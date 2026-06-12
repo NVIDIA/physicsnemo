@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import warnings
+from collections.abc import Iterator
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
@@ -81,9 +82,10 @@ def from_pyvista(
         - ``"cell_centroids"``: Cell centroids become points, ``cell_data``
           is mapped to ``point_data``. With ``manifold_dim=0`` the result is
           a point cloud; with ``manifold_dim=1`` the result is a dual graph
-          whose edges connect cells that share a face in the original mesh.
-          This mode avoids expensive tetrahedralization and is suitable for
-          large polyhedral meshes.
+          whose edges connect cells that share a facet (an edge for surface
+          meshes, a face for volume meshes) in the original mesh. This mode
+          avoids expensive tetrahedralization and is suitable for large
+          polyhedral meshes.
     warn_on_lost_data : bool
         If True, emit a ``UserWarning`` when the conversion discards non-empty
         data arrays. Cell data is lost when ``point_source="vertices"`` and
@@ -416,8 +418,8 @@ def _from_pyvista_cell_centroids(
     pyvista_mesh : pv.PolyData or pv.UnstructuredGrid
         Input PyVista mesh.
     manifold_dim : int or {"auto"}
-        0 for a point cloud, 1 for a dual graph (cell-neighbor edges).
-        "auto" resolves to 0.
+        0 for a point cloud, 1 for a dual graph (edges between cells that
+        share a (d-1)-facet). "auto" resolves to 0.
     warn_on_lost_data : bool
         Emit a warning if non-empty point_data will be discarded.
 
@@ -483,19 +485,70 @@ def _to_vtk_cell_array(cells_np: np.ndarray) -> np.ndarray:
     ).ravel()
 
 
+def _cell_facet_point_ids(cell: "vtk.vtkCell") -> Iterator[list[int]]:
+    """Yield the point-id lists of a cell's (d-1)-facets (dimension-generic).
+
+    A volume cell's facets are its 2D faces, a surface cell's facets are its
+    edges (1-faces), and a line cell's facets are its endpoint vertices. Two
+    cells are adjacent across a shared facet, so these are precisely the facets
+    that define dual-graph edges in any dimension.
+
+    Parameters
+    ----------
+    cell : vtk.vtkCell
+        A VTK cell.
+
+    Yields
+    ------
+    list[int]
+        Point ids of one (d-1)-facet. Nothing is yielded for 0D cells
+        (isolated points have no facets, hence no adjacency).
+
+    Notes
+    -----
+    Facets are yielded in VTK's canonical per-cell-type order, and the point
+    ids within each facet follow VTK's canonical winding; both are
+    deterministic. The sole consumer, :func:`_build_dual_graph_edges`, passes
+    these ids to ``vtkDataSet.GetCellNeighbors``, which matches cells
+    containing the full point *set* and is therefore insensitive to facet
+    ordering and to point order within a facet.
+    """
+    # VTK cell dimensions are bounded to {0, 1, 2, 3}, so matching the
+    # exact dimension is equivalent to the previous ``dim >= 3`` guard.
+    match cell.GetCellDimension():
+        case 3:  # Volume cell: facets are its 2D faces.
+            subcells = (cell.GetFace(f) for f in range(cell.GetNumberOfFaces()))
+        case 2:  # Surface cell: facets are its edges (1-faces).
+            subcells = (cell.GetEdge(e) for e in range(cell.GetNumberOfEdges()))
+        case 1:  # Line cell: facets are its two endpoint vertices (0-faces).
+            for p in range(cell.GetNumberOfPoints()):
+                yield [cell.GetPointId(p)]
+            return
+        case _:  # 0D (or anything unexpected): isolated points have no facets.
+            return
+    for sub in subcells:
+        yield [sub.GetPointId(p) for p in range(sub.GetNumberOfPoints())]
+
+
 @require_version_spec("vtk")
 def _build_dual_graph_edges(
     pyvista_mesh: "pv.PolyData | pv.UnstructuredGrid",
 ) -> Int[torch.Tensor, "n_edges 2"]:
-    """Build (n_edges, 2) tensor of cell-neighbor pairs sharing a face.
+    """Build (n_edges, 2) tensor of cell-neighbor pairs sharing a (d-1)-facet.
 
-    Iterates over every cell and its faces, using VTK's cell links for
-    O(1) per-face neighbor lookups.  VTK objects are reused across
-    iterations and results are written directly to chunked numpy buffers
-    to minimize Python-level overhead (~10x faster than the equivalent
-    PyVista ``cell_neighbors`` wrapper).  The overall cost is one pass
-    over all cells and their faces; for very large meshes (>10M cells)
-    this may still take minutes.
+    Two cells are adjacent (joined by a dual-graph edge) when they share a
+    facet: a 2D face for volume cells, an edge for surface cells, or a vertex
+    for line cells (see :func:`_cell_facet_point_ids`).  Iterates over every
+    cell and its facets, using VTK's cell links for O(1) per-facet neighbor
+    lookups.  VTK objects are reused across iterations and results are written
+    directly to chunked numpy buffers to minimize Python-level overhead
+    (~10x faster than the equivalent PyVista ``cell_neighbors`` wrapper).  The
+    overall cost is one pass over all cells and their facets; for very large
+    meshes (>10M cells) this may still take minutes.  A fully vectorized
+    facet-hashing pass (sorting each cell's facets and matching duplicates) is
+    ~6-10x faster again, but only for homogeneous, manifold meshes; the VTK
+    ``GetCellNeighbors`` path is kept here because it also handles mixed cell
+    types, polyhedra, and non-manifold facets generically.
 
     Parameters
     ----------
@@ -513,7 +566,7 @@ def _build_dual_graph_edges(
     if n_cells == 0:
         return torch.empty((0, 2), dtype=torch.long)
 
-    face_pt_ids = vtk.vtkIdList()
+    facet_pt_ids = vtk.vtkIdList()
     nbr_ids = vtk.vtkIdList()
 
     # Collect upper-triangular neighbor pairs into chunked numpy buffers.
@@ -524,14 +577,13 @@ def _build_dual_graph_edges(
 
     for i in range(n_cells):
         cell = pyvista_mesh.GetCell(i)
-        for f in range(cell.GetNumberOfFaces()):
-            face = cell.GetFace(f)
-            face_pt_ids.Reset()
-            for p in range(face.GetNumberOfPoints()):
-                face_pt_ids.InsertNextId(face.GetPointId(p))
+        for facet_ids in _cell_facet_point_ids(cell):
+            facet_pt_ids.Reset()
+            for point_id in facet_ids:
+                facet_pt_ids.InsertNextId(point_id)
 
             nbr_ids.Reset()
-            pyvista_mesh.GetCellNeighbors(i, face_pt_ids, nbr_ids)
+            pyvista_mesh.GetCellNeighbors(i, facet_pt_ids, nbr_ids)
 
             for k in range(nbr_ids.GetNumberOfIds()):
                 j = nbr_ids.GetId(k)
