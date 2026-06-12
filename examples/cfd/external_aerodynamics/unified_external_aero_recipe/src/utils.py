@@ -18,36 +18,33 @@
 
 from __future__ import annotations
 
+import json
 import random
-from typing import TYPE_CHECKING, Literal, TypeAlias
+from collections.abc import Callable
+from contextlib import nullcontext
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Literal, TypeAlias
 
 import numpy as np
 import torch
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from tensordict import TensorDict
+from torch.amp import autocast
 
+from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.optim import CombinedOptimizer
 
-if TYPE_CHECKING:
-    from nondim import NondimFieldType, NonDimensionalizeByMetadata
-    from physicsnemo.datapipes.transforms.mesh import NormalizeMeshFields
-
 ### Recipe-wide type aliases. Re-exported for use in loss.py, metrics.py,
-### output_normalize.py, forward_kwargs.py, collate.py, train.py, and the
-### tests so that ``target_config`` values share a single source of truth.
+### output_normalize.py, forward_kwargs.py, collate.py, train.py, infer.py,
+### and the tests so that ``target_config`` values share a single source of
+### truth.
 FieldType: TypeAlias = Literal["scalar", "vector"]
 
-### Default mapping from a field's `target_config` type to the nondim
-### recipe used by `NonDimensionalizeByMetadata`. Surface CFD predictions
-### follow this convention by default (pressure scalars are non-dim'd as
-### Cp; vector fields like wall shear stress are non-dim'd as Cf via the
-### dynamic-pressure scaling). Override per-field via
-### `nondim_type_overrides` when a field doesn't follow it (e.g.
-### temperature scalars or velocity vectors).
-_DEFAULT_NONDIM_TYPE_FROM_FIELD_TYPE: dict[FieldType, "NondimFieldType"] = {
-    "scalar": "pressure",
-    "vector": "stress",
-}
+### Allowed mixed-precision modes for the autocast context. ``"float8"`` is
+### intentionally absent; `get_autocast_context` rejects it at runtime (see
+### its error message for the padding rationale).
+Precision: TypeAlias = Literal["float32", "float16", "bfloat16"]
 
 
 def set_seed(seed: int | None, rank: int = 0) -> None:
@@ -197,106 +194,153 @@ def validate_field_coverage(
 
 
 # ---------------------------------------------------------------------------
-# Re-dimensionalization (model-space -> physical units)
+# Config helpers
 # ---------------------------------------------------------------------------
 
 
-def to_physical_units(
-    pred_td: TensorDict,
-    target_config: dict[str, FieldType],
-    normalizer: "NormalizeMeshFields | None",
-    nondim_transform: "NonDimensionalizeByMetadata | None",
-    metadata: TensorDict | None,
-    nondim_type_overrides: dict[str, "NondimFieldType"] | None = None,
-) -> TensorDict:
-    """Convert a per-field model-space TensorDict back to physical units.
+def resolve_dict(cfg: DictConfig, path: str) -> dict[str, Any] | None:
+    """Resolve `cfg.<path>` to a plain dict, or ``None`` if missing/empty.
 
-    Symmetric inverse of the dataset's normalize + non-dim pipeline.
-    Chains the two existing per-field inverses (rather than going via
-    a flat tensor) so the inference path can stay TensorDict-native:
-
-    1. :meth:`NormalizeMeshFields.inverse_td` undoes z-score
-       normalization (additive shift / multiplicative scale per field).
-    2. :meth:`NonDimensionalizeByMetadata.inverse_td` undoes the
-       freestream-conditioned non-dimensionalization
-       (e.g. Cp -> p in Pa).
-
-    Either step is skipped if the corresponding transform is ``None``,
-    so callers can use this with a partially-configured pipeline (e.g.
-    a model that was only normalized, or only non-dim'd).
-
-    Parameters
-    ----------
-    pred_td : TensorDict
-        Predictions keyed by field name, in model-space (post-normalize,
-        post-nondim). Each leaf can be any shape.
-    target_config : dict[str, FieldType]
-        ``{field_name: "scalar"|"vector"}`` for every key in
-        ``pred_td``. Drives the default nondim recipe lookup
-        (``scalar`` -> ``pressure``, ``vector`` -> ``stress``).
-    normalizer : NormalizeMeshFields | None
-        The dataset's normalizer (or ``None`` to skip the inverse-norm
-        step).
-    nondim_transform : NonDimensionalizeByMetadata | None
-        The dataset's non-dim transform (or ``None`` to skip the
-        inverse-nondim step).
-    metadata : TensorDict | None
-        The sample's ``metadata`` (typically pulled straight off the
-        input :class:`~physicsnemo.mesh.DomainMesh` / :class:`Mesh`),
-        carrying freestream conditions: ``U_inf`` and ``rho_inf`` (and
-        ``p_inf`` for pressure-like fields), plus ``T_inf`` when a
-        field is mapped to ``"temperature"``. ``None`` (or an empty
-        TensorDict) skips the inverse-nondim step.
-    nondim_type_overrides : dict[str, NondimFieldType] | None
-        Per-field overrides to the default nondim-type lookup. Use for
-        fields where the default ``scalar -> pressure`` /
-        ``vector -> stress`` mapping doesn't apply (e.g.
-        ``{"temperature": "temperature"}``).
-
-    Returns
-    -------
-    TensorDict
-        New TensorDict (same keys, batch_size, and device as *pred_td*)
-        with leaves in physical units. Returned as-is when both
-        transforms are ``None`` and no *metadata* is available (no
-        work to do).
+    Wraps the OmegaConf incantation
+    ``OmegaConf.to_container(OmegaConf.select(cfg, path, default=...), resolve=True) or None``
+    that would otherwise repeat at every read site.
     """
-    has_metadata = metadata is not None and len(metadata.keys()) > 0
-    if normalizer is None and (nondim_transform is None or not has_metadata):
-        return pred_td
+    selected = OmegaConf.select(cfg, path, default=OmegaConf.create({}))
+    container = OmegaConf.to_container(selected, resolve=True)
+    return container or None
 
-    out = pred_td
-    if normalizer is not None:
-        out = normalizer.inverse_td(out)
 
-    if nondim_transform is not None and has_metadata:
-        ### Lazy import keeps the recipe's module-level dependency graph
-        ### narrow -- ``utils`` is at the bottom of the import chain and
-        ### only ``to_physical_units`` reaches into the non-dim module.
-        from nondim import freestream_scales
+# ---------------------------------------------------------------------------
+# Mixed-precision autocast
+# ---------------------------------------------------------------------------
 
-        ### ``freestream_scales`` is the canonical reader for the
-        ### freestream conditions on ``metadata``. It casts each
-        ### value to float32 so the reference scales stay precision-
-        ### stable through the inverse multiply even when ``pred_td``
-        ### is in bfloat16 / fp16.
-        q_inf, p_inf, U_inf_mag, rho_inf, T_inf = freestream_scales(metadata)
 
-        ### Resolve each field's nondim recipe: explicit override wins,
-        ### otherwise fall back on the scalar/vector default mapping.
-        overrides = nondim_type_overrides or {}
-        nondim_fields: dict[str, NondimFieldType] = {
-            name: overrides.get(name, _DEFAULT_NONDIM_TYPE_FROM_FIELD_TYPE[ftype])
-            for name, ftype in target_config.items()
-        }
-        out = nondim_transform.inverse_td(
-            out,
-            nondim_fields,
-            q_inf,
-            p_inf,
-            U_inf_mag,
-            rho_inf=rho_inf,
-            T_inf=T_inf,
+def get_autocast_context(precision: Precision):
+    """Return an autocast context manager for the given precision.
+
+    Args:
+        precision: One of ``"float32"``, ``"float16"``, or ``"bfloat16"``.
+            ``"float32"`` yields a no-op ``nullcontext``.
+
+    Returns:
+        An autocast context manager for the requested precision, or a
+        no-op ``nullcontext`` when no casting is needed.
+
+    Raises:
+        NotImplementedError: For ``"float8"`` -- intentionally scoped out
+            of this recipe; the raised message carries the padding
+            rationale.
+        ValueError: For any other unrecognized value (e.g. a YAML typo
+            like ``"bf16"``), rather than silently running in fp32.
+    """
+    if precision == "float32":
+        return nullcontext()
+    elif precision == "float16":
+        return autocast("cuda", dtype=torch.float16)
+    elif precision == "bfloat16":
+        return autocast("cuda", dtype=torch.bfloat16)
+    elif precision == "float8":
+        raise NotImplementedError(
+            "precision='float8' is not supported in this recipe: TE fp8 needs "
+            "every GEMM dimension (the per-sample point count and the target "
+            "out_dim, e.g. 4) divisible by 16, which is not padded here. Use "
+            "float32 / float16 / bfloat16. For an fp8 reference see "
+            "examples/cfd/external_aerodynamics/transformer_models "
+            "(update_model_params_for_fp8 / pad_input_for_fp8 / "
+            "unpad_output_for_fp8) and TE's Fp8Padding / Fp8Unpadding modules."
+        )
+    else:
+        raise ValueError(
+            f"Unknown precision {precision!r}; expected one of "
+            f"'float32', 'float16', 'bfloat16'."
         )
 
-    return out
+
+# ---------------------------------------------------------------------------
+# Recursive tensor / mesh device movement
+# ---------------------------------------------------------------------------
+
+### Callable types for the recursive walker. ``LeafFn`` is the per-Tensor
+### transform (mandatory); ``ContainerFn`` is the optional override
+### applied to tensor-aware containers (Mesh / DomainMesh / TensorDict)
+### when the default ``container.apply(leaf_fn)`` semantics aren't enough.
+LeafFn = Callable[[torch.Tensor], torch.Tensor]
+ContainerFn = Callable[[Any], Any]
+
+
+def _recursive_apply(
+    obj: Any,
+    leaf_fn: LeafFn,
+    *,
+    container_fn: ContainerFn | None = None,
+) -> Any:
+    """Walk a nested structure, applying ``leaf_fn`` to every Tensor leaf.
+
+    Tensor-aware containers (Mesh, DomainMesh, TensorDict) are routed
+    through ``container_fn``. By default, ``container_fn`` delegates to
+    ``container.apply(leaf_fn)``, which walks every tensor leaf in
+    lock-step but does NOT touch container-level metadata
+    (``TensorDict.device`` in particular stays at whatever it was).
+    Override ``container_fn`` (e.g. ``lambda c: c.to(device)``) when the
+    metadata change matters -- ``TensorDict`` treats ``device is None``
+    as "leaves may be on any device", so device moves must go through
+    ``.to(device)`` to be observable on the container.
+
+    Plain dicts / lists / tuples are walked recursively. Note that
+    ``TensorDict`` is matched in the container branch above, so it does
+    NOT fall into the ``isinstance(obj, dict)`` branch (it isn't a
+    ``dict`` subclass, but the explicit container check is what makes
+    this work). Anything else passes through unchanged.
+    """
+    if container_fn is None:
+        container_fn = lambda c: c.apply(leaf_fn)  # noqa: E731
+    if isinstance(obj, torch.Tensor):
+        return leaf_fn(obj)
+    if isinstance(obj, (Mesh, DomainMesh, TensorDict)):
+        return container_fn(obj)
+    if isinstance(obj, dict):
+        return {
+            k: _recursive_apply(v, leaf_fn, container_fn=container_fn)
+            for k, v in obj.items()
+        }
+    if isinstance(obj, (list, tuple)):
+        return type(obj)(
+            _recursive_apply(v, leaf_fn, container_fn=container_fn) for v in obj
+        )
+    return obj
+
+
+def recursive_to_device(obj: Any, device: torch.device | str) -> Any:
+    """Move every tensor / Mesh / DomainMesh / TensorDict in a nested value to *device*.
+
+    Containers go through ``.to(device)`` (not ``.apply(...)``) so that
+    ``TensorDict.device`` is updated alongside the leaves; otherwise a
+    later consumer reading ``td.device`` would still see ``None`` even
+    though the underlying tensors have already moved.
+    """
+    return _recursive_apply(
+        obj,
+        lambda t: t.to(device),
+        container_fn=lambda c: c.to(device),
+    )
+
+
+# ---------------------------------------------------------------------------
+# JSONL logging
+# ---------------------------------------------------------------------------
+
+
+def make_jsonl_logger(path: str | Path) -> Callable[[dict], None]:
+    """Return a logger that appends timestamped JSON records to *path*.
+
+    Each call serialises one ``record`` dict as a JSON line, stamping it
+    with a UTC ``ts``. Shared by the trainer and the inference companion
+    for their per-run ``metrics.jsonl``.
+    """
+
+    def log_jsonl(record: dict) -> None:
+        record["ts"] = datetime.now(timezone.utc).isoformat()
+        with open(path, "a") as f:
+            f.write(json.dumps(record, default=str) + "\n")
+
+    return log_jsonl

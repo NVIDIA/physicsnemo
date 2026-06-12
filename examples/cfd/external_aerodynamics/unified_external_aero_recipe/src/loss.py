@@ -42,7 +42,6 @@ import torch
 import torch.nn.functional as F
 from jaxtyping import Float
 from tensordict import TensorDict
-
 from utils import FieldType, align_scalar_shapes, field_dim, validate_field_coverage
 
 _LOGGER = logging.getLogger("training.loss")

@@ -15,7 +15,7 @@ challenging and development of new models somewhat challenging.  In this folder,
 we have unified the external aerodynamic recipes for our best models, including
 GLOBE (our newest model, designed for large 3D use cases).
 
-Here, you're able to train the following models:
+Here, you're able to train (and run inference with) the following models:
 - [Transolver](https://arxiv.org/abs/2402.02366)
 - [GeoTransolver](https://arxiv.org/abs/2512.20399), optionally using the [FLARE](https://arxiv.org/abs/2508.12594) attention mechanism backend
 - [GLOBE](https://arxiv.org/abs/2511.15856)
@@ -65,6 +65,11 @@ torchrun --nproc_per_node=N src/train.py
 
 # 2. Override any config value
 python src/train.py precision=bfloat16 training.num_epochs=100
+
+# 3. Run inference on a trained checkpoint
+#    (writes physical-unit .pdmsh predictions + CD/CL/CM for surface cases)
+python src/infer.py model=geotransolver_surface dataset=highlift_surface \
+    run_id=<the trained run_id> infer_split=test
 ```
 
 For the canonical CLI invocations of every named recipe (FA variants,
@@ -234,7 +239,7 @@ geometric embeddings.
 | Loss | Huber (smooth L1), normalized by total channels |
 | Optimizer | Muon (2D params) + AdamW (other params) |
 | Scheduler | StepLR (step=100, gamma=0.1) |
-| Precision | bfloat16 (float16/float32/float8 also supported) |
+| Precision | bfloat16 (float16/float32 also supported) |
 | Batch size | 1 |
 
 ### DomainMesh contract and the data-to-model mapping
@@ -361,8 +366,9 @@ different natural scales (e.g. GLOBE's
 `error_scales = {C_p: 1.0, C_f: 0.01}` weighting).
 
 **`batch_size > 1`** is not supported by any model in the recipe today;
-the YAML field is reserved for future use, and `train.py` raises
-`NotImplementedError` if you try to set it above 1.
+the YAML field is reserved for future use, and the recipe raises
+`NotImplementedError` (in `build_dataloaders` and the collate) if you try
+to set it above 1.
 
 ## Scripts
 
@@ -389,8 +395,53 @@ python src/train.py precision=float32 training.num_epochs=100
 ```
 
 Supports checkpointing (auto-resume), TensorBoard + JSONL logging,
-mixed precision (float16/bfloat16/float8 via Transformer Engine),
+mixed precision (float16/bfloat16),
 `torch.compile`, and NVIDIA profiling.
+
+### Infer
+
+```bash
+# Run a trained checkpoint over a split, writing physical-unit predictions
+python src/infer.py model=geotransolver_surface dataset=highlift_surface \
+    run_id=<the trained run_id> infer_split=test
+
+# Point at an explicit checkpoints directory instead of deriving from run_id
+python src/infer.py model=geotransolver_surface dataset=highlift_surface \
+    run_id=eval checkpoint_path=/path/to/run/checkpoints
+```
+
+`infer.py` is the inference companion to `train.py`: it shares
+`conf/base.yaml` (so precision / dataloader knobs match) and reuses the
+same dataloader, output-normalization, and metric machinery. It loads
+the checkpoint named by `run_id` (under `checkpoint_dir`, default
+`runs/`), runs the model over `infer_split` (a manifest split; default
+`test`), and writes one prediction per sample:
+
+```text
+${output_dir}/${run_id}/
+  predictions/<sample_id>.pdmsh   # DomainMesh: interior carries
+                                  # pred_<field> and true_<field>
+  metrics.jsonl                   # per-sample + summary records
+```
+
+- **Metrics** are reported in training space (non-dim / normalized), so
+  they line up with the validation numbers logged during training.
+- **Physical units**: written fields are re-dimensionalized
+  (`redimensionalize=true`, default) by inverting normalization then
+  non-dimensionalization; `rescale_geometry=true` additionally restores
+  physical-scale coordinates (the lost `CenterMesh` offset leaves them
+  centered at the origin).
+- **Force / moment coefficients** (surface cases): integrates the
+  predicted and reference surface traction (`-Cp*n + Cf`) over the
+  `vehicle` boundary into `CD`/`CL`/`CS` (drag/lift/side) and
+  `CMR`/`CMP`/`CMY` (roll/pitch/yaw), logged as a per-coefficient
+  pred / true / MAE table. Set `force_coefficients.reference_area` (and
+  optionally `reference_length` / `moment_center`) for physically
+  meaningful magnitudes; the predicted-vs-reference comparison is
+  independent of the reference area. Volume runs (no Cp/Cf) auto-skip.
+  See `src/forces.py` for the integration and sign conventions.
+- Inference runs at full mesh resolution by default (a large
+  `sampling_resolution` makes the reader's subsample a no-op).
 
 ### Benchmark datapipe throughput
 
@@ -419,8 +470,8 @@ unified_external_aero_recipe/
     base.yaml                  # universal cross-cutting defaults
                                # (precision, dataloader, logging,
                                #  optimizer base, training fundamentals)
-    train.yaml                 # the single training entry point
-    # infer.yaml -- placeholder for the future inference companion
+    train.yaml                 # the training entry point
+    infer.yaml                 # the inference entry point (companion)
     model/                     # model templates (Hydra group)
       geotransolver_{surface,volume,volume_highlift}.yaml
       transolver_{surface,volume}.yaml
@@ -447,7 +498,7 @@ unified_external_aero_recipe/
 | Splits (which one to use) | `train.yaml` (`train_split`, `val_split`) |
 | Sampling resolution | `train.yaml` (`sampling_resolution`) |
 | Metrics list | `train.yaml` (`metrics`) |
-| Multi-dataset orchestration | `train.yaml` (`extra_datasets`) + Python in `train.py` |
+| Multi-dataset orchestration | `train.yaml` (`extra_datasets`) + Python in `datasets.build_dataloaders` |
 | Model + forward_kwargs | `conf/model/<name>.yaml` |
 | Training schedule (lr, scheduler, num_epochs, compile) | `train.yaml` |
 
@@ -523,10 +574,10 @@ Notes on the composition:
   computes from the chosen dataset's `targets:` block (sum of channel
   counts via `field_dim()`). GLOBE templates declare per-target
   `output_field_ranks` instead and don't touch `out_dim`.
-- An eventual `infer.yaml` will follow the same shape:
+- `conf/infer.yaml` follows the same shape:
   `defaults: - base, - model: ???, - _self_` with checkpoint /
-  output-path knobs in place of the training schedule. The `base.yaml`
-  is intentionally training-agnostic for this reason.
+  output-path knobs in place of the training schedule. `base.yaml` is
+  intentionally training-agnostic so both entry points can share it.
 
 ### Recipe Gallery
 
@@ -623,7 +674,7 @@ pipeline:
   reader:
     _target_: ${dp:MeshReaderWithGlobalData}
     path: ${train_datadir}
-    pattern: "**/*.pdmsh/_tensordict/boundaries/vehicle"
+    pattern: "run_*/*.pdmsh/_tensordict/boundaries/vehicle"
     subsample_n_cells: ${sampling_resolution}
     merge_global_data_from: "../../global_data"
   augmentations:
@@ -751,15 +802,17 @@ Rank-0 only; no external tracker required.
 
 | Module | Purpose |
 |---|---|
-| `src/datasets.py` | Factory functions: `build_dataset`, `load_dataset_config`. Hydra-instantiates readers and transforms from YAML; freestream conditions are read straight from each sample's `global_data` (no YAML-side injection). Auto-injects target names from the YAML's `targets:` block into `MeshToDomainMesh`. Also provides `load_manifest`, `resolve_manifest_indices`, and `ManifestSampler` for manifest-based splitting. |
-| `src/nondim.py` | Recipe-local transform: `NonDimensionalizeByMetadata`. Registered into the global datapipe registry. Supports pressure, stress, velocity, temperature, density, and identity field types. |
+| `src/datasets.py` | Factory functions: `build_dataset`, `load_dataset_config`, and `build_dataloaders` (the train/val loader assembly + sampler/collate helpers, shared by both entry points). Hydra-instantiates readers and transforms from YAML; freestream conditions are read straight from each sample's `global_data`. Auto-injects target names from the YAML's `targets:` block into `MeshToDomainMesh`. Also provides `load_manifest`, `resolve_manifest_indices`, and `ManifestSampler` for manifest-based splitting. |
+| `src/nondim.py` | Recipe-local transform: `NonDimensionalizeByMetadata` (with `inverse` / `inverse_td` for re-dimensionalization). Registered into the global datapipe registry. Supports pressure, stress, velocity, temperature, density, and identity field types. |
 | `src/forward_kwargs.py` | Spec resolver. Walks declarative `forward_kwargs:` specs (paths, lists, nested dicts, `expand_like` modifiers) into actual `model.forward()` kwargs against a DomainMesh. Also provides `extract_targets` (interior.point_data lookup by target name). |
 | `src/collate.py` | `build_collate_fn(input_type, forward_kwargs_spec, target_config)`. Resolves forward kwargs from each `DomainMesh` sample, extracts targets from `interior.point_data`. For `input_type='tensors'`, batch-wraps tensors with the right token / per-element padding; for `input_type='mesh'`, passes Mesh / dict / scalar values through unchanged. |
 | `src/loss.py` | `LossCalculator` — TensorDict-based loss for mixed scalar/vector fields. Supports Huber, MSE, relative MSE. Optional `field_weights` per-field multiplicative weights. Normalizes total loss by number of output channels. |
-| `src/metrics.py` | `MetricCalculator` — TensorDict-based metrics (relative L1, relative L2, MAE) with optional distributed all-reduce. Reports per-field and per-component (x/y/z) metrics for vector fields. |
-| `src/output_normalize.py` | `normalize_output_to_tensordict` (Mesh -> `point_data.select`, tensor -> per-target slicing via `split_concat_by_target`). Tensorboard-free so the unit tests can import it directly. |
-| `src/utils.py` | `build_muon_optimizer` (Muon+AdamW via `CombinedOptimizer`), `field_dim`, `align_scalar_shapes`, `set_seed`. |
-| `src/train.py` | Training loop with DDP, mixed precision, checkpointing, TensorBoard + JSONL logging, I/O benchmarking (`benchmark_io=true`), and profiling. Dispatches forward-pass output unpacking on `output_type` via `output_normalize.normalize_output_to_tensordict`. |
+| `src/metrics.py` | `MetricCalculator` — TensorDict-based metrics (relative L1, relative L2, MAE) with optional distributed all-reduce; reports per-field and per-component (x/y/z) metrics for vector fields. `resolve_metrics(cfg)` reads the recipe-side `cfg.metrics`. |
+| `src/output_normalize.py` | `normalize_output_to_tensordict` (Mesh -> `point_data.select`, tensor -> per-target slicing via `split_concat_by_target`) and `require_output_type(cfg)`. Tensorboard-free so the unit tests can import it directly. |
+| `src/forces.py` | Integrated aerodynamic force/moment coefficients from surface predictions. `force_moment_coefficients` integrates the traction `-Cp*n + Cf` over the vehicle via `Mesh.integrate`, projected onto drag/lift/side + roll/pitch/yaw axes; `ForceContext` / `ForceAccumulator` wrap the per-run config + accumulation. |
+| `src/utils.py` | Shared helpers: `build_muon_optimizer` (Muon+AdamW via `CombinedOptimizer`), `field_dim`, `align_scalar_shapes`, `validate_field_coverage`, `set_seed`, plus the cross-cutting runtime helpers `get_autocast_context` (+ `Precision`), `recursive_to_device`, `resolve_dict`, and `make_jsonl_logger`. |
+| `src/train.py` | Training loop with DDP, mixed precision, checkpointing, TensorBoard + JSONL logging, I/O benchmarking (`benchmark_io=true`), and profiling. (Dataloader assembly now lives in `datasets.build_dataloaders`.) |
+| `src/infer.py` | Inference companion: loads a checkpoint, runs a split, writes physical-unit predictions back as native `.pdmsh` `DomainMesh`es, reports training-space metrics, and (surface cases) integrated CD/CL/CM force coefficients. Imports nothing from `train.py`. |
 
 ## Design decisions
 
