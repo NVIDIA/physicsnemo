@@ -95,74 +95,79 @@ def compute_point_gradient_lsq_intrinsic(
 
     gradients = torch.zeros(gradient_shape, dtype=dtype, device=device)
 
-    ### Build tangent space basis for all points (vectorized)
-    # For codim-1: use point normals and construct orthogonal basis
+    ### Build per-point tangent-space bases, expressed in ambient coordinates with
+    # shape (n_points, n_spatial_dims, n_manifold_dims): each column is a tangent vector.
     if mesh.codimension == 1:
-        # Get point normals (already vectorized and cached)
+        # Codimension-1: derive the tangent plane from the (unique) point normal.
         point_normals = mesh.point_normals  # (n_points, n_spatial_dims)
-
-        # Build tangent basis for all points at once
         tangent_bases = _build_tangent_bases_vectorized(
             point_normals, n_manifold_dims
         )  # (n_points, n_spatial_dims, n_manifold_dims)
+    else:
+        # Codimension >= 2 (e.g. a curve in 3D): normals are not unique, so estimate
+        # the tangent space via local PCA. estimate_tangent_space_pca returns
+        # (n_points, n_manifold_dims, n_spatial_dims); transpose to the column
+        # convention used by the tangent-space solve below. (Without this branch the
+        # zero-initialized `gradients` would be returned unchanged -- a silent
+        # all-zero gradient for the default intrinsic path on codim>=2 meshes.)
+        from physicsnemo.mesh.calculus._pca_tangent import estimate_tangent_space_pca
 
-        ### Process each neighbor-count group in parallel
-        from physicsnemo.mesh.calculus._neighborhoods import iter_neighborhood_batches
+        pca_tangent_bases, _ = estimate_tangent_space_pca(mesh)
+        tangent_bases = pca_tangent_bases.transpose(-2, -1).contiguous()
 
-        for batch in iter_neighborhood_batches(mesh.points, adjacency, min_neighbors=2):
-            point_indices = batch.entity_indices
-            neighbors_flat = batch.neighbor_indices
-            A_ambient = (
-                batch.relative_positions
-            )  # (n_group, n_neighbors, n_spatial_dims)
-            n_group = len(point_indices)
-            n_neighbors = batch.n_neighbors
+    ### Process each neighbor-count group in parallel
+    from physicsnemo.mesh.calculus._neighborhoods import iter_neighborhood_batches
 
-            ### Project into tangent space
-            tangent_basis = tangent_bases[
-                point_indices
-            ]  # (n_group, n_spatial_dims, n_manifold_dims)
-            A_tangent = torch.einsum("gns,gsm->gnm", A_ambient, tangent_basis)
+    for batch in iter_neighborhood_batches(mesh.points, adjacency, min_neighbors=2):
+        point_indices = batch.entity_indices
+        neighbors_flat = batch.neighbor_indices
+        A_ambient = batch.relative_positions  # (n_group, n_neighbors, n_spatial_dims)
+        n_group = len(point_indices)
+        n_neighbors = batch.n_neighbors
 
-            ### Function differences
-            b = point_values[neighbors_flat] - point_values[point_indices].unsqueeze(1)
+        ### Project into tangent space
+        tangent_basis = tangent_bases[
+            point_indices
+        ]  # (n_group, n_spatial_dims, n_manifold_dims)
+        A_tangent = torch.einsum("gns,gsm->gnm", A_ambient, tangent_basis)
 
-            ### Compute inverse-distance weights (using ambient distances)
-            distances = torch.linalg.vector_norm(A_ambient, dim=-1)
-            weights = 1.0 / distances.pow(weight_power).clamp(
-                min=safe_eps(distances.dtype)
+        ### Function differences
+        b = point_values[neighbors_flat] - point_values[point_indices].unsqueeze(1)
+
+        ### Compute inverse-distance weights (using ambient distances)
+        distances = torch.linalg.vector_norm(A_ambient, dim=-1)
+        weights = 1.0 / distances.pow(weight_power).clamp(min=safe_eps(distances.dtype))
+
+        ### Apply sqrt-weights to tangent-space system
+        sqrt_w = weights.sqrt().unsqueeze(-1)  # (n_group, n_neighbors, 1)
+        A_tangent_weighted = sqrt_w * A_tangent
+
+        ### Solve batched least-squares in tangent space
+        if is_scalar:
+            b_weighted = sqrt_w.squeeze(-1) * b
+            grad_tangent = torch.linalg.lstsq(
+                A_tangent_weighted, b_weighted.unsqueeze(-1), rcond=None
+            ).solution.squeeze(-1)  # (n_group, n_manifold_dims)
+
+            # Map back to ambient coordinates
+            grad_ambient = torch.einsum("gsm,gm->gs", tangent_basis, grad_tangent)
+            gradients[point_indices] = grad_ambient
+        else:
+            # Tensor field: flatten extra dims, solve, map back
+            b_weighted = sqrt_w * b
+            orig_shape = b.shape[2:]
+            b_flat = b_weighted.reshape(n_group, n_neighbors, -1)
+
+            grad_tangent = torch.linalg.lstsq(
+                A_tangent_weighted, b_flat, rcond=None
+            ).solution  # (n_group, n_manifold_dims, n_components)
+
+            grad_ambient = torch.bmm(tangent_basis, grad_tangent)
+            grad_ambient_reshaped = grad_ambient.reshape(
+                n_group, n_spatial_dims, *orig_shape
             )
-
-            ### Apply sqrt-weights to tangent-space system
-            sqrt_w = weights.sqrt().unsqueeze(-1)  # (n_group, n_neighbors, 1)
-            A_tangent_weighted = sqrt_w * A_tangent
-
-            ### Solve batched least-squares in tangent space
-            if is_scalar:
-                b_weighted = sqrt_w.squeeze(-1) * b
-                grad_tangent = torch.linalg.lstsq(
-                    A_tangent_weighted, b_weighted.unsqueeze(-1), rcond=None
-                ).solution.squeeze(-1)  # (n_group, n_manifold_dims)
-
-                # Map back to ambient coordinates
-                grad_ambient = torch.einsum("gsm,gm->gs", tangent_basis, grad_tangent)
-                gradients[point_indices] = grad_ambient
-            else:
-                # Tensor field: flatten extra dims, solve, map back
-                b_weighted = sqrt_w * b
-                orig_shape = b.shape[2:]
-                b_flat = b_weighted.reshape(n_group, n_neighbors, -1)
-
-                grad_tangent = torch.linalg.lstsq(
-                    A_tangent_weighted, b_flat, rcond=None
-                ).solution  # (n_group, n_manifold_dims, n_components)
-
-                grad_ambient = torch.bmm(tangent_basis, grad_tangent)
-                grad_ambient_reshaped = grad_ambient.reshape(
-                    n_group, n_spatial_dims, *orig_shape
-                )
-                perm = [0] + list(range(2, grad_ambient_reshaped.ndim)) + [1]
-                gradients[point_indices] = grad_ambient_reshaped.permute(*perm)
+            perm = [0] + list(range(2, grad_ambient_reshaped.ndim)) + [1]
+            gradients[point_indices] = grad_ambient_reshaped.permute(*perm)
 
     return gradients
 

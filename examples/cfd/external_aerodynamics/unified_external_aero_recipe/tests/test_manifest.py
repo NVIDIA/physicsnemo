@@ -286,7 +286,7 @@ class TestValidateDatasetConsistency:
     def test_metrics_mismatch_warns(self, caplog):
         """Metrics mismatch is a soft drift -- warns, doesn't raise."""
         first_targets, first_metrics = self._first()
-        with caplog.at_level(logging.WARNING, logger="training.build_dataloaders"):
+        with caplog.at_level(logging.WARNING, logger="training.datasets"):
             validate_dataset_consistency(
                 ds_key="ds_b",
                 ds_targets=dict(first_targets),
