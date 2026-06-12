@@ -53,11 +53,9 @@ from typing import Any
 
 import torch
 from tensordict import TensorDict
-
-from physicsnemo.mesh import DomainMesh, Mesh
-
 from utils import FieldType
 
+from physicsnemo.mesh import DomainMesh, Mesh
 
 ### ---------------------------------------------------------------------------
 ### Path walking

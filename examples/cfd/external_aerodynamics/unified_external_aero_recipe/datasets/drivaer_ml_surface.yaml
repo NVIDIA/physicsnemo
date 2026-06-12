@@ -31,7 +31,7 @@ pipeline:
   reader:
     _target_: ${dp:MeshReaderWithGlobalData}
     path: ${train_datadir}
-    pattern: "**/*.pdmsh/_tensordict/boundaries/vehicle"
+    pattern: "run_*/*.pdmsh/_tensordict/boundaries/vehicle"
     subsample_n_cells: ${sampling_resolution}
     # Walk up two levels from the boundary tensordict to the parent
     # DomainMesh's global_data and merge its keys onto each sample.

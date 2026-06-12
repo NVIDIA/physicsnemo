@@ -51,12 +51,10 @@ from collections.abc import Callable
 from typing import Any
 
 import torch
-from jaxtyping import Float
-
 from forward_kwargs import extract_targets, resolve_forward_kwargs
+from jaxtyping import Float
 from output_normalize import IOType
 from utils import FieldType
-
 
 ### ---------------------------------------------------------------------------
 ### Batch-dim helpers

@@ -31,7 +31,7 @@ pipeline:
   reader:
     _target_: ${dp:DomainMeshReader}
     path: ${train_datadir}
-    pattern: "**/*.pdmsh"
+    pattern: "geo_LHC*/*.pdmsh"
     subsample_n_points: ${sampling_resolution}
     subsample_n_cells: ${sampling_resolution}
     extra_boundaries:

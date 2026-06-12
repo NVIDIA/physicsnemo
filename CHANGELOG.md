@@ -76,9 +76,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   geometry-latent kNN distance as a continuous score for downstream
   consumers (e.g. AL acquisition) without the boolean thresholding /
   warning emission of `OODGuard.check()`.
+- Adds an inference script (`src/infer.py` + `conf/infer.yaml`) to the
+  Unified External Aero Recipe
+  (`examples/cfd/external_aerodynamics/unified_external_aero_recipe`),
+  with integrated aerodynamic force/moment coefficients (`src/forces.py`:
+  CD/CL/CS/CMR/CMP/CMY). The script is model/dataset-agnostic, writes one
+  native `.pdmsh` `DomainMesh` per sample (carrying physical-unit
+  `pred_<field>` / `true_<field>`), reports training-space metrics
+  (matching the training/validation loop), and reuses the trainer's
+  dataloader / collate / metric tooling (refactored into `datasets.py`
+  and `utils.py`).
 
 ### Changed
 
+- `physicsnemo.mesh.remesh` now raises `NotImplementedError` for non-2D-in-3D
+  inputs (the pyacvd ACVD clustering is surface-only) instead of failing
+  confusingly downstream, and its docstring reflects that restriction.
 - `physicsnemo.mesh.spatial`: `BVH.from_mesh` and `ClusterTree.from_points` now
   share a single morton-LBVH node-topology builder (`spatial/_lbvh.py`),
   removing ~80 lines of duplicated build logic; construction output is
@@ -108,6 +121,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `physicsnemo.mesh.remesh` now preserves the input mesh's device and floating
+  dtype (the pyacvd/pyvista round-trip previously dropped them to CPU/float32).
 - `physicsnemo.mesh`: `Mesh.to(<float dtype>)` and `DomainMesh.to(<float dtype>)`
   raised `TypeError: cells must have an int-like dtype` because the cast was applied
   to the integer `cells` tensor. A floating/complex dtype is now applied only to
@@ -167,6 +182,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 ### Dependencies
+
+- Updates the minimum supported `warp-lang` version to 1.14.0.
 
 ## [2.1.0] - 2026-05-26
 
