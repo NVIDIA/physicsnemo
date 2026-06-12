@@ -27,6 +27,10 @@ identically for surface and volume mesh configs because the distinction
 is entirely in the YAML transform chain (volume YAMLs already produce a
 ``DomainMesh`` natively via ``DomainMeshReader``; surface YAMLs append a
 ``MeshToDomainMesh`` terminal transform to reach the same shape).
+
+Also hosts ``build_dataloaders`` -- the train/val ``DataLoader`` assembly
+(samplers, collate, manifest splits) shared by ``train.py`` and
+``infer.py``.
 """
 
 from __future__ import annotations
@@ -35,8 +39,19 @@ import json
 import logging
 import math
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any, cast
+
+import hydra
+import torch
+from omegaconf import DictConfig, OmegaConf
+from torch.utils.data import Sampler
+
+import physicsnemo.datapipes  # noqa: F401  (registers ${dp:...} resolvers)
+from physicsnemo.datapipes import DataLoader, MeshDataset, MultiDataset
+from physicsnemo.datapipes.transforms.mesh import NormalizeMeshFields
+from physicsnemo.distributed import DistributedManager
 
 ### Make this folder importable by its bare module names (`nondim`, `sdf`)
 ### regardless of whether the caller invoked `python src/train.py` (which
@@ -46,25 +61,21 @@ _SRC_DIR = str(Path(__file__).resolve().parent)
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
-import hydra
-import torch
-from omegaconf import DictConfig, OmegaConf
-from torch.utils.data import Sampler
-
-import physicsnemo.datapipes  # noqa: F401  (registers ${dp:...} resolvers)
-from physicsnemo.datapipes import MeshDataset
-from physicsnemo.datapipes.transforms.mesh import NormalizeMeshFields
-
-import nondim  # noqa: F401  (registers NonDimensionalizeByMetadata)
-import sdf  # noqa: F401  (registers ComputeSDFFromBoundary, DropBoundary)
-import merge_global_data  # noqa: F401  (registers MeshReaderWithGlobalData)
-from metrics import MetricName
-from utils import FieldType
+### Recipe-local modules are imported by bare name, which only resolves
+### after the sys.path insertion above (hence the E402 suppressions). The
+### side-effect `import`s also register datapipe components.
+import merge_global_data  # noqa: F401, E402  (registers MeshReaderWithGlobalData)
+import nondim  # noqa: F401, E402  (registers NonDimensionalizeByMetadata)
+import sdf  # noqa: F401, E402  (registers ComputeSDFFromBoundary, DropBoundary)
+from collate import build_collate_fn  # noqa: E402
+from metrics import MetricName  # noqa: E402
+from utils import FieldType, field_dim, resolve_dict  # noqa: E402
 
 ### Module-level logger used for warnings emitted from helpers below
-### (e.g. ``validate_dataset_consistency``). Goes through the same Python
-### logging pipeline as the recipe's ``PythonLogger``, so it shows up in
-### whatever handlers the training script has configured.
+### (e.g. ``validate_dataset_consistency``, ``build_dataloaders``). Goes
+### through the same Python logging pipeline as the recipe's
+### ``PythonLogger``, so it shows up in whatever handlers the training
+### script has configured.
 _LOGGER = logging.getLogger("training.datasets")
 
 
@@ -538,3 +549,407 @@ class ManifestSampler(Sampler[int]):
             indices = indices[self._rank :: self._world_size]
 
         return iter(indices)
+
+
+# ---------------------------------------------------------------------------
+# DataLoader assembly
+# ---------------------------------------------------------------------------
+
+
+def _resolve_manifest_indices_from_spec(
+    reader: Any, manifest_spec: dict[str, Any]
+) -> tuple[list[int], list[int] | None]:
+    """Resolve a manifest spec to ``(train_indices, val_indices_or_None)``."""
+    if manifest_spec["train_manifest"] is not None:
+        train_entries = load_manifest(manifest_spec["train_manifest"])
+    else:
+        train_entries = load_manifest(
+            manifest_spec["manifest"], split=manifest_spec["train_split"]
+        )
+    train_indices = resolve_manifest_indices(reader, train_entries)
+
+    if manifest_spec["val_manifest"] is not None:
+        val_entries = load_manifest(manifest_spec["val_manifest"])
+        val_indices = resolve_manifest_indices(reader, val_entries)
+    elif manifest_spec["val_split"] is not None:
+        val_entries = load_manifest(
+            manifest_spec["manifest"], split=manifest_spec["val_split"]
+        )
+        val_indices = resolve_manifest_indices(reader, val_entries)
+    else:
+        val_indices = None
+    return train_indices, val_indices
+
+
+def _build_collate(
+    cfg: DictConfig, target_config: dict[str, FieldType]
+) -> Callable[[list[tuple[Any, Any]]], dict[str, Any]]:
+    """Build the per-sample collate from the model YAML's I/O contract."""
+    if not target_config:
+        raise ValueError(
+            "Dataset YAML must declare a non-empty `targets:` block. "
+            "Targets are the single source of truth for prediction field "
+            "names + types."
+        )
+    input_type = cfg.get("input_type", None)
+    if input_type is None:
+        raise ValueError(
+            "Model YAML must declare `input_type` (one of 'mesh', 'tensors')."
+        )
+    forward_kwargs_spec = resolve_dict(cfg, "forward_kwargs")
+    if not forward_kwargs_spec:
+        raise ValueError("Model YAML must declare a non-empty `forward_kwargs:` block.")
+    return build_collate_fn(
+        input_type=input_type,
+        forward_kwargs_spec=forward_kwargs_spec,
+        target_config=target_config,
+    )
+
+
+def _combine_datasets(
+    datasets: list[MeshDataset],
+) -> MeshDataset | MultiDataset:
+    """Wrap a list of `MeshDataset`s in a `MultiDataset` if there's more than one."""
+    if len(datasets) == 1:
+        return datasets[0]
+    return MultiDataset(*datasets, output_strict=False)
+
+
+def _build_directory_samplers(
+    train_dataset: Any,
+    val_dataset: Any,
+    *,
+    use_distributed: bool,
+    sampler_seed: int,
+) -> tuple[Sampler | None, Sampler | None]:
+    """Per-split :class:`DistributedSampler` pair for **directory-mode** datasets.
+
+    Used when each split has its own dataset (separate ``train_datadir``
+    and ``val_datadir`` in the dataset YAML); manifest-mode shares a
+    single dataset across splits and uses :func:`_build_manifest_samplers`
+    instead. Returns ``(None, None)`` on a single rank, where torch's
+    default sequential sampler is sufficient.
+    """
+    if not use_distributed:
+        return None, None
+    train_sampler = torch.utils.data.distributed.DistributedSampler(
+        train_dataset, shuffle=True, drop_last=True, seed=sampler_seed
+    )
+    val_sampler = torch.utils.data.distributed.DistributedSampler(
+        val_dataset, shuffle=False, drop_last=False
+    )
+    return train_sampler, val_sampler
+
+
+def _build_manifest_samplers(
+    train_indices: list[int],
+    val_indices: list[int] | None,
+    *,
+    dist_manager: DistributedManager,
+    sampler_seed: int,
+) -> tuple[ManifestSampler, ManifestSampler]:
+    """ManifestSamplers (with distributed sharding when world_size > 1)."""
+    use_distributed = dist_manager.world_size > 1
+    rank = dist_manager.rank if use_distributed else 0
+    world_size = dist_manager.world_size if use_distributed else 1
+
+    train_sampler = ManifestSampler(
+        train_indices,
+        shuffle=True,
+        seed=sampler_seed,
+        rank=rank,
+        world_size=world_size,
+        drop_last=True,
+    )
+    ### When no explicit val split is configured, fall back to the train
+    ### indices but build a separate non-shuffled, no-drop sampler so val
+    ### iteration is deterministic and covers every sample. This used to
+    ### happen silently; warn loudly so the duplication shows up in the
+    ### run log instead of producing a "val == train" loss curve that
+    ### looks correct.
+    if val_indices is None:
+        _LOGGER.warning(
+            "Manifest mode: no val_split / val_manifest configured; "
+            "validation will iterate the train split (%d samples). "
+            "Set 'val_split:' or 'val_manifest:' on the data block to "
+            "use a real holdout.",
+            len(train_indices),
+        )
+        val_indices = train_indices
+    val_sampler = ManifestSampler(
+        val_indices,
+        shuffle=False,
+        seed=sampler_seed,
+        rank=rank,
+        world_size=world_size,
+        drop_last=False,
+    )
+    return train_sampler, val_sampler
+
+
+def build_dataloaders(
+    cfg: DictConfig,
+) -> tuple[DataLoader, DataLoader, "NormalizeMeshFields | None", dict[str, Any]]:
+    """Build train and val dataloaders from the chosen dataset(s).
+
+    The recipe picks one primary dataset via ``cfg.dataset`` (a string
+    naming a file under ``datasets/``) and optionally combines it with
+    additional datasets listed in ``cfg.extra_datasets``. Each dataset
+    is loaded via :func:`load_dataset_config` from its standalone
+    pipeline YAML; ``cfg.sampling_resolution`` is applied as a uniform
+    cap.
+
+    Supports two split strategies:
+
+    **Directory-based**: separate ``train_datadir`` and ``val_datadir``
+    in the dataset YAML. Each split gets its own reader and dataset.
+
+    **Manifest-based**: a single ``train_datadir`` in the dataset YAML
+    with a sibling ``manifest.json`` (or explicit ``manifest`` /
+    ``train_manifest`` / ``val_manifest`` paths). The recipe-level
+    ``cfg.train_split`` / ``cfg.val_split`` keys select which subsets to
+    use; one reader covers the full directory and
+    :class:`ManifestSampler` restricts each loader to the matching
+    indices.
+
+    NOTE (limitation): only ONE chosen dataset may carry a manifest
+    today. If both ``cfg.dataset`` and an entry in ``cfg.extra_datasets``
+    are manifest-mode, the later one silently overwrites the earlier's
+    indices and the resulting :class:`ManifestSampler` is indexed
+    against the last reader's local positions rather than the
+    :class:`MultiDataset`'s concatenated positions. The current
+    multi-dataset recipe (Transolver + DrivAerML + SHIFT SUV) sidesteps
+    this because the SHIFT SUV datasets are directory-mode (no
+    manifest). Lifting this limitation requires walking
+    ``(offset, indices)`` pairs and building a single sampler over
+    offset-shifted indices against the :class:`MultiDataset`. Tracked
+    as a follow-up.
+    """
+    recipe_root = Path(__file__).resolve().parent.parent
+    batch_size = cfg.training.get("batch_size", 1)
+    if batch_size != 1:
+        raise NotImplementedError(
+            f"This recipe requires batch_size=1, got batch_size={batch_size}. "
+            f"All models in this recipe assume B=1; the YAML field is "
+            f"reserved for future use."
+        )
+    sampling_resolution = cfg.get("sampling_resolution", None)
+    train_split = cfg.get("train_split", None)
+    val_split = cfg.get("val_split", None)
+    augment = cfg.get("augment", False)
+    dist_manager = DistributedManager()
+    use_distributed = dist_manager.world_size > 1
+
+    ### DataLoader / MeshDataset performance tuning from cfg.dataloader
+    dl_cfg = cfg.get("dataloader", {})
+    prefetch_factor = dl_cfg.get("prefetch_factor", 2)
+    num_streams = dl_cfg.get("num_streams", 4)
+    use_streams = dl_cfg.get("use_streams", False)
+    num_workers = dl_cfg.get("num_workers", 1)
+    pin_memory = dl_cfg.get("pin_memory", False)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    sampler_seed = cfg.training.get("seed", 0) or 0
+
+    ### The primary dataset is `cfg.dataset` (a single string); extras
+    ### combine via MultiDataset. The same `train_split`/`val_split`
+    ### apply to every chosen dataset; when they are set,
+    ### `resolve_manifest_spec` requires each dataset to have a locatable
+    ### manifest (it raises otherwise) -- clear them (null) for
+    ### directory-mode datasets.
+    primary_name: str = cfg.dataset
+    extras: list[str] = list(cfg.get("extra_datasets", []) or [])
+    dataset_names: list[str] = [primary_name, *extras]
+
+    train_datasets: list = []
+    val_datasets: list = []
+    manifest_train_indices: list[int] | None = None
+    manifest_val_indices: list[int] | None = None
+    using_manifests = False
+    first_targets: dict[str, str] | None = None
+    first_metrics: list[str] | None = None
+
+    for ds_name in dataset_names:
+        config_path = recipe_root / "datasets" / f"{ds_name}.yaml"
+        if not config_path.exists():
+            ### Warn-and-skip on a missing dataset config so a typo in
+            ### `cfg.dataset` / `cfg.extra_datasets` surfaces in the run
+            ### log rather than vanishing as an empty dataloader at
+            ### training time.
+            _LOGGER.warning(
+                f"Skipping dataset {ds_name!r}: config file not found at "
+                f"{str(config_path)!r}. Check `cfg.dataset` / "
+                f"`cfg.extra_datasets` against the files under "
+                f"datasets/."
+            )
+            continue
+
+        ds_yaml = load_dataset_config(config_path)
+        if sampling_resolution is not None:
+            ds_yaml = OmegaConf.merge(
+                ds_yaml, {"sampling_resolution": sampling_resolution}
+            )
+
+        train_datadir = OmegaConf.select(ds_yaml, "train_datadir", default=None)
+        if train_datadir and not Path(str(train_datadir)).exists():
+            _LOGGER.warning(
+                f"Skipping dataset {ds_name!r}: train_datadir "
+                f"{str(train_datadir)!r} does not exist. Check the "
+                f"`dataset_paths` interpolation in "
+                f"datasets/dataset_paths.yaml."
+            )
+            continue
+
+        ### Read the dataset YAML's targets block so we can validate
+        ### consistency across multi-dataset training. Metrics are no
+        ### longer per-dataset (recipe-side via cfg.metrics).
+        ds_targets = OmegaConf.to_container(
+            OmegaConf.select(ds_yaml, "targets", default=OmegaConf.create({})),
+            resolve=True,
+        )
+        ds_metrics = OmegaConf.to_container(
+            OmegaConf.select(ds_yaml, "metrics", default=OmegaConf.create([])),
+            resolve=True,
+        )
+        if first_targets is None:
+            first_targets, first_metrics = ds_targets, ds_metrics
+        else:
+            validate_dataset_consistency(
+                ds_name,
+                ds_targets,
+                ds_metrics,
+                first_targets,
+                first_metrics,
+            )
+
+        ### resolve_manifest_spec expects a single "block" carrying both
+        ### the manifest paths (which live in the dataset YAML when set)
+        ### and the split selectors (which are recipe-level via cfg).
+        ### Assemble one here so each dataset's manifest resolution sees
+        ### the correct combination.
+        ds_cfg_block = OmegaConf.create(
+            {
+                "train_manifest": OmegaConf.select(
+                    ds_yaml, "train_manifest", default=None
+                ),
+                "val_manifest": OmegaConf.select(ds_yaml, "val_manifest", default=None),
+                "manifest": OmegaConf.select(ds_yaml, "manifest", default=None),
+                "train_split": train_split,
+                "val_split": val_split,
+            }
+        )
+        manifest_spec = resolve_manifest_spec(ds_yaml, ds_cfg_block)
+        if manifest_spec is not None:
+            using_manifests = True
+            dataset = build_dataset(
+                ds_yaml,
+                augment=augment,
+                device=device,
+                num_workers=num_workers,
+                pin_memory=pin_memory,
+            )
+            train_datasets.append(dataset)
+            ### NOTE: this overwrites any prior dataset's indices; see the
+            ### docstring's multi-dataset limitation note.
+            manifest_train_indices, manifest_val_indices = (
+                _resolve_manifest_indices_from_spec(dataset.reader, manifest_spec)
+            )
+            continue
+
+        ### Directory mode: separate readers / datasets per split.
+        train_datasets.append(
+            build_dataset(
+                ds_yaml,
+                augment=augment,
+                device=device,
+                num_workers=num_workers,
+                pin_memory=pin_memory,
+            )
+        )
+        val_datadir = OmegaConf.select(ds_yaml, "val_datadir", default=None)
+        if val_datadir and Path(val_datadir).exists():
+            val_yaml = OmegaConf.merge(ds_yaml, {"train_datadir": val_datadir})
+            val_datasets.append(
+                build_dataset(
+                    val_yaml,
+                    augment=False,
+                    device=device,
+                    num_workers=num_workers,
+                    pin_memory=pin_memory,
+                )
+            )
+
+    if not train_datasets:
+        raise RuntimeError(
+            "No valid datasets found. Check `cfg.dataset` and the "
+            "`dataset_paths` entries in datasets/dataset_paths.yaml."
+        )
+
+    ### Auto-derive the model's output channel count from the chosen
+    ### dataset's `targets:` block and inject it as a top-level cfg key
+    ### so the model template's `out_dim: ${out_dim}` interpolation
+    ### resolves before `hydra.utils.instantiate(cfg.model)`.  GLOBE's
+    ### model template doesn't reference `out_dim`, so the extra key is
+    ### a harmless no-op for it.
+    out_dim_total = sum(
+        field_dim(cast(FieldType, ftype)) for ftype in (first_targets or {}).values()
+    )
+    OmegaConf.update(cfg, "out_dim", out_dim_total, force_add=True)
+
+    normalizer = find_normalizer(train_datasets)
+    collate_fn = _build_collate(cfg, first_targets or {})
+    train_dataset = _combine_datasets(train_datasets)
+
+    if using_manifests:
+        ### Manifest mode: train and val share one underlying dataset;
+        ### the samplers carve out the per-split index sets.
+        val_dataset = train_dataset
+        train_sampler, val_sampler = _build_manifest_samplers(
+            manifest_train_indices,
+            manifest_val_indices,
+            dist_manager=dist_manager,
+            sampler_seed=sampler_seed,
+        )
+    else:
+        ### Directory mode: separate datasets per split, with per-rank
+        ### DistributedSamplers when world_size > 1.
+        val_dataset = _combine_datasets(val_datasets) if val_datasets else train_dataset
+        train_sampler, val_sampler = _build_directory_samplers(
+            train_dataset,
+            val_dataset,
+            use_distributed=use_distributed,
+            sampler_seed=sampler_seed,
+        )
+
+    ### Shared loader knobs; the two splits differ only in dataset / shuffle /
+    ### sampler / drop_last.
+    loader_kwargs = dict(
+        batch_size=batch_size,
+        collate_fn=collate_fn,
+        prefetch_factor=prefetch_factor,
+        num_streams=num_streams,
+        use_streams=use_streams,
+        seed=sampler_seed,
+    )
+    train_loader = DataLoader(
+        train_dataset,
+        shuffle=(train_sampler is None),
+        sampler=train_sampler,
+        drop_last=True,
+        **loader_kwargs,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        shuffle=False,
+        sampler=val_sampler,
+        drop_last=False,
+        **loader_kwargs,
+    )
+
+    ### `metrics` are now recipe-side (cfg.metrics) -- the training /
+    ### inference entry points handle that. We just hand back targets here
+    ### so the loss / metric calculators can be built against the dataset
+    ### contract.
+    dataset_info = {
+        "targets": first_targets or {},
+    }
+    return train_loader, val_loader, normalizer, dataset_info

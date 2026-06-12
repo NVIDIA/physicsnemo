@@ -76,7 +76,7 @@ class MeshReaderWithGlobalData(MeshReader):
         reader:
           _target_: ${dp:MeshReaderWithGlobalData}
           path: ${train_datadir}
-          pattern: "**/*.pdmsh/_tensordict/boundaries/vehicle"
+          pattern: "run_*/*.pdmsh/_tensordict/boundaries/vehicle"
           # Walk up to the parent DomainMesh's global_data tensordict
           merge_global_data_from: "../../global_data"
 

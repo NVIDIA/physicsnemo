@@ -346,7 +346,7 @@ class NonDimensionalizeByMetadata(MeshTransform):
         """
         out = tensor.clone()
         idx = 0
-        for name, ftype in field_types.items():
+        for ftype in field_types.values():
             n = _FIELD_CHANNELS[ftype]
             out[..., idx : idx + n] = _redim_field(
                 out[..., idx : idx + n],
