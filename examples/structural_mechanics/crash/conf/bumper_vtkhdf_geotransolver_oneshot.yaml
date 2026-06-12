@@ -1,0 +1,84 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Bumper-beam crash, GeoTransolver (one-shot), reading the VTKHDF dataset directly.
+# Mirrors conf/bumper_geotransolver_oneshot.yaml; only the data-facing fields differ:
+#   - reader: vtkhdf (instead of vtp)
+#   - num_time_steps: 101  (the VTKHDF export has 101 frames; out_dim = (101-1)*5 = 500)
+#   - data paths point at ./simulations and the master CSV / global_features.json
+# The global-feature contract is unchanged: velocity_x, thickness_scale, rwall_origin_y.
+#
+# Usage:
+#   python make_global_features.py            # build ./global_features.json once
+#   python train.py --config-name=bumper_vtkhdf_geotransolver_oneshot
+
+hydra:
+  job:
+    chdir: True
+  run:
+    dir: ./outputs/
+
+experiment_name: "Bumper-VTKHDF-GeoTransolver"
+
+defaults:
+  - reader: vtkhdf
+  - datapipe: point_cloud
+  - model: geotransolver_one_shot
+  - training: default
+  - inference: default
+  - _self_
+
+# ┌───────────────────────────────────────────┐
+# │                   Data                    │
+# └───────────────────────────────────────────┘
+
+training:
+  raw_data_dir: ./simulations             # reader filters to split=train via the master CSV
+  raw_data_dir_validation: ./simulations  # same dir; reader filters to split=val
+  global_features_filepath: ./global_features.json
+  optimizer: muon
+
+  num_time_steps: 101
+  num_training_samples: 121      # adjust to how many train sims you have downloaded
+  num_validation_samples: 5
+
+inference:
+  raw_data_dir_test: ./simulations         # reader filters to split=test
+
+# ┌───────────────────────────────────────────┐
+# │            Datapipe features              │
+# └───────────────────────────────────────────┘
+
+datapipe:
+  static_features: []
+  dynamic_targets:
+    - effective_plastic_strain
+    - stress_vm
+  global_features:
+    - velocity_x
+    - thickness_scale
+    - rwall_origin_y
+  sample_type: all_time_steps
+
+# ┌───────────────────────────────────────────┐
+# │            Model overrides                │
+# └───────────────────────────────────────────┘
+
+model:
+  functional_dim: 3   # coords (3)
+  out_dim: 500        # (num_time_steps - 1) * 5 = 100 * 5
+  global_dim: 3       # must match len(datapipe.global_features)
+  guard_config: null
