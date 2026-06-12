@@ -14,9 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Multi-layer perceptron (MLP) module with optional Transformer Engine support."""
+r"""Multi-layer perceptron (MLP) module with optional Transformer Engine support."""
 
 import itertools
+from collections.abc import Callable
 
 import torch
 from torch import nn
@@ -24,15 +25,67 @@ from torch import nn
 from physicsnemo.core.version_check import OptionalImport
 
 from .activations import get_activation
+from .layer_norm import TE_AVAILABLE
 
 # Check for Transformer Engine availability
 te = OptionalImport("transformer_engine.pytorch")
 
+NormLayerSpec = type[nn.Module] | Callable[[int], nn.Module] | str | None
+
+
+def _require_te_layernorm() -> None:
+    """Raise if Transformer Engine LayerNorm cannot be used."""
+    if not TE_AVAILABLE:
+        raise RuntimeError(
+            "norm_layer='te_layernorm' requires transformer_engine to be installed."
+        )
+    if not torch.cuda.is_available():
+        raise RuntimeError("norm_layer='te_layernorm' requires a CUDA device.")
+
+
+def _resolve_norm_factory(
+    norm_layer: NormLayerSpec,
+    use_batchnorm: bool,
+) -> Callable[[int], nn.Module] | None:
+    """Resolve normalization configuration to a per-layer factory."""
+    if norm_layer is not None and use_batchnorm:
+        raise ValueError(
+            "Cannot specify both norm_layer and use_batchnorm=True. "
+            "Use norm_layer='batchnorm' or norm_layer=nn.BatchNorm1d instead."
+        )
+
+    if norm_layer is not None:
+        if isinstance(norm_layer, str):
+            key = norm_layer.lower().replace("-", "_")
+            if key in {"batchnorm", "batch_norm", "bn"}:
+                return nn.BatchNorm1d
+            if key in {"layernorm", "layer_norm", "ln"}:
+                return nn.LayerNorm
+            if key in {"te_layernorm", "te_layer_norm"}:
+                _require_te_layernorm()
+                return te.LayerNorm
+            raise ValueError(
+                f"Unknown norm_layer string {norm_layer!r}. "
+                "Expected one of 'batchnorm', 'layernorm', or 'te_layernorm'."
+            )
+
+        if isinstance(norm_layer, nn.Module):
+            raise ValueError(
+                "norm_layer must be a class or callable factory, not a module instance."
+            )
+
+        return norm_layer
+
+    if use_batchnorm:
+        return nn.BatchNorm1d
+
+    return None
+
 
 class Mlp(nn.Module):
-    """Multi-layer perceptron with configurable architecture.
+    r"""Multi-layer perceptron with configurable architecture.
 
-    Supports arbitrary depth, dropout, batch normalization, spectral
+    Supports arbitrary depth, dropout, configurable normalization, spectral
     normalization, bias control, and optional Transformer Engine linear
     layers.
 
@@ -63,7 +116,18 @@ class Mlp(nn.Module):
         Whether to include bias terms in the linear layers. Default is ``True``.
     use_batchnorm : bool, optional
         If ``True``, applies ``BatchNorm1d`` after each linear layer
-        (including the output layer). Default is ``False``.
+        (including the output layer). Default is ``False``. Mutually
+        exclusive with ``norm_layer``.
+    norm_layer : type[nn.Module] | Callable[[int], nn.Module] | str | None, optional
+        Normalization applied after each linear layer. Can be:
+        - ``None``: no normalization (unless ``use_batchnorm=True``)
+        - ``str``: ``"batchnorm"`` for ``BatchNorm1d``; ``"layernorm"`` for PyTorch
+          ``LayerNorm``; ``"te_layernorm"`` for Transformer Engine ``LayerNorm``
+          (requires ``transformer_engine`` and CUDA)
+        - ``type`` or callable: factory invoked as ``norm_layer(out_features)``
+          (for example ``nn.LayerNorm`` or ``get_layer_norm_class()`` for TE-aware
+          auto selection)
+        Default is ``None``.
     spectral_norm : bool, optional
         If ``True``, applies spectral normalization to all linear layer
         weights, constraining the spectral norm to 1. Default is ``False``.
@@ -96,6 +160,15 @@ class Mlp(nn.Module):
     ... )
     >>> mlp(torch.randn(8, 10)).shape
     torch.Size([8, 4])
+
+    >>> mlp = Mlp(
+    ...     in_features=10,
+    ...     hidden_features=20,
+    ...     out_features=5,
+    ...     norm_layer="layernorm",
+    ... )
+    >>> mlp(torch.randn(4, 10)).shape
+    torch.Size([4, 5])
     """
 
     def __init__(
@@ -108,12 +181,15 @@ class Mlp(nn.Module):
         final_dropout: bool = True,
         bias: bool = True,
         use_batchnorm: bool = False,
+        norm_layer: NormLayerSpec = None,
         spectral_norm: bool = False,
         use_te: bool = False,
     ):
         super().__init__()
 
         self.use_te = use_te
+        self.norm_layer = norm_layer
+        norm_factory = _resolve_norm_factory(norm_layer, use_batchnorm)
 
         out_features = out_features or in_features
 
@@ -147,8 +223,8 @@ class Mlp(nn.Module):
             if spectral_norm:
                 linear = nn.utils.parametrizations.spectral_norm(linear, name="weight")
             layers.append(linear)
-            if use_batchnorm:
-                layers.append(nn.BatchNorm1d(out_dim))
+            if norm_factory is not None:
+                layers.append(norm_factory(out_dim))
             if not is_last:
                 layers.append(act_layer)
             if drop != 0 and (not is_last or final_dropout):
