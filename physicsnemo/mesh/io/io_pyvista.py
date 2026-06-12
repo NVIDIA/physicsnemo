@@ -501,19 +501,29 @@ def _cell_facet_point_ids(cell: "vtk.vtkCell") -> Iterator[list[int]]:
     list[int]
         Point ids of one (d-1)-facet. Nothing is yielded for 0D cells
         (isolated points have no facets, hence no adjacency).
+
+    Notes
+    -----
+    Facets are yielded in VTK's canonical per-cell-type order, and the point
+    ids within each facet follow VTK's canonical winding; both are
+    deterministic. The sole consumer, :func:`_build_dual_graph_edges`, passes
+    these ids to ``vtkDataSet.GetCellNeighbors``, which matches cells
+    containing the full point *set* and is therefore insensitive to facet
+    ordering and to point order within a facet.
     """
-    dim = cell.GetCellDimension()
-    if dim >= 3:
-        subcells = (cell.GetFace(f) for f in range(cell.GetNumberOfFaces()))
-    elif dim == 2:
-        subcells = (cell.GetEdge(e) for e in range(cell.GetNumberOfEdges()))
-    elif dim == 1:
-        # A line cell's facets are its two endpoint vertices (0-faces).
-        for p in range(cell.GetNumberOfPoints()):
-            yield [cell.GetPointId(p)]
-        return
-    else:  # 0D: isolated points have no facets.
-        return
+    # VTK cell dimensions are bounded to {0, 1, 2, 3}, so matching the
+    # exact dimension is equivalent to the previous ``dim >= 3`` guard.
+    match cell.GetCellDimension():
+        case 3:  # Volume cell: facets are its 2D faces.
+            subcells = (cell.GetFace(f) for f in range(cell.GetNumberOfFaces()))
+        case 2:  # Surface cell: facets are its edges (1-faces).
+            subcells = (cell.GetEdge(e) for e in range(cell.GetNumberOfEdges()))
+        case 1:  # Line cell: facets are its two endpoint vertices (0-faces).
+            for p in range(cell.GetNumberOfPoints()):
+                yield [cell.GetPointId(p)]
+            return
+        case _:  # 0D (or anything unexpected): isolated points have no facets.
+            return
     for sub in subcells:
         yield [sub.GetPointId(p) for p in range(sub.GetNumberOfPoints())]
 
@@ -532,7 +542,11 @@ def _build_dual_graph_edges(
     directly to chunked numpy buffers to minimize Python-level overhead
     (~10x faster than the equivalent PyVista ``cell_neighbors`` wrapper).  The
     overall cost is one pass over all cells and their facets; for very large
-    meshes (>10M cells) this may still take minutes.
+    meshes (>10M cells) this may still take minutes.  A fully vectorized
+    facet-hashing pass (sorting each cell's facets and matching duplicates) is
+    ~6-10x faster again, but only for homogeneous, manifold meshes; the VTK
+    ``GetCellNeighbors`` path is kept here because it also handles mixed cell
+    types, polyhedra, and non-manifold facets generically.
 
     Parameters
     ----------
