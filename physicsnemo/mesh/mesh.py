@@ -41,7 +41,6 @@ from physicsnemo.mesh.transformations.geometric import (
     transform,
     translate,
 )
-from physicsnemo.mesh.transformations.normalize import normalize_points
 from physicsnemo.mesh.utilities._padding import _pad_by_tiling_last, _pad_with_value
 from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
@@ -2573,40 +2572,6 @@ class Mesh:
             ax=ax,
             backend_options=backend_options,
         )
-
-    def normalize_points(
-        self,
-        *,
-        eps: float = 1.0e-8,
-    ) -> tuple[
-        "Mesh",
-        Float[torch.Tensor, " n_spatial_dims"],
-        Float[torch.Tensor, ""],
-    ]:
-        """Center and isotropically scale the mesh points.
-
-        Parameters
-        ----------
-        eps : float, optional
-            Positive lower bound for the normalization radius.
-
-        Returns
-        -------
-        Mesh
-            New mesh whose vertex centroid is at the origin and whose maximum
-            vertex distance from the origin is at most one.
-        Float[torch.Tensor, " n_spatial_dims"]
-            Arithmetic mean of the original point coordinates.
-        Float[torch.Tensor, ""]
-            Maximum vertex distance from the centroid, clamped to ``eps``.
-
-        Raises
-        ------
-        ValueError
-            If ``eps`` is not positive or the mesh points are empty or
-            non-finite.
-        """
-        return normalize_points(self, eps=eps)
 
     def translate(
         self,

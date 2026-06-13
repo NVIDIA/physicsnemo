@@ -209,12 +209,26 @@ def sample_random_points(
             raise ValueError("mesh cell measures must be finite")
         if float(measures.sum()) <= 0.0:
             raise ValueError("mesh must contain positive-measure cells")
-    cell_indices = torch.multinomial(
-        measures,
+    ### Select cells with probability proportional to their measure.
+    # Inverse-CDF sampling (cumulative measure + searchsorted) instead of
+    # torch.multinomial, whose 2**24-category cap rejects meshes that large
+    # CFD/automotive cases routinely exceed. The cumulative sum runs in
+    # float64: a float32 running total stops resolving individual cell
+    # measures once it exceeds them by ~2**24, silently zeroing the selection
+    # probability of late-indexed cells (~8% of a 20M-cell mesh).
+    cumulative_measure = torch.cumsum(measures, dim=0, dtype=torch.float64)
+    thresholds = cumulative_measure[-1] * torch.rand(
         num_samples,
-        replacement=True,
+        dtype=torch.float64,
+        device=measures.device,
         generator=generator,
     )
+    # right=True keeps zero-measure cells unselectable (their zero-width CDF
+    # interval cannot strictly contain a threshold); the clamp covers a
+    # threshold that rounds up to exactly the total measure.
+    cell_indices = torch.searchsorted(
+        cumulative_measure, thresholds, right=True
+    ).clamp_max_(mesh.n_cells - 1)
     return sample_random_points_on_cells(
         mesh,
         cell_indices,

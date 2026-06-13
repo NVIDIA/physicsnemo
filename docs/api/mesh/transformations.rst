@@ -36,26 +36,6 @@ All transformations are also available as methods on
    :members:
    :show-inheritance:
 
-Point Normalization
--------------------
-
-.. currentmodule:: physicsnemo.mesh.transformations.normalize
-
-:func:`normalize_points` centers a mesh at the arithmetic mean of its vertices
-and scales it isotropically into the unit ball. It returns the original centroid
-and radius so the transformation can be inverted or retained as model context.
-The operation is also available as
-:meth:`~physicsnemo.mesh.mesh.Mesh.normalize_points`.
-
-.. code:: python
-
-    normalized, centroid, radius = mesh.normalize_points()
-    reconstructed = normalized.points * radius + centroid
-
-.. automodule:: physicsnemo.mesh.transformations.normalize
-   :members:
-   :show-inheritance:
-
 Projections
 -----------
 

@@ -418,6 +418,50 @@ class TestMeasureWeightedRandomSampling:
         with pytest.raises(ValueError, match="at least one cell"):
             sample_random_points(Mesh(points=torch.zeros((3, 2))), 4)
 
+    def test_zero_measure_cells_are_never_selected(self):
+        ### Degenerate (collinear) triangles lie on the line x == y, far from
+        # the positive-area unit triangle, so any sample drawn from one would
+        # land outside the unit triangle and be detected.
+        points = torch.tensor(
+            [
+                [0.0, 0.0],
+                [1.0, 0.0],
+                [0.0, 1.0],
+                [2.0, 2.0],
+                [3.0, 3.0],
+                [4.0, 4.0],
+            ]
+        )
+        mesh = Mesh(
+            points=points,
+            cells=torch.tensor(((3, 4, 5), (0, 1, 2), (4, 5, 3))),
+        )
+        sampled = sample_random_points(
+            mesh,
+            4096,
+            generator=torch.Generator().manual_seed(3),
+        )
+        assert bool((sampled >= -1.0e-6).all())
+        assert bool((sampled.sum(dim=-1) <= 1.0 + 1.0e-6).all())
+
+    def test_cell_count_beyond_multinomial_category_limit(self):
+        ### Regression: torch.multinomial rejects more than 2**24 categories,
+        # which large CFD/automotive surface meshes routinely exceed, so cell
+        # selection must not route through it. All cells alias the same two
+        # points to keep the mesh cheap to build.
+        n_cells = 2**24 + 1
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0]])
+        cells = torch.zeros((n_cells, 2), dtype=torch.int64)
+        cells[:, 1] = 1
+        mesh = Mesh(points=points, cells=cells)
+        sampled = sample_random_points(
+            mesh,
+            16,
+            generator=torch.Generator().manual_seed(5),
+        )
+        assert sampled.shape == (16, 2)
+        assert bool(torch.isfinite(sampled).all())
+
 
 ### Parametrized Tests for Exhaustive Dimensional Coverage ###
 
