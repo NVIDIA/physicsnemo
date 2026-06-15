@@ -89,6 +89,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- xDeepONet `SpatialBranch`
+  (`physicsnemo.experimental.models.xdeeponet.SpatialBranch`) now supports
+  mixed-precision (AMP/autocast) training: FFT-based spectral convolutions are
+  evaluated in float32 internally (cuFFT lacks complex-half support) while the
+  rest of the branch uses autocast. This is a no-op under full precision, so
+  fp32 outputs are unchanged. Also fixes a stale module docstring that
+  referenced removed trunk/MLP-branch builder helpers.
 - `physicsnemo.mesh.remesh` now raises `NotImplementedError` for non-2D-in-3D
   inputs (the pyacvd ACVD clustering is surface-only) instead of failing
   confusingly downstream, and its docstring reflects that restriction.
