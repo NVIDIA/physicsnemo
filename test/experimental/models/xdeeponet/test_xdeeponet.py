@@ -1264,8 +1264,8 @@ class TestDeepONetAMP:
         loss.backward()
         grads = [p.grad for p in model.parameters() if p.requires_grad]
         assert grads, "model has no trainable parameters"
-        assert any(g is not None for g in grads)
-        assert all(torch.isfinite(g).all() for g in grads if g is not None)
+        assert all(g is not None for g in grads)
+        assert all(torch.isfinite(g).all() for g in grads)
 
 
 if __name__ == "__main__":

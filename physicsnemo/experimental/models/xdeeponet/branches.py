@@ -452,15 +452,19 @@ class SpatialBranch(Module):
     def _spectral(self, conv: nn.Module, x: Tensor) -> Tensor:
         """Evaluate an FFT-based spectral conv in float32.
 
-        cuFFT does not support the reduced / complex-half precisions that AMP
-        autocast would introduce, so the spectral convolution is always run in
-        float32 (autocast disabled) when autocast is active.  The surrounding
-        pointwise / UNet / conv branches still benefit from autocast.  This is a
+        FFT backends (e.g. cuFFT) do not support the reduced / complex-half
+        precisions that AMP autocast would introduce, so the spectral
+        convolution is always run in float32 (autocast disabled) when autocast
+        is active for the input's device.  The surrounding pointwise / UNet /
+        conv branches still benefit from autocast.  The autocast state and the
+        disabling context both use the input tensor's own device type, so the
+        guard is device-agnostic (CUDA, CPU, or other accelerators).  This is a
         no-op in full-precision training (autocast disabled), so it does not
         change fp32 behavior.
         """
-        if torch.is_autocast_enabled():
-            with torch.autocast(device_type="cuda", enabled=False):
+        device_type = x.device.type
+        if torch.is_autocast_enabled(device_type):
+            with torch.autocast(device_type=device_type, enabled=False):
                 return conv(x.float())
         return conv(x)
 
