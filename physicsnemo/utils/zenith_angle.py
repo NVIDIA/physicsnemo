@@ -116,7 +116,7 @@ def cos_zenith_angle_from_timestamp(
 def _deg2rad(x: T, dtype: np.typing.DTypeLike | torch.dtype | None = None) -> T:
     if isinstance(x, torch.Tensor):
         if dtype is not None and not isinstance(dtype, torch.dtype):
-            dtype = torch.as_tensor(np.empty(0, dtype=dtype)).dtype
+            dtype = torch.from_numpy(np.empty(0, dtype=dtype)).dtype
         return torch.deg2rad(x.to(dtype=dtype))
     return np.deg2rad(x, dtype=dtype)
 

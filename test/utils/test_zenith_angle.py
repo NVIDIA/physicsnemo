@@ -104,7 +104,18 @@ _PARITY_LONS = np.array([-90.0, 0.0, 40.0, 120.0], dtype=np.float32)
 _PARITY_LATS = np.array([-60.0, 0.0, 40.0, 80.0], dtype=np.float32)
 
 
-@pytest.mark.parametrize("device", ["cpu", "cuda:0"])
+@pytest.mark.parametrize(
+    "device",
+    [
+        "cpu",
+        pytest.param(
+            "cuda",
+            marks=pytest.mark.skipif(
+                not torch.cuda.is_available(), reason="CUDA not available"
+            ),
+        ),
+    ],
+)
 @pytest.mark.parametrize("timestamp", _PARITY_CASES)
 def test_cos_zenith_angle_numpy_torch_parity(timestamp, device):
     """numpy and torch paths must return equal float32 results."""
@@ -123,7 +134,18 @@ def test_cos_zenith_angle_numpy_torch_parity(timestamp, device):
     np.testing.assert_allclose(out_torch.cpu().numpy(), out_np, rtol=1e-5)
 
 
-@pytest.mark.parametrize("device", ["cpu", "cuda:0"])
+@pytest.mark.parametrize(
+    "device",
+    [
+        "cpu",
+        pytest.param(
+            "cuda",
+            marks=pytest.mark.skipif(
+                not torch.cuda.is_available(), reason="CUDA not available"
+            ),
+        ),
+    ],
+)
 @pytest.mark.parametrize("timestamp", _PARITY_CASES)
 def test_toa_numpy_torch_parity(timestamp, device):
     """numpy and torch paths must return equal results for toa_incident_solar_radiation_accumulated."""
