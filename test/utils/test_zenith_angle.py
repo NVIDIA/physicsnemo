@@ -29,6 +29,7 @@ from datetime import UTC, datetime
 
 import numpy as np
 import pytest
+import torch
 
 from physicsnemo.utils.zenith_angle import (
     _datetime_to_julian_century,
@@ -87,3 +88,58 @@ def test_toa():
     lat, lon = 0.0, 0.0
     ans = toa_incident_solar_radiation_accumulated(t, lat, lon)
     assert ans >= 0
+
+
+# Timestamps used for numpy/torch parity tests.  The cases deliberately include
+# daytime (sun above horizon), nighttime (sun below horizon, result == 0) and a
+# high-latitude summer scenario so that both branches of _integrate_abs_cosz are
+# exercised.
+_PARITY_CASES = [
+    datetime(2020, 3, 21, 12, 0, 0, tzinfo=UTC).timestamp(),  # equinox noon
+    datetime(2020, 7, 6, 9, 0, 0, tzinfo=UTC).timestamp(),  # summer morning
+    datetime(2020, 1, 15, 3, 0, 0, tzinfo=UTC).timestamp(),  # nighttime
+]
+
+_PARITY_LONS = np.array([-90.0, 0.0, 40.0, 120.0], dtype=np.float32)
+_PARITY_LATS = np.array([-60.0, 0.0, 40.0, 80.0], dtype=np.float32)
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda:0"])
+@pytest.mark.parametrize("timestamp", _PARITY_CASES)
+def test_cos_zenith_angle_numpy_torch_parity(timestamp, device):
+    """numpy and torch paths must return equal float32 results."""
+    lon_np = _PARITY_LONS[:, None]  # (4, 1)
+    lat_np = _PARITY_LATS[None, :]  # (1, 4)
+
+    out_np = cos_zenith_angle_from_timestamp(timestamp, lon_np, lat_np)
+
+    lon_torch = torch.as_tensor(lon_np, dtype=torch.float32, device=device)
+    lat_torch = torch.as_tensor(lat_np, dtype=torch.float32, device=device)
+    out_torch = cos_zenith_angle_from_timestamp(timestamp, lon_torch, lat_torch)
+
+    # The torch path returns float32; the numpy path returns float64 (numpy
+    # auto-promotes float32 arrays when multiplied with float64 scalars).
+    # Differences are bounded by float32 rounding of the float64 result.
+    np.testing.assert_allclose(out_torch.cpu().numpy(), out_np, rtol=1e-5)
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda:0"])
+@pytest.mark.parametrize("timestamp", _PARITY_CASES)
+def test_toa_numpy_torch_parity(timestamp, device):
+    """numpy and torch paths must return equal results for toa_incident_solar_radiation_accumulated."""
+    lat_np = _PARITY_LATS[:, None]  # (4, 1)
+    lon_np = _PARITY_LONS[None, :]  # (1, 4)
+
+    out_np = toa_incident_solar_radiation_accumulated(timestamp, lat_np, lon_np)
+
+    lat_torch = torch.as_tensor(lat_np, dtype=torch.float32, device=device)
+    lon_torch = torch.as_tensor(lon_np, dtype=torch.float32, device=device)
+    out_torch = toa_incident_solar_radiation_accumulated(
+        timestamp, lat_torch, lon_torch
+    )
+
+    # The toa integration runs in float32 for the torch path (lat/lon are float32
+    # and numpy scalars are converted to Python floats by PyTorch, preserving
+    # float32).  The numpy path promotes to float64 via numpy scalar arithmetic.
+    # atol covers near-zero terminator cells where rtol alone is too strict.
+    np.testing.assert_allclose(out_torch.cpu().numpy(), out_np, rtol=1e-5, atol=1.0)
