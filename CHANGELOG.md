@@ -121,6 +121,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `physicsnemo.mesh`: `validate_mesh(check_self_intersection=True)` now raises
   `NotImplementedError` (the check is unimplemented) instead of silently returning a
   `None` sentinel that masquerades as "no self-intersections found".
+- Performance improvements in the diffusion module: reduced peak memory of
+  DPS-guided diffusion sampling most notably for multi-diffusion at large
+  domains. A guided `sample()` loop run under `torch.no_grad()` now detaches the
+  state between solver steps, so the guidance autograd graph is no longer
+  accumulated across the sampling trajectory (sampled outputs are unchanged;
+  use `torch.no_grad()`, not `torch.inference_mode()`). Also expands CI test
+  coverage and adds an API documentation page for
+  `physicsnemo.diffusion.multi_diffusion`.
 
 ### Deprecated
 

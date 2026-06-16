@@ -229,7 +229,7 @@ Prediction Types
 
 Diffusion models can be trained to predict different targets.  The PhysicsNeMo
 framework currently supports three prediction types, enumerated by the
-:data:`~physicsnemo.diffusion.PredictorType` alias:
+:data:`~physicsnemo.diffusion.base.PredictorType` alias:
 
 - **x0-predictor** (``"x0"``): The model estimates the clean data
   :math:`\hat{\mathbf{x}}_0` from the noisy state :math:`\mathbf{x}_t`.
@@ -255,7 +255,7 @@ implementing a custom
 the appropriate conversions in its
 :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.get_denoiser`
 method, and by extending
-:data:`~physicsnemo.diffusion.PredictorType` accordingly.
+:data:`~physicsnemo.diffusion.base.PredictorType` accordingly.
 
 
 API Reference
@@ -284,6 +284,5 @@ API Reference
 :code:`PredictorType`
 ~~~~~~~~~~~~~~~~~~~~~
 
-.. autodata:: physicsnemo.diffusion.PredictorType
+.. autodata:: physicsnemo.diffusion.base.PredictorType
     :annotation:
-    :exclude-members: __init__

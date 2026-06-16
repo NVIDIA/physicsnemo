@@ -18,6 +18,7 @@
 
 from typing import Any, Dict, List, Literal
 
+import torch
 import torch.distributed as dist
 from jaxtyping import Float
 from torch import Tensor
@@ -382,6 +383,14 @@ def sample(
     # type-compatible.
     t_steps = _maybe_replicate_timesteps(t_steps, xN)
 
+    # Capture caller's grad mode. When called under ``torch.no_grad()`` (the
+    # recommended pattern for inference, including DPS sampling), detach ``x``
+    # between solver steps so any per-step autograd graph attached by the
+    # denoiser (e.g. by DPS score predictors) does not compound across the
+    # loop. Under default (caller grad enabled), preserve the graph so
+    # callers that intentionally backprop through sample() are unaffected.
+    outer_grad_enabled = torch.is_grad_enabled()
+
     # Main sampling loop
     samples: List[Tensor] = []
     x = xN
@@ -406,6 +415,8 @@ def sample(
 
         # Perform one solver step
         x = solver_.step(x, t_cur_batch, t_next_batch)
+        if not outer_grad_enabled:
+            x = x.detach()
 
         # Collect sample if requested
         if time_eval is not None and i in time_eval:
