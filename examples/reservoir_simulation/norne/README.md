@@ -479,6 +479,23 @@ Physicsnemo_publish/
 
 ---
 
+## Getting the data
+
+The bulk simulation data (reservoir grids, decks, summaries, and reference
+results) is published as a GitHub release asset rather than committed to this
+repository. Before running anything below, fetch it from the example
+directory:
+
+```bash
+python download_data.py
+```
+
+This downloads `norne_data_backup.zip` from the release and unpacks it,
+creating the `simulator_data/` and `RESULTS/` data folders automatically.
+If those folders already exist, the script does nothing.
+
+---
+
 ## 6. Running the pipeline
 
 The entire pipeline is wrapped behind a single command. Inside the
