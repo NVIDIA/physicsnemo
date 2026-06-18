@@ -1,0 +1,36 @@
+# Python build artefacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Tooling caches
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Claude Code session metadata
+.claude/
+
+# Environments
+physicsnemo_venv/
+.venv/
+venv/
+
+# MLflow
+src/mlruns/.trash/
+src/mlruns/**/artifacts/
+mlruns/.trash/
+
+# Hydra runtime outputs
+outputs/
+multirun/

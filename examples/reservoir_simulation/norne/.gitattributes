@@ -1,0 +1,37 @@
+# Git LFS — file types that frequently exceed 5 MB on this project.
+# Patterns are case-sensitive on Linux/macOS but case-insensitive on Windows;
+# variants of common extensions are listed explicitly.
+
+# Pickled tensors / ensemble dumps
+*.pkl filter=lfs diff=lfs merge=lfs -text
+*.pkl.gz filter=lfs diff=lfs merge=lfs -text
+*.joblib filter=lfs diff=lfs merge=lfs -text
+*.npy filter=lfs diff=lfs merge=lfs -text
+*.npz filter=lfs diff=lfs merge=lfs -text
+*.mat filter=lfs diff=lfs merge=lfs -text
+
+# Simulator binaries / grid files
+*.UNRST filter=lfs diff=lfs merge=lfs -text
+*.unrst filter=lfs diff=lfs merge=lfs -text
+*.GRDECL filter=lfs diff=lfs merge=lfs -text
+*.grdecl filter=lfs diff=lfs merge=lfs -text
+*.RSM filter=lfs diff=lfs merge=lfs -text
+*.rsm filter=lfs diff=lfs merge=lfs -text
+*.SMSPEC filter=lfs diff=lfs merge=lfs -text
+*.smspec filter=lfs diff=lfs merge=lfs -text
+*.UNSMRY filter=lfs diff=lfs merge=lfs -text
+*.unsmry filter=lfs diff=lfs merge=lfs -text
+*.EGRID filter=lfs diff=lfs merge=lfs -text
+*.egrid filter=lfs diff=lfs merge=lfs -text
+*.INIT filter=lfs diff=lfs merge=lfs -text
+*.init filter=lfs diff=lfs merge=lfs -text
+*.out filter=lfs diff=lfs merge=lfs -text
+
+# Animations & figures
+*.gif filter=lfs diff=lfs merge=lfs -text
+
+# Documents
+*.pdf filter=lfs diff=lfs merge=lfs -text
+
+# Run logs that exceed 5 MB
+src/simulation_logs/**/06_inverse_FNO.log filter=lfs diff=lfs merge=lfs -text
