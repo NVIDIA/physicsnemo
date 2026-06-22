@@ -310,9 +310,7 @@ class Muon(Optimizer):
 
             for (shape, _dtype, _device), idxs in groups.items():
                 stacked = torch.stack([updates[i] for i in idxs], dim=0)
-                ortho = _batched_newton_schulz(
-                    stacked, ns_coefficients, ns_steps, eps
-                )
+                ortho = _batched_newton_schulz(stacked, ns_coefficients, ns_steps, eps)
                 adjusted_lr = _adjust_lr(lr, adjust_lr_fn, torch.Size(shape))
 
                 group_params = [params_with_grad[i] for i in idxs]

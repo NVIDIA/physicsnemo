@@ -88,9 +88,7 @@ def test_group_params_by_shape(device):
     # (8,8) x3, (8,16) x1, (16,8) x1
     assert sizes == [1, 1, 3]
     # The repeated (8,8) shape collapses to one group with the right indices.
-    eight = [
-        idxs for key, idxs in groups.items() if key[0] == (8, 8)
-    ]
+    eight = [idxs for key, idxs in groups.items() if key[0] == (8, 8)]
     assert eight == [[0, 1, 4]]
 
 
