@@ -55,8 +55,7 @@ from physicsnemo.models.domino.utils import (
     unnormalize,
     unstandardize,
 )
-from physicsnemo.datapipes.transforms._sdf_torch import signed_distance_field_mesh
-from physicsnemo.nn.functional import knn
+from physicsnemo.nn.functional import knn, signed_distance_field
 from physicsnemo.utils.profiling import profile
 
 
@@ -612,8 +611,8 @@ class DoMINODataPipe(Dataset):
         # because we need to use the (maybe) normalized volume coordinates and grid
         ########################################################################
 
-        # SDF calculation on the volume grid
-        sdf_grid, _ = signed_distance_field_mesh(
+        # SDF calculation on the volume grid using WARP
+        sdf_grid, _ = signed_distance_field(
             normed_vertices,
             stl_indices,
             grid,
@@ -622,7 +621,7 @@ class DoMINODataPipe(Dataset):
 
         # Get the SDF of all the selected volume coordinates,
         # And keep the closest point to each one.
-        sdf_nodes, sdf_node_closest_point = signed_distance_field_mesh(
+        sdf_nodes, sdf_node_closest_point = signed_distance_field(
             normed_vertices,
             stl_indices,
             volume_coordinates,
@@ -720,7 +719,7 @@ class DoMINODataPipe(Dataset):
         mesh_indices_flattened = data_dict["stl_faces"].to(torch.int32)
 
         # Compute signed distance function for the surface grid:
-        sdf_surf_grid, _ = signed_distance_field_mesh(
+        sdf_surf_grid, _ = signed_distance_field(
             mesh_vertices=normed_vertices,
             mesh_indices=mesh_indices_flattened,
             input_points=surf_grid,

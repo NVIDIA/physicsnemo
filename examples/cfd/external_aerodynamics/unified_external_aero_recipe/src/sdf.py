@@ -145,9 +145,7 @@ class ComputeSDFFromBoundary(MeshTransform):
             dist = torch.norm(normals, dim=-1)
             on_surface = dist < 1e-6
             com = vertices.mean(dim=0, keepdim=True)
-            normals = torch.where(
-                on_surface.unsqueeze(-1), query_points - com, normals
-            )
+            normals = torch.where(on_surface.unsqueeze(-1), query_points - com, normals)
 
             # Normalize to unit vectors
             norm = torch.norm(normals, dim=-1, keepdim=True).clamp(min=1e-8)

@@ -561,8 +561,11 @@ def _winding_number_sign(
     winding = winding / (4.0 * torch.pi)
     # Inside when winding number ~ 1 (use 0.5 threshold on |winding|).
     inside = winding.abs() > 0.5
-    return torch.where(inside, -torch.ones(n_queries, dtype=dtype, device=device),
-                       torch.ones(n_queries, dtype=dtype, device=device))
+    return torch.where(
+        inside,
+        -torch.ones(n_queries, dtype=dtype, device=device),
+        torch.ones(n_queries, dtype=dtype, device=device),
+    )
 
 
 def signed_distance_field_mesh(

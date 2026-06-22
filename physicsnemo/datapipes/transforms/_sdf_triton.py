@@ -55,6 +55,7 @@ def _morton_order(points: torch.Tensor) -> torch.Tensor:
     """
     return torch.argsort(_compute_morton_codes(points))
 
+
 # Per-query DFS stack depth. The midpoint-split LBVH is balanced, so its depth is
 # ~log2(n_faces); 64 slots covers >1e18 faces with comfortable headroom for the
 # transient two-child push before the next pop.
@@ -182,9 +183,7 @@ if triton.available:
         return dx * dx + dy * dy + dz * dz
 
     @triton.jit
-    def _closest_point_on_triangle(
-        px, py, pz, ax, ay, az, bx, by, bz, cx, cy, cz
-    ):
+    def _closest_point_on_triangle(px, py, pz, ax, ay, az, bx, by, bz, cx, cy, cz):
         """Closest point on triangle (a, b, c) to p (Ericson region table).
 
         Mirrors ``_sdf_torch._closest_point_on_triangles`` exactly, including the
@@ -264,7 +263,11 @@ if triton.available:
 
         # Edge BC
         mask_bc = (
-            (va <= 0.0) & ((d4 - d3) >= 0.0) & ((d5 - d6) >= 0.0) & (~mask_b) & (~mask_c)
+            (va <= 0.0)
+            & ((d4 - d3) >= 0.0)
+            & ((d5 - d6) >= 0.0)
+            & (~mask_b)
+            & (~mask_c)
         )
         t_bc = (d4 - d3) / tl.maximum((d4 - d3) + (d5 - d6), _TINY_C)
         t_bc = tl.minimum(tl.maximum(t_bc, 0.0), 1.0)
@@ -350,9 +353,11 @@ if triton.available:
                 cpx, cpy, cpz = _closest_point_on_triangle(
                     qx, qy, qz, ax, ay, az, bx, by, bz, cx, cy, cz
                 )
-                dsq = (qx - cpx) * (qx - cpx) + (qy - cpy) * (qy - cpy) + (
-                    qz - cpz
-                ) * (qz - cpz)
+                dsq = (
+                    (qx - cpx) * (qx - cpx)
+                    + (qy - cpy) * (qy - cpy)
+                    + (qz - cpz) * (qz - cpz)
+                )
                 better = cell_valid & (dsq < best)
                 best = tl.where(better, dsq, best)
                 best_face = tl.where(better, cell, best_face)
