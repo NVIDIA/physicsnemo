@@ -61,7 +61,10 @@ pipeline:
       boundary_name: stl_geometry
       sdf_field: sdf
       normals_field: sdf_normals
-      use_winding_number: true
+      # Pseudo-normal sign (fed by the fast nearest-triangle kernel). Switch back
+      # to true to use the tree-accelerated winding-number sign for
+      # non-watertight / soup geometry.
+      use_winding_number: false
     - _target_: ${dp:DropBoundary}
       names: [stl_geometry]
     - _target_: ${dp:RenameMeshFields}

@@ -29,8 +29,8 @@ import torch
 from tensordict import TensorDict
 
 from physicsnemo.datapipes.registry import register
+from physicsnemo.datapipes.transforms._sdf_torch import signed_distance_field_mesh
 from physicsnemo.datapipes.transforms.base import Transform
-from physicsnemo.nn.functional import signed_distance_field
 
 
 @register()
@@ -152,7 +152,7 @@ class ComputeSDF(Transform):
             query_points = data[key]
 
             # Compute SDF and closest points
-            sdf, closest_points = signed_distance_field(
+            sdf, closest_points = signed_distance_field_mesh(
                 mesh_coords,
                 mesh_faces,
                 query_points,

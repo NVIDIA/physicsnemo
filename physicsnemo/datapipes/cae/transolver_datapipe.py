@@ -44,7 +44,7 @@ from physicsnemo.models.domino.utils import (
     unnormalize,
     unstandardize,
 )
-from physicsnemo.nn.functional import signed_distance_field
+from physicsnemo.datapipes.transforms._sdf_torch import signed_distance_field_mesh
 
 
 @dataclass
@@ -301,7 +301,7 @@ class TransolverDataPipe(Dataset):
             if self.config.scale_invariance:
                 coords = coords / scale_factor
 
-            sdf, closest_points = signed_distance_field(
+            sdf, closest_points = signed_distance_field_mesh(
                 coords,
                 data_dict["stl_faces"].flatten().to(torch.int32),
                 positions,
