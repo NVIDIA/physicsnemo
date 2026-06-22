@@ -33,7 +33,7 @@ from tensordict import TensorDict
 from torch.amp import autocast
 
 from physicsnemo.mesh import DomainMesh, Mesh
-from physicsnemo.optim import CombinedOptimizer
+from physicsnemo.optim import CombinedOptimizer, Muon
 
 ### Recipe-wide type aliases. Re-exported for use in loss.py, metrics.py,
 ### output_normalize.py, forward_kwargs.py, collate.py, train.py, infer.py,
@@ -94,7 +94,7 @@ def build_muon_optimizer(
     if muon_params and other_params:
         return CombinedOptimizer(
             [
-                torch.optim.Muon(
+                Muon(
                     muon_params,
                     lr=lr,
                     weight_decay=weight_decay,
@@ -111,7 +111,7 @@ def build_muon_optimizer(
             torch_compile_kwargs=compile_kwargs,
         )
     elif muon_params:
-        opt = torch.optim.Muon(
+        opt = Muon(
             muon_params,
             lr=lr,
             weight_decay=weight_decay,
