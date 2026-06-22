@@ -271,18 +271,23 @@ def forward_pass(
     targets: TensorDict = batch["targets"]
 
     ### Inputs keep their native dtype; autocast handles model-internal precision.
-    with get_autocast_context(precision):
-        output = model(**forward_kwargs)
+    with torch.profiler.record_function("forward_pass: model forward"):
+        with get_autocast_context(precision):
+            output = model(**forward_kwargs)
 
-    pred_td = normalize_output_to_tensordict(output, target_config, output_type)
+    with torch.profiler.record_function("forward_pass: normalize_output_to_tensordict"):
+        pred_td = normalize_output_to_tensordict(output, target_config, output_type)
 
     ### Loss runs in float32 to avoid bf16 precision loss in the reduction.
-    pred_f32 = pred_td.float()
-    target_f32 = targets.float()
+    with torch.profiler.record_function("forward_pass: .float() cast"):
+        pred_f32 = pred_td.float()
+        target_f32 = targets.float()
 
-    loss, loss_td = loss_calculator(pred_f32, target_f32)
+    with torch.profiler.record_function("forward_pass: loss_calculator"):
+        loss, loss_td = loss_calculator(pred_f32, target_f32)
     with torch.no_grad():
-        metric_td = metric_calculator(pred_f32, target_f32)
+        with torch.profiler.record_function("forward_pass: metric_calculator"):
+            metric_td = metric_calculator(pred_f32, target_f32)
     ### Detach (don't sync) the per-field TDs so the caller controls when
     ### a D2H copy happens; running ``.item()`` here would serialise the
     ### forward kernels against the host. ``TensorDict.detach()`` walks
@@ -365,31 +370,55 @@ def _run_epoch(
     n_local = 0
     num_steps = len(dataloader)
     epoch_t0 = time.perf_counter()
+    ### Single pinned scalar buffer reused every step so the loss D2H
+    ### transfer is async (non_blocking=True from device to pinned host
+    ### memory). The copy is issued right after forward_pass and read
+    ### just before the logger line; by then backward + optimizer.step
+    ### have run, giving the GPU time to complete the copy without
+    ### blocking the host.
+    _loss_pinned = (
+        torch.zeros(1, pin_memory=True) if torch.cuda.is_available() else None
+    )
 
     with grad_ctx:
         step_t0 = time.perf_counter()
         for i, batch in enumerate(dataloader):
-            batch = recursive_to_device(batch, dist_manager.device)
+            with torch.profiler.record_function("_run_epoch: recursive_to_device"):
+                batch = recursive_to_device(batch, dist_manager.device)
 
-            loss, losses, metrics = forward_pass(
-                batch,
-                model,
-                precision,
-                loss_calculator,
-                metric_calculator,
-                output_type=output_type,
-                target_config=target_config,
-            )
+            with torch.profiler.record_function("_run_epoch: forward_pass"):
+                loss, losses, metrics = forward_pass(
+                    batch,
+                    model,
+                    precision,
+                    loss_calculator,
+                    metric_calculator,
+                    output_type=output_type,
+                    target_config=target_config,
+                )
+
+            ### Kick off the async D2H copy of the scalar loss value into the
+            ### pinned buffer. Backward + optimizer.step run while the copy is
+            ### in flight, so by the time we call .item() below the transfer
+            ### is already done and there is no host stall.
+            if _loss_pinned is not None:
+                _loss_pinned.copy_(loss.detach(), non_blocking=True)
 
             if is_train:
-                optimizer.zero_grad()
+                with torch.profiler.record_function("_run_epoch: optimizer.zero_grad"):
+                    optimizer.zero_grad()
                 if precision == "float16" and scaler is not None:
-                    scaler.scale(loss).backward()
-                    scaler.step(optimizer)
-                    scaler.update()
+                    with torch.profiler.record_function("_run_epoch: scaler.backward"):
+                        scaler.scale(loss).backward()
+                    with torch.profiler.record_function("_run_epoch: scaler.step"):
+                        scaler.step(optimizer)
+                    with torch.profiler.record_function("_run_epoch: scaler.update"):
+                        scaler.update()
                 else:
-                    loss.backward()
-                    optimizer.step()
+                    with torch.profiler.record_function("_run_epoch: loss.backward"):
+                        loss.backward()
+                    with torch.profiler.record_function("_run_epoch: optimizer.step"):
+                        optimizer.step()
                 if cfg.training.get("scheduler_update_mode", "epoch") == "step":
                     scheduler.step()
 
@@ -407,9 +436,14 @@ def _run_epoch(
                 total_metrics_td.add_(metrics)
             n_local += 1
 
-            ### Per-step sync for the print line; lands after backward +
-            ### optimizer.step so it overlaps with queued GPU work.
-            this_loss = loss.detach().item()
+            ### Read the loss scalar from the pinned buffer; the async copy
+            ### was issued before backward so it has had the full backward +
+            ### optimizer.step to complete without stalling the host.
+            with torch.profiler.record_function("_run_epoch: loss.item() D2H readback"):
+                if _loss_pinned is not None:
+                    this_loss = _loss_pinned.item()
+                else:
+                    this_loss = loss.detach().item()
             total_loss += this_loss
 
             step_dt = time.perf_counter() - step_t0
@@ -719,13 +753,16 @@ def benchmark_io_epoch(
         )
         for name, t in named_tensors:
             v_flat = t.float() if t.is_floating_point() else t.to(torch.float32)
-            logger.info(
-                f"    {name:30s}  "
-                f"min={v_flat.min().item(): .6e}  "
-                f"mean={v_flat.mean().item(): .6e}  "
-                f"std={v_flat.std().item(): .6e}  "
-                f"max={v_flat.max().item(): .6e}"
-            )
+            with torch.profiler.record_function(
+                "benchmark_io: tensor stats .item() D2H"
+            ):
+                logger.info(
+                    f"    {name:30s}  "
+                    f"min={v_flat.min().item(): .6e}  "
+                    f"mean={v_flat.mean().item(): .6e}  "
+                    f"std={v_flat.std().item(): .6e}  "
+                    f"max={v_flat.max().item(): .6e}"
+                )
 
         if max_steps is not None and i + 1 >= max_steps:
             break

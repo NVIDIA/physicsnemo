@@ -215,10 +215,12 @@ def radius_search_impl(
     input_dtype = points.dtype
 
     # Warp supports only fp32, so we have to cast:
-    if points.dtype != torch.float32:
-        points = points.to(torch.float32)
-    if queries.dtype != torch.float32:
-        queries = queries.to(torch.float32)
+    with torch.profiler.record_function("radius_search: cast points to fp32"):
+        if points.dtype != torch.float32:
+            points = points.to(torch.float32)
+    with torch.profiler.record_function("radius_search: cast queries to fp32"):
+        if queries.dtype != torch.float32:
+            queries = queries.to(torch.float32)
 
     # Compute follows data.
     wp_launch_device, wp_launch_stream = FunctionSpec.warp_launch_context(points)
@@ -229,13 +231,18 @@ def radius_search_impl(
         wp_points_per_b = []
         wp_queries_per_b = []
         for b in range(B):
-            pts_b = points[b].contiguous()
-            qrs_b = queries[b].contiguous()
-            wp_pts_b = wp.from_torch(pts_b, dtype=wp.vec3)
-            wp_qrs_b = wp.from_torch(qrs_b, dtype=wp.vec3, return_ctype=True)
-            grid = wp.HashGrid(dim_x=128, dim_y=128, dim_z=128, device=wp_pts_b.device)
-            grid.reserve(N_queries)
-            grid.build(points=wp_pts_b, radius=0.5 * radius)
+            with torch.profiler.record_function(f"radius_search: contiguous b={b}"):
+                pts_b = points[b].contiguous()
+                qrs_b = queries[b].contiguous()
+            with torch.profiler.record_function(f"radius_search: from_torch b={b}"):
+                wp_pts_b = wp.from_torch(pts_b, dtype=wp.vec3)
+                wp_qrs_b = wp.from_torch(qrs_b, dtype=wp.vec3, return_ctype=True)
+            with torch.profiler.record_function(f"radius_search: HashGrid build b={b}"):
+                grid = wp.HashGrid(
+                    dim_x=128, dim_y=128, dim_z=128, device=wp_pts_b.device
+                )
+                grid.reserve(N_queries)
+                grid.build(points=wp_pts_b, radius=0.5 * radius)
             grids.append(grid)
             wp_points_per_b.append(wp_pts_b)
             wp_queries_per_b.append(wp_qrs_b)
@@ -323,21 +330,30 @@ def radius_search_impl(
             # Deterministic output path: always use batched 2D kernel launch
             # ---------------------------------------------------------------
 
-            # Build warp array of grid IDs
-            grid_ids_tensor = torch.tensor(
-                [g.id for g in grids], dtype=torch.int64, device=points.device
-            )
+            # Build warp array of grid IDs.
+            # Construct in pinned host memory first so the H2D copy is
+            # stream-ordered (non_blocking) rather than a blocking cudaMemcpy.
+            with torch.profiler.record_function("radius_search: grid_ids host->device"):
+                _grid_ids_cpu = torch.tensor(
+                    [g.id for g in grids],
+                    dtype=torch.int64,
+                    pin_memory=torch.cuda.is_available(),
+                )
+                grid_ids_tensor = _grid_ids_cpu.to(points.device, non_blocking=True)
             wp_grid_ids = wp.from_torch(
                 grid_ids_tensor, dtype=wp.uint64, return_ctype=True
             )
 
             # Convert batched points/queries to warp 2D arrays
-            wp_points_2d = wp.from_torch(
-                points.contiguous(), dtype=wp.vec3, return_ctype=True
-            )
-            wp_queries_2d = wp.from_torch(
-                queries.contiguous(), dtype=wp.vec3, return_ctype=True
-            )
+            with torch.profiler.record_function(
+                "radius_search: contiguous points/queries 2D"
+            ):
+                wp_points_2d = wp.from_torch(
+                    points.contiguous(), dtype=wp.vec3, return_ctype=True
+                )
+                wp_queries_2d = wp.from_torch(
+                    queries.contiguous(), dtype=wp.vec3, return_ctype=True
+                )
 
             # Allocate outputs with batch dimension
             indices = torch.full(
@@ -407,8 +423,9 @@ def radius_search_impl(
                     pts_out = pts_out.squeeze(0)
 
     # Handle the matrix of return values:
-    pts_out = pts_out.to(input_dtype)
-    dists_out = dists_out.to(input_dtype)
+    with torch.profiler.record_function("radius_search: cast outputs to input_dtype"):
+        pts_out = pts_out.to(input_dtype)
+        dists_out = dists_out.to(input_dtype)
     return indices, pts_out, dists_out, num_neighbors
 
 

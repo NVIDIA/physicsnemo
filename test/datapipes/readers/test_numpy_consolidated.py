@@ -239,6 +239,110 @@ class TestNumpyReaderCoordinatedSubsampling:
         assert reader_with_config._coordinated_subsampling_config is not None
 
 
+class TestNumpyReaderSubsamplingRNG:
+    """Order- and thread-independent reproducibility of subsampling RNG.
+
+    Reader subsampling derives its generator from ``(base_seed, epoch,
+    index)``, so a given sample's draw is identical regardless of read
+    order or worker thread (the threaded producer path), and varies
+    deterministically per index and per epoch.
+    """
+
+    def setup_method(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.temp_path = Path(self.temp_dir)
+
+        self.n_samples = 6
+        self.n_points = 1000
+        self.subsample_points = 100
+        for i in range(self.n_samples):
+            coords = np.random.randn(self.n_points, 3).astype(np.float32)
+            features = np.random.randn(self.n_points, 4).astype(np.float32)
+            np.savez(
+                self.temp_path / f"sample_{i:03d}.npz",
+                coords=coords,
+                features=features,
+            )
+
+    def teardown_method(self):
+        """Clean up temporary files."""
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _make_reader(self) -> NumpyReader:
+        return NumpyReader(
+            self.temp_path,
+            file_pattern="sample_*.npz",
+            fields=["coords", "features"],
+            coordinated_subsampling={
+                "n_points": self.subsample_points,
+                "target_keys": ["coords", "features"],
+            },
+        )
+
+    def test_subsample_order_independent(self):
+        """Reading an index gives the same result regardless of read order."""
+        reader = self._make_reader()
+        reader.set_generator(torch.Generator().manual_seed(123))
+
+        forward = {i: reader[i][0]["coords"] for i in range(self.n_samples)}
+
+        reader.set_generator(torch.Generator().manual_seed(123))
+        reverse = {i: reader[i][0]["coords"] for i in reversed(range(self.n_samples))}
+
+        for i in range(self.n_samples):
+            assert torch.equal(forward[i], reverse[i])
+
+    def test_subsample_thread_independent(self):
+        """Concurrent reads match single-threaded reads for each index."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        reader = self._make_reader()
+        reader.set_generator(torch.Generator().manual_seed(7))
+
+        serial = {i: reader[i][0]["coords"] for i in range(self.n_samples)}
+
+        indices = list(range(self.n_samples)) * 3
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(lambda i: (i, reader[i][0]["coords"]), indices))
+
+        for i, coords in results:
+            assert torch.equal(coords, serial[i])
+
+    def test_subsample_distinct_across_indices(self):
+        """Different indices yield different subsamples under one seed."""
+        reader = self._make_reader()
+        reader.set_generator(torch.Generator().manual_seed(0))
+
+        a = reader[0][0]["coords"]
+        b = reader[1][0]["coords"]
+        assert not torch.equal(a, b)
+
+    def test_subsample_epoch_changes_output(self):
+        """Epoch is folded into the seed, changing the draw deterministically."""
+        reader = self._make_reader()
+
+        reader.set_generator(torch.Generator().manual_seed(0))
+        reader.set_epoch(0)
+        e0 = reader[0][0]["coords"]
+
+        reader.set_generator(torch.Generator().manual_seed(0))
+        reader.set_epoch(1)
+        e1 = reader[0][0]["coords"]
+        assert not torch.equal(e0, e1)
+
+        # Re-deriving epoch 0 reproduces the original draw.
+        reader.set_generator(torch.Generator().manual_seed(0))
+        reader.set_epoch(0)
+        assert torch.equal(reader[0][0]["coords"], e0)
+
+    def test_unseeded_does_not_raise(self):
+        """Without a seed, subsampling falls back to the global RNG."""
+        reader = self._make_reader()
+        data, _ = reader[0]
+        assert data["coords"].shape == (self.subsample_points, 3)
+
+
 class TestNumpyReaderMemoryManagement:
     """Test memory management and cleanup."""
 

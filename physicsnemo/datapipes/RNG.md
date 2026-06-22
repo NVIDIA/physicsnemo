@@ -32,6 +32,21 @@ master seed using `fork_generator(parent, n)`.  Each child is seeded with
 and stable across runs.  Children are created on the **same device** as the
 parent.
 
+For RNG that must be reproducible regardless of *execution order* (e.g.
+reader subsampling, which runs on a pool of worker threads), `_rng.py`
+also provides coordinate-based seeding:
+
+- **`derive_seed(base_seed, *coords)`** — mixes a base seed with integer
+  coordinates (typically `epoch` and sample `index`) into a single
+  well-mixed 64-bit seed via `numpy.random.SeedSequence`.  The result
+  depends only on the inputs, not on call order or thread.
+- **`spawn_generator(base_seed, *coords, device=...)`** — returns a fresh
+  `torch.Generator` seeded with `derive_seed(base_seed, *coords)`.
+
+Because each call returns an independent generator seeded purely from its
+coordinates, draws are reproducible irrespective of order and safe to
+compute concurrently from multiple threads (no shared mutable state).
+
 ### DataLoader
 
 When `seed` is set the DataLoader:
@@ -70,9 +85,12 @@ sub-dataset.
 ### Epoch reseeding
 
 `DataLoader.set_epoch(epoch)` propagates to the sampler and dataset.
-Each component with a generator reseeds it with
+The sampler and stochastic transforms reseed their generators with
 `initial_seed() + epoch`, producing a different but deterministic
-random sequence every epoch.
+random sequence every epoch.  Readers instead store the epoch and fold
+it into each sample's derived seed (see [Readers](#readers)), so their
+per-sample RNG also varies deterministically per epoch without relying
+on a shared, sequentially-drawn generator.
 
 ## Generator tree
 
@@ -152,18 +170,63 @@ standalone use.
 
 ## Readers
 
-The `Reader` base class defines no-op `set_generator` / `set_epoch`.
-Readers that use randomness override them:
+Reader subsampling runs on the dataset's worker-thread pool (the threaded
+`prefetch` producer path; `Dataset` defaults to `num_workers=2`), so the
+*order* in which samples are drawn is non-deterministic.  A single shared,
+sequentially-drawn generator would therefore not be reproducible with
+`num_workers > 1`.  To avoid this, readers derive RNG **per
+`(base_seed, epoch, index)`** instead of from one shared stream:
 
-| Reader | Randomness | Generator support |
+- **`set_generator(g)`** stores `g.initial_seed()` as the reader's base
+  seed (it does *not* keep the generator itself).
+- **`set_epoch(e)`** stores the epoch.
+- Each `reader[index]` then calls
+  `spawn_generator(base_seed, epoch, index)` to obtain a fresh generator
+  for that sample's draws (the `Reader` base class exposes this as
+  `_index_generator(index)`).
+
+The draw for a given sample depends only on `(base_seed, epoch, index)`,
+so it is **identical regardless of read order or worker thread** —
+reproducible for any `num_workers` — while still differing across indices
+and across epochs.  When no seed has been set, the per-sample generator is
+`None` and draws fall back to the global default RNG.
+
+Transforms remain reproducible because they run on the main thread in
+sampler order (via the consume stage), so their sequentially-drawn
+generators are unaffected by the threaded producer.
+
+| Reader | Randomness | Per-`(seed, epoch, index)` RNG |
 |---|---|---|
 | `MeshReader` | `torch.randint` (contiguous block selection) | Yes |
 | `DomainMeshReader` | `torch.randint` | Yes |
 | `NumpyReader` | `torch.randint` (coordinated subsampling) | Yes |
 | `ZarrReader` | `torch.randint` | Yes |
 | `TensorStoreZarrReader` | `torch.randint` | Yes |
-| `HDF5Reader` | None | No-op (inherited) |
-| `VTKReader` | None | No-op (inherited) |
+| `HDF5Reader` | None | n/a (inherited base) |
+| `VTKReader` | None | n/a (inherited base) |
+
+## Iterable & descriptor paths: per-`(epoch, position)` seeding
+
+Map-style datasets have a stable sample `index`, so readers key their
+per-sample RNG on `(base_seed, epoch, index)` (see [Readers](#readers)).
+Generator-style (`IterableDatasetBase`) and future descriptor-keyed
+sources have **no stable index**: samples are produced in sequence with no
+addressable position in a corpus. They therefore key on the **monotonic
+emission position** within the epoch instead:
+
+- **map-style:** `derive_seed(base_seed, epoch, index)` — reproducible for
+  any read order / `num_workers`, since the index is intrinsic to the
+  sample.
+- **iterable / descriptor:** `derive_seed(base_seed, epoch, position)` —
+  where `position` is a 0-based counter of emissions in the current epoch.
+  Reproducible across runs and distinct across epochs and positions.
+
+Both schemes use the same `derive_seed`/`spawn_generator` primitives; only
+the coordinate that stands in for "which sample" differs. The iterable
+path runs entirely on the main thread in emission order, so the position
+counter is unambiguous (there is no worker-thread reordering to defend
+against). See `tutorial_5_iterable_online_simulation.py` for a worked
+example seeding an online Darcy-flow simulation per `(epoch, position)`.
 
 ## Current limitations
 

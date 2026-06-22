@@ -99,7 +99,8 @@ class TranslateMesh(MeshTransform):
         self.vector = vector
 
     def __call__(self, mesh: Mesh) -> Mesh:
-        return mesh.translate(self.vector.to(mesh.points.device))
+        with torch.profiler.record_function("TranslateMesh: vector.to(device)"):
+            return mesh.translate(self.vector.to(mesh.points.device))
 
     def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
         """Apply translation to a :class:`DomainMesh`.
@@ -453,9 +454,10 @@ class SetGlobalField(MeshTransform):
 
     def __call__(self, mesh: Mesh) -> Mesh:
         new_gd = mesh.global_data.clone()
-        new_gd.update(
-            self._fields.to(device=mesh.points.device, dtype=mesh.points.dtype)
-        )
+        with torch.profiler.record_function("InjectGlobalFields: _fields.to(device)"):
+            new_gd.update(
+                self._fields.to(device=mesh.points.device, dtype=mesh.points.dtype)
+            )
         return Mesh(
             points=mesh.points,
             cells=mesh.cells,
@@ -542,8 +544,11 @@ class NormalizeMeshFields(MeshTransform):
             if field_name not in new_td.keys():
                 continue
             val = new_td[field_name].float()
-            mean = stats["mean"].to(dtype=val.dtype, device=val.device)
-            std = stats["std"].to(dtype=val.dtype, device=val.device)
+            with torch.profiler.record_function(
+                "NormalizeMeshFields: stats.to(device)"
+            ):
+                mean = stats["mean"].to(dtype=val.dtype, device=val.device)
+                std = stats["std"].to(dtype=val.dtype, device=val.device)
             new_td[field_name] = (val - mean) / (std + self._eps)
 
         ### `Mesh.copy` is a tensorclass-provided shallow copy: `points`,
@@ -589,8 +594,11 @@ class NormalizeMeshFields(MeshTransform):
             dim = 1 if ftype == "scalar" else n_spatial_dims
             if name in self._stats:
                 stats = self._stats[name]
-                mean = stats["mean"].to(dtype=tensor.dtype, device=tensor.device)
-                std = stats["std"].to(dtype=tensor.dtype, device=tensor.device)
+                with torch.profiler.record_function(
+                    "NormalizeMeshFields.inverse_tensor: stats.to(device)"
+                ):
+                    mean = stats["mean"].to(dtype=tensor.dtype, device=tensor.device)
+                    std = stats["std"].to(dtype=tensor.dtype, device=tensor.device)
                 out[..., idx : idx + dim] = (
                     out[..., idx : idx + dim] * (std + self._eps) + mean
                 )
