@@ -767,6 +767,99 @@ class MultiScaleFeatureExtractor(nn.Module):
             dim=-1,
         )
 
+    @staticmethod
+    def _same_coords(
+        a: Float[torch.Tensor, "batch points spatial_dim"],
+        b: Float[torch.Tensor, "batch points spatial_dim"],
+    ) -> bool:
+        r"""Whether two tensors are the same data (so a ball query over either is identical).
+
+        :meth:`extract_context_features` and :meth:`extract_local_features`
+        pass ``spatial_coords`` and ``geometry`` to the per-scale processor in
+        **swapped** order (``processor(spatial_coords, geometry)`` vs
+        ``processor(geometry, spatial_coords)``). Those two calls compute the
+        same ball query and the same processor output **iff the two inputs hold
+        the same coordinates**. When they do, :meth:`extract_context_and_local`
+        runs each processor once instead of twice.
+
+        This is a *sufficient*, sync-free aliasing test: an ``is`` check is not
+        enough because the recipe's collate ``unsqueeze``-es ``geometry`` and
+        ``local_positions`` into distinct view objects that still alias the same
+        storage. A value comparison would force a host sync, so we instead
+        confirm the two tensors are identical views over identical storage
+        (shape, dtype, stride, offset, and base pointer all match). When this
+        returns ``False`` the caller falls back to the exact two-pass behavior,
+        so correctness never depends on it.
+
+        Parameters
+        ----------
+        a, b : torch.Tensor
+            Candidate coordinate tensors of shape :math:`(B, N, 3)`.
+
+        Returns
+        -------
+        bool
+            ``True`` when *a* and *b* are guaranteed element-for-element equal.
+        """
+        return a is b or (
+            a.shape == b.shape
+            and a.dtype == b.dtype
+            and a.stride() == b.stride()
+            and a.storage_offset() == b.storage_offset()
+            and a.data_ptr() == b.data_ptr()
+        )
+
+    def extract_context_and_local(
+        self,
+        spatial_coords: Float[torch.Tensor, "batch points spatial_dim"],
+        geometry: Float[torch.Tensor, "batch points geometry_dim"],
+    ) -> tuple[
+        list[Float[torch.Tensor, "batch heads slices dim"]],
+        Float[torch.Tensor, "batch points total_hidden"],
+    ]:
+        r"""Extract context and local features in one pass, reusing the ball query when possible.
+
+        Combines :meth:`extract_context_features` and
+        :meth:`extract_local_features`. When ``spatial_coords`` and ``geometry``
+        are the same coordinates (see :meth:`_same_coords`), the swapped-argument
+        processor calls in those two methods are identical, so each per-scale
+        processor (ball query + MLP, the model's dominant ``radius_search``
+        kernel) is evaluated **once** and fed to both the context tokenizer and
+        the concatenated local features. Otherwise this falls back to the exact
+        two-pass behavior, preserving the deliberate asymmetry for configs where
+        geometry and positions differ.
+
+        Parameters
+        ----------
+        spatial_coords : torch.Tensor
+            Spatial coordinates of shape :math:`(B, N, 3)`.
+        geometry : torch.Tensor
+            Geometry features of shape :math:`(B, N, C_{geo})`.
+
+        Returns
+        -------
+        tuple[list[torch.Tensor], torch.Tensor]
+            ``(context_features, local_features)`` matching the outputs of
+            :meth:`extract_context_features` and :meth:`extract_local_features`
+            respectively.
+        """
+        if self._same_coords(spatial_coords, geometry):
+            context_features = []
+            local_parts = []
+            for processor, tokenizer in zip(self.processors, self.tokenizers):
+                # processor(spatial_coords, geometry) == processor(geometry, spatial_coords)
+                # when the two inputs alias, so one pass feeds both paths.
+                feat = processor(spatial_coords, geometry)
+                context_features.append(tokenizer(feat))
+                local_parts.append(feat)
+            return context_features, torch.cat(local_parts, dim=-1)
+
+        # General (asymmetric) fallback: distinct query/search sets per path.
+        return (
+            self.extract_context_features(spatial_coords, geometry),
+            self.extract_local_features(spatial_coords, geometry),
+        )
+
 
 class GlobalContextBuilder(nn.Module):
     r"""Orchestrates all context construction with a clean, simple interface.
@@ -1029,16 +1122,15 @@ class GlobalContextBuilder(nn.Module):
             for i, embedding in enumerate(local_embeddings):
                 spatial_coords = local_positions[i]  # Extract coordinates
 
-                # Get tokenized context features from multi-scale extractor
-                context_feats = self.local_extractors[i].extract_context_features(
-                    spatial_coords, geometry
-                )
+                # Get tokenized context features and concatenated local
+                # features in one pass.  When spatial_coords and geometry alias
+                # the same coordinates (the common case), the extractor reuses a
+                # single ball query per scale instead of computing the same
+                # radius_search twice; otherwise it falls back to two passes.
+                context_feats, local_feats = self.local_extractors[
+                    i
+                ].extract_context_and_local(spatial_coords, geometry)
                 context_parts.extend(context_feats)
-
-                # Get concatenated local features for skip connection
-                local_feats = self.local_extractors[i].extract_local_features(
-                    spatial_coords, geometry
-                )
                 local_features.append(local_feats)
 
         # Tokenize geometry features
