@@ -124,12 +124,14 @@ class DarcyOnlineDataset(IterableDatasetBase):
 
 
 def main() -> None:
-    """Run the online Darcy simulation through the PhysicsNeMo ``DataLoader``.
+    """Run the online Darcy simulation over several epochs and report timings.
 
-    Builds the iterable :class:`DarcyOnlineDataset`, drives it for a few
-    epochs with stream overlap enabled, and prints per-batch and per-epoch
-    host/CUDA timing so the generation/compute overlap is visible. No-ops
-    on machines without CUDA, since the Warp Darcy solver requires a GPU.
+    Builds an iterable :class:`DarcyOnlineDataset`, wraps it in a stream-overlapped
+    ``DataLoader``, and iterates for ``num_epochs``. Each epoch is reseeded via
+    ``set_epoch`` for a distinct, reproducible batch stream. For every batch we
+    record host wall-clock time and per-step CUDA event timings, then print a
+    per-epoch summary. Requires a CUDA device for the Warp Darcy solver; the
+    function returns early with a message if none is available.
     """
     if not torch.cuda.is_available():
         print("This tutorial requires a CUDA device (Warp Darcy solver). Skipping.")
