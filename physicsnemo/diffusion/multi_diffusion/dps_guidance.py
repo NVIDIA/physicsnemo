@@ -222,6 +222,18 @@ class MultiDiffusionDPSScorePredictor(Predictor):
     :class:`~physicsnemo.diffusion.guidance.DPSScorePredictor` : Use for
         non-patch-local guidances.
 
+    Notes
+    -----
+    **Recommended call pattern:** wrap inference-only sample loops in
+    ``with torch.no_grad():``. The predictor re-enables autograd locally
+    for the guidance's ``autograd.grad`` call, so functionality is
+    preserved, and the returned score does not carry a graph back to the
+    per-chunk state. Without ``no_grad``, the score's autograd graph
+    accumulates across solver steps and can dominate memory at large
+    global domains. Do NOT use ``torch.inference_mode()`` — it disables
+    autograd entirely and breaks the guidance's internal gradient
+    computation.
+
     Examples
     --------
     **Example 1:** Basic usage with a single inpainting guidance:
@@ -382,6 +394,13 @@ class MultiDiffusionDPSScorePredictor(Predictor):
                 "instead."
             )
 
+        # Capture the caller's grad mode so the score-conversion and chunk-add
+        # ops below honor it. Under ``torch.no_grad()`` this makes the appended
+        # tensors leaves, so the cat/fuse return value does not carry a
+        # graph-tail through ``x_patched`` and friends. The guidance call still
+        # runs under ``enable_grad`` since it needs ``autograd.grad`` internally.
+        outer_grad_enabled = torch.is_grad_enabled()
+
         x = x.detach().requires_grad_(True)
         combined_list: list[Tensor] = []
 
@@ -390,8 +409,9 @@ class MultiDiffusionDPSScorePredictor(Predictor):
                 g_chunk = torch.zeros_like(x0_chunk)
                 for g in self.guidances:
                     g_chunk = g_chunk + g(x_chunk, t_chunk, x0_chunk, slice_start=s)
-                score_chunk = self.x0_to_score_fn(x0_chunk, x_chunk, t_chunk)
-                combined_list.append(score_chunk + g_chunk)
+                with torch.set_grad_enabled(outer_grad_enabled):
+                    score_chunk = self.x0_to_score_fn(x0_chunk, x_chunk, t_chunk)
+                    combined_list.append(score_chunk + g_chunk)
 
         combined_patched = torch.cat(combined_list, dim=0)  # (P*B, C, Hp, Wp)
         return self.x0_predictor.fuse_fn(combined_patched)

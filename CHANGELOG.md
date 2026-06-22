@@ -89,6 +89,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- xDeepONet `SpatialBranch`
+  (`physicsnemo.experimental.models.xdeeponet.SpatialBranch`) now supports
+  mixed-precision (AMP/autocast) training: FFT-based spectral convolutions are
+  evaluated in float32 internally (cuFFT lacks complex-half support) while the
+  rest of the branch uses autocast. This is a no-op under full precision, so
+  fp32 outputs are unchanged. Also fixes a stale module docstring that
+  referenced removed trunk/MLP-branch builder helpers.
 - `physicsnemo.mesh.remesh` now raises `NotImplementedError` for non-2D-in-3D
   inputs (the pyacvd ACVD clustering is surface-only) instead of failing
   confusingly downstream, and its docstring reflects that restriction.
@@ -114,6 +121,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `physicsnemo.mesh`: `validate_mesh(check_self_intersection=True)` now raises
   `NotImplementedError` (the check is unimplemented) instead of silently returning a
   `None` sentinel that masquerades as "no self-intersections found".
+- Performance improvements in the diffusion module: reduced peak memory of
+  DPS-guided diffusion sampling most notably for multi-diffusion at large
+  domains. A guided `sample()` loop run under `torch.no_grad()` now detaches the
+  state between solver steps, so the guidance autograd graph is no longer
+  accumulated across the sampling trajectory (sampled outputs are unchanged;
+  use `torch.no_grad()`, not `torch.inference_mode()`). Also expands CI test
+  coverage and adds an API documentation page for
+  `physicsnemo.diffusion.multi_diffusion`.
 
 ### Deprecated
 
@@ -182,6 +197,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 ### Dependencies
+
+- Updates the minimum supported `warp-lang` version to 1.14.0.
 
 ## [2.1.0] - 2026-05-26
 
