@@ -255,7 +255,9 @@ def extrude(
         # that list a shared edge's endpoints in different local orders split the
         # shared quad face along opposite diagonals, producing a non-manifold
         # boundary (interior crack faces then leak into get_boundary_mesh).
-        parent_cells = torch.sort(mesh.cells, dim=1).values  # (n_cells, n_verts_per_parent)
+        parent_cells = torch.sort(
+            mesh.cells, dim=1
+        ).values  # (n_cells, n_verts_per_parent)
 
         # NOTE: This loop iterates over child indices (bounded by simplex
         # dimension, not mesh size), so the iteration count is small (e.g. 3
