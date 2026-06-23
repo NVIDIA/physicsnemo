@@ -962,3 +962,30 @@ def test_mse_weights_mask_matches_manual(device):
     torch.testing.assert_close(mse_mod.mse(pred, target, weights=mask), man)
     # rmse inherits the weighting.
     torch.testing.assert_close(mse_mod.rmse(pred, target, weights=mask), man.sqrt())
+
+
+def test_mse_rmse_unweighted_and_dim(device):
+    torch.manual_seed(6)
+    pred = torch.randn(3, 8, device=device)
+    target = torch.randn(3, 8, device=device)
+    se = (pred - target) ** 2
+    torch.testing.assert_close(mse_mod.mse(pred, target), se.mean())
+    torch.testing.assert_close(mse_mod.rmse(pred, target), se.mean().sqrt())
+    # dim reduction matches a plain mean over that axis.
+    torch.testing.assert_close(mse_mod.mse(pred, target, dim=1), se.mean(dim=1))
+    torch.testing.assert_close(mse_mod.rmse(pred, target, dim=1), se.mean(dim=1).sqrt())
+
+
+def test_mse_weights_channel_and_eps(device):
+    torch.manual_seed(7)
+    pred = torch.randn(2, 9, 4, device=device)
+    target = torch.randn(2, 9, 4, device=device)
+    # Per-channel weights broadcast over (B, N): a genuine weighted mean — unlike
+    # the relative ratio, channel weights do NOT cancel here.
+    cw = torch.rand(4, device=device) + 0.5
+    w = torch.broadcast_to(cw, pred.shape)
+    man = (w * (pred - target) ** 2).sum() / w.sum()
+    torch.testing.assert_close(mse_mod.mse(pred, target, weights=cw), man)
+    # All-zero weights -> finite 0 via the eps floor (no division by zero).
+    out = mse_mod.mse(pred, target, weights=torch.zeros_like(pred))
+    assert torch.isfinite(out) and float(out) == 0.0

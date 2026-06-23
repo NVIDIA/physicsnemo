@@ -68,7 +68,11 @@ def _relative_reduce(
         ``dim``.
     """
     if weights is not None:
-        w = weights.to(device=err_sq.device, dtype=err_sq.dtype)
+        # Broadcast explicitly (as in ``mse.py``) so a non-broadcastable weight
+        # raises a clear error naming the target shape.
+        w = torch.broadcast_to(
+            weights.to(device=err_sq.device, dtype=err_sq.dtype), err_sq.shape
+        )
         err_sq = err_sq * w
         tgt_sq = tgt_sq * w
     if dim is None:
@@ -189,4 +193,7 @@ def relative_l2(
     ValueError
         If ``pred`` and ``target`` do not have the same shape.
     """
+    # Enforce the documented contract directly rather than relying on the
+    # delegated relative_mse call.
+    _check_shapes(pred, target)
     return relative_mse(pred, target, dim=dim, eps=eps, weights=weights).sqrt()
