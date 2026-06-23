@@ -17,7 +17,7 @@
 """Data- and domain-parallel helpers for FGN training.
 
 Slim adaptation of ``examples/weather/stormcast/utils/parallel.py`` tailored
-to the FGN recipe: same FSDP-plus-ShardTensor strategy, same sharded-
+to the FGN recipe: same FSDP2-plus-ShardTensor strategy, same sharded-
 dataloader conventions, but without the diffusion noise-scheduler plumbing
 StormCast needs.
 
@@ -34,13 +34,7 @@ from typing import Any
 import numpy as np
 import torch
 from datasets.dataset import worker_init
-from torch.distributed.fsdp import (
-    BackwardPrefetch,
-    ShardingStrategy,
-)
-from torch.distributed.fsdp import (
-    FullyShardedDataParallel as FSDP,
-)
+from torch.distributed.fsdp import FSDPModule, fully_shard
 from torch.distributed.tensor import DTensor, distribute_module, distribute_tensor
 from torch.distributed.tensor.placement_types import Replicate, Shard
 from utils.nn import nested_to
@@ -53,7 +47,7 @@ class ParallelHelper:
     """Manage data + domain parallelism for the FGN recipe.
 
     Mirrors StormCast's ``ParallelHelper`` so FGN inherits the same tested
-    pattern: a 2D device mesh with a ``ddp`` axis and a ``domain`` axis, FSDP
+    pattern: a 2D device mesh with a ``ddp`` axis and a ``domain`` axis, FSDP2
     on the ddp axis, optional ShardTensor spatial sharding on the domain
     axis.
 
@@ -177,23 +171,28 @@ class ParallelHelper:
             return self.nested_scatter(x, self.get_domain_group_zero_rank())
         return x
 
-    def distribute_model(self, model: torch.nn.Module) -> torch.nn.Module:
-        """Wrap a model with FSDP, with optional ShardTensor domain sharding."""
+    def distribute_model(self, model: torch.nn.Module) -> "FSDPModule":
+        """Shard model parameters with FSDP2 (``fully_shard``).
+
+        Mirrors StormCast's updated ``distribute_model``: makes parameters
+        contiguous first (FSDP2 raises on non-contiguous params), optionally
+        applies domain-parallel ``distribute_module``, then wraps with
+        ``fully_shard`` on the data-parallel mesh.
+        """
+        # FSDP2 rejects non-contiguous parameters.
+        with torch.no_grad():
+            for p in model.parameters():
+                if not p.is_contiguous():
+                    p.data = p.data.contiguous()
+
         if self.use_shard_tensor:
             model = distribute_module(
                 model,
                 device_mesh=self.mesh["domain"],
                 partition_fn=partition_model_selective,
             )
-        return FSDP(
-            model,
-            device_mesh=self.mesh["ddp"],
-            use_orig_params=False,  # required for ShardTensor compatibility
-            sharding_strategy=ShardingStrategy.NO_SHARD,
-            sync_module_states=True,
-            forward_prefetch=True,
-            backward_prefetch=BackwardPrefetch.BACKWARD_PRE,
-        )
+        fully_shard(model, mesh=self.mesh["ddp"])
+        return model
 
     def replicate_tensor(self, t: torch.Tensor) -> torch.Tensor:
         if not self.use_shard_tensor or isinstance(t, DTensor):
