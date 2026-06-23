@@ -717,3 +717,62 @@ class TestDomainGlobalDataTransform:
         )
         assert dm2.global_data["velocity"][0].item() == pytest.approx(0.0, abs=1e-6)
         assert dm2.global_data["velocity"][1].item() == pytest.approx(1.0, abs=1e-6)
+
+
+def test_domain_mesh_to_float_dtype_preserves_integer_cells():
+    """Regression: DomainMesh.to(<float dtype>) must cast floating tensors only;
+    the integer cells of the interior and boundary meshes must stay integer (the
+    generated tensorclass .to recursed in and cast them to float, failing
+    Mesh.__post_init__)."""
+    interior = Mesh(
+        points=torch.randn(4, 3), cells=torch.tensor([[0, 1, 2], [1, 3, 2]])
+    )
+    dm = DomainMesh(interior=interior, boundaries={"b": interior.get_boundary_mesh()})
+    dm.global_data["scale"] = torch.tensor(2.0)
+
+    dm64 = dm.to(torch.float64)
+    assert dm64.interior.points.dtype == torch.float64
+    assert dm64.interior.cells.dtype == torch.int64
+    assert dm64.boundaries["b"].points.dtype == torch.float64
+    assert dm64.boundaries["b"].cells.dtype == torch.int64
+    assert dm64.global_data["scale"].dtype == torch.float64
+
+
+def test_domain_mesh_to_same_float_dtype_preserves_integer_cells():
+    """Regression (PR #1716 review): DomainMesh.to(<same float dtype>) must keep the
+    cells-safe path instead of falling back to the cells-breaking tensorclass `.to`
+    when the domain is already at the requested float dtype."""
+    interior = Mesh(
+        points=torch.randn(4, 3).double(),  # already float64
+        cells=torch.tensor([[0, 1, 2], [1, 3, 2]]),
+    )
+    dm = DomainMesh(interior=interior)
+
+    dm64 = dm.to(torch.float64)  # same dtype -> must not raise
+    assert dm64.interior.points.dtype == torch.float64
+    assert dm64.interior.cells.dtype == torch.int64
+
+
+def test_domain_mesh_to_device_move_preserves_mixed_precision():
+    """A device-only DomainMesh.to must not homogenize float dtypes: a float16
+    global_data leaf stays float16 (only an explicit float-dtype request casts it)."""
+    interior = Mesh(points=torch.randn(4, 3), cells=torch.tensor([[0, 1, 2]]))
+    dm = DomainMesh(interior=interior)
+    dm.global_data["half"] = torch.randn(3, dtype=torch.float16)
+
+    out = dm.to("cpu")
+    assert out.global_data["half"].dtype == torch.float16
+    assert out.interior.cells.dtype == torch.int64
+
+
+def test_domain_mesh_to_float_dtype_forwards_transfer_kwargs():
+    """Regression (PR #1716 review): a DomainMesh float cast forwards transfer kwargs
+    (e.g. non_blocking) rather than dropping them, while preserving integer cells."""
+    interior = Mesh(points=torch.randn(4, 3), cells=torch.tensor([[0, 1, 2]]))
+    dm = DomainMesh(interior=interior)
+    dm.global_data["scale"] = torch.tensor(2.0)
+
+    out = dm.to(dtype=torch.float64, non_blocking=True)
+    assert out.interior.points.dtype == torch.float64
+    assert out.interior.cells.dtype == torch.int64
+    assert out.global_data["scale"].dtype == torch.float64

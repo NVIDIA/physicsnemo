@@ -24,7 +24,7 @@ from physicsnemo.core.function_spec import FunctionSpec
 from .kernels import fps_fused
 from .utils import validate_inputs
 
-wp.config.quiet = True
+wp.config.log_level = wp.LOG_WARNING
 wp.init()
 
 # Threads per block (one block per cloud). Lanes scan the points strided, so

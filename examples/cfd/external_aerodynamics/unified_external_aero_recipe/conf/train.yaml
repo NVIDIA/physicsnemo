@@ -45,8 +45,10 @@ dataset: drivaer_ml_volume
 # sets this to [shift_suv_estate_surface, shift_suv_fastback_surface].
 extra_datasets: []
 
-# Manifest-mode split selectors.  Datasets without a manifest fall
-# through to directory mode and ignore these.
+# Manifest-mode split selectors.  Setting these requests manifest mode:
+# a dataset without a locatable manifest raises at startup.  For a
+# manifest-less (directory-mode) dataset set `train_split=null
+# val_split=null`.
 train_split: train
 val_split: val
 

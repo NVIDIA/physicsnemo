@@ -24,13 +24,16 @@
 # MeshReaderWithGlobalData to merge them onto each boundary Mesh at
 # load time.
 
+# All splits share this root; the train/val/test subsets are selected
+# by manifest.json (auto-discovered next to train_datadir) plus the
+# top-level train_split / val_split keys in the training config.
 train_datadir: ${dataset_paths.shift_suv}/fastback/
 
 pipeline:
   reader:
     _target_: ${dp:MeshReaderWithGlobalData}
     path: ${train_datadir}
-    pattern: "**/domain.pdmsh/_tensordict/boundaries/vehicle"
+    pattern: "run_*/domain.pdmsh/_tensordict/boundaries/vehicle"
     # Walk up two levels from the boundary tensordict to the parent
     # DomainMesh's global_data and merge its keys onto each sample.
     merge_global_data_from: "../../global_data"

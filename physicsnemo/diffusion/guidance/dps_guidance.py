@@ -236,6 +236,16 @@ class DPSScorePredictor(Predictor):
     :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.get_denoiser` :
         Converts the score-predictor to a denoiser for sampling.
 
+    Notes
+    -----
+    **Recommended call pattern:** wrap inference-only sample loops in
+    ``with torch.no_grad():``. The predictor re-enables autograd locally
+    for the guidance's internal ``autograd.grad`` call, so functionality
+    is preserved, and the returned score does not carry an autograd graph
+    that the sampler would otherwise compound across solver steps. Do NOT
+    use ``torch.inference_mode()`` — it disables autograd entirely and
+    breaks the guidance's internal gradient computation.
+
     Examples
     --------
     **Example 1:** Basic usage with a single guidance for inpainting:
