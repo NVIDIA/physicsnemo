@@ -76,6 +76,89 @@ def _uv_sphere(n_rings: int = 40, n_segments: int = 80):
     return vertices, faces
 
 
+# ---------------------------------------------------------------------------
+# L-prism: a non-convex, sharp-edged watertight surface for sign-correctness
+# checks. The single nearest-face pseudo-normal is unreliable at sharp edges,
+# whereas the winding number is robust; these helpers expose that difference.
+# ---------------------------------------------------------------------------
+
+_L_PRISM_HEIGHT = 0.6  # z-extent of the extruded L cross-section
+
+
+def _l_prism_inside(points: torch.Tensor) -> torch.Tensor:
+    r"""Exact inside test for the L-prism (strict interior).
+
+    The L cross-section is the union of a bottom rectangle
+    :math:`(0, 1) \times (0, 0.5)` and a top-left rectangle
+    :math:`(0, 0.5) \times (0, 1)`, extruded over :math:`(0, H)` in ``z``; the
+    notch (``x > 0.5`` and ``y > 0.5``) is outside. Used both as ground truth and
+    to orient the mesh outward.
+
+    Parameters
+    ----------
+    points : torch.Tensor
+        Query points, shape :math:`(\dots, 3)`.
+
+    Returns
+    -------
+    torch.Tensor
+        Boolean tensor of shape :math:`(\dots,)`; ``True`` strictly inside.
+    """
+    x, y, z = points[..., 0], points[..., 1], points[..., 2]
+    in_z = (z > 0) & (z < _L_PRISM_HEIGHT)
+    bottom = (x > 0) & (x < 1.0) & (y > 0) & (y < 0.5)
+    top_left = (x > 0) & (x < 0.5) & (y > 0) & (y < 1.0)
+    return in_z & (bottom | top_left)
+
+
+def _l_prism() -> tuple[torch.Tensor, torch.Tensor]:
+    r"""Build a watertight, outward-oriented L-prism surface mesh.
+
+    A non-convex L-shaped polygon (one reflex corner) extruded in ``z`` into a
+    closed triangular surface with both convex and reflex sharp edges. Small and
+    fully self-contained (12 vertices, 20 triangles).
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor]
+        ``(vertices, faces)`` with shapes :math:`(12, 3)` (``float32``) and
+        :math:`(20, 3)` (``int64``). Triangles are wound so normals point outward.
+    """
+    # L-polygon corners in CCW order; index 3 is the reflex corner. The polygon
+    # is star-shaped from corner 0, so each cap is a simple fan from that corner.
+    corners = torch.tensor(
+        [[0.0, 0.0], [1.0, 0.0], [1.0, 0.5], [0.5, 0.5], [0.5, 1.0], [0.0, 1.0]],
+        dtype=torch.float32,
+    )
+    bottom = torch.cat([corners, torch.zeros(6, 1)], dim=1)
+    top = torch.cat([corners, torch.full((6, 1), _L_PRISM_HEIGHT)], dim=1)
+    vertices = torch.cat([bottom, top], dim=0)  # top vertex i lives at index i + 6
+
+    # Two caps (fans from corner 0 / 6) plus one quad -> two triangles per wall.
+    faces = [
+        [0, 1, 2],
+        [0, 2, 3],
+        [0, 3, 4],
+        [0, 4, 5],
+        [6, 7, 8],
+        [6, 8, 9],
+        [6, 9, 10],
+        [6, 10, 11],
+    ]
+    for a, b in [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 0)]:
+        faces += [[a, b, b + 6], [a, b + 6, a + 6]]
+    faces = torch.tensor(faces, dtype=torch.int64)
+
+    # Orient every face outward: reverse the winding of any triangle whose raw
+    # normal points into the solid (tested by nudging the centroid along it).
+    tri = vertices[faces]  # (n_faces, 3, 3)
+    normals = torch.linalg.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+    centroids = tri.mean(dim=1)
+    points_inward = _l_prism_inside(centroids + 1e-4 * normals)
+    faces[points_inward] = faces[points_inward][:, [0, 2, 1]]
+    return vertices, faces
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 @pytest.mark.parametrize("use_winding", [False, True])
 def test_sdf_tetrahedron_reference(dtype, use_winding, device):
@@ -191,6 +274,84 @@ def test_sdf_error_handling(device):
     bad_connectivity_rank = torch.zeros(1, 2, 3, device=device, dtype=torch.int32)
     with pytest.raises(ValueError, match="1D flattened indices or 2D"):
         signed_distance_field_mesh(vertices, bad_connectivity_rank, query)
+
+
+def test_sdf_pseudo_normal_sign_wrong_at_sharp_edges(device):
+    r"""Document the nearest-face pseudo-normal sign bug at sharp edges.
+
+    The default sign method classifies a query as inside/outside using the
+    outward normal of the *single* nearest triangle. Near a sharp convex or
+    reflex edge the nearest feature is the edge itself - shared by two faces with
+    very different normals - so picking one face's normal can flip the sign. A
+    robust implementation uses the angle-weighted pseudo-normal (cf. Warp's
+    ``mesh_query_point_sign_normal``) or the generalized winding number.
+    """
+    device = torch.device(device)
+    vertices, faces = _l_prism()
+    vertices = vertices.to(device)
+    faces = faces.to(device)
+
+    # Build the query set on CPU (device-independent point set), then move it.
+    # The expanded box reaches into the exterior wedges of the convex edges; the
+    # cluster densely probes the reflex edge at (x, y) = (0.5, 0.5).
+    torch.manual_seed(0)
+    lo = torch.tensor([-0.25, -0.25, -0.25])
+    hi = torch.tensor([1.25, 1.25, _L_PRISM_HEIGHT + 0.25])
+    box = lo + (hi - lo) * torch.rand(200_000, 3)
+    reflex = torch.rand(100_000, 3)
+    reflex[:, 0] = 0.35 + 0.30 * reflex[:, 0]
+    reflex[:, 1] = 0.35 + 0.30 * reflex[:, 1]
+    reflex[:, 2] = _L_PRISM_HEIGHT * reflex[:, 2]
+    query = torch.cat([box, reflex], dim=0).to(device)
+
+    sdf_out, _ = signed_distance_field_mesh(
+        vertices, faces, query, use_sign_winding_number=False
+    )
+
+    # The distance magnitude is correct; only the sign is in question. Compare to
+    # the analytic interior away from the surface, where the sign is unambiguous.
+    inside = _l_prism_inside(query)
+    away = sdf_out.abs() > 1e-3
+    wrong = ((sdf_out < 0) != inside) & away
+
+    n_wrong = int(wrong.sum())
+    assert n_wrong == 0, (
+        f"Nearest-face pseudo-normal sign misclassified {n_wrong} of "
+        f"{int(away.sum())} points near the L-prism's sharp edges. The single "
+        f"nearest-face normal is unreliable at sharp convex/reflex edges; use an "
+        f"angle-weighted pseudo-normal or the winding number for the sign."
+    )
+
+
+def test_sdf_winding_sign_correct_at_sharp_edges(device):
+    r"""Control: the winding-number sign is correct on the same L-prism.
+
+    Identical sharp-edged mesh as
+    ``test_sdf_pseudo_normal_sign_wrong_at_sharp_edges`` but with
+    ``use_sign_winding_number=True``. The generalized winding number is robust at
+    sharp edges, so the sign matches the analytic interior. This confirms the mesh
+    is valid and isolates the failure to the pseudo-normal method.
+    """
+    device = torch.device(device)
+    vertices, faces = _l_prism()
+    vertices = vertices.to(device)
+    faces = faces.to(device)
+
+    torch.manual_seed(1)
+    lo = torch.tensor([-0.2, -0.2, -0.2])
+    hi = torch.tensor([1.2, 1.2, _L_PRISM_HEIGHT + 0.2])
+    query = (lo + (hi - lo) * torch.rand(40_000, 3)).to(device)
+
+    sdf_out, _ = signed_distance_field_mesh(
+        vertices, faces, query, use_sign_winding_number=True
+    )
+
+    # Exclude a near-surface band: the CUDA Barnes-Hut winding approximation is
+    # only loose right at the surface (cf. test_winding_sign_triton_matches_exact).
+    inside = _l_prism_inside(query)
+    away = sdf_out.abs() > 0.05
+    wrong = ((sdf_out < 0) != inside) & away
+    assert int(wrong.sum()) == 0
 
 
 # ---------------------------------------------------------------------------
