@@ -43,6 +43,7 @@ from .conv_layers import ConvBlock, CubeEmbedding
 from .dgm_layers import DGMLayer
 from .dit_layers import (
     AttentionModuleBase,
+    ConvDetokenizer,
     DetokenizerModuleBase,
     DiTBlock,
     Natten2DSelfAttention,
@@ -50,6 +51,7 @@ from .dit_layers import (
     PerSampleDropout,
     ProjLayer,
     ProjReshape2DDetokenizer,
+    RopeNatten2DSelfAttention,
     TESelfAttention,
     TimmSelfAttention,
     TokenizerModuleBase,
@@ -103,6 +105,13 @@ from .resample_layers import (
     DownSample3D,
     UpSample2D,
     UpSample3D,
+)
+from .rope import (
+    RotaryPositionEmbedding1D,
+    RotaryPositionEmbedding2D,
+    apply_rotary_pos_emb,
+    build_axial_rope_cos_sin_2d,
+    build_rope_cos_sin_1d,
 )
 from .siren_layers import SirenLayer, SirenLayerType
 from .spectral_layers import (

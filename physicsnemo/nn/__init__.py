@@ -67,6 +67,7 @@ from .module.conv_layers import (
 from .module.dgm_layers import DGMLayer
 from .module.dit_layers import (
     AttentionModuleBase,
+    ConvDetokenizer,
     DetokenizerModuleBase,
     DiTBlock,
     Natten2DSelfAttention,
@@ -74,6 +75,7 @@ from .module.dit_layers import (
     PerSampleDropout,
     ProjLayer,
     ProjReshape2DDetokenizer,
+    RopeNatten2DSelfAttention,
     TESelfAttention,
     TimmSelfAttention,
     TokenizerModuleBase,
@@ -133,6 +135,13 @@ from .module.resample_layers import (
     DownSample3D,
     UpSample2D,
     UpSample3D,
+)
+from .module.rope import (
+    RotaryPositionEmbedding1D,
+    RotaryPositionEmbedding2D,
+    apply_rotary_pos_emb,
+    build_axial_rope_cos_sin_2d,
+    build_rope_cos_sin_1d,
 )
 from .module.running_norm import RunningNorm
 from .module.siren_layers import SirenLayer, SirenLayerType
