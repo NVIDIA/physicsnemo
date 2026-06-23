@@ -22,7 +22,7 @@ import warp as wp
 from .core.meta import ModelMetaData  # noqa E402
 from .core.module import Module  # noqa E402
 
-wp.config.log_level = wp.LOG_WARNING
+wp.config.quiet = True
 
 __version__ = "2.2.0a0"
 

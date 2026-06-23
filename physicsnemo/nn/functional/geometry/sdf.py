@@ -22,7 +22,7 @@ from physicsnemo.core.function_spec import FunctionSpec
 
 # Warp is a required dependency in v2.0+.
 
-wp.config.log_level = wp.LOG_WARNING
+wp.config.quiet = True
 
 
 @wp.kernel

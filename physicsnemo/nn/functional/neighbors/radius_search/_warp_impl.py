@@ -39,7 +39,7 @@ from .kernels import (
 )
 from .utils import format_returns, validate_inputs
 
-wp.config.log_level = wp.LOG_WARNING
+wp.config.quiet = True
 
 wp.init()
 

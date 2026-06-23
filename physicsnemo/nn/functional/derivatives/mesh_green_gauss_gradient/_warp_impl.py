@@ -27,7 +27,7 @@ from .utils import validate_inputs
 
 ### Warp runtime initialization for custom kernels.
 wp.init()
-wp.config.log_level = wp.LOG_WARNING
+wp.config.quiet = True
 
 
 @wp.func

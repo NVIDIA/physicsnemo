@@ -40,7 +40,7 @@ from ._kernels import (
 )
 
 wp.init()
-wp.config.log_level = wp.LOG_WARNING
+wp.config.quiet = True
 
 _DART_THROWING_MODE = "dart_throwing"
 _WEIGHTED_SAMPLE_ELIMINATION_MODE = "weighted_sample_elimination"

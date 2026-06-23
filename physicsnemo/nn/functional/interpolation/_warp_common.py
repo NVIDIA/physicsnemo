@@ -44,7 +44,7 @@ _INTERP_ID_TO_STRIDE = {
     _INTERP_GAUSSIAN: 5,
 }
 
-wp.config.log_level = wp.LOG_WARNING
+wp.config.quiet = True
 wp.init()
 
 

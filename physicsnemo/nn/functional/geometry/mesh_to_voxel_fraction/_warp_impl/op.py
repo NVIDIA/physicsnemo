@@ -29,7 +29,7 @@ from ._kernels import (
 )
 
 wp.init()
-wp.config.log_level = wp.LOG_WARNING
+wp.config.quiet = True
 
 
 # ----------------------------------------------------------------------------

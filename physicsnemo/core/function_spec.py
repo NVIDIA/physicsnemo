@@ -123,7 +123,7 @@ class FunctionSpec:
         from physicsnemo.core.function_spec import FunctionSpec
 
         wp.init()
-        wp.config.log_level = wp.LOG_WARNING
+        wp.config.quiet = True
 
         @wp.kernel
         def _identity_kernel(
