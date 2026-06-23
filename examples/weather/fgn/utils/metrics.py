@@ -1096,3 +1096,77 @@ def flag_bad_seeds(
         s for s in range(forecast_spectra.shape[0]) if np.any(ratio[s] > threshold)
     ]
     return flagged
+
+
+# ---------------------------------------------------------------------------
+# TC track evaluation plots — Figure 4 of arXiv:2506.10772
+# ---------------------------------------------------------------------------
+
+
+def plot_tc_position_error(
+    pos_err: np.ndarray,
+    lead_hours: np.ndarray,
+    out_path: str,
+) -> None:
+    """Figure 4a: ensemble-mean TC track position error (km) vs lead time.
+
+    Parameters
+    ----------
+    pos_err : (K,) position error in km, NaN where no paired storms exist.
+    lead_hours : (K,) lead times in hours.
+    out_path : output PNG path.
+    """
+    _import_matplotlib()
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    valid = ~np.isnan(pos_err)
+    ax.plot(lead_hours[valid] / 24, pos_err[valid], marker="o", ms=3, lw=1.5, label="FGN")
+    ax.set_xlabel("Lead time (days)")
+    ax.set_ylabel("Position error (km)")
+    ax.set_title("TC ensemble-mean track position error")
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
+def plot_tc_track_rev(
+    rev: np.ndarray,
+    lead_hours: np.ndarray,
+    cl_ratios: list[float],
+    out_path: str,
+    plot_lead_days: tuple[float, ...] = (1, 2, 3, 5),
+) -> None:
+    """Figure 4b: REV of TC track-probability predictions vs C/L ratio.
+
+    Parameters
+    ----------
+    rev : (K, n_cl) REV values per lead and C/L ratio.
+    lead_hours : (K,) lead times in hours.
+    cl_ratios : list of C/L ratio values.
+    out_path : output PNG path.
+    plot_lead_days : which lead times (in days) to plot as separate lines.
+    """
+    _import_matplotlib()
+    import matplotlib.pyplot as plt
+
+    cl = np.array(cl_ratios)
+    fig, ax = plt.subplots(figsize=(6, 4))
+    for ld in plot_lead_days:
+        k = int(round(ld * 24 / (lead_hours[1] - lead_hours[0]))) - 1
+        if k < 0 or k >= rev.shape[0]:
+            continue
+        vals = rev[k]
+        valid = ~np.isnan(vals)
+        ax.plot(cl[valid], vals[valid], lw=1.5, label=f"{ld:.0f}d")
+    ax.axhline(0, color="k", lw=0.8, ls="--")
+    ax.set_xlabel("C/L ratio")
+    ax.set_ylabel("REV")
+    ax.set_title("TC track-probability REV")
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)

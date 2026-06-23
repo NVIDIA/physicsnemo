@@ -311,6 +311,7 @@ class ArcoFGNDataset(FGNDataset):
             "history": torch.from_numpy(history),
             "target": torch.from_numpy(target),
             "background": torch.from_numpy(background),
+            "init_time": first_target_time.isoformat(),
         }
 
     def output_only_channels(self) -> list[int]:
