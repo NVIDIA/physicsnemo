@@ -20,7 +20,6 @@ from collections.abc import Mapping
 from typing import Any
 
 import torch
-from torch import nn
 
 from physicsnemo.core import ModelMetaData, Module
 

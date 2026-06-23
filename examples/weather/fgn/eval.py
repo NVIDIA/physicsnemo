@@ -60,6 +60,10 @@ import numpy as np
 import torch
 from datasets import dataset_classes
 from datasets.dataset import worker_init
+from earth2studio.statistics import crps as e2s_crps
+from earth2studio.statistics import rank_histogram as e2s_rh
+from earth2studio.statistics import rmse as e2s_rmse
+from earth2studio.statistics.weights import lat_weight
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 from utils.config import EvalMainConfig
@@ -83,10 +87,6 @@ from utils.metrics import (
 )
 from utils.trainer import find_latest_model_checkpoint
 
-from earth2studio.statistics import crps as e2s_crps
-from earth2studio.statistics import rank_histogram as e2s_rh
-from earth2studio.statistics import rmse as e2s_rmse
-from earth2studio.statistics.weights import lat_weight
 from physicsnemo.core import Module
 
 log = logging.getLogger(__name__)
@@ -256,9 +256,10 @@ def run_eval(cfg: DictConfig) -> None:
     # --- Load model(s) ---
     checkpoint_paths = _resolve_checkpoints(cfg)
     log.info(f"Checkpoints: {checkpoint_paths}")
-    models: list[torch.nn.Module] = []
-    for ckpt_path in checkpoint_paths:
-        models.append(Module.from_checkpoint(ckpt_path).to(device).eval())
+    models: list[torch.nn.Module] = [
+        Module.from_checkpoint(ckpt_path).to(device).eval()
+        for ckpt_path in checkpoint_paths
+    ]
 
     n_models = len(models)
     base_m = M // n_models
