@@ -324,7 +324,7 @@ class PixelDiTBlock(nn.Module):
         torch.Tensor
             Upsampled conditioning of shape :math:`(B, D, C, H, W)`.
         """
-        d, ph, pw = pixel_dhw
+        d, h, w = pixel_dhw  # full pixel-grid depth / height / width
         sd, sh, sw = semantic_dhw
         if d == sd:
             # Depth not upsampled (pixel depth == semantic depth): per-level 2D
@@ -333,13 +333,13 @@ class PixelDiTBlock(nn.Module):
                 s_cond, "b (sd sh sw) c -> (b sd) c sh sw", sd=sd, sh=sh, sw=sw
             )
             s_pix = F.interpolate(
-                s_sp, size=(ph, pw), mode="bilinear", align_corners=False
+                s_sp, size=(h, w), mode="bilinear", align_corners=False
             )
             return rearrange(s_pix, "(b sd) c h w -> b sd c h w", sd=sd)
         # Depth upsampled (pixel depth > semantic depth): 3D trilinear over (D,H,W).
         s_sp = rearrange(s_cond, "b (sd sh sw) c -> b c sd sh sw", sd=sd, sh=sh, sw=sw)
         s_pix = F.interpolate(
-            s_sp, size=(d, ph, pw), mode="trilinear", align_corners=False
+            s_sp, size=(d, h, w), mode="trilinear", align_corners=False
         )
         return rearrange(s_pix, "b c d h w -> b d c h w")
 
@@ -399,7 +399,9 @@ class PixelDiTBlock(nn.Module):
             adaln_params = self._expand_cond_to_pixels(
                 adaln_raw, pixel_dhw, semantic_dhw
             )  # (B, D*H*W, 6*dim)
-            shift1, scale1, gate1, shift2, scale2, gate2 = adaln_params.chunk(6, dim=-1)
+            shift1, scale1, gate1, shift2, scale2, gate2 = adaln_params.chunk(
+                self.num_adaln_params, dim=-1
+            )
 
         # Attention sub-layer with modulated pre-norm and gated residual.
         y = self.norm1(x) * (1 + scale1) + shift1
