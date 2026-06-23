@@ -145,6 +145,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or any multi-column grid, which also broke `repair.fix_orientation`). Parent-cell
   vertices are now sorted into a global order before tessellation (the
   Freudenthal-Kuhn subdivision), a no-op for already-sorted inputs.
+- `physicsnemo.mesh.projections.extrude` now returns consistently oriented cells
+  for full-dimensional (codimension-0) output.
 - `physicsnemo.mesh.remesh` now preserves the input mesh's device and floating
   dtype (the pyacvd/pyvista round-trip previously dropped them to CPU/float32).
 - `physicsnemo.mesh`: `Mesh.to(<float dtype>)` and `DomainMesh.to(<float dtype>)`

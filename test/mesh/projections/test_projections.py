@@ -171,10 +171,12 @@ class TestExtrude:
         assert torch.allclose(extruded.points, expected_points)
 
         ### Verify cells
-        # Edge [0, 1] becomes 2 triangles:
-        #   Child 0: [v0', v0, v1] = [2, 0, 1]
-        #   Child 1: [v0', v1', v1] = [2, 3, 1]
-        expected_cells = torch.tensor([[2, 0, 1], [2, 3, 1]], dtype=torch.int64)
+        # Edge [0, 1] becomes 2 triangles. The raw Kuhn child 1 [2, 3, 1] is
+        # negatively oriented, so extrude swaps its last two vertices -> [2, 1, 3]
+        # (both cells then have positive signed area):
+        #   Child 0: [v0', v0, v1]       = [2, 0, 1]
+        #   Child 1: [v0', v1', v1] flip = [2, 1, 3]
+        expected_cells = torch.tensor([[2, 0, 1], [2, 1, 3]], dtype=torch.int64)
         assert torch.equal(extruded.cells, expected_cells)
 
         ### Verify total area (should equal width * height)
@@ -241,12 +243,14 @@ class TestExtrude:
         assert torch.allclose(extruded.points, expected_points)
 
         ### Verify cells
-        # Triangle [0, 1, 2] becomes 3 tetrahedra:
-        #   Child 0: [v0', v0, v1, v2] = [3, 0, 1, 2]
-        #   Child 1: [v0', v1', v1, v2] = [3, 4, 1, 2]
-        #   Child 2: [v0', v1', v2', v2] = [3, 4, 5, 2]
+        # Triangle [0, 1, 2] becomes 3 tetrahedra. The raw Kuhn children 0 and 2
+        # are negatively oriented, so extrude swaps their last two vertices
+        # (child 1 is already positive) so all three have positive signed volume:
+        #   Child 0: [v0', v0, v1, v2]   flip = [3, 0, 2, 1]
+        #   Child 1: [v0', v1', v1, v2]       = [3, 4, 1, 2]
+        #   Child 2: [v0', v1', v2', v2] flip = [3, 4, 2, 5]
         expected_cells = torch.tensor(
-            [[3, 0, 1, 2], [3, 4, 1, 2], [3, 4, 5, 2]], dtype=torch.int64
+            [[3, 0, 2, 1], [3, 4, 1, 2], [3, 4, 2, 5]], dtype=torch.int64
         )
         assert torch.equal(extruded.cells, expected_cells)
 
@@ -604,25 +608,56 @@ class TestExtrude:
         ### Verify all cells have positive hypervolume
         assert (extruded.cell_areas > 0).all()
 
-    def test_extrude_orientation_consistency(self):
-        """Test that extrusion maintains consistent orientation."""
-        ### Create a simple triangle with known orientation
-        points = torch.tensor(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=torch.float32
-        )
-        cells = torch.tensor([[0, 1, 2]], dtype=torch.int64)
-        mesh = Mesh(points=points, cells=cells)
+    @pytest.mark.parametrize(
+        "make_mesh, extrude_kwargs",
+        [
+            # 1D edges -> 2D triangles in 2D space (codimension 0).
+            (
+                lambda: Mesh(
+                    points=torch.tensor(
+                        [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]], dtype=torch.float32
+                    ),
+                    cells=torch.tensor([[0, 1], [1, 2]], dtype=torch.int64),
+                ),
+                {"vector": [0.0, 1.0]},
+            ),
+            # 2D triangles -> 3D tetrahedra, auto-extending 2D space to 3D
+            # (codimension 0).
+            (
+                lambda: Mesh(
+                    points=torch.tensor(
+                        [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                        dtype=torch.float32,
+                    ),
+                    cells=torch.tensor([[0, 1, 2], [0, 2, 3]], dtype=torch.int64),
+                ),
+                {"allow_new_spatial_dims": True},
+            ),
+        ],
+        ids=["1d_to_2d", "2d_to_3d"],
+    )
+    def test_extrude_orientation_consistency(self, make_mesh, extrude_kwargs):
+        """Codim-0 extrusion must yield cells with consistent (positive) orientation.
 
-        ### Compute original normal (should point in +z direction)
-        original_normal = mesh.cell_normals[0]
-        assert original_normal[2] > 0  # Points upward
+        The raw Freudenthal-Kuhn children of a prism alternate in orientation, so
+        a multi-cell base produces a genuine mix of signs before correction.
+        ``extrude`` must flip the inverted ones so every full-dimensional cell has
+        a positive signed volume.  (A ``cell_areas > 0`` check is insufficient:
+        ``cell_areas`` is unsigned and cannot detect inversion.)
+        """
+        mesh = make_mesh()
+        extruded = extrude(mesh, **extrude_kwargs)
 
-        ### Extrude upward
-        extruded = extrude(mesh, vector=[0.0, 0.0, 1.0])
+        ### Full-dimensional output -> signed volume is the simplex determinant
+        assert extruded.codimension == 0
+        cell_points = extruded.points[extruded.cells]  # (n_cells, D+1, D)
+        edge_vectors = cell_points[:, 1:] - cell_points[:, :1]  # (n_cells, D, D)
+        signed_volumes = torch.det(edge_vectors)  # (n_cells,)
 
-        ### All extruded tetrahedra should have positive volume
-        # (negative volume would indicate inverted orientation)
-        assert (extruded.cell_areas > 0).all()
+        ### Every cell must be positively oriented (no inverted simplices)
+        assert (
+            signed_volumes > 0
+        ).all(), f"Inconsistent orientation, signed volumes: {signed_volumes.tolist()}"
 
     def test_extrude_with_zero_vector_raises_or_degenerates(self):
         """Test extrusion with zero vector creates degenerate cells."""

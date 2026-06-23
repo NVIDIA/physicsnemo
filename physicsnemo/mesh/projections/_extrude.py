@@ -138,10 +138,20 @@ def extrude(
 
     Sorting the vertices is the Freudenthal-Kuhn subdivision: prisms that share a
     face split it along the same diagonal, so the output is a *conforming*
-    simplicial complex (no cracks / non-manifold facets). The child cells are not
-    guaranteed to share a single orientation (signed-volume sign); apply
-    :func:`physicsnemo.mesh.repair.fix_orientation` or inspect the signed volume
-    if a consistent orientation is required.
+    simplicial complex (no cracks / non-manifold facets).
+
+    Orientation depends on the codimension of the output:
+
+        - Codimension 0 (``target_manifold_dims == target_spatial_dims``): the
+          raw Kuhn children alternate in orientation, so the last two vertices of
+          any inverted cell are swapped to give every cell a positive signed
+          volume. The result is a consistently oriented complex.
+        - A 2D surface in 3D (e.g. extruding a curve): orientation is not
+          enforced here; pass the result through
+          :func:`physicsnemo.mesh.repair.fix_orientation`, which handles exactly
+          this case.
+        - Any other positive codimension: signed volume is undefined, so no
+          orientation is enforced.
     """
     ### Validate inputs
     if capping:
@@ -158,7 +168,7 @@ def extrude(
             raise ValueError(
                 f"Cannot extrude {n_manifold_dims=}-dimensional manifold in {n_spatial_dims=}-dimensional space "
                 f"to {target_manifold_dims=}-dimensional manifold without increasing spatial dimensions.\n"
-                f"Set allow_new_spatial_dims=True to add new spatial dimensions, or provide a custom vector."
+                f"Set allow_new_spatial_dims=True to add new spatial dimensions."
             )
         # Extend spatial dimensions to accommodate extruded manifold
         target_spatial_dims = target_manifold_dims
@@ -289,6 +299,22 @@ def extrude(
             start_idx = child_idx * n_original_cells
             end_idx = (child_idx + 1) * n_original_cells
             extruded_cells[start_idx:end_idx] = child_cells
+
+    ### Orient codim-0 cells consistently (positive signed volume)
+    # Signed volume (an n-simplex determinant) is only defined when the output is
+    # full-dimensional (target_manifold_dims == target_spatial_dims). The
+    # Freudenthal-Kuhn children alternate in orientation, so ~half are inverted;
+    # swap the last two vertices of those (one transposition negates the
+    # determinant) so every cell has positive signed volume. Conformity, |volume|,
+    # and propagated data are unaffected (only per-cell vertex order changes);
+    # degenerate (zero-volume) cells are left untouched.
+    if extruded_cells.shape[0] > 0 and target_manifold_dims == target_spatial_dims:
+        cell_points = all_points[extruded_cells]  # (n_cells, D+1, D)
+        edge_vectors = cell_points[:, 1:] - cell_points[:, :1]  # (n_cells, D, D)
+        inverted = torch.det(edge_vectors) < 0  # (n_cells,)
+        swapped = extruded_cells[inverted, -2].clone()
+        extruded_cells[inverted, -2] = extruded_cells[inverted, -1]
+        extruded_cells[inverted, -1] = swapped
 
     ### Propagate data (excluding cached properties, which depend on geometry)
     filtered_point_data = mesh.point_data
