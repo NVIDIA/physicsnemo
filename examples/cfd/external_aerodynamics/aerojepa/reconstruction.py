@@ -38,6 +38,54 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+from physicsnemo.metrics.general.mse import mse as _core_mse
+from physicsnemo.metrics.general.relative_error import relative_l2 as _core_relative_l2
+
+
+def _element_weights(
+    ref: torch.Tensor,
+    *,
+    mask: torch.Tensor | None = None,
+    point_weights: torch.Tensor | None = None,
+    channel_weights: torch.Tensor | None = None,
+) -> torch.Tensor | None:
+    """Fold optional mask / point / channel weights into one element weight.
+
+    Each provided weight is broadcast to ``ref.ndim`` (channel weights over the
+    last axis, point/mask over the leading axes) and multiplied together.
+    Returns ``None`` when no weights are given, so callers can pass the result
+    straight to the ``weights=`` argument of the core metrics.
+
+    Parameters
+    ----------
+    ref : torch.Tensor
+        Reference tensor (``pred``) whose shape/dtype/device the weights match.
+    mask, point_weights, channel_weights : torch.Tensor, optional
+        Validity mask, per-point weights, and per-channel weights.
+
+    Returns
+    -------
+    torch.Tensor or None
+        The combined element weight, or ``None`` if nothing was supplied.
+    """
+    w = None
+    if channel_weights is not None:
+        cw = channel_weights.to(device=ref.device, dtype=ref.dtype).reshape(
+            [1] * (ref.ndim - 1) + [-1]
+        )
+        w = cw if w is None else w * cw
+    if point_weights is not None:
+        pw = point_weights.to(device=ref.device, dtype=ref.dtype)
+        while pw.ndim < ref.ndim:
+            pw = pw.unsqueeze(-1)
+        w = pw if w is None else w * pw
+    if mask is not None:
+        m = mask.to(device=ref.device, dtype=ref.dtype)
+        while m.ndim < ref.ndim:
+            m = m.unsqueeze(-1)
+        w = m if w is None else w * m
+    return w
+
 
 # ---------------------------------------------------------------------------
 # Plain MSE
@@ -89,42 +137,22 @@ def mse_loss(
             f"pred and target shapes must match, got {pred.shape} vs {target.shape}"
         )
 
-    err = (pred - target).pow(2)
-    weight_sum = float(pred.shape[-1])
     if channel_weights is not None:
-        cw = channel_weights.to(device=err.device, dtype=err.dtype).reshape(1, -1)
-        if cw.shape[-1] != err.shape[-1]:
+        n_cw = channel_weights.reshape(-1).shape[0]
+        if n_cw != pred.shape[-1]:
             raise ValueError(
-                f"channel_weights dim must match last dim ({err.shape[-1]}), "
-                f"got {cw.shape[-1]}"
+                f"channel_weights dim must match last dim ({pred.shape[-1]}), "
+                f"got {n_cw}"
             )
-        while cw.ndim < err.ndim:
-            cw = cw.unsqueeze(0)
-        err = err * cw
-        weight_sum = float(channel_weights.to(dtype=err.dtype).sum().item())
 
-    point_weight_t = None
-    if point_weights is not None:
-        point_weight_t = point_weights.to(device=err.device, dtype=err.dtype)
-        while point_weight_t.ndim < err.ndim:
-            point_weight_t = point_weight_t.unsqueeze(-1)
-        err = err * point_weight_t
-
-    if mask is not None:
-        mask_t = mask.to(device=err.device, dtype=err.dtype)
-        while mask_t.ndim < err.ndim:
-            mask_t = mask_t.unsqueeze(-1)
-        err = err * mask_t
-        denom_weights = mask_t if point_weight_t is None else point_weight_t * mask_t
-        denom = denom_weights.sum().clamp_min(1.0) * max(weight_sum, 1e-12)
-        return err.sum() / denom
-
-    if point_weight_t is not None:
-        denom = point_weight_t.sum().clamp_min(1.0) * max(weight_sum, 1e-12)
-        return err.sum() / denom
-
-    denom = err.numel() / err.shape[-1] * max(weight_sum, 1e-12)
-    return err.sum() / denom
+    # A weighted mean folds all three weights into one element weight: channel
+    # weights do not cancel here (unlike in the relative-L2 ratio), and the
+    # core ``sum(weights * err) / sum(weights)`` reproduces the per-channel /
+    # per-point / masked normalization exactly.
+    weights = _element_weights(
+        pred, mask=mask, point_weights=point_weights, channel_weights=channel_weights
+    )
+    return _core_mse(pred, target, weights=weights)
 
 
 class MSELoss(nn.Module):
@@ -224,31 +252,18 @@ def relative_l2_loss(
     if pred.ndim < 2:
         raise ValueError(f"pred/target must have ndim >= 2, got {pred.ndim}")
 
-    err_sq = (pred - target).pow(2)
-    tgt_sq = target.pow(2)
-
-    if point_weights is not None:
-        point_weight_t = point_weights.to(device=err_sq.device, dtype=err_sq.dtype)
-        while point_weight_t.ndim < err_sq.ndim:
-            point_weight_t = point_weight_t.unsqueeze(-1)
-        err_sq = err_sq * point_weight_t
-        tgt_sq = tgt_sq * point_weight_t
-
-    if mask is not None:
-        mask_t = mask.to(device=err_sq.device, dtype=err_sq.dtype)
-        while mask_t.ndim < err_sq.ndim:
-            mask_t = mask_t.unsqueeze(-1)
-        err_sq = err_sq * mask_t
-        tgt_sq = tgt_sq * mask_t
-
+    # Per-channel relative-L2 ratio (sqrt of sum-err^2 / sum-tgt^2 over the
+    # spatial axes, keeping batch + channel) is the core metric. mask/point
+    # weights enter inside the ratio; channel weights are applied *after* the
+    # sqrt below, because a per-channel weight would cancel inside the ratio.
+    weights = _element_weights(pred, mask=mask, point_weights=point_weights)
     if pred.ndim == 2:
-        reduce_dims = (0,)
+        reduce_dims: tuple[int, ...] = (0,)
     else:
         reduce_dims = tuple(range(1, pred.ndim - 1))
-
-    num = torch.sum(err_sq, dim=reduce_dims)
-    den = torch.clamp_min(torch.sum(tgt_sq, dim=reduce_dims), float(eps))
-    rel_l2 = torch.sqrt(num / den)
+    rel_l2 = _core_relative_l2(
+        pred, target, dim=reduce_dims, eps=float(eps), weights=weights
+    )
 
     weight_sum = float(pred.shape[-1])
     if channel_weights is not None:
