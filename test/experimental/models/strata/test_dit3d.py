@@ -664,8 +664,11 @@ def test_dit3d_activation_checkpointing_matches(device):
     ckpt = _seed_params(DiT3D(**kwargs, activation_checkpointing=True), seed=1).to(
         device
     )
-    plain.eval()
-    ckpt.eval()
+    # Checkpointing only engages in train mode (drop rates default to 0, so the
+    # forward is still deterministic and comparable to the plain model).
+    plain.train()
+    ckpt.train()
+    assert ckpt._should_checkpoint_block(0), "checkpointing must be active in train mode"
     x = torch.randn(2, 4, 4, 8, 8, device=device)
     y_plain = plain(x)
     y_ckpt = ckpt(x)
