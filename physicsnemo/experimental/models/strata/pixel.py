@@ -37,6 +37,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 from jaxtyping import Float
+from torch.utils.checkpoint import checkpoint as activation_checkpoint
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
@@ -513,6 +514,10 @@ class PixelDiT(Module):
         Stereographic coordinate normalization for the pixel pathway.
     bf16_mixed_pixel : bool, optional, default=False
         If ``True``, run the pixel blocks under ``bfloat16`` autocast on CUDA.
+    activation_checkpointing_pixel : bool | float, optional, default=False
+        Activation checkpointing of the pixel blocks during training. ``True`` /
+        ``1.0`` checkpoints all pixel blocks, ``0.0`` / ``False`` none, and a value
+        in ``(0, 1)`` checkpoints that leading fraction. Only engages in train mode.
 
     Forward
     -------
@@ -590,6 +595,7 @@ class PixelDiT(Module):
         rope_base_pixel: float = 100.0,
         rope_length_scale_pixel: float = 1.0,
         bf16_mixed_pixel: bool = False,
+        activation_checkpointing_pixel: Union[bool, float] = False,
     ):
         super().__init__(meta=PixelDiTMetaData())
 
@@ -655,6 +661,11 @@ class PixelDiT(Module):
         self.rope_mode_pixel = rope_mode_pixel
         self.rope_length_scale_pixel = rope_length_scale_pixel
         self.bf16_mixed_pixel = bf16_mixed_pixel
+        # Reuse DiT3D's pure parser (a staticmethod) so the ratio semantics match
+        # the semantic stage.
+        self._activation_checkpointing_ratio_pixel = DiT3D._parse_checkpointing_param(
+            activation_checkpointing_pixel
+        )
 
         ### Stage 2: pixel pathway at 1x1x1-patch resolution.
         self.pixel_patch_embed = PatchEmbed3D(
@@ -721,6 +732,31 @@ class PixelDiT(Module):
             cos, sin = self.rope_pixel.build_tables(coords[:, 0], coords[:, 1])
             self.register_buffer("_rope_cos_pixel", cos, persistent=False)
             self.register_buffer("_rope_sin_pixel", sin, persistent=False)
+
+    def _should_checkpoint_pixel_block(self, block_idx: int) -> bool:
+        r"""Return whether the pixel block at ``block_idx`` should be checkpointed.
+
+        Activation checkpointing only engages in training mode. Mirrors
+        :meth:`~physicsnemo.experimental.models.strata.DiT3D._should_checkpoint_block`.
+
+        Parameters
+        ----------
+        block_idx : int
+            Zero-based pixel-block index.
+
+        Returns
+        -------
+        bool
+            ``True`` if this pixel block should use activation checkpointing.
+        """
+        if not self.training:
+            return False
+        ratio = self._activation_checkpointing_ratio_pixel
+        if ratio <= 0.0:
+            return False
+        if ratio >= 1.0:
+            return True
+        return block_idx < round(ratio * len(self.pixel_blocks))
 
     def _build_pixel_rope_tables(
         self, pos: Optional[torch.Tensor]
@@ -792,18 +828,30 @@ class PixelDiT(Module):
 
         autocast_enabled = self.bf16_mixed_pixel and x.is_cuda
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=autocast_enabled):
-            for block in self.pixel_blocks:
+            for i, block in enumerate(self.pixel_blocks):
+                # The two block types take different keyword signatures; wrap the
+                # call in a closure so activation checkpointing can drive either.
                 if isinstance(block, PixelDiTBlock):
-                    x_pix = block(
-                        x_pix,
-                        s_cond=s_cond,
-                        pixel_dhw=pixel_dhw,
-                        semantic_dhw=semantic_dhw,
-                        s_cond_bilinear=s_cond_bilinear,
-                        rope_tables=rope_tables,
-                    )
+
+                    def _run(inp, b=block):
+                        return b(
+                            inp,
+                            s_cond=s_cond,
+                            pixel_dhw=pixel_dhw,
+                            semantic_dhw=semantic_dhw,
+                            s_cond_bilinear=s_cond_bilinear,
+                            rope_tables=rope_tables,
+                        )
+
                 else:
-                    x_pix = block(x_pix, latent_dhw=pixel_dhw, rope_tables=rope_tables)
+
+                    def _run(inp, b=block):
+                        return b(inp, latent_dhw=pixel_dhw, rope_tables=rope_tables)
+
+                if self._should_checkpoint_pixel_block(i):
+                    x_pix = activation_checkpoint(_run, x_pix, use_reentrant=False)
+                else:
+                    x_pix = _run(x_pix)
             x_pix = self.pixel_final_layer(x_pix)
 
         return rearrange(x_pix, "b (d h w) c -> b c d h w", d=dd, h=hh, w=ww)

@@ -668,7 +668,9 @@ def test_dit3d_activation_checkpointing_matches(device):
     # forward is still deterministic and comparable to the plain model).
     plain.train()
     ckpt.train()
-    assert ckpt._should_checkpoint_block(0), "checkpointing must be active in train mode"
+    assert ckpt._should_checkpoint_block(0), (
+        "checkpointing must be active in train mode"
+    )
     x = torch.randn(2, 4, 4, 8, 8, device=device)
     y_plain = plain(x)
     y_ckpt = ckpt(x)
@@ -730,3 +732,44 @@ def test_pixeldit_forward_rope_modes(device, sem_rope, pix_rope):
     assert torch.isfinite(out).all()
     # The pixel-stage RoPE module exists iff a pixel RoPE mode is selected.
     assert (model.rope_pixel is None) == (pix_rope == "none")
+
+
+def test_pixeldit_activation_checkpointing_matches(device):
+    """PixelDiT pixel-block checkpointing reproduces the non-checkpointed output/grads."""
+    torch.manual_seed(0)
+    kwargs = dict(
+        semantic_config=dict(
+            in_channels=4,
+            input_shape=(4, 8, 8),
+            patch_size=(1, 2, 2),
+            embed_dim=32,
+            num_heads=4,
+            num_layers=2,
+            attn_kernel=-1,
+        ),
+        embed_dim_pixel=16,
+        num_layers_pixel=3,
+        num_heads_pixel=2,
+        attn_kernel_pixel=-1,
+        adaln_mode="pixel_proj",
+    )
+    plain = _seed_params(
+        PixelDiT(**kwargs, activation_checkpointing_pixel=False), seed=1
+    ).to(device)
+    ckpt = _seed_params(
+        PixelDiT(**kwargs, activation_checkpointing_pixel=True), seed=1
+    ).to(device)
+    # Checkpointing only engages in train mode (drop rates default to 0).
+    plain.train()
+    ckpt.train()
+    assert ckpt._should_checkpoint_pixel_block(0), "checkpointing must be active"
+    x = torch.randn(2, 4, 4, 8, 8, device=device)
+    y_plain = plain(x)
+    y_ckpt = ckpt(x)
+    assert torch.allclose(y_plain, y_ckpt, atol=1e-5)
+    y_plain.pow(2).mean().backward()
+    y_ckpt.pow(2).mean().backward()
+    for (n, p_plain), (_, p_ckpt) in zip(
+        plain.named_parameters(), ckpt.named_parameters()
+    ):
+        assert torch.allclose(p_plain.grad, p_ckpt.grad, atol=1e-4), n
