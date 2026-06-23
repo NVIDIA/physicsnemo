@@ -304,7 +304,7 @@ def main(cfg: DictConfig) -> None:
 
                 frac_active = len(member_lats) / M_act
 
-                if obs_active and member_lats:
+                if obs_active and member_lats and frac_active >= 0.5:
                     # Position error of ensemble mean
                     truth_lat = float(truth_rows["tclat"].iloc[0])
                     truth_lon = float(truth_rows["tclon"].iloc[0]) % 360.0
@@ -333,11 +333,8 @@ def main(cfg: DictConfig) -> None:
         if rev_n[k] == 0:
             continue
         v_mean = rev_num[k] / rev_n[k]
-        v_clim = np.array([
-            clim_rate * max(0.0, 1.0 - cl) - (1.0 - clim_rate) * cl
-            for cl in REV_CL_RATIOS
-        ])
-        v_perf = np.array([max(0.0, clim_rate - cl) for cl in REV_CL_RATIOS])
+        v_clim = np.array([max(0.0, clim_rate - cl) for cl in REV_CL_RATIOS])
+        v_perf = np.array([clim_rate * max(0.0, 1.0 - cl) for cl in REV_CL_RATIOS])
         denom = v_perf - v_clim
         ok = np.abs(denom) > 1e-8
         rev_vals[k, ok] = (v_mean[ok] - v_clim[ok]) / denom[ok]
