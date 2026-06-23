@@ -75,17 +75,24 @@ class DiT3D(Module):
 
     DiT3D tokenizes a :math:`(B, C, D, H, W)` field with a 3D patch embedding,
     processes the tokens with a stack of pre-norm transformer blocks, and
-    decodes them back to a :math:`(B, C_{out}, D, H, W)` field. It is the 3D
-    analog of :class:`~physicsnemo.models.dit.DiT`, replacing 2D patching and
-    attention with 3D neighborhood attention (:class:`Natten3DSelfAttention`)
-    and adding optional stereographic rotary position embeddings for spherical
-    geometry.
+    decodes them back to a :math:`(B, C_{out}, D, H, W)` field.
 
-    Despite the Diffusion-Transformer (DiT) name, this is a **deterministic
-    regression** model, **not** a generative diffusion model: it carries none of
-    the original DiT's diffusion conditioning (no noise, timestep, adaLN,
-    class-label, or text conditioning). It is a plain pre-norm transformer that
-    maps an input field directly to an output field.
+    It is a **conceptual 3D analog** of :class:`~physicsnemo.models.dit.DiT` — it
+    follows the same DiT-style template (patch-embed -> pre-norm transformer ->
+    linear decode) but is an **independent reimplementation**, not a wrapper or a
+    reuse of that class's components. It defines its own 3D blocks
+    (:class:`DiT3DBlock`, :class:`Natten3DSelfAttention`, :class:`PatchEmbed3D`,
+    :class:`FinalLayer3D`) and shares only low-level primitives with the rest of
+    the library: :func:`physicsnemo.nn.functional.na3d`, :class:`physicsnemo.nn.Mlp`,
+    and the RoPE helpers. (The 2D :class:`~physicsnemo.models.dit.DiT` is built from
+    a tokenizer/detokenizer registry and an adaLN conditioning embedder, none of
+    which fit a 3D, unconditioned, neighborhood-attention model.)
+
+    The name refers to the *architecture family*, not a training objective:
+    despite "DiT" (Diffusion Transformer), this is a **deterministic regression**
+    model, **not** generative — it carries none of the original DiT's diffusion
+    conditioning (no noise, timestep, adaLN, class-label, or text conditioning),
+    and is a plain pre-norm transformer mapping an input field to an output field.
 
     Geometry is decoupled from construction: latitude / longitude are supplied
     at ``forward`` time (only when ``rope_mode="stereographic"``) rather than

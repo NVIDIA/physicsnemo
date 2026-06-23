@@ -464,11 +464,15 @@ class PixelDiT(Module):
     :meth:`~physicsnemo.experimental.models.strata.DiT3D.forward_tokens` trunk is
     used), so its forward is unavailable once wrapped.
 
-    Like :class:`DiT3D`, this reuses the Diffusion-Transformer (DiT) architecture
-    as a **deterministic regression** model — it is **not** a generative
-    diffusion model. The pixel-wise AdaLN conditions on the semantic stage's
-    learned features, not on a diffusion timestep or noise level; there is no
-    diffusion process and no class-label or text conditioning (see Notes).
+    Like :class:`DiT3D`, this is an **independent reimplementation** of the
+    Diffusion-Transformer (DiT) architecture (not a reuse of
+    :class:`~physicsnemo.models.dit.DiT`'s components), used as a **deterministic
+    regression** model — **not** a generative diffusion model. The "DiT" name is
+    especially apt here because the pixel stage keeps DiT's *defining* feature,
+    **adaptive-layer-norm (adaLN) conditioning** (see :class:`PixelDiTBlock`); only
+    the conditioning *signal* differs — the semantic stage's learned features,
+    rather than a diffusion timestep / noise level. There is no diffusion process
+    and no class-label or text conditioning (see Notes).
 
     Parameters
     ----------
