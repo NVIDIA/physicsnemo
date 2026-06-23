@@ -21,6 +21,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.distributed as dist
 from datasets import dataset_classes
 from omegaconf import OmegaConf
 from utils.config import TrainMainConfig
@@ -622,6 +623,18 @@ class Trainer:
             epoch=self.step,
             metadata={"best_val_loss": self.best_val_loss},
         )
+        self._rotate_checkpoints(keep=2)
+
+    def _rotate_checkpoints(self, keep: int = 2) -> None:
+        if not dist.is_initialized() or dist.get_rank() != 0:
+            return
+        for pattern in ("*.mdlus", "checkpoint.*.pt"):
+            files = sorted(
+                self.checkpoint_dir.glob(pattern),
+                key=lambda p: int(p.stem.rsplit(".", 1)[-1]),
+            )
+            for old in files[:-keep]:
+                old.unlink()
 
     def _make_train_iter(self) -> Iterator:
         # When domain parallelism is active, sharded_data_iter handles both
