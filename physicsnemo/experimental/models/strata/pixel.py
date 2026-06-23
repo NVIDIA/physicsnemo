@@ -509,7 +509,11 @@ class PixelDiT(Module):
     rope_mode_pixel : Literal["none", "axial", "stereographic"], optional, default="none"
         Pixel-pathway RoPE mode. ``"stereographic"`` builds pixel-resolution
         coordinates via :func:`~physicsnemo.experimental.models.strata.coords.build_stereographic_token_coords`
-        and requires ``pos`` at ``forward``.
+        and requires ``pos`` at ``forward``. Note: unlike
+        :meth:`~physicsnemo.experimental.models.strata.DiT3D.set_tile_size`, the
+        pixel stage has no re-tiling hook, so an ``"axial"`` pixel RoPE is fixed to
+        the construction-time grid (``stereographic`` is recomputed per forward and
+        is unaffected).
     rope_base_pixel : float, optional, default=100.0
         Base of the pixel RoPE frequency progression.
     rope_length_scale_pixel : float, optional, default=1.0

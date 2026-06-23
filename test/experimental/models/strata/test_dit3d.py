@@ -841,3 +841,26 @@ def test_pixeldit_activation_checkpointing_matches(device, adaln_mode):
         plain.named_parameters(), ckpt.named_parameters()
     ):
         assert torch.allclose(p_plain.grad, p_ckpt.grad, atol=1e-3, rtol=1e-3), n
+
+
+@torch.no_grad()
+def test_dit3d_set_tile_size_axial():
+    """set_tile_size rebuilds the axial RoPE buffers so forward works at a new size."""
+    torch.manual_seed(0)
+    model = DiT3D(
+        in_channels=3,
+        input_shape=(4, 8, 8),
+        patch_size=(1, 2, 2),
+        embed_dim=32,
+        num_heads=4,
+        num_layers=2,
+        attn_kernel=-1,
+        rope_mode="axial",
+    ).eval()
+    assert model(torch.randn(2, 3, 4, 8, 8)).shape == (2, 3, 4, 8, 8)
+    # Re-tile to a taller grid; the axial cos/sin buffers must rebuild to the new
+    # token count (a stale buffer would make the RoPE broadcast fail in forward).
+    model.set_tile_size(height=16, width=8)
+    assert model._rope_cos.shape[0] == 4 * (16 // 2) * (8 // 2)
+    out = model(torch.randn(2, 3, 4, 16, 8))
+    assert out.shape == (2, 3, 4, 16, 8) and torch.isfinite(out).all()
