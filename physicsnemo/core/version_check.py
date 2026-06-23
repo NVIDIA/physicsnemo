@@ -418,7 +418,13 @@ def get_installed_version(distribution_name: str) -> Optional[str]:
     if normalized_name in _VARIANT_BASE_PACKAGES:
         normalized_prefix = normalized_name + "-"
         for dist in metadata.distributions():
-            dist_normalized = canonicalize_name(dist.metadata["Name"])
+            try:
+                name = dist.metadata["Name"]
+                if name is None:
+                    continue
+                dist_normalized = canonicalize_name(name)
+            except (TypeError, KeyError):
+                continue
             if dist_normalized.startswith(normalized_prefix):
                 return dist.version
 
