@@ -232,11 +232,6 @@ class DiT3D(Module):
                 f"RoPE requires head_dim (embed_dim // num_heads = {head_dim}) "
                 f"divisible by 4"
             )
-        if isinstance(attn_kernel, (tuple, list)) and len(attn_kernel) != 3:
-            raise ValueError(
-                f"attn_kernel tuple must have length 3 (kd, kh, kw); got {attn_kernel}"
-            )
-
         depth, height, width = input_shape
         if isinstance(patch_size, int):
             patch_size = (patch_size, patch_size, patch_size)

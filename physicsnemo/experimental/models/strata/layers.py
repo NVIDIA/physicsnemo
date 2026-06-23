@@ -73,7 +73,12 @@ def _as_kernel_triple(
     """
     if isinstance(attn_kernel, int):
         return (attn_kernel, attn_kernel, attn_kernel)
-    return tuple(attn_kernel)  # type: ignore[return-value]
+    kernel = tuple(attn_kernel)
+    if len(kernel) != 3:
+        raise ValueError(
+            f"attn_kernel tuple must have length 3 (kd, kh, kw); got {attn_kernel}"
+        )
+    return kernel  # type: ignore[return-value]
 
 
 class Natten3DSelfAttention(nn.Module):
@@ -164,6 +169,10 @@ class Natten3DSelfAttention(nn.Module):
         self.head_dim = dim // num_heads
         self.scale = self.head_dim**-0.5
         self.attn_drop_rate = attn_drop_rate
+        # Validate a per-axis kernel eagerly (length-3) so all entry points —
+        # DiT3D, PixelDiT, and direct use — fail at construction, not deep inside
+        # NATTEN. The raw value is kept as given (int stays int).
+        _as_kernel_triple(attn_kernel)
         self.attn_kernel = attn_kernel
         self.do_depthwise_attention = do_depthwise_attention
         self.na_dilation = na_dilation

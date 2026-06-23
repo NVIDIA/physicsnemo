@@ -453,11 +453,14 @@ def test_pixeldit_natten_forward(device):
 
 
 def test_natten3d_attention_kernel_triple():
-    """Natten3DSelfAttention accepts both int and per-axis tuple kernels."""
+    """Natten3DSelfAttention accepts int and per-axis tuple kernels; rejects bad length."""
     attn_int = Natten3DSelfAttention(dim=32, num_heads=4, attn_kernel=3)
     assert attn_int.attn_kernel == 3
     attn_tuple = Natten3DSelfAttention(dim=32, num_heads=4, attn_kernel=(3, 5, 5))
     assert attn_tuple.attn_kernel == (3, 5, 5)
+    # A malformed (non-length-3) tuple is rejected eagerly at construction.
+    with pytest.raises(ValueError):
+        Natten3DSelfAttention(dim=32, num_heads=4, attn_kernel=(3, 5))
 
 
 # --------------------------------------------------------------------------- #
