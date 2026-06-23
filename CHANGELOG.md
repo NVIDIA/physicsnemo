@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds `relative_mse` and `relative_l2` (target-normalized regression errors,
+  `relative_l2 = sqrt(relative_mse)`) to `physicsnemo.metrics.general`
+  (`relative_error.py`), with optional element `weights` and `dim`-based
+  reduction matching `general.mse`.
+- `physicsnemo.metrics.general.mse` `mse`/`rmse` gain an optional `weights`
+  argument for a masked/weighted mean (backward-compatible; `weights=None`
+  reproduces the prior unweighted result).
 - Adds Point-Transformer local vector-attention blocks to `physicsnemo.nn`.
 - FSDP2 checkpoint support: full save/load round-trip for
   ``torch.distributed.fsdp`` v2 models, including DTensor edge cases,
