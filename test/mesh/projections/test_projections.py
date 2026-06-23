@@ -655,9 +655,9 @@ class TestExtrude:
         signed_volumes = torch.det(edge_vectors)  # (n_cells,)
 
         ### Every cell must be positively oriented (no inverted simplices)
-        assert (
-            signed_volumes > 0
-        ).all(), f"Inconsistent orientation, signed volumes: {signed_volumes.tolist()}"
+        assert (signed_volumes > 0).all(), (
+            f"Inconsistent orientation, signed volumes: {signed_volumes.tolist()}"
+        )
 
     def test_extrude_with_zero_vector_raises_or_degenerates(self):
         """Test extrusion with zero vector creates degenerate cells."""
