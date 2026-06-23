@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 from pathlib import Path
 
 import pytest
@@ -590,6 +591,45 @@ def test_depthwise_conv_chunked_matches_plain():
     plain = DepthwiseConv(8, kernel_size=3, padding=1)
     plain.load_state_dict(chunked.state_dict())
     x = torch.randn(2, 8, 6, 6)
+    assert torch.allclose(chunked(x), plain(x), atol=1e-5)
+
+
+@torch.no_grad()
+def test_depthwise_conv_chunked_deepcopy_uses_own_weights():
+    """A deep-copied chunked DepthwiseConv must use its OWN parameters.
+
+    Regression: the chunked forward reads ``self.weight`` / ``self.bias`` live
+    rather than closing over the original module, so EMA / ``AveragedModel`` /
+    snapshot paths (which ``copy.deepcopy`` the model) stay correct. If the copy
+    aliased the source's weights, zeroing the copy would have no effect.
+    """
+    torch.manual_seed(0)
+    conv = DepthwiseConv(4, kernel_size=3, padding=1, chunk_size=2)
+    clone = copy.deepcopy(conv)
+    clone.weight.zero_()
+    clone.bias.zero_()
+    x = torch.randn(1, 4, 8, 8)
+    # All-zero weight+bias => output must be exactly zero, and must NOT equal the
+    # original's output (which would mean the clone aliased the source weights).
+    assert torch.count_nonzero(clone(x)) == 0
+    assert not torch.equal(clone(x), conv(x))
+
+
+@torch.no_grad()
+def test_depthwise_conv_chunked_no_bias_matches_and_moves(device):
+    """bias=False chunked conv matches the plain conv and survives a device move.
+
+    Regression: the synthetic zero-bias must be built from live module state at
+    forward time; if captured at construction it stays on the original device
+    after ``.to(device)`` and the chunked forward errors on a cross-device call.
+    """
+    torch.manual_seed(0)
+    chunked = DepthwiseConv(8, kernel_size=3, padding=1, bias=False, chunk_size=4).to(
+        device
+    )
+    plain = DepthwiseConv(8, kernel_size=3, padding=1, bias=False).to(device)
+    plain.load_state_dict(chunked.state_dict())
+    x = torch.randn(2, 8, 6, 6, device=device)
     assert torch.allclose(chunked(x), plain(x), atol=1e-5)
 
 

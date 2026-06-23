@@ -78,25 +78,37 @@ def _apply_conv2d(
     )[0]
 
 
-def _wrap_large_depthwise_conv(conv: nn.Conv2d, chunk_size: int = 4):
-    r"""Build a chunked ``torch.vmap`` forward for a depthwise convolution.
+def _build_chunked_depthwise_conv(conv: nn.Conv2d, chunk_size: int = 4):
+    r"""Build a chunked ``torch.vmap`` depthwise convolution callable.
+
+    The returned callable takes ``(x, weight, bias)`` explicitly and captures
+    only the static convolution configuration (stride / padding / dilation /
+    padding mode) -- **not** the module or its parameters. The forward pass
+    threads ``self.weight`` / ``self.bias`` in live, so the callable stays
+    correct across ``deepcopy`` (e.g. EMA / ``AveragedModel``) and ``.to(device)``.
 
     Parameters
     ----------
     conv : torch.nn.Conv2d
-        A depthwise convolution (``groups == out_channels``).
+        A depthwise convolution (``groups == out_channels``); used only to read
+        its static configuration.
     chunk_size : int, optional, default=4
         Channel chunk size for the inner :func:`torch.vmap`.
 
     Returns
     -------
-    Callable[[torch.Tensor], torch.Tensor]
-        A function mapping :math:`(B, C, H, W) \rightarrow (B, C, H', W')`.
+    Callable[[torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor]
+        A function mapping ``(x, weight, bias)`` with
+        :math:`x \in (B, C, H, W)` to :math:`(B, C, H', W')`.
     """
     if conv.groups != conv.out_channels:
         raise ValueError("only works with depthwise convolution")
 
-    func = torch.vmap(
+    # Inner vmap over channels (chunked); outer vmap over the batch dim with the
+    # weight / bias broadcast (``in_dims=(0, None, None)``). This is equivalent
+    # to mapping ``func(x[i], weight, bias)`` over the batch, but keeps weight
+    # and bias as explicit arguments rather than closed-over module state.
+    per_sample = torch.vmap(
         partial(
             _apply_conv2d,
             stride=conv.stride,
@@ -106,27 +118,18 @@ def _wrap_large_depthwise_conv(conv: nn.Conv2d, chunk_size: int = 4):
         ),
         chunk_size=chunk_size,
     )
-    bias = conv.bias
-    if bias is None:
-        bias = torch.zeros(
-            conv.weight.shape[0], device=conv.weight.device, dtype=conv.weight.dtype
-        )
-
-    def apply(x: torch.Tensor) -> torch.Tensor:
-        return func(x, conv.weight, bias)
-
-    return torch.vmap(apply)
+    return torch.vmap(per_sample, in_dims=(0, None, None))
 
 
 class DepthwiseConv(torch.nn.Conv2d):
     r"""Depthwise 2D convolution that chunks large inputs via ``torch.vmap``.
 
     A :class:`torch.nn.Conv2d` with ``groups == channels``. When ``chunk_size``
-    is provided, the forward pass is replaced with a chunked
-    :func:`torch.vmap` implementation (see :func:`_wrap_large_depthwise_conv`)
-    that avoids the conv2d element-count limit for very large tensors;
-    otherwise it falls back to the standard convolution and warns if a single
-    chunk would exceed the limit.
+    is provided, the forward pass uses a chunked :func:`torch.vmap`
+    implementation (see :func:`_build_chunked_depthwise_conv`) that avoids the
+    conv2d element-count limit for very large tensors; otherwise it falls back
+    to the standard convolution and warns if a single chunk would exceed the
+    limit.
 
     Parameters
     ----------
@@ -158,24 +161,36 @@ class DepthwiseConv(torch.nn.Conv2d):
             raise ValueError("DepthwiseConv does not accept a groups argument")
         super().__init__(channels, channels, *args, **kwargs, groups=channels)
         self.chunk_size = chunk_size
-        # When chunking is requested, shadow the bound ``forward`` with the
-        # vmapped implementation built from this module's parameters.
-        if chunk_size is not None:
-            self.forward = _wrap_large_depthwise_conv(self, chunk_size)
+        # Build the chunked callable once from the static conv configuration. It
+        # does not capture ``self`` or the parameters, so ``forward`` can thread
+        # ``self.weight`` / ``self.bias`` in live -- this keeps the module correct
+        # after ``deepcopy`` (EMA / ``AveragedModel``) and ``.to(device)``, unlike
+        # binding a ``self``-capturing closure to ``self.forward``.
+        self._chunked_conv = (
+            _build_chunked_depthwise_conv(self, chunk_size)
+            if chunk_size is not None
+            else None
+        )
 
     def forward(self, x, *args, **kwargs):
+        if self._chunked_conv is not None:
+            # Chunked path: read parameters live so a deep-copied module uses its
+            # own (possibly relocated / re-initialized) weights, not the source's.
+            bias = self.bias
+            if bias is None:
+                bias = torch.zeros(
+                    self.out_channels, device=self.weight.device, dtype=self.weight.dtype
+                )
+            return self._chunked_conv(x, self.weight, bias)
+
         # Standard (non-chunked) path: warn if a single conv2d call would exceed
         # the element-count limit, then defer to nn.Conv2d.
-        n_chunks_size = 1
-        if x is not None and self.chunk_size:
-            n_chunks_size = max(1, x.numel() // self.chunk_size)
-
-        size_of_chunk = math.ceil(x.numel() * x.dtype.itemsize / n_chunks_size)
+        size_of_chunk = math.ceil(x.numel() * x.dtype.itemsize)
         if size_of_chunk > 2**32:
             warnings.warn(
                 f"Convolution {size_of_chunk=} larger than 2^32 so conv2d will "
-                f"revert to a slow implementation or error out. Decrease the "
-                f"chunk_size={self.chunk_size} option.",
+                f"revert to a slow implementation or error out. Set the "
+                f"chunk_size option to enable chunking.",
                 stacklevel=2,
             )
 
