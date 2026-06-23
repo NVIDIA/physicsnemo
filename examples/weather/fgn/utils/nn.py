@@ -20,6 +20,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import torch
+import torch.nn.functional as F
 
 from physicsnemo.core import ModelMetaData, Module
 
@@ -102,8 +103,20 @@ class FGNDiT(Module, register=True):
             if isinstance(patch_size, (list, tuple))
             else (patch_size, patch_size)
         )
+        # PatchEmbed2D allocates pos_embed with floor(H/ps) but pads at runtime to
+        # ceil(H/ps), causing a token-count mismatch for non-divisible grids (e.g.
+        # ERA5 721×1440 with ps=4).  Pre-pad here so DiT receives an already-divisible
+        # input and never triggers its internal padding path.
+        pad_h = (-input_height) % ps[0]
+        pad_w = (-input_width) % ps[1]
+        self._pad_top = pad_h // 2
+        self._pad_bottom = pad_h - self._pad_top
+        self._pad_left = pad_w // 2
+        self._pad_right = pad_w - self._pad_left
+        self._crop_h = input_height
+        self._crop_w = input_width
         self.backbone = DiT(
-            input_size=(input_height, input_width),
+            input_size=(input_height + pad_h, input_width + pad_w),
             in_channels=in_channels,
             out_channels=state_channels,
             patch_size=ps,
@@ -134,10 +147,20 @@ class FGNDiT(Module, register=True):
             pieces.append(invariants)
         x = torch.cat(pieces, dim=1)
 
-        # Dummy timestep: its embedding becomes a learned constant bias.
-        # All stochastic variation comes from latent z via AdaLN-Zero.
+        if self._pad_top or self._pad_bottom or self._pad_left or self._pad_right:
+            x = F.pad(
+                x, (self._pad_left, self._pad_right, self._pad_top, self._pad_bottom)
+            )
+
+        # t=0 dummy: timestep embedding becomes a learned constant bias;
+        # all stochasticity comes from latent z via AdaLN-Zero.
         t = torch.zeros(batch, device=x.device, dtype=torch.float32)
-        return self.backbone(x, t, condition=latent)
+        out = self.backbone(x, t, condition=latent)
+        return out[
+            ...,
+            self._pad_top : self._pad_top + self._crop_h,
+            self._pad_left : self._pad_left + self._crop_w,
+        ]
 
 
 def build_model(
