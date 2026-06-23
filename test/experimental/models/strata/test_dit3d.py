@@ -369,8 +369,13 @@ def test_dit3d_checkpoint(device):
     assert validate_checkpoint(model_1, model_2, (x,))
 
 
-def test_pixeldit_checkpoint(device):
-    """PixelDiT save/load/from_checkpoint reproduce the forward output."""
+@pytest.mark.parametrize("adaln_mode", ["pixel_proj", "bilinear_dw"])
+def test_pixeldit_checkpoint(device, adaln_mode):
+    """PixelDiT save/load/from_checkpoint reproduce the forward output.
+
+    Covers ``bilinear_dw`` too, so the shadowed-``forward`` (chunked
+    :class:`DepthwiseConv`) survives a full ``.mdlus`` round-trip.
+    """
     torch.manual_seed(0)
     kwargs = dict(
         semantic_config=dict(
@@ -386,7 +391,7 @@ def test_pixeldit_checkpoint(device):
         num_layers_pixel=2,
         num_heads_pixel=2,
         attn_kernel_pixel=-1,
-        adaln_mode="pixel_proj",
+        adaln_mode=adaln_mode,
     )
     model_1 = _seed_params(PixelDiT(**kwargs), seed=1).to(device)
     model_2 = _seed_params(PixelDiT(**kwargs), seed=2).to(device)
@@ -545,6 +550,19 @@ def test_depthwise_conv_is_depthwise_and_preserves_shape():
     assert out.shape == (2, 8, 6, 6) and torch.isfinite(out).all()
     with pytest.raises(ValueError):
         DepthwiseConv(8, kernel_size=3, groups=2)
+
+
+@torch.no_grad()
+def test_depthwise_conv_chunked_matches_plain():
+    """The chunked torch.vmap path (used by bilinear_dw) matches the plain conv."""
+    torch.manual_seed(0)
+    # chunk_size triggers the vmapped implementation; copy its weights to a plain
+    # DepthwiseConv (standard nn.Conv2d forward) and check the outputs agree.
+    chunked = DepthwiseConv(8, kernel_size=3, padding=1, chunk_size=4)
+    plain = DepthwiseConv(8, kernel_size=3, padding=1)
+    plain.load_state_dict(chunked.state_dict())
+    x = torch.randn(2, 8, 6, 6)
+    assert torch.allclose(chunked(x), plain(x), atol=1e-5)
 
 
 @torch.no_grad()
