@@ -350,10 +350,11 @@ def energy_score_per_lead(
 # Relative Economic Value (REV) — paper §4.1 / Figure 2 g-h
 # ---------------------------------------------------------------------------
 
-# Normalized exceedance thresholds ≈ 90th / 95th / 99th percentile of N(0,1).
+# Normalized exceedance thresholds ≈ 90th / 95th / 99th / 99.99th percentile of N(0,1).
 # Data is z-scored before training so these map onto the correct tails.
-REV_THRESHOLDS: list[float] = [1.28, 1.64, 2.33]
-REV_THRESHOLD_NAMES: list[str] = ["p90", "p95", "p99"]
+# Paper Figure 2g-h reports REV at the 99.99th percentile (z ≈ 3.72).
+REV_THRESHOLDS: list[float] = [1.28, 1.64, 2.33, 3.72]
+REV_THRESHOLD_NAMES: list[str] = ["p90", "p95", "p99", "p99.99"]
 # 19 cost/loss ratios in (0, 1) matching Richardson (2000) convention.
 REV_CL_RATIOS: np.ndarray = np.linspace(0.05, 0.95, 19)
 
