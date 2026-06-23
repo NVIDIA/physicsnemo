@@ -140,6 +140,29 @@ def _build_pixeldit_bilinear():
     return _seed_params(model, seed=40), (torch.randn(2, 4, 4, 8, 8, generator=gen),)
 
 
+def _build_pixeldit_bilinear_pd2():
+    # Vertical patch size 2 -> semantic depth 2, pixel depth 4, so bilinear_dw
+    # takes the trilinear depth-upsample path (not the d == sd 2D fallback).
+    model = PixelDiT(
+        semantic_config=dict(
+            in_channels=4,
+            input_shape=(4, 8, 8),
+            patch_size=(2, 2, 2),
+            embed_dim=32,
+            num_heads=4,
+            num_layers=2,
+            attn_kernel=-1,
+        ),
+        embed_dim_pixel=16,
+        num_layers_pixel=2,
+        num_heads_pixel=2,
+        attn_kernel_pixel=-1,
+        adaln_mode="bilinear_dw",
+    )
+    gen = torch.Generator().manual_seed(51)
+    return _seed_params(model, seed=50), (torch.randn(2, 4, 4, 8, 8, generator=gen),)
+
+
 # name -> (builder, golden path). Drives the non-regression test and the golden
 # generator (data/_generate_dit3d_goldens.py).
 _FIXTURE_REGISTRY = [
@@ -147,6 +170,11 @@ _FIXTURE_REGISTRY = [
     ("dit3d_stereo", _build_dit3d_stereo, _DATA / "dit3d_stereo.pth"),
     ("pixeldit_pixelproj", _build_pixeldit_pixelproj, _DATA / "pixeldit_pixelproj.pth"),
     ("pixeldit_bilinear", _build_pixeldit_bilinear, _DATA / "pixeldit_bilinear.pth"),
+    (
+        "pixeldit_bilinear_pd2",
+        _build_pixeldit_bilinear_pd2,
+        _DATA / "pixeldit_bilinear_pd2.pth",
+    ),
 ]
 
 
