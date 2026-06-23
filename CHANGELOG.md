@@ -136,6 +136,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `physicsnemo.mesh.projections.extrude` now produces a *conforming* (crack-free)
+  simplicial complex for multi-cell inputs. Each prism was previously tessellated
+  using the per-cell local vertex order, so adjacent cells that listed a shared
+  edge's endpoints in different orders split the shared quad face along opposite
+  diagonals; the resulting non-manifold volume leaked interior crack faces into
+  `get_boundary_mesh` (boundary edges shared by 4 faces — e.g. an extruded L-shape
+  or any multi-column grid, which also broke `repair.fix_orientation`). Parent-cell
+  vertices are now sorted into a global order before tessellation (the
+  Freudenthal-Kuhn subdivision), a no-op for already-sorted inputs.
 - `physicsnemo.mesh.remesh` now preserves the input mesh's device and floating
   dtype (the pyacvd/pyvista round-trip previously dropped them to CPU/float32).
 - `physicsnemo.mesh`: `Mesh.to(<float dtype>)` and `DomainMesh.to(<float dtype>)`

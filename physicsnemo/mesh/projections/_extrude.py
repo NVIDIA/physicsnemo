@@ -126,14 +126,22 @@ def extrude(
 
     Notes
     -----
-    The tessellation pattern for an N-simplex with vertices [v0, v1, ..., vN]
-    creates (N+1) child (N+1)-simplices:
+    Before tessellating, the vertices of each parent simplex are sorted into a
+    consistent global (ascending-index) order. With that ordering, the
+    tessellation pattern for an N-simplex with (sorted) vertices
+    [v0, v1, ..., vN] creates (N+1) child (N+1)-simplices:
 
         - Child i has vertices: [v0', v1', ..., vi', vi, vi+1, ..., vN]
+
     where primed vertices (v') are the extruded copies (offset by the extrusion
     vector).
 
-    This tessellation preserves orientation and creates a valid simplicial complex.
+    Sorting the vertices is the Freudenthal-Kuhn subdivision: prisms that share a
+    face split it along the same diagonal, so the output is a *conforming*
+    simplicial complex (no cracks / non-manifold facets). The child cells are not
+    guaranteed to share a single orientation (signed-volume sign); apply
+    :func:`physicsnemo.mesh.repair.fix_orientation` or inspect the signed volume
+    if a consistent orientation is required.
     """
     ### Validate inputs
     if capping:
@@ -237,8 +245,17 @@ def extrude(
         )
 
         # Vectorized tessellation
-        # For each parent cell, generate all children simultaneously
-        parent_cells = mesh.cells  # Shape: (n_cells, n_vertices_per_parent)
+        # For each parent cell, generate all children simultaneously.
+        #
+        # Freudenthal-Kuhn: sort each parent simplex's vertices into a consistent
+        # global (ascending-index) order before tessellating. A shared face is
+        # then seen with the same vertex order by both incident prisms, so they
+        # split it along the SAME diagonal and the result is a *conforming*
+        # (crack-free) simplicial complex. Without the sort, neighbouring cells
+        # that list a shared edge's endpoints in different local orders split the
+        # shared quad face along opposite diagonals, producing a non-manifold
+        # boundary (interior crack faces then leak into get_boundary_mesh).
+        parent_cells = torch.sort(mesh.cells, dim=1).values  # (n_cells, n_verts_per_parent)
 
         # NOTE: This loop iterates over child indices (bounded by simplex
         # dimension, not mesh size), so the iteration count is small (e.g. 3

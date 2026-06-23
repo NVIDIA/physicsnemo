@@ -21,7 +21,85 @@ import torch
 from tensordict import TensorDict
 
 from physicsnemo.mesh import Mesh
+from physicsnemo.mesh.primitives.planar import l_shape
 from physicsnemo.mesh.projections import embed, extrude, project
+
+
+def _undirected_edges(faces: torch.Tensor) -> torch.Tensor:
+    """Return the canonical (sorted-endpoint) undirected edges of a triangle mesh.
+
+    Args:
+        faces: Triangle connectivity of shape ``(n_faces, 3)``.
+
+    Returns:
+        Edge endpoints of shape ``(3 * n_faces, 2)`` with each row sorted
+        ascending, so an edge has the same representation regardless of the
+        triangle winding it came from.
+    """
+    edges = torch.cat([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [0, 2]]], dim=0)
+    return torch.sort(edges, dim=1).values
+
+
+def _surface_edge_multiplicities(surface: Mesh) -> torch.Tensor:
+    """Count how many triangles share each undirected edge of a surface mesh.
+
+    For a closed 2-manifold every edge is shared by exactly two triangles, so any
+    count of 1 (a crack / open boundary) or >= 3 (a non-manifold edge) signals a
+    malformed surface.
+
+    Args:
+        surface: A triangle surface mesh (``n_manifold_dims == 2``).
+
+    Returns:
+        Per-unique-edge incidence counts, shape ``(n_unique_edges,)``.
+    """
+    _, counts = torch.unique(
+        _undirected_edges(surface.cells), dim=0, return_counts=True
+    )
+    return counts
+
+
+def _euler_characteristic(surface: Mesh) -> int:
+    """Euler characteristic ``V - E + F`` of a triangle surface mesh.
+
+    A closed, orientable, genus-0 surface (a topological sphere) has ``chi == 2``;
+    cracked / non-manifold output from a buggy tessellation does not.
+
+    Args:
+        surface: A triangle surface mesh (``n_manifold_dims == 2``).
+
+    Returns:
+        The integer Euler characteristic.
+    """
+    faces = surface.cells
+    n_vertices = int(torch.unique(faces).numel())
+    n_edges = int(torch.unique(_undirected_edges(faces), dim=0).shape[0])
+    n_faces = int(faces.shape[0])
+    return n_vertices - n_edges + n_faces
+
+
+def _two_column_grid() -> Mesh:
+    """Build a 2x1 grid of quads (4 triangles) - the minimal extrude-crack repro.
+
+    Two horizontally adjacent quads share a vertical edge whose endpoints are
+    listed in different local orders by the two columns. That is exactly the
+    configuration that makes the prism tessellation pick mismatched diagonals on
+    the shared quad face, so it is the smallest mesh that exposes the bug.
+
+    Returns:
+        A 2D-in-2D triangle mesh with 6 points and 4 triangles.
+    """
+    n_rows = 2  # points per column (a single row of quads)
+    points = torch.tensor(
+        [[float(i), float(j)] for i in range(3) for j in range(n_rows)],
+        dtype=torch.float32,
+    )
+    cells = []
+    for col in range(2):
+        idx = col * n_rows
+        cells.append([idx, idx + 1, idx + n_rows])
+        cells.append([idx + 1, idx + n_rows + 1, idx + n_rows])
+    return Mesh(points=points, cells=torch.tensor(cells, dtype=torch.int64))
 
 
 class TestExtrude:
@@ -334,6 +412,44 @@ class TestExtrude:
         # Cells are ordered [child0_parent0, child0_parent1, child1_parent0, child1_parent1]
         expected_cell_ids = torch.tensor([10, 20, 10, 20])
         assert torch.equal(extruded.cell_data["cell_id"], expected_cell_ids)
+
+    @pytest.mark.parametrize(
+        "make_base",
+        [
+            pytest.param(lambda: l_shape.load(subdivisions=1), id="l_shape_sub1"),
+            pytest.param(lambda: l_shape.load(subdivisions=3), id="l_shape_sub3"),
+            pytest.param(_two_column_grid, id="grid_2col"),
+        ],
+    )
+    def test_extrude_produces_conforming_boundary(self, make_base):
+        """Extruding a valid 2D complex must yield a conforming (crack-free) solid.
+
+        Regression test for inconsistent prism-diagonal tessellation: adjacent
+        cells that list a shared edge's endpoints in different local orders used
+        to split the shared quad face along opposite diagonals, producing a
+        non-manifold boundary (interior crack faces leaking into
+        ``get_boundary_mesh``). A conforming solid has a closed 2-manifold
+        boundary - every edge shared by exactly two triangles, with Euler
+        characteristic 2 (a topological sphere).
+        """
+        base = make_base()  # 2D triangulation in 2D space (valid complex)
+
+        # Embed into 3D and extrude into a solid tetrahedral volume, then take
+        # the boundary surface that a downstream consumer (e.g. text_2d_3d) uses.
+        volume = extrude(embed(base, target_n_spatial_dims=3), vector=[0.0, 0.0, 1.0])
+        boundary = volume.get_boundary_mesh(data_source="cells")
+
+        ### The boundary must be edge-manifold: every edge in exactly 2 triangles.
+        edge_counts = _surface_edge_multiplicities(boundary)
+        nonmanifold = torch.unique(edge_counts[edge_counts != 2]).tolist()
+        assert nonmanifold == [], (
+            f"extruded boundary is not edge-manifold: found edges with incidence "
+            f"counts {nonmanifold} (every edge of a watertight surface must be "
+            f"shared by exactly 2 triangles)"
+        )
+
+        ### ... and topologically a sphere (no cracks/handles introduced).
+        assert _euler_characteristic(boundary) == 2
 
     def test_extrude_empty_mesh(self):
         """Test extrusion of empty mesh (no cells)."""
