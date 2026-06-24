@@ -510,7 +510,10 @@ class FinalLayer3D(nn.Module):
         self, x: Float[torch.Tensor, "batch tokens hidden_size"]
     ) -> Float[torch.Tensor, "batch tokens patch_pixels"]:
         # Force the output head to fp32 regardless of any outer autocast context.
+        # Match the linear input to the weight dtype so the model also works when
+        # cast wholesale to bf16/half (model.bfloat16()); under fp32 weights (the
+        # common autocast path) the cast is a no-op and the result is unchanged.
         with torch.autocast(device_type=x.device.type, enabled=False):
             x = self.norm(x.float())
-            x = self.linear(x)
+            x = self.linear(x.to(self.linear.weight.dtype))
         return x

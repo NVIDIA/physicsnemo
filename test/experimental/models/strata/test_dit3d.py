@@ -735,6 +735,41 @@ def test_dit3d_bf16_autocast_forward(device):
     assert torch.isfinite(out.float()).all()
 
 
+def _make_dit3d_default():
+    return DiT3D(
+        in_channels=4,
+        input_shape=(4, 8, 8),
+        patch_size=(1, 2, 2),
+        embed_dim=32,
+        num_heads=4,
+        num_layers=2,
+        attn_kernel=-1,
+    )
+
+
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "make",
+    [_make_dit3d_default, lambda: _build_pixeldit_bilinear()[0]],
+    ids=["dit3d", "pixeldit"],
+)
+def test_output_head_supports_pure_bf16_cast(make, device):
+    """A model cast wholesale to bf16 (model.bfloat16()) runs without a dtype crash.
+
+    Distinct from the bf16_mixed autocast path (weights stay fp32): here the
+    parameters are genuinely bf16. The fp32-forced output head must match its
+    input to the (bf16) weight dtype, else F.linear raises
+    "mat1 and mat2 must have the same dtype". The PixelDiT case also exercises
+    the bf16 DepthwiseConv (bilinear_dw) path.
+    """
+    torch.manual_seed(0)
+    model = make().to(device).bfloat16().eval()
+    x = torch.randn(2, 4, 4, 8, 8, device=device, dtype=torch.bfloat16)
+    out = model(x)
+    assert out.dtype == torch.bfloat16
+    assert torch.isfinite(out.float()).all()
+
+
 def test_dit3d_activation_checkpointing_matches(device):
     """activation_checkpointing reproduces the non-checkpointed output and grads.
 

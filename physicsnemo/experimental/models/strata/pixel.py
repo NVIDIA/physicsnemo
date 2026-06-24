@@ -447,9 +447,12 @@ class PixelDiTLastLayer(nn.Module):
     def forward(
         self, x: Float[torch.Tensor, "batch pixels hidden_size"]
     ) -> Float[torch.Tensor, "batch pixels out_chans"]:
+        # Force the output head to fp32 regardless of any outer autocast context.
+        # Match the linear input to the weight dtype so the model also works when
+        # cast wholesale to bf16/half; under fp32 weights the cast is a no-op.
         with torch.autocast(device_type=x.device.type, enabled=False):
             x = self.norm(x.float())
-            x = self.linear(x)
+            x = self.linear(x.to(self.linear.weight.dtype))
         return x
 
 
