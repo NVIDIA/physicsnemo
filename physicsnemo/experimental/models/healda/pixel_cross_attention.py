@@ -86,12 +86,6 @@ triton = OptionalImport("triton")
 tl = OptionalImport("triton.language")
 
 
-def _pixel_attn_kernels():
-    from physicsnemo.experimental.models.healda import _pixel_attn_kernels as _k
-
-    return _k
-
-
 # Directory for the persisted Triton autotune cache. Overridable so deployments
 # can redirect it to a fast/shared location; defaults under the user cache dir.
 _AUTOTUNE_CACHE_DIR = os.environ.get(
@@ -208,8 +202,9 @@ def _gqa_fwd_impl(
     B_v = B_v.contiguous()
     Out = torch.zeros_like(Q)
     LSE = torch.empty(n_groups, n_q_heads, device=Q.device, dtype=torch.float32)
-    _k = _pixel_attn_kernels()
-    _k._pixel_attn_gqa_fwd[(n_programs,)](
+    from . import _pixel_attn_kernels as kernels
+
+    kernels._pixel_attn_gqa_fwd[(n_programs,)](
         Q,
         tokens,
         W_k,
@@ -235,7 +230,7 @@ def _gqa_fwd_impl(
     )
     _maybe_print_autotune_choice(
         "fwd",
-        _k._pixel_attn_gqa_fwd,
+        kernels._pixel_attn_gqa_fwd,
         q_per_kv,
         n_kv_heads,
         compute_dtype,
@@ -295,8 +290,9 @@ def _gqa_bwd_impl(
     dKV = torch.empty(
         tokens.shape[0], 2 * kv_dim, device=Q.device, dtype=torch_compute_dtype
     )
-    _k = _pixel_attn_kernels()
-    _k._pixel_attn_gqa_bwd[(n_programs,)](
+    from . import _pixel_attn_kernels as kernels
+
+    kernels._pixel_attn_gqa_bwd[(n_programs,)](
         Q,
         tokens,
         W_k,
@@ -329,7 +325,7 @@ def _gqa_bwd_impl(
     )
     _maybe_print_autotune_choice(
         "bwd",
-        _k._pixel_attn_gqa_bwd,
+        kernels._pixel_attn_gqa_bwd,
         q_per_kv,
         n_kv_heads,
         compute_dtype,
@@ -901,10 +897,11 @@ def _autotuners():
     Built lazily so the module imports without triton; only called from the
     autotune-cache paths, which run after the first (triton-backed) attention.
     """
-    _k = _pixel_attn_kernels()
+    from . import _pixel_attn_kernels as kernels
+
     return {
-        "pixel_attn_gqa_fwd": _k._pixel_attn_gqa_fwd,
-        "pixel_attn_gqa_bwd": _k._pixel_attn_gqa_bwd,
+        "pixel_attn_gqa_fwd": kernels._pixel_attn_gqa_fwd,
+        "pixel_attn_gqa_bwd": kernels._pixel_attn_gqa_bwd,
     }
 
 
