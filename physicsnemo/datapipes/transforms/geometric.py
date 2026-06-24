@@ -29,8 +29,8 @@ import torch
 from tensordict import TensorDict
 
 from physicsnemo.datapipes.registry import register
-from physicsnemo.datapipes.transforms._sdf_torch import signed_distance_field_mesh
 from physicsnemo.datapipes.transforms.base import Transform
+from physicsnemo.mesh.spatial.sdf import signed_distance_field_mesh
 
 
 @register()

@@ -38,9 +38,9 @@ from __future__ import annotations
 import torch
 
 from physicsnemo.datapipes.registry import register
-from physicsnemo.datapipes.transforms._sdf_torch import signed_distance_field_mesh
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
 from physicsnemo.mesh import DomainMesh, Mesh
+from physicsnemo.mesh.spatial.sdf import signed_distance_field_mesh
 
 
 @register()
@@ -49,7 +49,7 @@ class ComputeSDFFromBoundary(MeshTransform):
 
     Reads the surface mesh from ``domain.boundaries[boundary_name]`` and
     evaluates the signed distance field at every interior point using
-    :func:`physicsnemo.datapipes.transforms._sdf_torch.signed_distance_field_mesh`,
+    :func:`physicsnemo.mesh.spatial.sdf.signed_distance_field_mesh`,
     a pure-PyTorch implementation backed by a torch BVH (Warp-free).
 
     The computed SDF is stored as a scalar field ``(N, 1)`` in

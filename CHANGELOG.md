@@ -86,6 +86,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (matching the training/validation loop), and reuses the trainer's
   dataloader / collate / metric tooling (refactored into `datasets.py`
   and `utils.py`).
+- Adds a Warp-free signed distance field to `physicsnemo.mesh.spatial`
+  (`physicsnemo.mesh.spatial.signed_distance_field_mesh`), built on the `BVH`
+  and `ClusterTree` spatial structures it lives alongside and a drop-in
+  replacement for the Warp-based `physicsnemo.nn.functional.signed_distance_field`.
+  The nearest-triangle query runs as a single-kernel per-thread BVH traversal
+  (Triton on CUDA, a bounded-stack PyTorch DFS as the CPU reference; per-query
+  indices are int64 so query counts past tens of millions do not overflow). The
+  sign is computed either from the angle-weighted pseudo-normal of the closest
+  mesh feature — face, edge, or vertex, which stays correct at sharp/non-convex
+  edges where a single face normal flips the sign, matching Warp's
+  `mesh_query_point_sign_normal` — or, with `use_sign_winding_number=True`, from
+  a `ClusterTree` dual-tree Barnes-Hut generalized-winding-number summation that
+  runs identically on CPU and GPU (robust on non-watertight meshes). The private
+  datapipes implementation (`physicsnemo.datapipes.transforms._sdf_torch` /
+  `_sdf_triton`, including its bespoke Triton winding kernel) is superseded and
+  removed; the public datapipes SDF transform delegates here.
 
 ### Changed
 

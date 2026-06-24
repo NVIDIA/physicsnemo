@@ -14,14 +14,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for the Warp-free, mesh-BVH-backed signed distance field."""
+"""Tests for the Warp-free, mesh-spatial signed distance field.
+
+The nearest-triangle query is backed by :class:`physicsnemo.mesh.spatial.BVH`
+(Triton fast path on CUDA, bounded-stack PyTorch DFS as the reference); the
+winding-number sign is computed with a
+:class:`physicsnemo.mesh.spatial.ClusterTree` Barnes-Hut summation, with the
+exact ``O(n_queries * n_faces)`` torch sum as the oracle.
+"""
 
 import math
 
 import pytest
 import torch
 
-from physicsnemo.datapipes.transforms._sdf_torch import signed_distance_field_mesh
+from physicsnemo.mesh.spatial.sdf import signed_distance_field_mesh
 
 
 # Build a simple tetrahedron surface mesh as four triangles (matches the
@@ -157,6 +164,78 @@ def _l_prism() -> tuple[torch.Tensor, torch.Tensor]:
     points_inward = _l_prism_inside(centroids + 1e-4 * normals)
     faces[points_inward] = faces[points_inward][:, [0, 2, 1]]
     return vertices, faces
+
+
+def _open_uv_sphere(n_rings: int = 40, n_segments: int = 80):
+    """A UV sphere with the south polar cap removed (non-watertight surface)."""
+    phi = torch.linspace(0, math.pi, n_rings + 2)[1:-1]
+    theta = torch.linspace(0, 2 * math.pi, n_segments + 1)[:-1]
+    phi_g, theta_g = torch.meshgrid(phi, theta, indexing="ij")
+    sin_phi = phi_g.sin()
+    ring = torch.stack(
+        [sin_phi * theta_g.cos(), sin_phi * theta_g.sin(), phi_g.cos()], dim=-1
+    ).reshape(-1, 3)
+    vertices = torch.cat(
+        [torch.tensor([[0.0, 0.0, 1.0]]), ring, torch.tensor([[0.0, 0.0, -1.0]])]
+    ).float()
+
+    j = torch.arange(n_segments)
+    j_next = (j + 1) % n_segments
+    # North fan + body, but drop the south fan so the surface has a hole.
+    north = torch.stack([torch.zeros_like(j), 1 + j, 1 + j_next], dim=1)
+    r = torch.arange(n_rings - 1).unsqueeze(1)
+    base = 1 + r * n_segments
+    p00, p01 = base + j, base + j_next
+    p10, p11 = base + n_segments + j, base + n_segments + j_next
+    body = torch.stack(
+        [torch.stack([p00, p10, p11], -1), torch.stack([p00, p11, p01], -1)], dim=2
+    ).reshape(-1, 3)
+    faces = torch.cat([north, body]).to(torch.int32).reshape(-1)
+    return vertices, faces
+
+
+def _l_prism_thick(thickness: float = 1.0):
+    """Watertight, outward-wound L-shaped triangular prism (non-convex solid).
+
+    The cross-section (in the xy-plane) is the hexagon ``(0,0) -> (2,0) ->
+    (2,1) -> (1,1) -> (1,2) -> (0,2)`` with a *reflex* (concave) corner at
+    ``(1, 1)``, extruded along ``z`` to ``thickness``. Caps are simple fans from
+    a single vertex (the polygon is star-shaped from ``(0, 0)``), walls are one
+    quad per boundary edge, and every triangle is wound so its normal points
+    outward. The reflex edge at ``x = y = 1`` is the sharp feature where a single
+    face normal is insufficient to sign the field.
+    """
+    boundary = torch.tensor(
+        [[0.0, 0.0], [2.0, 0.0], [2.0, 1.0], [1.0, 1.0], [1.0, 2.0], [0.0, 2.0]]
+    )
+    n = boundary.shape[0]
+    bottom = torch.cat([boundary, torch.zeros(n, 1)], dim=1)
+    top = torch.cat([boundary, torch.full((n, 1), thickness)], dim=1)
+    vertices = torch.cat([bottom, top], dim=0).float()  # (2n, 3); top vertex = n + i
+
+    # Bottom cap, outward normal -z: reversed fan from vertex 0.
+    bottom_cap = [[0, i + 1, i] for i in range(1, n - 1)]
+    # Top cap, outward normal +z: fan from vertex n.
+    top_cap = [[n, n + i, n + i + 1] for i in range(1, n - 1)]
+    # Side walls, outward in-plane normal: a quad (two triangles) per edge.
+    walls = [
+        tri
+        for i in range(n)
+        for tri in ([i, (i + 1) % n, n + (i + 1) % n], [i, n + (i + 1) % n, n + i])
+    ]
+    faces = bottom_cap + top_cap + walls
+
+    return vertices, torch.tensor(faces, dtype=torch.int32)
+
+
+def _inside_l(points: torch.Tensor, thickness: float = 1.0) -> torch.Tensor:
+    """Exact inside/outside test for the :func:`_l_prism_thick` solid (the oracle)."""
+    x, y, z = points[..., 0], points[..., 1], points[..., 2]
+    in_z = (z >= 0.0) & (z <= thickness)
+    in_xy = ((x >= 0.0) & (x <= 2.0) & (y >= 0.0) & (y <= 1.0)) | (
+        (x >= 0.0) & (x <= 1.0) & (y >= 1.0) & (y <= 2.0)
+    )
+    return in_z & in_xy
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
@@ -355,8 +434,141 @@ def test_sdf_winding_sign_correct_at_sharp_edges(device):
 
 
 # ---------------------------------------------------------------------------
-# Triton GPU kernel parity (CUDA-only): the kernel is the fast path, the
-# pure-PyTorch bounded-stack DFS is the reference oracle.
+# ClusterTree winding-number sign: the Barnes-Hut summation must agree with the
+# exact O(n_queries * n_faces) torch sum (the oracle) away from the surface,
+# where the winding number is unambiguous. Runs on both CPU and CUDA.
+# ---------------------------------------------------------------------------
+
+
+def test_clustertree_winding_sign_matches_exact_oracle(device):
+    """Tree-accelerated winding sign agrees with the exact winding sign."""
+    from physicsnemo.mesh.spatial.sdf import (
+        _build_surface_mesh,
+        _winding_number_sign,
+        _winding_number_sign_clustertree,
+    )
+
+    device = torch.device(device)
+    vertices, faces = _uv_sphere()
+    vertices = vertices.to(device)
+    faces = faces.to(device)
+
+    torch.manual_seed(0)
+    query = (torch.rand(4096, 3, device=device) * 3.0 - 1.5).float()
+    radius = query.norm(dim=-1)
+    away = (radius - 1.0).abs() > 0.05  # exclude the near-surface shell
+
+    _, face_vertices, _ = _build_surface_mesh(vertices.float(), faces)
+
+    sign_fast = _winding_number_sign_clustertree(face_vertices, query)
+    sign_exact = _winding_number_sign(face_vertices, query)
+
+    assert torch.all(sign_fast[away] == sign_exact[away])
+
+
+def test_clustertree_winding_sign_non_watertight(device):
+    """On a holed (non-watertight) surface the winding sign is still robust.
+
+    The generalized winding number degrades gracefully on open meshes; the
+    ClusterTree Barnes-Hut summation must still match the exact oracle away from
+    the surface and from the hole's rim.
+    """
+    from physicsnemo.mesh.spatial.sdf import (
+        _build_surface_mesh,
+        _winding_number_sign,
+        _winding_number_sign_clustertree,
+    )
+
+    device = torch.device(device)
+    vertices, faces = _open_uv_sphere()
+    vertices = vertices.to(device)
+    faces = faces.to(device)
+
+    torch.manual_seed(1)
+    query = (torch.rand(4096, 3, device=device) * 3.0 - 1.5).float()
+    radius = query.norm(dim=-1)
+    away = (radius - 1.0).abs() > 0.1  # exclude near-surface / near-hole shell
+
+    _, face_vertices, _ = _build_surface_mesh(vertices.float(), faces)
+
+    sign_fast = _winding_number_sign_clustertree(face_vertices, query)
+    sign_exact = _winding_number_sign(face_vertices, query)
+
+    assert torch.all(sign_fast[away] == sign_exact[away])
+
+
+# ---------------------------------------------------------------------------
+# Sharp / non-convex sign correctness. On an L-prism the closest surface point
+# frequently lands on an edge or vertex shared by several faces. A single
+# nearest-face normal is then insufficient: the query can sit behind that one
+# face's half-plane while still being outside the solid, flipping the sign. The
+# angle-weighted pseudo-normal (face/edge/vertex feature) and the winding number
+# both stay correct -- here checked against the exact analytic inside/outside.
+# ---------------------------------------------------------------------------
+
+
+def _l_prism_probe_grid(device: torch.device, thickness: float = 1.0):
+    """A dense grid of probes straddling the L-prism's surface and reflex edge."""
+    g = torch.linspace(-0.5, 2.5, 31)
+    z = torch.linspace(-0.4, thickness + 0.4, 13)
+    gx, gy, gz = torch.meshgrid(g, g, z, indexing="ij")
+    return torch.stack([gx, gy, gz], dim=-1).reshape(-1, 3).to(device)
+
+
+def test_sdf_winding_sign_correct_at_sharp_edges_grid(device):
+    """Winding-number sign matches the analytic L-prism field (companion check)."""
+    device = torch.device(device)
+    thickness = 1.0
+    vertices, faces = _l_prism_thick(thickness)
+    vertices, faces = vertices.to(device), faces.to(device)
+
+    query = _l_prism_probe_grid(device, thickness)
+    gt_inside = _inside_l(query, thickness)
+
+    sdf_out, _ = signed_distance_field_mesh(
+        vertices, faces, query, use_sign_winding_number=True
+    )
+
+    # Compare signs away from the surface. The default ClusterTree backend is a
+    # Barnes-Hut approximation whose winding number is only unreliable in a thin
+    # band hugging the (sharp) surface, so exclude points within 0.1 of it.
+    away = sdf_out.abs() > 0.1
+    expected = torch.where(
+        gt_inside, -torch.ones_like(sdf_out), torch.ones_like(sdf_out)
+    )
+    assert torch.all(sdf_out[away].sign() == expected[away])
+
+
+def test_sdf_pseudo_normal_sign_correct_at_sharp_edges(device):
+    """Angle-weighted pseudo-normal sign matches the analytic L-prism field.
+
+    Regression for the default (``use_sign_winding_number=False``) sign path:
+    using only the nearest face normal misclassifies points whose closest point
+    lies on the reflex edge / its vertices, whereas the feature pseudo-normal
+    agrees with the exact field (and with the winding-number companion above).
+    """
+    device = torch.device(device)
+    thickness = 1.0
+    vertices, faces = _l_prism_thick(thickness)
+    vertices, faces = vertices.to(device), faces.to(device)
+
+    query = _l_prism_probe_grid(device, thickness)
+    gt_inside = _inside_l(query, thickness)
+
+    sdf_out, _ = signed_distance_field_mesh(
+        vertices, faces, query, use_sign_winding_number=False
+    )
+
+    away = sdf_out.abs() > 0.05
+    expected = torch.where(
+        gt_inside, -torch.ones_like(sdf_out), torch.ones_like(sdf_out)
+    )
+    assert torch.all(sdf_out[away].sign() == expected[away])
+
+
+# ---------------------------------------------------------------------------
+# Triton GPU kernel parity (CUDA-only): the kernel is the nearest-triangle fast
+# path, the pure-PyTorch bounded-stack DFS is the reference oracle.
 # ---------------------------------------------------------------------------
 
 _CUDA = torch.cuda.is_available()
@@ -365,7 +577,7 @@ _CUDA = torch.cuda.is_available()
 def _triton_available() -> bool:
     if not _CUDA:
         return False
-    from physicsnemo.datapipes.transforms import _sdf_triton
+    from physicsnemo.mesh.spatial import _sdf_triton
 
     return _sdf_triton.available()
 
@@ -381,12 +593,8 @@ def test_sdf_triton_nearest_matches_torch_reference():
     if not _triton_available():
         pytest.skip("triton not available")
 
-    from physicsnemo.datapipes.transforms import _sdf_triton
-    from physicsnemo.datapipes.transforms._sdf_torch import (
-        _build_surface_mesh,
-        _nearest_face_bvh,
-    )
-    from physicsnemo.mesh.spatial import BVH
+    from physicsnemo.mesh.spatial import BVH, _sdf_triton
+    from physicsnemo.mesh.spatial.sdf import _build_surface_mesh, _nearest_face_bvh
 
     device = torch.device("cuda")
     vertices, faces = _uv_sphere()
@@ -419,7 +627,7 @@ def test_sdf_triton_end_to_end_matches_reference(use_winding, monkeypatch):
     if not _triton_available():
         pytest.skip("triton not available")
 
-    from physicsnemo.datapipes.transforms import _sdf_triton
+    from physicsnemo.mesh.spatial import _sdf_triton
 
     device = torch.device("cuda")
     vertices, faces = _uv_sphere()
@@ -434,46 +642,12 @@ def test_sdf_triton_end_to_end_matches_reference(use_winding, monkeypatch):
         vertices, faces, query, use_sign_winding_number=use_winding
     )
 
-    # Force the pure-PyTorch reference by disabling the Triton dispatch.
+    # Force the pure-PyTorch nearest-triangle reference by disabling the Triton
+    # dispatch. The winding-number sign uses the (device-agnostic) ClusterTree
+    # path in both cases.
     monkeypatch.setattr(_sdf_triton, "available", lambda: False)
     sdf_ref, _ = signed_distance_field_mesh(
         vertices, faces, query, use_sign_winding_number=use_winding
     )
 
     torch.testing.assert_close(sdf_triton, sdf_ref, atol=1e-4, rtol=1e-4)
-
-
-@pytest.mark.skipif(not _CUDA, reason="CUDA required for the Triton SDF kernel")
-def test_winding_sign_triton_matches_exact():
-    """Fast (Barnes-Hut) winding sign agrees with the exact winding sign.
-
-    Signs are compared away from the surface, where the winding number is
-    unambiguous; the Barnes-Hut approximation is only loose right at the surface.
-    """
-    if not _triton_available():
-        pytest.skip("triton not available")
-
-    from physicsnemo.datapipes.transforms import _sdf_triton
-    from physicsnemo.datapipes.transforms._sdf_torch import (
-        _build_surface_mesh,
-        _winding_number_sign,
-    )
-    from physicsnemo.mesh.spatial import BVH
-
-    device = torch.device("cuda")
-    vertices, faces = _uv_sphere()
-    vertices = vertices.to(device)
-    faces = faces.to(device)
-
-    torch.manual_seed(0)
-    query = (torch.rand(8192, 3, device=device) * 3.0 - 1.5).float()
-    radius = query.norm(dim=-1)
-    away = (radius - 1.0).abs() > 0.05  # exclude the near-surface shell
-
-    mesh, face_vertices, _ = _build_surface_mesh(vertices.float(), faces)
-    bvh = BVH.from_mesh(mesh)
-
-    sign_fast = _sdf_triton.winding_sign_triton(bvh, face_vertices, query)
-    sign_exact = _winding_number_sign(face_vertices, query)
-
-    assert torch.all(sign_fast[away] == sign_exact[away])

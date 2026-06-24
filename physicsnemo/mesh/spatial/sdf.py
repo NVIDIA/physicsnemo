@@ -16,20 +16,19 @@
 
 """Pure-PyTorch signed distance field over a triangle surface mesh.
 
-This is a Warp-free replacement for
-:func:`physicsnemo.nn.functional.signed_distance_field`, intended for use in
-the datapipes layer. It avoids NVIDIA Warp entirely (and therefore the
-stream-ordered CUDA memory churn that arises from mixing Warp's and torch's
-allocators) by building the spatial acceleration structure with
-:class:`physicsnemo.mesh.spatial.BVH` and computing distances/signs with plain
-PyTorch tensor ops.
+This is a Warp-free signed distance field that shares the spatial acceleration
+structures used throughout :mod:`physicsnemo.mesh.spatial`. It avoids NVIDIA
+Warp entirely (and therefore the stream-ordered CUDA memory churn that arises
+from mixing Warp's and torch's allocators) by building the nearest-triangle
+acceleration structure with :class:`physicsnemo.mesh.spatial.BVH` and computing
+distances/signs with plain PyTorch tensor ops. The winding-number sign is
+computed with a :class:`physicsnemo.mesh.spatial.ClusterTree` Barnes-Hut
+summation over the mesh, so the whole pipeline reuses the mesh's own spatial
+data structures and runs identically on CPU and GPU.
 
-Layering note
--------------
-This module lives in ``physicsnemo.datapipes`` -- the top layer -- because it
-imports :mod:`physicsnemo.mesh`. The ``physicsnemo.nn`` layer may not import
-``physicsnemo.mesh``, so the Warp-backed primitive still lives in
-``physicsnemo.nn.functional`` while this mesh-backed implementation lives here.
+:func:`signed_distance_field_mesh` matches the contract of the Warp-backed
+:func:`physicsnemo.nn.functional.signed_distance_field`, so it is a drop-in
+replacement for callers that cannot depend on Warp.
 
 Algorithm
 ---------
@@ -47,20 +46,26 @@ Algorithm
      at the closest feature (face / edge / vertex), matching Warp's
      ``mesh_query_point_sign_normal``. Robust for watertight meshes.
    - ``use_sign_winding_number=True``: the generalized winding number (solid
-     angle sum, Jacobson et al. 2013) evaluated exactly against every triangle.
-     Robust for non-watertight / self-intersecting meshes. This costs
-     ``O(n_queries * n_faces)`` and is chunked to bound memory.
+     angle sum, Jacobson et al. 2013), evaluated with a
+     :class:`physicsnemo.mesh.spatial.ClusterTree` dual-tree Barnes-Hut
+     summation. Robust for non-watertight / self-intersecting meshes and scales
+     to large meshes as ``O(n_queries * log n_faces)``. The exact
+     ``O(n_queries * n_faces)`` sum (:func:`_winding_number_sign`) is retained
+     as a reference oracle for testing.
 """
 
 from __future__ import annotations
 
 import torch
 from jaxtyping import Float, Int
+from tensordict import TensorDict
+from torch.profiler import record_function
 
-from physicsnemo.datapipes import _timing
-from physicsnemo.datapipes.transforms import _sdf_triton
-from physicsnemo.mesh import Mesh
-from physicsnemo.mesh.spatial import BVH
+from physicsnemo.mesh.mesh import Mesh
+from physicsnemo.mesh.spatial import _sdf_triton
+from physicsnemo.mesh.spatial._ragged import _ragged_arange
+from physicsnemo.mesh.spatial.bvh import BVH
+from physicsnemo.mesh.spatial.cluster_tree import ClusterTree
 
 # Chunk sizes keep the pairwise tensors bounded for large inputs. These are
 # product-of-counts limits (rows of the materialized intermediate), not raw
@@ -71,7 +76,15 @@ _WINDING_FACE_CHUNK = 1 << 22  # (query, face) pairs per winding-number tile
 # Cells per BVH leaf. Single source of truth: passed to ``BVH.from_mesh`` and to
 # the Triton kernels (as their static ``MAX_LEAF`` bound) so the GPU path never
 # reads ``leaf_count.max()`` back to the host on the prefetch stream.
-_BVH_LEAF_SIZE = 1
+_BVH_LEAF_SIZE = 16
+
+# ClusterTree winding-number summation parameters. ``_WINDING_THETA`` is the
+# Barnes-Hut opening angle for the dual-tree traversal (smaller is more exact /
+# slower; this value matches the accuracy regime of the previous bespoke kernel,
+# whose opening factor ``beta=2.0`` corresponds to ``theta=0.5``).
+# ``_WINDING_LEAF_SIZE`` controls how many primitives sit in a ClusterTree leaf.
+_WINDING_THETA = 0.5
+_WINDING_LEAF_SIZE = 8
 
 
 def _build_surface_mesh(
@@ -462,23 +475,95 @@ def _nearest_face_bvh(
     return best_dist_sq, best_face, best_point
 
 
+def _edge_pseudonormals(
+    faces: Int[torch.Tensor, "n_faces 3"],
+    face_normals: Float[torch.Tensor, "n_faces 3"],
+) -> Float[torch.Tensor, "n_faces 3 3"]:
+    r"""Per-face, per-edge pseudo-normals: the sum of the incident face normals.
+
+    For each of a face's three edges, the edge pseudo-normal is
+    :math:`\sum_f \mathbf{n}_f` over the faces sharing that edge (Baerentzen &
+    Aanaes: the incident angle of an edge is :math:`\pi` for both faces, so the
+    contributions are equal-weighted and reduce to a plain sum). The three
+    undirected edges of every face are canonicalized (sorted endpoints) and
+    de-duplicated so coincident edges accumulate together, then the result is
+    gathered back into a ``(n_faces, 3, 3)`` table indexed by ``[face, local
+    edge]`` with local edges ordered ``(v0, v1)``, ``(v1, v2)``, ``(v2, v0)``.
+
+    Parameters
+    ----------
+    faces : torch.Tensor
+        Triangle connectivity, shape :math:`(n_{faces}, 3)` (vertex indices).
+    face_normals : torch.Tensor
+        Outward unit face normals, shape :math:`(n_{faces}, 3)`.
+
+    Returns
+    -------
+    torch.Tensor
+        Edge pseudo-normals, shape :math:`(n_{faces}, 3, 3)`.
+    """
+    n_faces = faces.shape[0]
+    v0, v1, v2 = faces[:, 0], faces[:, 1], faces[:, 2]
+    # Three undirected edges per face in fixed local order, flattened
+    # face-major: (f0,e0), (f0,e1), (f0,e2), (f1,e0), ...
+    edges = torch.stack(
+        [
+            torch.stack([v0, v1], dim=1),  # local edge 0
+            torch.stack([v1, v2], dim=1),  # local edge 1
+            torch.stack([v2, v0], dim=1),  # local edge 2
+        ],
+        dim=1,
+    ).reshape(-1, 2)
+    edges, _ = torch.sort(edges, dim=1)  # canonical (lo, hi) per edge
+    unique_edges, inverse = torch.unique(edges, dim=0, return_inverse=True)
+
+    # Each face donates its normal to all three of its edges (same face-major
+    # order as ``edges``), accumulated per unique edge then gathered back.
+    fn_per_edge = face_normals.repeat_interleave(3, dim=0)  # (3 n_faces, 3)
+    edge_accum = torch.zeros(
+        unique_edges.shape[0], 3, dtype=face_normals.dtype, device=face_normals.device
+    )
+    edge_accum.index_add_(0, inverse, fn_per_edge)
+    return edge_accum[inverse].reshape(n_faces, 3, 3)
+
+
 def _pseudo_normal_sign(
     mesh: Mesh,
     query: Float[torch.Tensor, "n_queries 3"],
     best_face: Int[torch.Tensor, " n_queries"],
     best_point: Float[torch.Tensor, "n_queries 3"],
 ) -> Float[torch.Tensor, " n_queries"]:
-    """Sign of the SDF via the angle-weighted pseudo-normal of the hit face.
+    r"""Sign of the SDF via the angle-weighted pseudo-normal of the hit feature.
 
-    Uses the face normal of the nearest triangle (consistent with Warp's
-    ``mesh_query_point_sign_normal`` for the common face-interior case): the
-    point is "outside" (positive) when it lies on the positive side of the hit
-    triangle's outward normal.
+    The sign is :math:`\mathrm{sign}((\mathbf{q} - \mathbf{p}) \cdot \mathbf{N})`,
+    where :math:`\mathbf{p}` is the closest surface point and :math:`\mathbf{N}`
+    is the *angle-weighted pseudo-normal* of the mesh feature that :math:`p` lies
+    on -- not merely the nearest face normal. Picking a single face normal is
+    wrong whenever :math:`p` lands on an edge or vertex shared by several faces
+    (sharp or non-convex geometry): the query can sit behind that one face's
+    half-plane while still being outside the solid, which flips the sign (and,
+    near edges, corrupts the signed magnitude). Resolving the feature removes the
+    ambiguity and reproduces Warp's ``mesh_query_point_sign_normal``:
+
+    - **face interior** -> the face normal :math:`\mathbf{n}_f`;
+    - **edge** -> the sum of the normals of the faces sharing it,
+      :math:`\sum_f \mathbf{n}_f` (see :func:`_edge_pseudonormals`);
+    - **vertex** :math:`v` -> the incident-angle-weighted sum
+      :math:`\sum_f \alpha_f(v)\,\mathbf{n}_f`, via
+      :meth:`~physicsnemo.mesh.Mesh.compute_point_normals` with ``"angle"``
+      weighting.
+
+    Only the *direction* of :math:`\mathbf{N}` affects the sign, so the
+    per-vertex normalization applied by ``compute_point_normals`` is harmless.
+    The feature is classified from the barycentric region of :math:`p` on the
+    hit triangle (Ericson, *Real-Time Collision Detection*). This is robust on
+    watertight meshes; for non-watertight surfaces use the winding-number sign.
 
     Parameters
     ----------
     mesh : Mesh
-        Triangle surface mesh (provides cached ``cell_normals``).
+        Triangle surface mesh (provides ``cells``, ``points``, cached
+        ``cell_normals``, and angle-weighted ``compute_point_normals``).
     query : torch.Tensor
         Query points, shape ``(n_queries, 3)``.
     best_face : torch.Tensor
@@ -490,11 +575,66 @@ def _pseudo_normal_sign(
     -------
     torch.Tensor
         Sign per query in ``{-1, +1}`` (``+1`` outside, ``-1`` inside).
+
+    References
+    ----------
+    J. A. Baerentzen and H. Aanaes, "Signed Distance Computation Using the Angle
+    Weighted Pseudonormal", IEEE TVCG, 2005.
     """
-    face_normals = mesh.cell_normals  # (n_faces, 3), unit normals
-    hit_normals = face_normals[best_face]  # (n_queries, 3)
+    dtype = query.dtype
+    faces = mesh.cells  # (n_faces, 3) vertex indices
+    vertices = mesh.points.to(dtype)  # (n_vertices, 3)
+    face_normals = mesh.cell_normals.to(dtype)  # (n_faces, 3), unit, outward
+
+    # Precompute the feature pseudo-normals (once per call). Vertex normals are
+    # angle-weighted; edge normals are the sum of the incident face normals.
+    vertex_pn = mesh.compute_point_normals(weighting="angle").to(dtype)
+    face_edge_pn = _edge_pseudonormals(faces, face_normals)  # (n_faces, 3, 3)
+
+    # Classify which feature of the hit triangle ``best_point`` lies on, using
+    # the same barycentric region test as the closest-point routine. ``a, b, c``
+    # are the hit triangle's vertices (vertex axis 1); d1..d6 / va,vb,vc are the
+    # edge-projection and region-determinant quantities (Ericson).
+    hit_faces = faces[best_face]  # (n_queries, 3) vertex indices
+    tri = vertices[hit_faces]  # (n_queries, 3, 3)
+    a, b, c = tri[:, 0], tri[:, 1], tri[:, 2]
+    ab = b - a
+    ac = c - a
+    ap = query - a
+    d1 = (ab * ap).sum(-1)
+    d2 = (ac * ap).sum(-1)
+    bp = query - b
+    d3 = (ab * bp).sum(-1)
+    d4 = (ac * bp).sum(-1)
+    cp = query - c
+    d5 = (ab * cp).sum(-1)
+    d6 = (ac * cp).sum(-1)
+    vc = d1 * d4 - d3 * d2
+    vb = d5 * d2 - d1 * d6
+    va = d3 * d6 - d5 * d4
+
+    region_a = (d1 <= 0) & (d2 <= 0)  # vertex v0
+    region_b = (d3 >= 0) & (d4 <= d3)  # vertex v1
+    region_c = (d6 >= 0) & (d5 <= d6)  # vertex v2
+    region_ab = (vc <= 0) & (d1 >= 0) & (d3 <= 0)  # edge (v0, v1)
+    region_bc = (va <= 0) & ((d4 - d3) >= 0) & ((d5 - d6) >= 0)  # edge (v1, v2)
+    region_ca = (vb <= 0) & (d2 >= 0) & (d6 <= 0)  # edge (v2, v0)
+
+    # Select the pseudo-normal per query. Default to the face interior, override
+    # with edge normals, then with vertex normals last so vertices win at
+    # corners (matching Ericson's vertex-first region precedence).
+    pn = face_normals[best_face]
+    edge_pn = face_edge_pn[best_face]  # (n_queries, 3, 3): edges (ab, bc, ca)
+    pn = torch.where(region_ab.unsqueeze(-1), edge_pn[:, 0], pn)
+    pn = torch.where(region_bc.unsqueeze(-1), edge_pn[:, 1], pn)
+    pn = torch.where(region_ca.unsqueeze(-1), edge_pn[:, 2], pn)
+    vert_pn = vertex_pn[hit_faces]  # (n_queries, 3, 3): vertices (a, b, c)
+    pn = torch.where(region_a.unsqueeze(-1), vert_pn[:, 0], pn)
+    pn = torch.where(region_b.unsqueeze(-1), vert_pn[:, 1], pn)
+    pn = torch.where(region_c.unsqueeze(-1), vert_pn[:, 2], pn)
+
     direction = query - best_point
-    dot = (direction * hit_normals).sum(-1)
+    dot = (direction * pn).sum(-1)
     # Points exactly on the surface (dot == 0) are treated as outside (+1).
     return torch.where(dot < 0, -torch.ones_like(dot), torch.ones_like(dot))
 
@@ -568,19 +708,229 @@ def _winding_number_sign(
     )
 
 
+def _triangle_solid_angles(
+    query: Float[torch.Tensor, "n 3"],
+    tri: Float[torch.Tensor, "n 3 3"],
+) -> Float[torch.Tensor, " n"]:
+    r"""Signed solid angle subtended by each triangle at its paired query point.
+
+    Implements the Van Oosterom-Strackee formula
+
+    .. math::
+
+        \Omega = 2 \, \mathrm{atan2}\!\left(
+            \mathbf{a}\cdot(\mathbf{b}\times\mathbf{c}),\;
+            |\mathbf{a}||\mathbf{b}||\mathbf{c}|
+            + (\mathbf{a}\cdot\mathbf{b})|\mathbf{c}|
+            + (\mathbf{b}\cdot\mathbf{c})|\mathbf{a}|
+            + (\mathbf{c}\cdot\mathbf{a})|\mathbf{b}|
+        \right)
+
+    where :math:`\mathbf{a}, \mathbf{b}, \mathbf{c}` are the vectors from the
+    query point to the three triangle vertices. This is the exact per-triangle
+    term summed by :func:`_winding_number_sign`; here it is evaluated for paired
+    ``(query, triangle)`` rows produced by the dual-tree traversal.
+
+    Parameters
+    ----------
+    query : torch.Tensor
+        Query points, shape ``(n, 3)``.
+    tri : torch.Tensor
+        Triangle vertices, shape ``(n, 3, 3)`` (vertex axis is dim 1).
+
+    Returns
+    -------
+    torch.Tensor
+        Signed solid angle per pair, shape ``(n,)``.
+    """
+    a = tri[:, 0, :] - query
+    b = tri[:, 1, :] - query
+    c = tri[:, 2, :] - query
+
+    la = a.norm(dim=-1)
+    lb = b.norm(dim=-1)
+    lc = c.norm(dim=-1)
+
+    triple = (a * torch.linalg.cross(b, c, dim=-1)).sum(-1)
+    denom = (
+        la * lb * lc
+        + (a * b).sum(-1) * lc
+        + (b * c).sum(-1) * la
+        + (c * a).sum(-1) * lb
+    )
+    return 2.0 * torch.atan2(triple, denom)
+
+
+def _winding_number_sign_clustertree(
+    face_vertices: Float[torch.Tensor, "n_faces 3 3"],
+    query: Float[torch.Tensor, "n_queries 3"],
+    *,
+    theta: float = _WINDING_THETA,
+    leaf_size: int = _WINDING_LEAF_SIZE,
+) -> Float[torch.Tensor, " n_queries"]:
+    r"""Sign of the SDF via a :class:`ClusterTree` Barnes-Hut winding number.
+
+    Computes the generalized winding number (Jacobson et al., "Robust
+    Inside-Outside Segmentation using Generalized Winding Numbers", 2013) as a
+    dual-tree Barnes-Hut summation, reusing the mesh's own
+    :class:`physicsnemo.mesh.spatial.ClusterTree`. This is robust on
+    non-watertight / soup geometry and scales as ``O(n_queries * log n_faces)``
+    instead of the exact ``O(n_queries * n_faces)`` sum in
+    :func:`_winding_number_sign`, and -- unlike a hand-written CUDA/Triton
+    kernel -- runs identically on CPU and GPU because the tree is plain PyTorch.
+
+    The summation builds a source tree over the triangle (area-weighted)
+    centroids and a target tree over the query points, then evaluates the
+    dual-tree interaction plan
+    (:meth:`ClusterTree.find_dual_interaction_pairs`) with
+    ``expand_far_targets=True`` so the dominant far-field stream is expanded to
+    individual query points (no target-side approximation). Each interaction
+    stream contributes to the per-query winding number:
+
+    - **(near, near)**: the exact triangle solid angle, evaluated at the real
+      query point.
+    - **(near, far)**: the source node's dipole (sum of area-weighted normals)
+      evaluated at the real query point, ``N_node . (p_node - q) / |p_node -
+      q|^3``.
+    - **(far, near)**: the exact triangle solid angle evaluated at the target
+      node centroid, broadcast to the survivor query points in that node.
+
+    Parameters
+    ----------
+    face_vertices : torch.Tensor
+        Per-face vertex positions, shape ``(n_faces, 3, 3)``.
+    query : torch.Tensor
+        Query points, shape ``(n_queries, 3)``.
+    theta : float, optional
+        Barnes-Hut opening angle for the dual-tree traversal. Smaller is more
+        exact and slower. Default :data:`_WINDING_THETA`.
+    leaf_size : int, optional
+        Maximum primitives per :class:`ClusterTree` leaf. Default
+        :data:`_WINDING_LEAF_SIZE`.
+
+    Returns
+    -------
+    torch.Tensor
+        Sign per query in ``{-1, +1}`` (``+1`` outside, ``-1`` inside),
+        shape ``(n_queries,)``.
+
+    Notes
+    -----
+    See :func:`signed_distance_field_mesh` for the end-to-end SDF that consumes
+    this sign.
+    """
+    device = query.device
+    dtype = query.dtype
+    n_queries = query.shape[0]
+    n_faces = face_vertices.shape[0]
+
+    if n_faces == 0 or n_queries == 0:
+        return torch.ones(n_queries, dtype=dtype, device=device)
+
+    # Per-face geometry: area-weighted normal (the solid-angle dipole moment),
+    # scalar area, unit normal, and centroid (the source points of the tree).
+    a = face_vertices[:, 0, :]
+    b = face_vertices[:, 1, :]
+    c = face_vertices[:, 2, :]
+    area_normal = 0.5 * torch.linalg.cross(b - a, c - a, dim=-1)  # (F, 3)
+    area = area_normal.norm(dim=-1)  # (F,)
+    tiny = torch.finfo(torch.float32).tiny
+    unit_normal = area_normal / area.clamp(min=tiny).unsqueeze(-1)  # (F, 3)
+    centroid = (a + b + c) / 3.0  # (F, 3)
+
+    # Build the source tree over triangle centroids (area-weighted) and the
+    # target tree over the query points.
+    source_tree = ClusterTree.from_points(centroid, leaf_size=leaf_size, areas=area)
+    target_tree = ClusterTree.from_points(query, leaf_size=leaf_size)
+
+    # Per-node dipole moment ``N_node = sum_i area_i * unit_normal_i`` and
+    # expansion center ``p_node`` (area-weighted centroid). ``compute_source_
+    # aggregates`` returns the area-weighted *average* normal, so multiplying by
+    # the node's total area recovers the *sum* of area-weighted normals.
+    source_data = TensorDict(
+        {"normal": unit_normal}, batch_size=[n_faces], device=device
+    )
+    aggregates = source_tree.compute_source_aggregates(
+        source_points=centroid, areas=area, source_data=source_data
+    )
+    node_dipole = aggregates.node_source_data["normal"] * (
+        source_tree.node_total_area.unsqueeze(-1)
+    )  # (n_nodes, 3)
+    node_center = aggregates.node_centroid  # (n_nodes, 3)
+
+    # ``expand_far_targets=True`` converts the (far, far) stream into per-target
+    # (near, far) entries, eliminating the target-side blocky approximation for
+    # the dominant far-field term while keeping the source-side monopole.
+    plan = source_tree.find_dual_interaction_pairs(
+        target_tree=target_tree, theta=theta, expand_far_targets=True
+    )
+
+    # Target node centroids are only needed by the (far, near) stream, where the
+    # source triangle's solid angle is evaluated at the target node's centroid
+    # and broadcast to its survivor queries.
+    target_centroid = target_tree.compute_source_aggregates(
+        source_points=query,
+        areas=torch.ones(n_queries, dtype=query.dtype, device=device),
+        source_data=None,
+    ).node_centroid  # (n_target_nodes, 3)
+
+    winding = torch.zeros(n_queries, dtype=dtype, device=device)
+
+    # (near, near): exact triangle solid angle at the real query point.
+    if plan.n_near > 0:
+        nn_q = plan.near_target_ids
+        nn_s = plan.near_source_ids
+        omega = _triangle_solid_angles(query[nn_q], face_vertices[nn_s])
+        winding.scatter_add_(0, nn_q, omega.to(dtype))
+
+    # (near, far): source-node dipole evaluated at the real query point.
+    if plan.n_nf > 0:
+        nf_q = plan.nf_target_ids
+        nf_n = plan.nf_source_node_ids
+        e = node_center[nf_n] - query[nf_q]  # (n_nf, 3)
+        r2 = (e * e).sum(-1)
+        r3 = (r2 * r2.sqrt()).clamp(min=tiny)
+        dip = (node_dipole[nf_n] * e).sum(-1) / r3
+        winding.scatter_add_(0, nf_q, dip.to(dtype))
+
+    # (far, near): exact triangle solid angle evaluated at the target-node
+    # centroid, broadcast to the survivor query points in that node.
+    if plan.n_fn > 0:
+        fn_n = plan.fn_target_node_ids
+        fn_s = plan.fn_source_ids
+        omega_fn = _triangle_solid_angles(target_centroid[fn_n], face_vertices[fn_s])
+        positions, pair_ids = _ragged_arange(
+            plan.fn_broadcast_starts, plan.fn_broadcast_counts
+        )
+        expanded_tgt = plan.fn_broadcast_targets[positions]
+        winding.scatter_add_(0, expanded_tgt, omega_fn[pair_ids].to(dtype))
+
+    winding = winding / (4.0 * torch.pi)
+    inside = winding.abs() > 0.5
+    return torch.where(
+        inside,
+        -torch.ones(n_queries, dtype=dtype, device=device),
+        torch.ones(n_queries, dtype=dtype, device=device),
+    )
+
+
 def signed_distance_field_mesh(
     mesh_vertices: Float[torch.Tensor, "n_vertices 3"],
     mesh_indices: Int[torch.Tensor, "..."],
     input_points: Float[torch.Tensor, "... 3"],
     max_dist: float = 1e8,
     use_sign_winding_number: bool = False,
+    *,
+    winding_backend: str = "clustertree",
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Signed distance field of a triangle mesh, computed without Warp.
 
     Drop-in replacement for
     :func:`physicsnemo.nn.functional.signed_distance_field` that uses
-    :class:`physicsnemo.mesh.spatial.BVH` and plain PyTorch ops. The returned
-    tuple matches the Warp implementation's contract.
+    :class:`physicsnemo.mesh.spatial.BVH` for the nearest-triangle query and a
+    :class:`physicsnemo.mesh.spatial.ClusterTree` Barnes-Hut summation for the
+    winding-number sign, all in plain PyTorch. The returned tuple matches the
+    Warp implementation's contract.
 
     Parameters
     ----------
@@ -594,9 +944,13 @@ def signed_distance_field_mesh(
         Maximum search distance for the nearest-triangle query. Default ``1e8``.
     use_sign_winding_number : bool, optional
         If ``True``, sign via the generalized winding number (robust for
-        non-watertight meshes, ``O(n_queries * n_faces)``). If ``False``
-        (default), sign via the nearest face's pseudo-normal. The mesh should be
-        watertight for reliable signs in the ``False`` case.
+        non-watertight meshes). If ``False`` (default), sign via the
+        angle-weighted pseudo-normal of the closest mesh feature (face, edge, or
+        vertex), which stays correct at sharp/non-convex edges where a single
+        face normal would flip the sign (see :func:`_pseudo_normal_sign`). The
+        mesh should be watertight for reliable signs in the ``False`` case.
+    winding_backend : str, optional
+        Winding-number summation backend when ``use_sign_winding_number=True``: ``"clustertree"`` (default) for the :class:`physicsnemo.mesh.spatial.ClusterTree` Barnes-Hut sum (``O(n_queries * log n_faces)``, best for large meshes), or ``"bruteforce"`` for the exact fused ``O(n_queries * n_faces)`` sum (faster for small/medium meshes).
 
     Returns
     -------
@@ -643,7 +997,7 @@ def signed_distance_field_mesh(
         hit_points = hit_points.reshape(input_shape).to(out_dtype)
         return sdf, hit_points
 
-    with _timing.record("sdf/bvh_build"):
+    with record_function("sdf/bvh_build"):
         bvh = BVH.from_mesh(mesh, leaf_size=_BVH_LEAF_SIZE)
 
     # Nearest triangle + closest point. On CUDA with Triton available we run the
@@ -652,7 +1006,7 @@ def signed_distance_field_mesh(
     # fall back to the pure-PyTorch bounded-stack DFS (:func:`_nearest_face_bvh`),
     # which is also the parity oracle for the kernel. Both have peak memory
     # O(n_queries * tree_depth), independent of mesh size or query depth.
-    with _timing.record("sdf/nearest"):
+    with record_function("sdf/nearest"):
         if queries.is_cuda and _sdf_triton.available():
             _, best_face, best_point = _sdf_triton.nearest_triangle_triton(
                 bvh, face_vertices, queries, max_dist, leaf_size=_BVH_LEAF_SIZE
@@ -672,17 +1026,22 @@ def signed_distance_field_mesh(
 
     distance = (queries - best_point).norm(dim=-1)
 
-    with _timing.record("sdf/sign"):
+    with record_function("sdf/sign"):
         if use_sign_winding_number:
-            # Tree-accelerated winding number on CUDA+Triton (O(n_queries * log
-            # n_faces)); the exact O(n_queries * n_faces) torch sum is the CPU /
-            # no-Triton fallback and parity oracle.
-            if queries.is_cuda and _sdf_triton.available():
-                sign = _sdf_triton.winding_sign_triton(
-                    bvh, face_vertices, queries, leaf_size=_BVH_LEAF_SIZE
-                )
-            else:
+            # Generalized winding number. The ClusterTree Barnes-Hut summation
+            # (O(n_queries * log n_faces)) wins on large meshes; the exact fused
+            # O(n_queries * n_faces) sum is faster for small/medium meshes where
+            # the tree cannot prune. Both run on CPU and GPU and are equivalent
+            # up to the Barnes-Hut approximation.
+            if winding_backend == "bruteforce":
                 sign = _winding_number_sign(face_vertices, queries)
+            elif winding_backend == "clustertree":
+                sign = _winding_number_sign_clustertree(face_vertices, queries)
+            else:
+                raise ValueError(
+                    "winding_backend must be 'clustertree' or 'bruteforce', "
+                    f"got {winding_backend!r}"
+                )
         else:
             sign = _pseudo_normal_sign(mesh, queries, best_face, best_point)
 
