@@ -85,6 +85,27 @@ def test_disable_recovers_base():
     assert torch.allclose(lora(x), base(x), atol=1e-6)
 
 
+def test_linear_specific_helpers_not_on_generic_mixin():
+    # The in/out inference + weight-folding merge are Linear-specific and live on
+    # _LinearLoRALayer, so generic (non-Linear) wrappers that inherit LoRALayer
+    # directly do not pick up these weight-shaped assumptions.
+    from physicsnemo.experimental.peft.lora import LoRALayer, _LinearLoRALayer
+
+    for attr in ("_init_lora", "_infer_in_out_features", "merge_into_base"):
+        assert hasattr(_LinearLoRALayer, attr)
+        assert not hasattr(LoRALayer, attr)
+
+    # The generic mixin still provides the shape-agnostic core.
+    for attr in ("_make_lora_params", "lora_delta"):
+        assert hasattr(LoRALayer, attr)
+
+    # mergeable defaults: generic off, Linear-like on (opt-in to merge).
+    assert LoRALayer.mergeable is False
+    assert _LinearLoRALayer.mergeable is True
+    assert issubclass(LoRALinear, _LinearLoRALayer)
+    assert LoRALinear(nn.Linear(8, 8), rank=2, alpha=2).mergeable is True
+
+
 @requires_module("transformer_engine")
 def test_te_linear_wraps_and_init_parity():
     if not torch.cuda.is_available():

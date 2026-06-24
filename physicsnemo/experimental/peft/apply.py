@@ -175,6 +175,16 @@ def apply_lora(model: nn.Module, config: LoRAConfig) -> ApplyResult:
             alpha=config.effective_alpha,
             dropout=config.lora_dropout,
         )
+        # Enforce the wrapper contract: freeze/save/merge identify LoRA layers by
+        # isinstance(module, LoRALayer), so a wrapper that does not subclass it
+        # would be silently ignored downstream. Fail loudly instead.
+        if not is_lora_layer(wrapped):
+            raise TypeError(
+                f"LoRA wrapper for {type(module).__name__} returned a "
+                f"{type(wrapped).__name__}, which does not subclass LoRALayer. "
+                "Custom wrappers registered via register_lora_wrapper must "
+                "subclass LoRALayer (see its docstring for the contract)."
+            )
         setattr(parent, child, wrapped)
 
     _freeze_base_except_extras(model, config.extras_trainable)

@@ -191,3 +191,31 @@ def test_print_trainable_parameters():
     m = _model()
     apply_lora(m, LoRAConfig(rank=4, target_pattern=_ATTN_PATTERN))
     assert "trainable params" in print_trainable_parameters(m)
+
+
+def test_apply_rejects_wrapper_not_subclassing_loralayer():
+    # register_lora_wrapper contract: the factory must return a LoRALayer
+    # subclass. apply_lora rejects one that does not — otherwise freeze/save/merge
+    # (which key on isinstance(module, LoRALayer)) would silently skip it.
+    from physicsnemo.experimental.peft import register_lora_wrapper
+    from physicsnemo.experimental.peft.lora import _LORA_WRAPPERS
+
+    class _Custom(nn.Linear):
+        pass
+
+    class _BadWrapper(nn.Module):  # deliberately NOT a LoRALayer subclass
+        def __init__(self, base_layer, rank, alpha, dropout=0.0):
+            super().__init__()
+            self.base_layer = base_layer
+
+    class _Net(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.fc = _Custom(8, 8)
+
+    register_lora_wrapper(_Custom, _BadWrapper)
+    try:
+        with pytest.raises(TypeError, match="does not subclass LoRALayer"):
+            apply_lora(_Net(), LoRAConfig(rank=2, target_modules=["fc"]))
+    finally:
+        _LORA_WRAPPERS.pop(_Custom, None)  # don't leak into other tests

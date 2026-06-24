@@ -43,18 +43,46 @@ except ImportError:  # pragma: no cover - depends on environment
 
 
 class LoRALayer:
-    """Stateful mixin holding ``lora_A``, ``lora_B``, scaling, dropout and the
-    enable flag. Combined with a base layer type by the wrapper subclasses.
+    """Generic LoRA mixin: holds ``lora_A``/``lora_B``, scaling, dropout and the
+    enable flag, and computes the low-rank delta. Makes **no assumption** about
+    the base layer's parameter shapes — combined with a base layer type by the
+    wrapper subclasses.
 
     Math: with ``lora_A: (in, r)`` and ``lora_B: (r, out)`` the forward adds
     ``((dropout(x) @ A) @ B) * scaling``. ``B`` is zero at init so the delta is
     exactly zero — the wrapped forward equals the base forward until trained.
+
+    Wrapper contract
+    ----------------
+    Every LoRA wrapper — the built-ins below and any registered via
+    :func:`register_lora_wrapper` — is an ``nn.Module`` that subclasses
+    ``LoRALayer`` and exposes the surface the apply / freeze / save / merge /
+    enable utilities depend on:
+
+    - **Constructor**: ``__init__(self, base_layer, *, rank, alpha, dropout=0.0)``.
+      ``apply_lora`` instantiates wrappers as
+      ``wrapper(base_layer, rank=, alpha=, dropout=)``.
+    - **Attributes**: ``base_layer`` (the wrapped, frozen module); ``lora_A`` /
+      ``lora_B`` (trainable ``nn.Parameter``\\ s — the only params left with
+      ``requires_grad=True``, which is how ``save_adapter`` slices the adapter);
+      ``enabled`` (bool toggling the delta); ``mergeable`` (bool; ``False`` by
+      default — opt in only if you also implement ``merge_into_base``).
+    - **Methods**: ``forward`` (adds ``lora_delta(x)`` to the base output when
+      ``enabled``); ``merge_into_base`` (folds the delta into the base weight) —
+      required only when ``mergeable`` is ``True``.
+
+    Calling ``_make_lora_params(...)`` from ``__init__`` populates ``lora_A``,
+    ``lora_B``, ``scaling``, ``enabled`` and dropout for you. Wrappers for
+    Linear-like bases (``.weight`` shaped ``(out, in)``, or exposing
+    ``in_features``/``out_features``) should subclass :class:`_LinearLoRALayer`
+    instead — it adds in/out inference at init and a weight-folding
+    ``merge_into_base``. Only generic, non-Linear wrappers (e.g. the fused
+    ``te.LayerNormMLP`` residual) inherit ``LoRALayer`` directly.
     """
 
-    # Whether merge_lora can fold this adapter into base weights. False for the
-    # fused te.LayerNormMLP residual wrapper (its update can't be folded into the
-    # fused weights).
-    mergeable: bool = True
+    # Whether merge_lora can fold this adapter into base weights. Generic wrappers
+    # are non-mergeable by default; Linear-like wrappers (_LinearLoRALayer) opt in.
+    mergeable: bool = False
 
     def _make_lora_params(
         self,
@@ -87,10 +115,27 @@ class LoRALayer:
         )
         nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
 
+    def lora_delta(self, x: torch.Tensor) -> torch.Tensor:
+        return ((self.lora_dropout(x) @ self.lora_A) @ self.lora_B) * self.scaling
+
+
+class _LinearLoRALayer(LoRALayer):
+    """LoRA mixin specialized for Linear-like bases — those whose ``.weight`` is
+    shaped ``(out, in)`` and/or expose ``in_features``/``out_features`` (e.g.
+    ``nn.Linear``, ``te.Linear``). Adds in/out inference at init and a merge that
+    folds the delta into ``base_layer.weight``.
+
+    Non-Linear wrappers must NOT use this — they inherit :class:`LoRALayer`
+    directly so they don't pick up these weight-shaped assumptions.
+    """
+
+    mergeable: bool = True
+
     def _init_lora(
         self, base_layer: nn.Module, rank: int, alpha: float, dropout: float
     ) -> None:
-        """Init for Linear-like bases: infer in/out + device/dtype from .weight."""
+        """Infer in/out + device/dtype from the base ``.weight`` and create the
+        LoRA params."""
         in_features, out_features = self._infer_in_out_features(base_layer)
         self._make_lora_params(
             in_features, out_features, base_layer.weight, rank, alpha, dropout
@@ -106,9 +151,6 @@ class LoRALayer:
             out_f, in_f = int(w.shape[0]), int(w.shape[1])
         return int(in_f), int(out_f)
 
-    def lora_delta(self, x: torch.Tensor) -> torch.Tensor:
-        return ((self.lora_dropout(x) @ self.lora_A) @ self.lora_B) * self.scaling
-
     @torch.no_grad()
     def merge_into_base(self) -> None:
         """Fold ``scaling * (lora_A @ lora_B).T`` into ``base_layer.weight``
@@ -121,7 +163,7 @@ class LoRALayer:
         self.base_layer.weight.add_(delta.to(self.base_layer.weight.dtype))
 
 
-class LoRALinear(nn.Module, LoRALayer):
+class LoRALinear(nn.Module, _LinearLoRALayer):
     """LoRA wrapper for ``torch.nn.Linear``."""
 
     def __init__(
@@ -142,7 +184,7 @@ class LoRALinear(nn.Module, LoRALayer):
 
 if _TE_AVAILABLE:
 
-    class LoRA_te_Linear(nn.Module, LoRALayer):
+    class LoRA_te_Linear(nn.Module, _LinearLoRALayer):
         """LoRA wrapper for ``transformer_engine.pytorch.Linear``.
 
         Passes TE-specific kwargs (e.g. ``is_first_microbatch`` for fp8)
@@ -230,8 +272,15 @@ def register_lora_wrapper(
     """Register a LoRA wrapper for ``layer_type``.
 
     This is how new architectures (e.g. equivariant, tensor, or MoE layers) plug
-    in without touching the targeting / apply / merge core. ``wrapper_factory`` is
-    called as ``wrapper_factory(base_layer, rank=, alpha=, dropout=)``.
+    in without touching the targeting / apply / merge core.
+
+    ``wrapper_factory`` is called as
+    ``wrapper_factory(base_layer, rank=, alpha=, dropout=)`` and must return an
+    ``nn.Module`` that subclasses :class:`LoRALayer` (see its docstring for the
+    full attribute/method contract). The subclass requirement is enforced by
+    ``apply_lora``: freeze/save/merge identify LoRA layers via
+    ``isinstance(module, LoRALayer)``, so a wrapper that does not subclass it
+    would otherwise be silently skipped.
     """
     _LORA_WRAPPERS[layer_type] = wrapper_factory
 
