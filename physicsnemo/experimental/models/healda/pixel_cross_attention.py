@@ -82,7 +82,6 @@ import torch.nn as nn
 from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.experimental.models.healda import triton_autotune_cache as tac
 
-# Optional dependency; kernels live in the lazily-imported _pixel_attn_kernels backend.
 triton = OptionalImport("triton")
 tl = OptionalImport("triton.language")
 

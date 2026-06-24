@@ -39,7 +39,6 @@ import torch
 
 from physicsnemo.core.version_check import OptionalImport
 
-# Optional dependency; triton-typed autotune key elements resolved lazily.
 triton = OptionalImport("triton")
 tl = OptionalImport("triton.language")
 
