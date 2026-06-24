@@ -13,27 +13,41 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Packing metadata for ragged observation cross-attention.
+"""Packed observation inputs for ragged observation cross-attention.
 
-Copied as-is from the healda data pipeline; describes the packed per-pixel
-observation-token layout consumed by
+A single :class:`ObsCrossAttention` bundle carries everything a video DiT block's
+observation sub-layer needs -- the packed observation tokens plus the ragged
+packing metadata that maps each pixel to its token slice -- consumed by
 :class:`..pixel_cross_attention.PixelCrossAttention`.
 """
+
+from __future__ import annotations
 
 import dataclasses
 from typing import Optional
 
 import torch
+from jaxtyping import Int
 
 
 @dataclasses.dataclass
 class PixelGroupMap:
-    """CSR map for grouping non-empty pixels into shared attention programs."""
+    """CSR map grouping non-empty pixels into shared ragged-attention programs.
 
-    program_ptr: torch.Tensor
-    program_pixels: torch.Tensor
+    Parameters
+    ----------
+    program_ptr : torch.Tensor
+        Int tensor of shape :math:`(\\text{num\\_programs} + 1,)`; program ``p``
+        owns the pixels ``program_pixels[program_ptr[p]:program_ptr[p + 1]]``.
+    program_pixels : torch.Tensor
+        Int tensor of shape :math:`(\\text{num\\_grouped\\_pixels},)` listing the
+        pixel ids assigned to each program.
+    """
 
-    def to(self, device=None, dtype=None, non_blocking=True):
+    program_ptr: Int[torch.Tensor, " num_programs_plus_one"]
+    program_pixels: Int[torch.Tensor, " num_grouped_pixels"]
+
+    def to(self, device=None, dtype=None, non_blocking: bool = True) -> "PixelGroupMap":
         # dtype is intentionally ignored: group-map tensors are integer indices.
         del dtype
         return PixelGroupMap(
@@ -45,44 +59,43 @@ class PixelGroupMap:
 
 
 @dataclasses.dataclass
-class AttentionPacking:
-    """Precomputed packing metadata for backbone observation cross-attention.
+class ObsCrossAttention:
+    """Packed observation tokens + ragged packing for observation cross-attention.
 
-    Observations are sorted by flat pixel index so each pixel's key/value tokens
-    are contiguous; ``cu_seqlens_k`` holds the prefix sums into the packed token
-    array. ``counts`` is the per-pixel observation count. The sort permutation is
-    applied to the observation tensors in the data transform and is not retained
-    here: this struct only describes the resulting packed layout.
+    Bundled into one object (rather than passing tokens and packing metadata
+    separately) so a block's observation sub-layer takes a single argument.
+    Observations are sorted by flat pixel index so each pixel's tokens are
+    contiguous in ``tokens``.
+
+    Parameters
+    ----------
+    tokens : torch.Tensor
+        Packed observation tokens (the key/value source) of shape
+        :math:`(N_{tokens}, \\text{token\\_dim})`, concatenated over all pixels.
+    cu_seqlens_k : torch.Tensor
+        Int prefix sums of shape :math:`(\\text{total\\_pixels} + 1,)`; pixel
+        ``i`` attends to ``tokens[cu_seqlens_k[i]:cu_seqlens_k[i + 1]]``.
+    max_seqlen_k : int
+        Maximum per-pixel token count (kernel launch / autotune bucketing).
+    group_map : PixelGroupMap, optional
+        Optional CSR map packing small pixels into shared kernel programs.
+        ``None`` runs one program per pixel.
     """
 
-    counts: torch.Tensor
-    cu_seqlens_k: torch.Tensor
+    tokens: torch.Tensor
+    cu_seqlens_k: Int[torch.Tensor, " total_pixels_plus_one"]
     max_seqlen_k: int
-    npix: int
-    hpx_level: int
-    pixel_order: str
-    is_packed: bool = True
-    # Optional CSR map pairing small pixels into shared kernel programs for the
-    # ragged obs cross-attention. ``None`` -> one program per pixel.
     group_map: Optional[PixelGroupMap] = None
 
-    def to(self, device=None, dtype=None, non_blocking=True):
-        # dtype is intentionally ignored: packing tensors are integer indices.
-        del dtype
-
-        def _move(x):
-            if x is None:
-                return None
-            return x.to(device=device, non_blocking=non_blocking)
-
-        return AttentionPacking(
-            counts=_move(self.counts),
-            cu_seqlens_k=_move(self.cu_seqlens_k),
+    def to(
+        self, device=None, dtype=None, non_blocking: bool = True
+    ) -> "ObsCrossAttention":
+        return ObsCrossAttention(
+            tokens=self.tokens.to(
+                device=device, dtype=dtype, non_blocking=non_blocking
+            ),
+            cu_seqlens_k=self.cu_seqlens_k.to(device=device, non_blocking=non_blocking),
             max_seqlen_k=self.max_seqlen_k,
-            npix=self.npix,
-            hpx_level=self.hpx_level,
-            pixel_order=self.pixel_order,
-            is_packed=self.is_packed,
             group_map=(
                 None
                 if self.group_map is None

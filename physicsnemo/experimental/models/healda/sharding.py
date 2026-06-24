@@ -34,13 +34,17 @@ parallelism:
 import einops
 import torch
 import torch.distributed as dist
+from jaxtyping import Float
 from torch.distributed.nn.functional import all_to_all_single
 
 DATA_DIM = 0
 MODEL_DIM = 1
 
 
-def shard_x(tensor: torch.Tensor, group: dist.ProcessGroup) -> torch.Tensor:
+def shard_x(
+    tensor: Float[torch.Tensor, "batch time space channels"],
+    group: dist.ProcessGroup,
+) -> Float[torch.Tensor, "batch time space channels"]:
     r"""Reshard from t-sharded to x-sharded (gather time, scatter space).
 
     Parameters
@@ -66,7 +70,10 @@ def shard_x(tensor: torch.Tensor, group: dist.ProcessGroup) -> torch.Tensor:
     return output
 
 
-def shard_t(tensor: torch.Tensor, group: dist.ProcessGroup) -> torch.Tensor:
+def shard_t(
+    tensor: Float[torch.Tensor, "batch time space channels"],
+    group: dist.ProcessGroup,
+) -> Float[torch.Tensor, "batch time space channels"]:
     r"""Reshard from x-sharded to t-sharded (gather space, scatter time).
 
     Parameters
@@ -113,11 +120,15 @@ def _reshard_via_shardtensor(
     return st.to_local()
 
 
-def shard_x_shardtensor(tensor: torch.Tensor, mesh) -> torch.Tensor:
+def shard_x_shardtensor(
+    tensor: Float[torch.Tensor, "batch time space channels"], mesh
+) -> Float[torch.Tensor, "batch time space channels"]:
     r"""ShardTensor equivalent of :func:`shard_x` (Shard(time) -> Shard(space))."""
     return _reshard_via_shardtensor(tensor, mesh, _TIME_DIM, _SPACE_DIM)
 
 
-def shard_t_shardtensor(tensor: torch.Tensor, mesh) -> torch.Tensor:
+def shard_t_shardtensor(
+    tensor: Float[torch.Tensor, "batch time space channels"], mesh
+) -> Float[torch.Tensor, "batch time space channels"]:
     r"""ShardTensor equivalent of :func:`shard_t` (Shard(space) -> Shard(time))."""
     return _reshard_via_shardtensor(tensor, mesh, _SPACE_DIM, _TIME_DIM)

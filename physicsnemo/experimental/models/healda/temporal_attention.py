@@ -25,6 +25,7 @@ import math
 
 import einops
 import torch
+from jaxtyping import Float
 
 
 class RotaryPositionEmbedding(torch.nn.Module):
@@ -47,7 +48,9 @@ class RotaryPositionEmbedding(torch.nn.Module):
         self.register_buffer("freqs_sin", torch.sin(freqs))
 
     @torch.compile
-    def forward(self, x):
+    def forward(
+        self, x: Float[torch.Tensor, "batch time space heads head_dim"]
+    ) -> Float[torch.Tensor, "batch time space heads head_dim"]:
         seq_len = x.shape[1]
         if seq_len > self.max_seq_len:
             raise ValueError(
@@ -138,7 +141,11 @@ class TemporalAttention(torch.nn.Module):
             self.rope = None
 
     @torch.compile
-    def forward(self, x, is_causal: bool = False):
+    def forward(
+        self,
+        x: Float[torch.Tensor, "batch time space channels"],
+        is_causal: bool = False,
+    ) -> Float[torch.Tensor, "batch time space channels"]:
         qkv = self.qkv(x)
         q, k, v = einops.rearrange(
             qkv,

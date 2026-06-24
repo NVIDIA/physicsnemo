@@ -34,11 +34,13 @@ from typing import Any, Dict, Optional, Tuple
 
 import torch
 import torch.nn as nn
+from jaxtyping import Float
 
 from physicsnemo.nn.module.dit_layers import get_attention, get_layer_norm
 from physicsnemo.nn.module.drop import DropPath
 from physicsnemo.nn.module.mlp_layers import Mlp
 
+from .obs_packing import ObsCrossAttention
 from .pixel_cross_attention import PixelCrossAttention
 from .sharding import (
     shard_t,
@@ -71,7 +73,11 @@ class AdaLayerNormZero(nn.Module):
         self.linear = nn.Linear(emb_channels, 3 * n_blocks * embedding_dim)
         self.norm = nn.LayerNorm(embedding_dim, elementwise_affine=False, eps=1e-6)
 
-    def forward(self, x: torch.Tensor, emb: torch.Tensor) -> Tuple[torch.Tensor, ...]:
+    def forward(
+        self,
+        x: Float[torch.Tensor, "*leading channels"],
+        emb: Float[torch.Tensor, "batch emb_channels"],
+    ) -> Tuple[torch.Tensor, ...]:
         chunks = self.linear(self.silu(emb)).chunk(3 * self.n_blocks, dim=1)
         shift, scale, gate = chunks[0], chunks[1], chunks[2]
         x = self.norm(x) * (1 + _broadcast(scale, x.ndim)) + _broadcast(shift, x.ndim)
@@ -126,10 +132,9 @@ class VideoDiTBlock(nn.Module):
         parallelism: each rank holds all ``x`` for its time slice).
     emb : torch.Tensor
         ``(b, emb_channels)`` conditioning embedding.
-    obs_tokens : torch.Tensor, optional
-        ``(n_tokens, obs_token_dim)`` packed observation tokens.
-    attention_packing : AttentionPacking, optional
-        Ragged packing metadata for the observation cross-attention.
+    obs : ObsCrossAttention, optional
+        Packed observation tokens + ragged packing metadata (single bundle) for
+        the observation cross-attention.
     attn_kwargs : dict, optional
         Forwarded to the spatial-attention backend forward.
     is_causal : bool, optional, default=False
@@ -264,11 +269,9 @@ class VideoDiTBlock(nn.Module):
             return shard_t_shardtensor(x, self._reshard_target)
         return x
 
-    def _apply_obs_attention(
-        self, hidden_states, emb, obs_tokens, attention_packing
-    ) -> torch.Tensor:
+    def _apply_obs_attention(self, hidden_states, emb, obs) -> torch.Tensor:
         b, t, npix, c = hidden_states.shape
-        total_pixels = attention_packing.cu_seqlens_k.shape[0] - 1
+        total_pixels = obs.cu_seqlens_k.shape[0] - 1
         if total_pixels != b * t * npix:
             raise ValueError(
                 f"obs packing total_pixels={total_pixels} != b*t*npix={b * t * npix}"
@@ -276,27 +279,25 @@ class VideoDiTBlock(nn.Module):
         x_bt = hidden_states.reshape(b * t, npix, c)
         emb_bt = emb[:, None, :].expand(b, t, -1).reshape(b * t, emb.shape[-1])
         normed, gate = self.obs_norm(x_bt, emb_bt)
-        group_map = attention_packing.group_map
         out = self.obs_attn(
             normed,
-            obs_tokens,
+            obs.tokens,
             total_pixels,
-            attention_packing.cu_seqlens_k,
-            attention_packing.max_seqlen_k,
-            group_map=group_map,
+            obs.cu_seqlens_k,
+            obs.max_seqlen_k,
+            group_map=obs.group_map,
         ).view_as(x_bt)
         x_bt = torch.addcmul(x_bt, self.drop_path(gate), out)
         return x_bt.view_as(hidden_states)
 
     def forward(
         self,
-        hidden_states: torch.Tensor,
-        emb: torch.Tensor,
-        obs_tokens: Optional[torch.Tensor] = None,
-        attention_packing=None,
+        hidden_states: Float[torch.Tensor, "batch time space channels"],
+        emb: Float[torch.Tensor, "batch emb_channels"],
+        obs: Optional[ObsCrossAttention] = None,
         attn_kwargs: Optional[Dict[str, Any]] = None,
         is_causal: bool = False,
-    ) -> torch.Tensor:
+    ) -> Float[torch.Tensor, "batch time space channels"]:
         b, t, x, c = hidden_states.shape
 
         # Spatial self-attention (per frame), adaLN-Zero gated.
@@ -309,14 +310,11 @@ class VideoDiTBlock(nn.Module):
 
         # Observation cross-attention (per frame), adaLN-Zero gated.
         if self.obs_attn is not None:
-            if obs_tokens is None or attention_packing is None:
+            if obs is None:
                 raise ValueError(
-                    "obs_cross_attention=True requires obs_tokens and "
-                    "attention_packing."
+                    "obs_cross_attention=True requires an ObsCrossAttention input."
                 )
-            hidden_states = self._apply_obs_attention(
-                hidden_states, emb, obs_tokens, attention_packing
-            )
+            hidden_states = self._apply_obs_attention(hidden_states, emb, obs)
 
         # Temporal attention across time, adaLN-Zero gated, with t<->x reshard.
         if self.temporal_attn is not None:

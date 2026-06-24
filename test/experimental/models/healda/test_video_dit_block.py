@@ -17,27 +17,24 @@
 import pytest
 import torch
 
-from physicsnemo.experimental.models.healda.obs_packing import AttentionPacking
+from physicsnemo.experimental.models.healda.obs_packing import ObsCrossAttention
 from physicsnemo.experimental.models.healda.video_dit_block import VideoDiTBlock
 
 
-def _build_packing(b, t, npix, obs_token_dim, device, max_count=4):
-    """Build a packed ragged obs layout + tokens for ``b*t*npix`` pixels."""
+def _build_obs(b, t, npix, obs_token_dim, device, max_count=4):
+    """Build a packed ragged obs bundle (tokens + meta) for ``b*t*npix`` pixels."""
     total_pixels = b * t * npix
     counts = torch.randint(0, max_count, (total_pixels,), device=device)
     cu = torch.zeros(total_pixels + 1, dtype=torch.int32, device=device)
     cu[1:] = torch.cumsum(counts, 0).to(torch.int32)
     n_tokens = int(cu[-1].item())
     tokens = torch.randn(n_tokens, obs_token_dim, device=device, requires_grad=True)
-    packing = AttentionPacking(
-        counts=counts,
+    obs = ObsCrossAttention(
+        tokens=tokens,
         cu_seqlens_k=cu,
         max_seqlen_k=int(counts.max().item()) if total_pixels else 0,
-        npix=npix,
-        hpx_level=0,
-        pixel_order="ring",
     )
-    return tokens, packing
+    return obs
 
 
 def test_plain_block_reduces_to_spatial_mlp_cpu():
@@ -89,16 +86,16 @@ def test_full_block_cuda():
 
     x = torch.randn(b, t, npix, c, device=dev, requires_grad=True)
     emb = torch.randn(b, 128, device=dev)
-    tokens, packing = _build_packing(b, t, npix, obs_token_dim, dev)
+    obs = _build_obs(b, t, npix, obs_token_dim, dev)
 
-    out = block(x, emb, obs_tokens=tokens, attention_packing=packing)
+    out = block(x, emb, obs=obs)
     assert out.shape == (b, t, npix, c)
     assert torch.isfinite(out).all()
 
     out.float().pow(2).mean().backward()
     for g in (
         x.grad,
-        tokens.grad,
+        obs.tokens.grad,
         block.obs_attn.q_proj.weight.grad,
         block.temporal_attn.qkv.weight.grad,
         next(block.spatial_attn.parameters()).grad,
