@@ -655,6 +655,19 @@ def test_build_stereographic_token_coords():
     assert torch.isfinite(coords).all()
     blk = coords.reshape(b, 3, 4 * 4, 2)
     assert torch.equal(blk[:, 0], blk[:, 1])  # horizontal block tiled across depth
+
+    # Value / non-degeneracy: a zeroed or constant projection (which collapses RoPE
+    # to the identity) or a scrambled patch-pooling must fail these -- a shape-only
+    # check would not. _make_pos has latitude increasing down rows and longitude
+    # increasing across columns, so after projection the North coord (y) must
+    # increase with the patch-row index and the East coord (x) with the column.
+    assert coords.abs().max() > 1.0  # not collapsed to ~0
+    grid = blk[0, 0].reshape(4, 4, 2)  # (h_patch, w_patch, 2), batch 0, depth 0
+    y_by_row = grid[..., 1].mean(dim=1)  # North, averaged over columns
+    x_by_col = grid[..., 0].mean(dim=0)  # East, averaged over rows
+    assert torch.all(y_by_row[1:] > y_by_row[:-1])
+    assert torch.all(x_by_col[1:] > x_by_col[:-1])
+
     with pytest.raises(ValueError):
         build_stereographic_token_coords(pos, (2, 2), d_patch=3, length_scale=0.0)
 
