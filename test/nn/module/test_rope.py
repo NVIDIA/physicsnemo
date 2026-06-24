@@ -216,11 +216,12 @@ def test_rotary_1d_relative_phase_is_translation_invariant():
 
 # --- physicsnemo.Module checkpoint round-trips ---
 #
-# Both RoPE modules subclass physicsnemo.core.Module, so they must support the
-# .save() / Module.from_checkpoint() recipe. Their cos/sin tables are
-# persistent=False buffers, deterministically rebuilt from the __init__ args, so
-# a round-trip must reproduce the forward exactly without the tables appearing in
-# the checkpoint.
+# All three RoPE modules subclass physicsnemo.core.Module, so they must support
+# the .save() / Module.from_checkpoint() recipe. The axial 1D/2D modules cache
+# cos/sin as persistent=False buffers (deterministically rebuilt from the
+# __init__ args); the stereographic module is fully stateless (tables are built
+# per forward from the input coordinates). In every case a round-trip reproduces
+# the forward exactly without any tables appearing in the checkpoint.
 
 
 @torch.no_grad()
@@ -263,6 +264,29 @@ def test_rotary_1d_module_checkpoint_round_trip(tmp_path):
     loaded = Module.from_checkpoint(path)
     assert loaded.cos.shape == (max_seq_len, head_dim)
     q_out, k_out = loaded(q, k)
+    assert torch.equal(q_out, q_ref) and torch.equal(k_out, k_ref)
+
+
+@torch.no_grad()
+def test_stereographic_2d_module_checkpoint_round_trip(tmp_path):
+    head_dim = 16
+    rope = StereographicRotaryPositionEmbedding2D(head_dim=head_dim, theta=5000.0)
+    assert isinstance(rope, Module)
+    # Fully stateless: no buffers or parameters are serialized.
+    assert len(rope.state_dict()) == 0
+
+    q = torch.randn(2, 3, 6, head_dim)
+    k = torch.randn(2, 3, 6, head_dim)
+    x_pos = torch.randn(6)
+    y_pos = torch.randn(6)
+    q_ref, k_ref = rope(q, k, x_pos, y_pos)
+
+    path = str(tmp_path / "rope_stereo.mdlus")
+    rope.save(path)
+    loaded = Module.from_checkpoint(path)
+    # __init__ args (head_dim / theta) round-trip and reproduce the forward.
+    assert loaded.head_dim == head_dim and loaded.theta == 5000.0
+    q_out, k_out = loaded(q, k, x_pos, y_pos)
     assert torch.equal(q_out, q_ref) and torch.equal(k_out, k_ref)
 
 

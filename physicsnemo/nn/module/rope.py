@@ -66,7 +66,6 @@ from __future__ import annotations
 from typing import Optional, Tuple
 
 import torch
-import torch.nn as nn
 from jaxtyping import Float
 
 from physicsnemo.core import Module
@@ -769,7 +768,7 @@ def build_axial_rope_cos_sin_2d_continuous(
     return cos, sin
 
 
-class StereographicRotaryPositionEmbedding2D(nn.Module):
+class StereographicRotaryPositionEmbedding2D(Module):
     r"""Stereographic 2D rotary position embedding for tokens on a sphere.
 
     The continuous-coordinate counterpart of :class:`RotaryPositionEmbedding2D`.
