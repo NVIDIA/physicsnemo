@@ -34,6 +34,10 @@ from physicsnemo.nn.module.hpx.tokenizer import (
     HEALPixPatchTokenizer,
 )
 from physicsnemo.nn.module.mlp_layers import Mlp
+from physicsnemo.nn.module.rope import (
+    apply_rotary_pos_emb,
+    build_axial_rope_cos_sin_2d,
+)
 from physicsnemo.nn.module.utils import PatchEmbed2D
 
 timm_v1_0_16 = check_version_spec("timm", "1.0.16", hard_fail=False)
@@ -91,7 +95,9 @@ def get_layer_norm(
 def get_attention(
     hidden_size: int,
     num_heads: int,
-    attention_backend: Literal["transformer_engine", "timm", "natten2d"],
+    attention_backend: Literal[
+        "transformer_engine", "timm", "natten2d", "natten2d_rope"
+    ],
     attn_drop_rate: float = 0.0,
     proj_drop_rate: float = 0.0,
     **attn_kwargs: Any,
@@ -104,8 +110,8 @@ def get_attention(
         The embedding dimension.
     num_heads : int
         Number of attention heads.
-    attention_backend : Literal["transformer_engine", "timm", "natten2d"]
-        One of ``"timm"``, ``"transformer_engine"``, or ``"natten2d"`` to select between pre-defined attention modules.
+    attention_backend : Literal["transformer_engine", "timm", "natten2d", "natten2d_rope"]
+        One of ``"timm"``, ``"transformer_engine"``, ``"natten2d"``, or ``"natten2d_rope"`` to select between pre-defined attention modules. ``"natten2d_rope"`` is :class:`Natten2DSelfAttention` with axial 2D rotary position embeddings (see :class:`RopeNatten2DSelfAttention`) and requires ``latent_hw`` in ``attn_kwargs``.
     attn_drop_rate : float, optional, default=0.0
         The dropout rate for the attention operation.
     proj_drop_rate : float, optional, default=0.0
@@ -142,8 +148,16 @@ def get_attention(
             proj_drop_rate=proj_drop_rate,
             **attn_kwargs,
         )
+    if attention_backend == "natten2d_rope":
+        return RopeNatten2DSelfAttention(
+            hidden_size,
+            num_heads,
+            attn_drop_rate=attn_drop_rate,
+            proj_drop_rate=proj_drop_rate,
+            **attn_kwargs,
+        )
     raise ValueError(
-        "attention_backend must be one of 'timm', 'transformer_engine', 'natten2d' if using pre-defined attention modules."
+        "attention_backend must be one of 'timm', 'transformer_engine', 'natten2d', 'natten2d_rope' if using pre-defined attention modules."
     )
 
 
@@ -366,6 +380,8 @@ class Natten2DSelfAttention(AttentionModuleBase):
         The layer normalization backend for QK norm when ``qk_norm=True``. When used inside :class:`~physicsnemo.nn.module.dit_layers.DiTBlock` with ``attention_backend="natten2d"``, this is set from the block's ``layernorm_backend``.
     na2d_kwargs : Dict[str, Any], optional, default=None
         Optional keyword arguments forwarded to :func:`physicsnemo.nn.functional.na2d` for performance tuning (e.g. ``dilation``, ``is_causal``, ``scale``). If ``None``, an empty dict is used.
+    use_mask_token : bool, optional, default=False
+        If ``True``, allocate a per-block learned ``mask_token`` parameter of shape :math:`(1, 1, D)`. Spatial tokens flagged by the ``invalid_token_mask`` passed to ``forward`` are replaced by this learned token immediately before the QKV projection, so the neighborhood window mixes in a single learned feature instead of corrupted (e.g. NaN-padded) signal. Initialized to zero so the first forward is numerically identical to the unmasked path.
 
     References
     ----------
@@ -378,6 +394,8 @@ class Natten2DSelfAttention(AttentionModuleBase):
         Input tensor of shape :math:`(B, L, D)`.
     latent_hw : Tuple[int, int]
         The height and width of the 2D latent space for reshaping. Sequence length must equal ``latent_hw[0] * latent_hw[1]``.
+    invalid_token_mask : torch.Tensor, optional
+        Boolean (or float) mask of shape :math:`(L,)` (shared across the batch) or :math:`(B, L)` (per-sample), ``True`` (or ``1``) at spatial token positions to overwrite with the learned ``mask_token`` before QKV. The per-sample form supports dynamic, batch-dimension-variable masking. Ignored when ``use_mask_token=False`` or when ``None``. Invalid positions in ``x`` must be finite (sanitize NaNs beforehand); see :meth:`_apply_mask_token`.
 
     Returns
     -------
@@ -406,6 +424,7 @@ class Natten2DSelfAttention(AttentionModuleBase):
         proj_drop_rate: float = 0.0,
         norm_layer: Literal["apex", "torch"] = "torch",
         na2d_kwargs: Optional[Dict[str, Any]] = None,
+        use_mask_token: bool = False,
     ):
         super().__init__()
         if hidden_size % num_heads != 0:
@@ -420,6 +439,13 @@ class Natten2DSelfAttention(AttentionModuleBase):
         self.attn_kernel = attn_kernel
         self.na2d_kwargs = na2d_kwargs if na2d_kwargs is not None else {}
 
+        # Per-block learned token used to overwrite invalid spatial tokens
+        # immediately before QKV. Init to zero so the first forward matches the
+        # unmasked path and only diverges as gradients shape the token.
+        self.mask_token = (
+            nn.Parameter(torch.zeros(1, 1, hidden_size)) if use_mask_token else None
+        )
+
         self.qkv = nn.Linear(hidden_size, hidden_size * 3, bias=qkv_bias)
         if qk_norm:
             self.q_norm = get_layer_norm(self.head_dim, norm_layer)
@@ -433,18 +459,69 @@ class Natten2DSelfAttention(AttentionModuleBase):
         self.attn_drop = nn.Dropout(attn_drop_rate)
         self.proj_drop = nn.Dropout(proj_drop_rate)
 
+    def _apply_mask_token(
+        self,
+        x: Float[torch.Tensor, "batch sequence hidden_size"],
+        invalid_token_mask: Optional[
+            Union[
+                Float[torch.Tensor, " sequence"],
+                Float[torch.Tensor, "batch sequence"],
+            ]
+        ],
+    ) -> Float[torch.Tensor, "batch sequence hidden_size"]:
+        r"""Replace invalid spatial tokens with the learned ``mask_token``.
+
+        Implemented as ``x * (1 - alpha) + mask_token * alpha`` rather than
+        :func:`torch.where`. For a boolean mask (``alpha`` in :math:`\{0, 1\}`)
+        the result is bit-identical to ``torch.where`` but uses only elementwise
+        multiply/add. This keeps every operand on the same tensor type, which is
+        what makes it safe under domain-parallel sharding: when ``mask_token`` is
+        a replicated DTensor and ``x``/``invalid_token_mask`` are sharded
+        tensors, the arithmetic stays entirely within DTensor dispatch and never
+        triggers a mixed plain-tensor / DTensor op.
+
+        .. note::
+
+            Because the splice multiplies ``x`` by ``(1 - alpha)``, an invalid
+            token whose value is non-finite (e.g. ``NaN``) is **not** sanitized
+            (``NaN * 0 == NaN``). Callers that flag NaN-padded regions must
+            therefore replace those values (e.g. via :func:`torch.nan_to_num`)
+            *before* the forward pass, so ``x`` is finite at the masked
+            positions.
+
+        The mask may be shared across the batch (shape :math:`(L,)`) or
+        per-sample (shape :math:`(B, L)`); the latter enables dynamic,
+        batch-dimension-variable masking.
+        """
+        if self.mask_token is None or invalid_token_mask is None:
+            return x
+        alpha = invalid_token_mask.to(dtype=x.dtype)
+        # (L,) -> (1, L, 1) broadcasts across the batch; (B, L) -> (B, L, 1)
+        # applies a distinct pattern per sample.
+        alpha = alpha.view(1, -1, 1) if alpha.ndim == 1 else alpha.unsqueeze(-1)
+        return x * (1.0 - alpha) + self.mask_token.to(x.dtype) * alpha
+
     def forward(
         self,
         x: Float[torch.Tensor, "batch sequence hidden_size"],
         latent_hw: Tuple[int, int],
+        invalid_token_mask: Optional[
+            Union[
+                Float[torch.Tensor, " sequence"],
+                Float[torch.Tensor, "batch sequence"],
+            ]
+        ] = None,
     ) -> Float[torch.Tensor, "batch sequence hidden_size"]:
         B, N, C = x.shape
         h, w = latent_hw
 
-        if N != h * w:
+        if not torch.compiler.is_compiling() and N != h * w:
             raise ValueError(
                 f"Sequence length must be {h * w} based on latent_hw={latent_hw}, but got {N}"
             )
+
+        # Overwrite invalid spatial tokens with the learned mask token before QKV.
+        x = self._apply_mask_token(x, invalid_token_mask)
 
         # Project to query, key, value and split into heads
         qkv = self.qkv(x)
@@ -460,6 +537,147 @@ class Natten2DSelfAttention(AttentionModuleBase):
             [q, k, v],
         )
         x = _na2d_func(q, k, v, kernel_size=self.attn_kernel, **self.na2d_kwargs)
+        x = self.attn_drop(x)
+        x = rearrange(x, "b h w head c -> b (h w) (head c)")
+
+        x = self.proj_drop(self.proj(x))
+        return x
+
+
+class RopeNatten2DSelfAttention(Natten2DSelfAttention):
+    r"""NATTEN 2D self-attention with axial 2D rotary position embeddings (RoPE) on Q, K.
+
+    Subclass of :class:`Natten2DSelfAttention` that replaces an additive
+    positional embedding with relative rotary embeddings applied to the query
+    and key inside each attention block. Position is encoded purely as a
+    relative rotation between query and key, making attention output
+    translation-equivariant within each NATTEN window. When this backend is
+    used, the model should disable any additive positional embedding to avoid
+    double-counting the position signal.
+
+    The cos/sin tables are precomputed at construction so that
+    :func:`torch.compile` sees a stable forward graph. They are stored as
+    ``persistent=False`` buffers because they are deterministically rebuilt from
+    ``(latent_hw, head_dim, rope_theta)``; for domain-parallel training they are
+    built at the global spatial size and sharded along height by
+    ``distribute_module``, so each rank holds the rows with globally-correct
+    frequencies and no explicit rank offset is needed in model code.
+
+    Parameters
+    ----------
+    latent_hw : Tuple[int, int]
+        Spatial size :math:`(h, w)` of the token grid used to precompute the
+        cos/sin tables. For inference at a different shape, :meth:`forward`
+        rebuilds the tables in place (off the ``torch.compile`` path).
+    rope_theta : float, optional, default=10000.0
+        Base used for the RoPE frequency schedule.
+    *args, **kwargs
+        Forwarded to :class:`Natten2DSelfAttention` (e.g. ``attn_kernel``,
+        ``qk_norm``, ``use_mask_token``).
+
+    Forward
+    -------
+    x : torch.Tensor
+        Input tensor of shape :math:`(B, L, D)`.
+    latent_hw : Tuple[int, int]
+        The height and width of the 2D latent space for reshaping.
+    invalid_token_mask : torch.Tensor, optional
+        See :class:`Natten2DSelfAttention`.
+
+    Returns
+    -------
+    torch.Tensor
+        Output tensor of shape :math:`(B, L, D)`.
+    """
+
+    def __init__(
+        self,
+        *args: Any,
+        latent_hw: Tuple[int, int],
+        rope_theta: float = 10000.0,
+        **kwargs: Any,
+    ):
+        super().__init__(*args, **kwargs)
+        if self.head_dim % 4 != 0:
+            raise ValueError(
+                f"head_dim={self.head_dim} must be divisible by 4 for axial 2D RoPE."
+            )
+        self.rope_theta = float(rope_theta)
+        self._latent_hw: Tuple[int, int] = (int(latent_hw[0]), int(latent_hw[1]))
+
+        cos, sin = build_axial_rope_cos_sin_2d(
+            *self._latent_hw, self.head_dim, theta=self.rope_theta
+        )
+        # persistent=False: not in state_dict (rebuilt deterministically at
+        # __init__ from latent_hw + head_dim + theta), so checkpoints stay lean.
+        self.register_buffer("rope_cos", cos, persistent=False)  # (h, w, head_dim)
+        self.register_buffer("rope_sin", sin, persistent=False)  # (h, w, head_dim)
+
+    def _rebuild_for_shape(self, h: int, w: int) -> None:
+        r"""Rebuild the RoPE buffers for a new latent shape.
+
+        Reached only when :meth:`forward` is called with a ``latent_hw`` that
+        differs from construction (e.g. variable-resolution inference); not part
+        of the training-time hot path.
+        """
+        target_dtype = self.rope_cos.dtype
+        target_device = self.rope_cos.device
+        cos, sin = build_axial_rope_cos_sin_2d(
+            h, w, self.head_dim, theta=self.rope_theta, device=target_device
+        )
+        self.register_buffer("rope_cos", cos.to(dtype=target_dtype), persistent=False)
+        self.register_buffer("rope_sin", sin.to(dtype=target_dtype), persistent=False)
+        self._latent_hw = (int(h), int(w))
+
+    def forward(
+        self,
+        x: Float[torch.Tensor, "batch sequence hidden_size"],
+        latent_hw: Tuple[int, int],
+        invalid_token_mask: Optional[
+            Union[
+                Float[torch.Tensor, " sequence"],
+                Float[torch.Tensor, "batch sequence"],
+            ]
+        ] = None,
+    ) -> Float[torch.Tensor, "batch sequence hidden_size"]:
+        B, N, C = x.shape
+        h, w = int(latent_hw[0]), int(latent_hw[1])
+        if not torch.compiler.is_compiling() and N != h * w:
+            raise ValueError(
+                f"Sequence length must be {h * w} based on latent_hw={latent_hw}, but got {N}"
+            )
+        if (h, w) != self._latent_hw:
+            self._rebuild_for_shape(h, w)
+
+        # Overwrite invalid spatial tokens with the learned mask token before QKV.
+        x = self._apply_mask_token(x, invalid_token_mask)
+
+        qkv = self.qkv(x)
+        qkv = qkv.reshape(B, N, 3, self.num_heads, self.head_dim).permute(
+            2, 0, 3, 1, 4
+        )  # (3, B, num_heads, N, head_dim)
+        q, k, v = qkv.unbind(0)
+        q, k = self.q_norm(q), self.k_norm(k)
+
+        # Reshape Q, K to spatial layout for RoPE indexing.
+        q_2d = q.reshape(B, self.num_heads, h, w, self.head_dim)
+        k_2d = k.reshape(B, self.num_heads, h, w, self.head_dim)
+
+        # cos/sin: (h, w, head_dim) -> (1, 1, h, w, head_dim) broadcasts over
+        # batch and head axes. apply_rotary_pos_emb rotates in fp32 internally.
+        cos = self.rope_cos.unsqueeze(0).unsqueeze(0)
+        sin = self.rope_sin.unsqueeze(0).unsqueeze(0)
+        q_rot = apply_rotary_pos_emb(q_2d, cos, sin)
+        k_rot = apply_rotary_pos_emb(k_2d, cos, sin)
+
+        # NATTEN expects (B, h, w, num_heads, head_dim).
+        q_nat = q_rot.permute(0, 2, 3, 1, 4).contiguous()
+        k_nat = k_rot.permute(0, 2, 3, 1, 4).contiguous()
+        v_nat = rearrange(v, "b head (h w) c -> b h w head c", h=h)
+
+        x = _na2d_func(
+            q_nat, k_nat, v_nat, kernel_size=self.attn_kernel, **self.na2d_kwargs
+        )
         x = self.attn_drop(x)
         x = rearrange(x, "b h w head c -> b (h w) (head c)")
 
@@ -607,7 +825,7 @@ class DiTBlock(nn.Module):
         hidden_size: int,
         num_heads: int,
         attention_backend: Union[
-            Literal["transformer_engine", "timm", "natten2d"], Module
+            Literal["transformer_engine", "timm", "natten2d", "natten2d_rope"], Module
         ] = "timm",
         layernorm_backend: Literal["apex", "torch"] = "torch",
         norm_eps: float = 1e-6,
@@ -627,8 +845,8 @@ class DiTBlock(nn.Module):
             self.attention = attention_backend
         else:
             attn_kwargs_final = dict(attn_kwargs)
-            # Ensure Natten2DSelfAttention uses the same LayerNorm backend as the block when qk_norm is used
-            if attention_backend == "natten2d":
+            # Ensure the NATTEN attention modules use the same LayerNorm backend as the block when qk_norm is used
+            if attention_backend in ("natten2d", "natten2d_rope"):
                 attn_kwargs_final.setdefault("norm_layer", layernorm_backend)
             self.attention = get_attention(
                 hidden_size=hidden_size,
@@ -1099,13 +1317,129 @@ class ProjReshape2DDetokenizer(DetokenizerModuleBase):
         return x
 
 
+class ConvDetokenizer(DetokenizerModuleBase):
+    r"""Detokenizer with a residual convolutional smoothing head to suppress patch-seam artifacts.
+
+    Wraps :class:`ProjReshape2DDetokenizer` and adds a small
+    residual convolutional head over the full :math:`(B, C_{out}, H, W)` output
+    image.  The base detokenizer maps each token independently to its
+    ``patch × patch`` output block, so it cannot couple information across patch
+    boundaries; this can produce checkerboard artifacts on output channels with
+    high spatial frequency content.  The conv head lets information flow across
+    patch seams and can smooth those artifacts away.
+
+    The final conv layer is zero-initialized, so at construction the residual
+    contribution is exactly zero and this module is numerically identical to
+    :class:`ProjReshape2DDetokenizer`.
+
+    Use this as a drop-in replacement for
+    :class:`ProjReshape2DDetokenizer` (or ``detokenizer="proj_reshape_2d_conv"``
+    in :func:`get_detokenizer`) when checkerboard artifacts are visible in the
+    predicted image.  Because the head starts at zero, it can be swapped in
+    for a run already trained with ``proj_reshape_2d`` without disturbing
+    training dynamics.  The head is fully convolutional, so it can support
+    variable-resolution inference.
+
+    Parameters
+    ----------
+    input_size : Tuple[int, int]
+        The size of the input image.
+    patch_size : Tuple[int, int]
+        The size of the patch.
+    out_channels : int
+        The number of output channels.
+    hidden_size : int
+        The size of the transformer latent space to project from.
+    layernorm_backend : Literal["apex", "torch"], optional, default="torch"
+        The layer normalization implementation.
+    conv_layers : int, optional, default=2
+        Number of conv layers in the smoothing head.
+    conv_hidden : int, optional, default=64
+        Number of feature maps in intermediate conv layers.
+    conv_kernel : int, optional, default=3
+        Spatial kernel size (same-padding is applied).
+
+    Forward
+    -------
+    x_tokens : torch.Tensor
+        Token sequence of shape :math:`(B, L, D_{in})`.
+    c : torch.Tensor
+        Conditioning tensor of shape :math:`(B, D)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor of shape :math:`(B, C_{out}, H, W)`.
+    """
+
+    def __init__(
+        self,
+        input_size: Tuple[int, int],
+        patch_size: Tuple[int, int],
+        out_channels: int,
+        hidden_size: int,
+        layernorm_backend: Literal["apex", "torch"] = "torch",
+        conv_layers: int = 2,
+        conv_hidden: int = 64,
+        conv_kernel: int = 3,
+    ):
+        super().__init__()
+        self.proj = ProjReshape2DDetokenizer(
+            input_size=input_size,
+            patch_size=patch_size,
+            out_channels=out_channels,
+            hidden_size=hidden_size,
+            layernorm_backend=layernorm_backend,
+        )
+        if conv_layers < 1:
+            raise ValueError(f"conv_layers must be >= 1; got {conv_layers}")
+        pad = conv_kernel // 2
+        layers: list[nn.Module] = []
+        c_in = out_channels
+        n = int(conv_layers)
+        for i in range(n):
+            last = i == n - 1
+            c_out = out_channels if last else conv_hidden
+            layers.append(nn.Conv2d(c_in, c_out, conv_kernel, padding=pad))
+            if not last:
+                layers.append(nn.GELU())
+            c_in = c_out
+        self.conv_head = nn.Sequential(*layers)
+
+    def initialize_weights(self) -> None:
+        r"""Initialize weights; zero the last conv so the residual starts at zero.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+            Modifies module parameters in-place.
+        """
+        self.proj.initialize_weights()
+        convs = [m for m in self.conv_head if isinstance(m, nn.Conv2d)]
+        nn.init.zeros_(convs[-1].weight)
+        if convs[-1].bias is not None:
+            nn.init.zeros_(convs[-1].bias)
+
+    def forward(
+        self,
+        x_tokens: Float[torch.Tensor, "batch sequence hidden_size"],
+        c: Float[torch.Tensor, "batch hidden_size"],
+    ) -> Float[torch.Tensor, "batch out_channels height width"]:
+        img = self.proj(x_tokens, c)
+        return img + self.conv_head(img)
+
+
 def get_detokenizer(
     input_size: Union[int, Tuple[int]],
     patch_size: Union[int, Tuple[int]],
     out_channels: int,
     hidden_size: int,
     detokenizer: Literal[
-        "proj_reshape_2d", "hpx_patch_detokenizer"
+        "proj_reshape_2d", "proj_reshape_2d_conv", "hpx_patch_detokenizer"
     ] = "proj_reshape_2d",
     **detokenizer_kwargs: Any,
 ) -> Union[DetokenizerModuleBase, nn.Module]:
@@ -1126,16 +1460,20 @@ def get_detokenizer(
         The number of output channels.
     hidden_size : int
         The size of the transformer latent space to project from.
-    detokenizer : Literal["proj_reshape_2d", "hpx_patch_detokenizer"], optional, default="proj_reshape_2d"
+    detokenizer : Literal["proj_reshape_2d", "proj_reshape_2d_conv", "hpx_patch_detokenizer"], optional, default="proj_reshape_2d"
         The detokenizer to use.
         - ``"proj_reshape_2d"`` -- Uses a standard DiT ProjLayer and reshapes the sequence back to an
-        image based on ``input_size`` and ``patch_size``.
+          image based on ``input_size`` and ``patch_size``.
+        - ``"proj_reshape_2d_conv"`` -- Same as ``"proj_reshape_2d"`` followed by a zero-initialized
+          residual conv smoothing head (:class:`ConvDetokenizer`). Reduces checkerboard artifacts on
+          spiky output channels. Accepts ``conv_layers``, ``conv_hidden``, and ``conv_kernel`` in
+          ``detokenizer_kwargs``.
         - ``"hpx_patch_detokenizer"`` -- HEALPix patch detokenizer from
-            ``physicsnemo.nn.module.hpx.tokenizer``. Requires ``earth2grid`` and determines the patch size from
-            ``level_coarse`` and ``level_fine`` in ``detokenizer_kwargs``.
+          ``physicsnemo.nn.module.hpx.tokenizer``. Requires ``earth2grid`` and determines the patch size
+          from ``level_coarse`` and ``level_fine`` in ``detokenizer_kwargs``.
 
     **detokenizer_kwargs : Any
-        Additional keyword arguments for the detokenizer module.
+        Additional keyword arguments forwarded to the detokenizer constructor.
 
     Returns
     -------
@@ -1150,6 +1488,14 @@ def get_detokenizer(
             hidden_size=hidden_size,
             **detokenizer_kwargs,
         )
+    if detokenizer == "proj_reshape_2d_conv":
+        return ConvDetokenizer(
+            input_size=input_size,
+            patch_size=patch_size,
+            out_channels=out_channels,
+            hidden_size=hidden_size,
+            **detokenizer_kwargs,
+        )
     if detokenizer == "hpx_patch_detokenizer":
         return HEALPixPatchDetokenizer(
             hidden_size=hidden_size,
@@ -1157,5 +1503,5 @@ def get_detokenizer(
             **detokenizer_kwargs,
         )
     raise ValueError(
-        "detokenizer must be 'proj_reshape_2d' or 'hpx_patch_detokenizer'."
+        "detokenizer must be 'proj_reshape_2d', 'proj_reshape_2d_conv', or 'hpx_patch_detokenizer'."
     )

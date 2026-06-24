@@ -76,6 +76,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   geometry-latent kNN distance as a continuous score for downstream
   consumers (e.g. AL acquisition) without the boolean thresholding /
   warning emission of `OODGuard.check()`.
+- Adds rotary position embedding (RoPE) modules to `phyiscsnemo.nn` and
+  integrates support for 2D RoPE in the neighborhood attention backend
+  of `DiT` layers.
+- Adds support for RoPE, dynamic invalid-region masking, and a new
+  `ConvDetokenizer` in `phyiscsnemo.models.DiT`. Invalid regions are supplied
+  per forward call via the `invalid_mask` argument of `DiT.forward` (a
+  per-sample, batch-variable pixel mask, domain-parallel safe), replacing
+  flagged tokens with a learned mask token.
 - Adds an inference script (`src/infer.py` + `conf/infer.yaml`) to the
   Unified External Aero Recipe
   (`examples/cfd/external_aerodynamics/unified_external_aero_recipe`),
@@ -152,6 +160,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `physicsnemo.mesh.projections.extrude` now produces a *conforming* (crack-free)
+  simplicial complex for multi-cell inputs. Each prism was previously tessellated
+  using the per-cell local vertex order, so adjacent cells that listed a shared
+  edge's endpoints in different orders split the shared quad face along opposite
+  diagonals; the resulting non-manifold volume leaked interior crack faces into
+  `get_boundary_mesh` (boundary edges shared by 4 faces — e.g. an extruded L-shape
+  or any multi-column grid, which also broke `repair.fix_orientation`). Parent-cell
+  vertices are now sorted into a global order before tessellation (the
+  Freudenthal-Kuhn subdivision), a no-op for already-sorted inputs.
+- `physicsnemo.mesh.projections.extrude` now returns consistently oriented cells
+  for full-dimensional (codimension-0) output.
 - `physicsnemo.mesh.remesh` now preserves the input mesh's device and floating
   dtype (the pyacvd/pyvista round-trip previously dropped them to CPU/float32).
 - `physicsnemo.mesh`: `Mesh.to(<float dtype>)` and `DomainMesh.to(<float dtype>)`
@@ -270,6 +289,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added geometry functionals in `physicsnemo.nn.functional` for
   `mesh_poisson_disk_sample`, `mesh_to_voxel_fraction`, and
   `signed_distance_field`.
+- Added rendering functionals in `physicsnemo.nn.functional` for isosurface,
+  mesh, volume, LIC, point cloud, wireframe, and RGBA transfer rendering, with
+  Warp kernels for rendering and PyTorch fallbacks for transfer functions.
 - Adds embedded OOD guardrail `OODGuard` at
   `physicsnemo.experimental.guardrails.embedded`, optionally
   wired into `GeoTransolver` via a new `guard_config` constructor argument.
