@@ -39,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deterministic regression model (no diffusion / timestep / label conditioning),
   an independent reimplementation of the AdaLN, with the original `bilinear_dw`
   conditioning path added beyond the paper.
+- The `physicsnemo.experimental.models.strata` package also publicly exports its
+  reusable building-block layers (`DiT3DBlock`, `Natten3DSelfAttention`,
+  `PatchEmbed3D`, `FinalLayer3D`, `PixelDiTBlock`, `PixelDiTLastLayer`).
 - Adds Point-Transformer local vector-attention blocks to `physicsnemo.nn`.
 - FSDP2 checkpoint support: full save/load round-trip for
   ``torch.distributed.fsdp`` v2 models, including DTensor edge cases,
