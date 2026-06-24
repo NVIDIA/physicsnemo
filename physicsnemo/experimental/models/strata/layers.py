@@ -48,6 +48,7 @@ __all__ = [
     "DiT3DBlock",
     "PatchEmbed3D",
     "FinalLayer3D",
+    "RopeTables",
 ]
 
 # A pair of (cos, sin) RoPE lookup tables, as produced by

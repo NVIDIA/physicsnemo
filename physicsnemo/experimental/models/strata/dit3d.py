@@ -43,12 +43,10 @@ from .layers import (
     DiT3DBlock,
     FinalLayer3D,
     PatchEmbed3D,
+    RopeTables,
 )
 
 __all__ = ["DiT3D", "DiT3DMetaData"]
-
-# A pair of (cos, sin) RoPE lookup tables.
-RopeTables = Tuple[torch.Tensor, torch.Tensor]
 
 
 @dataclass

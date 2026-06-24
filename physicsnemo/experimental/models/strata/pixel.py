@@ -47,12 +47,9 @@ from physicsnemo.nn.module.mlp_layers import Mlp
 from .coords import build_axial_token_coords, build_stereographic_token_coords
 from .depthwise_conv import DepthwiseConv
 from .dit3d import DiT3D
-from .layers import DiT3DBlock, Natten3DSelfAttention, PatchEmbed3D
+from .layers import DiT3DBlock, Natten3DSelfAttention, PatchEmbed3D, RopeTables
 
 __all__ = ["PixelDiT", "PixelDiTMetaData", "PixelDiTBlock", "PixelDiTLastLayer"]
-
-# A pair of (cos, sin) RoPE lookup tables.
-RopeTables = Tuple[torch.Tensor, torch.Tensor]
 
 
 @dataclass
@@ -304,11 +301,14 @@ class PixelDiTBlock(nn.Module):
         Shared across all ``"bilinear_dw"`` blocks so the (expensive) upsample is
         computed once per forward pass. When the pixel depth equals the semantic
         depth (:math:`s_d = D`, i.e. no depth upsampling) it uses a per-level **2D
-        bilinear** upsample — bit-identical to the original 2D path, so the common
-        case (semantic vertical patch size 1, or any matching pixel/semantic depth)
-        is numerically unchanged. Only when the depth must actually be upsampled
-        (:math:`s_d < D`) does it fall back to a **3D trilinear** upsample over
-        :math:`(D, H, W)`.
+        bilinear** upsample — bit-identical to the original 2D-only path, so the
+        common case (semantic vertical patch size 1, or any matching pixel/semantic
+        depth) is numerically unchanged. This branch is deliberate, not just an
+        optimization: a 3D trilinear upsample at :math:`s_d = D` agrees with the
+        per-level 2D bilinear only to ~1e-7 (float), **not** exactly, so unifying on
+        trilinear would silently shift the numerics of every matching-depth model.
+        Only when the depth must actually be upsampled (:math:`s_d < D`) does it use
+        a **3D trilinear** upsample over :math:`(D, H, W)`.
 
         Parameters
         ----------
@@ -479,10 +479,12 @@ class PixelDiT(Module):
 
     Parameters
     ----------
-    semantic_config : Dict[str, Any], optional, default={}
+    semantic_config : Dict[str, Any], optional, default=None
         Keyword arguments forwarded to :class:`DiT3D` to build the semantic
         stage. Its ``in_channels``, ``input_shape``, ``patch_size``,
         ``out_channels``, and ``embed_dim`` determine the pixel-pathway layout.
+        ``None`` is coerced to an empty dict, i.e. a default-configured
+        :class:`DiT3D` semantic stage.
     embed_dim_pixel : int, optional, default=128
         Pixel-pathway embedding dimension.
     num_layers_pixel : int, optional, default=4
