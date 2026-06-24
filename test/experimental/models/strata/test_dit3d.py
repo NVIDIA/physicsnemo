@@ -883,9 +883,49 @@ def test_pixeldit_activation_checkpointing_matches(device, adaln_mode):
         assert torch.allclose(p_plain.grad, p_ckpt.grad, atol=1e-3, rtol=1e-3), n
 
 
+def _make_axial_dit3d(input_shape):
+    return DiT3D(
+        in_channels=3,
+        input_shape=input_shape,
+        patch_size=(1, 2, 2),
+        embed_dim=32,
+        num_heads=4,
+        num_layers=2,
+        attn_kernel=-1,
+        rope_mode="axial",
+    ).eval()
+
+
 @torch.no_grad()
 def test_dit3d_set_tile_size_axial():
-    """set_tile_size rebuilds the axial RoPE buffers so forward works at a new size."""
+    """set_tile_size rebuilds the axial RoPE buffers to match a fresh model.
+
+    The buffers are compared against a model constructed directly at the new
+    size, not just by token count: a wrong row/col assignment keeps the count
+    but changes the table, which a shape-only check would miss.
+    """
+    torch.manual_seed(0)
+    model = _make_axial_dit3d((4, 8, 8))
+    assert model(torch.randn(2, 3, 4, 8, 8)).shape == (2, 3, 4, 8, 8)
+    # Re-tile to a taller grid and compare to a model built directly at (4, 16, 8).
+    model.set_tile_size(height=16, width=8)
+    fresh = _make_axial_dit3d((4, 16, 8))
+    assert model._rope_cos.shape[0] == 4 * (16 // 2) * (8 // 2)
+    assert torch.equal(model._rope_cos, fresh._rope_cos)
+    assert torch.equal(model._rope_sin, fresh._rope_sin)
+    out = model(torch.randn(2, 3, 4, 16, 8))
+    assert out.shape == (2, 3, 4, 16, 8) and torch.isfinite(out).all()
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("rope_mode", ["stereographic", "none"])
+def test_dit3d_set_tile_size_retiles_non_axial(rope_mode):
+    """set_tile_size also re-tiles non-axial modes (the regional/global use case).
+
+    stereographic / none build their RoPE per forward, so re-tiling only needs
+    the expected input shape updated; a forward at the *new* tile must then run,
+    and one at the old tile is correctly rejected.
+    """
     torch.manual_seed(0)
     model = DiT3D(
         in_channels=3,
@@ -895,12 +935,17 @@ def test_dit3d_set_tile_size_axial():
         num_heads=4,
         num_layers=2,
         attn_kernel=-1,
-        rope_mode="axial",
+        rope_mode=rope_mode,
     ).eval()
-    assert model(torch.randn(2, 3, 4, 8, 8)).shape == (2, 3, 4, 8, 8)
-    # Re-tile to a taller grid; the axial cos/sin buffers must rebuild to the new
-    # token count (a stale buffer would make the RoPE broadcast fail in forward).
     model.set_tile_size(height=16, width=8)
-    assert model._rope_cos.shape[0] == 4 * (16 // 2) * (8 // 2)
-    out = model(torch.randn(2, 3, 4, 16, 8))
+    assert model.input_shape == (4, 16, 8)  # expected tile updated for all modes
+    x = torch.randn(2, 3, 4, 16, 8)
+    pos = _make_pos(2, 16, 8) if rope_mode == "stereographic" else None
+    out = model(x, pos) if pos is not None else model(x)
     assert out.shape == (2, 3, 4, 16, 8) and torch.isfinite(out).all()
+    # The old tile is now correctly rejected.
+    with pytest.raises(ValueError):
+        old_pos = _make_pos(2, 8, 8) if rope_mode == "stereographic" else None
+        model(torch.randn(2, 3, 4, 8, 8), old_pos) if old_pos is not None else model(
+            torch.randn(2, 3, 4, 8, 8)
+        )

@@ -406,10 +406,16 @@ class DiT3D(Module):
         nn.init.constant_(self.final_layer.linear.bias, 0.0)
 
     def set_tile_size(self, height: int, width: int) -> None:
-        r"""Recompute static axial-RoPE buffers for a new spatial tile size.
+        r"""Reconfigure the expected spatial tile size for a new resolution.
 
-        Only has an effect when ``rope_mode="axial"``. Use it before running
-        inference on a tile larger or smaller than the configured one.
+        Use this before running inference on a tile larger or smaller than the
+        configured one. It updates the expected input shape (``height`` /
+        ``width`` / ``input_shape``) for **every** ``rope_mode``, so the forward
+        shape check and :meth:`unpatchify` accept the new tile. For
+        ``rope_mode="axial"`` it *additionally* rebuilds the cached ``(cos, sin)``
+        RoPE buffers; the ``stereographic`` and ``none`` modes build their tables
+        per forward (from the supplied ``pos``, or not at all), so updating the
+        expected shape is all that is required for them.
 
         Parameters
         ----------
@@ -421,12 +427,14 @@ class DiT3D(Module):
         Returns
         -------
         None
-            Updates internal buffers in place.
+            Updates internal state in place.
         """
         self.height = height
         self.width = width
         self.input_shape = (self.depth, height, width)
         if self.rope_mode != "axial":
+            # stereographic / none build their RoPE per forward, so the expected
+            # shape updated above is all that re-tiling needs.
             return
         d = self.depth // self.patch_size_vert
         h = height // self.patch_size[1]
