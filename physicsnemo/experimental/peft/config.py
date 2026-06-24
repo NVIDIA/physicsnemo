@@ -25,10 +25,17 @@ low-rank update ``B @ A`` beside selected linear layers. ``LoRAConfig`` declares
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Literal
+from typing import TYPE_CHECKING, Callable, Literal, Union
 
 if TYPE_CHECKING:
+    import torch
     import torch.nn as nn
+
+# Accepted lora_A initialization spec: the named "default" strategy
+# (kaiming_uniform, matching nn.Linear / the common PEFT default) or a callable
+# that initializes the tensor in place. Extend the Literal as named strategies
+# are added (e.g. SVD-based PiSSA/OLoRA).
+LoRAInit = Union[Literal["default"], Callable[["torch.Tensor"], None]]
 
 
 @dataclass
@@ -67,8 +74,15 @@ class LoRAConfig:
         ``te.LayerNormMLP``, otherwise a ``Sequential(LayerNorm, Mlp)``. Matched
         by the known feed-forward naming of those blocks, so it is a no-op on
         models without that structure. Additive to the selector above.
-    init : {"default"}
-        Reserved for future init strategies (PiSSA / DoRA).
+    init : {"default"} or callable
+        Initialization for the ``lora_A`` factor (``lora_B`` is always zero, so the
+        adapter is identity at init). ``"default"`` uses ``kaiming_uniform_(a=√5)``
+        — matching ``nn.Linear`` and the common PEFT default. Pass a callable
+        ``(tensor) -> None`` to initialize ``lora_A`` in place with a custom scheme
+        (e.g. ``lambda t: nn.init.normal_(t, std=0.01)`` for a Gaussian with a
+        scale you control). Honored by wrappers built on ``_make_lora_params``;
+        wrappers with their own parameterization (e.g. equivariant layers)
+        initialize themselves and ignore this.
     """
 
     rank: int = 16
@@ -79,7 +93,7 @@ class LoRAConfig:
     lora_dropout: float = 0.0
     extras_trainable: list[str] = field(default_factory=list)
     wrap_mlp: bool = False
-    init: Literal["default"] = "default"
+    init: LoRAInit = "default"
 
     def __post_init__(self) -> None:
         selectors = {
@@ -103,10 +117,10 @@ class LoRAConfig:
             raise ValueError(
                 f"lora_dropout must be in [0.0, 1.0), got {self.lora_dropout}."
             )
-        if self.init != "default":
+        if not (callable(self.init) or self.init == "default"):
             raise ValueError(
-                f"init={self.init!r} is reserved; only 'default' is supported "
-                "in this version."
+                f"init={self.init!r} is not supported; use 'default' or a callable "
+                "that initializes the lora_A tensor in place."
             )
 
     @property

@@ -102,6 +102,40 @@ def test_save_after_merge_raises(tmp_path):
         save_adapter(m, tmp_path / "merged.lora")
 
 
+def test_save_load_with_callable_init(tmp_path):
+    # A callable init is not JSON-serializable: it is recorded as the honest label
+    # "custom" (not the callable, and not a misleading "default"), and load still
+    # round-trips (the init label is irrelevant once the saved weights load).
+    torch.manual_seed(0)
+    m = _Net()
+    apply_lora(
+        m,
+        LoRAConfig(
+            rank=4,
+            alpha=8,
+            target_pattern="fc",
+            init=lambda t: nn.init.normal_(t, std=0.01),
+        ),
+    )
+    for mod in m.modules():
+        if is_lora_layer(mod):
+            with torch.no_grad():
+                mod.lora_B.copy_(torch.randn_like(mod.lora_B))
+    x = torch.randn(3, 16)
+    out = m(x).detach().clone()
+
+    p = tmp_path / "adapter.lora"
+    save_adapter(m, p)  # must not raise on the callable init
+    with zipfile.ZipFile(p) as z:
+        cfg = json.loads(z.read("adapter_config.json"))
+    assert cfg["init"] == "custom"  # callable recorded honestly, not as "default"
+
+    torch.manual_seed(0)
+    fresh = _Net()
+    load_adapter(fresh, p)  # init label is irrelevant on load (weights restored)
+    assert torch.allclose(fresh(x), out, atol=1e-5)
+
+
 def test_save_accepts_any_extension(tmp_path):
     # The extension is not enforced — an arbitrary one still round-trips.
     m = _trained_net()

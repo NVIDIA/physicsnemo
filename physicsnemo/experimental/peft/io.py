@@ -84,8 +84,8 @@ def save_adapter(model: nn.Module, path: str | Path) -> None:
     processed by ``apply_lora``.
 
     Archive contents:
-      - ``adapter_config.json`` — the ``LoRAConfig`` (rank, alpha, dropout, and an
-        explicit ``target_modules`` list of the actually-wrapped names, so it
+      - ``adapter_config.json`` — the adapter config (rank, alpha, dropout, init,
+        and an explicit ``target_modules`` list of the actually-wrapped names, so it
         reloads identically regardless of the original selector, including a
         non-serializable ``target_filter``).
       - ``adapter_model.pt`` — the trainable tensors only: ``lora_A``/``lora_B``
@@ -95,8 +95,8 @@ def save_adapter(model: nn.Module, path: str | Path) -> None:
     """
     path = str(path)
 
-    config = getattr(model, "_lora_config", None)
-    if config is None:
+    meta = getattr(model, "_lora_adapter_config", None)
+    if meta is None:
         raise ValueError(
             "model has no stashed LoRA config; call apply_lora(model, config) "
             "before save_adapter."
@@ -112,12 +112,13 @@ def save_adapter(model: nn.Module, path: str | Path) -> None:
         )
 
     adapter_config = {
-        "rank": config.rank,
-        "alpha": config.effective_alpha,
-        "lora_dropout": config.lora_dropout,
+        "rank": meta["rank"],
+        "alpha": meta["alpha"],
+        "lora_dropout": meta["lora_dropout"],
         "target_modules": wrapped,  # exact wrapped names → robust reload
-        "extras_trainable": list(config.extras_trainable),
-        "init": config.init,
+        "extras_trainable": list(meta["extras_trainable"]),
+        # "custom" if a callable init was used (not recoverable); see apply_lora.
+        "init": meta["init"],
     }
 
     import physicsnemo  # lazy: avoid any import-time cycle
@@ -129,8 +130,8 @@ def save_adapter(model: nn.Module, path: str | Path) -> None:
         "torch_version": torch.__version__,
         "base_fingerprint": fingerprint,
         "n_wrapped": len(wrapped),
-        "rank": config.rank,
-        "alpha": config.effective_alpha,
+        "rank": meta["rank"],
+        "alpha": meta["alpha"],
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
 
@@ -195,13 +196,16 @@ def load_adapter(model: nn.Module, path: str | Path, strict: bool = True) -> Non
             raise ValueError(msg + " Pass strict=False to load anyway.")
         logger.warning(msg)
 
+    # init only seeds lora_A at apply time and is then overwritten by the loaded
+    # adapter weights, so the saved label (which may be "custom" for a callable, not
+    # re-runnable) is irrelevant on reload. Always use "default".
     config = LoRAConfig(
         rank=adapter_config["rank"],
         alpha=adapter_config["alpha"],
         lora_dropout=adapter_config.get("lora_dropout", 0.0),
         target_modules=adapter_config["target_modules"],
         extras_trainable=adapter_config.get("extras_trainable", []),
-        init=adapter_config.get("init", "default"),
+        init="default",
     )
     apply_lora(model, config)
 

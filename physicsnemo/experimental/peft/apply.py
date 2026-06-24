@@ -174,6 +174,7 @@ def apply_lora(model: nn.Module, config: LoRAConfig) -> ApplyResult:
             rank=config.rank,
             alpha=config.effective_alpha,
             dropout=config.lora_dropout,
+            init=config.init,
         )
         # Enforce the wrapper contract: freeze/save/merge identify LoRA layers by
         # isinstance(module, LoRALayer), so a wrapper that does not subclass it
@@ -188,10 +189,21 @@ def apply_lora(model: nn.Module, config: LoRAConfig) -> ApplyResult:
         setattr(parent, child, wrapped)
 
     _freeze_base_except_extras(model, config.extras_trainable)
-    # Stash the pristine-base fingerprint and the config so save_adapter need not
-    # re-derive them from the now-mutated model.
+    # Stash the pristine-base fingerprint and the metadata save_adapter serializes.
+    # This is a plain, picklable dict — NOT the LoRAConfig, which may hold callable
+    # target_filter/init — so a wrapped model can still be torch.save'd whole.
+    # target_modules is omitted (save_adapter derives it live from the model). init
+    # is recorded by name if it is a named strategy, else "custom": a callable can't
+    # be serialized and is irrelevant on reload (the saved weights overwrite the
+    # seed), but "custom" honestly signals that a non-default init was used.
     model._lora_base_fingerprint = fingerprint
-    model._lora_config = config
+    model._lora_adapter_config = {
+        "rank": config.rank,
+        "alpha": config.effective_alpha,
+        "lora_dropout": config.lora_dropout,
+        "extras_trainable": list(config.extras_trainable),
+        "init": config.init if isinstance(config.init, str) else "custom",
+    }
 
     n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     n_frozen = sum(p.numel() for p in model.parameters() if not p.requires_grad)

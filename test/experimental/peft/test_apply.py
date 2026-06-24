@@ -193,6 +193,43 @@ def test_print_trainable_parameters():
     assert "trainable params" in print_trainable_parameters(m)
 
 
+def test_apply_honors_config_init():
+    # config.init flows through apply_lora into the wrapper's lora_A init.
+    m = _model()
+    apply_lora(
+        m,
+        LoRAConfig(
+            rank=4,
+            target_pattern=_ATTN_PATTERN,
+            init=lambda t: nn.init.constant_(t, 0.25),
+        ),
+    )
+    qkv = m.blocks[0].Attn.qkv_project
+    assert torch.allclose(qkv.lora_A, torch.full_like(qkv.lora_A, 0.25))
+
+
+def test_wrapped_model_is_picklable_with_callable_selectors():
+    # apply_lora stashes a plain metadata dict (no callables), so a wrapped model
+    # stays picklable even when the user passed a callable target_filter and init.
+    import pickle
+
+    m = _model()
+    apply_lora(
+        m,
+        LoRAConfig(
+            rank=4,
+            target_filter=lambda name, mod: "Attn" in name,
+            init=lambda t: nn.init.normal_(t, std=0.01),
+        ),
+    )
+    # the stash holds only serializable metadata; a callable init is labelled.
+    assert isinstance(m._lora_adapter_config, dict)
+    assert m._lora_adapter_config["init"] == "custom"
+
+    restored = pickle.loads(pickle.dumps(m))  # would raise on a retained lambda
+    assert any(is_lora_layer(mod) for mod in restored.modules())
+
+
 def test_apply_rejects_wrapper_not_subclassing_loralayer():
     # register_lora_wrapper contract: the factory must return a LoRALayer
     # subclass. apply_lora rejects one that does not — otherwise freeze/save/merge
@@ -203,8 +240,8 @@ def test_apply_rejects_wrapper_not_subclassing_loralayer():
     class _Custom(nn.Linear):
         pass
 
-    class _BadWrapper(nn.Module):  # deliberately NOT a LoRALayer subclass
-        def __init__(self, base_layer, rank, alpha, dropout=0.0):
+    class _BadWrapper(nn.Module):  # accepts the ctor args but is NOT a LoRALayer
+        def __init__(self, base_layer, *args, **kwargs):
             super().__init__()
             self.base_layer = base_layer
 

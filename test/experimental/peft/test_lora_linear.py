@@ -85,6 +85,24 @@ def test_disable_recovers_base():
     assert torch.allclose(lora(x), base(x), atol=1e-6)
 
 
+def test_init_strategies_applied_to_lora_a():
+    # A custom callable initializes lora_A in place; lora_B stays zero.
+    base = nn.Linear(16, 8)
+    lora = LoRALinear(base, rank=4, alpha=4, init=lambda t: nn.init.constant_(t, 0.5))
+    assert torch.allclose(lora.lora_A, torch.full_like(lora.lora_A, 0.5))
+    assert torch.count_nonzero(lora.lora_B) == 0
+
+    # A custom nonzero init still leaves the delta zero at init (B=0), so the
+    # wrapped forward equals the base forward.
+    g = LoRALinear(
+        nn.Linear(16, 8), rank=4, alpha=4, init=lambda t: nn.init.normal_(t, std=0.02)
+    )
+    assert torch.count_nonzero(g.lora_A) > 0
+    assert torch.count_nonzero(g.lora_B) == 0
+    x = torch.randn(4, 16)
+    assert torch.allclose(g(x), g.base_layer(x), atol=1e-6)
+
+
 def test_linear_specific_helpers_not_on_generic_mixin():
     # The in/out inference + weight-folding merge are Linear-specific and live on
     # _LinearLoRALayer, so generic (non-Linear) wrappers that inherit LoRALayer

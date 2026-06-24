@@ -61,6 +61,17 @@ def test_empty_selector_rejected():
         LoRAConfig(target_pattern="")
 
 
-def test_reserved_init():
+def test_init_accepts_default_and_callable():
+    assert LoRAConfig(target_modules=["x"], init="default").init == "default"
+
+    def my_init(t):
+        return None
+
+    assert LoRAConfig(target_modules=["x"], init=my_init).init is my_init
+
+
+@pytest.mark.parametrize("bad", ["gaussian", "pissa", "kaiming"])
+def test_init_rejects_unknown_string(bad):
+    # Only "default" is a named strategy; any other string must be a callable.
     with pytest.raises(ValueError, match="init"):
-        LoRAConfig(target_modules=["x"], init="pissa")
+        LoRAConfig(target_modules=["x"], init=bad)

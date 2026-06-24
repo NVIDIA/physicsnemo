@@ -34,12 +34,32 @@ from typing import Callable
 import torch
 import torch.nn as nn
 
+from physicsnemo.experimental.peft.config import LoRAInit
+
 try:  # Transformer Engine is optional.
     import transformer_engine.pytorch as te
 
     _TE_AVAILABLE = True
 except ImportError:  # pragma: no cover - depends on environment
     _TE_AVAILABLE = False
+
+
+def _resolve_lora_a_init(init: LoRAInit) -> Callable[[torch.Tensor], None]:
+    """Map an ``init`` spec to a callable that initializes the ``lora_A`` tensor
+    in place. ``lora_B`` stays zero regardless, so the adapter is identity at init.
+
+    - ``"default"``: ``kaiming_uniform_(a=sqrt(5))`` — matches ``nn.Linear`` and
+      the common PEFT default (the ``a=sqrt(5)`` is PyTorch's historical value).
+    - a callable: used as-is (must initialize the passed tensor in place); this is
+      how you select a custom scheme, e.g. a Gaussian with a chosen scale.
+    """
+    if callable(init):
+        return init
+    if init == "default":
+        return lambda t: nn.init.kaiming_uniform_(t, a=math.sqrt(5))
+    raise ValueError(
+        f"unknown init strategy {init!r}; use 'default' or a callable."
+    )
 
 
 class LoRALayer:
@@ -59,25 +79,31 @@ class LoRALayer:
     ``LoRALayer`` and exposes the surface the apply / freeze / save / merge /
     enable utilities depend on:
 
-    - **Constructor**: ``__init__(self, base_layer, *, rank, alpha, dropout=0.0)``.
-      ``apply_lora`` instantiates wrappers as
-      ``wrapper(base_layer, rank=, alpha=, dropout=)``.
+    - **Constructor**: ``__init__(self, base_layer, *, rank, alpha, dropout=0.0,
+      init="default")``. ``apply_lora`` instantiates wrappers as
+      ``wrapper(base_layer, rank=, alpha=, dropout=, init=)`` — accept ``**kwargs``
+      if you want to be forward-compatible with options added later.
     - **Attributes**: ``base_layer`` (the wrapped, frozen module); ``lora_A`` /
       ``lora_B`` (trainable ``nn.Parameter``\\ s — the only params left with
-      ``requires_grad=True``, which is how ``save_adapter`` slices the adapter);
-      ``enabled`` (bool toggling the delta); ``mergeable`` (bool; ``False`` by
-      default — opt in only if you also implement ``merge_into_base``).
-    - **Methods**: ``forward`` (adds ``lora_delta(x)`` to the base output when
+      ``requires_grad=True``, which is how ``save_adapter`` slices the adapter;
+      these may be plain attributes or ``@property``\\ s that resolve to the
+      Parameters, e.g. for layers whose factors are submodules); ``enabled`` (bool
+      toggling the delta); ``mergeable`` (bool; ``False`` by default — opt in only
+      if you also implement ``merge_into_base``).
+    - **Methods**: ``forward`` (adds the low-rank delta to the base output when
       ``enabled``); ``merge_into_base`` (folds the delta into the base weight) —
       required only when ``mergeable`` is ``True``.
 
-    Calling ``_make_lora_params(...)`` from ``__init__`` populates ``lora_A``,
-    ``lora_B``, ``scaling``, ``enabled`` and dropout for you. Wrappers for
-    Linear-like bases (``.weight`` shaped ``(out, in)``, or exposing
-    ``in_features``/``out_features``) should subclass :class:`_LinearLoRALayer`
-    instead — it adds in/out inference at init and a weight-folding
-    ``merge_into_base``. Only generic, non-Linear wrappers (e.g. the fused
-    ``te.LayerNormMLP`` residual) inherit ``LoRALayer`` directly.
+    ``_make_lora_params(...)`` and ``lora_delta(...)`` are **optional conveniences**
+    for the standard tensor case (2-D ``lora_A``/``lora_B`` with the
+    ``((x @ A) @ B) * scaling`` delta): a wrapper may instead create its own
+    parameters, init, and delta (e.g. an equivariant wrapper whose factors are
+    themselves equivariant layers) as long as it ends up satisfying the contract
+    above. Wrappers for Linear-like bases (``.weight`` shaped ``(out, in)``, or
+    exposing ``in_features``/``out_features``) should subclass
+    :class:`_LinearLoRALayer` instead — it adds in/out inference at init and a
+    weight-folding ``merge_into_base``. Only generic, non-Linear wrappers (e.g. the
+    fused ``te.LayerNormMLP`` residual) inherit ``LoRALayer`` directly.
     """
 
     # Whether merge_lora can fold this adapter into base weights. Generic wrappers
@@ -92,10 +118,13 @@ class LoRALayer:
         rank: int,
         alpha: float,
         dropout: float,
+        init: LoRAInit = "default",
     ) -> None:
         """Create lora_A/lora_B + dropout. ``ref_weight`` supplies device/dtype,
         inherited so the LoRA params live wherever the base weight does (avoids a
-        device mismatch under DDP)."""
+        device mismatch under DDP). ``init`` selects how ``lora_A`` is initialized
+        (see :func:`_resolve_lora_a_init`); ``lora_B`` is always zero so the delta
+        is exactly zero at init."""
         self.rank = rank
         self.alpha = alpha
         self.scaling = alpha / rank
@@ -113,7 +142,7 @@ class LoRALayer:
         self.lora_dropout: nn.Module = (
             nn.Dropout(p=dropout) if dropout > 0.0 else nn.Identity()
         )
-        nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
+        _resolve_lora_a_init(init)(self.lora_A)
 
     def lora_delta(self, x: torch.Tensor) -> torch.Tensor:
         return ((self.lora_dropout(x) @ self.lora_A) @ self.lora_B) * self.scaling
@@ -132,13 +161,18 @@ class _LinearLoRALayer(LoRALayer):
     mergeable: bool = True
 
     def _init_lora(
-        self, base_layer: nn.Module, rank: int, alpha: float, dropout: float
+        self,
+        base_layer: nn.Module,
+        rank: int,
+        alpha: float,
+        dropout: float,
+        init: LoRAInit = "default",
     ) -> None:
         """Infer in/out + device/dtype from the base ``.weight`` and create the
         LoRA params."""
         in_features, out_features = self._infer_in_out_features(base_layer)
         self._make_lora_params(
-            in_features, out_features, base_layer.weight, rank, alpha, dropout
+            in_features, out_features, base_layer.weight, rank, alpha, dropout, init
         )
 
     @staticmethod
@@ -167,13 +201,18 @@ class LoRALinear(nn.Module, _LinearLoRALayer):
     """LoRA wrapper for ``torch.nn.Linear``."""
 
     def __init__(
-        self, base_layer: nn.Linear, rank: int, alpha: float, dropout: float = 0.0
+        self,
+        base_layer: nn.Linear,
+        rank: int,
+        alpha: float,
+        dropout: float = 0.0,
+        init: LoRAInit = "default",
     ) -> None:
         nn.Module.__init__(self)
         self.base_layer = base_layer
         for p in self.base_layer.parameters():
             p.requires_grad = False
-        self._init_lora(base_layer, rank, alpha, dropout)
+        self._init_lora(base_layer, rank, alpha, dropout, init)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         out = self.base_layer(x)
@@ -197,12 +236,13 @@ if _TE_AVAILABLE:
             rank: int,
             alpha: float,
             dropout: float = 0.0,
+            init: LoRAInit = "default",
         ) -> None:
             nn.Module.__init__(self)
             self.base_layer = base_layer
             for p in self.base_layer.parameters():
                 p.requires_grad = False
-            self._init_lora(base_layer, rank, alpha, dropout)
+            self._init_lora(base_layer, rank, alpha, dropout, init)
 
         def forward(self, x: torch.Tensor, **te_kwargs) -> torch.Tensor:
             out = self.base_layer(x, **te_kwargs)
@@ -232,6 +272,7 @@ if _TE_AVAILABLE:
             rank: int,
             alpha: float,
             dropout: float = 0.0,
+            init: LoRAInit = "default",
         ) -> None:
             nn.Module.__init__(self)
             self.base_layer = base_layer
@@ -240,7 +281,7 @@ if _TE_AVAILABLE:
             # hidden dim and device/dtype come from the fused LayerNorm weight.
             hidden = base_layer.layer_norm_weight.shape[0]
             self._make_lora_params(
-                hidden, hidden, base_layer.layer_norm_weight, rank, alpha, dropout
+                hidden, hidden, base_layer.layer_norm_weight, rank, alpha, dropout, init
             )
 
         def forward(self, x: torch.Tensor, **te_kwargs):
