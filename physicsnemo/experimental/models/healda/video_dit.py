@@ -13,15 +13,20 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Video DiT: a HEALPix field-sequence diffusion transformer over ``(B, C, T, X)``.
+"""Video DiT: a field-sequence diffusion transformer over ``(B, C, T, X)``.
 
 Follows the DiT template -- tokenize, condition, transformer blocks, detokenize --
-on an explicit time axis. Reuses the existing HEALPix patch tokenizer /
-detokenizer (which already fold the time axis and add a calendar embedding) and
-composes :class:`.video_dit_block.VideoDiTBlock` (spatial attention + optional
-factorized temporal attention + optional observation cross-attention). The flat
-tokenizer sequence is reshaped to ``(B, T, X, hidden_size)`` for the blocks and
-back for the detokenizer.
+on an explicit time axis. The transformer backbone is **grid-agnostic**: the grid
+is consumed only by the (pluggable) tokenizer / detokenizer, and the blocks then
+operate purely on tokens. Composes :class:`.video_dit_block.VideoDiTBlock`
+(spatial attention + optional factorized temporal attention + optional
+observation cross-attention).
+
+The tokenizer produces a flat, time-major token sequence ``(B, T * X, D)`` (e.g.
+the HEALPix patch tokenizer, but any grid's tokenizer works); the model reshapes
+it to ``(B, T, X, D)`` for the blocks and back for the detokenizer. Observations
+enter as a prebuilt :class:`.obs_packing.ObsCrossAttention` bundle consumed inside
+each block.
 
 This is a diffusion model: ``noise_labels`` drive an EDM conditioning embedder
 feeding the blocks' adaLN-Zero modulation.
@@ -35,30 +40,27 @@ import torch.nn as nn
 from jaxtyping import Float
 
 from physicsnemo.nn import ConditioningEmbedderType, get_conditioning_embedder
-from physicsnemo.nn.module.hpx.tokenizer import (
-    HEALPixPatchDetokenizer,
-    HEALPixPatchTokenizer,
-)
 
 from .obs_packing import ObsCrossAttention
 from .video_dit_block import VideoDiTBlock
 
 
 class VideoDiT(nn.Module):
-    r"""HEALPix field-sequence diffusion transformer with temporal + obs attention.
+    r"""Grid-agnostic field-sequence diffusion transformer with temporal + obs attention.
 
     Parameters
     ----------
-    in_channels : int
-        Number of input field channels.
-    out_channels : int
-        Number of output field channels.
-    level_fine : int
-        HEALPix resolution level of the input/output grid.
-    level_coarse : int
-        HEALPix model (token) resolution level after patch embedding.
+    tokenizer : torch.nn.Module
+        Maps a field sequence :math:`(B, C, T, X)` to a flat, time-major token
+        sequence :math:`(B, T \cdot X', \text{hidden\_size})`. Defines the grid;
+        e.g. ``physicsnemo.nn.module.hpx.tokenizer.HEALPixPatchTokenizer``. Its
+        forward may take extra arguments, supplied via ``tokenizer_kwargs``.
+    detokenizer : torch.nn.Module
+        Maps tokens :math:`(B, T \cdot X', \text{hidden\_size})` and the
+        conditioning embedding back to a field sequence :math:`(B, C_{out}, T, X)`.
     time_length : int
-        Number of time steps :math:`T`.
+        Number of time steps :math:`T`, used to reshape the flat token sequence to
+        ``(B, T, X', hidden_size)`` for the blocks.
     hidden_size : int
         Transformer token dimension.
     num_heads : int
@@ -92,32 +94,29 @@ class VideoDiT(nn.Module):
     Forward
     -------
     x : torch.Tensor
-        Field sequence of shape :math:`(B, C, T, N_{pix})`.
+        Field sequence of shape :math:`(B, C, T, X)`.
     noise_labels : torch.Tensor
         Diffusion noise levels of shape :math:`(B,)`.
-    second_of_day : torch.Tensor
-        Second-of-day of shape :math:`(B, T)` for the calendar embedding.
-    day_of_year : torch.Tensor
-        Day-of-year of shape :math:`(B, T)` for the calendar embedding.
     condition : torch.Tensor, optional
         Class-label condition of shape :math:`(B, \text{condition\_dim})`.
     obs : ObsCrossAttention, optional
         Packed observation tokens + ragged packing for the obs cross-attention.
+    tokenizer_kwargs : dict, optional
+        Extra keyword arguments forwarded to the tokenizer's forward (e.g.
+        ``second_of_day`` / ``day_of_year`` for the HEALPix tokenizer).
     is_causal : bool, optional, default=False
         Causal masking for temporal attention.
 
     Outputs
     -------
     torch.Tensor
-        Field sequence of shape :math:`(B, C_{out}, T, N_{pix})`.
+        Field sequence of shape :math:`(B, C_{out}, T, X)`.
     """
 
     def __init__(
         self,
-        in_channels: int,
-        out_channels: int,
-        level_fine: int,
-        level_coarse: int,
+        tokenizer: nn.Module,
+        detokenizer: nn.Module,
         time_length: int,
         hidden_size: int,
         num_heads: int,
@@ -136,8 +135,9 @@ class VideoDiT(nn.Module):
         block_kwargs: Optional[Dict[str, Any]] = None,
     ):
         super().__init__()
+        self.tokenizer = tokenizer
+        self.detokenizer = detokenizer
         self.time_length = time_length
-        self.npix_coarse = 12 * 4**level_coarse
 
         if emb_channels is None:
             emb_channels = 4 * hidden_size
@@ -151,21 +151,6 @@ class VideoDiT(nn.Module):
         )
         cond_dim = self.conditioning_embedder.output_dim
 
-        self.tokenizer = HEALPixPatchTokenizer(
-            in_channels=in_channels,
-            hidden_size=hidden_size,
-            level_fine=level_fine,
-            level_coarse=level_coarse,
-        )
-        self.detokenizer = HEALPixPatchDetokenizer(
-            hidden_size=hidden_size,
-            out_channels=out_channels,
-            level_coarse=level_coarse,
-            level_fine=level_fine,
-            time_length=time_length,
-            condition_dim=cond_dim,
-        )
-
         drop_path_schedule = [
             drop_path * i / max(1, num_layers - 1) for i in range(num_layers)
         ]
@@ -174,7 +159,7 @@ class VideoDiT(nn.Module):
                 VideoDiTBlock(
                     hidden_size,
                     num_heads,
-                    emb_channels=cond_dim,
+                    condition_embed_dim=cond_dim,
                     attention_backend=attention_backend,
                     mlp_ratio=mlp_ratio,
                     drop_path=drop_path_schedule[i],
@@ -190,16 +175,15 @@ class VideoDiT(nn.Module):
 
     def forward(
         self,
-        x: Float[torch.Tensor, "batch channels time npix"],
+        x: Float[torch.Tensor, "batch channels time space"],
         noise_labels: Float[torch.Tensor, " batch"],
-        second_of_day: Float[torch.Tensor, "batch time"],
-        day_of_year: Float[torch.Tensor, "batch time"],
         condition: Optional[Float[torch.Tensor, "batch condition_dim"]] = None,
         obs: Optional[ObsCrossAttention] = None,
+        tokenizer_kwargs: Optional[Dict[str, Any]] = None,
         is_causal: bool = False,
-    ) -> Float[torch.Tensor, "batch out_channels time npix"]:
-        # (B, C, T, npix) -> (B, T * npix_coarse, hidden) -> (B, T, npix_coarse, hidden)
-        tokens = self.tokenizer(x, second_of_day, day_of_year)
+    ) -> Float[torch.Tensor, "batch out_channels time space"]:
+        # (B, C, T, X) -> (B, T * X', hidden) -> (B, T, X', hidden)
+        tokens = self.tokenizer(x, **(tokenizer_kwargs or {}))
         h = einops.rearrange(tokens, "b (t x) d -> b t x d", t=self.time_length)
 
         emb = self.conditioning_embedder(noise_labels, condition=condition)

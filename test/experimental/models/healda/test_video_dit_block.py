@@ -41,7 +41,7 @@ def test_plain_block_reduces_to_spatial_mlp_cpu():
     """With temporal/obs off the block is a spatial DiT block; runs on CPU."""
     torch.manual_seed(0)
     b, t, npix, c = 2, 3, 16, 64
-    block = VideoDiTBlock(hidden_size=c, num_heads=4, emb_channels=32)
+    block = VideoDiTBlock(hidden_size=c, num_heads=4, condition_embed_dim=32)
     x = torch.randn(b, t, npix, c, requires_grad=True)
     emb = torch.randn(b, 32)
     out = block(x, emb)
@@ -55,7 +55,7 @@ def test_temporal_block_cpu():
     torch.manual_seed(0)
     b, t, npix, c = 2, 4, 16, 64
     block = VideoDiTBlock(
-        hidden_size=c, num_heads=4, emb_channels=32, temporal_attention=True
+        hidden_size=c, num_heads=4, condition_embed_dim=32, temporal_attention=True
     )
     x = torch.randn(b, t, npix, c, requires_grad=True)
     emb = torch.randn(b, 32)
@@ -78,7 +78,7 @@ def test_full_block_cuda():
     block = VideoDiTBlock(
         hidden_size=c,
         num_heads=8,
-        emb_channels=128,
+        condition_embed_dim=128,
         temporal_attention=True,
         obs_cross_attention=True,
         obs_token_dim=obs_token_dim,

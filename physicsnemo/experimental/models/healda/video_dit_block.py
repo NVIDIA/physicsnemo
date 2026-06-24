@@ -66,11 +66,11 @@ class AdaLayerNormZero(nn.Module):
     the caller to apply to later residual branches.
     """
 
-    def __init__(self, embedding_dim: int, emb_channels: int, n_blocks: int = 2):
+    def __init__(self, embedding_dim: int, condition_embed_dim: int, n_blocks: int = 2):
         super().__init__()
         self.n_blocks = n_blocks
         self.silu = nn.SiLU()
-        self.linear = nn.Linear(emb_channels, 3 * n_blocks * embedding_dim)
+        self.linear = nn.Linear(condition_embed_dim, 3 * n_blocks * embedding_dim)
         self.norm = nn.LayerNorm(embedding_dim, elementwise_affine=False, eps=1e-6)
 
     def forward(
@@ -99,7 +99,7 @@ class VideoDiTBlock(nn.Module):
         Token / channel dimension ``c``.
     num_heads : int
         Number of spatial-attention heads.
-    emb_channels : int
+    condition_embed_dim : int
         Conditioning-embedding dimension feeding the adaLN modulations.
     attention_backend : str, optional, default="timm"
         Spatial-attention backend, passed to
@@ -151,11 +151,15 @@ class VideoDiTBlock(nn.Module):
         hidden_size: int,
         num_heads: int,
         *,
-        emb_channels: int,
+        condition_embed_dim: int,
         attention_backend: str = "timm",
         mlp_ratio: float = 4.0,
         layernorm_backend: str = "torch",
         norm_eps: float = 1e-6,
+        attn_drop_rate: float = 0.0,
+        proj_drop_rate: float = 0.0,
+        mlp_drop_rate: float = 0.0,
+        final_mlp_dropout: bool = True,
         drop_path: float = 0.0,
         temporal_attention: bool = False,
         temporal_kwargs: Optional[Dict[str, Any]] = None,
@@ -169,12 +173,18 @@ class VideoDiTBlock(nn.Module):
         super().__init__()
         self.hidden_size = hidden_size
 
-        # Spatial self-attention (per frame) + MLP, both adaLN-Zero gated.
-        self.spatial_norm = AdaLayerNormZero(hidden_size, emb_channels, n_blocks=2)
+        # Spatial self-attention (per frame) + MLP, both adaLN-Zero gated. This
+        # path mirrors physicsnemo.nn.DiTBlock (same modulation, MLP, and dropout
+        # wiring); temporal and obs attention are additional gated sub-layers.
+        self.spatial_norm = AdaLayerNormZero(
+            hidden_size, condition_embed_dim, n_blocks=2
+        )
         self.spatial_attn = get_attention(
             hidden_size=hidden_size,
             num_heads=num_heads,
             attention_backend=attention_backend,
+            attn_drop_rate=attn_drop_rate,
+            proj_drop_rate=proj_drop_rate,
             **attn_kwargs,
         )
         self.mlp_norm = get_layer_norm(
@@ -184,13 +194,17 @@ class VideoDiTBlock(nn.Module):
             in_features=hidden_size,
             hidden_features=int(hidden_size * mlp_ratio),
             act_layer=lambda: nn.GELU(approximate="tanh"),
+            drop=mlp_drop_rate,
+            final_dropout=final_mlp_dropout,
         )
 
         # Optional temporal attention.
         self.temporal_attn = None
         self.temporal_norm = None
         if temporal_attention:
-            self.temporal_norm = AdaLayerNormZero(hidden_size, emb_channels, n_blocks=1)
+            self.temporal_norm = AdaLayerNormZero(
+                hidden_size, condition_embed_dim, n_blocks=1
+            )
             self.temporal_attn = TemporalAttention(
                 embed_dim=hidden_size,
                 num_heads=num_heads,
@@ -213,7 +227,9 @@ class VideoDiTBlock(nn.Module):
                     )
                 obs_q_heads = hidden_size // obs_token_dim
                 obs_q_head_dim = obs_token_dim
-            self.obs_norm = AdaLayerNormZero(hidden_size, emb_channels, n_blocks=1)
+            self.obs_norm = AdaLayerNormZero(
+                hidden_size, condition_embed_dim, n_blocks=1
+            )
             self.obs_attn = PixelCrossAttention(
                 token_dim=obs_token_dim,
                 input_dim=hidden_size,
