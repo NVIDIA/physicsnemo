@@ -783,6 +783,42 @@ def test_output_head_supports_pure_bf16_cast(make, device):
     assert torch.isfinite(out.float()).all()
 
 
+@requires_module(["natten"])
+@torch.no_grad()
+def test_dit3d_natten_bf16_cast(device):
+    """A pure bf16 cast also survives the real NA3D (NATTEN) attention path.
+
+    The other bf16-cast test uses the SDPA fallback (``attn_kernel=-1``); this one
+    exercises the CUDA-only NATTEN neighborhood-attention kernel (``attn_kernel>0``)
+    together with ``do_alt_depthwise_attn`` (depth-axis blocks) and
+    ``gated_attention`` under genuine bf16 weights, confirming the NA3D forward,
+    the depth-axis attention, the gate, and the fp32 output head all run in bf16.
+    """
+    if device == "cpu":
+        pytest.skip("natten neighborhood attention is not available on CPU")
+    torch.manual_seed(0)
+    model = (
+        DiT3D(
+            in_channels=4,
+            input_shape=(4, 8, 8),
+            patch_size=(1, 2, 2),
+            embed_dim=32,
+            num_heads=4,
+            num_layers=4,
+            attn_kernel=3,  # > 0 -> real NA3D windowed attention
+            do_alt_depthwise_attn=True,
+            gated_attention=True,
+        )
+        .to(device)
+        .bfloat16()
+        .eval()
+    )
+    x = torch.randn(2, 4, 4, 8, 8, device=device, dtype=torch.bfloat16)
+    out = model(x)
+    assert out.dtype == torch.bfloat16
+    assert out.shape == (2, 4, 4, 8, 8) and torch.isfinite(out.float()).all()
+
+
 def test_dit3d_activation_checkpointing_matches(device):
     """activation_checkpointing reproduces the non-checkpointed output and grads.
 
