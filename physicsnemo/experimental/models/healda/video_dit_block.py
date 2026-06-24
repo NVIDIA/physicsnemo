@@ -75,8 +75,8 @@ class AdaLayerNormZero(nn.Module):
 
     def forward(
         self,
-        x: Float[torch.Tensor, "*leading channels"],
-        emb: Float[torch.Tensor, "batch emb_channels"],
+        x: Float[torch.Tensor, "*leading hidden_size"],
+        emb: Float[torch.Tensor, "batch condition_embed_dim"],
     ) -> Tuple[torch.Tensor, ...]:
         chunks = self.linear(self.silu(emb)).chunk(3 * self.n_blocks, dim=1)
         shift, scale, gate = chunks[0], chunks[1], chunks[2]
@@ -292,12 +292,12 @@ class VideoDiTBlock(nn.Module):
 
     def forward(
         self,
-        hidden_states: Float[torch.Tensor, "batch time space channels"],
-        emb: Float[torch.Tensor, "batch emb_channels"],
+        hidden_states: Float[torch.Tensor, "batch time space hidden_size"],
+        emb: Float[torch.Tensor, "batch condition_embed_dim"],
         obs: Optional[ObsCrossAttention] = None,
         attn_kwargs: Optional[Dict[str, Any]] = None,
         is_causal: bool = False,
-    ) -> Float[torch.Tensor, "batch time space channels"]:
+    ) -> Float[torch.Tensor, "batch time space hidden_size"]:
         b, t, x, c = hidden_states.shape
 
         # Spatial self-attention (per frame), adaLN-Zero gated.

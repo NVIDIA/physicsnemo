@@ -42,9 +42,9 @@ MODEL_DIM = 1
 
 
 def shard_x(
-    tensor: Float[torch.Tensor, "batch time space channels"],
+    tensor: Float[torch.Tensor, "batch time space hidden_size"],
     group: dist.ProcessGroup,
-) -> Float[torch.Tensor, "batch time space channels"]:
+) -> Float[torch.Tensor, "batch time space hidden_size"]:
     r"""Reshard from t-sharded to x-sharded (gather time, scatter space).
 
     Parameters
@@ -71,9 +71,9 @@ def shard_x(
 
 
 def shard_t(
-    tensor: Float[torch.Tensor, "batch time space channels"],
+    tensor: Float[torch.Tensor, "batch time space hidden_size"],
     group: dist.ProcessGroup,
-) -> Float[torch.Tensor, "batch time space channels"]:
+) -> Float[torch.Tensor, "batch time space hidden_size"]:
     r"""Reshard from x-sharded to t-sharded (gather space, scatter time).
 
     Parameters
@@ -121,14 +121,14 @@ def _reshard_via_shardtensor(
 
 
 def shard_x_shardtensor(
-    tensor: Float[torch.Tensor, "batch time space channels"], mesh
-) -> Float[torch.Tensor, "batch time space channels"]:
+    tensor: Float[torch.Tensor, "batch time space hidden_size"], mesh
+) -> Float[torch.Tensor, "batch time space hidden_size"]:
     r"""ShardTensor equivalent of :func:`shard_x` (Shard(time) -> Shard(space))."""
     return _reshard_via_shardtensor(tensor, mesh, _TIME_DIM, _SPACE_DIM)
 
 
 def shard_t_shardtensor(
-    tensor: Float[torch.Tensor, "batch time space channels"], mesh
-) -> Float[torch.Tensor, "batch time space channels"]:
+    tensor: Float[torch.Tensor, "batch time space hidden_size"], mesh
+) -> Float[torch.Tensor, "batch time space hidden_size"]:
     r"""ShardTensor equivalent of :func:`shard_t` (Shard(space) -> Shard(time))."""
     return _reshard_via_shardtensor(tensor, mesh, _SPACE_DIM, _TIME_DIM)

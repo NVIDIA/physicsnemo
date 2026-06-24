@@ -143,9 +143,9 @@ class TemporalAttention(torch.nn.Module):
     @torch.compile
     def forward(
         self,
-        x: Float[torch.Tensor, "batch time space channels"],
+        x: Float[torch.Tensor, "batch time space hidden_size"],
         is_causal: bool = False,
-    ) -> Float[torch.Tensor, "batch time space channels"]:
+    ) -> Float[torch.Tensor, "batch time space hidden_size"]:
         qkv = self.qkv(x)
         q, k, v = einops.rearrange(
             qkv,
