@@ -41,6 +41,7 @@ from typing import Any, Literal, cast
 
 import hydra
 import torch
+import torch.distributed as dist
 from datasets import build_dataloaders
 from loss import LossCalculator
 from metrics import MetricCalculator, resolve_metrics
@@ -117,6 +118,53 @@ def _to_float_dicts(
     return (
         dict(zip(loss_keys, flat[:n_loss])),
         dict(zip(metric_keys, flat[n_loss:])),
+    )
+
+
+def _reduce_and_average_epoch(
+    total_loss: float,
+    losses_td: TensorDict | None,
+    metrics_td: TensorDict | None,
+    n_local: int,
+    *,
+    device: torch.device | str,
+) -> tuple[float, dict[str, float], dict[str, float]]:
+    """Average epoch loss/metric *sums* over the GLOBAL sample count.
+
+    The per-rank loop accumulates *sums* of per-step (per-sample, since
+    ``batch_size == 1``) losses and metrics. This packs ``total_loss``,
+    the local sample count, and every loss/metric leaf into one float32
+    tensor, all-reduces it once (SUM) when running distributed, then
+    divides by the reduced count. One collective + one D2H. Correct for
+    uneven per-rank shards (``global_sum / global_count``) and
+    deadlock-free (invoked once after the per-rank loops finish, not per
+    step). The single-process path is identical to the previous
+    ``sum / n_local`` averaging.
+    """
+    if losses_td is None or metrics_td is None:
+        return total_loss / max(n_local, 1), {}, {}
+    loss_keys = cast(list[str], list(losses_td.keys()))
+    metric_keys = cast(list[str], list(metrics_td.keys()))
+    leaves = cast(
+        list[torch.Tensor], list(losses_td.values()) + list(metrics_td.values())
+    )
+    ### [total_loss, n_local, *loss_sums, *metric_sums] -> one collective.
+    packed = torch.cat(
+        [
+            torch.tensor([total_loss, float(n_local)], device=device),
+            torch.stack(leaves).float().to(device),
+        ]
+    )
+    if dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1:
+        dist.all_reduce(packed)
+    reduced_loss, reduced_n, *leaf_sums = packed.tolist()
+    n = max(reduced_n, 1.0)
+    n_loss = len(loss_keys)
+    averaged = [v / n for v in leaf_sums]
+    return (
+        reduced_loss / n,
+        dict(zip(loss_keys, averaged[:n_loss])),
+        dict(zip(metric_keys, averaged[n_loss:])),
     )
 
 
@@ -401,8 +449,16 @@ def _run_epoch(
 
     epoch_dt = time.perf_counter() - epoch_t0
     n = max(n_batches, 1)
-    avg_loss = total_loss / n
-    avg_losses, avg_metrics = _to_float_dicts(total_losses_td, total_metrics_td, n=n)
+    ### Reduce the epoch sums + sample count across ranks once, so logged
+    ### loss/metrics are the GLOBAL averages (not rank-0's shard) under
+    ### DDP. `n` above is kept local for the per-rank step-rate line below.
+    avg_loss, avg_losses, avg_metrics = _reduce_and_average_epoch(
+        total_loss,
+        total_losses_td,
+        total_metrics_td,
+        n_batches,
+        device=dist_manager.device,
+    )
 
     logger.info(
         f"Epoch {epoch} {mode} done in {epoch_dt:.1f}s "

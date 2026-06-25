@@ -35,7 +35,6 @@ from collections.abc import Callable, Sequence
 from typing import Literal, TypeAlias, cast
 
 import torch
-import torch.distributed as dist
 from jaxtyping import Float
 from omegaconf import DictConfig, OmegaConf
 from tensordict import TensorDict
@@ -218,22 +217,6 @@ class MetricCalculator:
             for m in self.metric_names
         }
 
-    def _all_reduce(self, metrics: TensorDict) -> TensorDict:
-        if self.process_group is None:
-            return metrics
-        world_size = dist.get_world_size(self.process_group)
-        if world_size == 1:
-            return metrics
-        ### Single all_reduce over a stacked 1-D tensor (vs. one comm
-        ### per leaf) -- one collective beats N regardless of the
-        ### container type. Rebuild a TensorDict from the reduced
-        ### stack so callers see the same per-key access pattern.
-        keys = list(metrics.keys())
-        stacked = torch.stack([metrics[k] for k in keys])
-        dist.all_reduce(stacked, group=self.process_group)
-        stacked = stacked / world_size
-        return TensorDict({k: stacked[i] for i, k in enumerate(keys)}, batch_size=[])
-
     def __call__(
         self,
         pred: TensorDict,
@@ -284,7 +267,7 @@ class MetricCalculator:
                     t_mag = torch.linalg.vector_norm(t, dim=-1)
                     out.update(self._metrics_for_tensor(p_mag, t_mag, (name,)))
 
-        return self._all_reduce(TensorDict(out, batch_size=[]))
+        return TensorDict(out, batch_size=[])
 
     def __repr__(self) -> str:
         fields_str = ", ".join(f"{n}:{t}" for n, t in self.target_config.items())
