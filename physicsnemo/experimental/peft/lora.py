@@ -28,20 +28,19 @@ merge machinery picks it up unchanged.
 
 from __future__ import annotations
 
+import importlib
 import math
 from typing import Callable
 
 import torch
 import torch.nn as nn
 
+from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.experimental.peft.config import LoRAInit
 
-try:  # Transformer Engine is optional.
-    import transformer_engine.pytorch as te
-
-    _TE_AVAILABLE = True
-except ImportError:  # pragma: no cover - depends on environment
-    _TE_AVAILABLE = False
+# Transformer Engine is an optional dependency.
+_TE_AVAILABLE = check_version_spec("transformer_engine", "0.1.0", hard_fail=False)
+te = importlib.import_module("transformer_engine.pytorch") if _TE_AVAILABLE else None
 
 
 def _resolve_lora_a_init(init: LoRAInit) -> Callable[[torch.Tensor], None]:
