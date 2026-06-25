@@ -826,7 +826,7 @@ class Mesh:
                     f"Current codimension: {self.codimension}"
                 )
             relative_vectors = (
-                self.points[self.cells[:, 1:]] - self.points[self.cells[:, [0]]]
+                self.points[self.cells[:, 1:]] - self.points[self.cells[:, 0:1]]
             )
             cached = compute_cell_normals(relative_vectors)
             self._cache["cell", "normals"] = cached

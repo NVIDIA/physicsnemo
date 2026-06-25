@@ -515,16 +515,37 @@ def _edge_pseudonormals(
         dim=1,
     ).reshape(-1, 2)
     edges, _ = torch.sort(edges, dim=1)  # canonical (lo, hi) per edge
-    unique_edges, inverse = torch.unique(edges, dim=0, return_inverse=True)
+
+    # Group coincident edges WITHOUT ``torch.unique(edges, dim=0)``: that call
+    # reads the unique-row count back to the host to size its output, forcing a
+    # D2H sync that stalls the SDF prep stream (it can no longer overlap the
+    # compute stream). Instead, lexicographically sort the canonical ``(lo, hi)``
+    # rows -- two stable ``argsort``s on int64 columns, both sync-free because
+    # their output size is the static ``m`` -- so identical edges become
+    # adjacent. Contiguous group ids then follow from a cumsum over a
+    # "row changed" mask. No host readback anywhere on the path.
+    m = edges.shape[0]
+    lo, hi = edges[:, 0], edges[:, 1]
+    order_hi = torch.argsort(hi, stable=True)
+    order = order_hi[torch.argsort(lo[order_hi], stable=True)]  # lexsort by (lo, hi)
+    lo_s, hi_s = lo[order], hi[order]
+    is_new = torch.ones(m, dtype=torch.bool, device=edges.device)
+    is_new[1:] = (lo_s[1:] != lo_s[:-1]) | (hi_s[1:] != hi_s[:-1])
+    group = (
+        torch.cumsum(is_new.to(torch.long), 0) - 1
+    )  # contiguous edge id per sorted row
 
     # Each face donates its normal to all three of its edges (same face-major
-    # order as ``edges``), accumulated per unique edge then gathered back.
+    # order as ``edges``). Accumulate per group into a buffer sized to the static
+    # upper bound ``m`` (>= number of unique edges; unused tail rows stay zero),
+    # gather each instance's group sum, then scatter back to the original
+    # (unsorted) edge order so the table lines up with ``[face, local edge]``.
     fn_per_edge = face_normals.repeat_interleave(3, dim=0)  # (3 n_faces, 3)
-    edge_accum = torch.zeros(
-        unique_edges.shape[0], 3, dtype=face_normals.dtype, device=face_normals.device
-    )
-    edge_accum.index_add_(0, inverse, fn_per_edge)
-    return edge_accum[inverse].reshape(n_faces, 3, 3)
+    edge_accum = torch.zeros(m, 3, dtype=face_normals.dtype, device=face_normals.device)
+    edge_accum.index_add_(0, group, fn_per_edge[order])
+    pseudo = torch.empty_like(fn_per_edge)
+    pseudo[order] = edge_accum[group]  # each instance -> sum over its coincident edges
+    return pseudo.reshape(n_faces, 3, 3)
 
 
 def _pseudo_normal_sign(

@@ -567,6 +567,59 @@ def test_sdf_pseudo_normal_sign_correct_at_sharp_edges(device):
 
 
 # ---------------------------------------------------------------------------
+# Edge pseudo-normal grouping: the default (pseudo-normal) sign path sums the
+# incident face normals per edge. The grouping was rewritten to avoid
+# ``torch.unique(edges, dim=0)`` (a host sync that stalled the SDF prep stream),
+# so it must still match a direct ``torch.unique`` reference exactly.
+# ---------------------------------------------------------------------------
+
+
+def _edge_pseudonormals_unique_reference(
+    tri_faces: torch.Tensor, face_normals: torch.Tensor
+) -> torch.Tensor:
+    """Reference edge pseudo-normals via ``torch.unique`` (the pre-rewrite path)."""
+    n_faces = tri_faces.shape[0]
+    v0, v1, v2 = tri_faces[:, 0], tri_faces[:, 1], tri_faces[:, 2]
+    edges = torch.stack(
+        [
+            torch.stack([v0, v1], dim=1),
+            torch.stack([v1, v2], dim=1),
+            torch.stack([v2, v0], dim=1),
+        ],
+        dim=1,
+    ).reshape(-1, 2)
+    edges, _ = torch.sort(edges, dim=1)
+    unique_edges, inverse = torch.unique(edges, dim=0, return_inverse=True)
+    fn_per_edge = face_normals.repeat_interleave(3, dim=0)
+    edge_accum = torch.zeros(
+        unique_edges.shape[0], 3, dtype=face_normals.dtype, device=face_normals.device
+    )
+    edge_accum.index_add_(0, inverse, fn_per_edge)
+    return edge_accum[inverse].reshape(n_faces, 3, 3)
+
+
+def test_edge_pseudonormals_matches_unique_reference(device):
+    """Sync-free edge-pseudonormal grouping equals the ``torch.unique`` reference.
+
+    Exercises a closed surface with shared edges (every edge is incident to two
+    faces) so the per-edge accumulation is non-trivial.
+    """
+    from physicsnemo.mesh.spatial.sdf import _build_surface_mesh, _edge_pseudonormals
+
+    device = torch.device(device)
+    vertices, faces = _uv_sphere()
+    vertices = vertices.to(device)
+    faces = faces.to(device)
+
+    mesh, _, tri_faces = _build_surface_mesh(vertices.float(), faces)
+    face_normals = mesh.cell_normals.float()
+
+    got = _edge_pseudonormals(tri_faces, face_normals)
+    expected = _edge_pseudonormals_unique_reference(tri_faces, face_normals)
+    torch.testing.assert_close(got, expected, atol=1e-5, rtol=1e-5)
+
+
+# ---------------------------------------------------------------------------
 # Triton GPU kernel parity (CUDA-only): the kernel is the nearest-triangle fast
 # path, the pure-PyTorch bounded-stack DFS is the reference oracle.
 # ---------------------------------------------------------------------------
@@ -651,3 +704,46 @@ def test_sdf_triton_end_to_end_matches_reference(use_winding, monkeypatch):
     )
 
     torch.testing.assert_close(sdf_triton, sdf_ref, atol=1e-4, rtol=1e-4)
+
+
+@pytest.mark.skipif(not _CUDA, reason="CUDA required to check stream-sync-free SDF")
+def test_sdf_no_winding_path_is_sync_free():
+    """The default (pseudo-normal) SDF path issues no host<->device syncs.
+
+    The SDF transform runs on the dataloader's preprocessing stream; any host
+    sync (e.g. the former ``torch.unique`` in ``_edge_pseudonormals``) blocks the
+    main thread mid-enqueue and prevents the prep-stream SDF kernels from
+    overlapping the compute-stream model. ``set_sync_debug_mode("error")`` turns
+    any synchronizing CUDA call into a ``RuntimeError``, so a clean second run
+    proves the path is overlap-safe. The winding-number sign path is
+    intentionally excluded -- its ClusterTree traversal still syncs.
+    """
+    device = torch.device("cuda")
+    vertices, faces = _uv_sphere()
+    vertices = vertices.to(device)
+    faces = faces.to(device)
+
+    torch.manual_seed(0)
+    query = (torch.rand(8192, 3, device=device) * 3.0 - 1.5).float()
+
+    # Warm up OUTSIDE the guard: first-call costs (Triton autotune ``do_bench``,
+    # lazy module loading, caching-allocator growth) legitimately synchronize.
+    # The guarded run below reuses the same query shape so no new autotune key or
+    # allocation is triggered.
+    signed_distance_field_mesh(vertices, faces, query, use_sign_winding_number=False)
+    torch.cuda.synchronize()
+
+    # ``error`` mode raises on *implicit* synchronizing ops (``.item()``,
+    # ``.cpu()``, ``torch.unique``, ``nonzero`` ...) at enqueue time, so the
+    # detection does not need a trailing ``torch.cuda.synchronize()`` inside the
+    # guard -- and keeping the explicit sync outside avoids any version-specific
+    # ambiguity about whether an intentional device sync is itself flagged.
+    prev = torch.cuda.get_sync_debug_mode()
+    torch.cuda.set_sync_debug_mode("error")
+    try:
+        signed_distance_field_mesh(
+            vertices, faces, query, use_sign_winding_number=False
+        )
+    finally:
+        torch.cuda.set_sync_debug_mode(prev)
+    torch.cuda.synchronize()
