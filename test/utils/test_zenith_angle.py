@@ -100,8 +100,8 @@ _PARITY_CASES = [
     datetime(2020, 1, 15, 3, 0, 0, tzinfo=UTC).timestamp(),  # nighttime
 ]
 
-_PARITY_LONS = np.array([-90.0, 0.0, 40.0, 120.0], dtype=np.float32)
-_PARITY_LATS = np.array([-60.0, 0.0, 40.0, 80.0], dtype=np.float32)
+_PARITY_LONS = np.linspace(-180.0, 180.0, 360, dtype=np.float32, endpoint=False)
+_PARITY_LATS = np.linspace(-90.0, 90.0, 181, dtype=np.float32)
 
 
 @pytest.mark.parametrize(
@@ -117,21 +117,24 @@ _PARITY_LATS = np.array([-60.0, 0.0, 40.0, 80.0], dtype=np.float32)
     ],
 )
 @pytest.mark.parametrize("timestamp", _PARITY_CASES)
-def test_cos_zenith_angle_numpy_torch_parity(timestamp, device):
-    """numpy and torch paths must return equal float32 results."""
-    lon_np = _PARITY_LONS[:, None]  # (4, 1)
-    lat_np = _PARITY_LATS[None, :]  # (1, 4)
+@pytest.mark.parametrize("torch_dtype", [torch.float32, torch.float64])
+def test_cos_zenith_angle_numpy_torch_parity(timestamp, device, torch_dtype):
+    """numpy and torch paths must return equal float32 and float64 results."""
+    (lat_np, lon_np) = np.meshgrid(
+        _PARITY_LATS, _PARITY_LONS, indexing="ij"
+    )  # (181, 360)
 
     out_np = cos_zenith_angle_from_timestamp(timestamp, lon_np, lat_np)
 
-    lon_torch = torch.as_tensor(lon_np, dtype=torch.float32, device=device)
-    lat_torch = torch.as_tensor(lat_np, dtype=torch.float32, device=device)
+    lon_torch = torch.as_tensor(lon_np, dtype=torch_dtype, device=device)
+    lat_torch = torch.as_tensor(lat_np, dtype=torch_dtype, device=device)
     out_torch = cos_zenith_angle_from_timestamp(timestamp, lon_torch, lat_torch)
 
-    # The torch path returns float32; the numpy path returns float64 (numpy
+    # The torch path returns torch_dtype; the numpy path returns float64 (numpy
     # auto-promotes float32 arrays when multiplied with float64 scalars).
-    # Differences are bounded by float32 rounding of the float64 result.
-    np.testing.assert_allclose(out_torch.cpu().numpy(), out_np, rtol=1e-5)
+    # With torch.float32, differences are bounded by float32 rounding of the float64 result.
+    atol = 1e-5 if torch_dtype == torch.float32 else 1e-7
+    np.testing.assert_allclose(out_torch.cpu().numpy(), out_np, atol=atol)
 
 
 @pytest.mark.parametrize(
@@ -147,15 +150,17 @@ def test_cos_zenith_angle_numpy_torch_parity(timestamp, device):
     ],
 )
 @pytest.mark.parametrize("timestamp", _PARITY_CASES)
-def test_toa_numpy_torch_parity(timestamp, device):
+@pytest.mark.parametrize("torch_dtype", [torch.float32, torch.float64])
+def test_toa_numpy_torch_parity(timestamp, device, torch_dtype):
     """numpy and torch paths must return equal results for toa_incident_solar_radiation_accumulated."""
-    lat_np = _PARITY_LATS[:, None]  # (4, 1)
-    lon_np = _PARITY_LONS[None, :]  # (1, 4)
+    (lat_np, lon_np) = np.meshgrid(
+        _PARITY_LATS, _PARITY_LONS, indexing="ij"
+    )  # (181, 360)
 
     out_np = toa_incident_solar_radiation_accumulated(timestamp, lat_np, lon_np)
 
-    lat_torch = torch.as_tensor(lat_np, dtype=torch.float32, device=device)
-    lon_torch = torch.as_tensor(lon_np, dtype=torch.float32, device=device)
+    lat_torch = torch.as_tensor(lat_np, dtype=torch_dtype, device=device)
+    lon_torch = torch.as_tensor(lon_np, dtype=torch_dtype, device=device)
     out_torch = toa_incident_solar_radiation_accumulated(
         timestamp, lat_torch, lon_torch
     )
@@ -164,4 +169,5 @@ def test_toa_numpy_torch_parity(timestamp, device):
     # and numpy scalars are converted to Python floats by PyTorch, preserving
     # float32).  The numpy path promotes to float64 via numpy scalar arithmetic.
     # atol covers near-zero terminator cells where rtol alone is too strict.
-    np.testing.assert_allclose(out_torch.cpu().numpy(), out_np, rtol=1e-5, atol=1.0)
+    atol = 20.0 if torch_dtype == torch.float32 else 1.0
+    np.testing.assert_allclose(out_torch.cpu().numpy(), out_np, rtol=1e-5, atol=atol)
