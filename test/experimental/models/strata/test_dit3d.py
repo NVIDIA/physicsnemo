@@ -262,8 +262,10 @@ def test_pixeldit_constructor(config):
 
     assert isinstance(model, Module), "PixelDiT should inherit physicsnemo.Module"
     assert isinstance(model.semantic, DiT3D)
-    # The semantic output head is dropped (only forward_tokens is used).
-    assert not hasattr(model.semantic, "final_layer")
+    # The semantic stage is built headless (include_head=False): no output head,
+    # only forward_tokens is used.
+    assert model.semantic.final_layer is None
+    assert not any("final_layer" in n for n, _ in model.semantic.named_parameters())
     assert len(model.pixel_blocks) == model.num_layers_pixel
 
 
@@ -759,6 +761,30 @@ def _make_dit3d_default():
         num_layers=2,
         attn_kernel=-1,
     )
+
+
+@torch.no_grad()
+def test_dit3d_include_head_toggle():
+    """include_head=False omits the head: forward returns tokens, not a field."""
+    torch.manual_seed(0)
+    kw = dict(
+        in_channels=3,
+        input_shape=(4, 8, 8),
+        patch_size=(1, 2, 2),
+        embed_dim=32,
+        num_heads=4,
+        num_layers=2,
+        attn_kernel=-1,
+    )
+    full = DiT3D(**kw).eval()
+    headless = DiT3D(**kw, include_head=False).eval()
+    x = torch.randn(2, 3, 4, 8, 8)
+    assert full.final_layer is not None
+    assert full(x).shape == (2, 3, 4, 8, 8)  # decoded field
+    # Headless: no output head, forward returns post-block tokens (d*h*w, embed_dim).
+    assert headless.final_layer is None
+    assert headless(x).shape == (2, 4 * 4 * 4, 32)
+    assert not any("final_layer" in n for n, _ in headless.named_parameters())
 
 
 @torch.no_grad()

@@ -153,6 +153,10 @@ class DiT3D(Module):
     bf16_mixed : bool, optional, default=False
         If ``True``, run the transformer blocks under ``bfloat16`` autocast on
         CUDA. The output head always runs in fp32.
+    include_head : bool, optional, default=True
+        If ``True``, build the output head (``final_layer``) and decode to a field.
+        If ``False``, omit the head so :meth:`forward` returns post-block tokens;
+        used when the backbone is a feature trunk (e.g. inside ``PixelDiT``).
 
     Forward
     -------
@@ -220,6 +224,7 @@ class DiT3D(Module):
         rope_length_scale: float = 1.0,
         activation_checkpointing: Union[bool, float] = False,
         bf16_mixed: bool = False,
+        include_head: bool = True,
     ):
         super().__init__(meta=DiT3DMetaData())
 
@@ -315,7 +320,13 @@ class DiT3D(Module):
             self.register_buffer("_rope_cos", cos, persistent=False)
             self.register_buffer("_rope_sin", sin, persistent=False)
 
-        self.final_layer = FinalLayer3D(embed_dim, patch_size, self.out_channels)
+        # The output head is optional: PixelDiT builds the backbone headless and
+        # consumes its tokens via ``forward_tokens``, so it skips these parameters.
+        self.final_layer = (
+            FinalLayer3D(embed_dim, pd * ph * pw * self.out_channels)
+            if include_head
+            else None
+        )
         self.initialize_weights()
 
     @staticmethod
@@ -397,8 +408,9 @@ class DiT3D(Module):
         nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
         nn.init.constant_(self.patch_embed.proj.bias, 0.0)
 
-        nn.init.constant_(self.final_layer.linear.weight, 0.0)
-        nn.init.constant_(self.final_layer.linear.bias, 0.0)
+        if self.final_layer is not None:
+            nn.init.constant_(self.final_layer.linear.weight, 0.0)
+            nn.init.constant_(self.final_layer.linear.bias, 0.0)
 
     def set_tile_size(self, height: int, width: int) -> None:
         r"""Reconfigure the expected spatial tile size for a new resolution.
@@ -622,8 +634,17 @@ class DiT3D(Module):
         self,
         x: Float[torch.Tensor, "batch in_channels depth height width"],
         pos: Optional[Float[torch.Tensor, "batch 2 height width"]] = None,
-    ) -> Float[torch.Tensor, "batch out_channels depth height width"]:
+    ) -> torch.Tensor:
+        r"""Run the model, returning a decoded field (or features when headless).
+
+        With ``include_head=True`` (default) returns the decoded field of shape
+        :math:`(B, C_{out}, D, H, W)`. With ``include_head=False`` there is no
+        output head, so the post-block tokens of shape :math:`(B, N, E)` are
+        returned instead (equivalently use :meth:`forward_tokens`).
+        """
         _, _, d_in, h_in, w_in = x.shape
         tokens, _ = self.forward_tokens(x, pos)
+        if self.final_layer is None:
+            return tokens
         x = self.final_layer(tokens)
         return self.unpatchify(x, d_in, h_in, w_in)

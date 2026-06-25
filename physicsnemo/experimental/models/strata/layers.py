@@ -467,21 +467,20 @@ class PatchEmbed3D(nn.Module):
 
 
 class FinalLayer3D(nn.Module):
-    r"""Final projection head: fp32 layer norm followed by a linear patch decoder.
+    r"""Final projection head: fp32 layer norm followed by a linear decoder.
 
-    Normalizes the token features and linearly maps each token to the flattened
-    pixel block it represents (:math:`p_d \cdot p_h \cdot p_w \cdot C_{out}`
-    channels). The norm and linear run in fp32 (autocast disabled) for numerical
-    stability of the output head.
+    Normalizes the token features and linearly maps each token to ``out_features``
+    output channels. The norm and linear run in fp32 (autocast disabled) for
+    numerical stability of the output head. Shared by the patch-level decoder
+    (``out_features = p_d * p_h * p_w * C_out``, later unpatchified to a field) and
+    the pixel-level decoder (``out_features = C_out``).
 
     Parameters
     ----------
     hidden_size : int
         Token embedding dimension.
-    patch_size : Tuple[int, int, int]
-        The ``(p_d, p_h, p_w)`` patch size used by the tokenizer.
-    out_chans : int
-        Number of output field channels :math:`C_{out}`.
+    out_features : int
+        Number of output channels produced per token.
 
     Forward
     -------
@@ -491,25 +490,17 @@ class FinalLayer3D(nn.Module):
     Outputs
     -------
     torch.Tensor
-        Per-token patch pixels of shape
-        :math:`(B, N, p_d \cdot p_h \cdot p_w \cdot C_{out})`.
+        Per-token outputs of shape :math:`(B, N, \text{out\_features})`.
     """
 
-    def __init__(
-        self,
-        hidden_size: int,
-        patch_size: Tuple[int, int, int],
-        out_chans: int,
-    ):
+    def __init__(self, hidden_size: int, out_features: int):
         super().__init__()
         self.norm = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.linear = nn.Linear(
-            hidden_size, patch_size[0] * patch_size[1] * patch_size[2] * out_chans
-        )
+        self.linear = nn.Linear(hidden_size, out_features)
 
     def forward(
         self, x: Float[torch.Tensor, "batch tokens hidden_size"]
-    ) -> Float[torch.Tensor, "batch tokens patch_pixels"]:
+    ) -> Float[torch.Tensor, "batch tokens out_features"]:
         # Force the output head to fp32 regardless of any outer autocast context.
         # Match the linear input to the weight dtype so the model also works when
         # cast wholesale to bf16/half (model.bfloat16()); under fp32 weights (the

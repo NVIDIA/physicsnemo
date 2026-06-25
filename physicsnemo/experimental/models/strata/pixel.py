@@ -47,9 +47,15 @@ from physicsnemo.nn.module.mlp_layers import Mlp
 from .coords import build_axial_token_coords, build_stereographic_token_coords
 from .depthwise_conv import DepthwiseConv
 from .dit3d import DiT3D
-from .layers import DiT3DBlock, Natten3DSelfAttention, PatchEmbed3D, RopeTables
+from .layers import (
+    DiT3DBlock,
+    FinalLayer3D,
+    Natten3DSelfAttention,
+    PatchEmbed3D,
+    RopeTables,
+)
 
-__all__ = ["PixelDiT", "PixelDiTMetaData", "PixelDiTBlock", "PixelDiTLastLayer"]
+__all__ = ["PixelDiT", "PixelDiTMetaData", "PixelDiTBlock"]
 
 
 @dataclass
@@ -415,47 +421,6 @@ class PixelDiTBlock(nn.Module):
         return x
 
 
-class PixelDiTLastLayer(nn.Module):
-    r"""Output head for the pixel pathway: fp32 layer norm then linear projection.
-
-    No adaptive layer norm is applied here; all conditioning has already been
-    injected by the :class:`PixelDiTBlock` layers.
-
-    Parameters
-    ----------
-    hidden_size : int
-        Pixel-pathway embedding dimension.
-    out_chans : int
-        Number of output field channels.
-
-    Forward
-    -------
-    x : torch.Tensor
-        Pixel tokens of shape :math:`(B, N, \text{hidden\_size})`.
-
-    Outputs
-    -------
-    torch.Tensor
-        Per-pixel outputs of shape :math:`(B, N, \text{out\_chans})`.
-    """
-
-    def __init__(self, hidden_size: int, out_chans: int):
-        super().__init__()
-        self.norm = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.linear = nn.Linear(hidden_size, out_chans)
-
-    def forward(
-        self, x: Float[torch.Tensor, "batch pixels hidden_size"]
-    ) -> Float[torch.Tensor, "batch pixels out_chans"]:
-        # Force the output head to fp32 regardless of any outer autocast context.
-        # Match the linear input to the weight dtype so the model also works when
-        # cast wholesale to bf16/half; under fp32 weights the cast is a no-op.
-        with torch.autocast(device_type=x.device.type, enabled=False):
-            x = self.norm(x.float())
-            x = self.linear(x.to(self.linear.weight.dtype))
-        return x
-
-
 class PixelDiT(Module):
     r"""Two-stage 3D transformer regression model with pixel-wise conditioning.
 
@@ -616,11 +581,11 @@ class PixelDiT(Module):
 
         ### Stage 1: semantic DiT3D, built from the provided config.
         semantic_config = dict(semantic_config or {})
+        # Build the semantic stage as a headless feature trunk: only its
+        # forward_tokens output is used here, so force include_head=False to avoid
+        # creating unused output-head parameters (no DDP unused-parameter issues).
+        semantic_config["include_head"] = False
         self.semantic = DiT3D(**semantic_config)
-        # The semantic output head is never used here (only forward_tokens is);
-        # drop it so it does not create unused parameters under DDP. Removal is
-        # symmetric across save / load because reconstruction rebuilds then drops.
-        del self.semantic.final_layer
 
         depth, height, width = (
             self.semantic.depth,
@@ -731,7 +696,7 @@ class PixelDiT(Module):
             blocks = [_make_adaln_block() for _ in range(num_layers_pixel)]
         self.pixel_blocks = nn.ModuleList(blocks)
 
-        self.pixel_final_layer = PixelDiTLastLayer(embed_dim_pixel, out_channels)
+        self.pixel_final_layer = FinalLayer3D(embed_dim_pixel, out_channels)
 
         # Pixel-pathway RoPE. Axial coords are static; stereographic coords are
         # computed per forward via the shared geometry helpers in ``coords.py``

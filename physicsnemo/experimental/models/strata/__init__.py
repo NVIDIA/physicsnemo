@@ -45,8 +45,8 @@ PixelDiTMetaData
     Metadata for :class:`PixelDiT`.
 Natten3DSelfAttention, DiT3DBlock, PatchEmbed3D, FinalLayer3D
     Building-block layers used by the models.
-PixelDiTBlock, PixelDiTLastLayer
-    Building-block layers used by :class:`PixelDiT`.
+PixelDiTBlock
+    Building-block layer used by :class:`PixelDiT`.
 
 Examples
 --------
@@ -73,7 +73,7 @@ from .layers import (
     Natten3DSelfAttention,
     PatchEmbed3D,
 )
-from .pixel import PixelDiT, PixelDiTBlock, PixelDiTLastLayer, PixelDiTMetaData
+from .pixel import PixelDiT, PixelDiTBlock, PixelDiTMetaData
 
 __all__ = [
     "DiT3D",
@@ -85,5 +85,4 @@ __all__ = [
     "PatchEmbed3D",
     "FinalLayer3D",
     "PixelDiTBlock",
-    "PixelDiTLastLayer",
 ]
