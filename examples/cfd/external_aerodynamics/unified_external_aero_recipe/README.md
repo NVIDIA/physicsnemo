@@ -1,13 +1,9 @@
 <!-- markdownlint-disable -->
 # Unified External Aerodynamics Recipe
 
-> This unified recipe is still under some final polishing but nearly
-> completed.  Feel free to used it and experiment.  In the meantime,
-> be wary of sharp edges!
-
 ## Introduction
 
-External Aerodynamic recipes in physicsnemo have proliferated: we have
+External aerodynamics recipes in PhysicsNeMo have proliferated: we have
 a number of recipes, across a range of models, all working on different models
 with unique data handling, pipelines, model architectures, metrics, training
 paradigms, etc.  While there is nothing wrong with that, it does make comparison
@@ -16,10 +12,10 @@ we have unified the external aerodynamic recipes for our best models, including
 GLOBE (our newest model, designed for large 3D use cases).
 
 Here, you're able to train (and run inference with) the following models:
+- [DoMINO](https://arxiv.org/abs/2501.13350) coming soon
 - [Transolver](https://arxiv.org/abs/2402.02366)
 - [GeoTransolver](https://arxiv.org/abs/2512.20399), optionally using the [FLARE](https://arxiv.org/abs/2508.12594) attention mechanism backend
 - [GLOBE](https://arxiv.org/abs/2511.15856)
-- DoMINO is coming shortly
 
 We currently support the following datasets:
 - DrivaerML
@@ -33,21 +29,15 @@ PhysicsNeMo-Curator:
 
 ## Dataset Handling
 
-The data processing pipeline in this example explicitly performs non dimensionalization
-of input data to unitless fields for model inputs.  Check out the yaml configurations
-in `datasets/` to see examples; the reference freestream conditions
-(`U_inf`, `rho_inf`, `p_inf`, ...) are stored per-sample in each data
-file's `global_data` and read directly from there by
-`MeshReaderWithGlobalData`.  Because datasets are non-dimensionalized, and are loaded
-with the physicsnemo datapipes which support a MultiDataset abstraction, it's 
-possible to merge datasets on-the-fly during training to perform multi-dataset
-training.  We at PhysicsNeMo haven't extensively explored all of the parameters
-of this multi-dataset training yet, but the infrastructure can support it and
-we welcome you to try it if you're interested in it.
-
-Dataset non dimensionalization is handled in the `nondim.py` transformation, which
-is part of the data transformation pipeline.  See `src/nondim.py` in this example
-for the source code.
+The pipeline non-dimensionalizes raw fields to unitless model inputs
+(see the YAML configs in `datasets/`). Per-sample reference freestream
+conditions (`U_inf`, `rho_inf`, `p_inf`, ...) live in each file's
+`global_data` and are read by `MeshReaderWithGlobalData`. Because the
+datasets are non-dimensionalized and loaded through the PhysicsNeMo
+datapipes' `MultiDataset` abstraction, you can merge datasets on the fly
+for multi-dataset training; the infrastructure supports it, though we
+haven't extensively tuned it. Non-dimensionalization itself is the
+`NonDimensionalizeByMetadata` transform in `src/nondim.py`.
 
 ## Quick start
 
@@ -78,18 +68,16 @@ GLOBE, multi-dataset Transolver, HiLift, DoMINO), see the
 
 ## Pipeline architecture
 
-Each dataset gets its own `MeshDataset` or `DomainMeshDataset` with an
-ordered chain of `MeshTransform` steps defined in YAML. Multiple
-datasets are then merged via `MultiDataset`. The pipeline is
+Each dataset gets its own `MeshDataset` / `DomainMeshDataset` with an
+ordered chain of `MeshTransform` steps defined in YAML; multiple
+datasets are merged via `MultiDataset`. The pipeline is
 **DomainMesh-native end-to-end**: every dataset YAML produces a
-`DomainMesh` whose `interior` describes "where to predict" (a point
-cloud at cell centroids for surface configs; the volume mesh for
-volume configs) and whose `boundaries` describe "what the inputs are".
-Each model YAML's `forward_kwargs:` block then declaratively maps
-DomainMesh paths into the model's `forward()` kwargs, with the recipe
-collate either passing those values through directly (for mesh-native
-models like GLOBE) or batch-wrapping them into `(B, N, C)` tensors
-(for transformer-style models).
+`DomainMesh` (see the
+[DomainMesh contract](#domainmesh-contract-and-the-data-to-model-mapping)),
+and each model YAML's `forward_kwargs:` block declaratively maps
+DomainMesh paths into the model's `forward()` kwargs. The recipe collate
+either passes those values through (mesh-native models like GLOBE) or
+batch-wraps them into `(B, N, C)` tensors (transformer-style models).
 
 ```mermaid
 flowchart LR
@@ -115,16 +103,14 @@ flowchart LR
 
 - **Freestream conditions on `global_data`** — Each sample's freestream
   conditions (`U_inf`, `rho_inf`, `p_inf`, `nu`, `L_ref`, and `T_inf`
-  for compressible datasets) are embedded directly in the data files'
-  `global_data` at conversion time, at the **domain level** of each
-  `.pdmsh` / `.pmsh`. Downstream transforms like
-  `NonDimensionalizeByMetadata` read them straight off the loaded
-  sample. The surface configs read a boundary `Mesh`
-  directly out of the parent DomainMesh's on-disk tensordict tree; the
-  boundary's own `global_data` is typically empty, so those configs use
-  the recipe-local `MeshReaderWithGlobalData` to merge the domain-level 
-  `global_data`  onto each boundary at load time (`merge_global_data_from:
-  "../../global_data"`).
+  for compressible datasets) are embedded at the **domain level** of each
+  `.pdmsh` / `.pmsh` at conversion time, so transforms like
+  `NonDimensionalizeByMetadata` read them straight off the loaded sample.
+  Surface configs read a boundary `Mesh` whose own `global_data` is
+  typically empty, so they use the recipe-local
+  `MeshReaderWithGlobalData` to merge the domain-level `global_data` onto
+  each boundary at load time. See [Design decisions](#design-decisions)
+  for the rationale.
 
 - **DropMeshFields** — Removes fields that are not needed for training
   (e.g. `TimeValue` in DrivaerML) to reduce memory and avoid schema
@@ -149,16 +135,12 @@ flowchart LR
     - Pressure → Cp: `(p - p_inf) / q_inf` where `q_inf = 0.5 * rho_inf * |U_inf|²`
     - Wall shear stress → Cf: `tau / q_inf`
     - Velocity → `U / |U_inf|`
-  
-  Also supports temperature, density, and identity (pass-through) field
-  types.  Provides an `inverse()` method for re-dimensionalizing
-  predictions.
 
-  Note that for input points, we non-dimensionalize by a reference scalar `L_ref`.
-  In some recipes, the x/y/z axes are all scaled to unit-scale independently.
-  Here, we've made a conscious decision to maintain the aspect ratios of the input
-  positions and vectors deliberately use a scalar parameter for coordinate
-  non-dimensionalization.  
+  Also supports temperature, density, and identity (pass-through) field
+  types, and provides an `inverse()` for re-dimensionalizing predictions.
+  Input points are non-dimensionalized by a single reference scalar
+  `L_ref` (rather than scaling x/y/z independently) so geometry aspect
+  ratios are preserved.
 
 - **ComputeSDFFromBoundary** — Volume pipelines only.  Computes a
   signed distance field (and surface normals) from an auxiliary STL
@@ -193,33 +175,12 @@ flowchart LR
 
 - **MeshToDomainMesh** — Terminal transform for surface dataset YAMLs
   (volume YAMLs already produce a `DomainMesh` natively via
-  `DomainMeshReader`). Converts the single surface `Mesh` into a
-  `DomainMesh(interior, boundaries={"vehicle": ...}, global_data)`
-  per the recipe's prediction-vs-input contract: `interior` is a
-  `Mesh[0, n_spatial_dims]` point cloud at the cell centroids carrying
-  the prediction targets in `point_data`; `boundaries["vehicle"]` is
-  the original triangulated surface with non-target cell features
-  (e.g. precomputed normals from `ComputeSurfaceNormals`) preserved
-  in `cell_data`. The dataset builder auto-injects
-  `cell_data_targets` from the YAML's `targets:` block, so users
-  don't list field names twice.
-
-## Non-dimensionalization and normalization
-
-The pipeline applies two layers of field conditioning:
-
-1. **Physics-based non-dimensionalization** (`NonDimensionalizeByMetadata`)
-   converts raw simulation outputs to standard aerodynamic coefficients
-   (Cp, Cf) or non-dimensional velocity.  This is essential when
-   combining datasets that may use different freestream conditions, fluid
-   properties, or unit conventions.  The freestream conditions (`U_inf`,
-   `rho_inf`, `p_inf`, optional `T_inf`, `L_ref`) are stored per-sample
-   in each data file's `global_data` and read directly from there.
-
-2. **Statistical normalization** (`NormalizeMeshFields`) applies z-score
-   scaling so that all field values fed to the model have roughly zero
-   mean and unit variance.  Statistics are specified inline in the dataset
-   YAML config or loaded from a `.pt` file.
+  `DomainMeshReader`). Converts the surface `Mesh` into a
+  `DomainMesh(interior, boundaries={"vehicle": ...}, global_data)` per
+  the prediction-vs-input contract described under
+  [DomainMesh contract](#domainmesh-contract-and-the-data-to-model-mapping).
+  The dataset builder auto-injects `cell_data_targets` from the YAML's
+  `targets:` block, so users don't list field names twice.
 
 ## Model and training
 
@@ -338,10 +299,6 @@ Pick one of each on the CLI:
 python src/train.py model=<one of above> dataset=<one of above>
 ```
 
-The full list of canonical CLI invocations for the previously-named
-recipes (FA variants, GLOBE, multi-dataset Transolver, HiLift, DoMINO)
-is in the [Recipe Gallery](#recipe-gallery) section below.
-
 To add a new model, drop a new template under `conf/model/` declaring
 `input_type`, `output_type`, `forward_kwargs`, and the `model:` block.
 No registry edits needed.
@@ -380,23 +337,11 @@ cd examples/cfd/external_aerodynamics/unified_external_aero_recipe
 
 ### Train
 
-```bash
-# Single GPU (default: GeoTransolver / DrivAerML volume)
-python src/train.py
-
-# Pick a different model and/or dataset
-python src/train.py model=transolver_surface dataset=drivaer_ml_surface
-
-# Multi-GPU
-torchrun --nproc_per_node=N src/train.py
-
-# Override config values
-python src/train.py precision=float32 training.num_epochs=100
-```
-
-Supports checkpointing (auto-resume), TensorBoard + JSONL logging,
-mixed precision (float16/bfloat16),
-`torch.compile`, and NVIDIA profiling.
+See [Quick start](#quick-start) for the common invocations and the
+[Recipe Gallery](#recipe-gallery) for every named recipe. Training
+supports checkpointing (auto-resume), TensorBoard + JSONL logging,
+mixed precision (float16/bfloat16), `torch.compile`, and NVIDIA
+profiling.
 
 ### Infer
 
@@ -459,10 +404,8 @@ Measures per-sample load time and throughput without running the model.
 A single canonical `conf/train.yaml` drives every training run. It picks
 one entry from `conf/model/` and one dataset from `datasets/` via
 Hydra-style `model=...` and `dataset=...` overrides, applies the
-centralized training schedule, and runs the loop. Every previously-named
-recipe (FA variants, GLOBE, multi-dataset Transolver, HiLift, DoMINO) is
-reproducible from CLI overrides — see the
-[Recipe Gallery](#recipe-gallery) for the canonical invocations.
+centralized training schedule, and runs the loop. Every named recipe is
+reproducible from CLI overrides.
 
 ```text
 unified_external_aero_recipe/

@@ -40,7 +40,6 @@ from contextlib import nullcontext
 from typing import Any, Literal, cast
 
 import hydra
-import omegaconf
 import torch
 from datasets import build_dataloaders
 from loss import LossCalculator
@@ -672,7 +671,7 @@ def main(cfg: DictConfig) -> None:
     ### where `cfg.out_dim` is auto-derived from the chosen dataset's
     ### `targets:` block; resolving earlier would fail on the model
     ### template's `out_dim: ${out_dim}` interpolation.
-    logger.info(f"Config:\n{omegaconf.OmegaConf.to_yaml(cfg, resolve=True)}")
+    logger.info(f"Config:\n{OmegaConf.to_yaml(cfg, resolve=True)}")
 
     logger.info(f"Train samples: {len(train_loader.sampler)}")
     logger.info(f"Val samples: {len(val_loader.sampler)}")
@@ -761,7 +760,7 @@ def main(cfg: DictConfig) -> None:
             )
 
         # Save the full resolved config
-        resolved_yaml = omegaconf.OmegaConf.to_yaml(cfg, resolve=True)
+        resolved_yaml = OmegaConf.to_yaml(cfg, resolve=True)
         config_artifact_path = os.path.join(run_dir, "resolved_config.yaml")
         with open(config_artifact_path, "w") as f:
             f.write(resolved_yaml)
