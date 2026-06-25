@@ -273,6 +273,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added geometry functionals in `physicsnemo.nn.functional` for
   `mesh_poisson_disk_sample`, `mesh_to_voxel_fraction`, and
   `signed_distance_field`.
+- Added rendering functionals in `physicsnemo.nn.functional` for isosurface,
+  mesh, volume, LIC, point cloud, wireframe, and RGBA transfer rendering, with
+  Warp kernels for rendering and PyTorch fallbacks for transfer functions.
 - Adds embedded OOD guardrail `OODGuard` at
   `physicsnemo.experimental.guardrails.embedded`, optionally
   wired into `GeoTransolver` via a new `guard_config` constructor argument.
