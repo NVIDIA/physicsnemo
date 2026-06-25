@@ -638,7 +638,7 @@ def main(cfg: DictConfig) -> None:
         ### One JSONL row per sample -- the documented metrics.jsonl
         ### contract. Console logging below is throttled by log_every.
         record: dict[str, Any] = {
-            "phase": "sample",
+            "phase": "infer_step",
             "step": i,
             "sample_id": sample_id,
             "metrics": sample_metrics,
@@ -676,7 +676,7 @@ def main(cfg: DictConfig) -> None:
         )
         log_jsonl(
             {
-                "phase": "summary",
+                "phase": "infer_summary",
                 "space": "training",
                 "num_samples": count,
                 "metrics": averages,
@@ -697,13 +697,11 @@ def main(cfg: DictConfig) -> None:
             )
             log_jsonl(
                 {
-                    "phase": "forces_summary",
+                    "phase": "infer_forces_summary",
                     "num_samples": force_acc.count,
                     "coefficients": coeff_summary,
                 }
             )
-
-    logger.info(f"Inference complete! Predictions written to {pred_dir}")
 
 
 if __name__ == "__main__":

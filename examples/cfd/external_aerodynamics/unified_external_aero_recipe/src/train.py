@@ -53,6 +53,7 @@ from torch.amp import GradScaler
 from torch.utils.tensorboard import SummaryWriter
 from utils import (
     FieldType,
+    Phase,
     Precision,
     build_muon_optimizer,
     get_autocast_context,
@@ -484,7 +485,7 @@ def _run_epoch(
                     if log_jsonl is not None:
                         log_jsonl(
                             {
-                                "phase": "step",
+                                "phase": "train_step",
                                 "global_step": global_step,
                                 "loss": this_loss,
                                 "mem_gb": mem_gb,
@@ -540,9 +541,10 @@ def _run_epoch(
         _log_to_tensorboard(writer, avg_losses, "epoch", epoch)
         _log_to_tensorboard(writer, avg_metrics, "epoch/metrics", epoch)
         if log_jsonl is not None:
+            summary_phase: Phase = "train_summary" if is_train else "val_summary"
             log_jsonl(
                 {
-                    "phase": mode,
+                    "phase": summary_phase,
                     "epoch": epoch,
                     "loss": avg_loss,
                     **avg_losses,

@@ -99,12 +99,14 @@ def test_make_jsonl_logger_writes_timestamped_line(tmp_path):
     """Logger appends one JSON object per call, each stamped with a 'ts' field."""
     path = tmp_path / "metrics.jsonl"
     log = make_jsonl_logger(path)
-    log({"phase": "summary", "value": 1.5})
-    log({"phase": "sample", "step": 0})
+    log({"phase": "infer_summary", "value": 1.5})
+    log({"phase": "infer_step", "step": 0})
     lines = path.read_text().strip().splitlines()
     assert len(lines) == 2
     first = json.loads(lines[0])
-    assert first["phase"] == "summary" and first["value"] == 1.5 and "ts" in first
+    assert first["phase"] == "infer_summary"
+    assert first["value"] == 1.5
+    assert "ts" in first
 
 
 ### ---------------------------------------------------------------------------
