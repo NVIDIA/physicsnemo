@@ -44,10 +44,10 @@ Strata
     the backbone features, not on a diffusion timestep).
 StrataMetaData
     Metadata for :class:`Strata`.
-Natten3DSelfAttention, StrataTransformer3DBlock, PatchEmbed3D, FinalLayer3D
-    Building-block layers used by the models.
-StrataPixel3DBlock
-    Building-block layer used by :class:`Strata`.
+
+The building-block layers (``StrataTransformer3DBlock``, ``StrataPixel3DBlock``,
+``Natten3DSelfAttention``, ``PatchEmbed3D``, ``FinalLayer3D``) are not part of the
+public surface; import them from their submodules if needed.
 
 Examples
 --------
@@ -68,22 +68,11 @@ torch.Size([2, 4, 4, 8, 8])
 """
 
 from .transformer import StrataTransformer3D, StrataTransformer3DMetaData
-from .layers import (
-    StrataTransformer3DBlock,
-    FinalLayer3D,
-    Natten3DSelfAttention,
-    PatchEmbed3D,
-)
-from .strata import Strata, StrataPixel3DBlock, StrataMetaData
+from .strata import Strata, StrataMetaData
 
 __all__ = [
-    "StrataTransformer3D",
-    "StrataTransformer3DMetaData",
     "Strata",
     "StrataMetaData",
-    "Natten3DSelfAttention",
-    "StrataTransformer3DBlock",
-    "PatchEmbed3D",
-    "FinalLayer3D",
-    "StrataPixel3DBlock",
+    "StrataTransformer3D",
+    "StrataTransformer3DMetaData",
 ]
