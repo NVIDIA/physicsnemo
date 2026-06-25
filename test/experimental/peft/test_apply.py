@@ -193,6 +193,27 @@ def test_print_trainable_parameters():
     assert "trainable params" in print_trainable_parameters(m)
 
 
+def test_warns_on_selector_match_without_wrapper(caplog):
+    # A selector that matches a layer with no registered wrapper (e.g. an
+    # embedding) should warn and skip it, not silently no-op.
+    import logging
+
+    class _NetWithEmbedding(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.emb = nn.Embedding(10, 8)  # no registered LoRA wrapper
+            self.fc = nn.Linear(8, 8)
+
+    m = _NetWithEmbedding()
+    with caplog.at_level(logging.WARNING, logger="experimental.peft"):
+        res = apply_lora(m, LoRAConfig(rank=2, target_pattern=r"emb|fc"))
+
+    assert res.n_wrapped == 1  # only fc wrapped
+    assert is_lora_layer(m.fc)
+    assert not is_lora_layer(m.emb)  # embedding skipped
+    assert "emb" in caplog.text and "no wrapper is registered" in caplog.text
+
+
 def test_apply_honors_config_init():
     # config.init flows through apply_lora into the wrapper's lora_A init.
     m = _model()

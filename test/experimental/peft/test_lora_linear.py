@@ -103,6 +103,18 @@ def test_init_strategies_applied_to_lora_a():
     assert torch.allclose(g(x), g.base_layer(x), atol=1e-6)
 
 
+def test_infer_in_out_features_rejects_non_linear_base():
+    # A base with neither in_features/out_features nor a 2-D weight can't have its
+    # LoRA shapes inferred — fail loudly instead of an opaque AttributeError.
+    from physicsnemo.experimental.peft.lora import _LinearLoRALayer
+
+    class _NotLinear(nn.Module):
+        pass
+
+    with pytest.raises(TypeError, match="not Linear-like"):
+        _LinearLoRALayer._infer_in_out_features(_NotLinear())
+
+
 def test_linear_specific_helpers_not_on_generic_mixin():
     # The in/out inference + weight-folding merge are Linear-specific and live on
     # _LinearLoRALayer, so generic (non-Linear) wrappers that inherit LoRALayer

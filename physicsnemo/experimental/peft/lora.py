@@ -181,15 +181,30 @@ class _LinearLoRALayer(LoRALayer):
     @staticmethod
     def _infer_in_out_features(base_layer: nn.Module) -> tuple[int, int]:
         """Infer ``(in_features, out_features)`` from a Linear-like base via its
-        ``in_features``/``out_features`` attributes, or its ``.weight`` shape
-        ``(out, in)``."""
+        ``in_features``/``out_features`` attributes, or its 2-D ``.weight`` shape
+        ``(out, in)``.
+
+        Raises
+        ------
+        TypeError
+            If ``base_layer`` exposes neither ``in_features``/``out_features`` nor
+            a 2-D ``weight`` — its LoRA factor shapes can't be inferred, so it
+            needs a dedicated wrapper registered via ``register_lora_wrapper``
+            rather than the Linear path.
+        """
         in_f = getattr(base_layer, "in_features", None)
         out_f = getattr(base_layer, "out_features", None)
-        if in_f is None or out_f is None:
-            # Fall back to the weight shape (out, in), as for nn.Linear.
-            w = base_layer.weight
-            out_f, in_f = int(w.shape[0]), int(w.shape[1])
-        return int(in_f), int(out_f)
+        if in_f is not None and out_f is not None:
+            return int(in_f), int(out_f)
+        # Fall back to the weight shape (out, in), as for nn.Linear.
+        w = getattr(base_layer, "weight", None)
+        if getattr(w, "ndim", None) == 2:
+            return int(w.shape[1]), int(w.shape[0])
+        raise TypeError(
+            f"{type(base_layer).__name__} is not Linear-like (no in_features/"
+            "out_features and no 2-D weight), so its LoRA factor shapes can't be "
+            "inferred; register a dedicated wrapper via register_lora_wrapper."
+        )
 
     @torch.no_grad()
     def merge_into_base(self) -> None:

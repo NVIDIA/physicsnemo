@@ -102,6 +102,18 @@ def resolve_targets(model: nn.Module, config: LoRAConfig) -> list[Target]:
         if name == "" or is_lora_layer(module):
             continue
         if get_wrapper_for(module) is None:
+            # Skip layers with no registered wrapper, but warn if the user's own
+            # selector matched one (e.g. an nn.Embedding) so it isn't a silent
+            # no-op. wrap_mlp pattern matches are excluded — they intentionally
+            # sweep over norms/activations that are filtered out by type.
+            if matcher(name, module):
+                logger.warning(
+                    "LoRA selector matched %s (%s), but no wrapper is registered "
+                    "for that type; skipping it. Register one via "
+                    "register_lora_wrapper.",
+                    name,
+                    type(module).__name__,
+                )
             continue
         if not _is_target(name, module):
             continue
