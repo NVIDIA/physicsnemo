@@ -70,6 +70,7 @@ def _adapter_state_dict(model: nn.Module) -> dict:
 
 
 def _wrapped_module_names(model: nn.Module) -> list[str]:
+    """Fully-qualified names of all LoRA-wrapped submodules in ``model``."""
     return [name for name, m in model.named_modules() if is_lora_layer(m)]
 
 

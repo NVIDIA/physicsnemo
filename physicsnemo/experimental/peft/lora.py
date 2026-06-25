@@ -145,6 +145,9 @@ class LoRALayer:
         _resolve_lora_a_init(init)(self.lora_A)
 
     def lora_delta(self, x: torch.Tensor) -> torch.Tensor:
+        """The low-rank update added to the base output:
+        ``((dropout(x) @ lora_A) @ lora_B) * scaling``. Zero at init since
+        ``lora_B`` starts at zero."""
         return ((self.lora_dropout(x) @ self.lora_A) @ self.lora_B) * self.scaling
 
 
@@ -177,6 +180,9 @@ class _LinearLoRALayer(LoRALayer):
 
     @staticmethod
     def _infer_in_out_features(base_layer: nn.Module) -> tuple[int, int]:
+        """Infer ``(in_features, out_features)`` from a Linear-like base via its
+        ``in_features``/``out_features`` attributes, or its ``.weight`` shape
+        ``(out, in)``."""
         in_f = getattr(base_layer, "in_features", None)
         out_f = getattr(base_layer, "out_features", None)
         if in_f is None or out_f is None:
@@ -198,7 +204,27 @@ class _LinearLoRALayer(LoRALayer):
 
 
 class LoRALinear(nn.Module, _LinearLoRALayer):
-    """LoRA wrapper for ``torch.nn.Linear``."""
+    """LoRA wrapper for ``torch.nn.Linear``.
+
+    Wraps a frozen ``nn.Linear`` and adds a trainable low-rank update to its
+    output (``base(x) + lora_delta(x)``). Only ``lora_A``/``lora_B`` train; the
+    base layer's weight and bias are frozen in place.
+
+    Parameters
+    ----------
+    base_layer : nn.Linear
+        The linear layer to wrap; its parameters are frozen.
+    rank : int
+        Low-rank dimension ``r`` of the adapter.
+    alpha : float
+        LoRA scaling numerator; the delta is scaled by ``alpha / rank``.
+    dropout : float, optional
+        Dropout applied to the adapter input path. Defaults to ``0.0``.
+    init : str or callable, optional
+        How ``lora_A`` is initialized (``lora_B`` is always zero). See
+        :class:`~physicsnemo.experimental.peft.config.LoRAConfig`. Defaults to
+        ``"default"`` (``kaiming_uniform_``).
+    """
 
     def __init__(
         self,
@@ -215,6 +241,7 @@ class LoRALinear(nn.Module, _LinearLoRALayer):
         self._init_lora(base_layer, rank, alpha, dropout, init)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Frozen base output plus the LoRA delta (when ``enabled``)."""
         out = self.base_layer(x)
         if self.enabled:
             out = out + self.lora_delta(x)
@@ -226,8 +253,24 @@ if _TE_AVAILABLE:
     class LoRA_te_Linear(nn.Module, _LinearLoRALayer):
         """LoRA wrapper for ``transformer_engine.pytorch.Linear``.
 
-        Passes TE-specific kwargs (e.g. ``is_first_microbatch`` for fp8)
-        through to the frozen base layer.
+        Adds a trainable low-rank update to the frozen TE linear's output, passing
+        TE-specific kwargs (e.g. ``is_first_microbatch`` for fp8) through to the
+        base layer.
+
+        Parameters
+        ----------
+        base_layer : te.Linear
+            The Transformer Engine linear layer to wrap; its parameters are frozen.
+        rank : int
+            Low-rank dimension ``r`` of the adapter.
+        alpha : float
+            LoRA scaling numerator; the delta is scaled by ``alpha / rank``.
+        dropout : float, optional
+            Dropout applied to the adapter input path. Defaults to ``0.0``.
+        init : str or callable, optional
+            How ``lora_A`` is initialized (``lora_B`` is always zero). See
+            :class:`~physicsnemo.experimental.peft.config.LoRAConfig`. Defaults to
+            ``"default"`` (``kaiming_uniform_``).
         """
 
         def __init__(
@@ -245,6 +288,8 @@ if _TE_AVAILABLE:
             self._init_lora(base_layer, rank, alpha, dropout, init)
 
         def forward(self, x: torch.Tensor, **te_kwargs) -> torch.Tensor:
+            """Frozen base output (with TE kwargs) plus the LoRA delta when
+            ``enabled``."""
             out = self.base_layer(x, **te_kwargs)
             if self.enabled:
                 out = out + self.lora_delta(x)
@@ -262,6 +307,21 @@ if _TE_AVAILABLE:
 
         Keeps the fused/fp8 kernel; NOT mergeable into the fused weights
         (``mergeable = False`` → merge_lora leaves it in place).
+
+        Parameters
+        ----------
+        base_layer : te.LayerNormMLP
+            The fused TE LayerNorm-MLP block to wrap; its parameters are frozen.
+        rank : int
+            Low-rank dimension ``r`` of the residual adapter.
+        alpha : float
+            LoRA scaling numerator; the residual is scaled by ``alpha / rank``.
+        dropout : float, optional
+            Dropout applied to the adapter input path. Defaults to ``0.0``.
+        init : str or callable, optional
+            How ``lora_A`` is initialized (``lora_B`` is always zero). See
+            :class:`~physicsnemo.experimental.peft.config.LoRAConfig`. Defaults to
+            ``"default"`` (``kaiming_uniform_``).
         """
 
         mergeable = False
@@ -285,6 +345,8 @@ if _TE_AVAILABLE:
             )
 
         def forward(self, x: torch.Tensor, **te_kwargs):
+            """Fused base output plus the rank-r residual when ``enabled``;
+            preserves a tuple output (e.g. ``return_bias=True``)."""
             out = self.base_layer(x, **te_kwargs)
             if not self.enabled:
                 return out
@@ -294,6 +356,8 @@ if _TE_AVAILABLE:
             return out + delta
 
         def merge_into_base(self) -> None:  # pragma: no cover - guarded by mergeable
+            """Not supported: the residual can't be folded into the fused weights
+            (so ``mergeable`` is ``False`` and merge_lora never calls this)."""
             raise NotImplementedError(
                 "LoRA_te_LayerNormMLP is a sub-block residual and cannot be merged "
                 "into the fused te.LayerNormMLP weights; keep the adapter un-merged."
@@ -315,32 +379,66 @@ def register_lora_wrapper(
     This is how new architectures (e.g. equivariant, tensor, or MoE layers) plug
     in without touching the targeting / apply / merge core.
 
-    ``wrapper_factory`` is called as
-    ``wrapper_factory(base_layer, rank=, alpha=, dropout=)`` and must return an
-    ``nn.Module`` that subclasses :class:`LoRALayer` (see its docstring for the
-    full attribute/method contract). The subclass requirement is enforced by
-    ``apply_lora``: freeze/save/merge identify LoRA layers via
-    ``isinstance(module, LoRALayer)``, so a wrapper that does not subclass it
-    would otherwise be silently skipped.
+    Parameters
+    ----------
+    layer_type : type
+        The base layer class to wrap (e.g. a custom ``nn.Module`` subclass).
+        Matched against each module's MRO, so subclasses are handled too.
+    wrapper_factory : Callable[..., nn.Module]
+        Called as ``wrapper_factory(base_layer, rank=, alpha=, dropout=, init=)``
+        and must return an ``nn.Module`` that subclasses :class:`LoRALayer` (see
+        its docstring for the full attribute/method contract). The subclass
+        requirement is enforced by ``apply_lora``: freeze/save/merge identify LoRA
+        layers via ``isinstance(module, LoRALayer)``, so a wrapper that does not
+        subclass it would otherwise be silently skipped.
     """
     _LORA_WRAPPERS[layer_type] = wrapper_factory
 
 
 def get_wrapper_for(module: nn.Module) -> Callable[..., nn.Module] | None:
-    """Return the registered wrapper for ``module`` (walking the MRO so that
-    subclasses of a registered type are handled), or ``None`` if not wrappable.
+    """Return the registered LoRA wrapper factory for ``module``, or ``None``.
+
+    Parameters
+    ----------
+    module : nn.Module
+        The candidate base layer to wrap.
+
+    Returns
+    -------
+    Callable[..., nn.Module] or None
+        The registered wrapper factory for ``module``'s type, found by walking its
+        MRO (so subclasses of a registered type are handled), or ``None`` if no
+        registered type matches (i.e. the module is not wrappable).
     """
-    for klass in type(module).__mro__:
-        if klass in _LORA_WRAPPERS:
-            return _LORA_WRAPPERS[klass]
+    for _class in type(module).__mro__:
+        if _class in _LORA_WRAPPERS:
+            return _LORA_WRAPPERS[_class]
     return None
 
 
 def wrappable_types() -> tuple[type, ...]:
-    """The layer types currently registered as wrappable."""
+    """Return the layer types currently registered as wrappable.
+
+    Returns
+    -------
+    tuple[type, ...]
+        The registered base layer types (e.g. ``nn.Linear`` and, when available,
+        the Transformer Engine types).
+    """
     return tuple(_LORA_WRAPPERS)
 
 
 def is_lora_layer(module: nn.Module) -> bool:
-    """Whether ``module`` is a LoRA wrapper."""
+    """Return whether ``module`` is a LoRA wrapper.
+
+    Parameters
+    ----------
+    module : nn.Module
+        The module to test.
+
+    Returns
+    -------
+    bool
+        ``True`` if ``module`` is a :class:`LoRALayer` instance.
+    """
     return isinstance(module, LoRALayer)

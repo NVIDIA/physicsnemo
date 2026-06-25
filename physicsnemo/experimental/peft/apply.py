@@ -92,6 +92,8 @@ def resolve_targets(model: nn.Module, config: LoRAConfig) -> list[Target]:
     )
 
     def _is_target(name: str, module: nn.Module) -> bool:
+        """True if ``name`` matches the config selector, or (when ``wrap_mlp``) a
+        default feed-forward pattern."""
         return matcher(name, module) or any(p.search(name) for p in mlp_patterns)
 
     modules = dict(model.named_modules())

@@ -29,7 +29,11 @@ logger = logging.getLogger("experimental.peft")
 
 
 def compute_base_fingerprint(model: nn.Module) -> str:
-    """Stable short hash of module class names + state_dict keys/shapes.
+    """Stable hash of module class names + state_dict keys/shapes.
+
+    Used only internally to detect architecture (in)compatibility between an
+    adapter and a base model — compared exact-match, not shown to users — so the
+    full SHA-256 digest is returned (no truncation, no collision risk).
 
     MUST be computed on the pristine base, *before* ``apply_lora`` wraps
     anything: after wrapping, keys gain ``base_layer.`` prefixes and the
@@ -40,7 +44,7 @@ def compute_base_fingerprint(model: nn.Module) -> str:
         h.update(f"{name}:{type(module).__name__}\n".encode())
     for key, tensor in model.state_dict().items():
         h.update(f"{key}:{tuple(tensor.shape)}\n".encode())
-    return h.hexdigest()[:16]
+    return h.hexdigest()
 
 
 def split_params_for_optimizer(model: nn.Module) -> dict[str, list]:
@@ -61,7 +65,10 @@ def split_params_for_optimizer(model: nn.Module) -> dict[str, list]:
     for p in model.parameters():
         if id(p) in lora_ids:
             continue
-        (extras if p.requires_grad else frozen).append(p)
+        if p.requires_grad:
+            extras.append(p)
+        else:
+            frozen.append(p)
     return {"lora": lora, "extras": extras, "frozen": frozen}
 
 
@@ -87,4 +94,4 @@ def set_adapter_enabled(model: nn.Module, enabled: bool) -> None:
     """
     for module in model.modules():
         if is_lora_layer(module):
-            module.enabled = bool(enabled)
+            module.enabled = enabled
