@@ -114,8 +114,23 @@ def cos_zenith_angle_from_timestamp(
 
 
 def _deg2rad(x: T, dtype: np.typing.DTypeLike | torch.dtype | None = None) -> T:
+    """Convert degrees to radians.
+
+    Parameters
+    ----------
+    x: input float, ndarray or torch.Tensor, in degrees
+    dtype: dtype to cast to; NumPy-compatible or torch-compatible dtype or None.
+        NumPy dtypes can be used with torch Tensors.
+        If None, will use the dtype of x.
+
+    Returns
+    -------
+    float, np.ndarray or torch.Tensor, x in radians, with the specified dtype
+    """
+
     if isinstance(x, torch.Tensor):
         if dtype is not None and not isinstance(dtype, torch.dtype):
+            # dtype is a numpy-compatible type; convert to the equivalent torch.dtype
             dtype = torch.from_numpy(np.empty(0, dtype=dtype)).dtype
         return torch.deg2rad(x.to(dtype=dtype))
     return np.deg2rad(x, dtype=dtype)
