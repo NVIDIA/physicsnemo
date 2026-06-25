@@ -3,7 +3,7 @@
 
 ## Introduction
 
-External Aerodynamic recipes in physicsnemo have proliferated: we have
+External aerodynamics recipes in PhysicsNeMo have proliferated: we have
 a number of recipes, across a range of models, all working on different models
 with unique data handling, pipelines, model architectures, metrics, training
 paradigms, etc.  While there is nothing wrong with that, it does make comparison
