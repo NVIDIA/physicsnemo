@@ -41,6 +41,8 @@ logger = logging.getLogger("finetune_lora.deploy")
 
 @hydra.main(version_base=None, config_path="../conf", config_name="finetune_lora")
 def main(cfg: DictConfig) -> None:
+    """Load a trained adapter onto the base for serving (adapter-swap), optionally
+    merging it into the base weights (``merge=true``) for zero-overhead inference."""
     logging.basicConfig(level=logging.INFO)
 
     # Reconstruct the SAME base architecture, then load its pretrained weights.

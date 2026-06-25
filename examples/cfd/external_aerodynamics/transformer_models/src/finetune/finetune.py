@@ -108,6 +108,8 @@ def _load_norm_factors(cfg: DictConfig, device) -> dict:
 
 @hydra.main(version_base=None, config_path="../conf", config_name="finetune_lora")
 def main(cfg: DictConfig) -> None:
+    """Run the LoRA fine-tuning recipe: load the pretrained base, inject adapters
+    and freeze the base, train only the adapters, and save a ``.lora`` adapter."""
     logging.basicConfig(level=logging.INFO)
 
     # Minimal float32 recipe: the mixed/fp8 path (autocast, fp8 input/output
