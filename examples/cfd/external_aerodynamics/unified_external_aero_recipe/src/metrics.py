@@ -39,7 +39,7 @@ import torch.distributed as dist
 from jaxtyping import Float
 from omegaconf import DictConfig, OmegaConf
 from tensordict import TensorDict
-from utils import FieldType, align_scalar_shapes, field_dim, validate_field_coverage
+from utils import FieldType, align_scalar_shapes, validate_field_coverage
 
 ### Recipe-wide alias for the metric-name enum that the dataset YAMLs use.
 MetricName: TypeAlias = Literal["mae", "l1", "l2"]
@@ -143,8 +143,6 @@ class MetricCalculator:
 
     Args:
         target_config: ``{name: scalar|vector}`` mapping.
-        process_group: Optional distributed process group for all-reduce.
-            When ``None`` (default), no reduction is performed.
         n_spatial_dims: Vector field dimensionality (used to label
             components when ``> len(VECTOR_COMPONENTS)`` falls back to
             integer indices).
@@ -156,7 +154,6 @@ class MetricCalculator:
     def __init__(
         self,
         target_config: dict[str, FieldType],
-        process_group: dist.ProcessGroup | None = None,
         n_spatial_dims: int = 3,
         metrics: Sequence[MetricName] | None = None,
         prefix: str = "",
@@ -165,7 +162,6 @@ class MetricCalculator:
         ### `FieldType` contract; copy verbatim so callers can mutate their
         ### original without affecting us.
         self.target_config: dict[str, FieldType] = dict(target_config)
-        self.process_group = process_group
         self.n_spatial_dims = n_spatial_dims
         self.metric_names = (
             list(metrics) if metrics is not None else list(DEFAULT_METRICS)
@@ -177,11 +173,6 @@ class MetricCalculator:
                 raise ValueError(
                     f"Unknown metric {m!r}; available {list(METRIC_FUNCTIONS)!r}"
                 )
-
-        ### `field_dim` raises on unknown field types, validating the config.
-        self.total_channels = sum(
-            field_dim(t, n_spatial_dims) for t in self.target_config.values()
-        )
 
     def _make_key(self, *parts: str) -> str:
         """Build a flat metric key, ``"<prefix>/<part1>_<part2>_..."``.
