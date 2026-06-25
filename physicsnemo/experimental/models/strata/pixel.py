@@ -748,6 +748,31 @@ class PixelDiT(Module):
             self.register_buffer("_rope_cos_pixel", cos, persistent=False)
             self.register_buffer("_rope_sin_pixel", sin, persistent=False)
 
+        self.initialize_weights()
+
+    def initialize_weights(self) -> None:
+        r"""Initialize the pixel-stage parameters DiT-style.
+
+        The semantic stage self-initializes, and the pixel blocks zero-initialize
+        their AdaLN projections at construction; this covers the two remaining
+        pixel components -- a fan-based Xavier init for the pixel patch-embedding
+        convolution and a zero-initialized output head -- so the pixel stage
+        starts as a near-identity residual mapping (matching
+        :meth:`DiT3D.initialize_weights`). A blanket Xavier pass is deliberately
+        avoided here so it does not clobber the AdaLN-zero projections.
+
+        Returns
+        -------
+        None
+            Modifies parameters in place.
+        """
+        w = self.pixel_patch_embed.proj.weight.data
+        nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
+        nn.init.constant_(self.pixel_patch_embed.proj.bias, 0.0)
+
+        nn.init.constant_(self.pixel_final_layer.linear.weight, 0.0)
+        nn.init.constant_(self.pixel_final_layer.linear.bias, 0.0)
+
     def _should_checkpoint_pixel_block(self, block_idx: int) -> bool:
         r"""Return whether the pixel block at ``block_idx`` should be checkpointed.
 
