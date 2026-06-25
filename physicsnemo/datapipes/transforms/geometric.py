@@ -70,7 +70,7 @@ class ComputeSDF(Transform):
     >>> sample = TensorDict({
     ...     "volume_mesh_centers": torch.randn(10000, 3),
     ...     "stl_coordinates": torch.randn(5000, 3),
-    ...     "stl_faces": torch.randint(0, 5000, (10000,))
+    ...     "stl_faces": torch.randint(0, 5000, (30000,))
     ... })
     >>> result = transform(sample)
     >>> print(result["sdf_nodes"].shape)
