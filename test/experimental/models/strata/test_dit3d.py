@@ -217,7 +217,8 @@ def test_dit3d_constructor(config):
     assert isinstance(model, Module), "DiT3D should inherit physicsnemo.Module"
     assert hasattr(model, "meta")
     assert len(model.blocks) == model.num_layers
-    assert (model.rope is None) == (model.rope_mode == "none")
+    # Axial mode caches static cos/sin buffers; stereographic builds per forward.
+    assert hasattr(model, "_rope_cos") == (model.rope_mode == "axial")
 
 
 @pytest.mark.parametrize(
@@ -911,8 +912,9 @@ def test_pixeldit_forward_rope_modes(device, sem_rope, pix_rope):
     out = model(x, pos)
     assert out.shape == (b, c, d, h, w)
     assert torch.isfinite(out).all()
-    # The pixel-stage RoPE module exists iff a pixel RoPE mode is selected.
-    assert (model.rope_pixel is None) == (pix_rope == "none")
+    # Axial pixel RoPE caches cos/sin buffers; stereographic builds them per
+    # forward and "none" builds nothing.
+    assert hasattr(model, "_rope_cos_pixel") == (pix_rope == "axial")
 
 
 @pytest.mark.parametrize("adaln_mode", ["pixel_proj", "bilinear_dw"])

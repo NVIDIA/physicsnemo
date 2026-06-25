@@ -36,7 +36,7 @@ from torch.utils.checkpoint import checkpoint as activation_checkpoint
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
-from physicsnemo.nn import StereographicRotaryPositionEmbedding2D
+from physicsnemo.experimental.nn import build_axial_rope_cos_sin_2d_continuous
 
 from .coords import build_axial_token_coords, build_stereographic_token_coords
 from .layers import (
@@ -139,9 +139,10 @@ class DiT3D(Module):
     rope_mode : Literal["none", "axial", "stereographic"], optional, default="none"
         Rotary position embedding mode. ``"axial"`` uses integer row/column
         token indices; ``"stereographic"`` uses stereographic projection of the
-        ``forward`` latitude / longitude (see :class:`~physicsnemo.nn.StereographicRotaryPositionEmbedding2D`).
+        ``forward`` latitude / longitude (see
+        :func:`~physicsnemo.experimental.nn.build_axial_rope_cos_sin_2d_continuous`).
     rope_base : float, optional, default=100.0
-        Base of the RoPE frequency progression (see :class:`~physicsnemo.nn.StereographicRotaryPositionEmbedding2D`).
+        Base of the RoPE frequency progression.
     rope_length_scale : float, optional, default=1.0
         Divisor applied to stereographic coordinates to normalize the per-token
         length scale. Ignored unless ``rope_mode="stereographic"``.
@@ -299,22 +300,18 @@ class DiT3D(Module):
             ]
         )
 
-        # Rotary position embedding. Both modes use the SAME module
-        # (StereographicRotaryPositionEmbedding2D) purely as a 2D RoPE table
-        # builder via ``build_tables``; the mode only selects what coordinates
-        # feed it. "axial" feeds a static integer grid (so the cos/sin tables are
-        # precomputed once and cached as buffers below) and never calls the
-        # module's stereographic ``project``; "stereographic" projects ``pos``
-        # (lat/lon) per forward. The class name reflects only its richest use.
-        self.rope = (
-            StereographicRotaryPositionEmbedding2D(head_dim=head_dim, theta=rope_base)
-            if rope_mode != "none"
-            else None
-        )
+        # Rotary position embedding. Both modes feed continuous (x, y) token
+        # coordinates to ``build_axial_rope_cos_sin_2d_continuous``; the mode only
+        # selects the coordinates. "axial" uses a static integer grid (cos/sin
+        # precomputed once and cached as buffers below); "stereographic" projects
+        # ``pos`` (lat/lon) per forward (see ``coords.py``).
+        self.head_dim = head_dim
         if rope_mode == "axial":
             d, h, w = depth // pd, height // ph, width // pw
             coords = build_axial_token_coords(d, h, w)
-            cos, sin = self.rope.build_tables(coords[:, 0], coords[:, 1])
+            cos, sin = build_axial_rope_cos_sin_2d_continuous(
+                coords[:, 0], coords[:, 1], self.head_dim, theta=self.rope_base
+            )
             self.register_buffer("_rope_cos", cos, persistent=False)
             self.register_buffer("_rope_sin", sin, persistent=False)
 
@@ -438,7 +435,9 @@ class DiT3D(Module):
         h = height // self.patch_size[1]
         w = width // self.patch_size[2]
         coords = build_axial_token_coords(d, h, w)
-        cos, sin = self.rope.build_tables(coords[:, 0], coords[:, 1])
+        cos, sin = build_axial_rope_cos_sin_2d_continuous(
+            coords[:, 0], coords[:, 1], self.head_dim, theta=self.rope_base
+        )
         self.register_buffer(
             "_rope_cos", cos.to(self._rope_cos.device), persistent=False
         )
@@ -478,8 +477,8 @@ class DiT3D(Module):
             d_patch=d,
             length_scale=self.rope_length_scale,
         )  # (B, N, 2)
-        cos, sin = self.rope.build_tables(
-            coords[..., 0], coords[..., 1]
+        cos, sin = build_axial_rope_cos_sin_2d_continuous(
+            coords[..., 0], coords[..., 1], self.head_dim, theta=self.rope_base
         )  # (B, N, head_dim)
         # Insert a heads axis so the tables broadcast over (B, heads, N, head_dim).
         return cos.unsqueeze(1), sin.unsqueeze(1)

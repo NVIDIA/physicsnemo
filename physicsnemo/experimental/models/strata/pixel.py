@@ -41,7 +41,7 @@ from torch.utils.checkpoint import checkpoint as activation_checkpoint
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
-from physicsnemo.nn import StereographicRotaryPositionEmbedding2D
+from physicsnemo.experimental.nn import build_axial_rope_cos_sin_2d_continuous
 from physicsnemo.nn.module.mlp_layers import Mlp
 
 from .coords import build_axial_token_coords, build_stereographic_token_coords
@@ -675,6 +675,8 @@ class PixelDiT(Module):
         self.first_block_only_adaln = first_block_only_adaln
         self.rope_mode_pixel = rope_mode_pixel
         self.rope_length_scale_pixel = rope_length_scale_pixel
+        self.rope_base_pixel = rope_base_pixel
+        self.head_dim_pixel = head_dim_pixel
         self.bf16_mixed_pixel = bf16_mixed_pixel
         # Reuse DiT3D's pure parser (a staticmethod) so the ratio semantics match
         # the semantic stage.
@@ -734,17 +736,15 @@ class PixelDiT(Module):
         # Pixel-pathway RoPE. Axial coords are static; stereographic coords are
         # computed per forward via the shared geometry helpers in ``coords.py``
         # (no dependency on the semantic stage's RoPE module).
-        self.rope_pixel = (
-            StereographicRotaryPositionEmbedding2D(
-                head_dim=head_dim_pixel, theta=rope_base_pixel
-            )
-            if rope_mode_pixel != "none"
-            else None
-        )
         if rope_mode_pixel == "axial":
             # Pixel patches are 1x1x1, so the token grid is (depth, height, width).
             coords = build_axial_token_coords(depth, height, width)
-            cos, sin = self.rope_pixel.build_tables(coords[:, 0], coords[:, 1])
+            cos, sin = build_axial_rope_cos_sin_2d_continuous(
+                coords[:, 0],
+                coords[:, 1],
+                self.head_dim_pixel,
+                theta=self.rope_base_pixel,
+            )
             self.register_buffer("_rope_cos_pixel", cos, persistent=False)
             self.register_buffer("_rope_sin_pixel", sin, persistent=False)
 
@@ -822,7 +822,12 @@ class PixelDiT(Module):
         coords = build_stereographic_token_coords(
             pos, (1, 1), d_patch=self.depth, length_scale=self.rope_length_scale_pixel
         )  # (B, N, 2)
-        cos, sin = self.rope_pixel.build_tables(coords[..., 0], coords[..., 1])
+        cos, sin = build_axial_rope_cos_sin_2d_continuous(
+            coords[..., 0],
+            coords[..., 1],
+            self.head_dim_pixel,
+            theta=self.rope_base_pixel,
+        )
         # Insert a heads axis so the tables broadcast over (B, heads, N, head_dim).
         return cos.unsqueeze(1), sin.unsqueeze(1)
 

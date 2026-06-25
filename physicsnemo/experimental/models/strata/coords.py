@@ -33,7 +33,7 @@ import torch
 from einops import rearrange
 from jaxtyping import Float
 
-from physicsnemo.nn import spherical_centroid, stereographic_projection
+from physicsnemo.experimental.nn import spherical_centroid, stereographic_projection
 
 
 def build_axial_token_coords(
