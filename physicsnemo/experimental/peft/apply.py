@@ -82,9 +82,10 @@ def resolve_targets(model: nn.Module, config: LoRAConfig) -> list[Target]:
     matched layer.
 
     Matches against *fully-qualified* names. Skips already-wrapped layers
-    (double-apply guard) and module types not in the wrapper registry. When
-    ``config.wrap_mlp`` is set, also matches the default MLP feed-forward
-    patterns (additive to the primary selector).
+    (double-apply guard), module types not in the wrapper registry, and instances
+    the matched wrapper's ``is_compatible`` rejects. When ``config.wrap_mlp`` is
+    set, also matches the default MLP feed-forward patterns (additive to the
+    primary selector).
     """
     matcher = _build_matcher(config)
     mlp_patterns = (
@@ -101,7 +102,8 @@ def resolve_targets(model: nn.Module, config: LoRAConfig) -> list[Target]:
     for name, module in modules.items():
         if name == "" or is_lora_layer(module):
             continue
-        if get_wrapper_for(module) is None:
+        wrapper = get_wrapper_for(module)
+        if wrapper is None:
             # Skip layers with no registered wrapper, but warn if the user's own
             # selector matched one (e.g. an nn.Embedding) so it isn't a silent
             # no-op. wrap_mlp pattern matches are excluded — they intentionally
@@ -116,6 +118,20 @@ def resolve_targets(model: nn.Module, config: LoRAConfig) -> list[Target]:
                 )
             continue
         if not _is_target(name, module):
+            continue
+        # Type is wrappable and selected — let the wrapper veto this specific
+        # instance (e.g. an equivariant adapter needs shared in/out irreps). Warn
+        # on a user-selected veto so it isn't a silent skip.
+        is_compatible = getattr(wrapper, "is_compatible", None)
+        if is_compatible is not None and not is_compatible(module):
+            if matcher(name, module):
+                logger.warning(
+                    "LoRA selector matched %s (%s), but %s.is_compatible reports "
+                    "it can't be adapted; skipping it.",
+                    name,
+                    type(module).__name__,
+                    getattr(wrapper, "__name__", type(wrapper).__name__),
+                )
             continue
         parent_name, _, child = name.rpartition(".")
         parent = modules[parent_name] if parent_name else model

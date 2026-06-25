@@ -103,16 +103,22 @@ def test_init_strategies_applied_to_lora_a():
     assert torch.allclose(g(x), g.base_layer(x), atol=1e-6)
 
 
-def test_infer_in_out_features_rejects_non_linear_base():
-    # A base with neither in_features/out_features nor a 2-D weight can't have its
-    # LoRA shapes inferred — fail loudly instead of an opaque AttributeError.
-    from physicsnemo.experimental.peft.lora import _LinearLoRALayer
+def test_non_linear_base_rejected():
+    # A non-Linear base (no in_features/out_features, no 2-D weight) is handled at
+    # both levels: _LinearLoRALayer.is_compatible reports False (so resolve_targets
+    # skips it), and direct construction fails loudly rather than with an opaque
+    # AttributeError. The generic LoRALayer accepts anything by default.
+    from physicsnemo.experimental.peft.lora import LoRALayer, _LinearLoRALayer
 
     class _NotLinear(nn.Module):
         pass
 
+    nl = _NotLinear()
+    assert _LinearLoRALayer.is_compatible(nn.Linear(4, 6)) is True
+    assert _LinearLoRALayer.is_compatible(nl) is False
+    assert LoRALayer.is_compatible(nl) is True  # generic default accepts all
     with pytest.raises(TypeError, match="not Linear-like"):
-        _LinearLoRALayer._infer_in_out_features(_NotLinear())
+        LoRALinear(nl, rank=2, alpha=2)  # direct construction fails loudly
 
 
 def test_linear_specific_helpers_not_on_generic_mixin():
@@ -121,7 +127,12 @@ def test_linear_specific_helpers_not_on_generic_mixin():
     # directly do not pick up these weight-shaped assumptions.
     from physicsnemo.experimental.peft.lora import LoRALayer, _LinearLoRALayer
 
-    for attr in ("_init_lora", "_infer_in_out_features", "merge_into_base"):
+    for attr in (
+        "_is_linear_like",
+        "_init_lora",
+        "_infer_in_out_features",
+        "merge_into_base",
+    ):
         assert hasattr(_LinearLoRALayer, attr)
         assert not hasattr(LoRALayer, attr)
 

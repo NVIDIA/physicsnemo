@@ -251,6 +251,41 @@ def test_wrapped_model_is_picklable_with_callable_selectors():
     assert any(is_lora_layer(mod) for mod in restored.modules())
 
 
+def test_is_compatible_vetoes_incompatible_instance(caplog):
+    # A wrapper can veto a specific instance via is_compatible; resolve_targets
+    # then skips it (with a warning) instead of wrapping it.
+    import logging
+
+    from physicsnemo.experimental.peft import register_lora_wrapper
+    from physicsnemo.experimental.peft.lora import LoRALinear, _LORA_WRAPPERS
+
+    class _PickyLinear(nn.Linear):
+        pass
+
+    class _PickyLoRA(LoRALinear):
+        @classmethod
+        def is_compatible(cls, base_layer):
+            return False  # never adaptable
+
+    class _Net(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.picky = _PickyLinear(8, 8)
+            self.fc = nn.Linear(8, 8)
+
+    register_lora_wrapper(_PickyLinear, _PickyLoRA)
+    try:
+        m = _Net()
+        with caplog.at_level(logging.WARNING, logger="experimental.peft"):
+            res = apply_lora(m, LoRAConfig(rank=2, target_pattern=r"picky|fc"))
+        assert res.n_wrapped == 1  # only fc; picky vetoed
+        assert is_lora_layer(m.fc)
+        assert not is_lora_layer(m.picky)
+        assert "picky" in caplog.text and "is_compatible" in caplog.text
+    finally:
+        _LORA_WRAPPERS.pop(_PickyLinear, None)  # don't leak into other tests
+
+
 def test_apply_rejects_wrapper_not_subclassing_loralayer():
     # register_lora_wrapper contract: the factory must return a LoRALayer
     # subclass. apply_lora rejects one that does not — otherwise freeze/save/merge

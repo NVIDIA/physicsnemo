@@ -92,7 +92,9 @@ class LoRALayer:
       if you also implement ``merge_into_base``).
     - **Methods**: ``forward`` (adds the low-rank delta to the base output when
       ``enabled``); ``merge_into_base`` (folds the delta into the base weight) —
-      required only when ``mergeable`` is ``True``.
+      required only when ``mergeable`` is ``True``. Optionally override the
+      classmethod ``is_compatible(base_layer)`` to veto instances of a registered
+      type this wrapper can't adapt (defaults to accepting all).
 
     ``_make_lora_params(...)`` and ``lora_delta(...)`` are **optional conveniences**
     for the standard tensor case (2-D ``lora_A``/``lora_B`` with the
@@ -150,6 +152,19 @@ class LoRALayer:
         ``lora_B`` starts at zero."""
         return ((self.lora_dropout(x) @ self.lora_A) @ self.lora_B) * self.scaling
 
+    @classmethod
+    def is_compatible(cls, base_layer: nn.Module) -> bool:
+        """Whether this wrapper can adapt ``base_layer`` beyond simple type match.
+
+        ``resolve_targets`` calls this on a selected, registered-type layer before
+        wrapping it and skips the layer if it returns ``False`` — letting a wrapper
+        veto instances it can't actually handle (e.g. an equivariant adapter that
+        needs at least one shared input/output irrep). Defaults to ``True`` (every
+        instance of a registered type is adaptable); override in subclasses that
+        need an instance-level check.
+        """
+        return True
+
 
 class _LinearLoRALayer(LoRALayer):
     """LoRA mixin specialized for Linear-like bases — those whose ``.weight`` is
@@ -162,6 +177,26 @@ class _LinearLoRALayer(LoRALayer):
     """
 
     mergeable: bool = True
+
+    @staticmethod
+    def _is_linear_like(base_layer: nn.Module) -> bool:
+        """True if ``base_layer`` exposes ``in_features``/``out_features`` or a 2-D
+        ``weight``, so a ``(out, in)`` LoRA factorization can be inferred (e.g.
+        ``nn.Linear``, ``te.Linear``)."""
+        if (
+            getattr(base_layer, "in_features", None) is not None
+            and getattr(base_layer, "out_features", None) is not None
+        ):
+            return True
+        return getattr(getattr(base_layer, "weight", None), "ndim", None) == 2
+
+    @classmethod
+    def is_compatible(cls, base_layer: nn.Module) -> bool:
+        """True if ``base_layer`` is Linear-like (see ``_is_linear_like``).
+        Non-Linear bases are skipped by ``resolve_targets`` rather than failing at
+        wrap time. (This won't catch ``nn.Embedding``, which has a 2-D weight —
+        embeddings need a dedicated index-lookup wrapper registered separately.)"""
+        return cls._is_linear_like(base_layer)
 
     def _init_lora(
         self,
@@ -187,24 +222,23 @@ class _LinearLoRALayer(LoRALayer):
         Raises
         ------
         TypeError
-            If ``base_layer`` exposes neither ``in_features``/``out_features`` nor
-            a 2-D ``weight`` — its LoRA factor shapes can't be inferred, so it
-            needs a dedicated wrapper registered via ``register_lora_wrapper``
-            rather than the Linear path.
+            If ``base_layer`` is not Linear-like (see ``_is_linear_like``).
+            ``resolve_targets`` normally skips such layers via ``is_compatible``;
+            this guard defends direct construction, pointing to
+            ``register_lora_wrapper`` for a dedicated wrapper.
         """
+        if not _LinearLoRALayer._is_linear_like(base_layer):
+            raise TypeError(
+                f"{type(base_layer).__name__} is not Linear-like (no in_features/"
+                "out_features and no 2-D weight), so its LoRA factor shapes can't "
+                "be inferred; register a dedicated wrapper via register_lora_wrapper."
+            )
         in_f = getattr(base_layer, "in_features", None)
         out_f = getattr(base_layer, "out_features", None)
         if in_f is not None and out_f is not None:
             return int(in_f), int(out_f)
-        # Fall back to the weight shape (out, in), as for nn.Linear.
-        w = getattr(base_layer, "weight", None)
-        if getattr(w, "ndim", None) == 2:
-            return int(w.shape[1]), int(w.shape[0])
-        raise TypeError(
-            f"{type(base_layer).__name__} is not Linear-like (no in_features/"
-            "out_features and no 2-D weight), so its LoRA factor shapes can't be "
-            "inferred; register a dedicated wrapper via register_lora_wrapper."
-        )
+        w = base_layer.weight  # guaranteed 2-D by _is_linear_like
+        return int(w.shape[1]), int(w.shape[0])
 
     @torch.no_grad()
     def merge_into_base(self) -> None:
