@@ -53,6 +53,7 @@ from torch.amp import GradScaler
 from torch.utils.tensorboard import SummaryWriter
 from utils import (
     FieldType,
+    Phase,
     Precision,
     build_muon_optimizer,
     get_autocast_context,
@@ -76,6 +77,11 @@ from physicsnemo.utils.profiling import Profiler, profile
 _PROFILE_MAX_STEPS = 10
 
 
+### ---------------------------------------------------------------------------
+### Config
+### ---------------------------------------------------------------------------
+
+
 def _flatten_config(
     d: dict[str, Any], parent: str = "", sep: str = "."
 ) -> dict[str, str]:
@@ -88,6 +94,11 @@ def _flatten_config(
         else:
             items[key] = str(v)
     return items
+
+
+### ---------------------------------------------------------------------------
+### Aggregation
+### ---------------------------------------------------------------------------
 
 
 def _to_float_dicts(
@@ -129,17 +140,62 @@ def _reduce_and_average_epoch(
     *,
     device: torch.device | str,
 ) -> tuple[float, dict[str, float], dict[str, float]]:
-    """Average epoch loss/metric *sums* over the GLOBAL sample count.
+    """Collapse one epoch's rank-local loss/metric *sums* into global means.
 
-    The per-rank loop accumulates *sums* of per-step (per-sample, since
-    ``batch_size == 1``) losses and metrics. This packs ``total_loss``,
-    the local sample count, and every loss/metric leaf into one float32
-    tensor, all-reduces it once (SUM) when running distributed, then
-    divides by the reduced count. One collective + one D2H. Correct for
-    uneven per-rank shards (``global_sum / global_count``) and
-    deadlock-free (invoked once after the per-rank loops finish, not per
-    step). The single-process path is identical to the previous
-    ``sum / n_local`` averaging.
+    Under DDP each rank only sees its own shard of the epoch, so the
+    numbers we log are meaningless until reduced across ranks. This takes
+    the rank-local running *sums* the epoch loop accumulated (``total_loss``
+    and the 0-D ``losses_td`` / ``metrics_td`` leaves) plus the rank's
+    sample count, reduces them across ranks once, and divides by the
+    *global* count to produce sample-weighted means.
+
+    Reducing sums and a count (rather than per-rank means) is what makes the
+    result correct for uneven shards: ``global_sum / global_count`` weights
+    every sample equally no matter how the dataset split across ranks.
+    Doing this once at end-of-epoch, rather than per step, also keeps it
+    deadlock-free: every rank issues exactly one collective here even if
+    ranks ran different step counts. The values are packed into a single
+    ``float32`` buffer, so the whole epoch costs one ``all_reduce`` and one
+    device-to-host sync (the ``.tolist()``). It mirrors the inference-side
+    reducer ``infer._allreduce_sums``.
+
+    Args:
+        total_loss: Rank-local sum of the per-step scalar losses over the
+            epoch (``sum(loss.item())``), not a mean.
+        losses_td: Rank-local epoch accumulator of per-field losses: a 0-D
+            (``batch_size=[]``) ``TensorDict`` whose leaves are the summed
+            scalar losses, one per loss term. ``None`` is the "epoch ran
+            zero steps" sentinel (see Notes).
+        metrics_td: The matching per-field metric-sum accumulator, with the
+            same ``None`` sentinel. Seeded in lock-step with ``losses_td``,
+            so the two are ``None`` together or populated together.
+        n_local: Number of samples this rank processed this epoch. Equals
+            the step count because the recipe runs ``batch_size == 1``.
+        device: Device on which to build the reduction buffer. Must be the
+            rank's collective/compute device (``dist_manager.device``) so the
+            NCCL ``all_reduce`` runs on the correct device.
+
+    Returns:
+        A ``(avg_loss, avg_losses, avg_metrics)`` tuple where ``avg_loss`` is
+        the global mean loss, ``avg_losses`` is ``{loss_name: global_mean}``,
+        and ``avg_metrics`` is ``{metric_name: global_mean}``. The dict keys
+        and their order are taken from ``losses_td`` / ``metrics_td``. On the
+        ``None`` sentinel it returns ``(total_loss / max(n_local, 1), {},
+        {})`` without entering the collective.
+
+    Notes:
+        Single-process (or ``world_size == 1``) skips the reduction, so the
+        result is identical to the previous ``sum / n_local`` averaging and
+        single-GPU logs are unchanged.
+
+        The one fused ``all_reduce`` is valid only because every rank packs
+        the same leaves in the same order, which holds since all ranks share
+        one ``target_config`` (identical loss/metric keys). The ``None``
+        early return similarly assumes ranks are seeded together: under DDP
+        every rank gets at least one sample, so the accumulators are
+        non-``None`` on all ranks at once. A lone rank taking the early
+        return while its peers enter the collective is the only way this
+        would hang, and the samplers this recipe uses do not produce that.
     """
     if losses_td is None or metrics_td is None:
         return total_loss / max(n_local, 1), {}, {}
@@ -168,6 +224,11 @@ def _reduce_and_average_epoch(
     )
 
 
+### ---------------------------------------------------------------------------
+### Logging
+### ---------------------------------------------------------------------------
+
+
 def _log_to_tensorboard(
     writer: SummaryWriter | None,
     values: Mapping[str, float | torch.Tensor],
@@ -183,6 +244,11 @@ def _log_to_tensorboard(
         return
     for k, v in values.items():
         writer.add_scalar(f"{tag_prefix}/{k}", v, global_step=global_step)
+
+
+### ---------------------------------------------------------------------------
+### Forward pass
+### ---------------------------------------------------------------------------
 
 
 def forward_pass(
@@ -247,6 +313,11 @@ def forward_pass(
     return loss, loss_td.detach(), metric_td.detach()
 
 
+### ---------------------------------------------------------------------------
+### Epoch loops
+### ---------------------------------------------------------------------------
+
+
 def _run_epoch(
     dataloader: DataLoader,
     model: torch.nn.Module,
@@ -298,6 +369,7 @@ def _run_epoch(
 
     grad_ctx = nullcontext() if is_train else torch.no_grad()
     log_prefix = "Epoch" if is_train else "Val Epoch"
+    is_rank0 = dist_manager.rank == 0
 
     ### `total_loss` is a Python float fed by the per-step print line's
     ### sync; `total_losses_td` / `total_metrics_td` are on-device
@@ -305,11 +377,15 @@ def _run_epoch(
     ### their D2H transfer to the single batched ``.tolist()`` at
     ### end-of-epoch. ``None`` here means "not yet seeded"; the first
     ### iteration clones the per-step TensorDict to break aliasing.
+    ### ``n_local`` below is this rank's step/sample count. The averaging
+    ### denominator is the GLOBAL count that ``_reduce_and_average_epoch``
+    ### all-reduces from each rank's ``n_local`` at end-of-epoch; the local
+    ### value is reused directly only for the per-rank step-rate line.
     total_loss = 0.0
     total_losses_td: TensorDict | None = None
     total_metrics_td: TensorDict | None = None
     precision = getattr(cfg, "precision", "float32")
-    n_batches = 0
+    n_local = 0
     num_steps = len(dataloader)
     epoch_t0 = time.perf_counter()
 
@@ -352,7 +428,7 @@ def _run_epoch(
             else:
                 total_losses_td.add_(losses)
                 total_metrics_td.add_(metrics)
-            n_batches += 1
+            n_local += 1
 
             ### Per-step sync for the print line; lands after backward +
             ### optimizer.step so it overlaps with queued GPU work.
@@ -380,7 +456,7 @@ def _run_epoch(
             ### emitted in both modes so downstream tooling can compute val
             ### step-time statistics directly instead of inferring them from
             ### ``val_ts - train_ts``.
-            if dist_manager.rank == 0:
+            if is_rank0:
                 losses_floats, metrics_floats = _to_float_dicts(losses, metrics)
                 if is_train:
                     global_step = epoch * num_steps + i
@@ -413,7 +489,7 @@ def _run_epoch(
                     if log_jsonl is not None:
                         log_jsonl(
                             {
-                                "phase": "step",
+                                "phase": "train_step",
                                 "global_step": global_step,
                                 "loss": this_loss,
                                 "mem_gb": mem_gb,
@@ -448,7 +524,7 @@ def _run_epoch(
             step_t0 = time.perf_counter()
 
     epoch_dt = time.perf_counter() - epoch_t0
-    n = max(n_batches, 1)
+    n = max(n_local, 1)
     ### Reduce the epoch sums + sample count across ranks once, so logged
     ### loss/metrics are the GLOBAL averages (not rank-0's shard) under
     ### DDP. `n` above is kept local for the per-rank step-rate line below.
@@ -456,22 +532,23 @@ def _run_epoch(
         total_loss,
         total_losses_td,
         total_metrics_td,
-        n_batches,
+        n_local,
         device=dist_manager.device,
     )
 
     logger.info(
         f"Epoch {epoch} {mode} done in {epoch_dt:.1f}s "
-        f"({n_batches} steps, {epoch_dt / n:.3f}s/step avg)"
+        f"({n_local} steps, {epoch_dt / n:.3f}s/step avg)"
     )
 
-    if dist_manager.rank == 0:
+    if is_rank0:
         _log_to_tensorboard(writer, avg_losses, "epoch", epoch)
         _log_to_tensorboard(writer, avg_metrics, "epoch/metrics", epoch)
         if log_jsonl is not None:
+            summary_phase: Phase = "train_summary" if is_train else "val_summary"
             log_jsonl(
                 {
-                    "phase": mode,
+                    "phase": summary_phase,
                     "epoch": epoch,
                     "loss": avg_loss,
                     **avg_losses,
@@ -554,6 +631,11 @@ def val_epoch(
         writer=val_writer,
         log_jsonl=log_jsonl,
     )
+
+
+### ---------------------------------------------------------------------------
+### I/O benchmarking
+### ---------------------------------------------------------------------------
 
 
 def _walk_batch_for_logging(
@@ -675,6 +757,11 @@ def benchmark_io_epoch(
     )
 
 
+### ---------------------------------------------------------------------------
+### Driver
+### ---------------------------------------------------------------------------
+
+
 @profile
 def main(cfg: DictConfig) -> None:
     """Run the full training loop, or I/O-only benchmark when ``benchmark_io=true``.
@@ -697,6 +784,8 @@ def main(cfg: DictConfig) -> None:
 
     DistributedManager.initialize()
     dist_manager = DistributedManager()
+    device = dist_manager.device
+    is_rank0 = dist_manager.rank == 0
     logger = RankZeroLoggingWrapper(PythonLogger(name="training"), dist_manager)
 
     seed = cfg.training.get("seed", None)
@@ -710,7 +799,7 @@ def main(cfg: DictConfig) -> None:
     val_writer = None
     log_jsonl = None
     run_dir = os.path.join(cfg.output_dir, cfg.run_id)
-    if dist_manager.rank == 0:
+    if is_rank0:
         os.makedirs(run_dir, exist_ok=True)
         os.makedirs(checkpoint_dir, exist_ok=True)
 
@@ -734,7 +823,7 @@ def main(cfg: DictConfig) -> None:
     logger.info(f"Targets (from dataset YAML): {target_config}")
 
     # -- Log dataset metadata (rank 0) --------------------------------------------
-    if dist_manager.rank == 0 and log_jsonl is not None:
+    if is_rank0 and log_jsonl is not None:
         ### Use len(sampler) so manifest mode (where train and val share
         ### one underlying dataset) reports the actual per-split count,
         ### not the always-identical len(dataset). PyTorch always assigns
@@ -765,7 +854,7 @@ def main(cfg: DictConfig) -> None:
                 benchmark_io_epoch(train_loader, "train", logger, max_steps=max_steps)
                 benchmark_io_epoch(val_loader, "val", logger, max_steps=max_steps)
         logger.info("benchmark_io complete!")
-        if dist_manager.rank == 0:
+        if is_rank0:
             if train_writer is not None:
                 train_writer.close()
             if val_writer is not None:
@@ -778,13 +867,13 @@ def main(cfg: DictConfig) -> None:
     num_params = sum(p.numel() for p in model.parameters())
     logger.info(f"Parameters: {num_params:,}")
 
-    model.to(dist_manager.device)
+    model.to(device)
 
     if dist_manager.world_size > 1:
         model = torch.nn.parallel.DistributedDataParallel(
             model,
             device_ids=[dist_manager.local_rank],
-            output_device=dist_manager.device,
+            output_device=device,
         )
 
     if normalizer is not None:
@@ -801,7 +890,7 @@ def main(cfg: DictConfig) -> None:
     scaler = GradScaler() if precision == "float16" else None
 
     # -- Log full config + model params (rank 0) ---------------------------------
-    if dist_manager.rank == 0:
+    if is_rank0:
         flat_cfg = _flatten_config(
             OmegaConf.to_container(cfg, resolve=True, throw_on_missing=False)
         )
@@ -851,7 +940,7 @@ def main(cfg: DictConfig) -> None:
         "scheduler": scheduler,
         "models": model,
     }
-    loaded_epoch = load_checkpoint(device=dist_manager.device, **ckpt_args)
+    loaded_epoch = load_checkpoint(device=device, **ckpt_args)
 
     if cfg.compile:
         model = torch.compile(model)
@@ -898,7 +987,7 @@ def main(cfg: DictConfig) -> None:
                 log_jsonl=log_jsonl,
             )
 
-            if dist_manager.rank == 0:
+            if is_rank0:
                 all_keys = list(dict.fromkeys(list(train_metrics) + list(val_metrics)))
 
                 rows = [
@@ -919,7 +1008,7 @@ def main(cfg: DictConfig) -> None:
                     f"{table}\n"
                 )
 
-            if epoch % cfg.training.save_interval == 0 and dist_manager.rank == 0:
+            if epoch % cfg.training.save_interval == 0 and is_rank0:
                 save_checkpoint(**ckpt_args, epoch=epoch + 1)
                 if normalizer is not None:
                     norm_path = os.path.join(ckpt_args["path"], "norm_stats.pt")
@@ -928,7 +1017,7 @@ def main(cfg: DictConfig) -> None:
             if cfg.training.get("scheduler_update_mode", "epoch") == "epoch":
                 scheduler.step()
 
-    if dist_manager.rank == 0:
+    if is_rank0:
         if train_writer is not None:
             train_writer.close()
         if val_writer is not None:
