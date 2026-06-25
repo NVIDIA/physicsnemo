@@ -207,6 +207,13 @@ class TimmSelfAttention(AttentionModuleBase):
         QK normalization type. Options: ``"RMSNorm"``, ``"LayerNorm"``, or ``None``.
     qk_norm_affine : bool, optional, default=True
         Whether QK normalization layers should use learnable affine parameters.
+    is_causal : bool, optional, default=False
+        Whether to apply a causal self-attention mask, so that each position
+        attends only to itself and earlier positions in the sequence. Uses
+        timm's native causal path (``torch.nn.functional.scaled_dot_product_attention``
+        with ``is_causal=True``), which builds the lower-triangular mask
+        internally for the current sequence length. Only supported for timm
+        version 1.0.16 and higher.
     **kwargs : Any
         Additional keyword arguments for the timm attention module.
 
@@ -217,6 +224,7 @@ class TimmSelfAttention(AttentionModuleBase):
     attn_mask : torch.Tensor, optional
         The attention mask to apply (passed to timm's Attention module).
         If ``None``, no mask is applied. Only supported for timm version 1.0.16 and higher.
+        Mutually exclusive with ``is_causal=True``; passing both raises a ``ValueError``.
 
     Outputs
     -------
@@ -232,9 +240,15 @@ class TimmSelfAttention(AttentionModuleBase):
         proj_drop_rate: float = 0.0,
         qk_norm_type: Literal["RMSNorm", "LayerNorm"] | None = None,
         qk_norm_affine: bool = True,
+        is_causal: bool = False,
         **kwargs: Any,
     ):
         super().__init__()
+        if is_causal and not timm_v1_0_16:
+            raise ValueError(
+                "is_causal in TimmSelfAttention is only supported for timm version 1.0.16 and higher"
+            )
+        self.is_causal = is_causal
 
         # Translate qk_norm_type to timm's qk_norm and norm_layer
         if qk_norm_type == "RMSNorm":
@@ -264,11 +278,16 @@ class TimmSelfAttention(AttentionModuleBase):
             raise ValueError(
                 "attn_mask in TimmSelfAttention is only supported for timm version 1.0.16 and higher"
             )
+        if attn_mask is not None and self.is_causal:
+            raise ValueError(
+                "attn_mask cannot be combined with is_causal=True in TimmSelfAttention; "
+                "they are mutually exclusive."
+            )
 
         if not timm_v1_0_16:
             return self.attn_op(x)
         else:
-            return self.attn_op(x, attn_mask=attn_mask)
+            return self.attn_op(x, attn_mask=attn_mask, is_causal=self.is_causal)
 
 
 class TESelfAttention(AttentionModuleBase):

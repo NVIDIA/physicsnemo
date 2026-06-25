@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Adds Point-Transformer local vector-attention blocks to `physicsnemo.nn`.
+- Adds an `is_causal` option to `TimmSelfAttention` in `physicsnemo.nn` for
+  causal self-attention.
 - FSDP2 checkpoint support: full save/load round-trip for
   ``torch.distributed.fsdp`` v2 models, including DTensor edge cases,
   cross-mesh reloads, and optimizer state loading.
