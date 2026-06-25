@@ -82,26 +82,29 @@ def _model():
 _ATTN_PATTERN = r"blocks\.\d+\.Attn\."
 
 
-def test_regex_targets_attention_only():
+@pytest.mark.parametrize(
+    "selector, expected, wrapped, unwrapped",
+    [
+        # regex over fully-qualified names → qkv_project + out_linear per block
+        (dict(target_pattern=_ATTN_PATTERN), 3 * 2, "blocks.0.Attn.qkv_project", "head"),
+        # exact module name
+        (dict(target_modules=["head"]), 1, "head", "blocks.0.Attn.qkv_project"),
+        # callable predicate (the per-block `mlp` Linear)
+        (
+            dict(target_filter=lambda name, mod: name.endswith("mlp")),
+            3,
+            "blocks.0.mlp",
+            "head",
+        ),
+    ],
+)
+def test_selector_targeting(selector, expected, wrapped, unwrapped):
     m = _model()
-    res = apply_lora(m, LoRAConfig(rank=4, target_pattern=_ATTN_PATTERN))
-    assert res.n_wrapped == 3 * 2  # qkv_project + out_linear per block
-    assert all(is_lora_layer(b.Attn.qkv_project) for b in m.blocks)
-    assert not is_lora_layer(m.head)
-    assert not is_lora_layer(m.blocks[0].mlp)
-
-
-def test_exact_module_targeting():
-    m = _model()
-    res = apply_lora(m, LoRAConfig(rank=2, target_modules=["head"]))
-    assert res.n_wrapped == 1
-    assert is_lora_layer(m.head)
-
-
-def test_callable_targeting():
-    m = _model()
-    cfg = LoRAConfig(rank=2, target_filter=lambda name, mod: name.endswith("mlp"))
-    assert apply_lora(m, cfg).n_wrapped == 3
+    res = apply_lora(m, LoRAConfig(rank=2, **selector))
+    assert res.n_wrapped == expected
+    mods = dict(m.named_modules())
+    assert is_lora_layer(mods[wrapped])
+    assert not is_lora_layer(mods[unwrapped])
 
 
 def test_zero_match_raises():

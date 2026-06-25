@@ -21,17 +21,28 @@ import pytest
 from physicsnemo.experimental.peft import LoRAConfig
 
 
-def test_requires_exactly_one_selector():
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {},  # no selector
+        dict(target_modules=["a"], target_pattern="b"),  # two selectors
+    ],
+)
+def test_requires_exactly_one_selector(kwargs):
     with pytest.raises(ValueError, match="Exactly one"):
-        LoRAConfig()  # none set
-    with pytest.raises(ValueError, match="Exactly one"):
-        LoRAConfig(target_modules=["a"], target_pattern="b")  # two set
+        LoRAConfig(**kwargs)
 
 
-def test_valid_single_selector():
-    assert LoRAConfig(target_pattern=r"blocks\.\d+").target_pattern is not None
-    assert LoRAConfig(target_modules=["head"]).target_modules == ["head"]
-    assert LoRAConfig(target_filter=lambda n, m: True).target_filter is not None
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        dict(target_pattern=r"blocks\.\d+"),
+        dict(target_modules=["head"]),
+        dict(target_filter=lambda n, m: True),
+    ],
+)
+def test_valid_single_selector(kwargs):
+    LoRAConfig(**kwargs)  # exactly one selector → constructs without error
 
 
 def test_scaling_and_alpha_default():
@@ -54,11 +65,10 @@ def test_dropout_range(bad):
         LoRAConfig(lora_dropout=bad, target_modules=["x"])
 
 
-def test_empty_selector_rejected():
+@pytest.mark.parametrize("kwargs", [dict(target_modules=[]), dict(target_pattern="")])
+def test_empty_selector_rejected(kwargs):
     with pytest.raises(ValueError, match="empty"):
-        LoRAConfig(target_modules=[])
-    with pytest.raises(ValueError, match="empty"):
-        LoRAConfig(target_pattern="")
+        LoRAConfig(**kwargs)
 
 
 def test_init_accepts_default_and_callable():

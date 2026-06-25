@@ -54,11 +54,12 @@ def _trained_net(d=16):
     return m
 
 
-def test_save_load_roundtrip(tmp_path):
+@pytest.mark.parametrize("ext", [".lora", ".bin"])  # extension is not enforced
+def test_save_load_roundtrip(tmp_path, ext):
     m = _trained_net()
     x = torch.randn(3, 16)
     trained_out = m(x).detach().clone()
-    p = tmp_path / "adapter.lora"
+    p = tmp_path / f"adapter{ext}"
     save_adapter(m, p)
 
     # Fresh base with identical init (same seed) → load should reproduce output.
@@ -134,19 +135,6 @@ def test_save_load_with_callable_init(tmp_path):
     fresh = _Net()
     load_adapter(fresh, p)  # init label is irrelevant on load (weights restored)
     assert torch.allclose(fresh(x), out, atol=1e-5)
-
-
-def test_save_accepts_any_extension(tmp_path):
-    # The extension is not enforced — an arbitrary one still round-trips.
-    m = _trained_net()
-    x = torch.randn(3, 16)
-    trained_out = m(x).detach().clone()
-    p = tmp_path / "adapter.bin"  # arbitrary, neither .lora nor .mdlus
-    save_adapter(m, p)
-    torch.manual_seed(0)
-    fresh = _Net()
-    load_adapter(fresh, p)
-    assert torch.allclose(fresh(x), trained_out, atol=1e-5)
 
 
 def test_kind_check_rejects_non_adapter(tmp_path):

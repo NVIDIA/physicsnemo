@@ -69,3 +69,36 @@ def test_merge_idempotent():
     merge_lora(m)  # no-op, must not raise or change anything
     assert torch.allclose(once, m(x), atol=1e-6)
     assert not any(is_lora_layer(mod) for mod in m.modules())
+
+
+def test_merge_skips_non_mergeable(caplog):
+    # A non-mergeable wrapper (mergeable=False, like the te.LayerNormMLP residual)
+    # is left in place and warned about, while mergeable wrappers are folded.
+    import logging
+
+    from physicsnemo.experimental.peft import register_lora_wrapper
+    from physicsnemo.experimental.peft.lora import LoRALinear, _LORA_WRAPPERS
+
+    class _ResidualLinear(nn.Linear):
+        pass
+
+    class _NonMergeableLoRA(LoRALinear):
+        mergeable = False
+
+    class _Mixed(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.res = _ResidualLinear(8, 8)
+            self.fc = nn.Linear(8, 8)
+
+    register_lora_wrapper(_ResidualLinear, _NonMergeableLoRA)
+    try:
+        m = _Mixed()
+        apply_lora(m, LoRAConfig(rank=2, alpha=2, target_pattern=r"res|fc"))
+        with caplog.at_level(logging.WARNING, logger="experimental.peft"):
+            merge_lora(m)
+        assert is_lora_layer(m.res)  # non-mergeable left wrapped
+        assert not is_lora_layer(m.fc)  # mergeable folded + unwrapped
+        assert "non-mergeable" in caplog.text
+    finally:
+        _LORA_WRAPPERS.pop(_ResidualLinear, None)  # don't leak into other tests
