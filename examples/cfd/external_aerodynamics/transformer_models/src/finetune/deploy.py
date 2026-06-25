@@ -25,8 +25,8 @@ Two modes:
 
 Run from the example root::
 
-    python src/deploy.py init_from=<base.mdlus>            # adapter-swap
-    python src/deploy.py init_from=<base.mdlus> merge=true  # fold in
+    python src/finetune/deploy.py init_from=<base.mdlus>            # adapter-swap
+    python src/finetune/deploy.py init_from=<base.mdlus> merge=true  # fold in
 """
 
 import logging
@@ -39,7 +39,7 @@ from physicsnemo.experimental.peft import is_lora_layer, load_adapter, merge_lor
 logger = logging.getLogger("finetune_lora.deploy")
 
 
-@hydra.main(version_base=None, config_path="conf", config_name="finetune_lora")
+@hydra.main(version_base=None, config_path="../conf", config_name="finetune_lora")
 def main(cfg: DictConfig) -> None:
     logging.basicConfig(level=logging.INFO)
 

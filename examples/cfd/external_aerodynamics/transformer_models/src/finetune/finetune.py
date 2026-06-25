@@ -14,11 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""LoRA fine-tuning recipe for GeoTransolver (companion to ``train.py``).
+"""LoRA fine-tuning recipe for GeoTransolver (companion to ``src/train.py``).
 
-A standalone entry point that lives alongside ``train.py`` and reuses this
-example's configs (``conf/``) and data pipeline — without modifying
-``train.py``. Workflow (see the README in this directory for full details):
+A standalone entry point, kept separate from the main training/inference code in
+``src/``, that reuses this example's configs (``src/conf/``) and data pipeline —
+without modifying ``train.py``. Workflow (see the README in this directory for
+full details):
 
   1. Build the model and load a PRETRAINED base checkpoint (``init_from``).
   2. Inject LoRA adapters and freeze the base (``apply_lora``).
@@ -28,9 +29,9 @@ example's configs (``conf/``) and data pipeline — without modifying
 
 Run from the example root (same convention as ``train.py``)::
 
-    python src/finetune.py init_from=/path/to/base_geotransolver.mdlus
+    python src/finetune/finetune.py init_from=/path/to/base_geotransolver.mdlus
 
-Deploy / merge is demonstrated in ``src/deploy.py``.
+Deploy / merge is demonstrated in ``src/finetune/deploy.py``.
 """
 
 import logging
@@ -105,7 +106,7 @@ def _load_norm_factors(cfg: DictConfig, device) -> dict:
     return factors
 
 
-@hydra.main(version_base=None, config_path="conf", config_name="finetune_lora")
+@hydra.main(version_base=None, config_path="../conf", config_name="finetune_lora")
 def main(cfg: DictConfig) -> None:
     logging.basicConfig(level=logging.INFO)
 

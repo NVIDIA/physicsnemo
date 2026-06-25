@@ -15,7 +15,7 @@
 # limitations under the License.
 
 # ---------------------------------------------------------------------------
-# LoRA fine-tuning config (used by src/finetune.py and src/deploy.py).
+# LoRA fine-tuning config (used by src/finetune/finetune.py and src/finetune/deploy.py).
 # Reuses the same model/data/training groups as geotransolver_surface.yaml and
 # adds the `peft:` block + `init_from`. Keep the `model:` block matching the
 # architecture of the base checkpoint you load (the adapter records a base
@@ -69,5 +69,5 @@ peft:
   target_pattern: 'blocks\.\d+\.Attn\.(in_project_x|in_project_fx|qkv_project|out_linear|cross_[qkv])'
   wrap_mlp: false
 
-# Deploy-only (src/deploy.py): fold the adapter into the base and save a plain .mdlus.
+# Deploy-only (src/finetune/deploy.py): fold the adapter into the base and save a plain .mdlus.
 merge: false

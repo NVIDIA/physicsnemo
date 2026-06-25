@@ -77,7 +77,7 @@ def test_merge_skips_non_mergeable(caplog):
     import logging
 
     from physicsnemo.experimental.peft import register_lora_wrapper
-    from physicsnemo.experimental.peft.lora import LoRALinear, _LORA_WRAPPERS
+    from physicsnemo.experimental.peft.lora import _LORA_WRAPPERS, LoRALinear
 
     class _ResidualLinear(nn.Linear):
         pass

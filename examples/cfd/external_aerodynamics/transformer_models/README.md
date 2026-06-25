@@ -53,7 +53,7 @@ The Optimizer for this training is the `Muon` optimizer - available only in `pyt
 
 ### Parameter-Efficient Fine-Tuning (LoRA)
 
-To adapt a *pretrained* model to a new dataset cheaply — without retraining all weights — use the LoRA fine-tuning recipe (`src/finetune.py` and `src/deploy.py`, with `conf/finetune_lora.yaml`). It freezes the base model and trains only small low-rank adapters, producing a compact adapter checkpoint that can be swapped at serve time or merged into the base. See [FINETUNE_LORA.md](FINETUNE_LORA.md) for the full workflow.
+To adapt a *pretrained* model to a new dataset cheaply — without retraining all weights — use the LoRA fine-tuning recipe in the [`src/finetune/`](src/finetune/) folder (`src/finetune/finetune.py` and `src/finetune/deploy.py`, with `src/conf/finetune_lora.yaml`). It freezes the base model and trains only small low-rank adapters, producing a compact adapter checkpoint that can be swapped at serve time or merged into the base. See [src/finetune/README.md](src/finetune/README.md) for the full workflow.
 
 ### Training Precision
 

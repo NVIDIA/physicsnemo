@@ -86,7 +86,12 @@ _ATTN_PATTERN = r"blocks\.\d+\.Attn\."
     "selector, expected, wrapped, unwrapped",
     [
         # regex over fully-qualified names → qkv_project + out_linear per block
-        (dict(target_pattern=_ATTN_PATTERN), 3 * 2, "blocks.0.Attn.qkv_project", "head"),
+        (
+            dict(target_pattern=_ATTN_PATTERN),
+            3 * 2,
+            "blocks.0.Attn.qkv_project",
+            "head",
+        ),
         # exact module name
         (dict(target_modules=["head"]), 1, "head", "blocks.0.Attn.qkv_project"),
         # callable predicate (the per-block `mlp` Linear)
@@ -250,7 +255,11 @@ def test_wrapped_model_is_picklable_with_callable_selectors():
     assert isinstance(m._lora_adapter_config, dict)
     assert m._lora_adapter_config["init"] == "custom"
 
-    restored = pickle.loads(pickle.dumps(m))  # would raise on a retained lambda
+    # Round-trip a locally-constructed, trusted model (NOT untrusted data): the
+    # dumps would raise if a lambda were retained, and loads confirms the wrappers
+    # survive. S301 (pickle-of-untrusted-data) does not apply here.
+    blob = pickle.dumps(m)
+    restored = pickle.loads(blob)  # noqa: S301
     assert any(is_lora_layer(mod) for mod in restored.modules())
 
 
@@ -260,7 +269,7 @@ def test_is_compatible_vetoes_incompatible_instance(caplog):
     import logging
 
     from physicsnemo.experimental.peft import register_lora_wrapper
-    from physicsnemo.experimental.peft.lora import LoRALinear, _LORA_WRAPPERS
+    from physicsnemo.experimental.peft.lora import _LORA_WRAPPERS, LoRALinear
 
     class _PickyLinear(nn.Linear):
         pass
