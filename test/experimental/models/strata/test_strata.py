@@ -673,6 +673,17 @@ def test_build_stereographic_token_coords():
     assert torch.all(y_by_row[1:] > y_by_row[:-1])
     assert torch.all(x_by_col[1:] > x_by_col[:-1])
 
+    # length_scale magnitude: coords scale as 1/length_scale, so doubling it
+    # exactly halves them. Pins the normalization exponent (the >1.0 and
+    # monotonicity checks above are blind to the scale magnitude).
+    coords_1x = build_stereographic_token_coords(
+        pos, (2, 2), d_patch=3, length_scale=1.0
+    )
+    coords_2x = build_stereographic_token_coords(
+        pos, (2, 2), d_patch=3, length_scale=2.0
+    )
+    assert torch.allclose(coords_2x, coords_1x / 2, atol=1e-6)
+
     with pytest.raises(ValueError):
         build_stereographic_token_coords(pos, (2, 2), d_patch=3, length_scale=0.0)
 
