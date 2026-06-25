@@ -377,11 +377,15 @@ def _run_epoch(
     ### their D2H transfer to the single batched ``.tolist()`` at
     ### end-of-epoch. ``None`` here means "not yet seeded"; the first
     ### iteration clones the per-step TensorDict to break aliasing.
+    ### ``n_local`` below is this rank's step/sample count. The averaging
+    ### denominator is the GLOBAL count that ``_reduce_and_average_epoch``
+    ### all-reduces from each rank's ``n_local`` at end-of-epoch; the local
+    ### value is reused directly only for the per-rank step-rate line.
     total_loss = 0.0
     total_losses_td: TensorDict | None = None
     total_metrics_td: TensorDict | None = None
     precision = getattr(cfg, "precision", "float32")
-    n_batches = 0
+    n_local = 0
     num_steps = len(dataloader)
     epoch_t0 = time.perf_counter()
 
@@ -424,7 +428,7 @@ def _run_epoch(
             else:
                 total_losses_td.add_(losses)
                 total_metrics_td.add_(metrics)
-            n_batches += 1
+            n_local += 1
 
             ### Per-step sync for the print line; lands after backward +
             ### optimizer.step so it overlaps with queued GPU work.
@@ -520,7 +524,7 @@ def _run_epoch(
             step_t0 = time.perf_counter()
 
     epoch_dt = time.perf_counter() - epoch_t0
-    n = max(n_batches, 1)
+    n = max(n_local, 1)
     ### Reduce the epoch sums + sample count across ranks once, so logged
     ### loss/metrics are the GLOBAL averages (not rank-0's shard) under
     ### DDP. `n` above is kept local for the per-rank step-rate line below.
@@ -528,13 +532,13 @@ def _run_epoch(
         total_loss,
         total_losses_td,
         total_metrics_td,
-        n_batches,
+        n_local,
         device=dist_manager.device,
     )
 
     logger.info(
         f"Epoch {epoch} {mode} done in {epoch_dt:.1f}s "
-        f"({n_batches} steps, {epoch_dt / n:.3f}s/step avg)"
+        f"({n_local} steps, {epoch_dt / n:.3f}s/step avg)"
     )
 
     if is_rank0:
