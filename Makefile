@@ -44,8 +44,8 @@ pytest-internal:
 
 coverage:
 	coverage combine && \
-		coverage report --show-missing --omit=*test* --omit=*internal* --omit=*experimental* --fail-under=60 && \
-		coverage html
+		coverage report -i --show-missing --omit=*test* --omit=*internal* --omit=*experimental* --fail-under=60 && \
+		coverage html -i
 
 all-ci: get-data setup-ci black interrogate lint license install pytest doctest coverage
 

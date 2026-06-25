@@ -26,7 +26,7 @@ _SUPPORTED_DERIVATIVE_ORDERS = (1, 2)
 
 ### Warp runtime initialization for custom kernels.
 wp.init()
-wp.config.quiet = True
+wp.config.log_level = wp.LOG_WARNING
 
 ### Optional launch block size override; <=0 uses Warp default autotuning.
 _WARP_BLOCK_DIM = -1

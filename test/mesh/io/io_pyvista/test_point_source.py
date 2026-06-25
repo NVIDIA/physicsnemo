@@ -270,8 +270,10 @@ class TestCellCentroidsPointCloud:
 
 class TestCellCentroidsDualGraph:
     """Centroid-based dual graph via from_pyvista: builds a 1D graph where cell
-    centroids are nodes and face-adjacent cell pairs are edges, with cell_data
-    remapped to point_data."""
+    centroids are nodes and facet-adjacent cell pairs are edges (a facet is a
+    face for volume cells, an edge for surface cells, a vertex for line cells),
+    with cell_data remapped to point_data. Covers volume, surface, and line
+    meshes to exercise the dimension-generic facet adjacency."""
 
     def test_dual_graph_two_hexes(self):
         """Two adjacent hexes sharing a face produce 1 dual-graph edge."""
@@ -301,7 +303,7 @@ class TestCellCentroidsDualGraph:
         assert mesh.point_data["zone"].shape[0] == 2
 
     def test_dual_graph_isolated_cell_no_edges(self):
-        """A single cell has no face-neighbors, so the dual graph has 0 edges."""
+        """A single cell has no facet-neighbors, so the dual graph has 0 edges."""
         pv_mesh = _make_tet_with_data()
         mesh = from_pyvista(
             pv_mesh,
@@ -312,6 +314,57 @@ class TestCellCentroidsDualGraph:
 
         assert mesh.n_points == 1
         assert mesh.n_cells == 0
+
+    def test_dual_graph_triangulated_surface(self):
+        """Surface cells share edges (1-faces), so a surface mesh has a non-empty
+        dual graph. Regression for the face-only bug, which returned 0 edges here
+        because triangles report ``GetNumberOfFaces() == 0``."""
+        surf = pv.Plane(i_resolution=2, j_resolution=2).triangulate()  # 8 triangles
+        mesh = from_pyvista(
+            surf,
+            manifold_dim=1,
+            point_source="cell_centroids",
+            warn_on_lost_data=False,
+        )
+
+        assert mesh.n_manifold_dims == 1
+        assert mesh.n_points == 8  # 8 triangles -> 8 centroids
+        assert mesh.cells.shape == (8, 2)
+        assert mesh.n_cells == 8  # edge-sharing adjacencies among the triangles
+
+    def test_dual_graph_quad_surface(self):
+        """A 2x2 grid of quads yields the expected 4-edge grid adjacency."""
+        surf = pv.Plane(i_resolution=2, j_resolution=2)  # 4 quads
+        mesh = from_pyvista(
+            surf,
+            manifold_dim=1,
+            point_source="cell_centroids",
+            warn_on_lost_data=False,
+        )
+
+        assert mesh.n_manifold_dims == 1
+        assert mesh.n_points == 4  # 4 quads -> 4 centroids
+        assert mesh.n_cells == 4  # 2 horizontal + 2 vertical neighbor pairs
+
+    def test_dual_graph_polyline(self):
+        """Full dimension-genericity: a polyline's cells (segments) share endpoint
+        vertices, so its dual graph is the segment-adjacency line graph."""
+        points = np.array(
+            [[0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0]], dtype=np.float64
+        )
+        # Three segments: (0, 1), (1, 2), (2, 3).
+        lines = np.array([2, 0, 1, 2, 1, 2, 2, 2, 3])
+        poly = pv.PolyData(points, lines=lines)
+        mesh = from_pyvista(
+            poly,
+            manifold_dim=1,
+            point_source="cell_centroids",
+            warn_on_lost_data=False,
+        )
+
+        assert mesh.n_manifold_dims == 1
+        assert mesh.n_points == 3  # 3 segments -> 3 centroids
+        assert mesh.n_cells == 2  # consecutive segments share a vertex
 
 
 # ---------------------------------------------------------------------------

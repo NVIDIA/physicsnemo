@@ -15,10 +15,11 @@
 # limitations under the License.
 
 # ---------------------------------------------------------------------------
-# Universal cross-cutting defaults shared by train.yaml and (eventually)
-# infer.yaml.  Anything truly training-only (output_dir, compile,
-# num_epochs, optimizer.lr, scheduler) lives in train.yaml so the
-# inference companion can stay clean of it.
+# Universal cross-cutting defaults shared by train.yaml and infer.yaml.
+# Anything truly training-only (num_epochs, optimizer.lr, scheduler)
+# lives in train.yaml so the inference companion can stay clean of it;
+# knobs both entry points need but with different values (output_dir,
+# compile, sampling_resolution) are declared per entry point instead.
 # ---------------------------------------------------------------------------
 
 # -- Runtime knobs -----------------------------------------------------------

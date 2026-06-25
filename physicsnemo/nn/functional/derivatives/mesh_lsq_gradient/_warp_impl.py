@@ -25,7 +25,7 @@ from .utils import resolve_safe_epsilon, validate_inputs
 
 ### Warp runtime initialization for custom kernels.
 wp.init()
-wp.config.quiet = True
+wp.config.log_level = wp.LOG_WARNING
 
 
 @wp.kernel

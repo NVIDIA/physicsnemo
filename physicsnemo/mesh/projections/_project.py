@@ -244,10 +244,16 @@ def project(
         )[keep_dims_list]  # shape: (result_n_dims, current_n_spatial_dims)
 
         if transform_point_data:
+            # Clone before transforming: _transform_tensordict mutates in place, and
+            # new_point_data still aliases the input mesh's point_data (Mesh does not
+            # clone an already-TensorDict field). Without this, project() would
+            # corrupt the caller's input mesh (global_data below already clones).
+            new_point_data = new_point_data.clone()
             _transform_tensordict(
                 new_point_data, projection_matrix, current_n_spatial_dims, "point_data"
             )
         if transform_cell_data:
+            new_cell_data = new_cell_data.clone()
             _transform_tensordict(
                 new_cell_data, projection_matrix, current_n_spatial_dims, "cell_data"
             )

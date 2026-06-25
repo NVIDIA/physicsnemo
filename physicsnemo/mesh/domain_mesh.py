@@ -22,7 +22,7 @@ import torch
 from jaxtyping import Float
 from tensordict import TensorDict, tensorclass
 
-from physicsnemo.mesh.mesh import Mesh
+from physicsnemo.mesh.mesh import Mesh, _requested_float_dtype
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
 
 if TYPE_CHECKING:
@@ -1161,3 +1161,32 @@ def _domain_mesh_repr(self: DomainMesh) -> str:
 
 
 DomainMesh.__repr__ = _domain_mesh_repr  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+
+
+### Override the tensorclass ``to`` for the same reason as ``Mesh.to``: a floating/
+# complex dtype cast via the generated tensorclass ``to`` recurses into the interior/
+# boundary meshes and casts their integer ``cells`` to a float dtype, which fails
+# ``Mesh.__post_init__``. Only an explicitly requested floating dtype takes the
+# per-mesh path through the (cells-safe) ``Mesh.to`` via ``apply_to_meshes`` (with
+# ``global_data`` cast too); device-only moves and non-float dtypes are delegated
+# unchanged (cells-safe and metadata-preserving).
+def _domain_mesh_to(self, *args: Any, **kwargs: Any) -> "DomainMesh":
+    cast_dtype = _requested_float_dtype(args, kwargs)
+    if cast_dtype is None:
+        return _tensorclass_domain_to(self, *args, **kwargs)
+
+    # Per-mesh: route through the (fixed, cells-safe) ``Mesh.to``. Resolve the target
+    # device with a zero-length probe, then move ``global_data`` to that device
+    # (forwarding all transfer options except ``dtype``) and cast its floating leaves.
+    probe = self.interior.points[:0].to(*args, **kwargs)
+    moved = self.apply_to_meshes(lambda mesh: mesh.to(*args, **kwargs))
+    transfer_kwargs = {k: v for k, v in kwargs.items() if k != "dtype"}
+    transfer_kwargs["device"] = probe.device
+    moved.global_data = moved.global_data.to(**transfer_kwargs).apply(
+        lambda t: t.to(cast_dtype) if (t.is_floating_point() or t.is_complex()) else t
+    )
+    return moved
+
+
+_tensorclass_domain_to = DomainMesh.to  # the generated tensorclass ``to``
+DomainMesh.to = _domain_mesh_to  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
