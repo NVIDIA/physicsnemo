@@ -68,7 +68,7 @@ def build_axial_token_coords(
 
 
 def build_stereographic_token_coords(
-    pos: Float[torch.Tensor, "batch two height width"],
+    pos: Float[torch.Tensor, "batch 2 height width"],
     patch_hw: Union[int, Tuple[int, int]],
     d_patch: int,
     length_scale: float,

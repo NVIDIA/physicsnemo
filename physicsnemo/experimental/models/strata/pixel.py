@@ -804,7 +804,7 @@ class PixelDiT(Module):
     def forward(
         self,
         x: Float[torch.Tensor, "batch in_channels depth height width"],
-        pos: Optional[Float[torch.Tensor, "batch two height width"]] = None,
+        pos: Optional[Float[torch.Tensor, "batch 2 height width"]] = None,
     ) -> Float[torch.Tensor, "batch out_channels depth height width"]:
         ### Input validation
         if not torch.compiler.is_compiling():

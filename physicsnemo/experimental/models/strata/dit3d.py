@@ -508,7 +508,7 @@ class DiT3D(Module):
     def forward_tokens(
         self,
         x: Float[torch.Tensor, "batch in_channels depth height width"],
-        pos: Optional[Float[torch.Tensor, "batch two height width"]] = None,
+        pos: Optional[Float[torch.Tensor, "batch 2 height width"]] = None,
     ) -> Tuple[Float[torch.Tensor, "batch tokens embed_dim"], Tuple[int, int, int]]:
         r"""Run the tokenizer and all transformer blocks, returning raw tokens.
 
@@ -622,7 +622,7 @@ class DiT3D(Module):
     def forward(
         self,
         x: Float[torch.Tensor, "batch in_channels depth height width"],
-        pos: Optional[Float[torch.Tensor, "batch two height width"]] = None,
+        pos: Optional[Float[torch.Tensor, "batch 2 height width"]] = None,
     ) -> Float[torch.Tensor, "batch out_channels depth height width"]:
         _, _, d_in, h_in, w_in = x.shape
         tokens, _ = self.forward_tokens(x, pos)
