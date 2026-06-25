@@ -21,14 +21,14 @@ import pytest
 import torch
 
 from physicsnemo.core.module import Module
-from physicsnemo.experimental.models.strata import DiT3D, PixelDiT
+from physicsnemo.experimental.models.strata import Strata, StrataTransformer3D
 from physicsnemo.experimental.models.strata.coords import (
     build_axial_token_coords,
     build_stereographic_token_coords,
 )
 from physicsnemo.experimental.models.strata.depthwise_conv import DepthwiseConv
 from physicsnemo.experimental.models.strata.layers import Natten3DSelfAttention
-from physicsnemo.experimental.models.strata.pixel import PixelDiTBlock
+from physicsnemo.experimental.models.strata.strata import StrataPixel3DBlock
 from test.common import validate_checkpoint
 from test.conftest import requires_module
 
@@ -45,7 +45,7 @@ def _make_pos(b: int, h: int, w: int) -> torch.Tensor:
 def _seed_params(model: torch.nn.Module, seed: int) -> torch.nn.Module:
     """Fill all parameters with reproducible random values (MOD-008b pattern).
 
-    DiT3D zero-initializes its output head, so a freshly constructed model
+    StrataTransformer3D zero-initializes its output head, so a freshly constructed model
     produces all-zero outputs; seeding the parameters gives meaningful,
     reproducible forward outputs for non-regression and checkpoint tests.
     """
@@ -62,8 +62,8 @@ def _seed_params(model: torch.nn.Module, seed: int) -> torch.nn.Module:
 # is independent of init/RNG changes across PyTorch versions. All use the CPU-
 # reproducible full-attention path (attn_kernel=-1).
 # --------------------------------------------------------------------------- #
-def _build_dit3d_axial():
-    model = DiT3D(
+def _build_transformer_axial():
+    model = StrataTransformer3D(
         in_channels=4,
         input_shape=(4, 8, 8),
         patch_size=(1, 2, 2),
@@ -79,8 +79,8 @@ def _build_dit3d_axial():
     return _seed_params(model, seed=10), (torch.randn(2, 4, 4, 8, 8, generator=gen),)
 
 
-def _build_dit3d_stereo():
-    model = DiT3D(
+def _build_transformer_stereo():
+    model = StrataTransformer3D(
         in_channels=3,
         input_shape=(6, 8, 8),
         patch_size=(1, 2, 2),
@@ -98,9 +98,9 @@ def _build_dit3d_stereo():
     )
 
 
-def _build_pixeldit_pixelproj():
-    model = PixelDiT(
-        semantic_config=dict(
+def _build_strata_pixelproj():
+    model = Strata(
+        backbone_config=dict(
             in_channels=4,
             input_shape=(4, 8, 8),
             patch_size=(1, 2, 2),
@@ -119,9 +119,9 @@ def _build_pixeldit_pixelproj():
     return _seed_params(model, seed=30), (torch.randn(2, 4, 4, 8, 8, generator=gen),)
 
 
-def _build_pixeldit_bilinear():
-    model = PixelDiT(
-        semantic_config=dict(
+def _build_strata_bilinear():
+    model = Strata(
+        backbone_config=dict(
             in_channels=4,
             input_shape=(4, 8, 8),
             patch_size=(1, 2, 2),
@@ -141,11 +141,11 @@ def _build_pixeldit_bilinear():
     return _seed_params(model, seed=40), (torch.randn(2, 4, 4, 8, 8, generator=gen),)
 
 
-def _build_pixeldit_bilinear_pd2():
-    # Vertical patch size 2 -> semantic depth 2, pixel depth 4, so bilinear_dw
+def _build_strata_bilinear_pd2():
+    # Vertical patch size 2 -> backbone depth 2, pixel depth 4, so bilinear_dw
     # takes the trilinear depth-upsample path (not the d == sd 2D fallback).
-    model = PixelDiT(
-        semantic_config=dict(
+    model = Strata(
+        backbone_config=dict(
             in_channels=4,
             input_shape=(4, 8, 8),
             patch_size=(2, 2, 2),
@@ -165,16 +165,16 @@ def _build_pixeldit_bilinear_pd2():
 
 
 # name -> (builder, golden path). Drives the non-regression test and the golden
-# generator (data/_generate_dit3d_goldens.py).
+# generator (data/_generate_strata_goldens.py).
 _FIXTURE_REGISTRY = [
-    ("dit3d_axial", _build_dit3d_axial, _DATA / "dit3d_axial.pth"),
-    ("dit3d_stereo", _build_dit3d_stereo, _DATA / "dit3d_stereo.pth"),
-    ("pixeldit_pixelproj", _build_pixeldit_pixelproj, _DATA / "pixeldit_pixelproj.pth"),
-    ("pixeldit_bilinear", _build_pixeldit_bilinear, _DATA / "pixeldit_bilinear.pth"),
+    ("transformer_axial", _build_transformer_axial, _DATA / "transformer_axial.pth"),
+    ("transformer_stereo", _build_transformer_stereo, _DATA / "transformer_stereo.pth"),
+    ("strata_pixelproj", _build_strata_pixelproj, _DATA / "strata_pixelproj.pth"),
+    ("strata_bilinear", _build_strata_bilinear, _DATA / "strata_bilinear.pth"),
     (
-        "pixeldit_bilinear_pd2",
-        _build_pixeldit_bilinear_pd2,
-        _DATA / "pixeldit_bilinear_pd2.pth",
+        "strata_bilinear_pd2",
+        _build_strata_bilinear_pd2,
+        _DATA / "strata_bilinear_pd2.pth",
     ),
 ]
 
@@ -185,10 +185,10 @@ _FIXTURE_REGISTRY = [
 @pytest.mark.parametrize(
     "config", ["default", "custom"], ids=["with_defaults", "with_custom_args"]
 )
-def test_dit3d_constructor(config):
-    """DiT3D constructor and public attributes."""
+def test_transformer_constructor(config):
+    """StrataTransformer3D constructor and public attributes."""
     if config == "default":
-        model = DiT3D(in_channels=4)
+        model = StrataTransformer3D(in_channels=4)
         assert model.out_channels == 4  # defaults to in_channels
         assert model.embed_dim == 768
         assert model.num_heads == 8
@@ -197,7 +197,7 @@ def test_dit3d_constructor(config):
         assert model.rope_mode == "none"
         assert model.input_shape == (16, 64, 64)
     else:
-        model = DiT3D(
+        model = StrataTransformer3D(
             in_channels=3,
             out_channels=5,
             input_shape=(4, 8, 8),
@@ -214,7 +214,9 @@ def test_dit3d_constructor(config):
         assert model.patch_size == (1, 2, 2)
         assert model.rope_mode == "stereographic"
 
-    assert isinstance(model, Module), "DiT3D should inherit physicsnemo.Module"
+    assert isinstance(model, Module), (
+        "StrataTransformer3D should inherit physicsnemo.Module"
+    )
     assert hasattr(model, "meta")
     assert len(model.blocks) == model.num_layers
     # Axial mode caches static cos/sin buffers; stereographic builds per forward.
@@ -224,9 +226,9 @@ def test_dit3d_constructor(config):
 @pytest.mark.parametrize(
     "config", ["default", "custom"], ids=["with_defaults", "with_custom_args"]
 )
-def test_pixeldit_constructor(config):
-    """PixelDiT constructor and public attributes."""
-    semantic_config = dict(
+def test_strata_constructor(config):
+    """Strata constructor and public attributes."""
+    backbone_config = dict(
         in_channels=4,
         input_shape=(4, 8, 8),
         patch_size=(1, 2, 2),
@@ -236,16 +238,16 @@ def test_pixeldit_constructor(config):
         attn_kernel=-1,
     )
     if config == "default":
-        model = PixelDiT(semantic_config=semantic_config)
+        model = Strata(backbone_config=backbone_config)
         assert model.embed_dim_pixel == 128
         assert model.num_layers_pixel == 4
         assert model.adaln_mode == "pixel_proj"
         assert model.first_block_only_adaln is False
         # All blocks inject conditioning when not first-block-only.
-        assert all(isinstance(b, PixelDiTBlock) for b in model.pixel_blocks)
+        assert all(isinstance(b, StrataPixel3DBlock) for b in model.pixel_blocks)
     else:
-        model = PixelDiT(
-            semantic_config=semantic_config,
+        model = Strata(
+            backbone_config=backbone_config,
             embed_dim_pixel=16,
             num_layers_pixel=3,
             num_heads_pixel=2,
@@ -257,35 +259,35 @@ def test_pixeldit_constructor(config):
         assert model.num_layers_pixel == 3
         assert model.adaln_mode == "bilinear_dw"
         # First-block-only: exactly one conditioning block, the rest plain.
-        assert isinstance(model.pixel_blocks[0], PixelDiTBlock)
-        assert sum(isinstance(b, PixelDiTBlock) for b in model.pixel_blocks) == 1
+        assert isinstance(model.pixel_blocks[0], StrataPixel3DBlock)
+        assert sum(isinstance(b, StrataPixel3DBlock) for b in model.pixel_blocks) == 1
 
-    assert isinstance(model, Module), "PixelDiT should inherit physicsnemo.Module"
-    assert isinstance(model.semantic, DiT3D)
-    # The semantic stage is built headless (include_head=False): no output head,
+    assert isinstance(model, Module), "Strata should inherit physicsnemo.Module"
+    assert isinstance(model.backbone, StrataTransformer3D)
+    # The backbone stage is built headless (include_head=False): no output head,
     # only forward_tokens is used.
-    assert model.semantic.final_layer is None
-    assert not any("final_layer" in n for n, _ in model.semantic.named_parameters())
+    assert model.backbone.final_layer is None
+    assert not any("final_layer" in n for n, _ in model.backbone.named_parameters())
     assert len(model.pixel_blocks) == model.num_layers_pixel
 
 
-def test_dit3d_invalid_args():
+def test_transformer_invalid_args():
     """Constructor validation for incompatible arguments."""
     with pytest.raises(ValueError):  # embed_dim not divisible by num_heads
-        DiT3D(in_channels=4, embed_dim=30, num_heads=4)
+        StrataTransformer3D(in_channels=4, embed_dim=30, num_heads=4)
     with pytest.raises(ValueError):  # head_dim not divisible by 4 with RoPE
-        DiT3D(in_channels=4, embed_dim=8, num_heads=4, rope_mode="axial")
+        StrataTransformer3D(in_channels=4, embed_dim=8, num_heads=4, rope_mode="axial")
     with pytest.raises(ValueError):  # bad rope_mode
-        DiT3D(in_channels=4, rope_mode="bogus")
+        StrataTransformer3D(in_channels=4, rope_mode="bogus")
 
 
 @pytest.mark.parametrize("adaln_mode", ["pixel_proj", "bilinear_dw"])
-def test_pixeldit_supports_vertical_patch_gt_one(adaln_mode):
-    """Both AdaLN modes support a semantic vertical patch size > 1; bilinear_dw
+def test_strata_supports_vertical_patch_gt_one(adaln_mode):
+    """Both AdaLN modes support a backbone vertical patch size > 1; bilinear_dw
     trilinearly upsamples the depth axis (no longer restricted to patch_vert=1)."""
     torch.manual_seed(0)
-    model = PixelDiT(
-        semantic_config=dict(
+    model = Strata(
+        backbone_config=dict(
             in_channels=4,
             input_shape=(4, 8, 8),
             patch_size=(2, 2, 2),
@@ -309,11 +311,11 @@ def test_pixeldit_supports_vertical_patch_gt_one(adaln_mode):
 # Forward shape tests (CPU + CUDA via the SDPA path)
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("rope_mode", ["none", "axial", "stereographic"])
-def test_dit3d_forward_shape(device, rope_mode):
-    """DiT3D forward produces the correct output shape on the SDPA path."""
+def test_transformer_forward_shape(device, rope_mode):
+    """StrataTransformer3D forward produces the correct output shape on the SDPA path."""
     torch.manual_seed(0)
     b, c, d, h, w = 2, 4, 4, 8, 8
-    model = DiT3D(
+    model = StrataTransformer3D(
         in_channels=c,
         input_shape=(d, h, w),
         patch_size=(1, 2, 2),
@@ -330,12 +332,12 @@ def test_dit3d_forward_shape(device, rope_mode):
 
 
 @pytest.mark.parametrize("adaln_mode", ["pixel_proj", "bilinear_dw"])
-def test_pixeldit_forward_shape(device, adaln_mode):
-    """PixelDiT forward produces the correct output shape on the SDPA path."""
+def test_strata_forward_shape(device, adaln_mode):
+    """Strata forward produces the correct output shape on the SDPA path."""
     torch.manual_seed(0)
     b, c, d, h, w = 2, 4, 4, 8, 8
-    model = PixelDiT(
-        semantic_config=dict(
+    model = Strata(
+        backbone_config=dict(
             in_channels=c,
             input_shape=(d, h, w),
             patch_size=(1, 2, 2),
@@ -367,7 +369,7 @@ def test_non_regression(name, builder, golden):
     if not golden.exists():
         pytest.skip(
             f"golden {golden.name} missing; run "
-            f"test/experimental/models/strata/data/_generate_dit3d_goldens.py"
+            f"test/experimental/models/strata/data/_generate_strata_goldens.py"
         )
     data = torch.load(golden)
     model, _ = builder()
@@ -381,8 +383,8 @@ def test_non_regression(name, builder, golden):
 # --------------------------------------------------------------------------- #
 # Checkpoint tests (MOD-008c)
 # --------------------------------------------------------------------------- #
-def test_dit3d_checkpoint(device):
-    """DiT3D save/load/from_checkpoint reproduce the forward output."""
+def test_transformer_checkpoint(device):
+    """StrataTransformer3D save/load/from_checkpoint reproduce the forward output."""
     torch.manual_seed(0)
     kwargs = dict(
         in_channels=4,
@@ -395,22 +397,22 @@ def test_dit3d_checkpoint(device):
         do_alt_depthwise_attn=True,
         rope_mode="axial",
     )
-    model_1 = _seed_params(DiT3D(**kwargs), seed=1).to(device)
-    model_2 = _seed_params(DiT3D(**kwargs), seed=2).to(device)
+    model_1 = _seed_params(StrataTransformer3D(**kwargs), seed=1).to(device)
+    model_2 = _seed_params(StrataTransformer3D(**kwargs), seed=2).to(device)
     x = torch.randn(2, 4, 4, 8, 8, device=device)
     assert validate_checkpoint(model_1, model_2, (x,))
 
 
 @pytest.mark.parametrize("adaln_mode", ["pixel_proj", "bilinear_dw"])
-def test_pixeldit_checkpoint(device, adaln_mode):
-    """PixelDiT save/load/from_checkpoint reproduce the forward output.
+def test_strata_checkpoint(device, adaln_mode):
+    """Strata save/load/from_checkpoint reproduce the forward output.
 
     Covers ``bilinear_dw`` too, so the shadowed-``forward`` (chunked
     :class:`DepthwiseConv`) survives a full ``.mdlus`` round-trip.
     """
     torch.manual_seed(0)
     kwargs = dict(
-        semantic_config=dict(
+        backbone_config=dict(
             in_channels=4,
             input_shape=(4, 8, 8),
             patch_size=(1, 2, 2),
@@ -425,8 +427,8 @@ def test_pixeldit_checkpoint(device, adaln_mode):
         attn_kernel_pixel=-1,
         adaln_mode=adaln_mode,
     )
-    model_1 = _seed_params(PixelDiT(**kwargs), seed=1).to(device)
-    model_2 = _seed_params(PixelDiT(**kwargs), seed=2).to(device)
+    model_1 = _seed_params(Strata(**kwargs), seed=1).to(device)
+    model_2 = _seed_params(Strata(**kwargs), seed=2).to(device)
     x = torch.randn(2, 4, 4, 8, 8, device=device)
     assert validate_checkpoint(model_1, model_2, (x,))
 
@@ -435,13 +437,13 @@ def test_pixeldit_checkpoint(device, adaln_mode):
 # 3D neighborhood-attention (NATTEN) tests (CUDA + natten only)
 # --------------------------------------------------------------------------- #
 @requires_module(["natten"])
-def test_dit3d_natten_forward(device):
-    """DiT3D forward on the NA3D path (NATTEN is CUDA-only)."""
+def test_transformer_natten_forward(device):
+    """StrataTransformer3D forward on the NA3D path (NATTEN is CUDA-only)."""
     if device == "cpu":
         pytest.skip("natten neighborhood attention is not available on CPU")
     torch.manual_seed(0)
     b, c, d, h, w = 2, 4, 4, 8, 8
-    model = DiT3D(
+    model = StrataTransformer3D(
         in_channels=c,
         input_shape=(d, h, w),
         patch_size=(1, 2, 2),
@@ -461,14 +463,14 @@ def test_dit3d_natten_forward(device):
 
 
 @requires_module(["natten"])
-def test_pixeldit_natten_forward(device):
-    """PixelDiT forward on the NA3D path (NATTEN is CUDA-only)."""
+def test_strata_natten_forward(device):
+    """Strata forward on the NA3D path (NATTEN is CUDA-only)."""
     if device == "cpu":
         pytest.skip("natten neighborhood attention is not available on CPU")
     torch.manual_seed(0)
     b, c, d, h, w = 2, 4, 4, 8, 8
-    model = PixelDiT(
-        semantic_config=dict(
+    model = Strata(
+        backbone_config=dict(
             in_channels=c,
             input_shape=(d, h, w),
             patch_size=(1, 2, 2),
@@ -503,7 +505,7 @@ def test_natten3d_attention_kernel_triple():
 # --------------------------------------------------------------------------- #
 # Gradient-flow tests: every trainable parameter must participate in the
 # forward graph (a parameter left with ``grad is None`` after backward is dead /
-# disconnected). For PixelDiT this also confirms the semantic stage receives
+# disconnected). For Strata this also confirms the backbone stage receives
 # gradients through the pixel stage.
 # --------------------------------------------------------------------------- #
 def _assert_all_params_receive_grad(model):
@@ -513,11 +515,11 @@ def _assert_all_params_receive_grad(model):
     assert not missing, f"parameters received no gradient: {missing}"
 
 
-def test_dit3d_backward_all_params_receive_gradients(device):
-    """All DiT3D parameters receive a gradient (no dead params)."""
+def test_transformer_backward_all_params_receive_gradients(device):
+    """All StrataTransformer3D parameters receive a gradient (no dead params)."""
     torch.manual_seed(0)
     model = _seed_params(
-        DiT3D(
+        StrataTransformer3D(
             in_channels=4,
             input_shape=(4, 8, 8),
             patch_size=(1, 2, 2),
@@ -537,12 +539,12 @@ def test_dit3d_backward_all_params_receive_gradients(device):
     _assert_all_params_receive_grad(model)
 
 
-def test_pixeldit_backward_all_params_receive_gradients(device):
-    """All PixelDiT parameters (incl. the semantic stage) receive a gradient."""
+def test_strata_backward_all_params_receive_gradients(device):
+    """All Strata parameters (incl. the backbone stage) receive a gradient."""
     torch.manual_seed(0)
     model = _seed_params(
-        PixelDiT(
-            semantic_config=dict(
+        Strata(
+            backbone_config=dict(
                 in_channels=4,
                 input_shape=(4, 8, 8),
                 patch_size=(1, 2, 2),
@@ -562,9 +564,9 @@ def test_pixeldit_backward_all_params_receive_gradients(device):
     x = torch.randn(2, 4, 4, 8, 8, device=device)
     model(x).pow(2).mean().backward()
     _assert_all_params_receive_grad(model)
-    # The semantic stage must be reached through the pixel stage.
+    # The backbone stage must be reached through the pixel stage.
     assert any(
-        n.startswith("semantic.") and p.grad is not None and p.grad.any()
+        n.startswith("backbone.") and p.grad is not None and p.grad.any()
         for n, p in model.named_parameters()
     )
 
@@ -684,11 +686,11 @@ def test_build_stereographic_token_coords():
     [((4, 8, 8), (1, 2, 2)), ((6, 8, 8), (2, 2, 2)), ((2, 16, 8), (1, 4, 2))],
     ids=["pd1", "pd2", "anisotropic"],
 )
-def test_dit3d_forward_varied_shapes(shape, patch):
+def test_transformer_forward_varied_shapes(shape, patch):
     """Forward preserves shape across depth / horizontal / vertical-patch combos."""
     torch.manual_seed(0)
     d, h, w = shape
-    model = DiT3D(
+    model = StrataTransformer3D(
         in_channels=3,
         input_shape=shape,
         patch_size=patch,
@@ -706,11 +708,11 @@ def test_dit3d_forward_varied_shapes(shape, patch):
 # torch.compile, bf16 autocast, and activation checkpointing
 # --------------------------------------------------------------------------- #
 @torch.no_grad()
-def test_dit3d_torch_compile_matches_eager():
+def test_transformer_torch_compile_matches_eager():
     """torch.compile produces the same output as eager (SDPA path)."""
     torch.manual_seed(0)
     model = _seed_params(
-        DiT3D(
+        StrataTransformer3D(
             in_channels=4,
             input_shape=(4, 8, 8),
             patch_size=(1, 2, 2),
@@ -728,11 +730,11 @@ def test_dit3d_torch_compile_matches_eager():
 
 
 @torch.no_grad()
-def test_dit3d_bf16_autocast_forward(device):
+def test_transformer_bf16_autocast_forward(device):
     """The model runs under bf16 autocast (and accepts bf16_mixed) with finite output."""
     torch.manual_seed(0)
     model = _seed_params(
-        DiT3D(
+        StrataTransformer3D(
             in_channels=4,
             input_shape=(4, 8, 8),
             patch_size=(1, 2, 2),
@@ -751,8 +753,8 @@ def test_dit3d_bf16_autocast_forward(device):
     assert torch.isfinite(out.float()).all()
 
 
-def _make_dit3d_default():
-    return DiT3D(
+def _make_transformer_default():
+    return StrataTransformer3D(
         in_channels=4,
         input_shape=(4, 8, 8),
         patch_size=(1, 2, 2),
@@ -764,7 +766,7 @@ def _make_dit3d_default():
 
 
 @torch.no_grad()
-def test_dit3d_include_head_toggle():
+def test_transformer_include_head_toggle():
     """include_head=False omits the head: forward returns tokens, not a field."""
     torch.manual_seed(0)
     kw = dict(
@@ -776,8 +778,8 @@ def test_dit3d_include_head_toggle():
         num_layers=2,
         attn_kernel=-1,
     )
-    full = DiT3D(**kw).eval()
-    headless = DiT3D(**kw, include_head=False).eval()
+    full = StrataTransformer3D(**kw).eval()
+    headless = StrataTransformer3D(**kw, include_head=False).eval()
     x = torch.randn(2, 3, 4, 8, 8)
     assert full.final_layer is not None
     assert full(x).shape == (2, 3, 4, 8, 8)  # decoded field
@@ -790,8 +792,8 @@ def test_dit3d_include_head_toggle():
 @torch.no_grad()
 @pytest.mark.parametrize(
     "make",
-    [_make_dit3d_default, lambda: _build_pixeldit_bilinear()[0]],
-    ids=["dit3d", "pixeldit"],
+    [_make_transformer_default, lambda: _build_strata_bilinear()[0]],
+    ids=["transformer", "strata"],
 )
 def test_output_head_supports_pure_bf16_cast(make, device):
     """A model cast wholesale to bf16 (model.bfloat16()) runs without a dtype crash.
@@ -799,7 +801,7 @@ def test_output_head_supports_pure_bf16_cast(make, device):
     Distinct from the bf16_mixed autocast path (weights stay fp32): here the
     parameters are genuinely bf16. The fp32-forced output head must match its
     input to the (bf16) weight dtype, else F.linear raises
-    "mat1 and mat2 must have the same dtype". The PixelDiT case also exercises
+    "mat1 and mat2 must have the same dtype". The Strata case also exercises
     the bf16 DepthwiseConv (bilinear_dw) path.
     """
     torch.manual_seed(0)
@@ -812,7 +814,7 @@ def test_output_head_supports_pure_bf16_cast(make, device):
 
 @requires_module(["natten"])
 @torch.no_grad()
-def test_dit3d_natten_bf16_cast(device):
+def test_transformer_natten_bf16_cast(device):
     """A pure bf16 cast also survives the real NA3D (NATTEN) attention path.
 
     The other bf16-cast test uses the SDPA fallback (``attn_kernel=-1``); this one
@@ -825,7 +827,7 @@ def test_dit3d_natten_bf16_cast(device):
         pytest.skip("natten neighborhood attention is not available on CPU")
     torch.manual_seed(0)
     model = (
-        DiT3D(
+        StrataTransformer3D(
             in_channels=4,
             input_shape=(4, 8, 8),
             patch_size=(1, 2, 2),
@@ -846,7 +848,7 @@ def test_dit3d_natten_bf16_cast(device):
     assert out.shape == (2, 4, 4, 8, 8) and torch.isfinite(out.float()).all()
 
 
-def test_dit3d_activation_checkpointing_matches(device):
+def test_transformer_activation_checkpointing_matches(device):
     """activation_checkpointing reproduces the non-checkpointed output and grads.
 
     Uses depth-axis-alternating blocks + stereographic RoPE so per-block
@@ -865,12 +867,12 @@ def test_dit3d_activation_checkpointing_matches(device):
         do_alt_depthwise_attn=True,
         rope_mode="stereographic",
     )
-    plain = _seed_params(DiT3D(**kwargs, activation_checkpointing=False), seed=1).to(
-        device
-    )
-    ckpt = _seed_params(DiT3D(**kwargs, activation_checkpointing=True), seed=1).to(
-        device
-    )
+    plain = _seed_params(
+        StrataTransformer3D(**kwargs, activation_checkpointing=False), seed=1
+    ).to(device)
+    ckpt = _seed_params(
+        StrataTransformer3D(**kwargs, activation_checkpointing=True), seed=1
+    ).to(device)
     # Checkpointing only engages in train mode (drop rates default to 0, so the
     # forward is still deterministic and comparable to the plain model).
     plain.train()
@@ -892,11 +894,11 @@ def test_dit3d_activation_checkpointing_matches(device):
 
 
 # --------------------------------------------------------------------------- #
-# PixelDiT RoPE: the semantic stage (via semantic_config["rope_mode"]) and the
+# Strata RoPE: the backbone stage (via backbone_config["rope_mode"]) and the
 # pixel stage (rope_mode_pixel) are INDEPENDENT — every combination must work.
-# PixelDiT.forward routes `pos` to both stages. In particular a stereographic
-# pixel stage must not depend on the semantic stage also being stereographic
-# (the pixel coords must not dereference a possibly-None semantic RoPE module).
+# Strata.forward routes `pos` to both stages. In particular a stereographic
+# pixel stage must not depend on the backbone stage also being stereographic
+# (the pixel coords must not dereference a possibly-None backbone RoPE module).
 # --------------------------------------------------------------------------- #
 @torch.no_grad()
 @pytest.mark.parametrize(
@@ -904,18 +906,18 @@ def test_dit3d_activation_checkpointing_matches(device):
     [
         ("none", "none"),
         ("none", "axial"),
-        ("none", "stereographic"),  # stereographic pixel stage, no semantic RoPE
+        ("none", "stereographic"),  # stereographic pixel stage, no backbone RoPE
         ("stereographic", "none"),
         ("axial", "stereographic"),
         ("stereographic", "stereographic"),
     ],
 )
-def test_pixeldit_forward_rope_modes(device, sem_rope, pix_rope):
-    """Semantic-stage and pixel-stage RoPE are independent across all combos."""
+def test_strata_forward_rope_modes(device, sem_rope, pix_rope):
+    """Backbone-stage and pixel-stage RoPE are independent across all combos."""
     torch.manual_seed(0)
     b, c, d, h, w = 2, 4, 4, 8, 8
-    model = PixelDiT(
-        semantic_config=dict(
+    model = Strata(
+        backbone_config=dict(
             in_channels=c,
             input_shape=(d, h, w),
             patch_size=(1, 2, 2),
@@ -944,17 +946,17 @@ def test_pixeldit_forward_rope_modes(device, sem_rope, pix_rope):
 
 
 @pytest.mark.parametrize("adaln_mode", ["pixel_proj", "bilinear_dw"])
-def test_pixeldit_activation_checkpointing_matches(device, adaln_mode):
-    """PixelDiT pixel-block checkpointing reproduces the non-checkpointed output/grads.
+def test_strata_activation_checkpointing_matches(device, adaln_mode):
+    """Strata pixel-block checkpointing reproduces the non-checkpointed output/grads.
 
     ``first_block_only_adaln=True`` makes the pixel stack heterogeneous (one
-    conditioning ``PixelDiTBlock`` + plain ``DiT3DBlock``s), so checkpointing
+    conditioning ``StrataPixel3DBlock`` + plain ``StrataTransformer3DBlock``s), so checkpointing
     exercises both closure branches; ``bilinear_dw`` additionally checkpoints the
     block that captures ``s_cond_bilinear``.
     """
     torch.manual_seed(0)
     kwargs = dict(
-        semantic_config=dict(
+        backbone_config=dict(
             in_channels=4,
             input_shape=(4, 8, 8),
             patch_size=(1, 2, 2),
@@ -971,10 +973,10 @@ def test_pixeldit_activation_checkpointing_matches(device, adaln_mode):
         first_block_only_adaln=True,
     )
     plain = _seed_params(
-        PixelDiT(**kwargs, activation_checkpointing_pixel=False), seed=1
+        Strata(**kwargs, activation_checkpointing_pixel=False), seed=1
     ).to(device)
     ckpt = _seed_params(
-        PixelDiT(**kwargs, activation_checkpointing_pixel=True), seed=1
+        Strata(**kwargs, activation_checkpointing_pixel=True), seed=1
     ).to(device)
     # Checkpointing only engages in train mode (drop rates default to 0).
     plain.train()
@@ -986,7 +988,7 @@ def test_pixeldit_activation_checkpointing_matches(device, adaln_mode):
     assert torch.allclose(y_plain, y_ckpt, atol=1e-5)
     y_plain.pow(2).mean().backward()
     y_ckpt.pow(2).mean().backward()
-    # Looser grad tolerance than DiT3D: gradients through the chunked-vmap
+    # Looser grad tolerance than StrataTransformer3D: gradients through the chunked-vmap
     # DepthwiseConv (bilinear_dw) recomputed under checkpointing accumulate
     # ~1e-4 float noise on CUDA. The forward output above still matches exactly.
     for (n, p_plain), (_, p_ckpt) in zip(
@@ -995,8 +997,8 @@ def test_pixeldit_activation_checkpointing_matches(device, adaln_mode):
         assert torch.allclose(p_plain.grad, p_ckpt.grad, atol=1e-3, rtol=1e-3), n
 
 
-def _make_axial_dit3d(input_shape):
-    return DiT3D(
+def _make_axial_transformer(input_shape):
+    return StrataTransformer3D(
         in_channels=3,
         input_shape=input_shape,
         patch_size=(1, 2, 2),
@@ -1009,7 +1011,7 @@ def _make_axial_dit3d(input_shape):
 
 
 @torch.no_grad()
-def test_dit3d_set_tile_size_axial():
+def test_transformer_set_tile_size_axial():
     """set_tile_size rebuilds the axial RoPE buffers to match a fresh model.
 
     The buffers are compared against a model constructed directly at the new
@@ -1017,11 +1019,11 @@ def test_dit3d_set_tile_size_axial():
     but changes the table, which a shape-only check would miss.
     """
     torch.manual_seed(0)
-    model = _make_axial_dit3d((4, 8, 8))
+    model = _make_axial_transformer((4, 8, 8))
     assert model(torch.randn(2, 3, 4, 8, 8)).shape == (2, 3, 4, 8, 8)
     # Re-tile to a taller grid and compare to a model built directly at (4, 16, 8).
     model.set_tile_size(height=16, width=8)
-    fresh = _make_axial_dit3d((4, 16, 8))
+    fresh = _make_axial_transformer((4, 16, 8))
     assert model._rope_cos.shape[0] == 4 * (16 // 2) * (8 // 2)
     assert torch.equal(model._rope_cos, fresh._rope_cos)
     assert torch.equal(model._rope_sin, fresh._rope_sin)
@@ -1031,7 +1033,7 @@ def test_dit3d_set_tile_size_axial():
 
 @torch.no_grad()
 @pytest.mark.parametrize("rope_mode", ["stereographic", "none"])
-def test_dit3d_set_tile_size_retiles_non_axial(rope_mode):
+def test_transformer_set_tile_size_retiles_non_axial(rope_mode):
     """set_tile_size also re-tiles non-axial modes (the regional/global use case).
 
     stereographic / none build their RoPE per forward, so re-tiling only needs
@@ -1039,7 +1041,7 @@ def test_dit3d_set_tile_size_retiles_non_axial(rope_mode):
     and one at the old tile is correctly rejected.
     """
     torch.manual_seed(0)
-    model = DiT3D(
+    model = StrataTransformer3D(
         in_channels=3,
         input_shape=(4, 8, 8),
         patch_size=(1, 2, 2),

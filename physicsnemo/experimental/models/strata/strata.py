@@ -14,17 +14,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""PixelDiT: a two-stage 3D transformer regression model with pixel-wise conditioning.
+r"""Strata: a two-stage 3D transformer regression model with pixel-wise conditioning.
 
-Stage 1 (semantic) is a :class:`~physicsnemo.experimental.models.strata.DiT3D`
-operating on coarse patches; its output tokens ``s_cond`` condition stage 2
+Stage 1 (backbone) is a :class:`~physicsnemo.experimental.models.strata.StrataTransformer3D`
+operating on coarse patches; its output tokens ``backbone_cond`` condition stage 2
 (pixel), which runs at full :math:`1\times1\times1`-patch resolution and injects
 the conditioning through pixel-wise adaptive layer norm, adapting the
 pixel-wise-AdaLN idea from PixelDiT (`arXiv:2511.20645
 <https://arxiv.org/abs/2511.20645>`_). This is an adaptation, not a faithful
 port: a deterministic regression model (no diffusion / timestep / label
 conditioning), an independent reimplementation of the AdaLN, with an original
-conditioning path. See :class:`PixelDiT` for the full attribution.
+conditioning path. See :class:`Strata` for the full attribution.
 """
 
 from __future__ import annotations
@@ -46,21 +46,21 @@ from physicsnemo.nn.module.mlp_layers import Mlp
 
 from .coords import build_axial_token_coords, build_stereographic_token_coords
 from .depthwise_conv import DepthwiseConv
-from .dit3d import DiT3D
+from .transformer import StrataTransformer3D
 from .layers import (
-    DiT3DBlock,
+    StrataTransformer3DBlock,
     FinalLayer3D,
     Natten3DSelfAttention,
     PatchEmbed3D,
     RopeTables,
 )
 
-__all__ = ["PixelDiT", "PixelDiTMetaData", "PixelDiTBlock"]
+__all__ = ["Strata", "StrataMetaData", "StrataPixel3DBlock"]
 
 
 @dataclass
-class PixelDiTMetaData(ModelMetaData):
-    r"""Metadata for :class:`PixelDiT` (see :class:`~physicsnemo.core.meta.ModelMetaData`)."""
+class StrataMetaData(ModelMetaData):
+    r"""Metadata for :class:`Strata` (see :class:`~physicsnemo.core.meta.ModelMetaData`)."""
 
     # Optimization
     jit: bool = False
@@ -77,22 +77,22 @@ class PixelDiTMetaData(ModelMetaData):
     auto_grad: bool = False
 
 
-class PixelDiTBlock(nn.Module):
+class StrataPixel3DBlock(nn.Module):
     r"""Pixel-pathway transformer block with pixel-wise adaptive layer norm.
 
     Like a DiT block, but the adaptive-layer-norm (AdaLN) modulation parameters
     (``shift``, ``scale``, ``gate`` for both the attention and MLP sub-layers)
-    vary *per pixel* and are derived from the semantic conditioning tokens
-    ``s_cond``. This is a **regression** conditioning: unlike the original DiT's
+    vary *per pixel* and are derived from the backbone conditioning tokens
+    ``backbone_cond``. This is a **regression** conditioning: unlike the original DiT's
     adaLN-Zero (which modulates on the diffusion timestep / noise level), here
-    the modulation is a learned function of the semantic stage's features —
+    the modulation is a learned function of the backbone stage's features —
     there is no diffusion timestep or noise. Two derivation modes are supported
     (``adaln_mode``):
 
-    - ``"pixel_proj"``: project each semantic token to
+    - ``"pixel_proj"``: project each backbone token to
       ``pixels_per_patch * 6 * dim`` values and scatter them to the pixels of
       that patch.
-    - ``"bilinear_dw"``: trilinearly upsample the semantic tokens to pixel
+    - ``"bilinear_dw"``: trilinearly upsample the backbone tokens to pixel
       resolution (over depth and the horizontal plane), smooth horizontal patch
       seams with a per-level depthwise :math:`5\times5` convolution,
       RMS-normalize, apply GeLU, then project to ``6 * dim``.
@@ -101,7 +101,7 @@ class PixelDiTBlock(nn.Module):
     an identity residual mapping.
 
     The pixel-wise AdaLN is an independent reimplementation of the conditioning
-    in PixelDiT (see :class:`PixelDiT`); the ``"bilinear_dw"`` mode is an
+    in Strata (see :class:`Strata`); the ``"bilinear_dw"`` mode is an
     original addition beyond that work.
 
     Parameters
@@ -109,9 +109,9 @@ class PixelDiTBlock(nn.Module):
     dim : int
         Pixel-pathway embedding dimension.
     cond_dim : int
-        Semantic-pathway (conditioning) embedding dimension.
+        Backbone-pathway (conditioning) embedding dimension.
     pixels_per_patch : int
-        Number of pixels per semantic patch (:math:`p_d \cdot p_h \cdot p_w`);
+        Number of pixels per backbone patch (:math:`p_d \cdot p_h \cdot p_w`);
         used by the ``"pixel_proj"`` mode.
     num_heads : int
         Number of attention heads.
@@ -136,7 +136,7 @@ class PixelDiTBlock(nn.Module):
     na3d_backend : str, optional, default=None
         NATTEN backend forwarded to :class:`Natten3DSelfAttention`.
     adaln_mode : Literal["pixel_proj", "bilinear_dw"], optional, default="pixel_proj"
-        How per-pixel modulation parameters are produced from ``s_cond``.
+        How per-pixel modulation parameters are produced from ``backbone_cond``.
     chunk_size_grouped_conv : int, optional, default=2
         ``torch.vmap`` chunk size for the depthwise conv (``"bilinear_dw"`` only).
     use_chunked_depthwise_conv : bool, optional, default=True
@@ -148,12 +148,12 @@ class PixelDiTBlock(nn.Module):
     -------
     x : torch.Tensor
         Pixel tokens of shape :math:`(B, D \cdot H \cdot W, \text{dim})`.
-    s_cond : torch.Tensor
-        Semantic conditioning tokens of shape :math:`(B, N_s, \text{cond\_dim})`.
+    backbone_cond : torch.Tensor
+        Backbone conditioning tokens of shape :math:`(B, N_s, \text{cond\_dim})`.
     pixel_dhw : Tuple[int, int, int]
         Full pixel-grid shape :math:`(D, H, W)`.
-    semantic_dhw : Tuple[int, int, int]
-        Semantic patch-grid shape :math:`(s_d, s_h, s_w)`.
+    backbone_dhw : Tuple[int, int, int]
+        Backbone patch-grid shape :math:`(s_d, s_h, s_w)`.
     s_cond_bilinear : torch.Tensor, optional
         Shared bilinear-upsampled conditioning (``"bilinear_dw"`` mode only),
         as produced by :meth:`precompute_bilinear_cond`.
@@ -263,7 +263,7 @@ class PixelDiTBlock(nn.Module):
     def _expand_cond_to_pixels(
         adaln_raw: torch.Tensor,
         pixel_dhw: Tuple[int, int, int],
-        semantic_dhw: Tuple[int, int, int],
+        backbone_dhw: Tuple[int, int, int],
     ) -> torch.Tensor:
         r"""Scatter per-patch modulation values to per-pixel order.
 
@@ -274,8 +274,8 @@ class PixelDiTBlock(nn.Module):
             :math:`(B, N_s, p_{ppp} \cdot 6 \cdot \text{dim})`.
         pixel_dhw : Tuple[int, int, int]
             Full pixel-grid shape :math:`(D, H, W)`.
-        semantic_dhw : Tuple[int, int, int]
-            Semantic patch-grid shape :math:`(s_d, s_h, s_w)`.
+        backbone_dhw : Tuple[int, int, int]
+            Backbone patch-grid shape :math:`(s_d, s_h, s_w)`.
 
         Returns
         -------
@@ -283,7 +283,7 @@ class PixelDiTBlock(nn.Module):
             Per-pixel modulation of shape :math:`(B, D \cdot H \cdot W, 6 \cdot \text{dim})`.
         """
         d, h, w = pixel_dhw
-        sd, sh, sw = semantic_dhw
+        sd, sh, sw = backbone_dhw
         pv, ph, pw = d // sd, h // sh, w // sw
         return rearrange(
             adaln_raw,
@@ -298,17 +298,17 @@ class PixelDiTBlock(nn.Module):
 
     @staticmethod
     def precompute_bilinear_cond(
-        s_cond: torch.Tensor,
+        backbone_cond: torch.Tensor,
         pixel_dhw: Tuple[int, int, int],
-        semantic_dhw: Tuple[int, int, int],
+        backbone_dhw: Tuple[int, int, int],
     ) -> torch.Tensor:
-        r"""Upsample semantic tokens to pixel resolution.
+        r"""Upsample backbone tokens to pixel resolution.
 
         Shared across all ``"bilinear_dw"`` blocks so the (expensive) upsample is
-        computed once per forward pass. When the pixel depth equals the semantic
+        computed once per forward pass. When the pixel depth equals the backbone
         depth (:math:`s_d = D`, i.e. no depth upsampling) it uses a per-level **2D
         bilinear** upsample — bit-identical to the original 2D-only path, so the
-        common case (semantic vertical patch size 1, or any matching pixel/semantic
+        common case (backbone vertical patch size 1, or any matching pixel/backbone
         depth) is numerically unchanged. This branch is deliberate, not just an
         optimization: a 3D trilinear upsample at :math:`s_d = D` agrees with the
         per-level 2D bilinear only to ~1e-7 (float), **not** exactly, so unifying on
@@ -318,12 +318,12 @@ class PixelDiTBlock(nn.Module):
 
         Parameters
         ----------
-        s_cond : torch.Tensor
-            Semantic tokens of shape :math:`(B, N_s, C)`.
+        backbone_cond : torch.Tensor
+            Backbone tokens of shape :math:`(B, N_s, C)`.
         pixel_dhw : Tuple[int, int, int]
             Full pixel-grid shape :math:`(D, H, W)`.
-        semantic_dhw : Tuple[int, int, int]
-            Semantic patch-grid shape :math:`(s_d, s_h, s_w)`.
+        backbone_dhw : Tuple[int, int, int]
+            Backbone patch-grid shape :math:`(s_d, s_h, s_w)`.
 
         Returns
         -------
@@ -331,19 +331,19 @@ class PixelDiTBlock(nn.Module):
             Upsampled conditioning of shape :math:`(B, D, C, H, W)`.
         """
         d, h, w = pixel_dhw  # full pixel-grid depth / height / width
-        sd, sh, sw = semantic_dhw
+        sd, sh, sw = backbone_dhw
         if d == sd:
-            # Depth not upsampled (pixel depth == semantic depth): per-level 2D
+            # Depth not upsampled (pixel depth == backbone depth): per-level 2D
             # bilinear. Bit-identical to the original 2D path (backward compatible).
             s_sp = rearrange(
-                s_cond, "b (sd sh sw) c -> (b sd) c sh sw", sd=sd, sh=sh, sw=sw
+                backbone_cond, "b (sd sh sw) c -> (b sd) c sh sw", sd=sd, sh=sh, sw=sw
             )
             s_pix = F.interpolate(
                 s_sp, size=(h, w), mode="bilinear", align_corners=False
             )
             return rearrange(s_pix, "(b sd) c h w -> b sd c h w", sd=sd)
-        # Depth upsampled (pixel depth > semantic depth): 3D trilinear over (D,H,W).
-        s_sp = rearrange(s_cond, "b (sd sh sw) c -> b c sd sh sw", sd=sd, sh=sh, sw=sw)
+        # Depth upsampled (pixel depth > backbone depth): 3D trilinear over (D,H,W).
+        s_sp = rearrange(backbone_cond, "b (sd sh sw) c -> b c sd sh sw", sd=sd, sh=sh, sw=sw)
         s_pix = F.interpolate(
             s_sp, size=(d, h, w), mode="trilinear", align_corners=False
         )
@@ -385,9 +385,9 @@ class PixelDiTBlock(nn.Module):
     def forward(
         self,
         x: Float[torch.Tensor, "batch pixels dim"],
-        s_cond: Float[torch.Tensor, "batch patches cond_dim"],
+        backbone_cond: Float[torch.Tensor, "batch patches cond_dim"],
         pixel_dhw: Tuple[int, int, int],
-        semantic_dhw: Tuple[int, int, int],
+        backbone_dhw: Tuple[int, int, int],
         s_cond_bilinear: Optional[torch.Tensor] = None,
         rope_tables: Optional[RopeTables] = None,
     ) -> Float[torch.Tensor, "batch pixels dim"]:
@@ -401,9 +401,9 @@ class PixelDiTBlock(nn.Module):
                 self._compute_bilinear_dw_adaln_params(s_cond_bilinear)
             )
         else:
-            adaln_raw = self.adaln_pixel_proj(s_cond)  # (B, N_s, ppp*6*dim)
+            adaln_raw = self.adaln_pixel_proj(backbone_cond)  # (B, N_s, ppp*6*dim)
             adaln_params = self._expand_cond_to_pixels(
-                adaln_raw, pixel_dhw, semantic_dhw
+                adaln_raw, pixel_dhw, backbone_dhw
             )  # (B, D*H*W, 6*dim)
             shift1, scale1, gate1, shift2, scale2, gate2 = adaln_params.chunk(
                 self.num_adaln_params, dim=-1
@@ -421,35 +421,35 @@ class PixelDiTBlock(nn.Module):
         return x
 
 
-class PixelDiT(Module):
+class Strata(Module):
     r"""Two-stage 3D transformer regression model with pixel-wise conditioning.
 
-    Composes a :class:`~physicsnemo.experimental.models.strata.DiT3D` semantic
-    stage (built from ``semantic_config``) with a pixel-resolution stage. The
-    semantic stage's tokens condition every pixel block via pixel-wise adaptive
-    layer norm (see :class:`PixelDiTBlock`). The semantic stage's unused output
+    Composes a :class:`~physicsnemo.experimental.models.strata.StrataTransformer3D` backbone
+    stage (built from ``backbone_config``) with a pixel-resolution stage. The
+    backbone stage's tokens condition every pixel block via pixel-wise adaptive
+    layer norm (see :class:`StrataPixel3DBlock`). The backbone stage's unused output
     head is dropped at construction (only its
-    :meth:`~physicsnemo.experimental.models.strata.DiT3D.forward_tokens` trunk is
+    :meth:`~physicsnemo.experimental.models.strata.StrataTransformer3D.forward_tokens` trunk is
     used), so its forward is unavailable once wrapped.
 
-    Like :class:`DiT3D`, this is an **independent reimplementation** of the
+    Like :class:`StrataTransformer3D`, this is an **independent reimplementation** of the
     Diffusion-Transformer (DiT) architecture (not a reuse of
     :class:`~physicsnemo.models.dit.DiT`'s components), used as a **deterministic
     regression** model — **not** a generative diffusion model. The "DiT" name is
     especially apt here because the pixel stage keeps DiT's *defining* feature,
-    **adaptive-layer-norm (adaLN) conditioning** (see :class:`PixelDiTBlock`); only
-    the conditioning *signal* differs — the semantic stage's learned features,
+    **adaptive-layer-norm (adaLN) conditioning** (see :class:`StrataPixel3DBlock`); only
+    the conditioning *signal* differs — the backbone stage's learned features,
     rather than a diffusion timestep / noise level. There is no diffusion process
     and no class-label or text conditioning (see Notes).
 
     Parameters
     ----------
-    semantic_config : Dict[str, Any], optional, default=None
-        Keyword arguments forwarded to :class:`DiT3D` to build the semantic
+    backbone_config : Dict[str, Any], optional, default=None
+        Keyword arguments forwarded to :class:`StrataTransformer3D` to build the backbone
         stage. Its ``in_channels``, ``input_shape``, ``patch_size``,
         ``out_channels``, and ``embed_dim`` determine the pixel-pathway layout.
         ``None`` is coerced to an empty dict, i.e. a default-configured
-        :class:`DiT3D` semantic stage.
+        :class:`StrataTransformer3D` backbone stage.
     embed_dim_pixel : int, optional, default=128
         Pixel-pathway embedding dimension.
     num_layers_pixel : int, optional, default=4
@@ -470,12 +470,12 @@ class PixelDiT(Module):
     na3d_backend_pixel : str, optional, default=None
         NATTEN backend for the pixel pathway.
     adaln_mode : Literal["pixel_proj", "bilinear_dw"], optional, default="pixel_proj"
-        Pixel-wise modulation derivation mode (see :class:`PixelDiTBlock`).
-        ``"bilinear_dw"`` trilinearly upsamples the semantic conditioning over
+        Pixel-wise modulation derivation mode (see :class:`StrataPixel3DBlock`).
+        ``"bilinear_dw"`` trilinearly upsamples the backbone conditioning over
         depth and the horizontal plane, so any vertical patch size is supported.
     first_block_only_adaln : bool, optional, default=False
         If ``True``, only the first pixel block injects conditioning (adaptive
-        layer norm); the rest are plain :class:`DiT3DBlock` blocks.
+        layer norm); the rest are plain :class:`StrataTransformer3DBlock` blocks.
     use_chunked_depthwise_conv : bool, optional, default=True
         Whether ``"bilinear_dw"`` blocks use the chunked :class:`DepthwiseConv`.
     chunk_size_grouped_conv : int, optional, default=2
@@ -484,7 +484,7 @@ class PixelDiT(Module):
         Pixel-pathway RoPE mode. ``"stereographic"`` builds pixel-resolution
         coordinates via :func:`~physicsnemo.experimental.models.strata.coords.build_stereographic_token_coords`
         and requires ``pos`` at ``forward``. Note: unlike
-        :meth:`~physicsnemo.experimental.models.strata.DiT3D.set_tile_size`, the
+        :meth:`~physicsnemo.experimental.models.strata.StrataTransformer3D.set_tile_size`, the
         pixel stage has no re-tiling hook, so an ``"axial"`` pixel RoPE is fixed to
         the construction-time grid (``stereographic`` is recomputed per forward and
         is unaffected).
@@ -514,7 +514,7 @@ class PixelDiT(Module):
 
     Notes
     -----
-    The pixel-wise adaptive-layer-norm conditioning is adapted from PixelDiT
+    The pixel-wise adaptive-layer-norm conditioning is adapted from Strata
     (see References). This is an **adaptation, not a faithful reimplementation**:
 
     - It is a deterministic regression model (e.g. weather emulation), not a
@@ -532,9 +532,9 @@ class PixelDiT(Module):
     Examples
     --------
     >>> import torch
-    >>> from physicsnemo.experimental.models.strata import PixelDiT
-    >>> model = PixelDiT(
-    ...     semantic_config=dict(
+    >>> from physicsnemo.experimental.models.strata import Strata
+    >>> model = Strata(
+    ...     backbone_config=dict(
     ...         in_channels=4,
     ...         input_shape=(4, 8, 8),
     ...         patch_size=(1, 2, 2),
@@ -557,7 +557,7 @@ class PixelDiT(Module):
 
     def __init__(
         self,
-        semantic_config: Optional[Dict[str, Any]] = None,
+        backbone_config: Optional[Dict[str, Any]] = None,
         embed_dim_pixel: int = 128,
         num_layers_pixel: int = 4,
         num_heads_pixel: Optional[int] = None,
@@ -577,25 +577,25 @@ class PixelDiT(Module):
         bf16_mixed_pixel: bool = False,
         activation_checkpointing_pixel: Union[bool, float] = False,
     ):
-        super().__init__(meta=PixelDiTMetaData())
+        super().__init__(meta=StrataMetaData())
 
-        ### Stage 1: semantic DiT3D, built from the provided config.
-        semantic_config = dict(semantic_config or {})
-        # Build the semantic stage as a headless feature trunk: only its
+        ### Stage 1: backbone StrataTransformer3D, built from the provided config.
+        backbone_config = dict(backbone_config or {})
+        # Build the backbone stage as a headless feature trunk: only its
         # forward_tokens output is used here, so force include_head=False to avoid
         # creating unused output-head parameters (no DDP unused-parameter issues).
-        semantic_config["include_head"] = False
-        self.semantic = DiT3D(**semantic_config)
+        backbone_config["include_head"] = False
+        self.backbone = StrataTransformer3D(**backbone_config)
 
         depth, height, width = (
-            self.semantic.depth,
-            self.semantic.height,
-            self.semantic.width,
+            self.backbone.depth,
+            self.backbone.height,
+            self.backbone.width,
         )
-        in_channels = self.semantic.in_channels
-        out_channels = self.semantic.out_channels
-        cond_dim = self.semantic.embed_dim
-        pd, ph, pw = self.semantic.patch_size
+        in_channels = self.backbone.in_channels
+        out_channels = self.backbone.out_channels
+        cond_dim = self.backbone.embed_dim
+        pd, ph, pw = self.backbone.patch_size
         pixels_per_patch = pd * ph * pw
 
         num_heads_pixel = (
@@ -643,9 +643,9 @@ class PixelDiT(Module):
         self.rope_base_pixel = rope_base_pixel
         self.head_dim_pixel = head_dim_pixel
         self.bf16_mixed_pixel = bf16_mixed_pixel
-        # Reuse DiT3D's pure parser (a staticmethod) so the ratio semantics match
-        # the semantic stage.
-        self._activation_checkpointing_ratio_pixel = DiT3D._parse_checkpointing_param(
+        # Reuse StrataTransformer3D's pure parser (a staticmethod) so the ratio semantics match
+        # the backbone stage.
+        self._activation_checkpointing_ratio_pixel = StrataTransformer3D._parse_checkpointing_param(
             activation_checkpointing_pixel
         )
 
@@ -659,8 +659,8 @@ class PixelDiT(Module):
             embed_dim=embed_dim_pixel,
         )
 
-        def _make_adaln_block() -> PixelDiTBlock:
-            return PixelDiTBlock(
+        def _make_adaln_block() -> StrataPixel3DBlock:
+            return StrataPixel3DBlock(
                 dim=embed_dim_pixel,
                 cond_dim=cond_dim,
                 pixels_per_patch=pixels_per_patch,
@@ -676,8 +676,8 @@ class PixelDiT(Module):
                 chunk_size_grouped_conv=chunk_size_grouped_conv,
             )
 
-        def _make_plain_block() -> DiT3DBlock:
-            return DiT3DBlock(
+        def _make_plain_block() -> StrataTransformer3DBlock:
+            return StrataTransformer3DBlock(
                 dim=embed_dim_pixel,
                 num_heads=num_heads_pixel,
                 mlp_ratio=mlp_ratio_pixel,
@@ -700,7 +700,7 @@ class PixelDiT(Module):
 
         # Pixel-pathway RoPE. Axial coords are static; stereographic coords are
         # computed per forward via the shared geometry helpers in ``coords.py``
-        # (no dependency on the semantic stage's RoPE module).
+        # (no dependency on the backbone stage's RoPE module).
         if rope_mode_pixel == "axial":
             # Pixel patches are 1x1x1, so the token grid is (depth, height, width).
             coords = build_axial_token_coords(depth, height, width)
@@ -718,12 +718,12 @@ class PixelDiT(Module):
     def initialize_weights(self) -> None:
         r"""Initialize the pixel-stage parameters DiT-style.
 
-        The semantic stage self-initializes, and the pixel blocks zero-initialize
+        The backbone stage self-initializes, and the pixel blocks zero-initialize
         their AdaLN projections at construction; this covers the two remaining
         pixel components -- a fan-based Xavier init for the pixel patch-embedding
         convolution and a zero-initialized output head -- so the pixel stage
         starts as a near-identity residual mapping (matching
-        :meth:`DiT3D.initialize_weights`). A blanket Xavier pass is deliberately
+        :meth:`StrataTransformer3D.initialize_weights`). A blanket Xavier pass is deliberately
         avoided here so it does not clobber the AdaLN-zero projections.
 
         Returns
@@ -742,7 +742,7 @@ class PixelDiT(Module):
         r"""Return whether the pixel block at ``block_idx`` should be checkpointed.
 
         Activation checkpointing only engages in training mode. Mirrors
-        :meth:`~physicsnemo.experimental.models.strata.DiT3D._should_checkpoint_block`.
+        :meth:`~physicsnemo.experimental.models.strata.StrataTransformer3D._should_checkpoint_block`.
 
         Parameters
         ----------
@@ -816,8 +816,8 @@ class PixelDiT(Module):
 
         _, _, dd, hh, ww = x.shape
 
-        # Stage 1: semantic conditioning tokens (input validation handled here).
-        s_cond, semantic_dhw = self.semantic.forward_tokens(x, pos)
+        # Stage 1: backbone conditioning tokens (input validation handled here).
+        backbone_cond, backbone_dhw = self.backbone.forward_tokens(x, pos)
 
         # Stage 2: pixel tokens at full resolution.
         pixel_dhw = (dd, hh, ww)
@@ -825,11 +825,11 @@ class PixelDiT(Module):
 
         # Precompute the shared bilinear conditioning once if any block needs it.
         use_shared_bilinear = any(
-            isinstance(b, PixelDiTBlock) and b.adaln_mode == "bilinear_dw"
+            isinstance(b, StrataPixel3DBlock) and b.adaln_mode == "bilinear_dw"
             for b in self.pixel_blocks
         )
         s_cond_bilinear = (
-            PixelDiTBlock.precompute_bilinear_cond(s_cond, pixel_dhw, semantic_dhw)
+            StrataPixel3DBlock.precompute_bilinear_cond(backbone_cond, pixel_dhw, backbone_dhw)
             if use_shared_bilinear
             else None
         )
@@ -841,14 +841,14 @@ class PixelDiT(Module):
             for i, block in enumerate(self.pixel_blocks):
                 # The two block types take different keyword signatures; wrap the
                 # call in a closure so activation checkpointing can drive either.
-                if isinstance(block, PixelDiTBlock):
+                if isinstance(block, StrataPixel3DBlock):
 
                     def _run(inp, b=block):
                         return b(
                             inp,
-                            s_cond=s_cond,
+                            backbone_cond=backbone_cond,
                             pixel_dhw=pixel_dhw,
-                            semantic_dhw=semantic_dhw,
+                            backbone_dhw=backbone_dhw,
                             s_cond_bilinear=s_cond_bilinear,
                             rope_tables=rope_tables,
                         )

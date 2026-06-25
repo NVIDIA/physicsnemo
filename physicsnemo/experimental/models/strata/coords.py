@@ -17,11 +17,11 @@
 r"""Token-coordinate builders for Strata RoPE.
 
 Pure, instance-free helpers that build the per-token ``(x, y)`` coordinates fed to
-the 2D RoPE table builder (``StereographicRotaryPositionEmbedding2D.build_tables``)
-in :class:`~physicsnemo.experimental.models.strata.DiT3D` and
-:class:`~physicsnemo.experimental.models.strata.PixelDiT`. Keeping them as free
+the 2D RoPE table builder (``build_axial_rope_cos_sin_2d_continuous``)
+in :class:`~physicsnemo.experimental.models.strata.StrataTransformer3D` and
+:class:`~physicsnemo.experimental.models.strata.Strata`. Keeping them as free
 functions (rather than methods on a model) decouples the two stages — the pixel
-stage no longer reaches into the semantic stage's instance state — and makes the
+stage no longer reaches into the backbone stage's instance state — and makes the
 geometry independently unit-testable.
 """
 
@@ -80,7 +80,7 @@ def build_stereographic_token_coords(
     centers onto the tile-tangent plane via
     :func:`~physicsnemo.nn.stereographic_projection`, normalizes by
     ``length_scale``, and tiles the result across the depth axis. Used at patch
-    resolution by ``DiT3D`` and at pixel resolution (``patch_hw=1``) by ``PixelDiT``.
+    resolution by ``StrataTransformer3D`` and at pixel resolution (``patch_hw=1``) by ``Strata``.
 
     Parameters
     ----------

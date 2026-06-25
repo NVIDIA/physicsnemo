@@ -17,7 +17,7 @@
 r"""Depthwise 2D convolution with a ``torch.vmap`` fallback for very large tensors.
 
 ``torch.nn.functional.conv2d`` has an internal element-count limit that a
-depthwise convolution over a high-resolution pixel grid (as used by PixelDiT's
+depthwise convolution over a high-resolution pixel grid (as used by Strata's
 ``bilinear_dw`` adaptive-layer-norm path) can exceed. :class:`DepthwiseConv`
 optionally chunks the convolution with :func:`torch.vmap` to stay under that
 limit.

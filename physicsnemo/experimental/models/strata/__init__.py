@@ -14,13 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""DiT3D and PixelDiT: 3D transformer regression models for fields on a sphere.
+r"""StrataTransformer3D and Strata: 3D transformer regression models for fields on a sphere.
 
-This package provides the DiT3D backbone and the two-stage PixelDiT model, the
+This package provides the StrataTransformer3D backbone and the two-stage Strata model, the
 3D analogs of :class:`physicsnemo.models.dit.DiT`. They combine 3D neighborhood
 attention (:func:`physicsnemo.nn.functional.na3d`), 3D patch embedding, and an
 optional stereographic rotary position embedding
-(:class:`physicsnemo.nn.StereographicRotaryPositionEmbedding2D`) for spherical geometry.
+(:func:`physicsnemo.experimental.nn.build_axial_rope_cos_sin_2d_continuous`) for
+spherical geometry.
 
 .. important::
 
@@ -33,26 +34,26 @@ optional stereographic rotary position embedding
 
 Classes
 -------
-DiT3D
+StrataTransformer3D
     3D Diffusion Transformer backbone (field-to-field, no diffusion conditioning).
-DiT3DMetaData
-    Metadata for :class:`DiT3D`.
-PixelDiT
-    Two-stage regression model: a DiT3D semantic stage conditions a
+StrataTransformer3DMetaData
+    Metadata for :class:`StrataTransformer3D`.
+Strata
+    Two-stage regression model: a StrataTransformer3D backbone stage conditions a
     pixel-resolution stage via pixel-wise adaptive layer norm (conditioned on
-    the semantic features, not on a diffusion timestep).
-PixelDiTMetaData
-    Metadata for :class:`PixelDiT`.
-Natten3DSelfAttention, DiT3DBlock, PatchEmbed3D, FinalLayer3D
+    the backbone features, not on a diffusion timestep).
+StrataMetaData
+    Metadata for :class:`Strata`.
+Natten3DSelfAttention, StrataTransformer3DBlock, PatchEmbed3D, FinalLayer3D
     Building-block layers used by the models.
-PixelDiTBlock
-    Building-block layer used by :class:`PixelDiT`.
+StrataPixel3DBlock
+    Building-block layer used by :class:`Strata`.
 
 Examples
 --------
 >>> import torch
->>> from physicsnemo.experimental.models.strata import DiT3D
->>> model = DiT3D(
+>>> from physicsnemo.experimental.models.strata import StrataTransformer3D
+>>> model = StrataTransformer3D(
 ...     in_channels=4,
 ...     input_shape=(4, 8, 8),
 ...     patch_size=(1, 2, 2),
@@ -66,23 +67,23 @@ Examples
 torch.Size([2, 4, 4, 8, 8])
 """
 
-from .dit3d import DiT3D, DiT3DMetaData
+from .transformer import StrataTransformer3D, StrataTransformer3DMetaData
 from .layers import (
-    DiT3DBlock,
+    StrataTransformer3DBlock,
     FinalLayer3D,
     Natten3DSelfAttention,
     PatchEmbed3D,
 )
-from .pixel import PixelDiT, PixelDiTBlock, PixelDiTMetaData
+from .strata import Strata, StrataPixel3DBlock, StrataMetaData
 
 __all__ = [
-    "DiT3D",
-    "DiT3DMetaData",
-    "PixelDiT",
-    "PixelDiTMetaData",
+    "StrataTransformer3D",
+    "StrataTransformer3DMetaData",
+    "Strata",
+    "StrataMetaData",
     "Natten3DSelfAttention",
-    "DiT3DBlock",
+    "StrataTransformer3DBlock",
     "PatchEmbed3D",
     "FinalLayer3D",
-    "PixelDiTBlock",
+    "StrataPixel3DBlock",
 ]

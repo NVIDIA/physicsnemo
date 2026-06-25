@@ -14,9 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""DiT3D: a 3D transformer backbone for regression on spherical fields.
+r"""StrataTransformer3D: a 3D transformer backbone for regression on spherical fields.
 
-DiT3D reuses the Diffusion-Transformer (DiT) *architecture* but is a
+StrataTransformer3D reuses the Diffusion-Transformer (DiT) *architecture* but is a
 **deterministic regression** model, not a generative diffusion model: it has no
 diffusion / denoising process and none of the original DiT's diffusion
 conditioning (no noise, timestep, class-label, or text conditioning). The "DiT"
@@ -40,18 +40,18 @@ from physicsnemo.experimental.nn import build_axial_rope_cos_sin_2d_continuous
 
 from .coords import build_axial_token_coords, build_stereographic_token_coords
 from .layers import (
-    DiT3DBlock,
+    StrataTransformer3DBlock,
     FinalLayer3D,
     PatchEmbed3D,
     RopeTables,
 )
 
-__all__ = ["DiT3D", "DiT3DMetaData"]
+__all__ = ["StrataTransformer3D", "StrataTransformer3DMetaData"]
 
 
 @dataclass
-class DiT3DMetaData(ModelMetaData):
-    r"""Metadata for :class:`DiT3D` (see :class:`~physicsnemo.core.meta.ModelMetaData`)."""
+class StrataTransformer3DMetaData(ModelMetaData):
+    r"""Metadata for :class:`StrataTransformer3D` (see :class:`~physicsnemo.core.meta.ModelMetaData`)."""
 
     # Optimization
     jit: bool = False
@@ -68,10 +68,10 @@ class DiT3DMetaData(ModelMetaData):
     auto_grad: bool = False
 
 
-class DiT3D(Module):
+class StrataTransformer3D(Module):
     r"""3D transformer (DiT architecture) for deterministic regression on spherical fields.
 
-    DiT3D tokenizes a :math:`(B, C, D, H, W)` field with a 3D patch embedding,
+    StrataTransformer3D tokenizes a :math:`(B, C, D, H, W)` field with a 3D patch embedding,
     processes the tokens with a stack of pre-norm transformer blocks, and
     decodes them back to a :math:`(B, C_{out}, D, H, W)` field.
 
@@ -79,7 +79,7 @@ class DiT3D(Module):
     follows the same DiT-style template (patch-embed -> pre-norm transformer ->
     linear decode) but is an **independent reimplementation**, not a wrapper or a
     reuse of that class's components. It defines its own 3D blocks
-    (:class:`DiT3DBlock`, :class:`Natten3DSelfAttention`, :class:`PatchEmbed3D`,
+    (:class:`StrataTransformer3DBlock`, :class:`Natten3DSelfAttention`, :class:`PatchEmbed3D`,
     :class:`FinalLayer3D`) and shares only low-level primitives with the rest of
     the library: :func:`physicsnemo.nn.functional.na3d`, :class:`physicsnemo.nn.Mlp`,
     and the RoPE helpers. (The 2D :class:`~physicsnemo.models.dit.DiT` is built from
@@ -156,7 +156,7 @@ class DiT3D(Module):
     include_head : bool, optional, default=True
         If ``True``, build the output head (``final_layer``) and decode to a field.
         If ``False``, omit the head so :meth:`forward` returns post-block tokens;
-        used when the backbone is a feature trunk (e.g. inside ``PixelDiT``).
+        used when the backbone is a feature trunk (e.g. inside ``Strata``).
 
     Forward
     -------
@@ -175,15 +175,15 @@ class DiT3D(Module):
     References
     ----------
     - `Scalable Diffusion Models with Transformers <https://arxiv.org/abs/2212.09748>`_
-      (origin of the DiT architecture; DiT3D reuses the architecture only, not
+      (origin of the DiT architecture; StrataTransformer3D reuses the architecture only, not
       the diffusion training or conditioning)
     - `Neighborhood Attention Transformer <https://arxiv.org/abs/2204.07143>`_
 
     Examples
     --------
     >>> import torch
-    >>> from physicsnemo.experimental.models.strata import DiT3D
-    >>> model = DiT3D(
+    >>> from physicsnemo.experimental.models.strata import StrataTransformer3D
+    >>> model = StrataTransformer3D(
     ...     in_channels=4,
     ...     input_shape=(4, 8, 8),
     ...     patch_size=(1, 2, 2),
@@ -226,7 +226,7 @@ class DiT3D(Module):
         bf16_mixed: bool = False,
         include_head: bool = True,
     ):
-        super().__init__(meta=DiT3DMetaData())
+        super().__init__(meta=StrataTransformer3DMetaData())
 
         ### Input validation
         if embed_dim % num_heads != 0:
@@ -249,7 +249,7 @@ class DiT3D(Module):
         patch_size = tuple(patch_size)
         pd, ph, pw = patch_size
 
-        # Public attributes (also read by PixelDiT when composing DiT3D).
+        # Public attributes (also read by Strata when composing StrataTransformer3D).
         self.in_channels = in_channels
         self.out_channels = out_channels if out_channels is not None else in_channels
         self.input_shape = (depth, height, width)
@@ -286,7 +286,7 @@ class DiT3D(Module):
         # fourth block optionally uses dilated neighborhood attention.
         self.blocks = nn.ModuleList(
             [
-                DiT3DBlock(
+                StrataTransformer3DBlock(
                     dim=embed_dim,
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
@@ -320,7 +320,7 @@ class DiT3D(Module):
             self.register_buffer("_rope_cos", cos, persistent=False)
             self.register_buffer("_rope_sin", sin, persistent=False)
 
-        # The output head is optional: PixelDiT builds the backbone headless and
+        # The output head is optional: Strata builds the backbone headless and
         # consumes its tokens via ``forward_tokens``, so it skips these parameters.
         self.final_layer = (
             FinalLayer3D(embed_dim, pd * ph * pw * self.out_channels)
@@ -525,8 +525,8 @@ class DiT3D(Module):
 
         This is the shared trunk used both by :meth:`forward` (which then applies
         the output head) and by
-        :class:`~physicsnemo.experimental.models.strata.PixelDiT` (which uses the
-        tokens as semantic conditioning).
+        :class:`~physicsnemo.experimental.models.strata.Strata` (which uses the
+        tokens as backbone conditioning).
 
         Parameters
         ----------

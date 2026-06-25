@@ -14,17 +14,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Regenerate the DiT3D / PixelDiT golden ``.pth`` fixtures.
+"""Regenerate the StrataTransformer3D / Strata golden ``.pth`` fixtures.
 
 Run from the repository root::
 
-    python test/experimental/models/strata/data/_generate_dit3d_goldens.py
+    python test/experimental/models/strata/data/_generate_strata_goldens.py
 
 Overwrites the committed fixtures with freshly-seeded model outputs. Invoke this
 deliberately whenever model numerics intentionally change (architecture edit,
 default-argument change, etc.) and commit the resulting ``.pth`` files.
 
-The fixture set is driven by :data:`_FIXTURE_REGISTRY` in ``test_dit3d.py``.
+The fixture set is driven by :data:`_FIXTURE_REGISTRY` in ``test_strata.py``.
 Each fixture stores ``{"args", "state_dict", "y"}``; the non-regression test
 loads the parameters and inputs and re-runs the forward pass, so it is robust to
 initialization / RNG changes across PyTorch versions. All fixtures use the
@@ -42,7 +42,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(_REPO_ROOT))
 sys.path.insert(0, str(_REPO_ROOT / "test" / "experimental" / "models" / "strata"))
 
-from test_dit3d import _FIXTURE_REGISTRY  # noqa: E402
+from test_strata import _FIXTURE_REGISTRY  # noqa: E402
 
 
 def _write(path: Path, builder) -> None:

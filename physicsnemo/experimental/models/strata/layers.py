@@ -14,18 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""Building blocks for the :class:`~physicsnemo.experimental.models.strata.DiT3D`
+r"""Building blocks for the :class:`~physicsnemo.experimental.models.strata.StrataTransformer3D`
 transformer.
 
-These layers are specific to the DiT3D / PixelDiT models and are kept in the
+These layers are specific to the StrataTransformer3D / Strata models and are kept in the
 model package (rather than ``physicsnemo.nn``) per the self-contained-model
 convention. The attention layer reuses
 :func:`physicsnemo.nn.functional.na3d` for 3D neighborhood attention so that it
 inherits NATTEN optional-dependency handling and ``ShardTensor`` dispatch.
 
-DiT3D / PixelDiT reuse the Diffusion-Transformer (DiT) architecture but are
+StrataTransformer3D / Strata reuse the Diffusion-Transformer (DiT) architecture but are
 deterministic regression models, not generative diffusion models — these blocks
-carry no diffusion / timestep conditioning (:class:`DiT3DBlock` is a plain
+carry no diffusion / timestep conditioning (:class:`StrataTransformer3DBlock` is a plain
 pre-norm transformer block).
 """
 
@@ -45,14 +45,14 @@ from physicsnemo.nn.module.mlp_layers import Mlp
 
 __all__ = [
     "Natten3DSelfAttention",
-    "DiT3DBlock",
+    "StrataTransformer3DBlock",
     "PatchEmbed3D",
     "FinalLayer3D",
     "RopeTables",
 ]
 
 # A pair of (cos, sin) RoPE lookup tables, as produced by
-# ``StereographicRotaryPositionEmbedding2D.build_tables``.
+# ``build_axial_rope_cos_sin_2d_continuous``.
 RopeTables = Tuple[torch.Tensor, torch.Tensor]
 
 
@@ -171,7 +171,7 @@ class Natten3DSelfAttention(nn.Module):
         self.scale = self.head_dim**-0.5
         self.attn_drop_rate = attn_drop_rate
         # Validate a per-axis kernel eagerly (length-3) so all entry points —
-        # DiT3D, PixelDiT, and direct use — fail at construction, not deep inside
+        # StrataTransformer3D, Strata, and direct use — fail at construction, not deep inside
         # NATTEN. The raw value is kept as given (int stays int).
         _as_kernel_triple(attn_kernel)
         self.attn_kernel = attn_kernel
@@ -284,14 +284,14 @@ class Natten3DSelfAttention(nn.Module):
         return self.proj_drop(self.proj(out))
 
 
-class DiT3DBlock(nn.Module):
-    r"""Pre-norm transformer block for DiT3D.
+class StrataTransformer3DBlock(nn.Module):
+    r"""Pre-norm transformer block for StrataTransformer3D.
 
     Applies, with residual connections, a :class:`Natten3DSelfAttention`
     sub-layer followed by an MLP sub-layer (reusing
     :class:`physicsnemo.nn.Mlp`). Layer norms are non-affine, matching the
     standard DiT block. Unlike the diffusion DiT block, no adaLN conditioning is
-    used (DiT3D is a deterministic field-to-field model).
+    used (StrataTransformer3D is a deterministic field-to-field model).
 
     Parameters
     ----------
