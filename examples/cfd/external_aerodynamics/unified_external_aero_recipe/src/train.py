@@ -129,17 +129,62 @@ def _reduce_and_average_epoch(
     *,
     device: torch.device | str,
 ) -> tuple[float, dict[str, float], dict[str, float]]:
-    """Average epoch loss/metric *sums* over the GLOBAL sample count.
+    """Collapse one epoch's rank-local loss/metric *sums* into global means.
 
-    The per-rank loop accumulates *sums* of per-step (per-sample, since
-    ``batch_size == 1``) losses and metrics. This packs ``total_loss``,
-    the local sample count, and every loss/metric leaf into one float32
-    tensor, all-reduces it once (SUM) when running distributed, then
-    divides by the reduced count. One collective + one D2H. Correct for
-    uneven per-rank shards (``global_sum / global_count``) and
-    deadlock-free (invoked once after the per-rank loops finish, not per
-    step). The single-process path is identical to the previous
-    ``sum / n_local`` averaging.
+    Under DDP each rank only sees its own shard of the epoch, so the
+    numbers we log are meaningless until reduced across ranks. This takes
+    the rank-local running *sums* the epoch loop accumulated (``total_loss``
+    and the 0-D ``losses_td`` / ``metrics_td`` leaves) plus the rank's
+    sample count, reduces them across ranks once, and divides by the
+    *global* count to produce sample-weighted means.
+
+    Reducing sums and a count (rather than per-rank means) is what makes the
+    result correct for uneven shards: ``global_sum / global_count`` weights
+    every sample equally no matter how the dataset split across ranks.
+    Doing this once at end-of-epoch, rather than per step, also keeps it
+    deadlock-free: every rank issues exactly one collective here even if
+    ranks ran different step counts. The values are packed into a single
+    ``float32`` buffer, so the whole epoch costs one ``all_reduce`` and one
+    device-to-host sync (the ``.tolist()``). It mirrors the inference-side
+    reducer ``infer._allreduce_sums``.
+
+    Args:
+        total_loss: Rank-local sum of the per-step scalar losses over the
+            epoch (``sum(loss.item())``), not a mean.
+        losses_td: Rank-local epoch accumulator of per-field losses: a 0-D
+            (``batch_size=[]``) ``TensorDict`` whose leaves are the summed
+            scalar losses, one per loss term. ``None`` is the "epoch ran
+            zero steps" sentinel (see Notes).
+        metrics_td: The matching per-field metric-sum accumulator, with the
+            same ``None`` sentinel. Seeded in lock-step with ``losses_td``,
+            so the two are ``None`` together or populated together.
+        n_local: Number of samples this rank processed this epoch. Equals
+            the step count because the recipe runs ``batch_size == 1``.
+        device: Device on which to build the reduction buffer. Must be the
+            rank's collective/compute device (``dist_manager.device``) so the
+            NCCL ``all_reduce`` runs on the correct device.
+
+    Returns:
+        A ``(avg_loss, avg_losses, avg_metrics)`` tuple where ``avg_loss`` is
+        the global mean loss, ``avg_losses`` is ``{loss_name: global_mean}``,
+        and ``avg_metrics`` is ``{metric_name: global_mean}``. The dict keys
+        and their order are taken from ``losses_td`` / ``metrics_td``. On the
+        ``None`` sentinel it returns ``(total_loss / max(n_local, 1), {},
+        {})`` without entering the collective.
+
+    Notes:
+        Single-process (or ``world_size == 1``) skips the reduction, so the
+        result is identical to the previous ``sum / n_local`` averaging and
+        single-GPU logs are unchanged.
+
+        The one fused ``all_reduce`` is valid only because every rank packs
+        the same leaves in the same order, which holds since all ranks share
+        one ``target_config`` (identical loss/metric keys). The ``None``
+        early return similarly assumes ranks are seeded together: under DDP
+        every rank gets at least one sample, so the accumulators are
+        non-``None`` on all ranks at once. A lone rank taking the early
+        return while its peers enter the collective is the only way this
+        would hang, and the samplers this recipe uses do not produce that.
     """
     if losses_td is None or metrics_td is None:
         return total_loss / max(n_local, 1), {}, {}
