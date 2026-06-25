@@ -10,38 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Adds a stereographic 2D rotary position embedding to `physicsnemo.nn`
-  (`StereographicRotaryPositionEmbedding2D`) for tokens on a sphere:
-  latitude/longitude are mapped to a local tangent plane via a stereographic
-  projection and the resulting continuous coordinates drive a 2D RoPE that
-  composes with the existing `apply_rotary_pos_emb`. Also adds
-  `build_rope_cos_sin_1d_continuous` and `build_axial_rope_cos_sin_2d_continuous`
-  (the continuous-coordinate generalizations of `build_rope_cos_sin_1d` and
-  `build_axial_rope_cos_sin_2d`), `stereographic_projection`, and `spherical_centroid`
-  to `physicsnemo.nn.module.rope`.
-- Adds `DiT3D` to experimental models
-  (`physicsnemo.experimental.models.strata.DiT3D`). A 3D transformer backbone —
-  the 3D analog of `physicsnemo.models.dit.DiT` — combining 3D patch embedding,
-  3D neighborhood attention (reusing `physicsnemo.nn.functional.na3d`) with
-  optional depth-axis and gated attention, and optional axial or stereographic
-  (`StereographicRotaryPositionEmbedding2D`) rotary position embeddings.
-  Despite the "DiT" name it is a **deterministic regression** model, not a
-  generative diffusion model (no diffusion / timestep / class-label / text
-  conditioning). Geometry is decoupled from construction: latitude/longitude are
-  an optional forward input used only for stereographic RoPE, so the model has no
-  hard spherical-grid dependency.
-- Adds `PixelDiT` to experimental models
-  (`physicsnemo.experimental.models.strata.PixelDiT`). A two-stage regression
-  model: a `DiT3D` semantic stage (coarse patches) conditions a pixel-resolution
-  stage whose blocks inject the semantic tokens via pixel-wise adaptive layer
-  norm (`pixel_proj` or `bilinear_dw` modes). Adapts the pixel-wise-AdaLN idea
-  from PixelDiT (arXiv:2511.20645) — an adaptation, not a faithful port: a
-  deterministic regression model (no diffusion / timestep / label conditioning),
-  an independent reimplementation of the AdaLN, with the original `bilinear_dw`
-  conditioning path added beyond the paper.
-- The `physicsnemo.experimental.models.strata` package also publicly exports its
-  reusable building-block layers (`DiT3DBlock`, `Natten3DSelfAttention`,
-  `PatchEmbed3D`, `FinalLayer3D`, `PixelDiTBlock`, `PixelDiTLastLayer`).
+- Adds the **Strata** weather-emulation architecture to experimental models
+  (`physicsnemo.experimental.models.strata`): `Strata`, a two-stage
+  **deterministic regression** model (not a generative diffusion model) whose
+  `StrataTransformer3D` backbone — 3D neighborhood attention via
+  `physicsnemo.nn.functional.na3d`, optional axial or stereographic RoPE, optional
+  depth-axis / gated attention — conditions a pixel-resolution stage through
+  pixel-wise adaptive layer norm (adapting the PixelDiT idea, arXiv:2511.20645).
+  Geometry (latitude/longitude) is an optional forward input, so there is no hard
+  spherical-grid dependency. Also adds the supporting continuous-coordinate and
+  stereographic RoPE helpers to `physicsnemo.experimental.nn`
+  (`build_rope_cos_sin_1d_continuous`, `build_axial_rope_cos_sin_2d_continuous`,
+  `stereographic_projection`, `spherical_centroid`).
 - Adds Point-Transformer local vector-attention blocks to `physicsnemo.nn`.
 - FSDP2 checkpoint support: full save/load round-trip for
   ``torch.distributed.fsdp`` v2 models, including DTensor edge cases,
