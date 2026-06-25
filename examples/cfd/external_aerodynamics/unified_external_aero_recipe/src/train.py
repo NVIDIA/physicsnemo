@@ -76,6 +76,11 @@ from physicsnemo.utils.profiling import Profiler, profile
 _PROFILE_MAX_STEPS = 10
 
 
+### ---------------------------------------------------------------------------
+### Config
+### ---------------------------------------------------------------------------
+
+
 def _flatten_config(
     d: dict[str, Any], parent: str = "", sep: str = "."
 ) -> dict[str, str]:
@@ -88,6 +93,11 @@ def _flatten_config(
         else:
             items[key] = str(v)
     return items
+
+
+### ---------------------------------------------------------------------------
+### Aggregation
+### ---------------------------------------------------------------------------
 
 
 def _to_float_dicts(
@@ -213,6 +223,11 @@ def _reduce_and_average_epoch(
     )
 
 
+### ---------------------------------------------------------------------------
+### Logging
+### ---------------------------------------------------------------------------
+
+
 def _log_to_tensorboard(
     writer: SummaryWriter | None,
     values: Mapping[str, float | torch.Tensor],
@@ -228,6 +243,11 @@ def _log_to_tensorboard(
         return
     for k, v in values.items():
         writer.add_scalar(f"{tag_prefix}/{k}", v, global_step=global_step)
+
+
+### ---------------------------------------------------------------------------
+### Forward pass
+### ---------------------------------------------------------------------------
 
 
 def forward_pass(
@@ -292,6 +312,11 @@ def forward_pass(
     return loss, loss_td.detach(), metric_td.detach()
 
 
+### ---------------------------------------------------------------------------
+### Epoch loops
+### ---------------------------------------------------------------------------
+
+
 def _run_epoch(
     dataloader: DataLoader,
     model: torch.nn.Module,
@@ -343,6 +368,7 @@ def _run_epoch(
 
     grad_ctx = nullcontext() if is_train else torch.no_grad()
     log_prefix = "Epoch" if is_train else "Val Epoch"
+    is_rank0 = dist_manager.rank == 0
 
     ### `total_loss` is a Python float fed by the per-step print line's
     ### sync; `total_losses_td` / `total_metrics_td` are on-device
@@ -425,7 +451,7 @@ def _run_epoch(
             ### emitted in both modes so downstream tooling can compute val
             ### step-time statistics directly instead of inferring them from
             ### ``val_ts - train_ts``.
-            if dist_manager.rank == 0:
+            if is_rank0:
                 losses_floats, metrics_floats = _to_float_dicts(losses, metrics)
                 if is_train:
                     global_step = epoch * num_steps + i
@@ -510,7 +536,7 @@ def _run_epoch(
         f"({n_batches} steps, {epoch_dt / n:.3f}s/step avg)"
     )
 
-    if dist_manager.rank == 0:
+    if is_rank0:
         _log_to_tensorboard(writer, avg_losses, "epoch", epoch)
         _log_to_tensorboard(writer, avg_metrics, "epoch/metrics", epoch)
         if log_jsonl is not None:
@@ -599,6 +625,11 @@ def val_epoch(
         writer=val_writer,
         log_jsonl=log_jsonl,
     )
+
+
+### ---------------------------------------------------------------------------
+### I/O benchmarking
+### ---------------------------------------------------------------------------
 
 
 def _walk_batch_for_logging(
@@ -720,6 +751,11 @@ def benchmark_io_epoch(
     )
 
 
+### ---------------------------------------------------------------------------
+### Driver
+### ---------------------------------------------------------------------------
+
+
 @profile
 def main(cfg: DictConfig) -> None:
     """Run the full training loop, or I/O-only benchmark when ``benchmark_io=true``.
@@ -742,6 +778,8 @@ def main(cfg: DictConfig) -> None:
 
     DistributedManager.initialize()
     dist_manager = DistributedManager()
+    device = dist_manager.device
+    is_rank0 = dist_manager.rank == 0
     logger = RankZeroLoggingWrapper(PythonLogger(name="training"), dist_manager)
 
     seed = cfg.training.get("seed", None)
@@ -755,7 +793,7 @@ def main(cfg: DictConfig) -> None:
     val_writer = None
     log_jsonl = None
     run_dir = os.path.join(cfg.output_dir, cfg.run_id)
-    if dist_manager.rank == 0:
+    if is_rank0:
         os.makedirs(run_dir, exist_ok=True)
         os.makedirs(checkpoint_dir, exist_ok=True)
 
@@ -779,7 +817,7 @@ def main(cfg: DictConfig) -> None:
     logger.info(f"Targets (from dataset YAML): {target_config}")
 
     # -- Log dataset metadata (rank 0) --------------------------------------------
-    if dist_manager.rank == 0 and log_jsonl is not None:
+    if is_rank0 and log_jsonl is not None:
         ### Use len(sampler) so manifest mode (where train and val share
         ### one underlying dataset) reports the actual per-split count,
         ### not the always-identical len(dataset). PyTorch always assigns
@@ -810,7 +848,7 @@ def main(cfg: DictConfig) -> None:
                 benchmark_io_epoch(train_loader, "train", logger, max_steps=max_steps)
                 benchmark_io_epoch(val_loader, "val", logger, max_steps=max_steps)
         logger.info("benchmark_io complete!")
-        if dist_manager.rank == 0:
+        if is_rank0:
             if train_writer is not None:
                 train_writer.close()
             if val_writer is not None:
@@ -823,13 +861,13 @@ def main(cfg: DictConfig) -> None:
     num_params = sum(p.numel() for p in model.parameters())
     logger.info(f"Parameters: {num_params:,}")
 
-    model.to(dist_manager.device)
+    model.to(device)
 
     if dist_manager.world_size > 1:
         model = torch.nn.parallel.DistributedDataParallel(
             model,
             device_ids=[dist_manager.local_rank],
-            output_device=dist_manager.device,
+            output_device=device,
         )
 
     if normalizer is not None:
@@ -846,7 +884,7 @@ def main(cfg: DictConfig) -> None:
     scaler = GradScaler() if precision == "float16" else None
 
     # -- Log full config + model params (rank 0) ---------------------------------
-    if dist_manager.rank == 0:
+    if is_rank0:
         flat_cfg = _flatten_config(
             OmegaConf.to_container(cfg, resolve=True, throw_on_missing=False)
         )
@@ -896,7 +934,7 @@ def main(cfg: DictConfig) -> None:
         "scheduler": scheduler,
         "models": model,
     }
-    loaded_epoch = load_checkpoint(device=dist_manager.device, **ckpt_args)
+    loaded_epoch = load_checkpoint(device=device, **ckpt_args)
 
     if cfg.compile:
         model = torch.compile(model)
@@ -943,7 +981,7 @@ def main(cfg: DictConfig) -> None:
                 log_jsonl=log_jsonl,
             )
 
-            if dist_manager.rank == 0:
+            if is_rank0:
                 all_keys = list(dict.fromkeys(list(train_metrics) + list(val_metrics)))
 
                 rows = [
@@ -964,7 +1002,7 @@ def main(cfg: DictConfig) -> None:
                     f"{table}\n"
                 )
 
-            if epoch % cfg.training.save_interval == 0 and dist_manager.rank == 0:
+            if epoch % cfg.training.save_interval == 0 and is_rank0:
                 save_checkpoint(**ckpt_args, epoch=epoch + 1)
                 if normalizer is not None:
                     norm_path = os.path.join(ckpt_args["path"], "norm_stats.pt")
@@ -973,7 +1011,7 @@ def main(cfg: DictConfig) -> None:
             if cfg.training.get("scheduler_update_mode", "epoch") == "epoch":
                 scheduler.step()
 
-    if dist_manager.rank == 0:
+    if is_rank0:
         if train_writer is not None:
             train_writer.close()
         if val_writer is not None:
