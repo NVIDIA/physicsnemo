@@ -1,10 +1,6 @@
 <!-- markdownlint-disable -->
 # Unified External Aerodynamics Recipe
 
-> This unified recipe is still under some final polishing but nearly
-> completed.  Feel free to used it and experiment.  In the meantime,
-> be wary of sharp edges!
-
 ## Introduction
 
 External Aerodynamic recipes in physicsnemo have proliferated: we have
