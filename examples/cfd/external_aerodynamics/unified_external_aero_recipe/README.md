@@ -12,7 +12,7 @@ we have unified the external aerodynamic recipes for our best models, including
 GLOBE (our newest model, designed for large 3D use cases).
 
 Here, you're able to train (and run inference with) the following models:
-- [DoMINO](https://arxiv.org/abs/2501.13350)
+- [DoMINO](https://arxiv.org/abs/2501.13350) coming soon
 - [Transolver](https://arxiv.org/abs/2402.02366)
 - [GeoTransolver](https://arxiv.org/abs/2512.20399), optionally using the [FLARE](https://arxiv.org/abs/2508.12594) attention mechanism backend
 - [GLOBE](https://arxiv.org/abs/2511.15856)
