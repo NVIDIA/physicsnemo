@@ -76,9 +76,9 @@ def build_stereographic_token_coords(
     r"""Build stereographic token coordinates from latitude / longitude.
 
     Pools the per-pixel lat/lon over each ``(p_h, p_w)`` patch (pole- and
-    seam-robust :func:`~physicsnemo.nn.spherical_centroid`), projects the patch
-    centers onto the tile-tangent plane via
-    :func:`~physicsnemo.nn.stereographic_projection`, normalizes by
+    seam-robust :func:`~physicsnemo.experimental.nn.spherical_centroid`), projects
+    the patch centers onto the tile-tangent plane via
+    :func:`~physicsnemo.experimental.nn.stereographic_projection`, normalizes by
     ``length_scale``, and tiles the result across the depth axis. Used at patch
     resolution by ``StrataTransformer3D`` and at pixel resolution (``patch_hw=1``) by ``Strata``.
 

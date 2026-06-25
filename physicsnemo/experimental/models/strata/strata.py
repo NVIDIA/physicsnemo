@@ -46,16 +46,16 @@ from physicsnemo.nn.module.mlp_layers import Mlp
 
 from .coords import build_axial_token_coords, build_stereographic_token_coords
 from .depthwise_conv import DepthwiseConv
-from .transformer import StrataTransformer3D
 from .layers import (
-    StrataTransformer3DBlock,
     FinalLayer3D,
     Natten3DSelfAttention,
     PatchEmbed3D,
     RopeTables,
+    StrataTransformer3DBlock,
 )
+from .transformer import StrataTransformer3D
 
-__all__ = ["Strata", "StrataMetaData", "StrataPixel3DBlock"]
+__all__ = ["Strata", "StrataMetaData"]
 
 
 @dataclass
@@ -514,7 +514,7 @@ class Strata(Module):
 
     Notes
     -----
-    The pixel-wise adaptive-layer-norm conditioning is adapted from Strata
+    The pixel-wise adaptive-layer-norm conditioning is adapted from PixelDiT
     (see References). This is an **adaptation, not a faithful reimplementation**:
 
     - It is a deterministic regression model (e.g. weather emulation), not a

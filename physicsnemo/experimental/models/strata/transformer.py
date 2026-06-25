@@ -40,10 +40,10 @@ from physicsnemo.experimental.nn import build_axial_rope_cos_sin_2d_continuous
 
 from .coords import build_axial_token_coords, build_stereographic_token_coords
 from .layers import (
-    StrataTransformer3DBlock,
     FinalLayer3D,
     PatchEmbed3D,
     RopeTables,
+    StrataTransformer3DBlock,
 )
 
 __all__ = ["StrataTransformer3D", "StrataTransformer3DMetaData"]
@@ -170,7 +170,10 @@ class StrataTransformer3D(Module):
     Outputs
     -------
     torch.Tensor
-        Output field of shape :math:`(B, C_{out}, D, H, W)`.
+        With ``include_head=True`` (default), the decoded field of shape
+        :math:`(B, C_{out}, D, H, W)`. With ``include_head=False`` there is no
+        output head, so the post-block tokens of shape :math:`(B, N, E)` are
+        returned instead (equivalently :meth:`forward_tokens`).
 
     References
     ----------
