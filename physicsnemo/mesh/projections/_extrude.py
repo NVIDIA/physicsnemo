@@ -126,14 +126,32 @@ def extrude(
 
     Notes
     -----
-    The tessellation pattern for an N-simplex with vertices [v0, v1, ..., vN]
-    creates (N+1) child (N+1)-simplices:
+    Before tessellating, the vertices of each parent simplex are sorted into a
+    consistent global (ascending-index) order. With that ordering, the
+    tessellation pattern for an N-simplex with (sorted) vertices
+    [v0, v1, ..., vN] creates (N+1) child (N+1)-simplices:
 
         - Child i has vertices: [v0', v1', ..., vi', vi, vi+1, ..., vN]
+
     where primed vertices (v') are the extruded copies (offset by the extrusion
     vector).
 
-    This tessellation preserves orientation and creates a valid simplicial complex.
+    Sorting the vertices is the Freudenthal-Kuhn subdivision: prisms that share a
+    face split it along the same diagonal, so the output is a *conforming*
+    simplicial complex (no cracks / non-manifold facets).
+
+    Orientation depends on the codimension of the output:
+
+        - Codimension 0 (``target_manifold_dims == target_spatial_dims``): the
+          raw Kuhn children alternate in orientation, so the last two vertices of
+          any inverted cell are swapped to give every cell a positive signed
+          volume. The result is a consistently oriented complex.
+        - A 2D surface in 3D (e.g. extruding a curve): orientation is not
+          enforced here; pass the result through
+          :func:`physicsnemo.mesh.repair.fix_orientation`, which handles exactly
+          this case.
+        - Any other positive codimension: signed volume is undefined, so no
+          orientation is enforced.
     """
     ### Validate inputs
     if capping:
@@ -150,7 +168,7 @@ def extrude(
             raise ValueError(
                 f"Cannot extrude {n_manifold_dims=}-dimensional manifold in {n_spatial_dims=}-dimensional space "
                 f"to {target_manifold_dims=}-dimensional manifold without increasing spatial dimensions.\n"
-                f"Set allow_new_spatial_dims=True to add new spatial dimensions, or provide a custom vector."
+                f"Set allow_new_spatial_dims=True to add new spatial dimensions."
             )
         # Extend spatial dimensions to accommodate extruded manifold
         target_spatial_dims = target_manifold_dims
@@ -237,8 +255,19 @@ def extrude(
         )
 
         # Vectorized tessellation
-        # For each parent cell, generate all children simultaneously
-        parent_cells = mesh.cells  # Shape: (n_cells, n_vertices_per_parent)
+        # For each parent cell, generate all children simultaneously.
+        #
+        # Freudenthal-Kuhn: sort each parent simplex's vertices into a consistent
+        # global (ascending-index) order before tessellating. A shared face is
+        # then seen with the same vertex order by both incident prisms, so they
+        # split it along the SAME diagonal and the result is a *conforming*
+        # (crack-free) simplicial complex. Without the sort, neighbouring cells
+        # that list a shared edge's endpoints in different local orders split the
+        # shared quad face along opposite diagonals, producing a non-manifold
+        # boundary (interior crack faces then leak into get_boundary_mesh).
+        parent_cells = torch.sort(
+            mesh.cells, dim=1
+        ).values  # (n_cells, n_verts_per_parent)
 
         # NOTE: This loop iterates over child indices (bounded by simplex
         # dimension, not mesh size), so the iteration count is small (e.g. 3
@@ -270,6 +299,22 @@ def extrude(
             start_idx = child_idx * n_original_cells
             end_idx = (child_idx + 1) * n_original_cells
             extruded_cells[start_idx:end_idx] = child_cells
+
+    ### Orient codim-0 cells consistently (positive signed volume)
+    # Signed volume (an n-simplex determinant) is only defined when the output is
+    # full-dimensional (target_manifold_dims == target_spatial_dims). The
+    # Freudenthal-Kuhn children alternate in orientation, so ~half are inverted;
+    # swap the last two vertices of those (one transposition negates the
+    # determinant) so every cell has positive signed volume. Conformity, |volume|,
+    # and propagated data are unaffected (only per-cell vertex order changes);
+    # degenerate (zero-volume) cells are left untouched.
+    if extruded_cells.shape[0] > 0 and target_manifold_dims == target_spatial_dims:
+        cell_points = all_points[extruded_cells]  # (n_cells, D+1, D)
+        edge_vectors = cell_points[:, 1:] - cell_points[:, :1]  # (n_cells, D, D)
+        inverted = torch.det(edge_vectors) < 0  # (n_cells,)
+        swapped = extruded_cells[inverted, -2].clone()
+        extruded_cells[inverted, -2] = extruded_cells[inverted, -1]
+        extruded_cells[inverted, -1] = swapped
 
     ### Propagate data (excluding cached properties, which depend on geometry)
     filtered_point_data = mesh.point_data
