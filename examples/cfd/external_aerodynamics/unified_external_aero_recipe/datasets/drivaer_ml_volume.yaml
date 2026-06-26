@@ -60,7 +60,10 @@ pipeline:
       boundary_name: stl_geometry
       sdf_field: sdf
       normals_field: sdf_normals
-      use_winding_number: true
+      # Pseudo-normal sign (fed by the fast nearest-triangle kernel). The
+      # _single_solid STL is watertight, so this is exact and avoids the
+      # O(n_points * n_faces) winding-number sign pass.
+      use_winding_number: false
     - _target_: ${dp:DropBoundary}
       names: [stl_geometry]
     - _target_: ${dp:RenameMeshFields}
