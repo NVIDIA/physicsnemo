@@ -68,6 +68,20 @@ def _calendar(b, t, device):
     return sod, doy
 
 
+def test_healda_v2_spatial_qk_norm_parameter_free():
+    """HealDAv2's attn_kwargs engage affine-free RMSNorm q/k norm in spatial attn.
+
+    Guards against the kwarg names being silently swallowed (which would leave
+    qk-norm off): the q/k norm modules must exist (not Identity) and carry no
+    learnable affine parameters.
+    """
+    model = _build_model("cpu")
+    attn_op = model.dit.blocks[0].attention.attn_op
+    for norm in (attn_op.q_norm, attn_op.k_norm):
+        assert not isinstance(norm, torch.nn.Identity)
+        assert list(norm.parameters()) == []
+
+
 def test_healda_v2_cpu_no_obs():
     """Full graph on CPU with an empty observation set (Triton-free obs path)."""
     torch.manual_seed(0)
