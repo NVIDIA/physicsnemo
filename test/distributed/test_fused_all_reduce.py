@@ -1,0 +1,306 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+r"""Tests for :func:`physicsnemo.distributed.fused_all_reduce`.
+
+The file is collected by both test jobs (cf. ``test/distributed/test_autograd.py``):
+
+- **Serial / no-op path** (unmarked): runs in the normal CPU suite. Distributed
+  is not initialized, so ``fused_all_reduce`` returns detached clones. These
+  tests pin the structure-preserving contract (dict / sequence / TensorDict
+  round-trips, shape/dtype/device passthrough, detached & independent outputs).
+- **Collective path** (``@pytest.mark.multigpu_static``): runs only under
+  ``torchrun --nproc-per-node N -m pytest --multigpu-static`` (the conftest
+  initializes ``DistributedManager`` and these are *all-collective* tests). They
+  pin the actual reduction math: SUM across ranks, heterogeneous shapes/dtypes,
+  key-order determinism, the uneven-shard weighted-mean idiom, nested
+  TensorDicts, and MAX/MIN.
+"""
+
+import pytest
+import torch
+import torch.distributed as dist
+from tensordict import TensorDict, TensorDictBase
+
+from physicsnemo.distributed import DistributedManager, fused_all_reduce
+
+# -----------------------------------------------------------------------------
+# Serial / no-op path (unmarked -> CPU suite)
+# -----------------------------------------------------------------------------
+
+
+def test_mapping_structure_preserved():
+    """A dict round-trips to a dict with the same keys (original order)."""
+    inputs = {"b": torch.tensor([1.0, 2.0]), "a": torch.tensor(3.0)}
+    reduced = fused_all_reduce(inputs)
+
+    assert type(reduced) is dict
+    assert list(reduced) == ["b", "a"]  # input order, not sorted
+    assert torch.equal(reduced["b"], inputs["b"])
+    assert torch.equal(reduced["a"], inputs["a"])
+
+
+def test_sequence_structure_preserved():
+    """A sequence round-trips to a list in the same order."""
+    inputs = (torch.tensor(1.0), torch.tensor([2.0, 3.0]))
+    reduced = fused_all_reduce(inputs)
+
+    assert type(reduced) is list
+    assert len(reduced) == 2
+    assert torch.equal(reduced[0], inputs[0])
+    assert torch.equal(reduced[1], inputs[1])
+
+
+def test_outputs_are_detached_independent_clones():
+    """No-op outputs are detached and do not alias the inputs."""
+    grad_tensor = torch.tensor(2.0, requires_grad=True)
+    inputs = {"x": grad_tensor}
+    reduced = fused_all_reduce(inputs)
+
+    assert not reduced["x"].requires_grad
+    assert reduced["x"].data_ptr() != grad_tensor.data_ptr()
+    # Mutating the output must not touch the input.
+    reduced["x"].add_(100.0)
+    assert grad_tensor.item() == 2.0
+
+
+def test_empty_inputs():
+    """Empty containers reduce to empty containers of the same type."""
+    assert fused_all_reduce({}) == {}
+    assert fused_all_reduce([]) == []
+    empty_td = fused_all_reduce(TensorDict({}, batch_size=[]))
+    assert isinstance(empty_td, TensorDictBase)
+    assert len(list(empty_td.keys(include_nested=True, leaves_only=True))) == 0
+
+
+def test_shape_dtype_device_passthrough(device):
+    """Heterogeneous shapes/dtypes/devices round-trip unchanged (no-op path)."""
+    inputs = {
+        "scalar": torch.tensor(1.0, device=device),
+        "vec": torch.arange(3, dtype=torch.float64, device=device),
+        "mat": torch.ones(2, 2, dtype=torch.float16, device=device),
+    }
+    reduced = fused_all_reduce(inputs)
+
+    for key, original in inputs.items():
+        assert reduced[key].shape == original.shape
+        assert reduced[key].dtype == original.dtype
+        assert reduced[key].device == original.device
+        assert torch.equal(reduced[key], original)
+
+
+def test_flat_tensordict_returns_tensordict():
+    """A flat TensorDict returns a TensorDict, never a degraded plain dict."""
+    flat = TensorDict({"x": torch.tensor(1.0), "y": torch.tensor(2.0)}, batch_size=[])
+    reduced = fused_all_reduce(flat)
+
+    assert isinstance(reduced, TensorDictBase)
+    assert set(reduced.keys()) == {"x", "y"}
+    assert reduced["x"].item() == 1.0
+
+
+def test_nested_tensordict_structure_preserved():
+    """A nested TensorDict round-trips with its (nested) structure intact."""
+    nested = TensorDict(
+        {
+            "loss": torch.tensor(1.0),
+            "sub": TensorDict(
+                {"x": torch.tensor(2.0), "y": torch.tensor(3.0)}, batch_size=[]
+            ),
+        },
+        batch_size=[],
+    )
+    reduced = fused_all_reduce(nested)
+
+    assert isinstance(reduced, TensorDictBase)
+    leaf_keys = set(reduced.keys(include_nested=True, leaves_only=True))
+    assert leaf_keys == {"loss", ("sub", "x"), ("sub", "y")}
+    assert reduced["loss"].item() == 1.0
+    assert reduced["sub"]["x"].item() == 2.0
+    assert reduced["sub"]["y"].item() == 3.0
+
+
+def test_invalid_type_raises():
+    """A non-container input (e.g. a bare tensor) is a TypeError."""
+    with pytest.raises(TypeError):
+        fused_all_reduce(torch.tensor(1.0))
+
+
+# -----------------------------------------------------------------------------
+# Collective path (@pytest.mark.multigpu_static)
+# -----------------------------------------------------------------------------
+
+
+def _arithmetic_series(world_size: int) -> float:
+    """Sum over ranks of the per-rank contribution ``rank + 1``."""
+    return float(sum(k + 1 for k in range(world_size)))
+
+
+@pytest.mark.multigpu_static
+def test_sum_across_ranks():
+    """Default SUM adds each rank's contribution element-wise."""
+    dm = DistributedManager()
+    assert dm.is_initialized()
+    rank, world_size = dm.rank, dm.world_size
+    expected = _arithmetic_series(world_size)
+
+    reduced = fused_all_reduce(
+        {
+            "scalar": torch.tensor(float(rank + 1), device=dm.device),
+            "vec": torch.full((3,), float(rank + 1), device=dm.device),
+        }
+    )
+
+    assert reduced["scalar"].item() == pytest.approx(expected)
+    assert torch.allclose(reduced["vec"], torch.full((3,), expected, device=dm.device))
+
+
+@pytest.mark.multigpu_static
+def test_heterogeneous_shapes_roundtrip():
+    """0-D / 1-D / 2-D leaves reduce together, with shape/dtype/device restored."""
+    dm = DistributedManager()
+    rank, world_size = dm.rank, dm.world_size
+    expected = _arithmetic_series(world_size)
+
+    inputs = {
+        "scalar": torch.tensor(float(rank + 1), device=dm.device),
+        "vec": torch.full((3,), float(rank + 1), device=dm.device),
+        "mat": torch.full((2, 2), float(rank + 1), device=dm.device),
+    }
+    reduced = fused_all_reduce(inputs)
+
+    for key, original in inputs.items():
+        assert reduced[key].shape == original.shape
+        assert reduced[key].dtype == original.dtype
+        assert reduced[key].device == original.device
+        assert torch.allclose(reduced[key], torch.full_like(original, expected))
+
+
+@pytest.mark.multigpu_static
+def test_mixed_dtype_fp32_promotion():
+    """Mixed-precision leaves reduce correctly; each leaf keeps its own dtype."""
+    dm = DistributedManager()
+    rank, world_size = dm.rank, dm.world_size
+    expected = _arithmetic_series(world_size)
+
+    inputs = {
+        "f16": torch.tensor(float(rank + 1), dtype=torch.float16, device=dm.device),
+        "f32": torch.tensor(float(rank + 1), dtype=torch.float32, device=dm.device),
+        "f64": torch.tensor(float(rank + 1), dtype=torch.float64, device=dm.device),
+    }
+    reduced = fused_all_reduce(inputs)
+
+    assert reduced["f16"].dtype == torch.float16
+    assert reduced["f32"].dtype == torch.float32
+    assert reduced["f64"].dtype == torch.float64
+    # f64 is present, so the buffer accumulates in f64: f32/f64 are exact.
+    assert reduced["f32"].item() == pytest.approx(expected)
+    assert reduced["f64"].item() == pytest.approx(expected)
+    assert reduced["f16"].item() == pytest.approx(expected, abs=1e-1)
+
+
+@pytest.mark.multigpu_static
+def test_key_order_determinism():
+    """Differing per-rank dict insertion orders still reduce the right keys.
+
+    Each rank inserts the same keys in a rank-dependent order. Sorted-key
+    packing makes the wire layout identical across ranks, so element ``k`` is
+    summed with element ``k`` (not a transposed neighbor).
+    """
+    dm = DistributedManager()
+    rank, world_size = dm.rank, dm.world_size
+    series = _arithmetic_series(world_size)
+
+    keys = ["a", "b", "c", "d"]
+    ordered_keys = keys if rank % 2 == 0 else list(reversed(keys))
+    inputs = {
+        key: torch.tensor(float((rank + 1) * (keys.index(key) + 1)), device=dm.device)
+        for key in ordered_keys
+    }
+    reduced = fused_all_reduce(inputs)
+
+    for j, key in enumerate(keys):
+        # sum_r (r+1)*(j+1) = (j+1) * series
+        assert reduced[key].item() == pytest.approx((j + 1) * series)
+
+
+@pytest.mark.multigpu_static
+def test_weighted_mean_uneven_shards():
+    """The sum/count idiom yields a sample-weighted mean, not a mean-of-means."""
+    dm = DistributedManager()
+    rank, world_size = dm.rank, dm.world_size
+
+    count = float(rank + 1)  # rank r holds (r+1) samples
+    total = count * (rank + 1)  # whose local mean is (r+1)
+    reduced = fused_all_reduce(
+        {
+            "sum": torch.tensor(total, device=dm.device),
+            "count": torch.tensor(count, device=dm.device),
+        }
+    )
+    weighted_mean = (reduced["sum"] / reduced["count"]).item()
+
+    expected = sum((k + 1) ** 2 for k in range(world_size)) / sum(
+        k + 1 for k in range(world_size)
+    )
+    assert weighted_mean == pytest.approx(expected)
+    if world_size > 1:
+        # The (wrong) mean-of-means would be the plain average of (r+1).
+        mean_of_means = sum(k + 1 for k in range(world_size)) / world_size
+        assert weighted_mean != pytest.approx(mean_of_means)
+
+
+@pytest.mark.multigpu_static
+def test_nested_tensordict_collective_roundtrip():
+    """A nested TensorDict reduces its leaves and keeps its structure."""
+    dm = DistributedManager()
+    rank, world_size = dm.rank, dm.world_size
+    expected = _arithmetic_series(world_size)
+
+    nested = TensorDict(
+        {
+            "loss": torch.tensor(float(rank + 1), device=dm.device),
+            "sub": TensorDict(
+                {"x": torch.tensor(float(rank + 1), device=dm.device)}, batch_size=[]
+            ),
+        },
+        batch_size=[],
+    )
+    reduced = fused_all_reduce(nested)
+
+    assert isinstance(reduced, TensorDictBase)
+    assert set(reduced.keys(include_nested=True, leaves_only=True)) == {
+        "loss",
+        ("sub", "x"),
+    }
+    assert reduced["loss"].item() == pytest.approx(expected)
+    assert reduced["sub"]["x"].item() == pytest.approx(expected)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize(
+    "op, reference", [(dist.ReduceOp.MAX, max), (dist.ReduceOp.MIN, min)]
+)
+def test_max_min(op, reference):
+    """MAX / MIN reduce element-wise across ranks."""
+    dm = DistributedManager()
+    rank, world_size = dm.rank, dm.world_size
+
+    reduced = fused_all_reduce(
+        {"v": torch.tensor(float(rank + 1), device=dm.device)}, op=op
+    )
+    expected = float(reference(k + 1 for k in range(world_size)))
+    assert reduced["v"].item() == pytest.approx(expected)

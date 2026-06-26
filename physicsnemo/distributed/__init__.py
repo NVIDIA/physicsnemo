@@ -31,6 +31,7 @@ from .manager import (
     PhysicsNeMoUninitializedDistributedManagerWarning,
 )
 from .utils import (
+    fused_all_reduce,
     mark_module_as_shared,
     reduce_loss,
     unmark_module_as_shared,
