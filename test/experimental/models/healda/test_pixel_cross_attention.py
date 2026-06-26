@@ -13,32 +13,32 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Ragged pixel cross-attention Triton kernel vs a PyTorch GQA reference."""
+"""Ragged pixel cross-attention: Triton kernel and pure-PyTorch reference."""
 
 import math
 
 import pytest
 import torch
 
-triton = pytest.importorskip("triton")
-pytestmark = pytest.mark.skipif(
-    not torch.cuda.is_available(),
-    reason="pixel cross-attention Triton kernel requires CUDA",
-)
-
-from physicsnemo.experimental.models.healda import (  # noqa: E402
-    _pixel_attn_kernels as pcak,
-)
-from physicsnemo.experimental.models.healda.obs_context import (  # noqa: E402
-    ObsContext,
-)
-from physicsnemo.experimental.models.healda.pixel_attention_utils import (  # noqa: E402
+from physicsnemo.core.version_check import OptionalImport
+from physicsnemo.experimental.models.healda.obs_context import ObsContext
+from physicsnemo.experimental.models.healda.pixel_attention_utils import (
     build_pixel_group_map,
 )
-from physicsnemo.experimental.models.healda.pixel_cross_attention import (  # noqa: E402
+from physicsnemo.experimental.models.healda.pixel_cross_attention import (
     PixelCrossAttention,
     pixel_attention,
+    pixel_attention_reference,
 )
+
+triton = OptionalImport("triton")
+# The Triton kernel needs triton + CUDA; the reference path runs anywhere.
+requires_triton_cuda = pytest.mark.skipif(
+    not (triton.available and torch.cuda.is_available()),
+    reason="pixel cross-attention Triton kernel requires triton + CUDA",
+)
+
+_ragged_gqa_reference = pixel_attention_reference
 
 # Small power-of-two dims keep every kernel launch tiny and fast.
 D_HEAD = 16
@@ -53,6 +53,11 @@ _HEAD_LAYOUTS = [(16, 1), (32, 2), (64, 4)]
 def _single_autotune_config(monkeypatch):
     # Collapse the autotuner's config sweep to one config so each kernel compiles
     # once. num_warps/num_stages are functionally irrelevant to correctness.
+    if not (triton.available and torch.cuda.is_available()):
+        yield
+        return
+    from physicsnemo.experimental.models.healda import _pixel_attn_kernels as pcak
+
     one = [triton.Config({"TILE_K": 32}, num_warps=4, num_stages=2)]
     for kernel in (pcak._pixel_attn_gqa_fwd, pcak._pixel_attn_gqa_bwd):
         monkeypatch.setattr(kernel, "configs", one, raising=False)
@@ -66,29 +71,6 @@ def _cu_seqlens(counts):
     if counts:
         cu[1:] = torch.tensor(counts, dtype=torch.int32).cumsum(0)
     return cu
-
-
-def _ragged_gqa_reference(Q, tokens, W_k, W_v, cu, n_kv_heads, scale, B_v=None):
-    """Readable per-pixel PyTorch reference for the ragged grouped-query attention."""
-    n_pixels, n_q_heads, d_head = Q.shape
-    q_per_kv = n_q_heads // n_kv_heads
-    out = torch.zeros_like(Q)
-    for p in range(n_pixels):
-        start, end = int(cu[p]), int(cu[p + 1])
-        if end == start:
-            continue
-        tok = tokens[start:end]
-        K = (tok @ W_k.t()).view(-1, n_kv_heads, d_head)
-        V = tok @ W_v.t()
-        if B_v is not None:
-            V = V + B_v
-        V = V.view(-1, n_kv_heads, d_head)
-        for h in range(n_q_heads):
-            kv = h // q_per_kv
-            scores = (K[:, kv] @ Q[p, h]) * scale
-            weights = torch.softmax(scores, dim=0)
-            out[p, h] = weights @ V[:, kv]
-    return out
 
 
 def _make_inputs(counts, n_q_heads, n_kv_heads, use_v_bias, seed=0):
@@ -128,6 +110,7 @@ def _assert_scale_close(actual, ref, rtol, name=""):
     )
 
 
+@requires_triton_cuda
 @pytest.mark.parametrize("n_q_heads,n_kv_heads", _HEAD_LAYOUTS)
 @pytest.mark.parametrize("use_v_bias", [False, True])
 def test_pixel_attention_forward(n_q_heads, n_kv_heads, use_v_bias):
@@ -158,6 +141,7 @@ def test_pixel_attention_forward(n_q_heads, n_kv_heads, use_v_bias):
     _assert_scale_close(out, ref, rtol=5e-3, name="forward")
 
 
+@requires_triton_cuda
 def test_pixel_attention_packed_full_grid():
     # Packed full-grid layout: many pixels, almost all with zero observations.
     counts = [0] * 120
@@ -186,6 +170,7 @@ def test_pixel_attention_packed_full_grid():
     assert torch.count_nonzero(out[0]) == 0
 
 
+@requires_triton_cuda
 @pytest.mark.parametrize("n_q_heads,n_kv_heads", _HEAD_LAYOUTS)
 def test_pixel_attention_backward(n_q_heads, n_kv_heads):
     counts = [0, 2, 9, 1, 6]
@@ -232,6 +217,7 @@ def test_pixel_attention_backward(n_q_heads, n_kv_heads):
         )
 
 
+@requires_triton_cuda
 @pytest.mark.parametrize("n_q_heads,n_kv_heads", _HEAD_LAYOUTS)
 def test_pixel_attention_grouping_matches_ungrouped(n_q_heads, n_kv_heads):
     # Small-pixel grouping packs several pixels into one kernel program via a CSR
@@ -281,6 +267,7 @@ def test_pixel_attention_grouping_matches_ungrouped(n_q_heads, n_kv_heads):
         )
 
 
+@requires_triton_cuda
 def test_pixel_cross_attention_module_forward_backward():
     # Exercises the nn.Module wiring (q_proj/out_proj + reshapes) in the real
     # bf16 path. Smoke-checks shapes, finiteness, and full gradient coverage.
@@ -314,6 +301,7 @@ def test_pixel_cross_attention_module_forward_backward():
         assert p.grad is not None and torch.isfinite(p.grad).all(), name
 
 
+@requires_triton_cuda
 def test_pixel_cross_attention_empty_tokens_grad():
     # No observations anywhere (this path skips the kernel entirely): every
     # projection param must still get a (zero, finite) gradient so DDP stays in
@@ -350,3 +338,54 @@ def test_pixel_cross_attention_rejects_unsupported_configs():
         PixelCrossAttention(
             token_dim=TOKEN_DIM, n_q_heads=66, n_kv_heads=4, d_head=D_HEAD
         )
+
+
+def test_pixel_cross_attention_cpu_reference_forward_backward():
+    # Pure-PyTorch reference path (no Triton/CUDA): forward shape + full grads.
+    torch.manual_seed(0)
+    counts = [2, 0, 3, 1, 4, 0]  # total_pixels = b*t*x = 1*2*3
+    module = PixelCrossAttention(
+        token_dim=TOKEN_DIM,
+        n_q_heads=16,
+        n_kv_heads=1,
+        d_head=D_HEAD,
+        use_proj_bias=True,
+    )
+    gen = torch.Generator().manual_seed(0)
+    tokens = torch.randn(sum(counts), TOKEN_DIM, generator=gen, requires_grad=True)
+    ctx = ObsContext(
+        tokens=tokens, cu_seqlens_k=_cu_seqlens(counts), max_seqlen_k=max(counts)
+    )
+    hidden = torch.randn(1, 2, 3, module.input_dim, requires_grad=True)
+
+    out = module(hidden, ctx)
+    assert out.shape == (1, 2, 3, module.output_dim)
+    assert torch.isfinite(out).all()
+
+    out.pow(2).sum().backward()
+    assert hidden.grad is not None
+    assert tokens.grad is not None
+    assert module.q_proj.weight.grad is not None
+
+
+def test_pixel_cross_attention_cpu_all_empty_keeps_grads():
+    # No observations: zero output, but every projection param still gets a grad.
+    module = PixelCrossAttention(
+        token_dim=TOKEN_DIM,
+        n_q_heads=16,
+        n_kv_heads=1,
+        d_head=D_HEAD,
+        use_proj_bias=True,
+    )
+    ctx = ObsContext(
+        tokens=torch.zeros(0, TOKEN_DIM),
+        cu_seqlens_k=torch.zeros(5, dtype=torch.int32),
+        max_seqlen_k=0,
+    )
+    hidden = torch.randn(1, 1, 4, module.input_dim, requires_grad=True)
+
+    out = module(hidden, ctx)
+    assert out.shape == (1, 1, 4, module.output_dim)
+    out.sum().backward()
+    assert module.q_proj.weight.grad is not None
+    assert module.out_proj.weight.grad is not None

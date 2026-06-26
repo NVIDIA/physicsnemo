@@ -763,6 +763,71 @@ def pixel_attention(
     return torch.cat(outs, dim=1)
 
 
+def pixel_attention_reference(
+    Q: torch.Tensor,
+    tokens: torch.Tensor,
+    W_k: torch.Tensor,
+    W_v: torch.Tensor,
+    cu_seqlens_k: torch.Tensor,
+    n_kv_heads: int,
+    scale: float,
+    B_v: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    r"""Pure-PyTorch ragged grouped-query attention; reference for :func:`pixel_attention`.
+
+    Projects each pixel's token slice to keys/values, applies softmax attention
+    from that pixel's query heads, and writes the per-pixel output. The key bias is
+    omitted (softmax cancels it); ``group_map`` does not apply (grouping is a
+    kernel-launch optimization that does not change the result).
+
+    Loops over pixels and heads in Python, so it is far slower than the Triton
+    :func:`pixel_attention` -- intended for small inputs and the no-triton path,
+    not large-scale runs.
+
+    Parameters
+    ----------
+    Q : torch.Tensor
+        Per-pixel queries of shape :math:`(\text{total\_pixels}, n_q\_heads, d\_head)`.
+    tokens : torch.Tensor
+        Packed observation tokens of shape :math:`(N_{obs}, \text{token\_dim})`.
+    W_k, W_v : torch.Tensor
+        Key/value projection weights of shape
+        :math:`(n_{kv}\_heads \cdot d\_head, \text{token\_dim})`.
+    cu_seqlens_k : torch.Tensor
+        Int prefix sums of shape :math:`(\text{total\_pixels} + 1,)`.
+    n_kv_heads : int
+        Number of key/value heads (grouped-query attention).
+    scale : float
+        Softmax logit scale.
+    B_v : torch.Tensor, optional, default=None
+        Value projection bias.
+
+    Returns
+    -------
+    torch.Tensor
+        Attention output of shape :math:`(\text{total\_pixels}, n_q\_heads, d\_head)`.
+    """
+    n_pixels, n_q_heads, d_head = Q.shape
+    q_per_kv = n_q_heads // n_kv_heads
+    out = torch.zeros_like(Q)
+    for p in range(n_pixels):
+        start, end = int(cu_seqlens_k[p]), int(cu_seqlens_k[p + 1])
+        if end == start:
+            continue
+        tok = tokens[start:end]
+        K = (tok @ W_k.t()).view(-1, n_kv_heads, d_head)
+        V = tok @ W_v.t()
+        if B_v is not None:
+            V = V + B_v
+        V = V.view(-1, n_kv_heads, d_head)
+        for h in range(n_q_heads):
+            kv = h // q_per_kv
+            scores = (K[:, kv] @ Q[p, h]) * scale
+            weights = torch.softmax(scores, dim=0)
+            out[p, h] = weights @ V[:, kv]
+    return out
+
+
 class PixelCrossAttention(CrossAttentionModuleBase):
     r"""Cross-attention from per-pixel latents to packed per-pixel observation tokens.
 
@@ -873,19 +938,31 @@ class PixelCrossAttention(CrossAttentionModuleBase):
         Q = hidden_flat.view(total_pixels, self.n_q_heads, self.d_head)
         Q = Q.contiguous()
 
-        attn_out = pixel_attention(
-            Q,
-            tokens,
-            self.k_proj.weight,
-            self.v_proj.weight,
-            cu_seqlens_k,
-            max_seqlen_k,
-            n_kv_heads=self.n_kv_heads,
-            scale=self.scale,
-            B_k=self.k_proj.bias,
-            B_v=self.v_proj.bias,
-            group_map=group_map,
-        )
+        if triton.available and Q.is_cuda:
+            attn_out = pixel_attention(
+                Q,
+                tokens,
+                self.k_proj.weight,
+                self.v_proj.weight,
+                cu_seqlens_k,
+                max_seqlen_k,
+                n_kv_heads=self.n_kv_heads,
+                scale=self.scale,
+                B_k=self.k_proj.bias,
+                B_v=self.v_proj.bias,
+                group_map=group_map,
+            )
+        else:
+            attn_out = pixel_attention_reference(
+                Q,
+                tokens,
+                self.k_proj.weight,
+                self.v_proj.weight,
+                cu_seqlens_k,
+                self.n_kv_heads,
+                self.scale,
+                B_v=self.v_proj.bias,
+            )
 
         return self.out_proj(attn_out.reshape(total_pixels, self.attn_dim))
 
