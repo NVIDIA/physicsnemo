@@ -24,7 +24,7 @@ tokenizer:
 2. A pure-PyTorch reference path (the readable definition of the math) that
    runs everywhere, including CPU.
 3. ``torch.library.custom_op`` wrappers around the fused Triton kernels in
-   :mod:`._obs_film_kernels`, so the kernels participate in autograd and
+   :mod:`._obs_tokenizer_kernels`, so the kernels participate in autograd and
    fake-tensor tracing for ``torch.compile``.
 
 The tokenizer computes::
@@ -186,7 +186,7 @@ def _launch_fused_film_fwd(
     out_dim: int,
     force_fp32: bool,
 ) -> torch.Tensor:
-    from . import _obs_film_kernels as kernels
+    from . import _obs_tokenizer_kernels as kernels
 
     N = obs.shape[0]
     hidden = w1.shape[1]
@@ -356,7 +356,7 @@ def _launch_fused_film_bwd(
     torch.Tensor,
     torch.Tensor,
 ]:
-    from . import _obs_film_kernels as kernels
+    from . import _obs_tokenizer_kernels as kernels
 
     N = obs.shape[0]
     cond_dim = meta_dim + obs_embed_dim + chan_embed_dim + platform_embed_dim

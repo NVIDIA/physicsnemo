@@ -16,7 +16,7 @@
 
 """Fused Triton kernels for the 2-layer FiLM observation tokenizer.
 
-Private kernel backend for :mod:`..obs_film_tokenizer`, imported lazily only
+Private kernel backend for :mod:`..obs_tokenizer`, imported lazily only
 when triton is installed (mirrors the warp ``_warp_impl`` backends and the
 ``_pixel_attn_kernels`` module).
 

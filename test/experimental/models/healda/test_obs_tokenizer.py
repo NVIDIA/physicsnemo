@@ -18,7 +18,7 @@
 import pytest
 import torch
 
-from physicsnemo.experimental.models.healda.obs_film_tokenizer import (
+from physicsnemo.experimental.models.healda.obs_tokenizer import (
     ObsTokenizerFiLM,
 )
 
@@ -99,7 +99,7 @@ def test_film_tokenizer_cpu_reference_smoke(use_platform):
 @pytest.mark.parametrize("use_platform", [False, True])
 def test_film_tokenizer_triton_matches_reference(use_platform):
     pytest.importorskip("triton")
-    from physicsnemo.experimental.models.healda.obs_film_tokenizer import (
+    from physicsnemo.experimental.models.healda.obs_tokenizer import (
         fused_film_tokenizer_triton,
     )
 
