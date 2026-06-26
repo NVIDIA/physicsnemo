@@ -13,9 +13,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Pluggable cross-attention contract for the video DiT block."""
+"""Pluggable cross-attention sub-layer contract."""
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 import torch
 from jaxtyping import Float
@@ -24,30 +25,29 @@ from physicsnemo.core import Module
 
 
 class CrossAttentionModuleBase(Module, ABC):
-    r"""Abstract base for a cross-attention sub-layer injected into a video DiT block.
+    r"""Abstract base for a cross-attention sub-layer.
 
-    A concrete module attends from the block's field-sequence latents to an
-    arbitrary external ``context`` that the module fully owns (its type, layout,
-    and any folding / packing). The block treats ``context`` as opaque and simply
-    forwards whatever it received in its own forward call.
+    A concrete module attends from ``hidden_states`` to an arbitrary external
+    ``context`` that the module fully owns (its type, layout, and any folding /
+    packing). The caller treats ``context`` as opaque.
 
     Forward
     -------
     hidden_states : torch.Tensor
-        Field-sequence latents of shape :math:`(B, T, X, C)`.
-    context
+        Latents of shape :math:`(*B, C)`.
+    context : Any
         Module-defined conditioning source (e.g. packed cross-attention tokens).
 
     Outputs
     -------
     torch.Tensor
-        Updated latents of shape :math:`(B, T, X, C)`.
+        Updated latents of shape :math:`(*B, C)`.
     """
 
     @abstractmethod
     def forward(
         self,
-        hidden_states: Float[torch.Tensor, "batch time space hidden_size"],
-        context,
-    ) -> Float[torch.Tensor, "batch time space hidden_size"]:
+        hidden_states: Float[torch.Tensor, "*batch hidden_size"],
+        context: Any,
+    ) -> Float[torch.Tensor, "*batch hidden_size"]:
         pass
