@@ -826,25 +826,14 @@ class ObsTokenizerFiLM(torch.nn.Module):
         alpha, beta  = cond_mlp(conditioning).chunk(2)   # 2 * out_dim -> two out_dim vectors
         token        = alpha * obs + beta                # broadcast scalar obs over out_dim
 
-    Rationale: empirically the model leans heavily on the raw measurement and
-    largely ignores metadata, so giving metadata a competing slot in a shared
-    feature space (the older concat tokenizer) wastes capacity. FiLM preserves the
-    strong raw-obs signal while still letting metadata steer it via ``alpha``/``beta``.
-
     Embedding tables:
       - ``embed_table``: observation *type* embedding (which kind of obs).
       - ``channel_embedding``: instrument *channel* embedding.
       - ``platform_embedding`` (optional): satellite/platform embedding.
     All are looked up per observation and concatenated into the conditioning.
 
-    Separate conv/sat first-linear head: conventional (in-situ / GNSS) and
-    satellite observations have different metadata semantics. To let the first
-    ``cond_mlp`` linear specialize per family without duplicating the whole MLP, the
-    metadata is pre-expanded (on the data side) into
-    ``[shared, sat_private, conv_private]`` with the off-family block zeroed -- so a
-    single plain first linear effectively learns separate conv/sat weights. The
-    expansion is the featurization layer's job; this module just consumes the wider
-    metadata vector.
+    Any sensor-family (e.g. conv vs satellite) routing of the metadata is done on
+    the data side; this module consumes the final metadata vector as-is.
 
     When the inputs are on CUDA and triton is available, the whole tokenizer
     (embedding gather + conditioning + 2-layer MLP + FiLM) runs in a single
@@ -859,12 +848,6 @@ class ObsTokenizerFiLM(torch.nn.Module):
         Output token dimension.
     n_embed : int, optional, default=1024
         Size of the observation-type embedding table.
-    nchannel : int, optional, default=1024
-        Number of channels. TODO(polish): trim unused settings -- the channel
-        embedding table is always sized ``GLOBAL_MAX_CHANNELS``, so this is unused.
-    nplatform : int, optional, default=1024
-        Number of platforms. TODO(polish): trim unused settings -- the platform
-        embedding table is always sized ``GLOBAL_MAX_PLATFORM``, so this is unused.
     obs_type_embed_dim : int, optional, default=4
         Dimension of observation-type embeddings.
     channel_embed_dim : int, optional
@@ -874,10 +857,6 @@ class ObsTokenizerFiLM(torch.nn.Module):
         embedding.
     use_fused_mlp : bool, optional, default=True
         Prefer the fused Triton backend when CUDA + triton are available.
-    use_global_channel_platform_ids : bool, optional, default=False
-        TODO(polish): trim unused settings -- channel/platform id-space selection
-        is now the caller's responsibility (ids are passed to ``forward``), so
-        this flag is unused here.
     hidden_dim : int, optional
         Hidden dimension of the conditioning MLP. Defaults to a heuristic on
         ``out_dim``; must be a power of 2 for the fused kernel.
@@ -907,13 +886,10 @@ class ObsTokenizerFiLM(torch.nn.Module):
         meta_dim: int,
         out_dim: int,
         n_embed: int = 1024,
-        nchannel: int = 1024,
-        nplatform: int = 1024,
         obs_type_embed_dim: int = 4,
         channel_embed_dim: int | None = None,
         platform_embed_dim: int | None = None,
         use_fused_mlp: bool = True,
-        use_global_channel_platform_ids: bool = False,
         hidden_dim: int | None = None,
     ):
         super().__init__()
@@ -938,9 +914,6 @@ class ObsTokenizerFiLM(torch.nn.Module):
         # Prefer the fused Triton path, but fall back to the pure-PyTorch
         # reference at runtime when CUDA/triton are unavailable.
         self.use_fused_mlp = use_fused_mlp
-        # TODO(polish): trim unused settings -- ids are now passed directly to
-        # forward(), so id-space selection is the caller's responsibility.
-        self.use_global_channel_platform_ids = use_global_channel_platform_ids
         if hidden_dim is None:
             hidden_dim = _default_film_hidden_dim(out_dim)
         if hidden_dim <= 0:
