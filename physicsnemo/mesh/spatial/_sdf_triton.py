@@ -80,14 +80,20 @@ if triton.available:
     _TINY_C = tl.constexpr(_TINY)
 
     @triton.jit
-    def _node_dist_sq(qx, qy, qz, nmin_ptr, nmax_ptr, node, valid):
-        """Squared distance from each query to its node's AABB (0 if inside)."""
-        minx = tl.load(nmin_ptr + node * 3 + 0, mask=valid, other=0.0)
-        miny = tl.load(nmin_ptr + node * 3 + 1, mask=valid, other=0.0)
-        minz = tl.load(nmin_ptr + node * 3 + 2, mask=valid, other=0.0)
-        maxx = tl.load(nmax_ptr + node * 3 + 0, mask=valid, other=0.0)
-        maxy = tl.load(nmax_ptr + node * 3 + 1, mask=valid, other=0.0)
-        maxz = tl.load(nmax_ptr + node * 3 + 2, mask=valid, other=0.0)
+    def _node_dist_sq(qx, qy, qz, aabb_ptr, node, valid):
+        """Squared distance from each query to its node's AABB (0 if inside).
+
+        ``aabb_ptr`` packs each node's bounds contiguously as
+        ``(n_nodes, 6)`` -- ``min(xyz)`` then ``max(xyz)`` -- so a node's six
+        floats land in one ~32-byte segment, giving the per-lane gather better
+        cache locality than two separate ``(n_nodes, 3)`` arrays.
+        """
+        minx = tl.load(aabb_ptr + node * 6 + 0, mask=valid, other=0.0)
+        miny = tl.load(aabb_ptr + node * 6 + 1, mask=valid, other=0.0)
+        minz = tl.load(aabb_ptr + node * 6 + 2, mask=valid, other=0.0)
+        maxx = tl.load(aabb_ptr + node * 6 + 3, mask=valid, other=0.0)
+        maxy = tl.load(aabb_ptr + node * 6 + 4, mask=valid, other=0.0)
+        maxz = tl.load(aabb_ptr + node * 6 + 5, mask=valid, other=0.0)
         dx = tl.maximum(qx - maxx, 0.0) + tl.maximum(minx - qx, 0.0)
         dy = tl.maximum(qy - maxy, 0.0) + tl.maximum(miny - qy, 0.0)
         dz = tl.maximum(qz - maxz, 0.0) + tl.maximum(minz - qz, 0.0)
@@ -211,15 +217,13 @@ if triton.available:
     @triton.jit
     def _nearest_triangle_kernel(
         query_ptr,  # (N, 3) f32
-        fv_ptr,  # (n_faces, 9) f32  -- a(xyz), b(xyz), c(xyz)
-        nmin_ptr,  # (n_nodes, 3) f32
-        nmax_ptr,  # (n_nodes, 3) f32
+        fv_ptr,  # (n_faces, 9) f32  -- leaf-sorted: a(xyz), b(xyz), c(xyz)
+        aabb_ptr,  # (n_nodes, 6) f32  -- min(xyz), max(xyz)
         left_ptr,  # (n_nodes,) i32
         right_ptr,  # (n_nodes,) i32
         lstart_ptr,  # (n_nodes,) i32
         lcount_ptr,  # (n_nodes,) i32
-        order_ptr,  # (n_cells,) i32
-        stack_ptr,  # (N, STACK_SIZE) i32 scratch
+        stack_ptr,  # (STACK_SIZE, N) i32 scratch (depth-major: coalesced lanes)
         out_dist_ptr,  # (N,) f32  best squared distance
         out_face_ptr,  # (N,) i32  best face index
         out_pt_ptr,  # (N, 3) f32 closest point
@@ -232,7 +236,7 @@ if triton.available:
         """One query per lane; bounded-stack near-first DFS for nearest triangle."""
         pid = tl.program_id(0)
         # int64 index base: ``off`` feeds element-offset arithmetic (``off * 3``
-        # for queries, ``off * STACK_SIZE`` for the per-lane stack). At tens of
+        # for queries, ``depth * N + off`` for the per-lane stack). At tens of
         # millions of queries the default int32 product silently overflows and
         # the kernel reads/writes wrong addresses, so widen before the multiply.
         off = pid.to(tl.int64) * BLOCK + tl.arange(0, BLOCK).to(tl.int64)
@@ -248,9 +252,12 @@ if triton.available:
         bpy = qy
         bpz = qz
 
-        # Seed each lane's stack with the root node (0) and size 1.
+        # Seed each lane's stack with the root node (0) and size 1. The stack is
+        # depth-major (``depth * N + off``): at a shared depth, adjacent lanes
+        # map to adjacent addresses, so coherent pushes/pops coalesce. Root sits
+        # at depth 0, i.e. element ``off``.
         sp = tl.where(m, 1, 0).to(tl.int32)
-        tl.store(stack_ptr + off * STACK_SIZE + 0, tl.zeros((BLOCK,), tl.int32), mask=m)
+        tl.store(stack_ptr + off, tl.zeros((BLOCK,), tl.int32), mask=m)
 
         # Each node is pushed at most once per lane (one parent per node), so the
         # DFS pops a finite number of nodes and the loop is guaranteed to
@@ -259,11 +266,11 @@ if triton.available:
         while tl.sum(active.to(tl.int32)) > 0:
             # --- Pop the top node from every active lane.
             ptr = sp - 1
-            node = tl.load(stack_ptr + off * STACK_SIZE + ptr, mask=active, other=0)
+            node = tl.load(stack_ptr + ptr.to(tl.int64) * N + off, mask=active, other=0)
             sp = tl.where(active, ptr, sp)
 
             # --- Prune: skip nodes that can no longer beat the running bound.
-            lower_sq = _node_dist_sq(qx, qy, qz, nmin_ptr, nmax_ptr, node, active)
+            lower_sq = _node_dist_sq(qx, qy, qz, aabb_ptr, node, active)
             proceed = active & (lower_sq < best)
 
             lcount = tl.load(lcount_ptr + node, mask=proceed, other=0)
@@ -274,7 +281,10 @@ if triton.available:
             lstart = tl.load(lstart_ptr + node, mask=is_leaf, other=0)
             for ci in tl.static_range(0, MAX_LEAF):
                 cell_valid = is_leaf & (ci < lcount)
-                cell = tl.load(order_ptr + lstart + ci, mask=cell_valid, other=0)
+                # ``fv`` is pre-sorted into leaf order, so the leaf position is
+                # the triangle row directly -- no ``sorted_cell_order`` load. The
+                # caller maps this leaf position back to the original face id.
+                cell = lstart + ci
                 ax = tl.load(fv_ptr + cell * 9 + 0, mask=cell_valid, other=0.0)
                 ay = tl.load(fv_ptr + cell * 9 + 1, mask=cell_valid, other=0.0)
                 az = tl.load(fv_ptr + cell * 9 + 2, mask=cell_valid, other=0.0)
@@ -306,8 +316,8 @@ if triton.available:
             left_valid = is_internal & (left >= 0)
             right_valid = is_internal & (right >= 0)
 
-            d_left = _node_dist_sq(qx, qy, qz, nmin_ptr, nmax_ptr, left, left_valid)
-            d_right = _node_dist_sq(qx, qy, qz, nmin_ptr, nmax_ptr, right, right_valid)
+            d_left = _node_dist_sq(qx, qy, qz, aabb_ptr, left, left_valid)
+            d_right = _node_dist_sq(qx, qy, qz, aabb_ptr, right, right_valid)
             inf = tl.full((BLOCK,), float("inf"), tl.float32)
             d_left = tl.where(left_valid, d_left, inf)
             d_right = tl.where(right_valid, d_right, inf)
@@ -318,10 +328,22 @@ if triton.available:
             near_valid = tl.where(left_first, left_valid, right_valid)
             far_valid = tl.where(left_first, right_valid, left_valid)
 
+            # Prune at push time: a child whose AABB lower bound already exceeds
+            # the running best cannot hold a closer triangle, so never push it.
+            # ``d_left``/``d_right`` are reused here (already computed for the
+            # near-first ordering), so this is effectively free and keeps
+            # prunable subtrees out of the stack entirely. ``best`` only shrinks
+            # later, so the pop-time prune above still catches nodes that become
+            # prunable after they were pushed.
+            d_near = tl.where(left_first, d_left, d_right)
+            d_far = tl.where(left_first, d_right, d_left)
+            near_valid = near_valid & (d_near < best)
+            far_valid = far_valid & (d_far < best)
+
             # Push the farther child first so it sits below the nearer child.
-            tl.store(stack_ptr + off * STACK_SIZE + sp, far, mask=far_valid)
+            tl.store(stack_ptr + sp.to(tl.int64) * N + off, far, mask=far_valid)
             sp = tl.where(far_valid, sp + 1, sp)
-            tl.store(stack_ptr + off * STACK_SIZE + sp, near, mask=near_valid)
+            tl.store(stack_ptr + sp.to(tl.int64) * N + off, near, mask=near_valid)
             sp = tl.where(near_valid, sp + 1, sp)
 
             active = sp > 0
@@ -379,15 +401,27 @@ def nearest_triangle_triton(
         )
 
     n_faces = face_vertices.shape[0]
-    fv = face_vertices.reshape(n_faces, 9).to(torch.float32).contiguous()
     query_c = query.reshape(-1, 3).to(torch.float32).contiguous()
-    nmin = bvh.node_aabb_min.to(torch.float32).contiguous()
-    nmax = bvh.node_aabb_max.to(torch.float32).contiguous()
+    # Reorder the triangle payload into BVH leaf order: leaf position ``i`` holds
+    # original face ``cell_order[i]``. Storing triangles this way makes a leaf's
+    # cells contiguous and lets the kernel index them by leaf position
+    # (``leaf_start + ci``) -- dropping the per-cell ``sorted_cell_order``
+    # indirection load and coalescing the 9-float triangle gather for
+    # warp-coherent lanes. The kernel records the leaf position as the winning
+    # "face"; we map it back to the original face id before returning.
+    cell_order = bvh.sorted_cell_order.to(torch.long)
+    fv = face_vertices.reshape(n_faces, 9).to(torch.float32)
+    fv_sorted = fv[cell_order].contiguous()
+    # Pack node bounds as (n_nodes, 6) = min(xyz) | max(xyz) so each node's six
+    # floats are contiguous, improving the per-lane AABB gather's cache locality.
+    node_aabb = torch.cat(
+        [bvh.node_aabb_min.to(torch.float32), bvh.node_aabb_max.to(torch.float32)],
+        dim=1,
+    ).contiguous()
     left = bvh.node_left_child.to(torch.int32).contiguous()
     right = bvh.node_right_child.to(torch.int32).contiguous()
     lstart = bvh.leaf_start.to(torch.int32).contiguous()
     lcount = bvh.leaf_count.to(torch.int32).contiguous()
-    cell_order = bvh.sorted_cell_order.to(torch.int32).contiguous()
 
     # Reorder queries along a Morton curve for warp coherence; unsorted at the
     # end. Outputs are written/allocated in sorted order, then scattered back.
@@ -403,7 +437,10 @@ def nearest_triangle_triton(
     # to the host (that readback stalled the prefetch stream).
     max_leaf = max(1, leaf_size)
 
-    stack = torch.empty(n_queries, _STACK_SIZE, dtype=torch.int32, device=device)
+    # Depth-major scratch: shape (STACK_SIZE, n_queries) so that, at a shared
+    # DFS depth, adjacent lanes index adjacent memory and the push/pop traffic
+    # coalesces. Indexed in the kernel as ``depth * N + off``.
+    stack = torch.empty(_STACK_SIZE, n_queries, dtype=torch.int32, device=device)
 
     # ``BLOCK`` (and ``num_warps``) come from the autotuner; the grid must be a
     # meta-aware callable so it tracks the chosen block size.
@@ -412,14 +449,12 @@ def nearest_triangle_triton(
 
     _nearest_triangle_kernel[grid](
         query_s,
-        fv,
-        nmin,
-        nmax,
+        fv_sorted,
+        node_aabb,
         left,
         right,
         lstart,
         lcount,
-        cell_order,
         stack,
         out_dist_s,
         out_face_s,
@@ -437,4 +472,6 @@ def nearest_triangle_triton(
     best_face[perm] = out_face_s
     best_point[perm] = out_pt_s
 
-    return best_dist_sq, best_face.long(), best_point
+    # ``out_face_s`` holds BVH leaf positions (the kernel runs on leaf-sorted
+    # triangles); map them back to original face ids.
+    return best_dist_sq, cell_order[best_face.long()], best_point
