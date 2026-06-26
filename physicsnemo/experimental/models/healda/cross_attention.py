@@ -36,7 +36,7 @@ class CrossAttentionModuleBase(Module, ABC):
     hidden_states : torch.Tensor
         Latents of shape :math:`(*B, C)`.
     context : Any
-        Module-defined conditioning source (e.g. packed cross-attention tokens).
+        Module-defined conditioning source, opaque to the caller.
 
     Outputs
     -------

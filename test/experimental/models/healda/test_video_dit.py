@@ -19,7 +19,7 @@ import torch
 
 pytest.importorskip("earth2grid")  # HEALPix tokenizer dependency
 
-from physicsnemo.experimental.models.healda.obs_packing import (  # noqa: E402
+from physicsnemo.experimental.models.healda.obs_context import (  # noqa: E402
     ObsContext,
 )
 from physicsnemo.experimental.models.healda.pixel_cross_attention import (  # noqa: E402

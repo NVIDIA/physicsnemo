@@ -29,8 +29,10 @@ pytestmark = pytest.mark.skipif(
 from physicsnemo.experimental.models.healda import (  # noqa: E402
     _pixel_attn_kernels as pcak,
 )
-from physicsnemo.experimental.models.healda.obs_packing import (  # noqa: E402
+from physicsnemo.experimental.models.healda.obs_context import (  # noqa: E402
     ObsContext,
+)
+from physicsnemo.experimental.models.healda.pixel_attention_utils import (  # noqa: E402
     build_pixel_group_map,
 )
 from physicsnemo.experimental.models.healda.pixel_cross_attention import (  # noqa: E402

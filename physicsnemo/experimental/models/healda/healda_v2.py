@@ -17,6 +17,7 @@
 
 import dataclasses
 from dataclasses import dataclass
+from functools import partial
 from typing import Literal, Optional
 
 import torch
@@ -29,7 +30,7 @@ from physicsnemo.nn.module.hpx.tokenizer import (
     HEALPixPatchTokenizer,
 )
 
-from physicsnemo.experimental.models.healda.obs_packing import ObsContext
+from physicsnemo.experimental.models.healda.obs_context import ObsContext
 from physicsnemo.experimental.models.healda.obs_tokenizer import ObsTokenizerFiLM
 from physicsnemo.experimental.models.healda.pixel_cross_attention import (
     PixelCrossAttention,
@@ -66,7 +67,7 @@ class HealDAv2(Module):
     :class:`~physicsnemo.experimental.models.healda.obs_tokenizer.ObsTokenizerFiLM`
     maps each scalar observation to a ``obs_token_dim``-vector token, and those
     tokens are assembled into the per-pixel
-    :class:`~physicsnemo.experimental.models.healda.obs_packing.ObsContext`
+    :class:`~physicsnemo.experimental.models.healda.obs_context.ObsContext`
     that each block's
     :class:`~physicsnemo.experimental.models.healda.pixel_cross_attention.PixelCrossAttention`
     consumes.
@@ -228,16 +229,16 @@ class HealDAv2(Module):
             use_fused_mlp=use_fused_obs_mlp,
         )
 
-        def cross_attention_factory() -> PixelCrossAttention:
-            return PixelCrossAttention(
-                token_dim=obs_token_dim,
-                n_q_heads=pixel_attn_n_q_heads,
-                n_kv_heads=pixel_attn_n_kv_heads,
-                d_head=pixel_attn_head_dim,
-                input_dim=hidden_size,
-                output_dim=hidden_size,
-                use_proj_bias=pixel_attn_use_proj_bias,
-            )
+        cross_attention = partial(
+            PixelCrossAttention,
+            token_dim=obs_token_dim,
+            n_q_heads=pixel_attn_n_q_heads,
+            n_kv_heads=pixel_attn_n_kv_heads,
+            d_head=pixel_attn_head_dim,
+            input_dim=hidden_size,
+            output_dim=hidden_size,
+            use_proj_bias=pixel_attn_use_proj_bias,
+        )
 
         attn_kwargs = {"qk_norm_type": qk_norm_type} if qk_norm_type else {}
         if qk_norm_type:
@@ -279,7 +280,7 @@ class HealDAv2(Module):
             condition_dim=condition_dim,
             temporal_attention=temporal_attention,
             temporal_kwargs=temporal_kwargs,
-            cross_attention=cross_attention_factory,
+            cross_attention=cross_attention,
             is_causal=is_causal,
             attention_backend=attention_backend,
             layernorm_backend=layernorm_backend,

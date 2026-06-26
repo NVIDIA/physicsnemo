@@ -85,7 +85,7 @@ from physicsnemo.experimental.models.healda import triton_autotune_cache as tac
 from physicsnemo.experimental.models.healda.cross_attention import (
     CrossAttentionModuleBase,
 )
-from physicsnemo.experimental.models.healda.obs_packing import ObsContext
+from physicsnemo.experimental.models.healda.obs_context import ObsContext
 
 triton = OptionalImport("triton")
 tl = OptionalImport("triton.language")
@@ -766,7 +766,7 @@ class PixelCrossAttention(CrossAttentionModuleBase):
     implementation: it folds the time axis into the batch, runs ragged
     grouped-query attention from each pixel latent to that pixel's observation
     token slice (a Triton kernel), and unfolds back to ``(B, T, X, C)``. The
-    packing is carried in the :class:`~physicsnemo.experimental.models.healda.obs_packing.ObsContext`.
+    packing is carried in the :class:`~physicsnemo.experimental.models.healda.obs_context.ObsContext`.
 
     Forward expects ``hidden_states`` of shape ``(B, T, X, C)`` and an
     ``ObsContext`` whose ``cu_seqlens_k`` describes ``B * T * X`` pixels. The

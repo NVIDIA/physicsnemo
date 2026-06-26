@@ -13,12 +13,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Packed observation inputs for ragged observation cross-attention.
+"""Observation cross-attention context container.
 
 A single :class:`ObsContext` carries everything a video DiT block's observation
-sub-layer needs -- the packed observation tokens plus the ragged packing
+cross-attention needs -- the packed observation tokens plus the ragged packing
 metadata that maps each pixel to its token slice -- consumed by
-:class:`..pixel_cross_attention.PixelCrossAttention`.
+:class:`..pixel_cross_attention.PixelCrossAttention`. The packing itself is built
+by :mod:`..pixel_attention_utils`.
 """
 
 from __future__ import annotations
@@ -139,72 +140,3 @@ class ObsContext:
                 else self.group_map.to(device=device, non_blocking=non_blocking)
             ),
         )
-
-
-def build_pixel_group_map(
-    cu_seqlens_k: Int[torch.Tensor, " total_pixels_plus_one"],
-    thresh_mult: float = 2.0,
-) -> PixelGroupMap:
-    """Pack consecutive small pixels into shared kernel programs for obs attention.
-
-    The ragged attention runs one kernel program per pixel; for the many tiny
-    pixels the fixed per-program cost (``W_k`` / ``W_v`` load, prologue, launch
-    latency) dominates the actual math. Pairing two small pixels into one program
-    loads those weights once and cuts the program count.
-
-    A pixel is "small" when its token count is below ``thresh_mult`` times the
-    median of the non-empty counts (median-relative so it keeps grouping when the
-    typical pixel is large). Empty pixels are dropped. Pure function of
-    ``cu_seqlens_k``, so it is built once per batch and reused by every layer and
-    both passes.
-
-    Parameters
-    ----------
-    cu_seqlens_k : torch.Tensor
-        Int prefix sums of shape :math:`(\\text{total\\_pixels} + 1,)`.
-    thresh_mult : float, optional, default=2.0
-        Small-pixel threshold as a multiple of the median non-empty count.
-
-    Returns
-    -------
-    PixelGroupMap
-        ``program_ptr`` of shape :math:`(\\text{num\\_programs} + 1,)` and
-        ``program_pixels`` of shape :math:`(\\text{num\\_nonzero\\_pixels},)`,
-        both int32 on the input device.
-    """
-    device = cu_seqlens_k.device
-    counts = (cu_seqlens_k[1:] - cu_seqlens_k[:-1]).to(torch.int64)
-    nonzero_pixels = torch.nonzero(counts > 0, as_tuple=False).flatten()
-    if nonzero_pixels.numel() == 0:  # frame with no observations
-        return PixelGroupMap(
-            program_ptr=torch.zeros(1, dtype=torch.int32, device=device),
-            program_pixels=torch.empty(0, dtype=torch.int32, device=device),
-        )
-    nonzero_counts = counts[nonzero_pixels].float()
-    threshold = nonzero_counts.median() * thresh_mult
-    is_small = nonzero_counts < threshold
-    small_pixels = nonzero_pixels[is_small]
-    large_pixels = nonzero_pixels[~is_small]
-
-    # Large pixels stay solo; small pixels are taken two at a time, with a final
-    # solo program if an odd one is left over.
-    num_pairs = small_pixels.numel() // 2
-    has_leftover = small_pixels.numel() % 2 == 1
-    program_sizes = torch.cat(
-        [
-            torch.ones(large_pixels.numel(), dtype=torch.int64, device=device),
-            torch.full((num_pairs,), 2, dtype=torch.int64, device=device),
-            torch.ones(int(has_leftover), dtype=torch.int64, device=device),
-        ]
-    )
-    program_ptr = torch.zeros(
-        program_sizes.numel() + 1, dtype=torch.int32, device=device
-    )
-    program_ptr[1:] = torch.cumsum(program_sizes, 0).to(torch.int32)
-    program_pixels = torch.cat(
-        [large_pixels.to(torch.int32), small_pixels.to(torch.int32)]
-    )
-    return PixelGroupMap(
-        program_ptr=program_ptr.contiguous(),
-        program_pixels=program_pixels.contiguous(),
-    )
