@@ -15,9 +15,10 @@
 # limitations under the License.
 """Temporal (video) self-attention over the time axis of ``(b, t, x, c)`` tensors.
 
-Copied as-is from the healda model. Used by the factorized video DiT block: each
-spatial location attends across time, complementing the per-frame spatial
-attention. Supports rotary position embeddings on the time axis, an optional
+Used by the factorized video DiT block: each spatial location attends across
+time, complementing the per-frame spatial attention. Supports rotary position
+embeddings on the time axis
+(:class:`~physicsnemo.nn.module.rope.RotaryPositionEmbedding1D`), an optional
 linear (softmax-free) variant, and causal / sliding-window masking.
 """
 
@@ -27,49 +28,7 @@ import einops
 import torch
 from jaxtyping import Float
 
-
-class RotaryPositionEmbedding(torch.nn.Module):
-    """Rotary Position Embedding (RoPE) for the time axis of ``(b, t, x, h, d)``."""
-
-    def __init__(self, head_dim, base: int = 10000, max_seq_len: int = 24):
-        super().__init__()
-        self.head_dim = head_dim
-        self.base = base
-        self.max_seq_len = max_seq_len
-        self._precompute_freqs()
-
-    def _precompute_freqs(self):
-        position = torch.arange(self.max_seq_len).float()
-        dim_indices = torch.arange(self.head_dim // 2).float()
-        dim_indices = dim_indices[None, :]
-        freqs = 1.0 / (self.base ** (2 * dim_indices / self.head_dim))
-        freqs = position[:, None] * freqs
-        self.register_buffer("freqs_cos", torch.cos(freqs))
-        self.register_buffer("freqs_sin", torch.sin(freqs))
-
-    @torch.compile
-    def forward(
-        self, x: Float[torch.Tensor, "batch time space heads head_dim"]
-    ) -> Float[torch.Tensor, "batch time space heads head_dim"]:
-        seq_len = x.shape[1]
-        if seq_len > self.max_seq_len:
-            raise ValueError(
-                f"Sequence length {seq_len} exceeds max_seq_len {self.max_seq_len}"
-            )
-        freqs_cos = self.freqs_cos[:seq_len]
-        freqs_sin = self.freqs_sin[:seq_len]
-        return self._apply_rotary_pos_emb(x, freqs_cos, freqs_sin)
-
-    def _apply_rotary_pos_emb(self, x, freqs_cos, freqs_sin):
-        # x: [b, t, x, heads, head_dim]; freqs_*: [t, head_dim//2]
-        x1, x2 = x[..., 0::2], x[..., 1::2]
-        cos = freqs_cos[None, :, None, None, :]
-        sin = freqs_sin[None, :, None, None, :]
-        out1 = x1 * cos - x2 * sin
-        out2 = x1 * sin + x2 * cos
-        out = torch.stack([out1, out2], dim=-1)
-        out = out.reshape(x.shape)
-        return out
+from physicsnemo.nn.module.rope import RotaryPositionEmbedding1D
 
 
 def mask_causal(attn, linear: bool = True, window: int | None = None):
@@ -134,8 +93,8 @@ class TemporalAttention(torch.nn.Module):
         self.causal_window = causal_window
 
         if self.use_rope:
-            self.rope = RotaryPositionEmbedding(
-                head_dim=self.head_dim, base=rope_base, max_seq_len=max_seq_len
+            self.rope = RotaryPositionEmbedding1D(
+                head_dim=self.head_dim, max_seq_len=max_seq_len, theta=rope_base
             )
         else:
             self.rope = None
@@ -155,8 +114,12 @@ class TemporalAttention(torch.nn.Module):
         )
 
         if self.rope is not None:
-            q = self.rope(q)
-            k = self.rope(k)
+            # RotaryPositionEmbedding1D rotates the -2 axis, so move time there.
+            q = einops.rearrange(q, "b t x h c -> b x h t c")
+            k = einops.rearrange(k, "b t x h c -> b x h t c")
+            q, k = self.rope(q, k)
+            q = einops.rearrange(q, "b x h t c -> b t x h c")
+            k = einops.rearrange(k, "b x h t c -> b t x h c")
 
         if self.linear_attention:
             scale_dim = (
