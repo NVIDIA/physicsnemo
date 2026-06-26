@@ -72,11 +72,11 @@ def test_video_dit_cpu_temporal():
     """Grid-agnostic dense + temporal path (no obs) on CPU."""
     torch.manual_seed(0)
     b, c, t, hidden = 2, 3, 2, 64
-    model = _build_model(c, t, hidden, 4, "cpu", temporal_attention=True)
-    x = torch.randn(b, c, t, NPIX, requires_grad=True)
-    out = model(
-        x, torch.rand(b), tokenizer_kwargs=_calendar(b, t, "cpu"), is_causal=True
+    model = _build_model(
+        c, t, hidden, 4, "cpu", temporal_attention=True, is_causal=True
     )
+    x = torch.randn(b, c, t, NPIX, requires_grad=True)
+    out = model(x, torch.rand(b), tokenizer_kwargs=_calendar(b, t, "cpu"))
     assert out.shape == (b, c, t, NPIX)
     out.float().pow(2).mean().backward()
     assert torch.isfinite(x.grad).all()
@@ -98,7 +98,7 @@ def test_video_dit_cuda_full():
         dev,
         temporal_attention=True,
         obs_cross_attention=True,
-        obs_token_dim=otd,
+        obs_kwargs={"obs_token_dim": otd},
     )
     x = torch.randn(b, c, t, NPIX, device=dev, requires_grad=True)
 

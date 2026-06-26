@@ -108,9 +108,12 @@ _TIME_DIM = 1
 _SPACE_DIM = 2
 
 
+@torch._dynamo.disable
 def _reshard_via_shardtensor(
     tensor: torch.Tensor, mesh, from_dim: int, to_dim: int
 ) -> torch.Tensor:
+    # The redistribute is a DTensor collective; dynamo cannot usefully trace it
+    # (and tracing the resumed frame mis-resolves names), so run it eager.
     from torch.distributed.tensor.placement_types import Shard
 
     from physicsnemo.domain_parallel import ShardTensor

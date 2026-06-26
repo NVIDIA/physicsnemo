@@ -55,11 +55,15 @@ def test_temporal_block_cpu():
     torch.manual_seed(0)
     b, t, npix, c = 2, 4, 16, 64
     block = VideoDiTBlock(
-        hidden_size=c, num_heads=4, condition_embed_dim=32, temporal_attention=True
+        hidden_size=c,
+        num_heads=4,
+        condition_embed_dim=32,
+        temporal_attention=True,
+        is_causal=True,
     )
     x = torch.randn(b, t, npix, c, requires_grad=True)
     emb = torch.randn(b, 32)
-    out = block(x, emb, is_causal=True)
+    out = block(x, emb)
     assert out.shape == (b, t, npix, c)
     out.float().pow(2).mean().backward()
     assert block.temporal_attn.qkv.weight.grad is not None
@@ -81,7 +85,7 @@ def test_full_block_cuda():
         condition_embed_dim=128,
         temporal_attention=True,
         obs_cross_attention=True,
-        obs_token_dim=obs_token_dim,
+        obs_kwargs={"obs_token_dim": obs_token_dim},
     ).to(dev)
 
     x = torch.randn(b, t, npix, c, device=dev, requires_grad=True)
@@ -98,6 +102,6 @@ def test_full_block_cuda():
         obs.tokens.grad,
         block.obs_attn.q_proj.weight.grad,
         block.temporal_attn.qkv.weight.grad,
-        next(block.spatial_attn.parameters()).grad,
+        next(block.attention.parameters()).grad,
     ):
         assert g is not None and torch.isfinite(g).all() and g.abs().sum() > 0
