@@ -60,6 +60,9 @@ class HEALPixPatchTokenizer(nn.Module):
         HEALPix resolution level of input data.
     level_coarse : int
         HEALPix resolution level after patch embedding (model level).
+    separate_time_axis : bool, optional, default=False
+        If ``True``, return tokens as :math:`(B, T, X', D)` instead of the flat
+        :math:`(B, T X', D)` sequence.
 
     Forward
     -------
@@ -75,9 +78,9 @@ class HEALPixPatchTokenizer(nn.Module):
     Outputs
     -------
     torch.Tensor
-        Token tensor of shape :math:`(B, L, D)` where
-        :math:`L = T \\times 12 \\times 4^{\\mathrm{level}_{coarse}}` and
-        :math:`D=\\mathrm{hidden\\_size}`. In HEALPIX_PAD_XY pixel order.
+        Token tensor of shape :math:`(B, T X', D)` (or :math:`(B, T, X', D)` when
+        ``separate_time_axis``) with :math:`X' = 12 \\times 4^{\\mathrm{level}_{coarse}}`
+        and :math:`D=\\mathrm{hidden\\_size}`. In HEALPIX_PAD_XY pixel order.
     """
 
     def __init__(
@@ -87,6 +90,7 @@ class HEALPixPatchTokenizer(nn.Module):
         hidden_size: int,
         level_fine: int,
         level_coarse: int,
+        separate_time_axis: bool = False,
         **kwargs,
     ):
         super().__init__()
@@ -94,6 +98,7 @@ class HEALPixPatchTokenizer(nn.Module):
         self.hidden_size = hidden_size
         self.level_fine = level_fine
         self.level_coarse = level_coarse
+        self.separate_time_axis = separate_time_axis
         self.nside = 2**level_fine
         self.nside_coarse = 2**level_coarse
         self.patch_size = 2 ** (level_fine - level_coarse)
@@ -152,6 +157,9 @@ class HEALPixPatchTokenizer(nn.Module):
 
         x = x + calendar_emb + self.pos_embed
 
+        if self.separate_time_axis:
+            return x  # (B, T, X', D)
+
         # Unfold into a token sequence.
         x = einops.rearrange(
             x,
@@ -182,16 +190,16 @@ class HEALPixPatchDetokenizer(nn.Module):
     level_fine : int
         HEALPix resolution level of output data.
     time_length : int, optional, default=1
-        Number of time steps.
+        Number of time steps, used only for flat :math:`(B, T X', D)` inputs.
     condition_dim : int, optional, default=None
         Conditioning dimension for AdaLN modulation. If None, uses ``hidden_size``.
 
     Forward
     -------
     x : torch.Tensor
-        Input tensor of shape :math:`(B, L, D)` where
-        :math:`L = T \\times 12 \\times 4^{\\mathrm{level}_{coarse}}`. Must have
-        HEALPIX_PAD_XY pixel order.
+        Token tensor, either flat :math:`(B, T X', D)` (time inferred from
+        ``time_length``) or :math:`(B, T, X', D)`. Must have HEALPIX_PAD_XY pixel
+        order.
     c : torch.Tensor
         Conditioning tensor of shape :math:`(B, D_c)` where :math:`D_c` is
         ``condition_dim`` if provided, otherwise ``hidden_size``.
@@ -244,10 +252,15 @@ class HEALPixPatchDetokenizer(nn.Module):
 
     def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
         b = x.shape[0]
-        t = self.time_length
         n = self.nside_coarse
 
-        x = einops.rearrange(x, "b (t f x y) d -> b t (f x y) d", t=t, f=12, x=n, y=n)
+        if x.ndim == 4:
+            t = x.shape[1]
+        else:
+            t = self.time_length
+            x = einops.rearrange(
+                x, "b (t f x y) d -> b t (f x y) d", t=t, f=12, x=n, y=n
+            )
 
         shift, scale = self.adaptive_modulation(c).chunk(2, dim=-1)
         x = self.norm_out(x) * (1 + scale[:, None, None, :]) + shift[:, None, None, :]

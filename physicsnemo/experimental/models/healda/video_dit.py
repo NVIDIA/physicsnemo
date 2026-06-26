@@ -15,11 +15,9 @@
 # limitations under the License.
 """Diffusion Transformer over field sequences ``(B, C, T, X)`` with an explicit time axis."""
 
-import copy
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
-import einops
 import torch
 import torch.nn as nn
 from jaxtyping import Float
@@ -51,14 +49,11 @@ class VideoDiT(Module):
     Parameters
     ----------
     tokenizer : torch.nn.Module
-        Maps :math:`(B, C, T, X)` to a flat token sequence :math:`(B, T X', D)`,
+        Maps :math:`(B, C, T, X)` to a token sequence :math:`(B, T, X', D)`,
         defining the grid (e.g. a HEALPix patch tokenizer).
     detokenizer : torch.nn.Module
-        Maps tokens :math:`(B, T X', D)` and the conditioning embedding back to
+        Maps tokens :math:`(B, T, X', D)` and the conditioning embedding back to
         :math:`(B, C_{out}, T, X)`.
-    time_length : int
-        Number of time steps :math:`T`, used to reshape the flat tokens to
-        :math:`(B, T, X', D)` for the blocks.
     hidden_size : int
         Transformer token dimension.
     num_heads : int
@@ -75,9 +70,9 @@ class VideoDiT(Module):
         Enable factorized temporal attention in every block.
     temporal_kwargs : Dict[str, Any], optional, default=None
         Extra keyword arguments for the temporal-attention layers.
-    cross_attention : Module, optional, default=None
-        Cross-attention module (:class:`~physicsnemo.experimental.models.healda.cross_attention.CrossAttentionModuleBase`),
-        deep-copied per block; consumes ``cross_attention_context``.
+    cross_attention : Callable[..., Module], optional, default=None
+        Factory called once per block to build its cross-attention module
+        (:class:`~physicsnemo.experimental.models.healda.cross_attention.CrossAttentionModuleBase`).
     is_causal : bool, optional, default=False
         Causal masking for temporal attention, fixed at construction.
     attention_backend : str or Module, optional, default="timm"
@@ -115,8 +110,8 @@ class VideoDiT(Module):
         Diffusion noise levels of shape :math:`(B,)`.
     condition : torch.Tensor, optional
         Conditioning input of shape :math:`(B, \text{condition\_dim})`.
-    cross_attention_context : optional
-        Opaque context consumed by the injected cross-attention module.
+    cross_attention_context : Any, optional
+        Opaque per-call context consumed by the injected cross-attention module.
     tokenizer_kwargs : Dict[str, Any], optional
         Extra keyword arguments forwarded to the tokenizer's forward.
 
@@ -130,7 +125,6 @@ class VideoDiT(Module):
         self,
         tokenizer: nn.Module,
         detokenizer: nn.Module,
-        time_length: int,
         hidden_size: int,
         num_heads: int,
         num_layers: int,
@@ -140,7 +134,7 @@ class VideoDiT(Module):
         condition_dim: int = 0,
         temporal_attention: bool = False,
         temporal_kwargs: Optional[Dict[str, Any]] = None,
-        cross_attention: Optional[Module] = None,
+        cross_attention: Optional[Callable[..., Module]] = None,
         is_causal: bool = False,
         attention_backend: Union[str, Module] = "timm",
         layernorm_backend: str = "torch",
@@ -157,19 +151,33 @@ class VideoDiT(Module):
         super().__init__(meta=MetaData())
         self.tokenizer = tokenizer
         self.detokenizer = detokenizer
-        self.time_length = time_length
 
-        self.conditioning_embedder = self._build_conditioning_embedder(
-            conditioning_embedder,
-            conditioning_embedder_kwargs,
-            hidden_size=hidden_size,
-            emb_channels=emb_channels,
-            noise_channels=noise_channels,
-            condition_dim=condition_dim,
-        )
+        if isinstance(conditioning_embedder, str):
+            embedder_type = ConditioningEmbedderType[conditioning_embedder.upper()]
+            embedder_kwargs = dict(conditioning_embedder_kwargs or {})
+            if embedder_type is ConditioningEmbedderType.EDM:
+                embedder_kwargs.setdefault(
+                    "emb_channels", emb_channels or 4 * hidden_size
+                )
+                embedder_kwargs.setdefault(
+                    "noise_channels", noise_channels or hidden_size
+                )
+            self.conditioning_embedder = get_conditioning_embedder(
+                embedder_type,
+                hidden_size=hidden_size,
+                condition_dim=condition_dim,
+                amp_mode=self.meta.amp_gpu,
+                **embedder_kwargs,
+            )
+        elif isinstance(conditioning_embedder, ConditioningEmbedder):
+            self.conditioning_embedder = conditioning_embedder
+        else:
+            raise TypeError(
+                "conditioning_embedder must be a name in {'dit', 'edm', 'zero'} "
+                "or a ConditioningEmbedder instance"
+            )
         cond_dim = self.conditioning_embedder.output_dim
 
-        # Per-block rates if given, else a linear schedule from the scalar.
         if drop_path_rates is None:
             drop_path_rates = [
                 drop_path * i / max(1, num_layers - 1) for i in range(num_layers)
@@ -192,11 +200,7 @@ class VideoDiT(Module):
                     drop_path=drop_path_rates[i],
                     temporal_attention=temporal_attention,
                     temporal_kwargs=temporal_kwargs,
-                    cross_attention=(
-                        copy.deepcopy(cross_attention)
-                        if cross_attention is not None
-                        else None
-                    ),
+                    cross_attention=cross_attention,
                     is_causal=is_causal,
                     adaln_zero_init=adaln_zero_init,
                     attn_kwargs=attn_kwargs,
@@ -208,63 +212,6 @@ class VideoDiT(Module):
 
         if dit_initialization:
             self.initialize_weights()
-
-    def _build_conditioning_embedder(
-        self,
-        conditioning_embedder: Union[str, ConditioningEmbedder],
-        conditioning_embedder_kwargs: Optional[Dict[str, Any]],
-        hidden_size: int,
-        emb_channels: Optional[int],
-        noise_channels: Optional[int],
-        condition_dim: int,
-    ) -> ConditioningEmbedder:
-        r"""Resolve the conditioning embedder from a name or a pre-built instance.
-
-        Parameters
-        ----------
-        conditioning_embedder : str or ConditioningEmbedder
-            Embedder type name or a pre-instantiated embedder.
-        conditioning_embedder_kwargs : Dict[str, Any] or None
-            Extra constructor keyword arguments.
-        hidden_size : int
-            Transformer token dimension.
-        emb_channels : int or None
-            EDM embedding dimension (defaults to ``4 * hidden_size``).
-        noise_channels : int or None
-            EDM noise positional-embedding dimension (defaults to ``hidden_size``).
-        condition_dim : int
-            Conditioning input dimension.
-
-        Returns
-        -------
-        ConditioningEmbedder
-            The resolved embedder instance.
-        """
-        if not isinstance(conditioning_embedder, str):
-            if not isinstance(conditioning_embedder, ConditioningEmbedder):
-                raise TypeError(
-                    "conditioning_embedder must be a name in {'dit', 'edm', "
-                    "'zero'} or a ConditioningEmbedder instance"
-                )
-            return conditioning_embedder
-
-        embedder_type = ConditioningEmbedderType[conditioning_embedder.upper()]
-        kwargs = dict(conditioning_embedder_kwargs or {})
-        if embedder_type is ConditioningEmbedderType.EDM:
-            kwargs.setdefault(
-                "emb_channels",
-                4 * hidden_size if emb_channels is None else emb_channels,
-            )
-            kwargs.setdefault(
-                "noise_channels",
-                hidden_size if noise_channels is None else noise_channels,
-            )
-            kwargs.setdefault("condition_dim", condition_dim)
-        elif embedder_type is ConditioningEmbedderType.DIT:
-            kwargs.setdefault("hidden_size", hidden_size)
-            kwargs.setdefault("condition_dim", condition_dim)
-            kwargs.setdefault("amp_mode", self.meta.amp_gpu)
-        return get_conditioning_embedder(embedder_type, **kwargs)
 
     def initialize_weights(self) -> None:
         r"""Apply DiT-style initialization.
@@ -297,16 +244,14 @@ class VideoDiT(Module):
         x: Float[torch.Tensor, "batch channels time space"],
         noise_labels: Float[torch.Tensor, " batch"],
         condition: Optional[Float[torch.Tensor, "batch condition_dim"]] = None,
-        cross_attention_context=None,
+        cross_attention_context: Optional[Any] = None,
         tokenizer_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Float[torch.Tensor, "batch out_channels time space"]:
-        # (B, C, T, X) -> (B, T * X', hidden) -> (B, T, X', hidden)
-        tokens = self.tokenizer(x, **(tokenizer_kwargs or {}))
-        h = einops.rearrange(tokens, "b (t x) d -> b t x d", t=self.time_length)
+        # (B, C, T, X) -> (B, T, X', hidden)
+        h = self.tokenizer(x, **(tokenizer_kwargs or {}))
 
         emb = self.conditioning_embedder(noise_labels, condition=condition)
         for block in self.blocks:
             h = block(h, emb, cross_attention_context=cross_attention_context)
 
-        h = einops.rearrange(h, "b t x d -> b (t x) d")
         return self.detokenizer(h, emb)

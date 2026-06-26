@@ -39,17 +39,21 @@ def _build_obs(b, t, npix, obs_token_dim, device, max_count=4):
     )
 
 
-def _build_cross_attention(hidden_size, token_dim):
-    """One reference cross-attention module for the generic slot."""
-    return PixelCrossAttention(
-        token_dim=token_dim,
-        n_q_heads=hidden_size // token_dim,
-        n_kv_heads=1,
-        d_head=token_dim,
-        input_dim=hidden_size,
-        output_dim=hidden_size,
-        use_proj_bias=True,
-    )
+def _cross_attention_factory(hidden_size, token_dim):
+    """Factory for one reference cross-attention module for the generic slot."""
+
+    def build():
+        return PixelCrossAttention(
+            token_dim=token_dim,
+            n_q_heads=hidden_size // token_dim,
+            n_kv_heads=1,
+            d_head=token_dim,
+            input_dim=hidden_size,
+            output_dim=hidden_size,
+            use_proj_bias=True,
+        )
+
+    return build
 
 
 def test_plain_block_reduces_to_spatial_mlp_cpu():
@@ -90,13 +94,13 @@ def test_adaln_zero_init_toggle():
     zeroed = VideoDiTBlock(
         hidden_size=64, num_heads=4, condition_embed_dim=32, adaln_zero_init=True
     )
-    assert zeroed.adaln_attention.modulation[-1].weight.abs().sum() == 0
-    assert zeroed.adaln_mlp.modulation[-1].bias.abs().sum() == 0
+    assert zeroed.attn_norm.modulation[-1].weight.abs().sum() == 0
+    assert zeroed.mlp_norm.modulation[-1].bias.abs().sum() == 0
 
     kept = VideoDiTBlock(
         hidden_size=64, num_heads=4, condition_embed_dim=32, adaln_zero_init=False
     )
-    assert kept.adaln_attention.modulation[-1].weight.abs().sum() > 0
+    assert kept.attn_norm.modulation[-1].weight.abs().sum() > 0
 
 
 @pytest.mark.skipif(
@@ -113,7 +117,7 @@ def test_full_block_cuda():
         num_heads=8,
         condition_embed_dim=128,
         temporal_attention=True,
-        cross_attention=_build_cross_attention(c, token_dim),
+        cross_attention=_cross_attention_factory(c, token_dim),
         adaln_zero_init=False,  # non-zero gates so every branch gets grad
     ).to(dev)
 

@@ -15,7 +15,7 @@
 # limitations under the License.
 """DiT block over field sequences ``(b, t, x, c)`` with optional temporal and cross-attention."""
 
-from typing import Any, Dict, Optional, Union
+from typing import Any, Callable, Dict, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -72,11 +72,11 @@ class VideoDiTBlock(nn.Module):
         Add a gated temporal-attention sub-layer.
     temporal_kwargs : Dict[str, Any], optional, default=None
         Extra arguments for :class:`.temporal_attention.TemporalAttention`.
-    cross_attention : Module, optional, default=None
-        Pre-instantiated cross-attention module implementing the
-        :class:`~physicsnemo.experimental.models.healda.cross_attention.CrossAttentionModuleBase`
-        contract. When set, adds a gated cross-attention sub-layer consuming the
-        opaque ``cross_attention_context`` passed to :meth:`forward`.
+    cross_attention : Callable[..., Module], optional, default=None
+        Factory building this block's cross-attention module
+        (:class:`~physicsnemo.experimental.models.healda.cross_attention.CrossAttentionModuleBase`).
+        When set, adds a gated cross-attention sub-layer consuming the opaque
+        ``cross_attention_context`` passed to :meth:`forward`.
     is_causal : bool, optional, default=False
         Causal masking for temporal attention, fixed at construction.
     adaln_zero_init : bool, optional, default=True
@@ -99,8 +99,8 @@ class VideoDiTBlock(nn.Module):
         context parallelism).
     c : torch.Tensor
         Conditioning embedding of shape :math:`(B, D_c)`.
-    cross_attention_context : optional
-        Opaque context forwarded to the injected ``cross_attention`` module.
+    cross_attention_context : Any, optional
+        Opaque per-call context forwarded to the injected ``cross_attention`` module.
     attn_kwargs : Dict[str, Any], optional
         Forwarded to the spatial-attention backend forward.
 
@@ -127,7 +127,7 @@ class VideoDiTBlock(nn.Module):
         drop_path: float = 0.0,
         temporal_attention: bool = False,
         temporal_kwargs: Optional[Dict[str, Any]] = None,
-        cross_attention: Optional[Module] = None,
+        cross_attention: Optional[Callable[..., Module]] = None,
         is_causal: bool = False,
         adaln_zero_init: bool = True,
         attn_kwargs: Optional[Dict[str, Any]] = None,
@@ -152,7 +152,7 @@ class VideoDiTBlock(nn.Module):
                 proj_drop_rate=proj_drop_rate,
                 **attn_kwargs_final,
             )
-        self.adaln_attention = AdaLayerNormZero(
+        self.attn_norm = AdaLayerNormZero(
             hidden_size,
             condition_embed_dim,
             zero_init=adaln_zero_init,
@@ -160,7 +160,6 @@ class VideoDiTBlock(nn.Module):
             norm_eps=norm_eps,
         )
 
-        # Gated MLP (gelu-approx).
         self.linear = Mlp(
             in_features=hidden_size,
             hidden_features=int(hidden_size * mlp_ratio),
@@ -168,7 +167,7 @@ class VideoDiTBlock(nn.Module):
             drop=mlp_drop_rate,
             final_dropout=final_mlp_dropout,
         )
-        self.adaln_mlp = AdaLayerNormZero(
+        self.mlp_norm = AdaLayerNormZero(
             hidden_size,
             condition_embed_dim,
             zero_init=adaln_zero_init,
@@ -178,14 +177,14 @@ class VideoDiTBlock(nn.Module):
 
         # Optional gated temporal-attention sub-layer.
         self.temporal_attention = None
-        self.adaln_temporal = None
+        self.temporal_attn_norm = None
         if temporal_attention:
             self.temporal_attention = TemporalAttention(
                 embed_dim=hidden_size,
                 num_heads=num_heads,
                 **(temporal_kwargs or {}),
             )
-            self.adaln_temporal = AdaLayerNormZero(
+            self.temporal_attn_norm = AdaLayerNormZero(
                 hidden_size,
                 condition_embed_dim,
                 zero_init=adaln_zero_init,
@@ -193,11 +192,10 @@ class VideoDiTBlock(nn.Module):
                 norm_eps=norm_eps,
             )
 
-        # Optional gated cross-attention sub-layer (injected module).
-        self.cross_attention = cross_attention
-        self.adaln_cross = None
-        if cross_attention is not None:
-            self.adaln_cross = AdaLayerNormZero(
+        self.cross_attention = cross_attention() if cross_attention is not None else None
+        self.cross_attn_norm = None
+        if self.cross_attention is not None:
+            self.cross_attn_norm = AdaLayerNormZero(
                 hidden_size,
                 condition_embed_dim,
                 zero_init=adaln_zero_init,
@@ -220,10 +218,10 @@ class VideoDiTBlock(nn.Module):
             Delegates to each :class:`.adaln.AdaLayerNormZero`.
         """
         for adaln in (
-            self.adaln_attention,
-            self.adaln_mlp,
-            self.adaln_temporal,
-            self.adaln_cross,
+            self.attn_norm,
+            self.mlp_norm,
+            self.temporal_attn_norm,
+            self.cross_attn_norm,
         ):
             if adaln is not None:
                 adaln.initialize_weights()
@@ -267,13 +265,13 @@ class VideoDiTBlock(nn.Module):
         self,
         hidden_states: Float[torch.Tensor, "batch time space hidden_size"],
         c: Float[torch.Tensor, "batch condition_embed_dim"],
-        cross_attention_context=None,
+        cross_attention_context: Optional[Any] = None,
         attn_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Float[torch.Tensor, "batch time space hidden_size"]:
         b, t, x, ch = hidden_states.shape
 
         # Spatial self-attention per frame (time folded into batch).
-        normed, gate = self.adaln_attention(hidden_states, c)
+        normed, gate = self.attn_norm(hidden_states, c)
         attn_out = self.attention(
             normed.reshape(b * t, x, ch), **(attn_kwargs or {})
         ).reshape(b, t, x, ch)
@@ -286,7 +284,7 @@ class VideoDiTBlock(nn.Module):
                     "cross_attention was provided at construction but no "
                     "cross_attention_context was passed to forward."
                 )
-            normed, gate = self.adaln_cross(hidden_states, c)
+            normed, gate = self.cross_attn_norm(hidden_states, c)
             cross_out = self.cross_attention(normed, cross_attention_context)
             hidden_states = torch.addcmul(
                 hidden_states, self.drop_path(gate), cross_out
@@ -295,15 +293,15 @@ class VideoDiTBlock(nn.Module):
         # Temporal attention across time, with t<->x reshard around it.
         if self.temporal_attention is not None:
             hidden_states = self._to_space_sharded(hidden_states)
-            normed, gate = self.adaln_temporal(hidden_states, c)
+            normed, gate = self.temporal_attn_norm(hidden_states, c)
             temporal_out = self.temporal_attention(normed, self._is_causal)
             hidden_states = torch.addcmul(
                 hidden_states, self.drop_path(gate), temporal_out
             )
             hidden_states = self._to_time_sharded(hidden_states)
 
-        # Gated MLP.
-        normed, gate = self.adaln_mlp(hidden_states, c)
+        # Feed-forward block.
+        normed, gate = self.mlp_norm(hidden_states, c)
         hidden_states = torch.addcmul(
             hidden_states, self.drop_path(gate), self.linear(normed)
         )

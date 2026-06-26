@@ -44,19 +44,18 @@ def _build_model(c, t, hidden, num_heads, device, **kwargs):
         hidden_size=hidden,
         level_fine=LEVEL_FINE,
         level_coarse=LEVEL_COARSE,
+        separate_time_axis=True,
     )
     detokenizer = HEALPixPatchDetokenizer(
         hidden_size=hidden,
         out_channels=c,
         level_coarse=LEVEL_COARSE,
         level_fine=LEVEL_FINE,
-        time_length=t,
         condition_dim=emb_channels,
     )
     return VideoDiT(
         tokenizer,
         detokenizer,
-        time_length=t,
         hidden_size=hidden,
         num_heads=num_heads,
         num_layers=2,
@@ -101,15 +100,18 @@ def test_video_dit_cuda_full():
     torch.manual_seed(0)
     dev = "cuda"
     b, c, t, hidden, otd = 2, 3, 2, 256, 16
-    cross_attention = PixelCrossAttention(
-        token_dim=otd,
-        n_q_heads=hidden // otd,
-        n_kv_heads=1,
-        d_head=otd,
-        input_dim=hidden,
-        output_dim=hidden,
-        use_proj_bias=True,
-    )
+
+    def cross_attention():
+        return PixelCrossAttention(
+            token_dim=otd,
+            n_q_heads=hidden // otd,
+            n_kv_heads=1,
+            d_head=otd,
+            input_dim=hidden,
+            output_dim=hidden,
+            use_proj_bias=True,
+        )
+
     model = _build_model(
         c,
         t,
