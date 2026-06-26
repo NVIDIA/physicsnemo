@@ -31,7 +31,9 @@ PLATFORM_EMBED_DIM = 4
 N_EMBED = 32
 
 
-def _film_reference(module: ObsTokenizerFiLM, obs, float_metadata, obs_type, channel, platform):
+def _film_reference(
+    module: ObsTokenizerFiLM, obs, float_metadata, obs_type, channel, platform
+):
     """Readable pure-PyTorch reference for the FiLM tokenizer math."""
     embed_vec = module.embed_table(obs_type)
     chan_emb = module.channel_embedding(channel)

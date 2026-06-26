@@ -74,6 +74,7 @@ ordinary PyTorch autograd.
 import hashlib
 import math
 import os
+from typing import Optional
 
 import torch
 import torch.distributed as dist
@@ -85,7 +86,10 @@ from physicsnemo.experimental.models.healda import triton_autotune_cache as tac
 from physicsnemo.experimental.models.healda.cross_attention import (
     CrossAttentionModuleBase,
 )
-from physicsnemo.experimental.models.healda.obs_context import ObsContext
+from physicsnemo.experimental.models.healda.obs_context import (
+    ObsContext,
+    PixelGroupMap,
+)
 
 triton = OptionalImport("triton")
 tl = OptionalImport("triton.language")
@@ -760,30 +764,56 @@ def pixel_attention(
 
 
 class PixelCrossAttention(CrossAttentionModuleBase):
-    """Cross-attention from per-pixel latents to packed per-pixel observation tokens.
+    r"""Cross-attention from per-pixel latents to packed per-pixel observation tokens.
 
-    A reference :class:`~physicsnemo.experimental.models.healda.cross_attention.CrossAttentionModuleBase`
-    implementation: it folds the time axis into the batch, runs ragged
-    grouped-query attention from each pixel latent to that pixel's observation
-    token slice (a Triton kernel), and unfolds back to ``(B, T, X, C)``. The
-    packing is carried in the :class:`~physicsnemo.experimental.models.healda.obs_context.ObsContext`.
+    A :class:`..cross_attention.CrossAttentionModuleBase` whose ``context`` is an
+    :class:`..obs_context.ObsContext`: it folds the time axis into the batch, runs
+    ragged grouped-query attention from each pixel latent to that pixel's token
+    slice (a Triton kernel; see :func:`pixel_attention`), and unfolds the result
+    back to :math:`(B, T, X, C)`.
 
-    Forward expects ``hidden_states`` of shape ``(B, T, X, C)`` and an
-    ``ObsContext`` whose ``cu_seqlens_k`` describes ``B * T * X`` pixels. The
-    module reshapes the latents to ``[total_pixels, input_dim]``, applies
-    ``q_proj``, runs the ragged attention over each pixel's token slice, applies
-    ``out_proj``, and reshapes the result back to ``(B, T, X, C)``.
+    Parameters
+    ----------
+    token_dim : int
+        Channel dimension of the observation tokens (the key/value source).
+    n_q_heads : int
+        Number of query heads.
+    n_kv_heads : int
+        Number of key/value heads (grouped-query attention). Must be 1, 2, or an
+        even number, divide ``n_q_heads``, with ``n_q_heads / n_kv_heads >= 16``.
+    d_head : int
+        Per-head channel dimension.
+    input_dim : int, optional, default=None
+        Latent input dimension. Defaults to ``n_q_heads * d_head``.
+    output_dim : int, optional, default=None
+        Output dimension. Defaults to ``n_q_heads * d_head``.
+    use_proj_bias : bool, optional, default=False
+        Add bias to the query/value/output projections (the key projection is
+        always bias-free).
+
+    Forward
+    -------
+    hidden_states : torch.Tensor
+        Per-pixel latents of shape :math:`(B, T, X, C)`.
+    context : ObsContext
+        Packed observation tokens and ragged packing whose ``cu_seqlens_k``
+        describes :math:`B \cdot T \cdot X` pixels.
+
+    Outputs
+    -------
+    torch.Tensor
+        Updated latents of shape :math:`(B, T, X, C)`.
     """
 
     def __init__(
         self,
-        token_dim,
-        n_q_heads,
-        n_kv_heads,
-        d_head,
-        input_dim=None,
-        output_dim=None,
-        use_proj_bias=False,
+        token_dim: int,
+        n_q_heads: int,
+        n_kv_heads: int,
+        d_head: int,
+        input_dim: Optional[int] = None,
+        output_dim: Optional[int] = None,
+        use_proj_bias: bool = False,
     ):
         super().__init__()
 
@@ -817,13 +847,13 @@ class PixelCrossAttention(CrossAttentionModuleBase):
 
     def _forward_impl(
         self,
-        hidden_states,
-        tokens,
-        total_pixels,
-        cu_seqlens_k,
-        max_seqlen_k,
-        group_map=None,
-    ):
+        hidden_states: torch.Tensor,
+        tokens: torch.Tensor,
+        total_pixels: int,
+        cu_seqlens_k: torch.Tensor,
+        max_seqlen_k: int,
+        group_map: Optional[PixelGroupMap] = None,
+    ) -> torch.Tensor:
         hidden_flat = hidden_states.reshape(total_pixels, self.input_dim)
 
         if tokens.shape[0] == 0:
@@ -959,8 +989,8 @@ def _ensure_autotune_cache():
     load this rank's saved configs (so a fresh process reuses a prior run's tuning)
     and arm the write-through (so any config Triton tunes lazily on the real batch
     is persisted). Tuning itself stays Triton-lazy on the real workload, so the
-    chosen config always matches production -- no synthetic data, no setup step.
-    Idempotent and best-effort (a cache failure never blocks the kernel)."""
+    chosen config always matches the real batch -- no synthetic data, no setup
+    step. Idempotent and best-effort (a cache failure never blocks the kernel)."""
     global _AUTOTUNE_CACHE_READY
     if _AUTOTUNE_CACHE_READY:
         return

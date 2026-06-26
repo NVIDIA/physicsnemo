@@ -55,22 +55,9 @@ class HealDAv2MetaData(ModelMetaData):
 
 
 class HealDAv2(Module):
-    r"""Video+observation data-assimilation model wrapping :class:`VideoDiT`.
-
-    Composes the upstreamed :class:`~physicsnemo.experimental.models.healda.video_dit.VideoDiT`
-    backbone with a FiLM observation tokenizer into the production v2 video DA
-    architecture, so the existing healda checkpoint can be loaded. The backbone
-    runs HEALPix patch (de)tokenization, per-frame spatial attention, factorized
-    temporal attention, and per-block observation cross-attention.
-
-    The FiLM observation tokenizer is hosted here rather than inside ``VideoDiT``:
-    :class:`~physicsnemo.experimental.models.healda.obs_tokenizer.ObsTokenizerFiLM`
-    maps each scalar observation to a ``obs_token_dim``-vector token, and those
-    tokens are assembled into the per-pixel
-    :class:`~physicsnemo.experimental.models.healda.obs_context.ObsContext`
-    that each block's
-    :class:`~physicsnemo.experimental.models.healda.pixel_cross_attention.PixelCrossAttention`
-    consumes.
+    r"""
+    Video data-assimilation model combining HEALPix tokenizers, a FiLM observation
+    tokenizer, and a VideoDiT backbone.
 
     Parameters
     ----------

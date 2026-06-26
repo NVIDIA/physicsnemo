@@ -35,10 +35,19 @@ from .video_dit_block import VideoDiTBlock
 
 @dataclass
 class MetaData(ModelMetaData):
-    name: str = "VideoDiT"
+    # Optimization
+    jit: bool = False
+    cuda_graphs: bool = False
+    amp_cpu: bool = False
     amp_gpu: bool = True
+    torch_fx: bool = False
+    # Data type
     bf16: bool = True
-
+    # Inference
+    onnx: bool = False
+    # Physics informed
+    func_torch: bool = False
+    auto_grad: bool = False
 
 class VideoDiT(Module):
     r"""Diffusion Transformer over :math:`(B, C, T, X)` inputs with an explicit time axis.
