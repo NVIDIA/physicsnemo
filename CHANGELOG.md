@@ -10,9 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Adds the **Strata** weather-emulation architecture to experimental models
+- Adds the Strata weather-emulation architecture to experimental models
   (`physicsnemo.experimental.models.strata`): `Strata`, a two-stage
-  **deterministic regression** model (not a generative diffusion model) whose
+  deterministic regression model (not a generative diffusion model) whose
   `StrataTransformer3D` backbone — 3D neighborhood attention via
   `physicsnemo.nn.functional.na3d`, optional axial or stereographic RoPE, optional
   depth-axis / gated attention — conditions a pixel-resolution stage through
