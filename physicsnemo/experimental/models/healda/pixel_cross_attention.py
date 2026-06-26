@@ -875,7 +875,7 @@ class PixelCrossAttention(CrossAttentionModuleBase):
                     f"but cu_seqlens_k describes {n_pix}"
                 )
         # Fold (B, T, X) into the flat pixel axis the ragged kernel expects, then
-        # unfold the per-pixel output back to the field-sequence layout.
+        # unfold the per-pixel output back to the (B, T, X, C) layout.
         out = self._forward_impl(
             hidden_states,
             context.tokens,

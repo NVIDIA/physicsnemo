@@ -13,7 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""DiT block over field sequences ``(b, t, x, c)`` with optional temporal and cross-attention."""
+"""DiT block over ``(b, t, x, c)`` with optional temporal and cross-attention."""
 
 from typing import Any, Callable, Dict, Optional, Union
 
@@ -37,7 +37,7 @@ from .temporal_attention import TemporalAttention
 
 
 class VideoDiTBlock(nn.Module):
-    r"""A DiT block over field sequences :math:`(B, T, X, C)` with optional temporal and cross-attention.
+    r"""A DiT block over :math:`(B, T, X, C)` with optional temporal and cross-attention.
 
     Spatial attention runs per frame (time folded into batch); the optional
     temporal and cross-attention sub-layers each add a gated residual branch.

@@ -13,7 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Diffusion Transformer over field sequences ``(B, C, T, X)`` with an explicit time axis."""
+"""Diffusion Transformer over ``(B, C, T, X)`` inputs with an explicit time axis."""
 
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Union
@@ -41,7 +41,7 @@ class MetaData(ModelMetaData):
 
 
 class VideoDiT(Module):
-    r"""Diffusion Transformer over field sequences :math:`(B, C, T, X)` with an explicit time axis.
+    r"""Diffusion Transformer over :math:`(B, C, T, X)` inputs with an explicit time axis.
 
     The tokenizer and detokenizer are arbitrary modules that define the grid (e.g.
     HEALPix patch (de)tokenizers); the backbone operates on a flat token sequence.
@@ -239,6 +239,21 @@ class VideoDiT(Module):
         for block in self.blocks:
             block.initialize_weights()
 
+    def set_context_parallel(self, mode: Optional[str], target=None) -> None:
+        r"""Configure the temporal time<->space reshard on every block.
+
+        Parameters
+        ----------
+        mode : str or None
+            ``None`` (no resharding), ``"all_to_all"`` (manual collective over a
+            ``ProcessGroup``), or ``"shardtensor"`` (``ShardTensor.redistribute``
+            over a 1D mesh).
+        target : ProcessGroup or DeviceMesh, optional, default=None
+            The process group (``all_to_all``) or device mesh (``shardtensor``).
+        """
+        for block in self.blocks:
+            block.set_context_parallel(mode, target)
+
     def forward(
         self,
         x: Float[torch.Tensor, "batch channels time space"],
@@ -249,6 +264,11 @@ class VideoDiT(Module):
     ) -> Float[torch.Tensor, "batch out_channels time space"]:
         # (B, C, T, X) -> (B, T, X', hidden)
         h = self.tokenizer(x, **(tokenizer_kwargs or {}))
+        if h.ndim != 4:
+            raise ValueError(
+                f"tokenizer must emit (B, T, X, hidden) for VideoDiT; got {h.ndim}D "
+                "(use a tokenizer with separate_time_axis=True)."
+            )
 
         emb = self.conditioning_embedder(noise_labels, condition=condition)
         for block in self.blocks:
