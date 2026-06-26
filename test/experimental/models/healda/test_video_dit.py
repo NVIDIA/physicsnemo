@@ -22,6 +22,9 @@ pytest.importorskip("earth2grid")  # HEALPix tokenizer dependency
 from physicsnemo.experimental.models.healda.obs_packing import (  # noqa: E402
     ObsCrossAttention,
 )
+from physicsnemo.experimental.models.healda.pixel_cross_attention import (  # noqa: E402
+    PixelCrossAttention,
+)
 from physicsnemo.experimental.models.healda.video_dit import VideoDiT  # noqa: E402
 from physicsnemo.nn.module.hpx.tokenizer import (  # noqa: E402
     HEALPixPatchDetokenizer,
@@ -69,7 +72,7 @@ def _calendar(b, t, device):
 
 
 def test_video_dit_cpu_temporal():
-    """Grid-agnostic dense + temporal path (no obs) on CPU."""
+    """Grid-agnostic dense + temporal path (no cross-attention) on CPU."""
     torch.manual_seed(0)
     b, c, t, hidden = 2, 3, 2, 64
     model = _build_model(
@@ -82,14 +85,31 @@ def test_video_dit_cpu_temporal():
     assert torch.isfinite(x.grad).all()
 
 
+def test_video_dit_drop_path_rates():
+    """Explicit ``drop_path_rates`` are honored per block; bad length raises."""
+    model = _build_model(3, 2, 64, 4, "cpu", drop_path_rates=[0.1, 0.2])
+    assert [blk.drop_path.drop_prob for blk in model.blocks] == [0.1, 0.2]
+    with pytest.raises(ValueError, match="drop_path_rates length"):
+        _build_model(3, 2, 64, 4, "cpu", drop_path_rates=[0.1, 0.2, 0.3])
+
+
 @pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="triton obs attn is CUDA-only"
+    not torch.cuda.is_available(), reason="triton cross-attn is CUDA-only"
 )
 def test_video_dit_cuda_full():
-    """Dense + temporal + observation cross-attention on CUDA."""
+    """Dense + temporal + injected cross-attention on CUDA."""
     torch.manual_seed(0)
     dev = "cuda"
     b, c, t, hidden, otd = 2, 3, 2, 256, 16
+    cross_attention = PixelCrossAttention(
+        token_dim=otd,
+        n_q_heads=hidden // otd,
+        n_kv_heads=1,
+        d_head=otd,
+        input_dim=hidden,
+        output_dim=hidden,
+        use_proj_bias=True,
+    )
     model = _build_model(
         c,
         t,
@@ -97,8 +117,8 @@ def test_video_dit_cuda_full():
         8,
         dev,
         temporal_attention=True,
-        obs_cross_attention=True,
-        obs_kwargs={"obs_token_dim": otd},
+        cross_attention=cross_attention,
+        adaln_zero_init=False,  # non-zero gates so every branch gets grad
     )
     x = torch.randn(b, c, t, NPIX, device=dev, requires_grad=True)
 
@@ -107,12 +127,15 @@ def test_video_dit_cuda_full():
     cu = torch.zeros(total_pixels + 1, dtype=torch.int32, device=dev)
     cu[1:] = torch.cumsum(counts, 0).to(torch.int32)
     tokens = torch.randn(int(cu[-1]), otd, device=dev, requires_grad=True)
-    obs = ObsCrossAttention(
+    context = ObsCrossAttention(
         tokens=tokens, cu_seqlens_k=cu, max_seqlen_k=int(counts.max())
     )
 
     out = model(
-        x, torch.rand(b, device=dev), obs=obs, tokenizer_kwargs=_calendar(b, t, dev)
+        x,
+        torch.rand(b, device=dev),
+        cross_attention_context=context,
+        tokenizer_kwargs=_calendar(b, t, dev),
     )
     assert out.shape == (b, c, t, NPIX)
     assert torch.isfinite(out).all()

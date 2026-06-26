@@ -78,9 +78,14 @@ import os
 import torch
 import torch.distributed as dist
 import torch.nn as nn
+from jaxtyping import Float
 
 from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.experimental.models.healda import triton_autotune_cache as tac
+from physicsnemo.experimental.models.healda.cross_attention import (
+    CrossAttentionModuleBase,
+)
+from physicsnemo.experimental.models.healda.obs_packing import ObsCrossAttention
 
 triton = OptionalImport("triton")
 tl = OptionalImport("triton.language")
@@ -754,26 +759,21 @@ def pixel_attention(
     return torch.cat(outs, dim=1)
 
 
-class PixelCrossAttention(nn.Module):
-    """Cross-attention from pixel latents to packed per-pixel observation tokens.
+class PixelCrossAttention(CrossAttentionModuleBase):
+    """Cross-attention from per-pixel latents to packed per-pixel observation tokens.
 
-    Forward expects:
+    A reference :class:`~physicsnemo.experimental.models.healda.cross_attention.CrossAttentionModuleBase`
+    implementation: it folds the time axis into the batch, runs ragged
+    grouped-query attention from each pixel latent to that pixel's observation
+    token slice (a Triton kernel), and unfolds back to ``(B, T, X, C)``. The
+    packing is carried in the :class:`~physicsnemo.experimental.models.healda.obs_packing.ObsCrossAttention`
+    context.
 
-    * ``hidden_states`` with shape ``[..., input_dim]`` containing one latent
-      vector per pixel.
-    * ``tokens`` with shape ``[total_tokens, token_dim]`` containing all
-      observation tokens concatenated across pixels.
-    * ``total_pixels`` equal to the flattened pixel count in ``hidden_states``.
-    * ``cu_seqlens_k`` with shape ``[total_pixels + 1]`` storing prefix sums into
-      ``tokens`` so pixel ``i`` attends to
-      ``tokens[cu_seqlens_k[i]:cu_seqlens_k[i + 1]]``.
-    * ``max_seqlen_k`` equal to the maximum per-pixel token count in that packed
-      layout.
-
-    The module reshapes ``hidden_states`` to ``[total_pixels, input_dim]``,
-    applies ``q_proj``, runs ragged grouped-query attention over each pixel's
-    token slice, applies ``out_proj``, and returns
-    ``[total_pixels, output_dim]``.
+    Forward expects ``hidden_states`` of shape ``(B, T, X, C)`` and an
+    ``ObsCrossAttention`` context whose ``cu_seqlens_k`` describes ``B * T * X``
+    pixels. The module reshapes the latents to ``[total_pixels, input_dim]``,
+    applies ``q_proj``, runs the ragged attention over each pixel's token slice,
+    applies ``out_proj``, and reshapes the result back to ``(B, T, X, C)``.
     """
 
     def __init__(
@@ -862,21 +862,29 @@ class PixelCrossAttention(nn.Module):
 
     def forward(
         self,
-        hidden_states,
-        tokens,
-        total_pixels,
-        cu_seqlens_k,
-        max_seqlen_k,
-        group_map=None,
-    ):
-        return self._forward_impl(
+        hidden_states: Float[torch.Tensor, "batch time space hidden_size"],
+        context: ObsCrossAttention,
+    ) -> Float[torch.Tensor, "batch time space hidden_size"]:
+        b, t, x, ch = hidden_states.shape
+        total_pixels = b * t * x
+        if not torch.compiler.is_compiling():
+            n_pix = context.cu_seqlens_k.shape[0] - 1
+            if n_pix != total_pixels:
+                raise ValueError(
+                    f"Expected packing for {total_pixels} pixels (B*T*X), "
+                    f"but cu_seqlens_k describes {n_pix}"
+                )
+        # Fold (B, T, X) into the flat pixel axis the ragged kernel expects, then
+        # unfold the per-pixel output back to the field-sequence layout.
+        out = self._forward_impl(
             hidden_states,
-            tokens,
+            context.tokens,
             total_pixels,
-            cu_seqlens_k,
-            max_seqlen_k,
-            group_map=group_map,
+            context.cu_seqlens_k,
+            context.max_seqlen_k,
+            group_map=context.group_map,
         )
+        return out.view(b, t, x, ch)
 
 
 # ---------------------------------------------------------------------------

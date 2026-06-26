@@ -18,27 +18,42 @@ import pytest
 import torch
 
 from physicsnemo.experimental.models.healda.obs_packing import ObsCrossAttention
+from physicsnemo.experimental.models.healda.pixel_cross_attention import (
+    PixelCrossAttention,
+)
 from physicsnemo.experimental.models.healda.video_dit_block import VideoDiTBlock
 
 
 def _build_obs(b, t, npix, obs_token_dim, device, max_count=4):
-    """Build a packed ragged obs bundle (tokens + meta) for ``b*t*npix`` pixels."""
+    """Build a packed ragged cross-attention context for ``b*t*npix`` pixels."""
     total_pixels = b * t * npix
     counts = torch.randint(0, max_count, (total_pixels,), device=device)
     cu = torch.zeros(total_pixels + 1, dtype=torch.int32, device=device)
     cu[1:] = torch.cumsum(counts, 0).to(torch.int32)
     n_tokens = int(cu[-1].item())
     tokens = torch.randn(n_tokens, obs_token_dim, device=device, requires_grad=True)
-    obs = ObsCrossAttention(
+    return ObsCrossAttention(
         tokens=tokens,
         cu_seqlens_k=cu,
         max_seqlen_k=int(counts.max().item()) if total_pixels else 0,
     )
-    return obs
+
+
+def _build_cross_attention(hidden_size, token_dim):
+    """One reference cross-attention module for the generic slot."""
+    return PixelCrossAttention(
+        token_dim=token_dim,
+        n_q_heads=hidden_size // token_dim,
+        n_kv_heads=1,
+        d_head=token_dim,
+        input_dim=hidden_size,
+        output_dim=hidden_size,
+        use_proj_bias=True,
+    )
 
 
 def test_plain_block_reduces_to_spatial_mlp_cpu():
-    """With temporal/obs off the block is a spatial DiT block; runs on CPU."""
+    """With temporal/cross off the block is a spatial DiT block; runs on CPU."""
     torch.manual_seed(0)
     b, t, npix, c = 2, 3, 16, 64
     block = VideoDiTBlock(hidden_size=c, num_heads=4, condition_embed_dim=32)
@@ -66,42 +81,56 @@ def test_temporal_block_cpu():
     out = block(x, emb)
     assert out.shape == (b, t, npix, c)
     out.float().pow(2).mean().backward()
-    assert block.temporal_attn.qkv.weight.grad is not None
+    assert block.temporal_attention.qkv.weight.grad is not None
     assert torch.isfinite(x.grad).all()
 
 
+def test_adaln_zero_init_toggle():
+    """``adaln_zero_init`` actually zeros (or keeps) the modulation linear."""
+    zeroed = VideoDiTBlock(
+        hidden_size=64, num_heads=4, condition_embed_dim=32, adaln_zero_init=True
+    )
+    assert zeroed.adaln_attention.modulation[-1].weight.abs().sum() == 0
+    assert zeroed.adaln_mlp.modulation[-1].bias.abs().sum() == 0
+
+    kept = VideoDiTBlock(
+        hidden_size=64, num_heads=4, condition_embed_dim=32, adaln_zero_init=False
+    )
+    assert kept.adaln_attention.modulation[-1].weight.abs().sum() > 0
+
+
 @pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="triton obs attn is CUDA-only"
+    not torch.cuda.is_available(), reason="triton cross-attn is CUDA-only"
 )
 def test_full_block_cuda():
-    """Full block (spatial + obs cross-attn + temporal) forward/backward on CUDA."""
+    """Full block (spatial + cross-attn + temporal) forward/backward on CUDA."""
     torch.manual_seed(0)
     dev = "cuda"
     b, t, npix, c = 2, 3, 64, 256
-    obs_token_dim = 16
+    token_dim = 16
     block = VideoDiTBlock(
         hidden_size=c,
         num_heads=8,
         condition_embed_dim=128,
         temporal_attention=True,
-        obs_cross_attention=True,
-        obs_kwargs={"obs_token_dim": obs_token_dim},
+        cross_attention=_build_cross_attention(c, token_dim),
+        adaln_zero_init=False,  # non-zero gates so every branch gets grad
     ).to(dev)
 
     x = torch.randn(b, t, npix, c, device=dev, requires_grad=True)
     emb = torch.randn(b, 128, device=dev)
-    obs = _build_obs(b, t, npix, obs_token_dim, dev)
+    context = _build_obs(b, t, npix, token_dim, dev)
 
-    out = block(x, emb, obs=obs)
+    out = block(x, emb, cross_attention_context=context)
     assert out.shape == (b, t, npix, c)
     assert torch.isfinite(out).all()
 
     out.float().pow(2).mean().backward()
     for g in (
         x.grad,
-        obs.tokens.grad,
-        block.obs_attn.q_proj.weight.grad,
-        block.temporal_attn.qkv.weight.grad,
+        context.tokens.grad,
+        block.cross_attention.q_proj.weight.grad,
+        block.temporal_attention.qkv.weight.grad,
         next(block.attention.parameters()).grad,
     ):
         assert g is not None and torch.isfinite(g).all() and g.abs().sum() > 0
