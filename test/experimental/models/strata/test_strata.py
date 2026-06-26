@@ -1040,6 +1040,10 @@ def test_transformer_set_tile_size_axial():
     assert torch.equal(model._rope_sin, fresh._rope_sin)
     out = model(torch.randn(2, 3, 4, 16, 8))
     assert out.shape == (2, 3, 4, 16, 8) and torch.isfinite(out).all()
+    # A tile not divisible by the patch size is rejected (mirrors the
+    # constructor's check), rather than silently truncated by the patch conv.
+    with pytest.raises(ValueError):
+        model.set_tile_size(height=15, width=8)  # 15 % patch_size[1] (2) != 0
 
 
 @torch.no_grad()

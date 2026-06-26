@@ -438,7 +438,23 @@ class StrataTransformer3D(Module):
         -------
         None
             Updates internal state in place.
+
+        Raises
+        ------
+        ValueError
+            If ``height`` or ``width`` is not divisible by the corresponding
+            horizontal patch size (mirrors the constructor's check, so re-tiling
+            cannot silently truncate the input via the patch-embed conv).
         """
+        ph, pw = self.patch_size[1], self.patch_size[2]
+        if height % ph != 0:
+            raise ValueError(
+                f"Height ({height}) must be divisible by horizontal patch size ({ph})"
+            )
+        if width % pw != 0:
+            raise ValueError(
+                f"Width ({width}) must be divisible by horizontal patch size ({pw})"
+            )
         self.height = height
         self.width = width
         self.input_shape = (self.depth, height, width)
