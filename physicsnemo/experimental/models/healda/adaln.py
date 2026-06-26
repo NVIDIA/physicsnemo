@@ -15,7 +15,7 @@
 # limitations under the License.
 """ndim-agnostic adaptive layer norm zero (adaLN-Zero) modulation."""
 
-from typing import Tuple
+from typing import Literal, Tuple
 
 import torch
 import torch.nn as nn
@@ -35,12 +35,13 @@ class AdaLayerNormZero(nn.Module):
     r"""Adaptive layer norm zero (adaLN-Zero) modulation, agnostic to input rank.
 
     Emits ``n_blocks`` ``(shift, scale, gate)`` triples from the conditioning
-    embedding via ``SiLU + Linear``. The first triple is consumed here: it
-    modulates the affine-free layer-normed ``x``, and its gate is returned for the
-    caller's gated residual. Any further triples are returned unapplied for the
-    caller to use on later sub-layers (e.g. a feed-forward branch). Modulation
-    vectors are broadcast to match ``x.ndim``, so the same module serves 3D
-    :math:`(B, L, C)` and 4D :math:`(B, T, X, C)` hidden states.
+    embedding via ``SiLU + Linear``. The first block's ``shift``/``scale`` are
+    applied to the affine-free layer-normed ``x`` here; its ``gate`` is returned
+    for the caller's gated residual. For ``n_blocks > 1`` the remaining blocks'
+    ``(shift, scale, gate)`` are returned unapplied, so one projection can drive
+    several sub-layers (e.g. grouped attention + feed-forward, as in the standard
+    DiT block). Modulation vectors are broadcast to match ``x.ndim``, so the same
+    module serves 3D :math:`(B, L, C)` and 4D :math:`(B, T, X, C)` states.
 
     The ``SiLU`` is applied inside this module, so the conditioning embedder must
     emit a pre-activation embedding.
@@ -95,7 +96,7 @@ class AdaLayerNormZero(nn.Module):
         condition_embed_dim: int,
         n_blocks: int = 1,
         zero_init: bool = True,
-        layernorm_backend: str = "torch",
+        layernorm_backend: Literal["apex", "torch"] = "torch",
         norm_eps: float = 1e-6,
     ):
         super().__init__()

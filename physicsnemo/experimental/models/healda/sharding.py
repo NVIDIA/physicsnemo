@@ -100,9 +100,10 @@ def shard_t(
 # ---------------------------------------------------------------------------
 # ShardTensor variant: express the same t<->x reshard as a placement change on a
 # 1D device mesh (Shard(time) <-> Shard(space)). The redistribute is an
-# all_to_all under the hood but is autograd-aware, supports uneven shards, and
-# composes with the rest of physicsnemo.domain_parallel. ``(b, t, x, c)`` so the
-# time axis is dim 1 and the spatial axis is dim 2.
+# all_to_all under the hood but is autograd-aware and composes with the rest of
+# physicsnemo.domain_parallel; unlike the manual shard_x/shard_t above (which
+# require evenly divisible shards), it also handles uneven shards. ``(b, t, x, c)``
+# so the time axis is dim 1 and the spatial axis is dim 2.
 # ---------------------------------------------------------------------------
 _TIME_DIM = 1
 _SPACE_DIM = 2

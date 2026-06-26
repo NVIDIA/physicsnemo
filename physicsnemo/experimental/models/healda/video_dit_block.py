@@ -134,7 +134,6 @@ class VideoDiTBlock(nn.Module):
         attn_kwargs: Optional[Dict[str, Any]] = None,
     ):
         super().__init__()
-        self.hidden_size = hidden_size
         self._is_causal = is_causal
 
         # Spatial self-attention backend (name -> built here, or injected module),

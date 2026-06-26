@@ -21,6 +21,7 @@ from typing import Optional
 import einops
 import torch
 import torch.nn as nn
+from jaxtyping import Float
 
 from physicsnemo.core.version_check import check_version_spec
 
@@ -126,10 +127,10 @@ class HEALPixPatchTokenizer(nn.Module):
 
     def forward(
         self,
-        x: torch.Tensor,
-        second_of_day: torch.Tensor,
-        day_of_year: torch.Tensor,
-    ) -> torch.Tensor:
+        x: Float[torch.Tensor, "batch in_channels time npix"],
+        second_of_day: Float[torch.Tensor, "batch time"],
+        day_of_year: Float[torch.Tensor, "batch time"],
+    ) -> Float[torch.Tensor, "batch ... hidden_size"]:
         b, c, t, npix = x.shape
 
         # Fold faces into batch for per-face convolution.
@@ -250,7 +251,11 @@ class HEALPixPatchDetokenizer(nn.Module):
         nn.init.constant_(self.adaptive_modulation[-1].weight, 0)
         nn.init.constant_(self.adaptive_modulation[-1].bias, 0)
 
-    def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: Float[torch.Tensor, "batch ... hidden_size"],
+        c: Float[torch.Tensor, "batch condition_dim"],
+    ) -> Float[torch.Tensor, "batch out_channels time npix"]:
         b = x.shape[0]
         n = self.nside_coarse
 
@@ -355,7 +360,10 @@ class CalendarEmbedding(nn.Module):
         second_of_day: torch.Tensor,
     ) -> torch.Tensor:
         if second_of_day.shape != day_of_year.shape:
-            raise ValueError()
+            raise ValueError(
+                "second_of_day and day_of_year must share a shape; got "
+                f"{tuple(second_of_day.shape)} and {tuple(day_of_year.shape)}"
+            )
 
         if self.include_legacy_bug:
             local_time = (second_of_day.unsqueeze(2) - self.lon * 86400 // 360) % 86400
