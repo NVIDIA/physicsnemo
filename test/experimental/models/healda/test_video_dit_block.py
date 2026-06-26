@@ -17,7 +17,7 @@
 import pytest
 import torch
 
-from physicsnemo.experimental.models.healda.obs_packing import ObsCrossAttention
+from physicsnemo.experimental.models.healda.obs_packing import ObsContext
 from physicsnemo.experimental.models.healda.pixel_cross_attention import (
     PixelCrossAttention,
 )
@@ -32,7 +32,7 @@ def _build_obs(b, t, npix, obs_token_dim, device, max_count=4):
     cu[1:] = torch.cumsum(counts, 0).to(torch.int32)
     n_tokens = int(cu[-1].item())
     tokens = torch.randn(n_tokens, obs_token_dim, device=device, requires_grad=True)
-    return ObsCrossAttention(
+    return ObsContext(
         tokens=tokens,
         cu_seqlens_k=cu,
         max_seqlen_k=int(counts.max().item()) if total_pixels else 0,

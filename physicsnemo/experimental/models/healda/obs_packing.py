@@ -15,9 +15,9 @@
 # limitations under the License.
 """Packed observation inputs for ragged observation cross-attention.
 
-A single :class:`ObsCrossAttention` bundle carries everything a video DiT block's
-observation sub-layer needs -- the packed observation tokens plus the ragged
-packing metadata that maps each pixel to its token slice -- consumed by
+A single :class:`ObsContext` carries everything a video DiT block's observation
+sub-layer needs -- the packed observation tokens plus the ragged packing
+metadata that maps each pixel to its token slice -- consumed by
 :class:`..pixel_cross_attention.PixelCrossAttention`.
 """
 
@@ -59,43 +59,46 @@ class PixelGroupMap:
 
 
 @dataclasses.dataclass
-class ObsCrossAttention:
-    """Packed observation tokens + ragged packing for observation cross-attention.
+class ObsContext:
+    """Observation cross-attention context: packed tokens + ragged packing.
 
-    Bundled into one object (rather than passing tokens and packing metadata
-    separately) so a block's observation sub-layer takes a single argument.
-    Observations are sorted by flat pixel index so each pixel's tokens are
-    contiguous in ``tokens``.
+    The single container a block's observation sub-layer
+    (:class:`..pixel_cross_attention.PixelCrossAttention`) consumes. Observations
+    are sorted by flat pixel index so each pixel's tokens are contiguous in
+    ``tokens``.
 
     Parameters
     ----------
-    tokens : torch.Tensor
-        Packed observation tokens (the key/value source) of shape
-        :math:`(N_{tokens}, \\text{token\\_dim})`, concatenated over all pixels.
     cu_seqlens_k : torch.Tensor
         Int prefix sums of shape :math:`(\\text{total\\_pixels} + 1,)`; pixel
         ``i`` attends to ``tokens[cu_seqlens_k[i]:cu_seqlens_k[i + 1]]``.
     max_seqlen_k : int
         Maximum per-pixel token count (kernel launch / autotune bucketing).
+    tokens : torch.Tensor, optional
+        Packed observation tokens (the key/value source) of shape
+        :math:`(N_{tokens}, \\text{token\\_dim})`, concatenated over all pixels.
+        Unset (``None``) until the observation tokenizer fills it.
     group_map : PixelGroupMap, optional
         Optional CSR map packing small pixels into shared kernel programs.
         ``None`` runs one program per pixel.
     """
 
-    tokens: torch.Tensor
     cu_seqlens_k: Int[torch.Tensor, " total_pixels_plus_one"]
     max_seqlen_k: int
+    tokens: Optional[torch.Tensor] = None
     group_map: Optional[PixelGroupMap] = None
 
-    def to(
-        self, device=None, dtype=None, non_blocking: bool = True
-    ) -> "ObsCrossAttention":
-        return ObsCrossAttention(
-            tokens=self.tokens.to(
-                device=device, dtype=dtype, non_blocking=non_blocking
-            ),
+    def to(self, device=None, dtype=None, non_blocking: bool = True) -> "ObsContext":
+        return ObsContext(
             cu_seqlens_k=self.cu_seqlens_k.to(device=device, non_blocking=non_blocking),
             max_seqlen_k=self.max_seqlen_k,
+            tokens=(
+                None
+                if self.tokens is None
+                else self.tokens.to(
+                    device=device, dtype=dtype, non_blocking=non_blocking
+                )
+            ),
             group_map=(
                 None
                 if self.group_map is None

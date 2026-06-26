@@ -13,7 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Production video+obs data-assimilation model composing :class:`VideoDiT`."""
+"""Video + observation data-assimilation model composing :class:`VideoDiT`."""
 
 from dataclasses import dataclass
 from typing import Literal, Optional
@@ -29,7 +29,7 @@ from physicsnemo.nn.module.hpx.tokenizer import (
 )
 
 from physicsnemo.experimental.models.healda.obs_packing import (
-    ObsCrossAttention,
+    ObsContext,
     build_pixel_group_map,
 )
 from physicsnemo.experimental.models.healda.obs_tokenizer import ObsTokenizerFiLM
@@ -68,8 +68,8 @@ class HealDAv2(Module):
     :class:`~physicsnemo.experimental.models.healda.obs_tokenizer.ObsTokenizerFiLM`
     maps each scalar observation to a ``obs_token_dim``-vector token, and those
     tokens are assembled into the per-pixel
-    :class:`~physicsnemo.experimental.models.healda.obs_packing.ObsCrossAttention`
-    context that each block's
+    :class:`~physicsnemo.experimental.models.healda.obs_packing.ObsContext`
+    that each block's
     :class:`~physicsnemo.experimental.models.healda.pixel_cross_attention.PixelCrossAttention`
     consumes.
 
@@ -320,7 +320,7 @@ class HealDAv2(Module):
             channel,
             platform,
         )
-        obs_ctx = ObsCrossAttention(
+        obs_ctx = ObsContext(
             tokens=obs_tokens,
             cu_seqlens_k=cu_seqlens_k,
             max_seqlen_k=max_seqlen_k,

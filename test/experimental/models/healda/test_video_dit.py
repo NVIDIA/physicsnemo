@@ -20,7 +20,7 @@ import torch
 pytest.importorskip("earth2grid")  # HEALPix tokenizer dependency
 
 from physicsnemo.experimental.models.healda.obs_packing import (  # noqa: E402
-    ObsCrossAttention,
+    ObsContext,
 )
 from physicsnemo.experimental.models.healda.pixel_cross_attention import (  # noqa: E402
     PixelCrossAttention,
@@ -129,7 +129,7 @@ def test_video_dit_cuda_full():
     cu = torch.zeros(total_pixels + 1, dtype=torch.int32, device=dev)
     cu[1:] = torch.cumsum(counts, 0).to(torch.int32)
     tokens = torch.randn(int(cu[-1]), otd, device=dev, requires_grad=True)
-    context = ObsCrossAttention(
+    context = ObsContext(
         tokens=tokens, cu_seqlens_k=cu, max_seqlen_k=int(counts.max())
     )
 

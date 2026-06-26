@@ -85,7 +85,7 @@ from physicsnemo.experimental.models.healda import triton_autotune_cache as tac
 from physicsnemo.experimental.models.healda.cross_attention import (
     CrossAttentionModuleBase,
 )
-from physicsnemo.experimental.models.healda.obs_packing import ObsCrossAttention
+from physicsnemo.experimental.models.healda.obs_packing import ObsContext
 
 triton = OptionalImport("triton")
 tl = OptionalImport("triton.language")
@@ -766,14 +766,13 @@ class PixelCrossAttention(CrossAttentionModuleBase):
     implementation: it folds the time axis into the batch, runs ragged
     grouped-query attention from each pixel latent to that pixel's observation
     token slice (a Triton kernel), and unfolds back to ``(B, T, X, C)``. The
-    packing is carried in the :class:`~physicsnemo.experimental.models.healda.obs_packing.ObsCrossAttention`
-    context.
+    packing is carried in the :class:`~physicsnemo.experimental.models.healda.obs_packing.ObsContext`.
 
     Forward expects ``hidden_states`` of shape ``(B, T, X, C)`` and an
-    ``ObsCrossAttention`` context whose ``cu_seqlens_k`` describes ``B * T * X``
-    pixels. The module reshapes the latents to ``[total_pixels, input_dim]``,
-    applies ``q_proj``, runs the ragged attention over each pixel's token slice,
-    applies ``out_proj``, and reshapes the result back to ``(B, T, X, C)``.
+    ``ObsContext`` whose ``cu_seqlens_k`` describes ``B * T * X`` pixels. The
+    module reshapes the latents to ``[total_pixels, input_dim]``, applies
+    ``q_proj``, runs the ragged attention over each pixel's token slice, applies
+    ``out_proj``, and reshapes the result back to ``(B, T, X, C)``.
     """
 
     def __init__(
@@ -863,10 +862,14 @@ class PixelCrossAttention(CrossAttentionModuleBase):
     def forward(
         self,
         hidden_states: Float[torch.Tensor, "batch time space hidden_size"],
-        context: ObsCrossAttention,
+        context: ObsContext,
     ) -> Float[torch.Tensor, "batch time space hidden_size"]:
         b, t, x, ch = hidden_states.shape
         total_pixels = b * t * x
+        if context.tokens is None:
+            raise ValueError(
+                "ObsContext.tokens is unset; run the observation tokenizer first."
+            )
         if not torch.compiler.is_compiling():
             n_pix = context.cu_seqlens_k.shape[0] - 1
             if n_pix != total_pixels:

@@ -30,7 +30,7 @@ from physicsnemo.experimental.models.healda import (  # noqa: E402
     _pixel_attn_kernels as pcak,
 )
 from physicsnemo.experimental.models.healda.obs_packing import (  # noqa: E402
-    ObsCrossAttention,
+    ObsContext,
     build_pixel_group_map,
 )
 from physicsnemo.experimental.models.healda.pixel_cross_attention import (  # noqa: E402
@@ -301,7 +301,7 @@ def test_pixel_cross_attention_module_forward_backward():
     )
     cu = _cu_seqlens(counts).cuda()
 
-    context = ObsCrossAttention(tokens=tokens, cu_seqlens_k=cu, max_seqlen_k=max(counts))
+    context = ObsContext(tokens=tokens, cu_seqlens_k=cu, max_seqlen_k=max(counts))
     out = module(hidden.view(1, 1, total_pixels, module.input_dim), context)
     assert out.shape == (1, 1, total_pixels, module.output_dim)
     assert torch.isfinite(out).all()
@@ -325,7 +325,7 @@ def test_pixel_cross_attention_empty_tokens_grad():
     tokens = torch.zeros(0, TOKEN_DIM).cuda()
     cu = torch.zeros(total_pixels + 1, dtype=torch.int32).cuda()
 
-    context = ObsCrossAttention(tokens=tokens, cu_seqlens_k=cu, max_seqlen_k=0)
+    context = ObsContext(tokens=tokens, cu_seqlens_k=cu, max_seqlen_k=0)
     out = module(hidden.view(1, 1, total_pixels, module.input_dim), context)
     assert out.shape == (1, 1, total_pixels, module.output_dim)
     out.sum().backward()
