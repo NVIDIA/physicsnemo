@@ -740,10 +740,13 @@ Training and validation metrics are logged in two places per run:
 - **JSONL** at `${output_dir}/${run_id}/metrics.jsonl`. One record per
   line, tagged by a `phase` field: `config` (resolved run config),
   `dataset` (split sizes + targets), `train_step` / `val_step` (per-step
-  loss + metrics), and `train_summary` / `val_summary` (per-epoch reduced
-  means). Easy to grep, easy to ship to an external store.
+  loss + metrics), and `train_summary` / `val_summary` (per-epoch loss +
+  metrics). Easy to grep, easy to ship to an external store.
 
-Rank-0 only; no external tracker required.
+Under multi-GPU (DDP), all logged loss and metric values -- per-step and
+per-epoch alike -- are global all-rank means (reduced across ranks with a
+single fused `all_reduce`), not rank-0's shard. Only rank 0 writes the
+TensorBoard / JSONL files; no external tracker required.
 
 ## Source modules
 
