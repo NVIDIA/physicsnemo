@@ -50,7 +50,7 @@ class ComputeSDFFromBoundary(MeshTransform):
     Reads the surface mesh from ``domain.boundaries[boundary_name]`` and
     evaluates the signed distance field at every interior point using
     :func:`physicsnemo.mesh.spatial.sdf.signed_distance_field_mesh`,
-    a pure-PyTorch implementation backed by a torch BVH (Warp-free).
+    a mesh-native, pure-PyTorch implementation backed by a torch BVH.
 
     The computed SDF is stored as a scalar field ``(N, 1)`` in
     ``interior.point_data[sdf_field]``.  If ``normals_field`` is set,

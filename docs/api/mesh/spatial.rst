@@ -35,10 +35,9 @@ Signed Distance Field
 
 :func:`signed_distance_field_mesh` computes the signed distance from a set of
 query points to a triangle surface mesh, together with the closest point on the
-surface for each query. It is a Warp-free, pure-PyTorch implementation that
+surface for each query. It is a mesh-native, pure-PyTorch implementation that
 reuses the spatial acceleration structures in this module, so it runs
-identically on CPU and GPU and is a drop-in replacement for the Warp-backed
-:func:`physicsnemo.nn.functional.signed_distance_field`.
+identically on CPU and GPU.
 
 The unsigned distance and closest point come from a bounded-stack
 depth-first nearest-triangle search over the :class:`BVH` (a single-kernel

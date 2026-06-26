@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for the Warp-free, mesh-spatial signed distance field.
+"""Tests for the mesh-native signed distance field.
 
 The nearest-triangle query is backed by :class:`physicsnemo.mesh.spatial.BVH`
 (Triton fast path on CUDA, bounded-stack PyTorch DFS as the reference); the
@@ -31,8 +31,8 @@ import torch
 from physicsnemo.mesh.spatial.sdf import signed_distance_field_mesh
 
 
-# Build a simple tetrahedron surface mesh as four triangles (matches the
-# reference fixture used by the Warp SDF test for cross-implementation parity).
+# Build a simple tetrahedron surface mesh as four triangles (a deterministic
+# fixture with known SDF values).
 def _tetrahedron_vertices() -> torch.Tensor:
     return torch.tensor(
         [
@@ -241,7 +241,7 @@ def _inside_l(points: torch.Tensor, thickness: float = 1.0) -> torch.Tensor:
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 @pytest.mark.parametrize("use_winding", [False, True])
 def test_sdf_tetrahedron_reference(dtype, use_winding, device):
-    """Match the deterministic tetrahedron values from the Warp SDF test."""
+    """Match the known deterministic tetrahedron SDF values."""
     device = torch.device(device)
     mesh_vertices = _tetrahedron_vertices().to(device=device, dtype=dtype)
     mesh_indices = torch.arange(12, device=device, dtype=torch.int32)
@@ -336,7 +336,7 @@ def test_sdf_preserves_input_shape(device):
 
 
 def test_sdf_error_handling(device):
-    """Input validation mirrors the Warp implementation's contract."""
+    """Input validation for the SDF interface."""
     device = torch.device(device)
     vertices = _tetrahedron_vertices().to(device=device, dtype=torch.float32)
     faces = torch.arange(12, device=device, dtype=torch.int32)
@@ -362,8 +362,8 @@ def test_sdf_pseudo_normal_sign_wrong_at_sharp_edges(device):
     outward normal of the *single* nearest triangle. Near a sharp convex or
     reflex edge the nearest feature is the edge itself - shared by two faces with
     very different normals - so picking one face's normal can flip the sign. A
-    robust implementation uses the angle-weighted pseudo-normal (cf. Warp's
-    ``mesh_query_point_sign_normal``) or the generalized winding number.
+    robust implementation uses the angle-weighted pseudo-normal or the
+    generalized winding number.
     """
     device = torch.device(device)
     vertices, faces = _l_prism()

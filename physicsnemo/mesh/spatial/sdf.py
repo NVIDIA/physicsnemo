@@ -14,21 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Pure-PyTorch signed distance field over a triangle surface mesh.
+"""Mesh-native signed distance field over a triangle surface mesh.
 
-This is a Warp-free signed distance field that shares the spatial acceleration
-structures used throughout :mod:`physicsnemo.mesh.spatial`. It avoids NVIDIA
-Warp entirely (and therefore the stream-ordered CUDA memory churn that arises
-from mixing Warp's and torch's allocators) by building the nearest-triangle
-acceleration structure with :class:`physicsnemo.mesh.spatial.BVH` and computing
-distances/signs with plain PyTorch tensor ops. The winding-number sign is
-computed with a :class:`physicsnemo.mesh.spatial.ClusterTree` Barnes-Hut
+This signed distance field is built entirely on the spatial acceleration
+structures of :mod:`physicsnemo.mesh.spatial`: the nearest-triangle
+acceleration structure is a :class:`physicsnemo.mesh.spatial.BVH`, and
+distances/signs are computed with plain PyTorch tensor ops. The winding-number
+sign is computed with a :class:`physicsnemo.mesh.spatial.ClusterTree` Barnes-Hut
 summation over the mesh, so the whole pipeline reuses the mesh's own spatial
 data structures and runs identically on CPU and GPU.
 
-:func:`signed_distance_field_mesh` matches the contract of the Warp-backed
-:func:`physicsnemo.nn.functional.signed_distance_field`, so it is a drop-in
-replacement for callers that cannot depend on Warp.
+:func:`signed_distance_field_mesh` returns the signed distance and the closest
+surface point for each query.
 
 Algorithm
 ---------
@@ -43,8 +40,7 @@ Algorithm
    unsigned distance and the closest point on the surface.
 3. **Sign**:
    - ``use_sign_winding_number=False`` (default): angle-weighted pseudo-normal
-     at the closest feature (face / edge / vertex), matching Warp's
-     ``mesh_query_point_sign_normal``. Robust for watertight meshes.
+     at the closest feature (face / edge / vertex). Robust for watertight meshes.
    - ``use_sign_winding_number=True``: the generalized winding number (solid
      angle sum, Jacobson et al. 2013), evaluated with a
      :class:`physicsnemo.mesh.spatial.ClusterTree` dual-tree Barnes-Hut
@@ -564,7 +560,7 @@ def _pseudo_normal_sign(
     (sharp or non-convex geometry): the query can sit behind that one face's
     half-plane while still being outside the solid, which flips the sign (and,
     near edges, corrupts the signed magnitude). Resolving the feature removes the
-    ambiguity and reproduces Warp's ``mesh_query_point_sign_normal``:
+    ambiguity:
 
     - **face interior** -> the face normal :math:`\mathbf{n}_f`;
     - **edge** -> the sum of the normals of the faces sharing it,
@@ -944,14 +940,12 @@ def signed_distance_field_mesh(
     *,
     winding_backend: str = "clustertree",
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Signed distance field of a triangle mesh, computed without Warp.
+    """Signed distance field of a triangle surface mesh.
 
-    Drop-in replacement for
-    :func:`physicsnemo.nn.functional.signed_distance_field` that uses
-    :class:`physicsnemo.mesh.spatial.BVH` for the nearest-triangle query and a
-    :class:`physicsnemo.mesh.spatial.ClusterTree` Barnes-Hut summation for the
-    winding-number sign, all in plain PyTorch. The returned tuple matches the
-    Warp implementation's contract.
+    Uses :class:`physicsnemo.mesh.spatial.BVH` for the nearest-triangle query
+    and a :class:`physicsnemo.mesh.spatial.ClusterTree` Barnes-Hut summation for
+    the winding-number sign, all in plain PyTorch. Returns the signed distance
+    and the closest surface point for each query.
 
     Parameters
     ----------
@@ -1002,8 +996,8 @@ def signed_distance_field_mesh(
     out_dtype = input_points.dtype
     device = input_points.device
 
-    # Compute internally in float32 for parity with the Warp kernel; the BVH
-    # build path also assumes a float coordinate dtype.
+    # Compute internally in float32; the BVH build path assumes a float
+    # coordinate dtype.
     vertices = mesh_vertices.to(torch.float32)
     queries = input_points.reshape(-1, 3).to(torch.float32)
     n_queries = queries.shape[0]
