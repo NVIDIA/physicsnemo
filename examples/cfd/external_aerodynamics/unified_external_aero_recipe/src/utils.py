@@ -51,9 +51,7 @@ Precision: TypeAlias = Literal["float32", "float16", "bfloat16"]
 ### ``{split}_{granularity}`` (or a one-shot metadata tag): ``config`` /
 ### ``dataset`` are run metadata; ``*_step`` rows are per-unit (one per step /
 ### sample, as the recipe runs ``batch_size == 1``); ``*_summary`` rows are the
-### reduced per-pass aggregates (``infer_forces_summary`` is surface-only). Call
-### sites write the bare strings; annotate a value ``: Phase`` to have the type
-### checker enforce them (see the train/val summary branch in ``_run_epoch``).
+### reduced per-pass aggregates (``infer_forces_summary`` is surface-only).
 Phase: TypeAlias = Literal[
     "config",
     "dataset",

@@ -326,7 +326,7 @@ def _allreduce_sums(
 
     No-op (returns a plain copy) when not running distributed. Folds every
     sum plus the count into a single collective. The training loop's
-    ``train._reduce_and_average_epoch`` is the analogous reducer; it also
+    ``train._reduce_and_average`` is the analogous reducer; it also
     divides by the global count to return means, whereas this returns the
     reduced sums for the caller to average.
     """

@@ -29,9 +29,10 @@ handling for:
   model output (``Mesh`` or ``(B, N, C)`` tensor) to a per-target
   TensorDict, with clear error messages on shape / channel-count
   mismatches.
-- :func:`train._reduce_and_average_epoch`: averages epoch loss / metric
-  sums over the global sample count; its single-process path must equal
-  the previous ``total_loss / n`` + per-leaf ``sum / n`` averaging.
+- :func:`train._reduce_and_average`: averages rank-local loss / metric
+  sums over the global sample count (used per step and per epoch); its
+  single-process path must equal plain ``total_loss / n`` + per-leaf
+  ``sum / n`` averaging.
 
 (The analogous tests for the shared, tensorboard-free
 :func:`utils.recursive_to_device` live in ``test_utils.py``, outside
@@ -54,8 +55,7 @@ pytest.importorskip("tensorboard")
 
 from output_normalize import normalize_output_to_tensordict  # noqa: E402
 from train import (  # noqa: E402  -- after the skip guard
-    _reduce_and_average_epoch,
-    _to_float_dicts,
+    _reduce_and_average,
     _walk_batch_for_logging,
 )
 
@@ -182,12 +182,12 @@ class TestNormalizeOutputToTensordict:
 
 
 ### ---------------------------------------------------------------------------
-### _reduce_and_average_epoch
+### _reduce_and_average
 ### ---------------------------------------------------------------------------
 
 
-class TestReduceAndAverageEpoch:
-    """Tests for `_reduce_and_average_epoch` (single-process path).
+class TestReduceAndAverage:
+    """Tests for `_reduce_and_average` (single-process path).
 
     The distributed branch is gated on an initialized process group with
     ``world_size > 1``; with no group initialized these tests exercise the
@@ -213,35 +213,23 @@ class TestReduceAndAverageEpoch:
     def test_single_process_divides_sums_by_local_count(self):
         """No process group: global average == local sum / n_local."""
         losses_td, metrics_td = self._epoch_sums()
-        avg_loss, avg_losses, avg_metrics = _reduce_and_average_epoch(
+        avg_loss, avg_losses, avg_metrics = _reduce_and_average(
             15.0, losses_td, metrics_td, 3, device="cpu"
         )
         assert avg_loss == pytest.approx(5.0)
         assert avg_losses == pytest.approx({"pressure": 2.0, "wss": 3.0})
         assert avg_metrics == pytest.approx({"pressure_l2": 1.0, "wss_mae": 4.0})
 
-    def test_single_process_matches_to_float_dicts(self):
-        """Equivalent to the `total_loss / n` + `_to_float_dicts(n=...)` it replaced."""
-        losses_td, metrics_td = self._epoch_sums()
-        n_local, total_loss = 4, 10.0
-        old_losses, old_metrics = _to_float_dicts(losses_td, metrics_td, n=n_local)
-        new_loss, new_losses, new_metrics = _reduce_and_average_epoch(
-            total_loss, losses_td, metrics_td, n_local, device="cpu"
-        )
-        assert new_loss == pytest.approx(total_loss / n_local)
-        assert new_losses == pytest.approx(old_losses)
-        assert new_metrics == pytest.approx(old_metrics)
-
     def test_none_sentinel_returns_loss_only(self):
         """The "no steps seeded" sentinel (either TD ``None``) yields (loss / n, {}, {})."""
-        assert _reduce_and_average_epoch(8.0, None, None, 2, device="cpu") == (
+        assert _reduce_and_average(8.0, None, None, 2, device="cpu") == (
             4.0,
             {},
             {},
         )
         ### A single ``None`` is enough to trip the sentinel.
         losses_td, _ = self._epoch_sums()
-        assert _reduce_and_average_epoch(8.0, losses_td, None, 2, device="cpu") == (
+        assert _reduce_and_average(8.0, losses_td, None, 2, device="cpu") == (
             4.0,
             {},
             {},
@@ -249,7 +237,7 @@ class TestReduceAndAverageEpoch:
 
     def test_zero_local_count_avoids_zero_division(self):
         """``n_local == 0`` (a step-less epoch) divides by 1, not 0."""
-        assert _reduce_and_average_epoch(7.0, None, None, 0, device="cpu") == (
+        assert _reduce_and_average(7.0, None, None, 0, device="cpu") == (
             7.0,
             {},
             {},

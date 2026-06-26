@@ -22,6 +22,7 @@ from physicsnemo.nn.module.dit_layers import (
     DiTBlock,
     Natten2DSelfAttention,
     ProjReshape2DDetokenizer,
+    TimmSelfAttention,
 )
 from physicsnemo.nn.module.rope import (
     apply_rotary_pos_emb,
@@ -29,6 +30,41 @@ from physicsnemo.nn.module.rope import (
 )
 from test import common
 from test.conftest import requires_module
+
+# --- TimmSelfAttention tests ---
+
+
+def test_timm_self_attention_is_causal(device):
+    # Default attention is bidirectional; the causal flag is stored on the module.
+    bidirectional = TimmSelfAttention(hidden_size=32, num_heads=4).to(device)
+    assert bidirectional.is_causal is False
+
+    causal = TimmSelfAttention(hidden_size=32, num_heads=4, is_causal=True).to(device)
+    assert causal.is_causal is True
+
+    # Perturbing the final position must not change earlier outputs under a causal
+    # mask (each position only attends to itself and earlier ones), while the
+    # bidirectional module leaks the perturbation into every position.
+    torch.manual_seed(0)
+    x = torch.randn(2, 6, 32, device=device)
+    perturbed = x.clone()
+    perturbed[:, -1] += 100.0
+    with torch.no_grad():
+        before = causal(x)
+        after = causal(perturbed)
+        bi_before = bidirectional(x)
+        bi_after = bidirectional(perturbed)
+
+    assert torch.allclose(before[:, :-1], after[:, :-1], atol=1.0e-6)
+    assert not torch.allclose(before[:, -1], after[:, -1])
+    assert not torch.allclose(bi_before[:, :-1], bi_after[:, :-1])
+
+    # attn_mask and is_causal=True are mutually exclusive (an explicit mask plus
+    # the causal flag is an illegal combination for the underlying SDPA call).
+    mask = torch.ones(6, 6, dtype=torch.bool, device=device).tril()
+    with pytest.raises(ValueError):
+        causal(x, attn_mask=mask)
+
 
 # --- DiTBlock tests ---
 

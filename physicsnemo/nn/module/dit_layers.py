@@ -24,9 +24,10 @@ import torch.nn.functional as F
 from einops import rearrange
 from jaxtyping import Float
 from timm.layers import RmsNorm
+from timm.layers.attention import Attention
 
 from physicsnemo.core import Module
-from physicsnemo.core.version_check import OptionalImport, check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.nn.functional.natten import na2d as _na2d_func
 from physicsnemo.nn.module.drop import DropPath
 from physicsnemo.nn.module.hpx.tokenizer import (
@@ -39,13 +40,6 @@ from physicsnemo.nn.module.rope import (
     build_axial_rope_cos_sin_2d,
 )
 from physicsnemo.nn.module.utils import PatchEmbed2D
-
-timm_v1_0_16 = check_version_spec("timm", "1.0.16", hard_fail=False)
-if timm_v1_0_16:
-    from timm.layers.attention import Attention
-else:
-    from timm.models.vision_transformer import Attention
-
 
 te = OptionalImport("transformer_engine.pytorch")
 apex_normalization = OptionalImport("apex.normalization")
@@ -207,6 +201,12 @@ class TimmSelfAttention(AttentionModuleBase):
         QK normalization type. Options: ``"RMSNorm"``, ``"LayerNorm"``, or ``None``.
     qk_norm_affine : bool, optional, default=True
         Whether QK normalization layers should use learnable affine parameters.
+    is_causal : bool, optional, default=False
+        Whether to apply a causal self-attention mask, so that each position
+        attends only to itself and earlier positions in the sequence. Uses
+        timm's native causal path (``torch.nn.functional.scaled_dot_product_attention``
+        with ``is_causal=True``), which builds the lower-triangular mask
+        internally for the current sequence length.
     **kwargs : Any
         Additional keyword arguments for the timm attention module.
 
@@ -216,7 +216,8 @@ class TimmSelfAttention(AttentionModuleBase):
         Input tensor of shape :math:`(B, L, D)`.
     attn_mask : torch.Tensor, optional
         The attention mask to apply (passed to timm's Attention module).
-        If ``None``, no mask is applied. Only supported for timm version 1.0.16 and higher.
+        If ``None``, no mask is applied. Mutually exclusive with
+        ``is_causal=True``; passing both raises a ``ValueError``.
 
     Outputs
     -------
@@ -232,9 +233,11 @@ class TimmSelfAttention(AttentionModuleBase):
         proj_drop_rate: float = 0.0,
         qk_norm_type: Literal["RMSNorm", "LayerNorm"] | None = None,
         qk_norm_affine: bool = True,
+        is_causal: bool = False,
         **kwargs: Any,
     ):
         super().__init__()
+        self.is_causal = is_causal
 
         # Translate qk_norm_type to timm's qk_norm and norm_layer
         if qk_norm_type == "RMSNorm":
@@ -260,15 +263,13 @@ class TimmSelfAttention(AttentionModuleBase):
         x: Float[torch.Tensor, "batch sequence hidden_size"],
         attn_mask: Optional[Float[torch.Tensor, "..."]] = None,
     ) -> Float[torch.Tensor, "batch sequence hidden_size"]:
-        if attn_mask is not None and not timm_v1_0_16:
+        if attn_mask is not None and self.is_causal:
             raise ValueError(
-                "attn_mask in TimmSelfAttention is only supported for timm version 1.0.16 and higher"
+                "attn_mask cannot be combined with is_causal=True in TimmSelfAttention; "
+                "they are mutually exclusive."
             )
 
-        if not timm_v1_0_16:
-            return self.attn_op(x)
-        else:
-            return self.attn_op(x, attn_mask=attn_mask)
+        return self.attn_op(x, attn_mask=attn_mask, is_causal=self.is_causal)
 
 
 class TESelfAttention(AttentionModuleBase):
