@@ -94,13 +94,13 @@ def test_adaln_zero_init_toggle():
     zeroed = VideoDiTBlock(
         hidden_size=64, num_heads=4, condition_embed_dim=32, adaln_zero_init=True
     )
-    assert zeroed.attn_norm.modulation[-1].weight.abs().sum() == 0
-    assert zeroed.mlp_norm.modulation[-1].bias.abs().sum() == 0
+    assert zeroed.norm1.modulation[-1].weight.abs().sum() == 0
+    assert zeroed.norm1.modulation[-1].bias.abs().sum() == 0
 
     kept = VideoDiTBlock(
         hidden_size=64, num_heads=4, condition_embed_dim=32, adaln_zero_init=False
     )
-    assert kept.attn_norm.modulation[-1].weight.abs().sum() > 0
+    assert kept.norm1.modulation[-1].weight.abs().sum() > 0
 
 
 @pytest.mark.skipif(

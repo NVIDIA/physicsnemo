@@ -22,7 +22,7 @@ import torch.nn as nn
 from jaxtyping import Float
 
 from physicsnemo.core import Module
-from physicsnemo.nn.module.dit_layers import get_attention
+from physicsnemo.nn.module.dit_layers import get_attention, get_layer_norm
 from physicsnemo.nn.module.drop import DropPath
 from physicsnemo.nn.module.mlp_layers import Mlp
 
@@ -86,17 +86,18 @@ class VideoDiTBlock(nn.Module):
 
     Notes
     -----
-    Each adaLN-Zero modulation lives in a per-sub-layer
-    :class:`~physicsnemo.experimental.models.healda.adaln.AdaLayerNormZero`, so the
-    modulation ``state_dict`` keys differ from :class:`physicsnemo.nn.DiTBlock`.
-    The heavy ``attention`` and MLP (``linear``) submodules keep ``DiTBlock``
-    names.
+    A single ``norm1``
+    :class:`~physicsnemo.experimental.models.healda.adaln.AdaLayerNormZero`
+    (``n_blocks=2``) drives both spatial attention and the MLP, matching the
+    DiT/diffusers layout; the MLP pre-norm is a separate parameter-free
+    LayerNorm. The optional temporal and cross-attention sub-layers each own a
+    one-block ``AdaLayerNormZero``.
 
     Forward
     -------
     hidden_states : torch.Tensor
-        Field-sequence latents of shape :math:`(B, T, X, C)` (t-sharded under
-        context parallelism).
+        Latents of shape :math:`(B, T, X, C)` (t-sharded under context
+        parallelism).
     c : torch.Tensor
         Conditioning embedding of shape :math:`(B, D_c)`.
     cross_attention_context : Any, optional
@@ -152,9 +153,13 @@ class VideoDiTBlock(nn.Module):
                 proj_drop_rate=proj_drop_rate,
                 **attn_kwargs_final,
             )
-        self.attn_norm = AdaLayerNormZero(
+        # One adaLN-Zero (n_blocks=2) drives both spatial attention and the MLP:
+        # its modulation emits 6 chunks (attn shift/scale/gate + mlp
+        # shift/scale/gate), matching the DiT/diffusers layout.
+        self.norm1 = AdaLayerNormZero(
             hidden_size,
             condition_embed_dim,
+            n_blocks=2,
             zero_init=adaln_zero_init,
             layernorm_backend=layernorm_backend,
             norm_eps=norm_eps,
@@ -167,12 +172,13 @@ class VideoDiTBlock(nn.Module):
             drop=mlp_drop_rate,
             final_dropout=final_mlp_dropout,
         )
-        self.mlp_norm = AdaLayerNormZero(
+        # MLP pre-norm: a parameter-free LayerNorm modulated by norm1's MLP
+        # shift/scale (not its own adaLN-Zero).
+        self.mlp_norm = get_layer_norm(
             hidden_size,
-            condition_embed_dim,
-            zero_init=adaln_zero_init,
-            layernorm_backend=layernorm_backend,
-            norm_eps=norm_eps,
+            layernorm_backend,
+            elementwise_affine=False,
+            eps=norm_eps,
         )
 
         # Optional gated temporal-attention sub-layer.
@@ -218,8 +224,7 @@ class VideoDiTBlock(nn.Module):
             Delegates to each :class:`.adaln.AdaLayerNormZero`.
         """
         for adaln in (
-            self.attn_norm,
-            self.mlp_norm,
+            self.norm1,
             self.temporal_attn_norm,
             self.cross_attn_norm,
         ):
@@ -270,12 +275,17 @@ class VideoDiTBlock(nn.Module):
     ) -> Float[torch.Tensor, "batch time space hidden_size"]:
         b, t, x, ch = hidden_states.shape
 
+        normed, attn_gate, mlp_shift, mlp_scale, mlp_gate = self.norm1(
+            hidden_states, c
+        )
+
         # Spatial self-attention per frame (time folded into batch).
-        normed, gate = self.attn_norm(hidden_states, c)
         attn_out = self.attention(
             normed.reshape(b * t, x, ch), **(attn_kwargs or {})
         ).reshape(b, t, x, ch)
-        hidden_states = torch.addcmul(hidden_states, self.drop_path(gate), attn_out)
+        hidden_states = torch.addcmul(
+            hidden_states, self.drop_path(attn_gate), attn_out
+        )
 
         # Cross-attention to the opaque injected context.
         if self.cross_attention is not None:
@@ -300,9 +310,9 @@ class VideoDiTBlock(nn.Module):
             )
             hidden_states = self._to_time_sharded(hidden_states)
 
-        # Feed-forward block.
-        normed, gate = self.mlp_norm(hidden_states, c)
+        # Feed-forward block, modulated by norm1's MLP shift/scale/gate.
+        mlp_in = self.mlp_norm(hidden_states) * (1 + mlp_scale) + mlp_shift
         hidden_states = torch.addcmul(
-            hidden_states, self.drop_path(gate), self.linear(normed)
+            hidden_states, self.drop_path(mlp_gate), self.linear(mlp_in)
         )
         return hidden_states
