@@ -56,10 +56,10 @@ def _single_autotune_config(monkeypatch):
     if not (triton.available and torch.cuda.is_available()):
         yield
         return
-    from physicsnemo.experimental.models.healda import _pixel_attn_kernels as pcak
+    from physicsnemo.experimental.models.healda import _pixel_attn_kernels as kernels
 
     one = [triton.Config({"TILE_K": 32}, num_warps=4, num_stages=2)]
-    for kernel in (pcak._pixel_attn_gqa_fwd, pcak._pixel_attn_gqa_bwd):
+    for kernel in (kernels._pixel_attn_gqa_fwd, kernels._pixel_attn_gqa_bwd):
         monkeypatch.setattr(kernel, "configs", one, raising=False)
         if hasattr(kernel, "cache"):
             kernel.cache.clear()
