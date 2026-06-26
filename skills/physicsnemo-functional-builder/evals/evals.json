@@ -1,0 +1,58 @@
+[
+  {
+    "id": "add-new-functional-with-warp-backend",
+    "question": "I want to add a new point-cloud sampling op to PhysicsNeMo's nn.functional with a fast CUDA path. How do I implement it so it follows the repository conventions and has both a reference and an accelerated backend?",
+    "expected_skill": "physicsnemo-functional-builder",
+    "expected_script": null,
+    "ground_truth": "A new functional op is added under physicsnemo/nn/functional/<category>/<op_name>/ in the STABLE tree (not experimental — unlike new models/layers). It is a FunctionSpec subclass that registers backends via @FunctionSpec.register(name=..., required_imports=..., rank=..., baseline=...), with exactly one baseline=True torch reference impl (_torch_impl.py) and an accelerated Warp backend (pure @wp.kernel in kernels.py, wrapped in _warp_impl.py with torch.library.custom_op + register_fake, launched via wp.from_torch/warp_launch_context). A dispatch() classmethod selects the backend by device (Warp on CUDA, torch on CPU) with an explicit implementation= override, and the public op is exposed via make_function(...). Tensor args use jaxtyping, shape validation lives in utils.py guarded by torch.compiler.is_compiling(), and the op is re-exported up through the category and nn.functional __init__ files. Tests mirror the source path and cover known-answer, cross-backend parity via compare_forward, device/dep skips, and torch.library.opcheck.",
+    "expected_behavior": [
+      "Loads the physicsnemo-functional-builder skill.",
+      "Places the op in the stable physicsnemo/nn/functional/ tree and explains it is NOT experimental (unlike models/layers).",
+      "Scaffolds a FunctionSpec subclass with a baseline torch impl and a Warp backend wrapped in torch.library.custom_op + register_fake.",
+      "Implements dispatch() selecting backend by device, plus make_function for the public op.",
+      "Proposes cross-backend equivalence tests (compare_forward), device/dependency skips, and opcheck.",
+      "Does not invent the op's algorithm or kernel; defers the math to the contributor.",
+      "Every absolute path cited in the final message exists on disk."
+    ]
+  },
+  {
+    "id": "add-cuml-scipy-backend-to-existing-op",
+    "question": "Our nn.functional kNN only has a torch implementation. How do I add an optional cuML (GPU) and SciPy (CPU) backend so it's faster when those libraries are installed?",
+    "expected_skill": "physicsnemo-functional-builder",
+    "expected_script": null,
+    "ground_truth": "A new backend is added as a dep-gated implementation module (_cuml_impl.py / _scipy_impl.py) and registered on the existing FunctionSpec via @FunctionSpec.register(name='cuml', required_imports=('cuml>=...','cupy>=...'), rank=...) (and 'scipy'). Each impl is gated on check_version_spec(pkg, ver, hard_fail=False) with an ImportError-raising stub when the dep is missing, is wrapped in torch.library.custom_op + register_fake, checks the tensor device inside the impl (cuML rejects CPU, SciPy rejects CUDA), moves data zero-copy (DLPack for cuML, numpy for SciPy), and casts unsupported dtypes (bf16->fp32) around the call. dispatch() is updated to prefer cuML on CUDA / SciPy on CPU with a one-time fallback to the torch baseline. Tests add per-backend parity using compare_forward that compares sorted DISTANCES not indices (ties differ across backends), with check_version_spec / device pytest.skips.",
+    "expected_behavior": [
+      "Loads the physicsnemo-functional-builder skill.",
+      "Adds dep-gated _cuml_impl.py / _scipy_impl.py registered on the existing FunctionSpec via @FunctionSpec.register with required_imports.",
+      "Gates optional deps with check_version_spec(hard_fail=False) and a stub ImportError fallback; checks device inside each impl.",
+      "Wraps backends in torch.library.custom_op + register_fake and uses DLPack/numpy zero-copy.",
+      "Updates dispatch() to prefer cuML/SciPy by device with fallback to the torch baseline.",
+      "Recommends cross-backend parity tests comparing sorted distances (not indices), with device/dep skips.",
+      "Every absolute path cited in the final message exists on disk."
+    ]
+  },
+  {
+    "id": "reusable-layer-defers-to-model-builder",
+    "question": "I have a new attention block (an nn.Module with learnable weights) I want to add to PhysicsNeMo so other models can reuse it. How do I add it correctly?",
+    "expected_skill": "physicsnemo-model-builder",
+    "expected_script": null,
+    "ground_truth": "A reusable, parameterized nn.Module building block is a LAYER, not a functional. It belongs under physicsnemo/nn/module/ (starting in experimental per MOD-002a) and is the territory of the physicsnemo-model-builder skill, not the functional-builder. The functional-builder is scoped to stateless tensor ops in physicsnemo.nn.functional (FunctionSpec + backends), so it should NOT activate here.",
+    "expected_behavior": [
+      "Does NOT load the physicsnemo-functional-builder skill.",
+      "Treats the request as a reusable layer (nn.Module) — physicsnemo-model-builder territory.",
+      "Does not scaffold a FunctionSpec or an nn.functional op."
+    ]
+  },
+  {
+    "id": "out-of-scope-datapipe",
+    "question": "How do I add a new datapipe for my custom point-cloud HDF5 dataset in PhysicsNeMo?",
+    "expected_skill": null,
+    "expected_script": null,
+    "ground_truth": "Datapipes are out of scope for the physicsnemo-functional-builder skill, which covers stateless ops and their backends in physicsnemo.nn.functional. A datapipe belongs under physicsnemo/datapipes/. The skill should not activate and should redirect rather than scaffold a functional op.",
+    "expected_behavior": [
+      "Does NOT load the physicsnemo-functional-builder skill.",
+      "Recognizes datapipes as out of scope and redirects toward physicsnemo/datapipes/.",
+      "Does not scaffold a FunctionSpec or nn.functional op."
+    ]
+  }
+]
