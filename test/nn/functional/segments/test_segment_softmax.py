@@ -132,7 +132,17 @@ def test_segment_softmax_backward_torch_matches_reference(device: str):
     torch.testing.assert_close(logits.grad, ref_logits.grad, atol=1e-8, rtol=1e-8)
 
 
-def test_segment_softmax_warp_backend_parity(device: str):
+def test_segment_softmax_dispatch_cpu_matches_torch():
+    torch.manual_seed(8)
+    offsets = torch.tensor([0, 2, 6], dtype=torch.int64)
+    logits = torch.randn(6, 3)
+
+    out_default = segment_softmax(logits, offsets)
+    out_torch = segment_softmax(logits, offsets, implementation="torch")
+    torch.testing.assert_close(out_default, out_torch)
+
+
+def test_segment_softmax_backend_forward_parity(device: str):
     if "cpu" in device:
         pytest.skip("warp segment_softmax backend is CUDA-only")
     torch.manual_seed(9)
@@ -144,7 +154,7 @@ def test_segment_softmax_warp_backend_parity(device: str):
     SegmentSoftmax.compare_forward(out_warp, out_torch)
 
 
-def test_segment_softmax_warp_backward_parity(device: str):
+def test_segment_softmax_backend_backward_parity(device: str):
     if "cpu" in device:
         pytest.skip("warp segment_softmax backend is CUDA-only")
     torch.manual_seed(10)
@@ -204,10 +214,29 @@ def test_segment_softmax_make_inputs_forward(device: str):
     assert out.shape == args[0].shape
 
 
+def test_segment_softmax_make_inputs_backward(device: str):
+    label, args, kwargs = next(iter(SegmentSoftmax.make_inputs_backward(device)))
+    assert isinstance(label, str)
+    assert isinstance(args, tuple)
+    assert isinstance(kwargs, dict)
+    logits, _ = args
+    assert logits.requires_grad
+    out = SegmentSoftmax.dispatch(*args, implementation="torch", **kwargs)
+    assert out.shape == logits.shape
+
+
 def test_segment_softmax_compare_forward_contract(device: str):
     _, args, kwargs = next(iter(SegmentSoftmax.make_inputs_forward(device)))
     out = SegmentSoftmax.dispatch(*args, implementation="torch", **kwargs)
     SegmentSoftmax.compare_forward(out, out.detach().clone())
+
+
+def test_segment_softmax_compare_backward_contract(device: str):
+    _, args, kwargs = next(iter(SegmentSoftmax.make_inputs_backward(device)))
+    logits, _ = args
+    out = SegmentSoftmax.dispatch(*args, implementation="torch", **kwargs)
+    out.square().mean().backward()
+    SegmentSoftmax.compare_backward(logits.grad, logits.grad.detach().clone())
 
 
 def test_segment_softmax_opcheck(device: str):
