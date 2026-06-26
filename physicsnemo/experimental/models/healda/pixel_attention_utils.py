@@ -63,12 +63,27 @@ if triton.available:
 def counting_sort_and_pack(
     flat_idx: Int[torch.Tensor, " nobs"], total_pixels: int
 ) -> Tuple[Int[torch.Tensor, " nobs"], Int[torch.Tensor, " total_pixels"]]:
-    """Counting sort via a Triton atomic-scatter pass (CUDA only).
+    r"""Sort observations by flat pixel index with a Triton counting sort (CUDA only).
 
-    For bounded integer keys this is O(N) in a single scatter, faster than
-    argsort's multi-pass radix sort. Within-bucket order is non-deterministic,
-    which is fine: attention is permutation-invariant over a pixel's tokens.
-    Returns ``(sorted_order int32, counts int64)``.
+    For bounded integer keys a counting sort is :math:`O(N)` in a single
+    atomic-scatter pass, faster than ``argsort``'s multi-pass radix sort.
+    Within-bucket order is non-deterministic, which is fine for attention
+    (permutation-invariant over a pixel's tokens).
+
+    Parameters
+    ----------
+    flat_idx : torch.Tensor
+        Int per-observation flat pixel indices of shape :math:`(N_{obs},)`, each
+        in :math:`[0, \text{total\_pixels})`.
+    total_pixels : int
+        Number of pixel buckets (:math:`B \cdot T \cdot X`).
+
+    Returns
+    -------
+    Tuple[torch.Tensor, torch.Tensor]
+        ``sorted_order`` (int32 permutation of shape :math:`(N_{obs},)`) and
+        ``counts`` (int64 per-pixel counts of shape
+        :math:`(\text{total\_pixels},)`).
     """
     n = flat_idx.shape[0]
     device = flat_idx.device
@@ -85,13 +100,26 @@ def counting_sort_and_pack(
 def sort_and_pack(
     flat_idx: Int[torch.Tensor, " nobs"], total_pixels: int
 ) -> Tuple[Int[torch.Tensor, " nobs"], Int[torch.Tensor, " total_pixels"]]:
-    """Sort observations by flat pixel index into per-pixel contiguous groups.
+    r"""Sort observations by flat pixel index into per-pixel contiguous groups.
 
-    Uses the Triton counting sort when triton is available and ``flat_idx`` is on
-    CUDA, else ``argsort``. Returns ``(sorted_order int32 permutation, counts
-    int64 per-pixel counts)``; ``sorted_order`` reorders the per-observation
-    tensors so each pixel's tokens are contiguous, ``counts`` becomes the
-    ``cu_seqlens_k`` prefix sums (:func:`counts_to_cu_seqlens`).
+    Uses the Triton counting sort (:func:`counting_sort_and_pack`) when triton is
+    available and ``flat_idx`` is on CUDA, else ``argsort``.
+
+    Parameters
+    ----------
+    flat_idx : torch.Tensor
+        Int per-observation flat pixel indices of shape :math:`(N_{obs},)`, each
+        in :math:`[0, \text{total\_pixels})`.
+    total_pixels : int
+        Number of pixel buckets (:math:`B \cdot T \cdot X`).
+
+    Returns
+    -------
+    Tuple[torch.Tensor, torch.Tensor]
+        ``sorted_order`` (int32 permutation) that reorders the per-observation
+        tensors so each pixel's tokens are contiguous, and ``counts`` (int64
+        per-pixel counts) that :func:`counts_to_cu_seqlens` turns into
+        ``cu_seqlens_k``.
     """
     if triton.available and flat_idx.is_cuda:
         return counting_sort_and_pack(flat_idx, total_pixels)
@@ -103,7 +131,20 @@ def sort_and_pack(
 def counts_to_cu_seqlens(
     counts: Int[torch.Tensor, " total_pixels"],
 ) -> Int[torch.Tensor, " total_pixels_plus_one"]:
-    """Prefix-sum per-pixel counts into ``cu_seqlens_k`` (int32, leading zero)."""
+    r"""Prefix-sum per-pixel ``counts`` into ``cu_seqlens_k``.
+
+    Parameters
+    ----------
+    counts : torch.Tensor
+        Int per-pixel token counts of shape :math:`(\text{total\_pixels},)`.
+
+    Returns
+    -------
+    torch.Tensor
+        Int32 prefix sums of shape :math:`(\text{total\_pixels} + 1,)` with a
+        leading zero; pixel :math:`i` owns tokens
+        :math:`[\text{cu\_seqlens\_k}[i], \text{cu\_seqlens\_k}[i + 1])`.
+    """
     cu_seqlens_k = torch.zeros(
         counts.shape[0] + 1, dtype=torch.int32, device=counts.device
     )
@@ -115,7 +156,7 @@ def build_pixel_group_map(
     cu_seqlens_k: Int[torch.Tensor, " total_pixels_plus_one"],
     thresh_mult: float = 2.0,
 ) -> PixelGroupMap:
-    """Pack consecutive small pixels into shared kernel programs for obs attention.
+    r"""Pack consecutive small pixels into shared ragged-attention kernel programs.
 
     The ragged attention runs one kernel program per pixel; for the many tiny
     pixels the fixed per-program cost (``W_k`` / ``W_v`` load, prologue, launch
@@ -123,24 +164,34 @@ def build_pixel_group_map(
     loads those weights once and cuts the program count.
 
     A pixel is "small" when its token count is below ``thresh_mult`` times the
-    median of the non-empty counts (median-relative so it keeps grouping when the
-    typical pixel is large). Empty pixels are dropped. Pure function of
+    median of the non-empty counts (median-relative, so it keeps grouping when the
+    typical pixel is large). Empty pixels are dropped. A pure function of
     ``cu_seqlens_k``, so it is built once per batch and reused by every layer and
     both passes.
 
     Parameters
     ----------
     cu_seqlens_k : torch.Tensor
-        Int prefix sums of shape :math:`(\\text{total\\_pixels} + 1,)`.
+        Int prefix sums of shape :math:`(\text{total\_pixels} + 1,)`, as produced
+        by :func:`counts_to_cu_seqlens`.
     thresh_mult : float, optional, default=2.0
         Small-pixel threshold as a multiple of the median non-empty count.
 
     Returns
     -------
     PixelGroupMap
-        ``program_ptr`` of shape :math:`(\\text{num\\_programs} + 1,)` and
-        ``program_pixels`` of shape :math:`(\\text{num\\_nonzero\\_pixels},)`,
-        both int32 on the input device.
+        ``program_ptr`` of shape :math:`(\text{num\_programs} + 1,)` and
+        ``program_pixels`` of shape :math:`(\text{num\_nonzero\_pixels},)`, both
+        int32 on the input device; program :math:`p` owns pixels
+        ``program_pixels[program_ptr[p]:program_ptr[p + 1]]``.
+
+    Examples
+    --------
+    For counts ``[5, 0, 3, 4, 200]`` (non-empty median 4, threshold 8): large
+    ``[4]``, small ``[0, 2, 3]``. Large pixels go first, each solo; small pixels
+    are then paired (an odd one left solo), giving programs
+    ``[[4], [0, 2], [3]]`` -- ``program_ptr = [0, 1, 3, 4]`` and
+    ``program_pixels = [4, 0, 2, 3]``. Pixel 1 is empty and dropped.
     """
     device = cu_seqlens_k.device
     counts = (cu_seqlens_k[1:] - cu_seqlens_k[:-1]).to(torch.int64)
