@@ -355,6 +355,50 @@ def test_sdf_error_handling(device):
         signed_distance_field_mesh(vertices, bad_connectivity_rank, query)
 
 
+def test_sdf_empty_mesh_raises(device):
+    """A mesh with no faces has no surface, so the query must raise."""
+    device = torch.device(device)
+    vertices = _tetrahedron_vertices().to(device=device, dtype=torch.float32)
+    empty_faces = torch.zeros(0, device=device, dtype=torch.int32)
+    query = torch.tensor([[0.1, 0.2, 0.3]], device=device, dtype=torch.float32)
+
+    with pytest.raises(ValueError, match="no faces"):
+        signed_distance_field_mesh(vertices, empty_faces, query)
+
+
+def test_sdf_max_dist_unbounded_and_narrow_band(device):
+    """Default is exact/unbounded; a finite ``max_dist`` is a narrow band.
+
+    The unbounded default must resolve a far query to its true nearest triangle
+    (never the silent ``sdf == 0`` / ``hit == query`` on-surface result), while a
+    finite ``max_dist`` smaller than the true distance reports the query as
+    ``NaN`` and leaves in-band queries identical to the unbounded result.
+    """
+    device = torch.device(device)
+    vertices = _tetrahedron_vertices().to(device=device, dtype=torch.float32)
+    faces = torch.arange(12, device=device, dtype=torch.int32)
+
+    far = torch.tensor([[100.0, 100.0, 100.0]], device=device, dtype=torch.float32)
+    near = torch.tensor([[0.05, 0.1, 0.1]], device=device, dtype=torch.float32)
+
+    # Unbounded default: the far query finds its true nearest triangle.
+    sdf_far, hit_far = signed_distance_field_mesh(vertices, faces, far)
+    assert torch.isfinite(sdf_far).all()
+    assert sdf_far.abs().item() > 1.0
+    assert not torch.allclose(hit_far, far)
+
+    # Finite band below the true distance: the far query is out of band -> NaN.
+    sdf_band, hit_band = signed_distance_field_mesh(vertices, faces, far, max_dist=1.0)
+    assert torch.isnan(sdf_band).all()
+    assert torch.isnan(hit_band).all()
+
+    # An in-band query with a finite max_dist matches the unbounded result.
+    sdf_unbounded, _ = signed_distance_field_mesh(vertices, faces, near)
+    sdf_in_band, _ = signed_distance_field_mesh(vertices, faces, near, max_dist=10.0)
+    assert torch.isfinite(sdf_in_band).all()
+    torch.testing.assert_close(sdf_in_band, sdf_unbounded, atol=1e-5, rtol=1e-5)
+
+
 def test_sdf_pseudo_normal_sign_wrong_at_sharp_edges(device):
     r"""Document the nearest-face pseudo-normal sign bug at sharp edges.
 

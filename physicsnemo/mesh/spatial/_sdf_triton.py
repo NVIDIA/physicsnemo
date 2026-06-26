@@ -351,8 +351,11 @@ def nearest_triangle_triton(
     query : torch.Tensor
         Query points, shape ``(n_queries, 3)``, on a CUDA device.
     max_dist : float
-        Maximum search radius; queries with no triangle within this distance
-        keep the (large) initial bound and an unchanged closest point.
+        Search radius: triangles farther than this are ignored. Pass
+        ``float("inf")`` for an unbounded, exact nearest search. A query with no
+        triangle within ``max_dist`` returns ``best_dist_sq == max_dist ** 2``
+        and ``best_point == query`` (an unchanged closest point), which the
+        caller treats as a miss.
     leaf_size : int, optional
         The ``leaf_size`` the BVH was built with (``BVH.from_mesh``'s default is
         1). A midpoint-split leaf holds at most ``leaf_size`` cells, so this is a

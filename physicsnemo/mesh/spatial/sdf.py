@@ -343,8 +343,11 @@ def _nearest_face_bvh(
     query : torch.Tensor
         Query points, shape ``(n_queries, 3)``.
     max_dist : float
-        Maximum search radius; queries with no triangle within this distance
-        keep the (large) initial bound and an unchanged closest point.
+        Search radius: triangles farther than this are ignored. Pass
+        ``float("inf")`` for an unbounded, exact nearest search. A query with no
+        triangle within ``max_dist`` returns ``best_dist_sq == max_dist ** 2``
+        and ``best_point == query`` (an unchanged closest point), which the
+        caller treats as a miss.
 
     Returns
     -------
@@ -935,7 +938,7 @@ def signed_distance_field_mesh(
     mesh_vertices: Float[torch.Tensor, "n_vertices 3"],
     mesh_indices: Int[torch.Tensor, "..."],
     input_points: Float[torch.Tensor, "... 3"],
-    max_dist: float = 1e8,
+    max_dist: float | None = None,
     use_sign_winding_number: bool = False,
     *,
     winding_backend: str = "clustertree",
@@ -955,8 +958,11 @@ def signed_distance_field_mesh(
         Triangle connectivity, flattened ``(3 * n_faces,)`` or ``(n_faces, 3)``.
     input_points : torch.Tensor
         Query points, shape ``(..., 3)``.
-    max_dist : float, optional
-        Maximum search distance for the nearest-triangle query. Default ``1e8``.
+    max_dist : float or None, optional
+        Maximum search radius for the nearest-triangle query. ``None``
+        (default) searches without bound, so the true nearest triangle is
+        always found; a finite value restricts the search to a band and
+        reports queries beyond it as ``NaN`` (both ``sdf`` and ``hit_points``).
     use_sign_winding_number : bool, optional
         If ``True``, sign via the generalized winding number (robust for
         non-watertight meshes). If ``False`` (default), sign via the
@@ -976,8 +982,16 @@ def signed_distance_field_mesh(
     Raises
     ------
     ValueError
-        If ``input_points`` does not have a trailing dimension of size 3, or if
-        ``mesh_indices`` is not 1D-flattened or ``(n_faces, 3)``.
+        If ``input_points`` does not have a trailing dimension of size 3, if
+        ``mesh_indices`` is not 1D-flattened or ``(n_faces, 3)``, or if the mesh
+        has no faces (there is no surface to measure distance to).
+
+    Notes
+    -----
+    A finite ``max_dist`` is an opt-in optimization/narrow-band mode: it prunes
+    the search to the given radius and marks out-of-band queries as ``NaN`` so a
+    far query is never silently reported as on-surface (``sdf == 0``). The
+    unbounded default never produces ``NaN`` for a non-empty mesh.
     """
     if input_points.shape[-1] != 3:
         raise ValueError("input_points must have last dimension of size 3")
@@ -1002,12 +1016,20 @@ def signed_distance_field_mesh(
     queries = input_points.reshape(-1, 3).to(torch.float32)
     n_queries = queries.shape[0]
 
+    # None -> unbounded exact search; a finite value is a narrow band.
+    max_dist_eff = float("inf") if max_dist is None else float(max_dist)
+
     mesh, face_vertices, faces = _build_surface_mesh(vertices, mesh_indices)
+
+    if faces.shape[0] == 0:
+        raise ValueError(
+            "mesh has no faces; there is no surface to measure distance to"
+        )
 
     sdf = torch.zeros(n_queries, dtype=torch.float32, device=device)
     hit_points = queries.clone()
 
-    if faces.shape[0] == 0 or n_queries == 0:
+    if n_queries == 0:
         sdf = sdf.reshape(input_shape[:-1]).to(out_dtype)
         hit_points = hit_points.reshape(input_shape).to(out_dtype)
         return sdf, hit_points
@@ -1023,19 +1045,21 @@ def signed_distance_field_mesh(
     # O(n_queries * tree_depth), independent of mesh size or query depth.
     with record_function("sdf/nearest"):
         if queries.is_cuda and _sdf_triton.available():
-            _, best_face, best_point = _sdf_triton.nearest_triangle_triton(
-                bvh, face_vertices, queries, max_dist, leaf_size=_BVH_LEAF_SIZE
+            best_dist_sq, best_face, best_point = _sdf_triton.nearest_triangle_triton(
+                bvh, face_vertices, queries, max_dist_eff, leaf_size=_BVH_LEAF_SIZE
             )
         else:
             # Queries are chunked so the per-iteration working tensors stay
             # modest for very large query sets.
+            best_dist_sq = torch.empty(n_queries, dtype=torch.float32, device=device)
             best_face = torch.zeros(n_queries, dtype=torch.long, device=device)
             best_point = queries.clone()
             for start in range(0, n_queries, _NEAREST_QUERY_CHUNK):
                 end = min(start + _NEAREST_QUERY_CHUNK, n_queries)
-                _, bf, bp = _nearest_face_bvh(
-                    bvh, face_vertices, queries[start:end], max_dist
+                bd, bf, bp = _nearest_face_bvh(
+                    bvh, face_vertices, queries[start:end], max_dist_eff
                 )
+                best_dist_sq[start:end] = bd
                 best_face[start:end] = bf
                 best_point[start:end] = bp
 
@@ -1062,6 +1086,14 @@ def signed_distance_field_mesh(
 
     sdf = sign * distance
     hit_points = best_point
+
+    if max_dist is not None:
+        # Out-of-band queries keep the initial bound; flag them NaN, not 0.
+        missed = best_dist_sq >= max_dist_eff**2
+        sdf = torch.where(missed, sdf.new_full((), float("nan")), sdf)
+        hit_points = torch.where(
+            missed.unsqueeze(-1), hit_points.new_full((), float("nan")), hit_points
+        )
 
     sdf = sdf.reshape(input_shape[:-1]).to(out_dtype)
     hit_points = hit_points.reshape(input_shape).to(out_dtype)
