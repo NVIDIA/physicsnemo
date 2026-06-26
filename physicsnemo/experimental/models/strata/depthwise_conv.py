@@ -25,7 +25,6 @@ limit.
 
 from __future__ import annotations
 
-import math
 import warnings
 from functools import partial
 
@@ -183,14 +182,15 @@ class DepthwiseConv(torch.nn.Conv2d):
                 )
             return self._chunked_conv(x, self.weight, bias)
 
-        # Standard (non-chunked) path: warn if a single conv2d call would exceed
-        # the element-count limit, then defer to nn.Conv2d.
-        size_of_chunk = math.ceil(x.numel() * x.dtype.itemsize)
-        if size_of_chunk > 2**32:
+        # Standard (non-chunked) path: warn if conv2d would exceed its 32-bit
+        # indexing limit (INT_MAX elements), then defer to nn.Conv2d. The limit is
+        # element-count, not bytes -- it trips identically for fp32 and bf16.
+        if x.numel() > torch.iinfo(torch.int32).max:
             warnings.warn(
-                f"Convolution {size_of_chunk=} larger than 2^32 so conv2d will "
-                f"revert to a slow implementation or error out. Set the "
-                f"chunk_size option to enable chunking.",
+                f"conv2d input has {x.numel()} elements (> 2**31 - 1, the 32-bit "
+                f"indexing limit), so it will raise a RuntimeError "
+                f"(canUse32BitIndexMath). Set the chunk_size option to enable "
+                f"chunking, which keeps each conv2d call under the limit.",
                 stacklevel=2,
             )
 
