@@ -112,7 +112,8 @@ class HealDAv2(Module):
     drop_path : float, optional, default=0.1
         Stochastic-depth rate applied to every block past the warmup blocks.
     drop_path_zero_first_n_blocks : int, optional, default=4
-        Number of leading blocks forced to drop-path rate 0.
+        Number of leading blocks forced to drop-path rate 0 to stabilize early
+        training (the first blocks are prone to gradient spikes otherwise).
     qk_norm_type : Literal["RMSNorm", "LayerNorm"], optional, default="RMSNorm"
         Spatial-attention QK normalization type. ``None`` disables it.
     qk_norm_affine : bool, optional, default=False
@@ -249,26 +250,27 @@ class HealDAv2(Module):
             "causal_window": temporal_causal_window,
         }
 
-        # Force the warmup blocks to drop-path rate 0 then a uniform rate after.
         n_zero = min(drop_path_zero_first_n_blocks, num_layers)
         drop_path_rates = [0.0] * n_zero + [drop_path] * (num_layers - n_zero)
 
+        tokenizer = HEALPixPatchTokenizer(
+            in_channels=in_channels,
+            hidden_size=hidden_size,
+            level_fine=level_in,
+            level_coarse=level_model,
+            separate_time_axis=True,
+        )
+        detokenizer = HEALPixPatchDetokenizer(
+            hidden_size=hidden_size,
+            out_channels=out_channels,
+            level_coarse=level_model,
+            level_fine=level_in,
+            time_length=time_length,
+            condition_dim=emb_channels,
+        )
         self.dit = VideoDiT(
-            HEALPixPatchTokenizer(
-                in_channels=in_channels,
-                hidden_size=hidden_size,
-                level_fine=level_in,
-                level_coarse=level_model,
-                separate_time_axis=True,
-            ),
-            HEALPixPatchDetokenizer(
-                hidden_size=hidden_size,
-                out_channels=out_channels,
-                level_coarse=level_model,
-                level_fine=level_in,
-                time_length=time_length,
-                condition_dim=emb_channels,
-            ),
+            tokenizer,
+            detokenizer,
             hidden_size=hidden_size,
             num_heads=num_heads,
             num_layers=num_layers,

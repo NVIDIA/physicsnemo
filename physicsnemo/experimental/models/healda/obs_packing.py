@@ -104,6 +104,16 @@ class ObsContext:
     tokens: Optional[torch.Tensor] = None
     group_map: Optional[PixelGroupMap] = None
 
+    def __post_init__(self) -> None:
+        # Cheap, sync-free structural check at construction: the packing is a 1D
+        # prefix sum over total_pixels + 1 entries. Per-element/value invariants
+        # (token counts, pixel-id ranges) are the producer's responsibility.
+        if self.cu_seqlens_k.ndim != 1:
+            raise ValueError(
+                "cu_seqlens_k must be 1D of shape (total_pixels + 1,); got shape "
+                f"{tuple(self.cu_seqlens_k.shape)}"
+            )
+
     def to(self, device=None, dtype=None, non_blocking: bool = True) -> "ObsContext":
         def move(t, cast):
             if t is None:

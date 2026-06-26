@@ -866,17 +866,6 @@ class PixelCrossAttention(CrossAttentionModuleBase):
     ) -> Float[torch.Tensor, "batch time space hidden_size"]:
         b, t, x, ch = hidden_states.shape
         total_pixels = b * t * x
-        if context.tokens is None:
-            raise ValueError(
-                "ObsContext.tokens is unset; run the observation tokenizer first."
-            )
-        if not torch.compiler.is_compiling():
-            n_pix = context.cu_seqlens_k.shape[0] - 1
-            if n_pix != total_pixels:
-                raise ValueError(
-                    f"Expected packing for {total_pixels} pixels (B*T*X), "
-                    f"but cu_seqlens_k describes {n_pix}"
-                )
         # Fold (B, T, X) into the flat pixel axis the ragged kernel expects, then
         # unfold the per-pixel output back to the (B, T, X, C) layout.
         out = self._forward_impl(
