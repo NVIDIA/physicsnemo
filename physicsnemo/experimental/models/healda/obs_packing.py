@@ -27,7 +27,7 @@ import dataclasses
 from typing import Optional
 
 import torch
-from jaxtyping import Int
+from jaxtyping import Float, Int
 
 
 @dataclasses.dataclass
@@ -63,9 +63,10 @@ class ObsContext:
     """Observation cross-attention context: packed tokens + ragged packing.
 
     The single container a block's observation sub-layer
-    (:class:`..pixel_cross_attention.PixelCrossAttention`) consumes. Observations
-    are sorted by flat pixel index so each pixel's tokens are contiguous in
-    ``tokens``.
+    (:class:`..pixel_cross_attention.PixelCrossAttention`) consumes. It carries the
+    raw per-observation arrays the tokenizer needs plus the ragged packing.
+    Observations are sorted by flat pixel index so each pixel's tokens are
+    contiguous in ``tokens``.
 
     Parameters
     ----------
@@ -74,9 +75,19 @@ class ObsContext:
         ``i`` attends to ``tokens[cu_seqlens_k[i]:cu_seqlens_k[i + 1]]``.
     max_seqlen_k : int
         Maximum per-pixel token count (kernel launch / autotune bucketing).
+    values : torch.Tensor, optional
+        Scalar observation values of shape :math:`(N_{obs},)`.
+    float_metadata : torch.Tensor, optional
+        Per-observation float metadata of shape :math:`(N_{obs}, M)`.
+    obs_type : torch.Tensor, optional
+        Observation-type ids of shape :math:`(N_{obs},)`.
+    channel : torch.Tensor, optional
+        Channel ids of shape :math:`(N_{obs},)`.
+    platform : torch.Tensor, optional
+        Platform ids of shape :math:`(N_{obs},)`.
     tokens : torch.Tensor, optional
         Packed observation tokens (the key/value source) of shape
-        :math:`(N_{tokens}, \\text{token\\_dim})`, concatenated over all pixels.
+        :math:`(N_{obs}, \\text{token\\_dim})`, concatenated over all pixels.
         Unset (``None``) until the observation tokenizer fills it.
     group_map : PixelGroupMap, optional
         Optional CSR map packing small pixels into shared kernel programs.
@@ -85,20 +96,33 @@ class ObsContext:
 
     cu_seqlens_k: Int[torch.Tensor, " total_pixels_plus_one"]
     max_seqlen_k: int
+    values: Optional[Float[torch.Tensor, " nobs"]] = None
+    float_metadata: Optional[Float[torch.Tensor, "nobs meta_dim"]] = None
+    obs_type: Optional[Int[torch.Tensor, " nobs"]] = None
+    channel: Optional[Int[torch.Tensor, " nobs"]] = None
+    platform: Optional[Int[torch.Tensor, " nobs"]] = None
     tokens: Optional[torch.Tensor] = None
     group_map: Optional[PixelGroupMap] = None
 
     def to(self, device=None, dtype=None, non_blocking: bool = True) -> "ObsContext":
+        def move(t, cast):
+            if t is None:
+                return None
+            return t.to(
+                device=device,
+                dtype=dtype if cast else None,
+                non_blocking=non_blocking,
+            )
+
         return ObsContext(
             cu_seqlens_k=self.cu_seqlens_k.to(device=device, non_blocking=non_blocking),
             max_seqlen_k=self.max_seqlen_k,
-            tokens=(
-                None
-                if self.tokens is None
-                else self.tokens.to(
-                    device=device, dtype=dtype, non_blocking=non_blocking
-                )
-            ),
+            values=move(self.values, cast=True),
+            float_metadata=move(self.float_metadata, cast=True),
+            obs_type=move(self.obs_type, cast=False),
+            channel=move(self.channel, cast=False),
+            platform=move(self.platform, cast=False),
+            tokens=move(self.tokens, cast=True),
             group_map=(
                 None
                 if self.group_map is None

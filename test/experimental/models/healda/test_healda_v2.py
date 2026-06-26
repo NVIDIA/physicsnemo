@@ -21,6 +21,9 @@ import torch
 pytest.importorskip("earth2grid")  # HEALPix tokenizer dependency
 
 from physicsnemo.experimental.models.healda.healda_v2 import HealDAv2  # noqa: E402
+from physicsnemo.experimental.models.healda.obs_packing import (  # noqa: E402
+    ObsContext,
+)
 
 LEVEL_FINE = 2
 LEVEL_COARSE = 1
@@ -78,19 +81,16 @@ def test_healda_v2_cpu_no_obs():
     empty_f = torch.empty(0, device=dev)
     empty_i = torch.empty(0, dtype=torch.int64, device=dev)
 
-    out = model(
-        x,
-        torch.rand(b, device=dev),
-        sod,
-        doy,
-        obs=empty_f,
+    obs_ctx = ObsContext(
+        cu_seqlens_k=torch.zeros(total_pixels + 1, dtype=torch.int32, device=dev),
+        max_seqlen_k=0,
+        values=empty_f,
         float_metadata=torch.empty(0, 8, device=dev),
         obs_type=empty_i,
         channel=empty_i,
         platform=empty_i,
-        cu_seqlens_k=torch.zeros(total_pixels + 1, dtype=torch.int32, device=dev),
-        max_seqlen_k=0,
     )
+    out = model(x, torch.rand(b, device=dev), sod, doy, obs_ctx)
 
     assert out.shape == (b, 3, t, NPIX)
     out.float().pow(2).mean().backward()
@@ -124,19 +124,16 @@ def test_healda_v2_cuda_full():
     channel = torch.randint(0, 8, (nobs,), device=dev)
     platform = torch.randint(0, 4, (nobs,), device=dev)
 
-    out = model(
-        x,
-        torch.rand(b, device=dev),
-        sod,
-        doy,
-        obs=obs,
+    obs_ctx = ObsContext(
+        cu_seqlens_k=_cu_seqlens(counts, dev),
+        max_seqlen_k=max(counts),
+        values=obs,
         float_metadata=float_metadata,
         obs_type=obs_type,
         channel=channel,
         platform=platform,
-        cu_seqlens_k=_cu_seqlens(counts, dev),
-        max_seqlen_k=max(counts),
     )
+    out = model(x, torch.rand(b, device=dev), sod, doy, obs_ctx)
 
     assert out.shape == (b, 3, t, NPIX)
     out.float().pow(2).mean().backward()

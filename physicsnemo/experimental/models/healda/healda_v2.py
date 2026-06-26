@@ -15,11 +15,12 @@
 # limitations under the License.
 """Video + observation data-assimilation model composing :class:`VideoDiT`."""
 
+import dataclasses
 from dataclasses import dataclass
 from typing import Literal, Optional
 
 import torch
-from jaxtyping import Float, Int
+from jaxtyping import Float
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
@@ -28,10 +29,7 @@ from physicsnemo.nn.module.hpx.tokenizer import (
     HEALPixPatchTokenizer,
 )
 
-from physicsnemo.experimental.models.healda.obs_packing import (
-    ObsContext,
-    build_pixel_group_map,
-)
+from physicsnemo.experimental.models.healda.obs_packing import ObsContext
 from physicsnemo.experimental.models.healda.obs_tokenizer import ObsTokenizerFiLM
 from physicsnemo.experimental.models.healda.pixel_cross_attention import (
     PixelCrossAttention,
@@ -157,23 +155,13 @@ class HealDAv2(Module):
         Second-of-day tensor of shape :math:`(B, T)` for the calendar embedding.
     day_of_year : torch.Tensor
         Day-of-year tensor of shape :math:`(B, T)` for the calendar embedding.
-    obs : torch.Tensor
-        Flattened scalar observation values of shape :math:`(N_{obs},)`, sorted by
-        flat pixel index so each pixel's tokens are contiguous.
-    float_metadata : torch.Tensor
-        Per-observation float metadata of shape :math:`(N_{obs}, M)`.
-    obs_type : torch.Tensor
-        Observation-type ids of shape :math:`(N_{obs},)`.
-    channel : torch.Tensor
-        Channel ids of shape :math:`(N_{obs},)`.
-    platform : torch.Tensor
-        Platform ids of shape :math:`(N_{obs},)`.
-    cu_seqlens_k : torch.Tensor
-        Int prefix sums of shape :math:`(B \cdot T \cdot X' + 1,)`; pixel ``i``
-        attends to ``obs_tokens[cu_seqlens_k[i]:cu_seqlens_k[i + 1]]`` with
-        :math:`X' = 12 \times 4^{\mathrm{level\_model}}`.
-    max_seqlen_k : int
-        Maximum per-pixel observation-token count.
+    obs : ObsContext
+        Per-observation arrays (``values``, ``float_metadata``, ``obs_type``,
+        ``channel``, ``platform``) plus the per-pixel ragged packing
+        (``cu_seqlens_k``, ``max_seqlen_k``, optional ``group_map``), with pixel
+        prefix sums over :math:`B \cdot T \cdot X'` and
+        :math:`X' = 12 \times 4^{\mathrm{level\_model}}`. The tokenizer fills
+        ``tokens`` internally; observations are sorted by flat pixel index.
 
     Outputs
     -------
@@ -305,31 +293,20 @@ class HealDAv2(Module):
         noise_labels: Float[torch.Tensor, "batch"],
         second_of_day: Float[torch.Tensor, "batch time"],
         day_of_year: Float[torch.Tensor, "batch time"],
-        obs: Float[torch.Tensor, "nobs"],
-        float_metadata: Float[torch.Tensor, "nobs meta_dim"],
-        obs_type: Int[torch.Tensor, "nobs"],
-        channel: Int[torch.Tensor, "nobs"],
-        platform: Int[torch.Tensor, "nobs"],
-        cu_seqlens_k: Int[torch.Tensor, "total_pixels_plus_one"],
-        max_seqlen_k: int,
+        obs: ObsContext,
     ) -> Float[torch.Tensor, "batch out_channels time npix"]:
-        obs_tokens = self.obs_tokenizer(
-            obs,
-            float_metadata,
-            obs_type,
-            channel,
-            platform,
+        tokens = self.obs_tokenizer(
+            obs.values,
+            obs.float_metadata,
+            obs.obs_type,
+            obs.channel,
+            obs.platform,
         )
-        obs_ctx = ObsContext(
-            tokens=obs_tokens,
-            cu_seqlens_k=cu_seqlens_k,
-            max_seqlen_k=max_seqlen_k,
-            group_map=build_pixel_group_map(cu_seqlens_k),
-        )
+        cross_attention_context = dataclasses.replace(obs, tokens=tokens)
         return self.dit(
             x,
             noise_labels,
-            cross_attention_context=obs_ctx,
+            cross_attention_context=cross_attention_context,
             tokenizer_kwargs={
                 "second_of_day": second_of_day,
                 "day_of_year": day_of_year,
