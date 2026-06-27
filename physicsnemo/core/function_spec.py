@@ -29,44 +29,6 @@ from packaging.requirements import Requirement
 
 from physicsnemo.core.version_check import check_version_spec
 
-# Cache of Warp stream wrappers keyed by the underlying CUDA stream handle.
-#
-# ``warp.stream_from_torch`` wraps a torch-owned (external) CUDA stream, and the
-# resulting ``warp.Stream`` unregisters that handle from Warp on ``__del__``.
-# Creating a fresh wrapper on every launch therefore churns register/unregister
-# on a shared stream; unregistering while another wrapper -- or an in-flight
-# kernel -- still uses the stream corrupts it (illegal memory access). Keeping
-# one long-lived wrapper per handle registers each stream exactly once.
-_WARP_STREAM_CACHE: Dict[int, Any] = {}
-
-
-def warp_stream_from_torch(torch_stream: "torch.cuda.Stream") -> Any:
-    """Return a cached Warp stream wrapping *torch_stream*.
-
-    Wrapping a torch stream registers it with Warp; the wrapper unregisters it
-    on garbage collection. Caching one wrapper per CUDA stream handle keeps the
-    registration stable for the process lifetime, which is required when the
-    same torch stream is bound by nested Warp scopes (e.g. an outer
-    preprocessing scope and an inner functional launch).
-
-    Parameters
-    ----------
-    torch_stream : torch.cuda.Stream
-        Torch CUDA stream to wrap.
-
-    Returns
-    -------
-    warp.Stream
-        Cached Warp stream sharing ``torch_stream``'s underlying CUDA handle.
-    """
-    wp = importlib.import_module("warp")
-    handle = torch_stream.cuda_stream
-    cached = _WARP_STREAM_CACHE.get(handle)
-    if cached is None:
-        cached = wp.stream_from_torch(torch_stream)
-        _WARP_STREAM_CACHE[handle] = cached
-    return cached
-
 
 @dataclass(frozen=True)
 class Implementation:
@@ -725,13 +687,11 @@ class FunctionSpec:
             Warp device and stream.
         """
         try:
-            importlib.import_module("warp")
+            wp = importlib.import_module("warp")
         except ImportError as exc:
             raise ImportError("warp is not available") from exc
         if tensor.device.type == "cuda":
-            # Reuse a cached wrapper so binding the current torch stream does
-            # not churn Warp's stream registration (see warp_stream_from_torch).
-            stream = warp_stream_from_torch(torch.cuda.current_stream(tensor.device))
+            stream = wp.stream_from_torch(torch.cuda.current_stream(tensor.device))
             device = None
         else:
             stream = None
