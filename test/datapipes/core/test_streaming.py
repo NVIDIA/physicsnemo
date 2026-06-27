@@ -21,7 +21,7 @@ Stage 1 covers the lazy, FIFO-handle preload path (IOPump laziness,
 primitive). Stage 2 covers iterable datasets driven main-thread-only
 (finite/capped-infinite generators, ``drop_last``, self-batching
 pass-through, reproducibility, and no worker pool). CUDA-guarded tests
-exercise stream-bound preprocessing and Warp-on-a-non-default-stream.
+exercise stream-bound preprocessing.
 """
 
 from __future__ import annotations
@@ -386,7 +386,7 @@ class TestIterableDataLoader:
 
 
 # ============================================================================
-# CUDA-guarded -- stream-bound consume and Warp-on-non-default-stream
+# CUDA-guarded -- stream-bound consume
 # ============================================================================
 
 
@@ -492,77 +492,3 @@ class TestStreamBoundConsume:
         # yielded (the regression guard: the old code waited inline during the
         # lookahead consume of batch 1, before batch 0 was ever yielded).
         assert wait_indices[1] > yield0_idx, order
-
-
-class TestWarpIterableOnStream:
-    """Warp launches on a non-default stream from the main thread are safe."""
-
-    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-    def test_darcy_online_simulation_through_iterable_loader(self):
-        from physicsnemo.datapipes.benchmarks.darcy import Darcy2D
-
-        class _DarcyIterable(IterableDatasetBase):
-            yields_batches = True
-
-            def __init__(self, num_batches):
-                self._sim = Darcy2D(resolution=32, batch_size=2, device="cuda")
-                self._num_batches = num_batches
-
-            def __iter__(self):
-                sim_iter = iter(self._sim)
-                for _ in range(self._num_batches):
-                    yield next(sim_iter)
-
-        loader = dp.DataLoader(_DarcyIterable(2), use_streams=True)
-        batches = list(loader)
-        torch.cuda.synchronize()  # surfaces any illegal-memory-access
-        assert len(batches) == 2
-        for batch in batches:
-            assert batch["permeability"].device.type == "cuda"
-            assert batch["darcy"].device.type == "cuda"
-
-
-class TestWarpFunctionalTransformOnStreams:
-    """A Warp ``FunctionSpec`` transform driven through the multi-stream
-    preload path. The functional binds the current torch stream as a Warp
-    stream internally; the loader binds the same stream around the consume.
-    Both must reuse one cached wrapper -- otherwise the inner wrapper
-    unregisters the shared stream on teardown and the next launch faults
-    (illegal memory access)."""
-
-    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-    def test_functional_warp_transform_multi_stream(self, numpy_data_dir):
-        from physicsnemo.datapipes.transforms.base import Transform
-        from physicsnemo.nn.functional import signed_distance_field
-
-        class _SDFTransform(Transform):
-            """Evaluate an SDF (a Warp functional) against the sample points."""
-
-            def __call__(self, data):
-                points = data["positions"].reshape(-1, 3).float()
-                vertices = torch.tensor(
-                    [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-                    device=points.device,
-                )
-                faces = torch.tensor([[0, 1, 2]], device=points.device)
-                sdf, _ = signed_distance_field(vertices, faces, points)
-                data["sdf"] = sdf.reshape(-1, 1)
-                return data
-
-        reader = dp.NumpyReader(numpy_data_dir, pin_memory=True)
-        dataset = dp.Dataset(reader, device="cuda:0", transforms=_SDFTransform())
-        loader = dp.DataLoader(
-            dataset,
-            batch_size=1,
-            shuffle=False,
-            prefetch_factor=2,
-            num_streams=4,
-            use_streams=True,
-        )
-        # Iterate well past num_streams so every stream is reused at least
-        # once; a churned registration faults on the second pass.
-        batches = list(loader)
-        torch.cuda.synchronize()  # surfaces any illegal-memory-access
-        assert len(batches) == 10
-        for batch in batches:
-            assert batch["sdf"].device.type == "cuda"

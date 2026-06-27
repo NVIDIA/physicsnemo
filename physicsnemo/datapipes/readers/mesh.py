@@ -30,7 +30,6 @@ from typing import Any, Iterator
 
 import torch
 
-from physicsnemo.datapipes import _timing
 from physicsnemo.datapipes._rng import spawn_generator
 from physicsnemo.datapipes.registry import register
 from physicsnemo.mesh import DomainMesh, Mesh
@@ -424,8 +423,7 @@ class DomainMeshReader:
         self._epoch = epoch
 
     def __getitem__(self, index: int) -> tuple[DomainMesh, dict[str, Any]]:
-        with _timing.record("producer/domain_load"):
-            dm = self._load_sample(index)
+        dm = self._load_sample(index)
 
         # Trim unused data before subsample/pin. Both references are lazy (no
         # memmap materialization here):
@@ -463,13 +461,11 @@ class DomainMeshReader:
                 n_points=self.subsample_n_points,
                 generator=generator,
             )
-            with _timing.record("producer/interior_subsample"):
-                interior = _subsample_mesh(dm.interior, **sub_kw)
-            with _timing.record("producer/boundary_subsample"):
-                boundaries = {
-                    name: _subsample_mesh(dm.boundaries[name], **sub_kw)
-                    for name in dm.boundary_names
-                }
+            interior = _subsample_mesh(dm.interior, **sub_kw)
+            boundaries = {
+                name: _subsample_mesh(dm.boundaries[name], **sub_kw)
+                for name in dm.boundary_names
+            }
             dm = DomainMesh(
                 interior=interior,
                 boundaries=boundaries,
@@ -478,12 +474,10 @@ class DomainMeshReader:
 
         # Load extra boundary meshes (full resolution, no subsampling).
         if self._extra_boundaries:
-            with _timing.record("producer/stl_load"):
-                dm = self._load_extra_boundaries(dm, index)
+            dm = self._load_extra_boundaries(dm, index)
 
         if self.pin_memory:
-            with _timing.record("producer/pin_memory"):
-                dm = dm.pin_memory()
+            dm = dm.pin_memory()
 
         metadata: dict[str, Any] = {
             "source_path": str(self._paths[index]),

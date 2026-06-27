@@ -28,7 +28,6 @@ from typing import Any, Optional, Sequence, Union
 import torch
 from tensordict import TensorDict
 
-from physicsnemo.datapipes import _timing
 from physicsnemo.datapipes._rng import fork_generator
 from physicsnemo.datapipes.protocols import (
     DatasetBase,
@@ -288,13 +287,11 @@ class MeshDataset(DatasetBase):
                 with torch.profiler.record_function(
                     "MeshDataset._consume: data.to(device)"
                 ):
-                    with _timing.record("consume/h2d"):
-                        data = data.to(self._device, non_blocking=True)
+                    data = data.to(self._device, non_blocking=True)
             with torch.profiler.record_function(
                 "MeshDataset._consume: _apply_transforms"
             ):
-                with _timing.record("consume/transforms"):
-                    data = _apply_transforms(data)
+                data = _apply_transforms(data)
 
         if use_stream:
             # Record an event marking the preprocessing's completion on the
@@ -310,7 +307,6 @@ class MeshDataset(DatasetBase):
                 # insert the wait at the right point).
                 compute_stream.wait_event(event)
 
-        _timing.tick()
         return data, metadata
 
     def close(self) -> None:
