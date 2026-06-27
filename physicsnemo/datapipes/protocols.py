@@ -42,27 +42,15 @@ from typing import Any, Iterator, Optional
 
 import torch
 
-from physicsnemo.core.function_spec import warp_stream_from_torch
-
-try:
-    import warp as wp
-
-    _HAS_WARP = True
-except ImportError:  # pragma: no cover - warp is normally installed
-    wp = None
-    _HAS_WARP = False
-
 
 @contextlib.contextmanager
 def preprocessing_stream(stream: Optional["torch.cuda.Stream"]):
-    """Bind torch (and Warp) to *stream* for the host-to-device + transforms.
+    """Bind torch to *stream* for the host-to-device copy + transforms.
 
-    Within the block both torch's current stream and -- when Warp is
-    installed -- Warp's current stream are set to *stream*, so Warp kernels
-    launched by transforms run on the same stream the data was copied on.
-    The single launching thread is the real Warp invariant; the stream is
-    free, but torch and Warp must agree on which one. A ``None`` stream is
-    a no-op (run on the current stream).
+    Within the block torch's current stream is set to *stream*, so the
+    host-to-device copy and any device kernels launched by transforms run
+    on the same stream the data was copied on. A ``None`` stream is a
+    no-op (run on the current stream).
 
     Parameters
     ----------
@@ -73,60 +61,7 @@ def preprocessing_stream(stream: Optional["torch.cuda.Stream"]):
         yield
         return
     with torch.cuda.stream(stream):
-        if _HAS_WARP:
-            # Use the cached wrapper: a fresh stream_from_torch per call would
-            # register/unregister the same CUDA handle on every consume and
-            # collide with the inner wrapper a Warp functional launch creates
-            # for the same stream, corrupting it (illegal memory access).
-            with wp.ScopedStream(warp_stream_from_torch(stream)):
-                yield
-        else:
-            yield
-
-
-def record_stream(obj: Any, stream: "torch.cuda.Stream") -> None:
-    """Tag *obj*'s device tensors with *stream* for the caching allocator.
-
-    Recurses into ``TensorDict``/tensor/mesh objects (which expose
-    ``record_stream``) and plain containers, so memory allocated on a
-    preprocessing stream is not recycled while the compute stream reads
-    it. Only CUDA tensors are tagged; CPU tensors (``record_stream`` is
-    unimplemented on the CPU backend) and objects without device memory
-    are skipped.
-
-    Parameters
-    ----------
-    obj : Any
-        Item to tag (tensor, TensorDict, mesh, dict, or sequence).
-    stream : torch.cuda.Stream
-        Stream that will consume the memory.
-    """
-    if isinstance(obj, torch.Tensor):
-        # record_stream is a CUDA-only caching-allocator hint; it is
-        # unimplemented on the CPU backend, so only tag CUDA tensors.
-        if obj.is_cuda:
-            obj.record_stream(stream)
-        return
-    record = getattr(obj, "record_stream", None)
-    if callable(record):
-        device = getattr(obj, "device", None)
-        device_type = getattr(device, "type", None)
-        if device_type == "cuda":
-            obj.record_stream(stream)
-        elif device_type is None:
-            # Device-less container (e.g. a mixed-device TensorDict): recurse
-            # so CUDA leaves are tagged and CPU leaves are skipped.
-            values = getattr(obj, "values", None)
-            if callable(values):
-                for value in values():
-                    record_stream(value, stream)
-        # device_type == "cpu": no-op (nothing for the allocator to track)
-    elif isinstance(obj, dict):
-        for value in obj.values():
-            record_stream(value, stream)
-    elif isinstance(obj, (list, tuple)):
-        for value in obj:
-            record_stream(value, stream)
+        yield
 
 
 @dataclass
@@ -137,7 +72,7 @@ class HostPayload:
     the main-thread consumer. It carries a CPU ``TensorDict`` (ideally
     pinned, so the subsequent host-to-device copy can be asynchronous)
     plus metadata. It is produced by a worker thread, which must not
-    launch device kernels (in particular Warp kernels).
+    launch device kernels.
 
     Parameters
     ----------
@@ -193,8 +128,8 @@ class DatasetBase(ABC):
     Producer / consumer split
     --------------------------
     Prefetching is split into two stages so that **no device kernels are
-    launched off the main thread** (a hard requirement for Warp
-    transforms, which must share the model's single launching thread):
+    launched off the main thread** (device kernels must share the model's
+    single launching thread):
 
     - :meth:`_load_host` is the **producer**. It runs on a worker thread
       and performs only thread-safe work: reading, decoding, and staging
@@ -202,7 +137,7 @@ class DatasetBase(ABC):
     - :meth:`_consume` is the **consumer**. It runs on the thread that
       calls :meth:`consume` / :meth:`__getitem__` (the main thread, in
       practice) and performs the host-to-device transfer and device
-      transforms (including Warp kernels) on the assigned CUDA stream.
+      transforms on the assigned CUDA stream.
 
     :class:`Dataset` and :class:`MeshDataset` override both hooks to
     perform the real split. The default implementations fall back to
@@ -214,13 +149,10 @@ class DatasetBase(ABC):
         self,
         *,
         num_workers: int = 2,
-        serialize_load_consume: bool = False,
     ) -> None:
         self._executor: Optional[ThreadPoolExecutor] = None
         self._num_workers = num_workers
         self._lock = threading.Lock()
-        self._stage_lock = threading.Lock()
-        self._serialize_load_consume = serialize_load_consume
         # Futures still in flight, tracked so close() can drain them.
         self._inflight: set[Future] = set()
         # Index-keyed handles backing the prefetch()/__getitem__ compat API.
@@ -295,12 +227,6 @@ class DatasetBase(ABC):
         except Exception as e:  # noqa: BLE001
             return HostPayload(work_item=work_item, error=e)
 
-    def _load_host_guarded(self, work_item: Any) -> HostPayload:
-        if not self._serialize_load_consume:
-            return self._load_host(work_item)
-        with self._stage_lock:
-            return self._load_host(work_item)
-
     def _consume(
         self,
         payload: HostPayload,
@@ -338,18 +264,6 @@ class DatasetBase(ABC):
             raise payload.error
         return payload.data, payload.metadata
 
-    def _consume_guarded(
-        self,
-        payload: HostPayload,
-        stream: Optional[torch.cuda.Stream] = None,
-        *,
-        defer_sync: bool = False,
-    ) -> tuple[Any, dict[str, Any]]:
-        if not self._serialize_load_consume:
-            return self._consume(payload, stream, defer_sync=defer_sync)
-        with self._stage_lock:
-            return self._consume(payload, stream, defer_sync=defer_sync)
-
     # ------------------------------------------------------------------
     # FIFO prefetch primitive (used by the DataLoader's pump)
     # ------------------------------------------------------------------
@@ -379,7 +293,7 @@ class DatasetBase(ABC):
             Handle bundling the producer future and the assigned stream.
         """
         executor = self._ensure_executor()
-        future = executor.submit(self._load_host_guarded, work_item)
+        future = executor.submit(self._load_host, work_item)
         with self._lock:
             self._inflight.add(future)
         future.add_done_callback(self._discard_inflight)
@@ -411,7 +325,7 @@ class DatasetBase(ABC):
             The sample data and its metadata.
         """
         payload = handle.future.result()  # re-raises producer errors via _consume
-        return self._consume_guarded(payload, handle.stream, defer_sync=defer_sync)
+        return self._consume(payload, handle.stream, defer_sync=defer_sync)
 
     # ------------------------------------------------------------------
     # Concrete interface
@@ -518,7 +432,7 @@ class IterableDatasetBase(ABC):
     indexing: it produces data by iteration only. The
     :class:`~physicsnemo.datapipes.DataLoader` drives it entirely on the
     main thread (no worker pool), so :meth:`__iter__` may freely launch
-    Warp kernels and use CUDA streams -- the property that makes online
+    device kernels and use CUDA streams -- the property that makes online
     simulation safe here but unsafe on the worker-pool preload path.
 
     Emission modes

@@ -99,8 +99,7 @@ class TranslateMesh(MeshTransform):
         self.vector = vector
 
     def __call__(self, mesh: Mesh) -> Mesh:
-        with torch.profiler.record_function("TranslateMesh: vector.to(device)"):
-            return mesh.translate(self.vector.to(mesh.points.device))
+        return mesh.translate(self.vector.to(mesh.points.device))
 
     def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
         """Apply translation to a :class:`DomainMesh`.
@@ -454,10 +453,9 @@ class SetGlobalField(MeshTransform):
 
     def __call__(self, mesh: Mesh) -> Mesh:
         new_gd = mesh.global_data.clone()
-        with torch.profiler.record_function("InjectGlobalFields: _fields.to(device)"):
-            new_gd.update(
-                self._fields.to(device=mesh.points.device, dtype=mesh.points.dtype)
-            )
+        new_gd.update(
+            self._fields.to(device=mesh.points.device, dtype=mesh.points.dtype)
+        )
         return Mesh(
             points=mesh.points,
             cells=mesh.cells,
@@ -535,6 +533,31 @@ class NormalizeMeshFields(MeshTransform):
         else:
             raise ValueError("Provide one of 'stats_file' or 'fields'")
 
+    def to(self, device: torch.device | str) -> "NormalizeMeshFields":
+        """Move internal tensors and the nested field statistics to *device*.
+
+        Extends :meth:`MeshTransform.to` by also moving the per-field
+        ``mean`` and ``std`` tensors in ``self._stats`` so the per-sample
+        ``.to()`` in :meth:`__call__` is a no-op.
+
+        Parameters
+        ----------
+        device : torch.device or str
+            Target device.
+
+        Returns
+        -------
+        NormalizeMeshFields
+            ``self``, for chaining.
+        """
+        # Base .to() moves only bare tensor attrs; move the nested stats too
+        # so the per-sample .to() in __call__ is a no-op (no H2D copy/sync).
+        super().to(device)
+        for s in self._stats.values():
+            s["mean"] = s["mean"].to(self._device)
+            s["std"] = s["std"].to(self._device)
+        return self
+
     def __call__(self, mesh: Mesh) -> Mesh:
         ### Clone and z-score the targeted association's TensorDict in
         ### place; fields absent from `_stats` (or absent from the mesh)
@@ -544,11 +567,8 @@ class NormalizeMeshFields(MeshTransform):
             if field_name not in new_td.keys():
                 continue
             val = new_td[field_name].float()
-            with torch.profiler.record_function(
-                "NormalizeMeshFields: stats.to(device)"
-            ):
-                mean = stats["mean"].to(dtype=val.dtype, device=val.device)
-                std = stats["std"].to(dtype=val.dtype, device=val.device)
+            mean = stats["mean"].to(dtype=val.dtype, device=val.device)
+            std = stats["std"].to(dtype=val.dtype, device=val.device)
             new_td[field_name] = (val - mean) / (std + self._eps)
 
         ### `Mesh.copy` is a tensorclass-provided shallow copy: `points`,
@@ -594,13 +614,9 @@ class NormalizeMeshFields(MeshTransform):
             dim = 1 if ftype == "scalar" else n_spatial_dims
             if name in self._stats:
                 stats = self._stats[name]
-                with torch.profiler.record_function(
-                    "NormalizeMeshFields.inverse_tensor: stats.to(device)"
-                ):
-                    mean = stats["mean"].to(dtype=tensor.dtype, device=tensor.device)
-                    std = stats["std"].to(dtype=tensor.dtype, device=tensor.device)
                 out[..., idx : idx + dim] = (
-                    out[..., idx : idx + dim] * (std + self._eps) + mean
+                    out[..., idx : idx + dim] * (stats["std"] + self._eps)
+                    + stats["mean"]
                 )
             idx += dim
         return out
@@ -637,9 +653,7 @@ class NormalizeMeshFields(MeshTransform):
             stats = self._stats.get(name)
             if stats is None:
                 return val
-            mean = stats["mean"].to(dtype=val.dtype, device=val.device)
-            std = stats["std"].to(dtype=val.dtype, device=val.device)
-            return val * (std + self._eps) + mean
+            return val * (stats["std"] + self._eps) + stats["mean"]
 
         ### ``named_apply`` is typed ``TensorDict | None`` for its
         ### in-place mode; the out-of-place path always returns a TD.

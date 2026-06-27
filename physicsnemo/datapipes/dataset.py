@@ -35,7 +35,6 @@ from physicsnemo.datapipes.protocols import (
     DatasetBase,
     HostPayload,
     preprocessing_stream,
-    record_stream,
 )
 from physicsnemo.datapipes.readers.base import Reader
 from physicsnemo.datapipes.registry import register
@@ -71,9 +70,8 @@ class Dataset(DatasetBase):
       host-to-device transfer and the GPU transforms on the assigned
       CUDA stream.
 
-    This keeps all device-kernel launches (notably Warp transforms) on
-    the consuming thread, which must be the same single thread the model
-    launches from.
+    This keeps all device-kernel launches on the consuming thread, which
+    must be the same single thread the model launches from.
 
     >>> # Start prefetching
     >>> dataset.prefetch(0, stream=stream0)  # doctest: +SKIP
@@ -296,16 +294,14 @@ class Dataset(DatasetBase):
         """
         Consumer stage: device transfer + transforms on the calling thread.
 
-        Runs on whatever thread calls this (the main thread, so any Warp
+        Runs on whatever thread calls this (the main thread, so any device
         kernels in the transforms share the model's launching thread). When
         a CUDA ``stream`` is assigned, the host-to-device copy *and* the
-        transforms run on that preprocessing stream -- Warp bound to it via
+        transforms run on that preprocessing stream via
         :func:`preprocessing_stream` -- so this sample's preprocessing
-        overlaps the previous batch's training on the compute stream. The
-        result is tagged via ``record_stream`` so the caching allocator does
-        not recycle it while training reads it, and a CUDA event orders the
-        preprocessing before the compute stream (never a host-side
-        synchronize).
+        overlaps the previous batch's training on the compute stream. A CUDA
+        event orders the preprocessing before the compute stream (never a
+        host-side synchronize).
 
         Parameters
         ----------
@@ -353,10 +349,8 @@ class Dataset(DatasetBase):
                 data = self.transforms(data)
 
         if use_stream:
-            # Tag the memory so the allocator keeps it alive for the compute
-            # stream, then record an event marking the preprocessing's
-            # completion on the prep stream.
-            record_stream(data, compute_stream)
+            # Record an event marking the preprocessing's completion on the
+            # prep stream.
             event = torch.cuda.Event()
             event.record(stream)
             if defer_sync:

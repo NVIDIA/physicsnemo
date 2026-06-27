@@ -40,7 +40,6 @@ from physicsnemo.datapipes.protocols import (
     DatasetBase,
     IterableDatasetBase,
     preprocessing_stream,
-    record_stream,
 )
 from physicsnemo.datapipes.registry import register
 
@@ -86,16 +85,13 @@ class DataLoader:
     submitting sample loads ahead of consumption, bounded by
     ``prefetch_factor`` batches worth of in-flight samples. The main
     thread is the sole consumer: it performs all host-to-device transfers
-    and GPU transforms (including Warp kernels) on the prefetch streams.
-    Warp's invariant is the single launching thread, not a single stream,
-    so transforms run on the assigned preprocessing stream and overlap the
-    compute stream.
+    and GPU transforms on the prefetch streams, so transforms run on the
+    assigned preprocessing stream and overlap the compute stream.
 
     For the pipeline to stay primed, the main thread must not block: keep
     reader output (optionally) pinned (so host-to-device copies are asynchronous) and
-    avoid host readbacks (``.item()``, ``wp.synchronize()``), data-
-    dependent shapes, and GIL-bound pure-Python transforms on the launch
-    path.
+    avoid host readbacks (``.item()``), data-dependent shapes, and
+    GIL-bound pure-Python transforms on the launch path.
 
     Examples
     --------
@@ -357,9 +353,9 @@ class DataLoader:
         pool, keeping a bounded number of samples in flight regardless of
         the consumer's cadence. The main thread is a pure drain loop: it
         pulls ready handles in order, runs the per-sample consume step
-        (host-to-device transfer plus GPU transforms, including Warp, on
-        the assigned stream), and reassembles batches from the boundary
-        markers the pump forwards.
+        (host-to-device transfer plus GPU transforms on the assigned
+        stream), and reassembles batches from the boundary markers the
+        pump forwards.
 
         Stream assignment is optional and decoupled from the threaded
         producer: when CUDA streams are enabled a stream is round-robined
@@ -536,7 +532,7 @@ class DataLoader:
         Main-thread-only iteration for generator (iterable) datasets.
 
         There is no worker pool: the dataset's generator runs on the main
-        thread, so it may freely launch Warp kernels / use streams. Each
+        thread, so it may freely launch device kernels / use streams. Each
         item is generated on a preprocessing stream (when streams are
         enabled) and handed to the compute stream via a CUDA event, so
         generation of the next item can overlap training on the current
@@ -571,7 +567,6 @@ class DataLoader:
                 except StopIteration:
                     break
             if use_stream:
-                record_stream(item, compute_stream)
                 event = torch.cuda.Event()
                 event.record(prep_stream)
                 compute_stream.wait_event(event)

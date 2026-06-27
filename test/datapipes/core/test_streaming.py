@@ -27,7 +27,6 @@ exercise stream-bound preprocessing and Warp-on-a-non-default-stream.
 from __future__ import annotations
 
 import threading
-import time
 
 import numpy as np
 import pytest
@@ -140,31 +139,6 @@ class _DescriptorDataset(DatasetBase):
         return len(self._store)
 
 
-class _StageLockedDataset(DatasetBase):
-    """Dataset that records whether worker load overlaps consume."""
-
-    def __init__(self):
-        super().__init__(num_workers=1, serialize_load_consume=True)
-        self.load_entries: list[int] = []
-        self.consume_started = threading.Event()
-        self.release_consume = threading.Event()
-
-    def _load(self, index):
-        return TensorDict({"x": torch.tensor([float(index)])}), {"index": index}
-
-    def _load_host(self, work_item):
-        self.load_entries.append(work_item)
-        return super()._load_host(work_item)
-
-    def _consume(self, payload, stream=None, *, defer_sync=False):
-        self.consume_started.set()
-        self.release_consume.wait(timeout=5.0)
-        return super()._consume(payload, stream, defer_sync=defer_sync)
-
-    def __len__(self):
-        return 2
-
-
 class TestSubmitConsume:
     """Tests for the FIFO submit/consume primitive."""
 
@@ -197,29 +171,6 @@ class TestSubmitConsume:
             with pytest.raises(KeyError):
                 ds.consume(handle)
         finally:
-            ds.close()
-
-    def test_stage_lock_prevents_load_consume_overlap(self):
-        """Opt-in stage lock keeps worker loads out of active consume."""
-        ds = _StageLockedDataset()
-        try:
-            first = ds.submit(0)
-            first.future.result(timeout=5.0)
-
-            consumer = threading.Thread(target=ds.consume, args=(first,))
-            consumer.start()
-            assert ds.consume_started.wait(timeout=5.0)
-
-            second = ds.submit(1)
-            time.sleep(0.1)
-            assert ds.load_entries == [0]
-
-            ds.release_consume.set()
-            consumer.join(timeout=5.0)
-            second.future.result(timeout=5.0)
-            assert ds.load_entries == [0, 1]
-        finally:
-            ds.release_consume.set()
             ds.close()
 
 

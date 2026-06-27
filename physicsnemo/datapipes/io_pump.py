@@ -15,10 +15,10 @@
 # limitations under the License.
 
 """
-IOPump - A self-driving I/O producer that keeps the pipeline primed.
+IOPump - A self-driving I/O producer that keeps the IO pipeline primed.
 
-The pump owns a dedicated dispatcher thread that pulls work items from a
-source iterator *lazily* and submits each for background loading, keeping
+The pump owns a dedicated dispatcher thread that lazily pulls work items from a
+source iterator and submits each for background loading, keeping
 a *bounded* number of samples in flight at all times. Pulling lazily means
 the source may be arbitrarily large (or effectively unbounded): the
 dispatcher only advances it when a backpressure slot is free, so memory

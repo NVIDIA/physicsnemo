@@ -34,7 +34,6 @@ from physicsnemo.datapipes.protocols import (
     DatasetBase,
     HostPayload,
     preprocessing_stream,
-    record_stream,
 )
 from physicsnemo.datapipes.readers.mesh import DomainMeshReader, MeshReader
 from physicsnemo.datapipes.registry import register
@@ -96,17 +95,10 @@ class MeshDataset(DatasetBase):
         num_workers : int, default=1
             Number of worker threads for the prefetch pool.  Worker threads
             run :meth:`_load_host` (disk read + pin_memory) concurrently;
-            GPU operations (H2D transfer, transforms, Warp kernels) always
-            run on the main thread in :meth:`_consume`.
+            GPU operations (H2D transfer, transforms) always run on the
+            main thread in :meth:`_consume`.
         """
-        # _load_host (disk read + pin_memory) is host-side only and launches no
-        # device kernels; all GPU work (H2D transfer, transforms, Triton SDF)
-        # runs on the main thread in _consume and is ordered via CUDA stream
-        # events.  With the Warp-free (torch/Triton) SDF there is no wp.Mesh
-        # lifetime race to guard against, so load and consume need not be
-        # serialized: disabling serialization lets all num_workers threads read
-        # in parallel and makes prefetch_factor actually scale I/O throughput.
-        super().__init__(num_workers=num_workers, serialize_load_consume=False)
+        super().__init__(num_workers=num_workers)
         self.reader = reader
         self.transforms = list(transforms) if transforms else []
         self._device = torch.device(device) if isinstance(device, str) else device
@@ -236,15 +228,14 @@ class MeshDataset(DatasetBase):
     ) -> tuple[Union[Mesh, DomainMesh, TensorDict], dict[str, Any]]:
         """Consumer stage: device transfer + transforms on the calling thread.
 
-        Runs on whatever thread calls this (the main thread, so any Warp
-        mesh-query kernels in the transforms share the model's launching
-        thread). When a CUDA ``stream`` is assigned, the host-to-device
-        copy *and* the transforms run on that preprocessing stream -- Warp
-        bound to it via :func:`preprocessing_stream` -- so this sample's
-        preprocessing overlaps the previous batch's training on the compute
-        stream. The result is tagged via ``record_stream`` and a CUDA event
-        orders the preprocessing before the compute stream (not a host-side
-        synchronize).
+        Runs on whatever thread calls this (the main thread, so any device
+        kernels in the transforms share the model's launching thread). When
+        a CUDA ``stream`` is assigned, the host-to-device copy *and* the
+        transforms run on that preprocessing stream via
+        :func:`preprocessing_stream` -- so this sample's preprocessing
+        overlaps the previous batch's training on the compute stream. A CUDA
+        event orders the preprocessing before the compute stream (not a
+        host-side synchronize).
 
         Parameters
         ----------
@@ -306,10 +297,8 @@ class MeshDataset(DatasetBase):
                     data = _apply_transforms(data)
 
         if use_stream:
-            # Tag the memory so the allocator keeps it alive for the compute
-            # stream, then record an event marking the preprocessing's
-            # completion on the prep stream.
-            record_stream(data, compute_stream)
+            # Record an event marking the preprocessing's completion on the
+            # prep stream.
             event = torch.cuda.Event()
             event.record(stream)
             if defer_sync:
