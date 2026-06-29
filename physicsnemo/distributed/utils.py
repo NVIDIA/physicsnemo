@@ -217,8 +217,13 @@ def _fused_reduce_tensors(
     group : torch.distributed.ProcessGroup | None
         The process group to reduce over (``None`` is the default group).
     buffer_dtype : torch.dtype | None
-        Explicit fused-buffer dtype, or ``None`` to infer it (promote all leaf
-        dtypes; accumulate sub-32-bit floats in ``float32``).
+        Explicit fused-buffer dtype (opt-in to any cast), or ``None`` to infer
+        it. The inferred dtype is the promotion of all leaf dtypes (so e.g.
+        ``float32`` + ``float64`` accumulates in ``float64``), floored at
+        ``float32`` for 16-bit float results (``float16`` / ``bfloat16``) whose
+        sums would lose precision (mirroring :func:`_reduce`). Integer/bool
+        leaves mixed with float leaves raise ``ValueError`` instead of being
+        cast into a floating buffer.
     device : torch.device | str | None
         Device for the fused buffer / collective, or ``None`` to use the first
         tensor's device.
@@ -230,26 +235,40 @@ def _fused_reduce_tensors(
     """
     if not tensors:
         return []
+    detached = [t.detach() for t in tensors]
 
-    # Single-process / uninitialized: no collective, just detached clones.
+    # Resolve the fused-buffer dtype, refusing a silent lossy int/bool -> float
+    # cast: promoting an integer leaf into a float buffer would round-trip it
+    # through a mantissa and corrupt large / index-like values. Validate BEFORE
+    # the no-op return so the contract fails loud single-process too, not only
+    # under world_size > 1. The accumulation dtype is the promotion of all leaf
+    # dtypes, floored at float32 for 16-bit floats (mirroring :func:`_reduce`)
+    # whose half/bfloat16 sums would lose too much precision.
+    if buffer_dtype is not None:
+        work_dtype = buffer_dtype  # explicit opt-in: the caller owns any casting
+    else:
+        work_dtype = functools.reduce(torch.promote_types, (t.dtype for t in detached))
+        if work_dtype.is_floating_point:
+            if any(not t.dtype.is_floating_point for t in detached):
+                raise ValueError(
+                    "fused_all_reduce would cast integer/bool leaves into a "
+                    f"{work_dtype} buffer, silently corrupting large or "
+                    "index-like values. Reduce integer leaves on their own (a "
+                    "homogeneous integer bundle is exact), or pass buffer_dtype= "
+                    "to opt in to the cast."
+                )
+            if work_dtype.itemsize < 4:
+                work_dtype = torch.float32
+
+    # Single-process / uninitialized: no collective, exact detached clones.
     # (Single-GPU logs stay byte-identical and never touch the network.)
     if not (
         dist.is_available()
         and dist.is_initialized()
         and dist.get_world_size(group=group) > 1
     ):
-        return [t.detach().clone() for t in tensors]
+        return [t.clone() for t in detached]
 
-    detached = [t.detach() for t in tensors]
-    # Working buffer dtype: an explicit ``buffer_dtype`` wins; otherwise promote
-    # every leaf dtype and (mirroring :func:`_reduce`) accumulate sub-32-bit
-    # floats in ``float32``, whose half/bfloat16 sums would lose too much precision.
-    if buffer_dtype is not None:
-        work_dtype = buffer_dtype
-    else:
-        work_dtype = functools.reduce(torch.promote_types, (t.dtype for t in detached))
-        if work_dtype.is_floating_point and work_dtype.itemsize < 4:
-            work_dtype = torch.float32
     buffer_device = torch.device(device) if device is not None else detached[0].device
 
     # Pack: flatten + cast every tensor and concatenate into ONE buffer.  ``cat``
@@ -293,19 +312,17 @@ def fused_all_reduce(
     (possibly nested), a :class:`~collections.abc.Mapping`, or a
     :class:`~collections.abc.Sequence`.
 
-    The default ``op`` is :attr:`~torch.distributed.ReduceOp.SUM` because SUM is
-    the composable primitive for distributed averaging: to obtain a correct
-    sample-weighted mean across ranks with *uneven* shard sizes, reduce the
-    per-rank weighted sums **and** the per-rank counts together and divide
-    ``sum / count`` afterwards. Reducing pre-computed per-rank means instead
-    (e.g. via :attr:`~torch.distributed.ReduceOp.AVG`) yields a mean-of-means,
-    which is wrong whenever the per-rank counts differ.
+    ``op`` defaults to :attr:`~torch.distributed.ReduceOp.SUM`, matching
+    :func:`torch.distributed.all_reduce`. Summing fused sums and counts and
+    dividing ``sum / count`` afterwards (see Examples) is the building block for
+    a sample-weighted mean that stays correct across uneven shards.
 
     Parameters
     ----------
     tensors : TensorDictBase | Mapping[str, torch.Tensor] | Sequence[torch.Tensor]
         The tensors to reduce. The return type mirrors the input type. Leaves
-        may have heterogeneous shapes, dtypes, and devices.
+        may have heterogeneous shapes and dtypes; each output is returned on its
+        leaf's original dtype and device.
     op : torch.distributed.ReduceOp, optional
         The reduction applied to every leaf, by default
         :attr:`~torch.distributed.ReduceOp.SUM`.
@@ -314,10 +331,14 @@ def fused_all_reduce(
         world-wide group).
     buffer_dtype : torch.dtype | None, optional
         Explicit dtype for the fused buffer. By default (``None``) the dtype is
-        inferred by promoting all leaf dtypes, with sub-32-bit floats
-        accumulated in ``float32`` (mirroring :func:`_reduce`). Pass
-        ``torch.float64`` if summing very large-magnitude integer counts where
-        ``float32``'s 24-bit mantissa would lose precision.
+        the promotion of all leaf dtypes (so e.g. ``float32`` + ``float64``
+        accumulates in ``float64``), floored at ``float32`` for 16-bit floats
+        (mirroring :func:`_reduce`); an all-integer bundle stays integer and
+        reduces exactly, while mixing integer/bool with floating leaves raises
+        ``ValueError`` instead of silently casting the integers through floating
+        point (see Notes). Pass an explicit dtype to opt in to that cast - e.g.
+        ``torch.float64`` to sum large-magnitude integer counts that would
+        overflow ``float32``'s 24-bit mantissa.
     device : torch.device | str | None, optional
         Device for the fused buffer and collective, by default ``None`` (the
         first leaf's device). Outputs are always returned on their original
@@ -337,6 +358,10 @@ def fused_all_reduce(
     ------
     TypeError
         If ``tensors`` is not a ``TensorDict``, ``Mapping``, or ``Sequence``.
+    ValueError
+        If the inferred buffer dtype is floating point but some leaf is integer
+        or boolean (which the cast would corrupt); pass ``buffer_dtype`` to opt
+        in to the cast.
 
     Notes
     -----
@@ -350,6 +375,9 @@ def fused_all_reduce(
       collective, so single-process runs are byte-identical.
     - **Not autograd-aware.** Inputs are detached; this is a metrics/logging
       reducer, not a tensor-parallel gradient primitive (see :func:`_reduce`).
+    - **Integer-safe.** Integer/bool bundles reduce exactly in their own dtype;
+      mixing them with floating leaves is refused (see Raises) rather than
+      silently cast. An explicit ``buffer_dtype`` overrides this.
 
     Examples
     --------
@@ -370,6 +398,12 @@ def fused_all_reduce(
     >>> out = fused_all_reduce([torch.ones(2, 2), torch.tensor(5.0)])
     >>> [tuple(t.shape) for t in out]
     [(2, 2), ()]
+
+    Integer bundles (counts, indices) reduce exactly in their own dtype:
+
+    >>> reduced = fused_all_reduce({"count": torch.tensor([5, 3])})
+    >>> reduced["count"].dtype, reduced["count"].tolist()
+    (torch.int64, [5, 3])
     """
     reduce_leaves = functools.partial(
         _fused_reduce_tensors,

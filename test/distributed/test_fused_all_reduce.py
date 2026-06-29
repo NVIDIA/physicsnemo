@@ -21,7 +21,8 @@ The file is collected by both test jobs (cf. ``test/distributed/test_autograd.py
 - **Serial / no-op path** (unmarked): runs in the normal CPU suite. Distributed
   is not initialized, so ``fused_all_reduce`` returns detached clones. These
   tests pin the structure-preserving contract (dict / sequence / TensorDict
-  round-trips, shape/dtype/device passthrough, detached & independent outputs).
+  round-trips, shape/dtype/device passthrough, detached & independent outputs)
+  and the integer/float dtype guard.
 - **Collective path** (``@pytest.mark.multigpu_static``): runs only under
   ``torchrun --nproc-per-node N -m pytest --multigpu-static`` (the conftest
   initializes ``DistributedManager`` and these are *all-collective* tests). They
@@ -137,6 +138,33 @@ def test_invalid_type_raises():
     """A non-container input (e.g. a bare tensor) is a TypeError."""
     with pytest.raises(TypeError):
         fused_all_reduce(torch.tensor(1.0))
+
+
+def test_homogeneous_integer_bundle_is_exact():
+    """Integer leaves reduce in their own dtype - no lossy float round-trip."""
+    big = 2**40  # well beyond float32's 24-bit mantissa
+    inputs = {"count": torch.tensor([5, 3]), "big": torch.tensor(big)}
+    reduced = fused_all_reduce(inputs)
+
+    assert reduced["count"].dtype == torch.int64
+    assert reduced["count"].tolist() == [5, 3]
+    assert reduced["big"].item() == big
+
+
+def test_mixed_int_float_without_buffer_dtype_raises():
+    """Implicitly casting integer leaves into a float buffer is refused."""
+    with pytest.raises(ValueError, match="integer"):
+        fused_all_reduce({"idx": torch.tensor(2**40), "loss": torch.tensor(1.0)})
+
+
+def test_mixed_int_float_allowed_with_explicit_buffer_dtype():
+    """An explicit ``buffer_dtype`` is the caller opting in to the cast."""
+    reduced = fused_all_reduce(
+        {"idx": torch.tensor(5), "loss": torch.tensor(1.5)},
+        buffer_dtype=torch.float64,
+    )
+    assert reduced["idx"].item() == 5
+    assert reduced["loss"].item() == pytest.approx(1.5)
 
 
 # -----------------------------------------------------------------------------
@@ -304,3 +332,17 @@ def test_max_min(op, reference):
     )
     expected = float(reference(k + 1 for k in range(world_size)))
     assert reduced["v"].item() == pytest.approx(expected)
+
+
+@pytest.mark.multigpu_static
+def test_integer_sum_is_exact():
+    """A homogeneous int64 bundle sums exactly across ranks (no float cast)."""
+    dm = DistributedManager()
+    rank, world_size = dm.rank, dm.world_size
+    expected = sum(k + 1 for k in range(world_size))
+
+    reduced = fused_all_reduce(
+        {"count": torch.tensor(rank + 1, dtype=torch.int64, device=dm.device)}
+    )
+    assert reduced["count"].dtype == torch.int64
+    assert reduced["count"].item() == expected
