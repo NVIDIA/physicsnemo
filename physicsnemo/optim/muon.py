@@ -27,42 +27,99 @@ stacked and orthogonalized together with batched matmuls (``bmm`` / ``baddbmm``)
 the same as the per-parameter loop; only the number of kernel launches changes,
 from ``O(num_params * ns_steps)`` to ``O(num_shape_groups * ns_steps)``.
 
-This module provides :class:`Muon`, a drop-in replacement whose constructor
-signature, hyperparameter semantics, and ``momentum_buffer`` optimizer-state key
-match :class:`torch.optim.Muon`, so checkpoints remain interchangeable.
+This module provides :class:`Muon`, a subclass of :class:`torch.optim.Muon` that
+overrides only the per-step orthogonalization with a batched implementation. The
+constructor signature, hyperparameter semantics, validation, and ``momentum_buffer``
+optimizer-state key are all inherited from :class:`torch.optim.Muon`, so checkpoints
+remain interchangeable.
 """
 
 from __future__ import annotations
 
-import math
 from collections import defaultdict
 from typing import Any, Callable
 
 import torch
 from torch import Tensor
-from torch.optim import Optimizer
+
+# This optimizer extends -- rather than reimplements -- the upstream PyTorch
+# Muon. ``torch.optim.Muon`` was added in PyTorch 2.9; PhysicsNeMo pins
+# ``torch>=2.10`` so it is expected to be present, but we surface a clear error
+# if a user somehow runs against a build that lacks it.
+try:
+    from torch.optim import Muon as _TorchMuon
+    from torch.optim._muon import _adjust_lr
+except ImportError as exc:  # pragma: no cover - depends on torch build
+    raise ImportError(
+        "physicsnemo.optim.Muon extends torch.optim.Muon, which is unavailable "
+        "in this PyTorch build. Please upgrade to torch>=2.10."
+    ) from exc
+
+# DTensor is only available when torch is built with distributed support. When
+# absent there is no way to construct a sharded parameter, so the guard below is
+# simply a no-op.
+try:
+    from torch.distributed.tensor import DTensor
+except ImportError:  # pragma: no cover - distributed-free torch builds
+    DTensor = None
 
 __all__ = ["Muon"]
 
-# Constants from Keller Jordan's Muon post (match torch.optim.Muon defaults):
-# https://kellerjordan.github.io/posts/muon/
-EPS = 1e-7
-DEFAULT_A = 3.4445
-DEFAULT_B = -4.7750
-DEFAULT_C = 2.0315
-DEFAULT_NS_STEPS = 5
+
+def _is_sharded(tensor: Tensor) -> bool:
+    """Return ``True`` if *tensor* is a sharded :class:`~torch.distributed.tensor.DTensor`.
+
+    This catches both FSDP2 (``fully_shard``) parameters and PhysicsNeMo's
+    :class:`~physicsnemo.domain_parallel.ShardTensor` (a ``DTensor`` subclass).
+    A ``DTensor`` that is purely replicated is not considered sharded.
+
+    Parameters
+    ----------
+    tensor : torch.Tensor
+        Tensor (parameter or gradient) to inspect.
+
+    Returns
+    -------
+    bool
+        ``True`` when *tensor* is a ``DTensor`` with at least one ``Shard``
+        placement, ``False`` otherwise.
+    """
+    return (
+        DTensor is not None
+        and isinstance(tensor, DTensor)
+        and any(placement.is_shard() for placement in tensor.placements)
+    )
 
 
-def _adjust_lr(lr: float, adjust_lr_fn: str | None, param_shape: torch.Size) -> float:
-    """Learning-rate adjustment for a parameter, matching ``torch.optim.Muon``."""
-    A, B = param_shape[0], param_shape[1]
-    if adjust_lr_fn is None or adjust_lr_fn == "original":
-        adjusted_ratio = math.sqrt(max(1, A / B))
-    elif adjust_lr_fn == "match_rms_adamw":
-        adjusted_ratio = 0.2 * math.sqrt(max(A, B))
-    else:
-        adjusted_ratio = 1.0
-    return lr * adjusted_ratio
+def _raise_if_sharded(tensor: Tensor) -> None:
+    """Raise a clear error if *tensor* is a sharded ``DTensor``.
+
+    The fused path stacks equally-shaped matrices and orthogonalizes them with
+    batched matmuls, which is only correct when each matrix is materialized whole
+    on the local device. Orthogonalizing a shard is not equal to orthogonalizing
+    the full matrix, so we refuse sharded parameters rather than silently
+    computing the wrong update.
+
+    Parameters
+    ----------
+    tensor : torch.Tensor
+        Tensor (parameter or gradient) to validate.
+
+    Raises
+    ------
+    ValueError
+        If *tensor* is a sharded ``DTensor`` (FSDP2 / ``ShardTensor``).
+    """
+    if _is_sharded(tensor):
+        raise ValueError(
+            "physicsnemo.optim.Muon batches the Newton-Schulz orthogonalization "
+            "across parameters and therefore only supports replicated 2-D "
+            "parameters (single-GPU and DDP). It received a sharded DTensor "
+            f"(placements={tuple(tensor.placements)}); batched orthogonalization "
+            "of a shard does not equal orthogonalizing the full matrix. For "
+            "FSDP2 (fully_shard) or ShardTensor parameters, use torch.optim.Muon "
+            "directly (or gather the full matrix before orthogonalizing)."
+        )
 
 
 def _batched_newton_schulz(
@@ -131,14 +188,14 @@ def _batched_newton_schulz(
     return ortho
 
 
-class Muon(Optimizer):
+class Muon(_TorchMuon):
     r"""Fused Muon optimizer for 2-D parameters.
 
-    Drop-in replacement for :class:`torch.optim.Muon` that batches the
-    Newton-Schulz orthogonalization across parameters of the same shape using
-    ``torch.bmm`` / ``torch.baddbmm``, and applies the momentum and weight-decay
-    updates with the ``torch._foreach_*`` fused kernels. The algorithm,
-    hyperparameter defaults, and ``momentum_buffer`` state key match
+    Subclass of :class:`torch.optim.Muon` that batches the Newton-Schulz
+    orthogonalization across parameters of the same shape using ``torch.bmm`` /
+    ``torch.baddbmm``, and applies the momentum and weight-decay updates with the
+    ``torch._foreach_*`` fused kernels. Construction, validation, hyperparameter
+    defaults, and the ``momentum_buffer`` state key are inherited unchanged from
     :class:`torch.optim.Muon`, so it is numerically equivalent (batched matmuls
     compute each matrix independently) and checkpoint-compatible.
 
@@ -167,59 +224,52 @@ class Muon(Optimizer):
     adjust_lr_fn : str, optional
         One of ``"original"`` or ``"match_rms_adamw"``. Default None
         (treated as ``"original"``).
+
+    Forward
+    -------
+    Call :meth:`step` after ``loss.backward()`` to apply one optimization step.
+
+    Outputs
+    -------
+    The optional closure loss returned by :meth:`step`, or ``None``.
+
+    .. important::
+        The fused path stacks equally-shaped matrices and orthogonalizes them
+        with batched matmuls, which is only correct for **replicated 2-D
+        parameters**. Single-GPU and **DDP** are fully supported and numerically
+        equal to :class:`torch.optim.Muon` (DDP gradients are dense, replicated
+        tensors, and :meth:`step` runs after ``backward()`` returns, by which
+        point DDP's bucketed all-reduce and FSDP's reduce-scatter have already
+        been synchronized). **FSDP2 (``fully_shard``) and
+        :class:`~physicsnemo.domain_parallel.ShardTensor` / ``DTensor``
+        parameters are not supported** and raise a :class:`ValueError`, because
+        orthogonalizing a shard is not equal to orthogonalizing the full matrix.
+        For those, use :class:`torch.optim.Muon` directly (or gather the full
+        matrix before orthogonalizing).
+
+    Notes
+    -----
+    See :class:`torch.optim.Muon` for the full algorithm description.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.optim import Muon
+    >>> weights = [torch.nn.Parameter(torch.randn(8, 8)) for _ in range(3)]
+    >>> opt = Muon(weights, lr=0.02)
+    >>> for w in weights:
+    ...     w.grad = torch.randn_like(w)
+    >>> _ = opt.step()
     """
 
-    def __init__(
-        self,
-        params: Any,
-        lr: float = 1e-3,
-        weight_decay: float = 0.1,
-        momentum: float = 0.95,
-        nesterov: bool = True,
-        ns_coefficients: tuple[float, float, float] = (
-            DEFAULT_A,
-            DEFAULT_B,
-            DEFAULT_C,
-        ),
-        eps: float = EPS,
-        ns_steps: int = DEFAULT_NS_STEPS,
-        adjust_lr_fn: str | None = None,
-    ) -> None:
-        if isinstance(lr, Tensor) and lr.numel() != 1:
-            raise ValueError("Tensor lr must be 1-element")
-        if not 0.0 <= lr:
-            raise ValueError(f"Learning rate should be >= 0 but is: {lr}")
-        if not 0.0 <= momentum:
-            raise ValueError(f"momentum should be >= 0 but is: {momentum}")
-        if not 0.0 <= weight_decay:
-            raise ValueError(f"weight decay should be >= 0 but is: {weight_decay}")
-        if adjust_lr_fn is not None and adjust_lr_fn not in (
-            "original",
-            "match_rms_adamw",
-        ):
-            raise ValueError(
-                f"Adjust learning rate function {adjust_lr_fn} is not supported"
-            )
-
-        defaults = {
-            "lr": lr,
-            "weight_decay": weight_decay,
-            "momentum": momentum,
-            "nesterov": nesterov,
-            "ns_coefficients": ns_coefficients,
-            "eps": eps,
-            "ns_steps": ns_steps,
-            "adjust_lr_fn": adjust_lr_fn,
-        }
-        super().__init__(params, defaults)
+    def __init__(self, params: Any, *args: Any, **kwargs: Any) -> None:
+        # Reuse upstream construction, validation, defaults, and the ndim == 2
+        # check verbatim, then add the sharded-parameter guard on top.
+        super().__init__(params, *args, **kwargs)
 
         for group in self.param_groups:
             for p in group["params"]:
-                if p.ndim != 2:
-                    raise ValueError(
-                        "Muon only supports 2D parameters whereas we found a "
-                        f"parameter with size: {p.size()}"
-                    )
+                _raise_if_sharded(p)
 
     @staticmethod
     def _group_params_by_shape(params: list[Tensor]) -> dict[tuple, list[int]]:
@@ -247,7 +297,19 @@ class Muon(Optimizer):
 
     @torch.no_grad()
     def step(self, closure: Callable[[], float] | None = None) -> float | None:
-        """Perform a single optimization step."""
+        """Perform a single optimization step.
+
+        Parameters
+        ----------
+        closure : Callable[[], float], optional
+            Optional callable that reevaluates the model and returns the loss.
+            Default None.
+
+        Returns
+        -------
+        float or None
+            The loss returned by *closure*, or ``None`` if no closure was given.
+        """
         loss = None
         if closure is not None:
             with torch.enable_grad():
@@ -269,28 +331,19 @@ class Muon(Optimizer):
             grads: list[Tensor] = []
             momentum_bufs: list[Tensor] = []
 
-            for p in group["params"]:
-                if p.grad is None:
-                    continue
-                if torch.is_complex(p):
-                    raise RuntimeError("Muon does not support complex parameters")
-                if p.grad.is_sparse:
-                    raise RuntimeError("Muon does not support sparse gradients")
-                if p.grad.ndim != 2:
-                    raise ValueError("Param gradient must be a 2D matrix")
-
-                params_with_grad.append(p)
-                grads.append(p.grad)
-
-                state = self.state[p]
-                if "momentum_buffer" not in state:
-                    state["momentum_buffer"] = torch.zeros_like(
-                        p.grad, memory_format=torch.preserve_format
-                    )
-                momentum_bufs.append(state["momentum_buffer"])
+            # Reuse the upstream collector: it appends params/grads, rejects
+            # complex/sparse, and lazily initializes the momentum_buffer state.
+            self._init_group(group, params_with_grad, grads, momentum_bufs)
 
             if not params_with_grad:
                 continue
+
+            # Guard against sharded grads (e.g. params wrapped after construction).
+            for p, g in zip(params_with_grad, grads):
+                _raise_if_sharded(p)
+                _raise_if_sharded(g)
+                if g.ndim != 2:
+                    raise ValueError("Param gradient must be a 2D matrix")
 
             # Momentum (fused across all shapes): buf = momentum*buf + (1-momentum)*grad
             torch._foreach_lerp_(momentum_bufs, grads, 1 - momentum)
