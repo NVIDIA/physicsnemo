@@ -44,20 +44,28 @@ Three dataset types share this pattern:
 | `MeshDataset` | `Mesh` / `DomainMesh` tensorclasses | `MeshTransform` |
 | `MultiDataset` | Union of child `DatasetBase` instances | Delegates to children |
 
-All three inherit from `DatasetBase`, which provides thread-pool
-prefetching and a `Future`-based cache (see
-[Performance](#performance-threading-and-stream-based-concurrency) below).
+`Dataset` and `MeshDataset` inherit from `DatasetBase`, which provides
+thread-pool prefetching via a FIFO (First In / First Out)
+`submit`/`consume` primitive driven by the `IOPump` (the index-keyed
+`prefetch`/`__getitem__` cache is a thin random-access layer on top).
+`MultiDataset` implements the same map-style surface by delegating
+`submit`, `consume`, `prefetch`, `_pop_events`, and `close` to the child
+`DatasetBase` instance that owns each sample; see
+[Performance](#performance-threading-and-stream-based-concurrency) below.
 
 ## Composability
 
 ### Readers
 
-A `Reader` is an ABC with a single contract:
+A `Reader` is an ABC with one main loading hook plus a required length:
 
 ```python
 class Reader(ABC):
     @abstractmethod
     def _load_sample(self, index: int) -> dict[str, Tensor]: ...
+
+    @abstractmethod
+    def __len__(self) -> int: ...
 ```
 
 `__getitem__` wraps the result in a `TensorDict` on CPU (optionally
@@ -79,7 +87,9 @@ multi-region consistency.
 
 ### Collators
 
-Collators combine per-sample `(TensorDict, metadata)` tuples into batches:
+Collators combine per-sample `(data, metadata)` tuples into batches,
+where `data` is usually a `TensorDict`, `Mesh`, or `DomainMesh` depending
+on the dataset and collator:
 
 | Collator | Strategy |
 |----------|----------|
@@ -147,31 +157,36 @@ preprocessing.  Threads are a natural fit:
 
 ### Producer / consumer split
 
-Prefetching is split into two stages so that **no device kernels are
-launched off the main thread** -- a hard requirement for Warp-based
-transforms, which must share the model's single launching thread:
+For the provided `Dataset` and `MeshDataset` implementations, prefetching
+is split into two stages so that **no device kernels are launched off the
+main thread** -- device kernels must share the model's single launching
+thread:
 
 - `_load_host` is the **producer**.  It runs on a worker thread and does
   only thread-safe work: reading, decoding, and staging into pinned host
   memory.  It returns a `HostPayload`.
 - `_consume` is the **consumer**.  It runs on whatever thread calls
   `__getitem__` (the main thread, in practice) and performs the
-  host-to-device transfer and device transforms (including Warp kernels).
+  host-to-device transfer and device transforms.
 
 `DatasetBase` owns a `ThreadPoolExecutor` (configurable via
 `num_workers`) and exposes a FIFO prefetch primitive.  `submit(work_item,
-stream=...)` runs only the producer on the pool and returns a
-`PrefetchHandle` bundling the future with the stream the consumer should
-use; `consume(handle)` resolves it on the calling thread:
+stream=...)` runs `_load_host` on the pool and returns a `PrefetchHandle`
+bundling the future with the stream the consumer should use;
+`consume(handle)` resolves it on the calling thread.  Subclasses that do
+not override `_load_host` and `_consume` fall back to running their full
+`_load` pipeline in the worker, so the main-thread launch guarantee
+belongs to split implementations such as `Dataset` and `MeshDataset`:
 
 ```python
 def submit(self, work_item, stream=None):
     future = self._executor.submit(self._load_host, work_item)
     return PrefetchHandle(future=future, stream=stream)
 
-def consume(self, handle):
+def consume(self, handle, *, defer_sync=False):
     payload = handle.future.result()       # re-raises producer errors
-    return self._consume(payload, handle.stream)   # H2D + transforms here
+    # H2D + transforms here; defer_sync controls who gates the compute stream
+    return self._consume(payload, handle.stream, defer_sync=defer_sync)
 ```
 
 Correlation is purely by handle identity (FIFO), so work items need not
@@ -193,9 +208,9 @@ them in place without consuming a slot, so the consumer reassembles
 dynamically-sized batches from the boundaries -- the DataLoader never
 builds the epoch's batch list in advance.  Because dispatch lives off the
 main thread, the pipeline stays primed even while the main thread is busy
-launching kernels or running the model.  This path is active whenever
-`prefetch_factor > 0`; set `prefetch_factor=0` for fully synchronous
-iteration.
+launching kernels or running the model.  For map-style datasets, this
+path is active whenever `prefetch_factor > 0`; set `prefetch_factor=0`
+to use synchronous map-style iteration.
 
 ### CUDA stream handoff
 
@@ -204,39 +219,69 @@ producer.  When `use_streams=True` (and CUDA is available), each sample is
 round-robined a **preprocessing stream**.  The consumer runs *both* the
 host-to-device copy and the transforms on that stream, then hands the
 result to the compute stream via a CUDA **event** (never a host
-`synchronize()`):
+`synchronize()`).  Crucially, *who* enqueues the compute-stream wait
+depends on the `defer_sync` flag (see
+[One-batch lookahead](#one-batch-lookahead-deferred-sync) below): the
+DataLoader defers it so the wait lands *after* the previous batch's model
+work, while standalone callers wait inline:
 
 ```python
-def _consume(self, payload, stream=None):
+def _consume(self, payload, stream=None, *, defer_sync=False):
     data = payload.data
     if device is not None and stream is not None:
         compute_stream = torch.cuda.current_stream()
-        # Bind torch AND Warp to the preprocessing stream.
-        with preprocessing_stream(stream):              # torch + wp.ScopedStream
+        # Bind torch to the preprocessing stream.
+        with preprocessing_stream(stream):              # torch.cuda.stream
             data = data.to(device, non_blocking=True)   # H2D on prep stream
             data = self.transforms(data)                # transforms on SAME stream
-        data.record_stream(compute_stream)              # keep memory alive
         event = torch.cuda.Event()
         event.record(stream)
-        compute_stream.wait_event(event)                # order, no host block
+        if defer_sync:
+            self._events_pending.append(event)          # DataLoader gates later
+        else:
+            compute_stream.wait_event(event)            # inline order, no host block
     else:
         data = self.transforms(data)
     return data, payload.metadata
 ```
 
-**The single launching thread -- not a single stream -- is Warp's real
-invariant.**  Warp kernels may run on any CUDA stream provided they are
-launched from the main thread *and* Warp's current stream matches torch's.
-`preprocessing_stream` (in `protocols.py`) binds both via
-`wp.ScopedStream(wp.stream_from_torch(stream))`, so transforms (including
-Warp mesh-query / BVH kernels) run correctly on the side stream.  A
-previous `cudaErrorIllegalAddress` here was a torch/Warp stream
-*divergence* (data on a side stream, the Warp kernel on Warp's own
-stream), not a prohibition on non-default streams; binding both fixes it
-and lets GPU preprocessing genuinely overlap training.  `record_stream`
-keeps the device tensors from being recycled while the compute stream
-reads them; the pinned host source is held by the caching host allocator
-until the copy completes.
+`preprocessing_stream` (in `protocols.py`) binds torch's current stream
+to the preprocessing stream via `torch.cuda.stream(stream)`, so the
+host-to-device copy and the transforms run on the side stream and GPU
+preprocessing genuinely overlaps training.  The pinned host source is
+held by the caching host allocator until the copy completes.
+
+### One-batch lookahead (deferred sync)
+
+The compute-stream wait recorded above is only half the overlap story:
+*when* it is enqueued decides whether preprocessing actually overlaps
+training.  The DataLoader's prefetch loop (`_iter_prefetch`) keeps a
+**one-batch lookahead** so the wait lands at the right point:
+
+- `drain_one_batch()` consumes pump items up to the next `BATCH_BOUNDARY`,
+  calling `consume(item, defer_sync=True)` on each.  With `defer_sync=True`
+  the consumer enqueues the H2D copy + transforms on the preprocessing
+  stream and *records* an event, but appends it to `_events_pending`
+  instead of making the compute stream wait.
+- `_pop_events()` (on `DatasetBase`) hands those recorded events back to
+  the loop.
+- Before yielding batch N, the loop eagerly drains batch **N+1**'s items
+  (launching their preprocessing on the side streams), then calls
+  `gate_compute_stream(events)` to issue `compute_stream.wait_event` for
+  batch N's events -- right before the `yield`.
+
+This ordering is the whole point.  Because the wait for batch N is
+enqueued *after* the previous iteration's `yield` already enqueued batch
+N-1's model kernels, the compute-stream order becomes
+`..., model_{N-1}, wait(prep_N), model_N, ...`.  Batch N's preprocessing
+(already in flight on its own stream) overlaps batch N-1's compute, and
+each model only ever blocks on its own batch's preprocessing -- never on
+the next batch's.  If `_consume` instead waited inline during the
+lookahead drain, that wait would be ordered *ahead* of batch N's model
+kernels and the model would block on batch N+1's preprocessing -- the
+opposite of overlap.  Standalone callers (no DataLoader to insert the
+gate) leave `defer_sync=False` and get the inline wait so their result is
+immediately safe to use.
 
 ### Concurrency timeline
 
@@ -244,15 +289,21 @@ With everything launched from the main thread, the worker pool, the
 preprocessing stream, and the compute stream form a triple buffer:
 
 ```text
-Worker pool       │ load N+2 ─ load N+1 ...   (host I/O + thread-safe CPU work)
-Preprocess stream │            H2D + Warp transforms for N+1
-Compute stream    │                         train N
+Worker pool       │ load N+1 ─ load N ...     (host I/O + thread-safe CPU work)
+Preprocess stream │           H2D + transforms for N
+Compute stream    │ train N-1 ─ wait(prep_N) ─ train N
 ```
 
-GPU preprocessing of batch N+1 genuinely overlaps training of batch N on
+GPU preprocessing of batch N genuinely overlaps training of batch N-1 on
 a separate stream; the two are ordered by a CUDA event, never a host-side
-`synchronize`.  A transform (or generator) that forces a host readback
-simply serializes itself -- a property of that code, not of the pipeline.
+`synchronize`.  The ordering is what the one-batch lookahead buys: the
+compute stream's `wait(prep_N)` is enqueued by `gate_compute_stream` only
+*after* batch N-1's model kernels and only *after* batch N's preprocessing
+has been launched on its side stream (see
+[One-batch lookahead](#one-batch-lookahead-deferred-sync)), so each model
+blocks on its own batch's preprocessing and nothing else.  A transform (or
+generator) that forces a host readback simply serializes itself -- a
+property of that code, not of the pipeline.
 
 ### Two data paths: map/descriptor vs iterable
 
@@ -267,10 +318,10 @@ type:
 - **Generator path (`IterableDatasetBase`)** -- iterable datasets that
   *produce* data (online simulation, procedural samplers, unbounded
   streams).  Driven **main-thread-only**: no sampler, no pump, no worker
-  pool.  `__iter__` may freely launch Warp kernels and use CUDA streams
-  (the single-launching-thread invariant holds), and the loader still
-  drives generation on a preprocessing stream with the same event handoff,
-  so generation of batch N+1 overlaps training of batch N.
+  pool.  `__iter__` may freely launch device kernels and use CUDA streams,
+  and the loader still drives generation on a preprocessing stream with a
+  CUDA event handoff.  This path does not use the map-style `IOPump`,
+  `_events_pending`, or one-batch deferred-sync loop.
 
 An iterable dataset yields either per-sample `(data, metadata)` (the
 loader collates `batch_size` of them, `drop_last` trims the tail) or, when
@@ -278,7 +329,7 @@ loader collates `batch_size` of them, `drop_last` trims the tail) or, when
 unchanged.  Iterable datasets have no length: `len(loader)` raises
 `TypeError`, and `shuffle`/`sampler` are ignored.  See
 `examples/minimal/datapipes/tutorial_5_iterable_online_simulation.py` for
-a Warp `Darcy2D` online simulation wired through this path.
+a `Darcy2D` online simulation wired through this path.
 
 ### Pinned memory
 
@@ -292,13 +343,15 @@ above is most effective when the reader pins its output.
 Prefetching can be toggled at runtime for debugging:
 
 ```python
-loader.disable_prefetch()   # synchronous, single-stream -- easy to debug
-loader.enable_prefetch()    # re-enable after debugging
+loader.disable_prefetch()   # drop CUDA streams (threaded pump still runs)
+loader.enable_prefetch()    # re-enable streams after debugging
 ```
 
 `use_streams=False` keeps the threaded producer but drops the CUDA
 stream handoff (the consumer copies and transforms on the default
-stream); `prefetch_factor=0` forces fully synchronous execution.
+stream); for map-style datasets, `prefetch_factor=0` forces fully
+synchronous execution.  Iterable datasets use their separate
+main-thread-only generator path regardless of `prefetch_factor`.
 
 ## RNG and reproducibility
 
@@ -314,11 +367,17 @@ documented in **[RNG.md](RNG.md)**.
 
 Mesh augmentations (`RandomScaleMesh`, `RandomTranslateMesh`,
 `RandomRotateMesh`) accept any `torch.distributions.Distribution` to
-parametrize their random sampling.  To preserve reproducibility with
-seeded `torch.Generator` objects (which `Distribution.sample()` does not
-accept), the augmentations use **inverse CDF sampling**: draw
-`U ~ Uniform(0,1)` via `torch.rand(generator=g)`, then compute
-`X = distribution.icdf(U)`.  This gives exact samples from the target
-distribution while keeping all randomness under generator control.
+parametrize distribution-backed random sampling.  To preserve
+reproducibility with seeded `torch.Generator` objects (which
+`Distribution.sample()` does not accept), `RandomScaleMesh`,
+`RandomTranslateMesh`, and `RandomRotateMesh(mode="axis_aligned")` use
+**inverse CDF sampling**: draw `U ~ Uniform(0,1)` via
+`torch.rand(generator=g)`, then compute `X = distribution.icdf(U)`.  This
+gives exact samples from the target distribution while keeping randomness
+under generator control for distributions that implement `icdf()`.
+Distributions without `icdf()` fall back to `Distribution.sample()` with
+a warning and are not generator-reproducible.  `RandomRotateMesh` defaults
+to `mode="uniform"`, which ignores `axes` and `distribution` and samples
+uniform SO(3) rotations via random quaternions.
 Full usage examples, YAML configuration, and the supported-distribution
 table are in **[transforms/mesh/DISTRIBUTIONS.md](transforms/mesh/DISTRIBUTIONS.md)**.
