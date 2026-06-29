@@ -298,10 +298,10 @@ class StrataPixel3DBlock(nn.Module):
 
     @staticmethod
     def precompute_bilinear_cond(
-        backbone_cond: torch.Tensor,
+        backbone_cond: Float[torch.Tensor, "batch backbone_tokens cond_dim"],
         pixel_dhw: Tuple[int, int, int],
         backbone_dhw: Tuple[int, int, int],
-    ) -> torch.Tensor:
+    ) -> Float[torch.Tensor, "batch depth cond_dim height width"]:
         r"""Upsample backbone tokens to pixel resolution.
 
         Shared across all ``"bilinear_dw"`` blocks so the (expensive) upsample is
@@ -812,6 +812,15 @@ class Strata(Module):
                 raise ValueError(
                     "pos (lat/lon of shape (B, 2, H, W)) is required when "
                     "rope_mode_pixel='stereographic'"
+                )
+            # Validate pos shape here too: the backbone only checks it when its
+            # own rope_mode='stereographic', so a backbone='none'/'axial' +
+            # pixel='stereographic' config would otherwise hit a cryptic rearrange
+            # error in build_stereographic_token_coords.
+            if pos is not None and pos.shape != (x.shape[0], 2, x.shape[3], x.shape[4]):
+                raise ValueError(
+                    f"Expected pos of shape "
+                    f"{(x.shape[0], 2, x.shape[3], x.shape[4])}, got {tuple(pos.shape)}"
                 )
 
         _, _, dd, hh, ww = x.shape

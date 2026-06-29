@@ -956,6 +956,34 @@ def test_strata_forward_rope_modes(device, sem_rope, pix_rope):
     assert hasattr(model, "_rope_cos_pixel") == (pix_rope == "axial")
 
 
+@torch.no_grad()
+def test_strata_validates_pos_shape():
+    """Strata.forward rejects a wrong-shaped pos even when only the pixel stage
+    uses stereographic RoPE (the backbone, here rope_mode='none', won't check it)."""
+    torch.manual_seed(0)
+    model = Strata(
+        backbone_config=dict(
+            in_channels=3,
+            input_shape=(4, 8, 8),
+            patch_size=(1, 2, 2),
+            embed_dim=32,
+            num_heads=4,
+            num_layers=2,
+            attn_kernel=-1,
+        ),
+        embed_dim_pixel=16,
+        num_layers_pixel=2,
+        num_heads_pixel=2,
+        attn_kernel_pixel=-1,
+        adaln_mode="pixel_proj",
+        rope_mode_pixel="stereographic",
+    ).eval()
+    x = torch.randn(2, 3, 4, 8, 8)
+    bad_pos = torch.randn(2, 2, 4, 8)  # wrong H/W; should be (2, 2, 8, 8)
+    with pytest.raises(ValueError):
+        model(x, bad_pos)
+
+
 @pytest.mark.parametrize("adaln_mode", ["pixel_proj", "bilinear_dw"])
 def test_strata_activation_checkpointing_matches(device, adaln_mode):
     """Strata pixel-block checkpointing reproduces the non-checkpointed output/grads.
