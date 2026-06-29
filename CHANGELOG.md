@@ -111,6 +111,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   datapipes implementation (`physicsnemo.datapipes.transforms._sdf_torch` /
   `_sdf_triton`, including its bespoke Triton winding kernel) is superseded and
   removed; the public datapipes SDF transform delegates here.
+- Added an iterable style dataset to physicsnemo datapipes, for on-the-fly gpu simulations.
 
 ### Changed
 
@@ -154,6 +155,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   use `torch.no_grad()`, not `torch.inference_mode()`). Also expands CI test
   coverage and adds an API documentation page for
   `physicsnemo.diffusion.multi_diffusion`.
+- Performance improvements in IO prefetching and GPU preprocessing in physicsnemo datapipes.
 
 ### Deprecated
 
