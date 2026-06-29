@@ -14,13 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""Fused all-reduce for logging and metrics.
+r"""All-reduce many tensors or a TensorDict in a single collective.
 
 :func:`fused_all_reduce` packs many tensors - or a
 :class:`~tensordict.TensorDict` (possibly nested) - into a single buffer, issues
-one ``all_reduce``, and unpacks the result back into the caller's structure. It
-is a metrics/logging reducer (not autograd-aware); see the function docstring
-for the full contract.
+one ``all_reduce``, and unpacks the result back into the caller's structure.
+Inputs are detached, so it reduces values rather than gradients (it is not
+autograd-aware); see the function docstring for the full contract.
 """
 
 import functools
@@ -267,14 +267,12 @@ def fused_all_reduce(
 ) -> _ReducedContainer | tuple[_ReducedContainer, _FusedAllReduceWork]:
     r"""All-reduce many tensors in a single collective, preserving structure.
 
-    Reductions for logging and metrics frequently need to combine *many*
-    independent scalars or small tensors across ranks (per-key losses, metric
-    sums, sample counts, ...). Issuing one ``all_reduce`` per value is
-    latency-bound; this helper instead flattens every value into a single buffer
-    and performs **one** collective, then unpacks the result back into the same
-    container type the caller passed in - a :class:`~tensordict.TensorDict`
-    (possibly nested), a :class:`~collections.abc.Mapping`, or a
-    :class:`~collections.abc.Sequence`.
+    Combining *many* independent scalars or small tensors across ranks with one
+    ``all_reduce`` per value is latency-bound. This helper instead flattens
+    every value into a single buffer and performs **one** collective, then
+    unpacks the result back into the same container type the caller passed in -
+    a :class:`~tensordict.TensorDict` (possibly nested), a
+    :class:`~collections.abc.Mapping`, or a :class:`~collections.abc.Sequence`.
 
     ``op`` defaults to :attr:`~torch.distributed.ReduceOp.SUM`, matching
     :func:`torch.distributed.all_reduce`. Summing fused sums and counts and
@@ -346,8 +344,8 @@ def fused_all_reduce(
     - **No-op fast path.** If ``torch.distributed`` is unavailable/uninitialized
       or ``world_size == 1``, detached clones are returned without any
       collective, so single-process runs are byte-identical.
-    - **Not autograd-aware.** Inputs are detached; this is a metrics/logging
-      reducer, not a tensor-parallel gradient primitive (see
+    - **Not autograd-aware.** Inputs are detached, so gradients do not flow
+      through the reduction (unlike the tensor-parallel primitive
       :func:`~physicsnemo.distributed.utils._reduce`).
     - **Integer-safe.** Integer/bool bundles reduce exactly in their own dtype;
       mixing them with floating leaves is refused (see Raises) rather than
