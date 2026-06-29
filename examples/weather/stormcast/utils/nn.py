@@ -267,6 +267,7 @@ def diffusion_model_forward(
     device: torch.device | None = None,
     lead_time_label: torch.Tensor | None = None,
     sampler_args: dict[str, Any] = {},
+    invalid_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Run diffusion model sampling using the ``physicsnemo.diffusion`` API.
 
@@ -300,6 +301,9 @@ def diffusion_model_forward(
         Sampler configuration. Supported keys: ``num_steps``,
         ``solver`` (``"heun"`` or ``"euler"``),
         ``S_churn``, ``S_min``, ``S_max``, ``S_noise``.
+    invalid_mask : torch.Tensor | None
+        Per-sample invalid-region mask ``(B, 1, H, W)`` forwarded to the model's
+        NaN-mask-token path at every denoising step. ``None`` disables masking.
     """
     if isinstance(condition, TensorDict):
         ref_tensor = condition.get("cond_concat", condition.get("cond_vec"))
@@ -331,6 +335,8 @@ def diffusion_model_forward(
     extra_kwargs: dict[str, Any] = {}
     if lead_time_label is not None:
         extra_kwargs["lead_time_label"] = lead_time_label
+    if invalid_mask is not None:
+        extra_kwargs["invalid_mask"] = invalid_mask
 
     def x0_predictor(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return model(x, t, condition=condition, **extra_kwargs)

@@ -46,6 +46,24 @@ FieldType: TypeAlias = Literal["scalar", "vector"]
 ### its error message for the padding rationale).
 Precision: TypeAlias = Literal["float32", "float16", "bfloat16"]
 
+### Canonical ``phase`` tags for each ``metrics.jsonl`` record, shared by
+### train.py and infer.py so both entry points emit one vocabulary. Values are
+### ``{split}_{granularity}`` (or a one-shot metadata tag): ``config`` /
+### ``dataset`` are run metadata; ``*_step`` rows are per-unit (one per step /
+### sample, as the recipe runs ``batch_size == 1``); ``*_summary`` rows are the
+### reduced per-pass aggregates (``infer_forces_summary`` is surface-only).
+Phase: TypeAlias = Literal[
+    "config",
+    "dataset",
+    "train_step",
+    "val_step",
+    "infer_step",
+    "train_summary",
+    "val_summary",
+    "infer_summary",
+    "infer_forces_summary",
+]
+
 
 def set_seed(seed: int | None, rank: int = 0) -> None:
     """Pin all RNG states for reproducible training.

@@ -31,6 +31,7 @@ the topology is identical for any consumer over the same number of morton-sorted
 items.
 """
 
+from collections import defaultdict
 from typing import NamedTuple
 
 import torch
@@ -94,6 +95,53 @@ def build_lbvh_topology(
     max_leaves = (n_items + min_per_leaf - 1) // min_per_leaf
     max_nodes = max(1, 2 * max_leaves - 1)
 
+    # --- Host-side topology recurrence (sync-free) --------------------------
+    # The midpoint split depends only on the segment *size* (not coordinates),
+    # so the exact per-level segment population is determined by ``n_items`` and
+    # ``leaf_size`` alone and can be enumerated on the host. Tracking the
+    # multiset of segment sizes (``size -> count``) per level -- only O(depth)
+    # distinct sizes ever appear -- yields, for every level, the frontier width
+    # and the number of internal (splitting) segments. With those host integers
+    # known up front, the device build below needs no data-dependent shapes
+    # (no ``torch.where(mask)`` / ``nonzero`` / ``len(tensor)`` host readbacks):
+    # it compacts with ``cumsum`` + masked scatter into exactly-sized buffers.
+    level_sizes: dict[int, int] = {n_items: 1}
+    # Per level: (frontier_width, n_internal). The final entry has n_internal=0
+    # (the all-leaf frontier).
+    levels_info: list[tuple[int, int]] = []
+    node_count = 1
+    # Each split strictly shrinks the maximum segment size (size > leaf_size >= 1
+    # implies size >= 2, and both children are < size), so the maximum size at
+    # least halves per level: the recurrence terminates in <= log2(n_items) + 1
+    # split levels. The extra slot covers the trailing all-leaf level, and the
+    # bound is a hard guard against an unexpected non-terminating split.
+    max_levels = max(1, n_items.bit_length()) + 2
+    for _ in range(max_levels):
+        width = sum(level_sizes.values())
+        n_internal = sum(c for s, c in level_sizes.items() if s > leaf_size)
+        levels_info.append((width, n_internal))
+        if n_internal == 0:
+            break
+        node_count += 2 * n_internal
+        nxt: dict[int, int] = defaultdict(int)
+        for s, c in level_sizes.items():
+            if s > leaf_size:
+                nxt[s // 2] += c
+                nxt[s - s // 2] += c
+        level_sizes = dict(nxt)
+    else:
+        # Unreachable given the strict size-decrease argument above; a violation
+        # means the split rule changed without updating this bound.
+        raise RuntimeError(
+            f"LBVH topology recurrence exceeded {max_levels} levels for "
+            f"{n_items=}, {leaf_size=}; the midpoint split should terminate in "
+            "O(log n_items) levels."
+        )
+
+    actual_depth = len(levels_info) - 1  # number of split levels
+    # Full binary tree identity: n_leaves = (n_nodes + 1) / 2.
+    n_leaves = (node_count + 1) // 2
+
     left_child = torch.full((max_nodes,), -1, dtype=torch.long, device=device)
     right_child = torch.full((max_nodes,), -1, dtype=torch.long, device=device)
     leaf_start = torch.full((max_nodes,), -1, dtype=torch.long, device=device)
@@ -101,55 +149,74 @@ def build_lbvh_topology(
     range_start = torch.zeros(max_nodes, dtype=torch.long, device=device)
     range_count = torch.zeros(max_nodes, dtype=torch.long, device=device)
 
-    ### Phase 1: top-down segment queue (O(log N) iterations).
-    # Each segment is a contiguous range [start, end) in sorted order, owned by a node.
-    seg_starts = torch.tensor([0], dtype=torch.long, device=device)
-    seg_ends = torch.tensor([n_items], dtype=torch.long, device=device)
-    seg_node_ids = torch.tensor([0], dtype=torch.long, device=device)
-    node_count = 1
-    actual_depth = 0
+    ### Phase 1: top-down segment queue (O(log N) iterations), sync-free.
+    # Each segment is a contiguous range [start, end) in sorted order, owned by
+    # a node. Compaction of internal / leaf segments uses ``cumsum`` for the
+    # destination index and routes the masked-out rows to a throwaway pad slot,
+    # so no host-device synchronization occurs.
+    seg_starts = torch.zeros(1, dtype=torch.long, device=device)
+    seg_ends = torch.full((1,), n_items, dtype=torch.long, device=device)
+    seg_node_ids = torch.zeros(1, dtype=torch.long, device=device)
+    node_count_dev = 1  # running id base; mirrors the host recurrence exactly
     internal_nodes_per_level: list[torch.Tensor] = []
 
-    # Defer leaf-segment processing to a single end-of-loop compaction, avoiding a
-    # per-level torch.where(is_leaf_seg) host-device sync.
-    leaf_seg_node_ids: list[torch.Tensor] = []
-    leaf_seg_starts: list[torch.Tensor] = []
-    leaf_seg_sizes: list[torch.Tensor] = []
-    leaf_seg_validity: list[torch.Tensor] = []
+    # Compact leaf segments are filled in place across levels at a host-tracked
+    # offset; the trailing pad slot (index ``n_leaves``) absorbs masked writes.
+    leaf_node_ids_buf = torch.empty(n_leaves + 1, dtype=torch.long, device=device)
+    leaf_starts_buf = torch.empty(n_leaves + 1, dtype=torch.long, device=device)
+    leaf_sizes_buf = torch.empty(n_leaves + 1, dtype=torch.long, device=device)
+    leaf_offset = 0
 
-    while len(seg_starts) > 0:
+    for width, n_internal in levels_info:
         seg_sizes = seg_ends - seg_starts
 
         ### Every node (leaf or internal) covers this contiguous sorted range.
         range_start[seg_node_ids] = seg_starts
         range_count[seg_node_ids] = seg_sizes
 
-        is_leaf_seg = seg_sizes <= leaf_size
-        is_internal_seg = ~is_leaf_seg
+        is_internal_seg = seg_sizes > leaf_size
+        is_leaf_seg = ~is_internal_seg
+        n_leaf = width - n_internal
 
-        leaf_seg_node_ids.append(seg_node_ids)
-        leaf_seg_starts.append(seg_starts)
-        leaf_seg_sizes.append(seg_sizes)
-        leaf_seg_validity.append(is_leaf_seg)
+        # --- Record this level's leaf segments into the compact leaf buffers.
+        if n_leaf > 0:
+            leaf_pos = leaf_offset + torch.cumsum(is_leaf_seg.long(), 0) - 1
+            leaf_dst = torch.where(
+                is_leaf_seg, leaf_pos, torch.full_like(leaf_pos, n_leaves)
+            )
+            leaf_node_ids_buf[leaf_dst] = seg_node_ids
+            leaf_starts_buf[leaf_dst] = seg_starts
+            leaf_sizes_buf[leaf_dst] = seg_sizes
+            leaf_offset += n_leaf
 
-        internal_indices = torch.where(is_internal_seg)[0]
-        if len(internal_indices) == 0:
+        if n_internal == 0:
             break
 
-        actual_depth += 1
-        int_starts = seg_starts[internal_indices]
-        int_ends = seg_ends[internal_indices]
-        int_sizes = seg_sizes[internal_indices]
-        int_node_ids = seg_node_ids[internal_indices]
+        # --- Compact the internal segments via cumsum (no nonzero sync). The
+        # pad slot at index ``n_internal`` absorbs the leaf rows' writes.
+        int_pos = torch.cumsum(is_internal_seg.long(), 0) - 1
+        int_dst = torch.where(
+            is_internal_seg, int_pos, torch.full_like(int_pos, n_internal)
+        )
+        int_starts_b = torch.empty(n_internal + 1, dtype=torch.long, device=device)
+        int_ends_b = torch.empty(n_internal + 1, dtype=torch.long, device=device)
+        int_node_b = torch.empty(n_internal + 1, dtype=torch.long, device=device)
+        int_starts_b[int_dst] = seg_starts
+        int_ends_b[int_dst] = seg_ends
+        int_node_b[int_dst] = seg_node_ids
+        int_starts = int_starts_b[:n_internal]
+        int_ends = int_ends_b[:n_internal]
+        int_node_ids = int_node_b[:n_internal]
+        int_sizes = int_ends - int_starts
 
         midpoints = int_starts + int_sizes // 2
 
-        n_internal = len(internal_indices)
         left_ids = (
-            node_count + torch.arange(n_internal, dtype=torch.long, device=device) * 2
+            node_count_dev
+            + torch.arange(n_internal, dtype=torch.long, device=device) * 2
         )
         right_ids = left_ids + 1
-        node_count += 2 * n_internal
+        node_count_dev += 2 * n_internal
 
         left_child[int_node_ids] = left_ids
         right_child[int_node_ids] = right_ids
@@ -159,19 +226,11 @@ def build_lbvh_topology(
         seg_ends = torch.cat([midpoints, int_ends])
         seg_node_ids = torch.cat([left_ids, right_ids])
 
-    ### Single-pass leaf fill: one boolean compaction across all levels.
-    if leaf_seg_node_ids:
-        all_leaf_validity = torch.cat(leaf_seg_validity)
-        leaf_node_ids = torch.cat(leaf_seg_node_ids)[all_leaf_validity]
-        leaf_starts = torch.cat(leaf_seg_starts)[all_leaf_validity]
-        leaf_sizes = torch.cat(leaf_seg_sizes)[all_leaf_validity]
-        leaf_start[leaf_node_ids] = leaf_starts
-        leaf_count[leaf_node_ids] = leaf_sizes
-    else:  # unreachable for n_items >= 1, but keep the contract total
-        empty = torch.empty(0, dtype=torch.long, device=device)
-        leaf_node_ids = empty
-        leaf_starts = empty.clone()
-        leaf_sizes = empty.clone()
+    leaf_node_ids = leaf_node_ids_buf[:n_leaves]
+    leaf_starts = leaf_starts_buf[:n_leaves]
+    leaf_sizes = leaf_sizes_buf[:n_leaves]
+    leaf_start[leaf_node_ids] = leaf_starts
+    leaf_count[leaf_node_ids] = leaf_sizes
 
     return LBVHTopology(
         left_child=left_child,
