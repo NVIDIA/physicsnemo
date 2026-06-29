@@ -50,67 +50,12 @@ from physicsnemo.nn.module.physics_attention import (
 
 from physicsnemo.nn import ConcreteDropout
 
+from .utils import structured_grid_to_conv_input, tensors_alias
+
 # Check optional dependency availability
 TE_AVAILABLE = check_version_spec("transformer_engine", "0.1.0", hard_fail=False)
 if TE_AVAILABLE:
     import transformer_engine.pytorch as te
-
-
-def _structured_grid_to_conv_input(
-    x: Float[torch.Tensor, "batch tokens channels"],
-    batch: int,
-    tokens: int,
-    channels: int,
-    ndim: int,
-    spatial_shape: tuple[int, ...],
-) -> Float[torch.Tensor, "batch channels ..."]:
-    r"""Reshape flat token tensor to spatial layout for Conv2d/Conv3d.
-
-    Converts :math:`(B, N, C)` to :math:`(B, C, H, W)` for 2D or
-    :math:`(B, C, H, W, D)` for 3D so that structured context projectors
-    can apply spatial convolutions. Validates that :math:`N` matches the
-    grid size.
-
-    Parameters
-    ----------
-    x : torch.Tensor
-        Input tensor of shape :math:`(B, N, C)` (batch, tokens, channels).
-    batch : int
-        Batch size :math:`B`.
-    tokens : int
-        Number of tokens :math:`N` (must equal :math:`H \\times W` or
-        :math:`H \\times W \\times D`).
-    channels : int
-        Channel dimension :math:`C`.
-    ndim : int
-        Number of spatial dimensions; must be 2 or 3.
-    spatial_shape : tuple[int, ...]
-        :math:`(H, W)` for 2D or :math:`(H, W, D)` for 3D.
-
-    Returns
-    -------
-    torch.Tensor
-        Reshaped tensor of shape :math:`(B, C, H, W)` or
-        :math:`(B, C, H, W, D)` for use as conv input.
-
-    Raises
-    ------
-    ValueError
-        If ``tokens`` does not match the product of ``spatial_shape``.
-    """
-    if ndim == 2:
-        H, W = spatial_shape
-        if tokens != H * W:
-            raise ValueError(
-                f"Expected N={H * W} tokens for 2D grid, got N={tokens}"
-            )
-        return x.view(batch, H, W, channels).permute(0, 3, 1, 2)
-    H, W, D = spatial_shape
-    if tokens != H * W * D:
-        raise ValueError(
-            f"Expected N={H * W * D} tokens for 3D grid, got N={tokens}"
-        )
-    return x.view(batch, H, W, D, channels).permute(0, 4, 1, 2, 3)
 
 
 class _SliceToContextMixin:
@@ -454,10 +399,7 @@ class StructuredContextProjector(_SliceToContextMixin, nn.Module):
             Float[torch.Tensor, "batch tokens heads dim"],
         ]
     ):
-        B, N, C = x.shape
-        grid = _structured_grid_to_conv_input(
-            x, B, N, C, self._nd, self.spatial_shape
-        )
+        grid = structured_grid_to_conv_input(x, self.spatial_shape)
         pattern = (
             "B (H D) h w -> B (h w) H D"
             if self._nd == 2
@@ -772,24 +714,11 @@ class MultiScaleFeatureExtractor(nn.Module):
         a: Float[torch.Tensor, "batch points spatial_dim"],
         b: Float[torch.Tensor, "batch points spatial_dim"],
     ) -> bool:
-        r"""Whether two tensors are the same data (so a ball query over either is identical).
+        r"""Whether ``a`` and ``b`` alias the same coordinates.
 
-        :meth:`extract_context_features` and :meth:`extract_local_features`
-        pass ``spatial_coords`` and ``geometry`` to the per-scale processor in
-        **swapped** order (``processor(spatial_coords, geometry)`` vs
-        ``processor(geometry, spatial_coords)``). Those two calls compute the
-        same ball query and the same processor output **iff the two inputs hold
-        the same coordinates**. When they do, :meth:`extract_context_and_local`
-        runs each processor once instead of twice.
-
-        This is a *sufficient*, sync-free aliasing test: an ``is`` check is not
-        enough because the recipe's collate ``unsqueeze``-es ``geometry`` and
-        ``local_positions`` into distinct view objects that still alias the same
-        storage. A value comparison would force a host sync, so we instead
-        confirm the two tensors are identical views over identical storage
-        (shape, dtype, stride, offset, and base pointer all match). When this
-        returns ``False`` the caller falls back to the exact two-pass behavior,
-        so correctness never depends on it.
+        Thin wrapper around :func:`~physicsnemo.experimental.models.geotransolver.utils.tensors_alias`.
+        When ``True``, a ball query over either tensor is identical, so
+        :meth:`extract_context_and_local` can take its single-pass fast path.
 
         Parameters
         ----------
@@ -801,13 +730,7 @@ class MultiScaleFeatureExtractor(nn.Module):
         bool
             ``True`` when *a* and *b* are guaranteed element-for-element equal.
         """
-        return a is b or (
-            a.shape == b.shape
-            and a.dtype == b.dtype
-            and a.stride() == b.stride()
-            and a.storage_offset() == b.storage_offset()
-            and a.data_ptr() == b.data_ptr()
-        )
+        return tensors_alias(a, b)
 
     def extract_context_and_local(
         self,
@@ -821,13 +744,10 @@ class MultiScaleFeatureExtractor(nn.Module):
 
         Combines :meth:`extract_context_features` and
         :meth:`extract_local_features`. When ``spatial_coords`` and ``geometry``
-        are the same coordinates (see :meth:`_same_coords`), the swapped-argument
-        processor calls in those two methods are identical, so each per-scale
-        processor (ball query + MLP, the model's dominant ``radius_search``
-        kernel) is evaluated **once** and fed to both the context tokenizer and
-        the concatenated local features. Otherwise this falls back to the exact
-        two-pass behavior, preserving the deliberate asymmetry for configs where
-        geometry and positions differ.
+        alias the same coordinates (see :meth:`_same_coords`), each per-scale
+        processor (ball query + MLP) runs once and feeds both paths. Otherwise
+        it falls back to the two-pass behavior, preserving the asymmetry for
+        configs where geometry and positions differ.
 
         Parameters
         ----------
@@ -844,17 +764,16 @@ class MultiScaleFeatureExtractor(nn.Module):
             respectively.
         """
         if self._same_coords(spatial_coords, geometry):
+            # Aliased inputs: one processor pass per scale feeds both paths.
             context_features = []
             local_parts = []
             for processor, tokenizer in zip(self.processors, self.tokenizers):
-                # processor(spatial_coords, geometry) == processor(geometry, spatial_coords)
-                # when the two inputs alias, so one pass feeds both paths.
                 feat = processor(spatial_coords, geometry)
                 context_features.append(tokenizer(feat))
                 local_parts.append(feat)
             return context_features, torch.cat(local_parts, dim=-1)
 
-        # General (asymmetric) fallback: distinct query/search sets per path.
+        # Asymmetric fallback: distinct query/search sets per path.
         return (
             self.extract_context_features(spatial_coords, geometry),
             self.extract_local_features(spatial_coords, geometry),
