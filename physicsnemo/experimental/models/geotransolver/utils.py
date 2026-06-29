@@ -78,11 +78,9 @@ def tensors_alias(
 ) -> bool:
     r"""Return ``True`` when ``a`` and ``b`` are guaranteed to hold identical data.
 
-    This is a sync-free, *sufficient* aliasing test: it confirms the two tensors
-    are the same object, or distinct views over the same storage with matching
-    shape, dtype, stride, and offset. A plain ``is`` check is not enough because
-    callers may pass separately-created views of the same storage; a value
-    comparison is avoided because it would force a host sync.
+    Sync-free, *sufficient* aliasing test: ``True`` iff the tensors alias the
+    same storage with matching shape, stride, offset, and dtype. Avoids a value
+    comparison, which would force a host sync.
 
     Parameters
     ----------
@@ -92,12 +90,8 @@ def tensors_alias(
     Returns
     -------
     bool
-        ``True`` if ``a`` and ``b`` are element-for-element equal.
+        ``True`` if ``a`` and ``b`` alias the same storage with matching shape,
+        stride, offset, and dtype.
     """
-    return a is b or (
-        a.shape == b.shape
-        and a.dtype == b.dtype
-        and a.stride() == b.stride()
-        and a.storage_offset() == b.storage_offset()
-        and a.data_ptr() == b.data_ptr()
-    )
+    # ``is_set_to`` covers storage, offset, size, and stride but ignores dtype.
+    return a.is_set_to(b) and a.dtype == b.dtype
