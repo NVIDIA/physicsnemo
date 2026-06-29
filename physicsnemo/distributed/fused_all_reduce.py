@@ -30,12 +30,73 @@ import torch
 import torch.distributed as dist
 from tensordict import TensorDictBase
 
+# The container types fused_all_reduce returns (mirrors the input structure).
+_ReducedContainer = TensorDictBase | dict[str, torch.Tensor] | list[torch.Tensor]
+
+
+class _FusedAllReduceWork:
+    """Async handle returned by :func:`fused_all_reduce` when ``async_op=True``.
+
+    The fused reduction packs every leaf into one buffer, reduces it, then
+    unpacks it (split the buffer + cast each slice back to its leaf's
+    dtype/device). With ``async_op`` the collective is launched non-blocking, so
+    the unpack is *deferred* into :meth:`wait`: until then the output leaves hold
+    this rank's own (un-reduced) values, exactly like
+    :func:`torch.distributed.all_reduce`'s in-place async contract - a premature
+    read is stale, never uninitialized garbage. :meth:`wait` blocks on the
+    collective, writes the reduced values back into the outputs, and is
+    idempotent. When there was no collective (empty input or single process) the
+    handle starts already-complete and :meth:`wait` is a no-op.
+    """
+
+    def __init__(
+        self,
+        work: dist.Work | None = None,
+        buffer: torch.Tensor | None = None,
+        outputs: Sequence[torch.Tensor] = (),
+        numels: Sequence[int] = (),
+    ) -> None:
+        self._work = work
+        self._buffer = buffer
+        self._outputs = outputs
+        self._numels = numels
+        self._completed = work is None  # no collective => already done
+
+    def wait(self) -> bool:
+        """Block on the collective, then fill the outputs in place.
+
+        Returns
+        -------
+        bool
+            ``True`` once the reduction is complete (mirroring
+            :meth:`torch.distributed.Work.wait`). Safe to call repeatedly; only
+            the first call does any work.
+        """
+        if self._completed:
+            return True
+        self._work.wait()
+        # Deferred unpack: split the reduced buffer and cast each slice back to
+        # its leaf's dtype/device (``copy_`` handles both).
+        with torch.no_grad():
+            offset = 0
+            for out, n in zip(self._outputs, self._numels):
+                out.copy_(self._buffer[offset : offset + n].reshape(out.shape))
+                offset += n
+        self._completed = True
+        return True
+
+    def is_completed(self) -> bool:
+        """Whether the reduction has completed (``wait`` ran, or it was a no-op)."""
+        return self._completed
+
 
 def _reduce_keyed(
     keys: list,
     values: list[torch.Tensor],
-    reduce_fn: Callable[[list[torch.Tensor]], list[torch.Tensor]],
-) -> list[torch.Tensor]:
+    reduce_fn: Callable[
+        [list[torch.Tensor]], tuple[list[torch.Tensor], _FusedAllReduceWork | None]
+    ],
+) -> tuple[list[torch.Tensor], _FusedAllReduceWork | None]:
     """Reduce keyed tensors in a rank-deterministic order.
 
     Packs ``values`` in sorted-key order (so every rank lays out the fused
@@ -48,13 +109,15 @@ def _reduce_keyed(
         The keys associated with ``values`` (flat or nested-tuple keys).
     values : list[torch.Tensor]
         The tensors to reduce, aligned with ``keys``.
-    reduce_fn : Callable[[list[torch.Tensor]], list[torch.Tensor]]
-        The order-preserving list reducer (see :func:`_fused_reduce_tensors`).
+    reduce_fn : Callable
+        The order-preserving list reducer (see :func:`_fused_reduce_tensors`),
+        returning ``(reduced_list, work_or_None)``.
 
     Returns
     -------
-    list[torch.Tensor]
-        The reduced tensors in the original ``keys`` order.
+    tuple[list[torch.Tensor], _FusedAllReduceWork | None]
+        The reduced tensors in the original ``keys`` order, and the reducer's
+        work handle (``None`` unless reducing asynchronously).
     """
     # Pack in a rank-deterministic order; normalize flat (str) and nested
     # (tuple, e.g. ("sub", "x")) keys to tuples so they share one total order.
@@ -62,11 +125,11 @@ def _reduce_keyed(
         range(len(keys)),
         key=lambda i: keys[i] if isinstance(keys[i], tuple) else (keys[i],),
     )
-    reduced_packed = reduce_fn([values[i] for i in packing_order])
+    reduced_packed, work = reduce_fn([values[i] for i in packing_order])
     reduced: list[torch.Tensor | None] = [None] * len(keys)
     for slot, original_index in enumerate(packing_order):
         reduced[original_index] = reduced_packed[slot]
-    return reduced  # type: ignore[return-value]
+    return reduced, work  # type: ignore[return-value]
 
 
 @torch.no_grad()
@@ -77,7 +140,8 @@ def _fused_reduce_tensors(
     group: dist.ProcessGroup | None,
     buffer_dtype: torch.dtype | None,
     device: torch.device | str | None,
-) -> list[torch.Tensor]:
+    async_op: bool = False,
+) -> tuple[list[torch.Tensor], _FusedAllReduceWork | None]:
     """All-reduce a list of arbitrarily-shaped tensors in ONE collective.
 
     This is the shared core of :func:`fused_all_reduce`: it flattens and
@@ -106,14 +170,22 @@ def _fused_reduce_tensors(
     device : torch.device | str | None
         Device for the fused buffer / collective, or ``None`` to use the first
         tensor's device.
+    async_op : bool
+        If ``True``, launch the collective non-blocking and defer the unpack
+        into the returned handle's ``wait`` (the outputs start as local-value
+        clones). If ``False`` (default), block and unpack eagerly, returning a
+        ``None`` handle.
 
     Returns
     -------
-    list[torch.Tensor]
-        The reduced tensors, in the same order as the input.
+    tuple[list[torch.Tensor], _FusedAllReduceWork | None]
+        The reduced tensors (same order as the input) and a work handle. The
+        handle is ``None`` when ``async_op`` is ``False``; otherwise it is a
+        :class:`_FusedAllReduceWork` whose ``wait`` completes the collective and
+        fills the outputs (which hold the local, un-reduced values until then).
     """
     if not tensors:
-        return []
+        return [], (_FusedAllReduceWork() if async_op else None)
     detached = [t.detach() for t in tensors]
 
     # Resolve the fused-buffer dtype, refusing a silent lossy int/bool -> float
@@ -147,7 +219,9 @@ def _fused_reduce_tensors(
         and dist.is_initialized()
         and dist.get_world_size(group=group) > 1
     ):
-        return [t.clone() for t in detached]
+        return [t.clone() for t in detached], (
+            _FusedAllReduceWork() if async_op else None
+        )
 
     buffer_device = torch.device(device) if device is not None else detached[0].device
 
@@ -158,7 +232,16 @@ def _fused_reduce_tensors(
     numels = [f.numel() for f in flats]
     buffer = torch.cat(flats)
 
-    # The one collective.
+    if async_op:
+        # Launch non-blocking and defer the unpack to the handle's wait().
+        # Outputs start as clones of the local (un-reduced) leaves, so a
+        # premature read is stale-but-valid (matching dist.all_reduce's in-place
+        # semantics), never uninitialized garbage; wait() overwrites them.
+        outputs = [s.clone() for s in detached]
+        work = dist.all_reduce(buffer, op=op, group=group, async_op=True)
+        return outputs, _FusedAllReduceWork(work, buffer, outputs, numels)
+
+    # The one (blocking) collective.
     dist.all_reduce(buffer, op=op, group=group)
 
     # Unpack: split back, restoring each tensor's shape, dtype, and device.
@@ -169,7 +252,7 @@ def _fused_reduce_tensors(
         chunk = buffer[offset : offset + n].reshape(source.shape)
         reduced.append(chunk.to(device=source.device, dtype=source.dtype, copy=True))
         offset += n
-    return reduced
+    return reduced, None
 
 
 @torch.no_grad()
@@ -180,7 +263,8 @@ def fused_all_reduce(
     group: dist.ProcessGroup | None = None,
     buffer_dtype: torch.dtype | None = None,
     device: torch.device | str | None = None,
-) -> TensorDictBase | dict[str, torch.Tensor] | list[torch.Tensor]:
+    async_op: bool = False,
+) -> _ReducedContainer | tuple[_ReducedContainer, _FusedAllReduceWork]:
     r"""All-reduce many tensors in a single collective, preserving structure.
 
     Reductions for logging and metrics frequently need to combine *many*
@@ -224,6 +308,12 @@ def fused_all_reduce(
         Device for the fused buffer and collective, by default ``None`` (the
         first leaf's device). Outputs are always returned on their original
         per-leaf device regardless of this.
+    async_op : bool, optional
+        If ``True``, issue the fused collective asynchronously and return
+        ``(result, work)``; the result's leaves hold each rank's local values
+        until ``work.wait()`` completes the reduction and fills them in place
+        (see :class:`_FusedAllReduceWork`). By default ``False`` (blocking),
+        returning just ``result``.
 
     Returns
     -------
@@ -233,7 +323,9 @@ def fused_all_reduce(
         a ``dict`` (same keys, original order) for a ``Mapping`` input, or a
         ``list`` (same order) for a ``Sequence`` input. Every leaf retains its
         input shape, dtype, and device, and is detached and independent of the
-        input.
+        input. When ``async_op=True`` the return is instead a ``(result, work)``
+        tuple whose ``result`` is valid only after ``work.wait()`` (see
+        ``async_op``).
 
     Raises
     ------
@@ -260,6 +352,11 @@ def fused_all_reduce(
     - **Integer-safe.** Integer/bool bundles reduce exactly in their own dtype;
       mixing them with floating leaves is refused (see Raises) rather than
       silently cast. An explicit ``buffer_dtype`` overrides this.
+    - **Async.** With ``async_op=True`` the collective is non-blocking and the
+      caller gets a ``(result, work)`` pair; call ``work.wait()`` before reading
+      ``result`` to let the reduction land (mirrors
+      :func:`torch.distributed.all_reduce`'s ``async_op``, and the in-repo
+      ``distributed_transpose``).
 
     Examples
     --------
@@ -286,6 +383,15 @@ def fused_all_reduce(
     >>> reduced = fused_all_reduce({"count": torch.tensor([5, 3])})
     >>> reduced["count"].dtype, reduced["count"].tolist()
     (torch.int64, [5, 3])
+
+    Asynchronous reduction returns a ``(result, work)`` pair; call ``wait``
+    before reading ``result``. On a single process this is a no-op handle:
+
+    >>> result, work = fused_all_reduce({"x": torch.tensor(1.0)}, async_op=True)
+    >>> work.wait()
+    True
+    >>> float(result["x"])
+    1.0
     """
     reduce_leaves = functools.partial(
         _fused_reduce_tensors,
@@ -293,6 +399,7 @@ def fused_all_reduce(
         group=group,
         buffer_dtype=buffer_dtype,
         device=device,
+        async_op=async_op,
     )
 
     # A ``TensorDict`` is *also* a ``Mapping``, so dispatch on it FIRST: this
@@ -301,21 +408,27 @@ def fused_all_reduce(
     if isinstance(tensors, TensorDictBase):
         leaves = list(tensors.items(include_nested=True, leaves_only=True))
         keys = [key for key, _ in leaves]
-        reduced = _reduce_keyed(keys, [value for _, value in leaves], reduce_leaves)
+        reduced, work = _reduce_keyed(
+            keys, [value for _, value in leaves], reduce_leaves
+        )
         # Clone the input as a structure/dtype/device template, then write each
         # reduced leaf back by its (possibly nested) key.
         out = tensors.detach().clone()
         for key, value in zip(keys, reduced):
             out[key] = value
-        return out
+        return (out, work) if async_op else out
 
     if isinstance(tensors, Mapping):
         keys = list(tensors.keys())
-        reduced = _reduce_keyed(keys, [tensors[key] for key in keys], reduce_leaves)
-        return dict(zip(keys, reduced))
+        reduced, work = _reduce_keyed(
+            keys, [tensors[key] for key in keys], reduce_leaves
+        )
+        result = dict(zip(keys, reduced))
+        return (result, work) if async_op else result
 
     if isinstance(tensors, Sequence):
-        return reduce_leaves(list(tensors))
+        reduced, work = reduce_leaves(list(tensors))
+        return (reduced, work) if async_op else reduced
 
     raise TypeError(
         "fused_all_reduce expects a TensorDict, Mapping, or Sequence of tensors, "

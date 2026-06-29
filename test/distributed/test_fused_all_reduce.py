@@ -167,6 +167,39 @@ def test_mixed_int_float_allowed_with_explicit_buffer_dtype():
     assert reduced["loss"].item() == pytest.approx(1.5)
 
 
+def test_async_op_noop_returns_work_and_values():
+    """``async_op=True`` returns ``(result, work)``; the no-op handle starts
+    completed, ``wait()`` is ``True`` and idempotent, and the local values hold."""
+    inputs = {"a": torch.tensor(3.0), "b": torch.tensor([1.0, 2.0])}
+    result, work = fused_all_reduce(inputs, async_op=True)
+
+    assert type(result) is dict
+    assert list(result) == ["a", "b"]
+    assert work.is_completed()  # no collective => already done
+    assert work.wait() is True
+    assert work.wait() is True  # idempotent
+    assert result["a"].item() == 3.0
+    assert torch.equal(result["b"], inputs["b"])
+
+
+def test_async_op_preserves_container_types():
+    """The ``(result, work)`` tuple round-trips dict / list / TensorDict."""
+    res_dict, work_dict = fused_all_reduce({"x": torch.tensor(1.0)}, async_op=True)
+    res_list, work_list = fused_all_reduce([torch.tensor(1.0)], async_op=True)
+    res_td, work_td = fused_all_reduce(
+        TensorDict({"x": torch.tensor(1.0)}), async_op=True
+    )
+
+    assert type(res_dict) is dict
+    assert type(res_list) is list
+    assert isinstance(res_td, TensorDictBase)
+    for work in (work_dict, work_list, work_td):
+        assert work.wait() is True
+    assert res_dict["x"].item() == 1.0
+    assert res_list[0].item() == 1.0
+    assert res_td["x"].item() == 1.0
+
+
 # -----------------------------------------------------------------------------
 # Collective path (@pytest.mark.multigpu_static)
 # -----------------------------------------------------------------------------
@@ -346,3 +379,30 @@ def test_integer_sum_is_exact():
     )
     assert reduced["count"].dtype == torch.int64
     assert reduced["count"].item() == expected
+
+
+@pytest.mark.multigpu_static
+def test_async_op_sum_across_ranks():
+    """``async_op=True`` matches the sync SUM once ``wait()`` lands; before
+    ``wait()`` the result holds this rank's own (un-reduced) values."""
+    dm = DistributedManager()
+    assert dm.is_initialized()
+    rank, world_size = dm.rank, dm.world_size
+    expected = _arithmetic_series(world_size)
+
+    result, work = fused_all_reduce(
+        {
+            "scalar": torch.tensor(float(rank + 1), device=dm.device),
+            "vec": torch.full((3,), float(rank + 1), device=dm.device),
+        },
+        async_op=True,
+    )
+
+    # Deferred unpack: until wait(), the outputs are this rank's local clones.
+    assert result["scalar"].item() == pytest.approx(float(rank + 1))
+
+    assert work.wait() is True
+    # After wait(), the fused SUM is filled into the outputs in place.
+    assert result["scalar"].item() == pytest.approx(expected)
+    assert torch.allclose(result["vec"], torch.full((3,), expected, device=dm.device))
+    assert work.is_completed()
