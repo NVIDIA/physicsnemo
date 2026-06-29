@@ -26,8 +26,10 @@ from physicsnemo.experimental.models.strata.coords import (
     build_axial_token_coords,
     build_stereographic_token_coords,
 )
-from physicsnemo.experimental.models.strata.depthwise_conv import DepthwiseConv
-from physicsnemo.experimental.models.strata.layers import Natten3DSelfAttention
+from physicsnemo.experimental.models.strata.layers import (
+    DepthwiseConv,
+    Natten3DSelfAttention,
+)
 from physicsnemo.experimental.models.strata.strata import StrataPixel3DBlock
 from test.common import validate_checkpoint
 from test.conftest import requires_module

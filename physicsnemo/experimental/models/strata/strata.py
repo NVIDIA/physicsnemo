@@ -45,8 +45,8 @@ from physicsnemo.experimental.nn import build_axial_rope_cos_sin_2d_continuous
 from physicsnemo.nn.module.mlp_layers import Mlp
 
 from .coords import build_axial_token_coords, build_stereographic_token_coords
-from .depthwise_conv import DepthwiseConv
 from .layers import (
+    DepthwiseConv,
     FinalLayer3D,
     Natten3DSelfAttention,
     PatchEmbed3D,
