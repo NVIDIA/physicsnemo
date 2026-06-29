@@ -235,12 +235,11 @@ def test_rotary_1d_relative_phase_is_translation_invariant():
 
 # --- physicsnemo.Module checkpoint round-trips ---
 #
-# All three RoPE modules subclass physicsnemo.core.Module, so they must support
-# the .save() / Module.from_checkpoint() recipe. The axial 1D/2D modules cache
-# cos/sin as persistent=False buffers (deterministically rebuilt from the
-# __init__ args); the stereographic module is fully stateless (tables are built
-# per forward from the input coordinates). In every case a round-trip reproduces
-# the forward exactly without any tables appearing in the checkpoint.
+# Both RoPE modules subclass physicsnemo.core.Module, so they must support the
+# .save() / Module.from_checkpoint() recipe. They cache cos/sin as
+# persistent=False buffers (deterministically rebuilt from the __init__ args), so
+# a round-trip reproduces the forward exactly without the tables appearing in the
+# checkpoint.
 
 
 @torch.no_grad()
