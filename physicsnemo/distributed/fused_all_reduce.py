@@ -414,24 +414,21 @@ def fused_all_reduce(
         )
         # Clone the input as a structure/dtype/device template, then write each
         # reduced leaf back by its (possibly nested) key.
-        out = tensors.detach().clone()
+        result = tensors.detach().clone()
         for key, value in zip(keys, reduced):
-            out[key] = value
-        return (out, work) if async_op else out
-
-    if isinstance(tensors, Mapping):
+            result[key] = value
+    elif isinstance(tensors, Mapping):
         keys = list(tensors.keys())
         reduced, work = _reduce_keyed(
             keys, [tensors[key] for key in keys], reduce_leaves
         )
         result = dict(zip(keys, reduced))
-        return (result, work) if async_op else result
+    elif isinstance(tensors, Sequence):
+        result, work = reduce_leaves(list(tensors))
+    else:
+        raise TypeError(
+            "fused_all_reduce expects a TensorDict, Mapping, or Sequence of "
+            f"tensors, got {type(tensors)=!r}."
+        )
 
-    if isinstance(tensors, Sequence):
-        reduced, work = reduce_leaves(list(tensors))
-        return (reduced, work) if async_op else reduced
-
-    raise TypeError(
-        "fused_all_reduce expects a TensorDict, Mapping, or Sequence of tensors, "
-        f"got {type(tensors)=!r}."
-    )
+    return (result, work) if async_op else result
