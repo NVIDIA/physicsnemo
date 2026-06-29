@@ -259,6 +259,21 @@ class StrataPixel3DBlock(nn.Module):
             nn.init.zeros_(self.adaln_pixel_proj[-1].weight)
             nn.init.zeros_(self.adaln_pixel_proj[-1].bias)
 
+    def reset_adaln_zero(self) -> None:
+        r"""Re-zero the AdaLN projection so the block starts as an identity residual.
+
+        The block zero-inits its AdaLN projection at construction; call this after
+        a blanket Xavier pass (e.g. in :meth:`Strata.initialize_weights`) that
+        would otherwise clobber it. The depthwise smoothing conv keeps its
+        identity init (a Conv2d, untouched by an ``nn.Linear`` Xavier pass).
+        """
+        if hasattr(self, "adaln_bilinear_dw_proj"):
+            nn.init.zeros_(self.adaln_bilinear_dw_proj.weight)
+            nn.init.zeros_(self.adaln_bilinear_dw_proj.bias)
+        if hasattr(self, "adaln_pixel_proj"):
+            nn.init.zeros_(self.adaln_pixel_proj[-1].weight)
+            nn.init.zeros_(self.adaln_pixel_proj[-1].bias)
+
     @staticmethod
     def _expand_cond_to_pixels(
         adaln_raw: torch.Tensor,
@@ -718,19 +733,33 @@ class Strata(Module):
     def initialize_weights(self) -> None:
         r"""Initialize the pixel-stage parameters DiT-style.
 
-        The backbone stage self-initializes, and the pixel blocks zero-initialize
-        their AdaLN projections at construction; this covers the two remaining
-        pixel components -- a fan-based Xavier init for the pixel patch-embedding
-        convolution and a zero-initialized output head -- so the pixel stage
-        starts as a near-identity residual mapping (matching
-        :meth:`StrataTransformer3D.initialize_weights`). A blanket Xavier pass is deliberately
-        avoided here so it does not clobber the AdaLN-zero projections.
+        The backbone stage self-initializes. For the pixel stage this mirrors
+        :meth:`StrataTransformer3D.initialize_weights`: Xavier-uniform on the
+        transformer blocks' linears, a fan-based Xavier on the pixel
+        patch-embedding conv, and a zero-initialized output head. The AdaLN
+        projections (zeroed at block construction) are restored after the blanket
+        Xavier pass so each conditioning block still starts as an identity
+        residual.
 
         Returns
         -------
         None
             Modifies parameters in place.
         """
+
+        def _basic_init(module: nn.Module) -> None:
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+
+        # Xavier the pixel blocks' attention / MLP linears, then re-zero the AdaLN
+        # projections the blanket pass above clobbered (preserving AdaLN-zero).
+        self.pixel_blocks.apply(_basic_init)
+        for block in self.pixel_blocks:
+            if isinstance(block, StrataPixel3DBlock):
+                block.reset_adaln_zero()
+
         w = self.pixel_patch_embed.proj.weight.data
         nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
         nn.init.constant_(self.pixel_patch_embed.proj.bias, 0.0)

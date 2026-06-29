@@ -984,6 +984,36 @@ def test_strata_validates_pos_shape():
         model(x, bad_pos)
 
 
+@torch.no_grad()
+@pytest.mark.parametrize("adaln_mode", ["pixel_proj", "bilinear_dw"])
+def test_strata_identity_init(adaln_mode):
+    """A freshly built Strata starts as an identity residual: the pixel blocks'
+    attn/MLP linears are Xavier-initialized (matching the backbone), but the
+    AdaLN projections and the output head are zero, so the forward is all-zero."""
+    torch.manual_seed(0)
+    model = Strata(
+        backbone_config=dict(
+            in_channels=4,
+            input_shape=(4, 8, 8),
+            patch_size=(1, 2, 2),
+            embed_dim=32,
+            num_heads=4,
+            num_layers=2,
+            attn_kernel=-1,
+        ),
+        embed_dim_pixel=16,
+        num_layers_pixel=2,
+        num_heads_pixel=2,
+        attn_kernel_pixel=-1,
+        adaln_mode=adaln_mode,
+    ).eval()
+    # Pixel blocks are initialized (not left at PyTorch default zeros/anything).
+    assert model.pixel_blocks[0].attn.qkv.weight.abs().sum() > 0
+    # ...but AdaLN-zero + zero output head => exact identity-residual (zero) output.
+    assert (model.pixel_final_layer.linear.weight == 0).all()
+    assert (model(torch.randn(2, 4, 4, 8, 8)) == 0).all()
+
+
 @pytest.mark.parametrize("adaln_mode", ["pixel_proj", "bilinear_dw"])
 def test_strata_activation_checkpointing_matches(device, adaln_mode):
     """Strata pixel-block checkpointing reproduces the non-checkpointed output/grads.
