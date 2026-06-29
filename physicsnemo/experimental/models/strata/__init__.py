@@ -36,14 +36,10 @@ Classes
 -------
 StrataTransformer3D
     3D Diffusion Transformer backbone (field-to-field, no diffusion conditioning).
-StrataTransformer3DMetaData
-    Metadata for :class:`StrataTransformer3D`.
 Strata
     Two-stage regression model: a StrataTransformer3D backbone stage conditions a
     pixel-resolution stage via pixel-wise adaptive layer norm (conditioned on
     the backbone features, not on a diffusion timestep).
-StrataMetaData
-    Metadata for :class:`Strata`.
 
 The building-block layers (``StrataTransformer3DBlock``, ``StrataPixel3DBlock``,
 ``Natten3DSelfAttention``, ``PatchEmbed3D``, ``FinalLayer3D``) are not part of the
@@ -67,12 +63,10 @@ Examples
 torch.Size([2, 4, 4, 8, 8])
 """
 
-from .transformer import StrataTransformer3D, StrataTransformer3DMetaData
-from .strata import Strata, StrataMetaData
+from .transformer import StrataTransformer3D
+from .strata import Strata
 
 __all__ = [
     "Strata",
-    "StrataMetaData",
     "StrataTransformer3D",
-    "StrataTransformer3DMetaData",
 ]

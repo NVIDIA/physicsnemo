@@ -55,7 +55,7 @@ from .layers import (
 )
 from .transformer import StrataTransformer3D
 
-__all__ = ["Strata", "StrataMetaData"]
+__all__ = ["Strata"]
 
 
 @dataclass

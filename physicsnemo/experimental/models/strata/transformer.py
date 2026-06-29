@@ -46,7 +46,7 @@ from .layers import (
     StrataTransformer3DBlock,
 )
 
-__all__ = ["StrataTransformer3D", "StrataTransformer3DMetaData"]
+__all__ = ["StrataTransformer3D"]
 
 
 @dataclass
