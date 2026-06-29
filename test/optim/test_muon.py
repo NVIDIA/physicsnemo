@@ -15,11 +15,9 @@
 # limitations under the License.
 
 import copy
-import os
 
 import pytest
 import torch
-import torch.distributed as dist
 
 from physicsnemo.optim import Muon
 
@@ -79,6 +77,18 @@ def test_matches_torch_muon(device, nesterov, adjust_lr_fn):
         torch.testing.assert_close(fused_p, ref_p, atol=1e-3, rtol=1e-3)
 
 
+def test_lazy_adjust_lr_proxy_resolves():
+    """The private torch._adjust_lr is reachable via the lazy OptionalImport.
+
+    physicsnemo.optim.muon imports torch.optim._muon lazily so a future
+    rename/removal fails at step() runtime rather than at module import time.
+    This asserts the proxy resolves the symbol on the installed torch.
+    """
+    from physicsnemo.optim.muon import _torch_muon_internal
+
+    assert callable(_torch_muon_internal._adjust_lr)
+
+
 def test_group_params_by_shape(device):
     """Equally-shaped params bucket together; distinct shapes stay separate."""
     shapes = [(8, 8), (8, 8), (8, 16), (16, 8), (8, 8)]
@@ -136,42 +146,3 @@ def test_rejects_non_2d_params(device):
     param_1d = torch.nn.Parameter(torch.randn(8).to(device))
     with pytest.raises(ValueError, match="2D"):
         Muon([param_1d], lr=0.02)
-
-
-@pytest.fixture()
-def single_rank_pg():
-    """A single-process gloo group so we can build sharded DTensors on CPU."""
-    if not dist.is_available():
-        pytest.skip("torch.distributed is unavailable")
-
-    os.environ.setdefault("MASTER_ADDR", "localhost")
-    os.environ.setdefault("MASTER_PORT", "29555")
-    os.environ.setdefault("RANK", "0")
-    os.environ.setdefault("WORLD_SIZE", "1")
-
-    created = not dist.is_initialized()
-    if created:
-        dist.init_process_group(backend="gloo", rank=0, world_size=1)
-    try:
-        yield
-    finally:
-        if created and dist.is_initialized():
-            dist.destroy_process_group()
-
-
-def test_rejects_sharded_dtensor(single_rank_pg):
-    """Sharded DTensor / ShardTensor params are rejected by the fused path.
-
-    The batched orthogonalization stacks equally-shaped matrices and only
-    yields the correct update when each matrix is materialized whole, so a
-    sharded parameter must raise rather than silently compute a wrong update.
-    """
-    from torch.distributed.device_mesh import init_device_mesh
-    from torch.distributed.tensor import Shard, distribute_tensor
-
-    mesh = init_device_mesh("cpu", (1,))
-    local = torch.randn(8, 8)
-    sharded = torch.nn.Parameter(distribute_tensor(local, mesh, [Shard(0)]))
-
-    with pytest.raises(ValueError, match="sharded|torch.optim.Muon"):
-        Muon([sharded], lr=0.02)

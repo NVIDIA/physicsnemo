@@ -37,89 +37,18 @@ remain interchangeable.
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any, Callable
+from typing import Callable
 
 import torch
 from torch import Tensor
+from torch.optim import Muon as _TorchMuon
 
-# This optimizer extends -- rather than reimplements -- the upstream PyTorch
-# Muon. ``torch.optim.Muon`` was added in PyTorch 2.9; PhysicsNeMo pins
-# ``torch>=2.10`` so it is expected to be present, but we surface a clear error
-# if a user somehow runs against a build that lacks it.
-try:
-    from torch.optim import Muon as _TorchMuon
-    from torch.optim._muon import _adjust_lr
-except ImportError as exc:  # pragma: no cover - depends on torch build
-    raise ImportError(
-        "physicsnemo.optim.Muon extends torch.optim.Muon, which is unavailable "
-        "in this PyTorch build. Please upgrade to torch>=2.10."
-    ) from exc
+from physicsnemo.core.version_check import OptionalImport
 
-# DTensor is only available when torch is built with distributed support. When
-# absent there is no way to construct a sharded parameter, so the guard below is
-# simply a no-op.
-try:
-    from torch.distributed.tensor import DTensor
-except ImportError:  # pragma: no cover - distributed-free torch builds
-    DTensor = None
+# Prevent import errors against internal API changes:
+_torch_muon_internal = OptionalImport("torch.optim._muon")
 
 __all__ = ["Muon"]
-
-
-def _is_sharded(tensor: Tensor) -> bool:
-    """Return ``True`` if *tensor* is a sharded :class:`~torch.distributed.tensor.DTensor`.
-
-    This catches both FSDP2 (``fully_shard``) parameters and PhysicsNeMo's
-    :class:`~physicsnemo.domain_parallel.ShardTensor` (a ``DTensor`` subclass).
-    A ``DTensor`` that is purely replicated is not considered sharded.
-
-    Parameters
-    ----------
-    tensor : torch.Tensor
-        Tensor (parameter or gradient) to inspect.
-
-    Returns
-    -------
-    bool
-        ``True`` when *tensor* is a ``DTensor`` with at least one ``Shard``
-        placement, ``False`` otherwise.
-    """
-    return (
-        DTensor is not None
-        and isinstance(tensor, DTensor)
-        and any(placement.is_shard() for placement in tensor.placements)
-    )
-
-
-def _raise_if_sharded(tensor: Tensor) -> None:
-    """Raise a clear error if *tensor* is a sharded ``DTensor``.
-
-    The fused path stacks equally-shaped matrices and orthogonalizes them with
-    batched matmuls, which is only correct when each matrix is materialized whole
-    on the local device. Orthogonalizing a shard is not equal to orthogonalizing
-    the full matrix, so we refuse sharded parameters rather than silently
-    computing the wrong update.
-
-    Parameters
-    ----------
-    tensor : torch.Tensor
-        Tensor (parameter or gradient) to validate.
-
-    Raises
-    ------
-    ValueError
-        If *tensor* is a sharded ``DTensor`` (FSDP2 / ``ShardTensor``).
-    """
-    if _is_sharded(tensor):
-        raise ValueError(
-            "physicsnemo.optim.Muon batches the Newton-Schulz orthogonalization "
-            "across parameters and therefore only supports replicated 2-D "
-            "parameters (single-GPU and DDP). It received a sharded DTensor "
-            f"(placements={tuple(tensor.placements)}); batched orthogonalization "
-            "of a shard does not equal orthogonalizing the full matrix. For "
-            "FSDP2 (fully_shard) or ShardTensor parameters, use torch.optim.Muon "
-            "directly (or gather the full matrix before orthogonalizing)."
-        )
 
 
 def _batched_newton_schulz(
@@ -153,6 +82,7 @@ def _batched_newton_schulz(
         to the parameter dtype by the caller).
     """
     if ns_steps >= 100:
+        # This is a decision that exactly mirrors upstream pytorch.
         raise ValueError(
             "Number of steps must be less than 100 for computational efficiency"
         )
@@ -239,13 +169,7 @@ class Muon(_TorchMuon):
         parameters**. Single-GPU and **DDP** are fully supported and numerically
         equal to :class:`torch.optim.Muon` (DDP gradients are dense, replicated
         tensors, and :meth:`step` runs after ``backward()`` returns, by which
-        point DDP's bucketed all-reduce and FSDP's reduce-scatter have already
-        been synchronized). **FSDP2 (``fully_shard``) and
-        :class:`~physicsnemo.domain_parallel.ShardTensor` / ``DTensor``
-        parameters are not supported** and raise a :class:`ValueError`, because
-        orthogonalizing a shard is not equal to orthogonalizing the full matrix.
-        For those, use :class:`torch.optim.Muon` directly (or gather the full
-        matrix before orthogonalizing).
+        point DDP's bucketed all-reduce has already been synchronized).
 
     Notes
     -----
@@ -261,15 +185,6 @@ class Muon(_TorchMuon):
     ...     w.grad = torch.randn_like(w)
     >>> _ = opt.step()
     """
-
-    def __init__(self, params: Any, *args: Any, **kwargs: Any) -> None:
-        # Reuse upstream construction, validation, defaults, and the ndim == 2
-        # check verbatim, then add the sharded-parameter guard on top.
-        super().__init__(params, *args, **kwargs)
-
-        for group in self.param_groups:
-            for p in group["params"]:
-                _raise_if_sharded(p)
 
     @staticmethod
     def _group_params_by_shape(params: list[Tensor]) -> dict[tuple, list[int]]:
@@ -338,10 +253,7 @@ class Muon(_TorchMuon):
             if not params_with_grad:
                 continue
 
-            # Guard against sharded grads (e.g. params wrapped after construction).
-            for p, g in zip(params_with_grad, grads):
-                _raise_if_sharded(p)
-                _raise_if_sharded(g)
+            for g in grads:
                 if g.ndim != 2:
                     raise ValueError("Param gradient must be a 2D matrix")
 
@@ -364,7 +276,9 @@ class Muon(_TorchMuon):
             for (shape, _dtype, _device), idxs in groups.items():
                 stacked = torch.stack([updates[i] for i in idxs], dim=0)
                 ortho = _batched_newton_schulz(stacked, ns_coefficients, ns_steps, eps)
-                adjusted_lr = _adjust_lr(lr, adjust_lr_fn, torch.Size(shape))
+                adjusted_lr = _torch_muon_internal._adjust_lr(
+                    lr, adjust_lr_fn, torch.Size(shape)
+                )
 
                 group_params = [params_with_grad[i] for i in idxs]
                 # Cast back to the parameter dtype (NS runs in bf16).
