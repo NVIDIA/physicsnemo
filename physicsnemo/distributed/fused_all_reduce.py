@@ -76,7 +76,18 @@ class _FusedAllReduceWork:
             return True
         self._work.wait()
         # Deferred unpack: split the reduced buffer and cast each slice back to
-        # its leaf's dtype/device (``copy_`` handles both).
+        # its leaf's dtype/device (``copy_`` handles both). The buffer tiles the
+        # leaves exactly by construction (it is ``cat`` of the same flats whose
+        # ``numels`` we recorded); guard that invariant in eager as cheap
+        # insurance against a future pack/unpack bookkeeping bug.
+        if (
+            not torch.compiler.is_compiling()
+            and sum(self._numels) != self._buffer.numel()
+        ):
+            raise RuntimeError(
+                "fused_all_reduce: reduced buffer does not tile its leaves "
+                f"({sum(self._numels)=} != {self._buffer.numel()=})."
+            )
         with torch.no_grad():
             offset = 0
             for out, n in zip(self._outputs, self._numels):
@@ -423,7 +434,7 @@ def fused_all_reduce(
             keys, [tensors[key] for key in keys], reduce_leaves
         )
         result = dict(zip(keys, reduced))
-    elif isinstance(tensors, Sequence):
+    elif isinstance(tensors, Sequence) and not isinstance(tensors, (str, bytes)):
         result, work = reduce_leaves(list(tensors))
     else:
         raise TypeError(

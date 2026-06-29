@@ -140,6 +140,14 @@ def test_invalid_type_raises():
         fused_all_reduce(torch.tensor(1.0))
 
 
+@pytest.mark.parametrize("bad", ["loss", b"loss"])
+def test_string_like_raises_typeerror(bad):
+    """str/bytes satisfy Sequence but are not tensor containers -> TypeError
+    (rather than a confusing AttributeError from the per-leaf ``.detach()``)."""
+    with pytest.raises(TypeError):
+        fused_all_reduce(bad)
+
+
 def test_homogeneous_integer_bundle_is_exact():
     """Integer leaves reduce in their own dtype - no lossy float round-trip."""
     big = 2**40  # well beyond float32's 24-bit mantissa
@@ -198,6 +206,34 @@ def test_async_op_preserves_container_types():
     assert res_dict["x"].item() == 1.0
     assert res_list[0].item() == 1.0
     assert res_td["x"].item() == 1.0
+
+
+def test_compiles_fullgraph_without_graph_break():
+    """``fused_all_reduce`` traces under ``torch.compile(fullgraph=True)`` with no
+    graph breaks: Dynamo rewrites the in-place ``dist.all_reduce`` to a functional
+    collective, so no functional-collective migration is needed. A fake process
+    group makes the real collective path (cat + all_reduce + unpack) traceable
+    without launching multiple processes.
+    """
+    import torch._dynamo as dynamo
+    from torch.testing._internal.distributed.fake_pg import FakeStore
+
+    assert not dist.is_initialized()
+    dist.init_process_group(backend="fake", store=FakeStore(), rank=0, world_size=4)
+    try:
+
+        def reduce_dict(a, b):
+            out = fused_all_reduce({"a": a, "b": b})
+            return out["a"].sum() + out["b"].sum()
+
+        inputs = (torch.ones(4), torch.ones(3))
+        assert dynamo.explain(reduce_dict)(*inputs).graph_break_count == 0
+        torch.compile(reduce_dict, fullgraph=True)(*inputs)
+    finally:
+        # Reset Dynamo state and tear down the fake group so it cannot leak into
+        # other serial tests (which assume an uninitialized default group).
+        dynamo.reset()
+        dist.destroy_process_group()
 
 
 # -----------------------------------------------------------------------------
@@ -405,4 +441,39 @@ def test_async_op_sum_across_ranks():
     # After wait(), the fused SUM is filled into the outputs in place.
     assert result["scalar"].item() == pytest.approx(expected)
     assert torch.allclose(result["vec"], torch.full((3,), expected, device=dm.device))
+    assert work.is_completed()
+
+
+@pytest.mark.multigpu_static
+def test_async_op_nested_tensordict_sum_across_ranks():
+    """``async_op=True`` with a (nested) TensorDict: the leaves hold this rank's
+    local values until ``wait()``, after which the fused SUM is filled in place.
+
+    This pins the aliasing contract the deferred unpack relies on - that
+    ``TensorDict.__setitem__`` keeps the assigned tensor object, so ``wait()``'s
+    in-place ``copy_`` reaches the caller's TensorDict leaves - under a real
+    collective, which the serial no-op tests cannot exercise.
+    """
+    dm = DistributedManager()
+    assert dm.is_initialized()
+    rank, world_size = dm.rank, dm.world_size
+    expected = _arithmetic_series(world_size)
+
+    nested = TensorDict(
+        {
+            "loss": torch.tensor(float(rank + 1), device=dm.device),
+            "sub": TensorDict({"x": torch.tensor(float(rank + 1), device=dm.device)}),
+        },
+    )
+    result, work = fused_all_reduce(nested, async_op=True)
+    assert isinstance(result, TensorDictBase)
+
+    # Before wait(): each leaf still holds this rank's own (un-reduced) value.
+    assert result["loss"].item() == pytest.approx(float(rank + 1))
+    assert result["sub", "x"].item() == pytest.approx(float(rank + 1))
+
+    assert work.wait() is True
+    # After wait(): the fused SUM lands in place, including the nested leaf.
+    assert result["loss"].item() == pytest.approx(expected)
+    assert result["sub", "x"].item() == pytest.approx(expected)
     assert work.is_completed()
