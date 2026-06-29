@@ -421,7 +421,7 @@ class StrataTransformer3D(Module):
         Use this before running inference on a tile larger or smaller than the
         configured one. It updates the expected input shape (``height`` /
         ``width`` / ``input_shape``) for **every** ``rope_mode``, so the forward
-        shape check and :meth:`unpatchify` accept the new tile. For
+        shape check and :meth:`_unpatchify` accept the new tile. For
         ``rope_mode="axial"`` it *additionally* rebuilds the cached ``(cos, sin)``
         RoPE buffers; the ``stereographic`` and ``none`` modes build their tables
         per forward (from the supplied ``pos``, or not at all), so updating the
@@ -514,7 +514,7 @@ class StrataTransformer3D(Module):
         # Insert a heads axis so the tables broadcast over (B, heads, N, head_dim).
         return cos.unsqueeze(1), sin.unsqueeze(1)
 
-    def prepare_tokens(
+    def _prepare_tokens(
         self, x: torch.Tensor
     ) -> Tuple[torch.Tensor, Tuple[int, int, int]]:
         r"""Patchify a field into a token sequence.
@@ -588,7 +588,7 @@ class StrataTransformer3D(Module):
                         f"{tuple(pos.shape)}"
                     )
 
-        x, latent_dhw = self.prepare_tokens(x)
+        x, latent_dhw = self._prepare_tokens(x)
         rope_tables = self._build_rope_tables(pos, latent_dhw)
 
         # Run blocks under optional bf16 autocast (CUDA only) and activation
@@ -607,7 +607,7 @@ class StrataTransformer3D(Module):
                     x = block(x, latent_dhw=latent_dhw, rope_tables=block_rope)
         return x, latent_dhw
 
-    def unpatchify(
+    def _unpatchify(
         self,
         x: torch.Tensor,
         depth: Optional[int] = None,
@@ -661,9 +661,10 @@ class StrataTransformer3D(Module):
         output head, so the post-block tokens of shape :math:`(B, N, E)` are
         returned instead (equivalently use :meth:`forward_tokens`).
         """
-        _, _, d_in, h_in, w_in = x.shape
         tokens, _ = self.forward_tokens(x, pos)
         if self.final_layer is None:
             return tokens
         x = self.final_layer(tokens)
-        return self.unpatchify(x, d_in, h_in, w_in)
+        # forward_tokens already validated the input shape == (depth, height,
+        # width), so use the configured dims (avoids unpacking x before validation).
+        return self._unpatchify(x, self.depth, self.height, self.width)
