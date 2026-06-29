@@ -241,18 +241,21 @@ def _fused_reduce_tensors(
         work = dist.all_reduce(buffer, op=op, group=group, async_op=True)
         return outputs, _FusedAllReduceWork(work, buffer, outputs, numels)
 
-    # The one (blocking) collective.
-    dist.all_reduce(buffer, op=op, group=group)
+    else:
+        # The one (blocking) collective.
+        dist.all_reduce(buffer, op=op, group=group)
 
-    # Unpack: split back, restoring each tensor's shape, dtype, and device.
-    # ``copy=True`` keeps every output independent of the shared buffer.
-    reduced: list[torch.Tensor] = []
-    offset = 0
-    for source, n in zip(detached, numels):
-        chunk = buffer[offset : offset + n].reshape(source.shape)
-        reduced.append(chunk.to(device=source.device, dtype=source.dtype, copy=True))
-        offset += n
-    return reduced, None
+        # Unpack: split back, restoring each tensor's shape, dtype, and device.
+        # ``copy=True`` keeps every output independent of the shared buffer.
+        reduced: list[torch.Tensor] = []
+        offset = 0
+        for source, n in zip(detached, numels):
+            chunk = buffer[offset : offset + n].reshape(source.shape)
+            reduced.append(
+                chunk.to(device=source.device, dtype=source.dtype, copy=True)
+            )
+            offset += n
+        return reduced, None
 
 
 @torch.no_grad()
