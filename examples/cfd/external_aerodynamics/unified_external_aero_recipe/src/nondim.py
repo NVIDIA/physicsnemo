@@ -79,16 +79,6 @@ _FIELD_TYPES: frozenset[NondimFieldType] = frozenset(
     {"pressure", "stress", "velocity", "temperature", "density", "identity"}
 )
 
-# Number of tensor channels each field type occupies.
-_FIELD_CHANNELS: dict[NondimFieldType, int] = {
-    "pressure": 1,
-    "stress": 3,
-    "velocity": 3,
-    "temperature": 1,
-    "density": 1,
-    "identity": 1,
-}
-
 
 def _nondim_field(
     val: torch.Tensor,
@@ -307,59 +297,6 @@ class NonDimensionalizeByMetadata(MeshTransform):
         """
         return self._transform_mesh(mesh, _redim_field, inverse=True)
 
-    def inverse_tensor(
-        self,
-        tensor: Float[torch.Tensor, "*batch C"],
-        field_types: dict[str, NondimFieldType],
-        q_inf: Float[torch.Tensor, ""],
-        p_inf: Float[torch.Tensor, ""],
-        U_inf_mag: Float[torch.Tensor, ""],
-        *,
-        rho_inf: Float[torch.Tensor, ""] | None = None,
-        T_inf: Float[torch.Tensor, ""] | None = None,
-    ) -> Float[torch.Tensor, "*batch C"]:
-        """Re-dimensionalize a concatenated output tensor.
-
-        Operates on model output tensors (shape ``(*, C)``) where channels
-        are ordered according to *field_types*. Useful at inference time
-        when you have a raw model prediction rather than a Mesh.
-
-        Args:
-            tensor: Shape ``(*, C)`` with channels ordered by *field_types*.
-            field_types: Ordered mapping of ``{field_name: nondim_type}``
-                where *nondim_type* is one of ``"pressure"``, ``"stress"``,
-                ``"velocity"``, ``"temperature"``, ``"density"``, or
-                ``"identity"``. Uses the model's output field names
-                (e.g. after renaming), not the original mesh field names.
-            q_inf: Reference dynamic pressure (scalar or broadcastable).
-            p_inf: Reference static pressure (scalar or broadcastable).
-            U_inf_mag: Reference freestream-velocity magnitude
-                (scalar or broadcastable).
-            rho_inf: Freestream density. Required when *field_types*
-                contains ``"density"``.
-            T_inf: Freestream temperature. Required when *field_types*
-                contains ``"temperature"``.
-
-        Returns:
-            Same shape as *tensor*, with each field's channels
-            re-dimensionalized.
-        """
-        out = tensor.clone()
-        idx = 0
-        for ftype in field_types.values():
-            n = _FIELD_CHANNELS[ftype]
-            out[..., idx : idx + n] = _redim_field(
-                out[..., idx : idx + n],
-                ftype,
-                q_inf,
-                p_inf,
-                U_inf_mag,
-                rho_inf=rho_inf,
-                T_inf=T_inf,
-            )
-            idx += n
-        return out
-
     def inverse_td(
         self,
         td: TensorDict,
@@ -373,9 +310,8 @@ class NonDimensionalizeByMetadata(MeshTransform):
     ) -> TensorDict:
         """Re-dimensionalize a per-field :class:`~tensordict.TensorDict`.
 
-        Companion to :meth:`inverse_tensor` for the per-field
-        TensorDict-keyed I/O flow used by recipes that consume named
-        prediction fields directly. Each leaf is independently
+        Used by recipes that consume named prediction fields directly as a
+        per-field TensorDict. Each leaf is independently
         re-dimensionalized using the formula matching its
         ``field_types`` entry; leaves whose names are absent from
         ``field_types`` are passed through unchanged.

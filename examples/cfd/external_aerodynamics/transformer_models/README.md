@@ -51,6 +51,10 @@ During training, the configuration uses a flat learning rate that decays every 1
 
 The Optimizer for this training is the `Muon` optimizer - available only in `pytorch>=2.9.0`. While not strictly required, we have found the `muon` optimizer performs substantially better on these architectures than standard `AdamW` and a oneCycle schedule.
 
+### Parameter-Efficient Fine-Tuning (LoRA)
+
+To adapt a *pretrained* model to a new dataset cheaply — without retraining all weights — use the LoRA fine-tuning recipe in the [`src/finetune/`](src/finetune/) folder (`src/finetune/finetune.py` and `src/finetune/deploy.py`, with `src/conf/finetune_lora.yaml`). It freezes the base model and trains only small low-rank adapters, producing a compact adapter checkpoint that can be swapped at serve time or merged into the base. See [src/finetune/README.md](src/finetune/README.md) for the full workflow.
+
 ### Training Precision
 
 These transformer architectures have support for NVIDIA's [TransformerEngine](https://docs.nvidia.com/deeplearning/transformer-engine/user-guide/index.html) built in. You can enable/disable the transformer engine path in the model with `model.use_te=[True | False]`. Available precisions for training with `transformer_engine` are `training.precision=["float32" | "float16" | "bfloat16" | "float8" ]`. In `float8` precision, the TransformerEngine Hybrid recipe is used for casting weights and inputs in the forward and backwards passes. For more details on `float8` precision, see the fp8 guide from [TransformerEngine](https://docs.nvidia.com/deeplearning/transformer-engine/user-guide/examples/fp8_primer.html). When using fp8, the training script will automatically pad and unpad the input and output, respectively, to use the fp8 hardware correctly.

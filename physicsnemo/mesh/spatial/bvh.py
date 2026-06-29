@@ -204,13 +204,22 @@ def _compute_leaf_aabbs(
     dtype = sorted_aabb_min.dtype
     n_leaf_segs = len(leaf_seg_starts)
 
-    if int(leaf_seg_sizes.sum()) == 0 or n_leaf_segs == 0:
+    # ``n_leaf_segs == 0`` is a host-side shape read (no sync). The former
+    # ``int(leaf_seg_sizes.sum()) == 0`` guard is dropped: leaf segments always
+    # hold >= 1 cell, so the sum is > 0 whenever there is any segment, making
+    # the check both redundant and a host-device synchronization.
+    if n_leaf_segs == 0:
         return (
             torch.empty((0, D), dtype=dtype, device=device),
             torch.empty((0, D), dtype=dtype, device=device),
         )
 
-    cell_pos, seg_ids = _ragged_arange(leaf_seg_starts, leaf_seg_sizes)
+    # Every sorted cell belongs to exactly one leaf, so the total expanded
+    # length equals the number of sorted cells -- a host-known shape. Passing it
+    # avoids ``_ragged_arange``'s internal ``arange(counts.sum())`` sync.
+    cell_pos, seg_ids = _ragged_arange(
+        leaf_seg_starts, leaf_seg_sizes, total=sorted_aabb_min.shape[0]
+    )
 
     cell_mins = sorted_aabb_min[cell_pos]  # (total_cells, D)
     cell_maxs = sorted_aabb_max[cell_pos]  # (total_cells, D)
