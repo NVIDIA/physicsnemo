@@ -384,6 +384,15 @@ def fused_all_reduce(
     >>> float(reduced["loss_sum"] / reduced["count"])
     1.5
 
+    When the per-rank shards are equal-weight, ``op=ReduceOp.AVG`` averages
+    across ranks directly, with no separate count leaf. On a single process the
+    reduction is a no-op, so the local value is returned unchanged:
+
+    >>> import torch.distributed as dist
+    >>> reduced = fused_all_reduce({"loss": torch.tensor(1.5)}, op=dist.ReduceOp.AVG)
+    >>> float(reduced["loss"])
+    1.5
+
     A sequence of heterogeneously-shaped tensors round-trips to a list:
 
     >>> out = fused_all_reduce([torch.ones(2, 2), torch.tensor(5.0)])

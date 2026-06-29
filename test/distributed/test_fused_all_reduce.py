@@ -404,6 +404,30 @@ def test_max_min(op, reference):
 
 
 @pytest.mark.multigpu_static
+def test_avg_across_ranks():
+    """AVG averages each rank's contribution element-wise (mean-of-means).
+
+    This pins the path the recipe metric reducers now depend on: each rank
+    passes its rank-local mean and AVG returns the across-rank average, which
+    equals the true global mean when the shards are equal-weight.
+    """
+    dm = DistributedManager()
+    rank, world_size = dm.rank, dm.world_size
+    expected = _arithmetic_series(world_size) / world_size
+
+    reduced = fused_all_reduce(
+        {
+            "scalar": torch.tensor(float(rank + 1), device=dm.device),
+            "vec": torch.full((3,), float(rank + 1), device=dm.device),
+        },
+        op=dist.ReduceOp.AVG,
+    )
+
+    assert reduced["scalar"].item() == pytest.approx(expected)
+    assert torch.allclose(reduced["vec"], torch.full((3,), expected, device=dm.device))
+
+
+@pytest.mark.multigpu_static
 def test_integer_sum_is_exact():
     """A homogeneous int64 bundle sums exactly across ranks (no float cast)."""
     dm = DistributedManager()
