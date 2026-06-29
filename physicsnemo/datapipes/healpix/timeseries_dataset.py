@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,8 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from __future__ import annotations
-
 import logging
 import time
 import warnings
@@ -25,15 +23,13 @@ from typing import Optional, Sequence, Union
 import numpy as np
 import pandas as pd
 import torch
+import xarray as xr
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import Dataset
 
-from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.datapipe import Datapipe
 from physicsnemo.datapipes.meta import DatapipeMetaData
 from physicsnemo.utils.insolation import insolation
-
-xr = OptionalImport("xarray")
 
 logger = logging.getLogger(__name__)
 
@@ -245,12 +241,17 @@ class TimeSeriesDataset(Dataset, Datapipe):
 
         # REMARK: we remove the xarray overhead from these
         try:
-            # we use channel_out instead of channel_in because
-            # the list of input channels may contain data fetched outside
-            # the datasets such as coupled fields
-            self.input_scaling = scaling_da.sel(
-                index=self.ds.channel_out.values
-            ).rename({"index": "channel_in"})
+            # 'if' statement used for cases where atmos model
+            # includes diagnostic variables like tp6 and msl.
+            # using 'channel_out' is still necessary for ocean models.
+            if len(self.ds.channel_out) != (len(self.ds.channel_in)-len(self.couplings[0].variables)):
+                self.input_scaling = scaling_da.sel(
+                    index=self.ds.channel_in.values
+                ).rename({"index": "channel_in"})
+            else:
+                self.input_scaling = scaling_da.sel(
+                    index=self.ds.channel_out.values
+                ).rename({"index": "channel_in"})
             self.input_scaling = {
                 "mean": np.expand_dims(
                     self.input_scaling["mean"].to_numpy(), (0, 2, 3, 4)

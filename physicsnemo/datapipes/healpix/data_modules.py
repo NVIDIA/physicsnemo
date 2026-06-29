@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -16,175 +16,33 @@
 
 # System modules
 import logging
-import os
-import time
 from pathlib import Path
-from typing import DefaultDict, Optional, Sequence, Union
+from typing import Optional, Sequence, Union
 
 # numpy
 import numpy as np
 
 # distributed stuff
-import torch
+import xarray as xr
+
+import warnings
+
+# External modules
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
-from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.distributed import DistributedManager
 
 from .coupledtimeseries_dataset import CoupledTimeSeriesDataset
 from .timeseries_dataset import TimeSeriesDataset
 
-xr = OptionalImport("xarray")
-
 logger = logging.getLogger(__name__)
-
-
-def _get_file_name(path, prefix, var, suffix):
-    """
-    Helper that returns a fully formed path for a given variable
-
-    Parameters
-    ----------
-    path: str
-        The base path where the file is located
-    prefix: str
-        The prefix used for the filename
-    var: str
-        The variable stored in the file
-    suffix: str
-        The suffix used for the files
-
-    Returns
-    -------
-    str: The fully formed path
-    """
-    return os.path.join(path, f"{prefix}{var}{suffix}.nc")
-
-
-def open_time_series_dataset_classic_on_the_fly(
-    directory: str,
-    input_variables: Sequence,
-    output_variables: Optional[Sequence],
-    constants: Optional[DefaultDict] = None,
-    prefix: Optional[str] = None,
-    suffix: Optional[str] = None,
-    batch_size: int = 32,
-    scaling: Optional[DictConfig] = None,
-) -> "xr.Dataset":
-    """
-    Opens and merges multiple datasets that that contain individual variables
-    into a single dataset
-
-    Parameters
-    ----------
-    directory: str
-        The directory that contains the input datasets
-    input_variables: Sequence
-        The input variables to be merged into the new dataset
-    output_variables: Sequence, optional
-        The output variables to be merged into the new dataset
-        If no output variables are provided the input set is used
-    constants: DefaultDict, optional
-        A set of constants to add to the merged dataset
-        default None
-    prefix: str, optional
-        The prefix of the input datasets, default None
-    suffix: str, optional
-        The suffix of the input datasets, default None
-    batch_size: str, optional
-        The chunk size to use for the input datasets, default 32
-    scaling: DictConfig, optional
-        Not used for open_time_series_dataset_classic_on_the_fly
-
-    Returns
-    -------
-    xr.Dataset: The merged dataset
-    """
-    output_variables = output_variables or input_variables
-    all_variables = np.union1d(input_variables, output_variables)
-    prefix = prefix or ""
-    suffix = suffix or ""
-
-    merge_time = time.time()
-    logger.info("merging input datasets")
-
-    datasets = []
-    remove_attrs = ["mean", "std"] if "LL" in prefix else ["varlev", "mean", "std"]
-    for variable in all_variables:
-        file_name = _get_file_name(directory, prefix, variable, suffix)
-        logger.debug("open nc dataset %s", file_name)
-
-        ds = xr.open_dataset(file_name, autoclose=True)
-
-        if "LL" in prefix:
-            ds = ds.rename({"lat": "height", "lon": "width"})
-            ds = ds.isel({"height": slice(0, 180)})
-        try:
-            ds = ds.isel(varlev=0)
-        except ValueError:
-            pass
-
-        # remove unused
-        for attr in remove_attrs:
-            if attr in ds.indexes or attr in ds.variables:
-                ds = ds.drop(attr)
-
-        # Rename variable
-        if "sample" in ds.variables or "sample" in ds.dims:
-            ds = ds.rename({"sample": "time"})
-
-        ds = ds.chunk({"time": batch_size})
-
-        # Change lat/lon to coordinates
-        try:
-            ds = ds.set_coords(["lat", "lon"])
-        except (ValueError, KeyError):
-            pass
-        datasets.append(ds)
-    # Merge datasets
-    data = xr.merge(datasets, compat="override")
-
-    # Convert to input/target array by merging along the variables
-    input_da = (
-        data[list(input_variables)]
-        .to_array("channel_in", name="inputs")
-        .transpose("time", "channel_in", "face", "height", "width")
-    )
-    target_da = (
-        data[list(output_variables)]
-        .to_array("channel_out", name="targets")
-        .transpose("time", "channel_out", "face", "height", "width")
-    )
-
-    result = xr.Dataset()
-    result["inputs"] = input_da
-    result["targets"] = target_da
-
-    # Get constants
-    if constants is not None:
-        constants_ds = []
-        for name, var in constants.items():
-            constants_ds.append(
-                xr.open_dataset(
-                    _get_file_name(directory, prefix, name, suffix), autoclose=True
-                ).set_coords(["lat", "lon"])[var]
-            )
-        constants_ds = xr.merge(constants_ds, compat="override")
-        constants_da = constants_ds.to_array("channel_c", name="constants").transpose(
-            "channel_c", "face", "height", "width"
-        )
-        result["constants"] = constants_da
-
-    logger.info("merged datasets in %0.1f s", time.time() - merge_time)
-
-    return result
 
 
 def open_time_series_dataset_classic_prebuilt(
     directory: str, dataset_name: str, constants: bool = False, batch_size: int = 32
-) -> "xr.Dataset":
+) -> xr.Dataset:
     """
     Opens an existing dataset
 
@@ -194,7 +52,7 @@ def open_time_series_dataset_classic_prebuilt(
         The directory that contains the dataset
     dataset_name: str
         The name of the dataset to open
-    constants: DefaultDict, optional
+    constants: typing.DefaultDict, optional
         Not used for open_time_series_dataset_classic_prebuilt, default False
     batch_size: str, optional
         The chunk size to use for the input datasets, default 32
@@ -202,161 +60,18 @@ def open_time_series_dataset_classic_prebuilt(
     Returns
     -------
     xr.Dataset: The opened dataset
+
+    Raises
+    ------
+    FileNotFoundError: If the dataset doesn't exist at the specified path
     """
 
     ds_path = Path(directory, dataset_name + ".zarr")
 
     if not ds_path.exists():
-        raise FileNotFoundError(f"Dataset doesn't appear to exist at {ds_path}")
+        raise FileNotFoundError(f"Dataset doesn't exist at {ds_path}")
 
     result = xr.open_zarr(ds_path)
-    return result
-
-
-def create_time_series_dataset_classic(
-    src_directory: str,
-    dst_directory: str,
-    dataset_name: str,
-    input_variables: Sequence,
-    output_variables: Optional[Sequence] = None,
-    constants: Optional[DefaultDict] = None,
-    prefix: Optional[str] = None,
-    suffix: Optional[str] = None,
-    batch_size: int = 32,
-    scaling: Optional[DictConfig] = None,
-    overwrite: bool = False,
-) -> "xr.Dataset":
-    """
-    Opens and merges multiple datasets that that contain individual variables
-    into a single dataset
-
-    Parameters
-    ----------
-    src_directory: str
-        The directory that contains the input datasets
-    dst_directory: str
-    dataset_name: str
-    input_variables: Sequence
-        The input variables to be merged into the new dataset
-    output_variables: Sequence, optional
-        The output variables to be merged into the new dataset
-        If no output variables are provided the input set is used
-    constants: DefaultDict, optional
-        A set of constants to add to the merged dataset, default None
-    prefix: str, optional
-        The prefix of the input datasets, default None
-    suffix: str, optional
-        The suffix of the input datasets, default None
-    batch_size: str, optional
-        The chunk size to use for the input datasets, default 32
-    scaling: DictConfig, optional
-        Scale factors applied to the listed variables, default None
-    overwrite: bool, optional
-        IF an existing dataset exists at the destination replace it, default False
-
-    Returns
-    -------
-    xr.Dataset: The merged dataset
-    """
-    dst_zarr = os.path.join(dst_directory, dataset_name + ".zarr")
-    file_exists = os.path.exists(dst_zarr)
-
-    if file_exists and not overwrite:
-        logger.info("opening input datasets")
-        return open_time_series_dataset_classic_prebuilt(
-            directory=dst_directory,
-            dataset_name=dataset_name,
-            constants=constants is not None,
-        )
-
-    output_variables = output_variables or input_variables
-    all_variables = np.union1d(input_variables, output_variables)
-    prefix = prefix or ""
-    suffix = suffix or ""
-
-    merge_time = time.time()
-    logger.info("merging input datasets")
-
-    datasets = []
-    remove_attrs = ["varlev", "mean", "std"]
-    for variable in all_variables:
-        file_name = _get_file_name(src_directory, prefix, variable, suffix)
-        logger.debug("open nc dataset %s", file_name)
-        if "sample" in list(xr.open_dataset(file_name).sizes.keys()):
-            ds = xr.open_dataset(file_name).rename({"sample": "time"})
-        else:
-            ds = xr.open_dataset(file_name)
-        if "varlev" in ds.dims:
-            ds = ds.isel(varlev=0)
-
-        for attr in remove_attrs:
-            if attr in ds.indexes or attr in ds.variables:
-                ds = ds.drop(attr)
-
-        # Rename variable
-        if "predictors" in list(ds.keys()):
-            ds = ds.rename({"predictors": variable})
-
-        # Change lat/lon to coordinates
-        try:
-            ds = ds.set_coords(["lat", "lon"])
-        except (ValueError, KeyError):
-            pass
-        # Apply log scaling lazily
-        if (
-            scaling
-            and variable in scaling
-            and scaling[variable].get("log_epsilon", None) is not None
-        ):
-            ds[variable] = np.log(
-                ds[variable] + scaling[variable]["log_epsilon"]
-            ) - np.log(scaling[variable]["log_epsilon"])
-        datasets.append(ds)
-    # Merge datasets
-    data = xr.merge(datasets, compat="override")
-
-    # Convert to input/target array by merging along the variables
-    input_da = (
-        data[list(input_variables)]
-        .to_array("channel_in", name="inputs")
-        .transpose("time", "channel_in", "face", "height", "width")
-    )
-    target_da = (
-        data[list(output_variables)]
-        .to_array("channel_out", name="targets")
-        .transpose("time", "channel_out", "face", "height", "width")
-    )
-
-    result = xr.Dataset()
-    result["inputs"] = input_da
-    result["targets"] = target_da
-
-    # Get constants
-    if constants is not None:
-        constants_ds = []
-        for name, var in constants.items():
-            constants_ds.append(
-                xr.open_dataset(_get_file_name(src_directory, prefix, name, suffix))
-                .set_coords(["lat", "lon"])[var]
-                .astype(np.float32)
-            )
-        constants_ds = xr.merge(constants_ds, compat="override")
-        constants_da = constants_ds.to_array("channel_c", name="constants").transpose(
-            "channel_c", "face", "height", "width"
-        )
-        result["constants"] = constants_da
-
-    logger.info("merged datasets in %0.1f s", time.time() - merge_time)
-    logger.info("writing unified dataset to file (takes long!)")
-
-    # writing out
-    def _write_zarr(data, path):
-        write_job = data.to_zarr(path, compute=False, mode="w")
-        logger.info(f"writing dataset to {path}")
-        write_job.compute()
-
-    _write_zarr(data=result, path=dst_zarr)
-
     return result
 
 
@@ -368,12 +83,12 @@ class TimeSeriesDataModule:
 
     def __init__(
         self,
-        src_directory: str = ".",
+        src_directory: str = ".",  # kept for backwards compatibility
         dst_directory: str = ".",
         dataset_name: str = "dataset",
         prefix: Optional[str] = None,
         suffix: Optional[str] = None,
-        data_format: str = "classic",
+        data_format: str = "classic",  # kept for backwards compatibility
         batch_size: int = 32,
         drop_last: bool = False,
         input_variables: Optional[Sequence] = ["t2m"],
@@ -389,17 +104,15 @@ class TimeSeriesDataModule:
         gap: Union[int, str, None] = None,
         shuffle: bool = True,
         add_insolation: bool = False,
-        cube_dim: int = 64,
+        cube_dim: int = 64,  # kept for backwards compatibility
         num_workers: int = 4,
         pin_memory: bool = True,
-        prebuilt_dataset: bool = True,
+        prebuilt_dataset: bool = True,  # kept for backwards compatibility
         forecast_init_times: Optional[Sequence] = None,
     ):
         """
         Parameters
         ----------
-        src_directory: str, optional
-            The directory containing data files per variable, default "."
         dst_directory: str, optional
             The directory containing joint data files, default "."
         dataset_name: str, optional
@@ -408,11 +121,6 @@ class TimeSeriesDataModule:
             Prefix appended to all data files, default None
         suffix: str, optional
             Suffix appended to all data files, default None
-        data_format: str, optional
-            str indicating data schema.
-            'classic': use classic DLWP file types. Loads .nc files, assuming
-            dimensions [sample, varlev, face, height, width] and
-            data variables 'predictors', 'lat', and 'lon'.
         batch_size: int, optional
             Size of batches to draw from data, defualt 32
         drop_last: bool, optional
@@ -449,14 +157,10 @@ class TimeSeriesDataModule:
             Option to shuffle the training data, default True
         add_insolation: bool, optional
             Option to add prescribed insolation as a decoder input feature, default True
-        cube_dim: int, optional
-            Number of points on the side of a cube face. Not currently used.
         num_workers: int, optional
             Number of parallel data loading workers, default 4
         pin_memory: bool, optional
             Whether pinned (page locked) memory should be used to store the tensors, improves GPU I/O, default True
-        prebuilt_dataset: bool, optional
-            Create a custom dataset for training. If False, the variables are gathered on the fly, default True
         forecast_init_times: Sequence, optional
             A Sequence of pandas Timestamps dictating the specific initialization times
             to produce inputs for. default None
@@ -466,12 +170,17 @@ class TimeSeriesDataModule:
                     NOT produce any target array.
         """
         super().__init__()
-        self.src_directory = src_directory
+
+        warnings.warn(
+            "TimeSeriesDataModule will be removed in a future release, please switch to using TimeSeriesDataModuleZarr",
+            DeprecationWarning,
+            stacklevel=2
+        )
+
         self.dst_directory = dst_directory
         self.dataset_name = dataset_name
         self.prefix = prefix
         self.suffix = suffix
-        self.data_format = data_format
         self.batch_size = batch_size
         self.drop_last = drop_last
         self.input_variables = input_variables
@@ -489,7 +198,6 @@ class TimeSeriesDataModule:
         self.cube_dim = cube_dim
         self.num_workers = num_workers
         self.pin_memory = pin_memory
-        self.prebuilt_dataset = prebuilt_dataset
         self.forecast_init_times = forecast_init_times
 
         self.train_dataset = None
@@ -520,93 +228,45 @@ class TimeSeriesDataModule:
 
     def setup(self) -> None:
         """Setup the datasets used for this DataModule"""
-        if self.data_format == "classic":
-            create_fn = create_time_series_dataset_classic
-            open_fn = (
-                open_time_series_dataset_classic_prebuilt
-                if self.prebuilt_dataset
-                else open_time_series_dataset_classic_on_the_fly
-            )
-        else:
-            raise ValueError("'data_format' must be one of ['classic']")
-
         # make sure distributed manager is initalized
         if not DistributedManager.is_initialized():
             DistributedManager.initialize()
-        dist = DistributedManager()
 
-        if torch.distributed.is_initialized():
-            if self.prebuilt_dataset:
-                if dist.rank == 0:
-                    create_fn(
-                        src_directory=self.src_directory,
-                        dst_directory=self.dst_directory,
-                        dataset_name=self.dataset_name,
-                        input_variables=self.input_variables,
-                        output_variables=self.output_variables,
-                        constants=self.constants,
-                        prefix=self.prefix,
-                        suffix=self.suffix,
-                        batch_size=self.dataset_batch_size,
-                        scaling=self.scaling,
-                        overwrite=False,
-                    )
+        dataset = open_time_series_dataset_classic_prebuilt(
+            directory=self.dst_directory,
+            dataset_name=self.dataset_name,
+            constants=self.constants is not None,
+            batch_size=self.batch_size,
+        )
 
-                # wait for rank 0 to complete, because then the files are guaranteed to exist
-                torch.distributed.barrier()
+        # Verify that all input variables are available in the dataset
+        missing_input_vars = set(self.input_variables) - set(dataset.channel_in.values)
+        if missing_input_vars:
+            raise ValueError(
+                f"Input variables not found in dataset: {missing_input_vars}"
+            )
 
-                dataset = open_fn(
-                    directory=self.dst_directory,
-                    dataset_name=self.dataset_name,
-                    constants=self.constants is not None,
-                    batch_size=self.batch_size,
-                )
-            else:
-                dataset = open_fn(
-                    input_variables=self.input_variables,
-                    output_variables=self.output_variables,
-                    directory=self.dst_directory,
-                    constants=self.constants,
-                    prefix=self.prefix,
-                    batch_size=self.batch_size,
-                )
-        else:
-            if self.prebuilt_dataset:
-                create_fn(
-                    src_directory=self.src_directory,
-                    dst_directory=self.dst_directory,
-                    dataset_name=self.dataset_name,
-                    input_variables=self.input_variables,
-                    output_variables=self.output_variables,
-                    constants=self.constants,
-                    prefix=self.prefix,
-                    suffix=self.suffix,
-                    batch_size=self.dataset_batch_size,
-                    scaling=self.scaling,
-                    overwrite=False,
-                )
-
-                dataset = open_fn(
-                    directory=self.dst_directory,
-                    dataset_name=self.dataset_name,
-                    constants=self.constants is not None,
-                    batch_size=self.batch_size,
-                )
-            else:
-                dataset = open_fn(
-                    input_variables=self.input_variables,
-                    output_variables=self.output_variables,
-                    directory=self.dst_directory,
-                    constants=self.constants,
-                    prefix=self.prefix,
-                    batch_size=self.batch_size,
-                )
+        # Verify that all output variables are available in the dataset
+        missing_output_vars = set(self.output_variables) - set(
+            dataset.channel_out.values
+        )
+        if missing_output_vars:
+            raise ValueError(
+                f"Output variables not found in dataset: {missing_output_vars}"
+            )
 
         dataset = dataset.sel(
             channel_in=self.input_variables,
             channel_out=self.output_variables,
         )
         if self.constants is not None:
+            # Verify that all constants are available in the dataset
+            missing_constants = set(list(self.constants.values())) - set(
+                dataset.channel_c.values
+            )
+            if missing_constants:
+                raise ValueError(f"Constants not found in dataset: {missing_constants}")
+
             dataset = dataset.sel(channel_c=list(self.constants.values()))
 
         if self.splits is not None and self.forecast_init_times is None:
@@ -801,12 +461,12 @@ class CoupledTimeSeriesDataModule(TimeSeriesDataModule):
 
     def __init__(
         self,
-        src_directory: str = ".",
+        src_directory: str = ".",  # kept for backwards compatibility
         dst_directory: str = ".",
         dataset_name: str = "dataset",
         prefix: Optional[str] = None,
         suffix: Optional[str] = None,
-        data_format: str = "classic",
+        data_format: str = "classic",  # kept for backwards compatibility
         batch_size: int = 32,
         drop_last: bool = False,
         input_variables: Optional[Sequence] = None,
@@ -822,10 +482,10 @@ class CoupledTimeSeriesDataModule(TimeSeriesDataModule):
         gap: Union[int, str, None] = None,
         shuffle: bool = True,
         add_insolation: bool = False,
-        cube_dim: int = 64,
+        cube_dim: int = 64,  # kept for backwards compatibility
         num_workers: int = 4,
         pin_memory: bool = True,
-        prebuilt_dataset: bool = True,
+        prebuilt_dataset: bool = True,  # kept for backwards compatibility
         forecast_init_times: Optional[Sequence] = None,
         couplings: Sequence = None,
         add_train_noise: Optional[bool] = False,
@@ -835,8 +495,6 @@ class CoupledTimeSeriesDataModule(TimeSeriesDataModule):
         """
         Parameters
         ----------
-        src_directory: str, optional
-            The directory containing data files per variable, default "."
         dst_directory: str, optional
             The directory containing joint data files, default "."
         dataset_name: str, optional
@@ -845,11 +503,6 @@ class CoupledTimeSeriesDataModule(TimeSeriesDataModule):
             Prefix appended to all data files, default None
         suffix: str, optional
             Suffix appended to all data files, default None
-        data_format: str, optional
-            str indicating data schema.
-            'classic': use classic DLWP file types. Loads .nc files, assuming
-            dimensions [sample, varlev, face, height, width] and
-            data variables 'predictors', 'lat', and 'lon'.
         batch_size: int, optional
             Size of batches to draw from data, defualt 32
         drop_last: bool, optional
@@ -892,8 +545,6 @@ class CoupledTimeSeriesDataModule(TimeSeriesDataModule):
             Number of parallel data loading workers, default 4
         pin_memory: bool, optional
             Whether pinned (page locked) memory should be used to store the tensors, improves GPU I/O, default True
-        prebuilt_dataset: bool, optional
-            Create a custom dataset for training. If False, the variables are gathered on the fly, default True
         forecast_init_times: Sequence, optional
             A Sequence of pandas Timestamps dictating the specific initialization times
             to produce inputs for. default None
@@ -946,6 +597,7 @@ class CoupledTimeSeriesDataModule(TimeSeriesDataModule):
         )
 
     def _get_coupled_vars(self):
+
         coupled_variables = []
         for d in self.couplings:
             coupled_variables = coupled_variables + d["params"]["variables"]
@@ -953,94 +605,46 @@ class CoupledTimeSeriesDataModule(TimeSeriesDataModule):
 
     def setup(self) -> None:
         """Setup the datasets used for this DataModule"""
-        if self.data_format == "classic":
-            create_fn = create_time_series_dataset_classic
-            open_fn = (
-                open_time_series_dataset_classic_prebuilt
-                if self.prebuilt_dataset
-                else open_time_series_dataset_classic_on_the_fly
-            )
-        else:
-            raise ValueError("'data_format' must be one of ['classic', 'zarr']")
-
         coupled_variables = self._get_coupled_vars()
         # make sure distributed manager is initalized
         if not DistributedManager.is_initialized():
             DistributedManager.initialize()
         dist = DistributedManager()
 
-        if torch.distributed.is_initialized():
-            if self.prebuilt_dataset:
-                if dist.rank == 0:
-                    create_fn(
-                        src_directory=self.src_directory,
-                        dst_directory=self.dst_directory,
-                        dataset_name=self.dataset_name,
-                        input_variables=self.input_variables + coupled_variables,
-                        output_variables=self.output_variables,
-                        constants=self.constants,
-                        prefix=self.prefix,
-                        suffix=self.suffix,
-                        batch_size=self.dataset_batch_size,
-                        scaling=self.scaling,
-                        overwrite=False,
-                    )
+        dataset = open_time_series_dataset_classic_prebuilt(
+            directory=self.dst_directory,
+            dataset_name=self.dataset_name,
+            constants=self.constants is not None,
+            batch_size=self.batch_size,
+        )
 
-                # wait for rank 0 to complete, because then the files are guaranteed to exist
-                torch.distributed.barrier()
+        # Verify that all input variables are available in the dataset
+        missing_input_vars = set(self.input_variables) - set(dataset.channel_in.values)
+        if missing_input_vars:
+            raise ValueError(
+                f"Input variables not found in dataset: {missing_input_vars}"
+            )
 
-                dataset = open_fn(
-                    directory=self.dst_directory,
-                    dataset_name=self.dataset_name,
-                    constants=self.constants is not None,
-                    batch_size=self.batch_size,
-                )
-            else:
-                dataset = open_fn(
-                    input_variables=self.input_variables + coupled_variables,
-                    output_variables=self.output_variables,
-                    directory=self.dst_directory,
-                    constants=self.constants,
-                    prefix=self.prefix,
-                    batch_size=self.batch_size,
-                )
-        else:
-            if self.prebuilt_dataset:
-                create_fn(
-                    src_directory=self.src_directory,
-                    dst_directory=self.dst_directory,
-                    dataset_name=self.dataset_name,
-                    input_variables=self.input_variables + coupled_variables,
-                    output_variables=self.output_variables,
-                    constants=self.constants,
-                    prefix=self.prefix,
-                    suffix=self.suffix,
-                    batch_size=self.dataset_batch_size,
-                    scaling=self.scaling,
-                    overwrite=False,
-                )
-
-                dataset = open_fn(
-                    directory=self.dst_directory,
-                    dataset_name=self.dataset_name,
-                    constants=self.constants is not None,
-                    batch_size=self.batch_size,
-                )
-            else:
-                dataset = open_fn(
-                    input_variables=self.input_variables + coupled_variables,
-                    output_variables=self.output_variables,
-                    directory=self.dst_directory,
-                    constants=self.constants,
-                    prefix=self.prefix,
-                    batch_size=self.batch_size,
-                )
+        # Verify that all output variables are available in the dataset
+        missing_output_vars = set(self.output_variables) - set(
+            dataset.channel_out.values
+        )
+        if missing_output_vars:
+            raise ValueError(
+                f"Output variables not found in dataset: {missing_output_vars}"
+            )
 
         dataset = dataset.sel(
             channel_in=self.input_variables + coupled_variables,
             channel_out=self.output_variables,
         )
         if self.constants is not None:
+            # Verify that all constants are available in the dataset
+            missing_constants = set(list(self.constants.values())) - set(
+                dataset.channel_c.values
+            )
+            if missing_constants:
+                raise ValueError(f"Constants not found in dataset: {missing_constants}")
             dataset = dataset.sel(channel_c=list(self.constants.values()))
 
         if self.splits is not None and self.forecast_init_times is None:

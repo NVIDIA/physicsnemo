@@ -38,8 +38,10 @@ from .healpix_blocks import (
     SymmetricConvNeXtBlock,
     TransposedConvUpsample,
 )
+from .healpix_constraints import NonnegativeConstraint
 from .healpix_decoder import UNetDecoder
 from .healpix_encoder import UNetEncoder
+from .normalization import ConditionalLayerNorm
 
 __all__ = [
     "BasicConvBlock",
@@ -52,6 +54,8 @@ __all__ = [
     "TransposedConvUpsample",
     "UNetDecoder",
     "UNetEncoder",
+    "ConditionalLayerNorm",
+    "NonnegativeConstraint",
     "HEALPixFoldFaces",
     "HEALPixLayer",
     "HEALPixPadding",
@@ -92,6 +96,14 @@ def _remap_target(target: str) -> str:
     if target.startswith("physicsnemo.models.dlwp_healpix_layers.healpix_layers."):
         cls_name = target.split(".")[-1]
         return f"physicsnemo.nn.{cls_name}"
+
+    if target.startswith("physicsnemo.models.dlwp_healpix_layers.normalization."):
+        cls_name = target.split(".")[-1]
+        return f"physicsnemo.models.dlwp_healpix.layers.normalization.{cls_name}"
+
+    if target.startswith("physicsnemo.models.dlwp_healpix_layers.healpix_constraints."):
+        cls_name = target.split(".")[-1]
+        return f"physicsnemo.models.dlwp_healpix.layers.healpix_constraints.{cls_name}"
 
     if target.startswith("physicsnemo.models.dlwp_healpix_layers."):
         cls_name = target.split(".")[-1]
