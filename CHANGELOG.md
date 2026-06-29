@@ -10,18 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Adds the Strata weather-emulation architecture to experimental models
-  (`physicsnemo.experimental.models.strata`): `Strata`, a two-stage
-  deterministic regression model (not a generative diffusion model) whose
-  `StrataTransformer3D` backbone — 3D neighborhood attention via
-  `physicsnemo.nn.functional.na3d`, optional axial or stereographic RoPE, optional
-  depth-axis / gated attention — conditions a pixel-resolution stage through
-  pixel-wise adaptive layer norm (adapting the PixelDiT idea, arXiv:2511.20645).
-  Geometry (latitude/longitude) is an optional forward input, so there is no hard
-  spherical-grid dependency. Also adds the supporting continuous-coordinate and
-  stereographic RoPE helpers to `physicsnemo.experimental.nn`
-  (`build_rope_cos_sin_1d_continuous`, `build_axial_rope_cos_sin_2d_continuous`,
-  `stereographic_projection`, `spherical_centroid`).
+- Adds the experimental Strata weather-emulation models —
+  `physicsnemo.experimental.models.strata.Strata` and `StrataTransformer3D` — plus
+  the continuous / stereographic RoPE helpers `build_rope_cos_sin_1d_continuous`,
+  `build_axial_rope_cos_sin_2d_continuous`, `stereographic_projection`, and
+  `spherical_centroid` in `physicsnemo.experimental.nn`.
 - Adds Point-Transformer local vector-attention blocks to `physicsnemo.nn`.
 - FSDP2 checkpoint support: full save/load round-trip for
   ``torch.distributed.fsdp`` v2 models, including DTensor edge cases,
