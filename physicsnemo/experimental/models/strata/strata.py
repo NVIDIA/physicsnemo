@@ -879,27 +879,34 @@ class Strata(Module):
             for i, block in enumerate(self.pixel_blocks):
                 # The two block types take different keyword signatures; wrap the
                 # call in a closure so activation checkpointing can drive either.
+                # The grad-bearing conditioning tensors are passed as explicit
+                # arguments (rather than closed over) so the checkpoint recompute's
+                # gradient path is auditable; the static (d, h, w) tuples and the
+                # loop-invariant rope_tables stay captured.
                 if isinstance(block, StrataPixel3DBlock):
 
-                    def _run(inp, b=block):
+                    def _run(inp, cond, cond_bilinear, b=block):
                         return b(
                             inp,
-                            backbone_cond=backbone_cond,
+                            backbone_cond=cond,
                             pixel_dhw=pixel_dhw,
                             backbone_dhw=backbone_dhw,
-                            s_cond_bilinear=s_cond_bilinear,
+                            s_cond_bilinear=cond_bilinear,
                             rope_tables=rope_tables,
                         )
 
+                    run_args = (x_pix, backbone_cond, s_cond_bilinear)
                 else:
 
                     def _run(inp, b=block):
                         return b(inp, latent_dhw=pixel_dhw, rope_tables=rope_tables)
 
+                    run_args = (x_pix,)
+
                 if self._should_checkpoint_pixel_block(i):
-                    x_pix = activation_checkpoint(_run, x_pix, use_reentrant=False)
+                    x_pix = activation_checkpoint(_run, *run_args, use_reentrant=False)
                 else:
-                    x_pix = _run(x_pix)
+                    x_pix = _run(*run_args)
             x_pix = self.pixel_final_layer(x_pix)
 
         return rearrange(x_pix, "b (d h w) c -> b c d h w", d=dd, h=hh, w=ww)
