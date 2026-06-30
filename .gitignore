@@ -163,6 +163,8 @@ cython_debug/
 
 # Additional stuff
 nsight-systems*
+*.ncu-rep
+profile_out/
 build/
 mlruns/
 mlflow.db

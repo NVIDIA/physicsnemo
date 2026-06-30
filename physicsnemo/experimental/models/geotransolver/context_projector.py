@@ -569,6 +569,7 @@ class GeometricFeatureProcessor(nn.Module):
         self,
         query_points: Float[torch.Tensor, "batch points spatial_dim"],
         key_features: Float[torch.Tensor, "batch points features"],
+        cfg=None,
     ) -> Float[torch.Tensor, "batch points hidden_dim"]:
         r"""Query neighbors and process features.
 
@@ -580,6 +581,10 @@ class GeometricFeatureProcessor(nn.Module):
         key_features : torch.Tensor
             Features to query from of shape :math:`(B, N, C)` where :math:`C` is the
             feature dimension.
+        cfg : optional
+            Optional profiling configuration exposing a ``profile`` attribute. When
+            ``cfg.profile`` is ``True``, NVTX ranges are emitted around the ball-query
+            operation. Default is ``None``.
 
         Returns
         -------
@@ -601,7 +606,11 @@ class GeometricFeatureProcessor(nn.Module):
                 )
 
         # Query neighbors within radius: (B, N, K, C)
+        if cfg is not None and cfg.profile:
+            torch.cuda.nvtx.range_push("bq_warp")
         _, neighbors = self.bq_warp(query_points, key_features)
+        if cfg is not None and cfg.profile:
+            torch.cuda.nvtx.range_pop()
 
         # Flatten neighbor features for MLP: (B, N, K, C) -> (B, N, K*C)
         neighbors_flat = rearrange(neighbors, "b n k c -> b n (k c)")
@@ -721,6 +730,7 @@ class MultiScaleFeatureExtractor(nn.Module):
         self,
         spatial_coords: Float[torch.Tensor, "batch points spatial_dim"],
         geometry: Float[torch.Tensor, "batch points geometry_dim"],
+        cfg=None,
     ) -> list[Float[torch.Tensor, "batch heads slices dim"]]:
         r"""Extract and tokenize features for context.
 
@@ -730,6 +740,9 @@ class MultiScaleFeatureExtractor(nn.Module):
             Spatial coordinates of shape :math:`(B, N, 3)`.
         geometry : torch.Tensor
             Geometry features of shape :math:`(B, N, C_{geo})`.
+        cfg : optional
+            Optional profiling configuration forwarded to each
+            :class:`GeometricFeatureProcessor`. Default is ``None``.
 
         Returns
         -------
@@ -738,7 +751,7 @@ class MultiScaleFeatureExtractor(nn.Module):
             :math:`(B, H, S, D)`.
         """
         return [
-            tokenizer(processor(spatial_coords, geometry))
+            tokenizer(processor(spatial_coords, geometry, cfg=cfg))
             for processor, tokenizer in zip(self.processors, self.tokenizers)
         ]
 
@@ -746,6 +759,7 @@ class MultiScaleFeatureExtractor(nn.Module):
         self,
         spatial_coords: Float[torch.Tensor, "batch points spatial_dim"],
         geometry: Float[torch.Tensor, "batch points geometry_dim"],
+        cfg=None,
     ) -> Float[torch.Tensor, "batch points total_hidden"]:
         r"""Extract and concatenate features for local pathway.
 
@@ -755,6 +769,9 @@ class MultiScaleFeatureExtractor(nn.Module):
             Spatial coordinates of shape :math:`(B, N, 3)`.
         geometry : torch.Tensor
             Geometry features of shape :math:`(B, N, C_{geo})`.
+        cfg : optional
+            Optional profiling configuration forwarded to each
+            :class:`GeometricFeatureProcessor`. Default is ``None``.
 
         Returns
         -------
@@ -763,7 +780,10 @@ class MultiScaleFeatureExtractor(nn.Module):
             :math:`D_{total}` is ``hidden_dim * num_scales``.
         """
         return torch.cat(
-            [processor(geometry, spatial_coords) for processor in self.processors],
+            [
+                processor(geometry, spatial_coords, cfg=cfg)
+                for processor in self.processors
+            ],
             dim=-1,
         )
 
@@ -963,6 +983,7 @@ class GlobalContextBuilder(nn.Module):
         geometry: Float[torch.Tensor, "batch tokens geometry_dim"] | None = None,
         global_embedding: Float[torch.Tensor, "batch global_tokens global_dim"]
         | None = None,
+        cfg= None
     ) -> tuple[
         Float[torch.Tensor, "batch heads slices context_dim"] | None,
         list[Float[torch.Tensor, "batch tokens local_features"]] | None,
@@ -1023,27 +1044,45 @@ class GlobalContextBuilder(nn.Module):
                 "Local positions are required if local features are enabled."
             )
 
+        if cfg is not None and cfg.profile:
+            torch.cuda.nvtx.range_push("multi-scale-features")
+   
         # Extract multi-scale features if enabled
         if self.local_extractors is not None and geometry is not None:
             local_features = []
             for i, embedding in enumerate(local_embeddings):
                 spatial_coords = local_positions[i]  # Extract coordinates
-
+                if cfg is not None and cfg.profile:
+                    torch.cuda.nvtx.range_push(f"loc_embed:{i} context")
                 # Get tokenized context features from multi-scale extractor
                 context_feats = self.local_extractors[i].extract_context_features(
-                    spatial_coords, geometry
+                    spatial_coords, geometry, cfg=cfg
                 )
+                if cfg is not None and cfg.profile:
+                    torch.cuda.nvtx.range_pop()
                 context_parts.extend(context_feats)
 
+                if cfg is not None and cfg.profile:
+                    torch.cuda.nvtx.range_push(f"loc_embed:{i} local")
                 # Get concatenated local features for skip connection
                 local_feats = self.local_extractors[i].extract_local_features(
-                    spatial_coords, geometry
+                    spatial_coords, geometry, cfg=cfg
                 )
+                
                 local_features.append(local_feats)
+
+        if cfg is not None and cfg.profile:
+            torch.cuda.nvtx.range_pop()
+        
+
 
         # Tokenize geometry features
         if self.geometry_tokenizer is not None and geometry is not None:
+            if cfg is not None and cfg.profile:
+                torch.cuda.nvtx.range_push("geometry")
             geometry_context = self.geometry_tokenizer(geometry)
+            if cfg is not None and cfg.profile:
+                torch.cuda.nvtx.range_pop()
             # Detach the returned copy so downstream observers (e.g. the OOD
             # guard) don't keep the backward graph alive.
             geometry_context_detached = geometry_context.detach()
@@ -1051,7 +1090,11 @@ class GlobalContextBuilder(nn.Module):
 
         # Tokenize global embedding
         if self.global_tokenizer is not None and global_embedding is not None:
+            if cfg is not None and cfg.profile:
+                torch.cuda.nvtx.range_push('global tokenizer')
             context_parts.append(self.global_tokenizer(global_embedding))
+            if cfg is not None and cfg.profile:
+                torch.cuda.nvtx.range_pop()
 
         # Concatenate all context features along the last dimension
         context = torch.cat(context_parts, dim=-1) if context_parts else None

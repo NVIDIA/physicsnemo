@@ -1,0 +1,53 @@
+Third-party sources vendored for the "pysdf_cuda" radius-search backend
+======================================================================
+
+This directory contains a minimal, OptiX-free subset of third-party CUDA
+sources required to build the software-QBVH point-range-query used by the
+``PHYSICSNEMO_RADIUS_SEARCH_MORTON=pysdf_cuda`` backend. Only the headers and
+translation units in the dependency closure of the radius query were copied;
+the SDF / OptiX portions of the upstream projects were intentionally excluded.
+
+Each file retains its original copyright/license header. All vendored files are
+licensed under the Apache License, Version 2.0.
+
+--------------------------------------------------------------------------------
+gequel/  (BVH build + point range query)
+--------------------------------------------------------------------------------
+Upstream : NVIDIA "minigql"  (https://gitlab-master.nvidia.com/mrietmann/minigql)
+Commit   : ef28f40eb4bdefa4e99fc2cc01d5205fe2b2f01e
+Subtree  : gequel/  (src/minigql/gequel/ in the upstream pysdf checkout)
+License  : Apache-2.0 (file headers: "Copyright 2020++ Ingo Wald")
+Files    :
+  gequel/common.h
+  gequel/common/DeviceData.h
+  gequel/bvhLib/BVH.h
+  gequel/bvhLib/builder.h
+  gequel/bvhLib/pointRangeQuery.h
+  gequel/bvhLib/spatialMedianBuilder.cu   (compiled)
+Local mods:
+  spatialMedianBuilder.cu - replaced the removed CUB functors cub::Min()/
+    cub::Max() with a small local shim (pnemo_cub_compat) and changed the root-
+    bounds block reduce from cub::BlockReduce<int,128> to <float,128> (the
+    coordinates are float). Both changes are marked with "PhysicsNeMo" comments.
+
+--------------------------------------------------------------------------------
+owl/  (header-only math + CUDA helpers)
+--------------------------------------------------------------------------------
+Upstream : OWL - the Optix Wrapper Library (https://github.com/owl-project/owl)
+Commit   : 34867d74c4a17b48682aabc7fe224a526c96e490
+License  : Apache-2.0 (see https://github.com/owl-project/owl/blob/master/LICENSE)
+Files    :
+  owl/common.h
+  owl/helper/cuda.h
+  owl/common/owl-common.h
+  owl/common/math/{vec,box,constants,AffineSpace,LinearSpace,Quaternion}.h
+  owl/common/math/vec/{compare,functors,rotate}.h
+
+--------------------------------------------------------------------------------
+Adapted source (not vendored verbatim)
+--------------------------------------------------------------------------------
+The device kernels in ``../radius_search_ext.cu`` are adapted from pysdf
+``src/prq.cu`` (NVIDIA "pysdf", https://gitlab-master.nvidia.com/mrietmann/pysdf,
+commit 34aa4e06385f4c58d9cf41c9e21576f5923bda72, Apache-2.0). They were modified
+to operate directly on PyTorch device tensors and to select the ``max_points``
+nearest neighbors per query in a single traversal pass.

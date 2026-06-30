@@ -57,7 +57,7 @@ class BQWarp(nn.Module):
         self.neighbors_in_radius = neighbors_in_radius
 
     def forward(
-        self, x: torch.Tensor, p_grid: torch.Tensor, reverse_mapping: bool = True
+        self, x: torch.Tensor, p_grid: torch.Tensor, reverse_mapping: bool = True, cfg= None
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Performs ball query operation to find neighboring points and their features.
@@ -93,8 +93,12 @@ class BQWarp(nn.Module):
                 p_grid = rearrange(p_grid, "b nx ny nz c -> b (nx ny nz) c")
             else:
                 raise ValueError("p_grid must be 3D, 4D, 5D only")
-
+        
+        if cfg is not None and cfg.profile:
+            torch.cuda.nvtx.range_push('bq_warp')
+       
         if reverse_mapping:
+            
             mapping, outputs = radius_search(
                 x,
                 p_grid,
@@ -102,6 +106,7 @@ class BQWarp(nn.Module):
                 self.neighbors_in_radius,
                 return_points=True,
             )
+
         else:
             mapping, outputs = radius_search(
                 p_grid,
@@ -110,5 +115,7 @@ class BQWarp(nn.Module):
                 self.neighbors_in_radius,
                 return_points=True,
             )
+        if cfg is not None and cfg.profile:
+            torch.cuda.nvtx.range_pop()
 
         return mapping, outputs

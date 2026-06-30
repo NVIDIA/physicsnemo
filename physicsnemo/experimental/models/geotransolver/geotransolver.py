@@ -612,6 +612,7 @@ class GeoTransolver(Module):
         geometry: Float[torch.Tensor, "batch tokens geometry_dim"] | None = None,
         time: torch.Tensor | None = None,
         return_embedding_states: bool = False,
+        cfg: DictConfig= None
     ) -> (
         Float[torch.Tensor, "batch tokens out_dim"]
         | tuple[Float[torch.Tensor, "batch tokens out_dim"], ...]
@@ -661,7 +662,7 @@ class GeoTransolver(Module):
         """
         # Track whether input was a single tensor for output format
         single_input = isinstance(local_embedding, torch.Tensor)
-
+        print("FORWARD BEGIN ANIMESH")
         # Time embedding not yet supported
         if time is not None:
             raise NotImplementedError(
@@ -670,9 +671,15 @@ class GeoTransolver(Module):
             )
 
         # Normalize inputs to tuple format
+        if cfg is not None and cfg.profile:
+            torch.cuda.nvtx.range_push('normalize local embedding tensor')
+
         local_embedding = _normalize_tensor(local_embedding)
         if local_positions is not None:
             local_positions = _normalize_tensor(local_positions)
+
+        if cfg is not None and cfg.profile:
+            torch.cuda.nvtx.range_pop()
 
         unflatten_output = False
         if self.structured_shape is not None:
@@ -717,12 +724,19 @@ class GeoTransolver(Module):
                 )
 
         # Build context embeddings and extract local features
+        if cfg is not None and cfg.profile:
+            torch.cuda.nvtx.range_push("build context")
+
         embedding_states, local_embedding_bq, geo_ctx = (
             self.context_builder.build_context(
-                local_embedding, local_positions, geometry, global_embedding
+                local_embedding, local_positions, geometry, global_embedding, cfg
             )
         )
+        if cfg is not None and cfg.profile:
+            torch.cuda.nvtx.range_pop()
 
+        if cfg is not None and cfg.profile:
+            torch.cuda.nvtx.range_push("ood guard")
         # --- OOD Guard ---
         if self.ood_guard is not None:
             # Pool (B, H, S, D) -> (B, D); guard expects pre-pooled latents.
@@ -733,7 +747,8 @@ class GeoTransolver(Module):
                 self.ood_guard.collect(global_embedding, geo_latent)
             else:
                 self.ood_guard.check(global_embedding, geo_latent)
-
+        if cfg is not None and cfg.profile:
+            torch.cuda.nvtx.range_pop()
         # Project inputs to hidden dimension: (B, N, C) -> (B, N, n_hidden)
         x = [self.preprocess[i](le) for i, le in enumerate(local_embedding)]
 
@@ -745,8 +760,12 @@ class GeoTransolver(Module):
             ]
 
         # Pass through GALE transformer blocks with context cross-attention
-        for block in self.blocks:
+        for block_idx_prof, block in enumerate(self.blocks):
+            if cfg is not None and cfg.profile:
+                torch.cuda.nvtx.range_push(f"GALE block idx:{block_idx_prof}")
             x = block(tuple(x), embedding_states)
+            if cfg is not None and cfg.profile:
+                torch.cuda.nvtx.range_pop()
 
         # Project to output dimensions: (B, N, n_hidden) -> (B, N, out_dim)
         x = [self.ln_mlp_out[i](x[i]) for i in range(len(x))]

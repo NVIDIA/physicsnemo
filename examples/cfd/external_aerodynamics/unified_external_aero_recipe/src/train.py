@@ -70,10 +70,106 @@ from physicsnemo.utils import load_checkpoint, save_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo.utils.profiling import Profiler, profile
 
-### When `cfg.profile` is set, every train / val epoch breaks out of its
-### batch loop after this many steps. Keeps profiling traces short enough
-### to be useful without changing the rest of the training contract.
-_PROFILE_MAX_STEPS = 10
+# Enable the experimental Morton-grid radius-search backend so a plain
+# ``python src/train.py`` exercises it (the ``radius_search`` custom op reads this
+# env var at call time and routes the CUDA ``max_points`` path through it).
+# ``setdefault`` preserves any value already exported, so you can switch variants
+# from the command line, e.g.::
+#
+#     PHYSICSNEMO_RADIUS_SEARCH_MORTON=pysdf_cuda python src/train.py ...
+#
+# Recognized values: ``scalar`` / ``fma`` / ``gemm`` (hash-grid Morton),
+# ``dense_fma`` / ``dense_gemm`` (dense-cell Morton), and ``pysdf_cuda`` (vendored
+# software-QBVH range query; JIT-compiled on first use, so it needs a CUDA
+# toolchain / ``nvcc`` and pays a one-time ~30-60 s compile). Any other value
+# (e.g. ``off``) falls back to the default hash grid.
+# ``fma`` is the robust tiled variant and ``scalar`` the deterministic fallback;
+# ``gemm`` is numerically unsafe for large (O(meters)) coordinates with a small
+# radius, so it is not used by default here.
+os.environ.setdefault("PHYSICSNEMO_RADIUS_SEARCH_MORTON", "fma")
+
+
+def cuda_profiler_start() -> None:
+    """Open an Nsight Systems capture range via ``cudaProfilerStart``.
+
+    No-op when CUDA is unavailable. Pairs with ``profile.sh``'s
+    ``--capture-range=cudaProfilerApi`` flag: nsys discards everything
+    until this fires, so warmup steps stay out of the report.
+    """
+    if torch.cuda.is_available():
+        torch.cuda.profiler.start()
+
+
+def cuda_profiler_stop() -> None:
+    """Close the Nsight Systems capture range via ``cudaProfilerStop``.
+
+    No-op when CUDA is unavailable. Pairs with ``profile.sh``'s
+    ``--capture-range-end=stop`` flag, which finalizes the report when
+    this fires.
+    """
+    if torch.cuda.is_available():
+        torch.cuda.profiler.stop()
+
+
+class _CudaProfilerWindow:
+    """Drive ``cudaProfilerStart`` / ``cudaProfilerStop`` around a step window.
+
+    Counts steps across the run and toggles the CUDA profiler so nsys
+    captures exactly ``profile_steps`` steps after an initial
+    ``warmup_steps`` settle-in period (``torch.compile`` warmup, cuDNN
+    autotune, allocator growth). Once the window closes the controller
+    flips :attr:`finished`, signalling the caller to end the run -- there
+    is no point running un-captured steps under nsys.
+
+    Args:
+        warmup_steps: Steps to run before ``cudaProfilerStart`` fires.
+        profile_steps: Steps to capture before ``cudaProfilerStop`` fires.
+        logger: Logger used to announce the capture boundaries.
+    """
+
+    def __init__(self, warmup_steps: int, profile_steps: int, logger: Any) -> None:
+        self.warmup_steps = warmup_steps
+        self.profile_steps = profile_steps
+        self._logger = logger
+        self._step = 0
+        self.started = False
+        self.finished = False
+
+    def on_step_begin(self) -> bool:
+        """Toggle the profiler at the window edges; call atop each step.
+
+        Returns ``True`` once the capture window has closed (the caller
+        should stop iterating), ``False`` while warming up or capturing.
+        The profiler is stopped *before* the work of the closing step, so
+        only the ``profile_steps`` fully-captured steps land in the report.
+        """
+        if self._step == self.warmup_steps:
+            self._logger.info(
+                f"[profile] cudaProfilerStart at step {self._step} "
+                f"(capturing {self.profile_steps} step(s))"
+            )
+            cuda_profiler_start()
+            self.started = True
+        if self._step == self.warmup_steps + self.profile_steps:
+            self._logger.info(f"[profile] cudaProfilerStop at step {self._step}")
+            cuda_profiler_stop()
+            self.finished = True
+            return True
+        self._step += 1
+        return False
+
+    def close(self) -> None:
+        """Close a still-open capture at run end (safety net).
+
+        Normally :meth:`on_step_begin` stops the profiler exactly at the
+        window edge. If the run exhausts its steps mid-capture (e.g. the
+        window is wider than the available steps), this stops the profiler
+        so nsys finalizes a bounded report instead of running open-ended.
+        """
+        if self.started and not self.finished:
+            self._logger.info("[profile] cudaProfilerStop at run end (window unclosed)")
+            cuda_profiler_stop()
+            self.finished = True
 
 
 def _flatten_config(
@@ -147,6 +243,7 @@ def forward_pass(
     *,
     output_type: IOType,
     target_config: dict[str, FieldType],
+    cfg: DictConfig = None
 ) -> tuple[torch.Tensor, TensorDict, TensorDict]:
     """Run a forward pass + loss + metrics on one collated batch.
 
@@ -182,17 +279,34 @@ def forward_pass(
 
     ### Inputs keep their native dtype; autocast handles model-internal precision.
     with get_autocast_context(precision):
-        output = model(**forward_kwargs)
-
+        if cfg is not None and cfg.profile:
+            torch.cuda.nvtx.range_push("model_forward")
+        # import ipdb; ipdb.set_trace()
+        output = model(**forward_kwargs, cfg=cfg)
+        if cfg is not None and cfg.profile:
+            torch.cuda.nvtx.range_pop()
+    
+    if cfg is not None and cfg.profile:
+        torch.cuda.nvtx.range_push("normalize output to tensordict")
+    
     pred_td = normalize_output_to_tensordict(output, target_config, output_type)
-
+    
+    if cfg is not None and cfg.profile:
+        torch.cuda.nvtx.range_pop()
     ### Loss runs in float32 to avoid bf16 precision loss in the reduction.
     pred_f32 = pred_td.float()
     target_f32 = targets.float()
-
+    if cfg is not None and cfg.profile:
+        torch.cuda.nvtx.range_push("loss calculator")
     loss, loss_td = loss_calculator(pred_f32, target_f32)
+    if cfg is not None and cfg.profile:
+        torch.cuda.nvtx.range_pop()
     with torch.no_grad():
+        if cfg is not None and cfg.profile:
+            torch.cuda.nvtx.range_push("metric_calc")
         metric_td = metric_calculator(pred_f32, target_f32)
+        if cfg is not None and cfg.profile:
+            torch.cuda.nvtx.range_pop()
     ### Detach (don't sync) the per-field TDs so the caller controls when
     ### a D2H copy happens; running ``.item()`` here would serialise the
     ### forward kernels against the host. ``TensorDict.detach()`` walks
@@ -218,6 +332,7 @@ def _run_epoch(
     scaler: GradScaler | None = None,
     writer: SummaryWriter | None = None,
     log_jsonl: Callable[[dict[str, Any]], None] | None = None,
+    profile_ctrl: "_CudaProfilerWindow | None" = None,
 ) -> tuple[float, dict[str, float]]:
     """Run one training-or-validation epoch.
 
@@ -269,8 +384,20 @@ def _run_epoch(
     with grad_ctx:
         step_t0 = time.perf_counter()
         for i, batch in enumerate(dataloader):
+            ### nsys capture control: open the window after warmup, close
+            ### it (and stop the run) once `profile_steps` have been
+            ### captured. Only train passes a controller, so val never
+            ### lands inside the trace.
+            if profile_ctrl is not None and profile_ctrl.on_step_begin():
+                break
+
+            
+            if cfg.profile:
+                torch.cuda.nvtx.range_push(f"step:{i}")
             batch = recursive_to_device(batch, dist_manager.device)
 
+            if cfg.profile:
+                torch.cuda.nvtx.range_push(f"forward_pass")
             loss, losses, metrics = forward_pass(
                 batch,
                 model,
@@ -279,19 +406,37 @@ def _run_epoch(
                 metric_calculator,
                 output_type=output_type,
                 target_config=target_config,
+                cfg = cfg
             )
+            if cfg.profile:
+                torch.cuda.nvtx.range_pop()
 
             if is_train:
+                if cfg.profile:
+                    torch.cuda.nvtx.range_push(f"optimizer-0-grad")
                 optimizer.zero_grad()
+                if cfg.profile:
+                    torch.cuda.nvtx.range_pop()
                 if precision == "float16" and scaler is not None:
+                    if cfg.profile:
+                        torch.cuda.nvtx.range_push(f"backward")
                     scaler.scale(loss).backward()
+                    if cfg.profile:
+                        torch.cuda.nvtx.range_pop()
                     scaler.step(optimizer)
                     scaler.update()
                 else:
+                    if cfg.profile:
+                        torch.cuda.nvtx.range_push(f"backward")
                     loss.backward()
+                    if cfg.profile:
+                        torch.cuda.nvtx.range_pop()
                     optimizer.step()
                 if cfg.training.get("scheduler_update_mode", "epoch") == "step":
                     scheduler.step()
+            
+            if cfg.profile:
+                torch.cuda.nvtx.range_pop()
 
             ### Accumulate on-device with no sync. First iteration clones
             ### so subsequent in-place ``add_`` calls don't alias the
@@ -396,8 +541,6 @@ def _run_epoch(
                         }
                     )
 
-            if cfg.profile and i >= _PROFILE_MAX_STEPS:
-                break
             step_t0 = time.perf_counter()
 
     epoch_dt = time.perf_counter() - epoch_t0
@@ -445,6 +588,7 @@ def train_epoch(
     target_config: dict[str, FieldType],
     train_writer: SummaryWriter | None = None,
     log_jsonl: Callable[[dict[str, Any]], None] | None = None,
+    profile_ctrl: "_CudaProfilerWindow | None" = None,
 ) -> tuple[float, dict[str, float]]:
     """Run one training epoch (delegates to :func:`_run_epoch` in train mode)."""
     return _run_epoch(
@@ -464,6 +608,7 @@ def train_epoch(
         scaler=scaler,
         writer=train_writer,
         log_jsonl=log_jsonl,
+        profile_ctrl=profile_ctrl,
     )
 
 
@@ -558,6 +703,8 @@ def benchmark_io_epoch(
     label: str,
     logger: Any,
     max_steps: int | None = None,
+    *,
+    profile_ctrl: "_CudaProfilerWindow | None" = None,
 ) -> None:
     """Iterate a dataloader without any model logic and report I/O timing.
 
@@ -568,6 +715,10 @@ def benchmark_io_epoch(
         logger: Logger for console output.
         max_steps: Stop after this many batches. ``None`` means exhaust
             the loader.
+        profile_ctrl: Optional nsys capture-window controller. When given,
+            the loop opens / closes the ``cudaProfilerStart``/``Stop``
+            window around the configured step range and stops once the
+            window has closed.
     """
     import statistics
 
@@ -576,6 +727,11 @@ def benchmark_io_epoch(
 
     step_t0 = time.perf_counter()
     for i, batch in enumerate(dataloader):
+        ### nsys capture control: same warmup/capture window as training,
+        ### applied to pure dataloader iteration (benchmark_io=true).
+        if profile_ctrl is not None and profile_ctrl.on_step_begin():
+            break
+
         dt = time.perf_counter() - step_t0
         times.append(dt)
 
@@ -636,8 +792,10 @@ def main(cfg: DictConfig) -> None:
     Args:
         cfg: Hydra config containing ``model``, ``training``, ``dataset``,
             ``data``, ``output_dir``, ``run_id``, ``precision``,
-            ``compile``, ``profile``, ``benchmark_io``, ``logging``, and
-            related keys.
+            ``compile``, ``profile``, ``warmup_steps``, ``profile_steps``,
+            ``benchmark_io``, ``logging``, and related keys. ``warmup_steps``
+            / ``profile_steps`` bound the nsys capture window when
+            ``profile`` is set (see :class:`_CudaProfilerWindow`).
     """
 
     DistributedManager.initialize()
@@ -695,6 +853,15 @@ def main(cfg: DictConfig) -> None:
             }
         )
 
+    ### nsys capture window (cudaProfilerStart/Stop), shared by the I/O
+    ### benchmark and the training loop. ``None`` when not profiling, in
+    ### which case both loops run to their normal completion.
+    profile_ctrl = (
+        _CudaProfilerWindow(cfg.warmup_steps, cfg.profile_steps, logger)
+        if cfg.profile
+        else None
+    )
+
     # -- I/O benchmark mode: iterate dataloaders, skip model entirely -----------
     if cfg.get("benchmark_io", False):
         num_epochs = cfg.training.num_epochs
@@ -707,8 +874,22 @@ def main(cfg: DictConfig) -> None:
             for epoch in range(num_epochs):
                 logger.info(f"--- Epoch {epoch + 1}/{num_epochs} ---")
                 train_loader.set_epoch(epoch)
-                benchmark_io_epoch(train_loader, "train", logger, max_steps=max_steps)
+                benchmark_io_epoch(
+                    train_loader,
+                    "train",
+                    logger,
+                    max_steps=max_steps,
+                    profile_ctrl=profile_ctrl,
+                )
+                ### Under nsys, the capture window drives the run length:
+                ### skip val and stop as soon as the window has closed.
+                if profile_ctrl is not None:
+                    if profile_ctrl.finished:
+                        break
+                    continue
                 benchmark_io_epoch(val_loader, "val", logger, max_steps=max_steps)
+        if profile_ctrl is not None:
+            profile_ctrl.close()
         logger.info("benchmark_io complete!")
         if dist_manager.rank == 0:
             if train_writer is not None:
@@ -797,7 +978,7 @@ def main(cfg: DictConfig) -> None:
         "models": model,
     }
     loaded_epoch = load_checkpoint(device=dist_manager.device, **ckpt_args)
-
+    
     if cfg.compile:
         model = torch.compile(model)
 
@@ -826,7 +1007,17 @@ def main(cfg: DictConfig) -> None:
                 target_config=target_config,
                 train_writer=train_writer,
                 log_jsonl=log_jsonl,
+                profile_ctrl=profile_ctrl,
             )
+
+            ### Under nsys, the capture window bounds the run: skip
+            ### validation / checkpointing and exit as soon as the window
+            ### has closed (the report is already finalized by then).
+            if profile_ctrl is not None:
+                if profile_ctrl.finished:
+                    logger.info("[profile] capture window complete; ending run")
+                    break
+                continue
 
             val_loss, val_metrics = val_epoch(
                 val_loader,
@@ -873,6 +1064,11 @@ def main(cfg: DictConfig) -> None:
             if cfg.training.get("scheduler_update_mode", "epoch") == "epoch":
                 scheduler.step()
 
+    ### Safety net: if the run ended mid-capture (window wider than the
+    ### available steps), make sure nsys gets its cudaProfilerStop.
+    if profile_ctrl is not None:
+        profile_ctrl.close()
+
     if dist_manager.rank == 0:
         if train_writer is not None:
             train_writer.close()
@@ -890,13 +1086,19 @@ def main(cfg: DictConfig) -> None:
 def launch(cfg: DictConfig) -> None:
     """Hydra entry point: configure profiling and delegate to :func:`main`.
 
+    Profiling in this recipe is driven by Nsight Systems via ``profile.sh``
+    (``--capture-range=cudaProfilerApi``): when ``cfg.profile`` is set,
+    :func:`main` opens a ``cudaProfilerStart``/``cudaProfilerStop`` window
+    around ``warmup_steps``..``warmup_steps + profile_steps``. The torch
+    (kineto) profiler is intentionally *not* enabled here -- it contends
+    with nsys for CUPTI, which corrupts the capture -- so the
+    :class:`~physicsnemo.utils.profiling.Profiler` context stays inert and
+    only its NVTX annotation hooks remain available.
+
     Args:
         cfg: Hydra-composed config (override with ``--config-name``).
-            When ``cfg.profile`` is truthy, torch profiling is enabled.
     """
     profiler = Profiler()
-    if cfg.profile:
-        profiler.enable("torch")
     profiler.initialize()
     main(cfg)
     profiler.finalize()

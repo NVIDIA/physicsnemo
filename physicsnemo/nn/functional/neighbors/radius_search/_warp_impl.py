@@ -23,6 +23,7 @@ and not warp.  So, tensor creation and allocation is driven by torch, and
 passed to warp for computation.
 """
 
+import os
 from typing import List
 
 import torch
@@ -31,11 +32,13 @@ import warp as wp
 from physicsnemo.core.function_spec import FunctionSpec
 
 from .kernels import (
+    compute_morton_codes,
     radius_search_count,
     radius_search_limited_select_batched,
     radius_search_unlimited_select,
     scatter_add_batched,
     scatter_add_unlimited,
+    tiled_bvh_radius_search,
 )
 from .utils import format_returns, validate_inputs
 
@@ -44,6 +47,67 @@ wp.config.log_level = wp.LOG_WARNING
 wp.init()
 
 BLOCK_DIM = 32
+
+# Threads per block for the cooperative (tiled) BVH ball-query kernel. Each
+# thread block handles one (batch, query) pair and its TILE_DIM lanes traverse
+# the BVH together. compute-sanitizer traced an out-of-bounds __shared__ read in
+# Warp's tiled BVH machinery from the upper lanes of a 64-wide block on real
+# (clustered) geometry, so we use 32 here.
+TILE_DIM = 32
+
+
+def _use_bvh_radius_search() -> bool:
+    """Whether the Morton-ordered tiled-BVH backend is enabled.
+
+    Controlled by the ``PHYSICSNEMO_RADIUS_SEARCH_BVH`` environment variable
+    (default off). When enabled, the warp ``max_points`` path runs the tiled
+    BVH kernel on CUDA inputs instead of the hash-grid kernel; CPU inputs and
+    the ``max_points=None`` path always use the hash-grid implementation.
+    """
+    return os.environ.get("PHYSICSNEMO_RADIUS_SEARCH_BVH", "0").strip().lower() not in (
+        "",
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
+
+_MORTON_VARIANTS = (
+    "scalar",
+    "fma",
+    "gemm",
+    "dense_fma",
+    "dense_fma_mem_opt",
+    "dense_fma_mm",
+    "dense_gemm",
+    "pysdf_cuda",
+)
+_MORTON_DENSE_VARIANTS = ("dense_fma", "dense_fma_mem_opt", "dense_fma_mm", "dense_gemm")
+
+
+def _morton_variant() -> str | None:
+    """Selected Morton radius-search variant, or ``None`` when disabled.
+
+    Controlled by the ``PHYSICSNEMO_RADIUS_SEARCH_MORTON`` environment variable.
+    Hash-based variants are ``scalar`` (Function A), ``fma`` (Function B1), and
+    ``gemm`` (Function B2). Dense-cell variants are ``dense_fma`` (one warp per
+    query) and ``dense_gemm`` (tiled matmul benchmark). The ``pysdf_cuda`` variant
+    uses the vendored pysdf software-QBVH range query (JIT-compiled CUDA). Anything
+    else (including unset) disables the Morton path.
+    """
+    value = os.environ.get("PHYSICSNEMO_RADIUS_SEARCH_MORTON", "").strip().lower()
+    return value if value in _MORTON_VARIANTS else None
+
+
+def _use_morton_radius_search() -> bool:
+    """Whether the Morton-grid radius-search backend is enabled (env-gated).
+
+    When enabled, the warp ``max_points`` path on CUDA inputs runs the selected
+    Morton variant instead of the hash-grid kernel; CPU inputs and the
+    ``max_points=None`` path always use the hash-grid implementation.
+    """
+    return _morton_variant() is not None
 
 
 def count_neighbors(
@@ -208,6 +272,63 @@ def radius_search_impl(
     if points.device != queries.device:
         raise ValueError("points and queries must be on the same device")
 
+    # Optional fast path: Morton-grid + custom-hash ball query (scalar/fma/gemm
+    # variants). Only the deterministic (max_points) path on CUDA is supported.
+    # radius_search_morton handles validation/casting/batch-squeezing and returns
+    # the same (indices, points, distances, num_neighbors) tuple, so the
+    # registered autograd backward and the fake (torch.compile) path are
+    # unaffected. Checked before the BVH path so MORTON takes precedence if both
+    # env flags are set.
+    if max_points is not None and points.is_cuda and _use_morton_radius_search():
+        variant = _morton_variant()
+
+        if variant == "pysdf_cuda":
+            from ._pysdf_cuda_impl import radius_search_pysdf_cuda
+
+            return radius_search_pysdf_cuda(
+                points,
+                queries,
+                radius,
+                max_points,
+                return_dists,
+                return_points,
+            )
+
+        if variant in _MORTON_DENSE_VARIANTS:
+            from ._morton_dense_impl import radius_search_morton_dense
+
+            return radius_search_morton_dense(
+                points,
+                queries,
+                radius,
+                max_points,
+                return_dists,
+                return_points,
+                variant=variant,
+            )
+
+        from ._morton_impl import radius_search_morton
+
+        return radius_search_morton(
+            points,
+            queries,
+            radius,
+            max_points,
+            return_dists,
+            return_points,
+            variant=variant,
+        )
+
+    # Optional fast path: Morton-ordered tiled-BVH ball query. Only the
+    # deterministic (max_points) path on CUDA is supported. radius_search_bvh
+    # handles validation/casting/batch-squeezing and returns the same
+    # (indices, points, distances, num_neighbors) tuple, so the registered
+    # autograd backward and the fake (torch.compile) path are unaffected.
+    if max_points is not None and points.is_cuda and _use_bvh_radius_search():
+        return radius_search_bvh(
+            points, queries, radius, max_points, return_dists, return_points
+        )
+
     points, queries, was_unbatched = validate_inputs(points, queries)
     B = points.shape[0]
     N_queries = queries.shape[1]
@@ -233,9 +354,13 @@ def radius_search_impl(
             qrs_b = queries[b].contiguous()
             wp_pts_b = wp.from_torch(pts_b, dtype=wp.vec3)
             wp_qrs_b = wp.from_torch(qrs_b, dtype=wp.vec3, return_ctype=True)
+            torch.cuda.nvtx.range_push('HASH GRID')
             grid = wp.HashGrid(dim_x=128, dim_y=128, dim_z=128, device=wp_pts_b.device)
+            torch.cuda.nvtx.range_pop()
             grid.reserve(N_queries)
-            grid.build(points=wp_pts_b, radius=0.5 * radius)
+            torch.cuda.nvtx.range_push('grid build')
+            grid.build(points=wp_pts_b, radius=radius)
+            torch.cuda.nvtx.range_pop()
             grids.append(grid)
             wp_points_per_b.append(wp_pts_b)
             wp_queries_per_b.append(wp_qrs_b)
@@ -249,6 +374,7 @@ def radius_search_impl(
             count_tensors = []
             wp_offsets = []
             for b in range(B):
+                torch.cuda.nvtx.range_push(f'COUNT NEIGHBOURS_{b}')
                 count_t, wp_off = count_neighbors(
                     grids[b],
                     wp_points_per_b[b],
@@ -259,6 +385,7 @@ def radius_search_impl(
                     N_queries,
                     sync=(B == 1),
                 )
+                torch.cuda.nvtx.range_pop()
                 count_tensors.append(count_t)
                 wp_offsets.append(wp_off)
 
@@ -284,6 +411,7 @@ def radius_search_impl(
             all_pts = []
             all_dists = []
             for b in range(B):
+                torch.cuda.nvtx.range_push(f'Gather NEIGHBOURS_{b}')
                 idx_b, pts_b, dist_b, _ = gather_neighbors(
                     grids[b],
                     points.device,
@@ -298,6 +426,7 @@ def radius_search_impl(
                     return_points,
                     total_counts[b],
                 )
+                torch.cuda.nvtx.range_pop()
                 # idx_b: (2, count_b); prepend batch-index row
                 batch_row = torch.full(
                     (1, idx_b.shape[1]),
@@ -375,7 +504,8 @@ def radius_search_impl(
                     dtype=torch.float32,
                     device=points.device,
                 )
-
+            print(f"Max points : {max_points}")
+            torch.cuda.nvtx.range_push(f'radius search nvtx push')
             wp.launch(
                 kernel=radius_search_limited_select_batched,
                 dim=(B, N_queries),
@@ -395,8 +525,9 @@ def radius_search_impl(
                     else None,
                 ],
                 stream=wp_launch_stream,
-                device=wp_launch_device,
+                device=wp_launch_device
             )
+            torch.cuda.nvtx.range_pop()
 
             if was_unbatched:
                 indices = indices.squeeze(0)
@@ -725,3 +856,268 @@ def radius_search(
         points, queries, radius, max_points, return_dists, return_points
     )
     return format_returns(indices, points_out, distances, return_dists, return_points)
+
+
+def _morton_permutation(
+    coords: torch.Tensor,
+    bbox_min_wp: wp.array,
+    inv_extent_wp: wp.array,
+    wp_launch_device: wp.Device | None,
+    wp_launch_stream: wp.Stream | None,
+) -> torch.Tensor:
+    """
+    Compute a per-batch Morton-order permutation for a set of coordinates.
+
+    Args:
+        coords (torch.Tensor): Contiguous fp32 coordinates of shape (B, M, 3).
+        bbox_min_wp (wp.array): Per-batch bbox lower corner, warp vec3 array (B,).
+        inv_extent_wp (wp.array): Per-batch reciprocal bbox extent, warp vec3 array (B,).
+        wp_launch_device (wp.Device | None): Device to launch the kernel on.
+        wp_launch_stream (wp.Stream | None): Stream to launch the kernel on.
+
+    Returns:
+        torch.Tensor: Int64 permutation of shape (B, M) sorting each batch by Morton code.
+    """
+    B, M = coords.shape[0], coords.shape[1]
+    codes = torch.empty((B, M), dtype=torch.int32, device=coords.device)
+    wp.launch(
+        kernel=compute_morton_codes,
+        dim=(B, M),
+        inputs=[
+            wp.from_torch(coords, dtype=wp.vec3, return_ctype=True),
+            bbox_min_wp,
+            inv_extent_wp,
+            wp.from_torch(codes, return_ctype=True),
+        ],
+        device=wp_launch_device,
+        stream=wp_launch_stream,
+    )
+    return torch.argsort(codes, dim=1)
+
+
+def radius_search_bvh(
+    points: torch.Tensor,
+    queries: torch.Tensor,
+    radius: float,
+    max_points: int,
+    return_dists: bool = False,
+    return_points: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Morton-ordered, tiled-BVH radius search (standalone; not wired into dispatch).
+
+    This is a drop-in alternative to the ``max_points`` path of
+    :func:`radius_search_impl` intended for testing and benchmarking. It Morton-
+    orders both point clouds and queries for locality, builds one LBVH per batch
+    element, and launches :func:`tiled_bvh_radius_search` as a flattened 1D tile
+    grid so each query is served cooperatively by a thread block via
+    ``wp.tile_bvh_query_aabb``.
+
+    Semantics match :func:`radius_search_limited_select_batched`: up to
+    ``max_points`` first-found neighbors within ``radius`` per query (filtered by
+    exact L2 distance). Outputs are returned in the original (un-permuted) point
+    and query order, with unused slots filled with ``0``.
+
+    Args:
+        points (torch.Tensor): Reference points, (N, 3) or (B, N, 3).
+        queries (torch.Tensor): Query points, (M, 3) or (B, M, 3).
+        radius (float): The search radius.
+        max_points (int): Maximum number of neighbors per query. Must not be None.
+        return_dists (bool, optional): Whether to return neighbor distances.
+        return_points (bool, optional): Whether to return neighbor coordinates.
+
+    Returns:
+        tuple[torch.Tensor, ...]: (indices, points, distances, num_neighbors),
+        mirroring the return contract of :func:`radius_search_impl`.
+    """
+    if points.device != queries.device:
+        raise ValueError("points and queries must be on the same device")
+    if max_points is None:
+        raise ValueError("radius_search_bvh requires max_points to be set (not None)")
+    if points.device.type != "cuda":
+        raise ValueError(
+            "radius_search_bvh requires CUDA tensors; tiled BVH queries are GPU-only"
+        )
+
+    points, queries, was_unbatched = validate_inputs(points, queries)
+    B = points.shape[0]
+    N = points.shape[1]
+    Q = queries.shape[1]
+
+    input_dtype = points.dtype
+
+    # Warp supports only fp32, so we have to cast:
+    if points.dtype != torch.float32:
+        points = points.to(torch.float32)
+    if queries.dtype != torch.float32:
+        queries = queries.to(torch.float32)
+    points = points.contiguous()
+    queries = queries.contiguous()
+
+    # Debug hook: dump the (validated, fp32) inputs of the first call so the exact
+    # failing case can be replayed standalone under compute-sanitizer. The .cpu()
+    # copy forces a sync, so if an *earlier* kernel already faulted the error
+    # surfaces here (attributing it upstream of this op) rather than at the next
+    # warp launch. Enable with PHYSICSNEMO_RADIUS_SEARCH_DUMP=/path/to/inputs.pt.
+    _dump_path = os.environ.get("PHYSICSNEMO_RADIUS_SEARCH_DUMP")
+    if _dump_path and not os.path.exists(_dump_path):
+        torch.save(
+            {
+                "points": points.detach().cpu(),
+                "queries": queries.detach().cpu(),
+                "radius": float(radius),
+                "max_points": int(max_points),
+                "return_dists": bool(return_dists),
+                "return_points": bool(return_points),
+            },
+            _dump_path,
+        )
+        print(f"[radius_search_bvh] dumped inputs -> {_dump_path}", flush=True)
+
+    # Compute follows data.
+    wp_launch_device, wp_launch_stream = FunctionSpec.warp_launch_context(points)
+
+    # Keep references to warp arrays / BVHs alive until after the launch.
+    keep_alive: List[object] = []
+
+    with wp.ScopedStream(wp_launch_stream):
+        # ------------------------------------------------------------------
+        # Morton ordering of points and queries (shared per-batch bbox)
+        # ------------------------------------------------------------------
+        both = torch.cat([points, queries], dim=1)
+        bbox_min = both.amin(dim=1).contiguous()
+        bbox_max = both.amax(dim=1)
+        inv_extent = (1.0 / (bbox_max - bbox_min).clamp_min(1e-12)).contiguous()
+
+        bbox_min_wp = wp.from_torch(bbox_min, dtype=wp.vec3, return_ctype=True)
+        inv_extent_wp = wp.from_torch(inv_extent, dtype=wp.vec3, return_ctype=True)
+
+        point_perm = _morton_permutation(
+            points, bbox_min_wp, inv_extent_wp, wp_launch_device, wp_launch_stream
+        )
+        query_perm = _morton_permutation(
+            queries, bbox_min_wp, inv_extent_wp, wp_launch_device, wp_launch_stream
+        )
+
+        points_sorted = torch.gather(
+            points, 1, point_perm.unsqueeze(-1).expand(B, N, 3)
+        ).contiguous()
+        queries_sorted = torch.gather(
+            queries, 1, query_perm.unsqueeze(-1).expand(B, Q, 3)
+        ).contiguous()
+
+        # ------------------------------------------------------------------
+        # Build one BVH per batch element from degenerate point AABBs
+        # ------------------------------------------------------------------
+        bvhs = []
+        for b in range(B):
+            lower_t = points_sorted[b].contiguous()
+            upper_t = lower_t.clone()
+            lowers = wp.from_torch(lower_t, dtype=wp.vec3)
+            uppers = wp.from_torch(upper_t, dtype=wp.vec3)
+            bvh = wp.Bvh(lowers, uppers, constructor="lbvh")
+            bvhs.append(bvh)
+            keep_alive.extend([lower_t, upper_t, lowers, uppers, bvh])
+
+        bvh_ids_tensor = torch.tensor(
+            [bvh.id for bvh in bvhs], dtype=torch.int64, device=points.device
+        )
+        wp_bvh_ids = wp.from_torch(bvh_ids_tensor, dtype=wp.uint64, return_ctype=True)
+
+        # ------------------------------------------------------------------
+        # Allocate outputs (sorted-query order, holding sorted-point indices)
+        # ------------------------------------------------------------------
+        mapping = torch.zeros(
+            (B, Q, max_points), dtype=torch.int32, device=points.device
+        )
+        num_neighbors = torch.zeros((B, Q), dtype=torch.int32, device=points.device)
+        if return_dists:
+            dists_out = torch.zeros(
+                (B, Q, max_points), dtype=torch.float32, device=points.device
+            )
+        else:
+            dists_out = torch.empty(0, dtype=torch.float32, device=points.device)
+        if return_points:
+            pts_out = torch.zeros(
+                (B, Q, max_points, 3), dtype=torch.float32, device=points.device
+            )
+        else:
+            pts_out = torch.empty(
+                (0, max_points, 3), dtype=torch.float32, device=points.device
+            )
+
+        # Flattened 1D tile grid (B * Q tiles), one thread block per query. A 2D
+        # dim=(B, Q) tiled launch triggers illegal memory accesses; the 1D shape
+        # matches the only tiled-launch form used by Warp's own BVH tests.
+        wp.launch_tiled(
+            kernel=tiled_bvh_radius_search,
+            dim=B * Q,
+            inputs=[
+                wp_bvh_ids,
+                wp.from_torch(points_sorted, dtype=wp.vec3, return_ctype=True),
+                wp.from_torch(queries_sorted, dtype=wp.vec3, return_ctype=True),
+                max_points,
+                radius,
+                wp.from_torch(mapping, return_ctype=True),
+                wp.from_torch(num_neighbors, return_ctype=True),
+                return_dists,
+                wp.from_torch(dists_out, return_ctype=True),
+                return_points,
+                wp.from_torch(pts_out, dtype=wp.vec3, return_ctype=True)
+                if return_points
+                else None,
+            ],
+            block_dim=16,
+            device=wp_launch_device,
+            stream=wp_launch_stream,
+        )
+
+    # ----------------------------------------------------------------------
+    # Remap outputs back to the original point / query ordering
+    # ----------------------------------------------------------------------
+    # The kernel uses an atomic counter, so num_neighbors can exceed max_points
+    # when more candidates fall within radius than there are output slots; clamp
+    # it to the cap (slots past max_points were not written).
+    num_neighbors = num_neighbors.clamp(max=max_points)
+
+    # Sorted-point indices -> original point indices; keep 0 sentinel for unused
+    # slots (those at or beyond num_neighbors).
+    valid_mask = torch.arange(max_points, device=points.device).view(
+        1, 1, max_points
+    ) < num_neighbors.unsqueeze(-1)
+    mapping_orig = (
+        torch.gather(point_perm, 1, mapping.long().reshape(B, Q * max_points))
+        .reshape(B, Q, max_points)
+        .to(torch.int32)
+    )
+    mapping_orig = mapping_orig.masked_fill(~valid_mask, 0)
+
+    # Un-permute query rows (sorted-query order -> original order).
+    inv_query_perm = torch.argsort(query_perm, dim=1)
+
+    def _unsort_queries(x: torch.Tensor) -> torch.Tensor:
+        idx = inv_query_perm.view(B, Q, *([1] * (x.ndim - 2))).expand_as(x)
+        return torch.gather(x, 1, idx)
+
+    indices = _unsort_queries(mapping_orig)
+    num_neighbors = torch.gather(num_neighbors, 1, inv_query_perm)
+    if return_points:
+        pts_out = _unsort_queries(pts_out)
+    if return_dists:
+        dists_out = _unsort_queries(dists_out)
+
+    if was_unbatched:
+        indices = indices.squeeze(0)
+        num_neighbors = num_neighbors.squeeze(0)
+        if return_dists:
+            dists_out = dists_out.squeeze(0)
+        if return_points:
+            pts_out = pts_out.squeeze(0)
+
+    pts_out = pts_out.to(input_dtype)
+    dists_out = dists_out.to(input_dtype)
+
+    # NOTE: ``keep_alive`` (BVHs and their bound arrays) is intentionally held
+    # in scope until the function returns. Warp frees are stream-ordered on the
+    # same stream as the launch, so the BVH memory stays valid for the kernel.
+    return indices, pts_out, dists_out, num_neighbors
