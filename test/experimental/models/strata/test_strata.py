@@ -29,8 +29,8 @@ from physicsnemo.experimental.models.strata.coords import (
 from physicsnemo.experimental.models.strata.layers import (
     DepthwiseConv,
     Natten3DSelfAttention,
+    StrataPixel3DBlock,
 )
-from physicsnemo.experimental.models.strata.strata import StrataPixel3DBlock
 from test.common import validate_checkpoint
 from test.conftest import requires_module
 
