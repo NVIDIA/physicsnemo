@@ -461,9 +461,7 @@ def test_sdf_pseudo_normal_sign_wrong_at_sharp_edges(device):
     reflex[:, 2] = _L_PRISM_HEIGHT * reflex[:, 2]
     query = torch.cat([box, reflex], dim=0).to(device)
 
-    sdf_out, _ = signed_distance_field_mesh(
-        mesh, query, use_sign_winding_number=False
-    )
+    sdf_out, _ = signed_distance_field_mesh(mesh, query, use_sign_winding_number=False)
 
     # The distance magnitude is correct; only the sign is in question. Compare to
     # the analytic interior away from the surface, where the sign is unambiguous.
@@ -497,9 +495,7 @@ def test_sdf_winding_sign_correct_at_sharp_edges(device):
     hi = torch.tensor([1.2, 1.2, _L_PRISM_HEIGHT + 0.2])
     query = (lo + (hi - lo) * torch.rand(40_000, 3)).to(device)
 
-    sdf_out, _ = signed_distance_field_mesh(
-        mesh, query, use_sign_winding_number=True
-    )
+    sdf_out, _ = signed_distance_field_mesh(mesh, query, use_sign_winding_number=True)
 
     # Exclude a near-surface band: the CUDA Barnes-Hut winding approximation is
     # only loose right at the surface (cf. test_winding_sign_triton_matches_exact).
@@ -596,9 +592,7 @@ def test_sdf_winding_sign_correct_at_sharp_edges_grid(device):
     query = _l_prism_probe_grid(device, thickness)
     gt_inside = _inside_l(query, thickness)
 
-    sdf_out, _ = signed_distance_field_mesh(
-        mesh, query, use_sign_winding_number=True
-    )
+    sdf_out, _ = signed_distance_field_mesh(mesh, query, use_sign_winding_number=True)
 
     # Compare signs away from the surface. The default ClusterTree backend is a
     # Barnes-Hut approximation whose winding number is only unreliable in a thin
@@ -625,9 +619,7 @@ def test_sdf_pseudo_normal_sign_correct_at_sharp_edges(device):
     query = _l_prism_probe_grid(device, thickness)
     gt_inside = _inside_l(query, thickness)
 
-    sdf_out, _ = signed_distance_field_mesh(
-        mesh, query, use_sign_winding_number=False
-    )
+    sdf_out, _ = signed_distance_field_mesh(mesh, query, use_sign_winding_number=False)
 
     away = sdf_out.abs() > 0.05
     expected = torch.where(
