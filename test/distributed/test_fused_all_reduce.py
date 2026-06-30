@@ -65,6 +65,42 @@ def test_sequence_structure_preserved():
     assert torch.equal(reduced[1], inputs[1])
 
 
+def test_bare_tensor_returns_tensor():
+    """A bare tensor reduces to a bare tensor (no container), value preserved on
+    the no-op path, detached and independent of the input."""
+    grad_tensor = torch.tensor(2.0, requires_grad=True)
+    reduced = fused_all_reduce(grad_tensor)
+
+    assert isinstance(reduced, torch.Tensor)
+    assert not isinstance(reduced, TensorDictBase)
+    assert reduced.item() == 2.0
+    assert not reduced.requires_grad
+    assert reduced.data_ptr() != grad_tensor.data_ptr()
+    # Mutating the output must not touch the input.
+    reduced.add_(100.0)
+    assert grad_tensor.item() == 2.0
+
+
+def test_bare_tensor_integer_is_exact():
+    """A homogeneous integer tensor reduces in its own dtype - no float cast."""
+    big = 2**40  # well beyond float32's 24-bit mantissa
+    reduced = fused_all_reduce(torch.tensor(big, dtype=torch.int64))
+
+    assert reduced.dtype == torch.int64
+    assert reduced.item() == big
+
+
+def test_bare_tensor_async_noop_returns_work_and_value():
+    """``async_op=True`` on a bare tensor returns ``(Tensor, work)``; the no-op
+    handle starts completed and the local value holds."""
+    result, work = fused_all_reduce(torch.tensor(5.0), async_op=True)
+
+    assert isinstance(result, torch.Tensor)
+    assert work.is_completed()  # no collective => already done
+    assert work.wait() is True
+    assert result.item() == 5.0
+
+
 def test_outputs_are_detached_independent_clones():
     """No-op outputs are detached and do not alias the inputs."""
     grad_tensor = torch.tensor(2.0, requires_grad=True)
@@ -134,10 +170,12 @@ def test_nested_tensordict_structure_preserved():
     assert reduced["sub"]["y"].item() == 3.0
 
 
-def test_invalid_type_raises():
-    """A non-container input (e.g. a bare tensor) is a TypeError."""
+@pytest.mark.parametrize("bad", [42, 3.14, None, object()])
+def test_invalid_type_raises(bad):
+    """A non-tensor, non-container input is a TypeError (a bare Tensor is now
+    supported; str/bytes are covered by test_string_like_raises_typeerror)."""
     with pytest.raises(TypeError):
-        fused_all_reduce(torch.tensor(1.0))
+        fused_all_reduce(bad)
 
 
 @pytest.mark.parametrize("bad", ["loss", b"loss"])
@@ -263,6 +301,41 @@ def test_sum_across_ranks():
 
     assert reduced["scalar"].item() == pytest.approx(expected)
     assert torch.allclose(reduced["vec"], torch.full((3,), expected, device=dm.device))
+
+
+@pytest.mark.multigpu_static
+def test_bare_tensor_sum_across_ranks():
+    """A bare tensor reduces to (and returns) a bare tensor: default SUM adds
+    each rank's contribution, the one-leaf analogue of the keyed SUM."""
+    dm = DistributedManager()
+    rank, world_size = dm.rank, dm.world_size
+    expected = _arithmetic_series(world_size)
+
+    reduced = fused_all_reduce(torch.tensor(float(rank + 1), device=dm.device))
+
+    assert isinstance(reduced, torch.Tensor)
+    assert reduced.item() == pytest.approx(expected)
+
+
+@pytest.mark.multigpu_static
+def test_bare_tensor_async_sum_across_ranks():
+    """``async_op=True`` on a bare tensor: the result holds this rank's local
+    value until ``wait()``, after which the fused SUM is filled in place."""
+    dm = DistributedManager()
+    rank, world_size = dm.rank, dm.world_size
+    expected = _arithmetic_series(world_size)
+
+    result, work = fused_all_reduce(
+        torch.tensor(float(rank + 1), device=dm.device), async_op=True
+    )
+
+    # Before wait(): the lone leaf still holds this rank's own (un-reduced) value.
+    assert result.item() == pytest.approx(float(rank + 1))
+
+    assert work.wait() is True
+    # After wait(): the fused SUM is filled into the output in place.
+    assert result.item() == pytest.approx(expected)
+    assert work.is_completed()
 
 
 @pytest.mark.multigpu_static
