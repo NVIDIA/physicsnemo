@@ -20,7 +20,6 @@ from dataclasses import dataclass
 from typing import Dict, Optional, Any
 import numpy as np
 import torch
-import torch.distributed as dist
 import pickle
 from pathlib import Path
 from typing import Literal
@@ -465,31 +464,5 @@ def metrics_fn_volume(
         "l2_velocity_z": torch.mean(l2[:, 2]),
         "l2_nut": torch.mean(l2[:, 4]),
     }
-
-    return metrics
-
-
-def all_reduce_dict(
-    metrics: dict[str, torch.Tensor], dm: DistributedManager
-) -> dict[str, torch.Tensor]:
-    """
-    Reduces a dictionary of metrics across all distributed processes.
-
-    Args:
-        metrics: Dictionary of metric names to torch.Tensor values.
-        dm: DistributedManager instance for distributed context.
-
-    Returns:
-        Dictionary of reduced metrics.
-    """
-    # TODO - update this to use domains and not the full world
-
-    if dm.world_size == 1:
-        return metrics
-
-    for key, value in metrics.items():
-        dist.all_reduce(value)
-        value = value / dm.world_size
-        metrics[key] = value
 
     return metrics
