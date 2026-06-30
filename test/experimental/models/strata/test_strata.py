@@ -987,6 +987,35 @@ def test_strata_validates_pos_shape():
 
 
 @torch.no_grad()
+def test_forward_rejects_wrong_ndim():
+    """Both models reject a non-5D input with a clean ValueError (not a cryptic
+    unpack/conv error). Guards the StrataTransformer3D.forward and Strata.forward
+    ndim checks."""
+    backbone_cfg = dict(
+        in_channels=3,
+        input_shape=(4, 8, 8),
+        patch_size=(1, 2, 2),
+        embed_dim=32,
+        num_heads=4,
+        num_layers=2,
+        attn_kernel=-1,
+    )
+    bad = torch.randn(2, 3, 8, 8)  # 4D: missing the depth axis
+    transformer = StrataTransformer3D(**backbone_cfg).eval()
+    with pytest.raises(ValueError):
+        transformer(bad)
+    model = Strata(
+        backbone_config=backbone_cfg,
+        embed_dim_pixel=16,
+        num_layers_pixel=2,
+        num_heads_pixel=2,
+        attn_kernel_pixel=-1,
+    ).eval()
+    with pytest.raises(ValueError):
+        model(bad)
+
+
+@torch.no_grad()
 @pytest.mark.parametrize("adaln_mode", ["pixel_proj", "bilinear_dw"])
 def test_strata_identity_init(adaln_mode):
     """A freshly built Strata starts as an identity residual: the pixel blocks'
