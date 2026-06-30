@@ -1023,6 +1023,19 @@ class GlobalContextBuilder(nn.Module):
                 "Local positions are required if local features are enabled."
             )
 
+        # `geometry` is required to build the local multi-scale features. The GALE
+        # blocks are sized for `n_hidden + n_hidden_local * len(radii)`, but those
+        # extra channels are only produced when geometry is provided. Without this
+        # guard, omitting `geometry` silently skips the concat and surfaces as a
+        # downstream LayerNorm shape mismatch instead of an actionable error.
+        if self.local_extractors is not None and geometry is None:
+            raise ValueError(
+                "`geometry` is required when local features are enabled "
+                "(include_local_features=True): multi-scale local features are "
+                "extracted from the geometry tensor. Pass `geometry` of shape "
+                "(B, N, geometry_dim) and set `geometry_dim` in the constructor."
+            )
+
         # Extract multi-scale features if enabled
         if self.local_extractors is not None and geometry is not None:
             local_features = []
