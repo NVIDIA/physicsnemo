@@ -1009,8 +1009,13 @@ def test_strata_identity_init(adaln_mode):
         attn_kernel_pixel=-1,
         adaln_mode=adaln_mode,
     ).eval()
-    # Pixel blocks are initialized (not left at PyTorch default zeros/anything).
-    assert model.pixel_blocks[0].attn.qkv.weight.abs().sum() > 0
+    # The pixel blocks' attn/MLP linears get the backbone's Xavier init, which
+    # *zeros* the linear bias -- whereas PyTorch's default nn.Linear init leaves a
+    # nonzero uniform bias. So a zeroed qkv bias proves the blocks were actually
+    # initialized by initialize_weights (a weight!=0 check can't: default init is
+    # nonzero too, so it would pass even if the Xavier pass were removed).
+    qkv = model.pixel_blocks[0].attn.qkv
+    assert qkv.bias is not None and (qkv.bias == 0).all()
     # ...but AdaLN-zero + zero output head => exact identity-residual (zero) output.
     assert (model.pixel_final_layer.linear.weight == 0).all()
     assert (model(torch.randn(2, 4, 4, 8, 8)) == 0).all()
