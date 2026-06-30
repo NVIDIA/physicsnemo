@@ -712,8 +712,8 @@ class StrataPixel3DBlock(nn.Module):
     an identity residual mapping.
 
     The pixel-wise AdaLN is an independent reimplementation of the conditioning
-    in Strata (see :class:`Strata`); the ``"bilinear_dw"`` mode is an
-    original addition beyond that work.
+    in PixelDiT (`arXiv:2511.20645 <https://arxiv.org/abs/2511.20645>`_); the
+    ``"bilinear_dw"`` mode is an original addition beyond that work.
 
     Parameters
     ----------
