@@ -567,13 +567,10 @@ def main(cfg: DictConfig) -> None:
             output = model(**batch["forward_kwargs"])
         pred_td = normalize_output_to_tensordict(output, target_config, output_type)
 
-        ### Metrics in training space (matches the validation numbers); one
-        ### batched D2H for all metric values.
+        ### Metrics in training space (matches the validation numbers); pull the
+        ### whole TensorDict host-side once so each .item() is a free CPU index.
         metric_td = metric_calculator(pred_td.float(), batch["targets"].float())
-        metric_keys = list(metric_td.keys())
-        sample_metrics = dict(
-            zip(metric_keys, torch.stack([metric_td[k] for k in metric_keys]).tolist())
-        )
+        sample_metrics = {key: value.item() for key, value in metric_td.cpu().items()}
         for k, v in sample_metrics.items():
             totals[k] += v
         count += 1
