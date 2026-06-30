@@ -392,7 +392,7 @@ class Strata(Module):
                     nn.init.zeros_(module.bias)
 
         # Xavier the pixel blocks' attention / MLP linears, then re-zero the AdaLN
-        # projections the blanket pass above clobbered (preserving AdaLN-zero).
+        # projections that the blanket pass clobbered (preserving AdaLN-zero).
         self.pixel_blocks.apply(_basic_init)
         for block in self.pixel_blocks:
             if isinstance(block, StrataPixel3DBlock):

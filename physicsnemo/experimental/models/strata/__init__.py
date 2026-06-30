@@ -42,8 +42,8 @@ Strata
     the backbone features, not on a diffusion timestep).
 
 The building-block layers (``StrataTransformer3DBlock``, ``StrataPixel3DBlock``,
-``Natten3DSelfAttention``, ``PatchEmbed3D``, ``FinalLayer3D``) are not part of the
-public surface; import them from their submodules if needed.
+``Natten3DSelfAttention``, ``PatchEmbed3D``, ``FinalLayer3D``, ``DepthwiseConv``)
+are not part of the public surface; import them from their submodules if needed.
 
 Examples
 --------
@@ -63,8 +63,8 @@ Examples
 torch.Size([2, 4, 4, 8, 8])
 """
 
-from .transformer import StrataTransformer3D
 from .strata import Strata
+from .transformer import StrataTransformer3D
 
 __all__ = [
     "Strata",
