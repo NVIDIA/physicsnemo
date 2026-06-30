@@ -825,9 +825,9 @@ class Mesh:
                     f"Required: n_manifold_dims = n_spatial_dims - 1 (codimension-1).\n"
                     f"Current codimension: {self.codimension}"
                 )
-            relative_vectors = (
-                self.points[self.cells[:, 1:]] - self.points[self.cells[:, [0]]]
-            )
+            rh_index = self.cells[:, 1:]
+            lh_index = self.cells[:, 0].unsqueeze(-1)
+            relative_vectors = self.points[rh_index] - self.points[lh_index]
             cached = compute_cell_normals(relative_vectors)
             self._cache["cell", "normals"] = cached
 
