@@ -81,7 +81,6 @@ from typing import Any
 
 import hydra
 import torch
-import torch.distributed as dist
 from datasets import build_dataloaders, find_normalizer, load_dataset_config
 from forces import ForceAccumulator, ForceContext
 from metrics import MetricCalculator, resolve_metrics
@@ -99,7 +98,7 @@ from utils import (
 )
 
 from physicsnemo import datapipes  # noqa: F401 - registers ${dp:...} resolver
-from physicsnemo.distributed import DistributedManager
+from physicsnemo.distributed import DistributedManager, fused_all_reduce
 from physicsnemo.mesh import DomainMesh
 from physicsnemo.utils import load_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
@@ -324,18 +323,24 @@ def _allreduce_sums(
 ) -> tuple[dict[str, float], int]:
     """All-reduce a ``{key: running_sum}`` dict and the sample count.
 
-    No-op (returns a plain copy) when not running distributed. Folds every
-    sum plus the count into a single collective.
+    Sums the per-key running sums across ranks via
+    :func:`physicsnemo.distributed.fused_all_reduce` (a detached no-op when not
+    distributed). The integer sample count is reduced in its own ``int64``
+    collective so it stays exact for any magnitude -- no ``int -> float -> int``
+    round-trip. Returns the reduced sums and global count for the caller to
+    divide; ``train._reduce_and_average`` is the analogous reducer that returns
+    means directly.
     """
-    if not (
-        dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1
-    ):
-        return dict(totals), count
-    keys = sorted(totals)
-    packed = torch.tensor([totals[k] for k in keys] + [float(count)], device=device)
-    dist.all_reduce(packed)
-    *sums, total = packed.tolist()
-    return {k: s for k, s in zip(keys, sums)}, int(total)
+    reduced_sums = fused_all_reduce(
+        {key: torch.tensor(value) for key, value in totals.items()}, device=device
+    )
+    reduced_count = fused_all_reduce(
+        torch.tensor(count, dtype=torch.int64), device=device
+    )
+    return (
+        {key: tensor.item() for key, tensor in reduced_sums.items()},
+        int(reduced_count.item()),
+    )
 
 
 ### ---------------------------------------------------------------------------
@@ -502,7 +507,6 @@ def main(cfg: DictConfig) -> None:
     # -- Force / moment coefficient setup (surface cases) -----------------------
     force_cfg = OmegaConf.select(cfg, "force_coefficients", default=None)
     force_ctx = ForceContext.from_config(force_cfg, field_types, device)
-    force_acc = ForceAccumulator()
     if force_ctx is not None:
         logger.info(
             f"Force coefficients: integrating Cp='{force_ctx.pressure_field}', "
@@ -535,9 +539,12 @@ def main(cfg: DictConfig) -> None:
             }
         )
 
+    dataset: Any = val_loader.dataset
+    sampler: Any = val_loader.sampler
+
+    force_acc = ForceAccumulator()
+
     # -- Inference loop ---------------------------------------------------------
-    dataset = val_loader.dataset
-    sampler = val_loader.sampler
     n_samples = len(sampler)
     log_every = max(1, int(cfg.get("logging", {}).get("log_every_n_steps", 10)))
     logger.info(f"Running inference over {n_samples} sample(s) -> {pred_dir}")
@@ -560,13 +567,10 @@ def main(cfg: DictConfig) -> None:
             output = model(**batch["forward_kwargs"])
         pred_td = normalize_output_to_tensordict(output, target_config, output_type)
 
-        ### Metrics in training space (matches the validation numbers).
-        sample_metrics = {
-            k: float(v.item())
-            for k, v in metric_calculator(
-                pred_td.float(), batch["targets"].float()
-            ).items()
-        }
+        ### Metrics in training space (matches the validation numbers); pull the
+        ### whole TensorDict host-side once so each .item() is a free CPU index.
+        metric_td = metric_calculator(pred_td.float(), batch["targets"].float())
+        sample_metrics = {key: value.item() for key, value in metric_td.cpu().items()}
         for k, v in sample_metrics.items():
             totals[k] += v
         count += 1
@@ -638,7 +642,7 @@ def main(cfg: DictConfig) -> None:
         ### One JSONL row per sample -- the documented metrics.jsonl
         ### contract. Console logging below is throttled by log_every.
         record: dict[str, Any] = {
-            "phase": "sample",
+            "phase": "infer_step",
             "step": i,
             "sample_id": sample_id,
             "metrics": sample_metrics,
@@ -676,7 +680,7 @@ def main(cfg: DictConfig) -> None:
         )
         log_jsonl(
             {
-                "phase": "summary",
+                "phase": "infer_summary",
                 "space": "training",
                 "num_samples": count,
                 "metrics": averages,
@@ -697,7 +701,7 @@ def main(cfg: DictConfig) -> None:
             )
             log_jsonl(
                 {
-                    "phase": "forces_summary",
+                    "phase": "infer_forces_summary",
                     "num_samples": force_acc.count,
                     "coefficients": coeff_summary,
                 }

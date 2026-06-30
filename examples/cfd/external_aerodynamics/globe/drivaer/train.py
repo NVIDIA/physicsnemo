@@ -51,7 +51,7 @@ from mlflow.tracking.fluent import (
     start_run,
 )
 from tensordict import TensorDict
-from torch.distributed import ReduceOp, all_reduce, barrier
+from torch.distributed import barrier
 from torch.profiler import record_function
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -62,7 +62,7 @@ from utilities import (
 )
 
 from physicsnemo.core import get_physicsnemo_pkg_info
-from physicsnemo.distributed import DistributedManager
+from physicsnemo.distributed import DistributedManager, fused_all_reduce
 from physicsnemo.experimental.models.globe.model import GLOBE
 from physicsnemo.experimental.utils import (
     disable_autotune_printing,
@@ -466,7 +466,9 @@ def main(
         batch_loss = batch_loss_components.stack_from_tensordict().sum()
         return batch_loss, batch_loss_components
 
-    def run_epoch(split: Split) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    def run_epoch(
+        split: Split,
+    ) -> tuple[torch.Tensor, TensorDict[str, Float[torch.Tensor, ""]]]:
         """Run one epoch of training or testing."""
         training = split == "train"
         dataloaders[split].sampler.set_epoch(epoch=epoch)
@@ -528,20 +530,27 @@ def main(
                 torch._logging.set_logs(graph_breaks=False, recompiles=False)
 
         ### [Distributed comms]
-        keys = ["loss", *all_batch_loss_components.keys()]
-        all_values = torch.stack(
-            [
-                torch.nanmean(torch.stack(all_batch_losses)),
-                *(
-                    torch.nanmean(torch.stack(all_batch_loss_components[k]))
-                    for k in keys[1:]
-                ),
-            ]
+        # Reduce per-key NaN-aware sums and non-NaN counts in one collective,
+        # then divide for a sample-weighted global mean. Deliberately sum/count
+        # (not AVG like the sibling recipes) to stay NaN-robust: an all-NaN rank
+        # adds 0 to both sum and count and drops out instead of poisoning the
+        # mean; the count is a small, exact non-NaN tally, never a large integer.
+        # The scalar epoch loss sits in its own "loss" slot, kept separate from
+        # the per-component "components" sub-tree so the two can never collide.
+        batches = TensorDict(
+            {
+                "loss": torch.stack(all_batch_losses),
+                "components": {
+                    k: torch.stack(v) for k, v in all_batch_loss_components.items()
+                },
+            }
         )
-        if dist.world_size > 1:
-            all_reduce(all_values, op=ReduceOp.AVG)
-        epoch_loss = all_values[0]
-        epoch_loss_components = dict(zip(keys[1:], all_values[1:]))
+        sums = batches.apply(torch.nansum)
+        counts = batches.apply(lambda v: (~torch.isnan(v)).sum().to(v.dtype))
+        reduced = fused_all_reduce(TensorDict({"sums": sums, "counts": counts}))
+        means = reduced["sums"] / reduced["counts"]
+        epoch_loss = means["loss"]
+        epoch_loss_components = means["components"]
 
         logger0.info(
             " | ".join(

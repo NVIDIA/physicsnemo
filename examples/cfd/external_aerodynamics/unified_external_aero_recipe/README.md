@@ -366,11 +366,13 @@ the checkpoint named by `run_id` (under `checkpoint_dir`, default
 ${output_dir}/${run_id}/
   predictions/<sample_id>.pdmsh   # DomainMesh: interior carries
                                   # pred_<field> and true_<field>
-  metrics.jsonl                   # per-sample + summary records
+  metrics.jsonl                   # infer_step + infer_summary records
 ```
 
 - **Metrics** are reported in training space (non-dim / normalized), so
-  they line up with the validation numbers logged during training.
+  they line up with the validation numbers logged during training. The
+  JSONL carries one `infer_step` row per sample plus an `infer_summary`
+  aggregate (and `infer_forces_summary` for surface cases).
 - **Physical units**: written fields are re-dimensionalized
   (`redimensionalize=true`, default) by inverting normalization then
   non-dimensionalization; `rescale_geometry=true` additionally restores
@@ -735,11 +737,16 @@ Training and validation metrics are logged in two places per run:
   loss / per-field loss / per-field metrics / learning rate / step time /
   GPU memory go in the `train/` writer; per-epoch summaries (loss + metrics)
   go in both writers.
-- **JSONL** at `${output_dir}/${run_id}/metrics.jsonl`. One line per
-  config snapshot, dataset summary, training step, and train / val epoch.
-  Easy to grep, easy to ship to an external store.
+- **JSONL** at `${output_dir}/${run_id}/metrics.jsonl`. One record per
+  line, tagged by a `phase` field: `config` (resolved run config),
+  `dataset` (split sizes + targets), `train_step` / `val_step` (per-step
+  loss + metrics), and `train_summary` / `val_summary` (per-epoch loss +
+  metrics). Easy to grep, easy to ship to an external store.
 
-Rank-0 only; no external tracker required.
+Under multi-GPU (DDP), all logged loss and metric values -- per-step and
+per-epoch alike -- are global all-rank means (reduced across ranks with a
+single fused `all_reduce`), not rank-0's shard. Only rank 0 writes the
+TensorBoard / JSONL files; no external tracker required.
 
 ## Source modules
 
