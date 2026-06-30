@@ -314,7 +314,6 @@ def _gqa_bwd_impl(
         dQ,
         d_tokens,
         dKV,
-        dKV,
         cu_seqlens_k,
         prog_ptr,
         prog_pix,
@@ -330,7 +329,6 @@ def _gqa_bwd_impl(
         KV_DIM=kv_dim,
         COMPUTE_DTYPE=compute_dtype,
         GROUPED=grouped,
-        COMBINED_DKV=True,
     )
     _maybe_print_autotune_choice(
         "bwd",

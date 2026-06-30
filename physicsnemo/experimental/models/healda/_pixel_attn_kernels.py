@@ -379,7 +379,6 @@ def _pixel_attn_gqa_fwd(
         "max_seqlen_k_bucket",
         "n_pix",
         "GROUPED",
-        "COMBINED_DKV",
     ],
 )
 @triton.jit
@@ -395,8 +394,7 @@ def _pixel_attn_gqa_bwd(
     dOut_ptr,
     dQ_ptr,
     dTokens_ptr,
-    dK_ptr,
-    dV_ptr,
+    dKV_ptr,  # combined [dK | dV] rows, stride 2 * KV_DIM
     cu_seqlens_ptr,
     ProgPtr_ptr,
     ProgPix_ptr,
@@ -413,7 +411,6 @@ def _pixel_attn_gqa_bwd(
     TILE_K: tl.constexpr,
     COMPUTE_DTYPE: tl.constexpr,
     GROUPED: tl.constexpr,
-    COMBINED_DKV: tl.constexpr,
 ):
     # CSR program map (see forward kernel). Weights loaded once per program and
     # shared across its 1-2 pixels; dK/dV/dTokens are written per global token row
@@ -557,18 +554,12 @@ def _pixel_attn_gqa_bwd(
                     other=0.0,
                 ).to(COMPUTE_DTYPE)
 
-                if COMBINED_DKV:
-                    kv_row_off = (
-                        (kv_start + tile_off) * (2 * KV_DIM)
-                        + offs_kv[:, None] * (2 * KV_DIM)
-                        + offs_d[None, :]
-                    )
-                else:
-                    kv_row_off = (
-                        (kv_start + tile_off) * KV_DIM
-                        + offs_kv[:, None] * KV_DIM
-                        + offs_d[None, :]
-                    )
+                # dKV holds combined [dK | dV] rows, so the row stride is 2 * KV_DIM.
+                kv_row_off = (
+                    (kv_start + tile_off) * (2 * KV_DIM)
+                    + offs_kv[:, None] * (2 * KV_DIM)
+                    + offs_d[None, :]
+                )
                 dq0, dt0, dk0, dv0 = _gqa_bwd_head(
                     tokens_tile,
                     wk0,
@@ -589,22 +580,14 @@ def _pixel_attn_gqa_bwd(
                     COMPUTE_DTYPE,
                 )
                 d_tok_sum = dt0
-                if COMBINED_DKV:
-                    tl.store(
-                        dK_ptr + kv_row_off + 0 * D_HEAD, dk0, mask=kv_mask[:, None]
-                    )
-                    tl.store(
-                        dK_ptr + kv_row_off + KV_DIM + 0 * D_HEAD,
-                        dv0,
-                        mask=kv_mask[:, None],
-                    )
-                else:
-                    tl.store(
-                        dK_ptr + kv_row_off + 0 * D_HEAD, dk0, mask=kv_mask[:, None]
-                    )
-                    tl.store(
-                        dV_ptr + kv_row_off + 0 * D_HEAD, dv0, mask=kv_mask[:, None]
-                    )
+                tl.store(
+                    dKV_ptr + kv_row_off + 0 * D_HEAD, dk0, mask=kv_mask[:, None]
+                )
+                tl.store(
+                    dKV_ptr + kv_row_off + KV_DIM + 0 * D_HEAD,
+                    dv0,
+                    mask=kv_mask[:, None],
+                )
                 if N_KV_HEADS >= 2:
                     dq1, dt1, dk1, dv1 = _gqa_bwd_head(
                         tokens_tile,
@@ -626,28 +609,16 @@ def _pixel_attn_gqa_bwd(
                         COMPUTE_DTYPE,
                     )
                     d_tok_sum += dt1
-                    if COMBINED_DKV:
-                        tl.store(
-                            dK_ptr + kv_row_off + 1 * D_HEAD,
-                            dk1,
-                            mask=kv_mask[:, None],
-                        )
-                        tl.store(
-                            dK_ptr + kv_row_off + KV_DIM + 1 * D_HEAD,
-                            dv1,
-                            mask=kv_mask[:, None],
-                        )
-                    else:
-                        tl.store(
-                            dK_ptr + kv_row_off + 1 * D_HEAD,
-                            dk1,
-                            mask=kv_mask[:, None],
-                        )
-                        tl.store(
-                            dV_ptr + kv_row_off + 1 * D_HEAD,
-                            dv1,
-                            mask=kv_mask[:, None],
-                        )
+                    tl.store(
+                        dKV_ptr + kv_row_off + 1 * D_HEAD,
+                        dk1,
+                        mask=kv_mask[:, None],
+                    )
+                    tl.store(
+                        dKV_ptr + kv_row_off + KV_DIM + 1 * D_HEAD,
+                        dv1,
+                        mask=kv_mask[:, None],
+                    )
 
                 tl.store(
                     dTokens_ptr
