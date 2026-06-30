@@ -55,15 +55,18 @@ The **sign** is determined by one of two methods, selected with
 .. code:: python
 
     import torch
+    from physicsnemo.mesh import Mesh
     from physicsnemo.mesh.spatial import signed_distance_field_mesh
 
-    # A triangle surface mesh: (n_vertices, 3) coords + flattened connectivity.
-    vertices = torch.randn(500, 3)
-    faces = torch.randint(0, 500, (3000,))  # (3 * n_faces,) or (n_faces, 3)
+    # A triangle surface mesh: (n_vertices, 3) coords + (n_faces, 3) connectivity.
+    mesh = Mesh(
+        points=torch.randn(500, 3),
+        cells=torch.randint(0, 500, (1000, 3)),
+    )
 
     query = torch.randn(10000, 3)
     sdf, hit_points = signed_distance_field_mesh(
-        vertices, faces, query, use_sign_winding_number=True
+        mesh, query, use_sign_winding_number=True
     )
     # sdf: (10000,) signed distances; hit_points: (10000, 3) closest surface points.
 
