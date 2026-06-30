@@ -31,10 +31,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
 
 from datasets import (
     ManifestSampler,
+    _build_manifest_val_dataset,
+    build_dataset,
     load_manifest,
     resolve_manifest_indices,
     resolve_manifest_spec,
@@ -388,3 +390,94 @@ class TestResolveManifestSpec:
         ds_yaml = OmegaConf.create({"train_datadir": str(tmp_path)})
         ds_block = OmegaConf.create({})
         assert resolve_manifest_spec(ds_yaml, ds_block) is None
+
+
+### ---------------------------------------------------------------------------
+### _build_manifest_val_dataset
+### ---------------------------------------------------------------------------
+
+
+class TestManifestValDataset:
+    """Tests for :func:`datasets._build_manifest_val_dataset`.
+
+    Manifest mode shares one reader across the train / val splits, so
+    validation must not inherit the train augmentations. This mirrors
+    directory mode, which always builds its val dataset with
+    ``augment=False`` -- the asymmetry these tests lock down.
+    """
+
+    @staticmethod
+    def _augmented_ds_yaml(datadir: Path) -> DictConfig:
+        """Minimal manifest-style volume dataset YAML carrying augmentations.
+
+        Trimmed to what the dataset builder inspects: the reader globs
+        paths lazily (no file is opened at construction), so the directory
+        only needs placeholder files, and the transform chain just needs a
+        ``CenterMesh`` anchor plus the augmentations that get inserted
+        after it.
+        """
+        return OmegaConf.create(
+            {
+                "pipeline": {
+                    "reader": {
+                        "_target_": "${dp:DomainMeshReader}",
+                        "path": str(datadir),
+                        "pattern": "run_*/domain_*.pdmsh",
+                    },
+                    "augmentations": [
+                        {"_target_": "${dp:RandomRotateMesh}", "axes": ["z"]},
+                        {"_target_": "${dp:RandomTranslateMesh}"},
+                    ],
+                    "transforms": [
+                        {"_target_": "${dp:CenterMesh}"},
+                    ],
+                },
+                "targets": {"pressure": "scalar"},
+            }
+        )
+
+    @staticmethod
+    def _make_datadir(tmp_path: Path) -> Path:
+        """Create placeholder runs the reader can glob (it never opens them)."""
+        for i in range(2):
+            run = tmp_path / f"run_{i}"
+            run.mkdir()
+            (run / f"domain_{i}.pdmsh").write_bytes(b"")
+        return tmp_path
+
+    def test_augment_off_returns_none(self, tmp_path: Path):
+        """``augment=False`` -> val shares the train dataset (None sentinel)."""
+        ds_yaml = self._augmented_ds_yaml(self._make_datadir(tmp_path))
+        assert (
+            _build_manifest_val_dataset(
+                ds_yaml,
+                augment=False,
+                device=None,
+                num_workers=1,
+                pin_memory=False,
+            )
+            is None
+        )
+
+    def test_augment_on_returns_unaugmented_dataset(self, tmp_path: Path):
+        """``augment=True`` -> a separate dataset whose chain has no augmentations."""
+        ds_yaml = self._augmented_ds_yaml(self._make_datadir(tmp_path))
+
+        ### Guard against a vacuous assertion: the train dataset must
+        ### actually carry a stochastic augmentation for the val check to
+        ### mean anything.
+        train_ds = build_dataset(
+            ds_yaml, augment=True, device=None, num_workers=1, pin_memory=False
+        )
+        assert any(getattr(t, "stochastic", False) for t in train_ds.transforms)
+
+        val_ds = _build_manifest_val_dataset(
+            ds_yaml, augment=True, device=None, num_workers=1, pin_memory=False
+        )
+        assert val_ds is not None
+        ### A distinct object (own reader), not the train dataset.
+        assert val_ds is not train_ds
+        ### No stochastic (augmentation) transforms survive on the val chain.
+        assert not any(getattr(t, "stochastic", False) for t in val_ds.transforms)
+        ### ...but the deterministic CenterMesh transform is still present.
+        assert any(type(t).__name__ == "CenterMesh" for t in val_ds.transforms)
