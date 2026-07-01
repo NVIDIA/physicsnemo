@@ -16,12 +16,15 @@
 
 """Fused Triton kernels for the 2-layer FiLM observation tokenizer.
 
-Private kernel backend for :mod:`..obs_tokenizer`, imported lazily only
-when triton is installed (mirrors the warp ``_warp_impl`` backends and the
-``_pixel_attn_kernels`` module).
+Private backend for :mod:`..obs_tokenizer`, imported lazily only when triton
+is installed. Contains:
 
-The kernels keep the FiLM MLP weights resident in SRAM and replay the forward
-computation during backward. They compute::
+1. The ``@triton.jit`` forward/backward kernels.
+2. ``torch.library.custom_op`` wrappers with fake-tensor and autograd
+   registration.
+3. The sweep-selected launch config presets (block/warp/stage counts).
+
+The kernels compute::
 
     cond  = [float_meta, obs_type_emb, channel_emb, platform_emb?]
     h     = SiLU(LayerNorm(Linear1(cond)))
@@ -30,15 +33,101 @@ computation during backward. They compute::
 
 Implementation notes
 --------------------
-All MLP weights fit in SRAM. The forward therefore evaluates ``Linear1`` as a
-sum of segment-local matmuls instead of materializing ``cond`` in HBM. The
-backward reconstructs the logical conditioning matrix with pointer-gather.
+All MLP weights fit in SRAM, so the forward evaluates ``Linear1`` as a sum of
+segment-local matmuls instead of materializing ``cond`` in HBM. The backward
+reconstructs the logical conditioning matrix with pointer-gather and replays
+the forward to recompute activations.
 """
+
+from dataclasses import dataclass
+
+import torch
 
 from physicsnemo.core.version_check import OptionalImport
 
 triton = OptionalImport("triton")
 tl = triton.language
+
+
+def _next_pow2(x: int) -> int:
+    return 1 << (x - 1).bit_length()
+
+
+def _cond_dim(
+    *, meta_dim: int, obs_embed_dim: int, chan_embed_dim: int, platform_embed_dim: int
+) -> int:
+    return meta_dim + obs_embed_dim + chan_embed_dim + platform_embed_dim
+
+
+# Presets chosen from sweep on H100. Need optimal performance with dynamic input
+# sizes, so hard coded presets for nobs >O(1M).
+@dataclass(frozen=True)
+class _KernelPreset:
+    BLOCK_M: int
+    num_warps: int
+    num_stages: int
+
+    def as_config_dict(self) -> dict[str, int | None]:
+        return {
+            "num_warps": self.num_warps,
+            "num_stages": self.num_stages,
+            "num_ctas": 1,
+            "maxnreg": None,
+            "BLOCK_M": self.BLOCK_M,
+        }
+
+
+_FWD_PRESET = _KernelPreset(BLOCK_M=64, num_warps=4, num_stages=2)
+
+_BWD_PRESET_A = _KernelPreset(BLOCK_M=64, num_warps=8, num_stages=1)
+_BWD_PRESET_B = _KernelPreset(BLOCK_M=128, num_warps=8, num_stages=1)
+_BWD_PRESET_C = _KernelPreset(BLOCK_M=128, num_warps=8, num_stages=2)
+
+
+def _select_bwd_preset(
+    *,
+    meta_dim: int,
+    obs_embed_dim: int,
+    chan_embed_dim: int,
+    platform_embed_dim: int,
+) -> _KernelPreset:
+    # Backward config selection is driven mostly by the padded conditioning width
+    # because the persistent kernel keeps replay state and reduction accumulators
+    # live across the tile loop.
+    cond_dim = _cond_dim(
+        meta_dim=meta_dim,
+        obs_embed_dim=obs_embed_dim,
+        chan_embed_dim=chan_embed_dim,
+        platform_embed_dim=platform_embed_dim,
+    )
+    cond_pad = _next_pow2(max(cond_dim, 16))
+    if cond_pad > 64:
+        return _BWD_PRESET_A
+    if cond_dim <= 46:
+        return _BWD_PRESET_C
+    if platform_embed_dim > 0:
+        return _BWD_PRESET_B
+    return _BWD_PRESET_A
+
+
+def get_fused_film_launch_configs(
+    *,
+    meta_dim: int,
+    obs_embed_dim: int,
+    chan_embed_dim: int,
+    platform_embed_dim: int,
+) -> dict[str, dict[str, int | None]]:
+    """Return the sweep-selected Triton launch config for this FiLM layout."""
+    bwd_preset = _select_bwd_preset(
+        meta_dim=meta_dim,
+        obs_embed_dim=obs_embed_dim,
+        chan_embed_dim=chan_embed_dim,
+        platform_embed_dim=platform_embed_dim,
+    )
+    return {
+        "fwd": _FWD_PRESET.as_config_dict(),
+        "bwd": bwd_preset.as_config_dict(),
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -491,3 +580,546 @@ def _fused_film_bwd(
         mask=offs_mlp[None, :] < MLP_OUT,
     )
     tl.atomic_add(DB2 + offs_mlp, db2_acc, mask=offs_mlp < MLP_OUT)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Python wrappers (custom ops for torch.compile)
+# These wrappers are split into:
+#   - Python launchers that allocate outputs/gradients,
+#   - public/private custom ops for ``torch.compile`` compatibility,
+#   - autograd glue that saves replay inputs for backward.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _launch_fused_film_fwd(
+    obs: torch.Tensor,
+    float_meta: torch.Tensor,
+    obs_type_id: torch.Tensor,
+    channel: torch.Tensor,
+    platform: torch.Tensor,
+    embed_weight: torch.Tensor,
+    chan_embed_weight: torch.Tensor,
+    platform_embed_weight: torch.Tensor,
+    w1: torch.Tensor,
+    b1: torch.Tensor,
+    ln_w: torch.Tensor,
+    ln_b: torch.Tensor,
+    w2: torch.Tensor,
+    b2: torch.Tensor,
+    eps: float,
+    meta_dim: int,
+    obs_embed_dim: int,
+    chan_embed_dim: int,
+    platform_embed_dim: int,
+    out_dim: int,
+    force_fp32: bool,
+) -> torch.Tensor:
+    N = obs.shape[0]
+    hidden = w1.shape[1]
+
+    out_dtype = torch.float32 if force_fp32 else torch.bfloat16
+    out = torch.empty(N, out_dim, device=obs.device, dtype=out_dtype)
+    if N == 0:
+        return out
+
+    # Forward handles conditioning as a sum of segment-local loads/dots, so each
+    # segment gets its own masked `tl.arange` extent. Using next-pow2 widths
+    # keeps those tile shapes Triton-friendly without materializing full `cond`.
+    meta_pad = _next_pow2(max(meta_dim, 16))
+    obs_embed_pad = _next_pow2(max(obs_embed_dim, 16))
+    chan_embed_pad = _next_pow2(max(chan_embed_dim, 16))
+    platform_embed_pad = _next_pow2(max(platform_embed_dim, 16))
+    out_pad = _next_pow2(max(out_dim, 16))
+    grid = ((N + _FWD_PRESET.BLOCK_M - 1) // _FWD_PRESET.BLOCK_M,)
+    _fused_film_fwd[grid](
+        obs,
+        float_meta,
+        obs_type_id,
+        channel,
+        platform,
+        embed_weight,
+        chan_embed_weight,
+        platform_embed_weight,
+        w1,
+        b1,
+        ln_w,
+        ln_b,
+        w2,
+        b2,
+        out,
+        N,
+        META_DIM=meta_dim,
+        OBS_EMBED_DIM=obs_embed_dim,
+        CHAN_EMBED_DIM=chan_embed_dim,
+        PLATFORM_EMBED_DIM=platform_embed_dim,
+        META_PAD=meta_pad,
+        OBS_EMBED_PAD=obs_embed_pad,
+        CHAN_EMBED_PAD=chan_embed_pad,
+        PLATFORM_EMBED_PAD=platform_embed_pad,
+        HIDDEN=hidden,
+        OUT_DIM=out_dim,
+        OUT_PAD=out_pad,
+        EPS=eps,
+        BLOCK_M=_FWD_PRESET.BLOCK_M,
+        COMPUTE_DTYPE=tl.float32 if force_fp32 else tl.bfloat16,
+        num_warps=_FWD_PRESET.num_warps,
+        num_stages=_FWD_PRESET.num_stages,
+    )
+    return out
+
+
+@torch.library.custom_op("healda::fused_film_fwd", mutates_args=())
+def fused_film_fwd(
+    obs: torch.Tensor,
+    float_meta: torch.Tensor,
+    obs_type_id: torch.Tensor,
+    channel: torch.Tensor,
+    platform: torch.Tensor,
+    embed_weight: torch.Tensor,
+    chan_embed_weight: torch.Tensor,
+    platform_embed_weight: torch.Tensor,
+    w1: torch.Tensor,
+    b1: torch.Tensor,
+    ln_w: torch.Tensor,
+    ln_b: torch.Tensor,
+    w2: torch.Tensor,
+    b2: torch.Tensor,
+    eps: float,
+    meta_dim: int,
+    obs_embed_dim: int,
+    chan_embed_dim: int,
+    platform_embed_dim: int,
+    out_dim: int,
+    force_fp32: bool,
+) -> torch.Tensor:
+    """Forward custom op that launches the fused FiLM Triton kernel."""
+    return _launch_fused_film_fwd(
+        obs,
+        float_meta,
+        obs_type_id,
+        channel,
+        platform,
+        embed_weight,
+        chan_embed_weight,
+        platform_embed_weight,
+        w1,
+        b1,
+        ln_w,
+        ln_b,
+        w2,
+        b2,
+        eps,
+        meta_dim,
+        obs_embed_dim,
+        chan_embed_dim,
+        platform_embed_dim,
+        out_dim,
+        force_fp32,
+    )
+
+
+@fused_film_fwd.register_fake
+def _fake_fused_film_fwd(
+    obs,
+    float_meta,
+    obs_type_id,
+    channel,
+    platform,
+    embed_weight,
+    chan_embed_weight,
+    platform_embed_weight,
+    w1,
+    b1,
+    ln_w,
+    ln_b,
+    w2,
+    b2,
+    eps,
+    meta_dim,
+    obs_embed_dim,
+    chan_embed_dim,
+    platform_embed_dim,
+    out_dim,
+    force_fp32,
+):
+    N = obs.shape[0]
+    return obs.new_empty(
+        (N, out_dim), dtype=torch.float32 if force_fp32 else torch.bfloat16
+    )
+
+
+def _launch_fused_film_bwd(
+    grad_out: torch.Tensor,
+    obs: torch.Tensor,
+    float_meta: torch.Tensor,
+    obs_type_id: torch.Tensor,
+    channel: torch.Tensor,
+    platform: torch.Tensor,
+    embed_weight: torch.Tensor,
+    chan_embed_weight: torch.Tensor,
+    platform_embed_weight: torch.Tensor,
+    w1: torch.Tensor,
+    b1: torch.Tensor,
+    ln_w: torch.Tensor,
+    ln_b: torch.Tensor,
+    w2: torch.Tensor,
+    b2: torch.Tensor,
+    eps: float,
+    meta_dim: int,
+    obs_embed_dim: int,
+    chan_embed_dim: int,
+    platform_embed_dim: int,
+    out_dim: int,
+    force_fp32: bool,
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+]:
+    N = obs.shape[0]
+    cond_dim = meta_dim + obs_embed_dim + chan_embed_dim + platform_embed_dim
+    hidden = w1.shape[1]
+    mlp_out_dim = 2 * out_dim
+    grad_out = grad_out.contiguous()
+    grad_embed = torch.zeros_like(embed_weight)
+    grad_chan_embed = torch.zeros_like(chan_embed_weight)
+    grad_platform_embed = torch.zeros_like(platform_embed_weight)
+
+    out_pad = _next_pow2(max(out_dim, 16))
+    obs_embed_pad = _next_pow2(max(obs_embed_dim, 16))
+    chan_embed_pad = _next_pow2(max(chan_embed_dim, 16))
+    platform_embed_pad = _next_pow2(max(platform_embed_dim, 16))
+
+    dw1 = torch.zeros(cond_dim, hidden, device=obs.device, dtype=torch.float32)
+    db1 = torch.zeros(hidden, device=obs.device, dtype=torch.float32)
+    dln_w = torch.zeros(hidden, device=obs.device, dtype=torch.float32)
+    dln_b = torch.zeros(hidden, device=obs.device, dtype=torch.float32)
+    dw2 = torch.zeros(hidden, mlp_out_dim, device=obs.device, dtype=torch.float32)
+    db2 = torch.zeros(mlp_out_dim, device=obs.device, dtype=torch.float32)
+
+    if N == 0:
+        return (
+            grad_embed,
+            grad_chan_embed,
+            grad_platform_embed,
+            dw1,
+            db1,
+            dln_w,
+            dln_b,
+            dw2,
+            db2,
+        )
+
+    compute_dtype = tl.float32 if force_fp32 else tl.bfloat16
+    num_sms = torch.cuda.get_device_properties(obs.device).multi_processor_count
+
+    bwd_preset = _select_bwd_preset(
+        meta_dim=meta_dim,
+        obs_embed_dim=obs_embed_dim,
+        chan_embed_dim=chan_embed_dim,
+        platform_embed_dim=platform_embed_dim,
+    )
+    cond_pad = _next_pow2(max(cond_dim, 16))
+    # Persistent launch: cap the grid at the SM count and let each CTA stride
+    # over multiple row tiles.
+    bwd_grid = (min(num_sms, (N + bwd_preset.BLOCK_M - 1) // bwd_preset.BLOCK_M),)
+
+    _fused_film_bwd[bwd_grid](
+        grad_out,
+        obs,
+        float_meta,
+        obs_type_id,
+        channel,
+        platform,
+        embed_weight,
+        chan_embed_weight,
+        platform_embed_weight,
+        w1,
+        b1,
+        ln_w,
+        ln_b,
+        w2,
+        dw1,
+        db1,
+        dln_w,
+        dln_b,
+        dw2,
+        db2,
+        grad_embed,
+        grad_chan_embed,
+        grad_platform_embed,
+        N,
+        META_DIM=meta_dim,
+        OBS_EMBED_DIM=obs_embed_dim,
+        CHAN_EMBED_DIM=chan_embed_dim,
+        PLATFORM_EMBED_DIM=platform_embed_dim,
+        COND_DIM=cond_dim,
+        HIDDEN=hidden,
+        OUT_DIM=out_dim,
+        COND_PAD=cond_pad,
+        OUT_PAD=out_pad,
+        OBS_EMBED_PAD=obs_embed_pad,
+        CHAN_EMBED_PAD=chan_embed_pad,
+        PLATFORM_EMBED_PAD=platform_embed_pad,
+        EPS=eps,
+        BLOCK_M=bwd_preset.BLOCK_M,
+        COMPUTE_DTYPE=compute_dtype,
+        num_warps=bwd_preset.num_warps,
+        num_stages=bwd_preset.num_stages,
+    )
+
+    return (
+        grad_embed,
+        grad_chan_embed,
+        grad_platform_embed,
+        dw1,
+        db1,
+        dln_w,
+        dln_b,
+        dw2,
+        db2,
+    )
+
+
+@torch.library.custom_op("healda::fused_film_bwd", mutates_args=())
+def fused_film_bwd(
+    grad_out: torch.Tensor,
+    obs: torch.Tensor,
+    float_meta: torch.Tensor,
+    obs_type_id: torch.Tensor,
+    channel: torch.Tensor,
+    platform: torch.Tensor,
+    embed_weight: torch.Tensor,
+    chan_embed_weight: torch.Tensor,
+    platform_embed_weight: torch.Tensor,
+    w1: torch.Tensor,
+    b1: torch.Tensor,
+    ln_w: torch.Tensor,
+    ln_b: torch.Tensor,
+    w2: torch.Tensor,
+    b2: torch.Tensor,
+    eps: float,
+    meta_dim: int,
+    obs_embed_dim: int,
+    chan_embed_dim: int,
+    platform_embed_dim: int,
+    out_dim: int,
+    force_fp32: bool,
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+]:
+    """Backward pass for the fused FiLM tokenizer.
+
+    Rebuilds a padded conditioning matrix with pointer-gather, replays the
+    FiLM MLP, and accumulates parameter and embedding gradients with a
+    single persistent-CTA Triton kernel.
+
+    Returns (grad_embed, grad_chan_embed, grad_platform_embed,
+             dw1, db1, dln_w, dln_b, dw2, db2).
+    """
+    return _launch_fused_film_bwd(
+        grad_out,
+        obs,
+        float_meta,
+        obs_type_id,
+        channel,
+        platform,
+        embed_weight,
+        chan_embed_weight,
+        platform_embed_weight,
+        w1,
+        b1,
+        ln_w,
+        ln_b,
+        w2,
+        b2,
+        eps,
+        meta_dim,
+        obs_embed_dim,
+        chan_embed_dim,
+        platform_embed_dim,
+        out_dim,
+        force_fp32,
+    )
+
+
+@fused_film_bwd.register_fake
+def _fake_fused_film_bwd(
+    grad_out,
+    obs,
+    float_meta,
+    obs_type_id,
+    channel,
+    platform,
+    embed_weight,
+    chan_embed_weight,
+    platform_embed_weight,
+    w1,
+    b1,
+    ln_w,
+    ln_b,
+    w2,
+    b2,
+    eps,
+    meta_dim,
+    obs_embed_dim,
+    chan_embed_dim,
+    platform_embed_dim,
+    out_dim,
+    force_fp32,
+):
+    cond_dim = meta_dim + obs_embed_dim + chan_embed_dim + platform_embed_dim
+    hidden = w1.shape[1]
+    mlp_out_dim = 2 * out_dim
+    return (
+        embed_weight.new_empty(embed_weight.shape),
+        chan_embed_weight.new_empty(chan_embed_weight.shape),
+        platform_embed_weight.new_empty(platform_embed_weight.shape),
+        w1.new_empty((cond_dim, hidden), dtype=torch.float32),
+        w1.new_empty((hidden,), dtype=torch.float32),
+        w1.new_empty((hidden,), dtype=torch.float32),
+        w1.new_empty((hidden,), dtype=torch.float32),
+        w1.new_empty((hidden, mlp_out_dim), dtype=torch.float32),
+        w1.new_empty((mlp_out_dim,), dtype=torch.float32),
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Autograd glue
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _setup_context(ctx, inputs, output):
+    (
+        obs,
+        float_meta,
+        obs_type_id,
+        channel,
+        platform,
+        embed_weight,
+        chan_embed_weight,
+        platform_embed_weight,
+        w1,
+        b1,
+        ln_w,
+        ln_b,
+        w2,
+        b2,
+        eps,
+        meta_dim,
+        obs_embed_dim,
+        chan_embed_dim,
+        platform_embed_dim,
+        out_dim,
+        force_fp32,
+    ) = inputs
+    # Save exactly the tensors needed to replay the FiLM computation in backward.
+    ctx.save_for_backward(
+        obs,
+        float_meta,
+        obs_type_id,
+        channel,
+        platform,
+        embed_weight,
+        chan_embed_weight,
+        platform_embed_weight,
+        w1,
+        b1,
+        ln_w,
+        ln_b,
+        w2,
+        b2,
+    )
+    ctx.eps = eps
+    ctx.meta_dim = meta_dim
+    ctx.obs_embed_dim = obs_embed_dim
+    ctx.chan_embed_dim = chan_embed_dim
+    ctx.platform_embed_dim = platform_embed_dim
+    ctx.out_dim = out_dim
+    ctx.force_fp32 = force_fp32
+
+
+def _backward(ctx, grad_out):
+    (
+        obs,
+        float_meta,
+        obs_type_id,
+        channel,
+        platform,
+        embed_weight,
+        chan_embed_weight,
+        platform_embed_weight,
+        w1,
+        b1,
+        ln_w,
+        ln_b,
+        w2,
+        b2,
+    ) = ctx.saved_tensors
+
+    ge, gce, gpe, dw1, db1, dln_w, dln_b, dw2, db2 = fused_film_bwd(
+        grad_out,
+        obs,
+        float_meta,
+        obs_type_id,
+        channel,
+        platform,
+        embed_weight,
+        chan_embed_weight,
+        platform_embed_weight,
+        w1,
+        b1,
+        ln_w,
+        ln_b,
+        w2,
+        b2,
+        ctx.eps,
+        ctx.meta_dim,
+        ctx.obs_embed_dim,
+        ctx.chan_embed_dim,
+        ctx.platform_embed_dim,
+        ctx.out_dim,
+        ctx.force_fp32,
+    )
+    # The inputs are metadata, indices, and scalar observations; gradients are
+    # exposed for the learned tables and dense FiLM MLP parameters only.
+    return (
+        None,
+        None,
+        None,
+        None,
+        None,  # obs, float_meta, obs_type_id, channel, platform
+        ge,
+        gce,
+        gpe,  # embed, chan_embed, platform_embed
+        dw1.to(w1.dtype),
+        db1.to(b1.dtype),
+        dln_w.to(ln_w.dtype),
+        dln_b.to(ln_b.dtype),
+        dw2.to(w2.dtype),
+        db2.to(b2.dtype),
+        None,  # eps
+        None,  # meta_dim
+        None,  # obs_embed_dim
+        None,  # chan_embed_dim
+        None,  # platform_embed_dim
+        None,  # out_dim
+        None,  # force_fp32
+    )
+
+
+fused_film_fwd.register_autograd(_backward, setup_context=_setup_context)

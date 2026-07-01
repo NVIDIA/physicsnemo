@@ -14,11 +14,37 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .scatter_aggregator import ScatterAggregator, scatter_mean
+r"""HealDA data-assimilation models and building blocks.
+
+:class:`HealDAv2` (current) uses :class:`PixelCrossAttention` and
+:class:`ObsTokenizerFiLM`. :class:`HealDA` (v1) uses the
+:class:`MultiSensorObsEmbedder` stack (:class:`SensorEmbedder`,
+:class:`UniformFusion`, :class:`ObsTokenizer`).
+"""
+
+from .healda import HealDA, HealDAMetaData
+from .healda_v2 import HealDAv2, HealDAv2MetaData
+from .obs_tokenizer import ObsTokenizerFiLM
+from .pixel_cross_attention import PixelCrossAttention
 from .point_embed import (
     MultiSensorObsEmbedder,
     ObsTokenizer,
     SensorEmbedder,
     UniformFusion,
 )
-from .healda import HealDA, HealDAMetaData
+from .scatter_aggregator import ScatterAggregator, scatter_mean
+
+__all__ = [
+    "HealDAv2",
+    "HealDAv2MetaData",
+    "HealDA",
+    "HealDAMetaData",
+    "PixelCrossAttention",
+    "ObsTokenizerFiLM",
+    "MultiSensorObsEmbedder",
+    "ObsTokenizer",
+    "SensorEmbedder",
+    "UniformFusion",
+    "ScatterAggregator",
+    "scatter_mean",
+]

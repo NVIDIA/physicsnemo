@@ -14,13 +14,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Triton grouped-query kernels for pixel/observation cross-attention.
+"""Triton kernels and PyTorch integration for pixel/observation cross-attention.
 
-Private kernel backend for :mod:`..pixel_cross_attention`, imported lazily only
-when triton is installed (mirrors the warp ``_warp_impl`` backends).
+Private backend for :mod:`..pixel_cross_attention`, imported lazily only when
+triton is installed. Contains:
+
+1. The ``@triton.jit`` forward/backward kernels.
+2. ``torch.library.custom_op`` wrappers with fake-tensor and autograd
+   registration.
+3. The autotune config cache.
 """
 
+import hashlib
+import os
+
+import torch
+import torch.distributed as dist
+
 from physicsnemo.core.version_check import OptionalImport
+from physicsnemo.experimental.models.healda import triton_autotune_cache as tac
 
 triton = OptionalImport("triton")
 tl = triton.language
@@ -30,6 +42,30 @@ tl = triton.language
 # exp2/log2 hardware instructions. The LSE is stored in the log2 domain so the
 # forward (producer) and backward (consumer) agree on the convention.
 LOG2E = tl.constexpr(1.4426950408889634)
+
+# Directory for the persisted Triton autotune cache. Overridable so deployments
+# can redirect it to a fast/shared location; defaults under the user cache dir.
+_AUTOTUNE_CACHE_DIR = os.environ.get(
+    "PHYSICSNEMO_CACHE_DIR", os.path.expanduser("~/.cache/physicsnemo")
+)
+
+
+def _next_power_of_2(n):
+    if n <= 0:
+        return 1
+    return 1 << (n - 1).bit_length()
+
+
+_MAX_SEQLEN_K_BUCKETS = (64, 256, 1024, 4096)
+_MAX_SEQLEN_K_BUCKET_OVERFLOW = 8192
+
+
+def _bucket_max_seqlen_k(max_seqlen_k: int) -> int:
+    # Bucket raw sequence lengths so nearby shapes share the same autotune cache.
+    for upper_bound in _MAX_SEQLEN_K_BUCKETS:
+        if max_seqlen_k <= upper_bound:
+            return upper_bound
+    return _MAX_SEQLEN_K_BUCKET_OVERFLOW
 
 
 def _autotune_configs():
@@ -580,9 +616,7 @@ def _pixel_attn_gqa_bwd(
                     COMPUTE_DTYPE,
                 )
                 d_tok_sum = dt0
-                tl.store(
-                    dKV_ptr + kv_row_off + 0 * D_HEAD, dk0, mask=kv_mask[:, None]
-                )
+                tl.store(dKV_ptr + kv_row_off + 0 * D_HEAD, dk0, mask=kv_mask[:, None])
                 tl.store(
                     dKV_ptr + kv_row_off + KV_DIM + 0 * D_HEAD,
                     dv0,
@@ -648,3 +682,556 @@ def _pixel_attn_gqa_bwd(
                     dq1,
                     mask=qh_mask[:, None],
                 )
+
+
+# ─── Custom op registration ──────────────────────────────────────────
+# Wrap the Triton launches as torch custom ops so autograd and fake-tensor
+# tracing see a single op.
+
+
+def _gqa_fwd_impl(
+    Q,
+    tokens,
+    W_k,
+    W_v,
+    B_k,
+    B_v,
+    cu_seqlens_k,
+    prog_ptr,
+    prog_pix,
+    scale,
+    max_seqlen_k,
+    q_per_kv,
+    token_dim,
+    n_kv_heads,
+    use_v_bias,
+    force_fp32=False,
+):
+    n_groups = cu_seqlens_k.shape[0] - 1
+    # Empty CSR map => ungrouped: one program per pixel, kernel derives pixel =
+    # program_id (GROUPED=False) and skips the per-program map loads.
+    grouped = prog_pix.numel() > 0
+    n_programs = (prog_ptr.shape[0] - 1) if grouped else n_groups
+    n_q_heads = Q.shape[1]
+    d_head = Q.shape[2]
+    block_q = max(16, _next_power_of_2(q_per_kv))
+    max_seqlen_k_bucket = _bucket_max_seqlen_k(int(max_seqlen_k))
+    compute_dtype = tl.float32 if force_fp32 else tl.bfloat16
+    # The Triton kernels below use flat pointer math for packed [group, head, d]
+    # storage and do not take explicit tensor strides. Multi-phase q/head slices
+    # are views with the original group stride, so materialize packed inputs here.
+    Q = Q.contiguous()
+    tokens = tokens.contiguous()
+    W_k = W_k.contiguous()
+    W_v = W_v.contiguous()
+    B_k = B_k.contiguous()
+    B_v = B_v.contiguous()
+    Out = torch.zeros_like(Q)
+    LSE = torch.empty(n_groups, n_q_heads, device=Q.device, dtype=torch.float32)
+
+    _pixel_attn_gqa_fwd[(n_programs,)](
+        Q,
+        tokens,
+        W_k,
+        W_v,
+        B_k,
+        B_v,
+        Out,
+        LSE,
+        cu_seqlens_k,
+        prog_ptr,
+        prog_pix,
+        scale,
+        max_seqlen_k_bucket,
+        n_groups,
+        USE_V_BIAS=use_v_bias,
+        Q_PER_KV=q_per_kv,
+        BLOCK_Q=block_q,
+        N_KV_HEADS=n_kv_heads,
+        D_HEAD=d_head,
+        TOKEN_DIM=token_dim,
+        COMPUTE_DTYPE=compute_dtype,
+        GROUPED=grouped,
+    )
+    return Out, LSE
+
+
+def _gqa_bwd_impl(
+    dOut,
+    Q,
+    tokens,
+    W_k,
+    W_v,
+    B_k,
+    B_v,
+    Out,
+    LSE,
+    cu_seqlens_k,
+    prog_ptr,
+    prog_pix,
+    scale,
+    max_seqlen_k,
+    q_per_kv,
+    token_dim,
+    n_kv_heads,
+    use_v_bias,
+    force_fp32=False,
+):
+    n_groups = cu_seqlens_k.shape[0] - 1
+    grouped = prog_pix.numel() > 0
+    n_programs = (prog_ptr.shape[0] - 1) if grouped else n_groups
+    d_head = Q.shape[2]
+    kv_dim = n_kv_heads * d_head
+    block_q = max(16, _next_power_of_2(q_per_kv))
+    max_seqlen_k_bucket = _bucket_max_seqlen_k(int(max_seqlen_k))
+    compute_dtype = tl.float32 if force_fp32 else tl.bfloat16
+    torch_compute_dtype = torch.float32 if force_fp32 else torch.bfloat16
+    # Backward sees the original saved inputs from the custom op; for multi-phase
+    # q/head slicing those can be non-contiguous views, which breaks the kernel's
+    # flat indexing unless we repack them first.
+    Q = Q.contiguous()
+    tokens = tokens.contiguous()
+    W_k = W_k.contiguous()
+    W_v = W_v.contiguous()
+    B_k = B_k.contiguous()
+    B_v = B_v.contiguous()
+    Out = Out.contiguous()
+    LSE = LSE.contiguous()
+    dOut = dOut.contiguous()
+    dQ = torch.zeros_like(Q)
+    d_tokens = torch.zeros_like(tokens)
+    # HYBRID: kernel keeps in-kernel K/V recompute + in-kernel dtokens, but emits
+    # per-token [dK | dV] rows so the weight grads are recovered with one dense
+    # GEMM instead of two. Every token is written by exactly one non-empty pixel.
+    dKV = torch.empty(
+        tokens.shape[0], 2 * kv_dim, device=Q.device, dtype=torch_compute_dtype
+    )
+
+    _pixel_attn_gqa_bwd[(n_programs,)](
+        Q,
+        tokens,
+        W_k,
+        W_v,
+        B_k,
+        B_v,
+        Out,
+        LSE,
+        dOut,
+        dQ,
+        d_tokens,
+        dKV,
+        cu_seqlens_k,
+        prog_ptr,
+        prog_pix,
+        scale,
+        max_seqlen_k_bucket,
+        n_groups,
+        USE_V_BIAS=use_v_bias,
+        Q_PER_KV=q_per_kv,
+        BLOCK_Q=block_q,
+        N_KV_HEADS=n_kv_heads,
+        D_HEAD=d_head,
+        TOKEN_DIM=token_dim,
+        KV_DIM=kv_dim,
+        COMPUTE_DTYPE=compute_dtype,
+        GROUPED=grouped,
+    )
+    # Recover weight grads as one dense cuBLAS GEMM:
+    # dKV rows are [dK | dV], so the result rows split back into [dW_k | dW_v].
+    tokens_compute = tokens.to(torch_compute_dtype)
+    dW_kv = (dKV.t() @ tokens_compute).to(torch.float32)
+    dW_k = dW_kv[:kv_dim].clone()
+    dW_v = dW_kv[kv_dim:].clone()
+    if use_v_bias:
+        # Accumulate in fp32 directly; do NOT materialize an fp32 copy of dV
+        # (millions of rows) before reducing -- that HBM pass dominated the bwd.
+        dB_v = dKV[:, kv_dim:].sum(dim=0, dtype=torch.float32)
+    else:
+        dB_v = torch.zeros(kv_dim, device=Q.device, dtype=torch.float32)
+    dB_k = torch.zeros_like(B_k)
+    dW_k = dW_k if W_k.dtype == dW_k.dtype else dW_k.to(W_k.dtype)
+    dW_v = dW_v if W_v.dtype == dW_v.dtype else dW_v.to(W_v.dtype)
+    if B_v.dtype != dB_v.dtype:
+        dB_v = dB_v.to(B_v.dtype)
+    return dQ, d_tokens, dW_k, dW_v, dB_k, dB_v
+
+
+@torch.library.custom_op("healda::pixel_attn_fwd", mutates_args=())
+def pixel_attn_fwd(
+    Q: torch.Tensor,
+    tokens: torch.Tensor,
+    W_k: torch.Tensor,
+    W_v: torch.Tensor,
+    B_k: torch.Tensor,
+    B_v: torch.Tensor,
+    cu_seqlens_k: torch.Tensor,
+    prog_ptr: torch.Tensor,
+    prog_pix: torch.Tensor,
+    scale: float,
+    max_seqlen_k: int,
+    q_per_kv: int,
+    token_dim: int,
+    n_kv_heads: int,
+    use_v_bias: bool,
+    force_fp32: bool,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    return _gqa_fwd_impl(
+        Q,
+        tokens,
+        W_k,
+        W_v,
+        B_k,
+        B_v,
+        cu_seqlens_k,
+        prog_ptr,
+        prog_pix,
+        scale,
+        max_seqlen_k,
+        q_per_kv,
+        token_dim,
+        n_kv_heads,
+        use_v_bias,
+        force_fp32,
+    )
+
+
+@pixel_attn_fwd.register_fake
+def _fake_fwd(
+    Q,
+    tokens,
+    W_k,
+    W_v,
+    B_k,
+    B_v,
+    cu_seqlens_k,
+    prog_ptr,
+    prog_pix,
+    scale,
+    max_seqlen_k,
+    q_per_kv,
+    token_dim,
+    n_kv_heads,
+    use_v_bias,
+    force_fp32,
+):
+    # Fake registrations mirror output metadata so torch.compile/export can trace
+    # through the custom op without running the Triton kernel.
+    n_groups, n_q_heads, d_head = Q.shape
+    return Q.new_empty((n_groups, n_q_heads, d_head)), Q.new_empty(
+        (n_groups, n_q_heads), dtype=torch.float32
+    )
+
+
+@torch.library.custom_op("healda::pixel_attn_bwd", mutates_args=())
+def pixel_attn_bwd(
+    dOut: torch.Tensor,
+    Q: torch.Tensor,
+    tokens: torch.Tensor,
+    W_k: torch.Tensor,
+    W_v: torch.Tensor,
+    B_k: torch.Tensor,
+    B_v: torch.Tensor,
+    Out: torch.Tensor,
+    LSE: torch.Tensor,
+    cu_seqlens_k: torch.Tensor,
+    prog_ptr: torch.Tensor,
+    prog_pix: torch.Tensor,
+    scale: float,
+    max_seqlen_k: int,
+    q_per_kv: int,
+    token_dim: int,
+    n_kv_heads: int,
+    use_v_bias: bool,
+    force_fp32: bool,
+) -> tuple[
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
+]:
+    return _gqa_bwd_impl(
+        dOut,
+        Q,
+        tokens,
+        W_k,
+        W_v,
+        B_k,
+        B_v,
+        Out,
+        LSE,
+        cu_seqlens_k,
+        prog_ptr,
+        prog_pix,
+        scale,
+        max_seqlen_k,
+        q_per_kv,
+        token_dim,
+        n_kv_heads,
+        use_v_bias,
+        force_fp32,
+    )
+
+
+@pixel_attn_bwd.register_fake
+def _fake_bwd(
+    dOut,
+    Q,
+    tokens,
+    W_k,
+    W_v,
+    B_k,
+    B_v,
+    Out,
+    LSE,
+    cu_seqlens_k,
+    prog_ptr,
+    prog_pix,
+    scale,
+    max_seqlen_k,
+    q_per_kv,
+    token_dim,
+    n_kv_heads,
+    use_v_bias,
+    force_fp32,
+):
+    return (
+        Q.new_empty(Q.shape),
+        tokens.new_empty(tokens.shape),
+        W_k.new_empty(W_k.shape),
+        W_v.new_empty(W_v.shape),
+        B_k.new_empty(B_k.shape),
+        B_v.new_empty(B_v.shape),
+    )
+
+
+def _setup_context(ctx, inputs, output):
+    (
+        Q,
+        tokens,
+        W_k,
+        W_v,
+        B_k,
+        B_v,
+        cu_seqlens_k,
+        prog_ptr,
+        prog_pix,
+        scale,
+        max_seqlen_k,
+        q_per_kv,
+        token_dim,
+        n_kv_heads,
+        use_v_bias,
+        force_fp32,
+    ) = inputs
+    Out, LSE = output
+    # Save the packed tensors the Triton backward expects rather than rebuilding
+    # projections during the autograd callback.
+    ctx.save_for_backward(
+        Q, tokens, W_k, W_v, B_k, B_v, Out, LSE, cu_seqlens_k, prog_ptr, prog_pix
+    )
+    ctx.scale = scale
+    ctx.max_seqlen_k = max_seqlen_k
+    ctx.q_per_kv = q_per_kv
+    ctx.token_dim = token_dim
+    ctx.n_kv_heads = n_kv_heads
+    ctx.use_v_bias = use_v_bias
+    ctx.force_fp32 = force_fp32
+
+
+def _backward(ctx, grad_Out, grad_LSE):
+    del grad_LSE
+    (
+        Q,
+        tokens,
+        W_k,
+        W_v,
+        B_k,
+        B_v,
+        Out,
+        LSE,
+        cu_seqlens_k,
+        prog_ptr,
+        prog_pix,
+    ) = ctx.saved_tensors
+    dQ, d_tokens, dW_k, dW_v, dB_k, dB_v = pixel_attn_bwd(
+        grad_Out,
+        Q,
+        tokens,
+        W_k,
+        W_v,
+        B_k,
+        B_v,
+        Out,
+        LSE,
+        cu_seqlens_k,
+        prog_ptr,
+        prog_pix,
+        ctx.scale,
+        ctx.max_seqlen_k,
+        ctx.q_per_kv,
+        ctx.token_dim,
+        ctx.n_kv_heads,
+        ctx.use_v_bias,
+        ctx.force_fp32,
+    )
+    # One grad slot per fwd input: 6 real grads then None for
+    # cu_seqlens_k, prog_ptr, prog_pix, scale, max_seqlen_k, q_per_kv,
+    # token_dim, n_kv_heads, use_v_bias, force_fp32.
+    return (
+        dQ,
+        d_tokens,
+        dW_k,
+        dW_v,
+        dB_k,
+        dB_v,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+
+
+pixel_attn_fwd.register_autograd(_backward, setup_context=_setup_context)
+
+
+def _pixel_attention_gqa(
+    Q,
+    tokens,
+    W_k,
+    W_v,
+    B_k,
+    B_v,
+    cu_seqlens_k,
+    prog_ptr,
+    prog_pix,
+    max_seqlen_k,
+    n_kv_heads,
+    scale,
+    force_fp32=False,
+):
+    n_q_heads = Q.shape[1]
+    q_per_kv = n_q_heads // n_kv_heads
+    token_dim = tokens.shape[1]
+    use_v_bias = B_v is not None
+    if B_k is None:
+        # The custom op has a fixed tensor schema, so use empty placeholders when
+        # a bias is logically absent.
+        B_k = W_k.new_empty((0,))
+    if B_v is None:
+        B_v = W_v.new_empty((0,))
+    Q = Q.contiguous()
+    tokens = tokens.contiguous()
+    W_k = W_k.contiguous()
+    W_v = W_v.contiguous()
+    B_k = B_k.contiguous()
+    B_v = B_v.contiguous()
+    Out, _LSE = pixel_attn_fwd(
+        Q,
+        tokens,
+        W_k,
+        W_v,
+        B_k,
+        B_v,
+        cu_seqlens_k,
+        prog_ptr,
+        prog_pix,
+        scale,
+        max_seqlen_k,
+        q_per_kv,
+        token_dim,
+        n_kv_heads,
+        use_v_bias,
+        force_fp32,
+    )
+    return Out
+
+
+# ---------------------------------------------------------------------------
+# Triton autotune config cache (startup optimization.
+# Triton @autotune benchmarks every config the first time each shape-key is
+# hit. We persist the chosen configs to a per-(GPU, rank) JSON and load them at
+# setup so a fresh process reuses a prior run's tuning instead of re-benchmarking.
+# Tuning itself stays LAZY on the real first batch (so the config always matches
+# the real workload -- no synthetic data that might mistune), and a write-through
+# saves each newly tuned config immediately. Each rank owns its file: no barrier /
+# rank-0 coordination, and ranks tune the same buckets in parallel anyway. The file
+# name embeds the GPU model + a source/Triton-version hash, so a kernel edit or a
+# Triton upgrade transparently invalidates the cache (re-tunes from scratch).
+# ---------------------------------------------------------------------------
+def _autotuners():
+    """Return the ``{name: triton.Autotuner}`` map for the kernel backend."""
+    return {
+        "pixel_attn_gqa_fwd": _pixel_attn_gqa_fwd,
+        "pixel_attn_gqa_bwd": _pixel_attn_gqa_bwd,
+    }
+
+
+_AUTOTUNE_CACHE_READY = False
+
+
+def _autotune_cache_file():
+    explicit = os.environ.get("HEALDA_PIXEL_ATTN_AUTOTUNE_CACHE")
+    if explicit:
+        return explicit
+    with open(__file__, "rb") as f:
+        digest = hashlib.sha1(f.read(), usedforsecurity=False).hexdigest()[:8]
+    ver = getattr(triton, "__version__", "0")
+    # Key by GPU model (a cache dir reused across GPU types never serves wrong-arch
+    # configs) and by rank (each rank owns its file -> no write races, no barrier).
+    gpu = (
+        torch.cuda.get_device_name().replace(" ", "_")
+        if torch.cuda.is_available()
+        else "cpu"
+    )
+    rank = dist.get_rank() if (dist.is_available() and dist.is_initialized()) else 0
+    name = f"pixel_cross_attention-{gpu}-{digest}-triton{ver}-rank{rank}.json"
+    return os.path.join(_AUTOTUNE_CACHE_DIR, "triton_autotune", name)
+
+
+def load_autotune_cache(path=None):
+    return tac.load_caches(_autotuners(), path or _autotune_cache_file())
+
+
+def save_autotune_cache(path=None):
+    return tac.save_caches(_autotuners(), path or _autotune_cache_file())
+
+
+def _install_writethrough(tuner, path):
+    # Persist this rank's cache whenever the autotuner tunes a new key (i.e. the
+    # first time a new shape/grid bucket is hit on the real workload), so the next
+    # process loads it instead of re-benchmarking.
+    if getattr(tuner, "_healda_writethrough", False):
+        return
+    tuner._healda_writethrough = True
+    run = tuner.run
+
+    def run_and_persist(*args, **kwargs):
+        before = len(tuner.cache)
+        out = run(*args, **kwargs)
+        if len(tuner.cache) > before:
+            save_autotune_cache(path)
+        return out
+
+    tuner.run = run_and_persist
+
+
+def _ensure_autotune_cache():
+    """Lazily wire up the per-rank autotune cache on the FIRST pixel-attention call:
+    load this rank's saved configs (so a fresh process reuses a prior run's tuning)
+    and arm the write-through (so any config Triton tunes lazily on the real batch
+    is persisted). Tuning itself stays Triton-lazy on the real workload, so the
+    chosen config always matches the real batch -- no synthetic data, no setup
+    step. Idempotent and best-effort (a cache failure never blocks the kernel)."""
+    global _AUTOTUNE_CACHE_READY
+    if _AUTOTUNE_CACHE_READY:
+        return
+    _AUTOTUNE_CACHE_READY = True  # set first: best-effort, never retry per-call
+    if os.environ.get("HEALDA_PIXEL_ATTN_PREWARM", "1") != "1":
+        return
+    path = _autotune_cache_file()
+    load_autotune_cache(path)
+    for tuner in _autotuners().values():
+        _install_writethrough(tuner, path)

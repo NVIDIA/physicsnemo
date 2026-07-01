@@ -27,8 +27,8 @@ from physicsnemo.experimental.models.healda.pixel_attention_utils import (
 )
 from physicsnemo.experimental.models.healda.pixel_cross_attention import (
     PixelCrossAttention,
+    _pixel_attention_reference,
     pixel_attention,
-    pixel_attention_reference,
 )
 
 triton = OptionalImport("triton")
@@ -38,7 +38,7 @@ requires_triton_cuda = pytest.mark.skipif(
     reason="pixel cross-attention Triton kernel requires triton + CUDA",
 )
 
-_ragged_gqa_reference = pixel_attention_reference
+_ragged_gqa_reference = _pixel_attention_reference
 
 # Small power-of-two dims keep every kernel launch tiny and fast.
 D_HEAD = 16

@@ -22,8 +22,7 @@ per-pixel contiguous groups (:func:`sort_and_pack`), turn per-pixel counts into
 the ``cu_seqlens_k`` prefix sums the kernel addresses by
 (:func:`counts_to_cu_seqlens`), and pack small pixels into shared kernel programs
 (:func:`build_pixel_group_map`). They operate on plain index/count tensors, so
-they are grid- and observation-layout agnostic. The data pipeline calls them to
-populate :class:`..obs_context.ObsContext`; the model never does.
+they are grid- and observation-layout agnostic.
 """
 
 from __future__ import annotations
