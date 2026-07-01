@@ -778,7 +778,7 @@ class WeightedCRPSLossSpectral(th.nn.MSELoss):
 
             if self.lambda_spec > 0:
 
-                with th.cuda.amp.autocast(enabled=False):
+                with th.amp.autocast("cuda",enabled=False):
                     # # Reorder predictions: [N, B, F, T, C, H, W] -> [N, B, T, C, F*H*W]
                     # pred_ring = self.reorder_to_ring(prediction.permute(0, 1, 3, 4, 2, 5, 6).reshape(n, b, t, c, f*h*w))
 
@@ -809,7 +809,7 @@ class WeightedCRPSLossSpectral(th.nn.MSELoss):
             if self.multiscale > 0:
                 for scale in self.scales:
                     l_filter = self._l_filter(scale, device=prediction.device)
-                    with th.cuda.amp.autocast(enabled=False):
+                    with th.amp.autocast("cuda",enabled=False):
                         sht_pred= self._apply_sht(prediction, face_dim=2, return_abs=False)
                         sht_tar = self._apply_sht(target, face_dim=1, return_abs=False)
 
@@ -849,7 +849,7 @@ class WeightedCRPSLossSpectral(th.nn.MSELoss):
                 loss = self.averaging_coeff * (diff_terms - self.coeff_eps * dist_matrix).sum(dim=(1,2))/(b*f*t*h*w)
 
                 if self.lambda_spec > 0:
-                    with th.cuda.amp.autocast(enabled=False):
+                    with th.amp.autocast("cuda",enabled=False):
                         # # Reorder predictions: [C, Cond, B, F, T, H, W] -> [C, Cond, B, T, F*H*W]
                         # pred_ring = self.reorder_to_ring(prediction.permute(0, 1, 2, 4, 3, 5, 6).reshape(c, n, b, t, f*h*w))
 
@@ -881,7 +881,7 @@ class WeightedCRPSLossSpectral(th.nn.MSELoss):
                 loss = self.averaging_coeff * (diff_terms - self.coeff_eps * dist_matrix).sum()/(b*f*c*t*h*w)
 
                 if self.lambda_spec > 0:
-                    with th.cuda.amp.autocast(enabled=False):
+                    with th.amp.autocast("cuda",enabled=False):
                         # # Reorder predictions: [Cond, B, F, T, C, H, W] -> [Cond, B, T, C, F*H*W]
                         # pred_ring = self.reorder_to_ring(prediction.permute(0, 1, 3, 4, 2, 5, 6).reshape(n, b, t, c, f*h*w))
 
