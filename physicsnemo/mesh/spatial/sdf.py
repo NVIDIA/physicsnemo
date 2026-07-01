@@ -945,12 +945,9 @@ def signed_distance_field_mesh(
     *,
     winding_backend: str = "clustertree",
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    r"""Signed distance field of a triangle surface mesh.
+    r"""Compute the signed distance to a triangle surface mesh.
 
-    Uses :class:`physicsnemo.mesh.spatial.BVH` for the nearest-triangle query
-    and a :class:`physicsnemo.mesh.spatial.ClusterTree` Barnes-Hut summation for
-    the winding-number sign, all in plain PyTorch. Returns the signed distance
-    and the closest surface point for each query.
+    Returns the signed distance and the closest surface point for each query.
 
     Parameters
     ----------
@@ -1114,19 +1111,16 @@ def _signed_distance_field_mesh_from_arrays(
     *,
     winding_backend: str = "clustertree",
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    r"""[INTERNAL - DO NOT USE] Array-based SDF mirroring the replaced Warp API.
+    r"""[INTERNAL - DO NOT USE] Private array-based SDF helper.
 
     .. warning::
 
-       **DON'T USE THIS ONE.** This is a private, debug-only entry point. Use
+       **DON'T USE THIS ONE.** This is a private, temporary entry point. Use
        the public :func:`signed_distance_field_mesh`, which takes a
        :class:`~physicsnemo.mesh.Mesh`, instead.
 
-       This variant takes raw ``(mesh_vertices, mesh_indices)`` arrays solely to
-       mirror the call signature of the (now replaced) Warp-based
-       ``signed_distance_field``, so the two can be swapped one-for-one while
-       debugging Warp parity for a release or two. It is unexported, carries no
-       backward-compatibility guarantee, and may be removed without notice.
+       This helper is unexported, carries no backward-compatibility guarantee,
+       and may be removed without notice.
 
     It wraps the arrays in a :class:`~physicsnemo.mesh.Mesh` and defers to
     :func:`signed_distance_field_mesh`, so the numerics are identical.
