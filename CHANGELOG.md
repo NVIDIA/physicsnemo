@@ -157,6 +157,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Deprecated
 
+- `physicsnemo.mesh.calculus.integrate_cell_data` and `integrate_point_data`
+  are deprecated in favor of `integrate(..., data_source="cells"|"points")`.
+  Compatibility wrappers remain available for this release and emit
+  `LegacyFeatureWarning`.
+
 ### Removed
 
 ### Fixed

@@ -41,10 +41,13 @@ This is exact for P1 fields and second-order accurate for smooth fields.
 """
 
 import math
+import warnings
 from typing import TYPE_CHECKING, Literal
 
 import torch
 from jaxtyping import Float
+
+from physicsnemo.core.warnings import LegacyFeatureWarning
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -304,6 +307,54 @@ def integrate(
             return _integrate_point_data(mesh, resolved, nan_policy=nan_policy)
         case _:
             raise ValueError(f"Invalid {data_source=!r}. Must be 'cells' or 'points'.")
+
+
+def integrate_cell_data(
+    mesh: "Mesh",
+    field: Float[torch.Tensor, "n_cells ..."],
+    *,
+    nan_policy: NanPolicy = "omit",
+) -> Float[torch.Tensor, " ..."]:
+    r"""Deprecated compatibility wrapper for cell-centered integration.
+
+    Use :func:`integrate` with ``data_source="cells"`` instead.
+    """
+    warnings.warn(
+        "`integrate_cell_data` is deprecated and will be removed in a future "
+        "release. Use `integrate(mesh, field, data_source='cells')` instead.",
+        LegacyFeatureWarning,
+        stacklevel=2,
+    )
+    return integrate(
+        mesh,
+        field,
+        data_source="cells",
+        nan_policy=nan_policy,
+    )
+
+
+def integrate_point_data(
+    mesh: "Mesh",
+    field: Float[torch.Tensor, "n_points ..."],
+    *,
+    nan_policy: NanPolicy = "omit",
+) -> Float[torch.Tensor, " ..."]:
+    r"""Deprecated compatibility wrapper for point-centered integration.
+
+    Use :func:`integrate` with ``data_source="points"`` instead.
+    """
+    warnings.warn(
+        "`integrate_point_data` is deprecated and will be removed in a future "
+        "release. Use `integrate(mesh, field, data_source='points')` instead.",
+        LegacyFeatureWarning,
+        stacklevel=2,
+    )
+    return integrate(
+        mesh,
+        field,
+        data_source="points",
+        nan_policy=nan_policy,
+    )
 
 
 def _integrate_weighted_moment(

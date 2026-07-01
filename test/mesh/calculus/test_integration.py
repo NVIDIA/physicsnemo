@@ -26,7 +26,9 @@ import math
 import pytest
 import torch
 
+from physicsnemo.core.warnings import LegacyFeatureWarning
 from physicsnemo.mesh import Mesh
+from physicsnemo.mesh.calculus import integrate_cell_data, integrate_point_data
 from physicsnemo.mesh.calculus.integration import (
     integrate,
     integrate_flux,
@@ -205,6 +207,27 @@ class TestIntegratePointFields:
         unit_triangle.point_data["T"] = unit_triangle.points[:, 0]
         result = unit_triangle.integrate("T", data_source="points")
         assert torch.isclose(result, torch.tensor(1.0 / 6.0))
+
+
+###############################################################################
+# Deprecated compatibility entry points
+###############################################################################
+
+
+class TestDeprecatedIntegrateAliases:
+    def test_cell_alias_warns_and_matches_integrate(self, unit_triangle: Mesh):
+        field = torch.tensor([7.0])
+        with pytest.warns(LegacyFeatureWarning, match="integrate_cell_data"):
+            result = integrate_cell_data(unit_triangle, field)
+        expected = integrate(unit_triangle, field, data_source="cells")
+        torch.testing.assert_close(result, expected)
+
+    def test_point_alias_warns_and_matches_integrate(self, unit_triangle: Mesh):
+        field = torch.tensor([1.0, 2.0, 3.0])
+        with pytest.warns(LegacyFeatureWarning, match="integrate_point_data"):
+            result = integrate_point_data(unit_triangle, field)
+        expected = integrate(unit_triangle, field, data_source="points")
+        torch.testing.assert_close(result, expected)
 
 
 ###############################################################################
@@ -409,6 +432,15 @@ class TestIntegrateMoment:
         )
         assert torch.allclose(omitted, expected_omitted)
         assert torch.isnan(propagated[1, 0])
+
+    def test_invalid_nan_policy(self, two_triangles: Mesh):
+        with pytest.raises(ValueError, match="nan_policy"):
+            integrate_moment(
+                two_triangles,
+                torch.ones(two_triangles.n_cells, 2),
+                torch.ones(two_triangles.n_cells, 3),
+                nan_policy="invalid",  # type: ignore[arg-type]
+            )
 
     def test_gradients(self, two_triangles: Mesh):
         left = torch.randn(two_triangles.n_cells, 2, requires_grad=True)
