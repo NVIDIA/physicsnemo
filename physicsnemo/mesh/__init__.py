@@ -16,28 +16,22 @@
 
 from physicsnemo.mesh.domain_mesh import DomainMesh
 from physicsnemo.mesh.fields import (
-    FieldLayout,
     RankSpecDict,
-    ScalarVectorFields,
     flatten_rank_spec,
     rank_counts,
     ranks_from_tensordict,
     validate_data_contains_ranks,
-    validate_rank_spec,
 )
 from physicsnemo.mesh.mesh import MESH_FIELD_ASSOCIATIONS, Mesh, MeshFieldAssociation
 
 __all__ = [
     "DomainMesh",
-    "FieldLayout",
     "MESH_FIELD_ASSOCIATIONS",
     "Mesh",
     "MeshFieldAssociation",
     "RankSpecDict",
-    "ScalarVectorFields",
     "flatten_rank_spec",
     "rank_counts",
     "ranks_from_tensordict",
     "validate_data_contains_ranks",
-    "validate_rank_spec",
 ]
