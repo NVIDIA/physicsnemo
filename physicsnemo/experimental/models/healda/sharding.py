@@ -35,6 +35,7 @@ import einops
 import torch
 import torch.distributed as dist
 from jaxtyping import Float
+from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.nn.functional import all_to_all_single
 
 DATA_DIM = 0
@@ -111,7 +112,7 @@ _SPACE_DIM = 2
 
 @torch._dynamo.disable
 def _reshard_via_shardtensor(
-    tensor: torch.Tensor, mesh, from_dim: int, to_dim: int
+    tensor: torch.Tensor, mesh: DeviceMesh, from_dim: int, to_dim: int
 ) -> torch.Tensor:
     # The redistribute is a DTensor collective; dynamo cannot usefully trace it
     # (and tracing the resumed frame mis-resolves names), so run it eager.
@@ -125,14 +126,14 @@ def _reshard_via_shardtensor(
 
 
 def shard_x_shardtensor(
-    tensor: Float[torch.Tensor, "batch time space hidden_size"], mesh
+    tensor: Float[torch.Tensor, "batch time space hidden_size"], mesh: DeviceMesh
 ) -> Float[torch.Tensor, "batch time space hidden_size"]:
     r"""ShardTensor equivalent of :func:`shard_x` (Shard(time) -> Shard(space))."""
     return _reshard_via_shardtensor(tensor, mesh, _TIME_DIM, _SPACE_DIM)
 
 
 def shard_t_shardtensor(
-    tensor: Float[torch.Tensor, "batch time space hidden_size"], mesh
+    tensor: Float[torch.Tensor, "batch time space hidden_size"], mesh: DeviceMesh
 ) -> Float[torch.Tensor, "batch time space hidden_size"]:
     r"""ShardTensor equivalent of :func:`shard_t` (Shard(space) -> Shard(time))."""
     return _reshard_via_shardtensor(tensor, mesh, _SPACE_DIM, _TIME_DIM)
