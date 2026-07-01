@@ -408,11 +408,8 @@ class ConstantCoupler(BaseCoupler):
             [coupled_fields.shape[0], self.spatial_dims[0], self.coupled_integration_dim, self.timevar_dim]
             + list(self.spatial_dims[1:])
         )
-        # we use a constant set of values so we just copy time 0
-        for i in range(self.coupled_integration_dim):
-            self.preset_coupled_fields[:, :, i, :, :, :] = coupled_fields[
-                :, :, 0, -1:, :, :
-            ]
+        # broadcast the first time step to all the integration steps
+        self.preset_coupled_fields[:, :, :, :, :, :] = coupled_fields[:, :, :1, :, :, :]
         if self.time_first:
             self.preset_coupled_fields = self.preset_coupled_fields.permute(2, 0, 3, 1, 4, 5)
         # flag for construct integrated coupling method to use this array

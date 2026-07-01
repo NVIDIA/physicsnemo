@@ -22,16 +22,8 @@ import torch as th
 from physicsnemo.core.version_check import OptionalImport
 
 xr = OptionalImport("xarray")
-earth2grid = OptionalImport("earth2grid")
-
-try:
-    from cuhpx import SHTCUDA, iSHTCUDA
-    from earth2grid.healpix import HEALPIX_PAD_XY, PixelOrder
-except ImportError:
-    SHTCUDA = None
-    iSHTCUDA = None
-    HEALPIX_PAD_XY = None
-    PixelOrder = None
+earth2grid = OptionalImport("earth2grid", "Install earth2grid from https://github.com/earth2grid/earth2grid")
+cuhpx = OptionalImport("cuhpx", "Install cuhpx from https://github.com/NVIDIA/cuhpx")
 
 """
 Custom dlwp compatible loss classes that allow for more sophisticated training optimization.
@@ -650,13 +642,13 @@ class WeightedCRPSLossSpectral(th.nn.MSELoss):
         self.lmax = lmax
         self.mmax = mmax
         self.nside = nside
-        self.sht = SHTCUDA(nside=nside, lmax=lmax, mmax=mmax, quad_weights='ring')
-        src_grid = earth2grid.healpix.Grid(level=int(np.log2(nside)), pixel_order=HEALPIX_PAD_XY)
-        tar_grid = earth2grid.healpix.Grid(level=int(np.log2(nside)), pixel_order=PixelOrder.RING)
+        self.sht = cuhpx.SHTCUDA(nside=nside, lmax=lmax, mmax=mmax, quad_weights='ring')
+        src_grid = earth2grid.healpix.Grid(level=int(np.log2(nside)), pixel_order=earth2grid.healpix.HEALPIX_PAD_XY)
+        tar_grid = earth2grid.healpix.Grid(level=int(np.log2(nside)), pixel_order=earth2grid.healpix.PixelOrder.RING)
         self.reorder_to_ring = earth2grid.get_regridder(src_grid, tar_grid).to(th.float32)
         if self.multiscale > 0:
             self.scales = [200, 400, 800, 1600] # in units of km
-            self.isht = iSHTCUDA(nside=nside, lmax=lmax, mmax=mmax, quad_weights='ring')
+            self.isht = cuhpx.iSHTCUDA(nside=nside, lmax=lmax, mmax=mmax, quad_weights='ring')
             self.reorder_from_ring = earth2grid.get_regridder(tar_grid, src_grid).to(th.float32)
 
         self.lsm_file = lsm_file
