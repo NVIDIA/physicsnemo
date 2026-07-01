@@ -13,15 +13,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""ndim-agnostic adaptive layer norm zero (adaLN-Zero) modulation."""
+r"""Reusable adaLN-Zero pieces: the :class:`AdaLNModulation` projection and the
+:func:`modulate` / :func:`gated_residual` helpers that apply it. Rank-agnostic,
+so they serve 3D :math:`(B, L, C)` and 4D :math:`(B, T, X, C)` states alike."""
 
-from typing import Literal, Tuple
+from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
 from jaxtyping import Float
-
-from physicsnemo.nn.module.dit_layers import get_layer_norm
 
 
 def _broadcast(param: Float[torch.Tensor, "batch channels"], ndim: int) -> torch.Tensor:
@@ -31,20 +31,70 @@ def _broadcast(param: Float[torch.Tensor, "batch channels"], ndim: int) -> torch
     return param.view(shape)
 
 
-class AdaLayerNormZero(nn.Module):
-    r"""Adaptive layer norm zero (adaLN-Zero) modulation, agnostic to input rank.
+def modulate(
+    x_normed: Float[torch.Tensor, "batch ... hidden_size"],
+    shift: Float[torch.Tensor, "batch hidden_size"],
+    scale: Float[torch.Tensor, "batch hidden_size"],
+) -> torch.Tensor:
+    r"""Apply an adaLN ``(shift, scale)``: :math:`x (1 + \text{scale}) + \text{shift}`.
 
-    Emits ``n_blocks`` ``(shift, scale, gate)`` triples from the conditioning
-    embedding via ``SiLU + Linear``. The first block's ``shift``/``scale`` are
-    applied to the affine-free layer-normed ``x`` here; its ``gate`` is returned
-    for the caller's gated residual. For ``n_blocks > 1`` the remaining blocks'
-    ``(shift, scale, gate)`` are returned unapplied, so one projection can drive
-    several sub-layers (e.g. grouped attention + feed-forward, as in the standard
-    DiT block). Modulation vectors are broadcast to match ``x.ndim``, so the same
-    module serves 3D :math:`(B, L, C)` and 4D :math:`(B, T, X, C)` states.
+    Parameters
+    ----------
+    x_normed : torch.Tensor
+        Layer-normed hidden states :math:`(B, \dots, C)`.
+    shift, scale : torch.Tensor
+        Per-sample modulation :math:`(B, C)`, broadcast to ``x_normed.ndim``.
 
-    The ``SiLU`` is applied inside this module, so the conditioning embedder must
-    emit a pre-activation embedding.
+    Returns
+    -------
+    torch.Tensor
+        Modulated tensor, same shape as ``x_normed``.
+    """
+    return torch.addcmul(
+        _broadcast(shift, x_normed.ndim),
+        x_normed,
+        1 + _broadcast(scale, x_normed.ndim),
+    )
+
+
+def gated_residual(
+    residual: Float[torch.Tensor, "batch ... hidden_size"],
+    branch_out: Float[torch.Tensor, "batch ... hidden_size"],
+    gate: Float[torch.Tensor, "batch hidden_size"],
+    drop_path: Optional[nn.Module] = None,
+) -> torch.Tensor:
+    r"""Gated residual add: :math:`\text{residual} + \text{gate} \cdot \text{branch\_out}`.
+
+    Parameters
+    ----------
+    residual : torch.Tensor
+        Residual stream :math:`(B, \dots, C)`.
+    branch_out : torch.Tensor
+        Sub-layer output to gate, same shape as ``residual``.
+    gate : torch.Tensor
+        Per-sample gate :math:`(B, C)`, broadcast to ``residual.ndim``.
+    drop_path : nn.Module, optional, default=None
+        Stochastic-depth module applied to the gate (drops the whole branch).
+
+    Returns
+    -------
+    torch.Tensor
+        Updated residual, same shape as ``residual``.
+    """
+    gate = _broadcast(gate, residual.ndim)
+    if drop_path is not None:
+        gate = drop_path(gate)
+    return torch.addcmul(residual, gate, branch_out)
+
+
+class AdaLNModulation(nn.Module):
+    r"""adaLN-Zero conditioning projection: ``c -> 3 * n_blocks`` modulation tensors.
+
+    Emits ``n_blocks`` ``(shift, scale, gate)`` triples via ``SiLU + Linear``, in
+    flat ``[shift, scale, gate] * n_blocks`` order, so one projection can drive
+    several sub-layers (e.g. attention + MLP with ``n_blocks=2``). Norms and the
+    modulation are applied at the call site (:func:`modulate`,
+    :func:`gated_residual`); conditioning must be pre-activation.
 
     Parameters
     ----------
@@ -55,39 +105,18 @@ class AdaLayerNormZero(nn.Module):
     n_blocks : int, optional, default=1
         Number of ``(shift, scale, gate)`` triples to emit.
     zero_init : bool, optional, default=True
-        If ``True``, zero the modulation ``Linear`` (adaLN-Zero) at construction
-        and in :meth:`initialize_weights`, so each residual branch starts as
-        identity. If ``False``, the modulation keeps its default initialization.
-    layernorm_backend : Literal["apex", "torch"], optional, default="torch"
-        Backend for the affine-free :func:`~physicsnemo.nn.module.dit_layers.get_layer_norm`.
-    norm_eps : float, optional, default=1e-6
-        Epsilon for the layer norm.
+        Zero-init the projection (adaLN-Zero) so each residual branch starts as
+        identity.
 
     Forward
     -------
-    x : torch.Tensor
-        Hidden states of shape :math:`(B, \dots, C)` (any rank :math:`\geq 2`).
     c : torch.Tensor
-        Conditioning embedding of shape :math:`(B, D_c)`.
+        Conditioning embedding :math:`(B, D_c)`.
 
     Outputs
     -------
     Tuple[torch.Tensor, ...]
-        ``(normed, gate)`` for ``n_blocks == 1``, where ``normed`` is the
-        modulated layer-normed ``x`` and ``gate`` is broadcast to ``x.ndim``. For
-        ``n_blocks > 1``, the remaining ``(shift, scale, gate)`` of each later
-        block follow, each broadcast to ``x.ndim``.
-
-    Examples
-    --------
-    >>> import torch
-    >>> from physicsnemo.experimental.models.healda.adaln import AdaLayerNormZero
-    >>> norm = AdaLayerNormZero(embedding_dim=64, condition_embed_dim=32)
-    >>> x = torch.randn(2, 5, 64)
-    >>> c = torch.randn(2, 32)
-    >>> normed, gate = norm(x, c)
-    >>> normed.shape, gate.shape
-    (torch.Size([2, 5, 64]), torch.Size([2, 1, 64]))
+        ``3 * n_blocks`` tensors :math:`(B, C)`, in ``[shift, scale, gate] * n_blocks`` order.
     """
 
     def __init__(
@@ -96,8 +125,6 @@ class AdaLayerNormZero(nn.Module):
         condition_embed_dim: int,
         n_blocks: int = 1,
         zero_init: bool = True,
-        layernorm_backend: Literal["apex", "torch"] = "torch",
-        norm_eps: float = 1e-6,
     ):
         super().__init__()
         self.n_blocks = n_blocks
@@ -106,34 +133,17 @@ class AdaLayerNormZero(nn.Module):
             nn.SiLU(),
             nn.Linear(condition_embed_dim, 3 * n_blocks * embedding_dim, bias=True),
         )
-        self.norm = get_layer_norm(
-            embedding_dim, layernorm_backend, elementwise_affine=False, eps=norm_eps
-        )
         if zero_init:
             self.initialize_weights()
 
     def initialize_weights(self) -> None:
-        r"""Zero the modulation linear when ``zero_init`` is set (adaLN-Zero).
-
-        Returns
-        -------
-        None
-            Modifies parameters in-place; a no-op when ``zero_init`` is ``False``.
-        """
+        r"""Zero the projection linear when ``zero_init`` is set (adaLN-Zero)."""
         if self.zero_init:
             nn.init.zeros_(self.modulation[-1].weight)
             nn.init.zeros_(self.modulation[-1].bias)
 
     def forward(
         self,
-        x: Float[torch.Tensor, "batch ... hidden_size"],
         c: Float[torch.Tensor, "batch condition_embed_dim"],
     ) -> Tuple[torch.Tensor, ...]:
-        chunks = self.modulation(c).chunk(3 * self.n_blocks, dim=-1)
-        shift, scale, gate = chunks[0], chunks[1], chunks[2]
-        normed = self.norm(x) * (1 + _broadcast(scale, x.ndim)) + _broadcast(
-            shift, x.ndim
-        )
-        outputs = [normed, _broadcast(gate, x.ndim)]
-        outputs.extend(_broadcast(extra, x.ndim) for extra in chunks[3:])
-        return tuple(outputs)
+        return self.modulation(c).chunk(3 * self.n_blocks, dim=-1)

@@ -49,6 +49,7 @@ class MetaData(ModelMetaData):
     func_torch: bool = False
     auto_grad: bool = False
 
+
 class VideoDiT(Module):
     r"""Diffusion Transformer over :math:`(B, C, T, X)` inputs with an explicit time axis.
 
@@ -105,7 +106,7 @@ class VideoDiT(Module):
         If ``True``, apply DiT-style initialization (Xavier on linears, then
         delegate to the tokenizer, detokenizer, and blocks).
     adaln_zero_init : bool, optional, default=True
-        Forwarded to every block's :class:`.adaln.AdaLayerNormZero` ``zero_init``.
+        Forwarded to every block's :class:`.adaln.AdaLNModulation` ``zero_init``.
     attn_kwargs : Dict[str, Any], optional, default=None
         Extra keyword arguments for the spatial-attention backend constructor.
     block_kwargs : Dict[str, Any], optional, default=None

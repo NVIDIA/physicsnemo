@@ -26,7 +26,7 @@ from physicsnemo.nn.module.dit_layers import get_attention, get_layer_norm
 from physicsnemo.nn.module.drop import DropPath
 from physicsnemo.nn.module.mlp_layers import Mlp
 
-from .adaln import AdaLayerNormZero
+from .adaln import AdaLNModulation, gated_residual, modulate
 from .sharding import (
     shard_t,
     shard_t_shardtensor,
@@ -80,18 +80,9 @@ class VideoDiTBlock(nn.Module):
     is_causal : bool, optional, default=False
         Causal masking for temporal attention, fixed at construction.
     adaln_zero_init : bool, optional, default=True
-        Forwarded to every :class:`.adaln.AdaLayerNormZero` ``zero_init``.
+        Forwarded to every :class:`.adaln.AdaLNModulation` ``zero_init``.
     attn_kwargs : Dict[str, Any], optional, default=None
         Extra arguments for the spatial-attention backend constructor.
-
-    Notes
-    -----
-    A single ``norm1``
-    :class:`~physicsnemo.experimental.models.healda.adaln.AdaLayerNormZero`
-    (``n_blocks=2``) drives both spatial attention and the MLP, matching the
-    DiT/diffusers layout; the MLP pre-norm is a separate parameter-free
-    LayerNorm. The optional temporal and cross-attention sub-layers each own a
-    one-block ``AdaLayerNormZero``.
 
     Forward
     -------
@@ -152,16 +143,19 @@ class VideoDiTBlock(nn.Module):
                 proj_drop_rate=proj_drop_rate,
                 **attn_kwargs_final,
             )
-        # One adaLN-Zero (n_blocks=2) drives both spatial attention and the MLP:
-        # its modulation emits 6 chunks (attn shift/scale/gate + mlp
-        # shift/scale/gate), matching the DiT/diffusers layout.
-        self.norm1 = AdaLayerNormZero(
+        # n_blocks=2: one projection drives both spatial attention and the MLP
+        # (the shared-projection DiT adaLN layout).
+        self.norm1_modulation = AdaLNModulation(
             hidden_size,
             condition_embed_dim,
             n_blocks=2,
             zero_init=adaln_zero_init,
-            layernorm_backend=layernorm_backend,
-            norm_eps=norm_eps,
+        )
+        self.attn_norm = get_layer_norm(
+            hidden_size,
+            layernorm_backend,
+            elementwise_affine=False,
+            eps=norm_eps,
         )
 
         self.linear = Mlp(
@@ -171,8 +165,6 @@ class VideoDiTBlock(nn.Module):
             drop=mlp_drop_rate,
             final_dropout=final_mlp_dropout,
         )
-        # MLP pre-norm: a parameter-free LayerNorm modulated by norm1's MLP
-        # shift/scale (not its own adaLN-Zero).
         self.mlp_norm = get_layer_norm(
             hidden_size,
             layernorm_backend,
@@ -180,8 +172,9 @@ class VideoDiTBlock(nn.Module):
             eps=norm_eps,
         )
 
-        # Optional gated temporal-attention sub-layer.
+        # Optional gated temporal-attention sub-layer (own one-block projection + norm).
         self.temporal_attention = None
+        self.temporal_attn_modulation = None
         self.temporal_attn_norm = None
         if temporal_attention:
             self.temporal_attention = TemporalAttention(
@@ -189,23 +182,34 @@ class VideoDiTBlock(nn.Module):
                 num_heads=num_heads,
                 **(temporal_kwargs or {}),
             )
-            self.temporal_attn_norm = AdaLayerNormZero(
+            self.temporal_attn_modulation = AdaLNModulation(
                 hidden_size,
                 condition_embed_dim,
                 zero_init=adaln_zero_init,
-                layernorm_backend=layernorm_backend,
-                norm_eps=norm_eps,
+            )
+            self.temporal_attn_norm = get_layer_norm(
+                hidden_size,
+                layernorm_backend,
+                elementwise_affine=False,
+                eps=norm_eps,
             )
 
-        self.cross_attention = cross_attention() if cross_attention is not None else None
+        self.cross_attention = (
+            cross_attention() if cross_attention is not None else None
+        )
+        self.cross_attn_modulation = None
         self.cross_attn_norm = None
         if self.cross_attention is not None:
-            self.cross_attn_norm = AdaLayerNormZero(
+            self.cross_attn_modulation = AdaLNModulation(
                 hidden_size,
                 condition_embed_dim,
                 zero_init=adaln_zero_init,
-                layernorm_backend=layernorm_backend,
-                norm_eps=norm_eps,
+            )
+            self.cross_attn_norm = get_layer_norm(
+                hidden_size,
+                layernorm_backend,
+                elementwise_affine=False,
+                eps=norm_eps,
             )
 
         self.drop_path = DropPath(drop_path)
@@ -220,15 +224,15 @@ class VideoDiTBlock(nn.Module):
         Returns
         -------
         None
-            Delegates to each :class:`.adaln.AdaLayerNormZero`.
+            Delegates to each :class:`.adaln.AdaLNModulation`.
         """
-        for adaln in (
-            self.norm1,
-            self.temporal_attn_norm,
-            self.cross_attn_norm,
+        for mod in (
+            self.norm1_modulation,
+            self.temporal_attn_modulation,
+            self.cross_attn_modulation,
         ):
-            if adaln is not None:
-                adaln.initialize_weights()
+            if mod is not None:
+                mod.initialize_weights()
 
     def set_context_parallel(self, mode: Optional[str], target=None) -> None:
         r"""Configure the temporal time<->space reshard.
@@ -274,16 +278,22 @@ class VideoDiTBlock(nn.Module):
     ) -> Float[torch.Tensor, "batch time space hidden_size"]:
         b, t, x, ch = hidden_states.shape
 
-        normed, attn_gate, mlp_shift, mlp_scale, mlp_gate = self.norm1(
-            hidden_states, c
-        )
+        (
+            attn_shift,
+            attn_scale,
+            attn_gate,
+            mlp_shift,
+            mlp_scale,
+            mlp_gate,
+        ) = self.norm1_modulation(c)
 
         # Spatial self-attention per frame (time folded into batch).
+        normed = modulate(self.attn_norm(hidden_states), attn_shift, attn_scale)
         attn_out = self.attention(
             normed.reshape(b * t, x, ch), **(attn_kwargs or {})
         ).reshape(b, t, x, ch)
-        hidden_states = torch.addcmul(
-            hidden_states, self.drop_path(attn_gate), attn_out
+        hidden_states = gated_residual(
+            hidden_states, attn_out, attn_gate, self.drop_path
         )
 
         # Cross-attention to the opaque injected context.
@@ -293,25 +303,27 @@ class VideoDiTBlock(nn.Module):
                     "cross_attention was provided at construction but no "
                     "cross_attention_context was passed to forward."
                 )
-            normed, gate = self.cross_attn_norm(hidden_states, c)
+            shift, scale, gate = self.cross_attn_modulation(c)
+            normed = modulate(self.cross_attn_norm(hidden_states), shift, scale)
             cross_out = self.cross_attention(normed, cross_attention_context)
-            hidden_states = torch.addcmul(
-                hidden_states, self.drop_path(gate), cross_out
+            hidden_states = gated_residual(
+                hidden_states, cross_out, gate, self.drop_path
             )
 
         # Temporal attention across time, with t<->x reshard around it.
         if self.temporal_attention is not None:
             hidden_states = self._to_space_sharded(hidden_states)
-            normed, gate = self.temporal_attn_norm(hidden_states, c)
+            shift, scale, gate = self.temporal_attn_modulation(c)
+            normed = modulate(self.temporal_attn_norm(hidden_states), shift, scale)
             temporal_out = self.temporal_attention(normed, self._is_causal)
-            hidden_states = torch.addcmul(
-                hidden_states, self.drop_path(gate), temporal_out
+            hidden_states = gated_residual(
+                hidden_states, temporal_out, gate, self.drop_path
             )
             hidden_states = self._to_time_sharded(hidden_states)
 
-        # Feed-forward block, modulated by norm1's MLP shift/scale/gate.
-        mlp_in = self.mlp_norm(hidden_states) * (1 + mlp_scale) + mlp_shift
-        hidden_states = torch.addcmul(
-            hidden_states, self.drop_path(mlp_gate), self.linear(mlp_in)
+        # Feed-forward block, modulated by norm1_modulation's MLP shift/scale/gate.
+        mlp_in = modulate(self.mlp_norm(hidden_states), mlp_shift, mlp_scale)
+        hidden_states = gated_residual(
+            hidden_states, self.linear(mlp_in), mlp_gate, self.drop_path
         )
         return hidden_states
