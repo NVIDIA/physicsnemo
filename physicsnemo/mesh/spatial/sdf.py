@@ -106,7 +106,7 @@ def _build_surface_mesh(
         copy, ``face_vertices`` has shape ``(n_faces, 3, 3)`` and ``faces`` has
         shape ``(n_faces, 3)`` (int64).
     """
-    faces = mesh.cells.reshape(-1, 3).to(torch.long)
+    faces = mesh.cells.to(torch.long)
     work_mesh = Mesh(points=mesh.points.to(torch.float32), cells=faces)
     face_vertices = work_mesh.points[faces]  # (n_faces, 3, 3)
     return work_mesh, face_vertices, faces
