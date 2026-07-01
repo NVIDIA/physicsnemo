@@ -19,7 +19,7 @@
 import pytest
 import torch
 
-from physicsnemo.experimental.models.aerojepa.losses import (
+from src.losses.reconstruction import (
     MSELoss,
     RelativeL2Loss,
     RelativeL2MSELoss,

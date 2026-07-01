@@ -17,9 +17,8 @@
 """JEPA-style losses and regularizers (experimental).
 
 Reusable losses for AeroJEPA and JEPA-style scientific-ML models:
-SIGReg / TokenLatentSIGReg latent regularizers, padding-aware masking
-helpers, and the reconstruction loss family (MSE, relative-L2, relative-MSE,
-and the relative-L2-plus-MSE hybrid).
+SIGReg / TokenLatentSIGReg latent regularizers and padding-aware masking
+helpers.
 
 API stability: experimental. Names and signatures may change between releases
 until the design graduates out of ``physicsnemo.experimental``.
@@ -31,16 +30,6 @@ Scalable 3D Aerodynamic Field Modeling", preprint arXiv:2605.05586 (2026).
 """
 
 from .masking import flatten_valid_token_features, reshape_token_features_for_sigreg
-from .reconstruction import (
-    MSELoss,
-    RelativeL2Loss,
-    RelativeL2MSELoss,
-    RelativeMSELoss,
-    mse_loss,
-    relative_l2_loss,
-    relative_l2_mse_loss,
-    relative_mse_loss,
-)
 from .sigreg import SIGReg, TokenLatentSIGReg
 
 __all__ = [
@@ -50,13 +39,4 @@ __all__ = [
     # SIGReg
     "SIGReg",
     "TokenLatentSIGReg",
-    # Reconstruction (functional + Module pairs)
-    "MSELoss",
-    "RelativeL2Loss",
-    "RelativeL2MSELoss",
-    "RelativeMSELoss",
-    "mse_loss",
-    "relative_l2_loss",
-    "relative_l2_mse_loss",
-    "relative_mse_loss",
 ]

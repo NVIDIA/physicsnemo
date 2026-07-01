@@ -34,12 +34,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from omegaconf import DictConfig
 
-from physicsnemo.experimental.models.aerojepa.losses import (
+from physicsnemo.experimental.models.aerojepa.losses import TokenLatentSIGReg
+
+from .reconstruction import (
     MSELoss,
     RelativeL2Loss,
     RelativeL2MSELoss,
     RelativeMSELoss,
-    TokenLatentSIGReg,
 )
 
 
