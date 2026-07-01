@@ -25,7 +25,6 @@ import pandas as pd
 import torch
 import xarray as xr
 from omegaconf import DictConfig, OmegaConf
-from torch.utils.data import Dataset
 
 from physicsnemo.datapipes.datapipe import Datapipe
 from physicsnemo.datapipes.meta import DatapipeMetaData
@@ -46,7 +45,7 @@ class MetaData(DatapipeMetaData):
     ddp_sharding: bool = False
 
 
-class TimeSeriesDataset(Dataset, Datapipe):
+class TimeSeriesDataset(Datapipe):
     """
     Dataset for sampling from continuous time-series data, compatible with pytorch data loading.
     """

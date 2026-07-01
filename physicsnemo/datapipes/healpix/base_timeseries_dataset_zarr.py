@@ -28,7 +28,6 @@ import zarr
 from physicsnemo.datapipes.datapipe import Datapipe
 from physicsnemo.datapipes.meta import DatapipeMetaData
 from omegaconf import DictConfig, OmegaConf
-from torch.utils.data import Dataset
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +74,7 @@ def _check_availability(path: str) -> None:  # pragma: no cover
         raise FileNotFoundError(f"Dataset not found at specified location: {path}")
 
 
-class BaseTimeSeriesDatasetZarr(Dataset, Datapipe, ABC):
+class BaseTimeSeriesDatasetZarr(Datapipe, ABC):
     """Abstract base class for time series datasets using Zarr storage.
 
     This class provides the core functionality for loading and processing time series data
