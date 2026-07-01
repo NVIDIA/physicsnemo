@@ -43,9 +43,9 @@ def remesh(
 ) -> "Mesh":
     """Uniform remeshing of a 2D triangle surface (in 3D) via clustering.
 
-    Creates a simplified mesh with approximately n_clusters cells uniformly
-    distributed across the geometry. Uses the ACVD (Approximate Centroidal
-    Voronoi Diagram) clustering algorithm.
+    Creates a simplified mesh with approximately ``n_clusters`` vertices
+    uniformly distributed across the geometry. Uses the ACVD (Approximate
+    Centroidal Voronoi Diagram) clustering algorithm.
 
     The algorithm:
     1. Weights vertices by their dual volumes (Voronoi areas)
@@ -61,13 +61,13 @@ def remesh(
     mesh : Mesh
         Input mesh to remesh
     n_clusters : int
-        Target number of output cells. The actual number may vary
+        Target number of output vertices. The actual number may vary
         slightly depending on mesh topology.
 
     Returns
     -------
     Mesh
-        Remeshed mesh with approximately n_clusters cells. The vertices are
+        Remeshed mesh with approximately ``n_clusters`` vertices. The vertices are
         cluster centroids, and cells connect adjacent clusters.
 
     Raises
@@ -82,7 +82,7 @@ def remesh(
     >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
     >>> from physicsnemo.mesh.remeshing import remesh
     >>> mesh = sphere_icosahedral.load(subdivisions=3)
-    >>> # Remesh a triangle mesh to ~100 triangles
+    >>> # Remesh a triangle mesh to approximately 100 cluster centroids
     >>> simplified = remesh(mesh, n_clusters=100)
     >>> assert simplified.n_cells > 0
 
