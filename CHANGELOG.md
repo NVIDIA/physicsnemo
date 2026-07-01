@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds the `physicsnemo-model-builder` agent skill (`skills/physicsnemo-model-builder/`):
+  guides contributors through adding a new model or reusable layer to PhysicsNeMo,
+  or wrapping an existing PyTorch model.
 - Adds Point-Transformer local vector-attention blocks to `physicsnemo.nn`.
 - Adds an `is_causal` option to `TimmSelfAttention` in `physicsnemo.nn` for
   causal self-attention.
