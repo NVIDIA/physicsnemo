@@ -25,17 +25,16 @@ from jaxtyping import Float
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
-from physicsnemo.nn.module.hpx.tokenizer import (
-    HEALPixPatchDetokenizer,
-    HEALPixPatchTokenizer,
-)
-
 from physicsnemo.experimental.models.healda.obs_context import ObsContext
 from physicsnemo.experimental.models.healda.obs_tokenizer import ObsTokenizerFiLM
 from physicsnemo.experimental.models.healda.pixel_cross_attention import (
     PixelCrossAttention,
 )
 from physicsnemo.experimental.models.healda.video_dit import VideoDiT
+from physicsnemo.nn.module.hpx.tokenizer import (
+    HEALPixPatchDetokenizer,
+    HEALPixPatchTokenizer,
+)
 
 
 @dataclass
@@ -55,9 +54,50 @@ class HealDAv2MetaData(ModelMetaData):
 
 
 class HealDAv2(Module):
-    r"""
-    Video data-assimilation model combining HEALPix tokenizers, a FiLM observation
-    tokenizer, and a VideoDiT backbone.
+    r"""Observation-conditioned video diffusion model for weather data assimilation on
+    the HEALPix sphere.
+
+    ``HealDAv2`` maps a set of sparse, irregularly located observations (plus
+    static fields and calendar features) to a gridded field sequence -- a short
+    video window of :math:`T` frames over a HEALPix grid.
+
+    The model is conditioned on a diffusion noise level (``noise_labels``)
+    through the adaLN modulation, so it can be trained as a diffusion model or as
+    a deterministic regression model, where the ``noise_labels`` are fixed to zero.
+
+    Data flows through four stages:
+
+    1. Static conditioning fields are patch-tokenized from the fine ingest grid
+       (``level_in``) down to the backbone grid (``level_model``) by
+       :class:`physicsnemo.nn.module.hpx.tokenizer.HEALPixPatchTokenizer`.
+    2. A :class:`.video_dit.VideoDiT` backbone processes the token sequence with
+       spatial attention, factorized temporal attention, and adaLN-Zero
+       conditioning built from the EDM noise embedding and the calendar
+       (second-of-day / day-of-year) features.
+    3. Observations are embedded per observation by
+       :class:`.obs_tokenizer.ObsTokenizerFiLM` and assimilated inside every block
+       by :class:`.pixel_cross_attention.PixelCrossAttention`: each grid pixel
+       attends only to the observations that land on it (ragged, local
+       cross-attention).
+    4. :class:`physicsnemo.nn.module.hpx.tokenizer.HEALPixPatchDetokenizer` maps
+       the backbone tokens back to the fine grid, producing the ``out_channels``
+       output fields.
+
+    The grid enters only at the boundaries: the patch tokenizer /
+    detokenizer (stages 1 and 4) and, upstream in the dataloader, the assignment
+    of a flat pixel index to each observation (which builds the ragged packing
+    carried on ``obs``). Everything in between is grid-agnostic -- the backbone
+    operates on a flat ``(B, T, X, C)`` token sequence and the observation
+    cross-attention only needs each observation tagged with the pixel it belongs
+    to. Adapting to a different grid therefore means swapping the tokenizer /
+    detokenizer pair and the observation pixel-assignment step.
+
+    Because spatial and temporal attention are factorized (each is independent
+    along the axis the other mixes over), the model supports context parallelism:
+    a group of :math:`N` GPUs reshards activations between time- and space-sharded
+    layouts around each attention (see :mod:`.sharding`). :math:`N` must divide
+    both the time and space extents, so the default ``time_length = 8`` caps it at
+    8-way. Enable via :meth:`set_context_parallel`.
 
     Parameters
     ----------
@@ -156,6 +196,17 @@ class HealDAv2(Module):
     -------
     torch.Tensor
         Output tensor of shape :math:`(B, C_{out}, T, N_{pix})`.
+
+    Notes
+    -----
+    Observations are passed as an :class:`.obs_context.ObsContext` whose tokens
+    must be packed per pixel (observations sorted by flat pixel index); build the
+    packing with :mod:`.pixel_cross_attention`. The FiLM tokenizer and pixel
+    cross-attention run fused Triton kernels on CUDA.
+
+    Only the default ``attention_backend="timm"`` currently supports the
+    ``qk_norm_type="RMSNorm"`` with ``qk_norm_affine=False`` this model
+    relies on for stable training.
     """
 
     def __init__(
@@ -277,10 +328,28 @@ class HealDAv2(Module):
             attn_kwargs=attn_kwargs,
         )
 
+    def set_context_parallel(self, mode: Optional[str], target=None) -> None:
+        r"""Enable or disable context-parallel resharding on the backbone.
+
+        Off by default; call once after the process group / device mesh is
+        available (e.g. from the distributed training setup) to shard each block's
+        attention across ``target``.
+
+        Parameters
+        ----------
+        mode : str or None
+            ``None`` (no resharding), ``"all_to_all"`` (manual collective over a
+            ``ProcessGroup``), or ``"shardtensor"`` (``ShardTensor.redistribute``
+            over a 1D mesh).
+        target : ProcessGroup or DeviceMesh, optional, default=None
+            The process group (``all_to_all``) or device mesh (``shardtensor``).
+        """
+        self.dit.set_context_parallel(mode, target)
+
     def forward(
         self,
         x: Float[torch.Tensor, "batch in_channels time npix"],
-        noise_labels: Float[torch.Tensor, "batch"],
+        noise_labels: Float[torch.Tensor, " batch"],
         second_of_day: Float[torch.Tensor, "batch time"],
         day_of_year: Float[torch.Tensor, "batch time"],
         obs: ObsContext,

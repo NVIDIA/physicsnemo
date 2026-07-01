@@ -18,8 +18,10 @@
 from typing import Any, Callable, Dict, Optional, Union
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 from jaxtyping import Float
+from torch.distributed.device_mesh import DeviceMesh
 
 from physicsnemo.core import Module
 from physicsnemo.nn.module.dit_layers import get_attention, get_layer_norm
@@ -252,6 +254,16 @@ class VideoDiTBlock(nn.Module):
         """
         if mode not in (None, "all_to_all", "shardtensor"):
             raise ValueError(f"unknown reshard mode {mode!r}")
+        if mode == "all_to_all" and not isinstance(target, dist.ProcessGroup):
+            raise TypeError(
+                "mode='all_to_all' requires target to be a ProcessGroup, got "
+                f"{type(target).__name__}"
+            )
+        if mode == "shardtensor" and not isinstance(target, DeviceMesh):
+            raise TypeError(
+                "mode='shardtensor' requires target to be a DeviceMesh, got "
+                f"{type(target).__name__}"
+            )
         self._reshard_mode = mode
         self._reshard_target = target
 
