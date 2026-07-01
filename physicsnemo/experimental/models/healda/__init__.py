@@ -24,6 +24,7 @@ r"""HealDA data-assimilation models and building blocks.
 
 from .healda import HealDA, HealDAMetaData
 from .healda_v2 import HealDAv2, HealDAv2MetaData
+from .obs_context import ObsContext, PixelGroupMap
 from .obs_tokenizer import ObsTokenizerFiLM
 from .pixel_cross_attention import PixelCrossAttention
 from .point_embed import (
@@ -41,6 +42,8 @@ __all__ = [
     "HealDAMetaData",
     "PixelCrossAttention",
     "ObsTokenizerFiLM",
+    "ObsContext",
+    "PixelGroupMap",
     "MultiSensorObsEmbedder",
     "ObsTokenizer",
     "SensorEmbedder",
