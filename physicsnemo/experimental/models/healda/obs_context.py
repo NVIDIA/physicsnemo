@@ -19,7 +19,7 @@ A single :class:`ObsContext` carries everything a video DiT block's observation
 cross-attention needs -- the packed observation tokens plus the ragged packing
 metadata that maps each pixel to its token slice -- consumed by
 :class:`..pixel_cross_attention.PixelCrossAttention`. The packing itself is built
-by :mod:`..pixel_attention_utils`.
+by :mod:`..pixel_cross_attention`.
 """
 
 from __future__ import annotations

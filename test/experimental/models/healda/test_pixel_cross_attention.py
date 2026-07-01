@@ -22,12 +22,10 @@ import torch
 
 from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.experimental.models.healda.obs_context import ObsContext
-from physicsnemo.experimental.models.healda.pixel_attention_utils import (
-    build_pixel_group_map,
-)
 from physicsnemo.experimental.models.healda.pixel_cross_attention import (
     PixelCrossAttention,
     _pixel_attention_reference,
+    build_pixel_group_map,
     pixel_attention,
 )
 
