@@ -84,29 +84,32 @@ _WINDING_LEAF_SIZE = 8
 
 
 def _build_surface_mesh(
-    mesh_vertices: Float[torch.Tensor, "n_vertices 3"],
-    mesh_indices: Int[torch.Tensor, "..."],
+    mesh: Mesh,
 ) -> tuple[Mesh, Float[torch.Tensor, "n_faces 3 3"], Int[torch.Tensor, "n_faces 3"]]:
-    """Construct a triangle :class:`Mesh` and return per-face vertex positions.
+    """Normalize a triangle :class:`Mesh` into the float32 working representation.
+
+    The BVH build and the Triton nearest-triangle kernel assume a float32
+    coordinate dtype, so this returns a float32 copy of ``mesh`` alongside the
+    per-face vertex positions and the int64 triangle connectivity consumed by
+    the downstream tensor ops.
 
     Parameters
     ----------
-    mesh_vertices : torch.Tensor
-        Vertex coordinates, shape ``(n_vertices, 3)``.
-    mesh_indices : torch.Tensor
-        Triangle connectivity, either flattened ``(3 * n_faces,)`` or
-        ``(n_faces, 3)``.
+    mesh : Mesh
+        Triangle surface mesh: ``mesh.points`` has shape ``(n_vertices, 3)`` and
+        ``mesh.cells`` has shape ``(n_faces, 3)``.
 
     Returns
     -------
     tuple[Mesh, torch.Tensor, torch.Tensor]
-        ``(mesh, face_vertices, faces)`` where ``face_vertices`` has shape
-        ``(n_faces, 3, 3)`` and ``faces`` has shape ``(n_faces, 3)`` (int64).
+        ``(mesh, face_vertices, faces)`` where ``mesh`` is the float32 working
+        copy, ``face_vertices`` has shape ``(n_faces, 3, 3)`` and ``faces`` has
+        shape ``(n_faces, 3)`` (int64).
     """
-    faces = mesh_indices.reshape(-1, 3).to(torch.long)
-    mesh = Mesh(points=mesh_vertices, cells=faces)
-    face_vertices = mesh_vertices[faces]  # (n_faces, 3, 3)
-    return mesh, face_vertices, faces
+    faces = mesh.cells.to(torch.long)
+    work_mesh = Mesh(points=mesh.points.to(torch.float32), cells=faces)
+    face_vertices = work_mesh.points[faces]  # (n_faces, 3, 3)
+    return work_mesh, face_vertices, faces
 
 
 def _closest_point_on_triangles(
@@ -935,28 +938,23 @@ def _winding_number_sign_clustertree(
 
 
 def signed_distance_field_mesh(
-    mesh_vertices: Float[torch.Tensor, "n_vertices 3"],
-    mesh_indices: Int[torch.Tensor, "..."],
-    input_points: Float[torch.Tensor, "... 3"],
+    mesh: Mesh,
+    query_points: Float[torch.Tensor, "... 3"],
     max_dist: float | None = None,
     use_sign_winding_number: bool = False,
     *,
     winding_backend: str = "clustertree",
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Signed distance field of a triangle surface mesh.
+    r"""Compute the signed distance to a triangle surface mesh.
 
-    Uses :class:`physicsnemo.mesh.spatial.BVH` for the nearest-triangle query
-    and a :class:`physicsnemo.mesh.spatial.ClusterTree` Barnes-Hut summation for
-    the winding-number sign, all in plain PyTorch. Returns the signed distance
-    and the closest surface point for each query.
+    Returns the signed distance and the closest surface point for each query.
 
     Parameters
     ----------
-    mesh_vertices : torch.Tensor
-        Mesh vertex coordinates, shape ``(n_vertices, 3)``.
-    mesh_indices : torch.Tensor
-        Triangle connectivity, flattened ``(3 * n_faces,)`` or ``(n_faces, 3)``.
-    input_points : torch.Tensor
+    mesh : Mesh
+        Triangle surface mesh embedded in 3D: ``mesh.points`` has shape
+        ``(n_vertices, 3)`` and ``mesh.cells`` has shape ``(n_faces, 3)``.
+    query_points : torch.Tensor
         Query points, shape ``(..., 3)``.
     max_dist : float or None, optional
         Maximum search radius for the nearest-triangle query. ``None``
@@ -976,15 +974,17 @@ def signed_distance_field_mesh(
     Returns
     -------
     tuple[torch.Tensor, torch.Tensor]
-        ``(sdf, hit_points)``: signed distance per query (shape ``input.shape[:-1]``)
-        and the closest point on the mesh per query (shape ``input.shape``).
+        ``(sdf, hit_points)``: signed distance per query
+        (shape ``query_points.shape[:-1]``) and the closest point on the mesh
+        per query (shape ``query_points.shape``).
 
     Raises
     ------
     ValueError
-        If ``input_points`` does not have a trailing dimension of size 3, if
-        ``mesh_indices`` is not 1D-flattened or ``(n_faces, 3)``, or if the mesh
-        has no faces (there is no surface to measure distance to).
+        If ``mesh`` is not a triangle surface in 3D (``n_spatial_dims == 3`` and
+        ``n_manifold_dims == 2``), if ``query_points`` does not have a trailing
+        dimension of size 3, or if the mesh has no faces (there is no surface to
+        measure distance to).
 
     Notes
     -----
@@ -993,49 +993,51 @@ def signed_distance_field_mesh(
     far query is never silently reported as on-surface (``sdf == 0``). The
     unbounded default never produces ``NaN`` for a non-empty mesh.
     """
-    if input_points.shape[-1] != 3:
-        raise ValueError("input_points must have last dimension of size 3")
+    if query_points.shape[-1] != 3:
+        raise ValueError("query_points must have last dimension of size 3")
 
-    if mesh_indices.ndim == 2:
-        if mesh_indices.shape[-1] != 3:
-            raise ValueError(
-                "mesh_indices with 2 dimensions must have shape (n_faces, 3)"
-            )
-    elif mesh_indices.ndim != 1:
+    # A triangle surface in 3D is required: the closest-point and solid-angle
+    # math both assume 3-vertex cells with 3D coordinates. Validate here so a
+    # mis-typed mesh fails loudly rather than deep inside the BVH/winding kernels.
+    if mesh.n_spatial_dims != 3:
         raise ValueError(
-            "mesh_indices must be either 1D flattened indices or 2D (n_faces, 3)"
+            "signed_distance_field_mesh requires a 3D mesh "
+            f"(n_spatial_dims == 3), but got {mesh.n_spatial_dims=}."
+        )
+    if mesh.n_manifold_dims != 2:
+        raise ValueError(
+            "signed_distance_field_mesh requires a triangle mesh "
+            f"(n_manifold_dims == 2), but got {mesh.n_manifold_dims=}."
+        )
+    if mesh.n_cells == 0:
+        raise ValueError(
+            "mesh has no faces; there is no surface to measure distance to"
         )
 
-    input_shape = input_points.shape
-    out_dtype = input_points.dtype
-    device = input_points.device
+    query_shape = query_points.shape
+    out_dtype = query_points.dtype
+    device = query_points.device
 
-    # Compute internally in float32; the BVH build path assumes a float
-    # coordinate dtype.
-    vertices = mesh_vertices.to(torch.float32)
-    queries = input_points.reshape(-1, 3).to(torch.float32)
+    queries = query_points.reshape(-1, 3).to(torch.float32)
     n_queries = queries.shape[0]
 
     # None -> unbounded exact search; a finite value is a narrow band.
     max_dist_eff = float("inf") if max_dist is None else float(max_dist)
 
-    mesh, face_vertices, faces = _build_surface_mesh(vertices, mesh_indices)
-
-    if faces.shape[0] == 0:
-        raise ValueError(
-            "mesh has no faces; there is no surface to measure distance to"
-        )
+    # Normalize the mesh to a float32 working copy; the BVH build and the Triton
+    # nearest-triangle kernel assume a float32 coordinate dtype.
+    work_mesh, face_vertices, _ = _build_surface_mesh(mesh)
 
     sdf = torch.zeros(n_queries, dtype=torch.float32, device=device)
     hit_points = queries.clone()
 
     if n_queries == 0:
-        sdf = sdf.reshape(input_shape[:-1]).to(out_dtype)
-        hit_points = hit_points.reshape(input_shape).to(out_dtype)
+        sdf = sdf.reshape(query_shape[:-1]).to(out_dtype)
+        hit_points = hit_points.reshape(query_shape).to(out_dtype)
         return sdf, hit_points
 
     with record_function("sdf/bvh_build"):
-        bvh = BVH.from_mesh(mesh, leaf_size=_BVH_LEAF_SIZE)
+        bvh = BVH.from_mesh(work_mesh, leaf_size=_BVH_LEAF_SIZE)
 
     # Nearest triangle + closest point. On CUDA with Triton available we run the
     # single-kernel per-thread DFS (:func:`_sdf_triton.nearest_triangle_triton`),
@@ -1082,7 +1084,7 @@ def signed_distance_field_mesh(
                     f"got {winding_backend!r}"
                 )
         else:
-            sign = _pseudo_normal_sign(mesh, queries, best_face, best_point)
+            sign = _pseudo_normal_sign(work_mesh, queries, best_face, best_point)
 
     sdf = sign * distance
     hit_points = best_point
@@ -1095,6 +1097,74 @@ def signed_distance_field_mesh(
             missed.unsqueeze(-1), hit_points.new_full((), float("nan")), hit_points
         )
 
-    sdf = sdf.reshape(input_shape[:-1]).to(out_dtype)
-    hit_points = hit_points.reshape(input_shape).to(out_dtype)
+    sdf = sdf.reshape(query_shape[:-1]).to(out_dtype)
+    hit_points = hit_points.reshape(query_shape).to(out_dtype)
     return sdf, hit_points
+
+
+def _signed_distance_field_mesh_from_arrays(
+    mesh_vertices: Float[torch.Tensor, "n_vertices 3"],
+    mesh_indices: Int[torch.Tensor, "..."],
+    query_points: Float[torch.Tensor, "... 3"],
+    max_dist: float | None = None,
+    use_sign_winding_number: bool = False,
+    *,
+    winding_backend: str = "clustertree",
+) -> tuple[torch.Tensor, torch.Tensor]:
+    r"""[INTERNAL - DO NOT USE] Private array-based SDF helper.
+
+    .. warning::
+
+       **DON'T USE THIS ONE.** This is a private, temporary entry point. Use
+       the public :func:`signed_distance_field_mesh`, which takes a
+       :class:`~physicsnemo.mesh.Mesh`, instead.
+
+       This helper is unexported, carries no backward-compatibility guarantee,
+       and may be removed without notice.
+
+    It wraps the arrays in a :class:`~physicsnemo.mesh.Mesh` and defers to
+    :func:`signed_distance_field_mesh`, so the numerics are identical.
+
+    Parameters
+    ----------
+    mesh_vertices : torch.Tensor
+        Mesh vertex coordinates, shape ``(n_vertices, 3)``.
+    mesh_indices : torch.Tensor
+        Triangle connectivity, flattened ``(3 * n_faces,)`` or ``(n_faces, 3)``.
+    query_points : torch.Tensor
+        Query points, shape ``(..., 3)``.
+    max_dist : float or None, optional
+        Maximum search radius; see :func:`signed_distance_field_mesh`.
+    use_sign_winding_number : bool, optional
+        Sign method; see :func:`signed_distance_field_mesh`.
+    winding_backend : str, optional
+        Winding-number backend; see :func:`signed_distance_field_mesh`.
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor]
+        ``(sdf, hit_points)``; see :func:`signed_distance_field_mesh`.
+
+    Raises
+    ------
+    ValueError
+        If ``mesh_indices`` is not 1D-flattened or ``(n_faces, 3)``; the
+        remaining validation is performed by :func:`signed_distance_field_mesh`.
+    """
+    if mesh_indices.ndim == 2:
+        if mesh_indices.shape[-1] != 3:
+            raise ValueError(
+                "mesh_indices with 2 dimensions must have shape (n_faces, 3)"
+            )
+    elif mesh_indices.ndim != 1:
+        raise ValueError(
+            "mesh_indices must be either 1D flattened indices or 2D (n_faces, 3)"
+        )
+    mesh = Mesh(points=mesh_vertices, cells=mesh_indices.reshape(-1, 3))
+    return signed_distance_field_mesh(
+        mesh,
+        query_points,
+        max_dist,
+        use_sign_winding_number,
+        winding_backend=winding_backend,
+    )
