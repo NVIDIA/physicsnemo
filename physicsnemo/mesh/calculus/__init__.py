@@ -55,9 +55,8 @@ from physicsnemo.mesh.calculus.gradient import (
 )
 from physicsnemo.mesh.calculus.integration import (
     integrate,
-    integrate_cell_data,
     integrate_flux,
-    integrate_point_data,
+    integrate_moment,
 )
 from physicsnemo.mesh.calculus.laplacian import (
     compute_laplacian_points_dec,

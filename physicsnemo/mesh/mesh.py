@@ -2793,6 +2793,8 @@ class Mesh:
         self,
         field: str | tuple[str, ...] | torch.Tensor,
         data_source: Literal["cells", "points"] = "cells",
+        *,
+        nan_policy: Literal["omit", "propagate"] = "omit",
     ) -> torch.Tensor:
         r"""Integrate a field over the mesh domain.
 
@@ -2816,6 +2818,10 @@ class Mesh:
             - ``torch.Tensor``: used directly.
         data_source : {"cells", "points"}
             Whether ``field`` is cell-centered (P0) or vertex-centered (P1).
+        nan_policy : {"omit", "propagate"}, default "omit"
+            NaN reduction behavior. ``"omit"`` preserves the historical
+            masked-data behavior; ``"propagate"`` uses an ordinary sum so
+            NaN contributions remain visible.
 
         Returns
         -------
@@ -2849,12 +2855,15 @@ class Mesh:
             mesh=self,
             field=field,
             data_source=data_source,
+            nan_policy=nan_policy,
         )
 
     def integrate_flux(
         self,
         field: str | tuple[str, ...] | torch.Tensor,
         data_source: Literal["cells", "points"] = "cells",
+        *,
+        nan_policy: Literal["omit", "propagate"] = "omit",
     ) -> torch.Tensor:
         r"""Compute the surface flux integral for codimension-1 meshes.
 
@@ -2868,6 +2877,8 @@ class Mesh:
             Vector field with last dimension equal to ``n_spatial_dims``.
         data_source : {"cells", "points"}
             Whether ``field`` is cell-centered or vertex-centered.
+        nan_policy : {"omit", "propagate"}, default "omit"
+            Whether NaN cell-flux contributions are omitted or propagated.
 
         Returns
         -------
@@ -2899,6 +2910,7 @@ class Mesh:
             mesh=self,
             field=field,
             data_source=data_source,
+            nan_policy=nan_policy,
         )
 
     def gradient(

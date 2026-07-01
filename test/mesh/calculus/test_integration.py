@@ -29,9 +29,8 @@ import torch
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.calculus.integration import (
     integrate,
-    integrate_cell_data,
     integrate_flux,
-    integrate_point_data,
+    integrate_moment,
 )
 
 ###############################################################################
@@ -86,18 +85,18 @@ def triangle_3d() -> Mesh:
 ###############################################################################
 
 
-class TestIntegrateCellData:
+class TestIntegrateCellFields:
     def test_constant_scalar(self, unit_triangle: Mesh):
         """Integral of constant c over domain = c * volume."""
         f = torch.tensor([7.0])
-        result = integrate_cell_data(unit_triangle, f)
+        result = integrate(unit_triangle, f, data_source="cells")
         assert torch.isclose(result, torch.tensor(7.0 * 0.5))
 
     def test_two_cells(self, two_triangles: Mesh):
         areas = two_triangles.cell_areas
         f = torch.tensor([2.0, 5.0])
         expected = (f * areas).sum()
-        assert torch.isclose(integrate_cell_data(two_triangles, f), expected)
+        assert torch.isclose(integrate(two_triangles, f, data_source="cells"), expected)
 
     def test_via_mesh_method(self, two_triangles: Mesh):
         two_triangles.cell_data["p"] = torch.tensor([2.0, 5.0])
@@ -108,14 +107,14 @@ class TestIntegrateCellData:
     def test_vector_field(self, unit_triangle: Mesh):
         """Trailing dimensions are preserved."""
         f = torch.tensor([[1.0, 2.0, 3.0]])  # (1, 3)
-        result = integrate_cell_data(unit_triangle, f)
+        result = integrate(unit_triangle, f, data_source="cells")
         assert result.shape == (3,)
         assert torch.allclose(result, torch.tensor([0.5, 1.0, 1.5]))
 
     def test_tensor_field(self, unit_triangle: Mesh):
         """2x2 tensor field on a single cell."""
         f = torch.tensor([[[1.0, 2.0], [3.0, 4.0]]])  # (1, 2, 2)
-        result = integrate_cell_data(unit_triangle, f)
+        result = integrate(unit_triangle, f, data_source="cells")
         assert result.shape == (2, 2)
         expected = torch.tensor([[0.5, 1.0], [1.5, 2.0]])
         assert torch.allclose(result, expected)
@@ -126,11 +125,11 @@ class TestIntegrateCellData:
 ###############################################################################
 
 
-class TestIntegratePointData:
+class TestIntegratePointFields:
     def test_constant_field_exact(self, unit_triangle: Mesh):
         """P1 integral of constant field = constant * volume."""
         f = torch.tensor([3.0, 3.0, 3.0])
-        result = integrate_point_data(unit_triangle, f)
+        result = integrate(unit_triangle, f, data_source="points")
         assert torch.isclose(result, torch.tensor(3.0 * 0.5))
 
     def test_linear_field_exact(self, unit_triangle: Mesh):
@@ -142,20 +141,20 @@ class TestIntegratePointData:
         P1: 0.5 * mean(0, 1, 0) = 0.5 * 1/3 = 1/6.  Exact.
         """
         f = unit_triangle.points[:, 0]  # f = x coordinate
-        result = integrate_point_data(unit_triangle, f)
+        result = integrate(unit_triangle, f, data_source="points")
         expected = torch.tensor(1.0 / 6.0)
         assert torch.isclose(result, expected)
 
     def test_linear_field_y(self, unit_triangle: Mesh):
         """P1 integral of f(x,y) = y.  Analytic = 1/6."""
         f = unit_triangle.points[:, 1]
-        result = integrate_point_data(unit_triangle, f)
+        result = integrate(unit_triangle, f, data_source="points")
         assert torch.isclose(result, torch.tensor(1.0 / 6.0))
 
     def test_multiple_cells(self, two_triangles: Mesh):
         """Integration over mesh with two cells."""
         f = torch.ones(two_triangles.n_points)
-        result = integrate_point_data(two_triangles, f)
+        result = integrate(two_triangles, f, data_source="points")
         assert torch.isclose(result, two_triangles.cell_areas.sum())
 
     def test_vector_field(self, unit_triangle: Mesh):
@@ -163,7 +162,7 @@ class TestIntegratePointData:
         f = torch.stack(
             [unit_triangle.points[:, 0], unit_triangle.points[:, 1]], dim=-1
         )  # (3, 2)
-        result = integrate_point_data(unit_triangle, f)
+        result = integrate(unit_triangle, f, data_source="points")
         assert result.shape == (2,)
         expected = torch.tensor([1.0 / 6.0, 1.0 / 6.0])
         assert torch.allclose(result, expected)
@@ -171,7 +170,7 @@ class TestIntegratePointData:
     def test_tet_constant(self, unit_tet: Mesh):
         """Constant field on tetrahedron: integral = c * V."""
         f = torch.full((4,), 5.0)
-        result = integrate_point_data(unit_tet, f)
+        result = integrate(unit_tet, f, data_source="points")
         expected = 5.0 / 6.0
         assert torch.isclose(result, torch.tensor(expected))
 
@@ -182,13 +181,13 @@ class TestIntegratePointData:
         Integral = (1/6) * 0.25 = 1/24.
         """
         f = unit_tet.points[:, 0]
-        result = integrate_point_data(unit_tet, f)
+        result = integrate(unit_tet, f, data_source="points")
         assert torch.isclose(result, torch.tensor(1.0 / 24.0))
 
     def test_edge_constant(self, edge_mesh: Mesh):
         """Constant field on edges: integral = c * total_length."""
         f = torch.full((4,), 2.0)
-        result = integrate_point_data(edge_mesh, f)
+        result = integrate(edge_mesh, f, data_source="points")
         assert torch.isclose(result, torch.tensor(2.0 * 3.0))
 
     def test_edge_linear(self, edge_mesh: Mesh):
@@ -199,7 +198,7 @@ class TestIntegratePointData:
         Analytic: integral of x from 0 to 3 = 9/2 = 4.5.
         """
         f = edge_mesh.points[:, 0]  # [0, 1, 2, 3]
-        result = integrate_point_data(edge_mesh, f)
+        result = integrate(edge_mesh, f, data_source="points")
         assert torch.isclose(result, torch.tensor(4.5))
 
     def test_via_mesh_method(self, unit_triangle: Mesh):
@@ -217,7 +216,7 @@ class TestNaNHandling:
     def test_cell_nan_excluded(self, two_triangles: Mesh):
         """Cells with NaN values are excluded from the integral."""
         f = torch.tensor([2.0, float("nan")])
-        result = integrate_cell_data(two_triangles, f)
+        result = integrate(two_triangles, f, data_source="cells")
         expected = 2.0 * two_triangles.cell_areas[0]
         assert torch.isclose(result, expected)
 
@@ -227,19 +226,214 @@ class TestNaNHandling:
         Vertex 1 is shared by both cells, so both cells are affected.
         """
         f = torch.tensor([1.0, float("nan"), 1.0, 1.0])
-        result = integrate_point_data(two_triangles, f)
+        result = integrate(two_triangles, f, data_source="points")
         assert torch.isclose(result, torch.tensor(0.0))
 
     def test_cell_nan_vector_field(self, two_triangles: Mesh):
         """NaN in one component of a vector field propagates for that cell."""
         f = torch.tensor([[1.0, 2.0], [float("nan"), 3.0]])
-        result = integrate_cell_data(two_triangles, f)
+        result = integrate(two_triangles, f, data_source="cells")
         areas = two_triangles.cell_areas
         # Component 0: only cell 0 contributes
         assert torch.isclose(result[0], 1.0 * areas[0])
         # Component 1: both cells contribute
         expected_1 = 2.0 * areas[0] + 3.0 * areas[1]
         assert torch.isclose(result[1], expected_1)
+
+    def test_cell_nan_propagated(self, two_triangles: Mesh):
+        f = torch.tensor([2.0, float("nan")])
+        result = integrate(
+            two_triangles,
+            f,
+            data_source="cells",
+            nan_policy="propagate",
+        )
+        assert torch.isnan(result)
+
+    def test_point_nan_propagated(self, two_triangles: Mesh):
+        f = torch.tensor([1.0, float("nan"), 1.0, 1.0])
+        result = integrate(
+            two_triangles,
+            f,
+            data_source="points",
+            nan_policy="propagate",
+        )
+        assert torch.isnan(result)
+
+    def test_nan_policy_via_mesh_method(self, two_triangles: Mesh):
+        two_triangles.cell_data["p"] = torch.tensor([2.0, float("nan")])
+        assert torch.isnan(two_triangles.integrate("p", nan_policy="propagate"))
+
+    def test_invalid_nan_policy(self, unit_triangle: Mesh):
+        with pytest.raises(ValueError, match="nan_policy"):
+            integrate(
+                unit_triangle,
+                torch.ones(1),
+                data_source="cells",
+                nan_policy="invalid",  # type: ignore[arg-type]
+            )
+
+
+###############################################################################
+# Cell outer-product moments
+###############################################################################
+
+
+class TestIntegrateMoment:
+    def test_matches_explicit_outer_product(self, two_triangles: Mesh):
+        left = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+        right = torch.tensor(
+            [
+                [[1.0, 2.0], [3.0, 4.0]],
+                [[5.0, 6.0], [7.0, 8.0]],
+            ]
+        )
+
+        result = integrate_moment(two_triangles, left, right)
+        explicit = torch.einsum(
+            "n,ni,njk->ijk",
+            two_triangles.cell_areas,
+            left,
+            right,
+        )
+
+        assert result.shape == (2, 2, 2)
+        assert torch.allclose(result, explicit)
+
+    def test_scalar_fields_return_scalar(self, two_triangles: Mesh):
+        left = torch.tensor([2.0, 3.0])
+        right = torch.tensor([5.0, 7.0])
+        result = integrate_moment(two_triangles, left, right)
+        expected = (two_triangles.cell_areas * left * right).sum()
+        assert result.shape == torch.Size([])
+        assert torch.allclose(result, expected)
+
+    def test_named_fields(self, two_triangles: Mesh):
+        two_triangles.cell_data["left"] = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+        two_triangles.cell_data["right"] = torch.tensor([[5.0, 6.0], [7.0, 8.0]])
+        result = integrate_moment(two_triangles, "left", "right")
+        expected = torch.einsum(
+            "n,ni,nj->ij",
+            two_triangles.cell_areas,
+            two_triangles.cell_data["left"],
+            two_triangles.cell_data["right"],
+        )
+        assert torch.allclose(result, expected)
+
+    def test_aligned_group_dimensions(self, two_triangles: Mesh):
+        left = torch.arange(24.0).reshape(2, 3, 4)
+        right = torch.arange(30.0).reshape(2, 3, 5)
+
+        result = integrate_moment(
+            two_triangles,
+            left,
+            right,
+            aligned_dims=1,
+        )
+        expected = torch.einsum(
+            "n,nha,nhb->hab",
+            two_triangles.cell_areas,
+            left,
+            right,
+        )
+
+        assert result.shape == (3, 4, 5)
+        assert torch.allclose(result, expected)
+
+    def test_aligned_dimensions_must_match(self, two_triangles: Mesh):
+        with pytest.raises(ValueError, match="Aligned field dimensions"):
+            integrate_moment(
+                two_triangles,
+                torch.ones(2, 3, 4),
+                torch.ones(2, 2, 5),
+                aligned_dims=1,
+            )
+
+    @pytest.mark.parametrize("aligned_dims", [-1, 2])
+    def test_invalid_aligned_dimension_count(
+        self, two_triangles: Mesh, aligned_dims: int
+    ):
+        with pytest.raises(ValueError, match="aligned_dims"):
+            integrate_moment(
+                two_triangles,
+                torch.ones(2, 3),
+                torch.ones(2, 3),
+                aligned_dims=aligned_dims,
+            )
+
+    def test_default_accumulates_reduced_precision_in_fp32(self, two_triangles: Mesh):
+        left = torch.ones((two_triangles.n_cells, 2), dtype=torch.float16)
+        right = torch.ones((two_triangles.n_cells, 3), dtype=torch.float16)
+        result = integrate_moment(two_triangles, left, right)
+        assert result.dtype == torch.float32
+
+    def test_configurable_accumulation_dtype(self, two_triangles: Mesh):
+        left = torch.ones((two_triangles.n_cells, 2), dtype=torch.float32)
+        right = torch.ones((two_triangles.n_cells, 3), dtype=torch.float32)
+        result = integrate_moment(
+            two_triangles,
+            left,
+            right,
+            accumulation_dtype=torch.float64,
+        )
+        assert result.dtype == torch.float64
+
+    def test_fp64_inputs_are_not_downcast(self, two_triangles: Mesh):
+        left = torch.ones((two_triangles.n_cells, 2), dtype=torch.float64)
+        right = torch.ones((two_triangles.n_cells, 3), dtype=torch.float64)
+        result = integrate_moment(two_triangles, left, right)
+        assert result.dtype == torch.float64
+
+    def test_nan_policy(self, two_triangles: Mesh):
+        left = torch.tensor([[1.0, float("nan")], [2.0, 3.0]])
+        right = torch.tensor([[4.0], [5.0]])
+
+        omitted = integrate_moment(
+            two_triangles,
+            left,
+            right,
+            nan_policy="omit",
+        )
+        propagated = integrate_moment(
+            two_triangles,
+            left,
+            right,
+            nan_policy="propagate",
+        )
+
+        expected_omitted = torch.einsum(
+            "n,ni,nj->ij",
+            two_triangles.cell_areas,
+            torch.nan_to_num(left, nan=0.0),
+            right,
+        )
+        assert torch.allclose(omitted, expected_omitted)
+        assert torch.isnan(propagated[1, 0])
+
+    def test_gradients(self, two_triangles: Mesh):
+        left = torch.randn(two_triangles.n_cells, 2, requires_grad=True)
+        right = torch.randn(two_triangles.n_cells, 3, requires_grad=True)
+        result = integrate_moment(two_triangles, left, right)
+        result.square().sum().backward()
+        assert left.grad is not None and torch.isfinite(left.grad).all()
+        assert right.grad is not None and torch.isfinite(right.grad).all()
+
+    def test_wrong_leading_dimension(self, unit_triangle: Mesh):
+        with pytest.raises(ValueError, match="left.*n_cells"):
+            integrate_moment(
+                unit_triangle,
+                torch.ones(2, 3),
+                torch.ones(1, 4),
+            )
+
+    def test_empty_mesh_raises(self):
+        point_cloud = Mesh(points=torch.randn(3, 2))
+        with pytest.raises(ValueError, match="no cells"):
+            integrate_moment(
+                point_cloud,
+                torch.empty(0, 2),
+                torch.empty(0, 3),
+            )
 
 
 ###############################################################################
@@ -294,6 +488,31 @@ class TestIntegrateFlux:
         triangle_3d.cell_data["v"] = normal.unsqueeze(0)
         flux = triangle_3d.integrate_flux("v")
         assert torch.isclose(flux, triangle_3d.cell_areas[0])
+
+    def test_nan_policy_and_mesh_forwarding(self, triangle_3d: Mesh):
+        field = torch.full((triangle_3d.n_cells, 3), float("nan"))
+        triangle_3d.cell_data["v"] = field
+
+        omitted = integrate_flux(
+            triangle_3d,
+            field,
+            nan_policy="omit",
+        )
+        propagated = triangle_3d.integrate_flux(
+            "v",
+            nan_policy="propagate",
+        )
+
+        assert torch.equal(omitted, torch.zeros_like(omitted))
+        assert torch.isnan(propagated)
+
+    def test_invalid_nan_policy(self, triangle_3d: Mesh):
+        with pytest.raises(ValueError, match="nan_policy"):
+            integrate_flux(
+                triangle_3d,
+                torch.ones(triangle_3d.n_cells, 3),
+                nan_policy="invalid",  # type: ignore[arg-type]
+            )
 
 
 ###############################################################################
