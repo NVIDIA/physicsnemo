@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
+
 import pytest
 import torch
 
@@ -126,6 +128,30 @@ def test_apply_rotary_pos_emb_preserves_dtype_and_norm():
     assert torch.allclose(twice, -x, atol=1e-6)
 
 
+@torch.no_grad()
+def test_apply_rotary_pos_emb_rotation_direction():
+    """Pin the handedness of the pair rotation, not just its magnitude.
+
+    The norm- and relative-position tests are blind to the rotation's sign (a
+    flipped ``rotate_half`` passes them all). Rotating a basis pair by a generic
+    angle must follow a proper counter-clockwise rotation
+    ``(x0, x1) -> (x0 cos - x1 sin, x0 sin + x1 cos)``: so ``(1, 0) -> (cos, sin)``
+    and ``(0, 1) -> (-sin, cos)``. A flipped sign would send ``(1, 0) -> (cos, -sin)``.
+    """
+    theta = math.pi / 6
+    c, s = math.cos(theta), math.sin(theta)
+    cos = torch.full((1, 2), c)  # head_dim=2: a single rotated pair
+    sin = torch.full((1, 2), s)
+    e_x = torch.tensor([[1.0, 0.0]])
+    e_y = torch.tensor([[0.0, 1.0]])
+    assert torch.allclose(
+        apply_rotary_pos_emb(e_x, cos, sin), torch.tensor([[c, s]]), atol=1e-6
+    )
+    assert torch.allclose(
+        apply_rotary_pos_emb(e_y, cos, sin), torch.tensor([[-s, c]]), atol=1e-6
+    )
+
+
 # --- 1D RoPE ---
 
 
@@ -210,10 +236,10 @@ def test_rotary_1d_relative_phase_is_translation_invariant():
 # --- physicsnemo.Module checkpoint round-trips ---
 #
 # Both RoPE modules subclass physicsnemo.core.Module, so they must support the
-# .save() / Module.from_checkpoint() recipe. Their cos/sin tables are
-# persistent=False buffers, deterministically rebuilt from the __init__ args, so
-# a round-trip must reproduce the forward exactly without the tables appearing in
-# the checkpoint.
+# .save() / Module.from_checkpoint() recipe. They cache cos/sin as
+# persistent=False buffers (deterministically rebuilt from the __init__ args), so
+# a round-trip reproduces the forward exactly without the tables appearing in the
+# checkpoint.
 
 
 @torch.no_grad()

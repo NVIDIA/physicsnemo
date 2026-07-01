@@ -13,22 +13,3 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-
-# Model name
-model_name: 'diffusion' # 'regression', 'diffusion', or custom model added by user
-
-architecture: dit
-
-# Model conditions
-regression_conditions: []
-diffusion_conditions: ["state", "background", "invariant"] # list consisting of "state", "regression", "background", "invariant" (default from StormCast paper)
-
-# Model hyperparameters (defaults follow Stormscope)
-hyperparameters:
-  depth: 16
-  hidden_size: 768
-  attn_kernel_size: 31
-  num_heads: 16
-  patch_size: 4
-  use_nan_mask_tokens: false  # replace invalid-region tokens with a learned mask token (requires a per-sample dataloader "mask")

@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds the experimental Strata weather-emulation models —
+  `physicsnemo.experimental.models.strata.Strata` and `StrataTransformer3D` — plus
+  the continuous / stereographic RoPE helpers `build_rope_cos_sin_1d_continuous`,
+  `build_axial_rope_cos_sin_2d_continuous`, `stereographic_projection`, and
+  `spherical_centroid` in `physicsnemo.experimental.nn`.
 - Adds Point-Transformer local vector-attention blocks to `physicsnemo.nn`.
 - Adds an `is_causal` option to `TimmSelfAttention` in `physicsnemo.nn` for
   causal self-attention.
@@ -170,6 +175,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or any multi-column grid, which also broke `repair.fix_orientation`). Parent-cell
   vertices are now sorted into a global order before tessellation (the
   Freudenthal-Kuhn subdivision), a no-op for already-sorted inputs.
+- `physicsnemo.mesh.generate.marching_cubes` now accepts `bfloat16` fields by
+  converting them to `float32` before crossing the NumPy boundary.
 - `physicsnemo.mesh.projections.extrude` now returns consistently oriented cells
   for full-dimensional (codimension-0) output.
 - `physicsnemo.mesh.remesh` now preserves the input mesh's device and floating
@@ -194,6 +201,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   detached before `.numpy()`); and integer/bool data crashed (`safe_eps` on an
   integer dtype) or truncated via integer division during facet/scatter
   aggregation (now computed in a floating dtype).
+- `physicsnemo.mesh` Morton-code quantization now handles empty inputs, tiny
+  extents, half-precision coordinates, and one-dimensional endpoints correctly.
 - `physicsnemo.mesh`: fixed Loop subdivision pulling open boundaries inward (now
   applies the boundary/crease mask); subdivision zero-filling integer/bool
   `point_data` at new edge vertices (now inherits a parent label);
