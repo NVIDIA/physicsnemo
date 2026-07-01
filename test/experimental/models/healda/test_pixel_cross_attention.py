@@ -274,12 +274,12 @@ def test_pixel_cross_attention_module_forward_backward():
     counts = [0, 3, 1, 0] * 5
     assert len(counts) == total_pixels
     module = PixelCrossAttention(
-        token_dim=TOKEN_DIM, n_q_heads=32, n_kv_heads=2, d_head=D_HEAD
+        hidden_size=64, token_dim=TOKEN_DIM, n_q_heads=32, n_kv_heads=2, d_head=D_HEAD
     ).cuda()
 
     gen = torch.Generator().manual_seed(5)
     hidden = (
-        torch.randn(total_pixels, module.input_dim, generator=gen)
+        torch.randn(total_pixels, module.hidden_size, generator=gen)
         .cuda()
         .requires_grad_(True)
     )
@@ -289,8 +289,8 @@ def test_pixel_cross_attention_module_forward_backward():
     cu = _cu_seqlens(counts).cuda()
 
     context = ObsContext(tokens=tokens, cu_seqlens_k=cu, max_seqlen_k=max(counts))
-    out = module(hidden.view(1, 1, total_pixels, module.input_dim), context)
-    assert out.shape == (1, 1, total_pixels, module.output_dim)
+    out = module(hidden.view(1, 1, total_pixels, module.hidden_size), context)
+    assert out.shape == (1, 1, total_pixels, module.hidden_size)
     assert torch.isfinite(out).all()
 
     out.sum().backward()
@@ -307,15 +307,15 @@ def test_pixel_cross_attention_empty_tokens_grad():
     torch.manual_seed(6)
     total_pixels = 12
     module = PixelCrossAttention(
-        token_dim=TOKEN_DIM, n_q_heads=32, n_kv_heads=2, d_head=D_HEAD
+        hidden_size=64, token_dim=TOKEN_DIM, n_q_heads=32, n_kv_heads=2, d_head=D_HEAD
     ).cuda()
-    hidden = torch.randn(total_pixels, module.input_dim).cuda()
+    hidden = torch.randn(total_pixels, module.hidden_size).cuda()
     tokens = torch.zeros(0, TOKEN_DIM).cuda()
     cu = torch.zeros(total_pixels + 1, dtype=torch.int32).cuda()
 
     context = ObsContext(tokens=tokens, cu_seqlens_k=cu, max_seqlen_k=0)
-    out = module(hidden.view(1, 1, total_pixels, module.input_dim), context)
-    assert out.shape == (1, 1, total_pixels, module.output_dim)
+    out = module(hidden.view(1, 1, total_pixels, module.hidden_size), context)
+    assert out.shape == (1, 1, total_pixels, module.hidden_size)
     out.sum().backward()
     for name, p in module.named_parameters():
         assert p.grad is not None and torch.isfinite(p.grad).all(), name
@@ -326,15 +326,27 @@ def test_pixel_cross_attention_rejects_unsupported_configs():
     # n_q_heads divisible by n_kv_heads. These raise at construction, no kernel.
     with pytest.raises(ValueError, match="below Triton tl.dot minimum"):
         PixelCrossAttention(
-            token_dim=TOKEN_DIM, n_q_heads=8, n_kv_heads=1, d_head=D_HEAD
+            hidden_size=64,
+            token_dim=TOKEN_DIM,
+            n_q_heads=8,
+            n_kv_heads=1,
+            d_head=D_HEAD,
         )
     with pytest.raises(ValueError, match="n_kv_heads"):
         PixelCrossAttention(
-            token_dim=TOKEN_DIM, n_q_heads=64, n_kv_heads=3, d_head=D_HEAD
+            hidden_size=64,
+            token_dim=TOKEN_DIM,
+            n_q_heads=64,
+            n_kv_heads=3,
+            d_head=D_HEAD,
         )
     with pytest.raises(ValueError, match="divisible"):
         PixelCrossAttention(
-            token_dim=TOKEN_DIM, n_q_heads=66, n_kv_heads=4, d_head=D_HEAD
+            hidden_size=64,
+            token_dim=TOKEN_DIM,
+            n_q_heads=66,
+            n_kv_heads=4,
+            d_head=D_HEAD,
         )
 
 
@@ -343,6 +355,7 @@ def test_pixel_cross_attention_cpu_reference_forward_backward():
     torch.manual_seed(0)
     counts = [2, 0, 3, 1, 4, 0]  # total_pixels = b*t*x = 1*2*3
     module = PixelCrossAttention(
+        hidden_size=64,
         token_dim=TOKEN_DIM,
         n_q_heads=16,
         n_kv_heads=1,
@@ -354,10 +367,10 @@ def test_pixel_cross_attention_cpu_reference_forward_backward():
     ctx = ObsContext(
         tokens=tokens, cu_seqlens_k=_cu_seqlens(counts), max_seqlen_k=max(counts)
     )
-    hidden = torch.randn(1, 2, 3, module.input_dim, requires_grad=True)
+    hidden = torch.randn(1, 2, 3, module.hidden_size, requires_grad=True)
 
     out = module(hidden, ctx)
-    assert out.shape == (1, 2, 3, module.output_dim)
+    assert out.shape == (1, 2, 3, module.hidden_size)
     assert torch.isfinite(out).all()
 
     out.pow(2).sum().backward()
@@ -366,9 +379,42 @@ def test_pixel_cross_attention_cpu_reference_forward_backward():
     assert module.q_proj.weight.grad is not None
 
 
+def test_pixel_cross_attention_hidden_size_differs_from_attn_dim():
+    # hidden_size (residual width) != attn_dim (n_q_heads * d_head, the internal
+    # attention width): q_proj maps up and out_proj maps back, so the layer stays
+    # shape-preserving on the residual stream. Covers populated and all-empty
+    # (kernel-skipped) paths on CPU.
+    hidden_size = 24
+    module = PixelCrossAttention(
+        hidden_size=hidden_size,
+        token_dim=TOKEN_DIM,
+        n_q_heads=16,
+        n_kv_heads=1,
+        d_head=D_HEAD,
+    )
+    assert module.hidden_size == hidden_size
+    assert module.attn_dim == 16 * D_HEAD
+    assert module.hidden_size != module.attn_dim
+
+    gen = torch.Generator().manual_seed(0)
+    for counts in ([2, 0, 3, 1], [0, 0, 0, 0]):
+        tokens = torch.randn(sum(counts), TOKEN_DIM, generator=gen)
+        ctx = ObsContext(
+            tokens=tokens, cu_seqlens_k=_cu_seqlens(counts), max_seqlen_k=max(counts)
+        )
+        hidden = torch.randn(1, 1, len(counts), hidden_size, requires_grad=True)
+        out = module(hidden, ctx)
+        assert out.shape == (1, 1, len(counts), hidden_size)
+        assert torch.isfinite(out).all()
+        out.sum().backward()
+        assert module.q_proj.weight.grad is not None
+        assert module.out_proj.weight.grad is not None
+
+
 def test_pixel_cross_attention_cpu_all_empty_keeps_grads():
     # No observations: zero output, but every projection param still gets a grad.
     module = PixelCrossAttention(
+        hidden_size=64,
         token_dim=TOKEN_DIM,
         n_q_heads=16,
         n_kv_heads=1,
@@ -380,10 +426,10 @@ def test_pixel_cross_attention_cpu_all_empty_keeps_grads():
         cu_seqlens_k=torch.zeros(5, dtype=torch.int32),
         max_seqlen_k=0,
     )
-    hidden = torch.randn(1, 1, 4, module.input_dim, requires_grad=True)
+    hidden = torch.randn(1, 1, 4, module.hidden_size, requires_grad=True)
 
     out = module(hidden, ctx)
-    assert out.shape == (1, 1, 4, module.output_dim)
+    assert out.shape == (1, 1, 4, module.hidden_size)
     out.sum().backward()
     assert module.q_proj.weight.grad is not None
     assert module.out_proj.weight.grad is not None

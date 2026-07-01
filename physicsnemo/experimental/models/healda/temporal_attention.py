@@ -77,7 +77,7 @@ class TemporalAttention(torch.nn.Module):
 
     Parameters
     ----------
-    embed_dim : int
+    hidden_size : int
         Hidden dimension :math:`C`, split evenly across ``num_heads``.
     num_heads : int
         Number of attention heads.
@@ -110,7 +110,7 @@ class TemporalAttention(torch.nn.Module):
     --------
     >>> import torch
     >>> from physicsnemo.experimental.models.healda.temporal_attention import TemporalAttention
-    >>> layer = TemporalAttention(embed_dim=64, num_heads=4)
+    >>> layer = TemporalAttention(hidden_size=64, num_heads=4)
     >>> x = torch.randn(2, 8, 16, 64)
     >>> out = layer(x, is_causal=False)
     >>> out.shape
@@ -120,7 +120,7 @@ class TemporalAttention(torch.nn.Module):
     def __init__(
         self,
         *,
-        embed_dim: int,
+        hidden_size: int,
         num_heads: int,
         use_rope: bool = True,
         rope_base: int = 100,
@@ -130,11 +130,11 @@ class TemporalAttention(torch.nn.Module):
     ) -> None:
         super().__init__()
         self._time_parallel_group = None
-        self.qkv = torch.nn.Linear(embed_dim, embed_dim * 3)
-        self.proj = torch.nn.Linear(embed_dim, embed_dim)
+        self.qkv = torch.nn.Linear(hidden_size, hidden_size * 3)
+        self.proj = torch.nn.Linear(hidden_size, hidden_size)
         self.num_heads = num_heads
         self.use_rope = use_rope
-        self.head_dim = embed_dim // num_heads
+        self.head_dim = hidden_size // num_heads
         self.linear_attention = linear_attention
         self.causal_window = causal_window
 

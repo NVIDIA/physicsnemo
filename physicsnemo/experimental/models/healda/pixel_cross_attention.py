@@ -268,6 +268,9 @@ class PixelCrossAttention(CrossAttentionModuleBase):
 
     Parameters
     ----------
+    hidden_size : int
+        Residual-stream width; latents enter and leave at this width. The
+        internal attention width ``n_q_heads * d_head`` may differ.
     token_dim : int
         Channel dimension of the observation tokens (the key/value source).
     n_q_heads : int
@@ -277,10 +280,6 @@ class PixelCrossAttention(CrossAttentionModuleBase):
         even number, divide ``n_q_heads``, with ``n_q_heads / n_kv_heads >= 16``.
     d_head : int
         Per-head channel dimension.
-    input_dim : int, optional, default=None
-        Latent input dimension. Defaults to ``n_q_heads * d_head``.
-    output_dim : int, optional, default=None
-        Output dimension. Defaults to ``n_q_heads * d_head``.
     use_proj_bias : bool, optional, default=False
         Add bias to the query/value/output projections (the key projection is
         always bias-free).
@@ -288,7 +287,7 @@ class PixelCrossAttention(CrossAttentionModuleBase):
     Forward
     -------
     hidden_states : torch.Tensor
-        Per-pixel latents of shape :math:`(B, T, X, C)`.
+        Per-pixel latents of shape :math:`(B, T, X, \text{hidden\_size})`.
     context : ObsContext
         Packed observation tokens and ragged packing whose ``cu_seqlens_k``
         describes :math:`B \cdot T \cdot X` pixels.
@@ -296,7 +295,7 @@ class PixelCrossAttention(CrossAttentionModuleBase):
     Outputs
     -------
     torch.Tensor
-        Updated latents of shape :math:`(B, T, X, C)`.
+        Updated latents of shape :math:`(B, T, X, \text{hidden\_size})`.
 
     Notes
     -----
@@ -309,12 +308,11 @@ class PixelCrossAttention(CrossAttentionModuleBase):
 
     def __init__(
         self,
+        hidden_size: int,
         token_dim: int,
         n_q_heads: int,
         n_kv_heads: int,
         d_head: int,
-        input_dim: Optional[int] = None,
-        output_dim: Optional[int] = None,
         use_proj_bias: bool = False,
     ):
         super().__init__()
@@ -334,18 +332,17 @@ class PixelCrossAttention(CrossAttentionModuleBase):
                 f"For n_kv_heads={n_kv_heads}, need n_q_heads >= {n_kv_heads * 16}"
             )
         self.attn_dim = n_q_heads * d_head
-        self.input_dim = self.attn_dim if input_dim is None else input_dim
-        self.output_dim = self.attn_dim if output_dim is None else output_dim
+        self.hidden_size = hidden_size
         self.token_dim = token_dim
         self.n_q_heads = n_q_heads
         self.n_kv_heads = n_kv_heads
         self.d_head = d_head
         self.scale = 1.0 / math.sqrt(d_head)
         kv_dim = n_kv_heads * d_head
-        self.q_proj = nn.Linear(self.input_dim, self.attn_dim, bias=use_proj_bias)
+        self.q_proj = nn.Linear(hidden_size, self.attn_dim, bias=use_proj_bias)
         self.k_proj = nn.Linear(token_dim, kv_dim, bias=False)
         self.v_proj = nn.Linear(token_dim, kv_dim, bias=use_proj_bias)
-        self.out_proj = nn.Linear(self.attn_dim, self.output_dim, bias=use_proj_bias)
+        self.out_proj = nn.Linear(self.attn_dim, hidden_size, bias=use_proj_bias)
 
     def _forward_impl(
         self,
@@ -356,7 +353,7 @@ class PixelCrossAttention(CrossAttentionModuleBase):
         max_seqlen_k: int,
         group_map: Optional[PixelGroupMap] = None,
     ) -> torch.Tensor:
-        hidden_flat = hidden_states.reshape(total_pixels, self.input_dim)
+        hidden_flat = hidden_states.reshape(total_pixels, self.hidden_size)
 
         if tokens.shape[0] == 0:
             # Keep every projection parameter in the graph even when a batch has
@@ -408,10 +405,10 @@ class PixelCrossAttention(CrossAttentionModuleBase):
         hidden_states: Float[torch.Tensor, "batch time space hidden_size"],
         context: ObsContext,
     ) -> Float[torch.Tensor, "batch time space hidden_size"]:
-        b, t, x, ch = hidden_states.shape
+        b, t, x, _ = hidden_states.shape
         total_pixels = b * t * x
         # Fold (B, T, X) into the flat pixel axis the ragged kernel expects, then
-        # unfold the per-pixel output back to the (B, T, X, C) layout.
+        # unfold the per-pixel output back to the (B, T, X, hidden_size) layout.
         out = self._forward_impl(
             hidden_states,
             context.tokens,
@@ -420,7 +417,7 @@ class PixelCrossAttention(CrossAttentionModuleBase):
             context.max_seqlen_k,
             group_map=context.group_map,
         )
-        return out.view(b, t, x, ch)
+        return out.view(b, t, x, self.hidden_size)
 
 
 # ---------------------------------------------------------------------------

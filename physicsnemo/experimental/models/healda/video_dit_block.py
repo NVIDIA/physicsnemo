@@ -180,7 +180,7 @@ class VideoDiTBlock(nn.Module):
         self.temporal_attn_norm = None
         if temporal_attention:
             self.temporal_attention = TemporalAttention(
-                embed_dim=hidden_size,
+                hidden_size=hidden_size,
                 num_heads=num_heads,
                 **(temporal_kwargs or {}),
             )

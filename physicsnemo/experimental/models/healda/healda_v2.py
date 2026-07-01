@@ -269,12 +269,11 @@ class HealDAv2(Module):
 
         cross_attention = partial(
             PixelCrossAttention,
+            hidden_size=hidden_size,
             token_dim=obs_token_dim,
             n_q_heads=pixel_attn_n_q_heads,
             n_kv_heads=pixel_attn_n_kv_heads,
             d_head=pixel_attn_head_dim,
-            input_dim=hidden_size,
-            output_dim=hidden_size,
             use_proj_bias=pixel_attn_use_proj_bias,
         )
 
