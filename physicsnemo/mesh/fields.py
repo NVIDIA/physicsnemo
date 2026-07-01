@@ -425,10 +425,6 @@ class FieldLayout:
                 f"vectors must have shape {expected_vectors}, got "
                 f"{tuple(vectors.shape)}"
             )
-        if vectors.shape[0] != n_points:
-            raise ValueError(
-                "scalars and vectors must contain the same number of points"
-            )
         if vectors.device != scalars.device:
             raise ValueError("scalars and vectors must be on the same device")
         if vectors.dtype != scalars.dtype:

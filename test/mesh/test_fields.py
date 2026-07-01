@@ -58,6 +58,7 @@ def test_rank_spec_helpers():
         "ignored": 0,
     }
 
+
 def test_validate_rank_spec_and_data_reports_schema_errors():
     validate_rank_spec({"scalar": 0, "tensor": 2})
     with pytest.raises(ValueError, match="must be one of .* got 2"):
