@@ -86,7 +86,6 @@ predictor:
   depth: 4
   num_heads: 4
   neighbor_k: 8
-  knn_chunk_size: 128
   query_pe_bands: 6
   mlp_ratio: 4
   dropout: 0.0

@@ -21,12 +21,7 @@ that are under active development. These components may have breaking API
 changes between releases.
 """
 
-from .attention_blocks import (
-    LocalPointTransformerBlock,
-    LocalTokenCrossAttentionBlock,
-    ResidualMLP,
-)
-from .diffusion_unet_3d_blocks import UNetBlock3D, Conv3D, GroupNorm3D, UNetAttention3D
+from .diffusion_unet_3d_blocks import Conv3D, GroupNorm3D, UNetAttention3D, UNetBlock3D
 from .flare_attention import FLARE
 from .point_tokenizer import PointCloudTokenizer
 from .point_utils import (
@@ -44,10 +39,7 @@ __all__ = [
     "Conv3D",
     "FLARE",
     "GroupNorm3D",
-    "LocalPointTransformerBlock",
-    "LocalTokenCrossAttentionBlock",
     "PointCloudTokenizer",
-    "ResidualMLP",
     "UNetAttention3D",
     "UNetBlock3D",
     "chunked_knn_indices",

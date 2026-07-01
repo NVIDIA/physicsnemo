@@ -32,17 +32,18 @@ import torch
 import torch.nn as nn
 
 from physicsnemo.core.module import Module
+from physicsnemo.nn import (
+    FourierPositionalEmbedding,
+    LocalPointTransformerBlock,
+    LocalTokenCrossAttentionBlock,
+)
+from physicsnemo.nn.functional import knn
 from physicsnemo.nn.module.layer_norm import LayerNorm
-from physicsnemo.nn import FourierPositionalEmbedding
 from physicsnemo.nn.module.mlp_layers import Mlp
 
 from ._metadata import AeroJEPAMetaData
-
 from .layers import (
-    LocalPointTransformerBlock,
-    LocalTokenCrossAttentionBlock,
     TokenSet,
-    chunked_knn_indices,
     compute_batch_offset_step,
     flatten_batched_coords,
     flatten_padded_batch,
@@ -91,13 +92,11 @@ class PrototypeTokenJEPAHead(Module):
     neighbor_k : int, optional
         Per-query neighborhood size in both self- and cross-attention.
         Default 24.
-    knn_chunk_size : int, optional
-        Chunk size for the inner k-NN. Default 128.
     query_pe_bands : int, optional
         Fourier positional-encoding bands for the target positions.
         Default 6.
     mlp_ratio : int, optional
-        Hidden multiplier inside each block's ``ResidualMLP``. Default 4.
+        Hidden multiplier inside each block's ``AdaLNResidualMLP``. Default 4.
     dropout : float, optional
         Dropout used throughout. Default 0.0.
     """
@@ -111,7 +110,6 @@ class PrototypeTokenJEPAHead(Module):
         depth: int = 4,
         num_heads: int = 8,
         neighbor_k: int = 24,
-        knn_chunk_size: int = 128,
         query_pe_bands: int = 6,
         mlp_ratio: int = 4,
         dropout: float = 0.0,
@@ -148,7 +146,6 @@ class PrototypeTokenJEPAHead(Module):
                     dilation=1,
                     mlp_ratio=int(mlp_ratio),
                     dropout=float(dropout),
-                    knn_chunk_size=int(knn_chunk_size),
                     conditioning_dim=block_conditioning_dim,
                 )
                 for _ in range(self.depth)
@@ -162,7 +159,6 @@ class PrototypeTokenJEPAHead(Module):
                     neighbor_k=int(neighbor_k),
                     mlp_ratio=int(mlp_ratio),
                     dropout=float(dropout),
-                    knn_chunk_size=int(knn_chunk_size),
                     conditioning_dim=block_conditioning_dim,
                 )
                 for _ in range(self.depth)
@@ -330,24 +326,26 @@ class PrototypeTokenJEPAHead(Module):
         if self.depth > 0:
             self_blk0 = self.self_blocks[0]
             cross_blk0 = self.cross_blocks[0]
-            self_idx = chunked_knn_indices(
-                query_coords=flat_target_coords,
-                key_coords=flat_target_coords,
-                k=min(
-                    int(self_blk0.neighbor_k) * int(self_blk0.dilation),
-                    int(flat_target_coords.shape[0]),
-                ),
-                chunk_size=int(self_blk0.knn_chunk_size),
+            self_k = min(
+                int(self_blk0.neighbor_k) * int(self_blk0.dilation),
+                int(flat_target_coords.shape[0]),
             )
-            cross_idx = chunked_knn_indices(
-                query_coords=flat_target_coords,
-                key_coords=flat_context_coords,
-                k=min(
-                    int(cross_blk0.neighbor_k),
-                    int(flat_context_coords.shape[0]),
-                ),
-                chunk_size=int(cross_blk0.knn_chunk_size),
+            self_idx, _ = knn(
+                points=flat_target_coords.float(),
+                queries=flat_target_coords.float(),
+                k=self_k,
             )
+            self_idx = self_idx.long()
+            cross_k = min(
+                int(cross_blk0.neighbor_k),
+                int(flat_context_coords.shape[0]),
+            )
+            cross_idx, _ = knn(
+                points=flat_context_coords.float(),
+                queries=flat_target_coords.float(),
+                k=cross_k,
+            )
+            cross_idx = cross_idx.long()
 
         for self_block, cross_block in zip(
             self.self_blocks, self.cross_blocks, strict=True

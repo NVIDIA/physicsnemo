@@ -565,3 +565,43 @@ def test_sqrt_scaling_absorption_identity():
         absorbed.weight.copy_(lin.weight / s)
         absorbed.bias.copy_(lin.bias / s)
     torch.testing.assert_close(lin(x) / s, absorbed(x))
+
+
+def test_self_block_precomputed_idx_matches_auto(device):
+    # A stack sharing static coordinates can run one wide k-NN and thread it
+    # through every block via ``precomputed_idx``; each block reproduces its own
+    # dilated slice from the shared index, so the output must match the
+    # per-block auto-search path exactly.
+    torch.manual_seed(0)
+    block = _self_block(neighbor_k=6, dilation=2).to(device).eval()
+    feats = torch.randn(20, 32, device=device)
+    coords = torch.randn(20, 3, device=device)
+    wide_idx = _dilated_knn(
+        query_coords=coords,
+        key_coords=coords,
+        k=block.neighbor_k * block.dilation,
+        dilation=1,
+    )
+    out_auto = block(feats, coords)
+    out_pre = block(feats, coords, precomputed_idx=wide_idx)
+    torch.testing.assert_close(out_auto, out_pre)
+
+
+def test_cross_block_precomputed_idx_matches_auto(device):
+    # Same reuse contract for the cross-attention block (dilation is always 1
+    # here): a precomputed query->context index must match the auto-search path.
+    torch.manual_seed(0)
+    block = _cross_block(neighbor_k=4).to(device).eval()
+    qf = torch.randn(10, 32, device=device)
+    qc = torch.randn(10, 3, device=device)
+    cf = torch.randn(20, 32, device=device)
+    cc = torch.randn(20, 3, device=device)
+    wide_idx = _dilated_knn(
+        query_coords=qc,
+        key_coords=cc,
+        k=block.neighbor_k,
+        dilation=1,
+    )
+    out_auto = block(qf, qc, cf, cc)
+    out_pre = block(qf, qc, cf, cc, precomputed_idx=wide_idx)
+    torch.testing.assert_close(out_auto, out_pre)

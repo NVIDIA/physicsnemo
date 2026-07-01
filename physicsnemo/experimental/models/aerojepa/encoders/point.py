@@ -43,18 +43,16 @@ import torch
 import torch.nn as nn
 
 from physicsnemo.core.module import Module
-from physicsnemo.nn import FourierPositionalEmbedding
+from physicsnemo.nn import FourierPositionalEmbedding, LocalPointTransformerBlock
+from physicsnemo.nn.functional import knn
 from physicsnemo.nn.module.layer_norm import LayerNorm
 from physicsnemo.nn.module.mlp_layers import Mlp
 
 from .._metadata import AeroJEPAMetaData
-
 from ..layers import (
     EncoderOutput,
-    LocalPointTransformerBlock,
     PointCloudTokenizer,
     TokenSet,
-    chunked_knn_indices,
     compute_batch_offset_step,
     flatten_batched_coords,
     flatten_padded_batch,
@@ -80,15 +78,13 @@ def _precomputed_idx_for_blocks(
         return None
     n_key = int(key_coords.shape[0])
     k_max = 1
-    chunk_size = int(blocks[0].knn_chunk_size)
     for b in blocks:
         k_max = max(k_max, min(int(b.neighbor_k) * int(b.dilation), n_key))
-    return chunked_knn_indices(
-        query_coords=query_coords,
-        key_coords=key_coords,
-        k=k_max,
-        chunk_size=chunk_size,
-    )
+    # Build the shared wide index the same way the block's own auto path does
+    # (``_dilated_knn`` -> ``knn`` on float coords), so each block reproduces
+    # its dilated slice exactly by striding this result.
+    idx, _ = knn(points=key_coords.float(), queries=query_coords.float(), k=k_max)
+    return idx.long()
 
 
 def build_geometry_features(
@@ -360,7 +356,7 @@ class PointTransformer(Module):
         Per-layer dilation. ``None`` uses dilation 1 everywhere. Shorter
         schedules are padded by repeating the last value.
     mlp_ratio : int
-        Hidden multiplier for the ``ResidualMLP`` inside each block.
+        Hidden multiplier for the ``AdaLNResidualMLP`` inside each block.
     dropout : float
         Dropout shared across the projections and attention blocks.
     tokenizer_cluster_pooling : str
@@ -502,7 +498,6 @@ class PointTransformer(Module):
                     dilation=int(dilations[i]),
                     mlp_ratio=int(mlp_ratio),
                     dropout=float(dropout),
-                    knn_chunk_size=int(tokenizer_knn_chunk_size),
                     conditioning_dim=(
                         int(token_dim) if self.use_gen_conditioning else None
                     ),

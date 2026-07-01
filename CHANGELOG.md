@@ -43,9 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   predictive architecture for 3D aerodynamic fields composing context and
   target encoders, a query-token field decoder, and a JEPA predictor head,
   together with its SIGReg, token-latent, and reconstruction loss family.
-  The generic building blocks (point-cloud tokenizer, local point-transformer
-  attention blocks, residual MLP, and the batch/mask/k-NN helpers) are added
-  under `physicsnemo.experimental.nn`.
+  The generic point-cloud tokenizer and the batch/mask/k-NN helpers are added
+  under `physicsnemo.experimental.nn`; the local point-transformer attention
+  blocks it composes come from `physicsnemo.nn`.
 - Adds the AeroJEPA SuperWing tutorial recipe
   (`examples/cfd/external_aerodynamics/aerojepa`), an end-to-end Hydra-driven
   workflow covering dataset download, normalization, JEPA training, chunked

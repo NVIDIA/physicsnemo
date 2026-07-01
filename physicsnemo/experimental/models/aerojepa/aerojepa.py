@@ -100,7 +100,7 @@ class AeroJEPA(Module):
     ... )
     >>> predictor = PrototypeTokenJEPAHead(
     ...     token_dim=32, cond_dim=4, depth=2, num_heads=4,
-    ...     neighbor_k=4, knn_chunk_size=32, query_pe_bands=4,
+    ...     neighbor_k=4, query_pe_bands=4,
     ...     mlp_ratio=2, dropout=0.0,
     ... )
     >>> model = AeroJEPA(trunk=trunk, predictor=predictor).eval()

@@ -36,17 +36,15 @@ import torch
 import torch.nn as nn
 
 from physicsnemo.core.module import Module
-from physicsnemo.nn import FourierPositionalEmbedding
+from physicsnemo.nn import FourierPositionalEmbedding, LocalTokenCrossAttentionBlock
+from physicsnemo.nn.functional import knn
 from physicsnemo.nn.module.layer_norm import LayerNorm
 from physicsnemo.nn.module.mlp_layers import Mlp
 from physicsnemo.nn.module.siren_layers import SirenLayer, SirenLayerType
 
 from ._metadata import AeroJEPAMetaData
-
 from .layers import (
-    LocalTokenCrossAttentionBlock,
     TokenSet,
-    chunked_knn_indices,
     compute_batch_offset_step,
     counts_to_mask,
     flatten_batched_coords,
@@ -176,7 +174,7 @@ class QueryTokenDecoder(Module):
     cross_attention_k : int, optional
         Per-query neighborhood size into the target tokens. Default 32.
     attention_mlp_ratio : int, optional
-        Hidden multiplier inside each cross-block's ``ResidualMLP``.
+        Hidden multiplier inside each cross-block's ``AdaLNResidualMLP``.
         Default 4.
     dropout : float, optional
         Dropout used throughout. Default 0.0.
@@ -285,7 +283,6 @@ class QueryTokenDecoder(Module):
                     neighbor_k=int(cross_attention_k),
                     mlp_ratio=int(attention_mlp_ratio),
                     dropout=float(dropout),
-                    knn_chunk_size=max(1, min(int(query_chunk_size), 1024)),
                 )
                 for _ in range(int(cross_attention_layers))
             ]
@@ -399,12 +396,13 @@ class QueryTokenDecoder(Module):
         precomputed_idx = None
         if len(self.cross_blocks) > 0:
             blk0 = self.cross_blocks[0]
-            precomputed_idx = chunked_knn_indices(
-                query_coords=query_pos,
-                key_coords=token_coords,
-                k=min(int(blk0.neighbor_k), int(token_coords.shape[0])),
-                chunk_size=int(blk0.knn_chunk_size),
+            k_wide = min(int(blk0.neighbor_k), int(token_coords.shape[0]))
+            precomputed_idx, _ = knn(
+                points=token_coords.float(),
+                queries=query_pos.float(),
+                k=k_wide,
             )
+            precomputed_idx = precomputed_idx.long()
         for block in self.cross_blocks:
             query_tokens = block(
                 query_tokens,
@@ -560,14 +558,15 @@ class QueryTokenDecoder(Module):
             precomputed_idx_chunk = None
             if len(self.cross_blocks) > 0:
                 blk0 = self.cross_blocks[0]
-                precomputed_idx_chunk = chunked_knn_indices(
-                    query_coords=flat_query_coords[start:end],
-                    key_coords=flat_token_coords,
-                    k=min(
-                        int(blk0.neighbor_k), int(flat_token_coords.shape[0])
-                    ),
-                    chunk_size=int(blk0.knn_chunk_size),
+                k_wide = min(
+                    int(blk0.neighbor_k), int(flat_token_coords.shape[0])
                 )
+                precomputed_idx_chunk, _ = knn(
+                    points=flat_token_coords.float(),
+                    queries=flat_query_coords[start:end].float(),
+                    k=k_wide,
+                )
+                precomputed_idx_chunk = precomputed_idx_chunk.long()
             for block in self.cross_blocks:
                 query_tokens = block(
                     query_tokens,

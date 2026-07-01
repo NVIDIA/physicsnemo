@@ -80,7 +80,7 @@ class TargetTransformer(BaseTargetEncoder):
     dilation_schedule : Sequence[int] or None, optional
         Per-layer dilation. ``None`` uses 1 everywhere.
     mlp_ratio : int, optional
-        Hidden multiplier inside each block's ``ResidualMLP``. Default
+        Hidden multiplier inside each block's ``AdaLNResidualMLP``. Default
         4.
     dropout : float, optional
         Dropout used throughout. Default 0.0.

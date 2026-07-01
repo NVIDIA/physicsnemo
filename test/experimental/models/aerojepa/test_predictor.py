@@ -31,7 +31,6 @@ def _build(*, cond_dim: int = 4) -> PrototypeTokenJEPAHead:
         depth=2,
         num_heads=4,
         neighbor_k=4,
-        knn_chunk_size=32,
         query_pe_bands=4,
         mlp_ratio=2,
         dropout=0.0,

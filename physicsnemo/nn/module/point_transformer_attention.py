@@ -127,6 +127,24 @@ def _dilated_knn(
     return idx[:, :out_k].long()
 
 
+def _dilate_precomputed_idx(
+    idx: torch.Tensor, *, k: int, dilation: int
+) -> torch.Tensor:
+    r"""Apply a block's dilation stride and neighbour cap to a shared index.
+
+    When a stack of blocks shares static coordinates, the caller can run a
+    single k-NN wide enough for every block (``max(k * dilation)`` neighbours)
+    and thread the result through each ``forward(..., precomputed_idx=idx)``.
+    Each block then reproduces its own ``_dilated_knn`` slice from that shared
+    index as a pure gather -- ``idx[:, ::dilation][:, :k]`` -- avoiding a
+    per-block neighbour search.
+    """
+    if dilation > 1:
+        idx = idx[:, :: int(dilation)]
+    out_k = min(int(k), int(idx.shape[1]))
+    return idx[:, :out_k]
+
+
 def _make_conditioning_mlp(cond_dim: int, out_dim: int) -> Mlp:
     hidden_dim = max(int(cond_dim), int(out_dim))
     mlp = Mlp(
@@ -459,6 +477,7 @@ class LocalPointTransformerBlock(_LocalVectorAttentionBlock):
         coords: Float[torch.Tensor, "n d_pos"],
         cond: Float[torch.Tensor, "*batch cond_dim"] | None = None,
         batch_ids: Int[torch.Tensor, "n"] | None = None,  # noqa: F821
+        precomputed_idx: Int[torch.Tensor, "n k_wide"] | None = None,  # noqa: F821
     ) -> Float[torch.Tensor, "n dim"]:
         if not torch.compiler.is_compiling():
             if features.ndim != 2 or features.shape[1] != self.dim:
@@ -493,12 +512,19 @@ class LocalPointTransformerBlock(_LocalVectorAttentionBlock):
                 3, dim=-1
             )
             h = h * (1.0 + scale) + shift
-        idx = _dilated_knn(
-            query_coords=coords,
-            key_coords=coords,
-            k=min(self.neighbor_k, int(coords.shape[0])),
-            dilation=self.dilation,
-        )
+        if precomputed_idx is None:
+            idx = _dilated_knn(
+                query_coords=coords,
+                key_coords=coords,
+                k=min(self.neighbor_k, int(coords.shape[0])),
+                dilation=self.dilation,
+            )
+        else:
+            idx = _dilate_precomputed_idx(
+                precomputed_idx,
+                k=min(self.neighbor_k, int(coords.shape[0])),
+                dilation=self.dilation,
+            )
         neighbor_mask = None
         if batch_ids is not None:
             gathered_batch_ids = _gather_rows(batch_ids.unsqueeze(-1), idx).squeeze(-1)
@@ -621,6 +647,7 @@ class LocalTokenCrossAttentionBlock(_LocalVectorAttentionBlock):
         context_cond: Float[torch.Tensor, "*batch cond_dim"] | None = None,
         query_batch_ids: Int[torch.Tensor, "nq"] | None = None,  # noqa: F821
         context_batch_ids: Int[torch.Tensor, "nc"] | None = None,  # noqa: F821
+        precomputed_idx: Int[torch.Tensor, "nq k_wide"] | None = None,  # noqa: F821
     ) -> Float[torch.Tensor, "nq dim"]:
         if not torch.compiler.is_compiling():
             if query_features.ndim != 2 or query_features.shape[1] != self.dim:
@@ -685,12 +712,19 @@ class LocalTokenCrossAttentionBlock(_LocalVectorAttentionBlock):
                     kv_source = kv_source.mean(dim=0, keepdim=True)
             kv_shift, kv_scale = self.conditioning(kv_source).chunk(5, dim=-1)[2:4]
             kv_in = kv_in * (1.0 + kv_scale) + kv_shift
-        idx = _dilated_knn(
-            query_coords=query_coords,
-            key_coords=context_coords,
-            k=min(self.neighbor_k, int(context_coords.shape[0])),
-            dilation=1,
-        )
+        if precomputed_idx is None:
+            idx = _dilated_knn(
+                query_coords=query_coords,
+                key_coords=context_coords,
+                k=min(self.neighbor_k, int(context_coords.shape[0])),
+                dilation=1,
+            )
+        else:
+            idx = _dilate_precomputed_idx(
+                precomputed_idx,
+                k=min(self.neighbor_k, int(context_coords.shape[0])),
+                dilation=1,
+            )
         neighbor_mask = None
         if query_batch_ids is not None and context_batch_ids is not None:
             gathered_batch_ids = _gather_rows(
