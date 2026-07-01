@@ -114,6 +114,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- PhysicsNeMo-Mesh tensor-valued gradients now consistently use the documented
+  derivative-first layout `(entity, spatial_dimension, *value_shape)` across
+  LSQ, intrinsic LSQ, and DEC. Earlier LSQ releases returned
+  `(entity, *value_shape, spatial_dimension)` instead; migrate a stored legacy
+  gradient with `legacy_gradient.movedim(-1, 1)`. Divergence and curl values
+  are unchanged.
 - xDeepONet `SpatialBranch`
   (`physicsnemo.experimental.models.xdeeponet.SpatialBranch`) now supports
   mixed-precision (AMP/autocast) training: FFT-based spectral convolutions are
