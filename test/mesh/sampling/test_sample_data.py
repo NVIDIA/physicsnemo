@@ -30,6 +30,7 @@ from physicsnemo.mesh.sampling import (
     find_containing_cells,
     sample_data_at_points,
 )
+from physicsnemo.mesh.sampling.sample_data import _accumulate_sampled_data
 
 ### Helper Functions ###
 
@@ -340,6 +341,46 @@ class TestSampleAtPoints:
         ### Should be NaN
         assert torch.isnan(result["temperature"][0])
 
+    @pytest.mark.parametrize(
+        ("field", "expected"),
+        [
+            (torch.tensor([7], dtype=torch.int64), 7.0),
+            (torch.tensor([True]), 1.0),
+        ],
+    )
+    def test_sample_discrete_cell_data_promotes_for_nan(self, field, expected):
+        """Integer and boolean fields must support the documented NaN sentinel."""
+        mesh = Mesh(
+            points=torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]),
+            cells=torch.tensor([[0, 1, 2]]),
+            cell_data={"label": field},
+        )
+        queries = torch.tensor([[0.2, 0.2], [2.0, 2.0]])
+
+        sampled = sample_data_at_points(mesh, queries, data_source="cells")["label"]
+
+        assert sampled.dtype == torch.float64
+        torch.testing.assert_close(
+            sampled[0], torch.tensor(expected, dtype=torch.float64)
+        )
+        assert torch.isnan(sampled[1])
+
+    def test_point_interpolation_promotes_field_and_geometry_dtypes(self):
+        """Barycentric interpolation follows PyTorch dtype promotion rules."""
+        mesh = Mesh(
+            points=torch.tensor(
+                [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float64
+            ),
+            cells=torch.tensor([[0, 1, 2]]),
+            point_data={"value": torch.tensor([0.0, 3.0, 6.0], dtype=torch.float32)},
+        )
+        query = torch.tensor([[1.0 / 3.0, 1.0 / 3.0]], dtype=torch.float64)
+
+        sampled = sample_data_at_points(mesh, query, data_source="points")["value"]
+
+        assert sampled.dtype == torch.float64
+        torch.testing.assert_close(sampled, torch.tensor([3.0], dtype=torch.float64))
+
     def test_sample_multidimensional_data(self):
         """Test sampling multi-dimensional data arrays."""
         ### Create a triangle with vector point data
@@ -395,6 +436,54 @@ class TestSampleAtPoints:
 
         ### Should get a value (might be average if both cells contain it)
         assert not torch.isnan(result["temperature"][0])
+
+    def test_multiple_cells_strategy_nan(self):
+        """The nan strategy rejects a query contained by more than one cell."""
+        mesh = Mesh(
+            points=torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.5, 1.0], [0.5, -1.0]]),
+            cells=torch.tensor([[0, 1, 2], [0, 1, 3]]),
+            cell_data={"temperature": torch.tensor([100.0, 200.0])},
+        )
+
+        result = sample_data_at_points(
+            mesh,
+            torch.tensor([[0.5, 0.0]]),
+            data_source="cells",
+            multiple_cells_strategy="nan",
+        )
+
+        assert torch.isnan(result["temperature"][0])
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
+    def test_accumulation_does_not_synchronize_cuda_masks(self):
+        mesh = Mesh(
+            points=torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], device="cuda"),
+            cells=torch.tensor([[0, 1, 2], [0, 2, 1]], device="cuda"),
+            cell_data={
+                f"field_{i}": torch.tensor([1.0, 2.0], device="cuda") for i in range(8)
+            },
+        )
+        query_indices = torch.tensor([0, 1, 1], device="cuda")
+        cell_indices = torch.tensor([0, 0, 1], device="cuda")
+
+        torch.cuda.synchronize()
+        previous = torch.cuda.get_sync_debug_mode()
+        torch.cuda.set_sync_debug_mode("error")
+        try:
+            result = _accumulate_sampled_data(
+                mesh,
+                n_queries=2,
+                query_indices=query_indices,
+                cell_indices=cell_indices,
+                bary_coords=None,
+                data_source="cells",
+                multiple_cells_strategy="nan",
+            )
+        finally:
+            torch.cuda.set_sync_debug_mode(previous)
+        torch.cuda.synchronize()
+
+        assert result.batch_size == torch.Size([2])
 
     def test_skip_cached_properties(self):
         """Test that cached properties stored in _cache are skipped."""
