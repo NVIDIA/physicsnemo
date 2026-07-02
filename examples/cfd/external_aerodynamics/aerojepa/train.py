@@ -331,8 +331,8 @@ def _run_epoch(
         if is_train:
             optimizer.zero_grad(set_to_none=True)
 
-        sample_losses: list[torch.Tensor] = []
-        for sample_idx in range(int(batch["context_pos"].shape[0])):
+        n_in_batch = int(batch["context_pos"].shape[0])
+        for sample_idx in range(n_in_batch):
             sample = _slice_batch_sample(batch, sample_idx)
             with (
                 torch.set_grad_enabled(is_train),
@@ -351,15 +351,18 @@ def _run_epoch(
                     loss_cfg=loss_cfg,
                     epoch=float(epoch),
                 )
-            sample_losses.append(loss)
+            if is_train:
+                # Accumulate gradients one sample at a time so only a single
+                # sample's autograd graph is alive at once; dividing by the
+                # batch size makes this identical to one backward on the
+                # batch-mean loss, at far lower peak memory.
+                (loss / n_in_batch).backward()
             for k in ("recon", "latent", "sigreg"):
                 totals[k] += float(parts[k])
             totals["loss"] += float(loss.detach().item())
             n_samples += 1
 
         if is_train:
-            batch_loss = torch.stack(sample_losses).mean()
-            batch_loss.backward()
             if grad_clip_norm > 0.0:
                 torch.nn.utils.clip_grad_norm_(
                     model.parameters(), max_norm=float(grad_clip_norm)
