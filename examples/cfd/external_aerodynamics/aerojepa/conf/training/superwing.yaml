@@ -14,8 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Tutorial-sized training schedule for SuperWing. The paper config trains
-# for 200 epochs; this runs for 50 so a smoke check finishes in minutes.
+# Training schedule for SuperWing (200-epoch run).
+# Lower `epochs` (e.g. to a handful) for a quick smoke check.
 epochs: 200
 batch_size: 1
 eval_batch_size: 1
@@ -47,6 +47,8 @@ ema:
 loss:
   recon:
     kind: relative_l2_mse
+    # relative_mse_mode only applies to the `relative_mse` kind; the active
+    # `relative_l2_mse` blend ignores it.
     relative_mse_mode: pointwise
     eps: 1.0e-2
     relative_l2_weight: 1.0
@@ -65,6 +67,3 @@ loss:
     warmup_epochs: 5
     knots: 17
     num_proj: 1024
-
-  mask:
-    weight: 0.0
