@@ -45,6 +45,7 @@ The several examples inside PhysicsNeMo can be classified based on their domains
 |[Shallow Water Equations using Distributed GNNs](./cfd/swe_distributed_gnn/)|GraphCast|YES|
 |[Vortex Shedding with Temporal Attention](./cfd/vortex_shedding_mesh_reduced/)|MeshGraphNet|YES|
 |[Data Center Airflow](./cfd/datacenter/)|3D UNet|NO|
+|[FP-DDM Thermal Domain Decomposition](./cfd/fp_ddm/)|FNO + Schwarz domain decomposition|NO|
 |[Fluid Super-resolution*](./cfd/flow_reconstruction_diffusion/)|Denoising Diffusion Probablistic Model|YES|
 |[Pre-trained DPOT for Navier-Stokes*](./cfd/navier_stokes_dpot/)|Denoising Operator Transformer|YES|
 |[Fine-tuning of DoMINO NIM](./cfd/external_aerodynamics/domino_nim_finetuning/)|DoMINO|NO|
