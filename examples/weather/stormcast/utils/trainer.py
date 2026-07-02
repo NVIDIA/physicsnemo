@@ -22,6 +22,7 @@ import time
 import numpy as np
 from omegaconf import DictConfig, OmegaConf
 import torch
+import torch.nn.functional as F
 from torch.nn.utils import clip_grad_norm_
 import psutil
 from physicsnemo.core import Module
@@ -228,13 +229,16 @@ class Trainer:
         self.loss_type = cfg.training.loss.type
         self.net_name = "regression" if self.loss_type == "regression" else "diffusion"
 
-        # Dynamic invalid-region (NaN) masking for the DiT NATTEN backend. When
-        # enabled, a per-sample invalid-pixel mask is derived from NaNs in the
-        # model's spatial inputs and passed to the model's forward; the inputs
-        # are sanitized (NaN -> 0) so the masked-token splice is well-defined.
+        # Invalid-region masking for the DiT NATTEN backend. When enabled, the
+        # per-sample mask from the dataloader is passed to the model's forward
+        # as the ``invalid_mask`` kwarg so invalid tokens are replaced by the
+        # learned mask token.  Only meaningful for the DiT architecture; always
+        # False for UNet.
         self.use_nan_mask_tokens = bool(
             cfg.model.hyperparameters.get("use_nan_mask_tokens", False)
         )
+        # Patch size extracted from the DiT in _setup_model; None for UNet.
+        self._dit_patch_size = None
         self.condition_list = (
             cfg.model.regression_conditions
             if self.net_name == "regression"
@@ -337,6 +341,8 @@ class Trainer:
         self.scalar_cond_channels = self.dataset_train.scalar_condition_channels()
         self.lead_time_steps = self.dataset_train.lead_time_steps
 
+        self._channel_loss_weight = self._build_channel_loss_weight()
+
         # Dataloaders
         num_workers = self.cfg.training.num_data_workers
         self.train_dataloader = self.parallel_helper.sharded_dataloader(
@@ -373,6 +379,25 @@ class Trainer:
             raise ValueError(
                 "Scalar conditions are only supported for the 'dit' architecture."
             )
+
+    def _build_channel_loss_weight(self) -> torch.Tensor:
+        r"""Build a ``(1, C, 1, 1)`` per-channel loss weight tensor from config.
+
+        Reads ``cfg.training.channel_loss_weights`` (a dict mapping state
+        channel names to float weights) and returns a broadcastable tensor.
+        Channels not listed default to ``1.0``.  Unknown names emit a warning.
+        """
+        cfg_weights = self.cfg.training.channel_loss_weights or {}
+        unknown = set(cfg_weights) - set(self.state_channels)
+        if unknown:
+            self.logger.info(
+                f"channel_loss_weights references unknown state channels (will be ignored): {sorted(unknown)}"
+            )
+        weights = [cfg_weights.get(ch, 1.0) for ch in self.state_channels]
+        t = torch.tensor(weights, dtype=torch.float32, device=self.device).view(
+            1, -1, 1, 1
+        )
+        return self.parallel_helper.replicate_tensor(t)
 
     # =========================================================================
     # Model Setup
@@ -431,74 +456,115 @@ class Trainer:
                 lead_time_steps=self.lead_time_steps,
                 **model_cfg.hyperparameters,
             )
+            # Capture patch_size directly from the DiT before FSDP wrapping
+            # changes the module hierarchy. EDMPreconditioner.model is the
+            # ConcatConditionWrapper; .model of that is the DiT.
+            self._dit_patch_size = net.model.model.patch_size
         else:
             raise ValueError("model.architecture must be 'unet' or 'dit'")
 
         return net
 
-    def _derive_invalid_mask(self, condition, target) -> tuple:
-        r"""Derive a per-sample invalid-region mask from NaNs in the inputs.
+    def _build_masks(self, target, batch_mask) -> tuple:
+        r"""Build the invalid-region mask and the loss weight tensor.
 
-        No-op (returns ``invalid_mask=None``) unless the model was built with
-        ``use_nan_mask_tokens=True``. When enabled, an invalid pixel is any
-        spatial location that is NaN in *either* the diffusion target or the
-        image-like conditioning (both occupy the model's spatial input once
-        concatenated). The corresponding mask is returned at shape
-        :math:`(B, 1, H, W)` for the DiT's ``invalid_mask`` argument, and the
-        offending inputs are sanitized in place (NaN -> 0) so the masked-token
-        splice is well-defined (it multiplies by zero, which does not remove a
-        NaN). The mask differs per sample and per step, enabling dynamic masking.
+        The per-sample mask is supplied entirely by the dataloader under the
+        ``"mask"`` key (convention: ``1`` = valid, ``0`` = invalid).  The
+        dataset owns the definition of the mask and is free to cache and reuse
+        it internally when the pattern is static.  This method translates that
+        mask into the two artefacts the training step needs:
 
-        Under domain parallelism the inputs are already height-sharded
-        ``ShardTensor``s; ``torch.isnan``/``torch.nan_to_num`` and the channel
-        reduction (``sum`` over the unsharded channel axis) keep the derived mask
-        sharded along height like ``x``.
+        * an ``invalid_mask`` (``True`` = invalid) for the DiT forward, and
+        * a ``weight`` tensor for the loss.
+
+        The ``weight`` is derived at the appropriate granularity:
+
+        * **DiT + ``use_nan_mask_tokens``**: token-granularity weight — any
+          pixel in a patch where *any* channel or pixel is invalid gets weight
+          0, matching the token-level substitution done inside the model.
+          Per-channel invalidity from the dataset mask is also applied, so a
+          pixel gets weight 0 if either its token is spatially invalid *or* its
+          specific channel is marked invalid.  Uses the ``patch_size`` extracted
+          directly from the DiT at construction.
+        * **Otherwise**: pixel-level weight — ``1 - invalid_mask.float()``.
+        * **No mask at all**: scalar ``1.0`` replicated onto the correct device
+          mesh (same as the unconditional behaviour).
+
+        ``use_nan_mask_tokens`` only controls whether the dataloader mask is
+        *also* injected into the DiT as the ``invalid_mask`` forward kwarg (so
+        the model can replace invalid tokens with the learned mask token); the
+        loss weight is applied regardless.
+
+        The returned ``invalid_mask`` (used for the DiT forward) is always
+        ``(B, 1, H, W)``: it is the spatial union (any-channel) of the
+        dataset mask, since token replacement operates across all channels.
+
+        Under domain parallelism the inputs are height-sharded
+        ``ShardTensor``s.  :func:`torch.nn.functional.max_pool2d` and
+        :func:`torch.nn.functional.interpolate` are registered for
+        ``ShardTensor`` and preserve the height sharding.
 
         Parameters
         ----------
-        condition : torch.Tensor, TensorDict, or None
-            Model conditioning. A ``TensorDict`` carries the image-like part
-            under ``"cond_concat"``; a plain tensor is itself the image part.
         target : torch.Tensor
-            Diffusion target of shape :math:`(B, C, H, W)`.
+            Diffusion target of shape :math:`(B, C, H, W)`; used only for its
+            spatial shape and device/dtype.
+        batch_mask : torch.Tensor or None
+            Per-sample mask from the dataloader, broadcastable to
+            :math:`(B, C, H, W)`.  ``1`` = valid pixel, ``0`` = invalid pixel.
+            ``None`` when the dataset does not provide a mask.
 
         Returns
         -------
         tuple
-            ``(condition, target, invalid_mask)`` with sanitized inputs and a
-            :math:`(B, 1, H, W)` boolean mask (or ``None`` when disabled).
+            ``(invalid_mask, weight)`` where ``invalid_mask`` is a
+            :math:`(B, 1, H, W)` bool tensor (``True`` = invalid) or ``None``
+            when the dataset provides no mask, and ``weight`` is a
+            broadcastable loss-weight tensor.
         """
-        if not self.use_nan_mask_tokens:
-            return condition, target, None
+        if batch_mask is None:
+            weight = self.parallel_helper.replicate_tensor(
+                torch.ones((), device=target.device, dtype=target.dtype)
+            )
+            return None, weight
 
-        # Locate the image-like conditioning that is concatenated to the target.
-        if isinstance(condition, torch.Tensor):
-            image_cond = condition
-        elif condition is not None:
-            image_cond = condition.get("cond_concat", None)
+        # batch_mask convention: 1=valid, 0=invalid → invert to invalid-first.
+        invalid_mask = batch_mask < 0.5  # (B, C_or_1, H_or_1, W_or_1) bool
+
+        # The DiT token-replacement path needs a purely spatial (B, 1, H, W)
+        # mask.  Collapse the channel dimension: a spatial location is invalid
+        # if it is invalid in *any* channel.
+        spatial_invalid = invalid_mask.any(dim=1, keepdim=True)  # (B, 1, H, W)
+
+        if self._dit_patch_size is not None and self.use_nan_mask_tokens:
+            # Token-granularity: pool mask down to patch level, then expand
+            # back so every pixel in a masked patch gets weight 0.
+            patch_h, patch_w = self._dit_patch_size
+            if patch_h != patch_w:
+                raise NotImplementedError(
+                    "Token-level loss masking requires square DiT patches; got "
+                    f"patch_size={self._dit_patch_size}."
+                )
+            patch_invalid = F.max_pool2d(
+                spatial_invalid.float(),
+                kernel_size=(patch_h, patch_w),
+                stride=(patch_h, patch_w),
+            )  # (B, 1, H/p, W/p)
+            # Expand back to pixel resolution with a *scalar* scale_factor.
+            # Neither size= nor a tuple scale_factor works under domain
+            # parallelism: the ShardTensor interpolate wrapper requires a
+            # scalar scale_factor (it computes halo sizes as
+            # scale_factor * halo). A scalar is exact here because patches are
+            # square and H/p * p == H (patching requires H, W divisible by p).
+            token_valid = 1.0 - F.interpolate(
+                patch_invalid, scale_factor=patch_h, mode="nearest"
+            )  # (B, 1, H, W), 0 at any pixel whose patch is invalid
+            # Also zero-out pixels invalid per the per-channel dataset mask.
+            weight = token_valid * (1.0 - invalid_mask.float())
         else:
-            image_cond = None
+            weight = 1.0 - invalid_mask.float()  # (B, C_or_1, H_or_1, W_or_1)
 
-        invalid = None
-        for part in (target, image_cond):
-            if part is None:
-                continue
-            # (B, 1, H, W): count NaN channels at each pixel (sum over the
-            # channel axis is ShardTensor-safe; ``any`` is not registered).
-            nan_count = torch.isnan(part).to(part.dtype).sum(dim=1, keepdim=True)
-            invalid = nan_count if invalid is None else invalid + nan_count
-        invalid_mask = invalid > 0  # (B, 1, H, W) bool
-
-        # Sanitize so the masked-token splice (x * 0 + mask_token) is finite.
-        target = torch.nan_to_num(target, nan=0.0)
-        if image_cond is not None:
-            image_cond = torch.nan_to_num(image_cond, nan=0.0)
-            if isinstance(condition, torch.Tensor):
-                condition = image_cond
-            else:
-                condition["cond_concat"] = image_cond
-
-        return condition, target, invalid_mask
+        return spatial_invalid, weight
 
     def _load_regression_net(self) -> Module | None:
         r"""
@@ -729,23 +795,16 @@ class Trainer:
                 )
                 del background, state, scalar_conditions
 
-                # Derive a per-sample invalid-region mask from NaNs in the model
-                # inputs and sanitize those inputs (no-op unless enabled).
-                condition, target, invalid_mask = self._derive_invalid_mask(
-                    condition, target
-                )
+                # Translate the dataloader mask into a loss weight
+                # (token-granularity for DiT, pixel-level otherwise) and an
+                # invalid_mask for the DiT forward.
+                invalid_mask, weight = self._build_masks(target, mask)
+                weight = weight * self._channel_loss_weight
 
-                weight = (
-                    mask
-                    if mask is not None
-                    else self.parallel_helper.replicate_tensor(
-                        torch.ones((), device=target.device, dtype=target.dtype)
-                    )
-                )
                 loss_kwargs = {}
                 if lead_time_label is not None:
                     loss_kwargs["lead_time_label"] = lead_time_label
-                if invalid_mask is not None:
+                if invalid_mask is not None and self.use_nan_mask_tokens:
                     loss_kwargs["invalid_mask"] = invalid_mask
 
                 sigma = None
@@ -878,21 +937,13 @@ class Trainer:
                         regression_condition_list=self.cfg.model.regression_conditions,
                     )
 
-                    condition, target, invalid_mask = self._derive_invalid_mask(
-                        condition, target
-                    )
+                    invalid_mask, weight = self._build_masks(target, mask)
+                    weight = weight * self._channel_loss_weight
 
-                    weight = (
-                        mask
-                        if mask is not None
-                        else self.parallel_helper.replicate_tensor(
-                            torch.ones((), device=target.device, dtype=target.dtype)
-                        )
-                    )
                     loss_kwargs = {}
                     if lead_time_label is not None:
                         loss_kwargs["lead_time_label"] = lead_time_label
-                    if invalid_mask is not None:
+                    if invalid_mask is not None and self.use_nan_mask_tokens:
                         loss_kwargs["invalid_mask"] = invalid_mask
 
                     valid_loss = self.loss_fn(
@@ -971,7 +1022,7 @@ class Trainer:
                 device=state[1].device,
                 sampler_args=self.cfg.sampler.args.__dict__,
                 lead_time_label=lead_time_label,
-                invalid_mask=invalid_mask,
+                invalid_mask=invalid_mask if self.use_nan_mask_tokens else None,
             )
             if "regression" in self.condition_list:
                 outputs += reg_out

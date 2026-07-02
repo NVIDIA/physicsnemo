@@ -49,6 +49,19 @@ def _vtk_data_to_tensor_dict(data) -> dict[str, torch.Tensor]:  # noqa: ANN001
     return tensor_data
 
 
+def _tensor_to_vtk_numpy(tensor: torch.Tensor) -> np.ndarray:
+    """Convert tensor data without narrowing dtypes supported by PyVista."""
+    tensor = tensor.detach().cpu()
+    # VTK has no native real type below float32. PyVista represents complex
+    # values with two real components, but likewise only supports complex64
+    # and complex128 inputs.
+    if tensor.is_floating_point() and tensor.element_size() < 4:
+        tensor = tensor.to(dtype=torch.float32)
+    elif tensor.is_complex() and tensor.element_size() < 8:
+        tensor = tensor.to(dtype=torch.complex64)
+    return tensor.resolve_conj().resolve_neg().numpy()
+
+
 @require_version_spec("pyvista")
 def from_pyvista(
     pyvista_mesh: "pv.PolyData | pv.UnstructuredGrid | pv.PointSet",
@@ -400,7 +413,7 @@ def to_pyvista(
         (mesh.global_data, pv_mesh.field_data),
     ]:
         for k, v in source.items(include_nested=True, leaves_only=True):
-            arr = v.detach().float().cpu().numpy()
+            arr = _tensor_to_vtk_numpy(v)
             target[str(k)] = arr.reshape(arr.shape[0], -1) if arr.ndim > 2 else arr
 
     return pv_mesh

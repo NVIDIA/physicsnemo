@@ -519,6 +519,173 @@ def test_seeding(
     torch.distributed.barrier()
 
 
+@pytest.mark.parametrize(
+    "world_size, domain_parallel_size, batch_size",
+    [(1, 1, 1), (2, 2, 1), (4, 2, 2)],
+    ids=["single", "domain_parallel", "data_domain_parallel"],
+)
+def test_masking(
+    tmp_path: Path,
+    cfg_diffusion: DictConfig,
+    *,
+    world_size: int,
+    domain_parallel_size: int,
+    batch_size: int,
+):
+    """Exercise the DiT masking pathway end-to-end across parallelism schemes.
+
+    Verifies that training and validation run correctly when:
+    - The dataset serves a per-sample ``"mask"`` key (right-half valid).
+    - The DiT is built with ``use_nan_mask_tokens=True``, enabling token-level
+      mask-token substitution inside every NATTEN block.
+    - The loss weight is computed at token granularity (patch-level pooling +
+      nearest-neighbour expansion) rather than at pixel level.
+
+    Three launch configurations are covered (each run targets one and skips the
+    others, matching the world size pytest was launched with):
+
+    - ``single`` (1 GPU): no sharding; pixel tensors are plain ``torch.Tensor``
+      and the mask pooling runs on ordinary tensors.
+    - ``domain_parallel`` (2 GPUs): ``domain_parallel_size=2``, which shards the
+      height dimension and exercises the ShardTensor ``max_pool2d`` /
+      ``interpolate`` path used to pool the mask to token granularity.
+    - ``data_domain_parallel`` (4 GPUs): a (2, 2) mesh combining data
+      parallelism (``batch_size=2``) with domain parallelism
+      (``domain_parallel_size=2``).
+    """
+    dist = DistributedManager()
+    if dist.world_size != world_size:
+        pytest.skip(
+            f"Skipping: this configuration requires {world_size} process(es), "
+            f"current: {dist.world_size}."
+        )
+
+    rundir = _setup_rundir(tmp_path, dist.world_size)
+
+    cfg = cfg_diffusion.copy()
+    cfg.training.rundir = rundir
+    cfg.training.validation_freq = 5
+    cfg.training.domain_parallel_size = domain_parallel_size
+    cfg.training.batch_size = batch_size
+
+    # Enable dataloader mask in the mock dataset
+    cfg.dataset.use_mask = True
+
+    # Enable DiT token-level masking
+    cfg.model.architecture = "dit"
+    cfg.model.hyperparameters.use_nan_mask_tokens = True
+
+    if "regression" in cfg.model.diffusion_conditions:
+        cfg.model.diffusion_conditions.remove("regression")
+
+    train.main(cfg)
+
+    if dist.world_size > 1:
+        torch.distributed.barrier()
+
+    ckpt_path = os.path.join(
+        rundir, "checkpoints_diffusion", "EDMPreconditioner.0.10.mdlus"
+    )
+    assert os.path.isfile(ckpt_path), (
+        "Diffusion checkpoint not found after masked training"
+    )
+
+
+@pytest.mark.parametrize(
+    "world_size, domain_parallel_size, batch_size",
+    [(1, 1, 1), (2, 2, 1), (4, 2, 2)],
+    ids=["single", "domain_parallel", "data_domain_parallel"],
+)
+def test_channel_loss_weights(
+    tmp_path: Path,
+    cfg_diffusion_unet: DictConfig,
+    *,
+    world_size: int,
+    domain_parallel_size: int,
+    batch_size: int,
+):
+    """Verify that channel_loss_weights composes correctly with the dataset mask.
+
+    Mirrors the parallelism parametrisation of ``test_masking`` but exercises
+    the channel-weight path instead of token masking.  Uses the UNet model
+    (no channels_last memory format) to keep weight-value assertions simple.
+
+    - A dataset spatial mask: right half of the domain is valid (1), left half
+      is invalid (0).  Image is (H=32, W=16) so the boundary is at column 8.
+    - ``channel_loss_weights``: ``state_0`` zeroed out (0.0), ``state_2``
+      doubled (2.0), ``state_1`` left at the default (1.0).
+
+    Expected per-pixel weight after composition (broadcast to B, C, H, W):
+
+    - ``state_0``: all zeros (channel weight 0 overrides spatial validity).
+    - ``state_1``: 0 on the left half, 1 on the right half (spatial mask only).
+    - ``state_2``: 0 on the left half, 2 on the right half (spatial × channel).
+
+    Under domain parallelism the weight tensor is a height-sharded
+    ``ShardTensor``; the width-based spatial pattern is still fully visible on
+    every rank's local shard, so the same value assertions apply.
+    """
+    dist = DistributedManager()
+    if dist.world_size != world_size:
+        pytest.skip(
+            f"Skipping: this configuration requires {world_size} process(es), "
+            f"current: {dist.world_size}."
+        )
+
+    rundir = _setup_rundir(tmp_path, dist.world_size)
+
+    cfg = cfg_diffusion_unet.copy()
+    cfg.training.rundir = rundir
+    cfg.training.domain_parallel_size = domain_parallel_size
+    cfg.training.batch_size = batch_size
+    cfg.dataset.image_size = [32, 16]  # small image: W=16, mask boundary at col 8
+    cfg.dataset.use_mask = True
+    cfg.training.channel_loss_weights = {"state_0": 0.0, "state_2": 2.0}
+
+    t = trainer.Trainer(cfg)
+
+    # --- Check the channel weight tensor (replicated across all ranks) ---
+    ch_w = t._channel_loss_weight
+    # Under domain parallelism ch_w is a DTensor; extract local copy.
+    ch_w_local = ch_w.to_local() if isinstance(ch_w, DTensor) else ch_w
+    assert ch_w_local.shape == (1, 3, 1, 1)
+    assert ch_w_local[0, 0, 0, 0].item() == pytest.approx(0.0)
+    assert ch_w_local[0, 1, 0, 0].item() == pytest.approx(1.0)
+    assert ch_w_local[0, 2, 0, 0].item() == pytest.approx(2.0)
+
+    # --- Intercept loss_fn to capture the composed weight during train_step ---
+    captured_weights: list[torch.Tensor] = []
+    _orig_loss = t.loss_fn
+
+    def _capturing_loss(target, weight, **kwargs):
+        # Under domain parallelism weight is a ShardTensor; .to_local() gives
+        # the local height shard (B, C, H_local, W).  The width-based spatial
+        # pattern (columns 0-7 invalid, 8-15 valid) is fully visible locally.
+        w_local = weight.to_local() if isinstance(weight, DTensor) else weight
+        captured_weights.append(w_local.detach().cpu())
+        return _orig_loss(target, weight, **kwargs)
+
+    t.loss_fn = _capturing_loss
+    t.train_step()
+
+    assert captured_weights, "loss_fn was never called during train_step"
+    w = captured_weights[0]  # (B, C, H_local, W)
+
+    # Image width = 16; left half = columns 0-7 (invalid), right = 8-15 (valid).
+    assert w[:, 0].eq(0.0).all(), "state_0 should be zero everywhere"
+    assert w[:, 1, :, :8].eq(0.0).all(), "state_1 left half should be 0"
+    assert w[:, 1, :, 8:].eq(1.0).all(), "state_1 right half should be 1"
+    assert w[:, 2, :, :8].eq(0.0).all(), "state_2 left half should be 0"
+    assert w[:, 2, :, 8:].eq(2.0).all(), "state_2 right half should be 2"
+
+    # Validation path should also run without error.
+    t.total_steps += 1
+    t.validate()
+
+    if dist.world_size > 1:
+        torch.distributed.barrier()
+
+
 @pytest.mark.parametrize("net_architecture", ["unet", "dit"])
 @pytest.mark.parametrize(
     "model_type", ["hybrid", "nowcasting", "downscaling", "unconditional"]

@@ -112,10 +112,8 @@ class ComputeSDFFromBoundary(MeshTransform):
             )
 
         surface = domain.boundaries[self.boundary_name]
-        vertices = surface.points.float()
-        faces = surface.cells
 
-        if faces is None or faces.numel() == 0:
+        if surface.n_cells == 0:
             raise ValueError(
                 f"Boundary {self.boundary_name!r} has no cell connectivity "
                 f"(required for SDF computation)"
@@ -124,8 +122,7 @@ class ComputeSDFFromBoundary(MeshTransform):
         query_points = domain.interior.points.float()
 
         sdf_values, closest_points = signed_distance_field_mesh(
-            vertices,
-            faces,
+            surface,
             query_points,
             use_sign_winding_number=self.use_winding_number,
         )
@@ -139,13 +136,16 @@ class ComputeSDFFromBoundary(MeshTransform):
             normals = query_points - closest_points
 
             # Fallback for points on the surface (zero distance): use direction
-            # from center of mass instead. Computed unconditionally and selected
-            # with a mask rather than branching on ``on_surface.any()`` -- that
-            # host readback would stall the prefetch stream.
+            # from the surface centroid instead. Computed unconditionally and
+            # selected with a mask rather than branching on ``on_surface.any()``
+            # -- that host readback would stall the prefetch stream.
             dist = torch.norm(normals, dim=-1)
             on_surface = dist < 1e-6
-            com = vertices.mean(dim=0, keepdim=True)
-            normals = torch.where(on_surface.unsqueeze(-1), query_points - com, normals)
+            # The mesh stays intact; read its points only here, at point of use.
+            centroid = surface.points.float().mean(dim=0, keepdim=True)
+            normals = torch.where(
+                on_surface.unsqueeze(-1), query_points - centroid, normals
+            )
 
             # Normalize to unit vectors
             norm = torch.norm(normals, dim=-1, keepdim=True).clamp(min=1e-8)
