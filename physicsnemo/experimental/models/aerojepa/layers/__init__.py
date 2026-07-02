@@ -56,7 +56,12 @@ from .prototype_anchors import (
     load_context_prototype_anchors,
     load_target_prototype_anchors,
 )
-from .token_utils import pad_token_sets, trim_batched_tokens
+from .token_utils import (
+    flatten_valid_token_features,
+    pad_token_sets,
+    reshape_token_features_for_sigreg,
+    trim_batched_tokens,
+)
 from .types import EncoderOutput, TokenSet
 
 __all__ = [
@@ -74,7 +79,9 @@ __all__ = [
     "masked_mean",
     "unflatten_to_padded",
     # TokenSet-coupled helpers (this package only)
+    "flatten_valid_token_features",
     "pad_token_sets",
+    "reshape_token_features_for_sigreg",
     "trim_batched_tokens",
     # Prototype anchors
     "build_context_prototype_anchors",

@@ -21,7 +21,9 @@ import torch
 
 from physicsnemo.experimental.models.aerojepa.layers import (
     TokenSet,
+    flatten_valid_token_features,
     pad_token_sets,
+    reshape_token_features_for_sigreg,
     trim_batched_tokens,
 )
 
@@ -74,3 +76,77 @@ def test_trim_batched_tokens_requires_batched():
     ts = TokenSet(features=torch.zeros(3, 4), coords=torch.zeros(3, 3))
     with pytest.raises(ValueError, match="batched TokenSet"):
         trim_batched_tokens(ts, index=0, count=2)
+
+
+# ---------------------------------------------------------------------------
+# flatten_valid_token_features
+# ---------------------------------------------------------------------------
+
+
+def test_flatten_rank2_passthrough(device):
+    """Rank-2 input is returned unchanged (same object identity)."""
+    x = torch.randn(10, 8, device=device)
+    out = flatten_valid_token_features(x)
+    assert out is x
+
+
+def test_flatten_rank3_no_mask(device):
+    """Rank-3 input without a mask collapses to ``(B * N, D)``."""
+    x = torch.randn(2, 5, 8, device=device)
+    out = flatten_valid_token_features(x)
+    assert out.shape == (10, 8)
+
+
+def test_flatten_rank3_with_mask(device):
+    """Rank-3 input with a mask returns only the masked-True rows."""
+    x = torch.randn(2, 5, 8, device=device)
+    mask = torch.tensor(
+        [[True, True, True, True, False], [True, True, True, False, False]],
+        device=device,
+    )
+    out = flatten_valid_token_features(x, mask)
+    assert out.shape == (7, 8)  # 4 + 3 valid rows
+
+
+def test_flatten_bad_mask_shape_raises():
+    """A mask whose shape disagrees with ``features.shape[:2]`` is rejected."""
+    x = torch.zeros(2, 5, 8)
+    with pytest.raises(ValueError, match=r"mask must match features.shape"):
+        flatten_valid_token_features(x, torch.zeros(3, 5, dtype=torch.bool))
+
+
+def test_flatten_bad_rank_raises():
+    """Rank-4 input is rejected with a clear message."""
+    with pytest.raises(ValueError, match=r"rank-2 or rank-3"):
+        flatten_valid_token_features(torch.zeros(1, 2, 3, 4))
+
+
+# ---------------------------------------------------------------------------
+# reshape_token_features_for_sigreg
+# ---------------------------------------------------------------------------
+
+
+def test_reshape_adds_leading_t_axis(device):
+    """A nonempty flatten becomes ``(1, M, D)``."""
+    x = torch.randn(2, 5, 8, device=device)
+    out = reshape_token_features_for_sigreg(x)
+    assert out.shape == (1, 10, 8)
+
+
+def test_reshape_with_mask(device):
+    """Masking applies before the unsqueeze."""
+    x = torch.randn(2, 5, 8, device=device)
+    mask = torch.tensor(
+        [[True, True, True, True, False], [True, True, True, False, False]],
+        device=device,
+    )
+    out = reshape_token_features_for_sigreg(x, mask)
+    assert out.shape == (1, 7, 8)
+
+
+def test_reshape_all_false_mask_returns_empty_placeholder(device):
+    """An all-False mask returns a ``(1, 0, D)`` placeholder, not an error."""
+    x = torch.randn(2, 5, 8, device=device)
+    mask = torch.zeros(2, 5, dtype=torch.bool, device=device)
+    out = reshape_token_features_for_sigreg(x, mask)
+    assert out.shape == (1, 0, 8)

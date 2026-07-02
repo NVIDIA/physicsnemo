@@ -16,27 +16,16 @@
 
 """JEPA-style losses and regularizers (experimental).
 
-Reusable losses for AeroJEPA and JEPA-style scientific-ML models:
-SIGReg / TokenLatentSIGReg latent regularizers and padding-aware masking
-helpers.
+The SIGReg / TokenLatentSIGReg latent anti-collapse regularizers for AeroJEPA
+and JEPA-style scientific-ML models.
 
 API stability: experimental. Names and signatures may change between releases
 until the design graduates out of ``physicsnemo.experimental``.
-
-References
-----------
-Giral et al., "AeroJEPA: Learning Semantic Latent Representations for
-Scalable 3D Aerodynamic Field Modeling", preprint arXiv:2605.05586 (2026).
 """
 
-from .masking import flatten_valid_token_features, reshape_token_features_for_sigreg
 from .sigreg import SIGReg, TokenLatentSIGReg
 
 __all__ = [
-    # Masking helpers
-    "flatten_valid_token_features",
-    "reshape_token_features_for_sigreg",
-    # SIGReg
     "SIGReg",
     "TokenLatentSIGReg",
 ]

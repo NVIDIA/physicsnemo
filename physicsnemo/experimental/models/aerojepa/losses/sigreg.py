@@ -29,7 +29,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from .masking import reshape_token_features_for_sigreg
+from ..layers.token_utils import reshape_token_features_for_sigreg
 
 
 class SIGReg(nn.Module):
