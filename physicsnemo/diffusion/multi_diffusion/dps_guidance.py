@@ -24,16 +24,39 @@ from torch import Tensor
 
 from physicsnemo.diffusion.base import Predictor
 from physicsnemo.diffusion.multi_diffusion.predictor import MultiDiffusionPredictor
+from physicsnemo.diffusion.utils.utils import _as_broadcastable
 
 
-def _lp_loss_fn(p: int) -> Callable[[Tensor, Tensor], Tensor]:
-    """Return a per-batch-element Lp loss function with exponent ``p``."""
+def _lp_loss_fn(
+    p: int,
+) -> Callable[
+    [Float[Tensor, " *shape"], Float[Tensor, " *shape"]], Float[Tensor, " *shape"]
+]:
+    """
+    Return a pointwise (not reduced) Lp residual function with exponent ``p``.
+    """
 
     def _loss(y_pred: Tensor, y_true: Tensor) -> Tensor:
-        residual = (y_pred - y_true).reshape(y_pred.shape[0], -1)
-        return residual.abs().pow(p).sum(dim=1)
+        return (y_pred - y_true).abs().pow(p)
 
     return _loss
+
+
+def _prepatch_param(
+    value: float | Float[Tensor, " *#shape"],
+    predictor: MultiDiffusionPredictor,
+    y: Float[Tensor, "B C H W"],
+) -> Float[Tensor, "P_times_B C Hp Wp"]:
+    """Pre-patch a ``value`` tensor to the patch layout.
+
+    ``value`` is validated to be a scalar or a tensor broadcastable to the
+    global observation ``y``, then broadcast to the global resolution and
+    patched. The result lines up with the :math:`(P \\times B, \\dots)` layout
+    of the pre-patched observations, so a chunk slice ``[s : s + K]`` selects
+    the matching patches.
+    """
+    value = _as_broadcastable(value, y)
+    return predictor.patch_fn(torch.broadcast_to(value, y.shape).contiguous())
 
 
 @runtime_checkable
@@ -417,7 +440,7 @@ class MultiDiffusionDPSScorePredictor(Predictor):
         return self.x0_predictor.fuse_fn(combined_patched)
 
 
-class MultiDiffusionModelConsistencyDPSGuidance:
+class MultiDiffusionModelConsistencyDPSGuidance(MultiDiffusionDPSGuidance):
     r"""Patch-local DPS guidance for generic observation operators with
     Gaussian noise.
 
@@ -429,19 +452,21 @@ class MultiDiffusionModelConsistencyDPSGuidance:
     (``slice_start``) semantics and the :math:`K` chunk-size convention.
 
     Computes the likelihood score assuming Gaussian measurement noise
-    with standard deviation :math:`\sigma_y`. Letting :math:`k` index the
-    current patch chunk:
+    with standard deviation :math:`\sigma_y`. For the current patch chunk
+    :math:`k`:
 
     .. math::
 
         \nabla_{\mathbf{x}} \log p(\mathbf{y}^k | \mathbf{x}_t^k)
-        = -\frac{1}{2 \left( \sigma_y^2 + \Gamma \frac{\sigma(t)^2}{\alpha(t)^2}
-        \right)} \nabla_{\mathbf{x}^k}
-        \| A(\hat{\mathbf{x}}_0^k) - \mathbf{y}^k \|^2
+        = -\nabla_{\mathbf{x}^k} \sum_i
+          \frac{\big( A(\hat{\mathbf{x}}_0^k) - \mathbf{y}^k \big)_i^2}
+               {2 \left( \sigma_{y,i}^2 + \Gamma_i\, \sigma(t)^2 / \alpha(t)^2
+               \right)}
 
-    where the scaling incorporates a Score-Based Data Assimilation (SDA)
-    correction through :math:`\Gamma`. The L2 norm can be replaced by
-    other Lp norms or a custom loss function via the ``norm`` parameter.
+    where :math:`i` indexes the (patch-local) observation components. See the
+    global :class:`~physicsnemo.diffusion.guidance.ModelConsistencyDPSGuidance`
+    for :math:`\sigma_{y,i}` (``std_y``), :math:`\Gamma_i` (``gamma``), and the
+    SDA scaling.
 
     Observations ``y`` are pre-patched once at construction; calling the
     guidance many times during sampling never re-patches them.
@@ -457,6 +482,9 @@ class MultiDiffusionModelConsistencyDPSGuidance:
         :math:`A` must therefore produce observations matching the input
         spatial resolution (e.g. channel-selection, pointwise
         nonlinearities, local convolutions within an overlap region).
+        Tensor-valued ``std_y`` / ``gamma`` follow the same rule: a scalar, or
+        a 4D tensor broadcastable to the global observation
+        :math:`(B, C_{obs}, H, W)`, pre-patched at construction like ``y``.
 
     The ``observation_operator`` must be a differentiable callable with
     the following signature:
@@ -467,14 +495,15 @@ class MultiDiffusionModelConsistencyDPSGuidance:
             x_0: Tensor,    # shape: (K, C, Hp, Wp)
         ) -> Tensor: ...    # shape: (K, C_obs, Hp, Wp)
 
-    When ``norm`` is a callable, it must have the signature:
+    When ``norm`` is a callable, it must be an elementwise loss with the
+    signature:
 
     .. code-block:: python
 
         def norm(
             y_pred: Tensor,    # shape: (K, C_obs, Hp, Wp)
             y_true: Tensor,    # shape: (K, C_obs, Hp, Wp)
-        ) -> Tensor: ...       # shape: (K,)  scalar loss per batch element
+        ) -> Tensor: ...       # elementwise loss, shape: (K, C_obs, Hp, Wp)
 
     Parameters
     ----------
@@ -487,15 +516,20 @@ class MultiDiffusionModelConsistencyDPSGuidance:
     y : Tensor
         Global observations of shape :math:`(B, C_{obs}, H, W)` matching
         the latent's global spatial shape.
-    std_y : float
-        Standard deviation of the measurement noise :math:`\sigma_y`.
+    std_y : float or Tensor
+        Standard deviation of the measurement noise
+        :math:`\boldsymbol{\sigma}_y`. A ``float`` applies a single standard
+        deviation to every observation component. A ``Tensor`` must be 4D and
+        broadcastable to the global observation :math:`(B, C_{obs}, H, W)`; it
+        is pre-patched like ``y``.
     norm : int or callable, default=2
-        Loss applied to the residual. An ``int`` selects the
-        corresponding Lp norm; a callable replaces it with a custom loss
-        of the signature above.
-    gamma : float, default=0.0
-        SDA covariance scaling factor :math:`\Gamma`. Set to ``0`` for
-        classical DPS without SDA scaling.
+        Residual loss. An ``int`` selects the corresponding :math:`L^p` norm;
+        a callable must return an elementwise loss with the same shape as its
+        inputs (see the signature above).
+    gamma : float or Tensor, default=0.0
+        SDA covariance scaling factor :math:`\boldsymbol{\Gamma}`. Set to
+        ``0`` for classical DPS without SDA scaling. Like ``std_y``, may be a
+        ``float`` or a ``Tensor`` broadcastable to the global observation.
     sigma_fn : callable or None, default=None
         Function mapping diffusion time to noise level :math:`\sigma(t)`.
         Required when ``gamma > 0``. Typically obtained from a noise
@@ -571,9 +605,12 @@ class MultiDiffusionModelConsistencyDPSGuidance:
     >>> guidance(x_chunk, t_chunk, x0_chunk, slice_start=0).shape
     torch.Size([2, 3, 8, 8])
 
-    **Example 2:** SDA-scaled guidance with a nonlinear patch-local
-    operator (here a sigmoid response on the first channel), plugged
-    into the full sampling stack:
+    **Example 2:** SDA-scaled guidance with a nonlinear patch-local operator
+    (here a sigmoid response on the first two channels) and **tensor-valued**
+    ``std_y`` / ``gamma``, plugged into the full sampling stack; ``std_y`` is
+    per-channel (spatially constant :math:`(B, C_{obs}, 1, 1)`)
+    while ``gamma`` is pointwise at the global resolution
+    :math:`(B, C_{obs}, H, W)`; both are pre-patched like ``y``:
 
     >>> from physicsnemo.diffusion.multi_diffusion import (
     ...     MultiDiffusionDPSScorePredictor,
@@ -582,15 +619,17 @@ class MultiDiffusionModelConsistencyDPSGuidance:
     >>> from physicsnemo.diffusion.samplers import sample
     >>>
     >>> scheduler = EDMNoiseScheduler()
-    >>> A_nl = lambda x_0: torch.sigmoid(x_0[:, :1])
-    >>> y_obs_nl = torch.rand(2, 1, 16, 16)
+    >>> A_nl = lambda x_0: torch.sigmoid(x_0[:, :2])  # 2 observed channels
+    >>> y_obs_nl = torch.rand(2, 2, 16, 16)
     >>>
+    >>> std_y = torch.tensor([0.05, 0.1]).reshape(1, 2, 1, 1)  # per-channel
+    >>> gamma = 0.05 * torch.rand(2, 2, 16, 16)                # pointwise (B, C, H, W)
     >>> guidance_sda = MultiDiffusionModelConsistencyDPSGuidance(
     ...     predictor=predictor,
     ...     observation_operator=A_nl,
     ...     y=y_obs_nl,
-    ...     std_y=0.075,
-    ...     gamma=0.05,          # enable SDA scaling
+    ...     std_y=std_y,
+    ...     gamma=gamma,         # enable SDA scaling
     ...     sigma_fn=scheduler.sigma,
     ...     alpha_fn=scheduler.alpha,
     ... )
@@ -613,13 +652,13 @@ class MultiDiffusionModelConsistencyDPSGuidance:
             [Float[Tensor, "K C Hp Wp"]], Float[Tensor, "K C_obs Hp Wp"]
         ],
         y: Float[Tensor, "B C_obs H W"],
-        std_y: float,
+        std_y: float | Float[Tensor, "#B #C_obs #H #W"],
         norm: int
         | Callable[
             [Float[Tensor, "K C_obs Hp Wp"], Float[Tensor, "K C_obs Hp Wp"]],
-            Float[Tensor, " K"],
+            Float[Tensor, "K C_obs Hp Wp"],
         ] = 2,
-        gamma: float = 0.0,
+        gamma: float | Float[Tensor, "#B #C_obs #H #W"] = 0.0,
         sigma_fn: Callable[[Float[Tensor, " *shape"]], Float[Tensor, " *shape"]]
         | None = None,
         alpha_fn: Callable[[Float[Tensor, " *shape"]], Float[Tensor, " *shape"]]
@@ -628,19 +667,21 @@ class MultiDiffusionModelConsistencyDPSGuidance:
         retain_graph: bool = False,
         create_graph: bool = False,
     ) -> None:
-        if gamma > 0 and sigma_fn is None:
-            raise ValueError("sigma_fn must be provided when gamma > 0")
         self.predictor = predictor
         # Pre-patch observations once via the predictor's patch_fn.
         self._y_patched: Tensor = predictor.patch_fn(y)
         self.observation_operator = observation_operator
-        self.std_y = std_y
+        # Pre-patch std_y / gamma once like ``y`` (a scalar broadcasts to
+        # everything), so they slice per chunk alongside the observations.
+        self._std_y_patched = _prepatch_param(std_y, predictor, y)
+        self._gamma_patched = _prepatch_param(gamma, predictor, y)
+        if sigma_fn is None and (self._gamma_patched > 0).any():
+            raise ValueError("sigma_fn must be provided when gamma > 0")
         # Resolve the loss callable at construction so __call__ has no branch.
         if isinstance(norm, int):
             self._loss_fn: Callable[[Tensor, Tensor], Tensor] = _lp_loss_fn(norm)
         else:
             self._loss_fn = norm
-        self.gamma = gamma
         self.sigma_fn = (
             sigma_fn if sigma_fn is not None else lambda t: torch.zeros_like(t)
         )
@@ -697,37 +738,38 @@ class MultiDiffusionModelConsistencyDPSGuidance:
                 "but torch inference mode is enabled."
             )
 
-        if slice_start is None:
-            y_chunk = self._y_patched.to(dtype=x.dtype, device=x.device)
-        else:
-            K = x.shape[0]
-            y_chunk = self._y_patched[slice_start : slice_start + K].to(
-                dtype=x.dtype, device=x.device
-            )
+        # Slice the pre-patched observation / strengths to the current chunk.
+        K = x.shape[0]
+        sl = slice(None) if slice_start is None else slice(slice_start, slice_start + K)
+        y_chunk = self._y_patched[sl].to(dtype=x.dtype, device=x.device)
+        std_y_chunk = self._std_y_patched[sl].to(dtype=x.dtype, device=x.device)
+        gamma_chunk = self._gamma_patched[sl].to(dtype=x.dtype, device=x.device)
 
         with torch.enable_grad():
             y_pred = self.observation_operator(x_0)
             loss = self._loss_fn(y_pred, y_chunk)
+            # Guidance strength rho(t), broadcast over the observation.
+            bc_shape = (-1,) + (1,) * (loss.ndim - 1)
+            t_bc = t.reshape(bc_shape)
+            sigma_t = self.sigma_fn(t_bc)
+            alpha_t = self.alpha_fn(t_bc)
+            rho = 1.0 / (
+                2.0 * (std_y_chunk**2 + gamma_chunk * (sigma_t**2) / (alpha_t**2))
+            )
             grad_x = torch.autograd.grad(
-                outputs=loss.sum(),
+                outputs=(rho * loss).sum(),
                 inputs=x,
                 retain_graph=self.retain_graph,
                 create_graph=self.create_graph,
             )[0]
 
-        expected_shape = (-1,) + (1,) * (x.ndim - 1)
-        t_bc = t.reshape(expected_shape)
-        sigma_t = self.sigma_fn(t_bc)
-        alpha_t = self.alpha_fn(t_bc)
-        variance = self.std_y**2 + self.gamma * (sigma_t**2) / (alpha_t**2)
-
-        g = -grad_x / (2 * variance)
+        g = -grad_x
         if slice_start is None and self.fuse:
             return self.predictor.fuse_fn(g)
         return g
 
 
-class MultiDiffusionDataConsistencyDPSGuidance:
+class MultiDiffusionDataConsistencyDPSGuidance(MultiDiffusionDPSGuidance):
     r"""Patch-local DPS guidance for masked observations with Gaussian
     noise.
 
@@ -740,21 +782,23 @@ class MultiDiffusionDataConsistencyDPSGuidance:
     (``slice_start``) semantics and the :math:`K` chunk-size convention.
 
     Computes the likelihood score assuming Gaussian measurement noise
-    with standard deviation :math:`\sigma_y`. Letting :math:`k` index
-    the current patch chunk:
+    with standard deviation :math:`\sigma_y`. For the current patch chunk
+    :math:`k`:
 
     .. math::
 
         \nabla_{\mathbf{x}} \log p(\mathbf{y}^k | \mathbf{x}_t^k)
-        = -\frac{1}{2 \left( \sigma_y^2 + \Gamma \frac{\sigma(t)^2}{\alpha(t)^2}
-        \right)} \nabla_{\mathbf{x}^k}
-        \| \mathbf{M}^k \odot (\hat{\mathbf{x}}_0^k - \mathbf{y}^k) \|^2
+        = -\nabla_{\mathbf{x}^k} \sum_i
+          \frac{\big( \mathbf{M}^k \odot (\hat{\mathbf{x}}_0^k - \mathbf{y}^k)
+               \big)_i^2}
+               {2 \left( \sigma_{y,i}^2 + \Gamma_i\, \sigma(t)^2 / \alpha(t)^2
+               \right)}
 
-    where :math:`\mathbf{M}` is a binary mask (1 = observed, 0 = missing)
-    and :math:`\odot` denotes element-wise multiplication. The scaling
-    incorporates an SDA correction through :math:`\Gamma`. The L2 norm
-    can be replaced by other Lp norms or a custom loss function via the
-    ``norm`` parameter.
+    where :math:`\mathbf{M}` is a binary mask (1 = observed, 0 = missing) and
+    :math:`\odot` element-wise multiplication. See the global
+    :class:`~physicsnemo.diffusion.guidance.DataConsistencyDPSGuidance` for
+    :math:`\sigma_{y,i}` (``std_y``), :math:`\Gamma_i` (``gamma``), and the SDA
+    scaling.
 
     Both ``mask`` and ``y`` are pre-patched once at construction;
     calling the guidance many times during sampling never re-patches
@@ -766,16 +810,19 @@ class MultiDiffusionDataConsistencyDPSGuidance:
         latent state :math:`\mathbf{x}`, so their spatial dimensions
         must equal the global resolution :math:`(H, W)`. The mask
         defines per-pixel observability within the global spatial
-        domain.
+        domain. Tensor-valued ``std_y`` / ``gamma`` follow the same rule: a
+        scalar, or a 4D tensor broadcastable to the global resolution
+        :math:`(B, C, H, W)`, pre-patched at construction.
 
-    When ``norm`` is a callable, it must have the signature:
+    When ``norm`` is a callable, it must be an elementwise loss with the
+    signature:
 
     .. code-block:: python
 
         def norm(
             y_pred: Tensor,    # shape: (K, C, Hp, Wp)
             y_true: Tensor,    # shape: (K, C, Hp, Wp)
-        ) -> Tensor: ...       # shape: (K,)  scalar loss per batch element
+        ) -> Tensor: ...       # elementwise loss, shape: (K, C, Hp, Wp)
 
     Parameters
     ----------
@@ -788,15 +835,21 @@ class MultiDiffusionDataConsistencyDPSGuidance:
     y : Tensor
         Observed values of shape :math:`(B, C, H, W)`. Values at
         unobserved locations are ignored.
-    std_y : float
-        Standard deviation of the measurement noise :math:`\sigma_y`.
+    std_y : float or Tensor
+        Standard deviation of the measurement noise
+        :math:`\boldsymbol{\sigma}_y`. A ``float`` applies a single standard
+        deviation everywhere. A ``Tensor`` must be 4D and broadcastable to the
+        global resolution :math:`(B, C, H, W)`; it is pre-patched like ``mask``
+        and ``y``.
     norm : int or callable, default=2
-        Loss applied to the masked residual. An ``int`` selects the
-        corresponding Lp norm; a callable replaces it with a custom loss
-        of the signature above.
-    gamma : float, default=0.0
-        SDA covariance scaling factor :math:`\Gamma`. Set to ``0`` for
-        classical DPS without SDA scaling.
+        Residual loss. An ``int`` selects the corresponding :math:`L^p` norm; a
+        callable receives ``(x_0, y)`` and must return an elementwise loss with
+        the same shape as its inputs (the mask is applied to the result); see
+        the signature above.
+    gamma : float or Tensor, default=0.0
+        SDA covariance scaling factor :math:`\boldsymbol{\Gamma}`. Set to
+        ``0`` for classical DPS without SDA scaling. Like ``std_y``, may be a
+        ``float`` or a ``Tensor`` broadcastable to the global observation.
     sigma_fn : callable or None, default=None
         Function mapping diffusion time to noise level :math:`\sigma(t)`.
         Required when ``gamma > 0``. Typically obtained from a noise
@@ -872,9 +925,13 @@ class MultiDiffusionDataConsistencyDPSGuidance:
     >>> guidance(x_chunk, t_chunk, x0_chunk, slice_start=0).shape
     torch.Size([2, 3, 8, 8])
 
-    **Example 2:** SDA-scaled guidance with the L1 norm for robustness,
-    plugged into the full sampling stack:
+    **Example 2:** Sparse probe observations with a **per-probe** measurement
+    noise and a custom elementwise (Huber) loss, plugged into the full sampling
+    stack; ``std_y`` is a pointwise tensor at the global resolution that sets an
+    independent noise standard deviation at each probe (only its entries at
+    observed locations matter), while ``gamma`` stays a scalar:
 
+    >>> import torch.nn.functional as F
     >>> from physicsnemo.diffusion.multi_diffusion import (
     ...     MultiDiffusionDPSScorePredictor,
     ... )
@@ -883,25 +940,37 @@ class MultiDiffusionDataConsistencyDPSGuidance:
     >>>
     >>> scheduler = EDMNoiseScheduler()
     >>>
+    >>> # Elementwise Huber loss (no reduction)
+    >>> def huber_loss(y_pred, y_true):
+    ...     return F.huber_loss(y_pred, y_true, reduction="none")
+    ...
+    >>> # Sparse probe locations on the global domain
     >>> mask = torch.zeros(2, 3, 16, 16, dtype=torch.bool)
     >>> mask[:, :, 2, 3] = True
     >>> mask[:, :, 5, 6] = True
+    >>> mask[:, :, 11, 4] = True
     >>> y_obs = torch.randn(2, 3, 16, 16)
     >>>
-    >>> guidance_sda = MultiDiffusionDataConsistencyDPSGuidance(
+    >>> # Per-probe measurement noise (pointwise tensor at the global resolution);
+    >>> # entries away from the probes are unused but must stay positive
+    >>> std_y = torch.ones(2, 3, 16, 16)
+    >>> std_y[:, :, 2, 3] = 0.05
+    >>> std_y[:, :, 5, 6] = 0.1
+    >>> std_y[:, :, 11, 4] = 0.3
+    >>> guidance = MultiDiffusionDataConsistencyDPSGuidance(
     ...     predictor=predictor,
     ...     mask=mask,
     ...     y=y_obs,
-    ...     std_y=0.075,
-    ...     norm=1,              # L1 norm for robustness
-    ...     gamma=1.0,           # enable SDA scaling
+    ...     std_y=std_y,         # per-probe measurement noise
+    ...     norm=huber_loss,     # custom elementwise loss
+    ...     gamma=1.0,           # scalar SDA scaling
     ...     sigma_fn=scheduler.sigma,
     ...     alpha_fn=scheduler.alpha,
     ... )
     >>> dps = MultiDiffusionDPSScorePredictor(
     ...     x0_predictor=predictor,
     ...     x0_to_score_fn=scheduler.x0_to_score,
-    ...     guidances=guidance_sda,
+    ...     guidances=guidance,
     ... )
     >>> denoiser = scheduler.get_denoiser(score_predictor=dps)
     >>> xN = torch.randn(2, 3, 16, 16)
@@ -915,13 +984,13 @@ class MultiDiffusionDataConsistencyDPSGuidance:
         predictor: MultiDiffusionPredictor,
         mask: Bool[Tensor, "B C H W"],
         y: Float[Tensor, "B C H W"],
-        std_y: float,
+        std_y: float | Float[Tensor, "#B #C #H #W"],
         norm: int
         | Callable[
             [Float[Tensor, "K C Hp Wp"], Float[Tensor, "K C Hp Wp"]],
-            Float[Tensor, " K"],
+            Float[Tensor, "K C Hp Wp"],
         ] = 2,
-        gamma: float = 0.0,
+        gamma: float | Float[Tensor, "#B #C #H #W"] = 0.0,
         sigma_fn: Callable[[Float[Tensor, " *shape"]], Float[Tensor, " *shape"]]
         | None = None,
         alpha_fn: Callable[[Float[Tensor, " *shape"]], Float[Tensor, " *shape"]]
@@ -930,20 +999,22 @@ class MultiDiffusionDataConsistencyDPSGuidance:
         retain_graph: bool = False,
         create_graph: bool = False,
     ) -> None:
-        if gamma > 0 and sigma_fn is None:
-            raise ValueError("sigma_fn must be provided when gamma > 0")
         self.predictor = predictor
         # Pre-patch mask and observations once via the predictor's patch_fn.
         patch = predictor.patch_fn
         self._mask_patched: Tensor = patch(mask.float())
         self._y_patched: Tensor = patch(y)
-        self.std_y = std_y
+        # Pre-patch std_y / gamma once like ``mask`` / ``y`` (a scalar
+        # broadcasts to everything), so they slice per chunk alongside them.
+        self._std_y_patched = _prepatch_param(std_y, predictor, y)
+        self._gamma_patched = _prepatch_param(gamma, predictor, y)
+        if sigma_fn is None and (self._gamma_patched > 0).any():
+            raise ValueError("sigma_fn must be provided when gamma > 0")
         # Resolve the loss callable at construction so __call__ has no branch.
         if isinstance(norm, int):
             self._loss_fn: Callable[[Tensor, Tensor], Tensor] = _lp_loss_fn(norm)
         else:
             self._loss_fn = norm
-        self.gamma = gamma
         self.sigma_fn = (
             sigma_fn if sigma_fn is not None else lambda t: torch.zeros_like(t)
         )
@@ -1000,36 +1071,33 @@ class MultiDiffusionDataConsistencyDPSGuidance:
                 "but torch inference mode is enabled."
             )
 
-        if slice_start is None:
-            mask_chunk = self._mask_patched.to(dtype=x.dtype, device=x.device)
-            y_chunk = self._y_patched.to(dtype=x.dtype, device=x.device)
-        else:
-            K = x.shape[0]
-            mask_chunk = self._mask_patched[slice_start : slice_start + K].to(
-                dtype=x.dtype, device=x.device
-            )
-            y_chunk = self._y_patched[slice_start : slice_start + K].to(
-                dtype=x.dtype, device=x.device
-            )
+        # Slice the pre-patched mask / observation / strengths to the chunk.
+        K = x.shape[0]
+        sl = slice(None) if slice_start is None else slice(slice_start, slice_start + K)
+        mask_chunk = self._mask_patched[sl].to(dtype=x.dtype, device=x.device)
+        y_chunk = self._y_patched[sl].to(dtype=x.dtype, device=x.device)
+        std_y_chunk = self._std_y_patched[sl].to(dtype=x.dtype, device=x.device)
+        gamma_chunk = self._gamma_patched[sl].to(dtype=x.dtype, device=x.device)
 
         with torch.enable_grad():
-            y_pred = mask_chunk * x_0
-            y_true = mask_chunk * y_chunk
-            loss = self._loss_fn(y_pred, y_true)
+            # Elementwise loss on the full state, then keep observed locations.
+            loss = mask_chunk * self._loss_fn(x_0, y_chunk)
+            # Guidance strength rho(t), broadcast over the state.
+            bc_shape = (-1,) + (1,) * (loss.ndim - 1)
+            t_bc = t.reshape(bc_shape)
+            sigma_t = self.sigma_fn(t_bc)
+            alpha_t = self.alpha_fn(t_bc)
+            rho = 1.0 / (
+                2.0 * (std_y_chunk**2 + gamma_chunk * (sigma_t**2) / (alpha_t**2))
+            )
             grad_x = torch.autograd.grad(
-                outputs=loss.sum(),
+                outputs=(rho * loss).sum(),
                 inputs=x,
                 retain_graph=self.retain_graph,
                 create_graph=self.create_graph,
             )[0]
 
-        expected_shape = (-1,) + (1,) * (x.ndim - 1)
-        t_bc = t.reshape(expected_shape)
-        sigma_t = self.sigma_fn(t_bc)
-        alpha_t = self.alpha_fn(t_bc)
-        variance = self.std_y**2 + self.gamma * (sigma_t**2) / (alpha_t**2)
-
-        g = -grad_x / (2 * variance)
+        g = -grad_x
         if slice_start is None and self.fuse:
             return self.predictor.fuse_fn(g)
         return g
