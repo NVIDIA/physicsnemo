@@ -7,6 +7,7 @@ import pytest
 import torch
 from _cln_reference import ConditionalLayerNormReference
 from physicsnemo.models.dlwp_healpix.layers.normalization import ConditionalLayerNorm
+from physicsnemo.nn import CappedGELU
 
 
 def _make_old_cln(condition_shape, channel_depth, **kwargs):
@@ -66,6 +67,15 @@ def _copy_old_to_new(old_cln, new_cln):
                     torch.cat([gamma_val, zeros], dim=1),
                     torch.cat([zeros, beta_val], dim=1),
                 ], dim=0)
+
+    for key, value in old_sd.items():
+        if not key.startswith("gamma_mlp."):
+            continue
+        layer_key = key[len("gamma_mlp.") :]
+        parts = layer_key.split(".", 1)
+        if len(parts) != 2 or parts[1] in ("weight", "bias"):
+            continue
+        new_sd[f"gamma_beta_mlp.{layer_key}"] = value
 
     new_cln.load_state_dict(new_sd)
 
@@ -263,3 +273,41 @@ def test_load_old_checkpoint():
     assert torch.isfinite(out_new).all()
     assert torch.allclose(out_old, out_new, atol=1e-5, rtol=1e-4), \
         f"Max diff after loading old checkpoint: {(out_old - out_new).abs().max().item()}"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+def test_load_old_checkpoint_with_capped_gelu():
+    """Verify strict loading of old CLN checkpoints that use CappedGELU activations."""
+    C, cond_shape = 64, 16
+    mlp_hidden_dims = [32, 32]
+    activation = CappedGELU()
+
+    torch.manual_seed(42)
+    old_cln = _make_old_cln(
+        cond_shape,
+        C,
+        mlp_hidden_dims=mlp_hidden_dims,
+        activation=activation,
+    )
+    old_sd = old_cln.state_dict()
+    assert any(k.endswith(".cap") for k in old_sd if k.startswith("gamma_mlp."))
+
+    new_cln = _make_new_cln(
+        cond_shape,
+        C,
+        mlp_hidden_dims=mlp_hidden_dims,
+        activation=CappedGELU(),
+    )
+    missing, unexpected = new_cln.load_state_dict(old_sd, strict=True)
+    assert not missing
+    assert not unexpected
+
+    x = torch.randn(12, C, 8, 8, device="cuda")
+    cond = torch.randn(1, cond_shape, device="cuda")
+
+    with torch.no_grad():
+        out_old = old_cln(x, cond)
+        out_new = new_cln(x, cond)
+
+    assert torch.allclose(out_old, out_new, atol=1e-5, rtol=1e-4), \
+        f"Max diff after loading old CappedGELU checkpoint: {(out_old - out_new).abs().max().item()}"

@@ -126,6 +126,9 @@ class ConditionalLayerNorm(th.nn.Module):
                           [0,            beta_weight]]
 
         Biases are always concatenated: cat([gamma_bias, beta_bias]).
+
+        Activation submodule buffers (e.g. CappedGELU ``cap``) are copied from
+        the gamma MLP to the fused MLP at the same sequential index.
         """
         gamma_prefix = prefix + "gamma_mlp."
         beta_prefix = prefix + "beta_mlp."
@@ -147,6 +150,7 @@ class ConditionalLayerNorm(th.nn.Module):
             keys_to_remove = []
             keys_to_add = {}
 
+            # handle weights and biases for the gamma MLP
             for k in list(state_dict.keys()):
                 if k.startswith(gamma_prefix):
                     layer_key = k[len(gamma_prefix):]  # e.g. "0.weight"
@@ -185,6 +189,28 @@ class ConditionalLayerNorm(th.nn.Module):
                     keys_to_remove.append(k)
                     if beta_key not in keys_to_remove:
                         keys_to_remove.append(beta_key)
+
+            # handle activation submodule buffers
+            for k in list(state_dict.keys()):
+                if not k.startswith(gamma_prefix):
+                    continue
+                layer_key = k[len(gamma_prefix):]  # e.g. "0.weight"
+                parts = layer_key.split(".", 1)
+                if len(parts) != 2:
+                    continue
+                try:
+                    int(parts[0])
+                except ValueError:
+                    continue
+                if parts[1] in ("weight", "bias"):
+                    continue
+
+                fused_key = fused_prefix + layer_key
+                keys_to_add[fused_key] = state_dict[k]
+                keys_to_remove.append(k)
+                beta_key = beta_prefix + layer_key
+                if beta_key in state_dict and beta_key not in keys_to_remove:
+                    keys_to_remove.append(beta_key)
 
             for k in keys_to_remove:
                 if k in state_dict:

@@ -3,6 +3,8 @@
 
 from typing import List
 
+import copy
+
 import torch as th
 
 try:
@@ -54,7 +56,9 @@ class ConditionalLayerNormReference(th.nn.Module):
         for hdim in hidden_dims:
             layers.append(th.nn.Linear(in_dim, hdim))
             if activation:
-                layers.append(activation)
+                # some variations of _make_mlp may have duplicate activation submodule buffers (e.g. CappedGELU ``cap``)
+                # so we need to deepcopy the activation submodule buffers
+                layers.append(copy.deepcopy(activation))
             in_dim = hdim
         layers.append(th.nn.Linear(in_dim, out_dim))
         return th.nn.Sequential(*layers)
