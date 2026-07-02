@@ -62,6 +62,17 @@ def _tensor_to_vtk_numpy(tensor: torch.Tensor) -> np.ndarray:
     return tensor.resolve_conj().resolve_neg().numpy()
 
 
+def _geometry_to_vtk_numpy(tensor: torch.Tensor) -> np.ndarray:
+    """Convert coordinates while preserving VTK's real float dtypes."""
+    tensor = tensor.detach()
+    if tensor.dtype not in (torch.float32, torch.float64):
+        # Preserve the existing geometry contract for integer, reduced-
+        # precision, and complex coordinates: PyVista points must be real and
+        # are represented in at least float32.
+        tensor = tensor.float()
+    return tensor.cpu().resolve_conj().resolve_neg().numpy()
+
+
 @require_version_spec("pyvista")
 def from_pyvista(
     pyvista_mesh: "pv.PolyData | pv.UnstructuredGrid | pv.PointSet",
@@ -211,8 +222,11 @@ def from_pyvista(
     def _maybe_copy(arr: np.ndarray) -> np.ndarray:
         return arr.copy() if force_copy else arr
 
-    # Points
-    points = torch.from_numpy(_maybe_copy(pyvista_mesh.points)).float()
+    # Points: preserve VTK-supported float32/float64 coordinates. Convert other
+    # coordinate dtypes to float32, matching the prior geometry contract.
+    points = torch.from_numpy(_maybe_copy(pyvista_mesh.points))
+    if not points.is_floating_point() or points.element_size() < 4:
+        points = points.float()
 
     # Cells
     if manifold_dim == 0:
@@ -359,7 +373,7 @@ def to_pyvista(
     ### Convert points to numpy and pad to 3D if needed (PyVista requires 3D points)
     # .detach() first so a grad-tracked mesh can still be exported (.numpy() would
     # otherwise raise on a tensor that requires grad).
-    points_np = mesh.points.detach().float().cpu().numpy()
+    points_np = _geometry_to_vtk_numpy(mesh.points)
 
     if mesh.n_spatial_dims < 3:
         # Pad with zeros to make 3D
@@ -459,7 +473,9 @@ def _from_pyvista_cell_centroids(
 
     ### Compute cell centroids (fast C++ filter, works for all cell types)
     centroids_np = pyvista_mesh.cell_centers().points
-    points = torch.from_numpy(centroids_np.copy()).float()
+    points = torch.from_numpy(centroids_np.copy())
+    if not points.is_floating_point() or points.element_size() < 4:
+        points = points.float()
 
     ### Build cells
     if manifold_dim == 0:
