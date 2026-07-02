@@ -334,7 +334,10 @@ def _run_epoch(
         sample_losses: list[torch.Tensor] = []
         for sample_idx in range(int(batch["context_pos"].shape[0])):
             sample = _slice_batch_sample(batch, sample_idx)
-            with get_autocast_context(device, precision):
+            with (
+                torch.set_grad_enabled(is_train),
+                get_autocast_context(device, precision),
+            ):
                 pred_field, pred_features, target_tokens, _, _ = _forward_sample(
                     model, sample
                 )
