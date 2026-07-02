@@ -6,13 +6,6 @@ This example trains and evaluates the
 [AeroJEPA](https://arxiv.org/abs/2605.05586) (Giral et al.) model on the **SuperWing**
 3D aerodynamic dataset.
 
-AeroJEPA is a Joint-Embedding Predictive Architecture: instead of mapping
-geometry directly to a flow field, it predicts a *latent representation*
-of the flow from a latent representation of the geometry and operating
-conditions, and reconstructs the field through a continuous implicit
-decoder when needed. This recipe walks through the full workflow —
-dataset download → training → inference → CL/CD estimation.
-
 AeroJEPA is a Joint-Embedding Predictive Architecture. Rather than mapping geometry directly to a flow field, it predicts a latent representation of the flow from a latent representation of the geometry and operating conditions, and reconstructs the field through a continuous implicit decoder when needed. This recipe walks through the full workflow, from dataset download through training, inference, and CL/CD estimation.
 
 > SuperWing is a more tutorial-friendly dataset (a parametric wing
