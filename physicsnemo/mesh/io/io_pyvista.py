@@ -63,12 +63,12 @@ def _tensor_to_vtk_numpy(tensor: torch.Tensor) -> np.ndarray:
 
 
 def _geometry_to_vtk_numpy(tensor: torch.Tensor) -> np.ndarray:
-    """Convert coordinates while preserving VTK's real float dtypes."""
+    """Convert coordinates using PhysicsNeMo's PyVista dtype policy."""
     tensor = tensor.detach()
     if tensor.dtype not in (torch.float32, torch.float64):
-        # Preserve the existing geometry contract for integer, reduced-
-        # precision, and complex coordinates: PyVista points must be real and
-        # are represented in at least float32.
+        # PyVista/VTK can store some additional coordinate dtypes, but
+        # PhysicsNeMo has historically exported integer, reduced-precision,
+        # and complex geometry as float32. Keep that compatibility policy.
         tensor = tensor.float()
     return tensor.cpu().resolve_conj().resolve_neg().numpy()
 
@@ -133,6 +133,15 @@ def from_pyvista(
         If manifold dimension cannot be determined or is invalid.
     ImportError
         If pyvista is not installed.
+
+    Notes
+    -----
+    Point coordinates with a ``float32`` or ``float64`` dtype retain that
+    dtype. Other coordinate dtypes are converted to ``float32``. Retaining
+    ``float64`` doubles coordinate storage relative to ``float32``, and
+    downstream geometric calculations generally remain in ``float64``. To
+    normalize the returned mesh and its floating data to ``float32``, use
+    ``from_pyvista(...).to(torch.float32)``.
     """
     ### Validate point_source
     if point_source not in {"vertices", "cell_centroids"}:
@@ -222,8 +231,8 @@ def from_pyvista(
     def _maybe_copy(arr: np.ndarray) -> np.ndarray:
         return arr.copy() if force_copy else arr
 
-    # Points: preserve VTK-supported float32/float64 coordinates. Convert other
-    # coordinate dtypes to float32, matching the prior geometry contract.
+    # Preserve float32/float64 coordinates. Convert other coordinate dtypes to
+    # float32, matching PhysicsNeMo's prior geometry contract.
     points = torch.from_numpy(_maybe_copy(pyvista_mesh.points))
     if not points.is_floating_point() or points.element_size() < 4:
         points = points.float()
@@ -369,6 +378,15 @@ def to_pyvista(
         If manifold dimension is not supported.
     ImportError
         If pyvista is not installed.
+
+    Notes
+    -----
+    ``float32`` and ``float64`` point coordinates are exported without
+    narrowing; other coordinate dtypes are converted to ``float32``. To
+    normalize a mesh and all its floating data before export, use
+    ``to_pyvista(mesh.to(torch.float32))``. Retaining ``float64`` coordinates
+    doubles their storage relative to ``float32`` and may keep downstream
+    PyVista computations in double precision.
     """
     ### Convert points to numpy and pad to 3D if needed (PyVista requires 3D points)
     # .detach() first so a grad-tracked mesh can still be exported (.numpy() would

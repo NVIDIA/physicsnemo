@@ -74,6 +74,17 @@ def test_preserves_float64_geometry_dtype():
     assert np.array_equal(result.points[:, :2], points.numpy())
 
 
+def test_explicit_mesh_cast_exports_float32_geometry():
+    mesh = Mesh(
+        points=torch.tensor([[0.0, 0.0], [1.0, 0.0]], dtype=torch.float64),
+        cells=torch.tensor([[0, 1]]),
+    )
+
+    result = to_pyvista(mesh.to(torch.float32))
+
+    assert result.points.dtype == np.float32
+
+
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 def test_promotes_reduced_precision_geometry_to_float32(dtype):
     mesh = Mesh(
