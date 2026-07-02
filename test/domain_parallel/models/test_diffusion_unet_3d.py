@@ -17,9 +17,9 @@
 """Domain-parallel tests for DiffusionUNet3D.
 
 The 3D U-Net backbone is distributed with DDP (its parameters are all
-replicated) while the volumetric input is a ``ShardTensor`` sharded along a
-spatial axis; ``ShardTensor`` auto-promotion lets the plain (replicated) weights
-meet the sharded activations. The shared harness in
+replicated) while the volumetric input is a ``ShardTensor`` sharded along the
+outermost spatial axis (D, dim 2); ``ShardTensor`` auto-promotion lets the plain
+(replicated) weights meet the sharded activations. The shared harness in
 ``test/domain_parallel/models/harness.py`` runs the distributed forward/backward
 and checks the output and gradients against a single-GPU reference.
 """
@@ -36,8 +36,12 @@ from test.domain_parallel.models.harness import (
     run_domain_parallel_model_check,
 )
 
-# Small volume; H (dim 3) is the sharded spatial axis.
-B, C, D, H, W = 2, 2, 8, 32, 32
+# Small volume; D (dim 2) is the sharded spatial axis. D is the outermost
+# spatial dim, so the attention block's (D, H, W) -> D*H*W flatten (and its
+# inverse) keeps the shard contiguous and unambiguous. D is sized so the
+# deepest U-Net level (D / 2 for num_levels=2) stays divisible by common
+# GPU counts (2/4/8).
+B, C, D, H, W = 2, 2, 32, 32, 32
 C_VOL, D_VEC = 2, 8
 
 
@@ -61,9 +65,9 @@ def _build_model(vol_cond_channels=0, vec_cond_dim=0):
 
 
 def _check_output(d_out):
-    """Output stays dense-shaped and sharded along H, like the input."""
+    """Output stays dense-shaped and sharded along D, like the input."""
     assert d_out.shape == (B, C, D, H, W)
-    assert d_out._spec.placements == (Shard(3),)
+    assert d_out._spec.placements == (Shard(2),)
 
 
 def _unconditional_inputs(device):
@@ -74,9 +78,9 @@ def _unconditional_inputs(device):
 
 def _shard_unconditional(args, kwargs, mesh):
     x, t = args
-    # Shard x along H (dim 3); t is a per-sample scalar and stays plain so
+    # Shard x along D (dim 2); t is a per-sample scalar and stays plain so
     # ShardTensor auto-promotes it against the (replicated) freqs buffer.
-    x_sharded = scatter_tensor(x, 0, mesh, (Shard(3),), requires_grad=False)
+    x_sharded = scatter_tensor(x, 0, mesh, (Shard(2),), requires_grad=False)
     return (x_sharded, t), kwargs
 
 
@@ -92,9 +96,9 @@ def _conditional_inputs(device):
 def _shard_conditional(args, kwargs, mesh):
     x, t = args
     condition = kwargs["condition"]
-    x_sharded = scatter_tensor(x, 0, mesh, (Shard(3),), requires_grad=False)
+    x_sharded = scatter_tensor(x, 0, mesh, (Shard(2),), requires_grad=False)
     volume_sharded = scatter_tensor(
-        condition["volume"], 0, mesh, (Shard(3),), requires_grad=False
+        condition["volume"], 0, mesh, (Shard(2),), requires_grad=False
     )
     # vector is a per-sample condition (no spatial axis): keep it plain.
     sharded_condition = TensorDict(

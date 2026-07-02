@@ -29,9 +29,14 @@ Note
 The channels dimension is largely irrelevant to sharding; tests include
 a couple of channel parameters but only require non-zero values.
 
+Regular convolutions are tested with both ``padding=0`` and ``padding=1`` (the
+latter is what the structured Transolver attention convs use); transposed
+convolutions only support ``padding=0`` so they are left at ``padding=0``.
+
 Some sharded convolution configurations are not well supported:
 
 - Even kernels require ``stride == kernel_size`` and ``padding == 0``
+- Non-zero padding is only supported with ``stride == 1``
 - Transposed convolutions with odd kernels are not yet supported
 - Non-matching stride and kernel size combinations are not supported
 
@@ -73,7 +78,7 @@ def disable_tf32():
     ],
 )
 @pytest.mark.parametrize("kernel", [2, 3])
-@pytest.mark.parametrize("padding", [0])
+@pytest.mark.parametrize("padding", [0, 1])
 @pytest.mark.parametrize("stride", [1, 2])
 @pytest.mark.parametrize("dilation", [1])
 @pytest.mark.parametrize("groups", [1])
@@ -191,7 +196,7 @@ def test_conv_transpose_1d_1dmesh(
     ],
 )
 @pytest.mark.parametrize("kernel", [2, 3])
-@pytest.mark.parametrize("padding", [0])
+@pytest.mark.parametrize("padding", [0, 1])
 @pytest.mark.parametrize("stride", [1, 2])
 @pytest.mark.parametrize("dilation", [1])
 @pytest.mark.parametrize("groups", [1])
@@ -317,7 +322,7 @@ def test_conv_transpose_2d_1dmesh(
     ],
 )
 @pytest.mark.parametrize("kernel", [2, 3])
-@pytest.mark.parametrize("padding", [0])
+@pytest.mark.parametrize("padding", [0, 1])
 @pytest.mark.parametrize("stride", [1, 2])
 @pytest.mark.parametrize("dilation", [1])
 @pytest.mark.parametrize("groups", [1])
@@ -457,7 +462,7 @@ def test_conv_transpose_2d_2dmesh(
     ],
 )
 @pytest.mark.parametrize("kernel", [2, 3])
-@pytest.mark.parametrize("padding", [0])
+@pytest.mark.parametrize("padding", [0, 1])
 @pytest.mark.parametrize("stride", [1, 2])
 @pytest.mark.parametrize("dilation", [1])
 @pytest.mark.parametrize("groups", [1])
@@ -575,7 +580,7 @@ def test_conv_transpose_3d_1dmesh(
     ],
 )
 @pytest.mark.parametrize("kernel", [2, 3])
-@pytest.mark.parametrize("padding", [0])
+@pytest.mark.parametrize("padding", [0, 1])
 @pytest.mark.parametrize("stride", [1, 2])
 @pytest.mark.parametrize("dilation", [1])
 @pytest.mark.parametrize("groups", [1])
