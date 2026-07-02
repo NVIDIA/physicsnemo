@@ -101,9 +101,9 @@ def from_pyvista(
           polyhedral meshes.
     warn_on_lost_data : bool
         If True, emit a ``UserWarning`` when the conversion discards non-empty
-        data arrays. Cell data is lost when ``point_source="vertices"`` and
-        ``manifold_dim`` is lower than the detected mesh dimension. Point data
-        is lost when ``point_source="cell_centroids"``.
+        data arrays. Cell data is lost when native cells of other dimensions
+        are discarded, and all cell data is lost for a 0D output. Point data is
+        lost when ``point_source="cell_centroids"``.
     force_copy : bool
         If True, copy point and cell arrays so the returned Mesh owns its
         memory independently of the source PyVista mesh.  When False
@@ -137,7 +137,8 @@ def from_pyvista(
 
     ### Determine native mesh dimension (used for auto-detection, data-loss
     ### warnings, and deciding whether cell_data can be passed through).
-    native_dim = _detect_native_dim(pyvista_mesh)
+    native_dims = _detect_native_dims(pyvista_mesh)
+    native_dim = max(native_dims)
 
     if manifold_dim == "auto":
         if isinstance(pyvista_mesh, pv.PointSet) and not isinstance(
@@ -146,17 +147,15 @@ def from_pyvista(
             manifold_dim = 0
         else:
             manifold_dim = native_dim
-            # PolyData can mix verts, lines, and faces in a single mesh.
-            # Reject cases where both lines and surface cells coexist,
-            # since the intended dimension is ambiguous.
-            if manifold_dim == 2:
-                n_lines = _get_count_safely(pyvista_mesh, "n_lines")
-                if n_lines > 0:
-                    raise ValueError(
-                        f"Cannot automatically determine manifold dimension.\n"
-                        f"Mesh has both lines and faces: {n_lines=}.\n"
-                        f"Please specify manifold_dim explicitly."
-                    )
+            # Choosing one dimension from a mixed-dimensional VTK dataset
+            # silently discards native cells and their data. Require an
+            # explicit target dimension instead.
+            if len(native_dims) > 1:
+                raise ValueError(
+                    "Cannot automatically determine manifold dimension.\n"
+                    f"Mesh contains native cells with dimensions {sorted(native_dims)}.\n"
+                    "Please specify manifold_dim explicitly."
+                )
 
     ### Validate manifold dimension
     if manifold_dim not in {0, 1, 2, 3}:
@@ -170,165 +169,187 @@ def from_pyvista(
             pyvista_mesh,
             point_source="vertices",
             manifold_dim=manifold_dim,
-            detected_dim=native_dim,
+            detected_dims=native_dims,
         )
 
-    ### Preprocess mesh based on manifold dimension
-    if manifold_dim == 2:
-        if isinstance(pyvista_mesh, pv.PolyData):
-            all_triangles = pyvista_mesh.is_all_triangles
-        elif isinstance(pyvista_mesh, pv.UnstructuredGrid):
-            all_triangles = bool((pyvista_mesh.celltypes == pv.CellType.TRIANGLE).all())
-        else:
-            raise NotImplementedError(
-                f"Only PolyData and UnstructuredGrid are supported for manifold dimension 2, got {type(pyvista_mesh)=}."
-            )
-        if not all_triangles:
-            pyvista_mesh = pyvista_mesh.triangulate()
-
-    elif manifold_dim == 3:
-        if not isinstance(pyvista_mesh, pv.UnstructuredGrid):
-            raise ValueError(
-                f"Expected an UnstructuredGrid with volume cells for 3D meshes, "
-                f"but got {type(pyvista_mesh)=}."
-            )
-
-        def is_all_tetra(pv_mesh) -> bool:
-            """Check if mesh contains only tetrahedral cells."""
-            return bool((pv_mesh.celltypes == pv.CellType.TETRA).all())
-
-        if not is_all_tetra(pyvista_mesh):
-            pyvista_mesh = pyvista_mesh.triangulate()
-
-        if not is_all_tetra(pyvista_mesh):
-            unique_types = np.unique(pyvista_mesh.celltypes)
-            cell_type_names = "\n".join(f"- {pv.CellType(t)}" for t in unique_types)
-            raise ValueError(
-                f"Expected all cells to be tetrahedra after triangulation, but got:\n{cell_type_names}"
-            )
-
-    ### Extract and convert geometry
     def _maybe_copy(arr: np.ndarray) -> np.ndarray:
         return arr.copy() if force_copy else arr
 
-    # Points
-    points = torch.from_numpy(_maybe_copy(pyvista_mesh.points)).float()
+    def _linearize_native_cells(cell_type: int) -> tuple[np.ndarray, dict]:
+        """Select one native dimension, linearize it, and retain point IDs."""
+        if isinstance(pyvista_mesh, pv.PolyData):
+            grid = pyvista_mesh.cast_to_unstructured_grid()
+        elif isinstance(pyvista_mesh, pv.UnstructuredGrid):
+            grid = pyvista_mesh
+        else:
+            raise NotImplementedError(
+                "Native-cell conversion requires PolyData or UnstructuredGrid, "
+                f"got {type(pyvista_mesh)=}."
+            )
 
-    # Cells
+        target_dim = int(vtk.vtkCellTypeUtilities.GetDimension(int(cell_type)))
+        native_cell_types = grid.celltypes
+        target_types = [
+            native_type
+            for native_type in np.unique(native_cell_types)
+            if vtk.vtkCellTypeUtilities.GetDimension(int(native_type)) == target_dim
+        ]
+        target_mask = np.isin(native_cell_types, target_types)
+        if not target_mask.any():
+            raise ValueError(
+                f"Input mesh has no cells that can be converted to manifold_dim={manifold_dim}."
+            )
+
+        # Triangulating a mixed-dimensional grid can needlessly expand millions
+        # of unrelated volume cells. Extract only the requested native
+        # dimension first. Extraction compacts points, so carry VTK's original
+        # point IDs through triangulation and map connectivity back below.
+        remap_to_original_points = not target_mask.all()
+        if not remap_to_original_points:
+            selected = grid
+        else:
+            selected = grid.extract_cells(
+                target_mask, pass_cell_ids=False, pass_point_ids=True
+            )
+
+        if bool((selected.celltypes == cell_type).all()):
+            linearized = selected
+        else:
+            linearized = selected.triangulate()
+
+        output_mask = linearized.celltypes == cell_type
+        if not output_mask.any():
+            raise ValueError(
+                f"Input mesh has no cells that can be converted to manifold_dim={manifold_dim}."
+            )
+        if not output_mask.all():
+            remaining_types = np.unique(linearized.celltypes[~output_mask])
+            cell_type_names = ", ".join(
+                str(pv.CellType(native_type)) for native_type in remaining_types
+            )
+            raise ValueError(
+                f"Could not linearize every manifold_dim={manifold_dim} cell; "
+                f"remaining cell types: {cell_type_names}."
+            )
+
+        connectivity = linearized.cells_dict[np.uint8(cell_type)]
+        if remap_to_original_points:
+            original_point_ids = np.asarray(
+                linearized.point_data["vtkOriginalPointIds"]
+            )
+            connectivity = original_point_ids[connectivity]
+        data = {
+            key: np.asarray(value) for key, value in dict(linearized.cell_data).items()
+        }
+        return connectivity, data
+
+    cell_data: dict[str, torch.Tensor] = {}
     if manifold_dim == 0:
         cells = None  # Mesh constructor creates empty cells
 
     elif manifold_dim == 1:
-        # Lines - extract from PyVista lines format.
-        # If the mesh has no native lines (e.g., a 3D volume mesh with
-        # manifold_dim=1 requested explicitly), extract all unique edges
-        # from the mesh topology to build a vertex graph.
-        lines_raw = getattr(pyvista_mesh, "lines", None)
-        if (lines_raw is None or len(lines_raw) == 0) and pyvista_mesh.n_cells > 0:
-            edges_mesh = pyvista_mesh.extract_all_edges()
-            lines_raw = edges_mesh.lines
-
-        if lines_raw is None or len(lines_raw) == 0:
+        if pyvista_mesh.n_cells == 0:
             cells = torch.empty((0, 2), dtype=torch.long)
-        else:
-            lines_array = np.asarray(lines_raw)
+        elif 1 in native_dims:
+            # Fast paths avoid a VTK filter for already-linear line meshes.
+            if isinstance(pyvista_mesh, pv.UnstructuredGrid) and bool(
+                (pyvista_mesh.celltypes == pv.CellType.LINE).all()
+            ):
+                line_cells = pyvista_mesh.cells_dict[np.uint8(pv.CellType.LINE)]
+                cell_data = _vtk_data_to_tensor_dict(pyvista_mesh.cell_data)
+            elif isinstance(pyvista_mesh, pv.PolyData) and native_dims == {1}:
+                lines = np.asarray(pyvista_mesh.lines)
+                first_count = int(lines[0])
+                stride = first_count + 1
+                is_uniform = (
+                    first_count >= 2
+                    and len(lines) >= stride
+                    and len(lines) % stride == 0
+                )
+                if is_uniform:
+                    reshaped = lines.reshape(-1, stride)
+                    is_uniform = bool((reshaped[:, 0] == first_count).all())
 
-            # Fast path: check if all line segments have uniform vertex count
-            # (common case — all edges have 2 vertices, stride = 3)
-            first_count = int(lines_array[0])
-            stride = first_count + 1
-            is_uniform = len(lines_array) % stride == 0 and len(lines_array) >= stride
-            if is_uniform:
-                n_segments = len(lines_array) // stride
-                reshaped = lines_array.reshape(n_segments, stride)
-                is_uniform = bool((reshaped[:, 0] == first_count).all())
-
-            if is_uniform:
-                # Vectorized path: reshape and extract vertex columns
-                point_ids = reshaped[:, 1:]  # (n_segments, first_count)
-
-                # Convert polylines to consecutive line segments
-                if first_count == 2:
-                    # Already line segments — use directly
-                    cells = torch.from_numpy(point_ids.copy()).long()
+                if is_uniform:
+                    point_ids = reshaped[:, 1:]
+                    if first_count == 2:
+                        line_cells = point_ids
+                        selected_data = pyvista_mesh.cell_data
+                    else:
+                        line_cells = np.stack(
+                            (point_ids[:, :-1], point_ids[:, 1:]), axis=-1
+                        ).reshape(-1, 2)
+                        selected_data = {
+                            key: np.repeat(np.asarray(value), first_count - 1, axis=0)
+                            for key, value in dict(pyvista_mesh.cell_data).items()
+                        }
+                    cell_data = _vtk_data_to_tensor_dict(selected_data)
                 else:
-                    # Polylines with >2 vertices: create consecutive pairs
-                    seg_starts = point_ids[:, :-1].reshape(-1)
-                    seg_ends = point_ids[:, 1:].reshape(-1)
-                    cells = torch.stack(
-                        [
-                            torch.from_numpy(seg_starts.copy()),
-                            torch.from_numpy(seg_ends.copy()),
-                        ],
-                        dim=1,
-                    ).long()
-            else:
-                # Fallback: Python loop for non-uniform segment sizes
-                cells_list = []
-                i = 0
-                while i < len(lines_array):
-                    n_pts = int(lines_array[i])
-                    point_ids = lines_array[i + 1 : i + 1 + n_pts]
-
-                    # Convert polyline to line segments (consecutive pairs)
-                    cells_list.extend(
-                        [
-                            [point_ids[j], point_ids[j + 1]]
-                            for j in range(len(point_ids) - 1)
-                        ]
+                    line_cells, selected_data = _linearize_native_cells(
+                        pv.CellType.LINE
                     )
-
-                    i += n_pts + 1
-
-                if cells_list:
-                    cells = torch.from_numpy(np.array(cells_list)).long()
-                else:
-                    cells = torch.empty((0, 2), dtype=torch.long)
+                    cell_data = _vtk_data_to_tensor_dict(selected_data)
+            else:
+                line_cells, selected_data = _linearize_native_cells(pv.CellType.LINE)
+                cell_data = _vtk_data_to_tensor_dict(selected_data)
+            cells = torch.from_numpy(_maybe_copy(line_cells)).long()
+        else:
+            # No native lines: derive the unique edge graph from higher-
+            # dimensional topology. Cell data has no unambiguous mapping to
+            # shared edges, so it is intentionally dropped below.
+            edge_grid = pyvista_mesh.extract_all_edges().cast_to_unstructured_grid()
+            edge_cells = edge_grid.cells_dict.get(
+                np.uint8(pv.CellType.LINE), np.empty((0, 2), dtype=np.int64)
+            )
+            cells = torch.from_numpy(edge_cells.copy()).long()
 
     elif manifold_dim == 2:
-        # After triangulation, extract the (n_cells, 3) connectivity array
-        if isinstance(pyvista_mesh, pv.PolyData):
-            tri_faces = _maybe_copy(pyvista_mesh.regular_faces)
-        elif isinstance(pyvista_mesh, pv.UnstructuredGrid):
+        if 2 not in native_dims:
+            raise ValueError("Input mesh does not contain native 2D cells.")
+        if isinstance(pyvista_mesh, pv.PolyData) and pyvista_mesh.is_all_triangles:
+            tri_faces = pyvista_mesh.regular_faces
+            cell_data = _vtk_data_to_tensor_dict(pyvista_mesh.cell_data)
+        elif isinstance(pyvista_mesh, pv.PolyData) and native_dims == {2}:
+            # Retain PyVista's direct PolyData fast path for ordinary polygon
+            # surfaces. Casting first to an UnstructuredGrid roughly doubles
+            # conversion time on large all-quad meshes.
+            triangulated = pyvista_mesh.triangulate()
+            if not triangulated.is_all_triangles:
+                raise ValueError("Could not triangulate every native 2D cell.")
+            tri_faces = triangulated.regular_faces
+            cell_data = _vtk_data_to_tensor_dict(triangulated.cell_data)
+        elif isinstance(pyvista_mesh, pv.UnstructuredGrid) and bool(
+            (pyvista_mesh.celltypes == pv.CellType.TRIANGLE).all()
+        ):
             tri_faces = pyvista_mesh.cells_dict[np.uint8(pv.CellType.TRIANGLE)]
+            cell_data = _vtk_data_to_tensor_dict(pyvista_mesh.cell_data)
         else:
-            raise NotImplementedError(
-                f"Only PolyData and UnstructuredGrid are supported for manifold dimension 2, got {type(pyvista_mesh)=}."
-            )
-        cells = torch.from_numpy(tri_faces).long()
+            tri_faces, selected_data = _linearize_native_cells(pv.CellType.TRIANGLE)
+            cell_data = _vtk_data_to_tensor_dict(selected_data)
+        cells = torch.from_numpy(_maybe_copy(tri_faces)).long()
 
     elif manifold_dim == 3:
-        # Tetrahedral cells - extract from cells
-        # After triangulation, all cells should be tetrahedra
-        cells_dict = pyvista_mesh.cells_dict
-        if pv.CellType.TETRA not in cells_dict:
+        if not isinstance(pyvista_mesh, pv.UnstructuredGrid):
             raise ValueError(
-                f"Expected tetrahedral cells after triangulation, but got {list(cells_dict.keys())}"
+                "Expected an UnstructuredGrid with volume cells for 3D meshes, "
+                f"but got {type(pyvista_mesh)=}."
             )
-        tetra_cells = cells_dict[np.uint8(pv.CellType.TETRA)]
-        cells = torch.from_numpy(tetra_cells).long()
+        if 3 not in native_dims:
+            raise ValueError("Input mesh does not contain native 3D cells.")
+        if bool((pyvista_mesh.celltypes == pv.CellType.TETRA).all()):
+            tetra_cells = pyvista_mesh.cells_dict[np.uint8(pv.CellType.TETRA)]
+            cell_data = _vtk_data_to_tensor_dict(pyvista_mesh.cell_data)
+        else:
+            tetra_cells, selected_data = _linearize_native_cells(pv.CellType.TETRA)
+            cell_data = _vtk_data_to_tensor_dict(selected_data)
+        cells = torch.from_numpy(_maybe_copy(tetra_cells)).long()
 
-    ### Return Mesh object
-    # Cell data can only be passed through when the output cells have a
-    # 1:many relationship with input cells (e.g., VTK's triangulate
-    # replicates cell_data to child cells).  This fails when manifold_dim
-    # is lower than native_dim (different cell topology), when
-    # manifold_dim is 0 (output has no cells at all), or when a topology
-    # transformation (polyline splitting, edge extraction) changed the
-    # cell count.
-    n_output_cells = 0 if cells is None else cells.shape[0]
-    pass_cell_data = (
-        manifold_dim > 0
-        and manifold_dim >= native_dim
-        and n_output_cells == pyvista_mesh.n_cells
-    )
+    points = torch.from_numpy(_maybe_copy(pyvista_mesh.points)).float()
     return Mesh(
         points=points,
         cells=cells,
         point_data=_vtk_data_to_tensor_dict(pyvista_mesh.point_data),
-        cell_data=_vtk_data_to_tensor_dict(pyvista_mesh.cell_data)
-        if pass_cell_data
-        else {},
+        cell_data=cell_data,
         global_data=_vtk_data_to_tensor_dict(pyvista_mesh.field_data),
     )
 
@@ -454,7 +475,7 @@ def _from_pyvista_cell_centroids(
             pyvista_mesh,
             point_source="cell_centroids",
             manifold_dim=manifold_dim,
-            detected_dim=None,
+            detected_dims=None,
         )
 
     ### Compute cell centroids (fast C++ filter, works for all cell types)
@@ -616,61 +637,38 @@ def _build_dual_graph_edges(
     return torch.from_numpy(np.concatenate(chunks, axis=0))
 
 
-def _detect_native_dim(
+def _detect_native_dims(
     pyvista_mesh: "pv.PolyData | pv.UnstructuredGrid | pv.PointSet",
-) -> int:
-    """Determine the native manifold dimension of a PyVista mesh.
-
-    This is a lightweight check (no cell processing) used for data-loss
-    warnings and for deciding whether cell_data can be passed through.
-
-    Parameters
-    ----------
-    pyvista_mesh : pyvista.PolyData or pyvista.UnstructuredGrid or pyvista.PointSet
-        Input mesh.
-
-    Returns
-    -------
-    int
-        0, 1, 2, or 3.
-    """
+) -> set[int]:
+    """Return every topological dimension represented by native VTK cells."""
     if pyvista_mesh.n_cells == 0:
-        return 0
+        return {0}
     if hasattr(pyvista_mesh, "celltypes"):
-        ct = pyvista_mesh.celltypes
-        volume_types = [
-            pv.CellType.TETRA,
-            pv.CellType.HEXAHEDRON,
-            pv.CellType.WEDGE,
-            pv.CellType.PYRAMID,
-            pv.CellType.VOXEL,
-            pv.CellType.POLYHEDRON,
-        ]
-        if np.isin(ct, volume_types).any():
-            return 3
-        surface_types = [pv.CellType.TRIANGLE, pv.CellType.QUAD, pv.CellType.POLYGON]
-        if np.isin(ct, surface_types).any():
-            return 2
-        line_types = [pv.CellType.LINE, pv.CellType.POLY_LINE]
-        if np.isin(ct, line_types).any():
-            return 1
-        return 0
-    # PolyData without celltypes - check for faces vs lines
+        return {
+            int(vtk.vtkCellTypeUtilities.GetDimension(int(cell_type)))
+            for cell_type in np.unique(pyvista_mesh.celltypes)
+        }
+
+    # PolyData does not expose ``celltypes``; its cell arrays are separated by
+    # dimension, so counts provide the same information without cell traversal.
     n_lines = _get_count_safely(pyvista_mesh, "n_lines")
     n_cells = _get_count_safely(pyvista_mesh, "n_cells")
     n_verts = _get_count_safely(pyvista_mesh, "n_verts")
-    if n_cells > n_verts + n_lines:
-        return 2
+    dimensions: set[int] = set()
+    if n_verts > 0:
+        dimensions.add(0)
     if n_lines > 0:
-        return 1
-    return 0
+        dimensions.add(1)
+    if n_cells > n_verts + n_lines:
+        dimensions.add(2)
+    return dimensions or {0}
 
 
 def _warn_on_data_loss(
     pyvista_mesh: "pv.PolyData | pv.UnstructuredGrid | pv.PointSet",
     point_source: str,
     manifold_dim: int,
-    detected_dim: int | None,
+    detected_dims: set[int] | None,
 ) -> None:
     """Emit UserWarning if non-empty data arrays will be discarded.
 
@@ -682,8 +680,8 @@ def _warn_on_data_loss(
         ``"vertices"`` or ``"cell_centroids"``.
     manifold_dim : int
         The resolved (non-"auto") target manifold dimension.
-    detected_dim : int or None
-        The auto-detected manifold dimension of the original mesh.
+    detected_dims : set[int] or None
+        Native manifold dimensions present in the original mesh.
         ``None`` when called from the cell_centroids path.
     """
     ### Case 1: point_data lost when using cell centroids
@@ -699,21 +697,25 @@ def _warn_on_data_loss(
                 stacklevel=3,
             )
 
-    ### Case 2: cell_data lost when extracting lower-dimensional representation
-    if point_source == "vertices" and detected_dim is not None:
-        if manifold_dim < detected_dim:
-            cd_keys = list(pyvista_mesh.cell_data.keys())
-            if cd_keys:
-                warnings.warn(
-                    f"manifold_dim={manifold_dim} (< detected {detected_dim}) with "
-                    f"point_source='vertices' discards {len(cd_keys)} cell_data "
-                    f"field(s) from the input mesh: {cd_keys}. "
-                    f"Use point_source='cell_centroids' to preserve cell_data "
-                    f"as point_data, or set warn_on_lost_data=False to silence "
-                    f"this warning.",
-                    UserWarning,
-                    stacklevel=3,
-                )
+    ### Case 2: cell_data lost when discarding native cells
+    if point_source == "vertices" and detected_dims is not None:
+        # A 0D Mesh is represented as a point cloud with no cells, so even
+        # native VTK vertex-cell data has nowhere to attach.
+        dropped_dims = (
+            detected_dims if manifold_dim == 0 else detected_dims - {manifold_dim}
+        )
+        cd_keys = list(pyvista_mesh.cell_data.keys())
+        if dropped_dims and cd_keys:
+            warnings.warn(
+                f"Selecting manifold_dim={manifold_dim} from native dimensions "
+                f"{sorted(detected_dims)} cannot preserve cell_data values attached "
+                f"to dimensions {sorted(dropped_dims)} for fields {cd_keys}. "
+                f"Use point_source='cell_centroids' to preserve all cell_data "
+                f"as point_data, or set warn_on_lost_data=False to silence "
+                f"this warning.",
+                UserWarning,
+                stacklevel=3,
+            )
 
 
 def _get_count_safely(obj, attr: str) -> int:

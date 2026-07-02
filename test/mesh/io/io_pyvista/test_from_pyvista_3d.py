@@ -102,6 +102,34 @@ class TestFromPyvista3D:
         expected_cells = torch.tensor([[0, 1, 2, 3]], dtype=torch.long)
         assert torch.equal(mesh.cells, expected_cells)
 
+    def test_quadratic_tetra_auto_detection_and_linearization(self):
+        points = np.array(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [0.5, 0.0, 0.0],
+                [0.5, 0.5, 0.0],
+                [0.0, 0.5, 0.0],
+                [0.0, 0.0, 0.5],
+                [0.5, 0.0, 0.5],
+                [0.0, 0.5, 0.5],
+            ]
+        )
+        pv_mesh = pv.UnstructuredGrid(
+            np.concatenate(([10], np.arange(10))),
+            np.array([pv.CellType.QUADRATIC_TETRA]),
+            points,
+        )
+        pv_mesh.cell_data["volume_id"] = np.array([11])
+
+        mesh = from_pyvista(pv_mesh)
+
+        assert mesh.n_manifold_dims == 3
+        assert mesh.cells.shape == (8, 4)
+        assert torch.equal(mesh.cell_data["volume_id"], torch.full((8,), 11))
+
 
 def _make_pentagonal_prism() -> "pv.UnstructuredGrid":
     """Create a pentagonal-prism polyhedron (10 vertices, 7 faces).

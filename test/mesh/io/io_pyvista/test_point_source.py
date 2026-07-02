@@ -383,6 +383,16 @@ class TestWarnOnLostData:
         with pytest.warns(UserWarning, match="cell_data"):
             from_pyvista(pv_mesh, manifold_dim=0, warn_on_lost_data=True)
 
+    def test_warns_when_point_cloud_drops_vertex_cell_data(self):
+        pv_mesh = pv.PolyData(
+            np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]),
+            verts=np.array([1, 0, 1, 1]),
+        )
+        pv_mesh.cell_data["vertex_id"] = np.array([7, 9])
+
+        with pytest.warns(UserWarning, match="vertex_id"):
+            from_pyvista(pv_mesh, warn_on_lost_data=True)
+
     def test_warns_on_lost_point_data(self):
         """Using cell_centroids with point_data should warn."""
         pv_mesh = _make_tet_with_data()
