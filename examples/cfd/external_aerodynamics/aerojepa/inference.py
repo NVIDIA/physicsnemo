@@ -47,6 +47,7 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 
+from physicsnemo.experimental.models.aerojepa import TokenSet
 from src.datapipes import (
     SuperWingDataset,
     build_superwing_split_manifest,
@@ -216,8 +217,6 @@ def _predict_one_case(
     if pred_features.ndim == 3 and int(pred_features.shape[0]) == 1:
         pred_features = pred_features[0]
 
-    from physicsnemo.experimental.models.aerojepa import TokenSet
-
     target_tokens = TokenSet(
         features=pred_features,
         coords=target_coords,
@@ -305,7 +304,11 @@ def main(cfg: DictConfig) -> None:
             chunk_size=int(cfg.decoder_chunk_size),
         )
 
-        # (N_q, C) flat -> (C, H, W) grid.
+        # (N_q, C) flat -> (C, H, W) grid. This assumes the ``query_pos`` used
+        # for ``eval_full_grid_query=True`` is emitted in row-major (H, W) order
+        # so the flat predictions reshape back to the grid correctly; the
+        # SuperWing dataset guarantees that ordering (SUPERWING_GRID_SHAPE). A
+        # different query ordering would silently scramble the output grid.
         pred_norm_chw = (
             pred_flat.detach().cpu().numpy().reshape(H, W, -1).transpose(2, 0, 1)
         )
