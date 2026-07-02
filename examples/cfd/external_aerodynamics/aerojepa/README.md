@@ -67,6 +67,9 @@ Default config: [`conf/config.yaml`](conf/config.yaml) (composes
 Checkpoints are written to `outputs/<run-name>/checkpoints/` under
 PhysicsNeMo's standard Hydra-driven output layout.
 
+Training currently runs on a single GPU; multi-GPU / multi-node distributed
+training is planned as a follow-up using PhysicsNeMo's distributed utilities.
+
 ## 4. Inference and Field Plots
 
 After training, decode the predicted surface field on test cases:
