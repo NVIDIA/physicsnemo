@@ -394,9 +394,14 @@ def _save_checkpoint(
     cfg: DictConfig,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    # When EMA is active, validation (and thus model selection) runs on the
+    # shadow weights, so persist those as the model state so the checkpoint
+    # reproduces the reported metric. ``ema.shadow`` shadows the full
+    # ``state_dict`` (parameters and buffers), so it is a complete model state.
+    model_state = ema.shadow if ema is not None else model.state_dict()
     payload: dict[str, Any] = {
         "epoch": int(epoch),
-        "model": model.state_dict(),
+        "model": model_state,
         "optimizer": optimizer.state_dict(),
         "config": OmegaConf.to_container(cfg, resolve=True),
     }
