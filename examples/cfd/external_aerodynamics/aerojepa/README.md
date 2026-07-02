@@ -38,7 +38,6 @@ The [`requirements.txt`](requirements.txt) file lists the additional dependencie
 pip install -r requirements.txt
 ```
 
-
 ## 2. Get the SuperWing Dataset
 
 The dataset lives on the Hugging Face Hub at
@@ -89,11 +88,11 @@ python inference.py \
 Example output on a held-out wing, showing ground truth, prediction, and
 absolute error for each surface channel (``Cp``, ``Cf_tau``, ``Cf_z``):
 
-![SuperWing predicted Cp field](docs/img/Cp_predictor_triptych.png)
+![SuperWing predicted Cp field](../../../../docs/img/aerojepa/Cp_predictor_triptych.png)
 
-![SuperWing predicted Cf_tau field](docs/img/Cf_tau_predictor_triptych.png)
+![SuperWing predicted Cf_tau field](../../../../docs/img/aerojepa/Cf_tau_predictor_triptych.png)
 
-![SuperWing predicted Cf_z field](docs/img/Cf_z_predictor_triptych.png)
+![SuperWing predicted Cf_z field](../../../../docs/img/aerojepa/Cf_z_predictor_triptych.png)
 
 ## 5. CL, CD, and CM Estimation
 
@@ -107,7 +106,7 @@ python -m src.postprocessing.superwing_forces \
 
 Predicted compared to ground-truth coefficients on the SuperWing test split:
 
-![CL/CD/CM parity plot](docs/img/cl_cd_parity.png)
+![CL/CD/CM parity plot](../../../../docs/img/aerojepa/cl_cd_parity.png)
 
 ## 6. Adding a New Dataset
 
