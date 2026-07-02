@@ -29,7 +29,9 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from ..layers.token_utils import reshape_token_features_for_sigreg
+from physicsnemo.experimental.models.aerojepa.layers import (
+    reshape_token_features_for_sigreg,
+)
 
 
 class SIGReg(nn.Module):
@@ -89,9 +91,7 @@ class SIGReg(nn.Module):
 
     def forward(self, proj: torch.Tensor) -> torch.Tensor:
         if proj.ndim != 3:
-            raise ValueError(
-                f"proj must have shape [T, B, D], got {tuple(proj.shape)}"
-            )
+            raise ValueError(f"proj must have shape [T, B, D], got {tuple(proj.shape)}")
         if int(proj.shape[-1]) == 0 or int(proj.shape[-2]) == 0:
             return proj.new_zeros(())
         A = torch.randn(
@@ -101,17 +101,14 @@ class SIGReg(nn.Module):
             dtype=proj.dtype,
         )
         A = A / A.norm(p=2, dim=0, keepdim=True).clamp_min(1e-12)
-        x_t = (proj @ A).unsqueeze(-1) * self.t.to(
-            device=proj.device, dtype=proj.dtype
-        )
+        x_t = (proj @ A).unsqueeze(-1) * self.t.to(device=proj.device, dtype=proj.dtype)
         err = (
-            x_t.cos().mean(dim=-3)
-            - self.phi.to(device=proj.device, dtype=proj.dtype)
+            x_t.cos().mean(dim=-3) - self.phi.to(device=proj.device, dtype=proj.dtype)
         ).square()
         err = err + x_t.sin().mean(dim=-3).square()
-        statistic = (
-            err @ self.weights.to(device=proj.device, dtype=proj.dtype)
-        ) * int(proj.shape[-2])
+        statistic = (err @ self.weights.to(device=proj.device, dtype=proj.dtype)) * int(
+            proj.shape[-2]
+        )
         return statistic.mean()
 
 

@@ -16,10 +16,11 @@
 
 r"""Hydra-friendly builders for the AeroJEPA training-loss stack.
 
-Library-side loss modules live in
-:mod:`physicsnemo.experimental.models.aerojepa.losses`. This module is the
-recipe-side glue that picks one out by name + kwargs from a Hydra
-config block (the ``loss:`` section of ``conf/training/superwing.yaml``)
+The loss modules live alongside this file in the recipe's ``src.losses``
+package: the reconstruction family (``reconstruction.py``, building on
+``physicsnemo.metrics``) and the SIGReg regularizers (``sigreg.py``). This
+module is the recipe-side glue that picks one out by name + kwargs from a
+Hydra config block (the ``loss:`` section of ``conf/training/superwing.yaml``)
 and instantiates it. It also exposes :func:`compute_latent_loss`, the
 MSE + cosine blend the predictor minimises against the target encoder
 in latent space.
@@ -34,14 +35,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from omegaconf import DictConfig
 
-from physicsnemo.experimental.models.aerojepa.losses import TokenLatentSIGReg
-
 from .reconstruction import (
     MSELoss,
     RelativeL2Loss,
     RelativeL2MSELoss,
     RelativeMSELoss,
 )
+from .sigreg import TokenLatentSIGReg
 
 
 def build_sigreg_from_config(
