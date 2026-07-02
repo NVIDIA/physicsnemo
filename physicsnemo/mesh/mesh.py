@@ -2341,7 +2341,9 @@ class Mesh:
             Target number of cells. If None, no cell padding is applied.
             Must be >= current n_cells if specified. Also accepts SymInt for torch.compile.
         data_padding_value : float
-            Value to use for padding data fields. Defaults to NaN.
+            Value to use for padding data fields. Defaults to NaN for floating
+            and complex fields; integer and boolean fields use 0 when the
+            requested value is NaN, preserving their dtype.
 
         Returns
         -------
@@ -2378,24 +2380,55 @@ class Mesh:
         if target_n_cells is None:
             target_n_cells = self.n_cells
 
+        if (
+            not torch.compiler.is_compiling()
+            and target_n_cells > 0
+            and target_n_points == 0
+        ):
+            raise ValueError("Cannot pad cells without at least one mesh point.")
+
+        def _pad_data(tensor: torch.Tensor, size: int) -> torch.Tensor:
+            value = data_padding_value
+            if (
+                not tensor.is_floating_point()
+                and not tensor.is_complex()
+                and math.isnan(value)
+            ):
+                value = 0.0
+            return _pad_with_value(tensor, size, value)
+
+        padded_cell_cache = self._cache["cell"].apply(
+            lambda x: _pad_with_value(x, target_n_cells, 0.0),
+            batch_size=torch.Size([target_n_cells]),
+        )
+        centroids = self._cache.get(("cell", "centroids"), None)
+        if centroids is not None:
+            n_padding_cells = target_n_cells - self.n_cells
+            if self.n_points == 0:
+                padding_centroid = self.points.new_zeros((1, self.n_spatial_dims))
+            else:
+                padding_centroid = self.points[-1:]
+            padded_cell_cache["centroids"] = torch.cat(
+                [centroids, padding_centroid.expand(n_padding_cells, -1)]
+            )
+
         return self.__class__(
             points=_pad_by_tiling_last(self.points, target_n_points),
-            cells=_pad_with_value(self.cells, target_n_cells, self.n_points - 1),
+            cells=_pad_with_value(
+                self.cells, target_n_cells, max(self.n_points - 1, 0)
+            ),
             point_data=self.point_data.apply(
-                lambda x: _pad_with_value(x, target_n_points, data_padding_value),
+                lambda x: _pad_data(x, target_n_points),
                 batch_size=torch.Size([target_n_points]),
             ),
             cell_data=self.cell_data.apply(
-                lambda x: _pad_with_value(x, target_n_cells, data_padding_value),
+                lambda x: _pad_data(x, target_n_cells),
                 batch_size=torch.Size([target_n_cells]),
             ),
             global_data=self.global_data,
             _cache=TensorDict(
                 {
-                    "cell": self._cache["cell"].apply(
-                        lambda x: _pad_with_value(x, target_n_cells, 0.0),
-                        batch_size=torch.Size([target_n_cells]),
-                    ),
+                    "cell": padded_cell_cache,
                     "point": self._cache["point"].apply(
                         lambda x: _pad_with_value(x, target_n_points, 0.0),
                         batch_size=torch.Size([target_n_points]),
@@ -2424,7 +2457,9 @@ class Mesh:
             Base for computing the next power. Must be > 1.
             Provides a good balance between memory efficiency and compile cache hits.
         data_padding_value : float
-            Value to use for padding data fields. Defaults to NaN.
+            Value to use for padding data fields. Defaults to NaN for floating
+            and complex fields; integer and boolean fields use 0 when the
+            requested value is NaN, preserving their dtype.
 
         Returns
         -------
