@@ -92,23 +92,26 @@ def test_healda_v2_cpu_no_obs():
     total_pixels = b * t * NPIX_COARSE
     x = torch.randn(b, c, t, NPIX, device=dev, requires_grad=True)
     sod, doy = _calendar(b, t, dev)
-    empty_f = torch.empty(0, device=dev)
-    empty_i = torch.empty(0, dtype=torch.int64, device=dev)
+    empty_obs = torch.empty(0, device=dev)
+    empty_ids = torch.empty(0, dtype=torch.int64, device=dev)
 
     obs_ctx = ObsContext(
         cu_seqlens_k=torch.zeros(total_pixels + 1, dtype=torch.int32, device=dev),
         max_seqlen_k=0,
-        values=empty_f,
+        obs=empty_obs,
         float_metadata=torch.empty(0, 8, device=dev),
-        obs_type=empty_i,
-        channel=empty_i,
-        platform=empty_i,
+        obs_type=empty_ids,
+        channel=empty_ids,
+        platform=empty_ids,
     )
     out = model(x, torch.rand(b, device=dev), sod, doy, obs_ctx)
 
     assert out.shape == (b, 3, t, NPIX)
     out.float().pow(2).mean().backward()
     assert torch.isfinite(x.grad).all()
+
+    for name, p in model.named_parameters():
+        assert p.grad is not None and torch.isfinite(p.grad).all(), name
 
 
 @pytest.mark.skipif(
@@ -141,7 +144,7 @@ def test_healda_v2_cuda_full():
     obs_ctx = ObsContext(
         cu_seqlens_k=_cu_seqlens(counts, dev),
         max_seqlen_k=max(counts),
-        values=obs,
+        obs=obs,
         float_metadata=float_metadata,
         obs_type=obs_type,
         channel=channel,
@@ -152,4 +155,5 @@ def test_healda_v2_cuda_full():
     assert out.shape == (b, 3, t, NPIX)
     out.float().pow(2).mean().backward()
     assert torch.isfinite(x.grad).all()
-    assert torch.isfinite(model.obs_tokenizer.cond_mlp[0].weight.grad).all()
+    for name, p in model.named_parameters():
+        assert p.grad is not None and torch.isfinite(p.grad).all(), name

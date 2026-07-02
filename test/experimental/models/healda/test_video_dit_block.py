@@ -24,8 +24,13 @@ from physicsnemo.experimental.models.healda.pixel_cross_attention import (
 from physicsnemo.experimental.models.healda.video_dit_block import VideoDiTBlock
 
 
-def _build_obs(b, t, npix, obs_token_dim, device, max_count=4):
-    """Build a packed ragged cross-attention context for ``b*t*npix`` pixels."""
+def _build_tokenized_context(b, t, npix, obs_token_dim, device, max_count=4):
+    """Build an already-tokenized ObsContext for ``b*t*npix`` pixels.
+
+    VideoDiTBlock's cross-attention only reads ``tokens``/``cu_seqlens_k``/
+    ``max_seqlen_k``; the raw per-observation fields (required on ObsContext,
+    but otherwise unused here) are filled with unused placeholder data.
+    """
     total_pixels = b * t * npix
     counts = torch.randint(0, max_count, (total_pixels,), device=device)
     cu = torch.zeros(total_pixels + 1, dtype=torch.int32, device=device)
@@ -36,24 +41,12 @@ def _build_obs(b, t, npix, obs_token_dim, device, max_count=4):
         tokens=tokens,
         cu_seqlens_k=cu,
         max_seqlen_k=int(counts.max().item()) if total_pixels else 0,
+        obs=torch.randn(n_tokens, device=device),
+        float_metadata=torch.randn(n_tokens, 1, device=device),
+        obs_type=torch.randint(0, 4, (n_tokens,), device=device),
+        channel=torch.randint(0, 4, (n_tokens,), device=device),
+        platform=torch.randint(0, 4, (n_tokens,), device=device),
     )
-
-
-def _cross_attention_factory(hidden_size, token_dim):
-    """Factory for one reference cross-attention module for the generic slot."""
-
-    def build():
-        return PixelCrossAttention(
-            token_dim=token_dim,
-            n_q_heads=hidden_size // token_dim,
-            n_kv_heads=1,
-            d_head=token_dim,
-            input_dim=hidden_size,
-            output_dim=hidden_size,
-            use_proj_bias=True,
-        )
-
-    return build
 
 
 def test_plain_block_reduces_to_spatial_mlp_cpu():
@@ -112,18 +105,29 @@ def test_full_block_cuda():
     dev = "cuda"
     b, t, npix, c = 2, 3, 64, 256
     token_dim = 16
+
+    def cross_attention():
+        return PixelCrossAttention(
+            hidden_size=c,
+            token_dim=token_dim,
+            n_q_heads=c // token_dim,
+            n_kv_heads=1,
+            d_head=token_dim,
+            use_proj_bias=True,
+        )
+
     block = VideoDiTBlock(
         hidden_size=c,
         num_heads=8,
         condition_embed_dim=128,
         temporal_attention=True,
-        cross_attention=_cross_attention_factory(c, token_dim),
+        cross_attention=cross_attention,
         adaln_zero_init=False,  # non-zero gates so every branch gets grad
     ).to(dev)
 
     x = torch.randn(b, t, npix, c, device=dev, requires_grad=True)
     emb = torch.randn(b, 128, device=dev)
-    context = _build_obs(b, t, npix, token_dim, dev)
+    context = _build_tokenized_context(b, t, npix, token_dim, dev)
 
     out = block(x, emb, cross_attention_context=context)
     assert out.shape == (b, t, npix, c)

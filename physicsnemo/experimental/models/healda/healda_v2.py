@@ -13,7 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Video + observation data-assimilation model composing :class:`VideoDiT`."""
+"""Video + observation data-assimilation model composing :class:`~physicsnemo.experimental.models.healda.video_dit.VideoDiT`."""
 
 import dataclasses
 from dataclasses import dataclass
@@ -70,13 +70,13 @@ class HealDAv2(Module):
     1. Static conditioning fields are patch-tokenized from the fine ingest grid
        (``level_in``) down to the backbone grid (``level_model``) by
        :class:`physicsnemo.nn.module.hpx.tokenizer.HEALPixPatchTokenizer`.
-    2. A :class:`.video_dit.VideoDiT` backbone processes the token sequence with
+    2. A :class:`~physicsnemo.experimental.models.healda.video_dit.VideoDiT` backbone processes the token sequence with
        spatial attention, factorized temporal attention, and adaLN-Zero
        conditioning built from the EDM noise embedding and the calendar
        (second-of-day / day-of-year) features.
     3. Observations are embedded per observation by
-       :class:`.obs_tokenizer.ObsTokenizerFiLM` and assimilated inside every block
-       by :class:`.pixel_cross_attention.PixelCrossAttention`: each grid pixel
+       :class:`~physicsnemo.experimental.models.healda.obs_tokenizer.ObsTokenizerFiLM` and assimilated inside every block
+       by :class:`~physicsnemo.experimental.models.healda.pixel_cross_attention.PixelCrossAttention`: each grid pixel
        attends only to the observations that land on it (ragged, local
        cross-attention).
     4. :class:`physicsnemo.nn.module.hpx.tokenizer.HEALPixPatchDetokenizer` maps
@@ -86,16 +86,16 @@ class HealDAv2(Module):
     The grid enters only at the boundaries: the patch tokenizer /
     detokenizer (stages 1 and 4) and, upstream in the dataloader, the assignment
     of a flat pixel index to each observation (which builds the ragged packing
-    carried on ``obs``). Everything in between is grid-agnostic -- the backbone
-    operates on a flat ``(B, T, X, C)`` token sequence and the observation
-    cross-attention only needs each observation tagged with the pixel it belongs
+    carried on ``obs_ctx``). Everything in between is grid-agnostic -- the backbone
+    operates on a token sequence of shape :math:`(B, T, X, C)` and the
+    observation cross-attention only needs each observation tagged with the pixel it belongs
     to. Adapting to a different grid therefore means swapping the tokenizer /
     detokenizer pair and the observation pixel-assignment step.
 
     Because spatial and temporal attention are factorized (each is independent
     along the axis the other mixes over), the model supports context parallelism:
     a group of :math:`N` GPUs reshards activations between time- and space-sharded
-    layouts around each attention (see :mod:`.sharding`). :math:`N` must divide
+    layouts around each attention (see :mod:`~physicsnemo.experimental.models.healda.sharding`). :math:`N` must divide
     both the time and space extents, so the default ``time_length = 8`` caps it at
     8-way. Enable via :meth:`set_context_parallel`.
 
@@ -108,7 +108,7 @@ class HealDAv2(Module):
     hidden_size : int, optional, default=1536
         Transformer token dimension.
     num_layers : int, optional, default=32
-        Number of :class:`.video_dit_block.VideoDiTBlock` blocks.
+        Number of :class:`~physicsnemo.experimental.models.healda.video_dit_block.VideoDiTBlock` blocks.
     num_heads : int, optional, default=16
         Number of spatial- and temporal-attention heads.
     mlp_ratio : float, optional, default=4.0
@@ -184,13 +184,10 @@ class HealDAv2(Module):
         Second-of-day tensor of shape :math:`(B, T)` for the calendar embedding.
     day_of_year : torch.Tensor
         Day-of-year tensor of shape :math:`(B, T)` for the calendar embedding.
-    obs : ObsContext
-        Per-observation arrays (``values``, ``float_metadata``, ``obs_type``,
-        ``channel``, ``platform``) plus the per-pixel ragged packing
-        (``cu_seqlens_k``, ``max_seqlen_k``, optional ``group_map``), with pixel
-        prefix sums over :math:`B \cdot T \cdot X'` and
-        :math:`X' = 12 \times 4^{\mathrm{level\_model}}`. The tokenizer fills
-        ``tokens`` internally; observations are sorted by flat pixel index.
+    obs_ctx : :class:`~physicsnemo.experimental.models.healda.obs_context.ObsContext`
+        Raw observations plus ragged packing, with pixel prefix sums over
+        :math:`B \cdot T \cdot X'` and :math:`X' = 12 \times 4^{\mathrm{level\_model}}`.
+        The tokenizer fills ``tokens`` internally.
 
     Outputs
     -------
@@ -199,10 +196,10 @@ class HealDAv2(Module):
 
     Notes
     -----
-    Observations are passed as an :class:`.obs_context.ObsContext` whose tokens
-    must be packed per pixel (observations sorted by flat pixel index); build the
-    packing with :mod:`.pixel_cross_attention`. The FiLM tokenizer and pixel
-    cross-attention run fused Triton kernels on CUDA.
+    Observations are passed as an :class:`~physicsnemo.experimental.models.healda.obs_context.ObsContext`, pre-packed
+    per pixel with :func:`~physicsnemo.experimental.models.healda.obs_context.sort_and_pack`. The FiLM tokenizer and
+    pixel cross-attention run fused Triton kernels on CUDA. Also set ``group_map`` via
+    :func:`~physicsnemo.experimental.models.healda.obs_context.build_pixel_group_map` for best throughput.
 
     Only the default ``attention_backend="timm"`` currently supports the
     ``qk_norm_type="RMSNorm"`` with ``qk_norm_affine=False`` this model
@@ -351,16 +348,16 @@ class HealDAv2(Module):
         noise_labels: Float[torch.Tensor, " batch"],
         second_of_day: Float[torch.Tensor, "batch time"],
         day_of_year: Float[torch.Tensor, "batch time"],
-        obs: ObsContext,
+        obs_ctx: ObsContext,
     ) -> Float[torch.Tensor, "batch out_channels time npix"]:
         tokens = self.obs_tokenizer(
-            obs.values,
-            obs.float_metadata,
-            obs.obs_type,
-            obs.channel,
-            obs.platform,
+            obs_ctx.obs,
+            obs_ctx.float_metadata,
+            obs_ctx.obs_type,
+            obs_ctx.channel,
+            obs_ctx.platform,
         )
-        cross_attention_context = dataclasses.replace(obs, tokens=tokens)
+        cross_attention_context = dataclasses.replace(obs_ctx, tokens=tokens)
         return self.dit(
             x,
             noise_labels,

@@ -16,8 +16,8 @@
 
 """Fused Triton kernels for the 2-layer FiLM observation tokenizer.
 
-Private backend for :mod:`..obs_tokenizer`, imported lazily only when triton
-is installed. Contains:
+Private backend for :mod:`~physicsnemo.experimental.models.healda.obs_tokenizer`,
+imported lazily only when triton is installed. Contains:
 
 1. The ``@triton.jit`` forward/backward kernels.
 2. ``torch.library.custom_op`` wrappers with fake-tensor and autograd

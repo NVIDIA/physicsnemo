@@ -103,12 +103,11 @@ def test_video_dit_cuda_full():
 
     def cross_attention():
         return PixelCrossAttention(
+            hidden_size=hidden,
             token_dim=otd,
             n_q_heads=hidden // otd,
             n_kv_heads=1,
             d_head=otd,
-            input_dim=hidden,
-            output_dim=hidden,
             use_proj_bias=True,
         )
 
@@ -128,8 +127,20 @@ def test_video_dit_cuda_full():
     counts = torch.randint(0, 4, (total_pixels,), device=dev)
     cu = torch.zeros(total_pixels + 1, dtype=torch.int32, device=dev)
     cu[1:] = torch.cumsum(counts, 0).to(torch.int32)
-    tokens = torch.randn(int(cu[-1]), otd, device=dev, requires_grad=True)
-    context = ObsContext(tokens=tokens, cu_seqlens_k=cu, max_seqlen_k=int(counts.max()))
+    n_tokens = int(cu[-1])
+    tokens = torch.randn(n_tokens, otd, device=dev, requires_grad=True)
+    # VideoDiT's cross-attention only reads tokens/cu_seqlens_k/max_seqlen_k; the
+    # raw per-observation fields (required on ObsContext) are unused placeholders.
+    context = ObsContext(
+        tokens=tokens,
+        cu_seqlens_k=cu,
+        max_seqlen_k=int(counts.max()),
+        obs=torch.randn(n_tokens, device=dev),
+        float_metadata=torch.randn(n_tokens, 1, device=dev),
+        obs_type=torch.randint(0, 4, (n_tokens,), device=dev),
+        channel=torch.randint(0, 4, (n_tokens,), device=dev),
+        platform=torch.randint(0, 4, (n_tokens,), device=dev),
+    )
 
     out = model(
         x,

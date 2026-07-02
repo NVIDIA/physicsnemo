@@ -21,12 +21,13 @@ import pytest
 import torch
 
 from physicsnemo.core.version_check import OptionalImport
-from physicsnemo.experimental.models.healda.obs_context import ObsContext
+from physicsnemo.experimental.models.healda.obs_context import (
+    ObsContext,
+    build_pixel_group_map,
+)
 from physicsnemo.experimental.models.healda.pixel_cross_attention import (
     PixelCrossAttention,
     _pixel_attention_reference,
-    build_pixel_group_map,
-    pixel_attention,
 )
 
 triton = OptionalImport("triton")
@@ -35,6 +36,12 @@ requires_triton_cuda = pytest.mark.skipif(
     not (triton.available and torch.cuda.is_available()),
     reason="pixel cross-attention Triton kernel requires triton + CUDA",
 )
+
+if triton.available:
+    # kernels.pixel_attention imports triton eagerly, so only import it here.
+    from physicsnemo.experimental.models.healda.kernels.pixel_attention import (
+        pixel_attention,
+    )
 
 _ragged_gqa_reference = _pixel_attention_reference
 
@@ -47,17 +54,47 @@ TOKEN_DIM = 32
 _HEAD_LAYOUTS = [(16, 1), (32, 2), (64, 4)]
 
 
+def _tokenized_obs_context(tokens, counts, device=None):
+    """Build an already-tokenized ObsContext for a PixelCrossAttention test.
+
+    PixelCrossAttention only reads ``tokens``/``cu_seqlens_k``/``max_seqlen_k``;
+    the raw per-observation fields (required on ObsContext, but otherwise
+    unused here) are filled with unused placeholder data, sized to match
+    ``tokens`` (a zero-length placeholder would misleadingly claim there are
+    no observations, when there are -- just already tokenized).
+    """
+    cu = _cu_seqlens(counts)
+    nobs = tokens.shape[0]
+    if device is not None:
+        cu = cu.to(device)
+    return ObsContext(
+        tokens=tokens,
+        cu_seqlens_k=cu,
+        max_seqlen_k=max(counts) if counts else 0,
+        obs=torch.randn(nobs),
+        float_metadata=torch.randn(nobs, 1),
+        obs_type=torch.randint(0, 4, (nobs,)),
+        channel=torch.randint(0, 4, (nobs,)),
+        platform=torch.randint(0, 4, (nobs,)),
+    )
+
+
 @pytest.fixture(autouse=True)
 def _single_autotune_config(monkeypatch):
-    # Collapse the autotuner's config sweep to one config so each kernel compiles
-    # once. num_warps/num_stages are functionally irrelevant to correctness.
+    # To reduce overhead from triton autotuning when running tests, collapse the autotuner's
+    # config sweep to one config.
     if not (triton.available and torch.cuda.is_available()):
         yield
         return
-    from physicsnemo.experimental.models.healda import _pixel_attn_kernels as kernels
+    from physicsnemo.experimental.models.healda.kernels import (
+        pixel_attention as pixel_attn_kernels,
+    )
 
     one = [triton.Config({"TILE_K": 32}, num_warps=4, num_stages=2)]
-    for kernel in (kernels._pixel_attn_gqa_fwd, kernels._pixel_attn_gqa_bwd):
+    for kernel in (
+        pixel_attn_kernels._pixel_attn_gqa_fwd,
+        pixel_attn_kernels._pixel_attn_gqa_bwd,
+    ):
         monkeypatch.setattr(kernel, "configs", one, raising=False)
         if hasattr(kernel, "cache"):
             kernel.cache.clear()
@@ -286,9 +323,7 @@ def test_pixel_cross_attention_module_forward_backward():
     tokens = (
         torch.randn(sum(counts), TOKEN_DIM, generator=gen).cuda().requires_grad_(True)
     )
-    cu = _cu_seqlens(counts).cuda()
-
-    context = ObsContext(tokens=tokens, cu_seqlens_k=cu, max_seqlen_k=max(counts))
+    context = _tokenized_obs_context(tokens, counts, device="cuda")
     out = module(hidden.view(1, 1, total_pixels, module.hidden_size), context)
     assert out.shape == (1, 1, total_pixels, module.hidden_size)
     assert torch.isfinite(out).all()
@@ -311,9 +346,7 @@ def test_pixel_cross_attention_empty_tokens_grad():
     ).cuda()
     hidden = torch.randn(total_pixels, module.hidden_size).cuda()
     tokens = torch.zeros(0, TOKEN_DIM).cuda()
-    cu = torch.zeros(total_pixels + 1, dtype=torch.int32).cuda()
-
-    context = ObsContext(tokens=tokens, cu_seqlens_k=cu, max_seqlen_k=0)
+    context = _tokenized_obs_context(tokens, [0] * total_pixels, device="cuda")
     out = module(hidden.view(1, 1, total_pixels, module.hidden_size), context)
     assert out.shape == (1, 1, total_pixels, module.hidden_size)
     out.sum().backward()
@@ -364,9 +397,7 @@ def test_pixel_cross_attention_cpu_reference_forward_backward():
     )
     gen = torch.Generator().manual_seed(0)
     tokens = torch.randn(sum(counts), TOKEN_DIM, generator=gen, requires_grad=True)
-    ctx = ObsContext(
-        tokens=tokens, cu_seqlens_k=_cu_seqlens(counts), max_seqlen_k=max(counts)
-    )
+    ctx = _tokenized_obs_context(tokens, counts)
     hidden = torch.randn(1, 2, 3, module.hidden_size, requires_grad=True)
 
     out = module(hidden, ctx)
@@ -399,9 +430,7 @@ def test_pixel_cross_attention_hidden_size_differs_from_attn_dim():
     gen = torch.Generator().manual_seed(0)
     for counts in ([2, 0, 3, 1], [0, 0, 0, 0]):
         tokens = torch.randn(sum(counts), TOKEN_DIM, generator=gen)
-        ctx = ObsContext(
-            tokens=tokens, cu_seqlens_k=_cu_seqlens(counts), max_seqlen_k=max(counts)
-        )
+        ctx = _tokenized_obs_context(tokens, counts)
         hidden = torch.randn(1, 1, len(counts), hidden_size, requires_grad=True)
         out = module(hidden, ctx)
         assert out.shape == (1, 1, len(counts), hidden_size)
@@ -421,11 +450,8 @@ def test_pixel_cross_attention_cpu_all_empty_keeps_grads():
         d_head=D_HEAD,
         use_proj_bias=True,
     )
-    ctx = ObsContext(
-        tokens=torch.zeros(0, TOKEN_DIM),
-        cu_seqlens_k=torch.zeros(5, dtype=torch.int32),
-        max_seqlen_k=0,
-    )
+    tokens = torch.zeros(0, TOKEN_DIM)
+    ctx = _tokenized_obs_context(tokens, [0, 0, 0, 0])
     hidden = torch.randn(1, 1, 4, module.hidden_size, requires_grad=True)
 
     out = module(hidden, ctx)

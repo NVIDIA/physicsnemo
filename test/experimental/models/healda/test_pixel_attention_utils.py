@@ -17,7 +17,7 @@
 
 import torch
 
-from physicsnemo.experimental.models.healda.pixel_cross_attention import (
+from physicsnemo.experimental.models.healda.obs_context import (
     build_pixel_group_map,
     counts_to_cu_seqlens,
     sort_and_pack,

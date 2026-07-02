@@ -19,8 +19,8 @@
 :class:`ObsTokenizerFiLM` maps each scalar observation to an ``out_dim`` token,
 modulated by per-observation metadata; see its docstring for the FiLM math and
 conditioning layout. Triton kernels, ``torch.library.custom_op`` registration,
-and launch-config presets live in :mod:`._obs_tokenizer_kernels`, imported lazily
-by :func:`fused_film_tokenizer_triton`.
+and launch-config presets live in :mod:`~physicsnemo.experimental.models.healda.kernels.obs_tokenizer_film`, imported
+lazily by :func:`fused_film_tokenizer_triton`.
 """
 
 from typing import Optional
@@ -102,7 +102,7 @@ def fused_film_tokenizer_triton(
     w1_t = linear1.weight.t().contiguous()
     w2_t = linear2.weight.t().contiguous()
 
-    from . import _obs_tokenizer_kernels as kernels
+    from .kernels import obs_tokenizer_film as kernels
 
     return kernels.fused_film_fwd(
         obs,

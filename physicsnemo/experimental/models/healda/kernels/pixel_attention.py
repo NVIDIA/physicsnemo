@@ -14,25 +14,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Triton kernels and PyTorch integration for pixel/observation cross-attention.
+"""Triton kernels for pixel/observation cross-attention.
 
-Private backend for :mod:`..pixel_cross_attention`, imported lazily only when
-triton is installed. Contains:
+Importing this module requires triton (``tl = triton.language`` runs eagerly
+below); callers must guard the import with ``triton.available``. The
+pure-PyTorch fallback has no triton dependency and lives in
+:mod:`~physicsnemo.experimental.models.healda.pixel_cross_attention` instead. Contains:
 
-1. The ``@triton.jit`` forward/backward kernels.
+1. The ``@triton.jit`` grouped-query-attention forward/backward kernels.
 2. ``torch.library.custom_op`` wrappers with fake-tensor and autograd
    registration.
 3. The autotune config cache.
+4. :func:`pixel_attention`, the GQA dispatch entry point
+   :class:`~physicsnemo.experimental.models.healda.pixel_cross_attention.PixelCrossAttention` calls.
+5. The ``@triton.jit`` counting-sort kernel and :func:`counting_sort_and_pack`,
+   the entry point :func:`~physicsnemo.experimental.models.healda.obs_context.sort_and_pack` calls.
 """
 
 import hashlib
+import math
 import os
+from typing import Tuple
 
 import torch
 import torch.distributed as dist
+from jaxtyping import Int
 
 from physicsnemo.core.version_check import OptionalImport
-from physicsnemo.experimental.models.healda import triton_autotune_cache as tac
+
+from . import autotune_cache as tac
 
 triton = OptionalImport("triton")
 tl = triton.language
@@ -1235,3 +1245,224 @@ def _ensure_autotune_cache():
     load_autotune_cache(path)
     for tuner in _autotuners().values():
         _install_writethrough(tuner, path)
+
+
+# ---------------------------------------------------------------------------
+# Host dispatch: the Triton entry point PixelCrossAttention calls.
+# ---------------------------------------------------------------------------
+
+
+def pixel_attention(
+    Q,
+    tokens,
+    W_k,
+    W_v,
+    cu_seqlens_k,
+    max_seqlen_k,
+    n_kv_heads=1,
+    scale=None,
+    B_k=None,
+    B_v=None,
+    force_fp32=False,
+    group_map=None,
+):
+    r"""Triton-backed ragged grouped-query attention; see
+    :func:`~physicsnemo.experimental.models.healda.pixel_cross_attention._pixel_attention_reference` for the
+    equivalent pure-PyTorch computation.
+
+    Operates on a packed ragged layout: ``Q`` holds one query per pixel,
+    ``tokens`` concatenates every pixel's observation tokens, and
+    ``cu_seqlens_k`` gives the prefix sums that carve ``tokens`` into per-pixel
+    slices. For each pixel, only that pixel's token slice is projected to
+    keys/values and attended over; the kernel streams over tokens with online
+    softmax and never materializes a full attention matrix.
+
+    Parameters
+    ----------
+    Q : torch.Tensor
+        Per-pixel queries, shape :math:`(\text{total\_pixels}, n_q\_heads, d\_head)`.
+    tokens : torch.Tensor
+        Packed observation tokens, shape :math:`(N_{obs}, \text{token\_dim})`.
+    W_k, W_v : torch.Tensor
+        Key/value projection weights, shape
+        :math:`(n_{kv}\_heads \cdot d\_head, \text{token\_dim})`.
+    cu_seqlens_k : torch.Tensor
+        Int prefix sums of shape :math:`(\text{total\_pixels} + 1,)` delimiting
+        each pixel's token slice.
+    max_seqlen_k : int
+        Longest per-pixel token slice, used to size the kernel's tiling.
+    n_kv_heads : int, optional, default=1
+        Number of key/value heads. Must be 1, 2, or an even number, and must
+        divide ``n_q_heads`` with ``n_q_heads / n_kv_heads >= 16``.
+    scale : float, optional, default=None
+        Softmax logit scale. Defaults to :math:`1/\sqrt{d\_head}`.
+    B_k : torch.Tensor, optional, default=None
+        Ignored: a constant per-query shift to every key logit is cancelled
+        exactly by softmax, so it is dropped before reaching the kernel.
+    B_v : torch.Tensor, optional, default=None
+        Value projection bias, shape :math:`(n_{kv}\_heads \cdot d\_head,)`.
+    force_fp32 : bool, optional, default=False
+        Accumulate attention math in fp32 regardless of input dtype.
+    group_map : :class:`~physicsnemo.experimental.models.healda.obs_context.PixelGroupMap`, optional, default=None
+        CSR map packing several small pixels into one kernel program. When
+        ``None``, every pixel runs as its own program.
+
+    Returns
+    -------
+    torch.Tensor
+        Attention output, shape :math:`(\text{total\_pixels}, n_q\_heads, d\_head)`.
+
+    Notes
+    -----
+    For ``n_kv_heads <= 2`` this runs one kernel launch over every pixel. For
+    larger ``n_kv_heads`` it loops over sequential two-KV-head phases and
+    concatenates the outputs; each phase re-reads every token from HBM to
+    project its own key/value slice, so runtime scales ~linearly with
+    ``n_kv_heads // 2``.
+    """
+    _ensure_autotune_cache()
+    if scale is None:
+        scale = 1.0 / math.sqrt(Q.shape[-1])
+
+    n_q_heads = Q.shape[1]
+    if n_kv_heads < 1 or (n_kv_heads > 2 and n_kv_heads % 2 != 0):
+        raise ValueError(
+            f"pixel_attention requires n_kv_heads=1,2 or an even number, got {n_kv_heads}"
+        )
+    if n_q_heads % n_kv_heads != 0:
+        raise ValueError(
+            f"n_q_heads={n_q_heads} must be divisible by n_kv_heads={n_kv_heads}"
+        )
+    kv_dim = n_kv_heads * Q.shape[-1]
+    token_dim = tokens.shape[1]
+    if W_k.shape != (kv_dim, token_dim) or W_v.shape != (kv_dim, token_dim):
+        raise ValueError(
+            f"Expected W_k/W_v shape {(kv_dim, token_dim)}, "
+            f"got W_k={tuple(W_k.shape)}, W_v={tuple(W_v.shape)}"
+        )
+    if B_v is not None and B_v.shape != (kv_dim,):
+        raise ValueError(f"Expected B_v shape {(kv_dim,)}, got B_v={tuple(B_v.shape)}")
+    # See docstring: K bias is dropped, softmax cancels it exactly.
+    B_k = None
+
+    if group_map is None:
+        # Kernel expects empty tensors, not None, for the ungrouped path.
+        prog_ptr = torch.empty(0, dtype=torch.int32, device=cu_seqlens_k.device)
+        prog_pix = torch.empty(0, dtype=torch.int32, device=cu_seqlens_k.device)
+    else:
+        prog_ptr = group_map.program_ptr
+        prog_pix = group_map.program_pixels
+
+    if n_kv_heads <= 2:
+        return _pixel_attention_gqa(
+            Q,
+            tokens,
+            W_k,
+            W_v,
+            B_k,
+            B_v,
+            cu_seqlens_k,
+            prog_ptr,
+            prog_pix,
+            max_seqlen_k,
+            n_kv_heads,
+            scale,
+            force_fp32=force_fp32,
+        )
+
+    # For larger grouped-query layouts, run the same kernel in two-KV-head
+    # phases and concatenate the head blocks back in the original order.
+    n_phases = n_kv_heads // 2
+    q_per_phase = n_q_heads // n_phases
+    d_head = Q.shape[-1]
+    kv_rows_per_phase = 2 * d_head
+    outs = []
+    for p in range(n_phases):
+        q_slice = Q[:, p * q_per_phase : (p + 1) * q_per_phase]
+        wk_slice = W_k[p * kv_rows_per_phase : (p + 1) * kv_rows_per_phase]
+        wv_slice = W_v[p * kv_rows_per_phase : (p + 1) * kv_rows_per_phase]
+        bv_slice = (
+            None
+            if B_v is None
+            else B_v[p * kv_rows_per_phase : (p + 1) * kv_rows_per_phase]
+        )
+        outs.append(
+            _pixel_attention_gqa(
+                q_slice,
+                tokens,
+                wk_slice,
+                wv_slice,
+                None,
+                bv_slice,
+                cu_seqlens_k,
+                prog_ptr,
+                prog_pix,
+                max_seqlen_k,
+                2,
+                scale,
+                force_fp32=force_fp32,
+            )
+        )
+    return torch.cat(outs, dim=1)
+
+
+# ---------------------------------------------------------------------------
+# Counting sort: packs observations into the per-pixel contiguous layout
+# pixel_attention consumes. Backend for ..obs_context.sort_and_pack.
+# ---------------------------------------------------------------------------
+
+
+@triton.jit
+def _counting_sort_scatter(
+    keys_ptr,
+    sorted_order_ptr,
+    bucket_offsets_ptr,
+    N,
+    BLOCK: tl.constexpr,
+):
+    # Counting sort over N items keyed by a bounded integer: each item
+    # atomically claims the next free slot in its key's bucket and writes its
+    # source index there, producing a key-grouped permutation in one pass.
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < N
+    key = tl.load(keys_ptr + offs, mask=mask).to(tl.int64)
+    pos = tl.atomic_add(bucket_offsets_ptr + key, 1, mask=mask)
+    tl.store(sorted_order_ptr + pos.to(tl.int32), offs.to(tl.int32), mask=mask)
+
+
+def counting_sort_and_pack(
+    flat_idx: Int[torch.Tensor, " nobs"], total_pixels: int
+) -> Tuple[Int[torch.Tensor, " nobs"], Int[torch.Tensor, " total_pixels"]]:
+    r"""Sort observations by flat pixel index with a Triton counting sort (CUDA only).
+
+    For bounded integer keys a counting sort is :math:`O(N)` in a single
+    atomic-scatter pass, faster than ``argsort``'s multi-pass radix sort and
+    with lower peak memory use. Within-bucket order is non-deterministic, which is
+    fine for attention (permutation-invariant over a pixel's tokens).
+
+    Parameters
+    ----------
+    flat_idx : torch.Tensor
+        Int per-observation flat pixel indices of shape :math:`(N_{obs},)`, each
+        in :math:`[0, \text{total\_pixels})`.
+    total_pixels : int
+        Number of pixel buckets (:math:`B \cdot T \cdot X`).
+
+    Returns
+    -------
+    Tuple[torch.Tensor, torch.Tensor]
+        ``sorted_order`` (int32 permutation of shape :math:`(N_{obs},)`) and
+        ``counts`` (int64 per-pixel counts of shape
+        :math:`(\text{total\_pixels},)`).
+    """
+    n = flat_idx.shape[0]
+    device = flat_idx.device
+    counts = torch.bincount(flat_idx.long(), minlength=total_pixels)
+    bucket_offsets = torch.zeros(total_pixels, dtype=torch.int64, device=device)
+    bucket_offsets[1:] = counts[:-1].cumsum(0)
+    sorted_order = torch.empty(n, dtype=torch.int32, device=device)
+    block = 1024
+    grid = ((n + block - 1) // block,)
+    _counting_sort_scatter[grid](flat_idx, sorted_order, bucket_offsets, n, BLOCK=block)
+    return sorted_order, counts
