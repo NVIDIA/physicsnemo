@@ -533,9 +533,9 @@ def _accumulate_sampled_data(
         0, query_indices, torch.ones_like(query_indices)
     )
     if multiple_cells_strategy == "mean":
-        valid_queries = query_containment_count > 0
+        invalid_queries = query_containment_count == 0
     else:
-        valid_queries = query_containment_count == 1
+        invalid_queries = query_containment_count != 1
 
     source_data = mesh.cell_data if data_source == "cells" else mesh.point_data
     cells = mesh.cells  # captured for point-data interpolation below
@@ -550,17 +550,17 @@ def _accumulate_sampled_data(
             )
         else:
             # Missing and ambiguous samples are represented by NaN. Integer and
-            # boolean fields therefore need a floating output dtype; float64 also
-            # avoids needlessly losing precision for large integer labels.
+            # boolean fields therefore need a floating output dtype. Float64
+            # minimizes precision loss, but cannot exactly represent every int64
+            # value outside the range [-2**53, 2**53].
             output_dtype = torch.float64
 
         output_shape = (n_queries,) + values.shape[1:]
-        output = torch.full(
-            output_shape, float("nan"), dtype=output_dtype, device=device
-        )
 
         if len(query_indices) == 0:
-            return output
+            return torch.full(
+                output_shape, float("nan"), dtype=output_dtype, device=device
+            )
 
         ### Compute per-pair values
         if data_source == "cells":
@@ -584,24 +584,24 @@ def _accumulate_sampled_data(
         else:
             raise ValueError(f"Invalid {data_source=!r}. Must be 'cells' or 'points'.")
 
-        ### Scatter-accumulate into output
-        output_sum = torch.zeros(output_shape, dtype=output_dtype, device=device)
+        ### Scatter directly into the result buffer. The following in-place
+        ### normalization and masking preserve autograd while avoiding redundant
+        ### full-sized output, division, and ``where`` tensors.
+        output = torch.zeros(output_shape, dtype=output_dtype, device=device)
         idx_expanded = query_indices.view(-1, *([1] * (values.ndim - 1))).expand_as(
             pair_values
         )
-        output_sum.scatter_add_(0, idx_expanded, pair_values)
+        output.scatter_add_(0, idx_expanded, pair_values)
 
         count_shape = (-1,) + (1,) * (values.ndim - 1)
         if multiple_cells_strategy == "mean":
-            divisor = (
-                query_containment_count.clamp_min(1).to(output_dtype).view(count_shape)
-            )
-            sampled = output_sum / divisor
-        else:
-            sampled = output_sum
+            # Clamp in integer space because ``clamp_min`` rejects complex dtypes.
+            divisor = query_containment_count.clamp_min(1)
+            output.div_(divisor.view(count_shape))
 
-        # Avoid boolean-index compaction and its device-to-host synchronization.
-        output = torch.where(valid_queries.view(count_shape), sampled, output)
+        # Mask in place instead of compacting a CUDA boolean mask. Together with
+        # the fixed-size count scatter above, this reduces host synchronizations.
+        output.masked_fill_(invalid_queries.view(count_shape), float("nan"))
 
         return output
 
@@ -672,7 +672,15 @@ def sample_data_at_points(
     TensorDict
         Sampled data for each query point, with the same keys as
         ``mesh.cell_data`` or ``mesh.point_data`` (depending on
-        ``data_source``). Values are NaN for query points outside the mesh.
+        ``data_source``). Values are NaN for query points outside the mesh, and
+        for ambiguous points when ``multiple_cells_strategy="nan"``.
+
+        Floating-point and complex cell data retain their source dtype. For
+        floating-point and complex point data, interpolation uses the dtype
+        resulting from promoting the field dtype with ``mesh.points.dtype``.
+        Integer and boolean data are promoted to ``torch.float64`` so that NaN
+        and non-integral interpolated or mean values can be represented. This
+        conversion may round integer values whose magnitude exceeds ``2**53``.
 
     Raises
     ------
