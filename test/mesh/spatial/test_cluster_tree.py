@@ -297,10 +297,10 @@ def test_source_aggregates_match_bruteforce(device):
 
 
 def test_source_aggregates_use_call_time_weights(device):
-    """Runtime weights, not construction weights, normalize each aggregate."""
+    """Runtime weights normalize aggregates, including zero-weight subtrees."""
     points = torch.tensor([[0.0, 0.0], [2.0, 0.0], [5.0, 0.0]], device=device)
     construction_areas = torch.ones(3, device=device)
-    runtime_areas = torch.tensor([1.0, 2.0, 7.0], device=device)
+    runtime_areas = torch.tensor([0.0, 2.0, 7.0], device=device)
     data = TensorDict(
         {"value": torch.tensor([[1.0], [4.0], [9.0]], device=device)},
         batch_size=[3],
@@ -313,8 +313,14 @@ def test_source_aggregates_use_call_time_weights(device):
     for node in range(tree.n_nodes):
         ids = _subtree_point_ids(tree, node)
         weights = runtime_areas[ids]
-        expected_centroid = (points[ids] * weights[:, None]).sum(0) / weights.sum()
-        expected_value = (data["value"][ids] * weights[:, None]).sum(0) / weights.sum()
+        total_weight = weights.sum()
+        if total_weight == 0:
+            assert aggregates.node_centroid[node].eq(0).all()
+            assert aggregates.node_source_data["value"][node].eq(0).all()
+            continue
+
+        expected_centroid = (points[ids] * weights[:, None]).sum(0) / total_weight
+        expected_value = (data["value"][ids] * weights[:, None]).sum(0) / total_weight
         torch.testing.assert_close(aggregates.node_centroid[node], expected_centroid)
         torch.testing.assert_close(
             aggregates.node_source_data["value"][node], expected_value
