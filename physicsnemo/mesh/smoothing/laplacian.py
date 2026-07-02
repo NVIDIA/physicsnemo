@@ -115,8 +115,8 @@ def smooth_laplacian(
 
     Notes
     -----
-    - Cotangent weights are used for codimension-1 manifolds (surfaces, curves)
-    - Uniform weights are used for higher codimension or volumetric meshes
+    - Cotangent weights are used for codimension-1 manifolds of dimension >= 2
+    - Uniform weights are used for curves, higher codimension, or volumetric meshes
     - Feature detection only works for codimension-1 manifolds where normals exist
     - Cell connectivity and all data fields are preserved (only points move)
     """

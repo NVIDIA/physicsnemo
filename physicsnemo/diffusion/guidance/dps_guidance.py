@@ -23,14 +23,20 @@ from jaxtyping import Bool, Float
 from torch import Tensor
 
 from physicsnemo.diffusion.base import Predictor
+from physicsnemo.diffusion.utils.utils import _as_broadcastable
 
 
-def _lp_loss_fn(p: int) -> Callable[[Tensor, Tensor], Tensor]:
-    """Return a per-batch-element Lp loss function with exponent ``p``."""
+def _lp_loss_fn(
+    p: int,
+) -> Callable[
+    [Float[Tensor, " *shape"], Float[Tensor, " *shape"]], Float[Tensor, " *shape"]
+]:
+    """
+    Return a pointwise (not reduced) Lp residual function with exponent ``p``.
+    """
 
     def _loss(y_pred: Tensor, y_true: Tensor) -> Tensor:
-        residual = (y_pred - y_true).reshape(y_pred.shape[0], -1)
-        return residual.abs().pow(p).sum(dim=1)
+        return (y_pred - y_true).abs().pow(p)
 
     return _loss
 
@@ -49,14 +55,17 @@ class DPSGuidance(Protocol):
     The typical form is:
 
     .. math::
-        \rho(t) \nabla_{\mathbf{x}}
-        \ell(A(\hat{\mathbf{x}}_0) - \mathbf{y})
+        \nabla_{\mathbf{x}} \sum_i \boldsymbol{\rho}_i(t)\,
+        \ell\big( A(\hat{\mathbf{x}}_0),\, \mathbf{y} \big)_i
 
-    where :math:`\rho(t)` is a time-dependent guidance strength,
-    :math:`A` is a (potentially nonlinear) observation operator,
-    :math:`\mathbf{y}` is the observed data, and :math:`\ell` is a scalar loss
-    function. However, variants are possible as long as the guidance produces
-    a quantity similar to a score (e.g., a likelihood score).
+    where :math:`A` is a (potentially nonlinear) observation operator,
+    :math:`\mathbf{y}` is the observed data, :math:`\ell` is an elementwise
+    loss, :math:`i` indexes the observation components, and
+    :math:`\boldsymbol{\rho}(t)` is a time-dependent guidance strength. The
+    strength can be a scalar (uniform over all observation components) or a
+    tensor giving a different strength to each observation component (e.g.
+    per-channel or spatially varying). Variants are possible as long as the
+    guidance produces a quantity similar to a score (e.g. a likelihood score).
 
     This is the minimal interface for guidance, and any object that implements
     this interface can be used with :class:`DPSScorePredictor` to build a guided
@@ -442,16 +451,25 @@ class ModelConsistencyDPSGuidance(DPSGuidance):
 
     .. math::
         \nabla_{\mathbf{x}} \log p(\mathbf{y} | \mathbf{x}_t)
-        = -\frac{1}{2 \left( \sigma_y^2 + \Gamma \frac{\sigma(t)^2}{\alpha(t)^2}
-        \right)} \nabla_{\mathbf{x}}
-        \| A\left(\hat{\mathbf{x}}_0\right) - \mathbf{y} \|^2
+        = -\nabla_{\mathbf{x}} \sum_i
+          \frac{\big( A(\hat{\mathbf{x}}_0) - \mathbf{y} \big)_i^2}
+               {2 \left( \sigma_{y,i}^2 + \Gamma_i\, \sigma(t)^2 / \alpha(t)^2
+               \right)}
 
-    where :math:`A` is the observation operator and the scaling incorporates
-    a Score-Based Data Assimilation (SDA) correction through the parameter
-    :math:`\Gamma` that accounts for the covariance of the
-    :math:`\hat{\mathbf{x}}_0(\mathbf{x}_t, t)` estimate at different diffusion
-    times. The L2 norm can be replaced by other Lp norms or custom loss
-    functions via the ``norm`` parameter.
+    where :math:`i` indexes the observation components, :math:`\sigma_{y,i}`
+    (``std_y``) is the per-component measurement-noise standard deviation, and
+    :math:`\Gamma_i` (``gamma``) the per-component Score-Based Data Assimilation
+    (SDA) scaling, accounting for the covariance of
+    :math:`\hat{\mathbf{x}}_0(\mathbf{x}_t, t)` across diffusion times.
+
+    .. note::
+
+        Replacing the squared-error loss by another :math:`L^p` norm or a
+        custom loss via ``norm`` is **not** equivalent to assuming a
+        Generalized Normal measurement likelihood.
+        It is instead an ad hoc modification
+        of the usual Gaussian likelihood (which is based on the :math:`L^2`
+        distance between predicted and observed data).
 
     The ``observation_operator`` must be a differentiable callable with the
     following signature:
@@ -462,14 +480,15 @@ class ModelConsistencyDPSGuidance(DPSGuidance):
             x_0: Tensor,  # shape: (B, *dims)
         ) -> Tensor: ...  # predicted observations, shape: (B, *obs_dims)
 
-    When ``norm`` is a callable, it must have the following signature:
+    When ``norm`` is a callable, it must be an elementwise loss with the
+    signature:
 
     .. code-block:: python
 
         def norm(
             y_pred: Tensor,  # shape: (B, *obs_dims)
             y_true: Tensor,  # shape: (B, *obs_dims)
-        ) -> Tensor: ...    # scalar loss per batch element, shape: (B,)
+        ) -> Tensor: ...    # elementwise loss, shape: (B, *obs_dims)
 
     Parameters
     ----------
@@ -479,18 +498,24 @@ class ModelConsistencyDPSGuidance(DPSGuidance):
     y : Tensor
         Observed data of shape :math:`(B, *obs\_dims)` matching the output
         of ``A``.
-    std_y : float
-        Standard deviation of the measurement noise :math:`\sigma_y`.
-    norm : int | Callable[[Tensor, Tensor], Tensor], default=2
-        Loss function used to compute the residual. An ``int`` value (default
-        ``2``) uses the corresponding Lp norm. A callable receives
-        ``(y_pred, y_true)`` and returns a scalar loss per batch element of
-        shape :math:`(B,)`.
-    gamma : float, default=0.0
-        SDA covariance scaling factor :math:`\Gamma`. When ``gamma > 0``,
-        applies SDA correction that accounts for the covariance of the
-        :math:`\hat{\mathbf{x}}_0` estimate at different noise levels. Set
-        to ``0`` for classical DPS without SDA scaling.
+    std_y : float or Tensor
+        Standard deviation of the measurement noise
+        :math:`\boldsymbol{\sigma}_y`. A ``float`` uses a single standard
+        deviation for every observation component. A ``Tensor`` must broadcast
+        to the observation ``y`` shape, so the guidance weights each component
+        differently.
+    norm : int or Callable[[Tensor, Tensor], Tensor], default=2
+        Residual loss. An ``int`` value (default ``2``) selects the
+        corresponding :math:`L^p` norm. A callable receives ``(y_pred,
+        y_true)`` and must return an elementwise loss with the same shape as
+        its inputs; see the code block above.
+    gamma : float or Tensor, default=0.0
+        SDA covariance scaling factor :math:`\boldsymbol{\Gamma}`. When any
+        entry is positive, applies the SDA correction that accounts for the
+        covariance of the :math:`\hat{\mathbf{x}}_0` estimate at different noise
+        levels (``sigma_fn`` is then required). Set to ``0`` for classical DPS
+        without SDA scaling. Like ``std_y``, may be a ``float`` or a ``Tensor``
+        broadcastable to the observation.
     sigma_fn : Callable[[Tensor], Tensor] | None, default=None
         Function mapping diffusion time to noise level :math:`\sigma(t)`.
         Required when ``gamma > 0``. Typically obtained from a noise
@@ -581,7 +606,11 @@ class ModelConsistencyDPSGuidance(DPSGuidance):
     >>> score.shape
     torch.Size([1, 3, 8, 8])
 
-    **Example 2:** With SDA scaling using noise scheduler methods:
+    **Example 2:** SDA scaling using noise scheduler methods and
+    **per-channel** tensor parameters.
+    Here ``std_y`` and ``gamma`` are tensors broadcast over the two observed
+    channels, assigning a different measurement-noise level and SDA scaling to
+    each:
 
     >>> import torch
     >>> from physicsnemo.diffusion.guidance import (
@@ -592,16 +621,18 @@ class ModelConsistencyDPSGuidance(DPSGuidance):
     >>>
     >>> scheduler = EDMNoiseScheduler()
     >>>
-    >>> # Linear observation operator (select first channel)
-    >>> A = lambda x: x[:, :1]
-    >>> y_obs = torch.randn(1, 1, 8, 8)
+    >>> # Observation operator selecting the first two channels
+    >>> A = lambda x: x[:, :2]
+    >>> y_obs = torch.randn(1, 2, 8, 8)
     >>>
-    >>> # Enable SDA scaling with gamma > 0, providing sigma and alpha functions
+    >>> # Per-channel measurement noise and SDA scaling, broadcast shape (1, C_obs, 1, 1)
+    >>> std_y = torch.tensor([0.05, 0.15]).reshape(1, 2, 1, 1)
+    >>> gamma = torch.tensor([0.02, 0.08]).reshape(1, 2, 1, 1)
     >>> guidance = ModelConsistencyDPSGuidance(
     ...     observation_operator=A,
     ...     y=y_obs,
-    ...     std_y=0.075,
-    ...     gamma=0.05,  # Enable SDA scaling
+    ...     std_y=std_y,
+    ...     gamma=gamma,  # per-channel SDA scaling (requires sigma_fn)
     ...     sigma_fn=scheduler.sigma,
     ...     alpha_fn=scheduler.alpha,
     ... )
@@ -624,16 +655,15 @@ class ModelConsistencyDPSGuidance(DPSGuidance):
     >>> score.shape
     torch.Size([1, 3, 8, 8])
 
-    **Example 3:** With a custom loss function (Huber loss):
+    **Example 3:** With a custom elementwise loss (Huber loss):
 
     >>> import torch
     >>> import torch.nn.functional as F
     >>> from physicsnemo.diffusion.guidance import ModelConsistencyDPSGuidance
     >>>
-    >>> # Wrap torch's Huber loss to return per-batch scalars
+    >>> # Elementwise Huber loss (no reduction)
     >>> def huber_loss(y_pred, y_true):
-    ...     per_elem = F.huber_loss(y_pred, y_true, reduction="none")
-    ...     return per_elem.reshape(y_pred.shape[0], -1).sum(dim=1)
+    ...     return F.huber_loss(y_pred, y_true, reduction="none")
     ...
     >>> A = lambda x: x[:, :1]  # Select first channel
     >>> y_obs = torch.randn(1, 1, 8, 8)
@@ -659,13 +689,13 @@ class ModelConsistencyDPSGuidance(DPSGuidance):
             [Float[Tensor, " B *dims"]], Float[Tensor, " B *obs_dims"]
         ],
         y: Float[Tensor, " B *obs_dims"],
-        std_y: float,
+        std_y: float | Float[Tensor, " #B *#obs_dims"],
         norm: int
         | Callable[
             [Float[Tensor, " B *obs_dims"], Float[Tensor, " B *obs_dims"]],
-            Float[Tensor, " B"],
+            Float[Tensor, " B *obs_dims"],
         ] = 2,
-        gamma: float = 0.0,
+        gamma: float | Float[Tensor, " #B *#obs_dims"] = 0.0,
         sigma_fn: Callable[[Float[Tensor, " *shape"]], Float[Tensor, " *shape"]]
         | None = None,
         alpha_fn: Callable[[Float[Tensor, " *shape"]], Float[Tensor, " *shape"]]
@@ -673,16 +703,17 @@ class ModelConsistencyDPSGuidance(DPSGuidance):
         retain_graph: bool = False,
         create_graph: bool = False,
     ) -> None:
-        if gamma > 0 and sigma_fn is None:
-            raise ValueError("sigma_fn must be provided when gamma > 0")
         self.observation_operator = observation_operator
         self.y = y
-        self.std_y = std_y
+        # std_y / gamma are stored as tensors broadcastable to the observation
+        self.std_y = _as_broadcastable(std_y, y)
+        self.gamma = _as_broadcastable(gamma, y)
+        if sigma_fn is None and (self.gamma > 0).any():
+            raise ValueError("sigma_fn must be provided when gamma > 0")
         if isinstance(norm, int):
             self._loss_fn: Callable[[Tensor, Tensor], Tensor] = _lp_loss_fn(norm)
         else:
             self._loss_fn = norm
-        self.gamma = gamma
         self.sigma_fn = (
             sigma_fn if sigma_fn is not None else lambda t: torch.zeros_like(t)
         )
@@ -729,25 +760,26 @@ class ModelConsistencyDPSGuidance(DPSGuidance):
             )
 
         y = self.y.to(dtype=x.dtype, device=x.device)
+        std_y = self.std_y.to(dtype=x.dtype, device=x.device)
+        gamma = self.gamma.to(dtype=x.dtype, device=x.device)
 
         with torch.enable_grad():
             y_pred = self.observation_operator(x_0)
             loss = self._loss_fn(y_pred, y)
+            # Guidance strength rho(t), broadcast over the observation.
+            bc_shape = (-1,) + (1,) * (loss.ndim - 1)
+            t_bc = t.reshape(bc_shape)  # (B, 1, ..., 1)
+            sigma_t = self.sigma_fn(t_bc)
+            alpha_t = self.alpha_fn(t_bc)
+            rho = 1.0 / (2.0 * (std_y**2 + gamma * (sigma_t**2) / (alpha_t**2)))
             grad_x = torch.autograd.grad(
-                outputs=loss.sum(),
+                outputs=(rho * loss).sum(),
                 inputs=x,
                 retain_graph=self.retain_graph,
                 create_graph=self.create_graph,
             )[0]
 
-        # Compute scaling factor
-        expected_shape = (-1,) + (1,) * (x.ndim - 1)
-        t_bc = t.reshape(expected_shape)
-        sigma_t = self.sigma_fn(t_bc)
-        alpha_t = self.alpha_fn(t_bc)
-        variance = self.std_y**2 + self.gamma * (sigma_t**2) / (alpha_t**2)
-
-        return -grad_x / (2 * variance)
+        return -grad_x
 
 
 class DataConsistencyDPSGuidance(DPSGuidance):
@@ -765,24 +797,31 @@ class DataConsistencyDPSGuidance(DPSGuidance):
 
     .. math::
         \nabla_{\mathbf{x}} \log p(\mathbf{y} | \mathbf{x}_t)
-        = -\frac{1}{2 \left( \sigma_y^2 + \Gamma \frac{\sigma(t)^2}{\alpha(t)^2}
-        \right)} \nabla_{\mathbf{x}}
-        \| \mathbf{M} \odot (\hat{\mathbf{x}}_0 - \mathbf{y}) \|^2
+        = -\nabla_{\mathbf{x}} \sum_i
+          \frac{\big( \mathbf{M} \odot (\hat{\mathbf{x}}_0 - \mathbf{y}) \big)_i^2}
+               {2 \left( \sigma_{y,i}^2 + \Gamma_i\, \sigma(t)^2 / \alpha(t)^2
+               \right)}
 
-    where :math:`\mathbf{M}` is a binary mask (1 = observed, 0 = missing),
-    :math:`\odot` denotes element-wise multiplication, and the scaling
-    incorporates an SDA correction through the parameter :math:`\Gamma`. The
-    L2 norm can be replaced by other Lp norms or custom loss functions via the
-    ``norm`` parameter.
+    where :math:`\mathbf{M}` is a binary mask (1 = observed, 0 = missing) and
+    :math:`\odot` element-wise multiplication. See
+    :class:`ModelConsistencyDPSGuidance` for :math:`\sigma_{y,i}` (``std_y``),
+    :math:`\Gamma_i` (``gamma``), and the SDA scaling.
 
-    When ``norm`` is a callable, it must have the following signature:
+    .. note::
+
+        Using a ``norm`` other than the default squared error is an ad hoc
+        modification of the Gaussian likelihood, not a Generalized Normal
+        likelihood (see :class:`ModelConsistencyDPSGuidance`).
+
+    When ``norm`` is a callable, it must be an elementwise loss with the
+    signature:
 
     .. code-block:: python
 
         def norm(
             y_pred: Tensor,  # shape: (B, *obs_dims)
             y_true: Tensor,  # shape: (B, *obs_dims)
-        ) -> Tensor: ...    # scalar loss per batch element, shape: (B,)
+        ) -> Tensor: ...    # elementwise loss, shape: (B, *obs_dims)
 
     Parameters
     ----------
@@ -792,18 +831,24 @@ class DataConsistencyDPSGuidance(DPSGuidance):
     y : Tensor
         Observed data of shape :math:`(B, *)` matching the state shape.
         Values at unobserved locations (where ``mask=0``) are ignored.
-    std_y : float
-        Standard deviation of the measurement noise :math:`\sigma_y`.
-    norm : int | Callable[[Tensor, Tensor], Tensor], default=2
-        Loss function used to compute the residual. An ``int`` value (default
-        ``2``) uses the corresponding Lp norm. A callable receives
-        ``(mask * x_0, mask * y)`` and returns a scalar loss per batch element
-        of shape :math:`(B,)`.
-    gamma : float, default=0.0
-        SDA covariance scaling factor :math:`\Gamma`. When ``gamma > 0``,
-        applies SDA correction that accounts for the covariance of the
-        :math:`\hat{\mathbf{x}}_0` estimate at different noise levels. Set
-        to ``0`` for classical DPS without SDA scaling.
+    std_y : float or Tensor
+        Standard deviation of the measurement noise
+        :math:`\boldsymbol{\sigma}_y`. A ``float`` applies a single standard
+        deviation everywhere. A ``Tensor`` must broadcast to the state
+        :math:`(B, *)` (e.g. ``(1, C, 1, 1)`` for a per-channel standard
+        deviation, or the full state shape for a pointwise standard deviation).
+    norm : int or Callable[[Tensor, Tensor], Tensor], default=2
+        Residual loss. An ``int`` value (default ``2``) selects the
+        corresponding :math:`L^p` norm. A callable receives ``(x_0, y)`` and
+        must return an elementwise loss with the same shape as its inputs (the
+        mask is applied to the result); see the code block above.
+    gamma : float or Tensor, default=0.0
+        SDA covariance scaling factor :math:`\boldsymbol{\Gamma}`. When any
+        entry is positive, applies the SDA correction that accounts for the
+        covariance of the :math:`\hat{\mathbf{x}}_0` estimate at different noise
+        levels (``sigma_fn`` is then required). Set to ``0`` for classical DPS
+        without SDA scaling. Like ``std_y``, may be a ``float`` or a ``Tensor``
+        broadcastable to the state.
     sigma_fn : Callable[[Tensor], Tensor] | None, default=None
         Function mapping diffusion time to noise level :math:`\sigma(t)`.
         Required when ``gamma > 0``. Typically obtained from a noise
@@ -885,7 +930,10 @@ class DataConsistencyDPSGuidance(DPSGuidance):
     >>> score.shape
     torch.Size([1, 3, 8, 8])
 
-    **Example 2:** With SDA scaling and L1 norm using noise scheduler:
+    **Example 2:** SDA scaling and an L1 norm, with **per-channel** tensor
+    parameters, and using noise scheduler methods; ``std_y`` and ``gamma`` are
+    tensors broadcast over the three channels, assigning a different noise
+    level and SDA scaling to each:
 
     >>> import torch
     >>> from physicsnemo.diffusion.guidance import (
@@ -903,13 +951,15 @@ class DataConsistencyDPSGuidance(DPSGuidance):
     >>> mask[:, :, 1, 7] = True
     >>> y_obs = torch.randn(1, 3, 8, 8)
     >>>
-    >>> # Enable SDA scaling and use L1 norm for robustness
+    >>> # Per-channel noise level and SDA scaling, broadcast shape (1, C, 1, 1)
+    >>> std_y = torch.tensor([0.05, 0.075, 0.1]).reshape(1, 3, 1, 1)
+    >>> gamma = torch.tensor([0.5, 1.0, 1.5]).reshape(1, 3, 1, 1)
     >>> guidance = DataConsistencyDPSGuidance(
     ...     mask=mask,
     ...     y=y_obs,
-    ...     std_y=0.075,
+    ...     std_y=std_y,
     ...     norm=1,  # L1 norm
-    ...     gamma=1.0,  # Enable SDA scaling
+    ...     gamma=gamma,  # per-channel SDA scaling (requires sigma_fn)
     ...     sigma_fn=scheduler.sigma,
     ...     alpha_fn=scheduler.alpha,
     ... )
@@ -932,27 +982,47 @@ class DataConsistencyDPSGuidance(DPSGuidance):
     >>> score.shape
     torch.Size([1, 3, 8, 8])
 
-    **Example 3:** With a custom loss function (Huber loss):
+    **Example 3:** Sparse probe observations with a **per-probe** measurement
+    noise and a custom elementwise (Huber) loss; ``std_y`` is a pointwise tensor
+    that sets an independent measurement noise standard deviation at each probe
+    (only its entries at observed locations matter), while ``gamma`` stays a
+    scalar:
 
     >>> import torch
     >>> import torch.nn.functional as F
-    >>> from physicsnemo.diffusion.guidance import DataConsistencyDPSGuidance
+    >>> from physicsnemo.diffusion.guidance import (
+    ...     DataConsistencyDPSGuidance,
+    ...     DPSScorePredictor,
+    ... )
+    >>> from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
     >>>
-    >>> # Wrap torch's Huber loss to return per-batch scalars
+    >>> scheduler = EDMNoiseScheduler()
+    >>>
+    >>> # Elementwise Huber loss (no reduction)
     >>> def huber_loss(y_pred, y_true):
-    ...     per_elem = F.huber_loss(y_pred, y_true, reduction="none")
-    ...     return per_elem.reshape(y_pred.shape[0], -1).sum(dim=1)
+    ...     return F.huber_loss(y_pred, y_true, reduction="none")
     ...
+    >>> # Sparse probe locations
     >>> mask = torch.zeros(1, 3, 8, 8, dtype=torch.bool)
-    >>> mask[:, :, 2, 3] = True
-    >>> mask[:, :, 5, 6] = True
+    >>> mask[:, :, 2, 3] = True  # Probe at (2, 3)
+    >>> mask[:, :, 5, 6] = True  # Probe at (5, 6)
+    >>> mask[:, :, 1, 7] = True  # Probe at (1, 7)
     >>> y_obs = torch.randn(1, 3, 8, 8)
     >>>
+    >>> # Per-probe measurement noise; entries away from the probes
+    >>> # are unused but must stay finite and positive
+    >>> std_y = torch.ones(1, 3, 8, 8)
+    >>> std_y[:, :, 2, 3] = 0.05  # tight probe
+    >>> std_y[:, :, 5, 6] = 0.1
+    >>> std_y[:, :, 1, 7] = 0.3   # loose probe
     >>> guidance = DataConsistencyDPSGuidance(
     ...     mask=mask,
     ...     y=y_obs,
-    ...     std_y=0.1,
-    ...     norm=huber_loss,  # Custom loss function
+    ...     std_y=std_y,         # per-probe measurement noise
+    ...     norm=huber_loss,     # custom elementwise loss
+    ...     gamma=1.0,           # scalar SDA scaling
+    ...     sigma_fn=scheduler.sigma,
+    ...     alpha_fn=scheduler.alpha,
     ... )
     >>>
     >>> x = torch.randn(1, 3, 8, 8, requires_grad=True)
@@ -961,19 +1031,30 @@ class DataConsistencyDPSGuidance(DPSGuidance):
     >>> output = guidance(x, t, x_0)
     >>> output.shape
     torch.Size([1, 3, 8, 8])
+    >>>
+    >>> # Use with DPSScorePredictor and scheduler's x0_to_score
+    >>> x0_predictor = lambda x, t: x * 0.9
+    >>> dps_score_pred = DPSScorePredictor(
+    ...     x0_predictor=x0_predictor,
+    ...     x0_to_score_fn=scheduler.x0_to_score,
+    ...     guidances=guidance,
+    ... )
+    >>> score = dps_score_pred(x, t)
+    >>> score.shape
+    torch.Size([1, 3, 8, 8])
     """
 
     def __init__(
         self,
         mask: Bool[Tensor, " B *dims"],
         y: Float[Tensor, " B *dims"],
-        std_y: float,
+        std_y: float | Float[Tensor, " #B *#dims"],
         norm: int
         | Callable[
             [Float[Tensor, " B *dims"], Float[Tensor, " B *dims"]],  # noqa: F821
-            Float[Tensor, " B"],
+            Float[Tensor, " B *dims"],  # noqa: F821
         ] = 2,
-        gamma: float = 0.0,
+        gamma: float | Float[Tensor, " #B *#dims"] = 0.0,
         sigma_fn: Callable[[Float[Tensor, " *shape"]], Float[Tensor, " *shape"]]
         | None = None,
         alpha_fn: Callable[[Float[Tensor, " *shape"]], Float[Tensor, " *shape"]]
@@ -981,16 +1062,18 @@ class DataConsistencyDPSGuidance(DPSGuidance):
         retain_graph: bool = False,
         create_graph: bool = False,
     ) -> None:
-        if gamma > 0 and sigma_fn is None:
-            raise ValueError("sigma_fn must be provided when gamma > 0")
         self.mask = mask.float()
         self.y = y
-        self.std_y = std_y
+        # std_y / gamma are stored as tensors broadcastable to the state
+        # (a scalar broadcasts to every component).
+        self.std_y = _as_broadcastable(std_y, y)
+        self.gamma = _as_broadcastable(gamma, y)
+        if sigma_fn is None and (self.gamma > 0).any():
+            raise ValueError("sigma_fn must be provided when gamma > 0")
         if isinstance(norm, int):
             self._loss_fn: Callable[[Tensor, Tensor], Tensor] = _lp_loss_fn(norm)
         else:
             self._loss_fn = norm
-        self.gamma = gamma
         self.sigma_fn = (
             sigma_fn if sigma_fn is not None else lambda t: torch.zeros_like(t)
         )
@@ -1038,23 +1121,23 @@ class DataConsistencyDPSGuidance(DPSGuidance):
 
         mask = self.mask.to(dtype=x.dtype, device=x.device)
         y = self.y.to(dtype=x.dtype, device=x.device)
+        std_y = self.std_y.to(dtype=x.dtype, device=x.device)
+        gamma = self.gamma.to(dtype=x.dtype, device=x.device)
 
         with torch.enable_grad():
-            y_pred = mask * x_0
-            y_true = mask * y
-            loss = self._loss_fn(y_pred, y_true)
+            # Elementwise loss on the full state, then keep observed locations.
+            loss = mask * self._loss_fn(x_0, y)
+            # Guidance strength rho(t), broadcast over the state.
+            bc_shape = (-1,) + (1,) * (loss.ndim - 1)
+            t_bc = t.reshape(bc_shape)  # (B, 1, ..., 1)
+            sigma_t = self.sigma_fn(t_bc)
+            alpha_t = self.alpha_fn(t_bc)
+            rho = 1.0 / (2.0 * (std_y**2 + gamma * (sigma_t**2) / (alpha_t**2)))
             grad_x = torch.autograd.grad(
-                outputs=loss.sum(),
+                outputs=(rho * loss).sum(),
                 inputs=x,
                 retain_graph=self.retain_graph,
                 create_graph=self.create_graph,
             )[0]
 
-        # Compute scaling factor
-        expected_shape = (-1,) + (1,) * (x.ndim - 1)
-        t_bc = t.reshape(expected_shape)
-        sigma_t = self.sigma_fn(t_bc)
-        alpha_t = self.alpha_fn(t_bc)
-        variance = self.std_y**2 + self.gamma * (sigma_t**2) / (alpha_t**2)
-
-        return -grad_x / (2 * variance)
+        return -grad_x
