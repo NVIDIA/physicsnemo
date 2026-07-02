@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import enum
 import threading
 import warnings
@@ -163,7 +164,15 @@ class _ShardTensorToDTensor(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output: DTensor):
-        return (_dtensor_to_shard_tensor(grad_output, ctx.shard_tensor_spec),)
+        cached_spec = ctx.shard_tensor_spec
+        grad_placements = tuple(grad_output._spec.placements)
+        # Keep the cached uneven sharding shapes, but adopt the gradient's
+        # placements so a Replicate->Partial flip isn't dropped (which would
+        # skip the all-reduce at the plain-tensor boundary). Shard dims are
+        # unchanged, so the cached shard shapes stay valid.
+        if grad_placements != tuple(cached_spec.placements):
+            cached_spec = dataclasses.replace(cached_spec, placements=grad_placements)
+        return (_dtensor_to_shard_tensor(grad_output, cached_spec),)
 
 
 # ============================================================================

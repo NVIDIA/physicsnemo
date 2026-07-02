@@ -27,7 +27,7 @@ Backward (gradient) correctness is tested for every configuration.
 
 import pytest
 import torch
-from torch.distributed.tensor.placement_types import Shard
+from torch.distributed.tensor.placement_types import Replicate, Shard
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.domain_parallel import scatter_tensor
@@ -658,7 +658,7 @@ def test_view_dtype_invalid_byte_size(distributed_mesh):
         original_tensor,
         global_src=0,
         mesh=distributed_mesh,
-        placements=(Shard(0),),
+        placements=(Replicate(),),
         requires_grad=False,
     )
 
