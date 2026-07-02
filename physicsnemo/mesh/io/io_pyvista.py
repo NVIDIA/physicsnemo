@@ -294,9 +294,8 @@ def from_pyvista(
         if isinstance(pyvista_mesh, pv.PolyData):
             tri_faces = _maybe_copy(pyvista_mesh.regular_faces)
         elif isinstance(pyvista_mesh, pv.UnstructuredGrid):
-            tri_faces = _maybe_copy(
-                pyvista_mesh.cells_dict[np.uint8(pv.CellType.TRIANGLE)]
-            )
+            # cells_dict materializes independent regular connectivity arrays.
+            tri_faces = pyvista_mesh.cells_dict[np.uint8(pv.CellType.TRIANGLE)]
         else:
             raise NotImplementedError(
                 f"Only PolyData and UnstructuredGrid are supported for manifold dimension 2, got {type(pyvista_mesh)=}."
@@ -311,7 +310,8 @@ def from_pyvista(
             raise ValueError(
                 f"Expected tetrahedral cells after triangulation, but got {list(cells_dict.keys())}"
             )
-        tetra_cells = _maybe_copy(cells_dict[np.uint8(pv.CellType.TETRA)])
+        # cells_dict materializes independent regular connectivity arrays.
+        tetra_cells = cells_dict[np.uint8(pv.CellType.TETRA)]
         cells = torch.from_numpy(tetra_cells).long()
 
     ### Return Mesh object
@@ -372,11 +372,9 @@ def to_pyvista(
     # .detach() first so a grad-tracked mesh can still be exported (.numpy() would
     # otherwise raise on a tensor that requires grad).
     points_np = mesh.points.detach().float().cpu().numpy()
-    if force_copy:
-        points_np = points_np.copy()
 
     if mesh.n_spatial_dims < 3:
-        # Pad with zeros to make 3D
+        # Pad with zeros to make 3D. np.pad already returns independent storage.
         padding_width = 3 - mesh.n_spatial_dims
         points_np = np.pad(
             points_np,
@@ -384,6 +382,8 @@ def to_pyvista(
             mode="constant",
             constant_values=0.0,
         )
+    elif force_copy:
+        points_np = points_np.copy()
 
     ### Convert based on manifold dimension
     if mesh.n_manifold_dims == 0:
@@ -391,26 +391,23 @@ def to_pyvista(
 
     elif mesh.n_manifold_dims == 1:
         cells_np = mesh.cells.cpu().numpy()
-        if force_copy:
-            cells_np = cells_np.copy()
         if mesh.n_cells == 0:
             pv_mesh = pv.PolyData(points_np)
         else:
+            # _to_vtk_cell_array returns independent VTK-format connectivity.
             pv_mesh = pv.PolyData(points_np, lines=_to_vtk_cell_array(cells_np))
 
     elif mesh.n_manifold_dims == 2:
         cells_np = mesh.cells.cpu().numpy()
-        if force_copy:
-            cells_np = cells_np.copy()
         if mesh.n_cells == 0:
             pv_mesh = pv.PolyData(points_np)
         else:
+            if force_copy:
+                cells_np = cells_np.copy()
             pv_mesh = pv.PolyData.from_regular_faces(points_np, cells_np)
 
     elif mesh.n_manifold_dims == 3:
         cells_np = mesh.cells.cpu().numpy()
-        if force_copy:
-            cells_np = cells_np.copy()
         if mesh.n_cells == 0:
             pv_mesh = pv.UnstructuredGrid(
                 np.array([], dtype=np.int64),
@@ -419,6 +416,7 @@ def to_pyvista(
             )
         else:
             celltypes = np.full(mesh.n_cells, pv.CellType.TETRA, dtype=np.uint8)
+            # _to_vtk_cell_array returns independent VTK-format connectivity.
             pv_mesh = pv.UnstructuredGrid(
                 _to_vtk_cell_array(cells_np), celltypes, points_np
             )

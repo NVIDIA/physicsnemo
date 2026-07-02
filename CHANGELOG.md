@@ -189,6 +189,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `physicsnemo.mesh.io.from_pyvista(..., force_copy=True)` now copies attached
+  point, cell, and global data as well as geometry. The matching new
+  `to_pyvista(..., force_copy=True)` option prevents exported PyVista geometry
+  and data from mutating the source `Mesh` through shared CPU storage.
 - `physicsnemo.mesh.projections.extrude` now produces a *conforming* (crack-free)
   simplicial complex for multi-cell inputs. Each prism was previously tessellated
   using the per-cell local vertex order, so adjacent cells that listed a shared
