@@ -39,6 +39,20 @@ class StormCastDataset(torch.utils.data.Dataset, ABC):
             and index 1 containing the target state data
         - `lead_time_label` (optional): this must be returned if lead_time_steps > 0. A single
             integer indicating which lead time embedding should be used
+        - `mask` (optional): a numpy.ndarray or torch.Tensor with values in {0, 1}
+            (or boolean), where 1/True marks valid pixels and 0/False marks
+            invalid/excluded pixels (e.g. outside sensor coverage, LAM padding zones,
+            land-sea boundaries).  The shape must broadcast with `(num_channels_state,
+            height, width)`: use `(1, height, width)` for a spatial mask shared across
+            all channels, `(num_channels_state, height, width)` for per-channel spatial
+            masks, or `(num_channels_state, 1, 1)` to mark entire channels as invalid.
+            When provided, the training loop uses the mask as a per-pixel loss weight.
+            For the DiT architecture with `use_nan_mask_tokens=True`, a spatial invalid
+            mask is derived (any channel invalid → token invalid) and used to replace
+            invalid-region tokens with learned mask tokens.  The dataset is responsible
+            for producing this mask; caching internally is encouraged when the pattern
+            is static across samples.
+
         The outputs of __getitem__ should be already normalized (this is not done in the training
         loop for performance reasons).
 
