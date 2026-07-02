@@ -7,18 +7,18 @@ Uniform remeshing via the ACVD (Approximate Centroidal Voronoi Diagram)
 clustering algorithm. Given a target number of clusters, the algorithm
 redistributes mesh vertices to produce a more uniform cell distribution.
 
-The approach is dimension-agnostic and works for any simplicial manifold:
+The current implementation wraps ``pyacvd`` and therefore supports only
+triangle surfaces (2D manifolds) embedded in 3D:
 
 1. Weight vertices by incident cell areas
 2. Initialize clusters via area-based region growing
 3. Remove spatially isolated cluster regions
 4. Reconstruct a simplified mesh from cluster adjacency
 
-.. note::
-
-   The output mesh may contain a small percentage (~0.5-1%) of non-manifold
-   edges, which is inherent to the face-mapping approach. Higher cluster
-   counts relative to mesh resolution produce better manifold quality.
+``n_clusters`` controls the approximate number of output vertices (one per
+cluster), not the number of triangles. The output cell count follows from the
+surface topology and is commonly close to twice the vertex count for a closed
+triangular surface.
 
 .. code:: python
 
@@ -27,7 +27,7 @@ The approach is dimension-agnostic and works for any simplicial manifold:
 
     mesh = sphere_icosahedral.load(subdivisions=3)
     remeshed = remesh(mesh, n_clusters=100)
-    print(remeshed.n_cells)  # approximately 200 triangles
+    print(remeshed.n_points)  # approximately 100 cluster centroids
 
 API Reference
 -------------

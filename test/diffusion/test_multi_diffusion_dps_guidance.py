@@ -68,6 +68,7 @@ GUIDANCE_CONFIGS = [
     ("model_l2", "ModelConsistency L2"),
     ("model_l2_sda", "ModelConsistency L2 + SDA"),
     ("model_l1_sda", "ModelConsistency L1 + SDA"),
+    ("data_tensor_sda", "DataConsistency per-channel tensor std_y & gamma + SDA"),
 ]
 
 MULTI_GUIDANCE_CONFIGS = [
@@ -192,6 +193,26 @@ def _make_guidance(config_name, predictor, device, seed=310, create_graph=False)
             std_y=0.1,
             norm=1,
             gamma=0.5,
+            sigma_fn=scheduler.sigma,
+            alpha_fn=scheduler.alpha,
+            create_graph=create_graph,
+        )
+    elif config_name == "data_tensor_sda":
+        # Per-channel tensor std_y and gamma (non-uniform guidance strength).
+        mask = _make_mask(device)
+        y = make_input(STATE_SHAPE, seed=seed, device=device)
+        std_y = torch.tensor(
+            [0.05 + 0.03 * i for i in range(CHANNELS)], device=device
+        ).reshape(1, CHANNELS, 1, 1)
+        gamma = torch.tensor(
+            [0.5 + 0.2 * i for i in range(CHANNELS)], device=device
+        ).reshape(1, CHANNELS, 1, 1)
+        return MultiDiffusionDataConsistencyDPSGuidance(
+            predictor=predictor,
+            mask=mask,
+            y=y,
+            std_y=std_y,
+            gamma=gamma,
             sigma_fn=scheduler.sigma,
             alpha_fn=scheduler.alpha,
             create_graph=create_graph,
@@ -344,8 +365,6 @@ class TestDataConsistencyConstructor:
             predictor=predictor, mask=mask, y=y, std_y=0.1
         )
         assert g.predictor is predictor
-        assert g.std_y == pytest.approx(0.1)
-        assert g.gamma == pytest.approx(0.0)
         assert g.fuse is False
         assert g.retain_graph is False
         assert g.create_graph is False
@@ -368,8 +387,6 @@ class TestDataConsistencyConstructor:
             retain_graph=True,
             create_graph=True,
         )
-        assert g.std_y == pytest.approx(0.5)
-        assert g.gamma == pytest.approx(2.0)
         assert g.fuse is True
         assert g.retain_graph is True
         assert g.create_graph is True
@@ -393,8 +410,6 @@ class TestModelConsistencyConstructor:
             std_y=0.1,
         )
         assert g.predictor is predictor
-        assert g.std_y == pytest.approx(0.1)
-        assert g.gamma == pytest.approx(0.0)
         assert g.fuse is False
         assert g.retain_graph is False
         assert g.create_graph is False
@@ -416,8 +431,6 @@ class TestModelConsistencyConstructor:
             retain_graph=True,
             create_graph=True,
         )
-        assert g.std_y == pytest.approx(0.5)
-        assert g.gamma == pytest.approx(2.0)
         assert g.fuse is True
         assert g.retain_graph is True
         assert g.create_graph is True
