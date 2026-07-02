@@ -67,7 +67,7 @@ trunk:
     token_dim: 128
     hidden_dim: 128
     num_layers: 4
-    out_dim: 3            # Cp, Cf_x, Cf_y (SuperWing surface targets)
+    out_dim: 3            # Cp, Cf_tau, Cf_z (SuperWing surface targets)
     use_sdf: false
     cond_dim: 2           # aoa, mach
     pe_num_bands: 16
