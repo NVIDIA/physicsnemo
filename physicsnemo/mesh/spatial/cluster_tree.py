@@ -790,8 +790,10 @@ class ClusterTree:
         r"""Compute per-node aggregate source data for far-field approximation.
 
         Aggregates are area-weighted averages of source features within each
-        node's subtree. The total weight for each node is the sum of per-source
-        strengths (handled separately during kernel evaluation, not here).
+        node's subtree. The ``areas`` passed to this call are authoritative for
+        both the weighted sums and their normalization; they need not match the
+        areas used to construct the tree. Per-source strengths are handled
+        separately during kernel evaluation.
 
         Parameters
         ----------
@@ -807,6 +809,13 @@ class ClusterTree:
         -------
         SourceAggregates
             Per-node aggregated centroids and source data.
+
+        Notes
+        -----
+        Tree topology depends on point positions, so callers may reuse a cached
+        tree with different aggregation weights. ``node_total_area`` remains
+        construction-time metadata; it is not the normalization for this
+        call's aggregates.
         """
         device = source_points.device
         dtype = source_points.dtype
