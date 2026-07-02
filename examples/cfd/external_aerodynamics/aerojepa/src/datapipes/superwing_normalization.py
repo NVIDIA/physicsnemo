@@ -160,15 +160,11 @@ def compute_superwing_normalization_stats(
     n = 0
     s1 = np.zeros((3,), dtype=np.float64)
     s2 = np.zeros((3,), dtype=np.float64)
-    t_min = np.full((3,), np.inf, dtype=np.float64)
-    t_max = np.full((3,), -np.inf, dtype=np.float64)
     for sid in sub_idx.tolist():
         d = np.asarray(data[int(sid)], dtype=np.float64)
         flat = d.reshape(3, -1)
         s1 += flat.sum(axis=1)
         s2 += np.square(flat).sum(axis=1)
-        t_min = np.minimum(t_min, flat.min(axis=1))
-        t_max = np.maximum(t_max, flat.max(axis=1))
         n += int(flat.shape[1])
     if n == 0:
         raise RuntimeError("No target samples accumulated; cannot compute stats.")
@@ -185,8 +181,6 @@ def compute_superwing_normalization_stats(
         "target_channels": list(SUPERWING_TARGET_CHANNELS),
         "target_mean": t_mean.astype(np.float32).tolist(),
         "target_std": t_std.astype(np.float32).tolist(),
-        "target_min": t_min.astype(np.float32).tolist(),
-        "target_max": t_max.astype(np.float32).tolist(),
         "gen_params_columns": [int(v) for v in gen_param_columns],
         "gen_params_names": list(gen_param_names),
         "gen_params_mean": gp_mean.astype(np.float32).tolist(),
