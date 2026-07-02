@@ -129,6 +129,7 @@ class TemporalAttention(torch.nn.Module):
         causal_window: Optional[int] = None,
     ) -> None:
         super().__init__()
+        self.hidden_size = hidden_size
         self._time_parallel_group = None
         self.qkv = torch.nn.Linear(hidden_size, hidden_size * 3)
         self.proj = torch.nn.Linear(hidden_size, hidden_size)
@@ -167,6 +168,18 @@ class TemporalAttention(torch.nn.Module):
         torch.Tensor
             Output latents of shape :math:`(B, T, X, C)`.
         """
+        if not torch.compiler.is_compiling():
+            if x.ndim != 4:
+                raise ValueError(
+                    f"Expected 4D input (B, T, X, C), got {x.ndim}D tensor with shape "
+                    f"{tuple(x.shape)}"
+                )
+            if x.shape[-1] != self.hidden_size:
+                raise ValueError(
+                    f"Expected hidden_size {self.hidden_size}, got "
+                    f"{x.shape[-1]} channels"
+                )
+
         # Project to queries, keys, values: (B, T, X, 3*C) -> 3 x (B, T, X, H, C_h)
         qkv = self.qkv(x)
         q, k, v = einops.rearrange(

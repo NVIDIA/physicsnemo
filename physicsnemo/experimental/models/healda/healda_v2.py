@@ -350,6 +350,42 @@ class HealDAv2(Module):
         day_of_year: Float[torch.Tensor, "batch time"],
         obs_ctx: ObsContext,
     ) -> Float[torch.Tensor, "batch out_channels time npix"]:
+        if not torch.compiler.is_compiling():
+            if x.ndim != 4:
+                raise ValueError(
+                    f"Expected 4D input (B, C, T, X), got {x.ndim}D tensor with shape "
+                    f"{tuple(x.shape)}"
+                )
+            b, c, t, x_dim = x.shape
+            if c != self.in_channels:
+                raise ValueError(
+                    f"Expected {self.in_channels} input channels, got {c} channels"
+                )
+            if t != self.time_length:
+                raise ValueError(
+                    f"Expected time_length {self.time_length}, got {t} frames"
+                )
+            if x_dim != self.npix:
+                raise ValueError(f"Expected npix {self.npix}, got {x_dim} pixels")
+            if noise_labels.ndim != 1 or noise_labels.shape[0] != b:
+                raise ValueError(
+                    f"Expected noise_labels of shape ({b},), got tensor with shape "
+                    f"{tuple(noise_labels.shape)}"
+                )
+            if second_of_day.shape != (b, t) or day_of_year.shape != (b, t):
+                raise ValueError(
+                    f"Expected calendar tensors of shape ({b}, {t}), got "
+                    f"second_of_day {tuple(second_of_day.shape)} and day_of_year "
+                    f"{tuple(day_of_year.shape)}"
+                )
+            npix_model = 12 * 4**self.level_model
+            expected_cu_len = b * t * npix_model + 1
+            if obs_ctx.cu_seqlens_k.numel() != expected_cu_len:
+                raise ValueError(
+                    f"Expected cu_seqlens_k length {expected_cu_len} "
+                    f"(B*T*npix_model+1), got {obs_ctx.cu_seqlens_k.numel()}"
+                )
+
         tokens = self.obs_tokenizer(
             obs_ctx.obs,
             obs_ctx.float_metadata,

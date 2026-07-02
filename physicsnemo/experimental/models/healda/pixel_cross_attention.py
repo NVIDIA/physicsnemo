@@ -256,6 +256,31 @@ class PixelCrossAttention(CrossAttentionModuleBase):
     ) -> Float[torch.Tensor, "batch time space hidden_size"]:
         b, t, x, _ = hidden_states.shape
         total_pixels = b * t * x
+        if not torch.compiler.is_compiling():
+            if context.tokens is None:
+                raise ValueError(
+                    "ObsContext.tokens must be set before PixelCrossAttention forward"
+                )
+            if hidden_states.ndim != 4:
+                raise ValueError(
+                    f"Expected hidden_states of shape (B, T, X, C), got {hidden_states.ndim}D "
+                    f"tensor with shape {tuple(hidden_states.shape)}"
+                )
+            if hidden_states.shape[-1] != self.hidden_size:
+                raise ValueError(
+                    f"Expected hidden_size {self.hidden_size}, got "
+                    f"{hidden_states.shape[-1]} channels"
+                )
+            if context.cu_seqlens_k.numel() != total_pixels + 1:
+                raise ValueError(
+                    f"Expected cu_seqlens_k length {total_pixels + 1} (B*T*X+1), got "
+                    f"{context.cu_seqlens_k.numel()}"
+                )
+            if int(context.cu_seqlens_k[-1]) != context.tokens.shape[0]:
+                raise ValueError(
+                    f"Expected {context.tokens.shape[0]} packed tokens, but "
+                    f"cu_seqlens_k ends at {int(context.cu_seqlens_k[-1])}"
+                )
         # Fold (B, T, X) into the flat pixel axis the ragged kernel expects, then
         # unfold the per-pixel output back to the (B, T, X, hidden_size) layout.
         out = self._forward_impl(

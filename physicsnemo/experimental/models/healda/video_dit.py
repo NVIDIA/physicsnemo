@@ -161,6 +161,8 @@ class VideoDiT(Module):
         super().__init__(meta=MetaData())
         self.tokenizer = tokenizer
         self.detokenizer = detokenizer
+        self.hidden_size = hidden_size
+        self.condition_dim = condition_dim
 
         if isinstance(conditioning_embedder, str):
             embedder_type = ConditioningEmbedderType[conditioning_embedder.upper()]
@@ -272,9 +274,28 @@ class VideoDiT(Module):
         cross_attention_context: Optional[Any] = None,
         tokenizer_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Float[torch.Tensor, "batch out_channels time space"]:
+        if not torch.compiler.is_compiling():
+            if x.ndim != 4:
+                raise ValueError(
+                    f"Expected 4D input (B, C, T, X), got {x.ndim}D tensor with shape "
+                    f"{tuple(x.shape)}"
+                )
+            b = x.shape[0]
+            if noise_labels.ndim != 1 or noise_labels.shape[0] != b:
+                raise ValueError(
+                    f"Expected noise_labels of shape ({b},), got tensor with shape "
+                    f"{tuple(noise_labels.shape)}"
+                )
+            if condition is not None:
+                if condition.ndim != 2 or condition.shape != (b, self.condition_dim):
+                    raise ValueError(
+                        f"Expected condition of shape ({b}, {self.condition_dim}), got "
+                        f"tensor with shape {tuple(condition.shape)}"
+                    )
+
         # (B, C, T, X) -> (B, T, X', hidden)
         h = self.tokenizer(x, **(tokenizer_kwargs or {}))
-        if h.ndim != 4:
+        if not torch.compiler.is_compiling() and h.ndim != 4:
             raise ValueError(
                 f"tokenizer must emit (B, T, X, hidden) for VideoDiT; got {h.ndim}D "
                 "(use a tokenizer with separate_time_axis=True)."

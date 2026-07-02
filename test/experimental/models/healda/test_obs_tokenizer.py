@@ -102,7 +102,7 @@ def test_film_tokenizer_cpu_reference_smoke(use_platform):
 def test_film_tokenizer_triton_matches_reference(use_platform):
     pytest.importorskip("triton")
     from physicsnemo.experimental.models.healda.obs_tokenizer import (
-        fused_film_tokenizer_triton,
+        _fused_film_tokenizer_triton,
     )
 
     module = _make_module(use_platform).cuda()
@@ -111,7 +111,7 @@ def test_film_tokenizer_triton_matches_reference(use_platform):
     )
 
     # fp32 kernel path so the comparison against the fp32 reference is tight.
-    triton_out = fused_film_tokenizer_triton(
+    triton_out = _fused_film_tokenizer_triton(
         obs,
         float_metadata,
         obs_type,

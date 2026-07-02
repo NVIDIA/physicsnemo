@@ -127,6 +127,8 @@ class VideoDiTBlock(nn.Module):
         attn_kwargs: Optional[Dict[str, Any]] = None,
     ):
         super().__init__()
+        self.hidden_size = hidden_size
+        self.condition_embed_dim = condition_embed_dim
         self._is_causal = is_causal
 
         # Spatial self-attention backend (name -> built here, or injected module),
@@ -289,6 +291,22 @@ class VideoDiTBlock(nn.Module):
         attn_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Float[torch.Tensor, "batch time space hidden_size"]:
         b, t, x, ch = hidden_states.shape
+        if not torch.compiler.is_compiling():
+            if hidden_states.ndim != 4:
+                raise ValueError(
+                    f"Expected hidden_states of shape (B, T, X, C), got {hidden_states.ndim}D "
+                    f"tensor with shape {tuple(hidden_states.shape)}"
+                )
+            if c.shape != (b, self.condition_embed_dim):
+                raise ValueError(
+                    f"Expected conditioning of shape ({b}, {self.condition_embed_dim}), got "
+                    f"tensor with shape {tuple(c.shape)}"
+                )
+            if self.cross_attention is not None and cross_attention_context is None:
+                raise ValueError(
+                    "cross_attention was provided at construction but no "
+                    "cross_attention_context was passed to forward"
+                )
 
         (
             attn_shift,
@@ -310,11 +328,6 @@ class VideoDiTBlock(nn.Module):
 
         # Cross-attention to the opaque injected context.
         if self.cross_attention is not None:
-            if cross_attention_context is None:
-                raise ValueError(
-                    "cross_attention was provided at construction but no "
-                    "cross_attention_context was passed to forward."
-                )
             shift, scale, gate = self.cross_attn_modulation(c)
             normed = modulate(self.cross_attn_norm(hidden_states), shift, scale)
             cross_out = self.cross_attention(normed, cross_attention_context)

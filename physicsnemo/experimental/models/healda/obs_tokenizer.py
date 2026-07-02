@@ -20,7 +20,7 @@
 modulated by per-observation metadata; see its docstring for the FiLM math and
 conditioning layout. Triton kernels, ``torch.library.custom_op`` registration,
 and launch-config presets live in :mod:`~physicsnemo.experimental.models.healda.kernels.obs_tokenizer_film`, imported
-lazily by :func:`fused_film_tokenizer_triton`.
+lazily by :func:`_fused_film_tokenizer_triton`.
 """
 
 from typing import Optional
@@ -46,7 +46,7 @@ def _default_film_hidden_dim(out_dim: int) -> int:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def fused_film_tokenizer_triton(
+def _fused_film_tokenizer_triton(
     obs: torch.Tensor,
     float_meta: torch.Tensor,
     obs_type_id: torch.Tensor,
@@ -61,15 +61,10 @@ def fused_film_tokenizer_triton(
     eps: float = 1e-5,
     force_fp32: bool = False,
 ) -> torch.Tensor:
-    """Fused Triton backend for :class:`ObsTokenizerFiLM` (see it for the FiLM
-    math), computing the whole tokenizer in a single kernel. This means neither the
-    forward or backward materializes large intermediate tensors in HBM.
+    r"""Fused Triton backend for :class:`ObsTokenizerFiLM` (see it for the FiLM math).
 
-    No intermediate activations are saved for the backward pass, which
-    recomputes the forward from the conditioning vector.
-
-    The embedding/``linear``/``layer_norm`` arguments are the modules owned by
-    :class:`ObsTokenizerFiLM`, consumed here as raw tensors. ``linear1.out_features``
+    Runs the whole tokenizer in one kernel so neither forward nor backward
+    materializes large intermediate activations in HBM. ``linear1.out_features``
     must be a power of two and ``linear2.out_features`` must equal ``2 * out_dim``;
     ``platform`` is required when ``platform_embedding`` is provided.
     """
@@ -273,8 +268,50 @@ class ObsTokenizerFiLM(torch.nn.Module):
         channel_ids: Int[torch.Tensor, " nobs"],
         platform_ids: Int[torch.Tensor, " nobs"] | None = None,
     ) -> Float[torch.Tensor, "nobs out_dim"]:
+        if not torch.compiler.is_compiling():
+            if obs.ndim != 1:
+                raise ValueError(
+                    f"Expected obs of shape (nobs,), got {obs.ndim}D tensor with shape "
+                    f"{tuple(obs.shape)}"
+                )
+            nobs = obs.shape[0]
+            if float_metadata.ndim != 2 or float_metadata.shape[0] != nobs:
+                raise ValueError(
+                    f"Expected float_metadata of shape ({nobs}, meta_dim), got tensor "
+                    f"with shape {tuple(float_metadata.shape)}"
+                )
+            if float_metadata.shape[1] + (
+                self.obs_type_embed_dim
+                + self.channel_embed_dim
+                + self.platform_embed_dim
+            ) != self.cond_mlp[0].in_features:
+                raise ValueError(
+                    f"Expected float_metadata with meta_dim "
+                    f"{self.cond_mlp[0].in_features - (self.obs_type_embed_dim + self.channel_embed_dim + self.platform_embed_dim)}, "
+                    f"got {float_metadata.shape[1]}"
+                )
+            for name, tensor in (
+                ("obs_type", obs_type),
+                ("channel_ids", channel_ids),
+            ):
+                if tensor.ndim != 1 or tensor.shape[0] != nobs:
+                    raise ValueError(
+                        f"Expected {name} of shape ({nobs},) matching obs, got tensor "
+                        f"with shape {tuple(tensor.shape)}"
+                    )
+            if self.use_platform_embedding:
+                if platform_ids is None:
+                    raise ValueError(
+                        "platform_ids required when platform embedding is enabled"
+                    )
+                if platform_ids.ndim != 1 or platform_ids.shape[0] != nobs:
+                    raise ValueError(
+                        f"Expected platform_ids of shape ({nobs},) matching obs, got "
+                        f"tensor with shape {tuple(platform_ids.shape)}"
+                    )
+
         if self.use_fused_mlp and triton.available and obs.is_cuda:
-            return fused_film_tokenizer_triton(
+            return _fused_film_tokenizer_triton(
                 obs,
                 float_metadata,
                 obs_type,
