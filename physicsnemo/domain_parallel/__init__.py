@@ -48,11 +48,9 @@ if ST_AVAILABLE:
 
     from ._shard_tensor_spec import ShardTensorSpec
     from .shard_tensor import (
-        FSDPOutputTensorAdapter,
         ShardTensor,
-        distribute_over_domain_for_fsdp,
+        TensorPromotionMode,
         scatter_tensor,
-        wrap_for_fsdp,
     )
 
     def register_custom_ops():
@@ -80,6 +78,4 @@ else:
     ShardTensor = None
     ShardTensorSpec = None
     scatter_tensor = None
-    distribute_over_domain_for_fsdp = None
-    FSDPOutputTensorAdapter = None
-    wrap_for_fsdp = None
+    TensorPromotionMode = None

@@ -16,16 +16,17 @@
 
 from __future__ import annotations
 
+import enum
 import threading
+import warnings
 from collections.abc import Iterable, Mapping
 from contextlib import contextmanager
 from typing import Callable, Sequence, cast
 
 import torch
 import torch.distributed as dist
-from torch import nn
 from torch.distributed.device_mesh import DeviceMesh, _mesh_resources
-from torch.distributed.tensor import DTensor, distribute_module
+from torch.distributed.tensor import DTensor
 from torch.distributed.tensor._dtensor_spec import (
     TensorMeta,
 )
@@ -48,7 +49,30 @@ from physicsnemo.domain_parallel._shard_tensor_spec import (
 aten = torch.ops.aten
 
 
-# ======================================================================
+class TensorPromotionMode(enum.Enum):
+    r"""How a plain ``torch.Tensor`` is handled when it meets a
+    :class:`ShardTensor` in an intercepted op.
+
+    Such a plain tensor is typically an unsharded model weight (all-gathered by
+    FSDP2 in its pre-forward hook, or replicated under DDP).
+
+    Attributes
+    ----------
+    DISABLED : TensorPromotionMode
+        No promotion; plain tensors pass through to DTensor routing unchanged
+        (mixing a non-scalar plain tensor with sharded data raises -- the
+        historical behavior).
+    WARN : TensorPromotionMode
+        Promote each plain tensor to a ``Replicate`` distributed tensor on the
+        accompanying distributed argument's mesh, warning on every promotion.
+    SILENT : TensorPromotionMode
+        Same as :attr:`WARN` but without emitting warnings.  The default.
+    """
+
+    DISABLED = "disabled"
+    WARN = "warn"
+    SILENT = "silent"
+
 
 # ============================================================================
 # Layer 1 -- Semi-private conversions (no autograd, no spec inference)
@@ -196,6 +220,49 @@ def _conversion_scope():
             _conversion_guard.depth = previous_depth
 
 
+def _find_mesh_in_args(*objs: object) -> DeviceMesh | None:
+    r"""Return the mesh of the first ``ShardTensor`` found in ``objs``.
+
+    This is the reference mesh used to promote plain tensors. It is only ever
+    reached from ShardTensor dispatch, so a ShardTensor is guaranteed to be
+    present, and promotion exists to line plain weights up with the sharded
+    activation -- so we key off the ShardTensor's mesh. Walks nested
+    ``Mapping``/``tuple``/``list`` containers and short-circuits on the first
+    match; returns ``None`` if none is present.
+    """
+    for obj in objs:
+        if isinstance(obj, ShardTensor):
+            return obj.device_mesh
+        if isinstance(obj, Mapping):
+            found = _find_mesh_in_args(*obj.values())
+            if found is not None:
+                return found
+        elif isinstance(obj, (tuple, list)):
+            found = _find_mesh_in_args(*obj)
+            if found is not None:
+                return found
+    return None
+
+
+def _promote_plain_tensor_to_dtensor(tensor: torch.Tensor, mesh: DeviceMesh) -> DTensor:
+    r"""Promote a plain ``torch.Tensor`` to a ``Replicate`` DTensor on ``mesh``.
+
+    Uses the differentiable ``DTensor.from_local`` so that, in backward, the
+    promoted tensor's gradient is normalized from ``Partial`` to ``Replicate``
+    (an eager all-reduce) before flowing back to the original plain tensor.
+    """
+    if ShardTensor._promotion_mode is TensorPromotionMode.WARN:
+        warnings.warn(
+            "ShardTensor auto-promoting a plain torch.Tensor "
+            f"(shape={tuple(tensor.shape)}, dtype={tensor.dtype}) to a "
+            f"Replicate tensor on mesh {mesh}. This usually means a "
+            "non-distributed model weight met a sharded activation.",
+            stacklevel=2,
+        )
+    placements = [Replicate()] * mesh.ndim
+    return DTensor.from_local(tensor, mesh, placements)
+
+
 def _dispatch_fallback_via_dtensor(
     func: torch._ops.OpOverload,
     args: tuple[object, ...],
@@ -206,12 +273,14 @@ def _dispatch_fallback_via_dtensor(
     Native Autograd wraps this hook, so we must NOT build an internal graph
     using .apply(). We just do the math and let PyTorch track the outer graph.
     """
+    ref_mesh = _find_mesh_in_args(args, kwargs)
     with _conversion_scope():
         converted_args = tuple(
-            _convert_args_to_dtensor(arg, use_autograd=False) for arg in args
+            _convert_args_to_dtensor(arg, use_autograd=False, ref_mesh=ref_mesh)
+            for arg in args
         )
         converted_kwargs = {
-            k: _convert_args_to_dtensor(v, use_autograd=False)
+            k: _convert_args_to_dtensor(v, use_autograd=False, ref_mesh=ref_mesh)
             for k, v in (kwargs or {}).items()
         }
 
@@ -231,12 +300,14 @@ def _torch_function_fallback_via_dtensor(
     Because this executes at the Python API level (above Autograd), we MUST
     use autograd functions (.apply) to bridge the tracking manually.
     """
+    ref_mesh = _find_mesh_in_args(args, kwargs)
     with _conversion_scope():
         converted_args = tuple(
-            _convert_args_to_dtensor(arg, use_autograd=True) for arg in args
+            _convert_args_to_dtensor(arg, use_autograd=True, ref_mesh=ref_mesh)
+            for arg in args
         )
         converted_kwargs = {
-            k: _convert_args_to_dtensor(v, use_autograd=True)
+            k: _convert_args_to_dtensor(v, use_autograd=True, ref_mesh=ref_mesh)
             for k, v in (kwargs or {}).items()
         }
 
@@ -252,10 +323,18 @@ def _torch_function_fallback_via_dtensor(
 # ============================================================================
 
 
-def _convert_args_to_dtensor(arg: object, use_autograd: bool = False) -> object:
+def _convert_args_to_dtensor(
+    arg: object, use_autograd: bool = False, ref_mesh: DeviceMesh | None = None
+) -> object:
     r"""Recursively replace ShardTensors with DTensors.
 
     If use_autograd is True, uses Layer 2 to preserve the graph connection.
+
+    Plain ``torch.Tensor`` arguments are auto-promoted to a ``Replicate``
+    DTensor on ``ref_mesh`` according to ``ShardTensor._promotion_mode`` (see
+    :class:`TensorPromotionMode`). Promotion is skipped when the mode is
+    ``DISABLED``, when there is no reference mesh, or for scalar (0-dim)
+    tensors (which DTensor handles natively).
     """
     match arg:
         case ShardTensor():
@@ -267,12 +346,23 @@ def _convert_args_to_dtensor(arg: object, use_autograd: bool = False) -> object:
             return arg
         case Mapping():
             return type(arg)(
-                {k: _convert_args_to_dtensor(v, use_autograd) for k, v in arg.items()}
+                {
+                    k: _convert_args_to_dtensor(v, use_autograd, ref_mesh)
+                    for k, v in arg.items()
+                }
             )
         case tuple():
-            return tuple(_convert_args_to_dtensor(a, use_autograd) for a in arg)
+            return tuple(
+                _convert_args_to_dtensor(a, use_autograd, ref_mesh) for a in arg
+            )
         case list():
-            return [_convert_args_to_dtensor(a, use_autograd) for a in arg]
+            return [_convert_args_to_dtensor(a, use_autograd, ref_mesh) for a in arg]
+        case torch.Tensor() if (
+            ShardTensor._promotion_mode is not TensorPromotionMode.DISABLED
+            and ref_mesh is not None
+            and arg.dim() >= 1
+        ):
+            return _promote_plain_tensor_to_dtensor(arg, ref_mesh)
         case _:
             return arg
 
@@ -494,23 +584,23 @@ class _FromTorchTensor(torch.autograd.Function):
             device_mesh, placements, and sharding_shapes gradients
             (not differentiable).
 
-        Raises
-        ------
-        RuntimeError
-            If gradient tensor has different placement than original and
-            the original placement contains partial placements.
+        Notes
+        -----
+        No ``Partial`` placement may cross the ShardTensor -> ``torch.Tensor``
+        boundary. The gradient is imperatively (eagerly) resolved to the
+        forward placement with any ``Partial`` mapped to ``Replicate`` (an
+        all-reduce now), so the plain gradient handed back to the original
+        tensor is fully reduced -- this is what lets FSDP reduce-scatter / DDP
+        all-reduce see a correct gradient.
         """
         previous_placement = ctx.previous_placement
-        if grad_output.placements != previous_placement:
-            # Automatically redistribute to the previous placement as long as it's not a partial.
-            if not any(p.is_partial() for p in previous_placement):
-                grad_output = grad_output.redistribute(
-                    grad_output._spec.mesh, previous_placement
-                )
-            else:
-                raise RuntimeError(
-                    "Resharding gradients with partial placements not implemented"
-                )
+        # Target placement is the forward placement with Partial -> Replicate.
+        # redistribute() forbids resharding *to* Partial, so the target is
+        # always a valid (non-Partial) placement; reaching it from a Partial
+        # grad performs the necessary all-reduce / reduce-scatter eagerly.
+        target = tuple(Replicate() if p.is_partial() else p for p in previous_placement)
+        if grad_output.placements != target:
+            grad_output = grad_output.redistribute(grad_output._spec.mesh, target)
 
         return grad_output.to_local(), None, None, None
 
@@ -581,10 +671,29 @@ class ShardTensor(torch.Tensor):
     # ShardTensor.register_named_function_handler("module.function_name.default", handler)
     _named_function_registry: dict[str, Callable] = {}
 
+    # Tensor methods that bind a callback or flag to *this* tensor's own
+    # autograd node. They must run on the ShardTensor instance itself rather
+    # than route through the DTensor fallback: the fallback binds them to a
+    # temporary DTensor that is discarded, so the hook/flag would never fire.
+    # Handled as a passthrough in __torch_function__.
+    _autograd_passthrough_functions: frozenset = frozenset(
+        fn
+        for fn in (
+            getattr(torch.Tensor, "register_hook", None),
+            getattr(torch.Tensor, "register_post_accumulate_grad_hook", None),
+            getattr(torch.Tensor, "retain_grad", None),
+        )
+        if fn is not None
+    )
+
     # Upon construction of any ShardTensor objects, this will be set to true.
     # Wrappers are triggered dynamically, so the wrapping will be pass-through
     # exclusively until true.
     _enable_shard_patches: bool = False
+
+    # Controls how plain torch.Tensor arguments are handled when they appear
+    # alongside a ShardTensor in an intercepted op (see TensorPromotionMode).
+    _promotion_mode: TensorPromotionMode = TensorPromotionMode.SILENT
 
     @classmethod
     def patches_enabled(cls) -> bool:
@@ -597,6 +706,31 @@ class ShardTensor(torch.Tensor):
             Default is ``False`` until a ShardTensor is constructed.
         """
         return cls._enable_shard_patches
+
+    @classmethod
+    def get_promotion_mode(cls) -> TensorPromotionMode:
+        r"""Return the active plain-tensor promotion mode (defaults to ``SILENT``)."""
+        return cls._promotion_mode
+
+    @classmethod
+    def set_promotion_mode(cls, mode: TensorPromotionMode) -> None:
+        r"""Set the plain-tensor promotion mode.
+
+        ``mode`` may be a :class:`TensorPromotionMode` or an equivalent string
+        (``"disabled"``, ``"warn"``, ``"silent"``), which is coerced.
+        """
+        cls._promotion_mode = TensorPromotionMode(mode)
+
+    @classmethod
+    @contextmanager
+    def promotion_mode(cls, mode: TensorPromotionMode):
+        r"""Temporarily set the promotion mode, restoring the previous one on exit."""
+        previous = cls._promotion_mode
+        cls.set_promotion_mode(mode)
+        try:
+            yield
+        finally:
+            cls._promotion_mode = previous
 
     @classmethod
     def register_dispatch_handler(
@@ -852,6 +986,12 @@ class ShardTensor(torch.Tensor):
             # we just run the function without ShardTensor dispatch.
             with torch._C.DisableTorchFunctionSubclass():
                 return func(*args, **kwargs)
+        if func in cls._autograd_passthrough_functions:
+            # Run directly on the ShardTensor so the hook/flag binds to the real
+            # autograd node rather than a throwaway DTensor (see
+            # _autograd_passthrough_functions for why this matters for FSDP2).
+            with torch._C.DisableTorchFunctionSubclass():
+                return func(*args, **kwargs)
         if func in cls._function_registry and cls._enable_shard_patches:
             return cls._function_registry[func](func, types, args, kwargs)
         if str(func) in cls._named_function_registry and cls._enable_shard_patches:
@@ -1029,6 +1169,11 @@ class ShardTensor(torch.Tensor):
         -------
         torch.Tensor
             Local tensor. Shape may vary between ranks for sharded tensors.
+
+        Notes
+        -----
+        A ``Partial`` placement is not resolved: this returns the unreduced
+        local contribution. Use :meth:`full_tensor` if you need a reduced value.
         """
 
         if not torch.is_grad_enabled():
@@ -1097,37 +1242,6 @@ class ShardTensor(torch.Tensor):
             return torch.Tensor.backward(self, *args, **kwargs)
 
         return self.to_local().backward(*args, **kwargs)
-
-
-class FSDPOutputTensorAdapter(nn.Module):
-    """Wrap a module and convert ShardTensor outputs to torch.Tensor."""
-
-    def __init__(self, module: nn.Module) -> None:
-        super().__init__()
-        self.module = module
-
-    def forward(self, *args, **kwargs):
-        out = self.module(*args, **kwargs)
-        return out.to_local() if isinstance(out, ShardTensor) else out
-
-
-def wrap_for_fsdp(module: nn.Module) -> nn.Module:
-    """Return a module wrapper that exposes tensor outputs for FSDP hooks."""
-    return FSDPOutputTensorAdapter(module)
-
-
-def distribute_over_domain_for_fsdp(
-    module: nn.Module,
-    device_mesh: DeviceMesh,
-    partition_fn: (Callable[[str, nn.Module, DeviceMesh], None] | None) = None,
-) -> nn.Module:
-    """Distribute a module over a domain mesh and adapt outputs for FSDP."""
-    distributed_module = distribute_module(
-        module,
-        device_mesh=device_mesh,
-        partition_fn=partition_fn,
-    )
-    return wrap_for_fsdp(distributed_module)
 
 
 def scatter_tensor(
