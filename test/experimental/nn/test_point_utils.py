@@ -198,6 +198,14 @@ def test_masked_mean_unmasked(device):
     assert torch.allclose(m, x.mean(dim=0, keepdim=True))
 
 
+def test_masked_mean_unmasked_rank3_keeps_dim(device):
+    """Rank-3 ``mask=None`` returns ``(B, 1, F)`` (matching the masked path)."""
+    x = torch.randn(3, 8, 5, device=device)
+    m = masked_mean(x, None)
+    assert m.shape == (3, 1, 5)
+    assert torch.allclose(m, x.mean(dim=1, keepdim=True))
+
+
 def test_masked_mean_masked(device):
     """Only ``mask==True`` rows contribute."""
     x = torch.tensor([[1.0, 1.0], [2.0, 2.0], [3.0, 3.0]], device=device)

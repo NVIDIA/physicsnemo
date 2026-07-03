@@ -377,7 +377,7 @@ def masked_mean(
         return (
             features.mean(dim=0, keepdim=True)
             if features.ndim == 2
-            else features.mean(dim=1)
+            else features.mean(dim=1, keepdim=True)
         )
     weights = mask.to(dtype=features.dtype).unsqueeze(-1)
     denom = weights.sum(
