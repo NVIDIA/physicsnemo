@@ -15,10 +15,10 @@
 # limitations under the License.
 """Attention layers for HealDA video DiT blocks.
 
-Provides :class:`CrossAttentionModuleBase` (pluggable cross-attention contract),
-:class:`TemporalAttention` (temporal self-attention over :math:`(B, T, X, C)`),
-and :class:`PixelCrossAttention` (ragged local cross-attention from pixels to
-observation tokens). Triton kernels live in
+Provides :class:`TemporalAttention` (temporal self-attention over
+:math:`(B, T, X, C)`), :class:`CrossAttentionModuleBase` (pluggable
+cross-attention contract), and :class:`PixelCrossAttention` (ragged local
+cross-attention from pixels to observation tokens). Triton kernels live in
 :mod:`~physicsnemo.experimental.models.healda.kernels.pixel_attention`; packing
 utilities live in :mod:`~physicsnemo.experimental.models.healda.obs_context`.
 """
@@ -43,35 +43,6 @@ from physicsnemo.experimental.models.healda.obs_context import (
 from physicsnemo.nn.module.rope import RotaryPositionEmbedding1D
 
 triton = OptionalImport("triton")
-
-
-class CrossAttentionModuleBase(Module, ABC):
-    r"""Abstract base for a cross-attention sub-layer.
-
-    A concrete module attends from ``hidden_states`` to an arbitrary external
-    ``context`` that the module fully owns (its type, layout, and any folding /
-    packing). The caller treats ``context`` as opaque.
-
-    Forward
-    -------
-    hidden_states : torch.Tensor
-        Latents of shape :math:`(*B, C)`.
-    context : Any
-        Module-defined conditioning source, opaque to the caller.
-
-    Outputs
-    -------
-    torch.Tensor
-        Updated latents of shape :math:`(*B, C)`.
-    """
-
-    @abstractmethod
-    def forward(
-        self,
-        hidden_states: Float[torch.Tensor, "*batch hidden_size"],
-        context: Any,
-    ) -> Float[torch.Tensor, "*batch hidden_size"]:
-        pass
 
 
 def mask_causal(
@@ -261,6 +232,45 @@ class TemporalAttention(torch.nn.Module):
         out = einops.rearrange(out, "b t x h c -> b t x (h c)")
         out = self.proj(out)
         return out
+
+
+# ---------------------------------------------------------------------------
+# Cross-attention
+#
+# :class:`CrossAttentionModuleBase` is the pluggable contract injected into
+# :class:`~physicsnemo.experimental.models.healda.video_dit.VideoDiTBlock`.
+# :class:`PixelCrossAttention` is the HealDA implementation over packed
+# observation tokens.
+# ---------------------------------------------------------------------------
+
+
+class CrossAttentionModuleBase(Module, ABC):
+    r"""Abstract base for a cross-attention sub-layer.
+
+    A concrete module attends from ``hidden_states`` to an arbitrary external
+    ``context`` that the module fully owns (its type, layout, and any folding /
+    packing). The caller treats ``context`` as opaque.
+
+    Forward
+    -------
+    hidden_states : torch.Tensor
+        Latents of shape :math:`(*B, C)`.
+    context : Any
+        Module-defined conditioning source, opaque to the caller.
+
+    Outputs
+    -------
+    torch.Tensor
+        Updated latents of shape :math:`(*B, C)`.
+    """
+
+    @abstractmethod
+    def forward(
+        self,
+        hidden_states: Float[torch.Tensor, "*batch hidden_size"],
+        context: Any,
+    ) -> Float[torch.Tensor, "*batch hidden_size"]:
+        pass
 
 
 def _pixel_attention_reference(
