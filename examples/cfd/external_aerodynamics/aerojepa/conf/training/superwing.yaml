@@ -93,3 +93,21 @@ two_phase_training:
   #   phase2_train_decoder  (default true)
   #   phase2_latent_weight / phase2_sigreg_weight / phase2_sigreg_context_weight
   #   (default 0.0); phase2_recon_weight (default loss.recon.weight)
+
+# Resume an interrupted run: restore model + optimizer + LR scheduler + EMA and
+# continue the schedule from the saved epoch. Off by default.
+resume:
+  enabled: false
+  checkpoint_path: null
+  strict: true
+  load_optimizer: true
+  load_scheduler: true
+
+# Start a new run from pretrained weights: load the model weights only (fresh
+# optimizer, epoch 0). With `strict: false` a checkpoint holding only a subset
+# of modules (e.g. encoders + predictor) loads those and leaves the rest at
+# initialization -- combine with `two_phase_training` phase 2 to train a
+# decoder on top of frozen pretrained encoders + predictor. Off by default.
+init_from_checkpoint:
+  path: null
+  strict: true

@@ -562,6 +562,7 @@ def _save_checkpoint(
     lr_scheduler: Any,
     ema: ExponentialMovingAverage | None,
     epoch: int,
+    best_val: float,
     cfg: DictConfig,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -572,6 +573,7 @@ def _save_checkpoint(
     model_state = ema.shadow if ema is not None else model.state_dict()
     payload: dict[str, Any] = {
         "epoch": int(epoch),
+        "best_val_loss": float(best_val),
         "model": model_state,
         "optimizer": optimizer.state_dict(),
         "config": OmegaConf.to_container(cfg, resolve=True),
@@ -583,6 +585,82 @@ def _save_checkpoint(
         payload["ema_decay"] = ema.decay
     torch.save(payload, path)
     log.info("Saved checkpoint to %s", path)
+
+
+def _load_initial_state(
+    cfg: DictConfig,
+    *,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    lr_scheduler: Any,
+    ema: ExponentialMovingAverage | None,
+    device: torch.device,
+) -> tuple[int, float]:
+    """Optionally initialise from a checkpoint before training.
+
+    Two mutually exclusive modes, both off by default:
+
+    * ``training.resume``: resume an interrupted run -- restore the model,
+      optimizer, LR scheduler, EMA shadow and epoch/best-val counters and
+      continue the schedule from where it stopped.
+    * ``training.init_from_checkpoint``: start a *new* run from pretrained
+      weights -- load the model weights only (fresh optimizer, epoch 0). With
+      ``strict=false`` a checkpoint that only holds a subset of modules (e.g.
+      encoders + predictor) loads those and leaves the rest at initialization.
+      Combined with two-phase training this is how a decoder is trained on top
+      of frozen pretrained encoders + predictor.
+
+    Returns the ``(start_epoch, best_val_loss)`` the training loop should use.
+    """
+    train_cfg = cfg.training
+
+    resume_cfg = train_cfg.get("resume", None)
+    if resume_cfg is not None and bool(resume_cfg.get("enabled", False)):
+        ckpt_path = resume_cfg.get("checkpoint_path")
+        if not ckpt_path:
+            raise ValueError("training.resume.enabled=true requires checkpoint_path.")
+        # Trusted (self-produced) checkpoint: weights_only=False so the bundled
+        # optimizer / scheduler state loads too.
+        payload = torch.load(str(ckpt_path), map_location=device, weights_only=False)
+        model.load_state_dict(
+            payload["model"], strict=bool(resume_cfg.get("strict", True))
+        )
+        if bool(resume_cfg.get("load_optimizer", True)) and payload.get("optimizer"):
+            optimizer.load_state_dict(payload["optimizer"])
+        if (
+            bool(resume_cfg.get("load_scheduler", True))
+            and lr_scheduler is not None
+            and payload.get("lr_scheduler")
+        ):
+            lr_scheduler.load_state_dict(payload["lr_scheduler"])
+        if ema is not None and payload.get("ema_shadow"):
+            ema.shadow = {k: v.to(device) for k, v in payload["ema_shadow"].items()}
+        start_epoch = int(payload.get("epoch", 0))
+        best_val = float(payload.get("best_val_loss", float("inf")))
+        log.info(
+            "Resumed from %s at epoch %d (best_val=%.4e)",
+            ckpt_path,
+            start_epoch,
+            best_val,
+        )
+        return start_epoch, best_val
+
+    init_cfg = train_cfg.get("init_from_checkpoint", None)
+    if init_cfg is not None and init_cfg.get("path"):
+        ckpt_path = init_cfg.get("path")
+        payload = torch.load(str(ckpt_path), map_location=device, weights_only=False)
+        result = model.load_state_dict(
+            payload["model"], strict=bool(init_cfg.get("strict", True))
+        )
+        log.info(
+            "Initialised model weights from %s (missing=%d, unexpected=%d)",
+            ckpt_path,
+            len(result.missing_keys),
+            len(result.unexpected_keys),
+        )
+        return 0, float("inf")
+
+    return 0, float("inf")
 
 
 # --------------------------------------------------------------------------- #
@@ -659,8 +737,16 @@ def main(cfg: DictConfig) -> None:
 
     two_phase_cfg = cfg.training.get("two_phase_training", None)
 
-    best_val_loss = float("inf")
-    for epoch in range(int(cfg.training.epochs)):
+    start_epoch, best_val_loss = _load_initial_state(
+        cfg,
+        model=model,
+        optimizer=optimizer,
+        lr_scheduler=lr_scheduler,
+        ema=ema,
+        device=device,
+    )
+
+    for epoch in range(start_epoch, int(cfg.training.epochs)):
         t0 = time.time()
         # Phase boundary is 1-indexed (phase1 = the first phase1_epochs epochs).
         phase = _resolve_phase(epoch + 1, two_phase_cfg)
@@ -733,6 +819,7 @@ def main(cfg: DictConfig) -> None:
                 lr_scheduler=lr_scheduler,
                 ema=ema,
                 epoch=epoch + 1,
+                best_val=best_val_loss,
                 cfg=cfg,
             )
         if val_metrics["loss"] < best_val_loss:
@@ -744,6 +831,7 @@ def main(cfg: DictConfig) -> None:
                 lr_scheduler=lr_scheduler,
                 ema=ema,
                 epoch=epoch + 1,
+                best_val=best_val_loss,
                 cfg=cfg,
             )
 
