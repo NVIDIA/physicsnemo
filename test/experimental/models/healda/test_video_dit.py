@@ -16,43 +16,49 @@
 
 import pytest
 import torch
+import torch.nn as nn
 
-pytest.importorskip("earth2grid")  # HEALPix tokenizer dependency
-
-from physicsnemo.experimental.models.healda.obs_context import (  # noqa: E402
-    ObsContext,
-)
-from physicsnemo.experimental.models.healda.attention_layers import (  # noqa: E402
+from physicsnemo.experimental.models.healda.attention_layers import (
     PixelCrossAttention,
 )
-from physicsnemo.experimental.models.healda.video_dit import VideoDiT  # noqa: E402
-from physicsnemo.nn.module.hpx.tokenizer import (  # noqa: E402
-    HEALPixPatchDetokenizer,
-    HEALPixPatchTokenizer,
-)
+from physicsnemo.experimental.models.healda.obs_context import ObsContext
+from physicsnemo.experimental.models.healda.video_dit import VideoDiT, VideoDiTBlock
 
-LEVEL_FINE = 2
-LEVEL_COARSE = 1
-NPIX = 12 * 4**LEVEL_FINE  # 192
-NPIX_COARSE = 12 * 4**LEVEL_COARSE  # 48
+NPIX = 48
+
+
+class _MockTokenizer(nn.Module):
+    """Grid-free tokenizer stub: per-pixel linear (B,C,T,X) -> (B,T,X,D).
+
+    Stands in for a real grid tokenizer (e.g. HEALPixPatchTokenizer) so
+    VideoDiT's spatial/temporal/cross-attention/conditioning wiring can be
+    tested without an earth2grid dependency; ignores tokenizer_kwargs
+    (e.g. calendar features) a real tokenizer would consume.
+    """
+
+    def __init__(self, in_channels: int, hidden_size: int):
+        super().__init__()
+        self.proj = nn.Linear(in_channels, hidden_size)
+
+    def forward(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
+        return self.proj(x.permute(0, 2, 3, 1))  # (B,C,T,X) -> (B,T,X,D)
+
+
+class _MockDetokenizer(nn.Module):
+    """Grid-free detokenizer stub: per-pixel linear (B,T,X,D) -> (B,C,T,X)."""
+
+    def __init__(self, hidden_size: int, out_channels: int):
+        super().__init__()
+        self.proj = nn.Linear(hidden_size, out_channels)
+
+    def forward(self, h: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+        return self.proj(h).permute(0, 3, 1, 2)  # (B,T,X,D) -> (B,C,T,X)
 
 
 def _build_model(c, t, hidden, num_heads, device, **kwargs):
     emb_channels = 4 * hidden
-    tokenizer = HEALPixPatchTokenizer(
-        in_channels=c,
-        hidden_size=hidden,
-        level_fine=LEVEL_FINE,
-        level_coarse=LEVEL_COARSE,
-        separate_time_axis=True,
-    )
-    detokenizer = HEALPixPatchDetokenizer(
-        hidden_size=hidden,
-        out_channels=c,
-        level_coarse=LEVEL_COARSE,
-        level_fine=LEVEL_FINE,
-        condition_dim=emb_channels,
-    )
+    tokenizer = _MockTokenizer(c, hidden)
+    detokenizer = _MockDetokenizer(hidden, c)
     return VideoDiT(
         tokenizer,
         detokenizer,
@@ -123,7 +129,7 @@ def test_video_dit_cuda_full():
     )
     x = torch.randn(b, c, t, NPIX, device=dev, requires_grad=True)
 
-    total_pixels = b * t * NPIX_COARSE
+    total_pixels = b * t * NPIX
     counts = torch.randint(0, 4, (total_pixels,), device=dev)
     cu = torch.zeros(total_pixels + 1, dtype=torch.int32, device=dev)
     cu[1:] = torch.cumsum(counts, 0).to(torch.int32)
@@ -152,3 +158,123 @@ def test_video_dit_cuda_full():
     assert torch.isfinite(out).all()
     out.float().pow(2).mean().backward()
     assert x.grad.abs().sum() > 0 and tokens.grad.abs().sum() > 0
+
+
+def _build_tokenized_context(b, t, npix, obs_token_dim, device, max_count=4):
+    """Build an already-tokenized ObsContext for ``b*t*npix`` pixels.
+
+    VideoDiTBlock's cross-attention only reads ``tokens``/``cu_seqlens_k``/
+    ``max_seqlen_k``; the raw per-observation fields (required on ObsContext,
+    but otherwise unused here) are filled with unused placeholder data.
+    """
+    total_pixels = b * t * npix
+    counts = torch.randint(0, max_count, (total_pixels,), device=device)
+    cu = torch.zeros(total_pixels + 1, dtype=torch.int32, device=device)
+    cu[1:] = torch.cumsum(counts, 0).to(torch.int32)
+    n_tokens = int(cu[-1].item())
+    tokens = torch.randn(n_tokens, obs_token_dim, device=device, requires_grad=True)
+    return ObsContext(
+        tokens=tokens,
+        cu_seqlens_k=cu,
+        max_seqlen_k=int(counts.max().item()) if total_pixels else 0,
+        obs=torch.randn(n_tokens, device=device),
+        float_metadata=torch.randn(n_tokens, 1, device=device),
+        obs_type=torch.randint(0, 4, (n_tokens,), device=device),
+        channel=torch.randint(0, 4, (n_tokens,), device=device),
+        platform=torch.randint(0, 4, (n_tokens,), device=device),
+    )
+
+
+def test_plain_block_reduces_to_spatial_mlp_cpu():
+    """With temporal/cross off the block is a spatial DiT block; runs on CPU."""
+    torch.manual_seed(0)
+    b, t, npix, c = 2, 3, 16, 64
+    block = VideoDiTBlock(hidden_size=c, num_heads=4, condition_embed_dim=32)
+    x = torch.randn(b, t, npix, c, requires_grad=True)
+    emb = torch.randn(b, 32)
+    out = block(x, emb)
+    assert out.shape == (b, t, npix, c)
+    out.float().pow(2).mean().backward()
+    assert torch.isfinite(x.grad).all()
+
+
+def test_temporal_block_cpu():
+    """Temporal attention is pure torch and trains on CPU."""
+    torch.manual_seed(0)
+    b, t, npix, c = 2, 4, 16, 64
+    block = VideoDiTBlock(
+        hidden_size=c,
+        num_heads=4,
+        condition_embed_dim=32,
+        temporal_attention=True,
+        is_causal=True,
+    )
+    x = torch.randn(b, t, npix, c, requires_grad=True)
+    emb = torch.randn(b, 32)
+    out = block(x, emb)
+    assert out.shape == (b, t, npix, c)
+    out.float().pow(2).mean().backward()
+    assert block.temporal_attention.qkv.weight.grad is not None
+    assert torch.isfinite(x.grad).all()
+
+
+def test_adaln_zero_init_toggle():
+    """``adaln_zero_init`` actually zeros (or keeps) the modulation linear."""
+    zeroed = VideoDiTBlock(
+        hidden_size=64, num_heads=4, condition_embed_dim=32, adaln_zero_init=True
+    )
+    assert zeroed.norm1_modulation.modulation[-1].weight.abs().sum() == 0
+    assert zeroed.norm1_modulation.modulation[-1].bias.abs().sum() == 0
+
+    kept = VideoDiTBlock(
+        hidden_size=64, num_heads=4, condition_embed_dim=32, adaln_zero_init=False
+    )
+    assert kept.norm1_modulation.modulation[-1].weight.abs().sum() > 0
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="triton cross-attn is CUDA-only"
+)
+def test_full_block_cuda():
+    """Full block (spatial + cross-attn + temporal) forward/backward on CUDA."""
+    torch.manual_seed(0)
+    dev = "cuda"
+    b, t, npix, c = 2, 3, 64, 256
+    token_dim = 16
+
+    def cross_attention():
+        return PixelCrossAttention(
+            hidden_size=c,
+            token_dim=token_dim,
+            n_q_heads=c // token_dim,
+            n_kv_heads=1,
+            d_head=token_dim,
+            use_proj_bias=True,
+        )
+
+    block = VideoDiTBlock(
+        hidden_size=c,
+        num_heads=8,
+        condition_embed_dim=128,
+        temporal_attention=True,
+        cross_attention=cross_attention,
+        adaln_zero_init=False,  # non-zero gates so every branch gets grad
+    ).to(dev)
+
+    x = torch.randn(b, t, npix, c, device=dev, requires_grad=True)
+    emb = torch.randn(b, 128, device=dev)
+    context = _build_tokenized_context(b, t, npix, token_dim, dev)
+
+    out = block(x, emb, cross_attention_context=context)
+    assert out.shape == (b, t, npix, c)
+    assert torch.isfinite(out).all()
+
+    out.float().pow(2).mean().backward()
+    for g in (
+        x.grad,
+        context.tokens.grad,
+        block.cross_attention.q_proj.weight.grad,
+        block.temporal_attention.qkv.weight.grad,
+        next(block.attention.parameters()).grad,
+    ):
+        assert g is not None and torch.isfinite(g).all() and g.abs().sum() > 0
