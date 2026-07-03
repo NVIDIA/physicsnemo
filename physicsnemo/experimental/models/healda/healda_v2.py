@@ -25,11 +25,11 @@ from jaxtyping import Float
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
-from physicsnemo.experimental.models.healda.obs_context import ObsContext
-from physicsnemo.experimental.models.healda.obs_tokenizer import ObsTokenizerFiLM
 from physicsnemo.experimental.models.healda.attention_layers import (
     PixelCrossAttention,
 )
+from physicsnemo.experimental.models.healda.obs_context import ObsContext
+from physicsnemo.experimental.models.healda.obs_tokenizer import ObsTokenizerFiLM
 from physicsnemo.experimental.models.healda.video_dit import VideoDiT
 from physicsnemo.nn.module.hpx.tokenizer import (
     HEALPixPatchDetokenizer,
@@ -108,7 +108,7 @@ class HealDAv2(Module):
     hidden_size : int, optional, default=1536
         Transformer token dimension.
     num_layers : int, optional, default=32
-        Number of :class:`~physicsnemo.experimental.models.healda.video_dit_block.VideoDiTBlock` blocks.
+        Number of :class:`~physicsnemo.experimental.models.healda.video_dit.VideoDiTBlock` blocks.
     num_heads : int, optional, default=16
         Number of spatial- and temporal-attention heads.
     mlp_ratio : float, optional, default=4.0
