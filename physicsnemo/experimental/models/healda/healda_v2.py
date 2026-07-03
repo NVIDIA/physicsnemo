@@ -27,7 +27,7 @@ from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.experimental.models.healda.obs_context import ObsContext
 from physicsnemo.experimental.models.healda.obs_tokenizer import ObsTokenizerFiLM
-from physicsnemo.experimental.models.healda.pixel_cross_attention import (
+from physicsnemo.experimental.models.healda.attention_layers import (
     PixelCrossAttention,
 )
 from physicsnemo.experimental.models.healda.video_dit import VideoDiT
@@ -76,7 +76,7 @@ class HealDAv2(Module):
        (second-of-day / day-of-year) features.
     3. Observations are embedded per observation by
        :class:`~physicsnemo.experimental.models.healda.obs_tokenizer.ObsTokenizerFiLM` and assimilated inside every block
-       by :class:`~physicsnemo.experimental.models.healda.pixel_cross_attention.PixelCrossAttention`: each grid pixel
+       by :class:`~physicsnemo.experimental.models.healda.attention_layers.PixelCrossAttention`: each grid pixel
        attends only to the observations that land on it (ragged, local
        cross-attention).
     4. :class:`~physicsnemo.nn.module.hpx.tokenizer.HEALPixPatchDetokenizer` maps

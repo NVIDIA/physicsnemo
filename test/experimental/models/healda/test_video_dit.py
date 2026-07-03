@@ -22,7 +22,7 @@ pytest.importorskip("earth2grid")  # HEALPix tokenizer dependency
 from physicsnemo.experimental.models.healda.obs_context import (  # noqa: E402
     ObsContext,
 )
-from physicsnemo.experimental.models.healda.pixel_cross_attention import (  # noqa: E402
+from physicsnemo.experimental.models.healda.attention_layers import (  # noqa: E402
     PixelCrossAttention,
 )
 from physicsnemo.experimental.models.healda.video_dit import VideoDiT  # noqa: E402

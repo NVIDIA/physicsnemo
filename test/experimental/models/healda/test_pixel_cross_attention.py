@@ -25,7 +25,7 @@ from physicsnemo.experimental.models.healda.obs_context import (
     ObsContext,
     build_pixel_group_map,
 )
-from physicsnemo.experimental.models.healda.pixel_cross_attention import (
+from physicsnemo.experimental.models.healda.attention_layers import (
     PixelCrossAttention,
     _pixel_attention_reference,
 )

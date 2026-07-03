@@ -13,14 +13,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Observation cross-attention context container.
+"""Observation cross-attention context and packing utilities.
 
-A single :class:`ObsContext` carries everything a video DiT block's observation
-cross-attention needs -- the packed observation tokens plus the ragged packing
-metadata that maps each pixel to its token slice -- consumed by
-:class:`~physicsnemo.experimental.models.healda.pixel_cross_attention.PixelCrossAttention`.
-Use :func:`prepare_obs_context` to sort observations by pixel, build prefix sums,
-and optionally attach a :class:`PixelGroupMap` for the fused Triton kernel.
+Build an :class:`ObsContext` with :func:`prepare_obs_context`, which sorts
+observations by pixel, builds the ragged prefix sums, and optionally attaches a
+:class:`PixelGroupMap` for the fused Triton kernel.
 """
 
 from __future__ import annotations
@@ -59,7 +56,7 @@ class PixelGroupMap:
 class ObsContext:
     r"""Observation cross-attention context: packed tokens + ragged packing.
 
-    Consumed by :class:`~physicsnemo.experimental.models.healda.pixel_cross_attention.PixelCrossAttention`. Observations
+    Consumed by :class:`~physicsnemo.experimental.models.healda.attention_layers.PixelCrossAttention`. Observations
     are sorted by flat pixel index so each pixel's tokens are contiguous in
     ``tokens``.
     """

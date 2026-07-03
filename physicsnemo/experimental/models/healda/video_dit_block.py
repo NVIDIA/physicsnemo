@@ -35,7 +35,7 @@ from .sharding import (
     shard_x,
     shard_x_shardtensor,
 )
-from .temporal_attention import TemporalAttention
+from .attention_layers import TemporalAttention
 
 
 class VideoDiTBlock(nn.Module):
@@ -73,10 +73,10 @@ class VideoDiTBlock(nn.Module):
     temporal_attention : bool, optional, default=False
         Add a gated temporal-attention sub-layer.
     temporal_kwargs : Dict[str, Any], optional, default=None
-        Extra arguments for :class:`~physicsnemo.experimental.models.healda.temporal_attention.TemporalAttention`.
+        Extra arguments for :class:`~physicsnemo.experimental.models.healda.attention_layers.TemporalAttention`.
     cross_attention : Callable[..., Module], optional, default=None
         Factory building this block's cross-attention module
-        (:class:`~physicsnemo.experimental.models.healda.cross_attention.CrossAttentionModuleBase`).
+        (:class:`~physicsnemo.experimental.models.healda.attention_layers.CrossAttentionModuleBase`).
         When set, adds a gated cross-attention sub-layer consuming the opaque
         ``cross_attention_context`` passed to :meth:`forward`.
     is_causal : bool, optional, default=False

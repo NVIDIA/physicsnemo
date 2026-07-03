@@ -19,14 +19,14 @@
 Importing this module requires triton (``tl = triton.language`` runs eagerly
 below); callers must guard the import with ``triton.available``. The
 pure-PyTorch fallback has no triton dependency and lives in
-:mod:`~physicsnemo.experimental.models.healda.pixel_cross_attention` instead. Contains:
+:mod:`~physicsnemo.experimental.models.healda.attention_layers` instead. Contains:
 
 1. The ``@triton.jit`` grouped-query-attention forward/backward kernels.
 2. ``torch.library.custom_op`` wrappers with fake-tensor and autograd
    registration.
 3. The autotune config cache.
 4. :func:`pixel_attention`, the GQA dispatch entry point
-   :class:`~physicsnemo.experimental.models.healda.pixel_cross_attention.PixelCrossAttention` calls.
+   :class:`~physicsnemo.experimental.models.healda.attention_layers.PixelCrossAttention` calls.
 5. The ``@triton.jit`` counting-sort kernel and :func:`counting_sort_and_pack`,
    the entry point :func:`~physicsnemo.experimental.models.healda.obs_context.sort_and_pack` calls.
 """
@@ -1267,7 +1267,7 @@ def pixel_attention(
     group_map=None,
 ):
     r"""Triton-backed ragged grouped-query attention; see
-    :func:`~physicsnemo.experimental.models.healda.pixel_cross_attention._pixel_attention_reference` for the
+    :func:`~physicsnemo.experimental.models.healda.attention_layers._pixel_attention_reference` for the
     equivalent pure-PyTorch computation.
 
     Operates on a packed ragged layout: ``Q`` holds one query per pixel,

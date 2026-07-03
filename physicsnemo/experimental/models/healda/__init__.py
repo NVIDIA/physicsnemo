@@ -26,7 +26,7 @@ from .healda import HealDA, HealDAMetaData
 from .healda_v2 import HealDAv2, HealDAv2MetaData
 from .obs_context import ObsContext, prepare_obs_context
 from .obs_tokenizer import ObsTokenizerFiLM
-from .pixel_cross_attention import PixelCrossAttention
+from .attention_layers import PixelCrossAttention
 from .point_embed import (
     MultiSensorObsEmbedder,
     ObsTokenizer,

@@ -18,7 +18,7 @@ import pytest
 import torch
 
 from physicsnemo.experimental.models.healda.obs_context import ObsContext
-from physicsnemo.experimental.models.healda.pixel_cross_attention import (
+from physicsnemo.experimental.models.healda.attention_layers import (
     PixelCrossAttention,
 )
 from physicsnemo.experimental.models.healda.video_dit_block import VideoDiTBlock
