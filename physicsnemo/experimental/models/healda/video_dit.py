@@ -69,7 +69,7 @@ class VideoDiT(Module):
     num_heads : int
         Number of spatial-attention heads.
     num_layers : int
-        Number of :class:`.video_dit_block.VideoDiTBlock` blocks.
+        Number of :class:`~physicsnemo.experimental.models.healda.video_dit_block.VideoDiTBlock` blocks.
     emb_channels : int, optional, default=None
         EDM conditioning-embedding dimension. Defaults to ``4 * hidden_size``.
     noise_channels : int, optional, default=None
@@ -106,7 +106,7 @@ class VideoDiT(Module):
         If ``True``, apply DiT-style initialization (Xavier on linears, then
         delegate to the tokenizer, detokenizer, and blocks).
     adaln_zero_init : bool, optional, default=True
-        Forwarded to every block's :class:`.adaln.AdaLNModulation` ``zero_init``.
+        Forwarded to every block's :class:`~physicsnemo.experimental.models.healda.adaln.AdaLNModulation` ``zero_init``.
     attn_kwargs : Dict[str, Any], optional, default=None
         Extra keyword arguments for the spatial-attention backend constructor.
     block_kwargs : Dict[str, Any], optional, default=None
@@ -129,6 +129,35 @@ class VideoDiT(Module):
     -------
     torch.Tensor
         Field sequence of shape :math:`(B, C_{out}, T, X)`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.experimental.models.healda import VideoDiT
+    >>> from physicsnemo.nn.module.hpx.tokenizer import (
+    ...     HEALPixPatchDetokenizer, HEALPixPatchTokenizer,
+    ... )
+    >>> hidden, level_fine, level_coarse = 64, 2, 1
+    >>> tokenizer = HEALPixPatchTokenizer(
+    ...     in_channels=2, hidden_size=hidden, level_fine=level_fine,
+    ...     level_coarse=level_coarse, separate_time_axis=True,
+    ... )
+    >>> detokenizer = HEALPixPatchDetokenizer(
+    ...     hidden_size=hidden, out_channels=2, level_coarse=level_coarse,
+    ...     level_fine=level_fine, condition_dim=4 * hidden,
+    ... )
+    >>> model = VideoDiT(tokenizer, detokenizer, hidden_size=hidden, num_heads=2, num_layers=2)
+    >>> b, t, npix = 1, 2, 12 * 4**level_fine
+    >>> out = model(
+    ...     torch.randn(b, 2, t, npix),
+    ...     torch.zeros(b),
+    ...     tokenizer_kwargs={
+    ...         "second_of_day": torch.rand(b, t) * 86400.0,
+    ...         "day_of_year": torch.rand(b, t) * 365.0,
+    ...     },
+    ... )
+    >>> out.shape
+    torch.Size([1, 2, 2, 192])
     """
 
     def __init__(

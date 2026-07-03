@@ -69,7 +69,7 @@ class HealDAv2(Module):
 
     1. Static conditioning fields are patch-tokenized from the fine ingest grid
        (``level_in``) down to the backbone grid (``level_model``) by
-       :class:`physicsnemo.nn.module.hpx.tokenizer.HEALPixPatchTokenizer`.
+       :class:`~physicsnemo.nn.module.hpx.tokenizer.HEALPixPatchTokenizer`.
     2. A :class:`~physicsnemo.experimental.models.healda.video_dit.VideoDiT` backbone processes the token sequence with
        spatial attention, factorized temporal attention, and adaLN-Zero
        conditioning built from the EDM noise embedding and the calendar
@@ -79,7 +79,7 @@ class HealDAv2(Module):
        by :class:`~physicsnemo.experimental.models.healda.pixel_cross_attention.PixelCrossAttention`: each grid pixel
        attends only to the observations that land on it (ragged, local
        cross-attention).
-    4. :class:`physicsnemo.nn.module.hpx.tokenizer.HEALPixPatchDetokenizer` maps
+    4. :class:`~physicsnemo.nn.module.hpx.tokenizer.HEALPixPatchDetokenizer` maps
        the backbone tokens back to the fine grid, producing the ``out_channels``
        output fields.
 
@@ -97,7 +97,7 @@ class HealDAv2(Module):
     a group of :math:`N` GPUs reshards activations between time- and space-sharded
     layouts around each attention (see :mod:`~physicsnemo.experimental.models.healda.sharding`). :math:`N` must divide
     both the time and space extents, so the default ``time_length = 8`` caps it at
-    8-way. Enable via :meth:`set_context_parallel`.
+    8-way. Enable via :meth:`~physicsnemo.experimental.models.healda.healda_v2.HealDAv2.set_context_parallel`.
 
     Parameters
     ----------
@@ -204,6 +204,60 @@ class HealDAv2(Module):
     Only the default ``attention_backend="timm"`` currently supports the
     ``qk_norm_type="RMSNorm"`` with ``qk_norm_affine=False`` this model
     relies on for stable training.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.experimental.models.healda import HealDAv2, ObsContext
+    >>> from physicsnemo.experimental.models.healda.obs_context import (
+    ...     build_pixel_group_map, counts_to_cu_seqlens, sort_and_pack,
+    ... )
+    >>> model = HealDAv2(
+    ...     in_channels=2,
+    ...     out_channels=3,
+    ...     hidden_size=64,
+    ...     num_layers=2,
+    ...     num_heads=2,
+    ...     level_in=2,
+    ...     level_model=1,
+    ...     time_length=2,
+    ...     emb_channels=32,
+    ...     noise_channels=32,
+    ...     obs_token_dim=16,
+    ...     obs_meta_dim=8,
+    ...     pixel_attn_n_q_heads=32,
+    ...     pixel_attn_n_kv_heads=2,
+    ...     pixel_attn_head_dim=16,
+    ... )
+    >>> b, t, npix = 1, 2, 12 * 4**2
+    >>> npix_model = 12 * 4**1
+    >>> nobs = 3
+    >>> obs = torch.tensor([1.0, 2.0, 3.0])
+    >>> float_metadata = torch.randn(nobs, 8)
+    >>> ids = torch.zeros(nobs, dtype=torch.long)
+    >>> flat = torch.tensor([5, 0, 5], dtype=torch.int32)
+    >>> order, counts = sort_and_pack(flat, b * t * npix_model)
+    >>> order = order.long()
+    >>> cu_seqlens_k = counts_to_cu_seqlens(counts)
+    >>> obs_ctx = ObsContext(
+    ...     obs=obs[order],
+    ...     float_metadata=float_metadata[order],
+    ...     obs_type=ids[order],
+    ...     channel=ids[order],
+    ...     platform=ids[order],
+    ...     cu_seqlens_k=cu_seqlens_k,
+    ...     max_seqlen_k=int(counts.max()),
+    ...     group_map=build_pixel_group_map(cu_seqlens_k),
+    ... )
+    >>> out = model(
+    ...     torch.randn(b, 2, t, npix),
+    ...     torch.zeros(b),
+    ...     torch.rand(b, t) * 86400.0,
+    ...     torch.rand(b, t) * 365.0,
+    ...     obs_ctx,
+    ... )
+    >>> out.shape
+    torch.Size([1, 3, 2, 192])
     """
 
     def __init__(

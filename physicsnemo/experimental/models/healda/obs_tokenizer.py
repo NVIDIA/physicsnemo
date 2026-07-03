@@ -61,10 +61,15 @@ def _fused_film_tokenizer_triton(
     eps: float = 1e-5,
     force_fp32: bool = False,
 ) -> torch.Tensor:
-    r"""Fused Triton backend for :class:`ObsTokenizerFiLM` (see it for the FiLM math).
+    """Fused Triton backend for :class:`ObsTokenizerFiLM` (see it for the FiLM
+    math), computing the whole tokenizer in a single kernel. This means neither the
+    forward or backward materializes large intermediate tensors in HBM.
 
-    Runs the whole tokenizer in one kernel so neither forward nor backward
-    materializes large intermediate activations in HBM. ``linear1.out_features``
+    No intermediate activations are saved for the backward pass, which
+    recomputes the forward from the conditioning vector.
+
+    The embedding/``linear``/``layer_norm`` arguments are the modules owned by
+    :class:`ObsTokenizerFiLM`, consumed here as raw tensors. ``linear1.out_features``
     must be a power of two and ``linear2.out_features`` must equal ``2 * out_dim``;
     ``platform`` is required when ``platform_embedding`` is provided.
     """
@@ -206,6 +211,7 @@ class ObsTokenizerFiLM(torch.nn.Module):
         hidden_dim: int | None = None,
     ):
         super().__init__()
+        self.meta_dim = meta_dim
         self.out_dim = out_dim
         if channel_embed_dim is None:
             channel_embed_dim = obs_type_embed_dim
@@ -280,15 +286,10 @@ class ObsTokenizerFiLM(torch.nn.Module):
                     f"Expected float_metadata of shape ({nobs}, meta_dim), got tensor "
                     f"with shape {tuple(float_metadata.shape)}"
                 )
-            if float_metadata.shape[1] + (
-                self.obs_type_embed_dim
-                + self.channel_embed_dim
-                + self.platform_embed_dim
-            ) != self.cond_mlp[0].in_features:
+            if float_metadata.shape[1] != self.meta_dim:
                 raise ValueError(
-                    f"Expected float_metadata with meta_dim "
-                    f"{self.cond_mlp[0].in_features - (self.obs_type_embed_dim + self.channel_embed_dim + self.platform_embed_dim)}, "
-                    f"got {float_metadata.shape[1]}"
+                    f"Expected float_metadata with meta_dim {self.meta_dim}, got "
+                    f"{float_metadata.shape[1]}"
                 )
             for name, tensor in (
                 ("obs_type", obs_type),

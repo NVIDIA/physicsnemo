@@ -73,7 +73,7 @@ class VideoDiTBlock(nn.Module):
     temporal_attention : bool, optional, default=False
         Add a gated temporal-attention sub-layer.
     temporal_kwargs : Dict[str, Any], optional, default=None
-        Extra arguments for :class:`.temporal_attention.TemporalAttention`.
+        Extra arguments for :class:`~physicsnemo.experimental.models.healda.temporal_attention.TemporalAttention`.
     cross_attention : Callable[..., Module], optional, default=None
         Factory building this block's cross-attention module
         (:class:`~physicsnemo.experimental.models.healda.cross_attention.CrossAttentionModuleBase`).
@@ -82,7 +82,7 @@ class VideoDiTBlock(nn.Module):
     is_causal : bool, optional, default=False
         Causal masking for temporal attention, fixed at construction.
     adaln_zero_init : bool, optional, default=True
-        Forwarded to every :class:`.adaln.AdaLNModulation` ``zero_init``.
+        Forwarded to every :class:`~physicsnemo.experimental.models.healda.adaln.AdaLNModulation` ``zero_init``.
     attn_kwargs : Dict[str, Any], optional, default=None
         Extra arguments for the spatial-attention backend constructor.
 
@@ -228,7 +228,7 @@ class VideoDiTBlock(nn.Module):
         Returns
         -------
         None
-            Delegates to each :class:`.adaln.AdaLNModulation`.
+            Delegates to each :class:`~physicsnemo.experimental.models.healda.adaln.AdaLNModulation`.
         """
         for mod in (
             self.norm1_modulation,

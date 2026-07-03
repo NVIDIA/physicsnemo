@@ -34,16 +34,17 @@ from .point_embed import (
     UniformFusion,
 )
 from .scatter_aggregator import ScatterAggregator, scatter_mean
+from .video_dit import VideoDiT
 
 __all__ = [
     "HealDAv2",
-    "HealDAv2MetaData",
     "HealDA",
     "HealDAMetaData",
     "PixelCrossAttention",
     "ObsTokenizerFiLM",
     "ObsContext",
     "PixelGroupMap",
+    "VideoDiT",
     "MultiSensorObsEmbedder",
     "ObsTokenizer",
     "SensorEmbedder",
