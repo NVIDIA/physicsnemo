@@ -121,11 +121,10 @@ class VideoDiTBlock(nn.Module):
         Opaque per-call context forwarded to the injected ``cross_attention`` module.
     attn_kwargs : Dict[str, Any], optional
         Forwarded to the spatial-attention backend forward.
-    rope_cos, rope_sin : torch.Tensor, optional
-        1D RoPE tables of shape :math:`(T, C / \text{num\_heads})` from a shared
-        :class:`~physicsnemo.nn.module.rope.RotaryEmbedding1DTables` provider,
-        forwarded to :class:`~physicsnemo.experimental.models.healda.attention_layers.TemporalAttention`.
-        Required when temporal attention is enabled with ``use_rope=True``.
+    temporal_attn_kwargs : Dict[str, Any], optional
+        Forwarded to :class:`~physicsnemo.experimental.models.healda.attention_layers.TemporalAttention`'s
+        forward (e.g. ``rope_cos``/``rope_sin`` from a shared
+        :class:`~physicsnemo.nn.module.rope.RotaryEmbedding1DTables` provider).
 
     Outputs
     -------
@@ -159,7 +158,6 @@ class VideoDiTBlock(nn.Module):
         super().__init__()
         self.hidden_size = hidden_size
         self.condition_embed_dim = condition_embed_dim
-        self._is_causal = is_causal
 
         # Spatial self-attention backend (name -> built here, or injected module),
         # named ``attention`` to match DiTBlock for checkpoint translatability.
@@ -215,6 +213,7 @@ class VideoDiTBlock(nn.Module):
                 hidden_size=hidden_size,
                 num_heads=num_heads,
                 use_rope=use_rope,
+                is_causal=is_causal,
                 **(temporal_kwargs or {}),
             )
             self.temporal_attn_modulation = AdaLNModulation(
@@ -320,8 +319,7 @@ class VideoDiTBlock(nn.Module):
         c: Float[torch.Tensor, "batch condition_embed_dim"],
         cross_attention_context: Optional[Any] = None,
         attn_kwargs: Optional[Dict[str, Any]] = None,
-        rope_cos: Optional[Float[torch.Tensor, "time head_dim"]] = None,
-        rope_sin: Optional[Float[torch.Tensor, "time head_dim"]] = None,
+        temporal_attn_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Float[torch.Tensor, "batch time space hidden_size"]:
         b, t, x, ch = hidden_states.shape
         if not torch.compiler.is_compiling():
@@ -374,7 +372,7 @@ class VideoDiTBlock(nn.Module):
             shift, scale, gate = self.temporal_attn_modulation(c)
             normed = modulate(self.temporal_attn_norm(hidden_states), shift, scale)
             temporal_out = self.temporal_attention(
-                normed, self._is_causal, rope_cos=rope_cos, rope_sin=rope_sin
+                normed, **(temporal_attn_kwargs or {})
             )
             hidden_states = gated_residual(
                 hidden_states, temporal_out, gate, self.drop_path
@@ -470,6 +468,12 @@ class VideoDiT(Module):
         Conditioning input of shape :math:`(B, \text{condition\_dim})`.
     cross_attention_context : Any, optional
         Opaque per-call context consumed by the injected cross-attention module.
+    attn_kwargs : Dict[str, Any], optional
+        Forwarded to every block's spatial-attention backend forward.
+    temporal_attn_kwargs : Dict[str, Any], optional
+        Forwarded to every block's :class:`~physicsnemo.experimental.models.healda.attention_layers.TemporalAttention`
+        forward. RoPE tables are appended automatically when RoPE
+        is active.
     tokenizer_kwargs : Dict[str, Any], optional
         Extra keyword arguments forwarded to the tokenizer's forward.
 
@@ -570,9 +574,9 @@ class VideoDiT(Module):
             )
         cond_dim = self.conditioning_embedder.output_dim
 
-        self.rope = None
+        self.temporal_rope = None
         if temporal_attention and use_rope:
-            self.rope = RotaryEmbedding1DTables(
+            self.temporal_rope = RotaryEmbedding1DTables(
                 head_dim=hidden_size // num_heads,
                 max_seq_len=max_seq_len,
                 theta=rope_base,
@@ -661,6 +665,8 @@ class VideoDiT(Module):
         t: Float[torch.Tensor, " batch"],
         condition: Optional[Float[torch.Tensor, "batch condition_dim"]] = None,
         cross_attention_context: Optional[Any] = None,
+        attn_kwargs: Optional[Dict[str, Any]] = None,
+        temporal_attn_kwargs: Optional[Dict[str, Any]] = None,
         tokenizer_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Float[torch.Tensor, "batch out_channels time space"]:
         if not torch.compiler.is_compiling():
@@ -682,7 +688,7 @@ class VideoDiT(Module):
                         f"tensor with shape {tuple(condition.shape)}"
                     )
 
-        # (B, C, T, X) -> (B, T, X', hidden)
+        # Tokenize: (B, C, T, X) -> (B, T, X', hidden)
         h = self.tokenizer(x, **(tokenizer_kwargs or {}))
         if not torch.compiler.is_compiling() and h.ndim != 4:
             raise ValueError(
@@ -691,16 +697,19 @@ class VideoDiT(Module):
             )
 
         emb = self.conditioning_embedder(t, condition=condition)
-        rope_cos = rope_sin = None
-        if self.rope is not None:
-            rope_cos, rope_sin = self.rope(seq_len=h.shape[1])
+        block_temporal_kwargs = dict(temporal_attn_kwargs or {})
+        if self.temporal_rope is not None:
+            rope_cos, rope_sin = self.temporal_rope(seq_len=h.shape[1])
+            block_temporal_kwargs["rope_cos"] = rope_cos
+            block_temporal_kwargs["rope_sin"] = rope_sin
         for block in self.blocks:
             h = block(
                 h,
                 emb,
                 cross_attention_context=cross_attention_context,
-                rope_cos=rope_cos,
-                rope_sin=rope_sin,
+                attn_kwargs=attn_kwargs,
+                temporal_attn_kwargs=block_temporal_kwargs,
             )
 
+        # De-tokenize: (B, T, X', hidden) -> (B, C, T, X)
         return self.detokenizer(h, emb)

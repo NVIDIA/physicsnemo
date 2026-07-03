@@ -216,7 +216,9 @@ def test_temporal_block_cpu():
     rope_cos, rope_sin = rope(seq_len=t)
     x = torch.randn(b, t, npix, c, requires_grad=True)
     emb = torch.randn(b, 32)
-    out = block(x, emb, rope_cos=rope_cos, rope_sin=rope_sin)
+    out = block(
+        x, emb, temporal_attn_kwargs={"rope_cos": rope_cos, "rope_sin": rope_sin}
+    )
     assert out.shape == (b, t, npix, c)
     out.float().pow(2).mean().backward()
     assert block.temporal_attention.qkv.weight.grad is not None
@@ -273,7 +275,10 @@ def test_full_block_cuda():
     context = _build_tokenized_context(b, t, npix, token_dim, dev)
 
     out = block(
-        x, emb, cross_attention_context=context, rope_cos=rope_cos, rope_sin=rope_sin
+        x,
+        emb,
+        cross_attention_context=context,
+        temporal_attn_kwargs={"rope_cos": rope_cos, "rope_sin": rope_sin},
     )
     assert out.shape == (b, t, npix, c)
     assert torch.isfinite(out).all()

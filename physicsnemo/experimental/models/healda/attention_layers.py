@@ -106,19 +106,19 @@ class TemporalAttention(torch.nn.Module):
     use_rope : bool, optional, default=True
         Apply rotary position embeddings to queries and keys along the time
         axis. When ``True``, :meth:`forward` requires ``rope_cos``/``rope_sin``.
+    is_causal : bool, optional, default=False
+        Apply causal masking via :func:`mask_causal`.
     linear_attention : bool, optional, default=True
         If ``True``, skip softmax — attention weights are raw dot-products and
         causal masking uses zero-fill instead of ``-inf``.
     causal_window : int or None, optional, default=None
-        When set (and the forward pass is causal), restricts each frame to attend
-        to itself and the previous ``causal_window - 1`` frames only.
+        When set (and ``is_causal=True``), restricts each frame to attend to
+        itself and the previous ``causal_window - 1`` frames only.
 
     Forward
     -------
     x : torch.Tensor
         Input latents of shape :math:`(B, T, X, C)`.
-    is_causal : bool, optional, default=False
-        If ``True``, apply causal masking via :func:`mask_causal`.
     rope_cos, rope_sin : torch.Tensor, optional
         1D RoPE tables of shape :math:`(T, C / \text{num\_heads})` from a
         :class:`~physicsnemo.nn.module.rope.RotaryEmbedding1DTables` provider.
@@ -135,7 +135,7 @@ class TemporalAttention(torch.nn.Module):
     >>> from physicsnemo.experimental.models.healda.attention_layers import TemporalAttention
     >>> layer = TemporalAttention(hidden_size=64, num_heads=4, use_rope=False)
     >>> x = torch.randn(2, 8, 16, 64)
-    >>> out = layer(x, is_causal=False)
+    >>> out = layer(x)
     >>> out.shape
     torch.Size([2, 8, 16, 64])
     """
@@ -146,9 +146,12 @@ class TemporalAttention(torch.nn.Module):
         hidden_size: int,
         num_heads: int,
         use_rope: bool = True,
+        is_causal: bool = False,
         linear_attention: bool = True,
         causal_window: Optional[int] = None,
     ) -> None:
+        if causal_window is not None and not is_causal:
+            raise ValueError("causal_window was set but is_causal=False")
         super().__init__()
         self.hidden_size = hidden_size
         self._time_parallel_group = None
@@ -156,6 +159,7 @@ class TemporalAttention(torch.nn.Module):
         self.proj = torch.nn.Linear(hidden_size, hidden_size)
         self.num_heads = num_heads
         self.use_rope = use_rope
+        self.is_causal = is_causal
         self.head_dim = hidden_size // num_heads
         self.linear_attention = linear_attention
         self.causal_window = causal_window
@@ -164,7 +168,6 @@ class TemporalAttention(torch.nn.Module):
     def forward(
         self,
         x: Float[torch.Tensor, "batch time space hidden_size"],
-        is_causal: bool = False,
         rope_cos: Optional[Float[torch.Tensor, "time head_dim"]] = None,
         rope_sin: Optional[Float[torch.Tensor, "time head_dim"]] = None,
     ) -> Float[torch.Tensor, "batch time space hidden_size"]:
@@ -174,9 +177,6 @@ class TemporalAttention(torch.nn.Module):
         ----------
         x : torch.Tensor
             Input latents of shape :math:`(B, T, X, C)`.
-        is_causal : bool, optional, default=False
-            If ``True``, apply causal masking so each frame only attends to
-            itself and prior frames (optionally within ``causal_window``).
         rope_cos, rope_sin : torch.Tensor, optional, default=None
             1D RoPE tables of shape :math:`(T, C / \text{num\_heads})`. Required
             when ``use_rope=True``.
@@ -227,7 +227,7 @@ class TemporalAttention(torch.nn.Module):
             "b q x h c, b k x h c -> b q k x h", q, k / math.sqrt(k.shape[-1])
         )
 
-        if is_causal:
+        if self.is_causal:
             attn = mask_causal(
                 attn, linear=self.linear_attention, window=self.causal_window
             )
