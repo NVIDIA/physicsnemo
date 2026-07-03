@@ -184,15 +184,29 @@ def _slice_batch_sample(batch: dict, idx: int) -> dict[str, Any]:
 def _forward_sample(
     model: torch.nn.Module,
     sample: dict[str, torch.Tensor],
-) -> tuple[torch.Tensor, torch.Tensor, TokenSet, TokenSet, torch.Tensor]:
-    """Run encoders + predictor + decoder on one sample.
+    *,
+    run_reconstruction: bool = True,
+) -> tuple[
+    torch.Tensor | None, torch.Tensor, TokenSet, TokenSet, TokenSet, torch.Tensor
+]:
+    """Run the encoders + predictor (and optionally the decoder) on one sample.
+
+    Parameters
+    ----------
+    run_reconstruction : bool, optional
+        When ``False`` the decoder is skipped and ``pred_field`` is ``None``.
+        Used when the reconstruction term has zero weight (e.g. the latent
+        phase of two-phase training) to avoid the decoder forward.
 
     Returns
     -------
-    pred_field : torch.Tensor
-        Decoded field at the query points, shape ``(N_q, C)``.
+    pred_field : torch.Tensor or None
+        Decoded field at the query points, shape ``(N_q, C)``; ``None`` when
+        ``run_reconstruction`` is ``False``.
     pred_features : torch.Tensor
         Predictor output features matching ``target_tokens.coords``.
+    context_tokens : TokenSet
+        Context encoder's output (kept for the optional context SIGReg).
     target_tokens : TokenSet
         Target encoder's output (kept for the latent / SIGReg losses).
     predictor_tokens : TokenSet
@@ -229,28 +243,44 @@ def _forward_sample(
         global_token=target_tokens.global_token,
     )
 
-    pred_field = model.decode_field(
-        target_tokens=predictor_tokens,
-        cond_global=cond_global,
-        query_pos=sample["query_pos"],
-        query_sdf=sample["query_sdf"],
+    pred_field = None
+    if run_reconstruction:
+        pred_field = model.decode_field(
+            target_tokens=predictor_tokens,
+            cond_global=cond_global,
+            query_pos=sample["query_pos"],
+            query_sdf=sample["query_sdf"],
+        )
+    return (
+        pred_field,
+        pred_features,
+        context_tokens,
+        target_tokens,
+        predictor_tokens,
+        cond_global,
     )
-    return pred_field, pred_features, target_tokens, predictor_tokens, cond_global
 
 
 def _compute_total_loss(
     *,
-    pred_field: torch.Tensor,
+    pred_field: torch.Tensor | None,
     query_target: torch.Tensor,
     pred_features: torch.Tensor,
+    context_tokens: TokenSet,
     target_tokens: TokenSet,
     recon_loss_fn: torch.nn.Module,
     sigreg_loss_fn: torch.nn.Module,
+    sigreg_context_loss_fn: torch.nn.Module,
     loss_cfg: DictConfig,
-    epoch: float,
+    term_weights: dict[str, float],
 ) -> tuple[torch.Tensor, dict[str, float]]:
-    """Combine recon + latent + sigreg losses with linear warmup."""
-    recon_term = recon_loss_fn(pred_field, query_target)
+    """Combine recon + latent + target/context SIGReg with the given weights.
+
+    ``term_weights`` holds the (already phase-resolved and warmed-up) scalar
+    weights for ``latent``, ``sigreg``, ``sigreg_context`` and ``recon``. The
+    latent and SIGReg terms are always computed (cheap, and used for logging);
+    the reconstruction term is added only when ``pred_field`` is provided.
+    """
     latent_term = compute_latent_loss(
         pred_features.unsqueeze(0),
         target_tokens.features.unsqueeze(0),
@@ -260,35 +290,165 @@ def _compute_total_loss(
             target_tokens.mask.unsqueeze(0) if target_tokens.mask is not None else None
         ),
     )
-    sigreg_term = sigreg_loss_fn(
-        target_tokens.features,
-        target_tokens.mask,
+    sigreg_term = sigreg_loss_fn(target_tokens.features, target_tokens.mask)
+    sigreg_context_term = sigreg_context_loss_fn(
+        context_tokens.features, context_tokens.mask
     )
 
-    recon_w = linear_warmup_weight(
-        float(loss_cfg.recon.weight),
-        float(loss_cfg.recon.warmup_epochs),
-        epoch,
+    total = (
+        term_weights["latent"] * latent_term
+        + term_weights["sigreg"] * sigreg_term
+        + term_weights["sigreg_context"] * sigreg_context_term
     )
-    latent_w = linear_warmup_weight(
-        float(loss_cfg.latent.weight),
-        float(loss_cfg.latent.warmup_epochs),
-        epoch,
-    )
-    sigreg_w = linear_warmup_weight(
-        float(loss_cfg.sigreg.weight),
-        float(loss_cfg.sigreg.warmup_epochs),
-        epoch,
-    )
+    recon_value = 0.0
+    if pred_field is not None:
+        recon_term = recon_loss_fn(pred_field, query_target)
+        total = total + term_weights["recon"] * recon_term
+        recon_value = float(recon_term.detach().item())
 
-    total = recon_w * recon_term + latent_w * latent_term + sigreg_w * sigreg_term
     return total, {
-        "recon": float(recon_term.detach().item()),
+        "recon": recon_value,
         "latent": float(latent_term.detach().item()),
         "sigreg": float(sigreg_term.detach().item()),
-        "recon_w": recon_w,
-        "latent_w": latent_w,
-        "sigreg_w": sigreg_w,
+        "sigreg_context": float(sigreg_context_term.detach().item()),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Two-phase training (optional)
+#
+# Phase 1 trains the context + target encoders and the predictor in latent
+# space (decoder frozen, reconstruction off). Phase 2 freezes those and trains
+# only the decoder to reconstruct the field from the frozen latents. Freezing
+# is done purely via ``requires_grad`` on a single optimizer, so parameters
+# with no gradient are simply skipped by the optimizer step.
+# --------------------------------------------------------------------------- #
+
+
+def _resolve_phase(
+    epoch: int, two_phase_cfg: DictConfig | None
+) -> dict[str, Any] | None:
+    """Resolve the phase for ``epoch`` (1-indexed), or ``None`` if disabled."""
+    if two_phase_cfg is None or not bool(two_phase_cfg.get("enabled", False)):
+        return None
+    phase1_epochs = int(two_phase_cfg.get("phase1_epochs", 0))
+    if phase1_epochs <= 0:
+        raise ValueError(
+            "training.two_phase_training.phase1_epochs must be > 0 when enabled."
+        )
+    if int(epoch) <= phase1_epochs:
+        return {
+            "name": "phase1_latent",
+            "epoch_in_phase": int(epoch),
+            "config": two_phase_cfg,
+        }
+    return {
+        "name": "phase2_reconstruction",
+        "epoch_in_phase": int(epoch) - phase1_epochs,
+        "config": two_phase_cfg,
+    }
+
+
+def _set_requires_grad(module: torch.nn.Module | None, enabled: bool) -> None:
+    if module is None:
+        return
+    for param in module.parameters():
+        param.requires_grad_(bool(enabled))
+
+
+def _apply_phase(
+    model: torch.nn.Module, phase: dict[str, Any] | None, *, is_train: bool
+) -> None:
+    """Freeze / unfreeze submodules and set train/eval modes for ``phase``.
+
+    With ``phase is None`` the whole model just follows ``is_train``. Otherwise
+    every parameter is frozen first, then the phase's trainable submodules are
+    re-enabled; frozen submodules also drop to eval mode so their dropout /
+    norm statistics stay fixed.
+    """
+    if phase is None:
+        return
+    pcfg = phase["config"]
+    _set_requires_grad(model, False)
+    model.eval()
+    if phase["name"] == "phase1_latent":
+        train_ctx = bool(pcfg.get("phase1_train_context_encoder", True))
+        train_tgt = bool(pcfg.get("phase1_train_target_encoder", True))
+        train_pred = bool(pcfg.get("phase1_train_predictor", True))
+        _set_requires_grad(model.context_encoder, train_ctx)
+        _set_requires_grad(model.target_encoder, train_tgt)
+        _set_requires_grad(model.predictor, train_pred)
+        model.context_encoder.train(is_train and train_ctx)
+        model.target_encoder.train(is_train and train_tgt)
+        model.predictor.train(is_train and train_pred)
+    elif phase["name"] == "phase2_reconstruction":
+        train_dec = bool(pcfg.get("phase2_train_decoder", True))
+        _set_requires_grad(model.decoder, train_dec)
+        model.decoder.train(is_train and train_dec)
+
+
+def _compute_term_weights(
+    epoch: int, loss_cfg: DictConfig, phase: dict[str, Any] | None
+) -> dict[str, float]:
+    """Phase-aware, linearly-warmed-up weights for the four loss terms."""
+
+    def warm(weight, warmup_epochs, ep) -> float:
+        return linear_warmup_weight(float(weight), float(warmup_epochs), float(ep))
+
+    if phase is None:
+        return {
+            "latent": warm(
+                loss_cfg.latent.weight, loss_cfg.latent.warmup_epochs, epoch
+            ),
+            "sigreg": warm(
+                loss_cfg.sigreg.weight, loss_cfg.sigreg.warmup_epochs, epoch
+            ),
+            "sigreg_context": warm(
+                loss_cfg.sigreg_context.weight,
+                loss_cfg.sigreg_context.get("warmup_epochs", 0),
+                epoch,
+            ),
+            "recon": warm(loss_cfg.recon.weight, loss_cfg.recon.warmup_epochs, epoch),
+        }
+
+    pcfg = phase["config"]
+    ep_in_phase = int(phase["epoch_in_phase"])
+    ctx_warmup = loss_cfg.sigreg_context.get("warmup_epochs", 0)
+    if phase["name"] == "phase1_latent":
+        return {
+            "latent": warm(
+                pcfg.get("phase1_latent_weight", loss_cfg.latent.weight),
+                pcfg.get("phase1_latent_warmup_epochs", loss_cfg.latent.warmup_epochs),
+                epoch,
+            ),
+            "sigreg": warm(
+                pcfg.get("phase1_sigreg_weight", loss_cfg.sigreg.weight),
+                pcfg.get("phase1_sigreg_warmup_epochs", loss_cfg.sigreg.warmup_epochs),
+                epoch,
+            ),
+            "sigreg_context": warm(
+                pcfg.get(
+                    "phase1_sigreg_context_weight", loss_cfg.sigreg_context.weight
+                ),
+                pcfg.get("phase1_sigreg_context_warmup_epochs", ctx_warmup),
+                epoch,
+            ),
+            "recon": warm(
+                pcfg.get("phase1_recon_weight", 0.0),
+                pcfg.get("phase1_recon_warmup_epochs", 0),
+                ep_in_phase,
+            ),
+        }
+    # phase2_reconstruction: reconstruction only by default.
+    return {
+        "latent": float(pcfg.get("phase2_latent_weight", 0.0)),
+        "sigreg": float(pcfg.get("phase2_sigreg_weight", 0.0)),
+        "sigreg_context": float(pcfg.get("phase2_sigreg_context_weight", 0.0)),
+        "recon": warm(
+            pcfg.get("phase2_recon_weight", loss_cfg.recon.weight),
+            pcfg.get("phase2_recon_warmup_epochs", 0),
+            ep_in_phase,
+        ),
     }
 
 
@@ -303,6 +463,7 @@ def _run_epoch(
     loader: DataLoader,
     recon_loss_fn: torch.nn.Module,
     sigreg_loss_fn: torch.nn.Module,
+    sigreg_context_loss_fn: torch.nn.Module,
     optimizer: torch.optim.Optimizer | None,
     lr_scheduler: Any,
     ema: ExponentialMovingAverage | None,
@@ -312,15 +473,21 @@ def _run_epoch(
     loss_cfg: DictConfig,
     epoch: int,
     max_batches: int | None,
+    phase: dict[str, Any] | None = None,
 ) -> dict[str, float]:
     is_train = optimizer is not None
     model.train(is_train)
+    _apply_phase(model, phase, is_train=is_train)
+
+    term_weights = _compute_term_weights(epoch, loss_cfg, phase)
+    run_reconstruction = float(term_weights["recon"]) != 0.0
 
     totals: dict[str, float] = {
         "loss": 0.0,
         "recon": 0.0,
         "latent": 0.0,
         "sigreg": 0.0,
+        "sigreg_context": 0.0,
     }
     n_samples = 0
 
@@ -338,18 +505,22 @@ def _run_epoch(
                 torch.set_grad_enabled(is_train),
                 get_autocast_context(device, precision),
             ):
-                pred_field, pred_features, target_tokens, _, _ = _forward_sample(
-                    model, sample
+                pred_field, pred_features, context_tokens, target_tokens, _, _ = (
+                    _forward_sample(
+                        model, sample, run_reconstruction=run_reconstruction
+                    )
                 )
                 loss, parts = _compute_total_loss(
                     pred_field=pred_field,
                     query_target=sample["query_target"],
                     pred_features=pred_features,
+                    context_tokens=context_tokens,
                     target_tokens=target_tokens,
                     recon_loss_fn=recon_loss_fn,
                     sigreg_loss_fn=sigreg_loss_fn,
+                    sigreg_context_loss_fn=sigreg_context_loss_fn,
                     loss_cfg=loss_cfg,
-                    epoch=float(epoch),
+                    term_weights=term_weights,
                 )
             if is_train:
                 # Accumulate gradients one sample at a time so only a single
@@ -357,7 +528,7 @@ def _run_epoch(
                 # batch size makes this identical to one backward on the
                 # batch-mean loss, at far lower peak memory.
                 (loss / n_in_batch).backward()
-            for k in ("recon", "latent", "sigreg"):
+            for k in ("recon", "latent", "sigreg", "sigreg_context"):
                 totals[k] += float(parts[k])
             totals["loss"] += float(loss.detach().item())
             n_samples += 1
@@ -463,6 +634,11 @@ def main(cfg: DictConfig) -> None:
     # Losses, optimiser, scheduler, EMA.
     recon_loss_fn = build_recon_loss_from_config(cfg.training.loss.recon).to(device)
     sigreg_loss_fn = build_sigreg_from_config(cfg.training.loss.sigreg).to(device)
+    # Optional anti-collapse regularizer on the context latents (weight 0 by
+    # default); a separate instance from the target-latent SIGReg.
+    sigreg_context_loss_fn = build_sigreg_from_config(
+        cfg.training.loss.sigreg_context
+    ).to(device)
     optimizer = build_optimizer(model, cfg.training.optimizer)
     lr_scheduler = build_lr_scheduler(
         optimizer,
@@ -481,14 +657,21 @@ def main(cfg: DictConfig) -> None:
     save_every = int(cfg.training.save_every_epochs)
     max_eval_batches = int(cfg.training.max_eval_batches)
 
+    two_phase_cfg = cfg.training.get("two_phase_training", None)
+
     best_val_loss = float("inf")
     for epoch in range(int(cfg.training.epochs)):
         t0 = time.time()
+        # Phase boundary is 1-indexed (phase1 = the first phase1_epochs epochs).
+        phase = _resolve_phase(epoch + 1, two_phase_cfg)
+        if phase is not None:
+            log.info("epoch=%03d  phase=%s", epoch, phase["name"])
         train_metrics = _run_epoch(
             model=model,
             loader=train_loader,
             recon_loss_fn=recon_loss_fn,
             sigreg_loss_fn=sigreg_loss_fn,
+            sigreg_context_loss_fn=sigreg_context_loss_fn,
             optimizer=optimizer,
             lr_scheduler=lr_scheduler,
             ema=ema,
@@ -498,6 +681,7 @@ def main(cfg: DictConfig) -> None:
             loss_cfg=cfg.training.loss,
             epoch=epoch,
             max_batches=None,
+            phase=phase,
         )
         train_time = time.time() - t0
 
@@ -509,6 +693,7 @@ def main(cfg: DictConfig) -> None:
                 loader=val_loader,
                 recon_loss_fn=recon_loss_fn,
                 sigreg_loss_fn=sigreg_loss_fn,
+                sigreg_context_loss_fn=sigreg_context_loss_fn,
                 optimizer=None,
                 lr_scheduler=None,
                 ema=None,
@@ -518,6 +703,7 @@ def main(cfg: DictConfig) -> None:
                 loss_cfg=cfg.training.loss,
                 epoch=epoch,
                 max_batches=max_eval_batches,
+                phase=phase,
             )
         finally:
             if ema is not None:

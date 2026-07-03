@@ -67,3 +67,29 @@ loss:
     warmup_epochs: 5
     knots: 17
     num_proj: 1024
+
+  # Optional anti-collapse regularizer on the context latents (before the
+  # predictor). Off by default (weight 0); the original AeroJEPA objective
+  # regularizes only the target latents.
+  sigreg_context:
+    weight: 0.0
+    warmup_epochs: 5
+    knots: 17
+    num_proj: 1024
+
+# Optional two-phase training. Phase 1 trains the context + target encoders
+# and the predictor in latent space (latent + SIGReg, decoder frozen). Phase 2
+# freezes the encoders and predictor and trains only the decoder to
+# reconstruct the field from the frozen latents. Disabled by default (a single
+# phase with all loss terms active, all parameters trainable).
+two_phase_training:
+  enabled: false
+  phase1_epochs: 100
+  # Per-phase weight / train-flag overrides (defaults shown; unset keys fall
+  # back to the `loss.*` weights above, or 0 where noted):
+  #   phase1_train_context_encoder / phase1_train_target_encoder /
+  #   phase1_train_predictor  (default true)
+  #   phase1_recon_weight  (default 0.0)
+  #   phase2_train_decoder  (default true)
+  #   phase2_latent_weight / phase2_sigreg_weight / phase2_sigreg_context_weight
+  #   (default 0.0); phase2_recon_weight (default loss.recon.weight)
