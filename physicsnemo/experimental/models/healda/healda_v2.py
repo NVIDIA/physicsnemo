@@ -54,16 +54,16 @@ class HealDAv2MetaData(ModelMetaData):
 
 
 class HealDAv2(Module):
-    r"""Observation-conditioned video diffusion model for weather data assimilation on
-    the HEALPix sphere.
+    r"""Video transformer model for data assimilation of point-cloud like observations on the
+    HEALPix grid.
 
     ``HealDAv2`` maps a set of sparse, irregularly located observations (plus
     static fields and calendar features) to a gridded field sequence -- a short
     video window of :math:`T` frames over a HEALPix grid.
 
-    The model is conditioned on a diffusion noise level (``noise_labels``)
-    through the adaLN modulation, so it can be trained as a diffusion model or as
-    a deterministic regression model, where the ``noise_labels`` are fixed to zero.
+    It uses the DiT architecture (adaLN-Zero conditioning on ``t`` and
+    ``class_labels``), but is currently only trained as a regression model
+    with ``t`` fixed to zero.
 
     Data flows through four stages:
 
@@ -72,7 +72,7 @@ class HealDAv2(Module):
        :class:`~physicsnemo.nn.module.hpx.tokenizer.HEALPixPatchTokenizer`.
     2. A :class:`~physicsnemo.experimental.models.healda.video_dit.VideoDiT` backbone processes the token sequence with
        spatial attention, factorized temporal attention, and adaLN-Zero
-       conditioning built from the EDM noise embedding and the calendar
+       conditioning built from ``t``, ``class_labels``, and the calendar
        (second-of-day / day-of-year) features.
     3. Observations are embedded per observation by
        :class:`~physicsnemo.experimental.models.healda.obs_tokenizer.ObsTokenizerFiLM` and assimilated inside every block
@@ -119,12 +119,15 @@ class HealDAv2(Module):
         HEALPix backbone resolution level after patch embedding.
     time_length : int, optional, default=8
         Number of frames per video window.
-    emb_channels : int, optional, default=128
-        EDM conditioning-embedding dimension feeding every adaLN and the detokenizer.
+    condition_embed_dim : int, optional, default=128
+        Width of the conditioning vector the adaLN modulations consume.
     noise_channels : int, optional, default=128
-        EDM noise positional-embedding dimension.
+        Intermediate width of the noise-level embedding inside the
+        conditioning embedder, before it is combined with ``class_labels``
+        and projected to ``condition_embed_dim``.
     condition_dim : int, optional, default=0
-        Class-label condition dimension (0 = noise-only conditioning).
+        Width of the raw ``class_labels`` input the conditioning embedder
+        accepts (0 = noise-only conditioning, no class-label input).
     temporal_attention : bool, optional, default=True
         Enable factorized temporal attention in every block.
     is_causal : bool, optional, default=True
@@ -140,8 +143,7 @@ class HealDAv2(Module):
     drop_path : float, optional, default=0.1
         Stochastic-depth rate applied to every block past the warmup blocks.
     drop_path_zero_first_n_blocks : int, optional, default=4
-        Number of leading blocks forced to drop-path rate 0 to stabilize early
-        training (the first blocks are prone to gradient spikes otherwise).
+        Number of leading blocks forced to drop-path rate 0.
     qk_norm_type : Literal["RMSNorm", "LayerNorm"], optional, default="RMSNorm"
         Spatial-attention QK normalization type. ``None`` disables it.
     qk_norm_affine : bool, optional, default=False
@@ -178,8 +180,9 @@ class HealDAv2(Module):
     x : torch.Tensor
         Static conditioning fields of shape :math:`(B, C_{in}, T, N_{pix})` with
         :math:`N_{pix} = 12 \times 4^{\mathrm{level\_in}}`.
-    noise_labels : torch.Tensor
-        EDM noise levels of shape :math:`(B,)`.
+    t : torch.Tensor
+        Noise/timestep-conditioning input of shape :math:`(B,)`; fixed to zero
+        for the current regression training setup (see Notes).
     second_of_day : torch.Tensor
         Second-of-day tensor of shape :math:`(B, T)` for the calendar embedding.
     day_of_year : torch.Tensor
@@ -188,6 +191,9 @@ class HealDAv2(Module):
         Raw observations plus ragged packing, with pixel prefix sums over
         :math:`B \cdot T \cdot X'` and :math:`X' = 12 \times 4^{\mathrm{level\_model}}`.
         The tokenizer fills ``tokens`` internally.
+    class_labels : torch.Tensor, optional, default=None
+        Class-label condition vector of shape :math:`(B, \text{condition\_dim})`.
+        ``None`` when ``condition_dim=0`` (noise-only conditioning).
 
     Outputs
     -------
@@ -196,10 +202,10 @@ class HealDAv2(Module):
 
     Notes
     -----
-    Observations are passed as an :class:`~physicsnemo.experimental.models.healda.obs_context.ObsContext`, pre-packed
-    per pixel with :func:`~physicsnemo.experimental.models.healda.obs_context.sort_and_pack`. The FiLM tokenizer and
-    pixel cross-attention run fused Triton kernels on CUDA. Also set ``group_map`` via
-    :func:`~physicsnemo.experimental.models.healda.obs_context.build_pixel_group_map` for best throughput.
+    Build an :class:`~physicsnemo.experimental.models.healda.obs_context.ObsContext` with
+    :func:`~physicsnemo.experimental.models.healda.obs_context.prepare_obs_context` to handle
+    the obs preprocessing (sorting and packing). The FiLM tokenizer and pixel cross-attention run
+    fused Triton kernels on CUDA.
 
     Only the default ``attention_backend="timm"`` currently supports the
     ``qk_norm_type="RMSNorm"`` with ``qk_norm_affine=False`` this model
@@ -208,10 +214,7 @@ class HealDAv2(Module):
     Examples
     --------
     >>> import torch
-    >>> from physicsnemo.experimental.models.healda import HealDAv2, ObsContext
-    >>> from physicsnemo.experimental.models.healda.obs_context import (
-    ...     build_pixel_group_map, counts_to_cu_seqlens, sort_and_pack,
-    ... )
+    >>> from physicsnemo.experimental.models.healda import HealDAv2, prepare_obs_context
     >>> model = HealDAv2(
     ...     in_channels=2,
     ...     out_channels=3,
@@ -221,7 +224,7 @@ class HealDAv2(Module):
     ...     level_in=2,
     ...     level_model=1,
     ...     time_length=2,
-    ...     emb_channels=32,
+    ...     condition_embed_dim=32,
     ...     noise_channels=32,
     ...     obs_token_dim=16,
     ...     obs_meta_dim=8,
@@ -236,18 +239,14 @@ class HealDAv2(Module):
     >>> float_metadata = torch.randn(nobs, 8)
     >>> ids = torch.zeros(nobs, dtype=torch.long)
     >>> flat = torch.tensor([5, 0, 5], dtype=torch.int32)
-    >>> order, counts = sort_and_pack(flat, b * t * npix_model)
-    >>> order = order.long()
-    >>> cu_seqlens_k = counts_to_cu_seqlens(counts)
-    >>> obs_ctx = ObsContext(
-    ...     obs=obs[order],
-    ...     float_metadata=float_metadata[order],
-    ...     obs_type=ids[order],
-    ...     channel=ids[order],
-    ...     platform=ids[order],
-    ...     cu_seqlens_k=cu_seqlens_k,
-    ...     max_seqlen_k=int(counts.max()),
-    ...     group_map=build_pixel_group_map(cu_seqlens_k),
+    >>> obs_ctx = prepare_obs_context(
+    ...     obs=obs,
+    ...     float_metadata=float_metadata,
+    ...     obs_type=ids,
+    ...     channel=ids,
+    ...     platform=ids,
+    ...     flat_idx=flat,
+    ...     total_pixels=b * t * npix_model,
     ... )
     >>> out = model(
     ...     torch.randn(b, 2, t, npix),
@@ -271,7 +270,7 @@ class HealDAv2(Module):
         level_in: int = 6,
         level_model: int = 5,
         time_length: int = 8,
-        emb_channels: int = 128,
+        condition_embed_dim: int = 128,
         noise_channels: int = 128,
         condition_dim: int = 0,
         temporal_attention: bool = True,
@@ -306,6 +305,7 @@ class HealDAv2(Module):
         self.level_in = level_in
         self.level_model = level_model
         self.time_length = time_length
+        self.condition_dim = condition_dim
         self.npix = 12 * 4**level_in
 
         self.obs_tokenizer = ObsTokenizerFiLM(
@@ -355,7 +355,7 @@ class HealDAv2(Module):
             level_coarse=level_model,
             level_fine=level_in,
             time_length=time_length,
-            condition_dim=emb_channels,
+            condition_dim=condition_embed_dim,
         )
         self.dit = VideoDiT(
             tokenizer,
@@ -363,7 +363,7 @@ class HealDAv2(Module):
             hidden_size=hidden_size,
             num_heads=num_heads,
             num_layers=num_layers,
-            emb_channels=emb_channels,
+            emb_channels=condition_embed_dim,
             noise_channels=noise_channels,
             condition_dim=condition_dim,
             temporal_attention=temporal_attention,
@@ -399,10 +399,11 @@ class HealDAv2(Module):
     def forward(
         self,
         x: Float[torch.Tensor, "batch in_channels time npix"],
-        noise_labels: Float[torch.Tensor, " batch"],
+        t: Float[torch.Tensor, " batch"],
         second_of_day: Float[torch.Tensor, "batch time"],
         day_of_year: Float[torch.Tensor, "batch time"],
         obs_ctx: ObsContext,
+        class_labels: Optional[Float[torch.Tensor, "batch condition_dim"]] = None,
     ) -> Float[torch.Tensor, "batch out_channels time npix"]:
         if not torch.compiler.is_compiling():
             if x.ndim != 4:
@@ -410,34 +411,53 @@ class HealDAv2(Module):
                     f"Expected 4D input (B, C, T, X), got {x.ndim}D tensor with shape "
                     f"{tuple(x.shape)}"
                 )
-            b, c, t, x_dim = x.shape
+            b, c, time_len, x_dim = x.shape
             if c != self.in_channels:
                 raise ValueError(
                     f"Expected {self.in_channels} input channels, got {c} channels"
                 )
-            if t != self.time_length:
+            if time_len != self.time_length:
                 raise ValueError(
-                    f"Expected time_length {self.time_length}, got {t} frames"
+                    f"Expected time_length {self.time_length}, got {time_len} frames"
                 )
             if x_dim != self.npix:
                 raise ValueError(f"Expected npix {self.npix}, got {x_dim} pixels")
-            if noise_labels.ndim != 1 or noise_labels.shape[0] != b:
+            if t.ndim != 1 or t.shape[0] != b:
                 raise ValueError(
-                    f"Expected noise_labels of shape ({b},), got tensor with shape "
-                    f"{tuple(noise_labels.shape)}"
+                    f"Expected t of shape ({b},), got tensor with shape "
+                    f"{tuple(t.shape)}"
                 )
-            if second_of_day.shape != (b, t) or day_of_year.shape != (b, t):
+            if second_of_day.shape != (b, time_len) or day_of_year.shape != (
+                b,
+                time_len,
+            ):
                 raise ValueError(
-                    f"Expected calendar tensors of shape ({b}, {t}), got "
+                    f"Expected calendar tensors of shape ({b}, {time_len}), got "
                     f"second_of_day {tuple(second_of_day.shape)} and day_of_year "
                     f"{tuple(day_of_year.shape)}"
                 )
             npix_model = 12 * 4**self.level_model
-            expected_cu_len = b * t * npix_model + 1
+            expected_cu_len = b * time_len * npix_model + 1
             if obs_ctx.cu_seqlens_k.numel() != expected_cu_len:
                 raise ValueError(
                     f"Expected cu_seqlens_k length {expected_cu_len} "
                     f"(B*T*npix_model+1), got {obs_ctx.cu_seqlens_k.numel()}"
+                )
+            if self.condition_dim > 0:
+                if class_labels is None:
+                    raise ValueError(
+                        f"condition_dim={self.condition_dim} but class_labels was not "
+                        "provided"
+                    )
+                if class_labels.shape != (b, self.condition_dim):
+                    raise ValueError(
+                        f"Expected class_labels of shape ({b}, {self.condition_dim}), "
+                        f"got tensor with shape {tuple(class_labels.shape)}"
+                    )
+            elif class_labels is not None:
+                raise ValueError(
+                    "class_labels was provided but condition_dim=0 (noise-only "
+                    "conditioning)"
                 )
 
         tokens = self.obs_tokenizer(
@@ -450,7 +470,8 @@ class HealDAv2(Module):
         cross_attention_context = dataclasses.replace(obs_ctx, tokens=tokens)
         return self.dit(
             x,
-            noise_labels,
+            t,
+            condition=class_labels,
             cross_attention_context=cross_attention_context,
             tokenizer_kwargs={
                 "second_of_day": second_of_day,

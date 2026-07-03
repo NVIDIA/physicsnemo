@@ -116,8 +116,8 @@ class VideoDiT(Module):
     -------
     x : torch.Tensor
         Field sequence of shape :math:`(B, C, T, X)`.
-    noise_labels : torch.Tensor
-        Diffusion noise levels of shape :math:`(B,)`.
+    t : torch.Tensor
+        Diffusion timestep (noise level) tensor of shape :math:`(B,)`.
     condition : torch.Tensor, optional
         Conditioning input of shape :math:`(B, \text{condition\_dim})`.
     cross_attention_context : Any, optional
@@ -298,7 +298,7 @@ class VideoDiT(Module):
     def forward(
         self,
         x: Float[torch.Tensor, "batch channels time space"],
-        noise_labels: Float[torch.Tensor, " batch"],
+        t: Float[torch.Tensor, " batch"],
         condition: Optional[Float[torch.Tensor, "batch condition_dim"]] = None,
         cross_attention_context: Optional[Any] = None,
         tokenizer_kwargs: Optional[Dict[str, Any]] = None,
@@ -310,10 +310,10 @@ class VideoDiT(Module):
                     f"{tuple(x.shape)}"
                 )
             b = x.shape[0]
-            if noise_labels.ndim != 1 or noise_labels.shape[0] != b:
+            if t.ndim != 1 or t.shape[0] != b:
                 raise ValueError(
-                    f"Expected noise_labels of shape ({b},), got tensor with shape "
-                    f"{tuple(noise_labels.shape)}"
+                    f"Expected t of shape ({b},), got tensor with shape "
+                    f"{tuple(t.shape)}"
                 )
             if condition is not None:
                 if condition.ndim != 2 or condition.shape != (b, self.condition_dim):
@@ -330,7 +330,7 @@ class VideoDiT(Module):
                 "(use a tokenizer with separate_time_axis=True)."
             )
 
-        emb = self.conditioning_embedder(noise_labels, condition=condition)
+        emb = self.conditioning_embedder(t, condition=condition)
         for block in self.blocks:
             h = block(h, emb, cross_attention_context=cross_attention_context)
 

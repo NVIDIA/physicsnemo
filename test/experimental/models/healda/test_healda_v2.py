@@ -22,7 +22,7 @@ pytest.importorskip("earth2grid")  # HEALPix tokenizer dependency
 
 from physicsnemo.experimental.models.healda.healda_v2 import HealDAv2  # noqa: E402
 from physicsnemo.experimental.models.healda.obs_context import (  # noqa: E402
-    ObsContext,
+    prepare_obs_context,
 )
 
 LEVEL_FINE = 2
@@ -42,7 +42,7 @@ def _build_model(device):
         level_in=LEVEL_FINE,
         level_model=LEVEL_COARSE,
         time_length=2,
-        emb_channels=32,
+        condition_embed_dim=32,
         noise_channels=32,
         obs_token_dim=16,
         obs_meta_dim=8,
@@ -54,12 +54,6 @@ def _build_model(device):
         pixel_attn_n_kv_heads=2,
         pixel_attn_head_dim=16,
     ).to(device)
-
-
-def _cu_seqlens(counts, device):
-    cu = torch.zeros(len(counts) + 1, dtype=torch.int32, device=device)
-    cu[1:] = torch.tensor(counts, dtype=torch.int32, device=device).cumsum(0)
-    return cu
 
 
 def _calendar(b, t, device):
@@ -95,14 +89,14 @@ def test_healda_v2_cpu_no_obs():
     empty_obs = torch.empty(0, device=dev)
     empty_ids = torch.empty(0, dtype=torch.int64, device=dev)
 
-    obs_ctx = ObsContext(
-        cu_seqlens_k=torch.zeros(total_pixels + 1, dtype=torch.int32, device=dev),
-        max_seqlen_k=0,
+    obs_ctx = prepare_obs_context(
         obs=empty_obs,
         float_metadata=torch.empty(0, 8, device=dev),
         obs_type=empty_ids,
         channel=empty_ids,
         platform=empty_ids,
+        flat_idx=torch.empty(0, dtype=torch.int32, device=dev),
+        total_pixels=total_pixels,
     )
     out = model(x, torch.rand(b, device=dev), sod, doy, obs_ctx)
 
@@ -141,14 +135,19 @@ def test_healda_v2_cuda_full():
     channel = torch.randint(0, 8, (nobs,), device=dev)
     platform = torch.randint(0, 4, (nobs,), device=dev)
 
-    obs_ctx = ObsContext(
-        cu_seqlens_k=_cu_seqlens(counts, dev),
-        max_seqlen_k=max(counts),
+    flat_idx = torch.tensor(
+        [pix for pix, count in enumerate(counts) for _ in range(count)],
+        dtype=torch.int32,
+        device=dev,
+    )
+    obs_ctx = prepare_obs_context(
         obs=obs,
         float_metadata=float_metadata,
         obs_type=obs_type,
         channel=channel,
         platform=platform,
+        flat_idx=flat_idx,
+        total_pixels=total_pixels,
     )
     out = model(x, torch.rand(b, device=dev), sod, doy, obs_ctx)
 

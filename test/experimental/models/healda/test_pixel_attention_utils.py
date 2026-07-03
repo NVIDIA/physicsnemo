@@ -20,6 +20,7 @@ import torch
 from physicsnemo.experimental.models.healda.obs_context import (
     build_pixel_group_map,
     counts_to_cu_seqlens,
+    prepare_obs_context,
     sort_and_pack,
 )
 
@@ -55,3 +56,51 @@ def test_build_pixel_group_map_empty():
     gm = build_pixel_group_map(cu)
     assert gm.program_ptr.tolist() == [0]
     assert gm.program_pixels.numel() == 0
+
+
+def test_prepare_obs_context_sorts_and_builds_group_map():
+    obs = torch.tensor([1.0, 2.0, 3.0])
+    float_metadata = torch.tensor([[1.0], [2.0], [3.0]])
+    obs_type = torch.tensor([10, 20, 30])
+    channel = torch.tensor([11, 21, 31])
+    platform = torch.tensor([12, 22, 32])
+    flat_idx = torch.tensor([2, 0, 2], dtype=torch.int32)
+
+    context = prepare_obs_context(
+        obs=obs,
+        float_metadata=float_metadata,
+        obs_type=obs_type,
+        channel=channel,
+        platform=platform,
+        flat_idx=flat_idx,
+        total_pixels=4,
+    )
+
+    assert torch.equal(context.obs, torch.tensor([2.0, 1.0, 3.0]))
+    assert torch.equal(
+        context.float_metadata.squeeze(-1), torch.tensor([2.0, 1.0, 3.0])
+    )
+    assert torch.equal(context.obs_type, torch.tensor([20, 10, 30]))
+    assert torch.equal(
+        context.cu_seqlens_k, torch.tensor([0, 1, 1, 3, 3], dtype=torch.int32)
+    )
+    assert context.max_seqlen_k == 2
+    assert context.group_map is not None
+
+
+def test_prepare_obs_context_empty_observations():
+    context = prepare_obs_context(
+        obs=torch.empty(0),
+        float_metadata=torch.empty(0, 2),
+        obs_type=torch.empty(0, dtype=torch.long),
+        channel=torch.empty(0, dtype=torch.long),
+        platform=torch.empty(0, dtype=torch.long),
+        flat_idx=torch.empty(0, dtype=torch.int32),
+        total_pixels=3,
+    )
+
+    assert context.obs.numel() == 0
+    assert torch.equal(context.cu_seqlens_k, torch.zeros(4, dtype=torch.int32))
+    assert context.max_seqlen_k == 0
+    assert context.group_map is not None
+    assert context.group_map.program_pixels.numel() == 0

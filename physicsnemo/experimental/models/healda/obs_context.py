@@ -18,9 +18,9 @@
 A single :class:`ObsContext` carries everything a video DiT block's observation
 cross-attention needs -- the packed observation tokens plus the ragged packing
 metadata that maps each pixel to its token slice -- consumed by
-:class:`~physicsnemo.experimental.models.healda.pixel_cross_attention.PixelCrossAttention`. The packing utilities
-that build this layout (:func:`sort_and_pack`, :func:`counts_to_cu_seqlens`,
-:func:`build_pixel_group_map`) live at the bottom of this module.
+:class:`~physicsnemo.experimental.models.healda.pixel_cross_attention.PixelCrossAttention`.
+Use :func:`prepare_obs_context` to sort observations by pixel, build prefix sums,
+and optionally attach a :class:`PixelGroupMap` for the fused Triton kernel.
 """
 
 from __future__ import annotations
@@ -257,4 +257,93 @@ def build_pixel_group_map(
     return PixelGroupMap(
         program_ptr=program_ptr.contiguous(),
         program_pixels=program_pixels.contiguous(),
+    )
+
+
+def prepare_obs_context(
+    obs: Float[torch.Tensor, " nobs"],
+    float_metadata: Float[torch.Tensor, "nobs meta_dim"],
+    obs_type: Int[torch.Tensor, " nobs"],
+    channel: Int[torch.Tensor, " nobs"],
+    platform: Int[torch.Tensor, " nobs"],
+    flat_idx: Int[torch.Tensor, " nobs"],
+    total_pixels: int,
+    *,
+    build_group_map: bool = True,
+    group_thresh_mult: float = 2.0,
+) -> ObsContext:
+    r"""Sort observations by pixel and build an :class:`ObsContext`.
+
+    Parameters
+    ----------
+    obs : torch.Tensor
+        Observation values of shape :math:`(N_{obs},)`.
+    float_metadata : torch.Tensor
+        Per-observation float metadata of shape :math:`(N_{obs}, M_{float})`.
+    obs_type : torch.Tensor
+        Observation-type ids of shape :math:`(N_{obs},)`.
+    channel : torch.Tensor
+        Channel ids of shape :math:`(N_{obs},)`.
+    platform : torch.Tensor
+        Platform ids of shape :math:`(N_{obs},)`.
+    flat_idx : torch.Tensor
+        Flat pixel ids of shape :math:`(N_{obs},)` over :math:`B \cdot T \cdot X`.
+    total_pixels : int
+        Number of pixel buckets :math:`B \cdot T \cdot X`.
+    build_group_map : bool, optional, default=True
+        If ``True``, attach a :class:`PixelGroupMap` for the fused Triton kernel.
+    group_thresh_mult : float, optional, default=2.0
+        Small-pixel grouping threshold passed to :func:`build_pixel_group_map`.
+
+    Returns
+    -------
+    ObsContext
+        Packed observation context with per-observation tensors sorted by
+        ``flat_idx`` and prefix sums over ``total_pixels``.
+    """
+    if obs.ndim != 1:
+        raise ValueError(
+            f"Expected obs of shape (nobs,), got {obs.ndim}D tensor with shape "
+            f"{tuple(obs.shape)}"
+        )
+    nobs = obs.shape[0]
+    if float_metadata.ndim != 2 or float_metadata.shape[0] != nobs:
+        raise ValueError(
+            f"Expected float_metadata of shape ({nobs}, meta_dim), got tensor "
+            f"with shape {tuple(float_metadata.shape)}"
+        )
+    for name, tensor in (
+        ("obs_type", obs_type),
+        ("channel", channel),
+        ("platform", platform),
+        ("flat_idx", flat_idx),
+    ):
+        if tensor.ndim != 1 or tensor.shape[0] != nobs:
+            raise ValueError(
+                f"Expected {name} of shape ({nobs},), got tensor with shape "
+                f"{tuple(tensor.shape)}"
+            )
+
+    if nobs == 0:
+        counts = torch.zeros(total_pixels, dtype=torch.int64, device=obs.device)
+        order = torch.empty(0, dtype=torch.long, device=obs.device)
+    else:
+        sorted_order, counts = sort_and_pack(flat_idx, total_pixels)
+        order = sorted_order.long()
+
+    cu_seqlens_k = counts_to_cu_seqlens(counts)
+    group_map = (
+        build_pixel_group_map(cu_seqlens_k, thresh_mult=group_thresh_mult)
+        if build_group_map
+        else None
+    )
+    return ObsContext(
+        obs=obs[order],
+        float_metadata=float_metadata[order],
+        obs_type=obs_type[order],
+        channel=channel[order],
+        platform=platform[order],
+        cu_seqlens_k=cu_seqlens_k,
+        max_seqlen_k=int(counts.max()) if nobs > 0 else 0,
+        group_map=group_map,
     )
