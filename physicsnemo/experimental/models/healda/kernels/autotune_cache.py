@@ -13,8 +13,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Persist triton @autotune best-configs to a JSON cache so the (multi-second)
-autotune benchmark is paid ONCE per GPU, not on every new shape/process.
+"""Persist the winning Triton ``@autotune`` tile config per shape key (warps,
+stages, block sizes) to JSON (not the compiled kernels themselves, whose caching is controlled
+by Triton).
+
+HealDA pixel attention uses this only when ``HEALDA_PIXEL_ATTN_AUTOTUNE_CACHE_DIR``
+is set (opt-in). Unset means Triton will autotune on first-use per shape key.
 
 Reusable across any triton.autotune'd kernel: pass {name: autotuner} where each
 autotuner is a kernel decorated with @triton.autotune (a triton Autotuner with a

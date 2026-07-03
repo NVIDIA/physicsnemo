@@ -205,7 +205,10 @@ class HealDAv2(Module):
     Build an :class:`~physicsnemo.experimental.models.healda.obs_context.ObsContext` with
     :func:`~physicsnemo.experimental.models.healda.obs_context.prepare_obs_context` to handle
     the obs preprocessing (sorting and packing). The FiLM tokenizer and pixel cross-attention run
-    fused Triton kernels on CUDA.
+    fused Triton kernels on CUDA. For repeated multi-GPU training, set
+    ``HEALDA_PIXEL_ATTN_AUTOTUNE_CACHE_DIR`` to a writable directory to cache
+    Triton autotune tile configs across runs and cut first-hit stalls from
+    variable obs counts (unset = off).
 
     Only the default ``attention_backend="timm"`` currently supports the
     ``qk_norm_type="RMSNorm"`` with ``qk_norm_affine=False`` this model

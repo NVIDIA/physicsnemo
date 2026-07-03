@@ -377,9 +377,10 @@ class PixelCrossAttention(CrossAttentionModuleBase):
     -----
     The kernel runs one program per pixel, so when many pixels hold only a few
     tokens the fixed per-program overhead can be significant. For best throughput,
-    precompute a :class:`~physicsnemo.experimental.models.healda.obs_context.PixelGroupMap` with
-    :func:`~physicsnemo.experimental.models.healda.obs_context.build_pixel_group_map` to build a map grouping pixels
-    with less obs together, and carry it on the ``context``.
+    build ``context`` with :func:`~physicsnemo.experimental.models.healda.obs_context.prepare_obs_context`
+    (``build_group_map=True`` by default).
+    On CUDA, set ``HEALDA_PIXEL_ATTN_AUTOTUNE_CACHE_DIR`` to a writable directory
+    to reuse Triton ``@autotune`` tile configs across repeated runs to reduce startup overhead.
     """
 
     def __init__(

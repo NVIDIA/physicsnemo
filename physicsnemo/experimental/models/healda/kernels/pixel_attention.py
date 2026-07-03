@@ -24,11 +24,20 @@ pure-PyTorch fallback has no triton dependency and lives in
 1. The ``@triton.jit`` grouped-query-attention forward/backward kernels.
 2. ``torch.library.custom_op`` wrappers with fake-tensor and autograd
    registration.
-3. The autotune config cache.
+3. An opt-in autotune config cache (see ``.. important::`` below).
 4. :func:`pixel_attention`, the GQA dispatch entry point
    :class:`~physicsnemo.experimental.models.healda.attention_layers.PixelCrossAttention` calls.
 5. The ``@triton.jit`` counting-sort kernel and :func:`counting_sort_and_pack`,
    the entry point :func:`~physicsnemo.experimental.models.healda.obs_context.sort_and_pack` calls.
+
+.. important::
+   On CUDA, the first call per shape bucket runs Triton ``@autotune`` to pick the
+   best tile config (warps, stages, block sizes). That is not the compiled
+   kernel — Triton caches those separately via ``TRITON_CACHE_DIR``. Variable obs
+   counts can hit new buckets mid-training and stall all ranks while one rank
+   benchmarks; set ``HEALDA_PIXEL_ATTN_AUTOTUNE_CACHE_DIR`` to a directory to
+   persist the winning config across processes/runs so known buckets skip the
+   sweep. Unset (default) means no disk read/write.
 """
 
 import hashlib
@@ -52,12 +61,6 @@ tl = triton.language
 # exp2/log2 hardware instructions. The LSE is stored in the log2 domain so the
 # forward (producer) and backward (consumer) agree on the convention.
 LOG2E = tl.constexpr(1.4426950408889634)
-
-# Directory for the persisted Triton autotune cache. Overridable so deployments
-# can redirect it to a fast/shared location; defaults under the user cache dir.
-_AUTOTUNE_CACHE_DIR = os.environ.get(
-    "PHYSICSNEMO_CACHE_DIR", os.path.expanduser("~/.cache/physicsnemo")
-)
 
 
 def _next_power_of_2(n):
@@ -1160,16 +1163,18 @@ def _pixel_attention_gqa(
 
 
 # ---------------------------------------------------------------------------
-# Triton autotune config cache (startup optimization.
+# Triton autotune config cache (opt-in startup optimization).
+#
 # Triton @autotune benchmarks every config the first time each shape-key is
-# hit. We persist the chosen configs to a per-(GPU, rank) JSON and load them at
-# setup so a fresh process reuses a prior run's tuning instead of re-benchmarking.
-# Tuning itself stays LAZY on the real first batch (so the config always matches
-# the real workload -- no synthetic data that might mistune), and a write-through
-# saves each newly tuned config immediately. Each rank owns its file: no barrier /
-# rank-0 coordination, and ranks tune the same buckets in parallel anyway. The file
-# name embeds the GPU model + a source/Triton-version hash, so a kernel edit or a
-# Triton upgrade transparently invalidates the cache (re-tunes from scratch).
+# hit. When HEALDA_PIXEL_ATTN_AUTOTUNE_CACHE_DIR points at a directory, the
+# winning config for each shape-key is persisted there and reloaded on the next
+# process. Tuning stays LAZY on the real first batch; write-through saves each
+# newly tuned config. Each (GPU, rank) owns its own JSON in that dir, so there
+# are no write races and no rank-0 barrier. The filename embeds GPU model +
+# source/Triton-version hash, so a kernel edit or Triton upgrade invalidates it.
+#
+# This is orthogonal to Triton's own compiled-kernel cache (TRITON_CACHE_DIR):
+# it stores only the chosen @autotune config, never generated kernels.
 # ---------------------------------------------------------------------------
 def _autotuners():
     """Return the ``{name: triton.Autotuner}`` map for the kernel backend."""
@@ -1182,10 +1187,19 @@ def _autotuners():
 _AUTOTUNE_CACHE_READY = False
 
 
-def _autotune_cache_file():
-    explicit = os.environ.get("HEALDA_PIXEL_ATTN_AUTOTUNE_CACHE")
-    if explicit:
-        return explicit
+def _autotune_cache_dir() -> str | None:
+    """Directory for persisted autotune configs, or ``None`` when disabled.
+
+    Enabled only when ``HEALDA_PIXEL_ATTN_AUTOTUNE_CACHE_DIR`` is set to a
+    non-empty path.
+    """
+    raw = os.environ.get("HEALDA_PIXEL_ATTN_AUTOTUNE_CACHE_DIR")
+    if raw is None or not raw.strip():
+        return None
+    return os.path.expanduser(raw.strip())
+
+
+def _autotune_cache_file(cache_dir: str) -> str:
     with open(__file__, "rb") as f:
         digest = hashlib.sha1(f.read(), usedforsecurity=False).hexdigest()[:8]
     ver = getattr(triton, "__version__", "0")
@@ -1198,15 +1212,15 @@ def _autotune_cache_file():
     )
     rank = dist.get_rank() if (dist.is_available() and dist.is_initialized()) else 0
     name = f"pixel_cross_attention-{gpu}-{digest}-triton{ver}-rank{rank}.json"
-    return os.path.join(_AUTOTUNE_CACHE_DIR, "triton_autotune", name)
+    return os.path.join(cache_dir, name)
 
 
-def load_autotune_cache(path=None):
-    return tac.load_caches(_autotuners(), path or _autotune_cache_file())
+def load_autotune_cache(path):
+    return tac.load_caches(_autotuners(), path)
 
 
-def save_autotune_cache(path=None):
-    return tac.save_caches(_autotuners(), path or _autotune_cache_file())
+def save_autotune_cache(path):
+    return tac.save_caches(_autotuners(), path)
 
 
 def _install_writethrough(tuner, path):
@@ -1229,19 +1243,16 @@ def _install_writethrough(tuner, path):
 
 
 def _ensure_autotune_cache():
-    """Lazily wire up the per-rank autotune cache on the FIRST pixel-attention call:
-    load this rank's saved configs (so a fresh process reuses a prior run's tuning)
-    and arm the write-through (so any config Triton tunes lazily on the real batch
-    is persisted). Tuning itself stays Triton-lazy on the real workload, so the
-    chosen config always matches the real batch -- no synthetic data, no setup
-    step. Idempotent and best-effort (a cache failure never blocks the kernel)."""
+    """Lazily wire up the per-rank autotune cache on the first pixel-attention call
+    when ``HEALDA_PIXEL_ATTN_AUTOTUNE_CACHE_DIR`` is set. Idempotent and best-effort."""
     global _AUTOTUNE_CACHE_READY
     if _AUTOTUNE_CACHE_READY:
         return
     _AUTOTUNE_CACHE_READY = True  # set first: best-effort, never retry per-call
-    if os.environ.get("HEALDA_PIXEL_ATTN_PREWARM", "1") != "1":
+    cache_dir = _autotune_cache_dir()
+    if cache_dir is None:
         return
-    path = _autotune_cache_file()
+    path = _autotune_cache_file(cache_dir)
     load_autotune_cache(path)
     for tuner in _autotuners().values():
         _install_writethrough(tuner, path)
