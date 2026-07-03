@@ -23,6 +23,7 @@ from physicsnemo.experimental.models.healda.attention_layers import (
 )
 from physicsnemo.experimental.models.healda.obs_context import ObsContext
 from physicsnemo.experimental.models.healda.video_dit import VideoDiT, VideoDiTBlock
+from physicsnemo.nn import RotaryEmbedding1DTables
 
 NPIX = 48
 
@@ -201,17 +202,21 @@ def test_plain_block_reduces_to_spatial_mlp_cpu():
 def test_temporal_block_cpu():
     """Temporal attention is pure torch and trains on CPU."""
     torch.manual_seed(0)
-    b, t, npix, c = 2, 4, 16, 64
+    b, t, npix, c, num_heads = 2, 4, 16, 64, 4
     block = VideoDiTBlock(
         hidden_size=c,
-        num_heads=4,
+        num_heads=num_heads,
         condition_embed_dim=32,
         temporal_attention=True,
         is_causal=True,
     )
+    # VideoDiT normally owns a single RotaryEmbedding1DTables and passes its
+    # tables into every block; build one here since the block is standalone.
+    rope = RotaryEmbedding1DTables(head_dim=c // num_heads, max_seq_len=t)
+    rope_cos, rope_sin = rope(seq_len=t)
     x = torch.randn(b, t, npix, c, requires_grad=True)
     emb = torch.randn(b, 32)
-    out = block(x, emb)
+    out = block(x, emb, rope_cos=rope_cos, rope_sin=rope_sin)
     assert out.shape == (b, t, npix, c)
     out.float().pow(2).mean().backward()
     assert block.temporal_attention.qkv.weight.grad is not None
@@ -261,11 +266,15 @@ def test_full_block_cuda():
         adaln_zero_init=False,  # non-zero gates so every branch gets grad
     ).to(dev)
 
+    rope = RotaryEmbedding1DTables(head_dim=c // 8, max_seq_len=t).to(dev)
+    rope_cos, rope_sin = rope(seq_len=t)
     x = torch.randn(b, t, npix, c, device=dev, requires_grad=True)
     emb = torch.randn(b, 128, device=dev)
     context = _build_tokenized_context(b, t, npix, token_dim, dev)
 
-    out = block(x, emb, cross_attention_context=context)
+    out = block(
+        x, emb, cross_attention_context=context, rope_cos=rope_cos, rope_sin=rope_sin
+    )
     assert out.shape == (b, t, npix, c)
     assert torch.isfinite(out).all()
 

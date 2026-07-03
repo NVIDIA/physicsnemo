@@ -337,8 +337,6 @@ class HealDAv2(Module):
 
         temporal_kwargs = {
             "linear_attention": linear_attention,
-            "rope_base": rope_base,
-            "max_seq_len": max_seq_len,
             "causal_window": temporal_causal_window,
         }
 
@@ -370,6 +368,8 @@ class HealDAv2(Module):
             noise_channels=noise_channels,
             condition_dim=condition_dim,
             temporal_attention=temporal_attention,
+            rope_base=rope_base,
+            max_seq_len=max_seq_len,
             temporal_kwargs=temporal_kwargs,
             cross_attention=cross_attention,
             is_causal=is_causal,

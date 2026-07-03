@@ -29,6 +29,7 @@ from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.nn import (
     ConditioningEmbedder,
     ConditioningEmbedderType,
+    RotaryEmbedding1DTables,
     get_conditioning_embedder,
 )
 from physicsnemo.nn.module.dit_layers import get_attention, get_layer_norm
@@ -91,8 +92,12 @@ class VideoDiTBlock(nn.Module):
         Stochastic-depth rate applied to every residual branch.
     temporal_attention : bool, optional, default=False
         Add a gated temporal-attention sub-layer.
+    use_rope : bool, optional, default=True
+        Apply rotary position embeddings in the temporal-attention sub-layer.
+        Ignored unless ``temporal_attention=True``.
     temporal_kwargs : Dict[str, Any], optional, default=None
-        Extra arguments for :class:`~physicsnemo.experimental.models.healda.attention_layers.TemporalAttention`.
+        Extra arguments for :class:`~physicsnemo.experimental.models.healda.attention_layers.TemporalAttention`
+        (e.g. ``linear_attention``, ``causal_window``).
     cross_attention : Callable[..., Module], optional, default=None
         Factory building this block's cross-attention module
         (:class:`~physicsnemo.experimental.models.healda.attention_layers.CrossAttentionModuleBase`).
@@ -116,6 +121,11 @@ class VideoDiTBlock(nn.Module):
         Opaque per-call context forwarded to the injected ``cross_attention`` module.
     attn_kwargs : Dict[str, Any], optional
         Forwarded to the spatial-attention backend forward.
+    rope_cos, rope_sin : torch.Tensor, optional
+        1D RoPE tables of shape :math:`(T, C / \text{num\_heads})` from a shared
+        :class:`~physicsnemo.nn.module.rope.RotaryEmbedding1DTables` provider,
+        forwarded to :class:`~physicsnemo.experimental.models.healda.attention_layers.TemporalAttention`.
+        Required when temporal attention is enabled with ``use_rope=True``.
 
     Outputs
     -------
@@ -139,6 +149,7 @@ class VideoDiTBlock(nn.Module):
         final_mlp_dropout: bool = True,
         drop_path: float = 0.0,
         temporal_attention: bool = False,
+        use_rope: bool = True,
         temporal_kwargs: Optional[Dict[str, Any]] = None,
         cross_attention: Optional[Callable[..., Module]] = None,
         is_causal: bool = False,
@@ -203,6 +214,7 @@ class VideoDiTBlock(nn.Module):
             self.temporal_attention = TemporalAttention(
                 hidden_size=hidden_size,
                 num_heads=num_heads,
+                use_rope=use_rope,
                 **(temporal_kwargs or {}),
             )
             self.temporal_attn_modulation = AdaLNModulation(
@@ -308,6 +320,8 @@ class VideoDiTBlock(nn.Module):
         c: Float[torch.Tensor, "batch condition_embed_dim"],
         cross_attention_context: Optional[Any] = None,
         attn_kwargs: Optional[Dict[str, Any]] = None,
+        rope_cos: Optional[Float[torch.Tensor, "time head_dim"]] = None,
+        rope_sin: Optional[Float[torch.Tensor, "time head_dim"]] = None,
     ) -> Float[torch.Tensor, "batch time space hidden_size"]:
         b, t, x, ch = hidden_states.shape
         if not torch.compiler.is_compiling():
@@ -359,7 +373,9 @@ class VideoDiTBlock(nn.Module):
             hidden_states = self._to_space_sharded(hidden_states)
             shift, scale, gate = self.temporal_attn_modulation(c)
             normed = modulate(self.temporal_attn_norm(hidden_states), shift, scale)
-            temporal_out = self.temporal_attention(normed, self._is_causal)
+            temporal_out = self.temporal_attention(
+                normed, self._is_causal, rope_cos=rope_cos, rope_sin=rope_sin
+            )
             hidden_states = gated_residual(
                 hidden_states, temporal_out, gate, self.drop_path
             )
@@ -401,8 +417,17 @@ class VideoDiT(Module):
         Conditioning input dimension (0 = noise-only).
     temporal_attention : bool, optional, default=False
         Enable factorized temporal attention in every block.
+    use_rope : bool, optional, default=True
+        Apply rotary position embeddings along the time axis. When ``True``,
+        builds a single :class:`~physicsnemo.nn.module.rope.RotaryEmbedding1DTables`
+        provider shared by every block, instead of building tables per block.
+    rope_base : int, optional, default=100
+        Base frequency :math:`\theta` for the RoPE sinusoidal schedule.
+    max_seq_len : int, optional, default=100
+        Maximum temporal sequence length for the RoPE table pre-computation.
     temporal_kwargs : Dict[str, Any], optional, default=None
-        Extra keyword arguments for the temporal-attention layers.
+        Extra keyword arguments for the temporal-attention layers (e.g.
+        ``linear_attention``, ``causal_window``).
     cross_attention : Callable[..., Module], optional, default=None
         Factory called once per block to build its cross-attention module
         (:class:`~physicsnemo.experimental.models.healda.attention_layers.CrossAttentionModuleBase`).
@@ -495,6 +520,9 @@ class VideoDiT(Module):
         noise_channels: Optional[int] = None,
         condition_dim: int = 0,
         temporal_attention: bool = False,
+        use_rope: bool = True,
+        rope_base: int = 100,
+        max_seq_len: int = 100,
         temporal_kwargs: Optional[Dict[str, Any]] = None,
         cross_attention: Optional[Callable[..., Module]] = None,
         is_causal: bool = False,
@@ -542,6 +570,14 @@ class VideoDiT(Module):
             )
         cond_dim = self.conditioning_embedder.output_dim
 
+        self.rope = None
+        if temporal_attention and use_rope:
+            self.rope = RotaryEmbedding1DTables(
+                head_dim=hidden_size // num_heads,
+                max_seq_len=max_seq_len,
+                theta=rope_base,
+            )
+
         if drop_path_rates is None:
             drop_path_rates = [
                 drop_path * i / max(1, num_layers - 1) for i in range(num_layers)
@@ -563,6 +599,7 @@ class VideoDiT(Module):
                     mlp_ratio=mlp_ratio,
                     drop_path=drop_path_rates[i],
                     temporal_attention=temporal_attention,
+                    use_rope=use_rope,
                     temporal_kwargs=temporal_kwargs,
                     cross_attention=cross_attention,
                     is_causal=is_causal,
@@ -654,7 +691,16 @@ class VideoDiT(Module):
             )
 
         emb = self.conditioning_embedder(t, condition=condition)
+        rope_cos = rope_sin = None
+        if self.rope is not None:
+            rope_cos, rope_sin = self.rope(seq_len=h.shape[1])
         for block in self.blocks:
-            h = block(h, emb, cross_attention_context=cross_attention_context)
+            h = block(
+                h,
+                emb,
+                cross_attention_context=cross_attention_context,
+                rope_cos=rope_cos,
+                rope_sin=rope_sin,
+            )
 
         return self.detokenizer(h, emb)

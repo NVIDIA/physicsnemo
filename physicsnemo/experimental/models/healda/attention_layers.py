@@ -40,7 +40,7 @@ from physicsnemo.experimental.models.healda.obs_context import (
     ObsContext,
     PixelGroupMap,
 )
-from physicsnemo.nn.module.rope import RotaryPositionEmbedding1D
+from physicsnemo.nn import apply_rotary_pos_emb
 
 triton = OptionalImport("triton")
 
@@ -91,9 +91,11 @@ class TemporalAttention(torch.nn.Module):
 
     Each spatial location attends independently across the time axis, complementing
     per-frame spatial attention in a factorized video DiT block. Supports rotary
-    position embeddings on the time axis via
-    :class:`~physicsnemo.nn.module.rope.RotaryPositionEmbedding1D`, an optional
-    softmax-free (linear) attention variant, and causal / sliding-window masking.
+    position embeddings on the time axis, an optional softmax-free (linear)
+    attention variant, and causal / sliding-window masking.
+
+    RoPE tables are built once by :class:`~physicsnemo.experimental.models.healda.video_dit.VideoDiT`
+    and passed in via ``rope_cos``/``rope_sin``.
 
     Parameters
     ----------
@@ -102,11 +104,8 @@ class TemporalAttention(torch.nn.Module):
     num_heads : int
         Number of attention heads.
     use_rope : bool, optional, default=True
-        Apply rotary position embeddings to queries and keys along the time axis.
-    rope_base : int, optional, default=100
-        Base frequency :math:`\theta` for the RoPE sinusoidal schedule.
-    max_seq_len : int, optional, default=100
-        Maximum temporal sequence length for the RoPE cache pre-computation.
+        Apply rotary position embeddings to queries and keys along the time
+        axis. When ``True``, :meth:`forward` requires ``rope_cos``/``rope_sin``.
     linear_attention : bool, optional, default=True
         If ``True``, skip softmax — attention weights are raw dot-products and
         causal masking uses zero-fill instead of ``-inf``.
@@ -120,6 +119,10 @@ class TemporalAttention(torch.nn.Module):
         Input latents of shape :math:`(B, T, X, C)`.
     is_causal : bool, optional, default=False
         If ``True``, apply causal masking via :func:`mask_causal`.
+    rope_cos, rope_sin : torch.Tensor, optional
+        1D RoPE tables of shape :math:`(T, C / \text{num\_heads})` from a
+        :class:`~physicsnemo.nn.module.rope.RotaryEmbedding1DTables` provider.
+        Required when ``use_rope=True``.
 
     Outputs
     -------
@@ -130,7 +133,7 @@ class TemporalAttention(torch.nn.Module):
     --------
     >>> import torch
     >>> from physicsnemo.experimental.models.healda.attention_layers import TemporalAttention
-    >>> layer = TemporalAttention(hidden_size=64, num_heads=4)
+    >>> layer = TemporalAttention(hidden_size=64, num_heads=4, use_rope=False)
     >>> x = torch.randn(2, 8, 16, 64)
     >>> out = layer(x, is_causal=False)
     >>> out.shape
@@ -143,8 +146,6 @@ class TemporalAttention(torch.nn.Module):
         hidden_size: int,
         num_heads: int,
         use_rope: bool = True,
-        rope_base: int = 100,
-        max_seq_len: int = 100,
         linear_attention: bool = True,
         causal_window: Optional[int] = None,
     ) -> None:
@@ -159,19 +160,13 @@ class TemporalAttention(torch.nn.Module):
         self.linear_attention = linear_attention
         self.causal_window = causal_window
 
-        self.rope: Optional[RotaryPositionEmbedding1D]
-        if self.use_rope:
-            self.rope = RotaryPositionEmbedding1D(
-                head_dim=self.head_dim, max_seq_len=max_seq_len, theta=rope_base
-            )
-        else:
-            self.rope = None
-
     @torch.compile
     def forward(
         self,
         x: Float[torch.Tensor, "batch time space hidden_size"],
         is_causal: bool = False,
+        rope_cos: Optional[Float[torch.Tensor, "time head_dim"]] = None,
+        rope_sin: Optional[Float[torch.Tensor, "time head_dim"]] = None,
     ) -> Float[torch.Tensor, "batch time space hidden_size"]:
         r"""Compute temporal self-attention over the time axis.
 
@@ -182,6 +177,9 @@ class TemporalAttention(torch.nn.Module):
         is_causal : bool, optional, default=False
             If ``True``, apply causal masking so each frame only attends to
             itself and prior frames (optionally within ``causal_window``).
+        rope_cos, rope_sin : torch.Tensor, optional, default=None
+            1D RoPE tables of shape :math:`(T, C / \text{num\_heads})`. Required
+            when ``use_rope=True``.
 
         Returns
         -------
@@ -199,6 +197,10 @@ class TemporalAttention(torch.nn.Module):
                     f"Expected hidden_size {self.hidden_size}, got "
                     f"{x.shape[-1]} channels"
                 )
+            if self.use_rope and (rope_cos is None or rope_sin is None):
+                raise ValueError(
+                    "use_rope=True but rope_cos/rope_sin were not provided"
+                )
 
         # Project to queries, keys, values: (B, T, X, 3*C) -> 3 x (B, T, X, H, C_h)
         qkv = self.qkv(x)
@@ -209,11 +211,15 @@ class TemporalAttention(torch.nn.Module):
             heads=self.num_heads,
         )
 
-        if self.rope is not None:
-            # RotaryPositionEmbedding1D rotates the second-to-last axis; move T there.
+        if self.use_rope:
+            # apply_rotary_pos_emb broadcasts cos/sin over leading dims; move T
+            # next-to-last to align with the (time, head_dim) table layout.
             q = einops.rearrange(q, "b t x h c -> b x h t c")
             k = einops.rearrange(k, "b t x h c -> b x h t c")
-            q, k = self.rope(q, k)
+            cos = rope_cos.view(1, 1, 1, *rope_cos.shape)
+            sin = rope_sin.view(1, 1, 1, *rope_sin.shape)
+            q = apply_rotary_pos_emb(q, cos, sin)
+            k = apply_rotary_pos_emb(k, cos, sin)
             q = einops.rearrange(q, "b x h t c -> b t x h c")
             k = einops.rearrange(k, "b x h t c -> b t x h c")
 
