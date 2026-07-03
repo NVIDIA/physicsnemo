@@ -1,0 +1,230 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Run PhysicsNeMo multi-GPU tests
+description: Set up a deterministic CUDA environment and run one multi-GPU stream
+
+inputs:
+  stream:
+    description: Multi-GPU stream to run (dynamic or static)
+    required: true
+  nproc:
+    description: Number of visible GPUs/ranks for the stream
+    required: true
+  runner-profile:
+    description: Stable configured runner label recorded in impact manifests
+    required: true
+  collect-impact:
+    description: Collect and upload a nightly impact manifest
+    required: false
+    default: "false"
+  python-version:
+    description: Python major.minor expected in the CUDA container
+    required: true
+  uv-version:
+    description: Exact uv version used by the deterministic environment
+    required: true
+  extras:
+    description: Comma-separated PhysicsNeMo extras
+    required: true
+  uv-cache-key-prefix:
+    description: Existing nightly uv cache key prefix
+    required: true
+  jit-cache-key:
+    description: Existing nightly JIT cache key
+    required: true
+  jit-cache-dir:
+    description: JIT cache root
+    required: true
+  hf-token:
+    description: Hugging Face token for private CI data
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Bootstrap cuDNN CI container
+      uses: ./.github/actions/bootstrap-cudnn-ci
+      with:
+        python-version: ${{ inputs.python-version }}
+        uv-version: ${{ inputs.uv-version }}
+
+    - name: Setup uv environment from cache
+      uses: ./.github/actions/setup-uv-env
+      with:
+        uv-cache-key-prefix: ${{ inputs.uv-cache-key-prefix }}
+        uv-cache-key-suffix: latest
+        extras: ${{ inputs.extras }}
+
+    - name: Restore JIT compilation cache
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ inputs.jit-cache-dir }}
+        key: ${{ inputs.jit-cache-key }}
+
+    - name: Download CI test data
+      uses: ./.github/actions/download-ci-data
+      with:
+        hf-token: ${{ inputs.hf-token }}
+
+    - name: Prepare stream paths
+      id: paths
+      shell: bash
+      env:
+        STREAM: ${{ inputs.stream }}
+      run: |
+        set -euo pipefail
+        case "$STREAM" in
+          dynamic|static) ;;
+          *) echo "::error::Unknown multi-GPU stream: $STREAM"; exit 2 ;;
+        esac
+        base="${RUNNER_TEMP}/physicsnemo-multigpu-${STREAM}"
+        mkdir -p "${base}/coverage" "${base}/junit" "${base}/impact"
+        echo "test_list=${base}/test-list.json" >> "$GITHUB_OUTPUT"
+        echo "junit_dir=${base}/junit" >> "$GITHUB_OUTPUT"
+        echo "coverage_file=${base}/coverage/.coverage.multigpu-${STREAM}" >> "$GITHUB_OUTPUT"
+        echo "impact_file=${base}/impact/multigpu-impact-${STREAM}.json" >> "$GITHUB_OUTPUT"
+
+    - name: Discover multi-GPU tests
+      shell: bash
+      env:
+        STREAM: ${{ inputs.stream }}
+        TEST_LIST: ${{ steps.paths.outputs.test_list }}
+      run: |
+        set -euo pipefail
+        .venv/bin/python .github/scripts/multigpu_ci.py \
+          --repo-root "$GITHUB_WORKSPACE" \
+          list-tests \
+          --stream "$STREAM" \
+          --output "$TEST_LIST"
+        cat "$TEST_LIST"
+
+    - name: Verify GPU allocation
+      shell: bash
+      env:
+        NPROC: ${{ inputs.nproc }}
+      run: |
+        set -euo pipefail
+        if ! [[ "$NPROC" =~ ^[1-9][0-9]*$ ]]; then
+          echo "::error::nproc must be a positive integer; got '$NPROC'"
+          exit 2
+        fi
+        if [ "$NPROC" -lt 2 ]; then
+          echo "::error::multi-GPU streams require nproc >= 2; got '$NPROC'"
+          exit 2
+        fi
+        nvidia-smi -L || true
+        .venv/bin/python .github/scripts/multigpu_ci.py \
+          verify-gpus --expected "$NPROC"
+        echo "Preserving the runner's existing CUDA_VISIBLE_DEVICES allocation."
+
+    - name: Run multi-GPU tests
+      shell: bash
+      env:
+        STREAM: ${{ inputs.stream }}
+        NPROC: ${{ inputs.nproc }}
+        COLLECT_IMPACT: ${{ inputs.collect-impact }}
+        TEST_LIST: ${{ steps.paths.outputs.test_list }}
+        JUNIT_DIR: ${{ steps.paths.outputs.junit_dir }}
+        COVERAGE_FILE: ${{ steps.paths.outputs.coverage_file }}
+        COVERAGE_RC: ${{ github.workspace }}/test/coverage.multigpu.rc
+        WARP_CACHE_PATH: ${{ inputs.jit-cache-dir }}/warp
+        TRITON_CACHE_DIR: ${{ inputs.jit-cache-dir }}/triton
+        TORCHINDUCTOR_CACHE_DIR: ${{ inputs.jit-cache-dir }}/inductor
+      run: |
+        set -euo pipefail
+        runner_args=(
+          .github/scripts/multigpu_ci.py
+          --repo-root "$GITHUB_WORKSPACE"
+          run-tests
+          --stream "$STREAM"
+          --test-list "$TEST_LIST"
+          --junit-dir "$JUNIT_DIR"
+        )
+        if [ "$COLLECT_IMPACT" = "true" ]; then
+          COVERAGE_FILE="$COVERAGE_FILE" .venv/bin/python -m coverage erase \
+            --rcfile="$COVERAGE_RC"
+          runner_args+=(
+            --coverage-file "$COVERAGE_FILE"
+            --coverage-rc "$COVERAGE_RC"
+          )
+        fi
+        if [ "$STREAM" = "static" ]; then
+          .venv/bin/torchrun \
+            --standalone \
+            --nnodes=1 \
+            --nproc-per-node="$NPROC" \
+            --max-restarts=0 \
+            "${runner_args[@]}"
+        else
+          .venv/bin/python "${runner_args[@]}"
+        fi
+
+    - name: Build impact manifest
+      if: ${{ success() && inputs.collect-impact == 'true' }}
+      shell: bash
+      env:
+        STREAM: ${{ inputs.stream }}
+        NPROC: ${{ inputs.nproc }}
+        TEST_LIST: ${{ steps.paths.outputs.test_list }}
+        JUNIT_DIR: ${{ steps.paths.outputs.junit_dir }}
+        COVERAGE_FILE: ${{ steps.paths.outputs.coverage_file }}
+        COVERAGE_RC: ${{ github.workspace }}/test/coverage.multigpu.rc
+        IMPACT_FILE: ${{ steps.paths.outputs.impact_file }}
+        RUNNER_PROFILE: ${{ inputs.runner-profile }}
+      run: |
+        set -euo pipefail
+        .venv/bin/python .github/scripts/multigpu_ci.py \
+          --repo-root "$GITHUB_WORKSPACE" \
+          build-manifest \
+          --stream "$STREAM" \
+          --test-list "$TEST_LIST" \
+          --coverage-file "$COVERAGE_FILE" \
+          --coverage-rc "$COVERAGE_RC" \
+          --junit-dir "$JUNIT_DIR" \
+          --output "$IMPACT_FILE" \
+          --source-sha "$GITHUB_SHA" \
+          --nproc "$NPROC" \
+          --runner-profile "$RUNNER_PROFILE"
+        cat "$IMPACT_FILE"
+
+    - name: Upload JUnit XML
+      if: ${{ always() && !cancelled() && steps.paths.outcome == 'success' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: junit-multigpu-${{ inputs.stream }}
+        path: ${{ steps.paths.outputs.junit_dir }}/*.xml
+        if-no-files-found: warn
+        retention-days: 7
+
+    - name: Publish test report
+      if: ${{ always() && !cancelled() && steps.paths.outcome == 'success' }}
+      uses: dorny/test-reporter@v3
+      with:
+        name: Multi-GPU ${{ inputs.stream }} Results
+        path: ${{ steps.paths.outputs.junit_dir }}/*.xml
+        reporter: java-junit
+        fail-on-error: "false"
+        fail-on-empty: "false"
+
+    - name: Upload impact manifest
+      if: ${{ success() && inputs.collect-impact == 'true' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: multigpu-impact-${{ inputs.stream }}
+        path: ${{ steps.paths.outputs.impact_file }}
+        if-no-files-found: error
+        retention-days: 14

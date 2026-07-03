@@ -3,9 +3,11 @@
 This document is the authoritative reference for how the
 `Nightly Github UV Workflow`
 ([.github/workflows/github-nightly-uv.yml](workflows/github-nightly-uv.yml))
-publishes caches and how downstream PR workflows consume them.  PR
-gating relies on these contracts being honored on both sides; do not
-weaken them without updating this document.
+and `Multi-GPU Github CI`
+([.github/workflows/github-multigpu.yml](workflows/github-multigpu.yml))
+publish caches and how downstream PR workflows consume them.  PR gating
+relies on these contracts being honored on both sides; do not weaken
+them without updating this document.
 
 ## Caches
 
@@ -152,12 +154,59 @@ Two ways to run the regen:
 Same immutable-key bug class as testmon; migrated to the `-latest`
 slot for parity.
 
+### Multi-GPU impact manifest caches
+
+The multi-GPU workflow owns two independent, small JSON caches: one for
+the dynamic stream and one for the static stream.
+
+| Property | Value |
+|---|---|
+| Keys | `multigpu-impact-dynamic-v1-latest` and `multigpu-impact-static-v1-latest` |
+| Prefix encodes | stream + manifest schema version |
+| Suffix | literal `latest` (mutable slots, refreshed via delete-before-save) |
+| Contents | source SHA, configured rank count, exact marker-test inventory, per-rank JUnit totals, and repository-relative files executed under the stream's dedicated parallel coverage run |
+| Invalidates when | the manifest schema changes (version bump) |
+| Restore semantics | exact-key hit after clearing the checked-out restore directory; **fail-open** on a miss, malformed schema, marker-inventory drift, unavailable baseline history, or age over 72 hours |
+| Save semantics | successful scheduled runs only, plus explicitly approved default-branch dispatches; PR GPU jobs never write these slots |
+
+These manifests answer a narrower question than the canonical coverage
+baseline: whether a PR changed a file exercised by either multi-GPU
+stream.  They are never combined into the normal coverage report.  The
+nightly runs collect process/rank-safe parallel coverage with
+[`test/coverage.multigpu.rc`](../test/coverage.multigpu.rc), then publish
+only a validated JSON manifest.  Testmon is intentionally not used for
+this purpose: the normal testmon baseline skips multi-GPU tests, dynamic
+tests execute in subprocesses, and static tests execute from multiple
+torchrun ranks.  Manifest publication requires exact JUnit rank files and
+coverage from every configured static rank.  Known rank/topology skips are
+allowlisted; missing dependencies, unavailable CUDA, and other unexpected
+skips prevent publication rather than creating a partial dependency picture.
+
+The PR selector also treats dependency files, shared CI setup actions,
+the global pytest harness, new marker-bearing tests, newly added
+production modules, Python helpers below marker-test directories,
+non-Python package/test resources, and known distributed source prefixes
+as conservative triggers.  API failures,
+truncated file lists, stale manifests, and selector failures all run the
+affected stream rather than silently skipping it.
+
+The selector reads PR metadata before and after the paginated files API
+request.  The PR head must remain stable and equal the mirrored checkout.
+For a manifest older than the PR base, the selector verifies ancestry and
+inspects the complete local manifest-to-base Git diff.  Relevant baseline
+changes run the affected stream; unrelated drift (for example, README-only
+changes) can still skip it.  Missing or shallow history fails open.  This
+prevents a source push or an advanced default branch from turning an old
+dependency picture into a false skip without making every post-nightly PR
+consume both GPU pools.
+
 ## Reusable building blocks
 
 ### `replace-cache` action ([.github/actions/replace-cache/action.yml](actions/replace-cache/action.yml))
 
-All four mutable-slot caches above (uv, JIT, testmon, coverage) share
-the same delete-before-save recipe: GitHub Actions cache slots are
+All mutable-slot caches above (uv, JIT, testmon, coverage, and the two
+multi-GPU impact manifests) share the same delete-before-save recipe:
+GitHub Actions cache slots are
 immutable, so refreshing a `-latest` key requires deleting the
 existing entry, calling `actions/cache/save`, and (because the save
 silently no-ops on key collision) re-querying `gh cache list` to
@@ -231,17 +280,40 @@ Guarantees:
 - `physicsnemo` itself is installed editable, so PR source changes are
   picked up without rebuilding the venv.
 
+The multi-GPU workflow follows the same environment contract and is
+restore-only for the uv and JIT caches.  Its CPU selector separately
+restores the two impact manifests.  Only successful nightly publisher
+jobs can replace those manifest slots.
+
 ## Operational notes
 
 - **Concurrency**: the nightly workflow declares
   `concurrency: nightly-github-uv` with `cancel-in-progress: false` so
   two overlapping runs cannot race on the static `-latest` uv cache key.
+- **Multi-GPU concurrency**: `github-multigpu.yml` serializes runs per
+  ref. Superseded `pull-request/*` pushes cancel in progress, while
+  scheduled/default-branch publisher runs are never canceled.
+- **Runner inventory**: both streams default to the confirmed
+  `linux-amd64-gpu-h100-latest-2` pool.  Some static tests intentionally
+  skip configurations that require four ranks.  Set both
+  `MULTIGPU_STATIC_RUNNER` and `MULTIGPU_STATIC_NPROC` repository
+  variables together when a four-GPU pool is available; the manifest
+  records its rank count and JUnit skip total.  Jobs require visible GPU
+  count to equal `NPROC`, and the selector rejects a cached manifest whose
+  rank count or runner profile no longer matches the repository variables.
+  Manifest `complete` is scoped to that recorded runner/rank profile; the
+  default two-rank stream is not a claim that four-rank-only cases executed.
+- **Operator overrides**: `ci:multi-gpu`, `ci:multi-gpu-dynamic`, and
+  `ci:multi-gpu-static` force selection on the next mirror sync or rerun.
+  Applying a label alone does not emit a push event; use the manual
+  dispatch for an immediate run.
 - **Save verification**: every mutable-slot save (uv download, JIT,
-  testmon, coverage) goes through the `replace-cache` action, which
-  re-queries `gh cache list` after `actions/cache/save` and fails the
-  job if the slot is not visible.  `cache/save` silently no-ops on
-  key collision and only logs a warning on reservation failure;
-  without verification a corrupted slot can persist for days.
+  testmon, coverage, multi-GPU impact manifests) goes through the
+  `replace-cache` action, which re-queries `gh cache list` after
+  `actions/cache/save` and fails the job if the slot is not visible.
+  `cache/save` silently no-ops on key collision and only logs a warning
+  on reservation failure; without verification a corrupted slot can
+  persist for days.
 - **Lockfile-mutation guard**: [.github/actions/setup-uv-env/action.yml](actions/setup-uv-env/action.yml)
   snapshots `sha256(uv.lock)` and `sha256(pyproject.toml)` before any uv
   command runs and compares them again at the end. Any drift (caused by
@@ -254,16 +326,20 @@ Guarantees:
 - **PR workflows never save the uv cache.** Only the nightly mutates
   the `-latest` slot; PRs restore fail-open and any fresh wheels they
   download are simply not preserved until the next nightly.
+- **PR workflows never save impact manifests.** GPU test jobs have
+  read-only Actions permissions. Dedicated CPU publisher jobs receive
+  `actions: write`, and only for successful scheduled or explicitly
+  approved default-branch runs.
 
 ## Bumping any of the baseline values
 
 If you change the container image, CUDA version, Python version, uv
-version, or extras tag, you must update both:
+version, or extras tag, you must update all three workflows:
 
-1. The matching `env:` value at the top of both
+1. The matching `env:` value at the top of
    [.github/workflows/github-nightly-uv.yml](workflows/github-nightly-uv.yml)
-   and
-   [.github/workflows/github-pr.yml](workflows/github-pr.yml).
+   [.github/workflows/github-pr.yml](workflows/github-pr.yml), and
+   [.github/workflows/github-multigpu.yml](workflows/github-multigpu.yml).
 2. The corresponding literals embedded in `UV_CACHE_KEY_PREFIX` and
    `JIT_CACHE_KEY_PREFIX` (GitHub Actions does not support env-to-env
    references within the same `env:` block, so these are kept in
