@@ -149,9 +149,12 @@ def compute_latent_loss(
         loss = mse_weight * mean_valid(|pred - tgt|^2)
              + cosine_weight * mean_valid(1 - cos(pred, tgt))
 
-    The target tensor is treated as a stop-gradient — the JEPA target
-    encoder is updated through EMA or its own optimiser branch, not by
-    this loss.
+    The loss is not a stop-gradient: it flows into both the predictor
+    (through ``predicted``) and the target encoder (through ``target``), so
+    the two are trained jointly to agree in latent space. Collapse to a
+    trivial constant solution is prevented by the SIGReg anti-collapse
+    regularizer applied to the target (and optionally context) latents, not
+    by detaching this term.
 
     Parameters
     ----------
@@ -174,7 +177,6 @@ def compute_latent_loss(
         Scalar loss tensor. Returns a zero scalar when the mask leaves
         no valid token.
     """
-    target = target.detach()
     if predicted.shape != target.shape:
         raise ValueError(
             "predicted and target must share shape; "
