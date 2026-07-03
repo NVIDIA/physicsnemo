@@ -34,6 +34,7 @@ from train import (
     _compute_total_loss,
     _forward_sample,
     _resolve_phase,
+    _run_epoch,
 )
 
 _ENC = dict(
@@ -235,6 +236,39 @@ def test_resolve_phase_boundary():
     # Disabled or absent -> single phase (None).
     assert _resolve_phase(1, OmegaConf.create({"enabled": False})) is None
     assert _resolve_phase(1, None) is None
+
+
+def test_run_epoch_train_step_updates_params(device):
+    """One `_run_epoch` train step runs end-to-end (with a GradScaler) and steps."""
+    torch.manual_seed(0)
+    model = _build_model().to(device)
+    recon_fn, sigreg_fn, sigreg_ctx_fn = _losses(device)
+    # Build a one-sample batch (leading batch axis) for the loader.
+    batch = {k: v.unsqueeze(0) for k, v in _sample(device).items()}
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    scaler = torch.amp.GradScaler("cuda", enabled=False)  # fp32 -> no-op
+    before = [p.detach().clone() for p in model.parameters()]
+    metrics = _run_epoch(
+        model=model,
+        loader=[batch],
+        recon_loss_fn=recon_fn,
+        sigreg_loss_fn=sigreg_fn,
+        sigreg_context_loss_fn=sigreg_ctx_fn,
+        optimizer=optimizer,
+        lr_scheduler=None,
+        ema=None,
+        device=torch.device(device),
+        precision="fp32",
+        grad_clip_norm=1.0,
+        loss_cfg=_loss_cfg(),
+        epoch=0,
+        max_batches=None,
+        phase=None,
+        scaler=scaler,
+    )
+    assert all(torch.isfinite(torch.tensor(float(v))) for v in metrics.values())
+    after = list(model.parameters())
+    assert any(not torch.allclose(a, b) for a, b in zip(before, after, strict=True))
 
 
 def test_context_sigreg_default_off_but_wirable(device):

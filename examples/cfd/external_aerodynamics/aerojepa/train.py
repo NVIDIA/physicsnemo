@@ -474,6 +474,7 @@ def _run_epoch(
     epoch: int,
     max_batches: int | None,
     phase: dict[str, Any] | None = None,
+    scaler: torch.amp.GradScaler | None = None,
 ) -> dict[str, float]:
     is_train = optimizer is not None
     model.train(is_train)
@@ -526,8 +527,9 @@ def _run_epoch(
                 # Accumulate gradients one sample at a time so only a single
                 # sample's autograd graph is alive at once; dividing by the
                 # batch size makes this identical to one backward on the
-                # batch-mean loss, at far lower peak memory.
-                (loss / n_in_batch).backward()
+                # batch-mean loss, at far lower peak memory. ``scaler`` is a
+                # no-op unless fp16 is active (bf16/fp32 need no loss scaling).
+                scaler.scale(loss / n_in_batch).backward()
             for k in ("recon", "latent", "sigreg", "sigreg_context"):
                 totals[k] += float(parts[k])
             totals["loss"] += float(loss.detach().item())
@@ -535,10 +537,14 @@ def _run_epoch(
 
         if is_train:
             if grad_clip_norm > 0.0:
+                # Unscale before clipping so the norm is computed on the true
+                # (unscaled) gradients.
+                scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(
                     model.parameters(), max_norm=float(grad_clip_norm)
                 )
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
             if lr_scheduler is not None:
                 lr_scheduler.step()
             if ema is not None:
@@ -735,6 +741,16 @@ def main(cfg: DictConfig) -> None:
     save_every = int(cfg.training.save_every_epochs)
     max_eval_batches = int(cfg.training.max_eval_batches)
 
+    # fp16 autocast can overflow gradients, so pair it with a GradScaler.
+    # bf16 / fp32 (and CPU) need no scaling, so the scaler is disabled there
+    # and every scaler call becomes a transparent no-op.
+    scaler = torch.amp.GradScaler(
+        "cuda",
+        enabled=(
+            str(cfg.training.precision).lower() == "fp16" and device.type == "cuda"
+        ),
+    )
+
     two_phase_cfg = cfg.training.get("two_phase_training", None)
 
     start_epoch, best_val_loss = _load_initial_state(
@@ -768,6 +784,7 @@ def main(cfg: DictConfig) -> None:
             epoch=epoch,
             max_batches=None,
             phase=phase,
+            scaler=scaler,
         )
         train_time = time.time() - t0
 
