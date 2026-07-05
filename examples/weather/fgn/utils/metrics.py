@@ -278,8 +278,8 @@ def power_spectra_per_variable(
     B, K, C, H, W = ensemble_mean.shape
     ens_flat = ensemble_mean.reshape(B * K * C, H, W)
     tgt_flat = target.reshape(B * K * C, H, W)
-    k, ens_pow = power_spectrum(ens_flat)
-    _, tgt_pow = power_spectrum(tgt_flat)
+    k, ens_pow = power_spectrum(ens_flat)  # type: ignore[misc]
+    _, tgt_pow = power_spectrum(tgt_flat)  # type: ignore[misc]
     ens_pow = ens_pow.reshape(B, K, C, -1).mean(dim=0)
     tgt_pow = tgt_pow.reshape(B, K, C, -1).mean(dim=0)
     return (
@@ -363,7 +363,7 @@ def rev_score(
     ensemble: torch.Tensor,
     target: torch.Tensor,
     thresholds: Sequence[float] = REV_THRESHOLDS,
-    cl_ratios: Sequence[float] = REV_CL_RATIOS,
+    cl_ratios: Sequence[float] | np.ndarray = REV_CL_RATIOS,
 ) -> np.ndarray:
     """Relative Economic Value (Richardson 2000) for exceedance events.
 

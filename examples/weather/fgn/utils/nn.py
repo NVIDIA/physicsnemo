@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal
 
 import torch
 import torch.nn.functional as F
@@ -93,8 +93,12 @@ class FGNDiT(Module, register=True):
         hidden_size: int = 384,
         depth: int = 12,
         num_heads: int = 8,
-        attention_backend: str = "timm",
-        detokenizer: str = "proj_reshape_2d_conv",
+        attention_backend: Literal[
+            "timm", "transformer_engine", "natten2d", "natten2d_rope"
+        ] = "timm",
+        detokenizer: Literal[
+            "proj_reshape_2d", "proj_reshape_2d_conv", "hpx_patch_detokenizer"
+        ] = "proj_reshape_2d_conv",
     ):
         from physicsnemo.models.dit import DiT
 
@@ -189,7 +193,9 @@ def build_model(
     if cfg.model.invariant_channels not in ("auto", invariant_channels):
         raise ValueError("config model.invariant_channels disagrees with dataset")
 
-    ps = list(cfg.model.patch_size) if hasattr(cfg.model, "patch_size") else [4, 4]
+    ps: tuple[int, int] = (
+        tuple(cfg.model.patch_size) if hasattr(cfg.model, "patch_size") else (4, 4)
+    )  # type: ignore[assignment]
     return FGNDiT(
         state_channels=state_channels,
         history_frames=int(cfg.model.history_frames),
@@ -200,6 +206,6 @@ def build_model(
         hidden_size=int(cfg.model.hidden_size),
         depth=int(cfg.model.depth),
         num_heads=int(cfg.model.num_heads),
-        attention_backend=str(cfg.model.attention_backend),
-        detokenizer=str(cfg.model.detokenizer),
+        attention_backend=cfg.model.attention_backend,  # type: ignore[arg-type]
+        detokenizer=cfg.model.detokenizer,  # type: ignore[arg-type]
     )
