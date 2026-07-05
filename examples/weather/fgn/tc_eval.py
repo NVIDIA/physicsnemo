@@ -137,8 +137,8 @@ def main(cfg: DictConfig) -> None:
     from physicsnemo.core.module import Module
 
     try:
-        from earth2studio.models.dx import TCTrackerWuDuan
         from earth2studio.data import IBTrACS
+        from earth2studio.models.dx import TCTrackerWuDuan
     except ImportError as exc:
         log.error("Install earth2studio[cyclone] for TC tracking: %s", exc)
         return

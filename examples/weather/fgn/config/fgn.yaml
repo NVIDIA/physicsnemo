@@ -35,11 +35,12 @@ dataset:
 model:
   model_name: fgn
   history_frames: 2
-  latent_dim: 32        # paper §2.3: z ~ N(0,1)^32
+  latent_dim: 32
   background_channels: auto
   invariant_channels: auto
-  # DiT backbone (physicsnemo.models.dit.DiT):
-  patch_size: [4, 4]    # 721×1440 → 181×360 = 65k tokens (16× compression)
-  hidden_size: 384      # DiT-S scale; ~33M params
+  patch_size: [4, 4]
+  hidden_size: 384
   depth: 12
   num_heads: 8
+  attention_backend: timm
+  detokenizer: proj_reshape_2d_conv

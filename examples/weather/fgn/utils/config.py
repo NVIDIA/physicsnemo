@@ -37,6 +37,11 @@ class ModelConfig:
     hidden_size: int = Field(default=384, ge=16)
     depth: int = Field(default=12, ge=1)
     num_heads: int = Field(default=8, ge=1)
+    # "natten2d_rope" uses axial RoPE + NATTEN windowed attention (requires natten).
+    attention_backend: str = "timm"
+    # "proj_reshape_2d_conv" adds a zero-init residual conv to suppress checkerboard
+    # artifacts on spiky channels (precipitation, w).
+    detokenizer: str = "proj_reshape_2d_conv"
 
 
 @dataclass(config={"extra": "forbid"})
@@ -55,11 +60,12 @@ class OptimizerConfig:
 class LossConfig:
     num_samples: int = Field(default=4, ge=2)
     mse_weight: float = Field(default=0.1, ge=0.0)
-    # GraphCast-style per-variable weights with geopotential halved per
-    # FGN §2.2.3. Independent of cos(lat) area weighting.
+    # GraphCast-style per-variable weights with geopotential halved per FGN §2.2.3.
     use_channel_weights: bool = False
-    # cos(lat) area weighting for the lat/lon grid.
     use_area_weights: bool = False
+    # Per-channel multipliers applied on top of use_channel_weights / use_area_weights.
+    # Keys are channel names (e.g. "t2m", "z500"); unknown names are ignored.
+    channel_loss_weights: dict[str, float] | None = None
 
 
 @dataclass(config={"extra": "forbid"})

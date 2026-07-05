@@ -50,8 +50,13 @@ dataset:
   tp_accumulation_hours: null
 
 model:
-  latent_dim: 16
-  hidden_channels: 64
+  latent_dim: 32
+  patch_size: [4, 4]
+  hidden_size: 384
+  depth: 12
+  num_heads: 8
+  attention_backend: timm
+  detokenizer: proj_reshape_2d_conv
 
 # training section is required by TrainMainConfig but unused during eval;
 # keep it minimal so Pydantic passes validation.
@@ -77,7 +82,7 @@ eval:
   # Number of DataLoader workers.
   num_workers: 0
   # Output directory for plots + eval_metrics.npz.
-  outdir: "rundir/fgn_2024_long/0/eval"
+  outdir: "rundir/eval"
   # Pooled-CRPS cell sizes (number of 0.25° grid cells per side).
   # [4,8,16,32] ≈ [120, 240, 480, 960] km.
   pool_sizes: [4, 8, 16, 32]

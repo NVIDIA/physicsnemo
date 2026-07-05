@@ -256,10 +256,6 @@ class Trainer:
             )
             self.validation_steps = None  # plain DataLoader is finite
 
-        # Optional per-channel + cos(lat) loss weights. Channel weights
-        # follow GraphCast/GenCast scheme with geopotential halved per FGN
-        # §2.2.3; area weights normalise cos(lat) so the mean row-sum over
-        # latitudes equals 1 (preserves loss scale when toggled on/off).
         self.loss_weights: torch.Tensor | None = None
         channel_w = None
         if bool(self.cfg.training.loss.use_channel_weights):
@@ -271,15 +267,27 @@ class Trainer:
             H, _ = self.train_dataset.image_shape()
             area_w = torch.from_numpy(build_area_weights(H)).to(
                 self.device, dtype=torch.float32
-            )  # shape (H, 1)
-        if channel_w is not None or area_w is not None:
-            # Build a (1, C, H, W)-broadcastable tensor.
+            )
+        override_w = None
+        cfg_overrides = self.cfg.training.loss.channel_loss_weights or {}
+        if cfg_overrides:
+            state_channels = self.train_dataset.state_channels()
+            unknown = set(cfg_overrides) - set(state_channels)
+            if unknown:
+                self.logger.info(
+                    f"channel_loss_weights references unknown channels (ignored): {sorted(unknown)}"
+                )
+            vals = [float(cfg_overrides.get(ch, 1.0)) for ch in state_channels]
+            override_w = torch.tensor(vals, device=self.device, dtype=torch.float32)
+        if channel_w is not None or area_w is not None or override_w is not None:
             H, W = self.train_dataset.image_shape()
             combined = torch.ones(1, 1, H, W, device=self.device, dtype=torch.float32)
             if channel_w is not None:
                 combined = combined * channel_w.view(1, -1, 1, 1)
             if area_w is not None:
                 combined = combined * area_w.view(1, 1, H, 1)
+            if override_w is not None:
+                combined = combined * override_w.view(1, -1, 1, 1)
             self.loss_weights = combined
 
         self.step = 0

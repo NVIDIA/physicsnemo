@@ -70,6 +70,14 @@ class FGNDiT(Module, register=True):
         Number of transformer layers.
     num_heads : int, optional, default=8
         Number of attention heads.
+    attention_backend : str, optional, default="timm"
+        DiT attention backend.  ``"natten2d_rope"`` enables axial 2D RoPE and
+        NATTEN windowed attention (requires ``natten`` installed); it also
+        disables the learned pos_embed so no pre-padding is needed.
+    detokenizer : str, optional, default="proj_reshape_2d_conv"
+        Detokenizer variant.  ``"proj_reshape_2d_conv"`` adds a zero-init
+        residual conv head after unprojection to suppress checkerboard
+        artifacts on spiky channels (e.g. precipitation, vertical velocity).
     """
 
     def __init__(
@@ -85,6 +93,8 @@ class FGNDiT(Module, register=True):
         hidden_size: int = 384,
         depth: int = 12,
         num_heads: int = 8,
+        attention_backend: str = "timm",
+        detokenizer: str = "proj_reshape_2d_conv",
     ):
         from physicsnemo.models.dit import DiT
 
@@ -103,12 +113,15 @@ class FGNDiT(Module, register=True):
             if isinstance(patch_size, (list, tuple))
             else (patch_size, patch_size)
         )
-        # PatchEmbed2D allocates pos_embed with floor(H/ps) but pads at runtime to
-        # ceil(H/ps), causing a token-count mismatch for non-divisible grids (e.g.
-        # ERA5 721×1440 with ps=4).  Pre-pad here so DiT receives an already-divisible
-        # input and never triggers its internal padding path.
-        pad_h = (-input_height) % ps[0]
-        pad_w = (-input_width) % ps[1]
+        # natten2d_rope forces pos_embed="none" inside DiT, so PatchEmbed2D's own
+        # internal padding handles non-divisible grids correctly and we don't need
+        # to pre-pad.  For all other backends the learned pos_embed is allocated with
+        # floor(H/ps) tokens but PatchEmbed2D pads to ceil(H/ps) at runtime, causing
+        # a token-count mismatch (ERA5 721 % 4 == 1).  Pre-pad so DiT always receives
+        # a divisible input and never triggers that mismatch.
+        use_rope = attention_backend == "natten2d_rope"
+        pad_h = 0 if use_rope else (-input_height) % ps[0]
+        pad_w = 0 if use_rope else (-input_width) % ps[1]
         self._pad_top = pad_h // 2
         self._pad_bottom = pad_h - self._pad_top
         self._pad_left = pad_w // 2
@@ -125,6 +138,8 @@ class FGNDiT(Module, register=True):
             num_heads=num_heads,
             condition_dim=latent_dim,
             conditioning_embedder="dit",
+            attention_backend=attention_backend,
+            detokenizer=detokenizer,
         )
 
     def forward(
@@ -185,4 +200,6 @@ def build_model(
         hidden_size=int(cfg.model.hidden_size),
         depth=int(cfg.model.depth),
         num_heads=int(cfg.model.num_heads),
+        attention_backend=str(cfg.model.attention_backend),
+        detokenizer=str(cfg.model.detokenizer),
     )

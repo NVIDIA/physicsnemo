@@ -47,11 +47,13 @@ dataset:
   tp_accumulation_hours: null   # set to 6 to include tp06 (paper §3)
 
 model:
-  latent_dim: 32   # paper §2.3: z ~ N(0,I)^32
+  latent_dim: 32
   patch_size: [4, 4]
   hidden_size: 384
   depth: 12
   num_heads: 8
+  attention_backend: timm
+  detokenizer: proj_reshape_2d_conv
 
 training:
   experiment_name: fgn_era5
