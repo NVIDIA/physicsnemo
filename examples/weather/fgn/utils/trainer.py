@@ -50,7 +50,6 @@ from utils.parallel import ParallelHelper
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils import load_checkpoint, save_checkpoint
 from physicsnemo.utils.logging import LaunchLogger, PythonLogger, RankZeroLoggingWrapper
-from physicsnemo.utils.logging.wandb import initialize_wandb
 
 
 def find_latest_model_checkpoint(checkpoint_dir: Path) -> str:
@@ -75,17 +74,26 @@ class Trainer:
         self.logger.info("Trainer.__init__ starting")
         self.amp = bool(self.cfg.training.amp) and torch.cuda.is_available()
 
-        # Structured experiment logging — W&B / MLflow via LaunchLogger.
-        # Mirrors physicsnemo.utils.logging convention used across all examples.
-        # No-op when both flags are False (default).
+        # Experiment tracking — trackio (drop-in wandb replacement) with real
+        # wandb as fallback.  Rank-0 only; no-op when use_wandb=False or neither
+        # library is installed.
+        self._tracker = None
         if bool(self.cfg.training.use_wandb) and self.dist.rank == 0:
-            initialize_wandb(
-                project=str(self.cfg.training.wandb_project),
-                name=f"{self.cfg.training.experiment_name}/{self.cfg.training.run_id}",
-                mode="online",
-            )
+            try:
+                import trackio as _wandb_api
+            except ImportError:
+                try:
+                    import wandb as _wandb_api  # type: ignore[no-redef]
+                except ImportError:
+                    _wandb_api = None  # type: ignore[assignment]
+            if _wandb_api is not None:
+                _wandb_api.init(
+                    project=str(self.cfg.training.wandb_project),
+                    name=f"{self.cfg.training.experiment_name}/{self.cfg.training.run_id}",
+                )
+                self._tracker = _wandb_api
         LaunchLogger.initialize(
-            use_wandb=bool(self.cfg.training.use_wandb) and self.dist.rank == 0,
+            use_wandb=False,
             use_mlflow=bool(self.cfg.training.use_mlflow) and self.dist.rank == 0,
         )
 
@@ -703,10 +711,13 @@ class Trainer:
 
             lr = self.optimizer.param_groups[0]["lr"]
 
-            # Route to LaunchLogger (W&B / MLflow when enabled, always stdout).
-            # step-based training → epoch=step, matching DLWP/diagnostic pattern.
+            # Route to LaunchLogger (stdout / MLflow) and tracker (trackio/wandb).
             with LaunchLogger("train", epoch=self.step) as launchlog:
                 launchlog.log_minibatch({"loss": train_loss_val, "lr": lr})
+            if self._tracker is not None:
+                self._tracker.log(
+                    {"train/loss": train_loss_val, "train/lr": lr}, step=self.step
+                )
 
             if self.step % int(self.cfg.training.print_progress_freq) == 0:
                 self.logger.info(
@@ -736,6 +747,11 @@ class Trainer:
                     )
                 with LaunchLogger("valid", epoch=self.step) as launchlog:
                     launchlog.log_minibatch(val_metrics)
+                if self._tracker is not None:
+                    self._tracker.log(
+                        {f"valid/{k}": v for k, v in val_metrics.items()},
+                        step=self.step,
+                    )
                 if bool(self.cfg.training.validation_metrics):
                     self._run_validation_metrics()
 
@@ -747,3 +763,6 @@ class Trainer:
 
         if self.step % int(self.cfg.training.checkpoint_freq) != 0:
             self.save_checkpoint()
+
+        if self._tracker is not None and self.dist.rank == 0:
+            self._tracker.finish()

@@ -103,7 +103,7 @@ class TrainingConfig:
     # Experiment tracking via physicsnemo.utils.logging.LaunchLogger.
     # Set use_wandb=true to route metrics to W&B (requires wandb installed and
     # WANDB_API_KEY set). wandb_project is the W&B project name.
-    use_wandb: bool = False
+    use_wandb: bool = True
     wandb_project: str = "fgn"
     use_mlflow: bool = False
     # Validation diagnostic hooks. When enabled, the trainer runs a short
