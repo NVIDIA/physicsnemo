@@ -88,6 +88,11 @@ validation_steps: 1 # Number of batches to evaluate during validation
 validation_plot_variables: ["u10m", "v10m", "t2m", "refc", "q1", "q5", "q10"]
 validation_plot_background_channels: [] # Background channels to show in validation plots (list of names or indices)
 
+# Per-channel loss weights: a mapping from state channel name to scalar weight.
+# Channels not listed default to 1.0.  Use 0.0 to exclude a channel from the loss.
+# Example: channel_loss_weights: {u10m: 0.0, t2m: 2.0}
+channel_loss_weights: null
+
 # Loss options
 loss:
   type: 'regression' # Loss type; use 'regression' or 'edm' for the regression and diffusion, respectively

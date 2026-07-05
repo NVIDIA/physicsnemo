@@ -112,6 +112,35 @@ class TestMortonCodes:
         codes = _compute_morton_codes(points)
         assert (codes >= 0).all()
 
+    @pytest.mark.parametrize(
+        "dtype", [torch.float16, torch.bfloat16, torch.float32, torch.float64]
+    )
+    def test_1d_maximum_endpoint_does_not_overflow(self, dtype):
+        """The maximum 1D coordinate must sort after interior coordinates."""
+        points = torch.tensor([[0.0], [0.5], [1.0]], dtype=dtype)
+
+        codes = _compute_morton_codes(points)
+
+        assert (codes >= 0).all()
+        assert codes[0] < codes[1] < codes[2]
+
+    @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+    def test_low_precision_quantization_matches_float32_arithmetic(self, dtype):
+        points = torch.tensor(
+            [
+                [0.4961, 0.7695],
+                [0.0884, 0.1318],
+                [0.3066, 0.6328],
+                [0.4902, 0.8945],
+                [0.4551, 0.6328],
+            ],
+            dtype=dtype,
+        )
+
+        codes = _compute_morton_codes(points)
+
+        assert torch.equal(codes, _compute_morton_codes(points.float()))
+
     def test_spatial_locality_2d(self):
         """Nearby 2D points should have nearby morton codes."""
         # Two clusters: one near origin, one far away
@@ -157,15 +186,41 @@ class TestMortonCodes:
         """Morton codes work for a single point."""
         codes = _compute_morton_codes(torch.tensor([[1.0, 2.0, 3.0]]))
         assert codes.shape == (1,)
-        # Single point: all dimensions map to the same value, code = 0 or max
-        # Since min == max, extent is clamped, coordinates map to max_val
-        assert codes[0] >= 0
+        assert codes[0] == 0
 
     def test_identical_points(self):
         """All identical points produce the same code."""
         points = torch.ones(10, 3) * 5.0
         codes = _compute_morton_codes(points)
         assert (codes == codes[0]).all()
+
+    def test_tiny_nonzero_extents_preserve_distinct_float64_codes(self, device):
+        """Every representable nonzero extent must use the quantization grid."""
+        steps = torch.arange(5, dtype=torch.float64, device=device).unsqueeze(-1)
+        points = steps * torch.tensor(
+            [[1.0e-40, 2.0e-40, 3.0e-40]], dtype=torch.float64, device=device
+        )
+
+        codes = _compute_morton_codes(points)
+
+        assert len(torch.unique(codes)) == len(points)
+
+    def test_constant_axes_do_not_disturb_varying_axis(self, device):
+        points = torch.tensor(
+            [
+                [0.0, 7.0, -2.0],
+                [0.25, 7.0, -2.0],
+                [0.50, 7.0, -2.0],
+                [1.00, 7.0, -2.0],
+            ],
+            dtype=torch.float64,
+            device=device,
+        )
+
+        codes = _compute_morton_codes(points)
+
+        assert len(torch.unique(codes)) == len(points)
+        assert torch.equal(codes, codes.sort().values)
 
     def test_codes_are_deterministic_for_known_centroids(self):
         """Repeated CPU calls on known centroids produce identical codes."""
@@ -205,6 +260,18 @@ class TestMortonCodes:
         """1D input should be rejected."""
         with pytest.raises(ValueError, match="2D"):
             _compute_morton_codes(torch.rand(10))
+
+    def test_empty_input_returns_empty_codes(self, device):
+        points = torch.empty((0, 3), device=device)
+        codes = _compute_morton_codes(points)
+
+        assert codes.shape == (0,)
+        assert codes.dtype == torch.int64
+        assert codes.device == points.device
+
+    def test_rejects_zero_spatial_dimensions(self):
+        with pytest.raises(ValueError, match="at least one spatial dimension"):
+            _compute_morton_codes(torch.empty((2, 0)))
 
 
 ### Construction Tests ###

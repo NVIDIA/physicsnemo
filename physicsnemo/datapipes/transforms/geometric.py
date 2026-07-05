@@ -30,6 +30,7 @@ from tensordict import TensorDict
 
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.base import Transform
+from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.spatial.sdf import signed_distance_field_mesh
 
 
@@ -142,6 +143,9 @@ class ComputeSDF(Transform):
         mesh_coords = data[self.mesh_coords_key]
         mesh_faces = data[self.mesh_faces_key].to(torch.int32)
 
+        # The SDF takes a Mesh; build one from the (flattened) triangle faces.
+        mesh = Mesh(points=mesh_coords, cells=mesh_faces.reshape(-1, 3))
+
         updates = {}
 
         # Compute SDF for each input key
@@ -153,8 +157,7 @@ class ComputeSDF(Transform):
 
             # Compute SDF and closest points
             sdf, closest_points = signed_distance_field_mesh(
-                mesh_coords,
-                mesh_faces,
+                mesh,
                 query_points,
                 use_sign_winding_number=self.use_winding_number,
             )
