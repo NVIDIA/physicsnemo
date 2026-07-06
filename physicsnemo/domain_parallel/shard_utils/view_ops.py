@@ -625,7 +625,8 @@ class ShardedView(torch.autograd.Function):
             Viewed ShardTensor.
         """
         ctx.input_global_shape = tuple(tensor.shape)
-        return _sharded_view_forward(tensor, target_shape)
+        out = _sharded_view_forward(tensor, target_shape)
+        return out
 
     @staticmethod
     def backward(
@@ -646,6 +647,7 @@ class ShardedView(torch.autograd.Function):
         tuple[ShardTensor, None]
             Gradient for the input tensor, and ``None`` for ``target_shape``.
         """
+
         return (
             _sharded_view_forward(grad_output, ctx.input_global_shape),
             None,
