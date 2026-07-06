@@ -41,7 +41,6 @@ Run with, e.g.::
 import pytest
 import torch
 import torch.nn as nn
-from torch.distributed.tensor import distribute_tensor
 from torch.distributed.tensor.placement_types import Replicate, Shard
 
 from physicsnemo.distributed import DistributedManager
@@ -187,10 +186,13 @@ def _run_dit_distributed_check(
         if use_nan_mask_tokens
         else None
     )
-    # Scalars/conditions must be replicated DTensors on the domain mesh so they
-    # compose with the now-DTensor model buffers (e.g. the timestep embedder's
-    # `freqs`); this mirrors StormCast's ParallelHelper.replicate_tensor.
-    t_dt = distribute_tensor(t, domain_mesh, [Replicate()])
+    # Timestep is a replicated ShardTensor on the domain mesh (not a plain
+    # DTensor). The embedder's ``freqs`` buffer stays plain; ShardTensor
+    # auto-promotion composes ``t`` with ``freqs`` at ``torch.outer``. Mirrors
+    # production ``DomainParallelNoiseScheduler.timesteps()``.
+    t_dt = scatter_tensor(
+        t, domain_src, domain_mesh, (Replicate(),), requires_grad=False
+    )
     with torch.no_grad():
         out = model(x_sharded, t_dt, invalid_mask=mask_sharded)
     gathered = out.full_tensor()  # collective: gather H-shards over domain mesh
