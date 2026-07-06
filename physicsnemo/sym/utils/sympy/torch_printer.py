@@ -146,7 +146,7 @@ TORCH_SYMPY_PRINTER = {
 }
 
 
-class CustomDerivativePrinter(sympy.StrPrinter):
+class CustomDerivativePrinter(StrPrinter):
     """Print SymPy derivatives as ``u__x`` style names using ``diff_str``."""
 
     def _print_Function(self, expr):
