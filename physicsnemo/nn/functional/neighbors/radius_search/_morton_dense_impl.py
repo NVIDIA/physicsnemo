@@ -53,7 +53,13 @@ TILE_Q = mk.TILE_Q
 TILE_P = mk.TILE_P
 FMA_BLOCK_DIM = mk.FMA_BLOCK_DIM
 
-DENSE_VARIANTS = ("dense_fma", "dense_fma_mem_opt", "dense_fma_mm", "dense_gemm")
+DENSE_VARIANTS = (
+    "dense_fma",
+    "dense_fma_e2e",
+    "dense_fma_mem_opt",
+    "dense_fma_mm",
+    "dense_gemm",
+)
 
 # Inflate the cell slightly past the nominal radius so the fixed 27-cell stencil
 # never misses a boundary neighbor under fp rounding in the floor() quantization.
@@ -196,14 +202,21 @@ def build_morton_compact_dense_index(
     radius: float,
     wp_device,
     wp_stream,
+    sort_cells: bool = True,
 ) -> MortonCompactDenseIndex:
-    """Build the dense-cell index: histogram, Morton-sort cells, compact points.
+    """Build the dense-cell index: histogram, order cells, compact points.
 
     Args:
         points: Reference points of shape ``(B, N, 3)``, float32, CUDA.
         radius: Search radius.
         wp_device: Warp launch device (from ``warp_launch_context``).
         wp_stream: Warp launch stream (from ``warp_launch_context``).
+        sort_cells: When ``True`` (default) the compact point bins are laid out in
+            Morton-cell order via a ``radix_sort_pairs`` over all ``total_cells``.
+            When ``False`` the bins are laid out in row-major dense-cell order via a
+            single exclusive scan of ``cell_count_by_row`` -- no radix sort and no
+            ``2 * total_cells`` scratch. Both orders are correct (the search kernel
+            indexes cells by row-major dense id); Morton only changes locality.
 
     Returns:
         The populated :class:`MortonCompactDenseIndex`.
@@ -267,48 +280,64 @@ def build_morton_compact_dense_index(
         stream=wp_stream,
     )
 
-    cell_key_tmp = torch.empty(2 * total_cells, dtype=torch.int64, device=device)
-    cell_row_tmp = torch.empty(2 * total_cells, dtype=torch.int32, device=device)
-    cell_key_wp = wp.from_torch(cell_key_tmp)
-    cell_row_wp = wp.from_torch(cell_row_tmp)
-    wp.launch(
-        kernel=mk.enumerate_cell_morton_keys,
-        dim=total_cells,
-        inputs=[
-            grid_x_wp,
-            grid_y_wp,
-            grid_base_wp,
-            int(B),
-            int(bits),
-            int(morton_bits),
-            cell_key_wp,
-            cell_row_wp,
-        ],
-        device=wp_device,
-        stream=wp_stream,
-    )
-    wp.utils.radix_sort_pairs(cell_key_wp, cell_row_wp, total_cells)
-
-    cell_counts_rank = torch.empty(total_cells, dtype=torch.int32, device=device)
-    cell_offsets_rank = torch.empty(total_cells, dtype=torch.int32, device=device)
+    # Per-row start offsets into the compact point arrays. Both layouts below are
+    # correct because the search kernel looks cells up by row-major dense id (never
+    # by Morton rank); Morton ordering only changes the spatial locality of the
+    # compact bins.
     cell_begin_by_row = torch.empty(total_cells, dtype=torch.int32, device=device)
-    counts_rank_wp = wp.from_torch(cell_counts_rank)
-    offsets_rank_wp = wp.from_torch(cell_offsets_rank)
-    wp.launch(
-        kernel=mk.gather_cell_counts_by_rank,
-        dim=total_cells,
-        inputs=[cell_row_wp, wp.from_torch(cell_count_by_row), counts_rank_wp],
-        device=wp_device,
-        stream=wp_stream,
-    )
-    wp.utils.array_scan(counts_rank_wp, offsets_rank_wp, inclusive=False)
-    wp.launch(
-        kernel=mk.fill_cell_row_ranges,
-        dim=total_cells,
-        inputs=[cell_row_wp, offsets_rank_wp, wp.from_torch(cell_begin_by_row)],
-        device=wp_device,
-        stream=wp_stream,
-    )
+    if sort_cells:
+        # Morton-cell order: sort every dense cell by its (batch, Morton) key, then
+        # scatter the rank-order prefix offsets back into row-indexed starts. This
+        # is the expensive radix_sort_pairs over all `total_cells` int64 keys.
+        cell_key_tmp = torch.empty(2 * total_cells, dtype=torch.int64, device=device)
+        cell_row_tmp = torch.empty(2 * total_cells, dtype=torch.int32, device=device)
+        cell_key_wp = wp.from_torch(cell_key_tmp)
+        cell_row_wp = wp.from_torch(cell_row_tmp)
+        wp.launch(
+            kernel=mk.enumerate_cell_morton_keys,
+            dim=total_cells,
+            inputs=[
+                grid_x_wp,
+                grid_y_wp,
+                grid_base_wp,
+                int(B),
+                int(bits),
+                int(morton_bits),
+                cell_key_wp,
+                cell_row_wp,
+            ],
+            device=wp_device,
+            stream=wp_stream,
+        )
+        wp.utils.radix_sort_pairs(cell_key_wp, cell_row_wp, total_cells)
+
+        cell_counts_rank = torch.empty(total_cells, dtype=torch.int32, device=device)
+        cell_offsets_rank = torch.empty(total_cells, dtype=torch.int32, device=device)
+        counts_rank_wp = wp.from_torch(cell_counts_rank)
+        offsets_rank_wp = wp.from_torch(cell_offsets_rank)
+        wp.launch(
+            kernel=mk.gather_cell_counts_by_rank,
+            dim=total_cells,
+            inputs=[cell_row_wp, wp.from_torch(cell_count_by_row), counts_rank_wp],
+            device=wp_device,
+            stream=wp_stream,
+        )
+        wp.utils.array_scan(counts_rank_wp, offsets_rank_wp, inclusive=False)
+        wp.launch(
+            kernel=mk.fill_cell_row_ranges,
+            dim=total_cells,
+            inputs=[cell_row_wp, offsets_rank_wp, wp.from_torch(cell_begin_by_row)],
+            device=wp_device,
+            stream=wp_stream,
+        )
+    else:
+        # Row-major order: a single exclusive scan of the per-row counts gives the
+        # per-row starts directly. No radix sort, no key/rank scratch buffers.
+        wp.utils.array_scan(
+            wp.from_torch(cell_count_by_row),
+            wp.from_torch(cell_begin_by_row),
+            inclusive=False,
+        )
 
     n_pad = Np + TILE_P
     pc_x_sorted = torch.empty(Np, dtype=torch.float32, device=device)
@@ -370,14 +399,22 @@ def prepare_morton_sorted_queries(
     queries: torch.Tensor,
     wp_device,
     wp_stream,
+    sort_queries: bool = True,
 ) -> SortedQueryData:
-    """Morton-sort the queries and gather their coords, absolute cells, and norms.
+    """Order the queries and gather their coords, absolute cells, and norms.
 
     Args:
         index: The PC-side dense index (provides the shared ``inv_radius`` / bits).
         queries: Query points of shape ``(B, Q, 3)``, float32, CUDA.
         wp_device: Warp launch device.
         wp_stream: Warp launch stream.
+        sort_queries: When ``True`` (default) the queries are Morton-sorted via a
+            ``radix_sort_pairs`` over ``Nq`` (for search-time locality), and
+            ``qkeys_sorted`` is populated for the GEMM query-cell grouping. When
+            ``False`` the queries are kept in original (identity) order -- no radix
+            sort -- and ``qkeys_sorted`` is empty. The FMA search is
+            order-independent (one block per query, output written at the original
+            flat id), so only the GEMM path needs ``sort_queries=True``.
 
     Returns:
         The populated :class:`SortedQueryData`.
@@ -387,38 +424,48 @@ def prepare_morton_sorted_queries(
     Nq = B * Q
     inv_radius = index.inv_radius
 
-    q_abs = torch.floor(queries * inv_radius).to(torch.int64)
-    q_min = q_abs.amin(dim=1)
-    q_min_cx = q_min[:, 0].to(torch.int32).contiguous()
-    q_min_cy = q_min[:, 1].to(torch.int32).contiguous()
-    q_min_cz = q_min[:, 2].to(torch.int32).contiguous()
-
     queries_wp = wp.from_torch(queries, dtype=wp.vec3, return_ctype=True)
 
-    q_key_tmp = torch.empty(2 * Nq, dtype=torch.int64, device=device)
-    q_val_tmp = torch.empty(2 * Nq, dtype=torch.int32, device=device)
-    q_key_wp = wp.from_torch(q_key_tmp)
-    q_val_wp = wp.from_torch(q_val_tmp)
-    wp.launch(
-        kernel=mk.make_query_morton_keys,
-        dim=Nq,
-        inputs=[
-            queries_wp,
-            float(inv_radius),
-            int(Q),
-            wp.from_torch(q_min_cx),
-            wp.from_torch(q_min_cy),
-            wp.from_torch(q_min_cz),
-            int(index.bits),
-            int(index.morton_bits),
-            q_key_wp,
-            q_val_wp,
-        ],
-        device=wp_device,
-        stream=wp_stream,
-    )
-    wp.utils.radix_sort_pairs(q_key_wp, q_val_wp, Nq)
-    qkeys_sorted = q_key_tmp[:Nq].clone()
+    if sort_queries:
+        # Morton-sort the queries so adjacent blocks touch overlapping cells (L2
+        # locality); also yields qkeys_sorted for the GEMM query-cell grouping.
+        q_abs = torch.floor(queries * inv_radius).to(torch.int64)
+        q_min = q_abs.amin(dim=1)
+        q_min_cx = q_min[:, 0].to(torch.int32).contiguous()
+        q_min_cy = q_min[:, 1].to(torch.int32).contiguous()
+        q_min_cz = q_min[:, 2].to(torch.int32).contiguous()
+
+        q_key_tmp = torch.empty(2 * Nq, dtype=torch.int64, device=device)
+        q_val_tmp = torch.empty(2 * Nq, dtype=torch.int32, device=device)
+        q_key_wp = wp.from_torch(q_key_tmp)
+        q_val_wp = wp.from_torch(q_val_tmp)
+        wp.launch(
+            kernel=mk.make_query_morton_keys,
+            dim=Nq,
+            inputs=[
+                queries_wp,
+                float(inv_radius),
+                int(Q),
+                wp.from_torch(q_min_cx),
+                wp.from_torch(q_min_cy),
+                wp.from_torch(q_min_cz),
+                int(index.bits),
+                int(index.morton_bits),
+                q_key_wp,
+                q_val_wp,
+            ],
+            device=wp_device,
+            stream=wp_stream,
+        )
+        wp.utils.radix_sort_pairs(q_key_wp, q_val_wp, Nq)
+        qkeys_sorted = q_key_tmp[:Nq].clone()
+    else:
+        # Identity order: no key build, no radix sort. gather_sorted_queries still
+        # runs below to build the SoA/vec4/norm arrays the search kernel reads.
+        # qkeys_sorted is consumed only by the GEMM task builder -> leave empty.
+        q_val_tmp = torch.arange(Nq, dtype=torch.int32, device=device)
+        q_val_wp = wp.from_torch(q_val_tmp)
+        qkeys_sorted = torch.empty(0, dtype=torch.int64, device=device)
 
     bq_pad = Nq + TILE_Q
     q_orig_sorted = torch.empty(Nq, dtype=torch.int32, device=device)
@@ -935,8 +982,10 @@ def radius_search_morton_dense(
         max_points: Maximum neighbors per query (must not be ``None``).
         return_dists: Whether to return neighbor distances.
         return_points: Whether to return neighbor coordinates.
-        variant: One of ``"dense_fma"`` (production) or ``"dense_gemm"`` (benchmark).
-            ``None`` defaults to ``"dense_fma"``.
+        variant: One of ``"dense_fma"`` (production), ``"dense_fma_e2e"`` (sort-free
+            ``dense_fma``: row-major cell bins + unsorted queries, no radix sort),
+            ``"dense_fma_mem_opt"``, ``"dense_fma_mm"``, or ``"dense_gemm"``
+            (benchmark). ``None`` defaults to ``"dense_fma"``.
 
     Returns:
         ``(indices, points, distances, num_neighbors)`` mirroring
@@ -978,12 +1027,19 @@ def radius_search_morton_dense(
 
     wp_device, wp_stream = FunctionSpec.warp_launch_context(points)
 
+    # dense_fma_e2e is the sort-free twin of dense_fma: it drops both Morton radix
+    # sorts (cell-bin ordering and query ordering), which are locality-only for the
+    # one-block-per-query FMA search, and reuses the same search kernel.
+    is_e2e = variant == "dense_fma_e2e"
+
     with wp.ScopedStream(wp_stream):
-        index = build_morton_compact_dense_index(points, radius, wp_device, wp_stream)
-        sorted_queries = prepare_morton_sorted_queries(
-            index, queries, wp_device, wp_stream
+        index = build_morton_compact_dense_index(
+            points, radius, wp_device, wp_stream, sort_cells=not is_e2e
         )
-        if variant == "dense_fma":
+        sorted_queries = prepare_morton_sorted_queries(
+            index, queries, wp_device, wp_stream, sort_queries=not is_e2e
+        )
+        if variant in ("dense_fma", "dense_fma_e2e"):
             indices, pts, dist, num = radius_search_morton_warp_fma(
                 index, sorted_queries, radius, max_points, return_dists,
                 return_points, wp_device, wp_stream,

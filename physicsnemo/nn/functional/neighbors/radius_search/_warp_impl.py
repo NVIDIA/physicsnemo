@@ -78,12 +78,19 @@ _MORTON_VARIANTS = (
     "fma",
     "gemm",
     "dense_fma",
+    "dense_fma_e2e",
     "dense_fma_mem_opt",
     "dense_fma_mm",
     "dense_gemm",
     "pysdf_cuda",
 )
-_MORTON_DENSE_VARIANTS = ("dense_fma", "dense_fma_mem_opt", "dense_fma_mm", "dense_gemm")
+_MORTON_DENSE_VARIANTS = (
+    "dense_fma",
+    "dense_fma_e2e",
+    "dense_fma_mem_opt",
+    "dense_fma_mm",
+    "dense_gemm",
+)
 
 
 def _morton_variant() -> str | None:
@@ -92,9 +99,11 @@ def _morton_variant() -> str | None:
     Controlled by the ``PHYSICSNEMO_RADIUS_SEARCH_MORTON`` environment variable.
     Hash-based variants are ``scalar`` (Function A), ``fma`` (Function B1), and
     ``gemm`` (Function B2). Dense-cell variants are ``dense_fma`` (one warp per
-    query) and ``dense_gemm`` (tiled matmul benchmark). The ``pysdf_cuda`` variant
-    uses the vendored pysdf software-QBVH range query (JIT-compiled CUDA). Anything
-    else (including unset) disables the Morton path.
+    query) and ``dense_gemm`` (tiled matmul benchmark). ``dense_fma_e2e`` is the
+    sort-free ``dense_fma`` (row-major cell bins + unsorted queries, no radix
+    sort). The ``pysdf_cuda`` variant uses the vendored pysdf software-QBVH range
+    query (JIT-compiled CUDA). Anything else (including unset) disables the Morton
+    path.
     """
     value = os.environ.get("PHYSICSNEMO_RADIUS_SEARCH_MORTON", "").strip().lower()
     return value if value in _MORTON_VARIANTS else None
