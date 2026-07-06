@@ -102,7 +102,7 @@ class VideoDiTBlock(nn.Module):
         Factory building this block's cross-attention module
         (:class:`~physicsnemo.experimental.models.healda.attention_layers.CrossAttentionModuleBase`).
         When set, adds a gated cross-attention sub-layer consuming the opaque
-        ``cross_attention_context`` passed to :meth:`forward`.
+        ``cross_attn_kwargs`` passed to :meth:`forward`.
     is_causal : bool, optional, default=False
         Causal masking for temporal attention, fixed at construction.
     adaln_zero_init : bool, optional, default=True
@@ -117,10 +117,10 @@ class VideoDiTBlock(nn.Module):
         parallelism).
     c : torch.Tensor
         Conditioning embedding of shape :math:`(B, D_c)`.
-    cross_attention_context : Any, optional
-        Opaque per-call context forwarded to the injected ``cross_attention`` module.
     attn_kwargs : Dict[str, Any], optional
         Forwarded to the spatial-attention backend forward.
+    cross_attn_kwargs : Dict[str, Any], optional
+        Forwarded to the injected ``cross_attention`` module.
     temporal_attn_kwargs : Dict[str, Any], optional
         Forwarded to :class:`~physicsnemo.experimental.models.healda.attention_layers.TemporalAttention`'s
         forward (e.g. ``rope_cos``/``rope_sin`` from a shared
@@ -317,8 +317,8 @@ class VideoDiTBlock(nn.Module):
         self,
         hidden_states: Float[torch.Tensor, "batch time space hidden_size"],
         c: Float[torch.Tensor, "batch condition_embed_dim"],
-        cross_attention_context: Optional[Any] = None,
         attn_kwargs: Optional[Dict[str, Any]] = None,
+        cross_attn_kwargs: Optional[Dict[str, Any]] = None,
         temporal_attn_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Float[torch.Tensor, "batch time space hidden_size"]:
         b, t, x, ch = hidden_states.shape
@@ -333,10 +333,10 @@ class VideoDiTBlock(nn.Module):
                     f"Expected conditioning of shape ({b}, {self.condition_embed_dim}), got "
                     f"tensor with shape {tuple(c.shape)}"
                 )
-            if self.cross_attention is not None and cross_attention_context is None:
+            if self.cross_attention is not None and not cross_attn_kwargs:
                 raise ValueError(
                     "cross_attention was provided at construction but no "
-                    "cross_attention_context was passed to forward"
+                    "cross_attn_kwargs was passed to forward"
                 )
 
         (
@@ -361,7 +361,7 @@ class VideoDiTBlock(nn.Module):
         if self.cross_attention is not None:
             shift, scale, gate = self.cross_attn_modulation(c)
             normed = modulate(self.cross_attn_norm(hidden_states), shift, scale)
-            cross_out = self.cross_attention(normed, cross_attention_context)
+            cross_out = self.cross_attention(normed, **cross_attn_kwargs)
             hidden_states = gated_residual(
                 hidden_states, cross_out, gate, self.drop_path
             )
@@ -466,10 +466,10 @@ class VideoDiT(Module):
         Diffusion timestep (noise level) tensor of shape :math:`(B,)`.
     condition : torch.Tensor, optional
         Conditioning input of shape :math:`(B, \text{condition\_dim})`.
-    cross_attention_context : Any, optional
-        Opaque per-call context consumed by the injected cross-attention module.
     attn_kwargs : Dict[str, Any], optional
         Forwarded to every block's spatial-attention backend forward.
+    cross_attn_kwargs : Dict[str, Any], optional
+        Forwarded to every block's injected cross-attention module.
     temporal_attn_kwargs : Dict[str, Any], optional
         Forwarded to every block's :class:`~physicsnemo.experimental.models.healda.attention_layers.TemporalAttention`
         forward. RoPE tables are appended automatically when RoPE
@@ -664,8 +664,8 @@ class VideoDiT(Module):
         x: Float[torch.Tensor, "batch channels time space"],
         t: Float[torch.Tensor, " batch"],
         condition: Optional[Float[torch.Tensor, "batch condition_dim"]] = None,
-        cross_attention_context: Optional[Any] = None,
         attn_kwargs: Optional[Dict[str, Any]] = None,
+        cross_attn_kwargs: Optional[Dict[str, Any]] = None,
         temporal_attn_kwargs: Optional[Dict[str, Any]] = None,
         tokenizer_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Float[torch.Tensor, "batch out_channels time space"]:
@@ -706,8 +706,8 @@ class VideoDiT(Module):
             h = block(
                 h,
                 emb,
-                cross_attention_context=cross_attention_context,
                 attn_kwargs=attn_kwargs,
+                cross_attn_kwargs=cross_attn_kwargs,
                 temporal_attn_kwargs=block_temporal_kwargs,
             )
 

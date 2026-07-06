@@ -36,10 +36,7 @@ from jaxtyping import Float
 
 from physicsnemo.core import Module
 from physicsnemo.core.version_check import OptionalImport
-from physicsnemo.experimental.models.healda.obs_context import (
-    ObsContext,
-    PixelGroupMap,
-)
+from physicsnemo.experimental.models.healda.obs_context import PixelGroupMap
 from physicsnemo.nn import apply_rotary_pos_emb
 
 triton = OptionalImport("triton")
@@ -251,18 +248,15 @@ class TemporalAttention(torch.nn.Module):
 
 
 class CrossAttentionModuleBase(Module, ABC):
-    r"""Abstract base for a cross-attention sub-layer.
-
-    A concrete module attends from ``hidden_states`` to an arbitrary external
-    ``context`` that the module fully owns (its type, layout, and any folding /
-    packing). The caller treats ``context`` as opaque.
+    r"""Abstract base for a cross-attention sub-layer: attends from ``hidden_states``
+    to conditioning inputs a subclass defines via ``**cross_attn_kwargs``.
 
     Forward
     -------
     hidden_states : torch.Tensor
         Latents of shape :math:`(*B, C)`.
-    context : Any
-        Module-defined conditioning source, opaque to the caller.
+    **cross_attn_kwargs : Any
+        Subclass-defined conditioning inputs.
 
     Outputs
     -------
@@ -274,7 +268,7 @@ class CrossAttentionModuleBase(Module, ABC):
     def forward(
         self,
         hidden_states: Float[torch.Tensor, "*batch hidden_size"],
-        context: Any,
+        **cross_attn_kwargs: Any,
     ) -> Float[torch.Tensor, "*batch hidden_size"]:
         pass
 
@@ -338,14 +332,14 @@ class PixelCrossAttention(CrossAttentionModuleBase):
     :func:`~physicsnemo.experimental.models.healda.kernels.pixel_attention.pixel_attention` for how the Triton kernel
     exploits this locality.
 
-    A :class:`CrossAttentionModuleBase` whose ``context`` is an
-    :class:`~physicsnemo.experimental.models.healda.obs_context.ObsContext`: it folds the time axis into the batch, runs
-    ragged grouped-query attention from each pixel latent to that pixel's token
-    slice, and unfolds the result back to :math:`(B, T, X, C)`.
+    A :class:`CrossAttentionModuleBase` taking the observation tokens and
+    their ragged packing as keyword arguments: it folds the time axis into
+    the batch, runs ragged grouped-query attention from each pixel latent to
+    that pixel's token slice, and unfolds the result back to :math:`(B, T, X, C)`.
 
-    The tokens in ``context`` must be pre-packed so that each pixel's tokens form
-    a single contiguous slice, laid out in pixel order, with ``cu_seqlens_k``
-    holding the prefix sums that delimit those slices. Build this packing with
+    ``tokens`` must be pre-packed so that each pixel's tokens form a single
+    contiguous slice, laid out in pixel order, with ``cu_seqlens_k`` holding
+    the prefix sums that delimit those slices. Build this packing with
     :func:`~physicsnemo.experimental.models.healda.obs_context.prepare_obs_context`.
 
     Parameters
@@ -370,9 +364,15 @@ class PixelCrossAttention(CrossAttentionModuleBase):
     -------
     hidden_states : torch.Tensor
         Per-pixel latents of shape :math:`(B, T, X, \text{hidden\_size})`.
-    context : :class:`~physicsnemo.experimental.models.healda.obs_context.ObsContext`
-        Packed observation tokens and ragged packing whose ``cu_seqlens_k``
-        describes :math:`B \cdot T \cdot X` pixels.
+    tokens : torch.Tensor
+        Packed observation tokens of shape :math:`(N_{tok}, \text{token\_dim})`.
+    cu_seqlens_k : torch.Tensor
+        Prefix sums delimiting each pixel's token slice; length
+        :math:`B \cdot T \cdot X + 1`.
+    max_seqlen_k : int
+        Largest per-pixel token count, for the Triton kernel's tile sizing.
+    group_map : :class:`~physicsnemo.experimental.models.healda.obs_context.PixelGroupMap`, optional
+        Small-pixel grouping map for the Triton kernel.
 
     Outputs
     -------
@@ -382,9 +382,9 @@ class PixelCrossAttention(CrossAttentionModuleBase):
     Notes
     -----
     The kernel runs one program per pixel, so when many pixels hold only a few
-    tokens the fixed per-program overhead can be significant. For best throughput,
-    build ``context`` with :func:`~physicsnemo.experimental.models.healda.obs_context.prepare_obs_context`
-    (``build_group_map=True`` by default).
+    tokens the fixed per-program overhead can be significant;
+    :func:`~physicsnemo.experimental.models.healda.obs_context.prepare_obs_context`'s
+    default ``build_group_map=True`` groups them for better throughput.
     On CUDA, set ``HEALDA_PIXEL_ATTN_AUTOTUNE_CACHE_DIR`` to a writable directory
     to reuse Triton ``@autotune`` tile configs across repeated runs to reduce startup overhead.
     """
@@ -427,15 +427,43 @@ class PixelCrossAttention(CrossAttentionModuleBase):
         self.v_proj = nn.Linear(token_dim, kv_dim, bias=use_proj_bias)
         self.out_proj = nn.Linear(self.attn_dim, hidden_size, bias=use_proj_bias)
 
-    def _forward_impl(
+    def forward(
         self,
-        hidden_states: torch.Tensor,
+        hidden_states: Float[torch.Tensor, "batch time space hidden_size"],
         tokens: torch.Tensor,
-        total_pixels: int,
         cu_seqlens_k: torch.Tensor,
         max_seqlen_k: int,
         group_map: Optional[PixelGroupMap] = None,
-    ) -> torch.Tensor:
+    ) -> Float[torch.Tensor, "batch time space hidden_size"]:
+        b, t, x, _ = hidden_states.shape
+        total_pixels = b * t * x
+        if not torch.compiler.is_compiling():
+            if tokens is None:
+                raise ValueError(
+                    "tokens must be set before PixelCrossAttention forward"
+                )
+            if hidden_states.ndim != 4:
+                raise ValueError(
+                    f"Expected hidden_states of shape (B, T, X, C), got {hidden_states.ndim}D "
+                    f"tensor with shape {tuple(hidden_states.shape)}"
+                )
+            if hidden_states.shape[-1] != self.hidden_size:
+                raise ValueError(
+                    f"Expected hidden_size {self.hidden_size}, got "
+                    f"{hidden_states.shape[-1]} channels"
+                )
+            if cu_seqlens_k.numel() != total_pixels + 1:
+                raise ValueError(
+                    f"Expected cu_seqlens_k length {total_pixels + 1} (B*T*X+1), got "
+                    f"{cu_seqlens_k.numel()}"
+                )
+            if int(cu_seqlens_k[-1]) != tokens.shape[0]:
+                raise ValueError(
+                    f"Expected {tokens.shape[0]} packed tokens, but "
+                    f"cu_seqlens_k ends at {int(cu_seqlens_k[-1])}"
+                )
+
+        # Fold (B, T, X) into the flat pixel axis the ragged kernel expects.
         hidden_flat = hidden_states.reshape(total_pixels, self.hidden_size)
 
         if tokens.shape[0] == 0:
@@ -449,11 +477,11 @@ class PixelCrossAttention(CrossAttentionModuleBase):
             if self.v_proj.bias is not None:
                 kv_dummy = kv_dummy + self.v_proj.bias.sum() * 0
             out = self.out_proj(hidden_flat.new_zeros((total_pixels, self.attn_dim)))
-            return out + token_dummy + q_dummy + kv_dummy
+            out = out + token_dummy + q_dummy + kv_dummy
+            return out.view(b, t, x, self.hidden_size)
 
         hidden_flat = self.q_proj(hidden_flat)
-        Q = hidden_flat.view(total_pixels, self.n_q_heads, self.d_head)
-        Q = Q.contiguous()
+        Q = hidden_flat.view(total_pixels, self.n_q_heads, self.d_head).contiguous()
 
         if triton.available and Q.is_cuda:
             from .kernels.pixel_attention import pixel_attention
@@ -483,48 +511,6 @@ class PixelCrossAttention(CrossAttentionModuleBase):
                 B_v=self.v_proj.bias,
             )
 
-        return self.out_proj(attn_out.reshape(total_pixels, self.attn_dim))
-
-    def forward(
-        self,
-        hidden_states: Float[torch.Tensor, "batch time space hidden_size"],
-        context: ObsContext,
-    ) -> Float[torch.Tensor, "batch time space hidden_size"]:
-        b, t, x, _ = hidden_states.shape
-        total_pixels = b * t * x
-        if not torch.compiler.is_compiling():
-            if context.tokens is None:
-                raise ValueError(
-                    "ObsContext.tokens must be set before PixelCrossAttention forward"
-                )
-            if hidden_states.ndim != 4:
-                raise ValueError(
-                    f"Expected hidden_states of shape (B, T, X, C), got {hidden_states.ndim}D "
-                    f"tensor with shape {tuple(hidden_states.shape)}"
-                )
-            if hidden_states.shape[-1] != self.hidden_size:
-                raise ValueError(
-                    f"Expected hidden_size {self.hidden_size}, got "
-                    f"{hidden_states.shape[-1]} channels"
-                )
-            if context.cu_seqlens_k.numel() != total_pixels + 1:
-                raise ValueError(
-                    f"Expected cu_seqlens_k length {total_pixels + 1} (B*T*X+1), got "
-                    f"{context.cu_seqlens_k.numel()}"
-                )
-            if int(context.cu_seqlens_k[-1]) != context.tokens.shape[0]:
-                raise ValueError(
-                    f"Expected {context.tokens.shape[0]} packed tokens, but "
-                    f"cu_seqlens_k ends at {int(context.cu_seqlens_k[-1])}"
-                )
-        # Fold (B, T, X) into the flat pixel axis the ragged kernel expects, then
-        # unfold the per-pixel output back to the (B, T, X, hidden_size) layout.
-        out = self._forward_impl(
-            hidden_states,
-            context.tokens,
-            total_pixels,
-            context.cu_seqlens_k,
-            context.max_seqlen_k,
-            group_map=context.group_map,
-        )
+        # Unfold the per-pixel output back to the (B, T, X, hidden_size) layout.
+        out = self.out_proj(attn_out.reshape(total_pixels, self.attn_dim))
         return out.view(b, t, x, self.hidden_size)

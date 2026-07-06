@@ -21,7 +21,6 @@ import torch.nn as nn
 from physicsnemo.experimental.models.healda.attention_layers import (
     PixelCrossAttention,
 )
-from physicsnemo.experimental.models.healda.obs_context import ObsContext
 from physicsnemo.experimental.models.healda.video_dit import VideoDiT, VideoDiTBlock
 from physicsnemo.nn import RotaryEmbedding1DTables
 
@@ -136,23 +135,16 @@ def test_video_dit_cuda_full():
     cu[1:] = torch.cumsum(counts, 0).to(torch.int32)
     n_tokens = int(cu[-1])
     tokens = torch.randn(n_tokens, otd, device=dev, requires_grad=True)
-    # VideoDiT's cross-attention only reads tokens/cu_seqlens_k/max_seqlen_k; the
-    # raw per-observation fields (required on ObsContext) are unused placeholders.
-    context = ObsContext(
-        tokens=tokens,
-        cu_seqlens_k=cu,
-        max_seqlen_k=int(counts.max()),
-        obs=torch.randn(n_tokens, device=dev),
-        float_metadata=torch.randn(n_tokens, 1, device=dev),
-        obs_type=torch.randint(0, 4, (n_tokens,), device=dev),
-        channel=torch.randint(0, 4, (n_tokens,), device=dev),
-        platform=torch.randint(0, 4, (n_tokens,), device=dev),
-    )
+    cross_attn_kwargs = {
+        "tokens": tokens,
+        "cu_seqlens_k": cu,
+        "max_seqlen_k": int(counts.max()),
+    }
 
     out = model(
         x,
         torch.rand(b, device=dev),
-        cross_attention_context=context,
+        cross_attn_kwargs=cross_attn_kwargs,
         tokenizer_kwargs=_calendar(b, t, dev),
     )
     assert out.shape == (b, c, t, NPIX)
@@ -161,29 +153,19 @@ def test_video_dit_cuda_full():
     assert x.grad.abs().sum() > 0 and tokens.grad.abs().sum() > 0
 
 
-def _build_tokenized_context(b, t, npix, obs_token_dim, device, max_count=4):
-    """Build an already-tokenized ObsContext for ``b*t*npix`` pixels.
-
-    VideoDiTBlock's cross-attention only reads ``tokens``/``cu_seqlens_k``/
-    ``max_seqlen_k``; the raw per-observation fields (required on ObsContext,
-    but otherwise unused here) are filled with unused placeholder data.
-    """
+def _build_cross_attn_kwargs(b, t, npix, obs_token_dim, device, max_count=4):
+    """Build PixelCrossAttention's forward kwargs for ``b*t*npix`` pixels."""
     total_pixels = b * t * npix
     counts = torch.randint(0, max_count, (total_pixels,), device=device)
     cu = torch.zeros(total_pixels + 1, dtype=torch.int32, device=device)
     cu[1:] = torch.cumsum(counts, 0).to(torch.int32)
     n_tokens = int(cu[-1].item())
     tokens = torch.randn(n_tokens, obs_token_dim, device=device, requires_grad=True)
-    return ObsContext(
-        tokens=tokens,
-        cu_seqlens_k=cu,
-        max_seqlen_k=int(counts.max().item()) if total_pixels else 0,
-        obs=torch.randn(n_tokens, device=device),
-        float_metadata=torch.randn(n_tokens, 1, device=device),
-        obs_type=torch.randint(0, 4, (n_tokens,), device=device),
-        channel=torch.randint(0, 4, (n_tokens,), device=device),
-        platform=torch.randint(0, 4, (n_tokens,), device=device),
-    )
+    return {
+        "tokens": tokens,
+        "cu_seqlens_k": cu,
+        "max_seqlen_k": int(counts.max().item()) if total_pixels else 0,
+    }
 
 
 def test_plain_block_reduces_to_spatial_mlp_cpu():
@@ -272,12 +254,12 @@ def test_full_block_cuda():
     rope_cos, rope_sin = rope(seq_len=t)
     x = torch.randn(b, t, npix, c, device=dev, requires_grad=True)
     emb = torch.randn(b, 128, device=dev)
-    context = _build_tokenized_context(b, t, npix, token_dim, dev)
+    cross_attn_kwargs = _build_cross_attn_kwargs(b, t, npix, token_dim, dev)
 
     out = block(
         x,
         emb,
-        cross_attention_context=context,
+        cross_attn_kwargs=cross_attn_kwargs,
         temporal_attn_kwargs={"rope_cos": rope_cos, "rope_sin": rope_sin},
     )
     assert out.shape == (b, t, npix, c)
@@ -286,7 +268,7 @@ def test_full_block_cuda():
     out.float().pow(2).mean().backward()
     for g in (
         x.grad,
-        context.tokens.grad,
+        cross_attn_kwargs["tokens"].grad,
         block.cross_attention.q_proj.weight.grad,
         block.temporal_attention.qkv.weight.grad,
         next(block.attention.parameters()).grad,

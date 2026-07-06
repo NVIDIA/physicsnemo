@@ -15,7 +15,6 @@
 # limitations under the License.
 """Video + observation data-assimilation model composing :class:`~physicsnemo.experimental.models.healda.video_dit.VideoDiT`."""
 
-import dataclasses
 from dataclasses import dataclass
 from functools import partial
 from typing import Literal, Optional
@@ -134,6 +133,8 @@ class HealDAv2(Module):
         Causal masking for temporal attention, fixed at construction.
     linear_attention : bool, optional, default=True
         Use the softmax-free (linear) temporal attention variant.
+    use_rope : bool, optional, default=True
+        Apply rotary position embeddings on the temporal-attention time axis.
     rope_base : int, optional, default=100
         Base frequency for the temporal-attention rotary position embedding.
     max_seq_len : int, optional, default=100
@@ -279,6 +280,7 @@ class HealDAv2(Module):
         temporal_attention: bool = True,
         is_causal: bool = True,
         linear_attention: bool = True,
+        use_rope: bool = True,
         rope_base: int = 100,
         max_seq_len: int = 100,
         temporal_causal_window: Optional[int] = None,
@@ -368,6 +370,7 @@ class HealDAv2(Module):
             noise_channels=noise_channels,
             condition_dim=condition_dim,
             temporal_attention=temporal_attention,
+            use_rope=use_rope,
             rope_base=rope_base,
             max_seq_len=max_seq_len,
             temporal_kwargs=temporal_kwargs,
@@ -470,12 +473,17 @@ class HealDAv2(Module):
             obs_ctx.channel,
             obs_ctx.platform,
         )
-        cross_attention_context = dataclasses.replace(obs_ctx, tokens=tokens)
+        cross_attn_kwargs = {
+            "tokens": tokens,
+            "cu_seqlens_k": obs_ctx.cu_seqlens_k,
+            "max_seqlen_k": obs_ctx.max_seqlen_k,
+            "group_map": obs_ctx.group_map,
+        }
         return self.dit(
             x,
             t,
             condition=class_labels,
-            cross_attention_context=cross_attention_context,
+            cross_attn_kwargs=cross_attn_kwargs,
             tokenizer_kwargs={
                 "second_of_day": second_of_day,
                 "day_of_year": day_of_year,

@@ -27,7 +27,6 @@ from physicsnemo.experimental.models.healda.attention_layers import (
     _pixel_attention_reference,
 )
 from physicsnemo.experimental.models.healda.obs_context import (
-    ObsContext,
     build_pixel_group_map,
     counts_to_cu_seqlens,
     prepare_obs_context,
@@ -58,29 +57,19 @@ TOKEN_DIM = 32
 _HEAD_LAYOUTS = [(16, 1), (32, 2), (64, 4)]
 
 
-def _tokenized_obs_context(tokens, counts, device=None):
-    """Build an already-tokenized ObsContext for a PixelCrossAttention test.
-
-    PixelCrossAttention only reads ``tokens``/``cu_seqlens_k``/``max_seqlen_k``;
-    the raw per-observation fields (required on ObsContext, but otherwise
-    unused here) are filled with unused placeholder data, sized to match
-    ``tokens`` (a zero-length placeholder would misleadingly claim there are
-    no observations, when there are -- just already tokenized).
-    """
-    cu = _cu_seqlens(counts)
-    nobs = tokens.shape[0]
+def _cross_attn_kwargs(tokens, counts, device=None, build_group_map=False):
+    """Build PixelCrossAttention's forward kwargs for the given per-pixel counts."""
+    cu = counts_to_cu_seqlens(torch.tensor(counts, dtype=torch.int64))
     if device is not None:
         cu = cu.to(device)
-    return ObsContext(
-        tokens=tokens,
-        cu_seqlens_k=cu,
-        max_seqlen_k=max(counts) if counts else 0,
-        obs=torch.randn(nobs),
-        float_metadata=torch.randn(nobs, 1),
-        obs_type=torch.randint(0, 4, (nobs,)),
-        channel=torch.randint(0, 4, (nobs,)),
-        platform=torch.randint(0, 4, (nobs,)),
-    )
+    kwargs = {
+        "tokens": tokens,
+        "cu_seqlens_k": cu,
+        "max_seqlen_k": max(counts) if counts else 0,
+    }
+    if build_group_map:
+        kwargs["group_map"] = build_pixel_group_map(cu)
+    return kwargs
 
 
 @pytest.fixture(autouse=True)
@@ -105,13 +94,6 @@ def _single_autotune_config(monkeypatch):
     yield
 
 
-def _cu_seqlens(counts):
-    cu = torch.zeros(len(counts) + 1, dtype=torch.int32)
-    if counts:
-        cu[1:] = torch.tensor(counts, dtype=torch.int32).cumsum(0)
-    return cu
-
-
 def _make_inputs(counts, n_q_heads, n_kv_heads, use_v_bias, seed=0):
     gen = torch.Generator().manual_seed(seed)
     kv_dim = n_kv_heads * D_HEAD
@@ -120,7 +102,7 @@ def _make_inputs(counts, n_q_heads, n_kv_heads, use_v_bias, seed=0):
     W_k = torch.randn(kv_dim, TOKEN_DIM, generator=gen) * 0.1
     W_v = torch.randn(kv_dim, TOKEN_DIM, generator=gen) * 0.1
     B_v = torch.randn(kv_dim, generator=gen) * 0.1 if use_v_bias else None
-    cu = _cu_seqlens(counts)
+    cu = counts_to_cu_seqlens(torch.tensor(counts, dtype=torch.int64))
     max_seqlen_k = max(counts) if counts else 0
 
     def cuda(x):
@@ -307,6 +289,46 @@ def test_pixel_attention_grouping_matches_ungrouped(n_q_heads, n_kv_heads):
 
 
 @requires_triton_cuda
+def test_pixel_cross_attention_module_grouping_matches_ungrouped():
+    # Small-pixel grouping must be transparent through the nn.Module wrapper:
+    # passing a group_map only changes kernel launches, so module output AND
+    # every parameter gradient must match the ungrouped path bit-for-bit.
+    torch.manual_seed(9)
+    counts = [3, 2, 4, 1, 0, 5, 2, 3, 30, 1, 2, 4, 0, 3, 2, 40, 1, 2]
+    total_pixels = len(counts)
+    module = PixelCrossAttention(
+        hidden_size=64, token_dim=TOKEN_DIM, n_q_heads=32, n_kv_heads=2, d_head=D_HEAD
+    ).cuda()
+
+    gen = torch.Generator().manual_seed(10)
+    hidden = torch.randn(1, 1, total_pixels, module.hidden_size, generator=gen).cuda()
+    tokens = torch.randn(sum(counts), TOKEN_DIM, generator=gen).cuda()
+    grouped_kwargs = _cross_attn_kwargs(
+        tokens, counts, device="cuda", build_group_map=True
+    )
+    # Sanity: the map must actually group (fewer programs than nonzero pixels).
+    n_nz = sum(1 for c in counts if c > 0)
+    assert grouped_kwargs["group_map"].program_ptr.numel() - 1 < n_nz
+
+    def out_and_grads(kwargs):
+        module.zero_grad(set_to_none=True)
+        h = hidden.clone().requires_grad_(True)
+        out = module(h, **kwargs)
+        out.sum().backward()
+        grads = {name: p.grad.clone() for name, p in module.named_parameters()}
+        return out, h.grad.clone(), grads
+
+    ungrouped_kwargs = _cross_attn_kwargs(tokens, counts, device="cuda")
+    ung_out, ung_hgrad, ung_grads = out_and_grads(ungrouped_kwargs)
+    grp_out, grp_hgrad, grp_grads = out_and_grads(grouped_kwargs)
+
+    torch.testing.assert_close(grp_out, ung_out, rtol=0, atol=0)
+    torch.testing.assert_close(grp_hgrad, ung_hgrad, rtol=0, atol=0)
+    for name in ung_grads:
+        torch.testing.assert_close(grp_grads[name], ung_grads[name], rtol=0, atol=0)
+
+
+@requires_triton_cuda
 def test_pixel_cross_attention_module_forward_backward():
     # Exercises the nn.Module wiring (q_proj/out_proj + reshapes) in the real
     # bf16 path. Smoke-checks shapes, finiteness, and full gradient coverage.
@@ -327,8 +349,8 @@ def test_pixel_cross_attention_module_forward_backward():
     tokens = (
         torch.randn(sum(counts), TOKEN_DIM, generator=gen).cuda().requires_grad_(True)
     )
-    context = _tokenized_obs_context(tokens, counts, device="cuda")
-    out = module(hidden.view(1, 1, total_pixels, module.hidden_size), context)
+    kwargs = _cross_attn_kwargs(tokens, counts, device="cuda")
+    out = module(hidden.view(1, 1, total_pixels, module.hidden_size), **kwargs)
     assert out.shape == (1, 1, total_pixels, module.hidden_size)
     assert torch.isfinite(out).all()
 
@@ -350,8 +372,8 @@ def test_pixel_cross_attention_empty_tokens_grad():
     ).cuda()
     hidden = torch.randn(total_pixels, module.hidden_size).cuda()
     tokens = torch.zeros(0, TOKEN_DIM).cuda()
-    context = _tokenized_obs_context(tokens, [0] * total_pixels, device="cuda")
-    out = module(hidden.view(1, 1, total_pixels, module.hidden_size), context)
+    kwargs = _cross_attn_kwargs(tokens, [0] * total_pixels, device="cuda")
+    out = module(hidden.view(1, 1, total_pixels, module.hidden_size), **kwargs)
     assert out.shape == (1, 1, total_pixels, module.hidden_size)
     out.sum().backward()
     for name, p in module.named_parameters():
@@ -401,10 +423,10 @@ def test_pixel_cross_attention_cpu_reference_forward_backward():
     )
     gen = torch.Generator().manual_seed(0)
     tokens = torch.randn(sum(counts), TOKEN_DIM, generator=gen, requires_grad=True)
-    ctx = _tokenized_obs_context(tokens, counts)
+    kwargs = _cross_attn_kwargs(tokens, counts)
     hidden = torch.randn(1, 2, 3, module.hidden_size, requires_grad=True)
 
-    out = module(hidden, ctx)
+    out = module(hidden, **kwargs)
     assert out.shape == (1, 2, 3, module.hidden_size)
     assert torch.isfinite(out).all()
 
@@ -434,9 +456,9 @@ def test_pixel_cross_attention_hidden_size_differs_from_attn_dim():
     gen = torch.Generator().manual_seed(0)
     for counts in ([2, 0, 3, 1], [0, 0, 0, 0]):
         tokens = torch.randn(sum(counts), TOKEN_DIM, generator=gen)
-        ctx = _tokenized_obs_context(tokens, counts)
+        kwargs = _cross_attn_kwargs(tokens, counts)
         hidden = torch.randn(1, 1, len(counts), hidden_size, requires_grad=True)
-        out = module(hidden, ctx)
+        out = module(hidden, **kwargs)
         assert out.shape == (1, 1, len(counts), hidden_size)
         assert torch.isfinite(out).all()
         out.sum().backward()
@@ -455,10 +477,10 @@ def test_pixel_cross_attention_cpu_all_empty_keeps_grads():
         use_proj_bias=True,
     )
     tokens = torch.zeros(0, TOKEN_DIM)
-    ctx = _tokenized_obs_context(tokens, [0, 0, 0, 0])
+    kwargs = _cross_attn_kwargs(tokens, [0, 0, 0, 0])
     hidden = torch.randn(1, 1, 4, module.hidden_size, requires_grad=True)
 
-    out = module(hidden, ctx)
+    out = module(hidden, **kwargs)
     assert out.shape == (1, 1, 4, module.hidden_size)
     out.sum().backward()
     assert module.q_proj.weight.grad is not None
