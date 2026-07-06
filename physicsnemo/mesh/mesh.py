@@ -391,13 +391,14 @@ class Mesh:
 
         ### _cache: default empty cache structure
         if self._cache is None:
+            device = self.points.device
             self._cache = TensorDict(
                 {
-                    "cell": TensorDict({}, batch_size=[self.n_cells]),
-                    "point": TensorDict({}, batch_size=[self.n_points]),
-                    "topology": TensorDict({}),
+                    "cell": TensorDict({}, batch_size=[self.n_cells], device=device),
+                    "point": TensorDict({}, batch_size=[self.n_points], device=device),
+                    "topology": TensorDict({}, device=device),
                 },
-                device=self.points.device,
+                device=device,
             )
 
         ### Validate shapes and dtypes
@@ -1439,13 +1440,16 @@ class Mesh:
         local_cell_cache = self._cache["cell"].select(
             "centroids", "areas", "normals", strict=False
         )
+        device = self.points.device
         new_cache = TensorDict(
             {
                 "cell": local_cell_cache[indices],
-                "point": TensorDict({}, batch_size=torch.Size([self.n_points])),
-                "topology": TensorDict({}),
+                "point": TensorDict(
+                    {}, batch_size=torch.Size([self.n_points]), device=device
+                ),
+                "topology": TensorDict({}, device=device),
             },
-            device=self.points.device,
+            device=device,
         )
         return Mesh(
             points=self.points,
@@ -2433,7 +2437,7 @@ class Mesh:
                         lambda x: _pad_with_value(x, target_n_points, 0.0),
                         batch_size=torch.Size([target_n_points]),
                     ),
-                    "topology": TensorDict({}),
+                    "topology": TensorDict({}, device=self.points.device),
                 },
                 device=self.points.device,
             ),
