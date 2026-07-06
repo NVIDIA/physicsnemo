@@ -10,15 +10,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Adds a neutral, non-blocking `Coverage %` check run on every PR (showing
-  the measured percentage and lines/branches detail) and a ready-to-enable
-  Codecov integration (`codecov.yml`), inert until an admin installs the
-  Codecov GitHub App and provisions `CODECOV_TOKEN`. Also fixes a latent
-  bug where `--fail-under` gated report generation itself, silently
-  skipping HTML/XML/JSON coverage artifacts whenever a run fell below the
-  threshold; the threshold (raised from 45% to 70%, matching current
-  nightly whole-repo coverage) is now enforced in its own step so reports
-  always generate.
 - Adds the experimental Strata weather-emulation models —
   `physicsnemo.experimental.models.strata.Strata` and `StrataTransformer3D` — plus
   the continuous / stereographic RoPE helpers `build_rope_cos_sin_1d_continuous`,
