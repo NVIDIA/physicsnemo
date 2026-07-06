@@ -95,6 +95,7 @@ python examples/cfd/fp_ddm/run_fpddm.py \
     domain.rows=3 \
     domain.columns=3 \
     run.max_iterations=10 \
+    run.ground_truth=true \
     run.visualize=false \
     run.output_dir=outputs/fp_ddm/fem
 ```
@@ -108,6 +109,7 @@ python examples/cfd/fp_ddm/run_fpddm.py \
     domain.rows=3 \
     domain.columns=3 \
     run.max_iterations=50 \
+    run.ground_truth=true \
     run.visualize=false \
     run.output_dir=outputs/fp_ddm/fno
 ```
@@ -137,7 +139,10 @@ The main configuration groups are:
 The supplied workload uses zero heat source, matching the original FP-DDM
 setup. Nonzero `dataset.q_min` and `dataset.q_max` values are supported by both
 the thermal residual and the finite-volume solver. The synthetic global layout
-currently requires a square patch grid with square patches.
+currently requires a square patch grid with square patches. Full-domain
+reference solves are opt-in with `run.ground_truth=true` and limited to at most
+26 subdomains so diagnostic work remains bounded. Larger requests emit a
+warning and continue without reference metrics.
 
 ## Reproduced Baseline
 

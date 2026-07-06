@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import time
+import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,6 +46,8 @@ from .observers import (
 )
 from .schwarz import EarlyStopping, PhysicsInformedAdapter, SchwarzMethod
 from .solvers import NeuralDomainSolver, ThermalFEMSolver
+
+_MAX_REFERENCE_SUBDOMAINS = 26
 
 
 @dataclass
@@ -87,7 +90,15 @@ def _reference_solve(
     coarse: bool = False,
     render: bool = True,
 ) -> torch.Tensor | None:
-    if domain.rows * domain.columns > 26:
+    num_subdomains = domain.rows * domain.columns
+    if num_subdomains > _MAX_REFERENCE_SUBDOMAINS:
+        solve_name = "coarse initialization" if coarse else "ground-truth reference"
+        warnings.warn(
+            f"Skipping {solve_name} for {num_subdomains} subdomains; the example "
+            f"limits full-domain solves to {_MAX_REFERENCE_SUBDOMAINS} subdomains.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
         return None
 
     conductivity = domain.fields[Fields.CONDUCTIVITY]
@@ -206,7 +217,7 @@ def run_fpddm(
             )
     reference = (
         _reference_solve(domain, reference_solver, output_dir, render=render)
-        if bool(run_config.get("ground_truth", True))
+        if bool(run_config.get("ground_truth", False))
         else None
     )
 

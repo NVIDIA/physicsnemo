@@ -56,8 +56,12 @@ class PhysicsInformedAdapter:
 
         if self.steps <= 0 or self.learning_rate <= 0.0:
             return
+        if not subdomains:
+            self.solver.loss = 0.0
+            return
 
         model = self.solver.model
+        num_subdomains = len(subdomains)
         previous_modes = (
             model.use_dimensional_input,
             model.use_dimensional_output,
@@ -83,11 +87,12 @@ class PhysicsInformedAdapter:
                         self.pde_weight * pde_loss
                         + self.boundary_weight * boundary_loss
                     )
-                    total.backward()
+                    batch_fraction = inputs.shape[0] / num_subdomains
+                    (batch_fraction * total).backward()
                 optimizer.step()
 
             total_loss = 0.0
-            batches = 0
+            evaluated_subdomains = 0
             model.eval()
             with torch.no_grad():
                 for _, inputs in self.solver.iter_batches(subdomains, self.batch_size):
@@ -98,12 +103,13 @@ class PhysicsInformedAdapter:
                         normalized,
                         source_scale=model.nondimensional_source_scale,
                     )
-                    total_loss += float(
+                    batch_loss = float(
                         self.pde_weight * pde_loss
                         + self.boundary_weight * boundary_loss
                     )
-                    batches += 1
-            self.solver.loss = total_loss / max(batches, 1)
+                    total_loss += inputs.shape[0] * batch_loss
+                    evaluated_subdomains += inputs.shape[0]
+            self.solver.loss = total_loss / evaluated_subdomains
         finally:
             model.set_dimensional_mode(previous_modes[0], previous_modes[1])
             model.set_boundary_enforcement(previous_modes[2])

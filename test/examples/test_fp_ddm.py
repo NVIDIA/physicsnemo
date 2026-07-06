@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import sys
 from pathlib import Path
@@ -33,9 +34,10 @@ from fpddm.data import ThermalDataset  # noqa: E402
 from fpddm.domain import Domain, Fields, MaskKind  # noqa: E402
 from fpddm.interfaces import ExchangeInterfaceHandler  # noqa: E402
 from fpddm.model import ThermalPINO, thermal_residual  # noqa: E402
-from fpddm.pipeline import run_fpddm  # noqa: E402
+from fpddm.observers import MetricsLogger  # noqa: E402
+from fpddm.pipeline import _reference_solve, run_fpddm  # noqa: E402
 from fpddm.schwarz import PhysicsInformedAdapter  # noqa: E402
-from fpddm.solvers import NeuralDomainSolver  # noqa: E402
+from fpddm.solvers import NeuralDomainSolver, ThermalFEMSolver  # noqa: E402
 from fpddm.thermal import Heat2DSolver  # noqa: E402
 
 
@@ -204,6 +206,67 @@ def test_test_time_adaptation_restores_inference_modes(model_config):
     assert not solver.model.training
     assert torch.isfinite(torch.tensor(solver.loss))
     assert solver.loss > 0.0
+
+
+def test_test_time_adaptation_is_batch_partition_invariant(monkeypatch, model_config):
+    full_batch_solver = NeuralDomainSolver(model_config, batch_size=2, device="cpu")
+    split_batch_solver = NeuralDomainSolver(model_config, batch_size=2, device="cpu")
+    split_batch_solver.model.load_state_dict(full_batch_solver.model.state_dict())
+    subdomains = [
+        item for row in _two_patch_domain().build_subdomains() for item in row
+    ]
+    monkeypatch.setattr(
+        torch.optim,
+        "Adam",
+        lambda parameters, lr: torch.optim.SGD(parameters, lr=lr),
+    )
+
+    PhysicsInformedAdapter(
+        full_batch_solver, steps=1, learning_rate=1.0e-4, batch_size=2
+    )(subdomains)
+    PhysicsInformedAdapter(
+        split_batch_solver, steps=1, learning_rate=1.0e-4, batch_size=1
+    )(subdomains)
+
+    for full_batch_value, split_batch_value in zip(
+        full_batch_solver.model.state_dict().values(),
+        split_batch_solver.model.state_dict().values(),
+    ):
+        assert torch.allclose(full_batch_value, split_batch_value, atol=2.0e-6)
+    assert full_batch_solver.loss == pytest.approx(split_batch_solver.loss, rel=1.0e-5)
+
+
+def test_metrics_logger_appends_and_restarts_cleanly(tmp_path, monkeypatch):
+    csv_path = tmp_path / "metrics.csv"
+    csv_path.write_text("stale output\n", encoding="utf-8")
+    logger = MetricsLogger(csv_path)
+    logger.metric_sources.append(lambda: ("value", float(logger.iteration)))
+    modes = []
+    original_open = Path.open
+
+    def tracked_open(path, mode="r", *args, **kwargs):
+        if path == csv_path and mode in {"w", "a"}:
+            modes.append(mode)
+        return original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", tracked_open)
+    logger.step()
+    logger.step()
+
+    assert modes == ["w", "a"]
+    with csv_path.open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    assert [int(row["iteration"]) for row in rows] == [1, 2]
+    assert [float(row["value"]) for row in rows] == [1.0, 2.0]
+    assert "stale output" not in csv_path.read_text(encoding="utf-8")
+
+
+def test_large_reference_solve_warns_and_skips(tmp_path):
+    domain = Domain(rows=6, columns=5, width=8, height=8, overlap=2)
+    solver = ThermalFEMSolver(device="cpu")
+    with pytest.warns(RuntimeWarning, match="30 subdomains"):
+        reference = _reference_solve(domain, solver, tmp_path, render=False)
+    assert reference is None
 
 
 def test_fem_fpddm_end_to_end(tmp_path, model_config):

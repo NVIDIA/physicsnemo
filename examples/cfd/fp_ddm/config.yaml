@@ -98,7 +98,7 @@ run:
   ttt_pde_weight: 1.0
   ttt_boundary_weight: 1.0
   visualize: true
-  ground_truth: true
+  ground_truth: false
 
 # Optional PNG and MP4 output ranges.
 visualization:

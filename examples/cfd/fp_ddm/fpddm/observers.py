@@ -228,10 +228,13 @@ class MetricsLogger:
             row[name] = float(value)
         self.rows.append(row)
         self.csv_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.csv_path.open("w", newline="", encoding="utf-8") as output:
-            writer = csv.DictWriter(output, fieldnames=list(self.rows[-1]))
-            writer.writeheader()
-            writer.writerows(self.rows)
+        write_header = self.iteration == 1
+        mode = "w" if write_header else "a"
+        with self.csv_path.open(mode, newline="", encoding="utf-8") as output:
+            writer = csv.DictWriter(output, fieldnames=list(row))
+            if write_header:
+                writer.writeheader()
+            writer.writerow(row)
         return row
 
     def finalize(self) -> list[dict[str, float | int]]:
