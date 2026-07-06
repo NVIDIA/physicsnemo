@@ -107,7 +107,7 @@ python examples/cfd/fp_ddm/run_fpddm.py \
     run.checkpoint_dir=outputs/train/checkpoints/best \
     domain.rows=3 \
     domain.columns=3 \
-    run.max_iterations=3 \
+    run.max_iterations=50 \
     run.visualize=false \
     run.output_dir=outputs/fp_ddm/fno
 ```
@@ -141,30 +141,39 @@ currently requires a square patch grid with square patches.
 
 ## Reproduced Baseline
 
-The following baseline was measured on July 2, 2026, with one NVIDIA A100 80 GB
-GPU, seed 10, the 4.20-million-parameter default FNO, a configured sample count
-of 500,000, batch size 256, and 10 epochs. The split contained
-450,000 on-the-fly training problems and 25,000 fixed problems for each of
-validation and test. Training completed in 5 minutes 55 seconds. The best
-validation physics metric was 0.1769 at epoch 9.
+The following baseline was measured on July 6, 2026, with one NVIDIA A100 80 GB
+GPU and the 4.20-million-parameter default FNO. Training used seed 10, a
+configured sample count of 500,000, batch size 256, and 6 epochs. The split
+contained 450,000 on-the-fly training problems and 25,000 fixed problems for
+each of validation and test. Six epochs completed in approximately 3 minutes;
+the epoch-6 validation physics metric was 0.2108.
 
 The rollout used a 3-by-3 patch decomposition, producing a 90-by-90 global
-field, with the default parallel interface update and no test-time adaptation.
-NRMAE is mean absolute error divided by the reference temperature range.
+field, with the default parallel interface update, learning rate 0.5, and no
+test-time adaptation. NRMAE is mean absolute error divided by the reference
+temperature range.
 
 | Run | Iterations | NRMAE | R-squared | Interface RMSE |
 | --- | ---: | ---: | ---: | ---: |
-| FNO measured setting | 3 | 0.0643 | 0.8777 | 6.48 |
-| FNO forced long rollout | 50 | 0.3107 | -1.2657 | 0.837 |
+| FNO default | 50 | 0.0366 | 0.9467 | 2.47 |
+| FNO forced long rollout | 200 | 0.0616 | 0.8885 | 0.00682 |
 | Finite-volume reference | 50 | 0.00591 | 0.9988 | 0.762 |
 
-The three-iteration FNO run completed in 6.87 seconds, including synthetic
-layout generation, the full-domain reference solve, checkpoint loading, and
-CUDA warmup. Its normalized PDE RMSE decreased from 9.59 to 7.95. The
-50-iteration stress run is intentionally reported because it exposes an
-important limitation: lower interface disagreement did not imply lower error
-for this checkpoint. Choose the Schwarz stopping configuration using held-out
-problems rather than assuming monotonic neural-rollout accuracy.
+The default was also evaluated on independently generated global layouts:
+
+| Decomposition | Layouts | Mean NRMAE | Worst NRMAE | Mean R-squared |
+| --- | ---: | ---: | ---: | ---: |
+| 3 by 3 | 10 | 0.0361 | 0.0386 | 0.9495 |
+| 5 by 5 | 5 | 0.0540 | 0.0607 | 0.9157 |
+
+Checkpoint selection matters for recursive accuracy. In the same training run,
+the lower local validation metric at epoch 9 did not produce a better Schwarz
+rollout: with the previous interface learning rate of 10, its mean 50-iteration
+NRMAE was 0.3091 over the ten 3-by-3 layouts. The epoch-6 checkpoint and lower
+interface learning rate remained effectively monotonic through 50 iterations.
+The 200-iteration stress run shows that some eventual drift remains even as
+interface disagreement approaches zero. Select checkpoints and stopping
+settings on held-out decomposed problems, not only isolated local losses.
 
 ## Validation And Scope
 

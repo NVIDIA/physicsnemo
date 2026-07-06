@@ -48,7 +48,7 @@ dataset:
 
 # Physics-informed training and PhysicsNeMo checkpoint settings.
 training:
-  epochs: 10
+  epochs: 6
   samples: 500000
   batch_size: 256
   num_workers: 10
@@ -87,7 +87,7 @@ run:
   output_dir: outputs/schwarz
   batch_size: 128
   handler: parallel
-  handler_learning_rate: 10.0
+  handler_learning_rate: 0.5
   exchange_alpha: 1.0
   max_iterations: 50
   tolerance: 1.0e-9
