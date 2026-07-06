@@ -556,4 +556,4 @@ Want to suggest some improvements to PhysicsNeMo? Use our [feedback form](https:
 
 PhysicsNeMo is provided under the Apache License 2.0. Please see [LICENSE.txt](./LICENSE.txt)
 for the full license text. Enterprise SLA, support, and preview access are available
-under NVAIE.
+under NVIDIA AI Enterprise (NVAIE).
