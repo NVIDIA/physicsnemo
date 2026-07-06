@@ -450,11 +450,6 @@ class _ToTorchTensor(torch.autograd.Function):
         """
         ctx.shard_tensor_spec = input._spec
         ctx.grad_placements = grad_placements
-        # # JUST LIKE DTENSOR:
-        # # We need to return a fresh Tensor object there as autograd metadata
-        # # will be inplaced into it. So we don't want to pollute the Tensor
-        # # object stored in the _local_tensor of this ShardTensor.
-        # return local_tensor.view_as(local_tensor)
 
         # Force the local view to inherit the requires_grad state of the ShardTensor
         local_tensor = input._local_tensor
