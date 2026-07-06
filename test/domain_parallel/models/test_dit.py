@@ -17,10 +17,11 @@
 """Domain-parallel tests for the DiT 2D-RoPE + NaN-mask-token features.
 
 These exercise the exact distribution configuration used by the StormCast
-recipe: a 2-D ``(ddp, domain)`` device mesh where the model is sharded along the
-height (``Shard(0)``) of its spatial buffers via ``distribute_module`` on the
-domain mesh and then ``fully_shard`` (FSDP2) on the ddp mesh, with the spatial
-input sharded along H on the domain mesh.
+recipe: a 2-D ``(ddp, domain)`` device mesh where only the spatial buffers are
+sharded along height (``Shard(0)``) as domain-mesh DTensors while every other
+weight stays plain and is ``fully_shard`` (FSDP2) over the ddp mesh (see
+``wrap_fsdp_spatial`` in the shared harness), with the spatial input sharded
+along H on the domain mesh.
 
 The key property under test is the "shard-along-height" design: building the
 RoPE cos/sin tables at the global spatial size and sharding them along height
@@ -40,8 +41,6 @@ Run with, e.g.::
 import pytest
 import torch
 import torch.nn as nn
-from torch.distributed.fsdp import fully_shard
-from torch.distributed.tensor import distribute_module, distribute_tensor
 from torch.distributed.tensor.placement_types import Replicate, Shard
 
 from physicsnemo.distributed import DistributedManager
@@ -49,6 +48,7 @@ from physicsnemo.domain_parallel import scatter_tensor
 from physicsnemo.models.dit import DiT
 from physicsnemo.nn.module.rope import build_axial_rope_cos_sin_2d
 from test.conftest import requires_module
+from test.domain_parallel.models.harness import wrap_fsdp_spatial
 
 # Latent grid is 4x4; with a domain mesh of size 2 each rank owns 2 rows.
 INPUT_SIZE = (16, 16)
@@ -58,40 +58,6 @@ NUM_HEADS = 4  # head_dim = 16 (divisible by 4, required for axial 2D RoPE)
 DEPTH = 2
 ATTN_KERNEL = 3
 IN_CHANNELS = 4
-
-
-def _shard_dim_for(name: str) -> int | None:
-    """Mirror of StormCast's ``shard_dim_selector`` for the buffers under test."""
-    if any(s in name for s in ("pos_embed", "pos_embd", "spatial_emb")):
-        return 1
-    if any(s in name for s in ("rope_cos", "rope_sin")):
-        return 0
-    return None
-
-
-def _partition_dit(name, submodule, device_mesh):
-    """Local copy of StormCast's ``partition_model_selective``.
-
-    Shards the spatial buffers along height and replicates everything else,
-    handling both parameters and buffers explicitly.
-    """
-    for key, param in submodule._parameters.items():
-        if param is None:
-            continue
-        shard_dim = _shard_dim_for(key)
-        placement = Shard(shard_dim) if shard_dim is not None else Replicate()
-        dt = distribute_tensor(param, device_mesh=device_mesh, placements=[placement])
-        submodule.register_parameter(
-            key, nn.Parameter(dt, requires_grad=param.requires_grad)
-        )
-    for key, buffer in submodule._buffers.items():
-        if buffer is None:
-            continue
-        shard_dim = _shard_dim_for(key)
-        placement = Shard(shard_dim) if shard_dim is not None else Replicate()
-        dt = distribute_tensor(buffer, device_mesh=device_mesh, placements=[placement])
-        persistent = key not in submodule._non_persistent_buffers_set
-        submodule.register_buffer(key, dt, persistent=persistent)
 
 
 def _build_dit(device, attention_backend: str, use_nan_mask_tokens: bool) -> DiT:
@@ -191,14 +157,12 @@ def _run_dit_distributed_check(
         ref_out = model(x_full, t, invalid_mask=pixel_mask_full).detach().clone()
 
     # --- distribute exactly as the StormCast recipe does ---
-    model = distribute_module(
-        model, device_mesh=domain_mesh, partition_fn=_partition_dit
-    )
-    with torch.no_grad():
-        for p in model.parameters():
-            if not p.is_contiguous():
-                p.data = p.data.contiguous()
-    fully_shard(model, mesh=ddp_mesh)
+    # Shard only the spatial params/buffers (RoPE cos/sin tables along height,
+    # positional embeddings along the flattened spatial axis) as domain-mesh
+    # DTensors; leave every other weight plain and FSDP2-shard it over the ddp
+    # mesh. Plain (all-gathered) weights meet the height-sharded activations via
+    # ShardTensor auto-promotion -- no ``distribute_module`` needed.
+    model = wrap_fsdp_spatial(model, ddp_mesh=ddp_mesh, domain_mesh=domain_mesh)
 
     # ------------------------------------------------------------------
     # Run ALL collective operations first, BEFORE any assertion. A failing
@@ -222,10 +186,13 @@ def _run_dit_distributed_check(
         if use_nan_mask_tokens
         else None
     )
-    # Scalars/conditions must be replicated DTensors on the domain mesh so they
-    # compose with the now-DTensor model buffers (e.g. the timestep embedder's
-    # `freqs`); this mirrors StormCast's ParallelHelper.replicate_tensor.
-    t_dt = distribute_tensor(t, domain_mesh, [Replicate()])
+    # Timestep is a replicated ShardTensor on the domain mesh (not a plain
+    # DTensor). The embedder's ``freqs`` buffer stays plain; ShardTensor
+    # auto-promotion composes ``t`` with ``freqs`` at ``torch.outer``. Mirrors
+    # production ``DomainParallelNoiseScheduler.timesteps()``.
+    t_dt = scatter_tensor(
+        t, domain_src, domain_mesh, (Replicate(),), requires_grad=False
+    )
     with torch.no_grad():
         out = model(x_sharded, t_dt, invalid_mask=mask_sharded)
     gathered = out.full_tensor()  # collective: gather H-shards over domain mesh
