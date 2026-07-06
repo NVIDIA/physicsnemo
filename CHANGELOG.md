@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds coverage reporting on PRs (informational `Coverage %` check and a ready-to-enable Codecov integration).
 - Adds the experimental Strata weather-emulation models —
   `physicsnemo.experimental.models.strata.Strata` and `StrataTransformer3D` — plus
   the continuous / stereographic RoPE helpers `build_rope_cos_sin_1d_continuous`,
