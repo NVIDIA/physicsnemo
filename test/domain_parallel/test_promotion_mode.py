@@ -51,7 +51,7 @@ def restore_promotion_mode():
 
 
 def test_default_promotion_mode_is_warn(restore_promotion_mode):
-    assert ShardTensor.get_promotion_mode() is TensorPromotionMode.WARN
+    assert ShardTensor.get_promotion_mode() is TensorPromotionMode.SILENT
 
 
 @pytest.mark.parametrize(

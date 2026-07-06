@@ -321,6 +321,7 @@ class ParallelHelper:
                 module.register_buffer(
                     name,
                     distribute_tensor(buf, domain_mesh, [Shard(shard_dim)]),
+                    persistent=name not in module._non_persistent_buffers_set,
                 )
 
     def make_domain_parallel_scheduler(self, scheduler: object) -> object:
