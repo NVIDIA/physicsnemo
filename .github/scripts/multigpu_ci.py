@@ -75,16 +75,41 @@ GLOBAL_TRIGGER_PREFIXES = (
     "test/plugins/",
 )
 MAX_DIAGNOSTIC_PATHS = 20
-ALLOWED_SKIP_PATTERNS = (
-    re.compile(
-        r"(?:requires exactly|requires at least|need at least|needs >=|needs at least)"
-        r".*\b4\b.*(?:gpu|rank)",
-        re.IGNORECASE,
+# Keep these exact: a new skip reason must block manifest publication so PR
+# selection fails open and continues running the affected multi-GPU stream.
+ALLOWED_SKIP_REASONS: Mapping[str, frozenset[str]] = {
+    "dynamic": frozenset(
+        {
+            "Skip SongUNetPosLtEmbd AMP/agnostic tests on cpu",
+        }
     ),
-    re.compile(r"combined ddp.*\b4\b.*gpu", re.IGNORECASE),
-    re.compile(r"seq_len .* not divisible by world_size", re.IGNORECASE),
-    re.compile(r"use_orig_params=true.*unsupported", re.IGNORECASE),
-)
+    "static": frozenset(
+        {
+            "Combined ddp+domain needs >= 4 GPUs divisible by 2 (have 2)",
+            "Conv1d with stride > 1 and kernel size != stride is expected to fail",
+            "Conv2d with stride > 1 and kernel size != stride is expected to fail",
+            "Conv3d with 2D mesh requires at least 4 GPUs",
+            "Conv3d with stride > 1 and kernel size != stride is expected to fail",
+            "DTensor with 2D mesh and backwards fails currently upstream",
+            "Even Kernels only supported for stride = kernel size and padding = 0",
+            "LayerNorm with affine=True is currently failing tests",
+            "Need at least 4 ranks (divisible by 2) for 2-D mesh test",
+            "Odd Kernels not yet supported for transposed convolutions",
+            "Pooling requires stride == K",
+            "Requires exactly 4 ranks for the (ddp=2, domain=2) mesh",
+            "Skip SongUNetPosLtEmbd AMP/agnostic tests on cpu",
+            "Skip tests on cpu",
+            "use_orig_params=True + ShardTensor under FSDP NO_SHARD is unsupported: "
+            "FSDP writeback fails when local parameter shape changes",
+        }
+    ),
+}
+
+
+def _is_allowed_skip(stream: str, reason: str) -> bool:
+    """Return whether a stream's known test matrix intentionally skips a case."""
+
+    return reason in ALLOWED_SKIP_REASONS.get(stream, frozenset())
 
 
 class ManifestError(ValueError):
@@ -332,13 +357,10 @@ def validate_manifest_data(
         raise ManifestError("manifest-invalid", "JUnit skipped count is invalid")
     if bool(junit_skipped) != bool(raw_skip_reasons):
         raise ManifestError("manifest-invalid", "JUnit skip reasons are incomplete")
-    if stream == "dynamic" and raw_skip_reasons:
-        raise ManifestError("manifest-invalid", "dynamic manifest contains skips")
-    if stream == "static" and any(
-        not any(pattern.search(reason) for pattern in ALLOWED_SKIP_PATTERNS)
-        for reason in raw_skip_reasons
-    ):
-        raise ManifestError("manifest-invalid", "static manifest has unexpected skips")
+    if any(not _is_allowed_skip(stream, reason) for reason in raw_skip_reasons):
+        raise ManifestError(
+            "manifest-invalid", f"{stream} manifest has unexpected skips"
+        )
     if definition_count <= 0:
         raise ManifestError(
             "manifest-invalid", "test_definition_count must be positive"
@@ -614,12 +636,7 @@ def _junit_summary(junit_dir: Path, stream: str, nproc: int) -> JUnitSummary:
     if len(skip_reasons) != totals["skipped"]:
         raise RuntimeError("JUnit skipped totals do not match testcase details")
     unexpected_skips = sorted(
-        {
-            reason
-            for reason in skip_reasons
-            if stream != "static"
-            or not any(pattern.search(reason) for pattern in ALLOWED_SKIP_PATTERNS)
-        }
+        {reason for reason in skip_reasons if not _is_allowed_skip(stream, reason)}
     )
     if unexpected_skips:
         raise RuntimeError(

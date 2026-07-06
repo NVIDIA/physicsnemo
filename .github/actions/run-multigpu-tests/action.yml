@@ -210,16 +210,6 @@ runs:
         if-no-files-found: warn
         retention-days: 7
 
-    - name: Publish test report
-      if: ${{ always() && !cancelled() && steps.paths.outcome == 'success' }}
-      uses: dorny/test-reporter@v3
-      with:
-        name: Multi-GPU ${{ inputs.stream }} Results
-        path: ${{ steps.paths.outputs.junit_dir }}/*.xml
-        reporter: java-junit
-        fail-on-error: "false"
-        fail-on-empty: "false"
-
     - name: Upload impact manifest
       if: ${{ success() && inputs.collect-impact == 'true' }}
       uses: actions/upload-artifact@v4

@@ -729,14 +729,59 @@ def test_junit_summary_rejects_missing_static_rank(tmp_path: Path):
 
 
 @pytest.mark.parametrize(
-    ("reason", "accepted"),
+    ("stream", "reason"),
     [
-        ("Need at least 4 ranks (divisible by 2) for 2-D mesh test", True),
-        ("natten is not installed", False),
+        (
+            "dynamic",
+            "Skip SongUNetPosLtEmbd AMP/agnostic tests on cpu",
+        ),
+        (
+            "static",
+            "Combined ddp+domain needs >= 4 GPUs divisible by 2 (have 2)",
+        ),
+        (
+            "static",
+            "Conv1d with stride > 1 and kernel size != stride is expected to fail",
+        ),
+        (
+            "static",
+            "Conv2d with stride > 1 and kernel size != stride is expected to fail",
+        ),
+        ("static", "Conv3d with 2D mesh requires at least 4 GPUs"),
+        (
+            "static",
+            "Conv3d with stride > 1 and kernel size != stride is expected to fail",
+        ),
+        (
+            "static",
+            "DTensor with 2D mesh and backwards fails currently upstream",
+        ),
+        (
+            "static",
+            "Even Kernels only supported for stride = kernel size and padding = 0",
+        ),
+        ("static", "LayerNorm with affine=True is currently failing tests"),
+        (
+            "static",
+            "Need at least 4 ranks (divisible by 2) for 2-D mesh test",
+        ),
+        ("static", "Odd Kernels not yet supported for transposed convolutions"),
+        ("static", "Pooling requires stride == K"),
+        ("static", "Requires exactly 4 ranks for the (ddp=2, domain=2) mesh"),
+        (
+            "static",
+            "Skip SongUNetPosLtEmbd AMP/agnostic tests on cpu",
+        ),
+        ("static", "Skip tests on cpu"),
+        (
+            "static",
+            "use_orig_params=True + ShardTensor under FSDP NO_SHARD is unsupported: "
+            "FSDP writeback fails when local parameter shape changes",
+        ),
     ],
 )
-def test_junit_summary_allows_only_expected_skips(
-    tmp_path: Path, reason: str, accepted: bool
+def test_junit_summary_allows_observed_expected_skips(
+    tmp_path: Path, stream: str, reason: str
 ):
     xml = (
         '<testsuite tests="2" failures="0" errors="0" skipped="1">'
@@ -744,15 +789,79 @@ def test_junit_summary_allows_only_expected_skips(
         '<testcase name="passed"/>'
         "</testsuite>\n"
     )
-    if accepted:
-        for rank in range(2):
-            (tmp_path / f"multigpu-static-rank-{rank}.xml").write_text(xml)
-        summary = multigpu_ci._junit_summary(tmp_path, "static", 2)
-        assert summary.skipped == 2
-    else:
-        (tmp_path / "multigpu-dynamic-rank-0.xml").write_text(xml)
-        with pytest.raises(RuntimeError, match="unexpected skips"):
-            multigpu_ci._junit_summary(tmp_path, "dynamic", 2)
+    rank_count = 2 if stream == "static" else 1
+    for rank in range(rank_count):
+        (tmp_path / f"multigpu-{stream}-rank-{rank}.xml").write_text(xml)
+    summary = multigpu_ci._junit_summary(tmp_path, stream, 2)
+    assert summary.skipped == rank_count
+
+
+@pytest.mark.parametrize("stream", ["dynamic", "static"])
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "natten is not installed",
+        "scipy is not installed",
+        "CUDA is not available",
+        "prefix Skip tests on cpu suffix",
+    ],
+)
+def test_junit_summary_rejects_environment_and_unknown_skips(
+    tmp_path: Path, stream: str, reason: str
+):
+    xml = (
+        '<testsuite tests="2" failures="0" errors="0" skipped="1">'
+        f'<testcase name="skipped"><skipped message="{reason}"/></testcase>'
+        '<testcase name="passed"/>'
+        "</testsuite>\n"
+    )
+    rank_count = 2 if stream == "static" else 1
+    for rank in range(rank_count):
+        (tmp_path / f"multigpu-{stream}-rank-{rank}.xml").write_text(xml)
+    with pytest.raises(RuntimeError, match="unexpected skips"):
+        multigpu_ci._junit_summary(tmp_path, stream, 2)
+
+
+@pytest.mark.parametrize(
+    ("stream", "reason"),
+    [
+        (
+            "dynamic",
+            "Skip SongUNetPosLtEmbd AMP/agnostic tests on cpu",
+        ),
+        ("static", "Skip tests on cpu"),
+    ],
+)
+def test_manifest_accepts_expected_stream_skips(stream: str, reason: str):
+    data = _manifest(stream, ["physicsnemo/module.py"]).data
+    assert data is not None
+    manifest = dict(data)
+    manifest["junit_skipped"] = 1
+    manifest["junit_skip_reasons"] = [reason]
+
+    multigpu_ci.validate_manifest_data(
+        manifest,
+        stream,
+        now=NOW,
+        max_age_hours=72,
+    )
+
+
+@pytest.mark.parametrize("stream", ["dynamic", "static"])
+def test_manifest_rejects_dependency_skips(stream: str):
+    data = _manifest(stream, ["physicsnemo/module.py"]).data
+    assert data is not None
+    manifest = dict(data)
+    manifest["junit_skipped"] = 1
+    manifest["junit_skip_reasons"] = ["natten is not installed"]
+
+    with pytest.raises(multigpu_ci.ManifestError, match="unexpected skips"):
+        multigpu_ci.validate_manifest_data(
+            manifest,
+            stream,
+            now=NOW,
+            max_age_hours=72,
+        )
 
 
 def test_manifest_rejects_duplicate_paths():

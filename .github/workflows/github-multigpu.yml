@@ -194,7 +194,6 @@ jobs:
     timeout-minutes: 45
     permissions:
       actions: read
-      checks: write
       contents: read
     container:
       image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
@@ -229,7 +228,6 @@ jobs:
     timeout-minutes: 90
     permissions:
       actions: read
-      checks: write
       contents: read
     container:
       image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
@@ -255,6 +253,72 @@ jobs:
           jit-cache-key: ${{ env.JIT_CACHE_KEY }}
           jit-cache-dir: ${{ env.JIT_CACHE_DIR }}
           hf-token: ${{ secrets.HF_CI_DATA_TOKEN }}
+
+  report_multigpu:
+    name: report multi-GPU results
+    needs: [multigpu_dynamic, multigpu_static]
+    if: >-
+      ${{ always() && !cancelled() &&
+          (needs.multigpu_dynamic.result != 'skipped' ||
+           needs.multigpu_static.result != 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+
+    steps:
+      - name: Check out repository for report annotations
+        id: checkout
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Download dynamic JUnit artifact
+        id: download_dynamic
+        if: ${{ needs.multigpu_dynamic.result != 'skipped' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: junit-multigpu-dynamic
+          path: ${{ runner.temp }}/multigpu-junit/dynamic
+
+      - name: Publish dynamic test report
+        if: >-
+          ${{ always() && steps.checkout.outcome == 'success' &&
+              steps.download_dynamic.outcome == 'success' }}
+        continue-on-error: true
+        uses: dorny/test-reporter@v3
+        with:
+          name: Multi-GPU dynamic Results
+          path: ${{ runner.temp }}/multigpu-junit/dynamic/*.xml
+          reporter: java-junit
+          fail-on-error: "false"
+          fail-on-empty: "false"
+
+      - name: Download static JUnit artifact
+        id: download_static
+        if: ${{ needs.multigpu_static.result != 'skipped' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: junit-multigpu-static
+          path: ${{ runner.temp }}/multigpu-junit/static
+
+      - name: Publish static test report
+        if: >-
+          ${{ always() && steps.checkout.outcome == 'success' &&
+              steps.download_static.outcome == 'success' }}
+        continue-on-error: true
+        uses: dorny/test-reporter@v3
+        with:
+          name: Multi-GPU static Results
+          path: ${{ runner.temp }}/multigpu-junit/static/*.xml
+          reporter: java-junit
+          fail-on-error: "false"
+          fail-on-empty: "false"
 
   publish_dynamic_impact:
     name: publish dynamic impact manifest
