@@ -13,16 +13,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Construction + forward smoke tests for the HealDAv2 video+obs DA model."""
+"""Construction + forward smoke tests for the VideoHealDA video+obs DA model."""
 
 import pytest
 import torch
 
 pytest.importorskip("earth2grid")  # HEALPix tokenizer dependency
 
-from physicsnemo.experimental.models.healda.healda_v2 import HealDAv2  # noqa: E402
 from physicsnemo.experimental.models.healda.obs_context import (  # noqa: E402
     prepare_obs_context,
+)
+from physicsnemo.experimental.models.healda.video_healda import (  # noqa: E402
+    VideoHealDA,
 )
 
 LEVEL_FINE = 2
@@ -33,7 +35,7 @@ NPIX_COARSE = 12 * 4**LEVEL_COARSE  # 48
 
 def _build_model(device):
     # q_per_kv = n_q_heads / n_kv_heads must be >= 16 for the cross-attn kernel.
-    return HealDAv2(
+    return VideoHealDA(
         in_channels=2,
         out_channels=3,
         hidden_size=64,
@@ -62,8 +64,8 @@ def _calendar(b, t, device):
     return sod, doy
 
 
-def test_healda_v2_spatial_qk_norm_parameter_free():
-    """HealDAv2's attn_kwargs engage affine-free RMSNorm q/k norm in spatial attn.
+def test_video_healda_spatial_qk_norm_parameter_free():
+    """VideoHealDA's attn_kwargs engage affine-free RMSNorm q/k norm in spatial attn.
 
     Guards against the kwarg names being silently swallowed (which would leave
     qk-norm off): the q/k norm modules must exist (not Identity) and carry no
@@ -76,7 +78,7 @@ def test_healda_v2_spatial_qk_norm_parameter_free():
         assert list(norm.parameters()) == []
 
 
-def test_healda_v2_cpu_no_obs():
+def test_video_healda_cpu_no_obs():
     """Full graph on CPU with an empty observation set (Triton-free obs path)."""
     torch.manual_seed(0)
     dev = "cpu"
@@ -111,7 +113,7 @@ def test_healda_v2_cpu_no_obs():
 @pytest.mark.skipif(
     not torch.cuda.is_available(), reason="obs cross-attn Triton kernel is CUDA-only"
 )
-def test_healda_v2_cuda_full():
+def test_video_healda_cuda_full():
     """Full obs path (FiLM tokenizer + ragged cross-attn kernel) on CUDA."""
     pytest.importorskip("triton")
     torch.manual_seed(0)

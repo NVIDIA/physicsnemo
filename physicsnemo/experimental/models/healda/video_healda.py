@@ -37,10 +37,10 @@ from physicsnemo.nn.module.hpx.tokenizer import (
 
 
 @dataclass
-class HealDAv2MetaData(ModelMetaData):
-    """Metadata for HealDAv2 model."""
+class VideoHealDAMetaData(ModelMetaData):
+    """Metadata for VideoHealDA model."""
 
-    name: str = "HealDAv2"
+    name: str = "VideoHealDA"
     jit: bool = False
     cuda_graphs: bool = False
     amp_cpu: bool = False
@@ -52,11 +52,11 @@ class HealDAv2MetaData(ModelMetaData):
     auto_grad: bool = False
 
 
-class HealDAv2(Module):
+class VideoHealDA(Module):
     r"""Video transformer model for data assimilation of point-cloud like observations on the
     HEALPix grid.
 
-    ``HealDAv2`` maps a set of sparse, irregularly located observations (plus
+    ``VideoHealDA`` maps a set of sparse, irregularly located observations (plus
     static fields and calendar features) to a gridded field sequence -- a short
     video window of :math:`T` frames over a HEALPix grid.
 
@@ -96,7 +96,7 @@ class HealDAv2(Module):
     a group of :math:`N` GPUs reshards activations between time- and space-sharded
     layouts around each attention (see :mod:`~physicsnemo.experimental.models.healda.sharding`). :math:`N` must divide
     both the time and space extents, so the default ``time_length = 8`` caps it at
-    8-way. Enable via :meth:`~physicsnemo.experimental.models.healda.healda_v2.HealDAv2.set_context_parallel`.
+    8-way. Enable via :meth:`~physicsnemo.experimental.models.healda.video_healda.VideoHealDA.set_context_parallel`.
 
     Parameters
     ----------
@@ -191,7 +191,7 @@ class HealDAv2(Module):
     obs_ctx : :class:`~physicsnemo.experimental.models.healda.obs_context.ObsContext`
         Raw observations plus ragged packing, with pixel prefix sums over
         :math:`B \cdot T \cdot X'` and :math:`X' = 12 \times 4^{\mathrm{level\_model}}`.
-        The tokenizer fills ``tokens`` internally.
+        Tokenized internally, then assimilated by the observation cross-attention.
     class_labels : torch.Tensor, optional, default=None
         Class-label condition vector of shape :math:`(B, \text{condition\_dim})`.
         ``None`` when ``condition_dim=0`` (noise-only conditioning).
@@ -218,8 +218,8 @@ class HealDAv2(Module):
     Examples
     --------
     >>> import torch
-    >>> from physicsnemo.experimental.models.healda import HealDAv2, prepare_obs_context
-    >>> model = HealDAv2(
+    >>> from physicsnemo.experimental.models.healda import VideoHealDA, prepare_obs_context
+    >>> model = VideoHealDA(
     ...     in_channels=2,
     ...     out_channels=3,
     ...     hidden_size=64,
@@ -302,7 +302,7 @@ class HealDAv2(Module):
         pixel_attn_head_dim: int = 32,
         pixel_attn_use_proj_bias: bool = True,
     ):
-        super().__init__(meta=HealDAv2MetaData())
+        super().__init__(meta=VideoHealDAMetaData())
 
         self.in_channels = in_channels
         self.out_channels = out_channels

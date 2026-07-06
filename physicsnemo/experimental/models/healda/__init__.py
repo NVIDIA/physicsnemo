@@ -16,39 +16,25 @@
 
 r"""HealDA data-assimilation models and building blocks.
 
-:class:`HealDAv2` (current) uses :class:`PixelCrossAttention` and
-:class:`ObsTokenizerFiLM`. :class:`HealDA` (v1) uses the
-:class:`MultiSensorObsEmbedder` stack (:class:`SensorEmbedder`,
-:class:`UniformFusion`, :class:`ObsTokenizer`).
+:class:`VideoHealDA` (current) uses :class:`PixelCrossAttention` and
+:class:`ObsTokenizerFiLM`. :class:`HealDA` (v1, deprecated) is retained only to
+run existing v1 checkpoints; its observation-embedder components are no longer
+publicly exported and will be removed in a future release.
 """
 
-from .healda import HealDA, HealDAMetaData
-from .healda_v2 import HealDAv2, HealDAv2MetaData
+from .attention_layers import PixelCrossAttention
+from .healda import HealDA
 from .obs_context import ObsContext, prepare_obs_context
 from .obs_tokenizer import ObsTokenizerFiLM
-from .attention_layers import PixelCrossAttention
-from .point_embed import (
-    MultiSensorObsEmbedder,
-    ObsTokenizer,
-    SensorEmbedder,
-    UniformFusion,
-)
-from .scatter_aggregator import ScatterAggregator, scatter_mean
 from .video_dit import VideoDiT
+from .video_healda import VideoHealDA
 
 __all__ = [
-    "HealDAv2",
+    "VideoHealDA",
     "HealDA",
-    "HealDAMetaData",
     "PixelCrossAttention",
     "ObsTokenizerFiLM",
     "ObsContext",
     "prepare_obs_context",
     "VideoDiT",
-    "MultiSensorObsEmbedder",
-    "ObsTokenizer",
-    "SensorEmbedder",
-    "UniformFusion",
-    "ScatterAggregator",
-    "scatter_mean",
 ]

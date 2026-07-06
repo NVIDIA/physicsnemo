@@ -54,11 +54,13 @@ class PixelGroupMap:
 
 @dataclasses.dataclass
 class ObsContext:
-    r"""Observation cross-attention context: packed tokens + ragged packing.
+    r"""Raw observations plus ragged pixel packing, sorted by flat pixel index.
 
-    Consumed by :class:`~physicsnemo.experimental.models.healda.attention_layers.PixelCrossAttention`. Observations
-    are sorted by flat pixel index so each pixel's tokens are contiguous in
-    ``tokens``.
+    Produced by :func:`prepare_obs_context` and consumed by
+    :meth:`~physicsnemo.experimental.models.healda.video_healda.VideoHealDA.forward`:
+    the raw obs fields feed :class:`~physicsnemo.experimental.models.healda.obs_tokenizer.ObsTokenizerFiLM`,
+    and the ragged packing feeds the observation cross-attention. Observations are
+    sorted by flat pixel index so each pixel's observations are contiguous.
     """
 
     obs: Float[torch.Tensor, " nobs"]  # observation measurement value
@@ -67,12 +69,10 @@ class ObsContext:
     channel: Int[torch.Tensor, " nobs"]  # channel id
     platform: Int[torch.Tensor, " nobs"]  # platform id
 
-    # prefix sums; pixel i attends tokens[cu_seqlens_k[i]:cu_seqlens_k[i + 1]]
+    # prefix sums; pixel i owns tokens[cu_seqlens_k[i]:cu_seqlens_k[i + 1]]
     cu_seqlens_k: Int[torch.Tensor, " total_pixels_plus_one"]
-    max_seqlen_k: int  # max per-pixel token count
+    max_seqlen_k: int  # max per-pixel observation count
 
-    # packed obs tokens (N_obs, token_dim); None until the tokenizer fills it
-    tokens: Optional[torch.Tensor] = None
     group_map: Optional[PixelGroupMap] = None  # groups small pixels into shared kernels
 
     def __post_init__(self) -> None:
@@ -103,7 +103,6 @@ class ObsContext:
             obs_type=move(self.obs_type, cast=False),
             channel=move(self.channel, cast=False),
             platform=move(self.platform, cast=False),
-            tokens=move(self.tokens, cast=True),
             group_map=(
                 None
                 if self.group_map is None
