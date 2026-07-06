@@ -282,13 +282,13 @@ class PartialGroupNorm(torch.autograd.Function):
         grad_weight = None
         grad_bias = None
 
-        if weight is not None and weight.requires_grad:
+        if weight is not None and ctx.needs_input_grad[3]:
             # grad_weight_c = sum_{n, spatial} grad_output * y  (per-channel)
             y_c = y.view(N, C, HxW_local)
             grad_out_c = local_grad_output.view(N, C, HxW_local)
             grad_weight = (grad_out_c * y_c).sum(dim=(0, 2))  # (C,)
 
-        if bias is not None and bias.requires_grad:
+        if bias is not None and ctx.needs_input_grad[4]:
             grad_out_c = local_grad_output.view(N, C, HxW_local)
             grad_bias = grad_out_c.sum(dim=(0, 2))  # (C,)
 
