@@ -522,6 +522,7 @@ class _FromTorchTensor(torch.autograd.Function):
         device_mesh: DeviceMesh,
         placements: tuple[Placement, ...],
         sharding_shapes: str | dict[int, list[tuple[int, ...]]] = "chunk",
+        global_shape: tuple[int, ...] | None = None,
     ) -> "ShardTensor":
         r"""Convert a local torch.Tensor to a ShardTensor in forward pass.
 
@@ -544,6 +545,9 @@ class _FromTorchTensor(torch.autograd.Function):
               mesh neighbors.
             - Manual dict mapping mesh dim to list of shard shapes: Use
               provided shapes. Must pass on each rank.
+        global_shape : Optional[Tuple[int, ...]], optional
+            Global shape of the full tensor. Required when
+            ``sharding_shapes="chunk"``; ignored otherwise.
 
         Returns
         -------
@@ -556,7 +560,7 @@ class _FromTorchTensor(torch.autograd.Function):
         # This function is simpler than the corresponding DTensor implementation on the surface
         # because under the hood, we have some logic here to infer the sharding shapes.
         shard_tensor_spec = _infer_shard_tensor_spec_from_local_chunks(
-            local_input, device_mesh, placements, sharding_shapes
+            local_input, device_mesh, placements, sharding_shapes, global_shape
         )
 
         shard_tensor = ShardTensor(
@@ -571,7 +575,7 @@ class _FromTorchTensor(torch.autograd.Function):
     def backward(
         ctx: torch.autograd.function.FunctionCtx,
         grad_output: "ShardTensor",
-    ) -> tuple[torch.Tensor, None, None, None]:
+    ) -> tuple[torch.Tensor, None, None, None, None]:
         r"""Convert gradient ShardTensor back to torch.Tensor in backward pass.
 
         Parameters
@@ -583,10 +587,10 @@ class _FromTorchTensor(torch.autograd.Function):
 
         Returns
         -------
-        Tuple[torch.Tensor, None, None, None]
+        Tuple[torch.Tensor, None, None, None, None]
             Tuple containing the local tensor gradient, and None for
-            device_mesh, placements, and sharding_shapes gradients
-            (not differentiable).
+            device_mesh, placements, sharding_shapes, and global_shape
+            gradients (not differentiable).
 
         Notes
         -----
@@ -606,7 +610,7 @@ class _FromTorchTensor(torch.autograd.Function):
         if grad_output.placements != target:
             grad_output = grad_output.redistribute(grad_output._spec.mesh, target)
 
-        return grad_output.to_local(), None, None, None
+        return grad_output.to_local(), None, None, None, None
 
 
 class ShardTensor(torch.Tensor):
@@ -1026,6 +1030,7 @@ class ShardTensor(torch.Tensor):
         device_mesh: DeviceMesh | None = None,
         placements: Sequence[Placement] | None = None,
         sharding_shapes: str | dict[int, list[tuple[int, ...]]] = "infer",
+        global_shape: tuple[int, ...] | None = None,
     ) -> "ShardTensor":
         r"""Generate a new ShardTensor from local torch tensors.
 
@@ -1048,11 +1053,15 @@ class ShardTensor(torch.Tensor):
             Controls how shard tensor spec is generated:
 
             - ``"chunk"``: Use ``torch.chunk`` shapes to infer shapes from
-              global shape (no communication).
+              global shape (no communication). Requires ``global_shape``.
             - ``"infer"``: Use collective communication to infer shapes from
               mesh neighbors.
             - Manual dict mapping mesh dim to list of shard shapes: Use
               provided shapes. Must pass on each rank.
+        global_shape : Optional[Tuple[int, ...]], optional
+            Global shape of the full tensor across all ranks. Required when
+            ``sharding_shapes="chunk"`` (it is what makes that mode
+            communication-free); ignored for ``"infer"`` and dict modes.
 
         Returns
         -------
@@ -1088,6 +1097,7 @@ class ShardTensor(torch.Tensor):
             device_mesh,
             tuple(placements),
             sharding_shapes,
+            global_shape,
         )
 
     def offsets(self, mesh_dim: int | None = None) -> list[int] | int:
