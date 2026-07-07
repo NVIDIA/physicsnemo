@@ -278,6 +278,8 @@ def inference(cfg: DictConfig) -> None:
             metrics = metrics_fn_surface(
                 global_predictions, global_targets, dist_manager
             )
+            # The metric fns return per-element error tensors; take the per-metric mean.
+            metrics = {key: value.mean() for key, value in metrics.items()}
             # Compute the drag and loss coefficients:
             # (Index on [0] is to remove the 1 batch index)
             pred_pressure, pred_shear = torch.split(
@@ -400,6 +402,8 @@ def inference(cfg: DictConfig) -> None:
             metrics = metrics_fn_volume(
                 global_predictions, global_targets, dist_manager
             )
+            # The metric fns return per-element error tensors; take the per-metric mean.
+            metrics = {key: value.mean() for key, value in metrics.items()}
             # Extract metric values and convert tensors to floats
             l2_pressure = (
                 metrics["l2_pressure_vol"].item()

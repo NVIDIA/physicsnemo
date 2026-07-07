@@ -581,6 +581,41 @@ def _resolve_manifest_indices_from_spec(
     return train_indices, val_indices
 
 
+def _build_manifest_val_dataset(
+    ds_yaml: DictConfig,
+    *,
+    augment: bool,
+    device: str | torch.device | None,
+    num_workers: int,
+    pin_memory: bool,
+) -> MeshDataset | None:
+    """Build a dedicated un-augmented validation dataset for manifest mode.
+
+    Manifest mode shares a single reader across the train / val splits
+    (the :class:`ManifestSampler` pair carves out per-split indices). That
+    means validation would otherwise run through the *augmented* transform
+    chain whenever ``augment`` is enabled -- unlike directory mode, which
+    always builds its val dataset with ``augment=False``.
+
+    To restore parity, when *augment* is ``True`` this returns a separate
+    dataset built with ``augment=False`` over the same ``train_datadir``.
+    Its reader globs the same sorted paths, so manifest indices resolved
+    against the train reader address the same samples here. When *augment*
+    is ``False`` the train and val transform chains are identical, so this
+    returns ``None`` and the caller lets validation share the train dataset
+    (avoiding a redundant second reader).
+    """
+    if not augment:
+        return None
+    return build_dataset(
+        ds_yaml,
+        augment=False,
+        device=device,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+    )
+
+
 def _build_collate(
     cfg: DictConfig, target_config: dict[str, FieldType]
 ) -> Callable[[list[tuple[Any, Any]]], dict[str, Any]]:
@@ -710,7 +745,10 @@ def build_dataloaders(
     ``cfg.train_split`` / ``cfg.val_split`` keys select which subsets to
     use; one reader covers the full directory and
     :class:`ManifestSampler` restricts each loader to the matching
-    indices.
+    indices. Augmentations are training-only: when ``cfg.augment`` is set,
+    validation uses a separate un-augmented dataset over the same
+    directory (mirroring directory mode); otherwise it shares the train
+    dataset.
 
     NOTE (limitation): only ONE chosen dataset may carry a manifest
     today. If both ``cfg.dataset`` and an entry in ``cfg.extra_datasets``
@@ -764,6 +802,7 @@ def build_dataloaders(
     val_datasets: list = []
     manifest_train_indices: list[int] | None = None
     manifest_val_indices: list[int] | None = None
+    manifest_val_dataset: MeshDataset | None = None
     using_manifests = False
     first_targets: dict[str, str] | None = None
     first_metrics: list[str] | None = None
@@ -848,10 +887,23 @@ def build_dataloaders(
                 pin_memory=pin_memory,
             )
             train_datasets.append(dataset)
-            ### NOTE: this overwrites any prior dataset's indices; see the
-            ### docstring's multi-dataset limitation note.
+            ### NOTE: this overwrites any prior manifest dataset's indices
+            ### (and the val dataset below); see the docstring's
+            ### multi-dataset limitation note.
             manifest_train_indices, manifest_val_indices = (
                 _resolve_manifest_indices_from_spec(dataset.reader, manifest_spec)
+            )
+            ### Augmentations are training-only: when enabled, give
+            ### validation its own un-augmented dataset over the same
+            ### directory so eval is never augmented (matching directory
+            ### mode). Stays None when augment is off, so val shares the
+            ### train dataset.
+            manifest_val_dataset = _build_manifest_val_dataset(
+                ds_yaml,
+                augment=augment,
+                device=device,
+                num_workers=num_workers,
+                pin_memory=pin_memory,
             )
             continue
 
@@ -900,9 +952,15 @@ def build_dataloaders(
     train_dataset = _combine_datasets(train_datasets)
 
     if using_manifests:
-        ### Manifest mode: train and val share one underlying dataset;
-        ### the samplers carve out the per-split index sets.
-        val_dataset = train_dataset
+        ### Manifest mode: train and val share one underlying reader; the
+        ### samplers carve out the per-split index sets. When augmentations
+        ### are enabled, validation uses a dedicated un-augmented dataset
+        ### (built in the loop above) so eval is never augmented -- matching
+        ### directory mode; otherwise the chains are identical and val
+        ### shares the train dataset.
+        val_dataset = (
+            manifest_val_dataset if manifest_val_dataset is not None else train_dataset
+        )
         train_sampler, val_sampler = _build_manifest_samplers(
             manifest_train_indices,
             manifest_val_indices,

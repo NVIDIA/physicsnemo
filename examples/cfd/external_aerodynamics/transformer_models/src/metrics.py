@@ -17,38 +17,9 @@
 import torch
 import torch.distributed as dist
 from physicsnemo.domain_parallel import ShardTensor
-from physicsnemo.distributed import DistributedManager
+from physicsnemo.distributed import DistributedManager, fused_all_reduce
 
 from utils import tensorwise
-
-
-def all_reduce_dict(
-    metrics: dict[str, torch.Tensor], dm: DistributedManager
-) -> dict[str, torch.Tensor]:
-    """
-    Reduces a dictionary of metrics across all distributed processes.
-
-    Args:
-        metrics: Dictionary of metric names to torch.Tensor values.
-        dm: DistributedManager instance for distributed context.
-
-    Returns:
-        Dictionary of reduced metrics.
-    """
-    # TODO - update this to use domains and not the full world
-
-    if dm.world_size == 1:
-        return metrics
-
-    # Pack the metrics together:
-    merged_metrics = torch.stack(list(metrics.values()), dim=-1)
-
-    dist.all_reduce(merged_metrics)
-    merged_metrics = merged_metrics / dm.world_size
-
-    # Unstack metrics:
-    metrics = {key: merged_metrics[i] for i, key in enumerate(metrics.keys())}
-    return metrics
 
 
 @tensorwise
@@ -61,26 +32,32 @@ def metrics_fn(
     """
     Computes metrics for either surface or volume data.
 
+    Each rank collapses its fields to scalar means, then one fused ``AVG``
+    collective averages those across ranks (a mean-of-means). This weights
+    every rank equally, which equals the true mean because every rank holds
+    the same number of samples (the val sampler pads to even shards).
+
     Args:
         pred: Predicted values (unnormalized).
         target: Target values (unnormalized).
-        others: Dictionary containing normalization statistics.
         dm: DistributedManager instance for distributed context.
         mode: Either "surface" or "volume".
 
     Returns:
-        Dictionary of computed metrics.
+        Flat dictionary of metric names to scalar tensors, globally averaged
+        across ranks.
     """
     with torch.no_grad():
         if mode == "surface":
-            metrics = metrics_fn_surface(pred, target, dm)
+            fields = metrics_fn_surface(pred, target, dm)
         elif mode == "volume":
-            metrics = metrics_fn_volume(pred, target, dm)
+            fields = metrics_fn_volume(pred, target, dm)
         else:
-            raise ValueError(f"Unknown data mode: {mode}")
+            raise ValueError(f"Unknown data mode: {mode!r}")
 
-        metrics = all_reduce_dict(metrics, dm)
-        return metrics
+        # Rank-local mean per field, then one fused AVG across ranks.
+        rank_means = {key: value.mean() for key, value in fields.items()}
+        return fused_all_reduce(rank_means, op=dist.ReduceOp.AVG)
 
 
 def metrics_fn_volume(
@@ -88,21 +65,19 @@ def metrics_fn_volume(
     target: torch.Tensor,
     dm: DistributedManager,
 ) -> dict[str, torch.Tensor]:
-    """
-    Placeholder for volume metrics computation.
+    """Compute volume-field error metrics: relative L2, relative L1, and MAE.
+
+    Covers pressure, the three velocity components, velocity magnitude, and nut.
 
     Args:
-        pred: Predicted values.
-        target: Target values.
-        others: Dictionary containing additional statistics.
+        pred: Predicted volume fields, shape (B, N, C).
+        target: Target volume fields, shape (B, N, C).
         dm: DistributedManager instance for distributed context.
-        norm_factors: Dictionary of normalization factors.
 
-    Raises:
-        NotImplementedError: Always, as this function is not yet implemented.
+    Returns:
+        Each metric name mapped to its per-element error tensor, which
+        :func:`metrics_fn` collapses to a scalar mean and averages across ranks.
     """
-
-    #
     pressure_pred = pred[:, :, 3]
     pressure_target = target[:, :, 3]
 
@@ -155,24 +130,24 @@ def metrics_fn_volume(
     l2_vel = l2_num_vel / l2_denom_vel
 
     metrics = {
-        "l2_pressure_vol": torch.mean(l2[:, 3]),
-        "l2_velocity_x": torch.mean(l2[:, 0]),
-        "l2_velocity_y": torch.mean(l2[:, 1]),
-        "l2_velocity_z": torch.mean(l2[:, 2]),
-        "l2_nut": torch.mean(l2[:, 4]),
-        "l1_pressure_vol": torch.mean(l1[:, 3]),
-        "l1_velocity_x": torch.mean(l1[:, 0]),
-        "l1_velocity_y": torch.mean(l1[:, 1]),
-        "l1_velocity_z": torch.mean(l1[:, 2]),
-        "l1_nut": torch.mean(l1[:, 4]),
-        "mae_pressure_vol": torch.mean(mae_pressure),
-        "mae_velocity_x": torch.mean(mae_num[:, :, 0]),
-        "mae_velocity_y": torch.mean(mae_num[:, :, 1]),
-        "mae_velocity_z": torch.mean(mae_num[:, :, 2]),
-        "mae_nut": torch.mean(mae_num[:, 4]),
-        "l2_velocity": torch.mean(l2_vel),
-        "l1_velocity": torch.mean(l1_vel),
-        "mae_velocity": torch.mean(mae_num_vel),
+        "l2_pressure_vol": l2[:, 3],
+        "l2_velocity_x": l2[:, 0],
+        "l2_velocity_y": l2[:, 1],
+        "l2_velocity_z": l2[:, 2],
+        "l2_nut": l2[:, 4],
+        "l1_pressure_vol": l1[:, 3],
+        "l1_velocity_x": l1[:, 0],
+        "l1_velocity_y": l1[:, 1],
+        "l1_velocity_z": l1[:, 2],
+        "l1_nut": l1[:, 4],
+        "mae_pressure_vol": mae_pressure,
+        "mae_velocity_x": mae_num[:, :, 0],
+        "mae_velocity_y": mae_num[:, :, 1],
+        "mae_velocity_z": mae_num[:, :, 2],
+        "mae_nut": mae_num[:, 4],
+        "l2_velocity": l2_vel,
+        "l1_velocity": l1_vel,
+        "mae_velocity": mae_num_vel,
     }
 
     return metrics
@@ -183,23 +158,20 @@ def metrics_fn_surface(
     target: torch.Tensor,
     dm: DistributedManager,
 ) -> dict[str, torch.Tensor]:
-    """
-    Computes L2 surface metrics between prediction and target.
+    """Compute surface-field error metrics: relative L2, relative L1, and MAE.
+
+    Covers pressure, the three wall-shear components, and wall-shear-stress
+    magnitude.
 
     Args:
-        pred: Predicted values (normalized).
-        target: Target values (normalized).
-        others: Dictionary containing normalization statistics.
+        pred: Predicted surface fields, shape (B, N, C).
+        target: Target surface fields, shape (B, N, C).
         dm: DistributedManager instance for distributed context.
-        norm_factors: Dictionary with 'mean' and 'std' for unnormalization.
 
     Returns:
-        Dictionary of L2 surface metrics for pressure and shear components.
+        Each metric name mapped to its per-element error tensor, which
+        :func:`metrics_fn` collapses to a scalar mean and averages across ranks.
     """
-    # Unnormalize the surface values for L2:
-    # target = target * norm_factors["std"] + norm_factors["mean"]
-    # pred = pred * norm_factors["std"] + norm_factors["mean"]
-
     pressure_pred = pred[:, :, 0]
     pressure_target = target[:, :, 0]
 
@@ -252,21 +224,21 @@ def metrics_fn_surface(
     l2_ws = l2_num_ws / l2_denom_ws
 
     metrics = {
-        "l2_pressure_surf": torch.mean(l2[:, 0]),
-        "l2_shear_x": torch.mean(l2[:, 1]),
-        "l2_shear_y": torch.mean(l2[:, 2]),
-        "l2_shear_z": torch.mean(l2[:, 3]),
-        "l1_pressure_surf": torch.mean(l1[:, 0]),
-        "l1_shear_x": torch.mean(l1[:, 1]),
-        "l1_shear_y": torch.mean(l1[:, 2]),
-        "l1_shear_z": torch.mean(l1[:, 3]),
-        "mae_pressure_surf": torch.mean(mae_pressure),
-        "mae_shear_x": torch.mean(mae_num[:, :, 1]),
-        "mae_shear_y": torch.mean(mae_num[:, :, 2]),
-        "mae_shear_z": torch.mean(mae_num[:, :, 3]),
-        "l2_wall_shear_stress": torch.mean(l2_ws),
-        "l1_wall_shear_stress": torch.mean(l1_ws),
-        "mae_wall_shear_stress": torch.mean(mae_wall_shear),
+        "l2_pressure_surf": l2[:, 0],
+        "l2_shear_x": l2[:, 1],
+        "l2_shear_y": l2[:, 2],
+        "l2_shear_z": l2[:, 3],
+        "l1_pressure_surf": l1[:, 0],
+        "l1_shear_x": l1[:, 1],
+        "l1_shear_y": l1[:, 2],
+        "l1_shear_z": l1[:, 3],
+        "mae_pressure_surf": mae_pressure,
+        "mae_shear_x": mae_num[:, :, 1],
+        "mae_shear_y": mae_num[:, :, 2],
+        "mae_shear_z": mae_num[:, :, 3],
+        "l2_wall_shear_stress": l2_ws,
+        "l1_wall_shear_stress": l1_ws,
+        "mae_wall_shear_stress": mae_wall_shear,
     }
 
     return metrics

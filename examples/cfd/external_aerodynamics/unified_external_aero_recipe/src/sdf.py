@@ -40,7 +40,7 @@ import torch
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
 from physicsnemo.mesh import DomainMesh, Mesh
-from physicsnemo.nn.functional import signed_distance_field
+from physicsnemo.mesh.spatial.sdf import signed_distance_field_mesh
 
 
 @register()
@@ -49,8 +49,8 @@ class ComputeSDFFromBoundary(MeshTransform):
 
     Reads the surface mesh from ``domain.boundaries[boundary_name]`` and
     evaluates the signed distance field at every interior point using
-    :func:`physicsnemo.nn.functional.signed_distance_field` (Warp-backed,
-    GPU-accelerated).
+    :func:`physicsnemo.mesh.spatial.sdf.signed_distance_field_mesh`,
+    a mesh-native, pure-PyTorch implementation backed by a torch BVH.
 
     The computed SDF is stored as a scalar field ``(N, 1)`` in
     ``interior.point_data[sdf_field]``.  If ``normals_field`` is set,
@@ -112,10 +112,8 @@ class ComputeSDFFromBoundary(MeshTransform):
             )
 
         surface = domain.boundaries[self.boundary_name]
-        vertices = surface.points.float()
-        faces = surface.cells
 
-        if faces is None or faces.numel() == 0:
+        if surface.n_cells == 0:
             raise ValueError(
                 f"Boundary {self.boundary_name!r} has no cell connectivity "
                 f"(required for SDF computation)"
@@ -123,9 +121,8 @@ class ComputeSDFFromBoundary(MeshTransform):
 
         query_points = domain.interior.points.float()
 
-        sdf_values, closest_points = signed_distance_field(
-            vertices,
-            faces,
+        sdf_values, closest_points = signed_distance_field_mesh(
+            surface,
             query_points,
             use_sign_winding_number=self.use_winding_number,
         )
@@ -138,13 +135,17 @@ class ComputeSDFFromBoundary(MeshTransform):
         if self.normals_field is not None:
             normals = query_points - closest_points
 
-            # Fallback for points on the surface (zero distance):
-            # use direction from center of mass instead.
+            # Fallback for points on the surface (zero distance): use direction
+            # from the surface centroid instead. Computed unconditionally and
+            # selected with a mask rather than branching on ``on_surface.any()``
+            # -- that host readback would stall the prefetch stream.
             dist = torch.norm(normals, dim=-1)
             on_surface = dist < 1e-6
-            if on_surface.any():
-                com = vertices.mean(dim=0, keepdim=True)
-                normals[on_surface] = query_points[on_surface] - com
+            # The mesh stays intact; read its points only here, at point of use.
+            centroid = surface.points.float().mean(dim=0, keepdim=True)
+            normals = torch.where(
+                on_surface.unsqueeze(-1), query_points - centroid, normals
+            )
 
             # Normalize to unit vectors
             norm = torch.norm(normals, dim=-1, keepdim=True).clamp(min=1e-8)

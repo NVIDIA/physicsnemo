@@ -8,6 +8,7 @@
 [![GitHub](https://img.shields.io/github/license/NVIDIA/physicsnemo)](https://github.com/NVIDIA/physicsnemo/blob/master/LICENSE.txt)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![Install CI](https://github.com/NVIDIA/physicsnemo/actions/workflows/install-ci.yml/badge.svg?event=schedule)](https://github.com/NVIDIA/physicsnemo/actions/workflows/install-ci.yml)
+[![codecov](https://codecov.io/gh/NVIDIA/physicsnemo/branch/main/graph/badge.svg)](https://app.codecov.io/gh/NVIDIA/physicsnemo)
 
 <!-- markdownlint-enable -->
 [**NVIDIA PhysicsNeMo**](#what-is-physicsnemo)

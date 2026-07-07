@@ -33,7 +33,7 @@ from tensordict import TensorDict
 from torch.amp import autocast
 
 from physicsnemo.mesh import DomainMesh, Mesh
-from physicsnemo.optim import CombinedOptimizer
+from physicsnemo.optim import CombinedOptimizer, Muon
 
 ### Recipe-wide type aliases. Re-exported for use in loss.py, metrics.py,
 ### output_normalize.py, forward_kwargs.py, collate.py, train.py, infer.py,
@@ -45,6 +45,24 @@ FieldType: TypeAlias = Literal["scalar", "vector"]
 ### intentionally absent; `get_autocast_context` rejects it at runtime (see
 ### its error message for the padding rationale).
 Precision: TypeAlias = Literal["float32", "float16", "bfloat16"]
+
+### Canonical ``phase`` tags for each ``metrics.jsonl`` record, shared by
+### train.py and infer.py so both entry points emit one vocabulary. Values are
+### ``{split}_{granularity}`` (or a one-shot metadata tag): ``config`` /
+### ``dataset`` are run metadata; ``*_step`` rows are per-unit (one per step /
+### sample, as the recipe runs ``batch_size == 1``); ``*_summary`` rows are the
+### reduced per-pass aggregates (``infer_forces_summary`` is surface-only).
+Phase: TypeAlias = Literal[
+    "config",
+    "dataset",
+    "train_step",
+    "val_step",
+    "infer_step",
+    "train_summary",
+    "val_summary",
+    "infer_summary",
+    "infer_forces_summary",
+]
 
 
 def set_seed(seed: int | None, rank: int = 0) -> None:
@@ -94,7 +112,7 @@ def build_muon_optimizer(
     if muon_params and other_params:
         return CombinedOptimizer(
             [
-                torch.optim.Muon(
+                Muon(
                     muon_params,
                     lr=lr,
                     weight_decay=weight_decay,
@@ -111,7 +129,7 @@ def build_muon_optimizer(
             torch_compile_kwargs=compile_kwargs,
         )
     elif muon_params:
-        opt = torch.optim.Muon(
+        opt = Muon(
             muon_params,
             lr=lr,
             weight_decay=weight_decay,

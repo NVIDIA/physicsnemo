@@ -49,6 +49,30 @@ def _vtk_data_to_tensor_dict(data) -> dict[str, torch.Tensor]:  # noqa: ANN001
     return tensor_data
 
 
+def _tensor_to_vtk_numpy(tensor: torch.Tensor) -> np.ndarray:
+    """Convert tensor data without narrowing dtypes supported by PyVista."""
+    tensor = tensor.detach().cpu()
+    # VTK has no native real type below float32. PyVista represents complex
+    # values with two real components, but likewise only supports complex64
+    # and complex128 inputs.
+    if tensor.is_floating_point() and tensor.element_size() < 4:
+        tensor = tensor.to(dtype=torch.float32)
+    elif tensor.is_complex() and tensor.element_size() < 8:
+        tensor = tensor.to(dtype=torch.complex64)
+    return tensor.resolve_conj().resolve_neg().numpy()
+
+
+def _geometry_to_vtk_numpy(tensor: torch.Tensor) -> np.ndarray:
+    """Convert coordinates using PhysicsNeMo's PyVista dtype policy."""
+    tensor = tensor.detach()
+    if tensor.dtype not in (torch.float32, torch.float64):
+        # PyVista/VTK can store some additional coordinate dtypes, but
+        # PhysicsNeMo has historically exported integer, reduced-precision,
+        # and complex geometry as float32. Keep that compatibility policy.
+        tensor = tensor.float()
+    return tensor.cpu().resolve_conj().resolve_neg().numpy()
+
+
 @require_version_spec("pyvista")
 def from_pyvista(
     pyvista_mesh: "pv.PolyData | pv.UnstructuredGrid | pv.PointSet",
@@ -109,6 +133,15 @@ def from_pyvista(
         If manifold dimension cannot be determined or is invalid.
     ImportError
         If pyvista is not installed.
+
+    Notes
+    -----
+    Point coordinates with a ``float32`` or ``float64`` dtype retain that
+    dtype. Other coordinate dtypes are converted to ``float32``. Retaining
+    ``float64`` doubles coordinate storage relative to ``float32``, and
+    downstream geometric calculations generally remain in ``float64``. To
+    normalize the returned mesh and its floating data to ``float32``, use
+    ``from_pyvista(...).to(torch.float32)``.
     """
     ### Validate point_source
     if point_source not in {"vertices", "cell_centroids"}:
@@ -198,8 +231,11 @@ def from_pyvista(
     def _maybe_copy(arr: np.ndarray) -> np.ndarray:
         return arr.copy() if force_copy else arr
 
-    # Points
-    points = torch.from_numpy(_maybe_copy(pyvista_mesh.points)).float()
+    # Preserve float32/float64 coordinates. Convert other coordinate dtypes to
+    # float32, matching PhysicsNeMo's prior geometry contract.
+    points = torch.from_numpy(_maybe_copy(pyvista_mesh.points))
+    if not points.is_floating_point() or points.element_size() < 4:
+        points = points.float()
 
     # Cells
     if manifold_dim == 0:
@@ -342,11 +378,20 @@ def to_pyvista(
         If manifold dimension is not supported.
     ImportError
         If pyvista is not installed.
+
+    Notes
+    -----
+    ``float32`` and ``float64`` point coordinates are exported without
+    narrowing; other coordinate dtypes are converted to ``float32``. To
+    normalize a mesh and all its floating data before export, use
+    ``to_pyvista(mesh.to(torch.float32))``. Retaining ``float64`` coordinates
+    doubles their storage relative to ``float32`` and may keep downstream
+    PyVista computations in double precision.
     """
     ### Convert points to numpy and pad to 3D if needed (PyVista requires 3D points)
     # .detach() first so a grad-tracked mesh can still be exported (.numpy() would
     # otherwise raise on a tensor that requires grad).
-    points_np = mesh.points.detach().float().cpu().numpy()
+    points_np = _geometry_to_vtk_numpy(mesh.points)
 
     if mesh.n_spatial_dims < 3:
         # Pad with zeros to make 3D
@@ -400,7 +445,7 @@ def to_pyvista(
         (mesh.global_data, pv_mesh.field_data),
     ]:
         for k, v in source.items(include_nested=True, leaves_only=True):
-            arr = v.detach().float().cpu().numpy()
+            arr = _tensor_to_vtk_numpy(v)
             target[str(k)] = arr.reshape(arr.shape[0], -1) if arr.ndim > 2 else arr
 
     return pv_mesh
@@ -446,7 +491,9 @@ def _from_pyvista_cell_centroids(
 
     ### Compute cell centroids (fast C++ filter, works for all cell types)
     centroids_np = pyvista_mesh.cell_centers().points
-    points = torch.from_numpy(centroids_np.copy()).float()
+    points = torch.from_numpy(centroids_np.copy())
+    if not points.is_floating_point() or points.element_size() < 4:
+        points = points.float()
 
     ### Build cells
     if manifold_dim == 0:
