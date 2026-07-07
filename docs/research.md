@@ -79,18 +79,6 @@ To add your work, see [Add your paper](#add-your-paper) below.
 | [Investigations on convergence behaviour of Physics Informed Neural Networks across spectral ranges and derivative orders](https://arxiv.org/abs/2301.02790) | M. Deshpande, S. Agarwal, V. Snigdha et al. | PINN methodology |
 | [Predictive Limitations of Physics-Informed Neural Networks in Vortex Shedding](https://arxiv.org/abs/2306.00230) | P. Chuang, L. A. Barba | CFD |
 
-## Methodology
-
-This list is compiled from full-text and metadata search across arXiv, OpenAlex,
-Semantic Scholar, and publisher venues, plus manual review and verification
-against each paper's primary text. It shows papers with **confirmed use** --
-those that explicitly report being implemented, trained, or built with
-PhysicsNeMo. Papers that only cite the framework, or that a search surfaced but
-that do not actually use it, are reviewed but not listed here.
-
-Inclusion does not imply endorsement by the authors. Authors may request a
-correction or removal by opening an issue.
-
 ## Add your paper
 
 Used PhysicsNeMo in your research? Open a
