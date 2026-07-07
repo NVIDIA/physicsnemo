@@ -175,6 +175,7 @@ def _to_new_shard_dim(
     target_spec: ShardTensorSpec,
     mesh_dim: int,
     size_hint: tuple[int, ...] | None,
+    spec_shapes_are_current: bool,
     current_dim: int,
     target_dim: int,
 ) -> tuple[torch.Tensor, tuple[int, ...] | None]:
@@ -196,6 +197,14 @@ def _to_new_shard_dim(
         The device mesh dimension on which we're transposing.
     size_hint : Optional[Tuple[int, ...]]
         If provided, use this to chunk the tensor for both send and recv.
+    spec_shapes_are_current : bool
+        Whether ``current_spec``'s recorded per-rank sharding shapes still
+        describe ``local_tensor``. The caller sets this from the hop
+        sequence of the enclosing redistribute (true only until the first
+        transform mutates the local tensor), which is derived from
+        placements and therefore identical on every rank -- the fast path
+        below must be taken by all ranks or none, so this decision may not
+        depend on rank-local state.
     current_dim : int
         Currently sharded on this tensor dimension.
     target_dim : int
@@ -238,36 +247,49 @@ def _to_new_shard_dim(
     #   from the same (already-replicated) global extent via the same
     #   deterministic chunking rule -- it's not actually rank-dependent.
     # - the current-dim extent of the sender is already recorded per-rank
-    #   on `current_spec`, as long as it was built with known
-    #   (non-"infer") sharding shapes.
-    # Only fall back to the shape-negotiation all_to_all when that
-    # information genuinely isn't available without a collective, or when
-    # it might be stale: `current_spec` is fixed for the whole (possibly
-    # multi-hop) redistribute call, but `local_tensor` can already have been
-    # reshaped by an earlier hop in the same call (e.g. a 2D-mesh
-    # Shard/Shard -> Shard/Replicate redistribute first gathers one mesh
-    # dim, then transposes the other) -- in that case the recorded shapes
-    # no longer describe what's actually being sent.
+    #   on `current_spec`.
+    # Whether the fast path applies is decided by `spec_shapes_are_current`,
+    # which the caller derives from the hop sequence (identical on all
+    # ranks by construction). It must NOT be decided from rank-local state
+    # such as `local_tensor.shape`: ranks disagreeing here means a subset
+    # skips the shape-negotiation all_to_all below and the collectives
+    # mismatch. The shape comparison is therefore an assertion (corrupt or
+    # inconsistent specs should fail loudly), not a fallback condition.
     recv_shapes = None
     if (
-        current_spec._sharding_shapes is not None
+        spec_shapes_are_current
+        and current_spec._sharding_shapes is not None
         and mesh_dim in current_spec._sharding_shapes
     ):
         current_shapes_by_rank = current_spec._sharding_shapes[mesh_dim]
         my_coord = device_mesh.get_coordinate()[mesh_dim]
-        is_fresh = len(current_shapes_by_rank) == mesh_size and torch.Size(
-            current_shapes_by_rank[my_coord]
-        ) == torch.Size(local_tensor.shape)
-        if is_fresh:
-            my_target_chunk_size = chunks[my_coord].shape[target_dim]
-            recv_shapes = []
-            for sender_shape in current_shapes_by_rank:
-                if len(sender_shape) != local_tensor.ndim:
-                    recv_shapes = None
-                    break
-                recv_shape = list(sender_shape)
-                recv_shape[target_dim] = my_target_chunk_size
-                recv_shapes.append(recv_shape)
+        if len(current_shapes_by_rank) != mesh_size:
+            raise RuntimeError(
+                f"current_spec records {len(current_shapes_by_rank)} shapes "
+                f"for mesh dim {mesh_dim}, expected {mesh_size}."
+            )
+        if torch.Size(current_shapes_by_rank[my_coord]) != torch.Size(
+            local_tensor.shape
+        ):
+            raise RuntimeError(
+                f"current_spec records shape {current_shapes_by_rank[my_coord]} "
+                f"for this rank on mesh dim {mesh_dim}, but the local tensor "
+                f"has shape {tuple(local_tensor.shape)}. The spec's sharding "
+                "shapes are stale or corrupt."
+            )
+        my_target_chunk_size = chunks[my_coord].shape[target_dim]
+        recv_shapes = []
+        for sender_shape in current_shapes_by_rank:
+            if len(sender_shape) != local_tensor.ndim:
+                raise RuntimeError(
+                    f"current_spec records shape {tuple(sender_shape)} for a "
+                    f"peer rank on mesh dim {mesh_dim}, which has different "
+                    f"rank than the local tensor shape "
+                    f"{tuple(local_tensor.shape)}."
+                )
+            recv_shape = list(sender_shape)
+            recv_shape[target_dim] = my_target_chunk_size
+            recv_shapes.append(recv_shape)
 
     if recv_shapes is None:
         # Fallback: negotiate recv shapes with the sender ranks directly.
@@ -392,6 +414,13 @@ def redistribute_local_shard_tensor(
     if len(transform_infos) == 0:
         return local_tensor
 
+    # `current_spec`'s recorded per-rank sharding shapes describe the local
+    # tensors only until the first hop below mutates them. This flag is a
+    # function of the hop sequence alone (derived from placements, so
+    # identical on every rank) -- see `_to_new_shard_dim` for why the
+    # fast-path decision must be rank-uniform.
+    spec_shapes_are_current = True
+
     for transform_info in transform_infos:
         i = transform_info.mesh_dim
         current, target = transform_info.src_dst_placements
@@ -474,6 +503,7 @@ def redistribute_local_shard_tensor(
                         target_spec,  # Send the whole spec so we can infer full recv sizes.
                         i,  # The mesh dim we're transposing sharding on.
                         size_hint,
+                        spec_shapes_are_current,  # Rank-uniform fast-path gate.
                         current.dim,  # Current tensor dimension.
                         target_placement.dim,  # Target tensor dimension.
                     )
@@ -520,6 +550,10 @@ def redistribute_local_shard_tensor(
                 "Failed to create new local tensor during redistribution"
             )
         local_tensor = new_local_tensor
+        # This hop transformed the local tensor (the `current == target`
+        # shortcut above skips this point), so the spec's recorded shapes
+        # no longer describe it.
+        spec_shapes_are_current = False
 
     if new_local_tensor is None:
         raise RuntimeError("redistribute failed!")
