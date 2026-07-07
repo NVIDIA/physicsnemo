@@ -6,8 +6,6 @@ A community-curated list of research that uses
 [NVIDIA PhysicsNeMo](https://github.com/NVIDIA/physicsnemo), grouped by year.
 To add your work, see [Add your paper](#add-your-paper) below.
 
-**53** publications with confirmed use of PhysicsNeMo.
-
 ## 2026
 
 | Paper | Authors | Domain |
