@@ -127,6 +127,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `ShardTensor.redistribute` now computes receive shapes analytically when
+  sharding shapes are known, skipping the shape-negotiation `all_to_all`
+  collective (falls back to the collective only when shapes are unavailable).
 - xDeepONet `SpatialBranch`
   (`physicsnemo.experimental.models.xdeeponet.SpatialBranch`) now supports
   mixed-precision (AMP/autocast) training: FFT-based spectral convolutions are
