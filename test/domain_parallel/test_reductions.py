@@ -118,6 +118,10 @@ def test_shard_tensor_reduction(
         requires_grad=backward,
     )
 
+    # if backward:
+    #     assert shard_tensor.is_leaf
+    #     assert shard_tensor.requires_grad
+
     if verbose:
         print(
             f"Shard tensor global shape: {shard_tensor.shape} and local shape: {shard_tensor._local_tensor.shape}"

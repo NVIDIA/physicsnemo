@@ -153,6 +153,10 @@ jobs:
   coverage:
     name: Coverage
     runs-on: linux-amd64-gpu-h100-latest-1
+    env:
+      # Single source of truth for the coverage gate; read by both the
+      # "Coverage %" check run (display) and the enforcement step (gate).
+      COVERAGE_FAIL_UNDER: "70"
     container:
       image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
       # /dev/shm defaults to 64 MiB in docker, which DALI's multiprocess
@@ -231,9 +235,18 @@ jobs:
         # code" error to a warning.  The restored nightly baseline can
         # reference files this PR has moved or deleted (e.g. a renamed
         # module); without -i the combined report aborts on the stale path.
-        uv run --no-sync coverage report -i --show-missing --omit="*test*" --omit="*internal*" --omit="*experimental*" --fail-under=45
+        #
+        # Report generation is intentionally kept free of --fail-under: it
+        # used to gate this step, which meant html/xml/json (and the PR's
+        # coverage percentage) were silently skipped whenever a PR fell
+        # under the threshold -- exactly the case where seeing the number
+        # matters most. The threshold is now enforced by its own step below.
+        uv run --no-sync coverage report -i --show-missing --omit="*test*" --omit="*internal*" --omit="*experimental*"
         uv run --no-sync coverage html -i
-        uv run --no-sync coverage xml -i -o coverage.xml
+        # xml carries the same omits as report/json so the number Codecov
+        # publishes agrees with the "Coverage %" check and the gate below.
+        uv run --no-sync coverage xml -i -o coverage.xml --omit="*test*" --omit="*internal*" --omit="*experimental*"
+        uv run --no-sync coverage json -i -o coverage.json --omit="*test*" --omit="*internal*" --omit="*experimental*"
 
     - name: Upload coverage HTML report
       uses: actions/upload-artifact@v4
@@ -241,3 +254,73 @@ jobs:
         name: coverage-report-pr
         path: htmlcov/
         retention-days: 7
+
+    - name: Upload coverage to Codecov
+      if: ${{ !cancelled() }}
+      # Best-effort (NVIDIA/warp's pattern): inert until an admin installs
+      # the Codecov GitHub App and provisions the CODECOV_TOKEN secret, and
+      # never fails the job on upload errors. Behavior config: codecov.yml
+      # at the repo root. Dashboard: app.codecov.io/gh/NVIDIA/physicsnemo
+      continue-on-error: true
+      uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
+      with:
+        disable_search: true
+        files: ./coverage.xml
+        flags: pr-core
+        token: ${{ secrets.CODECOV_TOKEN }}
+
+    - name: Report coverage percentage on the PR
+      if: always()
+      # Informational: a failure here (corrupt coverage.json, transient
+      # Checks API error) must never fail the Coverage job itself.
+      continue-on-error: true
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+
+          // Informational only -- the existing "Coverage" job/check
+          // already gates pass/fail on the threshold; this check just
+          // surfaces the actual number and never blocks the PR itself.
+          const check = {
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            name: 'Coverage %',
+            head_sha: context.sha,
+            status: 'completed',
+            conclusion: 'neutral',
+          };
+
+          // With `if: always()` this step runs even when an earlier step
+          // died before writing coverage.json; report that instead of
+          // throwing on the missing file.
+          if (!fs.existsSync('coverage.json')) {
+            check.output = {
+              title: 'coverage.json not produced',
+              summary:
+                'An earlier step in the Coverage job failed before the ' +
+                'report was generated -- see that step\'s log for the cause.',
+            };
+            await github.rest.checks.create(check);
+            return;
+          }
+
+          const data = JSON.parse(fs.readFileSync('coverage.json', 'utf8'));
+          const pct = data.totals.percent_covered.toFixed(2);
+          const threshold = Number(process.env.COVERAGE_FAIL_UNDER);
+          const passed = data.totals.percent_covered >= threshold;
+
+          check.output = {
+            title: `${pct}% covered (excl. test/internal/experimental)`,
+            summary:
+              `**Line coverage: ${pct}%** (threshold: ${threshold}%, ` +
+              `${passed ? 'passing' : 'currently failing -- see the "Coverage" check'})\n\n` +
+              `- Lines covered: ${data.totals.covered_lines} / ${data.totals.num_statements}\n` +
+              `- Branches covered: ${data.totals.covered_branches} / ${data.totals.num_branches}\n\n` +
+              `Full annotated report: see the \`coverage-report-pr\` artifact on this workflow run.`,
+          };
+          await github.rest.checks.create(check);
+
+    - name: Enforce coverage threshold
+      run: |
+        uv run --no-sync coverage report -i --omit="*test*" --omit="*internal*" --omit="*experimental*" --fail-under="${COVERAGE_FAIL_UNDER}"
