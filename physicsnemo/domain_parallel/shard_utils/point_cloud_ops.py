@@ -38,7 +38,7 @@ from physicsnemo.nn.functional.neighbors.radius_search._warp_impl import (
     radius_search_impl,
 )
 
-wp.config.quiet = True
+wp.config.log_level = wp.LOG_WARNING
 
 
 def ring_ball_query(
