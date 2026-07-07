@@ -198,7 +198,7 @@ def isosurface_render_impl(
         image_height, image_width, device=device
     )
     wp_device, wp_stream = FunctionSpec.warp_launch_context(field_fp32)
-    with wp.ScopedStream(wp_stream):
+    with FunctionSpec.warp_stream_scope(wp_stream):
         wp.launch(
             _isosurface_render_kernel,
             dim=image_height * image_width,

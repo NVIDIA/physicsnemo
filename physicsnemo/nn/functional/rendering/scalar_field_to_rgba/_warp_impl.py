@@ -72,7 +72,7 @@ def scalar_field_to_rgba_impl(
     field_fp32 = field.to(dtype=torch.float32).contiguous()
     rgba_volume = torch.empty(*field.shape, 4, device=field.device, dtype=torch.uint8)
     wp_device, wp_stream = FunctionSpec.warp_launch_context(field_fp32)
-    with wp.ScopedStream(wp_stream):
+    with FunctionSpec.warp_stream_scope(wp_stream):
         wp.launch(
             _scalar_field_to_rgba_kernel,
             dim=tuple(int(size) for size in field.shape),

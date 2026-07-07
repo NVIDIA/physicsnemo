@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import importlib.util
 import inspect
@@ -25,6 +26,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, Sequence, Tuple
 
 import torch
+import warp as wp
 from packaging.requirements import Requirement
 
 from physicsnemo.core.version_check import check_version_spec
@@ -139,7 +141,7 @@ class FunctionSpec:
             device, stream = FunctionSpec.warp_launch_context(x)
             wp_x = wp.from_torch(x, dtype=wp.float32, return_ctype=True)
             wp_y = wp.from_torch(out, dtype=wp.float32, return_ctype=True)
-            with wp.ScopedStream(stream):
+            with FunctionSpec.warp_stream_scope(stream):
                 wp.launch(
                     kernel=_identity_kernel,
                     dim=x.numel(),
@@ -697,3 +699,53 @@ class FunctionSpec:
             stream = None
             device = "cpu"
         return device, stream
+
+    @staticmethod
+    @contextlib.contextmanager
+    def warp_stream_scope(wp_launch_stream: wp.Stream | None):
+        """Scope Warp work on a borrowed torch stream with a cleanup guard.
+
+        Warp and torch have different stream semantics: Warp streams are
+        blocking (they implicitly synchronize with the NULL stream) while torch
+        streams are non-blocking. Launching Warp work directly on torch's
+        borrowed (non-blocking) current stream -- the stream returned by
+        :meth:`warp_launch_context` -- lets Warp's stream-ordered allocator
+        assume blocking behavior and free mesh / BVH / scratch buffers before
+        the launch finishes, which crashes.
+
+        This context manager runs the enclosed Warp work inside
+        ``wp.ScopedStream(wp_launch_stream)`` (preserving torch's own ordering of
+        the inputs and outputs on that stream), then, on exit, has a temporary
+        Warp-owned (blocking) stream wait on the borrowed stream so Warp's
+        cleanup is ordered after the compute instead of firing early.
+
+        Parameters
+        ----------
+        wp_launch_stream : wp.Stream or None
+            The borrowed Warp stream to launch on (as returned by
+            :meth:`warp_launch_context`). ``None`` selects the CPU / no-stream
+            path, where the scope is a no-op and no guard is installed.
+
+        Yields
+        ------
+        None
+            Control is yielded with ``wp_launch_stream`` installed as the active
+            Warp stream for the duration of the ``with`` block.
+        """
+        # CPU / no-stream path: no-op scope, no guard needed.
+        if wp_launch_stream is None:
+            with wp.ScopedStream(None):
+                yield
+            return
+
+        # Blocking, Warp-owned guard stream on the same device as the borrowed
+        # stream. Created before the scope so it is ready to install the guard
+        # once the launch has been enqueued.
+        guard = wp.Stream(wp_launch_stream.device)
+        try:
+            with wp.ScopedStream(wp_launch_stream):
+                yield
+        finally:
+            # Order Warp's stream-ordered cleanup after the compute so mesh /
+            # BVH / scratch buffers are not freed before the launch finishes.
+            guard.wait_stream(wp_launch_stream)

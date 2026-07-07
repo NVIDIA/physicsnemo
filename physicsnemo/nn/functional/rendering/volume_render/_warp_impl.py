@@ -145,7 +145,7 @@ def volume_render_impl(
     bounds = _bounds_tensor(bounds_min, bounds_max, device=device)
     rgba, depth = _empty_image_outputs(image_height, image_width, device=device)
     wp_device, wp_stream = FunctionSpec.warp_launch_context(rgba_volume_fp32)
-    with wp.ScopedStream(wp_stream):
+    with FunctionSpec.warp_stream_scope(wp_stream):
         wp.launch(
             _volume_render_kernel,
             dim=image_height * image_width,
