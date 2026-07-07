@@ -79,6 +79,7 @@ _MORTON_VARIANTS = (
     "gemm",
     "dense_fma",
     "dense_fma_e2e",
+    "dense_fma_store_opt",
     "dense_fma_mem_opt",
     "dense_fma_mm",
     "dense_gemm",
@@ -87,6 +88,7 @@ _MORTON_VARIANTS = (
 _MORTON_DENSE_VARIANTS = (
     "dense_fma",
     "dense_fma_e2e",
+    "dense_fma_store_opt",
     "dense_fma_mem_opt",
     "dense_fma_mm",
     "dense_gemm",

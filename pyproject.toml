@@ -189,6 +189,11 @@ path = "physicsnemo/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["physicsnemo"]
+# Ship the vendored CUDA extension sources for the pysdf_cuda radius-search
+# backend; they are JIT-compiled at runtime via torch.utils.cpp_extension.
+artifacts = [
+    "physicsnemo/nn/functional/neighbors/radius_search/_pysdf_cuda_ext/**",
+]
 
 [tool.hatch.build.targets.sdist]
 exclude = [

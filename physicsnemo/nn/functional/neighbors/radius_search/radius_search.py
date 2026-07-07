@@ -23,6 +23,7 @@ from ._torch_impl import radius_search as radius_search_torch
 from ._warp_impl import radius_search as radius_search_warp
 
 
+
 class RadiusSearch(FunctionSpec):
     """Performs radius-based neighbor search to find points within a specified radius of query points.
 
@@ -111,6 +112,7 @@ class RadiusSearch(FunctionSpec):
         return_points: bool = False,
     ) -> tuple[torch.Tensor, ...]:
         """Warp-accelerated radius search using spatial hash grids."""
+        print("******using warp impl")
         return radius_search_warp(
             points, queries, radius, max_points, return_dists, return_points
         )
@@ -125,6 +127,7 @@ class RadiusSearch(FunctionSpec):
         return_points: bool = False,
     ) -> tuple[torch.Tensor, ...]:
         """Pure-PyTorch brute-force radius search via cdist."""
+        print("******using torch impl")
         return radius_search_torch(
             points, queries, radius, max_points, return_dists, return_points
         )

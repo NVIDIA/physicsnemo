@@ -20,6 +20,6 @@
 # OmegaConf will raise MissingMandatoryValue at runtime for any
 # path that is still ???.
 
-drivaer_ml: ???
+drivaer_ml: /lustre/fsw/coreai_devtech_all/animishra/drivaer_ml_curated
 highlift_aero_ml: ???
 shift_suv: ???

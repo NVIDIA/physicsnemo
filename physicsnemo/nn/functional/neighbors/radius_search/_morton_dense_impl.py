@@ -56,6 +56,7 @@ FMA_BLOCK_DIM = mk.FMA_BLOCK_DIM
 DENSE_VARIANTS = (
     "dense_fma",
     "dense_fma_e2e",
+    "dense_fma_store_opt",
     "dense_fma_mem_opt",
     "dense_fma_mm",
     "dense_gemm",
@@ -544,6 +545,42 @@ def _wp_outputs(out_idx, out_count, out_dist, out_pts, Nq, max_points):
     return idx_wp, count_wp, dist_wp, pts_wp
 
 
+def _gather_neighbor_points(
+    points: torch.Tensor,
+    out_idx: torch.Tensor,
+    num: torch.Tensor,
+) -> torch.Tensor:
+    """Gather neighbor coordinates from ``out_idx`` on the host (Stage 1).
+
+    Replaces the FMA kernel's old per-neighbor ``wp.vec3`` global scatter (a
+    misaligned 12-byte store NCU flagged as inefficient) with a coalesced
+    ``index_select`` gather from the reference points.
+
+    Args:
+        points: Reference points, ``(B, N, 3)`` float32.
+        out_idx: Per-query neighbor indices -- local point ids in ``[0, N)`` with 0
+            padding past the neighbor count -- ``(B, Q, max_points)`` int32.
+        num: Neighbor count per query, ``(B, Q)`` int32.
+
+    Returns:
+        Neighbor coordinates ``(B, Q, max_points, 3)`` float32, with padding slots
+        (``slot >= num``) zeroed to match the previous in-kernel output contract.
+    """
+    B, N, _ = points.shape
+    _, Q, mp = out_idx.shape
+    device = points.device
+    # Flatten (batch, local-point) -> global row so a single index_select gathers
+    # every neighbor coordinate in one coalesced pass.
+    idx = out_idx.long().clamp_(0, N - 1)
+    batch_off = (torch.arange(B, device=device, dtype=torch.long) * N).view(B, 1, 1)
+    flat = (idx + batch_off).reshape(-1)
+    gathered = points.reshape(B * N, 3).index_select(0, flat).reshape(B, Q, mp, 3)
+    # Zero the padding slots (slot >= neighbor count) to preserve the old contract.
+    slot = torch.arange(mp, device=device).view(1, 1, mp)
+    valid = slot < num.view(B, Q, 1)
+    return gathered * valid.unsqueeze(-1).to(gathered.dtype)
+
+
 def radius_search_morton_warp_fma(
     index: MortonCompactDenseIndex,
     queries: SortedQueryData,
@@ -606,6 +643,95 @@ def radius_search_morton_warp_fma(
         stream=wp_stream,
     )
     return out_idx, out_pts, out_dist, out_count.view(B, Q)
+
+
+def radius_search_morton_warp_fma_store_opt(
+    index: MortonCompactDenseIndex,
+    queries: SortedQueryData,
+    points: torch.Tensor,
+    radius: float,
+    max_points: int,
+    return_dists: bool,
+    return_points: bool,
+    wp_device,
+    wp_stream,
+):
+    """Store-optimized FMA search: shared-mem staged flush + host-gathered points.
+
+    Same one-block-per-query 27-cell scan as :func:`radius_search_morton_warp_fma`,
+    but the kernel (Stage 2) stages indices/distances in a block-shared tile and
+    flushes them in one coalesced pass, and (Stage 1) does not scatter neighbor
+    coordinates -- those are gathered on the host from ``out_idx`` via
+    :func:`_gather_neighbor_points`. Together these remove the misaligned
+    ``wp.vec3`` global store and the per-chunk partial-warp scatters the profiler
+    flagged on :func:`radius_search_morton_warp_fma`. Returns the ``(indices,
+    points, distances, num_neighbors)`` 4-tuple with the batch dim intact.
+
+    Raises:
+        ValueError: If ``max_points`` exceeds the shared staging capacity
+            (``FMA_STAGE_CAP``).
+    """
+    B, Q, Nq = queries.B, queries.Q, queries.Nq
+    device = index.pc_xyz4_sorted.device
+    if max_points > mk.FMA_STAGE_CAP:
+        raise ValueError(
+            f"dense_fma_store_opt supports max_points <= {mk.FMA_STAGE_CAP} "
+            f"(got {max_points}); increase FMA_STAGE_CAP in _morton_dense_kernels.py "
+            "or use the dense_fma variant."
+        )
+
+    # The kernel writes only indices/distances; coordinates are gathered below.
+    out_idx = torch.zeros((B, Q, max_points), dtype=torch.int32, device=device)
+    out_count = torch.zeros(B * Q, dtype=torch.int32, device=device)
+    out_dist = (
+        torch.zeros((B, Q, max_points), dtype=torch.float32, device=device)
+        if return_dists
+        else None
+    )
+    idx_wp = wp.from_torch(out_idx.view(Nq, max_points))
+    count_wp = wp.from_torch(out_count)
+    dist_wp = (
+        wp.from_torch(out_dist.view(Nq, max_points)) if out_dist is not None else None
+    )
+
+    wp.launch_tiled(
+        kernel=mk.radius_search_dense_fma_store_opt_kernel,
+        dim=Nq,
+        inputs=[
+            wp.from_torch(queries.q_x_sorted),
+            wp.from_torch(queries.q_y_sorted),
+            wp.from_torch(queries.q_z_sorted),
+            wp.from_torch(queries.q_orig_sorted),
+            float(index.inv_radius),
+            int(queries.Q),
+            wp.from_torch(index.offsets),
+            wp.from_torch(index.min_cx),
+            wp.from_torch(index.min_cy),
+            wp.from_torch(index.min_cz),
+            wp.from_torch(index.grid_x),
+            wp.from_torch(index.grid_y),
+            wp.from_torch(index.grid_z),
+            wp.from_torch(index.grid_base),
+            wp.from_torch(index.cell_begin_by_row),
+            wp.from_torch(index.cell_count_by_row),
+            wp.from_torch(index.pc_x_sorted),
+            wp.from_torch(index.pc_y_sorted),
+            wp.from_torch(index.pc_z_sorted),
+            wp.from_torch(index.pc_orig_sorted),
+            float(radius) * float(radius),
+            int(max_points),
+            bool(return_dists),
+            idx_wp,
+            count_wp,
+            dist_wp,
+        ],
+        block_dim=FMA_BLOCK_DIM,
+        device=wp_device,
+        stream=wp_stream,
+    )
+    num = out_count.view(B, Q)
+    out_pts = _gather_neighbor_points(points, out_idx, num) if return_points else None
+    return out_idx, out_pts, out_dist, num
 
 
 def radius_search_morton_warp_fma_mem_opt(
@@ -984,6 +1110,8 @@ def radius_search_morton_dense(
         return_points: Whether to return neighbor coordinates.
         variant: One of ``"dense_fma"`` (production), ``"dense_fma_e2e"`` (sort-free
             ``dense_fma``: row-major cell bins + unsorted queries, no radix sort),
+            ``"dense_fma_store_opt"`` (``dense_fma`` with shared-memory staged flush
+            and host-gathered points -- optimizes the output stores),
             ``"dense_fma_mem_opt"``, ``"dense_fma_mm"``, or ``"dense_gemm"``
             (benchmark). ``None`` defaults to ``"dense_fma"``.
 
@@ -1042,6 +1170,11 @@ def radius_search_morton_dense(
         if variant in ("dense_fma", "dense_fma_e2e"):
             indices, pts, dist, num = radius_search_morton_warp_fma(
                 index, sorted_queries, radius, max_points, return_dists,
+                return_points, wp_device, wp_stream,
+            )
+        elif variant == "dense_fma_store_opt":
+            indices, pts, dist, num = radius_search_morton_warp_fma_store_opt(
+                index, sorted_queries, points, radius, max_points, return_dists,
                 return_points, wp_device, wp_stream,
             )
         elif variant == "dense_fma_mem_opt":

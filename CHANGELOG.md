@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds an experimental `pysdf_cuda` radius-search backend, selectable via
+  `PHYSICSNEMO_RADIUS_SEARCH_MORTON=pysdf_cuda`. It JIT-compiles a vendored,
+  OptiX-free software-QBVH point-range query (NVIDIA pysdf/minigql + owl,
+  Apache-2.0) on first use and is CUDA-only and requires `max_points` to be set.
 - Adds Point-Transformer local vector-attention blocks to `physicsnemo.nn`.
 - FSDP2 checkpoint support: full save/load round-trip for
   ``torch.distributed.fsdp`` v2 models, including DTensor edge cases,

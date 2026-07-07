@@ -39,7 +39,19 @@ TILE_P = 256
 # many candidate points per chunk and compacts hits with a block-wide tile scan.
 # 32 is one warp; larger (e.g. 128) scans more candidates per chunk for densely
 # populated cells, at the cost of idle lanes when cells hold fewer points.
-FMA_BLOCK_DIM = 128
+FMA_BLOCK_DIM = 64
+
+# Compile-time capacity of the per-query shared-memory staging buffer used by the
+# production FMA kernel (Stage 2). Neighbors from all 27 cells accumulate in this
+# block-shared tile and are flushed to global memory once, coalesced, so the hot
+# loop never issues the old per-chunk partial-warp global scatter. This caps the
+# supported ``max_points`` (the host raises if ``max_points`` exceeds it); 256
+# covers every realistic ball-query fan-out (production uses <= 32, tests <= 128).
+# ``FMA_STAGE_SLOTS`` adds one dump slot at index ``FMA_STAGE_CAP`` where inactive
+# lanes park their (never-read-back) write so the shared-tile store stays a single
+# block-uniform statement instead of a divergent, sync-splitting branch. 
+FMA_STAGE_CAP = 256
+FMA_STAGE_SLOTS = FMA_STAGE_CAP + 1
 
 
 # ---------------------------------------------------------------------------
@@ -344,6 +356,145 @@ def radius_search_dense_fma_kernel(
                 base += FMA_BLOCK_DIM
         if found >= max_points:
             break
+    if lane == 0:
+        out_count[flat_q] = found
+
+
+# ---------------------------------------------------------------------------
+# Store-optimized search variant: shared-mem staged flush + host-gathered points
+# ---------------------------------------------------------------------------
+
+
+@wp.kernel
+def radius_search_dense_fma_store_opt_kernel(
+    q_x_sorted: wp.array(dtype=wp.float32),
+    q_y_sorted: wp.array(dtype=wp.float32),
+    q_z_sorted: wp.array(dtype=wp.float32),
+    q_orig_sorted: wp.array(dtype=wp.int32),
+    inv_radius: wp.float32,
+    Q: wp.int32,
+    neighbor_offsets: wp.array2d(dtype=wp.int32),
+    min_cx: wp.array(dtype=wp.int32),
+    min_cy: wp.array(dtype=wp.int32),
+    min_cz: wp.array(dtype=wp.int32),
+    grid_x: wp.array(dtype=wp.int32),
+    grid_y: wp.array(dtype=wp.int32),
+    grid_z: wp.array(dtype=wp.int32),
+    grid_base: wp.array(dtype=wp.int32),
+    cell_begin_by_row: wp.array(dtype=wp.int32),
+    cell_count_by_row: wp.array(dtype=wp.int32),
+    pc_x_sorted: wp.array(dtype=wp.float32),
+    pc_y_sorted: wp.array(dtype=wp.float32),
+    pc_z_sorted: wp.array(dtype=wp.float32),
+    pc_orig_sorted: wp.array(dtype=wp.int32),
+    radius2: wp.float32,
+    max_points: wp.int32,
+    return_dists: wp.bool,
+    out_idx: wp.array2d(dtype=wp.int32),
+    out_count: wp.array(dtype=wp.int32),
+    out_dist: wp.array2d(dtype=wp.float32),
+):
+    """Store-optimized twin of :func:`radius_search_dense_fma_kernel`.
+
+    Same one-block-per-query 27-cell scan and block-wide hit compaction, but with
+    two changes that target the inefficient global stores NCU flagged on the
+    baseline kernel:
+
+    * Stage 1 -- neighbor *coordinates* are not stored here. The baseline's
+      ``out_pts[flat_q, slot] = wp.vec3(...)`` was a 12-byte (misaligned) global
+      scatter; callers that need coordinates gather them on the host from
+      ``out_idx`` (see ``_gather_neighbor_points``), so this kernel writes only
+      indices/distances.
+    * Stage 2 -- hits from all 27 cells accumulate in a per-query block-shared
+      staging tile (``stage_idx``/``stage_dist``) instead of a per-chunk global
+      write. After the scan a single coalesced pass flushes the compacted
+      ``[0, found)`` run, replacing many small partial-warp scatters with one
+      full-width store.
+
+    ``max_points`` must be ``<= FMA_STAGE_CAP`` (enforced host-side); the shared
+    tile carries one extra dump slot at index ``FMA_STAGE_CAP`` so the per-chunk
+    shared-tile write stays a single block-uniform statement (inactive lanes write
+    the dump slot, which is never read back).
+    """
+    sorted_q, lane = wp.tid()
+    flat_q = q_orig_sorted[sorted_q]
+    b = flat_q // Q
+    qx = q_x_sorted[sorted_q]
+    qy = q_y_sorted[sorted_q]
+    qz = q_z_sorted[sorted_q]
+    gx = grid_x[b]
+    gy = grid_y[b]
+    gz = grid_z[b]
+    mcx = min_cx[b]
+    mcy = min_cy[b]
+    mcz = min_cz[b]
+    gbase = grid_base[b]
+    lqx = wp.int32(wp.floor(qx * inv_radius)) - mcx
+    lqy = wp.int32(wp.floor(qy * inv_radius)) - mcy
+    lqz = wp.int32(wp.floor(qz * inv_radius)) - mcz
+
+    # Stage 2: block-shared staging buffers (one extra dump slot at FMA_STAGE_CAP).
+    # Writing a tile element migrates the tile to shared memory and emits a
+    # block-wide sync, so the per-chunk store below must be reached by every lane.
+    stage_idx = wp.tile_zeros(shape=(FMA_STAGE_SLOTS,), dtype=wp.int32)
+    stage_dist = wp.tile_zeros(shape=(FMA_STAGE_SLOTS,), dtype=wp.float32)
+
+    found = wp.int32(0)
+    for n in range(27):
+        lx = lqx + neighbor_offsets[n, 0]
+        ly = lqy + neighbor_offsets[n, 1]
+        lz = lqz + neighbor_offsets[n, 2]
+        if lx >= 0 and lx < gx and ly >= 0 and ly < gy and lz >= 0 and lz < gz:
+            row = gbase + lx + gx * (ly + gy * lz)
+            start = cell_begin_by_row[row]
+            end = start + cell_count_by_row[row]
+            base = start
+            while base < end:
+                si = base + lane
+                hit = wp.int32(0)
+                d2 = wp.float32(0.0)
+                if si < end:
+                    dx = pc_x_sorted[si] - qx
+                    dy = pc_y_sorted[si] - qy
+                    dz = pc_z_sorted[si] - qz
+                    d2 = dx * dx + dy * dy + dz * dz
+                    if d2 <= radius2:
+                        hit = wp.int32(1)
+                hit_tile = wp.tile(hit)
+                prefix = wp.untile(wp.tile_scan_exclusive(hit_tile))
+                hits_tile = wp.tile_sum(hit_tile)
+                write_hits = wp.min(hits_tile[0], max_points - found)
+
+                # Route inactive lanes to the dump slot so the shared-tile store is a
+                # single block-uniform statement; the value read is guarded so only
+                # in-radius lanes (si < end) touch pc_orig_sorted.
+                dst = wp.int32(FMA_STAGE_CAP)
+                idx_val = wp.int32(0)
+                dist_val = wp.float32(0.0)
+                if hit == 1 and prefix < write_hits:
+                    dst = found + prefix
+                    idx_val = pc_orig_sorted[si]
+                    if return_dists:
+                        dist_val = wp.sqrt(d2)
+                stage_idx[dst] = idx_val
+                if return_dists:
+                    stage_dist[dst] = dist_val
+
+                found += write_hits
+                if found >= max_points:
+                    break
+                base += FMA_BLOCK_DIM
+        if found >= max_points:
+            break
+
+    # Stage 2 flush: one coalesced pass writes the compacted [0, found) run.
+    # Consecutive lanes write consecutive slots, so each warp store is fully packed.
+    s = lane
+    while s < found:
+        out_idx[flat_q, s] = stage_idx[s]
+        if return_dists:
+            out_dist[flat_q, s] = stage_dist[s]
+        s += FMA_BLOCK_DIM
     if lane == 0:
         out_count[flat_q] = found
 
