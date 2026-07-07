@@ -353,7 +353,9 @@ class DatasetBase(ABC):
         """Start prefetching *index*, retrievable later via :meth:`__getitem__`.
 
         Index-keyed convenience wrapper around :meth:`submit`. A repeated
-        prefetch of an in-flight index is a no-op.
+        prefetch of an in-flight index is a no-op. Not thread-safe for
+        concurrent calls prefetching the same index; the DataLoader uses
+        :meth:`submit` / :meth:`consume` instead.
 
         Parameters
         ----------
