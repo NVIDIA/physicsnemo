@@ -150,6 +150,7 @@ def test_ditblock_natten_rope_and_mask_token_forward(device, pytestconfig):
     hidden_size, num_heads = 64, 4
     B, H, W = 2, 8, 8
     T = H * W
+    head_dim = hidden_size // num_heads
 
     block = (
         DiTBlock(
@@ -158,15 +159,25 @@ def test_ditblock_natten_rope_and_mask_token_forward(device, pytestconfig):
             attention_backend="natten2d_rope",
             layernorm_backend="torch",
             attn_kernel=3,
-            latent_hw=(H, W),
             use_mask_token=True,
         )
         .to(device)
         .eval()
     )
-    # Confirm the RoPE backend was selected and exposes its precomputed tables.
-    assert hasattr(block.attention, "rope_cos")
-    assert block.attention.rope_cos.shape == (H, W, hidden_size // num_heads)
+    # The RoPE block no longer owns the cos/sin tables: they are supplied at
+    # forward time by the top-level model's provider (here, built directly).
+    assert not hasattr(block.attention, "rope_cos")
+    rope_cos, rope_sin = build_axial_rope_cos_sin_2d(H, W, head_dim)
+    rope_cos, rope_sin = rope_cos.to(device), rope_sin.to(device)
+    rope_kwargs = {"latent_hw": (H, W), "rope_cos": rope_cos, "rope_sin": rope_sin}
+
+    # Omitting the tables is a clear error (the block cannot run standalone).
+    with pytest.raises(TypeError):
+        block(
+            torch.randn(B, T, hidden_size, device=device),
+            torch.randn(B, hidden_size, device=device),
+            attn_kwargs={"latent_hw": (H, W)},
+        )
 
     x = torch.randn(B, T, hidden_size, device=device)
     c = torch.randn(B, hidden_size, device=device)
@@ -174,10 +185,8 @@ def test_ditblock_natten_rope_and_mask_token_forward(device, pytestconfig):
     # An all-valid mask must match passing no mask at all (mask token init zero
     # would also match, but we trained none here; pass explicit zeros).
     all_valid = torch.zeros(T, dtype=torch.bool, device=device)
-    y_none = block(x, c, attn_kwargs={"latent_hw": (H, W)})
-    y_valid = block(
-        x, c, attn_kwargs={"latent_hw": (H, W), "invalid_token_mask": all_valid}
-    )
+    y_none = block(x, c, attn_kwargs=dict(rope_kwargs))
+    y_valid = block(x, c, attn_kwargs={**rope_kwargs, "invalid_token_mask": all_valid})
     assert y_none.shape == (B, T, hidden_size)
     assert torch.allclose(y_none, y_valid, atol=1e-5)
 
@@ -185,9 +194,7 @@ def test_ditblock_natten_rope_and_mask_token_forward(device, pytestconfig):
     torch.nn.init.normal_(block.attention.mask_token)
     invalid = all_valid.clone()
     invalid[[0, 9, 33]] = True
-    y_masked = block(
-        x, c, attn_kwargs={"latent_hw": (H, W), "invalid_token_mask": invalid}
-    )
+    y_masked = block(x, c, attn_kwargs={**rope_kwargs, "invalid_token_mask": invalid})
     assert not torch.allclose(y_none, y_masked, atol=1e-5)
 
     # A per-sample (B, T) mask applies a distinct pattern to each sample: mask
@@ -196,7 +203,7 @@ def test_ditblock_natten_rope_and_mask_token_forward(device, pytestconfig):
     per_sample = torch.zeros(B, T, dtype=torch.bool, device=device)
     per_sample[0] = invalid
     y_per_sample = block(
-        x, c, attn_kwargs={"latent_hw": (H, W), "invalid_token_mask": per_sample}
+        x, c, attn_kwargs={**rope_kwargs, "invalid_token_mask": per_sample}
     )
     assert torch.allclose(y_per_sample[0], y_masked[0], atol=1e-5)
     assert torch.allclose(y_per_sample[1], y_none[1], atol=1e-5)

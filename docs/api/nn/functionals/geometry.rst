@@ -29,6 +29,20 @@ mesh and the occupied voxels inferred by ``mesh_to_voxel_fraction``.
    :alt: Mesh to voxel fraction mesh and occupied-voxel rotation animation
    :width: 85%
 
+Ray Mesh Intersect
+------------------
+
+.. autofunction:: physicsnemo.nn.functional.ray_mesh_intersect
+
+.. rubric:: Visualization
+
+This visualization shows a batch of rays intersecting a triangulated sphere,
+with hits, misses, hit points, and surface normals.
+
+.. figure:: /img/nn/functional/geometry/ray_mesh_intersect/ray_mesh_intersect_overview.png
+   :alt: Ray mesh intersection overview with rays, hit points, and normals
+   :width: 85%
+
 Signed Distance Field
 ---------------------
 

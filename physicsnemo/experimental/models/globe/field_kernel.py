@@ -30,16 +30,12 @@ from torch.profiler import record_function
 from torch.utils.checkpoint import checkpoint
 
 from physicsnemo.core.module import Module
-from physicsnemo.experimental.models.globe.utilities.rank_spec import (
-    RankSpecDict,
-    flatten_rank_spec,
-    rank_counts,
-)
 from physicsnemo.experimental.models.globe.utilities.tensordict_utils import (
     concatenate_leaves,
     concatenated_length,
     split_by_leaf_rank,
 )
+from physicsnemo.mesh import RankSpecDict, flatten_rank_spec, rank_counts
 from physicsnemo.nn import Mlp, Pade
 from physicsnemo.nn.functional.equivariant_ops import (
     legendre_polynomials,
@@ -919,12 +915,12 @@ class BarnesHutKernel(Kernel):
         TensorDict[str, Float[torch.Tensor, "n_targets ..."]]
             Kernel output fields at target points.
         """
+        from physicsnemo.mesh.spatial._ragged import _ragged_arange
         from physicsnemo.mesh.spatial.cluster_tree import (
             ClusterTree,
             DualInteractionPlan,
             SourceAggregates,
         )
-        from physicsnemo.mesh.spatial._ragged import _ragged_arange
 
         n_sources = source_points.shape[0]
         n_targets = target_points.shape[0]

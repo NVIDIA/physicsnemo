@@ -202,19 +202,21 @@ class TestReduceAndAverage:
         """A representative pair of 0-D (epoch-accumulated) sum TensorDicts."""
         losses_td = TensorDict(
             {"pressure": torch.tensor(6.0), "wss": torch.tensor(9.0)},
-            batch_size=[],
         )
         metrics_td = TensorDict(
             {"pressure_l2": torch.tensor(3.0), "wss_mae": torch.tensor(12.0)},
-            batch_size=[],
         )
         return losses_td, metrics_td
 
     def test_single_process_divides_sums_by_local_count(self):
-        """No process group: global average == local sum / n_local."""
+        """No process group: global average == local sum / n_local.
+
+        ``loss_sum`` is passed as a 0-D tensor (matching the on-device epoch
+        accumulator); the reducer returns Python floats.
+        """
         losses_td, metrics_td = self._epoch_sums()
         avg_loss, avg_losses, avg_metrics = _reduce_and_average(
-            15.0, losses_td, metrics_td, 3, device="cpu"
+            torch.tensor(15.0), losses_td, metrics_td, 3, device="cpu"
         )
         assert avg_loss == pytest.approx(5.0)
         assert avg_losses == pytest.approx({"pressure": 2.0, "wss": 3.0})
@@ -222,23 +224,23 @@ class TestReduceAndAverage:
 
     def test_none_sentinel_returns_loss_only(self):
         """The "no steps seeded" sentinel (either TD ``None``) yields (loss / n, {}, {})."""
-        assert _reduce_and_average(8.0, None, None, 2, device="cpu") == (
-            4.0,
-            {},
-            {},
+        loss, losses, metrics = _reduce_and_average(
+            torch.tensor(8.0), None, None, 2, device="cpu"
         )
+        assert loss == pytest.approx(4.0)
+        assert losses == {} and metrics == {}
         ### A single ``None`` is enough to trip the sentinel.
         losses_td, _ = self._epoch_sums()
-        assert _reduce_and_average(8.0, losses_td, None, 2, device="cpu") == (
-            4.0,
-            {},
-            {},
+        loss, losses, metrics = _reduce_and_average(
+            torch.tensor(8.0), losses_td, None, 2, device="cpu"
         )
+        assert loss == pytest.approx(4.0)
+        assert losses == {} and metrics == {}
 
     def test_zero_local_count_avoids_zero_division(self):
         """``n_local == 0`` (a step-less epoch) divides by 1, not 0."""
-        assert _reduce_and_average(7.0, None, None, 0, device="cpu") == (
-            7.0,
-            {},
-            {},
+        loss, losses, metrics = _reduce_and_average(
+            torch.tensor(7.0), None, None, 0, device="cpu"
         )
+        assert loss == pytest.approx(7.0)
+        assert losses == {} and metrics == {}

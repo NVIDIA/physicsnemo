@@ -209,9 +209,14 @@ def test_dit_rope_disables_pos_embed_and_warns(device):
         ).to(device)
     # Additive positional embedding is disabled.
     assert model.tokenizer.pos_embed == 0.0
-    # The RoPE tables were precomputed at the latent grid size.
+    # The RoPE tables are owned by a single top-level provider (built once at the
+    # latent grid size), not duplicated per block.
     head_dim = 64 // 4
-    assert model.blocks[0].attention.rope_cos.shape == (4, 4, head_dim)
+    assert model.rope.rope_cos.shape == (4, 4, head_dim)
+    assert not hasattr(model.blocks[0].attention, "rope_cos")
+    # Exactly one owner of the tables across the whole model.
+    n_owners = sum(1 for m in model.modules() if hasattr(m, "rope_cos"))
+    assert n_owners == 1
 
 
 def test_dit_pixel_mask_to_token_mask(device):

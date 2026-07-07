@@ -37,12 +37,13 @@ import os
 import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import nullcontext
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 import hydra
 import torch
 import torch.distributed as dist
 from datasets import build_dataloaders
+from jaxtyping import Float
 from loss import LossCalculator
 from metrics import MetricCalculator, resolve_metrics
 from omegaconf import DictConfig, OmegaConf
@@ -65,7 +66,7 @@ from utils import (
 
 from physicsnemo import datapipes  # noqa: F401 - registers ${dp:...} resolver
 from physicsnemo.datapipes import DataLoader
-from physicsnemo.distributed import DistributedManager
+from physicsnemo.distributed import DistributedManager, fused_all_reduce
 from physicsnemo.mesh import MESH_FIELD_ASSOCIATIONS, DomainMesh, Mesh
 from physicsnemo.utils import load_checkpoint, save_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
@@ -102,38 +103,35 @@ def _flatten_config(
 
 
 def _reduce_and_average(
-    loss_sum: float,
+    loss_sum: Float[torch.Tensor, ""],
     losses_td: TensorDict | None,
     metrics_td: TensorDict | None,
     n_samples: int,
     *,
     device: torch.device | str,
 ) -> tuple[float, dict[str, float], dict[str, float]]:
-    """Collapse rank-local loss/metric *sums* + a sample count into global means.
+    """Collapse rank-local loss/metric *sums* into a global mean-of-means.
 
     Under DDP each rank only sees its own shard, so the numbers we log are
-    meaningless until reduced across ranks. This takes a rank-local *sum*
-    (``loss_sum`` plus the 0-D ``losses_td`` / ``metrics_td`` leaves) and the
-    matching sample count, reduces them across ranks once, and divides by the
-    *global* count to produce sample-weighted means. It is granularity-neutral
-    and called at two boundaries:
+    meaningless until reduced across ranks. This divides the rank-local sums
+    (``loss_sum`` plus the 0-D ``losses_td`` / ``metrics_td`` leaves) by the
+    local sample count, then averages those per-rank means across ranks with
+    one fused ``AVG`` ``all_reduce``
+    (:func:`physicsnemo.distributed.fused_all_reduce`). Under even shards
+    (train ``drop_last=True``, val pads) that equals the true global mean and
+    keeps the integer count out of the float reduction buffer. It is
+    granularity-neutral, mirrors the inference-side ``infer._allreduce_sums``,
+    and is called at two boundaries:
 
-    - Per step, with ``n_samples == 1`` (one sample per batch), so the logged
-      iteration curves are global all-rank means rather than rank-0's shard.
-    - Per epoch, with ``n_samples == n_local`` and the running epoch sums, so
-      the summary is a global mean over the whole dataset.
-
-    Reducing sums and a count (rather than per-rank means) is what makes the
-    result correct for uneven shards: ``global_sum / global_count`` weights
-    every sample equally no matter how the dataset split across ranks. The
-    values are packed into a single ``float32`` buffer, so each call costs one
-    ``all_reduce`` and one device-to-host sync (the ``.tolist()``). It mirrors
-    the inference-side reducer ``infer._allreduce_sums``.
+    - Per step, with ``n_samples == 1``, so the logged iteration curves are
+      global all-rank means rather than rank-0's shard.
+    - Per epoch, with ``n_samples == n_local`` and the running epoch sums, for
+      the dataset-wide summary.
 
     Args:
         loss_sum: Rank-local sum of scalar losses over the ``n_samples`` being
-            collapsed -- one step's ``loss.item()`` per step, or the epoch
-            running sum -- not a mean.
+            collapsed, as a 0-D on-device tensor -- one step's detached
+            ``loss`` per step, or the running epoch-loss tensor -- not a mean.
         losses_td: Rank-local per-field loss sum: a 0-D (``batch_size=[]``)
             ``TensorDict`` whose leaves are summed scalar losses, one per loss
             term. ``None`` is the "zero samples" sentinel (see Notes); it does
@@ -144,60 +142,44 @@ def _reduce_and_average(
         n_samples: Number of samples this rank contributed to ``loss_sum`` and
             the accumulators (``1`` per step, ``n_local`` per epoch; equal to
             the step count because the recipe runs ``batch_size == 1``).
-        device: Device on which to build the reduction buffer. Must be the
-            rank's collective/compute device (``dist_manager.device``) so the
-            NCCL ``all_reduce`` runs on the correct device.
+        device: The rank's collective/compute device (``dist_manager.device``),
+            where the ``all_reduce`` runs.
 
     Returns:
-        A ``(avg_loss, avg_losses, avg_metrics)`` tuple where ``avg_loss`` is
-        the global mean loss, ``avg_losses`` is ``{loss_name: global_mean}``,
-        and ``avg_metrics`` is ``{metric_name: global_mean}``. The dict keys
-        and their order are taken from ``losses_td`` / ``metrics_td``. On the
-        ``None`` sentinel it returns ``(loss_sum / max(n_samples, 1), {}, {})``
-        without entering the collective.
+        A ``(avg_loss, avg_losses, avg_metrics)`` tuple of Python floats:
+        ``avg_loss`` is the global mean loss, ``avg_losses`` is
+        ``{loss_name: mean}``, and ``avg_metrics`` is ``{metric_name: mean}``.
+        The dict keys and their order are taken from ``losses_td`` /
+        ``metrics_td``. On the ``None`` sentinel it returns
+        ``(loss_sum.item() / max(n_samples, 1), {}, {})`` without entering the
+        collective.
 
     Notes:
-        Single-process (or ``world_size == 1``) skips the reduction, so the
-        result is identical to plain ``sum / n_samples`` averaging and
-        single-GPU logs are unchanged.
-
-        Calling this per step adds one collective per iteration, which is only
-        deadlock-free because every rank issues the same number of collectives
-        -- i.e. every rank runs the same step count. The recipe's samplers
-        guarantee that: train uses ``drop_last=True`` and val pads to even
-        shards, so no rank finishes early and skips a step's ``all_reduce``.
-
-        The one fused ``all_reduce`` is valid only because every rank packs
-        the same leaves in the same order, which holds since all ranks share
-        one ``target_config`` (identical loss/metric keys). The ``None`` early
-        return similarly assumes ranks are seeded together: under DDP every
-        rank gets at least one sample, so the accumulators are non-``None`` on
-        all ranks at once.
+        The per-step collective is deadlock-free only because every rank runs
+        the same step count (train ``drop_last=True``, val pads) and packs the
+        same leaves in the same order (all ranks share one ``target_config``).
+        Single-process skips the reduction, leaving single-GPU logs unchanged.
     """
     if losses_td is None or metrics_td is None:
-        return loss_sum / max(n_samples, 1), {}, {}
-    loss_keys = cast(list[str], list(losses_td.keys()))
-    metric_keys = cast(list[str], list(metrics_td.keys()))
-    leaves = cast(
-        list[torch.Tensor], list(losses_td.values()) + list(metrics_td.values())
+        return loss_sum.item() / max(n_samples, 1), {}, {}
+    ### Divide by the local sample count first, then AVG across ranks: a
+    ### mean-of-means equal to the global mean under even shards, with no
+    ### integer count entering the float reduction buffer.
+    n = max(n_samples, 1)
+    bundle = TensorDict(
+        {
+            "loss": loss_sum / n,
+            "losses": losses_td / n,
+            "metrics": metrics_td / n,
+        },
     )
-    ### [loss_sum, n_samples, *loss_sums, *metric_sums] -> one collective.
-    packed = torch.cat(
-        [
-            torch.tensor([loss_sum, float(n_samples)], device=device),
-            torch.stack(leaves).float().to(device),
-        ]
-    )
-    if dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1:
-        dist.all_reduce(packed)
-    reduced_loss, reduced_n, *leaf_sums = packed.tolist()
-    n = max(reduced_n, 1.0)
-    n_loss = len(loss_keys)
-    averaged = [v / n for v in leaf_sums]
+    ### Pull the reduced bundle host-side once; .item() off the CPU copy is then
+    ### a free index, with no per-leaf device sync (AVG is a no-op single-process).
+    reduced = fused_all_reduce(bundle, op=dist.ReduceOp.AVG, device=device).cpu()
     return (
-        reduced_loss / n,
-        dict(zip(loss_keys, averaged[:n_loss])),
-        dict(zip(metric_keys, averaged[n_loss:])),
+        reduced["loss"].item(),
+        {key: value.item() for key, value in reduced["losses"].items()},
+        {key: value.item() for key, value in reduced["metrics"].items()},
     )
 
 
@@ -208,7 +190,7 @@ def _reduce_and_average(
 
 def _log_to_tensorboard(
     writer: SummaryWriter | None,
-    values: Mapping[str, float | torch.Tensor],
+    values: Mapping[str, float | Float[torch.Tensor, ""]],
     tag_prefix: str,
     global_step: int,
 ) -> None:
@@ -237,7 +219,7 @@ def forward_pass(
     *,
     output_type: IOType,
     target_config: dict[str, FieldType],
-) -> tuple[torch.Tensor, TensorDict, TensorDict]:
+) -> tuple[Float[torch.Tensor, ""], TensorDict, TensorDict]:
     """Run a forward pass + loss + metrics on one collated batch.
 
     Args:
@@ -348,17 +330,12 @@ def _run_epoch(
     log_prefix = "Epoch" if is_train else "Val Epoch"
     is_rank0 = dist_manager.rank == 0
 
-    ### `total_loss` is a Python float fed by the per-step print line's
-    ### sync; `total_losses_td` / `total_metrics_td` are on-device
-    ### TensorDict accumulators (one 0-D leaf per field) that defer
-    ### their D2H transfer to the single batched ``.tolist()`` at
-    ### end-of-epoch. ``None`` here means "not yet seeded"; the first
-    ### iteration clones the per-step TensorDict to break aliasing.
-    ### ``n_local`` below is this rank's step/sample count. The averaging
-    ### denominator is the GLOBAL count that ``_reduce_and_average``
-    ### all-reduces from each rank's ``n_local`` at end-of-epoch; the local
-    ### value is reused directly only for the per-rank step-rate line.
-    total_loss = 0.0
+    ### All three accumulators live on-device, so epoch sums build up with no
+    ### per-step host sync (the only per-step D2H is inside _reduce_and_average).
+    ### total_loss is float64 for accumulation precision, downcast to float32 at
+    ### the epoch reduce. None = not yet seeded; n_local is this rank's local
+    ### sample count.
+    total_loss = torch.zeros((), dtype=torch.float64, device=dist_manager.device)
     total_losses_td: TensorDict | None = None
     total_metrics_td: TensorDict | None = None
     precision = getattr(cfg, "precision", "float32")
@@ -407,10 +384,10 @@ def _run_epoch(
                 total_metrics_td.add_(metrics)
             n_local += 1
 
-            ### Per-step sync for the print line; lands after backward +
-            ### optimizer.step so it overlaps with queued GPU work.
-            this_loss = loss.detach().item()
-            total_loss += this_loss
+            ### Detached scalar loss: accumulate the epoch sum on-device (no
+            ### host sync) and feed the per-step reducer below.
+            loss_det = loss.detach()
+            total_loss += loss_det
 
             step_dt = time.perf_counter() - step_t0
             mem_gb = (
@@ -428,7 +405,7 @@ def _run_epoch(
             ### keep the per-step collective deadlock-free (see
             ### ``_reduce_and_average``).
             step_loss, step_losses, step_metrics = _reduce_and_average(
-                this_loss, losses, metrics, 1, device=dist_manager.device
+                loss_det, losses, metrics, 1, device=dist_manager.device
             )
 
             ### Train mode includes Mem in the per-step line; val drops it
@@ -441,13 +418,10 @@ def _run_epoch(
                 f"{mem_str}"
             )
 
-            ### Per-step TensorBoard: train only (val_writer is intentionally
-            ### epoch-only to keep dashboards uncluttered). Per-step JSONL is
-            ### emitted in both modes so downstream tooling can compute val
-            ### step-time statistics directly instead of inferring them from
-            ### ``val_ts - train_ts``. The logged loss / metrics are the global
-            ### all-rank means from ``_reduce_and_average`` above (not rank-0's
-            ### shard); rank 0 is only the writer.
+            ### Per-step TensorBoard is train-only (val_writer is epoch-only);
+            ### per-step JSONL is written in both modes so downstream tooling gets
+            ### val step-times directly. The logged values are global all-rank
+            ### means (rank 0 is only the writer).
             if is_rank0:
                 if is_train:
                     global_step = epoch * num_steps + i
@@ -516,11 +490,12 @@ def _run_epoch(
 
     epoch_dt = time.perf_counter() - epoch_t0
     n = max(n_local, 1)
-    ### Reduce the epoch sums + sample count across ranks once, so logged
-    ### loss/metrics are the GLOBAL averages (not rank-0's shard) under
-    ### DDP. `n` above is kept local for the per-rank step-rate line below.
+    ### Reduce the epoch sums + sample count across ranks once so logged
+    ### loss/metrics are global averages (not rank-0's shard) under DDP; `n`
+    ### above stays local for the per-rank step-rate line. Downcast the float64
+    ### loss accumulator to float32 so every reduced leaf shares one dtype.
     avg_loss, avg_losses, avg_metrics = _reduce_and_average(
-        total_loss,
+        total_loss.float(),
         total_losses_td,
         total_metrics_td,
         n_local,

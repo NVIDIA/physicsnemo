@@ -54,9 +54,10 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
 from nvtx import annotate as nvtx_annotate
 import torch.cuda.nvtx as nvtx
+from tensordict import TensorDict
 
 
-from physicsnemo.distributed import DistributedManager
+from physicsnemo.distributed import DistributedManager, fused_all_reduce
 from physicsnemo.utils import load_checkpoint, save_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
@@ -82,7 +83,7 @@ from physicsnemo.utils.profiling import profile, Profiler
 
 
 from loss import compute_loss_dict
-from utils import get_num_vars, load_scaling_factors, compute_l2, all_reduce_dict
+from utils import get_num_vars, load_scaling_factors, compute_l2
 
 
 def validation_step(
@@ -144,10 +145,21 @@ def validation_step(
                     key: metrics[key] + local_metrics[key] for key in metrics.keys()
                 }
 
-    avg_vloss = running_vloss / (i_batch + 1)
-    metrics = {key: metrics[key] / (i_batch + 1) for key in metrics.keys()}
-
-    metrics = all_reduce_dict(metrics, dm)
+    # Per-rank mean over local batches, then one fused AVG across ranks: a
+    # mean-of-means equal to the global mean under even per-rank batch counts
+    # (the sampler pads to equal shards). No batch count enters the buffer.
+    n_batches = i_batch + 1
+    reduced = fused_all_reduce(
+        TensorDict(
+            {
+                "metrics": {key: value / n_batches for key, value in metrics.items()},
+                "loss": torch.tensor(running_vloss / n_batches, device=device),
+            },
+        ),
+        op=dist.ReduceOp.AVG,
+    )
+    avg_vloss = reduced["loss"].item()
+    metrics = reduced["metrics"]
 
     if dm.rank == 0:
         logger.info(
@@ -296,11 +308,21 @@ def train_epoch(
             gpu_start_info = nvmlDeviceGetMemoryInfo(gpu_handle)
             io_start_time = time.perf_counter()
 
-    last_loss = running_loss / (i_batch + 1)  # loss per batch
-    # Normalize metrics:
-    metrics = {key: metrics[key] / (i_batch + 1) for key in metrics.keys()}
-    # reduce metrics across batch:
-    metrics = all_reduce_dict(metrics, dm)
+    # Per-rank mean over local batches, then one fused AVG across ranks: a
+    # mean-of-means equal to the global mean under even per-rank batch counts
+    # (the sampler pads to equal shards). No batch count enters the buffer.
+    n_batches = i_batch + 1
+    reduced = fused_all_reduce(
+        TensorDict(
+            {
+                "metrics": {key: value / n_batches for key, value in metrics.items()},
+                "loss": torch.tensor(running_loss / n_batches, device=device),
+            },
+        ),
+        op=dist.ReduceOp.AVG,
+    )
+    last_loss = reduced["loss"].item()  # global loss/batch
+    metrics = reduced["metrics"]
     if dm.rank == 0:
         logger.info(
             f" Device {device},  batch: {i_batch + 1}, loss norm: {loss.detach().item():.5f}"

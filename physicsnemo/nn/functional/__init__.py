@@ -34,6 +34,7 @@ from .geometry import (
     farthest_point_sampling,
     mesh_poisson_disk_sample,
     mesh_to_voxel_fraction,
+    ray_mesh_intersect,
     signed_distance_field,
 )
 from .interpolation import (
@@ -80,6 +81,7 @@ __all__ = [
     "polar_and_dipole_basis",
     "radius_search",
     "real",
+    "ray_mesh_intersect",
     "rectilinear_grid_gradient",
     "rfft",
     "rfft2",
