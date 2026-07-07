@@ -39,6 +39,7 @@ Usage::
         dataset.val_start=2023-06-01 \\
         dataset.val_end=2023-12-01
 """
+
 from __future__ import annotations
 
 import logging
@@ -71,7 +72,9 @@ PAIR_DIST_KM = 100.0
 _TRACK_FILL = -9999.0
 
 
-def _haversine_km(lat1: np.ndarray, lon1: np.ndarray, lat2: float, lon2: float) -> np.ndarray:
+def _haversine_km(
+    lat1: np.ndarray, lon1: np.ndarray, lat2: float, lon2: float
+) -> np.ndarray:
     """Vectorised haversine distance (km) from each (lat1, lon1) to (lat2, lon2)."""
     R = 6371.0
     rlat1 = np.deg2rad(np.asarray(lat1, float))
@@ -102,7 +105,9 @@ def _ar_rollout_steps(
         members = []
         for n in range(num_members):
             z = torch.randn(B, latent_dim, device=device, dtype=torch.float32)
-            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=torch.cuda.is_available()):
+            with torch.autocast(
+                "cuda", dtype=torch.bfloat16, enabled=torch.cuda.is_available()
+            ):
                 pred = model(
                     history=per_hist[:, n],
                     latent=z,
@@ -123,6 +128,7 @@ def _ar_rollout_steps(
 
 def _resolve_checkpoints(cfg: DictConfig) -> list[str]:
     from eval import _resolve_checkpoints as _rc
+
     return _rc(cfg)
 
 
@@ -151,7 +157,9 @@ def main(cfg: DictConfig) -> None:
     os.makedirs(outdir, exist_ok=True)
 
     if getattr(cfg.dataset, "spatial_stride", 1) != 1:
-        log.error("TC eval requires spatial_stride=1 (tracker expects 721×1440 ERA5 grid)")
+        log.error(
+            "TC eval requires spatial_stride=1 (tracker expects 721×1440 ERA5 grid)"
+        )
         return
 
     missing = [v for v in TRACKER_VARS if v not in variables]
@@ -177,7 +185,12 @@ def main(cfg: DictConfig) -> None:
     # tracks per IC: (M, n_paths, K, 4) — 4=[lat, lon, msl, w10m]; FILL=-9999 for missing
     all_tracks: list[np.ndarray | None] = []
 
-    log.info("Running TC tracker on %d ICs (K=%d steps, M=%d members)…", len(val_dataset), K, M)
+    log.info(
+        "Running TC tracker on %d ICs (K=%d steps, M=%d members)…",
+        len(val_dataset),
+        K,
+        M,
+    )
 
     with torch.no_grad():
         for bi, batch in enumerate(val_loader):
@@ -189,19 +202,27 @@ def main(cfg: DictConfig) -> None:
             tracker.reset_path_buffer()
 
             for preds_k in _ar_rollout_steps(
-                model, history, background, inv_b,
-                K, latent_dim, M, device,
+                model,
+                history,
+                background,
+                inv_b,
+                K,
+                latent_dim,
+                M,
+                device,
                 val_dataset.output_only_channels(),
             ):
                 # Denormalize full state so tracker sees physical units (Pa, m/s)
                 phys = val_dataset.denormalize_state(preds_k[0])  # (M, C, H, W)
-                tc_in = phys[:, tc_idx, :, :]                     # (M, 5, H, W)
-                step_coords = OrderedDict([
-                    ("batch", np.arange(M)),
-                    ("variable", np.array(TRACKER_VARS)),
-                    ("lat", ARCO_LAT.astype(np.float64)),
-                    ("lon", ARCO_LON.astype(np.float64)),
-                ])
+                tc_in = phys[:, tc_idx, :, :]  # (M, 5, H, W)
+                step_coords = OrderedDict(
+                    [
+                        ("batch", np.arange(M)),
+                        ("variable", np.array(TRACKER_VARS)),
+                        ("lat", ARCO_LAT.astype(np.float64)),
+                        ("lon", ARCO_LON.astype(np.float64)),
+                    ]
+                )
                 tracker(tc_in, step_coords)
 
             buf = tracker.path_buffer  # (M, n_paths, K, 4) after K calls
@@ -212,11 +233,13 @@ def main(cfg: DictConfig) -> None:
                 log.info("  %d/%d ICs", bi + 1, len(val_dataset))
 
     # --- IBTrACS ground truth for all forecast step times ---
-    all_step_times = sorted({
-        t + timedelta(hours=k * step_hours)
-        for t in all_init_times
-        for k in range(1, K + 1)
-    })
+    all_step_times = sorted(
+        {
+            t + timedelta(hours=k * step_hours)
+            for t in all_init_times
+            for k in range(1, K + 1)
+        }
+    )
     log.info("Querying IBTrACS for %d timestamps…", len(all_step_times))
     ibtracs = IBTrACS(region="ALL", time_tolerance=timedelta(hours=step_hours // 2))
     try:
@@ -234,7 +257,9 @@ def main(cfg: DictConfig) -> None:
 
     # Named storms only (paper §4.3)
     if "storm_name" in df.columns:
-        df = df[~df["storm_name"].str.upper().str.strip().isin(["NOT_NAMED", "UNNAMED", ""])]
+        df = df[
+            ~df["storm_name"].str.upper().str.strip().isin(["NOT_NAMED", "UNNAMED", ""])
+        ]
 
     # Storm identifier: prefer storm_id, fall back to storm_name
     id_col = "storm_id" if "storm_id" in df.columns else "storm_name"
@@ -246,8 +271,8 @@ def main(cfg: DictConfig) -> None:
     n_cl = len(REV_CL_RATIOS)
     rev_num = np.zeros((K, n_cl), dtype=np.float64)  # numerator V - V_clim
     rev_n = np.zeros(K, dtype=np.int64)
-    clim_active = 0   # total observations (obs=1 events)
-    clim_total = 0    # total (obs=0 + obs=1) events
+    clim_active = 0  # total observations (obs=1 events)
+    clim_total = 0  # total (obs=0 + obs=1) events
 
     for ic_idx, (init_time, tracks) in enumerate(zip(all_init_times, all_tracks)):
         if tracks is None:
@@ -266,7 +291,7 @@ def main(cfg: DictConfig) -> None:
             s_lon0 = float(srow["tclon"]) % 360.0
 
             # Check if any forecast path start (step 0) is within PAIR_DIST_KM
-            lats0 = tracks[:, :, 0, 0].ravel()   # (M*n_paths,)
+            lats0 = tracks[:, :, 0, 0].ravel()  # (M*n_paths,)
             lons0 = (tracks[:, :, 0, 1] % 360.0).ravel()
             valid0 = lats0 != _TRACK_FILL
             if not valid0.any():
@@ -282,7 +307,9 @@ def main(cfg: DictConfig) -> None:
 
             # Iterate over leads
             for k in range(K_act):
-                t_lead_k = pd.Timestamp(init_time + timedelta(hours=(k + 1) * step_hours))
+                t_lead_k = pd.Timestamp(
+                    init_time + timedelta(hours=(k + 1) * step_hours)
+                )
                 truth_rows = df[
                     (df[id_col].astype(str) == str(s_id)) & (df["time"] == t_lead_k)
                 ]
@@ -340,7 +367,11 @@ def main(cfg: DictConfig) -> None:
         rev_vals[k, ok] = (v_mean[ok] - v_clim[ok]) / denom[ok]
 
     log.info("Paired storms (lead=1): %d", n_pairs[0])
-    log.info("Mean position error at lead 1 (%.0fh): %.1f km", lead_hours[0], pos_err_mean[0] if not np.isnan(pos_err_mean[0]) else -1)
+    log.info(
+        "Mean position error at lead 1 (%.0fh): %.1f km",
+        lead_hours[0],
+        pos_err_mean[0] if not np.isnan(pos_err_mean[0]) else -1,
+    )
 
     # --- Save and plot ---
     np.savez(
@@ -351,8 +382,15 @@ def main(cfg: DictConfig) -> None:
         lead_hours=lead_hours,
         cl_ratios=np.array(REV_CL_RATIOS),
     )
-    plot_tc_position_error(pos_err_mean, lead_hours, os.path.join(outdir, "tc_position_error.png"))
-    plot_tc_track_rev(rev_vals, lead_hours, list(REV_CL_RATIOS), os.path.join(outdir, "tc_track_rev.png"))
+    plot_tc_position_error(
+        pos_err_mean, lead_hours, os.path.join(outdir, "tc_position_error.png")
+    )
+    plot_tc_track_rev(
+        rev_vals,
+        lead_hours,
+        list(REV_CL_RATIOS),
+        os.path.join(outdir, "tc_track_rev.png"),
+    )
     log.info("TC eval done → %s", outdir)
 
 

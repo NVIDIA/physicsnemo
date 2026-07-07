@@ -61,9 +61,7 @@ def fair_crps(
         )
     M = ensemble.shape[1]
     if M < 2:
-        raise ValueError(
-            f"fair_crps requires at least two ensemble members, got M={M}"
-        )
+        raise ValueError(f"fair_crps requires at least two ensemble members, got M={M}")
 
     # term1: E[|X - y|] per location — shape (B, C, H, W)
     term1 = (ensemble - target.unsqueeze(1)).abs().mean(dim=1)
@@ -122,7 +120,9 @@ def build_channel_weights(state_channels: list[str]) -> np.ndarray:
         if m:
             prefix_levels.setdefault(m.group(1), []).append(int(m.group(2)))
 
-    prefix_sum: dict[str, float] = {p: float(sum(lvls)) for p, lvls in prefix_levels.items()}
+    prefix_sum: dict[str, float] = {
+        p: float(sum(lvls)) for p, lvls in prefix_levels.items()
+    }
 
     weights = np.zeros(len(state_channels), dtype=np.float32)
     for i, ch in enumerate(state_channels):

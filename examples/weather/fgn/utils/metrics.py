@@ -1121,7 +1121,9 @@ def plot_tc_position_error(
 
     fig, ax = plt.subplots(figsize=(6, 4))
     valid = ~np.isnan(pos_err)
-    ax.plot(lead_hours[valid] / 24, pos_err[valid], marker="o", ms=3, lw=1.5, label="FGN")
+    ax.plot(
+        lead_hours[valid] / 24, pos_err[valid], marker="o", ms=3, lw=1.5, label="FGN"
+    )
     ax.set_xlabel("Lead time (days)")
     ax.set_ylabel("Position error (km)")
     ax.set_title("TC ensemble-mean track position error")
