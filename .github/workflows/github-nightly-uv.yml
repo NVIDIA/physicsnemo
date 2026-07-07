@@ -286,6 +286,10 @@ jobs:
     name: Coverage
     needs: build-environment
     runs-on: linux-amd64-gpu-h100-latest-1
+    env:
+      # Single source of truth for the coverage gate, kept in lockstep
+      # with github-pr.yml.
+      COVERAGE_FAIL_UNDER: "70"
     container:
       image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
       # /dev/shm defaults to 64 MiB in docker, which DALI's multiprocess
@@ -358,10 +362,17 @@ jobs:
         # -i / --ignore-errors downgrades coverage's fatal "No source for
         # code" error to a warning, matching the PR workflow.  Kept in
         # lockstep with github-pr.yml per .github/CACHE_CONTRACT.md.
-        uv run --no-sync coverage report -i --show-missing --omit="*test*" --omit="*internal*" --omit="*experimental*" --fail-under=45
+        #
+        # Report generation is intentionally kept free of --fail-under
+        # (lockstep with github-pr.yml): gating this step meant a sub-
+        # threshold night silently skipped the html/xml artifacts below.
+        # The threshold is enforced by its own final step instead.
+        uv run --no-sync coverage report -i --show-missing --omit="*test*" --omit="*internal*" --omit="*experimental*"
         uv run --no-sync coverage html -i
-        # Also create an XML report for potential CI integrations
-        uv run --no-sync coverage xml -i -o coverage.xml
+        # xml carries the same omits as the report so the number Codecov
+        # publishes agrees with the enforced threshold (lockstep with
+        # github-pr.yml).
+        uv run --no-sync coverage xml -i -o coverage.xml --omit="*test*" --omit="*internal*" --omit="*experimental*"
 
     - name: Upload coverage HTML report
       uses: actions/upload-artifact@v4
@@ -378,6 +389,24 @@ jobs:
           .coverage
           coverage.xml
         retention-days: 30
+
+    - name: Upload coverage to Codecov
+      if: ${{ !cancelled() }}
+      # Best-effort and inert until CODECOV_TOKEN is provisioned (see
+      # github-pr.yml). The nightly runs the full suite, so this flag is
+      # the meaningful trend line on the dashboard; the PR job's
+      # `pr-core` flag is the testmon-selected subset.
+      continue-on-error: true
+      uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
+      with:
+        disable_search: true
+        files: ./coverage.xml
+        flags: nightly-full
+        token: ${{ secrets.CODECOV_TOKEN }}
+
+    - name: Enforce coverage threshold
+      run: |
+        uv run --no-sync coverage report -i --omit="*test*" --omit="*internal*" --omit="*experimental*" --fail-under="${COVERAGE_FAIL_UNDER}"
 
   # Stage 4: Generate browsable test reports from JUnit XML
   test-reports:
