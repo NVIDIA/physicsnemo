@@ -14,20 +14,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Multi-GPU stream coverage.  The measured data is merged into the canonical
+# coverage report, so [run] must stay combine-compatible with
+# test/coverage.pytest.rc: same `branch` setting, same `source`, and the same
+# absolute-path recording (all CI jobs share the container workspace path).
+# The additions below only make measurement safe across torchrun ranks and
+# dynamically spawned worker processes.
+
 [run]
 branch = True
 concurrency =
     multiprocessing
     thread
-data_file = .coverage.multigpu
-include =
-    physicsnemo/*
-    test/*
+data_file = .coverage.pytest
 parallel = True
 patch =
     subprocess
-relative_files = True
 sigterm = True
+source = physicsnemo
 
 [report]
 ignore_errors = True

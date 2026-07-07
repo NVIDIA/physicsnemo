@@ -154,58 +154,43 @@ Two ways to run the regen:
 Same immutable-key bug class as testmon; migrated to the `-latest`
 slot for parity.
 
-### Multi-GPU impact manifest caches
+### Multi-GPU coverage shard caches
 
-The multi-GPU workflow owns two independent, small JSON caches: one for
-the dynamic stream and one for the static stream.
+The multi-GPU workflow owns two independent shard caches: one for the
+dynamic stream and one for the static stream.
 
 | Property | Value |
 |---|---|
-| Keys | `multigpu-impact-dynamic-v1-latest` and `multigpu-impact-static-v1-latest` |
-| Prefix encodes | stream + manifest schema version |
+| Keys | `coverage-multigpu-dynamic-latest` and `coverage-multigpu-static-latest` |
+| Paths | `.coverage.pytest.multigpu-dynamic*` and `.coverage.pytest.multigpu-static*` |
 | Suffix | literal `latest` (mutable slots, refreshed via delete-before-save) |
-| Contents | source SHA, configured rank count, exact marker-test inventory, per-rank JUnit totals, and repository-relative files executed under the stream's dedicated parallel coverage run |
-| Invalidates when | the manifest schema changes (version bump) |
-| Restore semantics | exact-key hit after clearing the checked-out restore directory; **fail-open** on a miss, malformed schema, marker-inventory drift, unavailable baseline history, or age over 72 hours |
+| Contents | per-rank/per-process parallel coverage data files from a full nightly run of the stream |
+| Restore semantics | **fail-open**; a missing slot only means the combined report lacks multi-GPU lines |
 | Save semantics | successful scheduled runs only, plus explicitly approved default-branch dispatches; PR GPU jobs never write these slots |
 
-These manifests answer a narrower question than the canonical coverage
-baseline: whether a PR changed a file exercised by either multi-GPU
-stream.  They are never combined into the normal coverage report.  The
-nightly runs collect process/rank-safe parallel coverage with
-[`test/coverage.multigpu.rc`](../test/coverage.multigpu.rc), then publish
-only a validated JSON manifest.  Testmon is intentionally not used for
-this purpose: the normal testmon baseline skips multi-GPU tests, dynamic
-tests execute in subprocesses, and static tests execute from multiple
-torchrun ranks.  Manifest publication requires exact JUnit rank files and
-coverage from every configured static rank.  Known rank/topology skips are
-allowlisted; missing dependencies, unavailable CUDA, and other unexpected
-skips prevent publication rather than creating a partial dependency picture.
+The nightly multi-GPU streams measure coverage with
+[`test/coverage.multigpu.rc`](../test/coverage.multigpu.rc), which must
+stay combine-compatible with `test/coverage.pytest.rc` (same `branch`
+setting, same `source`, absolute paths recorded from the shared container
+workspace).  The shards deliberately use the canonical
+`.coverage.pytest.` filename prefix: both the nightly `coverage` job and
+the PR `Coverage` job restore these two slots next to the canonical
+baseline and their existing plain `coverage combine` folds everything —
+CPU baseline, PR-run shards, and multi-GPU shards — into one report.
+Testmon is intentionally not extended to the multi-GPU streams: dynamic
+tests execute in worker subprocesses and static tests execute from
+multiple torchrun ranks, neither of which testmon can attribute.
 
-The PR selector also treats dependency files, shared CI setup actions,
-the global pytest harness, new marker-bearing tests, newly added
-production modules, Python helpers below marker-test directories,
-non-Python package/test resources, and known distributed source prefixes
-as conservative triggers.  API failures,
-truncated file lists, stale manifests, and selector failures all run the
-affected stream rather than silently skipping it.
-
-The selector reads PR metadata before and after the paginated files API
-request.  The PR head must remain stable and equal the mirrored checkout.
-For a manifest older than the PR base, the selector verifies ancestry and
-inspects the complete local manifest-to-base Git diff.  Relevant baseline
-changes run the affected stream; unrelated drift (for example, README-only
-changes) can still skip it.  Missing or shallow history fails open.  This
-prevents a source push or an advanced default branch from turning an old
-dependency picture into a false skip without making every post-nightly PR
-consume both GPU pools.
+Multi-GPU jobs on PR mirror branches are opt-in (labels or manual
+dispatch), never collect coverage, and are not required checks, so the
+merge queue does not need passthrough statuses for them.
 
 ## Reusable building blocks
 
 ### `replace-cache` action ([.github/actions/replace-cache/action.yml](actions/replace-cache/action.yml))
 
 All mutable-slot caches above (uv, JIT, testmon, coverage, and the two
-multi-GPU impact manifests) share the same delete-before-save recipe:
+multi-GPU coverage shard slots) share the same delete-before-save recipe:
 GitHub Actions cache slots are
 immutable, so refreshing a `-latest` key requires deleting the
 existing entry, calling `actions/cache/save`, and (because the save
@@ -281,9 +266,8 @@ Guarantees:
   picked up without rebuilding the venv.
 
 The multi-GPU workflow follows the same environment contract and is
-restore-only for the uv and JIT caches.  Its CPU selector separately
-restores the two impact manifests.  Only successful nightly publisher
-jobs can replace those manifest slots.
+restore-only for the uv and JIT caches.  Only its successful nightly
+publisher jobs can replace the two coverage shard slots.
 
 ## Operational notes
 
@@ -295,20 +279,15 @@ jobs can replace those manifest slots.
   scheduled/default-branch publisher runs are never canceled.
 - **Runner inventory**: both streams default to the confirmed
   `linux-amd64-gpu-h100-latest-2` pool.  Some static tests intentionally
-  skip configurations that require four ranks.  Set both
+  skip configurations that require four ranks; set both
   `MULTIGPU_STATIC_RUNNER` and `MULTIGPU_STATIC_NPROC` repository
-  variables together when a four-GPU pool is available; the manifest
-  records its rank count and JUnit skip total.  Jobs require visible GPU
-  count to equal `NPROC`, and the selector rejects a cached manifest whose
-  rank count or runner profile no longer matches the repository variables.
-  Manifest `complete` is scoped to that recorded runner/rank profile; the
-  default two-rank stream is not a claim that four-rank-only cases executed.
-- **Operator overrides**: `ci:multi-gpu`, `ci:multi-gpu-dynamic`, and
-  `ci:multi-gpu-static` force selection on the next mirror sync or rerun.
-  Applying a label alone does not emit a push event; use the manual
-  dispatch for an immediate run.
+  variables together when a four-GPU pool is available.
+- **PR opt-in**: `ci:multi-gpu`, `ci:multi-gpu-dynamic`, and
+  `ci:multi-gpu-static` labels select the streams on the next mirror sync
+  or rerun.  Applying a label alone does not emit a push event; use the
+  manual dispatch for an immediate run.
 - **Save verification**: every mutable-slot save (uv download, JIT,
-  testmon, coverage, multi-GPU impact manifests) goes through the
+  testmon, coverage, multi-GPU coverage shards) goes through the
   `replace-cache` action, which re-queries `gh cache list` after
   `actions/cache/save` and fails the job if the slot is not visible.
   `cache/save` silently no-ops on key collision and only logs a warning
@@ -326,10 +305,10 @@ jobs can replace those manifest slots.
 - **PR workflows never save the uv cache.** Only the nightly mutates
   the `-latest` slot; PRs restore fail-open and any fresh wheels they
   download are simply not preserved until the next nightly.
-- **PR workflows never save impact manifests.** GPU test jobs have
-  read-only Actions permissions. Dedicated CPU publisher jobs receive
-  `actions: write`, and only for successful scheduled or explicitly
-  approved default-branch runs.
+- **PR workflows never save multi-GPU coverage shards.** GPU test jobs
+  have read-only Actions permissions. Dedicated CPU publisher jobs
+  receive `actions: write`, and only for successful scheduled or
+  explicitly approved default-branch runs.
 
 ## Bumping any of the baseline values
 

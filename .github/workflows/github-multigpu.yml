@@ -14,12 +14,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Multi-GPU CI: the nightly schedule runs both marker streams in full and
+# publishes their coverage shards, which the canonical coverage report
+# (nightly and PR Coverage jobs) merges in.  On PR mirror branches the
+# streams are opt-in: apply `ci:multi-gpu` (both), `ci:multi-gpu-dynamic`,
+# or `ci:multi-gpu-static` before the next mirror push, or use the manual
+# dispatch for an immediate run on any ref.
+
 name: Multi-GPU GitHub CI
 
 on:
   schedule:
-    # Run after the 02:00 UTC canonical nightly has refreshed shared caches.
-    - cron: "17 6 * * *"
+    # Run ahead of the 02:00 UTC canonical nightly (static has a 90-minute
+    # ceiling) so tonight's coverage shards are published before the
+    # canonical coverage job merges them -- one coherent nightly view
+    # instead of an off-by-one-night report.  The shared uv/JIT caches
+    # restored here are fail-open, so consuming the previous nightly's
+    # slots only costs wheel downloads on the rare day uv.lock changed.
+    - cron: "47 23 * * *"
   workflow_dispatch:
     inputs:
       stream:
@@ -31,8 +43,8 @@ on:
           - static
         default: both
         required: true
-      publish-impact:
-        description: Publish impact manifests (default-branch dispatches only)
+      publish-coverage:
+        description: Publish coverage shards (default-branch dispatches only)
         type: boolean
         default: false
         required: false
@@ -60,15 +72,11 @@ env:
   UV_CACHE_KEY_PREFIX: "uv-cache-nightly-cuda12.8.1-cudnn-devel-ubuntu24.04-py3.12-uv0.11.7-fullextras"
   JIT_CACHE_KEY: "jit-cache-cuda12.8.1-cudnn-devel-ubuntu24.04-py3.12-latest"
   JIT_CACHE_DIR: "/root/.cache/jit"
-  IMPACT_CACHE_VERSION: "v1"
   # Two GPUs match the runner inventory already used by this repository.
-  # Static records rank/skip totals; set both static repository variables to
-  # exercise the cases that intentionally require four ranks when that pool
-  # becomes available.
+  # Set both static repository variables together to exercise the cases that
+  # intentionally require four ranks when that pool becomes available.
   MULTIGPU_DYNAMIC_NPROC: ${{ vars.MULTIGPU_DYNAMIC_NPROC || '2' }}
   MULTIGPU_STATIC_NPROC: ${{ vars.MULTIGPU_STATIC_NPROC || '2' }}
-  MULTIGPU_DYNAMIC_RUNNER_PROFILE: ${{ vars.MULTIGPU_DYNAMIC_RUNNER || 'linux-amd64-gpu-h100-latest-2' }}
-  MULTIGPU_STATIC_RUNNER_PROFILE: ${{ vars.MULTIGPU_STATIC_RUNNER || 'linux-amd64-gpu-h100-latest-2' }}
   UV_FROZEN: "1"
   UV_NO_SYNC: "1"
   PYVISTA_OFF_SCREEN: "true"
@@ -76,9 +84,10 @@ env:
 jobs:
   select:
     name: multi-GPU selection
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
-      actions: read
       contents: read
       pull-requests: read
     outputs:
@@ -86,38 +95,8 @@ jobs:
       run_static: ${{ steps.gate.outputs.run_static }}
 
     steps:
-      - uses: actions/checkout@v5
-
-      - name: Prepare isolated impact-cache paths
-        if: ${{ github.event_name == 'push' }}
-        run: |
-          set -euo pipefail
-          # Cache versions include path metadata, so restore with the same
-          # relative paths publishers save. Clear PR-controlled contents first.
-          rm -rf .multigpu-impact
-          mkdir -p .multigpu-impact
-
-      - name: Restore dynamic impact manifest
-        id: restore_dynamic
-        if: ${{ github.event_name == 'push' }}
-        continue-on-error: true
-        uses: actions/cache/restore@v5
-        with:
-          path: .multigpu-impact/multigpu-impact-dynamic.json
-          key: multigpu-impact-dynamic-${{ env.IMPACT_CACHE_VERSION }}-latest
-
-      - name: Restore static impact manifest
-        id: restore_static
-        if: ${{ github.event_name == 'push' }}
-        continue-on-error: true
-        uses: actions/cache/restore@v5
-        with:
-          path: .multigpu-impact/multigpu-impact-static.json
-          key: multigpu-impact-static-${{ env.IMPACT_CACHE_VERSION }}-latest
-
-      - name: Fetch pull-request metadata and files
-        if: ${{ github.event_name == 'push' }}
-        continue-on-error: true
+      - name: Check multi-GPU opt-in labels
+        id: gate
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REF_NAME: ${{ github.ref_name }}
@@ -130,66 +109,41 @@ jobs:
             echo "::error::Unexpected PR mirror ref: $REF_NAME"
             exit 2
           fi
-          gh api "repos/${REPOSITORY}/pulls/${pr_number}" \
-            > "${RUNNER_TEMP}/multigpu-pr-before.json"
-          gh api --paginate --slurp \
-            "repos/${REPOSITORY}/pulls/${pr_number}/files?per_page=100" \
-            > "${RUNNER_TEMP}/multigpu-pr-files.json"
-          # Re-read metadata so a source push during pagination cannot make
-          # us select against a different diff than the mirrored checkout.
-          gh api "repos/${REPOSITORY}/pulls/${pr_number}" \
-            > "${RUNNER_TEMP}/multigpu-pr-after.json"
-
-      - name: Fetch recent default-branch history for baseline comparison
-        if: ${{ github.event_name == 'push' }}
-        continue-on-error: true
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          set -euo pipefail
-          git fetch --no-tags --depth=512 origin \
-            "+refs/heads/${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}"
-
-      - name: Select multi-GPU streams
-        id: gate
-        env:
-          DISPATCH_STREAM: ${{ inputs.stream || 'both' }}
-          DYNAMIC_CACHE_HIT: ${{ steps.restore_dynamic.outputs.cache-hit }}
-          STATIC_CACHE_HIT: ${{ steps.restore_static.outputs.cache-hit }}
-        run: |
-          set -euo pipefail
-          dynamic_manifest="${RUNNER_TEMP}/missing-dynamic-impact.json"
-          static_manifest="${RUNNER_TEMP}/missing-static-impact.json"
-          if [ "$DYNAMIC_CACHE_HIT" = "true" ]; then
-            dynamic_manifest=".multigpu-impact/multigpu-impact-dynamic.json"
+          labels=$(gh api "repos/${REPOSITORY}/pulls/${pr_number}" \
+            --jq '[.labels[].name] | join("\n")')
+          run_dynamic=false
+          run_static=false
+          if grep -qxF "ci:multi-gpu" <<<"$labels"; then
+            run_dynamic=true
+            run_static=true
           fi
-          if [ "$STATIC_CACHE_HIT" = "true" ]; then
-            static_manifest=".multigpu-impact/multigpu-impact-static.json"
+          if grep -qxF "ci:multi-gpu-dynamic" <<<"$labels"; then
+            run_dynamic=true
           fi
-          python3 .github/scripts/multigpu_ci.py \
-            --repo-root "$GITHUB_WORKSPACE" \
-            gate \
-            --event-name "${GITHUB_EVENT_NAME}" \
-            --ref-name "${GITHUB_REF_NAME}" \
-            --dispatch-stream "$DISPATCH_STREAM" \
-            --pr-json "${RUNNER_TEMP}/multigpu-pr-before.json" \
-            --pr-after-json "${RUNNER_TEMP}/multigpu-pr-after.json" \
-            --files-json "${RUNNER_TEMP}/multigpu-pr-files.json" \
-            --expected-head-sha "$GITHUB_SHA" \
-            --dynamic-nproc "$MULTIGPU_DYNAMIC_NPROC" \
-            --static-nproc "$MULTIGPU_STATIC_NPROC" \
-            --dynamic-runner-profile "$MULTIGPU_DYNAMIC_RUNNER_PROFILE" \
-            --static-runner-profile "$MULTIGPU_STATIC_RUNNER_PROFILE" \
-            --dynamic-manifest "$dynamic_manifest" \
-            --static-manifest "$static_manifest" \
-            --max-age-hours 72 \
-            --github-output "$GITHUB_OUTPUT" \
-            --step-summary "$GITHUB_STEP_SUMMARY"
+          if grep -qxF "ci:multi-gpu-static" <<<"$labels"; then
+            run_static=true
+          fi
+          echo "run_dynamic=${run_dynamic}" >> "$GITHUB_OUTPUT"
+          echo "run_static=${run_static}" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Multi-GPU PR selection"
+            echo
+            echo "PR #${pr_number}: dynamic=${run_dynamic} static=${run_static}"
+            echo
+            echo "Opt in with the \`ci:multi-gpu\`, \`ci:multi-gpu-dynamic\`,"
+            echo "or \`ci:multi-gpu-static\` label before the next mirror"
+            echo "push, or use the manual workflow dispatch."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   multigpu_dynamic:
     name: multigpu-dynamic
     needs: select
-    if: ${{ always() && !cancelled() && (needs.select.result != 'success' || needs.select.outputs.run_dynamic != 'false') }}
+    if: >-
+      ${{ !cancelled() &&
+          (github.event_name == 'schedule' ||
+           (github.event_name == 'workflow_dispatch' &&
+            (inputs.stream == 'both' || inputs.stream == 'dynamic')) ||
+           needs.select.outputs.run_dynamic == 'true') }}
     runs-on: ${{ vars.MULTIGPU_DYNAMIC_RUNNER || 'linux-amd64-gpu-h100-latest-2' }}
     timeout-minutes: 45
     permissions:
@@ -206,11 +160,10 @@ jobs:
         with:
           stream: dynamic
           nproc: ${{ env.MULTIGPU_DYNAMIC_NPROC }}
-          runner-profile: ${{ env.MULTIGPU_DYNAMIC_RUNNER_PROFILE }}
-          collect-impact: >-
+          collect-coverage: >-
             ${{ github.event_name == 'schedule' ||
                 (github.event_name == 'workflow_dispatch' &&
-                 inputs['publish-impact'] && github.ref_type == 'branch' &&
+                 inputs['publish-coverage'] && github.ref_type == 'branch' &&
                  github.ref_name == github.event.repository.default_branch) }}
           python-version: ${{ env.PYTHON_VERSION }}
           uv-version: ${{ env.UV_VERSION }}
@@ -223,7 +176,12 @@ jobs:
   multigpu_static:
     name: multigpu-static
     needs: select
-    if: ${{ always() && !cancelled() && (needs.select.result != 'success' || needs.select.outputs.run_static != 'false') }}
+    if: >-
+      ${{ !cancelled() &&
+          (github.event_name == 'schedule' ||
+           (github.event_name == 'workflow_dispatch' &&
+            (inputs.stream == 'both' || inputs.stream == 'static')) ||
+           needs.select.outputs.run_static == 'true') }}
     runs-on: ${{ vars.MULTIGPU_STATIC_RUNNER || 'linux-amd64-gpu-h100-latest-2' }}
     timeout-minutes: 90
     permissions:
@@ -240,11 +198,10 @@ jobs:
         with:
           stream: static
           nproc: ${{ env.MULTIGPU_STATIC_NPROC }}
-          runner-profile: ${{ env.MULTIGPU_STATIC_RUNNER_PROFILE }}
-          collect-impact: >-
+          collect-coverage: >-
             ${{ github.event_name == 'schedule' ||
                 (github.event_name == 'workflow_dispatch' &&
-                 inputs['publish-impact'] && github.ref_type == 'branch' &&
+                 inputs['publish-coverage'] && github.ref_type == 'branch' &&
                  github.ref_name == github.event.repository.default_branch) }}
           python-version: ${{ env.PYTHON_VERSION }}
           uv-version: ${{ env.UV_VERSION }}
@@ -320,13 +277,13 @@ jobs:
           fail-on-error: "false"
           fail-on-empty: "false"
 
-  publish_dynamic_impact:
-    name: publish dynamic impact manifest
+  publish_dynamic_coverage:
+    name: publish dynamic coverage
     needs: multigpu_dynamic
     if: >-
       ${{ !cancelled() && needs.multigpu_dynamic.result == 'success' &&
           (github.event_name == 'schedule' ||
-           (github.event_name == 'workflow_dispatch' && inputs['publish-impact'] &&
+           (github.event_name == 'workflow_dispatch' && inputs['publish-coverage'] &&
             github.ref_type == 'branch' &&
             github.ref_name == github.event.repository.default_branch)) }}
     runs-on: ubuntu-latest
@@ -336,26 +293,26 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
-      - name: Download dynamic impact manifest
+      - name: Download dynamic coverage shards
         uses: actions/download-artifact@v4
         with:
-          name: multigpu-impact-dynamic
-          path: .multigpu-impact
-      - name: Replace dynamic impact cache
+          name: coverage-multigpu-dynamic
+          path: .
+      - name: Replace dynamic coverage cache
         uses: ./.github/actions/replace-cache
         with:
-          path: .multigpu-impact/multigpu-impact-dynamic.json
-          key: multigpu-impact-dynamic-${{ env.IMPACT_CACHE_VERSION }}-latest
-          description: dynamic multi-GPU impact manifest
+          path: .coverage.pytest.multigpu-dynamic*
+          key: coverage-multigpu-dynamic-latest
+          description: dynamic multi-GPU coverage shards
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-  publish_static_impact:
-    name: publish static impact manifest
+  publish_static_coverage:
+    name: publish static coverage
     needs: multigpu_static
     if: >-
       ${{ !cancelled() && needs.multigpu_static.result == 'success' &&
           (github.event_name == 'schedule' ||
-           (github.event_name == 'workflow_dispatch' && inputs['publish-impact'] &&
+           (github.event_name == 'workflow_dispatch' && inputs['publish-coverage'] &&
             github.ref_type == 'branch' &&
             github.ref_name == github.event.repository.default_branch)) }}
     runs-on: ubuntu-latest
@@ -365,15 +322,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
-      - name: Download static impact manifest
+      - name: Download static coverage shards
         uses: actions/download-artifact@v4
         with:
-          name: multigpu-impact-static
-          path: .multigpu-impact
-      - name: Replace static impact cache
+          name: coverage-multigpu-static
+          path: .
+      - name: Replace static coverage cache
         uses: ./.github/actions/replace-cache
         with:
-          path: .multigpu-impact/multigpu-impact-static.json
-          key: multigpu-impact-static-${{ env.IMPACT_CACHE_VERSION }}-latest
-          description: static multi-GPU impact manifest
+          path: .coverage.pytest.multigpu-static*
+          key: coverage-multigpu-static-latest
+          description: static multi-GPU coverage shards
           github-token: ${{ secrets.GITHUB_TOKEN }}

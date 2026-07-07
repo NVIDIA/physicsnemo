@@ -24,11 +24,8 @@ inputs:
   nproc:
     description: Number of visible GPUs/ranks for the stream
     required: true
-  runner-profile:
-    description: Stable configured runner label recorded in impact manifests
-    required: true
-  collect-impact:
-    description: Collect and upload a nightly impact manifest
+  collect-coverage:
+    description: Collect and upload coverage data for the canonical report
     required: false
     default: "false"
   python-version:
@@ -91,115 +88,65 @@ runs:
           dynamic|static) ;;
           *) echo "::error::Unknown multi-GPU stream: $STREAM"; exit 2 ;;
         esac
-        base="${RUNNER_TEMP}/physicsnemo-multigpu-${STREAM}"
-        mkdir -p "${base}/coverage" "${base}/junit" "${base}/impact"
-        echo "test_list=${base}/test-list.json" >> "$GITHUB_OUTPUT"
-        echo "junit_dir=${base}/junit" >> "$GITHUB_OUTPUT"
-        echo "coverage_file=${base}/coverage/.coverage.multigpu-${STREAM}" >> "$GITHUB_OUTPUT"
-        echo "impact_file=${base}/impact/multigpu-impact-${STREAM}.json" >> "$GITHUB_OUTPUT"
-
-    - name: Discover multi-GPU tests
-      shell: bash
-      env:
-        STREAM: ${{ inputs.stream }}
-        TEST_LIST: ${{ steps.paths.outputs.test_list }}
-      run: |
-        set -euo pipefail
-        .venv/bin/python .github/scripts/multigpu_ci.py \
-          --repo-root "$GITHUB_WORKSPACE" \
-          list-tests \
-          --stream "$STREAM" \
-          --output "$TEST_LIST"
-        cat "$TEST_LIST"
-
-    - name: Verify GPU allocation
-      shell: bash
-      env:
-        NPROC: ${{ inputs.nproc }}
-      run: |
-        set -euo pipefail
-        if ! [[ "$NPROC" =~ ^[1-9][0-9]*$ ]]; then
-          echo "::error::nproc must be a positive integer; got '$NPROC'"
-          exit 2
-        fi
-        if [ "$NPROC" -lt 2 ]; then
-          echo "::error::multi-GPU streams require nproc >= 2; got '$NPROC'"
-          exit 2
-        fi
-        nvidia-smi -L || true
-        .venv/bin/python .github/scripts/multigpu_ci.py \
-          verify-gpus --expected "$NPROC"
-        echo "Preserving the runner's existing CUDA_VISIBLE_DEVICES allocation."
+        junit_dir="${RUNNER_TEMP}/physicsnemo-multigpu-${STREAM}/junit"
+        mkdir -p "$junit_dir"
+        echo "junit_dir=${junit_dir}" >> "$GITHUB_OUTPUT"
+        # Coverage shards live in the workspace root under the canonical
+        # `.coverage.pytest.` prefix so `coverage combine` merges them into
+        # the full report without extra plumbing.
+        echo "coverage_file=${GITHUB_WORKSPACE}/.coverage.pytest.multigpu-${STREAM}" >> "$GITHUB_OUTPUT"
 
     - name: Run multi-GPU tests
       shell: bash
       env:
         STREAM: ${{ inputs.stream }}
         NPROC: ${{ inputs.nproc }}
-        COLLECT_IMPACT: ${{ inputs.collect-impact }}
-        TEST_LIST: ${{ steps.paths.outputs.test_list }}
+        COLLECT_COVERAGE: ${{ inputs.collect-coverage }}
         JUNIT_DIR: ${{ steps.paths.outputs.junit_dir }}
-        COVERAGE_FILE: ${{ steps.paths.outputs.coverage_file }}
+        COVERAGE_BASE: ${{ steps.paths.outputs.coverage_file }}
         COVERAGE_RC: ${{ github.workspace }}/test/coverage.multigpu.rc
+        PYTHON: ${{ github.workspace }}/.venv/bin/python
         WARP_CACHE_PATH: ${{ inputs.jit-cache-dir }}/warp
         TRITON_CACHE_DIR: ${{ inputs.jit-cache-dir }}/triton
         TORCHINDUCTOR_CACHE_DIR: ${{ inputs.jit-cache-dir }}/inductor
       run: |
         set -euo pipefail
-        runner_args=(
-          .github/scripts/multigpu_ci.py
-          --repo-root "$GITHUB_WORKSPACE"
-          run-tests
-          --stream "$STREAM"
-          --test-list "$TEST_LIST"
-          --junit-dir "$JUNIT_DIR"
-        )
-        if [ "$COLLECT_IMPACT" = "true" ]; then
-          COVERAGE_FILE="$COVERAGE_FILE" .venv/bin/python -m coverage erase \
-            --rcfile="$COVERAGE_RC"
-          runner_args+=(
-            --coverage-file "$COVERAGE_FILE"
-            --coverage-rc "$COVERAGE_RC"
-          )
+        if [ "$COLLECT_COVERAGE" = "true" ]; then
+          # Reused self-hosted workspaces can hold shards from earlier runs.
+          rm -f "${COVERAGE_BASE}" "${COVERAGE_BASE}".*
         fi
+        # Each rank writes its own JUnit file, and its own coverage shard
+        # base so parallel-mode suffixes cannot collide across ranks.  The
+        # rank command is single-quoted: $RANK and the exported env above
+        # expand inside each torchrun worker, not here.  Dynamic runs the
+        # same command as a single pseudo-rank without torchrun.
+        rank_cmd='
+          set -euo pipefail
+          pytest_args=(
+            "--multigpu-${STREAM}"
+            -m "multigpu_${STREAM}"
+            -p no:cacheprovider
+            "--junitxml=${JUNIT_DIR}/multigpu-${STREAM}-rank-${RANK}.xml"
+            test/
+          )
+          if [ "$COLLECT_COVERAGE" = "true" ]; then
+            export COVERAGE_FILE="${COVERAGE_BASE}.rank-${RANK}"
+            exec "$PYTHON" -m coverage run --rcfile="$COVERAGE_RC" \
+              -m pytest "${pytest_args[@]}"
+          fi
+          exec "$PYTHON" -m pytest "${pytest_args[@]}"
+        '
         if [ "$STREAM" = "static" ]; then
-          .venv/bin/torchrun \
+          "${GITHUB_WORKSPACE}/.venv/bin/torchrun" \
             --standalone \
             --nnodes=1 \
             --nproc-per-node="$NPROC" \
             --max-restarts=0 \
-            "${runner_args[@]}"
+            --no-python \
+            bash -c "$rank_cmd"
         else
-          .venv/bin/python "${runner_args[@]}"
+          RANK=0 bash -c "$rank_cmd"
         fi
-
-    - name: Build impact manifest
-      if: ${{ success() && inputs.collect-impact == 'true' }}
-      shell: bash
-      env:
-        STREAM: ${{ inputs.stream }}
-        NPROC: ${{ inputs.nproc }}
-        TEST_LIST: ${{ steps.paths.outputs.test_list }}
-        JUNIT_DIR: ${{ steps.paths.outputs.junit_dir }}
-        COVERAGE_FILE: ${{ steps.paths.outputs.coverage_file }}
-        COVERAGE_RC: ${{ github.workspace }}/test/coverage.multigpu.rc
-        IMPACT_FILE: ${{ steps.paths.outputs.impact_file }}
-        RUNNER_PROFILE: ${{ inputs.runner-profile }}
-      run: |
-        set -euo pipefail
-        .venv/bin/python .github/scripts/multigpu_ci.py \
-          --repo-root "$GITHUB_WORKSPACE" \
-          build-manifest \
-          --stream "$STREAM" \
-          --test-list "$TEST_LIST" \
-          --coverage-file "$COVERAGE_FILE" \
-          --coverage-rc "$COVERAGE_RC" \
-          --junit-dir "$JUNIT_DIR" \
-          --output "$IMPACT_FILE" \
-          --source-sha "$GITHUB_SHA" \
-          --nproc "$NPROC" \
-          --runner-profile "$RUNNER_PROFILE"
-        cat "$IMPACT_FILE"
 
     - name: Upload JUnit XML
       if: ${{ always() && !cancelled() && steps.paths.outcome == 'success' }}
@@ -210,11 +157,12 @@ runs:
         if-no-files-found: warn
         retention-days: 7
 
-    - name: Upload impact manifest
-      if: ${{ success() && inputs.collect-impact == 'true' }}
+    - name: Upload coverage shards
+      if: ${{ success() && inputs.collect-coverage == 'true' }}
       uses: actions/upload-artifact@v4
       with:
-        name: multigpu-impact-${{ inputs.stream }}
-        path: ${{ steps.paths.outputs.impact_file }}
+        name: coverage-multigpu-${{ inputs.stream }}
+        path: ${{ github.workspace }}/.coverage.pytest.multigpu-${{ inputs.stream }}*
+        include-hidden-files: true
         if-no-files-found: error
         retention-days: 14
