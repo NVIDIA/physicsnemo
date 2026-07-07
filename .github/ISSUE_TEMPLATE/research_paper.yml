@@ -22,17 +22,11 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for helping grow the [Research and Publications Using PhysicsNeMo](https://github.com/NVIDIA/physicsnemo/blob/main/docs/research.md) list!
-        - Inclusion does not imply endorsement; submissions are reviewed before being added.
-        - Authors may also request a correction or removal through this form.
-
-  - type: input
-    id: title
-    attributes:
-      label: Paper title
-      placeholder: "DoMINO: A Decomposable Multi-scale Iterative Neural Operator ..."
-    validations:
-      required: true
+        Thanks for taking the time to help PhysicsNeMo and share your research!
+        - By submitting this issue, you agree to follow our [Code of Conduct](https://github.com/NVIDIA/physicsnemo/blob/main/CONTRIBUTING.md)
+        - You also confirm that you have searched the [existing research list](https://github.com/NVIDIA/physicsnemo/blob/main/docs/research.md) and this paper is not already included
+        - Inclusion does not imply endorsement; submissions are reviewed before being added. Authors may also request a correction or removal through this form.
+        - Put the paper title in the issue title above, after `[PAPER]:`.
 
   - type: input
     id: link
@@ -46,30 +40,14 @@ body:
     id: usage
     attributes:
       label: How PhysicsNeMo was used
-      description: Briefly describe how PhysicsNeMo was used (which models, modules, or examples), and quote a sentence from the paper if possible.
+      description: Which PhysicsNeMo models, modules, or examples did you use? Quote a sentence from the paper if possible, and link your code if it is available.
+      placeholder: "Example: We trained the DoMINO neural operator from PhysicsNeMo for aerodynamic surrogate modeling. Code: https://github.com/..."
     validations:
       required: true
-
-  - type: input
-    id: code_link
-    attributes:
-      label: Code link (if available)
-      placeholder: "https://github.com/..."
-    validations:
-      required: false
 
   - type: input
     id: domain
     attributes:
       label: Domain
-      placeholder: "CFD / CAE, PINNs / PDEs, weather, subsurface, ..."
-    validations:
-      required: false
-
-  - type: checkboxes
-    id: confirm
-    attributes:
-      label: Confirmation
-      options:
-        - label: I have searched the existing [research list](https://github.com/NVIDIA/physicsnemo/blob/main/docs/research.md) and this paper is not already included.
-          required: true
+      description: The application area this work falls under.
+      placeholder: "CFD / CAE, weather, subsurface, structural mechanics, ..."
