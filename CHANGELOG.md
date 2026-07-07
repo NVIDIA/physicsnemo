@@ -191,6 +191,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `physicsnemo.mesh.sampling.sample_data_at_points` now handles integer and
+  boolean fields by returning `float64`, so NaN sentinels and non-integral
+  interpolation or multi-cell means are representable (subject to the usual
+  `float64` precision limits). Point-data interpolation now promotes field and
+  geometry dtypes consistently, and accumulation uses fewer full-sized
+  temporaries and CUDA host synchronizations.
 - `physicsnemo.mesh.projections.extrude` now produces a *conforming* (crack-free)
   simplicial complex for multi-cell inputs. Each prism was previously tessellated
   using the per-cell local vertex order, so adjacent cells that listed a shared
