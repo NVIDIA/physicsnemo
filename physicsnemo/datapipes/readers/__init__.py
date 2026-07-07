@@ -37,6 +37,7 @@ from physicsnemo.datapipes.readers.zarr_mesh import (
     save_domain_mesh_to_zarr,
     save_mesh_to_zarr,
     to_cell_soup,
+    validate_mesh_zarr,
 )
 
 __all__ = [
@@ -53,4 +54,5 @@ __all__ = [
     "save_mesh_to_zarr",
     "save_domain_mesh_to_zarr",
     "to_cell_soup",
+    "validate_mesh_zarr",
 ]

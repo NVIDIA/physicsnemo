@@ -57,6 +57,7 @@ from physicsnemo.datapipes.readers import (
     save_domain_mesh_to_zarr,
     save_mesh_to_zarr,
     to_cell_soup,
+    validate_mesh_zarr,
 )
 from physicsnemo.datapipes.registry import (
     COMPONENT_REGISTRY,
@@ -173,6 +174,7 @@ __all__ = [
     "save_mesh_to_zarr",
     "save_domain_mesh_to_zarr",
     "to_cell_soup",
+    "validate_mesh_zarr",
     # Collation
     "Collator",
     "DefaultCollator",

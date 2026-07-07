@@ -343,6 +343,50 @@ def test_zarr_domain_mesh_reader_rejects_mesh_groups(zarr_mesh_dir):
         dp.ZarrDomainMeshReader(zarr_mesh_dir)
 
 
+def test_writer_accepts_store_object(tmp_path):
+    import zarr as zarr_mod
+
+    store = zarr_mod.storage.LocalStore(str(tmp_path / "s.zarr"))
+    dp.save_mesh_to_zarr(_make_mesh(n_cells=10), store)
+    mesh, _ = dp.ZarrMeshReader(tmp_path)[0]
+    assert mesh.n_cells == 10
+
+
+def test_schema_version_rejection(tmp_path):
+    import zarr as zarr_mod
+
+    dp.save_mesh_to_zarr(_make_mesh(n_cells=10), tmp_path / "s.zarr")
+    g = zarr_mod.open_group(str(tmp_path / "s.zarr"), mode="r+")
+    g.attrs["schema_version"] = 999
+    reader = dp.ZarrMeshReader(tmp_path)
+    with pytest.raises(ValueError, match="schema_version=999"):
+        reader[0]
+    with pytest.raises(ValueError, match="schema_version=999"):
+        dp.validate_mesh_zarr(tmp_path / "s.zarr")
+
+
+def test_validate_mesh_zarr(tmp_path, domain_zarr_dir):
+    dp.save_mesh_to_zarr(_make_mesh(n_cells=25), tmp_path / "ok.zarr")
+    summary = dp.validate_mesh_zarr(tmp_path / "ok.zarr")
+    assert summary["layout"] == "soup" and summary["n_cells"] == 25
+
+    domain_summary = dp.validate_mesh_zarr(domain_zarr_dir / "run_0.zarr")
+    assert domain_summary["format"] == "physicsnemo-domainmesh-zarr"
+    assert domain_summary["boundaries"]["vehicle"]["layout"] == "soup"
+
+    # Corrupt an attr and a soup claim; both must be caught.
+    import zarr as zarr_mod
+
+    g = zarr_mod.open_group(str(tmp_path / "ok.zarr"), mode="r+")
+    g.attrs["n_cells"] = 24
+    with pytest.raises(ValueError, match="n_cells"):
+        dp.validate_mesh_zarr(tmp_path / "ok.zarr")
+    g.attrs["n_cells"] = 25
+    g["cells"][0] = [2, 1, 0]  # break the arange while layout says soup
+    with pytest.raises(ValueError, match="not arange"):
+        dp.validate_mesh_zarr(tmp_path / "ok.zarr")
+
+
 def test_mesh_dataset_pipeline(zarr_mesh_dir):
     """ZarrMeshReader drops into MeshDataset + mesh transforms."""
     from physicsnemo.datapipes.transforms.mesh import MeshToDomainMesh

@@ -126,6 +126,29 @@ def _is_soup(mesh) -> bool:
     return bool(torch.equal(cells.reshape(-1), expected))
 
 
+def _open_group(path_or_store, mode: str):
+    """Open a zarr group from a filesystem path or any zarr StoreLike.
+
+    Accepting store objects keeps the writers forward-compatible with
+    non-filesystem backends (object stores, transactional stores such as
+    Icechunk) without an API change.
+    """
+    if isinstance(path_or_store, (str, Path)):
+        return zarr.open_group(str(path_or_store), mode=mode)
+    return zarr.open_group(store=path_or_store, mode=mode)
+
+
+def _check_schema_version(attrs, where) -> None:
+    """Reject groups written by a newer schema (see MESH_ZARR_SCHEMA.md)."""
+    version = attrs.get("schema_version", SCHEMA_VERSION)
+    if version > SCHEMA_VERSION:
+        raise ValueError(
+            f"{where} was written with mesh-zarr schema_version={version}, "
+            f"but this reader supports <= {SCHEMA_VERSION}. Upgrade "
+            f"physicsnemo to read this store."
+        )
+
+
 def _make_compressors(compress: bool):
     if compress:
         from zarr.codecs import BloscCodec
@@ -199,8 +222,8 @@ def save_mesh_to_zarr(
     mesh : Mesh
         Mesh to serialize. Points, cells, point_data, cell_data and
         global_data are written; the internal geometry cache is not.
-    path : Path or str
-        Target Zarr group directory (created / overwritten).
+    path : Path, str, or zarr StoreLike
+        Target Zarr group directory or store (created / overwritten).
     chunk_cells : int, default=200_000
         Chunk length along the cell axis (``cells`` and ``cell_data``).
         Align this with the reader's ``subsample_n_cells`` so one sample
@@ -214,7 +237,7 @@ def save_mesh_to_zarr(
     if not zarr.available:
         zarr._get_module()  # Raises with install hint
 
-    group = zarr.open_group(str(path), mode="w")
+    group = _open_group(path, mode="w")
     _write_mesh_group(
         group, mesh, chunk_cells, chunk_points, _make_compressors(compress)
     )
@@ -241,8 +264,8 @@ def save_domain_mesh_to_zarr(
     ----------
     domain_mesh : DomainMesh
         Domain mesh to serialize.
-    path : Path or str
-        Target Zarr group directory (created / overwritten).
+    path : Path, str, or zarr StoreLike
+        Target Zarr group directory or store (created / overwritten).
     chunk_cells, chunk_points, compress
         See :func:`save_mesh_to_zarr`.
     soup_boundaries : bool, default=False
@@ -253,7 +276,7 @@ def save_domain_mesh_to_zarr(
     if not zarr.available:
         zarr._get_module()
 
-    root = zarr.open_group(str(path), mode="w")
+    root = _open_group(path, mode="w")
     compressors = _make_compressors(compress)
     root.attrs["format"] = DOMAIN_MESH_FORMAT
     root.attrs["schema_version"] = SCHEMA_VERSION
@@ -549,6 +572,7 @@ class ZarrMeshReader:
 
         backend = self._get_backend(index)
         attrs = backend.attrs()
+        _check_schema_version(attrs, self._paths[index])
         has_cells = backend.has("cells")
         is_soup = attrs.get("layout") == "soup"
 
@@ -756,6 +780,7 @@ class ZarrDomainMeshReader:
             raise ValueError(f"No Zarr groups matching {pattern!r} in {self._root}")
 
         first = zarr.open_group(str(self._paths[0]), mode="r")
+        _check_schema_version(dict(first.attrs), self._paths[0])
         if first.attrs.get("format") != DOMAIN_MESH_FORMAT:
             raise ValueError(
                 f"{self._paths[0]} is not a {DOMAIN_MESH_FORMAT!r} group "
@@ -861,3 +886,139 @@ class ZarrDomainMeshReader:
             f"ZarrDomainMeshReader(path={self._root!r}, len={len(self)}, "
             f"boundaries={self._boundary_names!r})"
         )
+
+
+def validate_mesh_zarr(path: Path | str, *, _prefix: str = "") -> dict[str, Any]:
+    """Validate a mesh-zarr or domainmesh-zarr group against the schema.
+
+    Checks the requirements of ``MESH_ZARR_SCHEMA.md``: known ``format``,
+    supported ``schema_version``, required arrays and attributes, attr /
+    array-shape consistency, field-length consistency, and (sampled) that
+    a ``layout="soup"`` claim is truthful. Raises ``ValueError`` with all
+    problems found; returns a summary dict when valid.
+
+    Parameters
+    ----------
+    path : Path or str
+        Zarr group directory to validate.
+
+    Returns
+    -------
+    dict
+        Summary: ``{"format": ..., "schema_version": ..., ...}`` plus
+        per-member summaries for DomainMesh groups.
+    """
+    if not zarr.available:
+        zarr._get_module()
+
+    group = zarr.open_group(str(path), mode="r")
+    attrs = dict(group.attrs)
+    problems: list[str] = []
+    fmt = attrs.get("format")
+
+    if fmt == DOMAIN_MESH_FORMAT:
+        _check_schema_version(attrs, path)
+        summary: dict[str, Any] = {
+            "format": fmt,
+            "schema_version": attrs.get("schema_version"),
+        }
+        names = attrs.get("boundary_names")
+        if not isinstance(names, list):
+            problems.append("missing/invalid attr 'boundary_names'")
+            names = []
+        if "interior" not in group:
+            problems.append("missing 'interior' group")
+        else:
+            summary["interior"] = validate_mesh_zarr(
+                Path(path) / "interior", _prefix="interior: "
+            )
+        boundaries: dict[str, Any] = {}
+        for name in names:
+            if f"boundaries/{name}" not in group:
+                problems.append(f"boundary_names lists {name!r} but group is missing")
+            else:
+                boundaries[name] = validate_mesh_zarr(
+                    Path(path) / "boundaries" / name, _prefix=f"boundaries/{name}: "
+                )
+        summary["boundaries"] = boundaries
+        if problems:
+            raise ValueError(
+                f"{path} failed validation: " + "; ".join(problems)
+            )
+        return summary
+
+    if fmt != MESH_FORMAT:
+        raise ValueError(
+            f"{_prefix}{path}: unknown format attr {fmt!r} "
+            f"(expected {MESH_FORMAT!r} or {DOMAIN_MESH_FORMAT!r})"
+        )
+    _check_schema_version(attrs, path)
+
+    if "points" not in group:
+        problems.append("missing required array 'points'")
+        n_points = None
+    else:
+        n_points = group["points"].shape[0]
+        if attrs.get("n_points") != n_points:
+            problems.append(
+                f"attr n_points={attrs.get('n_points')} != points shape {n_points}"
+            )
+
+    n_cells = int(attrs.get("n_cells", 0))
+    if n_cells > 0:
+        layout = attrs.get("layout")
+        npc = attrs.get("nodes_per_cell")
+        if layout not in ("soup", "indexed"):
+            problems.append(f"invalid layout attr {layout!r}")
+        if not isinstance(npc, int):
+            problems.append("missing attr 'nodes_per_cell'")
+        if "cells" not in group:
+            problems.append("n_cells > 0 but 'cells' array missing")
+        else:
+            cells = group["cells"]
+            if cells.shape[0] != n_cells:
+                problems.append(
+                    f"attr n_cells={n_cells} != cells shape {cells.shape[0]}"
+                )
+            if isinstance(npc, int) and cells.shape[1] != npc:
+                problems.append(
+                    f"attr nodes_per_cell={npc} != cells shape {cells.shape[1]}"
+                )
+            # Sampled truthfulness check of a soup claim: first and last
+            # window must be the identity arange. Full verification is
+            # O(n_cells); the sampled check catches every honest mistake
+            # short of an adversarial store.
+            if layout == "soup" and n_points is not None:
+                if n_points != n_cells * cells.shape[1]:
+                    problems.append("layout=soup but n_points != n_cells*nodes_per_cell")
+                else:
+                    k = min(1000, n_cells)
+                    head = np.asarray(cells[:k]).reshape(-1)
+                    tail = np.asarray(cells[-k:]).reshape(-1)
+                    w = cells.shape[1]
+                    if not (
+                        np.array_equal(head, np.arange(k * w))
+                        and np.array_equal(
+                            tail, np.arange((n_cells - k) * w, n_cells * w)
+                        )
+                    ):
+                        problems.append("layout=soup but cells are not arange")
+
+    for sub, expected in (("point_data", n_points), ("cell_data", n_cells or None)):
+        if sub in group and expected is not None:
+            for key in group[sub].array_keys():
+                got = group[sub][key].shape[0] if group[sub][key].ndim else None
+                if got is not None and got != expected:
+                    problems.append(
+                        f"{sub}/{key} first dim {got} != {expected}"
+                    )
+
+    if problems:
+        raise ValueError(f"{_prefix}{path} failed validation: " + "; ".join(problems))
+    return {
+        "format": fmt,
+        "schema_version": attrs.get("schema_version"),
+        "n_points": n_points,
+        "n_cells": n_cells,
+        "layout": attrs.get("layout"),
+    }
