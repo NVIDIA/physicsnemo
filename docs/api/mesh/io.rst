@@ -33,6 +33,17 @@ primary I/O gateway for PhysicsNeMo-Mesh.
     pv_out = to_pyvista(mesh)
     pv_out.save("refined.vtk")
 
+.. tip::
+
+   PyVista conversions preserve ``float32`` and ``float64`` point coordinates.
+   Integer, complex, and reduced-precision coordinates are converted to
+   ``float32`` as part of PhysicsNeMo's PyVista compatibility policy. To
+   normalize imported geometry and its floating data explicitly, use
+   ``mesh = from_pyvista(pv_mesh).to(torch.float32)``. Likewise, use
+   ``to_pyvista(mesh.to(torch.float32))`` before export. Retaining ``float64``
+   coordinates doubles their storage relative to ``float32`` and may keep
+   downstream PyVista computations in double precision.
+
 API Reference
 -------------
 
