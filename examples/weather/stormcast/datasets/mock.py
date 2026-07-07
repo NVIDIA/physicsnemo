@@ -43,6 +43,7 @@ class _MockDataset(StormCastDataset):
         model_type: Literal[
             "hybrid", "nowcasting", "downscaling", "unconditional"
         ] = "hybrid",
+        use_mask: bool = False,
     ):
         self._num_state_channels = num_state_channels
         self._num_background_channels = num_background_channels
@@ -51,6 +52,7 @@ class _MockDataset(StormCastDataset):
         self._image_size = image_size
         self._num_samples = num_samples
         self._model_type = model_type
+        self._use_mask = use_mask
 
     def __len__(self) -> int:
         return self._num_samples
@@ -94,6 +96,12 @@ class _MockDataset(StormCastDataset):
             item["scalar_conditions"] = rng.normal(
                 size=(self._num_scalar_cond_channels,)
             ).astype(np.float32)
+
+        # Optional per-sample mask: right half of the domain is valid
+        if self._use_mask:
+            mask = np.zeros((1, height, width), dtype=np.float32)
+            mask[:, :, width // 2 :] = 1.0
+            item["mask"] = mask
 
         return item
 

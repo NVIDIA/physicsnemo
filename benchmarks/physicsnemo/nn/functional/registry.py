@@ -36,6 +36,7 @@ from physicsnemo.nn.functional.fourier_spectral import (
 )
 from physicsnemo.nn.functional.geometry import (
     FarthestPointSampling,
+    RayMeshIntersect,
     SignedDistanceField,
 )
 from physicsnemo.nn.functional.interpolation import (
@@ -66,6 +67,7 @@ FUNCTIONAL_SPECS: tuple[type[FunctionSpec], ...] = (
     MeshlessFDDerivatives,
     # Geometry.
     FarthestPointSampling,
+    RayMeshIntersect,
     SignedDistanceField,
     # Interpolation.
     GridToPointInterpolation,

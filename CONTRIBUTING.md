@@ -318,3 +318,7 @@ The pipeline has following stages:
     Aim for more than 80% code coverage.
     To test coverage locally, run the `get_coverage.sh` script from the `test` folder and
     check the coverage of the module that you added/edited.
+    In CI, the overall coverage gate (`COVERAGE_FAIL_UNDER`) is enforced by the `Coverage`
+    job and currently requires 70%. Every PR also gets an informational, non-blocking
+    `Coverage %` check reporting the measured percentage, and uncovered lines are annotated
+    inline in the PR's Files view once the Codecov integration is enabled.

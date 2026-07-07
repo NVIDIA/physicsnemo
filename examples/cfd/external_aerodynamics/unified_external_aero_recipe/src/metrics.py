@@ -267,7 +267,7 @@ class MetricCalculator:
                     t_mag = torch.linalg.vector_norm(t, dim=-1)
                     out.update(self._metrics_for_tensor(p_mag, t_mag, (name,)))
 
-        return TensorDict(out, batch_size=[])
+        return TensorDict(out)
 
     def __repr__(self) -> str:
         fields_str = ", ".join(f"{n}:{t}" for n, t in self.target_config.items())
