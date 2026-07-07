@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import pytest
+import torch
 
 from physicsnemo.core.version_check import check_version_spec
 
@@ -29,3 +30,18 @@ if not check_version_spec("torch", "2.6.0", hard_fail=False):
 def skip_on_cpu(device):
     if device == "cpu":
         pytest.skip("Skip tests on cpu")
+
+
+@pytest.fixture(autouse=True)
+def disable_tf32():
+    # The harness compares sharded vs. single-GPU fp32 paths at ~1e-4; TF32
+    # (~1e-3 relative error) makes them diverge. Force full fp32.
+    prev_cudnn = torch.backends.cudnn.allow_tf32
+    prev_matmul = torch.backends.cuda.matmul.allow_tf32
+    torch.backends.cudnn.allow_tf32 = False
+    torch.backends.cuda.matmul.allow_tf32 = False
+    try:
+        yield
+    finally:
+        torch.backends.cudnn.allow_tf32 = prev_cudnn
+        torch.backends.cuda.matmul.allow_tf32 = prev_matmul
