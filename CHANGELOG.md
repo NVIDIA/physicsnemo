@@ -215,6 +215,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `physicsnemo.mesh.io.to_pyvista` now preserves supported dtypes for attached
   point, cell, and global data instead of narrowing every array to `float32`.
   Reduced-precision floating-point values are promoted only as needed for VTK.
+- `physicsnemo.mesh.io.from_pyvista` and `to_pyvista` now preserve `float64`
+  point coordinates instead of unconditionally narrowing geometry to `float32`,
+  which could collapse small features on meshes with large coordinate offsets.
+  Existing `float32` geometry remains `float32`.
 - `physicsnemo.mesh`: `Mesh.to(<float dtype>)` and `DomainMesh.to(<float dtype>)`
   raised `TypeError: cells must have an int-like dtype` because the cast was applied
   to the integer `cells` tensor. A floating/complex dtype is now applied only to
