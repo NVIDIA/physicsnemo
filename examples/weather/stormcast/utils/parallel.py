@@ -406,12 +406,20 @@ def shard_dim_selector(param_name: str) -> int | None:
         Shard dimension for param_name, or None if the tensor corresponding to
         param_name should not be sharded.
     """
-    # this should find the spatial parameters for SongUNet and DiT
-    sharded_params = ["pos_embed", "pos_embd", "spatial_emb"]
-    if any(sharded_param in param_name for sharded_param in sharded_params):
+    # Spatial parameters/buffers laid out as (1, H*W, C): shard the flattened
+    # spatial axis (dim 1). Covers SongUNet and DiT positional embeddings.
+    sharded_dim1 = ["pos_embed", "pos_embd", "spatial_emb"]
+    if any(name in param_name for name in sharded_dim1):
         return 1
-    else:
-        return None
+    # Spatial buffers laid out with height first: (h_lat, w_lat, head_dim) for
+    # the DiT RoPE cos/sin tables. Sharding dim 0 (height) gives each rank
+    # globally-correct rows with no explicit rank offset needed in model code.
+    # (The DiT invalid-region mask is no longer a model buffer: it is supplied
+    # dynamically per forward call as a ShardTensor sharded along height like x.)
+    sharded_dim0 = ["rope_cos", "rope_sin"]
+    if any(name in param_name for name in sharded_dim0):
+        return 0
+    return None
 
 
 def partition_model_selective(
@@ -449,3 +457,23 @@ def partition_model_selective(
         submodule.register_parameter(
             key, torch.nn.Parameter(dt, requires_grad=param.requires_grad)
         )
+
+    # Buffers are handled explicitly too: spatial buffers (RoPE cos/sin tables,
+    # the DiT invalid-token mask) are sharded so each rank holds its local rows
+    # with globally-correct values; all others are replicated. Doing this here
+    # (rather than relying on distribute_module's internal replication) lets us
+    # shard the spatial ones and preserves each buffer's persistent/state_dict
+    # status.
+    for key, buffer in submodule._buffers.items():
+        if buffer is None:
+            continue
+        if (shard_dim := shard_dim_selector(key)) is not None:
+            dt = distribute_tensor(
+                buffer, device_mesh=device_mesh, placements=[Shard(shard_dim)]
+            )
+        else:
+            dt = distribute_tensor(
+                buffer, device_mesh=device_mesh, placements=[Replicate()]
+            )
+        persistent = key not in submodule._non_persistent_buffers_set
+        submodule.register_buffer(key, dt, persistent=persistent)

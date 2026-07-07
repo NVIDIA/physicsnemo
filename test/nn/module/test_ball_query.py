@@ -17,8 +17,24 @@
 import pytest
 import torch
 
+import physicsnemo.nn.module.ball_query as ball_query_module
 from physicsnemo.nn.module.ball_query import BQWarp
 from test.conftest import requires_module
+
+
+def test_bqwarp_passes_radius_search_implementation(monkeypatch):
+    """BQWarp should pass its explicit implementation to radius_search."""
+    captured_kwargs = {}
+
+    def fake_radius_search(points, queries, radius, **kwargs):
+        captured_kwargs.update(kwargs)
+        return torch.empty(0, dtype=torch.long), torch.empty(0)
+
+    monkeypatch.setattr(ball_query_module, "radius_search", fake_radius_search)
+    bq = BQWarp(radius=1.5, neighbors_in_radius=5, implementation="compact_cell_points")
+    bq(torch.randn(1, 20, 3), torch.randn(1, 15, 3))
+
+    assert captured_kwargs["implementation"] == "compact_cell_points"
 
 
 @requires_module("warp")

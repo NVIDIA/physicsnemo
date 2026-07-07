@@ -550,11 +550,16 @@ class GeometricFeatureProcessor(nn.Module):
         neighbors_in_radius: int,
         feature_dim: int,
         hidden_dim: int,
+        radius_search_implementation: str | None = None,
     ) -> None:
         super().__init__()
 
         # Ball query for neighbor search within radius
-        self.bq_warp = BQWarp(radius=radius, neighbors_in_radius=neighbors_in_radius)
+        self.bq_warp = BQWarp(
+            radius=radius,
+            neighbors_in_radius=neighbors_in_radius,
+            implementation=radius_search_implementation,
+        )
 
         # MLP to process flattened neighbor features
         self.mlp = Mlp(
@@ -695,6 +700,7 @@ class MultiScaleFeatureExtractor(nn.Module):
         use_te: bool = True,
         plus: bool = False,
         concrete_dropout: bool = False,
+        radius_search_implementation: str | None = None,
     ) -> None:
         super().__init__()
         self.num_scales = len(radii)
@@ -703,7 +709,11 @@ class MultiScaleFeatureExtractor(nn.Module):
         self.processors = nn.ModuleList(
             [
                 GeometricFeatureProcessor(
-                    radii[i], neighbors_in_radius[i], geometry_dim, hidden_dim
+                    radii[i],
+                    neighbors_in_radius[i],
+                    geometry_dim,
+                    hidden_dim,
+                    radius_search_implementation=radius_search_implementation,
                 )
                 for i in range(self.num_scales)
             ]
@@ -879,6 +889,7 @@ class GlobalContextBuilder(nn.Module):
         include_local_features: bool = False,
         structured_shape: tuple[int, ...] | None = None,
         concrete_dropout: bool = False,
+        radius_search_implementation: str | None = None,
     ) -> None:
         super().__init__()
 
@@ -915,6 +926,7 @@ class GlobalContextBuilder(nn.Module):
                         use_te,
                         plus,
                         concrete_dropout=concrete_dropout,
+                        radius_search_implementation=radius_search_implementation,
                     )
                     for _ in functional_dims
                 ]

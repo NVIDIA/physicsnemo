@@ -190,6 +190,30 @@ def test_geotransolver_forward_with_local_features(device, pytestconfig):
     assert not torch.isnan(outputs).any()
 
 
+def test_geotransolver_propagates_radius_search_implementation():
+    """GeoTransolver should configure every local-feature BQWarp instance."""
+    model = GeoTransolver(
+        functional_dim=8,
+        out_dim=2,
+        geometry_dim=3,
+        n_layers=1,
+        n_hidden=16,
+        n_head=2,
+        slice_num=4,
+        use_te=False,
+        include_local_features=True,
+        radii=[0.1, 0.2],
+        neighbors_in_radius=[4, 8],
+        n_hidden_local=8,
+        radius_search_implementation="torch",
+    )
+
+    assert model.context_builder.local_extractors is not None
+    for extractor in model.context_builder.local_extractors:
+        for processor in extractor.processors:
+            assert processor.bq_warp.implementation == "torch"
+
+
 # =============================================================================
 # Forward Accuracy Tests (reproducibility)
 # =============================================================================

@@ -253,6 +253,7 @@ physicsnemo/models/vfgn/ @mnabian
 physicsnemo/experimental/
 physicsnemo/experimental/datapipes/healda/ @pzharrington
 physicsnemo/experimental/models/globe/ @peterdsharpe
+physicsnemo/experimental/peft/ @mnabian
 
 # ==============================================================================
 # EXAMPLES - Active Learning
@@ -282,6 +283,7 @@ examples/cfd/external_aerodynamics/figconvnet/ @coreyjadams
 examples/cfd/external_aerodynamics/globe/ @peterdsharpe
 examples/cfd/external_aerodynamics/moe/ @mnabian
 examples/cfd/external_aerodynamics/transformer_models/ @coreyjadams @RishikeshRanade
+examples/cfd/external_aerodynamics/transformer_models/src/finetune/ @mnabian
 examples/cfd/external_aerodynamics/unified_external_aero_recipe/ @coreyjadams @peterdsharpe
 examples/cfd/external_aerodynamics/xaeronet/ @mnabian
 examples/cfd/flow_reconstruction_diffusion/
@@ -419,6 +421,7 @@ test/optim/ @peterdsharpe
 test/diffusion/ @CharlelieLrt
 test/utils/
 test/experimental/
+test/experimental/peft/ @mnabian
 
 # ==============================================================================
 # TESTS - CI

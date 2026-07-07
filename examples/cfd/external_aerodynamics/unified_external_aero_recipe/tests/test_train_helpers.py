@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for `src/train.py`'s private TensorDict-aware walker and for `src/output_normalize.py`.
+"""Unit tests for `src/train.py`'s private TensorDict-aware helpers and for `src/output_normalize.py`.
 
 ``TensorDict`` is not a ``dict`` subclass, so the bare
 ``isinstance(obj, dict)`` branches in the recipe's recursive helpers
@@ -29,6 +29,10 @@ handling for:
   model output (``Mesh`` or ``(B, N, C)`` tensor) to a per-target
   TensorDict, with clear error messages on shape / channel-count
   mismatches.
+- :func:`train._reduce_and_average`: averages rank-local loss / metric
+  sums over the global sample count (used per step and per epoch); its
+  single-process path must equal plain ``total_loss / n`` + per-leaf
+  ``sum / n`` averaging.
 
 (The analogous tests for the shared, tensorboard-free
 :func:`utils.recursive_to_device` live in ``test_utils.py``, outside
@@ -50,7 +54,10 @@ from tensordict import TensorDict
 pytest.importorskip("tensorboard")
 
 from output_normalize import normalize_output_to_tensordict  # noqa: E402
-from train import _walk_batch_for_logging  # noqa: E402  -- after the skip guard
+from train import (  # noqa: E402  -- after the skip guard
+    _reduce_and_average,
+    _walk_batch_for_logging,
+)
 
 from physicsnemo.mesh import Mesh  # noqa: E402  -- after the importorskip guard
 
@@ -172,3 +179,66 @@ class TestNormalizeOutputToTensordict:
         mesh = Mesh(points=torch.randn(7, 3), point_data={"other": torch.randn(7)})
         with pytest.raises(KeyError, match="missing target fields"):
             normalize_output_to_tensordict(mesh, target_config, "mesh")
+
+
+### ---------------------------------------------------------------------------
+### _reduce_and_average
+### ---------------------------------------------------------------------------
+
+
+class TestReduceAndAverage:
+    """Tests for `_reduce_and_average` (single-process path).
+
+    The distributed branch is gated on an initialized process group with
+    ``world_size > 1``; with no group initialized these tests exercise the
+    pure-local path, which must stay equivalent to the previous
+    ``total_loss / n`` + per-leaf ``sum / n`` averaging it replaced. The
+    collective branch mirrors the already-shipped ``infer._allreduce_sums``
+    and is validated by inspection.
+    """
+
+    @staticmethod
+    def _epoch_sums() -> tuple[TensorDict, TensorDict]:
+        """A representative pair of 0-D (epoch-accumulated) sum TensorDicts."""
+        losses_td = TensorDict(
+            {"pressure": torch.tensor(6.0), "wss": torch.tensor(9.0)},
+            batch_size=[],
+        )
+        metrics_td = TensorDict(
+            {"pressure_l2": torch.tensor(3.0), "wss_mae": torch.tensor(12.0)},
+            batch_size=[],
+        )
+        return losses_td, metrics_td
+
+    def test_single_process_divides_sums_by_local_count(self):
+        """No process group: global average == local sum / n_local."""
+        losses_td, metrics_td = self._epoch_sums()
+        avg_loss, avg_losses, avg_metrics = _reduce_and_average(
+            15.0, losses_td, metrics_td, 3, device="cpu"
+        )
+        assert avg_loss == pytest.approx(5.0)
+        assert avg_losses == pytest.approx({"pressure": 2.0, "wss": 3.0})
+        assert avg_metrics == pytest.approx({"pressure_l2": 1.0, "wss_mae": 4.0})
+
+    def test_none_sentinel_returns_loss_only(self):
+        """The "no steps seeded" sentinel (either TD ``None``) yields (loss / n, {}, {})."""
+        assert _reduce_and_average(8.0, None, None, 2, device="cpu") == (
+            4.0,
+            {},
+            {},
+        )
+        ### A single ``None`` is enough to trip the sentinel.
+        losses_td, _ = self._epoch_sums()
+        assert _reduce_and_average(8.0, losses_td, None, 2, device="cpu") == (
+            4.0,
+            {},
+            {},
+        )
+
+    def test_zero_local_count_avoids_zero_division(self):
+        """``n_local == 0`` (a step-less epoch) divides by 1, not 0."""
+        assert _reduce_and_average(7.0, None, None, 0, device="cpu") == (
+            7.0,
+            {},
+            {},
+        )

@@ -265,13 +265,17 @@ class GeoTransolver(Module):
         training, and emits warnings on out-of-distribution inputs during
         inference. Default is ``None``.
     attention_type : str, optional
-        attention_type is used to choose the attention type (GALE or GALE_FA). 
+        attention_type is used to choose the attention type (GALE or GALE_FA).
         Default is ``"GALE"``.
     state_mixing_mode : str, optional
         How to blend self-attention and cross-attention outputs in GALE layers.
         ``"weighted"`` uses a learnable sigmoid-gated weighted sum.
         ``"concat_project"`` concatenates the two along the head dimension and
         projects back with a linear layer. Default is ``"weighted"``.
+
+    radius_search_implementation : str | None, optional
+        Radius-search implementation used for local geometric features. If
+        None, the implementation is selected automatically.
 
     Forward
     -------
@@ -303,7 +307,7 @@ class GeoTransolver(Module):
         layout—flattened :math:`(B, N, C_{out})` or spatial
         :math:`(B, H, W, C_{out})` / :math:`(B, H, W, D, C_{out})` when
         inputs were 4D/5D.
-        
+
         When ``return_embedding_states=True``, returns a 2-tuple
         ``(output, embedding_states)`` where ``output`` follows the same
         rules above, and ``embedding_states`` is of shape
@@ -425,6 +429,7 @@ class GeoTransolver(Module):
         attention_type: str = "GALE",
         concrete_dropout: bool = False,
         state_mixing_mode: str = "weighted",
+        radius_search_implementation: str | None = None,
     ) -> None:
         super().__init__(meta=GeoTransolverMetaData())
         self.__name__ = "GeoTransolver"
@@ -483,6 +488,7 @@ class GeoTransolver(Module):
             include_local_features=self.include_local_features,
             structured_shape=structured_shape,
             concrete_dropout=concrete_dropout,
+            radius_search_implementation=radius_search_implementation,
         )
         context_dim = self.context_builder.get_context_dim()
 

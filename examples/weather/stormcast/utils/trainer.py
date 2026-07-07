@@ -227,6 +227,14 @@ class Trainer:
         # Model type
         self.loss_type = cfg.training.loss.type
         self.net_name = "regression" if self.loss_type == "regression" else "diffusion"
+
+        # Dynamic invalid-region (NaN) masking for the DiT NATTEN backend. When
+        # enabled, a per-sample invalid-pixel mask is derived from NaNs in the
+        # model's spatial inputs and passed to the model's forward; the inputs
+        # are sanitized (NaN -> 0) so the masked-token splice is well-defined.
+        self.use_nan_mask_tokens = bool(
+            cfg.model.hyperparameters.get("use_nan_mask_tokens", False)
+        )
         self.condition_list = (
             cfg.model.regression_conditions
             if self.net_name == "regression"
@@ -427,6 +435,70 @@ class Trainer:
             raise ValueError("model.architecture must be 'unet' or 'dit'")
 
         return net
+
+    def _derive_invalid_mask(self, condition, target) -> tuple:
+        r"""Derive a per-sample invalid-region mask from NaNs in the inputs.
+
+        No-op (returns ``invalid_mask=None``) unless the model was built with
+        ``use_nan_mask_tokens=True``. When enabled, an invalid pixel is any
+        spatial location that is NaN in *either* the diffusion target or the
+        image-like conditioning (both occupy the model's spatial input once
+        concatenated). The corresponding mask is returned at shape
+        :math:`(B, 1, H, W)` for the DiT's ``invalid_mask`` argument, and the
+        offending inputs are sanitized in place (NaN -> 0) so the masked-token
+        splice is well-defined (it multiplies by zero, which does not remove a
+        NaN). The mask differs per sample and per step, enabling dynamic masking.
+
+        Under domain parallelism the inputs are already height-sharded
+        ``ShardTensor``s; ``torch.isnan``/``torch.nan_to_num`` and the channel
+        reduction (``sum`` over the unsharded channel axis) keep the derived mask
+        sharded along height like ``x``.
+
+        Parameters
+        ----------
+        condition : torch.Tensor, TensorDict, or None
+            Model conditioning. A ``TensorDict`` carries the image-like part
+            under ``"cond_concat"``; a plain tensor is itself the image part.
+        target : torch.Tensor
+            Diffusion target of shape :math:`(B, C, H, W)`.
+
+        Returns
+        -------
+        tuple
+            ``(condition, target, invalid_mask)`` with sanitized inputs and a
+            :math:`(B, 1, H, W)` boolean mask (or ``None`` when disabled).
+        """
+        if not self.use_nan_mask_tokens:
+            return condition, target, None
+
+        # Locate the image-like conditioning that is concatenated to the target.
+        if isinstance(condition, torch.Tensor):
+            image_cond = condition
+        elif condition is not None:
+            image_cond = condition.get("cond_concat", None)
+        else:
+            image_cond = None
+
+        invalid = None
+        for part in (target, image_cond):
+            if part is None:
+                continue
+            # (B, 1, H, W): count NaN channels at each pixel (sum over the
+            # channel axis is ShardTensor-safe; ``any`` is not registered).
+            nan_count = torch.isnan(part).to(part.dtype).sum(dim=1, keepdim=True)
+            invalid = nan_count if invalid is None else invalid + nan_count
+        invalid_mask = invalid > 0  # (B, 1, H, W) bool
+
+        # Sanitize so the masked-token splice (x * 0 + mask_token) is finite.
+        target = torch.nan_to_num(target, nan=0.0)
+        if image_cond is not None:
+            image_cond = torch.nan_to_num(image_cond, nan=0.0)
+            if isinstance(condition, torch.Tensor):
+                condition = image_cond
+            else:
+                condition["cond_concat"] = image_cond
+
+        return condition, target, invalid_mask
 
     def _load_regression_net(self) -> Module | None:
         r"""
@@ -657,6 +729,12 @@ class Trainer:
                 )
                 del background, state, scalar_conditions
 
+                # Derive a per-sample invalid-region mask from NaNs in the model
+                # inputs and sanitize those inputs (no-op unless enabled).
+                condition, target, invalid_mask = self._derive_invalid_mask(
+                    condition, target
+                )
+
                 weight = (
                     mask
                     if mask is not None
@@ -667,6 +745,8 @@ class Trainer:
                 loss_kwargs = {}
                 if lead_time_label is not None:
                     loss_kwargs["lead_time_label"] = lead_time_label
+                if invalid_mask is not None:
+                    loss_kwargs["invalid_mask"] = invalid_mask
 
                 sigma = None
                 if self.loss_type != "regression":
@@ -798,6 +878,10 @@ class Trainer:
                         regression_condition_list=self.cfg.model.regression_conditions,
                     )
 
+                    condition, target, invalid_mask = self._derive_invalid_mask(
+                        condition, target
+                    )
+
                     weight = (
                         mask
                         if mask is not None
@@ -808,6 +892,8 @@ class Trainer:
                     loss_kwargs = {}
                     if lead_time_label is not None:
                         loss_kwargs["lead_time_label"] = lead_time_label
+                    if invalid_mask is not None:
+                        loss_kwargs["invalid_mask"] = invalid_mask
 
                     valid_loss = self.loss_fn(
                         target, weight, condition=condition, **loss_kwargs
@@ -816,7 +902,11 @@ class Trainer:
                     if v_i == 0:
                         plot_state, plot_background = state, background
                         plot_outputs = self._get_plot_outputs(
-                            condition, state, lead_time_label, reg_out
+                            condition,
+                            state,
+                            lead_time_label,
+                            reg_out,
+                            invalid_mask=invalid_mask,
                         )
 
                     valid_loss_mean_step = valid_loss.mean(dim=(0, 2, 3))
@@ -843,7 +933,9 @@ class Trainer:
 
         return val_loss, plot_outputs, plot_state, plot_background
 
-    def _get_plot_outputs(self, condition, state, lead_time_label, reg_out):
+    def _get_plot_outputs(
+        self, condition, state, lead_time_label, reg_out, invalid_mask=None
+    ):
         r"""
         Get outputs for validation plotting.
 
@@ -860,6 +952,9 @@ class Trainer:
             Lead time embedding indices if using lead time conditioning.
         reg_out : torch.Tensor or None
             Regression network output for residual addition.
+        invalid_mask : torch.Tensor or None, optional
+            Per-sample invalid-region mask ``(B, 1, H, W)`` forwarded to the
+            diffusion network's NaN-mask-token path. ``None`` disables masking.
 
         Returns
         -------
@@ -876,6 +971,7 @@ class Trainer:
                 device=state[1].device,
                 sampler_args=self.cfg.sampler.args.__dict__,
                 lead_time_label=lead_time_label,
+                invalid_mask=invalid_mask,
             )
             if "regression" in self.condition_list:
                 outputs += reg_out

@@ -658,6 +658,265 @@ def test_radius_search_batched_opcheck(device: str):
     )
 
 
+_CELL_BACKENDS = ("compact_cell_points",)
+_EXACT_BACKENDS = ("torch", "warp", "compact_cell_points")
+
+
+def _skip_unavailable_backend(implementation: str, device: str) -> None:
+    if implementation == "warp":
+        pytest.importorskip("warp")
+    elif implementation == "compact_cell_points":
+        pytest.importorskip("cupy")
+        if device == "cpu":
+            pytest.skip("compact_cell_points requires CUDA")
+
+
+def _assert_static_neighbors_match_brute_force(
+    points: torch.Tensor,
+    queries: torch.Tensor,
+    radius: float,
+    implementation: str,
+) -> None:
+    """Check an untruncated static result without assuming neighbor order."""
+    max_points = max(1, points.shape[-2])
+    indices, selected_points, distances = radius_search(
+        points,
+        queries,
+        radius=radius,
+        max_points=max_points,
+        return_dists=True,
+        return_points=True,
+        implementation=implementation,
+    )
+
+    was_unbatched = points.ndim == 2
+    points_b = points.unsqueeze(0) if was_unbatched else points
+    queries_b = queries.unsqueeze(0) if was_unbatched else queries
+    indices_b = indices.unsqueeze(0) if was_unbatched else indices
+    selected_points_b = (
+        selected_points.unsqueeze(0) if was_unbatched else selected_points
+    )
+    distances_b = distances.unsqueeze(0) if was_unbatched else distances
+    expected_distances = torch.cdist(
+        queries_b.float(),
+        points_b.float(),
+        compute_mode="donot_use_mm_for_euclid_dist",
+    )
+
+    for batch_idx in range(points_b.shape[0]):
+        for query_idx in range(queries_b.shape[1]):
+            expected_ids = torch.nonzero(
+                expected_distances[batch_idx, query_idx] <= radius,
+                as_tuple=False,
+            ).flatten()
+            count = expected_ids.numel()
+            actual_ids = indices_b[batch_idx, query_idx, :count].long()
+            torch.testing.assert_close(
+                actual_ids.sort().values,
+                expected_ids.sort().values,
+            )
+            torch.testing.assert_close(
+                selected_points_b[batch_idx, query_idx, :count],
+                points_b[batch_idx, actual_ids],
+            )
+            torch.testing.assert_close(
+                distances_b[batch_idx, query_idx, :count].float(),
+                expected_distances[batch_idx, query_idx, actual_ids],
+                atol=1e-5,
+                rtol=1e-5,
+            )
+            assert (indices_b[batch_idx, query_idx, count:] == 0).all()
+
+
+@requires_module("cupy")
+@pytest.mark.parametrize("implementation", _CELL_BACKENDS)
+@pytest.mark.parametrize("return_dists", [False, True])
+@pytest.mark.parametrize("return_points", [False, True])
+def test_radius_search_cell_backend_return_modes(
+    device: str,
+    implementation: str,
+    return_dists: bool,
+    return_points: bool,
+):
+    if device == "cpu":
+        pytest.skip(f"{implementation} requires CUDA")
+
+    points, queries = _build_problem(device)
+    results = radius_search(
+        points,
+        queries,
+        radius=0.17,
+        max_points=8,
+        return_dists=return_dists,
+        return_points=return_points,
+        implementation=implementation,
+    )
+    _assert_radius_outputs(
+        points,
+        queries,
+        0.17,
+        8,
+        return_dists,
+        return_points,
+        results,
+    )
+
+
+@pytest.mark.parametrize("implementation", _EXACT_BACKENDS)
+@pytest.mark.parametrize("batched", [False, True])
+def test_radius_search_backend_exact_neighbors(
+    device: str,
+    implementation: str,
+    batched: bool,
+):
+    _skip_unavailable_backend(implementation, device)
+
+    points = torch.tensor(
+        [
+            [0.50, 0.00, 0.00],
+            [0.5001, 0.00, 0.00],
+            [0.4999, 0.00, 0.00],
+            [-0.50, 0.00, 0.00],
+            [-0.5001, 0.00, 0.00],
+            [-1.25, -1.00, -1.00],
+            [-0.75, -1.00, -1.00],
+            [3.00, 3.00, 3.00],
+        ],
+        device=device,
+    )
+    queries = torch.tensor(
+        [[0.00, 0.00, 0.00], [-1.00, -1.00, -1.00], [8.00, 8.00, 8.00]],
+        device=device,
+    )
+    if batched:
+        points = torch.stack((points, points + 0.125))
+        queries = torch.stack((queries, queries + 0.125))
+
+    _assert_static_neighbors_match_brute_force(
+        points,
+        queries,
+        radius=0.5,
+        implementation=implementation,
+    )
+
+
+@requires_module("cupy")
+@pytest.mark.parametrize("batched", [False, True])
+def test_radius_search_compact_cell_backward_parity(device: str, batched: bool):
+    if device == "cpu":
+        pytest.skip("compact_cell_points requires CUDA")
+
+    torch.manual_seed(42)
+    points = torch.randn(32, 3, device=device)
+    queries = torch.randn(12, 3, device=device)
+    if batched:
+        points = torch.stack((points, points + 0.125))
+        queries = torch.stack((queries, queries + 0.125))
+
+    grads = {}
+    for implementation in ("torch", "compact_cell_points"):
+        pts = points.clone().detach().requires_grad_(True)
+        qrs = queries.clone().detach().requires_grad_(True)
+        _, selected_points = radius_search(
+            pts,
+            qrs,
+            radius=0.5,
+            max_points=points.shape[-2],
+            return_points=True,
+            implementation=implementation,
+        )
+        selected_points.square().sum().backward()
+        grads[implementation] = (
+            pts.grad.detach().clone() if pts.grad is not None else None,
+            qrs.grad.detach().clone() if qrs.grad is not None else None,
+        )
+
+    points_grad_torch, queries_grad_torch = grads["torch"]
+    points_grad_compact, queries_grad_compact = grads["compact_cell_points"]
+    assert points_grad_torch is not None
+    assert points_grad_compact is not None
+    torch.testing.assert_close(points_grad_compact, points_grad_torch)
+
+    # Neighbor selection is non-differentiable with respect to query positions.
+    assert queries_grad_torch is None or torch.all(queries_grad_torch == 0)
+    assert queries_grad_compact is None or torch.all(queries_grad_compact == 0)
+
+
+@requires_module("cupy")
+@pytest.mark.parametrize("batched", [False, True])
+def test_radius_search_compact_cell_same_tensor_queries(device: str, batched: bool):
+    """Exercise compact cell ordering when points and queries alias."""
+    if device == "cpu":
+        pytest.skip("compact_cell_points requires CUDA")
+
+    points = torch.tensor(
+        [
+            [-0.75, -0.50, 0.00],
+            [-0.25, -0.25, 0.00],
+            [0.00, 0.00, 0.00],
+            [0.20, 0.10, 0.00],
+            [0.70, 0.50, 0.00],
+        ],
+        device=device,
+    )
+    if batched:
+        points = torch.stack((points, points + 0.125))
+
+    _assert_static_neighbors_match_brute_force(
+        points,
+        points,
+        radius=0.6,
+        implementation="compact_cell_points",
+    )
+
+
+@requires_module("cupy")
+@pytest.mark.parametrize("implementation", _CELL_BACKENDS)
+def test_radius_search_cell_backend_empty_inputs(
+    device: str,
+    implementation: str,
+):
+    if device == "cpu":
+        pytest.skip(f"{implementation} requires CUDA")
+
+    empty_points = torch.empty((0, 3), device=device)
+    queries = torch.tensor([[0.0, 0.0, 0.0]], device=device)
+    _assert_static_neighbors_match_brute_force(
+        empty_points,
+        queries,
+        radius=0.5,
+        implementation=implementation,
+    )
+
+    points = torch.tensor([[0.0, 0.0, 0.0]], device=device)
+    empty_queries = torch.empty((0, 3), device=device)
+    _assert_static_neighbors_match_brute_force(
+        points,
+        empty_queries,
+        radius=0.5,
+        implementation=implementation,
+    )
+
+
+@requires_module("cupy")
+@pytest.mark.parametrize("implementation", _CELL_BACKENDS)
+def test_radius_search_cell_backend_requires_max_points(
+    device: str,
+    implementation: str,
+):
+    if device == "cpu":
+        pytest.skip(f"{implementation} requires CUDA")
+
+    points, queries = _build_problem(device)
+    with pytest.raises(ValueError, match="requires max_points"):
+        radius_search(
+            points,
+            queries,
+            radius=0.17,
+            implementation=implementation,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Tiled-BVH radius-search tests (Morton-ordered, CUDA-only)
 # ---------------------------------------------------------------------------

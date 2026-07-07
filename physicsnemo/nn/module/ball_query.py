@@ -43,6 +43,7 @@ class BQWarp(nn.Module):
         self,
         radius: float = 0.25,
         neighbors_in_radius: int | None = 10,
+        implementation: str | None = None,
     ):
         """
         Initialize the BQWarp layer.
@@ -50,11 +51,14 @@ class BQWarp(nn.Module):
         Args:
             radius: Radius for ball query operation
             neighbors_in_radius: Maximum number of neighbors to return within radius. If None, all neighbors will be returned.
+            implementation: Radius-search implementation to use. If None, the
+                implementation is selected automatically.
         """
         super().__init__()
 
         self.radius = radius
         self.neighbors_in_radius = neighbors_in_radius
+        self.implementation = implementation
 
     def forward(
         self, x: torch.Tensor, p_grid: torch.Tensor, reverse_mapping: bool = True, cfg= None
@@ -97,14 +101,19 @@ class BQWarp(nn.Module):
         if cfg is not None and cfg.profile:
             torch.cuda.nvtx.range_push('bq_warp')
        
+        radius_search_kwargs = {
+            "max_points": self.neighbors_in_radius,
+            "return_points": True,
+            "implementation": self.implementation,
+        }
+
         if reverse_mapping:
             
             mapping, outputs = radius_search(
                 x,
                 p_grid,
                 self.radius,
-                self.neighbors_in_radius,
-                return_points=True,
+                **radius_search_kwargs,
             )
 
         else:
@@ -112,8 +121,7 @@ class BQWarp(nn.Module):
                 p_grid,
                 x,
                 self.radius,
-                self.neighbors_in_radius,
-                return_points=True,
+                **radius_search_kwargs,
             )
         if cfg is not None and cfg.profile:
             torch.cuda.nvtx.range_pop()

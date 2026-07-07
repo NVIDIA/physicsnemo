@@ -325,7 +325,10 @@ def _allreduce_sums(
     """All-reduce a ``{key: running_sum}`` dict and the sample count.
 
     No-op (returns a plain copy) when not running distributed. Folds every
-    sum plus the count into a single collective.
+    sum plus the count into a single collective. The training loop's
+    ``train._reduce_and_average`` is the analogous reducer; it also
+    divides by the global count to return means, whereas this returns the
+    reduced sums for the caller to average.
     """
     if not (
         dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1
@@ -502,7 +505,6 @@ def main(cfg: DictConfig) -> None:
     # -- Force / moment coefficient setup (surface cases) -----------------------
     force_cfg = OmegaConf.select(cfg, "force_coefficients", default=None)
     force_ctx = ForceContext.from_config(force_cfg, field_types, device)
-    force_acc = ForceAccumulator()
     if force_ctx is not None:
         logger.info(
             f"Force coefficients: integrating Cp='{force_ctx.pressure_field}', "
@@ -535,9 +537,12 @@ def main(cfg: DictConfig) -> None:
             }
         )
 
+    dataset: Any = val_loader.dataset
+    sampler: Any = val_loader.sampler
+
+    force_acc = ForceAccumulator()
+
     # -- Inference loop ---------------------------------------------------------
-    dataset = val_loader.dataset
-    sampler = val_loader.sampler
     n_samples = len(sampler)
     log_every = max(1, int(cfg.get("logging", {}).get("log_every_n_steps", 10)))
     logger.info(f"Running inference over {n_samples} sample(s) -> {pred_dir}")
@@ -638,7 +643,7 @@ def main(cfg: DictConfig) -> None:
         ### One JSONL row per sample -- the documented metrics.jsonl
         ### contract. Console logging below is throttled by log_every.
         record: dict[str, Any] = {
-            "phase": "sample",
+            "phase": "infer_step",
             "step": i,
             "sample_id": sample_id,
             "metrics": sample_metrics,
@@ -676,7 +681,7 @@ def main(cfg: DictConfig) -> None:
         )
         log_jsonl(
             {
-                "phase": "summary",
+                "phase": "infer_summary",
                 "space": "training",
                 "num_samples": count,
                 "metrics": averages,
@@ -697,7 +702,7 @@ def main(cfg: DictConfig) -> None:
             )
             log_jsonl(
                 {
-                    "phase": "forces_summary",
+                    "phase": "infer_forces_summary",
                     "num_samples": force_acc.count,
                     "coefficients": coeff_summary,
                 }
