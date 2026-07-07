@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds coverage reporting on PRs — an informational `Coverage %` check plus a
+  ready-to-enable Codecov integration.
 - Adds the experimental Strata weather-emulation models —
   `physicsnemo.experimental.models.strata.Strata` and `StrataTransformer3D` — plus
   the continuous / stereographic RoPE helpers `build_rope_cos_sin_1d_continuous`,
@@ -221,6 +223,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   derived-mesh methods (`compute_point_derivatives`, `compute_cell_derivatives`,
   `cell_data_to_point_data`, `point_data_to_cell_data`) aliased the source mesh's
   mutable `_cache`.
+- `physicsnemo.mesh.spatial.ClusterTree.compute_source_aggregates` now
+  normalizes with its call-time area weights instead of the weights used when
+  constructing the tree, preserving correct aggregates when weights change.
 - `physicsnemo.mesh`: fixed crash / data-integrity bugs — `project(...)` with
   `transform_point_data`/`transform_cell_data=True` mutated the input mesh in
   place; visualization and `to_pyvista` crashed on autograd-tracked tensors (now
