@@ -21,14 +21,12 @@ in 2D; a watertight surface in 3D, planned) and produces a quality simplex
 mesh of the enclosed interior, preserving the boundary exactly: every input
 vertex appears bit-identically in the output, and boundary facets are never
 moved off the input geometry (they may be subdivided during refinement).
-This is the exact-boundary counterpart to
-``physicsnemo.mesh.generate.mesh_implicit_domain``, which meshes
-implicit domains approximately but works in any dimension.
 """
 
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Float, Int
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -36,13 +34,16 @@ if TYPE_CHECKING:
 __all__ = ["fill_interior"]
 
 
-def _extract_loops(points_2d, edges):
+def _extract_loops(
+    edges: Int[torch.Tensor, "n_edges 2"], n_points: int
+) -> list[Int[torch.Tensor, " n_i"]]:
     """Ordered vertex-index loops from a closed 1-manifold edge mesh.
 
     Requires every referenced vertex to have degree exactly 2. Returns a
     list of 1D int64 index tensors (one per loop, arbitrary orientation).
+    Pure-Python adjacency (built once from a single ``tolist``) rather than
+    per-edge tensor indexing: ~1 us/edge instead of ~33 us/edge.
     """
-    n_points = points_2d.shape[0]
     degree = torch.zeros(n_points, dtype=torch.int64)
     degree.index_add_(
         0, edges.reshape(-1), torch.ones(edges.numel(), dtype=torch.int64)
@@ -55,27 +56,22 @@ def _extract_loops(points_2d, edges):
             f"2 edges); vertices {bad} have degree != 2. Open curves, "
             f"T-junctions, and duplicated edges are not fillable."
         )
-    # Two neighbor slots per vertex.
-    nbr = torch.full((n_points, 2), -1, dtype=torch.int64)
-    slot = torch.zeros(n_points, dtype=torch.int64)
+    nbr: list[list[int]] = [[] for _ in range(n_points)]
     for a, b in edges.tolist():
-        nbr[a, slot[a]] = b
-        slot[a] += 1
-        nbr[b, slot[b]] = a
-        slot[b] += 1
-    visited = torch.zeros(n_points, dtype=torch.bool)
-    visited[~used] = True
+        nbr[a].append(b)
+        nbr[b].append(a)
+    visited = [not bool(u) for u in used.tolist()]
     loops = []
     for start in range(n_points):
         if visited[start]:
             continue
         loop = [start]
         visited[start] = True
-        prev, cur = start, int(nbr[start, 0])
+        prev, cur = start, nbr[start][0]
         while cur != start:
             loop.append(cur)
             visited[cur] = True
-            a, b = int(nbr[cur, 0]), int(nbr[cur, 1])
+            a, b = nbr[cur]
             prev, cur = cur, (b if a == prev else a)
         if len(loop) < 3:
             raise ValueError(
@@ -86,42 +82,99 @@ def _extract_loops(points_2d, edges):
     return loops
 
 
-def _point_in_polygon(point, poly):
-    """Even-odd crossing test (poly: (N, 2) float64, point: (2,))."""
-    a = poly
-    b = torch.roll(poly, -1, dims=0)
-    straddle = (a[:, 1] > point[1]) != (b[:, 1] > point[1])
-    t = (point[1] - a[:, 1]) / (b[:, 1] - a[:, 1] + 1e-300)
-    x_cross = a[:, 0] + t * (b[:, 0] - a[:, 0])
-    return bool((straddle & (x_cross > point[0])).sum() % 2 == 1)
-
-
-def _group_components(loop_polys):
+def _group_components(
+    loop_polys: list[Float[torch.Tensor, "n_i 2"]],
+) -> list[tuple[int, list[int]]]:
     """Group loops into (outer, [holes]) components by containment depth.
 
     Even nesting depth = a component's outer boundary; its holes are the
     loops one level deeper that it directly contains. Islands inside holes
-    start new components (any nesting depth is supported).
+    start new components (any nesting depth is supported). Containment is
+    probed with a point strictly inside each loop (via
+    ``polygon_interior_point``) rather than a vertex, which can lie exactly
+    on another loop's edge where the even-odd test is arbitrary; the tests
+    themselves reuse the engine's vectorized ``_points_in_polygon`` (one
+    call per loop, not one per pair).
+
+    Crossing loops that end up in *different* components (the engine's own
+    crossing check only sees one component at a time) are detected by
+    pairwise segment intersection, bounding-box prefiltered.
     """
-    from physicsnemo.mesh.tessellation.delaunay import polygon_interior_point
+    from physicsnemo.mesh.tessellation.delaunay import (
+        _points_in_polygon,
+        polygon_interior_point,
+    )
 
     n = len(loop_polys)
-    # Probe with a point strictly inside each loop rather than its first
-    # vertex: a vertex can lie exactly on another loop's edge (touching or
-    # float-coincident inputs), where the even-odd test is arbitrary.
-    probes = [polygon_interior_point(poly) for poly in loop_polys]
+    polys_np = [poly.numpy() for poly in loop_polys]
+    probes = (
+        torch.stack([polygon_interior_point(poly) for poly in loop_polys])
+        .double()
+        .numpy()
+    )
     contains = [[False] * n for _ in range(n)]
     for i in range(n):
+        inside = _points_in_polygon(probes, polys_np[i])
         for j in range(n):
             if i != j:
-                contains[i][j] = _point_in_polygon(probes[j], loop_polys[i])
+                contains[i][j] = bool(inside[j])
     depth = [sum(contains[i][j] for i in range(n)) for j in range(n)]
     components = []
     for j in range(n):
         if depth[j] % 2 == 0:
             holes = [k for k in range(n) if depth[k] == depth[j] + 1 and contains[j][k]]
             components.append((j, holes))
+
+    comp_of = {}
+    for ci, (outer, holes) in enumerate(components):
+        comp_of[outer] = ci
+        for k in holes:
+            comp_of[k] = ci
+    _check_no_cross_component_crossings(loop_polys, comp_of)
     return components
+
+
+def _segments_intersect(
+    a: Float[torch.Tensor, "n_a 2 2"], b: Float[torch.Tensor, "n_b 2 2"]
+) -> bool:
+    """True if any segment of ``a`` properly intersects any segment of ``b``."""
+
+    def orient(p, q, r):  # sign of the (q-p) x (r-p) cross product
+        return torch.sign(
+            (q[..., 0] - p[..., 0]) * (r[..., 1] - p[..., 1])
+            - (q[..., 1] - p[..., 1]) * (r[..., 0] - p[..., 0])
+        )
+
+    p1, p2 = a[:, None, 0], a[:, None, 1]
+    q1, q2 = b[None, :, 0], b[None, :, 1]
+    hit = (orient(p1, p2, q1) * orient(p1, p2, q2) < 0) & (
+        orient(q1, q2, p1) * orient(q1, q2, p2) < 0
+    )
+    return bool(hit.any())
+
+
+def _check_no_cross_component_crossings(
+    loop_polys: list[Float[torch.Tensor, "n_i 2"]],
+    comp_of: dict[int, int],
+) -> None:
+    n = len(loop_polys)
+    boxes = [(poly.min(dim=0).values, poly.max(dim=0).values) for poly in loop_polys]
+    segs = [
+        torch.stack([poly, torch.roll(poly, -1, dims=0)], dim=1) for poly in loop_polys
+    ]
+    for i in range(n):
+        for j in range(i + 1, n):
+            if comp_of.get(i) == comp_of.get(j):
+                continue  # same component: the engine validates these
+            if bool((boxes[i][1] < boxes[j][0]).any()) or bool(
+                (boxes[j][1] < boxes[i][0]).any()
+            ):
+                continue  # disjoint bounding boxes cannot cross
+            if _segments_intersect(segs[i], segs[j]):
+                raise ValueError(
+                    f"boundary loops {i} and {j} cross each other; loops "
+                    f"must be disjoint simple polylines"
+                )
 
 
 def fill_interior(
@@ -138,8 +191,8 @@ def fill_interior(
     ``Mesh[n-1, n]``, produce a volume ``Mesh[n, n]`` of the enclosed
     interior such that
 
-    - every input vertex appears **bit-identically** in the output (the
-      leading rows of ``points``, in input order);
+    - every input vertex *referenced by an edge* appears **bit-identically**
+      in the output (the leading rows of ``points``, in input order);
     - boundary facets are never moved off the input geometry — refinement
       may *subdivide* them, but the union of output boundary facets equals
       the input boundary exactly;
@@ -149,11 +202,7 @@ def fill_interior(
     every output triangle is **guaranteed** a minimum angle of
     ``min_angle_degrees`` (Ruppert refinement; deterministic, bitwise
     reproducible). ``n = 3`` (watertight surface -> tetrahedra) raises
-    :class:`NotImplementedError`; for *approximate* interior meshing of a
-    surface today, build an SDF from it
-    (``physicsnemo.mesh.spatial.signed_distance_field_mesh``) and use
-    ``physicsnemo.mesh.generate.mesh_implicit_domain``, which trades
-    the exact-boundary contract for dimension generality.
+    :class:`NotImplementedError` pending exact 3D boundary recovery.
 
     Parameters
     ----------
@@ -237,11 +286,7 @@ def fill_interior(
     if n == 3:
         raise NotImplementedError(
             "fill_interior for n=3 (watertight surface -> tetrahedra) is "
-            "not implemented yet. For approximate interior meshing today, "
-            "build an SDF from the surface via "
-            "physicsnemo.mesh.spatial.signed_distance_field_mesh and mesh "
-            "it with physicsnemo.mesh.generate.mesh_implicit_domain (the "
-            "boundary becomes O(h^2)-approximate rather than exact)."
+            "not implemented yet; exact 3D boundary recovery is planned."
         )
     if n != 2:
         raise NotImplementedError(
@@ -258,9 +303,15 @@ def fill_interior(
             "boundary contains no edges; nothing to fill. Pass a Mesh "
             "whose cells are the closed boundary loops."
         )
-    loops_idx = _extract_loops(pts64, edges)
+    loops_idx = _extract_loops(edges, pts64.shape[0])
     loop_polys = [pts64[idx] for idx in loops_idx]
     components = _group_components(loop_polys)
+    if not components:
+        raise ValueError(
+            "no boundary loop sits at even containment depth, so there is "
+            "no domain to fill; this typically means coincident duplicate "
+            "loops or otherwise invalid nesting"
+        )
 
     all_points, all_cells = [], []
     all_marker, all_source = [], []

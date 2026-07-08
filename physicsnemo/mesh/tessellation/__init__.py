@@ -30,8 +30,6 @@ vertex is preserved bit-identically, and in 2D every output angle is
 guaranteed to meet the requested bound. :func:`polygon_interior_point`
 returns a point strictly inside a simple polygon.
 
-For *implicit* domains (signed-distance or level-set functions) in any
-dimension, see ``physicsnemo.mesh.generate.mesh_implicit_domain``.
 """
 
 from physicsnemo.mesh.tessellation.delaunay import polygon_interior_point
