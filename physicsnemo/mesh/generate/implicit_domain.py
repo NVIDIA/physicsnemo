@@ -43,7 +43,7 @@ geometry.
 
 import math
 import time
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 import torch
 
@@ -72,15 +72,6 @@ if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
 __all__ = ["mesh_implicit_domain", "refit_mesh_to_implicit"]
-
-
-def _clip(phi, points, cells, h=None):
-    keep = phi(points[cells].mean(dim=1)) < 0
-    if h is not None:
-        d = points.shape[1]
-        vol = signed_volumes(points, cells).abs()
-        keep &= vol > 1e-6 * h**d / math.factorial(d)
-    return compact_mesh(points, cells[keep])
 
 
 def _odt_targets(points, cells, h):
@@ -144,23 +135,34 @@ def _gated_update(points, cells, target, vol_floor, max_halvings: int = 6):
         scale[bad_verts] = 0.0
 
 
-def _coverage_gap(phi, points, cells, bounds, h, n_probes=4096, seed=0):
+def _coverage_gap(phi, points, cells, bounds, h, gscale=1.0, seed=0):
     """Worst distance (in units of h) from the zero set to the mesh boundary.
 
     Probes the bounding box, projects onto ``phi = 0``, and measures each
     projected sample's distance to the nearest boundary vertex or
-    boundary-facet centroid. Large gaps mean the mesh silently failed to
-    cover part of the surface (features below the lattice resolution).
+    boundary-facet centroid. Probe count scales with the box-to-h ratio
+    (capped at 65536), but detection of a dropped feature is still
+    probabilistic: its projection basin must be hit by a probe. Projection
+    convergence is judged in DISTANCE units, |phi| / |grad phi| < 0.05 h,
+    so noisy or scaled level sets cannot silently empty the probe set; if
+    no probe converges for a nonempty mesh, +inf is returned (treated as a
+    guard failure, never as perfect coverage).
     """
     lo, hi = bounds
     d = points.shape[1]
+    span = float((hi - lo).max())
+    n_probes = int(min(65536, max(4096, (span / h) ** d)))
     g = torch.Generator(device="cpu").manual_seed(seed)
     probe = torch.rand(n_probes, d, generator=g, dtype=points.dtype).to(points.device)
     probe = lo + probe * (hi - lo)
     surf = project_to_zero_set(phi, probe, iters=6)
-    surf = surf[phi(surf).abs() < 1e-6 * max(1.0, float(h))]
+    xg = surf.detach().requires_grad_(True)
+    f = phi(xg)
+    (grads,) = torch.autograd.grad(f.sum(), xg)
+    dist_est = f.detach().abs() / grads.norm(dim=-1).clamp_min(1e-30)
+    surf = surf[torch.nan_to_num(dist_est, nan=float("inf")) < 0.05 * h]
     if surf.shape[0] == 0:
-        return 0.0
+        return float("inf")
     uniq, counts, _, _ = facet_census(cells)
     bfacets = uniq[counts == 1]
     targets = torch.cat(
@@ -174,6 +176,50 @@ def _coverage_gap(phi, points, cells, bounds, h, n_probes=4096, seed=0):
         chunk_min = torch.cdist(surf[s0 : s0 + 256], targets).min(dim=1).values
         gap = torch.maximum(gap, chunk_min.max())
     return float(gap / h)
+
+
+@overload
+def mesh_implicit_domain(
+    phi: ImplicitFunction,
+    bounds: tuple,
+    h: float,
+    *,
+    reconnect: Literal["flips", "none"] = "flips",
+    iters: int = 60,
+    device: str | torch.device = "cpu",
+    dtype: torch.dtype | None = None,
+    max_coverage_gap_h: float | None = 1.5,
+    feature_points: torch.Tensor | None = None,
+    erode: float = 0.2,
+    reconnect_every: int = 10,
+    flip_q_focus: float = 0.5,
+    tol: float = 5e-3,
+    peel: bool = True,
+    seed: int = 0,
+    full_output: Literal[False] = ...,
+) -> "Mesh": ...
+
+
+@overload
+def mesh_implicit_domain(
+    phi: ImplicitFunction,
+    bounds: tuple,
+    h: float,
+    *,
+    reconnect: Literal["flips", "none"] = "flips",
+    iters: int = 60,
+    device: str | torch.device = "cpu",
+    dtype: torch.dtype | None = None,
+    max_coverage_gap_h: float | None = 1.5,
+    feature_points: torch.Tensor | None = None,
+    erode: float = 0.2,
+    reconnect_every: int = 10,
+    flip_q_focus: float = 0.5,
+    tol: float = 5e-3,
+    peel: bool = True,
+    seed: int = 0,
+    full_output: Literal[True],
+) -> tuple["Mesh", dict[str, Any]]: ...
 
 
 def mesh_implicit_domain(
@@ -215,7 +261,10 @@ def mesh_implicit_domain(
         blocks.
     bounds : tuple of (array-like, array-like)
         ``(lo, hi)`` corners of an axis-aligned box that contains the
-        domain. Each of length ``d``.
+        domain. Each of length ``d``. Keep the box reasonably tight: the
+        full lattice over ``bounds`` is materialized before clipping, so
+        memory scales with ``prod((hi - lo) / h)`` regardless of the
+        domain's own size.
     h : float
         Target edge length. Geometric features smaller than ``h`` cannot be
         represented (see ``max_coverage_gap_h``).
@@ -329,7 +378,19 @@ def mesh_implicit_domain(
 
     t0 = time.perf_counter()
     points, cells = kuhn_lattice(lo, hi, h, device=device, dtype=dtype)
-    keep = phi(points[cells].mean(dim=1)) < -erode * h
+    centroid_phi = phi(points[cells].mean(dim=1))
+    # Normalize phi-unit thresholds by the gradient magnitude near the zero
+    # set, so any level set with a usable gradient works -- not only unit-
+    # gradient SDFs (phi = c * sdf must behave identically for any c > 0).
+    band = torch.topk(
+        centroid_phi.abs(), k=min(1024, centroid_phi.shape[0]), largest=False
+    ).indices
+    bg = points[cells].mean(dim=1)[band].detach().requires_grad_(True)
+    (grads,) = torch.autograd.grad(phi(bg).sum(), bg)
+    gscale = float(grads.norm(dim=-1).median())
+    if not (gscale > 0 and gscale < float("inf")):
+        gscale = 1.0
+    keep = centroid_phi < -erode * h * gscale
     if not bool(keep.any()):
         raise ValueError(
             "no lattice cell lies inside the domain at this resolution: "
@@ -374,6 +435,11 @@ def mesh_implicit_domain(
 
     t0 = time.perf_counter()
     for it in range(iters):
+        if it > 0 and it % reconnect_every == 0:
+            # Full refresh bounds escape-band staleness: the cache stores
+            # phi at proposed targets, not at the gated positions actually
+            # accepted, and drift can otherwise accumulate unchecked.
+            phi_cache = phi(points)
         tr = time.perf_counter()
         if reconnect == "flips" and it >= next_flip_it:
             cells, n_flips = flip_until_done(
@@ -400,12 +466,10 @@ def mesh_implicit_domain(
             # Pinned vertices sit exactly at their features; the pin
             # overrides smoothing and projection (a corner tip is on the
             # zero set, but projection would slide a vertex off the tip).
-            if fixed_idx is None:
-                fixed_idx = torch.cdist(fixed_targets, points).argmin(dim=1)
             target[fixed_idx] = fixed_targets
         # Escape check only in the near-boundary band: interior vertices
         # more than ~3h inside cannot exit the domain in one gated step.
-        band = (~bnd) & (phi_cache > -3.0 * h)
+        band = (~bnd) & (phi_cache > -3.0 * h * gscale)
         if band.any():
             phi_band = phi(target[band])
             esc = torch.zeros_like(band)
@@ -427,15 +491,13 @@ def mesh_implicit_domain(
     target = points.clone()
     target[bnd] = project_to_zero_set(phi, points[bnd], iters=5)
     if fixed_targets is not None:
-        if fixed_idx is None:
-            fixed_idx = torch.cdist(fixed_targets, points).argmin(dim=1)
         target[fixed_idx] = fixed_targets
     points = _gated_update(points, cells, target, vol_floor)
 
     diag["peeled"] = 0
     if peel:
         points, cells, diag["peeled"] = peel_boundary_slivers(
-            points, cells, phi, h, protect_vertices=fixed_idx
+            points, cells, phi, h * gscale, protect_vertices=fixed_idx
         )
 
     q = volume_length_quality(points, cells)
@@ -445,7 +507,7 @@ def mesh_implicit_domain(
         all_volumes_positive=bool((signed_volumes(points, cells) > 0).all()),
         boundary_closed_manifold=boundary_is_closed_manifold(cells),
         q_min=float(q.min()),
-        q_p01=float(q.quantile(0.01)),
+        q_p01=float(torch.kthvalue(q, max(1, int(0.01 * q.shape[0]))).values),
         q_median=float(q.median()),
         sliver_fraction=float((q < 0.2).double().mean()),
         time_init_s=t_init,
@@ -462,6 +524,8 @@ def mesh_implicit_domain(
             f"max_coverage_gap_h=None to accept the loss."
         )
 
+    if fixed_targets is not None:
+        diag["pinned_vertex_indices"] = torch.cdist(fixed_targets, points).argmin(dim=1)
     mesh = Mesh(points=points, cells=cells)
     return (mesh, diag) if full_output else mesh
 

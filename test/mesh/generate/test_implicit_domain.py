@@ -417,3 +417,50 @@ def test_diagnostics_contract():
         "time_optimize_s",
     ):
         assert key in diag, f"missing diagnostic: {key}"
+
+
+def test_scaled_level_set_matches_sdf():
+    """phi = c * sdf must behave like the sdf for any c (grad-normalized)."""
+    for c in (1e-3, 1.0, 1e3):
+        phi = lambda x, c=c: (x.norm(dim=-1) - 0.7) * c  # noqa: E731
+        mesh = mesh_implicit_domain(phi, ([-1, -1], [1, 1]), 0.1)
+        assert_valid_volume_mesh(mesh)
+        vol = float(signed_volumes(mesh.points, mesh.cells).sum())
+        assert abs(vol - math.pi * 0.49) / (math.pi * 0.49) < 0.02
+
+
+def test_feature_point_on_interior_facet():
+    """A feature landing exactly on a cell facet must split, not tent:
+    tents over interior facets overlap existing cells (undetectable by
+    volume or manifold diagnostics)."""
+    mesh, diag = mesh_implicit_domain(
+        sdf_box([-0.5, -0.5], [0.5, 0.5]),
+        ([-0.7, -0.7], [0.7, 0.7]),
+        0.35,
+        feature_points=torch.tensor([[0.0, 0.0]], dtype=torch.float64),
+        max_coverage_gap_h=None,
+        full_output=True,
+    )
+    assert_valid_volume_mesh(mesh)
+    d = torch.cdist(torch.zeros(1, 2, dtype=torch.float64), mesh.points).min()
+    assert float(d) < 1e-12
+    # Coverage: total volume must not exceed the true square area (an
+    # overlapping tent inflates it).
+    vol = float(signed_volumes(mesh.points, mesh.cells).sum())
+    assert vol <= 1.0 + 1e-9
+
+
+def test_coverage_guard_survives_quantized_phi():
+    """A noisy/quantized level set must not silently disable the guard."""
+    q = 2e-5
+
+    def phi(x):  # simulate float-quantized neural-field output
+        raw = sdf_union(
+            sdf_sphere([-0.65, 0.0], 0.25),
+            sdf_sphere([0.65, 0.0], 0.25),
+            sdf_box([-0.65, -0.01], [0.65, 0.01]),
+        )(x)
+        return torch.round(raw / q) * q
+
+    with pytest.raises(ValueError, match="coverage guard"):
+        mesh_implicit_domain(phi, ([-1, -0.6], [1, 0.6]), 0.15)
