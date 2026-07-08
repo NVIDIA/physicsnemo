@@ -33,22 +33,42 @@ from physicsnemo.core.version_check import OptionalImport
 triton = OptionalImport("triton")
 
 
+def _to_device_cast_float(t, device, dtype, non_blocking):
+    # Move to device; cast float payloads only. Integer id/index tensors keep original dtype.
+    cast = dtype if (dtype is not None and t.is_floating_point()) else None
+    return t.to(device=device, dtype=cast, non_blocking=non_blocking)
+
+
 @dataclasses.dataclass
 class PixelGroupMap:
-    r"""CSR map grouping non-empty pixels into shared ragged-attention programs."""
+    r"""CSR map grouping non-empty pixels into shared ragged-attention kernel programs.
 
-    # program p owns pixels [program_ptr[p]:program_ptr[p + 1]]
+    Built by :func:`build_pixel_group_map`; see it for a worked example.
+
+    Attributes
+    ----------
+    program_ptr : torch.Tensor
+        Int prefix sums of shape :math:`(\text{num\_programs} + 1,)`; program
+        :math:`p` owns pixels
+        :math:`\text{program\_pixels}[\text{program\_ptr}[p]:\text{program\_ptr}[p + 1]]`.
+    program_pixels : torch.Tensor
+        Int pixel ids of shape :math:`(\text{num\_grouped\_pixels},)`, ordered by program.
+    """
+
     program_ptr: Int[torch.Tensor, " num_programs_plus_one"]
-    program_pixels: Int[torch.Tensor, " num_grouped_pixels"]  # pixel ids per program
+    program_pixels: Int[torch.Tensor, " num_grouped_pixels"]
 
     def to(self, device=None, dtype=None, non_blocking: bool = True) -> "PixelGroupMap":
-        # dtype is intentionally ignored: group-map tensors are integer indices.
-        del dtype
+        # torch dispatches .to's first positional by type
+        if isinstance(device, torch.dtype):
+            device, dtype = None, device
+
+        def move(t):
+            return _to_device_cast_float(t, device, dtype, non_blocking)
+
         return PixelGroupMap(
-            program_ptr=self.program_ptr.to(device=device, non_blocking=non_blocking),
-            program_pixels=self.program_pixels.to(
-                device=device, non_blocking=non_blocking
-            ),
+            program_ptr=move(self.program_ptr),
+            program_pixels=move(self.program_pixels),
         )
 
 
@@ -61,19 +81,42 @@ class ObsContext:
     the raw obs fields feed :class:`~physicsnemo.experimental.models.healda.obs_tokenizer.ObsTokenizerFiLM`,
     and the ragged packing feeds the observation cross-attention. Observations are
     sorted by flat pixel index so each pixel's observations are contiguous.
+
+    :math:`N_{obs}` is the total observation count across all batch elements and
+    time frames; :math:`\text{total\_pixels} = B \cdot T \cdot X'` over the
+    backbone grid.
+
+    Attributes
+    ----------
+    obs : torch.Tensor
+        Scalar observation measurement values of shape :math:`(N_{obs},)`.
+    float_metadata : torch.Tensor
+        Per-observation float metadata features of shape :math:`(N_{obs}, M_{float})`.
+    obs_type : torch.Tensor
+        Observation-type ids of shape :math:`(N_{obs},)`.
+    channel : torch.Tensor
+        Instrument channel ids of shape :math:`(N_{obs},)`.
+    platform : torch.Tensor
+        Platform/satellite ids of shape :math:`(N_{obs},)`.
+    cu_seqlens_k : torch.Tensor
+        Int prefix sums of shape :math:`(\text{total\_pixels} + 1,)` with a
+        leading zero; pixel :math:`i` owns observations
+        :math:`[\text{cu\_seqlens\_k}[i], \text{cu\_seqlens\_k}[i + 1])`.
+    max_seqlen_k : int
+        Maximum per-pixel observation count.
+    group_map : :class:`PixelGroupMap` or None, optional, default=None
+        Groups small pixels into shared ragged-attention kernel programs; ``None``
+        disables grouping.
     """
 
-    obs: Float[torch.Tensor, " nobs"]  # observation measurement value
-    float_metadata: Float[torch.Tensor, "nobs meta_dim"]  # pre-computed float features
-    obs_type: Int[torch.Tensor, " nobs"]  # observation-type id
-    channel: Int[torch.Tensor, " nobs"]  # channel id
-    platform: Int[torch.Tensor, " nobs"]  # platform id
-
-    # prefix sums; pixel i owns tokens[cu_seqlens_k[i]:cu_seqlens_k[i + 1]]
+    obs: Float[torch.Tensor, " nobs"]
+    float_metadata: Float[torch.Tensor, "nobs meta_dim"]
+    obs_type: Int[torch.Tensor, " nobs"]
+    channel: Int[torch.Tensor, " nobs"]
+    platform: Int[torch.Tensor, " nobs"]
     cu_seqlens_k: Int[torch.Tensor, " total_pixels_plus_one"]
-    max_seqlen_k: int  # max per-pixel observation count
-
-    group_map: Optional[PixelGroupMap] = None  # groups small pixels into shared kernels
+    max_seqlen_k: int
+    group_map: Optional[PixelGroupMap] = None
 
     def __post_init__(self) -> None:
         # Cheap, sync-free structural check at construction: the packing is a 1D
@@ -86,27 +129,27 @@ class ObsContext:
             )
 
     def to(self, device=None, dtype=None, non_blocking: bool = True) -> "ObsContext":
-        def move(t, cast):
-            if t is None:
-                return None
-            return t.to(
-                device=device,
-                dtype=dtype if cast else None,
-                non_blocking=non_blocking,
-            )
+        # torch dispatches .to's first positional by type
+        if isinstance(device, torch.dtype):
+            device, dtype = None, device
+
+        def move(t):
+            return _to_device_cast_float(t, device, dtype, non_blocking)
 
         return ObsContext(
-            cu_seqlens_k=self.cu_seqlens_k.to(device=device, non_blocking=non_blocking),
+            obs=move(self.obs),
+            float_metadata=move(self.float_metadata),
+            obs_type=move(self.obs_type),
+            channel=move(self.channel),
+            platform=move(self.platform),
+            cu_seqlens_k=move(self.cu_seqlens_k),
             max_seqlen_k=self.max_seqlen_k,
-            obs=move(self.obs, cast=True),
-            float_metadata=move(self.float_metadata, cast=True),
-            obs_type=move(self.obs_type, cast=False),
-            channel=move(self.channel, cast=False),
-            platform=move(self.platform, cast=False),
             group_map=(
                 None
                 if self.group_map is None
-                else self.group_map.to(device=device, non_blocking=non_blocking)
+                else self.group_map.to(
+                    device=device, dtype=dtype, non_blocking=non_blocking
+                )
             ),
         )
 
