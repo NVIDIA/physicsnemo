@@ -1059,6 +1059,7 @@ def test_geotransolver_local_features_compile(device):
     assert not torch.isnan(compiled_out).any()
 
 
+@requires_module("warp")
 def test_geotransolver_local_features_requires_geometry(device):
     """include_local_features=True must fail fast without geometry (regression).
 

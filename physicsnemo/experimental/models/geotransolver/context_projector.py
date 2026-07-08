@@ -1036,8 +1036,9 @@ class GlobalContextBuilder(nn.Module):
                 "(B, N, geometry_dim) and set `geometry_dim` in the constructor."
             )
 
-        # Extract multi-scale features if enabled
-        if self.local_extractors is not None and geometry is not None:
+        # Extract multi-scale features if enabled (the guard above guarantees
+        # `geometry` is non-None here whenever `local_extractors` is set)
+        if self.local_extractors is not None:
             local_features = []
             for i, embedding in enumerate(local_embeddings):
                 spatial_coords = local_positions[i]  # Extract coordinates
