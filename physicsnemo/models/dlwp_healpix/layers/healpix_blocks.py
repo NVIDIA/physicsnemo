@@ -14,6 +14,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Implementation of the Deep Learning Weather Prediction (DLWP) convolutional and recurrent blocks on the HEALPix mesh.
+
+This module contains the implementation of the Deep Learning Weather Prediction (DLWP) convolutional and recurrent blocks on the HEALPix mesh.
+The main classes are:
+- ConvGRUBlock: A class for the DLWP convolutional GRU block on the HEALPix mesh.
+- BasicConvBlock: A class for the DLWP basic convolutional block on the HEALPix mesh.
+- ConvNeXtBlock: A class for the DLWP ConvNeXt block on the HEALPix mesh.
+- DoubleConvNeXtBlock: A class for the DLWP double ConvNeXt block on the HEALPix mesh.
+- Multi_SymmetricConvNeXtBlock: A class for the DLWP multi symmetric ConvNeXt block on the HEALPix mesh.
+- SymmetricConvNeXtBlock: A class for the DLWP symmetric ConvNeXt block on the HEALPix mesh.
+- TransposedConvUpsample: A class for the DLWP transposed convolutional upsample block on the HEALPix mesh.
+- Interpolate: A class for the DLWP interpolate block on the HEALPix mesh.
+"""
+
 from typing import Callable, Sequence, Tuple, Union
 
 import torch
@@ -31,10 +46,30 @@ class _LayerNormOverChannels(th.nn.Module):
     """Applies nn.LayerNorm over the channel dimension for (B, C, H, W) tensors."""
 
     def __init__(self, channel_depth: int, eps: float = 1e-5):
+        """
+        Parameters
+        ----------
+        channel_depth: int
+            The number of channels in the input tensor
+        eps: float, optional
+            The epsilon value for the layer norm
+        """
         super().__init__()
         self.norm = th.nn.LayerNorm(channel_depth, eps=eps)
 
     def forward(self, x):
+        """Forward pass of the _LayerNormOverChannels
+
+        Parameters
+        ----------
+        x: torch.Tensor
+            The input tensor
+
+        Returns
+        -------
+        torch.Tensor
+            The normed output tensor
+        """
         x = x.permute(0, 2, 3, 1)
         x = self.norm(x)
         return x.permute(0, 3, 1, 2)
@@ -693,6 +728,20 @@ class Multi_SymmetricConvNeXtBlock(th.nn.Module):
             )
 
     def forward(self, x, conditions_cln=None):
+        """Forward pass of the Multi_SymmetricConvNeXtBlock
+
+        Parameters
+        ----------
+        x: torch.Tensor
+            The input tensor
+        conditions_cln: torch.Tensor, optional
+            The conditions for the conditional layer normalization
+
+        Returns
+        -------
+        torch.Tensor
+            The output tensor
+        """
         out = x
         for block in self.blocks:
             out = block(out, conditions_cln=conditions_cln)

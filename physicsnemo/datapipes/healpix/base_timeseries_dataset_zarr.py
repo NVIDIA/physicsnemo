@@ -14,6 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+BaseTimeSeriesDatasetZarr - Abstract base class for time series healpix datasets using Zarr storage.
+
+This class provides the core functionality for loading and processing time series healpix data
+stored in Zarr format. It handles data loading, scaling, and time management.
+Subclasses must implement the __getitem__ method to define specific data retrieval logic.
+"""
+
 import importlib.util
 import logging
 import os

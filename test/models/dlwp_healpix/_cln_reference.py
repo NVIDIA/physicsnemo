@@ -17,14 +17,14 @@
 # Reference (old) implementation of ConditionalLayerNorm for testing.
 # This is a copy of the original code before optimization.
 
-from typing import List
-
 import copy
+from typing import List
 
 import torch as th
 
 try:
     from apex.normalization import FusedLayerNorm
+
     _APEX_AVAILABLE = True
 except ImportError:
     _APEX_AVAILABLE = False
@@ -49,8 +49,12 @@ class ConditionalLayerNormReference(th.nn.Module):
         self.channel_depth = channel_depth
         self.hidden_dims = mlp_hidden_dims
         self.activation = activation if activation is not None else th.nn.Identity()
-        self.gamma_mlp = self._make_mlp(self.condition_shape, self.hidden_dims, self.channel_depth, self.activation)
-        self.beta_mlp = self._make_mlp(self.condition_shape, self.hidden_dims, self.channel_depth, self.activation)
+        self.gamma_mlp = self._make_mlp(
+            self.condition_shape, self.hidden_dims, self.channel_depth, self.activation
+        )
+        self.beta_mlp = self._make_mlp(
+            self.condition_shape, self.hidden_dims, self.channel_depth, self.activation
+        )
         self.n_faces = n_faces
         self.scale_center = scale_center
 
@@ -64,10 +68,18 @@ class ConditionalLayerNormReference(th.nn.Module):
             self.norm = th.nn.LayerNorm(channel_depth, elementwise_affine=False)
         elif norm_op == "apex":
             if not _APEX_AVAILABLE:
-                raise ImportError("Apex FusedLayerNorm requested but apex is not available")
+                raise ImportError(
+                    "Apex FusedLayerNorm requested but apex is not available"
+                )
             self.norm = FusedLayerNorm(channel_depth, elementwise_affine=False)
 
-    def _make_mlp(self, in_dim: int, hidden_dims: List[int], out_dim: int, activation: th.nn.Module) -> th.nn.Sequential:
+    def _make_mlp(
+        self,
+        in_dim: int,
+        hidden_dims: List[int],
+        out_dim: int,
+        activation: th.nn.Module,
+    ) -> th.nn.Sequential:
         layers = []
         for hdim in hidden_dims:
             layers.append(th.nn.Linear(in_dim, hdim))

@@ -14,6 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Implementation of the Deep Learning Weather Prediction (DLWP) normalization on the HEALPix mesh.
+
+This class contains the implementation of the Deep Learning Weather Prediction (DLWP) normalization on the HEALPix mesh.
+"""
+
 from typing import List
 
 import torch as th
@@ -41,6 +47,14 @@ def _cln_affine(x_norm, gamma_raw, beta, scale_center, n_faces):
 
 
 class ConditionalLayerNorm(th.nn.Module):
+    """LayerNorm whose affine (gamma/beta) parameters are predicted from a conditional input field.
+
+    Normalizes the input over the channel dimension with no learnable affine
+    parameters, then predicts per-channel scale and shift from ``conditions``
+    via a fused MLP and applies them, optionally recentered by
+    ``scale_center``.
+    """
+
     def __init__(
         self,
         condition_shape: int,
@@ -114,6 +128,24 @@ class ConditionalLayerNorm(th.nn.Module):
         out_dim: int,
         activation: th.nn.Module,
     ) -> th.nn.Sequential:
+        """Helper function that creates the MLP for the conditional layer normalization.
+
+        Parameters
+        ----------
+        in_dim: int
+            The input dimension
+        hidden_dims: List[int]
+            The hidden dimensions
+        out_dim: int
+            The output dimension
+        activation: th.nn.Module
+            The activation function
+
+        Returns
+        -------
+        th.nn.Sequential
+            The MLP
+        """
         layers = []
         for hdim in hidden_dims:
             layers.append(th.nn.Linear(in_dim, hdim))

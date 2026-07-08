@@ -14,6 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Dataset for coupling time series healpix data with external inputs from various earth system components.
+
+This class extends the TimeSeriesDataset to add the core functionality for coupling time series healpix data with external inputs from various earth system components.
+"""
+
 import gc
 import logging
 import time
@@ -165,6 +171,10 @@ class CoupledTimeSeriesDataset(TimeSeriesDataset):
         self.curr_item = None  # keeps track of current initialization
 
     def _get_scaling_da(self):
+        """
+        Get the scaling for the coupled values from the scaling dictionary.
+        This is overridden to add the scaling for the coupled values.
+        """
         scaling_df = pd.DataFrame.from_dict(self.scaling).T
         scaling_df.loc["zeros"] = {"mean": 0.0, "std": 1.0}
         scaling_da = scaling_df.to_xarray().astype("float32")
@@ -175,6 +185,9 @@ class CoupledTimeSeriesDataset(TimeSeriesDataset):
         super()._get_scaling_da()
 
     def __getitem__(self, item):
+        """
+        Get the item from the dataset. This is overridden to add the coupled values.
+        """
         # start range
         torch.cuda.nvtx.range_push("CoupledTimeSeriesDataset:__getitem__")
 
@@ -340,6 +353,9 @@ class CoupledTimeSeriesDataset(TimeSeriesDataset):
         return inputs_result, targets
 
     def next_integration(self, model_outputs, constants):
+        """
+        Fetch the next coupled integration step
+        """
         inputs_result = []
 
         # grab last few model outputs for re-initialization

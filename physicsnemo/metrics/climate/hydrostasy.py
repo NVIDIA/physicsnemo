@@ -33,6 +33,14 @@ def _virtual_temperature_from_geopotential_height(z1, z2, p1, p2, T1, R, g0):
 
 
 class HydrostaticBalance(torch.nn.Module):
+    """Derive virtual temperature at pressure levels from geopotential height.
+
+    Given geopotential heights (Z) at a set of pressure levels and a known
+    virtual temperature anchor, integrates the hypsometric equation outward
+    from the anchor level to recover virtual temperature at every other
+    level.
+    """
+
     def __init__(
         self,
         z_pressure_levels: Dict[int, float],
@@ -119,6 +127,15 @@ class HydrostaticBalance(torch.nn.Module):
 
 
 class DifferentialHydrostaticBalanceConstraint(torch.nn.Module):
+    """Compute layer-average virtual temperatures implied by geopotential height and model output.
+
+    For each pair of adjacent pressure levels, derives the layer-mean virtual
+    temperature implied by the hypsometric equation from geopotential height
+    (``Tv_avg``) alongside the layer-mean virtual temperature predicted
+    directly by the model (``Tv_model_avg``), so the two can be compared as a
+    hydrostatic-balance constraint.
+    """
+
     def __init__(
         self,
         z_pressure_levels: Dict[int, float],
@@ -433,6 +450,24 @@ class WeightedMSEWithHydrostasy(torch.nn.MSELoss):
         return x_scaled.reshape((-1, F, C_scaled, H, W))
 
     def error_histogram(self, prediction, bins, accumulator=None):
+        """Accumulate a per-level histogram of absolute hydrostatic-balance error.
+
+        Parameters
+        ----------
+        prediction: torch.Tensor
+            Model prediction tensor of shape [N, F, B, C, H, W].
+        bins: int or torch.Tensor
+            Either the number of equal-width bins to use, or an existing
+            tensor of per-level bin edges to reuse.
+        accumulator: torch.Tensor, optional
+            Existing per-level histogram counts to add to. If None, a new
+            zero-initialized accumulator is created.
+
+        Returns
+        -------
+        tuple[torch.Tensor, torch.Tensor]
+            The updated ``(accumulator, bin_edges)``.
+        """
         N, F, B, C, H, W = tuple(prediction.shape)
 
         if not (prediction.ndim == 6):
@@ -742,6 +777,24 @@ class LossWithHydrostasy(torch.nn.MSELoss):
         return x_scaled.reshape((-1, F, C_scaled, H, W))
 
     def error_histogram(self, prediction, bins, accumulator=None):
+        """Accumulate a per-level histogram of absolute hydrostatic-balance error.
+
+        Parameters
+        ----------
+        prediction: torch.Tensor
+            Model prediction tensor of shape [N, F, B, C, H, W].
+        bins: int or torch.Tensor
+            Either the number of equal-width bins to use, or an existing
+            tensor of per-level bin edges to reuse.
+        accumulator: torch.Tensor, optional
+            Existing per-level histogram counts to add to. If None, a new
+            zero-initialized accumulator is created.
+
+        Returns
+        -------
+        tuple[torch.Tensor, torch.Tensor]
+            The updated ``(accumulator, bin_edges)``.
+        """
         N, F, B, C, H, W = tuple(prediction.shape)
 
         if not (prediction.ndim == 6):

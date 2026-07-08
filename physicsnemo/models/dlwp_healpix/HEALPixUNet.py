@@ -14,6 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Implementation of the Deep Learning Weather Prediction (DLWP) UNet on the HEALPix mesh.
+
+This class provides the core functionality for the DLWP UNet on the HEALPix mesh.
+It handles the forward pass of the model, the backward pass, and the initialization of the hidden states.
+It also supports coupling the model with external inputs from various earth system components.
+"""
+
 import logging
 from dataclasses import dataclass
 from typing import Any, Dict, Sequence

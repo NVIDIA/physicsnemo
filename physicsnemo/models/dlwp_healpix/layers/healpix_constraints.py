@@ -14,10 +14,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Implementation of the Deep Learning Weather Prediction (DLWP) constraints on the HEALPix mesh.
+
+This module contains the implementation of the Deep Learning Weather Prediction (DLWP) constraints on the HEALPix mesh.
+The main classes are:
+- NonnegativeConstraint: A class for the DLWP nonnegative constraint on the HEALPix mesh.
+"""
+
 import torch
 
 
 class NonnegativeConstraint(torch.nn.Module):
+    """Clamp selected output channels to be nonnegative in physical units.
+
+    Applies a lower bound of zero (in unnormalized/physical space) to the
+    specified ``variables`` by clamping the corresponding normalized channels
+    to their per-variable, per-scaling threshold.
+    """
+
     def __init__(
         self,
         variables: list[str],

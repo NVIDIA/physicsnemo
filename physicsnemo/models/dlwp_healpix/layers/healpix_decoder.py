@@ -14,6 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Implementation of the Deep Learning Weather Prediction (DLWP) decoder on the HEALPix mesh.
+
+This class contains the implementation of the Deep Learning Weather Prediction (DLWP) decoder on the HEALPix mesh.
+"""
+
 from typing import Sequence
 
 import torch
@@ -171,6 +177,24 @@ class UNetDecoder(torch.nn.Module):
         skip_connection: torch.Tensor = None,
         conditions_cln: torch.Tensor = None,
     ) -> torch.Tensor:
+        """Helper function that performs the forward pass of a single layer of the decoder.
+
+        Parameters
+        ----------
+        layer: torch.nn.Module
+            The layer to forward pass
+        x: torch.Tensor
+            The input tensor
+        skip_connection: torch.Tensor, optional
+            The skip connection tensor
+        conditions_cln: torch.Tensor, optional
+            The conditional inputs for the normalization layers.
+
+        Returns
+        -------
+        torch.Tensor
+            The output tensor
+        """
         if layer["upsamp"] is not None:
             up = layer["upsamp"](x)
             x = torch.cat([up, skip_connection], dim=self.channel_dim)

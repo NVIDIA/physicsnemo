@@ -145,7 +145,6 @@ def scaling_double_dict():
 @import_or_fail("xarray")
 @nfsdata_or_fail
 def test_ConstantCoupler(dataset_path, scaling_dict, pytestconfig):
-
     from physicsnemo.datapipes.healpix.couplers import (
         ConstantCoupler,
     )
@@ -290,7 +289,6 @@ def test_ConstantCoupler(dataset_path, scaling_dict, pytestconfig):
 @import_or_fail("xarray")
 @nfsdata_or_fail
 def test_TrailingAverageCoupler(dataset_path, scaling_dict, pytestconfig):
-
     from physicsnemo.datapipes.healpix.couplers import (
         TrailingAverageCoupler,
     )
@@ -449,7 +447,6 @@ def test_TrailingAverageCoupler(dataset_path, scaling_dict, pytestconfig):
 def test_CoupledTimeSeriesDatasetZarr_initialization(
     dataset_path, scaling_dict, pytestconfig
 ):
-
     from physicsnemo.datapipes.healpix.coupledtimeseries_dataset_zarr import (
         CoupledTimeSeriesDatasetZarr,
     )
@@ -571,7 +568,6 @@ def test_CoupledTimeSeriesDatasetZarr_initialization(
 def test_CoupledTimeSeriesDatasetZarr_get_constants(
     dataset_path, scaling_dict, constant_coupler_config, pytestconfig
 ):
-
     from physicsnemo.datapipes.healpix.coupledtimeseries_dataset_zarr import (
         CoupledTimeSeriesDatasetZarr,
     )
@@ -876,7 +872,6 @@ def test_CoupledTimeSeriesDatasetZarr_get(
 def test_CoupledTimeSeriesDataModuleZarr_initialization(
     dataset_path, splits, scaling_double_dict, constant_coupler_config, pytestconfig
 ):
-
     from physicsnemo.datapipes.healpix.data_modules_zarr import (
         CoupledTimeSeriesDataModuleZarr,
     )
@@ -940,7 +935,6 @@ def test_CoupledTimeSeriesDataModuleZarr_initialization(
 def test_CoupledTimeSeriesDataModuleZarr_get_constants(
     dataset_path, scaling_double_dict, splits, constant_coupler_config, pytestconfig
 ):
-
     from physicsnemo.datapipes.healpix.data_modules_zarr import (
         CoupledTimeSeriesDataModuleZarr,
     )
@@ -1015,7 +1009,6 @@ def test_CoupledTimeSeriesDataModuleZarr_get_constants(
 def test_CoupledTimeSeriesDataModuleZarr_get_dataloaders(
     dataset_path, scaling_double_dict, splits, constant_coupler_config, pytestconfig
 ):
-
     from physicsnemo.datapipes.healpix.data_modules_zarr import (
         CoupledTimeSeriesDataModuleZarr,
     )

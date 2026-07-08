@@ -14,6 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Implementation of the Deep Learning Weather Prediction (DLWP) encoder on the HEALPix mesh.
+
+This class contains the implementation of the Deep Learning Weather Prediction (DLWP) encoder on the HEALPix mesh.
+"""
+
 from typing import Sequence
 
 import torch
@@ -141,6 +147,22 @@ class UNetEncoder(torch.nn.Module):
         inp: torch.Tensor,
         conditions_cln: torch.Tensor = None,
     ) -> torch.Tensor:
+        """Helper function that performs the forward pass of a single layer of the encoder.
+
+        Parameters
+        ----------
+        layer_group: torch.nn.Module
+            The layer group to forward pass
+        inp: torch.Tensor
+            The input tensor
+        conditions_cln: torch.Tensor, optional
+            The conditional inputs for the normalization layers.
+
+        Returns
+        -------
+        torch.Tensor
+            The output tensor
+        """
         interim_output = inp
         for layer in layer_group:
             if getattr(layer, "cln_enabled", False):

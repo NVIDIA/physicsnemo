@@ -168,6 +168,7 @@ class ConditionalWeightLoss(th.nn.MSELoss):
         self.w = w
 
     def setup(self, trainer):
+        """Setup function that moves tensors to the same device as the model"""
         self.b = th.tensor(self.b, device=trainer.device)
         self.w = th.tensor(self.w, device=trainer.device)
 

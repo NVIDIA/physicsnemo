@@ -14,6 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+TimeSeriesDataModule - DataModule that sets up the dataloaders for the time series healpix data.
+
+This class provides the core functionality for setting up the dataloaders for the time series healpix data.
+Depending on the splits and forecast_init_times, it will set up the appropriate dataloaders for the training, validation, and test sets.
+It also supports coupling the time series data with external inputs from various earth system components.
+
+The main classes are:
+- TimeSeriesDataModule: A DataModule for loading and processing time series healpix data.
+- CoupledTimeSeriesDataModule: A DataModule for loading and processing coupled time series healpix data.
+"""
+
 # System modules
 import logging
 import warnings
@@ -596,6 +608,9 @@ class CoupledTimeSeriesDataModule(TimeSeriesDataModule):
         )
 
     def _get_coupled_vars(self):
+        """ "
+        Get the coupled variables from the couplings dictionary.
+        """
         coupled_variables = []
         for d in self.couplings:
             coupled_variables = coupled_variables + d["params"]["variables"]

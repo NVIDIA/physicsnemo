@@ -14,6 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+DataModule for loading and processing time series healpix data stored in Zarr format.
+
+This class provides the core functionality for setting up the dataloaders for the time series healpix data stored in Zarr format.
+Data loading, scaling, and time management are handled by the TimeSeriesDatasetZarr and CoupledTimeSeriesDatasetZarr classes.
+Zarr format is used to avoid Xarray overheads when loading and processing the data.
+"""
+
 # System modules
 import logging
 import warnings

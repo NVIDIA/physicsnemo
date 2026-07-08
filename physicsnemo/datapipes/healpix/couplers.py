@@ -117,9 +117,18 @@ class BaseCoupler(ABC):
             )
 
     def _compute_coupled_integration_dim(self):
+        """
+        Compute the coupled integration steps across the time dimension.
+        This is the number of presteps plus the maximum number of output times divided by the number of input times.
+        """
         return self.presteps + max(self.output_time_dim // self.input_time_dim, 1)
 
     def _compute_timevar_dim(self):
+        """
+        Compute the time variable dimension.
+        Multiple time integrations are stacked along the time dimension.
+        Thus it is the number of input times multiplied by the number of variables.
+        """
         return len(self.input_times) * len(self.variables)
 
     @abstractmethod
@@ -200,6 +209,12 @@ class BaseCoupler(ABC):
         self.coupled_channel_indices = channel_indices
 
     def reset_coupler(self):
+        """Clear saved coupled fields, forces recomputation on next use.
+
+        This method is called when the dataloader is reset, and it is used to clear the
+        cached coupled fields. This is necessary because the coupled fields are computed
+        on the fly, and they are not saved to the dataset.
+        """
         self.coupled_mode = False
         self.integrated_couplings = None
         self.preset_coupled_fields = None
@@ -494,7 +509,6 @@ class TrailingAverageCoupler(BaseCoupler):
             self.time_da = np.asarray(dates)
         else:
             self.time_da = self.ds.time.values
-        self._set_time_increments()
 
     def compute_coupled_indices(self, interval, data_time_step):
         """
@@ -522,18 +536,11 @@ class TrailingAverageCoupler(BaseCoupler):
 
         self._coupled_offsets = self._coupled_offsets.astype(int)
 
-    def _set_time_increments(self):
-        # get the dt of the dataset
-        dt = pd.Timedelta(self.time_da[1] - self.time_da[0]).total_seconds()
-        # assert that the time increments are divisible by the dt of the dataset
-        if np.any([t.total_seconds() % dt != 0 for t in self.input_times]):
-            raise ValueError(
-                f"Coupled input times {self.input_times} "
-                f"({[t.total_seconds() for t in self.input_times]} in secs) are not divisible by dataset dt: {dt}"
-            )
-        self.time_increments = [t.total_seconds() / dt for t in self.input_times]
-
     def setup_coupling(self, coupled_module):
+        """
+        Setup the trailing average specific coupling between the coupled variables and the provided module.
+        Precomputes the averaging slices for the coupled variables.
+        """
         # Call parent method first to set basic coupling
         super().setup_coupling(coupled_module)
 

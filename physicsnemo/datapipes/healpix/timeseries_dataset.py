@@ -14,6 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Dataset for sampling from continuous time-series data, compatible with pytorch data loading.
+
+This class provides the core functionality for sampling from continuous time-series data, compatible with pytorch data loading.
+It handles data loading, scaling, and time management. It is used by the TimeSeriesDataModule to set up the dataloaders for the time series healpix data.
+"""
+
 import logging
 import time
 import warnings

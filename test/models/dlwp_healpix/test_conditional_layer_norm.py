@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pytest
 import torch
 from _cln_reference import ConditionalLayerNormReference
+
 from physicsnemo.models.dlwp_healpix.layers.normalization import ConditionalLayerNorm
 from physicsnemo.nn import CappedGELU
 
@@ -53,10 +54,13 @@ def _copy_old_to_new(old_cln, new_cln):
     old_sd = old_cln.state_dict()
 
     # Collect Linear layer indices from the old gamma MLP
-    gamma_linear_indices = sorted({
-        int(k.split(".")[1])
-        for k in old_sd if k.startswith("gamma_mlp.") and k.endswith(".weight")
-    })
+    gamma_linear_indices = sorted(
+        {
+            int(k.split(".")[1])
+            for k in old_sd
+            if k.startswith("gamma_mlp.") and k.endswith(".weight")
+        }
+    )
     first_layer_idx = gamma_linear_indices[0]
 
     new_sd = {}
@@ -79,10 +83,13 @@ def _copy_old_to_new(old_cln, new_cln):
                 # Block-diagonal: [[gamma, 0], [0, beta]]
                 out_old, in_old = gamma_val.shape
                 zeros = torch.zeros_like(gamma_val)
-                new_sd[fused_key] = torch.cat([
-                    torch.cat([gamma_val, zeros], dim=1),
-                    torch.cat([zeros, beta_val], dim=1),
-                ], dim=0)
+                new_sd[fused_key] = torch.cat(
+                    [
+                        torch.cat([gamma_val, zeros], dim=1),
+                        torch.cat([zeros, beta_val], dim=1),
+                    ],
+                    dim=0,
+                )
 
     for key, value in old_sd.items():
         if not key.startswith("gamma_mlp."):
@@ -123,12 +130,14 @@ def test_old_vs_new_forward(n_cond, channels_last, scale_center):
         out_new = new_cln(x, cond)
 
     assert out_old.shape == out_new.shape
-    assert torch.allclose(out_old, out_new, atol=1e-5, rtol=1e-4), \
+    assert torch.allclose(out_old, out_new, atol=1e-5, rtol=1e-4), (
         f"Max diff: {(out_old - out_new).abs().max().item()}"
+    )
 
     if channels_last:
-        assert out_new.is_contiguous(memory_format=torch.channels_last), \
+        assert out_new.is_contiguous(memory_format=torch.channels_last), (
             "Output should preserve channels_last format"
+        )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
@@ -162,11 +171,13 @@ def test_old_vs_new_backward(channels_last):
     out_new = new_cln(x_new, cond_new)
     out_new.sum().backward()
 
-    assert torch.allclose(x_old.grad, x_new.grad, atol=1e-4, rtol=1e-3), \
+    assert torch.allclose(x_old.grad, x_new.grad, atol=1e-4, rtol=1e-3), (
         f"Input grad max diff: {(x_old.grad - x_new.grad).abs().max().item()}"
+    )
 
-    assert torch.allclose(cond_old.grad, cond_new.grad, atol=1e-4, rtol=1e-3), \
+    assert torch.allclose(cond_old.grad, cond_new.grad, atol=1e-4, rtol=1e-3), (
         f"Cond grad max diff: {(cond_old.grad - cond_new.grad).abs().max().item()}"
+    )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
@@ -192,8 +203,9 @@ def test_init_cln_to_zero_matches_layer_norm(channels_last):
         x_nhwc = x.permute(0, 2, 3, 1)
         out_ln = plain_ln(x_nhwc).permute(0, 3, 1, 2)
 
-    assert torch.allclose(out_cln, out_ln, atol=1e-5, rtol=1e-4), \
+    assert torch.allclose(out_cln, out_ln, atol=1e-5, rtol=1e-4), (
         f"Max diff: {(out_cln - out_ln).abs().max().item()}"
+    )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
@@ -253,17 +265,25 @@ def test_backward_channels_last_matches_contiguous():
     cln.zero_grad()
 
     # Channels-last path
-    x_cl = x_base.clone().detach().to(memory_format=torch.channels_last).requires_grad_(True)
+    x_cl = (
+        x_base.clone()
+        .detach()
+        .to(memory_format=torch.channels_last)
+        .requires_grad_(True)
+    )
     cond_cl = cond_base.clone().detach().requires_grad_(True)
     out_cl = cln(x_cl, cond_cl)
     out_cl.sum().backward()
 
-    assert torch.allclose(out_cont, out_cl, atol=1e-5, rtol=1e-4), \
+    assert torch.allclose(out_cont, out_cl, atol=1e-5, rtol=1e-4), (
         f"Output max diff: {(out_cont - out_cl).abs().max().item()}"
-    assert torch.allclose(x_cont.grad, x_cl.grad, atol=1e-5, rtol=1e-4), \
+    )
+    assert torch.allclose(x_cont.grad, x_cl.grad, atol=1e-5, rtol=1e-4), (
         f"Input grad max diff: {(x_cont.grad - x_cl.grad).abs().max().item()}"
-    assert torch.allclose(cond_cont.grad, cond_cl.grad, atol=1e-5, rtol=1e-4), \
+    )
+    assert torch.allclose(cond_cont.grad, cond_cl.grad, atol=1e-5, rtol=1e-4), (
         f"Cond grad max diff: {(cond_cont.grad - cond_cl.grad).abs().max().item()}"
+    )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
@@ -287,8 +307,9 @@ def test_load_old_checkpoint():
 
     assert out_new.shape == (12, C, 8, 8)
     assert torch.isfinite(out_new).all()
-    assert torch.allclose(out_old, out_new, atol=1e-5, rtol=1e-4), \
+    assert torch.allclose(out_old, out_new, atol=1e-5, rtol=1e-4), (
         f"Max diff after loading old checkpoint: {(out_old - out_new).abs().max().item()}"
+    )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
@@ -325,5 +346,6 @@ def test_load_old_checkpoint_with_capped_gelu():
         out_old = old_cln(x, cond)
         out_new = new_cln(x, cond)
 
-    assert torch.allclose(out_old, out_new, atol=1e-5, rtol=1e-4), \
+    assert torch.allclose(out_old, out_new, atol=1e-5, rtol=1e-4), (
         f"Max diff after loading old CappedGELU checkpoint: {(out_old - out_new).abs().max().item()}"
+    )

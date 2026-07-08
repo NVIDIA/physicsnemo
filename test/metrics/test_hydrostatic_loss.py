@@ -14,10 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Sequence
-
 import numpy as np
 import pytest
 import torch
@@ -27,6 +23,7 @@ from physicsnemo.metrics.climate.hydrostasy import (
 )
 
 xr = pytest.importorskip("xarray")
+
 
 def test_constant_temperature(rtol: float = 1e-3, atol: float = 1e-3):
     R = 287  # J K^{-1} kg^{-1}
@@ -62,7 +59,12 @@ def test_constant_temperature(rtol: float = 1e-3, atol: float = 1e-3):
     Tv = constraint(x)
 
     print(Tv[0, 0, :, 0, 0])
-    assert torch.allclose(T * torch.ones_like(Tv), Tv, rtol=rtol, atol=atol,)
+    assert torch.allclose(
+        T * torch.ones_like(Tv),
+        Tv,
+        rtol=rtol,
+        atol=atol,
+    )
 
 
 @pytest.mark.parametrize("N", [10, 20])
