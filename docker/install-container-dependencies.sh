@@ -65,8 +65,7 @@ install_torch_scatter() {
 
     echo "No custom torch_scatter wheel present; building from source"
     local source_dir="${BUILD_ROOT}/pytorch_scatter"
-    git clone https://github.com/rusty1s/pytorch_scatter.git "${source_dir}"
-    git -C "${source_dir}" checkout tags/2.1.2
+    git clone --branch 2.1.2 --depth 1 https://github.com/rusty1s/pytorch_scatter.git "${source_dir}"
     (
         cd "${source_dir}"
         FORCE_CUDA=1 MAX_JOBS=64 python setup.py bdist_wheel
