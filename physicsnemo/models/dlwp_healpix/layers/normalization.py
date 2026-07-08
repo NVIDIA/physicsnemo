@@ -14,13 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Sequence, List
+from typing import List
 
 import torch as th
-from omegaconf import DictConfig
 
 try:
     from apex.normalization import FusedLayerNorm
+
     _APEX_AVAILABLE = True
 except ImportError:
     _APEX_AVAILABLE = False
@@ -30,7 +30,12 @@ except ImportError:
 def _cln_affine(x_norm, gamma_raw, beta, scale_center, n_faces):
     """Fused affine transform: expand gamma/beta across faces and apply to normalized input."""
     C = gamma_raw.shape[-1]
-    gamma = (scale_center + gamma_raw).unsqueeze(1).expand(-1, n_faces, -1).reshape(-1, 1, 1, C)
+    gamma = (
+        (scale_center + gamma_raw)
+        .unsqueeze(1)
+        .expand(-1, n_faces, -1)
+        .reshape(-1, 1, 1, C)
+    )
     beta = beta.unsqueeze(1).expand(-1, n_faces, -1).reshape(-1, 1, 1, C)
     return gamma * x_norm + beta
 
@@ -44,7 +49,7 @@ class ConditionalLayerNorm(th.nn.Module):
         activation: th.nn.Module = None,
         eps: float = 1e-5,
         n_faces: int = 12,
-        norm_op:str = "torch",
+        norm_op: str = "torch",
         init_cln_to_zero: bool = False,
         scale_center: float = 0.0,
     ):
@@ -97,11 +102,18 @@ class ConditionalLayerNorm(th.nn.Module):
             self.norm = th.nn.LayerNorm(channel_depth, elementwise_affine=False)
         elif norm_op == "apex":
             if not _APEX_AVAILABLE:
-                raise ImportError("Apex FusedLayerNorm requested but apex is not available, please install it from https://github.com/NVIDIA/apex")
+                raise ImportError(
+                    "Apex FusedLayerNorm requested but apex is not available, please install it from https://github.com/NVIDIA/apex"
+                )
             self.norm = FusedLayerNorm(channel_depth, elementwise_affine=False)
 
-    def _make_mlp(self, in_dim: int, hidden_dims: List[int], out_dim: int, activation: th.nn.Module) -> th.nn.Sequential:
-
+    def _make_mlp(
+        self,
+        in_dim: int,
+        hidden_dims: List[int],
+        out_dim: int,
+        activation: th.nn.Module,
+    ) -> th.nn.Sequential:
         layers = []
         for hdim in hidden_dims:
             layers.append(th.nn.Linear(in_dim, hdim))
@@ -111,7 +123,16 @@ class ConditionalLayerNorm(th.nn.Module):
         layers.append(th.nn.Linear(in_dim, out_dim))
         return th.nn.Sequential(*layers)
 
-    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
+    def _load_from_state_dict(
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ):
         """Backward compatibility: merge old separate gamma_mlp/beta_mlp into fused gamma_beta_mlp.
 
         Old MLPs had hidden_dims [h1, h2, ...] and output dim C.
@@ -141,7 +162,7 @@ class ConditionalLayerNorm(th.nn.Module):
             gamma_layer_indices = set()
             for k in state_dict:
                 if k.startswith(gamma_prefix):
-                    layer_key = k[len(gamma_prefix):]
+                    layer_key = k[len(gamma_prefix) :]
                     parts = layer_key.split(".")
                     if len(parts) == 2 and parts[1] in ("weight", "bias"):
                         gamma_layer_indices.add(int(parts[0]))
@@ -153,7 +174,7 @@ class ConditionalLayerNorm(th.nn.Module):
             # handle weights and biases for the gamma MLP
             for k in list(state_dict.keys()):
                 if k.startswith(gamma_prefix):
-                    layer_key = k[len(gamma_prefix):]  # e.g. "0.weight"
+                    layer_key = k[len(gamma_prefix) :]  # e.g. "0.weight"
                     parts = layer_key.split(".")
                     if len(parts) != 2 or parts[1] not in ("weight", "bias"):
                         continue
@@ -180,11 +201,19 @@ class ConditionalLayerNorm(th.nn.Module):
                         # gamma_val: (out_old, in_old), beta_val: (out_old, in_old)
                         # result: (2*out_old, 2*in_old)
                         out_old, in_old = gamma_val.shape
-                        zeros = th.zeros(out_old, in_old, dtype=gamma_val.dtype, device=gamma_val.device)
-                        keys_to_add[fused_key] = th.cat([
-                            th.cat([gamma_val, zeros], dim=1),
-                            th.cat([zeros, beta_val], dim=1),
-                        ], dim=0)
+                        zeros = th.zeros(
+                            out_old,
+                            in_old,
+                            dtype=gamma_val.dtype,
+                            device=gamma_val.device,
+                        )
+                        keys_to_add[fused_key] = th.cat(
+                            [
+                                th.cat([gamma_val, zeros], dim=1),
+                                th.cat([zeros, beta_val], dim=1),
+                            ],
+                            dim=0,
+                        )
 
                     keys_to_remove.append(k)
                     if beta_key not in keys_to_remove:
@@ -194,7 +223,7 @@ class ConditionalLayerNorm(th.nn.Module):
             for k in list(state_dict.keys()):
                 if not k.startswith(gamma_prefix):
                     continue
-                layer_key = k[len(gamma_prefix):]  # e.g. "0.weight"
+                layer_key = k[len(gamma_prefix) :]  # e.g. "0.weight"
                 parts = layer_key.split(".", 1)
                 if len(parts) != 2:
                     continue
@@ -217,7 +246,15 @@ class ConditionalLayerNorm(th.nn.Module):
                     del state_dict[k]
             state_dict.update(keys_to_add)
 
-        super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
+        super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )
 
     def forward(self, x: th.Tensor, conditions: th.Tensor) -> th.Tensor:
         """

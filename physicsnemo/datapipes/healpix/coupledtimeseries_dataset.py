@@ -208,12 +208,17 @@ class CoupledTimeSeriesDataset(TimeSeriesDataset):
             )
 
         # for models with extra outputs
-        if len(self.ds["targets"].channel_out) != (len(self.ds["inputs"].channel_in)-len(self.couplings[0].variables)):
-            input_array = (input_array - self.input_scaling["mean"][:,:-len(self.couplings[0].variables)]) \
-                    / self.input_scaling["std"][:,:-len(self.couplings[0].variables)]
+        if len(self.ds["targets"].channel_out) != (
+            len(self.ds["inputs"].channel_in) - len(self.couplings[0].variables)
+        ):
+            input_array = (
+                input_array
+                - self.input_scaling["mean"][:, : -len(self.couplings[0].variables)]
+            ) / self.input_scaling["std"][:, : -len(self.couplings[0].variables)]
         else:
-            input_array = (input_array - self.input_scaling["mean"]) \
-                    / self.input_scaling["std"]
+            input_array = (
+                input_array - self.input_scaling["mean"]
+            ) / self.input_scaling["std"]
 
         if not self.forecast_mode:
             # BAD NEWS: Indexing the array as commented out below causes unexpected behavior in target creation.

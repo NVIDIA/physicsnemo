@@ -14,15 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Sequence, Tuple, Union, Callable
+from typing import Callable, Sequence, Tuple, Union
 
 import torch
 import torch as th
-from physicsnemo.nn.module.hpx import HEALPixLayer
-from .normalization import ConditionalLayerNorm
 
-from hydra.utils import instantiate
-from omegaconf import DictConfig
+from physicsnemo.nn.module.hpx import HEALPixLayer
+
+from .normalization import ConditionalLayerNorm
 
 
 #
@@ -39,6 +38,7 @@ class _LayerNormOverChannels(th.nn.Module):
         x = x.permute(0, 2, 3, 1)
         x = self.norm(x)
         return x.permute(0, 3, 1, 2)
+
 
 #
 # RECURRENT BLOCKS
@@ -379,10 +379,10 @@ class DoubleConvNeXtBlock(th.nn.Module):
         super().__init__()
 
         self.cln_enabled = conditional_layer_norm is not None
-        
+
         if in_channels == int(latent_channels):
-            self.skip_module1 = (
-                lambda x: x
+            self.skip_module1 = lambda x: (
+                x
             )  # Identity-function required in forward pass
         else:
             self.skip_module1 = geometry_layer(
@@ -394,8 +394,8 @@ class DoubleConvNeXtBlock(th.nn.Module):
                 enable_healpixpad=enable_healpixpad,
             )
         if out_channels == int(latent_channels):
-            self.skip_module2 = (
-                lambda x: x
+            self.skip_module2 = lambda x: (
+                x
             )  # Identity-function required in forward pass
         else:
             self.skip_module2 = geometry_layer(
@@ -407,7 +407,7 @@ class DoubleConvNeXtBlock(th.nn.Module):
                 enable_healpixpad=enable_healpixpad,
             )
 
-        # check if we're applying a layer norm at the beginning 
+        # check if we're applying a layer norm at the beginning
         # we've got two ConvNeXt equivalent blocks in the layer, so have two entry points
         # TODO: conditional layer norm once is doing two things, it's applying a norm on block entry
         # and switch from conditional to non-conditional layer norm. This is not ideal and should be fixed once we determine
@@ -466,9 +466,15 @@ class DoubleConvNeXtBlock(th.nn.Module):
 
         # Apply layer norm if needed
         if conditional_layer_norm_once:
-            convblock1.append(_LayerNormOverChannels(channel_depth=int(latent_channels * upscale_factor)))
+            convblock1.append(
+                _LayerNormOverChannels(
+                    channel_depth=int(latent_channels * upscale_factor)
+                )
+            )
         elif conditional_layer_norm is not None:
-            cln = conditional_layer_norm(channel_depth=int(latent_channels * upscale_factor))
+            cln = conditional_layer_norm(
+                channel_depth=int(latent_channels * upscale_factor)
+            )
             convblock1.append(cln)
 
         if activation is not None:
@@ -512,7 +518,7 @@ class DoubleConvNeXtBlock(th.nn.Module):
         if conditional_layer_norm is not None and not conditional_layer_norm_once:
             cln = conditional_layer_norm(channel_depth=int(latent_channels))
             convblock2.append(cln)
-    
+
         if activation is not None:
             convblock2.append(activation)
         if dropout > 0.0:
@@ -532,9 +538,15 @@ class DoubleConvNeXtBlock(th.nn.Module):
         )
         # Apply layer norm if needed
         if conditional_layer_norm_once:
-            convblock2.append(_LayerNormOverChannels(channel_depth=int(latent_channels * upscale_factor)))
+            convblock2.append(
+                _LayerNormOverChannels(
+                    channel_depth=int(latent_channels * upscale_factor)
+                )
+            )
         elif conditional_layer_norm is not None:
-            cln = conditional_layer_norm(channel_depth=int(latent_channels * upscale_factor))
+            cln = conditional_layer_norm(
+                channel_depth=int(latent_channels * upscale_factor)
+            )
             convblock2.append(cln)
 
         if activation is not None:
@@ -614,9 +626,10 @@ class DoubleConvNeXtBlock(th.nn.Module):
                 x1 = layer(x1)
         return x2_residual + x1
 
+
 class Multi_SymmetricConvNeXtBlock(th.nn.Module):
     """
-    Wrapper for SymmetricConvNeXtBlock that allows serial linking of blocks. 
+    Wrapper for SymmetricConvNeXtBlock that allows serial linking of blocks.
     """
 
     def __init__(
@@ -642,7 +655,7 @@ class Multi_SymmetricConvNeXtBlock(th.nn.Module):
         n_layers: int, optional
             The number of SymmetricConvNeXt Blocks
         conditional_layer_norm: Callable, optional
-            Callable for physicsnemo.models.dlwp_healpix_layers.normalization.ConditionalLayerNorm. 
+            Callable for physicsnemo.models.dlwp_healpix_layers.normalization.ConditionalLayerNorm.
             Callable can be passed in by setting _partial_ to True in hydra config. If None,
             conditional layer normalization is not applied.
         conditional_layer_norm_once: bool, optional
@@ -672,7 +685,9 @@ class Multi_SymmetricConvNeXtBlock(th.nn.Module):
                     enable_nhwc=enable_nhwc,
                     enable_healpixpad=enable_healpixpad,
                     dropout=dropout,
-                    conditional_layer_norm=conditional_layer_norm if conditional_layer_norm is not None else None,
+                    conditional_layer_norm=conditional_layer_norm
+                    if conditional_layer_norm is not None
+                    else None,
                     conditional_layer_norm_once=conditional_layer_norm_once,
                 ),
             )
@@ -819,17 +834,22 @@ class SymmetricConvNeXtBlock(th.nn.Module):
 
         # Apply layer norm if needed
         if conditional_layer_norm_once:
-            convblock.append(_LayerNormOverChannels(channel_depth=int(latent_channels * upscale_factor)))
+            convblock.append(
+                _LayerNormOverChannels(
+                    channel_depth=int(latent_channels * upscale_factor)
+                )
+            )
         elif conditional_layer_norm is not None:
-                cln = conditional_layer_norm(channel_depth=int(latent_channels * upscale_factor))
-                convblock.append(cln)
+            cln = conditional_layer_norm(
+                channel_depth=int(latent_channels * upscale_factor)
+            )
+            convblock.append(cln)
 
         if activation is not None:
             convblock.append(activation)
         if dropout > 0.0:
             convblock.append(th.nn.Dropout2d(p=dropout))
 
-        
         # 1x1: upscale → latent
         convblock.append(
             geometry_layer(
@@ -873,7 +893,6 @@ class SymmetricConvNeXtBlock(th.nn.Module):
             convblock.append(th.nn.Dropout2d(p=dropout))
 
         self.convblock = th.nn.ModuleList(convblock)
-
 
     def forward(self, x, conditions_cln=None):
         """

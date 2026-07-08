@@ -216,9 +216,7 @@ class UNetDecoder(torch.nn.Module):
                     use_reentrant=False,
                 )
             else:
-                x = self._forward_layer_pass(
-                    layer, x, skip_connection, conditions_cln
-                )
+                x = self._forward_layer_pass(layer, x, skip_connection, conditions_cln)
 
             if layer["recurrent"] is not None:
                 x = layer["recurrent"](x)

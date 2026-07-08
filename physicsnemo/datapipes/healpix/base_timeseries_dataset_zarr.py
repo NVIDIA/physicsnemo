@@ -25,9 +25,10 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 import zarr
+from omegaconf import DictConfig, OmegaConf
+
 from physicsnemo.datapipes.datapipe import Datapipe
 from physicsnemo.datapipes.meta import DatapipeMetaData
-from omegaconf import DictConfig, OmegaConf
 
 logger = logging.getLogger(__name__)
 
@@ -473,7 +474,6 @@ class BaseTimeSeriesDatasetZarr(Datapipe, ABC):
                 )
 
             try:
-
                 self.constant_scaling = scaling_da.sel(
                     index=self.constant_variables
                 ).rename({"index": "channel_out"})

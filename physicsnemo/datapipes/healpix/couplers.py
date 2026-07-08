@@ -57,7 +57,7 @@ class BaseCoupler(ABC):
             forecasting batch size should be 1
         variables: Sequence
             sequence of strings that indicate the coupled variable
-            names in the dataset. All names should be in the dataset with 
+            names in the dataset. All names should be in the dataset with
             an optional time component at the end, eg ttr-48h
         presteps: int, optional
             the number of model steps used to initialize the hidden state.
@@ -75,7 +75,7 @@ class BaseCoupler(ABC):
             the right side of a averaging_window window.
             This is highly recommended for training, default True
         time_first: boolean, optional
-            Whether the coupled data should be permuted to have the time dimension first 
+            Whether the coupled data should be permuted to have the time dimension first
             [T, B, C, F, H, W] rather than [B, F, T, C, H, W]
         """
         # extract important meta data from ds
@@ -101,9 +101,9 @@ class BaseCoupler(ABC):
         if not prepared_coupled_data:
             raise NotImplementedError("Data preparation not yet implemented")
 
-        if type(self.ds) == xr.Dataset:
+        if isinstance(self.ds, xr.Dataset):
             self.use_zarr = False
-        elif type(self.ds) == zr.Group:
+        elif isinstance(self.ds, zr.Group):
             self.use_zarr = True
             self.ds_variable_indices = [
                 i
@@ -401,17 +401,22 @@ class ConstantCoupler(BaseCoupler):
             format is [B, F, T, C, H, W]
         """
         # create buffer for coupling
-        coupled_fields = coupled_fields[
-            :, :, :, self.coupled_channel_indices, :, :
-        ] 
+        coupled_fields = coupled_fields[:, :, :, self.coupled_channel_indices, :, :]
         self.preset_coupled_fields = th.empty(
-            [coupled_fields.shape[0], self.spatial_dims[0], self.coupled_integration_dim, self.timevar_dim]
+            [
+                coupled_fields.shape[0],
+                self.spatial_dims[0],
+                self.coupled_integration_dim,
+                self.timevar_dim,
+            ]
             + list(self.spatial_dims[1:])
         )
         # broadcast the first time step to all the integration steps
         self.preset_coupled_fields[:, :, :, :, :, :] = coupled_fields[:, :, :1, :, :, :]
         if self.time_first:
-            self.preset_coupled_fields = self.preset_coupled_fields.permute(2, 0, 3, 1, 4, 5)
+            self.preset_coupled_fields = self.preset_coupled_fields.permute(
+                2, 0, 3, 1, 4, 5
+            )
         # flag for construct integrated coupling method to use this array
         self.coupled_mode = True
 
@@ -572,10 +577,10 @@ class TrailingAverageCoupler(BaseCoupler):
                 for s in self.averaging_slices[j]
             ]
             coupled_averaging_periods.append(th.concat(averaging_periods, dim=3))
-        self.preset_coupled_fields = th.concat(
-            coupled_averaging_periods, dim=2
-        )
+        self.preset_coupled_fields = th.concat(coupled_averaging_periods, dim=2)
         if self.time_first:
-            self.preset_coupled_fields = self.preset_coupled_fields.permute(2, 0, 3, 1, 4, 5)
+            self.preset_coupled_fields = self.preset_coupled_fields.permute(
+                2, 0, 3, 1, 4, 5
+            )
         # flag for construct integrated coupling method to use this array
         self.coupled_mode = True

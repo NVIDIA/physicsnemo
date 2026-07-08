@@ -16,6 +16,7 @@
 
 # System modules
 import logging
+import warnings
 from pathlib import Path
 from typing import Optional, Sequence, Union
 
@@ -24,8 +25,6 @@ import numpy as np
 
 # distributed stuff
 import xarray as xr
-
-import warnings
 
 # External modules
 from omegaconf import DictConfig
@@ -174,7 +173,7 @@ class TimeSeriesDataModule:
         warnings.warn(
             "TimeSeriesDataModule will be removed in a future release, please switch to using TimeSeriesDataModuleZarr",
             DeprecationWarning,
-            stacklevel=2
+            stacklevel=2,
         )
 
         self.dst_directory = dst_directory
@@ -597,7 +596,6 @@ class CoupledTimeSeriesDataModule(TimeSeriesDataModule):
         )
 
     def _get_coupled_vars(self):
-
         coupled_variables = []
         for d in self.couplings:
             coupled_variables = coupled_variables + d["params"]["variables"]

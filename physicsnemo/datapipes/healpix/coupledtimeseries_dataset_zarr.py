@@ -28,8 +28,8 @@ from physicsnemo.datapipes.meta import DatapipeMetaData
 from physicsnemo.utils.insolation import insolation
 
 from . import couplers
-from .timeseries_dataset_zarr import TimeSeriesDatasetZarr
 from .base_timeseries_dataset_zarr import _check_availability
+from .timeseries_dataset_zarr import TimeSeriesDatasetZarr
 
 logger = logging.getLogger(__name__)
 

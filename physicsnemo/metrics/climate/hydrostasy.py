@@ -45,9 +45,10 @@ class HydrostaticBalance(torch.nn.Module):
         self.R = R
         self.g0 = g0
 
-        assert (
-            anchor_z_channel in z_pressure_levels.keys()
-        ), f"anchor_z_channel ({anchor_z_channel}) not in z_pressure_levels ({z_pressure_levels.keys()})"
+        if anchor_z_channel not in z_pressure_levels:
+            raise ValueError(
+                f"anchor_z_channel ({anchor_z_channel}) not in z_pressure_levels ({z_pressure_levels.keys()})"
+            )
 
         # Sort channels by pressure levels for ease of use later
         self.z_pressure_levels = dict(
@@ -131,12 +132,14 @@ class DifferentialHydrostaticBalanceConstraint(torch.nn.Module):
         self.R = R
         self.g0 = g0
 
-        assert (
-            anchor_z_channel in z_pressure_levels.keys()
-        ), f"anchor_z_channel ({anchor_z_channel}) not in z_pressure_levels ({z_pressure_levels.keys()})"
-        assert (
-            anchor_T_channel in Tv_pressure_levels.keys()
-        ), f"anchor_T_channel ({anchor_T_channel}) not in Tv_pressure_levels ({Tv_pressure_levels.keys()})"
+        if anchor_z_channel not in z_pressure_levels.keys():
+            raise ValueError(
+                f"anchor_z_channel ({anchor_z_channel}) not in z_pressure_levels ({z_pressure_levels.keys()})"
+            )
+        if anchor_T_channel not in Tv_pressure_levels.keys():
+            raise ValueError(
+                f"anchor_T_channel ({anchor_T_channel}) not in Tv_pressure_levels ({Tv_pressure_levels.keys()})"
+            )
 
         # Sort channels by pressure levels for ease of use later
         self.z_pressure_levels = dict(
@@ -187,15 +190,15 @@ class DifferentialHydrostaticBalanceConstraint(torch.nn.Module):
             z_channel_p1 = self.z_channels[i + 1]
             zi = x[:, :, z_channel, ...]
             zip1 = x[:, :, z_channel_p1, ...]
-            Tv_avg[
-                :, :, i, ...
-            ] = _average_virtual_temperature_from_geopotential_height(
-                zi,
-                zip1,
-                self.z_pressure_levels[z_channel],
-                self.z_pressure_levels[z_channel_p1],
-                self.R,
-                self.g0,
+            Tv_avg[:, :, i, ...] = (
+                _average_virtual_temperature_from_geopotential_height(
+                    zi,
+                    zip1,
+                    self.z_pressure_levels[z_channel],
+                    self.z_pressure_levels[z_channel_p1],
+                    self.R,
+                    self.g0,
+                )
             )
 
         Tv_model_avg_size = [
@@ -218,7 +221,6 @@ class DifferentialHydrostaticBalanceConstraint(torch.nn.Module):
 
 
 class WeightedMSEWithHydrostasy(torch.nn.MSELoss):
-
     """
     Loss object that adds a differential Hydrostatic balance constraint in addition to
     user defined weighting of variables when calculating MSE
@@ -320,7 +322,7 @@ class WeightedMSEWithHydrostasy(torch.nn.MSELoss):
         # Set per level alphas
         if len(alpha) != len(hPa_levels) - 1:
             raise AssertionError(
-                f"Incorrect number of alpha values. Expected len(hPa_levels)-1 [{len(hPa_levels)-1}], got {len(alpha)}"
+                f"Incorrect number of alpha values. Expected len(hPa_levels)-1 [{len(hPa_levels) - 1}], got {len(alpha)}"
             )
         self.alpha = torch.Tensor(alpha).reshape((1, 1, -1, 1, 1))
 
@@ -465,13 +467,13 @@ class WeightedMSEWithHydrostasy(torch.nn.MSELoss):
         else:
             bin_edges = bins
 
-        for l in range(vlevels):
+        for level_idx in range(vlevels):
             hist, be = torch.histogram(
-                torch.absolute(Tv_error[:, :, l, :, :]),
-                bins=bins if isinstance(bins, int) else bin_edges[l, :],
+                torch.absolute(Tv_error[:, :, level_idx, :, :]),
+                bins=bins if isinstance(bins, int) else bin_edges[level_idx, :],
             )
-            accumulator[l, :] += hist
-            bin_edges[l, :] = be
+            accumulator[level_idx, :] += hist
+            bin_edges[level_idx, :] = be
 
         return accumulator, bin_edges
 
@@ -523,10 +525,9 @@ class WeightedMSEWithHydrostasy(torch.nn.MSELoss):
 
 
 class LossWithHydrostasy(torch.nn.MSELoss):
-
     """
     Loss object that adds a differential Hydrostatic balance constraint in addition to
-    user defined data loss 
+    user defined data loss function.
     """
 
     def __init__(
@@ -627,7 +628,7 @@ class LossWithHydrostasy(torch.nn.MSELoss):
         # Set per level alphas
         if len(alpha) != len(hPa_levels) - 1:
             raise AssertionError(
-                f"Incorrect number of alpha values. Expected len(hPa_levels)-1 [{len(hPa_levels)-1}], got {len(alpha)}"
+                f"Incorrect number of alpha values. Expected len(hPa_levels)-1 [{len(hPa_levels) - 1}], got {len(alpha)}"
             )
         self.alpha = torch.Tensor(alpha).reshape((1, 1, -1, 1, 1))
 
@@ -655,7 +656,7 @@ class LossWithHydrostasy(torch.nn.MSELoss):
         # Get topography information
         ds = xr.open_zarr(f"{src_directory}{dataset_name}.zarr")
         self.topography = (
-            surface_geopotential_std * ds.constants.sel(channel_c='z').values
+            surface_geopotential_std * ds.constants.sel(channel_c="z").values
             + surface_geopotential_mean
         ) / self.g0
 
@@ -674,10 +675,10 @@ class LossWithHydrostasy(torch.nn.MSELoss):
         # Call setup for data loss first
         self.data_loss.setup(trainer)
 
-        if len(self.z_pressure_levels) - 1 != len(
-            self.loss_weights
-        ):
-            raise ValueError("Length of loss_weights is not one less than number of pressure levels!")
+        if len(self.z_pressure_levels) - 1 != len(self.loss_weights):
+            raise ValueError(
+                "Length of loss_weights is not one less than number of pressure levels!"
+            )
 
         self.loss_weights = self.loss_weights.to(device=trainer.device)
 
@@ -775,13 +776,13 @@ class LossWithHydrostasy(torch.nn.MSELoss):
         else:
             bin_edges = bins
 
-        for l in range(vlevels):
+        for level_idx in range(vlevels):
             hist, be = torch.histogram(
-                torch.absolute(Tv_error[:, :, l, :, :]),
-                bins=bins if isinstance(bins, int) else bin_edges[l, :],
+                torch.absolute(Tv_error[:, :, level_idx, :, :]),
+                bins=bins if isinstance(bins, int) else bin_edges[level_idx, :],
             )
-            accumulator[l, :] += hist
-            bin_edges[l, :] = be
+            accumulator[level_idx, :] += hist
+            bin_edges[level_idx, :] = be
 
         return accumulator, bin_edges
 
@@ -819,10 +820,14 @@ class LossWithHydrostasy(torch.nn.MSELoss):
                 Tv_error[x[:, :, 1 : self.num_z_levels, :, :] < self.topography] = 0.0
 
             # Compute the error tolerant loss
-            Tv_loss = self.loss_weights * (Tv_error / (1 + torch.exp(1 - Tv_error))).mean(dim=(0, 1, 3, 4))
+            Tv_loss = self.loss_weights * (
+                Tv_error / (1 + torch.exp(1 - Tv_error))
+            ).mean(dim=(0, 1, 3, 4))
 
             # Compute data loss
-            data_loss = self.data_loss(prediction, target, average_channels=average_channels)
+            data_loss = self.data_loss(
+                prediction, target, average_channels=average_channels
+            )
 
             if average_channels:
                 return data_loss + torch.mean(Tv_loss)

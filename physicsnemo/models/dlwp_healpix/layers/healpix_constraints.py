@@ -1,6 +1,5 @@
-import numpy as np
 import torch
-import xarray as xr
+
 
 class NonnegativeConstraint(torch.nn.Module):
     def __init__(
@@ -28,22 +27,21 @@ class NonnegativeConstraint(torch.nn.Module):
         self.variables = [var for var in self.variables if var in channels]
 
         var_indices = torch.tensor(
-            [channels.index(var) for var in self.variables],
-            dtype=torch.long
+            [channels.index(var) for var in self.variables], dtype=torch.long
         )
-        self.register_buffer('var_indices', var_indices, persistent=False)
+        self.register_buffer("var_indices", var_indices, persistent=False)
 
-        self.var_means = torch.tensor([scaling[var]['mean'] for var in self.variables])
-        self.var_stds = torch.tensor([scaling[var]['std'] for var in self.variables])
+        self.var_means = torch.tensor([scaling[var]["mean"] for var in self.variables])
+        self.var_stds = torch.tensor([scaling[var]["std"] for var in self.variables])
 
-        thresholds = (0. - self.var_means) / self.var_stds
+        thresholds = (0.0 - self.var_means) / self.var_stds
         thresholds = thresholds.view(1, 1, 1, -1, 1, 1)
-        self.register_buffer('thresholds', thresholds, persistent=False)
+        self.register_buffer("thresholds", thresholds, persistent=False)
 
     def forward(self, x):
-        '''
+        """
         Tensors are expected to be in the shape [B, F, T, C, H, W]
-        '''
+        """
         selected_vars = torch.index_select(x, dim=3, index=self.var_indices)
         clamped = torch.maximum(selected_vars, self.thresholds).to(x.dtype)
         x.index_copy_(3, self.var_indices, clamped)

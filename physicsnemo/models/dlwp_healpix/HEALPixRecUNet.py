@@ -104,6 +104,12 @@ class HEALPixRecUNet(Module):
         "0.1.0": _legacy_hydra_targets_warning,
     }
 
+    # Allows ``Module.from_checkpoint(..., override_args=...)`` to substitute
+    # a corrected ``encoder``/``decoder`` config. Used by checkpoint conversion
+    # utilities to fix up legacy checkpoints (e.g. the ``per_level_cln``
+    # decoder bug) without having to hand-edit the model source.
+    _overridable_args: set = {"encoder", "decoder"}
+
     @classmethod
     def _backward_compat_arg_mapper(
         cls, version: str, args: Dict[str, Any]

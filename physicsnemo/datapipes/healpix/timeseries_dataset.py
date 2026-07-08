@@ -243,7 +243,9 @@ class TimeSeriesDataset(Datapipe):
             # 'if' statement used for cases where atmos model
             # includes diagnostic variables like tp6 and msl.
             # using 'channel_out' is still necessary for ocean models.
-            if len(self.ds.channel_out) != (len(self.ds.channel_in)-len(self.couplings[0].variables)):
+            if len(self.ds.channel_out) != (
+                len(self.ds.channel_in) - len(self.couplings[0].variables)
+            ):
                 self.input_scaling = scaling_da.sel(
                     index=self.ds.channel_in.values
                 ).rename({"index": "channel_in"})
