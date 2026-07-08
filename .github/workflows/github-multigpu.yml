@@ -17,9 +17,8 @@
 # Multi-GPU CI: the nightly schedule runs both marker streams in full and
 # publishes their coverage shards, which the canonical coverage report
 # (nightly and PR Coverage jobs) merges in.  On PR mirror branches the
-# streams are opt-in: apply `ci:multi-gpu` (both), `ci:multi-gpu-dynamic`,
-# or `ci:multi-gpu-static` before the next mirror push, or use the manual
-# dispatch for an immediate run on any ref.
+# streams are opt-in: apply the `ci:multi-gpu` label before the next
+# mirror push, or use the manual dispatch for an immediate run on any ref.
 
 name: Multi-GPU GitHub CI
 
@@ -91,11 +90,10 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      run_dynamic: ${{ steps.gate.outputs.run_dynamic }}
-      run_static: ${{ steps.gate.outputs.run_static }}
+      run: ${{ steps.gate.outputs.run }}
 
     steps:
-      - name: Check multi-GPU opt-in labels
+      - name: Check multi-GPU opt-in label
         id: gate
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -111,28 +109,18 @@ jobs:
           fi
           labels=$(gh api "repos/${REPOSITORY}/pulls/${pr_number}" \
             --jq '[.labels[].name] | join("\n")')
-          run_dynamic=false
-          run_static=false
+          run=false
           if grep -qxF "ci:multi-gpu" <<<"$labels"; then
-            run_dynamic=true
-            run_static=true
+            run=true
           fi
-          if grep -qxF "ci:multi-gpu-dynamic" <<<"$labels"; then
-            run_dynamic=true
-          fi
-          if grep -qxF "ci:multi-gpu-static" <<<"$labels"; then
-            run_static=true
-          fi
-          echo "run_dynamic=${run_dynamic}" >> "$GITHUB_OUTPUT"
-          echo "run_static=${run_static}" >> "$GITHUB_OUTPUT"
+          echo "run=${run}" >> "$GITHUB_OUTPUT"
           {
             echo "## Multi-GPU PR selection"
             echo
-            echo "PR #${pr_number}: dynamic=${run_dynamic} static=${run_static}"
+            echo "PR #${pr_number}: multi-GPU=${run}"
             echo
-            echo "Opt in with the \`ci:multi-gpu\`, \`ci:multi-gpu-dynamic\`,"
-            echo "or \`ci:multi-gpu-static\` label before the next mirror"
-            echo "push, or use the manual workflow dispatch."
+            echo "Opt in with the \`ci:multi-gpu\` label before the next"
+            echo "mirror push, or use the manual workflow dispatch."
           } >> "$GITHUB_STEP_SUMMARY"
 
   multigpu_dynamic:
@@ -143,7 +131,7 @@ jobs:
           (github.event_name == 'schedule' ||
            (github.event_name == 'workflow_dispatch' &&
             (inputs.stream == 'both' || inputs.stream == 'dynamic')) ||
-           needs.select.outputs.run_dynamic == 'true') }}
+           needs.select.outputs.run == 'true') }}
     runs-on: ${{ vars.MULTIGPU_DYNAMIC_RUNNER || 'linux-amd64-gpu-h100-latest-2' }}
     timeout-minutes: 45
     permissions:
@@ -181,7 +169,7 @@ jobs:
           (github.event_name == 'schedule' ||
            (github.event_name == 'workflow_dispatch' &&
             (inputs.stream == 'both' || inputs.stream == 'static')) ||
-           needs.select.outputs.run_static == 'true') }}
+           needs.select.outputs.run == 'true') }}
     runs-on: ${{ vars.MULTIGPU_STATIC_RUNNER || 'linux-amd64-gpu-h100-latest-2' }}
     timeout-minutes: 90
     permissions:

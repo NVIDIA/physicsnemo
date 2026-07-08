@@ -31,9 +31,6 @@
 #   the realized venv was not worth the complexity it cost.
 # ----------------------------------------------------------------------------
 
-# TO DO: THE COVERAGE LIMIT IS VERY LOW, BECAUSE THIS IS NOT USING GPU TESTS OR
-# THE DATA-DRIVEN TESTS.  RAISE THIS UP AGAIN EVENTUALLY.
-
 name: Pull Request Github CI
 on:
   workflow_dispatch:

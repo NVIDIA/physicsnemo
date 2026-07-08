@@ -282,10 +282,9 @@ publisher jobs can replace the two coverage shard slots.
   skip configurations that require four ranks; set both
   `MULTIGPU_STATIC_RUNNER` and `MULTIGPU_STATIC_NPROC` repository
   variables together when a four-GPU pool is available.
-- **PR opt-in**: `ci:multi-gpu`, `ci:multi-gpu-dynamic`, and
-  `ci:multi-gpu-static` labels select the streams on the next mirror sync
-  or rerun.  Applying a label alone does not emit a push event; use the
-  manual dispatch for an immediate run.
+- **PR opt-in**: the `ci:multi-gpu` label runs both streams on the next
+  mirror sync or rerun.  Applying a label alone does not emit a push
+  event; use the manual dispatch for an immediate run.
 - **Save verification**: every mutable-slot save (uv download, JIT,
   testmon, coverage, multi-GPU coverage shards) goes through the
   `replace-cache` action, which re-queries `gh cache list` after
