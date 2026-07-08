@@ -103,6 +103,8 @@ def sdf_polygon_2d(vertices, chunk: int = 65536) -> ImplicitFunction:
     verts = torch.as_tensor(vertices, dtype=torch.float64)
 
     def phi(x):
+        batch_shape = x.shape[:-1]
+        x = x.reshape(-1, 2)  # honor the (..., d) implicit-function contract
         v = verts.to(dtype=x.dtype, device=x.device)
         a = v
         b = torch.roll(v, -1, dims=0)
@@ -122,7 +124,7 @@ def sdf_polygon_2d(vertices, chunk: int = 65536) -> ImplicitFunction:
             crossings = (straddle & (x_cross > p[:, 0:1])).sum(dim=1)
             sign = torch.where(crossings % 2 == 1, -1.0, 1.0).to(x.dtype)
             out[s : s + chunk] = sign * dist
-        return out
+        return out.reshape(batch_shape)
 
     return phi
 

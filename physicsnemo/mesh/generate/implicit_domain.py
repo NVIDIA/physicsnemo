@@ -166,7 +166,13 @@ def _coverage_gap(phi, points, cells, bounds, h, n_probes=4096, seed=0):
     targets = torch.cat(
         [points[torch.unique(bfacets.reshape(-1))], points[bfacets].mean(dim=1)]
     )
-    gap = torch.cdist(surf, targets).min(dim=1).values.max()
+    # Chunk the probe rows: a single cdist would materialize an
+    # (n_probes, n_targets) matrix, which exceeds GPU memory for fine
+    # meshes (n_targets grows with the boundary).
+    gap = torch.zeros((), dtype=points.dtype, device=points.device)
+    for s0 in range(0, surf.shape[0], 256):
+        chunk_min = torch.cdist(surf[s0 : s0 + 256], targets).min(dim=1).values
+        gap = torch.maximum(gap, chunk_min.max())
     return float(gap / h)
 
 
@@ -500,7 +506,7 @@ def refit_mesh_to_implicit(
     ...     sdf_sphere([0.0, 0.0], 0.7), ([-1, -1], [1, 1]), h=0.1)
     >>> r = torch.tensor(0.7, dtype=torch.float64, requires_grad=True)
     >>> refit = refit_mesh_to_implicit(base, lambda x: x.norm(dim=-1) - r)
-    >>> area = (refit.points[refit.cells],)  # differentiable geometry
+    >>> verts = refit.points[refit.cells]  # differentiable geometry
     """
     from physicsnemo.mesh.mesh import Mesh
 
