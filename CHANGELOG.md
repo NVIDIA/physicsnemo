@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the continuous / stereographic RoPE helpers `build_rope_cos_sin_1d_continuous`,
   `build_axial_rope_cos_sin_2d_continuous`, `stereographic_projection`, and
   `spherical_centroid` in `physicsnemo.experimental.nn`.
+- Adds general data-fitting error metrics to `physicsnemo.metrics.general`:
+  `mae` (mean absolute error, aliased as `l1`), `relative_l2` / `relative_lp`
+  (scale-invariant relative :math:`L_p` error, a.k.a. `LpLoss`), and `huber`
+  (smooth :math:`L_1` error). These complement the existing `mse` / `rmse` and
+  provide the common regression losses used by neural-operator training loops.
 - Adds Point-Transformer local vector-attention blocks to `physicsnemo.nn`.
 - Adds an `is_causal` option to `TimmSelfAttention` in `physicsnemo.nn` for
   causal self-attention.

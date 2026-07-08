@@ -26,6 +26,14 @@ Below is a summary of general purpose statistical methods and metrics that are a
      - Mean Squared error between two tensors
    * - `physicsnemo.metrics.general.mse.rmse <#physicsnemo.metrics.general.mse.rmse>`_
      - Root Mean Squared error between two tensors
+   * - `physicsnemo.metrics.general.mae.mae <#physicsnemo.metrics.general.mae.mae>`_
+     - Mean Absolute error (a.k.a. ``l1``) between two tensors
+   * - `physicsnemo.metrics.general.relative.relative_l2 <#physicsnemo.metrics.general.relative.relative_l2>`_
+     - Scale-invariant relative :math:`L_2` error between two tensors
+   * - `physicsnemo.metrics.general.relative.relative_lp <#physicsnemo.metrics.general.relative.relative_lp>`_
+     - Scale-invariant relative :math:`L_p` error between two tensors
+   * - `physicsnemo.metrics.general.huber.huber <#physicsnemo.metrics.general.huber.huber>`_
+     - Huber (smooth :math:`L_1`) error between two tensors
    * - `physicsnemo.metrics.general.histogram.histogram <#physicsnemo.metrics.general.histogram.histogram>`_
      - Histogram of a set of tensors over the leading dimension
    * - `physicsnemo.metrics.general.histogram.cdf <#physicsnemo.metrics.general.histogram.cdf>`_
@@ -228,6 +236,18 @@ General
 ---------
 
 .. automodule:: physicsnemo.metrics.general.mse
+    :members:
+    :show-inheritance:
+
+.. automodule:: physicsnemo.metrics.general.mae
+    :members:
+    :show-inheritance:
+
+.. automodule:: physicsnemo.metrics.general.relative
+    :members:
+    :show-inheritance:
+
+.. automodule:: physicsnemo.metrics.general.huber
     :members:
     :show-inheritance:
 

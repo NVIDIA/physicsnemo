@@ -28,6 +28,9 @@ import physicsnemo.metrics.general.histogram as hist
 import physicsnemo.metrics.general.power_spectrum as ps
 import physicsnemo.metrics.general.wasserstein as w
 from physicsnemo.distributed.manager import DistributedManager
+from physicsnemo.metrics.general.huber import huber
+from physicsnemo.metrics.general.mae import l1, mae
+from physicsnemo.metrics.general.relative import relative_l2, relative_lp
 
 Tensor = torch.Tensor
 
@@ -853,3 +856,95 @@ def test_power_spectrum(device):
     assert (power[0, 0] < 1e-6).sum() > (
         power[0, 0].numel() * 0.9
     )  # Most bins are zero
+
+
+# ---------------------------------------------------------------------------
+# Data-fitting losses: mae / l1, relative_l2 / relative_lp, huber
+# ---------------------------------------------------------------------------
+
+
+def test_mae(device):
+    # Known value: constant offset of 1 -> MAE = 1.
+    target = torch.zeros(1, 4, 4, 2, device=device)
+    pred = torch.ones(1, 4, 4, 2, device=device)
+    assert torch.isclose(mae(pred, target), torch.tensor(1.0, device=device))
+
+    # ``l1`` is an alias of ``mae``.
+    assert l1 is mae
+
+    # A known offset of 2 -> MAE = 2.
+    pred2 = torch.full_like(target, 2.0)
+    assert torch.isclose(l1(pred2, target), torch.tensor(2.0, device=device))
+
+    # Zero for identical inputs.
+    x = torch.randn(2, 8, 16, 4, device=device)
+    assert torch.isclose(mae(x.clone(), x), torch.tensor(0.0, device=device), atol=1e-6)
+
+    # Per-dimension reduction preserves the batch dimension.
+    assert mae(x, torch.randn_like(x), dim=(1, 2, 3)).shape == (2,)
+
+
+def test_relative_l2(device):
+    # Zero for identical inputs.
+    target = torch.randn(2, 8, 16, 4, device=device)
+    assert torch.isclose(
+        relative_l2(target.clone(), target), torch.tensor(0.0, device=device), atol=1e-6
+    )
+
+    # Positive for different inputs.
+    pred = target + 0.1 * torch.randn_like(target)
+    assert relative_l2(pred, target) > 0
+
+    # Scale invariance: relative error is unchanged under a common rescale.
+    shifted = torch.randn(2, 8, 16, 4, device=device) + 2.0
+    pred_s = shifted + 0.1 * torch.randn_like(shifted)
+    assert torch.isclose(
+        relative_l2(pred_s, shifted), relative_l2(pred_s * 5, shifted * 5), rtol=1e-4
+    )
+
+    # ``eps`` prevents NaN/Inf when the target norm is zero.
+    zero_target = torch.zeros(2, 4, 4, 2, device=device)
+    ones = torch.ones(2, 4, 4, 2, device=device)
+    loss = relative_l2(zero_target + ones, zero_target, eps=1e-6)
+    assert not torch.isnan(loss) and not torch.isinf(loss)
+
+    # Per-sample reduction over non-batch dimensions.
+    assert relative_l2(pred, target, dim=(1, 2, 3)).shape == (2,)
+
+
+def test_relative_lp(device):
+    # ``relative_l2`` matches ``relative_lp`` with p=2.
+    target = torch.randn(3, 6, 6, device=device) + 1.0
+    pred = target + 0.2 * torch.randn_like(target)
+    assert torch.isclose(relative_lp(pred, target, p=2.0), relative_l2(pred, target))
+
+    # Relative L1 is scale-invariant and non-negative.
+    rel_l1 = relative_lp(pred, target, p=1.0)
+    assert rel_l1 >= 0
+    assert torch.isclose(rel_l1, relative_lp(pred * 3, target * 3, p=1.0), rtol=1e-4)
+
+
+def test_huber(device):
+    # For small element-wise errors and delta=1, Huber ~= 0.5 * MSE.
+    target = torch.randn(2, 8, 8, 4, device=device)
+    pred = target + 0.01 * torch.randn_like(target)
+    mse_val = torch.mean((pred - target) ** 2)
+    huber_val = huber(pred, target, delta=1.0)
+    assert torch.isclose(mse_val, huber_val * 2, rtol=0.1)
+
+    # Zero for identical inputs.
+    assert torch.isclose(
+        huber(target.clone(), target), torch.tensor(0.0, device=device), atol=1e-6
+    )
+
+    # For large errors, Huber grows linearly: delta*(|x| - 0.5*delta).
+    target0 = torch.zeros(1, 4, 4, device=device)
+    pred_big = torch.full_like(target0, 10.0)
+    expected = 1.0 * (10.0 - 0.5 * 1.0)
+    assert torch.isclose(
+        huber(pred_big, target0, delta=1.0),
+        torch.tensor(expected, device=device),
+    )
+
+    # Per-dimension reduction preserves the batch dimension.
+    assert huber(pred, target, dim=(1, 2, 3)).shape == (2,)
