@@ -1,6 +1,20 @@
 Geometry Functionals
 ====================
 
+Lattice Deform Points
+---------------------
+
+.. autofunction:: physicsnemo.nn.functional.lattice_deform_points
+
+.. rubric:: Visualization
+
+This visualization shows a regular control lattice smoothly deforming a dense
+point grid. The dashed grid shows the original geometry for comparison.
+
+.. figure:: /img/nn/functional/geometry/lattice_deform_points/lattice_deform_points_overview.png
+   :alt: Input point grid and 4 by 4 displacement lattice producing a smoothly deformed output grid
+   :width: 85%
+
 Mesh Poisson Disk Sample
 ------------------------
 
