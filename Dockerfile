@@ -23,7 +23,7 @@
 # Python packages use uv (UV_SYSTEM_PYTHON=1). Build-only source and uv caches are
 # mounted into RUN instructions so they do not become part of the image layers.
 
-ARG BASE_CONTAINER=nvcr.io/nvidia/pytorch:26.01-py3
+ARG BASE_CONTAINER=nvcr.io/nvidia/pytorch:26.06-py3
 FROM ${BASE_CONTAINER} AS builder
 
 ARG TARGETPLATFORM
@@ -56,7 +56,7 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     { [ -f /etc/pip/constraint.txt ] || touch /etc/pip/constraint.txt; } && \
     rm -rf /var/lib/apt/lists/*
 
-# Match the original ordering: activate the constraint only after the initial
+# Activate the constraint only after the initial
 # pip/setuptools bootstrap and constraint-file preparation have completed.
 ENV UV_CONSTRAINT=/etc/pip/constraint.txt
 
@@ -104,8 +104,7 @@ ENV PYSPNG_ARM64_WHEEL=${PYSPNG_ARM64_WHEEL:-unknown} \
     TORCH_CUDA_ARCH_LIST="7.5 8.0 8.6 9.0 10.0 12.0+PTX" \
     NATTEN_CUDA_ARCH="8.0;8.6;9.0;10.0;12.0"
 
-# Preserve the existing install order and platform conditionals while committing
-# their combined filesystem result as one layer. The source tree (including
+# Commit the combined filesystem result as one layer. The source tree (including
 # release-provided wheels under deps/) and uv cache are temporary mounts.
 RUN --mount=type=bind,target=/physicsnemo,rw \
     --mount=type=cache,target=/root/.cache/uv,sharing=locked \
