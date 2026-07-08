@@ -112,12 +112,26 @@ RUN --mount=type=bind,source=docker/install-container-dependencies.sh,target=/tm
     --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     bash /tmp/install-container-dependencies.sh
 
-# Install PhysicsNeMo itself separately so source-only changes produce a small
-# application layer and can reuse the expensive dependency layer above.
+# Install the remaining third-party dependencies from the canonical project
+# metadata. Only pyproject.toml participates in this layer's bind-mount cache
+# checksum, and its torch-sparse build dependency is declared under tool.uv.
+RUN --mount=type=bind,source=pyproject.toml,target=/tmp/pyproject.toml,ro \
+    --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    cd /tmp && \
+    uv pip install -r pyproject.toml \
+        --extra cu13 \
+        --extra utils-extras \
+        --extra mesh-extras \
+        --extra datapipes-extras \
+        --extra gnns \
+        --extra sym
+
+# Install PhysicsNeMo itself without resolving dependencies again. Source-only
+# changes now produce a small application layer and reuse both layers above.
 RUN --mount=type=bind,target=/physicsnemo,rw \
     --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     cd /physicsnemo && \
-    uv pip install ".[cu13,utils-extras,mesh-extras,datapipes-extras,gnns,sym]"
+    uv pip install --no-deps ".[cu13,utils-extras,mesh-extras,datapipes-extras,gnns,sym]"
 
 #######################################################################
 # CI image: builder + dev group + FigNet/Makani + CI-only packages

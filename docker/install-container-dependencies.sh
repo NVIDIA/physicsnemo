@@ -147,15 +147,11 @@ install_natten() {
 main() {
     install_pyspng
     install_numcodecs
-    uv pip install "vtk>=9.6.0"
-    uv pip install "pyvista>=0.40.1"
     install_onnxruntime
-    uv pip install "torch_geometric>=2.6.1"
     install_torch_scatter
     install_pyg_lib
     install_torch_cluster
     install_natten
-    uv pip install --no-build-isolation torch_sparse
 }
 
 main "$@"
