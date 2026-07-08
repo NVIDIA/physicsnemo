@@ -122,3 +122,15 @@ def test_dtype_follows_query(dtype):
     phi = sdf_union(sdf_sphere([0.0, 0.0], 0.5), sdf_box([-1.0, -1.0], [0.0, 0.0]))
     x = torch.zeros(4, 2, dtype=dtype)
     assert phi(x).dtype == dtype
+
+
+def test_polygon_honors_batch_dims():
+    """The (..., d) implicit-function contract must hold for the polygon."""
+    square = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+    phi = sdf_polygon_2d(square)
+    g = torch.Generator().manual_seed(0)
+    x = torch.rand(3, 5, 7, 2, generator=g, dtype=torch.float64) * 2 - 0.5
+    batched = phi(x)
+    assert batched.shape == (3, 5, 7)
+    flat = phi(x.reshape(-1, 2))
+    assert torch.equal(batched.reshape(-1), flat)
