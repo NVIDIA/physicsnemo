@@ -49,15 +49,12 @@ def thermal_residual(
 
     conductivity = inputs[:, 2:3]
     heat_source = inputs[:, 4:5]
-    height, width = temperature.shape[-2:]
-    dy = 1.0 / max(height - 1, 1)
-    dx = 1.0 / max(width - 1, 1)
-    grad_x = torch.gradient(temperature, spacing=(dx,), dim=(3,))[0]
-    grad_y = torch.gradient(temperature, spacing=(dy,), dim=(2,))[0]
+    grad_x = torch.gradient(temperature, dim=3)[0]
+    grad_y = torch.gradient(temperature, dim=2)[0]
     flux_x = conductivity * grad_x
     flux_y = conductivity * grad_y
-    div_x = torch.gradient(flux_x, spacing=(dx,), dim=(3,))[0]
-    div_y = torch.gradient(flux_y, spacing=(dy,), dim=(2,))[0]
+    div_x = torch.gradient(flux_x, dim=3)[0]
+    div_y = torch.gradient(flux_y, dim=2)[0]
     return div_x + div_y + source_scale * heat_source
 
 
@@ -85,8 +82,6 @@ class ThermalPINO(Module):
 
         super().__init__(meta=ModelMetaData())
         normalization = config["normalization"]
-        if not isinstance(normalization, Mapping):
-            raise TypeError("model.normalization must be a mapping")
 
         width = int(config.get("width", 32))
         self.fno = FNO(

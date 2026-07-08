@@ -137,10 +137,6 @@ def train_model(config: Mapping[str, object], dist: DistributedManager) -> Path:
     training = config["training"]
     dataset = config["dataset"]
     model_config = config["model"]
-    if not all(
-        isinstance(section, Mapping) for section in (training, dataset, model_config)
-    ):
-        raise TypeError("training, dataset, and model configs must be mappings")
 
     seed = int(config.get("seed", 10))
     set_seed(seed + dist.rank)

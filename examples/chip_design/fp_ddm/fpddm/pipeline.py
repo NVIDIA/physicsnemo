@@ -18,7 +18,6 @@
 
 from __future__ import annotations
 
-import json
 import time
 import warnings
 from collections.abc import Mapping
@@ -136,7 +135,7 @@ def _reference_solve(
 
 def _build_interface_handler(run_config: Mapping[str, object]):
     name = str(run_config.get("handler", "parallel"))
-    learning_rate = float(run_config.get("handler_learning_rate", 0.5))
+    learning_rate = float(run_config.get("handler_learning_rate", 10.0))
     if name == "parallel":
         return ParallelGradientInterfaceHandler(learning_rate)
     if name == "gradient":
@@ -157,19 +156,6 @@ def run_fpddm(
     model_config = config["model"]
     visualization_config = config["visualization"]
     fem_config = config["fem"]
-    if not all(
-        isinstance(section, Mapping)
-        for section in (
-            run_config,
-            domain_config,
-            dataset_config,
-            model_config,
-            visualization_config,
-            fem_config,
-        )
-    ):
-        raise TypeError("FP-DDM config sections must be mappings")
-
     output_dir = Path(str(run_config["output_dir"]))
     output_dir.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
@@ -217,7 +203,7 @@ def run_fpddm(
             )
     reference = (
         _reference_solve(domain, reference_solver, output_dir, render=render)
-        if bool(run_config.get("ground_truth", False))
+        if bool(run_config.get("ground_truth", True))
         else None
     )
 
@@ -232,7 +218,7 @@ def run_fpddm(
         local_solver = NeuralDomainSolver(
             model_config,
             checkpoint_dir=Path(str(checkpoint_dir)),
-            batch_size=int(run_config.get("batch_size", 128)),
+            batch_size=int(run_config.get("batch_size", 1000)),
             device=device,
         )
         adapter = PhysicsInformedAdapter(
@@ -266,7 +252,7 @@ def run_fpddm(
                     output_dir,
                     save_name="conductivity",
                     fps=int(visualization_config.get("fps", 10)),
-                    vmin=float(visualization_config.get("conductivity_min", 0.5)),
+                    vmin=float(visualization_config.get("conductivity_min", 10.0)),
                     vmax=float(visualization_config.get("conductivity_max", 200.0)),
                 ),
             ]
@@ -298,13 +284,4 @@ def run_fpddm(
     )
     grid = method.run(domain)
     elapsed = time.perf_counter() - started
-    summary = {
-        "solver": solver_name,
-        "iterations": len(metrics.rows),
-        "elapsed_seconds": elapsed,
-        "converged": early_stopping.converged,
-        "metrics": metrics.rows[-1] if metrics.rows else {},
-    }
-    with (output_dir / "summary.json").open("w", encoding="utf-8") as output:
-        json.dump(summary, output, indent=2)
     return RunResult(grid, metrics.rows, reference, elapsed)

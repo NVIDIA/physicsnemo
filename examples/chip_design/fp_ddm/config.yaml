@@ -48,7 +48,7 @@ dataset:
 
 # Physics-informed training and PhysicsNeMo checkpoint settings.
 training:
-  epochs: 6
+  epochs: 10
   samples: 500000
   batch_size: 256
   num_workers: 10
@@ -82,12 +82,13 @@ fem:
 
 # Schwarz workflow. Handler choices are: parallel, gradient, and exchange.
 run:
+  seed: 1
   solver: fem
   checkpoint_dir: null
   output_dir: outputs/schwarz
-  batch_size: 128
+  batch_size: 1000
   handler: parallel
-  handler_learning_rate: 0.5
+  handler_learning_rate: 10.0
   exchange_alpha: 1.0
   max_iterations: 50
   tolerance: 1.0e-9
@@ -98,14 +99,14 @@ run:
   ttt_pde_weight: 1.0
   ttt_boundary_weight: 1.0
   visualize: true
-  ground_truth: false
+  ground_truth: true
 
 # Optional PNG and MP4 output ranges.
 visualization:
   fps: 10
   temperature_min: 300.0
   temperature_max: 400.0
-  conductivity_min: 0.5
+  conductivity_min: 10.0
   conductivity_max: 200.0
 
 hydra:

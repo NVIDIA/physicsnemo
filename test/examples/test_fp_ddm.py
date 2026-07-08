@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import csv
-import json
 import sys
 from pathlib import Path
 
@@ -27,7 +26,9 @@ import torch
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils import load_checkpoint, save_checkpoint
 
-EXAMPLE_ROOT = Path(__file__).resolve().parents[2] / "examples" / "cfd" / "fp_ddm"
+EXAMPLE_ROOT = (
+    Path(__file__).resolve().parents[2] / "examples" / "chip_design" / "fp_ddm"
+)
 sys.path.insert(0, str(EXAMPLE_ROOT))
 
 import fpddm.domain as domain_module  # noqa: E402
@@ -125,9 +126,9 @@ def test_thermal_fields_honor_configured_conductivity_minimum(monkeypatch):
     assert captured == [3.0]
 
 
-def test_default_interface_learning_rate_is_stable():
+def test_default_interface_learning_rate_matches_original():
     assert pipeline_module._build_interface_handler({}).learning_rate == pytest.approx(
-        0.5
+        10.0
     )
 
 
@@ -140,6 +141,12 @@ def test_thermal_residual_includes_heat_source():
     inputs[:, 4] = 2.0
     residual = thermal_residual(temperature, inputs, source_scale=0.25)
     assert torch.allclose(residual, torch.full_like(residual, 0.5))
+
+    x = torch.arange(8, dtype=torch.float32)
+    temperature = x.square()[None, None, None, :].expand(1, 1, 8, 8).clone()
+    inputs[:, 4] = 0.0
+    residual = thermal_residual(temperature, inputs)
+    assert torch.allclose(residual[..., 2:-2, 2:-2], torch.full((1, 1, 4, 4), 2.0))
 
 
 def test_physicsnemo_fno_shape_and_boundary(model_config):
@@ -345,6 +352,3 @@ def test_fem_fpddm_end_to_end(tmp_path, model_config):
     assert all("loss_overlap" in row for row in result.metrics)
     assert all("loss_true_NRMAE" in row for row in result.metrics)
     assert (output_dir / "metrics.csv").is_file()
-    with (output_dir / "summary.json").open(encoding="utf-8") as summary_file:
-        summary = json.load(summary_file)
-    assert summary["iterations"] == 2

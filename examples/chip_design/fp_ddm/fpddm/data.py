@@ -25,29 +25,15 @@ from collections.abc import Mapping
 
 import numpy as np
 import torch
-import torch.nn.functional as F
+from opensimplex import OpenSimplex
+from scipy.ndimage import gaussian_filter
 from torch.utils.data import DataLoader, Dataset, DistributedSampler, random_split
 
 _SIMPLEX_WORKERS = 20
 
 
 def _smooth(array: np.ndarray, sigma: float, *, mode: str = "reflect") -> np.ndarray:
-    try:
-        from scipy.ndimage import gaussian_filter
-
-        return gaussian_filter(array, sigma=sigma, mode=mode)
-    except ImportError:
-        max_kernel = min(array.shape)
-        if max_kernel % 2 == 0:
-            max_kernel -= 1
-        kernel = min(max(3, 2 * round(sigma) + 1), max_kernel)
-        if kernel < 3:
-            return array.astype(np.float32, copy=True)
-        padding = kernel // 2
-        values = torch.from_numpy(array.astype(np.float32))[None, None]
-        padding_mode = "circular" if mode == "wrap" else "reflect"
-        values = F.pad(values, (padding,) * 4, mode=padding_mode)
-        return F.avg_pool2d(values, kernel, stride=1)[0, 0].numpy()
+    return gaussian_filter(array, sigma=sigma, mode=mode)
 
 
 def _normalize_to_range(array: np.ndarray, vmin: float, vmax: float) -> np.ndarray:
@@ -211,10 +197,8 @@ def create_dataloaders(
     """Create deterministic train, validation, and test data loaders."""
 
     total = int(config.get("n_samples", 0))
-    if total < 3:
-        raise ValueError("FP-DDM training requires at least three samples")
-    n_val = max(1, int(0.05 * total))
-    n_test = max(1, int(0.05 * total))
+    n_val = int(0.05 * total)
+    n_test = int(0.05 * total)
     n_train = total - n_val - n_test
 
     train_config = copy.deepcopy(dict(config))
@@ -264,23 +248,7 @@ def create_dataloaders(
     )
 
 
-def _fallback_layout_map(seed: int, size: int, octaves: int) -> np.ndarray:
-    rng = np.random.default_rng(seed + 1337)
-    result = np.zeros((size, size), dtype=np.float32)
-    amplitude = 1.0
-    total_amplitude = 0.0
-    for octave in range(max(1, octaves)):
-        noise = rng.random((size, size), dtype=np.float32)
-        sigma = max(0.5, size / (8.0 * 2**octave))
-        result += amplitude * _smooth(noise, sigma, mode="wrap")
-        total_amplitude += amplitude
-        amplitude *= 0.5
-    return result / total_amplitude
-
-
 def _simplex_rows(args) -> tuple[int, np.ndarray]:
-    from opensimplex import OpenSimplex
-
     seed, size, y0, y1, octaves, lacunarity, gain, warp_strength = args
     simplex = OpenSimplex(seed=seed + 1337)
     noise = simplex.noise2
@@ -310,11 +278,6 @@ def _layout_map(
     gain: float = 0.3,
     warp_strength: float = 0.5,
 ) -> np.ndarray:
-    try:
-        from opensimplex import OpenSimplex
-    except ImportError:
-        return _normalize_to_range(_fallback_layout_map(seed, size, octaves), 0.0, 1.0)
-
     available = (
         len(os.sched_getaffinity(0))
         if hasattr(os, "sched_getaffinity")

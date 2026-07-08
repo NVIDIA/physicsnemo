@@ -37,7 +37,7 @@ def main(cfg: DictConfig) -> None:
     if dist.world_size != 1:
         raise RuntimeError("FP-DDM Schwarz inference currently supports one process")
     logger = PythonLogger("fp_ddm")
-    set_seed(int(cfg.seed))
+    set_seed(int(cfg.run.seed))
 
     cfg.run.output_dir = to_absolute_path(cfg.run.output_dir)
     if cfg.run.checkpoint_dir:

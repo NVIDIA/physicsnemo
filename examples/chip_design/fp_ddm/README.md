@@ -39,7 +39,7 @@ Install PhysicsNeMo, then install the example dependencies from the repository
 root:
 
 ```bash
-pip install -r examples/cfd/fp_ddm/requirements.txt
+pip install -r examples/chip_design/fp_ddm/requirements.txt
 ```
 
 SciPy and OpenSimplex provide the smooth synthetic material layouts. Matplotlib
@@ -51,7 +51,7 @@ The default configuration generates local thermal problems on the fly and
 trains one model directly with the physics-informed objective:
 
 ```bash
-python examples/cfd/fp_ddm/train.py
+python examples/chip_design/fp_ddm/train.py
 ```
 
 All settings may be changed with Hydra overrides. Distributed training uses the
@@ -59,7 +59,7 @@ same entry point:
 
 ```bash
 torchrun --standalone --nproc_per_node=4 \
-    examples/cfd/fp_ddm/train.py \
+    examples/chip_design/fp_ddm/train.py \
     training.output_dir=outputs/fp_ddm/train_distributed
 ```
 
@@ -77,12 +77,11 @@ The `fem` solver key is retained from the original scripts; its local reference
 implementation is the matrix-free finite-volume stencil in `thermal.py`.
 
 ```bash
-python examples/cfd/fp_ddm/run_fpddm.py \
+python examples/chip_design/fp_ddm/run_fpddm.py \
     run.solver=fem \
     domain.rows=3 \
     domain.columns=3 \
     run.max_iterations=10 \
-    run.ground_truth=true \
     run.visualize=false \
     run.output_dir=outputs/fp_ddm/fem
 ```
@@ -90,13 +89,12 @@ python examples/cfd/fp_ddm/run_fpddm.py \
 Use a trained FNO checkpoint for neural local solves:
 
 ```bash
-python examples/cfd/fp_ddm/run_fpddm.py \
+python examples/chip_design/fp_ddm/run_fpddm.py \
     run.solver=fno \
     run.checkpoint_dir=outputs/train/checkpoints/best \
     domain.rows=3 \
     domain.columns=3 \
     run.max_iterations=50 \
-    run.ground_truth=true \
     run.visualize=false \
     run.output_dir=outputs/fp_ddm/fno
 ```
@@ -105,12 +103,11 @@ The checkpoint is used directly by default. Physics-guided test-time adaptation
 is optional and disabled; enable it with `run.ttt_steps=<steps>`.
 
 Each run writes the resolved Hydra configuration, per-iteration metrics,
-NumPy reference fields when requested, and a JSON summary. Visualization also
-writes field images, iteration series, and MP4 animations.
+and NumPy reference fields when requested. Visualization also writes field
+images, iteration series, and MP4 animations.
 
-The overlap RMSE is the stopping metric. In `summary.json`, `converged` is true
-only when the configured tolerance is reached; stopping at `max_iterations` is
-an iteration-budget limit, not convergence.
+The overlap RMSE is the stopping metric. Reaching `max_iterations` is an
+iteration-budget limit, not convergence.
 
 ## Configuration
 
@@ -128,9 +125,9 @@ The main configuration groups are:
 
 The supplied workload uses zero heat source, matching the original FP-DDM setup.
 The synthetic global layout currently requires a square patch grid with square
-patches. Full-domain reference solves are opt-in with `run.ground_truth=true`
-and limited to at most 26 subdomains. Larger requests emit a warning and continue
-without reference metrics.
+patches. Full-domain reference solves are enabled by default and limited to at
+most 26 subdomains. Larger requests emit a warning and continue without
+reference metrics; disable them explicitly with `run.ground_truth=false`.
 
 ## Validation And Scope
 
