@@ -17,14 +17,13 @@
 import importlib.util
 import random
 import warnings
-from pathlib import Path
 
 import pytest
-from pytest_utils import import_or_fail, nfsdata_or_fail
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
 from physicsnemo.distributed import DistributedManager
+from test.conftest import requires_module
 
 omegaconf = pytest.importorskip("omegaconf")
 np = pytest.importorskip("numpy")
@@ -33,11 +32,8 @@ zarr = pytest.importorskip("zarr")
 
 
 @pytest.fixture
-def dataset_path():
-    data_dir = "/data/nfs/modulus-data/datasets/healpix/"
-    dataset_name = "healpix.zarr"
-    path = Path(data_dir, dataset_name)
-    return path
+def dataset_path(nfs_data_dir):
+    return nfs_data_dir.joinpath("datasets/healpix/healpix.zarr")
 
 
 @pytest.fixture
@@ -89,9 +85,8 @@ def scaling_double_dict():
     return omegaconf.DictConfig(scaling)
 
 
-@import_or_fail("omegaconf")
-@import_or_fail("netCDF4")
-@nfsdata_or_fail
+@requires_module("omegaconf")
+@requires_module("netCDF4")
 def test_TimeSeriesDataset_initialization(
     dataset_path,
     scaling_dict,
@@ -276,11 +271,10 @@ def test_TimeSeriesDataset_initialization(
     assert isinstance(timeseries_ds, TimeSeriesDatasetZarr)
 
 
-@import_or_fail("omegaconf")
-@import_or_fail("netCDF4")
-@import_or_fail("numpy")
-@import_or_fail("zarr")
-@nfsdata_or_fail
+@requires_module("omegaconf")
+@requires_module("netCDF4")
+@requires_module("numpy")
+@requires_module("zarr")
 def test_TimeSeriesDataset_get_constants(dataset_path, scaling_dict, pytestconfig):
     from physicsnemo.datapipes.healpix.timeseries_dataset_zarr import (
         TimeSeriesDatasetZarr,
@@ -338,9 +332,8 @@ def test_TimeSeriesDataset_get_constants(dataset_path, scaling_dict, pytestconfi
     zarr_ds.close()
 
 
-@import_or_fail("omegaconf")
-@import_or_fail("netCDF4")
-@nfsdata_or_fail
+@requires_module("omegaconf")
+@requires_module("netCDF4")
 def test_TimeSeriesDataset_len(dataset_path, scaling_dict, pytestconfig):
     from physicsnemo.datapipes.healpix.timeseries_dataset_zarr import (
         TimeSeriesDatasetZarr,
@@ -398,10 +391,9 @@ def test_TimeSeriesDataset_len(dataset_path, scaling_dict, pytestconfig):
     DistributedManager.cleanup()
 
 
-@import_or_fail("omegaconf")
-@import_or_fail("netCDF4")
-@import_or_fail("numpy")
-@nfsdata_or_fail
+@requires_module("omegaconf")
+@requires_module("netCDF4")
+@requires_module("numpy")
 def test_TimeSeriesDataset_get(dataset_path, scaling_double_dict, splits, pytestconfig):
     from physicsnemo.datapipes.healpix.timeseries_dataset_zarr import (
         TimeSeriesDatasetZarr,
@@ -541,10 +533,9 @@ def test_TimeSeriesDataset_get(dataset_path, scaling_double_dict, splits, pytest
     assert (len(inputs) + 1) == len(timeseries_ds[0])
 
 
-@import_or_fail("omegaconf")
-@import_or_fail("netCDF4")
-@import_or_fail("zarr")
-@nfsdata_or_fail
+@requires_module("omegaconf")
+@requires_module("netCDF4")
+@requires_module("zarr")
 def test_TimeSeriesDataModule_initialization(
     dataset_path, splits, scaling_double_dict, pytestconfig
 ):
@@ -642,11 +633,10 @@ def test_TimeSeriesDataModule_initialization(
     DistributedManager.cleanup()
 
 
-@import_or_fail("omegaconf")
-@import_or_fail("netCDF4")
-@import_or_fail("numpy")
-@import_or_fail("zarr")
-@nfsdata_or_fail
+@requires_module("omegaconf")
+@requires_module("netCDF4")
+@requires_module("numpy")
+@requires_module("zarr")
 def test_TimeSeriesDataModule_get_constants(
     dataset_path, scaling_double_dict, splits, pytestconfig
 ):
@@ -731,9 +721,8 @@ def test_TimeSeriesDataModule_get_constants(
     DistributedManager.cleanup()
 
 
-@import_or_fail("omegaconf")
-@import_or_fail("zarr")
-@nfsdata_or_fail
+@requires_module("omegaconf")
+@requires_module("zarr")
 def test_TimeSeriesDataModule_get_dataloaders(
     dataset_path, scaling_double_dict, splits, pytestconfig
 ):
