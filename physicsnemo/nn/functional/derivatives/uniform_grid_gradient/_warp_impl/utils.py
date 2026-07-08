@@ -21,6 +21,8 @@ from collections.abc import Sequence
 import torch
 import warp as wp
 
+from physicsnemo.core.function_spec import FunctionSpec
+
 _SUPPORTED_ORDERS = (2, 4)
 _SUPPORTED_DERIVATIVE_ORDERS = (1, 2)
 
@@ -107,30 +109,24 @@ def _wp_launch(
     stream,
 ) -> None:
     ### Launch a Warp kernel, optionally overriding block size.
-    if _WARP_BLOCK_DIM > 0:
+    with FunctionSpec.warp_stream_scope(stream):
+        if _WARP_BLOCK_DIM > 0:
+            wp.launch(
+                kernel=kernel,
+                dim=dim,
+                inputs=inputs,
+                device=device,
+                stream=stream,
+                block_dim=_WARP_BLOCK_DIM,
+            )
+            return
         wp.launch(
             kernel=kernel,
             dim=dim,
             inputs=inputs,
             device=device,
             stream=stream,
-            block_dim=_WARP_BLOCK_DIM,
         )
-        return
-    wp.launch(
-        kernel=kernel,
-        dim=dim,
-        inputs=inputs,
-        device=device,
-        stream=stream,
-    )
-
-
-def _warp_launch_context(field: torch.Tensor):
-    ### Resolve warp launch context without per-call dynamic imports.
-    if field.device.type == "cuda":
-        return None, wp.stream_from_torch(torch.cuda.current_stream(field.device))
-    return "cpu", None
 
 
 def _launch_dim(shape: torch.Size) -> int | tuple[int, ...]:

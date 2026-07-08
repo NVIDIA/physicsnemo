@@ -14,11 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Codecov behavior config, following rapidsai/cudf's shape. All peer repos
-# (NVIDIA/warp, NVIDIA/NeMo, rapidsai/cudf) disable the PR comment; coverage
-# signal surfaces through checks/statuses and the codecov.io dashboard.
+# Codecov behavior config, following the rapidsai/cudf + zarr shapes.
 
-comment: false
+# Post a coverage summary comment on PRs. Kept low-noise: only when
+# coverage actually changes, and only after the coverage upload(s) land.
+comment:
+  layout: "diff, files"
+  behavior: default
+  require_changes: true  # only comment when coverage changes vs base
 
 coverage:
   status:
@@ -28,7 +31,49 @@ coverage:
     patch:
       default:
         target: auto
+        threshold: 5%        # tolerance band so small diffs don't flip status
         informational: true  # diff coverage is a signal, never a blocker
+
+# Flags let Codecov combine partial coverage uploads correctly. The PR
+# Coverage job runs a testmon-selected subset, so without carryforward a
+# PR that runs only a few tests would report artificially low coverage;
+# carryforward reuses the last-known coverage for anything not re-run.
+flags:
+  pr-core:
+    paths:
+      - physicsnemo/
+    carryforward: true
+
+# Wait for coverage upload(s) before computing/notifying. Bump this as
+# GPU / multi-GPU coverage uploads are added so no status reports early.
+codecov:
+  notify:
+    after_n_builds: 1
+    wait_for_ci: true
+
+# Per-subsystem coverage so under-tested modules are visible, not just a
+# single repo-wide number.
+component_management:
+  individual_components:
+    - component_id: models
+      paths:
+        - physicsnemo/models/**
+    - component_id: distributed
+      paths:
+        - physicsnemo/distributed/**
+        - physicsnemo/domain_parallel/**
+    - component_id: datapipes
+      paths:
+        - physicsnemo/datapipes/**
+    - component_id: mesh
+      paths:
+        - physicsnemo/mesh/**
+    - component_id: nn
+      paths:
+        - physicsnemo/nn/**
+    - component_id: diffusion
+      paths:
+        - physicsnemo/diffusion/**
 
 github_checks:
   # Paint uncovered changed lines directly onto the PR's Files view.

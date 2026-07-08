@@ -106,7 +106,7 @@ def identity_impl(x: torch.Tensor) -> torch.Tensor:
     device, stream = FunctionSpec.warp_launch_context(x)
     wp_x = wp.from_torch(x, dtype=wp.float32, return_ctype=True)
     wp_y = wp.from_torch(out, dtype=wp.float32, return_ctype=True)
-    with wp.ScopedStream(stream):
+    with FunctionSpec.warp_stream_scope(stream):
         wp.launch(
             kernel=_identity_kernel,
             dim=x.numel(),
