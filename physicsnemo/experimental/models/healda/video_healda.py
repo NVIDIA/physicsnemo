@@ -38,16 +38,19 @@ from physicsnemo.nn.module.hpx.tokenizer import (
 
 @dataclass
 class VideoHealDAMetaData(ModelMetaData):
-    """Metadata for VideoHealDA model."""
+    r"""Metadata for :class:`VideoHealDA` (see :class:`~physicsnemo.core.meta.ModelMetaData`)."""
 
-    name: str = "VideoHealDA"
+    # Optimization
     jit: bool = False
     cuda_graphs: bool = False
     amp_cpu: bool = False
     amp_gpu: bool = True
     torch_fx: bool = False
+    # Data type
     bf16: bool = True
+    # Inference
     onnx: bool = False
+    # Physics informed
     func_torch: bool = False
     auto_grad: bool = False
 
