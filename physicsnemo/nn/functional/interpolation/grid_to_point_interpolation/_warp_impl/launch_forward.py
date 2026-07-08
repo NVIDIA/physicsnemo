@@ -14,7 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Dimension-specific Warp launch helpers for interpolation forward passes."""
+"""Dimension-specific Warp launch helpers for interpolation forward passes.
+
+The enclosing torch custom op owns autograd, so input views explicitly disable
+Warp-side gradient allocation.
+"""
 
 import torch
 import warp as wp
@@ -43,8 +47,8 @@ def _launch_forward_1d(
 ) -> None:
     # Convert torch tensors to warp views with dtypes expected by 1D kernels.
     points = query_points[:, 0].contiguous()
-    wp_points = wp.from_torch(points, dtype=wp.float32)
-    wp_grid = wp.from_torch(context_grid.contiguous())
+    wp_points = wp.from_torch(points, dtype=wp.float32, requires_grad=False)
+    wp_grid = wp.from_torch(context_grid.contiguous(), requires_grad=False)
     wp_out = wp.from_torch(output, return_ctype=True)
 
     wp.launch(
@@ -80,8 +84,10 @@ def _launch_forward_2d(
     wp_stream,
 ) -> None:
     # Convert torch tensors to warp views with dtypes expected by 2D kernels.
-    wp_points = wp.from_torch(query_points.contiguous(), dtype=wp.vec2f)
-    wp_grid = wp.from_torch(context_grid.contiguous())
+    wp_points = wp.from_torch(
+        query_points.contiguous(), dtype=wp.vec2f, requires_grad=False
+    )
+    wp_grid = wp.from_torch(context_grid.contiguous(), requires_grad=False)
     wp_out = wp.from_torch(output, return_ctype=True)
     origin = wp.vec2f(float(start_vals[0]), float(start_vals[1]))
     spacing = wp.vec2f(float(dx_vals[0]), float(dx_vals[1]))
@@ -120,8 +126,10 @@ def _launch_forward_3d(
     wp_stream,
 ) -> None:
     # Convert torch tensors to warp views with dtypes expected by 3D kernels.
-    wp_points = wp.from_torch(query_points.contiguous(), dtype=wp.vec3f)
-    wp_grid = wp.from_torch(context_grid.contiguous())
+    wp_points = wp.from_torch(
+        query_points.contiguous(), dtype=wp.vec3f, requires_grad=False
+    )
+    wp_grid = wp.from_torch(context_grid.contiguous(), requires_grad=False)
     wp_out = wp.from_torch(output, return_ctype=True)
     origin = wp.vec3f(
         float(start_vals[0]),
@@ -168,6 +176,7 @@ def launch_forward(
     wp_device,
     wp_stream,
 ) -> None:
+    """Launch the dimension-specific Warp interpolation forward kernel."""
     if dims == 1:
         _launch_forward_1d(
             query_points=query_points,

@@ -100,6 +100,39 @@ def clamp_stencil_pair(center: int, size: int) -> wp.vec2i:
     return wp.vec2i(clamp_index(center, size), clamp_index(center + 1, size))
 
 
+@wp.func
+def _padded_stencil_boundary_tolerance(size: int) -> wp.float32:
+    """Return a grid-index tolerance scaled to float32 position roundoff."""
+    # Cover float32 roundoff accumulated while reconstructing grid position.
+    return 4.0 * 1.1920928955078125e-7 * wp.float32(size)
+
+
+@wp.func
+def select_padded_stencil_center(position: wp.float32, size: int) -> int:
+    """Select the real two-point cell at either padded-grid boundary."""
+    tolerance = _padded_stencil_boundary_tolerance(size)
+    lower_index = wp.float32(1.0)
+    upper_index = wp.float32(size - 2)
+    if wp.abs(position - lower_index) <= tolerance:
+        return 1
+    if wp.abs(position - upper_index) <= tolerance:
+        return size - 3
+    return wp.int32(position)
+
+
+@wp.func
+def padded_stencil_fraction(position: wp.float32, center: int, size: int) -> wp.float32:
+    """Return a two-point cell fraction with exact real-boundary values."""
+    tolerance = _padded_stencil_boundary_tolerance(size)
+    lower_index = wp.float32(1.0)
+    upper_index = wp.float32(size - 2)
+    if wp.abs(position - lower_index) <= tolerance:
+        return 0.0
+    if wp.abs(position - upper_index) <= tolerance:
+        return 1.0
+    return position - wp.float32(center)
+
+
 def parse_grid_metadata(
     grid_meta: torch.Tensor, *, op_name: str
 ) -> list[tuple[float, float, int]]:
@@ -181,5 +214,7 @@ __all__ = [
     "crop_padded_grid_gradient",
     "interpolation_geometry",
     "pad_grid_for_stride",
+    "padded_stencil_fraction",
     "parse_grid_metadata",
+    "select_padded_stencil_center",
 ]

@@ -137,7 +137,11 @@ def nearest_neighbor_weighting(dist_vec: Tensor, dx: Tensor) -> Tensor:
         but with the last two dimensions reduced to single dimensions.
 
     """
-    return torch.ones(dist_vec.shape[:-2] + (1, 1), device=dist_vec.device)
+    return torch.ones(
+        dist_vec.shape[:-2] + (1, 1),
+        device=dist_vec.device,
+        dtype=dist_vec.dtype,
+    )
 
 
 def _hyper_cube_weighting(lower_point: Tensor, upper_point: Tensor) -> Tensor:
@@ -347,17 +351,41 @@ def _grid_knn_idx(
 
     # find nearest neighbors of query points from a grid
     # dx vector on grid
-    dx = torch.tensor([(x[1] - x[0]) / (x[2] - 1) for x in grid])
-    dx = dx.view(1, 1, len(grid)).to(device)
+    dx = torch.tensor(
+        [(x[1] - x[0]) / (x[2] - 1) for x in grid],
+        device=device,
+        dtype=torch.float32,
+    )
+    dx = dx.view(1, 1, len(grid))
 
     # min point on grid (this will change if we are padding the grid)
-    start = torch.tensor([val[0] for val in grid]).to(device)
+    start = torch.tensor(
+        [val[0] for val in grid],
+        device=device,
+        dtype=torch.float32,
+    )
     if padding:
         start = start - (k * dx)
     start = start.view(1, 1, len(grid))
 
     # this is the center nearest neighbor in the grid
     center_idx = (((query_points - start) / dx) + (stride / 2.0 % 1.0)).to(torch.int64)
+    if padding and stride == 2:
+        # At inclusive grid boundaries, choose a real cell instead of the
+        # adjacent interval that contains a zero-padding sample.
+        first_real_cell = center_idx.new_ones(len(grid))
+        max_real_cell = center_idx.new_tensor([x[2] - 1 for x in grid])
+        upper_padding_cell = center_idx.new_tensor([x[2] for x in grid])
+        lower_bound = query_points.new_tensor([x[0] for x in grid])
+        upper_bound = query_points.new_tensor([x[1] for x in grid])
+        use_first_real_cell = (center_idx <= first_real_cell) & (
+            query_points >= lower_bound
+        )
+        use_final_real_cell = (center_idx >= upper_padding_cell) & (
+            query_points <= upper_bound
+        )
+        center_idx = torch.where(use_first_real_cell, first_real_cell, center_idx)
+        center_idx = torch.where(use_final_real_cell, max_real_cell, center_idx)
 
     # index window
     idx_add = (
@@ -456,11 +484,17 @@ def interpolation_torch(
     # NOTE the mesh grid is padded by stride//2
     k = stride // 2
     linspace = [
-        torch.linspace(x[0] - k * dx_i, x[1] + k * dx_i, x[2] + 2 * k)
+        torch.linspace(
+            x[0] - k * dx_i,
+            x[1] + k * dx_i,
+            x[2] + 2 * k,
+            device=device,
+            dtype=torch.float32,
+        )
         for x, dx_i in zip(grid, dx)
     ]
     meshgrid = torch.meshgrid(linspace, indexing="ij")
-    meshgrid = torch.stack(meshgrid, dim=-1).to(device)
+    meshgrid = torch.stack(meshgrid, dim=-1)
 
     # pad context grid by k to avoid cuts on corners
     padding = dims * (k, k)
@@ -468,7 +502,9 @@ def interpolation_torch(
 
     # reshape query points, context grid and mesh grid for easier indexing
     # [1, grid_dim_1*grid_dim_2*..., 2-4]
-    nr_grid_points = int(torch.tensor([x[2] + 2 * k for x in grid]).prod())
+    nr_grid_points = 1
+    for grid_axis in grid:
+        nr_grid_points *= grid_axis[2] + 2 * k
     meshgrid = meshgrid.view(1, nr_grid_points, dims)
     context_grid = torch.reshape(context_grid, [1, nr_channels, nr_grid_points])
     context_grid = torch.swapaxes(context_grid, 1, 2)
@@ -485,8 +521,51 @@ def interpolation_torch(
     dist_vec = query_points.unsqueeze(2) - mesh_grid_idx
 
     # make tf dx vec (for interpolation function)
-    dx = torch.tensor(dx, dtype=torch.float32)
-    dx = torch.reshape(dx, [1, 1, 1, dims]).to(device)
+    dx = torch.tensor(dx, dtype=torch.float32, device=device)
+    dx = torch.reshape(dx, [1, 1, 1, dims])
+    if stride == 2:
+        # Snap values at logical grid boundaries to exact cell coordinates
+        # while retaining the original query derivative through each correction.
+        query_coordinates = query_points.unsqueeze(2)
+        lower_bound = query_coordinates.new_tensor([x[0] for x in grid]).view(
+            1, 1, 1, dims
+        )
+        upper_bound = query_coordinates.new_tensor([x[1] for x in grid]).view(
+            1, 1, 1, dims
+        )
+        at_lower_bound = query_coordinates == lower_bound
+        at_upper_bound = query_coordinates == upper_bound
+
+        first_distance = dist_vec[..., :1, :]
+        last_distance = dist_vec[..., -1:, :]
+        snapped_first_lower = first_distance - first_distance.detach()
+        snapped_first_upper = first_distance + (dx - first_distance).detach()
+        snapped_last_lower = last_distance + (-dx - last_distance).detach()
+        snapped_last_upper = last_distance - last_distance.detach()
+        first_distance = torch.where(
+            at_lower_bound,
+            snapped_first_lower,
+            first_distance,
+        )
+        first_distance = torch.where(
+            at_upper_bound,
+            snapped_first_upper,
+            first_distance,
+        )
+        last_distance = torch.where(
+            at_lower_bound,
+            snapped_last_lower,
+            last_distance,
+        )
+        last_distance = torch.where(
+            at_upper_bound,
+            snapped_last_upper,
+            last_distance,
+        )
+        dist_vec = torch.cat(
+            (first_distance, dist_vec[..., 1:-1, :], last_distance),
+            dim=-2,
+        )
 
     # compute bump function
     if interpolation_type == "nearest_neighbor":
