@@ -206,3 +206,12 @@ def test_smoothing_preserves_contract():
     filled = fill_interior(disk, max_cell_size=0.05, smooth_iterations=3)
     assert torch.equal(filled.points[:32], disk.points)
     assert min_angle_deg(filled) >= 30.0 - 1e-9
+
+
+def test_empty_boundary_raises():
+    empty = Mesh(
+        points=torch.zeros(3, 2, dtype=torch.float64),
+        cells=torch.zeros(0, 2, dtype=torch.int64),
+    )
+    with pytest.raises(ValueError, match="no edges"):
+        fill_interior(empty)
