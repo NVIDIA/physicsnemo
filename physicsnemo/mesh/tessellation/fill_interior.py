@@ -103,12 +103,18 @@ def _group_components(loop_polys):
     loops one level deeper that it directly contains. Islands inside holes
     start new components (any nesting depth is supported).
     """
+    from physicsnemo.mesh.tessellation.delaunay import polygon_interior_point
+
     n = len(loop_polys)
+    # Probe with a point strictly inside each loop rather than its first
+    # vertex: a vertex can lie exactly on another loop's edge (touching or
+    # float-coincident inputs), where the even-odd test is arbitrary.
+    probes = [polygon_interior_point(poly) for poly in loop_polys]
     contains = [[False] * n for _ in range(n)]
     for i in range(n):
         for j in range(n):
             if i != j:
-                contains[i][j] = _point_in_polygon(loop_polys[j][0], loop_polys[i])
+                contains[i][j] = _point_in_polygon(probes[j], loop_polys[i])
     depth = [sum(contains[i][j] for i in range(n)) for j in range(n)]
     components = []
     for j in range(n):
@@ -242,6 +248,11 @@ def fill_interior(
     pts64 = boundary.points.detach().to(device="cpu", dtype=torch.float64)
     edges = boundary.cells.detach().cpu()
 
+    if edges.shape[0] == 0:
+        raise ValueError(
+            "boundary contains no edges; nothing to fill. Pass a Mesh "
+            "whose cells are the closed boundary loops."
+        )
     loops_idx = _extract_loops(pts64, edges)
     loop_polys = [pts64[idx] for idx in loops_idx]
     components = _group_components(loop_polys)
