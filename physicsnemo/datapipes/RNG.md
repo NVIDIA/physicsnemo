@@ -27,10 +27,12 @@ for epoch in range(n_epochs):
 ### Generator forking (`_rng.py`)
 
 The system derives independent `torch.Generator` streams from a single
-master seed using `fork_generator(parent, n)`.  Each child is seeded with
-`parent.initial_seed() + i + 1`, so children are independent of each other
-and stable across runs.  Children are created on the **same device** as the
-parent.
+master seed using `fork_generator(parent, n)`.  Child *i* is seeded with
+`derive_seed(parent.initial_seed(), i)` (SeedSequence mixing, see below),
+so children are well-mixed, independent of each other, and stable across
+runs — nearby master seeds or forks at different pipeline depths do not
+produce overlapping child streams.  Children are created on the **same
+device** as the parent.
 
 For RNG that must be reproducible regardless of *execution order* (e.g.
 reader subsampling, which runs on a pool of worker threads), `_rng.py`
@@ -99,15 +101,15 @@ DataLoader(seed=S)
 │
 ├── master = Generator().manual_seed(S)
 │
-├── fork_generator(master, 2)
-│   ├── child[0]  (seed S+1) ──► Sampler
-│   └── child[1]  (seed S+2) ──► Dataset / MeshDataset / MultiDataset
-│                                  │
-│                                  ├── fork_generator(child[1], 1+N_transforms)
-│                                  │   ├── child[0] (seed S+3) ──► Reader
-│                                  │   ├── child[1] (seed S+4) ──► Transform 0
-│                                  │   ├── child[2] (seed S+5) ──► Transform 1
-│                                  │   └── ...
+├── fork_generator(master, 2)          # child[i] seeded derive_seed(S, i)
+│   ├── child[0] ──► Sampler
+│   └── child[1] ──► Dataset / MeshDataset / MultiDataset
+│                      │
+│                      ├── fork_generator(child[1], 1+N_transforms)
+│                      │   ├── child[0] ──► Reader
+│                      │   ├── child[1] ──► Transform 0
+│                      │   ├── child[2] ──► Transform 1
+│                      │   └── ...
 ```
 
 For `MultiDataset`, the fork distributes one child per sub-dataset,

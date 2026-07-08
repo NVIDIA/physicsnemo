@@ -91,8 +91,11 @@ def fork_generator(
 ) -> list[torch.Generator]:
     """Deterministically derive *n* child generators from *parent*.
 
-    Each child is seeded with ``parent.initial_seed() + i + 1``, so
-    children are independent of each other and stable across runs.
+    Child *i* is seeded with :func:`derive_seed(parent.initial_seed(), i)
+    <derive_seed>`, so children are well-mixed and stable across runs.
+    Unlike sequential ``base_seed + i`` seeding, nearby parent seeds (or
+    forks at different depths of the pipeline tree) do not produce
+    overlapping child streams.
 
     Parameters
     ----------
@@ -106,14 +109,5 @@ def fork_generator(
     list[torch.Generator]
         *n* independent generators on the same device as *parent*.
     """
-
-    # I miss JAX ...
-    # https://docs.jax.dev/en/latest/jax.random.html
-
     base_seed = parent.initial_seed()
-    children: list[torch.Generator] = []
-    for i in range(n):
-        g = torch.Generator(device=parent.device)
-        g.manual_seed(base_seed + i + 1)
-        children.append(g)
-    return children
+    return [spawn_generator(base_seed, i, device=parent.device) for i in range(n)]

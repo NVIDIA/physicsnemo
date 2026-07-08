@@ -318,8 +318,9 @@ class MeshDataset(DatasetBase):
         return data, metadata
 
     def close(self) -> None:
-        """Close the dataset and stop prefetching.
+        """Close the dataset, its reader, and stop prefetching.
 
         Waits for any in-flight prefetch tasks to complete before shutdown.
         """
         super().close()
+        self.reader.close()

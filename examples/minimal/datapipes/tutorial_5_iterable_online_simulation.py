@@ -146,7 +146,7 @@ def main() -> None:
     # generation of the next batch can overlap training on the current one.
     loader = DataLoader(dataset, use_streams=True, seed=0)
 
-    # Iterable datasets have no length: this will take the exception path.oOOh,
+    # Iterable datasets have no length: this will take the exception path.
     try:
         len(loader)
     except TypeError as exc:
