@@ -342,16 +342,6 @@ def _run_epoch(
     n_local = 0
     num_steps = len(dataloader)
     epoch_t0 = time.perf_counter()
-    ### Single pinned scalar buffer reused every step so the loss D2H
-    ### transfer is async (non_blocking=True from device to pinned host
-    ### memory). The copy is issued right after forward_pass and read
-    ### just before the logger line; by then backward + optimizer.step
-    ### have run, giving the GPU time to complete the copy without
-    ### blocking the host.
-    _loss_pinned = (
-        torch.zeros(1, pin_memory=True) if torch.cuda.is_available() else None
-    )
-
     with grad_ctx:
         step_t0 = time.perf_counter()
         for i, batch in enumerate(dataloader):
@@ -366,13 +356,6 @@ def _run_epoch(
                 output_type=output_type,
                 target_config=target_config,
             )
-
-            ### Kick off the async D2H copy of the scalar loss value into the
-            ### pinned buffer. Backward + optimizer.step run while the copy is
-            ### in flight, so by the time we call .item() below the transfer
-            ### is already done and there is no host stall.
-            if _loss_pinned is not None:
-                _loss_pinned.copy_(loss.detach(), non_blocking=True)
 
             if is_train:
                 optimizer.zero_grad()
