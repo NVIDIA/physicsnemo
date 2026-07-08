@@ -36,11 +36,13 @@ from __future__ import annotations
 import contextlib
 import threading
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Iterator, Optional
 
 import torch
+from tensordict import is_tensor_collection
 
 
 @contextlib.contextmanager
@@ -62,6 +64,43 @@ def preprocessing_stream(stream: Optional["torch.cuda.Stream"]):
         return
     with torch.cuda.stream(stream):
         yield
+
+
+def record_consumer_stream(data: Any, stream: torch.cuda.Stream) -> None:
+    """Mark every CUDA tensor in *data* as used by *stream*.
+
+    Tensors allocated on a preprocessing stream but consumed on the compute
+    stream must be recorded against the consumer
+    (:meth:`torch.Tensor.record_stream`), so the caching allocator does not
+    recycle their blocks for new prep-stream allocations while consumer
+    kernels are still reading them.  The event-based gating between the two
+    streams only orders *kernels* (compute after preprocessing); block reuse
+    after a host-side free is an allocator decision this call defers.
+
+    Walks tensor collections (``TensorDict`` and tensorclasses such as
+    ``Mesh``/``DomainMesh``), mappings, lists, and tuples; non-tensor leaves
+    and CPU tensors are ignored.
+
+    Parameters
+    ----------
+    data : Any
+        Sample data whose CUDA tensors will be consumed on *stream*.
+    stream : torch.cuda.Stream
+        The consumer (compute) stream.
+    """
+    if isinstance(data, torch.Tensor):
+        if data.is_cuda:
+            data.record_stream(stream)
+    elif is_tensor_collection(data):
+        for leaf in data.values(include_nested=True, leaves_only=True):
+            if isinstance(leaf, torch.Tensor) and leaf.is_cuda:
+                leaf.record_stream(stream)
+    elif isinstance(data, Mapping):
+        for value in data.values():
+            record_consumer_stream(value, stream)
+    elif isinstance(data, (list, tuple)):
+        for value in data:
+            record_consumer_stream(value, stream)
 
 
 @dataclass

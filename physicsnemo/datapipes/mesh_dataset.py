@@ -33,6 +33,7 @@ from physicsnemo.datapipes.protocols import (
     DatasetBase,
     HostPayload,
     preprocessing_stream,
+    record_consumer_stream,
 )
 from physicsnemo.datapipes.readers.mesh import DomainMeshReader, MeshReader
 from physicsnemo.datapipes.registry import register
@@ -234,7 +235,10 @@ class MeshDataset(DatasetBase):
         :func:`preprocessing_stream` -- so this sample's preprocessing
         overlaps the previous batch's training on the compute stream. A CUDA
         event orders the preprocessing before the compute stream (not a
-        host-side synchronize).
+        host-side synchronize), and the returned mesh's tensors are recorded
+        against the compute stream (:meth:`torch.Tensor.record_stream`) so the
+        caching allocator does not recycle their memory for later prep-stream
+        samples while compute-stream reads are still pending.
 
         Parameters
         ----------
@@ -294,6 +298,10 @@ class MeshDataset(DatasetBase):
                 data = _apply_transforms(data)
 
         if use_stream:
+            # The compute stream will read these tensors (collate + model);
+            # record it so the allocator does not recycle their blocks for
+            # later prep-stream samples while those reads are still pending.
+            record_consumer_stream(data, compute_stream)
             # Record an event marking the preprocessing's completion on the
             # prep stream.
             event = torch.cuda.Event()

@@ -40,6 +40,7 @@ from physicsnemo.datapipes.protocols import (
     DatasetBase,
     IterableDatasetBase,
     preprocessing_stream,
+    record_consumer_stream,
 )
 from physicsnemo.datapipes.registry import register
 
@@ -570,6 +571,13 @@ class DataLoader:
                 event = torch.cuda.Event()
                 event.record(prep_stream)
                 compute_stream.wait_event(event)
+                # The compute stream will read this item's tensors; record it
+                # so the allocator does not recycle their blocks for the
+                # generator's next allocations while those reads are pending.
+                # This protects allocator reuse only: a generator that reuses
+                # its *own* output buffers in place across iterations still
+                # races with pending compute-stream reads.
+                record_consumer_stream(item, compute_stream)
 
             if self_batching:
                 yield item

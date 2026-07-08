@@ -251,6 +251,19 @@ host-to-device copy and the transforms run on the side stream and GPU
 preprocessing genuinely overlaps training.  The pinned host source is
 held by the caching host allocator until the copy completes.
 
+The event only orders *kernels*; device-memory lifetime needs its own
+guard.  The sample's tensors are allocated on the preprocessing stream,
+so when their Python references drop, the caching allocator would return
+the blocks to that stream's pool immediately -- and a later sample's
+host-to-device copy on the same round-robin stream could overwrite them
+while compute-stream reads (collate, model) are still pending.
+`_consume` therefore records every returned CUDA tensor against the
+compute stream (`record_consumer_stream` in `protocols.py`, wrapping
+`torch.Tensor.record_stream`), which defers allocator reuse of those
+blocks until the compute stream's work at free time has completed.  The
+cost is that freed blocks stay unavailable until the compute stream
+catches up -- bounded by the prefetch depth's worth of samples.
+
 ### One-batch lookahead (deferred sync)
 
 The compute-stream wait recorded above is only half the overlap story:

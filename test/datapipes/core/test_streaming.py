@@ -492,3 +492,102 @@ class TestStreamBoundConsume:
         # yielded (the regression guard: the old code waited inline during the
         # lookahead consume of batch 1, before batch 0 was ever yielded).
         assert wait_indices[1] > yield0_idx, order
+
+
+class TestCrossStreamMemoryLifetime:
+    """Tensors handed from a preprocessing stream to the compute stream must
+    be recorded against the compute stream so the caching allocator does not
+    recycle their blocks for later prep-stream samples while compute-stream
+    reads are still pending."""
+
+    def test_record_consumer_stream_skips_cpu_tensors(self, monkeypatch):
+        from physicsnemo.datapipes.protocols import record_consumer_stream
+
+        calls: list = []
+        monkeypatch.setattr(
+            torch.Tensor, "record_stream", lambda self, stream: calls.append(self)
+        )
+
+        td = TensorDict({"a": torch.ones(3), "b": {"c": torch.ones(2)}})
+        # Traversal covers tensors, collections, mappings, and sequences
+        # without error; CPU tensors are never recorded.
+        record_consumer_stream(torch.ones(4), stream=object())
+        record_consumer_stream(td, stream=object())
+        record_consumer_stream({"x": torch.ones(2), "meta": "str"}, stream=object())
+        record_consumer_stream([torch.ones(1), (td, None)], stream=object())
+        assert calls == []
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+    def test_record_consumer_stream_records_all_cuda_leaves(self, monkeypatch):
+        from physicsnemo.datapipes.protocols import record_consumer_stream
+
+        recorded: list = []
+        monkeypatch.setattr(
+            torch.Tensor,
+            "record_stream",
+            lambda self, stream: recorded.append((self, stream)),
+        )
+
+        td = TensorDict(
+            {
+                "a": torch.ones(3, device="cuda"),
+                "b": {"c": torch.ones(2, device="cuda")},
+                "cpu": torch.ones(2),
+            }
+        )
+        stream = torch.cuda.Stream()
+        record_consumer_stream({"td": td, "t": torch.ones(1, device="cuda")}, stream)
+        assert len(recorded) == 3
+        assert all(s is stream for _, s in recorded)
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+    def test_stream_overlap_values_correct_without_host_sync(self, temp_dir):
+        """Regression test for allocator reuse across streams.
+
+        Batch values are validated on the GPU with *no host sync inside the
+        loop*, while ``torch.cuda._sleep`` stands in for a GPU-bound model
+        and keeps the compute queue deep, so the host (and the prefetch
+        lookahead) runs ahead of GPU execution.  Without
+        ``record_consumer_stream`` in ``_consume``, a later sample's
+        host-to-device copy on the same round-robin prep stream can reuse a
+        freed sample's block and overwrite it before the compute stream's
+        pending collate read executes, corrupting the batch.  A per-batch
+        ``.item()`` (as in test_dataloader_streams_match_synchronous) would
+        drain the queue and mask exactly this race.
+        """
+        n_samples, width = 32, 4096
+        for i in range(n_samples):
+            np.savez(
+                temp_dir / f"sample_{i:03d}.npz",
+                values=np.full((width,), float(i), dtype=np.float32),
+            )
+        reader = dp.NumpyReader(temp_dir, pin_memory=True)
+        dataset = dp.Dataset(reader, device="cuda:0")
+        loader = dp.DataLoader(
+            dataset,
+            batch_size=2,
+            shuffle=False,
+            prefetch_factor=2,
+            num_streams=2,
+            use_streams=True,
+        )
+
+        residuals = []
+        idx = 0
+        try:
+            for batch in loader:
+                # Keep the compute stream busy so the host runs ahead and
+                # freed sample blocks still have pending compute reads.
+                torch.cuda._sleep(20_000_000)
+                values = batch["values"]
+                expected = torch.arange(
+                    idx, idx + values.shape[0], device=values.device
+                ).to(values.dtype)
+                residuals.append((values - expected.unsqueeze(1)).abs().max())
+                idx += values.shape[0]
+            worst = torch.stack(residuals).max()
+            torch.cuda.synchronize()
+            assert idx == n_samples
+            assert worst.item() == 0.0
+        finally:
+            dataset.close()
