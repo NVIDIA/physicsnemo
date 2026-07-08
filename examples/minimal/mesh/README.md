@@ -49,7 +49,7 @@ pip install -e ".[mesh]"
 | **5. Quality & Repair** | Mesh health | Validation, quality metrics, repair |
 | **6. ML Integration** | Production workflows | Performance, batching, torch.compile |
 | **7. Domain Mesh** | Simulation domains | DomainMesh, boundaries, transforms, validation |
-| **8. I/O, Interop & Serialization** | Getting data in/out | PyVista import/export, polygon tessellation, save/load |
+| **8. I/O, Interop & Serialization** | Getting data in/out | PyVista import/export, polygon tessellation, mesh generation, save/load |
 <!-- markdownlint-enable MD013 -->
 
 ## Running the Tutorials
@@ -178,6 +178,8 @@ Learn to get meshes in and out of PhysicsNeMo-Mesh.
 - Importing from PyVista with `from_pyvista` (automatic triangulation)
 - Importing raw polygon soups with `Adjacency` + `triangulate` / `Mesh.from_polygons`
 - Convex vs non-convex polygons: ear clipping for correct areas and forces
+- Generating quality meshes from boundary edge meshes with `fill_interior`
+  (constrained Delaunay + Ruppert refinement, guaranteed minimum angle)
 - Exporting to PyVista with `to_pyvista`
 - Saving and loading the native, folder-based memmap format, including its
   on-disk layout (`.pmsh` for `Mesh`, `.pdmsh` for `DomainMesh`)

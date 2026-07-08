@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds exact-boundary quality mesh generation to
+  `physicsnemo.mesh.tessellation`: `fill_interior` takes a closed
+  codimension-one boundary `Mesh` (2D edge loops today; loops in any order
+  and orientation, with holes, multiple components, and nested islands
+  resolved automatically) and fills the interior with quality simplices via
+  constrained Delaunay triangulation with Ruppert refinement — every input
+  vertex is preserved bit-identically, every output triangle meets the
+  guaranteed minimum-angle bound, output is a `Mesh` with provenance
+  `point_data`, deterministic, with optional bound-preserving ODT smoothing.
+  The contract is dimension-generic; `n = 3` raises `NotImplementedError`
+  pending exact boundary recovery. Also adds `polygon_interior_point`,
+  which returns a point strictly inside a simple polygon.
 - Adds coverage reporting on PRs — an informational `Coverage %` check plus a
   ready-to-enable Codecov integration.
 - Adds the experimental Strata weather-emulation models —

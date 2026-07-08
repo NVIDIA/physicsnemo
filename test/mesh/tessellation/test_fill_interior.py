@@ -1,0 +1,208 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Tests for the Mesh-native fill_interior entry point.
+
+The Ruppert/CDT engine itself is tested exhaustively in test_delaunay.py;
+these tests cover the Mesh-native contract: loop extraction, nesting and
+multi-component handling, exact vertex preservation, provenance data,
+device/dtype round-trips, and input validation.
+"""
+
+import math
+
+import pytest
+import torch
+
+from physicsnemo.mesh import Mesh
+from physicsnemo.mesh.tessellation import fill_interior
+
+
+def circle_mesh_parts(radius, n, offset, center=(0.0, 0.0)):
+    t = torch.arange(n, dtype=torch.float64) / n * 2 * math.pi
+    pts = torch.stack(
+        [center[0] + radius * torch.cos(t), center[1] + radius * torch.sin(t)],
+        dim=1,
+    )
+    idx = torch.arange(n)
+    edges = torch.stack([idx, (idx + 1) % n], dim=1) + offset
+    return pts, edges
+
+
+def boundary_mesh(*parts, shuffle_edges=False, seed=0):
+    pts = torch.cat([p for p, _ in parts])
+    edges = torch.cat([e for _, e in parts])
+    if shuffle_edges:
+        g = torch.Generator().manual_seed(seed)
+        perm = torch.randperm(edges.shape[0], generator=g)
+        edges = edges[perm]
+        # Also flip a random half of the edges (orientation-free contract).
+        flip = torch.rand(edges.shape[0], generator=g) < 0.5
+        edges[flip] = edges[flip][:, [1, 0]]
+    return Mesh(points=pts, cells=edges)
+
+
+def min_angle_deg(mesh):
+    p = mesh.points[mesh.cells].double()
+    worst = 180.0
+    for i in range(3):
+        u = p[:, (i + 1) % 3] - p[:, i]
+        v = p[:, (i + 2) % 3] - p[:, i]
+        cos = (u * v).sum(-1) / (u.norm(dim=-1) * v.norm(dim=-1))
+        ang = torch.rad2deg(torch.arccos(cos.clamp(-1, 1)))
+        worst = min(worst, float(ang.min()))
+    return worst
+
+
+def signed_areas(mesh):
+    p = mesh.points[mesh.cells].double()
+    e1 = p[:, 1] - p[:, 0]
+    e2 = p[:, 2] - p[:, 0]
+    return 0.5 * (e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0])
+
+
+def test_disk_basic_contract():
+    disk = boundary_mesh(circle_mesh_parts(1.0, 48, 0))
+    filled = fill_interior(disk, max_cell_size=0.02)
+    assert filled.n_spatial_dims == 2 and filled.n_manifold_dims == 2
+    # Exact vertex preservation, in input order.
+    assert torch.equal(filled.points[:48], disk.points)
+    # Positive orientation, guaranteed angle, size bound.
+    assert bool((signed_areas(filled) > 0).all())
+    assert min_angle_deg(filled) >= 30.0 - 1e-9
+    assert float(signed_areas(filled).max()) <= 0.02 * (1 + 1e-12)
+    # Area converges to the disk's.
+    total = float(signed_areas(filled).sum())
+    assert abs(total - math.pi) / math.pi < 0.01
+
+
+def test_annulus_and_provenance():
+    ring = boundary_mesh(circle_mesh_parts(1.0, 48, 0), circle_mesh_parts(0.4, 24, 48))
+    filled = fill_interior(ring, max_cell_size=0.02)
+    assert torch.equal(filled.points[:72], ring.points)
+    total = float(signed_areas(filled).sum())
+    exact = math.pi * (1.0 - 0.4**2)
+    assert abs(total - exact) / exact < 0.02
+    # Provenance: source_point maps inherited vertices back to the input.
+    src = filled.point_data["source_point"]
+    marker = filled.point_data["boundary_marker"]
+    assert torch.equal(src[:72], torch.arange(72))
+    assert bool((src[72:] == -1).all())
+    assert bool((marker[:72] == 1).all())  # input verts are boundary
+    inherited = src >= 0
+    assert torch.equal(filled.points[inherited], ring.points[src[inherited]])
+
+
+def test_edge_order_and_orientation_free():
+    """Shuffled, randomly-flipped edges give the same domain."""
+    a = boundary_mesh(circle_mesh_parts(1.0, 32, 0))
+    b = boundary_mesh(circle_mesh_parts(1.0, 32, 0), shuffle_edges=True)
+    fa = fill_interior(a, max_cell_size=0.05)
+    fb = fill_interior(b, max_cell_size=0.05)
+    assert abs(float(signed_areas(fa).sum()) - float(signed_areas(fb).sum())) < 1e-9
+
+
+def test_multiple_components():
+    two = boundary_mesh(
+        circle_mesh_parts(0.5, 24, 0, center=(-1.0, 0.0)),
+        circle_mesh_parts(0.5, 24, 24, center=(1.0, 0.0)),
+    )
+    filled = fill_interior(two, max_cell_size=0.02)
+    total = float(signed_areas(filled).sum())
+    exact = 2 * math.pi * 0.5**2
+    assert abs(total - exact) / exact < 0.02
+    assert torch.equal(filled.points[:48], two.points)
+
+
+def test_island_inside_hole():
+    """Nesting depth 2: disk, hole in it, island inside the hole."""
+    m = boundary_mesh(
+        circle_mesh_parts(1.0, 48, 0),
+        circle_mesh_parts(0.6, 32, 48),
+        circle_mesh_parts(0.25, 16, 80),
+    )
+    filled = fill_interior(m, max_cell_size=0.02)
+    total = float(signed_areas(filled).sum())
+    exact = math.pi * (1.0 - 0.6**2 + 0.25**2)
+    assert abs(total - exact) / exact < 0.02
+
+
+def test_dtype_device_roundtrip():
+    disk32 = Mesh(
+        points=boundary_mesh(circle_mesh_parts(1.0, 32, 0)).points.float(),
+        cells=boundary_mesh(circle_mesh_parts(1.0, 32, 0)).cells,
+    )
+    filled = fill_interior(disk32, max_cell_size=0.05)
+    assert filled.points.dtype == torch.float32
+    # float32 -> float64 -> float32 round-trip is exact for the inputs.
+    assert torch.equal(filled.points[:32], disk32.points)
+
+
+def test_unreferenced_points_ignored():
+    pts, edges = circle_mesh_parts(1.0, 32, 0)
+    pts = torch.cat([pts, torch.tensor([[5.0, 5.0]], dtype=torch.float64)])
+    filled = fill_interior(Mesh(points=pts, cells=edges), max_cell_size=0.05)
+    assert float(filled.points[:, 0].max()) < 2.0  # stray point dropped
+
+
+def test_open_curve_raises():
+    pts, edges = circle_mesh_parts(1.0, 16, 0)
+    with pytest.raises(ValueError, match="closed 1-manifold"):
+        fill_interior(Mesh(points=pts, cells=edges[:-1]))
+
+
+def test_t_junction_raises():
+    pts, edges = circle_mesh_parts(1.0, 16, 0)
+    pts = torch.cat([pts, torch.tensor([[2.0, 0.0]], dtype=torch.float64)])
+    edges = torch.cat([edges, torch.tensor([[0, 16]])])
+    with pytest.raises(ValueError, match="closed 1-manifold"):
+        fill_interior(Mesh(points=pts, cells=edges))
+
+
+def test_surface_input_raises_not_implemented():
+    tet_surface = Mesh(
+        points=torch.tensor(
+            [[0.0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]],
+            dtype=torch.float64,
+        ),
+        cells=torch.tensor([[0, 2, 1], [0, 1, 3], [1, 2, 3], [0, 3, 2]]),
+    )
+    with pytest.raises(NotImplementedError, match="n=3"):
+        fill_interior(tet_surface)
+
+
+def test_wrong_codimension_raises():
+    volume = Mesh(
+        points=torch.tensor([[0.0, 0], [1, 0], [0, 1]], dtype=torch.float64),
+        cells=torch.tensor([[0, 1, 2]]),
+    )
+    with pytest.raises(ValueError, match="codimension-one"):
+        fill_interior(volume)
+
+
+def test_determinism():
+    m = boundary_mesh(circle_mesh_parts(1.0, 32, 0), circle_mesh_parts(0.4, 16, 32))
+    a = fill_interior(m, max_cell_size=0.05)
+    b = fill_interior(m, max_cell_size=0.05)
+    assert torch.equal(a.points, b.points)
+    assert torch.equal(a.cells, b.cells)
+
+
+def test_smoothing_preserves_contract():
+    disk = boundary_mesh(circle_mesh_parts(1.0, 32, 0))
+    filled = fill_interior(disk, max_cell_size=0.05, smooth_iterations=3)
+    assert torch.equal(filled.points[:32], disk.points)
+    assert min_angle_deg(filled) >= 30.0 - 1e-9

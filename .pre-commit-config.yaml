@@ -14,6 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# pre-commit.ci cannot run language-system hooks; import-linter is
+# enforced by the 'Run pre-commit hooks' GitHub Action instead.
+ci:
+    skip: [import-linter]
+
 repos:
 -   repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.12.5
