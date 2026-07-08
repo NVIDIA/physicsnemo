@@ -130,6 +130,7 @@ def fill_interior(
     max_cell_size: float | None = None,
     min_angle_degrees: float = 30.0,
     smooth_iterations: int = 0,
+    provenance: bool = False,
 ) -> "Mesh":
     r"""Fill the interior of a closed boundary mesh with quality simplices.
 
@@ -175,12 +176,10 @@ def fill_interior(
     smooth_iterations : int, default 0
         Quality-gated ODT smoothing passes after refinement; boundary
         vertices never move, and the quality bounds are preserved.
-
-    Returns
-    -------
-    Mesh
-        Volume mesh on the input's device and dtype, positively oriented,
-        with provenance in ``point_data``:
+    provenance : bool, default False
+        When ``True``, attach provenance fields to the output's
+        ``point_data`` (opt-in, since these claim keys in a user-owned
+        namespace):
 
         - ``"boundary_marker"`` (int64): 1 for vertices on the input
           boundary (input vertices and refinement midpoints inserted on
@@ -189,6 +188,12 @@ def fill_interior(
           input, the index of the originating input vertex; -1 for
           generated vertices. Use it to propagate input ``point_data``
           onto the output.
+
+    Returns
+    -------
+    Mesh
+        Volume mesh on the input's device and dtype, positively oriented,
+        with an empty ``point_data`` unless ``provenance=True``.
 
     Raises
     ------
@@ -293,11 +298,14 @@ def fill_interior(
     inverse = torch.empty_like(order)
     inverse[order] = torch.arange(order.shape[0])
 
+    point_data = None
+    if provenance:
+        point_data = {
+            "boundary_marker": marker[order].to(device),
+            "source_point": source[order].to(device),
+        }
     return Mesh(
         points=points[order].to(device=device, dtype=dtype),
         cells=inverse[cells].to(device),
-        point_data={
-            "boundary_marker": marker[order].to(device),
-            "source_point": source[order].to(device),
-        },
+        point_data=point_data,
     )

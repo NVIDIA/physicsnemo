@@ -77,6 +77,8 @@ def signed_areas(mesh):
 def test_disk_basic_contract():
     disk = boundary_mesh(circle_mesh_parts(1.0, 48, 0))
     filled = fill_interior(disk, max_cell_size=0.02)
+    # Provenance is opt-in: no keys are claimed in point_data by default.
+    assert len(filled.point_data.keys()) == 0
     assert filled.n_spatial_dims == 2 and filled.n_manifold_dims == 2
     # Exact vertex preservation, in input order.
     assert torch.equal(filled.points[:48], disk.points)
@@ -91,7 +93,7 @@ def test_disk_basic_contract():
 
 def test_annulus_and_provenance():
     ring = boundary_mesh(circle_mesh_parts(1.0, 48, 0), circle_mesh_parts(0.4, 24, 48))
-    filled = fill_interior(ring, max_cell_size=0.02)
+    filled = fill_interior(ring, max_cell_size=0.02, provenance=True)
     assert torch.equal(filled.points[:72], ring.points)
     total = float(signed_areas(filled).sum())
     exact = math.pi * (1.0 - 0.4**2)

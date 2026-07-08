@@ -76,8 +76,10 @@ Optional ODT smoothing (``smooth_iterations``) improves the *typical*
 angle while preserving both bounds. The exact-boundary contract: every
 input vertex appears bit-identically in the output (leading rows, input
 order), boundary facets are only ever *subdivided*, never moved, and the
-whole pipeline is deterministic. Provenance travels on the output as
-``point_data`` (``"boundary_marker"``, ``"source_point"``).
+whole pipeline is deterministic. Provenance fields
+(``"boundary_marker"``, ``"source_point"``) can be attached to the
+output's ``point_data`` — opt-in via ``provenance=True``, so no keys are
+claimed in the user-owned namespace by default.
 
 The contract is dimension-generic by design; ``n = 3`` (watertight surface
 ``Mesh[2, 3]`` → tetrahedra) currently raises :class:`NotImplementedError`
