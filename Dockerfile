@@ -131,7 +131,7 @@ RUN --mount=type=bind,source=pyproject.toml,target=/tmp/pyproject.toml,ro \
 RUN --mount=type=bind,target=/physicsnemo,rw \
     --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     cd /physicsnemo && \
-    uv pip install --no-deps ".[cu13,utils-extras,mesh-extras,datapipes-extras,gnns,sym]"
+    uv pip install --no-deps .
 
 #######################################################################
 # CI image: builder + dev group + FigNet/Makani + CI-only packages
