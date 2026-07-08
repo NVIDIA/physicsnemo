@@ -16,15 +16,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Image stages: builder -> ci | deploy -> docs
-# Builder: all custom if-else deps + all pyproject extras (no dev), project installed non-editable.
+# Image stages: dependencies -> builder -> deploy -> docs
+#                         \-> ci
+# Dependencies: custom packages and all selected pyproject extras (no dev).
+# Builder: dependencies plus PhysicsNeMo installed non-editable.
 # Deploy: uninstall mlflow/wandb only; physicsnemo stays non-editable from builder.
-# CI: add dev group, netcdf4 hack, FigNet/Makani, other CI-only packages; physicsnemo uninstalled
+# CI: dependencies plus dev group, netcdf4 hack, FigNet/Makani, and CI-only packages.
 # Python packages use uv (UV_SYSTEM_PYTHON=1). Build-only source and uv caches are
 # mounted into RUN instructions so they do not become part of the image layers.
 
 ARG BASE_CONTAINER=nvcr.io/nvidia/pytorch:26.06-py3
-FROM ${BASE_CONTAINER} AS builder
+FROM ${BASE_CONTAINER} AS dependencies
 
 ARG TARGETPLATFORM
 
@@ -88,8 +90,8 @@ ARG TORCH_CLUSTER_AMD64_WHEEL
 ARG NATTEN_ARM64_WHEEL
 ARG NATTEN_AMD64_WHEEL
 
-# Expose the selected wheel names as before, but use one image-config entry.
-# natten and torch_sparse need torch at build time (--no-build-isolation).
+# Expose the selected wheel names and CUDA build configuration as one
+# image-config entry.
 ENV PYSPNG_ARM64_WHEEL=${PYSPNG_ARM64_WHEEL:-unknown} \
     NUMCODECS_ARM64_WHEEL=${NUMCODECS_ARM64_WHEEL:-unknown} \
     ONNXRUNTIME_ARM64_WHEEL=${ONNXRUNTIME_ARM64_WHEEL:-unknown} \
@@ -114,7 +116,8 @@ RUN --mount=type=bind,source=docker/install-container-dependencies.sh,target=/tm
 
 # Install the remaining third-party dependencies from the canonical project
 # metadata. Only pyproject.toml participates in this layer's bind-mount cache
-# checksum, and its torch-sparse build dependency is declared under tool.uv.
+# checksum. The torch-sparse build dependency is declared under
+# [tool.uv.extra-build-dependencies].
 RUN --mount=type=bind,source=pyproject.toml,target=/tmp/pyproject.toml,ro \
     --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     cd /tmp && \
@@ -126,6 +129,10 @@ RUN --mount=type=bind,source=pyproject.toml,target=/tmp/pyproject.toml,ro \
         --extra gnns \
         --extra sym
 
+# Branch the release builder after dependency installation. The CI stage below
+# branches directly from dependencies and therefore never installs PhysicsNeMo.
+FROM dependencies AS builder
+
 # Install PhysicsNeMo itself without resolving dependencies again. Source-only
 # changes now produce a small application layer and reuse both layers above.
 RUN --mount=type=bind,target=/physicsnemo,rw \
@@ -134,9 +141,9 @@ RUN --mount=type=bind,target=/physicsnemo,rw \
     uv pip install --no-deps .
 
 #######################################################################
-# CI image: builder + dev group + FigNet/Makani + CI-only packages
+# CI image: dependencies + dev group + FigNet/Makani + CI-only packages
 #######################################################################
-FROM builder AS ci
+FROM dependencies AS ci
 
 ARG TARGETPLATFORM
 
@@ -151,8 +158,7 @@ RUN --mount=type=bind,target=/physicsnemo,rw \
     uv pip install "tensorly>=0.8.1" "tensorly-torch>=0.4.0" "torchinfo>=1.8" "webdataset>=0.2" && \
     uv pip install "moto[s3]>=5.0.28" && \
     uv pip install "numpy-stl" "scikit-image>=0.24.0" "shapely" && \
-    uv pip install "multi-storage-client[boto3]>=0.33.0" && \
-    uv pip uninstall nvidia-physicsnemo
+    uv pip install "multi-storage-client[boto3]>=0.33.0"
 
 # FigNet/Makani and related CI-only deps
 # Install Makani via direct URL

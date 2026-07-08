@@ -28,7 +28,7 @@ MANIFEST
 
 # Release-provided container wheels are copied here by the release pipeline.
 /deps/*
-!/deps/.gitkeep
+!/deps/README.md
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
