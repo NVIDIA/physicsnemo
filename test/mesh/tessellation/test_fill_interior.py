@@ -217,3 +217,72 @@ def test_empty_boundary_raises():
     )
     with pytest.raises(ValueError, match="no edges"):
         fill_interior(empty)
+
+
+def test_crossing_loops_across_components_raise():
+    """Two crossing rectangles (a plus sign) must not silently double-cover."""
+
+    def rect(lo, hi, offset):
+        pts = torch.tensor(
+            [[lo[0], lo[1]], [hi[0], lo[1]], [hi[0], hi[1]], [lo[0], hi[1]]],
+            dtype=torch.float64,
+        )
+        i = torch.arange(4)
+        return pts, torch.stack([i, (i + 1) % 4], dim=1) + offset
+
+    p1, e1 = rect((-2.0, -0.2), (2.0, 0.2), 0)
+    p2, e2 = rect((-0.2, -2.0), (0.2, 2.0), 4)
+    plus = Mesh(points=torch.cat([p1, p2]), cells=torch.cat([e1, e2]))
+    with pytest.raises(ValueError, match="cross"):
+        fill_interior(plus, max_cell_size=0.1)
+
+
+def test_coincident_duplicate_loops_raise():
+    """Duplicated coincident loops leave no even-depth outer: clear error."""
+    pts, edges = circle_mesh_parts(1.0, 16, 0)
+    pts2, edges2 = circle_mesh_parts(1.0, 16, 16)
+    dup = Mesh(points=torch.cat([pts, pts2]), cells=torch.cat([edges, edges2]))
+    with pytest.raises(ValueError, match="even containment depth"):
+        fill_interior(dup)
+
+
+def test_device_roundtrip(device):
+    """Output lands on the input's device (repo device parametrization)."""
+    m = boundary_mesh(circle_mesh_parts(1.0, 24, 0)).to(device)
+    filled = fill_interior(m, max_cell_size=0.1, provenance=True)
+    assert filled.points.device.type == torch.device(device).type
+    assert filled.point_data["boundary_marker"].device.type == (
+        torch.device(device).type
+    )
+
+
+def test_boundary_facets_subdivide_input_segments():
+    """The output boundary must lie ON the input polyline: every boundary
+    edge's endpoints sit on one common input segment (subdivision only,
+    never displacement), and total boundary length equals the perimeter."""
+    ring = boundary_mesh(circle_mesh_parts(1.0, 24, 0), circle_mesh_parts(0.4, 12, 24))
+    filled = fill_interior(ring, max_cell_size=0.02)
+    # Output boundary edges = facets appearing once in the edge census.
+    tris = filled.cells
+    e = torch.cat([tris[:, [0, 1]], tris[:, [1, 2]], tris[:, [2, 0]]])
+    e, _ = torch.sort(e, dim=1)
+    uniq, counts = torch.unique(e, dim=0, return_counts=True)
+    bnd_edges = uniq[counts == 1]
+    a = ring.points[ring.cells[:, 0]]  # input segment starts (S, 2)
+    b = ring.points[ring.cells[:, 1]]
+    ab = b - a
+    ab2 = (ab * ab).sum(-1)
+
+    def on_segment(q):  # (2,) -> (S,) bool: q lies on input segment s
+        t = ((q - a) * ab).sum(-1) / ab2
+        proj = a + t[:, None] * ab
+        return (t > -1e-12) & (t < 1 + 1e-12) & ((q - proj).norm(dim=-1) < 1e-12)
+
+    total = 0.0
+    for u, v in bnd_edges.tolist():
+        pu, pv = filled.points[u], filled.points[v]
+        common = on_segment(pu) & on_segment(pv)
+        assert bool(common.any()), "boundary edge not on any input segment"
+        total += float((pu - pv).norm())
+    perimeter = float(ab.norm(dim=-1).sum())
+    assert abs(total - perimeter) < 1e-9 * perimeter
