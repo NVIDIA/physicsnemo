@@ -522,6 +522,12 @@ class NormalizeMeshFields(MeshTransform):
             self._stats: dict[str, dict[str, Float[torch.Tensor, " *shape"] | str]] = (
                 torch.load(stats_file, weights_only=True)
             )
+            # Match the inline branch: stats are float32 regardless of the
+            # dtype they were computed/saved in, so normalization never
+            # promotes field dtypes.
+            for s in self._stats.values():
+                s["mean"] = torch.as_tensor(s["mean"], dtype=torch.float32)
+                s["std"] = torch.as_tensor(s["std"], dtype=torch.float32)
         elif fields is not None:
             self._stats = {}
             for name, cfg in fields.items():
@@ -567,9 +573,7 @@ class NormalizeMeshFields(MeshTransform):
             if field_name not in new_td.keys():
                 continue
             val = new_td[field_name].float()
-            mean = stats["mean"].to(dtype=val.dtype, device=val.device)
-            std = stats["std"].to(dtype=val.dtype, device=val.device)
-            new_td[field_name] = (val - mean) / (std + self._eps)
+            new_td[field_name] = (val - stats["mean"]) / (stats["std"] + self._eps)
 
         ### `Mesh.copy` is a tensorclass-provided shallow copy: `points`,
         ### `cells`, the untouched associations, and the geometric `_cache`
