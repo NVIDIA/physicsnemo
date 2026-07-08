@@ -38,6 +38,7 @@ from .equivariant_ops import (
 from .fourier_spectral import imag, irfft, irfft2, real, rfft, rfft2, view_as_complex
 from .geometry import (
     farthest_point_sampling,
+    lattice_deform_points,
     mesh_poisson_disk_sample,
     mesh_to_voxel_fraction,
     ray_mesh_intersect,
@@ -74,6 +75,7 @@ __all__ = [
     "imag",
     "interpolation",
     "knn",
+    "lattice_deform_points",
     "isosurface_render",
     "legendre_polynomials",
     "line_integral_convolution",
