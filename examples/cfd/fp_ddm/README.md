@@ -15,8 +15,8 @@ included matrix-free finite-volume reference solver or a physics-informed
 
 The FNO is trained without solution labels. Its objective combines the thermal
 equation residual with the boundary residual. During a decomposed solve,
-neighboring patches exchange their overlap values and repeat local solves until
-the interface residual converges.
+neighboring patches exchange their overlap values and repeat local solves until a
+configured stopping condition or iteration budget is reached.
 
 ## Method
 
@@ -54,23 +54,8 @@ trains one model directly with the physics-informed objective:
 python examples/cfd/fp_ddm/train.py
 ```
 
-All settings use Hydra overrides. This short command validates the full
-training and checkpoint path; it is not a quality benchmark:
-
-```bash
-python examples/cfd/fp_ddm/train.py \
-    training.epochs=1 \
-    training.samples=64 \
-    training.batch_size=8 \
-    training.num_workers=0 \
-    training.max_minutes=0 \
-    model.modes=4 \
-    model.width=8 \
-    model.layers=1 \
-    training.output_dir=outputs/fp_ddm/train_smoke
-```
-
-Distributed training uses the same entry point:
+All settings may be changed with Hydra overrides. Distributed training uses the
+same entry point:
 
 ```bash
 torchrun --standalone --nproc_per_node=4 \
@@ -78,8 +63,10 @@ torchrun --standalone --nproc_per_node=4 \
     training.output_dir=outputs/fp_ddm/train_distributed
 ```
 
-Training writes the latest resumable state to `checkpoints/latest` and the
-lowest-validation-loss model to `checkpoints/best`. Resume with
+Training writes the latest resumable state to `checkpoints/latest` and the model
+with the lowest isolated-patch validation loss to `checkpoints/best`. The latter
+is not necessarily the best checkpoint for a recursive Schwarz rollout, so
+validate candidate checkpoints on representative decompositions. Resume with
 `training.resume_dir=<path-to-latest>`.
 
 ## Run FP-DDM
@@ -114,13 +101,16 @@ python examples/cfd/fp_ddm/run_fpddm.py \
     run.output_dir=outputs/fp_ddm/fno
 ```
 
-The checkpoint is used directly; there is no separate fine-tuning phase.
-Physics-guided test-time adaptation is optional and disabled by default. Enable
-it with `run.ttt_steps=<steps>`.
+The checkpoint is used directly by default. Physics-guided test-time adaptation
+is optional and disabled; enable it with `run.ttt_steps=<steps>`.
 
 Each run writes the resolved Hydra configuration, per-iteration metrics,
 NumPy reference fields when requested, and a JSON summary. Visualization also
 writes field images, iteration series, and MP4 animations.
+
+The overlap RMSE is the stopping metric. In `summary.json`, `converged` is true
+only when the configured tolerance is reached; stopping at `max_iterations` is
+an iteration-budget limit, not convergence.
 
 ## Configuration
 
@@ -136,51 +126,19 @@ The main configuration groups are:
 | `run` | Local solver, interface update, TTT, and Schwarz stopping |
 | `visualization` | Plot ranges and animation frame rate |
 
-The supplied workload uses zero heat source, matching the original FP-DDM
-setup. Nonzero `dataset.q_min` and `dataset.q_max` values are supported by both
-the thermal residual and the finite-volume solver. The synthetic global layout
-currently requires a square patch grid with square patches. Full-domain
-reference solves are opt-in with `run.ground_truth=true` and limited to at most
-26 subdomains so diagnostic work remains bounded. Larger requests emit a
-warning and continue without reference metrics.
-
-## Reproduced Baseline
-
-The following baseline was measured on July 6, 2026, with one NVIDIA A100 80 GB
-GPU and the 4.20-million-parameter default FNO. Training used seed 10, a
-configured sample count of 500,000, batch size 256, and 6 epochs. The split
-contained 450,000 on-the-fly training problems and 25,000 fixed problems for
-each of validation and test. Six epochs completed in approximately 3 minutes;
-the epoch-6 validation physics metric was 0.2108.
-
-The rollout used a 3-by-3 patch decomposition, producing a 90-by-90 global
-field, with the default parallel interface update, learning rate 0.5, and no
-test-time adaptation. NRMAE is mean absolute error divided by the reference
-temperature range.
-
-| Run | Iterations | NRMAE | R-squared | Interface RMSE |
-| --- | ---: | ---: | ---: | ---: |
-| FNO default | 50 | 0.0366 | 0.9467 | 2.47 |
-| FNO forced long rollout | 200 | 0.0616 | 0.8885 | 0.00682 |
-| Finite-volume reference | 50 | 0.00591 | 0.9988 | 0.762 |
-
-The default was also evaluated on independently generated global layouts:
-
-| Decomposition | Layouts | Mean NRMAE | Worst NRMAE | Mean R-squared |
-| --- | ---: | ---: | ---: | ---: |
-| 3 by 3 | 10 | 0.0361 | 0.0386 | 0.9495 |
-| 5 by 5 | 5 | 0.0540 | 0.0607 | 0.9157 |
-
-Checkpoint selection matters for recursive accuracy. In the same training run,
-the lower local validation metric at epoch 9 did not produce a better Schwarz
-rollout: with the previous interface learning rate of 10, its mean 50-iteration
-NRMAE was 0.3091 over the ten 3-by-3 layouts. The epoch-6 checkpoint and lower
-interface learning rate remained effectively monotonic through 50 iterations.
-The 200-iteration stress run shows that some eventual drift remains even as
-interface disagreement approaches zero. Select checkpoints and stopping
-settings on held-out decomposed problems, not only isolated local losses.
+The supplied workload uses zero heat source, matching the original FP-DDM setup.
+The synthetic global layout currently requires a square patch grid with square
+patches. Full-domain reference solves are opt-in with `run.ground_truth=true`
+and limited to at most 26 subdomains. Larger requests emit a warning and continue
+without reference metrics.
 
 ## Validation And Scope
+
+Run the focused tests from the repository root:
+
+```bash
+pytest -q test/examples/test_fp_ddm.py
+```
 
 The automated tests cover data orientation, the source term, FNO output and
 boundary behavior, mixed-convergence finite-volume batches, interface exchange,

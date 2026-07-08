@@ -136,7 +136,7 @@ def _reference_solve(
 
 def _build_interface_handler(run_config: Mapping[str, object]):
     name = str(run_config.get("handler", "parallel"))
-    learning_rate = float(run_config.get("handler_learning_rate", 10.0))
+    learning_rate = float(run_config.get("handler_learning_rate", 0.5))
     if name == "parallel":
         return ParallelGradientInterfaceHandler(learning_rate)
     if name == "gradient":

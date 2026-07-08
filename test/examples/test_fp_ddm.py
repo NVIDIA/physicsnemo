@@ -30,6 +30,8 @@ from physicsnemo.utils import load_checkpoint, save_checkpoint
 EXAMPLE_ROOT = Path(__file__).resolve().parents[2] / "examples" / "cfd" / "fp_ddm"
 sys.path.insert(0, str(EXAMPLE_ROOT))
 
+import fpddm.domain as domain_module  # noqa: E402
+import fpddm.pipeline as pipeline_module  # noqa: E402
 from fpddm.data import ThermalDataset  # noqa: E402
 from fpddm.domain import Domain, Fields, MaskKind  # noqa: E402
 from fpddm.interfaces import ExchangeInterfaceHandler  # noqa: E402
@@ -102,6 +104,31 @@ def test_thermal_dataset_coordinates_and_shape():
     assert torch.allclose(sample[1, 0], torch.zeros(8))
     assert torch.unique(sample[2]).numel() == 1
     assert torch.count_nonzero(sample[3, 1:-1, 1:-1]) == 0
+
+
+def test_thermal_fields_honor_configured_conductivity_minimum(monkeypatch):
+    captured = []
+
+    def fake_layout_fields(config):
+        captured.append(float(config["k_min"]))
+        shape = (int(config["grid_size"]),) * 2
+        return torch.ones(shape), torch.zeros(shape), torch.zeros(shape)
+
+    monkeypatch.setattr("fpddm.domain.make_layout_fields", fake_layout_fields)
+    domain = Domain(rows=1, columns=1, width=8, height=8, overlap=1)
+    boundary = {
+        side: {"type": "dirichlet", "value": 350.0}
+        for side in ("top", "bottom", "left", "right")
+    }
+    domain_module.initialize_thermal_fields(domain, boundary, {"k_min": 3.0})
+
+    assert captured == [3.0]
+
+
+def test_default_interface_learning_rate_is_stable():
+    assert pipeline_module._build_interface_handler({}).learning_rate == pytest.approx(
+        0.5
+    )
 
 
 def test_thermal_residual_includes_heat_source():

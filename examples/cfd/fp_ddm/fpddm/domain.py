@@ -262,7 +262,7 @@ def initialize_thermal_fields(
         return
 
     field_config = dict(layout_config)
-    field_config.update(grid_size=domain.total_height, k_min=0.5)
+    field_config.update(grid_size=domain.total_height)
     conductivity, heat_source, _ = make_layout_fields(field_config)
     if conductivity.shape != (domain.total_height, domain.total_width):
         raise ValueError("FP-DDM currently requires a square global domain")
