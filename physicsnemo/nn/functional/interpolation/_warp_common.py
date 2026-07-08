@@ -101,36 +101,68 @@ def clamp_stencil_pair(center: int, size: int) -> wp.vec2i:
 
 
 @wp.func
-def _padded_stencil_boundary_tolerance(size: int) -> wp.float32:
-    """Return a grid-index tolerance scaled to float32 position roundoff."""
-    # Cover float32 roundoff accumulated while reconstructing grid position.
-    return 4.0 * 1.1920928955078125e-7 * wp.float32(size)
-
-
-@wp.func
-def select_padded_stencil_center(position: wp.float32, size: int) -> int:
-    """Select the real two-point cell at either padded-grid boundary."""
-    tolerance = _padded_stencil_boundary_tolerance(size)
-    lower_index = wp.float32(1.0)
-    upper_index = wp.float32(size - 2)
-    if wp.abs(position - lower_index) <= tolerance:
+def select_padded_stencil_center(
+    coordinate: wp.float32,
+    logical_lower: wp.float32,
+    logical_upper: wp.float32,
+    padded_origin: wp.float32,
+    dx: wp.float32,
+    size: int,
+) -> int:
+    """Select a stable two-point cell, preserving exact logical endpoints."""
+    if coordinate == logical_lower:
         return 1
-    if wp.abs(position - upper_index) <= tolerance:
+    if coordinate == logical_upper:
         return size - 3
-    return wp.int32(position)
+
+    # Preserve the existing zero-padded behavior outside the logical grid.
+    if coordinate < logical_lower or coordinate > logical_upper:
+        return wp.int32((coordinate - padded_origin) / dx)
+
+    # Work from the nearer logical endpoint so an inward float32 neighbor does
+    # not round back onto the boundary while converting to grid coordinates.
+    lower_distance = coordinate - logical_lower
+    upper_distance = logical_upper - coordinate
+    real_center = wp.int32(0)
+    if lower_distance <= upper_distance:
+        real_center = wp.int32(lower_distance / dx)
+    else:
+        cells_from_upper = wp.int32(wp.ceil(upper_distance / dx))
+        real_center = size - 3 - cells_from_upper
+
+    # ``size - 3`` is the number of real cells in the padded grid. This also
+    # leaves exactly one valid center when the original grid has two controls.
+    return clamp_index(real_center, size - 3) + 1
 
 
 @wp.func
-def padded_stencil_fraction(position: wp.float32, center: int, size: int) -> wp.float32:
-    """Return a two-point cell fraction with exact real-boundary values."""
-    tolerance = _padded_stencil_boundary_tolerance(size)
-    lower_index = wp.float32(1.0)
-    upper_index = wp.float32(size - 2)
-    if wp.abs(position - lower_index) <= tolerance:
+def padded_stencil_fraction(
+    coordinate: wp.float32,
+    logical_lower: wp.float32,
+    logical_upper: wp.float32,
+    padded_origin: wp.float32,
+    dx: wp.float32,
+    center: int,
+    size: int,
+) -> wp.float32:
+    """Return a stable cell fraction with exact logical endpoint values."""
+    if coordinate == logical_lower:
         return 0.0
-    if wp.abs(position - upper_index) <= tolerance:
+    if coordinate == logical_upper:
         return 1.0
-    return position - wp.float32(center)
+
+    if coordinate < logical_lower or coordinate > logical_upper:
+        position = (coordinate - padded_origin) / dx
+        return position - wp.float32(center)
+
+    lower_distance = coordinate - logical_lower
+    upper_distance = logical_upper - coordinate
+    if lower_distance <= upper_distance:
+        real_center = center - 1
+        return wp.clamp(lower_distance / dx - wp.float32(real_center), 0.0, 1.0)
+
+    intervals_to_upper = wp.float32(size - 2 - center)
+    return wp.clamp(intervals_to_upper - upper_distance / dx, 0.0, 1.0)
 
 
 def parse_grid_metadata(

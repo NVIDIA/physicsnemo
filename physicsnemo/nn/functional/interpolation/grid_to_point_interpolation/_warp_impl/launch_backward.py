@@ -69,6 +69,8 @@ def _launch_backward_1d(
     start_vals: list[float],
     dx_vals: list[float],
     padded_sizes: list[int],
+    lower_vals: list[float],
+    upper_vals: list[float],
     center_offset: float,
     interp_id: int,
     stride: int,
@@ -106,10 +108,18 @@ def _launch_backward_1d(
             float(start_vals[0]),
             float(dx_vals[0]),
             int(padded_sizes[0]),
-            int(interp_id) if stride == 2 else float(center_offset),
-            int(compute_query_grad),
-            int(compute_grid_grad),
         ]
+        if stride == 2:
+            inputs.extend(
+                [
+                    float(lower_vals[0]),
+                    float(upper_vals[0]),
+                    int(interp_id),
+                ]
+            )
+        else:
+            inputs.append(float(center_offset))
+        inputs.extend([int(compute_query_grad), int(compute_grid_grad)])
 
     wp.launch(
         BACKWARD_KERNELS[1][stride],
@@ -130,6 +140,8 @@ def _launch_backward_2d(
     start_vals: list[float],
     dx_vals: list[float],
     padded_sizes: list[int],
+    lower_vals: list[float],
+    upper_vals: list[float],
     center_offset: float,
     interp_id: int,
     stride: int,
@@ -149,6 +161,8 @@ def _launch_backward_2d(
     origin = wp.vec2f(float(start_vals[0]), float(start_vals[1]))
     spacing = wp.vec2f(float(dx_vals[0]), float(dx_vals[1]))
     size = wp.vec2i(int(padded_sizes[0]), int(padded_sizes[1]))
+    logical_lower = wp.vec2f(float(lower_vals[0]), float(lower_vals[1]))
+    logical_upper = wp.vec2f(float(upper_vals[0]), float(upper_vals[1]))
 
     inputs = [
         wp_points,
@@ -171,10 +185,12 @@ def _launch_backward_2d(
             origin,
             spacing,
             size,
-            int(interp_id) if stride == 2 else float(center_offset),
-            int(compute_query_grad),
-            int(compute_grid_grad),
         ]
+        if stride == 2:
+            inputs.extend([logical_lower, logical_upper, int(interp_id)])
+        else:
+            inputs.append(float(center_offset))
+        inputs.extend([int(compute_query_grad), int(compute_grid_grad)])
 
     wp.launch(
         BACKWARD_KERNELS[2][stride],
@@ -195,6 +211,8 @@ def _launch_backward_3d(
     start_vals: list[float],
     dx_vals: list[float],
     padded_sizes: list[int],
+    lower_vals: list[float],
+    upper_vals: list[float],
     center_offset: float,
     interp_id: int,
     stride: int,
@@ -226,6 +244,16 @@ def _launch_backward_3d(
         int(padded_sizes[1]),
         int(padded_sizes[2]),
     )
+    logical_lower = wp.vec3f(
+        float(lower_vals[0]),
+        float(lower_vals[1]),
+        float(lower_vals[2]),
+    )
+    logical_upper = wp.vec3f(
+        float(upper_vals[0]),
+        float(upper_vals[1]),
+        float(upper_vals[2]),
+    )
 
     inputs = [
         wp_points,
@@ -248,10 +276,12 @@ def _launch_backward_3d(
             origin,
             spacing,
             size,
-            int(interp_id) if stride == 2 else float(center_offset),
-            int(compute_query_grad),
-            int(compute_grid_grad),
         ]
+        if stride == 2:
+            inputs.extend([logical_lower, logical_upper, int(interp_id)])
+        else:
+            inputs.append(float(center_offset))
+        inputs.extend([int(compute_query_grad), int(compute_grid_grad)])
 
     wp.launch(
         BACKWARD_KERNELS[3][stride],
@@ -293,6 +323,8 @@ def launch_backward(
     start_vals, dx_vals, padded_sizes, center_offset = interpolation_geometry(
         grid, stride, pad_grid=True
     )
+    lower_vals = [axis[0] for axis in grid]
+    upper_vals = [axis[1] for axis in grid]
 
     # Allocate gradient outputs and lightweight dummies for disabled branches.
     compute_query_grad = int(bool(needs_input_grad[0]) and interp_id != _INTERP_NEAREST)
@@ -330,6 +362,8 @@ def launch_backward(
                 start_vals=start_vals,
                 dx_vals=dx_vals,
                 padded_sizes=padded_sizes,
+                lower_vals=lower_vals,
+                upper_vals=upper_vals,
                 center_offset=center_offset,
                 interp_id=interp_id,
                 stride=stride,
@@ -349,6 +383,8 @@ def launch_backward(
                 start_vals=start_vals,
                 dx_vals=dx_vals,
                 padded_sizes=padded_sizes,
+                lower_vals=lower_vals,
+                upper_vals=upper_vals,
                 center_offset=center_offset,
                 interp_id=interp_id,
                 stride=stride,
@@ -368,6 +404,8 @@ def launch_backward(
                 start_vals=start_vals,
                 dx_vals=dx_vals,
                 padded_sizes=padded_sizes,
+                lower_vals=lower_vals,
+                upper_vals=upper_vals,
                 center_offset=center_offset,
                 interp_id=interp_id,
                 stride=stride,

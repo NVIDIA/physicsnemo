@@ -66,6 +66,8 @@ def backward_1d_stride2(
     origin: wp.float32,
     dx: wp.float32,
     size_x: int,
+    logical_lower: wp.float32,
+    logical_upper: wp.float32,
     interp_id: int,
     compute_query_grad: int,
     compute_grid_grad: int,
@@ -75,9 +77,24 @@ def backward_1d_stride2(
     # Map one Warp thread to one query/scatter sample.
 
     # Convert world-space coordinates into grid-space coordinates.
-    pos = (points[tid] - origin) / dx
-    center = select_padded_stencil_center(pos, size_x)
-    frac = padded_stencil_fraction(pos, center, size_x)
+    coordinate = points[tid]
+    center = select_padded_stencil_center(
+        coordinate,
+        logical_lower,
+        logical_upper,
+        origin,
+        dx,
+        size_x,
+    )
+    frac = padded_stencil_fraction(
+        coordinate,
+        logical_lower,
+        logical_upper,
+        origin,
+        dx,
+        center,
+        size_x,
+    )
     lower = basis_value(interp_id, frac)
     upper = basis_value(interp_id, 1.0 - frac)
     d_lower = basis_derivative(interp_id, frac) / dx
@@ -215,6 +232,8 @@ def backward_2d_stride2(
     origin: wp.vec2f,
     dx: wp.vec2f,
     size: wp.vec2i,
+    logical_lower: wp.vec2f,
+    logical_upper: wp.vec2f,
     interp_id: int,
     compute_query_grad: int,
     compute_grid_grad: int,
@@ -225,12 +244,40 @@ def backward_2d_stride2(
     p = points[tid]
 
     # Convert world-space coordinates into grid-space coordinates.
-    pos_x = (p[0] - origin[0]) / dx[0]
-    pos_y = (p[1] - origin[1]) / dx[1]
-    center_x = select_padded_stencil_center(pos_x, size[0])
-    center_y = select_padded_stencil_center(pos_y, size[1])
-    frac_x = padded_stencil_fraction(pos_x, center_x, size[0])
-    frac_y = padded_stencil_fraction(pos_y, center_y, size[1])
+    center_x = select_padded_stencil_center(
+        p[0],
+        logical_lower[0],
+        logical_upper[0],
+        origin[0],
+        dx[0],
+        size[0],
+    )
+    center_y = select_padded_stencil_center(
+        p[1],
+        logical_lower[1],
+        logical_upper[1],
+        origin[1],
+        dx[1],
+        size[1],
+    )
+    frac_x = padded_stencil_fraction(
+        p[0],
+        logical_lower[0],
+        logical_upper[0],
+        origin[0],
+        dx[0],
+        center_x,
+        size[0],
+    )
+    frac_y = padded_stencil_fraction(
+        p[1],
+        logical_lower[1],
+        logical_upper[1],
+        origin[1],
+        dx[1],
+        center_y,
+        size[1],
+    )
 
     lower_x = basis_value(interp_id, frac_x)
     upper_x = basis_value(interp_id, 1.0 - frac_x)
@@ -427,6 +474,8 @@ def backward_3d_stride2(
     origin: wp.vec3f,
     dx: wp.vec3f,
     size: wp.vec3i,
+    logical_lower: wp.vec3f,
+    logical_upper: wp.vec3f,
     interp_id: int,
     compute_query_grad: int,
     compute_grid_grad: int,
@@ -437,15 +486,57 @@ def backward_3d_stride2(
     p = points[tid]
 
     # Convert world-space coordinates into grid-space coordinates.
-    pos_x = (p[0] - origin[0]) / dx[0]
-    pos_y = (p[1] - origin[1]) / dx[1]
-    pos_z = (p[2] - origin[2]) / dx[2]
-    center_x = select_padded_stencil_center(pos_x, size[0])
-    center_y = select_padded_stencil_center(pos_y, size[1])
-    center_z = select_padded_stencil_center(pos_z, size[2])
-    frac_x = padded_stencil_fraction(pos_x, center_x, size[0])
-    frac_y = padded_stencil_fraction(pos_y, center_y, size[1])
-    frac_z = padded_stencil_fraction(pos_z, center_z, size[2])
+    center_x = select_padded_stencil_center(
+        p[0],
+        logical_lower[0],
+        logical_upper[0],
+        origin[0],
+        dx[0],
+        size[0],
+    )
+    center_y = select_padded_stencil_center(
+        p[1],
+        logical_lower[1],
+        logical_upper[1],
+        origin[1],
+        dx[1],
+        size[1],
+    )
+    center_z = select_padded_stencil_center(
+        p[2],
+        logical_lower[2],
+        logical_upper[2],
+        origin[2],
+        dx[2],
+        size[2],
+    )
+    frac_x = padded_stencil_fraction(
+        p[0],
+        logical_lower[0],
+        logical_upper[0],
+        origin[0],
+        dx[0],
+        center_x,
+        size[0],
+    )
+    frac_y = padded_stencil_fraction(
+        p[1],
+        logical_lower[1],
+        logical_upper[1],
+        origin[1],
+        dx[1],
+        center_y,
+        size[1],
+    )
+    frac_z = padded_stencil_fraction(
+        p[2],
+        logical_lower[2],
+        logical_upper[2],
+        origin[2],
+        dx[2],
+        center_z,
+        size[2],
+    )
 
     lower_x = basis_value(interp_id, frac_x)
     upper_x = basis_value(interp_id, 1.0 - frac_x)
@@ -729,6 +820,8 @@ def interp_1d_stride2(
     origin: wp.float32,
     dx: wp.float32,
     size_x: int,
+    logical_lower: wp.float32,
+    logical_upper: wp.float32,
     interp_id: int,
 ):
     """Gather 1D linear/smooth interpolation values from grid to points."""
@@ -738,9 +831,23 @@ def interp_1d_stride2(
     x = points[tid]
 
     # Convert world-space coordinates into grid-space coordinates.
-    pos = (x - origin) / dx
-    center = select_padded_stencil_center(pos, size_x)
-    frac = padded_stencil_fraction(pos, center, size_x)
+    center = select_padded_stencil_center(
+        x,
+        logical_lower,
+        logical_upper,
+        origin,
+        dx,
+        size_x,
+    )
+    frac = padded_stencil_fraction(
+        x,
+        logical_lower,
+        logical_upper,
+        origin,
+        dx,
+        center,
+        size_x,
+    )
     lower = basis_value(interp_id, frac)
     upper = basis_value(interp_id, 1.0 - frac)
 
@@ -829,6 +936,8 @@ def interp_2d_stride2(
     origin: wp.vec2f,
     dx: wp.vec2f,
     size: wp.vec2i,
+    logical_lower: wp.vec2f,
+    logical_upper: wp.vec2f,
     interp_id: int,
 ):
     """Gather 2D bilinear/smooth interpolation values from grid."""
@@ -838,11 +947,40 @@ def interp_2d_stride2(
     p = points[tid]
 
     # Convert world-space coordinates into grid-space coordinates.
-    pos = wp.vec2f((p[0] - origin[0]) / dx[0], (p[1] - origin[1]) / dx[1])
-    center_x = select_padded_stencil_center(pos[0], size[0])
-    center_y = select_padded_stencil_center(pos[1], size[1])
-    frac_x = padded_stencil_fraction(pos[0], center_x, size[0])
-    frac_y = padded_stencil_fraction(pos[1], center_y, size[1])
+    center_x = select_padded_stencil_center(
+        p[0],
+        logical_lower[0],
+        logical_upper[0],
+        origin[0],
+        dx[0],
+        size[0],
+    )
+    center_y = select_padded_stencil_center(
+        p[1],
+        logical_lower[1],
+        logical_upper[1],
+        origin[1],
+        dx[1],
+        size[1],
+    )
+    frac_x = padded_stencil_fraction(
+        p[0],
+        logical_lower[0],
+        logical_upper[0],
+        origin[0],
+        dx[0],
+        center_x,
+        size[0],
+    )
+    frac_y = padded_stencil_fraction(
+        p[1],
+        logical_lower[1],
+        logical_upper[1],
+        origin[1],
+        dx[1],
+        center_y,
+        size[1],
+    )
     lower_x = basis_value(interp_id, frac_x)
     upper_x = basis_value(interp_id, 1.0 - frac_x)
     lower_y = basis_value(interp_id, frac_y)
@@ -954,6 +1092,8 @@ def interp_3d_stride2(
     origin: wp.vec3f,
     dx: wp.vec3f,
     size: wp.vec3i,
+    logical_lower: wp.vec3f,
+    logical_upper: wp.vec3f,
     interp_id: int,
 ):
     """Gather 3D trilinear/smooth interpolation values from grid."""
@@ -963,17 +1103,57 @@ def interp_3d_stride2(
     p = points[tid]
 
     # Convert world-space coordinates into grid-space coordinates.
-    pos = wp.vec3f(
-        (p[0] - origin[0]) / dx[0],
-        (p[1] - origin[1]) / dx[1],
-        (p[2] - origin[2]) / dx[2],
+    center_x = select_padded_stencil_center(
+        p[0],
+        logical_lower[0],
+        logical_upper[0],
+        origin[0],
+        dx[0],
+        size[0],
     )
-    center_x = select_padded_stencil_center(pos[0], size[0])
-    center_y = select_padded_stencil_center(pos[1], size[1])
-    center_z = select_padded_stencil_center(pos[2], size[2])
-    frac_x = padded_stencil_fraction(pos[0], center_x, size[0])
-    frac_y = padded_stencil_fraction(pos[1], center_y, size[1])
-    frac_z = padded_stencil_fraction(pos[2], center_z, size[2])
+    center_y = select_padded_stencil_center(
+        p[1],
+        logical_lower[1],
+        logical_upper[1],
+        origin[1],
+        dx[1],
+        size[1],
+    )
+    center_z = select_padded_stencil_center(
+        p[2],
+        logical_lower[2],
+        logical_upper[2],
+        origin[2],
+        dx[2],
+        size[2],
+    )
+    frac_x = padded_stencil_fraction(
+        p[0],
+        logical_lower[0],
+        logical_upper[0],
+        origin[0],
+        dx[0],
+        center_x,
+        size[0],
+    )
+    frac_y = padded_stencil_fraction(
+        p[1],
+        logical_lower[1],
+        logical_upper[1],
+        origin[1],
+        dx[1],
+        center_y,
+        size[1],
+    )
+    frac_z = padded_stencil_fraction(
+        p[2],
+        logical_lower[2],
+        logical_upper[2],
+        origin[2],
+        dx[2],
+        center_z,
+        size[2],
+    )
     lower_x = basis_value(interp_id, frac_x)
     upper_x = basis_value(interp_id, 1.0 - frac_x)
     lower_y = basis_value(interp_id, frac_y)

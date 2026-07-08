@@ -342,7 +342,7 @@ def _grid_knn_idx(
     grid: List[Tuple[float, float, int]],
     stride: int,
     padding: bool = True,
-) -> Tensor:
+) -> tuple[Tensor, Tensor]:
     # set k
     k = stride // 2
 
@@ -371,21 +371,20 @@ def _grid_knn_idx(
     # this is the center nearest neighbor in the grid
     center_idx = (((query_points - start) / dx) + (stride / 2.0 % 1.0)).to(torch.int64)
     if padding and stride == 2:
-        # At inclusive grid boundaries, choose a real cell instead of the
-        # adjacent interval that contains a zero-padding sample.
+        # In-bounds queries always use a real cell. This also handles an inward
+        # float32 neighbor whose grid-space division rounds onto the padded
+        # endpoint cell.
         first_real_cell = center_idx.new_ones(len(grid))
-        max_real_cell = center_idx.new_tensor([x[2] - 1 for x in grid])
-        upper_padding_cell = center_idx.new_tensor([x[2] for x in grid])
+        final_real_cell = center_idx.new_tensor([x[2] - 1 for x in grid])
         lower_bound = query_points.new_tensor([x[0] for x in grid])
         upper_bound = query_points.new_tensor([x[1] for x in grid])
-        use_first_real_cell = (center_idx <= first_real_cell) & (
-            query_points >= lower_bound
+        real_center = torch.maximum(center_idx, first_real_cell)
+        real_center = torch.minimum(real_center, final_real_cell)
+        center_idx = torch.where(
+            (query_points >= lower_bound) & (query_points <= upper_bound),
+            real_center,
+            center_idx,
         )
-        use_final_real_cell = (center_idx >= upper_padding_cell) & (
-            query_points <= upper_bound
-        )
-        center_idx = torch.where(use_first_real_cell, first_real_cell, center_idx)
-        center_idx = torch.where(use_final_real_cell, max_real_cell, center_idx)
 
     # index window
     idx_add = (
@@ -422,7 +421,7 @@ def _grid_knn_idx(
     else:
         raise RuntimeError
 
-    return idx
+    return idx, center_idx
 
 
 # TODO currently the `tolist` operation is not supported by torch script and when fixed torch script will be used
@@ -511,7 +510,7 @@ def interpolation_torch(
     query_points = query_points.unsqueeze(0)
 
     # compute index of nearest neighbor on grid to query points
-    idx = _grid_knn_idx(query_points, grid, stride, padding=True)
+    idx, center_idx = _grid_knn_idx(query_points, grid, stride, padding=True)
 
     # index mesh grid to get distance vector
     if mem_speed_trade:
@@ -523,59 +522,63 @@ def interpolation_torch(
     # make tf dx vec (for interpolation function)
     dx = torch.tensor(dx, dtype=torch.float32, device=device)
     dx = torch.reshape(dx, [1, 1, 1, dims])
-    if stride == 2:
-        # Snap values at logical grid boundaries to exact cell coordinates
-        # while retaining the original query derivative through each correction.
-        query_coordinates = query_points.unsqueeze(2)
-        lower_bound = query_coordinates.new_tensor([x[0] for x in grid]).view(
-            1, 1, 1, dims
-        )
-        upper_bound = query_coordinates.new_tensor([x[1] for x in grid]).view(
-            1, 1, 1, dims
-        )
-        at_lower_bound = query_coordinates == lower_bound
-        at_upper_bound = query_coordinates == upper_bound
-
-        first_distance = dist_vec[..., :1, :]
-        last_distance = dist_vec[..., -1:, :]
-        snapped_first_lower = first_distance - first_distance.detach()
-        snapped_first_upper = first_distance + (dx - first_distance).detach()
-        snapped_last_lower = last_distance + (-dx - last_distance).detach()
-        snapped_last_upper = last_distance - last_distance.detach()
-        first_distance = torch.where(
-            at_lower_bound,
-            snapped_first_lower,
-            first_distance,
-        )
-        first_distance = torch.where(
-            at_upper_bound,
-            snapped_first_upper,
-            first_distance,
-        )
-        last_distance = torch.where(
-            at_lower_bound,
-            snapped_last_lower,
-            last_distance,
-        )
-        last_distance = torch.where(
-            at_upper_bound,
-            snapped_last_upper,
-            last_distance,
-        )
-        dist_vec = torch.cat(
-            (first_distance, dist_vec[..., 1:-1, :], last_distance),
-            dim=-2,
-        )
 
     # compute bump function
     if interpolation_type == "nearest_neighbor":
         weights = nearest_neighbor_weighting(dist_vec, dx)
-    elif interpolation_type == "linear":
-        weights = linear_weighting(dist_vec, dx)
-    elif interpolation_type == "smooth_step_1":
-        weights = smooth_step_1_weighting(dist_vec, dx)
-    elif interpolation_type == "smooth_step_2":
-        weights = smooth_step_2_weighting(dist_vec, dx)
+    elif stride == 2:
+        # Only the lower-corner distance is needed to form the per-axis cell
+        # fraction. Correct exact logical endpoints without materializing
+        # endpoint masks over every stencil corner.
+        dx_per_axis = dx[..., 0, :]
+        fraction = dist_vec[..., 0, :] / dx_per_axis
+        lower_bound = query_points.new_tensor([x[0] for x in grid])
+        upper_bound = query_points.new_tensor([x[1] for x in grid])
+        lower_distance = query_points - lower_bound
+        upper_distance = upper_bound - query_points
+        scaled_lower_distance = lower_distance / dx_per_axis
+        scaled_upper_distance = upper_distance / dx_per_axis
+        real_center = (center_idx - 1).to(query_points.dtype)
+        resolutions = center_idx.new_tensor([x[2] for x in grid])
+        intervals_to_upper = (resolutions - center_idx).to(query_points.dtype)
+        fraction_from_lower = scaled_lower_distance - real_center
+        fraction_from_upper = intervals_to_upper - scaled_upper_distance
+        stable_fraction = torch.where(
+            lower_distance <= upper_distance,
+            fraction_from_lower,
+            fraction_from_upper,
+        )
+        stable_fraction = (
+            stable_fraction
+            + (stable_fraction.clamp(0.0, 1.0) - stable_fraction).detach()
+        )
+        fraction = torch.where(
+            (lower_distance >= 0.0) & (upper_distance >= 0.0),
+            stable_fraction,
+            fraction,
+        )
+        at_lower_bound = query_points == lower_bound
+        at_upper_bound = query_points == upper_bound
+        fraction = torch.where(
+            at_lower_bound,
+            fraction - fraction.detach(),
+            fraction,
+        )
+        fraction = torch.where(
+            at_upper_bound,
+            fraction + (1.0 - fraction).detach(),
+            fraction,
+        )
+        if interpolation_type == "linear":
+            lower_point = fraction
+            upper_point = 1.0 - fraction
+        elif interpolation_type == "smooth_step_1":
+            lower_point = smooth_step_1(fraction)
+            upper_point = smooth_step_1(1.0 - fraction)
+        else:
+            lower_point = smooth_step_2(fraction)
+            upper_point = smooth_step_2(1.0 - fraction)
+        weights = _hyper_cube_weighting(lower_point, upper_point)
     elif interpolation_type == "gaussian":
         weights = gaussian_weighting(dist_vec, dx)
     else:

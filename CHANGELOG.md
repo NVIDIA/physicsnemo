@@ -197,11 +197,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Fixes two-point `grid_to_point_interpolation` stencils at inclusive grid
-  boundaries so linear query gradients use the first or final real cell instead
-  of a zero-padding cell. Torch interpolation metadata now also uses an explicit
-  float32 dtype, preventing the process-wide default dtype from promoting
-  float32 outputs.
+- Fixes `grid_to_point_interpolation` so inclusive-boundary gradients use real
+  cells, float32 inputs remain float32 regardless of the default dtype, and
+  Warp custom-op views do not request duplicate gradient tracking.
 - `physicsnemo.mesh.sampling.sample_data_at_points` now handles integer and
   boolean fields by returning `float64`, so NaN sentinels and non-integral
   interpolation or multi-cell means are representable (subject to the usual
