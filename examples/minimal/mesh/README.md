@@ -184,6 +184,22 @@ Learn to get meshes in and out of PhysicsNeMo-Mesh.
 - Saving and loading the native, folder-based memmap format, including its
   on-disk layout (`.pmsh` for `Mesh`, `.pdmsh` for `DomainMesh`)
 
+### Tutorial 9: Mesh Generation
+
+**File**: `tutorial_9_mesh_generation.ipynb`
+
+Generate simulation-ready volume meshes from scratch, two ways.
+
+- Choosing between `fill_interior` (exact boundaries, guaranteed angles),
+  `mesh_implicit_domain` (implicit domains, any dimension, GPU), and
+  `marching_cubes` (isosurfaces)
+- Filling multiply-connected boundary meshes; per-boundary provenance data
+- Verifying the minimum-angle guarantee across resolutions
+- Implicit CSG, raw level sets, and the coverage guard
+- Pinning sharp corners with `feature_points`
+- Tetrahedralizing 3D implicit domains
+- Differentiable meshing: shape gradients through the mesh
+
 ## Assets
 
 The `assets/` directory contains pre-saved meshes for use in tutorials:
