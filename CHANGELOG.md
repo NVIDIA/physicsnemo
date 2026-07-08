@@ -22,6 +22,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The contract is dimension-generic; `n = 3` raises `NotImplementedError`
   pending exact boundary recovery. Also adds `polygon_interior_point`,
   which returns a point strictly inside a simple polygon.
+||||||| e5405921
+- Adds dimension-generic volume mesh generation for implicit domains to
+  `physicsnemo.mesh.generate`: `mesh_implicit_domain` meshes
+  `{x : phi(x) < 0}` for any implicit function (SDFs, level sets, neural
+  fields) in 2D/3D/ND on CPU or CUDA using pure PyTorch tensor ops —
+  lattice initialization, validity-gated ODT smoothing, quality-greedy
+  bistellar flips, topological repairs, a coverage guard that raises on
+  sub-resolution features, and exact interpolation of sharp corners via
+  `feature_points`. Also adds `refit_mesh_to_implicit` (differentiable
+  boundary refit at fixed topology, for shape-optimization loops) and
+  signed-distance building blocks (`sdf_sphere`, `sdf_box`,
+  `sdf_polygon_2d`, `sdf_union`, `sdf_intersection`, `sdf_difference`,
+  `project_to_zero_set`).
 - Adds coverage reporting on PRs — an informational `Coverage %` check plus a
   ready-to-enable Codecov integration.
 - Adds the experimental Strata weather-emulation models —

@@ -16,8 +16,24 @@
 
 """Mesh generation from implicit representations.
 
-This module provides functions for generating meshes from scalar fields,
-including isosurface extraction via the marching cubes algorithm.
+This module provides functions for generating meshes from scalar fields
+and implicit functions: isosurface extraction via marching cubes, and
+volume mesh generation for implicit domains (``mesh_implicit_domain``) in
+any spatial dimension, with a differentiable geometry refit
+(``refit_mesh_to_implicit``) and signed-distance building blocks.
 """
 
+from physicsnemo.mesh.generate.implicit_domain import (
+    mesh_implicit_domain,
+    refit_mesh_to_implicit,
+)
+from physicsnemo.mesh.generate.implicit_functions import (
+    project_to_zero_set,
+    sdf_box,
+    sdf_difference,
+    sdf_intersection,
+    sdf_polygon_2d,
+    sdf_sphere,
+    sdf_union,
+)
 from physicsnemo.mesh.generate.marching_cubes import marching_cubes
