@@ -19,9 +19,11 @@ from .derivative import (
     cell_centre_distance,
     central_difference,
 )
+from .volume_conservation import VolumeConservationLoss
 
 __all__ = [
     "SpatialDerivativeLoss",
+    "VolumeConservationLoss",
     "cell_centre_distance",
     "central_difference",
 ]

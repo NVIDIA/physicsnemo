@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the continuous / stereographic RoPE helpers `build_rope_cos_sin_1d_continuous`,
   `build_axial_rope_cos_sin_2d_continuous`, `stereographic_projection`, and
   `spherical_centroid` in `physicsnemo.experimental.nn`.
+- Adds `VolumeConservationLoss` to `physicsnemo.experimental.losses`, a generic,
+  dimension-agnostic weak-conservation loss. It compares the (optionally
+  volume-weighted) spatial integral of a prediction and a target at each step of
+  a trailing feature/time axis using an injectable data-fitting metric, with
+  optional inactive-cell masking. It enforces conservation of a volume-weighted
+  integral (not true mass; no density/porosity is applied).
 - Adds `SpatialDerivativeLoss` to `physicsnemo.experimental.losses`, a generic,
   dimension-agnostic spatial-derivative regularization loss. It compares the
   interior (non-periodic) central-difference gradients of a prediction and a
