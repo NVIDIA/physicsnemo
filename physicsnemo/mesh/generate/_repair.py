@@ -162,13 +162,17 @@ def pin_feature_points(points, cells, targets, h):
     no pressure while it is blocked), so features are pinned by TOPOLOGICAL
     insertion instead:
 
+    - a feature coinciding with an existing vertex pins that vertex;
     - a feature strictly inside some cell splits that cell 1 -> d+1 around
       a new vertex at the feature (always valid, by barycentric coords);
+    - a feature ON a facet splits every incident cell into d cells around
+      it (a tent there would overlap existing cells);
     - a feature outside the mesh (the common case: convex corners lie
-      beyond the eroded staircase) gets a "tent" -- a new cell over the
-      nearest boundary facet whose outward side faces the feature;
-    - a feature that admits neither (e.g. farther than ~2h from the mesh)
-      raises: it is not resolvable at this resolution.
+      beyond the eroded staircase) gets a "tent" over the nearest boundary
+      facet whose OUTWARD side faces it (half-space-tested against the
+      facet's owner, so the tent can never overlap the mesh);
+    - a feature that admits none of these (e.g. farther than ~2.5h from
+      the mesh) raises: it is not resolvable at this resolution.
 
     Returns ``(points, cells, fixed_idx (n_features,))``.
     """
@@ -176,6 +180,15 @@ def pin_feature_points(points, cells, targets, h):
     fixed_idx = []
     for k in range(targets.shape[0]):
         x = targets[k]
+        # A feature coinciding with an existing vertex needs no insertion:
+        # pin that vertex (and snap it exactly onto the feature).
+        dist_v = (points - x).norm(dim=-1)
+        vid = int(dist_v.argmin())
+        if float(dist_v[vid]) < 1e-9 * h:
+            points = points.clone()
+            points[vid] = x
+            fixed_idx.append(vid)
+            continue
         # Containing cell via barycentric coordinates (batched solve).
         p0 = points[cells[:, 0]]
         rel = points[cells[:, 1:]] - p0[:, None, :]
@@ -186,7 +199,12 @@ def pin_feature_points(points, cells, targets, h):
         ]
         lam0 = 1.0 - bary.sum(dim=1)
         eps = 1e-9
-        inside = vol_ok & (bary > eps).all(dim=1) & (lam0 > eps)
+        lam = torch.cat([lam0[:, None], bary], dim=1)  # (M, d+1) barycentric
+        inside = vol_ok & (lam > eps).all(dim=1)
+        # On-facet: inside a cell's closure with exactly one ~zero coordinate.
+        on_facet = (
+            vol_ok & (lam > -eps).all(dim=1) & ((lam.abs() <= eps).sum(dim=1) == 1)
+        )
         new_vid = points.shape[0]
         if bool(inside.any()):
             c = int(torch.nonzero(inside)[0])
@@ -208,14 +226,45 @@ def pin_feature_points(points, cells, targets, h):
             keep_mask[c] = False
             points = torch.cat([points, x[None, :]], dim=0)
             cells = torch.cat([cells[keep_mask], torch.stack(new_cells)], dim=0)
+        elif bool(on_facet.any()):
+            # Feature lies ON a facet: split every incident cell into d
+            # cells around it (a strict-interior 1->d+1 split would create
+            # a zero-height cell; a tent would overlap existing cells).
+            hosts = torch.nonzero(on_facet).reshape(-1)
+            points = torch.cat([points, x[None, :]], dim=0)
+            new_cells = []
+            keep_mask = torch.ones(
+                cells.shape[0], dtype=torch.bool, device=cells.device
+            )
+            for c in hosts.tolist():
+                keep_mask[c] = False
+                host = cells[c].tolist()
+                zero_slot = int((lam[c].abs() <= eps).nonzero()[0])
+                facet = [v for k, v in enumerate(host) if k != zero_slot]
+                apex = host[zero_slot]
+                for drop in range(len(facet)):
+                    cell = [v for k, v in enumerate(facet) if k != drop]
+                    new_cells.append(
+                        torch.tensor(
+                            cell + [new_vid, apex],
+                            dtype=torch.int64,
+                            device=cells.device,
+                        )
+                    )
+            cells = torch.cat([cells[keep_mask], torch.stack(new_cells)], dim=0)
         else:
-            # Tent over the nearest outward-facing boundary facet.
-            uniq, counts, _, _ = facet_census(cells)
-            bfacets = uniq[counts == 1]
+            # Tent over the nearest boundary facet whose OUTWARD side faces
+            # the feature (the tent must not overlap the facet's owner).
+            uniq, counts, owner_all, inverse_all = facet_census(cells)
+            bmask = counts == 1
+            bfacets = uniq[bmask]
+            # Owner cell of each boundary facet, recovered from the census.
+            sel = bmask[inverse_all]
+            order = torch.argsort(inverse_all[sel], stable=True)
+            owners = owner_all[sel][order]
             cen = points[bfacets].mean(dim=1)
-            order = (cen - x).norm(dim=1).argsort()
             placed = False
-            for f in order[:8].tolist():
+            for f in (cen - x).norm(dim=1).argsort()[:8].tolist():
                 fv = bfacets[f]
                 tent = torch.cat([fv, torch.tensor([new_vid], device=cells.device)])
                 trial_points = torch.cat([points, x[None, :]], dim=0)
@@ -224,6 +273,18 @@ def pin_feature_points(points, cells, targets, h):
                     continue  # feature coplanar with this facet; try next
                 if float((cen[f] - x).norm()) > 2.5 * h:
                     break
+                # Half-space test: the feature must sit on the opposite side
+                # of the facet from the owner cell's apex, else the tent
+                # overlaps the owner (undetectable by volume or manifold
+                # diagnostics afterwards).
+                own = cells[int(owners[f])]
+                apex = own[~torch.isin(own, fv)][0]
+                apex_cell = torch.cat(
+                    [fv, torch.tensor([int(apex)], device=cells.device)]
+                )
+                vol_apex = signed_volumes(points, apex_cell[None, :])
+                if float(vol * vol_apex) >= 0:
+                    continue  # same side as the owner: would overlap
                 points = trial_points
                 if vol < 0:
                     tent = tent[[1, 0] + list(range(2, d + 1))]

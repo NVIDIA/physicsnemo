@@ -131,8 +131,11 @@ def _candidates(points, cells, q_all, cell_ids, k_share, sub_size, h):
         n_clusters, k_share
     )
     new_vol_sum = vol_new.abs().reshape(n_clusters, k_new).sum(dim=1)
+    # Relative term is dtype-aware: a fixed 1e-9 sits below float32's
+    # machine epsilon and silently rejected ~11% of legitimate flips.
+    rel_eps = max(1e-9, 64.0 * torch.finfo(points.dtype).eps)
     conserved = (new_vol_sum - cur_vol.sum(dim=1)).abs() <= (
-        1e-9 * new_vol_sum.clamp_min(1e-30) + 1e-14 * h**d
+        rel_eps * new_vol_sum.clamp_min(1e-30) + 1e-14 * h**d
     )
     gain = q_new.min(dim=1).values - q_all[groups].min(dim=1).values
     vol_ok = (vol_new.abs().reshape(n_clusters, k_new) > 1e-12 * h**d).all(dim=1)
@@ -182,7 +185,14 @@ def flip_pass(points, cells, h, generator=None, q_focus: float = 0.5):
     gain = torch.cat([c[3] for c in cands])
 
     n_cand = groups.shape[0]
-    prio = torch.rand(n_cand, generator=generator).to(device) + gain.clamp(0.0, 1.0)
+    # float64 priorities with a deterministic index tie-break: winner
+    # selection is exact float equality per vertex, and quantized ties
+    # would let two vertex-sharing candidates both win.
+    prio = (
+        torch.rand(n_cand, generator=generator, dtype=torch.float64).to(device)
+        + gain.double().clamp(0.0, 1.0)
+        + torch.arange(n_cand, device=device, dtype=torch.float64) * 1e-18
+    )
     best = torch.zeros(points.shape[0], dtype=prio.dtype, device=device)
     best.scatter_reduce_(
         0,
