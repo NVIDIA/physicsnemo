@@ -23,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the continuous / stereographic RoPE helpers `build_rope_cos_sin_1d_continuous`,
   `build_axial_rope_cos_sin_2d_continuous`, `stereographic_projection`, and
   `spherical_centroid` in `physicsnemo.experimental.nn`.
+- Adds `SpatialDerivativeLoss` to `physicsnemo.experimental.losses`, a generic,
+  dimension-agnostic spatial-derivative regularization loss. It compares the
+  interior (non-periodic) central-difference gradients of a prediction and a
+  target on a non-uniform grid (per-axis cell widths) using an injectable
+  data-fitting metric, with optional inactive-cell masking for sparse grids.
+  The reusable `central_difference` / `cell_centre_distance` helpers are also
+  exported.
 - Adds Point-Transformer local vector-attention blocks to `physicsnemo.nn`.
 - Adds an `is_causal` option to `TimmSelfAttention` in `physicsnemo.nn` for
   causal self-attention.
