@@ -178,10 +178,10 @@ Key Features
   intrinsic (tangent space) and extrinsic (ambient space) variants
 - **Differential geometry**: Gaussian curvature, mean curvature, normals,
   tangent spaces
-- **Mesh operations**: subdivision (linear, Loop, Butterfly), smoothing,
-  remeshing, repair
+- **Mesh operations**: subdivision (linear, Loop, Butterfly), geometry and
+  point-field smoothing, remeshing, repair
 - **Geometry transformations**: translation, rotation, scaling, dense point
-  displacement, and sparse control-point morphing
+  displacement, sparse control-point morphing, and guarded normal updates
 - **Tessellation**: triangulate polygon soups into simplicial meshes (convex
   fan with an ear-clip fallback for non-convex polygons), for example, using
   ``Mesh.from_polygons``
@@ -208,6 +208,10 @@ Runnable Jupyter notebook tutorials are available in ``examples/minimal/mesh/``:
 7. **Domain Mesh** -- simulation domains, boundaries, transforms, validation
 8. **I/O, Interop & Serialization** -- PyVista conversion, tessellation,
    native save/load
+
+The standalone ``examples/minimal/mesh/guarded_shape_optimization.py`` example
+demonstrates a differentiable shape-update loop with normal projection,
+sensitivity smoothing, step clipping, and geometric backtracking.
 
 
 API Reference

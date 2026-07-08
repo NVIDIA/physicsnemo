@@ -304,6 +304,7 @@ Comprehensive overview of PhysicsNeMo-Mesh capabilities:
 | Butterfly | ✅ | Interpolating |
 | **Smoothing** | | |
 | Laplacian smoothing | ✅ | |
+| Point-field smoothing | ✅ | Normalized cotangent/uniform edge averaging |
 | **Remeshing** | | |
 | Uniform remeshing | ✅ | Clustering-based |
 | **Tessellation** | | |
@@ -323,6 +324,7 @@ Comprehensive overview of PhysicsNeMo-Mesh capabilities:
 | Arbitrary matrix transform | ✅ | |
 | Dense point displacement | ✅ | Aligned tensor or `point_data` key, with optional point weights |
 | Sparse control-point morphing | ✅ | Wendland-C2 compact support with scalar or per-control radii |
+| Guarded normal update | ✅ | Normal projection, smoothing, masking, clipping, and validity backtracking |
 | Extrusion | ✅ | Manifold → higher dimension |
 | Coordinate projection (drop ambient dims) | ✅ | `projections.project` (e.g. 3D → 2D embedding) |
 | Surface projection / mesh intersection | ❌ | Manifold → lower *manifold* dimension; work in progress |
@@ -403,6 +405,27 @@ radius, use a positive parameterization such as
 values are not validated at runtime. Floating `point_weights` are applied as
 supplied and may be signed or greater than one. The current morphing kernel is
 `"wendland_c2"`, which is also the default.
+
+### Guarded Normal Updates
+
+```python
+# direction is already signed; negate an ordinary objective gradient for descent
+step_size = 1.0e-3
+direction = -step_size * torch.autograd.grad(objective, mesh.points)[0]
+updated, diagnostics = mesh.guarded_normal_update(
+    direction,
+    point_weights=design_region,
+    smoothing_iterations=5,
+    max_step=0.01,
+)
+if not diagnostics.accepted:
+    raise RuntimeError("No geometrically valid shape step was found")
+```
+
+The update remains normal to the source geometry after smoothing. Candidate
+meshes with degenerate, strongly collapsed, or normal-reversed cells are
+rejected and retried at smaller scales. Global self-intersections are not yet
+detected.
 
 ### Subdivision
 

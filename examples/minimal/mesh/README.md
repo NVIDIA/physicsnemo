@@ -52,6 +52,18 @@ pip install -e ".[mesh]"
 | **8. I/O, Interop & Serialization** | Getting data in/out | PyVista import/export, polygon tessellation, save/load |
 <!-- markdownlint-enable MD013 -->
 
+## Standalone Shape-Optimization Example
+
+The checkpoint-free shape-optimization example can be run directly:
+
+```bash
+python examples/minimal/mesh/guarded_shape_optimization.py
+```
+
+It demonstrates an autograd objective followed by normal projection, scalar
+sensitivity smoothing, protected-region masking, maximum-step clipping, and
+mesh-validity backtracking.
+
 ## Running the Tutorials
 
 ### Option 1: Jupyter Notebook

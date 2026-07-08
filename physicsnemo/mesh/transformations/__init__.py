@@ -30,10 +30,16 @@ from physicsnemo.mesh.transformations.geometric import (
     transform,
     translate,
 )
+from physicsnemo.mesh.transformations.normal_update import (
+    NormalUpdateDiagnostics,
+    guarded_normal_update,
+)
 
 __all__ = [
     "displace",
+    "guarded_normal_update",
     "morph",
+    "NormalUpdateDiagnostics",
     "rotate",
     "rotation_matrix",
     "scale",

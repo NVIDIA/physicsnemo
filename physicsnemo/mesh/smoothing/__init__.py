@@ -14,10 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Mesh smoothing operations.
+"""Mesh geometry and point-field smoothing operations.
 
-This module provides algorithms for smoothing mesh geometry while preserving
-important features like boundaries and sharp edges.
+Geometry smoothing supports boundary and sharp-feature preservation. Point-field
+smoothing applies normalized edge averaging without moving the mesh.
 """
 
-from physicsnemo.mesh.smoothing.laplacian import smooth_laplacian
+from physicsnemo.mesh.smoothing.laplacian import smooth_laplacian, smooth_point_field
+
+__all__ = ["smooth_laplacian", "smooth_point_field"]

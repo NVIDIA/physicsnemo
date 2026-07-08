@@ -208,6 +208,63 @@ lazily; topology caches are retained.
    :members:
    :show-inheritance:
 
+Guarded Normal Updates
+----------------------
+
+.. currentmodule:: physicsnemo.mesh.transformations.normal_update
+
+:func:`guarded_normal_update` turns an already-signed point direction into a
+normal-only deformation of a positive-dimensional codimension-one mesh. It
+smooths the scalar normal component,
+reconstructs the vector field along point normals, applies design-region
+point weights, globally clips the maximum step, and backtracks when a candidate
+contains collapsed or normal-reversed cells.
+The source must be locally manifold and consistently oriented so each point has
+a usable normal.
+
+.. figure:: /img/mesh/guarded_normal_update.png
+   :alt: An original triangular surface and its guarded normal update.
+   :width: 100%
+
+   A masked, smoothed normal update; color on the updated surface shows the
+   accepted displacement magnitude.
+
+.. code:: python
+
+    objective = model(mesh)
+    gradient = torch.autograd.grad(objective, mesh.points)[0]
+    step_size = 1.0e-3
+    updated, diagnostics = mesh.guarded_normal_update(
+        -step_size * gradient,  # sign and magnitude are explicit
+        point_weights=design_region,
+        smoothing_iterations=5,
+        max_step=0.01,
+    )
+
+The direction is not implicitly negated or rescaled. Pass a scaled
+``-gradient`` for ordinary minimization, but pass an already-improving
+sensitivity such as ``d(-drag)/dX`` directly. Cell-centered fields can first
+be mapped to points with
+:meth:`~physicsnemo.mesh.mesh.Mesh.cell_data_to_point_data`; that conversion is
+an unweighted incidence mean.
+
+Backtracking makes a discrete, non-differentiable choice of scale. Once chosen,
+the accepted mesh is reconstructed from the original tensors so autograd still
+flows through that selected branch. This host-controlled routine is an eager
+optimization-step boundary rather than a full-graph-compilable operator. The
+guard checks local cell geometry; it does not detect global self-intersections
+or perform an objective-value line search. This first version updates a
+codimension-one ``Mesh`` rather than propagating boundary movement through a
+volume ``DomainMesh``.
+
+Floating ``point_weights`` are per-point multipliers applied after smoothing;
+they may be signed or greater than one. Use values in ``[0, 1]`` for a
+conventional design-region mask or falloff.
+
+.. automodule:: physicsnemo.mesh.transformations.normal_update
+   :members:
+   :show-inheritance:
+
 Projections
 -----------
 

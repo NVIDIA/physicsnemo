@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds `Mesh.guarded_normal_update` and
+  `physicsnemo.mesh.transformations.guarded_normal_update` for signed,
+  point-directed shape steps with normal projection, design-region weights,
+  global step clipping, and local geometric validation/backtracking. Also adds
+  the reusable `physicsnemo.mesh.smoothing.smooth_point_field` operator and
+  `NormalUpdateDiagnostics`.
 - Adds coverage reporting on PRs — an informational `Coverage %` check plus a
   ready-to-enable Codecov integration.
 - Adds differentiable mesh morphing: Torch-backed dense ``displace_points`` /

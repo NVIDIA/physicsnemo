@@ -14,12 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Laplacian mesh smoothing with feature preservation.
+"""Laplacian smoothing for mesh geometry and point-associated fields.
 
-Implements geometry-aware smoothing using cotangent weights, with options for
-preserving boundaries and sharp features.
+Geometry smoothing supports boundary and sharp-feature preservation. Point-field
+smoothing applies normalized edge averaging to every connected point.
 """
 
+import math
+from numbers import Real
 from typing import TYPE_CHECKING
 
 import torch
@@ -27,12 +29,141 @@ from jaxtyping import Bool, Float, Int
 
 from physicsnemo.mesh.boundaries import get_boundary_vertices
 from physicsnemo.mesh.boundaries._facet_extraction import extract_candidate_facets
+from physicsnemo.mesh.calculus.laplacian import _apply_cotan_laplacian_operator
 from physicsnemo.mesh.geometry.dual_meshes import compute_cotan_weights_fem
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 from physicsnemo.mesh.utilities._topology import extract_unique_edges
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
+
+
+def smooth_point_field(
+    mesh: "Mesh",
+    field: Float[torch.Tensor, "n_points ..."],
+    n_iter: int = 1,
+    relaxation_factor: float = 0.2,
+) -> Float[torch.Tensor, "n_points ..."]:
+    """Smooth a point field with the mesh's normalized edge Laplacian.
+
+    The edge-weight construction matches :func:`smooth_laplacian`, but this
+    function does not apply its boundary or feature-preservation masks.
+    Cotangent weights are used for codimension-one manifolds of dimension two
+    or greater and uniform weights are used otherwise. Unlike
+    :meth:`~physicsnemo.mesh.mesh.Mesh.laplacian`, the update is normalized by
+    the incident edge-weight sum, so a dimensionless ``relaxation_factor`` has
+    consistent averaging semantics across mesh scales.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Mesh providing point adjacency and geometric edge weights.
+    field : Float[torch.Tensor, "n_points ..."]
+        Point-associated scalar, vector, or tensor field with leading shape
+        ``(mesh.n_points, ...)``. It must share the mesh point dtype and device;
+        float32 and float64 are supported.
+    n_iter : int, optional
+        Number of smoothing iterations. Default is ``1``.
+    relaxation_factor : float, optional
+        Fraction of the normalized neighbor update applied per iteration, in
+        the closed interval ``[0, 1]``. Default is ``0.2``.
+
+    Returns
+    -------
+    Float[torch.Tensor, "n_points ..."]
+        Smoothed field with the same shape, dtype, and device as ``field``.
+
+    Raises
+    ------
+    TypeError
+        If ``field`` is not a tensor, its dtype differs from the mesh point
+        dtype, the shared dtype is not float32 or float64, or an iteration or
+        relaxation argument has an unsupported type.
+    ValueError
+        If the leading field dimension does not equal ``mesh.n_points``, the
+        field and mesh are on different devices, ``n_iter`` is negative, or
+        ``relaxation_factor`` is outside ``[0, 1]``.
+
+    Notes
+    -----
+    The input tensor is not modified. Isolated points and vertices whose
+    usable cotangent weights sum to zero retain their original values. The
+    operation is differentiable with respect to both ``field`` and the mesh
+    geometry used to construct cotangent weights.
+    """
+    ### Validate arguments
+    if not isinstance(field, torch.Tensor):
+        raise TypeError(f"field must be a torch.Tensor, got {type(field).__name__}")
+    if field.ndim < 1 or field.shape[0] != mesh.n_points:
+        raise ValueError(
+            "field must have leading shape "
+            f"({mesh.n_points}, ...), got {tuple(field.shape)}"
+        )
+    if field.device != mesh.points.device:
+        raise ValueError(
+            "field and mesh points must be on the same device, got "
+            f"{field.device} and {mesh.points.device}"
+        )
+    if field.dtype != mesh.points.dtype:
+        raise TypeError(
+            "field and mesh points must have the same dtype, got "
+            f"{field.dtype} and {mesh.points.dtype}"
+        )
+    if field.dtype not in (torch.float32, torch.float64):
+        raise TypeError(
+            "field and mesh points must have dtype torch.float32 or "
+            f"torch.float64, got {field.dtype}"
+        )
+    if not isinstance(n_iter, int) or isinstance(n_iter, bool):
+        raise TypeError(f"n_iter must be an integer, got {type(n_iter).__name__}")
+    if n_iter < 0:
+        raise ValueError(f"n_iter must be >= 0, got {n_iter=}")
+    if not isinstance(relaxation_factor, Real) or isinstance(relaxation_factor, bool):
+        raise TypeError(
+            "relaxation_factor must be a finite real scalar, got "
+            f"{type(relaxation_factor).__name__}"
+        )
+    if not math.isfinite(float(relaxation_factor)):
+        raise ValueError(f"relaxation_factor must be finite, got {relaxation_factor=}")
+    if not 0.0 <= float(relaxation_factor) <= 1.0:
+        raise ValueError(
+            f"relaxation_factor must be in [0, 1], got {relaxation_factor=}"
+        )
+
+    ### Handle meshes and settings with no smoothing work
+    if (
+        n_iter == 0
+        or relaxation_factor == 0.0
+        or mesh.n_points == 0
+        or mesh.n_cells == 0
+        or mesh.n_manifold_dims == 0
+    ):
+        return field
+
+    ### Recompute geometric weights from the current points
+    # Geometry caches may belong to an autograd graph that a caller has already
+    # consumed. A cache-free view avoids reusing those stale graph tensors while
+    # retaining gradients to ``mesh.points``.
+    geometry_mesh = mesh.strip_caches()
+    edge_weights, edges = _compute_edge_weights(geometry_mesh)
+
+    trailing_singletons = (1,) * (field.ndim - 1)
+    weight_sum = torch.zeros(mesh.n_points, dtype=field.dtype, device=field.device)
+    weight_sum = weight_sum.index_add(0, edges[:, 0], edge_weights)
+    weight_sum = weight_sum.index_add(0, edges[:, 1], edge_weights)
+    safe_weight_sum = weight_sum.clamp_min(safe_eps(field.dtype)).reshape(
+        (mesh.n_points, *trailing_singletons)
+    )
+
+    ### Apply normalized weighted-neighbor iterations
+    result = field
+    for _ in range(n_iter):
+        laplacian = _apply_cotan_laplacian_operator(
+            mesh.n_points, edges, edge_weights, result
+        )
+        result = result + relaxation_factor * laplacian / safe_weight_sum
+
+    return result
 
 
 def smooth_laplacian(

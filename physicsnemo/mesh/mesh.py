@@ -33,7 +33,7 @@ from typing import (
 
 import torch
 import torch.nn.functional as F
-from jaxtyping import Float
+from jaxtyping import Bool, Float
 from tensordict import NonTensorData, TensorDict, tensorclass
 
 from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
@@ -46,6 +46,7 @@ from physicsnemo.mesh.transformations.geometric import (
     transform,
     translate,
 )
+from physicsnemo.mesh.transformations.normal_update import NormalUpdateDiagnostics
 from physicsnemo.mesh.utilities._padding import _pad_by_tiling_last, _pad_with_value
 from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
@@ -2709,6 +2710,57 @@ class Mesh:
             radius=radius,
             point_weights=point_weights,
             kernel=kernel,
+            implementation=implementation,
+        )
+
+    def guarded_normal_update(
+        self,
+        direction: str
+        | tuple[str, ...]
+        | Float[torch.Tensor, "n_points n_spatial_dims"],
+        *,
+        point_weights: str
+        | tuple[str, ...]
+        | Bool[torch.Tensor, " n_points"]
+        | Float[torch.Tensor, " n_points"]
+        | None = None,
+        smoothing_iterations: int = 5,
+        smoothing_relaxation: float = 0.2,
+        max_step: float | None = None,
+        backtracking_factor: float = 0.5,
+        max_backtracks: int = 8,
+        validation_tolerance: float | None = None,
+        min_cell_measure_ratio: float = 1.0e-6,
+        implementation: Literal["torch"] | None = None,
+    ) -> tuple["Mesh", NormalUpdateDiagnostics]:
+        """Apply a guarded normal-only update to this codimension-one mesh.
+
+        This convenience wrapper delegates to
+        :func:`physicsnemo.mesh.transformations.guarded_normal_update`. The
+        supplied ``direction`` includes both sign and step magnitude.
+
+        Returns
+        -------
+        tuple[Mesh, NormalUpdateDiagnostics]
+            Accepted mesh and validation/backtracking diagnostics. If every
+            trial is rejected, the original mesh is returned and
+            ``diagnostics.accepted`` is ``False``.
+        """
+        from physicsnemo.mesh.transformations.normal_update import (
+            guarded_normal_update,
+        )
+
+        return guarded_normal_update(
+            self,
+            direction,
+            point_weights=point_weights,
+            smoothing_iterations=smoothing_iterations,
+            smoothing_relaxation=smoothing_relaxation,
+            max_step=max_step,
+            backtracking_factor=backtracking_factor,
+            max_backtracks=max_backtracks,
+            validation_tolerance=validation_tolerance,
+            min_cell_measure_ratio=min_cell_measure_ratio,
             implementation=implementation,
         )
 

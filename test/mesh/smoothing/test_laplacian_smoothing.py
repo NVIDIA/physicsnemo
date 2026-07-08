@@ -24,7 +24,7 @@ import pytest
 import torch
 
 from physicsnemo.mesh import Mesh
-from physicsnemo.mesh.smoothing import smooth_laplacian
+from physicsnemo.mesh.smoothing import smooth_laplacian, smooth_point_field
 
 ### Test Utilities ###
 
@@ -784,6 +784,181 @@ def test_negative_convergence():
 
     with pytest.raises(ValueError, match="convergence must be >= 0"):
         smooth_laplacian(mesh, convergence=-0.01)
+
+
+### J. Point Field Smoothing Tests ###
+
+
+def test_smooth_point_field_supports_vector_fields(device):
+    """Vector fields use the same normalized neighbor averaging per component."""
+    mesh = Mesh(
+        points=torch.tensor([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]], device=device),
+        cells=torch.tensor([[0, 1], [1, 2]], device=device),
+    )
+    field = torch.tensor([[0.0, 0.0], [2.0, 4.0], [0.0, 0.0]], device=device)
+
+    result = smooth_point_field(mesh, field, n_iter=1, relaxation_factor=0.5)
+
+    torch.testing.assert_close(
+        result, torch.tensor([[1.0, 2.0]], device=device).expand(3, -1)
+    )
+    assert result.device.type == device
+
+
+def test_smooth_point_field_preserves_isolated_point_cloud_fields():
+    """A mesh with points but no cells has no usable neighbors to smooth."""
+    mesh = Mesh(
+        points=torch.tensor([[0.0, 0.0, 0.0], [1.0, 2.0, 3.0]]),
+        cells=torch.empty((0, 1), dtype=torch.int64),
+    )
+    field = torch.arange(8.0).reshape(2, 2, 2)
+
+    result = smooth_point_field(mesh, field, n_iter=3, relaxation_factor=0.5)
+
+    assert result is field
+
+
+def test_smooth_point_field_preserves_zero_manifold_fields():
+    """Zero-dimensional cells have no edges across which to smooth."""
+    mesh = Mesh(
+        points=torch.tensor([[0.0], [1.0]]),
+        cells=torch.tensor([[0], [1]]),
+    )
+    field = torch.tensor([2.0, -1.0])
+
+    result = smooth_point_field(mesh, field, n_iter=3, relaxation_factor=0.5)
+
+    assert result is field
+
+
+def test_smooth_point_field_is_differentiable_in_field_and_geometry(device):
+    """Cotangent smoothing retains gradients through values and mesh points."""
+    points = torch.tensor(
+        [
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [1.5, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ],
+        dtype=torch.float64,
+        device=device,
+        requires_grad=True,
+    )
+    mesh = Mesh(
+        points=points,
+        cells=torch.tensor([[0, 1, 2], [0, 2, 3]], device=device),
+    )
+    field = torch.tensor(
+        [0.0, 2.0, -1.0, 3.0],
+        dtype=torch.float64,
+        device=device,
+        requires_grad=True,
+    )
+
+    smooth_point_field(mesh, field, n_iter=1, relaxation_factor=0.2)[0].backward()
+
+    assert field.grad is not None and torch.isfinite(field.grad).all()
+    assert points.grad is not None and torch.isfinite(points.grad).all()
+    assert points.grad.abs().sum() > 0.0
+
+
+def test_smooth_point_field_recomputes_weights_after_backward():
+    points = torch.tensor(
+        [
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [1.5, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ],
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    mesh = Mesh(points=points, cells=torch.tensor([[0, 1, 2], [0, 2, 3]]))
+    field = torch.tensor([0.0, 2.0, -1.0, 3.0], dtype=torch.float64)
+
+    smooth_point_field(mesh, field, n_iter=1).sum().backward()
+    points.grad = None
+    smooth_point_field(mesh, field, n_iter=1).square().sum().backward()
+
+    assert points.grad is not None
+    assert torch.isfinite(points.grad).all()
+    assert points.grad.abs().sum() > 0.0
+
+
+def test_smooth_point_field_preserves_an_isolated_vertex():
+    mesh = Mesh(
+        points=torch.tensor([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [10.0, 10.0]]),
+        cells=torch.tensor([[0, 1], [1, 2]]),
+    )
+    field = torch.tensor([0.0, 2.0, 0.0, 17.0])
+
+    result = smooth_point_field(mesh, field, n_iter=1, relaxation_factor=0.5)
+
+    torch.testing.assert_close(result, torch.tensor([1.0, 1.0, 1.0, 17.0]))
+
+
+def test_smooth_point_field_compiles_fullgraph():
+    points = torch.tensor(
+        [
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [1.5, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ],
+        dtype=torch.float64,
+    )
+    cells = torch.tensor([[0, 1, 2], [0, 2, 3]])
+    field = torch.tensor([0.0, 2.0, -1.0, 3.0], dtype=torch.float64)
+
+    def smooth(points, cells, field):
+        mesh = Mesh(points=points, cells=cells)
+        return smooth_point_field(mesh, field, n_iter=2, relaxation_factor=0.2)
+
+    expected = smooth(points, cells, field)
+    compiled = torch.compile(smooth, backend="eager", fullgraph=True)
+
+    torch.testing.assert_close(compiled(points, cells, field), expected)
+
+
+def test_smooth_point_field_connected_no_ops_return_input():
+    mesh = Mesh(
+        points=torch.tensor([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]]),
+        cells=torch.tensor([[0, 1], [1, 2]]),
+    )
+    field = torch.tensor([0.0, 2.0, 0.0])
+
+    assert smooth_point_field(mesh, field, n_iter=0) is field
+    assert smooth_point_field(mesh, field, relaxation_factor=0.0) is field
+
+
+def test_smooth_point_field_validates_arguments():
+    mesh = Mesh(
+        points=torch.tensor([[0.0, 0.0], [1.0, 0.0]]),
+        cells=torch.tensor([[0, 1]]),
+    )
+
+    with pytest.raises(TypeError, match="field must be a torch.Tensor"):
+        smooth_point_field(mesh, [0.0, 1.0])
+    with pytest.raises(ValueError, match="leading shape"):
+        smooth_point_field(mesh, torch.tensor(1.0))
+    with pytest.raises(ValueError, match="leading shape"):
+        smooth_point_field(mesh, torch.zeros(3))
+    with pytest.raises(TypeError, match="same dtype"):
+        smooth_point_field(mesh, torch.zeros(2, dtype=torch.float64))
+    with pytest.raises(TypeError, match="n_iter must be an integer"):
+        smooth_point_field(mesh, torch.zeros(2), n_iter=True)
+    with pytest.raises(ValueError, match="n_iter must be >= 0"):
+        smooth_point_field(mesh, torch.zeros(2), n_iter=-1)
+    with pytest.raises(ValueError, match="relaxation_factor must be in"):
+        smooth_point_field(mesh, torch.zeros(2), relaxation_factor=1.1)
+    with pytest.raises(TypeError, match="finite real scalar"):
+        smooth_point_field(mesh, torch.zeros(2), relaxation_factor=True)
+    with pytest.raises(ValueError, match="must be finite"):
+        smooth_point_field(mesh, torch.zeros(2), relaxation_factor=float("nan"))
+
+    half_mesh = Mesh(points=mesh.points.half(), cells=mesh.cells)
+    with pytest.raises(TypeError, match="torch.float32 or torch.float64"):
+        smooth_point_field(half_mesh, torch.zeros(2, dtype=torch.float16))
 
 
 if __name__ == "__main__":
