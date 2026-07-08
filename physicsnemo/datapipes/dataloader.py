@@ -186,6 +186,9 @@ class DataLoader:
         self.shuffle = shuffle
         self.drop_last = drop_last
         self.prefetch_factor = prefetch_factor
+        # Depth restored by enable_prefetch(); a loader constructed with
+        # prefetch_factor=0 re-enables at the default depth of 2.
+        self._saved_prefetch_factor = prefetch_factor if prefetch_factor > 0 else 2
         self.num_streams = num_streams
         self.use_streams = use_streams and torch.cuda.is_available()
         self._seed = seed
@@ -611,29 +614,41 @@ class DataLoader:
             self.dataset.set_epoch(epoch)
 
     def enable_prefetch(self) -> None:
+        """Re-enable prefetching after :meth:`disable_prefetch`.
+
+        Restores the threaded prefetch pump on every platform; CUDA
+        streams are re-enabled only when CUDA is available (they are an
+        optional accelerator on top of the threaded producer). A loader
+        constructed with ``prefetch_factor=0`` is enabled at the default
+        depth of 2. Takes effect at the next iteration.
         """
-        Enable stream-based prefetching.
-
-        Raises
-        ------
-        RuntimeError
-            If CUDA is not available.
-        """
-        if not torch.cuda.is_available():
-            raise RuntimeError(
-                "CUDA is not available, cannot enable stream prefetching"
-            )
-
-        if not self._streams:
-            for _ in range(self.num_streams):
-                self._streams.append(torch.cuda.Stream())
-
-        self.use_streams = True
+        if self.prefetch_factor == 0:
+            self.prefetch_factor = self._saved_prefetch_factor
+        if torch.cuda.is_available():
+            if not self._streams:
+                for _ in range(self.num_streams):
+                    self._streams.append(torch.cuda.Stream())
+            self.use_streams = True
 
     def disable_prefetch(self) -> None:
-        """Disable prefetching (useful for debugging)."""
+        """Return to fully synchronous iteration (useful for debugging).
+
+        Disables both the threaded prefetch pump (``prefetch_factor`` is
+        set to 0; the previous value is restored by
+        :meth:`enable_prefetch`) and the CUDA stream handoff. Takes
+        effect at the next iteration; an in-flight iterator is
+        unaffected.
+        """
+        if self.prefetch_factor > 0:
+            self._saved_prefetch_factor = self.prefetch_factor
+            self.prefetch_factor = 0
         self.use_streams = False
-        self.dataset.cancel_prefetch()
+        # Iterable datasets have no prefetch machinery to cancel;
+        # MultiDataset duck-types DatasetBase, so feature-detect rather
+        # than isinstance.
+        cancel = getattr(self.dataset, "cancel_prefetch", None)
+        if cancel is not None:
+            cancel()
 
     def __repr__(self) -> str:
         """

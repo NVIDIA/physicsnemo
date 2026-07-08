@@ -356,15 +356,17 @@ above is most effective when the reader pins its output.
 Prefetching can be toggled at runtime for debugging:
 
 ```python
-loader.disable_prefetch()   # drop CUDA streams (threaded pump still runs)
-loader.enable_prefetch()    # re-enable streams after debugging
+loader.disable_prefetch()   # fully synchronous: pump + streams off
+loader.enable_prefetch()    # restore prefetch (streams too, when CUDA)
 ```
 
-`use_streams=False` keeps the threaded producer but drops the CUDA
-stream handoff (the consumer copies and transforms on the default
-stream); for map-style datasets, `prefetch_factor=0` forces fully
-synchronous execution.  Iterable datasets use their separate
-main-thread-only generator path regardless of `prefetch_factor`.
+Toggles take effect at the next iteration.  The two halves can also be
+controlled independently at construction time: `use_streams=False` keeps
+the threaded producer but drops the CUDA stream handoff (the consumer
+copies and transforms on the default stream), while `prefetch_factor=0`
+disables the threaded pump for fully synchronous map-style execution.
+Iterable datasets use their separate main-thread-only generator path
+regardless of `prefetch_factor`.
 
 ## RNG and reproducibility
 
