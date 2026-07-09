@@ -1,0 +1,487 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Warp-accelerated uniform surface remeshing."""
+
+from __future__ import annotations
+
+import math
+from typing import TYPE_CHECKING
+
+import torch
+import warp as wp
+
+from physicsnemo.core.function_spec import FunctionSpec
+from physicsnemo.mesh.utilities._index_tuple_ops import unique_index_tuples
+from physicsnemo.nn.functional import farthest_point_sampling
+
+from ._config import WarpRemeshOptions
+from ._warp_kernels import (
+    accumulate_vertex_areas,
+    assign_vertices,
+    project_centroids_to_surface,
+    update_centroids,
+)
+
+if TYPE_CHECKING:
+    from physicsnemo.mesh.mesh import Mesh
+
+wp.config.log_level = wp.LOG_WARNING
+wp.init()
+
+_DEFAULT_ITERATIONS = 4
+_MAX_MANIFOLD_CLEANUP_STEPS = 4
+
+
+def _wp_view(tensor: torch.Tensor, dtype):  # noqa: ANN001, ANN202
+    """Return a zero-copy Warp launch descriptor for a detached tensor."""
+    return wp.from_torch(
+        tensor.detach(),
+        dtype=dtype,
+        return_ctype=True,
+        requires_grad=False,
+    )
+
+
+def _select_fps_centroids(
+    points: torch.Tensor,
+    vertex_areas: torch.Tensor,
+    n_clusters: int,
+    options: WarpRemeshOptions,
+) -> torch.Tensor:
+    """Select high-quality seeds with FPS over an area-weighted candidate set."""
+    candidate_count = min(
+        points.shape[0], options.farthest_point_oversampling * n_clusters
+    )
+    generator = torch.Generator(device=points.device).manual_seed(0)
+    # A tiny positive floor keeps isolated input vertices selectable only when
+    # the requested candidate count leaves no alternative.
+    sampling_weights = vertex_areas.clamp_min(torch.finfo(torch.float32).tiny)
+    candidate_indices = torch.multinomial(
+        sampling_weights,
+        candidate_count,
+        replacement=False,
+        generator=generator,
+    )
+    candidates = points[candidate_indices]
+    selected = farthest_point_sampling(
+        candidates,
+        n_clusters,
+        random_start=False,
+        implementation="warp",
+    )
+    return candidates[selected].clone()
+
+
+def _voxel_keys(
+    points: torch.Tensor,
+    lower_bound: torch.Tensor,
+    upper_bound: torch.Tensor,
+    cell_width: float,
+) -> torch.Tensor:
+    coordinates = torch.floor((points - lower_bound) / cell_width).to(torch.int64)
+    dimensions = (
+        torch.floor((upper_bound - lower_bound) / cell_width).to(torch.int64) + 1
+    )
+    return (coordinates[:, 0] * dimensions[1] + coordinates[:, 1]) * dimensions[
+        2
+    ] + coordinates[:, 2]
+
+
+def _voxel_representatives(
+    points: torch.Tensor,
+    lower_bound: torch.Tensor,
+    upper_bound: torch.Tensor,
+    cell_width: float,
+) -> torch.Tensor:
+    """Return one source vertex index from each occupied spatial voxel."""
+    keys = _voxel_keys(points, lower_bound, upper_bound, cell_width)
+    sorted_keys, order = torch.sort(keys)
+    first = torch.ones(points.shape[0], dtype=torch.bool, device=points.device)
+    first[1:] = sorted_keys[1:] != sorted_keys[:-1]
+    return order[first]
+
+
+def _select_stratified_centroids(
+    points: torch.Tensor,
+    vertex_areas: torch.Tensor,
+    n_clusters: int,
+    total_area: float,
+    options: WarpRemeshOptions,
+) -> torch.Tensor:
+    """Select large seed sets with an O(N log N) spatial stratification.
+
+    One source point per occupied, surface-area-scaled voxel avoids the
+    quadratic cost of FPS for large target meshes. A small deterministic fill
+    or reduction produces the exact requested seed count.
+    """
+    lower_bound = points.amin(dim=0)
+    upper_bound = points.amax(dim=0)
+    cell_width = max(
+        options.voxel_width_scale * math.sqrt(total_area / n_clusters),
+        torch.finfo(torch.float32).tiny,
+    )
+    representatives = _voxel_representatives(
+        points, lower_bound, upper_bound, cell_width
+    )
+    generator = torch.Generator(device=points.device).manual_seed(0)
+
+    if representatives.numel() > n_clusters:
+        selection = torch.randperm(
+            representatives.numel(), device=points.device, generator=generator
+        )[:n_clusters]
+        representatives = representatives[selection]
+    elif representatives.numel() < n_clusters:
+        # Fill sparse voxelizations from vertices not already selected. The
+        # positive floor also covers isolated vertices in malformed-but-safe
+        # inputs without ever sampling a representative twice.
+        sampling_weights = vertex_areas.clamp_min(torch.finfo(torch.float32).tiny)
+        sampling_weights[representatives] = 0.0
+        fill = torch.multinomial(
+            sampling_weights,
+            n_clusters - representatives.numel(),
+            replacement=False,
+            generator=generator,
+        )
+        representatives = torch.cat([representatives, fill])
+    return points[representatives].clone()
+
+
+def _deduplicate_faces(
+    mapped_cells: torch.Tensor,
+    n_clusters: int,
+) -> torch.Tensor:
+    """Drop collapsed faces and orientation-independent duplicates."""
+    distinct = (
+        (mapped_cells[:, 0] != mapped_cells[:, 1])
+        & (mapped_cells[:, 1] != mapped_cells[:, 2])
+        & (mapped_cells[:, 0] != mapped_cells[:, 2])
+    )
+    mapped_cells = mapped_cells[distinct]
+    if mapped_cells.numel() == 0:
+        return mapped_cells
+
+    canonical = torch.sort(mapped_cells, dim=1).values
+    unique_faces, inverse = unique_index_tuples(
+        canonical,
+        n_clusters,
+        return_inverse=True,
+    )
+    n_unique = unique_faces.shape[0]
+    source_indices = torch.arange(
+        mapped_cells.shape[0], device=mapped_cells.device, dtype=torch.int64
+    )
+    first = torch.full(
+        (n_unique,),
+        mapped_cells.shape[0],
+        device=mapped_cells.device,
+        dtype=torch.int64,
+    )
+    first.scatter_reduce_(0, inverse, source_indices, reduce="amin")
+    return mapped_cells[first]
+
+
+def _remove_nonmanifold_faces(
+    points: torch.Tensor,
+    cells: torch.Tensor,
+    n_points: int,
+) -> torch.Tensor:
+    """Remove redundant faces from edges incident to more than two faces.
+
+    Spatial clustering can very occasionally reconstruct an overlapping local
+    patch. Such a patch appears as a small set of edges with three or more
+    incident faces. For each over-subscribed edge, this cleanup prefers a face
+    shared by the largest number of problematic edges, then removes the
+    smallest-area candidate. Ordinary manifold outputs exit after one edge
+    count pass without changing connectivity.
+    """
+    for _ in range(_MAX_MANIFOLD_CLEANUP_STEPS):
+        n_faces = cells.shape[0]
+        edges = torch.cat([cells[:, [0, 1]], cells[:, [1, 2]], cells[:, [2, 0]]], dim=0)
+        face_indices = torch.arange(
+            n_faces, device=cells.device, dtype=torch.int64
+        ).repeat(3)
+        canonical_edges = torch.sort(edges, dim=1).values
+        unique_edges, inverse, counts = unique_index_tuples(
+            canonical_edges,
+            n_points,
+            return_inverse=True,
+            return_counts=True,
+        )
+        bad_incidence = counts[inverse] > 2
+        if not bool(bad_incidence.any()):
+            return cells
+
+        # Favor one face that resolves several problematic edges at once.
+        face_bad_edge_counts = torch.zeros(
+            n_faces, dtype=torch.int32, device=cells.device
+        )
+        face_bad_edge_counts.scatter_add_(
+            0, face_indices, bad_incidence.to(torch.int32)
+        )
+        best_score = torch.zeros(
+            unique_edges.shape[0], dtype=torch.int32, device=cells.device
+        )
+        best_score.scatter_reduce_(
+            0,
+            inverse,
+            face_bad_edge_counts[face_indices],
+            reduce="amax",
+        )
+        candidates = bad_incidence & (
+            face_bad_edge_counts[face_indices] == best_score[inverse]
+        )
+
+        vertices = points[cells]
+        face_areas = torch.linalg.vector_norm(
+            torch.linalg.cross(
+                vertices[:, 1] - vertices[:, 0],
+                vertices[:, 2] - vertices[:, 0],
+                dim=1,
+            ),
+            dim=1,
+        )
+        candidate_areas = torch.where(
+            candidates,
+            face_areas[face_indices],
+            torch.full_like(face_areas[face_indices], torch.inf),
+        )
+        smallest_area = torch.full(
+            (unique_edges.shape[0],),
+            torch.inf,
+            dtype=face_areas.dtype,
+            device=cells.device,
+        )
+        smallest_area.scatter_reduce_(0, inverse, candidate_areas, reduce="amin")
+        candidates &= candidate_areas == smallest_area[inverse]
+
+        # Break exact-area ties by face index so each problematic edge chooses
+        # one face deterministically.
+        candidate_faces = torch.where(
+            candidates,
+            face_indices,
+            torch.full_like(face_indices, n_faces),
+        )
+        selected_faces = torch.full(
+            (unique_edges.shape[0],),
+            n_faces,
+            dtype=torch.int64,
+            device=cells.device,
+        )
+        selected_faces.scatter_reduce_(0, inverse, candidate_faces, reduce="amin")
+        remove = torch.zeros(n_faces, dtype=torch.bool, device=cells.device)
+        remove[selected_faces[counts > 2]] = True
+        cells = cells[~remove]
+        if cells.numel() == 0:
+            raise RuntimeError("manifold cleanup removed every remeshed face")
+        # Removing one incident face resolves every edge with count three.
+        # Only higher-order overlaps require another counting pass.
+        if not bool((counts > 3).any()):
+            return cells
+
+    return cells
+
+
+def _build_output_mesh(
+    source_mesh: "Mesh",
+    source_points: torch.Tensor,
+    centroids: torch.Tensor,
+    labels: torch.Tensor,
+    n_clusters: int,
+) -> "Mesh":
+    """Reconstruct, clean, and compact triangle connectivity on the GPU."""
+    from physicsnemo.mesh.mesh import Mesh
+
+    mapped_cells = labels.to(torch.int64)[source_mesh.cells.to(torch.int64)]
+    output_cells = _deduplicate_faces(mapped_cells, n_clusters)
+    if output_cells.numel() == 0:
+        raise RuntimeError(
+            "Warp remeshing collapsed every input face; request more clusters "
+            "or provide a nondegenerate triangle surface."
+        )
+
+    # Reject geometric degeneracies after centroid movement and projection.
+    vertices = centroids[output_cells]
+    doubled_areas = torch.linalg.vector_norm(
+        torch.linalg.cross(
+            vertices[:, 1] - vertices[:, 0],
+            vertices[:, 2] - vertices[:, 0],
+            dim=1,
+        ),
+        dim=1,
+    )
+    extent = torch.linalg.vector_norm(
+        source_points.amax(dim=0) - source_points.amin(dim=0)
+    )
+    area_tolerance = torch.finfo(torch.float32).eps * torch.clamp(
+        extent.square(), min=torch.finfo(torch.float32).tiny
+    )
+    output_cells = output_cells[doubled_areas > area_tolerance]
+    if output_cells.numel() == 0:
+        raise RuntimeError(
+            "Warp remeshing produced only zero-area faces; request more clusters."
+        )
+
+    output_cells = _remove_nonmanifold_faces(
+        centroids,
+        output_cells,
+        n_clusters,
+    )
+
+    used_centroids, compact_cells = torch.unique(
+        output_cells.reshape(-1),
+        sorted=True,
+        return_inverse=True,
+    )
+    output_points = centroids[used_centroids].to(dtype=source_mesh.points.dtype)
+    output_cells = compact_cells.reshape(-1, 3).to(dtype=torch.int64)
+    return Mesh(
+        points=output_points,
+        cells=output_cells,
+        global_data=source_mesh.global_data.clone(),
+    )
+
+
+@torch.no_grad()
+def remesh_warp(
+    mesh: "Mesh",
+    n_clusters: int,
+    *,
+    max_iterations: int | None = None,
+    options: WarpRemeshOptions,
+) -> "Mesh":
+    """Remesh a CUDA triangle surface with Warp-accelerated CVT clustering."""
+    iterations = _DEFAULT_ITERATIONS if max_iterations is None else max_iterations
+    points = mesh.points.detach().to(dtype=torch.float32).contiguous()
+    cells = mesh.cells.detach().to(dtype=torch.int32).contiguous()
+    flat_cells = cells.reshape(-1).contiguous()
+    n_points = points.shape[0]
+
+    vertex_areas = torch.zeros(n_points, dtype=torch.float32, device=points.device)
+    wp_launch_device, wp_launch_stream = FunctionSpec.warp_launch_context(points)
+    with FunctionSpec.warp_stream_scope(wp_launch_stream):
+        wp.launch(
+            accumulate_vertex_areas,
+            dim=cells.shape[0],
+            inputs=[
+                _wp_view(points, wp.vec3f),
+                _wp_view(cells, wp.int32),
+                _wp_view(vertex_areas, wp.float32),
+            ],
+            device=wp_launch_device,
+            stream=wp_launch_stream,
+        )
+
+    total_area = float(vertex_areas.sum().item())
+    if not math.isfinite(total_area) or total_area <= 0.0:
+        raise ValueError("mesh must have positive finite surface area")
+
+    if n_clusters <= options.farthest_point_threshold:
+        centroids = _select_fps_centroids(points, vertex_areas, n_clusters, options)
+    else:
+        centroids = _select_stratified_centroids(
+            points, vertex_areas, n_clusters, total_area, options
+        )
+
+    labels = torch.empty(n_points, dtype=torch.int32, device=points.device)
+    centroid_sums = torch.zeros(
+        n_clusters, 3, dtype=torch.float32, device=points.device
+    )
+    centroid_areas = torch.zeros(n_clusters, dtype=torch.float32, device=points.device)
+    search_radius = max(
+        options.search_radius_scale * math.sqrt(total_area / n_clusters),
+        torch.finfo(torch.float32).tiny,
+    )
+
+    with FunctionSpec.warp_stream_scope(wp_launch_stream):
+        wp_points = wp.from_torch(points, dtype=wp.vec3f)
+        wp_centroids = wp.from_torch(centroids, dtype=wp.vec3f)
+        centroid_grid = wp.HashGrid(
+            dim_x=options.hash_grid_resolution,
+            dim_y=options.hash_grid_resolution,
+            dim_z=options.hash_grid_resolution,
+            device=wp_centroids.device,
+        )
+        centroid_grid.reserve(n_clusters)
+
+        assignment_inputs = [
+            centroid_grid.id,
+            _wp_view(points, wp.vec3f),
+            _wp_view(centroids, wp.vec3f),
+            _wp_view(vertex_areas, wp.float32),
+            _wp_view(labels, wp.int32),
+            _wp_view(centroid_sums, wp.float32),
+            _wp_view(centroid_areas, wp.float32),
+            search_radius,
+        ]
+
+        for _ in range(iterations):
+            centroid_sums.zero_()
+            centroid_areas.zero_()
+            centroid_grid.build(wp_centroids, radius=search_radius)
+            wp.launch(
+                assign_vertices,
+                dim=n_points,
+                inputs=[
+                    *assignment_inputs,
+                    1,
+                ],
+                device=wp_launch_device,
+                stream=wp_launch_stream,
+            )
+            wp.launch(
+                update_centroids,
+                dim=n_clusters,
+                inputs=[
+                    _wp_view(centroids, wp.vec3f),
+                    _wp_view(centroid_sums, wp.float32),
+                    _wp_view(centroid_areas, wp.float32),
+                ],
+                device=wp_launch_device,
+                stream=wp_launch_stream,
+            )
+
+        # A final assignment reflects the last centroid update and supplies the
+        # labels used to reconstruct topology.
+        centroid_grid.build(wp_centroids, radius=search_radius)
+        wp.launch(
+            assign_vertices,
+            dim=n_points,
+            inputs=[
+                *assignment_inputs,
+                0,
+            ],
+            device=wp_launch_device,
+            stream=wp_launch_stream,
+        )
+
+        source_surface = wp.Mesh(
+            points=wp_points,
+            indices=wp.from_torch(flat_cells, dtype=wp.int32),
+        )
+        wp.launch(
+            project_centroids_to_surface,
+            dim=n_clusters,
+            inputs=[
+                source_surface.id,
+                _wp_view(centroids, wp.vec3f),
+                float(1.0e30),
+            ],
+            device=wp_launch_device,
+            stream=wp_launch_stream,
+        )
+
+    return _build_output_mesh(mesh, points, centroids, labels, n_clusters)

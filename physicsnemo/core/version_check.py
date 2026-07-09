@@ -231,6 +231,10 @@ _PACKAGE_HINTS: Dict[str, str] = {
         "pyvista",
         group="mesh-extras",
     ),
+    "pyacvd": _format_install_hint(
+        "pyacvd",
+        group="mesh-extras",
+    ),
     "vtk": _format_install_hint(
         "vtk",
         group="model-extras",

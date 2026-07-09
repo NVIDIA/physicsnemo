@@ -89,7 +89,8 @@ performance benefits.
   (interpolating) schemes
 - **Smoothing**: [Laplacian smoothing](https://en.wikipedia.org/wiki/Laplacian_smoothing)
   with feature preservation
-- **Remeshing**: Uniform remeshing via clustering (dimension-agnostic)
+- **Remeshing**: Uniform 3D triangle-surface remeshing with CUDA Warp and CPU
+  PyACVD backends
 - **Repair**: Remove duplicates, fix orientation, fill holes, clean topology
 - **Tessellation**: Triangulate polygon soups into simplicial meshes (convex
   fan + [ear clipping](https://en.wikipedia.org/wiki/Polygon_triangulation) for
@@ -303,7 +304,7 @@ Comprehensive overview of PhysicsNeMo-Mesh capabilities:
 | **Smoothing** | | |
 | Laplacian smoothing | ✅ | |
 | **Remeshing** | | |
-| Uniform remeshing | ✅ | Clustering-based |
+| Uniform remeshing | ✅ | CUDA Warp + CPU PyACVD |
 | **Tessellation** | | |
 | Polygon-soup triangulation | ✅ | Convex fan + ear-clip; `Mesh.from_polygons` |
 | **Spatial Queries** | | |
@@ -376,6 +377,27 @@ refined = mesh.subdivide(levels=2, filter="linear")    # Topology only
 smooth = mesh.subdivide(levels=2, filter="loop")       # C² continuous
 interp = mesh.subdivide(levels=2, filter="butterfly")  # Interpolating
 ```
+
+### Remeshing
+
+```python
+from physicsnemo.mesh.remeshing import WarpRemeshOptions
+
+# CUDA meshes dispatch to the Warp backend; CPU meshes dispatch to PyACVD.
+coarse = mesh.to("cuda").remesh(n_clusters=1_000)
+
+# Warp tuning values are runtime controls and do not recompile the kernels.
+tuned = mesh.to("cuda").remesh(
+    n_clusters=1_000,
+    warp_options=WarpRemeshOptions(search_radius_scale=2.0),
+)
+
+# Select a backend explicitly for controlled comparisons.
+reference = mesh.remesh(n_clusters=1_000, implementation="pyacvd")
+```
+
+Remeshing currently supports triangle surfaces embedded in 3D. It creates new
+topology, so point and cell data are discarded; global data is preserved.
 
 ### Discrete Calculus
 

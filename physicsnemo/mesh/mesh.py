@@ -14,6 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# ``tensorclass`` adds a class-scoped ``float`` method. Qualify scalar
+# annotations that must remain resolvable under Python's deferred lookup.
+import builtins
 import math
 import types
 from pathlib import Path
@@ -51,6 +54,7 @@ if TYPE_CHECKING:
     import pyvista
 
     from physicsnemo.mesh.neighbors._adjacency import Adjacency
+    from physicsnemo.mesh.remeshing._config import WarpRemeshOptions
 
 
 # A field on a `Mesh` is "associated with" either points (e.g. a per-vertex
@@ -3331,6 +3335,54 @@ class Mesh:
         from physicsnemo.mesh.validation import compute_mesh_statistics
 
         return compute_mesh_statistics(self)
+
+    def remesh(
+        self,
+        n_clusters: builtins.int,
+        *,
+        max_iterations: builtins.int | None = None,
+        warp_options: "WarpRemeshOptions | None" = None,
+        implementation: Literal["warp", "pyacvd"] | None = None,
+    ) -> "Mesh":
+        """Uniformly remesh a triangle surface.
+
+        CUDA meshes use the Warp implementation by default; CPU meshes use
+        PyACVD. Both backends create new topology with approximately
+        ``n_clusters`` vertices and discard point and cell data.
+
+        Parameters
+        ----------
+        n_clusters : int
+            Target output vertex count.
+        max_iterations : int | None, optional
+            Maximum centroid-relaxation iterations. ``None`` selects the
+            backend-tuned default.
+        warp_options : WarpRemeshOptions | None, optional
+            Warp-specific performance and initialization controls.
+        implementation : {"warp", "pyacvd"} | None, optional
+            Explicit backend. ``None`` dispatches from this mesh's device.
+
+        Returns
+        -------
+        Mesh
+            Remeshed triangle surface on the same device and with the same
+            point dtype as this mesh.
+
+        Notes
+        -----
+        Remeshing is non-differentiable. Global data is preserved, while point
+        and cell data are discarded because their associations no longer match
+        the reconstructed topology.
+        """
+        from physicsnemo.mesh.remeshing import remesh
+
+        return remesh(
+            self,
+            n_clusters,
+            max_iterations=max_iterations,
+            warp_options=warp_options,
+            implementation=implementation,
+        )
 
     def subdivide(
         self,

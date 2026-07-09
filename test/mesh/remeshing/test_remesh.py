@@ -49,6 +49,20 @@ def test_remesh_preserves_dtype():
     assert not torch.is_floating_point(out.cells)
 
 
+def test_remesh_field_data_contract():
+    """Topology-associated data is dropped while global data is preserved."""
+    mesh = sphere_icosahedral.load(subdivisions=2)
+    mesh.point_data["temperature"] = torch.ones(mesh.n_points)
+    mesh.cell_data["pressure"] = torch.ones(mesh.n_cells)
+    mesh.global_data["case_id"] = torch.tensor(11)
+
+    out = remesh(mesh, n_clusters=40, implementation="pyacvd")
+
+    assert len(out.point_data.keys(include_nested=True, leaves_only=True)) == 0
+    assert len(out.cell_data.keys(include_nested=True, leaves_only=True)) == 0
+    assert out.global_data["case_id"].item() == 11
+
+
 def test_remesh_rejects_non_surface():
     """remesh guards against non-2D-in-3D inputs with a clear NotImplementedError
     instead of a confusing downstream pyacvd failure."""
