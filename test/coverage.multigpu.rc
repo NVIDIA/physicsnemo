@@ -6,7 +6,7 @@
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,28 +14,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Transformations for simplicial meshes.
+# Multi-GPU stream coverage.  The measured data is merged into the canonical
+# coverage report, so [run] must stay combine-compatible with
+# test/coverage.pytest.rc: same `branch` setting, same `source`, and the same
+# absolute-path recording (all CI jobs share the container workspace path).
+# The additions below only make measurement safe across torchrun ranks and
+# dynamically spawned worker processes.
 
-Linear and affine operations are exported directly. Nonlinear operations are
-grouped under :mod:`physicsnemo.mesh.transformations.deform`.
-"""
+[run]
+branch = True
+concurrency =
+    multiprocessing
+    thread
+data_file = .coverage.pytest
+parallel = True
+patch =
+    subprocess
+sigterm = True
+source = physicsnemo
 
-from physicsnemo.mesh.transformations import deform
-from physicsnemo.mesh.transformations.geometric import (
-    rotate,
-    rotation_matrix,
-    scale,
-    scale_matrix,
-    transform,
-    translate,
-)
-
-__all__ = [
-    "deform",
-    "rotate",
-    "rotation_matrix",
-    "scale",
-    "scale_matrix",
-    "transform",
-    "translate",
-]
+[report]
+ignore_errors = True

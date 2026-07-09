@@ -6,7 +6,7 @@
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,28 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Transformations for simplicial meshes.
+"""Warp backend for compact Shepard morphing."""
 
-Linear and affine operations are exported directly. Nonlinear operations are
-grouped under :mod:`physicsnemo.mesh.transformations.deform`.
-"""
-
-from physicsnemo.mesh.transformations import deform
-from physicsnemo.mesh.transformations.geometric import (
-    rotate,
-    rotation_matrix,
-    scale,
-    scale_matrix,
-    transform,
-    translate,
+from .op import (
+    compact_shepard_field_warp_impl,
+    morph_points_warp,
 )
 
 __all__ = [
-    "deform",
-    "rotate",
-    "rotation_matrix",
-    "scale",
-    "scale_matrix",
-    "transform",
-    "translate",
+    "compact_shepard_field_warp_impl",
+    "morph_points_warp",
 ]

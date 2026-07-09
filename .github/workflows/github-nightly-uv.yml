@@ -356,6 +356,25 @@ jobs:
         description: coverage baseline
         github-token: ${{ secrets.GITHUB_TOKEN }}
 
+    # Fold tonight's multi-GPU coverage (published by github-multigpu.yml,
+    # scheduled at 23:47 UTC so it finishes before this workflow) into the
+    # nightly report.  Restored AFTER the baseline save above so the
+    # canonical baseline slot stays CPU/single-GPU-only and PR jobs, which
+    # restore both slots, never double-count.  Restores fail open: a
+    # missing or still-publishing slot just means the report falls back to
+    # the previous night's multi-GPU lines, or lacks them entirely.
+    - name: Restore nightly dynamic multi-GPU coverage from cache
+      uses: actions/cache/restore@v5
+      with:
+        path: .coverage.pytest.multigpu-dynamic*
+        key: coverage-multigpu-dynamic-latest
+
+    - name: Restore nightly static multi-GPU coverage from cache
+      uses: actions/cache/restore@v5
+      with:
+        path: .coverage.pytest.multigpu-static*
+        key: coverage-multigpu-static-latest
+
     - name: Merge coverage reports
       run: |
         uv run --no-sync coverage combine

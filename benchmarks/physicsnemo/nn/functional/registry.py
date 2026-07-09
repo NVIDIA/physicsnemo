@@ -41,9 +41,11 @@ from physicsnemo.nn.functional.fourier_spectral import (
     ViewAsComplex,
 )
 from physicsnemo.nn.functional.geometry import (
+    DisplacePoints,
     FarthestPointSampling,
     MeshPoissonDiskSample,
     MeshToVoxelFraction,
+    MorphPoints,
     RayMeshIntersect,
     SignedDistanceField,
 )
@@ -80,6 +82,8 @@ FUNCTIONAL_SPECS: tuple[type[FunctionSpec], ...] = (
     UniformGridCurl,
     UniformGridLaplacian,
     # Geometry.
+    DisplacePoints,
+    MorphPoints,
     FarthestPointSampling,
     MeshPoissonDiskSample,
     MeshToVoxelFraction,

@@ -14,16 +14,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Geometric transformations for simplicial meshes.
+"""Linear and affine transformations for simplicial meshes.
 
-This module implements linear and affine transformations with intelligent
-cache handling. By default, all caches are invalidated; transformations
-explicitly opt-in to preserve/transform specific cache fields.
+This module implements geometric point transformations with intelligent cache
+handling. By default, all caches are invalidated; transformations explicitly
+opt in to preserve or update valid cache fields.
 
 Cached fields handled:
 - areas: point_data and cell_data
 - normals: point_data and cell_data
 - centroids: cell_data only
+
 """
 
 from collections.abc import Sequence
@@ -285,7 +286,7 @@ def rotation_matrix(
     device: torch.device,
     dtype: torch.dtype,
 ) -> Float[torch.Tensor, "n_spatial_dims n_spatial_dims"]:
-    r"""Build a rotation matrix from angle and axis.
+    """Build a rotation matrix from angle and axis.
 
     Parameters
     ----------
@@ -317,7 +318,7 @@ def scale_matrix(
     device: torch.device,
     dtype: torch.dtype,
 ) -> Float[torch.Tensor, "n_spatial_dims n_spatial_dims"]:
-    r"""Build a diagonal scale matrix from a factor specification.
+    """Build a diagonal scale matrix from a factor specification.
 
     Parameters
     ----------

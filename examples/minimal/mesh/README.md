@@ -43,7 +43,7 @@ pip install -e ".[mesh]"
 | Tutorial | Topic | What You'll Learn |
 |----------|-------|-------------------|
 | **1. Getting Started** | Core concepts | Mesh structure, data attachment, GPU acceleration |
-| **2. Operations** | Mesh manipulation | Transformations, subdivision, slicing, merging |
+| **2. Operations** | Mesh manipulation | Transformations, displacement, morphing, subdivision, slicing, merging |
 | **3. Discrete Calculus** | Mathematical operators | Gradients, divergence, curl, curvature |
 | **4. Neighbors & Spatial** | Queries | Adjacency, BVH, sampling, interpolation |
 | **5. Quality & Repair** | Mesh health | Validation, quality metrics, repair |
@@ -97,6 +97,8 @@ Learn the core concepts - a `Mesh` is just 5 fields: 2 for geometry, 3 for data.
 Learn mesh manipulation operations.
 
 - Geometric transformations (translate, rotate, scale, transform)
+- Dense point displacement from tensors or point-data fields
+- Sparse control-point morphing with single or multiple controls
 - Subdivision schemes (linear, Loop, Butterfly)
 - Slicing (slice_cells, slice_points)
 - Merging multiple meshes

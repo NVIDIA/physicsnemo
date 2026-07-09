@@ -14,28 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Transformations for simplicial meshes.
+"""Nonlinear deformation operations for simplicial meshes."""
 
-Linear and affine operations are exported directly. Nonlinear operations are
-grouped under :mod:`physicsnemo.mesh.transformations.deform`.
-"""
+from physicsnemo.mesh.transformations.deform.displace import displace
+from physicsnemo.mesh.transformations.deform.morph import morph
 
-from physicsnemo.mesh.transformations import deform
-from physicsnemo.mesh.transformations.geometric import (
-    rotate,
-    rotation_matrix,
-    scale,
-    scale_matrix,
-    transform,
-    translate,
-)
-
-__all__ = [
-    "deform",
-    "rotate",
-    "rotation_matrix",
-    "scale",
-    "scale_matrix",
-    "transform",
-    "translate",
-]
+__all__ = ["displace", "morph"]
