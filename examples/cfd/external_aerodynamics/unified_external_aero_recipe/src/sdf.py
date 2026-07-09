@@ -158,10 +158,16 @@ class ComputeSDFFromBoundary(MeshTransform):
             coord_scale = query_points.abs().amax(dim=-1).clamp(min=1.0)
             near_surface = dist < (128.0 * torch.finfo(torch.float32).eps * coord_scale)
             face_normals = surface.cell_normals.to(query_points.dtype)[hit_faces]
+            # A degenerate (zero-area) hit face has no meaningful normal --
+            # ``cell_normals`` returns a zero vector for it. Keep the raw
+            # closest-point direction there instead of substituting zeros.
+            face_normal_ok = (face_normals * face_normals).sum(-1) > 0.5
             oriented = torch.where(
                 (sdf_values >= 0).unsqueeze(-1), face_normals, -face_normals
             )
-            normals = torch.where(near_surface.unsqueeze(-1), oriented, normals)
+            normals = torch.where(
+                (near_surface & face_normal_ok).unsqueeze(-1), oriented, normals
+            )
 
             # Normalize to unit vectors
             norm = torch.norm(normals, dim=-1, keepdim=True).clamp(min=1e-8)

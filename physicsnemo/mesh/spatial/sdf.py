@@ -1220,7 +1220,8 @@ def signed_distance_field(
         return SignedDistanceFieldResult(
             sdf=sdf.reshape(query_shape[:-1]).to(out_dtype),
             hit_points=hit_points.reshape(query_shape).to(out_dtype),
-            hit_faces=torch.zeros(query_shape[:-1], dtype=torch.long, device=device),
+            # Always empty here; -1 keeps the "no valid face" sentinel uniform.
+            hit_faces=torch.full(query_shape[:-1], -1, dtype=torch.long, device=device),
         )
 
     with record_function("sdf/bvh_build"):

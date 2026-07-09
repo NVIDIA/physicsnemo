@@ -28,7 +28,6 @@ layer.
 from __future__ import annotations
 
 import torch
-
 from sdf import ComputeSDFFromBoundary
 
 from physicsnemo.mesh import DomainMesh, Mesh
@@ -129,3 +128,37 @@ def test_sdf_normals_far_points_keep_closest_point_direction():
     closest = torch.tensor([[10.0, 0.0, 1.0], [5.0, 0.0, 1.0]])
     expected = torch.nn.functional.normalize(off - closest, dim=-1)
     torch.testing.assert_close(normals, expected, atol=1e-5, rtol=1e-5)
+
+
+def test_sdf_normals_degenerate_hit_face_stays_finite():
+    """A near-wall query hitting a degenerate face must not get a junk normal.
+
+    A zero-area face has a zero ``cell_normals`` entry, so the face-normal
+    substitution must be skipped for it (keeping the raw closest-point
+    direction) rather than writing zero/NaN normals into the training data.
+    """
+    # The box plus a degenerate "antenna" face: a repeated-vertex face
+    # spanning the segment (10, 0, 1) -> (11, 0, 1), sticking off the box so
+    # it is genuinely the nearest surface for queries above it.
+    vertices = torch.cat(
+        [_BOX_VERTICES, torch.tensor([[10.0, 0.0, 1.0], [11.0, 0.0, 1.0]])]
+    )
+    faces = torch.cat([_BOX_FACES, torch.tensor([[8, 9, 9]])])
+    # Near-wall above the antenna midpoint, plus a regular top-face point.
+    interior = torch.tensor(
+        [[10.5, 0.0, 1.0 + 1e-7], [5.0, 0.0, 1.0 + 1e-7]], dtype=torch.float32
+    )
+    domain = DomainMesh(
+        interior=Mesh(points=interior),
+        boundaries={"stl_geometry": Mesh(points=vertices, cells=faces)},
+        global_data={},
+    )
+
+    result = ComputeSDFFromBoundary().apply_to_domain(domain)
+    normals = result.interior.point_data["sdf_normals"]
+
+    assert torch.isfinite(normals).all()
+    # The regular near-wall point still gets the exact face normal.
+    torch.testing.assert_close(
+        normals[1], torch.tensor([0.0, 0.0, 1.0]), atol=1e-4, rtol=0.0
+    )
