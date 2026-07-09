@@ -89,35 +89,47 @@ def _group_components(
 
     Even nesting depth = a component's outer boundary; its holes are the
     loops one level deeper that it directly contains. Islands inside holes
-    start new components (any nesting depth is supported). Containment is
-    probed with a point strictly inside each loop (via
-    ``polygon_interior_point``) rather than a vertex, which can lie exactly
-    on another loop's edge where the even-odd test is arbitrary; the tests
-    themselves reuse the engine's vectorized ``_points_in_polygon`` (one
-    call per loop, not one per pair).
+    start new components (any nesting depth is supported). Containment
+    between disjoint curves is probed with the loops' own vertices -- ALL
+    of them, via one vectorized ``_points_in_polygon`` call per loop --
+    so touching or crossing loops surface as a mixed-membership error
+    rather than an arbitrary classification.
 
     Crossing loops that end up in *different* components (the engine's own
     crossing check only sees one component at a time) are detected by
     pairwise segment intersection, bounding-box prefiltered.
     """
-    from physicsnemo.mesh.tessellation.delaunay import (
-        _points_in_polygon,
-        polygon_interior_point,
-    )
+    from physicsnemo.mesh.tessellation.delaunay import _points_in_polygon
 
     n = len(loop_polys)
     polys_np = [poly.numpy() for poly in loop_polys]
-    probes = (
-        torch.stack([polygon_interior_point(poly) for poly in loop_polys])
-        .double()
-        .numpy()
-    )
+    # Containment between DISJOINT curves is decided by any single boundary
+    # point, so probe with the loops' own vertices -- testing all of them
+    # both makes the answer robust and detects touching/crossing loops
+    # (mixed membership) instead of classifying them arbitrarily. (An
+    # interior point of the polygon is the WRONG probe here: an outer
+    # square's interior point can fall inside its own hole, misclassifying
+    # the outer loop as nested -- found in review by melo-gonzo.)
     contains = [[False] * n for _ in range(n)]
     for i in range(n):
-        inside = _points_in_polygon(probes, polys_np[i])
-        for j in range(n):
-            if i != j:
-                contains[i][j] = bool(inside[j])
+        others = [j for j in range(n) if j != i]
+        if not others:
+            break
+        stacked = __import__("numpy").concatenate([polys_np[j] for j in others])
+        inside = _points_in_polygon(stacked, polys_np[i])
+        off = 0
+        for j in others:
+            m = polys_np[j].shape[0]
+            block = inside[off : off + m]
+            off += m
+            if block.all():
+                contains[i][j] = True
+            elif block.any():
+                raise ValueError(
+                    f"boundary loops {i} and {j} touch or cross (some of "
+                    f"loop {j}'s vertices are inside loop {i} and some are "
+                    f"outside); loops must be disjoint simple polylines"
+                )
     depth = [sum(contains[i][j] for i in range(n)) for j in range(n)]
     components = []
     for j in range(n):

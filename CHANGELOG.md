@@ -22,7 +22,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The contract is dimension-generic; `n = 3` raises `NotImplementedError`
   pending exact boundary recovery. Also adds `polygon_interior_point`,
   which returns a point strictly inside a simple polygon.
-||||||| e5405921
 - Adds dimension-generic volume mesh generation for implicit domains to
   `physicsnemo.mesh.generate`: `mesh_implicit_domain` meshes
   `{x : phi(x) < 0}` for any implicit function (SDFs, level sets, neural
@@ -35,8 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   signed-distance building blocks (`sdf_sphere`, `sdf_box`,
   `sdf_polygon_2d`, `sdf_union`, `sdf_intersection`, `sdf_difference`,
   `project_to_zero_set`).
+- Adds `rectilinear_grid_divergence`, `rectilinear_grid_curl`, and
+  `rectilinear_grid_laplacian` to `physicsnemo.nn.functional`, with Torch and
+  fused Warp implementations for periodic, nonuniform rectilinear grids.
 - Adds coverage reporting on PRs — an informational `Coverage %` check plus a
   ready-to-enable Codecov integration.
+- Adds `uniform_grid_divergence`, `uniform_grid_curl`, and
+  `uniform_grid_laplacian` to `physicsnemo.nn.functional`, with Torch and fused
+  Warp implementations for periodic Cartesian grids.
 - Adds the experimental Strata weather-emulation models —
   `physicsnemo.experimental.models.strata.Strata` and `StrataTransformer3D` — plus
   the continuous / stereographic RoPE helpers `build_rope_cos_sin_1d_continuous`,
@@ -216,6 +221,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `physicsnemo.mesh.sampling.sample_data_at_points` now handles integer and
+  boolean fields by returning `float64`, so NaN sentinels and non-integral
+  interpolation or multi-cell means are representable (subject to the usual
+  `float64` precision limits). Point-data interpolation now promotes field and
+  geometry dtypes consistently, and accumulation uses fewer full-sized
+  temporaries and CUDA host synchronizations.
 - `physicsnemo.mesh.projections.extrude` now produces a *conforming* (crack-free)
   simplicial complex for multi-cell inputs. Each prism was previously tessellated
   using the per-cell local vertex order, so adjacent cells that listed a shared
@@ -234,6 +245,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `physicsnemo.mesh.io.to_pyvista` now preserves supported dtypes for attached
   point, cell, and global data instead of narrowing every array to `float32`.
   Reduced-precision floating-point values are promoted only as needed for VTK.
+- `physicsnemo.mesh.io.from_pyvista` and `to_pyvista` now preserve `float64`
+  point coordinates instead of unconditionally narrowing geometry to `float32`,
+  which could collapse small features on meshes with large coordinate offsets.
+  Existing `float32` geometry remains `float32`.
 - `physicsnemo.mesh`: `Mesh.to(<float dtype>)` and `DomainMesh.to(<float dtype>)`
   raised `TypeError: cells must have an int-like dtype` because the cast was applied
   to the integer `cells` tensor. A floating/complex dtype is now applied only to

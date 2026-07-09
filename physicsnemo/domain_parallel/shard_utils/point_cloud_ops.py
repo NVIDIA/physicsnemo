@@ -26,6 +26,7 @@ from torch.distributed.tensor.placement_types import (
     Shard,
 )
 
+from physicsnemo.core.function_spec import FunctionSpec
 from physicsnemo.domain_parallel import ShardTensor, ShardTensorSpec
 from physicsnemo.domain_parallel.shard_utils.patch_core import (
     MissingShardPatch,
@@ -350,39 +351,40 @@ def merge_outputs(
         n_points = current_indices.shape[0]
         max_neighbors = current_indices.shape[1]
 
-    stream = wp.stream_from_torch(current_indices.device)
+    _, stream = FunctionSpec.warp_launch_context(current_indices)
 
-    if batched:
-        for b in range(B):
+    with FunctionSpec.warp_stream_scope(stream):
+        if batched:
+            for b in range(B):
+                wp.launch(
+                    merge_indices_and_points,
+                    dim=n_points,
+                    inputs=[
+                        wp.from_torch(current_indices[b], return_ctype=True),
+                        wp.from_torch(current_num_neighbors[b], return_ctype=True),
+                        wp.from_torch(current_points[b], return_ctype=True),
+                        wp.from_torch(incoming_indices[b], return_ctype=True),
+                        wp.from_torch(incoming_num_neighbors[b], return_ctype=True),
+                        wp.from_torch(incoming_points[b], return_ctype=True),
+                        max_neighbors,
+                    ],
+                    stream=stream,
+                )
+        else:
             wp.launch(
                 merge_indices_and_points,
                 dim=n_points,
                 inputs=[
-                    wp.from_torch(current_indices[b], return_ctype=True),
-                    wp.from_torch(current_num_neighbors[b], return_ctype=True),
-                    wp.from_torch(current_points[b], return_ctype=True),
-                    wp.from_torch(incoming_indices[b], return_ctype=True),
-                    wp.from_torch(incoming_num_neighbors[b], return_ctype=True),
-                    wp.from_torch(incoming_points[b], return_ctype=True),
+                    wp.from_torch(current_indices, return_ctype=True),
+                    wp.from_torch(current_num_neighbors, return_ctype=True),
+                    wp.from_torch(current_points, return_ctype=True),
+                    wp.from_torch(incoming_indices, return_ctype=True),
+                    wp.from_torch(incoming_num_neighbors, return_ctype=True),
+                    wp.from_torch(incoming_points, return_ctype=True),
                     max_neighbors,
                 ],
                 stream=stream,
             )
-    else:
-        wp.launch(
-            merge_indices_and_points,
-            dim=n_points,
-            inputs=[
-                wp.from_torch(current_indices, return_ctype=True),
-                wp.from_torch(current_num_neighbors, return_ctype=True),
-                wp.from_torch(current_points, return_ctype=True),
-                wp.from_torch(incoming_indices, return_ctype=True),
-                wp.from_torch(incoming_num_neighbors, return_ctype=True),
-                wp.from_torch(incoming_points, return_ctype=True),
-                max_neighbors,
-            ],
-            stream=stream,
-        )
 
     return current_indices, current_num_neighbors, current_points
 

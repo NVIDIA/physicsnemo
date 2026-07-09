@@ -242,7 +242,7 @@ def test_coincident_duplicate_loops_raise():
     pts, edges = circle_mesh_parts(1.0, 16, 0)
     pts2, edges2 = circle_mesh_parts(1.0, 16, 16)
     dup = Mesh(points=torch.cat([pts, pts2]), cells=torch.cat([edges, edges2]))
-    with pytest.raises(ValueError, match="even containment depth"):
+    with pytest.raises(ValueError, match="touch or cross|even containment depth"):
         fill_interior(dup)
 
 
@@ -286,3 +286,66 @@ def test_boundary_facets_subdivide_input_segments():
         total += float((pu - pv).norm())
     perimeter = float(ab.norm(dim=-1).sum())
     assert abs(total - perimeter) < 1e-9 * perimeter
+
+
+def test_square_annulus_and_island_nesting():
+    """Rectilinear nesting regression (found in review by melo-gonzo): an
+    outer square's largest-ear interior point can fall inside its own hole,
+    so containment must be probed with boundary vertices, not interior
+    points. 6x6 plate, centered 5x5 hole, then a 1x1 island in the hole."""
+    points = torch.tensor(
+        [
+            [0.0, 0.0],
+            [6.0, 0.0],
+            [6.0, 6.0],
+            [0.0, 6.0],
+            [0.5, 0.5],
+            [5.5, 0.5],
+            [5.5, 5.5],
+            [0.5, 5.5],
+        ],
+        dtype=torch.float64,
+    )
+    cells = torch.tensor(
+        [[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4]]
+    )
+    annulus = fill_interior(Mesh(points=points, cells=cells))
+    area = float(signed_areas(annulus).sum())
+    assert abs(area - (36.0 - 25.0)) < 1e-9  # nothing silently dropped
+
+    island_pts = torch.tensor(
+        [[2.5, 2.5], [3.5, 2.5], [3.5, 3.5], [2.5, 3.5]], dtype=torch.float64
+    )
+    island_cells = torch.tensor([[8, 9], [9, 10], [10, 11], [11, 8]])
+    full = fill_interior(
+        Mesh(
+            points=torch.cat([points, island_pts]),
+            cells=torch.cat([cells, island_cells]),
+        )
+    )
+    area = float(signed_areas(full).sum())
+    assert abs(area - (36.0 - 25.0 + 1.0)) < 1e-9
+
+
+def test_sharp_corner_rejected_when_refining():
+    """A 20-degree wedge voids Ruppert's termination guarantee: refinement
+    chases itself into the apex, emitting thousands of sub-float32-area
+    triangles with no error (found in review by melo-gonzo). Sharp corners
+    must be rejected loudly when an angle bound is requested -- and still
+    mesh fine as a pure CDT with the bound disabled."""
+    wedge = torch.tensor(
+        [
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [math.cos(math.radians(20.0)), math.sin(math.radians(20.0))],
+        ],
+        dtype=torch.float64,
+    )
+    edges = torch.tensor([[0, 1], [1, 2], [2, 0]])
+    m = Mesh(points=wedge, cells=edges)
+    with pytest.raises(ValueError, match="60 degrees"):
+        fill_interior(m, min_angle_degrees=30.0)
+    cdt = fill_interior(m, min_angle_degrees=0.0)
+    area = float(signed_areas(cdt).sum())
+    exact = 0.5 * math.sin(math.radians(20.0))
+    assert abs(area - exact) < 1e-12

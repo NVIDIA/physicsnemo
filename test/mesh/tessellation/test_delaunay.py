@@ -780,3 +780,80 @@ def test_polygon_interior_point_collinear_runs():
     loop = _square_loop(16)  # 60 of 64 vertices are collinear mid-edge points
     inside = polygon_interior_point(loop)
     assert _points_in_polygon(inside.numpy()[None], loop)[0]
+
+
+def _shoelace(loop: torch.Tensor) -> float:
+    x, y = loop[:, 0], loop[:, 1]
+    return float(0.5 * (x * y.roll(-1) - x.roll(-1) * y).sum().abs())
+
+
+def _meshed_area(points: torch.Tensor, triangles: torch.Tensor) -> float:
+    tp = points[triangles]
+    return float(
+        (
+            0.5
+            * (
+                (tp[:, 1, 0] - tp[:, 0, 0]) * (tp[:, 2, 1] - tp[:, 0, 1])
+                - (tp[:, 2, 0] - tp[:, 0, 0]) * (tp[:, 1, 1] - tp[:, 0, 1])
+            )
+        )
+        .abs()
+        .sum()
+    )
+
+
+@pytest.mark.parametrize(
+    "loop",
+    [
+        # Reflex-adjacent hexagon: segment recovery previously raised
+        # "could not find a starting wedge" (reported by melo-gonzo).
+        [
+            [-0.6, -0.3],
+            [-0.4, -0.7],
+            [-0.1, -0.3],
+            [0.1, -1.0],
+            [0.3, -0.7],
+            [0.5, -0.2],
+        ],
+        # Simple hexagon where the backward-wedge bug made the pipe walk
+        # exit the hull and silently drop ~25% of the domain's area.
+        [
+            [0.97, 0.00],
+            [0.32, 0.09],
+            [0.43, 0.26],
+            [0.23, 0.44],
+            [0.43, -0.83],
+            [0.84, -0.24],
+        ],
+    ],
+    ids=["reflex-crash", "silent-coverage-loss"],
+)
+def test_segment_recovery_on_sparse_reflex_polygons(loop):
+    pts = torch.tensor(loop, dtype=torch.float64)
+    points, triangles, _, _ = delaunay_mesh_2d(
+        [pts], max_area=None, min_angle_degrees=0.0
+    )
+    assert _meshed_area(points, triangles) == pytest.approx(_shoelace(pts), rel=1e-12)
+
+
+def test_segment_recovery_random_star_polygons():
+    """Property test (suggested by melo-gonzo): sparse random star polygons
+    exercise real segment recovery -- densely sampled smooth boundaries make
+    recovery a no-op, which is how the wedge-selection bug survived the
+    original suite. Pure CDT (no refinement): meshed area must equal the
+    shoelace area exactly."""
+    g = torch.Generator().manual_seed(0)
+    for trial in range(25):
+        n = int(torch.randint(5, 15, (1,), generator=g))
+        radii = 0.15 + 0.85 * torch.rand(n, generator=g, dtype=torch.float64)
+        theta = (
+            torch.arange(n, dtype=torch.float64) / n * 2 * math.pi
+            + 0.3 * torch.rand(n, generator=g, dtype=torch.float64) / n
+        )
+        loop = torch.stack([radii * torch.cos(theta), radii * torch.sin(theta)], dim=1)
+        points, triangles, _, _ = delaunay_mesh_2d(
+            [loop], max_area=None, min_angle_degrees=0.0
+        )
+        assert _meshed_area(points, triangles) == pytest.approx(
+            _shoelace(loop), rel=1e-12
+        ), f"area mismatch on trial {trial}"

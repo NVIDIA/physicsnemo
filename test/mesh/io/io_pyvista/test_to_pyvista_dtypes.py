@@ -61,6 +61,56 @@ def test_preserves_supported_point_cell_and_global_data_dtypes():
     )
 
 
+def test_preserves_float64_geometry_dtype():
+    points = torch.tensor(
+        [[1e8, 1e8], [1e8 + 1, 1e8], [1e8, 1e8 + 1]],
+        dtype=torch.float64,
+    )
+    mesh = Mesh(points=points, cells=torch.tensor([[0, 1, 2]]))
+
+    result = to_pyvista(mesh)
+
+    assert result.points.dtype == np.float64
+    assert np.array_equal(result.points[:, :2], points.numpy())
+
+
+def test_explicit_mesh_cast_exports_float32_geometry():
+    mesh = Mesh(
+        points=torch.tensor([[0.0, 0.0], [1.0, 0.0]], dtype=torch.float64),
+        cells=torch.tensor([[0, 1]]),
+    )
+
+    result = to_pyvista(mesh.to(torch.float32))
+
+    assert result.points.dtype == np.float32
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_promotes_reduced_precision_geometry_to_float32(dtype):
+    mesh = Mesh(
+        points=torch.tensor([[0.0, 0.0], [1.0, 0.0]], dtype=dtype),
+        cells=torch.tensor([[0, 1]]),
+    )
+
+    result = to_pyvista(mesh)
+
+    assert result.points.dtype == np.float32
+
+
+@pytest.mark.parametrize("dtype", [torch.int64, torch.complex64])
+def test_other_geometry_dtypes_retain_float32_conversion(dtype):
+    points = torch.tensor([[0, 0], [1, 0]], dtype=dtype)
+    mesh = Mesh(points=points, cells=torch.tensor([[0, 1]]))
+
+    if dtype.is_complex:
+        with pytest.warns(UserWarning, match="Casting complex values"):
+            result = to_pyvista(mesh)
+    else:
+        result = to_pyvista(mesh)
+
+    assert result.points.dtype == np.float32
+
+
 def test_resolves_lazy_conjugate_before_export():
     values = torch.tensor([1.0 + 2.0j], dtype=torch.complex64).conj()
 
