@@ -24,7 +24,7 @@ sign is computed with a :class:`physicsnemo.mesh.spatial.ClusterTree` Barnes-Hut
 summation over the mesh, so the whole pipeline reuses the mesh's own spatial
 data structures and runs identically on CPU and GPU.
 
-:func:`signed_distance_field_mesh` returns the signed distance and the closest
+:func:`signed_distance_field` returns the signed distance and the closest
 surface point for each query.
 
 Algorithm
@@ -52,6 +52,8 @@ Algorithm
 
 from __future__ import annotations
 
+from typing import Literal, TypeAlias, get_args
+
 import torch
 from jaxtyping import Float, Int
 from tensordict import TensorDict
@@ -62,6 +64,11 @@ from physicsnemo.mesh.spatial import _sdf_triton
 from physicsnemo.mesh.spatial._ragged import _ragged_arange
 from physicsnemo.mesh.spatial.bvh import BVH
 from physicsnemo.mesh.spatial.cluster_tree import ClusterTree
+
+# Winding-number summation backends for ``use_sign_winding_number=True``. The
+# runtime validation tuple is derived from the typed ``Literal`` via
+# ``get_args`` so the two can never drift apart.
+WindingBackend: TypeAlias = Literal["clustertree", "bruteforce"]
 
 # Chunk sizes keep the pairwise tensors bounded for large inputs. These are
 # product-of-counts limits (rows of the materialized intermediate), not raw
@@ -711,7 +718,7 @@ def _winding_number_sign(
         lc = c.norm(dim=-1)
 
         # Numerator: triple product a . (b x c).
-        triple = (a * torch.cross(b, c, dim=-1)).sum(-1)
+        triple = (a * torch.linalg.cross(b, c, dim=-1)).sum(-1)
         denom = (
             la * lb * lc
             + (a * b).sum(-1) * lc
@@ -839,7 +846,7 @@ def _winding_number_sign_clustertree(
 
     Notes
     -----
-    See :func:`signed_distance_field_mesh` for the end-to-end SDF that consumes
+    See :func:`signed_distance_field` for the end-to-end SDF that consumes
     this sign.
     """
     device = query.device
@@ -937,13 +944,13 @@ def _winding_number_sign_clustertree(
     )
 
 
-def signed_distance_field_mesh(
+def signed_distance_field(
     mesh: Mesh,
     query_points: Float[torch.Tensor, "... 3"],
     max_dist: float | None = None,
     use_sign_winding_number: bool = False,
     *,
-    winding_backend: str = "clustertree",
+    winding_backend: WindingBackend = "clustertree",
 ) -> tuple[torch.Tensor, torch.Tensor]:
     r"""Compute the signed distance to a triangle surface mesh.
 
@@ -968,8 +975,13 @@ def signed_distance_field_mesh(
         vertex), which stays correct at sharp/non-convex edges where a single
         face normal would flip the sign (see :func:`_pseudo_normal_sign`). The
         mesh should be watertight for reliable signs in the ``False`` case.
-    winding_backend : str, optional
-        Winding-number summation backend when ``use_sign_winding_number=True``: ``"clustertree"`` (default) for the :class:`physicsnemo.mesh.spatial.ClusterTree` Barnes-Hut sum (``O(n_queries * log n_faces)``, best for large meshes), or ``"bruteforce"`` for the exact fused ``O(n_queries * n_faces)`` sum (faster for small/medium meshes).
+    winding_backend : {"clustertree", "bruteforce"}, optional
+        Winding-number summation backend when ``use_sign_winding_number=True``:
+        ``"clustertree"`` (default) for the
+        :class:`physicsnemo.mesh.spatial.ClusterTree` Barnes-Hut sum
+        (``O(n_queries * log n_faces)``, best for large meshes), or
+        ``"bruteforce"`` for the exact fused ``O(n_queries * n_faces)`` sum
+        (faster for small/medium meshes).
 
     Returns
     -------
@@ -983,8 +995,9 @@ def signed_distance_field_mesh(
     ValueError
         If ``mesh`` is not a triangle surface in 3D (``n_spatial_dims == 3`` and
         ``n_manifold_dims == 2``), if ``query_points`` does not have a trailing
-        dimension of size 3, or if the mesh has no faces (there is no surface to
-        measure distance to).
+        dimension of size 3, if the mesh has no faces (there is no surface to
+        measure distance to), if ``mesh`` and ``query_points`` are on different
+        devices, or if ``winding_backend`` is not a supported backend.
 
     Notes
     -----
@@ -1001,17 +1014,27 @@ def signed_distance_field_mesh(
     # mis-typed mesh fails loudly rather than deep inside the BVH/winding kernels.
     if mesh.n_spatial_dims != 3:
         raise ValueError(
-            "signed_distance_field_mesh requires a 3D mesh "
+            "signed_distance_field requires a 3D mesh "
             f"(n_spatial_dims == 3), but got {mesh.n_spatial_dims=}."
         )
     if mesh.n_manifold_dims != 2:
         raise ValueError(
-            "signed_distance_field_mesh requires a triangle mesh "
+            "signed_distance_field requires a triangle mesh "
             f"(n_manifold_dims == 2), but got {mesh.n_manifold_dims=}."
         )
     if mesh.n_cells == 0:
         raise ValueError(
             "mesh has no faces; there is no surface to measure distance to"
+        )
+    if mesh.points.device != query_points.device:
+        raise ValueError(
+            "mesh and query_points must be on the same device, but got "
+            f"{mesh.points.device=} and {query_points.device=}."
+        )
+    if winding_backend not in get_args(WindingBackend):
+        raise ValueError(
+            f"winding_backend must be one of {get_args(WindingBackend)}, "
+            f"got {winding_backend!r}"
         )
 
     query_shape = query_points.shape
@@ -1076,13 +1099,8 @@ def signed_distance_field_mesh(
             # up to the Barnes-Hut approximation.
             if winding_backend == "bruteforce":
                 sign = _winding_number_sign(face_vertices, queries)
-            elif winding_backend == "clustertree":
-                sign = _winding_number_sign_clustertree(face_vertices, queries)
             else:
-                raise ValueError(
-                    "winding_backend must be 'clustertree' or 'bruteforce', "
-                    f"got {winding_backend!r}"
-                )
+                sign = _winding_number_sign_clustertree(face_vertices, queries)
         else:
             sign = _pseudo_normal_sign(work_mesh, queries, best_face, best_point)
 
@@ -1102,28 +1120,28 @@ def signed_distance_field_mesh(
     return sdf, hit_points
 
 
-def _signed_distance_field_mesh_from_arrays(
+def _signed_distance_field_from_arrays(
     mesh_vertices: Float[torch.Tensor, "n_vertices 3"],
     mesh_indices: Int[torch.Tensor, "..."],
     query_points: Float[torch.Tensor, "... 3"],
     max_dist: float | None = None,
     use_sign_winding_number: bool = False,
     *,
-    winding_backend: str = "clustertree",
+    winding_backend: WindingBackend = "clustertree",
 ) -> tuple[torch.Tensor, torch.Tensor]:
     r"""[INTERNAL - DO NOT USE] Private array-based SDF helper.
 
     .. warning::
 
        **DON'T USE THIS ONE.** This is a private, temporary entry point. Use
-       the public :func:`signed_distance_field_mesh`, which takes a
+       the public :func:`signed_distance_field`, which takes a
        :class:`~physicsnemo.mesh.Mesh`, instead.
 
        This helper is unexported, carries no backward-compatibility guarantee,
        and may be removed without notice.
 
     It wraps the arrays in a :class:`~physicsnemo.mesh.Mesh` and defers to
-    :func:`signed_distance_field_mesh`, so the numerics are identical.
+    :func:`signed_distance_field`, so the numerics are identical.
 
     Parameters
     ----------
@@ -1134,22 +1152,22 @@ def _signed_distance_field_mesh_from_arrays(
     query_points : torch.Tensor
         Query points, shape ``(..., 3)``.
     max_dist : float or None, optional
-        Maximum search radius; see :func:`signed_distance_field_mesh`.
+        Maximum search radius; see :func:`signed_distance_field`.
     use_sign_winding_number : bool, optional
-        Sign method; see :func:`signed_distance_field_mesh`.
-    winding_backend : str, optional
-        Winding-number backend; see :func:`signed_distance_field_mesh`.
+        Sign method; see :func:`signed_distance_field`.
+    winding_backend : {"clustertree", "bruteforce"}, optional
+        Winding-number backend; see :func:`signed_distance_field`.
 
     Returns
     -------
     tuple[torch.Tensor, torch.Tensor]
-        ``(sdf, hit_points)``; see :func:`signed_distance_field_mesh`.
+        ``(sdf, hit_points)``; see :func:`signed_distance_field`.
 
     Raises
     ------
     ValueError
         If ``mesh_indices`` is not 1D-flattened or ``(n_faces, 3)``; the
-        remaining validation is performed by :func:`signed_distance_field_mesh`.
+        remaining validation is performed by :func:`signed_distance_field`.
     """
     if mesh_indices.ndim == 2:
         if mesh_indices.shape[-1] != 3:
@@ -1161,7 +1179,7 @@ def _signed_distance_field_mesh_from_arrays(
             "mesh_indices must be either 1D flattened indices or 2D (n_faces, 3)"
         )
     mesh = Mesh(points=mesh_vertices, cells=mesh_indices.reshape(-1, 3))
-    return signed_distance_field_mesh(
+    return signed_distance_field(
         mesh,
         query_points,
         max_dist,
