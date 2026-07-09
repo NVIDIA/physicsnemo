@@ -25,6 +25,11 @@ if ST_AVAILABLE:
     from physicsnemo.domain_parallel.shard_tensor import ShardTensor
 
     def register_shard_wrappers():
+        """Import and register all shard-aware operation wrappers with ShardTensor.
+
+        Each imported module registers its wrapper via
+        :meth:`ShardTensor.register_op` at import time.
+        """
         from .attention_patches import sdpa_wrapper
         from .conv_patches import generic_conv_nd_wrapper
         from .index_ops import (

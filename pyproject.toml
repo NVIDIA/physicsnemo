@@ -49,6 +49,7 @@ dependencies = [
     "omegaconf>=2.3.0",
     "importlib-metadata>=8.7.1",
     "psutil>=6.0.0",
+    "fsspec>=2026.4.0",
 ]
 
 [project.urls]
@@ -326,6 +327,7 @@ gnns = [
     "torch_scatter",
     "torch_sparse",
     "torch_cluster",
+    "PyYAML>=6.0.2",
     # "nvfuser",
     "nvidia-physicsnemo[model-extras]",
 ]

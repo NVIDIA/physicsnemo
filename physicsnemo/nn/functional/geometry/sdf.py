@@ -151,7 +151,7 @@ def signed_distance_field_impl(
 
     wp_launch_device, wp_launch_stream = FunctionSpec.warp_launch_context(input_points)
 
-    with wp.ScopedStream(wp_launch_stream):
+    with FunctionSpec.warp_stream_scope(wp_launch_stream):
         wp.init()
 
         # zero copy the vertices, indices, and input points to warp:

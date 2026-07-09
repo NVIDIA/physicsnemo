@@ -1,0 +1,168 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Run PhysicsNeMo multi-GPU tests
+description: Set up a deterministic CUDA environment and run one multi-GPU stream
+
+inputs:
+  stream:
+    description: Multi-GPU stream to run (dynamic or static)
+    required: true
+  nproc:
+    description: Number of visible GPUs/ranks for the stream
+    required: true
+  collect-coverage:
+    description: Collect and upload coverage data for the canonical report
+    required: false
+    default: "false"
+  python-version:
+    description: Python major.minor expected in the CUDA container
+    required: true
+  uv-version:
+    description: Exact uv version used by the deterministic environment
+    required: true
+  extras:
+    description: Comma-separated PhysicsNeMo extras
+    required: true
+  uv-cache-key-prefix:
+    description: Existing nightly uv cache key prefix
+    required: true
+  jit-cache-key:
+    description: Existing nightly JIT cache key
+    required: true
+  jit-cache-dir:
+    description: JIT cache root
+    required: true
+  hf-token:
+    description: Hugging Face token for private CI data
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Bootstrap cuDNN CI container
+      uses: ./.github/actions/bootstrap-cudnn-ci
+      with:
+        python-version: ${{ inputs.python-version }}
+        uv-version: ${{ inputs.uv-version }}
+
+    - name: Setup uv environment from cache
+      uses: ./.github/actions/setup-uv-env
+      with:
+        uv-cache-key-prefix: ${{ inputs.uv-cache-key-prefix }}
+        uv-cache-key-suffix: latest
+        extras: ${{ inputs.extras }}
+
+    - name: Restore JIT compilation cache
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ inputs.jit-cache-dir }}
+        key: ${{ inputs.jit-cache-key }}
+
+    - name: Download CI test data
+      uses: ./.github/actions/download-ci-data
+      with:
+        hf-token: ${{ inputs.hf-token }}
+
+    - name: Prepare stream paths
+      id: paths
+      shell: bash
+      env:
+        STREAM: ${{ inputs.stream }}
+      run: |
+        set -euo pipefail
+        case "$STREAM" in
+          dynamic|static) ;;
+          *) echo "::error::Unknown multi-GPU stream: $STREAM"; exit 2 ;;
+        esac
+        junit_dir="${RUNNER_TEMP}/physicsnemo-multigpu-${STREAM}/junit"
+        mkdir -p "$junit_dir"
+        echo "junit_dir=${junit_dir}" >> "$GITHUB_OUTPUT"
+        # Coverage shards live in the workspace root under the canonical
+        # `.coverage.pytest.` prefix so `coverage combine` merges them into
+        # the full report without extra plumbing.
+        echo "coverage_file=${GITHUB_WORKSPACE}/.coverage.pytest.multigpu-${STREAM}" >> "$GITHUB_OUTPUT"
+
+    - name: Run multi-GPU tests
+      shell: bash
+      env:
+        STREAM: ${{ inputs.stream }}
+        NPROC: ${{ inputs.nproc }}
+        COLLECT_COVERAGE: ${{ inputs.collect-coverage }}
+        JUNIT_DIR: ${{ steps.paths.outputs.junit_dir }}
+        COVERAGE_BASE: ${{ steps.paths.outputs.coverage_file }}
+        COVERAGE_RC: ${{ github.workspace }}/test/coverage.multigpu.rc
+        PYTHON: ${{ github.workspace }}/.venv/bin/python
+        WARP_CACHE_PATH: ${{ inputs.jit-cache-dir }}/warp
+        TRITON_CACHE_DIR: ${{ inputs.jit-cache-dir }}/triton
+        TORCHINDUCTOR_CACHE_DIR: ${{ inputs.jit-cache-dir }}/inductor
+      run: |
+        set -euo pipefail
+        if [ "$COLLECT_COVERAGE" = "true" ]; then
+          # Reused self-hosted workspaces can hold shards from earlier runs.
+          rm -f "${COVERAGE_BASE}" "${COVERAGE_BASE}".*
+        fi
+        # Each rank writes its own JUnit file, and its own coverage shard
+        # base so parallel-mode suffixes cannot collide across ranks.  The
+        # rank command is single-quoted: $RANK and the exported env above
+        # expand inside each torchrun worker, not here.  Dynamic runs the
+        # same command as a single pseudo-rank without torchrun.
+        rank_cmd='
+          set -euo pipefail
+          pytest_args=(
+            "--multigpu-${STREAM}"
+            -m "multigpu_${STREAM}"
+            -p no:cacheprovider
+            "--junitxml=${JUNIT_DIR}/multigpu-${STREAM}-rank-${RANK}.xml"
+            test/
+          )
+          if [ "$COLLECT_COVERAGE" = "true" ]; then
+            export COVERAGE_FILE="${COVERAGE_BASE}.rank-${RANK}"
+            exec "$PYTHON" -m coverage run --rcfile="$COVERAGE_RC" \
+              -m pytest "${pytest_args[@]}"
+          fi
+          exec "$PYTHON" -m pytest "${pytest_args[@]}"
+        '
+        if [ "$STREAM" = "static" ]; then
+          "${GITHUB_WORKSPACE}/.venv/bin/torchrun" \
+            --standalone \
+            --nnodes=1 \
+            --nproc-per-node="$NPROC" \
+            --max-restarts=0 \
+            --no-python \
+            bash -c "$rank_cmd"
+        else
+          RANK=0 bash -c "$rank_cmd"
+        fi
+
+    - name: Upload JUnit XML
+      if: ${{ always() && !cancelled() && steps.paths.outcome == 'success' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: junit-multigpu-${{ inputs.stream }}
+        path: ${{ steps.paths.outputs.junit_dir }}/*.xml
+        if-no-files-found: warn
+        retention-days: 7
+
+    - name: Upload coverage shards
+      if: ${{ success() && inputs.collect-coverage == 'true' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-multigpu-${{ inputs.stream }}
+        path: ${{ github.workspace }}/.coverage.pytest.multigpu-${{ inputs.stream }}*
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 14

@@ -836,6 +836,13 @@ class Trainer:
 
         self.sigma_bin_tracker.log(self.logger, world_size=self.dist.world_size)
 
+        # Domain parallelism: keep replicated-parameter gradients bit-identical
+        # across the domain mesh. The promotion boundary already reduces them to
+        # the domain-sum, but residual ~ULP FP differences in the conditioning
+        # path would otherwise make replicated params (and their optimizer state)
+        # slowly diverge across domain ranks. No-op unless domain-parallel.
+        self.parallel_helper.sync_replicated_grads(self.net)
+
         # Gradient clipping
         if self.cfg.training.clip_grad_norm > 0:
             clip_grad_norm_(self.net.parameters(), self.cfg.training.clip_grad_norm)

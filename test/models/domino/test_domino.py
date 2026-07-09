@@ -411,9 +411,10 @@ def test_domino_checkpoint_save_load(device, tmp_path, pytestconfig):
     with torch.no_grad():
         output_loaded = model_loaded(input_dict)
 
-    # Compare outputs
-    assert torch.allclose(output_loaded[0], output_original[0], atol=1e-5, rtol=1e-5)
-    assert torch.allclose(output_loaded[1], output_original[1], atol=1e-5, rtol=1e-5)
+    # Compare outputs. Looser tolerance than 1e-5: two separate CUDA forward passes
+    # can differ slightly due to non-deterministic Warp/knn atomic reductions.
+    assert torch.allclose(output_loaded[0], output_original[0], atol=1e-4, rtol=1e-4)
+    assert torch.allclose(output_loaded[1], output_original[1], atol=1e-4, rtol=1e-4)
 
 
 @requires_module("warp")
