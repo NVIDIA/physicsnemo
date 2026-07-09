@@ -87,12 +87,17 @@ sub-dataset.
 ### Epoch reseeding
 
 `DataLoader.set_epoch(epoch)` propagates to the sampler and dataset.
-The sampler and stochastic transforms reseed their generators with
-`initial_seed() + epoch`, producing a different but deterministic
-random sequence every epoch.  Readers instead store the epoch and fold
-it into each sample's derived seed (see [Readers](#readers)), so their
-per-sample RNG also varies deterministically per epoch without relying
-on a shared, sequentially-drawn generator.
+Stochastic transforms reseed their generators with
+`derive_seed(base_seed, epoch)`, where `base_seed` was captured once at
+`set_generator` time -- a different but deterministic random sequence
+every epoch that depends only on `(base_seed, epoch)`, never on how many
+times `set_epoch` was called before, so resuming a run at epoch *N*
+reproduces the same stream as reaching epoch *N* sequentially.  Readers
+instead store the epoch and fold it into each sample's derived seed (see
+[Readers](#readers)), so their per-sample RNG also varies
+deterministically per epoch without relying on a shared,
+sequentially-drawn generator.  The sampler (e.g. torch's
+`DistributedSampler`) applies its own epoch-pure reseeding.
 
 ## Generator tree
 
