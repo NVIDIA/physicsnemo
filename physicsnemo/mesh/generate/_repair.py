@@ -194,9 +194,13 @@ def pin_feature_points(points, cells, targets, h):
         rel = points[cells[:, 1:]] - p0[:, None, :]
         vol_ok = signed_volumes(points, cells).abs() > 1e-12 * h**d
         bary = torch.zeros(cells.shape[0], d, dtype=points.dtype, device=points.device)
-        bary[vol_ok] = torch.linalg.solve(rel[vol_ok], (x - p0[vol_ok])[:, :, None])[
-            :, :, 0
-        ]
+        # Columns of the system matrix are the edge vectors: x - v0 =
+        # sum_k bary_k (v_k - v0). rel stores edges as ROWS, so solve the
+        # transposed system (using rel directly silently answers a
+        # different question -- found by adversarial fuzzing, round 2).
+        bary[vol_ok] = torch.linalg.solve(
+            rel[vol_ok].transpose(1, 2), (x - p0[vol_ok])[:, :, None]
+        )[:, :, 0]
         lam0 = 1.0 - bary.sum(dim=1)
         eps = 1e-9
         lam = torch.cat([lam0[:, None], bary], dim=1)  # (M, d+1) barycentric
