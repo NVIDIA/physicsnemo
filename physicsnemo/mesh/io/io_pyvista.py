@@ -39,8 +39,8 @@ else:
 
 
 def _vtk_data_to_tensor_dict(
-    data,
-    force_copy: bool = False,  # noqa: ANN001
+    data: "pv.DataSetAttributes",
+    force_copy: bool = False,
 ) -> dict[str, torch.Tensor]:
     """Convert a PyVista/VTK data container to a plain tensor dictionary."""
     tensor_data: dict[str, torch.Tensor] = {}

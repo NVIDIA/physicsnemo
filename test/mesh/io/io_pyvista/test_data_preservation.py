@@ -241,6 +241,40 @@ class TestForceCopy:
         torch.testing.assert_close(mesh.cell_data["cell_value"], source_cell_data)
         torch.testing.assert_close(mesh.global_data["case_value"], source_global_data)
 
+    def test_to_pyvista_force_copy_cannot_mutate_source_mesh_3d(self):
+        # The 3D export path builds an UnstructuredGrid with its own
+        # connectivity layout, so exercise it separately from the 2D PolyData
+        # path. `cell_connectivity` is a live view of VTK's storage, so writing
+        # through it (like the geometry/data writes below) would reach the
+        # source Mesh if any buffer were still shared.
+        mesh = Mesh(
+            points=torch.tensor(
+                [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+            ),
+            cells=torch.tensor([[0, 1, 2, 3]]),
+            point_data={"point_value": torch.tensor([1.0, 2.0, 3.0, 4.0])},
+            cell_data={"cell_value": torch.tensor([4.0])},
+            global_data={"case_value": torch.tensor([5.0])},
+        )
+        source_points = mesh.points.clone()
+        source_cells = mesh.cells.clone()
+        source_point_data = mesh.point_data["point_value"].clone()
+        source_cell_data = mesh.cell_data["cell_value"].clone()
+        source_global_data = mesh.global_data["case_value"].clone()
+
+        pv_mesh = to_pyvista(mesh, force_copy=True)
+        pv_mesh.points[0, 0] = 10.0
+        pv_mesh.cell_connectivity[0] = 1
+        pv_mesh.point_data["point_value"][0] = 10.0
+        pv_mesh.cell_data["cell_value"][0] = 10.0
+        pv_mesh.field_data["case_value"][0] = 10.0
+
+        torch.testing.assert_close(mesh.points, source_points)
+        torch.testing.assert_close(mesh.cells, source_cells)
+        torch.testing.assert_close(mesh.point_data["point_value"], source_point_data)
+        torch.testing.assert_close(mesh.cell_data["cell_value"], source_cell_data)
+        torch.testing.assert_close(mesh.global_data["case_value"], source_global_data)
+
 
 ### Parametrized Tests for Device Handling ###
 
