@@ -43,9 +43,9 @@ from physicsnemo.nn.functional.fourier_spectral import (
 from physicsnemo.nn.functional.geometry import (
     DisplacePoints,
     FarthestPointSampling,
-    MorphPoints,
     MeshPoissonDiskSample,
     MeshToVoxelFraction,
+    MorphPoints,
     RayMeshIntersect,
     SignedDistanceField,
 )
