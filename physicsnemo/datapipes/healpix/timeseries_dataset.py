@@ -246,13 +246,16 @@ class TimeSeriesDataset(Datapipe):
         scaling_da = scaling_df.to_xarray().astype("float32")
 
         # REMARK: we remove the xarray overhead from these
+        # base (non-coupled) datasets have no 'couplings' attribute, and coupled
+        # datasets may be configured with an empty couplings list; treat both as
+        # zero coupled variables rather than indexing into an empty/missing list.
+        couplings = getattr(self, "couplings", [])
+        num_coupled_vars = len(couplings[0].variables) if couplings else 0
         try:
             # 'if' statement used for cases where atmos model
             # includes diagnostic variables like tp6 and msl.
             # using 'channel_out' is still necessary for ocean models.
-            if len(self.ds.channel_out) != (
-                len(self.ds.channel_in) - len(self.couplings[0].variables)
-            ):
+            if len(self.ds.channel_out) != (len(self.ds.channel_in) - num_coupled_vars):
                 self.input_scaling = scaling_da.sel(
                     index=self.ds.channel_in.values
                 ).rename({"index": "channel_in"})

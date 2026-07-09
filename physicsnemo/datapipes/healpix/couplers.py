@@ -45,7 +45,6 @@ class BaseCoupler(ABC):
         output_time_dim: int = 2,
         input_times: Sequence = [pd.Timedelta("24h"), pd.Timedelta("48h")],
         prepared_coupled_data: bool = True,
-        time_first: bool = True,
     ):
         """
         Parameters
@@ -74,9 +73,6 @@ class BaseCoupler(ABC):
             averages have already been calculated so that each time step denotes
             the right side of a averaging_window window.
             This is highly recommended for training, default True
-        time_first: boolean, optional
-            Whether the coupled data should be permuted to have the time dimension first
-            [T, B, C, F, H, W] rather than [B, F, T, C, H, W]
         """
         # extract important meta data from ds
         self.ds = dataset
@@ -96,7 +92,6 @@ class BaseCoupler(ABC):
         self.coupled_mode = False
         self.integrated_couplings = None
         self.ds_variable_indices = []
-        self.time_first = time_first
 
         if not prepared_coupled_data:
             raise NotImplementedError("Data preparation not yet implemented")
@@ -105,11 +100,15 @@ class BaseCoupler(ABC):
             self.use_zarr = False
         elif isinstance(self.ds, zr.Group):
             self.use_zarr = True
+            # iterate over self.variables in the outer loop so the selected
+            # indices follow the order of self.variables (matching the xarray
+            # path's `.sel(channel_in=self.variables)`), not the dataset's
+            # native channel_in order. Downstream code (e.g. coupled_scaling,
+            # built from self.variables order in set_scaling) assumes the
+            # coupled channel axis is ordered by self.variables.
+            channel_in = list(self.ds["channel_in"])
             self.ds_variable_indices = [
-                i
-                for i, ic in enumerate(self.ds["channel_in"])
-                for v in self.variables
-                if ic == v
+                i for v in self.variables for i, ic in enumerate(channel_in) if ic == v
             ]
         else:
             raise TypeError(
@@ -144,7 +143,7 @@ class BaseCoupler(ABC):
         data_time_step:
             dataset timestep
         """
-        pass
+        pass  # pragma: no cover - abstract method body, always overridden
 
     def set_scaling(self, scaling_da):
         """
@@ -231,7 +230,7 @@ class BaseCoupler(ABC):
             The data to use when the dataloader requests coupled fields. Expected
             format is [B, F, T, C, H, W]
         """
-        pass
+        pass  # pragma: no cover - abstract method body, always overridden
 
     def _construct_integrated_couplings_from_dataset(self, batch, bsize):
         """
@@ -314,12 +313,11 @@ class BaseCoupler(ABC):
                     self.integrated_couplings[b, i, :, :, :] = coupling_temp.reshape(
                         (self.timevar_dim,) + coupling_temp.shape[2:]
                     )
-            if self.time_first:
-                return self.integrated_couplings.transpose((1, 0, 2, 3, 4, 5)).astype(
-                    "float32"
-                )  # cast to float for compatibility
-            else:
-                return self.integrated_couplings.astype("float32")
+            # permute to have the time dimension first [T, B, C, F, H, W]
+            # rather than [B, F, T, C, H, W], and cast to float for compatibility
+            return self.integrated_couplings.transpose((1, 0, 2, 3, 4, 5)).astype(
+                "float32"
+            )
 
 
 class ConstantCoupler(BaseCoupler):
@@ -428,10 +426,11 @@ class ConstantCoupler(BaseCoupler):
         )
         # broadcast the first time step to all the integration steps
         self.preset_coupled_fields[:, :, :, :, :, :] = coupled_fields[:, :, :1, :, :, :]
-        if self.time_first:
-            self.preset_coupled_fields = self.preset_coupled_fields.permute(
-                2, 0, 3, 1, 4, 5
-            )
+        # permute to have the time dimension first [T, B, C, F, H, W]
+        # rather than [B, F, T, C, H, W]
+        self.preset_coupled_fields = self.preset_coupled_fields.permute(
+            2, 0, 3, 1, 4, 5
+        )
         # flag for construct integrated coupling method to use this array
         self.coupled_mode = True
 
@@ -585,9 +584,10 @@ class TrailingAverageCoupler(BaseCoupler):
             ]
             coupled_averaging_periods.append(th.concat(averaging_periods, dim=3))
         self.preset_coupled_fields = th.concat(coupled_averaging_periods, dim=2)
-        if self.time_first:
-            self.preset_coupled_fields = self.preset_coupled_fields.permute(
-                2, 0, 3, 1, 4, 5
-            )
+        # permute to have the time dimension first [T, B, C, F, H, W]
+        # rather than [B, F, T, C, H, W]
+        self.preset_coupled_fields = self.preset_coupled_fields.permute(
+            2, 0, 3, 1, 4, 5
+        )
         # flag for construct integrated coupling method to use this array
         self.coupled_mode = True

@@ -337,19 +337,35 @@ class BaseTimeSeriesDatasetZarr(Datapipe, ABC):
         if "time" not in ds:
             raise KeyError(f"Dataset missing time. Dataset provided {dataset_path}")
 
-        if np.datetime64(start_date) < ds.time[0]:
+        # integer start/end dates are indices into the time array rather than
+        # dates themselves (see the int handling below), so they can't be
+        # compared against `ds.time` via `np.datetime64`
+        if (
+            start_date is not None
+            and not isinstance(start_date, int)
+            and np.datetime64(start_date) < ds.time[0]
+        ):
             warnings.warn(
                 f"Start date {start_date} is before first available date {ds.time[0].values}"
             )
-        if ds.time[-1] < np.datetime64(end_date):
+        if (
+            end_date is not None
+            and not isinstance(end_date, int)
+            and ds.time[-1] < np.datetime64(end_date)
+        ):
             warnings.warn(
                 f"End date {end_date} is after last available date {ds.time[-1].values}"
             )
 
         # used when we need all the dates to calculate things like offset indices
         self.time_da = ds.time.copy(deep=True)
-        # a list of dates that is available to fetch, used for things like inferencers
-        self.times = self.time_da.sel(time=slice(start_date, end_date))
+        # a list of dates that is available to fetch, used for things like inferencers.
+        # integer start/end dates are positional indices into the time array rather
+        # than dates themselves, so they need `isel` instead of the label-based `sel`
+        if isinstance(start_date, int) or isinstance(end_date, int):
+            self.times = self.time_da.isel(time=slice(start_date, end_date))
+        else:
+            self.times = self.time_da.sel(time=slice(start_date, end_date))
         self.total_samples = self.times.shape[0]
 
         if start_date:
@@ -481,27 +497,20 @@ class BaseTimeSeriesDatasetZarr(Datapipe, ABC):
                     f"Constant variables {missing_constants} not found in the scaling config dict data.scaling ({list(self.scaling.keys())})"
                 )
 
-            try:
-                self.constant_scaling = scaling_da.sel(
-                    index=self.constant_variables
-                ).rename({"index": "channel_out"})
-                self.constant_scaling = {
-                    "mean": np.expand_dims(
-                        self.constant_scaling["mean"].values.copy(), (1, 2, 3)
-                    ),
-                    "std": np.expand_dims(
-                        self.constant_scaling["std"].values.copy(), (1, 2, 3)
-                    ),
-                }
-            except (ValueError, KeyError):
-                missing = [
-                    m
-                    for m in self.constant_variables
-                    if m not in list(self.scaling.keys())
-                ]
-                raise KeyError(
-                    f"Constant channels {missing} not found in the scaling config dict data.scaling ({list(self.scaling.keys())})"
-                )
+            # no try/except needed here: the missing_constants check above
+            # already guarantees every name in self.constant_variables is
+            # present in self.scaling, which is what backs scaling_da's index
+            self.constant_scaling = scaling_da.sel(
+                index=self.constant_variables
+            ).rename({"index": "channel_out"})
+            self.constant_scaling = {
+                "mean": np.expand_dims(
+                    self.constant_scaling["mean"].values.copy(), (1, 2, 3)
+                ),
+                "std": np.expand_dims(
+                    self.constant_scaling["std"].values.copy(), (1, 2, 3)
+                ),
+            }
 
     def get_constants(self) -> np.ndarray:
         """Get constant fields used in dataset.
@@ -627,4 +636,4 @@ class BaseTimeSeriesDatasetZarr(Datapipe, ABC):
             H = height
             W = width
         """
-        pass
+        pass  # pragma: no cover - abstract method body, always overridden

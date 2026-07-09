@@ -221,13 +221,18 @@ class CoupledTimeSeriesDataset(TimeSeriesDataset):
             )
 
         # for models with extra outputs
+        # an empty couplings list means zero coupled variables, rather than
+        # indexing into a non-existent first coupling
+        num_coupled_vars = len(self.couplings[0].variables) if self.couplings else 0
         if len(self.ds["targets"].channel_out) != (
-            len(self.ds["inputs"].channel_in) - len(self.couplings[0].variables)
+            len(self.ds["inputs"].channel_in) - num_coupled_vars
         ):
+            channel_slice = (
+                slice(None, -num_coupled_vars) if num_coupled_vars else slice(None)
+            )
             input_array = (
-                input_array
-                - self.input_scaling["mean"][:, : -len(self.couplings[0].variables)]
-            ) / self.input_scaling["std"][:, : -len(self.couplings[0].variables)]
+                input_array - self.input_scaling["mean"][:, channel_slice]
+            ) / self.input_scaling["std"][:, channel_slice]
         else:
             input_array = (
                 input_array - self.input_scaling["mean"]

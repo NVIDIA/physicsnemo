@@ -19,11 +19,10 @@ import random
 import warnings
 
 import pytest
-from torch.utils.data import DataLoader
-from torch.utils.data.distributed import DistributedSampler
 
 from physicsnemo.distributed import DistributedManager
 from test.conftest import requires_module
+from test.datapipes.healpix.conftest import assert_shard_dataloaders
 
 omegaconf = pytest.importorskip("omegaconf")
 np = pytest.importorskip("numpy")
@@ -31,58 +30,40 @@ xr = pytest.importorskip("xarray")
 zarr = pytest.importorskip("zarr")
 
 
-@pytest.fixture
-def dataset_path(nfs_data_dir):
-    return nfs_data_dir.joinpath("datasets/healpix/healpix.zarr")
+def test_object_store_path_helpers(tmp_path):
+    """Zarr datasets may live on object stores (e.g. s3://, or fsspec-chained paths
+    like simplecache::s3://); such paths are recognized by path syntax alone and
+    skip the local filesystem existence check performed for plain local paths.
+    This behavior is unique to the Zarr-backed datapipes and doesn't require the
+    NFS test dataset, so it can run unconditionally.
+    """
+    from physicsnemo.datapipes.healpix.base_timeseries_dataset_zarr import (
+        _check_availability,
+        _is_object_store_path,
+    )
 
+    assert _is_object_store_path("s3://bucket/data.zarr")
+    assert _is_object_store_path("simplecache::s3://bucket/data.zarr")
+    assert not _is_object_store_path(str(tmp_path / "local.zarr"))
 
-@pytest.fixture
-def splits():
-    split_dict = {
-        "train_date_start": "1979-01-01",
-        "train_date_end": "1979-01-01T21:00",
-        "val_date_start": "1979-01-02",
-        "val_date_end": "1979-01-02T09:00",
-        "test_date_start": "1979-01-02T12:00",
-        "test_date_end": "1979-01-02T18:00",
-    }
-    return split_dict
+    # an existing local path passes without needing fsspec
+    existing_path = tmp_path / "exists.zarr"
+    existing_path.mkdir()
+    _check_availability(str(existing_path))
 
+    # a missing local path raises FileNotFoundError
+    with pytest.raises(FileNotFoundError, match=("Dataset not found at")):
+        _check_availability(str(tmp_path / "missing.zarr"))
 
-@pytest.fixture
-def scaling_dict():
-    scaling = {
-        "t2m0": {"mean": 287.8665771484375, "std": 14.86227798461914},
-        "t850": {"mean": 281.2710266113281, "std": 12.04991626739502},
-        "tau300-700": {"mean": 61902.72265625, "std": 2559.8408203125},
-        "tcwv0": {"mean": 24.034976959228516, "std": 16.411935806274414},
-        "z1000": {"mean": 952.1435546875, "std": 895.7516479492188},
-        "z250": {"mean": 101186.28125, "std": 5551.77978515625},
-        "z500": {"mean": 55625.9609375, "std": 2681.712890625},
-        "lsm": {"mean": 0, "std": 1},
-        "z": {"mean": 0, "std": 1},
-        "tp6": {"mean": 1, "std": 0, "log_epsilon": 1e-6},
-        "extra": {"mean": 1, "std": 0},  # doesn't appear in test dataset
-    }
-    return omegaconf.DictConfig(scaling)
-
-
-@pytest.fixture
-def scaling_double_dict():
-    scaling = {
-        "t2m0": {"mean": 0, "std": 2},
-        "t850": {"mean": 0, "std": 2},
-        "tau300-700": {"mean": 0, "std": 2},
-        "tcwv0": {"mean": 0, "std": 2},
-        "z1000": {"mean": 0, "std": 2},
-        "z250": {"mean": 0, "std": 2},
-        "z500": {"mean": 0, "std": 2},
-        "tp6": {"mean": 0, "std": 2, "log_epsilon": 1e-6},
-        "lsm": {"mean": 0, "std": 2},
-        "z": {"mean": 0, "std": 2},
-        "extra": {"mean": 0, "std": 2},  # doesn't appear in test dataset
-    }
-    return omegaconf.DictConfig(scaling)
+    # object store paths bypass the local existence check as long as fsspec
+    # is installed, even when the remote resource doesn't actually exist
+    if importlib.util.find_spec("fsspec"):
+        _check_availability("s3://bucket-that-does-not-exist/missing.zarr")
+    else:
+        with pytest.raises(
+            ImportError, match=("fsspec is required to access object store paths")
+        ):
+            _check_availability("s3://bucket-that-does-not-exist/missing.zarr")
 
 
 @requires_module("omegaconf")
@@ -103,7 +84,6 @@ def test_TimeSeriesDataset_initialization(
     bad_end_date = "2000-12-31"
     valid_end_date = "1979-01-02"
 
-    zarr_ds = zarr.open(dataset_path)
     time_da = xr.open_zarr(dataset_path).time
 
     # check for failure of invalid dataset path
@@ -137,7 +117,7 @@ def test_TimeSeriesDataset_initialization(
             time_step="5h",
             scaling=scaling_dict,
             input_variables=input_variables,
-            forecast_init_times=zarr_ds.time[:2],
+            forecast_init_times=time_da[:2],
             batch_size=1,
         )
 
@@ -173,6 +153,38 @@ def test_TimeSeriesDataset_initialization(
             batch_size=1,
         )
 
+    # check for failure when a requested variable isn't present in the dataset
+    # this validation is specific to the Zarr-backed dataset, which selects
+    # channels by name directly out of the store rather than relying on a
+    # pre-sliced xarray Dataset
+    with pytest.raises(
+        KeyError,
+        match=("Requested Input, coupled, or output variables not found in dataset"),
+    ):
+        timeseries_ds = TimeSeriesDatasetZarr(
+            dataset_path=dataset_path,
+            scaling=scaling_dict,
+            start_date=valid_start_date,
+            end_date=valid_end_date,
+            input_variables=input_variables + ["DoesntExist"],
+        )
+
+    # check for warning when the configured data_time_step doesn't match the
+    # dataset's native cadence; this cross-check against the stored time
+    # coordinate only exists in the Zarr-backed dataset
+    warnings.filterwarnings("error")
+    with pytest.raises(UserWarning, match=("doesn't match configuration dt")):
+        timeseries_ds = TimeSeriesDatasetZarr(
+            dataset_path=dataset_path,
+            scaling=scaling_dict,
+            data_time_step="6h",
+            time_step="6h",
+            start_date=valid_start_date,
+            end_date=valid_end_date,
+            input_variables=input_variables,
+        )
+    warnings.resetwarnings()
+
     # check for warning on batch size > 1 and forecast mode
     warnings.filterwarnings("error")
     with pytest.raises(
@@ -185,7 +197,7 @@ def test_TimeSeriesDataset_initialization(
             dataset_path=dataset_path,
             scaling=scaling_dict,
             batch_size=2,
-            forecast_init_times=zarr_ds.time[:2],
+            forecast_init_times=time_da[:2],
             input_variables=input_variables,
         )
     warnings.resetwarnings()
@@ -269,6 +281,89 @@ def test_TimeSeriesDataset_initialization(
         input_variables=input_variables,
     )
     assert isinstance(timeseries_ds, TimeSeriesDatasetZarr)
+
+    # `start_date`/`end_date` can also be integer positional indices into the
+    # time array rather than dates (use a nonzero start_date since 0 is falsy
+    # and would take the same code path as "no start date provided")
+    timeseries_ds = TimeSeriesDatasetZarr(
+        dataset_path=dataset_path,
+        scaling=scaling_dict,
+        start_date=2,
+        end_date=5,
+        input_variables=input_variables,
+    )
+    assert timeseries_ds.start_index == 2
+    assert timeseries_ds.total_samples == 3
+
+    # check for failure when a requested output variable has no scaling
+    # entry, even though it's present in the dataset (and in the input
+    # scaling, if it happens to also be an input variable)
+    scaling_missing_target = omegaconf.DictConfig(
+        {k: v for k, v in scaling_dict.items() if k != "z1000"}
+    )
+    with pytest.raises(KeyError, match=("Target channels ")):
+        timeseries_ds = TimeSeriesDatasetZarr(
+            dataset_path=dataset_path,
+            scaling=scaling_missing_target,
+            start_date=valid_start_date,
+            end_date=valid_end_date,
+            input_variables=["t2m0"],
+            output_variables=["t2m0", "z1000"],
+        )
+
+    # check for failure when a requested constant variable exists in the
+    # dataset but has no corresponding scaling entry
+    scaling_missing_constant = omegaconf.DictConfig(
+        {k: v for k, v in scaling_dict.items() if k != "z"}
+    )
+    with pytest.raises(KeyError, match=("Constant variables ")):
+        timeseries_ds = TimeSeriesDatasetZarr(
+            dataset_path=dataset_path,
+            scaling=scaling_missing_constant,
+            start_date=valid_start_date,
+            end_date=valid_end_date,
+            input_variables=input_variables,
+            constant_variables=["lsm", "z"],
+        )
+
+
+def test_TimeSeriesDataset_missing_time(tmp_path):
+    """The Zarr-backed dataset validates that the store has a `time`
+    variable before doing any time-based indexing; this check is unique to
+    the Zarr path (the classic path always derives its dataset from a
+    pre-opened xarray Dataset that already has a time dimension), so build a
+    minimal Zarr store without a time coordinate to exercise it directly.
+    """
+    from physicsnemo.datapipes.healpix.timeseries_dataset_zarr import (
+        TimeSeriesDatasetZarr,
+    )
+
+    no_time_ds = xr.Dataset(
+        data_vars={
+            "inputs": (
+                ("t", "channel_in", "face", "height", "width"),
+                np.zeros((3, 1, 1, 2, 2), dtype="float32"),
+            ),
+            "targets": (
+                ("t", "channel_out", "face", "height", "width"),
+                np.zeros((3, 1, 1, 2, 2), dtype="float32"),
+            ),
+        },
+        coords={
+            "channel_in": ["z500"],
+            "channel_out": ["z500"],
+        },
+    )
+    dataset_path = tmp_path / "no_time.zarr"
+    no_time_ds.to_zarr(dataset_path)
+
+    with pytest.raises(KeyError, match=("Dataset missing time")):
+        TimeSeriesDatasetZarr(
+            dataset_path=str(dataset_path),
+            input_variables=["z500"],
+            start_date="1979-01-01",
+            end_date="1979-01-02",
+        )
 
 
 @requires_module("omegaconf")
@@ -507,6 +602,37 @@ def test_TimeSeriesDataset_get(dataset_path, scaling_double_dict, splits, pytest
     )
     assert (len(inputs)) + 2 == len(timeseries_ds[0][0])
 
+    # train noise is applied directly to the inputs of the (non-coupled) Zarr
+    # dataset; this option doesn't exist on the classic (non-Zarr) TimeSeriesDataset
+    timeseries_ds = TimeSeriesDatasetZarr(
+        dataset_path=dataset_path,
+        input_variables=input_variables,
+        scaling=scaling_double_dict,
+        batch_size=batch_size,
+        drop_last=True,
+        start_date=time_da[0],
+        end_date=time_da[-1],
+    )
+    non_perturbed = timeseries_ds[0]
+
+    noise_params = {"inputs": scaling_double_dict}
+    timeseries_ds = TimeSeriesDatasetZarr(
+        dataset_path=dataset_path,
+        input_variables=input_variables,
+        scaling=scaling_double_dict,
+        batch_size=batch_size,
+        drop_last=True,
+        add_train_noise=True,
+        train_noise_params=noise_params,
+        start_date=time_da[0],
+        end_date=time_da[-1],
+    )
+    perturbed = timeseries_ds[0]
+
+    # same shape, but the perturbed sample should differ from the un-perturbed one
+    assert non_perturbed[0][0].shape == perturbed[0][0].shape
+    assert not np.array_equal(non_perturbed[0][0], perturbed[0][0])
+
     # nothing should change with forecast mode other than getting just inputs
     init_times = random.randint(1, len(zarr_ds.time.values))
     timeseries_ds = TimeSeriesDatasetZarr(
@@ -743,29 +869,5 @@ def test_TimeSeriesDataModule_get_dataloaders(
         shuffle=False,
     )
 
-    # with 1 shard should get no sampler
-    train_dataloader, train_sampler = timeseries_dm.train_dataloader(num_shards=1)
-    assert train_sampler is None
-    assert isinstance(train_dataloader, DataLoader)
-
-    val_dataloader, val_sampler = timeseries_dm.val_dataloader(num_shards=1)
-    assert val_sampler is None
-    assert isinstance(val_dataloader, DataLoader)
-
-    test_dataloader, test_sampler = timeseries_dm.test_dataloader(num_shards=1)
-    assert test_sampler is None
-    assert isinstance(test_dataloader, DataLoader)
-
-    # with >1 shard should be distributed sampler
-    train_dataloader, train_sampler = timeseries_dm.train_dataloader(num_shards=2)
-    assert isinstance(train_sampler, DistributedSampler)
-    assert isinstance(train_dataloader, DataLoader)
-
-    val_dataloader, val_sampler = timeseries_dm.val_dataloader(num_shards=2)
-    assert isinstance(val_sampler, DistributedSampler)
-    assert isinstance(val_dataloader, DataLoader)
-
-    test_dataloader, test_sampler = timeseries_dm.test_dataloader(num_shards=2)
-    assert isinstance(test_sampler, DistributedSampler)
-    assert isinstance(test_dataloader, DataLoader)
+    assert_shard_dataloaders(timeseries_dm)
     DistributedManager.cleanup()

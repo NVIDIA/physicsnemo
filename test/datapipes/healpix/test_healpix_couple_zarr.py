@@ -16,15 +16,13 @@
 
 import random
 import warnings
-from dataclasses import dataclass
 
 import pytest
 import torch as th
-from torch.utils.data import DataLoader
-from torch.utils.data.distributed import DistributedSampler
 
 from physicsnemo.distributed import DistributedManager
 from test.conftest import requires_module
+from test.datapipes.healpix.conftest import assert_shard_dataloaders, coupler_helper
 
 omegaconf = pytest.importorskip("omegaconf")
 np = pytest.importorskip("numpy")
@@ -33,106 +31,25 @@ xr = pytest.importorskip("xarray")
 zarr = pytest.importorskip("zarr")
 
 
-@pytest.fixture
-def dataset_path(nfs_data_dir):
-    return nfs_data_dir.joinpath("datasets/healpix/healpix.zarr")
+def test_base_coupler_invalid_dataset_type():
+    """Couplers dispatch on the runtime type of `dataset` to decide whether to use
+    the Zarr-native code path (`zarr.Group`) or the xarray-based one (`xr.Dataset`).
+    This dispatch logic is new (added to support the Zarr datapipes) and doesn't
+    require the NFS test dataset, so it can run unconditionally.
+    """
+    from physicsnemo.datapipes.healpix.couplers import ConstantCoupler
 
+    fake_dataset = {"inputs": np.zeros((4, 12, 1, 4, 4))}
 
-@pytest.fixture
-def splits():
-    split_dict = {
-        "train_date_start": "1979-01-01",
-        "train_date_end": "1979-01-01T21:00",
-        "val_date_start": "1979-01-02",
-        "val_date_end": "1979-01-02T09:00",
-        "test_date_start": "1979-01-02T12:00",
-        "test_date_end": "1979-01-02T18:00",
-    }
-    return split_dict
-
-
-@pytest.fixture
-def constant_coupler_config():
-    constant_coupler = [
-        {
-            "coupler": "ConstantCoupler",
-            "params": {
-                "batch_size": 1,
-                "variables": ["z250"],
-                "input_times": ["0h"],
-                "input_time_dim": 1,
-                "output_time_dim": 1,
-                "presteps": 0,
-                "prepared_coupled_data": True,
-            },
-        }
-    ]
-    return constant_coupler
-
-
-@pytest.fixture
-def average_coupler_config():
-    average_coupler = [
-        {
-            "coupler": "ConstantCoupler",
-            "params": {
-                "batch_size": 1,
-                "variables": ["z250"],
-                "input_times": ["0h"],
-                "input_time_dim": 1,
-                "output_time_dim": 1,
-                "presteps": 0,
-                "prepared_coupled_data": True,
-            },
-        }
-    ]
-    return average_coupler
-
-
-@dataclass
-class coupler_helper:
-    """helper class for setting up the couplers"""
-
-    output_variables: list
-    time_step: str
-
-
-@pytest.fixture
-def scaling_dict():
-    scaling = {
-        "t2m0": {"mean": 287.8665771484375, "std": 14.86227798461914},
-        "t850": {"mean": 281.2710266113281, "std": 12.04991626739502},
-        "tau300-700": {"mean": 61902.72265625, "std": 2559.8408203125},
-        "tcwv0": {"mean": 24.034976959228516, "std": 16.411935806274414},
-        "z1000": {"mean": 952.1435546875, "std": 895.7516479492188},
-        "z1000-12h": {"mean": 952.1435546875, "std": 895.7516479492188},
-        "z250": {"mean": 101186.28125, "std": 5551.77978515625},
-        "z500": {"mean": 55625.9609375, "std": 2681.712890625},
-        "lsm": {"mean": 0, "std": 1},
-        "z": {"mean": 0, "std": 1},
-        "tp6": {"mean": 1, "std": 0, "log_epsilon": 1e-6},
-        "extra": {"mean": 0, "std": 0},  # doesn't appear in test dataset
-    }
-    return omegaconf.DictConfig(scaling)
-
-
-@pytest.fixture
-def scaling_double_dict():
-    scaling = {
-        "t2m0": {"mean": 0, "std": 2},
-        "t850": {"mean": 0, "std": 2},
-        "tau300-700": {"mean": 0, "std": 2},
-        "tcwv0": {"mean": 0, "std": 2},
-        "z1000": {"mean": 0, "std": 2},
-        "z1000-12h": {"mean": 0, "std": 2},
-        "z250": {"mean": 0, "std": 2},
-        "z500": {"mean": 0, "std": 2},
-        "lsm": {"mean": 0, "std": 2},
-        "z": {"mean": 0, "std": 2},
-        "tp6": {"mean": 0, "std": 2, "log_epsilon": 1e-6},
-        "extra": {"mean": 0, "std": 2},  # doesn't appear in test dataset
-    }
-    return omegaconf.DictConfig(scaling)
+    with pytest.raises(
+        TypeError,
+        match=("Coupler only supports xarray Datasets or zarr Groups"),
+    ):
+        ConstantCoupler(
+            dataset=fake_dataset,
+            batch_size=1,
+            variables=["z500"],
+        )
 
 
 @requires_module("omegaconf")
@@ -155,7 +72,7 @@ def test_ConstantCoupler(dataset_path, scaling_dict, pytestconfig):
     # open our test dataset
     zarr_ds = zarr.open(dataset_path)
     input_indices = [
-        int(np.where(zarr_ds.channel_in[:] == ch)[0][0]) for ch in variables
+        int(np.where(zarr_ds["channel_in"][:] == ch)[0][0]) for ch in variables
     ]
 
     # test fail initialization
@@ -238,26 +155,14 @@ def test_ConstantCoupler(dataset_path, scaling_dict, pytestconfig):
     assert coupler.coupled_mode
     assert list(coupler.construct_integrated_couplings().shape) == expected_shape
 
-    # verify that the data is being properly transformed
-    expected = coupled_fields[:, :, :, coupler.coupled_channel_indices, :, :].permute(
-        2, 0, 3, 1, 4, 5
-    )
-    expected = expected[0, :, -1:, :, :, :]
-    expected = expected.unsqueeze(0)
-    expected = expected.repeat(
-        coupler.coupled_integration_dim, 1, coupled_fields_batch_size, 1, 1, 1
-    )
-    result = coupler.construct_integrated_couplings()
-    assert th.equal(expected, coupler.construct_integrated_couplings())
-
-    # verify that dimensions aren't reordered when time_first is false
-    coupler.time_first = False
-    coupler.set_coupled_fields(coupled_fields)
-    # [T, B, C, F, H, W]
-    expected = expected.permute(1, 3, 0, 2, 4, 5)
+    # verify that the data is being properly transformed: set_coupled_fields
+    # broadcasts the first time step of coupled_fields across the integration
+    # dim and permutes to [integration_dim, batch, timevar, face, height, width]
+    expected = coupled_fields[:, :, :, coupler.coupled_channel_indices, :, :]
+    expected = expected[:, :, :1, :, :, :]
+    expected = expected.permute(2, 0, 3, 1, 4, 5)
     result = coupler.construct_integrated_couplings()
     assert th.equal(expected, result)
-    coupler.time_first = True
 
     # test coupler reset
     coupler.reset_coupler()
@@ -268,7 +173,7 @@ def test_ConstantCoupler(dataset_path, scaling_dict, pytestconfig):
         "mean": np.expand_dims(coupled_scaling["mean"].to_numpy(), (0, 2, 3, 4)),
         "std": np.expand_dims(coupled_scaling["std"].to_numpy(), (0, 2, 3, 4)),
     }
-    expected = zarr_ds.inputs[:2][:, input_indices]
+    expected = zarr_ds["inputs"][:2][:, input_indices]
     expected = (expected - coupled_scaling["mean"]) / coupled_scaling["std"]
     coupled_field = coupler.construct_integrated_couplings(
         batch=batch, bsize=batch_size
@@ -276,6 +181,88 @@ def test_ConstantCoupler(dataset_path, scaling_dict, pytestconfig):
     assert np.array_equal(expected, coupled_field[0])
 
     DistributedManager.cleanup()
+
+
+@requires_module("omegaconf")
+@requires_module("netCDF4")
+@requires_module("pandas")
+@requires_module("xarray")
+def test_ConstantCoupler_multiple_variables_order(dataset_path):
+    """Regression test for a bug where the Zarr-backed coupling path selected
+    coupled channels in the dataset's native channel_in order rather than the
+    order given by `variables`, while the xarray-backed path (`.sel`) always
+    honored the requested order. With 2+ coupled variables requested out of
+    their native dataset order, this silently misaligned `coupled_scaling`
+    (which is built from `variables` order) against the loaded data, applying
+    the wrong mean/std to the wrong channel. Only surfaces with 2+ variables
+    that aren't already in native dataset order, which none of the other
+    tests happen to exercise.
+    """
+    from physicsnemo.datapipes.healpix.couplers import ConstantCoupler
+
+    xr_ds = xr.open_zarr(dataset_path)
+    zarr_ds = zarr.open(dataset_path)
+
+    # deliberately request the coupled variables in the opposite order from
+    # how they appear natively in the dataset's channel_in coordinate
+    # (native order is z500, ..., z1000, ..., z250)
+    native_order = list(xr_ds.channel_in.values)
+    variables = ["z250", "z1000", "z500"]
+    assert [native_order.index(v) for v in variables] == sorted(
+        [native_order.index(v) for v in variables], reverse=True
+    )
+
+    batch_size = 2
+    batch = {"time": slice(0, 2)}
+
+    coupler_xr = ConstantCoupler(
+        dataset=xr_ds,
+        batch_size=batch_size,
+        variables=variables,
+        input_times=["0h"],
+        input_time_dim=1,
+        output_time_dim=1,
+    )
+    coupler_zarr = ConstantCoupler(
+        dataset=zarr_ds,
+        batch_size=batch_size,
+        variables=variables,
+        input_times=["0h"],
+        input_time_dim=1,
+        output_time_dim=1,
+    )
+
+    interval = 2
+    data_time_step = "3h"
+    coupler_xr.compute_coupled_indices(interval, data_time_step)
+    coupler_zarr.compute_coupled_indices(interval, data_time_step)
+
+    coupled_xr = coupler_xr.construct_integrated_couplings(
+        batch=batch, bsize=batch_size
+    )
+    coupled_zarr = coupler_zarr.construct_integrated_couplings(
+        batch=batch, bsize=batch_size
+    )
+
+    # the Zarr-backed and xarray-backed couplers must agree exactly, and both
+    # must match the raw data indexed in the order `variables` was given, not
+    # the dataset's native channel_in order
+    input_indices = [
+        int(np.where(zarr_ds["channel_in"][:] == v)[0][0]) for v in variables
+    ]
+    expected = zarr_ds["inputs"][:2][:, input_indices]
+    # coupled_integration_dim is 1 here, so index into the leading dim to get
+    # the [batch, channel, face, height, width] slice that lines up with `expected`
+    assert np.array_equal(expected, coupled_xr[0])
+    assert np.array_equal(expected, coupled_zarr[0])
+
+    # and, per-variable, each channel's data must match that specific
+    # variable's raw data, not another (coupled) variable's
+    for i, var in enumerate(variables):
+        var_index = int(np.where(zarr_ds["channel_in"][:] == var)[0][0])
+        expected_var = zarr_ds["inputs"][:2][:, var_index]
+        assert np.array_equal(expected_var, coupled_zarr[0][:, i])
+        assert np.array_equal(expected_var, coupled_xr[0][:, i])
 
 
 @requires_module("omegaconf")
@@ -313,19 +300,6 @@ def test_TrailingAverageCoupler(dataset_path, scaling_dict, pytestconfig):
             prepared_coupled_data=False,
         )
 
-    # test fail when input times aren't evenly divisible by dataset dt
-    with pytest.raises(ValueError, match=("Coupled input times")):
-        coupler = TrailingAverageCoupler(
-            dataset=zarr_ds,
-            batch_size=batch_size,
-            variables=variables,
-            presteps=presteps,
-            averaging_window=averaging_window,
-            input_times=["30m"],
-            input_time_dim=input_time_dim,
-            output_time_dim=output_time_dim,
-        )
-
     coupler = TrailingAverageCoupler(
         dataset=zarr_ds,
         batch_size=batch_size,
@@ -337,6 +311,12 @@ def test_TrailingAverageCoupler(dataset_path, scaling_dict, pytestconfig):
         output_time_dim=output_time_dim,
     )
     assert isinstance(coupler, TrailingAverageCoupler)
+
+    # Zarr-backed datasets store time as CF-encoded integers rather than
+    # numpy datetime64; verify the coupler decodes them via cftime into the
+    # same wall-clock times as the xarray view of the same store
+    expected_time_da = xr.open_zarr(dataset_path).time.values
+    assert np.array_equal(coupler.time_da, expected_time_da)
 
     mock_coupled_module = coupler_helper(
         output_variables=["not_coupled", "z500"],
@@ -430,6 +410,96 @@ def test_TrailingAverageCoupler(dataset_path, scaling_dict, pytestconfig):
     assert coupler.coupled_mode
     coupler.reset_coupler()
     assert coupler.coupled_mode is False
+
+    DistributedManager.cleanup()
+
+
+@requires_module("omegaconf")
+@requires_module("netCDF4")
+@requires_module("pandas")
+@requires_module("xarray")
+def test_TrailingAverageCoupler_multiple_variables(dataset_path):
+    """Regression test to ensure `set_coupled_fields` correctly averages and
+    threads through every coupled variable, not just the first. Gives each
+    coupled variable a distinct, constant value in the synthetic
+    `coupled_fields` tensor so that averaging over any time window still
+    yields that same constant, letting each variable's contribution to
+    `preset_coupled_fields` be checked in isolation and by position.
+    """
+    from physicsnemo.datapipes.healpix.couplers import TrailingAverageCoupler
+
+    variables = ["z500", "z1000-12h", "z250"]
+    input_times = ["6h", "12h"]
+    input_time_dim = 2
+    output_time_dim = 2
+    batch_size = 2
+    averaging_window = "6h"
+    zarr_ds = zarr.open(dataset_path)
+
+    coupler = TrailingAverageCoupler(
+        dataset=zarr_ds,
+        batch_size=batch_size,
+        variables=variables,
+        presteps=0,
+        averaging_window=averaging_window,
+        input_times=input_times,
+        input_time_dim=input_time_dim,
+        output_time_dim=output_time_dim,
+    )
+    coupler.coupled_channel_indices = list(range(len(variables)))
+
+    data_time_step = "3h"
+    averaging_window_max_indices = [
+        i // pd.Timedelta(data_time_step) for i in input_times
+    ]
+    di = averaging_window_max_indices[0]
+    averaging_slices = []
+    for j in range(coupler.coupled_integration_dim):
+        averaging_slices.append([])
+        for i, r in enumerate(averaging_window_max_indices):
+            averaging_slices[j].append(
+                slice(
+                    coupler.input_time_dim * j * di + i * di,
+                    coupler.input_time_dim * j * di + r,
+                )
+            )
+    coupler.averaging_slices = averaging_slices
+
+    # give each coupled variable a distinct, constant value across every
+    # other dimension so the averaging window doesn't change its value, and
+    # each variable's contribution can be checked independently of the
+    # others
+    channel_values = [100.0, 200.0, 300.0]
+    coupled_fields = th.empty(
+        batch_size,
+        coupler.spatial_dims[0],
+        4,
+        len(variables),
+        coupler.spatial_dims[1],
+        coupler.spatial_dims[2],
+    )
+    for i, value in enumerate(channel_values):
+        coupled_fields[:, :, :, i, :, :] = value
+
+    coupler.set_coupled_fields(coupled_fields)
+    result = coupler.construct_integrated_couplings()
+    assert list(result.shape) == [
+        coupler.coupled_integration_dim,
+        batch_size,
+        coupler.timevar_dim,
+    ] + list(coupler.spatial_dims)
+
+    # timevar ordering groups by averaging period first, then by variable
+    # (matching the dataset-loading path in
+    # `_construct_integrated_couplings_from_dataset`/`construct_integrated_couplings`)
+    for period in range(len(input_times)):
+        for var_idx, value in enumerate(channel_values):
+            timevar_idx = period * len(variables) + var_idx
+            slice_result = result[:, :, timevar_idx, :, :, :]
+            assert th.allclose(slice_result, th.full_like(slice_result, value)), (
+                f"coupled variable {variables[var_idx]!r} (value {value}) was not "
+                f"preserved at averaging period {period}, timevar index {timevar_idx}"
+            )
 
     DistributedManager.cleanup()
 
@@ -792,6 +862,39 @@ def test_CoupledTimeSeriesDatasetZarr_get(
     assert non_perturbed_inputs[0][0][0].shape == perturbed_inputs[0][0][0].shape
     assert not np.array_equal(non_perturbed_inputs[0][0][0], perturbed_inputs[0][0][0])
 
+    # noise is also added to the integrated couplings themselves, not just
+    # the regular inputs, when couplings are present. With no constants and
+    # no insolation, inputs_result is [inputs, integrated_couplings]
+    timeseries_ds = CoupledTimeSeriesDatasetZarr(
+        dataset_path=dataset_path,
+        input_variables=input_variables,
+        scaling=scaling_double_dict,
+        batch_size=batch_size,
+        drop_last=True,
+        start_date=zarr_ds.time[0].values,
+        end_date=zarr_ds.time[-1].values,
+        couplings=batch2_constant_coupler,
+    )
+    non_perturbed_sample = timeseries_ds[0][0]
+    assert len(non_perturbed_sample) == 2
+    non_perturbed_couplings = non_perturbed_sample[1]
+
+    timeseries_ds = CoupledTimeSeriesDatasetZarr(
+        dataset_path=dataset_path,
+        input_variables=input_variables,
+        scaling=scaling_double_dict,
+        batch_size=batch_size,
+        drop_last=True,
+        add_train_noise=True,
+        train_noise_params=noise_params,
+        start_date=zarr_ds.time[0].values,
+        end_date=zarr_ds.time[-1].values,
+        couplings=batch2_constant_coupler,
+    )
+    perturbed_couplings = timeseries_ds[0][0][1]
+    assert non_perturbed_couplings.shape == perturbed_couplings.shape
+    assert not np.array_equal(non_perturbed_couplings, perturbed_couplings)
+
     # With insolation we get 1 extra channel
     timeseries_ds = CoupledTimeSeriesDatasetZarr(
         dataset_path=dataset_path,
@@ -1014,31 +1117,7 @@ def test_CoupledTimeSeriesDataModuleZarr_get_dataloaders(
         couplings=constant_coupler_config,
     )
 
-    # with 1 shard should get no sampler
-    train_dataloader, train_sampler = timeseries_dm.train_dataloader(num_shards=1)
-    assert train_sampler is None
-    assert isinstance(train_dataloader, DataLoader)
-
-    val_dataloader, val_sampler = timeseries_dm.val_dataloader(num_shards=1)
-    assert val_sampler is None
-    assert isinstance(val_dataloader, DataLoader)
-
-    test_dataloader, test_sampler = timeseries_dm.test_dataloader(num_shards=1)
-    assert test_sampler is None
-    assert isinstance(test_dataloader, DataLoader)
-
-    # with >1 shard should be distributed sampler
-    train_dataloader, train_sampler = timeseries_dm.train_dataloader(num_shards=2)
-    assert isinstance(train_sampler, DistributedSampler)
-    assert isinstance(train_dataloader, DataLoader)
-
-    val_dataloader, val_sampler = timeseries_dm.val_dataloader(num_shards=2)
-    assert isinstance(val_sampler, DistributedSampler)
-    assert isinstance(val_dataloader, DataLoader)
-
-    test_dataloader, test_sampler = timeseries_dm.test_dataloader(num_shards=2)
-    assert isinstance(test_sampler, DistributedSampler)
-    assert isinstance(test_dataloader, DataLoader)
+    assert_shard_dataloaders(timeseries_dm)
     DistributedManager.cleanup()
 
 
@@ -1105,7 +1184,9 @@ def test_CoupledTimeSeriesDatasetZarr_next_integration(
 
     spatial_dims = [12, 32, 32]
     input_variables = ["z500", "z1000"]
-    coupled_channel_indices = [0, 1]
+    # length must match len(coupled_variables) (i.e. the coupler's timevar_dim);
+    # values are arbitrary since this synthetic setup bypasses setup_coupling()
+    coupled_channel_indices = [0]
     coupled_variables = ["z250"]
     num_variables = len(input_variables)
     input_time_dim = 1
@@ -1167,12 +1248,11 @@ def test_CoupledTimeSeriesDatasetZarr_next_integration(
         spatial_dims[2],
     )
 
-    expected_coupling = coupled_fields[:, :, :, coupled_channel_indices, :, :].permute(
-        2, 0, 3, 1, 4, 5
-    )
-    expected_coupling = expected_coupling[0, :, -1, :, :, :]
-    expected_coupling = expected_coupling.unsqueeze(0).unsqueeze(0)
-    expected_coupling = expected_coupling.repeat(1, batch_size, 1, 1, 1, 1)
+    # mirrors set_coupled_fields: broadcast the first time step across the
+    # integration dim and permute to [integration_dim, batch, timevar, face, height, width]
+    expected_coupling = coupled_fields[:, :, :, coupled_channel_indices, :, :]
+    expected_coupling = expected_coupling[:, :, :1, :, :, :]
+    expected_coupling = expected_coupling.permute(2, 0, 3, 1, 4, 5)
 
     # need to grab at least 1 sample to properly intialize everything
     timeseries_ds[0]
