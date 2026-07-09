@@ -441,8 +441,7 @@ def run_pass(reader, order: list[int], workers: int) -> dict:
 
     t0 = time.perf_counter()
     if workers == 1:
-        for i in order:
-            latencies.append(task(i))
+        latencies = [task(i) for i in order]
     else:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             latencies = list(pool.map(task, order))

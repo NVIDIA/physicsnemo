@@ -55,8 +55,10 @@ def zarr_mesh_dir(tmp_path):
     """Directory with three saved mesh groups."""
     for i in range(3):
         dp.save_mesh_to_zarr(
-            _make_mesh(seed=i), tmp_path / f"sample_{i:04d}.zarr",
-            chunk_cells=32, chunk_points=96,
+            _make_mesh(seed=i),
+            tmp_path / f"sample_{i:04d}.zarr",
+            chunk_cells=32,
+            chunk_points=96,
         )
     return tmp_path
 
@@ -82,9 +84,7 @@ def test_full_roundtrip(zarr_mesh_dir, backend):
 
 @pytest.mark.parametrize("backend", BACKENDS)
 def test_subsample_n_cells(zarr_mesh_dir, backend):
-    reader = dp.ZarrMeshReader(
-        zarr_mesh_dir, backend=backend, subsample_n_cells=10
-    )
+    reader = dp.ZarrMeshReader(zarr_mesh_dir, backend=backend, subsample_n_cells=10)
     gen = torch.Generator().manual_seed(0)
     reader.set_generator(gen)
     mesh, _ = reader[0]
@@ -160,9 +160,7 @@ def test_point_cloud_roundtrip_and_subsample(tmp_path):
 
 def test_invalid_configurations(zarr_mesh_dir, tmp_path):
     with pytest.raises(NotImplementedError):
-        dp.ZarrMeshReader(
-            zarr_mesh_dir, subsample_n_cells=5, subsample_n_points=5
-        )
+        dp.ZarrMeshReader(zarr_mesh_dir, subsample_n_cells=5, subsample_n_points=5)
     reader = dp.ZarrMeshReader(zarr_mesh_dir, subsample_n_points=5)
     with pytest.raises(NotImplementedError):
         reader[0]  # points-subsample on a mesh with cells
@@ -202,8 +200,11 @@ def domain_zarr_dir(tmp_path):
     """Directory with two DomainMesh-schema groups (souped boundaries)."""
     for i in range(2):
         dp.save_domain_mesh_to_zarr(
-            _make_domain_mesh(seed=i), tmp_path / f"run_{i}.zarr",
-            chunk_cells=16, chunk_points=48, soup_boundaries=True,
+            _make_domain_mesh(seed=i),
+            tmp_path / f"run_{i}.zarr",
+            chunk_cells=16,
+            chunk_points=48,
+            soup_boundaries=True,
         )
     return tmp_path
 
@@ -236,9 +237,7 @@ def test_subpath_and_merge_global_data(domain_zarr_dir):
     soup_ref = ref.boundaries["vehicle"]
     # Souped boundary: cell_data and per-cell vertex geometry must match.
     assert torch.equal(mesh.cell_data["pressure"], soup_ref.cell_data["pressure"])
-    assert torch.equal(
-        mesh.points[mesh.cells], soup_ref.points[soup_ref.cells]
-    )
+    assert torch.equal(mesh.points[mesh.cells], soup_ref.points[soup_ref.cells])
     # Boundary's own global_data merged with case-level metadata.
     assert torch.equal(mesh.global_data["U_inf"], torch.tensor([38.9]))
     assert torch.equal(mesh.global_data["rho_inf"], torch.tensor(1.205))
@@ -256,7 +255,8 @@ def test_merge_collision_raises(tmp_path):
     )
     dp.save_domain_mesh_to_zarr(dm, tmp_path / "run_0.zarr")
     reader = dp.ZarrMeshReader(
-        tmp_path, subpath="boundaries/vehicle",
+        tmp_path,
+        subpath="boundaries/vehicle",
         merge_global_data_from="../../global_data",
     )
     with pytest.raises(ValueError, match="collision"):
@@ -326,16 +326,16 @@ def test_zarr_domain_mesh_reader_subsample_and_full_res(domain_zarr_dir):
     assert domain.boundaries["vehicle"].n_cells == 8  # has cells -> n_cells
 
     full = dp.ZarrDomainMeshReader(
-        domain_zarr_dir, subsample_n_points=10, subsample_n_cells=8,
+        domain_zarr_dir,
+        subsample_n_points=10,
+        subsample_n_cells=8,
         full_resolution_boundaries=["vehicle"],
     )
     domain_full, _ = full[0]
     assert domain_full.boundaries["vehicle"].n_cells == 40  # untouched
 
     with pytest.raises(ValueError, match="full_resolution_boundaries"):
-        dp.ZarrDomainMeshReader(
-            domain_zarr_dir, full_resolution_boundaries=["nope"]
-        )
+        dp.ZarrDomainMeshReader(domain_zarr_dir, full_resolution_boundaries=["nope"])
 
 
 def test_zarr_domain_mesh_reader_rejects_mesh_groups(zarr_mesh_dir):
@@ -442,9 +442,7 @@ def test_nested_tensordict_roundtrip(tmp_path, backend):
         mesh.point_data["turbulence", "wall", "omega"],
         ref.point_data["turbulence", "wall", "omega"],
     )
-    assert torch.equal(
-        mesh.cell_data["stress", "max"], ref.cell_data["stress", "max"]
-    )
+    assert torch.equal(mesh.cell_data["stress", "max"], ref.cell_data["stress", "max"])
     assert torch.equal(
         mesh.global_data["freestream", "U"], ref.global_data["freestream", "U"]
     )
@@ -508,9 +506,7 @@ def test_non_tensor_field_rejected(tmp_path):
     mesh = Mesh(
         points=torch.randn(30, 3),
         cells=torch.arange(30, dtype=torch.int64).reshape(10, 3),
-        global_data=TensorDict(
-            {"case_name": NonTensorData("run_042")}, batch_size=[]
-        ),
+        global_data=TensorDict({"case_name": NonTensorData("run_042")}, batch_size=[]),
     )
     with pytest.raises(TypeError, match="NonTensorData"):
         dp.save_mesh_to_zarr(mesh, tmp_path / "bad.zarr")

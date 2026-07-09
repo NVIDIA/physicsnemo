@@ -447,7 +447,9 @@ class _TensorstoreBackend:
 
     def read_many(self, requests: dict[str, slice | None]) -> dict[str, np.ndarray]:
         futures = {
-            name: (self._handle(name)[sl] if sl is not None else self._handle(name)).read()
+            name: (
+                self._handle(name)[sl] if sl is not None else self._handle(name)
+            ).read()
             for name, sl in requests.items()
         }
         return {name: fut.result() for name, fut in futures.items()}
@@ -612,9 +614,7 @@ class ZarrMeshReader:
     def set_epoch(self, epoch: int) -> None:
         """Reseed the subsample RNG for a new epoch (base seed + epoch)."""
         if self._subsample_generator is not None:
-            self._subsample_generator.manual_seed(
-                self._subsample_base_seed + epoch
-            )
+            self._subsample_generator.manual_seed(self._subsample_base_seed + epoch)
 
     def _get_backend(self, index: int):
         if index not in self._backends:
@@ -640,9 +640,7 @@ class ZarrMeshReader:
 
     def _merged_global_data(self, index: int) -> dict[str, Any]:
         """Read the external global_data group for read-time merging."""
-        merge_path = Path(
-            os.path.normpath(self._paths[index] / self._merge_rel_path)
-        )
+        merge_path = Path(os.path.normpath(self._paths[index] / self._merge_rel_path))
         if merge_path not in self._merge_backends:
             if not merge_path.exists():
                 raise FileNotFoundError(
@@ -739,16 +737,12 @@ class ZarrMeshReader:
                     n_cells, npc
                 )
             elif "cells" in arrays:
-                cells = torch.from_numpy(
-                    np.ascontiguousarray(arrays["cells"])
-                ).long()
+                cells = torch.from_numpy(np.ascontiguousarray(arrays["cells"])).long()
 
         def _sub(name: str) -> dict[str, Any]:
             prefix = f"{name}/"
             return _nest_tensors(
-                (k[len(prefix):], v)
-                for k, v in arrays.items()
-                if k.startswith(prefix)
+                (k[len(prefix) :], v) for k, v in arrays.items() if k.startswith(prefix)
             )
 
         global_data = _sub("global_data")
@@ -968,9 +962,7 @@ class ZarrDomainMeshReader:
             return {}
         keys = backend.leaf_array_paths("global_data")
         arrays = backend.read_many({f"global_data/{k}": None for k in keys})
-        return _nest_tensors(
-            (k.split("/", 1)[1], v) for k, v in arrays.items()
-        )
+        return _nest_tensors((k.split("/", 1)[1], v) for k, v in arrays.items())
 
     def __getitem__(self, index: int):
         from physicsnemo.mesh import DomainMesh
@@ -1062,9 +1054,7 @@ def validate_mesh_zarr(path: Path | str, *, _prefix: str = "") -> dict[str, Any]
                 )
         summary["boundaries"] = boundaries
         if problems:
-            raise ValueError(
-                f"{path} failed validation: " + "; ".join(problems)
-            )
+            raise ValueError(f"{path} failed validation: " + "; ".join(problems))
         return summary
 
     if fmt != MESH_FORMAT:
@@ -1110,7 +1100,9 @@ def validate_mesh_zarr(path: Path | str, *, _prefix: str = "") -> dict[str, Any]
             # short of an adversarial store.
             if layout == "soup" and n_points is not None:
                 if n_points != n_cells * cells.shape[1]:
-                    problems.append("layout=soup but n_points != n_cells*nodes_per_cell")
+                    problems.append(
+                        "layout=soup but n_points != n_cells*nodes_per_cell"
+                    )
                 else:
                     k = min(1000, n_cells)
                     head = np.asarray(cells[:k]).reshape(-1)
@@ -1136,9 +1128,7 @@ def validate_mesh_zarr(path: Path | str, *, _prefix: str = "") -> dict[str, Any]
             for key, arr in _iter_leaf_arrays(group[sub]):
                 got = arr.shape[0] if arr.ndim else None
                 if got is not None and got != expected:
-                    problems.append(
-                        f"{sub}/{key} first dim {got} != {expected}"
-                    )
+                    problems.append(f"{sub}/{key} first dim {got} != {expected}")
 
     if problems:
         raise ValueError(f"{_prefix}{path} failed validation: " + "; ".join(problems))
