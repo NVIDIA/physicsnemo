@@ -10,8 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds `rectilinear_grid_divergence`, `rectilinear_grid_curl`, and
+  `rectilinear_grid_laplacian` to `physicsnemo.nn.functional`, with Torch and
+  fused Warp implementations for periodic, nonuniform rectilinear grids.
 - Adds coverage reporting on PRs — an informational `Coverage %` check plus a
   ready-to-enable Codecov integration.
+- Adds `uniform_grid_divergence`, `uniform_grid_curl`, and
+  `uniform_grid_laplacian` to `physicsnemo.nn.functional`, with Torch and fused
+  Warp implementations for periodic Cartesian grids.
 - Adds the experimental Strata weather-emulation models —
   `physicsnemo.experimental.models.strata.Strata` and `StrataTransformer3D` — plus
   the continuous / stereographic RoPE helpers `build_rope_cos_sin_1d_continuous`,
