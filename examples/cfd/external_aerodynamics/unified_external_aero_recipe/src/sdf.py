@@ -56,7 +56,10 @@ class ComputeSDFFromBoundary(MeshTransform):
     ``interior.point_data[sdf_field]``.  If ``normals_field`` is set,
     approximate surface normals ``(N, 3)`` are also stored, computed as
     the normalized direction from each query point to its closest point
-    on the surface (with center-of-mass fallback for on-surface points).
+    on the surface.  Points essentially *on* the surface (boundary-layer
+    points at sub-micron wall distances) instead use the oriented normal
+    of the hit face, since at those distances the closest-point direction
+    is float32 rounding noise.
 
     Parameters
     ----------
@@ -121,7 +124,7 @@ class ComputeSDFFromBoundary(MeshTransform):
 
         query_points = domain.interior.points.float()
 
-        sdf_values, closest_points, _ = signed_distance_field(
+        sdf_values, closest_points, hit_faces = signed_distance_field(
             surface,
             query_points,
             use_sign_winding_number=self.use_winding_number,
@@ -135,17 +138,30 @@ class ComputeSDFFromBoundary(MeshTransform):
         if self.normals_field is not None:
             normals = query_points - closest_points
 
-            # Fallback for points on the surface (zero distance): use direction
-            # from the surface centroid instead. Computed unconditionally and
-            # selected with a mask rather than branching on ``on_surface.any()``
-            # -- that host readback would stall the prefetch stream.
+            # For points essentially on the surface -- boundary-layer points
+            # at sub-micron wall distances -- (query - closest) is float32
+            # rounding noise (or exactly zero) and its direction is
+            # meaningless. Substitute the oriented normal of the hit face:
+            # the exact limit of the closest-point direction at the wall.
+            # Sign-align with the SDF so the rare interior point keeps
+            # pointing into the body like its neighbors (the SDF treats
+            # on-surface as outside, so dist == 0 gets the outward normal).
+            # The band is scale-aware: the closest point carries rounding
+            # noise ~ eps * |coordinate|, so an absolute cutoff under-covers
+            # geometry far from the origin. 128 eps (~1.5e-5 per unit
+            # coordinate) clears that noise floor with a wide margin, and
+            # widening the band is free because the substitute is exact.
+            # Computed unconditionally and selected with a mask rather than
+            # branching on ``near_surface.any()`` -- that host readback would
+            # stall the prefetch stream.
             dist = torch.norm(normals, dim=-1)
-            on_surface = dist < 1e-6
-            # The mesh stays intact; read its points only here, at point of use.
-            centroid = surface.points.float().mean(dim=0, keepdim=True)
-            normals = torch.where(
-                on_surface.unsqueeze(-1), query_points - centroid, normals
+            coord_scale = query_points.abs().amax(dim=-1).clamp(min=1.0)
+            near_surface = dist < (128.0 * torch.finfo(torch.float32).eps * coord_scale)
+            face_normals = surface.cell_normals.to(query_points.dtype)[hit_faces]
+            oriented = torch.where(
+                (sdf_values >= 0).unsqueeze(-1), face_normals, -face_normals
             )
+            normals = torch.where(near_surface.unsqueeze(-1), oriented, normals)
 
             # Normalize to unit vectors
             norm = torch.norm(normals, dim=-1, keepdim=True).clamp(min=1e-8)
