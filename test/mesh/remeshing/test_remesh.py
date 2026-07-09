@@ -40,8 +40,7 @@ def test_remesh_basic_sphere():
 
 
 def test_remesh_preserves_dtype():
-    """remesh restores the input floating dtype even though pyvista round-trips
-    through float32."""
+    """remesh preserves the input point dtype."""
     base = sphere_icosahedral.load(subdivisions=3)
     mesh = Mesh(points=base.points.double(), cells=base.cells)  # float64
     out = remesh(mesh, n_clusters=80)
@@ -52,7 +51,12 @@ def test_remesh_preserves_dtype():
 def test_remesh_field_data_contract():
     """Topology-associated data is dropped while global data is preserved."""
     mesh = sphere_icosahedral.load(subdivisions=2)
-    mesh.point_data["temperature"] = torch.ones(mesh.n_points)
+    mesh.point_data["unused_quantized"] = torch.quantize_per_tensor(
+        torch.arange(mesh.n_points, dtype=torch.float32),
+        scale=0.1,
+        zero_point=0,
+        dtype=torch.qint8,
+    )
     mesh.cell_data["pressure"] = torch.ones(mesh.n_cells)
     mesh.global_data["case_id"] = torch.tensor(11)
 

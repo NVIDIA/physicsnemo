@@ -22,8 +22,8 @@ area, normal, and centroid.  This approximates the restricted Voronoi diagram
 on the surface by grouping whole cells rather than splitting them - exact in
 the limit M/N -> infinity on a fine mesh.
 
-This is complementary to :func:`~physicsnemo.mesh.remeshing.remesh` (ACVD),
-which creates *new* mesh topology via iterative Centroidal Voronoi Tessellation.
+This is complementary to :func:`~physicsnemo.mesh.remeshing.remesh`, which
+creates *new* mesh topology via iterative centroidal clustering.
 ``partition_cells`` preserves the original cells and produces aggregate
 properties - no topology reconstruction and no external dependencies.
 

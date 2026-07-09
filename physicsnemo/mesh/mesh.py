@@ -14,8 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# ``tensorclass`` adds a class-scoped ``float`` method. Qualify scalar
-# annotations that must remain resolvable under Python's deferred lookup.
+# Python 3.14 evaluates annotations lazily in the decorated class namespace,
+# where ``tensorclass`` installs dtype-conversion methods such as ``int``.
+# Qualify scalar annotations that must continue to resolve to builtin types.
 import builtins
 import math
 import types
@@ -54,7 +55,7 @@ if TYPE_CHECKING:
     import pyvista
 
     from physicsnemo.mesh.neighbors._adjacency import Adjacency
-    from physicsnemo.mesh.remeshing._config import WarpRemeshOptions
+    from physicsnemo.mesh.remeshing import WarpRemeshOptions
 
 
 # A field on a `Mesh` is "associated with" either points (e.g. a per-vertex
@@ -3353,10 +3354,11 @@ class Mesh:
         Parameters
         ----------
         n_clusters : int
-            Target output vertex count.
+            Target output vertex count. Must be between 3 and ``n_points``,
+            inclusive.
         max_iterations : int | None, optional
             Maximum centroid-relaxation iterations. ``None`` selects the
-            backend-tuned default.
+            backend-tuned default. Values must be non-negative.
         warp_options : WarpRemeshOptions | None, optional
             Warp-specific performance and initialization controls.
         implementation : {"warp", "pyacvd"} | None, optional
@@ -3367,6 +3369,22 @@ class Mesh:
         Mesh
             Remeshed triangle surface on the same device and with the same
             point dtype as this mesh.
+
+        Raises
+        ------
+        TypeError
+            If counts, options, or point coordinates have invalid types.
+        ValueError
+            If a count is out of range, geometry is invalid, or Warp options
+            are used with the PyACVD backend.
+        NotImplementedError
+            If this is not a 2D triangle surface embedded in 3D.
+        KeyError
+            If ``implementation`` does not name a registered backend.
+        ImportError
+            If dependencies for the selected backend are unavailable.
+        RuntimeError
+            If cleanup cannot reconstruct a nonempty manifold surface.
 
         Notes
         -----

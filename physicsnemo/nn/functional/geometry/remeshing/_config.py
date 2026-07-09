@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Configuration objects for remeshing backends."""
+"""Configuration for the Warp remeshing functional."""
 
 import math
 from dataclasses import dataclass

@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Fast operations for small bounded integer index tuples."""
+"""Fast tensor operations for small bounded integer index tuples."""
 
 import math
 

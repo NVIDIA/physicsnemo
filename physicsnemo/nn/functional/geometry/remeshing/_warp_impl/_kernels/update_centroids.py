@@ -14,18 +14,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Make the Stanford bunny mesh for the tutorials."""
+"""Warp kernel for updating remeshing centroids."""
 
-from pathlib import Path
+import warp as wp
 
-import pyvista as pv
-import torch
 
-from physicsnemo.mesh.io.io_pyvista import from_pyvista
-from physicsnemo.mesh.remeshing import remesh
-
-mesh = from_pyvista(pv.examples.download_bunny_coarse())
-mesh = remesh(mesh.clean().subdivide(levels=3, filter="linear"), 400)
-mesh = mesh.rotate(axis="x", angle=torch.pi / 2).rotate(axis="z", angle=torch.pi / 2)
-
-torch.save(mesh, Path(__file__).parent / "bunny.pt")
+@wp.kernel
+def update_centroids(
+    centroids: wp.array(dtype=wp.vec3f),
+    centroid_sums: wp.array2d(dtype=wp.float32),
+    centroid_areas: wp.array(dtype=wp.float32),
+):
+    """Move nonempty centroids to their area-weighted cluster centers."""
+    centroid_index = wp.tid()
+    weight = centroid_areas[centroid_index]
+    if weight > float(0.0):
+        centroids[centroid_index] = wp.vec3f(
+            centroid_sums[centroid_index, 0] / weight,
+            centroid_sums[centroid_index, 1] / weight,
+            centroid_sums[centroid_index, 2] / weight,
+        )

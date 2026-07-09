@@ -14,18 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Make the Stanford bunny mesh for the tutorials."""
+"""Internal tensor implementation for the public Mesh remeshing API.
 
-from pathlib import Path
+This package is intentionally not re-exported from ``physicsnemo.nn.functional``.
+Unlike ordinary functionals, remeshing changes mesh topology and its supported
+public contract is :mod:`physicsnemo.mesh.remeshing`.
+"""
 
-import pyvista as pv
-import torch
+from ._config import WarpRemeshOptions
+from .remeshing import Remeshing, remeshing
 
-from physicsnemo.mesh.io.io_pyvista import from_pyvista
-from physicsnemo.mesh.remeshing import remesh
-
-mesh = from_pyvista(pv.examples.download_bunny_coarse())
-mesh = remesh(mesh.clean().subdivide(levels=3, filter="linear"), 400)
-mesh = mesh.rotate(axis="x", angle=torch.pi / 2).rotate(axis="z", angle=torch.pi / 2)
-
-torch.save(mesh, Path(__file__).parent / "bunny.pt")
+__all__ = ["Remeshing", "WarpRemeshOptions", "remeshing"]

@@ -14,36 +14,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Warp-accelerated uniform surface remeshing."""
+"""Forward launch orchestration for Warp surface remeshing."""
 
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING
 
 import torch
 import warp as wp
 
 from physicsnemo.core.function_spec import FunctionSpec
-from physicsnemo.mesh.utilities._index_tuple_ops import unique_index_tuples
-from physicsnemo.nn.functional import farthest_point_sampling
+from physicsnemo.nn.functional.geometry.farthest_point_sampling import (
+    farthest_point_sampling,
+)
+from physicsnemo.utils._index_tuple_ops import unique_index_tuples
 
-from ._config import WarpRemeshOptions
-from ._warp_kernels import (
+from .._config import WarpRemeshOptions
+from ._kernels import (
     accumulate_vertex_areas,
     assign_vertices,
     project_centroids_to_surface,
     update_centroids,
 )
 
-if TYPE_CHECKING:
-    from physicsnemo.mesh.mesh import Mesh
-
 wp.config.log_level = wp.LOG_WARNING
 wp.init()
 
 _DEFAULT_ITERATIONS = 4
-_MAX_MANIFOLD_CLEANUP_STEPS = 4
 
 
 def _wp_view(tensor: torch.Tensor, dtype):  # noqa: ANN001, ANN202
@@ -86,33 +83,50 @@ def _select_fps_centroids(
     return candidates[selected].clone()
 
 
-def _voxel_keys(
-    points: torch.Tensor,
-    lower_bound: torch.Tensor,
-    upper_bound: torch.Tensor,
-    cell_width: float,
-) -> torch.Tensor:
-    coordinates = torch.floor((points - lower_bound) / cell_width).to(torch.int64)
-    dimensions = (
-        torch.floor((upper_bound - lower_bound) / cell_width).to(torch.int64) + 1
-    )
-    return (coordinates[:, 0] * dimensions[1] + coordinates[:, 1]) * dimensions[
-        2
-    ] + coordinates[:, 2]
-
-
 def _voxel_representatives(
     points: torch.Tensor,
     lower_bound: torch.Tensor,
     upper_bound: torch.Tensor,
     cell_width: float,
+    max_extent: float,
 ) -> torch.Tensor:
     """Return one source vertex index from each occupied spatial voxel."""
-    keys = _voxel_keys(points, lower_bound, upper_bound, cell_width)
-    sorted_keys, order = torch.sort(keys)
-    first = torch.ones(points.shape[0], dtype=torch.bool, device=points.device)
-    first[1:] = sorted_keys[1:] != sorted_keys[:-1]
-    return order[first]
+    coordinates = torch.floor((points - lower_bound) / cell_width)
+
+    # Packing the three coordinates into one int64 key is substantially faster
+    # than a row-wise unique for ordinary voxel widths. Very small user-provided
+    # widths can exceed that key space, so retain the exact float coordinates
+    # for a safe fallback instead of allowing integer overflow and collisions.
+    max_dimension = math.floor(max_extent / cell_width) + 1
+    if max_dimension**3 <= torch.iinfo(torch.int64).max:
+        dimensions = (
+            torch.floor((upper_bound - lower_bound) / cell_width).to(torch.int64) + 1
+        )
+        coordinates_i64 = coordinates.to(torch.int64)
+        keys = (
+            coordinates_i64[:, 0] * dimensions[1] + coordinates_i64[:, 1]
+        ) * dimensions[2] + coordinates_i64[:, 2]
+        sorted_keys, order = torch.sort(keys)
+        first = torch.ones(points.shape[0], dtype=torch.bool, device=points.device)
+        first[1:] = sorted_keys[1:] != sorted_keys[:-1]
+        return order[first]
+
+    unique_coordinates, inverse = torch.unique(
+        coordinates,
+        dim=0,
+        return_inverse=True,
+    )
+    source_indices = torch.arange(
+        points.shape[0], device=points.device, dtype=torch.int64
+    )
+    first = torch.full(
+        (unique_coordinates.shape[0],),
+        points.shape[0],
+        device=points.device,
+        dtype=torch.int64,
+    )
+    first.scatter_reduce_(0, inverse, source_indices, reduce="amin")
+    return first
 
 
 def _select_stratified_centroids(
@@ -121,6 +135,9 @@ def _select_stratified_centroids(
     n_clusters: int,
     total_area: float,
     options: WarpRemeshOptions,
+    lower_bound: torch.Tensor,
+    upper_bound: torch.Tensor,
+    max_extent: float,
 ) -> torch.Tensor:
     """Select large seed sets with an O(N log N) spatial stratification.
 
@@ -128,14 +145,16 @@ def _select_stratified_centroids(
     quadratic cost of FPS for large target meshes. A small deterministic fill
     or reduction produces the exact requested seed count.
     """
-    lower_bound = points.amin(dim=0)
-    upper_bound = points.amax(dim=0)
     cell_width = max(
         options.voxel_width_scale * math.sqrt(total_area / n_clusters),
         torch.finfo(torch.float32).tiny,
     )
     representatives = _voxel_representatives(
-        points, lower_bound, upper_bound, cell_width
+        points,
+        lower_bound,
+        upper_bound,
+        cell_width,
+        max_extent,
     )
     generator = torch.Generator(device=points.device).manual_seed(0)
 
@@ -208,7 +227,7 @@ def _remove_nonmanifold_faces(
     smallest-area candidate. Ordinary manifold outputs exit after one edge
     count pass without changing connectivity.
     """
-    for _ in range(_MAX_MANIFOLD_CLEANUP_STEPS):
+    while True:
         n_faces = cells.shape[0]
         edges = torch.cat([cells[:, [0, 1]], cells[:, [1, 2]], cells[:, [2, 0]]], dim=0)
         face_indices = torch.arange(
@@ -292,20 +311,18 @@ def _remove_nonmanifold_faces(
         if not bool((counts > 3).any()):
             return cells
 
-    return cells
 
-
-def _build_output_mesh(
-    source_mesh: "Mesh",
+def _build_output_tensors(
     source_points: torch.Tensor,
+    source_cells: torch.Tensor,
     centroids: torch.Tensor,
     labels: torch.Tensor,
     n_clusters: int,
-) -> "Mesh":
+    normalization_center: torch.Tensor,
+    normalization_scale: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Reconstruct, clean, and compact triangle connectivity on the GPU."""
-    from physicsnemo.mesh.mesh import Mesh
-
-    mapped_cells = labels.to(torch.int64)[source_mesh.cells.to(torch.int64)]
+    mapped_cells = labels.to(torch.int64)[source_cells.to(torch.int64)]
     output_cells = _deduplicate_faces(mapped_cells, n_clusters)
     if output_cells.numel() == 0:
         raise RuntimeError(
@@ -323,13 +340,7 @@ def _build_output_mesh(
         ),
         dim=1,
     )
-    extent = torch.linalg.vector_norm(
-        source_points.amax(dim=0) - source_points.amin(dim=0)
-    )
-    area_tolerance = torch.finfo(torch.float32).eps * torch.clamp(
-        extent.square(), min=torch.finfo(torch.float32).tiny
-    )
-    output_cells = output_cells[doubled_areas > area_tolerance]
+    output_cells = output_cells[torch.isfinite(doubled_areas) & (doubled_areas > 0.0)]
     if output_cells.numel() == 0:
         raise RuntimeError(
             "Warp remeshing produced only zero-area faces; request more clusters."
@@ -346,27 +357,70 @@ def _build_output_mesh(
         sorted=True,
         return_inverse=True,
     )
-    output_points = centroids[used_centroids].to(dtype=source_mesh.points.dtype)
+    output_points = centroids[used_centroids].to(dtype=normalization_center.dtype)
+    output_points = output_points * normalization_scale + normalization_center
+    output_points = output_points.to(dtype=source_points.dtype)
     output_cells = compact_cells.reshape(-1, 3).to(dtype=torch.int64)
-    return Mesh(
-        points=output_points,
-        cells=output_cells,
-        global_data=source_mesh.global_data.clone(),
+    return output_points, output_cells
+
+
+def _normalize_points_for_warp(
+    points: torch.Tensor,
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    float,
+]:
+    """Center and scale coordinates before float32 Warp computation."""
+    working_dtype = torch.float64 if points.dtype == torch.float64 else torch.float32
+    working_points = points.detach().to(dtype=working_dtype)
+    lower_bound = working_points.amin(dim=0)
+    upper_bound = working_points.amax(dim=0)
+
+    # Forming the midpoint as two half-sized terms avoids overflow for finite
+    # coordinates near the dtype limits. Subtract in the input precision so a
+    # large world-space translation does not erase local geometry in float32.
+    center = 0.5 * lower_bound + 0.5 * upper_bound
+    scale = torch.maximum(
+        (lower_bound - center).abs(),
+        (upper_bound - center).abs(),
+    ).amax()
+    safe_scale = torch.where(scale > 0.0, scale, torch.ones_like(scale))
+    normalized = ((working_points - center) / safe_scale).to(torch.float32)
+    normalized_lower = ((lower_bound - center) / safe_scale).to(torch.float32)
+    normalized_upper = ((upper_bound - center) / safe_scale).to(torch.float32)
+    return (
+        normalized.contiguous(),
+        center,
+        safe_scale,
+        normalized_lower,
+        normalized_upper,
+        2.0,
     )
 
 
-@torch.no_grad()
-def remesh_warp(
-    mesh: "Mesh",
+def launch_remeshing(
+    mesh_vertices: torch.Tensor,
+    mesh_indices: torch.Tensor,
     n_clusters: int,
     *,
     max_iterations: int | None = None,
     options: WarpRemeshOptions,
-) -> "Mesh":
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Remesh a CUDA triangle surface with Warp-accelerated CVT clustering."""
     iterations = _DEFAULT_ITERATIONS if max_iterations is None else max_iterations
-    points = mesh.points.detach().to(dtype=torch.float32).contiguous()
-    cells = mesh.cells.detach().to(dtype=torch.int32).contiguous()
+    (
+        points,
+        normalization_center,
+        normalization_scale,
+        lower_bound,
+        upper_bound,
+        max_extent,
+    ) = _normalize_points_for_warp(mesh_vertices)
+    cells = mesh_indices.detach().to(dtype=torch.int32).contiguous()
     flat_cells = cells.reshape(-1).contiguous()
     n_points = points.shape[0]
 
@@ -393,7 +447,14 @@ def remesh_warp(
         centroids = _select_fps_centroids(points, vertex_areas, n_clusters, options)
     else:
         centroids = _select_stratified_centroids(
-            points, vertex_areas, n_clusters, total_area, options
+            points,
+            vertex_areas,
+            n_clusters,
+            total_area,
+            options,
+            lower_bound,
+            upper_bound,
+            max_extent,
         )
 
     labels = torch.empty(n_points, dtype=torch.int32, device=points.device)
@@ -484,4 +545,15 @@ def remesh_warp(
             stream=wp_launch_stream,
         )
 
-    return _build_output_mesh(mesh, points, centroids, labels, n_clusters)
+    return _build_output_tensors(
+        mesh_vertices,
+        mesh_indices,
+        centroids,
+        labels,
+        n_clusters,
+        normalization_center,
+        normalization_scale,
+    )
+
+
+__all__ = ["launch_remeshing"]

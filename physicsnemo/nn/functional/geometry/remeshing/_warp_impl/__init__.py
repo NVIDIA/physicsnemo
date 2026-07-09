@@ -14,18 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Make the Stanford bunny mesh for the tutorials."""
+"""Warp backend for the remeshing functional."""
 
-from pathlib import Path
+from .op import remeshing_warp
 
-import pyvista as pv
-import torch
-
-from physicsnemo.mesh.io.io_pyvista import from_pyvista
-from physicsnemo.mesh.remeshing import remesh
-
-mesh = from_pyvista(pv.examples.download_bunny_coarse())
-mesh = remesh(mesh.clean().subdivide(levels=3, filter="linear"), 400)
-mesh = mesh.rotate(axis="x", angle=torch.pi / 2).rotate(axis="z", angle=torch.pi / 2)
-
-torch.save(mesh, Path(__file__).parent / "bunny.pt")
+__all__ = ["remeshing_warp"]

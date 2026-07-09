@@ -398,6 +398,8 @@ reference = mesh.remesh(n_clusters=1_000, implementation="pyacvd")
 
 Remeshing currently supports triangle surfaces embedded in 3D. It creates new
 topology, so point and cell data are discarded; global data is preserved.
+The CPU backend is optional and installed separately with
+`pip install "pyacvd>=0.3.2" "pyvista>=0.47.0"`.
 
 ### Discrete Calculus
 

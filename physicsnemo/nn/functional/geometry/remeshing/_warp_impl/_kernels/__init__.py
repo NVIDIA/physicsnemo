@@ -14,18 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Make the Stanford bunny mesh for the tutorials."""
+"""Warp kernels for GPU surface remeshing."""
 
-from pathlib import Path
+from .accumulate_vertex_areas import accumulate_vertex_areas
+from .assign_vertices import assign_vertices
+from .project_centroids_to_surface import project_centroids_to_surface
+from .update_centroids import update_centroids
 
-import pyvista as pv
-import torch
-
-from physicsnemo.mesh.io.io_pyvista import from_pyvista
-from physicsnemo.mesh.remeshing import remesh
-
-mesh = from_pyvista(pv.examples.download_bunny_coarse())
-mesh = remesh(mesh.clean().subdivide(levels=3, filter="linear"), 400)
-mesh = mesh.rotate(axis="x", angle=torch.pi / 2).rotate(axis="z", angle=torch.pi / 2)
-
-torch.save(mesh, Path(__file__).parent / "bunny.pt")
+__all__ = [
+    "accumulate_vertex_areas",
+    "assign_vertices",
+    "project_centroids_to_surface",
+    "update_centroids",
+]

@@ -98,4 +98,8 @@ FUNCTIONAL_SPECS: tuple[type[FunctionSpec], ...] = (
     Imag,
 )
 
+# The CUDA-only Remeshing spec uses a dedicated mesh benchmark instead of this
+# single-device registry so Warp and the CPU PyACVD reference run on their
+# native devices. See ``benchmarks/physicsnemo/mesh/remeshing.py``.
+
 __all__ = ["FUNCTIONAL_SPECS"]
