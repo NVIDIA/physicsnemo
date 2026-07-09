@@ -114,7 +114,7 @@ def line_integral_convolution_impl(
     seed_fp32 = seed.to(device=vector_field.device, dtype=torch.float32).contiguous()
     line_integral = torch.empty_like(seed_fp32)
     wp_device, wp_stream = FunctionSpec.warp_launch_context(vector_fp32)
-    with wp.ScopedStream(wp_stream):
+    with FunctionSpec.warp_stream_scope(wp_stream):
         wp.launch(
             _line_integral_convolution_kernel,
             dim=tuple(int(size) for size in seed.shape),

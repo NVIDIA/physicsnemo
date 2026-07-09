@@ -508,7 +508,7 @@ def _launch_forward(
     n_cells = values_flat_fp32.shape[0]
     n_components = values_flat_fp32.shape[1]
 
-    with wp.ScopedStream(wp_stream):
+    with FunctionSpec.warp_stream_scope(wp_stream):
         wp.launch(
             kernel=kernel,
             dim=(n_cells, n_components),
@@ -546,7 +546,7 @@ def _launch_backward(
     n_faces = neighbors_i32.shape[1]
     n_components = grad_output_components_fp32.shape[2]
 
-    with wp.ScopedStream(wp_stream):
+    with FunctionSpec.warp_stream_scope(wp_stream):
         wp.launch(
             kernel=kernel,
             dim=(n_cells, n_faces, n_components),
@@ -586,7 +586,7 @@ def _launch_backward_points(
     n_faces = neighbors_i32.shape[1]
     fd_eps = 1.0e-4
 
-    with wp.ScopedStream(wp_stream):
+    with FunctionSpec.warp_stream_scope(wp_stream):
         wp.launch(
             kernel=kernel,
             dim=(n_cells, n_faces, n_components),
