@@ -242,7 +242,7 @@ def _generate_uniform_surface_samples_warp(
     )
 
     wp_launch_device, wp_launch_stream = FunctionSpec.warp_launch_context(tri_vertices)
-    with wp.ScopedStream(wp_launch_stream):
+    with FunctionSpec.warp_stream_scope(wp_launch_stream):
         wp.launch(
             kernel=_generate_surface_candidates,
             dim=num_samples,
@@ -309,7 +309,7 @@ def _weighted_sample_elimination_warp(
     wp_launch_device, wp_launch_stream = FunctionSpec.warp_launch_context(
         sample_positions
     )
-    with wp.ScopedStream(wp_launch_stream):
+    with FunctionSpec.warp_stream_scope(wp_launch_stream):
         wp_sample_positions = wp.from_torch(
             sample_positions,
             dtype=wp.vec3f,
@@ -662,7 +662,7 @@ def _mesh_poisson_disk_sample_warp(
     )
 
     wp_launch_device, wp_launch_stream = FunctionSpec.warp_launch_context(mesh_vertices)
-    with wp.ScopedStream(wp_launch_stream):
+    with FunctionSpec.warp_stream_scope(wp_launch_stream):
         # Convert static input tensors once for repeated kernel launches.
         wp_triangle_vertices = wp.from_torch(
             tri_vertices, dtype=wp.vec3f, return_ctype=True
