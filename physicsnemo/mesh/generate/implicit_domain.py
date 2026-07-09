@@ -155,14 +155,31 @@ def _coverage_gap(phi, points, cells, bounds, h, gscale=1.0, seed=0):
     g = torch.Generator(device="cpu").manual_seed(seed)
     probe = torch.rand(n_probes, d, generator=g, dtype=points.dtype).to(points.device)
     probe = lo + probe * (hi - lo)
+    signs = torch.sign(phi(probe))
+    if bool((signs >= 0).all()) or bool((signs <= 0).all()):
+        # No zero crossing inside the box: either the domain fills the box
+        # (boundary = box faces, not phi's zero set) or it is empty (already
+        # rejected earlier). Nothing for the guard to measure.
+        return 0.0
     surf = project_to_zero_set(phi, probe, iters=6)
     xg = surf.detach().requires_grad_(True)
     f = phi(xg)
-    (grads,) = torch.autograd.grad(f.sum(), xg)
+    if not f.requires_grad:
+        return 0.0
+    (grads,) = torch.autograd.grad(f.sum(), xg, allow_unused=True)
+    if grads is None:
+        return 0.0
     dist_est = f.detach().abs() / grads.norm(dim=-1).clamp_min(1e-30)
-    surf = surf[torch.nan_to_num(dist_est, nan=float("inf")) < 0.05 * h]
+    converged = torch.nan_to_num(dist_est, nan=float("inf")) < 0.05 * h
+    # The zero set can extend beyond the bounding box (a domain clipped by
+    # bounds); only its in-box portion is meshable, so out-of-box
+    # projections must not count against coverage.
+    in_box = ((surf >= lo - 0.5 * h) & (surf <= hi + 0.5 * h)).all(dim=1)
+    surf = surf[converged & in_box]
     if surf.shape[0] == 0:
-        return float("inf")
+        if bool(in_box.any()):
+            return float("inf")  # in-box zero set exists; projection failed
+        return 0.0
     uniq, counts, _, _ = facet_census(cells)
     bfacets = uniq[counts == 1]
     targets = torch.cat(
@@ -386,10 +403,20 @@ def mesh_implicit_domain(
         centroid_phi.abs(), k=min(1024, centroid_phi.shape[0]), largest=False
     ).indices
     bg = points[cells].mean(dim=1)[band].detach().requires_grad_(True)
-    (grads,) = torch.autograd.grad(phi(bg).sum(), bg)
-    gscale = float(grads.norm(dim=-1).median())
+    f_bg = phi(bg)
+    grads = (
+        torch.autograd.grad(f_bg.sum(), bg, allow_unused=True)[0]
+        if f_bg.requires_grad
+        else None
+    )
+    gscale = float(grads.norm(dim=-1).median()) if grads is not None else 1.0
     if not (gscale > 0 and gscale < float("inf")):
         gscale = 1.0
+    # A phi with no gradient information anywhere (e.g. a constant field:
+    # "the domain fills the box") gives the boundary nothing to project
+    # onto; boundary vertices must then anchor in place, because unanchored
+    # ODT is a shrinking flow that would collapse the mesh.
+    can_project = grads is not None
     keep = centroid_phi < -erode * h * gscale
     if not bool(keep.any()):
         raise ValueError(
@@ -461,7 +488,13 @@ def mesh_implicit_domain(
         t_reconnect += time.perf_counter() - tr
 
         target = _odt_targets(points, cells, h)
-        target[bnd] = project_to_zero_set(phi, target[bnd])
+        # Clamp projections into the bounds box: for a domain clipped by
+        # bounds, the box faces ARE the boundary there, and the zero set can
+        # be arbitrarily far outside (adversarial hardening round).
+        if can_project:
+            target[bnd] = project_to_zero_set(phi, target[bnd]).clamp(lo, hi)
+        else:
+            target[bnd] = points[bnd]
         if fixed_targets is not None:
             # Pinned vertices sit exactly at their features; the pin
             # overrides smoothing and projection (a corner tip is on the
@@ -489,7 +522,8 @@ def mesh_implicit_domain(
     t_optimize = time.perf_counter() - t0 - t_reconnect
 
     target = points.clone()
-    target[bnd] = project_to_zero_set(phi, points[bnd], iters=5)
+    if can_project:
+        target[bnd] = project_to_zero_set(phi, points[bnd], iters=5).clamp(lo, hi)
     if fixed_targets is not None:
         target[fixed_idx] = fixed_targets
     points = _gated_update(points, cells, target, vol_floor)
@@ -558,7 +592,10 @@ def refit_mesh_to_implicit(
     -------
     Mesh
         Mesh with the same cells and refit points (same dtype/device),
-        connected to the autograd graph of ``phi``'s parameters.
+        connected to the autograd graph of ``phi``'s parameters. The
+        projection is ungated (gating would break differentiability):
+        large shape changes can invert cells, which raises a
+        ``UserWarning`` — regenerate instead of refitting in that case.
 
     Examples
     --------
@@ -590,4 +627,16 @@ def refit_mesh_to_implicit(
             step = torch.nan_to_num(step, nan=0.0, posinf=0.0, neginf=0.0)
             x = x.clone()
             x[bnd] = xb - step
+    with torch.no_grad():
+        n_bad = int((signed_volumes(x.detach(), cells) <= 0).sum())
+    if n_bad:
+        import warnings
+
+        warnings.warn(
+            f"refit_mesh_to_implicit inverted {n_bad} cells: the projection "
+            f"is ungated (to stay differentiable) and intended for small "
+            f"shape perturbations at fixed topology. Regenerate the mesh "
+            f"with mesh_implicit_domain for large shape changes.",
+            stacklevel=2,
+        )
     return Mesh(points=x, cells=cells)

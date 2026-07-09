@@ -141,7 +141,11 @@ def project_to_zero_set(
     for _ in range(iters):
         xg = x.detach().requires_grad_(True)
         f = phi(xg)
-        (g,) = torch.autograd.grad(f.sum(), xg)
+        if not f.requires_grad:  # phi ignores x (e.g. a constant field)
+            return x.detach()
+        (g,) = torch.autograd.grad(f.sum(), xg, allow_unused=True)
+        if g is None:
+            return x.detach()
         step = f.detach()[:, None] * g / (g * g).sum(-1, keepdim=True).clamp_min(1e-30)
         step = torch.nan_to_num(step, nan=0.0, posinf=0.0, neginf=0.0)
         x = (xg.detach() - step).detach()

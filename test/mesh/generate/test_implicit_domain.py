@@ -464,3 +464,38 @@ def test_coverage_guard_survives_quantized_phi():
 
     with pytest.raises(ValueError, match="coverage guard"):
         mesh_implicit_domain(phi, ([-1, -0.6], [1, 0.6]), 0.15)
+
+
+def test_constant_phi_fills_the_box():
+    """phi with no dependence on x (e.g. a constant field) is a reasonable
+    'domain fills the box' input and must not crash autograd (adversarial
+    hardening round)."""
+    mesh, diag = mesh_implicit_domain(
+        lambda x: -torch.ones(x.shape[0], dtype=x.dtype),
+        ([-1, -1], [1, 1]),
+        0.25,
+        full_output=True,
+    )
+    assert_valid_volume_mesh(mesh)
+    assert diag["coverage_gap_h"] == 0.0
+    vol = float(signed_volumes(mesh.points, mesh.cells).sum())
+    # With no zero set anywhere, there is nothing to project boundary
+    # vertices onto; the box is covered up to the erode margin (~1%).
+    assert abs(vol - 4.0) / 4.0 < 0.02
+
+
+def test_domain_clipped_by_bounds():
+    """A domain larger than the bounding box meshes the box; the coverage
+    guard must not count the out-of-box zero set against it."""
+    mesh = mesh_implicit_domain(sdf_sphere([0.0, 0.0], 10.0), ([-1, -1], [1, 1]), 0.25)
+    assert_valid_volume_mesh(mesh)
+    vol = float(signed_volumes(mesh.points, mesh.cells).sum())
+    assert abs(vol - 4.0) < 1e-9
+
+
+def test_refit_warns_on_inversion():
+    """Large shape changes through the ungated differentiable refit must
+    warn instead of silently inverting cells."""
+    base = mesh_implicit_domain(sdf_sphere([0.0, 0.0], 0.7), ([-1, -1], [1, 1]), 0.1)
+    with pytest.warns(UserWarning, match="inverted"):
+        refit_mesh_to_implicit(base, sdf_sphere([0.0, 0.0], 0.35))
