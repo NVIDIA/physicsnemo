@@ -216,7 +216,9 @@ def mesh_implicit_domain(
     peel: bool = True,
     seed: int = 0,
     full_output: Literal[False] = ...,
-) -> "Mesh": ...
+) -> "Mesh":
+    """Overload: ``full_output=False`` returns just the ``Mesh``."""
+    ...
 
 
 @overload
@@ -238,7 +240,9 @@ def mesh_implicit_domain(
     peel: bool = True,
     seed: int = 0,
     full_output: Literal[True],
-) -> tuple["Mesh", dict[str, Any]]: ...
+) -> tuple["Mesh", dict[str, Any]]:
+    """Overload: ``full_output=True`` returns ``(Mesh, diagnostics)``."""
+    ...
 
 
 def mesh_implicit_domain(
