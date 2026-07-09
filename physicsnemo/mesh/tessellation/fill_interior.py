@@ -235,7 +235,10 @@ def fill_interior(
     min_angle_degrees : float, default 30.0
         Guaranteed minimum triangle angle, in :math:`[0, 33]` (2D).
     smooth_iterations : int, default 0
-        Quality-gated ODT smoothing passes after refinement; boundary
+        Quality-gated optimal-Delaunay-triangulation (ODT) smoothing
+        passes after refinement (each interior vertex moves to the
+        area-weighted average of its incident triangles' circumcenters,
+        Chen & Xu 2004); boundary
         vertices never move, and the quality bounds are preserved.
     provenance : bool, default False
         When ``True``, attach provenance fields to the output's
