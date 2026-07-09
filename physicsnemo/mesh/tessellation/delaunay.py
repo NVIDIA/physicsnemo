@@ -271,6 +271,31 @@ def delaunay_mesh_2d(
                     f"hole loops must be mutually disjoint"
                 )
 
+    if min_angle_degrees > 0.0:
+        # Ruppert's termination guarantee assumes adjacent input segments
+        # meet at >= ~60 degrees; sharper corners make refinement chase
+        # itself into the corner, emitting thousands of sub-float32-area
+        # triangles near the apex with no error (found in review by
+        # melo-gonzo). Validate rather than assume.
+        for li, arr in enumerate(loop_arrays):
+            prev = np.roll(arr, 1, axis=0) - arr
+            nxt = np.roll(arr, -1, axis=0) - arr
+            cosang = (prev * nxt).sum(axis=1) / (
+                np.linalg.norm(prev, axis=1) * np.linalg.norm(nxt, axis=1)
+            )
+            ang = np.degrees(np.arccos(np.clip(cosang, -1.0, 1.0)))
+            k = int(ang.argmin())
+            if ang[k] < 60.0 - 1e-9:
+                raise ValueError(
+                    f"loop {li} has adjacent segments meeting at "
+                    f"{ang[k]:.1f} degrees (vertex {k} at "
+                    f"{arr[k].tolist()}); the min-angle refinement "
+                    f"guarantee requires input corners of at least ~60 "
+                    f"degrees. Pass min_angle_degrees=0.0 for an "
+                    f"unrefined constrained triangulation, or blunt the "
+                    f"corner geometrically."
+                )
+
     # Normalize into the unit box: every predicate then runs on ~unit-scale
     # float64 operands regardless of the physical coordinate range.
     lower = all_points.min(axis=0)
@@ -961,6 +986,7 @@ class _Triangulation:
         ay = py[a]
         bx = px[b]
         by = py[b]
+        best: tuple[float, int, int] | None = None
         for t, i in self._triangles_around(a):
             base = 3 * t
             u = tv[base + (1, 2, 0)[i]]
@@ -971,11 +997,33 @@ class _Triangulation:
                 return ("vertex", u)
             if ov == 0.0 and (px[v] - ax) * (bx - ax) + (py[v] - ay) * (by - ay) > 0.0:
                 return ("vertex", v)
-            if ou > 0.0 > ov:
-                return ("edge", t, i)
-        raise RuntimeError(
-            "segment recovery could not find a starting wedge; input geometry "
-            "is too degenerate for float64 predicates"
+            straddles = (ou >= 0.0 >= ov or ou <= 0.0 <= ov) and (
+                ou != 0.0 or ov != 0.0
+            )
+            if straddles:
+                # The sign pattern of (ou, ov) alone cannot distinguish the
+                # wedge containing the forward ray from the one containing
+                # the backward ray (found in review by melo-gonzo: the
+                # original strict test selected backward wedges, and the
+                # subsequent pipe walk exited the hull, silently dropping
+                # coverage). Require a PROPER segment-segment intersection
+                # of (a, b) with the opposite edge (u, v), and take the
+                # crossing closest to a: the segment may properly cross a
+                # non-convex link polygon several times, and the walk must
+                # start at the first crossing.
+                oa = (px[v] - px[u]) * (ay - py[u]) - (py[v] - py[u]) * (ax - px[u])
+                ob = (px[v] - px[u]) * (by - py[u]) - (py[v] - py[u]) * (bx - px[u])
+                if oa * ob < 0.0:
+                    t_param = oa / (oa - ob)
+                    if best is None or t_param < best[0]:
+                        best = (t_param, t, i)
+        if best is not None:
+            return ("edge", best[1], best[2])
+        raise ValueError(
+            "segment recovery found no crossing toward the segment "
+            "endpoint; input segments most likely cross each other (loops "
+            "must be disjoint simple polylines), or the geometry is "
+            "degenerate beyond float64 predicates"
         )
 
     def _collect_pipe(self, a: int, b: int):
@@ -1007,6 +1055,13 @@ class _Triangulation:
             v = tv[base + (2, 0, 1)[i]]  # right of (a, b)
             pipe.append((u, v))
             n = tn[base + i]
+            if n < 0:
+                # Python's negative indexing would otherwise read garbage
+                # adjacency off the list tails and corrupt the walk.
+                raise RuntimeError(
+                    "segment pipe walk exited the triangulation; input "
+                    "geometry is too degenerate for float64 predicates"
+                )
             nb = 3 * n
             k = 0 if tn[nb] == t else (1 if tn[nb + 1] == t else 2)
             w = tv[nb + k]
