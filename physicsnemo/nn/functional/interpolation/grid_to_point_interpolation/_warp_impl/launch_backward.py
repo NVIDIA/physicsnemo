@@ -21,6 +21,9 @@ functional. It contains:
 
 1. Private, dimension-specific launch helpers (1D/2D/3D)
 2. The public backward dispatcher used by the torch custom op
+
+The torch custom op owns autograd, so tensors viewed by the manual Warp
+backward explicitly disable Warp-side gradient allocation.
 """
 
 import torch
@@ -46,6 +49,7 @@ def restore_grad_layout(
     context_grid: torch.Tensor,
     squeeze_query: bool,
 ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+    """Restore optional gradients to the input dtypes and query-point shape."""
     if grad_query is not None and query_points.dtype != torch.float32:
         grad_query = grad_query.to(query_points.dtype)
     if grad_grid is not None and context_grid.dtype != torch.float32:
@@ -65,6 +69,8 @@ def _launch_backward_1d(
     start_vals: list[float],
     dx_vals: list[float],
     padded_sizes: list[int],
+    lower_vals: list[float],
+    upper_vals: list[float],
     center_offset: float,
     interp_id: int,
     stride: int,
@@ -76,8 +82,8 @@ def _launch_backward_1d(
 ) -> None:
     # Convert torch tensors to warp views with dtypes expected by 1D kernels.
     points = query_points[:, 0].contiguous()
-    wp_points = wp.from_torch(points, dtype=wp.float32)
-    wp_grad_out = wp.from_torch(grad_output.contiguous())
+    wp_points = wp.from_torch(points, dtype=wp.float32, requires_grad=False)
+    wp_grad_out = wp.from_torch(grad_output.contiguous(), requires_grad=False)
     wp_grad_query = wp.from_torch(grad_query.contiguous(), return_ctype=True)
     wp_grad_grid = wp.from_torch(grad_grid.contiguous(), return_ctype=True)
 
@@ -92,7 +98,7 @@ def _launch_backward_1d(
         int(compute_grid_grad),
     ]
     if stride != 1:
-        wp_grid = wp.from_torch(padded_grid.contiguous())
+        wp_grid = wp.from_torch(padded_grid.contiguous(), requires_grad=False)
         inputs = [
             wp_points,
             wp_grid,
@@ -102,10 +108,18 @@ def _launch_backward_1d(
             float(start_vals[0]),
             float(dx_vals[0]),
             int(padded_sizes[0]),
-            int(interp_id) if stride == 2 else float(center_offset),
-            int(compute_query_grad),
-            int(compute_grid_grad),
         ]
+        if stride == 2:
+            inputs.extend(
+                [
+                    float(lower_vals[0]),
+                    float(upper_vals[0]),
+                    int(interp_id),
+                ]
+            )
+        else:
+            inputs.append(float(center_offset))
+        inputs.extend([int(compute_query_grad), int(compute_grid_grad)])
 
     wp.launch(
         BACKWARD_KERNELS[1][stride],
@@ -126,6 +140,8 @@ def _launch_backward_2d(
     start_vals: list[float],
     dx_vals: list[float],
     padded_sizes: list[int],
+    lower_vals: list[float],
+    upper_vals: list[float],
     center_offset: float,
     interp_id: int,
     stride: int,
@@ -136,13 +152,17 @@ def _launch_backward_2d(
     wp_stream,
 ) -> None:
     # Convert torch tensors to warp views with dtypes expected by 2D kernels.
-    wp_points = wp.from_torch(query_points.contiguous(), dtype=wp.vec2f)
-    wp_grad_out = wp.from_torch(grad_output.contiguous())
+    wp_points = wp.from_torch(
+        query_points.contiguous(), dtype=wp.vec2f, requires_grad=False
+    )
+    wp_grad_out = wp.from_torch(grad_output.contiguous(), requires_grad=False)
     wp_grad_query = wp.from_torch(grad_query.contiguous(), return_ctype=True)
     wp_grad_grid = wp.from_torch(grad_grid.contiguous(), return_ctype=True)
     origin = wp.vec2f(float(start_vals[0]), float(start_vals[1]))
     spacing = wp.vec2f(float(dx_vals[0]), float(dx_vals[1]))
     size = wp.vec2i(int(padded_sizes[0]), int(padded_sizes[1]))
+    logical_lower = wp.vec2f(float(lower_vals[0]), float(lower_vals[1]))
+    logical_upper = wp.vec2f(float(upper_vals[0]), float(upper_vals[1]))
 
     inputs = [
         wp_points,
@@ -155,7 +175,7 @@ def _launch_backward_2d(
         int(compute_grid_grad),
     ]
     if stride != 1:
-        wp_grid = wp.from_torch(padded_grid.contiguous())
+        wp_grid = wp.from_torch(padded_grid.contiguous(), requires_grad=False)
         inputs = [
             wp_points,
             wp_grid,
@@ -165,10 +185,12 @@ def _launch_backward_2d(
             origin,
             spacing,
             size,
-            int(interp_id) if stride == 2 else float(center_offset),
-            int(compute_query_grad),
-            int(compute_grid_grad),
         ]
+        if stride == 2:
+            inputs.extend([logical_lower, logical_upper, int(interp_id)])
+        else:
+            inputs.append(float(center_offset))
+        inputs.extend([int(compute_query_grad), int(compute_grid_grad)])
 
     wp.launch(
         BACKWARD_KERNELS[2][stride],
@@ -189,6 +211,8 @@ def _launch_backward_3d(
     start_vals: list[float],
     dx_vals: list[float],
     padded_sizes: list[int],
+    lower_vals: list[float],
+    upper_vals: list[float],
     center_offset: float,
     interp_id: int,
     stride: int,
@@ -199,8 +223,10 @@ def _launch_backward_3d(
     wp_stream,
 ) -> None:
     # Convert torch tensors to warp views with dtypes expected by 3D kernels.
-    wp_points = wp.from_torch(query_points.contiguous(), dtype=wp.vec3f)
-    wp_grad_out = wp.from_torch(grad_output.contiguous())
+    wp_points = wp.from_torch(
+        query_points.contiguous(), dtype=wp.vec3f, requires_grad=False
+    )
+    wp_grad_out = wp.from_torch(grad_output.contiguous(), requires_grad=False)
     wp_grad_query = wp.from_torch(grad_query.contiguous(), return_ctype=True)
     wp_grad_grid = wp.from_torch(grad_grid.contiguous(), return_ctype=True)
     origin = wp.vec3f(
@@ -218,6 +244,16 @@ def _launch_backward_3d(
         int(padded_sizes[1]),
         int(padded_sizes[2]),
     )
+    logical_lower = wp.vec3f(
+        float(lower_vals[0]),
+        float(lower_vals[1]),
+        float(lower_vals[2]),
+    )
+    logical_upper = wp.vec3f(
+        float(upper_vals[0]),
+        float(upper_vals[1]),
+        float(upper_vals[2]),
+    )
 
     inputs = [
         wp_points,
@@ -230,7 +266,7 @@ def _launch_backward_3d(
         int(compute_grid_grad),
     ]
     if stride != 1:
-        wp_grid = wp.from_torch(padded_grid.contiguous())
+        wp_grid = wp.from_torch(padded_grid.contiguous(), requires_grad=False)
         inputs = [
             wp_points,
             wp_grid,
@@ -240,10 +276,12 @@ def _launch_backward_3d(
             origin,
             spacing,
             size,
-            int(interp_id) if stride == 2 else float(center_offset),
-            int(compute_query_grad),
-            int(compute_grid_grad),
         ]
+        if stride == 2:
+            inputs.extend([logical_lower, logical_upper, int(interp_id)])
+        else:
+            inputs.append(float(center_offset))
+        inputs.extend([int(compute_query_grad), int(compute_grid_grad)])
 
     wp.launch(
         BACKWARD_KERNELS[3][stride],
@@ -263,6 +301,7 @@ def launch_backward(
     grad_output: torch.Tensor,
     needs_input_grad: tuple[bool, ...],
 ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+    """Launch manual Warp backward kernels and restore input gradient layouts."""
     # Convert metadata tensor into Python tuples for launch-parameter setup.
     grid = [(float(g[0]), float(g[1]), int(g[2])) for g in grid_meta.to("cpu").tolist()]
     dims = len(grid)
@@ -284,6 +323,8 @@ def launch_backward(
     start_vals, dx_vals, padded_sizes, center_offset = interpolation_geometry(
         grid, stride, pad_grid=True
     )
+    lower_vals = [axis[0] for axis in grid]
+    upper_vals = [axis[1] for axis in grid]
 
     # Allocate gradient outputs and lightweight dummies for disabled branches.
     compute_query_grad = int(bool(needs_input_grad[0]) and interp_id != _INTERP_NEAREST)
@@ -321,6 +362,8 @@ def launch_backward(
                 start_vals=start_vals,
                 dx_vals=dx_vals,
                 padded_sizes=padded_sizes,
+                lower_vals=lower_vals,
+                upper_vals=upper_vals,
                 center_offset=center_offset,
                 interp_id=interp_id,
                 stride=stride,
@@ -340,6 +383,8 @@ def launch_backward(
                 start_vals=start_vals,
                 dx_vals=dx_vals,
                 padded_sizes=padded_sizes,
+                lower_vals=lower_vals,
+                upper_vals=upper_vals,
                 center_offset=center_offset,
                 interp_id=interp_id,
                 stride=stride,
@@ -359,6 +404,8 @@ def launch_backward(
                 start_vals=start_vals,
                 dx_vals=dx_vals,
                 padded_sizes=padded_sizes,
+                lower_vals=lower_vals,
+                upper_vals=upper_vals,
                 center_offset=center_offset,
                 interp_id=interp_id,
                 stride=stride,

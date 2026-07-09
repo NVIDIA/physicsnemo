@@ -53,6 +53,7 @@ def interpolation_impl(
     interp_id: int,
     mem_speed_trade: bool = True,
 ) -> torch.Tensor:
+    """Run Warp grid-to-point interpolation behind a Torch custom-op boundary."""
     # Keep signature parity with the torch implementation API.
     _ = mem_speed_trade
 
@@ -87,6 +88,8 @@ def interpolation_impl(
     start_vals, dx_vals, padded_sizes, center_offset = interpolation_geometry(
         grid, stride, pad_grid=True
     )
+    lower_vals = [axis[0] for axis in grid]
+    upper_vals = [axis[1] for axis in grid]
 
     # Normalize to float32 for warp kernels and keep original dtype for output cast.
     input_dtype = context_grid.dtype
@@ -115,6 +118,8 @@ def interpolation_impl(
             start_vals=start_vals,
             dx_vals=dx_vals,
             padded_sizes=padded_sizes,
+            lower_vals=lower_vals,
+            upper_vals=upper_vals,
             center_offset=center_offset,
             interp_id=interp_id,
             stride=stride,
@@ -150,6 +155,7 @@ def _(
 def setup_interpolation_context(
     ctx: torch.autograd.function.FunctionCtx, inputs: tuple, output: torch.Tensor
 ) -> None:
+    """Save tensor inputs and interpolation options for the custom-op backward."""
     query_points, context_grid, grid_meta, interp_id, mem_speed_trade = inputs
     ctx.save_for_backward(query_points, context_grid, grid_meta)
     ctx.interp_id = int(interp_id)
@@ -189,6 +195,7 @@ def interpolation_warp(
     interpolation_type: str = "smooth_step_2",
     mem_speed_trade: bool = True,
 ) -> torch.Tensor:
+    """Validate public options and dispatch interpolation through the custom op."""
     if not mem_speed_trade:
         warnings.warn(
             "The Warp backend ignores mem_speed_trade and always runs the same kernel path.",

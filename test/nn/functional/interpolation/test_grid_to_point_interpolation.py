@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from contextlib import nullcontext
 
 import pytest
@@ -119,6 +120,285 @@ def test_grid_to_point_interpolation_warp(
         )
     error = torch.linalg.norm((output - reference) / num_points)
     assert float(error) < 1e-2
+
+
+@requires_module("warp")
+def test_grid_to_point_interpolation_warp_uses_manual_autograd_boundary(
+    device: str,
+):
+    """Warp views must not request their own grads inside the custom op."""
+    query_leaf, grid_leaf, grid, _, _ = _build_reference_problem(device)
+    query_leaf.requires_grad_(True)
+    grid_leaf.requires_grad_(True)
+    query_points = query_leaf * 1.0
+    context_grid = grid_leaf * 1.0
+
+    # Without an explicit requires_grad=False at the Warp launch boundary,
+    # wp.from_torch tries to allocate and inspect gradients for these non-leaf
+    # tensors despite the custom op owning backward, which raises a warning.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        output = GridToPointInterpolation.dispatch(
+            query_points,
+            context_grid,
+            grid,
+            interpolation_type="linear",
+            implementation="warp",
+        )
+        output.sum().backward()
+
+    assert query_leaf.grad is not None
+    assert grid_leaf.grad is not None
+
+
+@pytest.mark.parametrize("implementation", ["torch", "warp"])
+@pytest.mark.parametrize("dims", [1, 2, 3])
+def test_grid_to_point_interpolation_linear_boundary_gradient(
+    device: str,
+    implementation: str,
+    dims: int,
+):
+    """Linear interpolation uses real cells at both inclusive boundaries."""
+    if implementation == "warp" and (
+        "warp" not in GridToPointInterpolation.available_implementations()
+    ):
+        pytest.skip("Warp is not available")
+
+    dtype = torch.float32
+    bounds = [(-2.0 - axis, 5.0 + axis) for axis in range(dims)]
+    axes = [
+        torch.linspace(lower, upper, 4, device=device, dtype=dtype)
+        for lower, upper in bounds
+    ]
+    coordinates = torch.stack(torch.meshgrid(*axes, indexing="ij"), dim=0)
+    coefficients = torch.linspace(0.1, 0.1 * dims, dims, device=device, dtype=dtype)
+    context_grid = torch.einsum("i,i...->...", coefficients, coordinates).unsqueeze(0)
+
+    lower = torch.tensor([bound[0] for bound in bounds], device=device, dtype=dtype)
+    upper = torch.tensor([bound[1] for bound in bounds], device=device, dtype=dtype)
+    query_points = ((lower + upper) / 2).expand(2 * (dims + 1), dims).clone()
+    query_points[:dims].diagonal().copy_(lower)
+    query_points[dims].copy_(lower)
+    query_points[dims + 1 : -1].diagonal().copy_(upper)
+    query_points[-1].copy_(upper)
+    query_points.requires_grad_(True)
+
+    output = GridToPointInterpolation.dispatch(
+        query_points,
+        context_grid,
+        [(lower, upper, 4) for lower, upper in bounds],
+        interpolation_type="linear",
+        implementation=implementation,
+    )
+    expected = (query_points.detach() * coefficients).sum(dim=-1, keepdim=True)
+    torch.testing.assert_close(output, expected, atol=2e-6, rtol=2e-6)
+
+    output.sum().backward()
+    expected_gradient = coefficients.expand_as(query_points)
+    torch.testing.assert_close(
+        query_points.grad,
+        expected_gradient,
+        atol=2e-6,
+        rtol=2e-6,
+    )
+
+
+@pytest.mark.parametrize("implementation", ["torch", "warp"])
+@pytest.mark.parametrize("boundary", ["lower", "upper"])
+def test_grid_to_point_interpolation_linear_boundary_node_is_exact(
+    device: str,
+    implementation: str,
+    boundary: str,
+):
+    """Arbitrary boundary controls retain exact values and one-sided slopes."""
+    if implementation == "warp" and (
+        "warp" not in GridToPointInterpolation.available_implementations()
+    ):
+        pytest.skip("Warp is not available")
+
+    lower, upper, resolution = 0.1, 0.9, 7267
+    context_grid = torch.zeros(1, resolution, device=device)
+    if boundary == "lower":
+        query_value = lower
+        context_grid[0, 0] = 1.0
+        expected_gradient = -(resolution - 1) / (upper - lower)
+    else:
+        query_value = upper
+        context_grid[0, -1] = 1.0
+        expected_gradient = (resolution - 1) / (upper - lower)
+
+    query_points = torch.tensor(
+        [[query_value]],
+        device=device,
+        requires_grad=True,
+    )
+    output = GridToPointInterpolation.dispatch(
+        query_points,
+        context_grid,
+        [(lower, upper, resolution)],
+        interpolation_type="linear",
+        implementation=implementation,
+    )
+    torch.testing.assert_close(output, torch.ones_like(output), atol=1e-6, rtol=1e-6)
+
+    output.sum().backward()
+    torch.testing.assert_close(
+        query_points.grad,
+        torch.full_like(query_points, expected_gradient),
+        atol=2e-2,
+        rtol=2e-3,
+    )
+
+
+@pytest.mark.parametrize("implementation", ["torch", "warp"])
+@pytest.mark.parametrize("boundary", ["lower", "upper"])
+def test_grid_to_point_interpolation_inward_nextafter_is_not_boundary(
+    device: str,
+    implementation: str,
+    boundary: str,
+):
+    """An inward float32 neighbor must not snap to an exact logical endpoint."""
+    if implementation == "warp" and (
+        "warp" not in GridToPointInterpolation.available_implementations()
+    ):
+        pytest.skip("Warp is not available")
+
+    lower = torch.tensor(0.1, device=device, dtype=torch.float32)
+    upper = torch.tensor(0.9, device=device, dtype=torch.float32)
+    if boundary == "lower":
+        exact_coordinate = lower
+        inward_coordinate = torch.nextafter(lower, upper)
+        exact_fraction = torch.zeros_like(lower)
+        inward_fraction = (inward_coordinate - lower) / (upper - lower)
+    else:
+        exact_coordinate = upper
+        inward_coordinate = torch.nextafter(upper, lower)
+        exact_fraction = torch.ones_like(upper)
+        inward_fraction = 1.0 - (upper - inward_coordinate) / (upper - lower)
+
+    def evaluate(coordinate: torch.Tensor):
+        query_points = coordinate.reshape(1, 1).clone().requires_grad_(True)
+        context_grid = torch.tensor(
+            [[0.0, 1.0]],
+            device=device,
+            dtype=torch.float32,
+            requires_grad=True,
+        )
+        output = GridToPointInterpolation.dispatch(
+            query_points,
+            context_grid,
+            [(float(lower), float(upper), 2)],
+            interpolation_type="linear",
+            implementation=implementation,
+        )
+        grad_query, grad_grid = torch.autograd.grad(
+            output.sum(),
+            (query_points, context_grid),
+        )
+        return output.detach().squeeze(), grad_query.squeeze(), grad_grid.squeeze()
+
+    exact_output, exact_query_grad, exact_grid_grad = evaluate(exact_coordinate)
+    inward_output, inward_query_grad, inward_grid_grad = evaluate(inward_coordinate)
+    expected_query_grad = 1.0 / (upper - lower)
+    exact_expected_grid_grad = torch.stack((1.0 - exact_fraction, exact_fraction))
+    inward_expected_grid_grad = torch.stack((1.0 - inward_fraction, inward_fraction))
+
+    torch.testing.assert_close(exact_output, exact_fraction, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(
+        exact_grid_grad,
+        exact_expected_grid_grad,
+        atol=0.0,
+        rtol=0.0,
+    )
+    torch.testing.assert_close(
+        inward_output,
+        inward_fraction,
+        atol=1e-12,
+        rtol=1e-5,
+    )
+    torch.testing.assert_close(
+        inward_grid_grad,
+        inward_expected_grid_grad,
+        atol=1e-12,
+        rtol=1e-5,
+    )
+    torch.testing.assert_close(
+        torch.stack((exact_query_grad, inward_query_grad)),
+        expected_query_grad.expand(2),
+    )
+
+    if boundary == "lower":
+        assert inward_output > exact_output
+        assert inward_grid_grad[1] > exact_grid_grad[1]
+    else:
+        assert inward_output < exact_output
+        assert inward_grid_grad[0] > exact_grid_grad[0]
+
+
+@pytest.mark.parametrize("implementation", ["torch", "warp"])
+def test_grid_to_point_interpolation_interior_node_roundoff(
+    device: str,
+    implementation: str,
+):
+    """Interior nodes and their float32 neighbors use a consistent real cell."""
+    if implementation == "warp" and (
+        "warp" not in GridToPointInterpolation.available_implementations()
+    ):
+        pytest.skip("Warp is not available")
+
+    lower = torch.tensor(0.0, device=device)
+    upper = torch.tensor(1.0, device=device)
+    interior = torch.linspace(lower, upper, 4, device=device)[2]
+    query_points = torch.stack(
+        (
+            torch.nextafter(interior, lower),
+            interior,
+            torch.nextafter(interior, upper),
+        )
+    ).reshape(-1, 1)
+    query_points.requires_grad_()
+    context_grid = torch.arange(4.0, device=device).reshape(1, 4)
+
+    output = GridToPointInterpolation.dispatch(
+        query_points,
+        context_grid,
+        [(0.0, 1.0, 4)],
+        interpolation_type="linear",
+        implementation=implementation,
+    )
+    expected = 3.0 * query_points.detach()
+    torch.testing.assert_close(output, expected, atol=5e-7, rtol=1e-6)
+
+    output.sum().backward()
+    torch.testing.assert_close(query_points.grad, torch.full_like(query_points, 3.0))
+
+
+@pytest.mark.parametrize("interpolation_type", _INTERPOLATION_TYPES)
+def test_grid_to_point_interpolation_torch_dtype_is_independent_of_default_dtype(
+    device: str,
+    interpolation_type: str,
+):
+    """Torch coordinate construction cannot promote explicit float32 inputs."""
+    original_default_dtype = torch.get_default_dtype()
+    try:
+        torch.set_default_dtype(torch.float64)
+        query_points = torch.tensor([[0.25]], device=device, dtype=torch.float32)
+        context_grid = torch.tensor(
+            [[0.0, 0.5, 1.0]],
+            device=device,
+            dtype=torch.float32,
+        )
+        output = GridToPointInterpolation.dispatch(
+            query_points,
+            context_grid,
+            [(0.0, 1.0, 3)],
+            interpolation_type=interpolation_type,
+            implementation="torch",
+        )
+    finally:
+        torch.set_default_dtype(original_default_dtype)
+
+    assert output.dtype == torch.float32
 
 
 # Validate deprecated alias and input/error handling paths.

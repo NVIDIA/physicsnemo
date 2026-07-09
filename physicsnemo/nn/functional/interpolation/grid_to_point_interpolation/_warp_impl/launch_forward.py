@@ -14,7 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Dimension-specific Warp launch helpers for interpolation forward passes."""
+"""Dimension-specific Warp launch helpers for interpolation forward passes.
+
+The enclosing torch custom op owns autograd, so input views explicitly disable
+Warp-side gradient allocation.
+"""
 
 import torch
 import warp as wp
@@ -34,6 +38,8 @@ def _launch_forward_1d(
     start_vals: list[float],
     dx_vals: list[float],
     padded_sizes: list[int],
+    lower_vals: list[float],
+    upper_vals: list[float],
     center_offset: float,
     interp_id: int,
     stride: int,
@@ -43,22 +49,33 @@ def _launch_forward_1d(
 ) -> None:
     # Convert torch tensors to warp views with dtypes expected by 1D kernels.
     points = query_points[:, 0].contiguous()
-    wp_points = wp.from_torch(points, dtype=wp.float32)
-    wp_grid = wp.from_torch(context_grid.contiguous())
+    wp_points = wp.from_torch(points, dtype=wp.float32, requires_grad=False)
+    wp_grid = wp.from_torch(context_grid.contiguous(), requires_grad=False)
     wp_out = wp.from_torch(output, return_ctype=True)
+
+    inputs = [
+        wp_points,
+        wp_grid,
+        wp_out,
+        float(start_vals[0]),
+        float(dx_vals[0]),
+        int(padded_sizes[0]),
+    ]
+    if stride == 2:
+        inputs.extend(
+            [
+                float(lower_vals[0]),
+                float(upper_vals[0]),
+                int(interp_id),
+            ]
+        )
+    else:
+        inputs.append(_kernel_param(center_offset, interp_id, stride))
 
     wp.launch(
         FORWARD_KERNELS[1][stride],
         dim=num_points,
-        inputs=[
-            wp_points,
-            wp_grid,
-            wp_out,
-            float(start_vals[0]),
-            float(dx_vals[0]),
-            int(padded_sizes[0]),
-            _kernel_param(center_offset, interp_id, stride),
-        ],
+        inputs=inputs,
         device=wp_device,
         stream=wp_stream,
     )
@@ -72,6 +89,8 @@ def _launch_forward_2d(
     start_vals: list[float],
     dx_vals: list[float],
     padded_sizes: list[int],
+    lower_vals: list[float],
+    upper_vals: list[float],
     center_offset: float,
     interp_id: int,
     stride: int,
@@ -80,25 +99,27 @@ def _launch_forward_2d(
     wp_stream,
 ) -> None:
     # Convert torch tensors to warp views with dtypes expected by 2D kernels.
-    wp_points = wp.from_torch(query_points.contiguous(), dtype=wp.vec2f)
-    wp_grid = wp.from_torch(context_grid.contiguous())
+    wp_points = wp.from_torch(
+        query_points.contiguous(), dtype=wp.vec2f, requires_grad=False
+    )
+    wp_grid = wp.from_torch(context_grid.contiguous(), requires_grad=False)
     wp_out = wp.from_torch(output, return_ctype=True)
     origin = wp.vec2f(float(start_vals[0]), float(start_vals[1]))
     spacing = wp.vec2f(float(dx_vals[0]), float(dx_vals[1]))
     size = wp.vec2i(int(padded_sizes[0]), int(padded_sizes[1]))
+    logical_lower = wp.vec2f(float(lower_vals[0]), float(lower_vals[1]))
+    logical_upper = wp.vec2f(float(upper_vals[0]), float(upper_vals[1]))
+
+    inputs = [wp_points, wp_grid, wp_out, origin, spacing, size]
+    if stride == 2:
+        inputs.extend([logical_lower, logical_upper, int(interp_id)])
+    else:
+        inputs.append(_kernel_param(center_offset, interp_id, stride))
 
     wp.launch(
         FORWARD_KERNELS[2][stride],
         dim=num_points,
-        inputs=[
-            wp_points,
-            wp_grid,
-            wp_out,
-            origin,
-            spacing,
-            size,
-            _kernel_param(center_offset, interp_id, stride),
-        ],
+        inputs=inputs,
         device=wp_device,
         stream=wp_stream,
     )
@@ -112,6 +133,8 @@ def _launch_forward_3d(
     start_vals: list[float],
     dx_vals: list[float],
     padded_sizes: list[int],
+    lower_vals: list[float],
+    upper_vals: list[float],
     center_offset: float,
     interp_id: int,
     stride: int,
@@ -120,8 +143,10 @@ def _launch_forward_3d(
     wp_stream,
 ) -> None:
     # Convert torch tensors to warp views with dtypes expected by 3D kernels.
-    wp_points = wp.from_torch(query_points.contiguous(), dtype=wp.vec3f)
-    wp_grid = wp.from_torch(context_grid.contiguous())
+    wp_points = wp.from_torch(
+        query_points.contiguous(), dtype=wp.vec3f, requires_grad=False
+    )
+    wp_grid = wp.from_torch(context_grid.contiguous(), requires_grad=False)
     wp_out = wp.from_torch(output, return_ctype=True)
     origin = wp.vec3f(
         float(start_vals[0]),
@@ -134,19 +159,27 @@ def _launch_forward_3d(
         int(padded_sizes[1]),
         int(padded_sizes[2]),
     )
+    logical_lower = wp.vec3f(
+        float(lower_vals[0]),
+        float(lower_vals[1]),
+        float(lower_vals[2]),
+    )
+    logical_upper = wp.vec3f(
+        float(upper_vals[0]),
+        float(upper_vals[1]),
+        float(upper_vals[2]),
+    )
+
+    inputs = [wp_points, wp_grid, wp_out, origin, spacing, size]
+    if stride == 2:
+        inputs.extend([logical_lower, logical_upper, int(interp_id)])
+    else:
+        inputs.append(_kernel_param(center_offset, interp_id, stride))
 
     wp.launch(
         FORWARD_KERNELS[3][stride],
         dim=num_points,
-        inputs=[
-            wp_points,
-            wp_grid,
-            wp_out,
-            origin,
-            spacing,
-            size,
-            _kernel_param(center_offset, interp_id, stride),
-        ],
+        inputs=inputs,
         device=wp_device,
         stream=wp_stream,
     )
@@ -161,6 +194,8 @@ def launch_forward(
     start_vals: list[float],
     dx_vals: list[float],
     padded_sizes: list[int],
+    lower_vals: list[float],
+    upper_vals: list[float],
     center_offset: float,
     interp_id: int,
     stride: int,
@@ -168,6 +203,7 @@ def launch_forward(
     wp_device,
     wp_stream,
 ) -> None:
+    """Launch the dimension-specific Warp interpolation forward kernel."""
     if dims == 1:
         _launch_forward_1d(
             query_points=query_points,
@@ -176,6 +212,8 @@ def launch_forward(
             start_vals=start_vals,
             dx_vals=dx_vals,
             padded_sizes=padded_sizes,
+            lower_vals=lower_vals,
+            upper_vals=upper_vals,
             center_offset=center_offset,
             interp_id=interp_id,
             stride=stride,
@@ -193,6 +231,8 @@ def launch_forward(
             start_vals=start_vals,
             dx_vals=dx_vals,
             padded_sizes=padded_sizes,
+            lower_vals=lower_vals,
+            upper_vals=upper_vals,
             center_offset=center_offset,
             interp_id=interp_id,
             stride=stride,
@@ -210,6 +250,8 @@ def launch_forward(
             start_vals=start_vals,
             dx_vals=dx_vals,
             padded_sizes=padded_sizes,
+            lower_vals=lower_vals,
+            upper_vals=upper_vals,
             center_offset=center_offset,
             interp_id=interp_id,
             stride=stride,
