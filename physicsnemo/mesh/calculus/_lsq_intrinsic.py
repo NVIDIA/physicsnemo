@@ -54,7 +54,8 @@ def compute_point_gradient_lsq_intrinsic(
     -------
     torch.Tensor
         Intrinsic gradients (living in tangent space, represented in ambient coordinates).
-        Shape: (n_points, n_spatial_dims) for scalars, or (n_points, n_spatial_dims, ...) for tensor fields
+        Shape: (n_points, n_spatial_dims) for scalars, or (n_points, n_spatial_dims, ...) for tensor fields.
+        The derivative-coordinate axis is always axis 1.
 
     Notes
     -----
@@ -154,7 +155,8 @@ def compute_point_gradient_lsq_intrinsic(
             gradients[point_indices] = grad_ambient
         else:
             # Tensor field: flatten extra dims, solve, map back
-            b_weighted = sqrt_w * b
+            value_weights = sqrt_w.view(n_group, n_neighbors, *([1] * (b.ndim - 2)))
+            b_weighted = value_weights * b
             orig_shape = b.shape[2:]
             b_flat = b_weighted.reshape(n_group, n_neighbors, -1)
 
@@ -166,8 +168,7 @@ def compute_point_gradient_lsq_intrinsic(
             grad_ambient_reshaped = grad_ambient.reshape(
                 n_group, n_spatial_dims, *orig_shape
             )
-            perm = [0] + list(range(2, grad_ambient_reshaped.ndim)) + [1]
-            gradients[point_indices] = grad_ambient_reshaped.permute(*perm)
+            gradients[point_indices] = grad_ambient_reshaped
 
     return gradients
 

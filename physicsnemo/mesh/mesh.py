@@ -3044,6 +3044,8 @@ class Mesh:
         torch.Tensor
             Gradient of shape ``(n, n_spatial_dims, *field.shape[1:])``, where
             ``n`` is ``n_points`` or ``n_cells`` according to ``data_source``.
+            For a vector field, ``gradient[i, k, j]`` is
+            :math:`\partial field_{i,j} / \partial x_k`.
         """
         from physicsnemo.mesh.calculus.gradient import (
             compute_gradient_cells_lsq,
