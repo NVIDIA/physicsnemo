@@ -14,16 +14,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Dense, sparse, and lattice point-deformation functionals."""
+"""Differentiable point-deformation and registration functionals."""
 
 from .deform import DisplacePoints, MorphPoints, displace_points, morph_points
 from .ffd import FreeFormDeformPoints, free_form_deform_points
+from .procrustes import Procrustes, procrustes
 
 __all__ = [
     "DisplacePoints",
     "FreeFormDeformPoints",
     "MorphPoints",
+    "Procrustes",
     "displace_points",
     "free_form_deform_points",
     "morph_points",
+    "procrustes",
 ]

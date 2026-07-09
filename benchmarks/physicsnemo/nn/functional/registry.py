@@ -47,6 +47,7 @@ from physicsnemo.nn.functional.geometry import (
     MeshPoissonDiskSample,
     MeshToVoxelFraction,
     MorphPoints,
+    Procrustes,
     RayMeshIntersect,
     SignedDistanceField,
 )
@@ -86,6 +87,7 @@ FUNCTIONAL_SPECS: tuple[type[FunctionSpec], ...] = (
     DisplacePoints,
     MorphPoints,
     FreeFormDeformPoints,
+    Procrustes,
     FarthestPointSampling,
     MeshPoissonDiskSample,
     MeshToVoxelFraction,
