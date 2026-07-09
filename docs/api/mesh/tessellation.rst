@@ -72,7 +72,9 @@ with quality simplices. The engine is constrained Delaunay triangulation
 topologically by even-odd parity flood fill) followed by Ruppert's
 Delaunay refinement, so in 2D every output triangle **provably** satisfies
 the requested minimum-angle bound and, optionally, a maximum cell size.
-Optional ODT smoothing (``smooth_iterations``) improves the *typical*
+Optional optimal-Delaunay-triangulation (ODT) smoothing — each interior
+vertex moves to the area-weighted average of its incident triangles'
+circumcenters (Chen & Xu 2004) — via ``smooth_iterations`` improves the *typical*
 angle while preserving both bounds. The exact-boundary contract: every
 input vertex appears bit-identically in the output (leading rows, input
 order), boundary facets are only ever *subdivided*, never moved, and the
