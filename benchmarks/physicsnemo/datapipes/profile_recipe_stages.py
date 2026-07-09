@@ -79,8 +79,8 @@ class StageClock:
 
 def build_parts(yaml_name: str, path_overrides: dict, sampling_resolution: int):
     """Reader + transform list, via the recipe's own helpers."""
-    import hydra.utils
     import datasets as recipe_datasets
+    import hydra.utils
 
     paths = OmegaConf.load(RECIPE / "datasets/dataset_paths.yaml")
     for k, v in path_overrides.items():
@@ -151,12 +151,20 @@ def profile_zarr_reader_internals(zarr_dir: Path, res: int) -> None:
     group = sorted(zarr_dir.glob("*.zarr"))[0]
     handles = {
         name: ts.open(
-            {"driver": "zarr3", "kvstore": {"driver": "file", "path": str(group / name)}},
+            {
+                "driver": "zarr3",
+                "kvstore": {"driver": "file", "path": str(group / name)},
+            },
             open=True,
         ).result()
-        for name in ("points", "cells", "cell_data/pMeanTrim",
-                     "cell_data/wallShearStressMeanTrim",
-                     "cell_data/CpMeanTrim", "cell_data/pPrime2MeanTrim")
+        for name in (
+            "points",
+            "cells",
+            "cell_data/pMeanTrim",
+            "cell_data/wallShearStressMeanTrim",
+            "cell_data/CpMeanTrim",
+            "cell_data/pPrime2MeanTrim",
+        )
     }
     n_cells = handles["cells"].shape[0]
     clock = StageClock()
@@ -165,15 +173,22 @@ def profile_zarr_reader_internals(zarr_dir: Path, res: int) -> None:
         s = torch.randint(0, n_cells - res + 1, (1,), generator=gen).item()
         sl = slice(s, s + res)
         clock.stage("cells block (await)", lambda: handles["cells"][sl].read().result())
-        clock.stage("points range", lambda: handles["points"][3 * s : 3 * (s + res)].read().result())
-        clock.stage("4 fields (concurrent)", lambda: [
-            f.result() for f in [
-                handles["cell_data/pMeanTrim"][sl].read(),
-                handles["cell_data/wallShearStressMeanTrim"][sl].read(),
-                handles["cell_data/CpMeanTrim"][sl].read(),
-                handles["cell_data/pPrime2MeanTrim"][sl].read(),
-            ]
-        ])
+        clock.stage(
+            "points range",
+            lambda: handles["points"][3 * s : 3 * (s + res)].read().result(),
+        )
+        clock.stage(
+            "4 fields (concurrent)",
+            lambda: [
+                f.result()
+                for f in [
+                    handles["cell_data/pMeanTrim"][sl].read(),
+                    handles["cell_data/wallShearStressMeanTrim"][sl].read(),
+                    handles["cell_data/CpMeanTrim"][sl].read(),
+                    handles["cell_data/pPrime2MeanTrim"][sl].read(),
+                ]
+            ],
+        )
     clock.report("=== zarr reader internals (warm, sequential for attribution) ===")
 
 
@@ -188,14 +203,24 @@ def main() -> None:
     model, collate = build_model_and_collate()
 
     profile_variant(
-        "pdmsh (MeshReaderWithGlobalData)", "drivaer_ml_surface.yaml",
-        {"drivaer_ml": args.pdmsh_dir.resolve()}, args.pdmsh_dir,
-        model, collate, args.epochs, args.sampling_resolution,
+        "pdmsh (MeshReaderWithGlobalData)",
+        "drivaer_ml_surface.yaml",
+        {"drivaer_ml": args.pdmsh_dir.resolve()},
+        args.pdmsh_dir,
+        model,
+        collate,
+        args.epochs,
+        args.sampling_resolution,
     )
     profile_variant(
-        "zarr (ZarrMeshReader)", "drivaer_ml_surface_zarr.yaml",
-        {"drivaer_ml_zarr": args.zarr_dir.resolve()}, args.zarr_dir,
-        model, collate, args.epochs, args.sampling_resolution,
+        "zarr (ZarrMeshReader)",
+        "drivaer_ml_surface_zarr.yaml",
+        {"drivaer_ml_zarr": args.zarr_dir.resolve()},
+        args.zarr_dir,
+        model,
+        collate,
+        args.epochs,
+        args.sampling_resolution,
     )
     profile_zarr_reader_internals(args.zarr_dir, args.sampling_resolution)
 

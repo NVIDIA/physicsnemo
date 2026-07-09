@@ -194,9 +194,11 @@ def main() -> None:
         if step_ms is None and torch.cuda.is_available():
             domain, _ = dataset[0]
             step_ms = gpu_step_time_ms(domain)
-            print(f"\n[context] GeoTransolver fwd+bwd GPU step: {step_ms:.1f} ms "
-                  f"({1e3 / step_ms:.1f} steps/s) -- datapipe must beat this "
-                  f"per-GPU to stay hidden")
+            print(
+                f"\n[context] GeoTransolver fwd+bwd GPU step: {step_ms:.1f} ms "
+                f"({1e3 / step_ms:.1f} steps/s) -- datapipe must beat this "
+                f"per-GPU to stay hidden"
+            )
 
 
 if __name__ == "__main__":

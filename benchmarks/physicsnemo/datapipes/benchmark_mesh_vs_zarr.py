@@ -225,7 +225,9 @@ def convert_real(dataset_dir: Path, data_dir: Path, runs: int, subsample: int) -
     if len(run_dirs) < runs:
         raise ValueError(f"only {len(run_dirs)} run_* dirs under {dataset_dir}")
 
-    stores = {n: data_dir / n for n in ("pmsh_orig", "pmsh_soup", "zarr_zstd", "zarr_raw")}
+    stores = {
+        n: data_dir / n for n in ("pmsh_orig", "pmsh_soup", "zarr_zstd", "zarr_raw")
+    }
     for d in stores.values():
         if d.exists():
             shutil.rmtree(d)
@@ -246,10 +248,17 @@ def convert_real(dataset_dir: Path, data_dir: Path, runs: int, subsample: int) -
         for k in REAL_FIELDS:
             sample[k] = mesh.cell_data[k].contiguous().numpy()
         _write_pmsh_soup(sample, stores["pmsh_soup"] / f"sample_{i:04d}.pmsh")
-        _write_zarr(sample, stores["zarr_zstd"] / f"sample_{i:04d}.zarr", subsample, True)
-        _write_zarr(sample, stores["zarr_raw"] / f"sample_{i:04d}.zarr", subsample, False)
-        print(f"  converted {run.name} ({i + 1}/{runs}): "
-              f"{mesh.n_cells:,} cells, {mesh.n_points:,} points", flush=True)
+        _write_zarr(
+            sample, stores["zarr_zstd"] / f"sample_{i:04d}.zarr", subsample, True
+        )
+        _write_zarr(
+            sample, stores["zarr_raw"] / f"sample_{i:04d}.zarr", subsample, False
+        )
+        print(
+            f"  converted {run.name} ({i + 1}/{runs}): "
+            f"{mesh.n_cells:,} cells, {mesh.n_points:,} points",
+            flush=True,
+        )
 
 
 def _write_pmsh_soup(sample: dict[str, np.ndarray], path: Path) -> None:
@@ -277,9 +286,7 @@ class PmshReaderAdapter:
         from physicsnemo.datapipes.readers.mesh import MeshReader
 
         self.field_names = fields
-        self._reader = MeshReader(
-            path, pattern="*.pmsh", subsample_n_cells=subsample
-        )
+        self._reader = MeshReader(path, pattern="*.pmsh", subsample_n_cells=subsample)
         gen = torch.Generator()
         gen.manual_seed(seed)
         self._reader.set_generator(gen)
@@ -492,20 +499,34 @@ def main() -> None:
     ap.add_argument("--n-samples", type=int, default=16)
     ap.add_argument("--n-cells", type=int, default=1_000_000)
     ap.add_argument(
-        "--subsample", type=int, default=200_000,
+        "--subsample",
+        type=int,
+        default=200_000,
         help="cells per training sample (recipe sampling_resolution)",
     )
     ap.add_argument("--workers", type=int, nargs="+", default=[1, 8])
-    ap.add_argument("--epochs", type=int, default=2,
-                    help="warm passes after the cold pass")
+    ap.add_argument(
+        "--epochs", type=int, default=2, help="warm passes after the cold pass"
+    )
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--skip-generate", action="store_true",
-                    help="reuse existing stores under --data-dir")
-    ap.add_argument("--real-from", type=Path, default=None,
-                    help="DrivAerML dataset dir (run_*/domain_*.pdmsh); "
-                         "benchmarks real data instead of synthetic")
-    ap.add_argument("--runs", type=int, default=8,
-                    help="number of run_* cases to use in --real-from mode")
+    ap.add_argument(
+        "--skip-generate",
+        action="store_true",
+        help="reuse existing stores under --data-dir",
+    )
+    ap.add_argument(
+        "--real-from",
+        type=Path,
+        default=None,
+        help="DrivAerML dataset dir (run_*/domain_*.pdmsh); "
+        "benchmarks real data instead of synthetic",
+    )
+    ap.add_argument(
+        "--runs",
+        type=int,
+        default=8,
+        help="number of run_* cases to use in --real-from mode",
+    )
     ap.add_argument("--json-out", type=Path, default=None)
     args = ap.parse_args()
 
@@ -517,35 +538,46 @@ def main() -> None:
             convert_real(args.real_from, args.data_dir, args.runs, args.subsample)
         else:
             print(f"Generating {args.n_samples} samples x {args.n_cells} cells ...")
-            generate(args.data_dir, args.n_samples, args.n_cells, args.subsample,
-                     args.seed)
+            generate(
+                args.data_dir, args.n_samples, args.n_cells, args.subsample, args.seed
+            )
 
     fields = REAL_FIELDS if real else FIELDS
     variants = {}
     if real:
         variants["pmsh original (MeshReader, shipping path)"] = (
             "pmsh_orig",
-            lambda p: PmshReaderAdapter(p, args.subsample, args.seed, fields))
+            lambda p: PmshReaderAdapter(p, args.subsample, args.seed, fields),
+        )
         variants["pmsh soup (MeshReader, relaid-out)"] = (
             "pmsh_soup",
-            lambda p: PmshReaderAdapter(p, args.subsample, args.seed, fields))
+            lambda p: PmshReaderAdapter(p, args.subsample, args.seed, fields),
+        )
     else:
         variants["pmsh (MeshReader/memmap)"] = (
-            "pmsh", lambda p: PmshReaderAdapter(p, args.subsample, args.seed, fields))
-    variants.update({
-        "zarr+zstd (zarr-python)": (
-            "zarr_zstd",
-            lambda p: ZarrMeshReader(p, args.subsample, args.seed, fields)),
-        "zarr+zstd (tensorstore)": (
-            "zarr_zstd",
-            lambda p: TensorstoreMeshReader(p, args.subsample, args.seed, fields)),
-        "zarr raw (zarr-python)": (
-            "zarr_raw",
-            lambda p: ZarrMeshReader(p, args.subsample, args.seed, fields)),
-        "zarr raw (tensorstore)": (
-            "zarr_raw",
-            lambda p: TensorstoreMeshReader(p, args.subsample, args.seed, fields)),
-    })
+            "pmsh",
+            lambda p: PmshReaderAdapter(p, args.subsample, args.seed, fields),
+        )
+    variants.update(
+        {
+            "zarr+zstd (zarr-python)": (
+                "zarr_zstd",
+                lambda p: ZarrMeshReader(p, args.subsample, args.seed, fields),
+            ),
+            "zarr+zstd (tensorstore)": (
+                "zarr_zstd",
+                lambda p: TensorstoreMeshReader(p, args.subsample, args.seed, fields),
+            ),
+            "zarr raw (zarr-python)": (
+                "zarr_raw",
+                lambda p: ZarrMeshReader(p, args.subsample, args.seed, fields),
+            ),
+            "zarr raw (tensorstore)": (
+                "zarr_raw",
+                lambda p: TensorstoreMeshReader(p, args.subsample, args.seed, fields),
+            ),
+        }
+    )
 
     sample_mb = logical_sample_mb(args.subsample, real)
     print(f"\nLogical bytes per sample read: {sample_mb:.1f} MB")
@@ -571,7 +603,9 @@ def main() -> None:
             for name, r in (("cold", cold), ("warm", warm)):
                 r["read_mb_per_s"] = sample_mb * len(reader) / r["wall_s"]
             results[label]["passes"][f"workers={workers}"] = {
-                "cold": cold, "warm": warm, "files_evicted": evicted,
+                "cold": cold,
+                "warm": warm,
+                "files_evicted": evicted,
             }
             print(
                 f"  workers={workers:<2d} "

@@ -51,26 +51,49 @@ from physicsnemo.mesh import DomainMesh, Mesh
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    ap.add_argument("--input", type=Path, required=True,
-                    help="dataset root containing run_*/domain_*.pdmsh")
-    ap.add_argument("--output", type=Path, required=True,
-                    help="output directory for <run>.zarr groups")
-    ap.add_argument("--runs", type=int, default=None,
-                    help="convert only the first N runs (numeric order)")
-    ap.add_argument("--soup-boundaries", action="store_true",
-                    help="denormalize boundary meshes to per-cell vertex "
-                         "soup for contiguous block reads")
-    ap.add_argument("--extra-boundary", action="append", default=[],
-                    metavar="NAME=GLOB",
-                    help="add a sibling .pmsh mesh (glob relative to the run "
-                         "dir) as an extra boundary, stored indexed at full "
-                         "resolution and never souped -- e.g. "
-                         "stl_geometry='*_single_solid.stl.pmsh' for exact "
-                         "SDF queries (mirrors DomainMeshReader's "
-                         "extra_boundaries)")
-    ap.add_argument("--chunk-cells", type=int, default=200_000,
-                    help="zarr chunk length on the cell axis; align with "
-                         "the reader's subsample_n_cells")
+    ap.add_argument(
+        "--input",
+        type=Path,
+        required=True,
+        help="dataset root containing run_*/domain_*.pdmsh",
+    )
+    ap.add_argument(
+        "--output",
+        type=Path,
+        required=True,
+        help="output directory for <run>.zarr groups",
+    )
+    ap.add_argument(
+        "--runs",
+        type=int,
+        default=None,
+        help="convert only the first N runs (numeric order)",
+    )
+    ap.add_argument(
+        "--soup-boundaries",
+        action="store_true",
+        help="denormalize boundary meshes to per-cell vertex "
+        "soup for contiguous block reads",
+    )
+    ap.add_argument(
+        "--extra-boundary",
+        action="append",
+        default=[],
+        metavar="NAME=GLOB",
+        help="add a sibling .pmsh mesh (glob relative to the run "
+        "dir) as an extra boundary, stored indexed at full "
+        "resolution and never souped -- e.g. "
+        "stl_geometry='*_single_solid.stl.pmsh' for exact "
+        "SDF queries (mirrors DomainMeshReader's "
+        "extra_boundaries)",
+    )
+    ap.add_argument(
+        "--chunk-cells",
+        type=int,
+        default=200_000,
+        help="zarr chunk length on the cell axis; align with "
+        "the reader's subsample_n_cells",
+    )
     ap.add_argument("--no-compress", action="store_true")
     args = ap.parse_args()
 
@@ -110,7 +133,8 @@ def main() -> None:
         domain = DomainMesh.load(str(pdmsh_candidates[0]))
 
         boundaries = {
-            name: to_cell_soup(domain.boundaries[name]) if args.soup_boundaries
+            name: to_cell_soup(domain.boundaries[name])
+            if args.soup_boundaries
             else domain.boundaries[name]
             for name in domain.boundary_names
         }
@@ -120,8 +144,7 @@ def main() -> None:
             matches = sorted(run.glob(pattern))
             if not matches:
                 raise FileNotFoundError(
-                    f"no mesh matching {pattern!r} in {run} for extra "
-                    f"boundary {name!r}"
+                    f"no mesh matching {pattern!r} in {run} for extra boundary {name!r}"
                 )
             boundaries[name] = Mesh.load(str(matches[0]))
 
@@ -137,10 +160,12 @@ def main() -> None:
             chunk_points=3 * args.chunk_cells,
             compress=not args.no_compress,
         )
-        print(f"  {run.name} -> {out_group.name} "
-              f"(interior {domain.interior.n_points:,} pts, boundaries: "
-              f"{', '.join(domain.boundary_names)}) [{i + 1}/{len(run_dirs)}]",
-              flush=True)
+        print(
+            f"  {run.name} -> {out_group.name} "
+            f"(interior {domain.interior.n_points:,} pts, boundaries: "
+            f"{', '.join(domain.boundary_names)}) [{i + 1}/{len(run_dirs)}]",
+            flush=True,
+        )
 
 
 if __name__ == "__main__":
