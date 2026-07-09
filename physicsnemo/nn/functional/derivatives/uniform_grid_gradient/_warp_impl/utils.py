@@ -134,6 +134,30 @@ def _launch_dim(shape: torch.Size) -> int | tuple[int, ...]:
     return shape[0] if len(shape) == 1 else tuple(shape)
 
 
+@wp.func
+def _wrap_plus1(i: int, n: int) -> int:
+    """Wrap a grid index one cell forward for periodic stencils."""
+    return (i + 1) % n
+
+
+@wp.func
+def _wrap_minus1(i: int, n: int) -> int:
+    """Wrap a grid index one cell backward for periodic stencils."""
+    return (i + n - 1) % n
+
+
+@wp.func
+def _wrap_plus2(i: int, n: int) -> int:
+    """Wrap a grid index two cells forward for periodic stencils."""
+    return (i + 2) % n
+
+
+@wp.func
+def _wrap_minus2(i: int, n: int) -> int:
+    """Wrap a grid index two cells backward for periodic stencils."""
+    return (i + n - 2) % n
+
+
 def _inverse_spacings(
     spacing_tuple: tuple[float, ...],
     *,
