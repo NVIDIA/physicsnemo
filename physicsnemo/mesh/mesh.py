@@ -3403,7 +3403,7 @@ class Mesh:
         max_iterations: builtins.int | None = None,
         warp_options: "WarpRemeshOptions | None" = None,
     ) -> "Mesh":
-        """Uniformly remesh a CUDA triangle surface using Warp.
+        """Uniformly remesh a triangle surface using Warp on CPU or CUDA.
 
         Remeshing creates new topology with approximately ``n_clusters``
         vertices and discards point and cell data.
@@ -3430,8 +3430,7 @@ class Mesh:
         TypeError
             If counts, options, or point coordinates have invalid types.
         ValueError
-            If this mesh is not on CUDA, a count is out of range, or geometry
-            is invalid.
+            If a count is out of range or geometry is invalid.
         NotImplementedError
             If this is not a 2D triangle surface embedded in 3D.
         ImportError

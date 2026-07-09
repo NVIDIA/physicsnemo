@@ -78,7 +78,6 @@ def _select_fps_centroids(
         candidates,
         n_clusters,
         random_start=False,
-        implementation="warp",
     )
     return candidates[selected].clone()
 
@@ -321,7 +320,7 @@ def _build_output_tensors(
     normalization_center: torch.Tensor,
     normalization_scale: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Reconstruct, clean, and compact triangle connectivity on the GPU."""
+    """Reconstruct, clean, and compact triangle connectivity."""
     mapped_cells = labels.to(torch.int64)[source_cells.to(torch.int64)]
     output_cells = _deduplicate_faces(mapped_cells, n_clusters)
     if output_cells.numel() == 0:
@@ -410,7 +409,7 @@ def launch_remeshing(
     max_iterations: int | None = None,
     options: WarpRemeshOptions,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Remesh a CUDA triangle surface with Warp-accelerated CVT clustering."""
+    """Remesh a triangle surface with Warp CVT clustering."""
     iterations = _DEFAULT_ITERATIONS if max_iterations is None else max_iterations
     (
         points,

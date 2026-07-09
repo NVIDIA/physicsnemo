@@ -313,11 +313,7 @@ def test_warp_remesh_rejects_invalid_iteration_counts(max_iterations):
         )
 
 
-def test_warp_remesh_rejects_unsafe_geometry_and_cpu_input():
-    cpu_source = sphere_icosahedral.load(subdivisions=2)
-    with pytest.raises(ValueError, match="requires a CUDA mesh"):
-        remesh(cpu_source, 32)
-
+def test_warp_remesh_rejects_unsafe_geometry():
     nonfinite = sphere_icosahedral.load(subdivisions=2, device="cuda")
     nonfinite.points[0, 0] = torch.nan
     with pytest.raises(ValueError, match="finite"):

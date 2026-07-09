@@ -157,7 +157,7 @@ def _make_uv_sphere(
 
 
 class Remeshing(FunctionSpec):
-    """Remesh a CUDA triangle surface represented by tensors.
+    """Remesh a triangle surface represented by tensors.
 
     This low-level functional performs area-weighted centroidal clustering,
     projects cluster centers onto the source surface, and reconstructs compact
@@ -168,11 +168,10 @@ class Remeshing(FunctionSpec):
     Parameters
     ----------
     mesh_vertices : torch.Tensor
-        Floating-point vertex coordinates with shape ``(n_vertices, 3)`` on
-        CUDA.
+        Floating-point vertex coordinates with shape ``(n_vertices, 3)``.
     mesh_indices : torch.Tensor
         Integer triangle connectivity with shape ``(n_faces, 3)`` on the same
-        CUDA device.
+        device.
     n_clusters : int
         Target output vertex count between 3 and ``n_vertices``, inclusive.
     max_iterations : int | None, optional
@@ -209,7 +208,7 @@ class Remeshing(FunctionSpec):
         max_iterations: int | None = None,
         warp_options: WarpRemeshOptions | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Run Warp-accelerated CUDA remeshing."""
+        """Run Warp remeshing on CPU or CUDA."""
         from ._warp_impl import remeshing_warp
 
         options = warp_options or WarpRemeshOptions()
@@ -236,7 +235,7 @@ class Remeshing(FunctionSpec):
         warp_options: WarpRemeshOptions | None = None,
         implementation: Literal["warp"] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Validate inputs and dispatch the CUDA implementation."""
+        """Validate inputs and dispatch the Warp implementation."""
         implementations = cls._get_impls()
         cls._check_impl(implementation, implementations)
         _validate_inputs(
@@ -246,9 +245,11 @@ class Remeshing(FunctionSpec):
             max_iterations,
             warp_options,
         )
-        if mesh_vertices.device.type != "cuda":
-            raise ValueError("The Warp remeshing functional requires CUDA tensors.")
-
+        if mesh_vertices.device.type not in ("cpu", "cuda"):
+            raise ValueError(
+                "The Warp remeshing functional supports CPU and CUDA tensors; "
+                f"got device {mesh_vertices.device}."
+            )
         selected = implementations["warp" if implementation is None else implementation]
         if not selected.available:
             raise ImportError("The Warp remeshing backend requires warp>=1.14.0.")

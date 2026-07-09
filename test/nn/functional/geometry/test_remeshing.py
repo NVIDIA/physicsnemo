@@ -59,13 +59,14 @@ def test_remeshing_function_spec_contract():
     assert kwargs == {}
 
 
-def test_remeshing_public_api_fake_tensor_propagation():
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_remeshing_public_api_fake_tensor_propagation(device):
     from torch._subclasses.fake_tensor import FakeTensor, FakeTensorMode
     from torch.fx.experimental.symbolic_shapes import ShapeEnv, statically_known_true
 
     with FakeTensorMode(shape_env=ShapeEnv()):
-        vertices = torch.empty((16, 3), dtype=torch.float64, device="cuda")
-        indices = torch.empty((20, 3), dtype=torch.int32, device="cuda")
+        vertices = torch.empty((16, 3), dtype=torch.float64, device=device)
+        indices = torch.empty((20, 3), dtype=torch.int32, device=device)
         output_vertices, output_indices = remeshing(
             vertices,
             indices,
@@ -121,18 +122,21 @@ def test_warp_remesh_options_reject_unrepresentable_integer_scale():
         WarpRemeshOptions(search_radius_scale=10**1_000)
 
 
-def test_remeshing_rejects_cpu_and_invalid_tensor_inputs():
+def test_remeshing_rejects_invalid_tensor_inputs():
     vertices = torch.rand(16, 3)
     indices = torch.tensor([[0, 1, 2], [2, 3, 0]])
 
-    with pytest.raises(ValueError, match="requires CUDA tensors"):
-        remeshing(vertices, indices, 8)
     with pytest.raises(ValueError, match="mesh_vertices must have shape"):
         remeshing(vertices[:, :2], indices, 8)
     with pytest.raises(ValueError, match="mesh_indices must have shape"):
         remeshing(vertices, indices.reshape(-1), 8)
     with pytest.raises(TypeError, match="WarpRemeshOptions instance.*dict"):
         remeshing(vertices, indices, 8, warp_options={})
+
+    meta_vertices = torch.empty(16, 3, device="meta")
+    meta_indices = torch.empty(2, 3, dtype=torch.int64, device="meta")
+    with pytest.raises(ValueError, match="supports CPU and CUDA tensors"):
+        remeshing(meta_vertices, meta_indices, 8)
 
 
 @pytest.mark.parametrize(
@@ -148,6 +152,53 @@ def test_remeshing_import_order(imports):
         check=True,
         capture_output=True,
         text=True,
+    )
+
+
+def test_remeshing_cpu_tensor_api_contract():
+    source = sphere_icosahedral.load(subdivisions=1)
+    output_vertices, output_indices = remeshing(
+        source.points,
+        source.cells,
+        24,
+        max_iterations=1,
+        implementation="warp",
+    )
+
+    assert 3 <= output_vertices.shape[0] <= 24
+    assert output_vertices.device.type == "cpu"
+    assert output_vertices.dtype == source.points.dtype
+    assert output_indices.ndim == 2 and output_indices.shape[1] == 3
+    assert output_indices.device.type == "cpu"
+    assert output_indices.dtype == torch.int64
+
+
+def test_remeshing_cpu_torch_compile():
+    source = sphere_icosahedral.load(subdivisions=1)
+    compiled = torch.compile(remeshing, backend="eager", fullgraph=True, dynamic=True)
+
+    output_vertices, output_indices = compiled(
+        source.points,
+        source.cells,
+        24,
+        max_iterations=1,
+        implementation="warp",
+    )
+
+    assert 3 <= output_vertices.shape[0] <= 24
+    assert output_indices.ndim == 2 and output_indices.shape[1] == 3
+    assert output_indices.dtype == torch.int64
+
+
+def test_remeshing_cpu_custom_op_contract():
+    from physicsnemo.nn.functional.geometry.remeshing._warp_impl import remeshing_warp
+
+    source = sphere_icosahedral.load(subdivisions=1)
+    torch.library.opcheck(
+        remeshing_warp,
+        args=(source.points, source.cells, 24, 1, 1.6, 1.15, 128, 256, 4),
+        rtol=1.0e-4,
+        atol=1.0e-4,
     )
 
 

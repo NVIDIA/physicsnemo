@@ -103,7 +103,7 @@ FUNCTIONAL_SPECS: tuple[type[FunctionSpec], ...] = (
 )
 
 # Remeshing uses a dedicated benchmark that measures the complete Mesh-level
-# operation, including topology cleanup and CUDA synchronization. See
-# ``benchmarks/physicsnemo/mesh/remeshing.py``.
+# operation, including topology cleanup. The current benchmark measures
+# synchronized CUDA execution; see ``benchmarks/physicsnemo/mesh/remeshing.py``.
 
 __all__ = ["FUNCTIONAL_SPECS"]

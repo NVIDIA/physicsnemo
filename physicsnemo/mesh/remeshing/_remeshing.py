@@ -77,10 +77,10 @@ def remesh(
     max_iterations: int | None = None,
     warp_options: WarpRemeshOptions | None = None,
 ) -> Mesh:
-    """Uniformly remesh a CUDA triangle surface using Warp.
+    """Uniformly remesh a triangle surface using Warp on CPU or CUDA.
 
     Warp performs area-weighted centroidal clustering, projects cluster centers
-    back to the source surface with a GPU bounding volume hierarchy, and
+    back to the source surface with a bounding volume hierarchy, and
     reconstructs compact triangle connectivity.
 
     Parameters
@@ -108,8 +108,7 @@ def remesh(
     TypeError
         If counts, options, or point coordinates have invalid types.
     ValueError
-        If the mesh is not on CUDA, a count is out of range, or coordinates or
-        connectivity are invalid.
+        If a count is out of range or coordinates or connectivity are invalid.
     NotImplementedError
         If ``mesh`` is not a 2D triangle surface embedded in 3D.
     ImportError
@@ -133,10 +132,6 @@ def remesh(
 
     _validate_remesh_inputs(mesh, n_clusters, max_iterations)
 
-    if not mesh.points.is_cuda:
-        raise ValueError(
-            "remesh requires a CUDA mesh; move the mesh to CUDA before calling it"
-        )
     output_points, output_cells = remeshing(
         mesh.points,
         mesh.cells,

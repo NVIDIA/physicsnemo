@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""ASV benchmarks for GPU surface remeshing."""
+"""ASV benchmarks for CUDA surface remeshing."""
 
 import torch
 
@@ -39,7 +39,7 @@ class RemeshBenchmark:
     def setup(self, subdivisions: int) -> None:
         """Create an icosphere with an 8:1 target vertex reduction."""
         if not torch.cuda.is_available():
-            raise NotImplementedError("remeshing requires CUDA")
+            raise NotImplementedError("the CUDA remeshing benchmark requires CUDA")
 
         self.mesh = sphere_icosahedral.load(
             subdivisions=subdivisions,

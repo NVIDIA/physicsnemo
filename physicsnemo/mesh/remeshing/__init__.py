@@ -25,7 +25,8 @@ This module provides two complementary algorithms for mesh coarsening:
     diagram on the surface.  Pure PyTorch, no external dependencies.
 
 **Uniform remeshing** (:func:`remesh`):
-    Creates new, approximately uniform triangle topology on CUDA using Warp.
+    Creates new, approximately uniform triangle topology on CPU or CUDA using
+    Warp.
 
 ``partition_cells`` is also a natural building block for a pure-PyTorch
 centroidal Voronoi tessellation (CVT): Lloyd's algorithm iterates from
@@ -34,7 +35,7 @@ partitioning to moving seeds to cluster centroids, then repeats.
 Example:
     >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
     >>> from physicsnemo.mesh.remeshing import remesh
-    >>> mesh = sphere_icosahedral.load(subdivisions=3, device="cuda")
+    >>> mesh = sphere_icosahedral.load(subdivisions=3)
     >>> # Remesh a triangle mesh to approximately 100 vertices
     >>> remeshed = remesh(mesh, n_clusters=100)
     >>> assert remeshed.n_cells > 0

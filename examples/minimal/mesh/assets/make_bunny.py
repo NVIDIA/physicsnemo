@@ -26,9 +26,9 @@ from physicsnemo.mesh.remeshing import remesh
 
 mesh = from_pyvista(pv.examples.download_bunny_coarse())
 mesh = remesh(
-    mesh.clean().subdivide(levels=3, filter="linear").to("cuda"),
+    mesh.clean().subdivide(levels=3, filter="linear"),
     400,
-).to("cpu")
+)
 mesh = mesh.rotate(axis="x", angle=torch.pi / 2).rotate(axis="z", angle=torch.pi / 2)
 
 torch.save(mesh, Path(__file__).parent / "bunny.pt")

@@ -89,8 +89,8 @@ performance benefits.
   (interpolating) schemes
 - **Smoothing**: [Laplacian smoothing](https://en.wikipedia.org/wiki/Laplacian_smoothing)
   with feature preservation
-- **Remeshing**: Uniform CUDA-accelerated remeshing for triangle surfaces
-  embedded in 3D
+- **Remeshing**: Uniform Warp-based remeshing on CPU and CUDA for triangle
+  surfaces embedded in 3D
 - **Repair**: Remove duplicates, fix orientation, fill holes, clean topology
 - **Morphing**: Dense point displacement and sparse, compactly supported
   control-point deformation
@@ -306,7 +306,7 @@ Comprehensive overview of PhysicsNeMo-Mesh capabilities:
 | **Smoothing** | | |
 | Laplacian smoothing | ✅ | |
 | **Remeshing** | | |
-| Uniform remeshing | ✅ | CUDA Warp |
+| Uniform remeshing | ✅ | Warp (CPU and CUDA) |
 | **Tessellation** | | |
 | Polygon-soup triangulation | ✅ | Convex fan + ear-clip; `Mesh.from_polygons` |
 | **Spatial Queries** | | |
@@ -418,11 +418,14 @@ interp = mesh.subdivide(levels=2, filter="butterfly")  # Interpolating
 ```python
 from physicsnemo.mesh.remeshing import WarpRemeshOptions
 
-# Remeshing requires a CUDA-resident mesh.
-coarse = mesh.to("cuda").remesh(n_clusters=1_000)
+# The result remains on the input device.
+coarse = mesh.remesh(n_clusters=1_000)
+
+# Move the mesh to CUDA first to accelerate large inputs.
+coarse_cuda = mesh.to("cuda").remesh(n_clusters=1_000)
 
 # Warp tuning values are runtime controls and do not recompile the kernels.
-tuned = mesh.to("cuda").remesh(
+tuned = mesh.remesh(
     n_clusters=1_000,
     warp_options=WarpRemeshOptions(search_radius_scale=2.0),
 )

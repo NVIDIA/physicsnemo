@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Warp kernels for GPU surface remeshing."""
+"""Warp kernels for surface remeshing."""
 
 from .accumulate_vertex_areas import accumulate_vertex_areas
 from .assign_vertices import assign_vertices
