@@ -862,7 +862,9 @@ def test_compiled_torch_training_checkpoints_pairwise_activations():
     def operation(points, controls, displacements, radius):
         return compact_shepard_field_torch(points, controls, displacements, radius)
 
-    compiled = torch.compile(operation, fullgraph=True, backend="eager")
+    # Checkpoint tags are consumed by AOTAutograd. Dynamo's debug ``eager``
+    # backend did not honor them before PyTorch 2.12.
+    compiled = torch.compile(operation, fullgraph=True, backend="aot_eager")
 
     def make_inputs():
         generator = torch.Generator().manual_seed(4321)

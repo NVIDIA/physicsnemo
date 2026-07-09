@@ -396,8 +396,8 @@ def compact_shepard_field_torch(
     # Dynamo cannot unroll shape-dependent Python chunk loops for symbolic
     # dimensions. Let Inductor see one vectorized block while compiling; eager
     # execution retains byte-aware blocking below. Activation checkpointing is
-    # still required for compiled training: without it, backend="eager" and
-    # compiler fallbacks retain the complete O(B*N*C*D) pairwise graph.
+    # still required for AOTAutograd training: without it, compiled backward
+    # retains the complete O(B*N*C*D) pairwise graph.
     if torch.compiler.is_compiling():
         control_indices = torch.arange(num_controls, device=points.device)
         if torch.is_grad_enabled() and any(
