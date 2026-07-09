@@ -25,7 +25,7 @@ from .launch_forward import launch_remeshing
 @torch.library.custom_op(
     "physicsnemo::remeshing_warp",
     mutates_args=(),
-    tags=(torch.Tag.nondeterministic_bitwise,),
+    tags=(torch.Tag.nondeterministic_bitwise, torch.Tag.cudagraph_unsafe),
 )
 def remeshing_warp(
     mesh_vertices: torch.Tensor,
@@ -39,6 +39,24 @@ def remeshing_warp(
     farthest_point_oversampling: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Execute Warp remeshing as an opaque, non-differentiable Torch op."""
+    # Validate device-side values inside the opaque op so FakeTensor and
+    # torch.compile tracing can use the registered fake implementation.
+    # Bounds must still be checked before a Warp kernel dereferences indices.
+    checks = torch.stack(
+        [
+            torch.isfinite(mesh_vertices).all(),
+            mesh_indices.min() >= 0,
+            mesh_indices.max() < mesh_vertices.shape[0],
+        ]
+    ).to(device="cpu")
+    finite_vertices, lower_bound_ok, upper_bound_ok = [bool(value) for value in checks]
+    if not finite_vertices:
+        raise ValueError("mesh_vertices must contain only finite coordinates")
+    if not lower_bound_ok or not upper_bound_ok:
+        raise ValueError(
+            f"mesh_indices values must lie in [0, {mesh_vertices.shape[0]})"
+        )
+
     options = WarpRemeshOptions(
         search_radius_scale=search_radius_scale,
         voxel_width_scale=voxel_width_scale,
@@ -86,7 +104,8 @@ def _remeshing_warp_fake(
         farthest_point_oversampling,
     )
     context = torch.library.get_ctx()
-    output_vertex_count = context.new_dynamic_size(min=3, max=n_clusters)
+    output_vertex_count = context.new_dynamic_size(min=3)
+    torch._check(output_vertex_count <= n_clusters)
     output_face_count = context.new_dynamic_size(min=1)
     output_vertices = mesh_vertices.new_empty((output_vertex_count, 3))
     output_indices = mesh_indices.new_empty(

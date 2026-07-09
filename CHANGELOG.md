@@ -26,8 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rectilinear_grid_laplacian` to `physicsnemo.nn.functional`, with Torch and
   fused Warp implementations for periodic, nonuniform rectilinear grids.
 - Adds CUDA-native uniform triangle-surface remeshing with NVIDIA Warp,
-  including device-aware `remesh` dispatch, `Mesh.remesh`, topology cleanup,
-  and runtime tuning through `WarpRemeshOptions`.
+  including `remesh`, `Mesh.remesh`, topology cleanup, and runtime tuning
+  through `WarpRemeshOptions`.
 - Adds coverage reporting on PRs — an informational `Coverage %` check plus a
   ready-to-enable Codecov integration.
 - Adds differentiable mesh morphing: Torch-backed dense ``displace_points`` /
@@ -155,6 +155,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `physicsnemo.mesh.remeshing.remesh` and `Mesh.remesh` now require a
+  CUDA-resident mesh; the previous CPU remeshing path has been removed.
 - PhysicsNeMo-Mesh tensor-valued gradients now consistently use the documented
   derivative-first layout `(entity, spatial_dimension, *value_shape)` across
   LSQ, intrinsic LSQ, and DEC. Earlier LSQ releases returned
@@ -168,9 +170,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rest of the branch uses autocast. This is a no-op under full precision, so
   fp32 outputs are unchanged. Also fixes a stale module docstring that
   referenced removed trunk/MLP-branch builder helpers.
-- `physicsnemo.mesh.remesh` now raises `NotImplementedError` for non-2D-in-3D
-  inputs (the pyacvd ACVD clustering is surface-only) instead of failing
-  confusingly downstream, and its docstring reflects that restriction.
+- `physicsnemo.mesh.remeshing.remesh` now raises `NotImplementedError` for
+  non-2D-in-3D inputs (the remeshing implementation is surface-only) instead
+  of failing confusingly downstream, and its docstring reflects that
+  restriction.
 - `physicsnemo.mesh.spatial`: `BVH.from_mesh` and `ClusterTree.from_points` now
   share a single morton-LBVH node-topology builder (`spatial/_lbvh.py`),
   removing ~80 lines of duplicated build logic; construction output is
@@ -242,8 +245,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   converting them to `float32` before crossing the NumPy boundary.
 - `physicsnemo.mesh.projections.extrude` now returns consistently oriented cells
   for full-dimensional (codimension-0) output.
-- `physicsnemo.mesh.remesh` now preserves the input mesh's device and floating
-  dtype (the pyacvd/pyvista round-trip previously dropped them to CPU/float32).
+- `physicsnemo.mesh.remeshing.remesh` now preserves the input mesh's device and
+  floating dtype instead of dropping them to CPU/float32.
 - `physicsnemo.mesh.io.to_pyvista` now preserves supported dtypes for attached
   point, cell, and global data instead of narrowing every array to `float32`.
   Reduced-precision floating-point values are promoted only as needed for VTK.

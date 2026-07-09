@@ -19,15 +19,11 @@ if not torch.cuda.is_available():
 
 source = torch.load(BUNNY, weights_only=False).subdivide(levels=2, filter="loop")
 target_vertices = 600
-gpu_result = remesh(
-    source.to("cuda"), n_clusters=target_vertices, implementation="warp"
-).to("cpu")
-cpu_result = remesh(source, n_clusters=target_vertices, implementation="pyacvd")
+result = remesh(source.to("cuda"), n_clusters=target_vertices).to("cpu")
 
 panels = (
     ("Dense source", source, "#9ecae1"),
-    ("Warp · GPU", gpu_result, "#76B900"),
-    ("PyACVD · CPU", cpu_result, "#4C78A8"),
+    ("Remeshed · GPU", result, "#76B900"),
 )
 
 center = source.points.mean(dim=0).tolist()
@@ -38,7 +34,7 @@ eye = [
     center[2] + 0.75 * diagonal,
 ]
 
-plotter = pv.Plotter(shape=(1, 3), window_size=(1500, 540))
+plotter = pv.Plotter(shape=(1, 2), window_size=(1050, 500))
 plotter.enable_anti_aliasing("ssaa")
 for column, (label, mesh, color) in enumerate(panels):
     plotter.subplot(0, column)

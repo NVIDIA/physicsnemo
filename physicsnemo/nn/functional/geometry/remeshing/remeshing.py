@@ -18,6 +18,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import torch
 
 from physicsnemo.core.function_spec import FunctionSpec
@@ -93,23 +95,6 @@ def _validate_inputs(
             f"{type(warp_options).__name__}"
         )
 
-    # Connectivity bounds must be checked before a Warp kernel dereferences
-    # indices. Collect all device-side predicates into one synchronization.
-    checks = torch.stack(
-        [
-            torch.isfinite(mesh_vertices).all(),
-            mesh_indices.min() >= 0,
-            mesh_indices.max() < mesh_vertices.shape[0],
-        ]
-    ).to(device="cpu")
-    finite_vertices, lower_bound_ok, upper_bound_ok = [bool(value) for value in checks]
-    if not finite_vertices:
-        raise ValueError("mesh_vertices must contain only finite coordinates")
-    if not lower_bound_ok or not upper_bound_ok:
-        raise ValueError(
-            f"mesh_indices values must lie in [0, {mesh_vertices.shape[0]})"
-        )
-
 
 def _make_uv_sphere(
     n_rings: int,
@@ -178,8 +163,7 @@ class Remeshing(FunctionSpec):
     projects cluster centers onto the source surface, and reconstructs compact
     triangle connectivity. The operation is intentionally non-differentiable.
     Most users should call :func:`physicsnemo.mesh.remeshing.remesh`, which
-    accepts and returns :class:`physicsnemo.mesh.Mesh` objects and also provides
-    the optional CPU PyACVD backend.
+    accepts and returns :class:`physicsnemo.mesh.Mesh` objects.
 
     Parameters
     ----------
@@ -250,7 +234,7 @@ class Remeshing(FunctionSpec):
         *,
         max_iterations: int | None = None,
         warp_options: WarpRemeshOptions | None = None,
-        implementation: str | None = None,
+        implementation: Literal["warp"] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Validate inputs and dispatch the CUDA implementation."""
         implementations = cls._get_impls()
@@ -263,10 +247,7 @@ class Remeshing(FunctionSpec):
             warp_options,
         )
         if mesh_vertices.device.type != "cuda":
-            raise ValueError(
-                "The Warp remeshing functional requires CUDA tensors; use "
-                "physicsnemo.mesh.remeshing.remesh for CPU remeshing."
-            )
+            raise ValueError("The Warp remeshing functional requires CUDA tensors.")
 
         selected = implementations["warp" if implementation is None else implementation]
         if not selected.available:

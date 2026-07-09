@@ -19,10 +19,7 @@
     "matrix": {
         "req": {
             "cuml-cu13": [],
-            "scipy": [],
-            "pyacvd": [],
-            "pyvista": [],
-            "vtk": []
+            "scipy": []
         }
     }
 }

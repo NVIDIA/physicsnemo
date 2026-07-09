@@ -3402,13 +3402,11 @@ class Mesh:
         *,
         max_iterations: builtins.int | None = None,
         warp_options: "WarpRemeshOptions | None" = None,
-        implementation: Literal["warp", "pyacvd"] | None = None,
     ) -> "Mesh":
-        """Uniformly remesh a triangle surface.
+        """Uniformly remesh a CUDA triangle surface using Warp.
 
-        CUDA meshes use the Warp implementation by default; CPU meshes use
-        PyACVD. Both backends create new topology with approximately
-        ``n_clusters`` vertices and discard point and cell data.
+        Remeshing creates new topology with approximately ``n_clusters``
+        vertices and discards point and cell data.
 
         Parameters
         ----------
@@ -3416,12 +3414,10 @@ class Mesh:
             Target output vertex count. Must be between 3 and ``n_points``,
             inclusive.
         max_iterations : int | None, optional
-            Maximum centroid-relaxation iterations. ``None`` selects the
-            backend-tuned default. Values must be non-negative.
+            Maximum centroid-relaxation iterations. ``None`` uses four
+            iterations. Values must be non-negative.
         warp_options : WarpRemeshOptions | None, optional
-            Warp-specific performance and initialization controls.
-        implementation : {"warp", "pyacvd"} | None, optional
-            Explicit backend. ``None`` dispatches from this mesh's device.
+            Performance and initialization controls for Warp.
 
         Returns
         -------
@@ -3434,14 +3430,12 @@ class Mesh:
         TypeError
             If counts, options, or point coordinates have invalid types.
         ValueError
-            If a count is out of range, geometry is invalid, or Warp options
-            are used with the PyACVD backend.
+            If this mesh is not on CUDA, a count is out of range, or geometry
+            is invalid.
         NotImplementedError
             If this is not a 2D triangle surface embedded in 3D.
-        KeyError
-            If ``implementation`` does not name a registered backend.
         ImportError
-            If dependencies for the selected backend are unavailable.
+            If Warp is unavailable.
         RuntimeError
             If cleanup cannot reconstruct a nonempty manifold surface.
 
@@ -3458,7 +3452,6 @@ class Mesh:
             n_clusters,
             max_iterations=max_iterations,
             warp_options=warp_options,
-            implementation=implementation,
         )
 
     def subdivide(

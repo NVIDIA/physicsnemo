@@ -16,8 +16,10 @@
 
 """Tests for the tensor-level Warp remeshing functional."""
 
+import inspect
 import subprocess
 import sys
+from typing import Literal, get_type_hints
 
 import pytest
 import torch
@@ -35,10 +37,19 @@ from physicsnemo.nn.functional.geometry.remeshing._warp_impl.launch_forward impo
 
 
 def test_remeshing_function_spec_contract():
-    assert Remeshing.available_implementations() == ("warp",)
+    assert Remeshing.implementations() == ("warp",)
     implementation = Remeshing._get_impls()["warp"]
     assert implementation.rank == 0
     assert implementation.baseline
+    assert list(inspect.signature(remeshing).parameters) == [
+        "mesh_vertices",
+        "mesh_indices",
+        "n_clusters",
+        "max_iterations",
+        "warp_options",
+        "implementation",
+    ]
+    assert get_type_hints(remeshing)["implementation"] == Literal["warp"] | None
 
     label, args, kwargs = next(iter(Remeshing.make_inputs_forward(device="cpu")))
     assert label == "small-v482-k64"
@@ -46,6 +57,39 @@ def test_remeshing_function_spec_contract():
     assert args[1].ndim == 2 and args[1].shape[1] == 3
     assert args[2] == 64
     assert kwargs == {}
+
+
+def test_remeshing_public_api_fake_tensor_propagation():
+    from torch._subclasses.fake_tensor import FakeTensor, FakeTensorMode
+    from torch.fx.experimental.symbolic_shapes import ShapeEnv, statically_known_true
+
+    with FakeTensorMode(shape_env=ShapeEnv()):
+        vertices = torch.empty((16, 3), dtype=torch.float64, device="cuda")
+        indices = torch.empty((20, 3), dtype=torch.int32, device="cuda")
+        output_vertices, output_indices = remeshing(
+            vertices,
+            indices,
+            8,
+            implementation="warp",
+        )
+
+    assert isinstance(output_vertices, FakeTensor)
+    assert isinstance(output_indices, FakeTensor)
+    assert output_vertices.shape[1:] == (3,)
+    assert output_indices.shape[1:] == (3,)
+    assert output_vertices.dtype == vertices.dtype
+    assert output_indices.dtype == torch.int64
+    assert output_vertices.device == vertices.device
+    assert output_indices.device == indices.device
+    assert statically_known_true(output_vertices.shape[0] >= 3)
+    assert statically_known_true(output_vertices.shape[0] <= 8)
+    assert statically_known_true(output_indices.shape[0] >= 1)
+
+
+def test_remeshing_custom_op_tags():
+    tags = torch.ops.physicsnemo.remeshing_warp.default.tags
+    assert torch.Tag.nondeterministic_bitwise in tags
+    assert torch.Tag.cudagraph_unsafe in tags
 
 
 @pytest.mark.parametrize(
@@ -126,6 +170,24 @@ def test_remeshing_tensor_api_contract():
     assert output_indices.ndim == 2 and output_indices.shape[1] == 3
     assert int(output_indices.min()) >= 0
     assert int(output_indices.max()) < output_vertices.shape[0]
+
+
+@pytest.mark.cuda
+def test_remeshing_public_api_torch_compile():
+    source = sphere_icosahedral.load(subdivisions=1, device="cuda")
+    compiled = torch.compile(remeshing, backend="eager", fullgraph=True, dynamic=True)
+
+    output_vertices, output_indices = compiled(
+        source.points,
+        source.cells,
+        24,
+        max_iterations=1,
+        implementation="warp",
+    )
+
+    assert 3 <= output_vertices.shape[0] <= 24
+    assert output_indices.ndim == 2 and output_indices.shape[1] == 3
+    assert output_indices.dtype == torch.int64
 
 
 @pytest.mark.cuda

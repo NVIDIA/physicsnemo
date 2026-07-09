@@ -70,7 +70,7 @@ def test_warp_remesh_closed_sphere_contract():
     original_points = source.points.clone()
     original_cells = source.cells.clone()
 
-    output = remesh(source, 128, implementation="warp")
+    output = remesh(source, 128)
 
     assert output.n_points == 128
     assert output.n_manifold_dims == 2 and output.n_spatial_dims == 3
@@ -127,7 +127,7 @@ def test_warp_remesh_preserves_dtype_and_accepts_noncontiguous_geometry():
     assert not points.is_contiguous()
     source = Mesh(points=points, cells=base.cells.to(device="cuda", dtype=torch.int32))
 
-    output = remesh(source, 96, implementation="warp")
+    output = remesh(source, 96)
 
     assert output.points.dtype == torch.float64
     assert output.cells.dtype == torch.int64
@@ -139,7 +139,7 @@ def test_warp_remesh_is_scale_equivariant(scale):
     unit_source = sphere_icosahedral.load(subdivisions=3, device="cuda")
     source = Mesh(points=scale * unit_source.points, cells=unit_source.cells.clone())
 
-    output = remesh(source, 128, implementation="warp")
+    output = remesh(source, 128)
 
     assert output.n_points == 128
     _assert_clean_topology(output)
@@ -160,7 +160,7 @@ def test_warp_remesh_normalizes_world_coordinates(offset, scale):
         cells=unit_source.cells.clone(),
     )
 
-    output = remesh(source, 128, implementation="warp")
+    output = remesh(source, 128)
 
     assert output.n_points == 128
     assert output.points.dtype == torch.float64
@@ -189,7 +189,7 @@ def test_warp_remesh_preserves_valid_thin_faces():
         cells=torch.tensor([[0, 1, 2], [0, 2, 3]], device="cuda"),
     )
 
-    output = remesh(source, 4, max_iterations=0, implementation="warp")
+    output = remesh(source, 4, max_iterations=0)
 
     assert output.n_points == 4
     assert output.n_cells == 2
@@ -224,7 +224,6 @@ def test_warp_remesh_accepts_custom_options(options):
         48,
         max_iterations=1,
         warp_options=options,
-        implementation="warp",
     )
 
     assert output.points.device.type == "cuda"
@@ -243,7 +242,7 @@ def test_warp_remesh_surface_topology(surface, target, expected_euler, watertigh
         source = plane.load(subdivisions=20, device="cuda")
     else:
         source = torus.load(n_major=48, n_minor=24, device="cuda")
-    output = remesh(source, target, implementation="warp")
+    output = remesh(source, target)
 
     _assert_clean_topology(output)
     assert _euler_characteristic(output) == expected_euler
@@ -258,7 +257,7 @@ def test_warp_remesh_preserves_separated_components():
     )
     source = Mesh.merge([first, second])
 
-    output = remesh(source, 128, implementation="warp")
+    output = remesh(source, 128)
 
     _assert_clean_topology(output)
     assert is_watertight(output)
@@ -269,8 +268,8 @@ def test_warp_remesh_is_nondifferentiable():
     source = sphere_icosahedral.load(subdivisions=3, device="cuda")
     source.points.requires_grad_(True)
 
-    first = remesh(source, 96, implementation="warp")
-    second = remesh(source, 96, implementation="warp")
+    first = remesh(source, 96)
+    second = remesh(source, 96)
 
     assert not first.points.requires_grad
     assert torch.isfinite(first.points).all()
@@ -281,7 +280,7 @@ def test_warp_remesh_uses_current_cuda_stream():
     source = sphere_icosahedral.load(subdivisions=3, device="cuda")
     stream = torch.cuda.Stream()
     with torch.cuda.stream(stream):
-        output = remesh(source, 96, implementation="warp")
+        output = remesh(source, 96)
         marker = output.points.square().sum()
     stream.synchronize()
 
@@ -300,7 +299,7 @@ def test_warp_remesh_uses_current_cuda_stream():
 def test_warp_remesh_rejects_invalid_cluster_counts(n_clusters, error, match):
     source = sphere_icosahedral.load(subdivisions=2, device="cuda")
     with pytest.raises(error, match=match):
-        remesh(source, n_clusters, implementation="warp")
+        remesh(source, n_clusters)
 
 
 @pytest.mark.parametrize("max_iterations", [-1, 1.5, True])
@@ -311,21 +310,20 @@ def test_warp_remesh_rejects_invalid_iteration_counts(max_iterations):
             source,
             32,
             max_iterations=max_iterations,
-            implementation="warp",
         )
 
 
 def test_warp_remesh_rejects_unsafe_geometry_and_cpu_input():
     cpu_source = sphere_icosahedral.load(subdivisions=2)
     with pytest.raises(ValueError, match="requires a CUDA mesh"):
-        remesh(cpu_source, 32, implementation="warp")
+        remesh(cpu_source, 32)
 
     nonfinite = sphere_icosahedral.load(subdivisions=2, device="cuda")
     nonfinite.points[0, 0] = torch.nan
     with pytest.raises(ValueError, match="finite"):
-        remesh(nonfinite, 32, implementation="warp")
+        remesh(nonfinite, 32)
 
     invalid_cells = sphere_icosahedral.load(subdivisions=2, device="cuda")
     invalid_cells.cells[0, 0] = invalid_cells.n_points
     with pytest.raises(ValueError, match="indices"):
-        remesh(invalid_cells, 32, implementation="warp")
+        remesh(invalid_cells, 32)

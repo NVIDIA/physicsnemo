@@ -16,15 +16,14 @@
 
 """Device-independent tests for the public Mesh remeshing API."""
 
-import importlib
 import inspect
 
 import pytest
+import torch
 
-from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
-from physicsnemo.mesh.remeshing import WarpRemeshOptions, remesh
+from physicsnemo.mesh.remeshing import remesh
 
 
 def test_remesh_public_signatures():
@@ -33,7 +32,6 @@ def test_remesh_public_signatures():
         "n_clusters",
         "max_iterations",
         "warp_options",
-        "implementation",
     )
     assert "warp_options" in inspect.signature(Mesh.remesh).parameters
 
@@ -46,33 +44,20 @@ def test_remesh_rejects_wrong_options_type_without_cuda():
             source,
             48,
             warp_options={"hash_grid_resolution": 64},
-            implementation="warp",
         )
 
 
-def test_warp_options_are_rejected_by_pyacvd_before_importing_it():
+def test_remesh_rejects_cpu_mesh():
     source = sphere_icosahedral.load(subdivisions=2)
 
-    with pytest.raises(
-        ValueError,
-        match="warp_options can only be used with implementation='warp'",
-    ):
-        remesh(
-            source,
-            48,
-            warp_options=WarpRemeshOptions(),
-            implementation="pyacvd",
-        )
+    with pytest.raises(ValueError, match="requires a CUDA mesh"):
+        remesh(source, 48)
 
 
-def test_missing_pyacvd_error_has_direct_install_instructions(monkeypatch):
-    module = importlib.import_module("physicsnemo.mesh.remeshing._remeshing")
-    missing = OptionalImport(
-        "physicsnemo_test_missing_pyacvd",
-        package_hint='pip install "pyacvd>=0.3.2" "pyvista>=0.47.0"',
-    )
-    monkeypatch.setattr(module, "pyacvd", missing)
-    source = sphere_icosahedral.load(subdivisions=2)
+def test_remesh_rejects_non_surface_mesh():
+    points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
+    cells = torch.tensor([[0, 1], [1, 2]])
+    source = Mesh(points=points, cells=cells)
 
-    with pytest.raises(ImportError, match=r'pip install "pyacvd>=0\.3\.2"'):
-        remesh(source, 48, implementation="pyacvd")
+    with pytest.raises(NotImplementedError, match="2D triangle surface"):
+        remesh(source, 3)
