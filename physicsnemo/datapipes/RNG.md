@@ -233,7 +233,7 @@ the coordinate that stands in for "which sample" differs. The iterable
 path runs entirely on the main thread in emission order, so the position
 counter is unambiguous (there is no worker-thread reordering to defend
 against). See `tutorial_5_iterable_online_simulation.py` for a worked
-example seeding an online Darcy-flow simulation per `(epoch, position)`.
+example seeding an online electrostatics simulation per `(epoch, position)`.
 
 ## Current limitations
 

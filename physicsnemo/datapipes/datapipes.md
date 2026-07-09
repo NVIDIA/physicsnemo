@@ -342,7 +342,7 @@ loader collates `batch_size` of them, `drop_last` trims the tail) or, when
 unchanged.  Iterable datasets have no length: `len(loader)` raises
 `TypeError`, and `shuffle`/`sampler` are ignored.  See
 `examples/minimal/datapipes/tutorial_5_iterable_online_simulation.py` for
-a `Darcy2D` online simulation wired through this path.
+an online electrostatics simulation wired through this path.
 
 ### Pinned memory
 

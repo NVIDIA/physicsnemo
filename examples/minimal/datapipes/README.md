@@ -227,20 +227,51 @@ with `IterableDatasetBase`:
 
 - Iterable datasets only support iteration: no `__len__`, no `__getitem__`,
   no sampler, and no prefetch worker pool.
-- They run entirely on the **main thread**, so they may freely launch Warp
-  kernels and use CUDA streams. Warp's only requirement is a single
-  launching thread, which the main thread satisfies -- this is what makes
-  an online GPU simulation safe on this path.
-- The `DataLoader` still drives generation on a preprocessing stream (when
-  `use_streams=True`) and hands each item to the compute stream via a CUDA
-  event, so generating the next batch can overlap training on the current
-  one.
+- They run entirely on the **main thread** (as opposed to the multithreaded
+  IO of the DataLoaders)
+- They emit either **per-sample** `(TensorDict, metadata)` tuples that the
+  loader collates into `batch_size` batches (this tutorial; a trailing
+  partial batch is kept unless `drop_last=True`), or ready-made batches
+  when the dataset sets `yields_batches = True`.
+- With `use_streams=True`, the loader runs each generation step on a
+  preprocessing stream, hands the result to the consumer's stream via a
+  CUDA event (plus `record_stream` for allocator safety), and collates on
+  the consumer's stream -- so generating the next samples overlaps
+  training on the current batch.
 
-This tutorial wraps the built-in Warp `Darcy2D` flow generator (a
-multigrid Jacobi solver) as an iterable dataset and iterates it through the
-`DataLoader`. Because `Darcy2D` produces a full batch per step, the wrapper
-is *self-batching* (`yields_batches = True`) and the loader passes each
-batch through unchanged.
+Three rules make a generator a good citizen of this pipeline:
+
+- **Order all device work into torch's main stream before yielding.**
+  The loader's handoff event only covers work the main stream knows
+  about. Plain torch ops land there automatically; a generator may use
+  its own side streams for concurrent work as long as the main stream
+  waits on an event from each before the yield. Warp launches on its own
+  per-device stream and always needs that bridge.  Use `warp_stream_scope` from
+  `physicsnemo.core` for stream management with warp/PyTorch.
+- **Yield freshly allocated tensors each sample.** The loader protects the
+  allocator from recycling your tensors too early; it cannot protect a
+  generator that overwrites tensors it already yielded.  This applies
+  to the PyTorch stream ordered memory allocator - if you are using
+  a custom CUDA allocator, then you likely can make decisions for your
+  use case uniquely!
+- **Keep host readbacks out of the hot loop.** `.item()`, `.cpu()`, or a
+  convergence check blocks the host mid-generation.
+
+The tutorial builds `ElectrostaticsDataset`, a pure-torch online
+simulation: each sample scatters random point charges into a grounded 2D
+box and solves the Poisson equation for the electric potential with a
+fixed budget of Jacobi stencil sweeps. The fixed budget also makes the
+solve CUDA-graph-capturable: the dataset captures the sweep loop once and
+replays it as a single kernel launch per sample, so generation is not
+bounded by the host's kernel-launch rate. Samples
+are seeded per `(base_seed, epoch, position)`, so streams are
+reproducible across runs and distinct across epochs.
+
+The script ends with an A/B demonstration: the same epochs run with
+streams + prefetch enabled and then fully synchronously
+(`loader.disable_prefetch()`), against a proxy training step. Identical
+seeding makes the two runs generate identical data, so the printed
+checksums must match while the wall times show the overlap win.
 
 **When to use the iterable path vs the map/descriptor path:** use the
 map-style `Dataset` when you have a fixed corpus on disk addressable by
@@ -250,6 +281,6 @@ the length is unbounded or unknown, or the producer itself must launch
 device kernels.
 
 ```bash
-# Requires a CUDA device (the Darcy solver runs Warp kernels on the GPU)
+# Requires a CUDA device (the demonstration is CUDA stream overlap)
 python tutorial_5_iterable_online_simulation.py
 ```
