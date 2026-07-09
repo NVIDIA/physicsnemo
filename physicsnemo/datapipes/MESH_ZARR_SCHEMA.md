@@ -24,9 +24,27 @@ One zarr group per mesh:
 |---|---|---|
 | `points` | `(n_points, n_spatial_dims)` | required |
 | `cells` | `(n_cells, nodes_per_cell)` | absent for point clouds (`n_cells == 0`); integer dtype; indices into `points` |
-| `point_data/<f>` | `(n_points, ...)` | |
-| `cell_data/<f>` | `(n_cells, ...)` | |
-| `global_data/<f>` | any (typically 0-d) | |
+| `point_data/<f>` | `(n_points, ...)` | array or subgroup (see below) |
+| `cell_data/<f>` | `(n_cells, ...)` | array or subgroup (see below) |
+| `global_data/<f>` | any (typically 0-d) | array or subgroup (see below) |
+
+### Field names and nesting
+
+Data fields mirror the `TensorDict` tree: each `<f>` under `point_data` /
+`cell_data` / `global_data` is either an **array** (a tensor leaf) or a
+**subgroup** (a nested `TensorDict`), recursively. Every *leaf array*
+under `point_data` (resp. `cell_data`) must obey the leading-dimension
+rule of its container, at any depth.
+
+- Field and subgroup names must be non-empty and **must not contain `/`**
+  (the zarr path separator -- it would create hierarchy instead of a
+  field). Writers MUST reject such names; readers may treat any name
+  reaching them as literal.
+- Non-tensor leaves (`NonTensorData`, e.g. strings) are **not
+  representable in v1**; writers MUST reject them (an attrs-based
+  encoding is reserved for v2).
+- Groups MUST be **zarr format 3** (`zarr.json` metadata). Readers MAY
+  reject format-2 stores.
 
 ### Attributes
 
@@ -77,6 +95,9 @@ mesh-local `global_data` (e.g. `TimeValue`).
   meshes; the fixed-width form remains the fast path.
 - **Connectivity dtype**: v1 preserves the writer's dtype; a v2 writer
   MAY downcast to the smallest safe integer type.
+- **Non-tensor metadata**: an attrs-based (JSON) encoding for
+  `NonTensorData` leaves (case names, solver strings); v1 writers reject
+  them.
 
 ## Design notes (non-normative)
 

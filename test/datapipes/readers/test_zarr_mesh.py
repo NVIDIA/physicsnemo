@@ -408,3 +408,225 @@ def test_mesh_dataset_pipeline(zarr_mesh_dir):
     assert "pressure" in domain.interior.point_data.keys()
     assert "pressure" not in domain.boundaries["vehicle"].cell_data.keys()
     assert "wss" in domain.boundaries["vehicle"].cell_data.keys()
+
+
+def _make_nested_mesh(n_cells: int = 60, seed: int = 0) -> Mesh:
+    """Mesh with nested TensorDicts in every data container."""
+    gen = torch.Generator().manual_seed(seed)
+    n_points = 3 * n_cells
+    return Mesh(
+        points=torch.randn(n_points, 3, generator=gen),
+        cells=torch.arange(n_points, dtype=torch.int64).reshape(n_cells, 3),
+        point_data={
+            "disp": torch.randn(n_points, 3, generator=gen),
+            "turbulence": {
+                "k": torch.randn(n_points, generator=gen),
+                "wall": {"omega": torch.randn(n_points, generator=gen)},
+            },
+        },
+        cell_data={"stress": {"max": torch.randn(n_cells, generator=gen)}},
+        global_data={
+            "freestream": {"U": torch.tensor(38.9), "p": torch.tensor(0.0)},
+        },
+    )
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_nested_tensordict_roundtrip(tmp_path, backend):
+    """Nested TensorDicts map to nested zarr groups and back exactly."""
+    ref = _make_nested_mesh()
+    dp.save_mesh_to_zarr(ref, tmp_path / "n.zarr", chunk_cells=16, chunk_points=48)
+    dp.validate_mesh_zarr(tmp_path / "n.zarr")
+    mesh, _ = dp.ZarrMeshReader(tmp_path, backend=backend)[0]
+    assert torch.equal(
+        mesh.point_data["turbulence", "wall", "omega"],
+        ref.point_data["turbulence", "wall", "omega"],
+    )
+    assert torch.equal(
+        mesh.cell_data["stress", "max"], ref.cell_data["stress", "max"]
+    )
+    assert torch.equal(
+        mesh.global_data["freestream", "U"], ref.global_data["freestream", "U"]
+    )
+
+
+def test_nested_subsample_slices_all_leaves(tmp_path):
+    """One block subsample must slice every nested leaf consistently."""
+    dp.save_mesh_to_zarr(
+        _make_nested_mesh(), tmp_path / "n.zarr", chunk_cells=16, chunk_points=48
+    )
+    full, _ = dp.ZarrMeshReader(tmp_path)[0]
+    reader = dp.ZarrMeshReader(tmp_path, subsample_n_cells=10)
+    reader.set_generator(torch.Generator().manual_seed(0))
+    sub, _ = reader[0]
+    assert sub.n_cells == 10
+    assert sub.point_data["turbulence", "wall", "omega"].shape[0] == sub.n_points
+    p = full.cell_data["stress", "max"]
+    start = (p == sub.cell_data["stress", "max"][0]).nonzero()[0].item()
+    assert torch.equal(sub.cell_data["stress", "max"], p[start : start + 10])
+
+
+def test_nested_case_global_data_merge(tmp_path):
+    """Nested case-level global_data survives both read-time merge paths."""
+    from physicsnemo.mesh import DomainMesh
+
+    dm = _make_domain_mesh(seed=0)
+    dm = DomainMesh(
+        interior=dm.interior,
+        boundaries=dm.boundaries,
+        global_data={
+            "freestream": {"U": torch.tensor(38.9)},
+            "rho_inf": torch.tensor(1.205),
+        },
+    )
+    dp.save_domain_mesh_to_zarr(dm, tmp_path / "run_0.zarr")
+    mesh, _ = dp.ZarrMeshReader(
+        tmp_path,
+        subpath="boundaries/vehicle",
+        merge_global_data_from="../../global_data",
+    )[0]
+    assert torch.equal(mesh.global_data["freestream", "U"], torch.tensor(38.9))
+    domain, _ = dp.ZarrDomainMeshReader(tmp_path)[0]
+    assert torch.equal(domain.global_data["freestream", "U"], torch.tensor(38.9))
+
+
+def test_slash_field_name_rejected(tmp_path):
+    """'/' is the zarr path separator; writing it would silently nest."""
+    mesh = Mesh(
+        points=torch.randn(30, 3),
+        cells=torch.arange(30, dtype=torch.int64).reshape(10, 3),
+        cell_data={"stress/max": torch.randn(10)},
+    )
+    with pytest.raises(ValueError, match="must not contain"):
+        dp.save_mesh_to_zarr(mesh, tmp_path / "bad.zarr")
+
+
+def test_non_tensor_field_rejected(tmp_path):
+    """NonTensorData is not representable in schema v1: clear error."""
+    from tensordict import NonTensorData, TensorDict
+
+    mesh = Mesh(
+        points=torch.randn(30, 3),
+        cells=torch.arange(30, dtype=torch.int64).reshape(10, 3),
+        global_data=TensorDict(
+            {"case_name": NonTensorData("run_042")}, batch_size=[]
+        ),
+    )
+    with pytest.raises(TypeError, match="NonTensorData"):
+        dp.save_mesh_to_zarr(mesh, tmp_path / "bad.zarr")
+
+
+def test_to_cell_soup_nested_point_data():
+    gen = torch.Generator().manual_seed(1)
+    shared = Mesh(
+        points=torch.randn(50, 3, generator=gen),
+        cells=torch.randint(0, 50, (30, 3), generator=gen),
+        point_data={"turbulence": {"k": torch.randn(50, generator=gen)}},
+    )
+    soup = dp.readers.zarr_mesh.to_cell_soup(shared)
+    assert soup.n_points == 90
+    assert torch.equal(
+        soup.point_data["turbulence", "k"].reshape(30, 3),
+        shared.point_data["turbulence", "k"][shared.cells],
+    )
+
+
+def _make_indexed_mesh(seed: int = 0) -> Mesh:
+    """Shared-vertex mesh whose cells are NOT arange (layout=indexed)."""
+    gen = torch.Generator().manual_seed(seed)
+    n_points, n_cells = 200, 150
+    return Mesh(
+        points=torch.randn(n_points, 3, generator=gen),
+        cells=torch.randint(0, n_points, (n_cells, 3), generator=gen),
+        cell_data={"pressure": torch.randn(n_cells, generator=gen)},
+        point_data={"disp": torch.randn(n_points, 3, generator=gen)},
+    )
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_indexed_subsample_matches_full_read(tmp_path, backend):
+    """The dependent-read path (indexed layout) must slice verbatim."""
+    import zarr as zarr_mod
+
+    dp.save_mesh_to_zarr(
+        _make_indexed_mesh(), tmp_path / "i.zarr", chunk_cells=32, chunk_points=64
+    )
+    g = zarr_mod.open_group(str(tmp_path / "i.zarr"), mode="r")
+    assert g.attrs["layout"] == "indexed"
+
+    full, _ = dp.ZarrMeshReader(tmp_path, backend=backend)[0]
+    reader = dp.ZarrMeshReader(tmp_path, backend=backend, subsample_n_cells=20)
+    reader.set_generator(torch.Generator().manual_seed(5))
+    sub, _ = reader[0]
+    p = full.cell_data["pressure"]
+    start = (p == sub.cell_data["pressure"][0]).nonzero()[0].item()
+    sl = slice(start, start + 20)
+    assert torch.equal(sub.cell_data["pressure"], p[sl])
+    assert torch.equal(sub.points[sub.cells], full.points[full.cells[sl]])
+    # point_data is the [cells.min(), cells.max()] window of the block.
+    off = full.cells[sl].min()
+    assert torch.equal(
+        sub.point_data["disp"], full.point_data["disp"][off : off + sub.n_points]
+    )
+
+
+def test_set_epoch_resume_reproducible(zarr_mesh_dir):
+    """set_epoch(n) after resume == reaching epoch n sequentially."""
+
+    def block(epochs):
+        reader = dp.ZarrMeshReader(zarr_mesh_dir, subsample_n_cells=10)
+        reader.set_generator(torch.Generator().manual_seed(0))
+        for e in epochs:
+            reader.set_epoch(e)
+        mesh, _ = reader[0]
+        return mesh.cell_data["pressure"]
+
+    assert torch.equal(block([1, 2, 3]), block([3]))
+
+
+def test_mesh_reader_rejects_domainmesh_group(domain_zarr_dir):
+    """Forgetting subpath= on a DomainMesh dataset gives a clear error."""
+    reader = dp.ZarrMeshReader(domain_zarr_dir)
+    with pytest.raises(ValueError, match="subpath"):
+        reader[0]
+
+
+def test_heterogeneous_boundary_names_raise(tmp_path):
+    """Extra boundaries in a later case must not be silently dropped."""
+    from physicsnemo.mesh import DomainMesh
+
+    dp.save_domain_mesh_to_zarr(_make_domain_mesh(seed=0), tmp_path / "run_0.zarr")
+    dm1 = _make_domain_mesh(seed=1)
+    dm1 = DomainMesh(
+        interior=dm1.interior,
+        boundaries={**dm1.boundaries, "extra": _make_mesh(n_cells=10, seed=2)},
+        global_data=dm1.global_data,
+    )
+    dp.save_domain_mesh_to_zarr(dm1, tmp_path / "run_1.zarr")
+    reader = dp.ZarrDomainMeshReader(tmp_path)
+    reader[0]  # first case defines the structure and reads fine
+    with pytest.raises(ValueError, match="boundary_names"):
+        reader[1]
+
+
+def test_zarr_v2_store_rejected(tmp_path):
+    """Schema requires zarr format 3; v2 stores fail with a clear error."""
+    import zarr as zarr_mod
+
+    g = zarr_mod.open_group(str(tmp_path / "v2.zarr"), mode="w", zarr_format=2)
+    g.create_array("points", shape=(4, 3), dtype="float32")
+    g.attrs["format"] = "physicsnemo-mesh-zarr"
+    reader = dp.ZarrMeshReader(tmp_path)
+    with pytest.raises(ValueError, match="format 2"):
+        reader[0]
+
+
+def test_validate_nested_leaf_dims(tmp_path):
+    """The validator checks leading dims of nested leaves, any depth."""
+    import zarr as zarr_mod
+
+    dp.save_mesh_to_zarr(_make_nested_mesh(), tmp_path / "n.zarr")
+    g = zarr_mod.open_group(str(tmp_path / "n.zarr"), mode="r+")
+    g["point_data/turbulence"].create_array("bad", shape=(7,), dtype="float32")
+    with pytest.raises(ValueError, match="turbulence/bad"):
+        dp.validate_mesh_zarr(tmp_path / "n.zarr")

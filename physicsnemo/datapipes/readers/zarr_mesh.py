@@ -30,6 +30,12 @@ Mesh schema (one Zarr group per sample)::
         cell_data/<field>    (n_cells, ...)
         global_data/<field>  (...)
 
+Data fields mirror the ``TensorDict`` tree: a ``<field>`` is either an array
+(a tensor leaf) or a subgroup (a nested ``TensorDict``), recursively. Field
+names must not contain ``"/"`` (the zarr path separator) and non-tensor
+leaves (``NonTensorData``) are not representable in schema v1; the writers
+reject both with clear errors rather than corrupting the store.
+
 DomainMesh schema (one Zarr group per case, mirroring the ``.pdmsh`` tree)::
 
     run_1.zarr/                    attrs: format="physicsnemo-domainmesh-zarr"
@@ -45,6 +51,11 @@ sample, so it drops into any pipeline that accepts
 (e.g. ``"boundaries/vehicle"``) to read one mesh out of a DomainMesh group,
 and ``merge_global_data_from`` (e.g. ``"../../global_data"``) to merge
 case-level metadata at read time.
+
+Scope note: the writers accept zarr StoreLike objects (object stores,
+transactional stores), but the readers and validator navigate filesystem
+paths in this version -- "cloud-capable" currently applies to the storage
+format and writers, not to reading from object stores.
 
 Subsampling reads a random contiguous cell block (sequential, chunk-aligned
 I/O) plus the contiguous point range the block references. The point range
@@ -65,6 +76,7 @@ from typing import Any, Iterator, Literal
 
 import numpy as np
 import torch
+from tensordict import TensorDictBase
 
 from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.registry import register
@@ -96,13 +108,10 @@ def to_cell_soup(mesh):
         return mesh
     cells = mesh.cells
     n_cells, nodes_per_cell = cells.shape
-    points = mesh.points[cells].reshape(-1, mesh.points.shape[1]).contiguous()
-    point_data = {
-        k: mesh.point_data[k][cells]
-        .reshape(points.shape[0], *mesh.point_data[k].shape[1:])
-        .contiguous()
-        for k in mesh.point_data.keys()
-    }
+    flat = cells.reshape(-1)
+    points = mesh.points[flat].contiguous()
+    # TensorDict batch-indexing gathers every leaf (nested included) at once.
+    point_data = mesh.point_data[flat].contiguous()
     soup_cells = torch.arange(points.shape[0], dtype=torch.int64).reshape(
         n_cells, nodes_per_cell
     )
@@ -176,6 +185,37 @@ def _write_array(target, name, tensor, chunk0: int, compressors) -> None:
         z[...] = arr
 
 
+def _write_tensordict(group, td, chunk0: int, compressors) -> None:
+    """Write a TensorDict as a zarr group tree, mirroring its nesting.
+
+    Tensor leaves become arrays; nested TensorDicts become subgroups,
+    recursively. Rejects field names containing ``"/"`` (zarr's path
+    separator -- it would silently create hierarchy instead of a field)
+    and non-tensor leaves (``NonTensorData`` is not representable in
+    schema v1; an attrs-based encoding is reserved for v2).
+    """
+    for key in td.keys():
+        if not key or "/" in key:
+            raise ValueError(
+                f"field name {key!r} is not storable in the mesh-zarr "
+                f"schema: names must be non-empty and must not contain "
+                f"'/' (the zarr path separator). Rename the field before "
+                f"saving (see MESH_ZARR_SCHEMA.md)."
+            )
+        value = td.get(key)
+        if isinstance(value, TensorDictBase):
+            _write_tensordict(group.create_group(key), value, chunk0, compressors)
+        elif isinstance(value, torch.Tensor):
+            _write_array(group, key, value, chunk0, compressors)
+        else:
+            raise TypeError(
+                f"field {key!r} has unsupported type "
+                f"{type(value).__name__}; mesh-zarr schema v1 stores "
+                f"tensors and nested TensorDicts only (NonTensorData / "
+                f"strings are reserved for v2, see MESH_ZARR_SCHEMA.md)."
+            )
+
+
 def _write_mesh_group(
     group, mesh, chunk_cells: int, chunk_points: int, compressors
 ) -> None:
@@ -189,12 +229,9 @@ def _write_mesh_group(
         ("cell_data", mesh.cell_data, chunk_cells),
         ("global_data", mesh.global_data, chunk_cells),
     ):
-        keys = list(data.keys())
-        if not keys:
+        if not len(data.keys()):
             continue
-        sub = group.create_group(sub_name)
-        for key in keys:
-            _write_array(sub, key, data[key], chunk0, compressors)
+        _write_tensordict(group.create_group(sub_name), data, chunk0, compressors)
 
     group.attrs["format"] = MESH_FORMAT
     group.attrs["schema_version"] = SCHEMA_VERSION
@@ -222,6 +259,9 @@ def save_mesh_to_zarr(
     mesh : Mesh
         Mesh to serialize. Points, cells, point_data, cell_data and
         global_data are written; the internal geometry cache is not.
+        Nested TensorDicts are written as nested zarr groups. Field names
+        containing ``"/"`` and non-tensor leaves (``NonTensorData``) are
+        rejected (not representable in schema v1).
     path : Path, str, or zarr StoreLike
         Target Zarr group directory or store (created / overwritten).
     chunk_cells : int, default=200_000
@@ -282,11 +322,13 @@ def save_domain_mesh_to_zarr(
     root.attrs["schema_version"] = SCHEMA_VERSION
     root.attrs["boundary_names"] = list(domain_mesh.boundary_names)
 
-    gd_keys = list(domain_mesh.global_data.keys())
-    if gd_keys:
-        gd = root.create_group("global_data")
-        for key in gd_keys:
-            _write_array(gd, key, domain_mesh.global_data[key], chunk_cells, compressors)
+    if len(domain_mesh.global_data.keys()):
+        _write_tensordict(
+            root.create_group("global_data"),
+            domain_mesh.global_data,
+            chunk_cells,
+            compressors,
+        )
 
     _write_mesh_group(
         root.create_group("interior"),
@@ -305,18 +347,54 @@ def save_domain_mesh_to_zarr(
         )
 
 
+def _nest_tensors(items) -> dict[str, Any]:
+    """Rebuild a nested dict of tensors from ``(leaf_path, ndarray)`` pairs.
+
+    Inverts the group-tree layout written by :func:`_write_tensordict`:
+    ``"turbulence/k"`` becomes ``{"turbulence": {"k": tensor}}``.
+    """
+    out: dict[str, Any] = {}
+    for path, value in items:
+        parts = path.split("/")
+        node = out
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+        # np.asarray: 0-d zarr reads come back as numpy scalars, which
+        # torch.from_numpy rejects.
+        node[parts[-1]] = torch.from_numpy(np.asarray(value))
+    return out
+
+
 class _ZarrBackend:
     """zarr-python array access for one sample group."""
 
     def __init__(self, path: Path) -> None:
+        # The schema requires zarr format 3 (see MESH_ZARR_SCHEMA.md); a
+        # format-2 store would otherwise fail opaquely inside the
+        # tensorstore backend (its driver is pinned to zarr3).
+        if not (path / "zarr.json").exists() and (path / ".zgroup").exists():
+            raise ValueError(
+                f"{path} is a zarr format 2 store; the mesh-zarr schema "
+                f"requires zarr format 3 (see MESH_ZARR_SCHEMA.md)."
+            )
         self._group = zarr.open_group(str(path), mode="r")
 
     def attrs(self) -> dict[str, Any]:
         return dict(self._group.attrs)
 
-    def array_keys(self, subgroup: str | None = None) -> list[str]:
+    def leaf_array_paths(self, subgroup: str | None = None) -> list[str]:
+        """Slash-separated paths of all arrays under ``subgroup``, any depth."""
         node = self._group[subgroup] if subgroup else self._group
-        return list(node.array_keys())
+        paths: list[str] = []
+
+        def _walk(g, prefix: str) -> None:
+            for name, _ in g.arrays():
+                paths.append(prefix + name)
+            for name, child in g.groups():
+                _walk(child, f"{prefix}{name}/")
+
+        _walk(node, "")
+        return sorted(paths)
 
     def has(self, name: str) -> bool:
         return name in self._group
@@ -345,8 +423,8 @@ class _TensorstoreBackend:
     def attrs(self) -> dict[str, Any]:
         return self._meta.attrs()
 
-    def array_keys(self, subgroup: str | None = None) -> list[str]:
-        return self._meta.array_keys(subgroup)
+    def leaf_array_paths(self, subgroup: str | None = None) -> list[str]:
+        return self._meta.leaf_array_paths(subgroup)
 
     def has(self, name: str) -> bool:
         return self._meta.has(name)
@@ -428,7 +506,9 @@ class ZarrMeshReader:
         path : Path or str
             Directory containing Zarr mesh groups.
         pattern : str, optional
-            Glob pattern for group directories. Default ``*.zarr``.
+            Glob pattern for group directories. Default ``*.zarr``
+            (non-recursive, unlike ``MeshReader``'s ``**/*.pmsh``; use
+            ``"**/*.zarr"`` for nested directory trees).
         subpath : str, optional
             Path of a mesh-schema subgroup inside each matched group, e.g.
             ``"boundaries/vehicle"`` to read one boundary out of
@@ -511,6 +591,7 @@ class ZarrMeshReader:
         self.subsample_n_cells = subsample_n_cells
         self.subsample_n_points = subsample_n_points
         self._subsample_generator: torch.Generator | None = None
+        self._subsample_base_seed: int | None = None
 
     @staticmethod
     def _is_zarr_group(path: Path) -> bool:
@@ -522,12 +603,17 @@ class ZarrMeshReader:
     def set_generator(self, generator: torch.Generator) -> None:
         """Assign a ``torch.Generator`` for reproducible subsampling."""
         self._subsample_generator = generator
+        # Capture the base seed once: reseeding from initial_seed() each
+        # epoch would drift (manual_seed updates initial_seed), making the
+        # epoch->seed mapping depend on call history and breaking
+        # checkpoint-resume reproducibility.
+        self._subsample_base_seed = generator.initial_seed()
 
     def set_epoch(self, epoch: int) -> None:
-        """Reseed the subsample RNG for a new epoch."""
+        """Reseed the subsample RNG for a new epoch (base seed + epoch)."""
         if self._subsample_generator is not None:
             self._subsample_generator.manual_seed(
-                self._subsample_generator.initial_seed() + epoch
+                self._subsample_base_seed + epoch
             )
 
     def _get_backend(self, index: int):
@@ -546,11 +632,13 @@ class ZarrMeshReader:
     def _field_requests(
         self, backend, subgroup: str, sl: slice | None
     ) -> dict[str, slice | None]:
+        # Leaf paths at any depth: nested TensorDicts share the leading
+        # batch dim (TensorDict enforces it), so one slice fits all leaves.
         if not backend.has(subgroup):
             return {}
-        return {f"{subgroup}/{k}": sl for k in backend.array_keys(subgroup)}
+        return {f"{subgroup}/{k}": sl for k in backend.leaf_array_paths(subgroup)}
 
-    def _merged_global_data(self, index: int) -> dict[str, torch.Tensor]:
+    def _merged_global_data(self, index: int) -> dict[str, Any]:
         """Read the external global_data group for read-time merging."""
         merge_path = Path(
             os.path.normpath(self._paths[index] / self._merge_rel_path)
@@ -564,8 +652,8 @@ class ZarrMeshReader:
                 )
             self._merge_backends[merge_path] = self._backend_cls(merge_path)
         backend = self._merge_backends[merge_path]
-        arrays = backend.read_many({k: None for k in backend.array_keys()})
-        return {k: torch.from_numpy(np.asarray(v)) for k, v in arrays.items()}
+        arrays = backend.read_many({k: None for k in backend.leaf_array_paths()})
+        return _nest_tensors(arrays.items())
 
     def _load_sample(self, index: int):
         from physicsnemo.mesh import Mesh
@@ -573,6 +661,19 @@ class ZarrMeshReader:
         backend = self._get_backend(index)
         attrs = backend.attrs()
         _check_schema_version(attrs, self._paths[index])
+        fmt = attrs.get("format")
+        if fmt is not None and fmt != MESH_FORMAT:
+            hint = (
+                " (a DomainMesh group: pass subpath='interior' or "
+                "subpath='boundaries/<name>' to select a member mesh, or "
+                "use ZarrDomainMeshReader)"
+                if fmt == DOMAIN_MESH_FORMAT
+                else ""
+            )
+            raise ValueError(
+                f"{self._paths[index]} has format={fmt!r}, expected "
+                f"{MESH_FORMAT!r}{hint}"
+            )
         has_cells = backend.has("cells")
         is_soup = attrs.get("layout") == "soup"
 
@@ -642,15 +743,13 @@ class ZarrMeshReader:
                     np.ascontiguousarray(arrays["cells"])
                 ).long()
 
-        def _sub(name: str) -> dict[str, torch.Tensor]:
-            # np.asarray: 0-d zarr reads come back as numpy scalars, which
-            # torch.from_numpy rejects.
+        def _sub(name: str) -> dict[str, Any]:
             prefix = f"{name}/"
-            return {
-                k[len(prefix):]: torch.from_numpy(np.asarray(v))
+            return _nest_tensors(
+                (k[len(prefix):], v)
                 for k, v in arrays.items()
                 if k.startswith(prefix)
-            }
+            )
 
         global_data = _sub("global_data")
         if self._merge_rel_path is not None:
@@ -720,6 +819,13 @@ class ZarrDomainMeshReader:
     ``full_resolution_boundaries`` are never subsampled -- use for
     geometry consumed by exact queries (e.g. an STL boundary feeding
     SDF computation).
+
+    The dataset must be homogeneous: every case group must have the same
+    ``boundary_names`` (and per-member cells-vs-points structure) as the
+    first case, which defines the reader layout. A case with a missing
+    boundary fails at construction; a case whose ``boundary_names``
+    otherwise differ (e.g. extra boundaries) raises at read time rather
+    than silently dropping data.
 
     Examples
     --------
@@ -839,18 +945,32 @@ class ZarrDomainMeshReader:
         # Sub-readers share one generator; a single reseed suffices, and
         # reseeding per reader would just repeat the same assignment.
 
-    def _global_data(self, index: int) -> dict[str, torch.Tensor]:
+    def _root_backend(self, index: int):
         if index not in self._root_backends:
-            self._root_backends[index] = self._backend_cls(self._paths[index])
-        backend = self._root_backends[index]
+            backend = self._backend_cls(self._paths[index])
+            # Boundary structure (and each sub-reader's subsample mode) is
+            # taken from the first case; verify instead of silently
+            # dropping boundaries a later case might add.
+            names = list(backend.attrs().get("boundary_names", []))
+            if names != self._boundary_names:
+                raise ValueError(
+                    f"{self._paths[index]} has boundary_names {names}, but "
+                    f"{self._paths[0]} (which defines the dataset "
+                    f"structure) has {self._boundary_names}. "
+                    f"ZarrDomainMeshReader requires a homogeneous dataset."
+                )
+            self._root_backends[index] = backend
+        return self._root_backends[index]
+
+    def _global_data(self, index: int) -> dict[str, Any]:
+        backend = self._root_backend(index)
         if not backend.has("global_data"):
             return {}
-        keys = backend.array_keys("global_data")
+        keys = backend.leaf_array_paths("global_data")
         arrays = backend.read_many({f"global_data/{k}": None for k in keys})
-        return {
-            k.split("/", 1)[1]: torch.from_numpy(np.asarray(v))
-            for k, v in arrays.items()
-        }
+        return _nest_tensors(
+            (k.split("/", 1)[1], v) for k, v in arrays.items()
+        )
 
     def __getitem__(self, index: int):
         from physicsnemo.mesh import DomainMesh
@@ -1004,10 +1124,17 @@ def validate_mesh_zarr(path: Path | str, *, _prefix: str = "") -> dict[str, Any]
                     ):
                         problems.append("layout=soup but cells are not arange")
 
+    def _iter_leaf_arrays(node, prefix: str = ""):
+        """All arrays under a group, any depth (nested TensorDict fields)."""
+        for name, arr in node.arrays():
+            yield prefix + name, arr
+        for name, child in node.groups():
+            yield from _iter_leaf_arrays(child, f"{prefix}{name}/")
+
     for sub, expected in (("point_data", n_points), ("cell_data", n_cells or None)):
         if sub in group and expected is not None:
-            for key in group[sub].array_keys():
-                got = group[sub][key].shape[0] if group[sub][key].ndim else None
+            for key, arr in _iter_leaf_arrays(group[sub]):
+                got = arr.shape[0] if arr.ndim else None
                 if got is not None and got != expected:
                     problems.append(
                         f"{sub}/{key} first dim {got} != {expected}"
