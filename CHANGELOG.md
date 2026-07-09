@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds exact-boundary quality mesh generation to
+  `physicsnemo.mesh.tessellation`: `fill_interior` takes a closed
+  codimension-one boundary `Mesh` (2D edge loops today; loops in any order
+  and orientation, with holes, multiple components, and nested islands
+  resolved automatically) and fills the interior with quality simplices via
+  constrained Delaunay triangulation with Ruppert refinement — every input
+  vertex is preserved bit-identically, every output triangle meets the
+  guaranteed minimum-angle bound, output is a `Mesh` with provenance
+  `point_data`, deterministic, with optional bound-preserving ODT smoothing.
+  The contract is dimension-generic; `n = 3` raises `NotImplementedError`
+  pending exact boundary recovery. Also adds `polygon_interior_point`,
+  which returns a point strictly inside a simple polygon.
 - Adds `rectilinear_grid_divergence`, `rectilinear_grid_curl`, and
   `rectilinear_grid_laplacian` to `physicsnemo.nn.functional`, with Torch and
   fused Warp implementations for periodic, nonuniform rectilinear grids.
@@ -113,8 +125,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dataloader / collate / metric tooling (refactored into `datasets.py`
   and `utils.py`).
 - Adds a mesh-native signed distance field to `physicsnemo.mesh.spatial`
-  (`physicsnemo.mesh.spatial.signed_distance_field_mesh`), built on the `BVH`
-  and `ClusterTree` spatial structures it lives alongside.
+  (`physicsnemo.mesh.spatial.signed_distance_field`), built on the `BVH`
+  and `ClusterTree` spatial structures it lives alongside. Returns a
+  `SignedDistanceFieldResult` named tuple: the signed distance, the closest
+  surface point, and the nearest-face index per query.
   The nearest-triangle query runs as a single-kernel per-thread BVH traversal
   (Triton on CUDA, a bounded-stack PyTorch DFS as the CPU reference; per-query
   indices are int64 so query counts past tens of millions do not overflow). The
@@ -138,6 +152,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- PhysicsNeMo-Mesh tensor-valued gradients now consistently use the documented
+  derivative-first layout `(entity, spatial_dimension, *value_shape)` across
+  LSQ, intrinsic LSQ, and DEC. Earlier LSQ releases returned
+  `(entity, *value_shape, spatial_dimension)` instead; migrate a stored legacy
+  gradient with `legacy_gradient.movedim(-1, 1)`. Divergence and curl values
+  are unchanged.
 - xDeepONet `SpatialBranch`
   (`physicsnemo.experimental.models.xdeeponet.SpatialBranch`) now supports
   mixed-precision (AMP/autocast) training: FFT-based spectral convolutions are
