@@ -499,3 +499,26 @@ def test_refit_warns_on_inversion():
     base = mesh_implicit_domain(sdf_sphere([0.0, 0.0], 0.7), ([-1, -1], [1, 1]), 0.1)
     with pytest.warns(UserWarning, match="inverted"):
         refit_mesh_to_implicit(base, sdf_sphere([0.0, 0.0], 0.35))
+
+
+def test_clustered_feature_points():
+    """Five feature points within one h exercise sequential topological
+    insertion in asymmetric neighborhoods. Found by adversarial fuzzing:
+    the barycentric containing-cell solve used the transposed edge matrix,
+    so insertions targeted cells that did not contain the feature and
+    corrupted the facet structure (symmetric geometries masked it)."""
+    fp = torch.tensor(
+        [[0.0, 0.0], [0.02, 0.0], [0.0, 0.02], [-0.02, 0.0], [0.0, -0.02]],
+        dtype=torch.float64,
+    )
+    mesh, diag = mesh_implicit_domain(
+        sdf_sphere([0.0, 0.0], 0.7),
+        ([-1, -1], [1, 1]),
+        0.2,
+        feature_points=fp,
+        full_output=True,
+        max_coverage_gap_h=None,
+    )
+    assert_valid_volume_mesh(mesh)
+    d = torch.cdist(fp, mesh.points).min(dim=1).values
+    assert float(d.max()) < 1e-12
