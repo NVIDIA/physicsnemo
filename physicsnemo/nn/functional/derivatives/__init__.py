@@ -20,24 +20,48 @@ from .meshless_finite_difference import (
     MeshlessFDDerivatives,
     meshless_fd_derivatives,
 )
+from .rectilinear_grid_curl import RectilinearGridCurl, rectilinear_grid_curl
+from .rectilinear_grid_divergence import (
+    RectilinearGridDivergence,
+    rectilinear_grid_divergence,
+)
 from .rectilinear_grid_gradient import (
     RectilinearGridGradient,
     rectilinear_grid_gradient,
 )
+from .rectilinear_grid_laplacian import (
+    RectilinearGridLaplacian,
+    rectilinear_grid_laplacian,
+)
 from .spectral_grid_gradient import SpectralGridGradient, spectral_grid_gradient
+from .uniform_grid_curl import UniformGridCurl, uniform_grid_curl
+from .uniform_grid_divergence import UniformGridDivergence, uniform_grid_divergence
 from .uniform_grid_gradient import UniformGridGradient, uniform_grid_gradient
+from .uniform_grid_laplacian import UniformGridLaplacian, uniform_grid_laplacian
 
 __all__ = [
+    "UniformGridCurl",
+    "UniformGridDivergence",
+    "UniformGridLaplacian",
     "MeshGreenGaussGradient",
     "MeshlessFDDerivatives",
     "MeshLSQGradient",
+    "RectilinearGridCurl",
+    "RectilinearGridDivergence",
     "RectilinearGridGradient",
+    "RectilinearGridLaplacian",
     "SpectralGridGradient",
     "UniformGridGradient",
+    "uniform_grid_curl",
+    "uniform_grid_divergence",
+    "uniform_grid_laplacian",
     "mesh_green_gauss_gradient",
     "meshless_fd_derivatives",
     "mesh_lsq_gradient",
+    "rectilinear_grid_curl",
+    "rectilinear_grid_divergence",
     "rectilinear_grid_gradient",
+    "rectilinear_grid_laplacian",
     "spectral_grid_gradient",
     "uniform_grid_gradient",
 ]

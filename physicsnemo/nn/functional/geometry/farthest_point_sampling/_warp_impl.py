@@ -77,7 +77,7 @@ def farthest_point_sampling(
     )
 
     wp_launch_device, wp_launch_stream = FunctionSpec.warp_launch_context(points_f)
-    with wp.ScopedStream(wp_launch_stream):
+    with FunctionSpec.warp_stream_scope(wp_launch_stream):
         wp.launch(
             fps_fused,
             dim=(batch_size, block_size),

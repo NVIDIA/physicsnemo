@@ -23,7 +23,66 @@ independent per-component generators from a single master seed.
 
 from __future__ import annotations
 
+import numpy as np
 import torch
+
+
+def derive_seed(base_seed: int, *coords: int) -> int:
+    """Deterministically mix a base seed with integer coordinates.
+
+    Combines ``base_seed`` with arbitrary integer ``coords`` (typically
+    ``epoch`` and sample ``index``) into a single well-mixed 64-bit seed
+    using :class:`numpy.random.SeedSequence`.  The result depends only on
+    the inputs, not on call order or thread, so per-sample RNG derived
+    from it is reproducible and safe to compute concurrently.
+
+    Parameters
+    ----------
+    base_seed : int
+        Base seed (e.g. a generator's ``initial_seed()``).
+    *coords : int
+        Additional non-negative integer coordinates to fold in, such as
+        ``(epoch, index)``.
+
+    Returns
+    -------
+    int
+        A deterministic 64-bit seed.
+    """
+    seq = np.random.SeedSequence([int(base_seed), *(int(c) for c in coords)])
+    return int(seq.generate_state(1, dtype=np.uint64)[0])
+
+
+def spawn_generator(
+    base_seed: int,
+    *coords: int,
+    device: torch.device | str = "cpu",
+) -> torch.Generator:
+    """Create a fresh :class:`torch.Generator` seeded from mixed coordinates.
+
+    Returns an independent generator whose seed is
+    :func:`derive_seed(base_seed, *coords) <derive_seed>`.  Because each
+    call returns a new generator seeded purely from its inputs, draws are
+    reproducible regardless of execution order and can be made
+    concurrently from multiple threads without sharing mutable state.
+
+    Parameters
+    ----------
+    base_seed : int
+        Base seed (e.g. a generator's ``initial_seed()``).
+    *coords : int
+        Additional integer coordinates to fold in, such as ``(epoch, index)``.
+    device : torch.device or str, default="cpu"
+        Device the generator is created on.
+
+    Returns
+    -------
+    torch.Generator
+        A new generator seeded deterministically from the inputs.
+    """
+    generator = torch.Generator(device=device)
+    generator.manual_seed(derive_seed(base_seed, *coords))
+    return generator
 
 
 def fork_generator(
@@ -32,8 +91,11 @@ def fork_generator(
 ) -> list[torch.Generator]:
     """Deterministically derive *n* child generators from *parent*.
 
-    Each child is seeded with ``parent.initial_seed() + i + 1``, so
-    children are independent of each other and stable across runs.
+    Child *i* is seeded with :func:`derive_seed(parent.initial_seed(), i)
+    <derive_seed>`, so children are well-mixed and stable across runs.
+    Unlike sequential ``base_seed + i`` seeding, nearby parent seeds (or
+    forks at different depths of the pipeline tree) do not produce
+    overlapping child streams.
 
     Parameters
     ----------
@@ -47,14 +109,5 @@ def fork_generator(
     list[torch.Generator]
         *n* independent generators on the same device as *parent*.
     """
-
-    # I miss JAX ...
-    # https://docs.jax.dev/en/latest/jax.random.html
-
     base_seed = parent.initial_seed()
-    children: list[torch.Generator] = []
-    for i in range(n):
-        g = torch.Generator(device=parent.device)
-        g.manual_seed(base_seed + i + 1)
-        children.append(g)
-    return children
+    return [spawn_generator(base_seed, i, device=parent.device) for i in range(n)]

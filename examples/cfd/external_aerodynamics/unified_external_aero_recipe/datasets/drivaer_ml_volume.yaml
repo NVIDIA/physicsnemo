@@ -32,6 +32,16 @@ pipeline:
     pattern: "run_*/domain_*.pdmsh"
     subsample_n_points: ${sampling_resolution}
     subsample_n_cells: ${sampling_resolution}
+    # The volume model consumes the interior as a point cloud (interior.points +
+    # interior.point_data); dropping interior tet topology makes the point
+    # subsample a cheap contiguous block read instead of a full slice_points
+    # remap (the dominant per-sample IO cost otherwise).
+    drop_interior_cells: true
+    # The in-file `vehicle` surface boundary is unused by the volume pipeline
+    # (SDF comes from the injected stl_geometry below; model/collate use only
+    # the interior). Drop it so we don't subsample (expensive, GIL-held) or pin
+    # it every sample.
+    drop_in_file_boundaries: true
     extra_boundaries:
       stl_geometry:
         pattern: "*_single_solid.stl.pmsh"
