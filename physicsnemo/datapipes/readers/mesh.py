@@ -189,7 +189,6 @@ class MeshReader:
         self.subsample_n_points = subsample_n_points
         self.subsample_n_cells = subsample_n_cells
         self._subsample_generator: torch.Generator | None = None
-        self._subsample_base_seed: int | None = None
 
         if not self._root.exists():
             raise FileNotFoundError(f"Path not found: {self._root}")
@@ -224,24 +223,17 @@ class MeshReader:
             Generator to use for contiguous block selection.
         """
         self._subsample_generator = generator
-        # Capture the base seed once: reseeding from initial_seed() each
-        # epoch would drift (manual_seed updates initial_seed), making the
-        # epoch->seed mapping depend on call history and breaking
-        # checkpoint-resume reproducibility.
-        self._subsample_base_seed = generator.initial_seed()
 
     def set_epoch(self, epoch: int) -> None:
-        """Reseed the subsample RNG for a new epoch (base seed + epoch).
+        """Reseed the subsample RNG for a new epoch.
 
         Produces a different (but deterministic) sequence of contiguous
         blocks each epoch when a generator has been assigned via
-        :meth:`set_generator`. The mapping depends only on the base seed
-        and ``epoch``, so resuming at epoch *N* reproduces the same
-        blocks as reaching epoch *N* sequentially.
+        :meth:`set_generator`.
         """
         if self._subsample_generator is not None:
             self._subsample_generator.manual_seed(
-                self._subsample_base_seed + epoch
+                self._subsample_generator.initial_seed() + epoch
             )
 
     def __getitem__(self, index: int) -> tuple[Mesh, dict[str, Any]]:
@@ -348,7 +340,6 @@ class DomainMeshReader:
         self.subsample_n_points = subsample_n_points
         self.subsample_n_cells = subsample_n_cells
         self._subsample_generator: torch.Generator | None = None
-        self._subsample_base_seed: int | None = None
         self._extra_boundaries = extra_boundaries or {}
 
         if not self._root.exists():
@@ -379,24 +370,17 @@ class DomainMeshReader:
             Generator to use for contiguous block selection.
         """
         self._subsample_generator = generator
-        # Capture the base seed once: reseeding from initial_seed() each
-        # epoch would drift (manual_seed updates initial_seed), making the
-        # epoch->seed mapping depend on call history and breaking
-        # checkpoint-resume reproducibility.
-        self._subsample_base_seed = generator.initial_seed()
 
     def set_epoch(self, epoch: int) -> None:
-        """Reseed the subsample RNG for a new epoch (base seed + epoch).
+        """Reseed the subsample RNG for a new epoch.
 
         Produces a different (but deterministic) sequence of contiguous
         blocks each epoch when a generator has been assigned via
-        :meth:`set_generator`. The mapping depends only on the base seed
-        and ``epoch``, so resuming at epoch *N* reproduces the same
-        blocks as reaching epoch *N* sequentially.
+        :meth:`set_generator`.
         """
         if self._subsample_generator is not None:
             self._subsample_generator.manual_seed(
-                self._subsample_base_seed + epoch
+                self._subsample_generator.initial_seed() + epoch
             )
 
     def __getitem__(self, index: int) -> tuple[DomainMesh, dict[str, Any]]:
