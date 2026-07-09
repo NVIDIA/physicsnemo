@@ -219,9 +219,7 @@ class ZarrReader(Reader):
     def set_epoch(self, epoch: int) -> None:
         """Reseed the subsample RNG for a new epoch (base seed + epoch)."""
         if self._subsample_generator is not None:
-            self._subsample_generator.manual_seed(
-                self._subsample_base_seed + epoch
-            )
+            self._subsample_generator.manual_seed(self._subsample_base_seed + epoch)
 
     def _open_zarr_store(self, path: Path) -> Any:
         """

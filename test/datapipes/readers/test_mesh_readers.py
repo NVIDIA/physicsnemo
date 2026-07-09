@@ -422,9 +422,7 @@ class TestMeshReaderSubsamplingRNG:
         mesh.save(tmp_path / "m.pmsh")
 
         def block(epochs):
-            reader = MeshReader(
-                tmp_path, pattern="*.pmsh", subsample_n_points=10
-            )
+            reader = MeshReader(tmp_path, pattern="*.pmsh", subsample_n_points=10)
             reader.set_generator(torch.Generator().manual_seed(42))
             for e in epochs:
                 reader.set_epoch(e)

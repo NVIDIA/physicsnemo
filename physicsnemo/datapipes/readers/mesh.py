@@ -240,9 +240,7 @@ class MeshReader:
         blocks as reaching epoch *N* sequentially.
         """
         if self._subsample_generator is not None:
-            self._subsample_generator.manual_seed(
-                self._subsample_base_seed + epoch
-            )
+            self._subsample_generator.manual_seed(self._subsample_base_seed + epoch)
 
     def __getitem__(self, index: int) -> tuple[Mesh, dict[str, Any]]:
         mesh = self._load_sample(index)
@@ -395,9 +393,7 @@ class DomainMeshReader:
         blocks as reaching epoch *N* sequentially.
         """
         if self._subsample_generator is not None:
-            self._subsample_generator.manual_seed(
-                self._subsample_base_seed + epoch
-            )
+            self._subsample_generator.manual_seed(self._subsample_base_seed + epoch)
 
     def __getitem__(self, index: int) -> tuple[DomainMesh, dict[str, Any]]:
         dm = self._load_sample(index)
