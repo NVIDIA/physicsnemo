@@ -39,7 +39,7 @@ Install PhysicsNeMo, then install the example dependencies from the repository
 root:
 
 ```bash
-pip install -r examples/chip_design/fp_ddm/requirements.txt
+pip install -r examples/tcad/fp_ddm/requirements.txt
 ```
 
 SciPy and OpenSimplex provide the smooth synthetic material layouts. Matplotlib
@@ -51,7 +51,7 @@ The default configuration generates local thermal problems on the fly and
 trains one model directly with the physics-informed objective:
 
 ```bash
-python examples/chip_design/fp_ddm/train.py
+python examples/tcad/fp_ddm/train.py
 ```
 
 All settings may be changed with Hydra overrides. Distributed training uses the
@@ -59,7 +59,7 @@ same entry point:
 
 ```bash
 torchrun --standalone --nproc_per_node=4 \
-    examples/chip_design/fp_ddm/train.py \
+    examples/tcad/fp_ddm/train.py \
     training.output_dir=outputs/fp_ddm/train_distributed
 ```
 
@@ -77,7 +77,7 @@ The `fem` solver key is retained from the original scripts; its local reference
 implementation is the matrix-free finite-volume stencil in `thermal.py`.
 
 ```bash
-python examples/chip_design/fp_ddm/run_fpddm.py \
+python examples/tcad/fp_ddm/run_fpddm.py \
     run.solver=fem \
     domain.rows=3 \
     domain.columns=3 \
@@ -89,7 +89,7 @@ python examples/chip_design/fp_ddm/run_fpddm.py \
 Use a trained FNO checkpoint for neural local solves:
 
 ```bash
-python examples/chip_design/fp_ddm/run_fpddm.py \
+python examples/tcad/fp_ddm/run_fpddm.py \
     run.solver=fno \
     run.checkpoint_dir=outputs/train/checkpoints/best \
     domain.rows=3 \

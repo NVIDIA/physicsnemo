@@ -26,9 +26,7 @@ import torch
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils import load_checkpoint, save_checkpoint
 
-EXAMPLE_ROOT = (
-    Path(__file__).resolve().parents[2] / "examples" / "chip_design" / "fp_ddm"
-)
+EXAMPLE_ROOT = Path(__file__).resolve().parents[2] / "examples" / "tcad" / "fp_ddm"
 sys.path.insert(0, str(EXAMPLE_ROOT))
 
 import fpddm.domain as domain_module  # noqa: E402

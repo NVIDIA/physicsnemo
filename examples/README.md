@@ -50,11 +50,11 @@ The several examples inside PhysicsNeMo can be classified based on their domains
 |[Fine-tuning of DoMINO NIM](./cfd/external_aerodynamics/domino_nim_finetuning/)|DoMINO|NO|
 |[Transolver for External Aerodynamics on Irregular Meshes](./cfd/external_aerodynamics/transolver/)|Transolver|NO|
 
-### Chip Design
+### TCAD
 
 |Use case|Model|
 | --- | --- |
-|[FP-DDM Thermal Domain Decomposition](./chip_design/fp_ddm/)|FNO + Schwarz domain decomposition|
+|[FP-DDM Thermal Domain Decomposition](./tcad/fp_ddm/)|FNO + Schwarz domain decomposition|
 
 
 ### Weather
