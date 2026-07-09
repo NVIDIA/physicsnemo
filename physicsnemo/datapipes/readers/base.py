@@ -31,6 +31,8 @@ from typing import Any, Iterator
 import torch
 from tensordict import TensorDict
 
+from physicsnemo.datapipes._rng import spawn_generator
+
 logger = logging.getLogger(__name__)
 
 
@@ -110,6 +112,11 @@ class Reader(ABC):
         self.pin_memory = pin_memory
         self.include_index_in_metadata = include_index_in_metadata
         self._coordinated_subsampling_config = coordinated_subsampling
+        # Base seed + epoch for deterministic per-index RNG. See
+        # :meth:`_index_generator`. ``None`` means no seed was provided
+        # (random draws fall back to the global default RNG).
+        self._seed_base: int | None = None
+        self._epoch: int = 0
 
     @abstractmethod
     def _load_sample(self, index: int) -> dict[str, torch.Tensor]:
@@ -279,28 +286,61 @@ class Reader(ABC):
                 raise RuntimeError(error_msg) from e
 
     def set_generator(self, generator: torch.Generator) -> None:
-        """Assign a ``torch.Generator`` for reproducible random sampling.
+        """Assign a base seed for reproducible, order-independent sampling.
 
-        Override in subclasses that use randomness (e.g. subsampling).
-        The default implementation is a no-op.
+        Stores ``generator.initial_seed()`` as the base seed. Per-sample
+        generators are then derived deterministically from
+        ``(base_seed, epoch, index)`` via :meth:`_index_generator`, so
+        random draws are reproducible regardless of the order in which
+        samples are read or which worker thread reads them.
+
+        Subclasses that use randomness should draw from
+        :meth:`_index_generator` rather than a shared generator. Readers
+        with no randomness inherit this harmlessly.
 
         Parameters
         ----------
         generator : torch.Generator
-            Generator to use for random draws.
+            Generator whose ``initial_seed()`` seeds all per-sample RNG.
         """
+        self._seed_base = generator.initial_seed()
 
     def set_epoch(self, epoch: int) -> None:
-        """Reseed the reader's RNG for a new epoch.
+        """Set the epoch used to vary per-sample RNG deterministically.
 
-        Override in subclasses that use randomness.
-        The default implementation is a no-op.
+        The epoch is folded into each sample's derived seed (see
+        :meth:`_index_generator`), so each epoch produces a different but
+        reproducible sequence.
 
         Parameters
         ----------
         epoch : int
             Current epoch number.
         """
+        self._epoch = epoch
+
+    def _index_generator(self, index: int) -> torch.Generator | None:
+        """Return a fresh generator seeded for sample *index* this epoch.
+
+        Derives an independent :class:`torch.Generator` from
+        ``(base_seed, epoch, index)``. Because the seed depends only on
+        those values, the draw for a given sample is identical regardless
+        of read order or worker thread. Returns ``None`` when no base
+        seed has been set (the unseeded fallback).
+
+        Parameters
+        ----------
+        index : int
+            Sample index.
+
+        Returns
+        -------
+        torch.Generator or None
+            A per-sample generator, or ``None`` if no seed was provided.
+        """
+        if self._seed_base is None:
+            return None
+        return spawn_generator(self._seed_base, self._epoch, index)
 
     def close(self) -> None:
         """

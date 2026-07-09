@@ -26,13 +26,18 @@ Tensor = torch.Tensor
 
 @pytest.fixture
 def data_dir(nfs_data_dir):
-    return nfs_data_dir.joinpath("datasets/ahmed_body")
+    # Resolve so the path stays valid after the test chdirs away.
+    return nfs_data_dir.joinpath("datasets/ahmed_body").resolve()
 
 
 @requires_module(["vtk", "pyvista", "torch_geometric", "torch_scatter"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_ahmed_body_constructor(data_dir, device, pytestconfig):
+def test_ahmed_body_constructor(data_dir, device, pytestconfig, monkeypatch, tmp_path):
     from physicsnemo.datapipes.gnn.ahmed_body_dataset import AhmedBodyDataset
+
+    # The dataset writes edge_stats.json and node_stats.json in the CWD;
+    # isolate the CWD so other datapipe tests don't pick them up.
+    monkeypatch.chdir(tmp_path)
 
     # construct dataset
     dataset = AhmedBodyDataset(

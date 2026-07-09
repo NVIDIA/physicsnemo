@@ -114,7 +114,7 @@ def _vector_loss(
         target_sq = torch.mean(target**2, dim=tuple(range(pred.ndim - 1)))
         return torch.sum(diff_sq / (target_sq + eps))
 
-    total = torch.tensor(0.0, device=pred.device, dtype=pred.dtype)
+    total = torch.zeros((), device=pred.device, dtype=pred.dtype)
     for i in range(n_components):
         p, t = pred[..., i], target[..., i]
         if loss_type == "huber":

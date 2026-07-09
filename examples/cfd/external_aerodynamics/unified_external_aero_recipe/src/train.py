@@ -342,7 +342,6 @@ def _run_epoch(
     n_local = 0
     num_steps = len(dataloader)
     epoch_t0 = time.perf_counter()
-
     with grad_ctx:
         step_t0 = time.perf_counter()
         for i, batch in enumerate(dataloader):

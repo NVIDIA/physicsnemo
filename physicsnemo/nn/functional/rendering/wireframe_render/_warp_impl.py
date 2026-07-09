@@ -259,7 +259,7 @@ def wireframe_render_impl(
         (image_height, image_width), empty_key, device=device, dtype=torch.int64
     )
     wp_device, wp_stream = FunctionSpec.warp_launch_context(edges_fp32)
-    with wp.ScopedStream(wp_stream):
+    with FunctionSpec.warp_stream_scope(wp_stream):
         wp.launch(
             _wireframe_depth_kernel,
             dim=int(edges.shape[0]),
