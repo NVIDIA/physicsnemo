@@ -27,7 +27,9 @@ ops. The pipeline is *stamp -> erode -> inflate -> optimize -> repair*:
    mesh is a staircase of perfect lattice simplices, valid by construction;
 3. split pinched vertices (thin concave features can make the staircase
    non-manifold at a point);
-4. optimize: batched ODT vertex updates gated so no step ever creates an
+4. optimize: batched optimal-Delaunay-triangulation (ODT) vertex updates
+   -- each interior vertex moves to the volume-weighted average of its
+   incident cells' circumcenters (Chen & Xu 2004) -- gated so no step ever creates an
    inverted or below-floor cell, with boundary vertices projected onto
    ``phi = 0`` each iteration, interleaved with quality-greedy bistellar
    flips;
