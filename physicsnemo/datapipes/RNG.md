@@ -70,9 +70,11 @@ sub-dataset.
 ### Epoch reseeding
 
 `DataLoader.set_epoch(epoch)` propagates to the sampler and dataset.
-Each component with a generator reseeds it with
-`initial_seed() + epoch`, producing a different but deterministic
-random sequence every epoch.
+Each component with a generator reseeds it with `base_seed + epoch`,
+where the base seed is captured once when the generator is assigned
+(`set_generator`). The epoch->seed mapping therefore depends only on
+the base seed and the epoch — resuming a run at epoch *N* reproduces
+the same random sequence as reaching epoch *N* sequentially.
 
 ## Generator tree
 
@@ -122,7 +124,8 @@ define the same generator protocol:
 
 - **`stochastic`** — property; `True` when `self._generator` exists.
 - **`set_generator(g)`** — assigns `g` if stochastic; no-op otherwise.
-- **`set_epoch(epoch)`** — reseeds with `initial_seed() + epoch`.
+- **`set_epoch(epoch)`** — reseeds with `base_seed + epoch` (base
+  seed captured at `set_generator` time; resume-reproducible).
 
 To make a transform stochastic, declare
 `self._generator: torch.Generator | None = None` in `__init__`.

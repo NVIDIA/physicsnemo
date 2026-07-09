@@ -60,8 +60,10 @@ master `torch.Generator` and passes it to
 `MeshDataset.set_generator(parent_gen)`, which forks the parent
 into independent children — one for the reader and one per
 transform.  `MeshDataset.set_epoch(epoch)` reseeds every child
-with `initial_seed() + epoch` so each epoch is different but
-deterministic.  Deterministic transforms silently ignore both calls.
+with `base_seed + epoch` (the base seed is captured when the child is
+assigned) so each epoch is different but deterministic, and resuming
+at an epoch reproduces the same sequence as reaching it sequentially.
+Deterministic transforms silently ignore both calls.
 
 For standalone usage outside a `DataLoader`, call `set_generator`
 on the transform directly:

@@ -70,6 +70,30 @@ class TestZarrReaderCoordinatedSubsampling:
         # Non-target arrays should have original size
         assert data["metadata_scalar"].shape == (1,)
 
+    def test_set_epoch_resume_reproducible(self, zarr_large_data_dir):
+        """set_epoch(n) after resume == reaching epoch n sequentially.
+
+        Guards against base-seed drift: reseeding from initial_seed()
+        each epoch compounds (manual_seed updates initial_seed).
+        """
+
+        def block(epochs):
+            reader = dp.ZarrReader(
+                zarr_large_data_dir,
+                group_pattern="sample_*.zarr",
+                coordinated_subsampling={
+                    "n_points": 100,
+                    "target_keys": ["volume_coords", "volume_fields"],
+                },
+            )
+            reader.set_generator(torch.Generator().manual_seed(42))
+            for e in epochs:
+                reader.set_epoch(e)
+            data, _ = reader[0]
+            return data["volume_coords"]
+
+        assert torch.equal(block([1, 2, 3]), block([3]))
+
     def test_coordinated_subsampling_consistency(self, zarr_large_data_dir):
         """Test that coordinated subsampling is consistent across target keys."""
         reader = dp.ZarrReader(

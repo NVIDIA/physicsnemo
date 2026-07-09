@@ -197,6 +197,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed `set_epoch` seed drift in datapipes readers and transforms:
+  reseeding used `initial_seed() + epoch`, which compounds across calls
+  (manual_seed updates initial_seed), so resuming from a checkpoint drew
+  different subsample blocks and augmentations than an uninterrupted run.
+  Epoch reseeding now uses a base seed captured at `set_generator` time.
 - `physicsnemo.mesh.sampling.sample_data_at_points` now handles integer and
   boolean fields by returning `float64`, so NaN sentinels and non-integral
   interpolation or multi-cell means are representable (subject to the usual

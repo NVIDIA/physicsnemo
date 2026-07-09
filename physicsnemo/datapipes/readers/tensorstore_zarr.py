@@ -156,6 +156,7 @@ class TensorStoreZarrReader(Reader):
         self.default_values = default_values or {}
         self.group_pattern = group_pattern
         self._subsample_generator: torch.Generator | None = None
+        self._subsample_base_seed: int | None = None
 
         if not self.path.exists():
             raise FileNotFoundError(f"Path not found: {self.path}")
@@ -238,12 +239,17 @@ class TensorStoreZarrReader(Reader):
     def set_generator(self, generator: torch.Generator) -> None:
         """Assign a ``torch.Generator`` for reproducible subsampling."""
         self._subsample_generator = generator
+        # Capture the base seed once: reseeding from initial_seed() each
+        # epoch would drift (manual_seed updates initial_seed), making the
+        # epoch->seed mapping depend on call history and breaking
+        # checkpoint-resume reproducibility.
+        self._subsample_base_seed = generator.initial_seed()
 
     def set_epoch(self, epoch: int) -> None:
-        """Reseed the subsample RNG for a new epoch."""
+        """Reseed the subsample RNG for a new epoch (base seed + epoch)."""
         if self._subsample_generator is not None:
             self._subsample_generator.manual_seed(
-                self._subsample_generator.initial_seed() + epoch
+                self._subsample_base_seed + epoch
             )
 
     def _read_attributes(self, group_path: Path) -> dict[str, Any]:

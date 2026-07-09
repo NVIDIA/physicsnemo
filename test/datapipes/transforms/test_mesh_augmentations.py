@@ -837,3 +837,28 @@ class TestDataLoaderDrivenReproducibility:
         pts_a = _run_epoch(42, 5)
         pts_b = _run_epoch(42, 5)
         assert torch.allclose(pts_a, pts_b)
+
+    def test_set_epoch_resume_reproducible(self, tmp_path):
+        """set_epoch(n) after resume == reaching epoch n sequentially.
+
+        Guards against base-seed drift in Transform.set_epoch: reseeding
+        from initial_seed() each epoch compounds, so a checkpoint resume
+        would apply different augmentations than an uninterrupted run.
+        """
+        from physicsnemo.datapipes.mesh_dataset import MeshDataset
+        from physicsnemo.datapipes.readers.mesh import MeshReader
+
+        mesh = _simple_mesh_3d()
+        mesh.save(tmp_path / "s0.pt")
+
+        def _run_epochs(epochs):
+            reader = MeshReader(tmp_path, pattern="*.pt")
+            transforms = [RandomScaleMesh(distribution=D.Uniform(0.5, 2.0))]
+            ds = MeshDataset(reader, transforms=transforms)
+            ds.set_generator(torch.Generator().manual_seed(42))
+            for e in epochs:
+                ds.set_epoch(e)
+            m, _ = ds[0]
+            return m.points.clone()
+
+        assert torch.allclose(_run_epochs([1, 2, 3]), _run_epochs([3]))

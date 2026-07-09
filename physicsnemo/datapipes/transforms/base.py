@@ -102,13 +102,19 @@ class Transform(ABC):
         """
         if self.stochastic:
             self._generator = generator
+            # Capture the base seed once: reseeding from initial_seed()
+            # each epoch would drift (manual_seed updates initial_seed),
+            # making the epoch->seed mapping depend on call history and
+            # breaking checkpoint-resume reproducibility.
+            self._epoch_base_seed = generator.initial_seed()
 
     def set_epoch(self, epoch: int) -> None:
-        """Reseed the generator for a new epoch.
+        """Reseed the generator for a new epoch (base seed + epoch).
 
-        Reseeds ``self._generator`` with ``initial_seed() + epoch`` so
-        each epoch produces a different but deterministic random
-        sequence.  No-op for deterministic transforms or when no
+        The base seed is captured when the generator is assigned, so the
+        epoch->seed mapping depends only on ``epoch``: resuming at epoch
+        *N* reproduces the same random sequence as reaching epoch *N*
+        sequentially.  No-op for deterministic transforms or when no
         generator has been assigned.
 
         Parameters
@@ -117,7 +123,10 @@ class Transform(ABC):
             Current epoch number.
         """
         if self.stochastic and self._generator is not None:
-            self._generator.manual_seed(self._generator.initial_seed() + epoch)
+            if getattr(self, "_epoch_base_seed", None) is None:
+                # Generator declared by the subclass without set_generator.
+                self._epoch_base_seed = self._generator.initial_seed()
+            self._generator.manual_seed(self._epoch_base_seed + epoch)
 
     def to(self, device: torch.device | str) -> Transform:
         """Move any internal tensors, generators, and distributions to *device*.

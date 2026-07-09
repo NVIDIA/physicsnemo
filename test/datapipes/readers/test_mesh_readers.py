@@ -410,6 +410,29 @@ class TestMeshReaderSubsamplingRNG:
 
         assert not torch.equal(data_e0.points, data_e1.points)
 
+    def test_set_epoch_resume_reproducible(self, tmp_path):
+        """set_epoch(n) after resume == reaching epoch n sequentially.
+
+        Guards against base-seed drift: reseeding from initial_seed()
+        each epoch compounds (manual_seed updates initial_seed), so a
+        checkpoint resume would draw different blocks than an
+        uninterrupted run.
+        """
+        mesh = Mesh(points=torch.randn(100, 3))
+        mesh.save(tmp_path / "m.pmsh")
+
+        def block(epochs):
+            reader = MeshReader(
+                tmp_path, pattern="*.pmsh", subsample_n_points=10
+            )
+            reader.set_generator(torch.Generator().manual_seed(42))
+            for e in epochs:
+                reader.set_epoch(e)
+            data, _ = reader[0]
+            return data.points
+
+        assert torch.equal(block([1, 2, 3]), block([3]))
+
 
 class TestDomainMeshReaderExtraBoundaries:
     """Tests for DomainMeshReader extra_boundaries feature."""
