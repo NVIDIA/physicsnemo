@@ -46,6 +46,7 @@ import logging
 from typing import NamedTuple
 
 import torch
+import torch.nn.functional as F
 from jaxtyping import Float, Int
 from tensordict import TensorDict, tensorclass
 from torch.profiler import record_function
@@ -789,8 +790,10 @@ class ClusterTree:
         r"""Compute per-node aggregate source data for far-field approximation.
 
         Aggregates are area-weighted averages of source features within each
-        node's subtree. The total weight for each node is the sum of per-source
-        strengths (handled separately during kernel evaluation, not here).
+        node's subtree. The ``areas`` passed to this call are authoritative for
+        both the weighted sums and their normalization; they need not match the
+        areas used to construct the tree. Per-source strengths are handled
+        separately during kernel evaluation.
 
         Parameters
         ----------
@@ -806,6 +809,13 @@ class ClusterTree:
         -------
         SourceAggregates
             Per-node aggregated centroids and source data.
+
+        Notes
+        -----
+        Tree topology depends on point positions, so callers may reuse a cached
+        tree with different aggregation weights. ``node_total_area`` remains
+        construction-time metadata; it is not the normalization for this
+        call's aggregates.
         """
         device = source_points.device
         dtype = source_points.dtype
@@ -839,33 +849,34 @@ class ClusterTree:
         # fp64 cumsum is much less affected.
         sorted_points = source_points[self.sorted_source_order]
         sorted_areas = areas[self.sorted_source_order]
+        # Both the numerator and denominator must use the call-time weights.
+        sorted_areas_64 = sorted_areas.double()
         weighted_points_64 = (sorted_points * sorted_areas.unsqueeze(-1)).double()
 
         ### Leading-zero padding makes ``prefix[i]`` the sum of the first
         ### ``i`` elements, so subtraction gives the half-open range sum.
-        cumsum_weighted_points = torch.nn.functional.pad(
+        cumsum_weighted_points = F.pad(
             torch.cumsum(weighted_points_64, dim=0), (0, 0, 1, 0)
         )
+        cumsum_areas = F.pad(torch.cumsum(sorted_areas_64, dim=0), (1, 0))
 
         starts = self.node_range_start
         ends = starts + self.node_range_count
         node_total_weighted_pts = (
             cumsum_weighted_points[ends] - cumsum_weighted_points[starts]
         )
-        ### ``self.node_total_area`` was filled during tree construction
-        ### via the bottom-up AABB pass; reuse it instead of recomputing.
-        ### Promote to fp64 here so the divide stays in fp64 alongside the
-        ### range-sum; cast back to ``source_points.dtype`` at the end.
-        safe_areas_64 = self.node_total_area.double().clamp(min=1e-30)
+        node_total_area_64 = cumsum_areas[ends] - cumsum_areas[starts]
+        nonzero_total = node_total_area_64 != 0
+        safe_areas_64 = node_total_area_64.where(nonzero_total, 1)
         with record_function("cluster_tree::node_centroids"):
-            centroid_buf = (node_total_weighted_pts / safe_areas_64.unsqueeze(-1)).to(
+            centroid_64 = node_total_weighted_pts / safe_areas_64.unsqueeze(-1)
+            centroid_buf = centroid_64.where(nonzero_total.unsqueeze(-1), 0).to(
                 source_points.dtype
             )
 
         node_source_data: TensorDict | None = None
         if source_data is not None:
             sorted_source_data = source_data[self.sorted_source_order]
-            inv_safe_areas_64 = 1.0 / safe_areas_64
 
             def _aggregate_via_prefix_sum(tensor: torch.Tensor) -> torch.Tensor:
                 trailing_shape = tensor.shape[1:]
@@ -875,11 +886,10 @@ class ClusterTree:
                 ### upcast rationale as the centroid branch above.
                 flat = tensor.reshape(tensor.shape[0], -1)
                 weighted_64 = (flat * sorted_areas.unsqueeze(-1)).double()
-                cumsum_weighted = torch.nn.functional.pad(
-                    torch.cumsum(weighted_64, dim=0), (0, 0, 1, 0)
-                )
+                cumsum_weighted = F.pad(torch.cumsum(weighted_64, dim=0), (0, 0, 1, 0))
                 node_weighted_sum = cumsum_weighted[ends] - cumsum_weighted[starts]
-                node_avg = node_weighted_sum * inv_safe_areas_64.unsqueeze(-1)
+                node_avg = node_weighted_sum / safe_areas_64.unsqueeze(-1)
+                node_avg = node_avg.where(nonzero_total.unsqueeze(-1), 0)
                 return node_avg.reshape((n_nodes,) + trailing_shape).to(tensor.dtype)
 
             with record_function("cluster_tree::node_source_data"):

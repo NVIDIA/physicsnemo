@@ -162,7 +162,7 @@ def _build_warp_mesh(
     mesh_indices: torch.Tensor,
 ) -> wp.Mesh:
     wp_device, wp_stream = FunctionSpec.warp_launch_context(mesh_vertices)
-    with wp.ScopedStream(wp_stream):
+    with FunctionSpec.warp_stream_scope(wp_stream):
         return wp.Mesh(
             points=wp.from_torch(mesh_vertices, dtype=wp.vec3),
             indices=wp.from_torch(mesh_indices, dtype=wp.int32),
@@ -216,7 +216,7 @@ def _launch_ray_mesh_intersect(
         return hit_mask, hit_distance, hit_points, face_ids, hit_normals
 
     wp_device, wp_stream = FunctionSpec.warp_launch_context(ray_origins_fp32)
-    with wp.ScopedStream(wp_stream):
+    with FunctionSpec.warp_stream_scope(wp_stream):
         wp.launch(
             _ray_mesh_intersect_kernel,
             dim=num_rays,

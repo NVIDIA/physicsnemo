@@ -11,7 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Mesh-zarr schema and readers: `ZarrMeshReader` / `ZarrDomainMeshReader`, `save_mesh_to_zarr` / `save_domain_mesh_to_zarr`, `to_cell_soup`, `validate_mesh_zarr` — a chunked, compressed zarr storage path for mesh-native CAE pipelines (see `physicsnemo/datapipes/MESH_ZARR_SCHEMA.md`), plus zarr dataset configs for the unified external aerodynamics recipe.
-
+- Adds exact-boundary quality mesh generation to
+  `physicsnemo.mesh.tessellation`: `fill_interior` takes a closed
+  codimension-one boundary `Mesh` (2D edge loops today; loops in any order
+  and orientation, with holes, multiple components, and nested islands
+  resolved automatically) and fills the interior with quality simplices via
+  constrained Delaunay triangulation with Ruppert refinement — every input
+  vertex is preserved bit-identically, every output triangle meets the
+  guaranteed minimum-angle bound, output is a `Mesh` with provenance
+  `point_data`, deterministic, with optional bound-preserving ODT smoothing.
+  The contract is dimension-generic; `n = 3` raises `NotImplementedError`
+  pending exact boundary recovery. Also adds `polygon_interior_point`,
+  which returns a point strictly inside a simple polygon.
+- Adds `rectilinear_grid_divergence`, `rectilinear_grid_curl`, and
+  `rectilinear_grid_laplacian` to `physicsnemo.nn.functional`, with Torch and
+  fused Warp implementations for periodic, nonuniform rectilinear grids.
+- Adds coverage reporting on PRs — an informational `Coverage %` check plus a
+  ready-to-enable Codecov integration.
+- Adds `uniform_grid_divergence`, `uniform_grid_curl`, and
+  `uniform_grid_laplacian` to `physicsnemo.nn.functional`, with Torch and fused
+  Warp implementations for periodic Cartesian grids.
 - Adds the experimental Strata weather-emulation models —
   `physicsnemo.experimental.models.strata.Strata` and `StrataTransformer3D` — plus
   the continuous / stereographic RoPE helpers `build_rope_cos_sin_1d_continuous`,
@@ -104,8 +123,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dataloader / collate / metric tooling (refactored into `datasets.py`
   and `utils.py`).
 - Adds a mesh-native signed distance field to `physicsnemo.mesh.spatial`
-  (`physicsnemo.mesh.spatial.signed_distance_field_mesh`), built on the `BVH`
-  and `ClusterTree` spatial structures it lives alongside.
+  (`physicsnemo.mesh.spatial.signed_distance_field`), built on the `BVH`
+  and `ClusterTree` spatial structures it lives alongside. Returns a
+  `SignedDistanceFieldResult` named tuple: the signed distance, the closest
+  surface point, and the nearest-face index per query.
   The nearest-triangle query runs as a single-kernel per-thread BVH traversal
   (Triton on CUDA, a bounded-stack PyTorch DFS as the CPU reference; per-query
   indices are int64 so query counts past tens of millions do not overflow). The
@@ -118,9 +139,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   datapipes implementation (`physicsnemo.datapipes.transforms._sdf_torch` /
   `_sdf_triton`, including its bespoke Triton winding kernel) is superseded and
   removed; the public datapipes SDF transform delegates here.
+- DPS guidance now supports **non-uniform guidance strength**: the `std_y` and
+  `gamma` arguments of `physicsnemo.diffusion.guidance.ModelConsistencyDPSGuidance`
+  / `DataConsistencyDPSGuidance` and their
+  `physicsnemo.diffusion.multi_diffusion` counterparts accept tensors as well as
+  floats. A tensor assigns a different measurement-noise level / SDA scaling to
+  each observation component, e.g. per-channel (`(1, C, 1, 1)`) or pointwise
+  (full observation shape). Passing floats keeps the previous uniform
+  behavior unchanged.
 
 ### Changed
 
+- PhysicsNeMo-Mesh tensor-valued gradients now consistently use the documented
+  derivative-first layout `(entity, spatial_dimension, *value_shape)` across
+  LSQ, intrinsic LSQ, and DEC. Earlier LSQ releases returned
+  `(entity, *value_shape, spatial_dimension)` instead; migrate a stored legacy
+  gradient with `legacy_gradient.movedim(-1, 1)`. Divergence and curl values
+  are unchanged.
 - xDeepONet `SpatialBranch`
   (`physicsnemo.experimental.models.xdeeponet.SpatialBranch`) now supports
   mixed-precision (AMP/autocast) training: FFT-based spectral convolutions are
@@ -161,6 +196,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   use `torch.no_grad()`, not `torch.inference_mode()`). Also expands CI test
   coverage and adds an API documentation page for
   `physicsnemo.diffusion.multi_diffusion`.
+- &#9888;&#65039; **BC-impact (DPS guidance):** a custom `norm` callback passed to
+  `physicsnemo.diffusion.guidance.ModelConsistencyDPSGuidance` /
+  `DataConsistencyDPSGuidance` (and their `physicsnemo.diffusion.multi_diffusion`
+  counterparts) must now return an **elementwise** loss (same shape as its
+  inputs) instead of a per-batch-element reduced scalar of shape `(B,)`.
+  Migration: drop the reduction from your `norm`, e.g. return
+  `(y_pred - y_true).abs().pow(2)` rather than
+  `(y_pred - y_true).pow(2).reshape(B, -1).sum(dim=1)`. For
+  `DataConsistencyDPSGuidance` (and its `multi_diffusion` counterpart) the
+  `norm` callback now also receives the **unmasked** `(x_0, y)` and the mask is
+  applied to its output (`mask * norm(x_0, y)`), where it previously received
+  the pre-masked `(mask * x_0, mask * y)`; the two agree for the built-in `Lp`
+  norms, but a custom `norm` that relies on unobserved entries being zeroed
+  before the call may differ. The integer `norm` selector (e.g. `norm=2`) is
+  unaffected.
 
 ### Deprecated
 
@@ -168,6 +218,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `physicsnemo.mesh.sampling.sample_data_at_points` now handles integer and
+  boolean fields by returning `float64`, so NaN sentinels and non-integral
+  interpolation or multi-cell means are representable (subject to the usual
+  `float64` precision limits). Point-data interpolation now promotes field and
+  geometry dtypes consistently, and accumulation uses fewer full-sized
+  temporaries and CUDA host synchronizations.
 - `physicsnemo.mesh.projections.extrude` now produces a *conforming* (crack-free)
   simplicial complex for multi-cell inputs. Each prism was previously tessellated
   using the per-cell local vertex order, so adjacent cells that listed a shared
@@ -183,6 +239,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for full-dimensional (codimension-0) output.
 - `physicsnemo.mesh.remesh` now preserves the input mesh's device and floating
   dtype (the pyacvd/pyvista round-trip previously dropped them to CPU/float32).
+- `physicsnemo.mesh.io.to_pyvista` now preserves supported dtypes for attached
+  point, cell, and global data instead of narrowing every array to `float32`.
+  Reduced-precision floating-point values are promoted only as needed for VTK.
+- `physicsnemo.mesh.io.from_pyvista` and `to_pyvista` now preserve `float64`
+  point coordinates instead of unconditionally narrowing geometry to `float32`,
+  which could collapse small features on meshes with large coordinate offsets.
+  Existing `float32` geometry remains `float32`.
 - `physicsnemo.mesh`: `Mesh.to(<float dtype>)` and `DomainMesh.to(<float dtype>)`
   raised `TypeError: cells must have an int-like dtype` because the cast was applied
   to the integer `cells` tensor. A floating/complex dtype is now applied only to
@@ -197,6 +260,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   derived-mesh methods (`compute_point_derivatives`, `compute_cell_derivatives`,
   `cell_data_to_point_data`, `point_data_to_cell_data`) aliased the source mesh's
   mutable `_cache`.
+- `physicsnemo.mesh.spatial.ClusterTree.compute_source_aggregates` now
+  normalizes with its call-time area weights instead of the weights used when
+  constructing the tree, preserving correct aggregates when weights change.
 - `physicsnemo.mesh`: fixed crash / data-integrity bugs — `project(...)` with
   `transform_point_data`/`transform_cell_data=True` mutated the input mesh in
   place; visualization and `to_pyvista` crashed on autograd-tracked tensors (now

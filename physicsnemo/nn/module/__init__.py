@@ -107,8 +107,8 @@ from .resample_layers import (
     UpSample3D,
 )
 from .rope import (
-    RotaryPositionEmbedding1D,
-    RotaryPositionEmbedding2D,
+    RotaryEmbedding1DTables,
+    RotaryEmbedding2DTables,
     apply_rotary_pos_emb,
     build_axial_rope_cos_sin_2d,
     build_rope_cos_sin_1d,
