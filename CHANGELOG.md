@@ -10,11 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds exact-boundary quality mesh generation to
+  `physicsnemo.mesh.tessellation`: `fill_interior` takes a closed
+  codimension-one boundary `Mesh` (2D edge loops today; loops in any order
+  and orientation, with holes, multiple components, and nested islands
+  resolved automatically) and fills the interior with quality simplices via
+  constrained Delaunay triangulation with Ruppert refinement — every input
+  vertex is preserved bit-identically, every output triangle meets the
+  guaranteed minimum-angle bound, output is a `Mesh` with provenance
+  `point_data`, deterministic, with optional bound-preserving ODT smoothing.
+  The contract is dimension-generic; `n = 3` raises `NotImplementedError`
+  pending exact boundary recovery. Also adds `polygon_interior_point`,
+  which returns a point strictly inside a simple polygon.
 - Adds `rectilinear_grid_divergence`, `rectilinear_grid_curl`, and
   `rectilinear_grid_laplacian` to `physicsnemo.nn.functional`, with Torch and
   fused Warp implementations for periodic, nonuniform rectilinear grids.
 - Adds coverage reporting on PRs — an informational `Coverage %` check plus a
   ready-to-enable Codecov integration.
+- Adds differentiable mesh morphing: Torch-backed dense ``displace_points`` /
+  ``Mesh.displace`` and Torch/NVIDIA Warp compact sparse-control
+  ``morph_points`` / ``Mesh.morph`` / ``DomainMesh.morph``.
 - Adds `uniform_grid_divergence`, `uniform_grid_curl`, and
   `uniform_grid_laplacian` to `physicsnemo.nn.functional`, with Torch and fused
   Warp implementations for periodic Cartesian grids.
@@ -110,8 +125,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dataloader / collate / metric tooling (refactored into `datasets.py`
   and `utils.py`).
 - Adds a mesh-native signed distance field to `physicsnemo.mesh.spatial`
-  (`physicsnemo.mesh.spatial.signed_distance_field_mesh`), built on the `BVH`
-  and `ClusterTree` spatial structures it lives alongside.
+  (`physicsnemo.mesh.spatial.signed_distance_field`), built on the `BVH`
+  and `ClusterTree` spatial structures it lives alongside. Returns a
+  `SignedDistanceFieldResult` named tuple: the signed distance, the closest
+  surface point, and the nearest-face index per query.
   The nearest-triangle query runs as a single-kernel per-thread BVH traversal
   (Triton on CUDA, a bounded-stack PyTorch DFS as the CPU reference; per-query
   indices are int64 so query counts past tens of millions do not overflow). The
@@ -124,6 +141,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   datapipes implementation (`physicsnemo.datapipes.transforms._sdf_torch` /
   `_sdf_triton`, including its bespoke Triton winding kernel) is superseded and
   removed; the public datapipes SDF transform delegates here.
+- Added an iterable style dataset to physicsnemo datapipes, for on-the-fly gpu simulations.
 - DPS guidance now supports **non-uniform guidance strength**: the `std_y` and
   `gamma` arguments of `physicsnemo.diffusion.guidance.ModelConsistencyDPSGuidance`
   / `DataConsistencyDPSGuidance` and their
@@ -135,6 +153,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- PhysicsNeMo-Mesh tensor-valued gradients now consistently use the documented
+  derivative-first layout `(entity, spatial_dimension, *value_shape)` across
+  LSQ, intrinsic LSQ, and DEC. Earlier LSQ releases returned
+  `(entity, *value_shape, spatial_dimension)` instead; migrate a stored legacy
+  gradient with `legacy_gradient.movedim(-1, 1)`. Divergence and curl values
+  are unchanged.
 - xDeepONet `SpatialBranch`
   (`physicsnemo.experimental.models.xdeeponet.SpatialBranch`) now supports
   mixed-precision (AMP/autocast) training: FFT-based spectral convolutions are
@@ -175,6 +199,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   use `torch.no_grad()`, not `torch.inference_mode()`). Also expands CI test
   coverage and adds an API documentation page for
   `physicsnemo.diffusion.multi_diffusion`.
+- Performance improvements in IO prefetching and GPU preprocessing in physicsnemo datapipes.
 - &#9888;&#65039; **BC-impact (DPS guidance):** a custom `norm` callback passed to
   `physicsnemo.diffusion.guidance.ModelConsistencyDPSGuidance` /
   `DataConsistencyDPSGuidance` (and their `physicsnemo.diffusion.multi_diffusion`
@@ -197,6 +222,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `physicsnemo.mesh.io.from_pyvista(..., force_copy=True)` now copies attached
+  point, cell, and global data as well as geometry. The matching new
+  `to_pyvista(..., force_copy=True)` option prevents exported PyVista geometry
+  and data from mutating the source `Mesh` through shared CPU storage.
 - `physicsnemo.mesh.sampling.sample_data_at_points` now handles integer and
   boolean fields by returning `float64`, so NaN sentinels and non-integral
   interpolation or multi-cell means are representable (subject to the usual

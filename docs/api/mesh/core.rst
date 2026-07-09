@@ -44,3 +44,17 @@ polygons -- a "polygon soup" (see :doc:`tessellation`) -- use
 .. autoclass:: Mesh
    :members:
    :show-inheritance:
+
+DomainMesh
+----------
+
+.. currentmodule:: physicsnemo.mesh.domain_mesh
+
+The :class:`DomainMesh` class groups an interior mesh with named boundary
+meshes and domain-level data. Operations such as
+:meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.morph` apply one consistent
+geometry change to every component and return a new domain.
+
+.. autoclass:: DomainMesh
+   :members:
+   :show-inheritance:

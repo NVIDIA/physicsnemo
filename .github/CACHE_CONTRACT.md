@@ -3,9 +3,11 @@
 This document is the authoritative reference for how the
 `Nightly Github UV Workflow`
 ([.github/workflows/github-nightly-uv.yml](workflows/github-nightly-uv.yml))
-publishes caches and how downstream PR workflows consume them.  PR
-gating relies on these contracts being honored on both sides; do not
-weaken them without updating this document.
+and `Multi-GPU Github CI`
+([.github/workflows/github-multigpu.yml](workflows/github-multigpu.yml))
+publish caches and how downstream PR workflows consume them.  PR gating
+relies on these contracts being honored on both sides; do not weaken
+them without updating this document.
 
 ## Caches
 
@@ -152,12 +154,44 @@ Two ways to run the regen:
 Same immutable-key bug class as testmon; migrated to the `-latest`
 slot for parity.
 
+### Multi-GPU coverage shard caches
+
+The multi-GPU workflow owns two independent shard caches: one for the
+dynamic stream and one for the static stream.
+
+| Property | Value |
+|---|---|
+| Keys | `coverage-multigpu-dynamic-latest` and `coverage-multigpu-static-latest` |
+| Paths | `.coverage.pytest.multigpu-dynamic*` and `.coverage.pytest.multigpu-static*` |
+| Suffix | literal `latest` (mutable slots, refreshed via delete-before-save) |
+| Contents | per-rank/per-process parallel coverage data files from a full nightly run of the stream |
+| Restore semantics | **fail-open**; a missing slot only means the combined report lacks multi-GPU lines |
+| Save semantics | successful scheduled runs only, plus explicitly approved default-branch dispatches; PR GPU jobs never write these slots |
+
+The nightly multi-GPU streams measure coverage with
+[`test/coverage.multigpu.rc`](../test/coverage.multigpu.rc), which must
+stay combine-compatible with `test/coverage.pytest.rc` (same `branch`
+setting, same `source`, absolute paths recorded from the shared container
+workspace).  The shards deliberately use the canonical
+`.coverage.pytest.` filename prefix: both the nightly `coverage` job and
+the PR `Coverage` job restore these two slots next to the canonical
+baseline and their existing plain `coverage combine` folds everything —
+CPU baseline, PR-run shards, and multi-GPU shards — into one report.
+Testmon is intentionally not extended to the multi-GPU streams: dynamic
+tests execute in worker subprocesses and static tests execute from
+multiple torchrun ranks, neither of which testmon can attribute.
+
+Multi-GPU jobs on PR mirror branches are opt-in (labels or manual
+dispatch), never collect coverage, and are not required checks, so the
+merge queue does not need passthrough statuses for them.
+
 ## Reusable building blocks
 
 ### `replace-cache` action ([.github/actions/replace-cache/action.yml](actions/replace-cache/action.yml))
 
-All four mutable-slot caches above (uv, JIT, testmon, coverage) share
-the same delete-before-save recipe: GitHub Actions cache slots are
+All mutable-slot caches above (uv, JIT, testmon, coverage, and the two
+multi-GPU coverage shard slots) share the same delete-before-save recipe:
+GitHub Actions cache slots are
 immutable, so refreshing a `-latest` key requires deleting the
 existing entry, calling `actions/cache/save`, and (because the save
 silently no-ops on key collision) re-querying `gh cache list` to
@@ -231,17 +265,33 @@ Guarantees:
 - `physicsnemo` itself is installed editable, so PR source changes are
   picked up without rebuilding the venv.
 
+The multi-GPU workflow follows the same environment contract and is
+restore-only for the uv and JIT caches.  Only its successful nightly
+publisher jobs can replace the two coverage shard slots.
+
 ## Operational notes
 
 - **Concurrency**: the nightly workflow declares
   `concurrency: nightly-github-uv` with `cancel-in-progress: false` so
   two overlapping runs cannot race on the static `-latest` uv cache key.
+- **Multi-GPU concurrency**: `github-multigpu.yml` serializes runs per
+  ref. Superseded `pull-request/*` pushes cancel in progress, while
+  scheduled/default-branch publisher runs are never canceled.
+- **Runner inventory**: both streams default to the confirmed
+  `linux-amd64-gpu-h100-latest-2` pool.  Some static tests intentionally
+  skip configurations that require four ranks; set both
+  `MULTIGPU_STATIC_RUNNER` and `MULTIGPU_STATIC_NPROC` repository
+  variables together when a four-GPU pool is available.
+- **PR opt-in**: the `ci:multi-gpu` label runs both streams on the next
+  mirror sync or rerun.  Applying a label alone does not emit a push
+  event; use the manual dispatch for an immediate run.
 - **Save verification**: every mutable-slot save (uv download, JIT,
-  testmon, coverage) goes through the `replace-cache` action, which
-  re-queries `gh cache list` after `actions/cache/save` and fails the
-  job if the slot is not visible.  `cache/save` silently no-ops on
-  key collision and only logs a warning on reservation failure;
-  without verification a corrupted slot can persist for days.
+  testmon, coverage, multi-GPU coverage shards) goes through the
+  `replace-cache` action, which re-queries `gh cache list` after
+  `actions/cache/save` and fails the job if the slot is not visible.
+  `cache/save` silently no-ops on key collision and only logs a warning
+  on reservation failure; without verification a corrupted slot can
+  persist for days.
 - **Lockfile-mutation guard**: [.github/actions/setup-uv-env/action.yml](actions/setup-uv-env/action.yml)
   snapshots `sha256(uv.lock)` and `sha256(pyproject.toml)` before any uv
   command runs and compares them again at the end. Any drift (caused by
@@ -254,16 +304,20 @@ Guarantees:
 - **PR workflows never save the uv cache.** Only the nightly mutates
   the `-latest` slot; PRs restore fail-open and any fresh wheels they
   download are simply not preserved until the next nightly.
+- **PR workflows never save multi-GPU coverage shards.** GPU test jobs
+  have read-only Actions permissions. Dedicated CPU publisher jobs
+  receive `actions: write`, and only for successful scheduled or
+  explicitly approved default-branch runs.
 
 ## Bumping any of the baseline values
 
 If you change the container image, CUDA version, Python version, uv
-version, or extras tag, you must update both:
+version, or extras tag, you must update all three workflows:
 
-1. The matching `env:` value at the top of both
+1. The matching `env:` value at the top of
    [.github/workflows/github-nightly-uv.yml](workflows/github-nightly-uv.yml)
-   and
-   [.github/workflows/github-pr.yml](workflows/github-pr.yml).
+   [.github/workflows/github-pr.yml](workflows/github-pr.yml), and
+   [.github/workflows/github-multigpu.yml](workflows/github-multigpu.yml).
 2. The corresponding literals embedded in `UV_CACHE_KEY_PREFIX` and
    `JIT_CACHE_KEY_PREFIX` (GitHub Actions does not support env-to-env
    references within the same `env:` block, so these are kept in
