@@ -223,7 +223,7 @@ def radius_search_impl(
     # Compute follows data.
     wp_launch_device, wp_launch_stream = FunctionSpec.warp_launch_context(points)
 
-    with wp.ScopedStream(wp_launch_stream):
+    with FunctionSpec.warp_stream_scope(wp_launch_stream):
         # Build one hash grid per batch element (Python loop)
         grids = []
         wp_points_per_b = []
@@ -581,82 +581,85 @@ def apply_grad_to_points(
     if max_points is not None and not num_neighbors.is_contiguous():
         num_neighbors = num_neighbors.contiguous()
 
-    if max_points is None:
-        # Dynamic path: indexes is (2, total) unbatched or (3, total) batched.
-        # scatter_add_unlimited works on flat (N, 3) grad tensors, so we loop
-        # over batch elements (trivially 1 iteration for unbatched).
-        if indexes.shape[-1] > 0:
-            if indexes.shape[0] == 3:
-                # Batched: row 0 is batch index, rows 1-2 are query/point indices
-                B = point_grads.shape[0]
-                for b_idx in range(B):
-                    mask = indexes[0] == b_idx
-                    b_indexes = indexes[1:, mask]
-                    b_grad_out = grad_points_out[mask]
-                    if b_indexes.shape[1] > 0:
-                        wp.launch(
-                            kernel=scatter_add_unlimited,
-                            dim=b_indexes.shape[1],
-                            inputs=[
-                                wp.from_torch(
-                                    b_indexes, dtype=wp.int32, return_ctype=True
-                                ),
-                                wp.from_torch(
-                                    b_grad_out, dtype=wp.vec3, return_ctype=True
-                                ),
-                                wp.from_torch(
-                                    point_grads[b_idx],
-                                    dtype=wp.vec3,
-                                    return_ctype=True,
-                                ),
-                            ],
-                            device=wp_launch_device,
-                            stream=wp_launch_stream,
-                            block_dim=BLOCK_DIM,
-                        )
-            else:
-                # Unbatched: rows 0-1 are query/point indices
-                wp.launch(
-                    kernel=scatter_add_unlimited,
-                    dim=indexes.shape[1],
-                    inputs=[
-                        wp.from_torch(indexes, dtype=wp.int32, return_ctype=True),
-                        wp.from_torch(
-                            grad_points_out, dtype=wp.vec3, return_ctype=True
-                        ),
-                        wp.from_torch(point_grads, dtype=wp.vec3, return_ctype=True),
-                    ],
-                    device=wp_launch_device,
-                    stream=wp_launch_stream,
-                    block_dim=BLOCK_DIM,
-                )
+    with FunctionSpec.warp_stream_scope(wp_launch_stream):
+        if max_points is None:
+            # Dynamic path: indexes is (2, total) unbatched or (3, total) batched.
+            # scatter_add_unlimited works on flat (N, 3) grad tensors, so we loop
+            # over batch elements (trivially 1 iteration for unbatched).
+            if indexes.shape[-1] > 0:
+                if indexes.shape[0] == 3:
+                    # Batched: row 0 is batch index, rows 1-2 are query/point indices
+                    B = point_grads.shape[0]
+                    for b_idx in range(B):
+                        mask = indexes[0] == b_idx
+                        b_indexes = indexes[1:, mask]
+                        b_grad_out = grad_points_out[mask]
+                        if b_indexes.shape[1] > 0:
+                            wp.launch(
+                                kernel=scatter_add_unlimited,
+                                dim=b_indexes.shape[1],
+                                inputs=[
+                                    wp.from_torch(
+                                        b_indexes, dtype=wp.int32, return_ctype=True
+                                    ),
+                                    wp.from_torch(
+                                        b_grad_out, dtype=wp.vec3, return_ctype=True
+                                    ),
+                                    wp.from_torch(
+                                        point_grads[b_idx],
+                                        dtype=wp.vec3,
+                                        return_ctype=True,
+                                    ),
+                                ],
+                                device=wp_launch_device,
+                                stream=wp_launch_stream,
+                                block_dim=BLOCK_DIM,
+                            )
+                else:
+                    # Unbatched: rows 0-1 are query/point indices
+                    wp.launch(
+                        kernel=scatter_add_unlimited,
+                        dim=indexes.shape[1],
+                        inputs=[
+                            wp.from_torch(indexes, dtype=wp.int32, return_ctype=True),
+                            wp.from_torch(
+                                grad_points_out, dtype=wp.vec3, return_ctype=True
+                            ),
+                            wp.from_torch(
+                                point_grads, dtype=wp.vec3, return_ctype=True
+                            ),
+                        ],
+                        device=wp_launch_device,
+                        stream=wp_launch_stream,
+                        block_dim=BLOCK_DIM,
+                    )
 
-    else:
-        # Deterministic path: always use batched kernel.
-        # Unsqueeze 2D tensors to 3D so we can use a single kernel variant.
-        if indexes.ndim == 2:
-            indexes = indexes.unsqueeze(0)
-            num_neighbors = num_neighbors.unsqueeze(0)
-            grad_points_out = grad_points_out.unsqueeze(0)
-            point_grads = point_grads.unsqueeze(0)
+        else:
+            # Deterministic path: always use batched kernel.
+            # Unsqueeze 2D tensors to 3D so we can use a single kernel variant.
+            if indexes.ndim == 2:
+                indexes = indexes.unsqueeze(0)
+                num_neighbors = num_neighbors.unsqueeze(0)
+                grad_points_out = grad_points_out.unsqueeze(0)
+                point_grads = point_grads.unsqueeze(0)
 
-        B = indexes.shape[0]
-        wp.launch(
-            kernel=scatter_add_batched,
-            dim=(B, indexes.shape[1]),
-            inputs=[
-                wp.from_torch(indexes, dtype=wp.int32, return_ctype=True),
-                wp.from_torch(num_neighbors, dtype=wp.int32, return_ctype=True),
-                wp.from_torch(grad_points_out, dtype=wp.vec3, return_ctype=True),
-                wp.from_torch(point_grads, dtype=wp.vec3, return_ctype=True),
-            ],
-            device=wp_launch_device,
-            stream=wp_launch_stream,
-            block_dim=BLOCK_DIM,
-        )
+            B = indexes.shape[0]
+            wp.launch(
+                kernel=scatter_add_batched,
+                dim=(B, indexes.shape[1]),
+                inputs=[
+                    wp.from_torch(indexes, dtype=wp.int32, return_ctype=True),
+                    wp.from_torch(num_neighbors, dtype=wp.int32, return_ctype=True),
+                    wp.from_torch(grad_points_out, dtype=wp.vec3, return_ctype=True),
+                    wp.from_torch(point_grads, dtype=wp.vec3, return_ctype=True),
+                ],
+                device=wp_launch_device,
+                stream=wp_launch_stream,
+                block_dim=BLOCK_DIM,
+            )
 
-        if point_grads.shape[0] == 1 and len(points_shape) == 2:
-            point_grads = point_grads.squeeze(0)
+            if point_grads.shape[0] == 1 and len(points_shape) == 2:
+                point_grads = point_grads.squeeze(0)
 
     return point_grads
 
