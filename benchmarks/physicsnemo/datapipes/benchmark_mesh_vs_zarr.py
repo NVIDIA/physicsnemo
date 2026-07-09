@@ -32,12 +32,14 @@ Three readers over the same logical data:
 - ``zarr-ts``:   same stores read through tensorstore with concurrent
                  per-field async reads.
 
-The zarr mesh reader does not exist in the library (ZarrReader's coordinated
-subsampling cannot express the dependent cells-block -> points-range read),
-so the zarr variants here are prototypes of what one would look like. They
-exploit locality-ordered points (cell block -> contiguous point range +
-offset remap) instead of MeshReader's unique()-based compaction; per-sample
-CPU differences are small next to I/O but are noted in the results.
+The zarr variants here are self-contained prototypes that predate (and
+motivated) the library's ``ZarrMeshReader``; they isolate storage-format
+effects from the library reader's feature set. They exploit
+locality-ordered points (cell block -> contiguous point range + offset
+remap) instead of MeshReader's unique()-based compaction; per-sample CPU
+differences are small next to I/O but are noted in the results. Benchmark
+the shipped reader end-to-end with
+``benchmark_recipe_pipeline_mesh_vs_zarr.py``.
 
 Synthetic data is a locality-ordered triangle soup with smooth,
 spatially-correlated fields so compression ratios are CFD-plausible; pure

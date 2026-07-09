@@ -81,9 +81,16 @@ def main() -> None:
             raise SystemExit(f"--extra-boundary expects NAME=GLOB, got {spec!r}")
         extra_specs.append((name, pattern))
 
+    def _run_key(d: Path) -> tuple:
+        # Numeric runs (run_42) sort numerically; anything else (run_ref,
+        # run_0001_baseline) sorts lexicographically after them instead of
+        # crashing the conversion.
+        tail = d.name.split("_", 1)[1] if "_" in d.name else d.name
+        return (0, int(tail), "") if tail.isdigit() else (1, 0, d.name)
+
     run_dirs = sorted(
         (d for d in args.input.glob("run_*") if d.is_dir()),
-        key=lambda d: int(d.name.split("_")[1]),
+        key=_run_key,
     )
     if args.runs is not None:
         run_dirs = run_dirs[: args.runs]
