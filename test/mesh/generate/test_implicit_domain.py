@@ -522,3 +522,20 @@ def test_clustered_feature_points():
     assert_valid_volume_mesh(mesh)
     d = torch.cdist(fp, mesh.points).min(dim=1).values
     assert float(d.max()) < 1e-12
+
+
+def test_feature_point_on_lattice_ridge_3d():
+    """A 3D feature on a lattice EDGE (two zero barycentric coordinates)
+    exercises the general closure-split: the earlier facet-only taxonomy
+    rejected it as unresolvable (adversarial fuzzing, round 3)."""
+    fp = torch.tensor([[0.1, 0.0, 0.0]], dtype=torch.float64)
+    mesh, diag = mesh_implicit_domain(
+        sdf_sphere([0.0] * 3, 0.7),
+        ([-0.8] * 3, [0.8] * 3),
+        0.4,
+        feature_points=fp,
+        full_output=True,
+        max_coverage_gap_h=None,
+    )
+    assert_valid_volume_mesh(mesh)
+    assert float(torch.cdist(fp, mesh.points).min()) < 1e-12

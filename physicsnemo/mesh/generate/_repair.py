@@ -163,10 +163,10 @@ def pin_feature_points(points, cells, targets, h):
     insertion instead:
 
     - a feature coinciding with an existing vertex pins that vertex;
-    - a feature strictly inside some cell splits that cell 1 -> d+1 around
-      a new vertex at the feature (always valid, by barycentric coords);
-    - a feature ON a facet splits every incident cell into d cells around
-      it (a tent there would overlap existing cells);
+    - a feature in the CLOSURE of any cell (strictly inside, on a facet,
+      on a ridge/edge, ...) splits every such cell by replacing each
+      positive-barycentric vertex with the new vertex -- one rule for all
+      interior cases, always volume-preserving and orientation-safe;
     - a feature outside the mesh (the common case: convex corners lie
       beyond the eroded staircase) gets a "tent" over the nearest boundary
       facet whose OUTWARD side faces it (half-space-tested against the
@@ -204,57 +204,31 @@ def pin_feature_points(points, cells, targets, h):
         lam0 = 1.0 - bary.sum(dim=1)
         eps = 1e-9
         lam = torch.cat([lam0[:, None], bary], dim=1)  # (M, d+1) barycentric
-        inside = vol_ok & (lam > eps).all(dim=1)
-        # On-facet: inside a cell's closure with exactly one ~zero coordinate.
-        on_facet = (
-            vol_ok & (lam > -eps).all(dim=1) & ((lam.abs() <= eps).sum(dim=1) == 1)
-        )
+        # Any cell whose CLOSURE contains the feature is split by replacing
+        # each positive-coordinate vertex with the new vertex. This one rule
+        # covers interior points (d+1 sub-cells), on-facet points (d cells
+        # per host), and on-ridge/on-edge points in higher dimensions (found
+        # by adversarial fuzzing, round 3: features on lattice ridges fell
+        # through to the tent path and were rejected as unresolvable).
+        closure = vol_ok & (lam > -eps).all(dim=1)
         new_vid = points.shape[0]
-        if bool(inside.any()):
-            c = int(torch.nonzero(inside)[0])
-            host = cells[c]
-            # 1 -> d+1 split: replace host with the star of the new vertex.
-            new_cells = []
-            for drop in range(d + 1):
-                keepv = [host[i] for i in range(d + 1) if i != drop]
-                new_cells.append(
-                    torch.tensor(
-                        [int(v) for v in keepv] + [new_vid],
-                        dtype=torch.int64,
-                        device=cells.device,
-                    )
-                )
+        if bool(closure.any()):
+            hosts = torch.nonzero(closure).reshape(-1)
+            points = torch.cat([points, x[None, :]], dim=0)
             keep_mask = torch.ones(
                 cells.shape[0], dtype=torch.bool, device=cells.device
             )
-            keep_mask[c] = False
-            points = torch.cat([points, x[None, :]], dim=0)
-            cells = torch.cat([cells[keep_mask], torch.stack(new_cells)], dim=0)
-        elif bool(on_facet.any()):
-            # Feature lies ON a facet: split every incident cell into d
-            # cells around it (a strict-interior 1->d+1 split would create
-            # a zero-height cell; a tent would overlap existing cells).
-            hosts = torch.nonzero(on_facet).reshape(-1)
-            points = torch.cat([points, x[None, :]], dim=0)
             new_cells = []
-            keep_mask = torch.ones(
-                cells.shape[0], dtype=torch.bool, device=cells.device
-            )
             for c in hosts.tolist():
                 keep_mask[c] = False
                 host = cells[c].tolist()
-                zero_slot = int((lam[c].abs() <= eps).nonzero()[0])
-                facet = [v for k, v in enumerate(host) if k != zero_slot]
-                apex = host[zero_slot]
-                for drop in range(len(facet)):
-                    cell = [v for k, v in enumerate(facet) if k != drop]
-                    new_cells.append(
-                        torch.tensor(
-                            cell + [new_vid, apex],
-                            dtype=torch.int64,
-                            device=cells.device,
+                for slot in range(d + 1):
+                    if float(lam[c, slot]) > eps:
+                        cell = list(host)
+                        cell[slot] = new_vid
+                        new_cells.append(
+                            torch.tensor(cell, dtype=torch.int64, device=cells.device)
                         )
-                    )
             cells = torch.cat([cells[keep_mask], torch.stack(new_cells)], dim=0)
         else:
             # Tent over the nearest boundary facet whose OUTWARD side faces
