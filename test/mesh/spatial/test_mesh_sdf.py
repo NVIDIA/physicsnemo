@@ -379,6 +379,11 @@ def test_sdf_error_handling(device):
     with pytest.raises(ValueError, match="winding_backend"):
         signed_distance_field(mesh, query, winding_backend="warp")
 
+    # A negative search radius is rejected rather than silently behaving
+    # like its absolute value.
+    with pytest.raises(ValueError, match="max_dist"):
+        signed_distance_field(mesh, query, max_dist=-1.0)
+
 
 def test_sdf_winding_backend_selection(device):
     """Both winding backends agree through the public API on a closed surface."""
@@ -428,6 +433,136 @@ def test_sdf_empty_mesh_raises(device):
 
     with pytest.raises(ValueError, match="no faces"):
         signed_distance_field(empty_mesh, query)
+
+
+def test_repair_degenerate_faces(device):
+    """Degenerate faces are repaired into valid thin triangles; others untouched.
+
+    Ericson's Voronoi-region cascade assumes a non-degenerate triangle: on
+    zero-area faces several region tests fire vacuously and the cascade can
+    return the wrong feature (an overestimated distance). The build step must
+    therefore replace every repeated-vertex or collinear face with a valid
+    thin triangle spanning the same longest edge, moving the surface by no
+    more than the documented offset ``h``, while leaving valid faces
+    bit-identical and point-like faces (exact under Ericson) alone.
+    """
+    from physicsnemo.mesh.spatial.sdf import (
+        _DEGENERATE_TRI_REL_HEIGHT,
+        _repair_degenerate_faces,
+    )
+
+    device = torch.device(device)
+    torch.manual_seed(0)
+    n = 10_000
+    a = torch.randn(n, 3, device=device)
+    b = torch.randn(n, 3, device=device)
+    t_mid = torch.rand(n, 1, device=device) * 2 - 0.5
+    mid = a + (b - a) * t_mid  # collinear, inside and beyond the a-b span
+
+    def seg_dist(p, s0, s1):
+        d = s1 - s0
+        denom = (d * d).sum(-1)
+        t = ((p - s0) * d).sum(-1) / denom.clamp(min=1e-30)
+        t = torch.where(denom > 0, t.clamp(0.0, 1.0), torch.zeros_like(t))
+        return (p - (s0 + d * t.unsqueeze(-1))).norm(dim=-1)
+
+    degenerate_tris = [
+        torch.stack([a, a, b], dim=1),
+        torch.stack([a, b, a], dim=1),
+        torch.stack([b, a, a], dim=1),
+        torch.stack([a, mid, b], dim=1),
+    ]
+    for tri in degenerate_tris:
+        repaired = _repair_degenerate_faces(tri)
+        ra, rb, rc = repaired[:, 0], repaired[:, 1], repaired[:, 2]
+        # Valid now: relative height comfortably above the float32 danger zone.
+        area2 = torch.linalg.cross(rb - ra, rc - ra, dim=-1).norm(dim=-1)
+        edge_max = torch.stack(
+            [(rb - ra).norm(dim=-1), (rc - ra).norm(dim=-1), (rc - rb).norm(dim=-1)],
+            dim=-1,
+        ).amax(dim=-1)
+        rel_height = area2 / edge_max.clamp(min=1e-30) ** 2
+        assert torch.all(rel_height > 0.5 * _DEGENERATE_TRI_REL_HEIGHT)
+        # The repaired surface stays within h of the original geometry: every
+        # repaired vertex lies within h of the union of the original edges.
+        # (Individual vertices may travel far -- a repeated vertex moves to
+        # the edge midpoint -- but never off the original segment by more
+        # than h.)
+        h = (_DEGENERATE_TRI_REL_HEIGHT * edge_max + 1e-5).unsqueeze(-1)
+        dist_to_orig = torch.stack(
+            [
+                torch.minimum(
+                    torch.minimum(
+                        seg_dist(repaired[:, k], tri[:, 0], tri[:, 1]),
+                        seg_dist(repaired[:, k], tri[:, 1], tri[:, 2]),
+                    ),
+                    seg_dist(repaired[:, k], tri[:, 2], tri[:, 0]),
+                )
+                for k in range(3)
+            ],
+            dim=-1,
+        )
+        assert torch.all(dist_to_orig <= h)
+
+    # Point-like faces are exact under Ericson already: left untouched.
+    point_tri = torch.stack([a, a, a], dim=1)
+    assert torch.equal(_repair_degenerate_faces(point_tri), point_tri)
+
+    # Valid faces come back bit-identical.
+    c = torch.randn(n, 3, device=device)
+    valid = torch.stack([a, b, c], dim=1)
+    area2 = torch.linalg.cross(b - a, c - a, dim=-1).norm(dim=-1)
+    edge_max = torch.stack(
+        [(b - a).norm(dim=-1), (c - a).norm(dim=-1), (c - b).norm(dim=-1)], dim=-1
+    ).amax(dim=-1)
+    valid = valid[area2 / edge_max**2 > 10 * _DEGENERATE_TRI_REL_HEIGHT]
+    assert torch.equal(_repair_degenerate_faces(valid), valid)
+
+
+def test_sdf_degenerate_face_mesh(device):
+    """An isolated degenerate face reports the distance to its segment.
+
+    End-to-end regression: a repeated-vertex face spanning the segment
+    (0,0,0)-(4,0,0) must report the distance to that segment (nearest point
+    (4,0,0) here) to within the documented repair offset -- not the distance
+    to one of its vertices (an error of ~4 here before the fix). On CUDA this
+    exercises the Triton kernel path; on CPU the torch DFS.
+    """
+    device = torch.device(device)
+    # One repeated-vertex face spanning a segment, plus a far valid triangle so
+    # the mesh also contains non-degenerate geometry.
+    points = torch.tensor(
+        [
+            [0.0, 0.0, 0.0],
+            [4.0, 0.0, 0.0],
+            [100.0, 0.0, 0.0],
+            [101.0, 0.0, 0.0],
+            [100.0, 1.0, 0.0],
+        ],
+        dtype=torch.float32,
+        device=device,
+    )
+    cells = torch.tensor([[0, 1, 1], [2, 3, 4]], dtype=torch.int64, device=device)
+    mesh = Mesh(points=points, cells=cells)
+
+    query = torch.tensor([[4.5, 0.2, 0.0]], dtype=torch.float32, device=device)
+    sdf_out, hit = signed_distance_field(mesh, query, use_sign_winding_number=True)
+
+    # The repair moves the surface by at most 2 h = 2 * 1e-4 * 4; assert to
+    # 1e-3 to leave headroom over float32 arithmetic on top of that bound.
+    true_dist = math.hypot(0.5, 0.2)
+    torch.testing.assert_close(
+        sdf_out.abs(),
+        torch.tensor([true_dist], device=device),
+        atol=1e-3,
+        rtol=0.0,
+    )
+    torch.testing.assert_close(
+        hit,
+        torch.tensor([[4.0, 0.0, 0.0]], device=device),
+        atol=1e-3,
+        rtol=0.0,
+    )
 
 
 def test_sdf_max_dist_unbounded_and_narrow_band(device):
