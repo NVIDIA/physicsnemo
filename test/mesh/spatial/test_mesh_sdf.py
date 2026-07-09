@@ -255,7 +255,7 @@ def test_sdf_tetrahedron_reference(dtype, use_winding, device):
         [[1.0, 1.0, 1.0], [0.05, 0.1, 0.1]], device=device, dtype=dtype
     )
 
-    sdf_out, hit_points = signed_distance_field(
+    sdf_out, hit_points, _ = signed_distance_field(
         mesh,
         query_points,
         use_sign_winding_number=use_winding,
@@ -288,10 +288,10 @@ def test_sdf_index_layout_compatibility(device):
     mesh_indices_faces = tet.cells
     query_points = torch.tensor([[0.1, 0.2, 0.3]], device=device, dtype=torch.float32)
 
-    sdf_flat, hit_flat = _signed_distance_field_from_arrays(
+    sdf_flat, hit_flat, _ = _signed_distance_field_from_arrays(
         tet.points, mesh_indices_flat, query_points
     )
-    sdf_faces, hit_faces = _signed_distance_field_from_arrays(
+    sdf_faces, hit_faces, _ = _signed_distance_field_from_arrays(
         tet.points, mesh_indices_faces, query_points
     )
     torch.testing.assert_close(sdf_flat, sdf_faces)
@@ -309,7 +309,7 @@ def test_sdf_sphere_analytic(use_winding, device):
     radius = query.norm(dim=-1)
     gt = radius - 1.0
 
-    sdf_out, hit = signed_distance_field(
+    sdf_out, hit, _ = signed_distance_field(
         mesh, query, use_sign_winding_number=use_winding
     )
 
@@ -333,9 +333,11 @@ def test_sdf_preserves_input_shape(device):
     mesh = _tetrahedron_mesh().to(device)
     query = torch.rand(4, 5, 3, device=device)
 
-    sdf_out, hit = signed_distance_field(mesh, query)
+    sdf_out, hit, hit_faces = signed_distance_field(mesh, query)
     assert sdf_out.shape == (4, 5)
     assert hit.shape == (4, 5, 3)
+    assert hit_faces.shape == (4, 5)
+    assert hit_faces.dtype == torch.long
 
 
 def test_sdf_public_matches_private_arrays(device):
@@ -346,8 +348,8 @@ def test_sdf_public_matches_private_arrays(device):
     torch.manual_seed(0)
     query = (torch.rand(4096, 3, device=device) * 3.0 - 1.5).float()
 
-    sdf_pub, hit_pub = signed_distance_field(mesh, query)
-    sdf_priv, hit_priv = _signed_distance_field_from_arrays(
+    sdf_pub, hit_pub, _ = signed_distance_field(mesh, query)
+    sdf_priv, hit_priv, _ = _signed_distance_field_from_arrays(
         mesh.points, mesh.cells, query
     )
     torch.testing.assert_close(sdf_pub, sdf_priv)
@@ -393,10 +395,10 @@ def test_sdf_winding_backend_selection(device):
     torch.manual_seed(0)
     query = (torch.rand(512, 3, device=device) * 3.0 - 1.5).float()
 
-    sdf_tree, hit_tree = signed_distance_field(
+    sdf_tree, hit_tree, _ = signed_distance_field(
         mesh, query, use_sign_winding_number=True, winding_backend="clustertree"
     )
-    sdf_brute, hit_brute = signed_distance_field(
+    sdf_brute, hit_brute, _ = signed_distance_field(
         mesh, query, use_sign_winding_number=True, winding_backend="bruteforce"
     )
 
@@ -405,6 +407,34 @@ def test_sdf_winding_backend_selection(device):
     torch.testing.assert_close(hit_tree, hit_brute)
     near_surface = sdf_brute.abs() < 0.05
     assert torch.all(sdf_tree[~near_surface] == sdf_brute[~near_surface])
+
+
+def test_sdf_hit_faces_identify_nearest_face(device):
+    """``hit_faces`` indexes the face that realizes the reported distance.
+
+    Recomputing the closest point on the returned face must reproduce both the
+    hit point and the unsigned distance. On CUDA this also checks the Triton
+    kernel's mapping from BVH-sorted cell order back to input face indices.
+    """
+    from physicsnemo.mesh.spatial.sdf import _closest_point_on_triangles
+
+    device = torch.device(device)
+    mesh = _uv_sphere_mesh().to(device)
+
+    torch.manual_seed(0)
+    query = (torch.rand(2048, 3, device=device) * 3.0 - 1.5).float()
+
+    sdf_out, hit, hit_faces = signed_distance_field(mesh, query)
+
+    assert hit_faces.dtype == torch.long
+    assert hit_faces.min() >= 0
+    assert hit_faces.max() < mesh.n_cells
+    tri = mesh.points.float()[mesh.cells.long()[hit_faces]]
+    closest = _closest_point_on_triangles(query, tri)
+    torch.testing.assert_close(
+        (query - closest).norm(dim=-1), sdf_out.abs(), atol=1e-6, rtol=1e-5
+    )
+    torch.testing.assert_close(closest, hit, atol=1e-6, rtol=1e-5)
 
 
 def test_sdf_array_connectivity_validation(device):
@@ -546,7 +576,7 @@ def test_sdf_degenerate_face_mesh(device):
     mesh = Mesh(points=points, cells=cells)
 
     query = torch.tensor([[4.5, 0.2, 0.0]], dtype=torch.float32, device=device)
-    sdf_out, hit = signed_distance_field(mesh, query, use_sign_winding_number=True)
+    sdf_out, hit, _ = signed_distance_field(mesh, query, use_sign_winding_number=True)
 
     # The repair moves the surface by at most 2 h = 2 * 1e-4 * 4; assert to
     # 1e-3 to leave headroom over float32 arithmetic on top of that bound.
@@ -580,21 +610,25 @@ def test_sdf_max_dist_unbounded_and_narrow_band(device):
     near = torch.tensor([[0.05, 0.1, 0.1]], device=device, dtype=torch.float32)
 
     # Unbounded default: the far query finds its true nearest triangle.
-    sdf_far, hit_far = signed_distance_field(mesh, far)
+    sdf_far, hit_far, _ = signed_distance_field(mesh, far)
     assert torch.isfinite(sdf_far).all()
     assert sdf_far.abs().item() > 1.0
     assert not torch.allclose(hit_far, far)
 
-    # Finite band below the true distance: the far query is out of band -> NaN.
-    sdf_band, hit_band = signed_distance_field(mesh, far, max_dist=1.0)
+    # Finite band below the true distance: the far query is out of band ->
+    # NaN results and a -1 face index (int64 has no NaN).
+    sdf_band, hit_band, faces_band = signed_distance_field(mesh, far, max_dist=1.0)
     assert torch.isnan(sdf_band).all()
     assert torch.isnan(hit_band).all()
+    assert (faces_band == -1).all()
 
     # An in-band query with a finite max_dist matches the unbounded result.
-    sdf_unbounded, _ = signed_distance_field(mesh, near)
-    sdf_in_band, _ = signed_distance_field(mesh, near, max_dist=10.0)
+    sdf_unbounded, _, faces_unbounded = signed_distance_field(mesh, near)
+    sdf_in_band, _, faces_in_band = signed_distance_field(mesh, near, max_dist=10.0)
     assert torch.isfinite(sdf_in_band).all()
     torch.testing.assert_close(sdf_in_band, sdf_unbounded, atol=1e-5, rtol=1e-5)
+    assert (faces_in_band == faces_unbounded).all()
+    assert (faces_in_band >= 0).all()
 
 
 def test_sdf_pseudo_normal_sign_wrong_at_sharp_edges(device):
@@ -623,7 +657,7 @@ def test_sdf_pseudo_normal_sign_wrong_at_sharp_edges(device):
     reflex[:, 2] = _L_PRISM_HEIGHT * reflex[:, 2]
     query = torch.cat([box, reflex], dim=0).to(device)
 
-    sdf_out, _ = signed_distance_field(mesh, query, use_sign_winding_number=False)
+    sdf_out, _, _ = signed_distance_field(mesh, query, use_sign_winding_number=False)
 
     # The distance magnitude is correct; only the sign is in question. Compare to
     # the analytic interior away from the surface, where the sign is unambiguous.
@@ -657,7 +691,7 @@ def test_sdf_winding_sign_correct_at_sharp_edges(device):
     hi = torch.tensor([1.2, 1.2, _L_PRISM_HEIGHT + 0.2])
     query = (lo + (hi - lo) * torch.rand(40_000, 3)).to(device)
 
-    sdf_out, _ = signed_distance_field(mesh, query, use_sign_winding_number=True)
+    sdf_out, _, _ = signed_distance_field(mesh, query, use_sign_winding_number=True)
 
     # Exclude a near-surface band: the CUDA Barnes-Hut winding approximation is
     # only loose right at the surface (cf. test_winding_sign_triton_matches_exact).
@@ -754,7 +788,7 @@ def test_sdf_winding_sign_correct_at_sharp_edges_grid(device):
     query = _l_prism_probe_grid(device, thickness)
     gt_inside = _inside_l(query, thickness)
 
-    sdf_out, _ = signed_distance_field(mesh, query, use_sign_winding_number=True)
+    sdf_out, _, _ = signed_distance_field(mesh, query, use_sign_winding_number=True)
 
     # Compare signs away from the surface. The default ClusterTree backend is a
     # Barnes-Hut approximation whose winding number is only unreliable in a thin
@@ -781,7 +815,7 @@ def test_sdf_pseudo_normal_sign_correct_at_sharp_edges(device):
     query = _l_prism_probe_grid(device, thickness)
     gt_inside = _inside_l(query, thickness)
 
-    sdf_out, _ = signed_distance_field(mesh, query, use_sign_winding_number=False)
+    sdf_out, _, _ = signed_distance_field(mesh, query, use_sign_winding_number=False)
 
     away = sdf_out.abs() > 0.05
     expected = torch.where(
@@ -909,7 +943,7 @@ def test_sdf_triton_end_to_end_matches_reference(use_winding, monkeypatch):
     query = (torch.rand(4096, 3, device=device) * 3.0 - 1.5).float()
 
     # Triton fast path (default dispatch on CUDA).
-    sdf_triton, _ = signed_distance_field(
+    sdf_triton, _, _ = signed_distance_field(
         mesh, query, use_sign_winding_number=use_winding
     )
 
@@ -917,7 +951,9 @@ def test_sdf_triton_end_to_end_matches_reference(use_winding, monkeypatch):
     # dispatch. The winding-number sign uses the (device-agnostic) ClusterTree
     # path in both cases.
     monkeypatch.setattr(_sdf_triton, "available", lambda: False)
-    sdf_ref, _ = signed_distance_field(mesh, query, use_sign_winding_number=use_winding)
+    sdf_ref, _, _ = signed_distance_field(
+        mesh, query, use_sign_winding_number=use_winding
+    )
 
     torch.testing.assert_close(sdf_triton, sdf_ref, atol=1e-4, rtol=1e-4)
 

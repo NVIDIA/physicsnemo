@@ -24,8 +24,9 @@ sign is computed with a :class:`physicsnemo.mesh.spatial.ClusterTree` Barnes-Hut
 summation over the mesh, so the whole pipeline reuses the mesh's own spatial
 data structures and runs identically on CPU and GPU.
 
-:func:`signed_distance_field` returns the signed distance and the closest
-surface point for each query.
+:func:`signed_distance_field` returns the signed distance, the closest surface
+point, and the nearest face index for each query (as a
+:class:`SignedDistanceFieldResult`).
 
 Algorithm
 ---------
@@ -52,7 +53,7 @@ Algorithm
 
 from __future__ import annotations
 
-from typing import Literal, TypeAlias, get_args
+from typing import Literal, NamedTuple, TypeAlias, get_args
 
 import torch
 from jaxtyping import Float, Int
@@ -69,6 +70,33 @@ from physicsnemo.mesh.spatial.cluster_tree import ClusterTree
 # runtime validation tuple is derived from the typed ``Literal`` via
 # ``get_args`` so the two can never drift apart.
 WindingBackend: TypeAlias = Literal["clustertree", "bruteforce"]
+
+
+class SignedDistanceFieldResult(NamedTuple):
+    """Result of :func:`signed_distance_field`.
+
+    A named tuple: positional unpacking works, and the fields are
+    self-documenting at call sites that only need a subset.
+
+    Attributes
+    ----------
+    sdf : torch.Tensor
+        Signed distance per query, shape ``query_points.shape[:-1]`` (negative
+        inside, positive outside). ``NaN`` for queries beyond a finite
+        ``max_dist``.
+    hit_points : torch.Tensor
+        Closest point on the mesh per query, shape ``query_points.shape``.
+        ``NaN`` for queries beyond a finite ``max_dist``.
+    hit_faces : torch.Tensor
+        Index into ``mesh.cells`` of the nearest face per query (int64), shape
+        ``query_points.shape[:-1]``. ``-1`` for queries beyond a finite
+        ``max_dist``.
+    """
+
+    sdf: torch.Tensor
+    hit_points: torch.Tensor
+    hit_faces: torch.Tensor
+
 
 # Chunk sizes keep the pairwise tensors bounded for large inputs. These are
 # product-of-counts limits (rows of the materialized intermediate), not raw
@@ -1078,10 +1106,11 @@ def signed_distance_field(
     use_sign_winding_number: bool = False,
     *,
     winding_backend: WindingBackend = "clustertree",
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> SignedDistanceFieldResult:
     r"""Compute the signed distance to a triangle surface mesh.
 
-    Returns the signed distance and the closest surface point for each query.
+    Returns the signed distance, the closest surface point, and the nearest
+    face index for each query.
 
     Parameters
     ----------
@@ -1112,10 +1141,13 @@ def signed_distance_field(
 
     Returns
     -------
-    tuple[torch.Tensor, torch.Tensor]
-        ``(sdf, hit_points)``: signed distance per query
-        (shape ``query_points.shape[:-1]``) and the closest point on the mesh
-        per query (shape ``query_points.shape``).
+    SignedDistanceFieldResult
+        Named tuple ``(sdf, hit_points, hit_faces)``: signed distance per query
+        (shape ``query_points.shape[:-1]``), the closest point on the mesh per
+        query (shape ``query_points.shape``), and the index into ``mesh.cells``
+        of the nearest face per query (int64, shape
+        ``query_points.shape[:-1]``; ``-1`` for queries beyond a finite
+        ``max_dist``).
 
     Raises
     ------
@@ -1185,9 +1217,11 @@ def signed_distance_field(
     hit_points = queries.clone()
 
     if n_queries == 0:
-        sdf = sdf.reshape(query_shape[:-1]).to(out_dtype)
-        hit_points = hit_points.reshape(query_shape).to(out_dtype)
-        return sdf, hit_points
+        return SignedDistanceFieldResult(
+            sdf=sdf.reshape(query_shape[:-1]).to(out_dtype),
+            hit_points=hit_points.reshape(query_shape).to(out_dtype),
+            hit_faces=torch.zeros(query_shape[:-1], dtype=torch.long, device=device),
+        )
 
     with record_function("sdf/bvh_build"):
         bvh = BVH.from_mesh(work_mesh, leaf_size=_BVH_LEAF_SIZE)
@@ -1238,16 +1272,20 @@ def signed_distance_field(
     hit_points = best_point
 
     if max_dist is not None:
-        # Out-of-band queries keep the initial bound; flag them NaN, not 0.
+        # Out-of-band queries keep the initial bound; flag them NaN, not 0
+        # (and -1 for the face index, which has no NaN).
         missed = best_dist_sq >= max_dist_eff**2
         sdf = torch.where(missed, sdf.new_full((), float("nan")), sdf)
         hit_points = torch.where(
             missed.unsqueeze(-1), hit_points.new_full((), float("nan")), hit_points
         )
+        best_face = torch.where(missed, best_face.new_full((), -1), best_face)
 
-    sdf = sdf.reshape(query_shape[:-1]).to(out_dtype)
-    hit_points = hit_points.reshape(query_shape).to(out_dtype)
-    return sdf, hit_points
+    return SignedDistanceFieldResult(
+        sdf=sdf.reshape(query_shape[:-1]).to(out_dtype),
+        hit_points=hit_points.reshape(query_shape).to(out_dtype),
+        hit_faces=best_face.reshape(query_shape[:-1]),
+    )
 
 
 def _signed_distance_field_from_arrays(
@@ -1258,7 +1296,7 @@ def _signed_distance_field_from_arrays(
     use_sign_winding_number: bool = False,
     *,
     winding_backend: WindingBackend = "clustertree",
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> SignedDistanceFieldResult:
     r"""[INTERNAL - DO NOT USE] Private array-based SDF helper.
 
     .. warning::
@@ -1290,8 +1328,8 @@ def _signed_distance_field_from_arrays(
 
     Returns
     -------
-    tuple[torch.Tensor, torch.Tensor]
-        ``(sdf, hit_points)``; see :func:`signed_distance_field`.
+    SignedDistanceFieldResult
+        ``(sdf, hit_points, hit_faces)``; see :func:`signed_distance_field`.
 
     Raises
     ------

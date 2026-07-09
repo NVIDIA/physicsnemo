@@ -156,7 +156,7 @@ class ComputeSDF(Transform):
             query_points = data[key]
 
             # Compute SDF and closest points
-            sdf, closest_points = signed_distance_field(
+            sdf, closest_points, _ = signed_distance_field(
                 mesh,
                 query_points,
                 use_sign_winding_number=self.use_winding_number,

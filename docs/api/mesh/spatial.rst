@@ -65,10 +65,11 @@ The **sign** is determined by one of two methods, selected with
     )
 
     query = torch.randn(10000, 3)
-    sdf, hit_points = signed_distance_field(
-        mesh, query, use_sign_winding_number=True
-    )
-    # sdf: (10000,) signed distances; hit_points: (10000, 3) closest surface points.
+    result = signed_distance_field(mesh, query, use_sign_winding_number=True)
+    # A named tuple (positional unpacking also works):
+    # result.sdf:        (10000,)   signed distances
+    # result.hit_points: (10000, 3) closest surface points
+    # result.hit_faces:  (10000,)   nearest-face index into mesh.cells
 
 API Reference
 -------------

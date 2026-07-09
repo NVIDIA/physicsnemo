@@ -121,7 +121,7 @@ class ComputeSDFFromBoundary(MeshTransform):
 
         query_points = domain.interior.points.float()
 
-        sdf_values, closest_points = signed_distance_field(
+        sdf_values, closest_points, _ = signed_distance_field(
             surface,
             query_points,
             use_sign_winding_number=self.use_winding_number,
