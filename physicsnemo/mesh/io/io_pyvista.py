@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Literal
 import numpy as np
 import torch
 from jaxtyping import Int
+from tensordict import TensorDict
 
 from physicsnemo.core.version_check import OptionalImport, require_version_spec
 from physicsnemo.mesh.mesh import Mesh
@@ -41,8 +42,12 @@ else:
 def _vtk_data_to_tensor_dict(
     data: "pv.DataSetAttributes",
     force_copy: bool = False,
-) -> dict[str, torch.Tensor]:
-    """Convert a PyVista/VTK data container to a plain tensor dictionary."""
+) -> TensorDict:
+    """Convert a PyVista/VTK data container to a TensorDict.
+
+    The returned TensorDict has no batch dimensions; ``Mesh.__post_init__``
+    assigns the batch_size appropriate to the container it lands in.
+    """
     tensor_data: dict[str, torch.Tensor] = {}
     for key, value in dict(data).items():
         array = np.asarray(value)
@@ -51,7 +56,7 @@ def _vtk_data_to_tensor_dict(
         if force_copy:
             array = array.copy()
         tensor_data[str(key)] = torch.as_tensor(array)
-    return tensor_data
+    return TensorDict(tensor_data, device="cpu")
 
 
 def _tensor_to_vtk_numpy(tensor: torch.Tensor) -> np.ndarray:
