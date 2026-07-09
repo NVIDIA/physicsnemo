@@ -15,8 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fused Warp implementations for periodic, nonuniform rectilinear grids.
 - Adds CUDA-native uniform triangle-surface remeshing with NVIDIA Warp,
   including device-aware `remesh` dispatch, `Mesh.remesh`, topology cleanup,
-  and runtime tuning through `WarpRemeshOptions`. A separately installed
-  PyACVD backend supports CPU meshes and backend comparisons.
+  and runtime tuning through `WarpRemeshOptions`.
 - Adds coverage reporting on PRs — an informational `Coverage %` check plus a
   ready-to-enable Codecov integration.
 - Adds `uniform_grid_divergence`, `uniform_grid_curl`, and
