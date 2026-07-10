@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Zarr dataset configs for the unified external aerodynamics recipe
+  (`drivaer_ml_surface_zarr` / `drivaer_ml_volume_zarr`, reading
+  `physicsnemo-domainmesh-zarr` stores via `ZarrMeshReader` /
+  `ZarrDomainMeshReader`), plus a transitional `.pdmsh`-to-zarr converter CLI.
 - Adds a `global_shape` argument to `ShardTensor.from_local`, enabling the
   no-communication `sharding_shapes="chunk"` path.
 - Adds exact-boundary quality mesh generation to

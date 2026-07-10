@@ -21,5 +21,9 @@
 # path that is still ???.
 
 drivaer_ml: ???
+# Full-DomainMesh zarr conversion of DrivaerML (physicsnemo-domainmesh-zarr
+# schema; emitted by PhysicsNeMo-Curator's DomainMeshZarrSink, or via
+# src/convert_pdmsh_to_zarr.py for existing .pdmsh data)
+drivaer_ml_zarr: ???
 highlift_aero_ml: ???
 shift_suv: ???
