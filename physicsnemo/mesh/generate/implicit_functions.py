@@ -113,7 +113,13 @@ def sdf_polygon_2d(vertices, chunk: int = 65536) -> ImplicitFunction:
             p = x[s : s + chunk]
             pa = p[:, None, :] - a[None, :, :]
             ba = (b - a)[None, :, :]
-            t = ((pa * ba).sum(-1) / (ba * ba).sum(-1)).clamp(0.0, 1.0)
+            # clamp_min: a zero-length segment (duplicate consecutive
+            # vertex) would make t = 0/0 = NaN, and the min over segments
+            # then poisons EVERY query; clamped, the degenerate segment
+            # reduces to distance-to-point.
+            t = ((pa * ba).sum(-1) / (ba * ba).sum(-1).clamp_min(1e-300)).clamp(
+                0.0, 1.0
+            )
             d2 = ((pa - t[..., None] * ba) ** 2).sum(-1)
             dist = d2.min(dim=1).values.clamp_min(1e-300).sqrt()
             ay, by = a[None, :, 1], b[None, :, 1]
