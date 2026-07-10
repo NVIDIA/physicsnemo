@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Mesh-zarr schema and readers: `ZarrMeshReader` / `ZarrDomainMeshReader`, `save_mesh_to_zarr` / `save_domain_mesh_to_zarr`, `to_cell_soup`, `validate_mesh_zarr` — a chunked, compressed zarr storage path for mesh-native CAE pipelines (see `physicsnemo/datapipes/MESH_ZARR_SCHEMA.md`), plus zarr dataset configs for the unified external aerodynamics recipe.
+- Mesh-zarr schema and readers: `ZarrMeshReader` / `ZarrDomainMeshReader`, `save_mesh_to_zarr` / `save_domain_mesh_to_zarr`, `to_cell_soup`, `validate_mesh_zarr` — a chunked, compressed zarr storage path for mesh-native CAE pipelines (see `physicsnemo/datapipes/MESH_ZARR_SCHEMA.md`).
 - Adds exact-boundary quality mesh generation to
   `physicsnemo.mesh.tessellation`: `fill_interior` takes a closed
   codimension-one boundary `Mesh` (2D edge loops today; loops in any order
