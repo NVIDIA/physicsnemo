@@ -21,6 +21,8 @@ This class provides the core functionality for sampling from continuous time-ser
 It handles data loading, scaling, and time management. It is used by the TimeSeriesDataModule to set up the dataloaders for the time series healpix data.
 """
 
+from __future__ import annotations
+
 import logging
 import time
 import warnings
@@ -30,14 +32,19 @@ from typing import Optional, Sequence, Union
 import numpy as np
 import pandas as pd
 import torch
-import xarray as xr
 from omegaconf import DictConfig, OmegaConf
 
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.datapipe import Datapipe
 from physicsnemo.datapipes.meta import DatapipeMetaData
 from physicsnemo.utils.insolation import insolation
 
 logger = logging.getLogger(__name__)
+
+# xarray ships in the ``datapipes-extras`` optional dependency group; load it
+# lazily so the physicsnemo import graph carries no static dependency on it
+# (see CODING_STANDARDS/EXTERNAL_IMPORTS.md, EXT-003/EXT-004).
+xr = OptionalImport("xarray")
 
 
 @dataclass

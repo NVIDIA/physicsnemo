@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import logging
 from abc import ABC, abstractmethod
 from typing import Sequence
@@ -22,10 +24,16 @@ import cftime
 import numpy as np
 import pandas as pd
 import torch as th
-import xarray as xr
-import zarr as zr
+
+from physicsnemo.core.version_check import OptionalImport
 
 logger = logging.getLogger(__name__)
+
+# xarray/zarr ship in the ``datapipes-extras`` optional dependency group; load
+# them lazily so the physicsnemo import graph carries no static dependency on
+# them (see CODING_STANDARDS/EXTERNAL_IMPORTS.md, EXT-003/EXT-004).
+xr = OptionalImport("xarray")
+zarr = OptionalImport("zarr")
 
 
 class BaseCoupler(ABC):
@@ -98,7 +106,7 @@ class BaseCoupler(ABC):
 
         if isinstance(self.ds, xr.Dataset):
             self.use_zarr = False
-        elif isinstance(self.ds, zr.Group):
+        elif isinstance(self.ds, zarr.Group):
             self.use_zarr = True
             # iterate over self.variables in the outer loop so the selected
             # indices follow the order of self.variables (matching the xarray

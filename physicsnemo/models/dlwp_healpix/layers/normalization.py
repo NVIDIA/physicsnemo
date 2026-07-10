@@ -20,15 +20,22 @@ Implementation of the Deep Learning Weather Prediction (DLWP) normalization on t
 This class contains the implementation of the Deep Learning Weather Prediction (DLWP) normalization on the HEALPix mesh.
 """
 
+import importlib
 from typing import List
 
 import torch as th
 
+# ``apex`` is an optional accelerator (not a core dependency). Import it
+# dynamically so the physicsnemo import graph stays free of a static ``apex``
+# dependency (see CODING_STANDARDS/EXTERNAL_IMPORTS.md, EXT-003). The
+# ``FusedLayerNorm`` symbol is only used when ``norm_op="apex"`` is explicitly
+# requested, which is guarded by ``_APEX_AVAILABLE`` below.
 try:
-    from apex.normalization import FusedLayerNorm
+    FusedLayerNorm = importlib.import_module("apex.normalization").FusedLayerNorm
 
-    _APEX_AVAILABLE = True  # pragma: no cover
-except ImportError:
+    _APEX_AVAILABLE = True
+except ImportError:  # pragma: no cover - only exercised when apex is absent
+    FusedLayerNorm = None
     _APEX_AVAILABLE = False
 
 

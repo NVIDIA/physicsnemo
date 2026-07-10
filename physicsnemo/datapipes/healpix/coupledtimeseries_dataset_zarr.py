@@ -27,9 +27,9 @@ from typing import List, Optional, Sequence, Tuple, Union
 import numpy as np
 import pandas as pd
 import torch
-import zarr
 from omegaconf import DictConfig, OmegaConf
 
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.meta import DatapipeMetaData
 from physicsnemo.utils.insolation import insolation
 
@@ -38,6 +38,11 @@ from .base_timeseries_dataset_zarr import _check_availability
 from .timeseries_dataset_zarr import TimeSeriesDatasetZarr
 
 logger = logging.getLogger(__name__)
+
+# zarr ships in the ``datapipes-extras`` optional dependency group; load it
+# lazily so the physicsnemo import graph carries no static dependency on it
+# (see CODING_STANDARDS/EXTERNAL_IMPORTS.md, EXT-003/EXT-004).
+zarr = OptionalImport("zarr")
 
 
 @dataclass

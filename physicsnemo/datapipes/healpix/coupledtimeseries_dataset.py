@@ -20,6 +20,8 @@ Dataset for coupling time series healpix data with external inputs from various 
 This class extends the TimeSeriesDataset to add the core functionality for coupling time series healpix data with external inputs from various earth system components.
 """
 
+from __future__ import annotations
+
 import gc
 import logging
 import time
@@ -29,9 +31,9 @@ from typing import Optional, Sequence, Union
 import numpy as np
 import pandas as pd
 import torch
-import xarray as xr
 from omegaconf import DictConfig, OmegaConf
 
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.meta import DatapipeMetaData
 from physicsnemo.utils.insolation import insolation
 
@@ -39,6 +41,11 @@ from . import couplers
 from .timeseries_dataset import TimeSeriesDataset
 
 logger = logging.getLogger(__name__)
+
+# xarray ships in the ``datapipes-extras`` optional dependency group; load it
+# lazily so the physicsnemo import graph carries no static dependency on it
+# (see CODING_STANDARDS/EXTERNAL_IMPORTS.md, EXT-003/EXT-004).
+xr = OptionalImport("xarray")
 
 
 @dataclass

@@ -19,9 +19,16 @@ from typing import Dict, Sequence
 
 import numpy as np
 import torch
-import xarray as xr
+
+from physicsnemo.core.version_check import OptionalImport
 
 logger = logging.getLogger(__name__)
+
+# xarray ships in the ``datapipes-extras`` optional dependency group and is only
+# needed by the topography-loading helpers here; load it lazily so the
+# physicsnemo import graph carries no static dependency on it (see
+# CODING_STANDARDS/EXTERNAL_IMPORTS.md, EXT-003/EXT-004).
+xr = OptionalImport("xarray")
 
 
 def _average_virtual_temperature_from_geopotential_height(z1, z2, p1, p2, R, g0):

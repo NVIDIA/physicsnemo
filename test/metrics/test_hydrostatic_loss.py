@@ -18,11 +18,14 @@ import numpy as np
 import pytest
 import torch
 
-from physicsnemo.metrics.climate.hydrostasy import (
+# xarray is an optional dependency (datapipes-extras). Skip this module entirely
+# when it is unavailable, before importing hydrostasy, rather than failing at
+# collection time.
+pytest.importorskip("xarray")
+
+from physicsnemo.metrics.climate.hydrostasy import (  # noqa: E402
     HydrostaticBalance,
 )
-
-xr = pytest.importorskip("xarray")
 
 
 def test_constant_temperature(rtol: float = 1e-3, atol: float = 1e-3):

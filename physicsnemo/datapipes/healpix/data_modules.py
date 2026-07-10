@@ -26,6 +26,8 @@ The main classes are:
 - CoupledTimeSeriesDataModule: A DataModule for loading and processing coupled time series healpix data.
 """
 
+from __future__ import annotations
+
 # System modules
 import logging
 import warnings
@@ -35,20 +37,23 @@ from typing import Optional, Sequence, Union
 # numpy
 import numpy as np
 
-# distributed stuff
-import xarray as xr
-
 # External modules
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.distributed import DistributedManager
 
 from .coupledtimeseries_dataset import CoupledTimeSeriesDataset
 from .timeseries_dataset import TimeSeriesDataset
 
 logger = logging.getLogger(__name__)
+
+# xarray ships in the ``datapipes-extras`` optional dependency group; load it
+# lazily so the physicsnemo import graph carries no static dependency on it
+# (see CODING_STANDARDS/EXTERNAL_IMPORTS.md, EXT-003/EXT-004).
+xr = OptionalImport("xarray")
 
 
 def open_time_series_dataset_classic_prebuilt(

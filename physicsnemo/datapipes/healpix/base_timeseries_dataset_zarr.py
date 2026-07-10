@@ -31,14 +31,19 @@ from typing import List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
-import xarray as xr
-import zarr
 from omegaconf import DictConfig, OmegaConf
 
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.datapipe import Datapipe
 from physicsnemo.datapipes.meta import DatapipeMetaData
 
 logger = logging.getLogger(__name__)
+
+# xarray/zarr ship in the ``datapipes-extras`` optional dependency group; load
+# them lazily so the physicsnemo import graph carries no static dependency on
+# them (see CODING_STANDARDS/EXTERNAL_IMPORTS.md, EXT-003/EXT-004).
+xr = OptionalImport("xarray")
+zarr = OptionalImport("zarr")
 
 
 def _is_object_store_path(path: str) -> bool:  # pragma: no cover
