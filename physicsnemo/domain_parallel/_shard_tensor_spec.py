@@ -442,17 +442,26 @@ def compute_sharding_shapes_from_chunking_global_shape(
         for mesh_dim, chunks in temp_sharding_shapes.items()
     }
 
-    # Go through and reduce each mesh dim to the right shape for _this_ rank
-    for mesh_dim, shape_list in temp_sharding_shapes.items():
-        this_rank = mesh.get_local_rank(mesh_dim)
-        temp_sharding_shapes[mesh_dim] = shape_list[this_rank]
+    # This rank's chunk size along each sharded mesh dim:
+    my_chunks = {
+        mesh_dim: shape_list[mesh.get_local_rank(mesh_dim)]
+        for mesh_dim, shape_list in temp_sharding_shapes.items()
+    }
 
-    # Finally, update the sharded shape with the right chunk size:
-    for shape_list in sharding_shapes.values():
-        for inner_mesh_dim, chunk_size in temp_sharding_shapes.items():
+    # Finally, update the sharded shape with the right chunk size.
+    # sharding_shapes[mesh_dim][k] is the local shard shape of the rank at
+    # position k along `mesh_dim`, holding every other mesh coordinate at
+    # this rank's position: the tensor dim sharded along `mesh_dim` takes
+    # rank k's chunk size, while tensor dims sharded along other mesh dims
+    # take this rank's chunk size.
+    for mesh_dim, shape_list in sharding_shapes.items():
+        for inner_mesh_dim, chunks in temp_sharding_shapes.items():
             tensor_dim = placements[inner_mesh_dim].dim
-            for shape in shape_list:
-                shape[tensor_dim] = chunk_size
+            for k, shape in enumerate(shape_list):
+                if inner_mesh_dim == mesh_dim:
+                    shape[tensor_dim] = chunks[k]
+                else:
+                    shape[tensor_dim] = my_chunks[inner_mesh_dim]
 
     # Convert to immutable torch.Size
     return {
