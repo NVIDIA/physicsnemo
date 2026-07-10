@@ -227,6 +227,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `get_shift_window_mask` no longer partitions the cyclic longitude axis, so
+  shifted-window attention in Pangu and FengWu attends across the dateline.
+  Wrap-around longitude windows are merged into one window as described in
+  the Pangu-Weather paper. Stored regression outputs for both models are
+  regenerated.
 - `physicsnemo.mesh.io.from_pyvista(..., force_copy=True)` now copies attached
   point, cell, and global data as well as geometry. The matching new
   `to_pyvista(..., force_copy=True)` option prevents exported PyVista geometry
