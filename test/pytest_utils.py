@@ -104,7 +104,10 @@ def _import_or_fail(module_names, config, min_versions=None):
             try:
                 module = importlib.import_module(module_name)
                 if hasattr(module, "__version__"):
-                    if isinstance(module.__version__, str) or module.__version__ is None:
+                    if (
+                        isinstance(module.__version__, str)
+                        or module.__version__ is None
+                    ):
                         pytest.importorskip(module_name, min_version)
                     elif isinstance(module.__version__, Version):
                         version_check = Version(min_version)
