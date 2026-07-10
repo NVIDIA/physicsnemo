@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds a `global_shape` argument to `ShardTensor.from_local`, enabling the
+  no-communication `sharding_shapes="chunk"` path.
 - Adds exact-boundary quality mesh generation to
   `physicsnemo.mesh.tessellation`: `fill_interior` takes a closed
   codimension-one boundary `Mesh` (2D edge loops today; loops in any order
