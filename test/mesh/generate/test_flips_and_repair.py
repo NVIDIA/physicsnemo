@@ -274,3 +274,42 @@ def test_clean_mesh_is_untouched():
     assert torch.equal(new_points, points)
     assert torch.equal(new_cells, cells)
 
+
+def test_peel_followed_by_split_repairs_vertex_pinch():
+    """Peeling a bridging sliver can expose a boundary pinched at a
+    VERTEX, which the ridge-pairing manifoldness check inside the peel
+    cannot see (every boundary ridge still pairs cleanly). The pipeline
+    therefore follows every peel with a pinch split; this exercises that
+    exact sequence on the minimal configuration. Found by adversarial
+    audit: two tets sharing one vertex, bridged by a near-flat sliver.
+    """
+    from physicsnemo.mesh.generate._repair import peel_boundary_slivers
+
+    pts = torch.tensor(
+        [
+            [0.0, 0.0, 0.0],  # the future pinch vertex
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [0.0, 0.0, -1.0],
+            [0.0, 0.05, 0.001],  # near-flat bridge apex
+        ],
+        dtype=torch.float64,
+    )
+    cells = torch.tensor([[0, 1, 2, 3], [0, 5, 4, 6], [1, 2, 4, 7]], dtype=torch.int64)
+    vol = signed_volumes(pts, cells)
+    cells[vol < 0] = cells[vol < 0][:, [1, 0, 2, 3]]
+
+    def phi(x):
+        return torch.zeros(x.shape[:-1], dtype=x.dtype)
+
+    p2, c2, n_peeled = peel_boundary_slivers(pts, cells, phi, h=1.0)
+    assert n_peeled == 1
+    # The peel output is vertex-pinched, yet facet-pairing blesses it...
+    assert boundary_is_closed_manifold(c2)
+    # ...so the follow-up split must find and repair it.
+    p3, c3, n_split = split_pinched_vertices(p2, c2)
+    assert n_split == 1
+    assert set(c3[0].tolist()).isdisjoint(set(c3[1].tolist()))

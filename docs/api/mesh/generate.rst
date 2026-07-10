@@ -43,12 +43,17 @@ Volume meshing of implicit domains
 ``{x : phi(x) < 0}`` for an arbitrary implicit function ``phi`` (a signed
 distance function, or any level set with a usable gradient — including
 neural implicit fields), in **any spatial dimension**, entirely in PyTorch
-tensor ops on CPU or CUDA. The generator is structurally robust: every
+tensor ops on CPU or CUDA. The meshed set is ``{phi < 0}`` intersected
+with the bounding box: where the domain reaches the box, its faces are
+honored as boundary, so external-flow "box minus obstacle" domains work
+directly. The generator is structurally robust: every
 optimization step is validity-gated, so it always returns a positively
 oriented mesh with a closed-manifold boundary; difficult inputs degrade
 element quality (reported in diagnostics), never existence. A coverage
 guard raises — rather than silently dropping geometry — when the domain
-has features below the target edge length ``h``, and sharp corners can be
+has features below the target edge length ``h`` or when coverage cannot
+be certified at all (a phi that is NaN inside the box, e.g. a neural
+field queried outside its training range), and sharp corners can be
 interpolated exactly via ``feature_points``.
 
 :func:`refit_mesh_to_implicit` is the differentiable companion: it

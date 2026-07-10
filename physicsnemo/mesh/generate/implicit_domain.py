@@ -19,7 +19,10 @@
 ``mesh_implicit_domain`` meshes ``{x : phi(x) < 0}`` for an arbitrary
 implicit function ``phi`` (signed distance or any level set with a usable
 gradient), in 2D, 3D, or higher, on CPU or CUDA, using pure PyTorch tensor
-ops. The pipeline is *stamp -> erode -> inflate -> optimize -> repair*:
+ops. The meshed set is the intersection of ``{phi < 0}`` with the bounding
+box: phi is clipped by the box's own signed distance, so the box faces are
+first-class boundary wherever the domain reaches them. The pipeline is
+*stamp -> erode -> inflate -> optimize -> repair*:
 
 1. stamp a Kuhn simplicial lattice over the bounding box (``d!`` simplices
    per hypercube, valid in any dimension);
@@ -68,6 +71,7 @@ from physicsnemo.mesh.generate._simplex_ops import (
 from physicsnemo.mesh.generate.implicit_functions import (
     ImplicitFunction,
     project_to_zero_set,
+    sdf_box,
 )
 
 if TYPE_CHECKING:
@@ -117,7 +121,10 @@ def _gated_update(points, cells, target, vol_floor, max_halvings: int = 6):
 
     def bad_cells(trial):
         vol = signed_volumes(trial, cells)
-        return (vol <= vol_floor) & ((vol <= vol_old) | (vol <= 0))
+        # Non-finite volumes (a NaN target, e.g. from a phi that is NaN in
+        # part of the box) compare False in every branch below, which would
+        # classify them as good and let them replace valid vertices.
+        return ((vol <= vol_floor) & ((vol <= vol_old) | (vol <= 0))) | ~vol.isfinite()
 
     trial = target
     for _ in range(max_halvings):
@@ -137,46 +144,122 @@ def _gated_update(points, cells, target, vol_floor, max_halvings: int = 6):
         scale[bad_verts] = 0.0
 
 
-def _coverage_gap(phi, points, cells, bounds, h, gscale=1.0, seed=0):
+def _coverage_gap(phi, points, cells, bounds, h, seed=0):
     """Worst distance (in units of h) from the zero set to the mesh boundary.
 
     Probes the bounding box, projects onto ``phi = 0``, and measures each
     projected sample's distance to the nearest boundary vertex or
-    boundary-facet centroid. Probe count scales with the box-to-h ratio
-    (capped at 65536), but detection of a dropped feature is still
+    boundary-facet centroid. The projection probe count scales with the
+    box-to-h ratio (capped at 65536; the sign census below always uses the
+    full 65536), but detection of a dropped feature is still
     probabilistic: its projection basin must be hit by a probe. Projection
     convergence is judged in DISTANCE units, |phi| / |grad phi| < 0.05 h,
-    so noisy or scaled level sets cannot silently empty the probe set; if
-    no probe converges for a nonempty mesh, +inf is returned (treated as a
-    guard failure, never as perfect coverage).
+    so noisy or scaled level sets cannot silently empty the probe set.
+
+    The guard's one job is out-of-contract input, so failure to measure IS
+    failure (+inf, never perfect coverage): phi NaN anywhere in the box
+    and phi with a sign change but no autograd gradient both return
+    +inf, and a Monte-Carlo volume cross-check (from the probe signs)
+    returns +inf when the mesh is missing a macroscopic chunk of
+    ``{phi < 0}`` -- the two-sided complement to the zero-set gap, which
+    only sees boundary the mesh already has. Individual stalled
+    projections ARE dropped from the gap max (after a retry): a probe
+    oscillating in a positive CSG dead zone certifies nothing and hides
+    nothing, and hard-failing on it would reject in-contract composites.
     """
     lo, hi = bounds
     d = points.shape[1]
     span = float((hi - lo).max())
-    n_probes = int(min(65536, max(4096, (span / h) ** d)))
+    # The projection stage scales its probe count with the box-to-h ratio;
+    # the sign census (NaN detection + volume cross-check) always uses the
+    # full budget -- it costs only one batched phi evaluation, and a small
+    # census would inflate the Monte-Carlo sigma until the volume check
+    # went blind at coarse resolution.
+    n_proj = int(min(65536, max(4096, (span / h) ** d)))
+    n_probes = 65536
     g = torch.Generator(device="cpu").manual_seed(seed)
     probe = torch.rand(n_probes, d, generator=g, dtype=points.dtype).to(points.device)
     probe = lo + probe * (hi - lo)
-    signs = torch.sign(phi(probe))
+    f_probe = phi(probe)
+    if bool(torch.isnan(f_probe).any()):
+        # NaN phi inside the box (canonical case: a neural field queried
+        # outside its training range) carries no sign, so the guard has
+        # nothing to measure there -- and the mesher will have dropped
+        # that region. Report failure, never perfect coverage. (An
+        # inf-valued phi is fine: its sign still classifies the probe.)
+        return float("inf")
+    signs = torch.sign(f_probe)
+    # Volume cross-check (the two-sided half of the guard): the probe signs
+    # give a Monte-Carlo estimate of vol({phi < 0} in the box). A mesh
+    # missing a macroscopic chunk of the domain fails here even when every
+    # converging probe lands on covered zero set -- the zero-set gap alone
+    # is blind to boundary the mesh SHOULD have but does not. The 20%
+    # floor keeps this a MACROSCOPIC detector: the sub-h boundary rind of
+    # an honestly coarse mesh measures up to ~15% (4D sphere at h=0.25:
+    # 11.4%; adversarial 3D CSG at h=0.12: 15%) and policing it is the
+    # pointwise gap threshold's job, while the failures this exists for --
+    # a hollowed interior, a boundary sheet detaching wholesale -- sit at
+    # 25-50%.
+    box_vol = float(torch.prod(hi - lo))
+    p_in = float((signs < 0).double().mean())
+    est_vol = box_vol * p_in
+    mc_sigma = box_vol * math.sqrt(max(p_in * (1.0 - p_in), 0.0) / n_probes)
+    mesh_vol = float(signed_volumes(points, cells).abs().sum())
+    if est_vol - mesh_vol > max(0.20 * est_vol, 5.0 * mc_sigma):
+        return float("inf")
     if bool((signs >= 0).all()) or bool((signs <= 0).all()):
         # No zero crossing inside the box: either the domain fills the box
         # (boundary = box faces, not phi's zero set) or it is empty (already
         # rejected earlier). Nothing for the guard to measure.
         return 0.0
-    surf = project_to_zero_set(phi, probe, iters=6)
-    xg = surf.detach().requires_grad_(True)
-    f = phi(xg)
-    if not f.requires_grad:
-        return 0.0
-    (grads,) = torch.autograd.grad(f.sum(), xg, allow_unused=True)
-    if grads is None:
-        return 0.0
-    dist_est = f.detach().abs() / grads.norm(dim=-1).clamp_min(1e-30)
-    converged = torch.nan_to_num(dist_est, nan=float("inf")) < 0.05 * h
+
+    def dist_to_zero(pts):
+        """``|phi| / |grad phi|`` at ``pts``; None if phi has no gradient."""
+        xg = pts.detach().requires_grad_(True)
+        f = phi(xg)
+        if not f.requires_grad:
+            return None
+        (grads,) = torch.autograd.grad(f.sum(), xg, allow_unused=True)
+        if grads is None:
+            return None
+        return f.detach().abs() / grads.norm(dim=-1).clamp_min(1e-30)
+
+    surf = project_to_zero_set(phi, probe[:n_proj], iters=6)
+    dist_est = dist_to_zero(surf)
+    if dist_est is None:
+        # A sign change exists but phi exposes no autograd gradient (e.g. a
+        # step function): the boundary cannot even be located, let alone
+        # certified. Reporting 0.0 here blessed a staircase boundary as
+        # perfect coverage.
+        return float("inf")
+    tol_dist = 0.05 * h
+    converged = torch.nan_to_num(dist_est, nan=float("inf")) < tol_dist
     # The zero set can extend beyond the bounding box (a domain clipped by
     # bounds); only its in-box portion is meshable, so out-of-box
     # projections must not count against coverage.
     in_box = ((surf >= lo - 0.5 * h) & (surf <= hi + 0.5 * h)).all(dim=1)
+    # In-box projections that fail to converge certify nothing; give the
+    # slow-but-sound cases (Newton overshoot near interior critical points
+    # of a non-SDF level set, oscillation across CSG kinks in a positive
+    # dead zone with no zero set nearby) more iterations, then drop any
+    # still-stalled probe. Dropping is safe here because the dangerous
+    # failure classes are caught elsewhere: NaN regions at the probe
+    # stage, gradient-free boundaries by the no-gradient path, and a
+    # macroscopic uncertified region by the volume cross-check.
+    retry = (~converged) & in_box
+    if bool(retry.any()):
+        surf_r = project_to_zero_set(phi, surf[retry], iters=24)
+        dist_r = dist_to_zero(surf_r)
+        if dist_r is None:
+            return float("inf")
+        conv_r = torch.nan_to_num(dist_r, nan=float("inf")) < tol_dist
+        in_box_r = ((surf_r >= lo - 0.5 * h) & (surf_r <= hi + 0.5 * h)).all(dim=1)
+        surf = surf.clone()
+        surf[retry] = surf_r
+        converged = converged.clone()
+        converged[retry] = conv_r
+        in_box = in_box.clone()
+        in_box[retry] = in_box_r
     surf = surf[converged & in_box]
     if surf.shape[0] == 0:
         if bool(in_box.any()):
@@ -272,6 +355,12 @@ def mesh_implicit_domain(
     validity, so it always returns a valid mesh; difficult inputs degrade
     element quality (see the ``full_output`` diagnostics), not existence.
 
+    The meshed set is ``{phi < 0}`` *intersected with the bounds box*:
+    where the domain reaches the box, the box faces are honored as
+    boundary, so external-flow "box minus obstacle" domains work directly
+    -- pass the obstacle's negated SDF and let the box provide the
+    farfield.
+
     Parameters
     ----------
     phi : callable
@@ -279,15 +368,18 @@ def mesh_implicit_domain(
         domain, positive outside, differentiable (almost everywhere) under
         torch autograd. An exact signed-distance function conditions the
         boundary projection best, but any level-set function with a
-        non-vanishing gradient near its zero set works. See
+        non-vanishing gradient near its zero set works. phi must not be
+        NaN anywhere in ``bounds``: NaN values (e.g. a neural field
+        queried outside its training range) trip the coverage guard, since
+        coverage of that region cannot be certified. See
         :mod:`physicsnemo.mesh.generate.implicit_functions` for building
         blocks.
     bounds : tuple of (array-like, array-like)
-        ``(lo, hi)`` corners of an axis-aligned box that contains the
-        domain. Each of length ``d``. Keep the box reasonably tight: the
-        full lattice over ``bounds`` is materialized before clipping, so
-        memory scales with ``prod((hi - lo) / h)`` regardless of the
-        domain's own size.
+        ``(lo, hi)`` corners of an axis-aligned box. Each of length ``d``.
+        The domain is clipped to the box (faces become boundary where it
+        reaches them). Keep the box reasonably tight: the full lattice over
+        ``bounds`` is materialized before clipping, so memory scales with
+        ``prod((hi - lo) / h)`` regardless of the domain's own size.
     h : float
         Target edge length. Geometric features smaller than ``h`` cannot be
         represented (see ``max_coverage_gap_h``).
@@ -350,7 +442,11 @@ def mesh_implicit_domain(
     ValueError
         If the eroded domain is empty at this resolution (``h`` too coarse
         or ``bounds`` not containing the domain), if bounds are invalid, or
-        if the coverage guard trips.
+        if the coverage guard trips -- including when coverage cannot be
+        *certified* because phi is NaN inside bounds, exposes no autograd
+        gradient despite a sign change (e.g. a step function), or the mesh
+        volume falls short of the Monte-Carlo estimate of the domain
+        volume.
 
     Notes
     -----
@@ -401,14 +497,15 @@ def mesh_implicit_domain(
 
     t0 = time.perf_counter()
     points, cells = kuhn_lattice(lo, hi, h, device=device, dtype=dtype)
-    centroid_phi = phi(points[cells].mean(dim=1))
+    centroids = points[cells].mean(dim=1)
+    centroid_phi = phi(centroids)
     # Normalize phi-unit thresholds by the gradient magnitude near the zero
     # set, so any level set with a usable gradient works -- not only unit-
     # gradient SDFs (phi = c * sdf must behave identically for any c > 0).
     band = torch.topk(
         centroid_phi.abs(), k=min(1024, centroid_phi.shape[0]), largest=False
     ).indices
-    bg = points[cells].mean(dim=1)[band].detach().requires_grad_(True)
+    bg = centroids[band].detach().requires_grad_(True)
     f_bg = phi(bg)
     grads = (
         torch.autograd.grad(f_bg.sum(), bg, allow_unused=True)[0]
@@ -418,11 +515,28 @@ def mesh_implicit_domain(
     gscale = float(grads.norm(dim=-1).median()) if grads is not None else 1.0
     if not (gscale > 0 and gscale < float("inf")):
         gscale = 1.0
-    # A phi with no gradient information anywhere (e.g. a constant field:
-    # "the domain fills the box") gives the boundary nothing to project
-    # onto; boundary vertices must then anchor in place, because unanchored
-    # ODT is a shrinking flow that would collapse the mesh.
-    can_project = grads is not None
+    # The meshable set is {phi < 0} INTERSECTED with the box, so clip phi
+    # by the box's own signed distance (scaled into phi's units): where the
+    # domain touches the bounds, the faces become first-class zero set.
+    # Without this, face vertices Newton-project onto the only zero set the
+    # raw phi has -- the interior one -- and the mesh silently detaches
+    # from the faces and collapses inward (``.clamp(lo, hi)`` keeps
+    # vertices in the box, not on its faces). Where the domain is strictly
+    # interior, ``max(phi, box)`` equals phi near the zero set and nothing
+    # changes. The clip also gives every phi a projectable gradient -- even
+    # a constant field ("the domain fills the box") -- so boundary vertices
+    # always have an anchor (unanchored ODT is a shrinking flow).
+    user_phi = phi
+    box_phi = sdf_box(lo, hi)
+
+    def phi(x):
+        return torch.maximum(user_phi(x), gscale * box_phi(x))
+
+    # Erosion uses the UNCLIPPED phi: its margin exists for the user
+    # field's unknown boundary, while the lattice conforms to the box
+    # exactly -- face-adjacent cells need no margin from the box term (and
+    # would be spuriously eroded by it whenever ceil-rounding makes the
+    # actual lattice spacing smaller than the nominal h in the threshold).
     keep = centroid_phi < -erode * h * gscale
     if not bool(keep.any()):
         raise ValueError(
@@ -447,6 +561,27 @@ def mesh_implicit_domain(
 
     d = points.shape[1]
     vol_floor = 1e-3 * h**d / math.factorial(d)
+    # Face-membership tolerance: h-relative, widened for coarse dtypes at
+    # large coordinates (float32 at |x|~1e3 rounds worse than 1e-4*h), and
+    # capped so it can never capture genuinely off-face vertices.
+    coord_scale = float(torch.maximum(lo.abs(), hi.abs()).max())
+    face_eps = min(max(1e-4 * h, 16.0 * torch.finfo(dtype).eps * coord_scale), 0.25 * h)
+
+    def pin_face_coords(target_b, current_b):
+        """Vertices on a box face slide only within that face.
+
+        Newton projection onto the clipped phi targets the *nearest*
+        zero-set branch, which near a box edge or corner is a single face;
+        without per-coordinate pinning, edge and corner vertices migrate
+        onto one face and the box's own edges chamfer at the h scale.
+        Snapping (rather than just keeping the coordinate) makes face
+        membership exact, so the pin is a maintained invariant.
+        """
+        on_lo = (current_b - lo).abs() <= face_eps
+        on_hi = (hi - current_b).abs() <= face_eps
+        target_b = torch.where(on_lo, lo.expand_as(target_b), target_b)
+        return torch.where(on_hi, hi.expand_as(target_b), target_b)
+
     gen = torch.Generator(device="cpu").manual_seed(seed)
     diag = {
         "iters_run": 0,
@@ -494,13 +629,19 @@ def mesh_implicit_domain(
         t_reconnect += time.perf_counter() - tr
 
         target = _odt_targets(points, cells, h)
-        # Clamp projections into the bounds box: for a domain clipped by
-        # bounds, the box faces ARE the boundary there, and the zero set can
-        # be arbitrarily far outside (adversarial hardening round).
-        if can_project:
-            target[bnd] = project_to_zero_set(phi, target[bnd]).clamp(lo, hi)
-        else:
-            target[bnd] = points[bnd]
+        # phi is box-clipped, so its zero set includes the box faces where
+        # the domain touches them; the clamp is float-epsilon hygiene for
+        # projections that land a hair outside.
+        proj = project_to_zero_set(phi, target[bnd]).clamp(lo, hi)
+        # A projection that fails to land near the zero set (in gradient-
+        # normalized distance units) anchors its vertex instead: with a
+        # discontinuous or plateaued phi, the Newton step can strand a
+        # vertex in a region with no zero set at all, and an unanchored
+        # boundary then creeps outward unchecked.
+        near0 = phi(proj).abs() <= 0.5 * h * gscale
+        target[bnd] = pin_face_coords(
+            torch.where(near0[:, None], proj, points[bnd]), points[bnd]
+        )
         if fixed_targets is not None:
             # Pinned vertices sit exactly at their features; the pin
             # overrides smoothing and projection (a corner tip is on the
@@ -528,8 +669,11 @@ def mesh_implicit_domain(
     t_optimize = time.perf_counter() - t0 - t_reconnect
 
     target = points.clone()
-    if can_project:
-        target[bnd] = project_to_zero_set(phi, points[bnd], iters=5).clamp(lo, hi)
+    proj = project_to_zero_set(phi, points[bnd], iters=5).clamp(lo, hi)
+    near0 = phi(proj).abs() <= 0.5 * h * gscale
+    target[bnd] = pin_face_coords(
+        torch.where(near0[:, None], proj, points[bnd]), points[bnd]
+    )
     if fixed_targets is not None:
         target[fixed_idx] = fixed_targets
     points = _gated_update(points, cells, target, vol_floor)
@@ -539,6 +683,13 @@ def mesh_implicit_domain(
         points, cells, diag["peeled"] = peel_boundary_slivers(
             points, cells, phi, h * gscale, protect_vertices=fixed_idx
         )
+        # Deleting cells can expose a vertex-pinched boundary (two closed
+        # surface sheets touching at a point), which the ridge-pairing
+        # manifoldness check inside the peel cannot see; the split is a
+        # no-op when no pinch exists, and only appends vertices, so
+        # earlier vertex indices (e.g. pinned features) stay valid.
+        points, cells, n_post_split = split_pinched_vertices(points, cells)
+        diag["pinch_splits"] += n_post_split
 
     q = volume_length_quality(points, cells)
     diag.update(
@@ -554,8 +705,26 @@ def mesh_implicit_domain(
         time_optimize_s=t_optimize,
         time_reconnect_s=t_reconnect,
     )
-    diag["coverage_gap_h"] = _coverage_gap(phi, points, cells, (lo, hi), h, seed=seed)
+    # The guard certifies the USER phi's zero set: the box faces the
+    # clipped phi adds are covered by construction (face pinning), and
+    # running on the raw field keeps its no-gradient and non-finite
+    # detection intact (the box clip would lend a step function a healthy
+    # gradient near the faces and mask it).
+    diag["coverage_gap_h"] = _coverage_gap(
+        user_phi, points, cells, (lo, hi), h, seed=seed
+    )
     if max_coverage_gap_h is not None and diag["coverage_gap_h"] > max_coverage_gap_h:
+        if math.isinf(diag["coverage_gap_h"]):
+            raise ValueError(
+                "coverage guard tripped: coverage could not be certified. "
+                "phi is NaN somewhere inside bounds (e.g. a neural field "
+                "queried outside its training range), exposes no usable "
+                "autograd gradient despite a sign change (e.g. a step "
+                "function), or the mesh volume falls short of the "
+                "Monte-Carlo estimate of the domain volume. Clean up phi, "
+                "or pass max_coverage_gap_h=None to accept a best-effort "
+                "mesh of the well-defined region."
+            )
         raise ValueError(
             f"coverage guard tripped: the zero set has a point "
             f"{diag['coverage_gap_h']:.2f}h away from the mesh boundary "
@@ -574,6 +743,7 @@ def refit_mesh_to_implicit(
     mesh: "Mesh",
     phi: ImplicitFunction,
     iters: int = 3,
+    bounds: tuple | None = None,
 ) -> "Mesh":
     r"""Differentiably re-project a mesh's boundary onto ``phi = 0``.
 
@@ -593,6 +763,14 @@ def refit_mesh_to_implicit(
         Implicit function; may close over tensors that require grad.
     iters : int, optional
         Newton projection steps. Default ``3``.
+    bounds : tuple of (array-like, array-like), optional
+        The ``(lo, hi)`` box the mesh was generated with. Pass it whenever
+        the domain touches the box (an external-flow "box minus obstacle"
+        mesh): phi is then clipped by the box exactly as in
+        :func:`mesh_implicit_domain`, so vertices on the box faces stay on
+        them instead of being dragged onto phi's interior zero set. Face
+        vertices receive zero gradient from ``phi``'s parameters (the box
+        is not parameterized). Default ``None`` (no clipping).
 
     Returns
     -------
@@ -618,6 +796,17 @@ def refit_mesh_to_implicit(
     from physicsnemo.mesh.mesh import Mesh
 
     points, cells = mesh.points, mesh.cells
+    if bounds is not None:
+        lo = torch.as_tensor(bounds[0], dtype=points.dtype, device=points.device)
+        hi = torch.as_tensor(bounds[1], dtype=points.dtype, device=points.device)
+        user_phi, box_phi = phi, sdf_box(lo, hi)
+
+        def phi(x):
+            # No gscale here: the Newton step normalizes by |grad|^2 per
+            # point, and the zero set of max(f, g) is sign-determined, so
+            # mixed gradient scales cannot move the boundary.
+            return torch.maximum(user_phi(x), box_phi(x))
+
     bnd = boundary_vertex_mask(points, cells)
     x = points.clone()
     # The Newton step needs autograd for grad(phi) even in inference, so
