@@ -14,7 +14,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Geometric transformations for simplicial meshes.
+"""Transformations for simplicial meshes.
 
-This module provides linear and affine transformations with intelligent cache handling.
+Linear and affine operations are exported directly. Nonlinear operations are
+grouped under :mod:`physicsnemo.mesh.transformations.deform`.
 """
+
+from physicsnemo.mesh.transformations import deform
+from physicsnemo.mesh.transformations.geometric import (
+    rotate,
+    rotation_matrix,
+    scale,
+    scale_matrix,
+    transform,
+    translate,
+)
+
+__all__ = [
+    "deform",
+    "rotate",
+    "rotation_matrix",
+    "scale",
+    "scale_matrix",
+    "transform",
+    "translate",
+]

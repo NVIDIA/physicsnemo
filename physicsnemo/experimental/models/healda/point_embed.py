@@ -13,7 +13,17 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Multi-sensor observation embedding for HealDA."""
+"""Multi-sensor observation embedding for HealDA (v1).
+
+.. deprecated::
+    These components (``MultiSensorObsEmbedder``, ``ObsTokenizer``,
+    ``SensorEmbedder``, ``UniformFusion``) back the deprecated
+    :class:`~physicsnemo.experimental.models.healda.healda.HealDA` (v1) model,
+    are no longer publicly exported, and will be removed in a future release.
+    Use :class:`~physicsnemo.experimental.models.healda.video_healda.VideoHealDA`
+    with :class:`~physicsnemo.experimental.models.healda.obs_tokenizer.ObsTokenizerFiLM`
+    instead.
+"""
 
 import math
 
@@ -25,7 +35,9 @@ from physicsnemo.core.module import Module
 from .scatter_aggregator import ScatterAggregator
 
 
-def _offsets_to_batch_idx(offsets: Int[torch.Tensor, "batch time"]) -> Int[torch.Tensor, "nobs"]:
+def _offsets_to_batch_idx(
+    offsets: Int[torch.Tensor, "batch time"],
+) -> Int[torch.Tensor, " nobs"]:
     r"""Map each observation to its flattened :math:`(B, T)` window index.
 
     Given cumulative exclusive-end offsets of shape :math:`(B, T)`, return a
@@ -55,12 +67,12 @@ def _offsets_to_batch_idx(offsets: Int[torch.Tensor, "batch time"]) -> Int[torch
 
 @torch.compiler.disable
 def _split_by_sensor(
-    obs: Float[torch.Tensor, "nobs"],
+    obs: Float[torch.Tensor, " nobs"],
     float_metadata: Float[torch.Tensor, "nobs meta_dim"],
-    pix: Int[torch.Tensor, "nobs"],
-    local_channel: Int[torch.Tensor, "nobs"],
-    local_platform: Int[torch.Tensor, "nobs"],
-    obs_type: Int[torch.Tensor, "nobs"],
+    pix: Int[torch.Tensor, " nobs"],
+    local_channel: Int[torch.Tensor, " nobs"],
+    local_platform: Int[torch.Tensor, " nobs"],
+    obs_type: Int[torch.Tensor, " nobs"],
     offsets: Int[torch.Tensor, "sensors batch time"],
 ) -> list[tuple[torch.Tensor, ...]]:
     """Split flattened observation tensors into per-sensor slices using ``offsets``.
@@ -123,9 +135,8 @@ def _split_by_sensor(
     return out
 
 
-
 class ObsTokenizer(Module):
-    r"""Tokenizes individual observations into feature vectors by combining 
+    r"""Tokenizes individual observations into feature vectors by combining
     measurements along with their metadata, using learnable embedding tables and an MLP projection.
 
     Parameters
@@ -166,9 +177,9 @@ class ObsTokenizer(Module):
         self.embed_table = torch.nn.Embedding(n_embed, embed_dim)
 
         mlp_in_dim = (
-            1           # obs measurement
+            1  # obs measurement
             + meta_dim  # float metadata
-            + embed_dim # learned embedding
+            + embed_dim  # learned embedding
         )
         mlp_out_dim = out_dim - 1
         hidden_dim = out_dim * 2 if out_dim <= 32 else out_dim
@@ -182,9 +193,9 @@ class ObsTokenizer(Module):
 
     def forward(
         self,
-        obs: Float[torch.Tensor, "nobs"],
+        obs: Float[torch.Tensor, " nobs"],
         float_metadata: Float[torch.Tensor, "nobs meta_dim"],
-        obs_type: Int[torch.Tensor, "nobs"],
+        obs_type: Int[torch.Tensor, " nobs"],
     ) -> Float[torch.Tensor, "nobs out_dim"]:
         if not torch.compiler.is_compiling():
             if obs.ndim != 1:
@@ -251,7 +262,9 @@ class UniformFusion(Module):
 
     def forward(
         self,
-        sensor_embeddings: Float[torch.Tensor, "num_sensors batch time npix fusion_dim"],
+        sensor_embeddings: Float[
+            torch.Tensor, "num_sensors batch time npix fusion_dim"
+        ],
     ) -> Float[torch.Tensor, "batch time npix fusion_dim"]:
         if not torch.compiler.is_compiling():
             if sensor_embeddings.ndim != 5:
@@ -358,10 +371,10 @@ class SensorEmbedder(Module):
     def aggregate(
         self,
         embedded_obs: Float[torch.Tensor, "nobs embed_dim"],
-        pix: Int[torch.Tensor, "nobs"],
-        local_channel: Int[torch.Tensor, "nobs"],
-        local_platform: Int[torch.Tensor, "nobs"],
-        batch_idx: Int[torch.Tensor, "nobs"],
+        pix: Int[torch.Tensor, " nobs"],
+        local_channel: Int[torch.Tensor, " nobs"],
+        local_platform: Int[torch.Tensor, " nobs"],
+        batch_idx: Int[torch.Tensor, " nobs"],
         nbatch: int,
         npix: int,
     ) -> Float[torch.Tensor, "nbatch npix out_dim"]:
@@ -403,12 +416,12 @@ class SensorEmbedder(Module):
 
     def _forward(
         self,
-        obs: Float[torch.Tensor, "nobs"],
+        obs: Float[torch.Tensor, " nobs"],
         float_metadata: Float[torch.Tensor, "nobs meta_dim"],
-        pix: Int[torch.Tensor, "nobs"],
-        local_channel: Int[torch.Tensor, "nobs"],
-        local_platform: Int[torch.Tensor, "nobs"],
-        obs_type: Int[torch.Tensor, "nobs"],
+        pix: Int[torch.Tensor, " nobs"],
+        local_channel: Int[torch.Tensor, " nobs"],
+        local_platform: Int[torch.Tensor, " nobs"],
+        obs_type: Int[torch.Tensor, " nobs"],
         offsets: Int[torch.Tensor, "batch time"],
         npix: int,
     ) -> Float[torch.Tensor, "batch time npix out_dim"]:
@@ -434,12 +447,12 @@ class SensorEmbedder(Module):
 
     def forward(
         self,
-        obs: Float[torch.Tensor, "nobs"],
+        obs: Float[torch.Tensor, " nobs"],
         float_metadata: Float[torch.Tensor, "nobs meta_dim"],
-        pix: Int[torch.Tensor, "nobs"],
-        local_channel: Int[torch.Tensor, "nobs"],
-        local_platform: Int[torch.Tensor, "nobs"],
-        obs_type: Int[torch.Tensor, "nobs"],
+        pix: Int[torch.Tensor, " nobs"],
+        local_channel: Int[torch.Tensor, " nobs"],
+        local_platform: Int[torch.Tensor, " nobs"],
+        obs_type: Int[torch.Tensor, " nobs"],
         offsets: Int[torch.Tensor, "batch time"],
         npix: int,
     ) -> Float[torch.Tensor, "batch time npix out_dim"]:
@@ -623,12 +636,12 @@ class MultiSensorObsEmbedder(Module):
 
     def forward(
         self,
-        obs: Float[torch.Tensor, "nobs"],
+        obs: Float[torch.Tensor, " nobs"],
         float_metadata: Float[torch.Tensor, "nobs meta_dim"],
-        pix: Int[torch.Tensor, "nobs"],
-        local_channel: Int[torch.Tensor, "nobs"],
-        local_platform: Int[torch.Tensor, "nobs"],
-        obs_type: Int[torch.Tensor, "nobs"],
+        pix: Int[torch.Tensor, " nobs"],
+        local_channel: Int[torch.Tensor, " nobs"],
+        local_platform: Int[torch.Tensor, " nobs"],
+        obs_type: Int[torch.Tensor, " nobs"],
         offsets: Int[torch.Tensor, "sensors batch time"],
         npix: int,
     ) -> Float[torch.Tensor, "batch fusion_dim time npix"]:
@@ -706,9 +719,7 @@ class MultiSensorObsEmbedder(Module):
             )  # (b, t, npix, c)
             sensor_embeddings.append(output)
 
-        sensor_embeddings = torch.stack(
-            sensor_embeddings, dim=0
-        )
+        sensor_embeddings = torch.stack(sensor_embeddings, dim=0)
 
         # Fuse sensors
         out = self.sensor_fusion(sensor_embeddings)  # (b, t, npix, c)

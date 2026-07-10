@@ -1,0 +1,324 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Multi-GPU CI: the nightly schedule runs both marker streams in full and
+# publishes their coverage shards, which the canonical coverage report
+# (nightly and PR Coverage jobs) merges in.  On PR mirror branches the
+# streams are opt-in: apply the `ci:multi-gpu` label before the next
+# mirror push, or use the manual dispatch for an immediate run on any ref.
+
+name: Multi-GPU GitHub CI
+
+on:
+  schedule:
+    # Run ahead of the 02:00 UTC canonical nightly (static has a 90-minute
+    # ceiling) so tonight's coverage shards are published before the
+    # canonical coverage job merges them -- one coherent nightly view
+    # instead of an off-by-one-night report.  The shared uv/JIT caches
+    # restored here are fail-open, so consuming the previous nightly's
+    # slots only costs wheel downloads on the rare day uv.lock changed.
+    - cron: "47 23 * * *"
+  workflow_dispatch:
+    inputs:
+      stream:
+        description: Multi-GPU stream to run
+        type: choice
+        options:
+          - both
+          - dynamic
+          - static
+        default: both
+        required: true
+      publish-coverage:
+        description: Publish coverage shards (default-branch dispatches only)
+        type: boolean
+        default: false
+        required: false
+  push:
+    # copy-pr-bot mirrors ready PRs into these trusted repository branches.
+    branches:
+      - "pull-request/[0-9]+"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: multigpu-ci-${{ github.ref }}
+  # Cancel obsolete PR revisions, but never interrupt nightly cache publishers.
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  PYTHON_VERSION: "3.12"
+  UV_VERSION: "0.11.7"
+  EXTRAS_TAG: "cu12,natten-cu12,utils-extras,mesh-extras,nn-extras,model-extras,datapipes-extras,uq-extras,gnns,sym,transformer-engine-cu12"
+  UV_CACHE_KEY_PREFIX: "uv-cache-nightly-cuda12.8.1-cudnn-devel-ubuntu24.04-py3.12-uv0.11.7-fullextras"
+  JIT_CACHE_KEY: "jit-cache-cuda12.8.1-cudnn-devel-ubuntu24.04-py3.12-latest"
+  JIT_CACHE_DIR: "/root/.cache/jit"
+  # Two GPUs match the runner inventory already used by this repository.
+  # Set both static repository variables together to exercise the cases that
+  # intentionally require four ranks when that pool becomes available.
+  MULTIGPU_DYNAMIC_NPROC: ${{ vars.MULTIGPU_DYNAMIC_NPROC || '2' }}
+  MULTIGPU_STATIC_NPROC: ${{ vars.MULTIGPU_STATIC_NPROC || '2' }}
+  UV_FROZEN: "1"
+  UV_NO_SYNC: "1"
+  PYVISTA_OFF_SCREEN: "true"
+
+jobs:
+  select:
+    name: multi-GPU selection
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+
+    steps:
+      - name: Check multi-GPU opt-in label
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF_NAME: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "$REF_NAME" =~ ^pull-request/([1-9][0-9]*)$ ]]; then
+            pr_number="${BASH_REMATCH[1]}"
+          else
+            echo "::error::Unexpected PR mirror ref: $REF_NAME"
+            exit 2
+          fi
+          labels=$(gh api "repos/${REPOSITORY}/pulls/${pr_number}" \
+            --jq '[.labels[].name] | join("\n")')
+          run=false
+          if grep -qxF "ci:multi-gpu" <<<"$labels"; then
+            run=true
+          fi
+          echo "run=${run}" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Multi-GPU PR selection"
+            echo
+            echo "PR #${pr_number}: multi-GPU=${run}"
+            echo
+            echo "Opt in with the \`ci:multi-gpu\` label before the next"
+            echo "mirror push, or use the manual workflow dispatch."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  multigpu_dynamic:
+    name: multigpu-dynamic
+    needs: select
+    if: >-
+      ${{ !cancelled() &&
+          (github.event_name == 'schedule' ||
+           (github.event_name == 'workflow_dispatch' &&
+            (inputs.stream == 'both' || inputs.stream == 'dynamic')) ||
+           needs.select.outputs.run == 'true') }}
+    runs-on: ${{ vars.MULTIGPU_DYNAMIC_RUNNER || 'linux-amd64-gpu-h100-latest-2' }}
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
+    container:
+      image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+      options: --shm-size=2g
+
+    steps:
+      - uses: actions/checkout@v5
+      - name: Run dynamic multi-GPU stream
+        uses: ./.github/actions/run-multigpu-tests
+        with:
+          stream: dynamic
+          nproc: ${{ env.MULTIGPU_DYNAMIC_NPROC }}
+          collect-coverage: >-
+            ${{ github.event_name == 'schedule' ||
+                (github.event_name == 'workflow_dispatch' &&
+                 inputs['publish-coverage'] && github.ref_type == 'branch' &&
+                 github.ref_name == github.event.repository.default_branch) }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          uv-version: ${{ env.UV_VERSION }}
+          extras: ${{ env.EXTRAS_TAG }}
+          uv-cache-key-prefix: ${{ env.UV_CACHE_KEY_PREFIX }}
+          jit-cache-key: ${{ env.JIT_CACHE_KEY }}
+          jit-cache-dir: ${{ env.JIT_CACHE_DIR }}
+          hf-token: ${{ secrets.HF_CI_DATA_TOKEN }}
+
+  multigpu_static:
+    name: multigpu-static
+    needs: select
+    if: >-
+      ${{ !cancelled() &&
+          (github.event_name == 'schedule' ||
+           (github.event_name == 'workflow_dispatch' &&
+            (inputs.stream == 'both' || inputs.stream == 'static')) ||
+           needs.select.outputs.run == 'true') }}
+    runs-on: ${{ vars.MULTIGPU_STATIC_RUNNER || 'linux-amd64-gpu-h100-latest-2' }}
+    timeout-minutes: 90
+    permissions:
+      actions: read
+      contents: read
+    container:
+      image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+      options: --shm-size=2g
+
+    steps:
+      - uses: actions/checkout@v5
+      - name: Run static multi-GPU stream
+        uses: ./.github/actions/run-multigpu-tests
+        with:
+          stream: static
+          nproc: ${{ env.MULTIGPU_STATIC_NPROC }}
+          collect-coverage: >-
+            ${{ github.event_name == 'schedule' ||
+                (github.event_name == 'workflow_dispatch' &&
+                 inputs['publish-coverage'] && github.ref_type == 'branch' &&
+                 github.ref_name == github.event.repository.default_branch) }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          uv-version: ${{ env.UV_VERSION }}
+          extras: ${{ env.EXTRAS_TAG }}
+          uv-cache-key-prefix: ${{ env.UV_CACHE_KEY_PREFIX }}
+          jit-cache-key: ${{ env.JIT_CACHE_KEY }}
+          jit-cache-dir: ${{ env.JIT_CACHE_DIR }}
+          hf-token: ${{ secrets.HF_CI_DATA_TOKEN }}
+
+  report_multigpu:
+    name: report multi-GPU results
+    needs: [multigpu_dynamic, multigpu_static]
+    if: >-
+      ${{ always() && !cancelled() &&
+          (needs.multigpu_dynamic.result != 'skipped' ||
+           needs.multigpu_static.result != 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+
+    steps:
+      - name: Check out repository for report annotations
+        id: checkout
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Download dynamic JUnit artifact
+        id: download_dynamic
+        if: ${{ needs.multigpu_dynamic.result != 'skipped' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: junit-multigpu-dynamic
+          path: ${{ runner.temp }}/multigpu-junit/dynamic
+
+      - name: Publish dynamic test report
+        if: >-
+          ${{ always() && steps.checkout.outcome == 'success' &&
+              steps.download_dynamic.outcome == 'success' }}
+        continue-on-error: true
+        uses: dorny/test-reporter@v3
+        with:
+          name: Multi-GPU dynamic Results
+          path: ${{ runner.temp }}/multigpu-junit/dynamic/*.xml
+          reporter: java-junit
+          fail-on-error: "false"
+          fail-on-empty: "false"
+
+      - name: Download static JUnit artifact
+        id: download_static
+        if: ${{ needs.multigpu_static.result != 'skipped' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: junit-multigpu-static
+          path: ${{ runner.temp }}/multigpu-junit/static
+
+      - name: Publish static test report
+        if: >-
+          ${{ always() && steps.checkout.outcome == 'success' &&
+              steps.download_static.outcome == 'success' }}
+        continue-on-error: true
+        uses: dorny/test-reporter@v3
+        with:
+          name: Multi-GPU static Results
+          path: ${{ runner.temp }}/multigpu-junit/static/*.xml
+          reporter: java-junit
+          fail-on-error: "false"
+          fail-on-empty: "false"
+
+  publish_dynamic_coverage:
+    name: publish dynamic coverage
+    needs: multigpu_dynamic
+    if: >-
+      ${{ !cancelled() && needs.multigpu_dynamic.result == 'success' &&
+          (github.event_name == 'schedule' ||
+           (github.event_name == 'workflow_dispatch' && inputs['publish-coverage'] &&
+            github.ref_type == 'branch' &&
+            github.ref_name == github.event.repository.default_branch)) }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+      - name: Download dynamic coverage shards
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-multigpu-dynamic
+          path: .
+      - name: Replace dynamic coverage cache
+        uses: ./.github/actions/replace-cache
+        with:
+          path: .coverage.pytest.multigpu-dynamic*
+          key: coverage-multigpu-dynamic-latest
+          description: dynamic multi-GPU coverage shards
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  publish_static_coverage:
+    name: publish static coverage
+    needs: multigpu_static
+    if: >-
+      ${{ !cancelled() && needs.multigpu_static.result == 'success' &&
+          (github.event_name == 'schedule' ||
+           (github.event_name == 'workflow_dispatch' && inputs['publish-coverage'] &&
+            github.ref_type == 'branch' &&
+            github.ref_name == github.event.repository.default_branch)) }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+      - name: Download static coverage shards
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-multigpu-static
+          path: .
+      - name: Replace static coverage cache
+        uses: ./.github/actions/replace-cache
+        with:
+          path: .coverage.pytest.multigpu-static*
+          key: coverage-multigpu-static-latest
+          description: static multi-GPU coverage shards
+          github-token: ${{ secrets.GITHUB_TOKEN }}

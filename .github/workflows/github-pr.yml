@@ -31,9 +31,6 @@
 #   the realized venv was not worth the complexity it cost.
 # ----------------------------------------------------------------------------
 
-# TO DO: THE COVERAGE LIMIT IS VERY LOW, BECAUSE THIS IS NOT USING GPU TESTS OR
-# THE DATA-DRIVEN TESTS.  RAISE THIS UP AGAIN EVENTUALLY.
-
 name: Pull Request Github CI
 on:
   workflow_dispatch:
@@ -196,6 +193,22 @@ jobs:
       with:
         path: .coverage*
         key: ${{ env.COVERAGE_CACHE_KEY_PREFIX }}-latest
+
+    # Nightly multi-GPU coverage shards (published by github-multigpu.yml)
+    # use the canonical `.coverage.pytest.` prefix so the plain `coverage
+    # combine` below folds them into the full report.  Restores fail open:
+    # a missing slot just means the report lacks multi-GPU lines.
+    - name: Restore nightly dynamic multi-GPU coverage from cache
+      uses: actions/cache/restore@v5
+      with:
+        path: .coverage.pytest.multigpu-dynamic*
+        key: coverage-multigpu-dynamic-latest
+
+    - name: Restore nightly static multi-GPU coverage from cache
+      uses: actions/cache/restore@v5
+      with:
+        path: .coverage.pytest.multigpu-static*
+        key: coverage-multigpu-static-latest
 
     - name: Restore JIT compilation cache from nightly
       uses: actions/cache/restore@v5

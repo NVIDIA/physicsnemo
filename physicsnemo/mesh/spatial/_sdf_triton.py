@@ -17,7 +17,7 @@
 """Triton per-thread depth-first nearest-triangle search for the torch SDF.
 
 This is the GPU fast path behind
-:func:`physicsnemo.mesh.spatial.sdf.signed_distance_field_mesh`. It reproduces
+:func:`physicsnemo.mesh.spatial.sdf.signed_distance_field`. It reproduces
 the design of a hand-written CUDA mesh-query kernel (one thread per query, a
 small per-thread stack, descend the nearer child first, prune subtrees whose
 AABB is farther than the running best) -- the only structure that achieves

@@ -112,7 +112,6 @@ class NumpyReader(Reader):
         self.default_values = default_values or {}
         self.file_pattern = file_pattern
         self.index_key = index_key
-        self._subsample_generator: torch.Generator | None = None
 
         if not self.path.exists():
             raise FileNotFoundError(f"Path not found: {self.path}")
@@ -168,22 +167,12 @@ class NumpyReader(Reader):
             return self._user_fields
         return self._available_fields
 
-    def set_generator(self, generator: torch.Generator) -> None:
-        """Assign a ``torch.Generator`` for reproducible subsampling."""
-        self._subsample_generator = generator
-
-    def set_epoch(self, epoch: int) -> None:
-        """Reseed the subsample RNG for a new epoch."""
-        if self._subsample_generator is not None:
-            self._subsample_generator.manual_seed(
-                self._subsample_generator.initial_seed() + epoch
-            )
-
     def _select_random_sections_from_slice(
         self,
         slice_start: int,
         slice_stop: int,
         n_points: int,
+        generator: Optional[torch.Generator] = None,
     ) -> slice:
         """
         Select a random contiguous slice from a range.
@@ -196,6 +185,9 @@ class NumpyReader(Reader):
             Stop index of the available range (exclusive).
         n_points : int
             Number of points to sample.
+        generator : torch.Generator, optional
+            Per-sample generator for reproducible, order-independent
+            selection. ``None`` uses the global default RNG.
 
         Returns
         -------
@@ -219,7 +211,7 @@ class NumpyReader(Reader):
             slice_start,
             slice_stop - n_points + 1,
             (1,),
-            generator=self._subsample_generator,
+            generator=generator,
         ).item()
         return slice(start, start + n_points)
 
@@ -228,6 +220,7 @@ class NumpyReader(Reader):
         npz: np.lib.npyio.NpzFile,
         index: Optional[int] = None,
         file_path: Optional[Path] = None,
+        generator: Optional[torch.Generator] = None,
     ) -> dict[str, torch.Tensor]:
         """
         Load data from an npz file.
@@ -241,6 +234,8 @@ class NumpyReader(Reader):
             None for directory mode (load entire arrays).
         file_path : Path, optional
             Path to the file (for error messages).
+        generator : torch.Generator, optional
+            Per-sample generator for reproducible coordinated subsampling.
 
         Returns
         -------
@@ -272,7 +267,7 @@ class NumpyReader(Reader):
                 if field in npz.files:
                     array_shape = npz[field].shape[0]
                     subsample_slice = self._select_random_sections_from_slice(
-                        0, array_shape, n_points
+                        0, array_shape, n_points, generator=generator
                     )
                     break
 
@@ -301,12 +296,17 @@ class NumpyReader(Reader):
 
     def _load_sample(self, index: int) -> dict[str, torch.Tensor]:
         """Load a single sample."""
+        # Derive a per-sample generator so coordinated subsampling is
+        # reproducible regardless of read order or worker thread.
+        generator = self._index_generator(index)
         if self._mode == "directory":
             file_path = self._files[index]
             with np.load(file_path) as npz:
-                return self._load_from_npz(npz, index=None, file_path=file_path)
+                return self._load_from_npz(
+                    npz, index=None, file_path=file_path, generator=generator
+                )
         else:  # single
-            return self._load_from_npz(self._data, index=index)
+            return self._load_from_npz(self._data, index=index, generator=generator)
 
     def __len__(self) -> int:
         """Return number of samples."""

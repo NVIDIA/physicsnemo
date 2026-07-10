@@ -30,6 +30,7 @@ from typing import Any, Iterator
 
 import torch
 
+from physicsnemo.datapipes._rng import spawn_generator
 from physicsnemo.datapipes.registry import register
 from physicsnemo.mesh import DomainMesh, Mesh
 
@@ -55,7 +56,8 @@ def _contiguous_block_slice(
     """
     if total <= k:
         return slice(0, total)
-    start = torch.randint(0, total - k + 1, (1,), generator=generator).item()
+    with torch.profiler.record_function("mesh_reader: randint.item() scalar readback"):
+        start = torch.randint(0, total - k + 1, (1,), generator=generator).item()
     return slice(start, start + k)
 
 
@@ -188,7 +190,10 @@ class MeshReader:
         self.include_index_in_metadata = include_index_in_metadata
         self.subsample_n_points = subsample_n_points
         self.subsample_n_cells = subsample_n_cells
-        self._subsample_generator: torch.Generator | None = None
+        # Base seed + epoch for deterministic per-index RNG (see
+        # :meth:`set_generator`). ``None`` means unseeded.
+        self._seed_base: int | None = None
+        self._epoch: int = 0
 
         if not self._root.exists():
             raise FileNotFoundError(f"Path not found: {self._root}")
@@ -212,38 +217,43 @@ class MeshReader:
         return len(self._paths)
 
     def set_generator(self, generator: torch.Generator) -> None:
-        """Assign a ``torch.Generator`` for reproducible subsampling.
+        """Assign a base seed for reproducible, order-independent subsampling.
 
         Called by :class:`MeshDataset` when the DataLoader provides a
-        seed.  Replaces any previously assigned generator.
+        seed.  Stores ``generator.initial_seed()`` as the base seed; each
+        sample then derives its own generator from
+        ``(base_seed, epoch, index)``, so subsampling is reproducible
+        regardless of read order or worker thread.
 
         Parameters
         ----------
         generator : torch.Generator
-            Generator to use for contiguous block selection.
+            Generator whose ``initial_seed()`` seeds all per-sample RNG.
         """
-        self._subsample_generator = generator
+        self._seed_base = generator.initial_seed()
 
     def set_epoch(self, epoch: int) -> None:
-        """Reseed the subsample RNG for a new epoch.
+        """Set the epoch used to vary per-sample RNG deterministically.
 
-        Produces a different (but deterministic) sequence of contiguous
-        blocks each epoch when a generator has been assigned via
-        :meth:`set_generator`.
+        The epoch is folded into each sample's derived seed, producing a
+        different (but deterministic) sequence of contiguous blocks each
+        epoch when a base seed has been assigned via :meth:`set_generator`.
         """
-        if self._subsample_generator is not None:
-            self._subsample_generator.manual_seed(
-                self._subsample_generator.initial_seed() + epoch
-            )
+        self._epoch = epoch
 
     def __getitem__(self, index: int) -> tuple[Mesh, dict[str, Any]]:
         mesh = self._load_sample(index)
 
+        generator = (
+            None
+            if self._seed_base is None
+            else spawn_generator(self._seed_base, self._epoch, index)
+        )
         mesh = _subsample_mesh(
             mesh,
             self.subsample_n_cells,
             self.subsample_n_points,
-            generator=self._subsample_generator,
+            generator=generator,
         )
 
         if self.pin_memory:
@@ -286,6 +296,8 @@ class DomainMeshReader:
         subsample_n_points: int | None = None,
         subsample_n_cells: int | None = None,
         extra_boundaries: dict[str, dict] | None = None,
+        drop_interior_cells: bool = False,
+        drop_in_file_boundaries: bool = False,
     ) -> None:
         """
         Initialize the domain mesh reader.
@@ -332,14 +344,41 @@ class DomainMeshReader:
                 extra_boundaries:
                   stl_geometry:
                     pattern: "*_single_solid.stl.pmsh"
+        drop_interior_cells : bool, default=False
+            If True, discard the interior mesh's cell connectivity (and
+            cell_data) immediately after load, turning it into a point
+            cloud.  This makes ``subsample_n_points`` take the cheap
+            contiguous-block path instead of the expensive
+            ``slice_points`` remap (which allocates an ``n_points`` map
+            and scatter-reads the full cell array from the memmap).  Use
+            for point-based models that consume only ``interior.points``
+            and ``interior.point_data`` (e.g. GeoTransolver volume) and
+            never the interior tet/cell topology.  Boundaries are
+            unaffected, so surface normals etc. still work.
+        drop_in_file_boundaries : bool, default=False
+            If True, discard the boundaries stored *in* the DomainMesh
+            file immediately after load (before subsampling and pinning).
+            ``extra_boundaries`` are added afterwards and are therefore
+            unaffected.  Use when the model consumes only the interior
+            (plus any ``extra_boundaries``) and never the in-file
+            boundaries -- e.g. a volume pipeline whose SDF comes from an
+            injected STL, where the in-file car-surface boundary would
+            otherwise be subsampled (an expensive ``slice_points`` remap,
+            GIL-held, that blocks worker-thread overlap) and pinned every
+            sample for nothing.
         """
         self._root = Path(path)
         self._pattern = pattern
         self.pin_memory = pin_memory
         self.include_index_in_metadata = include_index_in_metadata
+        self.drop_interior_cells = drop_interior_cells
+        self.drop_in_file_boundaries = drop_in_file_boundaries
         self.subsample_n_points = subsample_n_points
         self.subsample_n_cells = subsample_n_cells
-        self._subsample_generator: torch.Generator | None = None
+        # Base seed + epoch for deterministic per-index RNG (see
+        # :meth:`set_generator`). ``None`` means unseeded.
+        self._seed_base: int | None = None
+        self._epoch: int = 0
         self._extra_boundaries = extra_boundaries or {}
 
         if not self._root.exists():
@@ -359,45 +398,77 @@ class DomainMeshReader:
         return len(self._paths)
 
     def set_generator(self, generator: torch.Generator) -> None:
-        """Assign a ``torch.Generator`` for reproducible subsampling.
+        """Assign a base seed for reproducible, order-independent subsampling.
 
         Called by :class:`MeshDataset` when the DataLoader provides a
-        seed.  Replaces any previously assigned generator.
+        seed.  Stores ``generator.initial_seed()`` as the base seed; each
+        sample then derives its own generator from
+        ``(base_seed, epoch, index)``, so subsampling is reproducible
+        regardless of read order or worker thread.
 
         Parameters
         ----------
         generator : torch.Generator
-            Generator to use for contiguous block selection.
+            Generator whose ``initial_seed()`` seeds all per-sample RNG.
         """
-        self._subsample_generator = generator
+        self._seed_base = generator.initial_seed()
 
     def set_epoch(self, epoch: int) -> None:
-        """Reseed the subsample RNG for a new epoch.
+        """Set the epoch used to vary per-sample RNG deterministically.
 
-        Produces a different (but deterministic) sequence of contiguous
-        blocks each epoch when a generator has been assigned via
-        :meth:`set_generator`.
+        The epoch is folded into each sample's derived seed, producing a
+        different (but deterministic) sequence of contiguous blocks each
+        epoch when a base seed has been assigned via :meth:`set_generator`.
         """
-        if self._subsample_generator is not None:
-            self._subsample_generator.manual_seed(
-                self._subsample_generator.initial_seed() + epoch
-            )
+        self._epoch = epoch
 
     def __getitem__(self, index: int) -> tuple[DomainMesh, dict[str, Any]]:
         dm = self._load_sample(index)
 
+        # Trim unused data before subsample/pin. Both references are lazy (no
+        # memmap materialization here):
+        #  - drop_interior_cells: turn the interior into a point cloud so its
+        #    point subsample takes the cheap contiguous-block path instead of a
+        #    full slice_points remap + scattered reads.
+        #  - drop_in_file_boundaries: skip the in-file boundaries entirely so we
+        #    don't subsample (an expensive, GIL-held slice_points remap that
+        #    starves worker-thread overlap) or pin a surface the model ignores.
+        if (self.drop_interior_cells and dm.interior.n_cells > 0) or (
+            self.drop_in_file_boundaries and len(dm.boundary_names) > 0
+        ):
+            interior = dm.interior
+            if self.drop_interior_cells and interior.n_cells > 0:
+                interior = Mesh(
+                    points=interior.points,
+                    point_data=interior.point_data,
+                    global_data=interior.global_data,
+                )
+            boundaries = {} if self.drop_in_file_boundaries else dm.boundaries
+            dm = DomainMesh(
+                interior=interior,
+                boundaries=boundaries,
+                global_data=dm.global_data,
+            )
+
         if self.subsample_n_cells is not None or self.subsample_n_points is not None:
+            generator = (
+                None
+                if self._seed_base is None
+                else spawn_generator(self._seed_base, self._epoch, index)
+            )
             sub_kw = dict(
                 n_cells=self.subsample_n_cells,
                 n_points=self.subsample_n_points,
-                generator=self._subsample_generator,
+                generator=generator,
             )
+            interior = _subsample_mesh(dm.interior, **sub_kw)
+            boundaries = {
+                name: _subsample_mesh(dm.boundaries[name], **sub_kw)
+                for name in dm.boundary_names
+            }
             dm = DomainMesh(
-                interior=_subsample_mesh(dm.interior, **sub_kw),
-                boundaries={
-                    name: _subsample_mesh(dm.boundaries[name], **sub_kw)
-                    for name in dm.boundary_names
-                },
+                interior=interior,
+                boundaries=boundaries,
                 global_data=dm.global_data,
             )
 
