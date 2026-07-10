@@ -25,9 +25,11 @@ from physicsnemo.mesh.primitives.basic import single_triangle_3d
 
 
 def _domain():
+    wall = single_triangle_3d.load()
+    wall.global_data["wall_id"] = torch.tensor([7.0])
     return DomainMesh(
         interior=Mesh(points=torch.randn(12, 3)),
-        boundaries={"wall": single_triangle_3d.load()},
+        boundaries={"wall": wall},
         global_data={"U_inf": torch.tensor([3.0, 0.0, 4.0])},
     )
 
@@ -54,6 +56,16 @@ class TestComputeUnitGlobalVector:
         # The source vector is unchanged.
         torch.testing.assert_close(
             out.global_data["U_inf"], torch.tensor([3.0, 0.0, 4.0])
+        )
+
+    def test_submesh_global_data_untouched(self):
+        transform = ComputeUnitGlobalVector(
+            vector_field="U_inf", output_field="U_inf_dir"
+        )
+        out = transform.apply_to_domain(_domain())
+        assert "U_inf_dir" not in out.boundaries["wall"].global_data.keys()
+        torch.testing.assert_close(
+            out.boundaries["wall"].global_data["wall_id"], torch.tensor([7.0])
         )
 
     def test_source_dtype_preserved(self):
@@ -84,3 +96,31 @@ class TestComputeUnitGlobalVector:
         )
         with pytest.raises(ValueError, match="finite and positive"):
             ComputeUnitGlobalVector(vector_field="v", output_field="d")(mesh)
+
+    def test_integer_vector_raises(self):
+        mesh = Mesh(
+            points=torch.randn(5, 3),
+            global_data={"v": torch.tensor([3, 0, 4])},
+        )
+        with pytest.raises(ValueError, match="floating-point"):
+            ComputeUnitGlobalVector(vector_field="v", output_field="d")(mesh)
+
+    def test_batched_vector_raises(self):
+        mesh = Mesh(
+            points=torch.randn(5, 3),
+            global_data={"v": torch.tensor([[1.0, 0.0, 0.0], [0.0, 2.0, 0.0]])},
+        )
+        with pytest.raises(ValueError, match="single vector"):
+            ComputeUnitGlobalVector(vector_field="v", output_field="d")(mesh)
+
+    def test_same_output_field_raises(self):
+        with pytest.raises(ValueError, match="must differ"):
+            ComputeUnitGlobalVector(vector_field="v", output_field="v")
+
+    def test_registered_in_hydra_resolver(self):
+        from omegaconf import OmegaConf
+
+        import physicsnemo.datapipes  # noqa: F401  -- side-effect import
+
+        cfg = OmegaConf.create({"_target_": "${dp:ComputeUnitGlobalVector}"})
+        assert cfg._target_.endswith("ComputeUnitGlobalVector")

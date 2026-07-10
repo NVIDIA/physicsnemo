@@ -487,7 +487,8 @@ class ComputeUnitGlobalVector(MeshTransform):
     Computes ``global_data[output_field] = v / |v|`` from
     ``global_data[vector_field]``. The source vector is not modified, so
     pipelines that need the original (e.g. to convert model outputs back
-    to physical units) keep working.
+    to physical units) keep working. An existing field under
+    ``output_field`` is overwritten.
 
     Typical use: condition a model on a flow *direction* rather than a
     raw dimensional velocity. Place this transform before a rotation
@@ -504,6 +505,11 @@ class ComputeUnitGlobalVector(MeshTransform):
         output_field: str,
     ) -> None:
         super().__init__()
+        if output_field == vector_field:
+            raise ValueError(
+                f"{type(self).__name__}: output_field must differ from "
+                f"vector_field ({vector_field!r})."
+            )
         self._vector_field = vector_field
         self._output_field = output_field
 
@@ -514,10 +520,20 @@ class ComputeUnitGlobalVector(MeshTransform):
                 f"in global_data (available: {sorted(global_data.keys())!r})."
             )
         source = global_data[self._vector_field]
-        ### Normalize in float32 (safe for half-precision inputs), then
-        ### return in the source dtype so downstream geometric transforms
-        ### (whose matrices follow points.dtype) can operate on the result.
-        vector = source.float()
+        if not source.dtype.is_floating_point:
+            raise ValueError(
+                f"{type(self).__name__}: {self._vector_field!r} must be a "
+                f"floating-point tensor, got dtype {source.dtype}."
+            )
+        if source.ndim == 0 or source.numel() != source.shape[-1]:
+            raise ValueError(
+                f"{type(self).__name__}: {self._vector_field!r} must be a "
+                f"single vector, got shape {tuple(source.shape)}."
+            )
+        ### Normalize in at least float32 (half-precision norms can
+        ### overflow), then return in the source dtype so later geometric
+        ### transforms (whose matrices follow points.dtype) compose.
+        vector = source.to(torch.promote_types(source.dtype, torch.float32))
         norm = torch.linalg.vector_norm(vector)
         if not torch.isfinite(norm) or norm <= 0.0:
             raise ValueError(
