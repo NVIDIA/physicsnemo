@@ -417,9 +417,14 @@ class HEALPixUNet(Module):
             Hydra instantiable constraint configurations.
         """
         if constraints is not None:
-            self.constraints = [
-                instantiate(constraints[constraint]) for constraint in constraints
-            ]
+            # Use a ModuleList (rather than a plain list) so the constraint
+            # modules are part of the module tree: their buffers (e.g. the
+            # non-persistent ``thresholds`` and ``var_indices`` in
+            # ``NonnegativeConstraint``) are then correctly moved by
+            # ``.to(device)`` along with the rest of the model.
+            self.constraints = torch.nn.ModuleList(
+                [instantiate(constraints[constraint]) for constraint in constraints]
+            )
 
     def forward(
         self,

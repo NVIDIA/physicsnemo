@@ -27,7 +27,7 @@ import torch as th
 try:
     from apex.normalization import FusedLayerNorm
 
-    _APEX_AVAILABLE = True
+    _APEX_AVAILABLE = True  # pragma: no cover
 except ImportError:
     _APEX_AVAILABLE = False
 

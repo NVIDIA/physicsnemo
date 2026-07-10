@@ -23,22 +23,26 @@ import pytest
 import torch
 from _cln_reference import ConditionalLayerNormReference
 
-from physicsnemo.models.dlwp_healpix.layers.normalization import ConditionalLayerNorm
+from physicsnemo.models.dlwp_healpix.layers import normalization
+from physicsnemo.models.dlwp_healpix.layers.normalization import (
+    _APEX_AVAILABLE,
+    ConditionalLayerNorm,
+)
 from physicsnemo.nn import CappedGELU
 
 
-def _make_old_cln(condition_shape, channel_depth, **kwargs):
+def _make_old_cln(condition_shape, channel_depth, device="cpu", **kwargs):
     """Instantiate the reference (old) implementation."""
     return ConditionalLayerNormReference(
         condition_shape=condition_shape, channel_depth=channel_depth, **kwargs
-    ).cuda()
+    ).to(device)
 
 
-def _make_new_cln(condition_shape, channel_depth, **kwargs):
+def _make_new_cln(condition_shape, channel_depth, device="cpu", **kwargs):
     """Instantiate the optimized (new) implementation."""
     return ConditionalLayerNorm(
         condition_shape=condition_shape, channel_depth=channel_depth, **kwargs
-    ).cuda()
+    ).to(device)
 
 
 def _copy_old_to_new(old_cln, new_cln):
@@ -103,24 +107,36 @@ def _copy_old_to_new(old_cln, new_cln):
     new_cln.load_state_dict(new_sd)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+def _assert_forward_is_finite(
+    cln, channel_depth, condition_shape, device, n_cond=1, n_faces=12, height=4, width=4
+):
+    """Run a minimal forward pass and assert the output is finite; used by
+    the legacy-checkpoint-loading tests to confirm a (possibly
+    partially-loaded) module still produces a usable output."""
+    x = torch.randn(n_cond * n_faces, channel_depth, height, width, device=device)
+    cond = torch.randn(n_cond, condition_shape, device=device)
+    out = cln(x, cond)
+    assert torch.isfinite(out).all()
+    return out
+
+
 @pytest.mark.parametrize("n_cond", [1, 2, 4])
 @pytest.mark.parametrize("channels_last", [False, True])
 @pytest.mark.parametrize("scale_center", [0.0, 1.0])
-def test_old_vs_new_forward(n_cond, channels_last, scale_center):
+def test_old_vs_new_forward(device, n_cond, channels_last, scale_center):
     """Verify optimized CLN matches reference implementation with block-diagonal weight mapping."""
     C, H, W = 128, 16, 16
     cond_shape = 32
     B_nf = n_cond * 12
 
     torch.manual_seed(42)
-    old_cln = _make_old_cln(cond_shape, C, scale_center=scale_center)
+    old_cln = _make_old_cln(cond_shape, C, device=device, scale_center=scale_center)
 
-    new_cln = _make_new_cln(cond_shape, C, scale_center=scale_center)
+    new_cln = _make_new_cln(cond_shape, C, device=device, scale_center=scale_center)
     _copy_old_to_new(old_cln, new_cln)
 
-    x = torch.randn(B_nf, C, H, W, device="cuda")
-    cond = torch.randn(n_cond, cond_shape, device="cuda")
+    x = torch.randn(B_nf, C, H, W, device=device)
+    cond = torch.randn(n_cond, cond_shape, device=device)
 
     if channels_last:
         x = x.to(memory_format=torch.channels_last)
@@ -140,9 +156,8 @@ def test_old_vs_new_forward(n_cond, channels_last, scale_center):
         )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 @pytest.mark.parametrize("channels_last", [False, True])
-def test_old_vs_new_backward(channels_last):
+def test_old_vs_new_backward(device, channels_last):
     """Verify gradients match between old and new implementations."""
     C, H, W = 64, 8, 8
     cond_shape = 16
@@ -150,12 +165,12 @@ def test_old_vs_new_backward(channels_last):
     B_nf = n_cond * 12
 
     torch.manual_seed(42)
-    old_cln = _make_old_cln(cond_shape, C)
-    new_cln = _make_new_cln(cond_shape, C)
+    old_cln = _make_old_cln(cond_shape, C, device=device)
+    new_cln = _make_new_cln(cond_shape, C, device=device)
     _copy_old_to_new(old_cln, new_cln)
 
-    x_base = torch.randn(B_nf, C, H, W, device="cuda")
-    cond_base = torch.randn(n_cond, cond_shape, device="cuda")
+    x_base = torch.randn(B_nf, C, H, W, device=device)
+    cond_base = torch.randn(n_cond, cond_shape, device=device)
 
     if channels_last:
         x_base = x_base.to(memory_format=torch.channels_last)
@@ -180,20 +195,19 @@ def test_old_vs_new_backward(channels_last):
     )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 @pytest.mark.parametrize("channels_last", [False, True])
-def test_init_cln_to_zero_matches_layer_norm(channels_last):
+def test_init_cln_to_zero_matches_layer_norm(device, channels_last):
     """With scale_center=1.0 and init_cln_to_zero=True, CLN should behave like plain LayerNorm."""
     C, H, W = 64, 8, 8
     n_cond = 2
     B_nf = n_cond * 12
 
     torch.manual_seed(42)
-    cln = _make_new_cln(32, C, scale_center=1.0, init_cln_to_zero=True)
-    plain_ln = torch.nn.LayerNorm(C, elementwise_affine=False).cuda()
+    cln = _make_new_cln(32, C, device=device, scale_center=1.0, init_cln_to_zero=True)
+    plain_ln = torch.nn.LayerNorm(C, elementwise_affine=False).to(device)
 
-    x = torch.randn(B_nf, C, H, W, device="cuda")
-    cond = torch.randn(n_cond, 32, device="cuda")
+    x = torch.randn(B_nf, C, H, W, device=device)
+    cond = torch.randn(n_cond, 32, device=device)
 
     if channels_last:
         x = x.to(memory_format=torch.channels_last)
@@ -208,9 +222,8 @@ def test_init_cln_to_zero_matches_layer_norm(channels_last):
     )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 @pytest.mark.parametrize("channels_last", [False, True])
-def test_backward_gradients(channels_last):
+def test_backward_gradients(device, channels_last):
     """Verify gradients flow through CLN and are finite."""
     C, H, W = 64, 8, 8
     cond_shape = 16
@@ -218,10 +231,10 @@ def test_backward_gradients(channels_last):
     B_nf = n_cond * 12
 
     torch.manual_seed(42)
-    cln = _make_new_cln(cond_shape, C)
+    cln = _make_new_cln(cond_shape, C, device=device)
 
-    x = torch.randn(B_nf, C, H, W, device="cuda")
-    cond = torch.randn(n_cond, cond_shape, device="cuda")
+    x = torch.randn(B_nf, C, H, W, device=device)
+    cond = torch.randn(n_cond, cond_shape, device=device)
 
     if channels_last:
         x = x.to(memory_format=torch.channels_last)
@@ -242,8 +255,7 @@ def test_backward_gradients(channels_last):
         assert torch.isfinite(p.grad).all(), f"Non-finite gradient for {name}"
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
-def test_backward_channels_last_matches_contiguous():
+def test_backward_channels_last_matches_contiguous(device):
     """Verify channels_last and contiguous inputs produce the same gradients."""
     C, H, W = 64, 8, 8
     cond_shape = 16
@@ -251,10 +263,10 @@ def test_backward_channels_last_matches_contiguous():
     B_nf = n_cond * 12
 
     torch.manual_seed(42)
-    cln = _make_new_cln(cond_shape, C)
+    cln = _make_new_cln(cond_shape, C, device=device)
 
-    x_base = torch.randn(B_nf, C, H, W, device="cuda")
-    cond_base = torch.randn(n_cond, cond_shape, device="cuda")
+    x_base = torch.randn(B_nf, C, H, W, device=device)
+    cond_base = torch.randn(n_cond, cond_shape, device=device)
 
     # Contiguous path
     x_cont = x_base.clone().detach().requires_grad_(True)
@@ -286,20 +298,19 @@ def test_backward_channels_last_matches_contiguous():
     )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
-def test_load_old_checkpoint():
+def test_load_old_checkpoint(device):
     """Verify new CLN can load old-format state dict via _load_from_state_dict."""
     C, cond_shape = 64, 16
     torch.manual_seed(42)
-    old_cln = _make_old_cln(cond_shape, C)
+    old_cln = _make_old_cln(cond_shape, C, device=device)
     old_sd = old_cln.state_dict()
 
-    new_cln = _make_new_cln(cond_shape, C)
+    new_cln = _make_new_cln(cond_shape, C, device=device)
     new_cln.load_state_dict(old_sd, strict=False)
 
     # Verify outputs match after loading old checkpoint
-    x = torch.randn(12, C, 8, 8, device="cuda")
-    cond = torch.randn(1, cond_shape, device="cuda")
+    x = torch.randn(12, C, 8, 8, device=device)
+    cond = torch.randn(1, cond_shape, device=device)
 
     with torch.no_grad():
         out_old = old_cln(x, cond)
@@ -312,8 +323,7 @@ def test_load_old_checkpoint():
     )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
-def test_load_old_checkpoint_with_capped_gelu():
+def test_load_old_checkpoint_with_capped_gelu(device):
     """Verify strict loading of old CLN checkpoints that use CappedGELU activations."""
     C, cond_shape = 64, 16
     mlp_hidden_dims = [32, 32]
@@ -323,6 +333,7 @@ def test_load_old_checkpoint_with_capped_gelu():
     old_cln = _make_old_cln(
         cond_shape,
         C,
+        device=device,
         mlp_hidden_dims=mlp_hidden_dims,
         activation=activation,
     )
@@ -332,6 +343,7 @@ def test_load_old_checkpoint_with_capped_gelu():
     new_cln = _make_new_cln(
         cond_shape,
         C,
+        device=device,
         mlp_hidden_dims=mlp_hidden_dims,
         activation=CappedGELU(),
     )
@@ -339,8 +351,8 @@ def test_load_old_checkpoint_with_capped_gelu():
     assert not missing
     assert not unexpected
 
-    x = torch.randn(12, C, 8, 8, device="cuda")
-    cond = torch.randn(1, cond_shape, device="cuda")
+    x = torch.randn(12, C, 8, 8, device=device)
+    cond = torch.randn(1, cond_shape, device=device)
 
     with torch.no_grad():
         out_old = old_cln(x, cond)
@@ -349,3 +361,246 @@ def test_load_old_checkpoint_with_capped_gelu():
     assert torch.allclose(out_old, out_new, atol=1e-5, rtol=1e-4), (
         f"Max diff after loading old CappedGELU checkpoint: {(out_old - out_new).abs().max().item()}"
     )
+
+
+@pytest.mark.parametrize("hidden_dims", [[], [64]])
+def test_old_vs_new_forward_hidden_dims_variation(device, hidden_dims):
+    """Verify the block-diagonal weight mapping generalizes to MLP depths other
+    than the default two hidden layers, including the degenerate zero-hidden-layer
+    case (a single Linear directly from ``condition_shape`` to the output).
+    """
+    C, H, W = 32, 8, 8
+    cond_shape = 16
+    n_cond = 2
+    B_nf = n_cond * 12
+
+    torch.manual_seed(42)
+    old_cln = _make_old_cln(cond_shape, C, device=device, mlp_hidden_dims=hidden_dims)
+    new_cln = _make_new_cln(cond_shape, C, device=device, mlp_hidden_dims=hidden_dims)
+    _copy_old_to_new(old_cln, new_cln)
+
+    x = torch.randn(B_nf, C, H, W, device=device)
+    cond = torch.randn(n_cond, cond_shape, device=device)
+
+    with torch.no_grad():
+        out_old = old_cln(x, cond)
+        out_new = new_cln(x, cond)
+
+    assert torch.allclose(out_old, out_new, atol=1e-5, rtol=1e-4), (
+        f"Max diff: {(out_old - out_new).abs().max().item()}"
+    )
+
+
+def test_norm_op_apex_raises_when_unavailable():
+    """``norm_op='apex'`` must raise an informative ImportError when the
+    ``apex`` package isn't installed, rather than silently falling back or
+    failing with an unrelated error later on.
+    """
+    if _APEX_AVAILABLE:
+        pytest.skip("apex is installed in this environment")
+
+    with pytest.raises(ImportError, match="Apex FusedLayerNorm requested"):
+        ConditionalLayerNorm(condition_shape=16, channel_depth=8, norm_op="apex")
+
+
+def test_norm_op_invalid_value_leaves_norm_unset():
+    """``norm_op`` outside {"torch", "apex"} is not validated; document the
+    current behavior of silently skipping norm construction rather than
+    raising, so a regression (e.g. an accidental typo check) is caught.
+    """
+    cln = ConditionalLayerNorm(condition_shape=16, channel_depth=8, norm_op="bogus")
+    assert not hasattr(cln, "norm")
+
+
+def test_norm_op_apex_available_uses_fused_layer_norm(monkeypatch):
+    """When apex *is* available, ``norm_op='apex'`` must construct a
+    ``FusedLayerNorm`` instead of ``torch.nn.LayerNorm``. Exercised via a
+    stand-in class since apex isn't a hard dependency of this environment.
+    """
+
+    class _FakeFusedLayerNorm(torch.nn.Module):
+        def __init__(self, channel_depth, elementwise_affine=False):
+            super().__init__()
+            self.channel_depth = channel_depth
+            self.elementwise_affine = elementwise_affine
+
+        def forward(self, x):
+            return x
+
+    monkeypatch.setattr(normalization, "_APEX_AVAILABLE", True)
+    monkeypatch.setattr(
+        normalization, "FusedLayerNorm", _FakeFusedLayerNorm, raising=False
+    )
+
+    cln = ConditionalLayerNorm(condition_shape=16, channel_depth=8, norm_op="apex")
+    assert isinstance(cln.norm, _FakeFusedLayerNorm)
+    assert cln.norm.channel_depth == 8
+
+
+def test_make_mlp_skips_activation_when_falsy():
+    """``_make_mlp`` only inserts an activation module between hidden Linear
+    layers when ``activation`` is truthy; verify the skip path directly since
+    the public constructor always coerces ``None`` to ``nn.Identity()``
+    (itself truthy), making this otherwise unreachable through ``__init__``.
+    """
+    cln = ConditionalLayerNorm(condition_shape=16, channel_depth=8, mlp_hidden_dims=[])
+    mlp = cln._make_mlp(in_dim=4, hidden_dims=[8, 8], out_dim=2, activation=False)
+    assert all(isinstance(layer, torch.nn.Linear) for layer in mlp)
+    assert len(mlp) == 3  # one Linear per hidden dim, plus the output Linear
+
+
+def test_cln_affine_eager_matches_compiled(monkeypatch, device):
+    """``_cln_affine`` is wrapped in ``@torch.compile``, which bypasses
+    coverage tracing of its body; run it once via the (functionally
+    identical) eager callable dynamo wraps to confirm equivalence and
+    exercise the underlying implementation directly.
+    """
+    eager_cln_affine = normalization._cln_affine._torchdynamo_orig_callable
+
+    C, H, W = 16, 4, 4
+    cond_shape = 8
+    n_cond = 2
+    n_faces = 12
+
+    torch.manual_seed(0)
+    x_norm = torch.randn(n_cond * n_faces, H, W, C, device=device)
+    gamma_raw = torch.randn(n_cond, C, device=device)
+    beta = torch.randn(n_cond, C, device=device)
+    scale_center = 1.0
+
+    compiled_out = normalization._cln_affine(
+        x_norm, gamma_raw, beta, scale_center, n_faces
+    )
+    eager_out = eager_cln_affine(x_norm, gamma_raw, beta, scale_center, n_faces)
+
+    assert torch.allclose(compiled_out, eager_out)
+
+    # also drive it end-to-end through ConditionalLayerNorm.forward with the
+    # module-level name patched to the eager callable
+    monkeypatch.setattr(normalization, "_cln_affine", eager_cln_affine)
+    cln = ConditionalLayerNorm(
+        condition_shape=cond_shape, channel_depth=C, mlp_hidden_dims=[]
+    ).to(device)
+    _assert_forward_is_finite(
+        cln, C, cond_shape, device, n_cond=n_cond, n_faces=n_faces, height=H, width=W
+    )
+
+
+def test_load_from_state_dict_ignores_malformed_activation_buffer_keys(device):
+    """The activation-buffer migration loop must gracefully skip legacy keys
+    that don't fit the expected ``"<index>.<name>"`` shape (no dot, or a
+    non-numeric index), rather than raising.
+    """
+    C, cond_shape = 16, 8
+    old_cln = _make_old_cln(cond_shape, C, device=device, mlp_hidden_dims=[])
+    old_sd = old_cln.state_dict()
+
+    # no dot after the gamma_mlp prefix at all
+    old_sd["gamma_mlp.malformed"] = torch.zeros(1)
+    # dot present, but the leading segment isn't a valid layer index
+    old_sd["gamma_mlp.bogus.cap"] = torch.zeros(1)
+
+    new_cln = _make_new_cln(cond_shape, C, device=device, mlp_hidden_dims=[])
+    missing, unexpected = new_cln.load_state_dict(old_sd, strict=False)
+
+    # both malformed keys are left untouched (never merged into the fused
+    # MLP), so they remain unexpected for the new module
+    assert "gamma_mlp.malformed" in unexpected
+    assert "gamma_mlp.bogus.cap" in unexpected
+
+    _assert_forward_is_finite(new_cln, C, cond_shape, device)
+
+
+def test_load_from_state_dict_activation_buffer_without_beta_counterpart(device):
+    """An activation submodule buffer (e.g. ``CappedGELU``'s ``cap``) present
+    on the gamma MLP but missing from the beta MLP (malformed/partial
+    checkpoint) must still migrate the gamma-side buffer, and must not raise
+    trying to remove the (absent) beta-side key.
+    """
+    C, cond_shape = 16, 8
+    mlp_hidden_dims = [8]
+    old_cln = _make_old_cln(
+        cond_shape,
+        C,
+        device=device,
+        mlp_hidden_dims=mlp_hidden_dims,
+        activation=CappedGELU(),
+    )
+    old_sd = old_cln.state_dict()
+    assert "gamma_mlp.1.cap" in old_sd
+    assert "beta_mlp.1.cap" in old_sd
+
+    # drop only the beta-side activation buffer
+    del old_sd["beta_mlp.1.cap"]
+
+    new_cln = _make_new_cln(
+        cond_shape,
+        C,
+        device=device,
+        mlp_hidden_dims=mlp_hidden_dims,
+        activation=CappedGELU(),
+    )
+    missing, unexpected = new_cln.load_state_dict(old_sd, strict=False)
+
+    # the gamma-side buffer was still migrated into the fused MLP
+    assert "gamma_beta_mlp.1.cap" not in unexpected
+    assert "gamma_mlp.1.cap" not in unexpected
+
+    _assert_forward_is_finite(new_cln, C, cond_shape, device)
+
+
+def test_load_from_state_dict_skips_unmatched_gamma_key(device):
+    """A legacy state dict where a ``gamma_mlp`` key has no matching
+    ``beta_mlp`` counterpart (e.g. a malformed/partial checkpoint) must be
+    skipped rather than merged, and loading must not raise.
+    """
+    C, cond_shape = 32, 16
+    torch.manual_seed(42)
+    old_cln = _make_old_cln(cond_shape, C, device=device, mlp_hidden_dims=[])
+    old_sd = old_cln.state_dict()
+
+    # drop the beta counterpart for the (only) gamma layer, simulating a
+    # malformed/partial legacy checkpoint
+    del old_sd["beta_mlp.0.weight"]
+    del old_sd["beta_mlp.0.bias"]
+
+    new_cln = _make_new_cln(cond_shape, C, device=device, mlp_hidden_dims=[])
+    missing, unexpected = new_cln.load_state_dict(old_sd, strict=False)
+
+    # the unmatched gamma key is left untouched (not merged into
+    # gamma_beta_mlp), so it shows up as unexpected for the new module, and
+    # the fused MLP's own parameters are all reported missing since nothing
+    # could be merged
+    assert "gamma_mlp.0.weight" in unexpected
+    assert "gamma_mlp.0.bias" in unexpected
+    assert any(k.startswith("gamma_beta_mlp.") for k in missing)
+
+    # forward should still run without error using the (unloaded, default
+    # initialized) fused MLP weights
+    _assert_forward_is_finite(new_cln, C, cond_shape, device)
+
+
+def test_load_new_format_checkpoint_roundtrip(device):
+    """A state dict already in the fused ``gamma_beta_mlp`` format (i.e. saved
+    from a ``ConditionalLayerNorm`` instance, with no legacy ``gamma_mlp``/
+    ``beta_mlp`` keys) should load directly with no remapping and reproduce
+    identical outputs.
+    """
+    C, cond_shape = 32, 16
+    torch.manual_seed(42)
+    source = _make_new_cln(cond_shape, C, device=device)
+    state_dict = source.state_dict()
+    assert not any(k.startswith("gamma_mlp.") for k in state_dict)
+
+    target = _make_new_cln(cond_shape, C, device=device)
+    missing, unexpected = target.load_state_dict(state_dict, strict=True)
+    assert not missing
+    assert not unexpected
+
+    x = torch.randn(12, C, 4, 4, device=device)
+    cond = torch.randn(1, cond_shape, device=device)
+    with torch.no_grad():
+        out_source = source(x, cond)
+        out_target = target(x, cond)
+
+    assert torch.allclose(out_source, out_target, atol=1e-6, rtol=1e-5)
