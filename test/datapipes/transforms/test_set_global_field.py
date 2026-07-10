@@ -24,6 +24,7 @@ from physicsnemo.mesh.primitives.basic import single_triangle_3d
 
 
 def _domain():
+    """Build a small DomainMesh with one boundary and one global field."""
     return DomainMesh(
         interior=Mesh(points=torch.randn(12, 3)),
         boundaries={"wall": single_triangle_3d.load()},
@@ -32,26 +33,38 @@ def _domain():
 
 
 class TestSetGlobalFieldDomainLevel:
+    """SetGlobalField writes both domain-level and sub-mesh global_data."""
+
     def test_domain_level_record_written(self):
+        """The injected field lands in domain-level and sub-mesh global_data."""
         transform = SetGlobalField(fields={"reference_length": [1.0]})
         out = transform.apply_to_domain(_domain())
-        # The domain-level global_data carries the field...
         assert "reference_length" in out.global_data.keys()
         torch.testing.assert_close(
             out.global_data["reference_length"],
             torch.tensor([1.0]),
         )
-        # ...and the sub-mesh broadcast is preserved.
         assert "reference_length" in out.interior.global_data.keys()
         assert "reference_length" in out.boundaries["wall"].global_data.keys()
 
     def test_existing_domain_fields_preserved(self):
+        """Fields already in domain-level global_data survive injection."""
         out = SetGlobalField(fields={"x": [2.0]}).apply_to_domain(_domain())
         torch.testing.assert_close(
             out.global_data["U_inf"], torch.tensor([3.0, 0.0, 4.0])
         )
 
+    def test_existing_domain_field_overwritten(self):
+        """Injecting an existing key overwrites it, as documented."""
+        out = SetGlobalField(fields={"U_inf": [1.0, 0.0, 0.0]}).apply_to_domain(
+            _domain()
+        )
+        torch.testing.assert_close(
+            out.global_data["U_inf"], torch.tensor([1.0, 0.0, 0.0])
+        )
+
     def test_plain_mesh_path_unchanged(self):
+        """The single-Mesh path still injects into the mesh's global_data."""
         mesh = Mesh(points=torch.randn(5, 3))
         out = SetGlobalField(fields={"x": [2.0]})(mesh)
         torch.testing.assert_close(out.global_data["x"], torch.tensor([2.0]))
