@@ -38,7 +38,7 @@ from tensordict import NonTensorData, TensorDict, tensorclass
 
 from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
 from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
-from physicsnemo.mesh.transformations.deform import displace, morph
+from physicsnemo.mesh.transformations.deform import displace, morph, rbf_morph
 from physicsnemo.mesh.transformations.geometric import (
     rotate,
     scale,
@@ -2708,6 +2708,39 @@ class Mesh:
             radius=radius,
             point_weights=point_weights,
             kernel=kernel,
+            implementation=implementation,
+        )
+
+    def rbf_morph(
+        self,
+        control_points: torch.Tensor,
+        control_displacements: torch.Tensor,
+        *,
+        kernel: Literal["thin_plate_spline"] = "thin_plate_spline",
+        polynomial: builtins.bool = True,
+        smoothing: builtins.float = 0.0,
+        point_weights: str | tuple[str, ...] | torch.Tensor | None = None,
+        implementation: Literal["torch", "warp"] | None = None,
+    ) -> "Mesh":
+        """Morph points with a global thin-plate-spline RBF field.
+
+        Convenience wrapper for
+        :func:`physicsnemo.mesh.transformations.deform.rbf_morph`, which
+        documents all parameters and numerical behavior.
+
+        Returns
+        -------
+        Mesh
+            New mesh with morphed points, unchanged connectivity and fields.
+        """
+        return rbf_morph(
+            self,
+            control_points,
+            control_displacements,
+            kernel=kernel,
+            polynomial=polynomial,
+            smoothing=smoothing,
+            point_weights=point_weights,
             implementation=implementation,
         )
 

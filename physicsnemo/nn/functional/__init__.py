@@ -43,6 +43,7 @@ from .geometry import (
     mesh_to_voxel_fraction,
     morph_points,
     ray_mesh_intersect,
+    rbf_morph_points,
     signed_distance_field,
 )
 from .interpolation import (
@@ -87,6 +88,7 @@ __all__ = [
     "mesh_poisson_disk_sample",
     "mesh_to_voxel_fraction",
     "morph_points",
+    "rbf_morph_points",
     "na1d",
     "na2d",
     "na3d",

@@ -41,12 +41,14 @@ Deformations
 
 .. currentmodule:: physicsnemo.mesh.transformations.deform
 
-Dense displacement and sparse control-point morphing are available from the
-``deform`` namespace and as methods on :class:`~physicsnemo.mesh.mesh.Mesh`.
+Dense displacement, compact sparse-control morphing, and global radial-basis
+morphing are available from the ``deform`` namespace and as methods on
+:class:`~physicsnemo.mesh.mesh.Mesh`.
 
-The mesh methods wrap the tensor-level
-:func:`~physicsnemo.nn.functional.displace_points` and
-:func:`~physicsnemo.nn.functional.morph_points` operations.
+The corresponding tensor-level operations are
+:func:`~physicsnemo.nn.functional.displace_points`,
+:func:`~physicsnemo.nn.functional.morph_points`, and
+:func:`~physicsnemo.nn.functional.rbf_morph_points`.
 
 Dense displacement accepts a tensor or a point-data key (including a nested
 tuple key). The operation returns a new mesh without changing ``mesh.points``.
@@ -154,6 +156,118 @@ and magnitudes.
    :alt: Original sphere and single-control and multiple-control sphere morphing
    :width: 100%
 
+Global RBF Morphing
+^^^^^^^^^^^^^^^^^^^
+
+Radial-basis morphing fits one global displacement field through sparse
+handles. With zero smoothing, the fitted field interpolates every prescribed
+control displacement before optional point weights are applied. Unlike compact
+Shepard morphing, every control generally influences every point, so fixed
+controls are useful as anchors.
+
+The standard affine polynomial tail reproduces affine displacement fields and
+makes the thin-plate-spline system well posed when the controls span the
+coordinate space.
+
+.. rubric:: Two-Dimensional Example
+
+A mesh with ``n_spatial_dims=2`` requires at least three non-collinear controls
+when the affine tail is enabled. This example fixes the four corners of a
+triangulated square and moves a fifth handle at the midpoint of its upper edge.
+
+.. code:: python
+
+    import torch
+    from physicsnemo.mesh.primitives.planar import unit_square
+
+    mesh_2d = unit_square.load(subdivisions=4)
+    controls_2d = mesh_2d.points.new_tensor(
+        [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0.5, 1.0]]
+    )
+    displacements_2d = torch.zeros_like(controls_2d)
+    displacements_2d[-1] = controls_2d.new_tensor([0.15, 0.35])
+
+    morphed_2d = mesh_2d.rbf_morph(
+        controls_2d,
+        displacements_2d,
+        kernel="thin_plate_spline",
+        polynomial=True,
+        smoothing=0.0,
+    )
+
+    handle_index = torch.linalg.vector_norm(
+        mesh_2d.points - controls_2d[-1], dim=1
+    ).argmin()
+    torch.testing.assert_close(
+        morphed_2d.points[handle_index],
+        controls_2d[-1] + displacements_2d[-1],
+        atol=2.0e-5,
+        rtol=2.0e-5,
+    )
+
+The corner controls remain fixed while the upper edge and interior deform
+smoothly. The hollow green marker in the output panel shows the handle's source
+position.
+
+.. figure:: /img/mesh/square_rbf_morph.png
+   :alt: Original triangulated square and its two-dimensional global RBF deformation
+   :width: 100%
+
+.. rubric:: Three-Dimensional Example
+
+In three dimensions the affine tail requires at least four controls spanning
+the coordinate space; practical layouts usually use more. The sphere example
+uses its six axis-extreme vertices as controls.
+
+.. code:: python
+
+    control_indices = torch.stack(
+        (
+            mesh.points[:, 2].argmax(),
+            mesh.points[:, 2].argmin(),
+            mesh.points[:, 0].argmax(),
+            mesh.points[:, 0].argmin(),
+            mesh.points[:, 1].argmax(),
+            mesh.points[:, 1].argmin(),
+        )
+    )
+    rbf_controls = mesh.points[control_indices]
+    rbf_displacements = torch.zeros_like(rbf_controls)
+    rbf_displacements[0, 2] = 0.55
+
+    exact_rbf = mesh.rbf_morph(
+        rbf_controls,
+        rbf_displacements,
+        kernel="thin_plate_spline",
+        polynomial=True,
+        smoothing=0.0,
+    )
+
+    torch.testing.assert_close(
+        exact_rbf.points[control_indices],
+        rbf_controls + rbf_displacements,
+        atol=2.0e-5,
+        rtol=2.0e-5,
+    )
+
+``smoothing=0.0`` gives exact interpolation. A positive smoothing value adds
+diagonal regularization and deliberately relaxes exactness for improved
+conditioning. Float64 is recommended for poorly scaled or nearly degenerate
+control layouts.
+
+Both evaluation backends use PyTorch for the small dense coefficient solve.
+The Warp backend fuses evaluation over the much larger mesh point set without
+materializing its full point/control kernel matrix.
+
+Orange controls are fixed anchors. Green controls mark moved handles, and the
+arrows show their displacement directions. The labels give the prescribed
+magnitudes. The deformed surfaces interpolate all six control displacements
+exactly.
+
+.. figure:: /img/mesh/sphere_rbf_morph.png
+   :alt: Original sphere and one-handle and two-handle exact RBF deformations
+   :width: 100%
+
 Domain Meshes
 ^^^^^^^^^^^^^
 
@@ -166,6 +280,11 @@ point counts can differ. Every resolved field must use one common dtype across
 the domain: bool for a hard mask, or the same floating dtype as the mesh points.
 Coincident points remain coincident under a point-weight key only when their
 resolved values also match.
+
+:meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.rbf_morph` follows the same
+component and point-weight rules while fitting one global RBF field. The
+coefficient system is solved once, and the combined interior and boundary
+points are evaluated together before the component meshes are rebuilt.
 
 .. code:: python
 
@@ -207,8 +326,8 @@ lazily; topology caches are retained.
 
 .. warning::
 
-   Displacement and morphing do not detect or repair inverted, degenerate, or
-   self-intersecting output cells. Call
+   Displacement, compact morphing, and RBF morphing do not detect or repair
+   inverted, degenerate, or self-intersecting output cells. Call
    :meth:`~physicsnemo.mesh.mesh.Mesh.validate` or
    :meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.validate` explicitly when a
    deformation could compromise validity.
@@ -216,6 +335,8 @@ lazily; topology caches are retained.
 .. autofunction:: displace
 
 .. autofunction:: morph
+
+.. autofunction:: rbf_morph
 
 Projections
 -----------

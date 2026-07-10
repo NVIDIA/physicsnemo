@@ -56,13 +56,52 @@ Sparse Control-Point Morphing
 This allows an optimizer—or a model producing the control displacements—to
 learn a deformation from a differentiable objective on ``morphed``.
 
+Global RBF Morphing
+-------------------
+
+.. autofunction:: physicsnemo.nn.functional.rbf_morph_points
+
+.. code:: python
+
+    import torch
+    from physicsnemo.nn.functional import rbf_morph_points
+
+    points = torch.tensor(
+        [[0.25, 0.25], [0.75, 0.25], [0.75, 0.75], [0.25, 0.75]],
+        requires_grad=True,
+    )
+    controls = torch.tensor(
+        [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+        requires_grad=True,
+    )
+    control_displacements = torch.tensor(
+        [[0.0, 0.0], [0.0, 0.0], [0.15, 0.25], [0.0, 0.0]],
+        requires_grad=True,
+    )
+
+    exact = rbf_morph_points(
+        points,
+        controls,
+        control_displacements,
+        kernel="thin_plate_spline",
+        polynomial=True,
+        smoothing=0.0,
+    )
+    exact.square().mean().backward()
+
+With zero smoothing, the fitted field interpolates every control displacement
+exactly. The affine polynomial tail also reproduces affine displacement fields.
+A positive ``smoothing`` value improves conditioning by relaxing exact
+interpolation. Thin-plate-spline fields have global support, unlike the compact
+Shepard field used by :func:`~physicsnemo.nn.functional.morph_points`.
+
 Performance and Compilation
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Dense point displacement uses Torch on every device. Morphing uses Torch by
-default on CPU and Warp by default on CUDA for sparse control sets. If Warp is
-unavailable, automatic CUDA dispatch falls back to Torch, while explicitly
-requesting ``implementation="warp"`` for morphing raises an ``ImportError``.
+Dense point displacement uses Torch on every device. Compact and RBF morphing
+use Torch by default on CPU and Warp by default on CUDA. If Warp is unavailable,
+automatic CUDA dispatch falls back to Torch, while explicitly requesting
+``implementation="warp"`` raises an ``ImportError``.
 For a repeatedly evaluated, fixed-shape CUDA morph wrapped in
 :func:`torch.compile`, benchmark ``implementation="torch"`` as well; compiler
 fusion can make that path faster after its one-time compilation cost. Keep the
@@ -75,10 +114,20 @@ Pass all simultaneous controls in one call. For a
 interior and boundary queries into one field evaluation before rebuilding the
 individual component meshes.
 
+RBF morphing additionally solves a dense control system with cubic cost
+in ``n_controls``. Both backends use the same differentiable PyTorch solve;
+``implementation="warp"`` selects a fused Warp evaluator for the larger
+point/control phase. The checked coefficient solve is not supported inside
+CUDA Graph capture; use :func:`torch.compile` when compiled execution is needed.
+
 For connectivity-preserving object APIs, use
 :meth:`~physicsnemo.mesh.mesh.Mesh.displace`,
 :meth:`~physicsnemo.mesh.mesh.Mesh.morph`, or
-:meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.morph`.
+:meth:`~physicsnemo.mesh.mesh.Mesh.rbf_morph`. A
+:class:`~physicsnemo.mesh.domain_mesh.DomainMesh` provides
+:meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.morph` and
+:meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.rbf_morph` for shared sparse
+fields across all components.
 
 Mesh Poisson Disk Sample
 ------------------------

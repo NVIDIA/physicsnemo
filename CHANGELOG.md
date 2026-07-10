@@ -32,6 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds differentiable mesh morphing: Torch-backed dense ``displace_points`` /
   ``Mesh.displace`` and Torch/NVIDIA Warp compact sparse-control
   ``morph_points`` / ``Mesh.morph`` / ``DomainMesh.morph``.
+- Adds exact thin-plate-spline RBF morphing through ``rbf_morph_points``,
+  ``Mesh.rbf_morph``, and ``DomainMesh.rbf_morph``. PyTorch performs the
+  differentiable coefficient solve, with Torch and fused NVIDIA Warp field
+  evaluators.
 - Adds `uniform_grid_divergence`, `uniform_grid_curl`, and
   `uniform_grid_laplacian` to `physicsnemo.nn.functional`, with Torch and fused
   Warp implementations for periodic Cartesian grids.

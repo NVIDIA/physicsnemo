@@ -14,14 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Warp backend for compact Shepard morphing."""
+"""Warp evaluators for compact Shepard and thin-plate-spline RBF morphing."""
 
 from .op import (
     compact_shepard_field_warp_impl,
     morph_points_warp,
 )
+from .rbf_op import rbf_field_warp
 
 __all__ = [
     "compact_shepard_field_warp_impl",
     "morph_points_warp",
+    "rbf_field_warp",
 ]

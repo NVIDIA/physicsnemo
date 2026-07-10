@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Transformations for simplicial meshes.
+"""Transformations for mesh geometry.
 
 Linear and affine operations are exported directly. Nonlinear operations are
 grouped under :mod:`physicsnemo.mesh.transformations.deform`.

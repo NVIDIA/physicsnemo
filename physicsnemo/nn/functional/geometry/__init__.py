@@ -14,7 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .deform import DisplacePoints, MorphPoints, displace_points, morph_points
+from .deform import (
+    DisplacePoints,
+    MorphPoints,
+    RBFMorphPoints,
+    displace_points,
+    morph_points,
+    rbf_morph_points,
+)
 from .farthest_point_sampling import FarthestPointSampling, farthest_point_sampling
 from .mesh_poisson_disk_sample import MeshPoissonDiskSample, mesh_poisson_disk_sample
 from .mesh_to_voxel_fraction import MeshToVoxelFraction, mesh_to_voxel_fraction
@@ -27,6 +34,7 @@ __all__ = [
     "MeshPoissonDiskSample",
     "MeshToVoxelFraction",
     "MorphPoints",
+    "RBFMorphPoints",
     "RayMeshIntersect",
     "SignedDistanceField",
     "displace_points",
@@ -34,6 +42,7 @@ __all__ = [
     "mesh_poisson_disk_sample",
     "mesh_to_voxel_fraction",
     "morph_points",
+    "rbf_morph_points",
     "ray_mesh_intersect",
     "signed_distance_field",
 ]

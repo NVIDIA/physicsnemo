@@ -323,6 +323,7 @@ Comprehensive overview of PhysicsNeMo-Mesh capabilities:
 | Arbitrary matrix transform | ✅ | |
 | Dense point displacement | ✅ | Aligned tensor or `point_data` key, with optional point weights |
 | Sparse control-point morphing | ✅ | Wendland-C2 compact support with scalar or per-control radii |
+| Exact RBF morphing | ✅ | Global thin-plate-spline field with an affine polynomial tail |
 | Extrusion | ✅ | Manifold → higher dimension |
 | Coordinate projection (drop ambient dims) | ✅ | `projections.project` (e.g. 3D → 2D embedding) |
 | Surface projection / mesh intersection | ❌ | Manifold → lower *manifold* dimension; work in progress |
@@ -395,6 +396,21 @@ morphed = mesh.morph(
     control_displacements,
     radius=0.4 * extent.norm(),
 )
+
+# Global RBF morphing: use D + 1 affinely independent box controls
+if torch.any(extent == 0):
+    raise ValueError("RBF example requires nonzero mesh extent in every dimension")
+box_origin = mesh.points.amin(dim=0)
+rbf_controls = torch.cat(
+    (box_origin.unsqueeze(0), box_origin.unsqueeze(0) + torch.diag(extent))
+)
+rbf_displacements = torch.zeros_like(rbf_controls)
+rbf_displacements[-1, -1] = 0.1 * extent.norm()
+rbf_morphed = mesh.rbf_morph(
+    rbf_controls,
+    rbf_displacements,
+    kernel="thin_plate_spline",
+)
 ```
 
 Tensor-valued radii must remain finite and strictly positive. For a learned
@@ -403,6 +419,11 @@ radius, use a positive parameterization such as
 values are not validated at runtime. Floating `point_weights` are applied as
 supplied and may be signed or greater than one. The current morphing kernel is
 `"wendland_c2"`, which is also the default.
+
+Thin-plate-spline RBF morphing has global support. With its default affine
+polynomial tail and `smoothing=0.0`, it interpolates every control
+displacement exactly. Positive smoothing deliberately relaxes exactness for
+improved conditioning.
 
 ### Subdivision
 

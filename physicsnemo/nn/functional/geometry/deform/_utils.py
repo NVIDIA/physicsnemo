@@ -30,16 +30,21 @@ def _zero_dependency(
 ) -> torch.Tensor:
     """Return scalar zero connected to every differentiable tensor argument."""
 
-    dependency = tensor.sum()
+    # Summing an empty view creates a differentiable zero without reading input
+    # values. This remains finite even when an otherwise unused input contains
+    # NaN, infinity, or values whose reduction would overflow.
+    dependency = tensor.unsqueeze(0)[:0].sum()
     for other in others:
         if other is not None and other.dtype != torch.bool:
-            dependency = dependency + other.sum()
-    return dependency * 0
+            dependency = dependency + other.unsqueeze(0)[:0].sum()
+    return dependency
 
 
 def _validate_points(tensor: torch.Tensor, name: str) -> None:
     """Validate an independent point-coordinate tensor."""
 
+    if not isinstance(tensor, torch.Tensor):
+        raise TypeError(f"{name} must be a torch.Tensor, got {type(tensor).__name__}")
     if tensor.ndim not in (2, 3):
         raise ValueError(
             f"{name} must have shape (N, D) or (B, N, D), got {tuple(tensor.shape)}"
@@ -94,6 +99,11 @@ def _normalize_point_weights(
 
     if point_weights is None:
         return None
+    if not isinstance(point_weights, torch.Tensor):
+        raise TypeError(
+            "point_weights must be a torch.Tensor or None, got "
+            f"{type(point_weights).__name__}"
+        )
 
     batch_size, num_points = points.shape[:2]
     expected = (num_points,) if was_unbatched else (batch_size, num_points)
@@ -128,6 +138,7 @@ def normalize_displace_inputs(
     """Validate and normalize dense-displacement inputs."""
 
     _validate_points(points, "points")
+    _validate_points(displacement, "displacement")
     _validate_layout(displacement, points, "points and displacement", True)
 
     points_b3, was_unbatched = _as_batched(points)
@@ -230,24 +241,23 @@ def _normalize_radius(
     return normalized
 
 
-def normalize_morph_inputs(
+def _normalize_control_deform_inputs(
     points: torch.Tensor,
     control_points: torch.Tensor,
     control_displacements: torch.Tensor,
-    radius: float | torch.Tensor,
     point_weights: torch.Tensor | None,
 ) -> tuple[
-    torch.Tensor,
     torch.Tensor,
     torch.Tensor,
     torch.Tensor,
     torch.Tensor | None,
     bool,
 ]:
-    """Validate and normalize compact-Shepard morphing inputs."""
+    """Validate inputs shared by sparse control-point deformations."""
 
     _validate_points(points, "points")
     _validate_points(control_points, "control_points")
+    _validate_points(control_displacements, "control_displacements")
     _validate_layout(
         control_displacements,
         control_points,
@@ -278,9 +288,68 @@ def normalize_morph_inputs(
         points_b3,
         controls_b3,
         control_displacements_b3,
-        _normalize_radius(radius, controls_b3, was_unbatched),
         _normalize_point_weights(point_weights, points_b3, was_unbatched),
         was_unbatched,
+    )
+
+
+def normalize_morph_inputs(
+    points: torch.Tensor,
+    control_points: torch.Tensor,
+    control_displacements: torch.Tensor,
+    radius: float | torch.Tensor,
+    point_weights: torch.Tensor | None,
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor | None,
+    bool,
+]:
+    """Validate and normalize compact-Shepard morphing inputs."""
+
+    (
+        points_b3,
+        controls_b3,
+        control_displacements_b3,
+        point_weights_b2,
+        was_unbatched,
+    ) = _normalize_control_deform_inputs(
+        points,
+        control_points,
+        control_displacements,
+        point_weights,
+    )
+    return (
+        points_b3,
+        controls_b3,
+        control_displacements_b3,
+        _normalize_radius(radius, controls_b3, was_unbatched),
+        point_weights_b2,
+        was_unbatched,
+    )
+
+
+def normalize_rbf_inputs(
+    points: torch.Tensor,
+    control_points: torch.Tensor,
+    control_displacements: torch.Tensor,
+    point_weights: torch.Tensor | None,
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor | None,
+    bool,
+]:
+    """Validate and normalize exact-RBF morphing inputs."""
+
+    return _normalize_control_deform_inputs(
+        points,
+        control_points,
+        control_displacements,
+        point_weights,
     )
 
 
@@ -293,5 +362,6 @@ def restore_point_rank(points: torch.Tensor, was_unbatched: bool) -> torch.Tenso
 __all__ = [
     "normalize_displace_inputs",
     "normalize_morph_inputs",
+    "normalize_rbf_inputs",
     "restore_point_rank",
 ]

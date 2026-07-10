@@ -17,10 +17,13 @@
 """Dense and sparse point-deformation functionals."""
 
 from .deform import DisplacePoints, MorphPoints, displace_points, morph_points
+from .rbf import RBFMorphPoints, rbf_morph_points
 
 __all__ = [
     "DisplacePoints",
     "MorphPoints",
+    "RBFMorphPoints",
     "displace_points",
     "morph_points",
+    "rbf_morph_points",
 ]

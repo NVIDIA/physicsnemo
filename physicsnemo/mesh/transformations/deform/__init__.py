@@ -14,9 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Nonlinear deformation operations for simplicial meshes."""
+"""Nonlinear deformation operations for mesh point coordinates."""
 
 from physicsnemo.mesh.transformations.deform.displace import displace
 from physicsnemo.mesh.transformations.deform.morph import morph
+from physicsnemo.mesh.transformations.deform.rbf import rbf_morph
 
-__all__ = ["displace", "morph"]
+__all__ = ["displace", "morph", "rbf_morph"]
