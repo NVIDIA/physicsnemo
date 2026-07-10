@@ -732,14 +732,15 @@ class TestDataLoaderDrivenReproducibility:
         master = torch.Generator().manual_seed(42)
         ds.set_generator(master)
 
-        # Reader and both transforms should have received generators
-        assert reader._subsample_generator is not None
+        # Reader (base seed) and both transforms should have received seeds
+        assert reader._seed_base is not None
         assert transforms[0]._generator is not None
         assert transforms[1]._generator is not None
 
-        # Generators should have different seeds (independent forks)
+        # Seeds should differ (independent forks): the reader's base seed
+        # plus each transform's generator seed.
         seeds = {
-            reader._subsample_generator.initial_seed(),
+            reader._seed_base,
             transforms[0]._generator.initial_seed(),
             transforms[1]._generator.initial_seed(),
         }
@@ -837,3 +838,44 @@ class TestDataLoaderDrivenReproducibility:
         pts_a = _run_epoch(42, 5)
         pts_b = _run_epoch(42, 5)
         assert torch.allclose(pts_a, pts_b)
+
+
+class TestSetEpochResumeReproducibility:
+    """set_epoch(n) after a resume must equal reaching epoch n sequentially.
+
+    Pins the fix for the seed-drift bug: reseeding from the generator's
+    live initial_seed() compounds across calls, so the epoch->stream
+    mapping depended on call history and checkpoint resume silently
+    changed augmentation draws.
+    """
+
+    def test_transform_sequential_equals_direct(self):
+        def draws(epochs):
+            aug = _seed(RandomScaleMesh(distribution=D.Uniform(0.5, 2.0)), 42)
+            for e in epochs:
+                aug.set_epoch(e)
+            return aug(_simple_mesh_3d()).points.clone()
+
+        assert torch.allclose(draws([1, 2, 3]), draws([3]))
+        assert not torch.allclose(draws([2]), draws([3]))
+
+    def test_dataset_sequential_equals_direct(self, tmp_path):
+        from physicsnemo.datapipes.mesh_dataset import MeshDataset
+        from physicsnemo.datapipes.readers.mesh import MeshReader
+
+        mesh = _simple_mesh_3d()
+        mesh.save(tmp_path / "s0.pt")
+
+        def _run(epochs):
+            reader = MeshReader(tmp_path, pattern="*.pt")
+            ds = MeshDataset(
+                reader,
+                transforms=[RandomScaleMesh(distribution=D.Uniform(0.5, 2.0))],
+            )
+            ds.set_generator(torch.Generator().manual_seed(42))
+            for e in epochs:
+                ds.set_epoch(e)
+            m, _ = ds[0]
+            return m.points.clone()
+
+        assert torch.allclose(_run([1, 2, 3]), _run([3]))

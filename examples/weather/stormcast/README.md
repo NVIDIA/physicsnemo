@@ -302,6 +302,8 @@ The following methods are optional for training:
 * `get_invariants`: Returns the invariants (conditions that are the same for each sample) for the dataset. To use them, `"invariant"` needs to be included in `model.diffusion_conditions`and `model.regression_conditions`.
 * `scalar_condition_channels`: Returns a list with the names of the scalar condition channels. The corresponding 1D array of scalar conditions should be returned in the `scalar_conditions` key of the dict returned by `__getitem__`.
 
+**Spatial mask**: `__getitem__` may optionally return a `"mask"` key containing a float32 array of shape `(1, H, W)` with values in `{0, 1}` (or boolean), where `1`/`True` marks *valid* pixels and `0`/`False` marks invalid or excluded pixels (e.g. outside sensor coverage, LAM sponge zones, land-sea boundaries). When present, the training loop uses the mask as a per-pixel loss weight. For the DiT architecture with `use_nan_mask_tokens: true` in `model.hyperparameters`, the mask is additionally pooled to token granularity and used to replace invalid-region tokens with learned mask tokens inside every NATTEN attention block. The dataset is responsible for producing this mask (e.g. loading a pre-computed coverage map or computing it from quality flags); for static masks, caching the array internally and returning it for every sample is recommended.
+
 The following methods are optional and are **only used by the `inference.py` script**:
 
 * `normalize_background`: Performs the transformation from physical values to normalized values for the background array.

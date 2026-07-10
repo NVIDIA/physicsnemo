@@ -67,20 +67,30 @@ def _check_weight_mesh(weight: torch.Tensor, x0: torch.Tensor) -> None:
 def _maybe_promote_to_mesh(t: torch.Tensor, ref: torch.Tensor) -> torch.Tensor:
     """Promote *t* to a replicated DTensor on *ref*'s device mesh if needed.
 
-    When ``ref`` is a ``ShardTensor`` (or any ``DTensor`` with a device mesh),
-    plain-tensor operands must be promoted to replicated ``DTensor``s on the
-    same mesh before element-wise arithmetic, otherwise DTensor dispatch
-    raises a mixed-type error.
+    This is only required for genuine ``DTensor`` references: DTensor dispatch
+    raises on mixed plain-tensor/DTensor arithmetic, so a plain ``t`` must be
+    lifted to a replicated ``DTensor`` on the same mesh.
+
+    When ``ref`` is a :class:`ShardTensor`, ``t`` is returned unchanged: the
+    ShardTensor dispatch path auto-promotes plain operands to replicated tensors
+    on its mesh on the way in (see
+    :class:`~physicsnemo.domain_parallel.shard_tensor.TensorPromotionMode`), so
+    promoting here would be redundant (and would wrongly wrap scalar
+    coefficients into DTensors).
     """
-    mesh = getattr(ref, "device_mesh", None)
-    if mesh is None:
-        return t
     from torch.distributed.tensor import DTensor
+
+    # Only genuine (non-Shard) DTensors need manual promotion here. A
+    # ShardTensor subclasses torch.Tensor (not DTensor), so it never matches
+    # this check and correctly falls through to its own auto-promoting dispatch.
+    if not isinstance(ref, DTensor):
+        return t
+
     from torch.distributed.tensor.placement_types import Replicate
 
     if isinstance(t, DTensor):
         return t
-    return DTensor.from_local(t, device_mesh=mesh, placements=[Replicate()])
+    return DTensor.from_local(t, device_mesh=ref.device_mesh, placements=[Replicate()])
 
 
 class MSEDSMLoss:

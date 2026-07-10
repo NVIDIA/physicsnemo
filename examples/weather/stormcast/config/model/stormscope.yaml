@@ -31,3 +31,4 @@ hyperparameters:
   attn_kernel_size: 31
   num_heads: 16
   patch_size: 4
+  use_nan_mask_tokens: false  # replace invalid-region tokens with a learned mask token (requires a per-sample dataloader "mask")

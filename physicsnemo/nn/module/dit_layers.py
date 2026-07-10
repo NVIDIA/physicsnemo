@@ -35,10 +35,7 @@ from physicsnemo.nn.module.hpx.tokenizer import (
     HEALPixPatchTokenizer,
 )
 from physicsnemo.nn.module.mlp_layers import Mlp
-from physicsnemo.nn.module.rope import (
-    apply_rotary_pos_emb,
-    build_axial_rope_cos_sin_2d,
-)
+from physicsnemo.nn.module.rope import apply_rotary_pos_emb
 from physicsnemo.nn.module.utils import PatchEmbed2D
 
 te = OptionalImport("transformer_engine.pytorch")
@@ -105,7 +102,7 @@ def get_attention(
     num_heads : int
         Number of attention heads.
     attention_backend : Literal["transformer_engine", "timm", "natten2d", "natten2d_rope"]
-        One of ``"timm"``, ``"transformer_engine"``, ``"natten2d"``, or ``"natten2d_rope"`` to select between pre-defined attention modules. ``"natten2d_rope"`` is :class:`Natten2DSelfAttention` with axial 2D rotary position embeddings (see :class:`RopeNatten2DSelfAttention`) and requires ``latent_hw`` in ``attn_kwargs``.
+        One of ``"timm"``, ``"transformer_engine"``, ``"natten2d"``, or ``"natten2d_rope"`` to select between pre-defined attention modules. ``"natten2d_rope"`` is :class:`Natten2DSelfAttention` with axial 2D rotary position embeddings (see :class:`RopeNatten2DSelfAttention`); its cos/sin tables are supplied at ``forward`` time (as ``rope_cos`` / ``rope_sin``) by the owning model, which holds a single :class:`~physicsnemo.nn.module.rope.RotaryEmbedding2DTables` provider, so it is not usable standalone.
     attn_drop_rate : float, optional, default=0.0
         The dropout rate for the attention operation.
     proj_drop_rate : float, optional, default=0.0
@@ -556,22 +553,23 @@ class RopeNatten2DSelfAttention(Natten2DSelfAttention):
     used, the model should disable any additive positional embedding to avoid
     double-counting the position signal.
 
-    The cos/sin tables are precomputed at construction so that
-    :func:`torch.compile` sees a stable forward graph. They are stored as
-    ``persistent=False`` buffers because they are deterministically rebuilt from
-    ``(latent_hw, head_dim, rope_theta)``; for domain-parallel training they are
-    built at the global spatial size and sharded along height by
-    ``distribute_module``, so each rank holds the rows with globally-correct
-    frequencies and no explicit rank offset is needed in model code.
+    This block does **not** own the cos/sin tables. The tables are owned by a
+    single :class:`~physicsnemo.nn.module.rope.RotaryEmbedding2DTables` provider
+    held by the top-level model (e.g. :class:`~physicsnemo.models.dit.DiT`), and
+    are passed into :meth:`forward` as the ``rope_cos`` / ``rope_sin`` keyword
+    arguments. Sharing one provider across all blocks means the tables are
+    built, stored, and — under domain parallelism — sharded exactly once for the
+    whole model instead of once per block.
+
+    Because the tables are a required forward input, this block cannot be used in
+    isolation: it must be driven by a model that supplies the tables (the DiT
+    ``natten2d_rope`` backend does this automatically). For domain-parallel
+    training the provider builds the tables at the global spatial size and shards
+    them, so each rank receives rows with globally-correct
+    frequencies and no explicit rank offset is needed here.
 
     Parameters
     ----------
-    latent_hw : Tuple[int, int]
-        Spatial size :math:`(h, w)` of the token grid used to precompute the
-        cos/sin tables. For inference at a different shape, :meth:`forward`
-        rebuilds the tables in place (off the ``torch.compile`` path).
-    rope_theta : float, optional, default=10000.0
-        Base used for the RoPE frequency schedule.
     *args, **kwargs
         Forwarded to :class:`Natten2DSelfAttention` (e.g. ``attn_kernel``,
         ``qk_norm``, ``use_mask_token``).
@@ -582,10 +580,14 @@ class RopeNatten2DSelfAttention(Natten2DSelfAttention):
         Input tensor of shape :math:`(B, L, D)`.
     latent_hw : Tuple[int, int]
         The height and width of the 2D latent space for reshaping.
+    rope_cos, rope_sin : torch.Tensor
+        Axial 2D RoPE tables of shape :math:`(h, w, head\_dim)` from a
+        :class:`~physicsnemo.nn.module.rope.RotaryEmbedding2DTables` provider.
+        Required.
     invalid_token_mask : torch.Tensor, optional
         See :class:`Natten2DSelfAttention`.
 
-    Returns
+    Outputs
     -------
     torch.Tensor
         Output tensor of shape :math:`(B, L, D)`.
@@ -594,8 +596,6 @@ class RopeNatten2DSelfAttention(Natten2DSelfAttention):
     def __init__(
         self,
         *args: Any,
-        latent_hw: Tuple[int, int],
-        rope_theta: float = 10000.0,
         **kwargs: Any,
     ):
         super().__init__(*args, **kwargs)
@@ -603,37 +603,13 @@ class RopeNatten2DSelfAttention(Natten2DSelfAttention):
             raise ValueError(
                 f"head_dim={self.head_dim} must be divisible by 4 for axial 2D RoPE."
             )
-        self.rope_theta = float(rope_theta)
-        self._latent_hw: Tuple[int, int] = (int(latent_hw[0]), int(latent_hw[1]))
-
-        cos, sin = build_axial_rope_cos_sin_2d(
-            *self._latent_hw, self.head_dim, theta=self.rope_theta
-        )
-        # persistent=False: not in state_dict (rebuilt deterministically at
-        # __init__ from latent_hw + head_dim + theta), so checkpoints stay lean.
-        self.register_buffer("rope_cos", cos, persistent=False)  # (h, w, head_dim)
-        self.register_buffer("rope_sin", sin, persistent=False)  # (h, w, head_dim)
-
-    def _rebuild_for_shape(self, h: int, w: int) -> None:
-        r"""Rebuild the RoPE buffers for a new latent shape.
-
-        Reached only when :meth:`forward` is called with a ``latent_hw`` that
-        differs from construction (e.g. variable-resolution inference); not part
-        of the training-time hot path.
-        """
-        target_dtype = self.rope_cos.dtype
-        target_device = self.rope_cos.device
-        cos, sin = build_axial_rope_cos_sin_2d(
-            h, w, self.head_dim, theta=self.rope_theta, device=target_device
-        )
-        self.register_buffer("rope_cos", cos.to(dtype=target_dtype), persistent=False)
-        self.register_buffer("rope_sin", sin.to(dtype=target_dtype), persistent=False)
-        self._latent_hw = (int(h), int(w))
 
     def forward(
         self,
         x: Float[torch.Tensor, "batch sequence hidden_size"],
         latent_hw: Tuple[int, int],
+        rope_cos: Float[torch.Tensor, "h w head_dim"],
+        rope_sin: Float[torch.Tensor, "h w head_dim"],
         invalid_token_mask: Optional[
             Union[
                 Float[torch.Tensor, " sequence"],
@@ -643,12 +619,17 @@ class RopeNatten2DSelfAttention(Natten2DSelfAttention):
     ) -> Float[torch.Tensor, "batch sequence hidden_size"]:
         B, N, C = x.shape
         h, w = int(latent_hw[0]), int(latent_hw[1])
-        if not torch.compiler.is_compiling() and N != h * w:
-            raise ValueError(
-                f"Sequence length must be {h * w} based on latent_hw={latent_hw}, but got {N}"
-            )
-        if (h, w) != self._latent_hw:
-            self._rebuild_for_shape(h, w)
+        if not torch.compiler.is_compiling():
+            if N != h * w:
+                raise ValueError(
+                    f"Sequence length must be {h * w} based on latent_hw={latent_hw}, but got {N}"
+                )
+            expected = (h, w, self.head_dim)
+            if tuple(rope_cos.shape) != expected or tuple(rope_sin.shape) != expected:
+                raise ValueError(
+                    f"Expected rope_cos/rope_sin of shape {expected}, but got "
+                    f"rope_cos={tuple(rope_cos.shape)}, rope_sin={tuple(rope_sin.shape)}"
+                )
 
         # Overwrite invalid spatial tokens with the learned mask token before QKV.
         x = self._apply_mask_token(x, invalid_token_mask)
@@ -666,8 +647,8 @@ class RopeNatten2DSelfAttention(Natten2DSelfAttention):
 
         # cos/sin: (h, w, head_dim) -> (1, 1, h, w, head_dim) broadcasts over
         # batch and head axes. apply_rotary_pos_emb rotates in fp32 internally.
-        cos = self.rope_cos.unsqueeze(0).unsqueeze(0)
-        sin = self.rope_sin.unsqueeze(0).unsqueeze(0)
+        cos = rope_cos.unsqueeze(0).unsqueeze(0)
+        sin = rope_sin.unsqueeze(0).unsqueeze(0)
         q_rot = apply_rotary_pos_emb(q_2d, cos, sin)
         k_rot = apply_rotary_pos_emb(k_2d, cos, sin)
 

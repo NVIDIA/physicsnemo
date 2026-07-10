@@ -203,14 +203,11 @@ def force_moment_coefficients(
         up_direction.to(device=device, dtype=dtype),
     )
 
-    return {
-        "CD": float((c_f @ drag).item()),
-        "CL": float((c_f @ lift).item()),
-        "CS": float((c_f @ side).item()),
-        "CMR": float((c_m @ drag).item()),
-        "CMP": float((c_m @ side).item()),
-        "CMY": float((c_m @ lift).item()),
-    }
+    ### Batched D2H: one .tolist() for all six coefficients.
+    coeffs = torch.stack(
+        [c_f @ drag, c_f @ lift, c_f @ side, c_m @ drag, c_m @ side, c_m @ lift]
+    ).tolist()
+    return dict(zip(("CD", "CL", "CS", "CMR", "CMP", "CMY"), coeffs))
 
 
 def surface_force_fields(

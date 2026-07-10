@@ -20,8 +20,20 @@ Exposes :func:`triangulate`, which converts a polygon soup (an ``Adjacency`` of
 cell-to-vertex rings) into a triangle connectivity, staying correct for
 non-convex polygons. It branches on manifold dimension and currently implements
 the 2D (polygon -> triangle) case.
+
+Also exposes exact-boundary quality mesh *generation* (which inserts new
+points, unlike :func:`triangulate`'s pure decomposition):
+:func:`fill_interior` takes a closed codimension-one boundary ``Mesh`` (edge
+loops in 2D) and fills the enclosed interior with quality simplices via
+constrained Delaunay triangulation with Ruppert refinement — every input
+vertex is preserved bit-identically, and in 2D every output angle is
+guaranteed to meet the requested bound. :func:`polygon_interior_point`
+returns a point strictly inside a simple polygon.
+
 """
 
+from physicsnemo.mesh.tessellation.delaunay import polygon_interior_point
+from physicsnemo.mesh.tessellation.fill_interior import fill_interior
 from physicsnemo.mesh.tessellation.triangulate import triangulate
 
-__all__ = ["triangulate"]
+__all__ = ["fill_interior", "polygon_interior_point", "triangulate"]

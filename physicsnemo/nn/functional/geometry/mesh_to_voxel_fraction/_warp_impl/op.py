@@ -175,7 +175,7 @@ def mesh_to_voxel_fraction_impl(
     output = torch.empty(nx * ny * nz, device=mesh_vertices.device, dtype=torch.float32)
     wp_launch_device, wp_launch_stream = FunctionSpec.warp_launch_context(mesh_vertices)
 
-    with wp.ScopedStream(wp_launch_stream):
+    with FunctionSpec.warp_stream_scope(wp_launch_stream):
         wp_vertices = wp.from_torch(mesh_vertices, dtype=wp.vec3)
         wp_indices = wp.from_torch(mesh_indices, dtype=wp.int32)
         wp_output = wp.from_torch(output, return_ctype=True)

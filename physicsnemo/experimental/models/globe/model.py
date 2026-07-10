@@ -27,17 +27,17 @@ from torch.profiler import record_function
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
-from physicsnemo.mesh.spatial.cluster_tree import (
-    ClusterTree,
-    DualInteractionPlan,
-)
 from physicsnemo.experimental.models.globe.field_kernel import MultiscaleKernel
-from physicsnemo.experimental.models.globe.utilities.rank_spec import (
+from physicsnemo.mesh import (
+    Mesh,
     RankSpecDict,
     flatten_rank_spec,
     validate_data_contains_ranks,
 )
-from physicsnemo.mesh import Mesh
+from physicsnemo.mesh.spatial.cluster_tree import (
+    ClusterTree,
+    DualInteractionPlan,
+)
 from physicsnemo.utils.logging import PythonLogger
 
 # allow_in_graph wraps these TensorDict methods as opaque graph nodes so that

@@ -153,3 +153,51 @@ def test_post_init_runs_under_compile(
     compiled = torch.compile(fn, fullgraph=False)(points, cells)
 
     torch.testing.assert_close(compiled, expected)
+
+
+@pytest.mark.parametrize(
+    "property_name",
+    ["cell_normals", "cell_areas", "cell_centroids"],
+)
+def test_local_cell_geometry_under_fullgraph_compile(
+    property_name: str,
+    triangle_3d: tuple[torch.Tensor, torch.Tensor],
+) -> None:
+    """Local cell geometry should be capturable as one complete graph.
+
+    Constructing the nested cache must not trigger a nested ``TensorDict.to``
+    while Dynamo is tracing the ``Mesh`` constructor.
+    """
+    points, cells = triangle_3d
+
+    def fn(p: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+        return getattr(Mesh(points=p, cells=c), property_name)
+
+    expected = fn(points, cells)
+    compiled = torch.compile(fn, backend="eager", fullgraph=True)(points, cells)
+
+    torch.testing.assert_close(compiled, expected)
+
+
+def test_cache_rebuild_paths_under_fullgraph_compile(
+    triangle_3d: tuple[torch.Tensor, torch.Tensor],
+) -> None:
+    """Operations that rebuild cache containers remain full-graph capturable."""
+    points, cells = triangle_3d
+
+    def fn(p: torch.Tensor, c: torch.Tensor) -> tuple[torch.Tensor, ...]:
+        mesh = Mesh(points=p, cells=c)
+        _ = mesh.cell_areas
+        mesh = mesh.translate([1.0, 2.0, 3.0])
+        mesh = mesh.transform(
+            torch.eye(3, dtype=p.dtype, device=p.device), assume_invertible=True
+        )
+        mesh = mesh.slice_cells(torch.tensor([0], device=c.device))
+        mesh = mesh.pad(target_n_points=4, target_n_cells=2)
+        return mesh.points, mesh.cells, mesh.cell_areas
+
+    expected = fn(points, cells)
+    compiled = torch.compile(fn, backend="eager", fullgraph=True)(points, cells)
+
+    for actual, reference in zip(compiled, expected):
+        torch.testing.assert_close(actual, reference)

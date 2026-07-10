@@ -26,6 +26,10 @@ share/python-wheels/
 *.egg
 MANIFEST
 
+# Release-provided container wheels are copied here by the release pipeline.
+/deps/*
+!/deps/README.md
+
 # PyInstaller
 #  Usually these files are written by a python script from a template
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
