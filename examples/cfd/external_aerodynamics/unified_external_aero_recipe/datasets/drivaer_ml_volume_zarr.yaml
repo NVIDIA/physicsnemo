@@ -1,0 +1,87 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# DrivaerML volume dataset -- Zarr variant.
+# Reads full DomainMesh cases from physicsnemo-domainmesh-zarr groups
+# (emitted by PhysicsNeMo-Curator's DomainMeshZarrSink, or by
+# src/convert_pdmsh_to_zarr.py --extra-boundary
+# "stl_geometry=*_single_solid.stl.pmsh" for existing .pdmsh data).
+# ZarrDomainMeshReader mirrors DomainMeshReader: interior (point cloud)
+# subsampled to ${sampling_resolution} points, boundaries to
+# ${sampling_resolution} cells, and the stl_geometry boundary read at
+# full resolution for exact SDF queries (stored indexed in the group --
+# the zarr analog of DomainMeshReader's sibling-file extra_boundaries).
+# Transform stack is identical to drivaer_ml_volume.yaml.
+
+train_datadir: ${dataset_paths.drivaer_ml_zarr}
+
+pipeline:
+  reader:
+    _target_: ${dp:ZarrDomainMeshReader}
+    path: ${train_datadir}
+    pattern: "*.zarr"
+    subsample_n_points: ${sampling_resolution}
+    subsample_n_cells: ${sampling_resolution}
+    full_resolution_boundaries: [stl_geometry]
+  augmentations:
+    - _target_: ${dp:RandomRotateMesh}
+      axes: ["z"]
+      transform_point_data: true
+      transform_global_data: true
+    - _target_: ${dp:RandomTranslateMesh}
+      distribution:
+        _target_: torch.distributions.Uniform
+        low: [-1.0, -1.0, 0.0]
+        high: [1.0, 1.0, 0.0]
+  transforms:
+    - _target_: ${dp:DropMeshFields}
+      global_data: [TimeValue]
+    - _target_: ${dp:CenterMesh}
+      use_area_weighting: false
+    - _target_: ${dp:NonDimensionalizeByMetadata}
+      fields:
+        UMeanTrim: velocity
+        pMeanTrim: pressure
+        nutMeanTrim: identity
+      association: point_data
+    - _target_: ${dp:ComputeSDFFromBoundary}
+      boundary_name: stl_geometry
+      sdf_field: sdf
+      normals_field: sdf_normals
+      # Pseudo-normal sign (fed by the fast nearest-triangle kernel). The
+      # _single_solid STL is watertight, so this is exact and avoids the
+      # O(n_points * n_faces) winding-number sign pass.
+      use_winding_number: false
+    - _target_: ${dp:DropBoundary}
+      names: [stl_geometry]
+    - _target_: ${dp:RenameMeshFields}
+      point_data:
+        UMeanTrim: velocity
+        pMeanTrim: pressure
+        nutMeanTrim: nut
+    - _target_: ${dp:NormalizeMeshFields}
+      association: point_data
+      fields:
+        nut: {type: scalar, mean: 4.8e-4, std: 9.4e-4}
+    # No terminal MeshToDomainMesh: like drivaer_ml_volume.yaml, the reader
+    # already produces a DomainMesh natively (interior = volume point cloud
+    # with target fields in point_data). The recipe's collate consumes it
+    # directly via each model YAML's `forward_kwargs:` spec.
+
+targets:
+  velocity: vector
+  pressure: scalar
+  nut: scalar

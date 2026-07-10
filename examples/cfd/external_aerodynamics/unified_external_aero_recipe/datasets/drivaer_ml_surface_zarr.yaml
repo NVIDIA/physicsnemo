@@ -1,0 +1,84 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# DrivaerML surface dataset -- Zarr variant.
+# Reads the vehicle boundary out of full-DomainMesh zarr groups (the
+# physicsnemo-domainmesh-zarr schema emitted by PhysicsNeMo-Curator's
+# DomainMeshZarrSink, or by src/convert_pdmsh_to_zarr.py for existing
+# .pdmsh data). Mirrors the .pdmsh pipeline exactly: `subpath` navigates
+# to the boundary (like the .pdmsh reader's glob into
+# _tensordict/boundaries/vehicle) and `merge_global_data_from` merges the
+# case-level freestream global_data (U_inf, rho_inf, p_inf, nu, L_ref) at
+# read time -- single-sourced, nothing baked into the boundary data.
+# Boundaries are curated as a per-cell vertex soup (layout attr) so the
+# reader's contiguous block subsample maps to sequential, chunk-aligned
+# zarr reads with no cells read at all. Transform stack is identical to
+# drivaer_ml_surface.yaml.
+
+train_datadir: ${dataset_paths.drivaer_ml_zarr}
+
+pipeline:
+  reader:
+    _target_: ${dp:ZarrMeshReader}
+    path: ${train_datadir}
+    pattern: "*.zarr"
+    subpath: "boundaries/vehicle"
+    merge_global_data_from: "../../global_data"
+    subsample_n_cells: ${sampling_resolution}
+  augmentations:
+    - _target_: ${dp:RandomRotateMesh}
+      axes: ["z"]
+      transform_cell_data: true
+      transform_global_data: true
+    - _target_: ${dp:RandomTranslateMesh}
+      distribution:
+        _target_: torch.distributions.Uniform
+        low: [-1.0, -1.0, 0.0]
+        high: [1.0, 1.0, 0.0]
+  transforms:
+    - _target_: ${dp:DropMeshFields}
+      global_data: [TimeValue]
+    - _target_: ${dp:CenterMesh}
+      use_area_weighting: false
+    - _target_: ${dp:NonDimensionalizeByMetadata}
+      fields:
+        pMeanTrim: pressure
+        wallShearStressMeanTrim: stress
+      association: cell_data
+    - _target_: ${dp:RenameMeshFields}
+      cell_data:
+        pMeanTrim: pressure
+        wallShearStressMeanTrim: wss
+    - _target_: ${dp:NormalizeMeshFields}
+      association: cell_data
+      fields:
+        wss: {type: vector, mean: [0.0, 0.0, 0.0], std: 0.00313}
+    - _target_: ${dp:ComputeSurfaceNormals}
+      store_as: cell_data
+      field_name: normals
+    - _target_: ${dp:SubsampleMesh}
+      n_cells: ${sampling_resolution}
+    # Terminal transform: convert the surface Mesh into a DomainMesh per the
+    # recipe's prediction-vs-input contract (see drivaer_ml_surface.yaml).
+    - _target_: ${dp:MeshToDomainMesh}
+      interior_points: cell_centroids
+
+# Single source of truth for prediction field names + types. Read by both the
+# dataset builder (auto-injected into MeshToDomainMesh above) and the train
+# loop (used to build LossCalculator and MetricCalculator).
+targets:
+  pressure: scalar
+  wss: vector
