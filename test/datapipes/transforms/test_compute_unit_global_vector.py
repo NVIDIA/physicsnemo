@@ -25,6 +25,7 @@ from physicsnemo.mesh.primitives.basic import single_triangle_3d
 
 
 def _domain():
+    """Build a small DomainMesh with one boundary and one global field."""
     wall = single_triangle_3d.load()
     wall.global_data["wall_id"] = torch.tensor([7.0])
     return DomainMesh(
@@ -35,7 +36,10 @@ def _domain():
 
 
 class TestComputeUnitGlobalVector:
+    """ComputeUnitGlobalVector derives v/|v| without touching the source."""
+
     def test_direction_on_mesh(self):
+        """The unit direction is stored under the new key on a Mesh."""
         mesh = Mesh(
             points=torch.randn(5, 3),
             global_data={"v": torch.tensor([0.0, 5.0, 0.0])},
@@ -46,6 +50,7 @@ class TestComputeUnitGlobalVector:
         )
 
     def test_direction_on_domain(self):
+        """The unit direction is stored in domain-level global_data."""
         transform = ComputeUnitGlobalVector(
             vector_field="U_inf", output_field="U_inf_dir"
         )
@@ -59,6 +64,7 @@ class TestComputeUnitGlobalVector:
         )
 
     def test_submesh_global_data_untouched(self):
+        """Sub-mesh global_data is not modified on the DomainMesh path."""
         transform = ComputeUnitGlobalVector(
             vector_field="U_inf", output_field="U_inf_dir"
         )
@@ -69,8 +75,7 @@ class TestComputeUnitGlobalVector:
         )
 
     def test_source_dtype_preserved(self):
-        # Rotation matrices are built at points.dtype, so the direction
-        # must keep the source dtype for rotations to compose with it.
+        """The direction keeps the source dtype so rotations compose with it."""
         mesh = Mesh(
             points=torch.randn(5, 3, dtype=torch.float64),
             global_data={"v": torch.tensor([3.0, 0.0, 4.0], dtype=torch.float64)},
@@ -84,12 +89,14 @@ class TestComputeUnitGlobalVector:
         )
 
     def test_missing_field_raises(self):
+        """A missing vector_field raises a KeyError naming available keys."""
         with pytest.raises(KeyError, match="not found in global_data"):
             ComputeUnitGlobalVector(
                 vector_field="missing", output_field="d"
             ).apply_to_domain(_domain())
 
     def test_zero_vector_raises(self):
+        """A zero-length vector raises instead of dividing by zero."""
         mesh = Mesh(
             points=torch.randn(5, 3),
             global_data={"v": torch.tensor([0.0, 0.0, 0.0])},
@@ -98,6 +105,7 @@ class TestComputeUnitGlobalVector:
             ComputeUnitGlobalVector(vector_field="v", output_field="d")(mesh)
 
     def test_integer_vector_raises(self):
+        """An integer vector raises instead of truncating to zeros."""
         mesh = Mesh(
             points=torch.randn(5, 3),
             global_data={"v": torch.tensor([3, 0, 4])},
@@ -106,6 +114,7 @@ class TestComputeUnitGlobalVector:
             ComputeUnitGlobalVector(vector_field="v", output_field="d")(mesh)
 
     def test_batched_vector_raises(self):
+        """A batched (B, 3) vector raises instead of mis-normalizing."""
         mesh = Mesh(
             points=torch.randn(5, 3),
             global_data={"v": torch.tensor([[1.0, 0.0, 0.0], [0.0, 2.0, 0.0]])},
@@ -114,10 +123,12 @@ class TestComputeUnitGlobalVector:
             ComputeUnitGlobalVector(vector_field="v", output_field="d")(mesh)
 
     def test_same_output_field_raises(self):
+        """output_field == vector_field is rejected at construction."""
         with pytest.raises(ValueError, match="must differ"):
             ComputeUnitGlobalVector(vector_field="v", output_field="v")
 
     def test_registered_in_hydra_resolver(self):
+        """The transform resolves through the ${dp:...} config resolver."""
         from omegaconf import OmegaConf
 
         import physicsnemo.datapipes  # noqa: F401  -- side-effect import
