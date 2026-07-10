@@ -12,7 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Adds dimension-generic volume mesh generation for implicit domains to
   `physicsnemo.mesh.generate`: `mesh_implicit_domain` meshes
-  `{x : phi(x) < 0}` for any implicit function (SDFs, level sets, neural
+  `{x : phi(x) < 0}` clipped to the bounding box (box faces are honored
+  as boundary, so external-flow "box minus obstacle" domains work
+  directly) for any implicit function (SDFs, level sets, neural
   fields) in 2D/3D/ND on CPU or CUDA using pure PyTorch tensor ops —
   lattice initialization, validity-gated ODT smoothing, quality-greedy
   bistellar flips, topological repairs, a coverage guard that raises on
