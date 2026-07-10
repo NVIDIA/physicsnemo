@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outer-product moments. Mesh integration APIs now accept `nan_policy`.
 - Adds per-cell measure weights that are preserved through cell subsampling
   and consumed by mesh integration routines and GLOBE.
+- Adds `ComputeUnitGlobalVector` to `physicsnemo.datapipes.transforms.mesh`:
+  computes the unit direction of a `global_data` vector field and stores it
+  under a new key, leaving the source vector unchanged.
 - Adds a `global_shape` argument to `ShardTensor.from_local`, enabling the
   no-communication `sharding_shapes="chunk"` path.
 - Adds exact-boundary quality mesh generation to

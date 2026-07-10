@@ -481,6 +481,92 @@ class SetGlobalField(MeshTransform):
 
 
 @register()
+class ComputeUnitGlobalVector(MeshTransform):
+    r"""Store the unit direction of a ``global_data`` vector as a new field.
+
+    Computes ``global_data[output_field] = v / |v|`` from
+    ``global_data[vector_field]``. The source vector is not modified, so
+    pipelines that need the original (e.g. to convert model outputs back
+    to physical units) keep working.
+
+    Typical use: condition a model on a flow *direction* rather than a
+    raw dimensional velocity. Place this transform before a rotation
+    augmentation with ``transform_global_data=True`` so the direction
+    rotates together with the source vector and the geometry.
+
+    On a :class:`~physicsnemo.mesh.DomainMesh`, the direction is computed
+    from and written to the domain-level ``global_data``.
+    """
+
+    def __init__(
+        self,
+        vector_field: str,
+        output_field: str,
+    ) -> None:
+        super().__init__()
+        self._vector_field = vector_field
+        self._output_field = output_field
+
+    def _direction(self, global_data: TensorDict) -> torch.Tensor:
+        if self._vector_field not in global_data.keys():
+            raise KeyError(
+                f"{type(self).__name__}: {self._vector_field!r} not found "
+                f"in global_data (available: {sorted(global_data.keys())!r})."
+            )
+        source = global_data[self._vector_field]
+        ### Normalize in float32 (safe for half-precision inputs), then
+        ### return in the source dtype so downstream geometric transforms
+        ### (whose matrices follow points.dtype) can operate on the result.
+        vector = source.float()
+        norm = torch.linalg.vector_norm(vector)
+        if not torch.isfinite(norm) or norm <= 0.0:
+            raise ValueError(
+                f"{type(self).__name__}: |{self._vector_field}| must be "
+                f"finite and positive, got {norm.item()!r}."
+            )
+        return (vector / norm).to(dtype=source.dtype)
+
+    def __call__(self, mesh: Mesh) -> Mesh:
+        new_gd = mesh.global_data.clone()
+        new_gd[self._output_field] = self._direction(mesh.global_data)
+        return Mesh(
+            points=mesh.points,
+            cells=mesh.cells,
+            point_data=mesh.point_data,
+            cell_data=mesh.cell_data,
+            global_data=new_gd,
+        )
+
+    def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
+        """Derive the unit direction on a :class:`DomainMesh`.
+
+        The direction is computed from and written to the domain-level
+        ``global_data``; sub-mesh records are left unchanged.
+
+        Parameters
+        ----------
+        domain : DomainMesh
+            Input domain mesh (interior + boundaries).
+
+        Returns
+        -------
+        DomainMesh
+            Domain mesh with ``output_field`` added to the domain-level
+            ``global_data``.
+        """
+        new_gd = domain.global_data.clone()
+        new_gd[self._output_field] = self._direction(domain.global_data)
+        return DomainMesh(
+            interior=domain.interior,
+            boundaries=domain.boundaries,
+            global_data=new_gd,
+        )
+
+    def extra_repr(self) -> str:
+        return f"{self._output_field} = {self._vector_field} / |{self._vector_field}|"
+
+
+@register()
 class NormalizeMeshFields(MeshTransform):
     r"""Standardize mesh data fields with direction-preserving vector support.
 
