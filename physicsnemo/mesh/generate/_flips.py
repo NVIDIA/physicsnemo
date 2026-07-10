@@ -98,17 +98,34 @@ def _candidates(points, cells, q_all, cell_ids, k_share, sub_size, h):
     cluster_verts = gverts[first].reshape(-1, d + 2)
 
     signs, ok = _radon_signs(points, cluster_verts)
-    cur_is_pos = (signs > 0).sum(dim=1) == k_share
-    cur_is_neg = (signs < 0).sum(dim=1) == k_share
-    ok &= cur_is_pos | cur_is_neg
+    # The target class is the sub-simplex shared by ALL current cells:
+    # removing each of its vertices from the cluster generates the new
+    # cells. Identify it by membership; the Radon sign pattern is only a
+    # validity filter (the shared vertices must form exactly one sign
+    # class). Identifying the target by sign-class SIZE is ambiguous
+    # whenever the two classes tie at k_share (2D 2-2 flips, 4D 3-3
+    # flips): the SVD null vector's sign is arbitrary, and resolving the
+    # tie to "negative" proposed the identity retriangulation -- silently
+    # rejected as zero-gain -- for about half of all improving 2D flips.
+    k_new = d + 2 - k_share
+    tgt = (
+        (cluster_verts[:, :, None, None] == cells[groups][:, None, :, :])
+        .any(dim=3)
+        .all(dim=2)
+    )
+    pos = signs > 0
+    n_shared = tgt.sum(dim=1)
+    n_pos_shared = (pos & tgt).sum(dim=1)
+    n_pos = pos.sum(dim=1)
+    one_class = ((n_pos_shared == n_shared) & (n_pos == n_shared)) | (
+        (n_pos_shared == 0) & (n_pos == (d + 2) - n_shared)
+    )
+    ok &= one_class & (n_shared == k_new)
     if not ok.any():
         return None
-    groups, cluster_verts, signs = groups[ok], cluster_verts[ok], signs[ok]
-    target_pos = ~cur_is_pos[ok]
-    tgt = torch.where(target_pos[:, None], signs > 0, signs < 0)
+    groups, cluster_verts, tgt = groups[ok], cluster_verts[ok], tgt[ok]
 
     n_clusters = cluster_verts.shape[0]
-    k_new = d + 2 - k_share
     tcol = torch.nonzero(tgt)[:, 1].reshape(n_clusters, k_new)
     arange = torch.arange(d + 2, device=points.device)
     keep = arange[None, None, :] != tcol[:, :, None]
