@@ -323,10 +323,15 @@ def radius_search_impl(
             # Deterministic output path: always use batched 2D kernel launch
             # ---------------------------------------------------------------
 
-            # Build warp array of grid IDs
-            grid_ids_tensor = torch.tensor(
-                [g.id for g in grids], dtype=torch.int64, device=points.device
+            # Build warp array of grid IDs.
+            # Construct in pinned host memory first so the H2D copy is
+            # stream-ordered (non_blocking) rather than a blocking cudaMemcpy.
+            _grid_ids_cpu = torch.tensor(
+                [g.id for g in grids],
+                dtype=torch.int64,
+                pin_memory=torch.cuda.is_available(),
             )
+            grid_ids_tensor = _grid_ids_cpu.to(points.device, non_blocking=True)
             wp_grid_ids = wp.from_torch(
                 grid_ids_tensor, dtype=wp.uint64, return_ctype=True
             )

@@ -13,6 +13,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+"""Scatter-based pixel aggregation for HealDA (v1).
+
+.. deprecated::
+    ``ScatterAggregator`` and ``scatter_mean`` back the deprecated
+    :class:`~physicsnemo.experimental.models.healda.healda.HealDA` (v1) model
+    via its observation embedder, are no longer publicly exported, and will be
+    removed in a future release alongside it.
+"""
+
 import math
 
 import torch
@@ -96,14 +105,10 @@ def scatter_mean(
     c = x.shape[1]
 
     # Initialize grid with fill_value
-    values_mean = torch.full(
-        (grid_size, c), fill_value, device=device, dtype=dtype
-    )
+    values_mean = torch.full((grid_size, c), fill_value, device=device, dtype=dtype)
 
     # Use scatter_reduce with mean, expanding indices to match value dimensions
-    grid_indices_flat_expanded = grid_indices_flat.unsqueeze(-1).expand(
-        -1, c
-    )
+    grid_indices_flat_expanded = grid_indices_flat.unsqueeze(-1).expand(-1, c)
     values_mean.scatter_reduce_(
         0, grid_indices_flat_expanded, x, reduce="mean", include_self=False
     )
@@ -174,7 +179,9 @@ class ScatterAggregator(Module):
         self.out_dim = out_dim
         self.nbuckets = nbuckets
 
-        proj_in = self.nbuckets * in_dim + self.nbuckets  # aggregated features + observability mask
+        proj_in = (
+            self.nbuckets * in_dim + self.nbuckets
+        )  # aggregated features + observability mask
         proj_out = out_dim * 2
         self.bucket_mixing_mlp = torch.nn.Sequential(
             torch.nn.Linear(proj_in, proj_out),
@@ -186,9 +193,9 @@ class ScatterAggregator(Module):
     def forward(
         self,
         x: Float[torch.Tensor, "N c_in"],
-        batch_idx: Int[torch.Tensor, "N"],
-        pix: Int[torch.Tensor, "N"],
-        bucket_id: Int[torch.Tensor, "N"],
+        batch_idx: Int[torch.Tensor, " N"],
+        pix: Int[torch.Tensor, " N"],
+        bucket_id: Int[torch.Tensor, " N"],
         nbatch: int,
         npix: int,
     ) -> Float[torch.Tensor, "nbatch npix c_out"]:
