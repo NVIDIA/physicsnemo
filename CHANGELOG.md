@@ -47,17 +47,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds a `global_shape` argument to `ShardTensor.from_local`, enabling the
   no-communication `sharding_shapes="chunk"` path.
 - Adds exact-boundary quality mesh generation to
-  `physicsnemo.mesh.tessellation`: `fill_interior` takes a closed
-  codimension-one boundary `Mesh` (2D edge loops today; loops in any order
-  and orientation, with holes, multiple components, and nested islands
-  resolved automatically) and fills the interior with quality simplices via
-  constrained Delaunay triangulation with Ruppert refinement — every input
-  vertex is preserved bit-identically, every output triangle meets the
-  guaranteed minimum-angle bound, output is a `Mesh` with provenance
-  `point_data`, deterministic, with optional bound-preserving ODT smoothing.
-  The contract is dimension-generic; `n = 3` raises `NotImplementedError`
-  pending exact boundary recovery. Also adds `polygon_interior_point`,
-  which returns a point strictly inside a simple polygon.
+  `physicsnemo.mesh.tessellation`. `fill_interior` takes a closed
+  codimension-one boundary `Mesh` (currently 2D edge loops, in any order
+  and orientation) and fills the interior with quality simplices through
+  constrained Delaunay triangulation with Ruppert refinement. The algorithm
+  resolves holes, multiple components, and nested islands automatically. It
+  preserves every input vertex bit-identically, and every output triangle
+  meets the guaranteed minimum-angle bound. Output is a `Mesh` with
+  provenance `point_data`, deterministic, with optional bound-preserving
+  optimal-Delaunay-triangulation (ODT) smoothing. The contract is
+  dimension-generic. `n = 3` raises `NotImplementedError` pending exact
+  boundary recovery. Also adds `polygon_interior_point`, which returns a
+  point strictly inside a simple polygon.
 - Adds `rectilinear_grid_divergence`, `rectilinear_grid_curl`, and
   `rectilinear_grid_laplacian` to `physicsnemo.nn.functional`, with Torch and
   fused Warp implementations for periodic, nonuniform rectilinear grids.
