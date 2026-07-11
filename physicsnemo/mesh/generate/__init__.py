@@ -17,8 +17,8 @@
 """Mesh generation from implicit representations.
 
 This module provides functions for generating meshes from scalar fields
-and implicit functions: isosurface extraction via marching cubes, and
-volume mesh generation for implicit domains in any spatial
+and implicit functions. It supports isosurface extraction using marching
+cubes and volume mesh generation for implicit domains in any spatial
 dimension through ``mesh_implicit_domain``. It also includes a
 differentiable geometry refit (``refit_mesh_to_implicit``) and
 signed-distance building blocks.
