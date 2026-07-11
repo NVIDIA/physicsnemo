@@ -83,57 +83,81 @@ def triangle_3d() -> Mesh:
 
 
 ###############################################################################
-# Cell data integration
+# Cell/point field integration: shared behavior
+###############################################################################
+
+
+def _entity_count(mesh: Mesh, data_source: str) -> int:
+    """Number of entities carrying the field for a given data source."""
+    return mesh.n_cells if data_source == "cells" else mesh.n_points
+
+
+@pytest.mark.parametrize("data_source", ["cells", "points"])
+class TestIntegrateFields:
+    """Behavior shared by cell-centered (P0) and point-centered (P1) quadrature."""
+
+    @pytest.mark.parametrize(
+        "mesh_fixture",
+        ["unit_triangle", "two_triangles", "unit_tet", "edge_mesh"],
+    )
+    def test_constant_scalar(
+        self, request: pytest.FixtureRequest, mesh_fixture: str, data_source: str
+    ):
+        """Integral of constant c over any manifold = c * total measure."""
+        mesh = request.getfixturevalue(mesh_fixture)
+        f = torch.full((_entity_count(mesh, data_source),), 7.0)
+        result = integrate(mesh, f, data_source=data_source)
+        assert torch.isclose(result, 7.0 * mesh.cell_areas.sum())
+
+    def test_vector_field(self, unit_triangle: Mesh, data_source: str):
+        """Trailing dimensions are preserved."""
+        n = _entity_count(unit_triangle, data_source)
+        f = torch.tensor([1.0, 2.0, 3.0]).expand(n, 3)
+        result = integrate(unit_triangle, f, data_source=data_source)
+        assert result.shape == (3,)
+        assert torch.allclose(result, torch.tensor([0.5, 1.0, 1.5]))
+
+    def test_tensor_field(self, unit_triangle: Mesh, data_source: str):
+        """Constant 2x2 tensor field: integral = area * value."""
+        base = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+        n = _entity_count(unit_triangle, data_source)
+        f = base.expand(n, 2, 2)
+        result = integrate(unit_triangle, f, data_source=data_source)
+        assert result.shape == (2, 2)
+        assert torch.allclose(result, 0.5 * base)
+
+    def test_via_mesh_method(self, two_triangles: Mesh, data_source: str):
+        """Mesh.integrate() forwards to the functional entry point."""
+        data = (
+            two_triangles.cell_data
+            if data_source == "cells"
+            else two_triangles.point_data
+        )
+        data["f"] = torch.full((_entity_count(two_triangles, data_source),), 2.0)
+        result = two_triangles.integrate("f", data_source=data_source)
+        assert torch.isclose(result, 2.0 * two_triangles.cell_areas.sum())
+
+
+###############################################################################
+# Cell data integration (P0-specific)
 ###############################################################################
 
 
 class TestIntegrateCellFields:
-    def test_constant_scalar(self, unit_triangle: Mesh):
-        """Integral of constant c over domain = c * volume."""
-        f = torch.tensor([7.0])
-        result = integrate(unit_triangle, f, data_source="cells")
-        assert torch.isclose(result, torch.tensor(7.0 * 0.5))
-
     def test_two_cells(self, two_triangles: Mesh):
+        """P0 quadrature is exact for distinct piecewise-constant values."""
         areas = two_triangles.cell_areas
         f = torch.tensor([2.0, 5.0])
         expected = (f * areas).sum()
         assert torch.isclose(integrate(two_triangles, f, data_source="cells"), expected)
 
-    def test_via_mesh_method(self, two_triangles: Mesh):
-        two_triangles.cell_data["p"] = torch.tensor([2.0, 5.0])
-        areas = two_triangles.cell_areas
-        expected = (torch.tensor([2.0, 5.0]) * areas).sum()
-        assert torch.isclose(two_triangles.integrate("p"), expected)
-
-    def test_vector_field(self, unit_triangle: Mesh):
-        """Trailing dimensions are preserved."""
-        f = torch.tensor([[1.0, 2.0, 3.0]])  # (1, 3)
-        result = integrate(unit_triangle, f, data_source="cells")
-        assert result.shape == (3,)
-        assert torch.allclose(result, torch.tensor([0.5, 1.0, 1.5]))
-
-    def test_tensor_field(self, unit_triangle: Mesh):
-        """2x2 tensor field on a single cell."""
-        f = torch.tensor([[[1.0, 2.0], [3.0, 4.0]]])  # (1, 2, 2)
-        result = integrate(unit_triangle, f, data_source="cells")
-        assert result.shape == (2, 2)
-        expected = torch.tensor([[0.5, 1.0], [1.5, 2.0]])
-        assert torch.allclose(result, expected)
-
 
 ###############################################################################
-# Point data integration (P1)
+# Point data integration (P1-specific)
 ###############################################################################
 
 
 class TestIntegratePointFields:
-    def test_constant_field_exact(self, unit_triangle: Mesh):
-        """P1 integral of constant field = constant * volume."""
-        f = torch.tensor([3.0, 3.0, 3.0])
-        result = integrate(unit_triangle, f, data_source="points")
-        assert torch.isclose(result, torch.tensor(3.0 * 0.5))
-
     def test_linear_field_exact(self, unit_triangle: Mesh):
         """P1 integral of linear field f(x,y)=x is exact.
 
@@ -153,14 +177,8 @@ class TestIntegratePointFields:
         result = integrate(unit_triangle, f, data_source="points")
         assert torch.isclose(result, torch.tensor(1.0 / 6.0))
 
-    def test_multiple_cells(self, two_triangles: Mesh):
-        """Integration over mesh with two cells."""
-        f = torch.ones(two_triangles.n_points)
-        result = integrate(two_triangles, f, data_source="points")
-        assert torch.isclose(result, two_triangles.cell_areas.sum())
-
-    def test_vector_field(self, unit_triangle: Mesh):
-        """Vector field preserves trailing dimension."""
+    def test_linear_vector_field(self, unit_triangle: Mesh):
+        """Linear vector field is integrated exactly per component."""
         f = torch.stack(
             [unit_triangle.points[:, 0], unit_triangle.points[:, 1]], dim=-1
         )  # (3, 2)
@@ -168,13 +186,6 @@ class TestIntegratePointFields:
         assert result.shape == (2,)
         expected = torch.tensor([1.0 / 6.0, 1.0 / 6.0])
         assert torch.allclose(result, expected)
-
-    def test_tet_constant(self, unit_tet: Mesh):
-        """Constant field on tetrahedron: integral = c * V."""
-        f = torch.full((4,), 5.0)
-        result = integrate(unit_tet, f, data_source="points")
-        expected = 5.0 / 6.0
-        assert torch.isclose(result, torch.tensor(expected))
 
     def test_tet_linear(self, unit_tet: Mesh):
         """Linear field f(x,y,z) = x on tetrahedron.
@@ -185,12 +196,6 @@ class TestIntegratePointFields:
         f = unit_tet.points[:, 0]
         result = integrate(unit_tet, f, data_source="points")
         assert torch.isclose(result, torch.tensor(1.0 / 24.0))
-
-    def test_edge_constant(self, edge_mesh: Mesh):
-        """Constant field on edges: integral = c * total_length."""
-        f = torch.full((4,), 2.0)
-        result = integrate(edge_mesh, f, data_source="points")
-        assert torch.isclose(result, torch.tensor(2.0 * 3.0))
 
     def test_edge_linear(self, edge_mesh: Mesh):
         """Linear field on edges: f(x) = x, x in [0,3].
@@ -203,11 +208,6 @@ class TestIntegratePointFields:
         result = integrate(edge_mesh, f, data_source="points")
         assert torch.isclose(result, torch.tensor(4.5))
 
-    def test_via_mesh_method(self, unit_triangle: Mesh):
-        unit_triangle.point_data["T"] = unit_triangle.points[:, 0]
-        result = unit_triangle.integrate("T", data_source="points")
-        assert torch.isclose(result, torch.tensor(1.0 / 6.0))
-
 
 ###############################################################################
 # Deprecated compatibility entry points
@@ -215,18 +215,17 @@ class TestIntegratePointFields:
 
 
 class TestDeprecatedIntegrateAliases:
-    def test_cell_alias_warns_and_matches_integrate(self, unit_triangle: Mesh):
-        field = torch.tensor([7.0])
-        with pytest.warns(LegacyFeatureWarning, match="integrate_cell_data"):
-            result = integrate_cell_data(unit_triangle, field)
-        expected = integrate(unit_triangle, field, data_source="cells")
-        torch.testing.assert_close(result, expected)
-
-    def test_point_alias_warns_and_matches_integrate(self, unit_triangle: Mesh):
-        field = torch.tensor([1.0, 2.0, 3.0])
-        with pytest.warns(LegacyFeatureWarning, match="integrate_point_data"):
-            result = integrate_point_data(unit_triangle, field)
-        expected = integrate(unit_triangle, field, data_source="points")
+    @pytest.mark.parametrize(
+        "alias, data_source",
+        [(integrate_cell_data, "cells"), (integrate_point_data, "points")],
+    )
+    def test_alias_warns_and_matches_integrate(
+        self, unit_triangle: Mesh, alias, data_source: str
+    ):
+        field = torch.arange(1.0, 1.0 + _entity_count(unit_triangle, data_source))
+        with pytest.warns(LegacyFeatureWarning, match=alias.__name__):
+            result = alias(unit_triangle, field)
+        expected = integrate(unit_triangle, field, data_source=data_source)
         torch.testing.assert_close(result, expected)
 
 
@@ -263,22 +262,14 @@ class TestNaNHandling:
         expected_1 = 2.0 * areas[0] + 3.0 * areas[1]
         assert torch.isclose(result[1], expected_1)
 
-    def test_cell_nan_propagated(self, two_triangles: Mesh):
-        f = torch.tensor([2.0, float("nan")])
+    @pytest.mark.parametrize("data_source", ["cells", "points"])
+    def test_nan_propagated(self, two_triangles: Mesh, data_source: str):
+        f = torch.ones(_entity_count(two_triangles, data_source))
+        f[1] = float("nan")
         result = integrate(
             two_triangles,
             f,
-            data_source="cells",
-            nan_policy="propagate",
-        )
-        assert torch.isnan(result)
-
-    def test_point_nan_propagated(self, two_triangles: Mesh):
-        f = torch.tensor([1.0, float("nan"), 1.0, 1.0])
-        result = integrate(
-            two_triangles,
-            f,
-            data_source="points",
+            data_source=data_source,
             nan_policy="propagate",
         )
         assert torch.isnan(result)
@@ -342,6 +333,28 @@ class TestIntegrateMoment:
             two_triangles.cell_data["right"],
         )
         assert torch.allclose(result, expected)
+
+    def test_via_mesh_method(self, two_triangles: Mesh):
+        """Mesh.integrate_moment() forwards all arguments to the functional API."""
+        two_triangles.cell_data["left"] = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+        two_triangles.cell_data["right"] = torch.tensor([[5.0, 6.0], [7.0, 8.0]])
+        result = two_triangles.integrate_moment(
+            "left",
+            "right",
+            aligned_dims=1,
+            accumulation_dtype=torch.float64,
+            nan_policy="propagate",
+        )
+        expected = integrate_moment(
+            two_triangles,
+            "left",
+            "right",
+            aligned_dims=1,
+            accumulation_dtype=torch.float64,
+            nan_policy="propagate",
+        )
+        assert result.dtype == torch.float64
+        torch.testing.assert_close(result, expected)
 
     def test_aligned_group_dimensions(self, two_triangles: Mesh):
         left = torch.arange(24.0).reshape(2, 3, 4)
@@ -553,16 +566,17 @@ class TestIntegrateFlux:
 
 
 class TestIntegrateDispatch:
-    def test_string_key_cell(self, two_triangles: Mesh):
-        two_triangles.cell_data["p"] = torch.tensor([1.0, 2.0])
-        result = integrate(two_triangles, "p", data_source="cells")
-        areas = two_triangles.cell_areas
-        assert torch.isclose(result, (torch.tensor([1.0, 2.0]) * areas).sum())
-
-    def test_string_key_point(self, unit_triangle: Mesh):
-        unit_triangle.point_data["T"] = torch.ones(3) * 4.0
-        result = integrate(unit_triangle, "T", data_source="points")
-        assert torch.isclose(result, torch.tensor(4.0 * 0.5))
+    @pytest.mark.parametrize("data_source", ["cells", "points"])
+    def test_string_key(self, two_triangles: Mesh, data_source: str):
+        """String keys are resolved from the data dictionary for the source."""
+        data = (
+            two_triangles.cell_data
+            if data_source == "cells"
+            else two_triangles.point_data
+        )
+        data["f"] = torch.full((_entity_count(two_triangles, data_source),), 4.0)
+        result = integrate(two_triangles, "f", data_source=data_source)
+        assert torch.isclose(result, 4.0 * two_triangles.cell_areas.sum())
 
     def test_tensor_direct(self, unit_triangle: Mesh):
         f = torch.tensor([6.0])
@@ -579,27 +593,26 @@ class TestIntegrateDispatch:
         with pytest.raises(ValueError, match="data_source"):
             integrate(unit_triangle, torch.ones(3), data_source="invalid")
 
-    def test_missing_cell_key(self, unit_triangle: Mesh):
-        """String key not in cell_data gives a helpful KeyError."""
-        with pytest.raises(KeyError, match="cell.*_data"):
-            integrate(unit_triangle, "nonexistent")
+    @pytest.mark.parametrize(
+        "data_source, match",
+        [("cells", "cell_data"), ("points", "point_data")],
+    )
+    def test_missing_key(self, unit_triangle: Mesh, data_source: str, match: str):
+        """String key not in the data dictionary gives a helpful KeyError."""
+        with pytest.raises(KeyError, match=match):
+            integrate(unit_triangle, "nonexistent", data_source=data_source)
 
-    def test_missing_point_key(self, unit_triangle: Mesh):
-        """String key not in point_data gives a helpful KeyError."""
-        with pytest.raises(KeyError, match="point.*_data"):
-            integrate(unit_triangle, "nonexistent", data_source="points")
-
-    def test_wrong_cell_tensor_shape(self, unit_triangle: Mesh):
-        """Tensor with wrong leading dimension for cell data raises ValueError."""
-        wrong = torch.ones(unit_triangle.n_cells + 5)
-        with pytest.raises(ValueError, match="n_cells"):
-            integrate(unit_triangle, wrong, data_source="cells")
-
-    def test_wrong_point_tensor_shape(self, unit_triangle: Mesh):
-        """Tensor with wrong leading dimension for point data raises ValueError."""
-        wrong = torch.ones(unit_triangle.n_points + 5)
-        with pytest.raises(ValueError, match="n_points"):
-            integrate(unit_triangle, wrong, data_source="points")
+    @pytest.mark.parametrize(
+        "data_source, match",
+        [("cells", "n_cells"), ("points", "n_points")],
+    )
+    def test_wrong_tensor_shape(
+        self, unit_triangle: Mesh, data_source: str, match: str
+    ):
+        """Tensor with wrong leading dimension raises ValueError."""
+        wrong = torch.ones(_entity_count(unit_triangle, data_source) + 5)
+        with pytest.raises(ValueError, match=match):
+            integrate(unit_triangle, wrong, data_source=data_source)
 
 
 ###############################################################################

@@ -389,13 +389,43 @@ def _integrate_weighted_moment(
     accumulation_dtype: torch.dtype | None,
     nan_policy: NanPolicy,
 ) -> torch.Tensor:
-    """Core weighted grouped moment used by Mesh and streamed operators.
+    r"""Core weighted grouped moment used by Mesh and streamed operators.
 
-    ``weights`` is the per-entity quadrature measure. Callers integrating
-    over a (possibly subsampled) mesh should pass the effective measure
-    ``cell_areas * cell_quadrature_weights`` (what
-    :func:`integrate_moment` does via ``_cell_quadrature_areas``), not the
-    bare geometric areas.
+    Computes :math:`\sum_i w_i \, a_i \otimes b_i` over the leading entity
+    axis, where an optional block of aligned (group) dimensions immediately
+    after the entity axis appears once in the output instead of
+    participating in the outer product.
+
+    Parameters
+    ----------
+    left, right : torch.Tensor
+        Field values shaped ``(n_entities, *aligned_shape, *event_shape)``.
+        The leading axis indexes integration entities (e.g. cells).  The
+        ``aligned_dims`` axes after it must match between the two tensors;
+        the remaining trailing (event) axes may differ.
+    weights : torch.Tensor
+        Quadrature weights shaped ``(n_entities,)`` (e.g. cell measures).
+        Callers integrating over a possibly-subsampled mesh should pass the
+        effective measure ``cell_areas * cell_quadrature_weights`` (what
+        :func:`integrate_moment` does via ``_cell_quadrature_areas``), not
+        the bare geometric areas.
+    aligned_dims : int
+        Number of dimensions immediately after the entity axis treated as
+        aligned batch/group axes shared by ``left`` and ``right``.
+    accumulation_dtype : torch.dtype or None
+        Minimum dtype for the weighted matrix product.  The compute dtype
+        is the promotion of ``left``, ``right``, ``weights``, and this
+        dtype; ``None`` applies ordinary input promotion with no
+        additional precision floor.
+    nan_policy : {"omit", "propagate"}
+        ``"omit"`` zeroes NaN entries in ``left`` and ``right`` before the
+        product; ``"propagate"`` leaves them untouched.
+
+    Returns
+    -------
+    torch.Tensor
+        Moment with shape ``aligned_shape + left_event_shape +
+        right_event_shape`` in the promoted compute dtype.
     """
     if not torch.compiler.is_compiling():
         if left.ndim < 1 or right.ndim < 1 or weights.ndim != 1:

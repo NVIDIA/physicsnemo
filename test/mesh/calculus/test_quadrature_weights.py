@@ -121,6 +121,10 @@ class TestWeightedIntegration:
         torch.testing.assert_close(
             integrate_moment(mesh, left, right), unweighted * 2.0
         )
+        ### Mesh method forwards to the same weighted implementation.
+        torch.testing.assert_close(
+            mesh.integrate_moment(left, right), unweighted * 2.0
+        )
 
     def test_no_weights_matches_geometric_measure(self):
         """Meshes without weights integrate against the bare geometric areas."""

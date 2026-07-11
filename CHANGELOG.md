@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds `integrate_moment` to `physicsnemo.mesh.calculus`, plus a
+  `Mesh.integrate_moment` convenience method: measure-weighted outer-product
+  moments of two cell-centered fields, with aligned group dimensions, a
+  configurable accumulation dtype, and an explicit `nan_policy`.
+  `integrate`, `integrate_flux`, and the corresponding `Mesh` methods gain
+  the same `nan_policy` option.
 - Adds `Mesh.cell_quadrature_weights` (with `Mesh.set_cell_quadrature_weights`
   and the reserved `cell_data` key `QUADRATURE_WEIGHTS_KEY`): dimensionless
   per-cell Horvitz–Thompson quadrature weights that make the effective measure
@@ -18,7 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MeshReader`/`DomainMeshReader` (now a cyclic contiguous block, giving every
   cell an inclusion probability of exactly `k/N`) and in `SubsampleMesh`
   records and multiplicatively composes the weights; `Mesh.integrate`,
-  `Mesh.integrate_flux`, and GLOBE's boundary integrals consume them.
+  `Mesh.integrate_flux`, `integrate_moment`, and GLOBE's boundary integrals
+  consume them.
   `cell_areas` itself remains the purely geometric simplex measure, and meshes
   without recorded weights behave exactly as before.
 - Adds a `global_shape` argument to `ShardTensor.from_local`, enabling the
