@@ -54,8 +54,8 @@ from being generated. A coverage guard raises an error, rather than
 silently dropping geometry, when the domain
 has features below the target edge length ``h`` or when coverage cannot
 be certified at all (a phi that is NaN inside the box, e.g. a neural
-field queried outside its training range), and sharp corners can be
-interpolated exactly via ``feature_points``.
+field queried outside its training range). You can interpolate sharp
+corners exactly through ``feature_points``.
 
 :func:`refit_mesh_to_implicit` is the differentiable companion: it
 re-projects a mesh's boundary onto ``phi = 0`` with graph-preserving
@@ -81,10 +81,18 @@ differentiable layer for shape optimization.
     r = torch.tensor(0.8, requires_grad=True)
     refit = refit_mesh_to_implicit(mesh.to("cpu"), lambda x: x.norm(dim=-1) - r)
 
-Signed-distance building blocks (:func:`sdf_sphere`, :func:`sdf_box`,
-:func:`sdf_polygon_2d`, and the CSG combinators :func:`sdf_union`,
-:func:`sdf_intersection`, :func:`sdf_difference`) are provided for
-convenience; any callable ``phi(x: (..., d)) -> (...)`` works.
+The following signed-distance building blocks are provided for
+convenience:
+
+- :func:`sdf_sphere`
+- :func:`sdf_box`
+- :func:`sdf_polygon_2d`
+- :func:`sdf_union` (CSG combinator)
+- :func:`sdf_intersection` (CSG combinator)
+- :func:`sdf_difference` (CSG combinator)
+- :func:`project_to_zero_set` (Newton projection onto ``phi = 0``)
+
+Any callable with the signature ``phi(x: (..., d)) -> (...)`` also works.
 
 Isosurface extraction
 ---------------------
