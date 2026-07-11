@@ -171,9 +171,11 @@ def _select_slice_from_replicate(
 
 def _to_new_shard_dim(
     local_tensor: torch.Tensor,
+    current_spec: ShardTensorSpec,
     target_spec: ShardTensorSpec,
     mesh_dim: int,
     size_hint: tuple[int, ...] | None,
+    spec_shapes_are_current: bool,
     current_dim: int,
     target_dim: int,
 ) -> tuple[torch.Tensor, tuple[int, ...] | None]:
@@ -187,12 +189,22 @@ def _to_new_shard_dim(
     ----------
     local_tensor : torch.Tensor
         The local shard of the tensor to reshard.
+    current_spec : ShardTensorSpec
+        Specification of current sharding scheme.
     target_spec : ShardTensorSpec
         Specification of target sharding scheme.
     mesh_dim : int
         The device mesh dimension on which we're transposing.
     size_hint : Optional[Tuple[int, ...]]
         If provided, use this to chunk the tensor for both send and recv.
+    spec_shapes_are_current : bool
+        Whether ``current_spec``'s recorded per-rank sharding shapes still
+        describe ``local_tensor``. The caller sets this from the hop
+        sequence of the enclosing redistribute (true only until the first
+        transform mutates the local tensor), which is derived from
+        placements and therefore identical on every rank -- the fast path
+        below must be taken by all ranks or none, so this decision may not
+        depend on rank-local state.
     current_dim : int
         Currently sharded on this tensor dimension.
     target_dim : int
@@ -229,21 +241,71 @@ def _to_new_shard_dim(
     # Also, cast to list for all_to_all:
     chunks = [c.contiguous() for c in chunks]
 
-    # TODO - remove this all_to_all by enabling recv shape from known information.
+    # Try to compute recv shapes analytically, with no communication:
+    # - the target-dim chunk size we're about to receive is whatever *we*
+    #   compute for our own slot, since every rank derives its chunk sizes
+    #   from the same (already-replicated) global extent via the same
+    #   deterministic chunking rule -- it's not actually rank-dependent.
+    # - the current-dim extent of the sender is already recorded per-rank
+    #   on `current_spec`.
+    # Whether the fast path applies is decided by `spec_shapes_are_current`,
+    # which the caller derives from the hop sequence (identical on all
+    # ranks by construction). It must NOT be decided from rank-local state
+    # such as `local_tensor.shape`: ranks disagreeing here means a subset
+    # skips the shape-negotiation all_to_all below and the collectives
+    # mismatch. The shape comparison is therefore an assertion (corrupt or
+    # inconsistent specs should fail loudly), not a fallback condition.
+    recv_shapes = None
+    if (
+        spec_shapes_are_current
+        and current_spec._sharding_shapes is not None
+        and mesh_dim in current_spec._sharding_shapes
+    ):
+        current_shapes_by_rank = current_spec._sharding_shapes[mesh_dim]
+        my_coord = device_mesh.get_coordinate()[mesh_dim]
+        if len(current_shapes_by_rank) != mesh_size:
+            raise RuntimeError(
+                f"current_spec records {len(current_shapes_by_rank)} shapes "
+                f"for mesh dim {mesh_dim}, expected {mesh_size}."
+            )
+        if torch.Size(current_shapes_by_rank[my_coord]) != torch.Size(
+            local_tensor.shape
+        ):
+            raise RuntimeError(
+                f"current_spec records shape {current_shapes_by_rank[my_coord]} "
+                f"for this rank on mesh dim {mesh_dim}, but the local tensor "
+                f"has shape {tuple(local_tensor.shape)}. The spec's sharding "
+                "shapes are stale or corrupt."
+            )
+        my_target_chunk_size = chunks[my_coord].shape[target_dim]
+        recv_shapes = []
+        for sender_shape in current_shapes_by_rank:
+            if len(sender_shape) != local_tensor.ndim:
+                raise RuntimeError(
+                    f"current_spec records shape {tuple(sender_shape)} for a "
+                    f"peer rank on mesh dim {mesh_dim}, which has different "
+                    f"rank than the local tensor shape "
+                    f"{tuple(local_tensor.shape)}."
+                )
+            recv_shape = list(sender_shape)
+            recv_shape[target_dim] = my_target_chunk_size
+            recv_shapes.append(recv_shape)
 
-    send_shapes = [
-        torch.tensor(c.shape, device=local_tensor.device, dtype=torch.int32)
-        for c in chunks
-    ]
-    recv_shapes = [torch.empty_like(s) for s in send_shapes]
+    if recv_shapes is None:
+        # Fallback: negotiate recv shapes with the sender ranks directly.
+        send_shapes = [
+            torch.tensor(c.shape, device=local_tensor.device, dtype=torch.int32)
+            for c in chunks
+        ]
+        recv_shape_tensors = [torch.empty_like(s) for s in send_shapes]
 
-    # Gather the send shape from every rank:
-    # For all to all, we _have_ to send and receive from every rank.
-    # But we can optimize the null-communication
-    dist.all_to_all(recv_shapes, send_shapes, group=group)
+        # Gather the send shape from every rank:
+        # For all to all, we _have_ to send and receive from every rank.
+        # But we can optimize the null-communication
+        dist.all_to_all(recv_shape_tensors, send_shapes, group=group)
 
-    # Turn the recv_shapes back into torch shapes:
-    recv_shapes = [list(torch.Size(r)) for r in recv_shapes]
+        # Turn the recv_shapes back into torch shapes:
+        recv_shapes = [list(torch.Size(r)) for r in recv_shape_tensors]
 
     # Create the buffers for recv:
     recv_buffers = [
@@ -352,6 +414,13 @@ def redistribute_local_shard_tensor(
     if len(transform_infos) == 0:
         return local_tensor
 
+    # `current_spec`'s recorded per-rank sharding shapes describe the local
+    # tensors only until the first hop below mutates them. This flag is a
+    # function of the hop sequence alone (derived from placements, so
+    # identical on every rank) -- see `_to_new_shard_dim` for why the
+    # fast-path decision must be rank-uniform.
+    spec_shapes_are_current = True
+
     for transform_info in transform_infos:
         i = transform_info.mesh_dim
         current, target = transform_info.src_dst_placements
@@ -430,9 +499,11 @@ def redistribute_local_shard_tensor(
 
                     new_local_tensor, size_hint = _to_new_shard_dim(
                         local_tensor,
+                        current_spec,  # Known per-rank shapes, to avoid negotiating recv sizes.
                         target_spec,  # Send the whole spec so we can infer full recv sizes.
                         i,  # The mesh dim we're transposing sharding on.
                         size_hint,
+                        spec_shapes_are_current,  # Rank-uniform fast-path gate.
                         current.dim,  # Current tensor dimension.
                         target_placement.dim,  # Target tensor dimension.
                     )
@@ -479,6 +550,10 @@ def redistribute_local_shard_tensor(
                 "Failed to create new local tensor during redistribution"
             )
         local_tensor = new_local_tensor
+        # This hop transformed the local tensor (the `current == target`
+        # shortcut above skips this point), so the spec's recorded shapes
+        # no longer describe it.
+        spec_shapes_are_current = False
 
     if new_local_tensor is None:
         raise RuntimeError("redistribute failed!")

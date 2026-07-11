@@ -145,11 +145,12 @@ def compute_divergence_points_lsq(
             + \frac{\partial v_y}{\partial y}
             + \frac{\partial v_z}{\partial z}
 
-    Computes the full Jacobian via a single batched LSQ solve, then takes
-    the trace. This is more efficient than solving each component separately,
-    because the adjacency construction, neighbor grouping, A-matrix assembly,
-    and batched lstsq are all performed once instead of ``n_spatial_dims``
-    times.
+    Computes the full derivative-first Jacobian
+    ``jacobian[i, k, j] = ∂v_j/∂x_k`` via a single batched LSQ solve,
+    then takes the trace. This is more efficient than solving each component
+    separately, because the adjacency construction, neighbor grouping,
+    A-matrix assembly, and batched lstsq are all performed once instead of
+    ``n_spatial_dims`` times.
 
     Parameters
     ----------
@@ -165,7 +166,7 @@ def compute_divergence_points_lsq(
     """
     from physicsnemo.mesh.calculus._lsq_reconstruction import compute_point_gradient_lsq
 
-    ### Single call computes full Jacobian: J[i, j, k] = ∂v_j/∂x_k
+    ### Single call computes full Jacobian: J[i, k, j] = ∂v_j/∂x_k
     # Shape: (n_points, n_spatial_dims, n_spatial_dims)
     jacobian = compute_point_gradient_lsq(mesh, vector_field)
 
@@ -180,8 +181,8 @@ def compute_divergence_cells_lsq(
     r"""Compute divergence at cell centers using the LSQ Jacobian trace.
 
     Cell-centered analogue of :func:`compute_divergence_points_lsq`: computes
-    the full Jacobian via a single batched cell-neighbour LSQ solve, then takes
-    the trace.
+    the full derivative-first Jacobian via a single batched cell-neighbour LSQ
+    solve, then takes the trace.
 
     Parameters
     ----------
@@ -197,7 +198,7 @@ def compute_divergence_cells_lsq(
     """
     from physicsnemo.mesh.calculus._lsq_reconstruction import compute_cell_gradient_lsq
 
-    # J[i, j, k] = ∂v_j/∂x_k, shape (n_cells, n_spatial_dims, n_spatial_dims)
+    # J[i, k, j] = ∂v_j/∂x_k, shape (n_cells, n_spatial_dims, n_spatial_dims)
     jacobian = compute_cell_gradient_lsq(mesh, vector_field)
 
     return torch.einsum("...ii", jacobian)
