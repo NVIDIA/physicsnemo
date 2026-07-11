@@ -304,6 +304,76 @@ class MultiDataset:
         metadata[DATASET_INDEX_METADATA_KEY] = ds_id
         return data, metadata
 
+    def submit(self, index: int, stream: Optional[Any] = None) -> tuple[int, Any]:
+        """
+        Submit a global index for background loading (FIFO prefetch primitive).
+
+        Maps the global index to its owning sub-dataset and delegates to
+        that dataset's :meth:`~DatasetBase.submit`. The returned handle is
+        wrapped with the owning dataset id so :meth:`consume` can restore
+        the ``dataset_index`` metadata.
+
+        Parameters
+        ----------
+        index : int
+            Global sample index to load.
+        stream : object, optional
+            CUDA stream for the consume step.
+
+        Returns
+        -------
+        tuple[int, PrefetchHandle]
+            ``(dataset_index, handle)`` to pass to :meth:`consume`.
+        """
+        ds_id, local_i = self._index_to_dataset_and_local(index)
+        handle = self._datasets[ds_id].submit(local_i, stream=stream)
+        return ds_id, handle
+
+    def consume(
+        self, handle: tuple[int, Any], *, defer_sync: bool = False
+    ) -> tuple[TensorDict, dict[str, Any]]:
+        """
+        Resolve a :meth:`submit` handle into ``(data, metadata)``.
+
+        Parameters
+        ----------
+        handle : tuple[int, PrefetchHandle]
+            The ``(dataset_index, handle)`` returned by :meth:`submit`.
+        defer_sync : bool, default=False
+            Forwarded to the owning sub-dataset's
+            :meth:`~DatasetBase.consume`.  When True, the sub-dataset records
+            its preprocessing event into its own ``_events_pending`` instead
+            of making the compute stream wait on it; :meth:`_pop_events`
+            collects those events for the DataLoader.
+
+        Returns
+        -------
+        tuple[TensorDict, dict[str, Any]]
+            Sample and metadata, enriched with ``dataset_index``.
+        """
+        ds_id, inner = handle
+        data, metadata = self._datasets[ds_id].consume(inner, defer_sync=defer_sync)
+        metadata = dict(metadata)
+        metadata[DATASET_INDEX_METADATA_KEY] = ds_id
+        return data, metadata
+
+    def _pop_events(self) -> list:
+        """Aggregate and clear pending preprocessing events across sub-datasets.
+
+        Each sub-dataset records its deferred preprocessing CUDA events on
+        itself, so the DataLoader retrieves them through the
+        :class:`MultiDataset` by gathering from every constituent.
+
+        Returns
+        -------
+        list
+            CUDA events recorded by the sub-datasets since the last pop.
+        """
+        collected: list = []
+        for ds in self._datasets:
+            collected.extend(ds._pop_events())
+        return collected
+
     def prefetch(
         self,
         index: int,

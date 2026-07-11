@@ -14,6 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# ``tensorclass`` adds a class-scoped ``float`` method. Qualify scalar
+# annotations that must remain resolvable under Python's deferred lookup.
+import builtins
 import math
 import types
 from pathlib import Path
@@ -35,6 +38,7 @@ from tensordict import NonTensorData, TensorDict, tensorclass
 
 from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
 from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
+from physicsnemo.mesh.transformations.deform import displace, morph
 from physicsnemo.mesh.transformations.geometric import (
     rotate,
     scale,
@@ -2650,6 +2654,62 @@ class Mesh:
             New Mesh with translated geometry.
         """
         return translate(self, offset)
+
+    def displace(
+        self,
+        displacement: str | tuple[str, ...] | torch.Tensor,
+        *,
+        point_weights: str | tuple[str, ...] | torch.Tensor | None = None,
+        implementation: Literal["torch"] | None = None,
+    ) -> "Mesh":
+        """Displace points by a dense vector field without changing topology.
+
+        Convenience wrapper for
+        :func:`physicsnemo.mesh.transformations.deform.displace`, which
+        documents all parameters and numerical behavior.
+
+        Returns
+        -------
+        Mesh
+            New mesh with displaced points, unchanged connectivity and fields.
+        """
+        return displace(
+            self,
+            displacement,
+            point_weights=point_weights,
+            implementation=implementation,
+        )
+
+    def morph(
+        self,
+        control_points: torch.Tensor,
+        control_displacements: torch.Tensor,
+        *,
+        radius: builtins.float | torch.Tensor,
+        point_weights: str | tuple[str, ...] | torch.Tensor | None = None,
+        kernel: Literal["wendland_c2"] = "wendland_c2",
+        implementation: Literal["torch", "warp"] | None = None,
+    ) -> "Mesh":
+        """Morph points from sparse compactly supported control handles.
+
+        Convenience wrapper for
+        :func:`physicsnemo.mesh.transformations.deform.morph`, which documents
+        all parameters and numerical behavior.
+
+        Returns
+        -------
+        Mesh
+            New mesh with morphed points, unchanged connectivity and fields.
+        """
+        return morph(
+            self,
+            control_points,
+            control_displacements,
+            radius=radius,
+            point_weights=point_weights,
+            kernel=kernel,
+            implementation=implementation,
+        )
 
     def rotate(
         self,

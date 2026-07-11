@@ -522,6 +522,12 @@ class NormalizeMeshFields(MeshTransform):
             self._stats: dict[str, dict[str, Float[torch.Tensor, " *shape"] | str]] = (
                 torch.load(stats_file, weights_only=True)
             )
+            # Match the inline branch: stats are float32 regardless of the
+            # dtype they were computed/saved in, so normalization never
+            # promotes field dtypes.
+            for s in self._stats.values():
+                s["mean"] = torch.as_tensor(s["mean"], dtype=torch.float32)
+                s["std"] = torch.as_tensor(s["std"], dtype=torch.float32)
         elif fields is not None:
             self._stats = {}
             for name, cfg in fields.items():
@@ -533,6 +539,31 @@ class NormalizeMeshFields(MeshTransform):
         else:
             raise ValueError("Provide one of 'stats_file' or 'fields'")
 
+    def to(self, device: torch.device | str) -> "NormalizeMeshFields":
+        """Move internal tensors and the nested field statistics to *device*.
+
+        Extends :meth:`MeshTransform.to` by also moving the per-field
+        ``mean`` and ``std`` tensors in ``self._stats`` so the per-sample
+        ``.to()`` in :meth:`__call__` is a no-op.
+
+        Parameters
+        ----------
+        device : torch.device or str
+            Target device.
+
+        Returns
+        -------
+        NormalizeMeshFields
+            ``self``, for chaining.
+        """
+        # Base .to() moves only bare tensor attrs; move the nested stats too
+        # so the per-sample .to() in __call__ is a no-op (no H2D copy/sync).
+        super().to(device)
+        for s in self._stats.values():
+            s["mean"] = s["mean"].to(self._device)
+            s["std"] = s["std"].to(self._device)
+        return self
+
     def __call__(self, mesh: Mesh) -> Mesh:
         ### Clone and z-score the targeted association's TensorDict in
         ### place; fields absent from `_stats` (or absent from the mesh)
@@ -542,9 +573,7 @@ class NormalizeMeshFields(MeshTransform):
             if field_name not in new_td.keys():
                 continue
             val = new_td[field_name].float()
-            mean = stats["mean"].to(dtype=val.dtype, device=val.device)
-            std = stats["std"].to(dtype=val.dtype, device=val.device)
-            new_td[field_name] = (val - mean) / (std + self._eps)
+            new_td[field_name] = (val - stats["mean"]) / (stats["std"] + self._eps)
 
         ### `Mesh.copy` is a tensorclass-provided shallow copy: `points`,
         ### `cells`, the untouched associations, and the geometric `_cache`
@@ -589,10 +618,9 @@ class NormalizeMeshFields(MeshTransform):
             dim = 1 if ftype == "scalar" else n_spatial_dims
             if name in self._stats:
                 stats = self._stats[name]
-                mean = stats["mean"].to(dtype=tensor.dtype, device=tensor.device)
-                std = stats["std"].to(dtype=tensor.dtype, device=tensor.device)
                 out[..., idx : idx + dim] = (
-                    out[..., idx : idx + dim] * (std + self._eps) + mean
+                    out[..., idx : idx + dim] * (stats["std"] + self._eps)
+                    + stats["mean"]
                 )
             idx += dim
         return out
@@ -629,9 +657,7 @@ class NormalizeMeshFields(MeshTransform):
             stats = self._stats.get(name)
             if stats is None:
                 return val
-            mean = stats["mean"].to(dtype=val.dtype, device=val.device)
-            std = stats["std"].to(dtype=val.dtype, device=val.device)
-            return val * (std + self._eps) + mean
+            return val * (stats["std"] + self._eps) + stats["mean"]
 
         ### ``named_apply`` is typed ``TensorDict | None`` for its
         ### in-place mode; the out-of-place path always returns a TD.

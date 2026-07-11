@@ -1,6 +1,85 @@
 Geometry Functionals
 ====================
 
+Point Displacement
+------------------
+
+.. autofunction:: physicsnemo.nn.functional.displace_points
+
+.. code:: python
+
+    import torch
+    from physicsnemo.nn.functional import displace_points
+
+    points = torch.tensor(
+        [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]], requires_grad=True
+    )
+    displacement = torch.tensor(
+        [[0.0, 1.0], [0.0, 1.0], [0.0, 1.0]], requires_grad=True
+    )
+    point_weights = torch.tensor([0.0, 0.5, 1.0])
+
+    moved = displace_points(
+        points,
+        displacement,
+        point_weights=point_weights,
+    )
+    moved.square().sum().backward()
+
+Sparse Control-Point Morphing
+-----------------------------
+
+.. autofunction:: physicsnemo.nn.functional.morph_points
+
+.. code:: python
+
+    import torch
+    from physicsnemo.nn.functional import morph_points
+
+    x = torch.linspace(0.0, 1.0, 9)
+    points = torch.stack((x, torch.zeros_like(x)), dim=-1).requires_grad_()
+    control_points = points.detach()[[0, -1]].clone().requires_grad_()
+    control_displacements = points.new_tensor(
+        [[0.0, 0.25], [0.0, -0.15]], requires_grad=True
+    )
+    radii = points.new_tensor([0.8, 0.8])
+
+    morphed = morph_points(
+        points,
+        control_points,
+        control_displacements,
+        radius=radii,
+        kernel="wendland_c2",
+    )
+    morphed.square().mean().backward()
+
+This allows an optimizer—or a model producing the control displacements—to
+learn a deformation from a differentiable objective on ``morphed``.
+
+Performance and Compilation
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Dense point displacement uses Torch on every device. Morphing uses Torch by
+default on CPU and Warp by default on CUDA for sparse control sets. If Warp is
+unavailable, automatic CUDA dispatch falls back to Torch, while explicitly
+requesting ``implementation="warp"`` for morphing raises an ``ImportError``.
+For a repeatedly evaluated, fixed-shape CUDA morph wrapped in
+:func:`torch.compile`, benchmark ``implementation="torch"`` as well; compiler
+fusion can make that path faster after its one-time compilation cost. Keep the
+backend explicit when comparing compiled and eager runs.
+
+Morphing evaluates every query/control pair and therefore has computational
+cost proportional to ``batch_size * n_points * n_controls * n_spatial_dims``.
+Pass all simultaneous controls in one call. For a
+:class:`~physicsnemo.mesh.domain_mesh.DomainMesh`, the object API combines its
+interior and boundary queries into one field evaluation before rebuilding the
+individual component meshes.
+
+For connectivity-preserving object APIs, use
+:meth:`~physicsnemo.mesh.mesh.Mesh.displace`,
+:meth:`~physicsnemo.mesh.mesh.Mesh.morph`, or
+:meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.morph`.
+
 Mesh Poisson Disk Sample
 ------------------------
 
