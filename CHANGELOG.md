@@ -16,18 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configurable accumulation dtype, and an explicit `nan_policy`.
   `integrate`, `integrate_flux`, and the corresponding `Mesh` methods gain
   the same `nan_policy` option.
-- Adds `Mesh.cell_quadrature_weights` (with `Mesh.set_cell_quadrature_weights`
-  and the reserved `cell_data` key `QUADRATURE_WEIGHTS_KEY`): dimensionless
-  per-cell Horvitz–Thompson quadrature weights that make the effective measure
-  `cell_areas * cell_quadrature_weights` of a cell-subsampled mesh an unbiased
-  estimate of the full mesh's measure. Cell subsampling in
-  `MeshReader`/`DomainMeshReader` (now a cyclic contiguous block, giving every
-  cell an inclusion probability of exactly `k/N`) and in `SubsampleMesh`
-  records and multiplicatively composes the weights; `Mesh.integrate`,
-  `Mesh.integrate_flux`, `integrate_moment`, and GLOBE's boundary integrals
-  consume them.
-  `cell_areas` itself remains the purely geometric simplex measure, and meshes
-  without recorded weights behave exactly as before.
+- Adds `physicsnemo.mesh.quadrature`: Horvitz–Thompson sampling weights for
+  cell-subsampled meshes. Cell subsampling in `MeshReader`/`DomainMeshReader`
+  (now a cyclic contiguous block, giving every cell an inclusion probability
+  of exactly `k/N`) and in `SubsampleMesh` records and multiplicatively
+  composes dimensionless per-cell sampling weights (stored in `cell_data`
+  under a reserved key); `Mesh.integrate`, `Mesh.integrate_flux`,
+  `integrate_moment`, and GLOBE's boundary integrals consume the effective
+  measure `cell_quadrature_areas = cell_areas * sampling_weights`. The `Mesh`
+  API is unchanged, `cell_areas` remains the purely geometric simplex
+  measure, and meshes without recorded weights behave exactly as before.
 - Adds a `global_shape` argument to `ShardTensor.from_local`, enabling the
   no-communication `sharding_shapes="chunk"` path.
 - Adds exact-boundary quality mesh generation to
@@ -261,7 +259,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`(k/N)**3` ≈ 2e-8 for DrivAerML surface at 50K of ~17M faces), collapsing
   the bias-free vector outputs to numerically-zero predictions and gradients
   (WSS relative-L2 pinned at exactly 1.0) while scalar outputs hid behind
-  their calibration bias. Fixed by the `cell_quadrature_weights` mechanism
+  their calibration bias. Fixed by the `physicsnemo.mesh.quadrature` mechanism
   above; the unified external aero recipe and the standalone GLOBE DrivAer
   example pick it up with no config changes.
   point, cell, and global data as well as geometry. The matching new

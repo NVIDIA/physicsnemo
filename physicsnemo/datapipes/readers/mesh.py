@@ -33,6 +33,7 @@ import torch
 from physicsnemo.datapipes._rng import spawn_generator
 from physicsnemo.datapipes.registry import register
 from physicsnemo.mesh import DomainMesh, Mesh
+from physicsnemo.mesh.quadrature import compose_sampling_weights
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,7 @@ def _subsample_mesh_points(
     falls back to ``slice_points``.
 
     Unlike :func:`_subsample_mesh_cells`, this does NOT maintain
-    quadrature weights: dropping points removes cells implicitly, with
+    sampling weights: dropping points removes cells implicitly, with
     no per-cell inclusion probability to invert.  Prefer cell
     subsampling when downstream code integrates over the mesh.
     """
@@ -104,7 +105,7 @@ def _cyclic_block_indices(
     With ``start`` drawn uniformly over ``[0, total)``, the wrapping block
     gives every element an inclusion probability of exactly ``k / total``
     (a non-wrapping block gives elements near the array ends a smaller
-    inclusion probability, which would bias Horvitz-Thompson quadrature
+    inclusion probability, which would bias Horvitz-Thompson sampling
     weights).  The result is one or two ascending contiguous runs, so
     gathering with it stays page-sequential on memmap-backed tensors.
     """
@@ -132,11 +133,11 @@ def _subsample_mesh_cells(
     memmap-backed cell tensors.
 
     Preserves the surface quadrature measure: every cell's inclusion
-    probability is exactly ``k/N``, and the retained cells' quadrature
-    weights (see :attr:`Mesh.cell_quadrature_weights`) are multiplied by
+    probability is exactly ``k/N``, and the retained cells' sampling
+    weights (see :mod:`physicsnemo.mesh.quadrature`) are multiplied by
     ``N/k``, composing with any weights from earlier sampling stages.
     Downstream consumers of the effective measure
-    ``cell_areas * cell_quadrature_weights`` (``Mesh.integrate``,
+    ``cell_areas * sampling_weights`` (``Mesh.integrate``,
     boundary-integral models such as GLOBE) then see an unbiased estimate
     of the full-mesh measure rather than the ~``k/N`` retained fraction.
 
@@ -159,7 +160,7 @@ def _subsample_mesh_cells(
     ### Compose the Horvitz-Thompson weight for this sampling stage.
     ### slice_cells/slice_points returned fresh TensorDicts, so the
     ### in-place update cannot leak into the memmap-backed source.
-    mesh.set_cell_quadrature_weights(mesh.cell_quadrature_weights * (n_total / n_cells))
+    compose_sampling_weights(mesh, n_total / n_cells)
     return mesh
 
 
@@ -229,8 +230,8 @@ class MeshReader:
             choice for triangulated surface meshes where downstream
             transforms depend on cells (e.g. surface normals, cell
             centroids, cell_data fields).  Records Horvitz-Thompson
-            quadrature weights (``N/k`` per retained cell; see
-            :attr:`Mesh.cell_quadrature_weights`) so area-weighted
+            sampling weights (``N/k`` per retained cell; see
+            :mod:`physicsnemo.mesh.quadrature`) so area-weighted
             integrals over the subsampled mesh remain unbiased
             estimates of full-mesh integrals.  Applied before
             ``subsample_n_points`` when both are set.
@@ -380,8 +381,8 @@ class DomainMeshReader:
             sequential I/O, then compacts unreferenced vertices.
             Preserves cell topology and is the correct choice when
             downstream transforms depend on cells.  Records
-            Horvitz-Thompson quadrature weights (``N/k`` per retained
-            cell; see :attr:`Mesh.cell_quadrature_weights`) so
+            Horvitz-Thompson sampling weights (``N/k`` per retained
+            cell; see :mod:`physicsnemo.mesh.quadrature`) so
             area-weighted integrals over subsampled meshes remain
             unbiased estimates of full-mesh integrals.  Applied before
             ``subsample_n_points`` when both are set.

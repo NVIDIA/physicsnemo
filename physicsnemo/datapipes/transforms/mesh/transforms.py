@@ -35,6 +35,7 @@ from physicsnemo.mesh import (
     Mesh,
     MeshFieldAssociation,
 )
+from physicsnemo.mesh.quadrature import compose_sampling_weights
 
 
 @register()
@@ -257,7 +258,7 @@ class SubsampleMesh(MeshTransform):
     r"""Subsample a mesh to a fixed number of cells and/or points.
 
     Cell subsampling preserves the quadrature measure: retained cells'
-    quadrature weights (see :attr:`Mesh.cell_quadrature_weights`) are
+    sampling weights (see :mod:`physicsnemo.mesh.quadrature`) are
     multiplied by this stage's inverse inclusion probability
     ``n_cells_before / n_cells``, composing with weights recorded by
     earlier sampling stages (e.g. reader-side subsampling), so
@@ -302,12 +303,10 @@ class SubsampleMesh(MeshTransform):
             mesh = mesh.slice_cells(indices)
             if self.compact:
                 mesh = _compact_points(mesh)
-            ### Compose this stage's Horvitz-Thompson quadrature weight.
+            ### Compose this stage's Horvitz-Thompson sampling weight.
             ### `_random_indices` is a uniform k-of-N sample, so every
             ### cell's inclusion probability is k/N exactly.
-            mesh.set_cell_quadrature_weights(
-                mesh.cell_quadrature_weights * (n_before / self.n_cells)
-            )
+            compose_sampling_weights(mesh, n_before / self.n_cells)
 
         if self.n_points is not None and mesh.n_points > self.n_points:
             indices = self._random_indices(

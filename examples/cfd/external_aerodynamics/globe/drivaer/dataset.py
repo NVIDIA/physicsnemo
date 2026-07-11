@@ -39,6 +39,7 @@ from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.io import from_pyvista
 from physicsnemo.mesh.primitives.planar import structured_grid
 from physicsnemo.mesh.projections import embed
+from physicsnemo.mesh.quadrature import compose_sampling_weights
 from physicsnemo.mesh.remeshing import partition_cells
 from physicsnemo.utils.logging import PythonLogger
 
@@ -250,7 +251,7 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
           centroids, at the cost of an O(N) nearest-neighbour pass over the
           full mesh each time a sample is loaded.
         * **Uniform** (``voronoi=False``): records a single global
-          quadrature weight (see :attr:`Mesh.cell_quadrature_weights`) so
+          sampling weight (see :mod:`physicsnemo.mesh.quadrature`) so
           that the effective sampled area total matches the full surface.
           Much faster, but every subsampled cell gets the same factor
           regardless of local density.
@@ -268,7 +269,7 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
 
         Returns:
             Mesh with ``n_cells`` cells and a corrected quadrature measure
-            (uniform: quadrature weights; Voronoi: area/normal cache).
+            (uniform: sampling weights; Voronoi: area/normal cache).
         """
         if n_cells <= 0:
             raise ValueError(f"{n_cells=!r} must be positive.")
@@ -291,18 +292,15 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
             boundary._cache["cell", "areas"] = partition.cluster_areas
             boundary._cache["cell", "normals"] = partition.cluster_normals
         else:
-            ### Uniform measure correction via quadrature weights (see
-            ### Mesh.cell_quadrature_weights): one global factor makes the
+            ### Uniform measure correction via sampling weights (see
+            ### physicsnemo.mesh.quadrature): one global factor makes the
             ### effective sampled area total match the full surface exactly
             ### for this realization (self-normalized / Hajek estimator).
-            ### GLOBE consumes cell_areas * cell_quadrature_weights, so this
-            ### is numerically identical to the previous area-cache override
+            ### GLOBE consumes cell_areas * sampling_weights, so this is
+            ### numerically identical to the previous area-cache override
             ### while keeping cell_areas purely geometric.
             total_area = mesh.cell_areas.sum()
-            raw_areas = boundary.cell_areas
-            boundary.set_cell_quadrature_weights(
-                (total_area / raw_areas.sum()) * torch.ones_like(raw_areas)
-            )
+            compose_sampling_weights(boundary, total_area / boundary.cell_areas.sum())
 
         return boundary
 

@@ -40,9 +40,9 @@ arithmetic mean of vertex values:
 This is exact for P1 fields and second-order accurate for smooth fields.
 
 **Subsampled meshes.**  All integrators use the effective quadrature measure
-``cell_areas * cell_quadrature_weights`` rather than the bare geometric
-areas.  For meshes carrying Horvitz-Thompson quadrature weights (recorded by
-cell-subsampling operations; see :attr:`Mesh.cell_quadrature_weights`), the
+``cell_areas * sampling_weights`` rather than the bare geometric areas.  For
+meshes carrying Horvitz-Thompson sampling weights (recorded by
+cell-subsampling operations; see :mod:`physicsnemo.mesh.quadrature`), the
 integral is an unbiased estimate of the corresponding full-mesh integral.
 For meshes without weights this reduces exactly to the geometric measure.
 """
@@ -55,28 +55,13 @@ import torch
 from jaxtyping import Float
 
 from physicsnemo.core.warnings import LegacyFeatureWarning
+from physicsnemo.mesh.quadrature import cell_quadrature_areas
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
 
 NanPolicy = Literal["omit", "propagate"]
-
-
-def _cell_quadrature_areas(mesh: "Mesh") -> Float[torch.Tensor, " n_cells"]:
-    r"""Effective per-cell quadrature measure: ``cell_areas * weights``.
-
-    Skips the multiplication when no quadrature weights are recorded, so
-    meshes without weights pay nothing and results are bit-identical to the
-    geometric-measure behavior.
-    """
-    from physicsnemo.mesh.mesh import QUADRATURE_WEIGHTS_KEY
-
-    cell_areas = mesh.cell_areas
-    weights = mesh.cell_data.get(QUADRATURE_WEIGHTS_KEY, None)
-    if weights is None:
-        return cell_areas
-    return cell_areas * weights
 
 
 def _sum_with_nan_policy(
@@ -182,7 +167,7 @@ def _integrate_cell_data(
                 f"n_cells ({mesh.n_cells})."
             )
 
-    quad_areas = _cell_quadrature_areas(mesh)  # (n_cells,)
+    quad_areas = cell_quadrature_areas(mesh)  # (n_cells,)
 
     ### Reshape for broadcasting with arbitrary trailing dims
     weights = quad_areas.reshape(-1, *([1] * (field.ndim - 1)))
@@ -239,7 +224,7 @@ def _integrate_point_data(
                 f"n_points ({mesh.n_points})."
             )
 
-    quad_areas = _cell_quadrature_areas(mesh)  # (n_cells,)
+    quad_areas = cell_quadrature_areas(mesh)  # (n_cells,)
 
     ### Gather vertex values for each cell: (n_cells, n_verts_per_cell, ...)
     cell_vertex_values = field[mesh.cells]
@@ -406,8 +391,9 @@ def _integrate_weighted_moment(
     weights : torch.Tensor
         Quadrature weights shaped ``(n_entities,)`` (e.g. cell measures).
         Callers integrating over a possibly-subsampled mesh should pass the
-        effective measure ``cell_areas * cell_quadrature_weights`` (what
-        :func:`integrate_moment` does via ``_cell_quadrature_areas``), not
+        effective measure ``cell_areas * sampling_weights`` (what
+        :func:`integrate_moment` does via
+        :func:`physicsnemo.mesh.quadrature.cell_quadrature_areas`), not
         the bare geometric areas.
     aligned_dims : int
         Number of dimensions immediately after the entity axis treated as
@@ -625,7 +611,7 @@ def integrate_moment(
     return _integrate_weighted_moment(
         left_tensor,
         right_tensor,
-        _cell_quadrature_areas(mesh),
+        cell_quadrature_areas(mesh),
         aligned_dims=aligned_dims,
         accumulation_dtype=accumulation_dtype,
         nan_policy=nan_policy,
@@ -733,7 +719,7 @@ def integrate_flux(
             )
 
     cell_normals = mesh.cell_normals  # (n_cells, n_spatial_dims)
-    quad_areas = _cell_quadrature_areas(mesh)  # (n_cells,)
+    quad_areas = cell_quadrature_areas(mesh)  # (n_cells,)
 
     ### Resolve per-cell vector field
     match data_source:

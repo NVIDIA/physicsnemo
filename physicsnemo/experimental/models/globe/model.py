@@ -34,6 +34,7 @@ from physicsnemo.mesh import (
     flatten_rank_spec,
     validate_data_contains_ranks,
 )
+from physicsnemo.mesh.quadrature import cell_quadrature_areas
 from physicsnemo.mesh.spatial.cluster_tree import (
     ClusterTree,
     DualInteractionPlan,
@@ -197,9 +198,9 @@ class GLOBE(Module):
       linear calibration layers, ordered alphabetically by field name.
     - Cell areas are automatically normalized by ``reference_area`` to preserve
       discretization-invariance.  If a boundary mesh carries per-cell
-      quadrature weights (recorded by cell-subsampling datapipes; see
-      :attr:`Mesh.cell_quadrature_weights`), the effective quadrature areas
-      ``cell_areas * cell_quadrature_weights`` are used, so boundary
+      sampling weights (recorded by cell-subsampling datapipes; see
+      :mod:`physicsnemo.mesh.quadrature`), the effective quadrature areas
+      ``cell_areas * sampling_weights`` are used, so boundary
       integrals over a subsampled surface are unbiased estimates of the
       full-surface ones.
     - The cell normal vector is automatically added to source data for each
@@ -431,10 +432,11 @@ class GLOBE(Module):
             Enriched per-BC-type boundary meshes.
         quadrature_areas : dict[str, torch.Tensor]
             Per-BC-type effective quadrature areas
-            (``cell_areas * cell_quadrature_weights``), computed by
+            (``cell_areas * sampling_weights``; see
+            :mod:`physicsnemo.mesh.quadrature`), computed by
             :meth:`forward` from the raw input meshes before enrichment.
             Equal to plain ``cell_areas`` for meshes without recorded
-            quadrature weights.
+            sampling weights.
 
         Returns
         -------
@@ -629,7 +631,7 @@ class GLOBE(Module):
 
         for bc_type, mesh in source_meshes.items():
             ### `source_areas` holds the reference_area-normalized effective
-            ### quadrature areas (cell_areas * cell_quadrature_weights),
+            ### quadrature areas (cell_areas * sampling weights),
             ### computed once from the raw input meshes in
             ### `_build_trees_and_plans` -- the mesh geometry is fixed across
             ### layers, so reusing them here keeps the strength integration
@@ -868,19 +870,18 @@ class GLOBE(Module):
         ### Effective per-cell quadrature areas, read from the raw input
         ### meshes BEFORE enrichment: enrichment nests each mesh's cell_data
         ### under the "physical" namespace, which would hide the reserved
-        ### quadrature-weights key from `Mesh.cell_quadrature_weights`.
-        ### For meshes without recorded weights this is exactly `cell_areas`
-        ### (weights default to ones). Subsampled meshes carry
-        ### Horvitz-Thompson weights (see `Mesh.cell_quadrature_weights`),
+        ### sampling-weights key from `physicsnemo.mesh.quadrature`.
+        ### For meshes without recorded weights this is exactly `cell_areas`.
+        ### Subsampled meshes carry Horvitz-Thompson sampling weights,
         ### making the model's area-weighted boundary integrals unbiased
         ### estimates of the full-surface ones.
         bc_quadrature_areas = {
-            bc_type: mesh.cell_areas * mesh.cell_quadrature_weights
+            bc_type: cell_quadrature_areas(mesh)
             for bc_type, mesh in boundary_meshes.items()
         }
 
         ### Phase 1: Enrich boundary meshes with initial (all-ones) strengths.
-        ### (The reserved quadrature-weights key rides along inside
+        ### (The reserved sampling-weights key rides along inside
         ### "physical"; it is inert there because kernels `select` only
         ### their declared feature keys.)
         with record_function("globe::enrich_meshes"):

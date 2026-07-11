@@ -23,9 +23,8 @@ true surface measure, and the deficit compounds through
 ``n_communication_hyperlayers + 1`` integral stages -- enough to collapse
 bias-free (vector) output heads to numerically-zero predictions and
 gradients.  The fix: GLOBE consumes the effective quadrature measure
-``cell_areas * cell_quadrature_weights`` (see
-:attr:`Mesh.cell_quadrature_weights`), restoring unbiased integrals over
-subsampled boundaries.
+``cell_areas * sampling_weights`` (see :mod:`physicsnemo.mesh.quadrature`),
+restoring unbiased integrals over subsampled boundaries.
 
 These tests pin the consumption contract:
 
@@ -43,6 +42,7 @@ import torch
 
 from physicsnemo.experimental.models.globe.model import GLOBE
 from physicsnemo.mesh.primitives.procedural import lumpy_sphere
+from physicsnemo.mesh.quadrature import compose_sampling_weights
 
 SEED = 7
 
@@ -98,7 +98,7 @@ def test_weights_equivalent_to_scaled_areas():
     for name in ("vehicle", "floor"):
         mesh_w = kwargs_weighted["boundary_meshes"][name]
         w = torch.rand(mesh_w.n_cells, generator=gen) + 0.5
-        mesh_w.set_cell_quadrature_weights(w)
+        compose_sampling_weights(mesh_w, w)
 
         mesh_s = kwargs_scaled["boundary_meshes"][name]
         mesh_s._cache["cell", "areas"] = mesh_s.cell_areas * w
@@ -118,7 +118,7 @@ def test_unit_weights_match_no_weights():
     kwargs_ones = _make_inputs(device)
     for name in ("vehicle", "floor"):
         mesh = kwargs_ones["boundary_meshes"][name]
-        mesh.set_cell_quadrature_weights(torch.ones(mesh.n_cells))
+        compose_sampling_weights(mesh, torch.ones(mesh.n_cells))
 
     out_plain = _forward(model, kwargs_plain)
     out_ones = _forward(model, kwargs_ones)
@@ -140,7 +140,7 @@ def test_weights_change_output():
     kwargs_weighted = _make_inputs(device)
     for name in ("vehicle", "floor"):
         mesh = kwargs_weighted["boundary_meshes"][name]
-        mesh.set_cell_quadrature_weights(torch.full((mesh.n_cells,), 3.0))
+        compose_sampling_weights(mesh, torch.full((mesh.n_cells,), 3.0))
 
     out_plain = _forward(model, kwargs_plain)
     out_weighted = _forward(model, kwargs_weighted)

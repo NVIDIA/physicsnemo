@@ -32,10 +32,15 @@ from physicsnemo.datapipes.transforms.mesh import (
     ScaleMesh,
     SubsampleMesh,
 )
-from physicsnemo.mesh import QUADRATURE_WEIGHTS_KEY, DomainMesh, Mesh
+from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.mesh.primitives.basic import (
     single_triangle_3d,
     two_triangles_2d,
+)
+from physicsnemo.mesh.quadrature import (
+    SAMPLING_WEIGHTS_KEY,
+    cell_quadrature_areas,
+    cell_sampling_weights,
 )
 
 
@@ -497,7 +502,7 @@ class TestCyclicBlockIndices:
 
 
 class TestCellSubsampleQuadratureWeights:
-    """Reader-side cell subsampling records Horvitz-Thompson weights."""
+    """Reader-side cell subsampling records Horvitz-Thompson sampling weights."""
 
     def _make_strip(self, n_cells: int) -> Mesh:
         """Disjoint unit right triangles (area 0.5 each) along the x-axis."""
@@ -520,9 +525,7 @@ class TestCellSubsampleQuadratureWeights:
         reader.set_generator(torch.Generator().manual_seed(0))
         mesh, _ = reader[0]
         assert mesh.n_cells == k
-        torch.testing.assert_close(
-            mesh.cell_quadrature_weights, torch.full((k,), n / k)
-        )
+        torch.testing.assert_close(cell_sampling_weights(mesh), torch.full((k,), n / k))
 
     def test_reader_noop_below_threshold(self, tmp_path):
         n = 8
@@ -530,7 +533,7 @@ class TestCellSubsampleQuadratureWeights:
         reader = MeshReader(tmp_path, pattern="*.pmsh", subsample_n_cells=20)
         mesh, _ = reader[0]
         assert mesh.n_cells == n
-        assert QUADRATURE_WEIGHTS_KEY not in mesh.cell_data.keys()
+        assert SAMPLING_WEIGHTS_KEY not in mesh.cell_data.keys()
 
     def test_equal_area_mesh_recovers_total_exactly(self, tmp_path):
         # With identical triangles, ANY cyclic block reproduces the full
@@ -542,7 +545,7 @@ class TestCellSubsampleQuadratureWeights:
         reader.set_generator(torch.Generator().manual_seed(0))
         for _ in range(5):
             mesh, _ = reader[0]
-            corrected = (mesh.cell_areas * mesh.cell_quadrature_weights).sum()
+            corrected = cell_quadrature_areas(mesh).sum()
             torch.testing.assert_close(corrected, full.cell_areas.sum())
 
     def test_composes_with_subsample_mesh_transform(self, tmp_path):
@@ -556,7 +559,7 @@ class TestCellSubsampleQuadratureWeights:
         mesh = SubsampleMesh(n_cells=k2)(mesh)
         assert mesh.n_cells == k2
         torch.testing.assert_close(
-            mesh.cell_quadrature_weights, torch.full((k2,), n / k2)
+            cell_sampling_weights(mesh), torch.full((k2,), n / k2)
         )
 
     def test_domain_mesh_reader_records_weights_on_boundaries(self, tmp_path):
@@ -568,11 +571,11 @@ class TestCellSubsampleQuadratureWeights:
         loaded, _ = reader[0]
         assert loaded.boundaries["wall"].n_cells == 6
         torch.testing.assert_close(
-            loaded.boundaries["wall"].cell_quadrature_weights,
+            cell_sampling_weights(loaded.boundaries["wall"]),
             torch.full((6,), 24 / 6),
         )
         ### Interior is a point cloud: no cells, no weights.
-        assert QUADRATURE_WEIGHTS_KEY not in loaded.interior.cell_data.keys()
+        assert SAMPLING_WEIGHTS_KEY not in loaded.interior.cell_data.keys()
 
     def test_seeded_reproducibility(self, tmp_path):
         ### Reader RNG is derived per-sample from (base_seed, epoch, index):
