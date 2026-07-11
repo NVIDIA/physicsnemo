@@ -213,6 +213,79 @@ For connectivity-preserving object APIs, use
 :meth:`~physicsnemo.mesh.mesh.Mesh.free_form_deform` or
 :meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.free_form_deform`.
 
+Deformation Energies
+--------------------
+
+The deformation-energy functionals compare current point coordinates with a
+fixed reference configuration and topology. They return differentiable penalty
+objectives for use in an optimization loop; they do not solve a constrained
+deformation problem or enforce hard constraints.
+
+For a :class:`~physicsnemo.mesh.mesh.Mesh`, the wrappers in
+:mod:`physicsnemo.mesh.deformation` validate and cache connectivity and build
+triangle hinges automatically.
+
+.. autofunction:: physicsnemo.nn.functional.simplex_strain_energy
+
+.. autofunction:: physicsnemo.nn.functional.simplex_measure_energy
+
+.. autofunction:: physicsnemo.nn.functional.total_measure_energy
+
+.. autofunction:: physicsnemo.nn.functional.simplex_inversion_energy
+
+.. autofunction:: physicsnemo.nn.functional.surface_bending_energy
+
+.. autofunction:: physicsnemo.nn.functional.closed_surface_volume_energy
+
+.. code:: python
+
+    from physicsnemo.nn.functional import (
+        simplex_inversion_energy,
+        simplex_strain_energy,
+        total_measure_energy,
+    )
+
+    loss = (
+        simplex_strain_energy(points, reference_points, cells)
+        + 40.0 * total_measure_energy(points, reference_points, cells)
+        + 10.0 * simplex_inversion_energy(points, reference_points, cells)
+    )
+    loss.backward()
+
+The simplex functionals accept unbatched ``(n_points, n_spatial_dims)`` or
+batched ``(batch_size, n_points, n_spatial_dims)`` coordinates with shared
+integer topology. Coordinates must use matching ``torch.float32`` or
+``torch.float64`` dtypes. ``reduction="none"`` returns one value per simplex or
+hinge;
+for ``total_measure_energy`` and ``closed_surface_volume_energy`` it returns one
+global value per batch item instead. ``"sum"`` and ``"mean"`` reduce all
+values to one scalar.
+
+``simplex_measure_energy`` constrains each element separately, whereas
+``total_measure_energy`` permits local redistribution and constrains only the
+sum. Full-dimensional measure ratios retain the orientation relative to each
+reference simplex; embedded-simplex ratios are unsigned. The St.
+Venant--Kirchhoff strain formulation used by
+``simplex_strain_energy`` is reflection-blind; add
+``simplex_inversion_energy`` when full-dimensional simplex orientation matters.
+Closed-surface volume requires one edge-connected, edge-closed, consistently
+oriented 3D triangle surface; the low-level functional assumes that contract
+without checking it. Surface bending is a geometric hinge regularizer rather
+than a material shell model.
+
+The tensor functionals validate topology shape, dtype, and device without
+scanning index values, which would synchronize a CUDA device on every call.
+Indices must therefore be distinct and in range as documented. Invalid index
+values are outside the tensor API contract; use the mesh wrappers when cached
+value validation is needed. Direct tensor calls accept int32 or int64
+connectivity, but normalize int32 connectivity on every call. Use int64 for
+repeated direct calls. Mesh wrappers cache this normalization with the
+topology.
+
+Torch provides higher-order derivatives. Warp provides a first-order CUDA
+path. Because its backward uses atomic accumulation at shared vertices, Warp
+gradient results can have small run-to-run floating-point differences.
+
 Mesh Poisson Disk Sample
 ------------------------
 
