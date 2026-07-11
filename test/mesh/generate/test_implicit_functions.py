@@ -78,6 +78,20 @@ def test_polygon_sign_and_distance():
     assert torch.isclose(vals[3], torch.tensor(-0.25, dtype=torch.float64))
 
 
+def test_polygon_tolerates_duplicate_vertex():
+    """A repeated consecutive vertex (common in real polygon data) makes a
+    zero-length segment; the point-to-segment projection must not divide
+    0/0 there -- one NaN would poison the min over segments for EVERY
+    query point."""
+    square = [[0.0, 0.0], [1.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+    phi = sdf_polygon_2d(square)
+    pts = torch.tensor([[0.5, 0.5], [0.5, -0.5], [1.5, 0.5]], dtype=torch.float64)
+    vals = phi(pts)
+    assert bool(torch.isfinite(vals).all())
+    ref = sdf_polygon_2d(square[:1] + square[2:])(pts)
+    assert torch.allclose(vals, ref)
+
+
 def test_polygon_orientation_invariance():
     square_ccw = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
     square_cw = list(reversed(square_ccw))

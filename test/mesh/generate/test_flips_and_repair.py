@@ -21,6 +21,8 @@ correct behavior is known exactly -- the integration tests exercise them
 inside the full generator.
 """
 
+import math
+
 import torch
 
 from physicsnemo.mesh.generate._flips import flip_until_done
@@ -80,6 +82,49 @@ def test_reflex_quad_never_flips():
     )
     assert n == 0
     assert sorted_cells(new_cells) == sorted_cells(cells)
+
+
+def test_flip_reaches_better_diagonal_from_either_start():
+    """Every improving 2-2 flip must fire regardless of WHICH diagonal the
+    current triangulation uses.
+
+    Nonregression for a target-class identification bug (found by
+    adversarial review): in 2D both Radon classes have size k_share, so
+    identifying the target by class SIZE resolved the tie to the negative
+    SVD sign class -- whose sign is arbitrary -- and proposed the identity
+    retriangulation (zero gain, rejected) whenever that class was the
+    current diagonal. About half of all improving 2D flips were silently
+    missed, deterministically per geometry, so affected quads NEVER
+    improved no matter the seed.
+    """
+    gen = torch.Generator().manual_seed(0)
+    exercised = 0
+    for trial in range(300):
+        g = torch.Generator().manual_seed(1000 + trial)
+        # Convex-position quad: sorted angles on a random ellipse.
+        ang = torch.sort(
+            torch.rand(4, generator=g, dtype=torch.float64) * (2 * math.pi)
+        ).values
+        ab = 0.3 + torch.rand(2, generator=g, dtype=torch.float64)
+        pts = torch.stack([ab[0] * torch.cos(ang), ab[1] * torch.sin(ang)], dim=1)
+        tri_a = torch.tensor([[0, 1, 2], [0, 2, 3]])
+        tri_b = torch.tensor([[0, 1, 3], [1, 2, 3]])
+        if (signed_volumes(pts, tri_a) <= 0).any():
+            continue
+        if (signed_volumes(pts, tri_b) <= 0).any():
+            continue
+        qa = float(volume_length_quality(pts, tri_a).min())
+        qb = float(volume_length_quality(pts, tri_b).min())
+        if abs(qa - qb) < 1e-3:
+            continue
+        worse, better = (tri_a, tri_b) if qa < qb else (tri_b, tri_a)
+        new_cells, n = flip_until_done(
+            pts, worse, h=1.0, max_passes=5, generator=gen, q_focus=1.0
+        )
+        assert n == 1, "improving diagonal flip was not proposed"
+        assert sorted_cells(new_cells) == sorted_cells(better)
+        exercised += 1
+    assert exercised > 150  # the harness must actually exercise flips
 
 
 def test_flip_conserves_total_volume():
@@ -228,3 +273,43 @@ def test_clean_mesh_is_untouched():
     assert n_split == 0
     assert torch.equal(new_points, points)
     assert torch.equal(new_cells, cells)
+
+
+def test_peel_followed_by_split_repairs_vertex_pinch():
+    """Peeling a bridging sliver can expose a boundary pinched at a
+    VERTEX, which the ridge-pairing manifoldness check inside the peel
+    cannot see (every boundary ridge still pairs cleanly). The pipeline
+    therefore follows every peel with a pinch split; this exercises that
+    exact sequence on the minimal configuration. Found by adversarial
+    audit: two tets sharing one vertex, bridged by a near-flat sliver.
+    """
+    from physicsnemo.mesh.generate._repair import peel_boundary_slivers
+
+    pts = torch.tensor(
+        [
+            [0.0, 0.0, 0.0],  # the future pinch vertex
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [0.0, 0.0, -1.0],
+            [0.0, 0.05, 0.001],  # near-flat bridge apex
+        ],
+        dtype=torch.float64,
+    )
+    cells = torch.tensor([[0, 1, 2, 3], [0, 5, 4, 6], [1, 2, 4, 7]], dtype=torch.int64)
+    vol = signed_volumes(pts, cells)
+    cells[vol < 0] = cells[vol < 0][:, [1, 0, 2, 3]]
+
+    def phi(x):
+        return torch.zeros(x.shape[:-1], dtype=x.dtype)
+
+    p2, c2, n_peeled = peel_boundary_slivers(pts, cells, phi, h=1.0)
+    assert n_peeled == 1
+    # The peel output is vertex-pinched, yet facet-pairing blesses it...
+    assert boundary_is_closed_manifold(c2)
+    # ...so the follow-up split must find and repair it.
+    p3, c3, n_split = split_pinched_vertices(p2, c2)
+    assert n_split == 1
+    assert set(c3[0].tolist()).isdisjoint(set(c3[1].tolist()))

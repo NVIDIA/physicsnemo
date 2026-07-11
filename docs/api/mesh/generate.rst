@@ -6,7 +6,7 @@ Generate
 Mesh generation from implicit representations: isosurface extraction and
 dimension-generic volume meshing.
 
-Choosing a mesher
+Choosing a Mesher
 -----------------
 
 PhysicsNeMo-Mesh has three generation tools with distinct contracts:
@@ -17,7 +17,7 @@ PhysicsNeMo-Mesh has three generation tools with distinct contracts:
    * - Tool
      - Input
      - Output
-     - Use when
+     - Use When
    * - ``physicsnemo.mesh.tessellation.fill_interior``
      - closed boundary ``Mesh`` (2D today)
      - volume ``Mesh``, **exact** boundary, guaranteed angles,
@@ -29,33 +29,39 @@ PhysicsNeMo-Mesh has three generation tools with distinct contracts:
      - volume ``Mesh`` in **any dimension**, boundary approximated to
        :math:`O(h^2)`, GPU-native, differentiable refit
      - geometry is implicit, you need 3D/ND volumes, GPU scale, or
-       gradients w.r.t. shape
+       gradients with regard to shape
    * - :func:`marching_cubes`
      - 3D scalar field on a grid
      - **surface** ``Mesh`` (the isosurface only, no interior)
      - the boundary surface itself is the deliverable (visualization,
        B-rep export)
 
-Volume meshing of implicit domains
+Volume Meshing of Implicit Domains
 ----------------------------------
 
 :func:`mesh_implicit_domain` generates a simplex volume mesh of
 ``{x : phi(x) < 0}`` for an arbitrary implicit function ``phi`` (a signed
-distance function, or any level set with a usable gradient — including
-neural implicit fields), in **any spatial dimension**, entirely in PyTorch
-tensor ops on CPU or CUDA. The generator is structurally robust: every
+distance function, or any level set with a usable gradient, including
+neural implicit fields), in *any spatial dimension*, entirely in PyTorch
+tensor ops on CPU or CUDA. The meshed set is ``{phi < 0}`` intersected
+with the bounding box: where the domain reaches the box, its faces are
+honored as boundary, so external-flow "box minus obstacle" domains work
+directly. The generator is structurally robust. Every
 optimization step is validity-gated, so it always returns a positively
-oriented mesh with a closed-manifold boundary; difficult inputs degrade
-element quality (reported in diagnostics), never existence. A coverage
-guard raises — rather than silently dropping geometry — when the domain
-has features below the target edge length ``h``, and sharp corners can be
+oriented mesh with a closed-manifold boundary. Difficult inputs degrade
+element quality (reported in diagnostics), but never prevent the mesh
+from being generated. A coverage guard raises an error, rather than
+silently dropping geometry, when the domain
+has features below the target edge length ``h`` or when coverage cannot
+be certified at all (a phi that is NaN inside the box, e.g. a neural
+field queried outside its training range), and sharp corners can be
 interpolated exactly via ``feature_points``.
 
 :func:`refit_mesh_to_implicit` is the differentiable companion: it
 re-projects a mesh's boundary onto ``phi = 0`` with graph-preserving
 Newton steps at fixed topology, so gradients flow from mesh coordinates to
-shape parameters inside ``phi`` — meshing as a differentiable layer for
-shape optimization.
+shape parameters inside ``phi``. This enables meshing as a
+differentiable layer for shape optimization.
 
 .. code:: python
 

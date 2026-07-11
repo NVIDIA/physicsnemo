@@ -269,6 +269,70 @@ def test_coverage_reported_in_diagnostics():
     assert diag["coverage_gap_h"] < 1.0
 
 
+def _nan_field(x):
+    """Disk SDF that is NaN for x > 0.2 -- the canonical out-of-range
+    neural-field behavior (found by adversarial review: the guard used to
+    drop the NaN probes and bless the half-missing disk)."""
+    sdf = x.norm(dim=-1) - 0.7
+    return torch.where(x[..., 0] > 0.2, torch.full_like(sdf, float("nan")), sdf)
+
+
+def test_nan_phi_trips_guard():
+    """Non-finite phi inside bounds must fail certification, not report
+    the best possible coverage of whatever region stayed finite."""
+    with pytest.raises(ValueError, match="could not be certified"):
+        mesh_implicit_domain(_nan_field, ([-1, -1], [1, 1]), 0.1)
+
+
+def test_nan_phi_best_effort_mesh_is_valid_and_finite():
+    """With the guard disabled, the finite region meshes best-effort; the
+    validity gate must treat NaN target volumes as bad, so no NaN
+    coordinate can replace a valid vertex."""
+    mesh, diag = mesh_implicit_domain(
+        _nan_field, ([-1, -1], [1, 1]), 0.1, max_coverage_gap_h=None, full_output=True
+    )
+    assert_valid_volume_mesh(mesh)
+    assert bool(torch.isfinite(mesh.points).all())
+    assert math.isinf(diag["coverage_gap_h"])  # reported honestly
+
+
+def test_step_phi_trips_guard():
+    """A sign change with no autograd gradient (step function) cannot be
+    certified; the no-gradient path must fail, not report perfect
+    coverage for a staircase boundary."""
+
+    def step(x):
+        inside = x.norm(dim=-1) < 0.7
+        return torch.where(
+            inside, -torch.ones_like(x[..., 0]), torch.ones_like(x[..., 0])
+        )
+
+    with pytest.raises(ValueError, match="could not be certified"):
+        mesh_implicit_domain(step, ([-1, -1], [1, 1]), 0.1)
+    mesh = mesh_implicit_domain(step, ([-1, -1], [1, 1]), 0.1, max_coverage_gap_h=None)
+    assert_valid_volume_mesh(mesh)
+    vol = float(signed_volumes(mesh.points, mesh.cells).sum())
+    assert abs(vol - math.pi * 0.49) < 0.2  # staircase disk, roughly right
+
+
+def test_volume_cross_check_catches_covered_but_hollow_mesh():
+    """The zero-set gap alone is blind to a mesh whose boundary covers the
+    zero set but whose interior is missing; the Monte-Carlo volume
+    cross-check must catch that."""
+    from physicsnemo.mesh.generate.implicit_domain import _coverage_gap
+
+    mesh = mesh_implicit_domain(DISK_2D, ([-1, -1], [1, 1]), 0.08)
+    lo = torch.tensor([-1.0, -1.0], dtype=torch.float64)
+    hi = torch.tensor([1.0, 1.0], dtype=torch.float64)
+    full = _coverage_gap(DISK_2D, mesh.points, mesh.cells, (lo, hi), 0.08)
+    assert full < 1.0
+    # Hollow out the core: every zero-set probe still lands on covered
+    # boundary, but a third of the domain is gone.
+    ring = mesh.points[mesh.cells].mean(dim=1).norm(dim=-1) > 0.4
+    hollow = _coverage_gap(DISK_2D, mesh.points, mesh.cells[ring], (lo, hi), 0.08)
+    assert math.isinf(hollow)
+
+
 # ---------------------------------------------------------------------------
 # Robustness and edge cases
 # ---------------------------------------------------------------------------
@@ -491,6 +555,77 @@ def test_domain_clipped_by_bounds():
     assert_valid_volume_mesh(mesh)
     vol = float(signed_volumes(mesh.points, mesh.cells).sum())
     assert abs(vol - 4.0) < 1e-9
+
+
+def test_domain_touching_bounds_keeps_faces():
+    """A domain clipped by the box must keep its boundary ON the faces.
+
+    Found by adversarial review: face vertices used to Newton-project onto
+    phi's interior zero set (the only one the raw field has) and the mesh
+    silently detached from the faces -- this half-plane lost 13% of its
+    area with the coverage guard blind to it. phi is now clipped by the
+    box SDF and face vertices are pinned per-coordinate.
+    """
+    mesh = mesh_implicit_domain(lambda x: x[..., 1], ([-1, -1], [1, 1]), 0.1)
+    assert_valid_volume_mesh(mesh)
+    area = float(signed_volumes(mesh.points, mesh.cells).sum())
+    assert abs(area - 2.0) < 0.03  # residual: corner rounding at (+-1, 0)
+    assert float(mesh.points[:, 1].min()) == -1.0  # exactly on the bottom face
+    # Boundary vertices survive on all three touched faces.
+    for coord, val in ((0, -1.0), (0, 1.0), (1, -1.0)):
+        assert int((mesh.points[:, coord] == val).sum()) >= 3
+
+
+def test_external_flow_box_minus_obstacle_2d():
+    """Box minus obstacle -- the farfield / external-flow case. The box
+    supplies the farfield boundary, the obstacle the interior one; the
+    box corners must be exact (per-coordinate pinning, not chamfered)."""
+    obstacle = sdf_sphere([0.0, 0.0], 0.4)
+    mesh, diag = mesh_implicit_domain(
+        lambda x: -obstacle(x), ([-1, -1], [1, 1]), 0.08, full_output=True
+    )
+    assert_valid_volume_mesh(mesh)
+    area = float(signed_volumes(mesh.points, mesh.cells).sum())
+    expected = 4.0 - math.pi * 0.4**2
+    assert abs(area - expected) / expected < 0.01
+    assert diag["coverage_gap_h"] < 1.0
+    pts = mesh.points
+    for coord in (0, 1):
+        for val in (-1.0, 1.0):
+            assert int((pts[:, coord] == val).sum()) >= 5
+    corners = torch.tensor(
+        [[i, j] for i in (-1.0, 1.0) for j in (-1.0, 1.0)], dtype=pts.dtype
+    )
+    assert float(torch.cdist(corners, pts).min(dim=1).values.max()) == 0.0
+
+
+def test_external_flow_box_minus_obstacle_3d():
+    """Same as 2D but in 3D, where the box's own EDGES would chamfer at
+    the h scale if face vertices could migrate onto a single face."""
+    obstacle = sdf_sphere([0.0, 0.0, 0.0], 0.4)
+    mesh = mesh_implicit_domain(lambda x: -obstacle(x), ([-1] * 3, [1] * 3), 0.15)
+    assert_valid_volume_mesh(mesh)
+    vol = float(signed_volumes(mesh.points, mesh.cells).sum())
+    expected = 8.0 - 4.0 / 3.0 * math.pi * 0.4**3
+    assert abs(vol - expected) / expected < 0.02
+
+
+def test_refit_with_bounds_keeps_face_vertices():
+    """Refitting a clipped-domain mesh must not drag face vertices onto
+    the obstacle; passing bounds clips phi exactly as generation did."""
+    obstacle = sdf_sphere([0.0, 0.0], 0.4)
+    base = mesh_implicit_domain(lambda x: -obstacle(x), ([-1, -1], [1, 1]), 0.1)
+    on_face = (base.points.abs() == 1.0).any(dim=1)
+    assert int(on_face.sum()) >= 8
+    refit = refit_mesh_to_implicit(
+        base, lambda x: 0.45 - x.norm(dim=-1), bounds=([-1, -1], [1, 1])
+    )
+    # Face vertices stay exactly put (zero Newton step on the box branch)...
+    assert torch.equal(refit.points[on_face], base.points[on_face])
+    # ... while the obstacle boundary moves to the new radius.
+    bnd = boundary_vertex_mask(base.points, base.cells)
+    r = refit.points[bnd & ~on_face].norm(dim=-1)
+    assert float((r - 0.45).abs().max()) < 1e-9
 
 
 def test_refit_warns_on_inversion():
