@@ -188,17 +188,20 @@ Learn to get meshes in and out of PhysicsNeMo-Mesh.
 
 **File**: `tutorial_9_mesh_generation.ipynb`
 
-Generate simulation-ready volume meshes from scratch, two ways.
+Generate simulation-ready volume meshes from scratch in two ways.
 
-- Choosing between `fill_interior` (exact boundaries, guaranteed angles),
-  `mesh_implicit_domain` (implicit domains, any dimension, GPU), and
-  `marching_cubes` (isosurfaces)
-- Filling multiply-connected boundary meshes; per-boundary provenance data
+**From an explicit boundary** (`fill_interior`):
+
+- Filling multiply-connected boundary meshes with per-boundary provenance data
 - Verifying the minimum-angle guarantee across resolutions
-- Implicit CSG, raw level sets, and the coverage guard
 - Pinning sharp corners with `feature_points`
+
+**From an implicit function** (`mesh_implicit_domain`, `marching_cubes`):
+
+- Using implicit CSG, raw level sets, and the coverage guard
 - Tetrahedralizing 3D implicit domains
-- Differentiable meshing: shape gradients through the mesh
+- Extracting isosurfaces with `marching_cubes`
+- Computing shape gradients through the mesh (differentiable meshing)
 
 ## Assets
 
