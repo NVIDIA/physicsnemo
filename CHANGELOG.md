@@ -11,19 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Adds dimension-generic volume mesh generation for implicit domains to
-  `physicsnemo.mesh.generate`: `mesh_implicit_domain` meshes
-  `{x : phi(x) < 0}` clipped to the bounding box (box faces are honored
+  `physicsnemo.mesh.generate`. `mesh_implicit_domain` meshes
+  `{x : phi(x) < 0}`, clipped to the bounding box (box faces are honored
   as boundary, so external-flow "box minus obstacle" domains work
-  directly) for any implicit function (SDFs, level sets, neural
-  fields) in 2D/3D/ND on CPU or CUDA using pure PyTorch tensor ops —
-  lattice initialization, validity-gated ODT smoothing, quality-greedy
-  bistellar flips, topological repairs, a coverage guard that raises on
-  sub-resolution features, and exact interpolation of sharp corners via
-  `feature_points`. Also adds `refit_mesh_to_implicit` (differentiable
-  boundary refit at fixed topology, for shape-optimization loops) and
-  signed-distance building blocks (`sdf_sphere`, `sdf_box`,
-  `sdf_polygon_2d`, `sdf_union`, `sdf_intersection`, `sdf_difference`,
-  `project_to_zero_set`).
+  directly), for any implicit function (signed-distance functions, level
+  sets, or neural fields) in 2D, 3D, or higher dimensions on CPU or CUDA
+  using pure PyTorch tensor ops. The algorithm includes:
+
+  - Lattice initialization
+  - Validity-gated optimal-Delaunay-triangulation (ODT) smoothing
+  - Quality-greedy bistellar flips
+  - Topological repairs
+  - A coverage guard that raises on sub-resolution features
+  - Exact interpolation of sharp corners through `feature_points`
+
+  It also adds:
+
+  - `refit_mesh_to_implicit`, a differentiable boundary refit at fixed
+    topology, for shape-optimization loops
+  - Signed-distance building blocks, including `sdf_sphere`, `sdf_box`,
+    `sdf_polygon_2d`, `sdf_union`, `sdf_intersection`, `sdf_difference`,
+    and `project_to_zero_set`
 - Adds a `global_shape` argument to `ShardTensor.from_local`, enabling the
   no-communication `sharding_shapes="chunk"` path.
 - Adds exact-boundary quality mesh generation to
