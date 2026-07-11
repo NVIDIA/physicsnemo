@@ -24,13 +24,15 @@ from physicsnemo.datapipes.readers.mesh import (
     DomainMeshReader,
     MeshReader,
     _contiguous_block_slice,
+    _cyclic_block_indices,
 )
 from physicsnemo.datapipes.transforms.mesh import (
     CenterMesh,
     RandomScaleMesh,
     ScaleMesh,
+    SubsampleMesh,
 )
-from physicsnemo.mesh import DomainMesh, Mesh
+from physicsnemo.mesh import QUADRATURE_WEIGHTS_KEY, DomainMesh, Mesh
 from physicsnemo.mesh.primitives.basic import (
     single_triangle_3d,
     two_triangles_2d,
@@ -470,3 +472,121 @@ class TestTensorDictMeshApply:
         assert "y" in out
         assert torch.allclose(out["x"].points, original_points * 3.0)
         assert torch.allclose(out["y"].points, original_points * 3.0)
+
+
+class TestCyclicBlockIndices:
+    """Tests for the ``_cyclic_block_indices`` helper."""
+
+    def test_no_wrap(self):
+        idx = _cyclic_block_indices(10, 4, start=3)
+        assert idx.tolist() == [3, 4, 5, 6]
+
+    def test_wraps_past_end(self):
+        idx = _cyclic_block_indices(10, 4, start=8)
+        assert idx.tolist() == [8, 9, 0, 1]
+
+    def test_inclusion_probability_exactly_uniform(self):
+        # Over all N starts, every element appears in exactly k blocks,
+        # so pi_i == k/N exactly -- the property that makes the N/k
+        # Horvitz-Thompson quadrature weight unbiased.
+        total, k = 11, 4
+        counts = torch.zeros(total, dtype=torch.long)
+        for start in range(total):
+            counts[_cyclic_block_indices(total, k, start)] += 1
+        assert (counts == k).all()
+
+
+class TestCellSubsampleQuadratureWeights:
+    """Reader-side cell subsampling records Horvitz-Thompson weights."""
+
+    def _make_strip(self, n_cells: int) -> Mesh:
+        """Disjoint unit right triangles (area 0.5 each) along the x-axis."""
+        pts = []
+        for i in range(n_cells):
+            pts += [
+                [float(i), 0.0, 0.0],
+                [float(i) + 1.0, 0.0, 0.0],
+                [float(i), 1.0, 0.0],
+            ]
+        return Mesh(
+            points=torch.tensor(pts),
+            cells=torch.arange(3 * n_cells).reshape(n_cells, 3),
+        )
+
+    def test_reader_records_weight(self, tmp_path):
+        n, k = 40, 12
+        self._make_strip(n).save(tmp_path / "m.pmsh")
+        reader = MeshReader(tmp_path, pattern="*.pmsh", subsample_n_cells=k)
+        reader.set_generator(torch.Generator().manual_seed(0))
+        mesh, _ = reader[0]
+        assert mesh.n_cells == k
+        torch.testing.assert_close(
+            mesh.cell_quadrature_weights, torch.full((k,), n / k)
+        )
+
+    def test_reader_noop_below_threshold(self, tmp_path):
+        n = 8
+        self._make_strip(n).save(tmp_path / "m.pmsh")
+        reader = MeshReader(tmp_path, pattern="*.pmsh", subsample_n_cells=20)
+        mesh, _ = reader[0]
+        assert mesh.n_cells == n
+        assert QUADRATURE_WEIGHTS_KEY not in mesh.cell_data.keys()
+
+    def test_equal_area_mesh_recovers_total_exactly(self, tmp_path):
+        # With identical triangles, ANY cyclic block reproduces the full
+        # area: sum(area * N/k) == k * 0.5 * N/k == full total.
+        n, k = 30, 7
+        full = self._make_strip(n)
+        full.save(tmp_path / "m.pmsh")
+        reader = MeshReader(tmp_path, pattern="*.pmsh", subsample_n_cells=k)
+        reader.set_generator(torch.Generator().manual_seed(0))
+        for _ in range(5):
+            mesh, _ = reader[0]
+            corrected = (mesh.cell_areas * mesh.cell_quadrature_weights).sum()
+            torch.testing.assert_close(corrected, full.cell_areas.sum())
+
+    def test_composes_with_subsample_mesh_transform(self, tmp_path):
+        # Reader keeps k1 of N (weight N/k1); SubsampleMesh keeps k2 of k1
+        # (weight x k1/k2). Composed weight must be exactly N/k2.
+        n, k1, k2 = 60, 20, 5
+        self._make_strip(n).save(tmp_path / "m.pmsh")
+        reader = MeshReader(tmp_path, pattern="*.pmsh", subsample_n_cells=k1)
+        reader.set_generator(torch.Generator().manual_seed(0))
+        mesh, _ = reader[0]
+        mesh = SubsampleMesh(n_cells=k2)(mesh)
+        assert mesh.n_cells == k2
+        torch.testing.assert_close(
+            mesh.cell_quadrature_weights, torch.full((k2,), n / k2)
+        )
+
+    def test_domain_mesh_reader_records_weights_on_boundaries(self, tmp_path):
+        interior = Mesh(points=torch.randn(10, 3))
+        wall = self._make_strip(24)
+        dm = DomainMesh(interior=interior, boundaries={"wall": wall})
+        dm.save(tmp_path / "dm.pdmsh")
+        reader = DomainMeshReader(tmp_path, pattern="*.pdmsh", subsample_n_cells=6)
+        loaded, _ = reader[0]
+        assert loaded.boundaries["wall"].n_cells == 6
+        torch.testing.assert_close(
+            loaded.boundaries["wall"].cell_quadrature_weights,
+            torch.full((6,), 24 / 6),
+        )
+        ### Interior is a point cloud: no cells, no weights.
+        assert QUADRATURE_WEIGHTS_KEY not in loaded.interior.cell_data.keys()
+
+    def test_seeded_reproducibility(self, tmp_path):
+        ### Reader RNG is derived per-sample from (base_seed, epoch, index):
+        ### the same triple must reproduce the same block; varying the epoch
+        ### must produce a variety of blocks.
+        self._make_strip(50).save(tmp_path / "m.pmsh")
+        reader = MeshReader(tmp_path, pattern="*.pmsh", subsample_n_cells=10)
+        reader.set_generator(torch.Generator().manual_seed(123))
+        m1, _ = reader[0]
+        m2, _ = reader[0]
+        torch.testing.assert_close(m1.points, m2.points)
+        distinct_blocks = set()
+        for epoch in range(20):
+            reader.set_epoch(epoch)
+            m, _ = reader[0]
+            distinct_blocks.add(round(float(m.points[0, 0])))
+        assert len(distinct_blocks) > 5

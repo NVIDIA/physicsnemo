@@ -73,6 +73,11 @@ def _subsample_mesh_points(
     cell-remapping logic in :meth:`Mesh.slice_points` which allocates
     two *N*-element intermediate tensors.  For meshes with cells it
     falls back to ``slice_points``.
+
+    Unlike :func:`_subsample_mesh_cells`, this does NOT maintain
+    quadrature weights: dropping points removes cells implicitly, with
+    no per-cell inclusion probability to invert.  Prefer cell
+    subsampling when downstream code integrates over the mesh.
     """
     if mesh.n_points <= n_points:
         return mesh
@@ -88,31 +93,73 @@ def _subsample_mesh_points(
     return mesh.slice_points(torch.arange(sl.start, sl.stop, device=mesh.points.device))
 
 
+def _cyclic_block_indices(
+    total: int,
+    k: int,
+    start: int,
+    device: torch.device | None = None,
+) -> torch.Tensor:
+    """Indices of the length-*k* contiguous block at *start*, wrapping mod *total*.
+
+    With ``start`` drawn uniformly over ``[0, total)``, the wrapping block
+    gives every element an inclusion probability of exactly ``k / total``
+    (a non-wrapping block gives elements near the array ends a smaller
+    inclusion probability, which would bias Horvitz-Thompson quadrature
+    weights).  The result is one or two ascending contiguous runs, so
+    gathering with it stays page-sequential on memmap-backed tensors.
+    """
+    end = start + k
+    if end <= total:
+        return torch.arange(start, end, device=device)
+    return torch.cat(
+        [
+            torch.arange(start, total, device=device),
+            torch.arange(0, end - total, device=device),
+        ]
+    )
+
+
 def _subsample_mesh_cells(
     mesh: Mesh,
     n_cells: int,
     generator: torch.Generator | None = None,
 ) -> Mesh:
-    """Subsample a Mesh to *n_cells* via a contiguous block read on cells.
+    """Subsample a Mesh to *n_cells* via a cyclic contiguous block read on cells.
 
     Preserves cell topology: each selected cell retains its full vertex
     connectivity.  Unreferenced points are compacted out.  Uses
-    ``_contiguous_block_slice`` for sequential I/O on memmap-backed
-    cell tensors.
+    :func:`_cyclic_block_indices` for (page-)sequential I/O on
+    memmap-backed cell tensors.
+
+    Preserves the surface quadrature measure: every cell's inclusion
+    probability is exactly ``k/N``, and the retained cells' quadrature
+    weights (see :attr:`Mesh.cell_quadrature_weights`) are multiplied by
+    ``N/k``, composing with any weights from earlier sampling stages.
+    Downstream consumers of the effective measure
+    ``cell_areas * cell_quadrature_weights`` (``Mesh.integrate``,
+    boundary-integral models such as GLOBE) then see an unbiased estimate
+    of the full-mesh measure rather than the ~``k/N`` retained fraction.
 
     Use this instead of :func:`_subsample_mesh_points` when the mesh
     has cell connectivity (triangulated surfaces, volume meshes) and
     downstream transforms or outputs depend on cell topology (e.g.
     surface normals, cell centroids, cell_data fields).
     """
-    if mesh.n_cells <= n_cells:
+    n_total = mesh.n_cells
+    if n_total <= n_cells:
         return mesh
-    sl = _contiguous_block_slice(mesh.n_cells, n_cells, generator=generator)
-    mesh = mesh.slice_cells(sl)
+    with torch.profiler.record_function("mesh_reader: randint.item() scalar readback"):
+        start = int(torch.randint(0, n_total, (1,), generator=generator).item())
+    indices = _cyclic_block_indices(n_total, n_cells, start, device=mesh.cells.device)
+    mesh = mesh.slice_cells(indices)
     # Compact: drop vertices not referenced by any surviving cell
     referenced = torch.unique(mesh.cells)
     if referenced.numel() < mesh.n_points:
         mesh = mesh.slice_points(referenced)
+    ### Compose the Horvitz-Thompson weight for this sampling stage.
+    ### slice_cells/slice_points returned fresh TensorDicts, so the
+    ### in-place update cannot leak into the memmap-backed source.
+    mesh.set_cell_quadrature_weights(mesh.cell_quadrature_weights * (n_total / n_cells))
     return mesh
 
 
@@ -176,12 +223,16 @@ class MeshReader:
             that a contiguous block is spatially representative.
         subsample_n_cells : int, optional
             If set, subsample the mesh to this many cells *before*
-            ``pin_memory``.  Uses contiguous block reads on the cell
-            tensor for sequential I/O, then compacts unreferenced
+            ``pin_memory``.  Uses cyclic contiguous block reads on the
+            cell tensor for sequential I/O, then compacts unreferenced
             vertices.  Preserves cell topology and is the correct
             choice for triangulated surface meshes where downstream
             transforms depend on cells (e.g. surface normals, cell
-            centroids, cell_data fields).  Applied before
+            centroids, cell_data fields).  Records Horvitz-Thompson
+            quadrature weights (``N/k`` per retained cell; see
+            :attr:`Mesh.cell_quadrature_weights`) so area-weighted
+            integrals over the subsampled mesh remain unbiased
+            estimates of full-mesh integrals.  Applied before
             ``subsample_n_points`` when both are set.
         """
         self._root = Path(path)
@@ -325,10 +376,14 @@ class DomainMeshReader:
         subsample_n_cells : int, optional
             If set, subsample the interior and each boundary mesh to
             at most this many cells *before* ``pin_memory``.  Uses
-            contiguous block reads on cell tensors for sequential I/O,
-            then compacts unreferenced vertices.  Preserves cell
-            topology and is the correct choice when downstream
-            transforms depend on cells.  Applied before
+            cyclic contiguous block reads on cell tensors for
+            sequential I/O, then compacts unreferenced vertices.
+            Preserves cell topology and is the correct choice when
+            downstream transforms depend on cells.  Records
+            Horvitz-Thompson quadrature weights (``N/k`` per retained
+            cell; see :attr:`Mesh.cell_quadrature_weights`) so
+            area-weighted integrals over subsampled meshes remain
+            unbiased estimates of full-mesh integrals.  Applied before
             ``subsample_n_points`` when both are set.
         extra_boundaries : dict[str, dict] or None, optional
             Load additional sibling meshes as extra boundaries on each

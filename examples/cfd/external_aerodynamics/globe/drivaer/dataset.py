@@ -249,9 +249,10 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
           areas that approximate the surface Voronoi diagram of the subsampled
           centroids, at the cost of an O(N) nearest-neighbour pass over the
           full mesh each time a sample is loaded.
-        * **Uniform** (``voronoi=False``): rescales all subsampled cell areas
-          by a single global factor so that total area is conserved.  Much
-          faster, but every subsampled cell gets the same scale factor
+        * **Uniform** (``voronoi=False``): records a single global
+          quadrature weight (see :attr:`Mesh.cell_quadrature_weights`) so
+          that the effective sampled area total matches the full surface.
+          Much faster, but every subsampled cell gets the same factor
           regardless of local density.
 
         Args:
@@ -266,7 +267,8 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
                 uniform area rescaling (faster, but less accurate).
 
         Returns:
-            Mesh with ``n_cells`` cells and corrected area cache.
+            Mesh with ``n_cells`` cells and a corrected quadrature measure
+            (uniform: quadrature weights; Voronoi: area/normal cache).
         """
         if n_cells <= 0:
             raise ValueError(f"{n_cells=!r} must be positive.")
@@ -281,14 +283,25 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
             boundary = Mesh(points=boundary.points, cells=boundary.cells)
 
         if voronoi:
+            ### The Voronoi path replaces both areas AND normals with
+            ### locally-accumulated cluster values -- a full requadrature of
+            ### the surface, not just a measure correction -- so it keeps the
+            ### direct geometry-cache override rather than quadrature weights.
             partition = partition_cells(mesh, seeds=boundary.cell_centroids)
             boundary._cache["cell", "areas"] = partition.cluster_areas
             boundary._cache["cell", "normals"] = partition.cluster_normals
         else:
+            ### Uniform measure correction via quadrature weights (see
+            ### Mesh.cell_quadrature_weights): one global factor makes the
+            ### effective sampled area total match the full surface exactly
+            ### for this realization (self-normalized / Hajek estimator).
+            ### GLOBE consumes cell_areas * cell_quadrature_weights, so this
+            ### is numerically identical to the previous area-cache override
+            ### while keeping cell_areas purely geometric.
             total_area = mesh.cell_areas.sum()
             raw_areas = boundary.cell_areas
-            boundary._cache["cell", "areas"] = raw_areas * (
-                total_area / raw_areas.sum()
+            boundary.set_cell_quadrature_weights(
+                (total_area / raw_areas.sum()) * torch.ones_like(raw_areas)
             )
 
         return boundary

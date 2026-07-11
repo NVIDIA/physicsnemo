@@ -22,13 +22,19 @@ from physicsnemo.mesh.fields import (
     ranks_from_tensordict,
     validate_data_contains_ranks,
 )
-from physicsnemo.mesh.mesh import MESH_FIELD_ASSOCIATIONS, Mesh, MeshFieldAssociation
+from physicsnemo.mesh.mesh import (
+    MESH_FIELD_ASSOCIATIONS,
+    QUADRATURE_WEIGHTS_KEY,
+    Mesh,
+    MeshFieldAssociation,
+)
 
 __all__ = [
     "DomainMesh",
     "MESH_FIELD_ASSOCIATIONS",
     "Mesh",
     "MeshFieldAssociation",
+    "QUADRATURE_WEIGHTS_KEY",
     "RankSpecDict",
     "flatten_rank_spec",
     "rank_counts",

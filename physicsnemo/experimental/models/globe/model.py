@@ -196,7 +196,12 @@ class GLOBE(Module):
     - ``final_field_transforms`` is a :class:`~torch.nn.ModuleList` of per-field
       linear calibration layers, ordered alphabetically by field name.
     - Cell areas are automatically normalized by ``reference_area`` to preserve
-      discretization-invariance.
+      discretization-invariance.  If a boundary mesh carries per-cell
+      quadrature weights (recorded by cell-subsampling datapipes; see
+      :attr:`Mesh.cell_quadrature_weights`), the effective quadrature areas
+      ``cell_areas * cell_quadrature_weights`` are used, so boundary
+      integrals over a subsampled surface are unbiased estimates of the
+      full-surface ones.
     - The cell normal vector is automatically added to source data for each
       mesh.
     - The ``Mesh["n-1", "n"]`` type annotations assume the PDE domain fills the
@@ -406,6 +411,7 @@ class GLOBE(Module):
     def _build_trees_and_plans(
         self,
         boundary_meshes: dict[str, Mesh["n-1", "n"]],  # ty: ignore[unresolved-reference]
+        quadrature_areas: dict[str, torch.Tensor],
     ) -> tuple[
         dict[str, ClusterTree],
         dict[str, torch.Tensor],
@@ -419,12 +425,26 @@ class GLOBE(Module):
         the target tree is the same object as the source tree.  Plans are
         reused across all communication layers since the geometry is fixed.
 
+        Parameters
+        ----------
+        boundary_meshes : dict[str, Mesh]
+            Enriched per-BC-type boundary meshes.
+        quadrature_areas : dict[str, torch.Tensor]
+            Per-BC-type effective quadrature areas
+            (``cell_areas * cell_quadrature_weights``), computed by
+            :meth:`forward` from the raw input meshes before enrichment.
+            Equal to plain ``cell_areas`` for meshes without recorded
+            quadrature weights.
+
         Returns
         -------
         cluster_trees : dict[str, ClusterTree]
             Per-BC-type cluster trees built from cell centroids.
         bc_areas : dict[str, torch.Tensor]
-            Per-BC-type normalized cell area tensors.
+            Per-BC-type ``reference_area``-normalized effective quadrature
+            area tensors, consumed both by Barnes-Hut source aggregation
+            and by the source-strength integration in
+            :meth:`_evaluate_hyperlayer`.
         comm_plans : dict[str, dict[str, DualInteractionPlan]]
             Communication plans indexed as ``comm_plans[dst_bc][src_bc]``.
         """
@@ -451,7 +471,9 @@ class GLOBE(Module):
             bc_areas_built: dict[str, torch.Tensor] = {}
             for bc_type, mesh in boundary_meshes.items():
                 centroids = mesh.cell_centroids.to(build_device)
-                areas = (mesh.cell_areas / self.reference_area).to(build_device)
+                areas = (quadrature_areas[bc_type] / self.reference_area).to(
+                    build_device
+                )
                 bc_areas_built[bc_type] = areas
                 cluster_trees_built[bc_type] = ClusterTree.from_points(
                     centroids, leaf_size=self.leaf_size, areas=areas,
@@ -606,9 +628,15 @@ class GLOBE(Module):
         result_pieces: list[TensorDict[str, Float[torch.Tensor, "n_targets ..."]]] = []
 
         for bc_type, mesh in source_meshes.items():
+            ### `source_areas` holds the reference_area-normalized effective
+            ### quadrature areas (cell_areas * cell_quadrature_weights),
+            ### computed once from the raw input meshes in
+            ### `_build_trees_and_plans` -- the mesh geometry is fixed across
+            ### layers, so reusing them here keeps the strength integration
+            ### and the Barnes-Hut aggregation on the same measure.
             strengths: TensorDict[str, Float[torch.Tensor, " n_cells"]] = (
                 mesh.cell_data["strengths"].apply(  # ty: ignore[unresolved-attribute]
-                    lambda x: x * (mesh.cell_areas / self.reference_area)
+                    lambda x: x * source_areas[bc_type]
                 )
             )
 
@@ -837,7 +865,24 @@ class GLOBE(Module):
                 source_label="`global_data`",
             )
 
+        ### Effective per-cell quadrature areas, read from the raw input
+        ### meshes BEFORE enrichment: enrichment nests each mesh's cell_data
+        ### under the "physical" namespace, which would hide the reserved
+        ### quadrature-weights key from `Mesh.cell_quadrature_weights`.
+        ### For meshes without recorded weights this is exactly `cell_areas`
+        ### (weights default to ones). Subsampled meshes carry
+        ### Horvitz-Thompson weights (see `Mesh.cell_quadrature_weights`),
+        ### making the model's area-weighted boundary integrals unbiased
+        ### estimates of the full-surface ones.
+        bc_quadrature_areas = {
+            bc_type: mesh.cell_areas * mesh.cell_quadrature_weights
+            for bc_type, mesh in boundary_meshes.items()
+        }
+
         ### Phase 1: Enrich boundary meshes with initial (all-ones) strengths.
+        ### (The reserved quadrature-weights key rides along inside
+        ### "physical"; it is inert there because kernels `select` only
+        ### their declared feature keys.)
         with record_function("globe::enrich_meshes"):
             boundary_meshes = {
                 bc_type: Mesh(
@@ -869,7 +914,7 @@ class GLOBE(Module):
         ### torch.compile, so we skip compilation for this block.
         with record_function("globe::build_trees_and_plans"):
             cluster_trees, bc_areas, comm_plans = self._build_trees_and_plans(
-                boundary_meshes
+                boundary_meshes, bc_quadrature_areas
             )
 
         ### Phase 2: Communication hyperlayers (boundary-to-boundary).

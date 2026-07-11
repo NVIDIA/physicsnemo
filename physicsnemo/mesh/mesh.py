@@ -74,6 +74,13 @@ MESH_FIELD_ASSOCIATIONS: tuple[MeshFieldAssociation, ...] = get_args(
     MeshFieldAssociation
 )
 
+# Reserved `cell_data` key holding dimensionless per-cell quadrature weights
+# (inverse inclusion probabilities) recorded by cell-subsampling operations.
+# See :attr:`Mesh.cell_quadrature_weights` for the contract. Underscore-prefixed
+# so it reads as internal bookkeeping rather than a physical field; consumers
+# that iterate over cell_data as model features should exclude it.
+QUADRATURE_WEIGHTS_KEY: str = "_quadrature_weights"
+
 
 @tensorclass(tensor_only=True, shadow=True)
 class Mesh:
@@ -797,6 +804,74 @@ class Mesh:
             self._cache["cell", "areas"] = cached
 
         return cached
+
+    @property
+    def cell_quadrature_weights(self) -> torch.Tensor:
+        r"""Dimensionless per-cell quadrature weights for subsampled meshes.
+
+        When a mesh is produced by randomly subsampling the cells of a larger
+        mesh, each retained cell statistically represents more surface than
+        its own geometric area: a cell kept with inclusion probability
+        :math:`\pi_i` carries the Horvitz-Thompson quadrature weight
+        :math:`1/\pi_i` (exactly ``N/k`` for a uniform ``k``-of-``N`` cell
+        subsample).  A discrete integral
+
+        .. math::
+            \int_\Omega f\,d\Omega \approx \sum_c f_c\,|\sigma_c|\,w_c
+
+        computed with the *effective* quadrature measure
+        ``cell_areas * cell_quadrature_weights`` is then an unbiased estimate
+        of the full-mesh integral.  Consumers that approximate integrals with
+        area-weighted sums (:meth:`integrate`, :meth:`integrate_flux`,
+        boundary-integral models such as GLOBE) read this property;
+        :attr:`cell_areas` itself always remains the purely geometric simplex
+        measure.
+
+        The weights are stored in ``cell_data`` under
+        :data:`QUADRATURE_WEIGHTS_KEY` (a reserved, underscore-prefixed key),
+        so they survive cell slicing, serialization, device transfer, and
+        rigid transforms automatically; being dimensionless, they are also
+        invariant under geometric rescaling (``cell_areas`` alone picks up
+        the appropriate power of length).  Cell-sampling operations
+        (``MeshReader``/``DomainMeshReader`` cell subsampling, the
+        ``SubsampleMesh`` transform) maintain the invariant by composing each
+        stage's inverse inclusion probability multiplicatively.  Point
+        subsampling on meshes with cells does **not** maintain it (cells
+        dropped implicitly have no per-cell inclusion probability).
+
+        Returns
+        -------
+        torch.Tensor
+            Weights of shape ``(n_cells,)``.  If no weights have been
+            recorded, returns ones (every cell represents exactly itself).
+        """
+        weights = self.cell_data.get(QUADRATURE_WEIGHTS_KEY, None)
+        if weights is None:
+            return torch.ones(
+                self.n_cells, dtype=self.points.dtype, device=self.points.device
+            )
+        return weights
+
+    def set_cell_quadrature_weights(self, weights: torch.Tensor) -> None:
+        """Record per-cell quadrature weights on this mesh (in place).
+
+        Stores *weights* in ``cell_data`` under
+        :data:`QUADRATURE_WEIGHTS_KEY`; see
+        :attr:`cell_quadrature_weights` for the contract.  A method rather
+        than a property setter because the ``@tensorclass`` machinery
+        intercepts attribute assignment on ``Mesh`` instances.
+
+        Parameters
+        ----------
+        weights : torch.Tensor
+            Dimensionless weights of shape ``(n_cells,)``.
+        """
+        if weights.shape != (self.n_cells,):
+            raise ValueError(
+                f"cell_quadrature_weights must have shape ({self.n_cells},) "
+                f"to match n_cells; got {tuple(weights.shape)}."
+            )
+        self.cell_data[QUADRATURE_WEIGHTS_KEY] = weights
 
     @property
     def cell_normals(self) -> torch.Tensor:

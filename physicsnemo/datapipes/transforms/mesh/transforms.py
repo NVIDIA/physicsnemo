@@ -254,7 +254,18 @@ def _compact_points(mesh: Mesh) -> Mesh:
 
 @register()
 class SubsampleMesh(MeshTransform):
-    r"""Subsample a mesh to a fixed number of cells and/or points."""
+    r"""Subsample a mesh to a fixed number of cells and/or points.
+
+    Cell subsampling preserves the quadrature measure: retained cells'
+    quadrature weights (see :attr:`Mesh.cell_quadrature_weights`) are
+    multiplied by this stage's inverse inclusion probability
+    ``n_cells_before / n_cells``, composing with weights recorded by
+    earlier sampling stages (e.g. reader-side subsampling), so
+    area-weighted integrals over the result remain unbiased estimates
+    of full-mesh integrals.  Point subsampling does not maintain
+    weights (dropping points removes cells implicitly, with no
+    per-cell inclusion probability to invert).
+    """
 
     def __init__(
         self,
@@ -286,12 +297,17 @@ class SubsampleMesh(MeshTransform):
 
     def __call__(self, mesh: Mesh) -> Mesh:
         if self.n_cells is not None and mesh.n_cells > self.n_cells:
-            indices = self._random_indices(
-                mesh.n_cells, self.n_cells, mesh.cells.device
-            )
+            n_before = mesh.n_cells
+            indices = self._random_indices(n_before, self.n_cells, mesh.cells.device)
             mesh = mesh.slice_cells(indices)
             if self.compact:
                 mesh = _compact_points(mesh)
+            ### Compose this stage's Horvitz-Thompson quadrature weight.
+            ### `_random_indices` is a uniform k-of-N sample, so every
+            ### cell's inclusion probability is k/N exactly.
+            mesh.set_cell_quadrature_weights(
+                mesh.cell_quadrature_weights * (n_before / self.n_cells)
+            )
 
         if self.n_points is not None and mesh.n_points > self.n_points:
             indices = self._random_indices(

@@ -38,6 +38,13 @@ arithmetic mean of vertex values:
     = \sum_c |\sigma_c| \cdot \frac{1}{n_v} \sum_{v \in c} f(v)
 
 This is exact for P1 fields and second-order accurate for smooth fields.
+
+**Subsampled meshes.**  All integrators use the effective quadrature measure
+``cell_areas * cell_quadrature_weights`` rather than the bare geometric
+areas.  For meshes carrying Horvitz-Thompson quadrature weights (recorded by
+cell-subsampling operations; see :attr:`Mesh.cell_quadrature_weights`), the
+integral is an unbiased estimate of the corresponding full-mesh integral.
+For meshes without weights this reduces exactly to the geometric measure.
 """
 
 import math
@@ -54,6 +61,22 @@ if TYPE_CHECKING:
 
 
 NanPolicy = Literal["omit", "propagate"]
+
+
+def _cell_quadrature_areas(mesh: "Mesh") -> Float[torch.Tensor, " n_cells"]:
+    r"""Effective per-cell quadrature measure: ``cell_areas * weights``.
+
+    Skips the multiplication when no quadrature weights are recorded, so
+    meshes without weights pay nothing and results are bit-identical to the
+    geometric-measure behavior.
+    """
+    from physicsnemo.mesh.mesh import QUADRATURE_WEIGHTS_KEY
+
+    cell_areas = mesh.cell_areas
+    weights = mesh.cell_data.get(QUADRATURE_WEIGHTS_KEY, None)
+    if weights is None:
+        return cell_areas
+    return cell_areas * weights
 
 
 def _sum_with_nan_policy(
@@ -159,10 +182,10 @@ def _integrate_cell_data(
                 f"n_cells ({mesh.n_cells})."
             )
 
-    cell_areas = mesh.cell_areas  # (n_cells,)
+    quad_areas = _cell_quadrature_areas(mesh)  # (n_cells,)
 
-    ### Reshape cell_areas for broadcasting with arbitrary trailing dims
-    weights = cell_areas.reshape(-1, *([1] * (field.ndim - 1)))
+    ### Reshape for broadcasting with arbitrary trailing dims
+    weights = quad_areas.reshape(-1, *([1] * (field.ndim - 1)))
 
     return _sum_with_nan_policy(
         field * weights,
@@ -216,7 +239,7 @@ def _integrate_point_data(
                 f"n_points ({mesh.n_points})."
             )
 
-    cell_areas = mesh.cell_areas  # (n_cells,)
+    quad_areas = _cell_quadrature_areas(mesh)  # (n_cells,)
 
     ### Gather vertex values for each cell: (n_cells, n_verts_per_cell, ...)
     cell_vertex_values = field[mesh.cells]
@@ -224,8 +247,8 @@ def _integrate_point_data(
     ### Mean over vertices within each cell: (n_cells, ...)
     cell_means = cell_vertex_values.mean(dim=1)
 
-    ### Weight by cell area and sum
-    weights = cell_areas.reshape(-1, *([1] * (cell_means.ndim - 1)))
+    ### Weight by effective cell measure and sum
+    weights = quad_areas.reshape(-1, *([1] * (cell_means.ndim - 1)))
     return _sum_with_nan_policy(
         cell_means * weights,
         dim=0,
@@ -366,7 +389,14 @@ def _integrate_weighted_moment(
     accumulation_dtype: torch.dtype | None,
     nan_policy: NanPolicy,
 ) -> torch.Tensor:
-    """Core weighted grouped moment used by Mesh and streamed operators."""
+    """Core weighted grouped moment used by Mesh and streamed operators.
+
+    ``weights`` is the per-entity quadrature measure. Callers integrating
+    over a (possibly subsampled) mesh should pass the effective measure
+    ``cell_areas * cell_quadrature_weights`` (what
+    :func:`integrate_moment` does via ``_cell_quadrature_areas``), not the
+    bare geometric areas.
+    """
     if not torch.compiler.is_compiling():
         if left.ndim < 1 or right.ndim < 1 or weights.ndim != 1:
             raise ValueError("left, right, and weights must have a leading entity axis")
@@ -565,7 +595,7 @@ def integrate_moment(
     return _integrate_weighted_moment(
         left_tensor,
         right_tensor,
-        mesh.cell_areas,
+        _cell_quadrature_areas(mesh),
         aligned_dims=aligned_dims,
         accumulation_dtype=accumulation_dtype,
         nan_policy=nan_policy,
@@ -673,7 +703,7 @@ def integrate_flux(
             )
 
     cell_normals = mesh.cell_normals  # (n_cells, n_spatial_dims)
-    cell_areas = mesh.cell_areas  # (n_cells,)
+    quad_areas = _cell_quadrature_areas(mesh)  # (n_cells,)
 
     ### Resolve per-cell vector field
     match data_source:
@@ -686,7 +716,7 @@ def integrate_flux(
 
     f_dot_n = (cell_field * cell_normals).sum(dim=-1)  # (n_cells,)
     return _sum_with_nan_policy(
-        f_dot_n * cell_areas,
+        f_dot_n * quad_areas,
         dim=0,
         nan_policy=nan_policy,
     )
