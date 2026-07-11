@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds `integrate_moment` to `physicsnemo.mesh.calculus`, plus a
+  `Mesh.integrate_moment` convenience method: measure-weighted outer-product
+  moments of two cell-centered fields, with aligned group dimensions, a
+  configurable accumulation dtype, and an explicit `nan_policy`.
+  `integrate`, `integrate_flux`, and the corresponding `Mesh` methods gain
+  the same `nan_policy` option.
 - Adds coverage reporting on PRs — an informational `Coverage %` check plus a
   ready-to-enable Codecov integration.
 - Adds the experimental Strata weather-emulation models —
