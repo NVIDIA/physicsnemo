@@ -188,8 +188,8 @@ def test_corner_pinning_with_feature_points():
     )
     assert_valid_volume_mesh(mesh)
     assert diag["coverage_gap_h"] < 1.0
-    d = torch.cdist(corners, mesh.points).min(dim=1).values
-    assert float(d.max()) < 1e-9, "feature points must appear as vertices"
+    d = (corners[:, None, :] - mesh.points[None, :, :]).norm(dim=-1).min(dim=1).values
+    assert float(d.max()) < 1e-12, "feature points must appear as vertices"
     # And pinning genuinely helps: without it the corners are rounded.
     _, diag_plain = mesh_implicit_domain(
         phi,
@@ -506,7 +506,7 @@ def test_feature_point_on_interior_facet():
         full_output=True,
     )
     assert_valid_volume_mesh(mesh)
-    d = torch.cdist(torch.zeros(1, 2, dtype=torch.float64), mesh.points).min()
+    d = mesh.points.norm(dim=-1).min()  # direct, not cdist (fp residue)
     assert float(d) < 1e-12
     # Coverage: total volume must not exceed the true square area (an
     # overlapping tent inflates it).
@@ -596,7 +596,12 @@ def test_external_flow_box_minus_obstacle_2d():
     corners = torch.tensor(
         [[i, j] for i in (-1.0, 1.0) for j in (-1.0, 1.0)], dtype=pts.dtype
     )
-    assert float(torch.cdist(corners, pts).min(dim=1).values.max()) == 0.0
+    assert (
+        float(
+            (corners[:, None, :] - pts[None, :, :]).norm(dim=-1).min(dim=1).values.max()
+        )
+        == 0.0
+    )
 
 
 def test_external_flow_box_minus_obstacle_3d():
@@ -655,7 +660,7 @@ def test_clustered_feature_points():
         max_coverage_gap_h=None,
     )
     assert_valid_volume_mesh(mesh)
-    d = torch.cdist(fp, mesh.points).min(dim=1).values
+    d = (fp[:, None, :] - mesh.points[None, :, :]).norm(dim=-1).min(dim=1).values
     assert float(d.max()) < 1e-12
 
 
@@ -673,4 +678,4 @@ def test_feature_point_on_lattice_ridge_3d():
         max_coverage_gap_h=None,
     )
     assert_valid_volume_mesh(mesh)
-    assert float(torch.cdist(fp, mesh.points).min()) < 1e-12
+    assert float((fp[:, None, :] - mesh.points[None, :, :]).norm(dim=-1).min()) < 1e-12
