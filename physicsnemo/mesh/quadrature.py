@@ -28,9 +28,9 @@ the Horvitz-Thompson **sampling weight** :math:`w_i = 1/\pi_i` (exactly
 computed with the effective **quadrature areas**
 ``cell_areas * sampling_weights`` is then an unbiased estimate of the
 full-mesh integral.  Without this, integrals over a ``k``-of-``N`` subsample
-silently shrink by ``~k/N`` -- and models that compound area-weighted
-integrals across several stages (e.g. GLOBE's boundary-integral hyperlayers)
-attenuate their outputs by that factor *per stage*.
+silently shrink by ``~k/N`` -- and computations that compound area-weighted
+integrals across several stages attenuate their results by that factor *per
+stage*.
 
 This module owns the whole concept, so :class:`~physicsnemo.mesh.Mesh`
 itself stays a general-purpose container:
@@ -50,8 +50,8 @@ itself stays a general-purpose container:
   Point subsampling on meshes with cells does **not** maintain weights
   (cells dropped implicitly have no per-cell inclusion probability).
 - Integral consumers (:meth:`Mesh.integrate`, :meth:`Mesh.integrate_flux`,
-  ``integrate_moment``, GLOBE) read :func:`cell_quadrature_areas`.  Meshes
-  without recorded weights pass through with the bare geometric measure,
+  ``integrate_moment``) read :func:`cell_quadrature_areas`.  Meshes without
+  recorded weights pass through with the bare geometric measure,
   bit-identically to the no-weights behavior.
 
 Terminology follows survey statistics and finite elements: the dimensionless

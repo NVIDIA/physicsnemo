@@ -136,9 +136,8 @@ def _subsample_mesh_cells(
     probability is exactly ``k/N``, and the retained cells' sampling
     weights (see :mod:`physicsnemo.mesh.quadrature`) are multiplied by
     ``N/k``, composing with any weights from earlier sampling stages.
-    Downstream consumers of the effective measure
-    ``cell_areas * sampling_weights`` (``Mesh.integrate``,
-    boundary-integral models such as GLOBE) then see an unbiased estimate
+    Consumers of the effective measure ``cell_areas * sampling_weights``
+    (see :mod:`physicsnemo.mesh.quadrature`) then see an unbiased estimate
     of the full-mesh measure rather than the ~``k/N`` retained fraction.
 
     Use this instead of :func:`_subsample_mesh_points` when the mesh
