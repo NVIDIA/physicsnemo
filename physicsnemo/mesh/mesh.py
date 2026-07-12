@@ -784,9 +784,9 @@ class Mesh:
         details.
 
         ``cell_areas`` is always the purely geometric simplex measure.  For
-        meshes produced by cell subsampling, the *effective* quadrature
-        measure (Horvitz-Thompson-weighted areas) is provided by
-        :mod:`physicsnemo.mesh.quadrature`.
+        meshes whose cells represent more than their own geometry (e.g.
+        after cell subsampling), the effective integration measure is
+        provided by :mod:`physicsnemo.mesh.calculus.measure`.
 
         Returns
         -------
@@ -3099,8 +3099,8 @@ class Mesh:
         Computes the P0 quadrature moment
         :math:`M = \sum_c |\sigma_c|\, a_c \otimes b_c`, where ``a`` is
         ``left``, ``b`` is ``right``, and :math:`|\sigma_c|` is the cell's
-        effective quadrature measure (see
-        :mod:`physicsnemo.mesh.quadrature`).  By default the result has
+        effective measure (see
+        :mod:`physicsnemo.mesh.calculus.measure`).  By default the result has
         shape
         ``left.shape[1:] + right.shape[1:]``.  ``aligned_dims`` may
         designate a common leading subset of the trailing dimensions as

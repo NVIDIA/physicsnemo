@@ -36,10 +36,10 @@ from torch.utils.data.distributed import DistributedSampler
 
 from physicsnemo.experimental.utils import CachedPreprocessingDataset
 from physicsnemo.mesh import Mesh
+from physicsnemo.mesh.calculus.measure import compose_measure_weights
 from physicsnemo.mesh.io import from_pyvista
 from physicsnemo.mesh.primitives.planar import structured_grid
 from physicsnemo.mesh.projections import embed
-from physicsnemo.mesh.quadrature import compose_sampling_weights
 from physicsnemo.mesh.remeshing import partition_cells
 from physicsnemo.utils.logging import PythonLogger
 
@@ -251,7 +251,7 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
           centroids, at the cost of an O(N) nearest-neighbour pass over the
           full mesh each time a sample is loaded.
         * **Uniform** (``voronoi=False``): records a single global
-          sampling weight (see :mod:`physicsnemo.mesh.quadrature`) so
+          measure weight (see :mod:`physicsnemo.mesh.calculus.measure`) so
           that the effective sampled area total matches the full surface.
           Much faster, but every subsampled cell gets the same factor
           regardless of local density.
@@ -268,8 +268,8 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
                 uniform area rescaling (faster, but less accurate).
 
         Returns:
-            Mesh with ``n_cells`` cells and a corrected quadrature measure
-            (uniform: sampling weights; Voronoi: area/normal cache).
+            Mesh with ``n_cells`` cells and a corrected integration measure
+            (uniform: measure weights; Voronoi: area/normal cache).
         """
         if n_cells <= 0:
             raise ValueError(f"{n_cells=!r} must be positive.")
@@ -285,22 +285,22 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
 
         if voronoi:
             ### The Voronoi path replaces both areas AND normals with
-            ### locally-accumulated cluster values -- a full requadrature of
-            ### the surface, not just a measure correction -- so it keeps the
-            ### direct geometry-cache override rather than quadrature weights.
+            ### locally-accumulated cluster values -- reconstructing the local
+            ### measure and normals, not just correcting the measure -- so it
+            ### keeps the geometry-cache override rather than measure weights.
             partition = partition_cells(mesh, seeds=boundary.cell_centroids)
             boundary._cache["cell", "areas"] = partition.cluster_areas
             boundary._cache["cell", "normals"] = partition.cluster_normals
         else:
-            ### Uniform measure correction via sampling weights (see
-            ### physicsnemo.mesh.quadrature): one global factor makes the
+            ### Uniform measure correction via measure weights (see
+            ### physicsnemo.mesh.calculus.measure): one global factor makes the
             ### effective sampled area total match the full surface exactly
             ### for this realization (self-normalized / Hajek estimator).
-            ### GLOBE consumes cell_areas * sampling_weights, so this is
+            ### GLOBE consumes cell_areas * measure_weights, so this is
             ### numerically identical to the previous area-cache override
             ### while keeping cell_areas purely geometric.
             total_area = mesh.cell_areas.sum()
-            compose_sampling_weights(boundary, total_area / boundary.cell_areas.sum())
+            compose_measure_weights(boundary, total_area / boundary.cell_areas.sum())
 
         return boundary
 

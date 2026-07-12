@@ -16,16 +16,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configurable accumulation dtype, and an explicit `nan_policy`.
   `integrate`, `integrate_flux`, and the corresponding `Mesh` methods gain
   the same `nan_policy` option.
-- Adds `physicsnemo.mesh.quadrature`: Horvitz–Thompson sampling weights for
-  cell-subsampled meshes. Cell subsampling in `MeshReader`/`DomainMeshReader`
-  (now a cyclic contiguous block, giving every cell an inclusion probability
-  of exactly `k/N`) and in `SubsampleMesh` records and multiplicatively
-  composes dimensionless per-cell sampling weights (stored in `cell_data`
-  under a reserved key); `Mesh.integrate`, `Mesh.integrate_flux`,
+- Adds `physicsnemo.mesh.calculus.measure`: dimensionless per-cell measure
+  weights (stored in `cell_data` under a reserved key) that make the measure
+  a mesh *represents* first-class alongside the geometry it *stores*, with
+  the effective measure `cell_measures = cell_areas * measure_weights`.
+  Cell subsampling in `MeshReader`/`DomainMeshReader` (now a cyclic
+  contiguous block, giving every cell an inclusion probability of exactly
+  `k/N`) and in `SubsampleMesh` records and multiplicatively composes
+  Horvitz–Thompson weights; `Mesh.integrate`, `Mesh.integrate_flux`,
   `integrate_moment`, and GLOBE's boundary integrals consume the effective
-  measure `cell_quadrature_areas = cell_areas * sampling_weights`. The `Mesh`
-  API is unchanged, `cell_areas` remains the purely geometric simplex
-  measure, and meshes without recorded weights behave exactly as before.
+  measure. The `Mesh` API is unchanged, `cell_areas` remains the purely
+  geometric simplex measure, and meshes without recorded weights behave
+  exactly as before.
 - Adds a `global_shape` argument to `ShardTensor.from_local`, enabling the
   no-communication `sharding_shapes="chunk"` path.
 - Adds exact-boundary quality mesh generation to
@@ -253,13 +255,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - GLOBE trained through cell-subsampling datapipes lost the surface
-  quadrature measure: retaining `k` of `N` faces kept only `~k/N` of the
+  integration measure: retaining `k` of `N` faces kept only `~k/N` of the
   true surface area, and the deficit compounded through GLOBE's
   `n_communication_hyperlayers + 1` area-weighted integral stages
   (`(k/N)**3` ≈ 2e-8 for DrivAerML surface at 50K of ~17M faces), collapsing
   the bias-free vector outputs to numerically-zero predictions and gradients
   (WSS relative-L2 pinned at exactly 1.0) while scalar outputs hid behind
-  their calibration bias. Fixed by the `physicsnemo.mesh.quadrature` mechanism
+  their calibration bias. Fixed by the `physicsnemo.mesh.calculus.measure` mechanism
   above; the unified external aero recipe and the standalone GLOBE DrivAer
   example pick it up with no config changes.
   point, cell, and global data as well as geometry. The matching new

@@ -14,25 +14,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""GLOBE consumption of per-cell quadrature weights.
+"""GLOBE consumption of the effective cell measure.
 
-GLOBE approximates boundary integrals by multiplying source strengths by
-``cell_areas / reference_area`` at every hyperlayer evaluation.  For meshes
-produced by cell subsampling, the retained faces only carry ``~k/N`` of the
-true surface measure, and the deficit compounds through
-``n_communication_hyperlayers + 1`` integral stages -- enough to collapse
-bias-free (vector) output heads to numerically-zero predictions and
-gradients.  The fix: GLOBE consumes the effective quadrature measure
-``cell_areas * sampling_weights`` (see :mod:`physicsnemo.mesh.quadrature`),
-restoring unbiased integrals over subsampled boundaries.
+GLOBE weights its boundary integrals by the effective cell measure
+``cell_areas * measure_weights`` (see
+:mod:`physicsnemo.mesh.calculus.measure`), and compounds one such
+measure-weighted sum per integral stage
+(``n_communication_hyperlayers + 1`` in total), so an incorrect measure is
+amplified to that power.  These tests pin the consumption contract:
 
-These tests pin the consumption contract:
-
-1. Quadrature weights on a boundary mesh must be equivalent to scaling that
-   mesh's cell areas directly (the two ways of expressing the same
-   effective measure).
-2. Explicit unit weights must reproduce the no-weights output exactly
-   (no behavioral change for meshes without recorded weights).
+1. Measure weights on a boundary mesh must be equivalent to scaling that
+   mesh's cell areas directly (two expressions of the same effective
+   measure).
+2. Explicit unit weights must reproduce the no-weights output exactly.
 3. Non-unit weights must actually change the output (guards against a
    refactor silently dropping the weights, e.g. reading them after
    enrichment has nested ``cell_data`` under the "physical" namespace).
@@ -41,8 +35,8 @@ These tests pin the consumption contract:
 import torch
 
 from physicsnemo.experimental.models.globe.model import GLOBE
+from physicsnemo.mesh.calculus.measure import compose_measure_weights
 from physicsnemo.mesh.primitives.procedural import lumpy_sphere
-from physicsnemo.mesh.quadrature import compose_sampling_weights
 
 SEED = 7
 
@@ -98,7 +92,7 @@ def test_weights_equivalent_to_scaled_areas():
     for name in ("vehicle", "floor"):
         mesh_w = kwargs_weighted["boundary_meshes"][name]
         w = torch.rand(mesh_w.n_cells, generator=gen) + 0.5
-        compose_sampling_weights(mesh_w, w)
+        compose_measure_weights(mesh_w, w)
 
         mesh_s = kwargs_scaled["boundary_meshes"][name]
         mesh_s._cache["cell", "areas"] = mesh_s.cell_areas * w
@@ -118,7 +112,7 @@ def test_unit_weights_match_no_weights():
     kwargs_ones = _make_inputs(device)
     for name in ("vehicle", "floor"):
         mesh = kwargs_ones["boundary_meshes"][name]
-        compose_sampling_weights(mesh, torch.ones(mesh.n_cells))
+        compose_measure_weights(mesh, torch.ones(mesh.n_cells))
 
     out_plain = _forward(model, kwargs_plain)
     out_ones = _forward(model, kwargs_ones)
@@ -140,7 +134,7 @@ def test_weights_change_output():
     kwargs_weighted = _make_inputs(device)
     for name in ("vehicle", "floor"):
         mesh = kwargs_weighted["boundary_meshes"][name]
-        compose_sampling_weights(mesh, torch.full((mesh.n_cells,), 3.0))
+        compose_measure_weights(mesh, torch.full((mesh.n_cells,), 3.0))
 
     out_plain = _forward(model, kwargs_plain)
     out_weighted = _forward(model, kwargs_weighted)

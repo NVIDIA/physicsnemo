@@ -34,7 +34,7 @@ from physicsnemo.mesh import (
     flatten_rank_spec,
     validate_data_contains_ranks,
 )
-from physicsnemo.mesh.quadrature import cell_quadrature_areas
+from physicsnemo.mesh.calculus.measure import cell_measures
 from physicsnemo.mesh.spatial.cluster_tree import (
     ClusterTree,
     DualInteractionPlan,
@@ -198,11 +198,10 @@ class GLOBE(Module):
       linear calibration layers, ordered alphabetically by field name.
     - Cell areas are automatically normalized by ``reference_area`` to preserve
       discretization-invariance.  If a boundary mesh carries per-cell
-      sampling weights (recorded by cell-subsampling datapipes; see
-      :mod:`physicsnemo.mesh.quadrature`), the effective quadrature areas
-      ``cell_areas * sampling_weights`` are used, so boundary
-      integrals over a subsampled surface are unbiased estimates of the
-      full-surface ones.
+      measure weights (see :mod:`physicsnemo.mesh.calculus.measure`), the
+      effective cell measures ``cell_areas * measure_weights`` are used --
+      so e.g. boundary integrals over a subsampled surface are unbiased
+      estimates of the full-surface ones.
     - The cell normal vector is automatically added to source data for each
       mesh.
     - The ``Mesh["n-1", "n"]`` type annotations assume the PDE domain fills the
@@ -429,16 +428,16 @@ class GLOBE(Module):
         ----------
         boundary_meshes : dict[str, Mesh]
             Raw (un-enriched) per-BC-type boundary meshes, so that
-            quadrature sampling weights are still visible at the top level
-            of ``cell_data`` (see :mod:`physicsnemo.mesh.quadrature`).
+            measure weights are still visible at the top level
+            of ``cell_data`` (see :mod:`physicsnemo.mesh.calculus.measure`).
 
         Returns
         -------
         cluster_trees : dict[str, ClusterTree]
             Per-BC-type cluster trees built from cell centroids.
         bc_areas : dict[str, torch.Tensor]
-            Per-BC-type ``reference_area``-normalized effective quadrature
-            area tensors, consumed both by Barnes-Hut source aggregation
+            Per-BC-type ``reference_area``-normalized effective cell-measure
+            tensors, consumed both by Barnes-Hut source aggregation
             and by the source-strength integration in
             :meth:`_evaluate_hyperlayer`.
         comm_plans : dict[str, dict[str, DualInteractionPlan]]
@@ -467,7 +466,7 @@ class GLOBE(Module):
             bc_areas_built: dict[str, torch.Tensor] = {}
             for bc_type, mesh in boundary_meshes.items():
                 centroids = mesh.cell_centroids.to(build_device)
-                areas = (cell_quadrature_areas(mesh) / self.reference_area).to(
+                areas = (cell_measures(mesh) / self.reference_area).to(
                     build_device
                 )
                 bc_areas_built[bc_type] = areas
@@ -625,7 +624,7 @@ class GLOBE(Module):
 
         for bc_type, mesh in source_meshes.items():
             ### `source_areas` holds the reference_area-normalized effective
-            ### quadrature areas (cell_areas * sampling weights),
+            ### cell measures (cell_areas * measure weights),
             ### computed once from the raw input meshes in
             ### `_build_trees_and_plans` -- the mesh geometry is fixed across
             ### layers, so reusing them here keeps the strength integration
@@ -867,7 +866,7 @@ class GLOBE(Module):
         ### torch.compile, so we skip compilation for this block.
         ### Built from the raw input meshes, BEFORE enrichment: tree and
         ### area construction consume only geometry (identical either way),
-        ### and the quadrature sampling weights must be read before
+        ### and the measure weights must be read before
         ### enrichment nests each mesh's cell_data under the "physical"
         ### namespace.
         with record_function("globe::build_trees_and_plans"):

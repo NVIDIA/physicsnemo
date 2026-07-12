@@ -33,7 +33,7 @@ import torch
 from physicsnemo.datapipes._rng import spawn_generator
 from physicsnemo.datapipes.registry import register
 from physicsnemo.mesh import DomainMesh, Mesh
-from physicsnemo.mesh.quadrature import compose_sampling_weights
+from physicsnemo.mesh.calculus.measure import compose_measure_weights
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +76,7 @@ def _subsample_mesh_points(
     falls back to ``slice_points``.
 
     Unlike :func:`_subsample_mesh_cells`, this does NOT maintain
-    sampling weights: dropping points removes cells implicitly, with
+    measure weights: dropping points removes cells implicitly, with
     no per-cell inclusion probability to invert.  Prefer cell
     subsampling when downstream code integrates over the mesh.
     """
@@ -105,8 +105,8 @@ def _cyclic_block_indices(
     With ``start`` drawn uniformly over ``[0, total)``, the wrapping block
     gives every element an inclusion probability of exactly ``k / total``
     (a non-wrapping block gives elements near the array ends a smaller
-    inclusion probability, which would bias Horvitz-Thompson sampling
-    weights).  The result is one or two ascending contiguous runs, so
+    inclusion probability, which would bias the recorded
+    Horvitz-Thompson weights).  The result is one or two ascending contiguous runs, so
     gathering with it stays page-sequential on memmap-backed tensors.
     """
     return torch.arange(start, start + k, device=device) % total
@@ -124,12 +124,12 @@ def _subsample_mesh_cells(
     :func:`_cyclic_block_indices` for (page-)sequential I/O on
     memmap-backed cell tensors.
 
-    Preserves the surface quadrature measure: every cell's inclusion
-    probability is exactly ``k/N``, and the retained cells' sampling
-    weights (see :mod:`physicsnemo.mesh.quadrature`) are multiplied by
+    Preserves the mesh's integration measure: every cell's inclusion
+    probability is exactly ``k/N``, and the retained cells' measure
+    weights (see :mod:`physicsnemo.mesh.calculus.measure`) are multiplied by
     ``N/k``, composing with any weights from earlier sampling stages.
-    Consumers of the effective measure ``cell_areas * sampling_weights``
-    (see :mod:`physicsnemo.mesh.quadrature`) then see an unbiased estimate
+    Consumers of the effective cell measure (see
+    :mod:`physicsnemo.mesh.calculus.measure`) then see an unbiased estimate
     of the full-mesh measure rather than the ~``k/N`` retained fraction.
 
     Use this instead of :func:`_subsample_mesh_points` when the mesh
@@ -151,7 +151,7 @@ def _subsample_mesh_cells(
     ### Compose the Horvitz-Thompson weight for this sampling stage.
     ### slice_cells/slice_points returned fresh TensorDicts, so the
     ### in-place update cannot leak into the memmap-backed source.
-    compose_sampling_weights(mesh, n_total / n_cells)
+    compose_measure_weights(mesh, n_total / n_cells)
     return mesh
 
 
@@ -220,9 +220,9 @@ class MeshReader:
             vertices.  Preserves cell topology and is the correct
             choice for triangulated surface meshes where downstream
             transforms depend on cells (e.g. surface normals, cell
-            centroids, cell_data fields).  Records Horvitz-Thompson
-            sampling weights preserving the quadrature measure (see
-            :mod:`physicsnemo.mesh.quadrature`).  Applied before
+            centroids, cell_data fields).  Records the inverse inclusion
+            probability as measure weights, preserving the integration
+            measure (see :mod:`physicsnemo.mesh.calculus.measure`).  Applied before
             ``subsample_n_points`` when both are set.
         """
         self._root = Path(path)
@@ -369,9 +369,10 @@ class DomainMeshReader:
             cyclic contiguous block reads on cell tensors for
             sequential I/O, then compacts unreferenced vertices.
             Preserves cell topology and is the correct choice when
-            downstream transforms depend on cells.  Records
-            Horvitz-Thompson sampling weights preserving the quadrature
-            measure (see :mod:`physicsnemo.mesh.quadrature`).  Applied
+            downstream transforms depend on cells.  Records the
+            inverse inclusion probability as measure weights, preserving
+            the integration measure (see
+            :mod:`physicsnemo.mesh.calculus.measure`).  Applied
             before
             ``subsample_n_points`` when both are set.
         extra_boundaries : dict[str, dict] or None, optional
