@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds gray-box term-discovery example (`examples/graybox_discovery`), which
+  recovers an unknown reaction/closure term in a PDE (rather than an unknown
+  scalar coefficient) using `physicsnemo.sym.eq.phy_informer.PhysicsInformer`
+  and a physics-prior constraint on the unknown term's network.
 - Adds a `global_shape` argument to `ShardTensor.from_local`, enabling the
   no-communication `sharding_shapes="chunk"` path.
 - Adds exact-boundary quality mesh generation to
