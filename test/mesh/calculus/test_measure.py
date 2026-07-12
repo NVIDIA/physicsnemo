@@ -79,9 +79,7 @@ class TestSamplingWeights:
         mesh = two_triangles_2d.load()
         compose_measure_weights(mesh, torch.tensor([2.0, 3.0]))
         assert MEASURE_WEIGHTS_KEY in mesh.cell_data.keys()
-        torch.testing.assert_close(
-            cell_measure_weights(mesh), torch.tensor([2.0, 3.0])
-        )
+        torch.testing.assert_close(cell_measure_weights(mesh), torch.tensor([2.0, 3.0]))
         ### Stages compose multiplicatively.
         compose_measure_weights(mesh, 10.0)
         torch.testing.assert_close(
