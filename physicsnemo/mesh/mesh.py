@@ -3098,7 +3098,10 @@ class Mesh:
 
         Computes the P0 quadrature moment
         :math:`M = \sum_c |\sigma_c|\, a_c \otimes b_c`, where ``a`` is
-        ``left`` and ``b`` is ``right``.  By default the result has shape
+        ``left``, ``b`` is ``right``, and :math:`|\sigma_c|` is the cell's
+        effective quadrature measure (see
+        :mod:`physicsnemo.mesh.quadrature`).  By default the result has
+        shape
         ``left.shape[1:] + right.shape[1:]``.  ``aligned_dims`` may
         designate a common leading subset of the trailing dimensions as
         independent groups; those axes appear only once in the output

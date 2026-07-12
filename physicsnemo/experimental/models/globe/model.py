@@ -412,7 +412,6 @@ class GLOBE(Module):
     def _build_trees_and_plans(
         self,
         boundary_meshes: dict[str, Mesh["n-1", "n"]],  # ty: ignore[unresolved-reference]
-        quadrature_areas: dict[str, torch.Tensor],
     ) -> tuple[
         dict[str, ClusterTree],
         dict[str, torch.Tensor],
@@ -429,14 +428,9 @@ class GLOBE(Module):
         Parameters
         ----------
         boundary_meshes : dict[str, Mesh]
-            Enriched per-BC-type boundary meshes.
-        quadrature_areas : dict[str, torch.Tensor]
-            Per-BC-type effective quadrature areas
-            (``cell_areas * sampling_weights``; see
-            :mod:`physicsnemo.mesh.quadrature`), computed by
-            :meth:`forward` from the raw input meshes before enrichment.
-            Equal to plain ``cell_areas`` for meshes without recorded
-            sampling weights.
+            Raw (un-enriched) per-BC-type boundary meshes, so that
+            quadrature sampling weights are still visible at the top level
+            of ``cell_data`` (see :mod:`physicsnemo.mesh.quadrature`).
 
         Returns
         -------
@@ -473,7 +467,7 @@ class GLOBE(Module):
             bc_areas_built: dict[str, torch.Tensor] = {}
             for bc_type, mesh in boundary_meshes.items():
                 centroids = mesh.cell_centroids.to(build_device)
-                areas = (quadrature_areas[bc_type] / self.reference_area).to(
+                areas = (cell_quadrature_areas(mesh) / self.reference_area).to(
                     build_device
                 )
                 bc_areas_built[bc_type] = areas
@@ -867,18 +861,19 @@ class GLOBE(Module):
                 source_label="`global_data`",
             )
 
-        ### Effective per-cell quadrature areas, read from the raw input
-        ### meshes BEFORE enrichment: enrichment nests each mesh's cell_data
-        ### under the "physical" namespace, which would hide the reserved
-        ### sampling-weights key from `physicsnemo.mesh.quadrature`.
-        ### For meshes without recorded weights this is exactly `cell_areas`.
-        ### Subsampled meshes carry Horvitz-Thompson sampling weights,
-        ### making the model's area-weighted boundary integrals unbiased
-        ### estimates of the full-surface ones.
-        bc_quadrature_areas = {
-            bc_type: cell_quadrature_areas(mesh)
-            for bc_type, mesh in boundary_meshes.items()
-        }
+        ### Build per-BC-type trees and areas (reused across all layers).
+        ### Tree construction and traversal involve irregular control flow
+        ### (morton codes, variable-depth loops) that cannot be traced by
+        ### torch.compile, so we skip compilation for this block.
+        ### Built from the raw input meshes, BEFORE enrichment: tree and
+        ### area construction consume only geometry (identical either way),
+        ### and the quadrature sampling weights must be read before
+        ### enrichment nests each mesh's cell_data under the "physical"
+        ### namespace.
+        with record_function("globe::build_trees_and_plans"):
+            cluster_trees, bc_areas, comm_plans = self._build_trees_and_plans(
+                boundary_meshes
+            )
 
         ### Phase 1: Enrich boundary meshes with initial (all-ones) strengths.
         ### (The reserved sampling-weights key rides along inside
@@ -908,15 +903,6 @@ class GLOBE(Module):
                 )
                 for bc_type, mesh in boundary_meshes.items()
             }
-
-        ### Build per-BC-type trees and areas (reused across all layers).
-        ### Tree construction and traversal involve irregular control flow
-        ### (morton codes, variable-depth loops) that cannot be traced by
-        ### torch.compile, so we skip compilation for this block.
-        with record_function("globe::build_trees_and_plans"):
-            cluster_trees, bc_areas, comm_plans = self._build_trees_and_plans(
-                boundary_meshes, bc_quadrature_areas
-            )
 
         ### Phase 2: Communication hyperlayers (boundary-to-boundary).
         # Trees and comm_plans are reused across all layers because cell

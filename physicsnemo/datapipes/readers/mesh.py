@@ -109,15 +109,7 @@ def _cyclic_block_indices(
     weights).  The result is one or two ascending contiguous runs, so
     gathering with it stays page-sequential on memmap-backed tensors.
     """
-    end = start + k
-    if end <= total:
-        return torch.arange(start, end, device=device)
-    return torch.cat(
-        [
-            torch.arange(start, total, device=device),
-            torch.arange(0, end - total, device=device),
-        ]
-    )
+    return torch.arange(start, start + k, device=device) % total
 
 
 def _subsample_mesh_cells(
@@ -229,10 +221,8 @@ class MeshReader:
             choice for triangulated surface meshes where downstream
             transforms depend on cells (e.g. surface normals, cell
             centroids, cell_data fields).  Records Horvitz-Thompson
-            sampling weights (``N/k`` per retained cell; see
-            :mod:`physicsnemo.mesh.quadrature`) so area-weighted
-            integrals over the subsampled mesh remain unbiased
-            estimates of full-mesh integrals.  Applied before
+            sampling weights preserving the quadrature measure (see
+            :mod:`physicsnemo.mesh.quadrature`).  Applied before
             ``subsample_n_points`` when both are set.
         """
         self._root = Path(path)
@@ -380,10 +370,9 @@ class DomainMeshReader:
             sequential I/O, then compacts unreferenced vertices.
             Preserves cell topology and is the correct choice when
             downstream transforms depend on cells.  Records
-            Horvitz-Thompson sampling weights (``N/k`` per retained
-            cell; see :mod:`physicsnemo.mesh.quadrature`) so
-            area-weighted integrals over subsampled meshes remain
-            unbiased estimates of full-mesh integrals.  Applied before
+            Horvitz-Thompson sampling weights preserving the quadrature
+            measure (see :mod:`physicsnemo.mesh.quadrature`).  Applied
+            before
             ``subsample_n_points`` when both are set.
         extra_boundaries : dict[str, dict] or None, optional
             Load additional sibling meshes as extra boundaries on each

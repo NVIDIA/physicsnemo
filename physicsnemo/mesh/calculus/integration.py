@@ -503,7 +503,10 @@ def integrate_moment(
     .. math::
         M = \sum_c |\sigma_c|\, a_c \otimes b_c,
 
-    where ``a`` is ``left`` and ``b`` is ``right``. By default the result has
+    where ``a`` is ``left``, ``b`` is ``right``, and :math:`|\sigma_c|` is
+    the cell's effective quadrature measure (its geometric area times any
+    recorded sampling weight; see :mod:`physicsnemo.mesh.quadrature`). By
+    default the result has
     shape ``left.shape[1:] + right.shape[1:]``. ``aligned_dims`` may designate
     a common leading subset of the trailing dimensions as independent groups;
     those axes appear only once in the output rather than participating in the
@@ -526,8 +529,8 @@ def integrate_moment(
         match exactly.
     accumulation_dtype : torch.dtype or None, default torch.float32
         Minimum dtype used by the weighted matrix product. The actual compute
-        dtype is the promotion of both inputs, cell areas, and this dtype, so
-        the default accumulates reduced-precision inputs in at least FP32
+        dtype is the promotion of both inputs, the quadrature measure, and
+        this dtype, so the default accumulates reduced-precision inputs in at least FP32
         without downcasting FP64 inputs. Pass ``None`` to use ordinary input
         promotion with no additional precision floor, or ``torch.float64`` to
         request at least FP64 accumulation.
@@ -568,6 +571,9 @@ def integrate_moment(
     left_tensor = _resolve_field(mesh, left, "cells")
     right_tensor = _resolve_field(mesh, right, "cells")
 
+    ### Only mesh-coupling checks live here; everything expressible on the
+    ### bare tensors (aligned dims, dtypes, device agreement) is validated
+    ### once in `_integrate_weighted_moment`.
     if not torch.compiler.is_compiling():
         for name, tensor in (("left", left_tensor), ("right", right_tensor)):
             if tensor.ndim < 1 or tensor.shape[0] != mesh.n_cells:
@@ -581,32 +587,6 @@ def integrate_moment(
                     f"{name} field and mesh must be on the same device, got "
                     f"{tensor.device} and {mesh.points.device}."
                 )
-        if left_tensor.device != right_tensor.device:
-            raise ValueError(
-                "left and right fields must be on the same device, got "
-                f"{left_tensor.device} and {right_tensor.device}."
-            )
-        if accumulation_dtype is not None and not (
-            accumulation_dtype.is_floating_point or accumulation_dtype.is_complex
-        ):
-            raise TypeError(
-                "accumulation_dtype must be a floating-point or complex dtype, "
-                f"got {accumulation_dtype}."
-            )
-        if isinstance(aligned_dims, bool) or not isinstance(aligned_dims, int):
-            raise TypeError(f"aligned_dims must be an integer, got {aligned_dims!r}.")
-        max_aligned = min(left_tensor.ndim, right_tensor.ndim) - 1
-        if aligned_dims < 0 or aligned_dims > max_aligned:
-            raise ValueError(
-                f"aligned_dims must be between 0 and {max_aligned}, got {aligned_dims}."
-            )
-        left_aligned = left_tensor.shape[1 : 1 + aligned_dims]
-        right_aligned = right_tensor.shape[1 : 1 + aligned_dims]
-        if left_aligned != right_aligned:
-            raise ValueError(
-                "Aligned field dimensions must match, got "
-                f"{tuple(left_aligned)} and {tuple(right_aligned)}."
-            )
 
     return _integrate_weighted_moment(
         left_tensor,

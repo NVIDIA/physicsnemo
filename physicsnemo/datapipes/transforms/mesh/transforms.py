@@ -257,15 +257,10 @@ def _compact_points(mesh: Mesh) -> Mesh:
 class SubsampleMesh(MeshTransform):
     r"""Subsample a mesh to a fixed number of cells and/or points.
 
-    Cell subsampling preserves the quadrature measure: retained cells'
-    sampling weights (see :mod:`physicsnemo.mesh.quadrature`) are
-    multiplied by this stage's inverse inclusion probability
-    ``n_cells_before / n_cells``, composing with weights recorded by
-    earlier sampling stages (e.g. reader-side subsampling), so
-    area-weighted integrals over the result remain unbiased estimates
-    of full-mesh integrals.  Point subsampling does not maintain
-    weights (dropping points removes cells implicitly, with no
-    per-cell inclusion probability to invert).
+    Cell subsampling preserves the quadrature measure by composing
+    Horvitz-Thompson sampling weights across stages (see
+    :mod:`physicsnemo.mesh.quadrature`); point subsampling does not
+    maintain weights.
     """
 
     def __init__(
