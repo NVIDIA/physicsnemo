@@ -1,7 +1,12 @@
 # FP-DDM Thermal Domain Decomposition
 
-FP-DDM stands for Foundation-model-based Physics-guided adaptation for the
-Domain Decomposition Method.
+FP-DDM (Foundation-model-based Physics-guided adaptation for the Domain
+Decomposition Method) is a scalable framework for large-domain multi-physics
+analysis.
+
+This example is based on the FP-DDM domain-decomposition work developed by the
+Samsung CSE (Computational Science and Engineering) team and UNIST, with
+PhysicsNeMo integration by NVIDIA.
 
 This example applies an overlapping Schwarz domain-decomposition method to the
 steady two-dimensional thermal equation
@@ -153,14 +158,24 @@ problems requires distributed ownership of subdomains and interfaces; this
 example currently batches local solves on one process and retains the assembled
 global fields for diagnostics.
 
-## Acknowledgments
-
-This example is based on FP-DDM thermal domain-decomposition work developed in
-collaboration with the Samsung CSE (Computational Science and Engineering) team,
-with PhysicsNeMo integration by NVIDIA.
-
 ## References
 
 - [Neural Domain Decomposition for Scalable Multi-Physics: Chip-Scale Thermal-Stress Analysis (DAC 2026)](https://63dac.conference-program.com/presentation/?id=RESEARCH158&sess=sess167)
+
+```bibtex
+@inproceedings{park2026fpddm,
+  author    = {Park, Min-Chul and Lee, Ji-Hye and Park, Hong-Hyun and Huh, In
+               and Lee, Sungyeop and Jang, Hyunjae and Hong, Giyong and
+               Lee, Seokki and Jeong, Changwook and Kim, Young-Gu and
+               Kim, Dae Sin},
+  title     = {Neural Domain Decomposition for Scalable Multi-Physics:
+               Chip-Scale Thermal-Stress Analysis},
+  booktitle = {Proceedings of the 63rd ACM/IEEE Design Automation Conference
+               (DAC '26)},
+  year      = {2026},
+  doi       = {10.1145/3770743.3803918}
+}
+```
+
 - [Fourier Neural Operator for Parametric Partial Differential Equations](https://arxiv.org/abs/2010.08895)
 - [Physics-Informed Neural Operator for Learning Partial Differential Equations](https://arxiv.org/abs/2111.03794)

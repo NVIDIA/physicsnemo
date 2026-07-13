@@ -23,6 +23,8 @@ from pathlib import Path
 import pytest
 import torch
 
+pytest.importorskip("opensimplex")
+
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils import load_checkpoint, save_checkpoint
 
