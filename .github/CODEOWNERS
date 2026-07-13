@@ -47,8 +47,15 @@ CODING_STANDARDS/FUNCTIONAL_APIS.md @loliverhennigh
 # ==============================================================================
 
 # All changes to documentation, except images
-docs/ @megnvidia @ktangsali
+docs/ @megnvidia
 docs/img/
+
+# Documentation build scripts and build validation
+docs/Makefile @megnvidia @ktangsali
+docs/conf.py @megnvidia @ktangsali
+docs/rewrite_examples_image_paths.lua @megnvidia @ktangsali
+docs/test_runner.py @megnvidia @ktangsali
+docs/test_scripts/ @megnvidia @ktangsali
 
 # ==============================================================================
 # BENCHMARKS
