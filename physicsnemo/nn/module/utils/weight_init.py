@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import warnings
+from typing import Callable, Optional, Union
 
 import numpy as np
 import torch
@@ -37,6 +38,125 @@ def trunc_normal_(*args, **kwargs):
         stacklevel=2,
     )
     return _torch_trunc_normal_(*args, **kwargs)
+
+
+_NOISE_PRESETS = ("scaled_normal", "normal")
+
+
+@torch.no_grad()
+def shrink_and_perturb_(
+    module: torch.nn.Module,
+    shrink: float = 0.5,
+    perturb: float = 0.1,
+    *,
+    noise: Union[str, Callable[[str, torch.Tensor], torch.Tensor]] = "scaled_normal",
+    include: Optional[Callable[[str, torch.Tensor], bool]] = None,
+    generator: Optional[torch.Generator] = None,
+) -> torch.nn.Module:
+    r"""Apply *shrink-and-perturb* re-initialization to ``module`` in place.
+
+    For every selected parameter :math:`\theta`, the update is
+
+    .. math:: \theta \leftarrow \lambda\,\theta + p\,\varepsilon,
+
+    where :math:`\lambda` is ``shrink``, :math:`p` is ``perturb``, and
+    :math:`\varepsilon` is fresh noise. Shrinking a *pretrained* weight toward
+    zero restores the scale statistics and plasticity of a fresh initialization
+    while the noise breaks symmetry, yet the shrink term keeps the direction of
+    the pretrained features. In warm-started training this often reaches a lower
+    loss asymptote than fine-tuning the raw pretrained weights (Ash & Adams,
+    *On Warm-Starting Neural Network Training*, NeurIPS 2020).
+
+    The operation is only meaningful on **pretrained** weights: applied to a
+    fresh initialization it merely rescales and re-noises random values.
+
+    Parameters
+    ----------
+    module : torch.nn.Module
+        Module whose parameters are perturbed in place. Buffers (e.g.
+        batch-norm running statistics) are left untouched.
+    shrink : float, optional
+        Multiplicative retention factor :math:`\lambda \ge 0` applied to each
+        weight. Values in ``[0, 1)`` shrink toward zero; ``1.0`` disables the
+        shrink. Default ``0.5``.
+    perturb : float, optional
+        Noise scale :math:`p \ge 0`. With ``noise="scaled_normal"`` this is the
+        noise level relative to each tensor's own standard deviation. Default
+        ``0.1``.
+    noise : str or callable, optional
+        Source of the perturbation :math:`\varepsilon`:
+
+        - ``"scaled_normal"`` (default):
+          :math:`\varepsilon = \operatorname{std}(\theta)\,z` with
+          :math:`z \sim \mathcal{N}(0, 1)`, i.e. Gaussian noise scaled by the
+          per-tensor standard deviation of the pre-shrink weight. Scale aware
+          and free of any architectural assumptions (expects at least two
+          elements per parameter tensor).
+        - ``"normal"``: :math:`\varepsilon = z \sim \mathcal{N}(0, 1)`,
+          unscaled.
+        - a callable ``(name, param) -> tensor`` returning
+          :math:`\varepsilon`, e.g. ``lambda n, p: fresh[n]`` to interpolate
+          toward the weights of a freshly constructed reference model.
+    include : callable, optional
+        Predicate ``(name, param) -> bool`` selecting which parameters to
+        perturb. Parameters for which it returns ``False`` are left entirely
+        unchanged (not even shrunk). Default: all parameters. For warm-starting,
+        pass e.g. ``include=lambda n, p: n in transferred`` to perturb only the
+        transferred backbone.
+    generator : torch.Generator, optional
+        Generator for the built-in Gaussian noise, for reproducibility. Must be
+        on the same device as ``module``'s parameters. Ignored when ``noise``
+        is a callable.
+
+    Returns
+    -------
+    torch.nn.Module
+        The same ``module``, modified in place (returned for chaining).
+
+    Raises
+    ------
+    ValueError
+        If ``shrink`` or ``perturb`` is negative, or ``noise`` is an unknown
+        string.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.nn import shrink_and_perturb_
+    >>> model = torch.nn.Linear(4, 4)
+    >>> _ = shrink_and_perturb_(model, shrink=0.6, perturb=0.1)
+    """
+    if shrink < 0.0 or perturb < 0.0:
+        raise ValueError(
+            f"shrink and perturb must be non-negative, got shrink={shrink}, "
+            f"perturb={perturb}"
+        )
+
+    if callable(noise):
+        noise_fn = noise
+    elif noise == "scaled_normal":
+
+        def noise_fn(name: str, p: torch.Tensor) -> torch.Tensor:
+            z = torch.empty_like(p).normal_(generator=generator)
+            return p.detach().std() * z
+
+    elif noise == "normal":
+
+        def noise_fn(name: str, p: torch.Tensor) -> torch.Tensor:
+            return torch.empty_like(p).normal_(generator=generator)
+
+    else:
+        raise ValueError(
+            f'Invalid noise "{noise}"; expected a callable or one of {_NOISE_PRESETS}'
+        )
+
+    for name, p in module.named_parameters():
+        if include is not None and not include(name, p):
+            continue
+        # eps is computed from the pre-shrink weight (matters for "scaled_normal").
+        eps = noise_fn(name, p)
+        p.mul_(shrink).add_(eps, alpha=perturb)
+    return module
 
 
 def _weight_init(shape: tuple, mode: str, fan_in: int, fan_out: int):

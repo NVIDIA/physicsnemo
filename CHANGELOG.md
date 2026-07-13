@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds `physicsnemo.nn.shrink_and_perturb_`, an in-place shrink-and-perturb
+  weight re-initialization (Ash & Adams, NeurIPS 2020) for warm-starting from
+  pretrained weights. Model-agnostic, with a per-tensor scale-aware Gaussian
+  default (`theta <- shrink*theta + perturb*std(theta)*noise`), a plain-Gaussian
+  and custom-callable noise source, and an `include` filter to restrict the
+  perturbation to (e.g.) transferred backbone parameters.
 - Adds a `global_shape` argument to `ShardTensor.from_local`, enabling the
   no-communication `sharding_shapes="chunk"` path.
 - Adds exact-boundary quality mesh generation to
