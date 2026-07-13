@@ -53,9 +53,9 @@ element quality (reported in diagnostics), but never prevent the mesh
 from being generated. A coverage guard raises an error, rather than
 silently dropping geometry, when the domain
 has features below the target edge length ``h`` or when coverage cannot
-be certified at all (a phi that is NaN inside the box, e.g. a neural
-field queried outside its training range). You can interpolate sharp
-corners exactly through ``feature_points``.
+be certified at all. The latter can happen, for example, if a neural field
+returns NaN inside the box when queried outside its training range. You can
+interpolate sharp corners exactly through ``feature_points``.
 
 :func:`refit_mesh_to_implicit` is the differentiable companion: it
 re-projects a mesh's boundary onto ``phi = 0`` with graph-preserving
