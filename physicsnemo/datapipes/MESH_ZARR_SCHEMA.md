@@ -11,7 +11,7 @@ PhysicsNeMo-Curator's `DomainMeshZarrSink`; consumed by `ZarrMeshReader` /
 
 One zarr group per mesh:
 
-```
+```text
 <group>/                      attrs (required): format, schema_version,
     points                    #   n_points, n_cells; (when n_cells > 0):
     cells                     #   nodes_per_cell, layout
@@ -64,7 +64,7 @@ rule of its container, at any depth.
 
 One zarr group per case, mirroring the `.pdmsh` tree:
 
-```
+```text
 <case>.zarr/                  attrs (required): format, schema_version,
     global_data/<field>       #   boundary_names (list[str])
     interior/                 # a mesh-schema group
