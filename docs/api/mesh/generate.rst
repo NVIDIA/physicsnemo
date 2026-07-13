@@ -94,7 +94,7 @@ convenience:
 
 Any callable with the signature ``phi(x: (..., d)) -> (...)`` also works.
 
-Isosurface extraction
+Isosurface Extraction
 ---------------------
 
 :func:`marching_cubes` extracts a triangle isosurface from a 3D scalar
