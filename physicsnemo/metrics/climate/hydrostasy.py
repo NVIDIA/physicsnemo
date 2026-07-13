@@ -297,10 +297,15 @@ class WeightedMSEWithHydrostasy(torch.nn.MSELoss):
         }
         # Get offset to map from q channels here to Tv channels
         # Relies on all pressure levels below a threshold to have q channels
+        self.q_index_offset = None
         for i, pl in enumerate(self.pressure_levels):
             if f"q{int(pl)}" in channels:
                 self.q_index_offset = i
                 break
+        if self.q_index_offset is None:
+            raise ValueError(
+                f"No q channels found in channels list that match the requested pressure levels {self.pressure_levels}"
+            )
 
         # Create mapping for new tensor that holds only the constraint variables
         self.z_constraint_pressure_levels = {

@@ -266,6 +266,7 @@ class CoupledTimeSeriesDatasetZarr(TimeSeriesDatasetZarr):
             )
             for c in self.couplings:
                 for i, v in enumerate(c.variables):
+                    # coupled fields are in the shape [T, B, C, F, H, W]
                     integrated_couplings[i, :, :] += self.rng.normal(
                         loc=0,
                         scale=self.train_noise_params["couplings"][v]["std"],

@@ -172,7 +172,7 @@ class ConditionalWeightLoss(th.nn.MSELoss):
         self.b = th.tensor(self.b, device=trainer.device)
         self.w = th.tensor(self.w, device=trainer.device)
 
-    def forward(self, prediction, target):
+    def forward(self, prediction, target, average_channels=True):
         """
         Computes the MSE of model prediction and applies weights for zero and non-zero precipitation cases.
 
@@ -182,13 +182,18 @@ class ConditionalWeightLoss(th.nn.MSELoss):
             The prediction tensor
         target: torch.Tensor
             The target tensor
+        average_channels: bool, optional
+            whether the mean of the channels should be taken
         """
         weights_for_zero = th.ones_like(target) * self.weight_zero
         weights_for_nonzero = (th.ones_like(target) * self.weight_nonzero) * th.exp(
             self.b * target
         )
         weights = th.where(target > 0, weights_for_nonzero, weights_for_zero)
-        loss = (th.mean(weights * (prediction - target) ** 2)) * self.w
+        if average_channels:
+            loss = (th.mean(weights * (prediction - target) ** 2)) * self.w
+        else:
+            loss = (weights * (prediction - target) ** 2) * self.w
         return loss
 
 
@@ -701,6 +706,10 @@ class WeightedCRPSLossSpectral(th.nn.MSELoss):
 
         # Parameters for "almost fair CRPS" loss. See https://arxiv.org/html/2412.15832v1
         self.coeff_eps = 1 - ((1 - alpha) / (n_members))
+        if n_members < 2:
+            raise ValueError("n_members must be at least 2 for CRPS loss to be defined")
+        else:
+            self.n_members = n_members
         self.averaging_coeff = 1 / (2 * n_members * (n_members - 1))
 
         # SHT utils: transform, grid reordering, output indexing
@@ -765,8 +774,7 @@ class WeightedCRPSLossSpectral(th.nn.MSELoss):
         if self.multiscale > 0:
             self.isht = self.isht.to(device=trainer.device)
             self.reorder_from_ring = self.reorder_from_ring.to(device=trainer.device)
-        if self.lsm_file is not None:
-            self.lsm_tensor = self.lsm_tensor.to(device=trainer.device)
+        self.lsm_tensor = self.lsm_tensor.to(device=trainer.device)
 
     def _apply_sht(self, x, face_dim, return_abs=True):
         """Apply SHT to a tensor
