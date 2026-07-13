@@ -27,6 +27,8 @@ Run:
     python graybox_reaction_diffusion.py
 """
 
+import os
+
 import hydra
 import matplotlib.pyplot as plt
 import numpy as np
@@ -40,6 +42,11 @@ from physicsnemo.models.mlp.fully_connected import FullyConnected
 from physicsnemo.sym.eq.pde import PDE
 from physicsnemo.sym.eq.phy_informer import PhysicsInformer
 from physicsnemo.utils.logging import PythonLogger
+
+# Anchor example-local files (data, plot) to this script's directory so they
+# resolve correctly no matter where the script is launched from (and are robust
+# to Hydra's optional runtime change of working directory).
+_HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 class GrayBoxReactionDiffusion(PDE):
@@ -69,7 +76,12 @@ def main(cfg: DictConfig) -> None:
     log = PythonLogger(name="graybox_discovery")
     log.file_logging()
 
-    data = np.load(cfg.data.data_file)
+    # Resolve a relative data path against the example directory; honor an
+    # absolute override as-is.
+    data_file = cfg.data.data_file
+    if not os.path.isabs(data_file):
+        data_file = os.path.join(_HERE, data_file)
+    data = np.load(data_file)
     D = float(data["D"])
     A_true = float(data["A"])
     u_obs = float(data["u_obs"])
@@ -181,8 +193,9 @@ def main(cfg: DictConfig) -> None:
     ax.set_ylabel("R(u)")
     ax.legend()
     fig.tight_layout()
-    fig.savefig("recovered_R.png", dpi=150)
-    log.info("saved recovered_R.png")
+    plot_path = os.path.join(_HERE, "recovered_R.png")
+    fig.savefig(plot_path, dpi=150)
+    log.info(f"saved {plot_path}")
 
 
 if __name__ == "__main__":

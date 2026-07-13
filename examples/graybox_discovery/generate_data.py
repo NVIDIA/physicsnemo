@@ -26,7 +26,13 @@ it), and observations are restricted to u <= U_OBS so the closure is
 under-determined for larger u.
 """
 
+import os
+
 import numpy as np
+
+# Anchor the output next to this script so the data lands in the example
+# directory regardless of the caller's working directory.
+_HERE = os.path.dirname(os.path.abspath(__file__))
 
 D, A, L = 0.02, 3.0, 1.0
 NX, DT, T = 161, 5e-4, 0.9
@@ -77,8 +83,9 @@ def main():
     ci = rng.choice(X.size, size=4000, replace=False)
     x_pde, t_pde = X.ravel()[ci][:, None], Tm.ravel()[ci][:, None]
 
+    out_path = os.path.join(_HERE, "graybox_data.npz")
     np.savez(
-        "graybox_data.npz",
+        out_path,
         x_data=x_data,
         t_data=t_data,
         u_data=u_data,
@@ -88,9 +95,7 @@ def main():
         D=np.array(D),
         A=np.array(A),
     )
-    print(
-        f"wrote graybox_data.npz: {len(x_data)} obs (u<={U_OBS}), {len(x_pde)} collocation"
-    )
+    print(f"wrote {out_path}: {len(x_data)} obs (u<={U_OBS}), {len(x_pde)} collocation")
 
 
 if __name__ == "__main__":

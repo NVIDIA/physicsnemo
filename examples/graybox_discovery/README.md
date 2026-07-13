@@ -22,6 +22,10 @@ It pins the closure in the unobserved region.
     python generate_data.py          # writes graybox_data.npz
     python graybox_reaction_diffusion.py
 
+The data (`graybox_data.npz`) and the recovered-closure plot (`recovered_R.png`)
+are always written into this example directory, regardless of the directory you
+launch from.
+
 ## How it works
 
 - `GrayBoxReactionDiffusion` declares the residual in SymPy with `R` left as a
