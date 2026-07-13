@@ -23,8 +23,7 @@ from physicsnemo.datapipes.mesh_dataset import MeshDataset
 from physicsnemo.datapipes.readers.mesh import (
     DomainMeshReader,
     MeshReader,
-    _contiguous_block_slice,
-    _cyclic_block_indices,
+    _subsample_mesh_points,
 )
 from physicsnemo.datapipes.transforms.mesh import (
     CenterMesh,
@@ -87,48 +86,17 @@ class TestMeshReader:
         loaded, _ = reader[0]
         assert loaded.n_points == 10
 
-
-class TestContiguousBlockSlice:
-    """Tests for the ``_contiguous_block_slice`` helper."""
-
-    def test_guard_returns_full_range(self):
-        # When total <= k, the helper returns the full [0, total) range.
-        assert _contiguous_block_slice(5, 5) == slice(0, 5)
-        assert _contiguous_block_slice(3, 10) == slice(0, 3)
-
-    def test_last_start_reachable_regression(self):
-        # Regression: with total == k + 1 the only non-zero valid start is
-        # total - k == 1.  Prior to the off-by-one fix this branch sampled
-        # from torch.randint(0, 1, ...), which is deterministic at 0 and
-        # therefore never produced start == 1.
-        total, k = 11, 10
-        gen = torch.Generator().manual_seed(0)
-        starts = {
-            _contiguous_block_slice(total, k, generator=gen).start for _ in range(200)
-        }
-        assert starts == {0, 1}
-
-    def test_bounds_and_max_start_reached(self):
-        total, k = 100, 10
-        gen = torch.Generator().manual_seed(123)
-        starts = []
-        for _ in range(2000):
-            sl = _contiguous_block_slice(total, k, generator=gen)
-            assert 0 <= sl.start
-            assert sl.stop - sl.start == k
-            assert sl.stop <= total
-            starts.append(sl.start)
-        assert min(starts) == 0
-        assert max(starts) == total - k
-
-    def test_determinism(self):
-        total, k = 64, 8
-        gen_a = torch.Generator().manual_seed(42)
-        gen_b = torch.Generator().manual_seed(42)
-        for _ in range(50):
-            sl_a = _contiguous_block_slice(total, k, generator=gen_a)
-            sl_b = _contiguous_block_slice(total, k, generator=gen_b)
-            assert sl_a == sl_b
+    def test_subsample_n_points_wraps_cyclically(self):
+        mesh = Mesh(points=torch.arange(10, dtype=torch.float32).unsqueeze(-1))
+        sampled = _subsample_mesh_points(
+            mesh,
+            4,
+            generator=torch.Generator().manual_seed(2),
+        )
+        torch.testing.assert_close(
+            sampled.points.squeeze(-1),
+            torch.tensor([8.0, 9.0, 0.0, 1.0]),
+        )
 
 
 class TestDomainMeshReader:
@@ -477,28 +445,6 @@ class TestTensorDictMeshApply:
         assert "y" in out
         assert torch.allclose(out["x"].points, original_points * 3.0)
         assert torch.allclose(out["y"].points, original_points * 3.0)
-
-
-class TestCyclicBlockIndices:
-    """Tests for the ``_cyclic_block_indices`` helper."""
-
-    def test_no_wrap(self):
-        idx = _cyclic_block_indices(10, 4, start=3)
-        assert idx.tolist() == [3, 4, 5, 6]
-
-    def test_wraps_past_end(self):
-        idx = _cyclic_block_indices(10, 4, start=8)
-        assert idx.tolist() == [8, 9, 0, 1]
-
-    def test_inclusion_probability_exactly_uniform(self):
-        # Over all N starts, every element appears in exactly k blocks,
-        # so pi_i == k/N exactly -- the property that makes the N/k
-        # Horvitz-Thompson weight unbiased.
-        total, k = 11, 4
-        counts = torch.zeros(total, dtype=torch.long)
-        for start in range(total):
-            counts[_cyclic_block_indices(total, k, start)] += 1
-        assert (counts == k).all()
 
 
 class TestCellSubsampleMeasureWeights:

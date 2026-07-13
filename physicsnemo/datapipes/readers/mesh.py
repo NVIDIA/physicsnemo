@@ -30,6 +30,7 @@ from typing import Any, Iterator
 
 import torch
 
+from physicsnemo.datapipes._indexing import _cyclic_block_indices
 from physicsnemo.datapipes._rng import spawn_generator
 from physicsnemo.datapipes.registry import register
 from physicsnemo.mesh import DomainMesh, Mesh
@@ -43,33 +44,15 @@ DEFAULT_MESH_EXTENSION = ".pmsh"
 DEFAULT_DOMAIN_MESH_EXTENSION = ".pdmsh"
 
 
-def _contiguous_block_slice(
-    total: int,
-    k: int,
-    generator: torch.Generator | None = None,
-) -> slice:
-    """Return a random contiguous ``slice`` of length *k* within ``[0, total)``.
-
-    A contiguous slice produces sequential I/O on memmap-backed tensors,
-    which is orders of magnitude faster than scattered fancy-indexing.
-    For best results the on-disk point order should be pre-shuffled so
-    that a contiguous block is spatially representative.
-    """
-    if total <= k:
-        return slice(0, total)
-    with torch.profiler.record_function("mesh_reader: randint.item() scalar readback"):
-        start = torch.randint(0, total - k + 1, (1,), generator=generator).item()
-    return slice(start, start + k)
-
-
 def _subsample_mesh_points(
     mesh: Mesh,
     n_points: int,
     generator: torch.Generator | None = None,
 ) -> Mesh:
-    """Subsample a Mesh to *n_points* via a contiguous block read.
+    """Subsample a Mesh to *n_points* via a cyclic contiguous block read.
 
-    Uses a contiguous slice for sequential I/O on memmap-backed data.
+    Uses one or two contiguous runs for page-sequential I/O on memmap-backed
+    data while giving every point the same inclusion probability.
     For point clouds (``n_cells == 0``) this avoids the heavy
     cell-remapping logic in :meth:`Mesh.slice_points` which allocates
     two *N*-element intermediate tensors.  For meshes with cells it
@@ -82,34 +65,21 @@ def _subsample_mesh_points(
     """
     if mesh.n_points <= n_points:
         return mesh
-    sl = _contiguous_block_slice(mesh.n_points, n_points, generator=generator)
+    indices = _cyclic_block_indices(
+        mesh.n_points,
+        n_points,
+        generator=generator,
+        device=mesh.points.device,
+    )
     if mesh.n_cells == 0:
         return Mesh(
-            points=mesh.points[sl],
+            points=mesh.points[indices],
             cells=mesh.cells,
-            point_data=mesh.point_data[sl],
+            point_data=mesh.point_data[indices],
             cell_data=mesh.cell_data,
             global_data=mesh.global_data,
         )
-    return mesh.slice_points(torch.arange(sl.start, sl.stop, device=mesh.points.device))
-
-
-def _cyclic_block_indices(
-    total: int,
-    k: int,
-    start: int,
-    device: torch.device | None = None,
-) -> torch.Tensor:
-    """Indices of the length-*k* contiguous block at *start*, wrapping mod *total*.
-
-    With ``start`` drawn uniformly over ``[0, total)``, the wrapping block
-    gives every element an inclusion probability of exactly ``k / total``
-    (a non-wrapping block gives elements near the array ends a smaller
-    inclusion probability, which would bias the recorded
-    Horvitz-Thompson weights).  The result is one or two ascending contiguous runs, so
-    gathering with it stays page-sequential on memmap-backed tensors.
-    """
-    return torch.arange(start, start + k, device=device) % total
+    return mesh.slice_points(indices)
 
 
 def _subsample_mesh_cells(
@@ -140,9 +110,12 @@ def _subsample_mesh_cells(
     n_total = mesh.n_cells
     if n_total <= n_cells:
         return mesh
-    with torch.profiler.record_function("mesh_reader: randint.item() scalar readback"):
-        start = int(torch.randint(0, n_total, (1,), generator=generator).item())
-    indices = _cyclic_block_indices(n_total, n_cells, start, device=mesh.cells.device)
+    indices = _cyclic_block_indices(
+        n_total,
+        n_cells,
+        generator=generator,
+        device=mesh.cells.device,
+    )
     mesh = mesh.slice_cells(indices)
     # Compact: drop vertices not referenced by any surviving cell
     referenced = torch.unique(mesh.cells)
@@ -208,8 +181,9 @@ class MeshReader:
             If True, include sample index in metadata.
         subsample_n_points : int, optional
             If set, subsample the mesh to this many points *before*
-            ``pin_memory``.  Uses contiguous block reads for sequential
-            I/O on memmap-backed data.  Appropriate for point clouds
+            ``pin_memory``.  Uses cyclic contiguous block reads for
+            page-sequential I/O on memmap-backed data, with uniform point
+            inclusion probability.  Appropriate for point clouds
             or meshes where cell topology is not needed downstream.
             For best results, pre-shuffle the on-disk point order so
             that a contiguous block is spatially representative.
@@ -358,9 +332,10 @@ class DomainMeshReader:
         subsample_n_points : int, optional
             If set, subsample the interior and each boundary mesh to
             at most this many points *before* ``pin_memory``.  Uses
-            contiguous block reads for sequential I/O on memmap-backed
-            data.  Appropriate for point clouds or meshes where cell
-            topology is not needed downstream.  For best results,
+            cyclic contiguous block reads for page-sequential I/O on
+            memmap-backed data, with uniform point inclusion probability.
+            Appropriate for point clouds or meshes where cell topology is
+            not needed downstream.  For best results,
             pre-shuffle the on-disk point order so that a contiguous
             block is spatially representative.
         subsample_n_cells : int, optional
