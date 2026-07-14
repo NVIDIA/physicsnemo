@@ -47,14 +47,25 @@ import numpy as np
 
 SUPERWING_CHANNEL_NAMES: tuple[str, ...] = ("Cp", "Cf_tau", "Cf_z")
 
+# Field metrics reported in the paper table, in column order.
+FIELD_METRICS: tuple[str, ...] = (
+    "rel_l2",
+    "rel_l1",
+    "rmse_over_gtmax",
+    "mae_over_gtmax",
+    "rmse",
+    "mae",
+)
+
 
 def per_case_field_metrics(
     *,
     pred: np.ndarray,
     target: np.ndarray,
     eps: float = 1e-12,
+    chunk_size: int = 512,
 ) -> dict[str, np.ndarray]:
-    r"""Compute relative-L2, RMSE, MAE per case and per channel.
+    r"""Compute the paper's per-case, per-channel field metrics.
 
     Parameters
     ----------
@@ -63,27 +74,51 @@ def per_case_field_metrics(
     target : np.ndarray
         Ground-truth field of shape ``(B, C, H, W)``.
     eps : float, optional
-        Floor on the denominator of the relative-L2 ratio to avoid
-        division by zero on degenerate targets. Default ``1e-12``.
+        Floor on denominators to avoid division by zero on degenerate
+        targets. Default ``1e-12``.
+    chunk_size : int, optional
+        Number of cases processed per block. Each metric reduces over a
+        single case independently, so chunking is numerically exact; it
+        just bounds the peak memory of the float64 temporaries (the full
+        ``(B, C, H, W)`` fields would otherwise need several GB at once).
+        Default ``512``.
 
     Returns
     -------
     dict
-        Keys: ``rel_l2``, ``rmse``, ``mae`` — each a ``(B, C)`` array.
+        Keys (each a ``(B, C)`` array), matching the paper columns:
+        ``rel_l2`` (``||d|| / ||t||``), ``rel_l1`` (``sum|d| / sum|t|``),
+        ``rmse_over_gtmax`` and ``mae_over_gtmax`` (RMSE / MAE divided by the
+        per-case per-channel ground-truth max magnitude), ``rmse``, ``mae``.
     """
     if pred.shape != target.shape:
         raise ValueError(
             "pred and target must share shape; "
             f"got {tuple(pred.shape)} vs {tuple(target.shape)}."
         )
-    diff = pred.astype(np.float64) - target.astype(np.float64)
-    sq = diff * diff
-    rmse = np.sqrt(sq.mean(axis=(-1, -2)))
-    mae = np.abs(diff).mean(axis=(-1, -2))
-    num = np.sqrt(sq.sum(axis=(-1, -2)))
-    denom = np.sqrt((target.astype(np.float64) ** 2).sum(axis=(-1, -2)))
-    rel_l2 = num / np.maximum(denom, eps)
-    return {"rel_l2": rel_l2, "rmse": rmse, "mae": mae}
+    ax = (-1, -2)
+    n_cases, n_channels = int(pred.shape[0]), int(pred.shape[1])
+    out = {k: np.empty((n_cases, n_channels), dtype=np.float64) for k in FIELD_METRICS}
+    step = max(1, int(chunk_size))
+    for start in range(0, n_cases, step):
+        sl = slice(start, start + step)
+        t = target[sl].astype(np.float64)
+        diff = pred[sl].astype(np.float64) - t
+        sq = diff * diff
+        rmse = np.sqrt(sq.mean(axis=ax))
+        mae = np.abs(diff).mean(axis=ax)
+        out["rel_l2"][sl] = np.sqrt(sq.sum(axis=ax)) / np.maximum(
+            np.sqrt((t * t).sum(axis=ax)), eps
+        )
+        out["rel_l1"][sl] = np.abs(diff).sum(axis=ax) / np.maximum(
+            np.abs(t).sum(axis=ax), eps
+        )
+        gt_max = np.maximum(np.abs(t).max(axis=ax), eps)  # per case, per channel
+        out["rmse_over_gtmax"][sl] = rmse / gt_max
+        out["mae_over_gtmax"][sl] = mae / gt_max
+        out["rmse"][sl] = rmse
+        out["mae"][sl] = mae
+    return out
 
 
 def summarise(
@@ -130,10 +165,11 @@ def _write_csv(
     metrics: dict[str, np.ndarray],
     channel_names: tuple[str, ...],
 ) -> None:
+    keys = [k for k in FIELD_METRICS if k in metrics]
     n_cases, n_channels = metrics["rel_l2"].shape
     header = ["case_id", "aoa_deg", "mach"]
     for ch in channel_names[:n_channels]:
-        header += [f"rel_l2_{ch}", f"rmse_{ch}", f"mae_{ch}"]
+        header += [f"{k}_{ch}" for k in keys]
     with out_path.open("w", encoding="utf-8", newline="") as f:
         w = csv.writer(f)
         w.writerow(header)
@@ -144,11 +180,7 @@ def _write_csv(
                 f"{float(mach[i]):.4f}",
             ]
             for ch_idx in range(n_channels):
-                row += [
-                    f"{float(metrics['rel_l2'][i, ch_idx]):.6f}",
-                    f"{float(metrics['rmse'][i, ch_idx]):.6f}",
-                    f"{float(metrics['mae'][i, ch_idx]):.6f}",
-                ]
+                row += [f"{float(metrics[k][i, ch_idx]):.6f}" for k in keys]
             w.writerow(row)
 
 
@@ -161,14 +193,16 @@ def _write_summary_text(
     lines = [
         f"SuperWing test-split field metrics over {n_cases} cases",
         "",
-        f"{'channel':<10s}  {'metric':<8s}  {'mean':>10s}  {'median':>10s}  {'std':>10s}",
-        "-" * 56,
+        f"{'channel':<10s}  {'metric':<16s}  {'mean':>10s}  {'median':>10s}  {'std':>10s}",
+        "-" * 62,
     ]
     for ch_name, metric_dict in summary.items():
-        for metric_name in ("rel_l2", "rmse", "mae"):
+        for metric_name in FIELD_METRICS:
+            if metric_name not in metric_dict:
+                continue
             stat = metric_dict[metric_name]
             lines.append(
-                f"{ch_name:<10s}  {metric_name:<8s}  "
+                f"{ch_name:<10s}  {metric_name:<16s}  "
                 f"{stat['mean']:>10.5f}  "
                 f"{stat['median']:>10.5f}  "
                 f"{stat['std']:>10.5f}"

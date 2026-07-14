@@ -14,6 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Paper-scale SuperWing data settings. Identical to `superwing.yaml`
+# except the per-sample point budget is raised to the paper's 16384 for
+# the surface / target-encoder / query sets. Use with `model=aerojepa_paper`.
+
 # Path to the SuperWing dataset root produced by
 # `python -m src.datapipes.download_superwing`. Must be set on the CLI:
 #   python train.py data.path=/path/to/SuperWing_Dataset
@@ -38,10 +42,10 @@ gen_params_names: [aoa, mach]
 # Cap on training samples streamed for the normalization-stat builder.
 normalization_max_target_samples: 4096
 
-# Sample sizes (tutorial-friendly defaults; paper uses 16384).
-surface_points: 4096
-target_encoder_points: 4096
-query_points: 4096
+# Sample sizes (paper scale).
+surface_points: 16384
+target_encoder_points: 16384
+query_points: 16384
 
 # Normalization.
 normalize_xyz: true

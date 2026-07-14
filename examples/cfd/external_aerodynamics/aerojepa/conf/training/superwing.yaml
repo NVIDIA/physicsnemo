@@ -23,6 +23,18 @@ max_eval_batches: 4
 precision: bf16
 save_every_epochs: 50
 
+# Per-step progress logging cadence (batches). Emits a GeoTransolver-style
+# line every `log_every` batches. `max_train_batches: null` uses the full
+# epoch; set to a small int (e.g. 20) for a fast smoke run.
+log_every: 50
+max_train_batches: null
+
+# torch.profiler diagnostics: set profile=true to profile the first
+# `profile_steps` train batches and print the top ops (CPU vs CUDA self-time),
+# then continue. Use to find the per-step bottleneck.
+profile: false
+profile_steps: 12
+
 optimizer:
   _target_: torch.optim.AdamW
   lr: 1.0e-3

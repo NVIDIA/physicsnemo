@@ -62,7 +62,16 @@ def move_batch_to_device(batch: dict, device: torch.device) -> dict:
     """
     out: dict[str, Any] = {}
     for k, v in batch.items():
-        out[k] = v.to(device) if torch.is_tensor(v) else v
+        if not torch.is_tensor(v):
+            out[k] = v
+        elif k.endswith("_n"):
+            # Per-sample length counts are read host-side (for slicing) only;
+            # keeping them on CPU avoids a ``.item()`` device sync per sample.
+            out[k] = v
+        else:
+            # non_blocking pairs with the loader's pin_memory=True for an async
+            # host->device copy that overlaps with compute.
+            out[k] = v.to(device, non_blocking=True)
     return out
 
 

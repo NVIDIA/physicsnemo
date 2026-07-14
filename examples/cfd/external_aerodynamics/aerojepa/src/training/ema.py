@@ -60,10 +60,19 @@ class ExponentialMovingAverage:
 
     @torch.no_grad()
     def update(self, model: torch.nn.Module) -> None:
-        r"""Pull one update step from ``model`` into the shadow weights."""
+        r"""Pull one update step from ``model`` into the shadow weights.
+
+        Only floating-point tensors are averaged; non-float buffers (integer
+        or boolean masks, counters) are copied verbatim, since the decay rule
+        would produce a float that cannot be cast back into them.
+        """
         state = model.state_dict()
         for k, v in state.items():
-            self.shadow[k].mul_(self.decay).add_(v.detach(), alpha=1.0 - self.decay)
+            shadow = self.shadow[k]
+            if shadow.is_floating_point():
+                shadow.mul_(self.decay).add_(v.detach(), alpha=1.0 - self.decay)
+            else:
+                shadow.copy_(v.detach())
 
     @torch.no_grad()
     def apply_to(self, model: torch.nn.Module) -> None:

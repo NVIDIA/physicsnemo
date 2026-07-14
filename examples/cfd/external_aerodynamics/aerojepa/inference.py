@@ -117,6 +117,8 @@ def _build_test_loader(
     *,
     split_manifest_path: str,
     normalization_stats_path: str,
+    shard: int = 0,
+    num_shards: int = 1,
 ) -> DataLoader:
     dataset = SuperWingDataset(
         root_dir=str(data_cfg.path),
@@ -132,10 +134,20 @@ def _build_test_loader(
         deterministic_sampling=True,
         normalize_xyz=bool(data_cfg.normalize_xyz),
     )
+    # Strided shard: process `shard` owns cases shard, shard+num_shards, ...
+    # Passing an explicit index list as the sampler means each process only
+    # reads its own cases (lighter on the shared filesystem than reading the
+    # full split on every process and skipping in the loop).
+    sampler = (
+        list(range(int(shard), len(dataset), int(num_shards)))
+        if int(num_shards) > 1
+        else None
+    )
     return DataLoader(
         dataset,
         batch_size=1,
         shuffle=False,
+        sampler=sampler,
         num_workers=int(data_cfg.num_workers),
         pin_memory=bool(data_cfg.pin_memory),
         collate_fn=superwing_collate,
@@ -261,12 +273,32 @@ def main(cfg: DictConfig) -> None:
     target_mean = np.asarray(stats["target_mean"], dtype=np.float32)
     target_std = np.asarray(stats["target_std"], dtype=np.float32)
 
+    num_shards = int(cfg.get("num_shards", 1))
+    shard = int(cfg.get("shard", 0))
+    if num_shards < 1 or not (0 <= shard < num_shards):
+        raise ValueError(
+            f"Require num_shards >= 1 and 0 <= shard < num_shards; "
+            f"got shard={shard}, num_shards={num_shards}."
+        )
+
     loader = _build_test_loader(
         cfg.data,
         split_manifest_path=split_path,
         normalization_stats_path=stats_path,
+        shard=shard,
+        num_shards=num_shards,
     )
-    log.info("Test cases: %d", len(loader.dataset))
+    n_local = len(loader.sampler) if loader.sampler is not None else len(loader.dataset)
+    if num_shards > 1:
+        log.info(
+            "Test cases: %d total; shard %d/%d owns %d cases.",
+            len(loader.dataset),
+            shard,
+            num_shards,
+            n_local,
+        )
+    else:
+        log.info("Test cases: %d", len(loader.dataset))
 
     model = hydra.utils.instantiate(cfg.model).to(device).eval()
     ckpt_path = Path(str(cfg.checkpoint))
@@ -293,7 +325,10 @@ def main(cfg: DictConfig) -> None:
     n_plots = int(cfg.num_plots)
     H, W = SUPERWING_GRID_SHAPE
 
-    for case_idx, batch in enumerate(loader):
+    for local_idx, batch in enumerate(loader):
+        # Global position in the full (unsharded) test order, for plot
+        # selection and progress logging.
+        global_idx = shard + local_idx * num_shards
         batch = move_batch_to_device(batch, device)
         sample = _slice_batch_sample(batch, 0)
         pred_flat = _predict_one_case(
@@ -332,7 +367,7 @@ def main(cfg: DictConfig) -> None:
         half_span_list.append(float(sample["half_span"]))
         origingeom_list.append(sample["origingeom_full"].detach().cpu().numpy())
 
-        if case_idx < n_plots:
+        if global_idx < n_plots:
             written = plot_surface_field(
                 predicted=pred_chw,
                 target=target_chw,
@@ -340,10 +375,13 @@ def main(cfg: DictConfig) -> None:
                 case_id=case_id,
             )
             log.info("Plotted case %s -> %d PNGs", case_id, len(written))
-        if (case_idx + 1) % 20 == 0:
-            log.info("Processed %d / %d test cases", case_idx + 1, len(loader.dataset))
+        if (local_idx + 1) % 20 == 0:
+            log.info("Processed %d / %d local cases", local_idx + 1, n_local)
 
-    npz_path = out_dir / "predictions.npz"
+    npz_name = (
+        "predictions.npz" if num_shards == 1 else f"predictions_shard{shard}.npz"
+    )
+    npz_path = out_dir / npz_name
     np.savez_compressed(
         npz_path,
         pred_field=np.stack(pred_fields, axis=0),

@@ -14,29 +14,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
+# Paper-scale training entry point. Composes the paper-scale model and data
+# groups with the shared 200-epoch training schedule. Select it with
+#   python train.py --config-name config_paper data.path=/path/to/SuperWing_Dataset
+# and launch multi-node with `sub_paper.sub`.
 
-# This is to ensure warp is quiet at startup:
-import warp as wp
+defaults:
+  - data: superwing_paper
+  - model: aerojepa_paper
+  - training: superwing
+  - _self_
 
-from .core.meta import ModelMetaData  # noqa E402
-from .core.module import Module  # noqa E402
+seed: 42
+device: cuda
 
-wp.config.quiet = True
+# Top-level run output directory. Hydra's `outputs/<date>/<time>/` layout
+# is preserved; this is the relative subfolder under that for checkpoints,
+# inference outputs and plots.
+output_dir: outputs
 
-__version__ = "2.2.0a0"
-
-
-# Backwards-compatibility is opt-in. Enable with env var or via enable_compat().
-if os.getenv("PHYSICSNEMO_ENABLE_COMPAT") in {
-    "1",
-    "true",
-    "True",
-    "YES",
-    "yes",
-    "on",
-    "ON",
-}:
-    from .compat import install as _compat_install
-
-    _compat_install()
+# Logging configuration.
+logging:
+  level: INFO
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'

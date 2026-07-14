@@ -35,11 +35,13 @@ from typing import Any
 
 import hydra
 import torch
+import torch.distributed as dist
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
+from physicsnemo.distributed import DistributedManager
 from physicsnemo.experimental.models.aerojepa import TokenSet
 from src.datapipes import (
     SuperWingDataset,
@@ -123,7 +125,9 @@ def _build_loader(
     normalization_stats_path: str,
     batch_size: int,
     shuffle: bool,
-) -> DataLoader:
+    world_size: int = 1,
+    rank: int = 0,
+) -> tuple[DataLoader, Any]:
     deterministic = (
         bool(data_cfg.train_deterministic_sampling)
         if split == "train"
@@ -146,16 +150,35 @@ def _build_loader(
         deterministic_sampling=deterministic,
         normalize_xyz=bool(data_cfg.normalize_xyz),
     )
-    return DataLoader(
+    sampler = None
+    if world_size > 1:
+        # Shard the dataset across ranks. ``drop_last`` on the train sampler
+        # keeps the per-rank batch count equal so the per-step gradient
+        # all-reduce stays collectively balanced.
+        sampler = torch.utils.data.distributed.DistributedSampler(
+            dataset,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=bool(shuffle),
+            drop_last=(split == "train"),
+        )
+    loader = DataLoader(
         dataset,
         batch_size=int(batch_size),
-        shuffle=bool(shuffle),
+        shuffle=bool(shuffle) if sampler is None else False,
+        sampler=sampler,
         num_workers=int(data_cfg.num_workers),
         pin_memory=bool(data_cfg.pin_memory),
         collate_fn=superwing_collate,
         drop_last=False,
         persistent_workers=int(data_cfg.num_workers) > 0,
+        prefetch_factor=(
+            int(data_cfg.get("prefetch_factor", 4))
+            if int(data_cfg.num_workers) > 0
+            else None
+        ),
     )
+    return loader, sampler
 
 
 # --------------------------------------------------------------------------- #
@@ -300,17 +323,20 @@ def _compute_total_loss(
         + term_weights["sigreg"] * sigreg_term
         + term_weights["sigreg_context"] * sigreg_context_term
     )
-    recon_value = 0.0
+    recon_value = torch.zeros((), device=latent_term.device)
     if pred_field is not None:
         recon_term = recon_loss_fn(pred_field, query_target)
         total = total + term_weights["recon"] * recon_term
-        recon_value = float(recon_term.detach().item())
+        recon_value = recon_term.detach()
 
+    # Parts are returned as detached device tensors (not floats): the training
+    # loop accumulates them on-device and syncs to the host only at logging
+    # cadence, avoiding a per-sample .item() stall in the hot loop.
     return total, {
         "recon": recon_value,
-        "latent": float(latent_term.detach().item()),
-        "sigreg": float(sigreg_term.detach().item()),
-        "sigreg_context": float(sigreg_context_term.detach().item()),
+        "latent": latent_term.detach(),
+        "sigreg": sigreg_term.detach(),
+        "sigreg_context": sigreg_context_term.detach(),
     }
 
 
@@ -457,6 +483,40 @@ def _compute_term_weights(
 # --------------------------------------------------------------------------- #
 
 
+def _all_reduce_grads(model: torch.nn.Module, world_size: int) -> None:
+    """Average gradients across ranks (manual data parallel).
+
+    AeroJEPA's training step runs through several model methods rather than a
+    single ``forward``, so ``DistributedDataParallel``'s forward-hook gradient
+    sync cannot be used; gradients are reduced explicitly instead. Call after
+    the per-sample accumulation, on unscaled gradients, before
+    ``optimizer.step()``. Every rank starts from identical weights and applies
+    identical averaged gradients, so the models stay in lockstep.
+    """
+    grads = []
+    for p in model.parameters():
+        if not p.requires_grad:
+            continue
+        if p.grad is None:
+            # Materialize a zero grad so the collective stays balanced across
+            # ranks (the frozen/trainable split is deterministic per phase).
+            p.grad = torch.zeros_like(p)
+        grads.append(p.grad)
+    if not grads:
+        return
+    # Coalesce every gradient into one contiguous buffer and all-reduce ONCE,
+    # rather than a separate (latency-bound) NCCL call per parameter — the
+    # per-parameter version dominated the profile (~600 tiny all-reduces/step).
+    flat = torch.cat([g.reshape(-1) for g in grads])
+    dist.all_reduce(flat, op=dist.ReduceOp.SUM)
+    flat.div_(world_size)
+    offset = 0
+    for g in grads:
+        n = g.numel()
+        g.copy_(flat[offset : offset + n].view_as(g))
+        offset += n
+
+
 def _run_epoch(
     *,
     model: torch.nn.Module,
@@ -475,6 +535,12 @@ def _run_epoch(
     max_batches: int | None,
     phase: dict[str, Any] | None = None,
     scaler: torch.amp.GradScaler | None = None,
+    writer: SummaryWriter | None = None,
+    log_every: int = 50,
+    world_size: int = 1,
+    is_main: bool = True,
+    profile: bool = False,
+    profile_steps: int = 12,
 ) -> dict[str, float]:
     is_train = optimizer is not None
     model.train(is_train)
@@ -483,23 +549,37 @@ def _run_epoch(
     term_weights = _compute_term_weights(epoch, loss_cfg, phase)
     run_reconstruction = float(term_weights["recon"]) != 0.0
 
-    totals: dict[str, float] = {
-        "loss": 0.0,
-        "recon": 0.0,
-        "latent": 0.0,
-        "sigreg": 0.0,
-        "sigreg_context": 0.0,
+    # Accumulate metrics on-device (float64) and sync to the host only at
+    # logging cadence / epoch end — avoids a per-sample .item() pipeline stall.
+    totals = {
+        k: torch.zeros((), device=device, dtype=torch.float64)
+        for k in ("loss", "recon", "latent", "sigreg", "sigreg_context")
     }
     n_samples = 0
+    epoch_len = len(loader)
+    phase_tag = "train" if is_train else "val"
+    step_time = time.time()
+
+    prof = None
+    if profile:
+        _acts = [torch.profiler.ProfilerActivity.CPU]
+        if torch.cuda.is_available():
+            _acts.append(torch.profiler.ProfilerActivity.CUDA)
+        prof = torch.profiler.profile(activities=_acts)
+        prof.start()
 
     for batch_idx, batch in enumerate(loader):
         if max_batches is not None and batch_idx >= int(max_batches):
+            break
+        if profile and batch_idx >= int(profile_steps):
             break
         batch = move_batch_to_device(batch, device)
         if is_train:
             optimizer.zero_grad(set_to_none=True)
 
         n_in_batch = int(batch["context_pos"].shape[0])
+        batch_loss_sum = torch.zeros((), device=device, dtype=torch.float64)
+        batch_recon_sum = torch.zeros((), device=device, dtype=torch.float64)
         for sample_idx in range(n_in_batch):
             sample = _slice_batch_sample(batch, sample_idx)
             with (
@@ -531,15 +611,22 @@ def _run_epoch(
                 # no-op unless fp16 is active (bf16/fp32 need no loss scaling).
                 scaler.scale(loss / n_in_batch).backward()
             for k in ("recon", "latent", "sigreg", "sigreg_context"):
-                totals[k] += float(parts[k])
-            totals["loss"] += float(loss.detach().item())
+                totals[k] += parts[k].double()
+            sample_loss = loss.detach().double()
+            totals["loss"] += sample_loss
+            batch_loss_sum += sample_loss
+            batch_recon_sum += parts["recon"].double()
             n_samples += 1
 
         if is_train:
-            if grad_clip_norm > 0.0:
-                # Unscale before clipping so the norm is computed on the true
-                # (unscaled) gradients.
+            # Unscale to true gradients before touching them (clipping and/or
+            # cross-rank averaging). ``scaler.unscale_`` is a no-op when the
+            # scaler is disabled (bf16 / fp32 / CPU).
+            if world_size > 1 or grad_clip_norm > 0.0:
                 scaler.unscale_(optimizer)
+            if world_size > 1:
+                _all_reduce_grads(model, world_size)
+            if grad_clip_norm > 0.0:
                 torch.nn.utils.clip_grad_norm_(
                     model.parameters(), max_norm=float(grad_clip_norm)
                 )
@@ -550,9 +637,75 @@ def _run_epoch(
             if ema is not None:
                 ema.update(model)
 
-    if n_samples == 0:
-        return {k: float("nan") for k in totals}
-    return {k: v / float(n_samples) for k, v in totals.items()}
+        # Per-step progress (GeoTransolver-style), throttled by ``log_every``.
+        now = time.time()
+        step_dur = now - step_time
+        step_time = now
+        if is_main and batch_idx % max(1, int(log_every)) == 0:
+            batch_loss = (batch_loss_sum / max(1, n_in_batch)).item()
+            batch_recon = (batch_recon_sum / max(1, n_in_batch)).item()
+            mem_gb = (
+                torch.cuda.memory_reserved() / 1024**3
+                if torch.cuda.is_available()
+                else 0.0
+            )
+            log.info(
+                "Epoch %03d %s [%d/%d] Loss: %.6f recon: %.4f Duration: %.2fs Mem: %.2fGB",
+                epoch,
+                phase_tag,
+                batch_idx,
+                epoch_len,
+                batch_loss,
+                batch_recon,
+                step_dur,
+                mem_gb,
+            )
+            if writer is not None:
+                gstep = batch_idx + epoch_len * epoch
+                writer.add_scalar(f"batch/{phase_tag}_loss", batch_loss, gstep)
+                writer.add_scalar(f"batch/{phase_tag}_recon", batch_recon, gstep)
+                writer.add_scalar(
+                    f"batch/{phase_tag}_throughput",
+                    (n_in_batch / step_dur) if step_dur > 0 else 0.0,
+                    gstep,
+                )
+                if is_train and lr_scheduler is not None:
+                    writer.add_scalar(
+                        "batch/learning_rate",
+                        optimizer.param_groups[0]["lr"],
+                        gstep,
+                    )
+
+    if prof is not None:
+        prof.stop()
+        if is_main:
+            ka = prof.key_averages()
+            try:
+                log.info(
+                    "Profiler (%d steps) — top ops by CUDA self-time:\n%s",
+                    int(profile_steps),
+                    ka.table(sort_by="self_cuda_time_total", row_limit=20),
+                )
+            except Exception:
+                pass
+            log.info(
+                "Profiler — top ops by CPU self-time:\n%s",
+                ka.table(sort_by="self_cpu_time_total", row_limit=20),
+            )
+
+    # Stack the on-device term sums + the sample count, reduce across ranks
+    # when distributed (so epoch means are global, not per-shard), then sync to
+    # the host once via a single ``.tolist()`` rather than per-term ``.item()``.
+    keys = list(totals.keys())
+    count = torch.tensor(float(n_samples), device=device, dtype=torch.float64)
+    packed = torch.stack([totals[k] for k in keys] + [count])
+    if world_size > 1:
+        dist.all_reduce(packed, op=dist.ReduceOp.SUM)
+    reduced = packed.tolist()
+    n_total = reduced[-1]
+    if n_total == 0:
+        return {k: float("nan") for k in keys}
+    return {k: reduced[i] / n_total for i, k in enumerate(keys)}
 
 
 # --------------------------------------------------------------------------- #
@@ -677,43 +830,64 @@ def _load_initial_state(
 @hydra.main(config_path="conf", config_name="config", version_base=None)
 def main(cfg: DictConfig) -> None:
     """Hydra entry point — train an AeroJEPA model on SuperWing."""
+    DistributedManager.initialize()
+    dm = DistributedManager()
+    world_size = dm.world_size
+    is_main = dm.rank == 0
+
+    # Same seed on every rank -> identical model initialization, which manual
+    # gradient averaging then keeps in lockstep. (Dataset subsampling uses its
+    # own per-call RNG and is sharded by the DistributedSampler.)
     set_seed(int(cfg.seed))
-    device = torch.device(str(cfg.device))
+    device = dm.device
     output_dir = Path(HydraConfig.get().runtime.output_dir)
     ckpt_dir = output_dir / cfg.output_dir / "checkpoints"
     tb_dir = output_dir / cfg.output_dir / "tensorboard"
-    log.info("Output dir: %s", output_dir)
+    if is_main:
+        log.info("Output dir: %s  (world_size=%d)", output_dir, world_size)
 
-    # Data prep + loaders.
-    split_path, stats_path = _ensure_superwing_artifacts(cfg.data)
-    train_loader = _build_loader(
+    # Data prep + loaders. Only rank 0 builds the split/stats artifacts; the
+    # other ranks wait at the barrier, then read the finished files.
+    if is_main:
+        split_path, stats_path = _ensure_superwing_artifacts(cfg.data)
+    if world_size > 1:
+        dist.barrier()
+    if not is_main:
+        split_path, stats_path = _ensure_superwing_artifacts(cfg.data)
+    train_loader, train_sampler = _build_loader(
         cfg.data,
         split="train",
         split_manifest_path=split_path,
         normalization_stats_path=stats_path,
         batch_size=int(cfg.training.batch_size),
         shuffle=True,
+        world_size=world_size,
+        rank=dm.rank,
     )
-    val_loader = _build_loader(
+    val_loader, _ = _build_loader(
         cfg.data,
         split="val",
         split_manifest_path=split_path,
         normalization_stats_path=stats_path,
         batch_size=int(cfg.training.eval_batch_size),
         shuffle=False,
+        world_size=world_size,
+        rank=dm.rank,
     )
-    log.info(
-        "Train / val samples: %d / %d",
-        len(train_loader.dataset),
-        len(val_loader.dataset),
-    )
+    if is_main:
+        log.info(
+            "Train / val samples: %d / %d",
+            len(train_loader.dataset),
+            len(val_loader.dataset),
+        )
 
     # Model.
     model = hydra.utils.instantiate(cfg.model).to(device)
-    log.info(
-        "Model parameters: %.2f M",
-        sum(p.numel() for p in model.parameters()) / 1e6,
-    )
+    if is_main:
+        log.info(
+            "Model parameters: %.2f M",
+            sum(p.numel() for p in model.parameters()) / 1e6,
+        )
 
     # Losses, optimiser, scheduler, EMA.
     recon_loss_fn = build_recon_loss_from_config(cfg.training.loss.recon).to(device)
@@ -735,11 +909,16 @@ def main(cfg: DictConfig) -> None:
     if bool(cfg.training.ema.enabled):
         ema = ExponentialMovingAverage(model, decay=float(cfg.training.ema.decay))
 
-    writer = SummaryWriter(log_dir=str(tb_dir))
+    writer = SummaryWriter(log_dir=str(tb_dir)) if is_main else None
 
     grad_clip_norm = float(cfg.training.grad_clip_norm)
     save_every = int(cfg.training.save_every_epochs)
     max_eval_batches = int(cfg.training.max_eval_batches)
+    log_every = int(cfg.training.get("log_every", 50))
+    _mtb = cfg.training.get("max_train_batches", None)
+    max_train_batches = int(_mtb) if _mtb is not None else None
+    profile = bool(cfg.training.get("profile", False))
+    profile_steps = int(cfg.training.get("profile_steps", 12))
 
     # fp16 autocast can overflow gradients, so pair it with a GradScaler.
     # bf16 / fp32 (and CPU) need no scaling, so the scaler is disabled there
@@ -764,9 +943,11 @@ def main(cfg: DictConfig) -> None:
 
     for epoch in range(start_epoch, int(cfg.training.epochs)):
         t0 = time.time()
+        if train_sampler is not None:
+            train_sampler.set_epoch(epoch)
         # Phase boundary is 1-indexed (phase1 = the first phase1_epochs epochs).
         phase = _resolve_phase(epoch + 1, two_phase_cfg)
-        if phase is not None:
+        if phase is not None and is_main:
             log.info("epoch=%03d  phase=%s", epoch, phase["name"])
         train_metrics = _run_epoch(
             model=model,
@@ -782,9 +963,15 @@ def main(cfg: DictConfig) -> None:
             grad_clip_norm=grad_clip_norm,
             loss_cfg=cfg.training.loss,
             epoch=epoch,
-            max_batches=None,
+            max_batches=max_train_batches,
             phase=phase,
             scaler=scaler,
+            writer=writer,
+            log_every=log_every,
+            world_size=world_size,
+            is_main=is_main,
+            profile=profile,
+            profile_steps=profile_steps,
         )
         train_time = time.time() - t0
 
@@ -807,53 +994,63 @@ def main(cfg: DictConfig) -> None:
                 epoch=epoch,
                 max_batches=max_eval_batches,
                 phase=phase,
+                writer=writer,
+                log_every=log_every,
+                world_size=world_size,
+                is_main=is_main,
             )
         finally:
             if ema is not None:
                 ema.restore(model)
 
-        log.info(
-            "epoch=%03d  train_loss=%.4f  val_loss=%.4f  "
-            "train_recon=%.4f val_recon=%.4f  time=%.1fs",
-            epoch,
-            train_metrics["loss"],
-            val_metrics["loss"],
-            train_metrics["recon"],
-            val_metrics["recon"],
-            train_time,
-        )
-
-        for split_name, m in (("train", train_metrics), ("val", val_metrics)):
-            for k, v in m.items():
-                writer.add_scalar(f"{split_name}/{k}", v, epoch)
-        writer.add_scalar("train/lr", optimizer.param_groups[0]["lr"], epoch)
-
-        if (epoch + 1) % save_every == 0 or epoch + 1 == int(cfg.training.epochs):
-            _save_checkpoint(
-                path=ckpt_dir / f"epoch_{epoch + 1:04d}.pt",
-                model=model,
-                optimizer=optimizer,
-                lr_scheduler=lr_scheduler,
-                ema=ema,
-                epoch=epoch + 1,
-                best_val=best_val_loss,
-                cfg=cfg,
+        if is_main:
+            log.info(
+                "epoch=%03d  train_loss=%.4f  val_loss=%.4f  "
+                "train_recon=%.4f val_recon=%.4f  time=%.1fs",
+                epoch,
+                train_metrics["loss"],
+                val_metrics["loss"],
+                train_metrics["recon"],
+                val_metrics["recon"],
+                train_time,
             )
+            for split_name, m in (("train", train_metrics), ("val", val_metrics)):
+                for k, v in m.items():
+                    writer.add_scalar(f"{split_name}/{k}", v, epoch)
+            writer.add_scalar("train/lr", optimizer.param_groups[0]["lr"], epoch)
+            if (epoch + 1) % save_every == 0 or epoch + 1 == int(cfg.training.epochs):
+                _save_checkpoint(
+                    path=ckpt_dir / f"epoch_{epoch + 1:04d}.pt",
+                    model=model,
+                    optimizer=optimizer,
+                    lr_scheduler=lr_scheduler,
+                    ema=ema,
+                    epoch=epoch + 1,
+                    best_val=best_val_loss,
+                    cfg=cfg,
+                )
+
+        # Metrics are global (reduced across ranks), so best_val_loss stays
+        # identical on every rank; only rank 0 writes the checkpoint file.
         if val_metrics["loss"] < best_val_loss:
             best_val_loss = val_metrics["loss"]
-            _save_checkpoint(
-                path=ckpt_dir / "best.pt",
-                model=model,
-                optimizer=optimizer,
-                lr_scheduler=lr_scheduler,
-                ema=ema,
-                epoch=epoch + 1,
-                best_val=best_val_loss,
-                cfg=cfg,
-            )
+            if is_main:
+                _save_checkpoint(
+                    path=ckpt_dir / "best.pt",
+                    model=model,
+                    optimizer=optimizer,
+                    lr_scheduler=lr_scheduler,
+                    ema=ema,
+                    epoch=epoch + 1,
+                    best_val=best_val_loss,
+                    cfg=cfg,
+                )
 
-    writer.close()
-    log.info("Training done. Best val_loss=%.4f", best_val_loss)
+    if writer is not None:
+        writer.close()
+    if is_main:
+        log.info("Training done. Best val_loss=%.4f", best_val_loss)
+    DistributedManager.cleanup()
 
 
 if __name__ == "__main__":
