@@ -194,11 +194,11 @@ Generate simulation-ready volume meshes from scratch in two ways.
 
 - Filling multiply-connected boundary meshes with per-boundary provenance data
 - Verifying the minimum-angle guarantee across resolutions
-- Pinning sharp corners with `feature_points`
 
 **From an implicit function** (`mesh_implicit_domain`, `marching_cubes`):
 
 - Using implicit CSG, raw level sets, and the coverage guard
+- Pinning sharp corners with `feature_points`
 - Tetrahedralizing 3D implicit domains
 - Extracting isosurfaces with `marching_cubes`
 - Computing shape gradients through the mesh (differentiable meshing)
