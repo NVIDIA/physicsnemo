@@ -20,6 +20,15 @@ import torch
 from physicsnemo.nn import shrink_and_perturb_
 
 
+class _ScalarParamNet(torch.nn.Module):
+    """Module with a scalar (numel==1) parameter, e.g. a learnable temperature."""
+
+    def __init__(self):
+        super().__init__()
+        self.fc = torch.nn.Linear(8, 8)
+        self.scale = torch.nn.Parameter(torch.tensor(0.07))
+
+
 def test_shrink_and_perturb_shrink_only(device):
     """perturb=0 shrinks every param exactly; returns the same module."""
     model = torch.nn.Linear(8, 8).to(device)
@@ -125,6 +134,26 @@ def test_buffers_untouched(device):
     assert torch.equal(model.running_var, rv)
     # weight (all ones -> std 0 -> no noise) is still shrunk.
     assert torch.allclose(model.weight, torch.full_like(model.weight, 0.5))
+
+
+def test_scalar_param_shrink_only(device):
+    """A scalar (numel==1) param is shrunk without NaN under scaled_normal."""
+    model = _ScalarParamNet().to(device)
+    scale0 = model.scale.detach().clone()
+
+    shrink_and_perturb_(model, shrink=0.5, perturb=0.1)  # default scaled_normal
+
+    for p in model.parameters():
+        assert torch.isfinite(p).all()
+    # scalar has no defined spread -> shrink only, no noise.
+    assert torch.allclose(model.scale, 0.5 * scale0)
+
+
+def test_callable_wrong_shape_raises(device):
+    """A noise callable returning a mismatched shape is rejected, not broadcast."""
+    model = torch.nn.Linear(4, 4).to(device)
+    with pytest.raises(ValueError):
+        shrink_and_perturb_(model, noise=lambda p: torch.tensor(1.0, device=p.device))
 
 
 def test_invalid_arguments(device):

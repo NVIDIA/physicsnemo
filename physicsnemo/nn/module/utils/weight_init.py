@@ -90,16 +90,21 @@ def shrink_and_perturb_(
           :math:`\varepsilon = \operatorname{std}(\theta)\,z` with
           :math:`z \sim \mathcal{N}(0, 1)`, i.e. Gaussian noise scaled by the
           per-tensor standard deviation of the pre-shrink weight. Scale aware
-          and free of any architectural assumptions (expects at least two
-          elements per parameter tensor).
+          and free of any architectural assumptions. A scalar parameter (a
+          single element) has no defined spread and is shrunk only, without
+          added noise.
         - ``"normal"``: :math:`\varepsilon = z \sim \mathcal{N}(0, 1)`,
           unscaled.
         - a callable ``(param) -> tensor`` returning :math:`\varepsilon`, with
-          the same signature as ``torch.randn_like``. Pass ``torch.randn_like``
-          (equivalent to ``"normal"``), the ``randn_like`` of a
-          ``StackedRandomGenerator``, any ``torch.nn.init``-style sampler, or
-          e.g. ``lambda p: torch.rand_like(p) * 2 - 1`` for a different noise
+          the same signature as ``torch.randn_like``; it must return a tensor
+          matching the parameter's shape. Pass ``torch.randn_like`` (equivalent
+          to ``"normal"``), the ``randn_like`` of a ``StackedRandomGenerator``,
+          any ``torch.nn.init``-style sampler, or e.g.
+          ``lambda p: torch.rand_like(p) * 2 - 1`` for a different noise
           distribution.
+
+        The built-in presets sample Gaussian noise and therefore require
+        floating-point (or complex) parameters.
     include : callable, optional
         Predicate ``(name, param) -> bool`` selecting which parameters to
         perturb. Parameters for which it returns ``False`` are left entirely
@@ -119,8 +124,9 @@ def shrink_and_perturb_(
     Raises
     ------
     ValueError
-        If ``shrink`` or ``perturb`` is negative, or ``noise`` is an unknown
-        string.
+        If ``shrink`` or ``perturb`` is negative, ``noise`` is an unknown
+        string, or a ``noise`` callable returns a tensor whose shape does not
+        match its parameter.
 
     Examples
     --------
@@ -140,6 +146,9 @@ def shrink_and_perturb_(
     elif noise == "scaled_normal":
 
         def noise_fn(p: torch.Tensor) -> torch.Tensor:
+            if p.numel() < 2:
+                # std is undefined for a single element; shrink only, no noise.
+                return torch.zeros_like(p)
             z = torch.empty_like(p).normal_(generator=generator)
             return p.detach().std() * z
 
@@ -158,6 +167,11 @@ def shrink_and_perturb_(
             continue
         # eps is computed from the pre-shrink weight (matters for "scaled_normal").
         eps = noise_fn(p)
+        if eps.shape != p.shape:
+            raise ValueError(
+                f"noise for parameter '{name}' returned shape "
+                f"{tuple(eps.shape)}, expected {tuple(p.shape)}"
+            )
         p.mul_(shrink).add_(eps, alpha=perturb)
     return module
 
