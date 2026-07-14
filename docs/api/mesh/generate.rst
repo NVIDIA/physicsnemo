@@ -53,7 +53,7 @@ element quality (reported in diagnostics), but never prevent the mesh
 from being generated. A coverage guard raises an error, rather than
 silently dropping geometry, when the domain
 has features below the target edge length ``h`` or when coverage cannot
-be certified at all (a phi that is NaN inside the box, e.g. a neural
+be certified at all (a phi that is NaN inside the box, for example a neural
 field queried outside its training range). You can interpolate sharp
 corners exactly through ``feature_points``.
 
