@@ -78,25 +78,29 @@ def test_shrink_and_perturb_callable_noise_exact(device):
         assert torch.allclose(p, 0.5 * orig[n] + 0.2 * eps[n])
 
 
-def test_scaled_normal_magnitude(device):
-    """scaled_normal noise std tracks perturb * std(theta) per tensor."""
+@pytest.mark.parametrize(
+    "noise, w_init_std",  # scaled_normal scales noise by std(theta); normal does not
+    [("scaled_normal", 3.0), ("normal", 1.0)],
+)
+def test_noise_magnitude(device, noise, w_init_std):
+    """With shrink=0 the result std ~ perturb * (std(theta) for scaled_normal, else 1)."""
     model = torch.nn.Linear(256, 256).to(device)
     with torch.no_grad():
-        model.weight.normal_(0.0, 3.0)
-    w_std = model.weight.std().item()
+        model.weight.normal_(0.0, w_init_std)
+    scale = model.weight.std().item() if noise == "scaled_normal" else 1.0
 
     gen = torch.Generator(device=device).manual_seed(0)
-    # shrink=0 isolates the noise term: result == perturb * std(theta) * z.
+    # shrink=0 isolates the noise term: result == perturb * scale * z.
     shrink_and_perturb_(
         model,
         shrink=0.0,
         perturb=0.1,
-        noise="scaled_normal",
+        noise=noise,
         include=lambda n, p: n == "weight",
         generator=gen,
     )
 
-    expected = 0.1 * w_std
+    expected = 0.1 * scale
     assert abs(model.weight.std().item() - expected) / expected < 0.1
 
 
@@ -211,21 +215,6 @@ def test_include_no_match_warns(device):
     model = torch.nn.Linear(4, 4).to(device)
     with pytest.warns(UserWarning, match="matched no parameters"):
         shrink_and_perturb_(model, include=lambda n, p: False)
-
-
-def test_normal_magnitude(device):
-    """'normal' noise has unit std, so with shrink=0 the result std ~ perturb."""
-    model = torch.nn.Linear(256, 256).to(device)
-    gen = torch.Generator(device=device).manual_seed(0)
-    shrink_and_perturb_(
-        model,
-        shrink=0.0,
-        perturb=0.1,
-        noise="normal",
-        include=lambda n, p: n == "weight",
-        generator=gen,
-    )
-    assert abs(model.weight.std().item() - 0.1) / 0.1 < 0.1
 
 
 def test_zero_perturb_preserves_rng(device):

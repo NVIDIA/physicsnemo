@@ -44,6 +44,70 @@ def trunc_normal_(*args, **kwargs):
 _NOISE_PRESETS = ("scaled_normal", "normal")
 
 
+def _resolve_noise(
+    noise: Union[
+        Literal["scaled_normal", "normal"], Callable[[torch.Tensor], torch.Tensor]
+    ],
+    generator: Optional[torch.Generator],
+) -> Callable[[torch.Tensor], torch.Tensor]:
+    """Build the ``(param) -> noise`` sampler for :func:`shrink_and_perturb_`.
+
+    Presets read the live (pre-shrink) parameter only to *read* its std and
+    allocate fresh noise, never to mutate it. A user callable instead receives
+    fresh scratch storage carrying the parameter's shape/dtype/device/layout, so
+    it can neither alias nor overwrite the weight (supporting both out-of-place
+    samplers like ``torch.randn_like`` and in-place ones like
+    ``torch.nn.init.normal_``).
+    """
+    if callable(noise):
+
+        def make_eps(p: torch.Tensor) -> torch.Tensor:
+            return noise(torch.empty_like(p))
+
+    elif noise == "scaled_normal":
+
+        def make_eps(p: torch.Tensor) -> torch.Tensor:
+            if p.numel() < 2:
+                # std is undefined for a single element; shrink only, no noise.
+                return torch.zeros_like(p)
+            z = torch.empty_like(p).normal_(generator=generator)
+            return z.mul_(p.detach().std())  # scale in place: one temporary
+
+    elif noise == "normal":
+
+        def make_eps(p: torch.Tensor) -> torch.Tensor:
+            return torch.empty_like(p).normal_(generator=generator)
+
+    else:
+        raise ValueError(
+            f'Invalid noise "{noise}"; expected a callable or one of {_NOISE_PRESETS}'
+        )
+
+    return make_eps
+
+
+def _validate_noise(eps: torch.Tensor, p: torch.Tensor, name: str) -> None:
+    """Reject noise incompatible with parameter ``name`` before it is applied.
+
+    Checking up front keeps each parameter's update atomic: a bad value raises
+    without having partially modified the parameter.
+    """
+    if eps.shape != p.shape:
+        raise ValueError(
+            f"noise for parameter '{name}' returned shape "
+            f"{tuple(eps.shape)}, expected {tuple(p.shape)}"
+        )
+    if eps.device != p.device:
+        raise ValueError(
+            f"noise for parameter '{name}' is on device {eps.device}, "
+            f"expected {p.device}"
+        )
+    if torch.is_complex(eps) and not torch.is_complex(p):
+        raise ValueError(
+            f"noise for parameter '{name}' is complex but the parameter is real"
+        )
+
+
 @torch.no_grad()
 def shrink_and_perturb_(
     module: torch.nn.Module,
@@ -173,36 +237,7 @@ def shrink_and_perturb_(
             f"shrink={shrink}, perturb={perturb}"
         )
 
-    # Resolve the noise source. Presets read the live (pre-shrink) parameter --
-    # only to *read* its std and allocate fresh noise, never to mutate it. A
-    # user callable instead receives fresh scratch storage carrying the
-    # parameter's shape/dtype/device/layout, so it can neither alias nor
-    # overwrite the weight (supporting both out-of-place samplers like
-    # ``torch.randn_like`` and in-place ones like ``torch.nn.init.normal_``).
-    if callable(noise):
-        user_noise = noise
-
-        def make_eps(p: torch.Tensor) -> torch.Tensor:
-            return user_noise(torch.empty_like(p))
-
-    elif noise == "scaled_normal":
-
-        def make_eps(p: torch.Tensor) -> torch.Tensor:
-            if p.numel() < 2:
-                # std is undefined for a single element; shrink only, no noise.
-                return torch.zeros_like(p)
-            z = torch.empty_like(p).normal_(generator=generator)
-            return z.mul_(p.detach().std())  # scale in place: one temporary
-
-    elif noise == "normal":
-
-        def make_eps(p: torch.Tensor) -> torch.Tensor:
-            return torch.empty_like(p).normal_(generator=generator)
-
-    else:
-        raise ValueError(
-            f'Invalid noise "{noise}"; expected a callable or one of {_NOISE_PRESETS}'
-        )
+    make_eps = _resolve_noise(noise, generator)
 
     # Visit tied parameters under every alias so `include` can match any
     # checkpoint key, but update each underlying tensor at most once.
@@ -225,20 +260,7 @@ def shrink_and_perturb_(
         eps = make_eps(p)
         # Validate before mutating so a rejected noise value leaves this
         # parameter untouched (the op is not transactional across parameters).
-        if eps.shape != p.shape:
-            raise ValueError(
-                f"noise for parameter '{name}' returned shape "
-                f"{tuple(eps.shape)}, expected {tuple(p.shape)}"
-            )
-        if eps.device != p.device:
-            raise ValueError(
-                f"noise for parameter '{name}' is on device {eps.device}, "
-                f"expected {p.device}"
-            )
-        if torch.is_complex(eps) and not torch.is_complex(p):
-            raise ValueError(
-                f"noise for parameter '{name}' is complex but the parameter is real"
-            )
+        _validate_noise(eps, p, name)
         p.mul_(shrink).add_(eps, alpha=perturb)
 
     if include is not None and not matched:
