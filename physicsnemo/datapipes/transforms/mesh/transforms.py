@@ -35,6 +35,7 @@ from physicsnemo.mesh import (
     Mesh,
     MeshFieldAssociation,
 )
+from physicsnemo.mesh.calculus.measure import compose_measure_weights
 
 
 @register()
@@ -254,7 +255,13 @@ def _compact_points(mesh: Mesh) -> Mesh:
 
 @register()
 class SubsampleMesh(MeshTransform):
-    r"""Subsample a mesh to a fixed number of cells and/or points."""
+    r"""Subsample a mesh to a fixed number of cells and/or points.
+
+    Cell subsampling preserves the integration measure by recording
+    each stage's inverse inclusion probability into the mesh's measure
+    weights (see :mod:`physicsnemo.mesh.calculus.measure`); point
+    subsampling does not maintain weights.
+    """
 
     def __init__(
         self,
@@ -286,12 +293,16 @@ class SubsampleMesh(MeshTransform):
 
     def __call__(self, mesh: Mesh) -> Mesh:
         if self.n_cells is not None and mesh.n_cells > self.n_cells:
-            indices = self._random_indices(
-                mesh.n_cells, self.n_cells, mesh.cells.device
-            )
+            n_before = mesh.n_cells
+            indices = self._random_indices(n_before, self.n_cells, mesh.cells.device)
             mesh = mesh.slice_cells(indices)
             if self.compact:
                 mesh = _compact_points(mesh)
+            ### Compose this stage's inverse inclusion probability into the
+            ### mesh's measure weights.
+            ### `_random_indices` is a uniform k-of-N sample, so every
+            ### cell's inclusion probability is k/N exactly.
+            compose_measure_weights(mesh, n_before / self.n_cells)
 
         if self.n_points is not None and mesh.n_points > self.n_points:
             indices = self._random_indices(

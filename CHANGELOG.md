@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Adds `physicsnemo.nn.shrink_and_perturb_`, an in-place shrink-and-perturb
   weight re-initialization for warm-starting from pretrained weights.
+- Adds `integrate_moment` and `Mesh.integrate_moment` for measure-weighted
+  outer-product moments. Mesh integration APIs now accept `nan_policy`.
+- Adds per-cell measure weights that are preserved through cell subsampling
+  and consumed by mesh integration routines and GLOBE.
 - Adds a `global_shape` argument to `ShardTensor.from_local`, enabling the
   no-communication `sharding_shapes="chunk"` path.
 - Adds exact-boundary quality mesh generation to
@@ -229,10 +233,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Deprecated
 
+- `physicsnemo.mesh.calculus.integrate_cell_data` and `integrate_point_data`
+  are deprecated in favor of `integrate(..., data_source="cells"|"points")`.
+  Compatibility wrappers remain available for this release and emit
+  `LegacyFeatureWarning`.
+
 ### Removed
 
 ### Fixed
 
+- Datapipe contiguous-block subsampling now wraps cyclically, giving boundary
+  and interior elements equal inclusion probability.
+- Cell-subsampled GLOBE inputs now retain their effective integration measure,
+  preventing area-weighted outputs and gradients from collapsing.
 - `physicsnemo.mesh.io.from_pyvista(..., force_copy=True)` now copies attached
   point, cell, and global data as well as geometry. The matching new
   `to_pyvista(..., force_copy=True)` option prevents exported PyVista geometry

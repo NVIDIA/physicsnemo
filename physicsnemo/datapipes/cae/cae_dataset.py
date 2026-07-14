@@ -27,6 +27,7 @@ import torch.distributed as dist
 from torch.distributed.tensor import Replicate, Shard
 
 from physicsnemo.core.version_check import OptionalImport, check_version_spec
+from physicsnemo.datapipes._indexing import _cyclic_block_indices
 from physicsnemo.distributed.utils import compute_split_shapes
 from physicsnemo.domain_parallel import ShardTensor, ShardTensorSpec
 
@@ -153,7 +154,7 @@ class BackendReader(ABC):
         """
         Set the volume sampling size.  When set, the readers will
         assume the volumetric data is shuffled on disk and read only
-        contiguous chunks of the data up to the sampling size.
+        cyclic contiguous blocks of the data up to the sampling size.
 
 
         Args:
@@ -167,26 +168,31 @@ class BackendReader(ABC):
         slice_start: int,
         slice_stop: int,
         n_points: int,
-    ) -> slice:
+    ) -> np.ndarray:
         """
 
-        select the contiguous chunks of the volume data to read.
+        Select a cyclic contiguous block of volume data to read.
 
         Args:
-            n_volume_points: The number of points to sample from the volume.
+            slice_start: First index in the available range.
+            slice_stop: Exclusive end of the available range.
+            n_points: The number of points to sample from the volume.
 
         Returns:
-            A tuple of the start and stop indices of the contiguous chunks.
+            Indices containing one or two contiguous runs.
         """
 
-        if slice_stop - slice_start < n_points:
+        total = slice_stop - slice_start
+        if total < n_points:
             raise ValueError(
-                f"Slice size {slice_stop - slice_start} is less than the number of points {n_points}"
+                f"Slice size {total} is less than the number of points {n_points}"
             )
 
-        # Choose a random start point that will fit the entire n_points region:
-        start = np.random.randint(slice_start, slice_stop - n_points)
-        return slice(start, start + n_points)
+        # Keep this legacy reader on NumPy's RNG while sharing the unbiased
+        # cyclic indexing rule with the current readers.
+        start = None if n_points in (0, total) else int(np.random.randint(total))
+        indices = _cyclic_block_indices(total, n_points, start=start).numpy()
+        return indices + slice_start
 
 
 class NpyFileReader(BackendReader):
@@ -226,6 +232,7 @@ class NpyFileReader(BackendReader):
     def read_file_sharded(
         self, filename: pathlib.Path, device_mesh: torch.distributed.DeviceMesh
     ) -> dict[str, ShardTensor]:
+        """Read an NPY file into sharded tensors (not implemented)."""
         pass
 
     def set_volume_sampling_size(self, volume_sampling_size: int):
@@ -295,6 +302,7 @@ class NpzFileReader(BackendReader):
     def read_file_sharded(
         self, filename: pathlib.Path, device_mesh: torch.distributed.DeviceMesh
     ) -> dict[str, ShardTensor]:
+        """Read an NPZ file into sharded tensors (not implemented)."""
         pass
 
     def set_volume_sampling_size(self, volume_sampling_size: int):
@@ -962,6 +970,7 @@ class CAEDataset:
         self.indices = indices
 
     def idx_to_index(self, idx):
+        """Map a dataset position through the optional epoch index list."""
         if hasattr(self, "indices"):
             return self.indices[idx]
 
