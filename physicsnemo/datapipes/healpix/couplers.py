@@ -17,318 +17,20 @@
 from __future__ import annotations
 
 import logging
-from abc import ABC, abstractmethod
 from typing import Sequence
 
-import cftime
 import numpy as np
 import pandas as pd
 import torch as th
 
 from physicsnemo.core.version_check import OptionalImport
 
+xr = OptionalImport("xarray")
+
 logger = logging.getLogger(__name__)
 
-# xarray/zarr ship in the ``datapipes-extras`` optional dependency group; load
-# them lazily so the physicsnemo import graph carries no static dependency on
-# them (see CODING_STANDARDS/EXTERNAL_IMPORTS.md, EXT-003/EXT-004).
-xr = OptionalImport("xarray")
-zarr = OptionalImport("zarr")
 
-
-class BaseCoupler(ABC):
-    """
-    Base class for couplers used to interface two components of earth system.
-
-    This class contains common functionality shared by different coupler implementations.
-    """
-
-    def __init__(
-        self,
-        dataset: xr.Dataset,
-        batch_size: int,
-        variables: Sequence,
-        presteps: int = 0,
-        input_time_dim: int = 2,
-        output_time_dim: int = 2,
-        input_times: Sequence = [pd.Timedelta("24h"), pd.Timedelta("48h")],
-        prepared_coupled_data: bool = True,
-    ):
-        """
-        Parameters
-        ----------
-        dataset: xr.Dataset
-            xarray Dataset that holds coupled data
-        batch_size: int
-            number of batch size during training.
-            forecasting batch size should be 1
-        variables: Sequence
-            sequence of strings that indicate the coupled variable
-            names in the dataset. All names should be in the dataset with
-            an optional time component at the end, eg ttr-48h
-        presteps: int, optional
-            the number of model steps used to initialize the hidden state.
-            If not using a GRU, prestep is 0, default 0
-        input_time_dim: int, optional
-            number of input times into the model, default 2
-        output_time_dim: int, optional
-            number of output times for each model step, default 2
-        input_times: Sequence, optional
-            sequence of pandas Timedelta objects that indicate which times are to be coupled,
-            default [pd.Timedelta("24h"), pd.Timedelta("48h")]
-        prepared_coupled_data: boolean, optional
-            If True assumes data in dataset has been prepared appropriately for training:
-            averages have already been calculated so that each time step denotes
-            the right side of a averaging_window window.
-            This is highly recommended for training, default True
-        """
-        # extract important meta data from ds
-        self.ds = dataset
-        self.batch_size = batch_size
-        self.spatial_dims = self.ds["inputs"].shape[2:]
-        self.variables = variables
-        self.presteps = presteps
-        self.input_time_dim = input_time_dim
-        self.output_time_dim = output_time_dim
-        self.coupled_integration_dim = self._compute_coupled_integration_dim()
-        self.input_times = [pd.Timedelta(t) for t in input_times]
-        self.output_channels = len(self.variables) * len(self.input_times)
-        self.timevar_dim = self._compute_timevar_dim()
-        self.coupled_inputs_shape = None
-        self.coupled_scaling = None
-        self._coupled_offsets = None
-        self.coupled_mode = False
-        self.integrated_couplings = None
-        self.ds_variable_indices = []
-
-        if not prepared_coupled_data:
-            raise NotImplementedError("Data preparation not yet implemented")
-
-        if isinstance(self.ds, xr.Dataset):
-            self.use_zarr = False
-        elif isinstance(self.ds, zarr.Group):
-            self.use_zarr = True
-            # iterate over self.variables in the outer loop so the selected
-            # indices follow the order of self.variables (matching the xarray
-            # path's `.sel(channel_in=self.variables)`), not the dataset's
-            # native channel_in order. Downstream code (e.g. coupled_scaling,
-            # built from self.variables order in set_scaling) assumes the
-            # coupled channel axis is ordered by self.variables.
-            channel_in = list(self.ds["channel_in"])
-            self.ds_variable_indices = [
-                i for v in self.variables for i, ic in enumerate(channel_in) if ic == v
-            ]
-        else:
-            raise TypeError(
-                f"Coupler only supports xarray Datasets or zarr Groups, got {type(self.ds)}"
-            )
-
-    def _compute_coupled_integration_dim(self):
-        """
-        Compute the coupled integration steps across the time dimension.
-        This is the number of presteps plus the maximum number of output times divided by the number of input times.
-        """
-        return self.presteps + max(self.output_time_dim // self.input_time_dim, 1)
-
-    def _compute_timevar_dim(self):
-        """
-        Compute the time variable dimension.
-        Multiple time integrations are stacked along the time dimension.
-        Thus it is the number of input times multiplied by the number of variables.
-        """
-        return len(self.input_times) * len(self.variables)
-
-    @abstractmethod
-    def compute_coupled_indices(self, interval, data_time_step):
-        """
-        Called by CoupledDataset to compute static indices for training samples.
-        Must be implemented by subclasses as the logic varies between coupler types.
-
-        Parameters
-        ----------
-        interval: int
-            ratio of dataset timestep to model dt
-        data_time_step:
-            dataset timestep
-        """
-        pass  # pragma: no cover - abstract method body, always overridden
-
-    def set_scaling(self, scaling_da):
-        """
-        Called by CoupledDataset to compute static indices for training samples
-
-        Parameters
-        ----------
-        scaling_da: xarray.DataArray
-            values used to scale input data, uses mean and std
-        """
-        # verify all the channels are there for scaling, this avoids an opaque
-        # "not all values found in index 'index'"" error that looks like its from hydra
-        missing_channels = set(self.variables) - set(scaling_da.index.values)
-        if len(missing_channels) > 0:
-            raise KeyError(
-                f"Coupled variable(s) not found in scaling values: {missing_channels}"
-            )
-
-        coupled_scaling = scaling_da.sel(index=self.variables).rename(
-            {"index": "channel_in"}
-        )
-        self.coupled_scaling = {
-            "mean": np.expand_dims(coupled_scaling["mean"].to_numpy(), (0, 2, 3, 4)),
-            "std": np.expand_dims(coupled_scaling["std"].to_numpy(), (0, 2, 3, 4)),
-        }
-
-    def setup_coupling(self, coupled_module):
-        """
-        Sets up the coupling between the coupled variables and the provided module
-
-        Parameters
-        ----------
-        coupled_module: physicsnemo.datapipes.healpix.TimeSeriesDataset
-            The module which this coupler will be coupled against.
-        """
-        # To expedite the coupling process the coupled_forecast
-        # get proper channels from coupled component output
-        output_channels = coupled_module.output_variables
-        # A bit convoluted. Some variable names are present in the dataset as is,
-        # Some prepared coupled variables are given a suffix for training associated
-        # with a time increment suach as a trailing average increment e.g. 'z1000-48H'.
-        # Some variables may have an additional suffix, e.g. 'z1000-3H-48H'. The final
-        # suffix (if it exists) is used to determine the coupling increment.
-        channel_indices = [
-            i
-            for i, oc in enumerate(output_channels)
-            for v in self.variables
-            # extract everthing before the last "-" if there is one in the name
-            if (("-" not in v and oc == v) or (oc == "-".join(v.split("-")[:-1])))
-        ]
-        # check for missing variables
-        if len(self.variables) != len(channel_indices):
-            found_channels = [
-                oc
-                for oc in output_channels
-                for v in self.variables
-                # extract everthing before the last -
-                if (("-" not in v and oc == v) or (oc == "-".join(v.split("-")[:-1])))
-            ]
-            missing_channels = set(self.variables) - set(found_channels)
-            raise ValueError(f"Missing variables in coupled module: {missing_channels}")
-        self.coupled_channel_indices = channel_indices
-
-    def reset_coupler(self):
-        """Clear saved coupled fields, forces recomputation on next use.
-
-        This method is called when the dataloader is reset, and it is used to clear the
-        cached coupled fields. This is necessary because the coupled fields are computed
-        on the fly, and they are not saved to the dataset.
-        """
-        self.coupled_mode = False
-        self.integrated_couplings = None
-        self.preset_coupled_fields = None
-
-    @abstractmethod
-    def set_coupled_fields(self, coupled_fields: th.tensor):
-        """
-        Set the data for the coupled field for the next iteration of the dataloader.
-        Must be implemented by subclasses as the processing logic varies.
-
-        Parameters
-        ----------
-        coupled_fields: th.tensor
-            The data to use when the dataloader requests coupled fields. Expected
-            format is [B, F, T, C, H, W]
-        """
-        pass  # pragma: no cover - abstract method body, always overridden
-
-    def _construct_integrated_couplings_from_dataset(self, batch, bsize):
-        """
-        Common logic for constructing integrated couplings from dataset.
-        Used by both ConstantCoupler and TrailingAverageCoupler.
-        """
-        # reset integrated couplings
-        self.integrated_couplings = np.empty(
-            (bsize, self.coupled_integration_dim, self.timevar_dim) + self.spatial_dims
-        )
-
-        index_range = slice(
-            batch["time"].start,
-            batch["time"].start + self._coupled_offsets[-1, -1, -1] + 1,
-        )
-
-        # extract coupled variables
-        if self.use_zarr:
-            # Loading the contiguous time slice into memory and then pulling out the semi-random
-            # variable indices is quicker than trying to do this all at once.
-            ds_index_range = self.ds["inputs"][index_range]
-            ds_index_range = ds_index_range[:, self.ds_variable_indices]
-        else:
-            ds_index_range = (
-                self.ds.inputs.sel(channel_in=self.variables)
-                .isel(time=index_range)
-                .compute()
-            )
-
-        return ds_index_range
-
-    def construct_integrated_couplings(
-        self,
-        batch=None,
-        bsize=None,
-    ):
-        """
-        Construct array of coupled inputs that includes values required for
-        model integration steps.
-
-        Parameters
-        ----------
-        batch: Sequence
-            indices of dataset sample dimension associated with current batch
-        bsize: int
-            batch size
-
-        Returns
-        -------
-        numpy.ndarray: The coupled data
-        """
-        if self.coupled_mode:
-            return self.preset_coupled_fields
-        else:
-            if (batch is None) or (bsize is None):
-                raise ValueError(
-                    "batch and bsize must be provided when not in coupled_mode"
-                )
-
-            ds_index_range = self._construct_integrated_couplings_from_dataset(
-                batch, bsize
-            )
-
-            # Apply scaling if available
-            if self.coupled_scaling is not None:
-                ds_index_range -= self.coupled_scaling["mean"]
-                ds_index_range /= self.coupled_scaling["std"]
-
-            # use static offsets to create integrated coupling array
-            for b in range(bsize):
-                for i in range(self.coupled_integration_dim):
-                    if self.use_zarr:
-                        coupling_temp = ds_index_range[
-                            self._coupled_offsets[b, i, :], :
-                        ]
-                    else:
-                        coupling_temp = ds_index_range.isel(
-                            time=self._coupled_offsets[b, i, :]
-                        ).to_numpy()
-                    self.integrated_couplings[b, i, :, :, :] = coupling_temp.reshape(
-                        (self.timevar_dim,) + coupling_temp.shape[2:]
-                    )
-            # permute to have the time dimension first [T, B, C, F, H, W]
-            # rather than [B, F, T, C, H, W], and cast to float for compatibility
-            return self.integrated_couplings.transpose((1, 0, 2, 3, 4, 5)).astype(
-                "float32"
-            )
-
-
-class ConstantCoupler(BaseCoupler):
+class ConstantCoupler:
     """
     coupler used to interface two component of earth system
 
@@ -369,21 +71,51 @@ class ConstantCoupler(BaseCoupler):
             sequence of pandas Timedelta objects that indicate which times are to be coupled,
             default [pd.Timedelta("24h"), pd.Timedelta("48h")]
         prepared_coupled_data: boolean, optional
-            If True assumes data in dataset has been prepared appropriately for training:
+            If True assumes data in dataset has been prepared approiately for training:
             averages have already been calculated so that each time step denotes
             the right side of a averaging_window window.
-            This is highly recommended for training, default True
+            This is highly remcommended for training, default True
         """
-        super().__init__(
-            dataset=dataset,
-            batch_size=batch_size,
-            variables=variables,
-            presteps=presteps,
-            input_time_dim=input_time_dim,
-            output_time_dim=output_time_dim,
-            input_times=input_times,
-            prepared_coupled_data=prepared_coupled_data,
-        )
+        # extract important meta data from ds
+        self.ds = dataset
+        self.batch_size = batch_size
+        self.spatial_dims = self.ds.inputs.shape[2:]
+        self.variables = variables
+        self.presteps = presteps
+        self.input_time_dim = input_time_dim
+        self.output_time_dim = output_time_dim
+        self.coupled_integration_dim = self._compute_coupled_integration_dim()
+        self.input_times = [pd.Timedelta(t) for t in input_times]
+        self.output_channels = len(self.variables) * len(self.input_times)
+        self.timevar_dim = self._compute_timevar_dim()
+        self.coupled_inputs_shape = None
+        self.scaling_dict = None
+        self._coupled_offsets = None
+        self.coupled_mode = False
+        self.integrated_couplings = None
+
+        if not prepared_coupled_data:
+            logger.log(
+                logging.DEBUG,
+                "Assuming coupled data is not preprocessed preparing data.",
+            )
+            self._prepare_coupled_data()
+        else:
+            logger.log(
+                logging.DEBUG,
+                "**Assuming coupled data has been prepared properly, using coupled field[s] from "
+                'dataset "as-is"**',
+            )
+
+    def _prepare_coupled_data(self):
+        # TODO: write function to lazily compute average as spcified in time scheme
+        raise NotImplementedError("Data preparation not yet implemented")
+
+    def _compute_coupled_integration_dim(self):
+        return self.presteps + max(self.output_time_dim // self.input_time_dim, 1)
+
+    def _compute_timevar_dim(self):
+        return len(self.input_times) * len(self.variables)
 
     def compute_coupled_indices(self, interval, data_time_step):
         """
@@ -397,7 +129,7 @@ class ConstantCoupler(BaseCoupler):
         data_time_step:
             dataset timestep
         """
-        # create array of static coupled offsets that accompany each batch
+        # create array of static coupled offstes that accompany each batch
         self._coupled_offsets = np.empty(
             [self.batch_size, self.coupled_integration_dim, len(self.input_times)]
         )
@@ -408,6 +140,48 @@ class ConstantCoupler(BaseCoupler):
                 )
 
         self._coupled_offsets = self._coupled_offsets.astype(int)
+
+    def set_scaling(self, scaling_da):
+        """
+        Called by CoupledDataset to compute static indices for training
+        samples
+
+        Parameters
+        ----------
+        scaling_da: xarray.DataArray
+            values used to scale input data, uses mean and std
+        """
+        coupled_scaling = scaling_da.sel(index=self.variables).rename(
+            {"index": "channel_in"}
+        )
+        self.coupled_scaling = {
+            "mean": np.expand_dims(coupled_scaling["mean"].to_numpy(), (0, 2, 3, 4)),
+            "std": np.expand_dims(coupled_scaling["std"].to_numpy(), (0, 2, 3, 4)),
+        }
+
+    def setup_coupling(self, coupled_module):
+        # To expediate the coupling process the coupled_forecast
+        # get proper channels from coupled component output
+        output_channels = coupled_module.output_variables
+        # A bit convoluted. Prepared coupled variables
+        # are given a suffix for training associated with their
+        # trailing average increment e.g. 'z1000-48H'. To extract
+        # thr proper field from the coupled model output, we see if
+        # we check if the coupled model output var is in self.variables.
+        #
+        # for example 'z1000' is in 'z1000-48H'
+        channel_indices = [
+            i
+            for i, oc in enumerate(output_channels)
+            for v in self.variables
+            if oc == v.split("-")[0]
+        ]
+        self.coupled_channel_indices = channel_indices
+
+    def reset_coupler(self):
+        self.coupled_mode = False
+        self.integrated_couplings = None
+        self.preset_coupled_fields = None
 
     def set_coupled_fields(self, coupled_fields: th.tensor):
         """
@@ -421,34 +195,92 @@ class ConstantCoupler(BaseCoupler):
             The data to use when the dataloader requests coupled fields. Expected
             format is [B, F, T, C, H, W]
         """
+        if coupled_fields.shape[0] != self.batch_size:
+            raise ValueError(
+                f"Batch size of coupled field {coupled_fields.shape[0]} doesn't "
+                f" match configured batch size {self.batch_size}"
+            )
         # create buffer for coupling
-        coupled_fields = coupled_fields[:, :, :, self.coupled_channel_indices, :, :]
+        coupled_fields = coupled_fields[
+            :, :, :, self.coupled_channel_indices, :, :
+        ].permute(2, 0, 3, 1, 4, 5)
         self.preset_coupled_fields = th.empty(
-            [
-                coupled_fields.shape[0],
-                self.spatial_dims[0],
-                self.coupled_integration_dim,
-                self.timevar_dim,
+            [self.coupled_integration_dim, self.batch_size, self.timevar_dim]
+            + list(self.spatial_dims)
+        )
+        # we use a constant set of values so we just copy time 0
+        for i in range(len(self.preset_coupled_fields)):
+            self.preset_coupled_fields[i, :, :, :, :, :] = coupled_fields[
+                0, :, -1, :, :, :
             ]
-            + list(self.spatial_dims[1:])
-        )
-        # broadcast the first time step to all the integration steps
-        self.preset_coupled_fields[:, :, :, :, :, :] = coupled_fields[:, :, :1, :, :, :]
-        # permute to have the time dimension first [T, B, C, F, H, W]
-        # rather than [B, F, T, C, H, W]
-        self.preset_coupled_fields = self.preset_coupled_fields.permute(
-            2, 0, 3, 1, 4, 5
-        )
         # flag for construct integrated coupling method to use this array
         self.coupled_mode = True
 
+    def construct_integrated_couplings(
+        self,
+        batch=None,
+        bsize=None,
+    ):
+        """
+        Construct array of coupled inputs that includes values required for
+        model integration steps.
 
-class TrailingAverageCoupler(BaseCoupler):
+        Parameters
+        ----------
+        batch: Sequence
+            indices of dataset sample dimension associated with current batch
+        bsize: int
+            batch size
+
+        Returns
+        -------
+        numpy.ndarray: The coupled data
+        """
+        if self.coupled_mode:
+            return self.preset_coupled_fields
+        else:
+            # reset integrated couplings
+            self.integrated_couplings = np.empty(
+                (bsize, self.coupled_integration_dim, self.timevar_dim)
+                + self.spatial_dims
+            )
+
+            index_range = slice(
+                batch["time"].start,
+                batch["time"].start + self._coupled_offsets[-1, -1, -1] + 1,
+            )
+
+            # extract coupled variables and scale lazily
+            input_array = self.ds.inputs.sel(channel_in=self.variables)
+            ds = (input_array - self.coupled_scaling["mean"]) / self.coupled_scaling[
+                "std"
+            ]
+            # load before entering loop for efficiency
+            ds_index_range = ds.isel(time=index_range).load()
+
+            # use static offsets to create integrated coupling array
+            for b in range(bsize):
+                for i in range(self.coupled_integration_dim):
+                    coupling_temp = ds_index_range.isel(
+                        time=self._coupled_offsets[b, i, :]
+                    )
+                    self.integrated_couplings[b, i, :, :, :] = (
+                        coupling_temp.to_numpy().reshape(
+                            (self.timevar_dim,) + coupling_temp.shape[2:]
+                        )
+                    )
+
+            return self.integrated_couplings.transpose((1, 0, 2, 3, 4, 5)).astype(
+                "float32"
+            )  # cast to float for compatability
+
+
+class TrailingAverageCoupler:
     """
-    coupler used to interface two components of the earth system
+    coupler used to inferface two components of the earth system
 
     Trailing average coupler uses coupled input times as the right side of
-    an average that is taken over an "averaging_window" window size.
+    an averag that is taken over an "averaging_window" window size.
     """
 
     def __init__(
@@ -487,49 +319,55 @@ class TrailingAverageCoupler(BaseCoupler):
             sequence of pandas Timedelta objects that indicate which times are to be coupled,
             default [pd.Timedelta("24h"), pd.Timedelta("48h")]
         prepared_coupled_data: boolean, optional
-            If True assumes data in dataset has been prepared appropriately for training:
+            If True assumes data in dataset has been prepared approiately for training:
             averages have already been calculated so that each time step denotes
             the right side of a averaging_window window.
-            This is highly recommended for training, default True
+            This is highly remcommended for training, default True
         """
-        super().__init__(
-            dataset=dataset,
-            batch_size=batch_size,
-            variables=variables,
-            presteps=presteps,
-            input_time_dim=input_time_dim,
-            output_time_dim=output_time_dim,
-            input_times=input_times,
-            prepared_coupled_data=prepared_coupled_data,
-        )
-
-        # TrailingAverageCoupler-specific attributes
+        # extract important meta data from ds
+        self.ds = dataset
+        self.batch_size = batch_size
+        self.spatial_dims = self.ds.inputs.shape[2:]
+        self.variables = variables
+        self.presteps = presteps
+        self.input_time_dim = input_time_dim
+        self.output_time_dim = output_time_dim
+        self.input_times = [pd.Timedelta(t) for t in input_times]
         self.averaging_window = pd.Timedelta(averaging_window)
+        self.output_channels = len(self.variables) * len(self.input_times)
+        self._set_time_increments()
+        self.coupled_integration_dim = self._compute_coupled_integration_dim()
+        self.timevar_dim = self._compute_timevar_dim()
+        self.coupled_inputs_shape = None
+        self.scaling_dict = None
+        self._coupled_offsets = None
+        self.integrated_couplings = None
+        self.coupled_mode = False  # if forecasting with another coupled model
 
-        if self.use_zarr:
-            cf_dates = cftime.num2pydate(
-                self.ds["time"][:],
-                units=self.ds["time"].attrs["units"],
-                calendar=self.ds["time"].attrs["calendar"],
+        if not prepared_coupled_data:
+            logger.log(
+                logging.DEBUG,
+                "Assuming coupled data is not preprocessed, averaging fields in as designed in"
+                "TrailingAverageCoupler. See docs for specifics.",
             )
-            dates = [np.datetime64(date.isoformat()) for date in cf_dates]
-            self.time_da = np.asarray(dates)
+            self._prepare_coupled_data()
         else:
-            self.time_da = self.ds.time.values
+            logger.log(
+                logging.DEBUG,
+                "**Assuming coupled data has been prepared properly, using coupled field[s] from"
+                'dataset "as-is"**',
+            )
 
     def compute_coupled_indices(self, interval, data_time_step):
         """
         Called by CoupledDataset to compute static indices for training
         samples
 
-        Parameters
-        ----------
-        interval: int
-            ratio of dataset timestep to model dt
-        data_time_step:
-            dataset timestep
+        :param interval: int ratio of dataset timestep to model dt
+        :param data_time_step: dataset timestep
         """
-        # create array of static coupled offsets that accompany each batch
+
+        # create array of static coupled offstes that accompany each batch
         self._coupled_offsets = np.empty(
             [self.batch_size, self.coupled_integration_dim, len(self.input_times)]
         )
@@ -543,16 +381,58 @@ class TrailingAverageCoupler(BaseCoupler):
 
         self._coupled_offsets = self._coupled_offsets.astype(int)
 
-    def setup_coupling(self, coupled_module):
-        """
-        Setup the trailing average specific coupling between the coupled variables and the provided module.
-        Precomputes the averaging slices for the coupled variables.
-        """
-        # Call parent method first to set basic coupling
-        super().setup_coupling(coupled_module)
+    def _prepare_coupled_data(self):
+        # TODO: write function to lazily compute average as spcified in time scheme
+        raise NotImplementedError("Data preparation not yet implemented")
 
-        # TrailingAverageCoupler-specific setup
-        # find averaging periods from component output
+    def set_scaling(self, scaling_da):
+        coupled_scaling = scaling_da.sel(index=self.variables).rename(
+            {"index": "channel_in"}
+        )
+        self.coupled_scaling = {
+            "mean": np.expand_dims(coupled_scaling["mean"].to_numpy(), (0, 2, 3, 4)),
+            "std": np.expand_dims(coupled_scaling["std"].to_numpy(), (0, 2, 3, 4)),
+        }
+
+    def _set_time_increments(self):
+        # get the dt of the dataset
+        dt = pd.Timedelta(
+            self.ds.time[1].values - self.ds.time[0].values
+        ).total_seconds()
+        # assert that the time increments are divisible by the dt of the dataset
+        if np.any([t.total_seconds() % dt != 0 for t in self.input_times]):
+            raise ValueError(
+                f"Coupled input times {self.input_times} "
+                f"({[t.total_seconds() for t in self.input_times]} in secs) are not divisible by dataset dt: {dt}"
+            )
+        self.time_increments = [t.total_seconds() / dt for t in self.input_times]
+
+    def _compute_timevar_dim(self):
+        return len(self.input_times) * len(self.variables)
+
+    def _compute_coupled_integration_dim(self):
+        return self.presteps + max(self.output_time_dim // self.input_time_dim, 1)
+
+    def setup_coupling(self, coupled_module):
+        # To expediate the coupling process the coupled_forecast
+        # get proper channels from coupled component output
+        output_channels = coupled_module.output_variables
+        # A bit convoluted. Prepared coupled variables
+        # are given a suffix for training associated with their
+        # trailing average increment e.g. 'z1000-48H'. To extract
+        # thr proper field from the coupled model output, we see if
+        # we check if the coupled model output var is in self.variables.
+        #
+        # for example 'z1000' is in 'z1000-48H'
+        channel_indices = [
+            i
+            for i, oc in enumerate(output_channels)
+            for v in self.variables
+            if oc == v.split("-")[0]
+        ]
+        self.coupled_channel_indices = channel_indices
+
+        # find averaging periods from componenet output
         averaging_window_max_indices = [
             i // pd.Timedelta(coupled_module.time_step) for i in self.input_times
         ]
@@ -570,7 +450,12 @@ class TrailingAverageCoupler(BaseCoupler):
                 )
         self.averaging_slices = averaging_slices
 
-    def set_coupled_fields(self, coupled_fields: th.tensor):
+    def reset_coupler(self):
+        self.coupled_mode = False
+        self.integrated_couplings = None
+        self.preset_coupled_fields = None
+
+    def set_coupled_fields(self, coupled_fields):
         """
         Set the data for the coupled field for the next iteration of the dataloader.
         Instead of loading data from the dataset the data from coupled_fields will
@@ -582,6 +467,12 @@ class TrailingAverageCoupler(BaseCoupler):
             The data to use when the dataloader requests coupled fields. Expected
             format is [B, F, T, C, H, W]
         """
+        if coupled_fields.shape[0] != self.batch_size:
+            raise ValueError(
+                f"Batch size of coupled field {coupled_fields.shape[0]} doesn't "
+                f" match configured batch size {self.batch_size}"
+            )
+
         coupled_fields = coupled_fields[:, :, :, self.coupled_channel_indices, :, :]
         # TODO: Now support output_time_dim =/= input_time_dim, but presteps need to be 0, will add support for presteps>0
         coupled_averaging_periods = []
@@ -591,11 +482,67 @@ class TrailingAverageCoupler(BaseCoupler):
                 for s in self.averaging_slices[j]
             ]
             coupled_averaging_periods.append(th.concat(averaging_periods, dim=3))
-        self.preset_coupled_fields = th.concat(coupled_averaging_periods, dim=2)
-        # permute to have the time dimension first [T, B, C, F, H, W]
-        # rather than [B, F, T, C, H, W]
-        self.preset_coupled_fields = self.preset_coupled_fields.permute(
-            2, 0, 3, 1, 4, 5
-        )
+        self.preset_coupled_fields = th.concat(
+            coupled_averaging_periods, dim=2
+        ).permute(2, 0, 3, 1, 4, 5)
         # flag for construct integrated coupling method to use this array
         self.coupled_mode = True
+
+    def construct_integrated_couplings(
+        self,
+        batch=None,
+        bsize=None,
+    ):
+        """
+        Construct array of coupled inputs that includes values required for
+        model integration steps.
+
+        :param batch: indices of dataset sample dimension associated with
+               current batch.
+        :param bsize: int batch size
+        """
+
+        if self.coupled_mode:
+            return self.preset_coupled_fields
+        else:
+            if (batch is None) or (bsize is None):
+                raise ValueError(
+                    "Coupled fields must be set if no batch or batch size is provided"
+                )
+            # reset integrated couplings
+            self.integrated_couplings = np.empty(
+                (bsize, self.coupled_integration_dim, self.timevar_dim)
+                + self.spatial_dims
+            )
+
+            index_range = slice(
+                batch["time"].start,
+                batch["time"].start + self._coupled_offsets[-1, -1, -1] + 1,
+            )
+
+            # extract coupled variables and scale lazily
+            ds = (
+                self.ds.inputs.sel(channel_in=self.variables)
+                - self.coupled_scaling["mean"]
+            ) / self.coupled_scaling["std"]
+            # load before entering loop for efficiency
+            ds_index_range = ds.isel(time=index_range).load()
+
+            # use static offsets to create integrated coupling array
+            for b in range(bsize):
+                for i in range(self.coupled_integration_dim):
+                    # coupling_temp = \
+                    #   ds.isel(time=batch["time"].start+self._coupled_offsets[b,i,:]) # changed i to 0 for debugging
+                    # added to test speed, original is commented above
+                    coupling_temp = ds_index_range.isel(
+                        time=self._coupled_offsets[b, i, :]
+                    )
+                    self.integrated_couplings[b, i, :, :, :] = (
+                        coupling_temp.to_numpy().reshape(
+                            (self.timevar_dim,) + coupling_temp.shape[2:]
+                        )
+                    )
+
+            return self.integrated_couplings.transpose((1, 0, 2, 3, 4, 5)).astype(
+                "float32"
+            )  # cast to float32 for pytroch compatibility.

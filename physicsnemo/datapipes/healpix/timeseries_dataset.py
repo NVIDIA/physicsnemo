@@ -14,13 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Dataset for sampling from continuous time-series data, compatible with pytorch data loading.
-
-This class provides the core functionality for sampling from continuous time-series data, compatible with pytorch data loading.
-It handles data loading, scaling, and time management. It is used by the TimeSeriesDataModule to set up the dataloaders for the time series healpix data.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -33,18 +26,16 @@ import numpy as np
 import pandas as pd
 import torch
 from omegaconf import DictConfig, OmegaConf
+from torch.utils.data import Dataset
 
 from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.datapipe import Datapipe
 from physicsnemo.datapipes.meta import DatapipeMetaData
 from physicsnemo.utils.insolation import insolation
 
-logger = logging.getLogger(__name__)
-
-# xarray ships in the ``datapipes-extras`` optional dependency group; load it
-# lazily so the physicsnemo import graph carries no static dependency on it
-# (see CODING_STANDARDS/EXTERNAL_IMPORTS.md, EXT-003/EXT-004).
 xr = OptionalImport("xarray")
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -59,7 +50,7 @@ class MetaData(DatapipeMetaData):
     ddp_sharding: bool = False
 
 
-class TimeSeriesDataset(Datapipe):
+class TimeSeriesDataset(Dataset, Datapipe):
     """
     Dataset for sampling from continuous time-series data, compatible with pytorch data loading.
     """
@@ -253,23 +244,13 @@ class TimeSeriesDataset(Datapipe):
         scaling_da = scaling_df.to_xarray().astype("float32")
 
         # REMARK: we remove the xarray overhead from these
-        # base (non-coupled) datasets have no 'couplings' attribute, and coupled
-        # datasets may be configured with an empty couplings list; treat both as
-        # zero coupled variables rather than indexing into an empty/missing list.
-        couplings = getattr(self, "couplings", [])
-        num_coupled_vars = len(couplings[0].variables) if couplings else 0
         try:
-            # 'if' statement used for cases where atmos model
-            # includes diagnostic variables like tp6 and msl.
-            # using 'channel_out' is still necessary for ocean models.
-            if len(self.ds.channel_out) != (len(self.ds.channel_in) - num_coupled_vars):
-                self.input_scaling = scaling_da.sel(
-                    index=self.ds.channel_in.values
-                ).rename({"index": "channel_in"})
-            else:
-                self.input_scaling = scaling_da.sel(
-                    index=self.ds.channel_out.values
-                ).rename({"index": "channel_in"})
+            # we use channel_out instead of channel_in because
+            # the list of input channels may contain data fetched outside
+            # the datasets such as coupled fields
+            self.input_scaling = scaling_da.sel(
+                index=self.ds.channel_out.values
+            ).rename({"index": "channel_in"})
             self.input_scaling = {
                 "mean": np.expand_dims(
                     self.input_scaling["mean"].to_numpy(), (0, 2, 3, 4)

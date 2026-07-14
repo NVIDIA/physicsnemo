@@ -14,12 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Dataset for coupling time series healpix data with external inputs from various earth system components.
-
-This class extends the TimeSeriesDataset to add the core functionality for coupling time series healpix data with external inputs from various earth system components.
-"""
-
 from __future__ import annotations
 
 import gc
@@ -40,12 +34,9 @@ from physicsnemo.utils.insolation import insolation
 from . import couplers
 from .timeseries_dataset import TimeSeriesDataset
 
-logger = logging.getLogger(__name__)
-
-# xarray ships in the ``datapipes-extras`` optional dependency group; load it
-# lazily so the physicsnemo import graph carries no static dependency on it
-# (see CODING_STANDARDS/EXTERNAL_IMPORTS.md, EXT-003/EXT-004).
 xr = OptionalImport("xarray")
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -178,10 +169,6 @@ class CoupledTimeSeriesDataset(TimeSeriesDataset):
         self.curr_item = None  # keeps track of current initialization
 
     def _get_scaling_da(self):
-        """
-        Get the scaling for the coupled values from the scaling dictionary.
-        This is overridden to add the scaling for the coupled values.
-        """
         scaling_df = pd.DataFrame.from_dict(self.scaling).T
         scaling_df.loc["zeros"] = {"mean": 0.0, "std": 1.0}
         scaling_da = scaling_df.to_xarray().astype("float32")
@@ -192,9 +179,6 @@ class CoupledTimeSeriesDataset(TimeSeriesDataset):
         super()._get_scaling_da()
 
     def __getitem__(self, item):
-        """
-        Get the item from the dataset. This is overridden to add the coupled values.
-        """
         # start range
         torch.cuda.nvtx.range_push("CoupledTimeSeriesDataset:__getitem__")
 
@@ -227,24 +211,9 @@ class CoupledTimeSeriesDataset(TimeSeriesDataset):
                 axis=2,
             )
 
-        # for models with extra outputs
-        # an empty couplings list means zero coupled variables, rather than
-        # indexing into a non-existent first coupling
-        num_coupled_vars = len(self.couplings[0].variables) if self.couplings else 0
-        if len(self.ds["targets"].channel_out) != (
-            len(self.ds["inputs"].channel_in) - num_coupled_vars
-        ):
-            channel_slice = (
-                slice(None, -num_coupled_vars) if num_coupled_vars else slice(None)
-            )
-            input_array = (
-                input_array - self.input_scaling["mean"][:, channel_slice]
-            ) / self.input_scaling["std"][:, channel_slice]
-        else:
-            input_array = (
-                input_array - self.input_scaling["mean"]
-            ) / self.input_scaling["std"]
-
+        input_array = (input_array - self.input_scaling["mean"]) / self.input_scaling[
+            "std"
+        ]
         if not self.forecast_mode:
             # BAD NEWS: Indexing the array as commented out below causes unexpected behavior in target creation.
             #     leaving this in here as a warning
@@ -320,7 +289,6 @@ class CoupledTimeSeriesDataset(TimeSeriesDataset):
                 )
             for c in self.couplings:
                 for i, v in enumerate(c.variables):
-                    # coupled fields are in the shape [T, B, C, F, H, W]
                     integrated_couplings[i, :, :] += self.rng.normal(
                         loc=0,
                         scale=self.train_noise_params["couplings"][v]["std"],
@@ -366,9 +334,6 @@ class CoupledTimeSeriesDataset(TimeSeriesDataset):
         return inputs_result, targets
 
     def next_integration(self, model_outputs, constants):
-        """
-        Fetch the next coupled integration step
-        """
         inputs_result = []
 
         # grab last few model outputs for re-initialization
