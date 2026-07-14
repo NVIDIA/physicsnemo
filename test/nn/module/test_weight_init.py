@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
+
 import pytest
 import torch
 
@@ -27,6 +29,16 @@ class _ScalarParamNet(torch.nn.Module):
         super().__init__()
         self.fc = torch.nn.Linear(8, 8)
         self.scale = torch.nn.Parameter(torch.tensor(0.07))
+
+
+class _TiedNet(torch.nn.Module):
+    """Module with a tied weight shared under two names (embed / head)."""
+
+    def __init__(self):
+        super().__init__()
+        self.embed = torch.nn.Linear(8, 8, bias=False)
+        self.head = torch.nn.Linear(8, 8, bias=False)
+        self.head.weight = self.embed.weight
 
 
 def test_shrink_and_perturb_shrink_only(device):
@@ -156,6 +168,77 @@ def test_callable_wrong_shape_raises(device):
         shrink_and_perturb_(model, noise=lambda p: torch.tensor(1.0, device=p.device))
 
 
+def test_inplace_init_callable(device):
+    """In-place torch.nn.init samplers fill scratch, never alias the weight."""
+    model = torch.nn.Linear(4, 4).to(device)
+    orig = {n: p.detach().clone() for n, p in model.named_parameters()}
+
+    shrink_and_perturb_(model, shrink=0.5, perturb=0.2, noise=torch.nn.init.ones_)
+
+    for n, p in model.named_parameters():
+        # eps == ones; if the callable had aliased the live param the pretrained
+        # value would be lost (would collapse to a constant).
+        assert torch.allclose(p, 0.5 * orig[n] + 0.2 * torch.ones_like(p))
+
+
+def test_complex_noise_into_real_raises(device):
+    """Complex noise for a real parameter is rejected before any mutation."""
+    model = torch.nn.Linear(4, 4).to(device)
+    w0 = model.weight.detach().clone()
+    with pytest.raises(ValueError):
+        shrink_and_perturb_(
+            model, noise=lambda p: torch.ones_like(p, dtype=torch.complex64)
+        )
+    assert torch.equal(model.weight, w0)  # untouched: validated before mutate
+
+
+def test_tied_params_selected_by_alias(device):
+    """A tied weight is reachable via any alias name and updated exactly once."""
+    model = _TiedNet().to(device)
+    w0 = model.embed.weight.detach().clone()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # no "matched no parameters" warning
+        shrink_and_perturb_(
+            model, shrink=0.5, perturb=0.0, include=lambda n, p: n == "head.weight"
+        )
+
+    # Updated once via the alias -> 0.5*w0 (0.25*w0 would mean double application).
+    assert torch.allclose(model.embed.weight, 0.5 * w0)
+
+
+def test_include_no_match_warns(device):
+    model = torch.nn.Linear(4, 4).to(device)
+    with pytest.warns(UserWarning, match="matched no parameters"):
+        shrink_and_perturb_(model, include=lambda n, p: False)
+
+
+def test_normal_magnitude(device):
+    """'normal' noise has unit std, so with shrink=0 the result std ~ perturb."""
+    model = torch.nn.Linear(256, 256).to(device)
+    gen = torch.Generator(device=device).manual_seed(0)
+    shrink_and_perturb_(
+        model,
+        shrink=0.0,
+        perturb=0.1,
+        noise="normal",
+        include=lambda n, p: n == "weight",
+        generator=gen,
+    )
+    assert abs(model.weight.std().item() - 0.1) / 0.1 < 0.1
+
+
+def test_zero_perturb_preserves_rng(device):
+    """perturb=0 must not advance the global RNG (no noise is drawn)."""
+    model = torch.nn.Linear(8, 8).to(device)
+    torch.manual_seed(123)
+    a = torch.randn(4, device=device)
+    torch.manual_seed(123)
+    shrink_and_perturb_(model, shrink=0.5, perturb=0.0)
+    b = torch.randn(4, device=device)
+    assert torch.equal(a, b)
+
+
 def test_invalid_arguments(device):
     model = torch.nn.Linear(4, 4).to(device)
     with pytest.raises(ValueError):
@@ -164,3 +247,13 @@ def test_invalid_arguments(device):
         shrink_and_perturb_(model, perturb=-1.0)
     with pytest.raises(ValueError):
         shrink_and_perturb_(model, noise="bogus")
+
+
+def test_nonfinite_coefficients_raise(device):
+    """NaN / +-inf coefficients are rejected before touching the module."""
+    model = torch.nn.Linear(4, 4).to(device)
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(ValueError):
+            shrink_and_perturb_(model, shrink=bad)
+        with pytest.raises(ValueError):
+            shrink_and_perturb_(model, perturb=bad)
