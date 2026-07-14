@@ -18,4 +18,3 @@ PhysicsNeMo Layers
    nn/layers/regularization
    nn/layers/specialized
    nn/layers/graph_geometry
-   nn/layers/weight_init

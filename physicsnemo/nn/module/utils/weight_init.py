@@ -49,7 +49,7 @@ def shrink_and_perturb_(
     shrink: float = 0.5,
     perturb: float = 0.1,
     *,
-    noise: Union[str, Callable[[str, torch.Tensor], torch.Tensor]] = "scaled_normal",
+    noise: Union[str, Callable[[torch.Tensor], torch.Tensor]] = "scaled_normal",
     include: Optional[Callable[[str, torch.Tensor], bool]] = None,
     generator: Optional[torch.Generator] = None,
 ) -> torch.nn.Module:
@@ -94,9 +94,12 @@ def shrink_and_perturb_(
           elements per parameter tensor).
         - ``"normal"``: :math:`\varepsilon = z \sim \mathcal{N}(0, 1)`,
           unscaled.
-        - a callable ``(name, param) -> tensor`` returning
-          :math:`\varepsilon`, e.g. ``lambda n, p: fresh[n]`` to interpolate
-          toward the weights of a freshly constructed reference model.
+        - a callable ``(param) -> tensor`` returning :math:`\varepsilon`, with
+          the same signature as ``torch.randn_like``. Pass ``torch.randn_like``
+          (equivalent to ``"normal"``), the ``randn_like`` of a
+          ``StackedRandomGenerator``, any ``torch.nn.init``-style sampler, or
+          e.g. ``lambda p: torch.rand_like(p) * 2 - 1`` for a different noise
+          distribution.
     include : callable, optional
         Predicate ``(name, param) -> bool`` selecting which parameters to
         perturb. Parameters for which it returns ``False`` are left entirely
@@ -136,13 +139,13 @@ def shrink_and_perturb_(
         noise_fn = noise
     elif noise == "scaled_normal":
 
-        def noise_fn(name: str, p: torch.Tensor) -> torch.Tensor:
+        def noise_fn(p: torch.Tensor) -> torch.Tensor:
             z = torch.empty_like(p).normal_(generator=generator)
             return p.detach().std() * z
 
     elif noise == "normal":
 
-        def noise_fn(name: str, p: torch.Tensor) -> torch.Tensor:
+        def noise_fn(p: torch.Tensor) -> torch.Tensor:
             return torch.empty_like(p).normal_(generator=generator)
 
     else:
@@ -154,7 +157,7 @@ def shrink_and_perturb_(
         if include is not None and not include(name, p):
             continue
         # eps is computed from the pre-shrink weight (matters for "scaled_normal").
-        eps = noise_fn(name, p)
+        eps = noise_fn(p)
         p.mul_(shrink).add_(eps, alpha=perturb)
     return module
 

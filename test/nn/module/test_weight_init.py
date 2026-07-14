@@ -49,7 +49,9 @@ def test_shrink_and_perturb_callable_noise_exact(device):
     orig = {n: p.detach().clone() for n, p in model.named_parameters()}
     eps = {n: torch.ones_like(p) for n, p in model.named_parameters()}
 
-    shrink_and_perturb_(model, shrink=0.5, perturb=0.2, noise=lambda n, p: eps[n])
+    shrink_and_perturb_(
+        model, shrink=0.5, perturb=0.2, noise=lambda p: torch.ones_like(p)
+    )
 
     for n, p in model.named_parameters():
         assert torch.allclose(p, 0.5 * orig[n] + 0.2 * eps[n])
