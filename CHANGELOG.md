@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds dimension-generic volume mesh generation for implicit domains to
   `physicsnemo.mesh.generate`. `mesh_implicit_domain` meshes
   `{x : phi(x) < 0}`, clipped to the bounding box (box faces are honored
-  as boundary, so external-flow "box minus obstacle" domains work
+  as a boundary, so that external-flow "box minus obstacle" domains work
   directly), for any implicit function (signed-distance functions, level
   sets, or neural fields).
 - Adds `integrate_moment` and `Mesh.integrate_moment` for measure-weighted
