@@ -106,8 +106,10 @@ class Reader(ABC):
             - ``n_points``: Number of points to read from each target tensor
             - ``target_keys``: List of tensor keys to apply subsampling to
 
-            This allows configuration via Hydra. Readers that don't support
-            coordinated subsampling will ignore this parameter.
+            Supporting readers select a cyclic contiguous block, so every
+            point has equal inclusion probability while reads retain storage
+            locality. This allows configuration via Hydra. Readers that don't
+            support coordinated subsampling will ignore this parameter.
         """
         self.pin_memory = pin_memory
         self.include_index_in_metadata = include_index_in_metadata
