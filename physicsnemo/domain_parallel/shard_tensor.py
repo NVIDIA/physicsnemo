@@ -516,6 +516,7 @@ class _FromTorchTensor(torch.autograd.Function):
     """
 
     @staticmethod
+    @torch._dynamo.disable
     def forward(
         ctx: torch.autograd.function.FunctionCtx,
         local_input: torch.Tensor,
@@ -783,6 +784,7 @@ class ShardTensor(torch.Tensor):
         cls._named_function_registry[func_name] = handler
 
     @staticmethod
+    @torch._dynamo.disable
     def __new__(
         cls,
         local_tensor: torch.Tensor,
