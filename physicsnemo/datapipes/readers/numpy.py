@@ -28,6 +28,7 @@ from typing import Any, Optional
 import numpy as np
 import torch
 
+from physicsnemo.datapipes._indexing import _cyclic_block_indices
 from physicsnemo.datapipes.readers.base import Reader
 from physicsnemo.datapipes.registry import register
 
@@ -167,54 +168,6 @@ class NumpyReader(Reader):
             return self._user_fields
         return self._available_fields
 
-    def _select_random_sections_from_slice(
-        self,
-        slice_start: int,
-        slice_stop: int,
-        n_points: int,
-        generator: Optional[torch.Generator] = None,
-    ) -> slice:
-        """
-        Select a random contiguous slice from a range.
-
-        Parameters
-        ----------
-        slice_start : int
-            Start index of the available range.
-        slice_stop : int
-            Stop index of the available range (exclusive).
-        n_points : int
-            Number of points to sample.
-        generator : torch.Generator, optional
-            Per-sample generator for reproducible, order-independent
-            selection. ``None`` uses the global default RNG.
-
-        Returns
-        -------
-        slice
-            A slice object representing the random contiguous section.
-
-        Raises
-        ------
-        ValueError
-            If the range is smaller than n_points.
-        """
-        total_points = slice_stop - slice_start
-
-        if total_points < n_points:
-            raise ValueError(
-                f"Slice size {total_points} is less than the number of points "
-                f"{n_points} requested for subsampling"
-            )
-
-        start = torch.randint(
-            slice_start,
-            slice_stop - n_points + 1,
-            (1,),
-            generator=generator,
-        ).item()
-        return slice(start, start + n_points)
-
     def _load_from_npz(
         self,
         npz: np.lib.npyio.NpzFile,
@@ -255,20 +208,22 @@ class NumpyReader(Reader):
                 f"Available: {list(npz.files)}"
             )
 
-        # Determine subsample slice if coordinated subsampling is enabled
-        subsample_slice = None
+        # Determine cyclic block indices if coordinated subsampling is enabled.
+        subsample_indices = None
         target_keys_set = set()
         if self._coordinated_subsampling_config is not None:
             n_points = self._coordinated_subsampling_config["n_points"]
             target_keys_set = set(self._coordinated_subsampling_config["target_keys"])
 
-            # Find slice from first available target key
+            # Find the range from the first available target key. A cyclic
+            # block gives every point equal inclusion probability while
+            # retaining contiguous storage locality.
             for field in target_keys_set:
                 if field in npz.files:
                     array_shape = npz[field].shape[0]
-                    subsample_slice = self._select_random_sections_from_slice(
-                        0, array_shape, n_points, generator=generator
-                    )
+                    subsample_indices = _cyclic_block_indices(
+                        array_shape, n_points, generator=generator
+                    ).numpy()
                     break
 
         # Load each field
@@ -281,8 +236,8 @@ class NumpyReader(Reader):
                     arr = arr[index]
 
                 # Apply subsampling if this field is a target
-                if subsample_slice is not None and field in target_keys_set:
-                    arr = arr[subsample_slice]
+                if subsample_indices is not None and field in target_keys_set:
+                    arr = arr[subsample_indices]
                 elif index is None:
                     # Directory mode: load full array
                     arr = arr[:]
