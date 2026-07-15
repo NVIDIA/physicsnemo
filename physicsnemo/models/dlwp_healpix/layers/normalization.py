@@ -20,23 +20,16 @@ Implementation of the Deep Learning Weather Prediction (DLWP) normalization on t
 This class contains the implementation of the Deep Learning Weather Prediction (DLWP) normalization on the HEALPix mesh.
 """
 
-import importlib
 from typing import List
 
 import torch as th
 
-# ``apex`` is an optional accelerator (not a core dependency). Import it
-# dynamically so the physicsnemo import graph stays free of a static ``apex``
-# dependency (see CODING_STANDARDS/EXTERNAL_IMPORTS.md, EXT-003). The
-# ``FusedLayerNorm`` symbol is only used when ``norm_op="apex"`` is explicitly
-# requested, which is guarded by ``_APEX_AVAILABLE`` below.
-try:
-    FusedLayerNorm = importlib.import_module("apex.normalization").FusedLayerNorm
+from physicsnemo.core.version_check import OptionalImport
 
-    _APEX_AVAILABLE = True
-except ImportError:  # pragma: no cover - only exercised when apex is absent
-    FusedLayerNorm = None
-    _APEX_AVAILABLE = False
+# ``apex`` is an optional accelerator (not a core dependency). Import it lazily
+# via ``OptionalImport``. If ``apex`` is missing, ``OptionalImport`` raises
+# an ``ImportError`` with an install hint at that point.
+apex_normalization = OptionalImport("apex.normalization")
 
 
 @th.compile
@@ -122,11 +115,9 @@ class ConditionalLayerNorm(th.nn.Module):
         if norm_op == "torch":
             self.norm = th.nn.LayerNorm(channel_depth, elementwise_affine=False)
         elif norm_op == "apex":
-            if not _APEX_AVAILABLE:
-                raise ImportError(
-                    "Apex FusedLayerNorm requested but apex is not available, please install it from https://github.com/NVIDIA/apex"
-                )
-            self.norm = FusedLayerNorm(channel_depth, elementwise_affine=False)
+            self.norm = apex_normalization.FusedLayerNorm(
+                channel_depth, elementwise_affine=False
+            )
 
     def _make_mlp(
         self,
@@ -161,139 +152,6 @@ class ConditionalLayerNorm(th.nn.Module):
             in_dim = hdim
         layers.append(th.nn.Linear(in_dim, out_dim))
         return th.nn.Sequential(*layers)
-
-    def _load_from_state_dict(
-        self,
-        state_dict,
-        prefix,
-        local_metadata,
-        strict,
-        missing_keys,
-        unexpected_keys,
-        error_msgs,
-    ):
-        """Backward compatibility: merge old separate gamma_mlp/beta_mlp into fused gamma_beta_mlp.
-
-        Old MLPs had hidden_dims [h1, h2, ...] and output dim C.
-        New fused MLP has hidden_dims [2*h1, 2*h2, ...] and output dim 2*C.
-
-        For the first Linear (condition_shape → 2*h1), we vertically concatenate:
-            new_weight = cat([gamma_weight, beta_weight], dim=0)
-
-        For subsequent Linear layers (2*h_i → 2*h_{i+1} or 2*h_last → 2*C),
-        we build a block-diagonal weight matrix:
-            new_weight = [[gamma_weight, 0          ],
-                          [0,            beta_weight]]
-
-        Biases are always concatenated: cat([gamma_bias, beta_bias]).
-
-        Activation submodule buffers (e.g. CappedGELU ``cap``) are copied from
-        the gamma MLP to the fused MLP at the same sequential index.
-        """
-        gamma_prefix = prefix + "gamma_mlp."
-        beta_prefix = prefix + "beta_mlp."
-        fused_prefix = prefix + "gamma_beta_mlp."
-
-        has_old_keys = any(k.startswith(gamma_prefix) for k in state_dict)
-
-        if has_old_keys:
-            # Collect all Linear layer indices from the old gamma MLP
-            gamma_layer_indices = set()
-            for k in state_dict:
-                if k.startswith(gamma_prefix):
-                    layer_key = k[len(gamma_prefix) :]
-                    parts = layer_key.split(".")
-                    if len(parts) == 2 and parts[1] in ("weight", "bias"):
-                        gamma_layer_indices.add(int(parts[0]))
-            first_layer_idx = min(gamma_layer_indices)
-
-            keys_to_remove = []
-            keys_to_add = {}
-
-            # handle weights and biases for the gamma MLP
-            for k in list(state_dict.keys()):
-                if k.startswith(gamma_prefix):
-                    layer_key = k[len(gamma_prefix) :]  # e.g. "0.weight"
-                    parts = layer_key.split(".")
-                    if len(parts) != 2 or parts[1] not in ("weight", "bias"):
-                        continue
-                    idx = int(parts[0])
-                    param_type = parts[1]
-                    fused_key = fused_prefix + layer_key
-                    beta_key = beta_prefix + layer_key
-
-                    if beta_key not in state_dict:
-                        continue
-
-                    gamma_val = state_dict[k]
-                    beta_val = state_dict[beta_key]
-
-                    if param_type == "bias":
-                        # Biases are always concatenated
-                        keys_to_add[fused_key] = th.cat([gamma_val, beta_val], dim=0)
-                    elif idx == first_layer_idx:
-                        # First layer: input dim is shared (condition_shape),
-                        # just concatenate along output dim
-                        keys_to_add[fused_key] = th.cat([gamma_val, beta_val], dim=0)
-                    else:
-                        # Hidden→hidden or hidden→output: block-diagonal
-                        # gamma_val: (out_old, in_old), beta_val: (out_old, in_old)
-                        # result: (2*out_old, 2*in_old)
-                        out_old, in_old = gamma_val.shape
-                        zeros = th.zeros(
-                            out_old,
-                            in_old,
-                            dtype=gamma_val.dtype,
-                            device=gamma_val.device,
-                        )
-                        keys_to_add[fused_key] = th.cat(
-                            [
-                                th.cat([gamma_val, zeros], dim=1),
-                                th.cat([zeros, beta_val], dim=1),
-                            ],
-                            dim=0,
-                        )
-
-                    keys_to_remove.append(k)
-                    if beta_key not in keys_to_remove:
-                        keys_to_remove.append(beta_key)
-
-            # handle activation submodule buffers
-            for k in list(state_dict.keys()):
-                if not k.startswith(gamma_prefix):
-                    continue
-                layer_key = k[len(gamma_prefix) :]  # e.g. "0.weight"
-                parts = layer_key.split(".", 1)
-                if len(parts) != 2:
-                    continue
-                try:
-                    int(parts[0])
-                except ValueError:
-                    continue
-                if parts[1] in ("weight", "bias"):
-                    continue
-
-                fused_key = fused_prefix + layer_key
-                keys_to_add[fused_key] = state_dict[k]
-                keys_to_remove.append(k)
-                beta_key = beta_prefix + layer_key
-                if beta_key in state_dict and beta_key not in keys_to_remove:
-                    keys_to_remove.append(beta_key)
-
-            for k in keys_to_remove:
-                if k in state_dict:
-                    del state_dict[k]
-            state_dict.update(keys_to_add)
-
-        super()._load_from_state_dict(
-            state_dict,
-            prefix,
-            local_metadata,
-            strict,
-            missing_keys,
-            unexpected_keys,
-            error_msgs,
-        )
 
     def forward(self, x: th.Tensor, conditions: th.Tensor) -> th.Tensor:
         """
