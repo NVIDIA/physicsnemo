@@ -14,8 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# TODO(Dallas) Introduce Ensemble RMSE and MSE routines.
-
 from typing import Union
 
 import torch

@@ -420,3 +420,184 @@ class Variance(EnsembleMetrics):
             return self.std
         else:
             return self.var
+
+
+class EnsembleMSE(EnsembleMetrics):
+    """Utility class that computes ensemble mean squared error over an ensemble dimension.
+
+    Compares a batch of ensemble predictions against a ground-truth target,
+    accumulating squared errors in a streaming fashion. Supports sequential
+    updates and distributed environments.
+
+    Parameters
+    ----------
+    input_shape : Union[Tuple, List]
+        Shape of the non-ensemble (spatial/channel) dimensions, i.e. the shape
+        of the target tensor.
+
+    Examples
+    --------
+    >>> metric = EnsembleMSE((72, 144), device="cpu")
+    >>> mse_val = metric(preds, target)   # preds: [N, 72, 144], target: [72, 144]
+    >>> mse_val = metric.update(more_preds, target)
+    >>> final_mse = metric.finalize()
+    """
+
+    def __init__(self, input_shape: Union[Tuple, List], **kwargs):
+        super().__init__(input_shape, **kwargs)
+        self.sum_sq_err = torch.zeros(
+            self.input_shape, dtype=self.dtype, device=self.device
+        )
+        self.n = torch.zeros([1], dtype=torch.int32, device=self.device)
+
+    def __call__(self, preds: Tensor, target: Tensor, dim: int = 0) -> Tensor:
+        """Initialise with the first batch of ensemble predictions.
+
+        Parameters
+        ----------
+        preds : Tensor
+            Ensemble predictions of shape ``[n_ensemble, *input_shape]``.
+        target : Tensor
+            Ground-truth tensor of shape ``[*input_shape]``.
+        dim : int, optional
+            Ensemble dimension of ``preds``, by default 0.
+
+        Returns
+        -------
+        Tensor
+            Running ensemble MSE using samples seen so far.
+        """
+        self._check_shape(preds)
+        if preds.device != self.device:
+            raise AssertionError(
+                f"Input device, {preds.device}, and Module device, {self.device}, must be the same."
+            )
+        sq_err = (preds - target) ** 2
+        self.sum_sq_err = torch.sum(sq_err, dim=dim)
+        self.n = torch.as_tensor([preds.shape[dim]], device=self.device)
+
+        if (
+            DistributedManager.is_initialized() and dist.is_initialized()
+        ):  # pragma: no cover
+            dist.all_reduce(self.sum_sq_err, op=dist.ReduceOp.SUM)
+            dist.all_reduce(self.n, op=dist.ReduceOp.SUM)
+
+        return self.sum_sq_err / self.n
+
+    def update(self, preds: Tensor, target: Tensor, dim: int = 0) -> Tensor:
+        """Accumulate additional ensemble members.
+
+        Parameters
+        ----------
+        preds : Tensor
+            Additional ensemble predictions of shape ``[n_ensemble, *input_shape]``.
+        target : Tensor
+            Ground-truth tensor of shape ``[*input_shape]``.
+        dim : int, optional
+            Ensemble dimension of ``preds``, by default 0.
+
+        Returns
+        -------
+        Tensor
+            Running ensemble MSE using all samples seen so far.
+        """
+        self._check_shape(preds)
+        if preds.device != self.device:
+            raise AssertionError(
+                f"Input device, {preds.device}, and Module device, {self.device}, must be the same."
+            )
+        sq_err = (preds - target) ** 2
+
+        if (
+            DistributedManager.is_initialized() and dist.is_initialized()
+        ):  # pragma: no cover
+            sums = torch.sum(sq_err, dim=dim)
+            n = torch.as_tensor([preds.shape[dim]], device=self.device)
+            dist.all_reduce(sums, op=dist.ReduceOp.SUM)
+            dist.all_reduce(n, op=dist.ReduceOp.SUM)
+            self.sum_sq_err += sums
+            self.n += n
+        else:
+            self.sum_sq_err, self.n = _update_mean(
+                self.sum_sq_err, self.n, sq_err, batch_dim=dim
+            )
+
+        return self.sum_sq_err / self.n
+
+    def finalize(self) -> Tensor:
+        """Compute and store the final ensemble MSE.
+
+        Returns
+        -------
+        Tensor
+            Final ensemble mean squared error.
+        """
+        if not (self.n > 0):
+            raise ValueError(
+                "Error! finalize() called before any samples were accumulated."
+            )
+        self.mse = self.sum_sq_err / self.n
+        return self.mse
+
+
+class EnsembleRMSE(EnsembleMSE):
+    """Utility class that computes ensemble root mean squared error over an ensemble dimension.
+
+    Identical to :class:`EnsembleMSE` but returns the square root at every
+    step, giving values in the same units as the predictions.
+
+    Parameters
+    ----------
+    input_shape : Union[Tuple, List]
+        Shape of the non-ensemble (spatial/channel) dimensions, i.e. the shape
+        of the target tensor.
+    """
+
+    def __call__(self, preds: Tensor, target: Tensor, dim: int = 0) -> Tensor:
+        """Initialise with the first batch of ensemble predictions.
+
+        Parameters
+        ----------
+        preds : Tensor
+            Ensemble predictions of shape ``[n_ensemble, *input_shape]``.
+        target : Tensor
+            Ground-truth tensor of shape ``[*input_shape]``.
+        dim : int, optional
+            Ensemble dimension of ``preds``, by default 0.
+
+        Returns
+        -------
+        Tensor
+            Running ensemble RMSE using samples seen so far.
+        """
+        return torch.sqrt(super().__call__(preds, target, dim))
+
+    def update(self, preds: Tensor, target: Tensor, dim: int = 0) -> Tensor:
+        """Accumulate additional ensemble members.
+
+        Parameters
+        ----------
+        preds : Tensor
+            Additional ensemble predictions of shape ``[n_ensemble, *input_shape]``.
+        target : Tensor
+            Ground-truth tensor of shape ``[*input_shape]``.
+        dim : int, optional
+            Ensemble dimension of ``preds``, by default 0.
+
+        Returns
+        -------
+        Tensor
+            Running ensemble RMSE using all samples seen so far.
+        """
+        return torch.sqrt(super().update(preds, target, dim))
+
+    def finalize(self) -> Tensor:
+        """Compute and store the final ensemble RMSE.
+
+        Returns
+        -------
+        Tensor
+            Final ensemble root mean squared error.
+        """
+        self.rmse = torch.sqrt(super().finalize())
+        return self.rmse

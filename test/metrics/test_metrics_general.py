@@ -853,3 +853,84 @@ def test_power_spectrum(device):
     assert (power[0, 0] < 1e-6).sum() > (
         power[0, 0].numel() * 0.9
     )  # Most bins are zero
+
+
+def test_ensemble_mse_rmse(device, rtol: float = 1e-5, atol: float = 1e-5):
+    preds = torch.randn((10, 1, 72, 144), device=device)
+    more = torch.randn((5, 1, 72, 144), device=device)
+    target = torch.randn((1, 72, 144), device=device)
+    all_preds = torch.cat([preds, more], dim=0)
+    expected_mse = torch.mean((all_preds - target) ** 2, dim=0)
+    expected_rmse = torch.sqrt(expected_mse)
+
+    # --- EnsembleMSE ---
+    M = em.EnsembleMSE((1, 72, 144), device=device)
+
+    # __call__ initialises with first batch
+    mse_x = M(preds, target)
+    assert torch.allclose(
+        mse_x, torch.mean((preds - target) ** 2, dim=0), rtol=rtol, atol=atol
+    )
+
+    # update accumulates additional ensemble members
+    mse_xy = M.update(more, target)
+    assert torch.allclose(mse_xy, expected_mse, rtol=rtol, atol=atol)
+
+    # finalize returns the same final value
+    assert torch.allclose(M.finalize(), expected_mse, rtol=rtol, atol=atol)
+
+    # wrong spatial shape should raise via _check_shape
+    with pytest.raises(ValueError):
+        M.update(torch.zeros((5, 7, 14), device=device), target)
+
+    # device mismatch should raise AssertionError (needs both CPU and GPU present)
+    if torch.cuda.is_available():
+        wrong = "cuda:0" if device == "cpu" else "cpu"
+        with pytest.raises(AssertionError):
+            M(preds.to(wrong), target)
+        with pytest.raises(AssertionError):
+            M.update(more.to(wrong), target)
+
+    # --- EnsembleRMSE ---
+    R = em.EnsembleRMSE((1, 72, 144), device=device)
+
+    # __call__
+    rmse_x = R(preds, target)
+    assert torch.allclose(
+        rmse_x,
+        torch.sqrt(torch.mean((preds - target) ** 2, dim=0)),
+        rtol=rtol,
+        atol=atol,
+    )
+
+    # update
+    rmse_xy = R.update(more, target)
+    assert torch.allclose(rmse_xy, expected_rmse, rtol=rtol, atol=atol)
+
+    # finalize
+    assert torch.allclose(R.finalize(), expected_rmse, rtol=rtol, atol=atol)
+
+    # RMSE is always non-negative
+    assert torch.all(R.finalize() >= 0.0)
+
+    # EnsembleRMSE <= EnsembleMSE when MSE > 1, else >= — just check consistency
+    assert torch.allclose(R.finalize() ** 2, M.finalize(), rtol=rtol, atol=atol)
+
+    # __call__ with wrong spatial shape should also raise via _check_shape
+    with pytest.raises(ValueError):
+        M(torch.zeros((5, 7, 14), device=device), target)
+
+    # finalize() on a fresh (uninitialized) instance should raise ValueError, not return NaN
+    with pytest.raises(ValueError):
+        em.EnsembleMSE((1, 72, 144), device=device).finalize()
+    with pytest.raises(ValueError):
+        em.EnsembleRMSE((1, 72, 144), device=device).finalize()
+
+    # EnsembleRMSE.finalize() must store self.rmse, not just self.mse
+    R2 = em.EnsembleRMSE((1, 72, 144), device=device)
+    R2(preds, target)
+    R2.finalize()
+    assert hasattr(R2, "rmse"), "EnsembleRMSE.finalize() must set self.rmse"
+    assert torch.allclose(
+        R2.rmse, torch.sqrt(R2.mse), rtol=rtol, atol=atol
+    ), "self.rmse must equal sqrt(self.mse)"
