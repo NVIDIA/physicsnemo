@@ -173,6 +173,16 @@ class DiffusionUNet3D(Module):
     :class:`~physicsnemo.diffusion.base.DiffusionModel` : Protocol this model
         implements.
 
+    Notes
+    -----
+    Mixed precision is delegated entirely to :func:`torch.autocast`. Every layer
+    keeps its parameters in their stored precision and never casts them to the
+    input dtype, so reduced-precision execution must happen inside an autocast
+    context, for example
+    ``with torch.autocast("cuda", dtype=torch.bfloat16): model(x, t)``. Feeding
+    reduced-precision inputs to a full-precision model without autocast is not
+    supported and will raise a dtype mismatch.
+
     Examples
     --------
     Unconditional model on a non-cubic grid:
@@ -296,22 +306,39 @@ class DiffusionUNet3D(Module):
             init_attn=init_attn,
         )
 
+        # amp_mode=True on every reused physicsnemo.nn layer: mixed precision is
+        # delegated to torch.autocast, so these layers keep their weights in the
+        # stored dtype rather than manually casting to the input dtype (the
+        # manual path raises inside an autocast context).
         if self.embedding_type != "zero":
             self.map_noise = (
-                PositionalEmbedding(num_channels=noise_channels, endpoint=True)
+                PositionalEmbedding(
+                    num_channels=noise_channels, endpoint=True, amp_mode=True
+                )
                 if embedding_type == "positional"
-                else FourierEmbedding(num_channels=noise_channels)
+                else FourierEmbedding(num_channels=noise_channels, amp_mode=True)
             )
             self.map_condition = (
-                Linear(in_features=vec_cond_dim, out_features=noise_channels, **init)
+                Linear(
+                    in_features=vec_cond_dim,
+                    out_features=noise_channels,
+                    amp_mode=True,
+                    **init,
+                )
                 if vec_cond_dim > 0
                 else None
             )
             self.map_layer0 = Linear(
-                in_features=noise_channels, out_features=emb_channels, **init
+                in_features=noise_channels,
+                out_features=emb_channels,
+                amp_mode=True,
+                **init,
             )
             self.map_layer1 = Linear(
-                in_features=emb_channels, out_features=emb_channels, **init
+                in_features=emb_channels,
+                out_features=emb_channels,
+                amp_mode=True,
+                **init,
             )
         else:
             # FSDP-compatible zero buffer; persistent=False keeps it out of state_dict
@@ -365,9 +392,7 @@ class DiffusionUNet3D(Module):
                 )
 
         skips = [
-            block.out_channels
-            for name, block in self.enc.items()
-            if "aux" not in name
+            block.out_channels for name, block in self.enc.items() if "aux" not in name
         ]
 
         # Decoder

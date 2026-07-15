@@ -162,6 +162,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each observation component, e.g. per-channel (`(1, C, 1, 1)`) or pointwise
   (full observation shape). Passing floats keeps the previous uniform
   behavior unchanged.
+- Adds the `urban_flow_diffusion_3d` example (externally contributed) under
+  `examples/cfd/`: a 3D diffusion prior for unconditional sampling of
+  turbulent flow fields past a single obstacle in a simplified urban
+  environment, built on
+  `physicsnemo.experimental.models.diffusion_unets.DiffusionUNet3D` with EDM
+  preconditioning and the `physicsnemo.diffusion` training/sampling
+  utilities. The denoising backbone architecture is based on Diff-SPORT
+  (arXiv:2506.00214).
 
 ### Changed
 

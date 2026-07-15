@@ -1,0 +1,102 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+#configs/evaluate/evaluate_configs.yaml
+#This is not wired in perfectly for 3d case yet, currently only shows correct comparison for reynolds stresses for a fixed y plane during training.
+unconditional:
+  dns_dir: ${paths.dataset}
+  pred_dir: ${paths.generated}/unconditional
+  stats_eval_results_dir: ${paths.evaluation}/uncond
+  predicted_snaps: 4000
+  eval_ckpt: 300
+  num: 0  # If evaluating a specific sample or snapshot index
+  z_plane: 11 #change this to unit and then use unit to pixel later
+
+plots:
+  z_plane: 11
+  y_plane: 11
+
+  common:
+    dpi: 300
+    tight_layout: True
+    obs_pos_x: -0.125
+    obs_pos_y: 0
+    obs_width: 0.25
+    obs_height: 1
+
+    x_label: "$x/h$"
+    y_label: "$y/h$"
+    time_label: "$t$"
+
+    mse_label: "$\\varepsilon$"
+    fluc_label: ["$u^{\\prime}$", "$v^{\\prime}$", "$w^{\\prime}$"]
+    mean_label: ["$\\overline{u^{\\prime}}$", "$\\overline{v^{\\prime}}$", "$\\overline{w^{\\prime}}$"]
+    x_lim: [-1, 5]
+    y_lim: [0, 2]
+    ticksize: 50
+    x_ticks: [-1, 0, 1, 2, 3, 4]
+    y_ticks: [0, 1, 1.8]
+    fontsize: 55
+
+    ds_ratio: 4
+    eval_dir: "evaluate/statistics"
+    config_name: "train-pred-compare-40k-vs-5k-top"
+
+    cmap: viridis
+
+  stats:
+    visual_compare:
+      filename: "visual_comparison"
+      figsize: [10, 5.5]
+      levels: 100
+      fontsize: 55
+      ticksize: 50
+      cmap: viridis
+
+    re_stress_planes:
+      figsize: [10, 5.5]
+      filename: "Reynolds_stresses2"
+      levels: 5
+      re_norm_stresses: ["$\\overline{u^{\\prime}u^{\\prime}}$", "$\\overline{v^{\\prime}v^{\\prime}}$", "$\\overline{u^{\\prime}v^{\\prime}}$"]
+      re_norm_stresses_p: ["$\\overline{{u^{\\prime}_p}{u^{\\prime}_p}}$", "$\\overline{{v^{\\prime}_p}{v^{\\prime}_p}}$", "$\\overline{{u^{\\prime}_p}{v^{\\prime}_p}}$"]
+      re_sh_stresses: ["$\\overline{u^{\\prime}v^{\\prime}}$", "$\\overline{u^{\\prime}w^{\\prime}}$", "$\\overline{v^{\\prime}w^{\\prime}}$"]
+      re_sh_stresses_p: ["$\\overline{{u^{\\prime}_p}{v^{\\prime}_p}}$", "$\\overline{{u^{\\prime}_p}{w^{\\prime}_p}}$", "$\\overline{{v^{\\prime}_p}{w^{\\prime}_p}}$"]
+      fontsize: 55
+      ticksize: 50
+      cmap: rainbow
+
+    jpdfs:
+      figsize: [10, 5.5]
+      filename: "jpdfs"
+      levels: 20
+      cmap: RdBu
+      fontsize: 55
+
+    mean_profiles:
+      figsize: [10, 5.5]
+      filename: "mean_vel_profiles"
+
+    re_stress_lines:
+      figsize: [10, 5.5]
+      filename: "Reynolds_stresses"
+
+    psd:
+      figsize: [10, 5.5]
+      filename: "PSD"
+
+    probe_signal:
+      figsize: [10, 5.5]
+      filename: "probe_signal"

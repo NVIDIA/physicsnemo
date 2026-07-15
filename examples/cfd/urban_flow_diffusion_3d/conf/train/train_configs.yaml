@@ -1,0 +1,57 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+#conf/train/train_configs.yaml
+# Hyperparameters
+hp:
+    epochs : 500
+    total_batch_size: 2048 #redundant in new training loop
+    # Total batch size
+    batch_size_per_gpu: 2 #"auto"
+    # Batch size per GPU -- kept tiny (2) to match the full-res sibling
+    # project: 288x88x88 volumes at model_channels=64 are memory-heavy.
+    lr: 2e-4
+    # Learning rate
+    lr_rampup: 0
+    # Rampup for learning rate, in number of epochs
+    grad_clip_threshold: null
+    # no gradient clipping for defualt non-patch-based training
+    lr_decay: 1
+    # LR decay rate
+    lr_decay_from : 1
+
+# Performance
+perf:
+    device: "cuda"
+    fp_optimizations: "fp32"
+    # Floating-point mode: one of ["fp32", "amp-fp16", "amp-bf16"]. Default fp32
+    # (no AMP). Set "amp-bf16" (or "amp-fp16") to enable torch.autocast mixed
+    # precision. Plain non-AMP "fp16" is not supported (reduced precision relies
+    # on autocast).
+    compile: false
+    dataloader_workers: 4
+    # DataLoader worker processes
+    songunet_checkpoint_level: 0 # 0 means no checkpointing
+    # Gradient checkpointing level, value is number of layers to checkpoint
+# I/O
+io:
+    # Where to load the regression checkpoint
+    print_progress_freq: 1
+    # How often to print progress
+    save_checkpoint_freq: 10
+    # How often to save the checkpoints, measured in number of processed samples
+    checkpoint_dir: ${paths.checkpoints}
+    checkpoint_format: "epoch_{epoch}_step_{step}.pt"

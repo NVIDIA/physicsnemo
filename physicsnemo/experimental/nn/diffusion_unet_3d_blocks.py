@@ -87,11 +87,13 @@ class GroupNorm3D(Module):
         self, x: Float[torch.Tensor, "B C D H W"]
     ) -> Float[torch.Tensor, "B C D H W"]:
         if self.training:
+            # Mixed precision is delegated to torch.autocast, which casts the
+            # weight/bias at the op boundary; no manual dtype matching here.
             x = torch.nn.functional.group_norm(
                 x,
                 num_groups=self.num_groups,
-                weight=self.weight.to(x.dtype),
-                bias=self.bias.to(x.dtype),
+                weight=self.weight,
+                bias=self.bias,
                 eps=self.eps,
             )
         else:
@@ -220,9 +222,7 @@ class Conv3D(Module):
             else None
         )
         self.bias = (
-            torch.nn.Parameter(
-                _weight_init((out_channels,), **init_kwargs) * init_bias
-            )
+            torch.nn.Parameter(_weight_init((out_channels,), **init_kwargs) * init_bias)
             if kernel and bias
             else None
         )
@@ -236,13 +236,11 @@ class Conv3D(Module):
     def forward(
         self, x: Float[torch.Tensor, "B C_in D H W"]
     ) -> Float[torch.Tensor, "B C_out D_out H_out W_out"]:
-        w = self.weight.to(x.dtype) if self.weight is not None else None
-        b = self.bias.to(x.dtype) if self.bias is not None else None
-        f = (
-            self.resample_filter.to(x.dtype)
-            if self.resample_filter is not None
-            else None
-        )
+        # Mixed precision is delegated to torch.autocast; parameters are used in
+        # their stored dtype and cast at the op boundary, not matched to x here.
+        w = self.weight
+        b = self.bias
+        f = self.resample_filter
         w_pad = w.shape[-1] // 2 if w is not None else 0
         f_pad = (f.shape[-1] - 1) // 2 if f is not None else 0
 
@@ -354,9 +352,7 @@ class UNetAttention3D(Module):
     ) -> None:
         super().__init__(meta=ModelMetaData())
         if not isinstance(num_heads, int) or num_heads <= 0:
-            raise ValueError(
-                f"num_heads must be a positive integer, got {num_heads}"
-            )
+            raise ValueError(f"num_heads must be a positive integer, got {num_heads}")
         if out_channels % num_heads != 0:
             raise ValueError(
                 f"out_channels must be divisible by num_heads, "
@@ -519,9 +515,13 @@ class UNetBlock3D(Module):
             resample_filter=resample_filter,
             **init,
         )
+        # amp_mode=True: this reused physicsnemo.nn.Linear defers precision to
+        # torch.autocast instead of manually casting its weights to the input
+        # dtype (which would otherwise raise inside an autocast context).
         self.affine = Linear(
             in_features=emb_channels,
             out_features=out_channels * (2 if adaptive_scale else 1),
+            amp_mode=True,
             **init,
         )
         self.norm1 = GroupNorm3D(num_channels=out_channels, eps=eps)
@@ -563,7 +563,7 @@ class UNetBlock3D(Module):
         x = self.conv0(self.act(self.norm0(x)))
 
         # Affine conditioning from emb, broadcast over spatial dims
-        params = self.affine(emb).unsqueeze(2).unsqueeze(3).unsqueeze(4).to(x.dtype)
+        params = self.affine(emb).unsqueeze(2).unsqueeze(3).unsqueeze(4)
         if self.adaptive_scale:
             scale, shift = params.chunk(chunks=2, dim=1)
             x = self.act(torch.addcmul(shift, self.norm1(x), scale + 1))

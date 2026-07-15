@@ -46,6 +46,7 @@ The several examples inside PhysicsNeMo can be classified based on their domains
 |[Vortex Shedding with Temporal Attention](./cfd/vortex_shedding_mesh_reduced/)|MeshGraphNet|YES|
 |[Data Center Airflow](./cfd/datacenter/)|3D UNet|NO|
 |[Fluid Super-resolution*](./cfd/flow_reconstruction_diffusion/)|Denoising Diffusion Probablistic Model|YES|
+|[3D Diffusion Prior for Unconditional Sampling in a Simplified Turbulent Urban Environment*](./cfd/urban_flow_diffusion_3d/)|3D Diffusion Model (DiffusionUNet3D)|YES|
 |[Pre-trained DPOT for Navier-Stokes*](./cfd/navier_stokes_dpot/)|Denoising Operator Transformer|YES|
 |[Fine-tuning of DoMINO NIM](./cfd/external_aerodynamics/domino_nim_finetuning/)|DoMINO|NO|
 |[Transolver for External Aerodynamics on Irregular Meshes](./cfd/external_aerodynamics/transolver/)|Transolver|NO|

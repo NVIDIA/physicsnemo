@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+#conf/config.yaml
+base_dir: .
+
+paths:
+  root: ${base_dir}
+  # Path to the training HDF5 file (U/V/W velocity fields at 288x88x88, see
+  # README for expected layout -- either a combined `data` dataset or
+  # separate `U`/`V`/`W` datasets, both are auto-detected). Override on the
+  # CLI, e.g.:
+  #   python train.py paths.dataset=/path/to/your/data.h5
+  dataset: ./data/urban_flow_3d.h5
+  outputs: ${paths.root}/outputs/${hydra:job.name}/${now:%Y-%m-%d_%H-%M}
+  checkpoints: ${paths.outputs}/checkpoints
+  generated: ${paths.outputs}/generated
+  evaluation: ${paths.outputs}/evaluation
+
+hydra:
+  job:
+    chdir: true
+    name: urban_flow_diffusion_3d
+  run:
+    dir: ${paths.outputs}
+
+defaults:
+  - dataset: uf-full_res
+  - model: model_configs
+  - train: train_configs
+  - generate: generate_configs
+  - evaluate: evaluate_configs
+  - visualize: visualize_configs
+  - _self_
