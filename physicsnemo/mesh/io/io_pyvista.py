@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Literal
 import numpy as np
 import torch
 from jaxtyping import Int
+from tensordict import TensorDict
 
 from physicsnemo.core.version_check import OptionalImport, require_version_spec
 from physicsnemo.mesh.mesh import Mesh
@@ -38,15 +39,24 @@ else:
     vtk = OptionalImport("vtk")
 
 
-def _vtk_data_to_tensor_dict(data) -> dict[str, torch.Tensor]:  # noqa: ANN001
-    """Convert a PyVista/VTK data container to a plain tensor dictionary."""
+def _vtk_data_to_tensor_dict(
+    data: "pv.DataSetAttributes",
+    force_copy: bool = False,
+) -> TensorDict:
+    """Convert a PyVista/VTK data container to a TensorDict.
+
+    The returned TensorDict has no batch dimensions; ``Mesh.__post_init__``
+    assigns the batch_size appropriate to the container it lands in.
+    """
     tensor_data: dict[str, torch.Tensor] = {}
     for key, value in dict(data).items():
         array = np.asarray(value)
         if not np.issubdtype(array.dtype, np.number) and array.dtype != np.bool_:
             continue
+        if force_copy:
+            array = array.copy()
         tensor_data[str(key)] = torch.as_tensor(array)
-    return tensor_data
+    return TensorDict(tensor_data, device="cpu")
 
 
 def _tensor_to_vtk_numpy(tensor: torch.Tensor) -> np.ndarray:
@@ -116,11 +126,10 @@ def from_pyvista(
         ``manifold_dim`` is lower than the detected mesh dimension. Point data
         is lost when ``point_source="cell_centroids"``.
     force_copy : bool
-        If True, copy point and cell arrays so the returned Mesh owns its
-        memory independently of the source PyVista mesh.  When False
-        (default), the returned tensors may share memory with the source
-        for efficiency; mutating the Mesh's ``points`` or ``cells`` could
-        then also modify the PyVista mesh.
+        If True, copy geometry and attached data arrays so the returned Mesh
+        owns its memory independently of the source PyVista mesh. When False
+        (default), returned tensors may share memory with the source for
+        efficiency.
 
     Returns
     -------
@@ -152,7 +161,7 @@ def from_pyvista(
     ### Handle cell_centroids path (completely separate flow)
     if point_source == "cell_centroids":
         return _from_pyvista_cell_centroids(
-            pyvista_mesh, manifold_dim, warn_on_lost_data
+            pyvista_mesh, manifold_dim, warn_on_lost_data, force_copy
         )
 
     ### Determine native mesh dimension (used for auto-detection, data-loss
@@ -313,6 +322,7 @@ def from_pyvista(
         if isinstance(pyvista_mesh, pv.PolyData):
             tri_faces = _maybe_copy(pyvista_mesh.regular_faces)
         elif isinstance(pyvista_mesh, pv.UnstructuredGrid):
+            # cells_dict materializes independent regular connectivity arrays.
             tri_faces = pyvista_mesh.cells_dict[np.uint8(pv.CellType.TRIANGLE)]
         else:
             raise NotImplementedError(
@@ -328,6 +338,7 @@ def from_pyvista(
             raise ValueError(
                 f"Expected tetrahedral cells after triangulation, but got {list(cells_dict.keys())}"
             )
+        # cells_dict materializes independent regular connectivity arrays.
         tetra_cells = cells_dict[np.uint8(pv.CellType.TETRA)]
         cells = torch.from_numpy(tetra_cells).long()
 
@@ -348,17 +359,19 @@ def from_pyvista(
     return Mesh(
         points=points,
         cells=cells,
-        point_data=_vtk_data_to_tensor_dict(pyvista_mesh.point_data),
-        cell_data=_vtk_data_to_tensor_dict(pyvista_mesh.cell_data)
+        point_data=_vtk_data_to_tensor_dict(pyvista_mesh.point_data, force_copy),
+        cell_data=_vtk_data_to_tensor_dict(pyvista_mesh.cell_data, force_copy)
         if pass_cell_data
         else {},
-        global_data=_vtk_data_to_tensor_dict(pyvista_mesh.field_data),
+        global_data=_vtk_data_to_tensor_dict(pyvista_mesh.field_data, force_copy),
     )
 
 
 @require_version_spec("pyvista")
 def to_pyvista(
     mesh: Mesh,
+    *,
+    force_copy: bool = False,
 ) -> "pv.PolyData | pv.UnstructuredGrid | pv.PointSet":
     """Convert a physicsnemo.mesh Mesh to a PyVista mesh.
 
@@ -366,6 +379,10 @@ def to_pyvista(
     ----------
     mesh : Mesh
         Input physicsnemo.mesh Mesh object.
+    force_copy : bool
+        If True, copy geometry and attached data arrays so the returned
+        PyVista object cannot mutate the source Mesh through shared CPU
+        storage. When False (default), arrays may share storage for efficiency.
 
     Returns
     -------
@@ -394,7 +411,7 @@ def to_pyvista(
     points_np = _geometry_to_vtk_numpy(mesh.points)
 
     if mesh.n_spatial_dims < 3:
-        # Pad with zeros to make 3D
+        # Pad with zeros to make 3D. np.pad already returns independent storage.
         padding_width = 3 - mesh.n_spatial_dims
         points_np = np.pad(
             points_np,
@@ -402,6 +419,8 @@ def to_pyvista(
             mode="constant",
             constant_values=0.0,
         )
+    elif force_copy:
+        points_np = points_np.copy()
 
     ### Convert based on manifold dimension
     if mesh.n_manifold_dims == 0:
@@ -412,6 +431,7 @@ def to_pyvista(
         if mesh.n_cells == 0:
             pv_mesh = pv.PolyData(points_np)
         else:
+            # _to_vtk_cell_array returns independent VTK-format connectivity.
             pv_mesh = pv.PolyData(points_np, lines=_to_vtk_cell_array(cells_np))
 
     elif mesh.n_manifold_dims == 2:
@@ -419,6 +439,8 @@ def to_pyvista(
         if mesh.n_cells == 0:
             pv_mesh = pv.PolyData(points_np)
         else:
+            if force_copy:
+                cells_np = cells_np.copy()
             pv_mesh = pv.PolyData.from_regular_faces(points_np, cells_np)
 
     elif mesh.n_manifold_dims == 3:
@@ -431,6 +453,7 @@ def to_pyvista(
             )
         else:
             celltypes = np.full(mesh.n_cells, pv.CellType.TETRA, dtype=np.uint8)
+            # _to_vtk_cell_array returns independent VTK-format connectivity.
             pv_mesh = pv.UnstructuredGrid(
                 _to_vtk_cell_array(cells_np), celltypes, points_np
             )
@@ -446,7 +469,8 @@ def to_pyvista(
     ]:
         for k, v in source.items(include_nested=True, leaves_only=True):
             arr = _tensor_to_vtk_numpy(v)
-            target[str(k)] = arr.reshape(arr.shape[0], -1) if arr.ndim > 2 else arr
+            arr = arr.reshape(arr.shape[0], -1) if arr.ndim > 2 else arr
+            target[str(k)] = arr.copy() if force_copy else arr
 
     return pv_mesh
 
@@ -455,6 +479,7 @@ def _from_pyvista_cell_centroids(
     pyvista_mesh: "pv.PolyData | pv.UnstructuredGrid",
     manifold_dim: int | Literal["auto"],
     warn_on_lost_data: bool,
+    force_copy: bool,
 ) -> Mesh:
     """Build a Mesh from cell centroids, mapping cell_data to point_data.
 
@@ -467,6 +492,8 @@ def _from_pyvista_cell_centroids(
         share a (d-1)-facet). "auto" resolves to 0.
     warn_on_lost_data : bool
         Emit a warning if non-empty point_data will be discarded.
+    force_copy : bool
+        Copy attached data arrays instead of sharing their storage.
 
     Returns
     -------
@@ -505,8 +532,8 @@ def _from_pyvista_cell_centroids(
     return Mesh(
         points=points,
         cells=cells,
-        point_data=_vtk_data_to_tensor_dict(pyvista_mesh.cell_data),
-        global_data=_vtk_data_to_tensor_dict(pyvista_mesh.field_data),
+        point_data=_vtk_data_to_tensor_dict(pyvista_mesh.cell_data, force_copy),
+        global_data=_vtk_data_to_tensor_dict(pyvista_mesh.field_data, force_copy),
     )
 
 

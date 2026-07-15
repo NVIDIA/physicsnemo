@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds dimension-generic volume mesh generation for implicit domains to
+  `physicsnemo.mesh.generate`. `mesh_implicit_domain` meshes
+  `{x : phi(x) < 0}`, clipped to the bounding box (box faces are honored
+  as a boundary, so that external-flow "box minus obstacle" domains work
+  directly), for any implicit function (signed-distance functions, level
+  sets, or neural fields).
+- Adds `integrate_moment` and `Mesh.integrate_moment` for measure-weighted
+  outer-product moments. Mesh integration APIs now accept `nan_policy`.
+- Adds per-cell measure weights that are preserved through cell subsampling
+  and consumed by mesh integration routines and GLOBE.
+- Adds a `global_shape` argument to `ShardTensor.from_local`, enabling the
+  no-communication `sharding_shapes="chunk"` path.
 - Adds exact-boundary quality mesh generation to
   `physicsnemo.mesh.tessellation`: `fill_interior` takes a closed
   codimension-one boundary `Mesh` (2D edge loops today; loops in any order
@@ -144,6 +156,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   datapipes implementation (`physicsnemo.datapipes.transforms._sdf_torch` /
   `_sdf_triton`, including its bespoke Triton winding kernel) is superseded and
   removed; the public datapipes SDF transform delegates here.
+- Added an iterable style dataset to physicsnemo datapipes, for on-the-fly gpu simulations.
 - DPS guidance now supports **non-uniform guidance strength**: the `std_y` and
   `gamma` arguments of `physicsnemo.diffusion.guidance.ModelConsistencyDPSGuidance`
   / `DataConsistencyDPSGuidance` and their
@@ -152,9 +165,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each observation component, e.g. per-channel (`(1, C, 1, 1)`) or pointwise
   (full observation shape). Passing floats keeps the previous uniform
   behavior unchanged.
+- Adds `relative_mse` and `relative_l2` (target-normalized regression errors,
+  `relative_l2 = sqrt(relative_mse)`) to `physicsnemo.metrics.general`
+  (`relative_error.py`), with optional element `weights` and `dim`-based
+  reduction matching `general.mse`.
+- `physicsnemo.metrics.general.mse` `mse`/`rmse` gain an optional `weights`
+  argument for a masked/weighted mean (backward-compatible; `weights=None`
+  reproduces the prior unweighted result).
 
 ### Changed
 
+- Optimizes the production container build by consolidating related filesystem
+  operations, using BuildKit bind and cache mounts, and separating custom,
+  declared, and project dependency installation. Reduces total physicsnemo layers
+  by around 78%.
+- `ShardTensor.redistribute` now computes receive shapes analytically when
+  sharding shapes are known, skipping the shape-negotiation `all_to_all`
+  collective (falls back to the collective only when shapes are unavailable).
 - PhysicsNeMo-Mesh tensor-valued gradients now consistently use the documented
   derivative-first layout `(entity, spatial_dimension, *value_shape)` across
   LSQ, intrinsic LSQ, and DEC. Earlier LSQ releases returned
@@ -202,6 +229,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   use `torch.no_grad()`, not `torch.inference_mode()`). Also expands CI test
   coverage and adds an API documentation page for
   `physicsnemo.diffusion.multi_diffusion`.
+- Performance improvements in IO prefetching and GPU preprocessing in physicsnemo datapipes.
 - &#9888;&#65039; **BC-impact (DPS guidance):** a custom `norm` callback passed to
   `physicsnemo.diffusion.guidance.ModelConsistencyDPSGuidance` /
   `DataConsistencyDPSGuidance` (and their `physicsnemo.diffusion.multi_diffusion`
@@ -220,10 +248,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Deprecated
 
+- `physicsnemo.mesh.calculus.integrate_cell_data` and `integrate_point_data`
+  are deprecated in favor of `integrate(..., data_source="cells"|"points")`.
+  Compatibility wrappers remain available for this release and emit
+  `LegacyFeatureWarning`.
+
 ### Removed
 
 ### Fixed
 
+- Datapipe contiguous-block subsampling now wraps cyclically, giving boundary
+  and interior elements equal inclusion probability.
+- Cell-subsampled GLOBE inputs now retain their effective integration measure,
+  preventing area-weighted outputs and gradients from collapsing.
+- `physicsnemo.mesh.io.from_pyvista(..., force_copy=True)` now copies attached
+  point, cell, and global data as well as geometry. The matching new
+  `to_pyvista(..., force_copy=True)` option prevents exported PyVista geometry
+  and data from mutating the source `Mesh` through shared CPU storage.
 - `physicsnemo.mesh.sampling.sample_data_at_points` now handles integer and
   boolean fields by returning `float64`, so NaN sentinels and non-integral
   interpolation or multi-cell means are representable (subject to the usual
