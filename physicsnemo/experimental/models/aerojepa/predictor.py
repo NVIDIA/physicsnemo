@@ -136,6 +136,7 @@ class PrototypeTokenJEPAHead(Module):
                 out_features=self.hidden_dim,
                 act_layer=nn.SiLU,
                 final_dropout=False,
+                use_te=use_te,
             )
             block_conditioning_dim = self.hidden_dim
         self.self_blocks = nn.ModuleList(
