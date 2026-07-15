@@ -782,6 +782,19 @@ class DomainMesh:
             New domain with deformed component meshes and unchanged domain
             data.
 
+        Raises
+        ------
+        TypeError
+            If tensors, lattice values, or point weights have unsupported
+            types or dtypes.
+        ValueError
+            If component layouts, lattice configuration, point weights, or
+            ``basis`` are invalid.
+        KeyError
+            If a point-data key or ``implementation`` name is not found.
+        ImportError
+            If an explicitly requested backend is unavailable.
+
         Notes
         -----
         Connectivity and attached mesh and domain data are retained. Attached

@@ -196,6 +196,19 @@ def ffd(
         New mesh with deformed points and unchanged connectivity and attached
         fields.
 
+    Raises
+    ------
+    TypeError
+        If tensors, lattice values, or point weights have unsupported types or
+        dtypes.
+    ValueError
+        If shapes, devices, lattice configuration, point weights, or ``basis``
+        are invalid.
+    KeyError
+        If a point-data key or ``implementation`` name is not found.
+    ImportError
+        If an explicitly requested backend is unavailable.
+
     Notes
     -----
     Attached fields are treated as Lagrangian data and are not pushed forward.

@@ -22,6 +22,7 @@ from collections.abc import Sequence
 from typing import Literal
 
 import torch
+from jaxtyping import Bool, Float
 
 from physicsnemo.core.function_spec import FunctionSpec
 
@@ -146,6 +147,18 @@ class FFDPoints(FunctionSpec):
     -------
     torch.Tensor
         Deformed points with the same shape, dtype, and device as ``points``.
+
+    Raises
+    ------
+    TypeError
+        If tensor dtypes or Python argument types are unsupported.
+    ValueError
+        If tensor shapes, devices, lattice configuration, point weights, or
+        ``basis`` are invalid.
+    KeyError
+        If ``implementation`` does not name a registered backend.
+    ImportError
+        If an explicitly requested backend is unavailable.
 
     Notes
     -----
@@ -295,17 +308,49 @@ class FFDPoints(FunctionSpec):
 
     @FunctionSpec.register(name="warp", required_imports=("warp>=0.6.0",), rank=0)
     def warp_forward(
-        points: torch.Tensor,
-        control_displacements: torch.Tensor,
+        points: Float[torch.Tensor, "*batch num_points num_dims"],
+        control_displacements: Float[torch.Tensor, "... num_dims"],
         *,
-        origin: torch.Tensor | Sequence[float],
-        extent: torch.Tensor | Sequence[float],
+        origin: Float[torch.Tensor, "... num_dims"] | Sequence[float],
+        extent: Float[torch.Tensor, "... num_dims"] | Sequence[float],
         basis: Literal[
             "bernstein", "bspline", "linear", "smoothstep", "smootherstep"
         ] = "bernstein",
-        point_weights: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """Apply lattice free-form deformation with the Warp backend."""
+        point_weights: Bool[torch.Tensor, "*batch num_points"]
+        | Float[torch.Tensor, "*batch num_points"]
+        | None = None,
+    ) -> Float[torch.Tensor, "*batch num_points num_dims"]:
+        """Apply lattice free-form deformation with the Warp backend.
+
+        Parameters
+        ----------
+        points : torch.Tensor
+            Unbatched ``(N, D)`` or batched ``(B, N, D)`` query points.
+        control_displacements : torch.Tensor
+            Unbatched or batch-aligned lattice displacement vectors whose last
+            dimension is ``D``.
+        origin, extent : torch.Tensor or sequence of float
+            Lattice-box origin and edge lengths with shape ``(D,)`` or
+            batch-aligned shape ``(B, D)``.
+        basis : {"bernstein", "bspline", "linear", "smoothstep", "smootherstep"}, optional
+            Tensor-product lattice basis.
+        point_weights : torch.Tensor or None, optional
+            Optional bool or floating per-point weights.
+
+        Returns
+        -------
+        torch.Tensor
+            Deformed points with the same shape, dtype, and device as
+            ``points``.
+
+        Raises
+        ------
+        TypeError
+            If tensor dtypes or Python argument types are unsupported.
+        ValueError
+            If shapes, devices, lattice configuration, weights, or ``basis``
+            are invalid.
+        """
 
         _validate_basis(basis)
         (
@@ -332,17 +377,49 @@ class FFDPoints(FunctionSpec):
 
     @FunctionSpec.register(name="torch", rank=1, baseline=True)
     def torch_forward(
-        points: torch.Tensor,
-        control_displacements: torch.Tensor,
+        points: Float[torch.Tensor, "*batch num_points num_dims"],
+        control_displacements: Float[torch.Tensor, "... num_dims"],
         *,
-        origin: torch.Tensor | Sequence[float],
-        extent: torch.Tensor | Sequence[float],
+        origin: Float[torch.Tensor, "... num_dims"] | Sequence[float],
+        extent: Float[torch.Tensor, "... num_dims"] | Sequence[float],
         basis: Literal[
             "bernstein", "bspline", "linear", "smoothstep", "smootherstep"
         ] = "bernstein",
-        point_weights: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """Apply lattice free-form deformation with the pure-Torch backend."""
+        point_weights: Bool[torch.Tensor, "*batch num_points"]
+        | Float[torch.Tensor, "*batch num_points"]
+        | None = None,
+    ) -> Float[torch.Tensor, "*batch num_points num_dims"]:
+        """Apply lattice free-form deformation with the Torch backend.
+
+        Parameters
+        ----------
+        points : torch.Tensor
+            Unbatched ``(N, D)`` or batched ``(B, N, D)`` query points.
+        control_displacements : torch.Tensor
+            Unbatched or batch-aligned lattice displacement vectors whose last
+            dimension is ``D``.
+        origin, extent : torch.Tensor or sequence of float
+            Lattice-box origin and edge lengths with shape ``(D,)`` or
+            batch-aligned shape ``(B, D)``.
+        basis : {"bernstein", "bspline", "linear", "smoothstep", "smootherstep"}, optional
+            Tensor-product lattice basis.
+        point_weights : torch.Tensor or None, optional
+            Optional bool or floating per-point weights.
+
+        Returns
+        -------
+        torch.Tensor
+            Deformed points with the same shape, dtype, and device as
+            ``points``.
+
+        Raises
+        ------
+        TypeError
+            If tensor dtypes or Python argument types are unsupported.
+        ValueError
+            If shapes, devices, lattice configuration, weights, or ``basis``
+            are invalid.
+        """
 
         _validate_basis(basis)
         (
@@ -370,21 +447,59 @@ class FFDPoints(FunctionSpec):
     @classmethod
     def dispatch(
         cls,
-        points: torch.Tensor,
-        control_displacements: torch.Tensor,
+        points: Float[torch.Tensor, "*batch num_points num_dims"],
+        control_displacements: Float[torch.Tensor, "... num_dims"],
         *,
-        origin: torch.Tensor | Sequence[float],
-        extent: torch.Tensor | Sequence[float],
+        origin: Float[torch.Tensor, "... num_dims"] | Sequence[float],
+        extent: Float[torch.Tensor, "... num_dims"] | Sequence[float],
         basis: Literal[
             "bernstein", "bspline", "linear", "smoothstep", "smootherstep"
         ] = "bernstein",
-        point_weights: torch.Tensor | None = None,
+        point_weights: Bool[torch.Tensor, "*batch num_points"]
+        | Float[torch.Tensor, "*batch num_points"]
+        | None = None,
         implementation: Literal["torch", "warp"] | None = None,
-    ) -> torch.Tensor:
+    ) -> Float[torch.Tensor, "*batch num_points num_dims"]:
         """Select Warp for CUDA inputs and Torch for CPU inputs by default.
 
         Falling back to Torch on CUDA inputs because Warp is unavailable emits
         the standard one-time :class:`RuntimeWarning`.
+
+        Parameters
+        ----------
+        points : torch.Tensor
+            Unbatched ``(N, D)`` or batched ``(B, N, D)`` query points.
+        control_displacements : torch.Tensor
+            Unbatched or batch-aligned lattice displacement vectors whose last
+            dimension is ``D``.
+        origin, extent : torch.Tensor or sequence of float
+            Lattice-box origin and edge lengths with shape ``(D,)`` or
+            batch-aligned shape ``(B, D)``.
+        basis : {"bernstein", "bspline", "linear", "smoothstep", "smootherstep"}, optional
+            Tensor-product lattice basis.
+        point_weights : torch.Tensor or None, optional
+            Optional bool or floating per-point weights.
+        implementation : {"torch", "warp"} or None, optional
+            Explicit backend selection. ``None`` selects according to the
+            point device and backend availability.
+
+        Returns
+        -------
+        torch.Tensor
+            Deformed points with the same shape, dtype, and device as
+            ``points``.
+
+        Raises
+        ------
+        TypeError
+            If tensor dtypes or Python argument types are unsupported.
+        ValueError
+            If shapes, devices, lattice configuration, weights, or ``basis``
+            are invalid.
+        KeyError
+            If ``implementation`` does not name a registered backend.
+        ImportError
+            If an explicitly requested backend is unavailable.
         """
 
         if implementation is None:
@@ -410,7 +525,18 @@ class FFDPoints(FunctionSpec):
 
     @classmethod
     def make_inputs_forward(cls, device: torch.device | str = "cpu"):
-        """Yield representative lattice free-form deformation forward cases."""
+        """Yield representative forward benchmark cases.
+
+        Parameters
+        ----------
+        device : torch.device or str, optional
+            Device on which to construct the benchmark tensors.
+
+        Yields
+        ------
+        tuple
+            Benchmark label, positional arguments, and keyword arguments.
+        """
 
         device = torch.device(device)
         for seed, (
@@ -471,7 +597,19 @@ class FFDPoints(FunctionSpec):
 
     @classmethod
     def make_inputs_backward(cls, device: torch.device | str = "cpu"):
-        """Yield differentiable lattice free-form deformation parity cases."""
+        """Yield representative backward benchmark cases.
+
+        Parameters
+        ----------
+        device : torch.device or str, optional
+            Device on which to construct the benchmark tensors.
+
+        Yields
+        ------
+        tuple
+            Benchmark label, differentiable positional arguments, and keyword
+            arguments.
+        """
 
         device = torch.device(device)
         for (
@@ -522,16 +660,46 @@ class FFDPoints(FunctionSpec):
             )
 
     @classmethod
-    def compare_forward(cls, output: torch.Tensor, reference: torch.Tensor) -> None:
-        """Compare lattice free-form deformation outputs across backends."""
+    def compare_forward(
+        cls,
+        output: Float[torch.Tensor, "*batch num_points num_dims"],
+        reference: Float[torch.Tensor, "*batch num_points num_dims"],
+    ) -> None:
+        """Compare forward results from two backends.
+
+        Parameters
+        ----------
+        output, reference : torch.Tensor
+            Backend result and baseline result with matching point shapes.
+
+        Raises
+        ------
+        AssertionError
+            If the results differ beyond the configured tolerances.
+        """
 
         torch.testing.assert_close(
             output, reference, atol=cls._COMPARE_ATOL, rtol=cls._COMPARE_RTOL
         )
 
     @classmethod
-    def compare_backward(cls, output: torch.Tensor, reference: torch.Tensor) -> None:
-        """Compare lattice free-form deformation gradients across backends."""
+    def compare_backward(
+        cls,
+        output: Float[torch.Tensor, "..."],
+        reference: Float[torch.Tensor, "..."],
+    ) -> None:
+        """Compare backward results from two backends.
+
+        Parameters
+        ----------
+        output, reference : torch.Tensor
+            Backend gradient and baseline gradient with matching shapes.
+
+        Raises
+        ------
+        AssertionError
+            If the gradients differ beyond the configured tolerances.
+        """
 
         torch.testing.assert_close(
             output,
