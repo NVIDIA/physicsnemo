@@ -88,6 +88,7 @@ class ArrayScaler:
 
     @classmethod
     def fit(cls, values: np.ndarray, kind: Normalization = "standard") -> "ArrayScaler":
+        """Fit scaler statistics from a 2-D array of shape (N, C)."""
         if kind == "minmax":
             mean = values.min(axis=0)
             std = values.max(axis=0) - mean
@@ -103,6 +104,7 @@ class ArrayScaler:
 
     @classmethod
     def from_state(cls, state: dict[str, Any]) -> "ArrayScaler":
+        """Restore an ArrayScaler from a state dict produced by state_dict()."""
         return cls(
             mean=np.asarray(state["mean"], dtype=np.float32),
             std=np.asarray(state["std"], dtype=np.float32),
@@ -110,15 +112,19 @@ class ArrayScaler:
         )
 
     def transform(self, values: np.ndarray) -> np.ndarray:
+        """Normalize values using fitted mean and std."""
         return ((values - self.mean) / self.std).astype(np.float32)
 
     def inverse_transform(self, values: np.ndarray) -> np.ndarray:
+        """Invert normalization for all channels."""
         return (values * self.std + self.mean).astype(np.float32)
 
     def inverse_last_channel(self, values: np.ndarray) -> np.ndarray:
+        """Invert normalization for the last channel only (the power target)."""
         return values * self.std[-1] + self.mean[-1]
 
     def state_dict(self) -> dict[str, Any]:
+        """Return serializable scaler state for checkpoint saving."""
         return {
             "mean": self.mean.tolist(),
             "std": self.std.tolist(),
@@ -303,11 +309,13 @@ class RealPVDataset(Dataset):
         }
 
     def target_times(self, index: int) -> list[np.datetime64]:
+        """Return the forecast timestamps for sample at index."""
         start = self.window_starts[index] + 2 * self.cfg.seq_len
         end = start + self.cfg.pred_len
         return list(self.times[start:end])
 
     def raw_primary_target(self, index: int) -> np.ndarray:
+        """Return un-normalized power values for the forecast window at index."""
         start = self.window_starts[index] + 2 * self.cfg.seq_len
         end = start + self.cfg.pred_len
         return self.raw_target[start:end]

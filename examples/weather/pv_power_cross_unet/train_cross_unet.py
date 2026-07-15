@@ -139,6 +139,7 @@ def _move(batch: dict[str, torch.Tensor], device) -> dict[str, torch.Tensor]:
 
 @hydra.main(version_base="1.2", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
+    """Hydra entrypoint: train Cross-Unet on synthetic PV data."""
     DistributedManager.initialize()
     dist = DistributedManager()
     LaunchLogger.initialize()

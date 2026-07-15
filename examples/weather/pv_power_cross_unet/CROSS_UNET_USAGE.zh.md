@@ -24,7 +24,6 @@ pip install -r examples/weather/pv_power_cross_unet/requirements.txt
 - 至少一列天气数据
 - 时间戳严格按 15 分钟间隔排列，不能有重复时间或缺失
 
-
 可以在 `conf/real_data.yaml` 中修改列名，也可以用 Hydra override：
 
 ```yaml
@@ -130,4 +129,3 @@ mae,mse,rmse,r2,best_valid_loss,epoch,checkpoint_path,prediction_path
 ```
 
 MAE、MSE、RMSE、R2 会在所有预测步展平后统一计算。
-

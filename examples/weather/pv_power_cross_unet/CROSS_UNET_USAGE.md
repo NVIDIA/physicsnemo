@@ -3,8 +3,9 @@
 
 # Cross-Unet Real PV Data Usage
 
-This guide describes how to use Cross-Unet to conduct photovoltaic power prediction. The workflow reads one CSV file at a
-15-minute cadence and uses user-specified column names for time, power, and weather inputs.
+This guide describes how to use Cross-Unet for photovoltaic power prediction.
+The workflow reads one CSV file at a 15-minute cadence and uses user-specified
+column names for time, power, and weather inputs.
 
 ## 1. Environment
 
@@ -131,4 +132,3 @@ mae,mse,rmse,r2,best_valid_loss,epoch,checkpoint_path,prediction_path
 
 MAE, MSE, RMSE, and R2 are computed over all forecast steps after flattening
 the prediction and target arrays.
-
