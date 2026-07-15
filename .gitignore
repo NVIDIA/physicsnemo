@@ -125,7 +125,6 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-.venv-dlesym/
 
 # Spyder project settings
 .spyderproject
