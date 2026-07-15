@@ -253,6 +253,14 @@ class RealPVDataset(Dataset):
             )
 
         ranges = _split_ranges(len(frame))
+        for split_name in ("valid", "test"):
+            s, e = ranges[split_name]
+            if e - s < cfg.pred_len:
+                raise ValueError(
+                    f"{cfg.data_file}: the {split_name} split has only {e - s} rows "
+                    f"but pred_len={cfg.pred_len} requires at least {cfg.pred_len}. "
+                    f"Use a larger dataset or a shorter pred_len."
+                )
         train_start, train_end = ranges["train"]
         split_start, split_end = ranges[split]
         self.split_target_start_time = (
@@ -557,8 +565,17 @@ def _run_prediction(cfg: DictConfig) -> tuple[Path, dict[str, float], dict[str, 
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
 
     saved_data_cfg = checkpoint["data_config"]
+    # Prefer the data_file from the current config so users can redirect to a
+    # new path; fall back to the checkpoint's saved path if the override does
+    # not resolve to an existing file (e.g. the placeholder default).
+    data_file_override = Path(to_absolute_path(str(cfg.data_file)))
+    data_file = (
+        data_file_override
+        if data_file_override.is_file()
+        else Path(to_absolute_path(str(saved_data_cfg["data_file"])))
+    )
     data_cfg = RealPVDataConfig(
-        data_file=Path(to_absolute_path(str(saved_data_cfg["data_file"]))),
+        data_file=data_file,
         time_col=saved_data_cfg["time_col"],
         target_col=saved_data_cfg["target_col"],
         weather_cols=list(saved_data_cfg["weather_cols"]),
