@@ -47,9 +47,18 @@ if ST_AVAILABLE:
     # In minumum versions are met, we can import the shard tensor and spec.
 
     from ._shard_tensor_spec import ShardTensorSpec
-    from .shard_tensor import ShardTensor, scatter_tensor
+    from .shard_tensor import (
+        ShardTensor,
+        TensorPromotionMode,
+        scatter_tensor,
+    )
 
     def register_custom_ops():
+        """Register all custom ShardTensor ops and shard-aware wrappers.
+
+        Imports are deferred to this function to avoid an import cycle between
+        ``shard_tensor`` and the individual op modules.
+        """
         # These imports will register the custom ops with the ShardTensor class.
         # It's done here to avoid an import cycle.
         from .custom_ops import (  # noqa: F401
@@ -69,3 +78,4 @@ else:
     ShardTensor = None
     ShardTensorSpec = None
     scatter_tensor = None
+    TensorPromotionMode = None

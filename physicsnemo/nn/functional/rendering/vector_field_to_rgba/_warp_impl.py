@@ -88,7 +88,7 @@ def vector_field_to_rgba_impl(
         *vector_field.shape[:3], 4, device=vector_field.device, dtype=torch.uint8
     )
     wp_device, wp_stream = FunctionSpec.warp_launch_context(vector_fp32)
-    with wp.ScopedStream(wp_stream):
+    with FunctionSpec.warp_stream_scope(wp_stream):
         wp.launch(
             _vector_field_to_rgba_kernel,
             dim=tuple(int(size) for size in vector_field.shape[:3]),

@@ -50,6 +50,71 @@ CODING_STANDARDS/FUNCTIONAL_APIS.md @loliverhennigh
 docs/ @megnvidia @ktangsali
 docs/img/
 
+# Documentation API pages follow the same ownership as the corresponding source
+# modules. Pages without a source module owner default to @megnvidia @ktangsali.
+docs/api/physicsnemo.core.rst @megnvidia @coreyjadams @CharlelieLrt @ktangsali
+docs/api/physicsnemo.distributed.rst @megnvidia @coreyjadams
+docs/api/physicsnemo.domain_parallel.rst @megnvidia @coreyjadams
+docs/api/physicsnemo.optim.rst @megnvidia @peterdsharpe
+docs/api/physicsnemo.sym.rst @megnvidia @ktangsali
+docs/api/physicsnemo.active_learning.rst @megnvidia @laserkelvin @dallasfoster
+
+# Datapipes documentation
+docs/api/datapipes/physicsnemo.datapipes.rst @megnvidia @coreyjadams
+docs/api/datapipes/physicsnemo.datapipes.benchmarks.rst @megnvidia @ktangsali
+docs/api/datapipes/physicsnemo.datapipes.cae.rst @megnvidia @RishikeshRanade @coreyjadams @mnabian
+docs/api/datapipes/physicsnemo.datapipes.climate.rst @megnvidia @dallasfoster @nickgeneva @pzharrington
+docs/api/datapipes/physicsnemo.datapipes.gnn.rst @megnvidia @mnabian
+docs/api/datapipes/physicsnemo.datapipes.readers.rst @megnvidia @coreyjadams
+docs/api/datapipes/physicsnemo.datapipes.transforms.rst @megnvidia @coreyjadams
+
+# Mesh documentation
+docs/api/mesh/ @megnvidia @peterdsharpe
+
+# Metrics documentation
+docs/api/physicsnemo.metrics.rst @megnvidia @dallasfoster @nickgeneva
+
+# Diffusion documentation
+docs/api/diffusion/ @megnvidia @CharlelieLrt
+
+# Model documentation
+docs/api/models/convolutional.rst @megnvidia @dallasfoster @ktangsali
+docs/api/models/diffusion_unets.rst @megnvidia @CharlelieLrt
+docs/api/models/dit.rst @megnvidia @pzharrington
+docs/api/models/fnos.rst @megnvidia @ktangsali
+docs/api/models/fully_connected.rst @megnvidia @peterdsharpe
+docs/api/models/gnns.rst @megnvidia @mnabian
+docs/api/models/modules.rst @megnvidia @coreyjadams @CharlelieLrt @ktangsali @peterdsharpe
+docs/api/models/operators.rst @megnvidia @RishikeshRanade @coreyjadams @peterdsharpe
+docs/api/models/recurrent.rst @megnvidia @ktangsali
+docs/api/models/transolver.rst @megnvidia @coreyjadams
+docs/api/models/weather.rst @megnvidia @dallasfoster @pzharrington @mnabian
+
+# Neural network layer and functional documentation
+docs/api/physicsnemo.nn.rst @megnvidia @loliverhennigh
+docs/api/physicsnemo.nn.layers.rst @megnvidia @loliverhennigh
+docs/api/physicsnemo.nn.functionals.rst @megnvidia @loliverhennigh
+docs/api/nn/ @megnvidia @loliverhennigh
+docs/api/nn/functionals/geometry.rst @megnvidia @RishikeshRanade @loliverhennigh
+docs/api/nn/functionals/neighbors.rst @megnvidia @coreyjadams @peterdsharpe @loliverhennigh
+docs/api/nn/layers/attention_transformers.rst @megnvidia @pzharrington @CharlelieLrt @ktangsali @loliverhennigh
+docs/api/nn/layers/convolutional.rst @megnvidia @mnabian @CharlelieLrt
+docs/api/nn/layers/embeddings.rst @megnvidia @CharlelieLrt
+docs/api/nn/layers/fourier_spectral.rst @megnvidia @ktangsali @loliverhennigh
+docs/api/nn/layers/fully_connected_mlp.rst @megnvidia @ktangsali @loliverhennigh
+docs/api/nn/layers/graph_geometry.rst @megnvidia @mnabian @loliverhennigh
+docs/api/nn/layers/specialized.rst @megnvidia @CharlelieLrt @loliverhennigh
+
+# Utilities documentation
+docs/api/physicsnemo.utils.rst @megnvidia @nickgeneva @ktangsali @CharlelieLrt @pzharrington @coreyjadams
+
+# Documentation build scripts and build validation
+docs/Makefile @megnvidia @ktangsali
+docs/conf.py @megnvidia @ktangsali
+docs/rewrite_examples_image_paths.lua @megnvidia @ktangsali
+docs/test_runner.py @megnvidia @ktangsali
+docs/test_scripts/ @megnvidia @ktangsali
+
 # ==============================================================================
 # BENCHMARKS
 # ==============================================================================

@@ -21,8 +21,14 @@ that are under active development. These components may have breaking API
 changes between releases.
 """
 
-from .diffusion_unet_3d_blocks import Conv3D, GroupNorm3D, UNetAttention3D, UNetBlock3D
 from .flare_attention import FLARE
+from .diffusion_unet_3d_blocks import UNetBlock3D, Conv3D, GroupNorm3D, UNetAttention3D
+from .rope import (
+    build_axial_rope_cos_sin_2d_continuous,
+    build_rope_cos_sin_1d_continuous,
+    spherical_centroid,
+    stereographic_projection,
+)
 from .point_tokenizer import PointCloudTokenizer
 from .point_utils import (
     chunked_knn_indices,
@@ -36,12 +42,16 @@ from .point_utils import (
 )
 
 __all__ = [
-    "Conv3D",
     "FLARE",
-    "GroupNorm3D",
-    "PointCloudTokenizer",
-    "UNetAttention3D",
     "UNetBlock3D",
+    "Conv3D",
+    "GroupNorm3D",
+    "UNetAttention3D",
+    "build_axial_rope_cos_sin_2d_continuous",
+    "build_rope_cos_sin_1d_continuous",
+    "spherical_centroid",
+    "stereographic_projection",
+    "PointCloudTokenizer",
     "chunked_knn_indices",
     "compute_batch_offset_step",
     "counts_to_mask",

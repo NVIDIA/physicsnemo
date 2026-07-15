@@ -159,6 +159,19 @@ class TestPadBasic:
         assert torch.all(padded.cells[1] == 2)
         assert torch.all(padded.cells[2] == 2)
 
+    def test_cached_padded_cell_centroids_match_geometry(self):
+        """Padding must not make cell centroids depend on prior cache access."""
+        mesh = Mesh(
+            points=torch.tensor([[2.0, 3.0], [4.0, 3.0], [2.0, 5.0]]),
+            cells=torch.tensor([[0, 1, 2]]),
+        )
+        _ = mesh.cell_centroids
+
+        padded = mesh.pad(target_n_cells=3)
+        uncached = Mesh(points=padded.points, cells=padded.cells)
+
+        torch.testing.assert_close(padded.cell_centroids, uncached.cell_centroids)
+
 
 class TestPadWithData:
     """Tests for padding with point_data and cell_data."""
@@ -217,6 +230,31 @@ class TestPadWithData:
 
         assert torch.allclose(padded.point_data["temperature"][:10], original_temp)
 
+    @pytest.mark.parametrize(
+        ("values", "expected_dtype"),
+        [
+            (torch.tensor([1, 2, 3]), torch.int64),
+            (torch.tensor([True, False, True]), torch.bool),
+        ],
+    )
+    def test_default_padding_preserves_discrete_field_dtype(
+        self, values, expected_dtype
+    ):
+        """NaN defaults to zero for dtypes that cannot represent NaN."""
+        mesh = Mesh(
+            points=torch.tensor([[0.0], [1.0], [2.0]]),
+            cells=torch.tensor([[0, 1], [1, 2]]),
+            point_data={"label": values},
+        )
+
+        padded = mesh.pad(target_n_points=5)
+
+        assert padded.point_data["label"].dtype == expected_dtype
+        torch.testing.assert_close(padded.point_data["label"][:3], values)
+        torch.testing.assert_close(
+            padded.point_data["label"][3:], torch.zeros(2, dtype=expected_dtype)
+        )
+
 
 class TestPadErrors:
     """Tests for error handling in pad()."""
@@ -234,6 +272,15 @@ class TestPadErrors:
 
         with pytest.raises(ValueError, match="target_n_cells=.* must be >= "):
             mesh.pad(target_n_cells=3)
+
+    def test_pad_cells_requires_a_point(self):
+        mesh = Mesh(
+            points=torch.empty((0, 2)),
+            cells=torch.empty((0, 3), dtype=torch.long),
+        )
+
+        with pytest.raises(ValueError, match="without at least one mesh point"):
+            mesh.pad(target_n_cells=1)
 
 
 class TestPadToNextPowerBasic:
@@ -443,6 +490,30 @@ class TestPadEdgeCases:
         assert padded.n_cells == 5
         # All cells should reference the last point index (2)
         assert torch.all(padded.cells == 2)
+
+    def test_pad_empty_mesh(self):
+        mesh = Mesh(
+            points=torch.empty((0, 2)),
+            cells=torch.empty((0, 3), dtype=torch.long),
+        )
+
+        padded = mesh.pad(target_n_points=2, target_n_cells=3)
+
+        torch.testing.assert_close(padded.points, torch.zeros((2, 2)))
+        assert torch.equal(padded.cells, torch.zeros((3, 3), dtype=torch.long))
+        assert torch.equal(padded.cell_areas, torch.zeros(3))
+
+    def test_pad_empty_mesh_to_next_power(self):
+        mesh = Mesh(
+            points=torch.empty((0, 2)),
+            cells=torch.empty((0, 3), dtype=torch.long),
+        )
+
+        padded = mesh.pad_to_next_power(power=2.0)
+
+        assert padded.points.shape == (1, 2)
+        assert padded.cells.shape == (1, 3)
+        assert torch.equal(padded.cells, torch.zeros((1, 3), dtype=torch.long))
 
     def test_pad_preserves_global_data(self):
         """Test that global_data is preserved unchanged."""

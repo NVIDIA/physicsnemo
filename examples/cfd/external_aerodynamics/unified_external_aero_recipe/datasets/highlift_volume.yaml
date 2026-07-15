@@ -34,6 +34,12 @@ pipeline:
     pattern: "geo_LHC*/*.pdmsh"
     subsample_n_points: ${sampling_resolution}
     subsample_n_cells: ${sampling_resolution}
+    # Interior consumed as a point cloud; drop tet topology so the point
+    # subsample is a cheap contiguous block read (see drivaer_ml_volume.yaml).
+    drop_interior_cells: true
+    # In-file boundaries unused by the volume pipeline (SDF uses stl_geometry);
+    # drop them to skip per-sample subsample + pin.
+    drop_in_file_boundaries: true
     extra_boundaries:
       stl_geometry:
         pattern: "*.stl.pmsh"

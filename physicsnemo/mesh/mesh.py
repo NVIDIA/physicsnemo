@@ -14,6 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# ``tensorclass`` adds a class-scoped ``float`` method. Qualify scalar
+# annotations that must remain resolvable under Python's deferred lookup.
+import builtins
 import math
 import types
 from pathlib import Path
@@ -35,6 +38,7 @@ from tensordict import NonTensorData, TensorDict, tensorclass
 
 from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
 from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
+from physicsnemo.mesh.transformations.deform import displace, morph
 from physicsnemo.mesh.transformations.geometric import (
     rotate,
     scale,
@@ -391,13 +395,14 @@ class Mesh:
 
         ### _cache: default empty cache structure
         if self._cache is None:
+            device = self.points.device
             self._cache = TensorDict(
                 {
-                    "cell": TensorDict({}, batch_size=[self.n_cells]),
-                    "point": TensorDict({}, batch_size=[self.n_points]),
-                    "topology": TensorDict({}),
+                    "cell": TensorDict({}, batch_size=[self.n_cells], device=device),
+                    "point": TensorDict({}, batch_size=[self.n_points], device=device),
+                    "topology": TensorDict({}, device=device),
                 },
-                device=self.points.device,
+                device=device,
             )
 
         ### Validate shapes and dtypes
@@ -777,6 +782,11 @@ class Mesh:
         determinant for higher dimensions.  See
         :func:`~physicsnemo.mesh.geometry._cell_areas.compute_cell_areas` for
         details.
+
+        ``cell_areas`` is always the purely geometric simplex measure.  For
+        meshes whose cells represent more than their own geometry (e.g.
+        after cell subsampling), the effective integration measure is
+        provided by :mod:`physicsnemo.mesh.calculus.measure`.
 
         Returns
         -------
@@ -1439,13 +1449,16 @@ class Mesh:
         local_cell_cache = self._cache["cell"].select(
             "centroids", "areas", "normals", strict=False
         )
+        device = self.points.device
         new_cache = TensorDict(
             {
                 "cell": local_cell_cache[indices],
-                "point": TensorDict({}, batch_size=torch.Size([self.n_points])),
-                "topology": TensorDict({}),
+                "point": TensorDict(
+                    {}, batch_size=torch.Size([self.n_points]), device=device
+                ),
+                "topology": TensorDict({}, device=device),
             },
-            device=self.points.device,
+            device=device,
         )
         return Mesh(
             points=self.points,
@@ -1582,6 +1595,74 @@ class Mesh:
             project_onto_nearest_cell=project_onto_nearest_cell,
             tolerance=tolerance,
             bvh=bvh,
+        )
+
+    def with_data(
+        self,
+        *,
+        point_data: TensorDict | dict[str, torch.Tensor] | None = None,
+        cell_data: TensorDict | dict[str, torch.Tensor] | None = None,
+        global_data: TensorDict | dict[str, torch.Tensor] | None = None,
+    ) -> "Mesh":
+        r"""Return a new mesh with selected field-data containers replaced.
+
+        Geometry and geometric/topological caches are preserved because
+        ``points`` and ``cells`` do not change. Any data argument left as
+        ``None`` is retained; pass an empty dictionary to clear that data
+        association. The source mesh is not modified.
+
+        Parameters
+        ----------
+        point_data : TensorDict or dict, optional
+            Replacement per-point data. ``None`` retains the current data.
+        cell_data : TensorDict or dict, optional
+            Replacement per-cell data. ``None`` retains the current data.
+        global_data : TensorDict or dict, optional
+            Replacement mesh-level data. ``None`` retains the current data.
+
+        Returns
+        -------
+        Mesh
+            New mesh sharing the immutable geometry tensors and cached
+            geometry values, with independent TensorDict containers for data
+            and cache entries.
+
+        Notes
+        -----
+        The TensorDict containers are shallow-copied. Their tensor leaves are
+        shared, matching PyTorch's usual view-like replacement semantics and
+        avoiding an unexpected copy of potentially large fields. Clone a
+        field explicitly before passing it when independent tensor storage is
+        required.
+
+        Examples
+        --------
+        >>> updated = mesh.with_data(  # doctest: +SKIP
+        ...     point_data={"pressure": predicted_pressure},
+        ... )
+        >>> cleared = updated.with_data(cell_data={})  # doctest: +SKIP
+        """
+
+        def _replacement(
+            value: TensorDict | dict[str, torch.Tensor] | None,
+            current: TensorDict,
+        ) -> TensorDict | dict[str, torch.Tensor]:
+            if value is None:
+                return current.copy()
+            if isinstance(value, TensorDict):
+                return value.copy()
+            return value
+
+        return Mesh(
+            points=self.points,
+            cells=self.cells,
+            point_data=_replacement(point_data, self.point_data),
+            cell_data=_replacement(cell_data, self.cell_data),
+            global_data=_replacement(global_data, self.global_data),
+            # Geometry is unchanged. Keep cached tensors, but give the result
+            # an independent cache container so later lazy population does not
+            # mutate the source mesh's cache structure.
+            _cache=self._cache.copy(),
         )
 
     def cell_data_to_point_data(self, overwrite_keys: bool = False) -> "Mesh":
@@ -2273,7 +2354,9 @@ class Mesh:
             Target number of cells. If None, no cell padding is applied.
             Must be >= current n_cells if specified. Also accepts SymInt for torch.compile.
         data_padding_value : float
-            Value to use for padding data fields. Defaults to NaN.
+            Value to use for padding data fields. Defaults to NaN for floating
+            and complex fields; integer and boolean fields use 0 when the
+            requested value is NaN, preserving their dtype.
 
         Returns
         -------
@@ -2310,29 +2393,60 @@ class Mesh:
         if target_n_cells is None:
             target_n_cells = self.n_cells
 
+        if (
+            not torch.compiler.is_compiling()
+            and target_n_cells > 0
+            and target_n_points == 0
+        ):
+            raise ValueError("Cannot pad cells without at least one mesh point.")
+
+        def _pad_data(tensor: torch.Tensor, size: int) -> torch.Tensor:
+            value = data_padding_value
+            if (
+                not tensor.is_floating_point()
+                and not tensor.is_complex()
+                and math.isnan(value)
+            ):
+                value = 0.0
+            return _pad_with_value(tensor, size, value)
+
+        padded_cell_cache = self._cache["cell"].apply(
+            lambda x: _pad_with_value(x, target_n_cells, 0.0),
+            batch_size=torch.Size([target_n_cells]),
+        )
+        centroids = self._cache.get(("cell", "centroids"), None)
+        if centroids is not None:
+            n_padding_cells = target_n_cells - self.n_cells
+            if self.n_points == 0:
+                padding_centroid = self.points.new_zeros((1, self.n_spatial_dims))
+            else:
+                padding_centroid = self.points[-1:]
+            padded_cell_cache["centroids"] = torch.cat(
+                [centroids, padding_centroid.expand(n_padding_cells, -1)]
+            )
+
         return self.__class__(
             points=_pad_by_tiling_last(self.points, target_n_points),
-            cells=_pad_with_value(self.cells, target_n_cells, self.n_points - 1),
+            cells=_pad_with_value(
+                self.cells, target_n_cells, max(self.n_points - 1, 0)
+            ),
             point_data=self.point_data.apply(
-                lambda x: _pad_with_value(x, target_n_points, data_padding_value),
+                lambda x: _pad_data(x, target_n_points),
                 batch_size=torch.Size([target_n_points]),
             ),
             cell_data=self.cell_data.apply(
-                lambda x: _pad_with_value(x, target_n_cells, data_padding_value),
+                lambda x: _pad_data(x, target_n_cells),
                 batch_size=torch.Size([target_n_cells]),
             ),
             global_data=self.global_data,
             _cache=TensorDict(
                 {
-                    "cell": self._cache["cell"].apply(
-                        lambda x: _pad_with_value(x, target_n_cells, 0.0),
-                        batch_size=torch.Size([target_n_cells]),
-                    ),
+                    "cell": padded_cell_cache,
                     "point": self._cache["point"].apply(
                         lambda x: _pad_with_value(x, target_n_points, 0.0),
                         batch_size=torch.Size([target_n_points]),
                     ),
-                    "topology": TensorDict({}),
+                    "topology": TensorDict({}, device=self.points.device),
                 },
                 device=self.points.device,
             ),
@@ -2356,7 +2470,9 @@ class Mesh:
             Base for computing the next power. Must be > 1.
             Provides a good balance between memory efficiency and compile cache hits.
         data_padding_value : float
-            Value to use for padding data fields. Defaults to NaN.
+            Value to use for padding data fields. Defaults to NaN for floating
+            and complex fields; integer and boolean fields use 0 when the
+            requested value is NaN, preserving their dtype.
 
         Returns
         -------
@@ -2543,6 +2659,62 @@ class Mesh:
             New Mesh with translated geometry.
         """
         return translate(self, offset)
+
+    def displace(
+        self,
+        displacement: str | tuple[str, ...] | torch.Tensor,
+        *,
+        point_weights: str | tuple[str, ...] | torch.Tensor | None = None,
+        implementation: Literal["torch"] | None = None,
+    ) -> "Mesh":
+        """Displace points by a dense vector field without changing topology.
+
+        Convenience wrapper for
+        :func:`physicsnemo.mesh.transformations.deform.displace`, which
+        documents all parameters and numerical behavior.
+
+        Returns
+        -------
+        Mesh
+            New mesh with displaced points, unchanged connectivity and fields.
+        """
+        return displace(
+            self,
+            displacement,
+            point_weights=point_weights,
+            implementation=implementation,
+        )
+
+    def morph(
+        self,
+        control_points: torch.Tensor,
+        control_displacements: torch.Tensor,
+        *,
+        radius: builtins.float | torch.Tensor,
+        point_weights: str | tuple[str, ...] | torch.Tensor | None = None,
+        kernel: Literal["wendland_c2"] = "wendland_c2",
+        implementation: Literal["torch", "warp"] | None = None,
+    ) -> "Mesh":
+        """Morph points from sparse compactly supported control handles.
+
+        Convenience wrapper for
+        :func:`physicsnemo.mesh.transformations.deform.morph`, which documents
+        all parameters and numerical behavior.
+
+        Returns
+        -------
+        Mesh
+            New mesh with morphed points, unchanged connectivity and fields.
+        """
+        return morph(
+            self,
+            control_points,
+            control_displacements,
+            radius=radius,
+            point_weights=point_weights,
+            kernel=kernel,
+            implementation=implementation,
+        )
 
     def rotate(
         self,
@@ -2793,6 +2965,8 @@ class Mesh:
         self,
         field: str | tuple[str, ...] | torch.Tensor,
         data_source: Literal["cells", "points"] = "cells",
+        *,
+        nan_policy: Literal["omit", "propagate"] = "omit",
     ) -> torch.Tensor:
         r"""Integrate a field over the mesh domain.
 
@@ -2816,6 +2990,10 @@ class Mesh:
             - ``torch.Tensor``: used directly.
         data_source : {"cells", "points"}
             Whether ``field`` is cell-centered (P0) or vertex-centered (P1).
+        nan_policy : {"omit", "propagate"}, default "omit"
+            NaN reduction behavior. ``"omit"`` preserves the historical
+            masked-data behavior; ``"propagate"`` uses an ordinary sum so
+            NaN contributions remain visible.
 
         Returns
         -------
@@ -2849,12 +3027,15 @@ class Mesh:
             mesh=self,
             field=field,
             data_source=data_source,
+            nan_policy=nan_policy,
         )
 
     def integrate_flux(
         self,
         field: str | tuple[str, ...] | torch.Tensor,
         data_source: Literal["cells", "points"] = "cells",
+        *,
+        nan_policy: Literal["omit", "propagate"] = "omit",
     ) -> torch.Tensor:
         r"""Compute the surface flux integral for codimension-1 meshes.
 
@@ -2868,6 +3049,8 @@ class Mesh:
             Vector field with last dimension equal to ``n_spatial_dims``.
         data_source : {"cells", "points"}
             Whether ``field`` is cell-centered or vertex-centered.
+        nan_policy : {"omit", "propagate"}, default "omit"
+            Whether NaN cell-flux contributions are omitted or propagated.
 
         Returns
         -------
@@ -2899,6 +3082,91 @@ class Mesh:
             mesh=self,
             field=field,
             data_source=data_source,
+            nan_policy=nan_policy,
+        )
+
+    def integrate_moment(
+        self,
+        left: str | tuple[str, ...] | torch.Tensor,
+        right: str | tuple[str, ...] | torch.Tensor,
+        *,
+        aligned_dims: int = 0,
+        accumulation_dtype: torch.dtype | None = torch.float32,
+        nan_policy: Literal["omit", "propagate"] = "omit",
+    ) -> torch.Tensor:
+        r"""Integrate the outer product of two cell-centered fields.
+
+        Computes the P0 quadrature moment
+        :math:`M = \sum_c |\sigma_c|\, a_c \otimes b_c`, where ``a`` is
+        ``left``, ``b`` is ``right``, and :math:`|\sigma_c|` is the cell's
+        effective measure (see
+        :mod:`physicsnemo.mesh.calculus.measure`).  By default the result has
+        shape
+        ``left.shape[1:] + right.shape[1:]``.  ``aligned_dims`` may
+        designate a common leading subset of the trailing dimensions as
+        independent groups; those axes appear only once in the output
+        rather than participating in the outer product.
+
+        Parameters
+        ----------
+        left, right : str, tuple[str, ...], or torch.Tensor
+            Cell-centered fields.  String and tuple keys are resolved from
+            ``cell_data``.  Their leading dimensions must equal
+            ``n_cells``; arbitrary trailing dimensions are supported.
+        aligned_dims : int, default=0
+            Number of leading trailing dimensions shared by ``left`` and
+            ``right`` and treated as aligned batch/group axes.  For
+            example, inputs shaped ``(N, H, A)`` and ``(N, H, B)`` with
+            ``aligned_dims=1`` produce ``(H, A, B)`` instead of
+            ``(H, A, H, B)``.
+        accumulation_dtype : torch.dtype or None, default torch.float32
+            Minimum dtype used by the weighted matrix product.  The default
+            accumulates reduced-precision inputs in at least FP32 without
+            downcasting FP64 inputs.  Pass ``None`` to use ordinary input
+            promotion with no additional precision floor.
+        nan_policy : {"omit", "propagate"}, default "omit"
+            ``"omit"`` replaces NaN field contributions with zero before
+            the matrix product.  ``"propagate"`` leaves them untouched.
+
+        Returns
+        -------
+        torch.Tensor
+            Weighted outer-product moment with shape ``aligned_shape +
+            left_event_shape + right_event_shape``.
+
+        Raises
+        ------
+        KeyError
+            If a named field is absent from ``cell_data``.
+        TypeError
+            If ``aligned_dims`` is not an integer or ``accumulation_dtype``
+            is not floating-point or complex.
+        ValueError
+            If the mesh has no cells, a leading dimension is wrong, aligned
+            dimensions are invalid, or ``nan_policy`` is invalid.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from physicsnemo.mesh import Mesh
+        >>> pts = torch.tensor([[0., 0.], [1., 0.], [0.5, 1.]])
+        >>> cells = torch.tensor([[0, 1, 2]])
+        >>> mesh = Mesh(points=pts, cells=cells)
+        >>> mesh.cell_data["a"] = torch.tensor([[1.0, 2.0]])
+        >>> mesh.cell_data["b"] = torch.tensor([[3.0, 4.0]])
+        >>> mesh.integrate_moment("a", "b")
+        tensor([[1.5000, 2.0000],
+                [3.0000, 4.0000]])
+        """
+        from physicsnemo.mesh.calculus.integration import integrate_moment
+
+        return integrate_moment(
+            mesh=self,
+            left=left,
+            right=right,
+            aligned_dims=aligned_dims,
+            accumulation_dtype=accumulation_dtype,
+            nan_policy=nan_policy,
         )
 
     def gradient(
@@ -2937,6 +3205,8 @@ class Mesh:
         torch.Tensor
             Gradient of shape ``(n, n_spatial_dims, *field.shape[1:])``, where
             ``n`` is ``n_points`` or ``n_cells`` according to ``data_source``.
+            For a vector field, ``gradient[i, k, j]`` is
+            :math:`\partial field_{i,j} / \partial x_k`.
         """
         from physicsnemo.mesh.calculus.gradient import (
             compute_gradient_cells_lsq,

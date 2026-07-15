@@ -238,19 +238,16 @@ class NonDimensionalizeByMetadata(MeshTransform):
                 T_inf=T_inf,
             )
 
-        ### `Mesh.copy` is a tensorclass-provided shallow copy: `points`,
-        ### `cells`, the untouched associations, and the geometric `_cache`
-        ### are all shared with `mesh`; only the cloned association is swapped.
+        # Shallow copy shares everything except the swapped association.
         new_mesh = mesh.copy()  # ty: ignore[unresolved-attribute]
         setattr(new_mesh, self._association, new_td)
 
-        ### Scale geometry into nondim space (`x* = x / L_ref`) on the
-        ### forward pass, and back to physical units (`x = x* * L_ref`)
-        ### on the inverse. `Mesh.scale` propagates `_cache` through the
-        ### linear transform.
+        # Scale geometry to/from nondim space (x* = x / L_ref).
+        # assume_invertible=True avoids a per-mesh sync from the det check.
         if L_ref is not None:
+            torch._assert_async(L_ref != 0)
             factor = L_ref if inverse else 1.0 / L_ref
-            new_mesh = new_mesh.scale(factor)
+            new_mesh = new_mesh.scale(factor, assume_invertible=True)
 
         return new_mesh
 

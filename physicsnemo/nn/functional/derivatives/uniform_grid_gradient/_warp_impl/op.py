@@ -20,6 +20,8 @@ from collections.abc import Sequence
 
 import torch
 
+from physicsnemo.core.function_spec import FunctionSpec
+
 from ..._request_utils import (
     compose_derivative_outputs,
     normalize_derivative_orders,
@@ -34,7 +36,6 @@ from .utils import (
     _validate_field,
     _validate_include_mixed,
     _validate_order,
-    _warp_launch_context,
 )
 
 
@@ -104,7 +105,7 @@ def uniform_grid_gradient_impl(
     )
     grad_components = [output_fp32[axis] for axis in range(field_fp32.ndim)]
 
-    wp_device, wp_stream = _warp_launch_context(field_fp32)
+    wp_device, wp_stream = FunctionSpec.warp_launch_context(field_fp32)
     _launch_forward(
         field_fp32=field_fp32,
         spacing_tuple=spacing_tuple,
@@ -159,7 +160,7 @@ def backward_uniform_grid_gradient(
     grad_output_fp32 = _to_fp32_contiguous(grad_output)
     grad_field = torch.empty_like(grad_output_fp32[0])
 
-    wp_device, wp_stream = _warp_launch_context(grad_output_fp32)
+    wp_device, wp_stream = FunctionSpec.warp_launch_context(grad_output_fp32)
     _launch_backward(
         grad_output_fp32=grad_output_fp32,
         spacing_tuple=ctx.spacing_tuple,
@@ -219,7 +220,7 @@ def uniform_grid_derivatives_order2_fused_impl(
     second_terms = [output_fp32[n_dims + axis] for axis in range(n_dims)]
     mixed_terms = [output_fp32[2 * n_dims + axis] for axis in range(n_mixed)]
 
-    wp_device, wp_stream = _warp_launch_context(field_fp32)
+    wp_device, wp_stream = FunctionSpec.warp_launch_context(field_fp32)
     _launch_forward_fused_order2(
         field_fp32=field_fp32,
         spacing_tuple=spacing_tuple,
@@ -283,7 +284,7 @@ def backward_uniform_grid_derivatives_order2_fused(
         ]
     grad_field = torch.empty_like(grad_output_fp32[0])
 
-    wp_device, wp_stream = _warp_launch_context(grad_output_fp32)
+    wp_device, wp_stream = FunctionSpec.warp_launch_context(grad_output_fp32)
     _launch_backward_fused_order2_no_mixed(
         grad_first_components=grad_first_components,
         grad_second_components=grad_second_components,
