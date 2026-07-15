@@ -89,6 +89,23 @@ def rbf_morph(
         New mesh with morphed points and unchanged connectivity and attached
         fields.
 
+    Raises
+    ------
+    TypeError
+        If control tensors, point weights, or Python argument types are
+        unsupported.
+    ValueError
+        If tensor shapes, dtypes, devices, control layout, point weights, or
+        RBF options are invalid.
+    KeyError
+        If a point-data key is missing or ``implementation`` does not name a
+        registered backend.
+    ImportError
+        If an explicitly requested backend is unavailable.
+    RuntimeError
+        If runtime validation or coefficient fitting fails, including for a
+        singular system or during CUDA Graph capture.
+
     Notes
     -----
     The field has global support. Unlike compact Shepard morphing, every

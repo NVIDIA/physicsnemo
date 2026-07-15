@@ -772,6 +772,23 @@ class DomainMesh:
         DomainMesh
             New domain with morphed component meshes and unchanged domain data.
 
+        Raises
+        ------
+        TypeError
+            If control tensors, point weights, or Python argument types are
+            unsupported.
+        ValueError
+            If component data, tensor shapes, dtypes, devices, control layout,
+            point weights, or RBF options are invalid.
+        KeyError
+            If a point-data key is missing or ``implementation`` does not name
+            a registered backend.
+        ImportError
+            If an explicitly requested backend is unavailable.
+        RuntimeError
+            If runtime validation or coefficient fitting fails, including for
+            a singular system or during CUDA Graph capture.
+
         Notes
         -----
         The thin-plate-spline field has global support. Connectivity and

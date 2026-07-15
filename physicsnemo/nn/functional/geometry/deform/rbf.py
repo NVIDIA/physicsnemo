@@ -23,6 +23,7 @@ from numbers import Real
 from typing import Literal
 
 import torch
+from jaxtyping import Bool, Float
 
 from physicsnemo.core.function_spec import FunctionSpec
 
@@ -209,6 +210,21 @@ class RBFMorphPoints(FunctionSpec):
     torch.Tensor
         Morphed points with the same shape, dtype, and device as ``points``.
 
+    Raises
+    ------
+    TypeError
+        If tensor dtypes or Python argument types are unsupported.
+    ValueError
+        If tensor shapes, devices, control layout, point weights, or RBF
+        options are invalid.
+    KeyError
+        If ``implementation`` does not name a registered backend.
+    ImportError
+        If an explicitly requested backend is unavailable.
+    RuntimeError
+        If runtime validation or coefficient fitting fails, including for a
+        singular system or during CUDA Graph capture.
+
     Notes
     -----
     The dense coefficient solve costs :math:`O(C^3)` and stores an
@@ -316,16 +332,54 @@ class RBFMorphPoints(FunctionSpec):
 
     @FunctionSpec.register(name="warp", required_imports=("warp>=0.6.0",), rank=0)
     def warp_forward(
-        points: torch.Tensor,
-        control_points: torch.Tensor,
-        control_displacements: torch.Tensor,
+        points: Float[torch.Tensor, "*batch num_points num_dims"],
+        control_points: Float[torch.Tensor, "*batch num_controls num_dims"],
+        control_displacements: Float[torch.Tensor, "*batch num_controls num_dims"],
         *,
         kernel: Literal["thin_plate_spline"] = "thin_plate_spline",
         polynomial: bool = True,
         smoothing: float = 0.0,
-        point_weights: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """Fit with Torch and evaluate the RBF field with Warp."""
+        point_weights: Bool[torch.Tensor, "*batch num_points"]
+        | Float[torch.Tensor, "*batch num_points"]
+        | None = None,
+    ) -> Float[torch.Tensor, "*batch num_points num_dims"]:
+        """Fit an RBF field with Torch and evaluate it with Warp.
+
+        Parameters
+        ----------
+        points : torch.Tensor
+            Unbatched ``(N, D)`` or batched ``(B, N, D)`` query points.
+        control_points : torch.Tensor
+            Unbatched or batch-aligned control locations with shape ``(C, D)``
+            or ``(B, C, D)``.
+        control_displacements : torch.Tensor
+            Displacement vectors with the same shape as ``control_points``.
+        kernel : {"thin_plate_spline"}, optional
+            Radial kernel used by the interpolant.
+        polynomial : bool, optional
+            Whether to include the affine polynomial tail.
+        smoothing : float, optional
+            Nonnegative diagonal regularization for the control-kernel block.
+        point_weights : torch.Tensor or None, optional
+            Optional bool or floating per-point weights.
+
+        Returns
+        -------
+        torch.Tensor
+            Morphed points with the same shape, dtype, and device as
+            ``points``.
+
+        Raises
+        ------
+        TypeError
+            If tensor dtypes or Python argument types are unsupported.
+        ValueError
+            If shapes, devices, control layout, weights, or RBF options are
+            invalid.
+        RuntimeError
+            If runtime validation or coefficient fitting fails, including for
+            a singular system or during CUDA Graph capture.
+        """
 
         (
             points_b3,
@@ -362,16 +416,54 @@ class RBFMorphPoints(FunctionSpec):
 
     @FunctionSpec.register(name="torch", rank=1, baseline=True)
     def torch_forward(
-        points: torch.Tensor,
-        control_points: torch.Tensor,
-        control_displacements: torch.Tensor,
+        points: Float[torch.Tensor, "*batch num_points num_dims"],
+        control_points: Float[torch.Tensor, "*batch num_controls num_dims"],
+        control_displacements: Float[torch.Tensor, "*batch num_controls num_dims"],
         *,
         kernel: Literal["thin_plate_spline"] = "thin_plate_spline",
         polynomial: bool = True,
         smoothing: float = 0.0,
-        point_weights: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """Fit and evaluate the RBF deformation with pure Torch."""
+        point_weights: Bool[torch.Tensor, "*batch num_points"]
+        | Float[torch.Tensor, "*batch num_points"]
+        | None = None,
+    ) -> Float[torch.Tensor, "*batch num_points num_dims"]:
+        """Fit and evaluate an RBF field with Torch.
+
+        Parameters
+        ----------
+        points : torch.Tensor
+            Unbatched ``(N, D)`` or batched ``(B, N, D)`` query points.
+        control_points : torch.Tensor
+            Unbatched or batch-aligned control locations with shape ``(C, D)``
+            or ``(B, C, D)``.
+        control_displacements : torch.Tensor
+            Displacement vectors with the same shape as ``control_points``.
+        kernel : {"thin_plate_spline"}, optional
+            Radial kernel used by the interpolant.
+        polynomial : bool, optional
+            Whether to include the affine polynomial tail.
+        smoothing : float, optional
+            Nonnegative diagonal regularization for the control-kernel block.
+        point_weights : torch.Tensor or None, optional
+            Optional bool or floating per-point weights.
+
+        Returns
+        -------
+        torch.Tensor
+            Morphed points with the same shape, dtype, and device as
+            ``points``.
+
+        Raises
+        ------
+        TypeError
+            If tensor dtypes or Python argument types are unsupported.
+        ValueError
+            If shapes, devices, control layout, weights, or RBF options are
+            invalid.
+        RuntimeError
+            If runtime validation or coefficient fitting fails, including for
+            a singular system or during CUDA Graph capture.
+        """
 
         (
             points_b3,
@@ -409,17 +501,65 @@ class RBFMorphPoints(FunctionSpec):
     @classmethod
     def dispatch(
         cls,
-        points: torch.Tensor,
-        control_points: torch.Tensor,
-        control_displacements: torch.Tensor,
+        points: Float[torch.Tensor, "*batch num_points num_dims"],
+        control_points: Float[torch.Tensor, "*batch num_controls num_dims"],
+        control_displacements: Float[torch.Tensor, "*batch num_controls num_dims"],
         *,
         kernel: Literal["thin_plate_spline"] = "thin_plate_spline",
         polynomial: bool = True,
         smoothing: float = 0.0,
-        point_weights: torch.Tensor | None = None,
+        point_weights: Bool[torch.Tensor, "*batch num_points"]
+        | Float[torch.Tensor, "*batch num_points"]
+        | None = None,
         implementation: Literal["torch", "warp"] | None = None,
-    ) -> torch.Tensor:
-        """Select Warp for CUDA inputs and Torch for CPU inputs by default."""
+    ) -> Float[torch.Tensor, "*batch num_points num_dims"]:
+        """Select Warp for CUDA inputs and Torch for CPU inputs by default.
+
+        Falling back to Torch on CUDA inputs because Warp is unavailable emits
+        the standard one-time :class:`RuntimeWarning`.
+
+        Parameters
+        ----------
+        points : torch.Tensor
+            Unbatched ``(N, D)`` or batched ``(B, N, D)`` query points.
+        control_points : torch.Tensor
+            Unbatched or batch-aligned control locations with shape ``(C, D)``
+            or ``(B, C, D)``.
+        control_displacements : torch.Tensor
+            Displacement vectors with the same shape as ``control_points``.
+        kernel : {"thin_plate_spline"}, optional
+            Radial kernel used by the interpolant.
+        polynomial : bool, optional
+            Whether to include the affine polynomial tail.
+        smoothing : float, optional
+            Nonnegative diagonal regularization for the control-kernel block.
+        point_weights : torch.Tensor or None, optional
+            Optional bool or floating per-point weights.
+        implementation : {"torch", "warp"} or None, optional
+            Explicit backend selection. ``None`` selects according to the
+            point device and backend availability.
+
+        Returns
+        -------
+        torch.Tensor
+            Morphed points with the same shape, dtype, and device as
+            ``points``.
+
+        Raises
+        ------
+        TypeError
+            If tensor dtypes or Python argument types are unsupported.
+        ValueError
+            If shapes, devices, control layout, weights, or RBF options are
+            invalid.
+        KeyError
+            If ``implementation`` does not name a registered backend.
+        ImportError
+            If an explicitly requested backend is unavailable.
+        RuntimeError
+            If runtime validation or coefficient fitting fails, including for
+            a singular system or during CUDA Graph capture.
+        """
 
         if implementation is None:
             impls = cls._get_impls()
@@ -445,7 +585,18 @@ class RBFMorphPoints(FunctionSpec):
 
     @classmethod
     def make_inputs_forward(cls, device: torch.device | str = "cpu"):
-        """Yield representative RBF forward benchmark cases."""
+        """Yield representative RBF forward benchmark cases.
+
+        Parameters
+        ----------
+        device : torch.device or str, optional
+            Device on which to construct the benchmark tensors.
+
+        Yields
+        ------
+        tuple
+            Benchmark label, positional arguments, and keyword arguments.
+        """
 
         device = torch.device(device)
         for seed, (
@@ -484,7 +635,19 @@ class RBFMorphPoints(FunctionSpec):
 
     @classmethod
     def make_inputs_backward(cls, device: torch.device | str = "cpu"):
-        """Yield differentiable RBF parity cases."""
+        """Yield differentiable RBF parity cases.
+
+        Parameters
+        ----------
+        device : torch.device or str, optional
+            Device on which to construct the benchmark tensors.
+
+        Yields
+        ------
+        tuple
+            Benchmark label, differentiable positional arguments, and keyword
+            arguments.
+        """
 
         device = torch.device(device)
         for seed, (
@@ -596,8 +759,23 @@ class RBFMorphPoints(FunctionSpec):
         return points, controls, control_displacements, point_weights
 
     @classmethod
-    def compare_forward(cls, output: torch.Tensor, reference: torch.Tensor) -> None:
-        """Compare RBF outputs across field-evaluation backends."""
+    def compare_forward(
+        cls,
+        output: Float[torch.Tensor, "*batch num_points num_dims"],
+        reference: Float[torch.Tensor, "*batch num_points num_dims"],
+    ) -> None:
+        """Compare RBF outputs across field-evaluation backends.
+
+        Parameters
+        ----------
+        output, reference : torch.Tensor
+            Backend result and baseline result with matching point shapes.
+
+        Raises
+        ------
+        AssertionError
+            If the results differ beyond the configured tolerances.
+        """
 
         torch.testing.assert_close(
             output,
@@ -607,8 +785,23 @@ class RBFMorphPoints(FunctionSpec):
         )
 
     @classmethod
-    def compare_backward(cls, output: torch.Tensor, reference: torch.Tensor) -> None:
-        """Compare RBF gradients across field-evaluation backends."""
+    def compare_backward(
+        cls,
+        output: Float[torch.Tensor, "..."],
+        reference: Float[torch.Tensor, "..."],
+    ) -> None:
+        """Compare RBF gradients across field-evaluation backends.
+
+        Parameters
+        ----------
+        output, reference : torch.Tensor
+            Backend gradient and baseline gradient with matching shapes.
+
+        Raises
+        ------
+        AssertionError
+            If the gradients differ beyond the configured tolerances.
+        """
 
         torch.testing.assert_close(
             output,
