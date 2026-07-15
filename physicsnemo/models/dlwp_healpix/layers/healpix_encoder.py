@@ -73,6 +73,15 @@ class UNetEncoder(torch.nn.Module):
         per_level_checkpointing: list[bool] | None, optional
             If the checkpointing should be applied to each level of the encoder
             If None, the checkpointing will not be applied
+
+        per level options are lists of booleans of the same length as n_channels,
+        if only one value is provided, it will be applied to all levels. The first 
+        level is the highest (top) level in the unet encoder and the last level is the lowest (bottom) level.
+        The value in the list will be applied to the top level, the second value to the next level down, etc.
+        Example:
+        n_channels = [16, 32, 64]
+        per_level_cln = [True, False, False] will apply CLN to the highest level (16 channels) and not the second and third levels.
+        
         """
         super().__init__()
         self.n_channels = n_channels
