@@ -27,7 +27,6 @@ import torch
 from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
 from physicsnemo.nn.functional.geometry.remeshing import (
     Remeshing,
-    WarpRemeshOptions,
     remeshing,
 )
 from physicsnemo.nn.functional.geometry.remeshing._warp_impl.launch_forward import (
@@ -46,7 +45,11 @@ def test_remeshing_function_spec_contract():
         "mesh_indices",
         "n_clusters",
         "max_iterations",
-        "warp_options",
+        "search_radius_scale",
+        "voxel_width_scale",
+        "hash_grid_resolution",
+        "farthest_point_threshold",
+        "farthest_point_oversampling",
         "implementation",
     ]
     assert get_type_hints(remeshing)["implementation"] == Literal["warp"] | None
@@ -110,16 +113,20 @@ def test_remeshing_custom_op_tags():
         ("farthest_point_oversampling", 2.0, TypeError, "integer"),
     ],
 )
-def test_warp_remesh_options_reject_invalid_values_and_types(
+def test_remeshing_rejects_invalid_tuning_values_and_types(
     keyword, value, error, match
 ):
+    vertices = torch.rand(16, 3)
+    indices = torch.tensor([[0, 1, 2], [2, 3, 0]])
     with pytest.raises(error, match=match):
-        WarpRemeshOptions(**{keyword: value})
+        remeshing(vertices, indices, 8, **{keyword: value})
 
 
-def test_warp_remesh_options_reject_unrepresentable_integer_scale():
+def test_remeshing_rejects_unrepresentable_integer_scale():
+    vertices = torch.rand(16, 3)
+    indices = torch.tensor([[0, 1, 2], [2, 3, 0]])
     with pytest.raises(ValueError, match="finite and positive"):
-        WarpRemeshOptions(search_radius_scale=10**1_000)
+        remeshing(vertices, indices, 8, search_radius_scale=10**1_000)
 
 
 def test_remeshing_rejects_invalid_tensor_inputs():
@@ -130,9 +137,6 @@ def test_remeshing_rejects_invalid_tensor_inputs():
         remeshing(vertices[:, :2], indices, 8)
     with pytest.raises(ValueError, match="mesh_indices must have shape"):
         remeshing(vertices, indices.reshape(-1), 8)
-    with pytest.raises(TypeError, match="WarpRemeshOptions instance.*dict"):
-        remeshing(vertices, indices, 8, warp_options={})
-
     meta_vertices = torch.empty(16, 3, device="meta")
     meta_indices = torch.empty(2, 3, dtype=torch.int64, device="meta")
     with pytest.raises(ValueError, match="supports CPU and CUDA tensors"):
@@ -162,6 +166,8 @@ def test_remeshing_cpu_tensor_api_contract():
         source.cells,
         24,
         max_iterations=1,
+        search_radius_scale=2.0,
+        farthest_point_threshold=0,
         implementation="warp",
     )
 
@@ -182,6 +188,8 @@ def test_remeshing_cpu_torch_compile():
         source.cells,
         24,
         max_iterations=1,
+        search_radius_scale=2.0,
+        farthest_point_threshold=0,
         implementation="warp",
     )
 

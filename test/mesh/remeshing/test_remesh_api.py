@@ -23,41 +23,58 @@ import torch
 
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
-from physicsnemo.mesh.remeshing import WarpRemeshOptions, remesh
+from physicsnemo.mesh.remeshing import remesh
 
 
 def test_remesh_public_signatures():
-    assert tuple(inspect.signature(remesh).parameters) == (
+    remesh_signature = inspect.signature(remesh)
+    assert tuple(remesh_signature.parameters) == (
         "mesh",
         "n_clusters",
         "max_iterations",
-        "warp_options",
+        "search_radius_scale",
+        "voxel_width_scale",
+        "hash_grid_resolution",
+        "farthest_point_threshold",
+        "farthest_point_oversampling",
     )
-    assert "warp_options" in inspect.signature(Mesh.remesh).parameters
+    mesh_remesh_signature = inspect.signature(Mesh.remesh)
+    assert tuple(mesh_remesh_signature.parameters) == (
+        "self",
+        "n_clusters",
+        "max_iterations",
+        "search_radius_scale",
+        "voxel_width_scale",
+        "hash_grid_resolution",
+        "farthest_point_threshold",
+        "farthest_point_oversampling",
+    )
+    assert remesh_signature.parameters["max_iterations"].default == 4
+    assert mesh_remesh_signature.parameters["max_iterations"].default == 4
 
 
-def test_remesh_rejects_wrong_options_type_on_cpu():
+def test_remesh_rejects_invalid_tuning_type_on_cpu():
     source = sphere_icosahedral.load(subdivisions=2)
 
-    with pytest.raises(TypeError, match="WarpRemeshOptions instance.*dict"):
+    with pytest.raises(TypeError, match="hash_grid_resolution must be an integer"):
         remesh(
             source,
             48,
-            warp_options={"hash_grid_resolution": 64},
+            hash_grid_resolution=64.0,
         )
 
 
 @pytest.mark.parametrize(
-    "warp_options",
-    [None, WarpRemeshOptions(farthest_point_threshold=0)],
+    "kwargs",
+    [{}, {"farthest_point_threshold": 0}],
 )
-def test_remesh_runs_on_cpu(warp_options):
+def test_remesh_runs_on_cpu(kwargs):
     source = sphere_icosahedral.load(subdivisions=2)
     output = remesh(
         source,
         48,
         max_iterations=1,
-        warp_options=warp_options,
+        **kwargs,
     )
 
     assert 3 <= output.n_points <= 48

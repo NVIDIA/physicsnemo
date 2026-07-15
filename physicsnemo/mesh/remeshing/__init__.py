@@ -42,11 +42,10 @@ Example:
 """
 
 from physicsnemo.mesh.remeshing._partition import CellPartition, partition_cells
-from physicsnemo.mesh.remeshing._remeshing import WarpRemeshOptions, remesh
+from physicsnemo.mesh.remeshing._remeshing import remesh
 
 __all__ = [
     "CellPartition",
-    "WarpRemeshOptions",
     "partition_cells",
     "remesh",
 ]

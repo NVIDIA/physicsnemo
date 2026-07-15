@@ -18,7 +18,6 @@
 
 import torch
 
-from .._config import WarpRemeshOptions
 from .launch_forward import launch_remeshing
 
 
@@ -57,20 +56,17 @@ def remeshing_warp(
             f"mesh_indices values must lie in [0, {mesh_vertices.shape[0]})"
         )
 
-    options = WarpRemeshOptions(
-        search_radius_scale=search_radius_scale,
-        voxel_width_scale=voxel_width_scale,
-        hash_grid_resolution=hash_grid_resolution,
-        farthest_point_threshold=farthest_point_threshold,
-        farthest_point_oversampling=farthest_point_oversampling,
-    )
     with torch.no_grad():
         output_vertices, output_indices = launch_remeshing(
             mesh_vertices.detach(),
             mesh_indices.detach(),
             n_clusters,
-            max_iterations=None if max_iterations < 0 else max_iterations,
-            options=options,
+            max_iterations=max_iterations,
+            search_radius_scale=search_radius_scale,
+            voxel_width_scale=voxel_width_scale,
+            hash_grid_resolution=hash_grid_resolution,
+            farthest_point_threshold=farthest_point_threshold,
+            farthest_point_oversampling=farthest_point_oversampling,
         )
 
     if not 3 <= output_vertices.shape[0] <= n_clusters:

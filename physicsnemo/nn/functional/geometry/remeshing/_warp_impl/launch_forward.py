@@ -29,7 +29,6 @@ from physicsnemo.nn.functional.geometry.farthest_point_sampling import (
 )
 from physicsnemo.utils._index_tuple_ops import unique_index_tuples
 
-from .._config import WarpRemeshOptions
 from ._kernels import (
     accumulate_vertex_areas,
     assign_vertices,
@@ -37,10 +36,7 @@ from ._kernels import (
     update_centroids,
 )
 
-wp.config.log_level = wp.LOG_WARNING
 wp.init()
-
-_DEFAULT_ITERATIONS = 4
 
 
 def _wp_view(tensor: torch.Tensor, dtype):  # noqa: ANN001, ANN202
@@ -57,12 +53,10 @@ def _select_fps_centroids(
     points: torch.Tensor,
     vertex_areas: torch.Tensor,
     n_clusters: int,
-    options: WarpRemeshOptions,
+    farthest_point_oversampling: int,
 ) -> torch.Tensor:
     """Select high-quality seeds with FPS over an area-weighted candidate set."""
-    candidate_count = min(
-        points.shape[0], options.farthest_point_oversampling * n_clusters
-    )
+    candidate_count = min(points.shape[0], farthest_point_oversampling * n_clusters)
     generator = torch.Generator(device=points.device).manual_seed(0)
     # A tiny positive floor keeps isolated input vertices selectable only when
     # the requested candidate count leaves no alternative.
@@ -133,7 +127,7 @@ def _select_stratified_centroids(
     vertex_areas: torch.Tensor,
     n_clusters: int,
     total_area: float,
-    options: WarpRemeshOptions,
+    voxel_width_scale: float,
     lower_bound: torch.Tensor,
     upper_bound: torch.Tensor,
     max_extent: float,
@@ -145,7 +139,7 @@ def _select_stratified_centroids(
     or reduction produces the exact requested seed count.
     """
     cell_width = max(
-        options.voxel_width_scale * math.sqrt(total_area / n_clusters),
+        voxel_width_scale * math.sqrt(total_area / n_clusters),
         torch.finfo(torch.float32).tiny,
     )
     representatives = _voxel_representatives(
@@ -406,11 +400,14 @@ def launch_remeshing(
     mesh_indices: torch.Tensor,
     n_clusters: int,
     *,
-    max_iterations: int | None = None,
-    options: WarpRemeshOptions,
+    max_iterations: int,
+    search_radius_scale: float,
+    voxel_width_scale: float,
+    hash_grid_resolution: int,
+    farthest_point_threshold: int,
+    farthest_point_oversampling: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Remesh a triangle surface with Warp CVT clustering."""
-    iterations = _DEFAULT_ITERATIONS if max_iterations is None else max_iterations
     (
         points,
         normalization_center,
@@ -442,15 +439,20 @@ def launch_remeshing(
     if not math.isfinite(total_area) or total_area <= 0.0:
         raise ValueError("mesh must have positive finite surface area")
 
-    if n_clusters <= options.farthest_point_threshold:
-        centroids = _select_fps_centroids(points, vertex_areas, n_clusters, options)
+    if n_clusters <= farthest_point_threshold:
+        centroids = _select_fps_centroids(
+            points,
+            vertex_areas,
+            n_clusters,
+            farthest_point_oversampling,
+        )
     else:
         centroids = _select_stratified_centroids(
             points,
             vertex_areas,
             n_clusters,
             total_area,
-            options,
+            voxel_width_scale,
             lower_bound,
             upper_bound,
             max_extent,
@@ -462,7 +464,7 @@ def launch_remeshing(
     )
     centroid_areas = torch.zeros(n_clusters, dtype=torch.float32, device=points.device)
     search_radius = max(
-        options.search_radius_scale * math.sqrt(total_area / n_clusters),
+        search_radius_scale * math.sqrt(total_area / n_clusters),
         torch.finfo(torch.float32).tiny,
     )
 
@@ -470,9 +472,9 @@ def launch_remeshing(
         wp_points = wp.from_torch(points, dtype=wp.vec3f)
         wp_centroids = wp.from_torch(centroids, dtype=wp.vec3f)
         centroid_grid = wp.HashGrid(
-            dim_x=options.hash_grid_resolution,
-            dim_y=options.hash_grid_resolution,
-            dim_z=options.hash_grid_resolution,
+            dim_x=hash_grid_resolution,
+            dim_y=hash_grid_resolution,
+            dim_z=hash_grid_resolution,
             device=wp_centroids.device,
         )
         centroid_grid.reserve(n_clusters)
@@ -488,7 +490,7 @@ def launch_remeshing(
             search_radius,
         ]
 
-        for _ in range(iterations):
+        for _ in range(max_iterations):
             centroid_sums.zero_()
             centroid_areas.zero_()
             centroid_grid.build(wp_centroids, radius=search_radius)

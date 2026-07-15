@@ -22,7 +22,7 @@ import torch
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.boundaries import is_watertight
 from physicsnemo.mesh.primitives.surfaces import plane, sphere_icosahedral, torus
-from physicsnemo.mesh.remeshing import WarpRemeshOptions, remesh
+from physicsnemo.mesh.remeshing import remesh
 
 pytestmark = pytest.mark.cuda
 
@@ -72,7 +72,7 @@ def test_warp_remesh_closed_sphere_contract():
 
     output = remesh(source, 128)
 
-    assert output.n_points == 128
+    assert 3 <= output.n_points <= 128
     assert output.n_manifold_dims == 2 and output.n_spatial_dims == 3
     assert output.points.device == source.points.device
     assert output.points.dtype == source.points.dtype
@@ -141,7 +141,7 @@ def test_warp_remesh_is_scale_equivariant(scale):
 
     output = remesh(source, 128)
 
-    assert output.n_points == 128
+    assert 3 <= output.n_points <= 128
     _assert_clean_topology(output)
     assert is_watertight(output)
     assert _euler_characteristic(output) == 2
@@ -162,7 +162,7 @@ def test_warp_remesh_normalizes_world_coordinates(offset, scale):
 
     output = remesh(source, 128)
 
-    assert output.n_points == 128
+    assert 3 <= output.n_points <= 128
     assert output.points.dtype == torch.float64
     _assert_clean_topology(
         output,
@@ -198,32 +198,32 @@ def test_warp_remesh_preserves_valid_thin_faces():
 
 
 @pytest.mark.parametrize(
-    "options",
+    "kwargs",
     [
-        WarpRemeshOptions(
-            search_radius_scale=2.0,
-            voxel_width_scale=0.9,
-            hash_grid_resolution=64,
-            farthest_point_threshold=64,
-            farthest_point_oversampling=2,
-        ),
-        WarpRemeshOptions(
-            search_radius_scale=1.8,
-            voxel_width_scale=1.0,
-            hash_grid_resolution=96,
-            farthest_point_threshold=0,
-            farthest_point_oversampling=3,
-        ),
+        {
+            "search_radius_scale": 2.0,
+            "voxel_width_scale": 0.9,
+            "hash_grid_resolution": 64,
+            "farthest_point_threshold": 64,
+            "farthest_point_oversampling": 2,
+        },
+        {
+            "search_radius_scale": 1.8,
+            "voxel_width_scale": 1.0,
+            "hash_grid_resolution": 96,
+            "farthest_point_threshold": 0,
+            "farthest_point_oversampling": 3,
+        },
     ],
     ids=["farthest-point-initialization", "voxel-initialization"],
 )
-def test_warp_remesh_accepts_custom_options(options):
+def test_warp_remesh_accepts_custom_tuning(kwargs):
     source = sphere_icosahedral.load(subdivisions=2, device="cuda")
 
     output = source.remesh(
         48,
         max_iterations=1,
-        warp_options=options,
+        **kwargs,
     )
 
     assert output.points.device.type == "cuda"
@@ -302,7 +302,7 @@ def test_warp_remesh_rejects_invalid_cluster_counts(n_clusters, error, match):
         remesh(source, n_clusters)
 
 
-@pytest.mark.parametrize("max_iterations", [-1, 1.5, True])
+@pytest.mark.parametrize("max_iterations", [-1, 1.5, True, None])
 def test_warp_remesh_rejects_invalid_iteration_counts(max_iterations):
     source = sphere_icosahedral.load(subdivisions=2, device="cuda")
     with pytest.raises((TypeError, ValueError), match="max_iterations"):

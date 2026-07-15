@@ -416,8 +416,6 @@ interp = mesh.subdivide(levels=2, filter="butterfly")  # Interpolating
 ### Remeshing
 
 ```python
-from physicsnemo.mesh.remeshing import WarpRemeshOptions
-
 # The result remains on the input device.
 coarse = mesh.remesh(n_clusters=1_000)
 
@@ -427,7 +425,7 @@ coarse_cuda = mesh.to("cuda").remesh(n_clusters=1_000)
 # Warp tuning values are runtime controls and do not recompile the kernels.
 tuned = mesh.remesh(
     n_clusters=1_000,
-    warp_options=WarpRemeshOptions(search_radius_scale=2.0),
+    search_radius_scale=2.0,
 )
 ```
 

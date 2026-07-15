@@ -21,7 +21,6 @@ Unlike ordinary functionals, remeshing changes mesh topology and its supported
 public contract is :mod:`physicsnemo.mesh.remeshing`.
 """
 
-from ._config import WarpRemeshOptions
 from .remeshing import Remeshing, remeshing
 
-__all__ = ["Remeshing", "WarpRemeshOptions", "remeshing"]
+__all__ = ["Remeshing", "remeshing"]

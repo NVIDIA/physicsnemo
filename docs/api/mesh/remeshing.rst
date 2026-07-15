@@ -40,16 +40,14 @@ the remeshing kernels:
 
 .. code:: python
 
-   from physicsnemo.mesh.remeshing import WarpRemeshOptions
-
-   options = WarpRemeshOptions(
+   tuned = dense.remesh(
+       4_096,
        search_radius_scale=2.0,
        voxel_width_scale=1.0,
        hash_grid_resolution=192,
        farthest_point_threshold=512,
        farthest_point_oversampling=6,
    )
-   tuned = dense.remesh(4_096, warp_options=options)
 
 These values are host-side controls or runtime kernel arguments. Changing them
 reuses the compiled Warp kernels rather than triggering JIT recompilation.
@@ -73,7 +71,8 @@ The checked-in ASV benchmark measures warmed, end-to-end GPU execution:
 clustering, surface projection, topology reconstruction, and cleanup. Timing
 includes an explicit CUDA synchronization.
 
-CUDA remeshing can be up to 300× faster than PyACVD on CPU.
+On supported CUDA devices, remeshing can be up to 300× faster than a CPU
+baseline.
 
 .. code:: console
 
@@ -86,7 +85,7 @@ on hardware and software versions; use the ASV benchmark above for measurements
 in another environment.
 
 .. image:: /img/mesh/remeshing_performance.png
-   :alt: GPU remeshing latency plot across increasing input sizes
+   :alt: GPU remeshing runtime plot across increasing input sizes
    :align: center
    :width: 65%
 

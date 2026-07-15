@@ -21,7 +21,7 @@ REPEATS = 3
 
 
 def measure(mesh, n_clusters: int) -> float:
-    """Return median warmed end-to-end latency in milliseconds."""
+    """Return median warmed end-to-end runtime in milliseconds."""
     remesh(mesh, n_clusters)
     torch.cuda.synchronize(mesh.points.device)
 
@@ -77,7 +77,7 @@ axis.plot(
 
 axis.set_xticks(list(positions), labels)
 axis.set_xlabel("Input vertices", fontsize=11)
-axis.set_ylabel("Median latency (ms)", fontsize=11)
+axis.set_ylabel("Median runtime (ms)", fontsize=11)
 axis.grid(True, axis="y", which="major", color="#dddddd", linewidth=0.8)
 axis.set_axisbelow(True)
 axis.spines[["top", "right"]].set_visible(False)
