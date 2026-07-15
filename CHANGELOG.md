@@ -78,6 +78,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   coordinates with no learnable parameters.
 - Adds radiation transport example (`examples/nuclear_engineering/radiation_transport`)
 - Adds agent skills structure, and initial skill for 'discoverability'.
+- Adds the `physicsnemo-functional-builder` agent skill: a standalone workflow
+  for adding a new `physicsnemo.nn.functional` op (or a Warp/cuML/SciPy backend
+  for an existing op) via `FunctionSpec`, with cross-backend equivalence tests.
 - Adds xDeepONet to experimental models
   (`physicsnemo.experimental.models.xdeeponet.DeepONet`).  A single
   dimension-generic (2D/3D) DeepONet that accepts a spatial or MLP branch,
