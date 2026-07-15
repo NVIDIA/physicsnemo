@@ -59,35 +59,45 @@ broadcast to the output identically in both paths using the returned
 A :class:`~physicsnemo.mesh.mesh.Mesh` can also be constructed in one step with
 :meth:`~physicsnemo.mesh.mesh.Mesh.from_polygons`.
 
-Exact-boundary interior filling
+Exact-Boundary Interior Filling
 -------------------------------
 
 Beyond decomposing existing cells, the package also *generates* quality
-meshes: :func:`fill_interior` takes a closed codimension-one boundary
-``Mesh`` — in 2D, an edge mesh forming one or more loops, in any order and
-orientation, with holes, multiple components, and islands-inside-holes
-resolved automatically by containment — and fills the enclosed interior
-with quality simplices. The engine is constrained Delaunay triangulation
+meshes. :func:`fill_interior` takes a closed codimension-one boundary
+``Mesh`` and fills the enclosed interior with quality simplices. In 2D, the
+boundary is an edge mesh forming one or more loops, in any order and
+orientation. The algorithm resolves holes, multiple components, and
+islands-inside-holes automatically through containment.
+
+The algorithm uses constrained Delaunay triangulation
 (Bowyer--Watson insertion with constrained-edge recovery, holes removed
 topologically by even-odd parity flood fill) followed by Ruppert's
-Delaunay refinement, so in 2D every output triangle **provably** satisfies
+Delaunay refinement, so that every 2D output triangle *provably* satisfies
 the requested minimum-angle bound and, optionally, a maximum cell size.
-Optional optimal-Delaunay-triangulation (ODT) smoothing — each interior
-vertex moves to the area-weighted average of its incident triangles'
-circumcenters (Chen & Xu 2004) — via ``smooth_iterations`` improves the *typical*
-angle while preserving both bounds. The exact-boundary contract: every
-input vertex appears bit-identically in the output (leading rows, input
-order), boundary facets are only ever *subdivided*, never moved, and the
-whole pipeline is deterministic. Provenance fields
-(``"boundary_marker"``, ``"source_point"``) can be attached to the
-output's ``point_data`` — opt-in via ``provenance=True``, so no keys are
-claimed in the user-owned namespace by default.
 
-The contract is dimension-generic by design; ``n = 3`` (watertight surface
-``Mesh[2, 3]`` → tetrahedra) currently raises :class:`NotImplementedError`
-because exact 3D boundary recovery is a separate, hard program. For
-implicit domains — or approximate volume meshing of a surface via its SDF
-— see ``physicsnemo.mesh.generate.mesh_implicit_domain``.
+Optional optimal-Delaunay-triangulation (ODT) smoothing, controlled by
+``smooth_iterations``, moves each interior vertex to the area-weighted
+average of its incident triangles' circumcenters (Chen and Xu 2004). This
+improves the *typical* angle while preserving both bounds. The
+exact-boundary contract provides three guarantees:
+
+- Every input vertex appears bit-identically in the output, in leading
+  rows and input order.
+- The pipeline only ever *subdivides* boundary facets and never moves
+  them.
+- The entire process is deterministic.
+
+You can attach provenance fields (``"boundary_marker"`` and
+``"source_point"``) to the output's ``point_data`` by setting
+``provenance=True``. By default, the pipeline claims no keys in the
+user-owned namespace.
+
+The contract is dimension-generic by design. The ``n = 3`` case (a
+watertight surface ``Mesh[2, 3]`` producing tetrahedra) currently raises
+:class:`NotImplementedError`: exact 3D boundary recovery is a
+substantially harder problem that requires its own implementation effort.
+For implicit domains, or approximate volume meshing of a surface through
+its SDF, refer to :func:`physicsnemo.mesh.generate.mesh_implicit_domain`.
 
 .. code:: python
 

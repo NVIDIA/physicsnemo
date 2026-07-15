@@ -24,10 +24,10 @@ the 2D (polygon -> triangle) case.
 Also exposes exact-boundary quality mesh *generation* (which inserts new
 points, unlike :func:`triangulate`'s pure decomposition):
 :func:`fill_interior` takes a closed codimension-one boundary ``Mesh`` (edge
-loops in 2D) and fills the enclosed interior with quality simplices via
-constrained Delaunay triangulation with Ruppert refinement — every input
-vertex is preserved bit-identically, and in 2D every output angle is
-guaranteed to meet the requested bound. :func:`polygon_interior_point`
+loops in 2D) and fills the enclosed interior with quality simplices through
+constrained Delaunay triangulation with Ruppert refinement. The algorithm
+preserves every input vertex bit-identically, and in 2D every output angle
+meets the requested bound. :func:`polygon_interior_point`
 returns a point strictly inside a simple polygon.
 
 """
