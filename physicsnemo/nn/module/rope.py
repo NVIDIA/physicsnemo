@@ -27,29 +27,38 @@ position is woven into the rotation of each head's Q/K projections.
 
 This module exposes two levels of API:
 
-**Ready-to-use modules** (bring-your-own-attention):
-  - :class:`RotaryPositionEmbedding2D` — axial 2D RoPE for global attention over
-    a flattened :math:`h \times w` token grid (ViT / SDPA style, shape
-    :math:`(B, \text{heads}, h \cdot w, head\_dim)`).
-  - :class:`RotaryPositionEmbedding1D` — standard 1D sequence RoPE for general
-    transformers (shape :math:`(B, \text{heads}, \text{seq}, head\_dim)`).
+**Shared table-provider modules** (owners of the cos/sin tables):
+  - :class:`RotaryEmbedding2DTables` — owns axial 2D RoPE cos/sin tables for an
+    :math:`h \times w` token grid, in explicit ``(h, w, head_dim)`` layout.
+  - :class:`RotaryEmbedding1DTables` — owns standard 1D sequence RoPE cos/sin
+    tables of shape ``(max_seq_len, head_dim)``.
+
+  A provider holds *no* projections and applies *no* rotation itself: its
+  ``forward`` simply returns the ``(cos, sin)`` tables. The intended pattern is
+  that a top-level, multi-block model constructs a *single* provider and passes
+  the returned tables into every attention block's ``forward`` (which rotates
+  Q/K with the functional :func:`apply_rotary_pos_emb`), so the tables are
+  built, stored, and — under domain parallelism — sharded exactly once instead
+  of once per block. See
+  :class:`~physicsnemo.nn.module.dit_layers.RopeNatten2DSelfAttention` and
+  :class:`~physicsnemo.models.dit.DiT` for a reference wiring.
 
 **Low-level functional helpers** (:func:`build_axial_rope_cos_sin_2d`,
 :func:`build_rope_cos_sin_1d`, :func:`apply_rotary_pos_emb`):
-  Used internally by the modules above and by attention implementations that
+  Used internally by the providers above and by attention implementations that
   need direct control over the table layout (e.g. NATTEN windowed attention,
   which keeps explicit spatial ``(h, w)`` dimensions, or domain-parallel
   paths that shard the tables across GPUs).
 
 Choosing the right API
 ----------------------
-* Writing a custom attention block that takes a *flattened* sequence from a 2D
-  grid?  Use :class:`RotaryPositionEmbedding2D`.
-* Writing a general-sequence transformer?  Use :class:`RotaryPositionEmbedding1D`.
-* Implementing NATTEN windowed attention or need sharded / domain-parallel
-  tables?  Use the functional helpers directly (see
-  :class:`~physicsnemo.nn.module.dit_layers.RopeNatten2DSelfAttention` for a
-  reference implementation).
+* Building a multi-block transformer (2D grid or 1D sequence)?  Construct one
+  :class:`RotaryEmbedding2DTables` / :class:`RotaryEmbedding1DTables` at the top
+  level of the model and share its tables across every block, applying them
+  with :func:`apply_rotary_pos_emb`.
+* Implementing a single attention block or need full control over the table
+  layout?  Call the functional helpers directly and apply them with
+  :func:`apply_rotary_pos_emb`.
 
 Math (axial 2D RoPE)
 --------------------
@@ -216,11 +225,11 @@ def apply_rotary_pos_emb(
 
     Call this directly when you manage the cos/sin tables
     yourself — for example, inside a custom NATTEN or domain-parallel attention
-    block where you build the tables with :func:`build_axial_rope_cos_sin_2d`
-    or :func:`build_rope_cos_sin_1d` and need to apply them independently to
-    queries and keys.  If you are using :class:`RotaryPositionEmbedding2D` or
-    :class:`RotaryPositionEmbedding1D`, those modules call this function
-    internally and you do not need to invoke it yourself.
+    block where you obtain the tables from a
+    :class:`RotaryEmbedding2DTables` / :class:`RotaryEmbedding1DTables` provider
+    (or build them with :func:`build_axial_rope_cos_sin_2d` /
+    :func:`build_rope_cos_sin_1d`) and need to apply them independently to
+    queries and keys.
 
     Parameters
     ----------
@@ -251,37 +260,28 @@ def apply_rotary_pos_emb(
     return (x * cos + rotate_half * sin).to(in_dtype)
 
 
-class RotaryPositionEmbedding2D(Module):
-    r"""Axial 2D rotary position embedding for flattened-sequence attention.
+class RotaryEmbedding2DTables(Module):
+    r"""Shared owner of axial 2D RoPE cos/sin tables for an :math:`h \times w` grid.
 
-    Encodes the 2D spatial position :math:`(row, col)` of
-    each token by rotating its query and key vectors before the attention
-    dot-product.  The first half of ``head_dim`` is rotated by the row index;
-    the second half by the column index.  Because only the *relative* rotation
-    between query and key enters the dot-product, attention scores are
-    automatically sensitive to relative 2D position — no learned positional
-    vectors are added to the token features.
+    This module *owns* the cos/sin tables and nothing else: it holds no
+    projections and applies no rotation. Its :meth:`forward` returns the
+    ``(cos, sin)`` tables in explicit ``(h, w, head_dim)`` spatial layout, which
+    a consumer applies to its query/key with :func:`apply_rotary_pos_emb`.
 
-    Use it when you are building a *custom attention module* that operates
-    on a *flattened 2D token grid* in the standard
-    :math:`(B, \text{heads}, N, head\_dim)` layout where
-    :math:`N = h \times w`.  Typical examples:
+    The intended pattern is that a top-level, multi-block model constructs a
+    *single* instance and passes the returned tables into every attention
+    block's ``forward`` (see
+    :class:`~physicsnemo.nn.module.dit_layers.RopeNatten2DSelfAttention` and
+    :class:`~physicsnemo.models.dit.DiT`). Building, storing, and — under domain
+    parallelism — sharding the tables then happens exactly once for the whole
+    model instead of once per block.
 
-    * Vision-transformer (ViT) style full-sequence
-      :func:`torch.nn.functional.scaled_dot_product_attention`.
-    * Custom ``timm``-style transformer blocks.
-    * Any attention block that receives a flat token sequence but should
-      respect 2D spatial geometry.
-
-    When *not* to use this class:
-
-    * *NATTEN windowed attention* keeps the spatial axes explicit
-      :math:`(B, h, w, \text{heads}, head\_dim)`, so it needs tables with that
-      layout; use the functional helpers or
-      :class:`~physicsnemo.nn.module.dit_layers.RopeNatten2DSelfAttention`
-      directly.
-    * *Domain-parallel / sharded* attention needs tables that can be sliced
-      along the ``h`` or ``w`` dimension; again use the functional helpers.
+    The tables are stored as ``persistent=False`` buffers named ``rope_cos`` /
+    ``rope_sin``: they are deterministically reconstructed from
+    ``(latent_hw, head_dim, theta)`` and do not need to be saved with the model
+    weights. The names and the height-first ``(h, w, head_dim)`` layout are
+    chosen so that domain-parallel sharding along dimension 0 (height) gives
+    each rank globally-correct rows with no explicit rank offset in model code.
 
     Parameters
     ----------
@@ -295,61 +295,34 @@ class RotaryPositionEmbedding2D(Module):
 
     Forward
     -------
-    q, k : torch.Tensor
-        Query and key tensors of shape :math:`(\ldots, h \cdot w, head\_dim)`.
-        Tokens must be in row-major order (height varies slowest), matching the
-        order produced by ``tensor.flatten(-3, -2)`` from an :math:`(h, w)`
-        spatial grid.
     latent_hw : Tuple[int, int], optional
-        Override the spatial grid size at call time.  If given and different
-        from the construction-time grid, the cos/sin tables are rebuilt in
-        place before rotating (off the ``torch.compile`` fast path).
+        Override the spatial grid size at call time. If given and different from
+        the current grid, the cos/sin tables are rebuilt in place before being
+        returned (off the ``torch.compile`` fast path). Under domain parallelism
+        the in-place rebuild replaces the sharded buffers with plain tensors, so
+        it is only appropriate for single-device variable-resolution inference.
 
-    Returns
+    Outputs
     -------
     Tuple[torch.Tensor, torch.Tensor]
-        The rotated ``(q, k)``, same shape and dtype as the inputs.
+        ``(rope_cos, rope_sin)``, each of shape :math:`(h, w, head\_dim)`.
 
     Examples
     --------
     >>> import torch
-    >>> from physicsnemo.nn.module.rope import RotaryPositionEmbedding2D
-    >>> rope = RotaryPositionEmbedding2D(head_dim=16, latent_hw=(4, 4))
-    >>> q = torch.randn(2, 8, 16, 16)  # (B, heads, h*w, head_dim)
-    >>> k = torch.randn(2, 8, 16, 16)
-    >>> q_rot, k_rot = rope(q, k)
+    >>> from physicsnemo.nn.module.rope import (
+    ...     RotaryEmbedding2DTables,
+    ...     apply_rotary_pos_emb,
+    ... )
+    >>> rope = RotaryEmbedding2DTables(head_dim=16, latent_hw=(4, 4))
+    >>> cos, sin = rope()
+    >>> cos.shape
+    torch.Size([4, 4, 16])
+    >>> # q reshaped to spatial layout (B, heads, h, w, head_dim)
+    >>> q = torch.randn(2, 8, 4, 4, 16)
+    >>> q_rot = apply_rotary_pos_emb(q, cos.unsqueeze(0).unsqueeze(0), sin.unsqueeze(0).unsqueeze(0))
     >>> q_rot.shape
-    torch.Size([2, 8, 16, 16])
-
-    Wiring to :func:`torch.nn.functional.scaled_dot_product_attention` in a
-    full multi-head self-attention pass over a flattened 2D token grid:
-
-    .. code-block:: python
-
-        import torch
-        import torch.nn.functional as F
-        from physicsnemo.nn.module.rope import RotaryPositionEmbedding2D
-
-        B, num_heads, h, w, head_dim = 1, 4, 8, 8, 32
-        D = num_heads * head_dim  # model dimension
-        rope = RotaryPositionEmbedding2D(head_dim=head_dim, latent_hw=(h, w))
-        N = h * w  # number of spatial tokens
-
-        # Simulate linear Q/K/V projections from flat token sequence
-        x = torch.randn(B, N, D)
-        Wq = torch.nn.Linear(D, D, bias=False)
-        Wk = torch.nn.Linear(D, D, bias=False)
-        Wv = torch.nn.Linear(D, D, bias=False)
-        q = Wq(x).view(B, N, num_heads, head_dim).transpose(1, 2)  # (B, H, N, head_dim)
-        k = Wk(x).view(B, N, num_heads, head_dim).transpose(1, 2)
-        v = Wv(x).view(B, N, num_heads, head_dim).transpose(1, 2)
-
-        # Rotate queries and keys with axial 2D RoPE before attention
-        q_rot, k_rot = rope(q, k)
-
-        # Scaled dot-product attention; q_rot and k_rot carry position info
-        out = F.scaled_dot_product_attention(q_rot, k_rot, v)  # (B, H, N, head_dim)
-        out = out.transpose(1, 2).reshape(B, N, D)  # merge heads -> (B, N, D)
+    torch.Size([2, 8, 4, 4, 16])
     """
 
     def __init__(
@@ -369,76 +342,62 @@ class RotaryPositionEmbedding2D(Module):
         cos, sin = build_axial_rope_cos_sin_2d(
             *self._latent_hw, self.head_dim, theta=self.theta
         )
-        # Flatten the spatial axes to (h*w, head_dim) so the tables broadcast
-        # against any (..., seq, head_dim) attention layout.
-        self.register_buffer("cos", cos.reshape(-1, self.head_dim), persistent=False)
-        self.register_buffer("sin", sin.reshape(-1, self.head_dim), persistent=False)
+        # persistent=False: not in state_dict (rebuilt deterministically from
+        # latent_hw + head_dim + theta), so checkpoints stay lean. Names
+        # rope_cos/rope_sin and (h, w, head_dim) layout let domain parallelism
+        # shard parameters along desired axes.
+        self.register_buffer("rope_cos", cos, persistent=False)  # (h, w, head_dim)
+        self.register_buffer("rope_sin", sin, persistent=False)  # (h, w, head_dim)
 
-    def _rebuild_for_shape(self, h: int, w: int) -> None:
-        """Rebuild the cos/sin tables for a new latent shape (off the hot path)."""
-        target_dtype = self.cos.dtype
-        target_device = self.cos.device
+    def _maybe_rebuild(self, h: int, w: int) -> None:
+        r"""Rebuild the cos/sin tables for a new latent shape if it changed.
+
+        Reached only when :meth:`forward` is called with a ``latent_hw`` that
+        differs from the current grid (e.g. variable-resolution inference); not
+        part of the training-time hot path.
+        """
+        if (int(h), int(w)) == self._latent_hw:
+            return
+        target_dtype = self.rope_cos.dtype
+        target_device = self.rope_cos.device
         cos, sin = build_axial_rope_cos_sin_2d(
             h, w, self.head_dim, theta=self.theta, device=target_device
         )
-        self.register_buffer(
-            "cos", cos.reshape(-1, self.head_dim).to(target_dtype), persistent=False
-        )
-        self.register_buffer(
-            "sin", sin.reshape(-1, self.head_dim).to(target_dtype), persistent=False
-        )
+        self.register_buffer("rope_cos", cos.to(dtype=target_dtype), persistent=False)
+        self.register_buffer("rope_sin", sin.to(dtype=target_dtype), persistent=False)
         self._latent_hw = (int(h), int(w))
 
     def forward(
         self,
-        q: Float[torch.Tensor, "*batch seq head_dim"],
-        k: Float[torch.Tensor, "*batch seq head_dim"],
         latent_hw: Optional[Tuple[int, int]] = None,
     ) -> Tuple[
-        Float[torch.Tensor, "*batch seq head_dim"],
-        Float[torch.Tensor, "*batch seq head_dim"],
+        Float[torch.Tensor, "h w head_dim"],
+        Float[torch.Tensor, "h w head_dim"],
     ]:
-        if latent_hw is not None and (
-            (int(latent_hw[0]), int(latent_hw[1])) != self._latent_hw
-        ):
-            self._rebuild_for_shape(int(latent_hw[0]), int(latent_hw[1]))
-
-        n = self.cos.shape[0]
-        if not torch.compiler.is_compiling() and (q.shape[-2] != n or k.shape[-2] != n):
-            raise ValueError(
-                f"q/k sequence length must be h*w={n} (latent_hw={self._latent_hw}), "
-                f"but got q={q.shape[-2]}, k={k.shape[-2]}"
-            )
-        return apply_rotary_pos_emb(q, self.cos, self.sin), apply_rotary_pos_emb(
-            k, self.cos, self.sin
-        )
+        if latent_hw is not None:
+            self._maybe_rebuild(int(latent_hw[0]), int(latent_hw[1]))
+        return self.rope_cos, self.rope_sin
 
 
-class RotaryPositionEmbedding1D(Module):
-    r"""Standard 1D rotary position embedding for sequence transformers.
+class RotaryEmbedding1DTables(Module):
+    r"""Shared owner of standard 1D RoPE cos/sin tables for a token sequence.
 
-    Encodes each token's absolute sequence position by
-    rotating its query and key vectors before the attention dot-product.
-    Because only the *relative* rotation between query and key enters the
-    dot-product, attention scores are automatically sensitive to relative
-    position — no learned positional vectors are added to the token features.
-    This is the same RoPE variant used by most autoregressive and encoder
-    transformer architectures (LLaMA, GPT-NeoX, etc.).
+    This module *owns* the cos/sin tables and nothing else: it holds no
+    projections and applies no rotation. Its :meth:`forward` returns the
+    ``(cos, sin)`` tables of shape :math:`(seq\_len, head\_dim)`, which a
+    consumer applies to its query/key with :func:`apply_rotary_pos_emb`. This is
+    the same RoPE variant used by most autoregressive and encoder transformer
+    architectures (LLaMA, GPT-NeoX, etc.).
 
-    Use it when your attention module operates on
-    a *1D token sequence* in the standard
-    :math:`(B, \text{heads}, \text{seq}, head\_dim)` layout.  Typical examples:
+    A top-level, multi-block transformer constructs a *single* instance and
+    shares its tables across all blocks, so the tables are built and stored once
+    instead of once per block. Sequences shorter than ``max_seq_len`` are served
+    by returning the leading positions of the precomputed table, so one instance
+    covers any length up to ``max_seq_len`` without rebuilding.
 
-    * General encoder/decoder transformers over variable-length sequences.
-    * Autoregressive language models with a causal attention mask.
-    * Any custom attention block that needs sequence-position awareness.
-
-    Inputs shorter than ``max_seq_len`` are rotated with the leading positions
-    of the precomputed table, so a single module instance can serve any
-    sequence length up to ``max_seq_len`` without rebuilding.  The cos/sin
-    tables are stored as ``persistent=False`` buffers (they are
-    deterministically reconstructed from ``(max_seq_len, head_dim, theta)``
-    and do not need to be saved with the model weights).
+    The tables are stored as ``persistent=False`` buffers (they are
+    deterministically reconstructed from ``(max_seq_len, head_dim, theta)`` and
+    do not need to be saved with the model weights).
 
     Parameters
     ----------
@@ -452,55 +411,30 @@ class RotaryPositionEmbedding1D(Module):
 
     Forward
     -------
-    q, k : torch.Tensor
-        Query and key tensors of shape :math:`(\ldots, \text{seq}, head\_dim)`
-        with ``seq <= max_seq_len``.
+    seq_len : int, optional
+        Number of leading positions to return. If ``None``, the full
+        ``max_seq_len`` table is returned.
 
-    Returns
+    Outputs
     -------
     Tuple[torch.Tensor, torch.Tensor]
-        The rotated ``(q, k)``, same shape and dtype as the inputs.
+        ``(cos, sin)``, each of shape :math:`(seq\_len, head\_dim)`.
 
     Examples
     --------
     >>> import torch
-    >>> from physicsnemo.nn.module.rope import RotaryPositionEmbedding1D
-    >>> rope = RotaryPositionEmbedding1D(head_dim=16, max_seq_len=128)
+    >>> from physicsnemo.nn.module.rope import (
+    ...     RotaryEmbedding1DTables,
+    ...     apply_rotary_pos_emb,
+    ... )
+    >>> rope = RotaryEmbedding1DTables(head_dim=16, max_seq_len=128)
+    >>> cos, sin = rope(seq_len=100)
+    >>> cos.shape
+    torch.Size([100, 16])
     >>> q = torch.randn(2, 8, 100, 16)  # (B, heads, seq, head_dim)
-    >>> k = torch.randn(2, 8, 100, 16)
-    >>> q_rot, k_rot = rope(q, k)
+    >>> q_rot = apply_rotary_pos_emb(q, cos, sin)
     >>> q_rot.shape
     torch.Size([2, 8, 100, 16])
-
-    Wiring to :func:`torch.nn.functional.scaled_dot_product_attention` with a
-    causal mask, as used in autoregressive transformer decoders:
-
-    .. code-block:: python
-
-        import torch
-        import torch.nn.functional as F
-        from physicsnemo.nn.module.rope import RotaryPositionEmbedding1D
-
-        B, num_heads, seq, head_dim = 2, 4, 64, 32
-        D = num_heads * head_dim  # model dimension
-        rope = RotaryPositionEmbedding1D(head_dim=head_dim, max_seq_len=128)
-
-        # Simulate linear Q/K/V projections from a token sequence
-        x = torch.randn(B, seq, D)
-        Wq = torch.nn.Linear(D, D, bias=False)
-        Wk = torch.nn.Linear(D, D, bias=False)
-        Wv = torch.nn.Linear(D, D, bias=False)
-        q = Wq(x).view(B, seq, num_heads, head_dim).transpose(1, 2)  # (B, H, T, head_dim)
-        k = Wk(x).view(B, seq, num_heads, head_dim).transpose(1, 2)
-        v = Wv(x).view(B, seq, num_heads, head_dim).transpose(1, 2)
-
-        # Rotate queries and keys with 1D RoPE before attention
-        q_rot, k_rot = rope(q, k)
-
-        # Causal self-attention; RoPE makes dot-products sensitive to relative
-        # position between query and key tokens, not absolute positions
-        out = F.scaled_dot_product_attention(q_rot, k_rot, v, is_causal=True)
-        out = out.transpose(1, 2).reshape(B, seq, D)  # merge heads -> (B, T, D)
     """
 
     def __init__(
@@ -523,24 +457,16 @@ class RotaryPositionEmbedding1D(Module):
 
     def forward(
         self,
-        q: Float[torch.Tensor, "*batch seq head_dim"],
-        k: Float[torch.Tensor, "*batch seq head_dim"],
+        seq_len: Optional[int] = None,
     ) -> Tuple[
-        Float[torch.Tensor, "*batch seq head_dim"],
-        Float[torch.Tensor, "*batch seq head_dim"],
+        Float[torch.Tensor, "seq head_dim"],
+        Float[torch.Tensor, "seq head_dim"],
     ]:
-        seq_len = q.shape[-2]
-        if not torch.compiler.is_compiling():
-            if k.shape[-2] != seq_len:
-                raise ValueError(
-                    f"q and k must share a sequence length; got q={seq_len}, "
-                    f"k={k.shape[-2]}"
-                )
-            if seq_len > self.max_seq_len:
-                raise ValueError(
-                    f"sequence length {seq_len} exceeds max_seq_len={self.max_seq_len}"
-                )
-        # Slice the leading positions so the module serves any length <= max.
-        cos = self.cos[:seq_len]
-        sin = self.sin[:seq_len]
-        return apply_rotary_pos_emb(q, cos, sin), apply_rotary_pos_emb(k, cos, sin)
+        if seq_len is None:
+            return self.cos, self.sin
+        if not torch.compiler.is_compiling() and seq_len > self.max_seq_len:
+            raise ValueError(
+                f"sequence length {seq_len} exceeds max_seq_len={self.max_seq_len}"
+            )
+        # Slice the leading positions so one instance serves any length <= max.
+        return self.cos[:seq_len], self.sin[:seq_len]

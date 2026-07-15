@@ -79,16 +79,33 @@ def _compute_morton_codes(
 
     N, D = centroids.shape
     device = centroids.device
+    if D == 0:
+        raise ValueError("centroids must contain at least one spatial dimension")
+    if N == 0:
+        return torch.empty(0, dtype=torch.int64, device=device)
 
-    ### Bits per dimension: 63 // D keeps total code <= 63 bits (non-negative int64)
-    n_bits = 63 // D
+    ### Bits per dimension: keep the total code within non-negative int64. For
+    ### D=1, a 63-bit grid maximum rounds to 2^63 in floating point before the
+    ### int64 conversion. Limit that case to 62 bits to avoid overflow.
+    n_bits = min(62, 63 // D)
     max_val = (1 << n_bits) - 1
 
-    ### Quantize centroids to integer grid [0, 2^n_bits - 1]
-    cmin = centroids.min(dim=0).values  # (D,)
-    cmax = centroids.max(dim=0).values  # (D,)
-    extent = (cmax - cmin).clamp(min=1e-30)  # avoid division by zero
-    coords = ((centroids - cmin) / extent * max_val).long().clamp(0, max_val)  # (N, D)
+    ### Quantize centroids to integer grid [0, 2^n_bits - 1]. Half-precision
+    ### dtypes cannot represent this grid's scale, so normalize in at least
+    ### float32 while retaining float64 input precision.
+    quantization_dtype = (
+        torch.float64 if centroids.dtype == torch.float64 else torch.float32
+    )
+    quantization_points = centroids.to(quantization_dtype)
+    cmin = quantization_points.min(dim=0).values  # (D,)
+    cmax = quantization_points.max(dim=0).values  # (D,)
+    extent = cmax - cmin
+    # Preserve every representable nonzero extent. Constant axes have a zero
+    # numerator, so replacing only their zero denominator maps them to zero.
+    safe_extent = torch.where(extent != 0, extent, torch.ones_like(extent))
+    coords = (
+        ((quantization_points - cmin) / safe_extent * max_val).long().clamp(0, max_val)
+    )  # (N, D)
 
     ### Bit-interleave all dimensions: bit b of dim d -> position b*D + d.
     if device.type == "cuda":
@@ -204,13 +221,22 @@ def _compute_leaf_aabbs(
     dtype = sorted_aabb_min.dtype
     n_leaf_segs = len(leaf_seg_starts)
 
-    if int(leaf_seg_sizes.sum()) == 0 or n_leaf_segs == 0:
+    # ``n_leaf_segs == 0`` is a host-side shape read (no sync). The former
+    # ``int(leaf_seg_sizes.sum()) == 0`` guard is dropped: leaf segments always
+    # hold >= 1 cell, so the sum is > 0 whenever there is any segment, making
+    # the check both redundant and a host-device synchronization.
+    if n_leaf_segs == 0:
         return (
             torch.empty((0, D), dtype=dtype, device=device),
             torch.empty((0, D), dtype=dtype, device=device),
         )
 
-    cell_pos, seg_ids = _ragged_arange(leaf_seg_starts, leaf_seg_sizes)
+    # Every sorted cell belongs to exactly one leaf, so the total expanded
+    # length equals the number of sorted cells -- a host-known shape. Passing it
+    # avoids ``_ragged_arange``'s internal ``arange(counts.sum())`` sync.
+    cell_pos, seg_ids = _ragged_arange(
+        leaf_seg_starts, leaf_seg_sizes, total=sorted_aabb_min.shape[0]
+    )
 
     cell_mins = sorted_aabb_min[cell_pos]  # (total_cells, D)
     cell_maxs = sorted_aabb_max[cell_pos]  # (total_cells, D)

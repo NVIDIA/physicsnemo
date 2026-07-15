@@ -28,15 +28,17 @@
 
 
 import datetime
+from collections.abc import Callable
 from typing import TypeVar, Union
 
 import numpy as np
+import torch
 
 # helper type
 dtype = np.float32
 
 
-T = TypeVar("T", np.ndarray, float)
+T = TypeVar("T", torch.Tensor, np.ndarray, float)
 
 TIMESTAMP_2000 = datetime.datetime(2000, 1, 1, 12, 0, tzinfo=datetime.UTC).timestamp()
 
@@ -55,13 +57,13 @@ def cos_zenith_angle(
 
     Parameters
     ----------
-    time: time in UTC
-    lon: float or np.ndarray in degrees (E/W)
-    lat: float or np.ndarray in degrees (N/S)
+    time: datetime.datetime, time in UTC
+    lon: float, np.ndarray or torch.Tensor, longitude in degrees (E/W)
+    lat: float, np.ndarray or torch.Tensor, latitude in degrees (N/S)
 
     Returns
     --------
-    float, np.ndarray
+    float, np.ndarray or torch.Tensor, cosine of the solar zenith angle
 
     Example:
     --------
@@ -70,8 +72,8 @@ def cos_zenith_angle(
     >>> bool(abs(angle - -0.447817277) < 1e-6)
     True
     """
-    lon_rad = np.deg2rad(lon, dtype=dtype)
-    lat_rad = np.deg2rad(lat, dtype=dtype)
+    lon_rad = _deg2rad(lon, dtype=dtype)
+    lat_rad = _deg2rad(lat, dtype=dtype)
     julian_centuries = _datetime_to_julian_century(time)
     return _star_cos_zenith(julian_centuries, lon_rad, lat_rad)
 
@@ -82,16 +84,21 @@ def cos_zenith_angle_from_timestamp(
     lat: T,
 ) -> T:
     """
-    Compute cosine of zenith angle using UNIX timestamp
+    Cosine of sun-zenith angle for lon, lat at a given UNIX timestamp (UTC).
 
     Since the UNIX timestamp is a floating point or integer this routine can be
     compiled with jax.
 
     Parameters
     ----------
-    timestamp: timestamp in seconds from UNIX epoch
-    lon: longitude in degrees E
-    lat: latitude in degrees N
+    timestamp: float, np.ndarray or torch.Tensor, UNIX timestamp in seconds
+    lon: float, np.ndarray or torch.Tensor, longitude in degrees (E/W)
+    lat: float, np.ndarray or torch.Tensor, latitude in degrees (N/S)
+
+    Returns
+    -------
+    float, np.ndarray or torch.Tensor, cosine of the solar zenith angle,
+    same type as the inputs
 
     Example:
     --------
@@ -100,10 +107,60 @@ def cos_zenith_angle_from_timestamp(
     >>> bool(abs(angle - -0.447817277) < 1e-6)
     True
     """
-    lon_rad = np.deg2rad(lon, dtype=dtype)
-    lat_rad = np.deg2rad(lat, dtype=dtype)
+    lon_rad = _deg2rad(lon, dtype=dtype)
+    lat_rad = _deg2rad(lat, dtype=dtype)
     julian_centuries = _timestamp_to_julian_century(timestamp)
     return _star_cos_zenith(julian_centuries, lon_rad, lat_rad)
+
+
+def _deg2rad(x: T, dtype: np.typing.DTypeLike | torch.dtype | None = None) -> T:
+    """Convert degrees to radians.
+
+    Parameters
+    ----------
+    x: input float, ndarray or torch.Tensor, in degrees
+    dtype: dtype to cast to; NumPy-compatible or torch-compatible dtype or None.
+        NumPy dtypes can be used with torch Tensors.
+        If None, will use the dtype of x.
+
+    Returns
+    -------
+    float, np.ndarray or torch.Tensor, x in radians, with the specified dtype
+    """
+
+    if isinstance(x, torch.Tensor):
+        if dtype is not None and not isinstance(dtype, torch.dtype):
+            # dtype is a numpy-compatible type; convert to the equivalent torch.dtype
+            dtype = torch.from_numpy(np.empty(0, dtype=dtype)).dtype
+        return torch.deg2rad(x.to(dtype=dtype))
+    return np.deg2rad(x, dtype=dtype)
+
+
+def _dispatch_torch_numpy(torch_fn: Callable, numpy_fn: Callable):
+    """Create generic math function that routes to either a numpy function or the torch equivalent."""
+
+    def fn(*args: T) -> T:
+        return torch_fn(*args) if isinstance(args[0], torch.Tensor) else numpy_fn(*args)
+
+    return fn
+
+
+_arccos = _dispatch_torch_numpy(torch.arccos, np.arccos)
+_arctan2 = _dispatch_torch_numpy(torch.arctan2, np.arctan2)
+_cos = _dispatch_torch_numpy(torch.cos, np.cos)
+_isnan = _dispatch_torch_numpy(torch.isnan, np.isnan)
+_sqrt = _dispatch_torch_numpy(torch.sqrt, np.sqrt)
+_sin = _dispatch_torch_numpy(torch.sin, np.sin)
+_where = _dispatch_torch_numpy(torch.where, np.where)
+
+
+def _maximum(x: T, y: T) -> T:
+    if isinstance(x, torch.Tensor):
+        # torch.maximum requires both arguments to be tensors
+        if not isinstance(y, torch.Tensor):
+            y = torch.as_tensor(y, dtype=x.dtype, device=x.device)
+        return torch.maximum(x, y)
+    return np.maximum(x, y)
 
 
 def irradiance(
@@ -131,6 +188,9 @@ def irradiance(
         the longitude when the Earth crosses the equator from South to North.
     newton_iterations: number of iterations for newton solver for elliptic anomaly
 
+    Returns
+    -------
+    float or torch.Tensor, solar irradiance at the top of atmosphere in W/m²
 
     Notes
     -----
@@ -162,7 +222,7 @@ def irradiance(
     # from appendix of Berger 1978
     M = (t - year_2000_equinox.timestamp()) % mean_tropical_year
     M = M / mean_tropical_year * 2 * np.pi
-    M -= np.deg2rad(perihelion_longitude)
+    M -= _deg2rad(perihelion_longitude)
 
     # to get the elliptic anomaly E from the "mean anomaly" M
     # use eq. 6.37
@@ -170,10 +230,10 @@ def irradiance(
     # r / a = (1 - e cos E )
     # E - e sin(E) = M
     def f(E):
-        return E - e * np.sin(E) - M
+        return E - e * _sin(E) - M
 
     def fp(E):
-        return 1 - e * np.cos(E)
+        return 1 - e * _cos(E)
 
     # newton iterations
     # initial guess
@@ -181,7 +241,7 @@ def irradiance(
     for _ in range(newton_iterations):
         E = E - f(E) / fp(E)
 
-    rho = 1 - e * np.cos(E)
+    rho = 1 - e * _cos(E)
     return S0 / rho**2
 
 
@@ -249,8 +309,8 @@ def toa_incident_solar_radiation_accumulated(
         Mean rates/fluxes and accumulations at step=0 have values of zero because the length of the processing period is zero.
 
     """  # noqa
-    lat = np.deg2rad(lat)
-    lon = np.deg2rad(lon)
+    lat = _deg2rad(lat)
+    lon = _deg2rad(lon)
 
     century = _timestamp_to_julian_century(t)
     ra, dec = _right_ascension_declination(century)
@@ -258,8 +318,8 @@ def toa_incident_solar_radiation_accumulated(
     # 0 <= h1 < 2 pi
     h1 = _local_hour_angle(century, lon, ra)
     h0 = h1 - interval_radians
-    A = np.sin(lat) * np.sin(dec)
-    B = np.cos(lat) * np.cos(dec)
+    A = _sin(lat) * _sin(dec)
+    B = _cos(lat) * _cos(dec)
 
     # assume irradiance is constant over the interval
     S = irradiance(t, S0, e, perihelion_longitude, mean_tropical_year)
@@ -270,10 +330,10 @@ def toa_incident_solar_radiation_accumulated(
 def _integrate_abs_cosz(A, B, h0, h1):
     """Analytically integrate max(A + B cos(h), 0) from h=h0 to h1"""
 
-    hc = np.arccos(-A / B)
+    hc = _arccos(-A / B)
 
     def integrate_cosz(left, right):
-        return A * (right - left) + B * (np.sin(right) - np.sin(left))
+        return A * (right - left) + B * (_sin(right) - _sin(left))
 
     def integrate_abs_cosz_from_zero_to(a):
         root1 = -hc + 2 * np.pi
@@ -284,14 +344,14 @@ def _integrate_abs_cosz(A, B, h0, h1):
 
         # if there is a root
         a = a % T
-        C = integrate_cosz(0, np.where(a < hc, a, hc))
-        D = np.where(root1 < a, integrate_cosz(root1, a), 0)
+        C = integrate_cosz(0, _where(a < hc, a, hc))
+        D = _where(root1 < a, integrate_cosz(root1, a), 0)
         total = integrate_cosz(0, hc) + integrate_cosz(root1, 2 * np.pi)
         return C + D + total * n
 
-    return np.where(
-        np.isnan(hc),
-        np.maximum(integrate_cosz(h0, h1), 0),
+    return _where(
+        _isnan(hc),
+        _maximum(integrate_cosz(h0, h1), 0),
         integrate_abs_cosz_from_zero_to(h1) - integrate_abs_cosz_from_zero_to(h0),
     )
 
@@ -354,10 +414,10 @@ def _greenwich_mean_sidereal_time(jul_centuries):
     theta = 67310.54841 + jul_centuries * (
         876600 * 3600
         + 8640184.812866
-        + jul_centuries * (0.093104 - jul_centuries * 6.2 * 10e-6)
+        + jul_centuries * (0.093104 - jul_centuries * 6.2e-6)
     )
 
-    theta_radians = np.deg2rad(theta / 240.0) % (2 * np.pi)
+    theta_radians = _deg2rad(theta / 240.0) % (2 * np.pi)
 
     return theta_radians
 
@@ -396,7 +456,7 @@ def _sun_ecliptic_longitude(julian_centuries):
     """
 
     # mean anomaly calculation
-    mean_anomaly = np.deg2rad(
+    mean_anomaly = _deg2rad(
         357.52910
         + 35999.05030 * julian_centuries
         - 0.0001559 * julian_centuries * julian_centuries
@@ -404,15 +464,15 @@ def _sun_ecliptic_longitude(julian_centuries):
     )
 
     # mean longitude
-    mean_longitude = np.deg2rad(
+    mean_longitude = _deg2rad(
         280.46645 + 36000.76983 * julian_centuries + 0.0003032 * (julian_centuries**2)
     )
 
-    d_l = np.deg2rad(
+    d_l = _deg2rad(
         (1.914600 - 0.004817 * julian_centuries - 0.000014 * (julian_centuries**2))
-        * np.sin(mean_anomaly)
-        + (0.019993 - 0.000101 * julian_centuries) * np.sin(2 * mean_anomaly)
-        + 0.000290 * np.sin(3 * mean_anomaly)
+        * _sin(mean_anomaly)
+        + (0.019993 - 0.000101 * julian_centuries) * _sin(2 * mean_anomaly)
+        + 0.000290 * _sin(3 * mean_anomaly)
     )
 
     # true longitude
@@ -433,7 +493,7 @@ def _obliquity_star(julian_centuries):
     >>> bool(abs(obl - 0.409088056) < 1e-8)
     True
     """
-    return np.deg2rad(
+    return _deg2rad(
         23.0
         + 26.0 / 60
         + 21.406 / 3600.0
@@ -466,14 +526,14 @@ def _right_ascension_declination(julian_centuries):
     """
     eps = _obliquity_star(julian_centuries)
     eclon = _sun_ecliptic_longitude(julian_centuries)
-    x = np.cos(eclon)
-    y = np.cos(eps) * np.sin(eclon)
-    z = np.sin(eps) * np.sin(eclon)
-    r = np.sqrt(1.0 - z * z)
+    x = _cos(eclon)
+    y = _cos(eps) * _sin(eclon)
+    z = _sin(eps) * _sin(eclon)
+    r = _sqrt(1.0 - z * z)
     # sun declination
-    declination = np.arctan2(z, r)
+    declination = _arctan2(z, r)
     # right ascension
-    right_ascension = 2 * np.arctan2(y, (x + r))
+    right_ascension = 2 * _arctan2(y, (x + r))
     return right_ascension, declination
 
 
@@ -498,11 +558,24 @@ def _star_cos_zenith(julian_centuries, lon, lat):
             https://en.wikipedia.org/wiki/Solar_zenith_angle
     """
 
+    if isinstance(lon, torch.Tensor):
+        output_dtype = lon.dtype
+        # Astronomical polynomial evaluations involve values up to ~6e8 degrees,
+        # which exceed float32 precision. Compute in float64 and cast back.
+        lon = lon.to(torch.float64)
+        lat = lat.to(torch.float64)
+        julian_centuries = torch.as_tensor(
+            julian_centuries, dtype=torch.float64, device=lon.device
+        )
+    else:
+        output_dtype = None
+
     ra, dec = _right_ascension_declination(julian_centuries)
     h_angle = _local_hour_angle(julian_centuries, lon, ra)
 
-    cosine_zenith = np.sin(lat) * np.sin(dec) + np.cos(lat) * np.cos(dec) * np.cos(
-        h_angle
-    )
+    cosine_zenith = _sin(lat) * _sin(dec) + _cos(lat) * _cos(dec) * _cos(h_angle)
+
+    if output_dtype is not None:
+        cosine_zenith = cosine_zenith.to(output_dtype)
 
     return cosine_zenith

@@ -139,6 +139,29 @@ of ``pin_memory`` from the ``DataLoader`` class to the ``Reader`` classes.
 This is because of the much earlier GPU data transfer in the PhysicsNeMo
 datapipe compared to PyTorch.
 
+The ``DataLoader`` drives one of two mutually-exclusive paths, selected by
+dataset type:
+
+- **Map-style preload path** (:class:`~physicsnemo.datapipes.DatasetBase`,
+  e.g. ``Dataset``, ``MeshDataset``): a dedicated dispatcher thread keeps a
+  *bounded* number of samples in flight by pulling the index stream
+  **lazily** under backpressure and submitting host-only loads to a worker
+  pool.  The main thread consumes the resulting samples in order
+  (host-to-device transfer plus transforms on a preprocessing stream) and
+  reassembles batches from boundary markers, so the full epoch is never
+  materialized up front and irregular batch sizes are supported.
+- **Iterable generator path** (:class:`~physicsnemo.datapipes.IterableDatasetBase`):
+  a generator dataset driven entirely on the main thread (no sampler, no
+  worker pool); see `Iterable Datasets`_ below.
+
+In both paths, **all device-kernel launches happen on the single main
+thread**.  This is the real constraint for Warp-based transforms: Warp may
+launch on any CUDA stream as long as the launch comes from the main thread
+and Warp's current stream is bound to the torch stream in use.
+Preprocessing therefore runs on a side (preprocessing) stream and is
+ordered against the compute stream with a CUDA event, so it overlaps
+training without ever blocking the host.
+
 .. autoclass:: physicsnemo.datapipes.dataloader.DataLoader
     :members:
     :show-inheritance:
@@ -175,6 +198,43 @@ consistent keys.  Because the exact collation details differ by dataset, the
 ``MultiDataset`` does not check more aggressively than output key consistency.
 
 .. autoclass:: physicsnemo.datapipes.multi_dataset.MultiDataset
+    :members:
+    :show-inheritance:
+
+
+Iterable Datasets
+^^^^^^^^^^^^^^^^^
+
+Map-style datasets (``Dataset``, ``MeshDataset``) assume a fixed length and a
+sampler that hands out indices.  Some workloads have neither: an online
+simulation, a procedural generator, or any source that produces samples on
+the fly with no meaningful ``__len__``.  For those, subclass
+:class:`~physicsnemo.datapipes.IterableDatasetBase` and yield samples from
+``__iter__``.  The ``DataLoader`` detects an iterable dataset automatically
+and switches to the main-thread-only generator path; ``shuffle`` and
+``sampler`` are ignored (a warning is issued) and ``len(loader)`` raises,
+since the length is unknown.
+
+An iterable dataset chooses one of two emission modes via the
+``yields_batches`` attribute:
+
+- ``yields_batches = False`` (default): ``__iter__`` yields individual
+  samples and the ``DataLoader`` collates them into batches of
+  ``batch_size`` (honoring ``drop_last``).
+- ``yields_batches = True``: ``__iter__`` yields fully-formed batches and the
+  ``DataLoader`` passes them through without further collation, which is the
+  natural fit for a generator that already produces a batch per step.
+
+Reproducibility follows a per-``(epoch, position)`` scheme rather than the
+map-style per-``(epoch, index)`` scheme: implement ``set_epoch`` and/or
+``set_generator`` to seed deterministically from the iteration position.
+Because the generator runs on the main thread, Warp kernels inside it are
+safe on any preprocessing stream the ``DataLoader`` binds.  See the online
+simulation tutorial in the
+`examples directory <https://github.com/NVIDIA/physicsnemo/tree/main/examples/minimal/datapipes>`_
+for a runnable Warp ``Darcy2D`` generator wired through this path.
+
+.. autoclass:: physicsnemo.datapipes.IterableDatasetBase
     :members:
     :show-inheritance:
 

@@ -33,6 +33,8 @@ def _pad_by_tiling_last(tensor: torch.Tensor, size: int) -> torch.Tensor:
         Padded tensor.
     """
     pad_count = size - tensor.shape[0]
+    if tensor.shape[0] == 0:
+        return tensor.new_zeros((size, *tensor.shape[1:]))
     padding = tensor[-1:].expand(pad_count, -1)
     return torch.cat([tensor, padding], dim=0)
 

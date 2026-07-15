@@ -36,7 +36,7 @@ repeat).
 Example:
     >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
     >>> mesh = sphere_icosahedral.load(subdivisions=3)
-    >>> # Remesh a triangle mesh to ~100 triangles
+    >>> # Remesh a triangle mesh to ~100 vertices (cluster centroids)
     >>> remeshed = remesh(mesh, n_clusters=100)
     >>> assert remeshed.n_cells > 0
 """

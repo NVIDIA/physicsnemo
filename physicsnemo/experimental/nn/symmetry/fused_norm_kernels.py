@@ -1655,7 +1655,7 @@ def fused_rmsnorm(
     wp_device, wp_stream = FunctionSpec.warp_launch_context(x)
 
     # Launch kernels
-    with wp.ScopedStream(wp_stream):
+    with FunctionSpec.warp_stream_scope(wp_stream):
         # Reduce kernel
         if subtract_mean:
             wp.launch(
@@ -1894,7 +1894,7 @@ def _fused_rmsnorm_backward(
     wp_device, wp_stream = FunctionSpec.warp_launch_context(x)
 
     # Launch kernels
-    with wp.ScopedStream(wp_stream):
+    with FunctionSpec.warp_stream_scope(wp_stream):
         # Backward reduce kernel (compute go_dot_o)
         if subtract_mean and has_bias:
             wp.launch(
@@ -2166,7 +2166,7 @@ def fused_layernormsh_lgt0(
     wp_device, wp_stream = FunctionSpec.warp_launch_context(x_lgt0)
 
     # Launch Warp kernels
-    with wp.ScopedStream(wp_stream):
+    with FunctionSpec.warp_stream_scope(wp_stream):
         # Reduce kernel
         wp.launch(
             kernel=layernormsh_lgt0_reduce,
@@ -2304,7 +2304,7 @@ def _fused_layernormsh_lgt0_backward(
     wp_device, wp_stream = FunctionSpec.warp_launch_context(x_lgt0)
 
     # Launch Warp kernels for backward pass
-    with wp.ScopedStream(wp_stream):
+    with FunctionSpec.warp_stream_scope(wp_stream):
         # Backward reduce kernel
         wp.launch(
             kernel=layernormsh_lgt0_backward_reduce,
@@ -2487,7 +2487,7 @@ def fused_layernorm(
     # Get warp context
     wp_device, wp_stream = FunctionSpec.warp_launch_context(x)
 
-    with wp.ScopedStream(wp_stream):
+    with FunctionSpec.warp_stream_scope(wp_stream):
         # Pass 1: Reduce (compute norm statistics per degree)
         if subtract_mean:
             wp.launch(
@@ -2689,7 +2689,7 @@ def _fused_layernorm_backward(
     # Get warp context
     wp_device, wp_stream = FunctionSpec.warp_launch_context(x)
 
-    with wp.ScopedStream(wp_stream):
+    with FunctionSpec.warp_stream_scope(wp_stream):
         # Backward reduce: compute go_dot_o
         if subtract_mean and has_bias:
             wp.launch(

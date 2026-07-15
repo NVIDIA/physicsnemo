@@ -42,7 +42,7 @@ from physicsnemo.datapipes.dataloader import DataLoader
 from physicsnemo.datapipes.dataset import Dataset
 from physicsnemo.datapipes.mesh_dataset import MeshDataset
 from physicsnemo.datapipes.multi_dataset import MultiDataset
-from physicsnemo.datapipes.protocols import DatasetBase
+from physicsnemo.datapipes.protocols import DatasetBase, IterableDatasetBase
 from physicsnemo.datapipes.readers import (
     DomainMeshReader,
     HDF5Reader,
@@ -105,6 +105,7 @@ __all__ = [
     #
     "TensorDict",  # Re-export from tensordict
     "DatasetBase",
+    "IterableDatasetBase",
     "Dataset",
     "MeshDataset",
     "DataLoader",

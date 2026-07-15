@@ -53,8 +53,9 @@ def compute_curl_points_lsq(
             \partial v_y / \partial x - \partial v_x / \partial y
         \end{pmatrix}.
 
-    Computes the Jacobian of the vector field, then takes its antisymmetric
-    part.
+    Computes the derivative-first Jacobian of the vector field, then takes its
+    antisymmetric part. The Jacobian layout is
+    ``jacobian[i, k, j] = ∂v_j/∂x_k``.
 
     Parameters
     ----------
@@ -82,7 +83,7 @@ def compute_curl_points_lsq(
 
     ### Compute full Jacobian in one batched LSQ solve
     # vector_field: (n_points, 3) -> jacobian: (n_points, 3, 3)
-    # jacobian[i, j, k] = ∂v_j/∂x_k
+    # jacobian[i, k, j] = ∂v_j/∂x_k (derivative axis first)
     jacobian = compute_point_gradient_lsq(mesh, vector_field)
 
     return _curl_from_jacobian(jacobian)
@@ -123,6 +124,7 @@ def compute_curl_cells_lsq(
     from physicsnemo.mesh.calculus._lsq_reconstruction import compute_cell_gradient_lsq
 
     # vector_field: (n_cells, 3) -> jacobian: (n_cells, 3, 3)
+    # jacobian[i, k, j] = ∂v_j/∂x_k (derivative axis first)
     jacobian = compute_cell_gradient_lsq(mesh, vector_field)
 
     return _curl_from_jacobian(jacobian)
@@ -133,14 +135,14 @@ def _curl_from_jacobian(
 ) -> Float[torch.Tensor, "n 3"]:
     r"""Extract the curl (antisymmetric part) from a batch of 3D Jacobians.
 
-    With ``jacobian[i, j, k] = ∂v_j/∂x_k``:
+    With ``jacobian[i, k, j] = ∂v_j/∂x_k``:
     curl = [∂vz/∂y - ∂vy/∂z, ∂vx/∂z - ∂vz/∂x, ∂vy/∂x - ∂vx/∂y].
     """
     return torch.stack(
         [
-            jacobian[:, 2, 1] - jacobian[:, 1, 2],
-            jacobian[:, 0, 2] - jacobian[:, 2, 0],
-            jacobian[:, 1, 0] - jacobian[:, 0, 1],
+            jacobian[:, 1, 2] - jacobian[:, 2, 1],
+            jacobian[:, 2, 0] - jacobian[:, 0, 2],
+            jacobian[:, 0, 1] - jacobian[:, 1, 0],
         ],
         dim=-1,
     )

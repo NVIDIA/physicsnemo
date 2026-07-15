@@ -19,6 +19,9 @@
 This module provides data structures and algorithms for fast spatial queries:
 - BVH (Bounding Volume Hierarchy) for point-in-cell queries
 - ClusterTree for dual-tree Barnes-Hut acceleration of kernel/attention operators
+- Signed distance field (:func:`signed_distance_field`) over a triangle
+  surface mesh, backed by the BVH (nearest triangle) and the ClusterTree
+  (winding-number sign)
 """
 
 from physicsnemo.mesh.spatial.bvh import BVH
@@ -27,3 +30,16 @@ from physicsnemo.mesh.spatial.cluster_tree import (
     DualInteractionPlan,
     SourceAggregates,
 )
+from physicsnemo.mesh.spatial.sdf import (
+    SignedDistanceFieldResult,
+    signed_distance_field,
+)
+
+__all__ = [
+    "BVH",
+    "ClusterTree",
+    "DualInteractionPlan",
+    "SignedDistanceFieldResult",
+    "SourceAggregates",
+    "signed_distance_field",
+]
