@@ -76,9 +76,9 @@ class UNetDecoder(torch.nn.Module):
         per_level_checkpointing: list[bool], optional
             If the checkpointing should be applied to each level of the decoder
             If None, the checkpointing will not be applied
-        
+
         per level options are lists of booleans of the same length as n_channels,
-        if only one value is provided, it will be applied to all levels. The level layout is a 
+        if only one value is provided, it will be applied to all levels. The level layout is a
         mirror of the encoder. The first value in the list will be applied to the lowest level
         in the decoder and the last value in the list will be applied to the highest level in the decoder.
         Example:
