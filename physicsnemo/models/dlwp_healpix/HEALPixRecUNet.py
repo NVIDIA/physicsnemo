@@ -92,6 +92,14 @@ class HEALPixRecUNet(Module):
         Enable CUDA HEALPix padding when available.
     couplings : list, optional
         Optional coupling specifications appended to the input feature channels.
+    residual_prediction : bool, optional
+        If ``True``, the model will predict the residual of the input and the output
+        and add it to the output. If ``False``, the model will predict the output directly.
+    couplings_time_first : bool, optional
+        If ``True``, the couplings will be passed to the model in the time dimension first.
+        If ``False``, the couplings will be passed to the model in the channel dimension first.
+    constraints : list[DictConfig], optional
+        Optional constraints to be applied to the model outputs.
 
     Forward
     -------
