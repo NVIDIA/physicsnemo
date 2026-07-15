@@ -41,8 +41,8 @@ def _relative_reduce(
     tgt_sq: Tensor,
     *,
     dim: int | tuple[int, ...] | None,
-    eps: float,
     weights: Tensor | None,
+    eps: float,
 ) -> Tensor:
     """Weighted ratio of summed squared error to summed squared target.
 
@@ -55,11 +55,11 @@ def _relative_reduce(
     dim : int or tuple of int or None
         Dimension(s) over which the sums are taken. ``None`` reduces over all
         elements.
-    eps : float
-        Floor applied to the denominator before dividing.
     weights : Tensor or None
         Optional element weights, broadcastable to ``err_sq``. Applied to both
         the numerator and denominator sums.
+    eps : float
+        Floor applied to the denominator before dividing.
 
     Returns
     -------
@@ -95,10 +95,9 @@ def _check_shapes(pred: Tensor, target: Tensor) -> None:
 def relative_mse(
     pred: Tensor,
     target: Tensor,
-    *,
     dim: int | tuple[int, ...] | None = None,
-    eps: float = 1e-8,
     weights: Tensor | None = None,
+    eps: float = 1e-8,
 ) -> Tensor:
     r"""Relative mean squared error, target-normalized.
 
@@ -115,13 +114,13 @@ def relative_mse(
     dim : int or tuple of int or None, optional
         Dimension(s) over which the error is normalized and reduced. ``None``
         reduces over all elements, returning a scalar. Default ``None``.
-    eps : float, optional
-        Floor applied to the (summed) denominator to guard against all-zero
-        targets. Default ``1e-8``.
     weights : Tensor, optional
         Element weights broadcastable to ``pred`` (e.g. a 0/1 validity mask or
         per-point weights). Applied inside both the numerator and denominator
         sums. Default ``None``.
+    eps : float, optional
+        Floor applied to the (summed) denominator to guard against all-zero
+        targets. Default ``1e-8``.
 
     Returns
     -------
@@ -147,18 +146,17 @@ def relative_mse(
         (pred - target).square(),
         target.square(),
         dim=dim,
-        eps=eps,
         weights=weights,
+        eps=eps,
     )
 
 
 def relative_l2(
     pred: Tensor,
     target: Tensor,
-    *,
     dim: int | tuple[int, ...] | None = None,
-    eps: float = 1e-8,
     weights: Tensor | None = None,
+    eps: float = 1e-8,
 ) -> Tensor:
     r"""Relative L2 error (target-normalized L2 norm).
 
@@ -175,13 +173,13 @@ def relative_l2(
     dim : int or tuple of int or None, optional
         Dimension(s) over which the norm is taken and reduced. ``None`` reduces
         over all elements, returning a scalar. Default ``None``.
-    eps : float, optional
-        Floor applied to the (summed) denominator to guard against all-zero
-        targets. Default ``1e-8``.
     weights : Tensor, optional
         Element weights broadcastable to ``pred`` (e.g. a 0/1 validity mask or
         per-point weights). Applied inside both sums. Default ``None``. See the
         ``Notes`` on :func:`relative_mse` regarding per-channel weighting.
+    eps : float, optional
+        Floor applied to the (summed) denominator to guard against all-zero
+        targets. Default ``1e-8``.
 
     Returns
     -------
@@ -196,4 +194,4 @@ def relative_l2(
     # Enforce the documented contract directly rather than relying on the
     # delegated relative_mse call.
     _check_shapes(pred, target)
-    return relative_mse(pred, target, dim=dim, eps=eps, weights=weights).sqrt()
+    return relative_mse(pred, target, dim=dim, weights=weights, eps=eps).sqrt()

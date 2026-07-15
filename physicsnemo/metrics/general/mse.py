@@ -56,6 +56,17 @@ def mse(
     -------
     Union[Tensor, float]
         Mean squared error value(s)
+
+    Notes
+    -----
+    With ``weights=None`` and ``dim=None`` this returns the same value as
+    ``torch.nn.functional.mse_loss(pred, target)`` (i.e. ``reduction="mean"``).
+    It differs from ``mse_loss`` in two ways: ``dim`` selects the specific
+    axis/axes to reduce over (``mse_loss`` only reduces over all elements via
+    ``reduction="mean"``/``"sum"``, or not at all), and ``weights`` turns the
+    reduction into a *weighted* mean (subsuming a validity mask or per-element
+    weighting), with ``eps`` guarding a fully-masked reduction. ``mse_loss`` has
+    no weighting argument.
     """
     squared_error = (pred - target) ** 2
     if weights is None:
