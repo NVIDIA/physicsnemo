@@ -167,6 +167,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each observation component, e.g. per-channel (`(1, C, 1, 1)`) or pointwise
   (full observation shape). Passing floats keeps the previous uniform
   behavior unchanged.
+- Adds `relative_mse` and `relative_l2` (target-normalized regression errors,
+  `relative_l2 = sqrt(relative_mse)`) to `physicsnemo.metrics.general`
+  (`relative_error.py`), with optional element `weights` and `dim`-based
+  reduction matching `general.mse`.
+- `physicsnemo.metrics.general.mse` `mse`/`rmse` gain an optional `weights`
+  argument for a masked/weighted mean (backward-compatible; `weights=None`
+  reproduces the prior unweighted result).
 
 ### Changed
 
