@@ -34,6 +34,7 @@ def _build(*, cond_dim: int = 4) -> PrototypeTokenJEPAHead:
         query_pe_bands=4,
         mlp_ratio=2,
         dropout=0.0,
+        use_te=False,
     )
 
 

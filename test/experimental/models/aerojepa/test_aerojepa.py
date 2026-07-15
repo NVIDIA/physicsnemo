@@ -46,6 +46,7 @@ def _enc_kwargs() -> dict:
         neighbor_k=4,
         mlp_ratio=2,
         dropout=0.0,
+        use_te=False,
     )
 
 
@@ -65,6 +66,7 @@ def _build_model() -> AeroJEPA:
             cross_attention_layers=1,
             cross_attention_k=4,
             query_chunk_size=128,
+            use_te=False,
         ),
         include_geometry_global_in_decoder_cond=False,
     )
@@ -77,6 +79,7 @@ def _build_model() -> AeroJEPA:
         query_pe_bands=4,
         mlp_ratio=2,
         dropout=0.0,
+        use_te=False,
     )
     return AeroJEPA(trunk=trunk, predictor=predictor)
 
@@ -348,6 +351,7 @@ def _build_model_with_global_cond(*, gen_dim: int, token_dim: int) -> AeroJEPA:
             cross_attention_layers=1,
             cross_attention_k=4,
             query_chunk_size=128,
+            use_te=False,
         ),
         include_geometry_global_in_decoder_cond=True,
     )
@@ -360,6 +364,7 @@ def _build_model_with_global_cond(*, gen_dim: int, token_dim: int) -> AeroJEPA:
         query_pe_bands=4,
         mlp_ratio=2,
         dropout=0.0,
+        use_te=False,
     )
     return AeroJEPA(trunk=trunk, predictor=predictor)
 

@@ -63,7 +63,7 @@ def test_build_geometry_features_rejects_short_feat():
 def test_graph_pool_basic_shape(device):
     """Forward returns ``(N_tok, F)`` shape."""
     pool = PointClusterGraphPool(
-        point_feature_dim=8, hidden_dim=16, num_layers=2, dropout=0.0
+        point_feature_dim=8, hidden_dim=16, num_layers=2, dropout=0.0, use_te=False
     ).to(device)
     src_pos = torch.randn(20, 3, device=device)
     src_feat = torch.randn(20, 8, device=device)
@@ -129,6 +129,7 @@ def _build_pt(*, use_conditioning: bool = False, cluster_pooling: str = "mean"):
         tokenizer_graph_pool_layers=1,
         use_gen_conditioning=use_conditioning,
         gen_conditioning_dim=8 if use_conditioning else None,
+        use_te=False,
     )
 
 

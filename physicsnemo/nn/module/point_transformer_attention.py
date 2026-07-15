@@ -230,11 +230,12 @@ class AdaLNResidualMLP(Module):
         dropout: float,
         conditioning_dim: int | None = None,
         adaln_zero: bool = False,
+        use_te: bool = True,
     ):
         super().__init__()
         self.dim = int(dim)
         hidden = max(1, int(mlp_ratio)) * int(dim)
-        self.norm = LayerNorm(int(dim))
+        self.norm = LayerNorm(int(dim)) if use_te else nn.LayerNorm(int(dim))
         self.conditioning = (
             None
             if conditioning_dim is None
@@ -302,6 +303,7 @@ class _LocalVectorAttentionBlock(Module):
         conditioning_dim: int | None,
         adaln_zero: bool,
         num_cond_chunks: int,
+        use_te: bool = True,
     ):
         super().__init__()
         if int(dim) % int(num_heads) != 0:
@@ -344,6 +346,7 @@ class _LocalVectorAttentionBlock(Module):
             dropout=float(dropout),
             conditioning_dim=conditioning_dim,
             adaln_zero=adaln_zero,
+            use_te=use_te,
         )
 
     def _attend(
@@ -456,6 +459,7 @@ class LocalPointTransformerBlock(_LocalVectorAttentionBlock):
         coord_dim: int = 3,
         conditioning_dim: int | None = None,
         adaln_zero: bool = False,
+        use_te: bool = True,
     ):
         super().__init__(
             dim=dim,
@@ -467,9 +471,10 @@ class LocalPointTransformerBlock(_LocalVectorAttentionBlock):
             conditioning_dim=conditioning_dim,
             adaln_zero=adaln_zero,
             num_cond_chunks=3,
+            use_te=use_te,
         )
         self.dilation = int(max(1, dilation))
-        self.norm = LayerNorm(self.dim)
+        self.norm = LayerNorm(self.dim) if use_te else nn.LayerNorm(self.dim)
 
     def forward(
         self,
@@ -622,6 +627,7 @@ class LocalTokenCrossAttentionBlock(_LocalVectorAttentionBlock):
         coord_dim: int = 3,
         conditioning_dim: int | None = None,
         adaln_zero: bool = False,
+        use_te: bool = True,
     ):
         super().__init__(
             dim=dim,
@@ -633,9 +639,10 @@ class LocalTokenCrossAttentionBlock(_LocalVectorAttentionBlock):
             conditioning_dim=conditioning_dim,
             adaln_zero=adaln_zero,
             num_cond_chunks=5,
+            use_te=use_te,
         )
-        self.norm_q = LayerNorm(self.dim)
-        self.norm_kv = LayerNorm(self.dim)
+        self.norm_q = LayerNorm(self.dim) if use_te else nn.LayerNorm(self.dim)
+        self.norm_kv = LayerNorm(self.dim) if use_te else nn.LayerNorm(self.dim)
 
     def forward(
         self,

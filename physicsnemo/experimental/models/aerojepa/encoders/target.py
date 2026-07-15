@@ -117,6 +117,7 @@ class TargetTransformer(BaseTargetEncoder):
         tokenizer_cluster_pooling: str = "mean",
         tokenizer_graph_pool_hidden_dim: int | None = None,
         tokenizer_graph_pool_layers: int = 2,
+        use_te: bool = True,
     ):
         super().__init__(meta=AeroJEPAMetaData())
         if isinstance(tokenizer_prototype_coords, torch.Tensor):
@@ -146,6 +147,7 @@ class TargetTransformer(BaseTargetEncoder):
             tokenizer_graph_pool_layers=int(tokenizer_graph_pool_layers),
             use_gen_conditioning=False,
             gen_conditioning_dim=None,
+            use_te=use_te,
         )
 
     def _concat_inputs(

@@ -41,6 +41,7 @@ def _build(**overrides) -> QueryTokenDecoder:
         attention_mlp_ratio=2,
         dropout=0.0,
         query_chunk_size=128,
+        use_te=False,
     )
     cfg.update(overrides)
     return QueryTokenDecoder(**cfg)

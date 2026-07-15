@@ -214,6 +214,7 @@ class PointClusterGraphPool(nn.Module):
         hidden_dim: int,
         num_layers: int,
         dropout: float,
+        use_te: bool = True,
     ):
         super().__init__()
         self.point_feature_dim = int(point_feature_dim)
@@ -254,7 +255,11 @@ class PointClusterGraphPool(nn.Module):
                     final_dropout=False,
                 )
             )
-        self.out_norm = LayerNorm(self.point_feature_dim)
+        self.out_norm = (
+            LayerNorm(self.point_feature_dim)
+            if use_te
+            else nn.LayerNorm(self.point_feature_dim)
+        )
 
     def forward(
         self,
@@ -409,6 +414,7 @@ class PointTransformer(Module):
         tokenizer_graph_pool_layers: int,
         use_gen_conditioning: bool = False,
         gen_conditioning_dim: int | None,
+        use_te: bool = True,
     ):
         super().__init__(meta=AeroJEPAMetaData())
         # ``tokenizer_prototype_coords`` is a torch.Tensor and is not
@@ -460,6 +466,7 @@ class PointTransformer(Module):
                 ),
                 num_layers=int(tokenizer_graph_pool_layers),
                 dropout=float(dropout),
+                use_te=use_te,
             )
         self.feature_in = nn.Linear(int(point_input_dim), int(token_dim))
         self.pos_enc = FourierPositionalEmbedding(
@@ -501,11 +508,14 @@ class PointTransformer(Module):
                     conditioning_dim=(
                         int(token_dim) if self.use_gen_conditioning else None
                     ),
+                    use_te=use_te,
                 )
                 for i in range(int(num_layers))
             ]
         )
-        self.out_norm = LayerNorm(int(token_dim))
+        self.out_norm = (
+            LayerNorm(int(token_dim)) if use_te else nn.LayerNorm(int(token_dim))
+        )
 
     def _compute_gen_embedding(
         self, gen_params: torch.Tensor | None

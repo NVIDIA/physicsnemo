@@ -35,6 +35,7 @@ def _build(token_dim: int = 32, max_tokens: int = 12) -> ContextTransformer:
         neighbor_k=4,
         mlp_ratio=2,
         dropout=0.0,
+        use_te=False,
     )
 
 

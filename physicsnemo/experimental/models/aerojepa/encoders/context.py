@@ -128,6 +128,7 @@ class ContextTransformer(BaseContextEncoder):
         use_sdf: bool = False,
         use_solid_normals: bool = False,
         use_solid_n_dot_uinf: bool = False,
+        use_te: bool = True,
     ):
         super().__init__(meta=AeroJEPAMetaData())
         if isinstance(tokenizer_prototype_coords, torch.Tensor):
@@ -160,6 +161,7 @@ class ContextTransformer(BaseContextEncoder):
             tokenizer_graph_pool_layers=int(tokenizer_graph_pool_layers),
             use_gen_conditioning=False,
             gen_conditioning_dim=None,
+            use_te=use_te,
         )
 
     def forward(

@@ -113,6 +113,7 @@ class PrototypeTokenJEPAHead(Module):
         query_pe_bands: int = 6,
         mlp_ratio: int = 4,
         dropout: float = 0.0,
+        use_te: bool = True,
     ):
         super().__init__(meta=AeroJEPAMetaData())
         self.token_dim = int(token_dim)
@@ -147,6 +148,7 @@ class PrototypeTokenJEPAHead(Module):
                     mlp_ratio=int(mlp_ratio),
                     dropout=float(dropout),
                     conditioning_dim=block_conditioning_dim,
+                    use_te=use_te,
                 )
                 for _ in range(self.depth)
             ]
@@ -160,11 +162,14 @@ class PrototypeTokenJEPAHead(Module):
                     mlp_ratio=int(mlp_ratio),
                     dropout=float(dropout),
                     conditioning_dim=block_conditioning_dim,
+                    use_te=use_te,
                 )
                 for _ in range(self.depth)
             ]
         )
-        self.out_norm = LayerNorm(self.hidden_dim)
+        self.out_norm = (
+            LayerNorm(self.hidden_dim) if use_te else nn.LayerNorm(self.hidden_dim)
+        )
         self.out_proj = nn.Linear(self.hidden_dim, self.token_dim)
 
     def _prepare_inputs(

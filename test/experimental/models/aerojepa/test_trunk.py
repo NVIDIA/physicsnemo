@@ -41,6 +41,7 @@ def _enc_kwargs() -> dict:
         neighbor_k=4,
         mlp_ratio=2,
         dropout=0.0,
+        use_te=False,
     )
 
 
@@ -57,6 +58,7 @@ def _build_decoder() -> QueryTokenDecoder:
         cross_attention_layers=1,
         cross_attention_k=4,
         query_chunk_size=128,
+        use_te=False,
     )
 
 

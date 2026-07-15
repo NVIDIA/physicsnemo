@@ -242,6 +242,7 @@ class QueryTokenDecoder(Module):
         final_refinement_siren_omega0: float = 30.0,
         extra_sdf_features_enabled: bool = False,
         extra_sdf_inv_eps: float = 1e-3,
+        use_te: bool = True,
     ):
         super().__init__(meta=AeroJEPAMetaData())
         self.use_sdf = bool(use_sdf)
@@ -283,12 +284,13 @@ class QueryTokenDecoder(Module):
                     neighbor_k=int(cross_attention_k),
                     mlp_ratio=int(attention_mlp_ratio),
                     dropout=float(dropout),
+                    use_te=use_te,
                 )
                 for _ in range(int(cross_attention_layers))
             ]
         )
         self.trunk = nn.Sequential(
-            LayerNorm(int(token_dim)),
+            LayerNorm(int(token_dim)) if use_te else nn.LayerNorm(int(token_dim)),
             nn.Linear(int(token_dim), int(hidden_dim)),
             nn.SiLU(),
             *[
