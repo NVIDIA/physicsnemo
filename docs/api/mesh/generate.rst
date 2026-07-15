@@ -44,18 +44,18 @@ Volume Meshing of Implicit Domains
 distance function, or any level set with a usable gradient, including
 neural implicit fields), in *any spatial dimension*, entirely in PyTorch
 tensor ops on CPU or CUDA. The meshed set is ``{phi < 0}`` intersected
-with the bounding box: where the domain reaches the box, its faces are
-honored as boundary, so external-flow "box minus obstacle" domains work
-directly. The generator is structurally robust. Every
+with the bounding box. Where the domain reaches the box, the generator
+treats its faces as a boundary, so external-flow "box minus obstacle"
+domains work directly. The generator is structurally robust. Every
 optimization step is validity-gated, so it always returns a positively
 oriented mesh with a closed-manifold boundary. Difficult inputs degrade
 element quality (reported in diagnostics), but never prevent the mesh
 from being generated. A coverage guard raises an error, rather than
 silently dropping geometry, when the domain
 has features below the target edge length ``h`` or when coverage cannot
-be certified at all (a phi that is NaN inside the box, for example a neural
-field queried outside its training range). You can interpolate sharp
-corners exactly through ``feature_points``.
+be certified at all. The latter can happen, for example, if a neural field
+returns NaN inside the box when queried outside its training range. You can
+interpolate sharp corners exactly through ``feature_points``.
 
 :func:`refit_mesh_to_implicit` is the differentiable companion: it
 re-projects a mesh's boundary onto ``phi = 0`` with graph-preserving
