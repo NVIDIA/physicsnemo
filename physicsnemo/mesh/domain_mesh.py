@@ -791,11 +791,10 @@ class DomainMesh:
         unchanged. A sufficient condition for a fixed exterior is to zero the
         outermost coefficient plane on every Bernstein or node-interpolating
         face, or the first and last three coefficient planes on every axis for
-        cubic B-splines. The
-        ``origin`` and ``extent`` are non-differentiable configuration values. The
-        deformation does not automatically detect inverted, degenerate, or
-        self-intersecting cells. Use each component mesh's
-        :meth:`Mesh.validate` method explicitly when required.
+        cubic B-splines. ``origin`` and ``extent`` are non-differentiable
+        configuration values. The deformation does not automatically detect
+        inverted, degenerate, or self-intersecting cells. Use each component
+        mesh's :meth:`Mesh.validate` method explicitly when required.
         """
         if not isinstance(control_displacements, torch.Tensor):
             raise TypeError(
