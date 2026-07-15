@@ -22,7 +22,7 @@ This class contains the implementation of the Deep Learning Weather Prediction (
 
 from typing import List
 
-import torch as th
+import torch
 
 from physicsnemo.core.version_check import OptionalImport
 
@@ -32,7 +32,7 @@ from physicsnemo.core.version_check import OptionalImport
 apex_normalization = OptionalImport("apex.normalization")
 
 
-@th.compile
+@torch.compile
 def _cln_affine(x_norm, gamma_raw, beta, scale_center, n_faces):
     """Fused affine transform: expand gamma/beta across faces and apply to normalized input."""
     C = gamma_raw.shape[-1]
@@ -46,7 +46,7 @@ def _cln_affine(x_norm, gamma_raw, beta, scale_center, n_faces):
     return gamma * x_norm + beta
 
 
-class ConditionalLayerNorm(th.nn.Module):
+class ConditionalLayerNorm(torch.nn.Module):
     """LayerNorm whose affine (gamma/beta) parameters are predicted from a conditional input field.
 
     Normalizes the input over the channel dimension with no learnable affine
@@ -60,7 +60,7 @@ class ConditionalLayerNorm(th.nn.Module):
         condition_shape: int,
         channel_depth: int,
         mlp_hidden_dims: List[int] = [128, 128],
-        activation: th.nn.Module = None,
+        activation: torch.nn.Module = None,
         eps: float = 1e-5,
         n_faces: int = 12,
         norm_op: str = "torch",
@@ -98,7 +98,7 @@ class ConditionalLayerNorm(th.nn.Module):
         self.condition_shape = condition_shape
         self.channel_depth = channel_depth
         self.hidden_dims = mlp_hidden_dims
-        self.activation = activation if activation is not None else th.nn.Identity()
+        self.activation = activation if activation is not None else torch.nn.Identity()
         self.gamma_beta_mlp = self._make_mlp(
             self.condition_shape,
             [2 * h for h in self.hidden_dims],
@@ -113,7 +113,7 @@ class ConditionalLayerNorm(th.nn.Module):
             self.gamma_beta_mlp[-1].bias.data.zero_()
 
         if norm_op == "torch":
-            self.norm = th.nn.LayerNorm(channel_depth, elementwise_affine=False)
+            self.norm = torch.nn.LayerNorm(channel_depth, elementwise_affine=False)
         elif norm_op == "apex":
             self.norm = apex_normalization.FusedLayerNorm(
                 channel_depth, elementwise_affine=False
@@ -124,8 +124,8 @@ class ConditionalLayerNorm(th.nn.Module):
         in_dim: int,
         hidden_dims: List[int],
         out_dim: int,
-        activation: th.nn.Module,
-    ) -> th.nn.Sequential:
+        activation: torch.nn.Module,
+    ) -> torch.nn.Sequential:
         """Helper function that creates the MLP for the conditional layer normalization.
 
         Parameters
@@ -136,39 +136,39 @@ class ConditionalLayerNorm(th.nn.Module):
             The hidden dimensions
         out_dim: int
             The output dimension
-        activation: th.nn.Module
+        activation: torch.nn.Module
             The activation function
 
         Returns
         -------
-        th.nn.Sequential
+        torch.nn.Sequential
             The MLP
         """
         layers = []
         for hdim in hidden_dims:
-            layers.append(th.nn.Linear(in_dim, hdim))
+            layers.append(torch.nn.Linear(in_dim, hdim))
             if activation:
                 layers.append(activation)
             in_dim = hdim
-        layers.append(th.nn.Linear(in_dim, out_dim))
-        return th.nn.Sequential(*layers)
+        layers.append(torch.nn.Linear(in_dim, out_dim))
+        return torch.nn.Sequential(*layers)
 
-    def forward(self, x: th.Tensor, conditions: th.Tensor) -> th.Tensor:
+    def forward(self, x: torch.Tensor, conditions: torch.Tensor) -> torch.Tensor:
         """
         Parameters
         ----------
-        x : th.Tensor
+        x : torch.Tensor
             Input tensor of shape: (B, C, H, W)
-        conditions : th.Tensor
+        conditions : torch.Tensor
             Conditioning tensor of shape (B*n_cond, cond_dim)
 
         Returns
         -------
-        th.Tensor
+        torch.Tensor
             Normalized and conditioned tensor of shape: (B, C, H, W)
         """
 
-        is_channels_last = x.is_contiguous(memory_format=th.channels_last)
+        is_channels_last = x.is_contiguous(memory_format=torch.channels_last)
 
         # LayerNorm on last dim: permute to (B, H, W, C)
         x_nhwc = x.permute(0, 2, 3, 1)
@@ -185,6 +185,8 @@ class ConditionalLayerNorm(th.nn.Module):
 
         # Return to NCHW logical layout, preserving channels_last memory format if input was
         if is_channels_last:
-            return result.permute(0, 3, 1, 2).contiguous(memory_format=th.channels_last)
+            return result.permute(0, 3, 1, 2).contiguous(
+                memory_format=torch.channels_last
+            )
         else:
             return result.permute(0, 3, 1, 2)
