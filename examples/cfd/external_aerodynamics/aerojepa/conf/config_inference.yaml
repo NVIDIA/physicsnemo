@@ -44,15 +44,9 @@ num_plots: 4
 # Chunk size for the chunked decoder (set lower if VRAM is tight).
 decoder_chunk_size: 4096
 
-# Sharded (multi-GPU) inference. Inference is embarrassingly parallel over
-# test cases, so launch `num_shards` independent processes -- each pinned to
-# a GPU (e.g. `CUDA_VISIBLE_DEVICES=k`) with a distinct `shard` in
-# `[0, num_shards)`. Each process reads only its own cases and writes
-# `predictions_shard{shard}.npz`; combine them with
-# `python -m src.postprocessing.merge_shards`. The default (`num_shards=1`)
-# writes `predictions.npz` directly -- no merge step needed.
-num_shards: 1
-shard: 0
+# Multi-GPU inference needs no config: launch with
+# `torchrun --nproc_per_node=<#GPUs> inference.py ...` and each rank runs a
+# stride of the test split, gathering onto rank 0 for a single predictions.npz.
 
 # Apply EMA weights from the checkpoint if present.
 use_ema: true

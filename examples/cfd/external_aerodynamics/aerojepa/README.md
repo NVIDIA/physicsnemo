@@ -116,32 +116,20 @@ absolute error for each surface channel (``Cp``, ``Cf_tau``, ``Cf_z``):
 
 ### Multi-GPU inference
 
-Inference is embarrassingly parallel over test cases, so it shards without
-any inter-process communication. Launch `num_shards` independent processes,
-each pinned to a GPU with a distinct `shard`; each reads only its own cases
-and writes `predictions_shard{shard}.npz`. Give every process its own Hydra
-run dir so their logs don't collide:
+Inference is embarrassingly parallel over test cases. Launch with `torchrun`
+and each rank runs a disjoint stride of the test split; the results are
+gathered onto rank 0, which writes the single `predictions.npz`. The GPU
+count comes from the launcher — no config and no merge step:
 
 ```bash
-N=8
-for k in $(seq 0 $((N-1))); do
-  CUDA_VISIBLE_DEVICES=$k python inference.py \
-      checkpoint=outputs/<run-name>/checkpoints/best.pt \
-      data.path=/path/to/SuperWing_Dataset \
-      num_shards=$N shard=$k \
-      hydra.run.dir=outputs/<run-name>/infer/shard$k &
-done
-wait
+torchrun --nproc_per_node=<#GPUs> inference.py \
+    checkpoint=outputs/<run-name>/checkpoints/best.pt \
+    data.path=/path/to/SuperWing_Dataset \
+    output_dir=outputs/<run-name>/inference
 ```
 
-Then merge the shard files into a single `predictions.npz` (identical schema
-to a single-GPU run, so the scoring scripts below run on it unchanged):
-
-```bash
-python -m src.postprocessing.merge_shards \
-    --shards outputs/<run-name>/infer/shard*/inference/predictions_shard*.npz \
-    --output outputs/<run-name>/infer/predictions.npz
-```
+The output is identical in schema to a single-GPU run, so the scoring scripts
+below run on it unchanged.
 
 ## 5. Field-Accuracy Metrics
 
@@ -178,41 +166,19 @@ are not included, so it is a lower bound on the true total.
 
 ### Benchmark
 
-The paper benchmarks AeroJEPA against FigConvUNet, GeoTransolver, and
-Transolver on the SuperWing test split (mean ± std over the test cases).
-The baselines are evaluated two ways: **Chunked** (the query grid is split
-into chunks decoded independently) and **One-pass** (the whole grid in one
-forward). AeroJEPA has a single row because its geometry is encoded once
-and the field is decoded continuously from the latent representation — the
-same latent serves any number of query points, so there is no chunked /
-one-pass distinction.
+The paper reports AeroJEPA on the SuperWing test split (mean ± std over the
+test cases). Geometry is encoded once and the field is decoded continuously
+from the latent representation. The first block is the paper's reported
+numbers; the second is this recipe's tutorial-scale run.
 
-| Model | Method | Field | Rel L2 | Rel L1 | RMSE / GT Max | MAE / GT Max | RMSE | MAE | Mean TFLOPs |
-|---|---|---|---|---|---|---|---|---|---|
-| FigConvUNet | Chunked | Cf,τ | 0.2240 ± 0.0609 | 0.1410 ± 0.0400 | 0.0784 ± 0.0212 | 0.0431 ± 0.0121 | 0.2227 ± 0.0571 | 0.1224 ± 0.0315 | 0.57 ± 0.00 |
-| | | Cf,z | 0.4909 ± 0.1057 | 0.3984 ± 0.0905 | 0.0697 ± 0.0199 | 0.0393 ± 0.0112 | 0.4835 ± 0.1525 | 0.2709 ± 0.0805 | |
-| | | Cp | 0.3265 ± 0.0714 | 0.2679 ± 0.0647 | 0.1017 ± 0.0270 | 0.0661 ± 0.0166 | 0.3200 ± 0.0861 | 0.2076 ± 0.0516 | |
-| FigConvUNet | One-pass | Cf,τ | 0.1429 ± 0.0525 | 0.0863 ± 0.0329 | 0.0497 ± 0.0169 | 0.0263 ± 0.0099 | 0.1420 ± 0.0501 | 0.0749 ± 0.0271 | 0.27 ± 0.00 |
-| | | Cf,z | 0.2912 ± 0.1080 | 0.2267 ± 0.0830 | 0.0416 ± 0.0180 | 0.0225 ± 0.0095 | 0.2899 ± 0.1396 | 0.1546 ± 0.0664 | |
-| | | Cp | 0.1946 ± 0.0713 | 0.1580 ± 0.0642 | 0.0598 ± 0.0215 | 0.0383 ± 0.0140 | 0.1884 ± 0.0693 | 0.1206 ± 0.0443 | |
-| GeoTransolver | Chunked | Cf,τ | 0.3587 ± 0.1338 | 0.2376 ± 0.1039 | 0.1269 ± 0.0530 | 0.0735 ± 0.0348 | 0.3588 ± 0.1369 | 0.2075 ± 0.0913 | 0.45 ± 0.00 |
-| | | Cf,z | 0.6990 ± 0.2298 | 0.6132 ± 0.2440 | 0.0969 ± 0.0304 | 0.0587 ± 0.0213 | 0.6660 ± 0.2018 | 0.4013 ± 0.1339 | |
-| | | Cp | 0.4533 ± 0.1361 | 0.3578 ± 0.1186 | 0.1427 ± 0.0531 | 0.0895 ± 0.0346 | 0.4502 ± 0.1707 | 0.2822 ± 0.1104 | |
-| GeoTransolver | One-pass | Cf,τ | 0.0280 ± 0.0177 | 0.0146 ± 0.0077 | 0.0096 ± 0.0056 | 0.0044 ± 0.0021 | 0.0277 ± 0.0170 | 0.0126 ± 0.0061 | 0.45 ± 0.00 |
-| | | Cf,z | 0.0529 ± 0.0335 | 0.0374 ± 0.0185 | 0.0076 ± 0.0055 | 0.0037 ± 0.0021 | 0.0539 ± 0.0416 | 0.0259 ± 0.0154 | |
-| | | Cp | 0.0309 ± 0.0157 | 0.0225 ± 0.0104 | 0.0097 ± 0.0055 | 0.0055 ± 0.0026 | 0.0306 ± 0.0175 | 0.0175 ± 0.0082 | |
-| Transolver | Chunked | Cf,τ | 0.3858 ± 0.1071 | 0.2773 ± 0.0940 | 0.1360 ± 0.0433 | 0.0859 ± 0.0330 | 0.3850 ± 0.1077 | 0.2418 ± 0.0814 | 0.35 ± 0.00 |
-| | | Cf,z | 0.8247 ± 0.2327 | 0.7352 ± 0.2518 | 0.1149 ± 0.0319 | 0.0710 ± 0.0231 | 0.7943 ± 0.2311 | 0.4856 ± 0.1446 | |
-| | | Cp | 0.4858 ± 0.1280 | 0.4135 ± 0.1271 | 0.1512 ± 0.0461 | 0.1026 ± 0.0350 | 0.4763 ± 0.1472 | 0.3229 ± 0.1106 | |
-| Transolver | One-pass | Cf,τ | 0.0324 ± 0.0179 | 0.0182 ± 0.0086 | 0.0111 ± 0.0056 | 0.0055 ± 0.0023 | 0.0321 ± 0.0172 | 0.0157 ± 0.0068 | 0.35 ± 0.00 |
-| | | Cf,z | 0.0606 ± 0.0341 | 0.0459 ± 0.0209 | 0.0087 ± 0.0056 | 0.0046 ± 0.0024 | 0.0612 ± 0.0425 | 0.0316 ± 0.0172 | |
-| | | Cp | 0.0358 ± 0.0164 | 0.0269 ± 0.0113 | 0.0112 ± 0.0058 | 0.0066 ± 0.0029 | 0.0354 ± 0.0187 | 0.0210 ± 0.0093 | |
-| **AeroJEPA (paper)** | encode-once / decode-continuous | Cf,τ | 0.0548 ± 0.0258 | 0.0302 ± 0.0121 | 0.0186 ± 0.0074 | 0.0090 ± 0.0029 | 0.0543 ± 0.0245 | 0.0261 ± 0.0092 | 0.32 ± 0.00 |
-| | | Cf,z | 0.1084 ± 0.0513 | 0.0768 ± 0.0284 | 0.0156 ± 0.0087 | 0.0077 ± 0.0035 | 0.1097 ± 0.0664 | 0.0531 ± 0.0254 | |
-| | | Cp | 0.0644 ± 0.0258 | 0.0473 ± 0.0179 | 0.0200 ± 0.0082 | 0.0116 ± 0.0041 | 0.0630 ± 0.0266 | 0.0365 ± 0.0133 | |
-| _AeroJEPA (this recipe, tutorial-scale)_ | encode-once / decode-continuous | Cf,τ | 0.0598 ± 0.0280 | 0.0314 ± 0.0131 | 0.0205 ± 0.0084 | 0.0094 ± 0.0034 | 0.0263 ± 0.0118 | 0.0119 ± 0.0046 | TBD |
-| | | Cf,z | 0.1271 ± 0.0583 | 0.0875 ± 0.0337 | 0.0183 ± 0.0106 | 0.0087 ± 0.0043 | 0.0223 ± 0.0137 | 0.0104 ± 0.0054 | |
-| | | Cp | 0.0712 ± 0.0289 | 0.0505 ± 0.0192 | 0.0250 ± 0.0101 | 0.0139 ± 0.0049 | 0.0320 ± 0.0137 | 0.0177 ± 0.0064 | |
+| Model | Field | Rel L2 | Rel L1 | RMSE / GT Max | MAE / GT Max | RMSE | MAE | Mean TFLOPs |
+|---|---|---|---|---|---|---|---|---|
+| **AeroJEPA (paper)** | Cf,τ | 0.0548 ± 0.0258 | 0.0302 ± 0.0121 | 0.0186 ± 0.0074 | 0.0090 ± 0.0029 | 0.0543 ± 0.0245 | 0.0261 ± 0.0092 | 0.32 ± 0.00 |
+| | Cf,z | 0.1084 ± 0.0513 | 0.0768 ± 0.0284 | 0.0156 ± 0.0087 | 0.0077 ± 0.0035 | 0.1097 ± 0.0664 | 0.0531 ± 0.0254 | |
+| | Cp | 0.0644 ± 0.0258 | 0.0473 ± 0.0179 | 0.0200 ± 0.0082 | 0.0116 ± 0.0041 | 0.0630 ± 0.0266 | 0.0365 ± 0.0133 | |
+| _AeroJEPA (this recipe, tutorial-scale)_ | Cf,τ | 0.0598 ± 0.0280 | 0.0314 ± 0.0131 | 0.0205 ± 0.0084 | 0.0094 ± 0.0034 | 0.0263 ± 0.0118 | 0.0119 ± 0.0046 | TBD |
+| | Cf,z | 0.1271 ± 0.0583 | 0.0875 ± 0.0337 | 0.0183 ± 0.0106 | 0.0087 ± 0.0043 | 0.0223 ± 0.0137 | 0.0104 ± 0.0054 | |
+| | Cp | 0.0712 ± 0.0289 | 0.0505 ± 0.0192 | 0.0250 ± 0.0101 | 0.0139 ± 0.0049 | 0.0320 ± 0.0137 | 0.0177 ± 0.0064 | |
 
 The last block is this recipe's tutorial-scale run over the 2871-case test
 split (from `metrics_summary.txt`).

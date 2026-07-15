@@ -26,9 +26,21 @@ back to physical units, and writes:
 * ``<output_dir>/plots/<case_id>_{cp,cf_tau,cf_z}.png`` — three field
   plots per case for the first ``num_plots`` cases.
 
+Inference is embarrassingly parallel over test cases: each rank runs a
+disjoint stride of the split and the results are gathered onto rank 0,
+which writes the single ``predictions.npz``. The GPU count is taken from
+the launcher -- nothing to configure or merge.
+
 Usage::
 
+    # Single GPU:
     python inference.py \
+        checkpoint=outputs/<run-name>/checkpoints/best.pt \
+        data.path=/path/to/SuperWing_Dataset \
+        output_dir=inference
+
+    # Multi-GPU (one process per GPU):
+    torchrun --nproc_per_node=<#GPUs> inference.py \
         checkpoint=outputs/<run-name>/checkpoints/best.pt \
         data.path=/path/to/SuperWing_Dataset \
         output_dir=inference
@@ -43,10 +55,12 @@ from pathlib import Path
 import hydra
 import numpy as np
 import torch
+import torch.distributed as dist
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 
+from physicsnemo.distributed import DistributedManager
 from physicsnemo.experimental.models.aerojepa import TokenSet
 from src.datapipes import (
     SuperWingDataset,
@@ -117,8 +131,8 @@ def _build_test_loader(
     *,
     split_manifest_path: str,
     normalization_stats_path: str,
-    shard: int = 0,
-    num_shards: int = 1,
+    rank: int = 0,
+    world_size: int = 1,
 ) -> DataLoader:
     dataset = SuperWingDataset(
         root_dir=str(data_cfg.path),
@@ -134,13 +148,13 @@ def _build_test_loader(
         deterministic_sampling=True,
         normalize_xyz=bool(data_cfg.normalize_xyz),
     )
-    # Strided shard: process `shard` owns cases shard, shard+num_shards, ...
-    # Passing an explicit index list as the sampler means each process only
-    # reads its own cases (lighter on the shared filesystem than reading the
-    # full split on every process and skipping in the loop).
+    # Strided shard: rank `rank` owns cases rank, rank+world_size, ...
+    # Passing an explicit index list as the sampler means each rank only reads
+    # its own cases (lighter on the shared filesystem than reading the full
+    # split on every rank and skipping in the loop).
     sampler = (
-        list(range(int(shard), len(dataset), int(num_shards)))
-        if int(num_shards) > 1
+        list(range(int(rank), len(dataset), int(world_size)))
+        if int(world_size) > 1
         else None
     )
     return DataLoader(
@@ -259,42 +273,48 @@ def _predict_one_case(
 )
 def main(cfg: DictConfig) -> None:
     """Hydra entry point — see module docstring."""
+    DistributedManager.initialize()
+    dm = DistributedManager()
+    world_size = dm.world_size
+    rank = dm.rank
+    is_main = rank == 0
+    device = dm.device
+
     set_seed(int(cfg.seed))
-    device = torch.device(str(cfg.device))
     hydra_dir = Path(HydraConfig.get().runtime.output_dir)
     out_dir = hydra_dir / cfg.output_dir
     plots_dir = out_dir / "plots"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    plots_dir.mkdir(parents=True, exist_ok=True)
+    if is_main:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        plots_dir.mkdir(parents=True, exist_ok=True)
 
-    split_path, stats_path = _ensure_superwing_artifacts(cfg.data)
+    # Build the split/normalization artifacts once on rank 0; other ranks wait
+    # at the barrier, then read the finished files.
+    if is_main:
+        split_path, stats_path = _ensure_superwing_artifacts(cfg.data)
+    if world_size > 1:
+        dist.barrier()
+    if not is_main:
+        split_path, stats_path = _ensure_superwing_artifacts(cfg.data)
     with open(stats_path, encoding="utf-8") as f:
         stats = json.load(f)
     target_mean = np.asarray(stats["target_mean"], dtype=np.float32)
     target_std = np.asarray(stats["target_std"], dtype=np.float32)
 
-    num_shards = int(cfg.get("num_shards", 1))
-    shard = int(cfg.get("shard", 0))
-    if num_shards < 1 or not (0 <= shard < num_shards):
-        raise ValueError(
-            f"Require num_shards >= 1 and 0 <= shard < num_shards; "
-            f"got shard={shard}, num_shards={num_shards}."
-        )
-
     loader = _build_test_loader(
         cfg.data,
         split_manifest_path=split_path,
         normalization_stats_path=stats_path,
-        shard=shard,
-        num_shards=num_shards,
+        rank=rank,
+        world_size=world_size,
     )
     n_local = len(loader.sampler) if loader.sampler is not None else len(loader.dataset)
-    if num_shards > 1:
+    if world_size > 1:
         log.info(
-            "Test cases: %d total; shard %d/%d owns %d cases.",
+            "Test cases: %d total; rank %d/%d owns %d cases.",
             len(loader.dataset),
-            shard,
-            num_shards,
+            rank,
+            world_size,
             n_local,
         )
     else:
@@ -321,14 +341,15 @@ def main(cfg: DictConfig) -> None:
     ref_area_list: list[float] = []
     half_span_list: list[float] = []
     origingeom_list: list[np.ndarray] = []
+    global_idx_list: list[int] = []
 
     n_plots = int(cfg.num_plots)
     H, W = SUPERWING_GRID_SHAPE
 
     for local_idx, batch in enumerate(loader):
-        # Global position in the full (unsharded) test order, for plot
-        # selection and progress logging.
-        global_idx = shard + local_idx * num_shards
+        # Global position in the full (unsharded) test order — used to restore
+        # the original case ordering after the ranks are gathered.
+        global_idx = rank + local_idx * world_size
         batch = move_batch_to_device(batch, device)
         sample = _slice_batch_sample(batch, 0)
         pred_flat = _predict_one_case(
@@ -352,10 +373,9 @@ def main(cfg: DictConfig) -> None:
         )
         target_chw = sample["target_full"].detach().cpu().numpy()
 
-        case_id = str(sample["case_id"])
         pred_fields.append(pred_chw)
         target_fields.append(target_chw)
-        case_ids.append(case_id)
+        case_ids.append(str(sample["case_id"]))
         gen_params_list.append(sample["gen_params"].detach().cpu().numpy())
         solver_coeffs_list.append(sample["solver_coeffs"].detach().cpu().numpy())
         surface_coeffs_list.append(sample["surface_coeffs"].detach().cpu().numpy())
@@ -366,41 +386,63 @@ def main(cfg: DictConfig) -> None:
         ref_area_list.append(float(sample["ref_area"]))
         half_span_list.append(float(sample["half_span"]))
         origingeom_list.append(sample["origingeom_full"].detach().cpu().numpy())
+        global_idx_list.append(global_idx)
 
-        if global_idx < n_plots:
+        if (local_idx + 1) % 20 == 0:
+            log.info("Processed %d / %d local cases", local_idx + 1, n_local)
+
+    # This rank's contribution, stacked into arrays keyed like the final dump.
+    shard_payload = {
+        "pred_field": np.stack(pred_fields, axis=0),
+        "target_field": np.stack(target_fields, axis=0),
+        "case_ids": np.asarray(case_ids),
+        "gen_params": np.stack(gen_params_list, axis=0),
+        "solver_coeffs": np.stack(solver_coeffs_list, axis=0),
+        "surface_coeffs": np.stack(surface_coeffs_list, axis=0),
+        "aoa_deg": np.asarray(aoa_list, dtype=np.float32),
+        "mach": np.asarray(mach_list, dtype=np.float32),
+        "geom_idx": np.asarray(geom_idx_list, dtype=np.int64),
+        "sample_idx": np.asarray(sample_idx_list, dtype=np.int64),
+        "ref_area": np.asarray(ref_area_list, dtype=np.float32),
+        "half_span": np.asarray(half_span_list, dtype=np.float32),
+        "origingeom": np.stack(origingeom_list, axis=0),
+    }
+    global_indices = np.asarray(global_idx_list, dtype=np.int64)
+
+    # Gather every rank's payload onto all ranks (NCCL supports all_gather, not
+    # gather); only rank 0 uses the result to write the single dump.
+    if world_size > 1:
+        gathered: list = [None] * world_size
+        dist.all_gather_object(gathered, (global_indices, shard_payload))
+    else:
+        gathered = [(global_indices, shard_payload)]
+
+    if is_main:
+        order = np.argsort(
+            np.concatenate([g[0] for g in gathered], axis=0), kind="stable"
+        )
+        merged = {
+            key: np.concatenate([g[1][key] for g in gathered], axis=0)[order]
+            for key in shard_payload
+        }
+
+        npz_path = out_dir / "predictions.npz"
+        np.savez_compressed(
+            npz_path, **merged, target_mean=target_mean, target_std=target_std
+        )
+        log.info("Saved predictions to %s (%d cases)", npz_path, order.shape[0])
+
+        for i in range(min(n_plots, int(merged["case_ids"].shape[0]))):
+            case_id = str(merged["case_ids"][i])
             written = plot_surface_field(
-                predicted=pred_chw,
-                target=target_chw,
+                predicted=merged["pred_field"][i],
+                target=merged["target_field"][i],
                 output_dir=plots_dir,
                 case_id=case_id,
             )
             log.info("Plotted case %s -> %d PNGs", case_id, len(written))
-        if (local_idx + 1) % 20 == 0:
-            log.info("Processed %d / %d local cases", local_idx + 1, n_local)
 
-    npz_name = (
-        "predictions.npz" if num_shards == 1 else f"predictions_shard{shard}.npz"
-    )
-    npz_path = out_dir / npz_name
-    np.savez_compressed(
-        npz_path,
-        pred_field=np.stack(pred_fields, axis=0),
-        target_field=np.stack(target_fields, axis=0),
-        case_ids=np.asarray(case_ids),
-        gen_params=np.stack(gen_params_list, axis=0),
-        solver_coeffs=np.stack(solver_coeffs_list, axis=0),
-        surface_coeffs=np.stack(surface_coeffs_list, axis=0),
-        aoa_deg=np.asarray(aoa_list, dtype=np.float32),
-        mach=np.asarray(mach_list, dtype=np.float32),
-        geom_idx=np.asarray(geom_idx_list, dtype=np.int64),
-        sample_idx=np.asarray(sample_idx_list, dtype=np.int64),
-        ref_area=np.asarray(ref_area_list, dtype=np.float32),
-        half_span=np.asarray(half_span_list, dtype=np.float32),
-        origingeom=np.stack(origingeom_list, axis=0),
-        target_mean=target_mean,
-        target_std=target_std,
-    )
-    log.info("Saved predictions to %s", npz_path)
+    DistributedManager.cleanup()
 
 
 if __name__ == "__main__":
