@@ -29,12 +29,20 @@ from ._torch_impl import ffd_points_torch
 from ._utils import normalize_ffd_inputs, restore_point_rank
 from ._warp_impl import ffd_points_warp
 
+_FFD_BASES = (
+    "bernstein",
+    "bspline",
+    "linear",
+    "smoothstep",
+    "smootherstep",
+)
+
 
 def _validate_basis(basis: str) -> None:
     """Validate the public lattice-basis selector."""
 
-    if basis not in ("bernstein", "bspline"):
-        raise ValueError(f"basis must be 'bernstein' or 'bspline', got {basis!r}")
+    if basis not in _FFD_BASES:
+        raise ValueError(f"basis must be one of {_FFD_BASES}, got {basis!r}")
 
 
 class FFDPoints(FunctionSpec):
@@ -58,7 +66,7 @@ class FFDPoints(FunctionSpec):
        \left[\prod_{d=1}^{D} b_{i_d}(u_d)\right] \Delta P_{i_1 \dots i_D},
        \qquad x' = x + \mathtt{point\_weights}\,d(x).
 
-    Points outside the box pass through as identity. Both bases form a
+    Points outside the box pass through as identity. All supported bases form a
     partition of unity, so a lattice of zero displacements is exactly the
     identity and a constant lattice translates every point inside the box.
 
@@ -78,6 +86,15 @@ class FFDPoints(FunctionSpec):
     Greville coordinate :math:`(i - 1) / (n_d - 3)`, so the first and last
     coefficient planes lie one knot spacing outside the evaluation box.
 
+    ``basis="linear"``, ``"smoothstep"``, and ``"smootherstep"`` are
+    local, node-interpolating alternatives. Each axis is divided into
+    :math:`n_d - 1` cells, and only the two nodes bracketing a point contribute
+    along that axis. If :math:`t \in [0, 1]` is the coordinate within a cell,
+    the upper-node weight is respectively :math:`t`,
+    :math:`3t^2 - 2t^3`, or :math:`t^3(6t^2 - 15t + 10)`; the lower-node
+    weight is one minus that value. The resulting fields are respectively C0,
+    C1, and C2 across cell boundaries.
+
     Inputs may be unbatched (``points`` of shape ``(N, D)``) or batched
     (``(B, N, D)``); the lattice follows with shapes
     ``(n_1, ..., n_D, D)`` or ``(B, n_1, ..., n_D, D)``. Batched inputs are
@@ -91,8 +108,9 @@ class FFDPoints(FunctionSpec):
         Displacement vectors, not destination coordinates, for every lattice
         node, with shape ``(n_1, ..., n_D, D)`` or ``(B, n_1, ..., n_D, D)``
         and the same dtype and device as ``points``. Each axis needs at least
-        two nodes for ``"bernstein"`` and four for ``"bspline"``. For
-        ``"bernstein"``, node ``(i_1, ..., i_D)`` sits at coordinate
+        two nodes for ``"bernstein"`` and the node-interpolating bases, and
+        four for ``"bspline"``. For ``"bernstein"`` and the interpolating
+        bases, node ``(i_1, ..., i_D)`` sits at coordinate
         ``origin_d + extent_d * i_d / (n_d - 1)`` along each axis; uniform
         cubic B-spline coefficient ``i_d`` is associated with
         ``origin_d + extent_d * (i_d - 1) / (n_d - 3)`` and is generally not
@@ -106,10 +124,13 @@ class FFDPoints(FunctionSpec):
         Edge lengths of the lattice box with the same accepted shapes as
         ``origin``. Every value must be strictly positive and finite; tensor
         values are not validated at runtime.
-    basis : {"bernstein", "bspline"}, optional
+    basis : {"bernstein", "bspline", "linear", "smoothstep", "smootherstep"}, optional
         Per-axis basis family. ``"bernstein"`` is classic global-support FFD
         for coarse lattices; ``"bspline"`` gives local four-node-per-axis
-        support and scales to fine lattices. Default is ``"bernstein"``.
+        support and scales to fine lattices. ``"linear"``,
+        ``"smoothstep"``, and ``"smootherstep"`` are local
+        two-node-per-axis bases that interpolate every lattice node, with
+        progressively smoother transitions. Default is ``"bernstein"``.
     point_weights : torch.Tensor or None, optional
         Optional bool or floating per-point weights. Accepted shapes are
         ``(N,)`` for unbatched inputs and ``(B, N)`` for batched inputs.
@@ -136,9 +157,10 @@ class FFDPoints(FunctionSpec):
     The deformation is generally not continuous across the box boundary: an
     outside point stays fixed while a neighboring inside point moves. A
     sufficient condition for continuity with the undeformed exterior is to set
-    the outermost coefficient plane on every Bernstein face to zero. For cubic
-    B-splines, set the first and last three coefficient planes on every axis to
-    zero because three planes have nonzero weight at each box face.
+    the outermost coefficient plane on every Bernstein or node-interpolating
+    face to zero. For cubic B-splines, set the first and last three coefficient
+    planes on every axis to zero because three planes have nonzero weight at
+    each box face.
 
     Bernstein degree, global support, and evaluation cost grow with the lattice
     resolution. Use ``"bspline"`` for fine lattices or local control. The
@@ -208,6 +230,16 @@ class FFDPoints(FunctionSpec):
             0.5,
         ),
         (
+            "smooth-step-2-n8192-r16x16x16",
+            1,
+            8192,
+            (16, 16, 16),
+            torch.float32,
+            "smootherstep",
+            "none",
+            0.0,
+        ),
+        (
             "bernstein-b2-n8192-r5x5x5-bool-point-weights",
             2,
             8192,
@@ -268,7 +300,9 @@ class FFDPoints(FunctionSpec):
         *,
         origin: torch.Tensor | Sequence[float],
         extent: torch.Tensor | Sequence[float],
-        basis: Literal["bernstein", "bspline"] = "bernstein",
+        basis: Literal[
+            "bernstein", "bspline", "linear", "smoothstep", "smootherstep"
+        ] = "bernstein",
         point_weights: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Apply lattice free-form deformation with the Warp backend."""
@@ -303,7 +337,9 @@ class FFDPoints(FunctionSpec):
         *,
         origin: torch.Tensor | Sequence[float],
         extent: torch.Tensor | Sequence[float],
-        basis: Literal["bernstein", "bspline"] = "bernstein",
+        basis: Literal[
+            "bernstein", "bspline", "linear", "smoothstep", "smootherstep"
+        ] = "bernstein",
         point_weights: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Apply lattice free-form deformation with the pure-Torch backend."""
@@ -339,7 +375,9 @@ class FFDPoints(FunctionSpec):
         *,
         origin: torch.Tensor | Sequence[float],
         extent: torch.Tensor | Sequence[float],
-        basis: Literal["bernstein", "bspline"] = "bernstein",
+        basis: Literal[
+            "bernstein", "bspline", "linear", "smoothstep", "smootherstep"
+        ] = "bernstein",
         point_weights: torch.Tensor | None = None,
         implementation: Literal["torch", "warp"] | None = None,
     ) -> torch.Tensor:

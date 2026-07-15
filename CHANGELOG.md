@@ -35,7 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds differentiable lattice free-form deformation with Torch and NVIDIA Warp
   backends: dimension-generic ``ffd_points`` / ``Mesh.ffd`` /
   ``DomainMesh.ffd`` with Bernstein (classic FFD) and locally supported
-  uniform cubic B-spline bases.
+  uniform cubic B-spline bases, plus node-interpolating linear, cubic
+  smooth-step, and quintic smooth-step modes.
 - Adds `uniform_grid_divergence`, `uniform_grid_curl`, and
   `uniform_grid_laplacian` to `physicsnemo.nn.functional`, with Torch and fused
   Warp implementations for periodic Cartesian grids.

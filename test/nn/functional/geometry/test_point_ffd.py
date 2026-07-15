@@ -30,7 +30,9 @@ from physicsnemo.nn.functional.geometry.deform import ffd as ffd_module
 from test.conftest import requires_module
 from test.nn.functional._parity_utils import clone_case
 
-_BASES = ("bernstein", "bspline")
+_INTERPOLATING_BASES = ("linear", "smoothstep", "smootherstep")
+_BASES = ("bernstein", "bspline", *_INTERPOLATING_BASES)
+_AFFINE_EXACT_BASES = ("bernstein", "bspline", "linear")
 
 
 def _lattice_nodes(resolution, origin, extent, basis, dtype, device):
@@ -43,7 +45,7 @@ def _lattice_nodes(resolution, origin, extent, basis, dtype, device):
 
     axes = []
     for size, origin_d, extent_d in zip(resolution, origin, extent):
-        if basis == "bernstein":
+        if basis != "bspline":
             positions = torch.linspace(0.0, 1.0, size, dtype=dtype, device=device)
         else:
             positions = (torch.arange(size, dtype=dtype, device=device) - 1) / (
@@ -152,7 +154,7 @@ def test_ffd_constant_displacement_is_exact_translation(device, implementation, 
 
 
 @pytest.mark.parametrize("implementation", ["torch", "warp"])
-@pytest.mark.parametrize("basis", _BASES)
+@pytest.mark.parametrize("basis", _AFFINE_EXACT_BASES)
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 def test_ffd_linear_precision(device, implementation, basis, dtype):
     """Sampling an affine map on the lattice reproduces the affine map exactly."""
@@ -186,6 +188,230 @@ def test_ffd_linear_precision(device, implementation, basis, dtype):
         torch.testing.assert_close(output, expected, atol=1e-5, rtol=1e-5)
     else:
         torch.testing.assert_close(output, expected)
+
+
+@pytest.mark.parametrize("implementation", ["torch", "warp"])
+@pytest.mark.parametrize("basis", _INTERPOLATING_BASES)
+@pytest.mark.parametrize("num_dims", [1, 2, 3])
+def test_interpolating_bases_reproduce_every_lattice_node(
+    device, implementation, basis, num_dims
+):
+    """The local modes attain every control displacement exactly."""
+
+    if implementation == "warp":
+        pytest.importorskip("warp")
+    device = torch.device(device)
+    dtype = torch.float64
+    resolution = tuple(range(3, 3 + num_dims))
+    axes = [
+        torch.linspace(0.0, 1.0, size, device=device, dtype=dtype)
+        for size in resolution
+    ]
+    points = torch.stack(torch.meshgrid(*axes, indexing="ij"), dim=-1).reshape(
+        -1, num_dims
+    )
+    generator = torch.Generator(device=device).manual_seed(18 + num_dims)
+    control_displacements = 0.1 * torch.randn(
+        (*resolution, num_dims), generator=generator, device=device, dtype=dtype
+    )
+
+    output = ffd_points(
+        points,
+        control_displacements,
+        origin=[0.0] * num_dims,
+        extent=[1.0] * num_dims,
+        basis=basis,
+        implementation=implementation,
+    )
+
+    torch.testing.assert_close(
+        output, points + control_displacements.reshape(-1, num_dims)
+    )
+
+
+@pytest.mark.parametrize("implementation", ["torch", "warp"])
+@pytest.mark.parametrize("basis", _INTERPOLATING_BASES)
+def test_interpolating_bases_match_piecewise_one_dimensional_oracle(
+    device, implementation, basis
+):
+    if implementation == "warp":
+        pytest.importorskip("warp")
+    device = torch.device(device)
+    dtype = torch.float64
+    points = torch.tensor(
+        [[0.125], [0.375], [0.625], [0.875]], device=device, dtype=dtype
+    )
+    control_displacements = torch.tensor(
+        [[0.0], [2.0], [-1.0]], device=device, dtype=dtype
+    )
+    scaled = points[:, 0] * 2
+    cell = scaled.floor().clamp_max(1).to(torch.long)
+    t = scaled - cell
+    if basis == "linear":
+        upper = t
+    elif basis == "smoothstep":
+        upper = t * t * (3 - 2 * t)
+    else:
+        upper = t * t * t * (t * (6 * t - 15) + 10)
+    field = (1 - upper) * control_displacements[
+        cell, 0
+    ] + upper * control_displacements[cell + 1, 0]
+
+    output = ffd_points(
+        points,
+        control_displacements,
+        origin=[0.0],
+        extent=[1.0],
+        basis=basis,
+        implementation=implementation,
+    )
+
+    torch.testing.assert_close(output[:, 0], points[:, 0] + field)
+
+
+@pytest.mark.parametrize("implementation", ["torch", "warp"])
+@pytest.mark.parametrize("basis", _INTERPOLATING_BASES)
+def test_interpolating_bases_have_two_node_per_axis_local_support(
+    device, implementation, basis
+):
+    if implementation == "warp":
+        pytest.importorskip("warp")
+    device = torch.device(device)
+    points = torch.tensor([[0.8, 0.8]], device=device)
+    control_displacements = torch.zeros((4, 4, 2), device=device)
+    control_displacements[0, 0] = torch.tensor([1.0, -1.0], device=device)
+
+    output = ffd_points(
+        points,
+        control_displacements,
+        origin=[0.0, 0.0],
+        extent=[1.0, 1.0],
+        basis=basis,
+        implementation=implementation,
+    )
+
+    assert torch.equal(output, points)
+
+
+@pytest.mark.parametrize("implementation", ["torch", "warp"])
+@pytest.mark.parametrize("num_dims", [1, 2, 3])
+def test_linear_upper_boundary_uses_final_cell_value_and_gradient(
+    device, implementation, num_dims
+):
+    """Inclusive upper faces retain the final interior linear stencil."""
+
+    if implementation == "warp":
+        pytest.importorskip("warp")
+    device = torch.device(device)
+    dtype = torch.float32
+    origin = torch.tensor(
+        [-1.0 - axis for axis in range(num_dims)], device=device, dtype=dtype
+    )
+    maximum = torch.tensor(
+        [2.0 + axis for axis in range(num_dims)], device=device, dtype=dtype
+    )
+    extent = maximum - origin
+    axes = [
+        torch.linspace(origin[d], maximum[d], 3, device=device, dtype=dtype)
+        for d in range(num_dims)
+    ]
+    nodes = torch.stack(torch.meshgrid(*axes, indexing="ij"), dim=-1)
+    matrix = 0.05 * torch.arange(
+        1, num_dims * num_dims + 1, device=device, dtype=dtype
+    ).reshape(num_dims, num_dims)
+    bias = torch.linspace(0.02, 0.02 * num_dims, num_dims, device=device, dtype=dtype)
+    control_displacements = nodes @ matrix.mT + bias
+
+    points = ((origin + maximum) / 2).expand(num_dims + 1, num_dims).clone()
+    points[:-1].diagonal().copy_(maximum)
+    points[-1].copy_(maximum)
+    points.requires_grad_(True)
+
+    output = ffd_points(
+        points,
+        control_displacements,
+        origin=origin,
+        extent=extent,
+        basis="linear",
+        implementation=implementation,
+    )
+    expected = points.detach() + points.detach() @ matrix.mT + bias
+    torch.testing.assert_close(output, expected, atol=3.0e-5, rtol=3.0e-5)
+
+    output.sum().backward()
+    expected_gradient = torch.ones_like(points) + matrix.sum(dim=0)
+    torch.testing.assert_close(points.grad, expected_gradient, atol=3.0e-5, rtol=3.0e-5)
+
+
+@pytest.mark.parametrize("implementation", ["torch", "warp"])
+def test_linear_large_world_origin_preserves_float64_coordinates(
+    device, implementation
+):
+    if implementation == "warp":
+        pytest.importorskip("warp")
+    device = torch.device(device)
+    points = torch.tensor(
+        [[1.0e8 + 0.25], [1.0e8 + 0.75]], device=device, dtype=torch.float64
+    )
+    control_displacements = torch.tensor(
+        [[0.0], [0.5], [1.0]], device=device, dtype=torch.float64
+    )
+
+    output = ffd_points(
+        points,
+        control_displacements,
+        origin=[1.0e8],
+        extent=[1.0],
+        basis="linear",
+        implementation=implementation,
+    )
+
+    expected_displacement = torch.tensor(
+        [[0.25], [0.75]], device=device, dtype=torch.float64
+    )
+    torch.testing.assert_close(
+        output - points, expected_displacement, atol=1.0e-6, rtol=1.0e-6
+    )
+
+
+@pytest.mark.parametrize(
+    ("basis", "continuity_order"),
+    [("smoothstep", 1), ("smootherstep", 2)],
+)
+def test_smooth_interpolating_bases_have_documented_knot_continuity(
+    basis, continuity_order
+):
+    """One-sided derivatives agree through the advertised continuity order."""
+
+    controls = torch.tensor([[0.0], [1.0], [-0.5]], dtype=torch.float64)
+
+    def field_derivatives(coordinate):
+        point = torch.tensor([[coordinate]], dtype=torch.float64, requires_grad=True)
+        field = (
+            ffd_points(
+                point,
+                controls,
+                origin=[0.0],
+                extent=[1.0],
+                basis=basis,
+                implementation="torch",
+            )
+            - point
+        ).sum()
+        derivatives = []
+        value = field
+        for _ in range(continuity_order):
+            (value,) = torch.autograd.grad(value, point, create_graph=True)
+            derivatives.append(value)
+        return derivatives
+
+    epsilon = 1.0e-7
+    left = field_derivatives(0.5 - epsilon)
+    right = field_derivatives(0.5 + epsilon)
+    for left_derivative, right_derivative in zip(left, right, strict=True):
+        torch.testing.assert_close(
+            left_derivative, right_derivative, atol=2.0e-4, rtol=0.0
+        )
 
 
 @requires_module("warp")
@@ -311,7 +537,13 @@ def test_ffd_outside_points_are_identity_with_zero_gradients(
 @pytest.mark.parametrize("implementation", ["torch", "warp"])
 @pytest.mark.parametrize(
     ("basis", "resolution", "zero_layers"),
-    [("bernstein", 5, 1), ("bspline", 8, 3)],
+    [
+        ("bernstein", 5, 1),
+        ("bspline", 8, 3),
+        ("linear", 5, 1),
+        ("smoothstep", 5, 1),
+        ("smootherstep", 5, 1),
+    ],
 )
 def test_ffd_zero_boundary_layers_match_fixed_exterior(
     device, implementation, basis, resolution, zero_layers
@@ -811,11 +1043,11 @@ def test_public_api_fake_tensor_propagation(implementation):
                 torch.zeros(4, 4, 2),
                 origin=[0.0, 0.0],
                 extent=[1.0, 1.0],
-                basis="linear",
+                basis="catmull_rom",
                 implementation="torch",
             ),
             ValueError,
-            "basis must be 'bernstein' or 'bspline'",
+            "basis must be one of",
         ),
         (
             lambda: ffd_points(
@@ -827,6 +1059,18 @@ def test_public_api_fake_tensor_propagation(implementation):
             ),
             ValueError,
             "requires at least 2 lattice nodes",
+        ),
+        (
+            lambda: ffd_points(
+                torch.zeros(2, 2),
+                torch.zeros(1, 4, 2),
+                origin=[0.0, 0.0],
+                extent=[1.0, 1.0],
+                basis="smoothstep",
+                implementation="torch",
+            ),
+            ValueError,
+            "basis 'smoothstep' requires at least 2 lattice nodes",
         ),
         (
             lambda: ffd_points(

@@ -722,7 +722,9 @@ class DomainMesh:
         *,
         origin: torch.Tensor | Sequence[builtins.float] | None = None,
         extent: torch.Tensor | Sequence[builtins.float] | None = None,
-        basis: Literal["bernstein", "bspline"] = "bernstein",
+        basis: Literal[
+            "bernstein", "bspline", "linear", "smoothstep", "smootherstep"
+        ] = "bernstein",
         point_weights: str | tuple[str, ...] | None = None,
         implementation: Literal["torch", "warp"] | None = None,
     ) -> "DomainMesh":
@@ -743,7 +745,7 @@ class DomainMesh:
             lattice node, with shape ``(n_1, ..., n_D, n_spatial_dims)`` and
             the same float32 or float64 dtype and device as every component's
             points. Each axis needs at least two nodes for ``"bernstein"`` and
-            four for ``"bspline"``.
+            the node-interpolating bases, and four for ``"bspline"``.
         origin : torch.Tensor, sequence of float, or None, optional
             Minimum corner of the lattice box with shape
             ``(n_spatial_dims,)``. ``None`` uses the minimum corner of the
@@ -755,12 +757,15 @@ class DomainMesh:
             combined component bounds. Validating a derived extent synchronizes
             with the device. Every coordinate axis must then have positive
             range; otherwise, supply an explicit extent.
-        basis : {"bernstein", "bspline"}, optional
+        basis : {"bernstein", "bspline", "linear", "smoothstep", "smootherstep"}, optional
             Per-axis basis family. ``"bernstein"`` has global support;
             ``"bspline"`` has local four-node-per-axis support. B-spline
             coefficient index ``i`` is associated with local coordinate
             ``(i - 1) / (n - 3)``, so the first and last coefficient planes lie
-            outside the evaluation box. Default is ``"bernstein"``.
+            outside the evaluation box. ``"linear"``, ``"smoothstep"``, and
+            ``"smootherstep"`` use two neighboring nodes per axis and
+            interpolate every lattice node, with progressively smoother
+            transitions. Default is ``"bernstein"``.
         point_weights : str, tuple[str, ...], or None
             Optional point-data key present in every component and resolved
             independently on each component. Each resolved tensor must have
@@ -784,8 +789,9 @@ class DomainMesh:
         pushed forward. Geometry caches are invalidated and topology caches
         are retained on each component. Points outside the lattice box are
         unchanged. A sufficient condition for a fixed exterior is to zero the
-        outermost coefficient plane on every Bernstein face, or the first and
-        last three coefficient planes on every axis for cubic B-splines. The
+        outermost coefficient plane on every Bernstein or node-interpolating
+        face, or the first and last three coefficient planes on every axis for
+        cubic B-splines. The
         ``origin`` and ``extent`` are non-differentiable configuration values. The
         deformation does not automatically detect inverted, degenerate, or
         self-intersecting cells. Use each component mesh's

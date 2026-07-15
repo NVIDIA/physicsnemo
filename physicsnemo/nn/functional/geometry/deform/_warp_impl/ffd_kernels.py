@@ -21,11 +21,12 @@ annotations, ``type(...)`` scalar constructors) and instantiated for float32
 and float64 through :func:`warp.overload`, so the two precisions share one
 numerical definition by construction.
 
-Both tensor-product bases run through one kernel family via a per-axis active
+All tensor-product bases run through one kernel family via a per-axis active
 window: Bernstein activates every lattice node along an axis, the uniform
-cubic B-spline activates the four nodes around the containing knot span. The
-kernels are dimension-generic; per-axis lattice sizes arrive in ``resolution``
-and coordinates are indexed componentwise.
+cubic B-spline activates the four nodes around the containing knot span, and
+the interpolating bases activate the two nodes bounding the containing cell.
+The kernels are dimension-generic; per-axis lattice sizes arrive in
+``resolution`` and coordinates are indexed componentwise.
 """
 
 from typing import Any
@@ -36,6 +37,9 @@ from .kernels import _precision_overload
 
 BERNSTEIN_BASIS_ID = 0
 BSPLINE_BASIS_ID = 1
+LINEAR_BASIS_ID = 2
+SMOOTH_STEP_1_BASIS_ID = 3
+SMOOTH_STEP_2_BASIS_ID = 4
 # Keep common coarse lattices on the faster product path. At degree 64 the
 # largest binomial coefficient is still many orders below the float32 limit.
 _BERNSTEIN_DIRECT_MAX_DEGREE = 64
@@ -130,6 +134,40 @@ def _bspline_derivative(index: int, t: Any):
 
 
 @wp.func
+def _is_interpolating_basis(basis_id: int) -> bool:
+    """Return whether ``basis_id`` selects a two-node cell basis."""
+
+    return (
+        basis_id == LINEAR_BASIS_ID
+        or basis_id == SMOOTH_STEP_1_BASIS_ID
+        or basis_id == SMOOTH_STEP_2_BASIS_ID
+    )
+
+
+@wp.func
+def _interpolating_blend(basis_id: int, t: Any):
+    """Evaluate the upper-node blend function for a cell parameter ``t``."""
+
+    if basis_id == SMOOTH_STEP_1_BASIS_ID:
+        return t * t * (type(t)(3.0) - type(t)(2.0) * t)
+    if basis_id == SMOOTH_STEP_2_BASIS_ID:
+        return t * t * t * (t * (type(t)(6.0) * t - type(t)(15.0)) + type(t)(10.0))
+    return t
+
+
+@wp.func
+def _interpolating_blend_derivative(basis_id: int, t: Any):
+    """Evaluate the cell-parameter derivative of the upper-node blend."""
+
+    if basis_id == SMOOTH_STEP_1_BASIS_ID:
+        return type(t)(6.0) * t * (type(t)(1.0) - t)
+    if basis_id == SMOOTH_STEP_2_BASIS_ID:
+        complement = type(t)(1.0) - t
+        return type(t)(30.0) * t * t * complement * complement
+    return type(t)(1.0)
+
+
+@wp.func
 def _local_coordinate(
     points: wp.array3d(dtype=Any),
     origin: wp.array2d(dtype=Any),
@@ -164,6 +202,8 @@ def _inside_lattice(
 def _window_count(basis_id: int, size: int) -> int:
     if basis_id == BSPLINE_BASIS_ID:
         return 4
+    if _is_interpolating_basis(basis_id):
+        return 2
     return size
 
 
@@ -173,6 +213,10 @@ def _window_start(basis_id: int, size: int, u: Any) -> int:
         span = size - 3
         scaled = wp.clamp(u * type(u)(span), type(u)(0.0), type(u)(span - 1))
         return int(wp.floor(scaled))
+    if _is_interpolating_basis(basis_id):
+        cells = size - 1
+        scaled = wp.clamp(u * type(u)(cells), type(u)(0.0), type(u)(cells - 1))
+        return int(wp.floor(scaled))
     return 0
 
 
@@ -180,6 +224,8 @@ def _window_start(basis_id: int, size: int, u: Any) -> int:
 def _window_param(basis_id: int, size: int, start: int, u: Any):
     if basis_id == BSPLINE_BASIS_ID:
         return u * type(u)(size - 3) - type(u)(start)
+    if _is_interpolating_basis(basis_id):
+        return u * type(u)(size - 1) - type(u)(start)
     return u
 
 
@@ -187,6 +233,11 @@ def _window_param(basis_id: int, size: int, start: int, u: Any):
 def _window_value(basis_id: int, size: int, index: int, param: Any):
     if basis_id == BSPLINE_BASIS_ID:
         return _bspline_value(index, param)
+    if _is_interpolating_basis(basis_id):
+        upper = _interpolating_blend(basis_id, param)
+        if index == 0:
+            return type(param)(1.0) - upper
+        return upper
     return _bernstein_value(index, size - 1, param)
 
 
@@ -194,6 +245,11 @@ def _window_value(basis_id: int, size: int, index: int, param: Any):
 def _window_derivative(basis_id: int, size: int, index: int, param: Any):
     if basis_id == BSPLINE_BASIS_ID:
         return _bspline_derivative(index, param)
+    if _is_interpolating_basis(basis_id):
+        derivative = _interpolating_blend_derivative(basis_id, param)
+        if index == 0:
+            return -derivative
+        return derivative
     return _bernstein_derivative(index, size - 1, param)
 
 
@@ -203,6 +259,8 @@ def _param_gradient_scale(basis_id: int, size: int, u: Any):
 
     if basis_id == BSPLINE_BASIS_ID:
         return type(u)(size - 3)
+    if _is_interpolating_basis(basis_id):
+        return type(u)(size - 1)
     return type(u)(1.0)
 
 
@@ -479,6 +537,9 @@ ffd_point_backward_f64 = _precision_overload(
 __all__ = [
     "BERNSTEIN_BASIS_ID",
     "BSPLINE_BASIS_ID",
+    "LINEAR_BASIS_ID",
+    "SMOOTH_STEP_1_BASIS_ID",
+    "SMOOTH_STEP_2_BASIS_ID",
     "ffd_backward_f32",
     "ffd_backward_f64",
     "ffd_forward_f32",

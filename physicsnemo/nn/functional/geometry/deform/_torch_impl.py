@@ -517,11 +517,25 @@ def _bspline_rows(t: torch.Tensor) -> torch.Tensor:
     )
 
 
+def _interpolating_rows(t: torch.Tensor, basis: str) -> torch.Tensor:
+    """Evaluate a two-node interpolating basis at cell coordinate ``t``."""
+
+    if basis == "linear":
+        upper = t
+    elif basis == "smoothstep":
+        upper = t * t * (3 - 2 * t)
+    else:
+        upper = t * t * t * (t * (6 * t - 15) + 10)
+    return torch.stack((1 - upper, upper), dim=-1)
+
+
 def _ffd_window_size(resolution: tuple[int, ...], basis: str) -> int:
     """Number of lattice nodes that influence one query point."""
 
     if basis == "bspline":
         return 4 ** len(resolution)
+    if basis != "bernstein":
+        return 2 ** len(resolution)
     window = 1
     for size in resolution:
         window *= size
@@ -555,6 +569,8 @@ def _ffd_field_chunk(
             )
         field = torch.bmm(weights, lattice_displacements)
     else:
+        interpolating = basis != "bspline"
+        nodes_per_axis = 2 if interpolating else 4
         strides: list[int] = []
         stride = 1
         for size in reversed(resolution):
@@ -565,14 +581,19 @@ def _ffd_field_chunk(
         flat_index = torch.zeros(
             (batch_size, num_points, 1), dtype=torch.long, device=points.device
         )
-        offsets = torch.arange(4, device=points.device)
+        offsets = torch.arange(nodes_per_axis, device=points.device)
         for d, size in enumerate(resolution):
-            span = size - 3
+            span = size - 1 if interpolating else size - 3
             s = u[..., d] * span
             # The clamp keeps the final span active on the inclusive upper
             # lattice face, where the raw cell index equals the span count.
             cell = s.detach().clamp(0, span - 1).floor()
-            rows = _bspline_rows(s - cell)
+            cell_coordinate = s - cell
+            rows = (
+                _interpolating_rows(cell_coordinate, basis)
+                if interpolating
+                else _bspline_rows(cell_coordinate)
+            )
             node = cell.to(torch.long).unsqueeze(-1) + offsets
             weights = (weights.unsqueeze(-1) * rows.unsqueeze(-2)).reshape(
                 batch_size, num_points, -1

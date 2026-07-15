@@ -132,7 +132,9 @@ def ffd(
     *,
     origin: torch.Tensor | Sequence[float] | None = None,
     extent: torch.Tensor | Sequence[float] | None = None,
-    basis: Literal["bernstein", "bspline"] = "bernstein",
+    basis: Literal[
+        "bernstein", "bspline", "linear", "smoothstep", "smootherstep"
+    ] = "bernstein",
     point_weights: str | tuple[str, ...] | torch.Tensor | None = None,
     implementation: Literal["torch", "warp"] | None = None,
 ) -> "Mesh":
@@ -153,7 +155,8 @@ def ffd(
         Displacement vectors, not destination coordinates, for every lattice
         node, with shape ``(n_1, ..., n_D, mesh.n_spatial_dims)`` and the same
         float32 or float64 dtype and device as ``mesh.points``. Each axis needs
-        at least two nodes for ``"bernstein"`` and four for ``"bspline"``.
+        at least two nodes for ``"bernstein"`` and the node-interpolating
+        bases, and four for ``"bspline"``.
     origin : torch.Tensor, sequence of float, or None, optional
         Minimum corner of the lattice box with shape
         ``(mesh.n_spatial_dims,)``. ``None`` uses the minimum corner of the
@@ -167,13 +170,16 @@ def ffd(
         axis must then have positive range; supply an explicit extent for
         lower-dimensional geometry embedded in a higher-dimensional space.
         Default is ``None``.
-    basis : {"bernstein", "bspline"}, optional
+    basis : {"bernstein", "bspline", "linear", "smoothstep", "smootherstep"}, optional
         Per-axis basis family. ``"bernstein"`` is classic global-support
         free-form deformation for coarse lattices; ``"bspline"`` gives local
         four-node-per-axis support and scales to fine lattices. For B-splines,
         coefficient index ``i`` is associated with local coordinate
         ``(i - 1) / (n - 3)``, so the first and last coefficient planes lie
-        outside the evaluation box. Default is ``"bernstein"``.
+        outside the evaluation box. ``"linear"``, ``"smoothstep"``, and
+        ``"smootherstep"`` use the two neighboring nodes per axis and
+        interpolate every lattice node, with progressively smoother
+        transitions. Default is ``"bernstein"``.
     point_weights : str, tuple[str, ...], torch.Tensor, or None, optional
         Optional bool or floating mesh-point weights with shape
         ``(mesh.n_points,)``, or a
@@ -196,8 +202,9 @@ def ffd(
     Geometry-dependent caches are invalidated and topology caches are retained.
     The deformation is generally not continuous across the lattice-box
     boundary. A sufficient condition for a fixed exterior is to zero the
-    outermost coefficient plane on every Bernstein face, or the first and last
-    three coefficient planes on every axis for cubic B-splines. ``origin`` and
+    outermost coefficient plane on every Bernstein or node-interpolating face,
+    or the first and last three coefficient planes on every axis for cubic
+    B-splines. ``origin`` and
     ``extent`` are non-differentiable lattice-configuration values; optimize
     ``control_displacements`` instead. The operation does not detect or repair
     inverted, degenerate, or self-intersecting cells; call

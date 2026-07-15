@@ -2717,7 +2717,9 @@ class Mesh:
         *,
         origin: torch.Tensor | Sequence[builtins.float] | None = None,
         extent: torch.Tensor | Sequence[builtins.float] | None = None,
-        basis: Literal["bernstein", "bspline"] = "bernstein",
+        basis: Literal[
+            "bernstein", "bspline", "linear", "smoothstep", "smootherstep"
+        ] = "bernstein",
         point_weights: str | tuple[str, ...] | torch.Tensor | None = None,
         implementation: Literal["torch", "warp"] | None = None,
     ) -> "Mesh":

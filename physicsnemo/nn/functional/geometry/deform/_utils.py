@@ -24,7 +24,13 @@ from numbers import Real
 
 import torch
 
-_FFD_MIN_NODES = {"bernstein": 2, "bspline": 4}
+_FFD_MIN_NODES = {
+    "bernstein": 2,
+    "bspline": 4,
+    "linear": 2,
+    "smoothstep": 2,
+    "smootherstep": 2,
+}
 
 
 def _zero_dependency(

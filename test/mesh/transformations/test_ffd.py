@@ -81,6 +81,29 @@ def test_mesh_ffd_default_box_spans_mesh_bounds():
     assert torch.equal(output.global_data["case_id"], mesh.global_data["case_id"])
 
 
+@pytest.mark.parametrize("basis", ["linear", "smoothstep", "smootherstep"])
+def test_mesh_ffd_interpolating_bases_reproduce_control_nodes(basis):
+    mesh = _triangle_mesh()
+    control_displacements = 0.1 * torch.arange(8.0).reshape(2, 2, 2)
+
+    output = mesh.ffd(
+        control_displacements,
+        origin=[0.0, 0.0],
+        extent=[1.0, 1.0],
+        basis=basis,
+        implementation="torch",
+    )
+
+    expected_displacements = torch.stack(
+        (
+            control_displacements[0, 0],
+            control_displacements[1, 0],
+            control_displacements[0, 1],
+        )
+    )
+    torch.testing.assert_close(output.points, mesh.points + expected_displacements)
+
+
 def test_mesh_ffd_explicit_box_leaves_outside_points_unchanged():
     mesh = _triangle_mesh()
     control_displacements = torch.full((4, 4, 2), 0.5)

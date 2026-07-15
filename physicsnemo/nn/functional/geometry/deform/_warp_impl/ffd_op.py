@@ -30,6 +30,9 @@ from .._utils import _FFD_MIN_NODES, _zero_dependency
 from .ffd_kernels import (
     BERNSTEIN_BASIS_ID,
     BSPLINE_BASIS_ID,
+    LINEAR_BASIS_ID,
+    SMOOTH_STEP_1_BASIS_ID,
+    SMOOTH_STEP_2_BASIS_ID,
     ffd_backward_f32,
     ffd_backward_f64,
     ffd_forward_f32,
@@ -39,7 +42,13 @@ from .ffd_kernels import (
 )
 from .op import _empty_contiguous_like, _wp_view
 
-_BASIS_IDS = {"bernstein": BERNSTEIN_BASIS_ID, "bspline": BSPLINE_BASIS_ID}
+_BASIS_IDS = {
+    "bernstein": BERNSTEIN_BASIS_ID,
+    "bspline": BSPLINE_BASIS_ID,
+    "linear": LINEAR_BASIS_ID,
+    "smoothstep": SMOOTH_STEP_1_BASIS_ID,
+    "smootherstep": SMOOTH_STEP_2_BASIS_ID,
+}
 
 
 class _FFDKernelSet(NamedTuple):
@@ -117,6 +126,8 @@ def _lattice_size(resolution: list[int]) -> int:
 def _window_total(resolution: list[int], basis: str) -> int:
     if basis == "bspline":
         return 4 ** len(resolution)
+    if basis in ("linear", "smoothstep", "smootherstep"):
+        return 2 ** len(resolution)
     return _lattice_size(resolution)
 
 
@@ -130,7 +141,10 @@ def _validate_ffd_geometry(
     """Validate the normalized query/lattice geometry shared by both ops."""
 
     if basis not in _BASIS_IDS:
-        raise ValueError(f"basis must be 'bernstein' or 'bspline', got {basis!r}")
+        raise ValueError(
+            "basis must be 'bernstein', 'bspline', 'linear', 'smoothstep', "
+            f"or 'smootherstep', got {basis!r}"
+        )
     if points.ndim != 3:
         raise ValueError("points must be a normalized rank-3 tensor")
     batch, _, num_dims = points.shape

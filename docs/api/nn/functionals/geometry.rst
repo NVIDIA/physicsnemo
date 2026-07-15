@@ -121,16 +121,23 @@ Choosing a basis:
   coefficients, index ``i`` is associated with the Greville coordinate
   ``(i - 1) / (n - 3)``. The first and last coefficient planes therefore lie
   one knot spacing outside the evaluation box.
+- ``"linear"``, ``"smoothstep"``, and ``"smootherstep"`` use the two
+  neighboring lattice nodes per axis and exactly reproduce every control-node
+  displacement. ``"linear"`` is piecewise multilinear, while the cubic and
+  quintic smooth-step variants are respectively C1 and C2 across cell
+  boundaries. These modes suit design parameters whose values must be attained
+  at the lattice nodes.
 
 The evaluation cost is proportional to
 ``batch_size * n_points * prod(resolution) * n_spatial_dims`` for
 ``"bernstein"`` and
 ``batch_size * n_points * 4**n_spatial_dims * n_spatial_dims`` for
-``"bspline"``. Points outside the lattice box pass through unchanged. A
-sufficient condition for continuity with a fixed exterior is to zero the
-outermost coefficient plane on every Bernstein face. For cubic B-splines,
-zero the first and last three coefficient planes on every axis because three
-planes have nonzero weight at each box face.
+``"bspline"``. The node-interpolating modes use ``2**n_spatial_dims`` controls
+per point. Points outside the lattice box pass through unchanged. A sufficient
+condition for continuity with a fixed exterior is to zero the outermost
+coefficient plane on every Bernstein or node-interpolating face. For cubic
+B-splines, zero the first and last three coefficient planes on every axis
+because three planes have nonzero weight at each box face.
 
 For connectivity-preserving object APIs, use
 :meth:`~physicsnemo.mesh.mesh.Mesh.ffd` or

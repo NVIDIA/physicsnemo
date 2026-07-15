@@ -173,7 +173,10 @@ in a higher-dimensional space therefore needs an explicit positive extent.
 ``basis="bernstein"`` is classic global-support free-form deformation for
 coarse lattices. ``basis="bspline"`` gives local four-node-per-axis support
 and scales to fine lattices for local sculpting; its first and last coefficient
-planes lie one knot spacing outside the evaluation box.
+planes lie one knot spacing outside the evaluation box. ``basis="linear"``,
+``"smoothstep"``, and ``"smootherstep"`` instead use the two neighboring
+nodes per axis and reproduce every control displacement at its lattice node.
+Their cell transitions are respectively C0, C1, and C2.
 
 .. code:: python
 
@@ -188,10 +191,11 @@ planes lie one knot spacing outside the evaluation box.
 
 Points outside the lattice box are unchanged. The deformation is generally not
 continuous across the box boundary. A sufficient condition for a fixed
-exterior is to zero the outermost coefficient plane on every Bernstein face,
-or the first and last three coefficient planes on every axis for cubic
-B-splines. ``origin`` and ``extent`` are non-differentiable lattice
-configuration; optimize ``control_displacements`` instead.
+exterior is to zero the outermost coefficient plane on every Bernstein or
+node-interpolating face, or the first and last three coefficient planes on
+every axis for cubic B-splines. ``origin`` and ``extent`` are
+non-differentiable lattice configuration; optimize ``control_displacements``
+instead.
 
 .. rubric:: Visualization
 
