@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Adds `physicsnemo.nn.shrink_and_perturb_`, an in-place shrink-and-perturb
   weight re-initialization for warm-starting from pretrained weights.
+- Adds dimension-generic volume mesh generation for implicit domains to
+  `physicsnemo.mesh.generate`. `mesh_implicit_domain` meshes
+  `{x : phi(x) < 0}`, clipped to the bounding box (box faces are honored
+  as a boundary, so that external-flow "box minus obstacle" domains work
+  directly), for any implicit function (signed-distance functions, level
+  sets, or neural fields).
 - Adds `integrate_moment` and `Mesh.integrate_moment` for measure-weighted
   outer-product moments. Mesh integration APIs now accept `nan_policy`.
 - Adds per-cell measure weights that are preserved through cell subsampling
