@@ -806,9 +806,7 @@ def _load_initial_state(
     if resume_path:
         # Trusted (self-produced) checkpoint: weights_only=False so the bundled
         # optimizer / scheduler state loads too.
-        payload = torch.load(
-            str(resume_path), map_location=device, weights_only=False
-        )
+        payload = torch.load(str(resume_path), map_location=device, weights_only=False)
         strict = bool(resume_cfg.get("strict", True)) if resume_cfg else True
         load_opt = bool(resume_cfg.get("load_optimizer", True)) if resume_cfg else True
         load_sched = (
