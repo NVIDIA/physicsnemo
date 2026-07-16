@@ -570,13 +570,15 @@ python src/train.py model=flare_surface dataset=drivaer_ml_surface \
 python src/train.py model=flare_volume dataset=drivaer_ml_volume \
     training.optimizer.lr=1e-3 training.scheduler.gamma=0.5
 
-# GLOBE (mesh-native; its template sets compile=false and its own lr)
+# GLOBE (mesh-native; needs different training knobs)
 # ~143 GB/GPU at sampling_resolution=50000 in bf16; 200000 does not fit
 # 180 GB-class devices.
 python src/train.py model=globe_surface dataset=drivaer_ml_surface \
-    training.num_epochs=10000 sampling_resolution=50000
+    compile=false training.optimizer.lr=1e-2 training.num_epochs=10000 \
+    sampling_resolution=50000
 python src/train.py model=globe_volume dataset=drivaer_ml_volume \
-    training.num_epochs=10000 sampling_resolution=50000
+    compile=false training.optimizer.lr=1e-2 training.num_epochs=10000 \
+    sampling_resolution=50000
 
 # HiLift surface (vanilla GeoTransolver)
 python src/train.py model=geotransolver_surface dataset=highlift_surface \
