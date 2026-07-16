@@ -66,6 +66,7 @@ def _self_block(
         dropout=0.0,
         conditioning_dim=conditioning_dim,
         adaln_zero=adaln_zero,
+        use_te=False,
     )
 
 
@@ -80,6 +81,7 @@ def _cross_block(
         dropout=0.0,
         conditioning_dim=conditioning_dim,
         adaln_zero=adaln_zero,
+        use_te=False,
     )
 
 
@@ -121,6 +123,7 @@ class TestLocalPointTransformerBlock:
             mlp_ratio=2,
             dropout=0.0,
             coord_dim=coord_dim,
+            use_te=False,
         )
         block = block.to(device).eval()
         feats = torch.randn(20, 32, device=device)
@@ -151,6 +154,7 @@ class TestLocalPointTransformerBlock:
             dilation=1,
             mlp_ratio=2,
             dropout=0.5,
+            use_te=False,
         ).to(device)
         feats = torch.randn(30, 32, device=device)
         coords = torch.randn(30, 3, device=device)
@@ -266,7 +270,7 @@ class TestLocalPointTransformerBlock:
     )
     def test_constructor_attributes(self, kwargs, expected):
         # MOD-008a: constructor/attribute coverage across >= 2 configurations.
-        block = LocalPointTransformerBlock(**kwargs)
+        block = LocalPointTransformerBlock(**kwargs, use_te=False)
         for name, value in expected.items():
             assert getattr(block, name) == value
 
@@ -444,7 +448,7 @@ class TestLocalTokenCrossAttentionBlock:
         ],
     )
     def test_constructor_attributes(self, kwargs, expected):
-        block = LocalTokenCrossAttentionBlock(**kwargs)
+        block = LocalTokenCrossAttentionBlock(**kwargs, use_te=False)
         for name, value in expected.items():
             assert getattr(block, name) == value
 
@@ -484,14 +488,20 @@ class TestLocalTokenCrossAttentionBlock:
 class TestAdaLNResidualMLP:
     @pytest.mark.parametrize("shape", [(7, 16), (2, 5, 16)])
     def test_output_shape(self, device, shape):
-        mlp = AdaLNResidualMLP(dim=16, mlp_ratio=4, dropout=0.0).to(device).eval()
+        mlp = (
+            AdaLNResidualMLP(dim=16, mlp_ratio=4, dropout=0.0, use_te=False)
+            .to(device)
+            .eval()
+        )
         out = mlp(torch.randn(*shape, device=device))
         assert out.shape == shape
         assert torch.isfinite(out).all()
 
     def test_conditioning_zero_init_is_identity(self, device):
         torch.manual_seed(0)
-        mlp = AdaLNResidualMLP(dim=16, mlp_ratio=4, dropout=0.0, conditioning_dim=4)
+        mlp = AdaLNResidualMLP(
+            dim=16, mlp_ratio=4, dropout=0.0, conditioning_dim=4, use_te=False
+        )
         mlp = mlp.to(device).eval()
         x = torch.randn(8, 16, device=device)
         out_a = mlp(x, cond=torch.randn(4, device=device))
@@ -499,7 +509,9 @@ class TestAdaLNResidualMLP:
         torch.testing.assert_close(out_a, out_b)
 
     def test_conditioning_requires_cond(self, device):
-        mlp = AdaLNResidualMLP(dim=16, mlp_ratio=4, dropout=0.0, conditioning_dim=4)
+        mlp = AdaLNResidualMLP(
+            dim=16, mlp_ratio=4, dropout=0.0, conditioning_dim=4, use_te=False
+        )
         with pytest.raises(ValueError, match="conditioning"):
             mlp.to(device).eval()(torch.randn(8, 16, device=device))
 

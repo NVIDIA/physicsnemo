@@ -329,6 +329,7 @@ class QueryTokenDecoder(Module):
                     out_features=1,
                     act_layer=nn.SiLU,
                     final_dropout=False,
+                    use_te=use_te,
                 )
             self.out = None
         else:

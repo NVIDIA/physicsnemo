@@ -234,6 +234,7 @@ class PointClusterGraphPool(nn.Module):
                     act_layer=nn.SiLU,
                     drop=float(dropout),
                     final_dropout=False,
+                    use_te=use_te,
                 )
             )
             self.gate_mlps.append(
@@ -243,6 +244,7 @@ class PointClusterGraphPool(nn.Module):
                     out_features=1,
                     act_layer=nn.SiLU,
                     final_dropout=False,
+                    use_te=use_te,
                 )
             )
             self.update_mlps.append(
@@ -253,6 +255,7 @@ class PointClusterGraphPool(nn.Module):
                     act_layer=nn.SiLU,
                     drop=float(dropout),
                     final_dropout=False,
+                    use_te=use_te,
                 )
             )
         self.out_norm = (
@@ -485,6 +488,7 @@ class PointTransformer(Module):
                 out_features=int(token_dim),
                 act_layer=nn.SiLU,
                 final_dropout=False,
+                use_te=use_te,
             )
         else:
             self.gen_proj = None

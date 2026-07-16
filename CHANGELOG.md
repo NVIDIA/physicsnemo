@@ -271,6 +271,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Unified external aerodynamics recipe: model templates can now carry
+  known-good training overrides (`train.yaml`'s `_self_` merges before the
+  model template; all existing templates resolve identically). The GLOBE
+  example now uses the recipe's default `compile` and learning-rate
+  settings — both measured equivalent or better than the previously
+  documented overrides on the DrivAerML surface case — and no longer sets
+  `training.field_weights={pressure: 1.0, wss: 100.0}`, which was redundant
+  with `NormalizeMeshFields` normalization and starved the pressure field
+  of gradient signal (~2x worse converged pressure L2 at equal WSS L2).
 - Datapipe contiguous-block subsampling now wraps cyclically, giving boundary
   and interior elements equal inclusion probability.
 - Cell-subsampled GLOBE inputs now retain their effective integration measure,

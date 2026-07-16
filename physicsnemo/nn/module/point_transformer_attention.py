@@ -145,7 +145,7 @@ def _dilate_precomputed_idx(
     return idx[:, :out_k]
 
 
-def _make_conditioning_mlp(cond_dim: int, out_dim: int) -> Mlp:
+def _make_conditioning_mlp(cond_dim: int, out_dim: int, use_te: bool = False) -> Mlp:
     hidden_dim = max(int(cond_dim), int(out_dim))
     mlp = Mlp(
         in_features=int(cond_dim),
@@ -153,6 +153,7 @@ def _make_conditioning_mlp(cond_dim: int, out_dim: int) -> Mlp:
         out_features=int(out_dim),
         act_layer=nn.SiLU,
         drop=0.0,
+        use_te=use_te,
     )
     # Zero-init the final linear so AdaLN/AdaLN-Zero starts as identity
     # (shift = scale = gate = 0 at initialization).
@@ -239,7 +240,9 @@ class AdaLNResidualMLP(Module):
         self.conditioning = (
             None
             if conditioning_dim is None
-            else _make_conditioning_mlp(int(conditioning_dim), 3 * int(dim))
+            else _make_conditioning_mlp(
+                int(conditioning_dim), 3 * int(dim), use_te=use_te
+            )
         )
         self.adaln_zero = bool(adaln_zero)
         self.net = Mlp(
@@ -249,6 +252,7 @@ class AdaLNResidualMLP(Module):
             act_layer=nn.GELU,
             drop=float(dropout),
             final_dropout=True,
+            use_te=use_te,
         )
 
     def forward(
@@ -318,7 +322,7 @@ class _LocalVectorAttentionBlock(Module):
             None
             if conditioning_dim is None
             else _make_conditioning_mlp(
-                int(conditioning_dim), int(num_cond_chunks) * self.dim
+                int(conditioning_dim), int(num_cond_chunks) * self.dim, use_te=use_te
             )
         )
         self.q_proj = nn.Linear(self.dim, self.dim)
@@ -330,6 +334,7 @@ class _LocalVectorAttentionBlock(Module):
             out_features=self.dim,
             act_layer=nn.GELU,
             drop=0.0,
+            use_te=use_te,
         )
         self.attn_proj = Mlp(
             in_features=self.dim,
@@ -337,6 +342,7 @@ class _LocalVectorAttentionBlock(Module):
             out_features=self.num_heads,
             act_layer=nn.GELU,
             drop=0.0,
+            use_te=use_te,
         )
         self.out_proj = nn.Linear(self.dim, self.dim)
         self.dropout = nn.Dropout(float(dropout))
