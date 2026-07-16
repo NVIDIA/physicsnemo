@@ -17,7 +17,7 @@
 import pytest
 import torch
 
-from physicsnemo.experimental.models.geotransolver.gale import (
+from physicsnemo.nn import (
     GALE,
     GALE_FA,
     GALE_block,

@@ -58,7 +58,7 @@ Examples
 Basic usage:
 
 >>> import torch
->>> from physicsnemo.experimental.models.geotransolver import GeoTransolver
+>>> from physicsnemo.models.geotransolver import GeoTransolver
 >>> model = GeoTransolver(
 ...     functional_dim=64,
 ...     out_dim=3,
@@ -73,23 +73,22 @@ torch.Size([2, 1000, 3])
 """
 
 from physicsnemo.nn import (
-      ConcreteDropout,
-      collect_concrete_dropout_losses,
-      get_concrete_dropout_rates,
+    GALE,
+    GALE_FA,
+    ConcreteDropout,
+    GALE_block,
+    GALEStructuredMesh2D,
+    GALEStructuredMesh3D,
+    collect_concrete_dropout_losses,
+    get_concrete_dropout_rates,
 )
+
 from .context_projector import (
     ContextProjector,
     GeometricFeatureProcessor,
     GlobalContextBuilder,
     MultiScaleFeatureExtractor,
     StructuredContextProjector,
-)
-from .gale import (
-    GALE,
-    GALE_FA,
-    GALE_block,
-    GALEStructuredMesh2D,
-    GALEStructuredMesh3D,
 )
 from .geotransolver import GeoTransolver, GeoTransolverMetaData
 

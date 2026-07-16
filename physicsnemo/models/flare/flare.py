@@ -1,4 +1,3 @@
-
 # SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
@@ -28,17 +27,18 @@ import torch
 import torch.nn as nn
 from jaxtyping import Float
 
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.models.transolver import Transolver as CoreTransolver
 from physicsnemo.models.transolver.transolver import _TransolverMlp
+from physicsnemo.nn import FLARE as FLAREAttention
 
-from physicsnemo.experimental.nn import FLARE as FLAREAttention
+te = OptionalImport("transformer_engine.pytorch")
 
 
 class _FLAREBlock(nn.Module):
     r"""Transformer block with FLARE attention instead of physics attention.
 
     Mirrors TransolverBlock structure but uses FLARE for the attention layer.
-    FLARE does not support Transformer Engine.
     """
 
     def __init__(
@@ -51,35 +51,47 @@ class _FLAREBlock(nn.Module):
         last_layer: bool = False,
         out_dim: int = 1,
         n_global_queries: int = 32,
+        use_te: bool = False,
     ) -> None:
         super().__init__()
         self.last_layer = last_layer
         dim_head = hidden_dim // num_heads
 
-        self.ln_1 = nn.LayerNorm(hidden_dim)
+        self.ln_1 = te.LayerNorm(hidden_dim) if use_te else nn.LayerNorm(hidden_dim)
         self.Attn = FLAREAttention(
             dim=hidden_dim,
             heads=num_heads,
             dim_head=dim_head,
             dropout=dropout,
             n_global_queries=n_global_queries,
-            use_te=False,
+            use_te=use_te,
         )
-        self.ln_mlp1 = nn.Sequential(
-            nn.LayerNorm(hidden_dim),
-            _TransolverMlp(
-                in_features=hidden_dim,
-                hidden_features=hidden_dim * mlp_ratio,
-                out_features=hidden_dim,
-                act_layer=act,
-                use_te=False,
-            ),
-        )
-        if last_layer:
-            self.ln_mlp2 = nn.Sequential(
-                nn.LayerNorm(hidden_dim),
-                nn.Linear(hidden_dim, out_dim),
+        if use_te:
+            self.ln_mlp1 = te.LayerNormMLP(
+                hidden_size=hidden_dim,
+                ffn_hidden_size=hidden_dim * mlp_ratio,
             )
+        else:
+            self.ln_mlp1 = nn.Sequential(
+                nn.LayerNorm(hidden_dim),
+                _TransolverMlp(
+                    in_features=hidden_dim,
+                    hidden_features=hidden_dim * mlp_ratio,
+                    out_features=hidden_dim,
+                    act_layer=act,
+                    use_te=False,
+                ),
+            )
+        if last_layer:
+            if use_te:
+                self.ln_mlp2 = te.LayerNormLinear(
+                    in_features=hidden_dim, out_features=out_dim
+                )
+            else:
+                self.ln_mlp2 = nn.Sequential(
+                    nn.LayerNorm(hidden_dim),
+                    nn.Linear(hidden_dim, out_dim),
+                )
 
     def forward(
         self, fx: Float[torch.Tensor, "B N C"]
@@ -95,8 +107,7 @@ class FLARE(CoreTransolver):
     r"""Transolver with FLARE attention.
 
     Inherits from the core Transolver and replaces all physics attention blocks
-    with FLARE (Fast Low-rank Attention Routing Engine) blocks. Transformer
-    Engine is not supported (use_te is forced to False).
+    with FLARE (Fast Low-rank Attention Routing Engine) blocks.
 
     Parameters
     ----------
@@ -128,6 +139,8 @@ class FLARE(CoreTransolver):
         Shape of structured data. ``None`` for unstructured. Default is ``None``.
     time_input : bool, optional
         Whether to include time embeddings. Default is ``False``.
+    use_te : bool, optional, default=False
+        Whether to use Transformer Engine layers and attention.
 
     Forward
     -------
@@ -140,7 +153,7 @@ class FLARE(CoreTransolver):
     See Also
     --------
     :class:`~physicsnemo.models.transolver.Transolver` : Core Transolver model.
-    :class:`~physicsnemo.experimental.nn.flare_attention.FLARE` : FLARE attention layer.
+    :class:`~physicsnemo.nn.module.flare_attention.FLARE` : FLARE attention layer.
     """
 
     def __init__(
@@ -159,6 +172,7 @@ class FLARE(CoreTransolver):
         ref: int = 8,
         structured_shape: None | tuple[int, ...] = None,
         time_input: bool = False,
+        use_te: bool = False,
     ) -> None:
         super().__init__(
             functional_dim=functional_dim,
@@ -174,7 +188,7 @@ class FLARE(CoreTransolver):
             unified_pos=unified_pos,
             ref=ref,
             structured_shape=structured_shape,
-            use_te=False,
+            use_te=use_te,
             time_input=time_input,
             plus=False,
         )
@@ -191,6 +205,7 @@ class FLARE(CoreTransolver):
                     last_layer=(i == n_layers - 1),
                     out_dim=out_dim,
                     n_global_queries=slice_num,
+                    use_te=use_te,
                 )
                 for i in range(n_layers)
             ]

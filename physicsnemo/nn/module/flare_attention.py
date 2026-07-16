@@ -28,12 +28,11 @@ import torch.nn.functional as F
 from einops import rearrange
 from jaxtyping import Float
 
-from physicsnemo.core.version_check import check_version_spec, OptionalImport
-from physicsnemo.nn.module.physics_attention import _project_input
+from physicsnemo.core.version_check import OptionalImport
 
-# Check optional dependency availability
-TE_AVAILABLE = check_version_spec("transformer_engine", "0.1.0", hard_fail=False)
-te = OptionalImport("transformer_engine.pytorch", "0.1.0")
+from .physics_attention import _project_input
+
+te = OptionalImport("transformer_engine.pytorch")
 
 
 def _flare_self_attention(
@@ -91,8 +90,8 @@ class FLARE(nn.Module):
         Dropout rate. Default is 0.0.
     n_global_queries : int, optional
         Number of learned global queries. Default is 64.
-    use_te : bool, optional
-        Whether to use Transformer Engine backend when available. Default is False.
+    use_te : bool, optional, default=False
+        Whether to use Transformer Engine backend when available.
 
     Forward
     -------
@@ -118,13 +117,8 @@ class FLARE(nn.Module):
         dim_head: int = 64,
         dropout: float = 0.0,
         n_global_queries: int = 64,
-        use_te: bool = True,
+        use_te: bool = False,
     ):
-        if use_te:
-            raise ValueError(
-                "FLARE does not support Transformer Engine backend. "
-                "Use use_te=False; TE disables FlashAttention for differing q/k sizes in FLARE attention."
-            )
         super().__init__()
         self.use_te = use_te
         self.heads = heads
@@ -144,14 +138,17 @@ class FLARE(nn.Module):
         self.self_k = linear_layer(dim_head, dim_head)
         self.self_v = linear_layer(dim_head, dim_head)
 
-        # te attention
+        # Transformer Engine cross-attention supports the unequal global and
+        # token sequence lengths used by both FLARE attention passes.
         if self.use_te:
             self.attn_fn = te.DotProductAttention(
                 num_attention_heads=self.heads,
                 kv_channels=self.dim_head,
                 attention_dropout=dropout,
+                attn_mask_type="no_mask",
+                attention_type="cross",
                 qkv_format="bshd",
-                softmax_scale=self.scale
+                softmax_scale=self.scale,
             )
 
         # Linear projection for output
@@ -176,14 +173,34 @@ class FLARE(nn.Module):
         """
 
         x_mid = _project_input(
-            x, self.in_project_x, self.heads, self.dim_head,
+            x,
+            self.in_project_x,
+            self.heads,
+            self.dim_head,
             "B N (H D) -> B N H D",
         )
         x_mid = x_mid.permute(0, 2, 1, 3)  # (B, N, H, D) -> (B, H, N, D)
 
-        y = _flare_self_attention(
-            x_mid, self.q_global, self.self_k, self.self_v, self.scale,
-        )
+        if self.use_te:
+            # Both FLARE passes are cross-attention because global and token
+            # sequences have different lengths. Transformer Engine uses BSHD
+            # inputs and returns the head dimensions flattened.
+            G = self.q_global.to(dtype=x_mid.dtype).expand(x_mid.shape[0], -1, -1, -1)
+            G = rearrange(G, "b h s d -> b s h d")
+            k = rearrange(self.self_k(x_mid), "b h n d -> b n h d")
+            v = rearrange(self.self_v(x_mid), "b h n d -> b n h d")
+            z = self.attn_fn(G, k, v)
+            z = rearrange(z, "b s (h d) -> b s h d", h=self.heads)
+            y = self.attn_fn(k, G, z)
+            y = rearrange(y, "b n (h d) -> b h n d", h=self.heads)
+        else:
+            y = _flare_self_attention(
+                x_mid,
+                self.q_global,
+                self.self_k,
+                self.self_v,
+                self.scale,
+            )
 
         out_x = y.permute(0, 2, 1, 3)  # (B, H, N, D) -> (B, N, H, D)
         out_x = rearrange(out_x, "b n h d -> b n (h d)")

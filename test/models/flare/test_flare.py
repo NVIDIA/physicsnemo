@@ -20,7 +20,7 @@ import pytest
 import torch
 
 from physicsnemo.core.module import Module
-from physicsnemo.experimental.models.flare import FLARE
+from physicsnemo.models.flare import FLARE
 from test.common import (
     check_ort_version,
     validate_amp,
@@ -32,6 +32,7 @@ from test.common import (
     validate_onnx_export,
     validate_onnx_runtime,
 )
+from test.conftest import requires_module
 
 
 @pytest.mark.parametrize(
@@ -83,6 +84,34 @@ def test_flare_constructor(config):
     assert hasattr(model, "meta"), "Model should have metadata"
 
 
+@requires_module("transformer_engine>=2.14.0")
+def test_flare_te_basic(device):
+    """Test the full FLARE model with Transformer Engine enabled."""
+    if device == "cpu":
+        pytest.skip("Transformer Engine requires CUDA")
+
+    torch.manual_seed(42)
+    model = FLARE(
+        functional_dim=2,
+        out_dim=1,
+        embedding_dim=3,
+        n_layers=2,
+        n_hidden=64,
+        n_head=4,
+        mlp_ratio=2,
+        slice_num=7,
+        use_te=True,
+    ).to(device)
+    functional_input = torch.randn(2, 19, 2, device=device)
+    embedding = torch.randn(2, 19, 3, device=device)
+
+    output = model(functional_input, embedding=embedding)
+    assert output.shape == (2, 19, 1)
+    assert not torch.isnan(output).any()
+    assert model.use_te is True
+    assert model.blocks[0].Attn.use_te is True
+
+
 def test_flare_2d_forward(device):
     """Test FLARE 2D forward pass"""
     torch.manual_seed(0)
@@ -113,7 +142,7 @@ def test_flare_2d_forward(device):
             fx,
             embedding,
         ),
-        file_name="experimental/models/flare/data/flare_2d_output.pth",
+        file_name="models/flare/data/flare_2d_output.pth",
         atol=2e-3,
     )
 
@@ -149,7 +178,7 @@ def test_flare_irregular_forward(device):
             embedding,
             functional_input,
         ),
-        file_name="experimental/models/flare/data/flare_irregular_output.pth",
+        file_name="models/flare/data/flare_irregular_output.pth",
         atol=1e-3,
     )
 

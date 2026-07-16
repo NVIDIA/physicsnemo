@@ -34,17 +34,13 @@ from jaxtyping import Float
 import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
-from physicsnemo.core.version_check import check_version_spec
-from physicsnemo.experimental.guardrails.embedded import OODGuard, OODGuardConfig
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.models.transolver.transolver import _TransolverMlp
+from physicsnemo.nn import GALE_block
 
 from .context_projector import GlobalContextBuilder
-from .gale import GALE_block
 
-# Check optional dependency availability
-TE_AVAILABLE = check_version_spec("transformer_engine", "0.1.0", hard_fail=False)
-if TE_AVAILABLE:
-    import transformer_engine.pytorch as te
+te = OptionalImport("transformer_engine.pytorch")
 
 
 @dataclass
@@ -142,7 +138,7 @@ def _normalize_tensor(
         return (x,)
     if isinstance(x, Sequence):
         return tuple(x)
-    raise TypeError(f"Invalid tensor structure")
+    raise TypeError("Invalid tensor structure")
 
 
 def _structured_num_tokens(spatial_shape: tuple[int, ...]) -> int:
@@ -252,20 +248,8 @@ class GeoTransolver(Module):
         (Conv2d/Conv3d GALE; no ball-query local features). Inputs may be
         flattened :math:`(B, N, C)` with :math:`N = H W` or :math:`H W D`, or
         spatial :math:`(B, H, W, C)` / :math:`(B, H, W, D, C)`. Default is ``None``.
-    guard_config : dict | None, optional
-        Configuration for the embedded OOD guard
-        (:class:`~physicsnemo.experimental.guardrails.embedded.OODGuard`).
-        Pass a plain ``dict`` whose keys match the fields of
-        :class:`~physicsnemo.experimental.guardrails.embedded.OODGuardConfig`
-        (``buffer_size`` required; ``knn_k`` and ``sensitivity`` optional), or
-        ``None`` to disable the guard entirely. A ``dict`` is required (rather
-        than the dataclass directly) so the model kwargs remain
-        JSON-serialisable for ``.mdlus`` checkpointing. When set, the guard
-        accumulates global-parameter bounds and pooled geometry latents during
-        training, and emits warnings on out-of-distribution inputs during
-        inference. Default is ``None``.
     attention_type : str, optional
-        attention_type is used to choose the attention type (GALE or GALE_FA). 
+        attention_type is used to choose the attention type (GALE or GALE_FA).
         Default is ``"GALE"``.
     state_mixing_mode : str, optional
         How to blend self-attention and cross-attention outputs in GALE layers.
@@ -303,7 +287,7 @@ class GeoTransolver(Module):
         layout—flattened :math:`(B, N, C_{out})` or spatial
         :math:`(B, H, W, C_{out})` / :math:`(B, H, W, D, C_{out})` when
         inputs were 4D/5D.
-        
+
         When ``return_embedding_states=True``, returns a 2-tuple
         ``(output, embedding_states)`` where ``output`` follows the same
         rules above, and ``embedding_states`` is of shape
@@ -333,16 +317,16 @@ class GeoTransolver(Module):
 
     See Also
     --------
-    :class:`~physicsnemo.experimental.models.geotransolver.gale.GALE` : The attention mechanism used in GeoTransolver.
-    :class:`~physicsnemo.experimental.models.geotransolver.gale.GALE_block` : Transformer block using GALE attention.
-    :class:`~physicsnemo.experimental.models.geotransolver.context_projector.ContextProjector` : Projects context features onto physical states.
+    :class:`~physicsnemo.nn.module.gale.GALE` : The attention mechanism used in GeoTransolver.
+    :class:`~physicsnemo.nn.module.gale.GALE_block` : Transformer block using GALE attention.
+    :class:`~physicsnemo.models.geotransolver.context_projector.ContextProjector` : Projects context features onto physical states.
 
     Examples
     --------
     Basic usage with local embeddings only:
 
     >>> import torch
-    >>> from physicsnemo.experimental.models.geotransolver import GeoTransolver
+    >>> from physicsnemo.models.geotransolver import GeoTransolver
     >>> model = GeoTransolver(
     ...     functional_dim=64,
     ...     out_dim=3,
@@ -421,7 +405,6 @@ class GeoTransolver(Module):
         neighbors_in_radius: list[int] | None = None,
         n_hidden_local: int = 32,
         structured_shape: tuple[int, ...] | None = None,
-        guard_config: dict | None = None,
         attention_type: str = "GALE",
         concrete_dropout: bool = False,
         state_mixing_mode: str = "weighted",
@@ -446,7 +429,9 @@ class GeoTransolver(Module):
                     f"structured_shape must have length 2 or 3, got {structured_shape!r}"
                 )
             if not all(int(s) > 0 for s in structured_shape):
-                raise ValueError(f"structured_shape must be positive ints, got {structured_shape!r}")
+                raise ValueError(
+                    f"structured_shape must be positive ints, got {structured_shape!r}"
+                )
 
         self.include_local_features = include_local_features
         self.use_te = use_te
@@ -565,35 +550,6 @@ class GeoTransolver(Module):
                 nn.Linear(n_hidden, n_hidden),
                 nn.SiLU(),
                 nn.Linear(n_hidden, n_hidden),
-            )
-
-        # OOD guard (None when disabled).
-        if guard_config is None:
-            self.ood_guard = None
-        else:
-            if not isinstance(guard_config, dict):
-                raise TypeError(
-                    f"guard_config must be a dict or None; got "
-                    f"{type(guard_config).__name__}. If using Hydra, set "
-                    f"_convert_=partial or _convert_=all on the model config "
-                    f"so nested mappings are passed as native dicts."
-                )
-            if global_dim is None and geometry_dim is None:
-                raise ValueError(
-                    "guard_config is set, but neither global_dim nor "
-                    "geometry_dim is configured; the OOD guard would have "
-                    "nothing to watch. Either set guard_config=None or "
-                    "enable at least one of the two surfaces."
-                )
-            # OODGuardConfig validates keys and applies defaults.
-            cfg = OODGuardConfig(**guard_config)
-            dim_head = n_hidden // n_head
-            self.ood_guard = OODGuard(
-                buffer_size=cfg.buffer_size,
-                global_dim=global_dim,
-                geometry_embed_dim=dim_head if geometry_dim is not None else None,
-                knn_k=cfg.knn_k,
-                sensitivity=cfg.sensitivity,
             )
 
     def forward(
@@ -716,23 +672,12 @@ class GeoTransolver(Module):
                     f"got {global_embedding.ndim}D tensor with shape {tuple(global_embedding.shape)}"
                 )
 
-        # Build context embeddings and extract local features
-        embedding_states, local_embedding_bq, geo_ctx = (
-            self.context_builder.build_context(
-                local_embedding, local_positions, geometry, global_embedding
-            )
+        # Build context embeddings and extract local features. The third
+        # return value (detached geometry latent) is consumed by an optional
+        # external OOD guard wrapper via a forward hook, not here.
+        embedding_states, local_embedding_bq, _ = self.context_builder.build_context(
+            local_embedding, local_positions, geometry, global_embedding
         )
-
-        # --- OOD Guard ---
-        if self.ood_guard is not None:
-            # Pool (B, H, S, D) -> (B, D); guard expects pre-pooled latents.
-            geo_latent = (
-                geo_ctx.mean(dim=(1, 2)) if geo_ctx is not None else None
-            )
-            if self.training:
-                self.ood_guard.collect(global_embedding, geo_latent)
-            else:
-                self.ood_guard.check(global_embedding, geo_latent)
 
         # Project inputs to hidden dimension: (B, N, C) -> (B, N, n_hidden)
         x = [self.preprocess[i](le) for i, le in enumerate(local_embedding)]
@@ -740,8 +685,7 @@ class GeoTransolver(Module):
         # Concatenate local features if enabled
         if self.include_local_features and local_embedding_bq is not None:
             x = [
-                torch.cat([x[i], local_embedding_bq[i]], dim=-1)
-                for i in range(len(x))
+                torch.cat([x[i], local_embedding_bq[i]], dim=-1) for i in range(len(x))
             ]
 
         # Pass through GALE transformer blocks with context cross-attention

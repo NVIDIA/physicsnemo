@@ -40,20 +40,15 @@ import torch.nn as nn
 from einops import rearrange
 from jaxtyping import Float
 
-from physicsnemo.core.version_check import check_version_spec
-from physicsnemo.nn import BQWarp
-from physicsnemo.nn import Mlp
+from physicsnemo.core.version_check import OptionalImport
+from physicsnemo.nn import BQWarp, ConcreteDropout, Mlp
 from physicsnemo.nn.module.physics_attention import (
     _compute_slices_from_projections,
     _project_input,
 )
 
-from physicsnemo.nn import ConcreteDropout
-
-# Check optional dependency availability
-TE_AVAILABLE = check_version_spec("transformer_engine", "0.1.0", hard_fail=False)
-if TE_AVAILABLE:
-    import transformer_engine.pytorch as te
+te = OptionalImport("transformer_engine.pytorch")
+TE_AVAILABLE = te.available
 
 
 def _structured_grid_to_conv_input(
@@ -101,15 +96,11 @@ def _structured_grid_to_conv_input(
     if ndim == 2:
         H, W = spatial_shape
         if tokens != H * W:
-            raise ValueError(
-                f"Expected N={H * W} tokens for 2D grid, got N={tokens}"
-            )
+            raise ValueError(f"Expected N={H * W} tokens for 2D grid, got N={tokens}")
         return x.view(batch, H, W, channels).permute(0, 3, 1, 2)
     H, W, D = spatial_shape
     if tokens != H * W * D:
-        raise ValueError(
-            f"Expected N={H * W * D} tokens for 3D grid, got N={tokens}"
-        )
+        raise ValueError(f"Expected N={H * W * D} tokens for 3D grid, got N={tokens}")
     return x.view(batch, H, W, D, channels).permute(0, 4, 1, 2, 3)
 
 
@@ -242,8 +233,8 @@ class ContextProjector(_SliceToContextMixin, nn.Module):
 
     See Also
     --------
-    :class:`~physicsnemo.experimental.models.geotransolver.gale.GALE` : Full GALE attention layer that uses these projected context features.
-    :class:`~physicsnemo.experimental.models.geotransolver.GeoTransolver` : Main model that uses ContextProjector for geometry and global embeddings.
+    :class:`~physicsnemo.nn.module.gale.GALE` : Full GALE attention layer that uses these projected context features.
+    :class:`~physicsnemo.models.geotransolver.GeoTransolver` : Main model that uses ContextProjector for geometry and global embeddings.
 
     Examples
     --------
@@ -323,8 +314,12 @@ class ContextProjector(_SliceToContextMixin, nn.Module):
         """
         fx = None if self.plus else self.in_project_fx
         return _project_input(
-            x, self.in_project_x, self.heads, self.dim_head,
-            "B N (H D) -> B N H D", project_fx=fx,
+            x,
+            self.in_project_x,
+            self.heads,
+            self.dim_head,
+            "B N (H D) -> B N H D",
+            project_fx=fx,
         )
 
     def forward(
@@ -374,9 +369,7 @@ class ContextProjector(_SliceToContextMixin, nn.Module):
         slice_projections = self.in_project_slice(projected_x)
 
         # Compute weighted aggregation of features into slice tokens
-        _, slice_tokens = self._compute_slices(
-            slice_projections, feature_projection
-        )
+        _, slice_tokens = self._compute_slices(slice_projections, feature_projection)
 
         # Apply concrete dropout to output slice tokens
         if self.output_dropout is not None:
@@ -455,9 +448,7 @@ class StructuredContextProjector(_SliceToContextMixin, nn.Module):
         ]
     ):
         B, N, C = x.shape
-        grid = _structured_grid_to_conv_input(
-            x, B, N, C, self._nd, self.spatial_shape
-        )
+        grid = _structured_grid_to_conv_input(x, B, N, C, self._nd, self.spatial_shape)
         pattern = (
             "B (H D) h w -> B (h w) H D"
             if self._nd == 2
@@ -465,8 +456,12 @@ class StructuredContextProjector(_SliceToContextMixin, nn.Module):
         )
         fx = None if self.plus else self.in_project_fx
         return _project_input(
-            grid, self.in_project_x, self.heads, self.dim_head,
-            pattern, project_fx=fx,
+            grid,
+            self.in_project_x,
+            self.heads,
+            self.dim_head,
+            pattern,
+            project_fx=fx,
         )
 
     def forward(
@@ -483,9 +478,7 @@ class StructuredContextProjector(_SliceToContextMixin, nn.Module):
         else:
             projected_x, feature_projection = self._grid_project(x)
         slice_projections = self.in_project_slice(projected_x)
-        _, slice_tokens = self._compute_slices(
-            slice_projections, feature_projection
-        )
+        _, slice_tokens = self._compute_slices(slice_projections, feature_projection)
 
         # Apply concrete dropout to output slice tokens
         if self.output_dropout is not None:
@@ -820,7 +813,7 @@ class GlobalContextBuilder(nn.Module):
     --------
     :class:`ContextProjector` : Used for tokenizing geometry and global embeddings.
     :class:`MultiScaleFeatureExtractor` : Used for multi-scale local features.
-    :class:`~physicsnemo.experimental.models.geotransolver.GeoTransolver` : Main model that uses this builder.
+    :class:`~physicsnemo.models.geotransolver.GeoTransolver` : Main model that uses this builder.
 
     Examples
     --------
@@ -919,7 +912,13 @@ class GlobalContextBuilder(nn.Module):
                 )
             else:
                 self.geometry_tokenizer = ContextProjector(
-                    geometry_dim, n_head, dim_head, dropout, slice_num, use_te, plus=plus, 
+                    geometry_dim,
+                    n_head,
+                    dim_head,
+                    dropout,
+                    slice_num,
+                    use_te,
+                    plus=plus,
                     concrete_dropout=concrete_dropout,
                 )
             context_dim += dim_head
