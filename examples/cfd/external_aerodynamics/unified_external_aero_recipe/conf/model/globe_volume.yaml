@@ -31,6 +31,14 @@
 input_type: mesh
 output_type: mesh
 
+### GLOBE's tree construction and traversal use data-dependent control
+### flow that torch.compile cannot trace.
+compile: false
+
+training:
+  optimizer:
+    lr: 1.0e-2
+
 forward_kwargs:
   prediction_points: interior.points          # interior volume points
   boundary_meshes:

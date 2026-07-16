@@ -271,12 +271,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- The unified external aerodynamics recipe's GLOBE example no longer sets
-  `training.field_weights={pressure: 1.0, wss: 100.0}`. The weight was
-  redundant with the dataset's `NormalizeMeshFields` normalization and
-  starved the pressure field of gradient signal (~2x worse converged
-  pressure L2 on DrivAerML surface at equal WSS L2). The `field_weights`
-  documentation now explains when (not) to use it.
+- Unified external aerodynamics recipe: model templates can now carry
+  known-good training overrides (`train.yaml`'s `_self_` merges before the
+  model template), and the GLOBE templates use this to set `compile: false`
+  and their validated learning rate, so `model=globe_surface` works without
+  folklore CLI flags. The GLOBE example no longer sets
+  `training.field_weights={pressure: 1.0, wss: 100.0}` — the weight was
+  redundant with `NormalizeMeshFields` normalization and starved the
+  pressure field of gradient signal (~2x worse converged pressure L2 on
+  DrivAerML surface at equal WSS L2).
 - Datapipe contiguous-block subsampling now wraps cyclically, giving boundary
   and interior elements equal inclusion probability.
 - Cell-subsampled GLOBE inputs now retain their effective integration measure,

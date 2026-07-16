@@ -31,10 +31,13 @@
 #   Multi-dataset:
 #     python src/train.py model=transolver_surface dataset=drivaer_ml_surface \
 #         'extra_datasets=[shift_suv_estate_surface, shift_suv_fastback_surface]'
+### `_self_` merges before the model template, so model templates may
+### carry known-good per-model overrides of the schedule below (e.g.
+### `compile`, `training.optimizer.lr`). CLI overrides still win over both.
 defaults:
   - base
-  - model: geotransolver_volume
   - _self_
+  - model: geotransolver_volume
 
 # -- Dataset selection -------------------------------------------------------
 # A string naming a file in datasets/ (without the `.yaml` suffix).
