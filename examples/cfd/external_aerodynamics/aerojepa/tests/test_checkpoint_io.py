@@ -219,3 +219,25 @@ def test_resume_enabled_without_path_raises(tmp_path):
             device=torch.device("cpu"),
             ckpt_dir=tmp_path / "empty",
         )
+
+
+def test_latest_checkpoint_ignores_unparseable(tmp_path):
+    """A stray non-numeric ``epoch_*.pt`` is skipped, not silently returned."""
+    ckpt_dir = tmp_path / "checkpoints"
+    ckpt_dir.mkdir()
+    (ckpt_dir / "epoch_abc.pt").write_text("")  # unparseable epoch
+    # All entries unparseable -> None (fresh start), not the garbage file.
+    assert _latest_checkpoint(ckpt_dir) is None
+    m = torch.nn.Linear(4, 4)
+    _save_checkpoint(
+        path=ckpt_dir / "epoch_0007.pt",
+        model=m,
+        optimizer=torch.optim.Adam(m.parameters(), lr=1e-3),
+        lr_scheduler=None,
+        ema=None,
+        epoch=7,
+        best_val=1.0,
+        cfg=OmegaConf.create({}),
+    )
+    # With a valid checkpoint present, the unparseable one is ignored.
+    assert _latest_checkpoint(ckpt_dir).name == "epoch_0007.pt"

@@ -761,13 +761,15 @@ def _latest_checkpoint(ckpt_dir: Path) -> Path | None:
 
     Selected by the integer epoch parsed from the filename (not a
     lexicographic sort), so it stays correct past ``epoch_9999.pt`` and for
-    mixed zero-pad widths. Used to resume automatically from a stable
-    checkpoint directory.
+    mixed zero-pad widths. Files whose stem does not parse to an epoch (e.g.
+    a stray ``epoch_abc.pt``) are ignored, so an all-unparseable directory
+    resolves to ``None`` (fresh start) rather than a silently-wrong file.
+    Used to resume automatically from a stable checkpoint directory.
     """
     ckpt_dir = Path(ckpt_dir)
     if not ckpt_dir.is_dir():
         return None
-    ckpts = list(ckpt_dir.glob("epoch_*.pt"))
+    ckpts = [p for p in ckpt_dir.glob("epoch_*.pt") if _epoch_of(p) >= 0]
     return max(ckpts, key=_epoch_of) if ckpts else None
 
 
@@ -831,8 +833,10 @@ def _load_initial_state(
             ema.shadow = {k: v.to(device) for k, v in payload["ema_shadow"].items()}
         start_epoch = int(payload.get("epoch", 0))
         best_val = float(payload.get("best_val_loss", float("inf")))
+        mode = "explicit" if explicit else "auto"
         log.info(
-            "Resumed from %s at epoch %d (best_val=%.4e)",
+            "[resume:%s] Resumed from %s at epoch %d (best_val=%.4e)",
+            mode,
             resume_path,
             start_epoch,
             best_val,
