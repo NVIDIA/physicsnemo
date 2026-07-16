@@ -796,6 +796,11 @@ def _load_initial_state(
     explicit = None
     if resume_cfg is not None and bool(resume_cfg.get("enabled", False)):
         explicit = resume_cfg.get("checkpoint_path")
+        if not explicit:
+            raise ValueError(
+                "training.resume.enabled=true requires checkpoint_path; omit "
+                "resume.enabled to auto-resume from the run's checkpoint dir."
+            )
     resume_path = explicit or _latest_checkpoint(ckpt_dir)
 
     if resume_path:

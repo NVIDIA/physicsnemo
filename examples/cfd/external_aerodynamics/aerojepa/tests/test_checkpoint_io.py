@@ -16,6 +16,7 @@
 
 """Checkpoint save / resume / init-from-checkpoint behaviour."""
 
+import pytest
 import torch
 from omegaconf import OmegaConf
 
@@ -200,3 +201,19 @@ def test_latest_checkpoint_picks_highest_epoch(tmp_path):
         )
     assert _latest_checkpoint(ckpt_dir).name == "epoch_0100.pt"
     assert _latest_checkpoint(tmp_path / "does_not_exist") is None
+
+
+def test_resume_enabled_without_path_raises(tmp_path):
+    """resume.enabled=true without checkpoint_path is a hard error, not a
+    silent fall-through to auto-resume."""
+    model = torch.nn.Linear(4, 4)
+    with pytest.raises(ValueError, match="checkpoint_path"):
+        _load_initial_state(
+            _cfg(resume={"enabled": True}),  # enabled, but no checkpoint_path
+            model=model,
+            optimizer=torch.optim.Adam(model.parameters(), lr=1e-3),
+            lr_scheduler=None,
+            ema=None,
+            device=torch.device("cpu"),
+            ckpt_dir=tmp_path / "empty",
+        )
