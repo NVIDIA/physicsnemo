@@ -188,7 +188,9 @@ def test_latest_checkpoint_picks_highest_epoch(tmp_path):
     ckpt_dir = tmp_path / "checkpoints"
     m = torch.nn.Linear(4, 4)
     o = torch.optim.Adam(m.parameters(), lr=1e-3)
-    for ep in (5, 100, 50):
+    # 9999 vs 10000 is the case a lexicographic sort would get wrong
+    # ("epoch_10000" < "epoch_9999"); the numeric parse must pick 10000.
+    for ep in (5, 100, 50, 9999, 10000):
         _save_checkpoint(
             path=ckpt_dir / f"epoch_{ep:04d}.pt",
             model=m,
@@ -199,7 +201,7 @@ def test_latest_checkpoint_picks_highest_epoch(tmp_path):
             best_val=1.0,
             cfg=OmegaConf.create({}),
         )
-    assert _latest_checkpoint(ckpt_dir).name == "epoch_0100.pt"
+    assert _latest_checkpoint(ckpt_dir).name == "epoch_10000.pt"
     assert _latest_checkpoint(tmp_path / "does_not_exist") is None
 
 

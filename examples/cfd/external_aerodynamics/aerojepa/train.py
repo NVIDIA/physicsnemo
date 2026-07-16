@@ -747,18 +747,28 @@ def _save_checkpoint(
     log.info("Saved checkpoint to %s", path)
 
 
+def _epoch_of(ckpt: Path) -> int:
+    """Parse the integer epoch from an ``epoch_<N>.pt`` filename (``-1`` if
+    unparseable)."""
+    try:
+        return int(ckpt.stem.split("_")[-1])
+    except ValueError:
+        return -1
+
+
 def _latest_checkpoint(ckpt_dir: Path) -> Path | None:
     """Return the highest-epoch ``epoch_*.pt`` in ``ckpt_dir``, or ``None``.
 
-    The ``epoch_XXXX.pt`` names are zero-padded, so a lexicographic sort
-    matches numeric order. Used to resume automatically from a stable
+    Selected by the integer epoch parsed from the filename (not a
+    lexicographic sort), so it stays correct past ``epoch_9999.pt`` and for
+    mixed zero-pad widths. Used to resume automatically from a stable
     checkpoint directory.
     """
     ckpt_dir = Path(ckpt_dir)
     if not ckpt_dir.is_dir():
         return None
-    ckpts = sorted(ckpt_dir.glob("epoch_*.pt"))
-    return ckpts[-1] if ckpts else None
+    ckpts = list(ckpt_dir.glob("epoch_*.pt"))
+    return max(ckpts, key=_epoch_of) if ckpts else None
 
 
 def _load_initial_state(
