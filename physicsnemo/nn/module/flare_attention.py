@@ -72,6 +72,55 @@ def _flare_self_attention(
     return F.scaled_dot_product_attention(k, G, z, scale=scale)
 
 
+def _flare_self_attention_te(
+    x_mid: Float[torch.Tensor, "B H N D"],
+    q_global: nn.Parameter,
+    self_k: nn.Module,
+    self_v: nn.Module,
+    attn_fn: nn.Module,
+    heads: int,
+) -> Float[torch.Tensor, "B H N D"]:
+    r"""FLARE two-pass self-attention kernel on the Transformer Engine backend.
+
+    Same computation as :func:`_flare_self_attention`, but the two attention
+    passes run through a Transformer Engine ``DotProductAttention`` module.  Both
+    passes are treated as cross-attention because the global-query and token
+    sequences have different lengths.  ``DotProductAttention`` consumes ``bshd``
+    inputs and returns the head dimensions flattened, so each pass is reshaped
+    back to ``bshd``/``bhnd`` around the call.
+
+    Parameters
+    ----------
+    x_mid : torch.Tensor
+        Projected input of shape :math:`(B, H, N, D)`.
+    q_global : nn.Parameter
+        Learned global queries of shape :math:`(1, H, S, D)`.
+    self_k : nn.Module
+        Key projection applied to ``x_mid``.
+    self_v : nn.Module
+        Value projection applied to ``x_mid``.
+    attn_fn : nn.Module
+        Transformer Engine ``DotProductAttention`` module configured with
+        ``qkv_format="bshd"`` and ``attention_type="cross"``.
+    heads : int
+        Number of attention heads :math:`H`, used to un-flatten the attention
+        output.
+
+    Returns
+    -------
+    torch.Tensor
+        Self-attended output of shape :math:`(B, H, N, D)`.
+    """
+    G = q_global.to(dtype=x_mid.dtype).expand(x_mid.shape[0], -1, -1, -1)
+    G = rearrange(G, "b h s d -> b s h d")
+    k = rearrange(self_k(x_mid), "b h n d -> b n h d")
+    v = rearrange(self_v(x_mid), "b h n d -> b n h d")
+    z = attn_fn(G, k, v)
+    z = rearrange(z, "b s (h d) -> b s h d", h=heads)
+    y = attn_fn(k, G, z)
+    return rearrange(y, "b n (h d) -> b h n d", h=heads)
+
+
 class FLARE(nn.Module):
     r"""FLARE: Fast Low-rank Attention Routing Engine attention layer.
     Adopted:
@@ -182,17 +231,14 @@ class FLARE(nn.Module):
         x_mid = x_mid.permute(0, 2, 1, 3)  # (B, N, H, D) -> (B, H, N, D)
 
         if self.use_te:
-            # Both FLARE passes are cross-attention because global and token
-            # sequences have different lengths. Transformer Engine uses BSHD
-            # inputs and returns the head dimensions flattened.
-            G = self.q_global.to(dtype=x_mid.dtype).expand(x_mid.shape[0], -1, -1, -1)
-            G = rearrange(G, "b h s d -> b s h d")
-            k = rearrange(self.self_k(x_mid), "b h n d -> b n h d")
-            v = rearrange(self.self_v(x_mid), "b h n d -> b n h d")
-            z = self.attn_fn(G, k, v)
-            z = rearrange(z, "b s (h d) -> b s h d", h=self.heads)
-            y = self.attn_fn(k, G, z)
-            y = rearrange(y, "b n (h d) -> b h n d", h=self.heads)
+            y = _flare_self_attention_te(
+                x_mid,
+                self.q_global,
+                self.self_k,
+                self.self_v,
+                self.attn_fn,
+                self.heads,
+            )
         else:
             y = _flare_self_attention(
                 x_mid,

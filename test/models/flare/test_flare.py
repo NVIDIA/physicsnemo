@@ -342,7 +342,7 @@ def test_flare_deploy(device):
     assert validate_onnx_runtime(
         model,
         (
-            invar,
+            pos,
             invar,
         ),
         1e-2,

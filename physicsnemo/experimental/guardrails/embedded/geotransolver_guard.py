@@ -145,9 +145,14 @@ class GuardedGeoTransolver(nn.Module):
 
         # Captured, pooled geometry latent for the most recent forward pass.
         self._geo_latent: torch.Tensor | None = None
+        # Retain the hook handle so it can be removed in close(); dropping it
+        # would leak hooks (and keep old wrappers alive) on repeated wrapping.
+        self._geo_hook_handle: torch.utils.hooks.RemovableHandle | None = None
         tokenizer = getattr(model.context_builder, "geometry_tokenizer", None)
         if tokenizer is not None:
-            tokenizer.register_forward_hook(self._capture_geometry_latent)
+            self._geo_hook_handle = tokenizer.register_forward_hook(
+                self._capture_geometry_latent
+            )
 
     def _capture_geometry_latent(
         self, module: nn.Module, inputs: tuple, output: torch.Tensor
@@ -167,6 +172,17 @@ class GuardedGeoTransolver(nn.Module):
             self.ood_guard.check(global_embedding, self._geo_latent)
 
         return output
+
+    def close(self) -> None:
+        """Remove the geometry forward hook installed on the wrapped model.
+
+        Call this when the wrapper is no longer needed to detach the hook from
+        the wrapped model's ``geometry_tokenizer``.  Idempotent and safe to call
+        when no geometry surface (and hence no hook) was registered.
+        """
+        if self._geo_hook_handle is not None:
+            self._geo_hook_handle.remove()
+            self._geo_hook_handle = None
 
 
 def attach_ood_guard(

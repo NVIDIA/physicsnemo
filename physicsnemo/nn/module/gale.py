@@ -33,7 +33,7 @@ import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.version_check import OptionalImport
 
 from .concrete_dropout import ConcreteDropout
-from .flare_attention import _flare_self_attention
+from .flare_attention import _flare_self_attention, _flare_self_attention_te
 from .mlp_layers import Mlp
 from .physics_attention import (
     PhysicsAttentionIrregularMesh,
@@ -585,16 +585,14 @@ class GALE_FA(nn.Module):
         dim_head: int = 64,
         dropout: float = 0.0,
         n_global_queries: int = 64,
-        use_te: bool = True,
+        use_te: bool = False,
         context_dim: int = 0,
         concrete_dropout: bool = False,
         state_mixing_mode: str = "weighted",
     ):
-        if use_te:
-            raise ValueError(
-                "GALE_FA does not support Transformer Engine backend. "
-                "Use use_te=False; TE disables FlashAttention for differing q/k sizes in FLARE attention."
-            )
+        # With use_te, linear projections and attention run on Transformer
+        # Engine; otherwise on PyTorch. A missing TE install raises with an
+        # install hint on first use, so no extra guard is needed here.
         super().__init__()
         self.use_te = use_te
         self.heads = heads
@@ -613,6 +611,19 @@ class GALE_FA(nn.Module):
         self.in_project_x = linear_layer(dim, inner_dim)
         self.self_k = linear_layer(dim_head, dim_head)
         self.self_v = linear_layer(dim_head, dim_head)
+
+        # FLARE's self-attention passes and the cross-attention all have
+        # differing q/kv lengths, so TE runs them as cross-attention (BSHD).
+        if self.use_te:
+            self.attn_fn = te.DotProductAttention(
+                num_attention_heads=self.heads,
+                kv_channels=self.dim_head,
+                attention_dropout=dropout,
+                attn_mask_type="no_mask",
+                attention_type="cross",
+                qkv_format="bshd",
+                softmax_scale=self.scale,
+            )
 
         if context_dim > 0:
             _gale_cross_init(self, dim_head, context_dim, use_te, state_mixing_mode)
@@ -668,25 +679,55 @@ class GALE_FA(nn.Module):
         ]
 
         # FLARE self-attention per input
-        self_attention = [
-            _flare_self_attention(
-                _x_mid,
-                self.q_global,
-                self.self_k,
-                self.self_v,
-                self.scale,
-            )
-            for _x_mid in x_mid
-        ]
+        if self.use_te:
+            self_attention = [
+                _flare_self_attention_te(
+                    _x_mid,
+                    self.q_global,
+                    self.self_k,
+                    self.self_v,
+                    self.attn_fn,
+                    self.heads,
+                )
+                for _x_mid in x_mid
+            ]
+        else:
+            self_attention = [
+                _flare_self_attention(
+                    _x_mid,
+                    self.q_global,
+                    self.self_k,
+                    self.self_v,
+                    self.scale,
+                )
+                for _x_mid in x_mid
+            ]
 
         # Cross-attention with context and state mixing
         if context is not None:
-            q = [self.cross_q(_x_mid) for _x_mid in x_mid]
-            k = self.cross_k(context)
-            v = self.cross_v(context)
-            cross_attention = [
-                F.scaled_dot_product_attention(_q, k, v, scale=self.scale) for _q in q
-            ]
+            if self.use_te:
+                # TE cross-attention: reshape (B, H, S, D) -> bshd, run through
+                # the shared DotProductAttention, then back to (B, H, N, D).
+                k = rearrange(self.cross_k(context), "b h s d -> b s h d")
+                v = rearrange(self.cross_v(context), "b h s d -> b s h d")
+                cross_attention = [
+                    rearrange(
+                        self.attn_fn(
+                            rearrange(self.cross_q(_x_mid), "b h n d -> b n h d"), k, v
+                        ),
+                        "b n (h d) -> b h n d",
+                        h=self.heads,
+                    )
+                    for _x_mid in x_mid
+                ]
+            else:
+                q = [self.cross_q(_x_mid) for _x_mid in x_mid]
+                k = self.cross_k(context)
+                v = self.cross_v(context)
+                cross_attention = [
+                    F.scaled_dot_product_attention(_q, k, v, scale=self.scale)
+                    for _q in q
+                ]
             outputs = [
                 _mix_self_and_cross(
                     sa,

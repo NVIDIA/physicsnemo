@@ -438,10 +438,12 @@ class GeoTransolver(Module):
         self.structured_shape = structured_shape
 
         # Validate head dimension compatibility
-        if not n_hidden % n_head == 0:
+        if n_head <= 0:
+            raise ValueError(f"GeoTransolver requires n_head > 0, got {n_head}")
+        if n_hidden % n_head != 0:
             raise ValueError(
                 f"GeoTransolver requires n_hidden % n_head == 0, "
-                f"but instead got {n_hidden % n_head}"
+                f"got n_hidden={n_hidden}, n_head={n_head}"
             )
 
         # Normalize dimension specifications to tuples
@@ -655,6 +657,26 @@ class GeoTransolver(Module):
         if not torch.compiler.is_compiling():
             if len(local_embedding) == 0:
                 raise ValueError("Expected non-empty local_embedding")
+            # The model has one input stream per configured functional_dim, and
+            # builds one preprocess/output module per stream. Check the caller
+            # passed the right number of streams here, once, so a wrong count
+            # gives a clear error instead of a confusing crash later (or quietly
+            # ignoring extra streams).
+            n_streams = len(self.preprocess)
+            if len(local_embedding) != n_streams:
+                raise ValueError(
+                    f"Expected {n_streams} local_embedding stream(s) to match the "
+                    f"model's configured functional_dim/out_dim, "
+                    f"got {len(local_embedding)}"
+                )
+            if local_positions is not None and len(local_positions) != len(
+                local_embedding
+            ):
+                raise ValueError(
+                    f"Expected local_positions to provide the same number of "
+                    f"streams as local_embedding ({len(local_embedding)}), "
+                    f"got {len(local_positions)}"
+                )
             for i, tensor in enumerate(local_embedding):
                 if tensor.ndim != 3:
                     raise ValueError(

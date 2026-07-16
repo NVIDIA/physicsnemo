@@ -408,6 +408,61 @@ def test_geotransolver_te_basic(device, pytestconfig):
     assert not torch.isnan(outputs).any()
 
 
+@requires_module("transformer_engine")
+def test_geotransolver_te_gale_fa(device):
+    """Test GeoTransolver with the GALE_FA backend and Transformer Engine.
+
+    Exercises the TE attention path in GALE_FA (both the FLARE self-attention
+    passes and the context cross-attention run through te.DotProductAttention).
+    """
+    torch.manual_seed(42)
+
+    if device == "cpu":
+        pytest.skip("TE Tests require cuda.")
+
+    model = GeoTransolver(
+        functional_dim=32,
+        out_dim=4,
+        geometry_dim=3,
+        global_dim=16,
+        n_layers=2,
+        n_hidden=64,
+        dropout=0.0,
+        n_head=4,
+        act="gelu",
+        mlp_ratio=2,
+        slice_num=8,
+        use_te=True,
+        time_input=False,
+        plus=False,
+        include_local_features=False,
+        attention_type="GALE_FA",
+    ).to(device)
+
+    assert model.blocks[0].Attn.use_te is True
+
+    batch_size = 2
+    n_tokens = 100
+    n_geom = 235
+    n_global = 5
+
+    local_emb = torch.randn(batch_size, n_tokens, 32).to(device)
+    geometry = torch.randn(batch_size, n_geom, 3).to(device)
+    global_emb = torch.randn(batch_size, n_global, 16).to(device)
+    local_positions = local_emb[:, :, :3]
+
+    outputs = model(
+        local_emb,
+        local_positions=local_positions,
+        global_embedding=global_emb,
+        geometry=geometry,
+    )
+
+    assert isinstance(outputs, torch.Tensor)
+    assert outputs.shape == (batch_size, n_tokens, 4)
+    assert not torch.isnan(outputs).any()
+
+
 # =============================================================================
 # Checkpoint Tests
 # =============================================================================
