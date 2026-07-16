@@ -18,7 +18,7 @@
 # Combines FLARE-style global-query self-attention with GALE geometry/context
 # cross-attention.  use_te must be False for GALE_FA.
 
-_target_: physicsnemo.experimental.models.geotransolver.GeoTransolver
+_target_: physicsnemo.models.geotransolver.GeoTransolver
 _convert_: all
 
 functional_dim: 3

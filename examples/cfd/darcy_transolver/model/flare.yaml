@@ -18,7 +18,7 @@
 # FLARE (Fast Low-rank Attention Routing Engine) blocks.
 # use_te and plus are forced off internally by FLARE.
 
-_target_: physicsnemo.experimental.models.flare.FLARE
+_target_: physicsnemo.models.flare.FLARE
 _convert_: all
 
 functional_dim: 1
