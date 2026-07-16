@@ -145,7 +145,7 @@ def _dilate_precomputed_idx(
     return idx[:, :out_k]
 
 
-def _make_conditioning_mlp(cond_dim: int, out_dim: int, use_te: bool = True) -> Mlp:
+def _make_conditioning_mlp(cond_dim: int, out_dim: int, use_te: bool = False) -> Mlp:
     hidden_dim = max(int(cond_dim), int(out_dim))
     mlp = Mlp(
         in_features=int(cond_dim),
