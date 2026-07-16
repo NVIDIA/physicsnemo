@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .attention import na1d, na2d, na3d
 from .derivatives import (
     mesh_green_gauss_gradient,
     mesh_lsq_gradient,
@@ -50,7 +51,6 @@ from .interpolation import (
     interpolation,
     point_to_grid_interpolation,
 )
-from .natten import na1d, na2d, na3d
 from .neighbors import knn, radius_search
 from .regularization_parameterization import drop_path, weight_fact
 from .rendering import (

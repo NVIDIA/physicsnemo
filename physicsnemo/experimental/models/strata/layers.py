@@ -42,7 +42,7 @@ from einops import rearrange
 from jaxtyping import Float
 
 from physicsnemo.nn import apply_rotary_pos_emb
-from physicsnemo.nn.functional.natten import na3d as _na3d_func
+from physicsnemo.nn.functional import na3d as _na3d_func
 from physicsnemo.nn.module.mlp_layers import Mlp
 
 __all__ = [

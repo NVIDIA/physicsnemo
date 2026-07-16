@@ -32,7 +32,7 @@ from physicsnemo.domain_parallel.shard_utils.patch_core import (
     MissingShardPatch,
     UndeterminedShardingError,
 )
-from physicsnemo.nn.functional.natten import na1d, na2d, na3d
+from physicsnemo.nn.functional.attention.neighborhood_attention import na1d, na2d, na3d
 
 _natten = OptionalImport("natten")
 _raw_func_map = {
@@ -221,9 +221,9 @@ def _natten_wrapper(
     r"""Shared wrapper for natten functions to support sharded tensors.
 
     Registered with :meth:`ShardTensor.register_function_handler` so that calls
-    to :func:`~physicsnemo.nn.functional.natten.na1d`,
-    :func:`~physicsnemo.nn.functional.natten.na2d`, or
-    :func:`~physicsnemo.nn.functional.natten.na3d` automatically route through
+    to :func:`~physicsnemo.nn.functional.attention.neighborhood_attention.na1d`,
+    :func:`~physicsnemo.nn.functional.attention.neighborhood_attention.na2d`, or
+    :func:`~physicsnemo.nn.functional.attention.neighborhood_attention.na3d` automatically route through
     this handler when any argument is a :class:`ShardTensor`.
 
     Parameters
@@ -250,7 +250,14 @@ def _natten_wrapper(
     q, k, v, kernel_size = args[0], args[1], args[2], args[3]
 
     dilation = kwargs.get("dilation", 1)
-    natten_kwargs = {_k: _v for _k, _v in kwargs.items() if _k != "dilation"}
+    implementation = kwargs.get("implementation")
+    if implementation not in (None, "natten"):
+        raise KeyError(
+            f"No implementation named '{implementation}' for neighborhood attention"
+        )
+    natten_kwargs = {
+        _k: _v for _k, _v in kwargs.items() if _k not in ("dilation", "implementation")
+    }
 
     if all(type(_t) is torch.Tensor for _t in (q, k, v)):
         return func(

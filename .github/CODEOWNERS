@@ -143,6 +143,7 @@ physicsnemo/nn/functional/ @loliverhennigh
 physicsnemo/nn/functional/neighbors/knn/ @coreyjadams @peterdsharpe @loliverhennigh
 physicsnemo/nn/functional/neighbors/radius_search/ @coreyjadams @peterdsharpe @loliverhennigh
 physicsnemo/nn/functional/natten.py @pzharrington
+physicsnemo/nn/functional/attention/neighborhood_attention.py @pzharrington
 physicsnemo/nn/functional/geometry/sdf.py @RishikeshRanade @loliverhennigh
 
 # Module layers

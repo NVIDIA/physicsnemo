@@ -28,7 +28,9 @@ from timm.layers.attention import Attention
 
 from physicsnemo.core import Module
 from physicsnemo.core.version_check import OptionalImport
-from physicsnemo.nn.functional.natten import na2d as _na2d_func
+from physicsnemo.nn.functional.attention.neighborhood_attention import (
+    na2d as _na2d_func,
+)
 from physicsnemo.nn.module.drop import DropPath
 from physicsnemo.nn.module.hpx.tokenizer import (
     HEALPixPatchDetokenizer,
@@ -866,9 +868,9 @@ class DiTBlock(nn.Module):
         self.adaptive_modulation = nn.Sequential(
             nn.SiLU(), nn.Linear(modulation_input_dim, 6 * hidden_size, bias=True)
         )
-        self.modulation = lambda x, scale, shift: x * (
-            1 + scale.unsqueeze(1)
-        ) + shift.unsqueeze(1)
+        self.modulation = lambda x, scale, shift: (
+            x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
+        )
 
         self.drop_path = DropPath(drop_path)
 
@@ -980,9 +982,9 @@ class ProjLayer(nn.Module):
         self.adaptive_modulation = nn.Sequential(
             nn.SiLU(), nn.Linear(hidden_size, 2 * hidden_size, bias=True)
         )
-        self.modulation = lambda x, scale, shift: x * (
-            1 + scale.unsqueeze(1)
-        ) + shift.unsqueeze(1)
+        self.modulation = lambda x, scale, shift: (
+            x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
+        )
 
     def forward(
         self,

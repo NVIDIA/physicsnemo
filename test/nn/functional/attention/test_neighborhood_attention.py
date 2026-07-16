@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""Lightweight unit tests for :mod:`physicsnemo.nn.functional.natten`.
+r"""Lightweight unit tests for :mod:`physicsnemo.nn.functional.attention.neighborhood_attention`.
 
 Validates that the ``na1d``, ``na2d``, and ``na3d`` wrappers:
 
@@ -25,10 +25,18 @@ Validates that the ``na1d``, ``na2d``, and ``na3d`` wrappers:
   covers the entire spatial extent.
 """
 
+import importlib.util
+from dataclasses import replace
+
 import pytest
 import torch
 import torch.nn.functional as F
 
+from physicsnemo.nn.functional.attention.neighborhood_attention import (
+    NeighborhoodAttention1D,
+    NeighborhoodAttention2D,
+    NeighborhoodAttention3D,
+)
 from test.conftest import requires_module
 
 # ---------------------------------------------------------------------------
@@ -72,6 +80,102 @@ def _sdpa_reference(q, k, v):
     return out.permute(0, 2, 1, 3).reshape(*leading, heads, d)
 
 
+@pytest.mark.parametrize(
+    "spec",
+    [
+        NeighborhoodAttention1D,
+        NeighborhoodAttention2D,
+        NeighborhoodAttention3D,
+    ],
+)
+def test_natten_function_specs_make_inputs_forward(device, spec):
+    """NATTEN FunctionSpecs expose labeled forward benchmark cases."""
+    cases = list(spec.make_inputs_forward(device=device))
+
+    assert len(cases) == len(spec._BENCHMARK_CASES)
+    assert [case[0] for case in cases] == [case[0] for case in spec._BENCHMARK_CASES]
+
+    _label, args, kwargs = cases[0]
+    q, k, v, kernel_size = args
+    assert q.shape == k.shape == v.shape
+    assert isinstance(kernel_size, int)
+    assert isinstance(kwargs["dilation"], int)
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        NeighborhoodAttention1D,
+        NeighborhoodAttention2D,
+        NeighborhoodAttention3D,
+    ],
+)
+def test_natten_function_specs_make_inputs_backward(device, spec):
+    """NATTEN FunctionSpecs expose differentiable benchmark cases."""
+    cases = list(spec.make_inputs_backward(device=device))
+
+    assert len(cases) == len(spec._BENCHMARK_CASES)
+    _label, args, _kwargs = cases[0]
+    q, k, v, _kernel_size = args
+    assert q.requires_grad
+    assert k.requires_grad
+    assert v.requires_grad
+
+
+@requires_module("natten")
+@pytest.mark.parametrize(
+    "spec",
+    [
+        NeighborhoodAttention1D,
+        NeighborhoodAttention2D,
+        NeighborhoodAttention3D,
+    ],
+)
+def test_natten_function_spec_dispatch_matches_compare_contract(device, spec):
+    """FunctionSpec dispatch and compare hooks are valid for NATTEN."""
+    _label, args, kwargs = next(iter(spec.make_inputs_forward(device=device)))
+    output = spec.dispatch(*args, implementation="natten", **kwargs)
+    reference = spec.dispatch(*args, implementation="natten", **kwargs)
+
+    spec.compare_forward(output, reference)
+
+
+def test_natten_missing_dependency_error_message(device):
+    """Missing NATTEN errors should keep the optional-dependency install hint."""
+    if importlib.util.find_spec("natten") is not None:
+        pytest.skip("natten is installed")
+
+    from physicsnemo.nn.functional.attention.neighborhood_attention import na1d
+
+    q = torch.randn(1, 8, 1, 4, device=device)
+    with pytest.raises(ImportError, match="Missing optional dependency: natten"):
+        na1d(q, q, q, kernel_size=3)
+
+
+def test_natten_version_mismatch_error_message(device, monkeypatch):
+    """Unavailable NATTEN versions should ask users to upgrade."""
+    import physicsnemo.nn.functional.attention.neighborhood_attention as natten_functionals
+    from physicsnemo.nn.functional.attention.neighborhood_attention import na1d
+
+    monkeypatch.setattr(natten_functionals, "get_installed_version", lambda _: "0.21.4")
+    impls = NeighborhoodAttention1D._get_impls()
+    monkeypatch.setitem(impls, "natten", replace(impls["natten"], available=False))
+
+    q = torch.randn(1, 8, 1, 4, device=device)
+    with pytest.raises(ImportError, match="natten>=0.21.5 is required"):
+        na1d(q, q, q, kernel_size=3)
+
+
+def test_legacy_natten_module_reexports_public_functionals():
+    """The PhysicsNeMo 2.1 NATTEN module path remains import-compatible."""
+    from physicsnemo.nn import functional
+    from physicsnemo.nn.functional import natten
+
+    assert natten.na1d is functional.na1d
+    assert natten.na2d is functional.na2d
+    assert natten.na3d is functional.na3d
+
+
 # ---------------------------------------------------------------------------
 # 1-D neighbourhood attention
 # ---------------------------------------------------------------------------
@@ -79,7 +183,7 @@ def _sdpa_reference(q, k, v):
 
 @requires_module("natten")
 class TestNA1D:
-    """Unit tests for :func:`physicsnemo.nn.functional.natten.na1d`."""
+    """Unit tests for :func:`physicsnemo.nn.functional.attention.neighborhood_attention.na1d`."""
 
     @pytest.mark.parametrize("kernel_size", [3, 5])
     @pytest.mark.parametrize("dilation", [1, 2])
@@ -87,7 +191,7 @@ class TestNA1D:
         """Wrapper output must be identical to ``natten.functional.na1d``."""
         import natten.functional as nf
 
-        from physicsnemo.nn.functional.natten import na1d
+        from physicsnemo.nn.functional.attention.neighborhood_attention import na1d
 
         B, L, H, D = 2, 16, 4, 8
         q = torch.randn(B, L, H, D, device=device)
@@ -101,7 +205,7 @@ class TestNA1D:
 
     def test_output_shape(self, device):
         """Output shape must equal the query shape."""
-        from physicsnemo.nn.functional.natten import na1d
+        from physicsnemo.nn.functional.attention.neighborhood_attention import na1d
 
         B, L, H, D = 1, 12, 2, 16
         q = torch.randn(B, L, H, D, device=device)
@@ -110,7 +214,7 @@ class TestNA1D:
 
     def test_backward(self, device):
         """Gradients must flow back through all three inputs."""
-        from physicsnemo.nn.functional.natten import na1d
+        from physicsnemo.nn.functional.attention.neighborhood_attention import na1d
 
         B, L, H, D = 1, 12, 2, 8
         q = torch.randn(B, L, H, D, device=device, requires_grad=True)
@@ -138,7 +242,7 @@ class TestNA1D:
 
     def test_torch_function_dispatch(self, device):
         """``__torch_function__`` must be invoked for tensor subclasses."""
-        from physicsnemo.nn.functional.natten import na1d
+        from physicsnemo.nn.functional.attention.neighborhood_attention import na1d
 
         B, L, H, D = 1, 8, 2, 8
         q = torch.randn(B, L, H, D, device=device).as_subclass(_DispatchRecorder)
@@ -152,7 +256,7 @@ class TestNA1D:
 
     def test_full_window_matches_sdpa(self, device):
         """When kernel covers the entire sequence, NA degenerates to SDPA."""
-        from physicsnemo.nn.functional.natten import na1d
+        from physicsnemo.nn.functional.attention.neighborhood_attention import na1d
 
         B, L, H, D = 2, 7, 2, 8
         q = torch.randn(B, L, H, D, device=device, dtype=torch.float32)
@@ -173,7 +277,7 @@ class TestNA1D:
 
 @requires_module("natten")
 class TestNA2D:
-    """Unit tests for :func:`physicsnemo.nn.functional.natten.na2d`."""
+    """Unit tests for :func:`physicsnemo.nn.functional.attention.neighborhood_attention.na2d`."""
 
     @pytest.mark.parametrize("kernel_size", [3, 5])
     @pytest.mark.parametrize("dilation", [1, 2])
@@ -181,7 +285,7 @@ class TestNA2D:
         """Wrapper output must be identical to ``natten.functional.na2d``."""
         import natten.functional as nf
 
-        from physicsnemo.nn.functional.natten import na2d
+        from physicsnemo.nn.functional.attention.neighborhood_attention import na2d
 
         B, Ht, W, H, D = 2, 16, 16, 4, 8
         q = torch.randn(B, Ht, W, H, D, device=device)
@@ -195,7 +299,7 @@ class TestNA2D:
 
     def test_output_shape(self, device):
         """Output shape must equal the query shape."""
-        from physicsnemo.nn.functional.natten import na2d
+        from physicsnemo.nn.functional.attention.neighborhood_attention import na2d
 
         B, Ht, W, H, D = 1, 6, 6, 2, 16
         q = torch.randn(B, Ht, W, H, D, device=device)
@@ -204,7 +308,7 @@ class TestNA2D:
 
     def test_backward(self, device):
         """Gradients must flow back through all three inputs."""
-        from physicsnemo.nn.functional.natten import na2d
+        from physicsnemo.nn.functional.attention.neighborhood_attention import na2d
 
         B, Ht, W, H, D = 1, 6, 6, 2, 8
         q = torch.randn(B, Ht, W, H, D, device=device, requires_grad=True)
@@ -232,7 +336,7 @@ class TestNA2D:
 
     def test_torch_function_dispatch(self, device):
         """``__torch_function__`` must be invoked for tensor subclasses."""
-        from physicsnemo.nn.functional.natten import na2d
+        from physicsnemo.nn.functional.attention.neighborhood_attention import na2d
 
         B, Ht, W, H, D = 1, 4, 4, 2, 8
         q = torch.randn(B, Ht, W, H, D, device=device).as_subclass(_DispatchRecorder)
@@ -246,7 +350,7 @@ class TestNA2D:
 
     def test_full_window_matches_sdpa(self, device):
         """When kernel covers the full spatial extent, NA degenerates to SDPA."""
-        from physicsnemo.nn.functional.natten import na2d
+        from physicsnemo.nn.functional.attention.neighborhood_attention import na2d
 
         B, Ht, W, H, D = 2, 5, 5, 2, 8
         q = torch.randn(B, Ht, W, H, D, device=device, dtype=torch.float32)
@@ -266,14 +370,14 @@ class TestNA2D:
 
 @requires_module("natten")
 class TestNA3D:
-    """Unit tests for :func:`physicsnemo.nn.functional.natten.na3d`."""
+    """Unit tests for :func:`physicsnemo.nn.functional.attention.neighborhood_attention.na3d`."""
 
     @pytest.mark.parametrize("kernel_size", [3, 5])
     def test_matches_natten_directly(self, device, kernel_size):
         """Wrapper output must be identical to ``natten.functional.na3d``."""
         import natten.functional as nf
 
-        from physicsnemo.nn.functional.natten import na3d
+        from physicsnemo.nn.functional.attention.neighborhood_attention import na3d
 
         B, X, Y, Z, H, D = 1, 16, 16, 16, 2, 8
         q = torch.randn(B, X, Y, Z, H, D, device=device)
@@ -287,7 +391,7 @@ class TestNA3D:
 
     def test_output_shape(self, device):
         """Output shape must equal the query shape."""
-        from physicsnemo.nn.functional.natten import na3d
+        from physicsnemo.nn.functional.attention.neighborhood_attention import na3d
 
         B, X, Y, Z, H, D = 1, 4, 4, 4, 2, 8
         q = torch.randn(B, X, Y, Z, H, D, device=device)
@@ -296,7 +400,7 @@ class TestNA3D:
 
     def test_backward(self, device):
         """Gradients must flow back through all three inputs."""
-        from physicsnemo.nn.functional.natten import na3d
+        from physicsnemo.nn.functional.attention.neighborhood_attention import na3d
 
         B, X, Y, Z, H, D = 1, 4, 4, 4, 2, 8
         q = torch.randn(B, X, Y, Z, H, D, device=device, requires_grad=True)
@@ -324,7 +428,7 @@ class TestNA3D:
 
     def test_torch_function_dispatch(self, device):
         """``__torch_function__`` must be invoked for tensor subclasses."""
-        from physicsnemo.nn.functional.natten import na3d
+        from physicsnemo.nn.functional.attention.neighborhood_attention import na3d
 
         B, X, Y, Z, H, D = 1, 4, 4, 4, 2, 8
         q = torch.randn(B, X, Y, Z, H, D, device=device).as_subclass(_DispatchRecorder)
@@ -338,7 +442,7 @@ class TestNA3D:
 
     def test_full_window_matches_sdpa(self, device):
         """When kernel covers the full spatial extent, NA degenerates to SDPA."""
-        from physicsnemo.nn.functional.natten import na3d
+        from physicsnemo.nn.functional.attention.neighborhood_attention import na3d
 
         B, X, Y, Z, H, D = 1, 5, 5, 5, 2, 8
         q = torch.randn(B, X, Y, Z, H, D, device=device, dtype=torch.float32)

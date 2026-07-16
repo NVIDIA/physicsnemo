@@ -17,6 +17,11 @@
 """Registry of FunctionSpec classes to benchmark with ASV."""
 
 from physicsnemo.core.function_spec import FunctionSpec
+from physicsnemo.nn.functional.attention.neighborhood_attention import (
+    NeighborhoodAttention1D,
+    NeighborhoodAttention2D,
+    NeighborhoodAttention3D,
+)
 from physicsnemo.nn.functional.derivatives import (
     MeshGreenGaussGradient,
     MeshlessFDDerivatives,
@@ -100,6 +105,10 @@ FUNCTIONAL_SPECS: tuple[type[FunctionSpec], ...] = (
     ViewAsComplex,
     Real,
     Imag,
+    # Neighborhood attention.
+    NeighborhoodAttention1D,
+    NeighborhoodAttention2D,
+    NeighborhoodAttention3D,
 )
 
 __all__ = ["FUNCTIONAL_SPECS"]

@@ -14,11 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Compatibility exports for the legacy neighborhood-attention module path.
+from .neighborhood_attention import (
+    NeighborhoodAttention1D,
+    NeighborhoodAttention2D,
+    NeighborhoodAttention3D,
+    na1d,
+    na2d,
+    na3d,
+)
 
-New code should import these functionals from :mod:`physicsnemo.nn.functional`.
-"""
-
-from .attention.neighborhood_attention import na1d, na2d, na3d
-
-__all__ = ["na1d", "na2d", "na3d"]
+__all__ = [
+    "NeighborhoodAttention1D",
+    "NeighborhoodAttention2D",
+    "NeighborhoodAttention3D",
+    "na1d",
+    "na2d",
+    "na3d",
+]

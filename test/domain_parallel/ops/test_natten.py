@@ -16,9 +16,9 @@
 
 r"""Tests for 1D, 2D, and 3D neighborhood attention on sharded tensors.
 
-This module validates the correctness of :func:`physicsnemo.nn.functional.natten.na1d`,
-:func:`physicsnemo.nn.functional.natten.na2d`, and
-:func:`physicsnemo.nn.functional.natten.na3d` over sharded inputs, covering both
+This module validates the correctness of :func:`physicsnemo.nn.functional.attention.neighborhood_attention.na1d`,
+:func:`physicsnemo.nn.functional.attention.neighborhood_attention.na2d`, and
+:func:`physicsnemo.nn.functional.attention.neighborhood_attention.na3d` over sharded inputs, covering both
 forward and backward passes. Sharding is performed over spatial dimensions which
 correspond to ``Shard(1)``, ``Shard(2)``, etc. in the natten heads-last layout.
 """
@@ -130,7 +130,7 @@ class TestNA1D:
     def test_na1d_shard_l(
         self, distributed_mesh, L, num_heads, head_dim, kernel_size, backward
     ):
-        from physicsnemo.nn.functional.natten import na1d
+        from physicsnemo.nn.functional.attention.neighborhood_attention import na1d
 
         _run_natten_check(
             na1d,
@@ -163,7 +163,7 @@ class TestNA2D:
     def test_na2d_shard_h(
         self, distributed_mesh, H, W, num_heads, head_dim, kernel_size, backward
     ):
-        from physicsnemo.nn.functional.natten import na2d
+        from physicsnemo.nn.functional.attention.neighborhood_attention import na2d
 
         _run_natten_check(
             na2d,
@@ -186,7 +186,7 @@ class TestNA2D:
     def test_na2d_shard_w(
         self, distributed_mesh, H, W, num_heads, head_dim, kernel_size, backward
     ):
-        from physicsnemo.nn.functional.natten import na2d
+        from physicsnemo.nn.functional.attention.neighborhood_attention import na2d
 
         _run_natten_check(
             na2d,
@@ -220,7 +220,7 @@ class TestNA3D:
     def test_na3d_shard_x(
         self, distributed_mesh, X, Y, Z, num_heads, head_dim, kernel_size, backward
     ):
-        from physicsnemo.nn.functional.natten import na3d
+        from physicsnemo.nn.functional.attention.neighborhood_attention import na3d
 
         _run_natten_check(
             na3d,
@@ -244,7 +244,7 @@ class TestNA3D:
     def test_na3d_shard_y(
         self, distributed_mesh, X, Y, Z, num_heads, head_dim, kernel_size, backward
     ):
-        from physicsnemo.nn.functional.natten import na3d
+        from physicsnemo.nn.functional.attention.neighborhood_attention import na3d
 
         _run_natten_check(
             na3d,
@@ -268,7 +268,7 @@ class TestNA3D:
     def test_na3d_shard_z(
         self, distributed_mesh, X, Y, Z, num_heads, head_dim, kernel_size, backward
     ):
-        from physicsnemo.nn.functional.natten import na3d
+        from physicsnemo.nn.functional.attention.neighborhood_attention import na3d
 
         _run_natten_check(
             na3d,

@@ -591,10 +591,6 @@ physicsnemo/models/graphcast/utils/graph_backend.py:PyGGraphBackend.create_heter
 physicsnemo/models/graphcast/utils/graph_backend.py:PyGGraphBackend.khop_adj_all_k
 physicsnemo/models/pix2pix/pix2pixunet.py:Pix2PixUnet.load_networks
 physicsnemo/models/pix2pix/pix2pixunet.py:Pix2PixUnet.test
-physicsnemo/nn/functional/equivariant_ops.py:legendre_polynomials
-physicsnemo/nn/functional/equivariant_ops.py:legendre_polynomials
-physicsnemo/nn/functional/equivariant_ops.py:smooth_log
-physicsnemo/nn/functional/equivariant_ops.py:smooth_log
 physicsnemo/nn/functional/fourier_spectral/fft.py:IRFFT.make_inputs_backward
 physicsnemo/nn/functional/fourier_spectral/fft.py:IRFFT.make_inputs_forward
 physicsnemo/nn/functional/fourier_spectral/fft.py:IRFFT.torch_forward

@@ -67,6 +67,7 @@ INTERROGATE_ARGS = [
     "--ignore-semiprivate",
     "--ignore-magic",
     "--ignore-nested-functions",  # not in original config; added per #1485
+    "--ignore-overloaded-functions",
     *[arg for p in _IGNORE_REGEX_PATTERNS for arg in ("--ignore-regex", p)],
 ]
 

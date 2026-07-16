@@ -53,7 +53,7 @@ This document is structured in two main sections:
 
 | Rule ID | Summary | Apply When |
 |---------|---------|------------|
-| [`FNC-000`](#fnc-000-functionals-must-use-functionspec) | Functionals must use FunctionSpec | Creating new functional APIs |
+| [`FNC-000`](#fnc-000-functionals-must-use-functionspec) | Functionals must use FunctionSpec unless they are lightweight tensor helpers | Creating new functional APIs |
 | [`FNC-001`](#fnc-001-functional-location-and-public-api) | Functional location and public API | Organizing or exporting functionals |
 | [`FNC-002`](#fnc-002-file-layout-for-functionals) | File layout for functionals | Adding or refactoring functional files |
 | [`FNC-003`](#fnc-003-registration-and-dispatch-rules) | Registration and dispatch rules | Registering implementations |
@@ -71,15 +71,30 @@ This document is structured in two main sections:
 
 **Description:**
 
-All functionals must be implemented with `FunctionSpec`, even if only a single
-implementation exists. This ensures the operation participates in validation
-and benchmarking through input generators and `compare_forward` (and
+All functionals with backend dispatch, optional accelerated implementations, or
+meaningful benchmark coverage must be implemented with `FunctionSpec`, even if
+only a single implementation exists. This ensures the operation participates in
+validation and benchmarking through input generators and `compare_forward` (and
 `compare_backward` where needed).
+
+Small pure-PyTorch tensor helpers can remain plain functions when all of the
+following are true:
+
+- The implementation is a thin composition of PyTorch tensor operations.
+- There is no optional backend, custom kernel, or dispatch-selection behavior.
+- Benchmarking the helper independently would not provide actionable
+  performance data.
+- The function has focused tests or coverage through its owning feature area.
+
+When a helper later grows an alternate backend, optional dependency, or
+performance-sensitive implementation, convert it to `FunctionSpec`.
 
 **Rationale:**
 
 `FunctionSpec` provides a consistent structure for backend registration,
-selection, benchmarking and verification across the codebase.
+selection, benchmarking and verification across the codebase. The lightweight
+helper exception avoids adding ceremony to simple tensor algebra that has no
+backend-selection or benchmark surface.
 
 **Example:**
 
