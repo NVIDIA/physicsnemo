@@ -320,13 +320,7 @@ Supported metrics: relative L1, relative L2, MAE.
 per-field loss before summation (note: the logged `loss/<field>` values
 include the weight). Leave it unset by default: the surface dataset YAMLs
 already bring every target to unit scale via `NormalizeMeshFields`, so
-per-field losses are directly comparable without weighting. (The standalone
-GLOBE recipe's `error_scales = {C_p: 1.0, C_f: 0.01}` is *not* a loss
-weighting -- it divides the residuals, i.e. it is that recipe's
-normalization -- so equal weights here match its behavior.) Re-weighting an
-already-normalized field starves the others of gradient signal; on the
-DrivAerML surface case, dropping a legacy `{wss: 100.0}` weight improved
-converged pressure L2 by ~2x at equal WSS L2.
+per-field losses are directly comparable without weighting.
 
 **`batch_size > 1`** is not supported by any model in the recipe today;
 the YAML field is reserved for future use, and the recipe raises
@@ -603,17 +597,6 @@ python src/train.py model=domino_volume dataset=drivaer_ml_volume \
 Note the `+` prefix on `+model.attention_type=...` — Hydra requires `+`
 when the override key isn't already present in the model template (FA
 attention is opt-in, not the default).
-
-**GLOBE at scale.** With the default `precision: bfloat16`,
-`sampling_resolution=50000` peaks at ~143 GB per GPU on the DrivAerML
-surface case (fits 180 GB-class devices; 200,000 cells runs out of
-memory). GLOBE's tree construction and traversal cannot be traced by
-`torch.compile`, hence `compile=false`. For multi-hour training under a
-walltime-limited scheduler, submit the same script repeatedly with
-`--dependency=singleton` and per-epoch checkpoints (`training.save_interval=1`)
-so each job resumes from the latest checkpoint; note that under `sbatch`
-a script runs from a spool copy, so locate the recipe via
-`$SLURM_SUBMIT_DIR` rather than `$BASH_SOURCE`.
 
 ### Dataset config anatomy
 
