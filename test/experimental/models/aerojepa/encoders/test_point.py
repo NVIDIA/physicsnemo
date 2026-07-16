@@ -83,7 +83,7 @@ def test_graph_pool_basic_shape(device):
 def test_graph_pool_empty_tokens_is_noop(device):
     """Empty token positions short-circuits to the input token features."""
     pool = PointClusterGraphPool(
-        point_feature_dim=8, hidden_dim=16, num_layers=1, dropout=0.0
+        point_feature_dim=8, hidden_dim=16, num_layers=1, dropout=0.0, use_te=False
     ).to(device)
     src_pos = torch.randn(20, 3, device=device)
     src_feat = torch.randn(20, 8, device=device)
