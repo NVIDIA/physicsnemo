@@ -127,7 +127,25 @@ def _dilated_knn(
     return idx[:, :out_k].long()
 
 
-def _make_conditioning_mlp(cond_dim: int, out_dim: int) -> Mlp:
+def _dilate_precomputed_idx(
+    idx: torch.Tensor, *, k: int, dilation: int
+) -> torch.Tensor:
+    r"""Apply a block's dilation stride and neighbour cap to a shared index.
+
+    When a stack of blocks shares static coordinates, the caller can run a
+    single k-NN wide enough for every block (``max(k * dilation)`` neighbours)
+    and thread the result through each ``forward(..., precomputed_idx=idx)``.
+    Each block then reproduces its own ``_dilated_knn`` slice from that shared
+    index as a pure gather -- ``idx[:, ::dilation][:, :k]`` -- avoiding a
+    per-block neighbour search.
+    """
+    if dilation > 1:
+        idx = idx[:, :: int(dilation)]
+    out_k = min(int(k), int(idx.shape[1]))
+    return idx[:, :out_k]
+
+
+def _make_conditioning_mlp(cond_dim: int, out_dim: int, use_te: bool = False) -> Mlp:
     hidden_dim = max(int(cond_dim), int(out_dim))
     mlp = Mlp(
         in_features=int(cond_dim),
@@ -135,6 +153,7 @@ def _make_conditioning_mlp(cond_dim: int, out_dim: int) -> Mlp:
         out_features=int(out_dim),
         act_layer=nn.SiLU,
         drop=0.0,
+        use_te=use_te,
     )
     # Zero-init the final linear so AdaLN/AdaLN-Zero starts as identity
     # (shift = scale = gate = 0 at initialization).
@@ -212,15 +231,18 @@ class AdaLNResidualMLP(Module):
         dropout: float,
         conditioning_dim: int | None = None,
         adaln_zero: bool = False,
+        use_te: bool = True,
     ):
         super().__init__()
         self.dim = int(dim)
         hidden = max(1, int(mlp_ratio)) * int(dim)
-        self.norm = LayerNorm(int(dim))
+        self.norm = LayerNorm(int(dim)) if use_te else nn.LayerNorm(int(dim))
         self.conditioning = (
             None
             if conditioning_dim is None
-            else _make_conditioning_mlp(int(conditioning_dim), 3 * int(dim))
+            else _make_conditioning_mlp(
+                int(conditioning_dim), 3 * int(dim), use_te=use_te
+            )
         )
         self.adaln_zero = bool(adaln_zero)
         self.net = Mlp(
@@ -230,6 +252,7 @@ class AdaLNResidualMLP(Module):
             act_layer=nn.GELU,
             drop=float(dropout),
             final_dropout=True,
+            use_te=use_te,
         )
 
     def forward(
@@ -284,6 +307,7 @@ class _LocalVectorAttentionBlock(Module):
         conditioning_dim: int | None,
         adaln_zero: bool,
         num_cond_chunks: int,
+        use_te: bool = True,
     ):
         super().__init__()
         if int(dim) % int(num_heads) != 0:
@@ -298,7 +322,7 @@ class _LocalVectorAttentionBlock(Module):
             None
             if conditioning_dim is None
             else _make_conditioning_mlp(
-                int(conditioning_dim), int(num_cond_chunks) * self.dim
+                int(conditioning_dim), int(num_cond_chunks) * self.dim, use_te=use_te
             )
         )
         self.q_proj = nn.Linear(self.dim, self.dim)
@@ -310,6 +334,7 @@ class _LocalVectorAttentionBlock(Module):
             out_features=self.dim,
             act_layer=nn.GELU,
             drop=0.0,
+            use_te=use_te,
         )
         self.attn_proj = Mlp(
             in_features=self.dim,
@@ -317,6 +342,7 @@ class _LocalVectorAttentionBlock(Module):
             out_features=self.num_heads,
             act_layer=nn.GELU,
             drop=0.0,
+            use_te=use_te,
         )
         self.out_proj = nn.Linear(self.dim, self.dim)
         self.dropout = nn.Dropout(float(dropout))
@@ -326,6 +352,7 @@ class _LocalVectorAttentionBlock(Module):
             dropout=float(dropout),
             conditioning_dim=conditioning_dim,
             adaln_zero=adaln_zero,
+            use_te=use_te,
         )
 
     def _attend(
@@ -438,6 +465,7 @@ class LocalPointTransformerBlock(_LocalVectorAttentionBlock):
         coord_dim: int = 3,
         conditioning_dim: int | None = None,
         adaln_zero: bool = False,
+        use_te: bool = True,
     ):
         super().__init__(
             dim=dim,
@@ -449,9 +477,10 @@ class LocalPointTransformerBlock(_LocalVectorAttentionBlock):
             conditioning_dim=conditioning_dim,
             adaln_zero=adaln_zero,
             num_cond_chunks=3,
+            use_te=use_te,
         )
         self.dilation = int(max(1, dilation))
-        self.norm = LayerNorm(self.dim)
+        self.norm = LayerNorm(self.dim) if use_te else nn.LayerNorm(self.dim)
 
     def forward(
         self,
@@ -459,6 +488,7 @@ class LocalPointTransformerBlock(_LocalVectorAttentionBlock):
         coords: Float[torch.Tensor, "n d_pos"],
         cond: Float[torch.Tensor, "*batch cond_dim"] | None = None,
         batch_ids: Int[torch.Tensor, "n"] | None = None,  # noqa: F821
+        precomputed_idx: Int[torch.Tensor, "n k_wide"] | None = None,  # noqa: F821
     ) -> Float[torch.Tensor, "n dim"]:
         if not torch.compiler.is_compiling():
             if features.ndim != 2 or features.shape[1] != self.dim:
@@ -493,12 +523,19 @@ class LocalPointTransformerBlock(_LocalVectorAttentionBlock):
                 3, dim=-1
             )
             h = h * (1.0 + scale) + shift
-        idx = _dilated_knn(
-            query_coords=coords,
-            key_coords=coords,
-            k=min(self.neighbor_k, int(coords.shape[0])),
-            dilation=self.dilation,
-        )
+        if precomputed_idx is None:
+            idx = _dilated_knn(
+                query_coords=coords,
+                key_coords=coords,
+                k=min(self.neighbor_k, int(coords.shape[0])),
+                dilation=self.dilation,
+            )
+        else:
+            idx = _dilate_precomputed_idx(
+                precomputed_idx,
+                k=min(self.neighbor_k, int(coords.shape[0])),
+                dilation=self.dilation,
+            )
         neighbor_mask = None
         if batch_ids is not None:
             gathered_batch_ids = _gather_rows(batch_ids.unsqueeze(-1), idx).squeeze(-1)
@@ -596,6 +633,7 @@ class LocalTokenCrossAttentionBlock(_LocalVectorAttentionBlock):
         coord_dim: int = 3,
         conditioning_dim: int | None = None,
         adaln_zero: bool = False,
+        use_te: bool = True,
     ):
         super().__init__(
             dim=dim,
@@ -607,9 +645,10 @@ class LocalTokenCrossAttentionBlock(_LocalVectorAttentionBlock):
             conditioning_dim=conditioning_dim,
             adaln_zero=adaln_zero,
             num_cond_chunks=5,
+            use_te=use_te,
         )
-        self.norm_q = LayerNorm(self.dim)
-        self.norm_kv = LayerNorm(self.dim)
+        self.norm_q = LayerNorm(self.dim) if use_te else nn.LayerNorm(self.dim)
+        self.norm_kv = LayerNorm(self.dim) if use_te else nn.LayerNorm(self.dim)
 
     def forward(
         self,
@@ -621,6 +660,7 @@ class LocalTokenCrossAttentionBlock(_LocalVectorAttentionBlock):
         context_cond: Float[torch.Tensor, "*batch cond_dim"] | None = None,
         query_batch_ids: Int[torch.Tensor, "nq"] | None = None,  # noqa: F821
         context_batch_ids: Int[torch.Tensor, "nc"] | None = None,  # noqa: F821
+        precomputed_idx: Int[torch.Tensor, "nq k_wide"] | None = None,  # noqa: F821
     ) -> Float[torch.Tensor, "nq dim"]:
         if not torch.compiler.is_compiling():
             if query_features.ndim != 2 or query_features.shape[1] != self.dim:
@@ -685,12 +725,19 @@ class LocalTokenCrossAttentionBlock(_LocalVectorAttentionBlock):
                     kv_source = kv_source.mean(dim=0, keepdim=True)
             kv_shift, kv_scale = self.conditioning(kv_source).chunk(5, dim=-1)[2:4]
             kv_in = kv_in * (1.0 + kv_scale) + kv_shift
-        idx = _dilated_knn(
-            query_coords=query_coords,
-            key_coords=context_coords,
-            k=min(self.neighbor_k, int(context_coords.shape[0])),
-            dilation=1,
-        )
+        if precomputed_idx is None:
+            idx = _dilated_knn(
+                query_coords=query_coords,
+                key_coords=context_coords,
+                k=min(self.neighbor_k, int(context_coords.shape[0])),
+                dilation=1,
+            )
+        else:
+            idx = _dilate_precomputed_idx(
+                precomputed_idx,
+                k=min(self.neighbor_k, int(context_coords.shape[0])),
+                dilation=1,
+            )
         neighbor_mask = None
         if query_batch_ids is not None and context_batch_ids is not None:
             gathered_batch_ids = _gather_rows(

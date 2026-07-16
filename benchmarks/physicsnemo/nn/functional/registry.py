@@ -21,9 +21,15 @@ from physicsnemo.nn.functional.derivatives import (
     MeshGreenGaussGradient,
     MeshlessFDDerivatives,
     MeshLSQGradient,
+    RectilinearGridCurl,
+    RectilinearGridDivergence,
     RectilinearGridGradient,
+    RectilinearGridLaplacian,
     SpectralGridGradient,
+    UniformGridCurl,
+    UniformGridDivergence,
     UniformGridGradient,
+    UniformGridLaplacian,
 )
 from physicsnemo.nn.functional.fourier_spectral import (
     IRFFT,
@@ -35,7 +41,12 @@ from physicsnemo.nn.functional.fourier_spectral import (
     ViewAsComplex,
 )
 from physicsnemo.nn.functional.geometry import (
+    DisplacePoints,
     FarthestPointSampling,
+    MeshPoissonDiskSample,
+    MeshToVoxelFraction,
+    MorphPoints,
+    RayMeshIntersect,
     SignedDistanceField,
 )
 from physicsnemo.nn.functional.interpolation import (
@@ -59,13 +70,24 @@ FUNCTIONAL_SPECS: tuple[type[FunctionSpec], ...] = (
     RadiusSearch,
     # Derivatives.
     UniformGridGradient,
+    RectilinearGridDivergence,
+    RectilinearGridCurl,
+    RectilinearGridLaplacian,
     RectilinearGridGradient,
     MeshLSQGradient,
     MeshGreenGaussGradient,
     SpectralGridGradient,
     MeshlessFDDerivatives,
+    UniformGridDivergence,
+    UniformGridCurl,
+    UniformGridLaplacian,
     # Geometry.
+    DisplacePoints,
+    MorphPoints,
     FarthestPointSampling,
+    MeshPoissonDiskSample,
+    MeshToVoxelFraction,
+    RayMeshIntersect,
     SignedDistanceField,
     # Interpolation.
     GridToPointInterpolation,

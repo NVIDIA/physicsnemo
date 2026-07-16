@@ -88,7 +88,6 @@ def _freestream_td() -> TensorDict:
             "rho_inf": torch.tensor(1.225),
             "p_inf": torch.tensor(101325.0),
         },
-        batch_size=[],
     )
 
 

@@ -218,6 +218,10 @@ class TrainingConfig:
 
     loss: LossConfig = Field(default=LossConfig())
 
+    channel_loss_weights: dict[str, float] | None = (
+        None  # per-channel loss weights by state channel name; unlisted channels default to 1.0
+    )
+
 
 @dataclass(config={"extra": "allow"})
 class DatasetConfig:

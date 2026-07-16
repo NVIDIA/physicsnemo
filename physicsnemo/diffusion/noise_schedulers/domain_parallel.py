@@ -283,14 +283,20 @@ class DomainParallelNoiseScheduler(NoiseScheduler):
         alpha_t = self._inner.alpha(t_bc)
         sigma_t = self._inner.sigma(t_bc)
 
-        if not isinstance(alpha_t, DTensor):
-            alpha_t = DTensor.from_local(
-                alpha_t, device_mesh=mesh, placements=[Replicate()]
-            )
-        if not isinstance(sigma_t, DTensor):
-            sigma_t = DTensor.from_local(
-                sigma_t, device_mesh=mesh, placements=[Replicate()]
-            )
+        # Only pre-wrap the scalar coefficients into replicated DTensors for a
+        # genuine (non-Shard) DTensor x0. A ShardTensor subclasses torch.Tensor
+        # (not DTensor), so it never matches this check; its dispatch path
+        # auto-promotes plain operands to replicated tensors on its mesh, so
+        # leaving alpha_t/sigma_t plain avoids over-wrapping them.
+        if isinstance(x0, DTensor):
+            if not isinstance(alpha_t, DTensor):
+                alpha_t = DTensor.from_local(
+                    alpha_t, device_mesh=mesh, placements=[Replicate()]
+                )
+            if not isinstance(sigma_t, DTensor):
+                sigma_t = DTensor.from_local(
+                    sigma_t, device_mesh=mesh, placements=[Replicate()]
+                )
 
         noise = torch.randn_like(x0)
         return alpha_t * x0 + sigma_t * noise
