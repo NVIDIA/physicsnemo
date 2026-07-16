@@ -21,7 +21,7 @@ batch_size: 1
 eval_batch_size: 1
 max_eval_batches: 4
 precision: bf16
-save_every_epochs: 50
+save_every_epochs: 10
 
 # Per-step progress logging cadence (batches). Emits a GeoTransolver-style
 # line every `log_every` batches. `max_train_batches: null` uses the full
