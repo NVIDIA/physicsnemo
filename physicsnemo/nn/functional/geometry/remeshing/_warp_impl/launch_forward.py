@@ -38,6 +38,8 @@ from ._kernels import (
 
 wp.init()
 
+_WEIGHTED_SAMPLE_CHUNK_SIZE = 1 << 22
+
 
 def _wp_view(tensor: torch.Tensor, dtype):  # noqa: ANN001, ANN202
     """Return a zero-copy Warp launch descriptor for a detached tensor."""
@@ -49,6 +51,47 @@ def _wp_view(tensor: torch.Tensor, dtype):  # noqa: ANN001, ANN202
     )
 
 
+def _weighted_sample_without_replacement(
+    weights: torch.Tensor,
+    count: int,
+) -> torch.Tensor:
+    """Sample indices by an uncapped, chunked exponential race.
+
+    Each chunk contributes its local ``count`` smallest keys. The global
+    ``count`` smallest keys must be in that union, so the chunking reduces
+    temporary memory without changing the weighted-without-replacement draw.
+    """
+    if count == weights.shape[0]:
+        return torch.arange(weights.shape[0], device=weights.device)
+
+    generator = torch.Generator(device=weights.device).manual_seed(0)
+    candidate_keys = []
+    candidate_indices = []
+    tiny = torch.finfo(weights.dtype).tiny
+    for start in range(0, weights.shape[0], _WEIGHTED_SAMPLE_CHUNK_SIZE):
+        stop = min(start + _WEIGHTED_SAMPLE_CHUNK_SIZE, weights.shape[0])
+        chunk_weights = weights[start:stop].clamp_min(tiny)
+        keys = torch.empty_like(chunk_weights).exponential_(generator=generator)
+        keys.div_(chunk_weights)
+        local_count = min(count, stop - start)
+        local_keys, local_indices = torch.topk(
+            keys,
+            local_count,
+            largest=False,
+            sorted=False,
+        )
+        candidate_keys.append(local_keys)
+        candidate_indices.append(local_indices + start)
+
+    if len(candidate_keys) == 1:
+        return candidate_indices[0]
+
+    keys = torch.cat(candidate_keys)
+    indices = torch.cat(candidate_indices)
+    selected = torch.topk(keys, count, largest=False, sorted=False).indices
+    return indices[selected]
+
+
 def _select_fps_centroids(
     points: torch.Tensor,
     vertex_areas: torch.Tensor,
@@ -57,15 +100,9 @@ def _select_fps_centroids(
 ) -> torch.Tensor:
     """Select high-quality seeds with FPS over an area-weighted candidate set."""
     candidate_count = min(points.shape[0], farthest_point_oversampling * n_clusters)
-    generator = torch.Generator(device=points.device).manual_seed(0)
-    # A tiny positive floor keeps isolated input vertices selectable only when
-    # the requested candidate count leaves no alternative.
-    sampling_weights = vertex_areas.clamp_min(torch.finfo(torch.float32).tiny)
-    candidate_indices = torch.multinomial(
-        sampling_weights,
+    candidate_indices = _weighted_sample_without_replacement(
+        vertex_areas,
         candidate_count,
-        replacement=False,
-        generator=generator,
     )
     candidates = points[candidate_indices]
     selected = farthest_point_sampling(
@@ -81,7 +118,6 @@ def _voxel_representatives(
     lower_bound: torch.Tensor,
     upper_bound: torch.Tensor,
     cell_width: float,
-    max_extent: float,
 ) -> torch.Tensor:
     """Return one source vertex index from each occupied spatial voxel."""
     coordinates = torch.floor((points - lower_bound) / cell_width)
@@ -90,7 +126,8 @@ def _voxel_representatives(
     # than a row-wise unique for ordinary voxel widths. Very small user-provided
     # widths can exceed that key space, so retain the exact float coordinates
     # for a safe fallback instead of allowing integer overflow and collisions.
-    max_dimension = math.floor(max_extent / cell_width) + 1
+    # Point normalization bounds every coordinate to [-1, 1].
+    max_dimension = math.floor(2.0 / cell_width) + 1
     if max_dimension**3 <= torch.iinfo(torch.int64).max:
         dimensions = (
             torch.floor((upper_bound - lower_bound) / cell_width).to(torch.int64) + 1
@@ -130,7 +167,6 @@ def _select_stratified_centroids(
     voxel_width_scale: float,
     lower_bound: torch.Tensor,
     upper_bound: torch.Tensor,
-    max_extent: float,
 ) -> torch.Tensor:
     """Select large seed sets with an O(N log N) spatial stratification.
 
@@ -147,27 +183,26 @@ def _select_stratified_centroids(
         lower_bound,
         upper_bound,
         cell_width,
-        max_extent,
     )
-    generator = torch.Generator(device=points.device).manual_seed(0)
-
     if representatives.numel() > n_clusters:
+        generator = torch.Generator(device=points.device).manual_seed(0)
         selection = torch.randperm(
             representatives.numel(), device=points.device, generator=generator
         )[:n_clusters]
         representatives = representatives[selection]
     elif representatives.numel() < n_clusters:
         # Fill sparse voxelizations from vertices not already selected. The
-        # positive floor also covers isolated vertices in malformed-but-safe
-        # inputs without ever sampling a representative twice.
-        sampling_weights = vertex_areas.clamp_min(torch.finfo(torch.float32).tiny)
-        sampling_weights[representatives] = 0.0
-        fill = torch.multinomial(
-            sampling_weights,
-            n_clusters - representatives.numel(),
-            replacement=False,
-            generator=generator,
-        )
+        # explicit remaining set keeps representatives excluded even when
+        # isolated vertices have zero area.
+        available = torch.ones(points.shape[0], dtype=torch.bool, device=points.device)
+        available[representatives] = False
+        remaining = torch.nonzero(available, as_tuple=False).flatten()
+        fill = remaining[
+            _weighted_sample_without_replacement(
+                vertex_areas[remaining],
+                n_clusters - representatives.numel(),
+            )
+        ]
         representatives = torch.cat([representatives, fill])
     return points[representatives].clone()
 
@@ -365,7 +400,6 @@ def _normalize_points_for_warp(
     torch.Tensor,
     torch.Tensor,
     torch.Tensor,
-    float,
 ]:
     """Center and scale coordinates before float32 Warp computation."""
     working_dtype = torch.float64 if points.dtype == torch.float64 else torch.float32
@@ -391,7 +425,6 @@ def _normalize_points_for_warp(
         safe_scale,
         normalized_lower,
         normalized_upper,
-        2.0,
     )
 
 
@@ -414,7 +447,6 @@ def launch_remeshing(
         normalization_scale,
         lower_bound,
         upper_bound,
-        max_extent,
     ) = _normalize_points_for_warp(mesh_vertices)
     cells = mesh_indices.detach().to(dtype=torch.int32).contiguous()
     flat_cells = cells.reshape(-1).contiguous()
@@ -455,7 +487,6 @@ def launch_remeshing(
             voxel_width_scale,
             lower_bound,
             upper_bound,
-            max_extent,
         )
 
     labels = torch.empty(n_points, dtype=torch.int32, device=points.device)

@@ -422,8 +422,12 @@ coarse = mesh.remesh(n_clusters=1_000)
 # Move the mesh to CUDA first to accelerate large inputs.
 coarse_cuda = mesh.to("cuda").remesh(n_clusters=1_000)
 
-# Warp tuning values are runtime controls and do not recompile the kernels.
-tuned = mesh.remesh(
+# Backend tuning is available through the advanced tensor functional.
+from physicsnemo.nn.functional.geometry.remeshing import remeshing
+
+tuned_points, tuned_cells = remeshing(
+    mesh.points,
+    mesh.cells,
     n_clusters=1_000,
     search_radius_scale=2.0,
 )

@@ -27,14 +27,13 @@ def project_centroids_to_surface(
 ):
     """Project centroids to their closest points on the source surface."""
     centroid_index = wp.tid()
-    query = wp.mesh_query_point_sign_normal(
+    query = wp.mesh_query_point_no_sign(
         mesh_id, centroids[centroid_index], max_distance
     )
     if query.result:
-        mesh = wp.mesh_get(mesh_id)
-        p0 = mesh.points[mesh.indices[3 * query.face + 0]]
-        p1 = mesh.points[mesh.indices[3 * query.face + 1]]
-        p2 = mesh.points[mesh.indices[3 * query.face + 2]]
-        centroids[centroid_index] = (
-            query.u * p0 + query.v * p1 + (float(1.0) - query.u - query.v) * p2
+        centroids[centroid_index] = wp.mesh_eval_position(
+            mesh_id,
+            query.face,
+            query.u,
+            query.v,
         )

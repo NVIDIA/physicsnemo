@@ -38,8 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rectilinear_grid_laplacian` to `physicsnemo.nn.functional`, with Torch and
   fused Warp implementations for periodic, nonuniform rectilinear grids.
 - Adds uniform triangle-surface remeshing with NVIDIA Warp on CPU and CUDA,
-  including `remesh`, `Mesh.remesh`, topology cleanup, and direct keyword
-  controls for runtime tuning.
+  including `remesh`, `Mesh.remesh`, topology cleanup, and advanced
+  tensor-level controls for runtime tuning.
 - Adds coverage reporting on PRs — an informational `Coverage %` check plus a
   ready-to-enable Codecov integration.
 - Adds differentiable mesh morphing: Torch-backed dense ``displace_points`` /
@@ -358,6 +358,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Dependencies
 
+- Removes `pyacvd` from the `mesh-extras` optional dependencies; remeshing now
+  uses NVIDIA Warp.
 - Updates the minimum supported `warp-lang` version to 1.14.0.
 
 ## [2.1.0] - 2026-05-26

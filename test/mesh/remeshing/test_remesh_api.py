@@ -32,49 +32,23 @@ def test_remesh_public_signatures():
         "mesh",
         "n_clusters",
         "max_iterations",
-        "search_radius_scale",
-        "voxel_width_scale",
-        "hash_grid_resolution",
-        "farthest_point_threshold",
-        "farthest_point_oversampling",
     )
     mesh_remesh_signature = inspect.signature(Mesh.remesh)
     assert tuple(mesh_remesh_signature.parameters) == (
         "self",
         "n_clusters",
         "max_iterations",
-        "search_radius_scale",
-        "voxel_width_scale",
-        "hash_grid_resolution",
-        "farthest_point_threshold",
-        "farthest_point_oversampling",
     )
     assert remesh_signature.parameters["max_iterations"].default == 4
     assert mesh_remesh_signature.parameters["max_iterations"].default == 4
 
 
-def test_remesh_rejects_invalid_tuning_type_on_cpu():
-    source = sphere_icosahedral.load(subdivisions=2)
-
-    with pytest.raises(TypeError, match="hash_grid_resolution must be an integer"):
-        remesh(
-            source,
-            48,
-            hash_grid_resolution=64.0,
-        )
-
-
-@pytest.mark.parametrize(
-    "kwargs",
-    [{}, {"farthest_point_threshold": 0}],
-)
-def test_remesh_runs_on_cpu(kwargs):
+def test_remesh_runs_on_cpu():
     source = sphere_icosahedral.load(subdivisions=2)
     output = remesh(
         source,
         48,
         max_iterations=1,
-        **kwargs,
     )
 
     assert 3 <= output.n_points <= 48
@@ -94,6 +68,17 @@ def test_mesh_remesh_runs_on_cpu():
 
     assert 3 <= output.n_points <= 24
     assert output.points.device.type == "cpu"
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_remesh_preserves_reduced_precision(dtype):
+    source = sphere_icosahedral.load(subdivisions=1).to(dtype)
+
+    output = remesh(source, 24, max_iterations=1)
+
+    assert output.points.dtype == dtype
+    assert torch.isfinite(output.points).all()
+    assert output.validate(check_manifoldness=True)["valid"]
 
 
 def test_cpu_remesh_rejects_unsafe_geometry():

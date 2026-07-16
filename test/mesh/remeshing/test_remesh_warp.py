@@ -23,6 +23,7 @@ from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.boundaries import is_watertight
 from physicsnemo.mesh.primitives.surfaces import plane, sphere_icosahedral, torus
 from physicsnemo.mesh.remeshing import remesh
+from physicsnemo.nn.functional.geometry.remeshing import remeshing
 
 pytestmark = pytest.mark.cuda
 
@@ -220,11 +221,14 @@ def test_warp_remesh_preserves_valid_thin_faces():
 def test_warp_remesh_accepts_custom_tuning(kwargs):
     source = sphere_icosahedral.load(subdivisions=2, device="cuda")
 
-    output = source.remesh(
+    points, cells = remeshing(
+        source.points,
+        source.cells,
         48,
         max_iterations=1,
         **kwargs,
     )
+    output = Mesh(points=points, cells=cells)
 
     assert output.points.device.type == "cuda"
     _assert_clean_topology(output)

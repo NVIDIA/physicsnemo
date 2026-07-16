@@ -3501,11 +3501,6 @@ class Mesh:
         n_clusters: builtins.int,
         *,
         max_iterations: builtins.int = 4,
-        search_radius_scale: builtins.float = 1.6,
-        voxel_width_scale: builtins.float = 1.15,
-        hash_grid_resolution: builtins.int = 128,
-        farthest_point_threshold: builtins.int = 256,
-        farthest_point_oversampling: builtins.int = 4,
     ) -> "Mesh":
         """Uniformly remesh a triangle surface using Warp on CPU or CUDA.
 
@@ -3520,22 +3515,6 @@ class Mesh:
         max_iterations : int, optional
             Maximum centroid-relaxation iterations. Default is ``4``. Values
             must be non-negative.
-        search_radius_scale : float, optional
-            Hash-grid query radius relative to
-            ``sqrt(surface_area / n_clusters)``. Default is ``1.6``.
-        voxel_width_scale : float, optional
-            Spatial-stratification voxel width relative to
-            ``sqrt(surface_area / n_clusters)``. Default is ``1.15``.
-        hash_grid_resolution : int, optional
-            Resolution of each axis of the sparse centroid hash grid. Must be
-            at most ``256``. Default is ``128``.
-        farthest_point_threshold : int, optional
-            Use farthest-point initialization when ``n_clusters`` is at most
-            this value. Set to ``0`` to always use voxel initialization.
-            Default is ``256``.
-        farthest_point_oversampling : int, optional
-            Area-weighted farthest-point candidate-pool size as a multiple of
-            ``n_clusters``. Default is ``4``.
 
         Returns
         -------
@@ -3561,7 +3540,9 @@ class Mesh:
         -----
         Remeshing is non-differentiable. Global data is preserved, while point
         and cell data are discarded because their associations no longer match
-        the reconstructed topology.
+        the reconstructed topology. Backend-specific tuning is available from
+        the advanced tensor-level
+        :func:`physicsnemo.nn.functional.geometry.remeshing.remeshing` API.
         """
         from physicsnemo.mesh.remeshing import remesh
 
@@ -3569,11 +3550,6 @@ class Mesh:
             self,
             n_clusters,
             max_iterations=max_iterations,
-            search_radius_scale=search_radius_scale,
-            voxel_width_scale=voxel_width_scale,
-            hash_grid_resolution=hash_grid_resolution,
-            farthest_point_threshold=farthest_point_threshold,
-            farthest_point_oversampling=farthest_point_oversampling,
         )
 
     def subdivide(

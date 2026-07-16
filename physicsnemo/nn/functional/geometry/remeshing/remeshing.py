@@ -33,6 +33,8 @@ _INTEGER_DTYPES = {
     torch.int64,
     torch.uint8,
 }
+# Warp allocates two int32 arrays with ``resolution**3`` entries; 256**3
+# bounds their combined storage to 128 MiB before point storage.
 _MAX_HASH_GRID_RESOLUTION = 256
 _MAX_FINITE_FLOAT = sys.float_info.max
 
@@ -207,8 +209,9 @@ class Remeshing(FunctionSpec):
         Spatial-stratification voxel width relative to
         ``sqrt(surface_area / n_clusters)``. Default is ``1.15``.
     hash_grid_resolution : int, optional
-        Resolution of each axis of the sparse centroid hash grid. Must be at
-        most ``256``. Default is ``128``.
+        Resolution of each axis of the centroid hash grid. Must be at most
+        ``256``, which bounds its two dense cell-offset arrays to 128 MiB.
+        Default is ``128``.
     farthest_point_threshold : int, optional
         Use farthest-point initialization when ``n_clusters`` is at most this
         value. Set to ``0`` to always use voxel initialization. Default is
@@ -243,7 +246,11 @@ class Remeshing(FunctionSpec):
     -----
     Remeshing is intentionally non-differentiable. Warp computes in centered
     and scaled coordinates in float32, then restores the input vertex dtype and
-    coordinate frame.
+    coordinate frame. Centroid sampling uses a fixed random seed, although
+    floating-point atomics can still introduce small run-to-run differences.
+    Spatial clustering can weld sheets or thin features separated by less than
+    the mean cluster spacing. Projection can also map distinct centroids to the
+    same surface position; output vertices are not welded by position.
     """
 
     _BENCHMARK_CASES = (

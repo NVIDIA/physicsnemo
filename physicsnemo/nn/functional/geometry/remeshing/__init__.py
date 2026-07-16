@@ -14,11 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Internal tensor implementation for the public Mesh remeshing API.
+"""Advanced tensor-level surface-remeshing API.
 
 This package is intentionally not re-exported from ``physicsnemo.nn.functional``.
-Unlike ordinary functionals, remeshing changes mesh topology and its supported
-public contract is :mod:`physicsnemo.mesh.remeshing`.
+Most users should use :mod:`physicsnemo.mesh.remeshing`. The tensor functional
+also exposes backend-specific tuning parameters that may change as the
+implementation evolves.
 """
 
 from .remeshing import Remeshing, remeshing

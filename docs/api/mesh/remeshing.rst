@@ -15,8 +15,8 @@ CPU and CUDA example
 
 The output remains on the input device. The example below selects CUDA when it
 is available and otherwise runs on CPU. The equivalent
-:meth:`~physicsnemo.mesh.Mesh.remesh` convenience method accepts the same
-arguments:
+:meth:`~physicsnemo.mesh.Mesh.remesh` convenience method accepts
+``n_clusters`` and ``max_iterations``:
 
 .. code:: python
 
@@ -35,13 +35,18 @@ arguments:
 Warp tuning
 -----------
 
-Advanced users can tune the search and initialization policy without changing
-the remeshing kernels:
+Advanced users can tune the backend search and initialization policy through
+the tensor functional. These backend-specific parameters may change as the
+implementation evolves:
 
 .. code:: python
 
-   tuned = dense.remesh(
-       4_096,
+   from physicsnemo.nn.functional.geometry.remeshing import remeshing
+
+   tuned_points, tuned_cells = remeshing(
+       dense.points,
+       dense.cells,
+       n_clusters=4_096,
        search_radius_scale=2.0,
        voxel_width_scale=1.0,
        hash_grid_resolution=192,
@@ -96,10 +101,14 @@ Behavior and limitations
   geometry before computing in ``float32``, then restores the input coordinate
   frame and point dtype on return.
 * Warp floating-point atomics can introduce small run-to-run differences in
-  vertex positions and, near assignment ties, topology. Do not rely on bitwise
-  reproducibility.
-* Because Warp clusters by spatial distance rather than mesh connectivity,
-  extremely close disconnected sheets can share a cluster.
+  vertex positions and, near assignment ties, topology, even though centroid
+  sampling uses a fixed random seed. Do not rely on bitwise reproducibility.
+* Because clustering uses spatial distance rather than mesh connectivity,
+  sheets or thin features separated by less than the mean cluster spacing can
+  be assigned to a common cluster and welded together.
+* Projection can map distinct cluster centroids to the same surface position.
+  Output vertices are compacted by connectivity but are not welded by
+  position.
 * The optional ``max_iterations`` argument defaults to four centroid updates.
 
 API reference

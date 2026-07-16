@@ -23,15 +23,21 @@ from typing import Literal, get_type_hints
 
 import pytest
 import torch
+import warp as wp
 
+import physicsnemo.nn.functional.geometry.remeshing._warp_impl.launch_forward as launch_forward
 from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
 from physicsnemo.nn.functional.geometry.remeshing import (
     Remeshing,
     remeshing,
 )
+from physicsnemo.nn.functional.geometry.remeshing._warp_impl._kernels import (
+    assign_vertices,
+)
 from physicsnemo.nn.functional.geometry.remeshing._warp_impl.launch_forward import (
     _remove_nonmanifold_faces,
     _voxel_representatives,
+    _weighted_sample_without_replacement,
 )
 
 
@@ -210,6 +216,54 @@ def test_remeshing_cpu_custom_op_contract():
     )
 
 
+def test_weighted_sampling_avoids_torch_category_limit(monkeypatch):
+    def reject_multinomial(*args, **kwargs):
+        raise AssertionError("torch.multinomial must not be used")
+
+    monkeypatch.setattr(torch, "multinomial", reject_multinomial)
+    monkeypatch.setattr(launch_forward, "_WEIGHTED_SAMPLE_CHUNK_SIZE", 2)
+    weights = torch.tensor([1.0, 0.0, 4.0, 2.0, 3.0])
+
+    first = _weighted_sample_without_replacement(weights, 3)
+    second = _weighted_sample_without_replacement(weights, 3)
+
+    torch.testing.assert_close(first, second)
+    assert torch.unique(first).numel() == 3
+    assert 1 not in first
+
+
+def test_assign_vertices_brute_force_fallback():
+    points = torch.tensor([[0.0, 0.0, 0.0], [0.8, 0.0, 0.0], [10.0, 0.0, 0.0]])
+    centroids = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+    vertex_areas = torch.ones(3)
+    labels = torch.empty(3, dtype=torch.int32)
+    centroid_sums = torch.zeros(2, 3)
+    centroid_areas = torch.zeros(2)
+    search_radius = 1.0e-4
+
+    grid = wp.HashGrid(dim_x=8, dim_y=8, dim_z=8, device="cpu")
+    wp_centroids = wp.from_torch(centroids, dtype=wp.vec3f)
+    grid.build(wp_centroids, radius=search_radius)
+    wp.launch(
+        assign_vertices,
+        dim=points.shape[0],
+        inputs=[
+            grid.id,
+            wp.from_torch(points, dtype=wp.vec3f),
+            wp_centroids,
+            wp.from_torch(vertex_areas, dtype=wp.float32),
+            wp.from_torch(labels, dtype=wp.int32),
+            wp.from_torch(centroid_sums, dtype=wp.float32),
+            wp.from_torch(centroid_areas, dtype=wp.float32),
+            search_radius,
+            0,
+        ],
+        device="cpu",
+    )
+
+    torch.testing.assert_close(labels, torch.tensor([0, 1, 1], dtype=torch.int32))
+
+
 @pytest.mark.cuda
 def test_remeshing_tensor_api_contract():
     source = sphere_icosahedral.load(subdivisions=2, device="cuda")
@@ -277,7 +331,6 @@ def test_voxel_representatives_avoid_packed_key_overflow():
         points.amin(dim=0),
         points.amax(dim=0),
         torch.finfo(torch.float32).tiny,
-        2.0,
     )
 
     assert representatives.numel() == points.shape[0]

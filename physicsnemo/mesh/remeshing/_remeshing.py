@@ -20,8 +20,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import torch
-
 from physicsnemo.nn.functional.geometry.remeshing import remeshing
 
 if TYPE_CHECKING:
@@ -33,11 +31,6 @@ def remesh(
     n_clusters: int,
     *,
     max_iterations: int = 4,
-    search_radius_scale: float = 1.6,
-    voxel_width_scale: float = 1.15,
-    hash_grid_resolution: int = 128,
-    farthest_point_threshold: int = 256,
-    farthest_point_oversampling: int = 4,
 ) -> Mesh:
     """Uniformly remesh a triangle surface using Warp on CPU or CUDA.
 
@@ -56,22 +49,6 @@ def remesh(
     max_iterations : int, optional
         Maximum centroid-relaxation iterations. Default is ``4``. Values must
         be non-negative.
-    search_radius_scale : float, optional
-        Hash-grid query radius relative to
-        ``sqrt(surface_area / n_clusters)``. Default is ``1.6``.
-    voxel_width_scale : float, optional
-        Spatial-stratification voxel width relative to
-        ``sqrt(surface_area / n_clusters)``. Default is ``1.15``.
-    hash_grid_resolution : int, optional
-        Resolution of each axis of the sparse centroid hash grid. Must be at
-        most ``256``. Default is ``128``.
-    farthest_point_threshold : int, optional
-        Use farthest-point initialization when ``n_clusters`` is at most this
-        value. Set to ``0`` to always use voxel initialization. Default is
-        ``256``.
-    farthest_point_oversampling : int, optional
-        Area-weighted farthest-point candidate-pool size as a multiple of
-        ``n_clusters``. Default is ``4``.
 
     Returns
     -------
@@ -96,38 +73,20 @@ def remesh(
     -----
     Remeshing is intentionally non-differentiable. Warp computes in centered
     and scaled coordinates in float32, then restores the input point dtype and
-    coordinate frame. Because Warp clusters by spatial distance rather than
-    mesh connectivity, very close disconnected sheets can be assigned to a
-    common cluster.
+    coordinate frame. Because clustering uses spatial distance rather than
+    mesh connectivity, sheets or thin features separated by less than the mean
+    cluster spacing can be assigned to a common cluster and welded together.
+    Projection can map distinct cluster centroids to the same surface position;
+    output vertices are compacted by connectivity but are not welded by
+    position. Backend-specific tuning remains available through
+    :func:`physicsnemo.nn.functional.geometry.remeshing.remeshing`; those
+    advanced parameters may change as the implementation evolves.
     """
-    if isinstance(n_clusters, bool) or not isinstance(n_clusters, int):
-        raise TypeError(
-            f"n_clusters must be an integer, got {type(n_clusters).__name__}"
-        )
     if mesh.n_manifold_dims != 2 or mesh.n_spatial_dims != 3:
         raise NotImplementedError(
             "remesh only supports 2D triangle surfaces embedded in 3D; got "
             f"n_manifold_dims={mesh.n_manifold_dims} and "
             f"n_spatial_dims={mesh.n_spatial_dims}"
-        )
-    if n_clusters < 3:
-        raise ValueError(f"n_clusters must be at least 3, got {n_clusters}")
-    if n_clusters > mesh.n_points:
-        raise ValueError(
-            "n_clusters cannot exceed the input point count; got "
-            f"n_clusters={n_clusters} and mesh.n_points={mesh.n_points}"
-        )
-    if isinstance(max_iterations, bool) or not isinstance(max_iterations, int):
-        raise TypeError(
-            f"max_iterations must be an integer, got {type(max_iterations).__name__}"
-        )
-    if max_iterations < 0:
-        raise ValueError(f"max_iterations must be non-negative, got {max_iterations}")
-    if mesh.n_cells == 0:
-        raise ValueError("remesh requires at least one triangle")
-    if not torch.is_floating_point(mesh.points):
-        raise TypeError(
-            f"mesh points must use a floating-point dtype, got {mesh.points.dtype}"
         )
 
     output_points, output_cells = remeshing(
@@ -135,11 +94,6 @@ def remesh(
         mesh.cells,
         n_clusters,
         max_iterations=max_iterations,
-        search_radius_scale=search_radius_scale,
-        voxel_width_scale=voxel_width_scale,
-        hash_grid_resolution=hash_grid_resolution,
-        farthest_point_threshold=farthest_point_threshold,
-        farthest_point_oversampling=farthest_point_oversampling,
     )
 
     from physicsnemo.mesh.mesh import Mesh
