@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Promotes GeoTransolver out of `experimental` to
+  `physicsnemo.models.geotransolver.GeoTransolver`, together with the FLARE
+  model (`physicsnemo.models.flare.FLARE`) and the reusable GALE and FLARE
+  attention layers (`physicsnemo.nn.GALE`, `physicsnemo.nn.GALE_block`,
+  `physicsnemo.nn.FLARE`). The embedded OOD guard is decoupled from the model:
+  wrap a constructed GeoTransolver with
+  `physicsnemo.experimental.guardrails.embedded.GuardedGeoTransolver` (or
+  `attach_ood_guard`) to enable out-of-distribution guarding — the
+  `guard_config` model argument is removed.
 - Adds exact-boundary quality mesh generation to
   `physicsnemo.mesh.tessellation`: `fill_interior` takes a closed
   codimension-one boundary `Mesh` (2D edge loops today; loops in any order
