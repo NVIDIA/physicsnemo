@@ -24,7 +24,7 @@
     
     
       
-        <title>June 2026 - NVIDIA PhysicsNeMo</title>
+        <title>July 2026 - NVIDIA PhysicsNeMo</title>
       
     
     
@@ -65,7 +65,7 @@
       
         <meta  property="og:type"  content="website" >
       
-        <meta  property="og:title"  content="June 2026 - NVIDIA PhysicsNeMo" >
+        <meta  property="og:title"  content="July 2026 - NVIDIA PhysicsNeMo" >
       
         <meta  property="og:description"  content="PhysicsNeMo blog" >
       
@@ -81,7 +81,7 @@
       
         <meta  name="twitter:card"  content="summary_large_image" >
       
-        <meta  name="twitter:title"  content="June 2026 - NVIDIA PhysicsNeMo" >
+        <meta  name="twitter:title"  content="July 2026 - NVIDIA PhysicsNeMo" >
       
         <meta  name="twitter:description"  content="PhysicsNeMo blog" >
       
@@ -108,7 +108,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#june-2026" class="md-skip">
+        <a href="#july-2026" class="md-skip">
           Skip to content
         </a>
       
@@ -142,7 +142,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              June 2026
+              July 2026
             
           </span>
         </div>
@@ -431,7 +431,7 @@
   
   
   <span class="md-ellipsis">
-    June 2026
+    July 2026
     
   </span>
   
@@ -444,7 +444,7 @@
   
   
   <span class="md-ellipsis">
-    June 2026
+    July 2026
     
   </span>
   
@@ -465,6 +465,15 @@
       Table of contents
     </label>
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#a-probabilistic-surrogate-for-kinetic-monte-carlo-simulations" class="md-nav__link">
+    <span class="md-ellipsis">
+      A Probabilistic Surrogate for Kinetic Monte Carlo Simulations
+    </span>
+  </a>
+  
+</li>
       
         <li class="md-nav__item">
   <a href="#introducing-the-physicsnemo-diffusion-module-composable-extensible-generative-modeling-for-physics-ai" class="md-nav__link">
@@ -497,15 +506,6 @@
   <a href="#introducing-physicsnemo-mesh-gpu-accelerated-mesh-processing-for-scientific-ml" class="md-nav__link">
     <span class="md-ellipsis">
       Introducing PhysicsNeMo-Mesh: GPU-Accelerated Mesh Processing for Scientific ML
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#training-ai-physics-models-for-transient-structural-mechanics-simulations-such-as-automotive-crash" class="md-nav__link">
-    <span class="md-ellipsis">
-      Training AI Physics Models for Transient Structural Mechanics Simulations such as Automotive Crash
     </span>
   </a>
   
@@ -716,6 +716,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#a-probabilistic-surrogate-for-kinetic-monte-carlo-simulations" class="md-nav__link">
+    <span class="md-ellipsis">
+      A Probabilistic Surrogate for Kinetic Monte Carlo Simulations
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#introducing-the-physicsnemo-diffusion-module-composable-extensible-generative-modeling-for-physics-ai" class="md-nav__link">
     <span class="md-ellipsis">
       Introducing the PhysicsNeMo Diffusion Module: Composable, Extensible Generative Modeling for Physics-AI
@@ -751,15 +760,6 @@
   
 </li>
       
-        <li class="md-nav__item">
-  <a href="#training-ai-physics-models-for-transient-structural-mechanics-simulations-such-as-automotive-crash" class="md-nav__link">
-    <span class="md-ellipsis">
-      Training AI Physics Models for Transient Structural Mechanics Simulations such as Automotive Crash
-    </span>
-  </a>
-  
-</li>
-      
     </ul>
   
 </nav>
@@ -772,8 +772,56 @@
   <div class="md-content" data-md-component="content">
     <div class="md-content__inner">
       <header class="md-typeset">
-        <h1 id="june-2026">June 2026</h1>
+        <h1 id="july-2026">July 2026</h1>
       </header>
+      
+        <article class="md-post md-post--excerpt">
+  <header class="md-post__header">
+    
+      <nav class="md-post__authors md-typeset">
+        
+          <span class="md-author">
+            <img src="../../../author-images/charlelie_headshot.jpg" alt="Charlelie Laurent">
+          </span>
+        
+      </nav>
+    
+    <div class="md-post__meta md-meta">
+      <ul class="md-meta__list">
+        <li class="md-meta__item">
+          <time datetime="2026-07-15 00:00:00+00:00">July 15, 2026</time></li>
+        
+          <li class="md-meta__item">
+            in
+            
+              <a href="../../category/physicsnemo/" class="md-meta__link">PhysicsNeMo</a></li>
+        
+        
+          
+          <li class="md-meta__item">
+            
+              8 min read
+            
+          </li>
+        
+      </ul>
+      
+    </div>
+  </header>
+  <div class="md-post__content md-typeset">
+    <h2 id="a-probabilistic-surrogate-for-kinetic-monte-carlo-simulations"><a class="toclink" href="../../2026/07/15/physicsnemo-kmc-surrogate/">A Probabilistic Surrogate for Kinetic Monte Carlo Simulations</a></h2>
+<p>Kinetic Monte Carlo (KMC) is a foundational method for simulating systems that evolve through a sequence of discrete, random events. It appears across a wide range of science and engineering simulations: defect and trap generation in semiconductor devices (device reliability and endurance simulations in TCAD), ion transport and degradation in battery materials, catalytic reactions on surfaces, crystal and thin-film growth, and microstructure evolution in metals and alloys. KMC is a highly effective method, but it is computationally expensive, and it has a few characteristics that set it apart from the conventional time-stepping and integration-based solvers on which most deep-learning surrogates are built. The time between events is a random quantity produced by the solver, and the solver is itself stochastic, so the same starting configuration yields a different trajectory on every run.</p>
+<p>The new <a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/kinetic_monte_carlo">kinetic Monte Carlo example</a> in <a href="https://github.com/NVIDIA/physicsnemo">PhysicsNeMo</a> is an end-to-end recipe, from training to trajectory generation, for a probabilistic surrogate that emulates a KMC solver one event at a time. From the current state, it predicts a full probability distribution over the next event, and running it forward repeatedly turns a single starting configuration into an ensemble of plausible trajectories with calibrated uncertainty.</p>
+
+    
+      <nav class="md-post__action">
+        <a href="../../2026/07/15/physicsnemo-kmc-surrogate/">
+          Continue reading
+        </a>
+      </nav>
+    
+  </div>
+</article>
       
         <article class="md-post md-post--excerpt">
   <header class="md-post__header">
@@ -965,53 +1013,6 @@
   </div>
 </article>
       
-        <article class="md-post md-post--excerpt">
-  <header class="md-post__header">
-    
-      <nav class="md-post__authors md-typeset">
-        
-          <span class="md-author">
-            <img src="../../../author-images/mohammad_headshot.png" alt="Mohammad Nabian">
-          </span>
-        
-      </nav>
-    
-    <div class="md-post__meta md-meta">
-      <ul class="md-meta__list">
-        <li class="md-meta__item">
-          <time datetime="2026-03-17 00:00:00+00:00">March 17, 2026</time></li>
-        
-          <li class="md-meta__item">
-            in
-            
-              <a href="../../category/physicsnemo/" class="md-meta__link">PhysicsNeMo</a></li>
-        
-        
-          
-          <li class="md-meta__item">
-            
-              5 min read
-            
-          </li>
-        
-      </ul>
-      
-    </div>
-  </header>
-  <div class="md-post__content md-typeset">
-    <h2 id="training-ai-physics-models-for-transient-structural-mechanics-simulations-such-as-automotive-crash"><a class="toclink" href="../../2026/03/17/structural-mechanics/">Training AI Physics Models for Transient Structural Mechanics Simulations such as Automotive Crash</a></h2>
-<p>Simulating automotive crash is one of the most complex computational workloads in computer-aided engineering (CAE). Crash simulation is a highly non-linear, dynamic event that happens in milliseconds. Therefore automotive crash simulations face significant bottlenecks in both human-driven workflows and raw computational demands. These challenges stem from the need to model highly non-linear, split-second events with extreme accuracy to meet strict regulatory standards (like NHTSA or Euro NCAP).</p>
-
-    
-      <nav class="md-post__action">
-        <a href="../../2026/03/17/structural-mechanics/">
-          Continue reading
-        </a>
-      </nav>
-    
-  </div>
-</article>
-      
       
         
           
@@ -1019,7 +1020,7 @@
 
 
 <nav class="md-pagination">
-  
+  <span class="md-pagination__current">1</span> <a class="md-pagination__link" href="page/2/">2</a>
 </nav>
         
       

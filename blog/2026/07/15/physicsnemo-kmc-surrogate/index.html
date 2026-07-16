@@ -10,13 +10,11 @@
       
       
       
-        <link rel="canonical" href="http://www.example.com/blog/2026/05/29/physicsnemo-cfd/">
+        <link rel="canonical" href="http://www.example.com/blog/2026/07/15/physicsnemo-kmc-surrogate/">
       
       
-        <link rel="prev" href="../../../04/10/earth2-deploy/">
+        <link rel="prev" href="../../../06/11/physicsnemo-diffusion/">
       
-      
-        <link rel="next" href="../../../06/11/physicsnemo-diffusion/">
       
       
       <link rel="icon" href="../../../../../assets/images/favicon.png">
@@ -24,7 +22,7 @@
     
     
       
-        <title>Don’t Yet Trust the Model, Test the Physics - NVIDIA PhysicsNeMo</title>
+        <title>A Probabilistic Surrogate for Kinetic Monte Carlo Simulations - NVIDIA PhysicsNeMo</title>
       
     
     
@@ -65,11 +63,11 @@
       
         <meta  property="og:type"  content="website" >
       
-        <meta  property="og:title"  content="Don’t Yet Trust the Model, Test the Physics - NVIDIA PhysicsNeMo" >
+        <meta  property="og:title"  content="A Probabilistic Surrogate for Kinetic Monte Carlo Simulations - NVIDIA PhysicsNeMo" >
       
         <meta  property="og:description"  content="PhysicsNeMo blog" >
       
-        <meta  property="og:image"  content="http://www.example.com/assets/images/social/blog/posts/physicsnemo_cfd.png" >
+        <meta  property="og:image"  content="http://www.example.com/assets/images/social/blog/posts/physicsnemo_kmc_surrogate.png" >
       
         <meta  property="og:image:type"  content="image/png" >
       
@@ -77,15 +75,15 @@
       
         <meta  property="og:image:height"  content="630" >
       
-        <meta  property="og:url"  content="http://www.example.com/blog/2026/05/29/physicsnemo-cfd/" >
+        <meta  property="og:url"  content="http://www.example.com/blog/2026/07/15/physicsnemo-kmc-surrogate/" >
       
         <meta  name="twitter:card"  content="summary_large_image" >
       
-        <meta  name="twitter:title"  content="Don’t Yet Trust the Model, Test the Physics - NVIDIA PhysicsNeMo" >
+        <meta  name="twitter:title"  content="A Probabilistic Surrogate for Kinetic Monte Carlo Simulations - NVIDIA PhysicsNeMo" >
       
         <meta  name="twitter:description"  content="PhysicsNeMo blog" >
       
-        <meta  name="twitter:image"  content="http://www.example.com/assets/images/social/blog/posts/physicsnemo_cfd.png" >
+        <meta  name="twitter:image"  content="http://www.example.com/assets/images/social/blog/posts/physicsnemo_kmc_surrogate.png" >
       
     
     
@@ -108,7 +106,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#dont-yet-trust-the-model-test-the-physics" class="md-skip">
+        <a href="#a-probabilistic-surrogate-for-kinetic-monte-carlo-simulations" class="md-skip">
           Skip to content
         </a>
       
@@ -142,7 +140,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Don’t Yet Trust the Model, Test the Physics
+              A Probabilistic Surrogate for Kinetic Monte Carlo Simulations
             
           </span>
         </div>
@@ -629,19 +627,37 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#the-consistency-gap" class="md-nav__link">
+  <a href="#kinetic-monte-carlo-a-simulator-where-time-is-an-output" class="md-nav__link">
     <span class="md-ellipsis">
-      The Consistency Gap
+      Kinetic Monte Carlo: A Simulator Where Time Is an Output
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="The Consistency Gap">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-probabilistic-surrogate-one-event-at-a-time" class="md-nav__link">
+    <span class="md-ellipsis">
+      A Probabilistic Surrogate, One Event at a Time
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="A Probabilistic Surrogate, One Event at a Time">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#validation-is-important" class="md-nav__link">
+  <a href="#why-geotransolver-and-how-we-adapt-it" class="md-nav__link">
     <span class="md-ellipsis">
-      Validation is important
+      Why GeoTransolver, and How We Adapt It
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#results" class="md-nav__link">
+    <span class="md-ellipsis">
+      Results
     </span>
   </a>
   
@@ -653,42 +669,9 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#the-expertise-gap" class="md-nav__link">
+  <a href="#applications-across-science-and-engineering" class="md-nav__link">
     <span class="md-ellipsis">
-      The Expertise Gap
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="The Expertise Gap">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#accessibility-matters" class="md-nav__link">
-    <span class="md-ellipsis">
-      Accessibility Matters
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#path-toward-democratization" class="md-nav__link">
-    <span class="md-ellipsis">
-      Path Toward Democratization
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#introducing-physicsnemo-cfd" class="md-nav__link">
-    <span class="md-ellipsis">
-      Introducing PhysicsNeMo CFD
+      Applications Across Science and Engineering
     </span>
   </a>
   
@@ -698,15 +681,6 @@
   <a href="#getting-started" class="md-nav__link">
     <span class="md-ellipsis">
       Getting Started
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#how-can-you-contribute" class="md-nav__link">
-    <span class="md-ellipsis">
-      How can you contribute?
     </span>
   </a>
   
@@ -741,6 +715,21 @@
                 
                   <div class="md-profile md-post__profile">
                     <span class="md-author md-author--long">
+                      <img src="../../../../../author-images/charlelie_headshot.jpg" alt="Charlelie Laurent">
+                    </span>
+                    <span class="md-profile__description">
+                      <strong>
+                        
+                          Charlelie Laurent
+                        
+                      </strong>
+                      <br>
+                      Senior Scientific Machine Learning Software Engineer - Physics
+                    </span>
+                  </div>
+                
+                  <div class="md-profile md-post__profile">
+                    <span class="md-author md-author--long">
                       <img src="../../../../../author-images/ram_headshot.jpg" alt="Ram Cherukuri">
                     </span>
                     <span class="md-profile__description">
@@ -751,36 +740,6 @@
                       </strong>
                       <br>
                       Senior Product Manager
-                    </span>
-                  </div>
-                
-                  <div class="md-profile md-post__profile">
-                    <span class="md-author md-author--long">
-                      <img src="../../../../../author-images/rishi_headshot.jpeg" alt="Rishi Ranade">
-                    </span>
-                    <span class="md-profile__description">
-                      <strong>
-                        
-                          Rishi Ranade
-                        
-                      </strong>
-                      <br>
-                      Senior Technical Product Manager - Physics AI Models and CAE Blueprints
-                    </span>
-                  </div>
-                
-                  <div class="md-profile md-post__profile">
-                    <span class="md-author md-author--long">
-                      <img src="../../../../../author-images/kaustubh_headshot.jpg" alt="Kaustubh Tangsali">
-                    </span>
-                    <span class="md-profile__description">
-                      <strong>
-                        
-                          Kaustubh Tangsali
-                        
-                      </strong>
-                      <br>
-                      Senior Software Engineer, AI-HPC
                     </span>
                   </div>
                 
@@ -798,16 +757,9 @@
                     <li class="md-nav__item">
                       <div class="md-nav__link">
                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 19H5V8h14m-3-7v2H8V1H6v2H5c-1.11 0-2 .89-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-1V1m-1 11h-5v5h5z"/></svg>
-                        <time datetime="2026-05-29 00:00:00+00:00" class="md-ellipsis">May 29, 2026</time>
+                        <time datetime="2026-07-15 00:00:00+00:00" class="md-ellipsis">July 15, 2026</time>
                       </div>
                     </li>
-                    
-                      <li class="md-nav__item">
-                        <div class="md-nav__link">
-                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M15 13h1.5v2.82l2.44 1.41-.75 1.3L15 16.69zm4-5H5v11h4.67c-.43-.91-.67-1.93-.67-3a7 7 0 0 1 7-7c1.07 0 2.09.24 3 .67zM5 21a2 2 0 0 1-2-2V5c0-1.11.89-2 2-2h1V1h2v2h8V1h2v2h1a2 2 0 0 1 2 2v6.1c1.24 1.26 2 2.99 2 4.9a7 7 0 0 1-7 7c-1.91 0-3.64-.76-4.9-2zm11-9.85A4.85 4.85 0 0 0 11.15 16c0 2.68 2.17 4.85 4.85 4.85A4.85 4.85 0 0 0 20.85 16c0-2.68-2.17-4.85-4.85-4.85"/></svg>
-                          <time datetime="2026-05-29 00:00:00+00:00" class="md-ellipsis">May 29, 2026</time>
-                        </div>
-                      </li>
                     
                     
                       <li class="md-nav__item">
@@ -816,7 +768,7 @@
                           <span class="md-ellipsis">
                             in
                             
-                              <a href="../../../../category/physicsnemo-cfd/">PhysicsNeMo CFD</a></span>
+                              <a href="../../../../category/physicsnemo/">PhysicsNeMo</a></span>
                         </div>
                       </li>
                     
@@ -827,7 +779,7 @@
                           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 20a8 8 0 0 0 8-8 8 8 0 0 0-8-8 8 8 0 0 0-8 8 8 8 0 0 0 8 8m0-18a10 10 0 0 1 10 10 10 10 0 0 1-10 10C6.47 22 2 17.5 2 12A10 10 0 0 1 12 2m.5 5v5.25l4.5 2.67-.75 1.23L11 13V7z"/></svg>
                           <span class="md-ellipsis">
                             
-                              5 min read
+                              8 min read
                             
                           </span>
                         </div>
@@ -953,6 +905,52 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/kinetic_monte_carlo" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Kinetic Monte Carlo recipe
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://docs.nvidia.com/physicsnemo/latest/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PhysicsNeMo documentation
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -981,13 +979,31 @@
       
       
       
-        <a href="../../../../tags/#tag:inference" class="md-tag">Inference</a>
+        <a href="../../../../tags/#tag:blog" class="md-tag">Blog</a>
       
     
       
       
       
-        <a href="../../../../tags/#tag:physicsnemo-cfd" class="md-tag">PhysicsNeMo CFD</a>
+        <a href="../../../../tags/#tag:gpu" class="md-tag">GPU</a>
+      
+    
+      
+      
+      
+        <a href="../../../../tags/#tag:kinetic-monte-carlo" class="md-tag">Kinetic Monte Carlo</a>
+      
+    
+      
+      
+      
+        <a href="../../../../tags/#tag:scientific-computing" class="md-tag">Scientific Computing</a>
+      
+    
+      
+      
+      
+        <a href="../../../../tags/#tag:tcad" class="md-tag">TCAD</a>
       
     
   </nav>
@@ -997,76 +1013,67 @@
   
 
 
-<h1 id="dont-yet-trust-the-model-test-the-physics">Don’t Yet Trust the Model, Test the Physics</h1>
-<p>AI physics models are advancing quickly and are beginning to prove their value in enterprise engineering workflows. But a critical bottleneck remains: rigorous, repeatable evaluation. Comparing a new model against the current state of the art still too often means stitching together datasets, metrics, scripts, and baselines by hand. That keeps evaluation behind a skill curtain and slows down both model development and domain expert adoption. To push the state of the art forward at the speed of light, we need to make evaluation easier for the people who understand the physics, the data, and the edge cases best. Their feedback will enable the AI researchers to surgically operate and build new bleeding edge models. This blog highlights the new and improved <a href="https://github.com/NVIDIA/physicsnemo-cfd/tree/main">PhysicsNeMo CFD module</a> to address the current gaps and strengthen this loop between model developers and model evaluators.</p>
+<h1 id="a-probabilistic-surrogate-for-kinetic-monte-carlo-simulations">A Probabilistic Surrogate for Kinetic Monte Carlo Simulations</h1>
+<p>Kinetic Monte Carlo (KMC) is a foundational method for simulating systems that evolve through a sequence of discrete, random events. It appears across a wide range of science and engineering simulations: defect and trap generation in semiconductor devices (device reliability and endurance simulations in TCAD), ion transport and degradation in battery materials, catalytic reactions on surfaces, crystal and thin-film growth, and microstructure evolution in metals and alloys. KMC is a highly effective method, but it is computationally expensive, and it has a few characteristics that set it apart from the conventional time-stepping and integration-based solvers on which most deep-learning surrogates are built. The time between events is a random quantity produced by the solver, and the solver is itself stochastic, so the same starting configuration yields a different trajectory on every run.</p>
+<p>The new <a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/kinetic_monte_carlo">kinetic Monte Carlo example</a> in <a href="https://github.com/NVIDIA/physicsnemo">PhysicsNeMo</a> is an end-to-end recipe, from training to trajectory generation, for a probabilistic surrogate that emulates a KMC solver one event at a time. From the current state, it predicts a full probability distribution over the next event, and running it forward repeatedly turns a single starting configuration into an ensemble of plausible trajectories with calibrated uncertainty.</p>
 <!-- more -->
 
-<p><a href="../../../../../images/physicsnemo-cfd/continuity-errors.png"><img alt="physicsnemo-cfd-continuity" src="../../../../../images/physicsnemo-cfd/continuity-errors.png" /></a></p>
-<h2 id="the-consistency-gap">The Consistency Gap</h2>
-<p>SciML Researchers building the next generation of AI Physics models need a consistent way to compare against current baselines, but today's evaluation process can be fragmented. Teams often scrape different repositories, reproduce inconsistent setups, and hand-build metric pipelines before they can make an apples-to-apples comparison. The target engineering community has high standards for reliability, physical consistency, and generalization; without transparent benchmarks, domain experts are left in a wait-and-see posture.</p>
-<h3 id="validation-is-important">Validation is important</h3>
+<p><img alt="Ground-truth kinetic Monte Carlo trajectory: defect generation in a 2 nm dielectric" src="../../../../../images/kmc-surrogate/kmc_tcad_groundtruth_rollout.gif" width="100%" />
+<em>Fig 1: A ground-truth KMC trajectory from the example dataset, defect generation in a 2 nm dielectric film. Each event adds one defect (left, colored by ionization energy); the right panel colors each defect by the inter-event delay that preceded it, on a log scale that already spans several orders of magnitude within a single run. This is the kind of stochastic, event-driven process the surrogate learns to emulate.</em></p>
+<h2 id="kinetic-monte-carlo-a-simulator-where-time-is-an-output">Kinetic Monte Carlo: A Simulator Where Time Is an Output</h2>
+<p><a href="https://en.wikipedia.org/wiki/Kinetic_Monte_Carlo">Kinetic Monte Carlo</a> evolves a system through a chain of discrete events. From the current state, the solver enumerates the <span class="arithmatex">\(M\)</span> events that could fire next, each with a rate <span class="arithmatex">\(r_i \ge 0\)</span> (its probability per unit time). It draws one event in proportion to its rate and advances a physical clock by a random inter-event time:</p>
+<div class="arithmatex">\[
+p_i = \frac{r_i}{R}, \qquad R = \sum_{j=1}^{M} r_j, \qquad \Delta t \sim \mathrm{Exponential}(R).
+\]</div>
+<p>Here <span class="arithmatex">\(R\)</span> is the total rate, and the wait until the next event is exponentially distributed with mean <span class="arithmatex">\(1/R\)</span>: the more, and the faster, the available events, the shorter the typical step. Repeating this rule produces a trajectory, a time-ordered sequence of events, each creating, moving, or transforming an entity in the system.</p>
+<p>As anticipated above, two properties set KMC apart from the conventional time-stepping simulations that most surrogates emulate, and both shape the recipe's design:</p>
 <ul>
-<li><strong>Holistic benchmarking</strong>: Metrics should capture physical consistency and engineering relevance, not just pointwise L2 error.</li>
-<li><strong>Consistent benchmarking</strong>: Models should be evaluated on shared datasets, metrics, and reporting formats so comparisons are fair.</li>
-<li><strong>Leaderboards</strong>: A current snapshot of state-of-the-art performance helps guide model development, ablations, and ideation.</li>
+<li><strong>The time step is an output, not a setting.</strong> Most surrogates in computational engineering, a CFD emulator for instance, advance on a fixed, predetermined time grid and predict the field at the next step. KMC has no such grid: the inter-event delay <span class="arithmatex">\(\Delta t\)</span> is drawn by the solver and can vary over many orders of magnitude within a single run (the right panel of Fig 1 shows this directly). A surrogate must therefore predict <em>when</em> the next event occurs, not only <em>what</em> it is.</li>
+<li><strong>The ground truth is stochastic.</strong> Re-running the solver from the same initial state produces a different trajectory every time, so the quantity of interest is a <em>distribution</em> over trajectories, not a single path. A deterministic regression surrogate could, at best, learn the expected next event given the history: it would collapse that distribution onto its mean and discard exactly the variability a KMC study exists to characterize. The surrogate must instead model the full conditional distribution of the next event and generate samples from it.</li>
 </ul>
-<h2 id="the-expertise-gap">The Expertise Gap</h2>
-<p>Evaluating an AI physics surrogate for a CFD use case, such as aerodynamic flow over a vehicle or conjugate heat transfer over a chip, often requires bespoke code and manual data plumbing. That creates a barrier for domain experts: the engineers who have the physical intuition to recognize non-physical behavior that a standard loss function would not capture.</p>
-<h3 id="accessibility-matters">Accessibility Matters</h3>
+<p>KMC is also costly. Reaching a physically meaningful time can require very long event chains, and each event re-evaluates a large set of candidate rates. This makes long-horizon studies and uncertainty quantification expensive, and it is precisely where a fast, probabilistic surrogate helps.</p>
+<h2 id="a-probabilistic-surrogate-one-event-at-a-time">A Probabilistic Surrogate, One Event at a Time</h2>
+<p>In this reference recipe, we train a surrogate to generate each trajectory autoregressively, one event at a time. At step <span class="arithmatex">\(n\)</span>, the surrogate reads the current state <span class="arithmatex">\(\mathcal{S}_n\)</span> and predicts the next event as a joint probability distribution over the inter-event delay <span class="arithmatex">\(\Delta t\)</span> and the new particle's features. The state <span class="arithmatex">\(\mathcal{S}_n\)</span> consists of the particles created so far (each with coordinates <span class="arithmatex">\((x, y, z)\)</span>, a set of scalar features <span class="arithmatex">\(X_p\)</span> such as a defect's ionization energy, and the delay since the previous event), the current time <span class="arithmatex">\(t_n\)</span>, and an optional static background mesh carrying the fields that shape the process (for example a temperature or electric-potential map encoding the boundary and initial conditions). The joint distribution over the next event factorizes as</p>
+<div class="arithmatex">\[
+p(\text{event}_{n+1} \mid \mathcal{S}_n) \;=\; \underbrace{p(\Delta t \mid \mathcal{S}_n)}_{\text{when}}\;\underbrace{p\big(x, y, z, X_p \mid \Delta t, \mathcal{S}_n\big)}_{\text{what}},
+\]</div>
+<p>so the model predicts <em>when</em> the next event occurs, then <em>what</em> it is, conditioned on that realized timing. Feeding each sampled event back in advances the trajectory, and drawing many independent runs from the same initial state produces the ensemble.</p>
+<p>In its most general form, KMC models <em>events</em>: discrete, instantaneous changes in a system's state. An event need not involve a particle, nor even a specific location; it could be an abrupt change in a continuous field. This recipe targets a common and important special case, in which every event is the birth, death, or mutation of a discrete <em>particle</em>. Such particle-based problems are pervasive in science and engineering, from defects forming in a device (a defect behaves like a fictitious particle) to adatoms hopping on a surface or grains nucleating in a solid. In this setting an event and the particle it acts on are inseparable, so we use the two terms together throughout.</p>
+<p>In the reference application, TCAD device reliability, these abstractions take a concrete form. Each particle is a defect. Its predicted features are its position <span class="arithmatex">\((x, y, z)\)</span> and its ionization energy. The background mesh is the device geometry: every mesh point carries, alongside its coordinates, the local temperature and electric potential, the operating conditions under which the defects form.</p>
+<p>Each event is predicted in two stages: the model first predicts the inter-event delay <span class="arithmatex">\(\Delta t\)</span>, then predicts the new particle's features <span class="arithmatex">\((x, y, z, X_p)\)</span> conditioned on that delay. This leaves a choice of which delay to feed the second stage. During training, the recipe uses <em>teacher forcing</em>: the features head is given the ground-truth delay <span class="arithmatex">\(\Delta t^\star\)</span> and fit to <span class="arithmatex">\(p(x, y, z, X_p \mid \Delta t^\star, \mathcal{S}_n)\)</span>. At generation, no ground-truth delay exists, so the features head is conditioned on the model's own sampled delay <span class="arithmatex">\(\widehat{\Delta t} \sim p(\Delta t \mid \mathcal{S}_n)\)</span>, giving <span class="arithmatex">\(p(x, y, z, X_p \mid \widehat{\Delta t}, \mathcal{S}_n)\)</span>. Feeding the model its own sampled delay during training as well, a <em>push-forward</em> scheme, would remove the gap between training and generation; it is a natural extension of the recipe but is not currently implemented.</p>
+<h3 id="why-geotransolver-and-how-we-adapt-it">Why GeoTransolver, and How We Adapt It</h3>
+<p>The surrogate is built on <a href="https://arxiv.org/abs/2512.20399">GeoTransolver</a>, a geometry-aware transformer from the PhysicsNeMo model zoo, designed for predictions on large unstructured meshes. The choice is deliberate. GeoTransolver has demonstrated strong accuracy on complex, highly nonlinear simulations such as external-aerodynamics <a href="../../../05/29/physicsnemo-cfd/">CFD</a> and automotive crash, and it scales to very large meshes. That same scalability carries over here to large particle populations and long event sequences. Being attention-based, it also benefits from the predictable improvement of transformers as training data grows.</p>
+<p>GeoTransolver uses <a href="https://arxiv.org/abs/2508.12594">FLARE</a> attention, which keeps the cost of attention linear rather than quadratic in the number of tokens by routing information through a small set of learned latent queries. This is what lets the model handle large particle populations efficiently. GeoTransolver is originally a deterministic model that operates on a fixed set of mesh points; turning it into a probabilistic generator of a growing sequence of events takes four changes.</p>
+<p><strong>1. Autoregressive conditioning on the history.</strong> GeoTransolver has been made time-dependent once before: a <a href="../../../03/17/structural-mechanics/">previous PhysicsNeMo recipe</a> extended it to transient crash simulation, where a mesh of fixed size deforms over time. A sequence of particle events is fundamentally different: the population grows and changes from one event to the next, and each prediction must depend only on the events that have already occurred. To handle this, the current particle population, the event history so far, is encoded into the model's global context, which every attention block reads. Rolling the model forward one event at a time then generates a full trajectory, making it another member of the GeoTransolver family.</p>
+<p><strong>2. Causal FLARE attention.</strong> The particle population is a set of tokens, padded to a fixed capacity, with a mask marking which tokens are real. Applying that mask inside the FLARE attention, and in the geometric-context projection, makes it causal: a prediction depends only on the particles that already exist. The next event is read out from the first free position after the last particle.</p>
+<p><strong>3. Time conditioning.</strong> The simulation clock steers the network through adaptive layer normalization (<a href="https://arxiv.org/abs/2212.09748">AdaLN-Zero</a>, the conditioning mechanism popularized by diffusion transformers): the current time <span class="arithmatex">\(t_n\)</span> is embedded and used to modulate every block, initialized so the model starts by ignoring it and learns how strongly to rely on it during training. Because times and delays span many orders of magnitude, the embedding is deliberately <em>multi-scale</em>, concatenating (<span class="arithmatex">\(\Vert\)</span>) a linear-scale and a log-scale Fourier embedding <span class="arithmatex">\(\phi\)</span>,</p>
+<div class="arithmatex">\[
+\mathbf{e}(\tau) = \big[\, \phi(\tau)\; \Vert \;\phi(\log \tau) \,\big],
+\]</div>
+<p>so both very short and very long delays remain well resolved by the same network.</p>
+<p><strong>4. Probabilistic heads.</strong> Two lightweight output heads parameterize the two factors of the event distribution above: one models <span class="arithmatex">\(p(\Delta t \mid \mathcal{S}_n)\)</span>, the other <span class="arithmatex">\(p(x, y, z, X_p \mid \Delta t, \mathcal{S}_n)\)</span>. Each is a <a href="https://en.wikipedia.org/wiki/Mixture_model">Gaussian mixture</a> <span class="arithmatex">\(\sum_k \pi_k\,\mathcal{N}(\cdot;\mu_k,\sigma_k^2)\)</span>, and the model is trained by maximizing the likelihood of the ground-truth events. The Gaussian mixture is a deliberate choice: it is expressive enough to capture multi-modal outcomes, yet it keeps the likelihood <em>tractable</em>. It gives a closed-form density, closed-form mean and variance (used for the uncertainty bands below), and direct sampling, with no iterative solver at generation time. The only physical constraint it does not enforce on its own is that <span class="arithmatex">\(\Delta t &gt; 0\)</span>, which is handled at generation by inexpensive rejection sampling.</p>
+<p>Built on PhysicsNeMo, the model trains and runs with the library's standard tooling, including mixed precision, <code>torch.compile</code>, and multi-GPU data parallelism.</p>
+<h3 id="results">Results</h3>
+<p>To test the surrogate, we start it from the initial state of held-out simulations and let it generate an ensemble of trajectories, with no further input from the solver. Across geometries, the ensemble follows the ground-truth statistics closely, and its spread gives a calibrated estimate of the uncertainty.</p>
+<p><img alt="The surrogate ensemble reproduces the ground-truth KMC trajectory" src="../../../../../images/kmc-surrogate/kmc_surrogate_vs_groundtruth.gif" width="100%" />
+<em>Fig 2: A ground-truth trajectory (top left) and one surrogate rollout (top right) for the same 2 nm dielectric. Below, the cumulative defect count and the mean defect energy over time, ground truth versus the surrogate ensemble, with the shaded bands showing the ensemble spread. The surrogate reproduces both the growth of the defect population and the energy statistics, and its ensemble brackets the ground truth with a calibrated uncertainty, all without re-running the underlying solver.</em></p>
+<p>Because a single trained model produces a whole ensemble at negligible cost, quantities that are expensive to estimate with the original solver, the spread of outcomes, the time to reach a given defect count, or the probability of a rare configuration, become cheap to read off directly.</p>
+<h2 id="applications-across-science-and-engineering">Applications Across Science and Engineering</h2>
+<p>The surrogate makes no assumption about the underlying physics; it requires only a sequence of events. It therefore applies wherever kinetic Monte Carlo is used, well beyond the example above:</p>
 <ul>
-<li><strong>Verification of physical consistency</strong>: A model can achieve a low mean squared error (MSE) while still violating important physical constraints. Domain experts need intuitive diagnostics and visualizations that surface those silent failures.</li>
-<li><strong>Stress-testing edge cases</strong>: Domain experts know the breaking points of simulation workflows, from extreme turbulence to unusual operating regimes. Accessible evaluation lets them probe models where failures are most likely.</li>
-<li><strong>Trust and adoption</strong>: For AI to be used in real-world engineering, the black box must be paired with transparent benchmarks that experts can inspect, extend, and discuss in the language of their discipline.</li>
+<li><strong>Semiconductor reliability.</strong> This is the setting shown above. Under electrical and thermal stress, defects gradually accumulate in a device's gate dielectric and eventually trigger dielectric breakdown, which sets the device lifetime. KMC models this degradation one defect at a time, but estimating failure statistics requires many long runs across stress conditions and geometries. The surrogate returns a full ensemble of degradation trajectories at once, making reliability analysis fast enough to inform device design.</li>
+<li><strong>Materials science.</strong> KMC predicts how a microstructure evolves through atomic-scale events such as defect migration, precipitation, and radiation damage. Reaching experimentally relevant timescales requires very long event sequences, and capturing the variability between samples requires many independent runs. The surrogate provides both at low cost. It extends predictions further in time and makes screening across alloy compositions or operating conditions practical.</li>
+<li><strong>Catalysis and surface science.</strong> KMC links the elementary surface steps, adsorption, diffusion, reaction, and desorption, to macroscopic activity and selectivity. These properties emerge only from long stochastic simulations, and each candidate material or operating point requires its own. A fast surrogate lets researchers explore temperature and pressure with quantified uncertainty, and prioritize promising catalysts before committing to full simulations or experiments.</li>
+<li><strong>Crystal growth and thin films.</strong> In epitaxial and thin-film growth, KMC models atomic deposition and surface diffusion to predict film morphology, roughness, and defect density as a function of the growth conditions. Optimizing a deposition recipe means scanning these conditions, each a separate and costly simulation. The surrogate explores the process window quickly and predicts the distribution of morphologies a recipe produces, rather than a single realization.</li>
+<li><strong>Electrochemistry and battery materials.</strong> KMC captures ion transport and interfacial processes such as passivation-layer growth and dendrite formation, which govern capacity, rate performance, and ageing. These span very long timescales and many charge-discharge cycles, making direct simulation of device lifetime impractical. The surrogate emulates the degradation and returns ensembles of ageing trajectories, enabling lifetime prediction with quantified uncertainty and faster screening of electrode and electrolyte chemistries.</li>
+<li><strong>Metallurgy.</strong> KMC models grain growth and grain-boundary migration during annealing and heat treatment, which determine the final microstructure and mechanical properties. Linking a processing schedule to the resulting microstructure typically requires large, long-running simulations. The surrogate predicts the microstructure across many thermal schedules at once, supporting process design and digital twins of heat treatment.</li>
 </ul>
-<h3 id="path-toward-democratization">Path Toward Democratization</h3>
-<p>To bring more experts into the fold, the field needs evaluation workflows that are:</p>
-<ul>
-<li><strong>Representative</strong>: Pretrained models and datasets should cover meaningful CFD use cases so experts can explore realistic behavior quickly.</li>
-<li><strong>Low-code</strong>: Engineers should be able to evaluate models on their own data by writing minimal wrappers and adapters.</li>
-<li><strong>Collaborative</strong>: Open libraries should make it easy to contribute challenge cases, custom metrics, and diagnostics that reveal where current models struggle.</li>
-</ul>
-<p><strong>The Bottom Line</strong>: If we want AI to solve the next generation of physics problems, the referees of these models should not need to overcome barriers to develop AI expertise first. By making evaluation accessible, we turn domain experts from skeptical observers into active architects of more robust AI.</p>
-<h2 id="introducing-physicsnemo-cfd">Introducing PhysicsNeMo CFD</h2>
-<p>PhysicsNeMo CFD is a sub-module of <a href="https://github.com/NVIDIA/physicsnemo/">NVIDIA PhysicsNeMo framework</a> that provides tools for integrating pretrained AI models into engineering and CFD workflows. It includes config-driven workflows for surrogate model evaluation and benchmarking, along with utilities for model wrappers, dataset adapters, metric computation, and postprocessing.</p>
-<p>This makes evaluation simpler for engineers and domain experts: many experiments require only a few YAML configuration changes. Advanced users can extend the same workflow with custom datasets, custom model wrappers, and new metrics while still reporting results through a consistent harness.</p>
-<p>Let's look at GeoTransolver as an example. After installing the module like any other Python package, you can use the benchmarking workflow to evaluate a pretrained GeoTransolver checkpoint on DrivAerML or your own compatible CFD dataset. The workflow reports metrics such as L2 pressure, L2 turbulent viscosity, L2 velocity, and integrated quantities such as drag and lift coefficient errors. For the default volume benchmark, evaluation comes down to running one script with the right configuration file.</p>
-<pre><code class="language-bash"># Volume benchmark
-python main.py --config-name=config_volume
-</code></pre>
-<p>The configuration file is designed to be easy to customize. You can swap the model checkpoint, dataset path, inference domain, or metric list from the built-in wrappers, and advanced users can register their own models, datasets, metrics, and visuals.</p>
-<pre><code class="language-yaml">benchmark:
- ...
-  models:
-    - name: &quot;geotransolver&quot;
-      inference_domain: volume
-      checkpoint: /path/to/checkpoint
-      ...
-  datasets:
-    - name: &quot;drivaerml&quot;
-      root: /path/to/dataset
-     ...
-
-metrics:
-  - l2_pressure
-  - l2_turbulent_viscosity
-  - l2_velocity
-...
-</code></pre>
-<p>To make exploration easier, NVIDIA PhysicsNeMo team has also published pretrained checkpoints on <a href="https://huggingface.co/collections/nvidia/physicsnemo">Hugging Face</a> for model architectures such as GeoTransolver, DoMINO, MeshGraphNet, and FigConvNet. These checkpoints give teams a starting point for reproducing benchmark results before bringing in their own models or data. The figure and the table below show the kind of validation and analysis that domain experts can perform using the benchmarking workflow with a custom model, dataset or custom metrics.</p>
-<p>This is just the beginning. We will continue building PhysicsNeMo CFD to help model builders and domain experts meet on common evaluation ground. A leaderboard can provide a living snapshot of state-of-the-art performance, helping researchers understand where current models excel, where they fail, and what they need to eclipse. Join the conversation on <a href="https://github.com/NVIDIA/physicsnemo-cfd">GitHub</a> by sharing issues, datasets, metrics, models, and challenge cases.</p>
-<p><a href="../../../../../images/physicsnemo-cfd/geotransolver-surface-predictions.gif"><img alt="physicsnemo-cfd-surface-predictions" src="../../../../../images/physicsnemo-cfd/geotransolver-surface-predictions.gif" /></a>
-<em>Fig 1: Figure showing outputs from the benchmarking notebook using the DrivAerML dataset.</em></p>
+<p>The reach extends well beyond materials. The same event-driven, rate-based formulation underlies stochastic chemical kinetics, systems biology, and epidemic dynamics. The recipe applies to any process that evolves as a sequence of random events. It is most useful when the quantity of interest is the full distribution of outcomes, not a single realization.</p>
 <h2 id="getting-started">Getting Started</h2>
-<p>Start with the <a href="https://github.com/NVIDIA/physicsnemo-cfd">PhysicsNeMo CFD GitHub</a> repository. Install the package in your Python environment, or clone the repository if you want to run the example workflows locally. From there, choose the benchmark assets you want to evaluate against and point the YAML configuration to the relevant checkpoint, dataset, and metrics.</p>
-<p>For the GeoTransolver example above, the workflow is intentionally lightweight: run the benchmark script from the benchmarking workflow with the volume configuration, then swap in a different checkpoint, dataset path, or metric list as needed. Advanced users can register custom model wrappers, dataset adapters, metrics, and visuals without rewriting the full harness.</p>
-<p>The output should give both model builders and domain experts a shared readout of model behavior: field-level errors, integrated engineering quantities, physics-aware diagnostics, and visual comparisons that make failure modes easier to inspect.</p>
-<h2 id="how-can-you-contribute">How can you contribute?</h2>
-<p>PhysicsNeMo CFD is intended to grow with the community. Contributions can be as small as a bug report or documentation fix, or as substantial as a new benchmark dataset, model wrapper, metric, visualization, or challenge case.</p>
-<p>If you are building AI physics models, contribute workflows that make your evaluation reproducible. If you are a domain expert, contribute edge cases and diagnostics that reveal failure modes standard loss curves miss. The goal is to make the benchmark harness a shared meeting ground where model builders and engineering experts can test, compare, and improve CFD surrogates together.</p>
-<p>To get involved, open an issue or pull request in the <a href="https://github.com/NVIDIA/physicsnemo-cfd">PhysicsNeMo CFD GitHub</a> repository and share what you are evaluating, what data or metrics matter, and where current models need to improve.</p>
-<p><a class="md-button" href="https://twitter.com/intent/tweet?text=Don%E2%80%99t%20Yet%20Trust%20the%20Model%2C%20Test%20the%20Physics%0A&amp;url=http://www.example.com/blog/2026/05/29/physicsnemo-cfd/">Share on <span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406l-5.8-7.584-6.638 7.584H.474l8.6-9.83L0 1.154h7.594l5.243 6.932ZM17.61 20.644h2.039L6.486 3.24H4.298Z"/></svg></span></a>
-<a class="md-button" href="https://www.facebook.com/sharer/sharer.php?u=http://www.example.com/blog/2026/05/29/physicsnemo-cfd/">Share on <span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.101 23.691v-7.98H6.627v-3.667h2.474v-1.58c0-4.085 1.848-5.978 5.858-5.978.401 0 .955.042 1.468.103a9 9 0 0 1 1.141.195v3.325a9 9 0 0 0-.653-.036 27 27 0 0 0-.733-.009c-.707 0-1.259.096-1.675.309a1.7 1.7 0 0 0-.679.622c-.258.42-.374.995-.374 1.752v1.297h3.919l-.386 2.103-.287 1.564h-3.246v8.245C19.396 23.238 24 18.179 24 12.044c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.628 3.874 10.35 9.101 11.647"/></svg></span></a>
-<a class="md-button" href="https://www.linkedin.com/sharing/share-offsite/?url=http://www.example.com/blog/2026/05/29/physicsnemo-cfd/">Share on LinkedIn</a>
+<p>The <a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/kinetic_monte_carlo">kinetic Monte Carlo example</a> ships with <a href="https://github.com/NVIDIA/physicsnemo">PhysicsNeMo</a> and walks through the data format, dataset statistics, training, and ensemble generation end to end. It joins a growing family of probabilistic and geometry-aware tools in the library, including the <a href="../../../06/11/physicsnemo-diffusion/">PhysicsNeMo diffusion module</a> for generative modeling on scientific data. If you work with a kinetic Monte Carlo or other event-driven simulator and want to study it in distribution, we would love to see what you build. Find us in <a href="https://github.com/NVIDIA/physicsnemo/discussions">PhysicsNeMo GitHub Discussions</a>.</p>
+<p><a class="md-button" href="https://twitter.com/intent/tweet?text=A%20Probabilistic%20Surrogate%20for%20Kinetic%20Monte%20Carlo%20Simulations%0A&amp;url=http://www.example.com/blog/2026/07/15/physicsnemo-kmc-surrogate/">Share on <span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406l-5.8-7.584-6.638 7.584H.474l8.6-9.83L0 1.154h7.594l5.243 6.932ZM17.61 20.644h2.039L6.486 3.24H4.298Z"/></svg></span></a>
+<a class="md-button" href="https://www.facebook.com/sharer/sharer.php?u=http://www.example.com/blog/2026/07/15/physicsnemo-kmc-surrogate/">Share on <span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.101 23.691v-7.98H6.627v-3.667h2.474v-1.58c0-4.085 1.848-5.978 5.858-5.978.401 0 .955.042 1.468.103a9 9 0 0 1 1.141.195v3.325a9 9 0 0 0-.653-.036 27 27 0 0 0-.733-.009c-.707 0-1.259.096-1.675.309a1.7 1.7 0 0 0-.679.622c-.258.42-.374.995-.374 1.752v1.297h3.919l-.386 2.103-.287 1.564h-3.246v8.245C19.396 23.238 24 18.179 24 12.044c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.628 3.874 10.35 9.101 11.647"/></svg></span></a>
+<a class="md-button" href="https://www.linkedin.com/sharing/share-offsite/?url=http://www.example.com/blog/2026/07/15/physicsnemo-kmc-surrogate/">Share on LinkedIn</a>
 <a class="md-button" href="https://github.com/NVIDIA/physicsnemo/discussions/categories/show-and-tell">Discuss on <span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg></span></a></p>
 
 

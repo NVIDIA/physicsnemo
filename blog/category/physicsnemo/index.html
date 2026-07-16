@@ -418,7 +418,7 @@
   
   
   <span class="md-ellipsis">
-    June 2026
+    July 2026
     
   </span>
   
@@ -596,6 +596,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#a-probabilistic-surrogate-for-kinetic-monte-carlo-simulations" class="md-nav__link">
+    <span class="md-ellipsis">
+      A Probabilistic Surrogate for Kinetic Monte Carlo Simulations
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#introducing-the-physicsnemo-diffusion-module-composable-extensible-generative-modeling-for-physics-ai" class="md-nav__link">
     <span class="md-ellipsis">
       Introducing the PhysicsNeMo Diffusion Module: Composable, Extensible Generative Modeling for Physics-AI
@@ -626,15 +635,6 @@
   <a href="#optimizing-and-scaling-domino" class="md-nav__link">
     <span class="md-ellipsis">
       Optimizing and Scaling DoMINO
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#highly-scalable-and-optimized-transolver-architecture" class="md-nav__link">
-    <span class="md-ellipsis">
-      Highly scalable and optimized Transolver architecture
     </span>
   </a>
   
@@ -716,6 +716,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#a-probabilistic-surrogate-for-kinetic-monte-carlo-simulations" class="md-nav__link">
+    <span class="md-ellipsis">
+      A Probabilistic Surrogate for Kinetic Monte Carlo Simulations
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#introducing-the-physicsnemo-diffusion-module-composable-extensible-generative-modeling-for-physics-ai" class="md-nav__link">
     <span class="md-ellipsis">
       Introducing the PhysicsNeMo Diffusion Module: Composable, Extensible Generative Modeling for Physics-AI
@@ -751,15 +760,6 @@
   
 </li>
       
-        <li class="md-nav__item">
-  <a href="#highly-scalable-and-optimized-transolver-architecture" class="md-nav__link">
-    <span class="md-ellipsis">
-      Highly scalable and optimized Transolver architecture
-    </span>
-  </a>
-  
-</li>
-      
     </ul>
   
 </nav>
@@ -774,6 +774,54 @@
       <header class="md-typeset">
         <h1 id="physicsnemo">PhysicsNeMo</h1>
       </header>
+      
+        <article class="md-post md-post--excerpt">
+  <header class="md-post__header">
+    
+      <nav class="md-post__authors md-typeset">
+        
+          <span class="md-author">
+            <img src="../../../author-images/charlelie_headshot.jpg" alt="Charlelie Laurent">
+          </span>
+        
+      </nav>
+    
+    <div class="md-post__meta md-meta">
+      <ul class="md-meta__list">
+        <li class="md-meta__item">
+          <time datetime="2026-07-15 00:00:00+00:00">July 15, 2026</time></li>
+        
+          <li class="md-meta__item">
+            in
+            
+              <a href="./" class="md-meta__link">PhysicsNeMo</a></li>
+        
+        
+          
+          <li class="md-meta__item">
+            
+              8 min read
+            
+          </li>
+        
+      </ul>
+      
+    </div>
+  </header>
+  <div class="md-post__content md-typeset">
+    <h2 id="a-probabilistic-surrogate-for-kinetic-monte-carlo-simulations"><a class="toclink" href="../../2026/07/15/physicsnemo-kmc-surrogate/">A Probabilistic Surrogate for Kinetic Monte Carlo Simulations</a></h2>
+<p>Kinetic Monte Carlo (KMC) is a foundational method for simulating systems that evolve through a sequence of discrete, random events. It appears across a wide range of science and engineering simulations: defect and trap generation in semiconductor devices (device reliability and endurance simulations in TCAD), ion transport and degradation in battery materials, catalytic reactions on surfaces, crystal and thin-film growth, and microstructure evolution in metals and alloys. KMC is a highly effective method, but it is computationally expensive, and it has a few characteristics that set it apart from the conventional time-stepping and integration-based solvers on which most deep-learning surrogates are built. The time between events is a random quantity produced by the solver, and the solver is itself stochastic, so the same starting configuration yields a different trajectory on every run.</p>
+<p>The new <a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/kinetic_monte_carlo">kinetic Monte Carlo example</a> in <a href="https://github.com/NVIDIA/physicsnemo">PhysicsNeMo</a> is an end-to-end recipe, from training to trajectory generation, for a probabilistic surrogate that emulates a KMC solver one event at a time. From the current state, it predicts a full probability distribution over the next event, and running it forward repeatedly turns a single starting configuration into an ensemble of plausible trajectories with calibrated uncertainty.</p>
+
+    
+      <nav class="md-post__action">
+        <a href="../../2026/07/15/physicsnemo-kmc-surrogate/">
+          Continue reading
+        </a>
+      </nav>
+    
+  </div>
+</article>
       
         <article class="md-post md-post--excerpt">
   <header class="md-post__header">
@@ -963,53 +1011,6 @@ as well as how you can use them from PhysicsNeMo for your own models.</p>
     
       <nav class="md-post__action">
         <a href="../../2025/10/21/physicsnemo-domino-opt/">
-          Continue reading
-        </a>
-      </nav>
-    
-  </div>
-</article>
-      
-        <article class="md-post md-post--excerpt">
-  <header class="md-post__header">
-    
-      <nav class="md-post__authors md-typeset">
-        
-          <span class="md-author">
-            <img src="../../../author-images/corey_headshot.jpg" alt="Corey Adams">
-          </span>
-        
-      </nav>
-    
-    <div class="md-post__meta md-meta">
-      <ul class="md-meta__list">
-        <li class="md-meta__item">
-          <time datetime="2025-09-29 00:00:00+00:00">September 29, 2025</time></li>
-        
-          <li class="md-meta__item">
-            in
-            
-              <a href="./" class="md-meta__link">PhysicsNeMo</a></li>
-        
-        
-          
-          <li class="md-meta__item">
-            
-              5 min read
-            
-          </li>
-        
-      </ul>
-      
-    </div>
-  </header>
-  <div class="md-post__content md-typeset">
-    <h2 id="highly-scalable-and-optimized-transolver-architecture"><a class="toclink" href="../../2025/09/29/physicsnemo-transolver/">Highly scalable and optimized Transolver architecture</a></h2>
-<p><a href="https://arxiv.org/abs/2402.02366">Transolver</a>, a <a href="https://icml.cc/virtual/2024/poster/33751">highlight at ICML 2024</a> and a leading CFD surrogate model, is now significantly enhanced within PhysicsNeMo. Originally integrated by co-author Huakun Luo, these updates empower AI-Physics developers to rapidly prototype, scale, and apply surrogate models to enterprise applications like automotive aerodynamics.</p>
-
-    
-      <nav class="md-post__action">
-        <a href="../../2025/09/29/physicsnemo-transolver/">
           Continue reading
         </a>
       </nav>
