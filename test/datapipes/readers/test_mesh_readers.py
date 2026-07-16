@@ -23,14 +23,20 @@ from physicsnemo.datapipes.mesh_dataset import MeshDataset
 from physicsnemo.datapipes.readers.mesh import (
     DomainMeshReader,
     MeshReader,
-    _contiguous_block_slice,
+    _subsample_mesh_points,
 )
 from physicsnemo.datapipes.transforms.mesh import (
     CenterMesh,
     RandomScaleMesh,
     ScaleMesh,
+    SubsampleMesh,
 )
 from physicsnemo.mesh import DomainMesh, Mesh
+from physicsnemo.mesh.calculus.measure import (
+    MEASURE_WEIGHTS_KEY,
+    cell_measure_weights,
+    cell_measures,
+)
 from physicsnemo.mesh.primitives.basic import (
     single_triangle_3d,
     two_triangles_2d,
@@ -80,48 +86,17 @@ class TestMeshReader:
         loaded, _ = reader[0]
         assert loaded.n_points == 10
 
-
-class TestContiguousBlockSlice:
-    """Tests for the ``_contiguous_block_slice`` helper."""
-
-    def test_guard_returns_full_range(self):
-        # When total <= k, the helper returns the full [0, total) range.
-        assert _contiguous_block_slice(5, 5) == slice(0, 5)
-        assert _contiguous_block_slice(3, 10) == slice(0, 3)
-
-    def test_last_start_reachable_regression(self):
-        # Regression: with total == k + 1 the only non-zero valid start is
-        # total - k == 1.  Prior to the off-by-one fix this branch sampled
-        # from torch.randint(0, 1, ...), which is deterministic at 0 and
-        # therefore never produced start == 1.
-        total, k = 11, 10
-        gen = torch.Generator().manual_seed(0)
-        starts = {
-            _contiguous_block_slice(total, k, generator=gen).start for _ in range(200)
-        }
-        assert starts == {0, 1}
-
-    def test_bounds_and_max_start_reached(self):
-        total, k = 100, 10
-        gen = torch.Generator().manual_seed(123)
-        starts = []
-        for _ in range(2000):
-            sl = _contiguous_block_slice(total, k, generator=gen)
-            assert 0 <= sl.start
-            assert sl.stop - sl.start == k
-            assert sl.stop <= total
-            starts.append(sl.start)
-        assert min(starts) == 0
-        assert max(starts) == total - k
-
-    def test_determinism(self):
-        total, k = 64, 8
-        gen_a = torch.Generator().manual_seed(42)
-        gen_b = torch.Generator().manual_seed(42)
-        for _ in range(50):
-            sl_a = _contiguous_block_slice(total, k, generator=gen_a)
-            sl_b = _contiguous_block_slice(total, k, generator=gen_b)
-            assert sl_a == sl_b
+    def test_subsample_n_points_wraps_cyclically(self):
+        mesh = Mesh(points=torch.arange(10, dtype=torch.float32).unsqueeze(-1))
+        sampled = _subsample_mesh_points(
+            mesh,
+            4,
+            generator=torch.Generator().manual_seed(2),
+        )
+        torch.testing.assert_close(
+            sampled.points.squeeze(-1),
+            torch.tensor([8.0, 9.0, 0.0, 1.0]),
+        )
 
 
 class TestDomainMeshReader:
@@ -470,3 +445,97 @@ class TestTensorDictMeshApply:
         assert "y" in out
         assert torch.allclose(out["x"].points, original_points * 3.0)
         assert torch.allclose(out["y"].points, original_points * 3.0)
+
+
+class TestCellSubsampleMeasureWeights:
+    """Reader-side cell subsampling records inverse inclusion probabilities as measure weights."""
+
+    def _make_strip(self, n_cells: int) -> Mesh:
+        """Disjoint unit right triangles (area 0.5 each) along the x-axis."""
+        pts = []
+        for i in range(n_cells):
+            pts += [
+                [float(i), 0.0, 0.0],
+                [float(i) + 1.0, 0.0, 0.0],
+                [float(i), 1.0, 0.0],
+            ]
+        return Mesh(
+            points=torch.tensor(pts),
+            cells=torch.arange(3 * n_cells).reshape(n_cells, 3),
+        )
+
+    def test_reader_records_weight(self, tmp_path):
+        n, k = 40, 12
+        self._make_strip(n).save(tmp_path / "m.pmsh")
+        reader = MeshReader(tmp_path, pattern="*.pmsh", subsample_n_cells=k)
+        reader.set_generator(torch.Generator().manual_seed(0))
+        mesh, _ = reader[0]
+        assert mesh.n_cells == k
+        torch.testing.assert_close(cell_measure_weights(mesh), torch.full((k,), n / k))
+
+    def test_reader_noop_below_threshold(self, tmp_path):
+        n = 8
+        self._make_strip(n).save(tmp_path / "m.pmsh")
+        reader = MeshReader(tmp_path, pattern="*.pmsh", subsample_n_cells=20)
+        mesh, _ = reader[0]
+        assert mesh.n_cells == n
+        assert MEASURE_WEIGHTS_KEY not in mesh.cell_data.keys()
+
+    def test_equal_area_mesh_recovers_total_exactly(self, tmp_path):
+        # With identical triangles, ANY cyclic block reproduces the full
+        # area: sum(area * N/k) == k * 0.5 * N/k == full total.
+        n, k = 30, 7
+        full = self._make_strip(n)
+        full.save(tmp_path / "m.pmsh")
+        reader = MeshReader(tmp_path, pattern="*.pmsh", subsample_n_cells=k)
+        reader.set_generator(torch.Generator().manual_seed(0))
+        for _ in range(5):
+            mesh, _ = reader[0]
+            corrected = cell_measures(mesh).sum()
+            torch.testing.assert_close(corrected, full.cell_areas.sum())
+
+    def test_composes_with_subsample_mesh_transform(self, tmp_path):
+        # Reader keeps k1 of N (weight N/k1); SubsampleMesh keeps k2 of k1
+        # (weight x k1/k2). Composed weight must be exactly N/k2.
+        n, k1, k2 = 60, 20, 5
+        self._make_strip(n).save(tmp_path / "m.pmsh")
+        reader = MeshReader(tmp_path, pattern="*.pmsh", subsample_n_cells=k1)
+        reader.set_generator(torch.Generator().manual_seed(0))
+        mesh, _ = reader[0]
+        mesh = SubsampleMesh(n_cells=k2)(mesh)
+        assert mesh.n_cells == k2
+        torch.testing.assert_close(
+            cell_measure_weights(mesh), torch.full((k2,), n / k2)
+        )
+
+    def test_domain_mesh_reader_records_weights_on_boundaries(self, tmp_path):
+        interior = Mesh(points=torch.randn(10, 3))
+        wall = self._make_strip(24)
+        dm = DomainMesh(interior=interior, boundaries={"wall": wall})
+        dm.save(tmp_path / "dm.pdmsh")
+        reader = DomainMeshReader(tmp_path, pattern="*.pdmsh", subsample_n_cells=6)
+        loaded, _ = reader[0]
+        assert loaded.boundaries["wall"].n_cells == 6
+        torch.testing.assert_close(
+            cell_measure_weights(loaded.boundaries["wall"]),
+            torch.full((6,), 24 / 6),
+        )
+        ### Interior is a point cloud: no cells, no weights.
+        assert MEASURE_WEIGHTS_KEY not in loaded.interior.cell_data.keys()
+
+    def test_seeded_reproducibility(self, tmp_path):
+        ### Reader RNG is derived per-sample from (base_seed, epoch, index):
+        ### the same triple must reproduce the same block; varying the epoch
+        ### must produce a variety of blocks.
+        self._make_strip(50).save(tmp_path / "m.pmsh")
+        reader = MeshReader(tmp_path, pattern="*.pmsh", subsample_n_cells=10)
+        reader.set_generator(torch.Generator().manual_seed(123))
+        m1, _ = reader[0]
+        m2, _ = reader[0]
+        torch.testing.assert_close(m1.points, m2.points)
+        distinct_blocks = set()
+        for epoch in range(20):
+            reader.set_epoch(epoch)
+            m, _ = reader[0]
+            distinct_blocks.add(round(float(m.points[0, 0])))
+        assert len(distinct_blocks) > 5

@@ -264,10 +264,14 @@ class DiT(Module):
 
         is_natten = attention_backend in ("natten2d", "natten2d_rope")
 
-        # Latent (token) grid size, used by the NATTEN backends.
-        self._latent_h = self.input_size[0] // self.patch_size[0]
-        self._latent_w = self.input_size[1] // self.patch_size[1]
-        latent_hw = (self._latent_h, self._latent_w)
+        # Only NATTEN uses the latent grid; other backends may pass a non-2D input_size
+        if is_natten:
+            self._latent_h = self.input_size[0] // self.patch_size[0]
+            self._latent_w = self.input_size[1] // self.patch_size[1]
+            latent_hw = (self._latent_h, self._latent_w)
+        else:
+            self._latent_h = self._latent_w = None
+            latent_hw = None
 
         # Keyword arguments threaded into every attention module's forward.
         if is_natten:

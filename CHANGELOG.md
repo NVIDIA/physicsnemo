@@ -19,6 +19,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `physicsnemo.experimental.guardrails.embedded.GuardedGeoTransolver` (or
   `attach_ood_guard`) to enable out-of-distribution guarding — the
   `guard_config` model argument is removed.
+- Adds dimension-generic volume mesh generation for implicit domains to
+  `physicsnemo.mesh.generate`. `mesh_implicit_domain` meshes
+  `{x : phi(x) < 0}`, clipped to the bounding box (box faces are honored
+  as a boundary, so that external-flow "box minus obstacle" domains work
+  directly), for any implicit function (signed-distance functions, level
+  sets, or neural fields).
+- Adds `integrate_moment` and `Mesh.integrate_moment` for measure-weighted
+  outer-product moments. Mesh integration APIs now accept `nan_policy`.
+- Adds per-cell measure weights that are preserved through cell subsampling
+  and consumed by mesh integration routines and GLOBE.
+- Adds a `global_shape` argument to `ShardTensor.from_local`, enabling the
+  no-communication `sharding_shapes="chunk"` path.
 - Adds exact-boundary quality mesh generation to
   `physicsnemo.mesh.tessellation`: `fill_interior` takes a closed
   codimension-one boundary `Mesh` (2D edge loops today; loops in any order
@@ -75,6 +87,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   coordinates with no learnable parameters.
 - Adds radiation transport example (`examples/nuclear_engineering/radiation_transport`)
 - Adds agent skills structure, and initial skill for 'discoverability'.
+- Adds the experimental AeroJEPA model
+  (`physicsnemo.experimental.models.aerojepa.AeroJEPA`), a joint-embedding
+  predictive architecture for 3D aerodynamic fields composing context and
+  target encoders, a query-token field decoder, and a JEPA predictor head,
+  together with its SIGReg, token-latent, and reconstruction loss family.
+  The generic point-cloud tokenizer and the batch/mask/k-NN helpers are added
+  under `physicsnemo.experimental.nn`; the local point-transformer attention
+  blocks it composes come from `physicsnemo.nn`.
+- Adds the AeroJEPA SuperWing tutorial recipe
+  (`examples/cfd/external_aerodynamics/aerojepa`), an end-to-end Hydra-driven
+  workflow covering dataset download, normalization, JEPA training, chunked
+  inference, field-error plots, and CL/CD post-processing.
 - Adds xDeepONet to experimental models
   (`physicsnemo.experimental.models.xdeeponet.DeepONet`).  A single
   dimension-generic (2D/3D) DeepONet that accepts a spatial or MLP branch,
@@ -150,6 +174,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   datapipes implementation (`physicsnemo.datapipes.transforms._sdf_torch` /
   `_sdf_triton`, including its bespoke Triton winding kernel) is superseded and
   removed; the public datapipes SDF transform delegates here.
+- Added an iterable style dataset to physicsnemo datapipes, for on-the-fly gpu simulations.
 - DPS guidance now supports **non-uniform guidance strength**: the `std_y` and
   `gamma` arguments of `physicsnemo.diffusion.guidance.ModelConsistencyDPSGuidance`
   / `DataConsistencyDPSGuidance` and their
@@ -158,9 +183,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each observation component, e.g. per-channel (`(1, C, 1, 1)`) or pointwise
   (full observation shape). Passing floats keeps the previous uniform
   behavior unchanged.
+- Adds `relative_mse` and `relative_l2` (target-normalized regression errors,
+  `relative_l2 = sqrt(relative_mse)`) to `physicsnemo.metrics.general`
+  (`relative_error.py`), with optional element `weights` and `dim`-based
+  reduction matching `general.mse`.
+- `physicsnemo.metrics.general.mse` `mse`/`rmse` gain an optional `weights`
+  argument for a masked/weighted mean (backward-compatible; `weights=None`
+  reproduces the prior unweighted result).
+- Adds a kinetic Monte Carlo (KMC) surrogate example
+  (`examples/kinetic_monte_carlo`): a probabilistic autoregressive surrogate
+  (`ParticleGeoTransolver`) that emulates a KMC event stream, predicting the
+  next event (the new particle's features and inter-event delay) from the
+  current particle population, an optional background mesh, and the simulation
+  time. Independent rollouts form an ensemble for uncertainty quantification.
 
 ### Changed
 
+- Optimizes the production container build by consolidating related filesystem
+  operations, using BuildKit bind and cache mounts, and separating custom,
+  declared, and project dependency installation. Reduces total physicsnemo layers
+  by around 78%.
+- `ShardTensor.redistribute` now computes receive shapes analytically when
+  sharding shapes are known, skipping the shape-negotiation `all_to_all`
+  collective (falls back to the collective only when shapes are unavailable).
 - PhysicsNeMo-Mesh tensor-valued gradients now consistently use the documented
   derivative-first layout `(entity, spatial_dimension, *value_shape)` across
   LSQ, intrinsic LSQ, and DEC. Earlier LSQ releases returned
@@ -207,6 +252,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   use `torch.no_grad()`, not `torch.inference_mode()`). Also expands CI test
   coverage and adds an API documentation page for
   `physicsnemo.diffusion.multi_diffusion`.
+- Performance improvements in IO prefetching and GPU preprocessing in physicsnemo datapipes.
 - &#9888;&#65039; **BC-impact (DPS guidance):** a custom `norm` callback passed to
   `physicsnemo.diffusion.guidance.ModelConsistencyDPSGuidance` /
   `DataConsistencyDPSGuidance` (and their `physicsnemo.diffusion.multi_diffusion`
@@ -225,10 +271,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Deprecated
 
+- `physicsnemo.mesh.calculus.integrate_cell_data` and `integrate_point_data`
+  are deprecated in favor of `integrate(..., data_source="cells"|"points")`.
+  Compatibility wrappers remain available for this release and emit
+  `LegacyFeatureWarning`.
+
 ### Removed
 
 ### Fixed
 
+- Unified external aerodynamics recipe: model templates can now carry
+  known-good training overrides (`train.yaml`'s `_self_` merges before the
+  model template; all existing templates resolve identically). The GLOBE
+  example now uses the recipe's default `compile` and learning-rate
+  settings — both measured equivalent or better than the previously
+  documented overrides on the DrivAerML surface case — and no longer sets
+  `training.field_weights={pressure: 1.0, wss: 100.0}`, which was redundant
+  with `NormalizeMeshFields` normalization and starved the pressure field
+  of gradient signal (~2x worse converged pressure L2 at equal WSS L2).
+- Datapipe contiguous-block subsampling now wraps cyclically, giving boundary
+  and interior elements equal inclusion probability.
+- Cell-subsampled GLOBE inputs now retain their effective integration measure,
+  preventing area-weighted outputs and gradients from collapsing.
+- `physicsnemo.mesh.io.from_pyvista(..., force_copy=True)` now copies attached
+  point, cell, and global data as well as geometry. The matching new
+  `to_pyvista(..., force_copy=True)` option prevents exported PyVista geometry
+  and data from mutating the source `Mesh` through shared CPU storage.
 - `physicsnemo.mesh.sampling.sample_data_at_points` now handles integer and
   boolean fields by returning `float64`, so NaN sentinels and non-integral
   interpolation or multi-cell means are representable (subject to the usual

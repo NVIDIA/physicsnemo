@@ -503,10 +503,11 @@ def transform(
     if matrix.shape[0] == matrix.shape[1]:
         det = matrix.det()
 
+        ### The runtime det test syncs (host readback of a cuda tensor).
         if assume_invertible is not None:
             is_invertible = assume_invertible
         else:
-            is_invertible = det.abs() > 1e-10
+            is_invertible = bool(det.abs() > 1e-10)
 
         if is_invertible:
             det_sign = det.sign()
