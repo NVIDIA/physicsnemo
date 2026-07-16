@@ -713,7 +713,7 @@ def _launch_forward(
     wp_offsets = wp.from_torch(offsets_i32, dtype=wp.int32)
     wp_indices = wp.from_torch(indices_i32, dtype=wp.int32)
 
-    with wp.ScopedStream(wp_stream):
+    with FunctionSpec.warp_stream_scope(wp_stream):
         for comp in range(n_components):
             wp.launch(
                 kernel=kernel,
@@ -766,7 +766,7 @@ def _launch_backward(
     wp_offsets = wp.from_torch(offsets_i32, dtype=wp.int32)
     wp_indices = wp.from_torch(indices_i32, dtype=wp.int32)
 
-    with wp.ScopedStream(wp_stream):
+    with FunctionSpec.warp_stream_scope(wp_stream):
         for comp in range(n_components):
             comp_grad_values = torch.zeros(
                 (n_entities,),
@@ -821,7 +821,7 @@ def _launch_backward_points(
     )
     values_components = values_flat_fp32.transpose(0, 1).contiguous()
 
-    with wp.ScopedStream(wp_stream):
+    with FunctionSpec.warp_stream_scope(wp_stream):
         wp_points = wp.from_torch(points_fp32, dtype=wp.float32)
         wp_offsets = wp.from_torch(offsets_i32, dtype=wp.int32)
         wp_indices = wp.from_torch(indices_i32, dtype=wp.int32)

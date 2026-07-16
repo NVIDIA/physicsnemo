@@ -310,7 +310,7 @@ def launch_backward(
 
     # Launch backward kernels on the same Warp stream context as torch.
     wp_device, wp_stream = FunctionSpec.warp_launch_context(query_fp32)
-    with wp.ScopedStream(wp_stream):
+    with FunctionSpec.warp_stream_scope(wp_stream):
         if dims == 1:
             _launch_backward_1d(
                 query_points=query_fp32,

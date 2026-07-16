@@ -13,6 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import warnings
 from dataclasses import dataclass
 from typing import Literal
 
@@ -21,8 +22,8 @@ from jaxtyping import Float, Int
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
-from physicsnemo.models.dit import DiT
 from physicsnemo.experimental.models.healda.point_embed import MultiSensorObsEmbedder
+from physicsnemo.models.dit import DiT
 
 
 @dataclass
@@ -43,6 +44,17 @@ class HealDAMetaData(ModelMetaData):
 class HealDA(Module):
     r"""
     HealDA model that combines HEALPix tokenizers, observation embedders, and a DiT backbone.
+
+    .. deprecated::
+        ``HealDA`` and its observation-embedder components
+        (:class:`~physicsnemo.experimental.models.healda.point_embed.MultiSensorObsEmbedder`,
+        :class:`~physicsnemo.experimental.models.healda.point_embed.ObsTokenizer`,
+        :class:`~physicsnemo.experimental.models.healda.point_embed.SensorEmbedder`,
+        :class:`~physicsnemo.experimental.models.healda.point_embed.UniformFusion`,
+        :class:`~physicsnemo.experimental.models.healda.scatter_aggregator.ScatterAggregator`)
+        are superseded by :class:`~physicsnemo.experimental.models.healda.video_healda.VideoHealDA`
+        and will be removed in a future release. It is kept for now only to run
+        existing v1 checkpoints; use ``VideoHealDA`` for new work.
 
     Parameters
     ----------
@@ -206,6 +218,14 @@ class HealDA(Module):
         attention_backend: str = "timm",
         layernorm_backend: str = "torch",
     ):
+        # TODO: remove HealDA (v1) and its point_embed / scatter_aggregator
+        # components once VideoHealDA has been through one release cycle.
+        warnings.warn(
+            "HealDA (v1) is deprecated and will be removed in a future release. "
+            "Use physicsnemo.experimental.models.healda.VideoHealDA instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__(meta=HealDAMetaData())
 
         self.in_channels = in_channels
@@ -274,7 +294,7 @@ class HealDA(Module):
         self.dit = DiT(
             input_size=(npix_coarse * time_length,),  # ignored by hpx tokenizer
             in_channels=tokenizer_in_channels,
-            patch_size=(patch_size, patch_size), # ignored by hpx tokenizer
+            patch_size=(patch_size, patch_size),  # ignored by hpx tokenizer
             tokenizer="hpx_patch_embed",
             detokenizer="hpx_patch_detokenizer",
             out_channels=out_channels,
@@ -304,13 +324,13 @@ class HealDA(Module):
     def forward(
         self,
         x: Float[torch.Tensor, "batch in_channels time npix"],
-        t: Float[torch.Tensor, "batch"],
-        obs: Float[torch.Tensor, "nobs"],
+        t: Float[torch.Tensor, " batch"],
+        obs: Float[torch.Tensor, " nobs"],
         float_metadata: Float[torch.Tensor, "nobs meta_dim"],
-        pix: Int[torch.Tensor, "nobs"],
-        local_channel: Int[torch.Tensor, "nobs"],
-        local_platform: Int[torch.Tensor, "nobs"],
-        obs_type: Int[torch.Tensor, "nobs"],
+        pix: Int[torch.Tensor, " nobs"],
+        local_channel: Int[torch.Tensor, " nobs"],
+        local_platform: Int[torch.Tensor, " nobs"],
+        obs_type: Int[torch.Tensor, " nobs"],
         offsets: Int[torch.Tensor, "sensors batch time"],
         second_of_day: Float[torch.Tensor, "batch time"],
         day_of_year: Float[torch.Tensor, "batch time"],
@@ -326,7 +346,7 @@ class HealDA(Module):
             obs_type=obs_type,
             offsets=offsets,
             npix=self.npix,
-        ) # (b, c, t, npix)
+        )  # (b, c, t, npix)
         x = torch.cat([x, obs_embedding], dim=1)
 
         return self.dit(

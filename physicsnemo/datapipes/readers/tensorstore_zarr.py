@@ -31,6 +31,7 @@ from typing import Any, Optional
 import torch
 
 from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.datapipes._indexing import _cyclic_block_indices
 from physicsnemo.datapipes.readers.base import Reader
 from physicsnemo.datapipes.registry import register
 
@@ -155,7 +156,6 @@ class TensorStoreZarrReader(Reader):
         self._user_fields = fields
         self.default_values = default_values or {}
         self.group_pattern = group_pattern
-        self._subsample_generator: torch.Generator | None = None
 
         if not self.path.exists():
             raise FileNotFoundError(f"Path not found: {self.path}")
@@ -235,17 +235,6 @@ class TensorStoreZarrReader(Reader):
             return self._user_fields
         return self._available_fields
 
-    def set_generator(self, generator: torch.Generator) -> None:
-        """Assign a ``torch.Generator`` for reproducible subsampling."""
-        self._subsample_generator = generator
-
-    def set_epoch(self, epoch: int) -> None:
-        """Reseed the subsample RNG for a new epoch."""
-        if self._subsample_generator is not None:
-            self._subsample_generator.manual_seed(
-                self._subsample_generator.initial_seed() + epoch
-            )
-
     def _read_attributes(self, group_path: Path) -> dict[str, Any]:
         """Read attributes from a Zarr group (v2 or v3)."""
         store_spec = {"driver": "file", "path": str(group_path)}
@@ -269,53 +258,11 @@ class TensorStoreZarrReader(Reader):
 
         return {}
 
-    def _select_random_sections_from_slice(
-        self,
-        slice_start: int,
-        slice_stop: int,
-        n_points: int,
-    ) -> slice:
-        """
-        Select a random contiguous slice from a range.
-
-        Parameters
-        ----------
-        slice_start : int
-            Start index of the available range.
-        slice_stop : int
-            Stop index of the available range (exclusive).
-        n_points : int
-            Number of points to sample.
-
-        Returns
-        -------
-        slice
-            A slice object representing the random contiguous section.
-
-        Raises
-        ------
-        ValueError
-            If the range is smaller than n_points.
-        """
-        total_points = slice_stop - slice_start
-
-        if total_points < n_points:
-            raise ValueError(
-                f"Slice size {total_points} is less than the number of points "
-                f"{n_points} requested for subsampling"
-            )
-
-        start = torch.randint(
-            slice_start,
-            slice_stop - n_points + 1,
-            (1,),
-            generator=self._subsample_generator,
-        ).item()
-        return slice(start, start + n_points)
-
     def _load_sample(self, index: int) -> dict[str, torch.Tensor]:
         """Load a single sample from a Zarr group using TensorStore."""
         group_path = self._groups[index]
+        # Per-sample generator: reproducible regardless of read order/thread.
+        generator = self._index_generator(index)
 
         # Read attributes (stored as tensors in sample)
         attributes = self._read_attributes(group_path)
@@ -335,8 +282,8 @@ class TensorStoreZarrReader(Reader):
                 f"Available: {list(available)}"
             )
 
-        # Determine subsample slice if coordinated subsampling is enabled
-        subsample_slice = None
+        # Determine cyclic block indices if coordinated subsampling is enabled.
+        subsample_indices = None
         target_keys_set = set()
         if self._coordinated_subsampling_config is not None:
             n_points = self._coordinated_subsampling_config["n_points"]
@@ -362,14 +309,19 @@ class TensorStoreZarrReader(Reader):
         # Wait for opens to complete
         stores = {key: future.result() for key, future in read_futures.items()}
 
-        # Determine subsample slice if needed
-        if subsample_slice is None and self._coordinated_subsampling_config is not None:
+        # Determine the range from the first available target key. A cyclic
+        # block gives every point equal inclusion probability while retaining
+        # contiguous storage locality.
+        if (
+            subsample_indices is None
+            and self._coordinated_subsampling_config is not None
+        ):
             for key in target_keys_set:
                 if key in stores:
                     array_shape = stores[key].shape[0]
-                    subsample_slice = self._select_random_sections_from_slice(
-                        0, array_shape, n_points
-                    )
+                    subsample_indices = _cyclic_block_indices(
+                        array_shape, n_points, generator=generator
+                    ).numpy()
                     break
 
         # Trigger async reads
@@ -379,8 +331,8 @@ class TensorStoreZarrReader(Reader):
                 continue
 
             # Apply subsampling if this key is a target
-            if subsample_slice is not None and key in target_keys_set:
-                tensor_futures[key] = stores[key][subsample_slice].read()
+            if subsample_indices is not None and key in target_keys_set:
+                tensor_futures[key] = stores[key][subsample_indices].read()
             else:
                 tensor_futures[key] = stores[key][:].read()
 

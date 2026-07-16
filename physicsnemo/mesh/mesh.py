@@ -14,6 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# ``tensorclass`` adds a class-scoped ``float`` method. Qualify scalar
+# annotations that must remain resolvable under Python's deferred lookup.
+import builtins
 import math
 import types
 from pathlib import Path
@@ -35,6 +38,7 @@ from tensordict import NonTensorData, TensorDict, tensorclass
 
 from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
 from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
+from physicsnemo.mesh.transformations.deform import displace, morph
 from physicsnemo.mesh.transformations.geometric import (
     rotate,
     scale,
@@ -778,6 +782,11 @@ class Mesh:
         determinant for higher dimensions.  See
         :func:`~physicsnemo.mesh.geometry._cell_areas.compute_cell_areas` for
         details.
+
+        ``cell_areas`` is always the purely geometric simplex measure.  For
+        meshes whose cells represent more than their own geometry (e.g.
+        after cell subsampling), the effective integration measure is
+        provided by :mod:`physicsnemo.mesh.calculus.measure`.
 
         Returns
         -------
@@ -2651,6 +2660,62 @@ class Mesh:
         """
         return translate(self, offset)
 
+    def displace(
+        self,
+        displacement: str | tuple[str, ...] | torch.Tensor,
+        *,
+        point_weights: str | tuple[str, ...] | torch.Tensor | None = None,
+        implementation: Literal["torch"] | None = None,
+    ) -> "Mesh":
+        """Displace points by a dense vector field without changing topology.
+
+        Convenience wrapper for
+        :func:`physicsnemo.mesh.transformations.deform.displace`, which
+        documents all parameters and numerical behavior.
+
+        Returns
+        -------
+        Mesh
+            New mesh with displaced points, unchanged connectivity and fields.
+        """
+        return displace(
+            self,
+            displacement,
+            point_weights=point_weights,
+            implementation=implementation,
+        )
+
+    def morph(
+        self,
+        control_points: torch.Tensor,
+        control_displacements: torch.Tensor,
+        *,
+        radius: builtins.float | torch.Tensor,
+        point_weights: str | tuple[str, ...] | torch.Tensor | None = None,
+        kernel: Literal["wendland_c2"] = "wendland_c2",
+        implementation: Literal["torch", "warp"] | None = None,
+    ) -> "Mesh":
+        """Morph points from sparse compactly supported control handles.
+
+        Convenience wrapper for
+        :func:`physicsnemo.mesh.transformations.deform.morph`, which documents
+        all parameters and numerical behavior.
+
+        Returns
+        -------
+        Mesh
+            New mesh with morphed points, unchanged connectivity and fields.
+        """
+        return morph(
+            self,
+            control_points,
+            control_displacements,
+            radius=radius,
+            point_weights=point_weights,
+            kernel=kernel,
+            implementation=implementation,
+        )
+
     def rotate(
         self,
         angle: float,
@@ -2900,6 +2965,8 @@ class Mesh:
         self,
         field: str | tuple[str, ...] | torch.Tensor,
         data_source: Literal["cells", "points"] = "cells",
+        *,
+        nan_policy: Literal["omit", "propagate"] = "omit",
     ) -> torch.Tensor:
         r"""Integrate a field over the mesh domain.
 
@@ -2923,6 +2990,10 @@ class Mesh:
             - ``torch.Tensor``: used directly.
         data_source : {"cells", "points"}
             Whether ``field`` is cell-centered (P0) or vertex-centered (P1).
+        nan_policy : {"omit", "propagate"}, default "omit"
+            NaN reduction behavior. ``"omit"`` preserves the historical
+            masked-data behavior; ``"propagate"`` uses an ordinary sum so
+            NaN contributions remain visible.
 
         Returns
         -------
@@ -2956,12 +3027,15 @@ class Mesh:
             mesh=self,
             field=field,
             data_source=data_source,
+            nan_policy=nan_policy,
         )
 
     def integrate_flux(
         self,
         field: str | tuple[str, ...] | torch.Tensor,
         data_source: Literal["cells", "points"] = "cells",
+        *,
+        nan_policy: Literal["omit", "propagate"] = "omit",
     ) -> torch.Tensor:
         r"""Compute the surface flux integral for codimension-1 meshes.
 
@@ -2975,6 +3049,8 @@ class Mesh:
             Vector field with last dimension equal to ``n_spatial_dims``.
         data_source : {"cells", "points"}
             Whether ``field`` is cell-centered or vertex-centered.
+        nan_policy : {"omit", "propagate"}, default "omit"
+            Whether NaN cell-flux contributions are omitted or propagated.
 
         Returns
         -------
@@ -3006,6 +3082,91 @@ class Mesh:
             mesh=self,
             field=field,
             data_source=data_source,
+            nan_policy=nan_policy,
+        )
+
+    def integrate_moment(
+        self,
+        left: str | tuple[str, ...] | torch.Tensor,
+        right: str | tuple[str, ...] | torch.Tensor,
+        *,
+        aligned_dims: int = 0,
+        accumulation_dtype: torch.dtype | None = torch.float32,
+        nan_policy: Literal["omit", "propagate"] = "omit",
+    ) -> torch.Tensor:
+        r"""Integrate the outer product of two cell-centered fields.
+
+        Computes the P0 quadrature moment
+        :math:`M = \sum_c |\sigma_c|\, a_c \otimes b_c`, where ``a`` is
+        ``left``, ``b`` is ``right``, and :math:`|\sigma_c|` is the cell's
+        effective measure (see
+        :mod:`physicsnemo.mesh.calculus.measure`).  By default the result has
+        shape
+        ``left.shape[1:] + right.shape[1:]``.  ``aligned_dims`` may
+        designate a common leading subset of the trailing dimensions as
+        independent groups; those axes appear only once in the output
+        rather than participating in the outer product.
+
+        Parameters
+        ----------
+        left, right : str, tuple[str, ...], or torch.Tensor
+            Cell-centered fields.  String and tuple keys are resolved from
+            ``cell_data``.  Their leading dimensions must equal
+            ``n_cells``; arbitrary trailing dimensions are supported.
+        aligned_dims : int, default=0
+            Number of leading trailing dimensions shared by ``left`` and
+            ``right`` and treated as aligned batch/group axes.  For
+            example, inputs shaped ``(N, H, A)`` and ``(N, H, B)`` with
+            ``aligned_dims=1`` produce ``(H, A, B)`` instead of
+            ``(H, A, H, B)``.
+        accumulation_dtype : torch.dtype or None, default torch.float32
+            Minimum dtype used by the weighted matrix product.  The default
+            accumulates reduced-precision inputs in at least FP32 without
+            downcasting FP64 inputs.  Pass ``None`` to use ordinary input
+            promotion with no additional precision floor.
+        nan_policy : {"omit", "propagate"}, default "omit"
+            ``"omit"`` replaces NaN field contributions with zero before
+            the matrix product.  ``"propagate"`` leaves them untouched.
+
+        Returns
+        -------
+        torch.Tensor
+            Weighted outer-product moment with shape ``aligned_shape +
+            left_event_shape + right_event_shape``.
+
+        Raises
+        ------
+        KeyError
+            If a named field is absent from ``cell_data``.
+        TypeError
+            If ``aligned_dims`` is not an integer or ``accumulation_dtype``
+            is not floating-point or complex.
+        ValueError
+            If the mesh has no cells, a leading dimension is wrong, aligned
+            dimensions are invalid, or ``nan_policy`` is invalid.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from physicsnemo.mesh import Mesh
+        >>> pts = torch.tensor([[0., 0.], [1., 0.], [0.5, 1.]])
+        >>> cells = torch.tensor([[0, 1, 2]])
+        >>> mesh = Mesh(points=pts, cells=cells)
+        >>> mesh.cell_data["a"] = torch.tensor([[1.0, 2.0]])
+        >>> mesh.cell_data["b"] = torch.tensor([[3.0, 4.0]])
+        >>> mesh.integrate_moment("a", "b")
+        tensor([[1.5000, 2.0000],
+                [3.0000, 4.0000]])
+        """
+        from physicsnemo.mesh.calculus.integration import integrate_moment
+
+        return integrate_moment(
+            mesh=self,
+            left=left,
+            right=right,
+            aligned_dims=aligned_dims,
+            accumulation_dtype=accumulation_dtype,
+            nan_policy=nan_policy,
         )
 
     def gradient(
@@ -3044,6 +3205,8 @@ class Mesh:
         torch.Tensor
             Gradient of shape ``(n, n_spatial_dims, *field.shape[1:])``, where
             ``n`` is ``n_points`` or ``n_cells`` according to ``data_source``.
+            For a vector field, ``gradient[i, k, j]`` is
+            :math:`\partial field_{i,j} / \partial x_k`.
         """
         from physicsnemo.mesh.calculus.gradient import (
             compute_gradient_cells_lsq,
