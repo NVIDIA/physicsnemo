@@ -163,7 +163,7 @@ Lattice Free-Form Deformation
 displacements over an axis-aligned evaluation box and deforms every point
 inside the box by tensor-product basis interpolation.
 Compared with sparse morphing, the design parameters form a structured grid of
-fixed size, which suits parametric shape optimization: a lattice of zeros is
+fixed size, which suits parametric shape optimization. A lattice of zeros is
 exactly the identity, and the same lattice deforms any geometry embedded in
 the box.
 
