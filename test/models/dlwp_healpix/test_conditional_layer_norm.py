@@ -28,63 +28,64 @@ from physicsnemo.models.dlwp_healpix.layers import normalization
 from physicsnemo.models.dlwp_healpix.layers.normalization import ConditionalLayerNorm
 
 
-def _make_old_cln(condition_shape, channel_depth, device="cpu", **kwargs):
-    """Instantiate the reference (old) implementation."""
+def _make_reference_cln(condition_shape, channel_depth, device="cpu", **kwargs):
+    """Instantiate the reference implementation."""
     return ConditionalLayerNormReference(
         condition_shape=condition_shape, channel_depth=channel_depth, **kwargs
     ).to(device)
 
 
-def _make_new_cln(condition_shape, channel_depth, device="cpu", **kwargs):
-    """Instantiate the optimized (new) implementation."""
+def _make_optimized_cln(condition_shape, channel_depth, device="cpu", **kwargs):
+    """Instantiate the optimized implementation."""
     return ConditionalLayerNorm(
         condition_shape=condition_shape, channel_depth=channel_depth, **kwargs
     ).to(device)
 
 
-def _copy_old_to_new(old_cln, new_cln):
-    """Copy old separate gamma/beta MLP weights into new fused MLP using block-diagonal structure.
+def _copy_reference_to_optimized(reference_cln, optimized_cln):
+    """Copy the reference implementation's separate gamma/beta MLP weights into the
+    optimized fused MLP using block-diagonal structure.
 
-    Old: gamma_mlp and beta_mlp each have hidden_dims [h1, h2] and output C.
-    New: gamma_beta_mlp has hidden_dims [2*h1, 2*h2] and output 2*C.
+    Reference: gamma_mlp and beta_mlp each have hidden_dims [h1, h2] and output C.
+    Optimized: gamma_beta_mlp has hidden_dims [2*h1, 2*h2] and output 2*C.
 
     Layer 0 (condition_shape → 2*h1): vertical cat of gamma/beta weights.
     Layer i>0 (2*h_{i-1} → 2*h_i or 2*C): block-diagonal [[gamma, 0], [0, beta]].
     Biases: always concatenated.
     """
-    old_sd = old_cln.state_dict()
+    reference_sd = reference_cln.state_dict()
 
-    # Collect Linear layer indices from the old gamma MLP
+    # Collect Linear layer indices from the reference gamma MLP
     gamma_linear_indices = sorted(
         {
             int(k.split(".")[1])
-            for k in old_sd
+            for k in reference_sd
             if k.startswith("gamma_mlp.") and k.endswith(".weight")
         }
     )
     first_layer_idx = gamma_linear_indices[0]
 
-    new_sd = {}
-    for key in old_sd:
+    optimized_sd = {}
+    for key in reference_sd:
         if key.startswith("norm."):
-            new_sd[key] = old_sd[key]
+            optimized_sd[key] = reference_sd[key]
 
     for idx in gamma_linear_indices:
         for param in ("weight", "bias"):
-            gamma_val = old_sd[f"gamma_mlp.{idx}.{param}"]
-            beta_val = old_sd[f"beta_mlp.{idx}.{param}"]
+            gamma_val = reference_sd[f"gamma_mlp.{idx}.{param}"]
+            beta_val = reference_sd[f"beta_mlp.{idx}.{param}"]
             fused_key = f"gamma_beta_mlp.{idx}.{param}"
 
             if param == "bias":
-                new_sd[fused_key] = torch.cat([gamma_val, beta_val], dim=0)
+                optimized_sd[fused_key] = torch.cat([gamma_val, beta_val], dim=0)
             elif idx == first_layer_idx:
                 # First layer: shared input dim, just cat along output dim
-                new_sd[fused_key] = torch.cat([gamma_val, beta_val], dim=0)
+                optimized_sd[fused_key] = torch.cat([gamma_val, beta_val], dim=0)
             else:
                 # Block-diagonal: [[gamma, 0], [0, beta]]
-                out_old, in_old = gamma_val.shape
+                out_dim, in_dim = gamma_val.shape
                 zeros = torch.zeros_like(gamma_val)
-                new_sd[fused_key] = torch.cat(
+                optimized_sd[fused_key] = torch.cat(
                     [
                         torch.cat([gamma_val, zeros], dim=1),
                         torch.cat([zeros, beta_val], dim=1),
@@ -92,16 +93,16 @@ def _copy_old_to_new(old_cln, new_cln):
                     dim=0,
                 )
 
-    for key, value in old_sd.items():
+    for key, value in reference_sd.items():
         if not key.startswith("gamma_mlp."):
             continue
         layer_key = key[len("gamma_mlp.") :]
         parts = layer_key.split(".", 1)
         if len(parts) != 2 or parts[1] in ("weight", "bias"):
             continue
-        new_sd[f"gamma_beta_mlp.{layer_key}"] = value
+        optimized_sd[f"gamma_beta_mlp.{layer_key}"] = value
 
-    new_cln.load_state_dict(new_sd)
+    optimized_cln.load_state_dict(optimized_sd)
 
 
 def _assert_forward_is_finite(
@@ -118,17 +119,17 @@ def _assert_forward_is_finite(
 @pytest.mark.parametrize("n_cond", [1, 2, 4])
 @pytest.mark.parametrize("channels_last", [False, True])
 @pytest.mark.parametrize("scale_center", [0.0, 1.0])
-def test_old_vs_new_forward(device, n_cond, channels_last, scale_center):
+def test_optimized_vs_reference_forward(device, n_cond, channels_last, scale_center):
     """Verify optimized CLN matches reference implementation with block-diagonal weight mapping."""
     C, H, W = 128, 16, 16
     cond_shape = 32
     B_nf = n_cond * 12
 
     torch.manual_seed(42)
-    old_cln = _make_old_cln(cond_shape, C, device=device, scale_center=scale_center)
+    reference_cln = _make_reference_cln(cond_shape, C, device=device, scale_center=scale_center)
 
-    new_cln = _make_new_cln(cond_shape, C, device=device, scale_center=scale_center)
-    _copy_old_to_new(old_cln, new_cln)
+    optimized_cln = _make_optimized_cln(cond_shape, C, device=device, scale_center=scale_center)
+    _copy_reference_to_optimized(reference_cln, optimized_cln)
 
     x = torch.randn(B_nf, C, H, W, device=device)
     cond = torch.randn(n_cond, cond_shape, device=device)
@@ -137,32 +138,33 @@ def test_old_vs_new_forward(device, n_cond, channels_last, scale_center):
         x = x.to(memory_format=torch.channels_last)
 
     with torch.no_grad():
-        out_old = old_cln(x, cond)
-        out_new = new_cln(x, cond)
+        out_ref = reference_cln(x, cond)
+        out_opt = optimized_cln(x, cond)
 
-    assert out_old.shape == out_new.shape
-    assert torch.allclose(out_old, out_new, atol=1e-5, rtol=1e-4), (
-        f"Max diff: {(out_old - out_new).abs().max().item()}"
+    assert out_ref.shape == out_opt.shape
+    assert torch.allclose(out_ref, out_opt, atol=1e-5, rtol=1e-4), (
+        f"Max diff: {(out_ref - out_opt).abs().max().item()}"
     )
 
     if channels_last:
-        assert out_new.is_contiguous(memory_format=torch.channels_last), (
+        assert out_opt.is_contiguous(memory_format=torch.channels_last), (
             "Output should preserve channels_last format"
         )
 
 
 @pytest.mark.parametrize("channels_last", [False, True])
-def test_old_vs_new_backward(device, channels_last):
-    """Verify gradients match between old and new implementations."""
+def test_optimized_vs_reference_backward(device, channels_last):
+    """Verify gradients match between the optimized implementation and the
+    reference implementation."""
     C, H, W = 64, 8, 8
     cond_shape = 16
     n_cond = 2
     B_nf = n_cond * 12
 
     torch.manual_seed(42)
-    old_cln = _make_old_cln(cond_shape, C, device=device)
-    new_cln = _make_new_cln(cond_shape, C, device=device)
-    _copy_old_to_new(old_cln, new_cln)
+    reference_cln = _make_reference_cln(cond_shape, C, device=device)
+    optimized_cln = _make_optimized_cln(cond_shape, C, device=device)
+    _copy_reference_to_optimized(reference_cln, optimized_cln)
 
     x_base = torch.randn(B_nf, C, H, W, device=device)
     cond_base = torch.randn(n_cond, cond_shape, device=device)
@@ -170,23 +172,23 @@ def test_old_vs_new_backward(device, channels_last):
     if channels_last:
         x_base = x_base.to(memory_format=torch.channels_last)
 
-    x_old = x_base.clone().detach().requires_grad_(True)
-    cond_old = cond_base.clone().detach().requires_grad_(True)
-    x_new = x_base.clone().detach().requires_grad_(True)
-    cond_new = cond_base.clone().detach().requires_grad_(True)
+    x_ref = x_base.clone().detach().requires_grad_(True)
+    cond_ref = cond_base.clone().detach().requires_grad_(True)
+    x_opt = x_base.clone().detach().requires_grad_(True)
+    cond_opt = cond_base.clone().detach().requires_grad_(True)
 
-    out_old = old_cln(x_old, cond_old)
-    out_old.sum().backward()
+    out_ref = reference_cln(x_ref, cond_ref)
+    out_ref.sum().backward()
 
-    out_new = new_cln(x_new, cond_new)
-    out_new.sum().backward()
+    out_opt = optimized_cln(x_opt, cond_opt)
+    out_opt.sum().backward()
 
-    assert torch.allclose(x_old.grad, x_new.grad, atol=1e-4, rtol=1e-3), (
-        f"Input grad max diff: {(x_old.grad - x_new.grad).abs().max().item()}"
+    assert torch.allclose(x_ref.grad, x_opt.grad, atol=1e-4, rtol=1e-3), (
+        f"Input grad max diff: {(x_ref.grad - x_opt.grad).abs().max().item()}"
     )
 
-    assert torch.allclose(cond_old.grad, cond_new.grad, atol=1e-4, rtol=1e-3), (
-        f"Cond grad max diff: {(cond_old.grad - cond_new.grad).abs().max().item()}"
+    assert torch.allclose(cond_ref.grad, cond_opt.grad, atol=1e-4, rtol=1e-3), (
+        f"Cond grad max diff: {(cond_ref.grad - cond_opt.grad).abs().max().item()}"
     )
 
 
@@ -198,7 +200,7 @@ def test_init_cln_to_zero_matches_layer_norm(device, channels_last):
     B_nf = n_cond * 12
 
     torch.manual_seed(42)
-    cln = _make_new_cln(32, C, device=device, scale_center=1.0, init_cln_to_zero=True)
+    cln = _make_optimized_cln(32, C, device=device, scale_center=1.0, init_cln_to_zero=True)
     plain_ln = torch.nn.LayerNorm(C, elementwise_affine=False).to(device)
 
     x = torch.randn(B_nf, C, H, W, device=device)
@@ -226,7 +228,7 @@ def test_backward_gradients(device, channels_last):
     B_nf = n_cond * 12
 
     torch.manual_seed(42)
-    cln = _make_new_cln(cond_shape, C, device=device)
+    cln = _make_optimized_cln(cond_shape, C, device=device)
 
     x = torch.randn(B_nf, C, H, W, device=device)
     cond = torch.randn(n_cond, cond_shape, device=device)
@@ -258,7 +260,7 @@ def test_backward_channels_last_matches_contiguous(device):
     B_nf = n_cond * 12
 
     torch.manual_seed(42)
-    cln = _make_new_cln(cond_shape, C, device=device)
+    cln = _make_optimized_cln(cond_shape, C, device=device)
 
     x_base = torch.randn(B_nf, C, H, W, device=device)
     cond_base = torch.randn(n_cond, cond_shape, device=device)
@@ -294,7 +296,7 @@ def test_backward_channels_last_matches_contiguous(device):
 
 
 @pytest.mark.parametrize("hidden_dims", [[], [64]])
-def test_old_vs_new_forward_hidden_dims_variation(device, hidden_dims):
+def test_optimized_vs_reference_forward_hidden_dims_variation(device, hidden_dims):
     """Verify the block-diagonal weight mapping generalizes to MLP depths other
     than the default two hidden layers, including the degenerate zero-hidden-layer
     case (a single Linear directly from ``condition_shape`` to the output).
@@ -305,19 +307,19 @@ def test_old_vs_new_forward_hidden_dims_variation(device, hidden_dims):
     B_nf = n_cond * 12
 
     torch.manual_seed(42)
-    old_cln = _make_old_cln(cond_shape, C, device=device, mlp_hidden_dims=hidden_dims)
-    new_cln = _make_new_cln(cond_shape, C, device=device, mlp_hidden_dims=hidden_dims)
-    _copy_old_to_new(old_cln, new_cln)
+    reference_cln = _make_reference_cln(cond_shape, C, device=device, mlp_hidden_dims=hidden_dims)
+    optimized_cln = _make_optimized_cln(cond_shape, C, device=device, mlp_hidden_dims=hidden_dims)
+    _copy_reference_to_optimized(reference_cln, optimized_cln)
 
     x = torch.randn(B_nf, C, H, W, device=device)
     cond = torch.randn(n_cond, cond_shape, device=device)
 
     with torch.no_grad():
-        out_old = old_cln(x, cond)
-        out_new = new_cln(x, cond)
+        out_ref = reference_cln(x, cond)
+        out_opt = optimized_cln(x, cond)
 
-    assert torch.allclose(out_old, out_new, atol=1e-5, rtol=1e-4), (
-        f"Max diff: {(out_old - out_new).abs().max().item()}"
+    assert torch.allclose(out_ref, out_opt, atol=1e-5, rtol=1e-4), (
+        f"Max diff: {(out_ref - out_opt).abs().max().item()}"
     )
 
 
@@ -426,11 +428,11 @@ def test_load_new_format_checkpoint_roundtrip(device):
     """
     C, cond_shape = 32, 16
     torch.manual_seed(42)
-    source = _make_new_cln(cond_shape, C, device=device)
+    source = _make_optimized_cln(cond_shape, C, device=device)
     state_dict = source.state_dict()
     assert not any(k.startswith("gamma_mlp.") for k in state_dict)
 
-    target = _make_new_cln(cond_shape, C, device=device)
+    target = _make_optimized_cln(cond_shape, C, device=device)
     missing, unexpected = target.load_state_dict(state_dict, strict=True)
     assert not missing
     assert not unexpected
