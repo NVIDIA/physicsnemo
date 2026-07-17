@@ -33,12 +33,12 @@ from typing import (
 
 import torch
 import torch.nn.functional as F
-from jaxtyping import Float
+from jaxtyping import Bool, Float
 from tensordict import NonTensorData, TensorDict, tensorclass
 
 from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
 from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
-from physicsnemo.mesh.transformations.deform import displace, ffd, morph
+from physicsnemo.mesh.transformations.deform import displace, free_form_deform, morph
 from physicsnemo.mesh.transformations.geometric import (
     rotate,
     scale,
@@ -2718,28 +2718,38 @@ class Mesh:
 
     def ffd(
         self,
-        control_displacements: torch.Tensor,
+        control_displacements: Float[
+            torch.Tensor, "*lattice_resolution n_spatial_dims"
+        ],
         *,
-        origin: torch.Tensor | Sequence[builtins.float] | None = None,
-        extent: torch.Tensor | Sequence[builtins.float] | None = None,
+        origin: Float[torch.Tensor, " n_spatial_dims"]
+        | Sequence[builtins.float]
+        | None = None,
+        extent: Float[torch.Tensor, " n_spatial_dims"]
+        | Sequence[builtins.float]
+        | None = None,
         basis: Literal[
             "bernstein", "bspline", "linear", "smoothstep", "smootherstep"
         ] = "bernstein",
-        point_weights: str | tuple[str, ...] | torch.Tensor | None = None,
+        point_weights: str
+        | tuple[str, ...]
+        | Bool[torch.Tensor, " n_points"]
+        | Float[torch.Tensor, " n_points"]
+        | None = None,
         implementation: Literal["torch", "warp"] | None = None,
     ) -> "Mesh":
         """Deform points with a control-point lattice by free-form deformation.
 
         Convenience wrapper for
-        :func:`physicsnemo.mesh.transformations.deform.ffd`, which documents
-        all parameters and numerical behavior.
+        :func:`physicsnemo.mesh.transformations.deform.free_form_deform`, which
+        documents all parameters and numerical behavior.
 
         Returns
         -------
         Mesh
             New mesh with deformed points, unchanged connectivity and fields.
         """
-        return ffd(
+        return free_form_deform(
             self,
             control_displacements,
             origin=origin,

@@ -22,6 +22,7 @@ from numbers import Real
 from typing import TYPE_CHECKING, Literal
 
 import torch
+from jaxtyping import Bool, Float
 
 from physicsnemo.mesh.transformations.deform._utils import (
     _mesh_with_deformed_points,
@@ -33,8 +34,9 @@ if TYPE_CHECKING:
 
 
 def _origin_tensor_for_extent(
-    origin: torch.Tensor | Sequence[float], points: torch.Tensor
-) -> torch.Tensor:
+    origin: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float],
+    points: Float[torch.Tensor, "n_points n_spatial_dims"],
+) -> Float[torch.Tensor, " n_spatial_dims"]:
     """Validate an explicit origin before using it to derive an extent."""
     num_dims = points.shape[-1]
     if isinstance(origin, torch.Tensor):
@@ -81,10 +83,13 @@ def _origin_tensor_for_extent(
 
 
 def _default_lattice_box(
-    points: torch.Tensor,
-    origin: torch.Tensor | Sequence[float] | None,
-    extent: torch.Tensor | Sequence[float] | None,
-) -> tuple[torch.Tensor | Sequence[float], torch.Tensor | Sequence[float]]:
+    points: Float[torch.Tensor, "n_points n_spatial_dims"],
+    origin: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float] | None,
+    extent: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float] | None,
+) -> tuple[
+    Float[torch.Tensor, " n_spatial_dims"] | Sequence[float],
+    Float[torch.Tensor, " n_spatial_dims"] | Sequence[float],
+]:
     """Derive missing lattice-box values from the axis-aligned point bounds.
 
     Validating a derived extent synchronizes with the device. Pass explicit
@@ -128,14 +133,18 @@ def _default_lattice_box(
 
 def ffd(
     mesh: "Mesh",
-    control_displacements: torch.Tensor,
+    control_displacements: Float[torch.Tensor, "*lattice_resolution n_spatial_dims"],
     *,
-    origin: torch.Tensor | Sequence[float] | None = None,
-    extent: torch.Tensor | Sequence[float] | None = None,
+    origin: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float] | None = None,
+    extent: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float] | None = None,
     basis: Literal[
         "bernstein", "bspline", "linear", "smoothstep", "smootherstep"
     ] = "bernstein",
-    point_weights: str | tuple[str, ...] | torch.Tensor | None = None,
+    point_weights: str
+    | tuple[str, ...]
+    | Bool[torch.Tensor, " n_points"]
+    | Float[torch.Tensor, " n_points"]
+    | None = None,
     implementation: Literal["torch", "warp"] | None = None,
 ) -> "Mesh":
     """Deform a mesh with a control-point lattice by free-form deformation.

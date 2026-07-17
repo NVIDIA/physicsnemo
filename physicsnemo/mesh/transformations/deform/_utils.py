@@ -19,6 +19,7 @@
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Bool, Float
 from tensordict import TensorDict
 
 if TYPE_CHECKING:
@@ -60,11 +61,14 @@ def _resolve_point_field(
 
 
 def _resolve_domain_point_weights(
-    components: "list[tuple[str, Mesh]]",
+    components: list[tuple[str, "Mesh"]],
     point_weights: str | tuple[str, ...] | None,
-    reference: torch.Tensor,
+    reference: Float[torch.Tensor, "..."],
     reference_name: str,
-) -> list[torch.Tensor]:
+) -> list[
+    Bool[torch.Tensor, " n_component_points"]
+    | Float[torch.Tensor, " n_component_points"]
+]:
     """Validate components against a reference tensor and resolve point weights.
 
     Every component's points must share the reference dtype and device. When a
@@ -137,7 +141,10 @@ def _resolve_domain_point_weights(
     return resolved_point_weights
 
 
-def _mesh_with_deformed_points(mesh: "Mesh", points: torch.Tensor) -> "Mesh":
+def _mesh_with_deformed_points(
+    mesh: "Mesh",
+    points: Float[torch.Tensor, "n_points n_spatial_dims"],
+) -> "Mesh":
     """Construct a geometry-invalidated mesh while retaining topology caches."""
     from physicsnemo.mesh.mesh import Mesh
 

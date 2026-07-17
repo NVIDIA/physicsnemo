@@ -275,7 +275,7 @@ recomputed lazily; topology caches are retained.
 
 .. autofunction:: displace
 
-.. autofunction:: ffd
+.. autofunction:: free_form_deform
 
 .. autofunction:: morph
 

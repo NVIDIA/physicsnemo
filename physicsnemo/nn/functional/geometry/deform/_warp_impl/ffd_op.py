@@ -22,6 +22,7 @@ from typing import NamedTuple
 
 import torch
 import warp as wp
+from jaxtyping import Bool, Float, Int
 
 from physicsnemo.core.function_spec import FunctionSpec
 
@@ -92,7 +93,7 @@ def _ffd_kernels(dtype: torch.dtype) -> _FFDKernelSet:
         ) from None
 
 
-def _check_common_dtype(*tensors: torch.Tensor) -> None:
+def _check_common_dtype(*tensors: Float[torch.Tensor, "..."]) -> None:
     dtype = tensors[0].dtype
     device = tensors[0].device
     if dtype not in (torch.float32, torch.float64):
@@ -107,7 +108,9 @@ def _check_common_dtype(*tensors: torch.Tensor) -> None:
         raise ValueError("all free-form deformation tensors must be on the same device")
 
 
-def _resolution_tensor(resolution: list[int], device: torch.device) -> torch.Tensor:
+def _resolution_tensor(
+    resolution: list[int], device: torch.device
+) -> Int[torch.Tensor, " num_dims"]:
     key = (device, tuple(resolution))
     cached = _RESOLUTION_CACHE.get(key)
     if cached is None:
@@ -132,9 +135,9 @@ def _window_total(resolution: list[int], basis: str) -> int:
 
 
 def _validate_ffd_geometry(
-    points: torch.Tensor,
-    origin: torch.Tensor,
-    extent: torch.Tensor,
+    points: Float[torch.Tensor, "batch num_points num_dims"],
+    origin: Float[torch.Tensor, "batch num_dims"],
+    extent: Float[torch.Tensor, "batch num_dims"],
     resolution: list[int],
     basis: str,
 ) -> None:
@@ -167,8 +170,8 @@ def _validate_ffd_geometry(
 
 
 def _validate_ffd_lattice(
-    control_displacements: torch.Tensor,
-    points: torch.Tensor,
+    control_displacements: Float[torch.Tensor, "batch lattice_nodes num_dims"],
+    points: Float[torch.Tensor, "batch num_points num_dims"],
     resolution: list[int],
 ) -> None:
     if control_displacements.ndim != 3:
@@ -190,13 +193,13 @@ def _validate_ffd_lattice(
     ),
 )
 def ffd_field_warp_impl(
-    points: torch.Tensor,
-    control_displacements: torch.Tensor,
-    origin: torch.Tensor,
-    extent: torch.Tensor,
+    points: Float[torch.Tensor, "batch num_points num_dims"],
+    control_displacements: Float[torch.Tensor, "batch lattice_nodes num_dims"],
+    origin: Float[torch.Tensor, "batch num_dims"],
+    extent: Float[torch.Tensor, "batch num_dims"],
     resolution: list[int],
     basis: str,
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "batch num_points num_dims"]:
     """Evaluate the lattice free-form displacement field with Warp."""
     _check_common_dtype(points, control_displacements, origin, extent)
     _validate_ffd_geometry(points, origin, extent, resolution, basis)
@@ -237,13 +240,13 @@ def ffd_field_warp_impl(
 
 @ffd_field_warp_impl.register_fake
 def _ffd_field_warp_fake(
-    points: torch.Tensor,
-    control_displacements: torch.Tensor,
-    origin: torch.Tensor,
-    extent: torch.Tensor,
+    points: Float[torch.Tensor, "batch num_points num_dims"],
+    control_displacements: Float[torch.Tensor, "batch lattice_nodes num_dims"],
+    origin: Float[torch.Tensor, "batch num_dims"],
+    extent: Float[torch.Tensor, "batch num_dims"],
     resolution: list[int],
     basis: str,
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "batch num_points num_dims"]:
     _ = control_displacements, origin, extent, resolution, basis
     return _empty_contiguous_like(points)
 
@@ -261,16 +264,19 @@ def _ffd_field_warp_fake(
     ),
 )
 def ffd_field_warp_backward_impl(
-    grad_field: torch.Tensor,
-    points: torch.Tensor,
-    control_displacements: torch.Tensor | None,
-    origin: torch.Tensor,
-    extent: torch.Tensor,
+    grad_field: Float[torch.Tensor, "batch num_points num_dims"],
+    points: Float[torch.Tensor, "batch num_points num_dims"],
+    control_displacements: Float[torch.Tensor, "batch lattice_nodes num_dims"] | None,
+    origin: Float[torch.Tensor, "batch num_dims"],
+    extent: Float[torch.Tensor, "batch num_dims"],
     resolution: list[int],
     basis: str,
     need_points: bool = True,
     need_control_displacements: bool = True,
-) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+) -> tuple[
+    Float[torch.Tensor, "batch num_points num_dims"] | None,
+    Float[torch.Tensor, "batch lattice_nodes num_dims"] | None,
+]:
     """Evaluate the first-order lattice free-form deformation pullback with Warp."""
     floating_inputs = [grad_field, points, origin, extent]
     if control_displacements is not None:
@@ -357,16 +363,19 @@ def ffd_field_warp_backward_impl(
 
 @ffd_field_warp_backward_impl.register_fake
 def _ffd_field_warp_backward_fake(
-    grad_field: torch.Tensor,
-    points: torch.Tensor,
-    control_displacements: torch.Tensor | None,
-    origin: torch.Tensor,
-    extent: torch.Tensor,
+    grad_field: Float[torch.Tensor, "batch num_points num_dims"],
+    points: Float[torch.Tensor, "batch num_points num_dims"],
+    control_displacements: Float[torch.Tensor, "batch lattice_nodes num_dims"] | None,
+    origin: Float[torch.Tensor, "batch num_dims"],
+    extent: Float[torch.Tensor, "batch num_dims"],
     resolution: list[int],
     basis: str,
     need_points: bool = True,
     need_control_displacements: bool = True,
-) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+) -> tuple[
+    Float[torch.Tensor, "batch num_points num_dims"] | None,
+    Float[torch.Tensor, "batch lattice_nodes num_dims"] | None,
+]:
     _ = grad_field, control_displacements, origin, extent, basis
     grad_lattice = (
         torch.empty(
@@ -385,8 +394,15 @@ def _ffd_field_warp_backward_fake(
 
 def _setup_ffd_context(
     ctx: torch.autograd.function.FunctionCtx,
-    inputs: tuple,
-    output: torch.Tensor,
+    inputs: tuple[
+        Float[torch.Tensor, "batch num_points num_dims"],
+        Float[torch.Tensor, "batch lattice_nodes num_dims"],
+        Float[torch.Tensor, "batch num_dims"],
+        Float[torch.Tensor, "batch num_dims"],
+        list[int],
+        str,
+    ],
+    output: Float[torch.Tensor, "batch num_points num_dims"],
 ) -> None:
     points, control_displacements, origin, extent, resolution, basis = inputs
     needs = ctx.needs_input_grad
@@ -401,8 +417,8 @@ def _setup_ffd_context(
 
 def _backward_ffd(
     ctx: torch.autograd.function.FunctionCtx,
-    grad_field: torch.Tensor | None,
-) -> tuple[torch.Tensor | None, ...]:
+    grad_field: Float[torch.Tensor, "batch num_points num_dims"] | None,
+) -> tuple[Float[torch.Tensor, "..."] | None, ...]:
     needs = ctx.needs_input_grad
     if grad_field is None or not (needs[0] or needs[1]):
         return None, None, None, None, None, None
@@ -437,14 +453,16 @@ ffd_field_warp_impl.register_autograd(_backward_ffd, setup_context=_setup_ffd_co
 
 
 def ffd_points_warp(
-    points: torch.Tensor,
-    control_displacements: torch.Tensor,
-    origin: torch.Tensor,
-    extent: torch.Tensor,
+    points: Float[torch.Tensor, "batch num_points num_dims"],
+    control_displacements: Float[torch.Tensor, "batch lattice_nodes num_dims"],
+    origin: Float[torch.Tensor, "batch num_dims"],
+    extent: Float[torch.Tensor, "batch num_dims"],
     resolution: tuple[int, ...],
     basis: str,
-    point_weights: torch.Tensor | None,
-) -> torch.Tensor:
+    point_weights: Bool[torch.Tensor, "batch num_points"]
+    | Float[torch.Tensor, "batch num_points"]
+    | None,
+) -> Float[torch.Tensor, "batch num_points num_dims"]:
     """Normalized rank-3 Warp lattice free-form deformation entry point."""
     if points.shape[0] == 0 or points.shape[1] == 0:
         # The point identity supplies its gradient directly. Connect every other

@@ -21,6 +21,7 @@ from __future__ import annotations
 from math import isqrt
 
 import torch
+from jaxtyping import Bool, Float
 from torch.utils.checkpoint import checkpoint
 
 from ._utils import _zero_dependency
@@ -480,7 +481,9 @@ _FFD_TEMPORARY_BYTE_BUDGET = 256 * 1024 * 1024
 _FFD_LIVE_VALUE_FACTOR = 8
 
 
-def _bernstein_rows(u: torch.Tensor, degree: int) -> torch.Tensor:
+def _bernstein_rows(
+    u: Float[torch.Tensor, "*batch"], degree: int
+) -> Float[torch.Tensor, "*batch n_basis"]:
     """Evaluate all Bernstein polynomials of ``degree`` at ``u``.
 
     Uses the de Casteljau recurrence instead of the closed form
@@ -500,7 +503,9 @@ def _bernstein_rows(u: torch.Tensor, degree: int) -> torch.Tensor:
     return torch.stack(rows, dim=-1)
 
 
-def _bspline_rows(t: torch.Tensor) -> torch.Tensor:
+def _bspline_rows(
+    t: Float[torch.Tensor, "*batch"],
+) -> Float[torch.Tensor, "*batch 4"]:
     """Evaluate the four uniform cubic B-spline weights at cell parameter ``t``."""
 
     complement = 1 - t
@@ -517,7 +522,9 @@ def _bspline_rows(t: torch.Tensor) -> torch.Tensor:
     )
 
 
-def _interpolating_rows(t: torch.Tensor, basis: str) -> torch.Tensor:
+def _interpolating_rows(
+    t: Float[torch.Tensor, "*batch"], basis: str
+) -> Float[torch.Tensor, "*batch 2"]:
     """Evaluate a two-node interpolating basis at cell coordinate ``t``."""
 
     if basis == "linear":
@@ -543,13 +550,13 @@ def _ffd_window_size(resolution: tuple[int, ...], basis: str) -> int:
 
 
 def _ffd_field_chunk(
-    points: torch.Tensor,
-    lattice_displacements: torch.Tensor,
-    origin: torch.Tensor,
-    extent: torch.Tensor,
+    points: Float[torch.Tensor, "batch num_points num_dims"],
+    lattice_displacements: Float[torch.Tensor, "batch lattice_nodes num_dims"],
+    origin: Float[torch.Tensor, "batch num_dims"],
+    extent: Float[torch.Tensor, "batch num_dims"],
     resolution: tuple[int, ...],
     basis: str,
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "batch num_points num_dims"]:
     """Evaluate the lattice FFD displacement field for one query block."""
 
     batch_size, num_points, num_dims = points.shape
@@ -637,14 +644,16 @@ def _ffd_chunk_size(
 
 
 def ffd_points_torch(
-    points: torch.Tensor,
-    control_displacements: torch.Tensor,
-    origin: torch.Tensor,
-    extent: torch.Tensor,
+    points: Float[torch.Tensor, "batch num_points num_dims"],
+    control_displacements: Float[torch.Tensor, "batch lattice_nodes num_dims"],
+    origin: Float[torch.Tensor, "batch num_dims"],
+    extent: Float[torch.Tensor, "batch num_dims"],
     resolution: tuple[int, ...],
     basis: str,
-    point_weights: torch.Tensor | None,
-) -> torch.Tensor:
+    point_weights: Bool[torch.Tensor, "batch num_points"]
+    | Float[torch.Tensor, "batch num_points"]
+    | None,
+) -> Float[torch.Tensor, "batch num_points num_dims"]:
     """Deform normalized rank-3 points with a lattice free-form field."""
 
     batch_size, num_points, num_dims = points.shape

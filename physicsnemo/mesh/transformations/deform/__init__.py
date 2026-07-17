@@ -17,7 +17,7 @@
 """Nonlinear deformation operations for simplicial meshes."""
 
 from physicsnemo.mesh.transformations.deform.displace import displace
-from physicsnemo.mesh.transformations.deform.ffd import ffd
+from physicsnemo.mesh.transformations.deform.ffd import ffd as free_form_deform
 from physicsnemo.mesh.transformations.deform.morph import morph
 
-__all__ = ["displace", "ffd", "morph"]
+__all__ = ["displace", "free_form_deform", "morph"]

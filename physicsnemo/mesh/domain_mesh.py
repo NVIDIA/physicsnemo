@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Self
 
 import torch
-from jaxtyping import Float
+from jaxtyping import Bool, Float
 from tensordict import TensorDict, tensorclass
 
 from physicsnemo.mesh.mesh import Mesh, _requested_float_dtype
@@ -701,9 +701,11 @@ class DomainMesh:
         from physicsnemo.nn.functional.geometry.deform import morph_points
 
         def apply_field(
-            combined_points: torch.Tensor,
-            combined_point_weights: torch.Tensor | None,
-        ) -> torch.Tensor:
+            combined_points: Float[torch.Tensor, "n_points n_spatial_dims"],
+            combined_point_weights: Bool[torch.Tensor, " n_points"]
+            | Float[torch.Tensor, " n_points"]
+            | None,
+        ) -> Float[torch.Tensor, "n_points n_spatial_dims"]:
             return morph_points(
                 combined_points,
                 control_points,
@@ -718,10 +720,16 @@ class DomainMesh:
 
     def ffd(
         self,
-        control_displacements: torch.Tensor,
+        control_displacements: Float[
+            torch.Tensor, "*lattice_resolution n_spatial_dims"
+        ],
         *,
-        origin: torch.Tensor | Sequence[builtins.float] | None = None,
-        extent: torch.Tensor | Sequence[builtins.float] | None = None,
+        origin: Float[torch.Tensor, " n_spatial_dims"]
+        | Sequence[builtins.float]
+        | None = None,
+        extent: Float[torch.Tensor, " n_spatial_dims"]
+        | Sequence[builtins.float]
+        | None = None,
         basis: Literal[
             "bernstein", "bspline", "linear", "smoothstep", "smootherstep"
         ] = "bernstein",
@@ -836,9 +844,11 @@ class DomainMesh:
         )
 
         def apply_field(
-            combined_points: torch.Tensor,
-            combined_point_weights: torch.Tensor | None,
-        ) -> torch.Tensor:
+            combined_points: Float[torch.Tensor, "n_points n_spatial_dims"],
+            combined_point_weights: Bool[torch.Tensor, " n_points"]
+            | Float[torch.Tensor, " n_points"]
+            | None,
+        ) -> Float[torch.Tensor, "n_points n_spatial_dims"]:
             box_origin, box_extent = _default_lattice_box(
                 combined_points, origin, extent
             )
@@ -856,9 +866,20 @@ class DomainMesh:
 
     def _deform_components(
         self,
-        components: "list[tuple[str, Mesh]]",
-        resolved_point_weights: list[torch.Tensor],
-        apply_field: "Callable[[torch.Tensor, torch.Tensor | None], torch.Tensor]",
+        components: list[tuple[str, Mesh]],
+        resolved_point_weights: list[
+            Bool[torch.Tensor, " n_component_points"]
+            | Float[torch.Tensor, " n_component_points"]
+        ],
+        apply_field: Callable[
+            [
+                Float[torch.Tensor, "n_points n_spatial_dims"],
+                Bool[torch.Tensor, " n_points"]
+                | Float[torch.Tensor, " n_points"]
+                | None,
+            ],
+            Float[torch.Tensor, "n_points n_spatial_dims"],
+        ],
     ) -> "DomainMesh":
         """Deform every component with one combined world-space evaluation.
 

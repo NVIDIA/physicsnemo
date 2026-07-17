@@ -23,6 +23,7 @@ from collections.abc import Sequence
 from numbers import Real
 
 import torch
+from jaxtyping import Bool, Float
 
 _FFD_MIN_NODES = {
     "bernstein": 2,
@@ -294,12 +295,12 @@ def normalize_morph_inputs(
 
 
 def _normalize_lattice_box(
-    value: torch.Tensor | Sequence[float],
+    value: Float[torch.Tensor, "*box_batch num_dims"] | Sequence[float],
     name: str,
-    points: torch.Tensor,
+    points: Float[torch.Tensor, "batch num_points num_dims"],
     was_unbatched: bool,
     require_positive: bool,
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "batch num_dims"]:
     """Normalize one lattice-box vector to ``(B, D)`` without copying tensors.
 
     Tensor values are trusted at runtime because validating them would force a
@@ -395,19 +396,23 @@ def _normalize_lattice_box(
 
 
 def normalize_ffd_inputs(
-    points: torch.Tensor,
-    control_displacements: torch.Tensor,
-    origin: torch.Tensor | Sequence[float],
-    extent: torch.Tensor | Sequence[float],
+    points: Float[torch.Tensor, "*batch num_points num_dims"],
+    control_displacements: Float[torch.Tensor, "*lattice_resolution num_dims"],
+    origin: Float[torch.Tensor, "*box_batch num_dims"] | Sequence[float],
+    extent: Float[torch.Tensor, "*box_batch num_dims"] | Sequence[float],
     basis: str,
-    point_weights: torch.Tensor | None,
+    point_weights: Bool[torch.Tensor, "*batch num_points"]
+    | Float[torch.Tensor, "*batch num_points"]
+    | None,
 ) -> tuple[
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
+    Float[torch.Tensor, "batch num_points num_dims"],
+    Float[torch.Tensor, "batch lattice_nodes num_dims"],
+    Float[torch.Tensor, "batch num_dims"],
+    Float[torch.Tensor, "batch num_dims"],
     tuple[int, ...],
-    torch.Tensor | None,
+    Bool[torch.Tensor, "batch num_points"]
+    | Float[torch.Tensor, "batch num_points"]
+    | None,
     bool,
 ]:
     """Validate and normalize lattice free-form deformation inputs."""

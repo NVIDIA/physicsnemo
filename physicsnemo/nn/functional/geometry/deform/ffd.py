@@ -309,10 +309,10 @@ class FFDPoints(FunctionSpec):
     @FunctionSpec.register(name="warp", required_imports=("warp>=0.6.0",), rank=0)
     def warp_forward(
         points: Float[torch.Tensor, "*batch num_points num_dims"],
-        control_displacements: Float[torch.Tensor, "... num_dims"],
+        control_displacements: Float[torch.Tensor, "*lattice_resolution num_dims"],
         *,
-        origin: Float[torch.Tensor, "... num_dims"] | Sequence[float],
-        extent: Float[torch.Tensor, "... num_dims"] | Sequence[float],
+        origin: Float[torch.Tensor, "*box_batch num_dims"] | Sequence[float],
+        extent: Float[torch.Tensor, "*box_batch num_dims"] | Sequence[float],
         basis: Literal[
             "bernstein", "bspline", "linear", "smoothstep", "smootherstep"
         ] = "bernstein",
@@ -378,10 +378,10 @@ class FFDPoints(FunctionSpec):
     @FunctionSpec.register(name="torch", rank=1, baseline=True)
     def torch_forward(
         points: Float[torch.Tensor, "*batch num_points num_dims"],
-        control_displacements: Float[torch.Tensor, "... num_dims"],
+        control_displacements: Float[torch.Tensor, "*lattice_resolution num_dims"],
         *,
-        origin: Float[torch.Tensor, "... num_dims"] | Sequence[float],
-        extent: Float[torch.Tensor, "... num_dims"] | Sequence[float],
+        origin: Float[torch.Tensor, "*box_batch num_dims"] | Sequence[float],
+        extent: Float[torch.Tensor, "*box_batch num_dims"] | Sequence[float],
         basis: Literal[
             "bernstein", "bspline", "linear", "smoothstep", "smootherstep"
         ] = "bernstein",
@@ -448,10 +448,10 @@ class FFDPoints(FunctionSpec):
     def dispatch(
         cls,
         points: Float[torch.Tensor, "*batch num_points num_dims"],
-        control_displacements: Float[torch.Tensor, "... num_dims"],
+        control_displacements: Float[torch.Tensor, "*lattice_resolution num_dims"],
         *,
-        origin: Float[torch.Tensor, "... num_dims"] | Sequence[float],
-        extent: Float[torch.Tensor, "... num_dims"] | Sequence[float],
+        origin: Float[torch.Tensor, "*box_batch num_dims"] | Sequence[float],
+        extent: Float[torch.Tensor, "*box_batch num_dims"] | Sequence[float],
         basis: Literal[
             "bernstein", "bspline", "linear", "smoothstep", "smootherstep"
         ] = "bernstein",

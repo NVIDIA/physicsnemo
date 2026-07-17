@@ -24,17 +24,18 @@ import pytest
 import torch
 
 from physicsnemo.mesh import DomainMesh, Mesh
-from physicsnemo.mesh.transformations.deform import ffd
+from physicsnemo.mesh.transformations.deform import free_form_deform
 
 
-def test_ffd_namespace_is_canonical():
+def test_free_form_deform_namespace_is_canonical():
     """The deformation is public only from its dedicated namespace."""
 
     transformations = importlib.import_module("physicsnemo.mesh.transformations")
     deform_module = importlib.import_module("physicsnemo.mesh.transformations.deform")
 
-    assert deform_module.ffd is ffd
-    assert not hasattr(transformations, "ffd")
+    assert deform_module.free_form_deform is free_form_deform
+    assert "ffd" not in deform_module.__all__
+    assert not hasattr(transformations, "free_form_deform")
 
 
 def test_mesh_ffd_signatures_and_annotations_are_introspectable():
