@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds `zenith_azimuth_angles` and `zenith_azimuth_angles_from_timestamp` to
+  `physicsnemo.utils.zenith_angle`, returning
+  `(sin_zenith, cos_zenith, sin_azimuth, cos_azimuth)` alongside the existing
+  `cos_zenith_angle` / `cos_zenith_angle_from_timestamp` helpers. The azimuth
+  follows the north-clockwise convention.
 - Adds dimension-generic volume mesh generation for implicit domains to
   `physicsnemo.mesh.generate`. `mesh_implicit_domain` meshes
   `{x : phi(x) < 0}`, clipped to the bounding box (box faces are honored
