@@ -192,7 +192,7 @@ Their cell transitions are respectively C0, C1, and C2.
 Points outside the lattice box are unchanged. The deformation is generally not
 continuous across the box boundary. A sufficient condition for a fixed
 exterior is to zero the outermost coefficient plane on every Bernstein or
-node-interpolating face, or the first and last three coefficient planes on
+node-interpolating face. For cubic B-splines, zero the first and last three coefficient planes on
 every axis for cubic B-splines. ``origin`` and ``extent`` are
 non-differentiable lattice configuration; optimize ``control_displacements``
 instead.
