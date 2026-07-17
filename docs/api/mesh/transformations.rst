@@ -170,7 +170,7 @@ the box.
 When ``origin`` and ``extent`` are omitted, the box spans the mesh bounds. Each
 coordinate axis must have positive range; planar or linear geometry embedded
 in a higher-dimensional space therefore needs an explicit positive extent.
-``basis="bernstein"`` is classic global-support free-form deformation for
+``basis="bernstein"`` provides classic global-support free-form deformation for
 coarse lattices. ``basis="bspline"`` gives local four-node-per-axis support
 and scales to fine lattices for local sculpting; its first and last coefficient
 planes lie one knot spacing outside the evaluation box. ``basis="linear"``,
