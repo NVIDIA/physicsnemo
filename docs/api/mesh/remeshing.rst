@@ -10,7 +10,7 @@ Point and cell data are discarded because their associations no longer match
 the reconstructed topology. Global data, point dtype, and device are
 preserved.
 
-CPU and CUDA example
+CPU and CUDA Example
 --------------------
 
 The output remains on the input device. The example below selects CUDA when it
@@ -32,7 +32,7 @@ is available and otherwise runs on CPU. The equivalent
    assert coarse.points.device == dense.points.device
    assert 0 < coarse.n_points <= 4_096
 
-Warp tuning
+Warp Tuning
 -----------
 
 Advanced users can tune the backend search and initialization policy through
@@ -61,7 +61,7 @@ The Warp implementation uses area-weighted centroidal relaxation with a hash
 grid, projects the relaxed vertices onto the source surface using a bounding
 volume hierarchy (BVH), removes collapsed and duplicate faces, and compacts
 unused vertices. Small targets use farthest-point initialization for mesh
-quality; large targets use a linearithmic spatially stratified initializer to
+quality. Large targets use a linearithmic spatially stratified initializer to
 avoid quadratic setup cost.
 
 .. image:: /img/mesh/remeshing_comparison.png
@@ -73,8 +73,13 @@ Performance
 -----------
 
 The checked-in ASV benchmark measures warmed, end-to-end GPU execution:
-clustering, surface projection, topology reconstruction, and cleanup. Timing
-includes an explicit CUDA synchronization.
+
+- clustering
+- surface projection
+- topology reconstruction
+- cleanup
+
+Timing includes an explicit CUDA synchronization.
 
 On supported CUDA devices, remeshing can be up to 300× faster than a CPU
 baseline.
@@ -86,7 +91,7 @@ baseline.
 The figure below is a representative run of
 ``docs/img/mesh/remeshing_performance.py`` on an NVIDIA RTX PRO 6000 Blackwell
 Server Edition MIG 1g.24GB partition using Warp 1.14.0. Absolute timings depend
-on hardware and software versions; use the ASV benchmark above for measurements
+on hardware and software versions. Use the ASV benchmark above for measurements
 in another environment.
 
 .. image:: /img/mesh/remeshing_performance.png
@@ -94,7 +99,7 @@ in another environment.
    :align: center
    :width: 65%
 
-Behavior and limitations
+Behavior and Limitations
 ------------------------
 
 * Remeshing is non-differentiable. The implementation centers and scales
@@ -111,7 +116,7 @@ Behavior and limitations
   position.
 * The optional ``max_iterations`` argument defaults to four centroid updates.
 
-API reference
+API Reference
 -------------
 
 .. automodule:: physicsnemo.mesh.remeshing
