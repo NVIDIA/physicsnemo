@@ -14,7 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 import pytest
 import torch
 
@@ -466,6 +465,19 @@ def test_geotransolver_te_gale_fa(device):
 # =============================================================================
 # Checkpoint Tests
 # =============================================================================
+
+
+def test_geotransolver_legacy_checkpoint_class_path():
+    """Test resolving the model class path stored by experimental checkpoints."""
+    from physicsnemo.experimental.models.geotransolver import (
+        GeoTransolver as LegacyPackageGeoTransolver,
+    )
+    from physicsnemo.experimental.models.geotransolver.geotransolver import (
+        GeoTransolver as LegacyModuleGeoTransolver,
+    )
+
+    assert LegacyPackageGeoTransolver is GeoTransolver
+    assert LegacyModuleGeoTransolver is GeoTransolver
 
 
 def test_geotransolver_checkpoint(device):
