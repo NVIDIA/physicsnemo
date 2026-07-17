@@ -263,7 +263,7 @@ coordinate axis unless an explicit extent is supplied.
 Every deformation preserves connectivity and attached point, cell, global, and
 domain data. Attached vector and tensor fields are treated as Lagrangian data
 and are not pushed forward. Geometry-dependent caches are discarded and
-recomputed lazily; topology caches are retained.
+recomputed lazily. Topology caches are retained.
 
 .. warning::
 
