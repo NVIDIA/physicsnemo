@@ -126,9 +126,13 @@ def test_optimized_vs_reference_forward(device, n_cond, channels_last, scale_cen
     B_nf = n_cond * 12
 
     torch.manual_seed(42)
-    reference_cln = _make_reference_cln(cond_shape, C, device=device, scale_center=scale_center)
+    reference_cln = _make_reference_cln(
+        cond_shape, C, device=device, scale_center=scale_center
+    )
 
-    optimized_cln = _make_optimized_cln(cond_shape, C, device=device, scale_center=scale_center)
+    optimized_cln = _make_optimized_cln(
+        cond_shape, C, device=device, scale_center=scale_center
+    )
     _copy_reference_to_optimized(reference_cln, optimized_cln)
 
     x = torch.randn(B_nf, C, H, W, device=device)
@@ -200,7 +204,9 @@ def test_init_cln_to_zero_matches_layer_norm(device, channels_last):
     B_nf = n_cond * 12
 
     torch.manual_seed(42)
-    cln = _make_optimized_cln(32, C, device=device, scale_center=1.0, init_cln_to_zero=True)
+    cln = _make_optimized_cln(
+        32, C, device=device, scale_center=1.0, init_cln_to_zero=True
+    )
     plain_ln = torch.nn.LayerNorm(C, elementwise_affine=False).to(device)
 
     x = torch.randn(B_nf, C, H, W, device=device)
@@ -307,8 +313,12 @@ def test_optimized_vs_reference_forward_hidden_dims_variation(device, hidden_dim
     B_nf = n_cond * 12
 
     torch.manual_seed(42)
-    reference_cln = _make_reference_cln(cond_shape, C, device=device, mlp_hidden_dims=hidden_dims)
-    optimized_cln = _make_optimized_cln(cond_shape, C, device=device, mlp_hidden_dims=hidden_dims)
+    reference_cln = _make_reference_cln(
+        cond_shape, C, device=device, mlp_hidden_dims=hidden_dims
+    )
+    optimized_cln = _make_optimized_cln(
+        cond_shape, C, device=device, mlp_hidden_dims=hidden_dims
+    )
     _copy_reference_to_optimized(reference_cln, optimized_cln)
 
     x = torch.randn(B_nf, C, H, W, device=device)
