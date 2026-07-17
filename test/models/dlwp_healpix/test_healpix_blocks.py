@@ -270,7 +270,6 @@ def test_DoubleConvNeXtBlock_conditional_layer_norm(device, test_data, pytestcon
         out_channels=out_channels,
         latent_channels=latent_channels,
         conditional_layer_norm=conditional_layer_norm,
-        conditional_layer_norm_once=False,
     ).to(device)
     assert doubleconvnextblock.cln_enabled
 
@@ -287,53 +286,6 @@ def test_DoubleConvNeXtBlock_conditional_layer_norm(device, test_data, pytestcon
     # different conditions must produce different normalization affine
     # parameters, and thus different outputs
     assert not common.compare_output(outvar_a, outvar_b)
-
-
-@pytest.mark.parametrize("conditional_layer_norm_enabled", [True, False])
-def test_DoubleConvNeXtBlock_conditional_layer_norm_once(
-    device, test_data, pytestconfig, conditional_layer_norm_enabled
-):
-    from physicsnemo.models.dlwp_healpix.layers import (
-        DoubleConvNeXtBlock,
-    )
-
-    in_channels = 2
-    out_channels = 1
-    latent_channels = 2
-    cond_dim = 4
-    tensor_size = 16
-
-    conditional_layer_norm = (
-        _cln_factory(cond_dim) if conditional_layer_norm_enabled else None
-    )
-
-    doubleconvnextblock = DoubleConvNeXtBlock(
-        in_channels=in_channels,
-        out_channels=out_channels,
-        latent_channels=latent_channels,
-        conditional_layer_norm=conditional_layer_norm,
-        conditional_layer_norm_once=True,
-    ).to(device)
-
-    invar = test_data(img_size=tensor_size, device=device)
-    out_shape = torch.Size([12, out_channels, tensor_size, tensor_size])
-
-    if conditional_layer_norm_enabled:
-        conditions_a = torch.randn(1, cond_dim).to(device)
-        conditions_b = torch.randn(1, cond_dim).to(device)
-
-        outvar_a = doubleconvnextblock(invar, conditions_cln=conditions_a)
-        outvar_b = doubleconvnextblock(invar, conditions_cln=conditions_b)
-
-        assert outvar_a.shape == out_shape
-        # entry norm is conditional, so different conditions must still
-        # change the output even though the internal norms have switched
-        # to plain (non-conditional) layer normalization
-        assert not common.compare_output(outvar_a, outvar_b)
-    else:
-        outvar = doubleconvnextblock(invar)
-        assert outvar.shape == out_shape
-        assert torch.isfinite(outvar).all()
 
 
 def test_SymmetricConvNeXtBlock_initialization(device, pytestconfig):
@@ -480,7 +432,6 @@ def test_SymmetricConvNeXtBlock_conditional_layer_norm(device, test_data, pytest
         in_channels=in_channels,
         latent_channels=latent_channels,
         conditional_layer_norm=conditional_layer_norm,
-        conditional_layer_norm_once=False,
     ).to(device)
     assert symmetric_convnextblock.cln_enabled
 
@@ -495,57 +446,6 @@ def test_SymmetricConvNeXtBlock_conditional_layer_norm(device, test_data, pytest
 
     assert outvar_a.shape == out_shape
     assert not common.compare_output(outvar_a, outvar_b)
-
-
-@pytest.mark.parametrize("conditional_layer_norm_enabled", [True, False])
-def test_SymmetricConvNeXtBlock_conditional_layer_norm_once(
-    device, test_data, pytestconfig, conditional_layer_norm_enabled
-):
-    from physicsnemo.models.dlwp_healpix.layers import (
-        SymmetricConvNeXtBlock,
-    )
-    from physicsnemo.models.dlwp_healpix.layers.normalization import (
-        ConditionalLayerNorm,
-    )
-
-    in_channels = 2
-    # latent_channels must be > 1: a single-channel LayerNorm always
-    # normalizes to exactly zero, which would erase the (still learnable)
-    # affine bias differences produced by the entry norm and mask the
-    # conditioning signal entirely.
-    latent_channels = 2
-    cond_dim = 4
-    tensor_size = 16
-
-    conditional_layer_norm = (
-        _cln_factory(cond_dim) if conditional_layer_norm_enabled else None
-    )
-
-    symmetric_convnextblock = SymmetricConvNeXtBlock(
-        in_channels=in_channels,
-        latent_channels=latent_channels,
-        conditional_layer_norm=conditional_layer_norm,
-        conditional_layer_norm_once=True,
-    ).to(device)
-
-    invar = test_data(img_size=tensor_size, device=device)
-    out_shape = torch.Size([12, 1, tensor_size, tensor_size])
-
-    if conditional_layer_norm_enabled:
-        assert isinstance(symmetric_convnextblock.entry_norm, ConditionalLayerNorm)
-
-        conditions_a = torch.randn(1, cond_dim).to(device)
-        conditions_b = torch.randn(1, cond_dim).to(device)
-
-        outvar_a = symmetric_convnextblock(invar, conditions_cln=conditions_a)
-        outvar_b = symmetric_convnextblock(invar, conditions_cln=conditions_b)
-
-        assert outvar_a.shape == out_shape
-        assert not common.compare_output(outvar_a, outvar_b)
-    else:
-        outvar = symmetric_convnextblock(invar)
-        assert outvar.shape == out_shape
-        assert torch.isfinite(outvar).all()
 
 
 def test_Multi_SymmetricConvNeXtBlock_initialization(device, pytestconfig):
