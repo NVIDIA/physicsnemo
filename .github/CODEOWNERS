@@ -143,7 +143,7 @@ physicsnemo/nn/functional/ @loliverhennigh
 physicsnemo/nn/functional/neighbors/knn/ @coreyjadams @peterdsharpe @loliverhennigh
 physicsnemo/nn/functional/neighbors/radius_search/ @coreyjadams @peterdsharpe @loliverhennigh
 physicsnemo/nn/functional/natten.py @pzharrington
-physicsnemo/nn/functional/geometry/sdf.py  @loliverhennigh
+physicsnemo/nn/functional/geometry/sdf.py @peterdsharpe @loliverhennigh
 
 # Module layers
 physicsnemo/nn/module/ @loliverhennigh
@@ -465,7 +465,7 @@ test/datapipes/ @coreyjadams
 
 test/models/diffusion/ @CharlelieLrt
 test/models/dit/ @pzharrington
-test/models/domino/ 
+test/models/domino/ @coreyjadams
 test/models/figconvnet/ @coreyjadams
 test/models/globe/ @peterdsharpe
 test/models/graphcast/ @mnabian
