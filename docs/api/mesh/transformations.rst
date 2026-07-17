@@ -172,7 +172,7 @@ coordinate axis must have positive range; planar or linear geometry embedded
 in a higher-dimensional space therefore needs an explicit positive extent.
 ``basis="bernstein"`` provides classic global-support free-form deformation for
 coarse lattices. ``basis="bspline"`` gives local four-node-per-axis support
-and scales to fine lattices for local sculpting; its first and last coefficient
+and scales to fine lattices for local sculpting. Its first and last coefficient
 planes lie one knot spacing outside the evaluation box. ``basis="linear"``,
 ``"smoothstep"``, and ``"smootherstep"`` instead use the two neighboring
 nodes per axis and reproduce every control displacement at its lattice node.
