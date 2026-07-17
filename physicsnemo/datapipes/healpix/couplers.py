@@ -195,11 +195,7 @@ class ConstantCoupler:
             The data to use when the dataloader requests coupled fields. Expected
             format is [B, F, T, C, H, W]
         """
-        if coupled_fields.shape[0] != self.batch_size:
-            raise ValueError(
-                f"Batch size of coupled field {coupled_fields.shape[0]} doesn't "
-                f" match configured batch size {self.batch_size}"
-            )
+
         # create buffer for coupling
         # coupled_channel_indices covers selecting multiple instances of the same variable,
         # e.g. z1000-24H and z1000-48H.
@@ -207,7 +203,7 @@ class ConstantCoupler:
             :, :, :, self.coupled_channel_indices, :, :
         ].permute(2, 0, 3, 1, 4, 5)
         self.preset_coupled_fields = th.empty(
-            [self.coupled_integration_dim, self.batch_size, self.timevar_dim]
+            [self.coupled_integration_dim, coupled_fields.shape[0], self.timevar_dim]
             + list(self.spatial_dims)
         )
 
