@@ -162,7 +162,9 @@ def test_vector_aggregate_metric_is_direction_sensitive():
     )
     assert out["wss_l1"].item() == pytest.approx(2.0, rel=1e-5)
     assert out["wss_l2"].item() == pytest.approx(2.0, rel=1e-5)
-    assert out["wss_mae"].item() > 0.5
+    assert out["wss_mae"].item() == pytest.approx(
+        (2 * torch.mean(torch.abs(t.flatten()))).item(), rel=1e-5
+    )
     assert out["wss_mag_l1"].item() == pytest.approx(0.0, abs=1e-6)
     assert out["wss_mag_l2"].item() == pytest.approx(0.0, abs=1e-6)
     assert out["wss_mag_mae"].item() == pytest.approx(0.0, abs=1e-6)
