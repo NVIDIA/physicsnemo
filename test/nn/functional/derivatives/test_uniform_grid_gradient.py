@@ -97,6 +97,52 @@ def test_uniform_grid_gradient_torch(
     torch.testing.assert_close(output, expected, atol=5e-2, rtol=5e-2)
 
 
+# Validate one-sided boundaries against an analytic polynomial.
+@pytest.mark.parametrize("order", [2, 4])
+@pytest.mark.parametrize("derivative_order", [1, 2])
+def test_uniform_grid_gradient_one_sided_analytic(
+    device: str, order: int, derivative_order: int
+):
+    x = torch.linspace(-1.0, 1.0, 17, device=device, dtype=torch.float32)
+    field = x.square()
+    expected = 2.0 * x if derivative_order == 1 else torch.full_like(x, 2.0)
+
+    output = UniformGridGradient.dispatch(
+        field,
+        spacing=float(x[1] - x[0]),
+        order=order,
+        derivative_orders=derivative_order,
+        boundary="one_sided",
+        implementation="torch",
+    )
+
+    torch.testing.assert_close(output[0], expected, atol=2e-4, rtol=2e-4)
+
+
+# Validate one-sided Warp forward and backward paths against torch.
+@requires_module("warp")
+def test_uniform_grid_gradient_one_sided_backend_parity(device: str):
+    field_torch = torch.randn(9, 8, device=device, requires_grad=True)
+    field_warp = field_torch.detach().clone().requires_grad_(True)
+    kwargs = {
+        "spacing": (0.2, 0.3),
+        "order": 2,
+        "derivative_orders": (1, 2),
+        "boundary": "one_sided",
+    }
+
+    out_torch = UniformGridGradient.dispatch(
+        field_torch, implementation="torch", **kwargs
+    )
+    out_warp = UniformGridGradient.dispatch(field_warp, implementation="warp", **kwargs)
+    torch.testing.assert_close(out_warp, out_torch, atol=1e-5, rtol=1e-5)
+
+    grad_seed = torch.randn_like(out_torch)
+    grad_torch = torch.autograd.grad(out_torch, field_torch, grad_seed)[0]
+    grad_warp = torch.autograd.grad(out_warp, field_warp, grad_seed)[0]
+    torch.testing.assert_close(grad_warp, grad_torch, atol=1e-5, rtol=1e-5)
+
+
 # Validate unified derivative-order requests concatenate outputs deterministically.
 @pytest.mark.parametrize("dims", [1, 2, 3])
 def test_uniform_grid_gradient_torch_combined_orders(device: str, dims: int):
@@ -445,6 +491,22 @@ def test_uniform_grid_gradient_error_handling(device: str):
             torch.randn(8, 8, device=device, dtype=torch.float32),
             derivative_orders=2,
             include_mixed=1,  # type: ignore[arg-type]
+            implementation="torch",
+        )
+
+    with pytest.raises(ValueError, match="boundary must be"):
+        UniformGridGradient.dispatch(
+            field,
+            boundary="reflect",
+            implementation="torch",
+        )
+
+    with pytest.raises(ValueError, match="requires at least 6 points"):
+        UniformGridGradient.dispatch(
+            torch.randn(5, device=device),
+            order=4,
+            derivative_orders=2,
+            boundary="one_sided",
             implementation="torch",
         )
 

@@ -20,6 +20,7 @@ from collections.abc import Sequence
 
 import torch
 
+from .._boundary import apply_one_sided_boundaries, normalize_boundary
 from .._request_utils import (
     compose_derivative_outputs,
     normalize_derivative_orders,
@@ -41,14 +42,16 @@ def rectilinear_grid_gradient_torch(
     periods: float | Sequence[float] | None = None,
     derivative_order: int = 1,
     include_mixed: bool = False,
+    boundary: str = "periodic",
 ) -> torch.Tensor:
-    """Compute periodic first or pure second derivatives on rectilinear grids."""
+    """Compute first or pure second derivatives on rectilinear grids."""
     ### Validate field and coordinate inputs.
     validate_field(field)
     derivative_order = validate_derivative_request(
         derivative_order=derivative_order,
         include_mixed=include_mixed,
     )
+    boundary = normalize_boundary(boundary, function_name="rectilinear_grid_gradient")
 
     coords_tuple, period_tuple = validate_and_normalize_coordinates(
         field=field,
@@ -86,7 +89,17 @@ def rectilinear_grid_gradient_torch(
         gradients.append(grad_axis)
 
     ### Stack per-axis derivative terms into (dims, *field.shape).
-    return torch.stack(gradients, dim=0)
+    output = torch.stack(gradients, dim=0)
+    if boundary == "one_sided":
+        output = apply_one_sided_boundaries(
+            output,
+            field=field,
+            coordinates=coords_tuple,
+            derivative_order=derivative_order,
+            stencil_size=2 + derivative_order,
+            function_name="rectilinear_grid_gradient",
+        )
+    return output
 
 
 def rectilinear_grid_gradient_torch_multi(
@@ -95,6 +108,7 @@ def rectilinear_grid_gradient_torch_multi(
     periods: float | Sequence[float] | None = None,
     derivative_orders: int | Sequence[int] = 1,
     include_mixed: bool = False,
+    boundary: str = "periodic",
 ) -> torch.Tensor:
     """Compute first/second/mixed derivatives from a unified request."""
     requested_orders = normalize_derivative_orders(
@@ -123,6 +137,7 @@ def rectilinear_grid_gradient_torch_multi(
                 periods=periods,
                 derivative_order=derivative_order,
                 include_mixed=False,
+                boundary=boundary,
             )
         ),
     )

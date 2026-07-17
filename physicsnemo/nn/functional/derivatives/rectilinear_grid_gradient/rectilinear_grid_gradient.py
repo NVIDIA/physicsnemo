@@ -29,7 +29,7 @@ from ._warp_impl import (
 
 
 class RectilinearGridGradient(FunctionSpec):
-    r"""Compute periodic gradients on rectilinear grids with nonuniform spacing.
+    r"""Compute gradients on rectilinear grids with nonuniform spacing.
 
     This functional computes first-order and/or second-order
     derivatives of a scalar field on a 1D/2D/3D rectilinear grid where each
@@ -86,6 +86,10 @@ class RectilinearGridGradient(FunctionSpec):
         Include mixed second derivatives when requesting second derivatives.
         Mixed terms are appended in axis-pair order ``(x,y)``, ``(x,z)``,
         ``(y,z)``.
+    boundary : {"periodic", "one_sided"}, optional
+        Boundary treatment. ``"periodic"`` preserves wrap-around behavior.
+        ``"one_sided"`` uses one-sided stencils at the first and last point
+        of each axis while retaining central differences in the interior.
     implementation : {"warp", "torch"} or None
         Explicit backend selection. When ``None``, dispatch selects by rank.
 
@@ -117,6 +121,7 @@ class RectilinearGridGradient(FunctionSpec):
         periods: float | Sequence[float] | None = None,
         derivative_orders: int | Sequence[int] = 1,
         include_mixed: bool = False,
+        boundary: str = "periodic",
     ) -> torch.Tensor:
         """Dispatch rectilinear gradients to the Warp backend."""
         return rectilinear_grid_gradient_warp_multi(
@@ -125,6 +130,7 @@ class RectilinearGridGradient(FunctionSpec):
             periods=periods,
             derivative_orders=derivative_orders,
             include_mixed=include_mixed,
+            boundary=boundary,
         )
 
     @FunctionSpec.register(name="torch", rank=1, baseline=True)
@@ -134,6 +140,7 @@ class RectilinearGridGradient(FunctionSpec):
         periods: float | Sequence[float] | None = None,
         derivative_orders: int | Sequence[int] = 1,
         include_mixed: bool = False,
+        boundary: str = "periodic",
     ) -> torch.Tensor:
         """Dispatch rectilinear gradients to eager PyTorch."""
         return rectilinear_grid_gradient_torch_multi(
@@ -142,6 +149,7 @@ class RectilinearGridGradient(FunctionSpec):
             periods=periods,
             derivative_orders=derivative_orders,
             include_mixed=include_mixed,
+            boundary=boundary,
         )
 
     @classmethod

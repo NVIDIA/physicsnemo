@@ -27,7 +27,7 @@ from ._warp_impl import uniform_grid_gradient_warp_multi
 
 
 class UniformGridGradient(FunctionSpec):
-    r"""Compute periodic central-difference gradients on a uniform grid.
+    r"""Compute finite-difference gradients on a uniform grid.
 
     This functional computes first-order and/or second-order
     derivatives of a scalar field defined on a 1D/2D/3D uniform Cartesian
@@ -66,6 +66,11 @@ class UniformGridGradient(FunctionSpec):
         Include mixed second derivatives when requesting second derivatives.
         Mixed terms are appended in axis-pair order ``(x,y)``, ``(x,z)``,
         ``(y,z)``.
+    boundary : {"periodic", "one_sided"}, optional
+        Boundary treatment. ``"periodic"`` preserves wrap-around behavior.
+        ``"one_sided"`` uses one-sided stencils matching ``order`` across the
+        boundary region of each axis while retaining central differences in
+        the interior.
     implementation : {"warp", "torch"} or None
         Explicit backend selection. When ``None``, rank-based backend dispatch
         is used.
@@ -98,6 +103,7 @@ class UniformGridGradient(FunctionSpec):
         order: int = 2,
         derivative_orders: int | Sequence[int] = 1,
         include_mixed: bool = False,
+        boundary: str = "periodic",
     ) -> torch.Tensor:
         """Dispatch uniform-grid gradients to the Warp backend."""
         return uniform_grid_gradient_warp_multi(
@@ -106,6 +112,7 @@ class UniformGridGradient(FunctionSpec):
             order=order,
             derivative_orders=derivative_orders,
             include_mixed=include_mixed,
+            boundary=boundary,
         )
 
     @FunctionSpec.register(name="torch", rank=2, baseline=True)
@@ -115,6 +122,7 @@ class UniformGridGradient(FunctionSpec):
         order: int = 2,
         derivative_orders: int | Sequence[int] = 1,
         include_mixed: bool = False,
+        boundary: str = "periodic",
     ) -> torch.Tensor:
         """Dispatch uniform-grid gradients to eager PyTorch."""
         return uniform_grid_gradient_torch_multi(
@@ -123,6 +131,7 @@ class UniformGridGradient(FunctionSpec):
             order=order,
             derivative_orders=derivative_orders,
             include_mixed=include_mixed,
+            boundary=boundary,
         )
 
     @classmethod
