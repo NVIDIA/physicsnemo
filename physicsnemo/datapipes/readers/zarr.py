@@ -29,6 +29,7 @@ import numpy as np
 import torch
 
 from physicsnemo.core.version_check import OptionalImport
+from physicsnemo.datapipes._indexing import _cyclic_block_indices
 from physicsnemo.datapipes.readers.base import Reader
 from physicsnemo.datapipes.registry import register
 
@@ -238,54 +239,6 @@ class ZarrReader(Reader):
         """
         return (path / "zarr.json").exists() or (path / ".zgroup").exists()
 
-    def _select_random_sections_from_slice(
-        self,
-        slice_start: int,
-        slice_stop: int,
-        n_points: int,
-        generator: Optional[torch.Generator] = None,
-    ) -> slice:
-        """
-        Select a random contiguous slice from a range.
-
-        Parameters
-        ----------
-        slice_start : int
-            Start index of the available range.
-        slice_stop : int
-            Stop index of the available range (exclusive).
-        n_points : int
-            Number of points to sample.
-        generator : torch.Generator, optional
-            Per-sample generator for reproducible, order-independent
-            selection. ``None`` uses the global default RNG.
-
-        Returns
-        -------
-        slice
-            A slice object representing the random contiguous section.
-
-        Raises
-        ------
-        ValueError
-            If the range is smaller than n_points.
-        """
-        total_points = slice_stop - slice_start
-
-        if total_points < n_points:
-            raise ValueError(
-                f"Slice size {total_points} is less than the number of points "
-                f"{n_points} requested for subsampling"
-            )
-
-        start = torch.randint(
-            slice_start,
-            slice_stop - n_points + 1,
-            (1,),
-            generator=generator,
-        ).item()
-        return slice(start, start + n_points)
-
     def _load_sample(self, index: int) -> dict[str, torch.Tensor]:
         """Load a single sample from a Zarr group."""
         # Per-sample generator: reproducible regardless of read order/thread.
@@ -317,14 +270,16 @@ class ZarrReader(Reader):
                 f"Available attributes: {list(available_attrs)}"
             )
 
-        # Determine subsample slice if coordinated subsampling is enabled
-        subsample_slice = None
+        # Determine cyclic block indices if coordinated subsampling is enabled.
+        subsample_indices = None
         target_keys_set = set()
         if self._coordinated_subsampling_config is not None:
             n_points = self._coordinated_subsampling_config["n_points"]
             target_keys_set = set(self._coordinated_subsampling_config["target_keys"])
 
-            # Find slice from first available target key
+            # Find the range from the first available target key. A cyclic
+            # block gives every point equal inclusion probability while
+            # retaining contiguous storage locality.
             for field in target_keys_set:
                 if field in root:
                     if self._single_group_mode:
@@ -332,9 +287,9 @@ class ZarrReader(Reader):
                         array_shape = root[field].shape[1]
                     else:
                         array_shape = root[field].shape[0]
-                    subsample_slice = self._select_random_sections_from_slice(
-                        0, array_shape, n_points, generator=generator
-                    )
+                    subsample_indices = _cyclic_block_indices(
+                        array_shape, n_points, generator=generator
+                    ).numpy()
                     break
 
         # Load each field
@@ -342,17 +297,17 @@ class ZarrReader(Reader):
             if field in root:
                 if self._single_group_mode:
                     # Single group mode: index into first dimension
-                    if subsample_slice is not None and field in target_keys_set:
+                    if subsample_indices is not None and field in target_keys_set:
                         # Apply subsampling on dimensions after the first
                         data[field] = torch.from_numpy(
-                            root[field][index, subsample_slice]
+                            root[field][index, subsample_indices]
                         )
                     else:
                         data[field] = torch.from_numpy(root[field][index])
                 else:
                     # Directory mode: load entire array or subsample
-                    if subsample_slice is not None and field in target_keys_set:
-                        data[field] = torch.from_numpy(root[field][subsample_slice])
+                    if subsample_indices is not None and field in target_keys_set:
+                        data[field] = torch.from_numpy(root[field][subsample_indices])
                     else:
                         data[field] = torch.from_numpy(root[field][:])
 
