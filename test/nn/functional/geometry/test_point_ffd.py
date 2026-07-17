@@ -23,6 +23,7 @@ import pytest
 import torch
 
 import physicsnemo.nn.functional as functional
+from physicsnemo._typing import FFDBasis
 from physicsnemo.core.function_spec import FunctionSpec
 from physicsnemo.nn.functional import ffd_points
 from physicsnemo.nn.functional.geometry import FFDPoints
@@ -30,13 +31,13 @@ from physicsnemo.nn.functional.geometry.deform import ffd as ffd_module
 from test.conftest import requires_module
 from test.nn.functional._parity_utils import clone_case
 
-_INTERPOLATING_BASES = ("linear", "smoothstep", "smootherstep")
+_INTERPOLATING_BASES = ("linear", "cubic_hermite", "quintic_hermite")
 _BASES = ("bernstein", "bspline", *_INTERPOLATING_BASES)
 _AFFINE_EXACT_BASES = ("bernstein", "bspline", "linear")
 
 
 def _lattice_nodes(resolution, origin, extent, basis, dtype, device):
-    """World-space node positions whose sampled values each basis reproduces.
+    """Return world-space lattice nodes that reproduce affine fields.
 
     Bernstein interpolation reproduces an affine map sampled at the uniform
     lattice nodes; a uniform cubic B-spline reproduces it when sampled at the
@@ -97,6 +98,7 @@ def test_public_exports_and_function_specs():
     assert get_type_hints(ffd_points)["implementation"] == (
         Literal["torch", "warp"] | None
     )
+    assert get_type_hints(ffd_points)["basis"] == FFDBasis
 
 
 @pytest.mark.parametrize("implementation", ["torch", "warp"])
@@ -137,7 +139,7 @@ def test_ffd_constant_displacement_is_exact_translation(device, implementation, 
     dtype = torch.float64
     generator = torch.Generator(device=device).manual_seed(13)
     points = torch.rand((128, 3), generator=generator, device=device, dtype=dtype)
-    # Include the inclusive box corners.
+    # Include both box corners.
     points[0] = 0.0
     points[1] = 1.0
     translation = torch.tensor([0.1, -0.2, 0.3], device=device, dtype=dtype)
@@ -196,7 +198,7 @@ def test_ffd_linear_precision(device, implementation, basis, dtype):
 def test_interpolating_bases_reproduce_every_lattice_node(
     device, implementation, basis, num_dims
 ):
-    """The local modes attain every control displacement exactly."""
+    """Local interpolating bases reproduce every control displacement exactly."""
 
     if implementation == "warp":
         pytest.importorskip("warp")
@@ -249,7 +251,7 @@ def test_interpolating_bases_match_piecewise_one_dimensional_oracle(
     t = scaled - cell
     if basis == "linear":
         upper = t
-    elif basis == "smoothstep":
+    elif basis == "cubic_hermite":
         upper = t * t * (3 - 2 * t)
     else:
         upper = t * t * t * (t * (6 * t - 15) + 10)
@@ -376,9 +378,9 @@ def test_linear_large_world_origin_preserves_float64_coordinates(
 
 @pytest.mark.parametrize(
     ("basis", "continuity_order"),
-    [("smoothstep", 1), ("smootherstep", 2)],
+    [("cubic_hermite", 1), ("quintic_hermite", 2)],
 )
-def test_smooth_interpolating_bases_have_documented_knot_continuity(
+def test_hermite_interpolating_bases_have_documented_knot_continuity(
     basis, continuity_order
 ):
     """One-sided derivatives agree through the advertised continuity order."""
@@ -416,7 +418,7 @@ def test_smooth_interpolating_bases_have_documented_knot_continuity(
 
 @requires_module("warp")
 def test_ffd_high_degree_bernstein_warp_stays_finite(device):
-    """Large binomial coefficients must not overflow before basis scaling."""
+    """High-degree Bernstein evaluation remains finite in float32."""
 
     device = torch.device(device)
     resolution = 133
@@ -541,8 +543,8 @@ def test_ffd_outside_points_are_identity_with_zero_gradients(
         ("bernstein", 5, 1),
         ("bspline", 8, 3),
         ("linear", 5, 1),
-        ("smoothstep", 5, 1),
-        ("smootherstep", 5, 1),
+        ("cubic_hermite", 5, 1),
+        ("quintic_hermite", 5, 1),
     ],
 )
 def test_ffd_zero_boundary_layers_match_fixed_exterior(
@@ -809,6 +811,33 @@ def _run_ffd_with_gradients(implementation, device, dtype, basis):
     return output, gradients
 
 
+@pytest.mark.parametrize("basis", _BASES)
+def test_ffd_torch_chunked_checkpoint_matches_unchunked(device, basis, monkeypatch):
+    """One-point checkpointed chunks match unchunked outputs and gradients."""
+
+    from physicsnemo.nn.functional.geometry.deform import _torch_impl
+
+    device = torch.device(device)
+    unchunked = _run_ffd_with_gradients("torch", device, torch.float64, basis)
+    real_checkpoint = _torch_impl.checkpoint
+    checkpoint_call_sizes = []
+
+    def checkpoint_spy(function, *args, **kwargs):
+        checkpoint_call_sizes.append(args[0].shape[1])
+        return real_checkpoint(function, *args, **kwargs)
+
+    monkeypatch.setattr(_torch_impl, "_FFD_TEMPORARY_BYTE_BUDGET", 1)
+    monkeypatch.setattr(_torch_impl, "checkpoint", checkpoint_spy)
+    chunked = _run_ffd_with_gradients("torch", device, torch.float64, basis)
+
+    assert checkpoint_call_sizes == [1, 1, 1]
+    torch.testing.assert_close(chunked[0], unchunked[0])
+    for chunked_gradient, unchunked_gradient in zip(
+        chunked[1], unchunked[1], strict=True
+    ):
+        torch.testing.assert_close(chunked_gradient, unchunked_gradient)
+
+
 @requires_module("warp")
 @pytest.mark.parametrize("basis", _BASES)
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
@@ -840,8 +869,8 @@ def test_default_dispatch_selects_device_backend(device, monkeypatch):
         calls.append("warp")
         return normalized_points
 
-    # Patch the names resolved by the registered methods, rather than the source
-    # implementation modules, to assert which custom dispatch branch ran.
+    # Patch the names resolved by registered methods to observe the selected
+    # branch. Patching the source modules would not intercept dispatch.
     monkeypatch.setattr(ffd_module, "ffd_points_torch", torch_spy)
     monkeypatch.setattr(ffd_module, "ffd_points_warp", warp_spy)
 
@@ -854,8 +883,8 @@ def test_default_dispatch_selects_device_backend(device, monkeypatch):
     torch.testing.assert_close(automatic, points)
 
     if device.type == "cuda" and warp_impl.available:
-        # CUDA must still fall back to Torch, with the standard one-time
-        # warning, if the optional backend is unavailable.
+        # When Warp is unavailable, CUDA falls back to Torch with the standard
+        # one-time warning.
         calls.clear()
         unavailable_warp = type(warp_impl)(
             name=warp_impl.name,
@@ -920,6 +949,49 @@ def test_torch_compile_fullgraph(implementation, basis):
     torch.testing.assert_close(compiled, eager)
 
 
+@pytest.mark.parametrize("implementation", ["torch", "warp"])
+def test_torch_compile_fullgraph_backward(implementation):
+    """Compiled backward matches eager execution for Torch and Warp."""
+
+    if implementation == "warp":
+        pytest.importorskip("warp")
+
+    def make_inputs():
+        points = torch.tensor([[0.2, 0.1], [0.6, 0.9]], requires_grad=True)
+        control_displacements = (
+            0.1 * torch.sin(torch.arange(4 * 5 * 2.0)).reshape(4, 5, 2)
+        ).requires_grad_()
+        point_weights = torch.tensor([0.5, 1.2], requires_grad=True)
+        return points, control_displacements, point_weights
+
+    def operation(p, c, w):
+        return ffd_points(
+            p,
+            c,
+            origin=[0.0, 0.0],
+            extent=[1.0, 1.0],
+            basis="bspline",
+            point_weights=w,
+            implementation=implementation,
+        )
+
+    eager_inputs = make_inputs()
+    eager_output = operation(*eager_inputs)
+    eager_gradients = torch.autograd.grad(eager_output.square().sum(), eager_inputs)
+
+    compiled_inputs = make_inputs()
+    compiled_output = torch.compile(operation, fullgraph=True)(*compiled_inputs)
+    compiled_gradients = torch.autograd.grad(
+        compiled_output.square().sum(), compiled_inputs
+    )
+
+    torch.testing.assert_close(compiled_output, eager_output)
+    for compiled_gradient, eager_gradient in zip(
+        compiled_gradients, eager_gradients, strict=True
+    ):
+        torch.testing.assert_close(compiled_gradient, eager_gradient)
+
+
 @pytest.mark.parametrize("basis", _BASES)
 def test_torch_compile_fullgraph_dynamic_shapes(basis):
     """Symbolic query counts use the vectorized compile path."""
@@ -946,7 +1018,7 @@ def test_torch_compile_fullgraph_dynamic_shapes(basis):
 
 
 def test_torch_compile_dynamic_lattice_box_sequences():
-    """Changing Python box values must not force invalid SymFloat conversions."""
+    """Changing Python box values remain valid under ``torch.compile``."""
 
     points = torch.tensor([[0.2, 0.1], [0.6, 0.9]])
     control_displacements = 0.1 * torch.sin(torch.arange(4 * 5 * 2.0)).reshape(4, 5, 2)
@@ -1066,11 +1138,11 @@ def test_public_api_fake_tensor_propagation(implementation):
                 torch.zeros(1, 4, 2),
                 origin=[0.0, 0.0],
                 extent=[1.0, 1.0],
-                basis="smoothstep",
+                basis="cubic_hermite",
                 implementation="torch",
             ),
             ValueError,
-            "basis 'smoothstep' requires at least 2 lattice nodes",
+            "basis 'cubic_hermite' requires at least 2 lattice nodes",
         ),
         (
             lambda: ffd_points(

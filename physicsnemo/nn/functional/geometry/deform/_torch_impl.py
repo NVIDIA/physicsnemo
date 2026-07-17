@@ -24,7 +24,7 @@ import torch
 from jaxtyping import Bool, Float
 from torch.utils.checkpoint import checkpoint
 
-from ._utils import _zero_dependency
+from ._utils import _ffd_window_size, _zero_dependency
 
 # Bound all live pairwise temporaries, rather than only the nominal
 # ``(B, query_chunk, control_chunk, D)`` difference tensor. Profiling the
@@ -529,24 +529,11 @@ def _interpolating_rows(
 
     if basis == "linear":
         upper = t
-    elif basis == "smoothstep":
+    elif basis == "cubic_hermite":
         upper = t * t * (3 - 2 * t)
     else:
         upper = t * t * t * (t * (6 * t - 15) + 10)
     return torch.stack((1 - upper, upper), dim=-1)
-
-
-def _ffd_window_size(resolution: tuple[int, ...], basis: str) -> int:
-    """Number of lattice nodes that influence one query point."""
-
-    if basis == "bspline":
-        return 4 ** len(resolution)
-    if basis != "bernstein":
-        return 2 ** len(resolution)
-    window = 1
-    for size in resolution:
-        window *= size
-    return window
 
 
 def _ffd_field_chunk(
@@ -618,9 +605,8 @@ def _ffd_field_chunk(
         ).reshape(batch_size, num_points, window, num_dims)
         field = (weights.unsqueeze(-1) * gathered).sum(dim=2)
 
-    # ``where`` rather than a mask multiply: outside rows are evaluated at the
-    # substituted coordinate above and must return exactly zero even when the
-    # lattice displacements are non-finite.
+    # ``where`` returns exact zeros for outside rows, even when lattice
+    # displacements are non-finite. Multiplying by a mask would propagate NaNs.
     return torch.where(inside.unsqueeze(-1), field, 0.0)
 
 

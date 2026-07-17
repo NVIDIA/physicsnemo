@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import NamedTuple
 
 import torch
@@ -27,13 +28,13 @@ from jaxtyping import Bool, Float, Int
 from physicsnemo.core.function_spec import FunctionSpec
 
 from .._torch_impl import displace_points_torch
-from .._utils import _FFD_MIN_NODES, _zero_dependency
+from .._utils import _FFD_MIN_NODES, _ffd_window_size, _zero_dependency
 from .ffd_kernels import (
     BERNSTEIN_BASIS_ID,
     BSPLINE_BASIS_ID,
+    CUBIC_HERMITE_BASIS_ID,
     LINEAR_BASIS_ID,
-    SMOOTH_STEP_1_BASIS_ID,
-    SMOOTH_STEP_2_BASIS_ID,
+    QUINTIC_HERMITE_BASIS_ID,
     ffd_backward_f32,
     ffd_backward_f64,
     ffd_forward_f32,
@@ -41,14 +42,14 @@ from .ffd_kernels import (
     ffd_point_backward_f32,
     ffd_point_backward_f64,
 )
-from .op import _empty_contiguous_like, _wp_view
+from .op import _check_common_dtype, _empty_contiguous_like, _wp_view
 
 _BASIS_IDS = {
     "bernstein": BERNSTEIN_BASIS_ID,
     "bspline": BSPLINE_BASIS_ID,
     "linear": LINEAR_BASIS_ID,
-    "smoothstep": SMOOTH_STEP_1_BASIS_ID,
-    "smootherstep": SMOOTH_STEP_2_BASIS_ID,
+    "cubic_hermite": CUBIC_HERMITE_BASIS_ID,
+    "quintic_hermite": QUINTIC_HERMITE_BASIS_ID,
 }
 
 
@@ -76,9 +77,9 @@ _FFD_KERNELS = {
     ),
 }
 
-# Lattice resolutions are architecture constants, so the per-device index
-# tensors are cached: repeated calls skip the host-to-device copy and a
-# warmed-up call sequence stays CUDA Graph capturable.
+# Cache each device's resolution tensor because lattice resolution is static.
+# Reuse avoids host-to-device copies and keeps warmed calls CUDA Graph
+# capturable.
 _RESOLUTION_CACHE: dict[tuple[torch.device, tuple[int, ...]], torch.Tensor] = {}
 
 
@@ -93,21 +94,6 @@ def _ffd_kernels(dtype: torch.dtype) -> _FFDKernelSet:
         ) from None
 
 
-def _check_common_dtype(*tensors: Float[torch.Tensor, "..."]) -> None:
-    dtype = tensors[0].dtype
-    device = tensors[0].device
-    if dtype not in (torch.float32, torch.float64):
-        raise TypeError(
-            f"free-form deformation supports float32 and float64, got {dtype}"
-        )
-    if any(t.dtype != dtype for t in tensors):
-        raise TypeError(
-            "all floating free-form deformation tensors must have the same dtype"
-        )
-    if any(t.device != device for t in tensors):
-        raise ValueError("all free-form deformation tensors must be on the same device")
-
-
 def _resolution_tensor(
     resolution: list[int], device: torch.device
 ) -> Int[torch.Tensor, " num_dims"]:
@@ -117,21 +103,6 @@ def _resolution_tensor(
         cached = torch.tensor(resolution, dtype=torch.int32, device=device)
         _RESOLUTION_CACHE[key] = cached
     return cached
-
-
-def _lattice_size(resolution: list[int]) -> int:
-    size = 1
-    for nodes in resolution:
-        size *= int(nodes)
-    return size
-
-
-def _window_total(resolution: list[int], basis: str) -> int:
-    if basis == "bspline":
-        return 4 ** len(resolution)
-    if basis in ("linear", "smoothstep", "smootherstep"):
-        return 2 ** len(resolution)
-    return _lattice_size(resolution)
 
 
 def _validate_ffd_geometry(
@@ -145,8 +116,8 @@ def _validate_ffd_geometry(
 
     if basis not in _BASIS_IDS:
         raise ValueError(
-            "basis must be 'bernstein', 'bspline', 'linear', 'smoothstep', "
-            f"or 'smootherstep', got {basis!r}"
+            "basis must be 'bernstein', 'bspline', 'linear', 'cubic_hermite', "
+            f"or 'quintic_hermite', got {basis!r}"
         )
     if points.ndim != 3:
         raise ValueError("points must be a normalized rank-3 tensor")
@@ -176,7 +147,7 @@ def _validate_ffd_lattice(
 ) -> None:
     if control_displacements.ndim != 3:
         raise ValueError("control_displacements must be a normalized rank-3 tensor")
-    expected = (points.shape[0], _lattice_size(resolution), points.shape[2])
+    expected = (points.shape[0], math.prod(resolution), points.shape[2])
     if tuple(control_displacements.shape) != expected:
         raise ValueError(
             "control_displacements must have one row per lattice node with shape "
@@ -229,7 +200,7 @@ def ffd_field_warp_impl(
                 int(_BASIS_IDS[basis]),
                 int(num_dims),
                 int(lattice_c.shape[1]),
-                int(_window_total(resolution, basis)),
+                int(_ffd_window_size(resolution, basis)),
                 _wp_view(field, kernels.warp_dtype),
             ],
             device=wp_device,
@@ -300,7 +271,7 @@ def ffd_field_warp_backward_impl(
         else None
     )
     batch, num_points, num_dims = points_c.shape
-    lattice_size = _lattice_size(resolution)
+    lattice_size = math.prod(resolution)
     # The point-backward kernel writes every row, so an uninitialized
     # allocation is sufficient.
     grad_points = torch.empty_like(points_c) if need_points else None
@@ -316,7 +287,7 @@ def ffd_field_warp_backward_impl(
         kernels = _ffd_kernels(points.dtype)
         basis_id = int(_BASIS_IDS[basis])
         resolution_t = _resolution_tensor(resolution, points.device)
-        window_total = int(_window_total(resolution, basis))
+        window_total = int(_ffd_window_size(resolution, basis))
         wp_device, wp_stream = FunctionSpec.warp_launch_context(grad_field_c)
         with FunctionSpec.warp_stream_scope(wp_stream, sync_enter=False):
             if need_points:
@@ -379,7 +350,7 @@ def _ffd_field_warp_backward_fake(
     _ = grad_field, control_displacements, origin, extent, basis
     grad_lattice = (
         torch.empty(
-            (points.shape[0], _lattice_size(resolution), points.shape[2]),
+            (points.shape[0], math.prod(resolution), points.shape[2]),
             dtype=points.dtype,
             device=points.device,
         )

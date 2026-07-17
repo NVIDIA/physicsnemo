@@ -25,6 +25,7 @@ import torch
 from jaxtyping import Bool, Float
 from tensordict import TensorDict, tensorclass
 
+from physicsnemo._typing import FFDBasis
 from physicsnemo.mesh.mesh import Mesh, _requested_float_dtype
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
 
@@ -730,21 +731,18 @@ class DomainMesh:
         extent: Float[torch.Tensor, " n_spatial_dims"]
         | Sequence[builtins.float]
         | None = None,
-        basis: Literal[
-            "bernstein", "bspline", "linear", "smoothstep", "smootherstep"
-        ] = "bernstein",
+        basis: FFDBasis = "bernstein",
         point_weights: str | tuple[str, ...] | None = None,
         implementation: Literal["torch", "warp"] | None = None,
     ) -> "DomainMesh":
         """Deform the interior and all boundaries with one lattice field.
 
-        The same control lattice, box, basis, and backend are used for every
-        component, so coincident interior/boundary points receive the same
-        motion when ``point_weights`` is ``None``. When supplied,
-        ``point_weights`` is a common :attr:`Mesh.point_data` key (or nested
-        tuple key) resolved on each component independently; raw point-weight
-        tensors are intentionally rejected because component point counts
-        differ.
+        Every component uses the same control lattice, box, basis, and backend.
+        With ``point_weights=None``, coincident interior and boundary points
+        receive the same motion. When supplied, ``point_weights`` is a common
+        :attr:`Mesh.point_data` key (or nested tuple key) resolved independently
+        on each component. Raw point-weight tensors are rejected because
+        component point counts differ.
 
         Parameters
         ----------
@@ -757,32 +755,38 @@ class DomainMesh:
         origin : torch.Tensor, sequence of float, or None, optional
             Minimum corner of the lattice box with shape
             ``(n_spatial_dims,)``. ``None`` uses the minimum corner of the
-            combined component bounds.
+            combined component bounds. For repeated GPU calls with an explicit
+            box, create ``origin`` and ``extent`` once as device tensors. Reuse
+            them to avoid recreating and transferring sequence values.
         extent : torch.Tensor, sequence of float, or None, optional
-            Edge lengths of the lattice box; every value must be finite and
-            strictly positive, and tensor values are not validated at runtime.
-            ``None`` sizes the box from ``origin`` to the maximum corner of the
-            combined component bounds. Validating a derived extent synchronizes
-            with the device. Every coordinate axis must then have positive
-            range; otherwise, supply an explicit extent.
-        basis : {"bernstein", "bspline", "linear", "smoothstep", "smootherstep"}, optional
-            Per-axis basis family. ``"bernstein"`` has global support;
-            ``"bspline"`` has local four-node-per-axis support. B-spline
-            coefficient index ``i`` is associated with local coordinate
-            ``(i - 1) / (n - 3)``, so the first and last coefficient planes lie
-            outside the evaluation box. ``"linear"``, ``"smoothstep"``, and
-            ``"smootherstep"`` use two neighboring nodes per axis and
-            interpolate every lattice node, with progressively smoother
-            transitions. Default is ``"bernstein"``.
+            Edge lengths of the lattice box. Every value must be finite and
+            strictly positive. The operation does not validate tensor values at
+            runtime. ``None`` sizes the box from ``origin`` to the maximum
+            corner of the combined component bounds. Validating a derived
+            extent synchronizes with the device. Every coordinate axis must
+            then have positive range. Otherwise, supply an explicit extent.
+        basis : {"bernstein", "bspline", "linear", "cubic_hermite", "quintic_hermite"}, optional
+            Per-axis basis family. ``"bernstein"`` provides global support.
+            ``"bspline"`` uses local four-node-per-axis support. B-spline
+            coefficient index ``i`` corresponds to local coordinate
+            ``(i - 1) / (n - 3)``. The first and last coefficient planes lie
+            outside the evaluation box. ``"linear"``, ``"cubic_hermite"``, and
+            ``"quintic_hermite"`` use two neighboring nodes per axis. The
+            resulting fields are C0, C1, and C2 across cell boundaries,
+            respectively. See
+            :func:`~physicsnemo.mesh.transformations.deform.free_form_deform`
+            for their polynomial weights and literature reference. Default is
+            ``"bernstein"``.
         point_weights : str, tuple[str, ...], or None
             Optional point-data key present in every component and resolved
             independently on each component. Each resolved tensor must have
-            shape ``(component.n_points,)``, use one common bool or floating
-            dtype, and match the component point device. Floating weights must
-            also match the point dtype. Raw tensors are not accepted.
+            shape ``(component.n_points,)`` and match the component point
+            device. All components must use one common bool or floating dtype.
+            Floating weights must also match the point dtype. Raw tensors are
+            not accepted.
         implementation : {"torch", "warp"} or None
-            Backend override. Auto dispatch uses Torch on CPU and Warp on CUDA
-            when Warp is available, otherwise Torch.
+            Backend override. Automatic dispatch uses Torch on CPU. On CUDA, it
+            uses Warp when available and otherwise Torch.
 
         Returns
         -------
@@ -796,7 +800,7 @@ class DomainMesh:
             If tensors, lattice values, or point weights have unsupported
             types or dtypes.
         ValueError
-            If component layouts, lattice configuration, point weights, or
+            If component layouts, lattice parameters, point weights, or
             ``basis`` are invalid.
         KeyError
             If a point-data key or ``implementation`` name is not found.
@@ -805,17 +809,17 @@ class DomainMesh:
 
         Notes
         -----
-        Connectivity and attached mesh and domain data are retained. Attached
-        vector and tensor fields are treated as Lagrangian data and are not
-        pushed forward. Geometry caches are invalidated and topology caches
-        are retained on each component. Points outside the lattice box are
-        unchanged. A sufficient condition for a fixed exterior is to zero the
-        outermost coefficient plane on every Bernstein or node-interpolating
-        face, or the first and last three coefficient planes on every axis for
-        cubic B-splines. ``origin`` and ``extent`` are non-differentiable
-        configuration values. The deformation does not automatically detect
-        inverted, degenerate, or self-intersecting cells. Use each component
-        mesh's :meth:`Mesh.validate` method explicitly when required.
+        The operation retains connectivity and attached mesh and domain data.
+        It treats attached vector and tensor fields as Lagrangian data and does
+        not push them forward. It invalidates geometry caches and retains
+        topology caches on each component. Points outside the lattice box are
+        unchanged. To keep the exterior fixed, zero the outermost coefficient
+        plane on every Bernstein or node-interpolating face. For cubic
+        B-splines, zero the first and last three coefficient planes on every
+        axis. ``origin`` and ``extent`` are non-differentiable lattice
+        parameters. The operation does not automatically detect inverted,
+        degenerate, or self-intersecting cells. Validate each component mesh
+        explicitly with :meth:`Mesh.validate` when required.
         """
         if not isinstance(control_displacements, torch.Tensor):
             raise TypeError(

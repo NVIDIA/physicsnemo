@@ -16,6 +16,7 @@
 
 """Shared utilities for mesh deformation operations."""
 
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import torch
@@ -146,8 +147,6 @@ def _mesh_with_deformed_points(
     points: Float[torch.Tensor, "n_points n_spatial_dims"],
 ) -> "Mesh":
     """Construct a geometry-invalidated mesh while retaining topology caches."""
-    from physicsnemo.mesh.mesh import Mesh
-
     device = points.device
     cache = TensorDict(
         {
@@ -157,11 +156,4 @@ def _mesh_with_deformed_points(
         },
         device=device,
     )
-    return Mesh(
-        points=points,
-        cells=mesh.cells,
-        point_data=mesh.point_data,
-        cell_data=mesh.cell_data,
-        global_data=mesh.global_data,
-        _cache=cache,
-    )
+    return replace(mesh, points=points, _cache=cache)

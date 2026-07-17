@@ -38,8 +38,8 @@ from .kernels import _precision_overload
 BERNSTEIN_BASIS_ID = 0
 BSPLINE_BASIS_ID = 1
 LINEAR_BASIS_ID = 2
-SMOOTH_STEP_1_BASIS_ID = 3
-SMOOTH_STEP_2_BASIS_ID = 4
+CUBIC_HERMITE_BASIS_ID = 3
+QUINTIC_HERMITE_BASIS_ID = 4
 # Keep common coarse lattices on the faster product path. At degree 64 the
 # largest binomial coefficient is still many orders below the float32 limit.
 _BERNSTEIN_DIRECT_MAX_DEGREE = 64
@@ -139,8 +139,8 @@ def _is_interpolating_basis(basis_id: int) -> bool:
 
     return (
         basis_id == LINEAR_BASIS_ID
-        or basis_id == SMOOTH_STEP_1_BASIS_ID
-        or basis_id == SMOOTH_STEP_2_BASIS_ID
+        or basis_id == CUBIC_HERMITE_BASIS_ID
+        or basis_id == QUINTIC_HERMITE_BASIS_ID
     )
 
 
@@ -148,9 +148,9 @@ def _is_interpolating_basis(basis_id: int) -> bool:
 def _interpolating_blend(basis_id: int, t: Any):
     """Evaluate the upper-node blend function for a cell parameter ``t``."""
 
-    if basis_id == SMOOTH_STEP_1_BASIS_ID:
+    if basis_id == CUBIC_HERMITE_BASIS_ID:
         return t * t * (type(t)(3.0) - type(t)(2.0) * t)
-    if basis_id == SMOOTH_STEP_2_BASIS_ID:
+    if basis_id == QUINTIC_HERMITE_BASIS_ID:
         return t * t * t * (t * (type(t)(6.0) * t - type(t)(15.0)) + type(t)(10.0))
     return t
 
@@ -159,9 +159,9 @@ def _interpolating_blend(basis_id: int, t: Any):
 def _interpolating_blend_derivative(basis_id: int, t: Any):
     """Evaluate the cell-parameter derivative of the upper-node blend."""
 
-    if basis_id == SMOOTH_STEP_1_BASIS_ID:
+    if basis_id == CUBIC_HERMITE_BASIS_ID:
         return type(t)(6.0) * t * (type(t)(1.0) - t)
-    if basis_id == SMOOTH_STEP_2_BASIS_ID:
+    if basis_id == QUINTIC_HERMITE_BASIS_ID:
         complement = type(t)(1.0) - t
         return type(t)(30.0) * t * t * complement * complement
     return type(t)(1.0)
@@ -538,8 +538,8 @@ __all__ = [
     "BERNSTEIN_BASIS_ID",
     "BSPLINE_BASIS_ID",
     "LINEAR_BASIS_ID",
-    "SMOOTH_STEP_1_BASIS_ID",
-    "SMOOTH_STEP_2_BASIS_ID",
+    "CUBIC_HERMITE_BASIS_ID",
+    "QUINTIC_HERMITE_BASIS_ID",
     "ffd_backward_f32",
     "ffd_backward_f64",
     "ffd_forward_f32",

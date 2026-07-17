@@ -92,12 +92,14 @@ Lattice Free-Form Deformation
 
     points = torch.rand(1024, 3)
     control_displacements = torch.zeros(4, 4, 4, 3, requires_grad=True)
+    origin = points.new_zeros(3)
+    extent = points.new_ones(3)
 
     deformed = ffd_points(
         points,
         control_displacements,
-        origin=[0.0, 0.0, 0.0],
-        extent=[1.0, 1.0, 1.0],
+        origin=origin,
+        extent=extent,
         basis="bernstein",
     )
     deformed.square().mean().backward()
@@ -108,9 +110,13 @@ optimization. An optimizer, or a model that produces the lattice
 displacements, learns the deformation from a differentiable objective on
 ``deformed``.
 
+For repeated GPU calls, create ``origin`` and ``extent`` once as device tensors,
+as shown in the example. Python sequences are convenient for one-off calls.
+Each invocation with sequence inputs creates and transfers new tensors.
+
 Choosing a basis:
 
-- ``"bernstein"`` is classic free-form deformation. Every lattice node
+- ``"bernstein"`` provides classic free-form deformation. Every lattice node
   influences every point in the box, which suits coarse design lattices. The
   polynomial degree, global support, and evaluation cost grow with the
   resolution.
@@ -121,23 +127,23 @@ Choosing a basis:
   coefficients, index ``i`` is associated with the Greville coordinate
   ``(i - 1) / (n - 3)``. The first and last coefficient planes therefore lie
   one knot spacing outside the evaluation box.
-- ``"linear"``, ``"smoothstep"``, and ``"smootherstep"`` use the two
+- ``"linear"``, ``"cubic_hermite"``, and ``"quintic_hermite"`` use the two
   neighboring lattice nodes per axis and exactly reproduce every control-node
-  displacement. ``"linear"`` is piecewise multilinear, while the cubic and
-  quintic smooth-step variants are respectively C1 and C2 across cell
-  boundaries. These modes suit design parameters whose values must be attained
-  at the lattice nodes.
+  displacement. ``"linear"`` is piecewise multilinear and C0 across cell
+  boundaries. The cubic and quintic Hermite variants are C1 and C2,
+  respectively. These modes suit design parameters whose values must be
+  attained at the lattice nodes.
 
-The evaluation cost is proportional to
-``batch_size * n_points * prod(resolution) * n_spatial_dims`` for
-``"bernstein"`` and
-``batch_size * n_points * 4**n_spatial_dims * n_spatial_dims`` for
-``"bspline"``. The node-interpolating modes use ``2**n_spatial_dims`` controls
-per point. Points outside the lattice box pass through unchanged. A sufficient
-condition for continuity with a fixed exterior is to zero the outermost
-coefficient plane on every Bernstein or node-interpolating face. For cubic
-B-splines, zero the first and last three coefficient planes on every axis
-because three planes have nonzero weight at each box face.
+For ``"bernstein"``, the evaluation cost is proportional to
+``batch_size * n_points * prod(resolution) * n_spatial_dims``. For
+``"bspline"``, it is proportional to
+``batch_size * n_points * 4**n_spatial_dims * n_spatial_dims``. The
+node-interpolating modes use ``2**n_spatial_dims`` controls per point. Points
+outside the lattice box remain unchanged. A sufficient condition for continuity
+with a fixed exterior is to zero the outermost coefficient plane on every
+Bernstein or node-interpolating face. For cubic B-splines, zero the first and
+last three coefficient planes on every axis because three planes have nonzero
+weight at each box face.
 
 For connectivity-preserving object APIs, use
 :meth:`~physicsnemo.mesh.mesh.Mesh.ffd` or

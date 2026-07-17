@@ -168,20 +168,26 @@ exactly the identity, and the same lattice deforms any geometry embedded in
 the box.
 
 When ``origin`` and ``extent`` are omitted, the box spans the mesh bounds. Each
-coordinate axis must have positive range; planar or linear geometry embedded
+coordinate axis must have positive range. Planar or linear geometry embedded
 in a higher-dimensional space therefore needs an explicit positive extent.
 ``basis="bernstein"`` provides classic global-support free-form deformation for
-coarse lattices. ``basis="bspline"`` gives local four-node-per-axis support
+coarse lattices. ``basis="bspline"`` provides local four-node-per-axis support
 and scales to fine lattices for local sculpting. Its first and last coefficient
 planes lie one knot spacing outside the evaluation box. ``basis="linear"``,
-``"smoothstep"``, and ``"smootherstep"`` instead use the two neighboring
+``"cubic_hermite"``, and ``"quintic_hermite"`` instead use the two neighboring
 nodes per axis and reproduce every control displacement at its lattice node.
-Their cell transitions are respectively C0, C1, and C2.
+For a local cell coordinate :math:`t`, their upper-node weights are
+:math:`t`, :math:`3t^2-2t^3` (cubic Hermite), and
+:math:`6t^5-15t^4+10t^3` (quintic Hermite), respectively. The lower-node
+weight is one minus the upper-node weight. The resulting fields are C0, C1,
+and C2 across cell boundaries, respectively. Perlin introduced the quintic
+blend in `Improving Noise <https://doi.org/10.1145/566654.566636>`_ to
+eliminate the cubic blend's second-derivative discontinuities.
 
 .. code:: python
 
-    # A 4x4x4 Bernstein lattice spanning the mesh bounds; zero displacements
-    # start at the identity.
+    # A 4x4x4 Bernstein lattice spans the mesh bounds.
+    # Zero displacements start at the identity.
     control_displacements = torch.zeros(4, 4, 4, 3, requires_grad=True)
     deformed = mesh.ffd(control_displacements)
 
@@ -192,9 +198,9 @@ Their cell transitions are respectively C0, C1, and C2.
 Points outside the lattice box are unchanged. The deformation is generally not
 continuous across the box boundary. A sufficient condition for a fixed
 exterior is to zero the outermost coefficient plane on every Bernstein or
-node-interpolating face. For cubic B-splines, zero the first and last three coefficient planes on
-every axis for cubic B-splines. ``origin`` and ``extent`` are
-non-differentiable lattice configuration; optimize ``control_displacements``
+node-interpolating face. For cubic B-splines, zero the first and last three
+coefficient planes on every axis. ``origin`` and ``extent`` are
+non-differentiable lattice parameters. Optimize ``control_displacements``
 instead.
 
 .. rubric:: Visualization
@@ -255,15 +261,19 @@ resolved values also match.
     )
 
 :meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.ffd` follows the same pattern
-for lattice free-form deformation: one lattice field is evaluated over the
-combined interior and boundary points, and the default box spans the combined
-component bounds. The combined bounds must have positive range on every
-coordinate axis unless an explicit extent is supplied.
+for lattice free-form deformation:
+
+- The operation evaluates one lattice field over the combined interior and
+  boundary points.
+- The default box spans the combined component bounds.
+
+The combined bounds must have positive range on every coordinate axis unless
+an explicit extent is supplied.
 
 Every deformation preserves connectivity and attached point, cell, global, and
-domain data. Attached vector and tensor fields are treated as Lagrangian data
-data and does not push them forward. Geometry-dependent caches are discarded and
-recomputed lazily. Topology caches are retained.
+domain data. These operations treat attached vector and tensor fields as
+Lagrangian data and do not push them forward. They discard geometry-dependent
+caches and recompute them lazily. They retain topology caches.
 
 .. warning::
 

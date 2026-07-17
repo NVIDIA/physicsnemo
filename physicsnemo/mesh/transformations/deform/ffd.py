@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Literal
 import torch
 from jaxtyping import Bool, Float
 
+from physicsnemo._typing import FFDBasis
 from physicsnemo.mesh.transformations.deform._utils import (
     _mesh_with_deformed_points,
     _resolve_point_field,
@@ -120,6 +121,7 @@ def _default_lattice_box(
         if extent is None:
             maximum = points.amax(dim=0)
             origin_t = _origin_tensor_for_extent(origin, points)
+            origin = origin_t
             extent = maximum - origin_t.detach()
             if not bool((torch.isfinite(extent) & (extent > 0)).all()):
                 raise ValueError(
@@ -137,9 +139,7 @@ def ffd(
     *,
     origin: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float] | None = None,
     extent: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float] | None = None,
-    basis: Literal[
-        "bernstein", "bspline", "linear", "smoothstep", "smootherstep"
-    ] = "bernstein",
+    basis: FFDBasis = "bernstein",
     point_weights: str
     | tuple[str, ...]
     | Bool[torch.Tensor, " n_points"]
@@ -151,8 +151,8 @@ def ffd(
 
     An ``n_1 x ... x n_D`` array of control displacements defines a field over
     the axis-aligned box ``[origin, origin + extent]``. Mesh points inside the
-    box move with the tensor-product basis interpolation of those values;
-    points outside the box are unchanged. A lattice of zero displacements is
+    box move with the tensor-product basis interpolation of those values.
+    Points outside the box are unchanged. A lattice of zero displacements is
     exactly the identity, and a constant lattice translates every point inside
     the box.
 
@@ -169,41 +169,57 @@ def ffd(
     origin : torch.Tensor, sequence of float, or None, optional
         Minimum corner of the lattice box with shape
         ``(mesh.n_spatial_dims,)``. ``None`` uses the minimum corner of the
-        mesh bounds. Default is ``None``.
+        mesh bounds. For repeated GPU calls with an explicit box, create
+        ``origin`` and ``extent`` once as device tensors. Reuse them to avoid
+        recreating and transferring sequence values. Default is ``None``.
     extent : torch.Tensor, sequence of float, or None, optional
         Edge lengths of the lattice box with the same accepted shapes as
-        ``origin``; every value must be finite and strictly positive, and
-        tensor values are not validated at runtime. ``None`` sizes the box
-        from ``origin`` to the maximum corner of the mesh bounds. Validating a
-        derived extent synchronizes with the device. Every point-coordinate
-        axis must then have positive range; supply an explicit extent for
-        lower-dimensional geometry embedded in a higher-dimensional space.
-        Default is ``None``.
-    basis : {"bernstein", "bspline", "linear", "smoothstep", "smootherstep"}, optional
-        Per-axis basis family. ``"bernstein"`` is classic global-support
-        free-form deformation for coarse lattices; ``"bspline"`` gives local
-        four-node-per-axis support and scales to fine lattices. For B-splines,
-        coefficient index ``i`` is associated with local coordinate
-        ``(i - 1) / (n - 3)``, so the first and last coefficient planes lie
-        outside the evaluation box. ``"linear"``, ``"smoothstep"``, and
-        ``"smootherstep"`` use the two neighboring nodes per axis and
-        interpolate every lattice node, with progressively smoother
-        transitions. Default is ``"bernstein"``.
+        ``origin``. Every value must be finite and strictly positive. The
+        operation does not validate tensor values at runtime. ``None`` sizes
+        the box from ``origin`` to the maximum corner of the mesh bounds.
+        Validating a derived extent synchronizes with the device. Every
+        point-coordinate axis must then have positive range. Supply an explicit
+        extent for lower-dimensional geometry embedded in a higher-dimensional
+        space. Default is ``None``.
+    basis : {"bernstein", "bspline", "linear", "cubic_hermite", "quintic_hermite"}, optional
+        Per-axis basis family:
+
+        - ``"bernstein"`` provides classic global-support FFD. Every lattice
+          node influences every point inside the box.
+        - ``"bspline"`` uses a uniform cubic B-spline with local
+          four-node-per-axis support and C2 continuity between knot spans.
+          Coefficient index ``i`` corresponds to local coordinate
+          ``(i - 1) / (n - 3)``. The first and last coefficient planes lie
+          outside the evaluation box.
+        - ``"linear"`` uses upper-node weight :math:`s(t)=t` within each
+          lattice cell. It interpolates every node. It is continuous (C0)
+          across cell boundaries, but its slope can jump.
+        - ``"cubic_hermite"`` uses the cubic Hermite blend
+          :math:`s(t)=3t^2-2t^3`. Its first derivative vanishes at both cell
+          endpoints. This gives C1 continuity across cell boundaries.
+        - ``"quintic_hermite"`` uses the quintic Hermite blend
+          :math:`s(t)=6t^5-15t^4+10t^3`. Its first and second derivatives
+          vanish at both endpoints. This gives C2 continuity across cell
+          boundaries. Perlin introduced this improved interpolant [1]_.
+
+        The node-interpolating bases use only the two neighboring nodes per
+        axis. Here, ``t`` is the local cell coordinate in ``[0, 1]``. The
+        upper-node weight is :math:`s(t)`, and the lower-node weight is
+        :math:`1-s(t)`. Default is ``"bernstein"``.
     point_weights : str, tuple[str, ...], torch.Tensor, or None, optional
         Optional bool or floating mesh-point weights with shape
         ``(mesh.n_points,)``, or a
         :attr:`~physicsnemo.mesh.mesh.Mesh.point_data` key resolving to those
-        point weights. All weights must match the point device; floating
+        point weights. All weights must match the point device. Floating
         weights must also match the point dtype. Default is ``None``.
     implementation : {"torch", "warp"} or None, optional
-        Backend override. ``None`` selects Torch on CPU and Warp on CUDA when
-        Warp is available, otherwise Torch.
+        Backend override. ``None`` selects Torch on CPU. On CUDA, it selects
+        Warp when available and otherwise Torch.
 
     Returns
     -------
     Mesh
-        New mesh with deformed points and unchanged connectivity and attached
-        fields.
+        New mesh with deformed points and unchanged connectivity and fields.
 
     Raises
     ------
@@ -211,7 +227,7 @@ def ffd(
         If tensors, lattice values, or point weights have unsupported types or
         dtypes.
     ValueError
-        If shapes, devices, lattice configuration, point weights, or ``basis``
+        If shapes, devices, lattice parameters, point weights, or ``basis``
         are invalid.
     KeyError
         If a point-data key or ``implementation`` name is not found.
@@ -220,17 +236,22 @@ def ffd(
 
     Notes
     -----
-    Attached fields are treated as Lagrangian data and are not pushed forward.
-    Geometry-dependent caches are invalidated and topology caches are retained.
-    The deformation is generally not continuous across the lattice-box
-    boundary. A sufficient condition for a fixed exterior is to zero the
-    outermost coefficient plane on every Bernstein or node-interpolating face,
-    or the first and last three coefficient planes on every axis for cubic
-    B-splines. ``origin`` and
-    ``extent`` are non-differentiable lattice-configuration values; optimize
+    The operation treats attached fields as Lagrangian data and does not push
+    them forward. It invalidates geometry-dependent caches and retains topology
+    caches. The deformation is generally not continuous across the lattice box
+    boundary. To keep the exterior fixed, zero the outermost coefficient plane
+    on every Bernstein or node-interpolating face. For cubic B-splines, zero the
+    first and last three coefficient planes on every axis. ``origin`` and
+    ``extent`` are non-differentiable lattice parameters. Optimize
     ``control_displacements`` instead. The operation does not detect or repair
-    inverted, degenerate, or self-intersecting cells; call
+    inverted, degenerate, or self-intersecting cells. Call
     :meth:`~physicsnemo.mesh.mesh.Mesh.validate` explicitly when needed.
+
+    References
+    ----------
+    .. [1] Perlin, K. (2002). "Improving Noise." *ACM Transactions on
+       Graphics*, 21(3), 681-682.
+       https://doi.org/10.1145/566654.566636
     """
     if not isinstance(control_displacements, torch.Tensor):
         raise TypeError(

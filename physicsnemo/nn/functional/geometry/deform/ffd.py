@@ -24,19 +24,14 @@ from typing import Literal
 import torch
 from jaxtyping import Bool, Float
 
+from physicsnemo._typing import FFDBasis
 from physicsnemo.core.function_spec import FunctionSpec
 
 from ._torch_impl import ffd_points_torch
-from ._utils import normalize_ffd_inputs, restore_point_rank
+from ._utils import _FFD_MIN_NODES, normalize_ffd_inputs, restore_point_rank
 from ._warp_impl import ffd_points_warp
 
-_FFD_BASES = (
-    "bernstein",
-    "bspline",
-    "linear",
-    "smoothstep",
-    "smootherstep",
-)
+_FFD_BASES = tuple(_FFD_MIN_NODES)
 
 
 def _validate_basis(basis: str) -> None:
@@ -51,15 +46,15 @@ class FFDPoints(FunctionSpec):
 
     An :math:`n_1 \times \dots \times n_D` array of control displacements
     defines a field over the axis-aligned box with corner ``origin`` :math:`o`
-    and edge lengths ``extent`` :math:`e`. Points inside the box are located by
-    their local coordinates
+    and edge lengths ``extent`` :math:`e`. For each point inside the box, define
+    the local coordinates as
 
     .. math::
 
-       u_d = \frac{x_d - o_d}{e_d} \in [0, 1],
+       u_d = \frac{x_d - o_d}{e_d} \in [0, 1].
 
-    and displaced by the tensor-product interpolation of the control
-    displacements :math:`\Delta P`:
+    The tensor-product interpolation of the control displacements
+    :math:`\Delta P` gives the displacement:
 
     .. math::
 
@@ -67,39 +62,41 @@ class FFDPoints(FunctionSpec):
        \left[\prod_{d=1}^{D} b_{i_d}(u_d)\right] \Delta P_{i_1 \dots i_D},
        \qquad x' = x + \mathtt{point\_weights}\,d(x).
 
-    Points outside the box pass through as identity. All supported bases form a
+    Points outside the box remain unchanged. All supported bases form a
     partition of unity, so a lattice of zero displacements is exactly the
     identity and a constant lattice translates every point inside the box.
 
-    With ``basis="bernstein"`` — classic free-form deformation
-    (Sederberg and Parry, 1986) — the per-axis functions are the Bernstein
+    ``basis="bernstein"`` provides the classic free-form deformation basis from
+    Sederberg and Parry (1986). Its per-axis functions are the Bernstein
     polynomials of degree :math:`p_d = n_d - 1`:
 
     .. math::
 
        b_i(u) = \binom{p_d}{i} u^i (1-u)^{p_d - i},
 
-    and every lattice node influences every point in the box. With
-    ``basis="bspline"``, the per-axis functions are uniform cubic B-splines:
-    the axis is divided into :math:`n_d - 3` knot spans and only the four
+    Every lattice node influences every point in the box. ``basis="bspline"``
+    uses uniform cubic B-splines. The axis is divided into
+    :math:`n_d - 3` knot spans, and only the four
     coefficients around the containing span influence a point, independent of
     the lattice resolution. Coefficient index :math:`i` is associated with the
-    Greville coordinate :math:`(i - 1) / (n_d - 3)`, so the first and last
+    Greville coordinate :math:`(i - 1) / (n_d - 3)`. The first and last
     coefficient planes lie one knot spacing outside the evaluation box.
 
-    ``basis="linear"``, ``"smoothstep"``, and ``"smootherstep"`` are
+    ``basis="linear"``, ``"cubic_hermite"``, and ``"quintic_hermite"`` are
     local, node-interpolating alternatives. Each axis is divided into
     :math:`n_d - 1` cells, and only the two nodes bracketing a point contribute
     along that axis. If :math:`t \in [0, 1]` is the coordinate within a cell,
-    the upper-node weight is respectively :math:`t`,
-    :math:`3t^2 - 2t^3`, or :math:`t^3(6t^2 - 15t + 10)`; the lower-node
-    weight is one minus that value. The resulting fields are respectively C0,
-    C1, and C2 across cell boundaries.
+    the upper-node weights are :math:`t`, :math:`3t^2 - 2t^3`, and
+    :math:`t^3(6t^2 - 15t + 10)`, respectively. The lower-node weight is one
+    minus the upper-node weight. The resulting fields are C0, C1, and C2 across
+    cell boundaries, respectively. Perlin introduced the quintic polynomial
+    in *Improving Noise* [1]_ to remove the cubic polynomial's second-derivative
+    discontinuities.
 
     Inputs may be unbatched (``points`` of shape ``(N, D)``) or batched
-    (``(B, N, D)``); the lattice follows with shapes
-    ``(n_1, ..., n_D, D)`` or ``(B, n_1, ..., n_D, D)``. Batched inputs are
-    aligned rather than broadcast. Float32 and float64 are supported.
+    (``(B, N, D)``). The lattice follows with shapes ``(n_1, ..., n_D, D)`` or
+    ``(B, n_1, ..., n_D, D)``. Batched inputs are aligned rather than
+    broadcast. Float32 and float64 are supported.
 
     Parameters
     ----------
@@ -112,35 +109,36 @@ class FFDPoints(FunctionSpec):
         two nodes for ``"bernstein"`` and the node-interpolating bases, and
         four for ``"bspline"``. For ``"bernstein"`` and the interpolating
         bases, node ``(i_1, ..., i_D)`` sits at coordinate
-        ``origin_d + extent_d * i_d / (n_d - 1)`` along each axis; uniform
+        ``origin_d + extent_d * i_d / (n_d - 1)`` along each axis. Uniform
         cubic B-spline coefficient ``i_d`` is associated with
         ``origin_d + extent_d * (i_d - 1) / (n_d - 3)`` and is generally not
         interpolated by the field.
     origin : torch.Tensor or sequence of float
         Minimum corner of the lattice box with shape ``(D,)`` or aligned
         batched shape ``(B, D)``. Tensor values must match the point dtype and
-        device and are used without runtime validation; sequences are
-        converted and validated on the host.
+        device. The operation uses tensor values without runtime validation. It
+        converts and validates sequences on the host. For repeated GPU calls,
+        create device tensors once and reuse them.
     extent : torch.Tensor or sequence of float
         Edge lengths of the lattice box with the same accepted shapes as
-        ``origin``. Every value must be strictly positive and finite; tensor
-        values are not validated at runtime.
-    basis : {"bernstein", "bspline", "linear", "smoothstep", "smootherstep"}, optional
-        Per-axis basis family. ``"bernstein"`` is classic global-support FFD
-        for coarse lattices; ``"bspline"`` gives local four-node-per-axis
+        ``origin``. Every value must be strictly positive and finite. The
+        operation does not validate tensor values at runtime.
+    basis : {"bernstein", "bspline", "linear", "cubic_hermite", "quintic_hermite"}, optional
+        Per-axis basis family. ``"bernstein"`` provides classic global-support
+        FFD for coarse lattices. ``"bspline"`` uses local four-node-per-axis
         support and scales to fine lattices. ``"linear"``,
-        ``"smoothstep"``, and ``"smootherstep"`` are local
+        ``"cubic_hermite"``, and ``"quintic_hermite"`` are local
         two-node-per-axis bases that interpolate every lattice node, with
         progressively smoother transitions. Default is ``"bernstein"``.
     point_weights : torch.Tensor or None, optional
         Optional bool or floating per-point weights. Accepted shapes are
         ``(N,)`` for unbatched inputs and ``(B, N)`` for batched inputs.
-        All weights must match the point device; floating weights must also
-        match the point dtype, while bool values act as hard masks. Values are
-        used as supplied without clamping. Default is ``None``.
+        All weights must match the point device. Floating weights must also
+        match the point dtype. Bool values act as hard masks. The operation
+        uses values as supplied without clamping. Default is ``None``.
     implementation : {"warp", "torch"} or None, optional
-        Explicit backend. ``None`` selects Torch on CPU and Warp on CUDA when
-        Warp is available, otherwise Torch with a one-time
+        Explicit backend. ``None`` selects Torch on CPU. On CUDA, it selects
+        Warp when available and otherwise Torch with a one-time
         :class:`RuntimeWarning`.
 
     Returns
@@ -153,7 +151,7 @@ class FFDPoints(FunctionSpec):
     TypeError
         If tensor dtypes or Python argument types are unsupported.
     ValueError
-        If tensor shapes, devices, lattice configuration, point weights, or
+        If tensor shapes, devices, lattice parameters, point weights, or
         ``basis`` are invalid.
     KeyError
         If ``implementation`` does not name a registered backend.
@@ -164,21 +162,26 @@ class FFDPoints(FunctionSpec):
     -----
     Both backends propagate first-order gradients through points, control
     displacements, and floating point weights. ``origin`` and ``extent`` are
-    non-differentiable lattice-configuration values and must not require grad.
+    non-differentiable lattice parameters. They must not require gradients.
     Only first-order gradients are part of the Warp backend's public contract.
 
-    The deformation is generally not continuous across the box boundary: an
-    outside point stays fixed while a neighboring inside point moves. A
-    sufficient condition for continuity with the undeformed exterior is to set
-    the outermost coefficient plane on every Bernstein or node-interpolating
-    face to zero. For cubic B-splines, set the first and last three coefficient
-    planes on every axis to zero because three planes have nonzero weight at
-    each box face.
+    The deformation is generally not continuous across the box boundary. An
+    outside point stays fixed while a neighboring inside point moves. To keep
+    the exterior fixed, set the outermost coefficient plane on every Bernstein
+    or node-interpolating face to zero. For cubic B-splines, set the first and
+    last three coefficient planes on every axis to zero because three planes
+    have nonzero weight at each box face.
 
     Bernstein degree, global support, and evaluation cost grow with the lattice
     resolution. Use ``"bspline"`` for fine lattices or local control. The
-    lattice resolution is treated as a static configuration under
-    :func:`torch.compile`; each distinct resolution compiles its own graph.
+    lattice resolution is a static parameter under :func:`torch.compile`. Each
+    distinct resolution compiles its own graph.
+
+    References
+    ----------
+    .. [1] Perlin, K. (2002). "Improving Noise." *ACM Transactions on
+       Graphics*, 21(3), 681-682.
+       https://doi.org/10.1145/566654.566636
     """
 
     _FORWARD_BENCHMARK_CASES = (
@@ -243,12 +246,12 @@ class FFDPoints(FunctionSpec):
             0.5,
         ),
         (
-            "smooth-step-2-n8192-r16x16x16",
+            "quintic-hermite-n8192-r16x16x16",
             1,
             8192,
             (16, 16, 16),
             torch.float32,
-            "smootherstep",
+            "quintic_hermite",
             "none",
             0.0,
         ),
@@ -313,44 +316,12 @@ class FFDPoints(FunctionSpec):
         *,
         origin: Float[torch.Tensor, "*box_batch num_dims"] | Sequence[float],
         extent: Float[torch.Tensor, "*box_batch num_dims"] | Sequence[float],
-        basis: Literal[
-            "bernstein", "bspline", "linear", "smoothstep", "smootherstep"
-        ] = "bernstein",
+        basis: FFDBasis = "bernstein",
         point_weights: Bool[torch.Tensor, "*batch num_points"]
         | Float[torch.Tensor, "*batch num_points"]
         | None = None,
     ) -> Float[torch.Tensor, "*batch num_points num_dims"]:
-        """Apply lattice free-form deformation with the Warp backend.
-
-        Parameters
-        ----------
-        points : torch.Tensor
-            Unbatched ``(N, D)`` or batched ``(B, N, D)`` query points.
-        control_displacements : torch.Tensor
-            Unbatched or batch-aligned lattice displacement vectors whose last
-            dimension is ``D``.
-        origin, extent : torch.Tensor or sequence of float
-            Lattice-box origin and edge lengths with shape ``(D,)`` or
-            batch-aligned shape ``(B, D)``.
-        basis : {"bernstein", "bspline", "linear", "smoothstep", "smootherstep"}, optional
-            Tensor-product lattice basis.
-        point_weights : torch.Tensor or None, optional
-            Optional bool or floating per-point weights.
-
-        Returns
-        -------
-        torch.Tensor
-            Deformed points with the same shape, dtype, and device as
-            ``points``.
-
-        Raises
-        ------
-        TypeError
-            If tensor dtypes or Python argument types are unsupported.
-        ValueError
-            If shapes, devices, lattice configuration, weights, or ``basis``
-            are invalid.
-        """
+        """Apply lattice free-form deformation with the Warp backend."""
 
         _validate_basis(basis)
         (
@@ -382,44 +353,12 @@ class FFDPoints(FunctionSpec):
         *,
         origin: Float[torch.Tensor, "*box_batch num_dims"] | Sequence[float],
         extent: Float[torch.Tensor, "*box_batch num_dims"] | Sequence[float],
-        basis: Literal[
-            "bernstein", "bspline", "linear", "smoothstep", "smootherstep"
-        ] = "bernstein",
+        basis: FFDBasis = "bernstein",
         point_weights: Bool[torch.Tensor, "*batch num_points"]
         | Float[torch.Tensor, "*batch num_points"]
         | None = None,
     ) -> Float[torch.Tensor, "*batch num_points num_dims"]:
-        """Apply lattice free-form deformation with the Torch backend.
-
-        Parameters
-        ----------
-        points : torch.Tensor
-            Unbatched ``(N, D)`` or batched ``(B, N, D)`` query points.
-        control_displacements : torch.Tensor
-            Unbatched or batch-aligned lattice displacement vectors whose last
-            dimension is ``D``.
-        origin, extent : torch.Tensor or sequence of float
-            Lattice-box origin and edge lengths with shape ``(D,)`` or
-            batch-aligned shape ``(B, D)``.
-        basis : {"bernstein", "bspline", "linear", "smoothstep", "smootherstep"}, optional
-            Tensor-product lattice basis.
-        point_weights : torch.Tensor or None, optional
-            Optional bool or floating per-point weights.
-
-        Returns
-        -------
-        torch.Tensor
-            Deformed points with the same shape, dtype, and device as
-            ``points``.
-
-        Raises
-        ------
-        TypeError
-            If tensor dtypes or Python argument types are unsupported.
-        ValueError
-            If shapes, devices, lattice configuration, weights, or ``basis``
-            are invalid.
-        """
+        """Apply lattice free-form deformation with the Torch backend."""
 
         _validate_basis(basis)
         (
@@ -452,55 +391,13 @@ class FFDPoints(FunctionSpec):
         *,
         origin: Float[torch.Tensor, "*box_batch num_dims"] | Sequence[float],
         extent: Float[torch.Tensor, "*box_batch num_dims"] | Sequence[float],
-        basis: Literal[
-            "bernstein", "bspline", "linear", "smoothstep", "smootherstep"
-        ] = "bernstein",
+        basis: FFDBasis = "bernstein",
         point_weights: Bool[torch.Tensor, "*batch num_points"]
         | Float[torch.Tensor, "*batch num_points"]
         | None = None,
         implementation: Literal["torch", "warp"] | None = None,
     ) -> Float[torch.Tensor, "*batch num_points num_dims"]:
-        """Select Warp for CUDA inputs and Torch for CPU inputs by default.
-
-        Falling back to Torch on CUDA inputs because Warp is unavailable emits
-        the standard one-time :class:`RuntimeWarning`.
-
-        Parameters
-        ----------
-        points : torch.Tensor
-            Unbatched ``(N, D)`` or batched ``(B, N, D)`` query points.
-        control_displacements : torch.Tensor
-            Unbatched or batch-aligned lattice displacement vectors whose last
-            dimension is ``D``.
-        origin, extent : torch.Tensor or sequence of float
-            Lattice-box origin and edge lengths with shape ``(D,)`` or
-            batch-aligned shape ``(B, D)``.
-        basis : {"bernstein", "bspline", "linear", "smoothstep", "smootherstep"}, optional
-            Tensor-product lattice basis.
-        point_weights : torch.Tensor or None, optional
-            Optional bool or floating per-point weights.
-        implementation : {"torch", "warp"} or None, optional
-            Explicit backend selection. ``None`` selects according to the
-            point device and backend availability.
-
-        Returns
-        -------
-        torch.Tensor
-            Deformed points with the same shape, dtype, and device as
-            ``points``.
-
-        Raises
-        ------
-        TypeError
-            If tensor dtypes or Python argument types are unsupported.
-        ValueError
-            If shapes, devices, lattice configuration, weights, or ``basis``
-            are invalid.
-        KeyError
-            If ``implementation`` does not name a registered backend.
-        ImportError
-            If an explicitly requested backend is unavailable.
-        """
+        """Select a backend and apply lattice free-form deformation."""
 
         if implementation is None:
             impls = cls._get_impls()

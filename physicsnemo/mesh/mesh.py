@@ -36,6 +36,7 @@ import torch.nn.functional as F
 from jaxtyping import Bool, Float
 from tensordict import NonTensorData, TensorDict, tensorclass
 
+from physicsnemo._typing import FFDBasis
 from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
 from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
 from physicsnemo.mesh.transformations.deform import displace, free_form_deform, morph
@@ -2728,9 +2729,7 @@ class Mesh:
         extent: Float[torch.Tensor, " n_spatial_dims"]
         | Sequence[builtins.float]
         | None = None,
-        basis: Literal[
-            "bernstein", "bspline", "linear", "smoothstep", "smootherstep"
-        ] = "bernstein",
+        basis: FFDBasis = "bernstein",
         point_weights: str
         | tuple[str, ...]
         | Bool[torch.Tensor, " n_points"]

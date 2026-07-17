@@ -23,12 +23,13 @@ from typing import get_type_hints
 import pytest
 import torch
 
+from physicsnemo._typing import FFDBasis
 from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.mesh.transformations.deform import free_form_deform
 
 
 def test_free_form_deform_namespace_is_canonical():
-    """The deformation is public only from its dedicated namespace."""
+    """Only the deformation namespace exports ``free_form_deform``."""
 
     transformations = importlib.import_module("physicsnemo.mesh.transformations")
     deform_module = importlib.import_module("physicsnemo.mesh.transformations.deform")
@@ -39,13 +40,15 @@ def test_free_form_deform_namespace_is_canonical():
 
 
 def test_mesh_ffd_signatures_and_annotations_are_introspectable():
-    """Generated ``.float()`` methods must not break public annotations."""
+    """Generated ``.float()`` methods preserve public annotations."""
 
+    assert get_type_hints(free_form_deform, localns={"Mesh": Mesh})["basis"] == FFDBasis
     for owner, ffd_method in ((Mesh, Mesh.ffd), (DomainMesh, DomainMesh.ffd)):
         signature = inspect.signature(ffd_method)
         assert signature.parameters["basis"].default == "bernstein"
         assert signature.parameters["origin"].default is None
         assert signature.parameters["extent"].default is None
+        assert get_type_hints(ffd_method)["basis"] == FFDBasis
         assert get_type_hints(ffd_method)["return"] is owner
 
 
@@ -82,7 +85,7 @@ def test_mesh_ffd_default_box_spans_mesh_bounds():
     assert torch.equal(output.global_data["case_id"], mesh.global_data["case_id"])
 
 
-@pytest.mark.parametrize("basis", ["linear", "smoothstep", "smootherstep"])
+@pytest.mark.parametrize("basis", ["linear", "cubic_hermite", "quintic_hermite"])
 def test_mesh_ffd_interpolating_bases_reproduce_control_nodes(basis):
     mesh = _triangle_mesh()
     control_displacements = 0.1 * torch.arange(8.0).reshape(2, 2, 2)
@@ -262,7 +265,7 @@ def test_domain_ffd_shared_lattice_and_common_point_weight_key(point_weights):
         implementation="torch",
     )
 
-    # Coincident component points with the same common-key values move identically.
+    # Components sharing a point and weight move identically.
     torch.testing.assert_close(
         output.interior.points[:2], output.boundaries["wall"].points
     )

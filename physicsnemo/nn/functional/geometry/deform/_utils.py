@@ -25,13 +25,25 @@ from numbers import Real
 import torch
 from jaxtyping import Bool, Float
 
-_FFD_MIN_NODES = {
+from physicsnemo._typing import FFDBasis
+
+_FFD_MIN_NODES: dict[FFDBasis, int] = {
     "bernstein": 2,
     "bspline": 4,
     "linear": 2,
-    "smoothstep": 2,
-    "smootherstep": 2,
+    "cubic_hermite": 2,
+    "quintic_hermite": 2,
 }
+
+
+def _ffd_window_size(resolution: Sequence[int], basis: str) -> int:
+    """Return the number of lattice nodes influencing one query point."""
+
+    if basis == "bspline":
+        return 4 ** len(resolution)
+    if basis != "bernstein":
+        return 2 ** len(resolution)
+    return math.prod(resolution)
 
 
 def _zero_dependency(
@@ -423,8 +435,8 @@ def normalize_ffd_inputs(
     points_unbatched = points.ndim == 2
     expected_rank = num_dims + (1 if points_unbatched else 2)
     if control_displacements.ndim != expected_rank:
-        # Explicit rank comparisons: tuple membership over symbolic ranks
-        # mis-traces under Dynamo.
+        # Dynamo mis-traces tuple membership over symbolic ranks, so compare
+        # ranks explicitly.
         other_rank = num_dims + (2 if points_unbatched else 1)
         if control_displacements.ndim == other_rank:
             raise ValueError(
