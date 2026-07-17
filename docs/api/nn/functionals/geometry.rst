@@ -104,7 +104,7 @@ Lattice Free-Form Deformation
 
 With zero control displacements the operation is exactly the identity, so a
 lattice initialized at zero is a well-behaved starting point for shape
-optimization: an optimizer—or a model producing the lattice
+optimization. An optimizer, or a model that produces the lattice
 displacements—learns the deformation from a differentiable objective on
 ``deformed``.
 
