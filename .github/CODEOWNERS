@@ -317,6 +317,7 @@ physicsnemo/models/vfgn/ @mnabian
 # Experimental deliberately has no codeowner
 physicsnemo/experimental/
 physicsnemo/experimental/datapipes/healda/ @pzharrington
+physicsnemo/experimental/models/aerojepa/ @mnabian
 physicsnemo/experimental/models/globe/ @peterdsharpe
 physicsnemo/experimental/peft/ @mnabian
 
@@ -342,6 +343,7 @@ examples/cfd/darcy_physics_informed/
 examples/cfd/darcy_transolver/ @coreyjadams
 examples/cfd/datacenter/
 examples/cfd/external_aerodynamics/aero_graph_net/ @mnabian
+examples/cfd/external_aerodynamics/aerojepa/ @mnabian
 examples/cfd/external_aerodynamics/domino/ @RishikeshRanade @coreyjadams
 examples/cfd/external_aerodynamics/domino_nim_finetuning/ @RishikeshRanade @peterdsharpe
 examples/cfd/external_aerodynamics/figconvnet/ @coreyjadams
@@ -486,6 +488,7 @@ test/optim/ @peterdsharpe
 test/diffusion/ @CharlelieLrt
 test/utils/
 test/experimental/
+test/experimental/models/aerojepa/ @mnabian
 test/experimental/peft/ @mnabian
 
 # ==============================================================================
