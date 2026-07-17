@@ -82,6 +82,7 @@ def zenith_azimuth_angles(
     time: Union[T, datetime.datetime],
     lon: T,
     lat: T,
+    sin_zenith_epsilon: float = 1e-6,
 ) -> tuple[T, T, T, T]:
     r"""
     Sine and cosine of the solar zenith and azimuth angles for ``lon``,
@@ -91,6 +92,8 @@ def zenith_azimuth_angles(
     north, 90 degrees is east, 180 degrees is south, 270 degrees is west),
     per the
     `solar azimuth angle formulas <https://en.wikipedia.org/wiki/Solar_azimuth_angle#Formulas>`_.
+    At exact poles (latitude +/- 90 degrees), azimuth angle is ill defined and
+    sin_azimuth/cos_azimuth return arbitrary values rather than a meaningful result.
     See :func:`~physicsnemo.utils.zenith_angle.cos_zenith_angle` if only the
     cosine of the zenith angle is required, and
     :func:`~physicsnemo.utils.zenith_angle.zenith_azimuth_angles_from_timestamp`
@@ -104,6 +107,9 @@ def zenith_azimuth_angles(
         Longitude in degrees (E/W).
     lat : float, np.ndarray or torch.Tensor
         Latitude in degrees (N/S).
+    sin_zenith_epsilon : float, optional, default=1e-6
+        Small minimum value applied to sin_zenith to prevent division by zero at
+        sub/anti-solar points.
 
     Returns
     -------
@@ -125,7 +131,9 @@ def zenith_azimuth_angles(
     lon_rad = _deg2rad(lon, dtype=dtype)
     lat_rad = _deg2rad(lat, dtype=dtype)
     julian_centuries = _datetime_to_julian_century(time)
-    return _star_zenith_azimuth(julian_centuries, lon_rad, lat_rad)
+    return _star_zenith_azimuth(
+        julian_centuries, lon_rad, lat_rad, sin_zenith_epsilon=sin_zenith_epsilon
+    )
 
 
 def cos_zenith_angle_from_timestamp(
@@ -167,6 +175,7 @@ def zenith_azimuth_angles_from_timestamp(
     timestamp: T,
     lon: T,
     lat: T,
+    sin_zenith_epsilon: float = 1e-6,
 ) -> tuple[T, T, T, T]:
     r"""
     Sine and cosine of the solar zenith and azimuth angles for ``lon``,
@@ -177,6 +186,8 @@ def zenith_azimuth_angles_from_timestamp(
     convention (0 degrees is north, 90 degrees is east, 180 degrees is
     south, 270 degrees is west), per the
     `solar azimuth angle formulas <https://en.wikipedia.org/wiki/Solar_azimuth_angle#Formulas>`_.
+    At exact poles (latitude +/- 90 degrees), azimuth angle is ill defined and
+    sin_azimuth/cos_azimuth return arbitrary values rather than a meaningful result.
     See :func:`~physicsnemo.utils.zenith_angle.cos_zenith_angle_from_timestamp`
     if only the cosine of the zenith angle is required, and
     :func:`~physicsnemo.utils.zenith_angle.zenith_azimuth_angles` for the
@@ -190,6 +201,9 @@ def zenith_azimuth_angles_from_timestamp(
         Longitude in degrees (E/W).
     lat : float, np.ndarray or torch.Tensor
         Latitude in degrees (N/S).
+    sin_zenith_epsilon : float, optional, default=1e-6
+        Small minimum value applied to sin_zenith to prevent division by zero at
+        sub/anti-solar points.
 
     Returns
     -------
@@ -213,7 +227,9 @@ def zenith_azimuth_angles_from_timestamp(
     lon_rad = _deg2rad(lon, dtype=dtype)
     lat_rad = _deg2rad(lat, dtype=dtype)
     julian_centuries = _timestamp_to_julian_century(timestamp)
-    return _star_zenith_azimuth(julian_centuries, lon_rad, lat_rad)
+    return _star_zenith_azimuth(
+        julian_centuries, lon_rad, lat_rad, sin_zenith_epsilon=sin_zenith_epsilon
+    )
 
 
 def _deg2rad(x: T, dtype: np.typing.DTypeLike | torch.dtype | None = None) -> T:
@@ -692,6 +708,7 @@ def _star_zenith_azimuth(julian_centuries, lon, lat, sin_zenith_epsilon=1e-6):
     """
     Return sine/cosine of solar zenith and azimuth angles.
     lon, lat in radians. Azimuth measured clockwise from north.
+    sin_zenith is clamped to a small positive minimum value for numerical stability.
 
     Ref:
         Azimuth:
