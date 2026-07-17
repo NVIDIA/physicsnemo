@@ -1,0 +1,11 @@
+huggingface_hub
+hydra-core
+h5py
+zarr>=3.0
+pyvista
+matplotlib
+scipy
+scikit-learn
+tqdm
+tensorboard
+einops

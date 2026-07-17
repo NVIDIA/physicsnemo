@@ -30,9 +30,11 @@ from typing import Any, Iterator
 
 import torch
 
+from physicsnemo.datapipes._indexing import _cyclic_block_indices
 from physicsnemo.datapipes._rng import spawn_generator
 from physicsnemo.datapipes.registry import register
 from physicsnemo.mesh import DomainMesh, Mesh
+from physicsnemo.mesh.calculus.measure import compose_measure_weights
 
 logger = logging.getLogger(__name__)
 
@@ -42,50 +44,42 @@ DEFAULT_MESH_EXTENSION = ".pmsh"
 DEFAULT_DOMAIN_MESH_EXTENSION = ".pdmsh"
 
 
-def _contiguous_block_slice(
-    total: int,
-    k: int,
-    generator: torch.Generator | None = None,
-) -> slice:
-    """Return a random contiguous ``slice`` of length *k* within ``[0, total)``.
-
-    A contiguous slice produces sequential I/O on memmap-backed tensors,
-    which is orders of magnitude faster than scattered fancy-indexing.
-    For best results the on-disk point order should be pre-shuffled so
-    that a contiguous block is spatially representative.
-    """
-    if total <= k:
-        return slice(0, total)
-    with torch.profiler.record_function("mesh_reader: randint.item() scalar readback"):
-        start = torch.randint(0, total - k + 1, (1,), generator=generator).item()
-    return slice(start, start + k)
-
-
 def _subsample_mesh_points(
     mesh: Mesh,
     n_points: int,
     generator: torch.Generator | None = None,
 ) -> Mesh:
-    """Subsample a Mesh to *n_points* via a contiguous block read.
+    """Subsample a Mesh to *n_points* via a cyclic contiguous block read.
 
-    Uses a contiguous slice for sequential I/O on memmap-backed data.
+    Uses one or two contiguous runs for page-sequential I/O on memmap-backed
+    data while giving every point the same inclusion probability.
     For point clouds (``n_cells == 0``) this avoids the heavy
     cell-remapping logic in :meth:`Mesh.slice_points` which allocates
     two *N*-element intermediate tensors.  For meshes with cells it
     falls back to ``slice_points``.
+
+    Unlike :func:`_subsample_mesh_cells`, this does NOT maintain
+    measure weights: dropping points removes cells implicitly, with
+    no per-cell inclusion probability to invert.  Prefer cell
+    subsampling when downstream code integrates over the mesh.
     """
     if mesh.n_points <= n_points:
         return mesh
-    sl = _contiguous_block_slice(mesh.n_points, n_points, generator=generator)
+    indices = _cyclic_block_indices(
+        mesh.n_points,
+        n_points,
+        generator=generator,
+        device=mesh.points.device,
+    )
     if mesh.n_cells == 0:
         return Mesh(
-            points=mesh.points[sl],
+            points=mesh.points[indices],
             cells=mesh.cells,
-            point_data=mesh.point_data[sl],
+            point_data=mesh.point_data[indices],
             cell_data=mesh.cell_data,
             global_data=mesh.global_data,
         )
-    return mesh.slice_points(torch.arange(sl.start, sl.stop, device=mesh.points.device))
+    return mesh.slice_points(indices)
 
 
 def _subsample_mesh_cells(
@@ -93,26 +87,44 @@ def _subsample_mesh_cells(
     n_cells: int,
     generator: torch.Generator | None = None,
 ) -> Mesh:
-    """Subsample a Mesh to *n_cells* via a contiguous block read on cells.
+    """Subsample a Mesh to *n_cells* via a cyclic contiguous block read on cells.
 
     Preserves cell topology: each selected cell retains its full vertex
     connectivity.  Unreferenced points are compacted out.  Uses
-    ``_contiguous_block_slice`` for sequential I/O on memmap-backed
-    cell tensors.
+    :func:`_cyclic_block_indices` for (page-)sequential I/O on
+    memmap-backed cell tensors.
+
+    Preserves the mesh's integration measure: every cell's inclusion
+    probability is exactly ``k/N``, and the retained cells' measure
+    weights (see :mod:`physicsnemo.mesh.calculus.measure`) are multiplied by
+    ``N/k``, composing with any weights from earlier sampling stages.
+    Consumers of the effective cell measure (see
+    :mod:`physicsnemo.mesh.calculus.measure`) then see an unbiased estimate
+    of the full-mesh measure rather than the ~``k/N`` retained fraction.
 
     Use this instead of :func:`_subsample_mesh_points` when the mesh
     has cell connectivity (triangulated surfaces, volume meshes) and
     downstream transforms or outputs depend on cell topology (e.g.
     surface normals, cell centroids, cell_data fields).
     """
-    if mesh.n_cells <= n_cells:
+    n_total = mesh.n_cells
+    if n_total <= n_cells:
         return mesh
-    sl = _contiguous_block_slice(mesh.n_cells, n_cells, generator=generator)
-    mesh = mesh.slice_cells(sl)
+    indices = _cyclic_block_indices(
+        n_total,
+        n_cells,
+        generator=generator,
+        device=mesh.cells.device,
+    )
+    mesh = mesh.slice_cells(indices)
     # Compact: drop vertices not referenced by any surviving cell
     referenced = torch.unique(mesh.cells)
     if referenced.numel() < mesh.n_points:
         mesh = mesh.slice_points(referenced)
+    ### Compose the Horvitz-Thompson weight for this sampling stage.
+    ### slice_cells/slice_points returned fresh TensorDicts, so the
+    ### in-place update cannot leak into the memmap-backed source.
+    compose_measure_weights(mesh, n_total / n_cells)
     return mesh
 
 
@@ -169,19 +181,22 @@ class MeshReader:
             If True, include sample index in metadata.
         subsample_n_points : int, optional
             If set, subsample the mesh to this many points *before*
-            ``pin_memory``.  Uses contiguous block reads for sequential
-            I/O on memmap-backed data.  Appropriate for point clouds
+            ``pin_memory``.  Uses cyclic contiguous block reads for
+            page-sequential I/O on memmap-backed data, with uniform point
+            inclusion probability.  Appropriate for point clouds
             or meshes where cell topology is not needed downstream.
             For best results, pre-shuffle the on-disk point order so
             that a contiguous block is spatially representative.
         subsample_n_cells : int, optional
             If set, subsample the mesh to this many cells *before*
-            ``pin_memory``.  Uses contiguous block reads on the cell
-            tensor for sequential I/O, then compacts unreferenced
+            ``pin_memory``.  Uses cyclic contiguous block reads on the
+            cell tensor for sequential I/O, then compacts unreferenced
             vertices.  Preserves cell topology and is the correct
             choice for triangulated surface meshes where downstream
             transforms depend on cells (e.g. surface normals, cell
-            centroids, cell_data fields).  Applied before
+            centroids, cell_data fields).  Records the inverse inclusion
+            probability as measure weights, preserving the integration
+            measure (see :mod:`physicsnemo.mesh.calculus.measure`).  Applied before
             ``subsample_n_points`` when both are set.
         """
         self._root = Path(path)
@@ -317,18 +332,23 @@ class DomainMeshReader:
         subsample_n_points : int, optional
             If set, subsample the interior and each boundary mesh to
             at most this many points *before* ``pin_memory``.  Uses
-            contiguous block reads for sequential I/O on memmap-backed
-            data.  Appropriate for point clouds or meshes where cell
-            topology is not needed downstream.  For best results,
+            cyclic contiguous block reads for page-sequential I/O on
+            memmap-backed data, with uniform point inclusion probability.
+            Appropriate for point clouds or meshes where cell topology is
+            not needed downstream.  For best results,
             pre-shuffle the on-disk point order so that a contiguous
             block is spatially representative.
         subsample_n_cells : int, optional
             If set, subsample the interior and each boundary mesh to
             at most this many cells *before* ``pin_memory``.  Uses
-            contiguous block reads on cell tensors for sequential I/O,
-            then compacts unreferenced vertices.  Preserves cell
-            topology and is the correct choice when downstream
-            transforms depend on cells.  Applied before
+            cyclic contiguous block reads on cell tensors for
+            sequential I/O, then compacts unreferenced vertices.
+            Preserves cell topology and is the correct choice when
+            downstream transforms depend on cells.  Records the
+            inverse inclusion probability as measure weights, preserving
+            the integration measure (see
+            :mod:`physicsnemo.mesh.calculus.measure`).  Applied
+            before
             ``subsample_n_points`` when both are set.
         extra_boundaries : dict[str, dict] or None, optional
             Load additional sibling meshes as extra boundaries on each
