@@ -102,7 +102,7 @@ Lattice Free-Form Deformation
     )
     deformed.square().mean().backward()
 
-With zero control displacements the operation is exactly the identity, so a
+With zero control displacements, the operation is exactly the identity, so a
 lattice initialized at zero is a well-behaved starting point for shape
 optimization. An optimizer, or a model that produces the lattice
 displacements, learns the deformation from a differentiable objective on
