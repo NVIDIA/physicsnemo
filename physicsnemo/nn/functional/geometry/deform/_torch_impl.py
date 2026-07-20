@@ -395,7 +395,7 @@ def compact_shepard_field_torch(
         return points * 0 + zero
 
     # Dynamo cannot unroll shape-dependent Python chunk loops for symbolic
-    # dimensions. Let Inductor see one vectorized block while compiling; eager
+    # dimensions. Let Inductor see one vectorized block while compiling. Eager
     # execution retains byte-aware blocking below. Activation checkpointing is
     # still required for AOTAutograd training: without it, compiled backward
     # retains the complete O(B*N*C*D) pairwise graph.
@@ -655,7 +655,7 @@ def ffd_points_torch(
     )
     if torch.compiler.is_compiling():
         # Dynamo cannot unroll shape-dependent Python chunk loops for symbolic
-        # dimensions. Let Inductor see one vectorized block while compiling;
+        # dimensions. Let Inductor see one vectorized block while compiling.
         # activation checkpointing reduces saved activations for training but
         # does not enforce the eager path's temporary-memory budget.
         if needs_grad:

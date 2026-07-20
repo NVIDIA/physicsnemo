@@ -43,7 +43,7 @@ def _lattice_nodes(resolution, origin, extent, basis, dtype, device):
     """Return world-space lattice nodes that reproduce affine fields.
 
     Bernstein interpolation reproduces an affine map sampled at the uniform
-    lattice nodes; a uniform cubic B-spline reproduces it when sampled at the
+    lattice nodes. A uniform cubic B-spline reproduces it when sampled at the
     Greville abscissae ``(i - 1) / (n - 3)``.
     """
 

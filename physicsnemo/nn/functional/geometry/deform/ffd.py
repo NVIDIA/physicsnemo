@@ -71,7 +71,7 @@ class FreeFormDeformPoints(FunctionSpec):
     identity and a constant lattice translates every point inside the box.
 
     ``basis="bernstein"`` provides the classic free-form deformation basis from
-    Sederberg and Parry (1986) [1]_. Its per-axis functions are the Bernstein
+    Sederberg and Parry (1986). Its per-axis functions are the Bernstein
     polynomials of degree :math:`p_d = n_d - 1`:
 
     .. math::
@@ -94,13 +94,13 @@ class FreeFormDeformPoints(FunctionSpec):
     :math:`t^3(6t^2 - 15t + 10)`, respectively. The lower-node weight is one
     minus the upper-node weight. The resulting fields are C0, C1, and C2 across
     cell boundaries, respectively. Perlin introduced the quintic polynomial
-    in *Improving Noise* [2]_ to remove the cubic polynomial's second-derivative
+    in **Improving Noise** to remove the cubic polynomial's second-derivative
     discontinuities.
 
     Inputs may be unbatched (``points`` of shape ``(N, D)``) or batched
     (``(B, N, D)``). The corresponding control lattice has shape
     ``(n_1, ..., n_D, D)`` or ``(B, n_1, ..., n_D, D)``. Points, control
-    lattices, and point weights must be either unbatched or batch-aligned; they
+    lattices, and point weights must be either unbatched or batch-aligned. They
     are not broadcast. For batched inputs, ``(D,)`` box vectors are shared
     across the batch, while ``(B, D)`` box vectors are aligned. Float32 and
     float64 are supported.
@@ -191,12 +191,11 @@ class FreeFormDeformPoints(FunctionSpec):
 
     References
     ----------
-    .. [1] Sederberg, T. W., and Parry, S. R. (1986). "Free-Form Deformation
-       of Solid Geometric Models." *ACM SIGGRAPH Computer Graphics*, 20(4),
-       151-160. https://doi.org/10.1145/15886.15903
-    .. [2] Perlin, K. (2002). "Improving Noise." *ACM Transactions on
-       Graphics*, 21(3), 681-682.
-       https://doi.org/10.1145/566654.566636
+    - Sederberg, T. W., and Parry, S. R. (1986). **Free-Form Deformation of
+      Solid Geometric Models.** ACM SIGGRAPH Computer Graphics, 20(4), 151-160.
+      https://doi.org/10.1145/15886.15903
+    - Perlin, K. (2002). **Improving Noise.** ACM Transactions on Graphics,
+      21(3), 681-682. https://doi.org/10.1145/566654.566636
     """
 
     _FORWARD_BENCHMARK_CASES = (

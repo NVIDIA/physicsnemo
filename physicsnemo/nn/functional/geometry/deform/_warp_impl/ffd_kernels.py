@@ -25,7 +25,7 @@ All tensor-product bases run through one kernel family via a per-axis active
 window: Bernstein activates every lattice node along an axis, the uniform
 cubic B-spline activates the four nodes around the containing knot span, and
 the interpolating bases activate the two nodes bounding the containing cell.
-The kernels are dimension-generic; per-axis lattice sizes arrive in
+The kernels are dimension-generic. Per-axis lattice sizes arrive in
 ``resolution`` and coordinates are indexed componentwise.
 """
 

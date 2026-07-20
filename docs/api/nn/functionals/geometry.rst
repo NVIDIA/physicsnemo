@@ -147,7 +147,7 @@ weight at each box face.
 
 Eager Torch evaluation chunks query points to keep estimated live FFD
 temporaries within 256 MiB. Under :func:`torch.compile`, the Torch backend uses
-one vectorized block because symbolic chunk loops cannot be unrolled; the eager
+one vectorized block because symbolic chunk loops cannot be unrolled. The eager
 memory budget is therefore not enforced. Very large Bernstein workloads may
 require substantially more peak memory when compiled.
 

@@ -134,7 +134,7 @@ def _resolve_domain_point_weights(
             ):
                 raise TypeError(
                     f"point_weights field {point_weights!r} must have one "
-                    f"common dtype across all components; {label}.point_data "
+                    f"common dtype across all components. {label}.point_data "
                     f"has {component_point_weights.dtype}, expected "
                     f"{resolved_point_weights[0].dtype}"
                 )

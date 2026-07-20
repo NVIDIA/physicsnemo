@@ -240,7 +240,7 @@ def _normalize_radius(
                     raise ValueError(
                         "radius must be strictly positive in the control dtype"
                     )
-        # ``as_tensor`` specializes a Dynamo SymFloat to its current value;
+        # ``as_tensor`` specializes a Dynamo SymFloat to its current value.
         # ``tensor`` keeps generalized call-time radii in one graph.
         normalized = (
             torch.tensor(radius, dtype=controls.dtype, device=controls.device)
@@ -281,7 +281,7 @@ def normalize_morph_inputs(
     )
     if points.ndim != control_points.ndim:
         raise ValueError(
-            "points and controls must both be unbatched or both be batched; got ranks "
+            "points and controls must both be unbatched or both be batched. Got ranks "
             f"{points.ndim} and {control_points.ndim}"
         )
     if points.shape[-1] != control_points.shape[-1]:
@@ -319,7 +319,7 @@ def _normalize_lattice_box(
     """Normalize one lattice-box vector to ``(B, D)`` without copying tensors.
 
     Tensor values are trusted at runtime because validating them would force a
-    device synchronization; sequences are converted on the host and validated.
+    device synchronization. Sequences are converted on the host and validated.
     """
 
     batch_size, num_dims = points.shape[0], points.shape[-1]
@@ -327,7 +327,7 @@ def _normalize_lattice_box(
         if value.requires_grad:
             raise ValueError(
                 f"{name} is non-differentiable lattice configuration and must not "
-                "require grad; optimize control_displacements instead"
+                "require grad. Optimize control_displacements instead"
             )
         _validate_layout(value, points, f"points and {name}")
         if tuple(value.shape) == (num_dims,):
@@ -444,12 +444,12 @@ def normalize_ffd_inputs(
         if control_displacements.ndim == other_rank:
             raise ValueError(
                 "points and control_displacements must both be unbatched or both "
-                f"be batched; got shapes {tuple(points.shape)} and "
+                f"be batched. Got shapes {tuple(points.shape)} and "
                 f"{tuple(control_displacements.shape)}"
             )
         raise ValueError(
             "control_displacements must have shape (n_1, ..., n_D, D) or "
-            "(B, n_1, ..., n_D, D) with one displacement vector per lattice node; "
+            "(B, n_1, ..., n_D, D) with one displacement vector per lattice node. "
             f"got shape {tuple(control_displacements.shape)} for D={num_dims}"
         )
     if control_displacements.shape[-1] != num_dims:

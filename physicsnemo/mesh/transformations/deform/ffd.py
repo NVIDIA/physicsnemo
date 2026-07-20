@@ -48,7 +48,7 @@ def _origin_tensor_for_extent(
         if origin.requires_grad:
             raise ValueError(
                 "origin is non-differentiable lattice configuration and must not "
-                "require grad; optimize control_displacements instead"
+                "require grad. Optimize control_displacements instead"
             )
         if tuple(origin.shape) != (num_dims,):
             raise ValueError(
@@ -130,7 +130,7 @@ def _default_lattice_box(
             if not bool((torch.isfinite(extent) & (extent > 0)).all()):
                 raise ValueError(
                     "the derived lattice extent must be finite and strictly positive "
-                    "along every axis; the point bounds are degenerate or non-finite, "
+                    "along every axis. The point bounds are degenerate or non-finite, "
                     "or the supplied origin is not below their maximum. Supply an "
                     "explicit extent."
                 )
@@ -206,7 +206,8 @@ def free_form_deform(
         - ``"quintic_hermite"`` uses the quintic Hermite blend
           :math:`s(t)=6t^5-15t^4+10t^3`. Its first and second derivatives
           vanish at both endpoints. This gives C2 continuity across cell
-          boundaries. Perlin introduced this improved interpolant [1]_.
+          boundaries. Perlin introduced this improved interpolant in
+          **Improving Noise**.
 
         The node-interpolating bases use only the two neighboring nodes per
         axis. Here, ``t`` is the local cell coordinate in ``[0, 1]``. The
@@ -255,9 +256,8 @@ def free_form_deform(
 
     References
     ----------
-    .. [1] Perlin, K. (2002). "Improving Noise." *ACM Transactions on
-       Graphics*, 21(3), 681-682.
-       https://doi.org/10.1145/566654.566636
+    - Perlin, K. (2002). **Improving Noise.** ACM Transactions on Graphics,
+      21(3), 681-682. https://doi.org/10.1145/566654.566636
     """
     if not isinstance(control_displacements, torch.Tensor):
         raise TypeError(

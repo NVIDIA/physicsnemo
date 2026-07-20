@@ -80,7 +80,7 @@ _FFD_KERNELS = {
 # Deliberately retain each device's static resolution tensor for the process
 # lifetime. Captured CUDA Graphs keep its device address, so eviction or manual
 # clearing could invalidate later graph replays. Each entry contains only one
-# int32 value per lattice axis; reuse also avoids host-to-device copies.
+# int32 value per lattice axis. Reuse also avoids host-to-device copies.
 _RESOLUTION_TENSOR_REGISTRY: dict[
     tuple[torch.device, tuple[int, ...]], torch.Tensor
 ] = {}
@@ -225,7 +225,7 @@ def _ffd_field_warp_fake(
     return _empty_contiguous_like(points)
 
 
-# This opaque pullback is the deliberate first-order autograd boundary; its
+# This opaque pullback is the deliberate first-order autograd boundary. Its
 # fake implementation supports AOT tracing without promising higher derivatives.
 @torch.library.custom_op(
     "physicsnemo::ffd_field_warp_backward_impl",
