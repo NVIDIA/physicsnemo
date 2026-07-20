@@ -32,4 +32,4 @@ from .utils import (
     get_pad2d,
     get_pad3d,
 )
-from .weight_init import trunc_normal_
+from .weight_init import shrink_and_perturb_, trunc_normal_
