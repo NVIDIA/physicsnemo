@@ -21,13 +21,16 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from numbers import Real
+from typing import Literal, TypeAlias
 
 import torch
 from jaxtyping import Bool, Float
 
-from physicsnemo._typing import FFDBasis
+_FFDBasis: TypeAlias = Literal[
+    "bernstein", "bspline", "linear", "cubic_hermite", "quintic_hermite"
+]
 
-_FFD_MIN_NODES: dict[FFDBasis, int] = {
+_FFD_MIN_NODES: dict[_FFDBasis, int] = {
     "bernstein": 2,
     "bspline": 4,
     "linear": 2,

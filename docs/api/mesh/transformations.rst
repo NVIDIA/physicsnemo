@@ -48,7 +48,7 @@ deformation are available from the ``deform`` namespace and as methods on
 The mesh methods wrap the tensor-level
 :func:`~physicsnemo.nn.functional.displace_points`,
 :func:`~physicsnemo.nn.functional.morph_points`, and
-:func:`~physicsnemo.nn.functional.ffd_points` operations.
+:func:`~physicsnemo.nn.functional.free_form_deform_points` operations.
 
 Dense displacement accepts a tensor or a point-data key (including a nested
 tuple key). The operation returns a new mesh without changing ``mesh.points``.
@@ -159,9 +159,9 @@ and magnitudes.
 Lattice Free-Form Deformation
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-:meth:`~physicsnemo.mesh.mesh.Mesh.ffd` defines a regular array of control
-displacements over an axis-aligned evaluation box and deforms every point
-inside the box by tensor-product basis interpolation.
+:meth:`~physicsnemo.mesh.mesh.Mesh.free_form_deform` defines a regular array of
+control displacements over an axis-aligned evaluation box and deforms every
+point inside the box by tensor-product basis interpolation.
 Compared with sparse morphing, the design parameters form a structured grid of
 fixed size, which suits parametric shape optimization. A lattice of zeros is
 exactly the identity, and the same lattice deforms any geometry embedded in
@@ -189,7 +189,7 @@ eliminate the cubic blend's second-derivative discontinuities.
     # A 4x4x4 Bernstein lattice spans the mesh bounds.
     # Zero displacements start at the identity.
     control_displacements = torch.zeros(4, 4, 4, 3, requires_grad=True)
-    deformed = mesh.ffd(control_displacements)
+    deformed = mesh.free_form_deform(control_displacements)
 
     # Autograd continues through the returned point coordinates.
     objective = deformed.points.square().mean()
@@ -260,8 +260,8 @@ resolved values also match.
         morphed_domain.boundaries["wall"].points,
     )
 
-:meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.ffd` follows the same pattern
-for lattice free-form deformation:
+:meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.free_form_deform` follows the
+same pattern for lattice free-form deformation:
 
 - The operation evaluates one lattice field over the combined interior and
   boundary points.

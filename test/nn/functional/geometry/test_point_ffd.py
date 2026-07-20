@@ -16,6 +16,7 @@
 
 """Tests for lattice free-form point deformation."""
 
+import importlib
 import inspect
 from typing import Literal, get_type_hints
 
@@ -23,10 +24,9 @@ import pytest
 import torch
 
 import physicsnemo.nn.functional as functional
-from physicsnemo._typing import FFDBasis
 from physicsnemo.core.function_spec import FunctionSpec
-from physicsnemo.nn.functional import ffd_points
-from physicsnemo.nn.functional.geometry import FFDPoints
+from physicsnemo.nn.functional import free_form_deform_points
+from physicsnemo.nn.functional.geometry import FreeFormDeformPoints
 from physicsnemo.nn.functional.geometry.deform import ffd as ffd_module
 from test.conftest import requires_module
 from test.nn.functional._parity_utils import clone_case
@@ -34,6 +34,9 @@ from test.nn.functional._parity_utils import clone_case
 _INTERPOLATING_BASES = ("linear", "cubic_hermite", "quintic_hermite")
 _BASES = ("bernstein", "bspline", *_INTERPOLATING_BASES)
 _AFFINE_EXACT_BASES = ("bernstein", "bspline", "linear")
+_EXPECTED_FFD_BASIS = Literal[
+    "bernstein", "bspline", "linear", "cubic_hermite", "quintic_hermite"
+]
 
 
 def _lattice_nodes(resolution, origin, extent, basis, dtype, device):
@@ -81,11 +84,28 @@ def _differentiable_case_tensors(args, kwargs):
 
 
 def test_public_exports_and_function_specs():
-    assert ffd_points.__name__ == "ffd_points"
-    assert ffd_points.__module__ == "physicsnemo.nn.functional.geometry.deform.ffd"
-    assert issubclass(FFDPoints, FunctionSpec)
-    assert not hasattr(functional, "FFDPoints")
-    assert list(inspect.signature(ffd_points).parameters) == [
+    geometry = importlib.import_module("physicsnemo.nn.functional.geometry")
+    deform = importlib.import_module("physicsnemo.nn.functional.geometry.deform")
+
+    assert functional.free_form_deform_points is free_form_deform_points
+    assert geometry.free_form_deform_points is free_form_deform_points
+    assert deform.free_form_deform_points is free_form_deform_points
+    assert geometry.FreeFormDeformPoints is FreeFormDeformPoints
+    assert deform.FreeFormDeformPoints is FreeFormDeformPoints
+    assert free_form_deform_points.__name__ == "free_form_deform_points"
+    assert (
+        free_form_deform_points.__module__
+        == "physicsnemo.nn.functional.geometry.deform.ffd"
+    )
+    assert issubclass(FreeFormDeformPoints, FunctionSpec)
+    assert not hasattr(functional, "FreeFormDeformPoints")
+    for module in (functional, geometry, deform):
+        assert "free_form_deform_points" in module.__all__
+        assert "ffd_points" not in module.__all__
+        assert not hasattr(module, "ffd_points")
+    assert not hasattr(geometry, "FFDPoints")
+    assert not hasattr(deform, "FFDPoints")
+    assert list(inspect.signature(free_form_deform_points).parameters) == [
         "points",
         "control_displacements",
         "origin",
@@ -94,11 +114,11 @@ def test_public_exports_and_function_specs():
         "point_weights",
         "implementation",
     ]
-    assert set(FFDPoints.implementations()) == {"torch", "warp"}
-    assert get_type_hints(ffd_points)["implementation"] == (
+    assert set(FreeFormDeformPoints.implementations()) == {"torch", "warp"}
+    assert get_type_hints(free_form_deform_points)["implementation"] == (
         Literal["torch", "warp"] | None
     )
-    assert get_type_hints(ffd_points)["basis"] == FFDBasis
+    assert get_type_hints(free_form_deform_points)["basis"] == _EXPECTED_FFD_BASIS
 
 
 @pytest.mark.parametrize("implementation", ["torch", "warp"])
@@ -117,7 +137,7 @@ def test_ffd_zero_displacements_is_identity(device, implementation, basis, dtype
         control_displacements = torch.zeros(
             (*resolution, num_dims), device=device, dtype=dtype
         )
-        output = ffd_points(
+        output = free_form_deform_points(
             points,
             control_displacements,
             origin=[0.0] * num_dims,
@@ -144,7 +164,7 @@ def test_ffd_constant_displacement_is_exact_translation(device, implementation, 
     points[1] = 1.0
     translation = torch.tensor([0.1, -0.2, 0.3], device=device, dtype=dtype)
     control_displacements = translation.expand(5, 4, 6, 3).clone()
-    output = ffd_points(
+    output = free_form_deform_points(
         points,
         control_displacements,
         origin=[0.0, 0.0, 0.0],
@@ -177,7 +197,7 @@ def test_ffd_linear_precision(device, implementation, basis, dtype):
     ) * torch.tensor(extent, device=device, dtype=dtype) + torch.tensor(
         origin, device=device, dtype=dtype
     )
-    output = ffd_points(
+    output = free_form_deform_points(
         points,
         control_displacements,
         origin=list(origin),
@@ -217,7 +237,7 @@ def test_interpolating_bases_reproduce_every_lattice_node(
         (*resolution, num_dims), generator=generator, device=device, dtype=dtype
     )
 
-    output = ffd_points(
+    output = free_form_deform_points(
         points,
         control_displacements,
         origin=[0.0] * num_dims,
@@ -259,7 +279,7 @@ def test_interpolating_bases_match_piecewise_one_dimensional_oracle(
         cell, 0
     ] + upper * control_displacements[cell + 1, 0]
 
-    output = ffd_points(
+    output = free_form_deform_points(
         points,
         control_displacements,
         origin=[0.0],
@@ -283,7 +303,7 @@ def test_interpolating_bases_have_two_node_per_axis_local_support(
     control_displacements = torch.zeros((4, 4, 2), device=device)
     control_displacements[0, 0] = torch.tensor([1.0, -1.0], device=device)
 
-    output = ffd_points(
+    output = free_form_deform_points(
         points,
         control_displacements,
         origin=[0.0, 0.0],
@@ -329,7 +349,7 @@ def test_linear_upper_boundary_uses_final_cell_value_and_gradient(
     points[-1].copy_(maximum)
     points.requires_grad_(True)
 
-    output = ffd_points(
+    output = free_form_deform_points(
         points,
         control_displacements,
         origin=origin,
@@ -359,7 +379,7 @@ def test_linear_large_world_origin_preserves_float64_coordinates(
         [[0.0], [0.5], [1.0]], device=device, dtype=torch.float64
     )
 
-    output = ffd_points(
+    output = free_form_deform_points(
         points,
         control_displacements,
         origin=[1.0e8],
@@ -390,7 +410,7 @@ def test_hermite_interpolating_bases_have_documented_knot_continuity(
     def field_derivatives(coordinate):
         point = torch.tensor([[coordinate]], dtype=torch.float64, requires_grad=True)
         field = (
-            ffd_points(
+            free_form_deform_points(
                 point,
                 controls,
                 origin=[0.0],
@@ -434,7 +454,7 @@ def test_ffd_high_degree_bernstein_warp_stays_finite(device):
     for implementation in ("torch", "warp"):
         points_i = points.clone().requires_grad_()
         control_i = control_displacements.clone().requires_grad_()
-        output = ffd_points(
+        output = free_form_deform_points(
             points_i,
             control_i,
             origin=[0.0],
@@ -465,7 +485,7 @@ def test_ffd_bernstein_degree_one_is_multilinear_interpolation(device, implement
         (2, 2, 2, 3), generator=generator, device=device, dtype=dtype
     )
     points = torch.rand((64, 3), generator=generator, device=device, dtype=dtype)
-    output = ffd_points(
+    output = free_form_deform_points(
         points,
         corners,
         origin=[0.0, 0.0, 0.0],
@@ -506,7 +526,7 @@ def test_ffd_outside_points_are_identity_with_zero_gradients(
         (4, 4, 2), generator=generator, device=device, dtype=dtype
     )
     control_displacements.requires_grad_(True)
-    output = ffd_points(
+    output = free_form_deform_points(
         points,
         control_displacements,
         origin=[0.0, 0.0],
@@ -561,7 +581,7 @@ def test_ffd_zero_boundary_layers_match_fixed_exterior(
     control_displacements[:zero_layers] = 0
     control_displacements[-zero_layers:] = 0
 
-    output = ffd_points(
+    output = free_form_deform_points(
         points,
         control_displacements,
         origin=[0.0],
@@ -583,7 +603,7 @@ def test_ffd_nan_points_stay_nan_without_poisoning_gradients(device, implementat
     )
     control_displacements = 0.1 * torch.ones((4, 4, 2), device=device).double()
     control_displacements.requires_grad_(True)
-    output = ffd_points(
+    output = free_form_deform_points(
         points,
         control_displacements,
         origin=[0.0, 0.0],
@@ -613,16 +633,20 @@ def test_ffd_hard_and_soft_point_weights(device, implementation):
         "basis": "bspline",
         "implementation": implementation,
     }
-    unweighted = ffd_points(points, control_displacements, **kwargs)
+    unweighted = free_form_deform_points(points, control_displacements, **kwargs)
     field = unweighted - points
 
     mask = torch.rand((16,), generator=generator, device=device) > 0.5
-    hard = ffd_points(points, control_displacements, point_weights=mask, **kwargs)
+    hard = free_form_deform_points(
+        points, control_displacements, point_weights=mask, **kwargs
+    )
     assert torch.equal(hard[~mask], points[~mask])
     torch.testing.assert_close(hard[mask], unweighted[mask])
 
     weights = torch.rand((16,), generator=generator, device=device, dtype=dtype)
-    soft = ffd_points(points, control_displacements, point_weights=weights, **kwargs)
+    soft = free_form_deform_points(
+        points, control_displacements, point_weights=weights, **kwargs
+    )
     torch.testing.assert_close(soft, points + weights.unsqueeze(-1) * field)
 
 
@@ -644,7 +668,7 @@ def test_ffd_batched_matches_unbatched(device, implementation, basis):
     extent = torch.tensor(
         [[1.0, 1.0, 1.0], [0.5, 2.0, 0.8]], device=device, dtype=dtype
     )
-    batched = ffd_points(
+    batched = free_form_deform_points(
         points,
         control_displacements,
         origin=origin,
@@ -653,7 +677,7 @@ def test_ffd_batched_matches_unbatched(device, implementation, basis):
         implementation=implementation,
     )
     for b in range(2):
-        single = ffd_points(
+        single = free_form_deform_points(
             points[b],
             control_displacements[b],
             origin=origin[b],
@@ -674,7 +698,7 @@ def test_ffd_one_dimensional_lattice(device, implementation):
     control_displacements = torch.tensor(
         [[0.0], [0.1], [0.1], [0.0]], device=device, dtype=dtype
     )
-    output = ffd_points(
+    output = free_form_deform_points(
         points,
         control_displacements,
         origin=[0.0],
@@ -699,7 +723,7 @@ def test_ffd_empty_points(device, implementation):
             if len(shape) == 2
             else control_displacements.expand(shape[0], 4, 4, 4, 3)
         )
-        output = ffd_points(
+        output = free_form_deform_points(
             points,
             lattice,
             origin=[0.0, 0.0, 0.0],
@@ -727,7 +751,7 @@ def test_ffd_torch_double_gradcheck(basis):
     point_weights = torch.tensor([0.7, -0.4, 1.2], dtype=dtype, requires_grad=True)
 
     def operation(p, c, w):
-        return ffd_points(
+        return free_form_deform_points(
             p,
             c,
             origin=[0.0, 0.0],
@@ -760,7 +784,7 @@ def test_ffd_warp_double_gradcheck(basis):
     point_weights = torch.tensor([0.8, -0.4, 1.1], dtype=dtype, requires_grad=True)
 
     def operation(p, c, w):
-        return ffd_points(
+        return free_form_deform_points(
             p,
             c,
             origin=[0.0, 0.0],
@@ -792,7 +816,7 @@ def _run_ffd_with_gradients(implementation, device, dtype, basis):
     point_weights = torch.tensor(
         [0.7, -0.4, 1.2], device=device, dtype=dtype, requires_grad=True
     )
-    output = ffd_points(
+    output = free_form_deform_points(
         points,
         control_displacements,
         origin=[0.0, 0.0],
@@ -874,9 +898,9 @@ def test_default_dispatch_selects_device_backend(device, monkeypatch):
     monkeypatch.setattr(ffd_module, "ffd_points_torch", torch_spy)
     monkeypatch.setattr(ffd_module, "ffd_points_warp", warp_spy)
 
-    warp_impl = FFDPoints._get_impls()["warp"]
+    warp_impl = FreeFormDeformPoints._get_impls()["warp"]
     expected = "warp" if device.type == "cuda" and warp_impl.available else "torch"
-    automatic = ffd_points(
+    automatic = free_form_deform_points(
         points, control_displacements, origin=[0.0, 0.0], extent=[1.0, 1.0]
     )
     assert calls == [expected]
@@ -894,10 +918,10 @@ def test_default_dispatch_selects_device_backend(device, monkeypatch):
             baseline=warp_impl.baseline,
             available=False,
         )
-        monkeypatch.setitem(FFDPoints._get_impls(), "warp", unavailable_warp)
-        FunctionSpec._fallback_warned.discard(FFDPoints._class_key())
+        monkeypatch.setitem(FreeFormDeformPoints._get_impls(), "warp", unavailable_warp)
+        FunctionSpec._fallback_warned.discard(FreeFormDeformPoints._class_key())
         with pytest.warns(RuntimeWarning, match="falling back to implementation"):
-            automatic = ffd_points(
+            automatic = free_form_deform_points(
                 points, control_displacements, origin=[0.0, 0.0], extent=[1.0, 1.0]
             )
         assert calls == ["torch"]
@@ -932,7 +956,7 @@ def test_torch_compile_fullgraph(implementation, basis):
     point_weights = torch.tensor([0.5, 1.2])
 
     def operation(p, c, w):
-        return ffd_points(
+        return free_form_deform_points(
             p,
             c,
             origin=[0.0, 0.0],
@@ -965,7 +989,7 @@ def test_torch_compile_fullgraph_backward(implementation):
         return points, control_displacements, point_weights
 
     def operation(p, c, w):
-        return ffd_points(
+        return free_form_deform_points(
             p,
             c,
             origin=[0.0, 0.0],
@@ -997,7 +1021,7 @@ def test_torch_compile_fullgraph_dynamic_shapes(basis):
     """Symbolic query counts use the vectorized compile path."""
 
     def operation(points, control_displacements):
-        return ffd_points(
+        return free_form_deform_points(
             points,
             control_displacements,
             origin=[0.0, 0.0, 0.0],
@@ -1024,7 +1048,7 @@ def test_torch_compile_dynamic_lattice_box_sequences():
     control_displacements = 0.1 * torch.sin(torch.arange(4 * 5 * 2.0)).reshape(4, 5, 2)
 
     def operation(points, control_displacements, origin, extent):
-        return ffd_points(
+        return free_form_deform_points(
             points,
             control_displacements,
             origin=origin,
@@ -1058,7 +1082,7 @@ def test_ffd_points_is_cuda_graph_capture_safe(device, implementation):
 
     # Warm allocations, backend kernels, and the cached lattice-resolution
     # tensor before capture.
-    expected = ffd_points(
+    expected = free_form_deform_points(
         points,
         control_displacements,
         origin=origin,
@@ -1069,7 +1093,7 @@ def test_ffd_points_is_cuda_graph_capture_safe(device, implementation):
     torch.cuda.synchronize(device)
     graph = torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph):
-        captured = ffd_points(
+        captured = free_form_deform_points(
             points,
             control_displacements,
             origin=origin,
@@ -1091,7 +1115,7 @@ def test_public_api_fake_tensor_propagation(implementation):
         points = torch.empty((4, 3), dtype=torch.float64)
         control_displacements = torch.empty((4, 5, 4, 3), dtype=torch.float64)
         point_weights = torch.empty(4, dtype=torch.float64)
-        output = ffd_points(
+        output = free_form_deform_points(
             points,
             control_displacements,
             origin=[0.0, 0.0, 0.0],
@@ -1110,7 +1134,7 @@ def test_public_api_fake_tensor_propagation(implementation):
     ("call", "error", "match"),
     [
         (
-            lambda: ffd_points(
+            lambda: free_form_deform_points(
                 torch.zeros(2, 2),
                 torch.zeros(4, 4, 2),
                 origin=[0.0, 0.0],
@@ -1122,7 +1146,7 @@ def test_public_api_fake_tensor_propagation(implementation):
             "basis must be one of",
         ),
         (
-            lambda: ffd_points(
+            lambda: free_form_deform_points(
                 torch.zeros(2, 2),
                 torch.zeros(1, 4, 2),
                 origin=[0.0, 0.0],
@@ -1133,7 +1157,7 @@ def test_public_api_fake_tensor_propagation(implementation):
             "requires at least 2 lattice nodes",
         ),
         (
-            lambda: ffd_points(
+            lambda: free_form_deform_points(
                 torch.zeros(2, 2),
                 torch.zeros(1, 4, 2),
                 origin=[0.0, 0.0],
@@ -1145,7 +1169,7 @@ def test_public_api_fake_tensor_propagation(implementation):
             "basis 'cubic_hermite' requires at least 2 lattice nodes",
         ),
         (
-            lambda: ffd_points(
+            lambda: free_form_deform_points(
                 torch.zeros(2, 2),
                 torch.zeros(4, 3, 2),
                 origin=[0.0, 0.0],
@@ -1157,7 +1181,7 @@ def test_public_api_fake_tensor_propagation(implementation):
             "requires at least 4 lattice nodes",
         ),
         (
-            lambda: ffd_points(
+            lambda: free_form_deform_points(
                 torch.zeros(2, 3),
                 torch.zeros(4, 4, 3),
                 origin=[0.0, 0.0, 0.0],
@@ -1168,7 +1192,7 @@ def test_public_api_fake_tensor_propagation(implementation):
             r"shape \(n_1, ..., n_D, D\)",
         ),
         (
-            lambda: ffd_points(
+            lambda: free_form_deform_points(
                 torch.zeros(1, 2, 2),
                 torch.zeros(4, 4, 2),
                 origin=[0.0, 0.0],
@@ -1179,7 +1203,7 @@ def test_public_api_fake_tensor_propagation(implementation):
             "both be unbatched or both be batched",
         ),
         (
-            lambda: ffd_points(
+            lambda: free_form_deform_points(
                 torch.zeros(2, 2, 2),
                 torch.zeros(3, 4, 4, 2),
                 origin=[0.0, 0.0],
@@ -1190,7 +1214,7 @@ def test_public_api_fake_tensor_propagation(implementation):
             "aligned batch",
         ),
         (
-            lambda: ffd_points(
+            lambda: free_form_deform_points(
                 torch.zeros(2, 3),
                 torch.zeros(4, 4, 4, 2),
                 origin=[0.0, 0.0, 0.0],
@@ -1201,7 +1225,7 @@ def test_public_api_fake_tensor_propagation(implementation):
             "components per lattice node",
         ),
         (
-            lambda: ffd_points(
+            lambda: free_form_deform_points(
                 torch.zeros(2, 2),
                 torch.zeros(4, 4, 2),
                 origin=[0.0],
@@ -1212,7 +1236,7 @@ def test_public_api_fake_tensor_propagation(implementation):
             "origin must contain exactly 2 real values",
         ),
         (
-            lambda: ffd_points(
+            lambda: free_form_deform_points(
                 torch.zeros(2, 2),
                 torch.zeros(4, 4, 2),
                 origin=[0.0, 0.0],
@@ -1223,7 +1247,7 @@ def test_public_api_fake_tensor_propagation(implementation):
             "extent values must be strictly positive",
         ),
         (
-            lambda: ffd_points(
+            lambda: free_form_deform_points(
                 torch.zeros(2, 2),
                 torch.zeros(4, 4, 2),
                 origin=[0.0, 0.0],
@@ -1234,7 +1258,7 @@ def test_public_api_fake_tensor_propagation(implementation):
             "extent values must be finite",
         ),
         (
-            lambda: ffd_points(
+            lambda: free_form_deform_points(
                 torch.zeros(2, 2),
                 torch.zeros(4, 4, 2),
                 origin=[0.0, 0.0],
@@ -1245,7 +1269,7 @@ def test_public_api_fake_tensor_propagation(implementation):
             "extent values must be finite in the points dtype",
         ),
         (
-            lambda: ffd_points(
+            lambda: free_form_deform_points(
                 torch.zeros(2, 2),
                 torch.zeros(4, 4, 2),
                 origin=[0.0, 0.0],
@@ -1256,7 +1280,7 @@ def test_public_api_fake_tensor_propagation(implementation):
             "extent values must be strictly positive in the points dtype",
         ),
         (
-            lambda: ffd_points(
+            lambda: free_form_deform_points(
                 torch.zeros(2, 2),
                 torch.zeros(4, 4, 2),
                 origin=torch.zeros(2, requires_grad=True),
@@ -1267,7 +1291,7 @@ def test_public_api_fake_tensor_propagation(implementation):
             "non-differentiable lattice configuration",
         ),
         (
-            lambda: ffd_points(
+            lambda: free_form_deform_points(
                 torch.zeros(2, 2),
                 torch.zeros(4, 4, 2),
                 origin=torch.zeros(3),
@@ -1278,7 +1302,7 @@ def test_public_api_fake_tensor_propagation(implementation):
             r"origin must have shape \(2,\)",
         ),
         (
-            lambda: ffd_points(
+            lambda: free_form_deform_points(
                 torch.zeros(2, 2),
                 torch.zeros(4, 4, 2),
                 origin=torch.zeros(2, dtype=torch.float64),
@@ -1289,7 +1313,7 @@ def test_public_api_fake_tensor_propagation(implementation):
             "same dtype",
         ),
         (
-            lambda: ffd_points(
+            lambda: free_form_deform_points(
                 torch.zeros(2, 2),
                 torch.zeros(4, 4, 2, dtype=torch.float64),
                 origin=[0.0, 0.0],
@@ -1300,7 +1324,7 @@ def test_public_api_fake_tensor_propagation(implementation):
             "same dtype",
         ),
         (
-            lambda: ffd_points(
+            lambda: free_form_deform_points(
                 torch.zeros(2, 2),
                 torch.zeros(4, 4, 2),
                 origin=[0.0, 0.0],
@@ -1324,21 +1348,21 @@ def test_ffd_benchmark_forward_cases_and_hooks(device):
 
     device = torch.device(device)
     labels = []
-    for label, args, kwargs in FFDPoints.make_inputs_forward(device=device):
+    for label, args, kwargs in FreeFormDeformPoints.make_inputs_forward(device=device):
         labels.append(label)
         reduced_args, reduced_kwargs = _trim_ffd_benchmark_case(args, kwargs)
         args_torch, kwargs_torch = clone_case(reduced_args, reduced_kwargs)
         args_warp, kwargs_warp = clone_case(reduced_args, reduced_kwargs)
 
-        output_torch = FFDPoints.dispatch(
+        output_torch = FreeFormDeformPoints.dispatch(
             *args_torch, implementation="torch", **kwargs_torch
         )
-        output_warp = FFDPoints.dispatch(
+        output_warp = FreeFormDeformPoints.dispatch(
             *args_warp, implementation="warp", **kwargs_warp
         )
-        FFDPoints.compare_forward(output_warp, output_torch)
+        FreeFormDeformPoints.compare_forward(output_warp, output_torch)
 
-    assert labels == [case[0] for case in FFDPoints._FORWARD_BENCHMARK_CASES]
+    assert labels == [case[0] for case in FreeFormDeformPoints._FORWARD_BENCHMARK_CASES]
 
 
 @requires_module("warp")
@@ -1347,19 +1371,19 @@ def test_ffd_benchmark_backward_cases_and_hooks(device):
 
     device = torch.device(device)
     labels = []
-    for label, args, kwargs in FFDPoints.make_inputs_backward(device=device):
+    for label, args, kwargs in FreeFormDeformPoints.make_inputs_backward(device=device):
         labels.append(label)
         reduced_args, reduced_kwargs = _trim_ffd_benchmark_case(args, kwargs)
         args_torch, kwargs_torch = clone_case(reduced_args, reduced_kwargs)
         args_warp, kwargs_warp = clone_case(reduced_args, reduced_kwargs)
 
-        output_torch = FFDPoints.dispatch(
+        output_torch = FreeFormDeformPoints.dispatch(
             *args_torch, implementation="torch", **kwargs_torch
         )
-        output_warp = FFDPoints.dispatch(
+        output_warp = FreeFormDeformPoints.dispatch(
             *args_warp, implementation="warp", **kwargs_warp
         )
-        FFDPoints.compare_forward(output_warp, output_torch)
+        FreeFormDeformPoints.compare_forward(output_warp, output_torch)
 
         tensors_torch = _differentiable_case_tensors(args_torch, kwargs_torch)
         tensors_warp = _differentiable_case_tensors(args_warp, kwargs_warp)
@@ -1370,6 +1394,8 @@ def test_ffd_benchmark_backward_cases_and_hooks(device):
         for gradient_warp, gradient_torch in zip(
             gradients_warp, gradients_torch, strict=True
         ):
-            FFDPoints.compare_backward(gradient_warp, gradient_torch)
+            FreeFormDeformPoints.compare_backward(gradient_warp, gradient_torch)
 
-    assert labels == [case[0] for case in FFDPoints._BACKWARD_BENCHMARK_CASES]
+    assert labels == [
+        case[0] for case in FreeFormDeformPoints._BACKWARD_BENCHMARK_CASES
+    ]

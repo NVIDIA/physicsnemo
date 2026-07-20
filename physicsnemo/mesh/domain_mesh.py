@@ -25,8 +25,8 @@ import torch
 from jaxtyping import Bool, Float
 from tensordict import TensorDict, tensorclass
 
-from physicsnemo._typing import FFDBasis
 from physicsnemo.mesh.mesh import Mesh, _requested_float_dtype
+from physicsnemo.mesh.transformations.deform.ffd import _FFDBasis
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
 
 if TYPE_CHECKING:
@@ -45,9 +45,9 @@ class DomainMesh:
     ``global_data``.
 
     ``DomainMesh`` exposes sparse world-space :meth:`morph` and lattice
-    :meth:`ffd`, but no dense ``displace``. Component point counts and fields
-    can differ, while one shared control field transfers consistently across
-    every component.
+    :meth:`free_form_deform`, but no dense ``displace``. Component point counts
+    and fields can differ. One shared control field transfers consistently
+    across every component.
 
     The semantic contract is that the boundary meshes, if merged, form a
     watertight enclosure around the interior mesh. This is documented but not
@@ -719,7 +719,7 @@ class DomainMesh:
 
         return self._deform_components(components, resolved_point_weights, apply_field)
 
-    def ffd(
+    def free_form_deform(
         self,
         control_displacements: Float[
             torch.Tensor, "*lattice_resolution n_spatial_dims"
@@ -731,7 +731,7 @@ class DomainMesh:
         extent: Float[torch.Tensor, " n_spatial_dims"]
         | Sequence[builtins.float]
         | None = None,
-        basis: FFDBasis = "bernstein",
+        basis: _FFDBasis = "bernstein",
         point_weights: str | tuple[str, ...] | None = None,
         implementation: Literal["torch", "warp"] | None = None,
     ) -> "DomainMesh":
@@ -828,15 +828,15 @@ class DomainMesh:
             )
         if point_weights is not None and not isinstance(point_weights, (str, tuple)):
             raise TypeError(
-                "DomainMesh.ffd point_weights must be a common point_data "
-                "key/path, not a raw tensor"
+                "DomainMesh.free_form_deform point_weights must be a common "
+                "point_data key/path, not a raw tensor"
             )
 
         from physicsnemo.mesh.transformations.deform._utils import (
             _resolve_domain_point_weights,
         )
         from physicsnemo.mesh.transformations.deform.ffd import _default_lattice_box
-        from physicsnemo.nn.functional.geometry.deform import ffd_points
+        from physicsnemo.nn.functional.geometry.deform import free_form_deform_points
 
         components: list[tuple[str, Mesh]] = [("interior", self.interior)]
         components.extend(
@@ -856,7 +856,7 @@ class DomainMesh:
             box_origin, box_extent = _default_lattice_box(
                 combined_points, origin, extent
             )
-            return ffd_points(
+            return free_form_deform_points(
                 combined_points,
                 control_displacements,
                 origin=box_origin,

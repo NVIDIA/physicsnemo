@@ -81,7 +81,7 @@ sphere = sphere_icosahedral.load(radius=1.0, subdivisions=3)
 bernstein_resolution = (4, 4, 4)
 bernstein_nodes = lattice_nodes(bernstein_resolution, "bernstein")
 bernstein_displacements = taper_displacements(bernstein_nodes)
-tapered = sphere.ffd(
+tapered = sphere.free_form_deform(
     bernstein_displacements,
     origin=list(ORIGIN),
     extent=list(EXTENT),
@@ -91,7 +91,7 @@ tapered = sphere.ffd(
 bspline_resolution = (8, 8, 8)
 bspline_nodes = lattice_nodes(bspline_resolution, "bspline")
 bspline_displacements = sculpt_displacements(bspline_nodes)
-sculpted = sphere.ffd(
+sculpted = sphere.free_form_deform(
     bspline_displacements,
     origin=list(ORIGIN),
     extent=list(EXTENT),

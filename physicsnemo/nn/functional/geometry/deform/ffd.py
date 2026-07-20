@@ -24,11 +24,15 @@ from typing import Literal
 import torch
 from jaxtyping import Bool, Float
 
-from physicsnemo._typing import FFDBasis
 from physicsnemo.core.function_spec import FunctionSpec
 
 from ._torch_impl import ffd_points_torch
-from ._utils import _FFD_MIN_NODES, normalize_ffd_inputs, restore_point_rank
+from ._utils import (
+    _FFD_MIN_NODES,
+    _FFDBasis,
+    normalize_ffd_inputs,
+    restore_point_rank,
+)
 from ._warp_impl import ffd_points_warp
 
 _FFD_BASES = tuple(_FFD_MIN_NODES)
@@ -41,7 +45,7 @@ def _validate_basis(basis: str) -> None:
         raise ValueError(f"basis must be one of {_FFD_BASES}, got {basis!r}")
 
 
-class FFDPoints(FunctionSpec):
+class FreeFormDeformPoints(FunctionSpec):
     r"""Deform points with a control lattice by free-form deformation.
 
     An :math:`n_1 \times \dots \times n_D` array of control displacements
@@ -316,7 +320,7 @@ class FFDPoints(FunctionSpec):
         *,
         origin: Float[torch.Tensor, "*box_batch num_dims"] | Sequence[float],
         extent: Float[torch.Tensor, "*box_batch num_dims"] | Sequence[float],
-        basis: FFDBasis = "bernstein",
+        basis: _FFDBasis = "bernstein",
         point_weights: Bool[torch.Tensor, "*batch num_points"]
         | Float[torch.Tensor, "*batch num_points"]
         | None = None,
@@ -353,7 +357,7 @@ class FFDPoints(FunctionSpec):
         *,
         origin: Float[torch.Tensor, "*box_batch num_dims"] | Sequence[float],
         extent: Float[torch.Tensor, "*box_batch num_dims"] | Sequence[float],
-        basis: FFDBasis = "bernstein",
+        basis: _FFDBasis = "bernstein",
         point_weights: Bool[torch.Tensor, "*batch num_points"]
         | Float[torch.Tensor, "*batch num_points"]
         | None = None,
@@ -391,7 +395,7 @@ class FFDPoints(FunctionSpec):
         *,
         origin: Float[torch.Tensor, "*box_batch num_dims"] | Sequence[float],
         extent: Float[torch.Tensor, "*box_batch num_dims"] | Sequence[float],
-        basis: FFDBasis = "bernstein",
+        basis: _FFDBasis = "bernstein",
         point_weights: Bool[torch.Tensor, "*batch num_points"]
         | Float[torch.Tensor, "*batch num_points"]
         | None = None,
@@ -606,10 +610,10 @@ class FFDPoints(FunctionSpec):
         )
 
 
-ffd_points = FFDPoints.make_function("ffd_points")
+free_form_deform_points = FreeFormDeformPoints.make_function("free_form_deform_points")
 
 
 __all__ = [
-    "FFDPoints",
-    "ffd_points",
+    "FreeFormDeformPoints",
+    "free_form_deform_points",
 ]

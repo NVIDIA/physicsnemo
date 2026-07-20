@@ -17,13 +17,13 @@
 """Dense, sparse, and lattice point-deformation functionals."""
 
 from .deform import DisplacePoints, MorphPoints, displace_points, morph_points
-from .ffd import FFDPoints, ffd_points
+from .ffd import FreeFormDeformPoints, free_form_deform_points
 
 __all__ = [
     "DisplacePoints",
-    "FFDPoints",
+    "FreeFormDeformPoints",
     "MorphPoints",
     "displace_points",
-    "ffd_points",
+    "free_form_deform_points",
     "morph_points",
 ]

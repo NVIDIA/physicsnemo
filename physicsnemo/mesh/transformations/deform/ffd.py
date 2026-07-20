@@ -19,12 +19,11 @@
 import math
 from collections.abc import Sequence
 from numbers import Real
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, TypeAlias
 
 import torch
 from jaxtyping import Bool, Float
 
-from physicsnemo._typing import FFDBasis
 from physicsnemo.mesh.transformations.deform._utils import (
     _mesh_with_deformed_points,
     _resolve_point_field,
@@ -32,6 +31,11 @@ from physicsnemo.mesh.transformations.deform._utils import (
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
+
+
+_FFDBasis: TypeAlias = Literal[
+    "bernstein", "bspline", "linear", "cubic_hermite", "quintic_hermite"
+]
 
 
 def _origin_tensor_for_extent(
@@ -139,7 +143,7 @@ def ffd(
     *,
     origin: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float] | None = None,
     extent: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float] | None = None,
-    basis: FFDBasis = "bernstein",
+    basis: _FFDBasis = "bernstein",
     point_weights: str
     | tuple[str, ...]
     | Bool[torch.Tensor, " n_points"]
@@ -264,9 +268,9 @@ def ffd(
         else _resolve_point_field(mesh, point_weights, argument_name="point_weights")
     )
     origin, extent = _default_lattice_box(mesh.points, origin, extent)
-    from physicsnemo.nn.functional.geometry.deform import ffd_points
+    from physicsnemo.nn.functional.geometry.deform import free_form_deform_points
 
-    points = ffd_points(
+    points = free_form_deform_points(
         mesh.points,
         control_displacements,
         origin=origin,

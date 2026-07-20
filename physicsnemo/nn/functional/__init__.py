@@ -39,7 +39,7 @@ from .fourier_spectral import imag, irfft, irfft2, real, rfft, rfft2, view_as_co
 from .geometry import (
     displace_points,
     farthest_point_sampling,
-    ffd_points,
+    free_form_deform_points,
     mesh_poisson_disk_sample,
     mesh_to_voxel_fraction,
     morph_points,
@@ -71,7 +71,7 @@ __all__ = [
     "irfft2",
     "drop_path",
     "farthest_point_sampling",
-    "ffd_points",
+    "free_form_deform_points",
     "uniform_grid_curl",
     "uniform_grid_divergence",
     "uniform_grid_laplacian",

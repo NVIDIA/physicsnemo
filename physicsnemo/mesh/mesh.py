@@ -36,10 +36,10 @@ import torch.nn.functional as F
 from jaxtyping import Bool, Float
 from tensordict import NonTensorData, TensorDict, tensorclass
 
-from physicsnemo._typing import FFDBasis
 from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
 from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
 from physicsnemo.mesh.transformations.deform import displace, free_form_deform, morph
+from physicsnemo.mesh.transformations.deform.ffd import _FFDBasis
 from physicsnemo.mesh.transformations.geometric import (
     rotate,
     scale,
@@ -2717,7 +2717,7 @@ class Mesh:
             implementation=implementation,
         )
 
-    def ffd(
+    def free_form_deform(
         self,
         control_displacements: Float[
             torch.Tensor, "*lattice_resolution n_spatial_dims"
@@ -2729,7 +2729,7 @@ class Mesh:
         extent: Float[torch.Tensor, " n_spatial_dims"]
         | Sequence[builtins.float]
         | None = None,
-        basis: FFDBasis = "bernstein",
+        basis: _FFDBasis = "bernstein",
         point_weights: str
         | tuple[str, ...]
         | Bool[torch.Tensor, " n_points"]

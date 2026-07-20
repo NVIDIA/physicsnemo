@@ -83,19 +83,19 @@ For connectivity-preserving object APIs, use
 Lattice Free-Form Deformation
 -----------------------------
 
-.. autofunction:: physicsnemo.nn.functional.ffd_points
+.. autofunction:: physicsnemo.nn.functional.free_form_deform_points
 
 .. code:: python
 
     import torch
-    from physicsnemo.nn.functional import ffd_points
+    from physicsnemo.nn.functional import free_form_deform_points
 
     points = torch.rand(1024, 3)
     control_displacements = torch.zeros(4, 4, 4, 3, requires_grad=True)
     origin = points.new_zeros(3)
     extent = points.new_ones(3)
 
-    deformed = ffd_points(
+    deformed = free_form_deform_points(
         points,
         control_displacements,
         origin=origin,
@@ -146,8 +146,8 @@ last three coefficient planes on every axis because three planes have nonzero
 weight at each box face.
 
 For connectivity-preserving object APIs, use
-:meth:`~physicsnemo.mesh.mesh.Mesh.ffd` or
-:meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.ffd`.
+:meth:`~physicsnemo.mesh.mesh.Mesh.free_form_deform` or
+:meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.free_form_deform`.
 
 Mesh Poisson Disk Sample
 ------------------------

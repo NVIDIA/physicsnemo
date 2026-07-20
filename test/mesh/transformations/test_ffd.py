@@ -18,14 +18,18 @@
 
 import importlib
 import inspect
-from typing import get_type_hints
+import pickle
+from typing import Literal, get_type_hints
 
 import pytest
 import torch
 
-from physicsnemo._typing import FFDBasis
 from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.mesh.transformations.deform import free_form_deform
+
+_EXPECTED_FFD_BASIS = Literal[
+    "bernstein", "bspline", "linear", "cubic_hermite", "quintic_hermite"
+]
 
 
 def test_free_form_deform_namespace_is_canonical():
@@ -35,21 +39,35 @@ def test_free_form_deform_namespace_is_canonical():
     deform_module = importlib.import_module("physicsnemo.mesh.transformations.deform")
 
     assert deform_module.free_form_deform is free_form_deform
+    assert free_form_deform.__name__ == "free_form_deform"
+    assert free_form_deform.__qualname__ == "free_form_deform"
+    assert free_form_deform.__module__ == "physicsnemo.mesh.transformations.deform"
+    assert pickle.dumps(free_form_deform)
     assert "ffd" not in deform_module.__all__
     assert not hasattr(transformations, "free_form_deform")
+    assert hasattr(Mesh, "free_form_deform")
+    assert hasattr(DomainMesh, "free_form_deform")
+    assert not hasattr(Mesh, "ffd")
+    assert not hasattr(DomainMesh, "ffd")
 
 
-def test_mesh_ffd_signatures_and_annotations_are_introspectable():
-    """Generated ``.float()`` methods preserve public annotations."""
+def test_mesh_free_form_deform_signatures_and_annotations_are_introspectable():
+    """Public deformation methods expose resolvable annotations."""
 
-    assert get_type_hints(free_form_deform, localns={"Mesh": Mesh})["basis"] == FFDBasis
-    for owner, ffd_method in ((Mesh, Mesh.ffd), (DomainMesh, DomainMesh.ffd)):
-        signature = inspect.signature(ffd_method)
+    assert (
+        get_type_hints(free_form_deform, localns={"Mesh": Mesh})["basis"]
+        == _EXPECTED_FFD_BASIS
+    )
+    for owner, deform_method in (
+        (Mesh, Mesh.free_form_deform),
+        (DomainMesh, DomainMesh.free_form_deform),
+    ):
+        signature = inspect.signature(deform_method)
         assert signature.parameters["basis"].default == "bernstein"
         assert signature.parameters["origin"].default is None
         assert signature.parameters["extent"].default is None
-        assert get_type_hints(ffd_method)["basis"] == FFDBasis
-        assert get_type_hints(ffd_method)["return"] is owner
+        assert get_type_hints(deform_method)["basis"] == _EXPECTED_FFD_BASIS
+        assert get_type_hints(deform_method)["return"] is owner
 
 
 def _triangle_mesh(*, requires_grad: bool = False) -> Mesh:
@@ -74,7 +92,7 @@ def test_mesh_ffd_default_box_spans_mesh_bounds():
     control_displacements = translation.expand(4, 4, 2).clone()
     source_points = mesh.points.clone()
 
-    output = mesh.ffd(control_displacements, implementation="torch")
+    output = mesh.free_form_deform(control_displacements, implementation="torch")
 
     torch.testing.assert_close(output.points, source_points + translation)
     torch.testing.assert_close(mesh.points, source_points)
@@ -90,7 +108,7 @@ def test_mesh_ffd_interpolating_bases_reproduce_control_nodes(basis):
     mesh = _triangle_mesh()
     control_displacements = 0.1 * torch.arange(8.0).reshape(2, 2, 2)
 
-    output = mesh.ffd(
+    output = mesh.free_form_deform(
         control_displacements,
         origin=[0.0, 0.0],
         extent=[1.0, 1.0],
@@ -112,7 +130,7 @@ def test_mesh_ffd_explicit_box_leaves_outside_points_unchanged():
     mesh = _triangle_mesh()
     control_displacements = torch.full((4, 4, 2), 0.5)
 
-    output = mesh.ffd(
+    output = mesh.free_form_deform(
         control_displacements,
         origin=[-0.25, -0.25],
         extent=[0.5, 0.5],
@@ -130,15 +148,15 @@ def test_mesh_ffd_default_extent_rejects_degenerate_bounds():
         cells=torch.tensor([[0, 1], [1, 2]]),
     )
     with pytest.raises(ValueError, match="must be finite and strictly positive"):
-        flat.ffd(torch.zeros(4, 4, 2), implementation="torch")
+        flat.free_form_deform(torch.zeros(4, 4, 2), implementation="torch")
 
 
 def test_mesh_ffd_defaults_support_empty_meshes_and_domains():
     mesh = Mesh(points=torch.empty((0, 2)))
     control_displacements = torch.zeros(4, 4, 2)
 
-    mesh_output = mesh.ffd(control_displacements, implementation="torch")
-    domain_output = DomainMesh(interior=mesh).ffd(
+    mesh_output = mesh.free_form_deform(control_displacements, implementation="torch")
+    domain_output = DomainMesh(interior=mesh).free_form_deform(
         control_displacements, implementation="torch"
     )
 
@@ -156,7 +174,7 @@ def test_mesh_ffd_defaults_support_empty_meshes_and_domains():
 def test_mesh_ffd_validates_origin_before_deriving_extent(origin, error, match):
     mesh = _triangle_mesh()
     with pytest.raises(error, match=match):
-        mesh.ffd(
+        mesh.free_form_deform(
             torch.zeros(4, 4, 2),
             origin=origin,
             implementation="torch",
@@ -166,13 +184,15 @@ def test_mesh_ffd_validates_origin_before_deriving_extent(origin, error, match):
 def test_mesh_ffd_rejects_nonfinite_derived_extent():
     mesh = Mesh(points=torch.tensor([[-2.0e38, 0.0], [2.0e38, 1.0]]))
     with pytest.raises(ValueError, match="derived lattice extent must be finite"):
-        mesh.ffd(torch.zeros(4, 4, 2), implementation="torch")
+        mesh.free_form_deform(torch.zeros(4, 4, 2), implementation="torch")
 
 
 def test_mesh_ffd_validates_point_dtype_before_bounds_reduction():
     mesh = Mesh(points=torch.zeros((2, 2), dtype=torch.complex64))
     with pytest.raises(TypeError, match="points must have dtype torch.float32"):
-        mesh.ffd(torch.zeros((4, 4, 2), dtype=torch.complex64), implementation="torch")
+        mesh.free_form_deform(
+            torch.zeros((4, 4, 2), dtype=torch.complex64), implementation="torch"
+        )
 
 
 def test_mesh_ffd_point_weights_key_and_cache_invalidation():
@@ -187,7 +207,7 @@ def test_mesh_ffd_point_weights_key_and_cache_invalidation():
 
     translation = torch.tensor([0.0, 0.0, 0.25])
     control_displacements = translation.expand(4, 4, 4, 3).clone()
-    output = mesh.ffd(
+    output = mesh.free_form_deform(
         control_displacements, point_weights="weight", implementation="torch"
     )
 
@@ -210,7 +230,7 @@ def test_mesh_ffd_preserves_autograd_through_returned_points():
     mesh = _triangle_mesh(requires_grad=True)
     control_displacements = 0.1 * torch.sin(torch.arange(4 * 4 * 2.0)).reshape(4, 4, 2)
     control_displacements.requires_grad_(True)
-    output = mesh.ffd(
+    output = mesh.free_form_deform(
         control_displacements,
         origin=[-0.5, -0.5],
         extent=[2.0, 2.0],
@@ -228,13 +248,17 @@ def test_mesh_ffd_preserves_autograd_through_returned_points():
 def test_mesh_ffd_missing_point_data_key_has_actionable_diagnostic():
     mesh = _triangle_mesh()
     with pytest.raises(KeyError, match="point_weights field 'missing'.*Available keys"):
-        mesh.ffd(torch.zeros(4, 4, 2), point_weights="missing", implementation="torch")
+        mesh.free_form_deform(
+            torch.zeros(4, 4, 2),
+            point_weights="missing",
+            implementation="torch",
+        )
 
 
 def test_mesh_ffd_rejects_non_tensor_control_displacements():
     mesh = _triangle_mesh()
     with pytest.raises(TypeError, match="control_displacements"):
-        mesh.ffd("lattice", implementation="torch")
+        mesh.free_form_deform("lattice", implementation="torch")
 
 
 def _domain_with_coincident_points() -> DomainMesh:
@@ -257,7 +281,7 @@ def _domain_with_coincident_points() -> DomainMesh:
 def test_domain_ffd_shared_lattice_and_common_point_weight_key(point_weights):
     domain = _domain_with_coincident_points()
     control_displacements = 0.1 * torch.sin(torch.arange(4 * 4 * 2.0)).reshape(4, 4, 2)
-    output = domain.ffd(
+    output = domain.free_form_deform(
         control_displacements,
         origin=[-0.5, -0.5],
         extent=[2.0, 2.0],
@@ -281,7 +305,7 @@ def test_domain_ffd_shared_lattice_and_common_point_weight_key(point_weights):
 
 def test_domain_ffd_clones_domain_global_data():
     domain = _domain_with_coincident_points()
-    output = domain.ffd(torch.zeros(4, 4, 2), implementation="torch")
+    output = domain.free_form_deform(torch.zeros(4, 4, 2), implementation="torch")
 
     assert output.global_data is not domain.global_data
     output.global_data["reynolds"] = torch.tensor(2.0e5)
@@ -298,7 +322,7 @@ def test_domain_ffd_default_box_spans_combined_components():
     domain.boundaries["outlet"] = outlet
 
     translation = torch.tensor([0.1, 0.2])
-    output = domain.ffd(
+    output = domain.free_form_deform(
         translation.expand(4, 4, 2).clone(),
         implementation="torch",
     )
@@ -315,7 +339,7 @@ def test_domain_ffd_default_box_spans_combined_components():
 def test_domain_ffd_rejects_raw_point_weight_tensor():
     domain = _domain_with_coincident_points()
     with pytest.raises(TypeError, match="common point_data key/path"):
-        domain.ffd(
+        domain.free_form_deform(
             torch.zeros(4, 4, 2),
             point_weights=torch.ones(domain.interior.n_points),
             implementation="torch",
@@ -326,15 +350,19 @@ def test_domain_ffd_evaluates_combined_components_once(monkeypatch):
     domain = _domain_with_coincident_points()
 
     deform_module = importlib.import_module("physicsnemo.nn.functional.geometry.deform")
-    original = deform_module.ffd_points
+    original = deform_module.free_form_deform_points
     calls: list[torch.Tensor] = []
 
-    def counted_ffd_points(points, *args, **kwargs):
+    def counted_free_form_deform_points(points, *args, **kwargs):
         calls.append(points)
         return original(points, *args, **kwargs)
 
-    monkeypatch.setattr(deform_module, "ffd_points", counted_ffd_points)
-    output = domain.ffd(
+    monkeypatch.setattr(
+        deform_module,
+        "free_form_deform_points",
+        counted_free_form_deform_points,
+    )
+    output = domain.free_form_deform(
         torch.zeros(4, 4, 2),
         point_weights="marker",
         implementation="torch",
@@ -355,7 +383,7 @@ def test_domain_combined_ffd_preserves_component_autograd():
     control_displacements = 0.1 * torch.sin(torch.arange(4 * 4 * 2.0)).reshape(4, 4, 2)
     control_displacements.requires_grad_(True)
 
-    output = domain.ffd(
+    output = domain.free_form_deform(
         control_displacements,
         origin=[-0.5, -0.5],
         extent=[2.0, 2.0],

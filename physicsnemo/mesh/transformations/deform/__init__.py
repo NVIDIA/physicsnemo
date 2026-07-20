@@ -16,8 +16,18 @@
 
 """Nonlinear deformation operations for simplicial meshes."""
 
+from functools import wraps
+
 from physicsnemo.mesh.transformations.deform.displace import displace
-from physicsnemo.mesh.transformations.deform.ffd import ffd as free_form_deform
+from physicsnemo.mesh.transformations.deform.ffd import ffd as _ffd
 from physicsnemo.mesh.transformations.deform.morph import morph
+
+
+@wraps(_ffd, assigned=("__doc__", "__annotations__"))
+def free_form_deform(*args, **kwargs):
+    """Expose free-form deformation under its public API name."""
+
+    return _ffd(*args, **kwargs)
+
 
 __all__ = ["displace", "free_form_deform", "morph"]

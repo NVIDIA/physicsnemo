@@ -16,10 +16,10 @@
 
 from .deform import (
     DisplacePoints,
-    FFDPoints,
+    FreeFormDeformPoints,
     MorphPoints,
     displace_points,
-    ffd_points,
+    free_form_deform_points,
     morph_points,
 )
 from .farthest_point_sampling import FarthestPointSampling, farthest_point_sampling
@@ -30,7 +30,7 @@ from .sdf import SignedDistanceField, signed_distance_field
 
 __all__ = [
     "DisplacePoints",
-    "FFDPoints",
+    "FreeFormDeformPoints",
     "FarthestPointSampling",
     "MeshPoissonDiskSample",
     "MeshToVoxelFraction",
@@ -39,7 +39,7 @@ __all__ = [
     "SignedDistanceField",
     "displace_points",
     "farthest_point_sampling",
-    "ffd_points",
+    "free_form_deform_points",
     "mesh_poisson_disk_sample",
     "mesh_to_voxel_fraction",
     "morph_points",
