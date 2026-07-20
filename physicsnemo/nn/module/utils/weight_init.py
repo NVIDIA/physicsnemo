@@ -70,13 +70,13 @@ def _resolve_noise(
             if p.numel() < 2:
                 # std is undefined for a single element; shrink only, no noise.
                 return torch.zeros_like(p)
-            z = torch.empty_like(p).normal_(generator=generator)
+            z = torch.randn_like(p, generator=generator)
             return z.mul_(p.detach().std())  # scale in place: one temporary
 
     elif noise == "normal":
 
         def make_eps(p: torch.Tensor) -> torch.Tensor:
-            return torch.empty_like(p).normal_(generator=generator)
+            return torch.randn_like(p, generator=generator)
 
     else:
         raise ValueError(
