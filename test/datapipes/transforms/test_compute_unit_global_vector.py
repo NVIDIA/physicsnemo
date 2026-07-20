@@ -19,7 +19,10 @@
 import pytest
 import torch
 
-from physicsnemo.datapipes.transforms.mesh import ComputeUnitGlobalVector
+from physicsnemo.datapipes.transforms.mesh import (
+    ComputeUnitGlobalVector,
+    MeshToDomainMesh,
+)
 from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.mesh.primitives.basic import single_triangle_3d
 
@@ -49,6 +52,15 @@ class TestComputeUnitGlobalVector:
             out.global_data["v_dir"], torch.tensor([0.0, 1.0, 0.0])
         )
 
+    def test_direction_on_2d_mesh(self):
+        """Rank-one vectors matching a 2-D mesh are supported."""
+        mesh = Mesh(
+            points=torch.randn(5, 2),
+            global_data={"v": torch.tensor([3.0, 4.0])},
+        )
+        out = ComputeUnitGlobalVector(vector_field="v", output_field="v_dir")(mesh)
+        torch.testing.assert_close(out.global_data["v_dir"], torch.tensor([0.6, 0.8]))
+
     def test_direction_on_domain(self):
         """The unit direction is stored in domain-level global_data."""
         transform = ComputeUnitGlobalVector(
@@ -72,6 +84,18 @@ class TestComputeUnitGlobalVector:
         assert "U_inf_dir" not in out.boundaries["wall"].global_data.keys()
         torch.testing.assert_close(
             out.boundaries["wall"].global_data["wall_id"], torch.tensor([7.0])
+        )
+
+    def test_before_mesh_to_domain_copies_direction_to_boundary(self):
+        """Ordering before conversion copies the direction with global_data."""
+        mesh = single_triangle_3d.load()
+        mesh.global_data["v"] = torch.tensor([3.0, 0.0, 4.0])
+        transform = ComputeUnitGlobalVector(vector_field="v", output_field="v_dir")
+        domain = MeshToDomainMesh(interior_points="vertices")(transform(mesh))
+        expected = torch.tensor([0.6, 0.0, 0.8])
+        torch.testing.assert_close(domain.global_data["v_dir"], expected)
+        torch.testing.assert_close(
+            domain.boundaries["vehicle"].global_data["v_dir"], expected
         )
 
     def test_source_dtype_preserved(self):
@@ -101,7 +125,7 @@ class TestComputeUnitGlobalVector:
             points=torch.randn(5, 3),
             global_data={"v": torch.tensor([0.0, 0.0, 0.0])},
         )
-        with pytest.raises(ValueError, match="finite and positive"):
+        with pytest.raises(ValueError, match="must be positive"):
             ComputeUnitGlobalVector(vector_field="v", output_field="d")(mesh)
 
     def test_integer_vector_raises(self):
@@ -113,14 +137,59 @@ class TestComputeUnitGlobalVector:
         with pytest.raises(ValueError, match="floating-point"):
             ComputeUnitGlobalVector(vector_field="v", output_field="d")(mesh)
 
-    def test_batched_vector_raises(self):
-        """A batched (B, 3) vector raises instead of mis-normalizing."""
+    @pytest.mark.parametrize(
+        "value",
+        [
+            torch.tensor(1.0),
+            torch.tensor([[1.0, 0.0, 0.0]]),
+            torch.tensor([[[1.0, 0.0, 0.0]]]),
+        ],
+        ids=["scalar", "singleton_batch", "rank_three_singleton_batch"],
+    )
+    def test_non_rank_one_vector_raises(self, value):
+        """Scalars and batched vectors raise, including singleton batches."""
         mesh = Mesh(
             points=torch.randn(5, 3),
-            global_data={"v": torch.tensor([[1.0, 0.0, 0.0], [0.0, 2.0, 0.0]])},
+            global_data={"v": value},
         )
-        with pytest.raises(ValueError, match="single vector"):
+        with pytest.raises(ValueError, match="single rank-one vector"):
             ComputeUnitGlobalVector(vector_field="v", output_field="d")(mesh)
+
+    def test_spatial_dimension_mismatch_raises(self):
+        """Vector length must match the mesh's spatial dimension."""
+        mesh = Mesh(
+            points=torch.randn(5, 3),
+            global_data={"v": torch.tensor([3.0, 4.0])},
+        )
+        with pytest.raises(ValueError, match="length 3"):
+            ComputeUnitGlobalVector(vector_field="v", output_field="d")(mesh)
+
+    @pytest.mark.parametrize("nonfinite", [float("nan"), float("inf"), -float("inf")])
+    def test_nonfinite_component_raises(self, nonfinite):
+        """NaN and positive or negative infinity are rejected explicitly."""
+        mesh = Mesh(
+            points=torch.randn(5, 3),
+            global_data={"v": torch.tensor([1.0, nonfinite, 0.0])},
+        )
+        with pytest.raises(ValueError, match="only finite values"):
+            ComputeUnitGlobalVector(vector_field="v", output_field="d")(mesh)
+
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+    @pytest.mark.parametrize("magnitude_name", ["large", "tiny"])
+    def test_extreme_finite_vector_normalizes(self, dtype, magnitude_name):
+        """Finite vectors normalize without norm overflow or underflow."""
+        magnitude = (
+            torch.finfo(dtype).max
+            if magnitude_name == "large"
+            else torch.finfo(dtype).tiny
+        )
+        mesh = Mesh(
+            points=torch.randn(5, 3, dtype=dtype),
+            global_data={"v": torch.tensor([magnitude, -magnitude, 0.0], dtype=dtype)},
+        )
+        out = ComputeUnitGlobalVector(vector_field="v", output_field="d")(mesh)
+        expected = torch.tensor([2**-0.5, -(2**-0.5), 0.0], dtype=dtype)
+        torch.testing.assert_close(out.global_data["d"], expected)
 
     def test_same_output_field_raises(self):
         """output_field == vector_field is rejected at construction."""
