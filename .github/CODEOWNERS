@@ -62,7 +62,7 @@ docs/api/physicsnemo.active_learning.rst @megnvidia @laserkelvin @dallasfoster
 # Datapipes documentation
 docs/api/datapipes/physicsnemo.datapipes.rst @megnvidia @coreyjadams
 docs/api/datapipes/physicsnemo.datapipes.benchmarks.rst @megnvidia @ktangsali
-docs/api/datapipes/physicsnemo.datapipes.cae.rst @megnvidia @RishikeshRanade @coreyjadams @mnabian
+docs/api/datapipes/physicsnemo.datapipes.cae.rst @megnvidia @coreyjadams @mnabian
 docs/api/datapipes/physicsnemo.datapipes.climate.rst @megnvidia @dallasfoster @nickgeneva @pzharrington
 docs/api/datapipes/physicsnemo.datapipes.gnn.rst @megnvidia @mnabian
 docs/api/datapipes/physicsnemo.datapipes.readers.rst @megnvidia @coreyjadams
@@ -85,7 +85,7 @@ docs/api/models/fnos.rst @megnvidia @ktangsali
 docs/api/models/fully_connected.rst @megnvidia @peterdsharpe
 docs/api/models/gnns.rst @megnvidia @mnabian
 docs/api/models/modules.rst @megnvidia @coreyjadams @CharlelieLrt @ktangsali @peterdsharpe
-docs/api/models/operators.rst @megnvidia @RishikeshRanade @coreyjadams @peterdsharpe
+docs/api/models/operators.rst @megnvidia  @coreyjadams @peterdsharpe
 docs/api/models/recurrent.rst @megnvidia @ktangsali
 docs/api/models/transolver.rst @megnvidia @coreyjadams
 docs/api/models/weather.rst @megnvidia @dallasfoster @pzharrington @mnabian
@@ -95,7 +95,7 @@ docs/api/physicsnemo.nn.rst @megnvidia @loliverhennigh
 docs/api/physicsnemo.nn.layers.rst @megnvidia @loliverhennigh
 docs/api/physicsnemo.nn.functionals.rst @megnvidia @loliverhennigh
 docs/api/nn/ @megnvidia @loliverhennigh
-docs/api/nn/functionals/geometry.rst @megnvidia @RishikeshRanade @loliverhennigh
+docs/api/nn/functionals/geometry.rst @megnvidia  @loliverhennigh
 docs/api/nn/functionals/neighbors.rst @megnvidia @coreyjadams @peterdsharpe @loliverhennigh
 docs/api/nn/layers/attention_transformers.rst @megnvidia @pzharrington @CharlelieLrt @ktangsali @loliverhennigh
 docs/api/nn/layers/convolutional.rst @megnvidia @mnabian @CharlelieLrt
@@ -143,7 +143,7 @@ physicsnemo/nn/functional/ @loliverhennigh
 physicsnemo/nn/functional/neighbors/knn/ @coreyjadams @peterdsharpe @loliverhennigh
 physicsnemo/nn/functional/neighbors/radius_search/ @coreyjadams @peterdsharpe @loliverhennigh
 physicsnemo/nn/functional/natten.py @pzharrington
-physicsnemo/nn/functional/geometry/sdf.py @RishikeshRanade @loliverhennigh
+physicsnemo/nn/functional/geometry/sdf.py @peterdsharpe @loliverhennigh
 
 # Module layers
 physicsnemo/nn/module/ @loliverhennigh
@@ -177,7 +177,7 @@ physicsnemo/datapipes/benchmarks/
 physicsnemo/datapipes/readers/ @coreyjadams
 physicsnemo/datapipes/transforms/ @coreyjadams
 
-physicsnemo/datapipes/cae/domino_datapipe.py @RishikeshRanade @coreyjadams
+physicsnemo/datapipes/cae/domino_datapipe.py  @coreyjadams
 physicsnemo/datapipes/cae/mesh_datapipe.py @mnabian
 physicsnemo/datapipes/cae/readers.py @mnabian
 physicsnemo/datapipes/cae/transolver_datapipe.py @coreyjadams
@@ -215,7 +215,7 @@ physicsnemo/mesh/ @peterdsharpe
 # METRICS
 # ==============================================================================
 
-physicsnemo/metrics/cae/ @RishikeshRanade @mnabian @peterdsharpe
+physicsnemo/metrics/cae/  @mnabian @peterdsharpe
 physicsnemo/metrics/climate/ @dallasfoster @nickgeneva
 physicsnemo/metrics/general/ @dallasfoster @nickgeneva
 
@@ -261,7 +261,7 @@ physicsnemo/models/dlwp/ @pzharrington
 physicsnemo/models/dlwp_healpix/ @pzharrington
 
 # DoMINO
-physicsnemo/models/domino/ @RishikeshRanade @coreyjadams @peterdsharpe
+physicsnemo/models/domino/  @coreyjadams @peterdsharpe
 
 # DPOT
 physicsnemo/models/dpot/ @mnabian
@@ -344,12 +344,12 @@ examples/cfd/darcy_transolver/ @coreyjadams
 examples/cfd/datacenter/
 examples/cfd/external_aerodynamics/aero_graph_net/ @mnabian
 examples/cfd/external_aerodynamics/aerojepa/ @mnabian
-examples/cfd/external_aerodynamics/domino/ @RishikeshRanade @coreyjadams
-examples/cfd/external_aerodynamics/domino_nim_finetuning/ @RishikeshRanade @peterdsharpe
+examples/cfd/external_aerodynamics/domino/  @coreyjadams
+examples/cfd/external_aerodynamics/domino_nim_finetuning/  @peterdsharpe
 examples/cfd/external_aerodynamics/figconvnet/ @coreyjadams
 examples/cfd/external_aerodynamics/globe/ @peterdsharpe
 examples/cfd/external_aerodynamics/moe/ @mnabian
-examples/cfd/external_aerodynamics/transformer_models/ @coreyjadams @RishikeshRanade
+examples/cfd/external_aerodynamics/transformer_models/ @coreyjadams 
 examples/cfd/external_aerodynamics/transformer_models/src/finetune/ @mnabian
 examples/cfd/external_aerodynamics/unified_external_aero_recipe/ @coreyjadams @peterdsharpe
 examples/cfd/external_aerodynamics/xaeronet/ @mnabian
@@ -465,7 +465,7 @@ test/datapipes/ @coreyjadams
 
 test/models/diffusion/ @CharlelieLrt
 test/models/dit/ @pzharrington
-test/models/domino/ @RishikeshRanade
+test/models/domino/ @coreyjadams
 test/models/figconvnet/ @coreyjadams
 test/models/globe/ @peterdsharpe
 test/models/graphcast/ @mnabian
