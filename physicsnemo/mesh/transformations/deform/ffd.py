@@ -207,7 +207,7 @@ def free_form_deform(
           :math:`s(t)=6t^5-15t^4+10t^3`. Its first and second derivatives
           vanish at both endpoints. This gives C2 continuity across cell
           boundaries. Perlin introduced this improved interpolant in
-          **Improving Noise**.
+          "Improving Noise" [1].
 
         The node-interpolating bases use only the two neighboring nodes per
         axis. Here, ``t`` is the local cell coordinate in ``[0, 1]``. The
@@ -256,8 +256,8 @@ def free_form_deform(
 
     References
     ----------
-    - Perlin, K. (2002). **Improving Noise.** ACM Transactions on Graphics,
-      21(3), 681-682. https://doi.org/10.1145/566654.566636
+    [1] Perlin, K. (2002). "Improving Noise." ACM Transactions on Graphics,
+    21(3), 681-682. https://doi.org/10.1145/566654.566636
     """
     if not isinstance(control_displacements, torch.Tensor):
         raise TypeError(
