@@ -22,9 +22,8 @@ named target field declared in ``target_config`` produces:
 - For ``"scalar"`` types: per-metric values (``l1``, ``l2``, ``mae`` by
   default), keyed ``"<prefix>/<name>_<metric>"``.
 - For ``"vector"`` types: per-component values
-  (``"<prefix>/<name>_x_<metric>"`` etc.), aggregate values over all
-  components jointly (``"<prefix>/<name>_<metric>"``), and
-  direction-blind magnitude values (``"<prefix>/<name>_mag_<metric>"``).
+  (``"<prefix>/<name>_x_<metric>"`` etc.) plus aggregate values over all
+  components jointly (``"<prefix>/<name>_<metric>"``).
 
 Metrics are reported unweighted -- per-field weighting belongs in the
 loss, not in diagnostic summaries.
@@ -190,9 +189,8 @@ class MetricCalculator:
     def expected_keys(self) -> list[str]:
         """The exact key set :meth:`__call__` produces, derivable without data.
 
-        Vector fields contribute keys per spatial component, the bare-name
-        aggregate keys, and the ``mag`` (magnitude-comparison) keys;
-        scalars contribute one key per metric.
+        Vector fields contribute keys per spatial component plus the bare-name
+        aggregate keys; scalars contribute one key per metric.
         Lets callers pre-size accumulators identically on every rank --
         e.g. ``infer.py`` zero-fills its running sums with these keys so
         the cross-rank all-reduce packs the same tensor length even on a
@@ -209,8 +207,6 @@ class MetricCalculator:
                         self._make_key(name, comp, m) for m in self.metric_names
                     )
             keys.extend(self._make_key(name, m) for m in self.metric_names)
-            if field_type == "vector":
-                keys.extend(self._make_key(name, "mag", m) for m in self.metric_names)
         return keys
 
     def _metrics_for_tensor(
@@ -237,8 +233,7 @@ class MetricCalculator:
             ``"<prefix>/<name>_<metric>"`` for scalar fields and by
             ``"<prefix>/<name>_<comp>_<metric>"`` plus
             ``"<prefix>/<name>_<metric>"`` (aggregate over all components
-            jointly) and ``"<prefix>/<name>_mag_<metric>"``
-            (direction-blind magnitude comparison) for vector fields.
+            jointly) for vector fields.
             Slash-containing keys are stored verbatim;
             TensorDict only treats ``/`` as nested when the caller
             explicitly invokes ``flatten_keys("/")``.
@@ -275,13 +270,6 @@ class MetricCalculator:
                     out.update(
                         self._metrics_for_tensor(p.flatten(-2), t.flatten(-2), (name,))
                     )
-                    ### Magnitude comparison under an explicit "mag" key.
-                    ### Direction-blind by construction -- a prediction with
-                    ### correct magnitude but arbitrary direction scores 0
-                    ### here -- so it must never be the headline aggregate.
-                    p_mag = torch.linalg.vector_norm(p, dim=-1)
-                    t_mag = torch.linalg.vector_norm(t, dim=-1)
-                    out.update(self._metrics_for_tensor(p_mag, t_mag, (name, "mag")))
 
         return TensorDict(out)
 

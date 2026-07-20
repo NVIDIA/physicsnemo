@@ -148,11 +148,11 @@ def test_vector_aggregate_metric_is_direction_sensitive():
 
     Adversarial case: ``pred = -target`` has the correct magnitude at
     every point but maximally wrong direction. The aggregate ``wss_*``
-    metrics must say so (relative l1/l2 of a sign flip is exactly 2),
-    while the explicitly direction-blind ``wss_mag_*`` metrics score it
-    as perfect. Before 2026-07 the bare-name aggregate *was* the
-    magnitude comparison, so this prediction scored 0 -- the headline
-    vector metric could not see direction errors at all.
+    metrics must say so (relative l1/l2 of a sign flip is exactly 2).
+    Before 2026-07 the bare-name aggregate was a magnitude comparison,
+    so this prediction scored 0 -- the headline vector metric could not
+    see direction errors at all. That broken behavior is not retained
+    under a separate metric key.
     """
     t = torch.randn(64, 3)
     calc = MetricCalculator({"wss": "vector"})
@@ -165,9 +165,7 @@ def test_vector_aggregate_metric_is_direction_sensitive():
     assert out["wss_mae"].item() == pytest.approx(
         (2 * torch.mean(torch.abs(t.flatten()))).item(), rel=1e-5
     )
-    assert out["wss_mag_l1"].item() == pytest.approx(0.0, abs=1e-6)
-    assert out["wss_mag_l2"].item() == pytest.approx(0.0, abs=1e-6)
-    assert out["wss_mag_mae"].item() == pytest.approx(0.0, abs=1e-6)
+    assert not any("_mag_" in key for key in out.keys())
 
 
 def test_vector_aggregate_l2_is_frobenius():

@@ -276,12 +276,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `_mae`) were computed on per-point vector magnitudes, so direction errors
   were invisible — a prediction with the correct magnitude but wrong direction
   at every point scored 0. The bare-name aggregate is now computed over all
-  components jointly (whole-field relative norms, Frobenius for `l2`), and the
-  direction-blind magnitude comparison moved to an explicit
-  `<field>_mag_<metric>` key. Per-component metrics (`wss_x_l2`, ...) were
-  always direction-sensitive and are unchanged, and training/checkpoints are
-  unaffected (the training objective goes through `LossCalculator`, not this
-  metric path) — only reported aggregate vector metrics were misleading.
+  components jointly (whole-field relative norms, Frobenius for `l2`). The
+  broken magnitude-only aggregate is not retained under a separate key.
+  Per-component metrics (`wss_x_l2`, ...) were always direction-sensitive and
+  are unchanged, and training/checkpoints are unaffected (the training
+  objective goes through `LossCalculator`, not this metric path) — only
+  reported aggregate vector metrics were misleading.
 - Unified external aerodynamics recipe: model templates can now carry
   known-good training overrides (`train.yaml`'s `_self_` merges before the
   model template; all existing templates resolve identically). The GLOBE
