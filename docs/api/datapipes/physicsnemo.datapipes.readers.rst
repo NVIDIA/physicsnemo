@@ -87,6 +87,31 @@ TensorStoreZarrReader
     :members:
     :show-inheritance:
 
+ZarrMeshReader
+--------------
+
+.. autoclass:: physicsnemo.datapipes.readers.zarr_mesh.ZarrMeshReader
+    :members:
+    :show-inheritance:
+
+ZarrDomainMeshReader
+--------------------
+
+.. autoclass:: physicsnemo.datapipes.readers.zarr_mesh.ZarrDomainMeshReader
+    :members:
+    :show-inheritance:
+
+Mesh-zarr schema utilities
+--------------------------
+
+.. autofunction:: physicsnemo.datapipes.readers.zarr_mesh.save_mesh_to_zarr
+
+.. autofunction:: physicsnemo.datapipes.readers.zarr_mesh.save_domain_mesh_to_zarr
+
+.. autofunction:: physicsnemo.datapipes.readers.zarr_mesh.to_cell_soup
+
+.. autofunction:: physicsnemo.datapipes.readers.zarr_mesh.validate_mesh_zarr
+
 VTKReader
 ---------
 

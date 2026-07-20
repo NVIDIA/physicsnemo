@@ -171,6 +171,7 @@ def test_readers_registered():
         "HDF5Reader",
         "NumpyReader",
         "ZarrReader",
+        "ZarrMeshReader",
         "VTKReader",
         "TensorStoreZarrReader",
     ]

@@ -31,14 +31,28 @@ from physicsnemo.datapipes.readers.numpy import NumpyReader
 from physicsnemo.datapipes.readers.tensorstore_zarr import TensorStoreZarrReader
 from physicsnemo.datapipes.readers.vtk import VTKReader
 from physicsnemo.datapipes.readers.zarr import ZarrReader
+from physicsnemo.datapipes.readers.zarr_mesh import (
+    ZarrDomainMeshReader,
+    ZarrMeshReader,
+    save_domain_mesh_to_zarr,
+    save_mesh_to_zarr,
+    to_cell_soup,
+    validate_mesh_zarr,
+)
 
 __all__ = [
     "Reader",
     "HDF5Reader",
     "ZarrReader",
+    "ZarrMeshReader",
+    "ZarrDomainMeshReader",
     "NumpyReader",
     "VTKReader",
     "TensorStoreZarrReader",
     "MeshReader",
     "DomainMeshReader",
+    "save_mesh_to_zarr",
+    "save_domain_mesh_to_zarr",
+    "to_cell_soup",
+    "validate_mesh_zarr",
 ]
