@@ -49,9 +49,9 @@ def radial_basis_function_deform(
 
     A thin-plate-spline radial field is fitted to the prescribed sparse
     control displacements and evaluated at every mesh point. With the default
-    affine polynomial tail and zero smoothing, the unweighted field
-    interpolates every control displacement exactly, subject to floating-point
-    accuracy and a nonsingular control layout.
+    affine polynomial tail, zero smoothing, and a nonsingular control layout,
+    the unweighted field interpolates every control displacement up to solver
+    precision.
 
     Parameters
     ----------
@@ -69,8 +69,8 @@ def radial_basis_function_deform(
         ``"thin_plate_spline"``.
     polynomial : bool, optional
         Add the standard affine polynomial tail and side constraints. This
-        reproduces affine displacement fields and makes the thin-plate-spline
-        system well posed when the controls affinely span the coordinate space.
+        reproduces affine displacement fields. The controls must affinely span
+        the coordinate space, and the augmented system must be nonsingular.
         Default is ``True``.
     smoothing : float, optional
         Nonnegative diagonal regularization added to the radial system. Zero
@@ -85,9 +85,9 @@ def radial_basis_function_deform(
         Bool weights must be on the same device as the mesh points. Floating
         weights must have the same dtype and device as the mesh points.
     implementation : {"torch", "warp"} or None, optional
-        Evaluation-backend override. Both backends use PyTorch for the small
-        dense coefficient solve. ``None`` selects Torch on CPU and Warp on CUDA
-        when Warp is available, otherwise Torch.
+        Evaluation-backend override. Both backends use PyTorch for the dense
+        coefficient solve. ``None`` selects Torch on CPU and Warp on CUDA when
+        Warp is available, otherwise Torch.
 
     Returns
     -------
@@ -98,11 +98,11 @@ def radial_basis_function_deform(
     Raises
     ------
     TypeError
-        If control tensors, point weights, or Python argument types are
-        unsupported.
+        If control tensors or Python arguments have unsupported types, or if
+        tensor dtypes are unsupported or mismatched.
     ValueError
-        If tensor shapes, dtypes, devices, control layout, point weights, or
-        RBF options are invalid.
+        If tensor shapes, devices, control layout, point weights, or RBF
+        options are invalid.
     KeyError
         If a point-data key is missing or ``implementation`` does not name a
         registered backend.

@@ -125,9 +125,9 @@ individual component meshes.
 
 Radial-basis deformation additionally solves a dense control system with cubic
 cost in ``n_controls``. Both backends use the same differentiable PyTorch solve.
-``implementation="warp"`` selects a fused Warp evaluator for the larger
-point/control phase. The checked coefficient solve is not supported inside
-CUDA Graph capture. Use :func:`torch.compile` when compiled execution is needed.
+``implementation="warp"`` selects a fused Warp evaluator for the point/control
+evaluation phase. The checked coefficient solve is not supported inside CUDA
+Graph capture. Use :func:`torch.compile` when compiled execution is needed.
 
 For connectivity-preserving object APIs, use
 :meth:`~physicsnemo.mesh.mesh.Mesh.displace`,

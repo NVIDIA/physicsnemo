@@ -738,8 +738,10 @@ class DomainMesh:
         weights, coincident component points therefore receive identical
         motion. When supplied, ``point_weights`` is a common
         :attr:`Mesh.point_data` key (or nested tuple key) resolved independently
-        on each component. Raw weight tensors are rejected because component
-        point counts differ.
+        on each component. Each resolved weight scales the fitted field at its
+        point. Coincident component points therefore receive identical motion
+        only when their resolved weights match. Raw weight tensors are rejected
+        because component point counts differ.
 
         Parameters
         ----------
@@ -755,8 +757,9 @@ class DomainMesh:
             ``"thin_plate_spline"``.
         polynomial : bool, optional
             Add the standard affine polynomial tail and side constraints. When
-            controls are present, this requires at least ``D + 1`` controls
-            that span the ambient affine basis. Default is ``True``.
+            controls are present, this requires at least ``D + 1`` distinct
+            controls that span the ambient affine basis and form a nonsingular
+            augmented system. Default is ``True``.
         smoothing : float, optional
             Nonnegative diagonal regularization. With a nonsingular control
             layout, zero interpolates the control displacements up to solver
@@ -764,9 +767,10 @@ class DomainMesh:
             ``0.0``.
         point_weights : str, tuple[str, ...], or None
             Optional point-data key present in every component. Resolved tensors
-            must have one common dtype. Floating weights must match component
-            point dtypes. Every resolved tensor must be on the same device as
-            its component's points. Raw tensors are not accepted.
+            must use one common bool or floating dtype. Floating weights must
+            match component point dtypes. Every resolved tensor must be on the
+            same device as its component's points. Raw tensors are not
+            accepted.
         implementation : {"torch", "warp"} or None
             Field-evaluation backend. Both paths use PyTorch for the coefficient
             solve. Automatic dispatch uses Torch on CPU. On CUDA, it uses Warp
@@ -780,11 +784,11 @@ class DomainMesh:
         Raises
         ------
         TypeError
-            If control tensors, point weights, or Python argument types are
-            unsupported.
+            If control tensors or Python arguments have unsupported types, or
+            if tensor dtypes are unsupported or mismatched.
         ValueError
-            If component data, tensor shapes, dtypes, devices, control layout,
-            point weights, or RBF options are invalid.
+            If component data, tensor shapes, devices, control layout, point
+            weights, or RBF options are invalid.
         KeyError
             If a point-data key is missing or ``implementation`` does not name
             a registered backend.

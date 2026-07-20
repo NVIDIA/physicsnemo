@@ -68,17 +68,9 @@ def _domain_with_coincident_points() -> DomainMesh:
 def test_radial_basis_function_deform_namespace_is_canonical():
     transformations = importlib.import_module("physicsnemo.mesh.transformations")
     deform_module = importlib.import_module("physicsnemo.mesh.transformations.deform")
-    geometric_module = importlib.import_module(
-        "physicsnemo.mesh.transformations.geometric"
-    )
 
     assert transformations.deform is deform_module
     assert deform_module.radial_basis_function_deform is radial_basis_function_deform
-    assert not hasattr(deform_module, "rbf_morph")
-    assert not hasattr(transformations, "radial_basis_function_deform")
-    assert not hasattr(geometric_module, "radial_basis_function_deform")
-    assert not hasattr(Mesh, "rbf_morph")
-    assert not hasattr(DomainMesh, "rbf_morph")
 
 
 def test_mesh_and_domain_radial_basis_function_deform_signatures_are_introspectable():

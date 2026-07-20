@@ -172,10 +172,10 @@ Optional point weights are applied after interpolation. Unlike compact Shepard
 morphing, every control generally influences every point. Fixed controls are
 therefore useful as anchors.
 
-The standard affine polynomial tail reproduces affine displacement fields and
-makes the thin-plate-spline system well posed when the controls affinely span
-the coordinate space. This formulation follows the thin-plate-spline
-interpolant described by Bookstein [1].
+The standard affine polynomial tail reproduces affine displacement fields. The
+controls must affinely span the coordinate space, and the augmented system must
+be nonsingular. This formulation follows the thin-plate-spline interpolant
+described by Bookstein [1].
 
 [1] F. L. Bookstein, "Principal warps: thin-plate splines and the decomposition
 of deformations," IEEE Transactions on Pattern Analysis and Machine
@@ -200,7 +200,7 @@ triangulated square and moves a fifth handle at the midpoint of its upper edge.
     displacements_2d = torch.zeros_like(controls_2d)
     displacements_2d[-1] = controls_2d.new_tensor([0.15, 0.35])
 
-    morphed_2d = mesh_2d.radial_basis_function_deform(
+    deformed_2d = mesh_2d.radial_basis_function_deform(
         controls_2d,
         displacements_2d,
         kernel="thin_plate_spline",
@@ -212,7 +212,7 @@ triangulated square and moves a fifth handle at the midpoint of its upper edge.
         mesh_2d.points - controls_2d[-1], dim=1
     ).argmin()
     torch.testing.assert_close(
-        morphed_2d.points[handle_index],
+        deformed_2d.points[handle_index],
         controls_2d[-1] + displacements_2d[-1],
         atol=2.0e-5,
         rtol=2.0e-5,
@@ -267,9 +267,9 @@ uses its six axis-extreme vertices as controls.
 smoothing value adds diagonal regularization. This deliberately relaxes
 interpolation accuracy.
 
-Both evaluation backends use PyTorch for the small dense coefficient solve.
-The Warp backend fuses evaluation over the much larger mesh point set without
-materializing its full point/control kernel matrix.
+Both evaluation backends use PyTorch for the dense coefficient solve. The Warp
+backend fuses evaluation over the mesh points without materializing its full
+point/control kernel matrix.
 
 Orange controls are fixed anchors. Green controls mark moved handles, and the
 arrows show their displacement directions. The labels give the prescribed

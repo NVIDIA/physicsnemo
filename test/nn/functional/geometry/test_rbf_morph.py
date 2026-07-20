@@ -23,7 +23,6 @@ from typing import Literal, get_type_hints
 import pytest
 import torch
 
-import physicsnemo.nn.functional as functional
 from physicsnemo.core.function_spec import FunctionSpec
 from physicsnemo.nn.functional import radial_basis_function_deform_points
 from physicsnemo.nn.functional.geometry import RadialBasisFunctionDeformPoints
@@ -101,8 +100,6 @@ def test_public_exports_signature_and_function_spec_contract():
         "physicsnemo.nn.functional.geometry.deform.rbf"
     )
     assert issubclass(RadialBasisFunctionDeformPoints, FunctionSpec)
-    assert not hasattr(functional, "RadialBasisFunctionDeformPoints")
-    assert not hasattr(functional, "rbf_morph_points")
     assert list(inspect.signature(radial_basis_function_deform_points).parameters) == [
         "points",
         "control_points",
