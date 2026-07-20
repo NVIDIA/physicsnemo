@@ -33,7 +33,13 @@ from .rectilinear_grid_laplacian import (
     RectilinearGridLaplacian,
     rectilinear_grid_laplacian,
 )
+from .spectral_grid_curl import SpectralGridCurl, spectral_grid_curl
+from .spectral_grid_divergence import (
+    SpectralGridDivergence,
+    spectral_grid_divergence,
+)
 from .spectral_grid_gradient import SpectralGridGradient, spectral_grid_gradient
+from .spectral_grid_laplacian import SpectralGridLaplacian, spectral_grid_laplacian
 from .uniform_grid_curl import UniformGridCurl, uniform_grid_curl
 from .uniform_grid_divergence import UniformGridDivergence, uniform_grid_divergence
 from .uniform_grid_gradient import UniformGridGradient, uniform_grid_gradient
@@ -50,7 +56,10 @@ __all__ = [
     "RectilinearGridDivergence",
     "RectilinearGridGradient",
     "RectilinearGridLaplacian",
+    "SpectralGridCurl",
+    "SpectralGridDivergence",
     "SpectralGridGradient",
+    "SpectralGridLaplacian",
     "UniformGridGradient",
     "uniform_grid_curl",
     "uniform_grid_divergence",
@@ -62,6 +71,9 @@ __all__ = [
     "rectilinear_grid_divergence",
     "rectilinear_grid_gradient",
     "rectilinear_grid_laplacian",
+    "spectral_grid_curl",
+    "spectral_grid_divergence",
     "spectral_grid_gradient",
+    "spectral_grid_laplacian",
     "uniform_grid_gradient",
 ]

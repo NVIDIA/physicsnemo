@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds `spectral_grid_divergence`, `spectral_grid_curl`, and
+  `spectral_grid_laplacian` to `physicsnemo.nn.functional` for periodic
+  Fourier spectral vector calculus on 1D-3D grids (curl in 2D and 3D).
 - Adds dimension-generic volume mesh generation for implicit domains to
   `physicsnemo.mesh.generate`. `mesh_implicit_domain` meshes
   `{x : phi(x) < 0}`, clipped to the bounding box (box faces are honored

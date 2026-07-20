@@ -242,3 +242,10 @@ def test_spectral_grid_gradient_error_handling(device: str):
             lengths=(1.0, 0.0),
             implementation="torch",
         )
+
+    with pytest.raises(ValueError, match="finite and strictly positive"):
+        SpectralGridGradient.dispatch(
+            torch.randn(32, 32, device=device, dtype=torch.float32),
+            lengths=(1.0, float("inf")),
+            implementation="torch",
+        )

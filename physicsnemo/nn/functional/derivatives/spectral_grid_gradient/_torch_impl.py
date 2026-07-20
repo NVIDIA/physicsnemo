@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from itertools import combinations
 
@@ -25,7 +26,7 @@ import torch
 def _normalize_lengths(
     lengths: float | Sequence[float], ndim: int
 ) -> tuple[float, ...]:
-    """Normalize periodic lengths into one positive entry per axis."""
+    """Normalize periodic lengths into one finite positive entry per axis."""
     if isinstance(lengths, (float, int)):
         lengths_tuple = tuple(float(lengths) for _ in range(ndim))
     else:
@@ -36,8 +37,8 @@ def _normalize_lengths(
             )
 
     for axis, length in enumerate(lengths_tuple):
-        if length <= 0.0:
-            raise ValueError(f"lengths[{axis}] must be strictly positive")
+        if not math.isfinite(length) or length <= 0.0:
+            raise ValueError(f"lengths[{axis}] must be finite and strictly positive")
     return lengths_tuple
 
 
