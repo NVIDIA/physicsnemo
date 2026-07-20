@@ -14,16 +14,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Dense and sparse point-deformation functionals."""
+"""Dense, sparse, and lattice point-deformation functionals."""
 
 from .deform import DisplacePoints, MorphPoints, displace_points, morph_points
-from .rbf import RBFMorphPoints, rbf_morph_points
+from .ffd import FreeFormDeformPoints, free_form_deform_points
+from .rbf import RadialBasisFunctionDeformPoints, radial_basis_function_deform_points
 
 __all__ = [
     "DisplacePoints",
+    "FreeFormDeformPoints",
     "MorphPoints",
-    "RBFMorphPoints",
+    "RadialBasisFunctionDeformPoints",
     "displace_points",
+    "free_form_deform_points",
     "morph_points",
-    "rbf_morph_points",
+    "radial_basis_function_deform_points",
 ]

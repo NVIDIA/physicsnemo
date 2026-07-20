@@ -49,9 +49,9 @@ def _controls(points: torch.Tensor) -> torch.Tensor:
     return points[indices]
 
 
-def _rbf_morph(mesh, controls, displacements):
+def _radial_basis_function_deform(mesh, controls, displacements):
     """Apply the exact RBF settings illustrated by this figure."""
-    return mesh.rbf_morph(
+    return mesh.radial_basis_function_deform(
         controls,
         displacements,
         kernel="thin_plate_spline",
@@ -118,8 +118,8 @@ def main():
     two_handles[0, 2] = 0.55
     two_handles[1, 2] = -0.55
 
-    pulled = _rbf_morph(sphere, controls, one_handle)
-    stretched = _rbf_morph(sphere, controls, two_handles)
+    pulled = _radial_basis_function_deform(sphere, controls, one_handle)
+    stretched = _radial_basis_function_deform(sphere, controls, two_handles)
 
     panels = (
         (

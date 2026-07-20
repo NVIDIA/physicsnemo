@@ -17,7 +17,8 @@
 """Nonlinear deformation operations for mesh point coordinates."""
 
 from physicsnemo.mesh.transformations.deform.displace import displace
+from physicsnemo.mesh.transformations.deform.ffd import free_form_deform
 from physicsnemo.mesh.transformations.deform.morph import morph
-from physicsnemo.mesh.transformations.deform.rbf import rbf_morph
+from physicsnemo.mesh.transformations.deform.rbf import radial_basis_function_deform
 
-__all__ = ["displace", "morph", "rbf_morph"]
+__all__ = ["displace", "free_form_deform", "morph", "radial_basis_function_deform"]

@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Pure-Torch fitting and evaluation for exact radial-basis morphing."""
+"""Pure-Torch fitting and evaluation for radial-basis deformation."""
 
 from __future__ import annotations
 

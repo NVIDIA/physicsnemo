@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for thin-plate-spline radial-basis point morphing."""
+"""Tests for thin-plate-spline radial-basis point deformation."""
 
 import inspect
 import math
@@ -25,8 +25,8 @@ import torch
 
 import physicsnemo.nn.functional as functional
 from physicsnemo.core.function_spec import FunctionSpec
-from physicsnemo.nn.functional import rbf_morph_points
-from physicsnemo.nn.functional.geometry import RBFMorphPoints
+from physicsnemo.nn.functional import radial_basis_function_deform_points
+from physicsnemo.nn.functional.geometry import RadialBasisFunctionDeformPoints
 from physicsnemo.nn.functional.geometry.deform import rbf as rbf_module
 from test.conftest import requires_module
 from test.nn.functional._parity_utils import clone_case
@@ -93,13 +93,17 @@ def _differentiable_tensors(args, kwargs):
 
 
 def test_public_exports_signature_and_function_spec_contract():
-    assert rbf_morph_points.__name__ == "rbf_morph_points"
-    assert rbf_morph_points.__module__ == (
+    assert (
+        radial_basis_function_deform_points.__name__
+        == "radial_basis_function_deform_points"
+    )
+    assert radial_basis_function_deform_points.__module__ == (
         "physicsnemo.nn.functional.geometry.deform.rbf"
     )
-    assert issubclass(RBFMorphPoints, FunctionSpec)
-    assert not hasattr(functional, "RBFMorphPoints")
-    assert list(inspect.signature(rbf_morph_points).parameters) == [
+    assert issubclass(RadialBasisFunctionDeformPoints, FunctionSpec)
+    assert not hasattr(functional, "RadialBasisFunctionDeformPoints")
+    assert not hasattr(functional, "rbf_morph_points")
+    assert list(inspect.signature(radial_basis_function_deform_points).parameters) == [
         "points",
         "control_points",
         "control_displacements",
@@ -109,8 +113,8 @@ def test_public_exports_signature_and_function_spec_contract():
         "point_weights",
         "implementation",
     ]
-    assert set(RBFMorphPoints.implementations()) == {"torch", "warp"}
-    assert get_type_hints(rbf_morph_points)["implementation"] == (
+    assert set(RadialBasisFunctionDeformPoints.implementations()) == {"torch", "warp"}
+    assert get_type_hints(radial_basis_function_deform_points)["implementation"] == (
         Literal["torch", "warp"] | None
     )
 
@@ -126,7 +130,7 @@ def test_exact_interpolation_at_controls(num_dims, implementation):
         controls.shape, generator=generator, dtype=controls.dtype
     )
 
-    output = rbf_morph_points(
+    output = radial_basis_function_deform_points(
         controls,
         controls,
         displacements,
@@ -158,7 +162,7 @@ def test_torch_query_chunking_preserves_outputs_and_gradients(monkeypatch):
             byte_budget,
         )
         inputs = tuple(tensor.clone().requires_grad_() for tensor in base_inputs)
-        output = rbf_morph_points(*inputs, implementation="torch")
+        output = radial_basis_function_deform_points(*inputs, implementation="torch")
         gradients = torch.autograd.grad(output.square().sum(), inputs)
         return output, gradients
 
@@ -198,7 +202,7 @@ def test_thin_plate_spline_value_at_off_control_query():
     control_displacements = torch.stack([field_at(control) for control in controls])
     query = torch.tensor([[0.25, 0.4]], dtype=dtype)
     expected = query + field_at(query[0])
-    actual = rbf_morph_points(
+    actual = radial_basis_function_deform_points(
         query,
         controls,
         control_displacements,
@@ -227,7 +231,7 @@ def test_warp_exact_coincidence_gradients_match_torch(device):
         points = base_controls.clone().requires_grad_()
         controls = base_controls.clone().requires_grad_()
         displacements = base_displacements.clone().requires_grad_()
-        output = rbf_morph_points(
+        output = radial_basis_function_deform_points(
             points,
             controls,
             displacements,
@@ -263,7 +267,7 @@ def test_affine_reproduction_is_dimensionally_generic_and_batched(num_dims, batc
     control_displacements = torch.bmm(controls, linear) + offset
     expected_displacements = torch.bmm(points, linear) + offset
 
-    output = rbf_morph_points(
+    output = radial_basis_function_deform_points(
         points,
         controls,
         control_displacements,
@@ -290,13 +294,13 @@ def test_boolean_signed_and_amplifying_point_weights():
         [[-0.8, -0.4], [0.0, 0.1], [0.6, 0.75], [1.2, -0.25]],
         dtype=dtype,
     )
-    unweighted = rbf_morph_points(
+    unweighted = radial_basis_function_deform_points(
         points, controls, displacements, implementation="torch"
     )
     field = unweighted - points
 
     weights = torch.tensor([0.0, 0.5, -1.0, 2.0], dtype=dtype, requires_grad=True)
-    weighted = rbf_morph_points(
+    weighted = radial_basis_function_deform_points(
         points,
         controls,
         displacements,
@@ -308,7 +312,7 @@ def test_boolean_signed_and_amplifying_point_weights():
     torch.testing.assert_close(weights.grad, field.sum(dim=-1))
 
     mask = torch.tensor([True, False, True, False])
-    masked = rbf_morph_points(
+    masked = radial_basis_function_deform_points(
         points,
         controls,
         displacements,
@@ -324,14 +328,14 @@ def test_smoothing_relaxes_interpolation():
     displacements = torch.randn(
         controls.shape, generator=generator, dtype=controls.dtype
     )
-    exact = rbf_morph_points(
+    exact = radial_basis_function_deform_points(
         controls,
         controls,
         displacements,
         smoothing=0.0,
         implementation="torch",
     )
-    smoothed = rbf_morph_points(
+    smoothed = radial_basis_function_deform_points(
         controls,
         controls,
         displacements,
@@ -352,7 +356,7 @@ def test_no_polynomial_tail_still_interpolates_when_kernel_is_invertible():
         [[0.2, -0.1], [-0.15, 0.3], [0.05, 0.2], [0.1, -0.2], [-0.25, 0.1]],
         dtype=controls.dtype,
     )
-    output = rbf_morph_points(
+    output = radial_basis_function_deform_points(
         controls,
         controls,
         displacements,
@@ -383,7 +387,7 @@ def test_empty_controls_are_identity(implementation):
         dtype=points.dtype,
         requires_grad=True,
     )
-    output = rbf_morph_points(
+    output = radial_basis_function_deform_points(
         points,
         controls,
         displacements,
@@ -406,7 +410,7 @@ def test_empty_controls_are_identity(implementation):
     ("call", "error", "match"),
     [
         (
-            lambda: rbf_morph_points(
+            lambda: radial_basis_function_deform_points(
                 [],
                 torch.zeros(3, 2),
                 torch.zeros(3, 2),
@@ -416,7 +420,7 @@ def test_empty_controls_are_identity(implementation):
             "points must be a torch.Tensor, got list",
         ),
         (
-            lambda: rbf_morph_points(
+            lambda: radial_basis_function_deform_points(
                 torch.zeros(2, 2),
                 torch.zeros(3, 2),
                 [],
@@ -426,7 +430,7 @@ def test_empty_controls_are_identity(implementation):
             "control_displacements must be a torch.Tensor, got list",
         ),
         (
-            lambda: rbf_morph_points(
+            lambda: radial_basis_function_deform_points(
                 torch.zeros(2, 2),
                 torch.zeros(3, 2),
                 torch.zeros(3, 2),
@@ -437,7 +441,7 @@ def test_empty_controls_are_identity(implementation):
             "point_weights must be a torch.Tensor or None, got list",
         ),
         (
-            lambda: rbf_morph_points(
+            lambda: radial_basis_function_deform_points(
                 torch.zeros(2, 2, dtype=torch.float16),
                 torch.zeros(3, 2, dtype=torch.float16),
                 torch.zeros(3, 2, dtype=torch.float16),
@@ -447,7 +451,7 @@ def test_empty_controls_are_identity(implementation):
             "float32 or torch.float64",
         ),
         (
-            lambda: rbf_morph_points(
+            lambda: radial_basis_function_deform_points(
                 torch.zeros(2, 2),
                 torch.zeros(3, 2),
                 torch.zeros(4, 2),
@@ -457,7 +461,7 @@ def test_empty_controls_are_identity(implementation):
             "identical shapes",
         ),
         (
-            lambda: rbf_morph_points(
+            lambda: radial_basis_function_deform_points(
                 torch.zeros(2, 2),
                 torch.zeros(3, 2),
                 torch.zeros(3, 2),
@@ -468,7 +472,7 @@ def test_empty_controls_are_identity(implementation):
             "kernel must be 'thin_plate_spline'",
         ),
         (
-            lambda: rbf_morph_points(
+            lambda: radial_basis_function_deform_points(
                 torch.zeros(2, 2),
                 torch.zeros(3, 2),
                 torch.zeros(3, 2),
@@ -479,7 +483,7 @@ def test_empty_controls_are_identity(implementation):
             "polynomial must be a bool",
         ),
         (
-            lambda: rbf_morph_points(
+            lambda: radial_basis_function_deform_points(
                 torch.zeros(2, 2),
                 torch.zeros(3, 2),
                 torch.zeros(3, 2),
@@ -490,7 +494,7 @@ def test_empty_controls_are_identity(implementation):
             "nonnegative finite Python real scalar",
         ),
         (
-            lambda: rbf_morph_points(
+            lambda: radial_basis_function_deform_points(
                 torch.zeros(2, 2),
                 torch.zeros(3, 2),
                 torch.zeros(3, 2),
@@ -501,7 +505,7 @@ def test_empty_controls_are_identity(implementation):
             "nonnegative",
         ),
         (
-            lambda: rbf_morph_points(
+            lambda: radial_basis_function_deform_points(
                 torch.zeros(2, 2),
                 torch.zeros(3, 2),
                 torch.zeros(3, 2),
@@ -512,7 +516,18 @@ def test_empty_controls_are_identity(implementation):
             "finite",
         ),
         (
-            lambda: rbf_morph_points(
+            lambda: radial_basis_function_deform_points(
+                torch.zeros(2, 2),
+                torch.zeros(3, 2),
+                torch.zeros(3, 2),
+                smoothing=10**10000,
+                implementation="torch",
+            ),
+            ValueError,
+            "finite in the control dtype",
+        ),
+        (
+            lambda: radial_basis_function_deform_points(
                 torch.zeros(2, 2),
                 torch.zeros(2, 2),
                 torch.zeros(2, 2),
@@ -522,7 +537,7 @@ def test_empty_controls_are_identity(implementation):
             "at least D \\+ 1 controls",
         ),
         (
-            lambda: rbf_morph_points(
+            lambda: radial_basis_function_deform_points(
                 torch.zeros(2, 2),
                 torch.zeros(3, 2),
                 torch.zeros(3, 2),
@@ -533,7 +548,7 @@ def test_empty_controls_are_identity(implementation):
             "point_weights must have shape",
         ),
         (
-            lambda: rbf_morph_points(
+            lambda: radial_basis_function_deform_points(
                 torch.zeros(1, 2, 2),
                 torch.zeros(2, 3, 2),
                 torch.zeros(2, 3, 2),
@@ -555,7 +570,7 @@ def test_affinely_degenerate_controls_surface_checked_solve_diagnostic():
         [[0.1, 0.0], [0.0, 0.2], [-0.1, 0.1]], dtype=torch.float64
     )
     with pytest.raises(RuntimeError, match="singular"):
-        rbf_morph_points(
+        radial_basis_function_deform_points(
             controls,
             controls,
             displacements,
@@ -565,7 +580,9 @@ def test_affinely_degenerate_controls_surface_checked_solve_diagnostic():
 
 @requires_module("warp")
 @pytest.mark.parametrize("implementation", ["torch", "warp", None])
-def test_rbf_morph_points_rejects_cuda_graph_capture(device, implementation):
+def test_radial_basis_function_deform_points_rejects_cuda_graph_capture(
+    device, implementation
+):
     device = torch.device(device)
     if device.type != "cuda":
         pytest.skip("CUDA Graph capture requires CUDA")
@@ -577,7 +594,7 @@ def test_rbf_morph_points_rejects_cuda_graph_capture(device, implementation):
 
     # Warm allocator and backend state before capture so the failure identifies
     # the checked coefficient solve rather than lazy initialization.
-    rbf_morph_points(
+    radial_basis_function_deform_points(
         points,
         controls,
         displacements,
@@ -588,7 +605,7 @@ def test_rbf_morph_points_rejects_cuda_graph_capture(device, implementation):
     graph = torch.cuda.CUDAGraph()
     with pytest.raises(RuntimeError, match="not supported during CUDA Graph capture"):
         with torch.cuda.graph(graph):
-            rbf_morph_points(
+            radial_basis_function_deform_points(
                 points,
                 controls,
                 displacements,
@@ -606,7 +623,7 @@ def test_inductor_rejects_singular_systems_like_eager(polynomial):
     displacements = torch.ones_like(controls)
 
     def singular_system(c, d):
-        return rbf_morph_points(
+        return radial_basis_function_deform_points(
             c,
             c,
             d,
@@ -640,7 +657,7 @@ def _gradcheck_inputs():
 
 def test_torch_gradcheck_and_gradgradcheck():
     def operation(points, controls, displacements, weights):
-        return rbf_morph_points(
+        return radial_basis_function_deform_points(
             points,
             controls,
             displacements,
@@ -684,7 +701,7 @@ def _run_with_gradients(implementation, device, dtype):
     weights = torch.tensor(
         [0.7, -0.4, 1.1], dtype=dtype, device=device, requires_grad=True
     )
-    output = rbf_morph_points(
+    output = radial_basis_function_deform_points(
         points,
         controls,
         displacements,
@@ -742,7 +759,7 @@ def test_warp_multiblock_backward_matches_torch(device, polynomial):
             tensor.clone().requires_grad_()
             for tensor in (points, controls, displacements, point_weights)
         )
-        output = rbf_morph_points(
+        output = radial_basis_function_deform_points(
             inputs[0],
             inputs[1],
             inputs[2],
@@ -779,9 +796,9 @@ def test_default_dispatch_selects_device_backend(device, monkeypatch):
     monkeypatch.setattr(rbf_module, "rbf_field_torch", torch_spy)
     monkeypatch.setattr(rbf_module, "rbf_field_warp", warp_spy)
 
-    warp_impl = RBFMorphPoints._get_impls()["warp"]
+    warp_impl = RadialBasisFunctionDeformPoints._get_impls()["warp"]
     expected = "warp" if device.type == "cuda" and warp_impl.available else "torch"
-    output = rbf_morph_points(points, controls, displacements)
+    output = radial_basis_function_deform_points(points, controls, displacements)
     assert calls == [expected]
     torch.testing.assert_close(output, points)
 
@@ -800,7 +817,7 @@ def test_torch_compile_fullgraph_smoke(implementation):
     weights = torch.tensor([0.7, 1.1], dtype=dtype)
 
     def operation(p, c, d, w):
-        return rbf_morph_points(
+        return radial_basis_function_deform_points(
             p,
             c,
             d,
@@ -818,7 +835,7 @@ def test_torch_compile_fullgraph_smoke(implementation):
 
 def test_torch_compile_fullgraph_dynamic_query_and_control_counts():
     def operation(points, controls, displacements):
-        return rbf_morph_points(
+        return radial_basis_function_deform_points(
             points,
             controls,
             displacements,
@@ -856,7 +873,7 @@ def test_inductor_warp_forward_and_backward(device):
     )
 
     def operation(p, c, d):
-        return rbf_morph_points(
+        return radial_basis_function_deform_points(
             p,
             c,
             d,
@@ -897,7 +914,7 @@ def test_torch_compile_rejects_invalid_static_smoothing_like_eager(smoothing, ma
     displacements = torch.zeros_like(controls)
 
     def invalid_smoothing(p, c, d):
-        return rbf_morph_points(
+        return radial_basis_function_deform_points(
             p,
             c,
             d,
@@ -920,7 +937,7 @@ def test_torch_compile_rejects_invalid_dynamic_smoothing_without_recompiling():
     compiled_graphs = []
 
     def operation(p, c, d, smoothing):
-        return rbf_morph_points(
+        return radial_basis_function_deform_points(
             p,
             c,
             d,
@@ -953,38 +970,44 @@ def test_torch_compile_rejects_invalid_dynamic_smoothing_without_recompiling():
 def test_benchmark_forward_generator_contract(device):
     device = torch.device(device)
     labels = []
-    for label, args, kwargs in RBFMorphPoints.make_inputs_forward(device=device):
+    for label, args, kwargs in RadialBasisFunctionDeformPoints.make_inputs_forward(
+        device=device
+    ):
         labels.append(label)
         reduced_args, reduced_kwargs = _trim_benchmark_case(args, kwargs)
         torch_args, torch_kwargs = clone_case(reduced_args, reduced_kwargs)
         warp_args, warp_kwargs = clone_case(reduced_args, reduced_kwargs)
-        torch_output = RBFMorphPoints.dispatch(
+        torch_output = RadialBasisFunctionDeformPoints.dispatch(
             *torch_args, implementation="torch", **torch_kwargs
         )
-        warp_output = RBFMorphPoints.dispatch(
+        warp_output = RadialBasisFunctionDeformPoints.dispatch(
             *warp_args, implementation="warp", **warp_kwargs
         )
-        RBFMorphPoints.compare_forward(warp_output, torch_output)
+        RadialBasisFunctionDeformPoints.compare_forward(warp_output, torch_output)
 
-    assert labels == [case[0] for case in RBFMorphPoints._FORWARD_BENCHMARK_CASES]
+    assert labels == [
+        case[0] for case in RadialBasisFunctionDeformPoints._FORWARD_BENCHMARK_CASES
+    ]
 
 
 @requires_module("warp")
 def test_benchmark_backward_generator_contract(device):
     device = torch.device(device)
     labels = []
-    for label, args, kwargs in RBFMorphPoints.make_inputs_backward(device=device):
+    for label, args, kwargs in RadialBasisFunctionDeformPoints.make_inputs_backward(
+        device=device
+    ):
         labels.append(label)
         reduced_args, reduced_kwargs = _trim_benchmark_case(args, kwargs)
         torch_args, torch_kwargs = clone_case(reduced_args, reduced_kwargs)
         warp_args, warp_kwargs = clone_case(reduced_args, reduced_kwargs)
-        torch_output = RBFMorphPoints.dispatch(
+        torch_output = RadialBasisFunctionDeformPoints.dispatch(
             *torch_args, implementation="torch", **torch_kwargs
         )
-        warp_output = RBFMorphPoints.dispatch(
+        warp_output = RadialBasisFunctionDeformPoints.dispatch(
             *warp_args, implementation="warp", **warp_kwargs
         )
-        RBFMorphPoints.compare_forward(warp_output, torch_output)
+        RadialBasisFunctionDeformPoints.compare_forward(warp_output, torch_output)
 
         torch_tensors = _differentiable_tensors(torch_args, torch_kwargs)
         warp_tensors = _differentiable_tensors(warp_args, warp_kwargs)
@@ -993,6 +1016,8 @@ def test_benchmark_backward_generator_contract(device):
         )
         warp_gradients = torch.autograd.grad(warp_output.square().mean(), warp_tensors)
         for actual, expected in zip(warp_gradients, torch_gradients, strict=True):
-            RBFMorphPoints.compare_backward(actual, expected)
+            RadialBasisFunctionDeformPoints.compare_backward(actual, expected)
 
-    assert labels == [case[0] for case in RBFMorphPoints._BACKWARD_BENCHMARK_CASES]
+    assert labels == [
+        case[0] for case in RadialBasisFunctionDeformPoints._BACKWARD_BENCHMARK_CASES
+    ]

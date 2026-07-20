@@ -14,11 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Thin-plate-spline radial-basis mesh morphing."""
+"""Thin-plate-spline radial-basis mesh deformation."""
 
 from typing import TYPE_CHECKING, Literal
 
 import torch
+from jaxtyping import Bool, Float
 
 from physicsnemo.mesh.transformations.deform._utils import (
     _mesh_with_deformed_points,
@@ -29,18 +30,22 @@ if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
 
-def rbf_morph(
+def radial_basis_function_deform(
     mesh: "Mesh",
-    control_points: torch.Tensor,
-    control_displacements: torch.Tensor,
+    control_points: Float[torch.Tensor, "n_controls n_spatial_dims"],
+    control_displacements: Float[torch.Tensor, "n_controls n_spatial_dims"],
     *,
     kernel: Literal["thin_plate_spline"] = "thin_plate_spline",
     polynomial: bool = True,
     smoothing: float = 0.0,
-    point_weights: str | tuple[str, ...] | torch.Tensor | None = None,
+    point_weights: str
+    | tuple[str, ...]
+    | Bool[torch.Tensor, " n_points"]
+    | Float[torch.Tensor, " n_points"]
+    | None = None,
     implementation: Literal["torch", "warp"] | None = None,
 ) -> "Mesh":
-    """Morph a mesh with a global thin-plate-spline RBF field.
+    """Deform a mesh with a global thin-plate-spline RBF field.
 
     A thin-plate-spline radial field is fitted to the prescribed sparse
     control displacements and evaluated at every mesh point. With the default
@@ -51,7 +56,7 @@ def rbf_morph(
     Parameters
     ----------
     mesh : Mesh
-        Mesh whose points are morphed. The source mesh is not modified.
+        Mesh whose points are deformed. The source mesh is not modified.
     control_points : torch.Tensor
         World-coordinate controls with shape
         ``(n_controls, mesh.n_spatial_dims)`` and the same dtype and device as
@@ -69,8 +74,9 @@ def rbf_morph(
         Default is ``True``.
     smoothing : float, optional
         Nonnegative diagonal regularization added to the radial system. Zero
-        gives exact interpolation; positive values trade exactness for
-        conditioning and smooth fitting. Default is ``0.0``.
+        gives exact interpolation for a nonsingular control layout up to solver
+        precision. Positive values relax interpolation accuracy. Default is
+        ``0.0``.
     point_weights : str, tuple[str, ...], torch.Tensor, or None, optional
         Optional bool or floating mesh-point weights with shape
         ``(mesh.n_points,)``, or a
@@ -86,7 +92,7 @@ def rbf_morph(
     Returns
     -------
     Mesh
-        New mesh with morphed points and unchanged connectivity and attached
+        New mesh with deformed points and unchanged connectivity and attached
         fields.
 
     Raises
@@ -112,7 +118,7 @@ def rbf_morph(
     control generally influences every mesh point. Attached fields are treated
     as Lagrangian data and are not pushed forward. Geometry-dependent caches
     are invalidated and topology caches are retained. The operation does not
-    detect or repair inverted, degenerate, or self-intersecting cells; call
+    detect or repair inverted, degenerate, or self-intersecting cells. Call
     :meth:`~physicsnemo.mesh.mesh.Mesh.validate` explicitly when needed.
     Coefficient fitting is not supported inside CUDA Graph capture because the
     singular-system check requires host interaction.
@@ -133,9 +139,11 @@ def rbf_morph(
         else _resolve_point_field(mesh, point_weights, argument_name="point_weights")
     )
 
-    from physicsnemo.nn.functional.geometry.deform import rbf_morph_points
+    from physicsnemo.nn.functional.geometry.deform import (
+        radial_basis_function_deform_points,
+    )
 
-    points = rbf_morph_points(
+    points = radial_basis_function_deform_points(
         mesh.points,
         control_points,
         control_displacements,
@@ -148,4 +156,4 @@ def rbf_morph(
     return _mesh_with_deformed_points(mesh, points)
 
 
-__all__ = ["rbf_morph"]
+__all__ = ["radial_basis_function_deform"]

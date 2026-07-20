@@ -123,7 +123,7 @@ def main():
     )
     displacements = torch.zeros_like(controls)
     displacements[-1] = controls.new_tensor([0.15, 0.35])
-    morphed = mesh.rbf_morph(
+    morphed = mesh.radial_basis_function_deform(
         controls,
         displacements,
         kernel="thin_plate_spline",

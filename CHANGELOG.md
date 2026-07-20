@@ -37,15 +37,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds `rectilinear_grid_divergence`, `rectilinear_grid_curl`, and
   `rectilinear_grid_laplacian` to `physicsnemo.nn.functional`, with Torch and
   fused Warp implementations for periodic, nonuniform rectilinear grids.
+- Adds uniform triangle-surface remeshing with NVIDIA Warp on CPU and CUDA,
+  including `remesh`, `Mesh.remesh`, topology cleanup, and advanced
+  tensor-level controls for runtime tuning.
 - Adds coverage reporting on PRs — an informational `Coverage %` check plus a
   ready-to-enable Codecov integration.
 - Adds differentiable mesh morphing: Torch-backed dense ``displace_points`` /
   ``Mesh.displace`` and Torch/NVIDIA Warp compact sparse-control
   ``morph_points`` / ``Mesh.morph`` / ``DomainMesh.morph``.
-- Adds exact thin-plate-spline RBF morphing through ``rbf_morph_points``,
-  ``Mesh.rbf_morph``, and ``DomainMesh.rbf_morph``. PyTorch performs the
-  differentiable coefficient solve, with Torch and fused NVIDIA Warp field
-  evaluators.
+- Adds thin-plate-spline radial-basis deformation through
+  `radial_basis_function_deform_points`,
+  `Mesh.radial_basis_function_deform`, and
+  `DomainMesh.radial_basis_function_deform`. PyTorch performs the differentiable
+  coefficient solve. Torch and fused NVIDIA Warp backends evaluate the field.
+- Adds differentiable lattice free-form deformation with Torch and NVIDIA Warp
+  backends: dimension-generic ``free_form_deform_points`` /
+  ``Mesh.free_form_deform`` / ``DomainMesh.free_form_deform`` with Bernstein
+  (classic FFD) and locally supported uniform cubic B-spline bases, plus
+  node-interpolating `linear`, `cubic_hermite`, and `quintic_hermite` modes.
 - Adds `uniform_grid_divergence`, `uniform_grid_curl`, and
   `uniform_grid_laplacian` to `physicsnemo.nn.functional`, with Torch and fused
   Warp implementations for periodic Cartesian grids.
@@ -82,6 +91,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   coordinates with no learnable parameters.
 - Adds radiation transport example (`examples/nuclear_engineering/radiation_transport`)
 - Adds agent skills structure, and initial skill for 'discoverability'.
+- Adds the experimental AeroJEPA model
+  (`physicsnemo.experimental.models.aerojepa.AeroJEPA`), a joint-embedding
+  predictive architecture for 3D aerodynamic fields composing context and
+  target encoders, a query-token field decoder, and a JEPA predictor head,
+  together with its SIGReg, token-latent, and reconstruction loss family.
+  The generic point-cloud tokenizer and the batch/mask/k-NN helpers are added
+  under `physicsnemo.experimental.nn`; the local point-transformer attention
+  blocks it composes come from `physicsnemo.nn`.
+- Adds the AeroJEPA SuperWing tutorial recipe
+  (`examples/cfd/external_aerodynamics/aerojepa`), an end-to-end Hydra-driven
+  workflow covering dataset download, normalization, JEPA training, chunked
+  inference, field-error plots, and CL/CD post-processing.
 - Adds xDeepONet to experimental models
   (`physicsnemo.experimental.models.xdeeponet.DeepONet`).  A single
   dimension-generic (2D/3D) DeepONet that accepts a spatial or MLP branch,
@@ -173,6 +194,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `physicsnemo.metrics.general.mse` `mse`/`rmse` gain an optional `weights`
   argument for a masked/weighted mean (backward-compatible; `weights=None`
   reproduces the prior unweighted result).
+- Adds a kinetic Monte Carlo (KMC) surrogate example
+  (`examples/kinetic_monte_carlo`): a probabilistic autoregressive surrogate
+  (`ParticleGeoTransolver`) that emulates a KMC event stream, predicting the
+  next event (the new particle's features and inter-event delay) from the
+  current particle population, an optional background mesh, and the simulation
+  time. Independent rollouts form an ensemble for uncertainty quantification.
 
 ### Changed
 
@@ -196,9 +223,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rest of the branch uses autocast. This is a no-op under full precision, so
   fp32 outputs are unchanged. Also fixes a stale module docstring that
   referenced removed trunk/MLP-branch builder helpers.
-- `physicsnemo.mesh.remesh` now raises `NotImplementedError` for non-2D-in-3D
-  inputs (the pyacvd ACVD clustering is surface-only) instead of failing
-  confusingly downstream, and its docstring reflects that restriction.
+- `physicsnemo.mesh.remeshing.remesh` now raises `NotImplementedError` for
+  non-2D-in-3D inputs (the remeshing implementation is surface-only) instead
+  of failing confusingly downstream, and its docstring reflects that
+  restriction.
 - `physicsnemo.mesh.spatial`: `BVH.from_mesh` and `ClusterTree.from_points` now
   share a single morton-LBVH node-topology builder (`spatial/_lbvh.py`),
   removing ~80 lines of duplicated build logic; construction output is
@@ -257,6 +285,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Unified external aerodynamics recipe: the aggregate metrics reported for
+  vector fields under the bare field name (e.g. `wss_l2`, likewise `_l1` /
+  `_mae`) were computed on per-point vector magnitudes, so direction errors
+  were invisible — a prediction with the correct magnitude but wrong direction
+  at every point scored 0. The bare-name aggregate is now computed over all
+  components jointly (whole-field relative norms, Frobenius for `l2`). The
+  broken magnitude-only aggregate is not retained under a separate key.
+  Per-component metrics (`wss_x_l2`, ...) were always direction-sensitive and
+  are unchanged, and training/checkpoints are unaffected (the training
+  objective goes through `LossCalculator`, not this metric path) — only
+  reported aggregate vector metrics were misleading.
+- Unified external aerodynamics recipe: model templates can now carry
+  known-good training overrides (`train.yaml`'s `_self_` merges before the
+  model template; all existing templates resolve identically). The GLOBE
+  example now uses the recipe's default `compile` and learning-rate
+  settings — both measured equivalent or better than the previously
+  documented overrides on the DrivAerML surface case — and no longer sets
+  `training.field_weights={pressure: 1.0, wss: 100.0}`, which was redundant
+  with `NormalizeMeshFields` normalization and starved the pressure field
+  of gradient signal (~2x worse converged pressure L2 at equal WSS L2).
 - Datapipe contiguous-block subsampling now wraps cyclically, giving boundary
   and interior elements equal inclusion probability.
 - Cell-subsampled GLOBE inputs now retain their effective integration measure,
@@ -284,8 +332,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   converting them to `float32` before crossing the NumPy boundary.
 - `physicsnemo.mesh.projections.extrude` now returns consistently oriented cells
   for full-dimensional (codimension-0) output.
-- `physicsnemo.mesh.remesh` now preserves the input mesh's device and floating
-  dtype (the pyacvd/pyvista round-trip previously dropped them to CPU/float32).
+- `physicsnemo.mesh.remeshing.remesh` now preserves the input mesh's device and
+  floating dtype instead of dropping them to CPU/float32.
 - `physicsnemo.mesh.io.to_pyvista` now preserves supported dtypes for attached
   point, cell, and global data instead of narrowing every array to `float32`.
   Reduced-precision floating-point values are promoted only as needed for VTK.
@@ -358,6 +406,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Dependencies
 
+- Removes `pyacvd` from the `mesh-extras` optional dependencies. Remeshing now
+  uses NVIDIA Warp.
 - Updates the minimum supported `warp-lang` version to 1.14.0.
 
 ## [2.1.0] - 2026-05-26

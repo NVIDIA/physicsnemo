@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Backend-dispatched thin-plate-spline radial-basis point morphing."""
+"""Backend-dispatched thin-plate-spline radial-basis point deformation."""
 
 from __future__ import annotations
 
@@ -81,13 +81,13 @@ def _validate_rbf_options(
         )
         return smoothing
 
+    if smoothing < 0:
+        raise ValueError("smoothing must be nonnegative")
+    if smoothing > finfo.max:
+        raise ValueError("smoothing must be finite in the control dtype")
     smoothing_value = float(smoothing)
     if not math.isfinite(smoothing_value):
         raise ValueError("smoothing must be finite")
-    if smoothing_value < 0:
-        raise ValueError("smoothing must be nonnegative")
-    if smoothing_value > finfo.max:
-        raise ValueError("smoothing must be finite in the control dtype")
     return smoothing_value
 
 
@@ -128,7 +128,7 @@ def _normalize_and_fit(
     num_dims = controls_b3.shape[2]
     if polynomial and 0 < num_controls < num_dims + 1:
         raise ValueError(
-            "polynomial=True requires at least D + 1 controls; got "
+            "polynomial=True requires at least D + 1 controls. Got "
             f"C={num_controls} and D={num_dims}"
         )
 
@@ -148,8 +148,8 @@ def _normalize_and_fit(
     )
 
 
-class RBFMorphPoints(FunctionSpec):
-    r"""Morph points with a global thin-plate-spline RBF field.
+class RadialBasisFunctionDeformPoints(FunctionSpec):
+    r"""Deform points with a global thin-plate-spline RBF field.
 
     Given controls :math:`c_j` with prescribed displacements :math:`d_j`, the
     displacement field is
@@ -164,7 +164,9 @@ class RBFMorphPoints(FunctionSpec):
     The affine side constraints make the fit unique for distinct controls in
     nondegenerate position and reproduce affine displacement fields exactly.
     With ``smoothing=0``, the field interpolates every control displacement up
-    to solver precision. Positive smoothing relaxes exact interpolation.
+    to solver precision. Positive smoothing relaxes exact interpolation. This
+    formulation follows the thin-plate-spline interpolant described by
+    Bookstein [1].
 
     Inputs may be unbatched ``(N, D)``/``(C, D)`` or aligned batched
     ``(B, N, D)``/``(B, C, D)``. Point and control batches are not implicitly
@@ -187,12 +189,12 @@ class RBFMorphPoints(FunctionSpec):
     polynomial : bool, optional
         Include the affine polynomial tail and its side constraints. This
         requires at least ``D + 1`` controls when controls are present. Disabling
-        the tail can make the radial system singular for otherwise reasonable
-        layouts. Default is ``True``.
+        the tail can make the radial system singular. Default is ``True``.
     smoothing : float, optional
         Nonnegative diagonal regularization added to the control-kernel block.
-        Zero gives exact interpolation; positive values trade interpolation
-        accuracy for a smoother, better-conditioned fit. Default is ``0.0``.
+        Zero gives exact interpolation for a nonsingular control layout up to
+        solver precision. Positive values relax interpolation accuracy. Default
+        is ``0.0``.
     point_weights : torch.Tensor or None, optional
         Optional bool or floating per-point multipliers with shape ``(N,)`` or
         ``(B, N)``. They scale the fitted field after interpolation. Signed and
@@ -208,7 +210,7 @@ class RBFMorphPoints(FunctionSpec):
     Returns
     -------
     torch.Tensor
-        Morphed points with the same shape, dtype, and device as ``points``.
+        Deformed points with the same shape, dtype, and device as ``points``.
 
     Raises
     ------
@@ -242,6 +244,13 @@ class RBFMorphPoints(FunctionSpec):
     Both backends propagate first-order gradients through points, control
     locations, control displacements, and floating point weights. Only
     first-order gradients are part of the Warp evaluator's public contract.
+
+    References
+    ----------
+    [1] F. L. Bookstein, "Principal warps: thin-plate splines and the
+        decomposition of deformations," IEEE Transactions on Pattern Analysis
+        and Machine Intelligence, vol. 11, no. 6, pp. 567-585, 1989.
+        https://doi.org/10.1109/34.24792
     """
 
     _FORWARD_BENCHMARK_CASES = (
@@ -366,7 +375,7 @@ class RBFMorphPoints(FunctionSpec):
         Returns
         -------
         torch.Tensor
-            Morphed points with the same shape, dtype, and device as
+            Deformed points with the same shape, dtype, and device as
             ``points``.
 
         Raises
@@ -450,7 +459,7 @@ class RBFMorphPoints(FunctionSpec):
         Returns
         -------
         torch.Tensor
-            Morphed points with the same shape, dtype, and device as
+            Deformed points with the same shape, dtype, and device as
             ``points``.
 
         Raises
@@ -542,7 +551,7 @@ class RBFMorphPoints(FunctionSpec):
         Returns
         -------
         torch.Tensor
-            Morphed points with the same shape, dtype, and device as
+            Deformed points with the same shape, dtype, and device as
             ``points``.
 
         Raises
@@ -811,10 +820,12 @@ class RBFMorphPoints(FunctionSpec):
         )
 
 
-rbf_morph_points = RBFMorphPoints.make_function("rbf_morph_points")
+radial_basis_function_deform_points = RadialBasisFunctionDeformPoints.make_function(
+    "radial_basis_function_deform_points"
+)
 
 
 __all__ = [
-    "RBFMorphPoints",
-    "rbf_morph_points",
+    "RadialBasisFunctionDeformPoints",
+    "radial_basis_function_deform_points",
 ]
