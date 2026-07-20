@@ -43,6 +43,7 @@ from .geometry import (
     mesh_to_voxel_fraction,
     morph_points,
     ray_mesh_intersect,
+    remeshing,
     signed_distance_field,
 )
 from .interpolation import (
@@ -95,6 +96,7 @@ __all__ = [
     "radius_search",
     "real",
     "ray_mesh_intersect",
+    "remeshing",
     "rectilinear_grid_curl",
     "rectilinear_grid_divergence",
     "rectilinear_grid_gradient",

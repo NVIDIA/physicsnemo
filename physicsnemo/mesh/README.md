@@ -434,7 +434,7 @@ tuned_points, tuned_cells = remeshing(
 ```
 
 Remeshing currently supports triangle surfaces embedded in 3D. It creates new
-topology, so point and cell data are discarded; global data is preserved.
+topology, so point and cell data are discarded. Global data is preserved.
 
 ### Discrete Calculus
 

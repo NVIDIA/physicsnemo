@@ -3542,7 +3542,7 @@ class Mesh:
         and cell data are discarded because their associations no longer match
         the reconstructed topology. Backend-specific tuning is available from
         the advanced tensor-level
-        :func:`physicsnemo.nn.functional.geometry.remeshing.remeshing` API.
+        :func:`physicsnemo.nn.functional.remeshing` API.
         """
         from physicsnemo.mesh.remeshing import remesh
 

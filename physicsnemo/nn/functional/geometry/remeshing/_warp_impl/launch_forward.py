@@ -354,7 +354,7 @@ def _build_output_tensors(
     output_cells = _deduplicate_faces(mapped_cells, n_clusters)
     if output_cells.numel() == 0:
         raise RuntimeError(
-            "Warp remeshing collapsed every input face; request more clusters "
+            "Warp remeshing collapsed every input face. Request more clusters "
             "or provide a nondegenerate triangle surface."
         )
 
@@ -371,7 +371,7 @@ def _build_output_tensors(
     output_cells = output_cells[torch.isfinite(doubled_areas) & (doubled_areas > 0.0)]
     if output_cells.numel() == 0:
         raise RuntimeError(
-            "Warp remeshing produced only zero-area faces; request more clusters."
+            "Warp remeshing produced only zero-area faces. Request more clusters."
         )
 
     output_cells = _remove_nonmanifold_faces(
@@ -522,8 +522,6 @@ def launch_remeshing(
         ]
 
         for _ in range(max_iterations):
-            centroid_sums.zero_()
-            centroid_areas.zero_()
             centroid_grid.build(wp_centroids, radius=search_radius)
             wp.launch(
                 assign_vertices,

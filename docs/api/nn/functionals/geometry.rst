@@ -108,6 +108,11 @@ mesh and the occupied voxels inferred by ``mesh_to_voxel_fraction``.
    :alt: Mesh to voxel fraction mesh and occupied-voxel rotation animation
    :width: 85%
 
+Surface Remeshing
+-----------------
+
+.. autofunction:: physicsnemo.nn.functional.remeshing
+
 Ray Mesh Intersect
 ------------------
 

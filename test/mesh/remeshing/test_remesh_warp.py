@@ -120,17 +120,18 @@ def test_cuda_default_dispatch_and_mesh_method():
     _assert_clean_topology(method)
 
 
-def test_warp_remesh_preserves_dtype_and_accepts_noncontiguous_geometry():
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float64])
+def test_warp_remesh_preserves_dtype_and_accepts_noncontiguous_geometry(dtype):
     base = sphere_icosahedral.load(subdivisions=3)
-    storage = torch.empty(base.n_points, 6, dtype=torch.float64, device="cuda")
+    storage = torch.empty(base.n_points, 6, dtype=dtype, device="cuda")
     points = storage[:, ::2]
-    points.copy_(base.points.to(device="cuda", dtype=torch.float64))
+    points.copy_(base.points.to(device="cuda", dtype=dtype))
     assert not points.is_contiguous()
     source = Mesh(points=points, cells=base.cells.to(device="cuda", dtype=torch.int32))
 
     output = remesh(source, 96)
 
-    assert output.points.dtype == torch.float64
+    assert output.points.dtype == dtype
     assert output.cells.dtype == torch.int64
     _assert_clean_topology(output)
 

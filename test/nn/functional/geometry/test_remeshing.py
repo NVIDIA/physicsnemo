@@ -25,14 +25,14 @@ import pytest
 import torch
 import warp as wp
 
-import physicsnemo.nn.functional.geometry.remeshing._warp_impl.launch_forward as launch_forward
 from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
-from physicsnemo.nn.functional.geometry.remeshing import (
-    Remeshing,
-    remeshing,
-)
+from physicsnemo.nn.functional import remeshing
+from physicsnemo.nn.functional.geometry import Remeshing
+from physicsnemo.nn.functional.geometry.remeshing._warp_impl import launch_forward
 from physicsnemo.nn.functional.geometry.remeshing._warp_impl._kernels import (
     assign_vertices,
+    project_centroids_to_surface,
+    update_centroids,
 )
 from physicsnemo.nn.functional.geometry.remeshing._warp_impl.launch_forward import (
     _remove_nonmanifold_faces,
@@ -133,6 +133,13 @@ def test_remeshing_rejects_unrepresentable_integer_scale():
     indices = torch.tensor([[0, 1, 2], [2, 3, 0]])
     with pytest.raises(ValueError, match="finite and positive"):
         remeshing(vertices, indices, 8, search_radius_scale=10**1_000)
+
+
+def test_remeshing_rejects_unknown_implementation():
+    vertices = torch.rand(16, 3)
+    indices = torch.tensor([[0, 1, 2], [2, 3, 0]])
+    with pytest.raises(KeyError, match="No implementation named 'torch'"):
+        remeshing(vertices, indices, 8, implementation="torch")
 
 
 def test_remeshing_rejects_invalid_tensor_inputs():
@@ -262,6 +269,53 @@ def test_assign_vertices_brute_force_fallback():
     )
 
     torch.testing.assert_close(labels, torch.tensor([0, 1, 1], dtype=torch.int32))
+
+
+def test_update_centroids_resets_accumulators():
+    centroids = torch.tensor([[0.0, 0.0, 0.0], [9.0, 9.0, 9.0]])
+    centroid_sums = torch.tensor([[2.0, 4.0, 6.0], [1.0, 2.0, 3.0]])
+    centroid_areas = torch.tensor([2.0, 0.0])
+
+    wp.launch(
+        update_centroids,
+        dim=centroids.shape[0],
+        inputs=[
+            wp.from_torch(centroids, dtype=wp.vec3f),
+            wp.from_torch(centroid_sums, dtype=wp.float32),
+            wp.from_torch(centroid_areas, dtype=wp.float32),
+        ],
+        device="cpu",
+    )
+
+    torch.testing.assert_close(
+        centroids,
+        torch.tensor([[1.0, 2.0, 3.0], [9.0, 9.0, 9.0]]),
+    )
+    torch.testing.assert_close(centroid_sums, torch.zeros_like(centroid_sums))
+    torch.testing.assert_close(centroid_areas, torch.zeros_like(centroid_areas))
+
+
+def test_project_centroids_uses_warp_barycentric_convention():
+    points = torch.tensor([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    indices = torch.tensor([0, 1, 2], dtype=torch.int32)
+    centroids = torch.tensor([[0.6, 0.2, 1.0]])
+    source_surface = wp.Mesh(
+        points=wp.from_torch(points, dtype=wp.vec3f),
+        indices=wp.from_torch(indices, dtype=wp.int32),
+    )
+
+    wp.launch(
+        project_centroids_to_surface,
+        dim=1,
+        inputs=[
+            source_surface.id,
+            wp.from_torch(centroids, dtype=wp.vec3f),
+            float(1.0e30),
+        ],
+        device="cpu",
+    )
+
+    torch.testing.assert_close(centroids, torch.tensor([[0.6, 0.2, 0.0]]))
 
 
 @pytest.mark.cuda

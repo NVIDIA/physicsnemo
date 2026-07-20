@@ -19,6 +19,7 @@ from .farthest_point_sampling import FarthestPointSampling, farthest_point_sampl
 from .mesh_poisson_disk_sample import MeshPoissonDiskSample, mesh_poisson_disk_sample
 from .mesh_to_voxel_fraction import MeshToVoxelFraction, mesh_to_voxel_fraction
 from .ray_mesh_intersect import RayMeshIntersect, ray_mesh_intersect
+from .remeshing import Remeshing, remeshing
 from .sdf import SignedDistanceField, signed_distance_field
 
 __all__ = [
@@ -28,6 +29,7 @@ __all__ = [
     "MeshToVoxelFraction",
     "MorphPoints",
     "RayMeshIntersect",
+    "Remeshing",
     "SignedDistanceField",
     "displace_points",
     "farthest_point_sampling",
@@ -35,5 +37,6 @@ __all__ = [
     "mesh_to_voxel_fraction",
     "morph_points",
     "ray_mesh_intersect",
+    "remeshing",
     "signed_distance_field",
 ]

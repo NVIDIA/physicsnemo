@@ -54,7 +54,7 @@ def remesh(
     -------
     Mesh
         Geometry-only remeshed surface on the input device. Point and cell data
-        are discarded because topology changes; global data is preserved.
+        are discarded because topology changes. Global data is preserved.
 
     Raises
     ------
@@ -76,15 +76,15 @@ def remesh(
     coordinate frame. Because clustering uses spatial distance rather than
     mesh connectivity, sheets or thin features separated by less than the mean
     cluster spacing can be assigned to a common cluster and welded together.
-    Projection can map distinct cluster centroids to the same surface position;
-    output vertices are compacted by connectivity but are not welded by
+    Projection can map distinct cluster centroids to the same surface position.
+    Output vertices are compacted by connectivity but are not welded by
     position. Backend-specific tuning remains available through
-    :func:`physicsnemo.nn.functional.geometry.remeshing.remeshing`; those
-    advanced parameters may change as the implementation evolves.
+    :func:`physicsnemo.nn.functional.remeshing`. These advanced parameters may
+    change as the implementation evolves.
     """
     if mesh.n_manifold_dims != 2 or mesh.n_spatial_dims != 3:
         raise NotImplementedError(
-            "remesh only supports 2D triangle surfaces embedded in 3D; got "
+            "remesh only supports 2D triangle surfaces embedded in 3D. Got "
             f"n_manifold_dims={mesh.n_manifold_dims} and "
             f"n_spatial_dims={mesh.n_spatial_dims}"
         )

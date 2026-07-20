@@ -57,7 +57,7 @@ class CellPartition(NamedTuple):
         Area-weighted average unit normal per cluster.
     cluster_centroids : Float[torch.Tensor, "n_seeds n_spatial_dims"]
         Area-weighted centroid per cluster.
-        For a well-centered seed this is close to the seed itself; the
+        For a well-centered seed this is close to the seed itself. The
         difference measures how far the seed is from its Voronoi centroid
         (exactly the quantity that Lloyd's algorithm drives to zero).
     """

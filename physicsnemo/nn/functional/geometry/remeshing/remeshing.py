@@ -19,7 +19,6 @@
 from __future__ import annotations
 
 import sys
-from typing import Literal
 
 import torch
 from jaxtyping import Float, Int, Integer
@@ -33,8 +32,8 @@ _INTEGER_DTYPES = {
     torch.int64,
     torch.uint8,
 }
-# Warp allocates two int32 arrays with ``resolution**3`` entries; 256**3
-# bounds their combined storage to 128 MiB before point storage.
+# Warp allocates two int32 arrays with ``resolution**3`` entries. A resolution
+# of 256 bounds their combined storage to 128 MiB before point storage.
 _MAX_HASH_GRID_RESOLUTION = 256
 _MAX_FINITE_FLOAT = sys.float_info.max
 
@@ -82,7 +81,7 @@ def _validate_inputs(
         raise ValueError(f"n_clusters must be at least 3, got {n_clusters}")
     if n_clusters > mesh_vertices.shape[0]:
         raise ValueError(
-            "n_clusters cannot exceed the input vertex count; got "
+            "n_clusters cannot exceed the input vertex count. Got "
             f"n_clusters={n_clusters} and n_vertices={mesh_vertices.shape[0]}"
         )
 
@@ -127,7 +126,11 @@ def _make_uv_sphere(
     Float[torch.Tensor, "n_vertices 3"],
     Int[torch.Tensor, "n_faces 3"],
 ]:
-    """Construct tensor-only benchmark geometry without importing mesh APIs."""
+    """Construct tensor-only benchmark geometry without mesh-layer imports.
+
+    The import architecture forbids ``physicsnemo.nn`` from depending on
+    ``physicsnemo.mesh``, so this generator cannot use the UV-sphere primitive.
+    """
     phi = torch.linspace(0.0, torch.pi, n_rings + 2, device=device)[1:-1]
     theta = torch.linspace(0.0, 2.0 * torch.pi, n_segments + 1, device=device)[:-1]
     phi_grid, theta_grid = torch.meshgrid(phi, theta, indexing="ij")
@@ -226,7 +229,7 @@ class Remeshing(FunctionSpec):
     -------
     tuple[torch.Tensor, torch.Tensor]
         Remeshed vertices and triangle indices. Vertex dtype and device match
-        ``mesh_vertices``; indices use ``torch.int64`` on the same device.
+        ``mesh_vertices``. Indices use ``torch.int64`` on the same device.
 
     Raises
     ------
@@ -250,7 +253,7 @@ class Remeshing(FunctionSpec):
     floating-point atomics can still introduce small run-to-run differences.
     Spatial clustering can weld sheets or thin features separated by less than
     the mean cluster spacing. Projection can also map distinct centroids to the
-    same surface position; output vertices are not welded by position.
+    same surface position. Output vertices are not welded by position.
     """
 
     _BENCHMARK_CASES = (
@@ -321,85 +324,6 @@ class Remeshing(FunctionSpec):
             If topology reconstruction cannot produce a nonempty manifold
             surface.
         """
-        from ._warp_impl import remeshing_warp
-
-        return remeshing_warp(
-            mesh_vertices.detach(),
-            mesh_indices.detach(),
-            n_clusters,
-            max_iterations,
-            float(search_radius_scale),
-            float(voxel_width_scale),
-            hash_grid_resolution,
-            farthest_point_threshold,
-            farthest_point_oversampling,
-        )
-
-    @classmethod
-    def dispatch(
-        cls,
-        mesh_vertices: Float[torch.Tensor, "n_vertices 3"],
-        mesh_indices: Integer[torch.Tensor, "n_faces 3"],
-        n_clusters: int,
-        *,
-        max_iterations: int = 4,
-        search_radius_scale: float = 1.6,
-        voxel_width_scale: float = 1.15,
-        hash_grid_resolution: int = 128,
-        farthest_point_threshold: int = 256,
-        farthest_point_oversampling: int = 4,
-        implementation: Literal["warp"] | None = None,
-    ) -> tuple[
-        Float[torch.Tensor, "n_output_vertices 3"],
-        Int[torch.Tensor, "n_output_faces 3"],
-    ]:
-        """Validate tensor inputs and dispatch the selected implementation.
-
-        Parameters
-        ----------
-        mesh_vertices : torch.Tensor
-            Floating-point vertex coordinates with shape ``(n_vertices, 3)``.
-        mesh_indices : torch.Tensor
-            Integer triangle connectivity with shape ``(n_faces, 3)``.
-        n_clusters : int
-            Target output vertex count.
-        max_iterations : int, optional
-            Maximum centroid-relaxation iterations.
-        search_radius_scale : float, optional
-            Scale factor for the centroid hash-grid query radius.
-        voxel_width_scale : float, optional
-            Scale factor for spatial-stratification voxel width.
-        hash_grid_resolution : int, optional
-            Resolution of each centroid hash-grid axis.
-        farthest_point_threshold : int, optional
-            Largest target that uses farthest-point initialization.
-        farthest_point_oversampling : int, optional
-            Candidate-pool multiplier for farthest-point initialization.
-        implementation : {"warp"} or None, optional
-            Explicit implementation selection. ``None`` selects Warp.
-
-        Returns
-        -------
-        tuple[torch.Tensor, torch.Tensor]
-            Remeshed vertices and triangle connectivity.
-
-        Raises
-        ------
-        TypeError
-            If tensor or scalar inputs have invalid types.
-        ValueError
-            If tensor shapes, devices, counts, geometry, or tuning values are
-            invalid.
-        KeyError
-            If ``implementation`` does not name a registered backend.
-        ImportError
-            If Warp is unavailable.
-        RuntimeError
-            If topology reconstruction cannot produce a nonempty manifold
-            surface.
-        """
-        implementations = cls._get_impls()
-        cls._check_impl(implementation, implementations)
         _validate_inputs(
             mesh_vertices,
             mesh_indices,
@@ -413,22 +337,22 @@ class Remeshing(FunctionSpec):
         )
         if mesh_vertices.device.type not in ("cpu", "cuda"):
             raise ValueError(
-                "The Warp remeshing functional supports CPU and CUDA tensors; "
-                f"got device {mesh_vertices.device}."
+                "The Warp remeshing functional supports CPU and CUDA tensors. "
+                f"Got device {mesh_vertices.device}."
             )
-        selected = implementations["warp" if implementation is None else implementation]
-        if not selected.available:
-            raise ImportError("The Warp remeshing backend requires warp>=1.14.0.")
-        return selected.func(
-            mesh_vertices,
-            mesh_indices,
+
+        from ._warp_impl import remeshing_warp
+
+        return remeshing_warp(
+            mesh_vertices.detach(),
+            mesh_indices.detach(),
             n_clusters,
-            max_iterations=max_iterations,
-            search_radius_scale=search_radius_scale,
-            voxel_width_scale=voxel_width_scale,
-            hash_grid_resolution=hash_grid_resolution,
-            farthest_point_threshold=farthest_point_threshold,
-            farthest_point_oversampling=farthest_point_oversampling,
+            max_iterations,
+            float(search_radius_scale),
+            float(voxel_width_scale),
+            hash_grid_resolution,
+            farthest_point_threshold,
+            farthest_point_oversampling,
         )
 
     @classmethod

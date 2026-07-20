@@ -5,7 +5,7 @@ Remeshing
 
 PhysicsNeMo provides Warp-based uniform remeshing on CPU and CUDA for 2D
 triangle manifolds embedded in 3D. ``n_clusters`` is the target number of
-output vertices, not triangles; cleanup can produce slightly fewer vertices.
+output vertices, not triangles. Cleanup can produce slightly fewer vertices.
 Point and cell data are discarded because their associations no longer match
 the reconstructed topology. Global data, point dtype, and device are
 preserved.
@@ -41,7 +41,7 @@ implementation evolves:
 
 .. code:: python
 
-   from physicsnemo.nn.functional.geometry.remeshing import remeshing
+   from physicsnemo.nn.functional import remeshing
 
    tuned_points, tuned_cells = remeshing(
        dense.points,

@@ -25,7 +25,7 @@ def update_centroids(
     centroid_sums: wp.array2d(dtype=wp.float32),
     centroid_areas: wp.array(dtype=wp.float32),
 ):
-    """Move nonempty centroids to their area-weighted cluster centers."""
+    """Move nonempty centroids and clear accumulators for the next iteration."""
     centroid_index = wp.tid()
     weight = centroid_areas[centroid_index]
     if weight > float(0.0):
@@ -34,3 +34,8 @@ def update_centroids(
             centroid_sums[centroid_index, 1] / weight,
             centroid_sums[centroid_index, 2] / weight,
         )
+
+    centroid_sums[centroid_index, 0] = float(0.0)
+    centroid_sums[centroid_index, 1] = float(0.0)
+    centroid_sums[centroid_index, 2] = float(0.0)
+    centroid_areas[centroid_index] = float(0.0)

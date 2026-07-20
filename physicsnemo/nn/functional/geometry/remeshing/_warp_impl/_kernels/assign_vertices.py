@@ -48,8 +48,11 @@ def assign_vertices(
                 best_distance_sq = distance_sq
                 best_index = candidate_index
 
-    # A well-spaced initialization makes this path rare. Retain it for
-    # disconnected inputs and highly nonuniform meshes.
+    # The default radius and well-spaced initialization make this path rare on
+    # ordinary connected surfaces. Each miss scans O(n_clusters), so a badly
+    # undersized user radius can degrade assignment to O(n_points * n_clusters).
+    # Retain the fallback for correctness on disconnected and highly nonuniform
+    # inputs.
     if best_index < 0:
         for centroid_index in range(centroids.shape[0]):
             delta = point - centroids[centroid_index]
