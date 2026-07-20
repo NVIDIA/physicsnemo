@@ -89,7 +89,8 @@ performance benefits.
   (interpolating) schemes
 - **Smoothing**: [Laplacian smoothing](https://en.wikipedia.org/wiki/Laplacian_smoothing)
   with feature preservation
-- **Remeshing**: Uniform remeshing via clustering (dimension-agnostic)
+- **Remeshing**: Uniform Warp-based remeshing on CPU and CUDA for triangle
+  surfaces embedded in 3D
 - **Repair**: Remove duplicates, fix orientation, fill holes, clean topology
 - **Morphing**: Dense point displacement and sparse, compactly supported
   control-point deformation
@@ -305,7 +306,7 @@ Comprehensive overview of PhysicsNeMo-Mesh capabilities:
 | **Smoothing** | | |
 | Laplacian smoothing | ✅ | |
 | **Remeshing** | | |
-| Uniform remeshing | ✅ | Clustering-based |
+| Uniform remeshing | ✅ | Warp (CPU and CUDA) |
 | **Tessellation** | | |
 | Polygon-soup triangulation | ✅ | Convex fan + ear-clip; `Mesh.from_polygons` |
 | **Spatial Queries** | | |
@@ -411,6 +412,29 @@ refined = mesh.subdivide(levels=2, filter="linear")    # Topology only
 smooth = mesh.subdivide(levels=2, filter="loop")       # C² continuous
 interp = mesh.subdivide(levels=2, filter="butterfly")  # Interpolating
 ```
+
+### Remeshing
+
+```python
+# The result remains on the input device.
+coarse = mesh.remesh(n_clusters=1_000)
+
+# Move the mesh to CUDA first to accelerate large inputs.
+coarse_cuda = mesh.to("cuda").remesh(n_clusters=1_000)
+
+# Backend tuning is available through the advanced tensor functional.
+from physicsnemo.nn.functional.geometry.remeshing import remeshing
+
+tuned_points, tuned_cells = remeshing(
+    mesh.points,
+    mesh.cells,
+    n_clusters=1_000,
+    search_radius_scale=2.0,
+)
+```
+
+Remeshing currently supports triangle surfaces embedded in 3D. It creates new
+topology, so point and cell data are discarded. Global data is preserved.
 
 ### Discrete Calculus
 

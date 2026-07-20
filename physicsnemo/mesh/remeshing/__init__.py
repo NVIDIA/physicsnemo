@@ -24,22 +24,28 @@ This module provides two complementary algorithms for mesh coarsening:
     This is a single-step discrete approximation to the restricted Voronoi
     diagram on the surface.  Pure PyTorch, no external dependencies.
 
-**ACVD remeshing** (:func:`remesh`):
-    Iterative Approximate Centroidal Voronoi Diagram clustering that creates
-    a new mesh topology with approximately uniform cell distribution.
-    Requires the ``pyacvd`` package.
+**Uniform remeshing** (:func:`remesh`):
+    Creates new, approximately uniform triangle topology on CPU or CUDA using
+    Warp.
 
-``partition_cells`` is also a natural building block for a pure-PyTorch CVT
-(Lloyd's algorithm iterates: partition -> move seeds to cluster centroids ->
-repeat).
+``partition_cells`` is also a natural building block for a pure-PyTorch
+centroidal Voronoi tessellation (CVT): Lloyd's algorithm iterates from
+partitioning to moving seeds to cluster centroids, then repeats.
 
 Example:
     >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+    >>> from physicsnemo.mesh.remeshing import remesh
     >>> mesh = sphere_icosahedral.load(subdivisions=3)
-    >>> # Remesh a triangle mesh to ~100 vertices (cluster centroids)
+    >>> # Remesh a triangle mesh to approximately 100 vertices
     >>> remeshed = remesh(mesh, n_clusters=100)
     >>> assert remeshed.n_cells > 0
 """
 
 from physicsnemo.mesh.remeshing._partition import CellPartition, partition_cells
 from physicsnemo.mesh.remeshing._remeshing import remesh
+
+__all__ = [
+    "CellPartition",
+    "partition_cells",
+    "remesh",
+]

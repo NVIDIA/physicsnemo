@@ -22,6 +22,7 @@ from typing import NamedTuple
 
 import torch
 import warp as wp
+from jaxtyping import Float
 
 from physicsnemo.core.function_spec import FunctionSpec
 
@@ -69,15 +70,15 @@ _SHEPARD_KERNELS = {
 }
 
 
-def _check_common_dtype(*tensors: torch.Tensor) -> None:
+def _check_common_dtype(*tensors: Float[torch.Tensor, "..."]) -> None:
     dtype = tensors[0].dtype
     device = tensors[0].device
     if dtype not in (torch.float32, torch.float64):
-        raise TypeError(f"morphing supports float32 and float64, got {dtype}")
+        raise TypeError(f"deformation supports float32 and float64, got {dtype}")
     if any(t.dtype != dtype for t in tensors):
-        raise TypeError("all floating morphing tensors must have the same dtype")
+        raise TypeError("all floating deformation tensors must have the same dtype")
     if any(t.device != device for t in tensors):
-        raise ValueError("all morphing tensors must be on the same device")
+        raise ValueError("all deformation tensors must be on the same device")
 
 
 def _empty_contiguous_like(tensor: torch.Tensor) -> torch.Tensor:

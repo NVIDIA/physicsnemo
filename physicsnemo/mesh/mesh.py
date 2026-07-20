@@ -14,8 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# ``tensorclass`` adds a class-scoped ``float`` method. Qualify scalar
-# annotations that must remain resolvable under Python's deferred lookup.
+# Python 3.14 evaluates annotations lazily in the decorated class namespace,
+# where ``tensorclass`` installs dtype-conversion methods such as ``int``.
+# Qualify scalar annotations that must continue to resolve to builtin types.
 import builtins
 import math
 import types
@@ -33,12 +34,13 @@ from typing import (
 
 import torch
 import torch.nn.functional as F
-from jaxtyping import Float
+from jaxtyping import Bool, Float
 from tensordict import NonTensorData, TensorDict, tensorclass
 
 from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
 from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
-from physicsnemo.mesh.transformations.deform import displace, morph
+from physicsnemo.mesh.transformations.deform import displace, free_form_deform, morph
+from physicsnemo.mesh.transformations.deform.ffd import _FFDBasis
 from physicsnemo.mesh.transformations.geometric import (
     rotate,
     scale,
@@ -2716,6 +2718,47 @@ class Mesh:
             implementation=implementation,
         )
 
+    def free_form_deform(
+        self,
+        control_displacements: Float[
+            torch.Tensor, "*lattice_resolution n_spatial_dims"
+        ],
+        *,
+        origin: Float[torch.Tensor, " n_spatial_dims"]
+        | Sequence[builtins.float]
+        | None = None,
+        extent: Float[torch.Tensor, " n_spatial_dims"]
+        | Sequence[builtins.float]
+        | None = None,
+        basis: _FFDBasis = "bernstein",
+        point_weights: str
+        | tuple[str, ...]
+        | Bool[torch.Tensor, " n_points"]
+        | Float[torch.Tensor, " n_points"]
+        | None = None,
+        implementation: Literal["torch", "warp"] | None = None,
+    ) -> "Mesh":
+        """Deform points with a control-point lattice by free-form deformation.
+
+        Convenience wrapper for
+        :func:`physicsnemo.mesh.transformations.deform.free_form_deform`, which
+        documents all parameters and numerical behavior.
+
+        Returns
+        -------
+        Mesh
+            New mesh with deformed points, unchanged connectivity and fields.
+        """
+        return free_form_deform(
+            self,
+            control_displacements,
+            origin=origin,
+            extent=extent,
+            basis=basis,
+            point_weights=point_weights,
+            implementation=implementation,
+        )
+
     def rotate(
         self,
         angle: float,
@@ -3494,6 +3537,62 @@ class Mesh:
         from physicsnemo.mesh.validation import compute_mesh_statistics
 
         return compute_mesh_statistics(self)
+
+    def remesh(
+        self,
+        n_clusters: builtins.int,
+        *,
+        max_iterations: builtins.int = 4,
+    ) -> "Mesh":
+        """Uniformly remesh a triangle surface using Warp on CPU or CUDA.
+
+        Remeshing creates new topology with approximately ``n_clusters``
+        vertices and discards point and cell data.
+
+        Parameters
+        ----------
+        n_clusters : int
+            Target output vertex count. Must be between 3 and ``n_points``,
+            inclusive.
+        max_iterations : int, optional
+            Maximum centroid-relaxation iterations. Default is ``4``. Values
+            must be non-negative.
+
+        Returns
+        -------
+        Mesh
+            Remeshed triangle surface on the same device and with the same
+            point dtype as this mesh.
+
+        Raises
+        ------
+        TypeError
+            If counts, tuning parameters, or point coordinates have invalid
+            types.
+        ValueError
+            If a count is out of range or geometry is invalid.
+        NotImplementedError
+            If this is not a 2D triangle surface embedded in 3D.
+        ImportError
+            If Warp is unavailable.
+        RuntimeError
+            If cleanup cannot reconstruct a nonempty manifold surface.
+
+        Notes
+        -----
+        Remeshing is non-differentiable. Global data is preserved, while point
+        and cell data are discarded because their associations no longer match
+        the reconstructed topology. Backend-specific tuning is available from
+        the advanced tensor-level
+        :func:`physicsnemo.nn.functional.remeshing` API.
+        """
+        from physicsnemo.mesh.remeshing import remesh
+
+        return remesh(
+            self,
+            n_clusters,
+            max_iterations=max_iterations,
+        )
 
     def subdivide(
         self,
