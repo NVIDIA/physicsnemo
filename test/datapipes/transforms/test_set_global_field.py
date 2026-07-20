@@ -39,13 +39,25 @@ class TestSetGlobalFieldDomainLevel:
         """The injected field lands in domain-level and sub-mesh global_data."""
         transform = SetGlobalField(fields={"reference_length": [1.0]})
         out = transform.apply_to_domain(_domain())
-        assert "reference_length" in out.global_data.keys()
-        torch.testing.assert_close(
-            out.global_data["reference_length"],
-            torch.tensor([1.0]),
-        )
-        assert "reference_length" in out.interior.global_data.keys()
-        assert "reference_length" in out.boundaries["wall"].global_data.keys()
+        expected = torch.tensor([1.0])
+        for global_data in (
+            out.global_data,
+            out.interior.global_data,
+            out.boundaries["wall"].global_data,
+        ):
+            torch.testing.assert_close(global_data["reference_length"], expected)
+
+    def test_input_domain_is_not_modified(self):
+        """Injection returns new metadata without mutating the input domain."""
+        domain = _domain()
+        original_u_inf = domain.global_data["U_inf"].clone()
+
+        SetGlobalField(fields={"reference_length": [1.0]}).apply_to_domain(domain)
+
+        assert "reference_length" not in domain.global_data.keys()
+        assert "reference_length" not in domain.interior.global_data.keys()
+        assert "reference_length" not in domain.boundaries["wall"].global_data.keys()
+        torch.testing.assert_close(domain.global_data["U_inf"], original_u_inf)
 
     def test_existing_domain_fields_preserved(self):
         """Fields already in domain-level global_data survive injection."""
