@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Mesh-zarr schema and readers: `ZarrMeshReader` / `ZarrDomainMeshReader`,
   `save_mesh_to_zarr` / `save_domain_mesh_to_zarr`, `to_cell_soup`,
-  `validate_mesh_zarr` — chunked, compressed zarr storage path for mesh-native
+  `validate_mesh_zarr`) provide chunked, compressed Zarr storage path for mesh-native
   CAE pipelines. Refer to `physicsnemo/datapipes/MESH_ZARR_SCHEMA.md`.
 - Adds dimension-generic volume mesh generation for implicit domains to
   `physicsnemo.mesh.generate`. `mesh_implicit_domain` meshes
