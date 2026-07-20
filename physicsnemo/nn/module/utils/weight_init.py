@@ -133,6 +133,7 @@ def shrink_and_perturb_(
     the pretrained features. In warm-started training this often reaches a lower
     loss asymptote than fine-tuning the raw pretrained weights (Ash & Adams,
     *On Warm-Starting Neural Network Training*, NeurIPS 2020).
+    https://arxiv.org/pdf/1910.08475
 
     The operation is only meaningful on **pretrained** weights: applied to a
     fresh initialization it merely rescales and re-noises random values.
@@ -210,8 +211,8 @@ def shrink_and_perturb_(
 
     ``"scaled_normal"`` is a deliberately model-agnostic variant: it scales the
     noise by the *pretrained tensor's* own standard deviation rather than by a
-    freshly re-initialized network's per-layer initializer variance (the form
-    in Ash & Adams, §4). It needs no architecture knowledge and matches the
+    freshly re-initialized network's per-layer initializer variance.
+    It needs no architecture knowledge and matches the
     validated production recipe.
 
     The operation is not transactional across parameters: each parameter's noise
