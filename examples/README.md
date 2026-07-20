@@ -94,6 +94,12 @@ The several examples inside PhysicsNeMo can be classified based on their domains
 | --- | --- |
 |[Force Prediciton for Lennard Jones system](./molecular_dynamics/lennard_jones/)|MeshGraphNet|
 
+### Kinetic Monte Carlo
+
+|Use case|Model|
+| --- | --- |
+|[Probabilistic surrogate for Kinetic Monte Carlo solvers](./kinetic_monte_carlo/)|GeoTransolver|
+
 ### Geophysics
 
 |Use case|Model|

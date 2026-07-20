@@ -317,10 +317,10 @@ Supported loss types: Huber (default), MSE, relative MSE.
 Supported metrics: relative L1, relative L2, MAE.
 
 **`training.field_weights`** is a model-side dict that multiplies each
-per-field loss before summation. Use it to balance fields with very
-different natural scales (e.g. GLOBE's
-`{pressure: 1.0, wss: 100.0}` mimics the standalone recipe's
-`error_scales = {C_p: 1.0, C_f: 0.01}` weighting).
+per-field loss before summation (note: the logged `loss/<field>` values
+include the weight). Leave it unset by default: the surface dataset YAMLs
+already bring every target to unit scale via `NormalizeMeshFields`, so
+per-field losses are directly comparable without weighting.
 
 **`batch_size > 1`** is not supported by any model in the recipe today;
 the YAML field is reserved for future use, and the recipe raises
@@ -570,14 +570,13 @@ python src/train.py model=flare_surface dataset=drivaer_ml_surface \
 python src/train.py model=flare_volume dataset=drivaer_ml_volume \
     training.optimizer.lr=1e-3 training.scheduler.gamma=0.5
 
-# GLOBE (mesh-native; needs different training knobs)
+# GLOBE (mesh-native)
+# ~143 GB/GPU at sampling_resolution=50000 in bf16; 200000 does not fit
+# 180 GB-class devices. First epoch includes ~90 s of torch.compile warmup.
 python src/train.py model=globe_surface dataset=drivaer_ml_surface \
-    compile=false training.optimizer.lr=1e-2 training.num_epochs=10000 \
-    'training.field_weights={pressure: 1.0, wss: 100.0}' \
-    sampling_resolution=50000
+    training.num_epochs=10000 sampling_resolution=50000
 python src/train.py model=globe_volume dataset=drivaer_ml_volume \
-    compile=false training.optimizer.lr=1e-2 training.num_epochs=10000 \
-    sampling_resolution=50000
+    training.num_epochs=10000 sampling_resolution=50000
 
 # HiLift surface (vanilla GeoTransolver)
 python src/train.py model=geotransolver_surface dataset=highlift_surface \

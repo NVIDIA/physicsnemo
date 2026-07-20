@@ -4,19 +4,19 @@ PhysicsNeMo Datapipes
 .. automodule:: physicsnemo.datapipes
 .. currentmodule:: physicsnemo.datapipes
 
-The PhysicsNeMo Datapipes consists largely of two separate components.  
+The PhysicsNeMo Datapipes consists largely of two separate components.
 
 Prior to version 2.0 of PhysicsNeMo, each datapipe was largely
 independent from all others, targeted for very specific datasets and applications,
-and broadly not extensible.  Those datapipes, preserved in v2.0 for compatibility,
+and broadly not extensible. Those datapipes, preserved in v2.0 for compatibility,
 are described in the climate, cae, gnn, and
 benchmark subsections.
 
 In PhysicsNeMo v2.0, the datapipes API has been redesigned from scratch to focus
 on key factors to enable scientific machine learning training and inference.
-This document describes the architecture and design philosophy
+This document describes the architecture and design philosophy.
 
-Refer to the examples of PhysicsNeMo for runnable datapipe tutorials to
+Refer to the PhysicsNeMo examples for runnable datapipe tutorials to
 get started.
 
 
@@ -26,15 +26,15 @@ Datapipes Philosophy
 The PhysicsNeMo datapipe structure is built on several key design decisions
 that are specifically made to enable diverse scientific machine learning datasets:
 
-- GPU First: data preprocessing is done on the GPU, not the CPU.
+- GPU First: data preprocessing runs on the GPU, not the CPU.
 - Isolation of roles: reading data is separate from transforming data, which is 
   separate from pipelining data for training, which is separate from threading
-  and stream management.  Changing data sources, or preprocessing pipelines,
+  and stream management. Changing data sources, or preprocessing pipelines,
   should require no intervention in other areas.
-- Composability and Extensibility: We aim to provide a tool kit and examples that
-  lets you build what you need yourself, easily, if it's not here.
-- Datapipes as configuration: Changing a pipeline shouldn't require source code
-  modification; the registry system in PhysicsNeMo datapipes enables hydra instantiation
+- Composability and Extensibility: Use the toolkit and examples to build what you
+  need if a component is not included.
+- Datapipes as configuration: Changing a pipeline should not require source code
+  modification. The registry system in PhysicsNeMo datapipes enables Hydra instantiation
   of datapipes at runtime for version-controlled, runtime-configured datapipes.
   You can also register and instantiate custom components.
 
@@ -44,7 +44,7 @@ Data flows through a PhysicsNeMo datapipe in a consistent path:
 2. An optional series of one or more transformations will apply on-the-fly
    manipulations of that data, per instance of data.
 3. Several instances of data will be collated into a batch (customizable,
-   just like in PyTorch).
+   like in PyTorch).
 4. The batched data is ready for use in a model.
 
 At the highest level, ``physicsnemo.datapipes.DataLoader`` has a similar API and
@@ -94,16 +94,15 @@ Quick Start
         predictions = model(batch["pressure"], batch["coordinates"])
 
 
-The best place to see the PhysicsNeMo datapipes in action, get a sense of 
-how they work, and use them, is to start with the examples located in the
-`examples directory <https://github.com/NVIDIA/physicsnemo/tree/main/examples/minimal/datapipes>`_.
+Refer to the examples in the
+`examples directory <https://github.com/NVIDIA/physicsnemo/tree/main/examples/minimal/datapipes>`_ to explore PhysicsNeMo datapipes and get started.
 
 
 Architecture
 ------------
 
-The diagram below gives a very high level overview of how the ``physicsnemo``
-datapipe tools interplay. 
+The diagram below gives a high-level overview of how the ``physicsnemo``
+datapipe tools interact.
 
 .. code-block:: text
 
@@ -112,7 +111,7 @@ datapipe tools interplay.
     │              │       │                  │       │                      │
     │  _load_sample│       │  device transfer │       │  batches indices     │
     │  __len__     │       │  + transforms    │       │  + collation         │
-    │              │       │  (via Compose)   │       │  + stream prefetch   │
+    │              │       │  through Compose │       │  + stream prefetch   │
     │  Returns:    │       │                  │       │                      │
     │  (TensorDict,│       │  Returns:        │       │  Yields:             │
     │   metadata)  │       │  (TensorDict,    │       │  batched TensorDict  │
@@ -120,7 +119,7 @@ datapipe tools interplay.
     └──────────────┘       └──────────────────┘       └──────────────────────┘
                                     │
                            ┌────────┴────────┐
-                           │   Transform(s)  │
+                           │   Transforms    │
                            │                 │
                            │  Compose chains │
                            │  multiple into  │
@@ -133,8 +132,8 @@ Core API
 DataLoader
 ^^^^^^^^^^
 
-The ``DataLoader`` is meant, in most ways, to be  a nearly drop-in
-replacement to the PyTorch dataloader. A notable difference is the movement
+The ``DataLoader`` serves as a nearly drop-in
+replacement for the PyTorch DataLoader. A notable difference is the movement
 of ``pin_memory`` from the ``DataLoader`` class to the ``Reader`` classes.
 This is because of the much earlier GPU data transfer in the PhysicsNeMo
 datapipe compared to PyTorch.
@@ -143,24 +142,24 @@ The ``DataLoader`` drives one of two mutually-exclusive paths, selected by
 dataset type:
 
 - **Map-style preload path** (:class:`~physicsnemo.datapipes.DatasetBase`,
-  e.g. ``Dataset``, ``MeshDataset``): a dedicated dispatcher thread keeps a
+  for example ``Dataset``, ``MeshDataset``): a dedicated dispatcher thread keeps a
   *bounded* number of samples in flight by pulling the index stream
-  **lazily** under backpressure and submitting host-only loads to a worker
-  pool.  The main thread consumes the resulting samples in order
+  *lazily* under backpressure and submitting host-only loads to a worker
+  pool. The main thread consumes the resulting samples in order
   (host-to-device transfer plus transforms on a preprocessing stream) and
   reassembles batches from boundary markers, so the full epoch is never
   materialized up front and irregular batch sizes are supported.
 - **Iterable generator path** (:class:`~physicsnemo.datapipes.IterableDatasetBase`):
   a generator dataset driven entirely on the main thread (no sampler, no
-  worker pool); see `Iterable Datasets`_ below.
+  worker pool). Refer to `Iterable Datasets`_ below.
 
-In both paths, **all device-kernel launches happen on the single main
-thread**.  This is the real constraint for Warp-based transforms: Warp may
-launch on any CUDA stream as long as the launch comes from the main thread
-and Warp's current stream is bound to the torch stream in use.
-Preprocessing therefore runs on a side (preprocessing) stream and is
-ordered against the compute stream with a CUDA event, so it overlaps
-training without ever blocking the host.
+In both paths, *all device-kernel launches happen on a single main
+thread*. This is the real constraint for Warp-based transforms. Warp may
+launch on any CUDA stream when the launch comes from the main thread
+and Warp's current stream matches the active PyTorch stream.
+Preprocessing runs on a separate preprocessing stream. A CUDA event orders
+that stream against the compute stream so preprocessing overlaps training
+without blocking the host.
 
 .. autoclass:: physicsnemo.datapipes.dataloader.DataLoader
     :members:
@@ -170,7 +169,7 @@ Dataset
 ^^^^^^^
 
 The ``Dataset`` is the core IO + Transformation coordinator of the datapipe 
-infrastructor.  Whereas the ``DataLoader`` will orchestrate the pipeline,
+infrastructure. Whereas the ``DataLoader`` will orchestrate the pipeline,
 the ``Dataset`` is responsible for the threaded execution of ``Reader``s and
 ``Transform`` pipelines to execute it.
 
@@ -181,21 +180,23 @@ the ``Dataset`` is responsible for the threaded execution of ``Reader``s and
 MultiDataset
 ^^^^^^^^^^^^
 
-The ``MultiDataset`` includes two or more ``Dataset`` instances behind a single
-index space (concatenation). Each sub-dataset can have its own Reader and
-transforms. Global indices are mapped to the owning sub-dataset and local index;
-metadata is enriched with ``dataset_index`` so that batches can identify the source.
-Use ``MultiDataset`` when you want to train on multiple datasets with the same
-DataLoader, and, optionally, enforce all outputs to share the same TensorDict keys
-for  collation. Refer to :const:`physicsnemo.datapipes.multi_dataset.DATASET_INDEX_METADATA_KEY`
+The ``MultiDataset`` combines two or more ``Dataset`` instances into a single
+index space through concatenation. Each sub-dataset can have its own ``Reader``
+and transforms. ``MultiDataset`` maps global indices to the owning sub-dataset
+and local index, and adds ``dataset_index`` to sample metadata so batches can
+identify the source.
+Use ``MultiDataset`` when you train on multiple datasets with the same
+``DataLoader``. You can optionally enforce matching ``TensorDict`` keys across
+all outputs for collation. Refer to
+:const:`physicsnemo.datapipes.multi_dataset.DATASET_INDEX_METADATA_KEY`
 for the metadata key added to each sample.
 
-To properly collate and stack outputs from different datasets, you
-can set ``output_strict=True`` in the constructor of a ``MultiDataset``.  After
-construction, it will load the first batch from every passed dataset and test
-that the TensorDict produced by the ``Reader`` and ``Transform`` pipeline has
-consistent keys.  Because the exact collation details differ by dataset, the
-``MultiDataset`` does not check more aggressively than output key consistency.
+To collate and stack outputs from different datasets, set
+``output_strict=True`` when you construct a ``MultiDataset``. After
+construction, ``MultiDataset`` loads the first batch from each sub-dataset
+and verifies that the ``TensorDict`` from the ``Reader`` and ``Transform``
+pipeline has consistent keys. Collation details differ by dataset, so
+``MultiDataset`` validates output key consistency only.
 
 .. autoclass:: physicsnemo.datapipes.multi_dataset.MultiDataset
     :members:
@@ -206,16 +207,16 @@ Iterable Datasets
 ^^^^^^^^^^^^^^^^^
 
 Map-style datasets (``Dataset``, ``MeshDataset``) assume a fixed length and a
-sampler that hands out indices.  Some workloads have neither: an online
-simulation, a procedural generator, or any source that produces samples on
-the fly with no meaningful ``__len__``.  For those, subclass
+sampler that yields indices. Some workloads lack both a fixed length and a
+sampler. These include online simulations, procedural generators, and sources
+that produce samples during iteration without a meaningful ``__len__``. For those cases, subclass
 :class:`~physicsnemo.datapipes.IterableDatasetBase` and yield samples from
-``__iter__``.  The ``DataLoader`` detects an iterable dataset automatically
-and switches to the main-thread-only generator path; ``shuffle`` and
-``sampler`` are ignored (a warning is issued) and ``len(loader)`` raises,
-since the length is unknown.
+``__iter__``. The ``DataLoader`` detects iterable datasets automatically and
+switches to the main-thread-only generator path. It ignores ``shuffle`` and
+``sampler`` and issues a warning. ``len(loader)`` raises because the length is
+unknown.
 
-An iterable dataset chooses one of two emission modes via the
+An iterable dataset chooses one of two emission modes through the
 ``yields_batches`` attribute:
 
 - ``yields_batches = False`` (default): ``__iter__`` yields individual
@@ -225,11 +226,11 @@ An iterable dataset chooses one of two emission modes via the
   ``DataLoader`` passes them through without further collation, which is the
   natural fit for a generator that already produces a batch per step.
 
-Reproducibility follows a per-``(epoch, position)`` scheme rather than the
-map-style per-``(epoch, index)`` scheme: implement ``set_epoch`` and/or
-``set_generator`` to seed deterministically from the iteration position.
+Reproducibility seeds from ``(epoch, position)`` rather than the map-style
+``(epoch, index)`` pair. Implement ``set_epoch`` and/or ``set_generator`` to
+seed deterministically from the iteration position.
 Because the generator runs on the main thread, Warp kernels inside it are
-safe on any preprocessing stream the ``DataLoader`` binds.  See the online
+safe on any preprocessing stream the ``DataLoader`` binds. Refer to the online
 simulation tutorial in the
 `examples directory <https://github.com/NVIDIA/physicsnemo/tree/main/examples/minimal/datapipes>`_
 for a runnable Warp ``Darcy2D`` generator wired through this path.
@@ -251,8 +252,8 @@ Transforms
 ^^^^^^^^^^
 
 Transforms are composable, device-agnostic operations applied to each sample
-after it is loaded and transferred to the target device.  The ``Compose``
-container chains multiple transforms into a single callable.  Refer to
+after it is loaded and transferred to the target device. The ``Compose``
+container chains multiple transforms into a single callable. Refer to
 :doc:`physicsnemo.datapipes.transforms` for the base class API, ``Compose``,
 and all built-in transforms.
 
@@ -260,14 +261,14 @@ Collation
 ^^^^^^^^^
 
 Combining a set of TensorDict objects into a batch of data can, at times, 
-require special care.  For example, collating graph datasets for Graph Neural 
+require special care. For example, collating graph datasets for Graph Neural 
 Networks requires different merging of batches than concatenation along a batch
-dimension.  For this reason, PhysicsNeMo datapipes offers custom collation functions 
-as well as an interface to write your own collator.  If the dataset you are
-trying to collate can not be accommodated here, open an issue on github.
+dimension. For this reason, PhysicsNeMo datapipes offer custom collation functions
+as well as an interface to write your own collator. If the dataset you are
+trying to collate cannot be accommodated here, open an issue on GitHub.
 
 For an example of a custom collation function that produces a batch of PyG graph data,
-refer to the examples on github for the datapipes.
+refer to the examples on GitHub for the datapipes.
 
 .. autoclass:: physicsnemo.datapipes.collate.Collator
     :members:
@@ -331,7 +332,7 @@ Custom Transform example:
 
 .. toctree::
    :maxdepth: 1
-   :caption: Built-in Readers & Transforms
+   :caption: Built-in Readers and Transforms
 
    physicsnemo.datapipes.readers
    physicsnemo.datapipes.transforms
@@ -340,7 +341,7 @@ Legacy Datapipes
 ----------------
 
 The following datapipe modules predate the v2.0 redesign and are preserved for
-backward compatibility.  They are domain-specific, self-contained pipelines
+backward compatibility. They are domain-specific, self-contained pipelines
 originally written for particular datasets and workflows.
 
 .. toctree::
