@@ -246,3 +246,16 @@ def test_nonfinite_coefficients_raise(device):
             shrink_and_perturb_(model, shrink=bad)
         with pytest.raises(ValueError):
             shrink_and_perturb_(model, perturb=bad)
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="device mismatch needs a second device"
+)
+def test_generator_device_mismatch_raises():
+    """A preset generator on the wrong device is rejected up front."""
+    model = torch.nn.Linear(4, 4).cuda()
+    cpu_gen = torch.Generator()  # cpu, mismatched with the cuda parameters
+    with pytest.raises(ValueError, match="generator is on"):
+        shrink_and_perturb_(model, generator=cpu_gen)
+    # a callable ignores the generator, so a device mismatch must not raise
+    shrink_and_perturb_(model, generator=cpu_gen, noise=torch.randn_like)

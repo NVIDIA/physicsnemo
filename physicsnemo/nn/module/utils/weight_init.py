@@ -197,9 +197,10 @@ def shrink_and_perturb_(
     ------
     ValueError
         If ``shrink`` or ``perturb`` is negative or non-finite, ``noise`` is an
-        unknown string, or a ``noise`` callable returns a tensor whose shape or
-        device is incompatible with its parameter (or complex noise for a real
-        parameter).
+        unknown string, a preset ``generator`` is on a different device than the
+        module's parameters, or a ``noise`` callable returns a tensor whose
+        shape or device is incompatible with its parameter (or complex noise for
+        a real parameter).
 
     Notes
     -----
@@ -237,6 +238,18 @@ def shrink_and_perturb_(
             f"shrink and perturb must be finite and non-negative, got "
             f"shrink={shrink}, perturb={perturb}"
         )
+
+    # The preset samplers draw on `generator`, which must sit on the device of
+    # every parameter it seeds (a callable ignores it, and perturb == 0 draws
+    # nothing, so skip the check in those cases).
+    if generator is not None and not callable(noise) and perturb != 0.0:
+        bad = {p.device for p in module.parameters()} - {generator.device}
+        if bad:
+            raise ValueError(
+                f"generator is on {generator.device}, but the module has "
+                f"parameters on {sorted(map(str, bad))}; the generator must "
+                f"match the parameter device(s)"
+            )
 
     make_eps = _resolve_noise(noise, generator)
 
