@@ -121,5 +121,3 @@ layers =
 name = Prevent Non-listed external imports in physicsnemo
 type = forbidden_import
 container = physicsnemo
-exclude =
-    datapipes.readers.zarr_mesh

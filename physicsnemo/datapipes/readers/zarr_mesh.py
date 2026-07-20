@@ -82,6 +82,7 @@ from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.registry import register
 
 zarr = OptionalImport("zarr")
+zarr_codecs = OptionalImport("zarr.codecs")
 tensorstore = OptionalImport("tensorstore")
 
 logger = logging.getLogger(__name__)
@@ -160,9 +161,7 @@ def _check_schema_version(attrs, where) -> None:
 
 def _make_compressors(compress: bool):
     if compress:
-        from zarr.codecs import BloscCodec
-
-        return BloscCodec(cname="zstd", clevel=3, shuffle="bitshuffle")
+        return zarr_codecs.BloscCodec(cname="zstd", clevel=3, shuffle="bitshuffle")
     return None
 
 
