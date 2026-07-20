@@ -107,6 +107,6 @@ mesh-local `global_data` (e.g. `TimeValue`).
 - Default compression is blosc-zstd (bitshuffle); uncompressed stores
   trade bytes for zero decode cost and only win when the working set fits
   the page cache.
-- Groups are self-contained (e.g. SDF source geometry stored as an
+- Groups are self-contained (for example, SDF source geometry stored as an
   additional full-resolution `indexed` boundary) so cases remain portable
   across filesystems and object stores.
