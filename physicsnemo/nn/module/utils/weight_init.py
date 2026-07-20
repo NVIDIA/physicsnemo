@@ -20,6 +20,7 @@ from typing import Callable, Literal, Optional, Union
 
 import numpy as np
 import torch
+from torch.distributed.tensor import DTensor
 from torch.nn.init import trunc_normal_ as _torch_trunc_normal_
 
 
@@ -142,7 +143,10 @@ def shrink_and_perturb_(
     ----------
     module : torch.nn.Module
         Module whose parameters are perturbed in place. Buffers (e.g.
-        batch-norm running statistics) are left untouched.
+        batch-norm running statistics) are left untouched. Only whole, unsharded
+        parameters are supported: a sharded ``DTensor`` parameter (e.g. from
+        FSDP2 ``fully_shard`` or tensor parallelism) raises
+        ``NotImplementedError``, so apply this before distributed wrapping.
     shrink : float, optional
         Multiplicative retention factor :math:`\lambda \ge 0` applied to each
         weight. Values in ``[0, 1)`` shrink toward zero; ``1.0`` disables the
@@ -201,14 +205,16 @@ def shrink_and_perturb_(
         module's parameters, or a ``noise`` callable returns a tensor whose
         shape or device is incompatible with its parameter (or complex noise for
         a real parameter).
+    NotImplementedError
+        If any selected parameter is a sharded ``DTensor`` (only whole,
+        unsharded tensors are supported).
 
     Notes
     -----
     Intended warm-start workflow: load the pretrained weights, apply this to the
     transferred parameters, then (re)create the optimizer, and only afterwards
     ``torch.compile`` / wrap in DDP or FSDP. Run it *before* distributed
-    wrapping: under FSDP2 the per-tensor ``std`` of ``"scaled_normal"`` reduces
-    over a sharded parameter and triggers an all-gather.
+    wrapping.
 
     ``"scaled_normal"`` is a deliberately model-agnostic variant: it scales the
     noise by the *pretrained tensor's* own standard deviation rather than by a
@@ -237,6 +243,13 @@ def shrink_and_perturb_(
         raise ValueError(
             f"shrink and perturb must be finite and non-negative, got "
             f"shrink={shrink}, perturb={perturb}"
+        )
+
+    if any(isinstance(p, DTensor) for p in module.parameters()):
+        raise NotImplementedError(
+            "shrink_and_perturb_ does not support sharded DTensor parameters "
+            "(e.g. from FSDP2 `fully_shard` or tensor parallelism); apply it to "
+            "the full model before distributed wrapping."
         )
 
     # The preset samplers draw on `generator`, which must sit on the device of
