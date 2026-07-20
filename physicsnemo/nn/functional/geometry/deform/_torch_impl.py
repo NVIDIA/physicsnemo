@@ -656,7 +656,8 @@ def ffd_points_torch(
     if torch.compiler.is_compiling():
         # Dynamo cannot unroll shape-dependent Python chunk loops for symbolic
         # dimensions. Let Inductor see one vectorized block while compiling;
-        # activation checkpointing still bounds compiled training memory.
+        # activation checkpointing reduces saved activations for training but
+        # does not enforce the eager path's temporary-memory budget.
         if needs_grad:
             field = checkpoint(
                 _ffd_field_chunk,

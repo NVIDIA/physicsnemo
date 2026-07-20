@@ -145,6 +145,12 @@ Bernstein or node-interpolating face. For cubic B-splines, zero the first and
 last three coefficient planes on every axis because three planes have nonzero
 weight at each box face.
 
+Eager Torch evaluation chunks query points to keep estimated live FFD
+temporaries within 256 MiB. Under :func:`torch.compile`, the Torch backend uses
+one vectorized block because symbolic chunk loops cannot be unrolled; the eager
+memory budget is therefore not enforced. Very large Bernstein workloads may
+require substantially more peak memory when compiled.
+
 For connectivity-preserving object APIs, use
 :meth:`~physicsnemo.mesh.mesh.Mesh.free_form_deform` or
 :meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.free_form_deform`.

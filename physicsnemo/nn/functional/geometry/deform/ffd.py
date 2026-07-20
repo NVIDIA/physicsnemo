@@ -71,7 +71,7 @@ class FreeFormDeformPoints(FunctionSpec):
     identity and a constant lattice translates every point inside the box.
 
     ``basis="bernstein"`` provides the classic free-form deformation basis from
-    Sederberg and Parry (1986). Its per-axis functions are the Bernstein
+    Sederberg and Parry (1986) [1]_. Its per-axis functions are the Bernstein
     polynomials of degree :math:`p_d = n_d - 1`:
 
     .. math::
@@ -94,13 +94,16 @@ class FreeFormDeformPoints(FunctionSpec):
     :math:`t^3(6t^2 - 15t + 10)`, respectively. The lower-node weight is one
     minus the upper-node weight. The resulting fields are C0, C1, and C2 across
     cell boundaries, respectively. Perlin introduced the quintic polynomial
-    in *Improving Noise* [1]_ to remove the cubic polynomial's second-derivative
+    in *Improving Noise* [2]_ to remove the cubic polynomial's second-derivative
     discontinuities.
 
     Inputs may be unbatched (``points`` of shape ``(N, D)``) or batched
-    (``(B, N, D)``). The lattice follows with shapes ``(n_1, ..., n_D, D)`` or
-    ``(B, n_1, ..., n_D, D)``. Batched inputs are aligned rather than
-    broadcast. Float32 and float64 are supported.
+    (``(B, N, D)``). The corresponding control lattice has shape
+    ``(n_1, ..., n_D, D)`` or ``(B, n_1, ..., n_D, D)``. Points, control
+    lattices, and point weights must be either unbatched or batch-aligned; they
+    are not broadcast. For batched inputs, ``(D,)`` box vectors are shared
+    across the batch, while ``(B, D)`` box vectors are aligned. Float32 and
+    float64 are supported.
 
     Parameters
     ----------
@@ -140,7 +143,7 @@ class FreeFormDeformPoints(FunctionSpec):
         All weights must match the point device. Floating weights must also
         match the point dtype. Bool values act as hard masks. The operation
         uses values as supplied without clamping. Default is ``None``.
-    implementation : {"warp", "torch"} or None, optional
+    implementation : {"torch", "warp"} or None, optional
         Explicit backend. ``None`` selects Torch on CPU. On CUDA, it selects
         Warp when available and otherwise Torch with a one-time
         :class:`RuntimeWarning`.
@@ -179,11 +182,19 @@ class FreeFormDeformPoints(FunctionSpec):
     Bernstein degree, global support, and evaluation cost grow with the lattice
     resolution. Use ``"bspline"`` for fine lattices or local control. The
     lattice resolution is a static parameter under :func:`torch.compile`. Each
-    distinct resolution compiles its own graph.
+    distinct resolution compiles its own graph. Eager Torch evaluation chunks
+    query points to keep estimated live FFD temporaries within 256 MiB. Compiled
+    Torch evaluation instead uses one vectorized block because symbolic chunk
+    loops cannot be unrolled, so it does not enforce that budget. Very large
+    Bernstein workloads may therefore require substantially more peak memory
+    when compiled.
 
     References
     ----------
-    .. [1] Perlin, K. (2002). "Improving Noise." *ACM Transactions on
+    .. [1] Sederberg, T. W., and Parry, S. R. (1986). "Free-Form Deformation
+       of Solid Geometric Models." *ACM SIGGRAPH Computer Graphics*, 20(4),
+       151-160. https://doi.org/10.1145/15886.15903
+    .. [2] Perlin, K. (2002). "Improving Noise." *ACM Transactions on
        Graphics*, 21(3), 681-682.
        https://doi.org/10.1145/566654.566636
     """

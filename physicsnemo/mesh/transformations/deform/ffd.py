@@ -97,9 +97,9 @@ def _default_lattice_box(
 ]:
     """Derive missing lattice-box values from the axis-aligned point bounds.
 
-    Validating a derived extent synchronizes with the device. Pass explicit
-    ``origin`` and ``extent`` to avoid bounds reductions in performance-critical
-    loops.
+    Validating a derived extent synchronizes with the device and is not CUDA
+    Graph capture-safe. Pass explicit device-tensor ``origin`` and ``extent``
+    to avoid bounds reductions in performance-critical or captured loops.
     """
     if points.dtype not in (torch.float32, torch.float64):
         raise TypeError(
@@ -137,7 +137,7 @@ def _default_lattice_box(
     return origin, extent
 
 
-def ffd(
+def free_form_deform(
     mesh: "Mesh",
     control_displacements: Float[torch.Tensor, "*lattice_resolution n_spatial_dims"],
     *,
@@ -181,10 +181,12 @@ def ffd(
         ``origin``. Every value must be finite and strictly positive. The
         operation does not validate tensor values at runtime. ``None`` sizes
         the box from ``origin`` to the maximum corner of the mesh bounds.
-        Validating a derived extent synchronizes with the device. Every
-        point-coordinate axis must then have positive range. Supply an explicit
-        extent for lower-dimensional geometry embedded in a higher-dimensional
-        space. Default is ``None``.
+        Validating a derived extent synchronizes with the device and is not
+        CUDA Graph capture-safe. For capture, pass both ``origin`` and
+        ``extent`` as device tensors. Every point-coordinate axis must have
+        positive range when the extent is derived. Supply an explicit extent
+        for lower-dimensional geometry embedded in a higher-dimensional space.
+        Default is ``None``.
     basis : {"bernstein", "bspline", "linear", "cubic_hermite", "quintic_hermite"}, optional
         Per-axis basis family:
 

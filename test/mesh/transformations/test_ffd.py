@@ -18,7 +18,6 @@
 
 import importlib
 import inspect
-import pickle
 from typing import Literal, get_type_hints
 
 import pytest
@@ -37,12 +36,18 @@ def test_free_form_deform_namespace_is_canonical():
 
     transformations = importlib.import_module("physicsnemo.mesh.transformations")
     deform_module = importlib.import_module("physicsnemo.mesh.transformations.deform")
+    implementation_module = importlib.import_module(
+        "physicsnemo.mesh.transformations.deform.ffd"
+    )
 
     assert deform_module.free_form_deform is free_form_deform
+    assert implementation_module.free_form_deform is free_form_deform
+    assert not hasattr(implementation_module, "ffd")
     assert free_form_deform.__name__ == "free_form_deform"
     assert free_form_deform.__qualname__ == "free_form_deform"
-    assert free_form_deform.__module__ == "physicsnemo.mesh.transformations.deform"
-    assert pickle.dumps(free_form_deform)
+    assert free_form_deform.__module__ == (
+        "physicsnemo.mesh.transformations.deform.ffd"
+    )
     assert "ffd" not in deform_module.__all__
     assert not hasattr(transformations, "free_form_deform")
     assert hasattr(Mesh, "free_form_deform")

@@ -170,6 +170,10 @@ the box.
 When ``origin`` and ``extent`` are omitted, the box spans the mesh bounds. Each
 coordinate axis must have positive range. Planar or linear geometry embedded
 in a higher-dimensional space therefore needs an explicit positive extent.
+Validating an automatically derived extent synchronizes with the device and is
+not CUDA Graph capture-safe. For capture, pass both ``origin`` and ``extent``
+as device tensors.
+
 ``basis="bernstein"`` provides classic global-support free-form deformation for
 coarse lattices. ``basis="bspline"`` provides local four-node-per-axis support
 and scales to fine lattices for local sculpting. Its first and last coefficient

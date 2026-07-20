@@ -763,8 +763,10 @@ class DomainMesh:
             strictly positive. The operation does not validate tensor values at
             runtime. ``None`` sizes the box from ``origin`` to the maximum
             corner of the combined component bounds. Validating a derived
-            extent synchronizes with the device. Every coordinate axis must
-            then have positive range. Otherwise, supply an explicit extent.
+            extent synchronizes with the device and is not CUDA Graph
+            capture-safe. For capture, pass both ``origin`` and ``extent`` as
+            device tensors. Every coordinate axis must have positive range
+            when the extent is derived. Otherwise, supply an explicit extent.
         basis : {"bernstein", "bspline", "linear", "cubic_hermite", "quintic_hermite"}, optional
             Per-axis basis family. ``"bernstein"`` provides global support.
             ``"bspline"`` uses local four-node-per-axis support. B-spline

@@ -77,10 +77,13 @@ _FFD_KERNELS = {
     ),
 }
 
-# Cache each device's resolution tensor because lattice resolution is static.
-# Reuse avoids host-to-device copies and keeps warmed calls CUDA Graph
-# capturable.
-_RESOLUTION_CACHE: dict[tuple[torch.device, tuple[int, ...]], torch.Tensor] = {}
+# Deliberately retain each device's static resolution tensor for the process
+# lifetime. Captured CUDA Graphs keep its device address, so eviction or manual
+# clearing could invalidate later graph replays. Each entry contains only one
+# int32 value per lattice axis; reuse also avoids host-to-device copies.
+_RESOLUTION_TENSOR_REGISTRY: dict[
+    tuple[torch.device, tuple[int, ...]], torch.Tensor
+] = {}
 
 
 def _ffd_kernels(dtype: torch.dtype) -> _FFDKernelSet:
@@ -98,10 +101,10 @@ def _resolution_tensor(
     resolution: list[int], device: torch.device
 ) -> Int[torch.Tensor, " num_dims"]:
     key = (device, tuple(resolution))
-    cached = _RESOLUTION_CACHE.get(key)
+    cached = _RESOLUTION_TENSOR_REGISTRY.get(key)
     if cached is None:
         cached = torch.tensor(resolution, dtype=torch.int32, device=device)
-        _RESOLUTION_CACHE[key] = cached
+        _RESOLUTION_TENSOR_REGISTRY[key] = cached
     return cached
 
 
