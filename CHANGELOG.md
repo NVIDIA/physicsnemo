@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds an opt-in ``boundary="one_sided"`` mode to
+  ``rectilinear_grid_gradient`` and ``uniform_grid_gradient``. The default
+  periodic behavior is unchanged, while bounded domains can use one-sided
+  boundary stencils with Torch/Warp forward and autograd parity.
 - Adds dimension-generic volume mesh generation for implicit domains to
   `physicsnemo.mesh.generate`. `mesh_implicit_domain` meshes
   `{x : phi(x) < 0}`, clipped to the bounding box (box faces are honored

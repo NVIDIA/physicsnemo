@@ -22,6 +22,11 @@ import torch
 
 from physicsnemo.core.function_spec import FunctionSpec
 
+from ..._boundary import (
+    apply_one_sided_boundaries,
+    normalize_boundary,
+    uniform_coordinates,
+)
 from ..._request_utils import (
     compose_derivative_outputs,
     normalize_derivative_orders,
@@ -311,8 +316,9 @@ def uniform_grid_gradient_warp(
     order: int = 2,
     derivative_order: int = 1,
     include_mixed: bool = False,
+    boundary: str = "periodic",
 ) -> torch.Tensor:
-    """Compute periodic first or pure second derivatives on a uniform grid.
+    """Compute first or pure second derivatives on a uniform grid.
 
     Notes
     -----
@@ -324,18 +330,30 @@ def uniform_grid_gradient_warp(
     _validate_positive_spacing(spacing_tuple)
     order = _validate_order(order)
     derivative_order = _validate_derivative_order(derivative_order)
+    boundary = normalize_boundary(boundary, function_name="uniform_grid_gradient")
     _validate_include_mixed(
         derivative_order=derivative_order,
         include_mixed=include_mixed,
     )
     spacing_meta = torch.tensor(spacing_tuple, dtype=torch.float32, device="cpu")
-    return uniform_grid_gradient_impl(
+    output = uniform_grid_gradient_impl(
         field,
         spacing_meta,
         int(order),
         int(derivative_order),
         bool(include_mixed),
     )
+    if boundary == "one_sided":
+        output = apply_one_sided_boundaries(
+            output,
+            field=field,
+            coordinates=uniform_coordinates(field, spacing_tuple),
+            derivative_order=derivative_order,
+            stencil_size=order + derivative_order,
+            boundary_width=order // 2,
+            function_name="uniform_grid_gradient",
+        )
+    return output
 
 
 def uniform_grid_gradient_warp_multi(
@@ -344,6 +362,7 @@ def uniform_grid_gradient_warp_multi(
     order: int,
     derivative_orders: int | Sequence[int] = 1,
     include_mixed: bool = False,
+    boundary: str = "periodic",
 ) -> torch.Tensor:
     """Compute multiple derivative families, fusing Warp launches when possible.
 
@@ -352,6 +371,7 @@ def uniform_grid_gradient_warp_multi(
     derivatives. ``order=4`` requests continue to compose single-order Warp calls.
     """
     _validate_field(field)
+    boundary = normalize_boundary(boundary, function_name="uniform_grid_gradient")
     spacing_tuple = _normalize_spacing(spacing, field.ndim)
     _validate_positive_spacing(spacing_tuple)
     order = _validate_order(order)
@@ -373,7 +393,11 @@ def uniform_grid_gradient_warp_multi(
     spacing_meta = torch.tensor(spacing_tuple, dtype=torch.float32, device="cpu")
 
     ### Use fused order-2 path whenever multiple derivative families are requested.
-    if order == 2 and (len(requested_orders) > 1 or mixed_terms):
+    if (
+        boundary == "periodic"
+        and order == 2
+        and (len(requested_orders) > 1 or mixed_terms)
+    ):
         fused = uniform_grid_derivatives_order2_fused_impl(
             field, spacing_meta, mixed_terms
         )
@@ -400,6 +424,7 @@ def uniform_grid_gradient_warp_multi(
                 order=order,
                 derivative_order=derivative_order,
                 include_mixed=False,
+                boundary=boundary,
             )
         ),
     )

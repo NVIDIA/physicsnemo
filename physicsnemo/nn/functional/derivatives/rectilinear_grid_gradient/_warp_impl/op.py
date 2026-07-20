@@ -23,6 +23,7 @@ import warp as wp
 
 from physicsnemo.core.function_spec import FunctionSpec
 
+from ..._boundary import apply_one_sided_boundaries, normalize_boundary
 from ..._request_utils import (
     compose_derivative_outputs,
     normalize_derivative_orders,
@@ -704,8 +705,9 @@ def rectilinear_grid_gradient_warp(
     periods: float | Sequence[float] | None = None,
     derivative_order: int = 1,
     include_mixed: bool = False,
+    boundary: str = "periodic",
 ) -> torch.Tensor:
-    """Compute periodic first or pure second derivatives on rectilinear grids.
+    """Compute first or pure second derivatives on rectilinear grids.
 
     Notes
     -----
@@ -718,6 +720,7 @@ def rectilinear_grid_gradient_warp(
         derivative_order=derivative_order,
         include_mixed=include_mixed,
     )
+    boundary = normalize_boundary(boundary, function_name="rectilinear_grid_gradient")
 
     coords_tuple, period_tuple = validate_and_normalize_coordinates(
         field=field,
@@ -728,15 +731,15 @@ def rectilinear_grid_gradient_warp(
     )
 
     if field.ndim == 1:
-        return rectilinear_grid_gradient_1d_impl(
+        output = rectilinear_grid_gradient_1d_impl(
             field,
             coords_tuple[0],
             float(period_tuple[0]),
             int(derivative_order),
             bool(include_mixed),
         )
-    if field.ndim == 2:
-        return rectilinear_grid_gradient_2d_impl(
+    elif field.ndim == 2:
+        output = rectilinear_grid_gradient_2d_impl(
             field,
             coords_tuple[0],
             coords_tuple[1],
@@ -745,17 +748,29 @@ def rectilinear_grid_gradient_warp(
             int(derivative_order),
             bool(include_mixed),
         )
-    return rectilinear_grid_gradient_3d_impl(
-        field,
-        coords_tuple[0],
-        coords_tuple[1],
-        coords_tuple[2],
-        float(period_tuple[0]),
-        float(period_tuple[1]),
-        float(period_tuple[2]),
-        int(derivative_order),
-        bool(include_mixed),
-    )
+    else:
+        output = rectilinear_grid_gradient_3d_impl(
+            field,
+            coords_tuple[0],
+            coords_tuple[1],
+            coords_tuple[2],
+            float(period_tuple[0]),
+            float(period_tuple[1]),
+            float(period_tuple[2]),
+            int(derivative_order),
+            bool(include_mixed),
+        )
+
+    if boundary == "one_sided":
+        output = apply_one_sided_boundaries(
+            output,
+            field=field,
+            coordinates=coords_tuple,
+            derivative_order=derivative_order,
+            stencil_size=2 + derivative_order,
+            function_name="rectilinear_grid_gradient",
+        )
+    return output
 
 
 def rectilinear_grid_gradient_warp_multi(
@@ -764,6 +779,7 @@ def rectilinear_grid_gradient_warp_multi(
     periods: float | Sequence[float] | None = None,
     derivative_orders: int | Sequence[int] = 1,
     include_mixed: bool = False,
+    boundary: str = "periodic",
 ) -> torch.Tensor:
     """Compute multiple derivative families, fusing first+second when possible.
 
@@ -773,6 +789,7 @@ def rectilinear_grid_gradient_warp_multi(
     ordering and autograd behavior.
     """
     validate_field(field)
+    boundary = normalize_boundary(boundary, function_name="rectilinear_grid_gradient")
     coords_tuple, period_tuple = validate_and_normalize_coordinates(
         field=field,
         coordinates=coordinates,
@@ -796,7 +813,7 @@ def rectilinear_grid_gradient_warp_multi(
     )
 
     ### Fused no-mixed path with custom-op backward for combined first+second.
-    if not mixed_terms and requested_orders == (1, 2):
+    if boundary == "periodic" and not mixed_terms and requested_orders == (1, 2):
         if field.ndim == 1:
             fused = rectilinear_derivatives_1d_fused_no_mixed_impl(
                 field,
@@ -842,6 +859,7 @@ def rectilinear_grid_gradient_warp_multi(
                 periods=period_tuple,
                 derivative_order=derivative_order,
                 include_mixed=False,
+                boundary=boundary,
             )
         ),
     )

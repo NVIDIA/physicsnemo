@@ -17,7 +17,7 @@
 import pytest
 import torch
 
-from physicsnemo.nn.functional import rectilinear_grid_gradient
+from physicsnemo.nn.functional import rectilinear_grid_gradient, uniform_grid_gradient
 from physicsnemo.nn.functional.derivatives import RectilinearGridGradient
 from test.conftest import requires_module
 from test.nn.functional._parity_utils import clone_case
@@ -106,6 +106,75 @@ def test_rectilinear_grid_gradient_torch(device: str, dims: int, derivative_orde
     )
     atol, rtol = (6e-1, 1e-1) if derivative_order == 2 and dims == 1 else (3e-2, 3e-2)
     torch.testing.assert_close(output, expected, atol=atol, rtol=rtol)
+
+
+# Validate one-sided boundaries on nonuniform coordinates and uniform-grid parity.
+@pytest.mark.parametrize("derivative_order", [1, 2])
+def test_rectilinear_grid_gradient_one_sided_analytic(
+    device: str, derivative_order: int
+):
+    x = torch.tensor(
+        [-1.0, -0.82, -0.55, -0.1, 0.35, 0.7, 1.0],
+        device=device,
+        dtype=torch.float32,
+    )
+    field = x.square()
+    expected = 2.0 * x if derivative_order == 1 else torch.full_like(x, 2.0)
+    output = RectilinearGridGradient.dispatch(
+        field,
+        (x,),
+        derivative_orders=derivative_order,
+        boundary="one_sided",
+        implementation="torch",
+    )
+    torch.testing.assert_close(output[0], expected, atol=2e-5, rtol=2e-5)
+
+    uniform_x = torch.linspace(-1.0, 1.0, 9, device=device)
+    uniform_field = uniform_x.square()
+    rect_output = rectilinear_grid_gradient(
+        uniform_field,
+        (uniform_x,),
+        derivative_orders=derivative_order,
+        boundary="one_sided",
+        implementation="torch",
+    )
+    uniform_output = uniform_grid_gradient(
+        uniform_field,
+        spacing=float(uniform_x[1] - uniform_x[0]),
+        derivative_orders=derivative_order,
+        boundary="one_sided",
+        implementation="torch",
+    )
+    torch.testing.assert_close(rect_output, uniform_output, atol=2e-5, rtol=2e-5)
+
+
+# Validate one-sided Warp forward and backward paths against torch.
+@requires_module("warp")
+def test_rectilinear_grid_gradient_one_sided_backend_parity(device: str):
+    x = torch.tensor(
+        [0.0, 0.12, 0.31, 0.57, 0.76, 1.0], device=device, dtype=torch.float32
+    )
+    y = torch.tensor([-0.5, -0.2, 0.15, 0.6, 1.1], device=device, dtype=torch.float32)
+    field_torch = torch.randn(6, 5, device=device, requires_grad=True)
+    field_warp = field_torch.detach().clone().requires_grad_(True)
+    kwargs = {
+        "coordinates": (x, y),
+        "derivative_orders": (1, 2),
+        "boundary": "one_sided",
+    }
+
+    out_torch = RectilinearGridGradient.dispatch(
+        field_torch, implementation="torch", **kwargs
+    )
+    out_warp = RectilinearGridGradient.dispatch(
+        field_warp, implementation="warp", **kwargs
+    )
+    torch.testing.assert_close(out_warp, out_torch, atol=1e-4, rtol=1e-4)
+
+    grad_seed = torch.randn_like(out_torch)
+    grad_torch = torch.autograd.grad(out_torch, field_torch, grad_seed)[0]
+    grad_warp = torch.autograd.grad(out_warp, field_warp, grad_seed)[0]
+    torch.testing.assert_close(grad_warp, grad_torch, atol=1e-4, rtol=1e-4)
 
 
 # Validate unified derivative-order requests concatenate outputs deterministically.
@@ -398,6 +467,15 @@ def test_rectilinear_grid_gradient_error_handling(device: str):
 
     output = rectilinear_grid_gradient(field, (x.to(torch.float32),), periods=1.0)
     assert output.shape == (1, 16)
+
+    with pytest.raises(ValueError, match="boundary must be"):
+        RectilinearGridGradient.dispatch(
+            field,
+            (x.to(torch.float32),),
+            periods=1.0,
+            boundary="reflect",
+            implementation="torch",
+        )
 
     with pytest.raises(ValueError, match="supports 1D-3D fields"):
         RectilinearGridGradient.dispatch(
