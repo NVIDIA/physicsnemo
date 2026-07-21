@@ -581,6 +581,25 @@ def _resolve_manifest_indices_from_spec(
     return train_indices, val_indices
 
 
+def _require_single_manifest_dataset(using_manifests: bool, n_datasets: int) -> None:
+    """Reject manifest sampling against a combined dataset.
+
+    Manifest indices are local to each dataset, but the sampler receives
+    the concatenated dataset. Multiple manifest datasets overwrite the
+    single stored index pair, while a manifest/directory mix either omits
+    the directory dataset or indexes the wrong dataset. Until indices are
+    accumulated with per-dataset offsets, manifest mode requires exactly
+    one dataset.
+    """
+    if using_manifests and n_datasets > 1:
+        raise NotImplementedError(
+            "multi-dataset manifest mode is not implemented: manifest "
+            "train/val indices are local to one dataset but would be applied "
+            "to the combined dataset. Use a single manifest dataset, or "
+            "directory mode for multi-dataset training."
+        )
+
+
 def _build_manifest_val_dataset(
     ds_yaml: DictConfig,
     *,
@@ -750,18 +769,13 @@ def build_dataloaders(
     directory (mirroring directory mode); otherwise it shares the train
     dataset.
 
-    NOTE (limitation): only ONE chosen dataset may carry a manifest
-    today. If both ``cfg.dataset`` and an entry in ``cfg.extra_datasets``
-    are manifest-mode, the later one silently overwrites the earlier's
-    indices and the resulting :class:`ManifestSampler` is indexed
-    against the last reader's local positions rather than the
-    :class:`MultiDataset`'s concatenated positions. The current
-    multi-dataset recipe (Transolver + DrivAerML + SHIFT SUV) sidesteps
-    this because the SHIFT SUV datasets are directory-mode (no
-    manifest). Lifting this limitation requires walking
-    ``(offset, indices)`` pairs and building a single sampler over
-    offset-shifted indices against the :class:`MultiDataset`. Tracked
-    as a follow-up.
+    NOTE (limitation): manifest mode currently supports exactly one
+    chosen dataset. Combining a manifest dataset with any additional
+    dataset, whether manifest- or directory-based, would apply local
+    indices to a :class:`MultiDataset` without the required offsets (and
+    multiple manifest datasets also overwrite the single stored index
+    pair). Lifting this limitation requires accumulating offset-shifted
+    indices for every dataset.
     """
     recipe_root = Path(__file__).resolve().parent.parent
     batch_size = cfg.training.get("batch_size", 1)
@@ -887,9 +901,6 @@ def build_dataloaders(
                 pin_memory=pin_memory,
             )
             train_datasets.append(dataset)
-            ### NOTE: this overwrites any prior manifest dataset's indices
-            ### (and the val dataset below); see the docstring's
-            ### multi-dataset limitation note.
             manifest_train_indices, manifest_val_indices = (
                 _resolve_manifest_indices_from_spec(dataset.reader, manifest_spec)
             )
@@ -929,6 +940,8 @@ def build_dataloaders(
                     pin_memory=pin_memory,
                 )
             )
+
+    _require_single_manifest_dataset(using_manifests, len(train_datasets))
 
     if not train_datasets:
         raise RuntimeError(

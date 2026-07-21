@@ -30,19 +30,20 @@ import logging
 from pathlib import Path
 from types import SimpleNamespace
 
+import datasets as datasets_module
 import pytest
-from omegaconf import DictConfig, OmegaConf
-
 from datasets import (
     ManifestSampler,
     _build_manifest_val_dataset,
+    _require_single_manifest_dataset,
+    build_dataloaders,
     build_dataset,
     load_manifest,
     resolve_manifest_indices,
     resolve_manifest_spec,
     validate_dataset_consistency,
 )
-
+from omegaconf import DictConfig, OmegaConf
 
 ### ---------------------------------------------------------------------------
 ### load_manifest
@@ -481,3 +482,60 @@ class TestManifestValDataset:
         assert not any(getattr(t, "stochastic", False) for t in val_ds.transforms)
         ### ...but the deterministic CenterMesh transform is still present.
         assert any(type(t).__name__ == "CenterMesh" for t in val_ds.transforms)
+
+
+class TestMultiDatasetManifestGuard:
+    """Manifest indices must never be applied to a combined dataset."""
+
+    def test_single_manifest_or_multiple_directory_datasets_pass(self):
+        """Single-manifest and pure directory configurations remain valid."""
+        _require_single_manifest_dataset(True, 1)
+        _require_single_manifest_dataset(False, 3)
+
+    def test_build_dataloaders_rejects_mixed_manifest_and_directory_mode(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The assembled loader rejects local indices on a combined dataset."""
+        roots = [tmp_path / name for name in ("manifest", "directory", "directory_val")]
+        for root in roots:
+            root.mkdir()
+            TestManifestValDataset._make_datadir(root)
+        manifest_root, directory_root, directory_val_root = roots
+        train_manifest = tmp_path / "train.txt"
+        train_manifest.write_text("run_0\n")
+        configs = {
+            "drivaer_ml_surface": OmegaConf.merge(
+                TestManifestValDataset._augmented_ds_yaml(manifest_root),
+                {"train_manifest": str(train_manifest)},
+            ),
+            "shift_suv_estate_surface": OmegaConf.merge(
+                TestManifestValDataset._augmented_ds_yaml(directory_root),
+                {"val_datadir": str(directory_val_root)},
+            ),
+        }
+
+        monkeypatch.setattr(
+            datasets_module,
+            "load_dataset_config",
+            lambda path: configs[path.stem],
+        )
+        monkeypatch.setattr(
+            datasets_module,
+            "DistributedManager",
+            lambda: SimpleNamespace(world_size=1, rank=0),
+        )
+        cfg = OmegaConf.create(
+            {
+                "dataset": "drivaer_ml_surface",
+                "extra_datasets": ["shift_suv_estate_surface"],
+                "train_split": None,
+                "val_split": None,
+                "augment": False,
+                "sampling_resolution": None,
+                "training": {"batch_size": 1, "seed": 0},
+                "dataloader": {"num_workers": 1, "pin_memory": False},
+            }
+        )
+
+        with pytest.raises(NotImplementedError, match="multi-dataset manifest mode"):
+            build_dataloaders(cfg)
