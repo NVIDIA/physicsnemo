@@ -14,4 +14,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""FP-DDM components for the PhysicsNeMo thermal example."""
+"""FP-DDM components for the PhysicsNeMo thermal and elasticity examples."""

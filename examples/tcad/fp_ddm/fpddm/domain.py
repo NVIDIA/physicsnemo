@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Domain, field, and overlap data structures for thermal FP-DDM."""
+"""Domain, field, and overlap data structures for FP-DDM."""
 
 from __future__ import annotations
 
@@ -24,7 +24,13 @@ from enum import Enum, auto
 import torch
 import torch.nn.functional as F
 
-from .data import make_layout_fields
+
+def make_layout_fields(config):
+    """Load the optional synthetic-layout dependency only for thermal runs."""
+
+    from .data import make_layout_fields as build_fields
+
+    return build_fields(config)
 
 
 class MaskKind(Enum):
@@ -57,12 +63,16 @@ DIRECTIONS = tuple(Direction)
 
 
 class Fields(Enum):
-    """Thermal fields stored on the global domain and each subdomain."""
+    """Fields stored on the global domain and each subdomain."""
 
     TEMPERATURE = auto()
     CONDUCTIVITY = auto()
     HEAT_SOURCE = auto()
     TEMPERATURE_BC = auto()
+    DISPLACEMENT = auto()
+    YOUNG_MODULUS = auto()
+    POISSON_RATIO = auto()
+    DISPLACEMENT_BC = auto()
 
 
 INPUT_FIELDS = (Fields.CONDUCTIVITY, Fields.TEMPERATURE_BC, Fields.HEAT_SOURCE)
@@ -82,14 +92,14 @@ def _tile_slices(
 
 def _crop(value, y_slice: slice, x_slice: slice):
     if torch.is_tensor(value):
-        return value[y_slice, x_slice].clone()
+        return value[..., y_slice, x_slice].clone()
     if isinstance(value, dict):
         return {key: _crop(item, y_slice, x_slice) for key, item in value.items()}
     return value
 
 
 class Subdomain:
-    """One overlapping rectangular patch in a decomposed thermal domain."""
+    """One overlapping rectangular patch in a decomposed domain."""
 
     def __init__(
         self, row: int, column: int, width: int, height: int, overlap: int
@@ -110,17 +120,51 @@ class Subdomain:
 
         full = slice(None)
         self.boundary_slices = {
-            Direction.LEFT: (full, 0),
-            Direction.RIGHT: (full, -1),
-            Direction.TOP: (0, full),
-            Direction.BOTTOM: (-1, full),
+            Direction.LEFT: (..., full, 0),
+            Direction.RIGHT: (..., full, -1),
+            Direction.TOP: (..., 0, full),
+            Direction.BOTTOM: (..., -1, full),
         }
         self.overlap_slices = {
-            Direction.LEFT: (full, overlap - 1),
-            Direction.RIGHT: (full, -overlap),
-            Direction.TOP: (overlap - 1, full),
-            Direction.BOTTOM: (-overlap, full),
+            Direction.LEFT: (..., full, overlap - 1),
+            Direction.RIGHT: (..., full, -overlap),
+            Direction.TOP: (..., overlap - 1, full),
+            Direction.BOTTOM: (..., -overlap, full),
         }
+
+    def boundary_slice(self, direction: Direction, depth: int = 1) -> tuple:
+        """Return the outer ``depth`` grid layers in ``direction``."""
+
+        if depth < 1 or depth > self.overlap:
+            raise ValueError("boundary depth must be between one and the overlap")
+        if depth == 1:
+            return self.boundary_slices[direction]
+        full = slice(None)
+        edge = (
+            slice(0, depth)
+            if direction in {Direction.LEFT, Direction.TOP}
+            else slice(-depth, None)
+        )
+        if direction in {Direction.LEFT, Direction.RIGHT}:
+            return (..., full, edge)
+        return (..., edge, full)
+
+    def overlap_slice(self, direction: Direction, depth: int = 1) -> tuple:
+        """Return matching layers inside an overlapping neighbor."""
+
+        if depth < 1 or depth > self.overlap:
+            raise ValueError("boundary depth must be between one and the overlap")
+        if depth == 1:
+            return self.overlap_slices[direction]
+        full = slice(None)
+        if direction in {Direction.LEFT, Direction.TOP}:
+            edge = slice(self.overlap - depth, self.overlap)
+        else:
+            stop = -self.overlap + depth
+            edge = slice(-self.overlap, stop if stop else None)
+        if direction in {Direction.LEFT, Direction.RIGHT}:
+            return (..., full, edge)
+        return (..., edge, full)
 
     def __repr__(self) -> str:
         """Return a compact grid-coordinate representation."""
@@ -129,7 +173,7 @@ class Subdomain:
 
 
 class Domain:
-    """Global thermal domain partitioned into overlapping rectangular patches."""
+    """Global domain partitioned into overlapping rectangular patches."""
 
     def __init__(
         self, rows: int, columns: int, width: int, height: int, overlap: int
@@ -197,7 +241,9 @@ def assemble_avg(grid: list[list[Subdomain]], field: Fields) -> torch.Tensor:
     total_width = (columns - 1) * (first.width - first.overlap) + first.width
     sample = first.fields[field]
     accumulated = torch.zeros(
-        (total_height, total_width), device=sample.device, dtype=sample.dtype
+        (*sample.shape[:-2], total_height, total_width),
+        device=sample.device,
+        dtype=sample.dtype,
     )
     counts = torch.zeros(
         (total_height, total_width), device=sample.device, dtype=torch.int32
@@ -207,7 +253,7 @@ def assemble_avg(grid: list[list[Subdomain]], field: Fields) -> torch.Tensor:
             y_slice, x_slice = _tile_slices(
                 row, column, first.width, first.height, first.overlap
             )
-            accumulated[y_slice, x_slice] += grid[row][column].fields[field]
+            accumulated[..., y_slice, x_slice] += grid[row][column].fields[field]
             counts[y_slice, x_slice] += 1
     return accumulated / counts.clamp_min_(1)
 

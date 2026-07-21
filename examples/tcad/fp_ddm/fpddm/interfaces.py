@@ -23,23 +23,28 @@ import torch
 from .domain import DIRECTIONS, Fields, Subdomain
 
 
-def _zero_interior(values: torch.Tensor) -> None:
+def _zero_interior(values: torch.Tensor, depth: int = 1) -> None:
     with torch.no_grad():
-        values[..., 1:-1, 1:-1] = 0.0
+        values[..., depth:-depth, depth:-depth] = 0.0
 
 
-def _domain_interface_mse(subdomain: Subdomain) -> torch.Tensor:
-    temperature_bc = subdomain.fields[Fields.TEMPERATURE_BC]
-    squared_error = temperature_bc.new_tensor(0.0)
+def _domain_interface_mse(
+    subdomain: Subdomain,
+    solution_field: Fields = Fields.TEMPERATURE,
+    boundary_field: Fields = Fields.TEMPERATURE_BC,
+    boundary_depth: int = 1,
+) -> torch.Tensor:
+    boundary = subdomain.fields[boundary_field]
+    squared_error = boundary.new_tensor(0.0)
     count = 0
     for direction in DIRECTIONS:
         neighbor = subdomain.neighbors[direction]
         if neighbor is None:
             continue
-        current = temperature_bc[subdomain.boundary_slices[direction]]
+        current = boundary[subdomain.boundary_slice(direction, boundary_depth)]
         target = (
-            neighbor.fields[Fields.TEMPERATURE][
-                neighbor.overlap_slices[direction.opposite()]
+            neighbor.fields[solution_field][
+                neighbor.overlap_slice(direction.opposite(), boundary_depth)
             ]
             .detach()
             .to(current.device)
@@ -197,30 +202,50 @@ class ParallelGradientInterfaceHandler:
 class ExchangeInterfaceHandler:
     """Copy neighboring overlap values directly onto subdomain boundaries."""
 
-    def __init__(self, alpha: float = 1.0) -> None:
+    def __init__(
+        self,
+        alpha: float = 1.0,
+        *,
+        solution_field: Fields = Fields.TEMPERATURE,
+        boundary_field: Fields = Fields.TEMPERATURE_BC,
+        boundary_depth: int = 1,
+    ) -> None:
         """Set the relaxation fraction used for each boundary exchange."""
 
         self.alpha = alpha
+        self.solution_field = solution_field
+        self.boundary_field = boundary_field
+        self.boundary_depth = boundary_depth
         self.total_loss = 0.0
 
     @torch.no_grad()
     def __call__(self, subdomains: list[Subdomain]) -> None:
         """Apply one relaxed Dirichlet exchange step."""
 
-        losses = [_domain_interface_mse(subdomain).sqrt() for subdomain in subdomains]
+        losses = [
+            _domain_interface_mse(
+                subdomain,
+                self.solution_field,
+                self.boundary_field,
+                self.boundary_depth,
+            ).sqrt()
+            for subdomain in subdomains
+        ]
         self.total_loss = float(torch.stack(losses).mean()) if losses else 0.0
         for subdomain in subdomains:
-            temperature_bc = subdomain.fields[Fields.TEMPERATURE_BC]
+            boundary = subdomain.fields[self.boundary_field]
             for direction in DIRECTIONS:
                 neighbor = subdomain.neighbors[direction]
                 if neighbor is None:
                     continue
-                current = temperature_bc[subdomain.boundary_slices[direction]]
-                target = neighbor.fields[Fields.TEMPERATURE][
-                    neighbor.overlap_slices[direction.opposite()]
+                current = boundary[
+                    subdomain.boundary_slice(direction, self.boundary_depth)
+                ]
+                target = neighbor.fields[self.solution_field][
+                    neighbor.overlap_slice(direction.opposite(), self.boundary_depth)
                 ].to(current.device)
                 current.lerp_(target, self.alpha)
-            _zero_interior(temperature_bc)
+            _zero_interior(boundary, self.boundary_depth)
 
     def get_metric(self) -> tuple[str, float]:
         """Return the mean interface RMSE before the latest exchange."""

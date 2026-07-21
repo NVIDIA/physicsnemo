@@ -1,4 +1,4 @@
-# FP-DDM Thermal Domain Decomposition
+# FP-DDM Thermal and Elasticity Domain Decomposition
 
 FP-DDM (Foundation-model-based Physics-guided adaptation for the Domain
 Decomposition Method) is a scalable framework for large-domain multi-physics
@@ -51,7 +51,7 @@ pip install -r examples/tcad/fp_ddm/requirements.txt
 ```
 
 SciPy and OpenSimplex provide the smooth synthetic material layouts. Matplotlib
-and ImageIO are only needed when `run.visualize=true`.
+and ImageIO are only needed for visual output.
 
 ## Train The FNO
 
@@ -117,6 +117,25 @@ images, iteration series, and MP4 animations.
 The overlap RMSE is the stopping metric. Reaching `max_iterations` is an
 iteration-budget limit, not convergence.
 
+## Run the Elasticity Comparison
+
+The elasticity example solves a two-dimensional plane-stress bending problem
+using numerical local patch solves. It compares a 2 x 2 overlapping DDM result
+with a monolithic solve using the same matrix-free elasticity operator:
+
+```bash
+python examples/tcad/fp_ddm/run_elasticity.py
+```
+
+The command prints relative displacement and stress errors and writes
+`outputs/fp_ddm/elasticity/elasticity_comparison.png`. The plot shows the
+monolithic result, the numerical DDM result, and their absolute difference for both
+displacement magnitude and von Mises stress. Use `--no-plot` when only the
+numerical comparison is needed.
+
+This is the numerical elasticity baseline for the FP-DDM workflow. It does not
+train or use an elasticity FNO, so it is not a neural FP-DDM result.
+
 ## Configuration
 
 The main configuration groups are:
@@ -142,16 +161,17 @@ reference metrics; disable them explicitly with `run.ground_truth=false`.
 Run the focused tests from the repository root:
 
 ```bash
-pytest -q test/examples/test_fp_ddm.py
+pytest -q test/examples/test_fp_ddm.py test/examples/test_fp_ddm_elasticity.py
 ```
 
 The automated tests cover data orientation, the source term, FNO output and
 boundary behavior, mixed-convergence finite-volume batches, interface exchange,
 PhysicsNeMo checkpoint round trips, test-time adaptation state restoration, and
-an end-to-end Schwarz run.
+an end-to-end thermal Schwarz run. The elasticity tests cover the plane-stress
+operator, batched local solves, and the decomposed-to-monolithic comparison.
 
 This is a research example of the FP-DDM algorithm, not a validated
-production-scale thermal simulator. A smoke checkpoint only verifies execution.
+production-scale simulator. A smoke checkpoint only verifies execution.
 Neural-solver accuracy must be established with a sustained training run and
 reported together with its exact configuration. Scaling to very large global
 problems requires distributed ownership of subdomains and interfaces; this
