@@ -64,7 +64,7 @@ unused vertices. Small targets use farthest-point initialization for mesh
 quality. Large targets use a linearithmic spatially stratified initializer to
 avoid quadratic setup cost.
 
-.. image:: /img/mesh/remeshing_comparison.png
+.. image:: ../../img/mesh/remeshing_comparison.png
    :alt: Dense Stanford bunny beside its Warp-remeshed result
    :align: center
    :width: 72%
@@ -94,7 +94,7 @@ Server Edition MIG 1g.24GB partition using Warp 1.14.0. Absolute timings depend
 on hardware and software versions. Use the ASV benchmark above for measurements
 in another environment.
 
-.. image:: /img/mesh/remeshing_performance.png
+.. image:: ../../img/mesh/remeshing_performance.png
    :alt: GPU remeshing runtime plot across increasing input sizes
    :align: center
    :width: 65%
