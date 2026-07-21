@@ -152,7 +152,7 @@ multiple-control examples above. Green markers identify the displaced handle
 locations, while arrows and labels show the prescribed displacement directions
 and magnitudes.
 
-.. figure:: /img/mesh/sphere_morphing.png
+.. figure:: ../../img/mesh/sphere_morphing.png
    :alt: Original sphere and single-control and multiple-control sphere morphing
    :width: 100%
 
@@ -214,7 +214,7 @@ Bernstein lattice tapers the whole sphere because every node acts globally,
 while three independently displaced regions in a finer cubic B-spline lattice
 produce two local bulges and a local indentation.
 
-.. figure:: /img/mesh/sphere_ffd.png
+.. figure:: ../../img/mesh/sphere_ffd.png
    :alt: Sphere with control lattice, Bernstein taper, and local B-spline sculpt
    :width: 100%
 
