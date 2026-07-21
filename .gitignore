@@ -185,8 +185,3 @@ sbatch_logs/
 
 # ASV
 .asv/
-
-# Vale: ignore synced packages, keep our custom style + vocab
-.vale/styles/*
-!.vale/styles/NVIDIA/
-!.vale/styles/config/
