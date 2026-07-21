@@ -383,10 +383,10 @@ def test_non_regression(name, builder, golden):
     # conv2d results differ across float backends. The committed goldens are
     # CPU-generated and match bit-exactly on that backend, but a different
     # torch/oneDNN build (CI) or device diverges -- measured up to ~5e-3 on a
-    # CUDA backend, ~1e-3 on a differing CPU build. 2e-3/2e-3 covers that; it is
+    # CUDA backend, ~1e-3 on a differing CPU build. 6e-3/6e-3 covers that; it is
     # float non-determinism, not a regression (a real regression shifts this
     # deep transformer's outputs by far more).
-    assert torch.allclose(y, data["y"], atol=2e-3, rtol=2e-3)
+    assert torch.allclose(y, data["y"], atol=6e-3, rtol=6e-3)
 
 
 # --------------------------------------------------------------------------- #

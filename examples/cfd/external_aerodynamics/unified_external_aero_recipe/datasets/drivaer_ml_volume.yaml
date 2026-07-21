@@ -15,11 +15,11 @@
 # limitations under the License.
 
 # DrivaerML volume dataset (DomainMesh)
-# Loads domain_*.pmsh files containing interior volume mesh + vehicle boundary + global_data.
+# Loads domain_*.pdmsh files containing interior volume mesh + vehicle boundary + global_data.
 # Interior: tetrahedral volume mesh with fields in point_data.
 # Boundary: triangulated car-body surface mesh keyed `vehicle` (curated layout).
 # global_data: freestream conditions (U_inf, rho_inf, p_inf, nu, L_ref) are
-# embedded directly in the .pmsh files and read straight out of each sample's
+# embedded directly in the .pdmsh files and read straight out of each sample's
 # global_data by NonDimensionalizeByMetadata.
 # Splits are controlled by manifest.json + train_split/val_split in the training config.
 
