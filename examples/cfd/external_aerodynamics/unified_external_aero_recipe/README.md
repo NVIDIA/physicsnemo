@@ -462,7 +462,7 @@ dataset: drivaer_ml_volume
 # Multi-dataset: list of additional datasets to combine via MultiDataset
 extra_datasets: []
 
-# Manifest-mode split selectors (no-op for directory-mode datasets)
+# Non-null selectors request manifest mode; set both to null for directory mode
 train_split: train
 val_split: val
 
@@ -686,9 +686,10 @@ file you need to edit per machine to point at your local data).
 
 ### Manifest-based data splitting
 
-DrivaerML and HiLift datasets use a `manifest.json` next to the data
-directory to define train/val/test splits. Selection is recipe-side via
-the top-level `train_split` / `val_split` keys in `train.yaml`:
+DrivaerML, HiLift, and SHIFT SUV datasets use a `manifest.json` next to
+the data directory to define train/val/test splits. Selection is
+recipe-side via the top-level `train_split` / `val_split` keys in
+`train.yaml`:
 
 ```yaml
 # in conf/train.yaml

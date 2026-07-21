@@ -35,7 +35,6 @@ import pytest
 from datasets import (
     ManifestSampler,
     _build_manifest_val_dataset,
-    _require_single_manifest_dataset,
     build_dataloaders,
     build_dataset,
     load_manifest,
@@ -487,11 +486,6 @@ class TestManifestValDataset:
 class TestMultiDatasetManifestGuard:
     """Manifest indices must never be applied to a combined dataset."""
 
-    def test_single_manifest_or_multiple_directory_datasets_pass(self):
-        """Single-manifest and pure directory configurations remain valid."""
-        _require_single_manifest_dataset(True, 1)
-        _require_single_manifest_dataset(False, 3)
-
     def test_build_dataloaders_rejects_mixed_manifest_and_directory_mode(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
@@ -532,6 +526,8 @@ class TestMultiDatasetManifestGuard:
                 "val_split": None,
                 "augment": False,
                 "sampling_resolution": None,
+                "input_type": "mesh",
+                "forward_kwargs": {"domain": ""},
                 "training": {"batch_size": 1, "seed": 0},
                 "dataloader": {"num_workers": 1, "pin_memory": False},
             }

@@ -581,25 +581,6 @@ def _resolve_manifest_indices_from_spec(
     return train_indices, val_indices
 
 
-def _require_single_manifest_dataset(using_manifests: bool, n_datasets: int) -> None:
-    """Reject manifest sampling against a combined dataset.
-
-    Manifest indices are local to each dataset, but the sampler receives
-    the concatenated dataset. Multiple manifest datasets overwrite the
-    single stored index pair, while a manifest/directory mix either omits
-    the directory dataset or indexes the wrong dataset. Until indices are
-    accumulated with per-dataset offsets, manifest mode requires exactly
-    one dataset.
-    """
-    if using_manifests and n_datasets > 1:
-        raise NotImplementedError(
-            "multi-dataset manifest mode is not implemented: manifest "
-            "train/val indices are local to one dataset but would be applied "
-            "to the combined dataset. Use a single manifest dataset, or "
-            "directory mode for multi-dataset training."
-        )
-
-
 def _build_manifest_val_dataset(
     ds_yaml: DictConfig,
     *,
@@ -941,7 +922,13 @@ def build_dataloaders(
                 )
             )
 
-    _require_single_manifest_dataset(using_manifests, len(train_datasets))
+    if using_manifests and len(train_datasets) > 1:
+        raise NotImplementedError(
+            "multi-dataset manifest mode is not implemented: manifest "
+            "train/val indices are local to one dataset but would be applied "
+            "to the combined dataset. Use a single manifest dataset, or "
+            "directory mode for multi-dataset training."
+        )
 
     if not train_datasets:
         raise RuntimeError(
