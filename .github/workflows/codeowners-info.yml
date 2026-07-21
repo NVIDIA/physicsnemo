@@ -18,7 +18,8 @@ jobs:
   report:
     if: >
       github.event_name == 'pull_request_target' ||
-      (github.event.issue.pull_request && github.event.comment.body == '/codeowners-info')
+      (github.event.issue.pull_request && github.event.comment.body == '/codeowners-info' &&
+       contains(fromJSON('["COLLABORATOR", "MEMBER", "OWNER"]'), github.event.comment.author_association))
     runs-on: ubuntu-latest
     permissions:
       contents: read
