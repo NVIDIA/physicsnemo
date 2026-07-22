@@ -14,22 +14,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Regenerate the committed ``.pmsh`` golden fixture used to lock in the
-on-disk format of :class:`physicsnemo.mesh.Mesh`.
+"""Regenerate the current ``.pmsh`` golden fixture.
 
-The companion test :mod:`test.mesh.mesh.test_pmsh_golden` loads this fixture
-and asserts every field round-trips intact, so any future change that
-quietly alters the on-disk layout (renaming a tensorclass field, dropping
-``shadow=True``, swapping the decorator for inheritance, etc.) will fail
-the test.
+The companion test keeps two fixtures:
 
-Run this script only when the ``.pmsh`` format intentionally changes:
+- ``v2.0_two_triangles.pmsh`` is immutable legacy data written by the
+  decorator-based ``Mesh`` implementation. It protects backward reads.
+- ``current_two_triangles.pmsh`` is written by the current implementation and
+  locks in the writer layout.
+
+Run this script when the current ``.pmsh`` writer intentionally changes:
 
 .. code-block:: bash
 
     uv run --no-sync python test/mesh/mesh/golden_pmsh/_regenerate.py
 
-Then commit the resulting ``v2.0_two_triangles.pmsh/`` directory tree.
+Then commit the resulting ``current_two_triangles.pmsh/`` directory tree.
+Never regenerate the legacy fixture with current code.
 """
 
 from __future__ import annotations
@@ -44,9 +45,10 @@ from physicsnemo.mesh.primitives.basic import two_triangles_2d
 
 ### Fixture identity #########################################################
 
-# Bumping this name (e.g. ``v2.1_...``) lets us keep historical fixtures
-# alongside new ones if we want to test multiple format generations at once.
-FIXTURE_DIR: Path = (Path(__file__).parent / "v2.0_two_triangles.pmsh").resolve()
+CURRENT_FIXTURE_DIR: Path = (
+    Path(__file__).parent / "current_two_triangles.pmsh"
+).resolve()
+LEGACY_FIXTURE_DIR: Path = (Path(__file__).parent / "v2.0_two_triangles.pmsh").resolve()
 
 
 def build_canonical_mesh() -> Mesh:
@@ -83,7 +85,7 @@ def build_canonical_mesh() -> Mesh:
     return mesh
 
 
-def regenerate(fixture_dir: Path = FIXTURE_DIR) -> None:
+def regenerate(fixture_dir: Path = CURRENT_FIXTURE_DIR) -> None:
     """Rebuild the on-disk fixture, replacing any prior copy.
 
     Memmap save refuses to overwrite an existing directory, so the prior

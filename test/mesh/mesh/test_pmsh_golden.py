@@ -14,24 +14,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Cross-version compatibility test for the ``.pmsh`` (memmap) format.
+"""Writer-layout and backward-read tests for the ``.pmsh`` memmap format.
 
-The committed fixture under ``golden_pmsh/`` was written by an earlier
-revision of :class:`~physicsnemo.mesh.Mesh`. This test loads it with the
-*current* code and asserts that every field round-trips intact. Any change
-that quietly alters the on-disk layout (renaming a tensorclass field,
-dropping ``shadow=True``, swapping the decorator for ``TensorClass``
-inheritance, changing the underlying ``tensordict`` memmap convention, etc.)
-will fail this test.
+``golden_pmsh/`` contains an immutable decorator-era fixture and a fixture
+written by the current ``TensorClass`` implementation. Both must reconstruct
+an exact :class:`~physicsnemo.mesh.Mesh`; the current fixture also serves as a
+golden manifest for the writer layout.
 
-To intentionally update the format, run
+To intentionally update the current writer layout, run
 ``test/mesh/mesh/golden_pmsh/_regenerate.py`` and commit the new fixture
-(or a fresh ``v<N.M>_...`` sibling, to keep older fixtures around).
+without replacing the legacy fixture.
 """
 
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -56,29 +54,46 @@ assert _spec is not None and _spec.loader is not None
 _regen = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_regen)
 build_canonical_mesh = _regen.build_canonical_mesh
-FIXTURE_DIR: Path = _regen.FIXTURE_DIR
+CURRENT_FIXTURE_DIR: Path = _regen.CURRENT_FIXTURE_DIR
+LEGACY_FIXTURE_DIR: Path = _regen.LEGACY_FIXTURE_DIR
 
 
-pytestmark = pytest.mark.skipif(
-    not FIXTURE_DIR.exists(),
-    reason=(
-        f"Golden .pmsh fixture not found at {FIXTURE_DIR}; "
-        f"run {_REGEN_PATH} to (re)generate it."
-    ),
+def _serialization_manifest(root: Path) -> dict[str, object]:
+    """Describe paths and metadata while ignoring tensor payload bytes."""
+    manifest: dict[str, object] = {}
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        if path.is_dir():
+            manifest[f"{relative}/"] = None
+        elif path.name == "meta.json":
+            manifest[relative] = json.loads(path.read_text())
+        else:
+            manifest[relative] = path.stat().st_size
+    return manifest
+
+
+@pytest.fixture(
+    params=(CURRENT_FIXTURE_DIR, LEGACY_FIXTURE_DIR),
+    ids=("current-tensorclass", "legacy-decorator"),
 )
+def fixture_dir(request: pytest.FixtureRequest) -> Path:
+    """Return each committed layout, failing clearly if one was removed."""
+    path: Path = request.param
+    assert path.is_dir(), f"Missing committed .pmsh fixture: {path}"
+    return path
 
 
 class TestPmshGoldenFixture:
     """Load a committed ``.pmsh`` fixture and verify field-by-field equality."""
 
-    def test_loads_without_error(self):
-        """The fixture deserializes into a `Mesh` instance."""
-        loaded = Mesh.load(FIXTURE_DIR)
-        assert isinstance(loaded, Mesh)
+    def test_reconstructs_exact_mesh_type(self, fixture_dir: Path):
+        """Both layouts reconstruct the structured type, not a TensorDict."""
+        loaded = Mesh.load(fixture_dir)
+        assert type(loaded) is Mesh
 
-    def test_geometry_matches(self):
+    def test_geometry_matches(self, fixture_dir: Path):
         """`points` and `cells` round-trip exactly."""
-        loaded = Mesh.load(FIXTURE_DIR)
+        loaded = Mesh.load(fixture_dir)
         expected = build_canonical_mesh()
         assert loaded.n_points == expected.n_points
         assert loaded.n_cells == expected.n_cells
@@ -87,9 +102,9 @@ class TestPmshGoldenFixture:
         assert torch.equal(loaded.points, expected.points)
         assert torch.equal(loaded.cells, expected.cells)
 
-    def test_data_fields_match(self):
+    def test_data_fields_match(self, fixture_dir: Path):
         """Every key in `point_data`, `cell_data`, `global_data` round-trips exactly."""
-        loaded = Mesh.load(FIXTURE_DIR)
+        loaded = Mesh.load(fixture_dir)
         expected = build_canonical_mesh()
         for field in ("point_data", "cell_data", "global_data"):
             loaded_td = getattr(loaded, field)
@@ -103,3 +118,11 @@ class TestPmshGoldenFixture:
                 assert torch.equal(loaded_td[key], expected_td[key]), (
                     f"{field}[{key!r}] value mismatch after load"
                 )
+
+    def test_current_writer_layout_matches_fixture(self, tmp_path: Path):
+        """A fresh save has the committed current directory and metadata layout."""
+        written = tmp_path / "current.pmsh"
+        build_canonical_mesh().save(written)
+        assert _serialization_manifest(written) == _serialization_manifest(
+            CURRENT_FIXTURE_DIR
+        )
