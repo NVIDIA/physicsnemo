@@ -3772,22 +3772,33 @@ class Mesh:
         )
         return cleaned
 
-    def strip_caches(self) -> "Mesh":
-        r"""Return a new mesh with all cached values removed.
+    def strip_caches(
+        self,
+        keep: Sequence[str | tuple[str, ...]] = (),
+    ) -> "Mesh":
+        r"""Return a new mesh with cached values removed.
 
         Cached values (stored under the ``_cache`` key in data TensorDicts) are
         computed lazily for expensive operations like normals, areas, and curvature.
-        This method creates a new mesh without these cached values, which is useful
-        for:
+        This method creates a new mesh without these cached values, except for keys
+        explicitly listed in ``keep``. This is useful for:
 
         - Accurate benchmarking (prevents false performance benefits from caching)
         - Reducing memory usage
         - Forcing recomputation of cached values
 
+        Parameters
+        ----------
+        keep : sequence of str or tuple[str, ...], optional
+            Cache keys to retain. Strings select a complete top-level cache such as
+            ``"topology"``; tuples select a nested entry such as
+            ``("cell", "areas")``. Missing keys are ignored.
+
         Returns
         -------
         Mesh
-            A new mesh with the same geometry and data, but without cached values.
+            A new mesh with the same geometry and data, retaining only the requested
+            cached values.
 
         Examples
         --------
@@ -3795,13 +3806,29 @@ class Mesh:
         >>> mesh = sphere_icosahedral.load(subdivisions=2)
         >>> _ = mesh.cell_normals  # Triggers caching
         >>> mesh_clean = mesh.strip_caches()  # Remove cached normals
+        >>> mesh_with_areas = mesh.strip_caches(keep=[("cell", "areas")])
         """
+        cache = self._cache.select(*keep, strict=False)
+        device = self.points.device
+        for category, batch_size in (
+            ("cell", torch.Size([self.n_cells])),
+            ("point", torch.Size([self.n_points])),
+            ("topology", torch.Size([])),
+        ):
+            if category not in cache:
+                cache[category] = TensorDict(
+                    {},
+                    batch_size=batch_size,
+                    device=device,
+                )
+
         return Mesh(
             points=self.points,
             cells=self.cells,
             point_data=self.point_data,
             cell_data=self.cell_data,
             global_data=self.global_data,
+            _cache=cache,
         )
 
 
