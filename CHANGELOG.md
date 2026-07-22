@@ -248,9 +248,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `None` sentinel that masquerades as "no self-intersections found".
 - `Mesh.strip_caches` and `DomainMesh.strip_caches` now accept a `keep`
   argument for retaining selected cache entries while clearing the rest.
-  `Mesh.with_points` provides cache-aware coordinate replacement for operations
-  that preserve point indexing and connectivity, while data-only mesh transforms
-  now preserve valid geometry and topology caches through `Mesh.with_data`.
+  `Mesh.with_points` and `Mesh.with_cells` provide cache-aware coordinate and
+  connectivity replacement for operations that preserve point or cell indexing,
+  while data-only mesh transforms now preserve valid geometry and topology caches
+  through `Mesh.with_data`.
 - Performance improvements in the diffusion module: reduced peak memory of
   DPS-guided diffusion sampling most notably for multi-diffusion at large
   domains. A guided `sample()` loop run under `torch.no_grad()` now detaches the

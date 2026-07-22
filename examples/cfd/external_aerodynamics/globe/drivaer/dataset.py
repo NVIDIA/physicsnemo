@@ -108,7 +108,7 @@ def create_domain_boundaries(
             target_n_spatial_dims=3,
         ).translate([0.0, 0.0, ground_z])
         # Flip cell winding so normals point upward (+z, into the fluid domain)
-        return Mesh(points=mesh.points, cells=mesh.cells[:, [0, 2, 1]])
+        return mesh.with_cells(mesh.cells[:, [0, 2, 1]])
 
     return {
         "slip_floor": _ground_patch(x_upstream, x_bl),

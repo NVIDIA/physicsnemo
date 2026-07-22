@@ -350,3 +350,90 @@ class TestWithPoints:
 
         assert "derived" not in mesh.point_data
         assert mesh._cache.get(("topology", "derived"), None) is None
+
+
+class TestWithCells:
+    """Tests for cache-aware cell-connectivity replacement."""
+
+    @staticmethod
+    def _cached_triangle() -> Mesh:
+        mesh = Mesh(
+            points=torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+            cells=torch.tensor([[0, 1, 2]]),
+            point_data={"value": torch.arange(3)},
+            cell_data={"region": torch.ones(1)},
+            global_data={"case": torch.tensor(4)},
+        )
+        _ = mesh.cell_areas
+        _ = mesh.cell_normals
+        mesh._cache["topology", "sentinel"] = torch.tensor(7)
+        return mesh
+
+    def test_replaces_cells_and_clears_caches_by_default(self):
+        mesh = self._cached_triangle()
+        cells = mesh.cells[:, [0, 2, 1]]
+
+        updated = mesh.with_cells(cells)
+
+        torch.testing.assert_close(updated.points, mesh.points)
+        torch.testing.assert_close(updated.cells, cells)
+        torch.testing.assert_close(
+            updated.point_data["value"], mesh.point_data["value"]
+        )
+        torch.testing.assert_close(
+            updated.cell_data["region"], mesh.cell_data["region"]
+        )
+        torch.testing.assert_close(
+            updated.global_data["case"], mesh.global_data["case"]
+        )
+        assert not updated._cache["cell"].keys()
+        assert not updated._cache["point"].keys()
+        assert not updated._cache["topology"].keys()
+        torch.testing.assert_close(updated.cell_normals, -mesh.cell_normals)
+
+    def test_keep_can_retain_selected_cache(self):
+        mesh = self._cached_triangle()
+
+        updated = mesh.with_cells(
+            mesh.cells[:, [0, 2, 1]],
+            keep=[("cell", "areas")],
+        )
+
+        torch.testing.assert_close(updated._cache["cell", "areas"], mesh.cell_areas)
+        assert updated._cache.get(("cell", "normals"), None) is None
+        assert updated._cache.get(("topology", "sentinel"), None) is None
+
+    def test_rejects_changed_cell_count(self):
+        mesh = self._cached_triangle()
+
+        with pytest.raises(ValueError, match="must preserve cell indexing"):
+            mesh.with_cells(mesh.cells[:0])
+
+    def test_rejects_changed_simplex_type(self):
+        mesh = self._cached_triangle()
+        tetrahedra = torch.cat([mesh.cells, mesh.cells[:, :1]], dim=1)
+
+        with pytest.raises(ValueError, match="simplex type"):
+            mesh.with_cells(tetrahedra)
+
+    def test_rejects_non_matrix_cells(self):
+        mesh = self._cached_triangle()
+
+        with pytest.raises(ValueError, match="replacement connectivity with shape"):
+            mesh.with_cells(mesh.cells[0])
+
+    def test_rejects_floating_point_cells(self):
+        mesh = self._cached_triangle()
+
+        with pytest.raises(TypeError, match="int-like dtype"):
+            mesh.with_cells(mesh.cells.to(torch.float32))
+
+    def test_result_containers_are_independent(self):
+        mesh = self._cached_triangle()
+
+        updated = mesh.with_cells(mesh.cells.clone())
+        updated.cell_data["derived"] = torch.zeros(mesh.n_cells)
+        updated._cache["cell", "derived"] = torch.zeros(mesh.n_cells)
+
+        assert "derived" not in mesh.cell_data
+        assert mesh._cache.get(("cell", "derived"), None) is None
