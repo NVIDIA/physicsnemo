@@ -200,6 +200,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `physicsnemo.mesh.Mesh` and `DomainMesh` now inherit directly from
+  `TensorClass`, use the resulting root-level `.pmsh` / `.pdmsh` layout, and
+  continue to load decorator-era serialized data. Mesh convenience methods now
+  reuse their canonical function objects, and `strip_caches` accepts a `keep`
+  argument for retaining selected cache entries.
 - Optimizes the production container build by consolidating related filesystem
   operations, using BuildKit bind and cache mounts, and separating custom,
   declared, and project dependency installation. Reduces total physicsnemo layers
@@ -282,6 +287,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Weighted sampling without replacement now uses one exact, chunked
+  exponential-race implementation across datapipes, DoMINO, and remeshing. This
+  removes the `torch.multinomial` `2^24` category limit and fixes
+  incorrect chunk-local indices and biased per-chunk quotas in DoMINO.
 - Unified external aerodynamics recipe: the aggregate metrics reported for
   vector fields under the bare field name (e.g. `wss_l2`, likewise `_l1` /
   `_mae`) were computed on per-point vector magnitudes, so direction errors
