@@ -25,6 +25,8 @@ from physicsnemo.datapipes.transforms import (
     SubsamplePoints,
     poisson_sample_indices_fixed,
 )
+from physicsnemo.datapipes.transforms.subsample import shuffle_array
+from physicsnemo.utils import _weighted_sampling
 
 
 @pytest.mark.parametrize("replacement", [False, True])
@@ -211,6 +213,26 @@ def test_subsample_points_weighted():
 
     assert result["surface_coords"].shape == (100, 3)
     assert result["surface_fields"].shape == (100, 2)
+
+
+def test_weighted_shuffle_uses_uncapped_sampler(monkeypatch):
+    def reject_multinomial(*args, **kwargs):
+        raise AssertionError("torch.multinomial must not be used")
+
+    monkeypatch.setattr(torch, "multinomial", reject_multinomial)
+    monkeypatch.setattr(_weighted_sampling, "_WEIGHTED_SAMPLE_CHUNK_SIZE", 4)
+    points = torch.arange(6).unsqueeze(-1)
+    weights = torch.tensor([0.0, 0.0, 0.0, 0.0, 1.0, 1.0])
+
+    sampled, indices = shuffle_array(
+        points,
+        2,
+        weights=weights,
+        generator=torch.Generator().manual_seed(0),
+    )
+
+    assert set(indices.tolist()) == {4, 5}
+    assert torch.equal(sampled, points[indices])
 
 
 def test_subsample_missing_weights_key():

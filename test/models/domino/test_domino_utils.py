@@ -44,6 +44,7 @@ from physicsnemo.models.domino.utils import (
     unnormalize,
     unstandardize,
 )
+from physicsnemo.utils import _weighted_sampling
 
 
 def test_calculate_center_of_mass():
@@ -157,6 +158,21 @@ def test_shuffle_array():
     assert subset.shape == (2, 2)
     assert indices.shape == (2,)
     assert len(torch.unique(indices)) == 2  # No duplicates
+
+
+def test_shuffle_array_uses_uncapped_sampler(monkeypatch):
+    def reject_multinomial(*args, **kwargs):
+        raise AssertionError("torch.multinomial must not be used")
+
+    monkeypatch.setattr(torch, "multinomial", reject_multinomial)
+    monkeypatch.setattr(_weighted_sampling, "_WEIGHTED_SAMPLE_CHUNK_SIZE", 4)
+    data = torch.arange(6).unsqueeze(-1)
+    weights = torch.tensor([0.0, 0.0, 0.0, 0.0, 1.0, 1.0])
+
+    subset, indices = shuffle_array(data, 2, weights=weights)
+
+    assert set(indices.tolist()) == {4, 5}
+    assert torch.equal(subset, data[indices])
 
 
 def test_shuffle_array_without_sampling():

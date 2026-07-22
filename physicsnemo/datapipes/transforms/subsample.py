@@ -30,6 +30,7 @@ from tensordict import TensorDict
 
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.base import Transform
+from physicsnemo.utils._weighted_sampling import weighted_sample_without_replacement
 
 
 def poisson_sample_indices_fixed(
@@ -184,8 +185,10 @@ def shuffle_array(
 
     if weights is not None:
         # Weighted sampling
-        indices = torch.multinomial(
-            weights, n_points, replacement=False, generator=generator
+        indices = weighted_sample_without_replacement(
+            weights,
+            n_points,
+            generator=generator,
         )
     else:
         # Uniform sampling
