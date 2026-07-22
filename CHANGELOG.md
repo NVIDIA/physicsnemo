@@ -253,9 +253,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cells, return self), matching its type hint and `slice_points`;
   `gaussian_curvature_cells` reuses the cached `gaussian_curvature_vertices`
   property instead of recomputing it.
-- `physicsnemo.mesh.Mesh` convenience methods whose functional implementation
-  accepts a mesh as its first argument now reuse that function object directly,
-  removing duplicate wrappers and docstrings.
+- `physicsnemo.mesh.Mesh` convenience methods with matching public signatures
+  now reuse their import-safe canonical function objects directly, removing
+  duplicate wrappers and docstrings.
 - `physicsnemo.mesh`: `validate_mesh(check_self_intersection=True)` now raises
   `NotImplementedError` (the check is unimplemented) instead of silently returning a
   `None` sentinel that masquerades as "no self-intersections found".
