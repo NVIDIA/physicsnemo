@@ -28,7 +28,6 @@ import warp as wp
 from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
 from physicsnemo.nn.functional import remeshing
 from physicsnemo.nn.functional.geometry import Remeshing
-from physicsnemo.nn.functional.geometry.remeshing._warp_impl import launch_forward
 from physicsnemo.nn.functional.geometry.remeshing._warp_impl._kernels import (
     assign_vertices,
     project_centroids_to_surface,
@@ -37,7 +36,6 @@ from physicsnemo.nn.functional.geometry.remeshing._warp_impl._kernels import (
 from physicsnemo.nn.functional.geometry.remeshing._warp_impl.launch_forward import (
     _remove_nonmanifold_faces,
     _voxel_representatives,
-    _weighted_sample_without_replacement,
 )
 
 
@@ -221,22 +219,6 @@ def test_remeshing_cpu_custom_op_contract():
         rtol=1.0e-4,
         atol=1.0e-4,
     )
-
-
-def test_weighted_sampling_avoids_torch_category_limit(monkeypatch):
-    def reject_multinomial(*args, **kwargs):
-        raise AssertionError("torch.multinomial must not be used")
-
-    monkeypatch.setattr(torch, "multinomial", reject_multinomial)
-    monkeypatch.setattr(launch_forward, "_WEIGHTED_SAMPLE_CHUNK_SIZE", 2)
-    weights = torch.tensor([1.0, 0.0, 4.0, 2.0, 3.0])
-
-    first = _weighted_sample_without_replacement(weights, 3)
-    second = _weighted_sample_without_replacement(weights, 3)
-
-    torch.testing.assert_close(first, second)
-    assert torch.unique(first).numel() == 3
-    assert 1 not in first
 
 
 def test_assign_vertices_brute_force_fallback():

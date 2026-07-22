@@ -29,6 +29,7 @@ import torch
 from jaxtyping import Float, Int
 
 from physicsnemo.nn.functional import knn
+from physicsnemo.utils._weighted_sampling import weighted_sample_without_replacement
 
 
 def calculate_center_of_mass(
@@ -509,12 +510,6 @@ def shuffle_array(
 
     Optionally, you can provide weights to use in the sampling.
 
-    Note
-    ----
-    The implementation with ``torch.multinomial`` is constrained to
-    :math:`2^{24}` points. If the input is larger than that, it will be
-    split and sampled from each chunk.
-
     Parameters
     ----------
     points : torch.Tensor
@@ -556,46 +551,7 @@ def shuffle_array(
     if weights is None:
         weights = torch.ones(points.shape[0], device=points.device)
 
-    # Using torch multinomial for this.
-    # Multinomial can't work with more than 2^24 input points.
-
-    # So apply chunking and stich back together in that case.
-    # Assume each chunk gets a number proportional to it's size,
-    # (but make sure they add up to n_points!)
-
-    max_chunk_size = 2**24
-
-    N_chunks = (N_input_points // max_chunk_size) + 1
-
-    # Divide the weights into these chunks
-    chunk_weights = torch.chunk(weights, N_chunks)
-
-    # Determine how mant points to compute per chunk:
-    points_per_chunk = [
-        round(n_points * c.shape[0] / N_input_points) for c in chunk_weights
-    ]
-
-    gap = n_points - sum(points_per_chunk)
-
-    if gap > 0:
-        for g in range(gap):
-            points_per_chunk[g] += 1
-    elif gap < 0:
-        for g in range(-gap):
-            points_per_chunk[g] -= 1
-
-    # Create a list of indexes per chunk:
-    idx_chunks = [
-        torch.multinomial(
-            w,
-            p,
-            replacement=False,
-        )
-        for w, p in zip(chunk_weights, points_per_chunk)
-    ]
-
-    # Stitch the chunks back together:
-    idx = torch.cat(idx_chunks)
+    idx = weighted_sample_without_replacement(weights, n_points)
 
     # Apply the selection:
     points_selected = points[idx]

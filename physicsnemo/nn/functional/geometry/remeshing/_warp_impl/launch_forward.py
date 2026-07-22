@@ -28,6 +28,7 @@ from physicsnemo.nn.functional.geometry.farthest_point_sampling import (
     farthest_point_sampling,
 )
 from physicsnemo.utils._index_tuple_ops import unique_index_tuples
+from physicsnemo.utils._weighted_sampling import weighted_sample_without_replacement
 
 from ._kernels import (
     accumulate_vertex_areas,
@@ -37,8 +38,6 @@ from ._kernels import (
 )
 
 wp.init()
-
-_WEIGHTED_SAMPLE_CHUNK_SIZE = 1 << 22
 
 
 def _wp_view(tensor: torch.Tensor, dtype):  # noqa: ANN001, ANN202
@@ -55,41 +54,13 @@ def _weighted_sample_without_replacement(
     weights: torch.Tensor,
     count: int,
 ) -> torch.Tensor:
-    """Sample indices by an uncapped, chunked exponential race.
-
-    Each chunk contributes its local ``count`` smallest keys. The global
-    ``count`` smallest keys must be in that union, so the chunking reduces
-    temporary memory without changing the weighted-without-replacement draw.
-    """
-    if count == weights.shape[0]:
-        return torch.arange(weights.shape[0], device=weights.device)
-
+    """Sample remeshing seeds reproducibly with the shared weighted sampler."""
     generator = torch.Generator(device=weights.device).manual_seed(0)
-    candidate_keys = []
-    candidate_indices = []
-    tiny = torch.finfo(weights.dtype).tiny
-    for start in range(0, weights.shape[0], _WEIGHTED_SAMPLE_CHUNK_SIZE):
-        stop = min(start + _WEIGHTED_SAMPLE_CHUNK_SIZE, weights.shape[0])
-        chunk_weights = weights[start:stop].clamp_min(tiny)
-        keys = torch.empty_like(chunk_weights).exponential_(generator=generator)
-        keys.div_(chunk_weights)
-        local_count = min(count, stop - start)
-        local_keys, local_indices = torch.topk(
-            keys,
-            local_count,
-            largest=False,
-            sorted=False,
-        )
-        candidate_keys.append(local_keys)
-        candidate_indices.append(local_indices + start)
-
-    if len(candidate_keys) == 1:
-        return candidate_indices[0]
-
-    keys = torch.cat(candidate_keys)
-    indices = torch.cat(candidate_indices)
-    selected = torch.topk(keys, count, largest=False, sorted=False).indices
-    return indices[selected]
+    return weighted_sample_without_replacement(
+        weights,
+        count,
+        generator=generator,
+    )
 
 
 def _select_fps_centroids(
