@@ -18,6 +18,7 @@
 
 from physicsnemo.mesh.transformations.deform.displace import displace
 from physicsnemo.mesh.transformations.deform.ffd import free_form_deform
+from physicsnemo.mesh.transformations.deform.fit_template import fit_template
 from physicsnemo.mesh.transformations.deform.morph import morph
 
-__all__ = ["displace", "free_form_deform", "morph"]
+__all__ = ["displace", "fit_template", "free_form_deform", "morph"]

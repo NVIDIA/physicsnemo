@@ -155,6 +155,100 @@ For connectivity-preserving object APIs, use
 :meth:`~physicsnemo.mesh.mesh.Mesh.free_form_deform` or
 :meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.free_form_deform`.
 
+As-Rigid-As-Possible Energy
+---------------------------
+
+.. autofunction:: physicsnemo.nn.functional.arap_energy
+
+``arap_energy(reference_points, deformed_points, edges)`` measures local shape
+distortion while allowing each point neighborhood to rotate. It is therefore
+zero, up to numerical precision, for a global rigid transformation. The
+functional accepts coordinate and connectivity tensors rather than
+:class:`~physicsnemo.mesh.mesh.Mesh` objects, so callers choose the undirected
+edge graph and optional edge weights explicitly.
+
+The fitted local rotations use the first-order envelope derivative of the
+minimized energy. Rotation selection is not unique for a degenerate
+neighborhood, and higher derivatives through that selection are outside the
+functional's contract.
+
+.. rubric:: Visualization
+
+The visualization compares a reference edge graph with rigid and non-rigid
+deformations measured by the ARAP energy.
+
+.. figure:: /img/nn/functional/geometry/arap_energy/arap_energy.png
+   :alt: Reference mesh and deformations with different ARAP energies
+   :width: 85%
+
+Point-to-Mesh Distance
+----------------------
+
+.. autofunction:: physicsnemo.nn.functional.point_to_mesh_distance
+
+The target mesh tensors come first and query points come last:
+
+.. code:: python
+
+    distance, closest = point_to_mesh_distance(
+        target_points,
+        target_triangles,
+        query_points,
+        squared=True,
+    )
+
+Nearest-face and triangle-feature choices are discrete. Once those choices are
+fixed, both outputs retain gradients to the query coordinates and the selected
+target vertices. Gradients are therefore branchwise and valid almost
+everywhere, but not at correspondence ties or triangle-region boundaries.
+The Warp backend rebuilds its target acceleration structure on each call so
+the public tensor API remains stateless. CUDA Graph capture is not part of the
+current contract.
+
+.. rubric:: Visualization
+
+The visualization shows query points, their closest points on the target
+surface, and the corresponding distances.
+
+.. figure:: /img/nn/functional/geometry/point_to_mesh_distance/point_to_mesh_distance.png
+   :alt: Query points and their closest points on a triangle mesh
+   :width: 85%
+
+Template Shape Fitting
+----------------------
+
+.. autofunction:: physicsnemo.nn.functional.fit_template_points
+
+``fit_template_points`` deforms a prealigned 3D triangle template toward a
+target triangle surface. The fitting term is one-way: every template vertex is
+matched to its closest point on the target. The returned tensor retains the
+template's point ordering, and the target may use different connectivity.
+
+``fit_weight`` controls target adherence, while ``arap_weight`` resists local
+stretching and shearing. Increasing ``arap_weight`` generally preserves the
+template shape more strongly at the cost of a less exact surface fit. The
+operation runs a fixed number of local/global steps and provides first-order
+gradients through that fixed-step result. Correspondence and rotation branches
+are discrete, and higher-order differentiation is not supported.
+
+The initial contract is unbatched, 3D, and prealigned. Warp accelerates only
+nearest-face selection; local rotations, ARAP assembly, and the matrix-free
+linear solves remain in Torch. The target acceleration structure is rebuilt
+for every fitting step, and CUDA Graph capture is not part of the current
+contract.
+
+For a connectivity-preserving object API, use
+:meth:`~physicsnemo.mesh.mesh.Mesh.fit_template`.
+
+.. rubric:: Visualization
+
+The visualization compares a prealigned template, its target surface, and the
+fitted template while retaining the template connectivity.
+
+.. figure:: /img/nn/functional/geometry/fit_template_points/fit_template_points.png
+   :alt: Template mesh fitted to a target surface with ARAP regularization
+   :width: 90%
+
 Mesh Poisson Disk Sample
 ------------------------
 

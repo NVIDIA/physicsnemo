@@ -37,12 +37,15 @@ from .equivariant_ops import (
 )
 from .fourier_spectral import imag, irfft, irfft2, real, rfft, rfft2, view_as_complex
 from .geometry import (
+    arap_energy,
     displace_points,
     farthest_point_sampling,
+    fit_template_points,
     free_form_deform_points,
     mesh_poisson_disk_sample,
     mesh_to_voxel_fraction,
     morph_points,
+    point_to_mesh_distance,
     ray_mesh_intersect,
     remeshing,
     signed_distance_field,
@@ -67,11 +70,13 @@ from .rendering import (
 )
 
 __all__ = [
+    "arap_energy",
     "displace_points",
     "irfft",
     "irfft2",
     "drop_path",
     "farthest_point_sampling",
+    "fit_template_points",
     "free_form_deform_points",
     "uniform_grid_curl",
     "uniform_grid_divergence",
@@ -94,6 +99,7 @@ __all__ = [
     "na2d",
     "na3d",
     "point_to_grid_interpolation",
+    "point_to_mesh_distance",
     "polar_and_dipole_basis",
     "radius_search",
     "real",

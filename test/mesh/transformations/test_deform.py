@@ -18,13 +18,14 @@
 
 import importlib
 import inspect
+from typing import Literal
 
 import pytest
 import torch
 from tensordict import TensorDict
 
 from physicsnemo.mesh import DomainMesh, Mesh
-from physicsnemo.mesh.transformations.deform import displace, morph
+from physicsnemo.mesh.transformations.deform import displace, fit_template, morph
 
 
 def test_deform_namespace_is_canonical():
@@ -38,10 +39,13 @@ def test_deform_namespace_is_canonical():
 
     assert transformations.deform is deform_module
     assert deform_module.displace is displace
+    assert deform_module.fit_template is fit_template
     assert deform_module.morph is morph
     assert not hasattr(transformations, "displace")
+    assert not hasattr(transformations, "fit_template")
     assert not hasattr(transformations, "morph")
     assert not hasattr(geometric_module, "displace")
+    assert not hasattr(geometric_module, "fit_template")
     assert not hasattr(geometric_module, "morph")
 
 
@@ -52,6 +56,19 @@ def test_mesh_morph_signatures_are_introspectable():
         signature = inspect.signature(morph_method)
         assert signature.parameters["radius"].annotation == float | torch.Tensor
         assert signature.parameters["kernel"].default == "wendland_c2"
+
+
+def test_mesh_fit_template_signature_is_introspectable():
+    """Tensorclass-generated methods retain ordinary scalar annotations."""
+
+    signature = inspect.signature(Mesh.fit_template)
+    for parameter in ("fit_weight", "arap_weight", "cg_tolerance"):
+        assert signature.parameters[parameter].annotation is float
+    assert signature.parameters["steps"].default == 10
+    assert signature.parameters["cg_max_iterations"].default == 256
+    assert signature.parameters["implementation"].annotation == (
+        Literal["torch", "warp"] | None
+    )
 
 
 def _triangle_mesh(*, requires_grad: bool = False) -> Mesh:
@@ -66,6 +83,174 @@ def _triangle_mesh(*, requires_grad: bool = False) -> Mesh:
         cell_data={"material": torch.tensor([7])},
         global_data={"case_id": torch.tensor(12)},
     )
+
+
+def _triangle_surface_mesh(*, requires_grad: bool = False) -> Mesh:
+    """Return a 3D triangle surface with representative attached fields."""
+
+    return Mesh(
+        points=torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            requires_grad=requires_grad,
+        ),
+        cells=torch.tensor([[0, 1, 2]]),
+        point_data={"temperature": torch.tensor([10.0, 20.0, 30.0])},
+        cell_data={"material": torch.tensor([7])},
+        global_data={"case_id": torch.tensor(12)},
+    )
+
+
+def test_mesh_fit_template_delegates_and_preserves_template_state(monkeypatch):
+    template = _triangle_surface_mesh()
+    target = Mesh(
+        points=template.points.detach().clone()
+        + torch.tensor([[0.0, 0.0, 0.2], [0.1, 0.0, 0.2], [0.0, -0.1, 0.2]]),
+        cells=torch.tensor([[0, 1, 2]]),
+        point_data={"target_label": torch.tensor([1, 2, 3])},
+    )
+    template_points = template.points.clone()
+    target_points = target.points.clone()
+    _ = template.cell_areas
+    _ = template.cell_centroids
+    _ = template.point_normals
+    topology = template.get_point_to_points_adjacency()
+    received: dict[str, object] = {}
+
+    def fake_fit_template_points(
+        template_points,
+        template_triangles,
+        target_points,
+        target_triangles,
+        **kwargs,
+    ):
+        received.update(
+            {
+                "template_points": template_points,
+                "template_triangles": template_triangles,
+                "target_points": target_points,
+                "target_triangles": target_triangles,
+                **kwargs,
+            }
+        )
+        return template_points + template_points.new_tensor([0.0, 0.0, 0.25])
+
+    functional = importlib.import_module("physicsnemo.nn.functional")
+    monkeypatch.setattr(
+        functional, "fit_template_points", fake_fit_template_points, raising=False
+    )
+    output = template.fit_template(
+        target,
+        fit_weight=2.0,
+        arap_weight=0.25,
+        steps=4,
+        cg_tolerance=2.0e-5,
+        cg_max_iterations=64,
+        implementation="torch",
+    )
+
+    assert received["template_points"] is template.points
+    assert received["template_triangles"] is template.cells
+    assert received["target_points"] is target.points
+    assert received["target_triangles"] is target.cells
+    assert received["fit_weight"] == 2.0
+    assert received["arap_weight"] == 0.25
+    assert received["steps"] == 4
+    assert received["cg_tolerance"] == 2.0e-5
+    assert received["cg_max_iterations"] == 64
+    assert received["implementation"] == "torch"
+
+    torch.testing.assert_close(
+        output.points,
+        template_points + template.points.new_tensor([0.0, 0.0, 0.25]),
+    )
+    torch.testing.assert_close(template.points, template_points)
+    torch.testing.assert_close(target.points, target_points)
+    assert output is not template
+    assert output.cells.data_ptr() == template.cells.data_ptr()
+    assert torch.equal(
+        output.point_data["temperature"], template.point_data["temperature"]
+    )
+    assert torch.equal(output.cell_data["material"], template.cell_data["material"])
+    assert torch.equal(output.global_data["case_id"], template.global_data["case_id"])
+    assert "target_label" not in output.point_data
+
+    assert list(output._cache["cell"].keys()) == []
+    assert list(output._cache["point"].keys()) == []
+    cached_topology = output._cache.get(("topology", "point_to_points"))
+    assert cached_topology is not None
+    assert cached_topology.offsets.data_ptr() == topology.offsets.data_ptr()
+    assert cached_topology.indices.data_ptr() == topology.indices.data_ptr()
+    assert template._cache.get(("cell", "areas")) is not None
+    assert template._cache.get(("cell", "centroids")) is not None
+    assert template._cache.get(("point", "normals")) is not None
+
+
+def test_mesh_fit_template_preserves_autograd_to_both_meshes(monkeypatch):
+    template = _triangle_surface_mesh(requires_grad=True)
+    target = _triangle_surface_mesh(requires_grad=True)
+
+    def differentiable_stub(
+        template_points,
+        template_triangles,
+        target_points,
+        target_triangles,
+        **kwargs,
+    ):
+        del template_triangles, target_triangles, kwargs
+        return template_points + target_points.mean(dim=0)
+
+    functional = importlib.import_module("physicsnemo.nn.functional")
+    monkeypatch.setattr(
+        functional, "fit_template_points", differentiable_stub, raising=False
+    )
+    output = fit_template(template, target, steps=1, implementation="torch")
+    template_gradient, target_gradient = torch.autograd.grad(
+        output.points.square().sum(), (template.points, target.points)
+    )
+
+    assert torch.isfinite(template_gradient).all()
+    assert torch.isfinite(target_gradient).all()
+    assert template_gradient.abs().sum() > 0
+    assert target_gradient.abs().sum() > 0
+
+
+def test_mesh_fit_template_real_solver_smoke():
+    template = _triangle_surface_mesh()
+    target = Mesh(
+        points=template.points + template.points.new_tensor([0.0, 0.0, 0.2]),
+        cells=template.cells.clone(),
+    )
+
+    output = template.fit_template(
+        target,
+        steps=1,
+        cg_tolerance=1.0e-5,
+        cg_max_iterations=64,
+        implementation="torch",
+    )
+
+    initial_error = (template.points[:, 2] - 0.2).abs().mean()
+    fitted_error = (output.points[:, 2] - 0.2).abs().mean()
+    assert fitted_error < initial_error
+    assert output.cells.data_ptr() == template.cells.data_ptr()
+
+
+def test_mesh_fit_template_validates_mesh_types_and_dimensions():
+    surface = _triangle_surface_mesh()
+    planar = _triangle_mesh()
+    edge_surface = Mesh(
+        points=torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]),
+        cells=torch.tensor([[0, 1]]),
+    )
+
+    with pytest.raises(TypeError, match="template must be a Mesh"):
+        fit_template("template", surface)
+    with pytest.raises(TypeError, match="target must be a Mesh"):
+        fit_template(surface, "target")
+    with pytest.raises(ValueError, match="template must be a triangle surface mesh"):
+        fit_template(planar, surface)
+    with pytest.raises(ValueError, match="target must be a triangle surface mesh"):
+        fit_template(surface, edge_surface)
 
 
 def test_mesh_displace_resolves_nested_keys_and_preserves_data():

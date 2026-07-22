@@ -15,36 +15,47 @@
 # limitations under the License.
 
 from .deform import (
+    ARAPEnergy,
     DisplacePoints,
+    FitTemplatePoints,
     FreeFormDeformPoints,
     MorphPoints,
+    arap_energy,
     displace_points,
+    fit_template_points,
     free_form_deform_points,
     morph_points,
 )
 from .farthest_point_sampling import FarthestPointSampling, farthest_point_sampling
 from .mesh_poisson_disk_sample import MeshPoissonDiskSample, mesh_poisson_disk_sample
 from .mesh_to_voxel_fraction import MeshToVoxelFraction, mesh_to_voxel_fraction
+from .point_to_mesh_distance import PointToMeshDistance, point_to_mesh_distance
 from .ray_mesh_intersect import RayMeshIntersect, ray_mesh_intersect
 from .remeshing import Remeshing, remeshing
 from .sdf import SignedDistanceField, signed_distance_field
 
 __all__ = [
+    "ARAPEnergy",
     "DisplacePoints",
     "FreeFormDeformPoints",
     "FarthestPointSampling",
+    "FitTemplatePoints",
     "MeshPoissonDiskSample",
     "MeshToVoxelFraction",
     "MorphPoints",
+    "PointToMeshDistance",
     "RayMeshIntersect",
     "Remeshing",
     "SignedDistanceField",
+    "arap_energy",
     "displace_points",
     "farthest_point_sampling",
+    "fit_template_points",
     "free_form_deform_points",
     "mesh_poisson_disk_sample",
     "mesh_to_voxel_fraction",
     "morph_points",
+    "point_to_mesh_distance",
     "ray_mesh_intersect",
     "remeshing",
     "signed_distance_field",

@@ -52,6 +52,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``Mesh.free_form_deform`` / ``DomainMesh.free_form_deform`` with Bernstein
   (classic FFD) and locally supported uniform cubic B-spline bases, plus
   node-interpolating `linear`, `cubic_hermite`, and `quintic_hermite` modes.
+- Adds differentiable template-to-surface fitting with tensor-level
+  `arap_energy`, Torch/NVIDIA Warp `point_to_mesh_distance`, and
+  `fit_template_points`, plus the connectivity-preserving `Mesh.fit_template`
+  wrapper.
 - Adds `uniform_grid_divergence`, `uniform_grid_curl`, and
   `uniform_grid_laplacian` to `physicsnemo.nn.functional`, with Torch and fused
   Warp implementations for periodic Cartesian grids.

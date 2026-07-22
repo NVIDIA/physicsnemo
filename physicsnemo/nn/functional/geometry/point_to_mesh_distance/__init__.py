@@ -14,22 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Dense, sparse, and lattice point-deformation functionals and energies."""
+"""Differentiable point-to-triangle-mesh distance."""
 
-from .arap import ARAPEnergy, arap_energy
-from .deform import DisplacePoints, MorphPoints, displace_points, morph_points
-from .ffd import FreeFormDeformPoints, free_form_deform_points
-from .fit import FitTemplatePoints, fit_template_points
+from .point_to_mesh_distance import PointToMeshDistance, point_to_mesh_distance
 
-__all__ = [
-    "ARAPEnergy",
-    "DisplacePoints",
-    "FreeFormDeformPoints",
-    "FitTemplatePoints",
-    "MorphPoints",
-    "arap_energy",
-    "displace_points",
-    "free_form_deform_points",
-    "fit_template_points",
-    "morph_points",
-]
+__all__ = ["PointToMeshDistance", "point_to_mesh_distance"]

@@ -39,7 +39,12 @@ from tensordict import NonTensorData, TensorDict, tensorclass
 
 from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
 from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
-from physicsnemo.mesh.transformations.deform import displace, free_form_deform, morph
+from physicsnemo.mesh.transformations.deform import (
+    displace,
+    fit_template,
+    free_form_deform,
+    morph,
+)
 from physicsnemo.mesh.transformations.deform.ffd import _FFDBasis
 from physicsnemo.mesh.transformations.geometric import (
     rotate,
@@ -2756,6 +2761,39 @@ class Mesh:
             extent=extent,
             basis=basis,
             point_weights=point_weights,
+            implementation=implementation,
+        )
+
+    def fit_template(
+        self,
+        target: "Mesh",
+        *,
+        fit_weight: builtins.float = 1.0,
+        arap_weight: builtins.float = 0.1,
+        steps: int = 10,
+        cg_tolerance: builtins.float = 1.0e-6,
+        cg_max_iterations: int = 256,
+        implementation: Literal["torch", "warp"] | None = None,
+    ) -> "Mesh":
+        """Fit this prealigned triangle template to a target surface.
+
+        Convenience wrapper for
+        :func:`physicsnemo.mesh.transformations.deform.fit_template`, which
+        documents all parameters and numerical behavior.
+
+        Returns
+        -------
+        Mesh
+            New fitted mesh with this template's connectivity and fields.
+        """
+        return fit_template(
+            self,
+            target,
+            fit_weight=fit_weight,
+            arap_weight=arap_weight,
+            steps=steps,
+            cg_tolerance=cg_tolerance,
+            cg_max_iterations=cg_max_iterations,
             implementation=implementation,
         )
 

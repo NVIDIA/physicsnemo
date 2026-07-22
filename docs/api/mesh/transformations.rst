@@ -41,14 +41,16 @@ Deformations
 
 .. currentmodule:: physicsnemo.mesh.transformations.deform
 
-Dense displacement, sparse control-point morphing, and lattice free-form
-deformation are available from the ``deform`` namespace and as methods on
-:class:`~physicsnemo.mesh.mesh.Mesh`.
+Dense displacement, sparse control-point morphing, lattice free-form
+deformation, and template shape fitting are available from the ``deform``
+namespace and as methods on :class:`~physicsnemo.mesh.mesh.Mesh`.
 
 The mesh methods wrap the tensor-level
 :func:`~physicsnemo.nn.functional.displace_points`,
 :func:`~physicsnemo.nn.functional.morph_points`, and
 :func:`~physicsnemo.nn.functional.free_form_deform_points` operations.
+Template fitting wraps
+:func:`~physicsnemo.nn.functional.fit_template_points`.
 
 Dense displacement accepts a tensor or a point-data key (including a nested
 tuple key). The operation returns a new mesh without changing ``mesh.points``.
@@ -218,6 +220,41 @@ produce two local bulges and a local indentation.
    :alt: Sphere with control lattice, Bernstein taper, and local B-spline sculpt
    :width: 100%
 
+Template Shape Fitting
+^^^^^^^^^^^^^^^^^^^^^^
+
+Template fitting moves the vertices of one prealigned 3D triangle mesh toward
+another triangle surface. The target may use different connectivity; the
+returned mesh keeps the template's connectivity, point ordering, and attached
+data.
+
+.. code:: python
+
+    fitted = template.fit_template(
+        target,
+        fit_weight=1.0,
+        arap_weight=0.1,
+        steps=10,
+    )
+
+The fitting term is one-way from template vertices to closest points on the
+target. ``fit_weight`` controls target adherence, while ``arap_weight`` resists
+local stretching and shearing. A larger ARAP weight favors shape preservation
+over an exact surface match. Rigid registration is a separate preprocessing
+step; the two meshes should already be approximately aligned.
+
+The solver performs a fixed number of local/global steps. First-order gradients
+propagate from ``fitted.points`` to both input point tensors for the selected
+nearest-surface and rotation branches. Those branches are discrete, so
+gradients are valid almost everywhere and higher-order differentiation is not
+supported.
+
+Template fitting is intentionally defined for one
+:class:`~physicsnemo.mesh.mesh.Mesh` and one target surface. It is not exposed
+on :class:`~physicsnemo.mesh.domain_mesh.DomainMesh`, whose interior and
+boundary components may have different manifold dimensions and do not define a
+single unambiguous fitting surface.
+
 Domain Meshes
 ^^^^^^^^^^^^^
 
@@ -290,6 +327,8 @@ caches and recompute them lazily. They retain topology caches.
 .. autofunction:: displace
 
 .. autofunction:: free_form_deform
+
+.. autofunction:: fit_template
 
 .. autofunction:: morph
 
