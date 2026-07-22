@@ -14,10 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Python 3.14 evaluates annotations lazily in the decorated class namespace,
-# where ``tensorclass`` installs dtype-conversion methods such as ``int``.
-# Qualify scalar annotations that must continue to resolve to builtin types.
-import builtins
 import math
 import types
 from pathlib import Path
@@ -35,7 +31,7 @@ from typing import (
 import torch
 import torch.nn.functional as F
 from jaxtyping import Bool, Float
-from tensordict import NonTensorData, TensorDict, tensorclass
+from tensordict import NonTensorData, TensorClass, TensorDict
 
 from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
 from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
@@ -77,8 +73,19 @@ MESH_FIELD_ASSOCIATIONS: tuple[MeshFieldAssociation, ...] = get_args(
 )
 
 
-@tensorclass(tensor_only=True, shadow=True)
-class Mesh:
+class _MeshTensorClassMeta(type(TensorClass)):
+    """Preserve ``Mesh[m, s]`` over TensorClass's configuration subscript."""
+
+    def __getitem__(cls, params: Any) -> type:
+        return cls.__class_getitem__(params)
+
+
+class Mesh(
+    TensorClass,
+    tensor_only=True,
+    shadow=True,
+    metaclass=_MeshTensorClassMeta,
+):
     r"""A PyTorch-based, dimensionally-generic Mesh data structure.
 
     A ``Mesh`` is a discrete representation of an n-dimensional manifold embedded
@@ -579,7 +586,7 @@ class Mesh:
         )
 
     if TYPE_CHECKING:
-        # Type stub for the `to` method dynamically added by @tensorclass.
+        # Type stub for the `to` method dynamically added by TensorClass.
         # This provides proper type hints without shadowing the runtime implementation.
         def to(self, *args: Any, **kwargs: Any) -> Self:
             """Move mesh and all attached data to specified device, dtype, or format.
@@ -2692,7 +2699,7 @@ class Mesh:
         control_points: torch.Tensor,
         control_displacements: torch.Tensor,
         *,
-        radius: builtins.float | torch.Tensor,
+        radius: float | torch.Tensor,
         point_weights: str | tuple[str, ...] | torch.Tensor | None = None,
         kernel: Literal["wendland_c2"] = "wendland_c2",
         implementation: Literal["torch", "warp"] | None = None,
@@ -2724,12 +2731,8 @@ class Mesh:
             torch.Tensor, "*lattice_resolution n_spatial_dims"
         ],
         *,
-        origin: Float[torch.Tensor, " n_spatial_dims"]
-        | Sequence[builtins.float]
-        | None = None,
-        extent: Float[torch.Tensor, " n_spatial_dims"]
-        | Sequence[builtins.float]
-        | None = None,
+        origin: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float] | None = None,
+        extent: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float] | None = None,
         basis: _FFDBasis = "bernstein",
         point_weights: str
         | tuple[str, ...]
@@ -3540,9 +3543,9 @@ class Mesh:
 
     def remesh(
         self,
-        n_clusters: builtins.int,
+        n_clusters: int,
         *,
-        max_iterations: builtins.int = 4,
+        max_iterations: int = 4,
     ) -> "Mesh":
         """Uniformly remesh a triangle surface using Warp on CPU or CUDA.
 
@@ -3805,8 +3808,61 @@ class Mesh:
         )
 
 
-### Override the tensorclass __repr__ with custom formatting
-# Note: Must be done after class definition because @tensorclass overrides __repr__
+### TensorClass's load wrapper may receive an already reconstructed Mesh when
+# loading the legacy decorator-based on-disk layout. Avoid wrapping it again.
+_tensorclass_mesh_from_tensordict = Mesh._from_tensordict.__func__
+_tensorclass_mesh_load_memmap = Mesh._load_memmap
+
+
+def _mesh_from_tensordict(cls, tensordict, non_tensordict=None, safe=True):
+    if isinstance(tensordict, cls):
+        return tensordict
+    return _tensorclass_mesh_from_tensordict(
+        cls,
+        tensordict,
+        non_tensordict=non_tensordict,
+        safe=safe,
+    )
+
+
+Mesh._from_tensordict = classmethod(_mesh_from_tensordict)
+
+
+def _mesh_load_memmap(
+    cls,
+    prefix,
+    metadata,
+    device=None,
+    out=None,
+    *,
+    robust_key,
+):
+    legacy_prefix = Path(prefix) / "_tensordict"
+    if legacy_prefix.is_dir():
+        tensordict_out = out._tensordict if isinstance(out, cls) else out
+        tensordict = TensorDict.load_memmap(
+            legacy_prefix,
+            device=device,
+            out=tensordict_out,
+            robust_key=robust_key,
+        )
+        if isinstance(out, cls):
+            return out
+        return cls._from_tensordict(tensordict)
+    return _tensorclass_mesh_load_memmap(
+        prefix,
+        metadata,
+        device=device,
+        out=out,
+        robust_key=robust_key,
+    )
+
+
+Mesh._load_memmap = classmethod(_mesh_load_memmap)
+
+
+### Override the TensorClass __repr__ with custom formatting
+# Must be done after class definition because TensorClass overrides __repr__
 # even when defined inside the class body
 def _mesh_repr(self) -> str:
     return format_mesh_repr(self)
@@ -3815,14 +3871,14 @@ def _mesh_repr(self) -> str:
 Mesh.__repr__ = _mesh_repr  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
 
 
-### Override the tensorclass ``to`` so a floating/complex dtype is applied only to
+### Override the TensorClass ``to`` so a floating/complex dtype is applied only to
 # floating tensors. The generated tensorclass ``to`` casts *every* leaf -- including
 # the integer ``cells`` -- which then fails ``__post_init__``'s int-dtype check, so
 # ``mesh.to(torch.float64)`` was broken for any mesh with cells. Only an explicitly
 # requested floating/complex dtype takes the cells-safe path; device-only moves and
 # non-float dtypes are delegated unchanged to the generated ``to`` so device metadata,
 # ``non_blocking``, etc. behave exactly as before. Reassigned after the class because
-# @tensorclass overrides a body-defined ``to`` (same reason as ``__repr__`` above).
+# TensorClass overrides a body-defined ``to`` (same reason as ``__repr__`` above).
 def _requested_float_dtype(
     args: tuple[Any, ...], kwargs: dict[str, Any]
 ) -> torch.dtype | None:
