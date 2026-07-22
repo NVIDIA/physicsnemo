@@ -44,6 +44,14 @@ pv = pytest.importorskip("pyvista", minversion="0.46.4")
 
 from physicsnemo.mesh.io.io_pyvista import from_pyvista, to_pyvista  # noqa: E402
 
+
+def test_mesh_geometric_methods_reuse_function_objects():
+    assert Mesh.translate is translate
+    assert Mesh.rotate is rotate
+    assert Mesh.scale is scale
+    assert Mesh.transform is transform
+
+
 ###############################################################################
 # Helper Functions
 ###############################################################################

@@ -20,6 +20,7 @@ import math
 
 import pytest
 import torch
+from tensordict import TensorClass
 
 from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.mesh.primitives.basic import (
@@ -29,6 +30,11 @@ from physicsnemo.mesh.primitives.basic import (
     single_triangle_3d,
     two_tetrahedra,
 )
+
+
+def test_domain_mesh_inherits_tensorclass():
+    assert TensorClass in DomainMesh.__bases__
+
 
 ### Fixtures
 
@@ -281,6 +287,40 @@ class TestStripCaches:
         assert "normals" in dm.interior._cache["cell"].keys()
         dm2 = dm.strip_caches()
         assert "normals" not in dm2.interior._cache["cell"].keys()
+
+    def test_propagates_keep_to_all_meshes(self):
+        dm = DomainMesh(
+            interior=single_triangle_3d.load(),
+            boundaries={"wall": single_triangle_3d.load()},
+        )
+        for _, mesh in dm.all_meshes():
+            _ = mesh.cell_areas
+            _ = mesh.cell_normals
+
+        stripped = dm.strip_caches(keep=[("cell", "areas")])
+
+        for _, mesh in stripped.all_meshes():
+            assert mesh._cache.get(("cell", "areas"), None) is not None
+            assert mesh._cache.get(("cell", "normals"), None) is None
+
+
+def test_domain_mesh_serialization_round_trip(tmp_path):
+    source = DomainMesh(
+        interior=single_triangle_3d.load(),
+        boundaries={"wall": single_triangle_3d.load()},
+        global_data={"case": torch.tensor(1)},
+    )
+    path = tmp_path / "domain_mesh"
+
+    source.save(path)
+    loaded = DomainMesh.load(path)
+
+    torch.testing.assert_close(loaded.interior.points, source.interior.points)
+    torch.testing.assert_close(
+        loaded.boundaries["wall"].points,
+        source.boundaries["wall"].points,
+    )
+    torch.testing.assert_close(loaded.global_data["case"], source.global_data["case"])
 
 
 class TestSubdivide:

@@ -14,16 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# ``tensorclass`` adds a class-scoped ``float`` method. Qualify scalar
-# annotations that must remain resolvable under Python's deferred lookup.
-import builtins
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Self
 
 import torch
 from jaxtyping import Bool, Float
-from tensordict import TensorDict, tensorclass
+from tensordict import TensorClass, TensorDict
 
 from physicsnemo.mesh.mesh import Mesh, _requested_float_dtype
 from physicsnemo.mesh.transformations.deform.ffd import _FFDBasis
@@ -34,8 +31,7 @@ if TYPE_CHECKING:
     import pyvista
 
 
-@tensorclass
-class DomainMesh:
+class DomainMesh(TensorClass):
     r"""A simulation domain represented as an interior mesh with named boundary meshes.
 
     A ``DomainMesh`` groups an interior :class:`Mesh` (either a volumetric mesh
@@ -611,7 +607,7 @@ class DomainMesh:
         control_points: torch.Tensor,
         control_displacements: torch.Tensor,
         *,
-        radius: builtins.float | torch.Tensor,
+        radius: float | torch.Tensor,
         point_weights: str | tuple[str, ...] | None = None,
         kernel: Literal["wendland_c2"] = "wendland_c2",
         implementation: Literal["torch", "warp"] | None = None,
@@ -725,12 +721,8 @@ class DomainMesh:
             torch.Tensor, "*lattice_resolution n_spatial_dims"
         ],
         *,
-        origin: Float[torch.Tensor, " n_spatial_dims"]
-        | Sequence[builtins.float]
-        | None = None,
-        extent: Float[torch.Tensor, " n_spatial_dims"]
-        | Sequence[builtins.float]
-        | None = None,
+        origin: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float] | None = None,
+        extent: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float] | None = None,
         basis: _FFDBasis = "bernstein",
         point_weights: str | tuple[str, ...] | None = None,
         implementation: Literal["torch", "warp"] | None = None,
@@ -973,17 +965,26 @@ class DomainMesh:
             )
         )
 
-    def strip_caches(self) -> "DomainMesh":
+    def strip_caches(
+        self,
+        keep: Sequence[str | tuple[str, ...]] = (),
+    ) -> "DomainMesh":
         r"""Remove cached geometry from all meshes in the domain.
 
         Delegates to :meth:`Mesh.strip_caches` for each mesh.
+
+        Parameters
+        ----------
+        keep : sequence of str or tuple[str, ...], optional
+            Cache keys to retain on every component mesh. See
+            :meth:`Mesh.strip_caches` for key semantics.
 
         Returns
         -------
         DomainMesh
             New domain with all cached values cleared.
         """
-        return self.apply_to_meshes(lambda m: m.strip_caches())
+        return self.apply_to_meshes(lambda m: m.strip_caches(keep=keep))
 
     def subdivide(
         self,
@@ -1458,11 +1459,79 @@ class DomainMesh:
         return canvas
 
     ### Repr is defined after the class body (see below) because
-    ### @tensorclass overwrites __repr__ even when defined inline.
+    ### TensorClass overwrites __repr__ even when defined inline.
 
 
-### Override the tensorclass __repr__ with custom formatting.
-# Must be done after class definition because @tensorclass overrides __repr__
+### Match Mesh's legacy-load compatibility: old decorator-based layouts can
+# already be reconstructed before TensorClass's outer wrapper receives them.
+_tensorclass_domain_from_tensordict = DomainMesh._from_tensordict.__func__
+_tensorclass_domain_load_memmap = DomainMesh._load_memmap
+
+
+def _domain_from_tensordict(cls, tensordict, non_tensordict=None, safe=True):
+    if isinstance(tensordict, cls):
+        return tensordict
+    interior = tensordict.get("interior")
+    boundaries = tensordict.get("boundaries")
+    if isinstance(interior, TensorDict) or (
+        isinstance(boundaries, TensorDict)
+        and any(isinstance(mesh, TensorDict) for mesh in boundaries.values())
+    ):
+        tensordict = tensordict.copy()
+        if isinstance(interior, TensorDict):
+            tensordict["interior"] = Mesh._from_tensordict(interior)
+        if isinstance(boundaries, TensorDict):
+            boundaries = boundaries.copy()
+            for name, mesh in boundaries.items():
+                if isinstance(mesh, TensorDict):
+                    boundaries[name] = Mesh._from_tensordict(mesh)
+            tensordict["boundaries"] = boundaries
+    return _tensorclass_domain_from_tensordict(
+        cls,
+        tensordict,
+        non_tensordict=non_tensordict,
+        safe=safe,
+    )
+
+
+DomainMesh._from_tensordict = classmethod(_domain_from_tensordict)
+
+
+def _domain_load_memmap(
+    cls,
+    prefix,
+    metadata,
+    device=None,
+    out=None,
+    *,
+    robust_key,
+):
+    legacy_prefix = Path(prefix) / "_tensordict"
+    if legacy_prefix.is_dir():
+        tensordict_out = out._tensordict if isinstance(out, cls) else out
+        tensordict = TensorDict.load_memmap(
+            legacy_prefix,
+            device=device,
+            out=tensordict_out,
+            robust_key=robust_key,
+        )
+        if isinstance(out, cls):
+            return out
+        return cls._from_tensordict(tensordict)
+    return _tensorclass_domain_load_memmap(
+        prefix,
+        metadata,
+        device=device,
+        out=out,
+        robust_key=robust_key,
+    )
+
+
+DomainMesh._load_memmap = classmethod(_domain_load_memmap)
+
+
+### Override the TensorClass __repr__ with custom formatting.
+# Must be done after class definition because TensorClass overrides __repr__
 # even when defined inside the class body (same pattern as Mesh).
 def _domain_mesh_repr(self: DomainMesh) -> str:
     """Format a readable summary of the domain mesh."""

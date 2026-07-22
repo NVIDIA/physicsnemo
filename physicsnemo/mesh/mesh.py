@@ -14,10 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Python 3.14 evaluates annotations lazily in the decorated class namespace,
-# where ``tensorclass`` installs dtype-conversion methods such as ``int``.
-# Qualify scalar annotations that must continue to resolve to builtin types.
-import builtins
 import math
 import types
 from pathlib import Path
@@ -35,7 +31,7 @@ from typing import (
 import torch
 import torch.nn.functional as F
 from jaxtyping import Bool, Float
-from tensordict import NonTensorData, TensorDict, tensorclass
+from tensordict import NonTensorData, TensorClass, TensorDict
 
 from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
 from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
@@ -53,9 +49,6 @@ from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
 from physicsnemo.mesh.visualization.draw_mesh import draw_mesh
 
 if TYPE_CHECKING:
-    import matplotlib.axes
-    import pyvista
-
     from physicsnemo.mesh.neighbors._adjacency import Adjacency
 
 
@@ -77,8 +70,19 @@ MESH_FIELD_ASSOCIATIONS: tuple[MeshFieldAssociation, ...] = get_args(
 )
 
 
-@tensorclass(tensor_only=True, shadow=True)
-class Mesh:
+class _MeshTensorClassMeta(type(TensorClass)):
+    """Preserve ``Mesh[m, s]`` over TensorClass's configuration subscript."""
+
+    def __getitem__(cls, params: Any) -> type:
+        return cls.__class_getitem__(params)
+
+
+class Mesh(
+    TensorClass,
+    tensor_only=True,
+    shadow=True,
+    metaclass=_MeshTensorClassMeta,
+):
     r"""A PyTorch-based, dimensionally-generic Mesh data structure.
 
     A ``Mesh`` is a discrete representation of an n-dimensional manifold embedded
@@ -579,7 +583,7 @@ class Mesh:
         )
 
     if TYPE_CHECKING:
-        # Type stub for the `to` method dynamically added by @tensorclass.
+        # Type stub for the `to` method dynamically added by TensorClass.
         # This provides proper type hints without shadowing the runtime implementation.
         def to(self, *args: Any, **kwargs: Any) -> Self:
             """Move mesh and all attached data to specified device, dtype, or format.
@@ -2520,203 +2524,13 @@ class Mesh:
             data_padding_value=data_padding_value,
         )
 
-    def draw(
-        self,
-        backend: Literal["matplotlib", "pyvista", "auto"] = "auto",
-        show: bool = True,
-        point_scalars: None | torch.Tensor | str | tuple[str, ...] = None,
-        cell_scalars: None | torch.Tensor | str | tuple[str, ...] = None,
-        cmap: str = "viridis",
-        vmin: float | None = None,
-        vmax: float | None = None,
-        alpha_points: float = 1.0,
-        alpha_cells: float = 1.0,
-        alpha_edges: float = 1.0,
-        show_edges: bool = True,
-        ax: "matplotlib.axes.Axes | pyvista.Plotter | None" = None,
-        backend_options: dict[str, Any] | None = None,
-    ) -> "matplotlib.axes.Axes | pyvista.Plotter":
-        """Draw the mesh using matplotlib or PyVista backend.
+    draw = draw_mesh
 
-        Provides interactive 3D or 2D visualization with support for scalar data
-        coloring, transparency control, and automatic backend selection.
+    translate = translate
 
-        Parameters
-        ----------
-        backend : {"auto", "matplotlib", "pyvista"}
-            Visualization backend to use:
+    displace = displace
 
-            - "auto": Automatically select based on n_spatial_dims
-              (matplotlib for 0D/1D/2D, PyVista for 3D)
-            - "matplotlib": Force matplotlib backend (supports 3D via mplot3d)
-            - "pyvista": Force PyVista backend (requires n_spatial_dims <= 3)
-        show : bool
-            Whether to display the plot immediately (calls plt.show() or
-            plotter.show()). If False, returns the plotter/axes for further
-            customization before display.
-        point_scalars : torch.Tensor or str or tuple[str, ...], optional
-            Scalar data to color points. Mutually exclusive with cell_scalars. Can be:
-
-            - None: Points use neutral color (black)
-            - torch.Tensor: Direct scalar values, shape (n_points,) or
-              (n_points, ...) where trailing dimensions are L2-normed
-            - str or tuple[str, ...]: Key to lookup in mesh.point_data
-        cell_scalars : torch.Tensor or str or tuple[str, ...], optional
-            Scalar data to color cells. Mutually exclusive with point_scalars. Can be:
-
-            - None: Cells use neutral color (lightblue if no scalars,
-              lightgray if point_scalars active)
-            - torch.Tensor: Direct scalar values, shape (n_cells,) or
-              (n_cells, ...) where trailing dimensions are L2-normed
-            - str or tuple[str, ...]: Key to lookup in mesh.cell_data
-        cmap : str
-            Colormap name for scalar visualization.
-        vmin : float, optional
-            Minimum value for colormap normalization. If None, uses data min.
-        vmax : float, optional
-            Maximum value for colormap normalization. If None, uses data max.
-        alpha_points : float
-            Opacity for points, range [0, 1].
-        alpha_cells : float
-            Opacity for cells/faces, range [0, 1].
-        alpha_edges : float
-            Opacity for cell edges, range [0, 1].
-        show_edges : bool
-            Whether to draw cell edges.
-        ax : matplotlib.axes.Axes or pyvista.Plotter, optional
-            Existing canvas to draw on. For matplotlib, a matplotlib Axes;
-            for PyVista, a pyvista Plotter. If ``None``, a new figure/plotter
-            is created. Use this to overlay multiple meshes on the same scene.
-        backend_options : dict[str, Any], optional
-            Additional keyword arguments forwarded to the underlying
-            visualization backend (e.g. PyVista's ``plotter.add_mesh()``).
-
-        Returns
-        -------
-        matplotlib.axes.Axes or pyvista.Plotter
-            - matplotlib backend: matplotlib.axes.Axes object
-            - PyVista backend: pyvista.Plotter object
-
-        Raises
-        ------
-        ValueError
-            If both point_scalars and cell_scalars are specified,
-            or if n_spatial_dims is not supported by the chosen backend.
-        ImportError
-            If the chosen backend (matplotlib or pyvista) is not installed.
-
-        Examples
-        --------
-        >>> # Draw mesh with automatic backend selection
-        >>> mesh.draw()  # doctest: +SKIP
-        >>>
-        >>> # Color cells by pressure data
-        >>> mesh.draw(cell_scalars="pressure", cmap="coolwarm")  # doctest: +SKIP
-        >>>
-        >>> # Color points by velocity magnitude (computing norm of vector field)
-        >>> mesh.draw(point_scalars="velocity")  # velocity is (n_points, 3)  # doctest: +SKIP
-        >>>
-        >>> # Use nested TensorDict key
-        >>> mesh.draw(cell_scalars=("flow", "temperature"))  # doctest: +SKIP
-        >>>
-        >>> # Customize and display later
-        >>> ax = mesh.draw(show=False, backend="matplotlib")  # doctest: +SKIP
-        >>> ax.set_title("My Mesh")  # doctest: +SKIP
-        >>> import matplotlib.pyplot as plt  # doctest: +SKIP
-        >>> plt.show()  # doctest: +SKIP
-        """
-        return draw_mesh(
-            mesh=self,
-            backend=backend,
-            show=show,
-            point_scalars=point_scalars,
-            cell_scalars=cell_scalars,
-            cmap=cmap,
-            vmin=vmin,
-            vmax=vmax,
-            alpha_points=alpha_points,
-            alpha_cells=alpha_cells,
-            alpha_edges=alpha_edges,
-            show_edges=show_edges,
-            ax=ax,
-            backend_options=backend_options,
-        )
-
-    def translate(
-        self,
-        offset: torch.Tensor | list | tuple,
-    ) -> "Mesh":
-        """Apply a translation to the mesh.
-
-        Convenience wrapper for physicsnemo.mesh.transformations.translate().
-
-        Parameters
-        ----------
-        offset : torch.Tensor or list or tuple
-            Translation vector, shape (n_spatial_dims,).
-
-        Returns
-        -------
-        Mesh
-            New Mesh with translated geometry.
-        """
-        return translate(self, offset)
-
-    def displace(
-        self,
-        displacement: str | tuple[str, ...] | torch.Tensor,
-        *,
-        point_weights: str | tuple[str, ...] | torch.Tensor | None = None,
-        implementation: Literal["torch"] | None = None,
-    ) -> "Mesh":
-        """Displace points by a dense vector field without changing topology.
-
-        Convenience wrapper for
-        :func:`physicsnemo.mesh.transformations.deform.displace`, which
-        documents all parameters and numerical behavior.
-
-        Returns
-        -------
-        Mesh
-            New mesh with displaced points, unchanged connectivity and fields.
-        """
-        return displace(
-            self,
-            displacement,
-            point_weights=point_weights,
-            implementation=implementation,
-        )
-
-    def morph(
-        self,
-        control_points: torch.Tensor,
-        control_displacements: torch.Tensor,
-        *,
-        radius: builtins.float | torch.Tensor,
-        point_weights: str | tuple[str, ...] | torch.Tensor | None = None,
-        kernel: Literal["wendland_c2"] = "wendland_c2",
-        implementation: Literal["torch", "warp"] | None = None,
-    ) -> "Mesh":
-        """Morph points from sparse compactly supported control handles.
-
-        Convenience wrapper for
-        :func:`physicsnemo.mesh.transformations.deform.morph`, which documents
-        all parameters and numerical behavior.
-
-        Returns
-        -------
-        Mesh
-            New mesh with morphed points, unchanged connectivity and fields.
-        """
-        return morph(
-            self,
-            control_points,
-            control_displacements,
-            radius=radius,
-            point_weights=point_weights,
-            kernel=kernel,
-            implementation=implementation,
-        )
+    morph = morph
 
     def free_form_deform(
         self,
@@ -2724,12 +2538,8 @@ class Mesh:
             torch.Tensor, "*lattice_resolution n_spatial_dims"
         ],
         *,
-        origin: Float[torch.Tensor, " n_spatial_dims"]
-        | Sequence[builtins.float]
-        | None = None,
-        extent: Float[torch.Tensor, " n_spatial_dims"]
-        | Sequence[builtins.float]
-        | None = None,
+        origin: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float] | None = None,
+        extent: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float] | None = None,
         basis: _FFDBasis = "bernstein",
         point_weights: str
         | tuple[str, ...]
@@ -2738,17 +2548,7 @@ class Mesh:
         | None = None,
         implementation: Literal["torch", "warp"] | None = None,
     ) -> "Mesh":
-        """Deform points with a control-point lattice by free-form deformation.
-
-        Convenience wrapper for
-        :func:`physicsnemo.mesh.transformations.deform.free_form_deform`, which
-        documents all parameters and numerical behavior.
-
-        Returns
-        -------
-        Mesh
-            New mesh with deformed points, unchanged connectivity and fields.
-        """
+        """Delegate to :func:`free_form_deform` for the canonical documentation."""
         return free_form_deform(
             self,
             control_displacements,
@@ -2759,140 +2559,11 @@ class Mesh:
             implementation=implementation,
         )
 
-    def rotate(
-        self,
-        angle: float,
-        axis: torch.Tensor | list | tuple | Literal["x", "y", "z"] | None = None,
-        center: torch.Tensor | list | tuple | None = None,
-        transform_point_data: bool | TensorDict = False,
-        transform_cell_data: bool | TensorDict = False,
-        transform_global_data: bool | TensorDict = False,
-    ) -> "Mesh":
-        """Rotate the mesh about an axis by a specified angle.
+    rotate = rotate
 
-        Convenience wrapper for physicsnemo.mesh.transformations.rotate().
+    scale = scale
 
-        Parameters
-        ----------
-        angle : float
-            Rotation angle in radians.
-        axis : torch.Tensor or list or tuple or {"x", "y", "z"}, optional
-            Rotation axis vector. None for 2D, shape (3,) for 3D.
-            String literals "x", "y", "z" are converted to unit vectors
-            (1,0,0), (0,1,0), (0,0,1) respectively.
-        center : torch.Tensor or list or tuple, optional
-            Center point for rotation.
-        transform_point_data : bool
-            If True, rotate vector/tensor fields in point_data.
-        transform_cell_data : bool
-            If True, rotate vector/tensor fields in cell_data.
-        transform_global_data : bool
-            If True, rotate vector/tensor fields in global_data.
-
-        Returns
-        -------
-        Mesh
-            New Mesh with rotated geometry.
-        """
-        return rotate(
-            self,
-            angle,
-            axis,
-            center,
-            transform_point_data,
-            transform_cell_data,
-            transform_global_data,
-        )
-
-    def scale(
-        self,
-        factor: float | torch.Tensor,
-        center: torch.Tensor | None = None,
-        transform_point_data: bool | TensorDict = False,
-        transform_cell_data: bool | TensorDict = False,
-        transform_global_data: bool | TensorDict = False,
-        assume_invertible: bool | None = None,
-    ) -> "Mesh":
-        """Scale the mesh by specified factor(s).
-
-        Convenience wrapper for physicsnemo.mesh.transformations.scale().
-
-        Parameters
-        ----------
-        factor : float or torch.Tensor
-            Scale factor (scalar) or factors (per-dimension).
-        center : torch.Tensor, optional
-            Center point for scaling.
-        transform_point_data : bool
-            If True, scale vector/tensor fields in point_data.
-        transform_cell_data : bool
-            If True, scale vector/tensor fields in cell_data.
-        transform_global_data : bool
-            If True, scale vector/tensor fields in global_data.
-        assume_invertible : bool or None, optional
-            Controls cache propagation:
-
-            - True: Assume all factors are non-zero (compile-safe).
-            - False: Skip cache propagation (compile-safe).
-            - None: Check at runtime (may cause graph breaks).
-
-        Returns
-        -------
-        Mesh
-            New Mesh with scaled geometry.
-        """
-        return scale(
-            self,
-            factor,
-            center,
-            transform_point_data,
-            transform_cell_data,
-            transform_global_data,
-            assume_invertible,
-        )
-
-    def transform(
-        self,
-        matrix: torch.Tensor,
-        transform_point_data: bool | TensorDict = False,
-        transform_cell_data: bool | TensorDict = False,
-        transform_global_data: bool | TensorDict = False,
-        assume_invertible: bool | None = None,
-    ) -> "Mesh":
-        """Apply a linear transformation to the mesh.
-
-        Convenience wrapper for physicsnemo.mesh.transformations.transform().
-
-        Parameters
-        ----------
-        matrix : torch.Tensor
-            Transformation matrix, shape (new_n_spatial_dims, n_spatial_dims).
-        transform_point_data : bool
-            If True, transform vector/tensor fields in point_data.
-        transform_cell_data : bool
-            If True, transform vector/tensor fields in cell_data.
-        transform_global_data : bool
-            If True, transform vector/tensor fields in global_data.
-        assume_invertible : bool or None, optional
-            Controls cache propagation for square matrices:
-
-            - True: Assume matrix is invertible (compile-safe).
-            - False: Skip cache propagation (compile-safe).
-            - None: Check at runtime (may cause graph breaks).
-
-        Returns
-        -------
-        Mesh
-            New Mesh with transformed geometry.
-        """
-        return transform(
-            self,
-            matrix,
-            transform_point_data,
-            transform_cell_data,
-            transform_global_data,
-            assume_invertible,
-        )
+    transform = transform
 
     def compute_point_derivatives(
         self,
@@ -3540,9 +3211,9 @@ class Mesh:
 
     def remesh(
         self,
-        n_clusters: builtins.int,
+        n_clusters: int,
         *,
-        max_iterations: builtins.int = 4,
+        max_iterations: int = 4,
     ) -> "Mesh":
         """Uniformly remesh a triangle surface using Warp on CPU or CUDA.
 
@@ -3772,17 +3443,27 @@ class Mesh:
         )
         return cleaned
 
-    def strip_caches(self) -> "Mesh":
-        r"""Return a new mesh with all cached values removed.
+    def strip_caches(
+        self,
+        keep: Sequence[str | tuple[str, ...]] = (),
+    ) -> "Mesh":
+        r"""Return a new mesh with cached values removed.
 
         Cached values (stored under the ``_cache`` key in data TensorDicts) are
         computed lazily for expensive operations like normals, areas, and curvature.
-        This method creates a new mesh without these cached values, which is useful
-        for:
+        This method creates a new mesh without these cached values, except for keys
+        explicitly listed in ``keep``. This is useful for:
 
         - Accurate benchmarking (prevents false performance benefits from caching)
         - Reducing memory usage
         - Forcing recomputation of cached values
+
+        Parameters
+        ----------
+        keep : sequence of str or tuple[str, ...], optional
+            Cache keys to retain. Strings select a complete top-level cache such as
+            ``"topology"``; tuples select a nested entry such as
+            ``("cell", "areas")``. Missing keys are ignored.
 
         Returns
         -------
@@ -3795,18 +3476,87 @@ class Mesh:
         >>> mesh = sphere_icosahedral.load(subdivisions=2)
         >>> _ = mesh.cell_normals  # Triggers caching
         >>> mesh_clean = mesh.strip_caches()  # Remove cached normals
+        >>> mesh_with_areas = mesh.strip_caches(keep=[("cell", "areas")])
         """
+        cache = self._cache.select(*keep, strict=False)
+        device = self.points.device
+        for category, batch_size in (
+            ("cell", torch.Size([self.n_cells])),
+            ("point", torch.Size([self.n_points])),
+            ("topology", torch.Size([])),
+        ):
+            if category not in cache:
+                cache[category] = TensorDict(
+                    {},
+                    batch_size=batch_size,
+                    device=device,
+                )
+
         return Mesh(
             points=self.points,
             cells=self.cells,
             point_data=self.point_data,
             cell_data=self.cell_data,
             global_data=self.global_data,
+            _cache=cache,
         )
 
 
-### Override the tensorclass __repr__ with custom formatting
-# Note: Must be done after class definition because @tensorclass overrides __repr__
+### TensorClass's load wrapper may receive an already reconstructed Mesh when
+# loading the legacy decorator-based on-disk layout. Avoid wrapping it again.
+_tensorclass_mesh_from_tensordict = Mesh._from_tensordict.__func__
+_tensorclass_mesh_load_memmap = Mesh._load_memmap
+
+
+def _mesh_from_tensordict(cls, tensordict, non_tensordict=None, safe=True):
+    if isinstance(tensordict, cls):
+        return tensordict
+    return _tensorclass_mesh_from_tensordict(
+        cls,
+        tensordict,
+        non_tensordict=non_tensordict,
+        safe=safe,
+    )
+
+
+Mesh._from_tensordict = classmethod(_mesh_from_tensordict)
+
+
+def _mesh_load_memmap(
+    cls,
+    prefix,
+    metadata,
+    device=None,
+    out=None,
+    *,
+    robust_key,
+):
+    legacy_prefix = Path(prefix) / "_tensordict"
+    if legacy_prefix.is_dir():
+        tensordict_out = out._tensordict if isinstance(out, cls) else out
+        tensordict = TensorDict.load_memmap(
+            legacy_prefix,
+            device=device,
+            out=tensordict_out,
+            robust_key=robust_key,
+        )
+        if isinstance(out, cls):
+            return out
+        return cls._from_tensordict(tensordict)
+    return _tensorclass_mesh_load_memmap(
+        prefix,
+        metadata,
+        device=device,
+        out=out,
+        robust_key=robust_key,
+    )
+
+
+Mesh._load_memmap = classmethod(_mesh_load_memmap)
+
+
+### Override the TensorClass __repr__ with custom formatting
+# Must be done after class definition because TensorClass overrides __repr__
 # even when defined inside the class body
 def _mesh_repr(self) -> str:
     return format_mesh_repr(self)
@@ -3822,7 +3572,7 @@ Mesh.__repr__ = _mesh_repr  # type: ignore[method-assign]  # ty: ignore[invalid-
 # requested floating/complex dtype takes the cells-safe path; device-only moves and
 # non-float dtypes are delegated unchanged to the generated ``to`` so device metadata,
 # ``non_blocking``, etc. behave exactly as before. Reassigned after the class because
-# @tensorclass overrides a body-defined ``to`` (same reason as ``__repr__`` above).
+# TensorClass overrides a body-defined ``to`` (same reason as ``__repr__`` above).
 def _requested_float_dtype(
     args: tuple[Any, ...], kwargs: dict[str, Any]
 ) -> torch.dtype | None:

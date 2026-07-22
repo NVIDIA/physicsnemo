@@ -215,3 +215,32 @@ class TestCacheDevices:
 
         assert cached is not None
         assert cached.device.type == "cuda"
+
+
+class TestStripCaches:
+    """Tests for selective cache removal."""
+
+    def test_keep_retains_only_selected_nested_keys(self):
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+        cells = torch.tensor([[0, 1, 2]])
+        mesh = Mesh(points=points, cells=cells)
+        _ = mesh.cell_areas
+        _ = mesh.cell_centroids
+        mesh._cache["point", "custom"] = torch.ones(mesh.n_points)
+
+        stripped = mesh.strip_caches(keep=[("cell", "areas"), ("point", "custom")])
+
+        torch.testing.assert_close(stripped._cache["cell", "areas"], mesh.cell_areas)
+        torch.testing.assert_close(
+            stripped._cache["point", "custom"], mesh._cache["point", "custom"]
+        )
+        assert stripped._cache.get(("cell", "centroids"), None) is None
+        assert set(stripped._cache.keys()) == {"cell", "point", "topology"}
+
+    def test_keep_ignores_missing_keys(self):
+        mesh = Mesh(points=torch.zeros(1, 2))
+
+        stripped = mesh.strip_caches(keep=[("cell", "missing")])
+
+        assert set(stripped._cache.keys()) == {"cell", "point", "topology"}
+        assert not stripped._cache["cell"].keys()
