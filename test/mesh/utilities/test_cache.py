@@ -255,3 +255,98 @@ class TestStripCaches:
             stripped._cache["topology", "custom"],
             mesh._cache["topology", "custom"],
         )
+
+    def test_retained_cache_containers_are_independent(self):
+        mesh = Mesh(points=torch.zeros(1, 2))
+        mesh._cache["topology", "original"] = torch.tensor(1)
+
+        stripped = mesh.strip_caches(keep=["topology"])
+        stripped._cache["topology", "derived"] = torch.tensor(2)
+
+        assert mesh._cache.get(("topology", "derived"), None) is None
+        torch.testing.assert_close(
+            stripped._cache["topology", "original"],
+            mesh._cache["topology", "original"],
+        )
+
+
+class TestWithPoints:
+    """Tests for cache-aware point-coordinate replacement."""
+
+    @staticmethod
+    def _cached_triangle() -> Mesh:
+        mesh = Mesh(
+            points=torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]),
+            cells=torch.tensor([[0, 1, 2]]),
+            point_data={"value": torch.arange(3)},
+            cell_data={"region": torch.ones(1)},
+            global_data={"case": torch.tensor(4)},
+        )
+        _ = mesh.cell_areas
+        mesh._cache["topology", "sentinel"] = torch.tensor(7)
+        return mesh
+
+    def test_replaces_points_and_retains_topology_by_default(self):
+        mesh = self._cached_triangle()
+        points = mesh.points + 2.0
+
+        updated = mesh.with_points(points)
+
+        torch.testing.assert_close(updated.points, points)
+        torch.testing.assert_close(updated.cells, mesh.cells)
+        torch.testing.assert_close(
+            updated.point_data["value"], mesh.point_data["value"]
+        )
+        torch.testing.assert_close(
+            updated.cell_data["region"], mesh.cell_data["region"]
+        )
+        torch.testing.assert_close(
+            updated.global_data["case"], mesh.global_data["case"]
+        )
+        assert updated._cache.get(("cell", "areas"), None) is None
+        torch.testing.assert_close(
+            updated._cache["topology", "sentinel"],
+            mesh._cache["topology", "sentinel"],
+        )
+
+    def test_keep_can_retain_selected_geometry_cache(self):
+        mesh = self._cached_triangle()
+
+        updated = mesh.with_points(
+            mesh.points.clone(),
+            keep=[("cell", "areas")],
+        )
+
+        torch.testing.assert_close(updated._cache["cell", "areas"], mesh.cell_areas)
+        assert updated._cache.get(("topology", "sentinel"), None) is None
+
+    def test_accepts_new_spatial_dimension(self):
+        mesh = self._cached_triangle()
+        points = torch.nn.functional.pad(mesh.points, (0, 1))
+
+        updated = mesh.with_points(points)
+
+        assert updated.points.shape == (mesh.n_points, 3)
+        torch.testing.assert_close(updated.cells, mesh.cells)
+
+    def test_rejects_changed_point_count(self):
+        mesh = self._cached_triangle()
+
+        with pytest.raises(ValueError, match="must preserve point indexing"):
+            mesh.with_points(mesh.points[:-1])
+
+    def test_rejects_non_matrix_points(self):
+        mesh = self._cached_triangle()
+
+        with pytest.raises(ValueError, match="replacement coordinates with shape"):
+            mesh.with_points(torch.zeros(mesh.n_points))
+
+    def test_result_containers_are_independent(self):
+        mesh = self._cached_triangle()
+
+        updated = mesh.with_points(mesh.points.clone())
+        updated.point_data["derived"] = torch.zeros(mesh.n_points)
+        updated._cache["topology", "derived"] = torch.tensor(2)
+
+        assert "derived" not in mesh.point_data
+        assert mesh._cache.get(("topology", "derived"), None) is None

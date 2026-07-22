@@ -269,8 +269,9 @@ class Mesh:
 
        In-place modification of ``points`` or ``cells`` (e.g.,
        ``mesh.points[0] = ...``) is unsupported and will **silently
-       invalidate** all cached properties. Always construct a new ``Mesh``
-       instead.
+       invalidate** cached properties. Use :meth:`with_points` for coordinate
+       changes that preserve point indexing and connectivity; construct a new
+       ``Mesh`` when topology changes.
 
     **Caching**
 
@@ -1599,6 +1600,94 @@ class Mesh:
             bvh=bvh,
         )
 
+    def _cache_with_only(
+        self,
+        keep: Sequence[str | tuple[str, ...]] = (),
+    ) -> TensorDict:
+        """Return an independent cache container containing only ``keep``.
+
+        Tensor leaves are intentionally shared, but every retained nested
+        ``TensorDict`` container is shallow-copied so populating a cache on a
+        derived mesh cannot mutate the source mesh's cache structure.
+        """
+        cache = self._cache.select(*keep, strict=False).copy()
+        device = self.points.device
+        for category, batch_size in (
+            ("cell", torch.Size([self.n_cells])),
+            ("point", torch.Size([self.n_points])),
+            ("topology", torch.Size([])),
+        ):
+            if category not in cache:
+                cache[category] = TensorDict(
+                    {},
+                    batch_size=batch_size,
+                    device=device,
+                )
+        return cache
+
+    def with_points(
+        self,
+        points: torch.Tensor,
+        *,
+        keep: Sequence[str | tuple[str, ...]] = ("topology",),
+    ) -> "Mesh":
+        r"""Return a mesh with replacement point coordinates.
+
+        This operation is for geometry changes that preserve point indexing and
+        cell connectivity. The number of points must therefore remain unchanged,
+        although the spatial dimensionality may change. User data is preserved and
+        only caches explicitly selected by ``keep`` survive; topology caches are
+        retained by default because they depend on connectivity rather than point
+        coordinates.
+
+        Parameters
+        ----------
+        points : torch.Tensor
+            Replacement coordinates with shape ``(n_points, new_n_spatial_dims)``.
+        keep : sequence of str or tuple[str, ...], optional
+            Cache keys to retain. Uses the same key semantics as
+            :meth:`strip_caches`; defaults to the complete ``"topology"`` cache.
+
+        Returns
+        -------
+        Mesh
+            New mesh with replacement coordinates, preserved cells and data, and
+            only the selected caches.
+
+        Raises
+        ------
+        ValueError
+            If the replacement is not a coordinate matrix or changes the number
+            of points.
+
+        Examples
+        --------
+        >>> moved = mesh.with_points(mesh.points + 1.0)  # doctest: +SKIP
+        >>> embedded = mesh.with_points(  # doctest: +SKIP
+        ...     torch.nn.functional.pad(mesh.points, (0, 1))
+        ... )
+        """
+        if not torch.compiler.is_compiling():
+            if points.ndim != 2:
+                raise ValueError(
+                    "with_points requires replacement coordinates with shape "
+                    f"(n_points, n_spatial_dims), but got {points.shape}."
+                )
+            if points.shape[0] != self.n_points:
+                raise ValueError(
+                    "with_points must preserve point indexing, but the replacement "
+                    f"has {points.shape[0]} points and the mesh has {self.n_points}."
+                )
+
+        return Mesh(
+            points=points,
+            cells=self.cells,
+            point_data=self.point_data.copy(),
+            cell_data=self.cell_data.copy(),
+            global_data=self.global_data.copy(),
+            _cache=self._cache_with_only(keep),
+        )
+
     def with_data(
         self,
         *,
@@ -1743,18 +1832,7 @@ class Mesh:
         )
         new_point_data.update(converted)
 
-        ### Return new mesh with updated point data
-        return Mesh(
-            points=self.points,
-            cells=self.cells,
-            point_data=new_point_data,
-            cell_data=self.cell_data,
-            global_data=self.global_data,
-            # Shallow-copy so the derived mesh has its own cache container
-            # (geometry is unchanged, so the cached tensors stay valid) rather
-            # than aliasing the source mesh's mutable _cache.
-            _cache=self._cache.copy(),
-        )
+        return self.with_data(point_data=new_point_data)
 
     def point_data_to_cell_data(self, overwrite_keys: bool = False) -> "Mesh":
         """Convert point data to cell data by averaging.
@@ -1805,18 +1883,7 @@ class Mesh:
         )
         new_cell_data.update(converted)
 
-        ### Return new mesh with updated cell data
-        return Mesh(
-            points=self.points,
-            cells=self.cells,
-            point_data=self.point_data,
-            cell_data=new_cell_data,
-            global_data=self.global_data,
-            # Shallow-copy so the derived mesh has its own cache container
-            # (geometry is unchanged, so the cached tensors stay valid) rather
-            # than aliasing the source mesh's mutable _cache.
-            _cache=self._cache.copy(),
-        )
+        return self.with_data(cell_data=new_cell_data)
 
     def get_facet_mesh(
         self,
@@ -3778,9 +3845,9 @@ class Mesh:
     ) -> "Mesh":
         r"""Return a new mesh with cached values removed.
 
-        Cached values (stored under the ``_cache`` key in data TensorDicts) are
-        computed lazily for expensive operations like normals, areas, and curvature.
-        This method creates a new mesh without these cached values, except for keys
+        Cached values stored in the separate :attr:`_cache` field are computed
+        lazily for expensive operations like normals, areas, and curvature. This
+        method creates a new mesh without these cached values, except for keys
         explicitly listed in ``keep``. This is useful for:
 
         - Accurate benchmarking (prevents false performance benefits from caching)
@@ -3808,27 +3875,13 @@ class Mesh:
         >>> mesh_clean = mesh.strip_caches()  # Remove cached normals
         >>> mesh_with_areas = mesh.strip_caches(keep=[("cell", "areas")])
         """
-        cache = self._cache.select(*keep, strict=False)
-        device = self.points.device
-        for category, batch_size in (
-            ("cell", torch.Size([self.n_cells])),
-            ("point", torch.Size([self.n_points])),
-            ("topology", torch.Size([])),
-        ):
-            if category not in cache:
-                cache[category] = TensorDict(
-                    {},
-                    batch_size=batch_size,
-                    device=device,
-                )
-
         return Mesh(
             points=self.points,
             cells=self.cells,
-            point_data=self.point_data,
-            cell_data=self.cell_data,
-            global_data=self.global_data,
-            _cache=cache,
+            point_data=self.point_data.copy(),
+            cell_data=self.cell_data.copy(),
+            global_data=self.global_data.copy(),
+            _cache=self._cache_with_only(keep),
         )
 
 
