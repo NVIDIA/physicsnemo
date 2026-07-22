@@ -17,7 +17,7 @@
 """Tests for Mesh methods backed directly by their functional APIs."""
 
 from physicsnemo.mesh import Mesh
-from physicsnemo.mesh.transformations.deform import displace, morph
+from physicsnemo.mesh.transformations.deform import displace, free_form_deform, morph
 from physicsnemo.mesh.transformations.geometric import (
     rotate,
     scale,
@@ -32,6 +32,7 @@ def test_mesh_methods_reuse_function_objects():
     assert Mesh.translate is translate
     assert Mesh.displace is displace
     assert Mesh.morph is morph
+    assert Mesh.free_form_deform is free_form_deform
     assert Mesh.rotate is rotate
     assert Mesh.scale is scale
     assert Mesh.transform is transform

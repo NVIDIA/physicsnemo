@@ -34,7 +34,7 @@ from typing import (
 
 import torch
 import torch.nn.functional as F
-from jaxtyping import Bool, Float
+from jaxtyping import Float
 from tensordict import NonTensorData, TensorDict, tensorclass
 
 from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
@@ -45,7 +45,6 @@ from physicsnemo.mesh.transformations.deform import (
     morph,
     radial_basis_function_deform,
 )
-from physicsnemo.mesh.transformations.deform.ffd import _FFDBasis
 from physicsnemo.mesh.transformations.geometric import (
     rotate,
     scale,
@@ -2530,46 +2529,7 @@ class Mesh:
 
     morph = morph
 
-    def free_form_deform(
-        self,
-        control_displacements: Float[
-            torch.Tensor, "*lattice_resolution n_spatial_dims"
-        ],
-        *,
-        origin: Float[torch.Tensor, " n_spatial_dims"]
-        | Sequence[builtins.float]
-        | None = None,
-        extent: Float[torch.Tensor, " n_spatial_dims"]
-        | Sequence[builtins.float]
-        | None = None,
-        basis: _FFDBasis = "bernstein",
-        point_weights: str
-        | tuple[str, ...]
-        | Bool[torch.Tensor, " n_points"]
-        | Float[torch.Tensor, " n_points"]
-        | None = None,
-        implementation: Literal["torch", "warp"] | None = None,
-    ) -> "Mesh":
-        """Deform points with a control-point lattice by free-form deformation.
-
-        Convenience wrapper for
-        :func:`physicsnemo.mesh.transformations.deform.free_form_deform`, which
-        documents all parameters and numerical behavior.
-
-        Returns
-        -------
-        Mesh
-            New mesh with deformed points, unchanged connectivity and fields.
-        """
-        return free_form_deform(
-            self,
-            control_displacements,
-            origin=origin,
-            extent=extent,
-            basis=basis,
-            point_weights=point_weights,
-            implementation=implementation,
-        )
+    free_form_deform = free_form_deform
 
     radial_basis_function_deform = radial_basis_function_deform
 
