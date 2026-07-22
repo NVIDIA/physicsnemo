@@ -178,19 +178,7 @@ def compute_point_derivatives(
         else:
             raise ValueError(f"Invalid {gradient_type=}")
 
-    ### Return a new Mesh with the augmented point_data
-    from physicsnemo.mesh.mesh import Mesh
-
-    return Mesh(
-        points=mesh.points,
-        cells=mesh.cells,
-        point_data=new_point_data,
-        cell_data=mesh.cell_data,
-        global_data=mesh.global_data,
-        # Shallow-copy: the new mesh shares the same geometry (so cached values
-        # stay valid) but must not alias the source mesh's mutable cache.
-        _cache=mesh._cache.copy(),
-    )
+    return mesh.with_data(point_data=new_point_data)
 
 
 def compute_cell_derivatives(
@@ -276,16 +264,4 @@ def compute_cell_derivatives(
         else:
             raise ValueError(f"Invalid {gradient_type=}")
 
-    ### Return a new Mesh with the augmented cell_data
-    from physicsnemo.mesh.mesh import Mesh
-
-    return Mesh(
-        points=mesh.points,
-        cells=mesh.cells,
-        point_data=mesh.point_data,
-        cell_data=new_cell_data,
-        global_data=mesh.global_data,
-        # Shallow-copy: the new mesh shares the same geometry (so cached values
-        # stay valid) but must not alias the source mesh's mutable cache.
-        _cache=mesh._cache.copy(),
-    )
+    return mesh.with_data(cell_data=new_cell_data)
