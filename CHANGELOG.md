@@ -200,6 +200,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `physicsnemo.mesh.Mesh` and `DomainMesh` now inherit directly from
+  `TensorClass`, use the resulting root-level `.pmsh` / `.pdmsh` layout, and
+  continue to load decorator-era serialized data.
 - Optimizes the production container build by consolidating related filesystem
   operations, using BuildKit bind and cache mounts, and separating custom,
   declared, and project dependency installation. Reduces total physicsnemo layers
