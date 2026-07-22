@@ -27,7 +27,7 @@ jobs:
       pull-requests: read
     steps:
     - name: Create or update CODEOWNERS report
-      uses: actions/github-script@60a0d83039f74b59dca4a3b3f8e0cf18e2e756d2 # v7.0.1
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
       with:
