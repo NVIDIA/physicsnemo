@@ -162,7 +162,9 @@ def test_shuffle_array():
 
 def test_shuffle_array_uses_uncapped_sampler(monkeypatch):
     def reject_multinomial(*args, **kwargs):
-        raise AssertionError("torch.multinomial must not be used")
+        raise AssertionError(
+            "torch.multinomial rejects inputs with more than 2**24 categories"
+        )
 
     monkeypatch.setattr(torch, "multinomial", reject_multinomial)
     monkeypatch.setattr(_weighted_sampling, "_WEIGHTED_SAMPLE_CHUNK_SIZE", 4)

@@ -31,7 +31,9 @@ def weighted_sample_without_replacement(
 
     Each chunk contributes its local ``count`` smallest keys. The global
     ``count`` smallest keys must be in that union, so chunking reduces temporary
-    memory without changing the weighted-without-replacement distribution.
+    memory without changing the weighted-without-replacement distribution. The
+    returned indices follow increasing race-key order, matching sequential
+    weighted draws even when the full population is requested.
 
     Unlike :func:`torch.multinomial`, the number of input categories is not
     limited to :math:`2^{24}`.
@@ -65,8 +67,8 @@ def weighted_sample_without_replacement(
         raise RuntimeError("weights must contain only finite, non-negative values.")
     if weights.numel() and not bool((weights > 0).any()):
         raise RuntimeError("weights must contain at least one positive value.")
-    if count == weights.shape[0]:
-        return torch.arange(weights.shape[0], device=weights.device)
+    if count == 0:
+        return torch.empty(0, dtype=torch.long, device=weights.device)
 
     candidate_keys = []
     candidate_indices = []
@@ -81,7 +83,7 @@ def weighted_sample_without_replacement(
             keys,
             local_count,
             largest=False,
-            sorted=False,
+            sorted=True,
         )
         candidate_keys.append(local_keys)
         candidate_indices.append(local_indices + start)
@@ -91,5 +93,5 @@ def weighted_sample_without_replacement(
 
     keys = torch.cat(candidate_keys)
     indices = torch.cat(candidate_indices)
-    selected = torch.topk(keys, count, largest=False, sorted=False).indices
+    selected = torch.topk(keys, count, largest=False, sorted=True).indices
     return indices[selected]

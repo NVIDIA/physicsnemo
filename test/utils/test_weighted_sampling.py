@@ -25,7 +25,9 @@ from physicsnemo.utils._weighted_sampling import weighted_sample_without_replace
 
 def test_weighted_sampling_avoids_torch_category_limit(monkeypatch):
     def reject_multinomial(*args, **kwargs):
-        raise AssertionError("torch.multinomial must not be used")
+        raise AssertionError(
+            "torch.multinomial rejects inputs with more than 2**24 categories"
+        )
 
     monkeypatch.setattr(torch, "multinomial", reject_multinomial)
     monkeypatch.setattr(_weighted_sampling, "_WEIGHTED_SAMPLE_CHUNK_SIZE", 2)
@@ -45,6 +47,37 @@ def test_weighted_sampling_avoids_torch_category_limit(monkeypatch):
     torch.testing.assert_close(first, second)
     assert torch.unique(first).numel() == 3
     assert 1 not in first
+
+
+def test_weighted_sampling_orders_full_population_by_race_keys(monkeypatch):
+    monkeypatch.setattr(_weighted_sampling, "_WEIGHTED_SAMPLE_CHUNK_SIZE", 2)
+    weights = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
+
+    expected_generator = torch.Generator().manual_seed(0)
+    expected_keys = torch.cat(
+        [
+            torch.empty_like(chunk)
+            .exponential_(generator=expected_generator)
+            .div_(chunk)
+            for chunk in weights.split(2)
+        ]
+    )
+    expected = expected_keys.argsort()
+
+    indices = weighted_sample_without_replacement(
+        weights,
+        weights.numel(),
+        generator=torch.Generator().manual_seed(0),
+    )
+
+    torch.testing.assert_close(indices, expected)
+
+
+def test_weighted_sampling_empty_population():
+    indices = weighted_sample_without_replacement(torch.empty(0), 0)
+
+    assert indices.dtype == torch.long
+    assert indices.shape == (0,)
 
 
 def test_weighted_sampling_applies_chunk_offsets(monkeypatch):
