@@ -155,6 +155,34 @@ For connectivity-preserving object APIs, use
 :meth:`~physicsnemo.mesh.mesh.Mesh.free_form_deform` or
 :meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.free_form_deform`.
 
+Procrustes Registration
+-----------------------
+
+.. autofunction:: physicsnemo.nn.functional.procrustes
+
+``procrustes`` aligns point sets with known correspondences in one, two, or
+three spatial dimensions. It estimates a proper rotation and translation, with
+optional isotropic scale. Automatic dispatch selects Torch on CPU and Warp on
+CUDA when Warp is available, otherwise it falls back to Torch.
+
+.. code:: python
+
+    import torch
+    from physicsnemo.nn.functional import procrustes
+
+    source = torch.randn(128, 3)
+    target = torch.randn(128, 3)
+    rotation, translation, scale = procrustes(source, target)
+    aligned = scale * (source @ rotation.transpose(-1, -2)) + translation
+
+.. rubric:: Visualization
+
+The visualization shows the source, target, and Procrustes-aligned point sets.
+
+.. figure:: /img/nn/functional/geometry/deform/procrustes_overview.png
+   :alt: Corresponding source, target, and Procrustes-aligned point sets
+   :width: 85%
+
 Mesh Poisson Disk Sample
 ------------------------
 
