@@ -35,6 +35,7 @@ from physicsnemo.mesh.transformations.geometric import (
 from physicsnemo.mesh.validation import (
     compute_mesh_statistics,
     compute_quality_metrics,
+    validate_mesh,
 )
 from physicsnemo.mesh.visualization.draw_mesh import draw_mesh
 
@@ -58,6 +59,8 @@ def test_mesh_methods_reuse_function_objects():
     assert Mesh.integrate is integrate
     assert Mesh.integrate_flux is integrate_flux
     assert Mesh.integrate_moment is integrate_moment
+
+    assert Mesh.validate is validate_mesh
 
 
 def test_mesh_properties_reuse_function_objects():

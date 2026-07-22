@@ -65,6 +65,7 @@ from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
 from physicsnemo.mesh.validation import (
     compute_mesh_statistics,
     compute_quality_metrics,
+    validate_mesh,
 )
 from physicsnemo.mesh.visualization.draw_mesh import draw_mesh
 
@@ -2726,65 +2727,13 @@ class Mesh:
                     f"Invalid {data_source=!r}. Must be 'points' or 'cells'."
                 )
 
-    def validate(
-        self,
-        check_degenerate_cells: bool = True,
-        check_duplicate_vertices: bool = True,
-        check_inverted_cells: bool = False,
-        check_out_of_bounds: bool = True,
-        check_manifoldness: bool = False,
-        tolerance: float = 1e-10,
-        raise_on_error: bool = False,
-    ):
-        """Validate mesh integrity and detect common errors.
-
-        Convenience method that delegates to physicsnemo.mesh.validation.validate_mesh.
-
-        Parameters
-        ----------
-        check_degenerate_cells : bool, optional
-            Check for zero/negative area cells.
-        check_duplicate_vertices : bool, optional
-            Check for coincident vertices.
-        check_inverted_cells : bool, optional
-            Check for negative orientation.
-        check_out_of_bounds : bool, optional
-            Check cell indices are valid.
-        check_manifoldness : bool, optional
-            Check manifold topology (2D only).
-        tolerance : float, optional
-            Tolerance for geometric checks.
-        raise_on_error : bool, optional
-            Raise ValueError on first error vs return report.
-
-        Returns
-        -------
-        dict
-            Dictionary with validation results.
-
-        Examples
-        --------
-        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
-        >>> mesh = two_triangles_2d.load()
-        >>> report = mesh.validate()
-        >>> assert report["valid"] == True
-        """
-        from physicsnemo.mesh.validation import validate_mesh
-
-        return validate_mesh(
-            mesh=self,
-            check_degenerate_cells=check_degenerate_cells,
-            check_duplicate_vertices=check_duplicate_vertices,
-            check_inverted_cells=check_inverted_cells,
-            check_out_of_bounds=check_out_of_bounds,
-            check_manifoldness=check_manifoldness,
-            tolerance=tolerance,
-            raise_on_error=raise_on_error,
-        )
+    ### Validation
 
     quality_metrics = property(compute_quality_metrics)
 
     statistics = property(compute_mesh_statistics)
+
+    validate = validate_mesh
 
     def remesh(
         self,

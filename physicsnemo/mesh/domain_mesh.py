@@ -1259,7 +1259,8 @@ class DomainMesh:
         check_inverted_cells: bool = False,
         check_out_of_bounds: bool = True,
         check_manifoldness: bool = False,
-        tolerance: float = 1e-10,
+        check_self_intersection: bool = False,
+        tolerance: float | None = None,
         raise_on_error: bool = False,
     ) -> dict[str, Any]:
         r"""Validate all meshes in the domain and aggregate results.
@@ -1279,8 +1280,11 @@ class DomainMesh:
             Check cell indices are valid.
         check_manifoldness : bool, optional
             Check manifold topology.
-        tolerance : float, optional
-            Tolerance for geometric checks.
+        check_self_intersection : bool, optional
+            Check for self-intersecting cells.
+        tolerance : float | None, optional
+            Tolerance for geometric checks. If ``None`` (default), each mesh
+            uses a dtype-aware epsilon.
         raise_on_error : bool, optional
             Raise ``ValueError`` on first error vs return report.
 
@@ -1302,6 +1306,7 @@ class DomainMesh:
             check_inverted_cells=check_inverted_cells,
             check_out_of_bounds=check_out_of_bounds,
             check_manifoldness=check_manifoldness,
+            check_self_intersection=check_self_intersection,
             tolerance=tolerance,
             raise_on_error=raise_on_error,
         )

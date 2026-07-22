@@ -255,7 +255,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   property instead of recomputing it.
 - `physicsnemo.mesh.Mesh` convenience methods with matching public signatures
   now reuse their import-safe canonical function objects directly, removing
-  duplicate wrappers and docstrings.
+  duplicate wrappers and docstrings. `Mesh.validate` and `DomainMesh.validate`
+  now match `validate_mesh`, including its `check_self_intersection` option and
+  dtype-aware default tolerance.
 - `physicsnemo.mesh`: `validate_mesh(check_self_intersection=True)` now raises
   `NotImplementedError` (the check is unimplemented) instead of silently returning a
   `None` sentinel that masquerades as "no self-intersections found".
