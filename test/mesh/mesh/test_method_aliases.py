@@ -113,3 +113,15 @@ def test_mesh_method_wrapper_delegates_to_function(triangle_mesh):
 
     torch.testing.assert_close(actual.points, expected.points)
     assert torch.equal(actual.cells, expected.cells)
+
+
+@pytest.mark.parametrize("property_name", ("quality_metrics", "statistics"))
+def test_mesh_validation_property_contract(property_name):
+    """Property help describes property access rather than functional arguments."""
+    descriptor = inspect.getattr_static(Mesh, property_name)
+
+    assert isinstance(descriptor, property)
+    assert list(inspect.signature(descriptor.fget).parameters) == ["self"]
+    assert "mesh : Mesh" not in descriptor.__doc__
+    assert "tolerance :" not in descriptor.__doc__
+    assert f"mesh.{property_name}" in descriptor.__doc__

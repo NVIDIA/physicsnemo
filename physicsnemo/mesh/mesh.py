@@ -21,7 +21,7 @@ import builtins
 import inspect
 import math
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -65,11 +65,7 @@ from physicsnemo.mesh.transformations.geometric import (
 from physicsnemo.mesh.utilities._padding import _pad_by_tiling_last, _pad_with_value
 from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
-from physicsnemo.mesh.validation import (
-    compute_mesh_statistics,
-    compute_quality_metrics,
-    validate,
-)
+from physicsnemo.mesh.validation import validate
 from physicsnemo.mesh.visualization.draw_mesh import AxesOrPlotter as _AxesOrPlotter
 from physicsnemo.mesh.visualization.draw_mesh import draw
 
@@ -2760,9 +2756,66 @@ class Mesh:
 
     ### Validation
 
-    quality_metrics = property(compute_quality_metrics)
+    @property
+    def quality_metrics(self) -> TensorDict:
+        """Compute geometric quality metrics for every cell.
 
-    statistics = property(compute_mesh_statistics)
+        Returns
+        -------
+        TensorDict
+            Per-cell metrics including normalized aspect ratio, edge-length
+            ratio, minimum and maximum angles, and a combined quality score.
+            A regular simplex has aspect ratio and quality score equal to 1.
+
+        Examples
+        --------
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
+        >>> metrics = mesh.quality_metrics
+        >>> assert "quality_score" in metrics.keys()
+
+        See Also
+        --------
+        physicsnemo.mesh.validation.compute_quality_metrics
+            Standalone functional form.
+        """
+        from physicsnemo.mesh.validation import compute_quality_metrics
+
+        return compute_quality_metrics(self)
+
+    @property
+    def statistics(
+        self,
+    ) -> Mapping[
+        str,
+        builtins.int
+        | builtins.float
+        | tuple[builtins.float, builtins.float, builtins.float, builtins.float],
+    ]:
+        """Compute summary statistics for the mesh.
+
+        Returns
+        -------
+        Mapping
+            Mesh counts and distributions of edge lengths, cell measures,
+            aspect ratios, and quality scores.
+
+        Examples
+        --------
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
+        >>> stats = mesh.statistics
+        >>> assert "n_points" in stats and "n_cells" in stats
+
+        See Also
+        --------
+        physicsnemo.mesh.validation.compute_mesh_statistics
+            Standalone functional form, including a configurable degeneracy
+            tolerance.
+        """
+        from physicsnemo.mesh.validation import compute_mesh_statistics
+
+        return compute_mesh_statistics(self)
 
     validate = _mesh_method(validate)
 
