@@ -79,7 +79,7 @@ def cos_zenith_angle(
 
 
 def zenith_azimuth_angles(
-    time: Union[T, datetime.datetime],
+    time: datetime.datetime,
     lon: T,
     lat: T,
     sin_zenith_epsilon: float = 1e-6,
@@ -101,7 +101,7 @@ def zenith_azimuth_angles(
 
     Parameters
     ----------
-    time : datetime.datetime, float, np.ndarray or torch.Tensor
+    time : datetime.datetime
         Time in UTC.
     lon : float, np.ndarray or torch.Tensor
         Longitude in degrees (E/W).
