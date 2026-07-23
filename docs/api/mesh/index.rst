@@ -181,7 +181,8 @@ Key Features
 - **Mesh operations**: subdivision (linear, Loop, Butterfly), smoothing,
   remeshing, repair
 - **Geometry transformations**: translation, rotation, scaling, dense point
-  displacement, and sparse control-point morphing
+  displacement, compact control-point morphing, and global radial-basis
+  deformation
 - **Tessellation**: triangulate polygon soups into simplicial meshes (convex
   fan with an ear-clip fallback for non-convex polygons), for example, using
   ``Mesh.from_polygons``

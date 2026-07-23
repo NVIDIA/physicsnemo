@@ -39,7 +39,12 @@ from tensordict import NonTensorData, TensorDict, tensorclass
 
 from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
 from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
-from physicsnemo.mesh.transformations.deform import displace, free_form_deform, morph
+from physicsnemo.mesh.transformations.deform import (
+    displace,
+    free_form_deform,
+    morph,
+    radial_basis_function_deform,
+)
 from physicsnemo.mesh.transformations.deform.ffd import _FFDBasis
 from physicsnemo.mesh.transformations.geometric import (
     rotate,
@@ -2755,6 +2760,43 @@ class Mesh:
             origin=origin,
             extent=extent,
             basis=basis,
+            point_weights=point_weights,
+            implementation=implementation,
+        )
+
+    def radial_basis_function_deform(
+        self,
+        control_points: Float[torch.Tensor, "n_controls n_spatial_dims"],
+        control_displacements: Float[torch.Tensor, "n_controls n_spatial_dims"],
+        *,
+        kernel: Literal["thin_plate_spline"] = "thin_plate_spline",
+        polynomial: builtins.bool = True,
+        smoothing: builtins.float = 0.0,
+        point_weights: str
+        | tuple[str, ...]
+        | Bool[torch.Tensor, " n_points"]
+        | Float[torch.Tensor, " n_points"]
+        | None = None,
+        implementation: Literal["torch", "warp"] | None = None,
+    ) -> "Mesh":
+        """Deform points with a global thin-plate-spline RBF field.
+
+        Convenience wrapper for
+        :func:`~physicsnemo.mesh.transformations.deform.radial_basis_function_deform`,
+        which documents all parameters and numerical behavior.
+
+        Returns
+        -------
+        Mesh
+            New mesh with deformed points, unchanged connectivity and fields.
+        """
+        return radial_basis_function_deform(
+            self,
+            control_points,
+            control_displacements,
+            kernel=kernel,
+            polynomial=polynomial,
+            smoothing=smoothing,
             point_weights=point_weights,
             implementation=implementation,
         )

@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Warp backends for compact Shepard morphing and lattice free-form deformation."""
+"""Warp backends for compact Shepard, RBF, and lattice deformation."""
 
 from .ffd_op import (
     ffd_field_warp_impl,
@@ -24,10 +24,12 @@ from .op import (
     compact_shepard_field_warp_impl,
     morph_points_warp,
 )
+from .rbf_op import rbf_field_warp
 
 __all__ = [
     "compact_shepard_field_warp_impl",
     "ffd_field_warp_impl",
     "ffd_points_warp",
     "morph_points_warp",
+    "rbf_field_warp",
 ]
