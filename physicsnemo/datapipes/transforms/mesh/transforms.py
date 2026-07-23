@@ -35,7 +35,7 @@ from physicsnemo.mesh import (
     MeshFieldAssociation,
 )
 from physicsnemo.mesh.calculus.measure import compose_measure_weights
-from physicsnemo.nn.functional import sample_without_replacement
+from physicsnemo.nn.functional import weighted_multinomial
 
 
 @register()
@@ -283,14 +283,14 @@ class SubsampleMesh(MeshTransform):
         if total <= k:
             return torch.arange(total, device=device)
         if total > 2**24:
-            return sample_without_replacement(
+            return weighted_multinomial(
                 total,
                 k,
                 strategy="poisson_gap",
                 device=device,
                 generator=self._generator,
             )
-        return sample_without_replacement(
+        return weighted_multinomial(
             total,
             k,
             strategy="exact",

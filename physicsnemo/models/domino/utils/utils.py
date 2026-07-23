@@ -28,7 +28,7 @@ from typing import Any, Sequence
 import torch
 from jaxtyping import Float, Int
 
-from physicsnemo.nn.functional import knn, sample_without_replacement
+from physicsnemo.nn.functional import knn, weighted_multinomial
 
 
 def calculate_center_of_mass(
@@ -546,10 +546,10 @@ def shuffle_array(
     if N_input_points < n_points:
         return points, torch.arange(N_input_points)
 
-    idx = sample_without_replacement(
-        N_input_points,
+    sampling_input = weights if weights is not None else N_input_points
+    idx = weighted_multinomial(
+        sampling_input,
         n_points,
-        weights=weights,
         device=points.device,
     )
 
@@ -941,7 +941,7 @@ def area_weighted_shuffle_array(
     Note
     ----
     For GPU tensors, the sampling is performed on the current device.
-    Sampling uses the uncapped exact ``sample_without_replacement`` functional.
+    Sampling uses the uncapped exact ``weighted_multinomial`` functional.
 
     Examples
     --------
@@ -1008,7 +1008,7 @@ def solution_weighted_shuffle_array(
     Note
     ----
     For GPU tensors, the sampling is performed on the current device.
-    Sampling uses the uncapped exact ``sample_without_replacement`` functional.
+    Sampling uses the uncapped exact ``weighted_multinomial`` functional.
 
     Examples
     --------
@@ -1097,7 +1097,7 @@ def sample_points_on_mesh(
             mesh_areas = 0.5 * normals_norm
 
     # Next, use the areas to compute a weighted sampling of the triangles:
-    target_triangles = torch.multinomial(
+    target_triangles = weighted_multinomial(
         mesh_areas,
         n_points,
         replacement=True,

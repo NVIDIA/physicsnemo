@@ -47,7 +47,7 @@ from physicsnemo.models.domino.utils import (
 )
 
 sampling_module = importlib.import_module(
-    "physicsnemo.nn.functional.sample_without_replacement"
+    "physicsnemo.nn.functional.weighted_multinomial"
 )
 
 

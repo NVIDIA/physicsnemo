@@ -30,7 +30,7 @@ from tensordict import TensorDict
 
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.base import Transform
-from physicsnemo.nn.functional import sample_without_replacement
+from physicsnemo.nn.functional import weighted_multinomial
 
 
 def shuffle_array(
@@ -72,10 +72,10 @@ def shuffle_array(
     strategy = (
         "poisson_gap" if weights is None and N > 2**24 and n_points < N else "exact"
     )
-    indices = sample_without_replacement(
-        N,
+    sampling_input = weights if weights is not None else N
+    indices = weighted_multinomial(
+        sampling_input,
         n_points,
-        weights=weights,
         strategy=strategy,
         device=device,
         generator=generator,
@@ -263,7 +263,7 @@ class SubsamplePoints(Transform):
                 generator=self._generator,
             )
         elif self.algorithm == "poisson_fixed" and N > 2**24:
-            indices = sample_without_replacement(
+            indices = weighted_multinomial(
                 N,
                 self.n_points,
                 strategy="poisson_gap",
@@ -271,7 +271,7 @@ class SubsamplePoints(Transform):
                 generator=self._generator,
             )
         else:
-            indices = sample_without_replacement(
+            indices = weighted_multinomial(
                 N,
                 self.n_points,
                 strategy="exact",

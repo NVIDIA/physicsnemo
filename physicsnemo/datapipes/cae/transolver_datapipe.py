@@ -44,7 +44,7 @@ from physicsnemo.models.domino.utils import (
     unnormalize,
     unstandardize,
 )
-from physicsnemo.nn.functional import sample_without_replacement, signed_distance_field
+from physicsnemo.nn.functional import signed_distance_field, weighted_multinomial
 
 
 @dataclass
@@ -179,7 +179,7 @@ class TransolverDataPipe(Dataset):
         positions = data_dict["surface_mesh_centers"]
 
         if self.config.resolution is not None:
-            idx = sample_without_replacement(
+            idx = weighted_multinomial(
                 data_dict["surface_mesh_centers"].shape[0],
                 self.config.resolution,
                 strategy="exact",
@@ -271,7 +271,7 @@ class TransolverDataPipe(Dataset):
         positions = data_dict["volume_mesh_centers"]
 
         if self.config.resolution is not None:
-            idx = sample_without_replacement(
+            idx = weighted_multinomial(
                 positions.shape[0],
                 self.config.resolution,
                 strategy="poisson_gap",
@@ -385,7 +385,7 @@ class TransolverDataPipe(Dataset):
         """
         geometry_coordinates = data_dict["stl_coordinates"]
         if self.config.geometry_sampling is not None:
-            idx = sample_without_replacement(
+            idx = weighted_multinomial(
                 data_dict["stl_coordinates"].shape[0],
                 self.config.geometry_sampling,
                 strategy="poisson_gap",

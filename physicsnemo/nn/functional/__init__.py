@@ -65,10 +65,7 @@ from .rendering import (
     volume_render,
     wireframe_render,
 )
-from .sample_without_replacement import (
-    SampleWithoutReplacement,
-    sample_without_replacement,
-)
+from .weighted_multinomial import WeightedMultinomial, weighted_multinomial
 
 __all__ = [
     "displace_points",
@@ -102,8 +99,8 @@ __all__ = [
     "radius_search",
     "real",
     "ray_mesh_intersect",
-    "SampleWithoutReplacement",
-    "sample_without_replacement",
+    "WeightedMultinomial",
+    "weighted_multinomial",
     "remeshing",
     "rectilinear_grid_curl",
     "rectilinear_grid_divergence",

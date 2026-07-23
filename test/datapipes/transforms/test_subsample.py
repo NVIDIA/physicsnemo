@@ -27,7 +27,7 @@ from physicsnemo.datapipes.transforms import SubsamplePoints
 from physicsnemo.datapipes.transforms.subsample import shuffle_array
 
 sampling_module = importlib.import_module(
-    "physicsnemo.nn.functional.sample_without_replacement"
+    "physicsnemo.nn.functional.weighted_multinomial"
 )
 
 

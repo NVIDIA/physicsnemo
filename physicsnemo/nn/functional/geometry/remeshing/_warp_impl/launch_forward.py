@@ -27,9 +27,7 @@ from physicsnemo.core.function_spec import FunctionSpec
 from physicsnemo.nn.functional.geometry.farthest_point_sampling import (
     farthest_point_sampling,
 )
-from physicsnemo.nn.functional.sample_without_replacement import (
-    sample_without_replacement,
-)
+from physicsnemo.nn.functional.weighted_multinomial import weighted_multinomial
 from physicsnemo.utils._index_tuple_ops import unique_index_tuples
 
 from ._kernels import (
@@ -58,10 +56,9 @@ def _sample_remeshing_seeds(
 ) -> torch.Tensor:
     """Sample remeshing seeds reproducibly with the shared weighted sampler."""
     generator = torch.Generator(device=weights.device).manual_seed(0)
-    return sample_without_replacement(
-        weights.shape[0],
+    return weighted_multinomial(
+        weights,
         count,
-        weights=weights,
         generator=generator,
     )
 
