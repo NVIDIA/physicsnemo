@@ -18,8 +18,10 @@
 # where ``tensorclass`` installs dtype-conversion methods such as ``int``.
 # Qualify scalar annotations that must continue to resolve to builtin types.
 import builtins
+import inspect
 import math
 import types
+from collections.abc import Callable
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -28,6 +30,7 @@ from typing import (
     Self,
     Sequence,
     TypeAlias,
+    TypeVar,
     cast,
     get_args,
 )
@@ -65,12 +68,40 @@ from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
 from physicsnemo.mesh.validation import (
     compute_mesh_statistics,
     compute_quality_metrics,
-    validate_mesh,
+    validate,
 )
-from physicsnemo.mesh.visualization.draw_mesh import draw_mesh
+from physicsnemo.mesh.visualization.draw_mesh import AxesOrPlotter as _AxesOrPlotter
+from physicsnemo.mesh.visualization.draw_mesh import draw
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.neighbors._adjacency import Adjacency
+
+
+_Method = TypeVar("_Method", bound=Callable[..., Any])
+# Copied method annotations resolve in this module's namespace.
+AxesOrPlotter = _AxesOrPlotter
+
+
+def _mesh_method(function: _Method) -> _Method:
+    """Bind a standalone mesh function without duplicating its implementation.
+
+    The adapter deliberately creates a distinct method object. Besides leaving
+    room for method-specific evolution, this gives the class-facing callable
+    the correct name and module for help, annotation resolution, and bound-method
+    pickling. ``__signature__`` preserves the canonical function signature while
+    normal descriptor binding removes its leading ``mesh`` parameter.
+    """
+
+    def method(self, *args, **kwargs):
+        return function(self, *args, **kwargs)
+
+    method.__name__ = function.__name__
+    method.__qualname__ = f"Mesh.{function.__name__}"
+    method.__module__ = __name__
+    method.__doc__ = function.__doc__
+    method.__annotations__ = function.__annotations__.copy()
+    setattr(method, "__signature__", inspect.signature(function))
+    return cast(_Method, method)
 
 
 # A field on a `Mesh` is "associated with" either points (e.g. a per-vertex
@@ -2115,9 +2146,9 @@ class Mesh:
                 f"Invalid {point_source=!r}. Must be 'vertices' or 'cell_centroids'."
             )
 
-    is_manifold = is_manifold
+    is_manifold = _mesh_method(is_manifold)
 
-    is_watertight = is_watertight
+    is_watertight = _mesh_method(is_watertight)
 
     def _cached_adjacency(self, cache_key: str, compute_fn, **kwargs):
         r"""Look up or compute-and-cache a topological adjacency.
@@ -2471,37 +2502,37 @@ class Mesh:
 
     ### Transformations
 
-    displace = displace
+    displace = _mesh_method(displace)
 
-    free_form_deform = free_form_deform
+    free_form_deform = _mesh_method(free_form_deform)
 
-    morph = morph
+    morph = _mesh_method(morph)
 
-    radial_basis_function_deform = radial_basis_function_deform
+    radial_basis_function_deform = _mesh_method(radial_basis_function_deform)
 
-    rotate = rotate
+    rotate = _mesh_method(rotate)
 
-    scale = scale
+    scale = _mesh_method(scale)
 
-    transform = transform
+    transform = _mesh_method(transform)
 
-    translate = translate
+    translate = _mesh_method(translate)
 
     ### Visualization
 
-    draw = draw_mesh
+    draw = _mesh_method(draw)
 
     ### Calculus
 
-    compute_cell_derivatives = compute_cell_derivatives
+    compute_cell_derivatives = _mesh_method(compute_cell_derivatives)
 
-    compute_point_derivatives = compute_point_derivatives
+    compute_point_derivatives = _mesh_method(compute_point_derivatives)
 
-    integrate = integrate
+    integrate = _mesh_method(integrate)
 
-    integrate_flux = integrate_flux
+    integrate_flux = _mesh_method(integrate_flux)
 
-    integrate_moment = integrate_moment
+    integrate_moment = _mesh_method(integrate_moment)
 
     def gradient(
         self,
@@ -2733,7 +2764,7 @@ class Mesh:
 
     statistics = property(compute_mesh_statistics)
 
-    validate = validate_mesh
+    validate = _mesh_method(validate)
 
     def remesh(
         self,

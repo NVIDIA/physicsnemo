@@ -71,10 +71,7 @@ def test_mesh_free_form_deform_signatures_and_annotations_are_introspectable():
         assert signature.parameters["basis"].default == "bernstein"
         assert signature.parameters["origin"].default is None
         assert signature.parameters["extent"].default is None
-        hints = get_type_hints(
-            deform_method,
-            localns={"Mesh": Mesh, "DomainMesh": DomainMesh},
-        )
+        hints = get_type_hints(deform_method)
         assert hints["basis"] == _EXPECTED_FFD_BASIS
         assert hints["return"] is owner
 

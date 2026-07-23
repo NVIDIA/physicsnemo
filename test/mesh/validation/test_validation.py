@@ -31,6 +31,7 @@ from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.validation import (
     compute_mesh_statistics,
     compute_quality_metrics,
+    validate,
     validate_mesh,
 )
 
@@ -58,11 +59,49 @@ class TestMeshValidation:
 
         mesh = Mesh(points=points, cells=cells)
 
-        report = validate_mesh(mesh)
+        report = validate(mesh)
 
         assert report["valid"]
         assert report["n_degenerate_cells"] == 0
         assert report["n_out_of_bounds_cells"] == 0
+
+    def test_pending_deprecation_alias_matches_validate(self, device):
+        """The legacy functional name preserves behavior while users migrate."""
+        points = torch.tensor(
+            [[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]],
+            dtype=torch.float32,
+            device=device,
+        )
+        mesh = Mesh(
+            points=points,
+            cells=torch.tensor([[0, 1, 2]], dtype=torch.long, device=device),
+        )
+
+        expected = validate(mesh)
+        with pytest.warns(PendingDeprecationWarning, match="validate_mesh"):
+            actual = validate_mesh(mesh)
+
+        assert actual.keys() == expected.keys()
+        for key in actual:
+            if isinstance(actual[key], torch.Tensor):
+                assert torch.equal(actual[key], expected[key])
+            else:
+                assert actual[key] == expected[key]
+
+    def test_mesh_validate_preserves_positional_tolerance(self, device):
+        """The sixth historical method argument remains ``tolerance``."""
+        points = torch.tensor(
+            [[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]],
+            dtype=torch.float32,
+            device=device,
+        )
+        mesh = Mesh(
+            points=points,
+            cells=torch.tensor([[0, 1, 2]], dtype=torch.long, device=device),
+        )
+
+        report = mesh.validate(True, True, False, True, False, 1e-6)
+        assert report["valid"]
 
     def test_out_of_bounds_indices(self, device):
         """Test detection of out-of-bounds cell indices."""
@@ -81,7 +120,7 @@ class TestMeshValidation:
 
         mesh = Mesh(points=points, cells=cells)
 
-        report = validate_mesh(mesh, check_out_of_bounds=True, raise_on_error=False)
+        report = validate(mesh, check_out_of_bounds=True, raise_on_error=False)
 
         assert not report["valid"]
         assert report["n_out_of_bounds_cells"] == 1
@@ -111,7 +150,7 @@ class TestMeshValidation:
 
         mesh = Mesh(points=points, cells=cells)
 
-        report = validate_mesh(mesh, check_degenerate_cells=True, raise_on_error=False)
+        report = validate(mesh, check_degenerate_cells=True, raise_on_error=False)
 
         assert not report["valid"]
         assert report["n_degenerate_cells"] >= 1
@@ -133,9 +172,7 @@ class TestMeshValidation:
 
         mesh = Mesh(points=points, cells=cells)
 
-        report = validate_mesh(
-            mesh, check_duplicate_vertices=True, raise_on_error=False
-        )
+        report = validate(mesh, check_duplicate_vertices=True, raise_on_error=False)
 
         assert not report["valid"]
         assert report["n_duplicate_vertices"] >= 1
@@ -157,7 +194,7 @@ class TestMeshValidation:
         mesh = Mesh(points=points, cells=cells)
 
         with pytest.raises(ValueError, match="out-of-bounds"):
-            validate_mesh(mesh, check_out_of_bounds=True, raise_on_error=True)
+            validate(mesh, check_out_of_bounds=True, raise_on_error=True)
 
     def test_manifoldness_check_2d(self, device):
         """Test manifoldness check for 2D meshes."""
@@ -184,7 +221,7 @@ class TestMeshValidation:
 
         mesh = Mesh(points=points, cells=cells)
 
-        report = validate_mesh(mesh, check_manifoldness=True)
+        report = validate(mesh, check_manifoldness=True)
 
         # Should be manifold (each edge shared by at most 2 faces)
         assert report["is_manifold"]
@@ -197,7 +234,7 @@ class TestMeshValidation:
 
         mesh = Mesh(points=points, cells=cells)
 
-        report = validate_mesh(mesh)
+        report = validate(mesh)
 
         # Empty mesh should be valid
         assert report["valid"]
@@ -535,7 +572,7 @@ class TestMeshAPIIntegration:
 
         mesh = Mesh(points=points, cells=cells)
 
-        report = validate_mesh(mesh, check_out_of_bounds=True, raise_on_error=False)
+        report = validate(mesh, check_out_of_bounds=True, raise_on_error=False)
 
         assert not report["valid"]
         assert report["n_out_of_bounds_cells"] == 1
@@ -692,7 +729,7 @@ class TestValidationCodePaths:
         mesh = Mesh(points=points, cells=cells)
 
         # Duplicate check now works for all mesh sizes using vectorized spatial hashing
-        report = validate_mesh(mesh, check_duplicate_vertices=True)
+        report = validate(mesh, check_duplicate_vertices=True)
 
         # Should return actual count (0 since grid points are well-spaced)
         assert report["n_duplicate_vertices"] == 0
@@ -722,7 +759,7 @@ class TestValidationCodePaths:
 
         mesh = Mesh(points=points, cells=cells)
 
-        report = validate_mesh(mesh, check_inverted_cells=True, raise_on_error=False)
+        report = validate(mesh, check_inverted_cells=True, raise_on_error=False)
 
         # Should detect one inverted cell
         assert report["n_inverted_cells"] >= 1
@@ -756,7 +793,7 @@ class TestValidationCodePaths:
 
         mesh = Mesh(points=points, cells=cells)
 
-        report = validate_mesh(mesh, check_manifoldness=True, raise_on_error=False)
+        report = validate(mesh, check_manifoldness=True, raise_on_error=False)
 
         # Should detect non-manifold edge
         assert not report["is_manifold"]
@@ -769,7 +806,7 @@ class TestValidationCodePaths:
 
         mesh = Mesh(points=points, cells=cells)
 
-        report = validate_mesh(
+        report = validate(
             mesh,
             check_degenerate_cells=True,
             check_out_of_bounds=True,
@@ -798,7 +835,7 @@ class TestValidationCodePaths:
 
         mesh = Mesh(points=points, cells=cells)
 
-        report = validate_mesh(mesh, check_inverted_cells=True)
+        report = validate(mesh, check_inverted_cells=True)
 
         # Should return -1 (not applicable for codimension != 0)
         assert report["n_inverted_cells"] == -1 or report["n_inverted_cells"] == 0
@@ -827,7 +864,7 @@ class TestValidationCodePaths:
 
         mesh = Mesh(points=points, cells=cells)
 
-        report = validate_mesh(mesh, check_manifoldness=True)
+        report = validate(mesh, check_manifoldness=True)
 
         # Should return None or -1 for non-2D manifolds
         assert (
@@ -853,7 +890,7 @@ class TestValidationCodePaths:
         mesh = Mesh(points=points, cells=cells)
 
         # Should not crash even though area computation would fail
-        report = validate_mesh(
+        report = validate(
             mesh,
             check_out_of_bounds=True,
             check_degenerate_cells=True,
@@ -875,7 +912,7 @@ def test_self_intersection_check_raises_not_implemented():
     cells = torch.tensor([[0, 1, 2]], dtype=torch.long)
     mesh = Mesh(points=points, cells=cells)
     with pytest.raises(NotImplementedError, match="[Ss]elf-intersection"):
-        validate_mesh(mesh, check_self_intersection=True, raise_on_error=False)
+        validate(mesh, check_self_intersection=True, raise_on_error=False)
 
 
 if __name__ == "__main__":

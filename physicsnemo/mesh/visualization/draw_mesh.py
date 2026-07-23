@@ -16,7 +16,8 @@
 
 """Main entry point for mesh visualization with backend selection."""
 
-from typing import TYPE_CHECKING, Any, Literal
+import warnings
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
 import torch
 
@@ -28,13 +29,17 @@ if TYPE_CHECKING:
 
     from physicsnemo.mesh.mesh import Mesh
 
+    AxesOrPlotter: TypeAlias = matplotlib.axes.Axes | pyvista.Plotter
+else:
+    AxesOrPlotter: TypeAlias = Any
+
 # Check availability at module load (add new backends here)
 BACKENDS_INSTALLED: dict[str, bool] = {
     name: check_version_spec(name) for name in ["matplotlib", "pyvista"]
 }
 
 
-def draw_mesh(
+def draw(
     mesh: "Mesh",
     backend: Literal["matplotlib", "pyvista", "auto"] = "auto",
     show: bool = True,
@@ -47,14 +52,15 @@ def draw_mesh(
     alpha_cells: float = 1.0,
     alpha_edges: float = 1.0,
     show_edges: bool = True,
-    ax: Any = None,
+    ax: "AxesOrPlotter | None" = None,
     backend_options: dict[str, Any] | None = None,
-) -> "matplotlib.axes.Axes | pyvista.Plotter":
+) -> "AxesOrPlotter":
     """Draw a mesh using matplotlib or PyVista backend.
 
     This is the main visualization function for Mesh objects. It automatically
     selects the appropriate backend based on spatial dimensions, or allows
-    explicit backend specification.
+    explicit backend specification. Call it as ``draw(mesh, ...)`` or as
+    ``mesh.draw(...)``; the bound method supplies ``mesh`` automatically.
 
     Parameters
     ----------
@@ -263,3 +269,46 @@ def draw_mesh(
         raise AssertionError(
             f"Unreachable: {backend=!r} passed validation but has no dispatch."
         )
+
+
+def draw_mesh(
+    mesh: "Mesh",
+    backend: Literal["matplotlib", "pyvista", "auto"] = "auto",
+    show: bool = True,
+    point_scalars: None | torch.Tensor | str | tuple[str, ...] = None,
+    cell_scalars: None | torch.Tensor | str | tuple[str, ...] = None,
+    cmap: str = "viridis",
+    vmin: float | None = None,
+    vmax: float | None = None,
+    alpha_points: float = 1.0,
+    alpha_cells: float = 1.0,
+    alpha_edges: float = 1.0,
+    show_edges: bool = True,
+    ax: "AxesOrPlotter | None" = None,
+    backend_options: dict[str, Any] | None = None,
+) -> "AxesOrPlotter":
+    """Compatibility wrapper for :func:`draw` pending deprecation."""
+    warnings.warn(
+        "draw_mesh is pending deprecation; use draw instead.",
+        PendingDeprecationWarning,
+        stacklevel=2,
+    )
+    return draw(
+        mesh,
+        backend=backend,
+        show=show,
+        point_scalars=point_scalars,
+        cell_scalars=cell_scalars,
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
+        alpha_points=alpha_points,
+        alpha_cells=alpha_cells,
+        alpha_edges=alpha_edges,
+        show_edges=show_edges,
+        ax=ax,
+        backend_options=backend_options,
+    )
+
+
+__all__ = ["AxesOrPlotter", "draw", "draw_mesh"]

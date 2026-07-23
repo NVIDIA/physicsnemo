@@ -20,6 +20,7 @@ Provides comprehensive validation of mesh integrity including topology,
 geometry, and data consistency checks.
 """
 
+import warnings
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
@@ -37,21 +38,24 @@ if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
 
-def validate_mesh(
+def validate(
     mesh: "Mesh",
     check_degenerate_cells: bool = True,
     check_duplicate_vertices: bool = True,
     check_inverted_cells: bool = False,  # Expensive, opt-in
     check_out_of_bounds: bool = True,
     check_manifoldness: bool = False,  # Only 2D, opt-in
-    check_self_intersection: bool = False,  # Very expensive, opt-in
     tolerance: float | None = None,
     raise_on_error: bool = False,
+    *,
+    check_self_intersection: bool = False,  # Very expensive, opt-in
 ) -> Mapping[str, bool | int | torch.Tensor]:
     """Validate mesh integrity and detect common errors.
 
     Performs a comprehensive set of checks to ensure mesh is well-formed
-    and suitable for geometric computations.
+    and suitable for geometric computations. Call it as ``validate(mesh, ...)``
+    or as ``mesh.validate(...)``; the bound method supplies ``mesh``
+    automatically.
 
     Parameters
     ----------
@@ -67,14 +71,15 @@ def validate_mesh(
         Check that cell indices are valid
     check_manifoldness : bool
         Check manifold topology (2D only, expensive)
-    check_self_intersection : bool
-        Check for self-intersecting cells (very expensive)
     tolerance : float | None
         Tolerance for geometric checks (areas, distances).
         If ``None`` (default), uses a dtype-aware epsilon via :func:`safe_eps`.
     raise_on_error : bool
         If True, raise ValueError on first error. If False,
         return dict with all validation results.
+    check_self_intersection : bool
+        Request a self-intersection check. This option is keyword-only and not
+        yet implemented; passing ``True`` raises ``NotImplementedError``.
 
     Returns
     -------
@@ -97,12 +102,15 @@ def validate_mesh(
     ------
     ValueError
         If raise_on_error=True and validation fails
+    NotImplementedError
+        If ``check_self_intersection=True`` because that check is not yet
+        implemented.
 
     Examples
     --------
     >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
     >>> mesh = two_triangles_2d.load()
-    >>> report = validate_mesh(mesh)
+    >>> report = validate(mesh)
     >>> assert report["valid"] == True
     """
     ### Default tolerance based on point dtype
@@ -286,6 +294,36 @@ def validate_mesh(
     return results
 
 
+def validate_mesh(
+    mesh: "Mesh",
+    check_degenerate_cells: bool = True,
+    check_duplicate_vertices: bool = True,
+    check_inverted_cells: bool = False,
+    check_out_of_bounds: bool = True,
+    check_manifoldness: bool = False,
+    check_self_intersection: bool = False,
+    tolerance: float | None = None,
+    raise_on_error: bool = False,
+) -> Mapping[str, bool | int | torch.Tensor]:
+    """Compatibility wrapper for :func:`validate` pending deprecation."""
+    warnings.warn(
+        "validate_mesh is pending deprecation; use validate instead.",
+        PendingDeprecationWarning,
+        stacklevel=2,
+    )
+    return validate(
+        mesh,
+        check_degenerate_cells=check_degenerate_cells,
+        check_duplicate_vertices=check_duplicate_vertices,
+        check_inverted_cells=check_inverted_cells,
+        check_out_of_bounds=check_out_of_bounds,
+        check_manifoldness=check_manifoldness,
+        tolerance=tolerance,
+        raise_on_error=raise_on_error,
+        check_self_intersection=check_self_intersection,
+    )
+
+
 def check_duplicate_cell_vertices(
     mesh: "Mesh",
 ) -> tuple[int, Int[torch.Tensor, " n_invalid"]]:
@@ -330,3 +368,6 @@ def check_duplicate_cell_vertices(
         return 0, torch.tensor([], dtype=torch.long, device=mesh.cells.device)
 
     return n_invalid, invalid_indices
+
+
+__all__ = ["check_duplicate_cell_vertices", "validate", "validate_mesh"]
