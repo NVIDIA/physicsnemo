@@ -253,12 +253,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cells, return self), matching its type hint and `slice_points`;
   `gaussian_curvature_cells` reuses the cached `gaussian_curvature_vertices`
   property instead of recomputing it.
-- `physicsnemo.mesh.Mesh` convenience methods with matching public signatures
-  now reuse their import-safe canonical function objects directly, removing
-  duplicate wrappers and docstrings. `Mesh.validate` and `DomainMesh.validate`
-  now match `validate_mesh`, including its `check_self_intersection` option and
-  dtype-aware default tolerance.
-- `physicsnemo.mesh`: `validate_mesh(check_self_intersection=True)` now raises
+- `physicsnemo.mesh.Mesh` convenience methods now delegate through small,
+  class-facing adapters to shared canonical implementations, removing duplicate
+  implementation bodies and docstrings while preserving method introspection,
+  type-hint resolution, and bound-method pickling. This includes geometric,
+  deformation (including radial-basis-function deformation), calculus,
+  topology, visualization, and validation operations.
+- `physicsnemo.mesh`: `draw` and `validate` are now the canonical standalone
+  names matching `Mesh.draw` and `Mesh.validate`; `draw_mesh` and
+  `validate_mesh` remain as pending-deprecation compatibility names.
+  `Mesh.validate` and `DomainMesh.validate` share the canonical validation
+  option order, preserve the historical positional `tolerance` argument, and
+  expose the new `check_self_intersection` option as keyword-only.
+- `physicsnemo.mesh`: `validate(check_self_intersection=True)` now raises
   `NotImplementedError` (the check is unimplemented) instead of silently returning a
   `None` sentinel that masquerades as "no self-intersections found".
 - Performance improvements in the diffusion module: reduced peak memory of

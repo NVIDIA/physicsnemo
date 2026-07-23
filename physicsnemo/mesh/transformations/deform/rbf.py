@@ -53,6 +53,10 @@ def radial_basis_function_deform(
     the unweighted field interpolates every control displacement up to solver
     precision.
 
+    Call it as ``radial_basis_function_deform(mesh, ...)`` or as
+    ``mesh.radial_basis_function_deform(...)``; the bound method supplies
+    ``mesh`` automatically.
+
     Parameters
     ----------
     mesh : Mesh

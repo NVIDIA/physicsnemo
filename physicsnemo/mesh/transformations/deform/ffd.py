@@ -160,6 +160,10 @@ def free_form_deform(
     exactly the identity, and a constant lattice translates every point inside
     the box.
 
+    Call it as ``free_form_deform(mesh, ...)`` or as
+    ``mesh.free_form_deform(...)``; the bound method supplies ``mesh``
+    automatically.
+
     Parameters
     ----------
     mesh : Mesh

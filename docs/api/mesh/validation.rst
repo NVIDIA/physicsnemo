@@ -5,10 +5,11 @@ Validation and Quality
 
 Tools for assessing mesh integrity and element quality.
 
-**Validation** (:func:`validate_mesh`)
+**Validation** (:func:`validate`)
     Checks structural correctness: valid index ranges, consistent dimensions,
     proper data types, and data shape compatibility. Returns a report of any
-    errors found. Also accessible as ``mesh.validate()``.
+    errors found. Also accessible as ``mesh.validate()``. ``validate_mesh``
+    remains available as a pending-deprecation compatibility name.
 
 **Quality metrics** (:func:`compute_quality_metrics`)
     Per-cell geometric quality indicators including aspect ratio, minimum/maximum
