@@ -271,13 +271,53 @@ class TestQualityMetrics:
         assert "aspect_ratio" in metrics.keys()
         assert "edge_length_ratio" in metrics.keys()
 
-        # Equilateral triangle should have high quality
-        quality = metrics["quality_score"][0]
-        assert quality > 0.7  # High quality (formula gives ~0.75 for equilateral)
+        torch.testing.assert_close(
+            metrics["aspect_ratio"],
+            torch.ones_like(metrics["aspect_ratio"]),
+        )
+        torch.testing.assert_close(
+            metrics["edge_length_ratio"],
+            torch.ones_like(metrics["edge_length_ratio"]),
+        )
+        torch.testing.assert_close(
+            metrics["quality_score"],
+            torch.ones_like(metrics["quality_score"]),
+        )
 
-        # Edge length ratio should be close to 1.0
-        edge_ratio = metrics["edge_length_ratio"][0]
-        assert edge_ratio < 1.1  # Nearly equal edges
+    def test_regular_simplex_quality_is_scale_invariant(self, device):
+        """Regular simplices remain ideal under uniform scaling in every dimension."""
+        from physicsnemo.mesh.primitives.volumes import tetrahedron_volume
+
+        meshes = (
+            Mesh(
+                points=torch.tensor([[0.0], [1.0]], device=device),
+                cells=torch.tensor([[0, 1]], dtype=torch.long, device=device),
+            ),
+            Mesh(
+                points=torch.tensor(
+                    [
+                        [0.0, 0.0],
+                        [1.0, 0.0],
+                        [0.5, (3**0.5) / 2],
+                    ],
+                    device=device,
+                ),
+                cells=torch.tensor([[0, 1, 2]], dtype=torch.long, device=device),
+            ),
+            tetrahedron_volume.load(device=device),
+        )
+
+        for mesh in meshes:
+            for scale in (0.5, 1.0, 2.0, 10.0):
+                metrics = compute_quality_metrics(mesh.scale(scale))
+                torch.testing.assert_close(
+                    metrics["aspect_ratio"],
+                    torch.ones_like(metrics["aspect_ratio"]),
+                )
+                torch.testing.assert_close(
+                    metrics["quality_score"],
+                    torch.ones_like(metrics["quality_score"]),
+                )
 
     def test_degenerate_triangle_quality(self, device):
         """Test that degenerate triangle has low quality score."""
@@ -656,6 +696,14 @@ class TestQualityMetricsEdgeCases:
         # Regular tet: all solid angles should be equal, so min == max
         assert torch.isclose(
             metrics["min_angle"][0], metrics["max_angle"][0], atol=1e-5
+        )
+        torch.testing.assert_close(
+            metrics["aspect_ratio"],
+            torch.ones_like(metrics["aspect_ratio"]),
+        )
+        torch.testing.assert_close(
+            metrics["quality_score"],
+            torch.ones_like(metrics["quality_score"]),
         )
 
 

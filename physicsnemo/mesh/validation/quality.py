@@ -20,6 +20,7 @@ Computes geometric quality metrics for simplicial cells including aspect ratio,
 skewness, and angles. Higher quality = better shaped cells.
 """
 
+import math
 from typing import TYPE_CHECKING
 
 import torch
@@ -27,6 +28,7 @@ from jaxtyping import Float
 from tensordict import TensorDict
 
 from physicsnemo.mesh.geometry._angles import compute_vertex_angles
+from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 if TYPE_CHECKING:
@@ -82,16 +84,49 @@ def compute_cell_edge_lengths(
     return torch.linalg.vector_norm(edge_vectors, dim=-1)
 
 
+def _compute_simplex_altitudes(
+    mesh: "Mesh",
+    cell_measures: Float[torch.Tensor, " n_cells"],
+) -> Float[torch.Tensor, "n_cells n_vertices_per_cell"]:
+    """Compute the altitude opposite every simplex vertex."""
+    n_manifold_dims = mesh.n_manifold_dims
+    n_vertices_per_cell = n_manifold_dims + 1
+
+    if n_manifold_dims == 1:
+        # A segment's two opposing facets are points with unit 0-volume.
+        return cell_measures[:, None].expand(-1, n_vertices_per_cell)
+
+    cell_vertices = mesh.points[mesh.cells]
+    vertex_indices = torch.arange(n_vertices_per_cell, device=mesh.cells.device)
+    facet_mask = ~torch.eye(
+        n_vertices_per_cell,
+        dtype=torch.bool,
+        device=mesh.cells.device,
+    )
+    facet_indices = vertex_indices.expand(n_vertices_per_cell, -1)[facet_mask].reshape(
+        n_vertices_per_cell, n_manifold_dims
+    )
+    facet_vertices = cell_vertices[:, facet_indices]
+    facet_relative_vectors = facet_vertices[..., 1:, :] - facet_vertices[..., :1, :]
+    facet_measures = compute_cell_areas(facet_relative_vectors.flatten(0, 1)).unflatten(
+        0, (mesh.n_cells, n_vertices_per_cell)
+    )
+
+    eps = safe_eps(mesh.points.dtype)
+    return n_manifold_dims * cell_measures[:, None] / facet_measures.clamp(min=eps)
+
+
 def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
     """Compute geometric quality metrics for all cells.
 
     Returns TensorDict with per-cell quality metrics:
 
-    - aspect_ratio: max_edge / min_altitude (lower is better, 1.0 is equilateral)
+    - aspect_ratio: normalized max_edge / min_altitude
+      (lower is better, 1.0 is a regular simplex)
     - min_angle: Minimum interior angle in radians
     - max_angle: Maximum interior angle in radians
-    - edge_length_ratio: max_edge / min_edge (1.0 is equilateral)
-    - quality_score: Combined metric in [0,1] (1.0 is perfect equilateral)
+    - edge_length_ratio: max_edge / min_edge (1.0 is a regular simplex)
+    - quality_score: Combined metric in [0,1] (1.0 is a regular simplex)
 
     Parameters
     ----------
@@ -120,8 +155,6 @@ def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
     device = mesh.points.device
     dtype = mesh.points.dtype
     n_cells = mesh.n_cells
-    n_verts_per_cell = mesh.n_manifold_dims + 1
-
     ### Compute edge lengths for each cell
     edge_lengths = compute_cell_edge_lengths(mesh)  # (n_cells, n_edges_per_cell)
 
@@ -131,14 +164,22 @@ def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
     eps = safe_eps(dtype)
     edge_length_ratio = max_edge / min_edge.clamp(min=eps)
 
-    ### Compute aspect ratio (approximation using area and edges)
-    areas = mesh.cell_areas
+    ### Compute a dimensionless, scale-invariant simplex aspect ratio
+    cell_measures = mesh.cell_areas
+    min_altitude = _compute_simplex_altitudes(mesh, cell_measures).min(dim=1).values
+    raw_aspect_ratio = max_edge / min_altitude.clamp(min=eps)
 
-    # For triangles: aspect_ratio ≈ max_edge / (4*area/perimeter)
-    # For general: use max_edge / characteristic_length
-    perimeter = edge_lengths.sum(dim=1)
-    characteristic_length = areas * n_verts_per_cell / perimeter.clamp(min=eps)
-    aspect_ratio = max_edge / characteristic_length.clamp(min=eps)
+    # A regular d-simplex has max_edge / min_altitude = sqrt(2d / (d + 1)).
+    # Normalize by that value so 1.0 is ideal in every manifold dimension.
+    regular_simplex_ratio = math.sqrt(
+        2 * mesh.n_manifold_dims / (mesh.n_manifold_dims + 1)
+    )
+    aspect_ratio = (raw_aspect_ratio / regular_simplex_ratio).clamp(min=1.0)
+    aspect_ratio = torch.where(
+        cell_measures > 0,
+        aspect_ratio,
+        torch.full_like(aspect_ratio, float("inf")),
+    )
 
     ### Compute interior angles at each vertex of each cell
     if mesh.n_manifold_dims >= 2:
@@ -154,7 +195,7 @@ def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
     ### Compute combined quality score
     # Perfect simplex has:
     # - edge_length_ratio = 1.0 (all edges equal)
-    # - For triangles: all angles = π/3
+    # - all vertex angles are equal
     # - aspect_ratio = 1.0
 
     # Quality score combines multiple metrics
