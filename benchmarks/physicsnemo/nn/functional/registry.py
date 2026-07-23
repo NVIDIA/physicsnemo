@@ -43,9 +43,11 @@ from physicsnemo.nn.functional.fourier_spectral import (
 from physicsnemo.nn.functional.geometry import (
     DisplacePoints,
     FarthestPointSampling,
+    FreeFormDeformPoints,
     MeshPoissonDiskSample,
     MeshToVoxelFraction,
     MorphPoints,
+    RadialBasisFunctionDeformPoints,
     RayMeshIntersect,
     SignedDistanceField,
 )
@@ -84,6 +86,8 @@ FUNCTIONAL_SPECS: tuple[type[FunctionSpec], ...] = (
     # Geometry.
     DisplacePoints,
     MorphPoints,
+    RadialBasisFunctionDeformPoints,
+    FreeFormDeformPoints,
     FarthestPointSampling,
     MeshPoissonDiskSample,
     MeshToVoxelFraction,
@@ -101,5 +105,9 @@ FUNCTIONAL_SPECS: tuple[type[FunctionSpec], ...] = (
     Real,
     Imag,
 )
+
+# Remeshing uses a dedicated benchmark that measures the complete Mesh-level
+# operation, including topology cleanup. The current benchmark measures
+# synchronized CUDA execution; see ``benchmarks/physicsnemo/mesh/remeshing.py``.
 
 __all__ = ["FUNCTIONAL_SPECS"]
