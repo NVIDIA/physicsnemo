@@ -33,7 +33,7 @@ search over all cells.
 Signed Distance Field
 ---------------------
 
-:func:`signed_distance_field_mesh` computes the signed distance from a set of
+:func:`signed_distance_field` computes the signed distance from a set of
 query points to a triangle surface mesh, together with the closest point on the
 surface for each query. It is a mesh-native, pure-PyTorch implementation that
 reuses the spatial acceleration structures in this module, so it runs
@@ -56,7 +56,7 @@ The **sign** is determined by one of two methods, selected with
 
     import torch
     from physicsnemo.mesh import Mesh
-    from physicsnemo.mesh.spatial import signed_distance_field_mesh
+    from physicsnemo.mesh.spatial import signed_distance_field
 
     # A triangle surface mesh: (n_vertices, 3) coords + (n_faces, 3) connectivity.
     mesh = Mesh(
@@ -65,10 +65,11 @@ The **sign** is determined by one of two methods, selected with
     )
 
     query = torch.randn(10000, 3)
-    sdf, hit_points = signed_distance_field_mesh(
-        mesh, query, use_sign_winding_number=True
-    )
-    # sdf: (10000,) signed distances; hit_points: (10000, 3) closest surface points.
+    result = signed_distance_field(mesh, query, use_sign_winding_number=True)
+    # A named tuple (positional unpacking also works):
+    # result.sdf:        (10000,)   signed distances
+    # result.hit_points: (10000, 3) closest surface points
+    # result.hit_faces:  (10000,)   nearest-face index into mesh.cells
 
 API Reference
 -------------

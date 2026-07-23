@@ -22,8 +22,8 @@ area, normal, and centroid.  This approximates the restricted Voronoi diagram
 on the surface by grouping whole cells rather than splitting them - exact in
 the limit M/N -> infinity on a fine mesh.
 
-This is complementary to :func:`~physicsnemo.mesh.remeshing.remesh` (ACVD),
-which creates *new* mesh topology via iterative Centroidal Voronoi Tessellation.
+This is complementary to :func:`~physicsnemo.mesh.remeshing.remesh`, which
+creates *new* mesh topology via iterative centroidal clustering.
 ``partition_cells`` preserves the original cells and produces aggregate
 properties - no topology reconstruction and no external dependencies.
 
@@ -57,7 +57,7 @@ class CellPartition(NamedTuple):
         Area-weighted average unit normal per cluster.
     cluster_centroids : Float[torch.Tensor, "n_seeds n_spatial_dims"]
         Area-weighted centroid per cluster.
-        For a well-centered seed this is close to the seed itself; the
+        For a well-centered seed this is close to the seed itself. The
         difference measures how far the seed is from its Voronoi centroid
         (exactly the quantity that Lloyd's algorithm drives to zero).
     """

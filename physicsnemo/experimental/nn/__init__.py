@@ -29,6 +29,17 @@ from .rope import (
     spherical_centroid,
     stereographic_projection,
 )
+from .point_tokenizer import PointCloudTokenizer
+from .point_utils import (
+    chunked_knn_indices,
+    compute_batch_offset_step,
+    counts_to_mask,
+    flatten_batched_coords,
+    flatten_padded_batch,
+    gather_rows,
+    masked_mean,
+    unflatten_to_padded,
+)
 
 __all__ = [
     "FLARE",
@@ -40,4 +51,13 @@ __all__ = [
     "build_rope_cos_sin_1d_continuous",
     "spherical_centroid",
     "stereographic_projection",
+    "PointCloudTokenizer",
+    "chunked_knn_indices",
+    "compute_batch_offset_step",
+    "counts_to_mask",
+    "flatten_batched_coords",
+    "flatten_padded_batch",
+    "gather_rows",
+    "masked_mean",
+    "unflatten_to_padded",
 ]

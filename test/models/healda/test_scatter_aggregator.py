@@ -15,7 +15,7 @@
 # limitations under the License.
 import torch
 
-from physicsnemo.experimental.models.healda import ScatterAggregator
+from physicsnemo.experimental.models.healda.scatter_aggregator import ScatterAggregator
 from test import common
 
 

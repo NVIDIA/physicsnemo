@@ -14,11 +14,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .scatter_aggregator import ScatterAggregator, scatter_mean
-from .point_embed import (
-    MultiSensorObsEmbedder,
-    ObsTokenizer,
-    SensorEmbedder,
-    UniformFusion,
-)
-from .healda import HealDA, HealDAMetaData
+r"""HealDA data-assimilation models and building blocks.
+
+:class:`VideoHealDA` (current) uses :class:`PixelCrossAttention` and
+:class:`ObsTokenizerFiLM`. :class:`HealDA` (v1, deprecated) is retained only to
+run existing v1 checkpoints; its observation-embedder components are no longer
+publicly exported and will be removed in a future release.
+"""
+
+from .attention_layers import PixelCrossAttention
+from .healda import HealDA
+from .obs_context import ObsContext, prepare_obs_context
+from .obs_tokenizer import ObsTokenizerFiLM
+from .video_dit import VideoDiT
+from .video_healda import VideoHealDA
+
+__all__ = [
+    "VideoHealDA",
+    "HealDA",
+    "PixelCrossAttention",
+    "ObsTokenizerFiLM",
+    "ObsContext",
+    "prepare_obs_context",
+    "VideoDiT",
+]

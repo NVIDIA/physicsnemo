@@ -43,10 +43,10 @@ training:
 
 # -- DataLoader / Dataset Performance Tuning --------------------------------
 dataloader:
-  prefetch_factor: 1
-  num_streams: 1
-  use_streams: false
-  num_workers: 1
+  prefetch_factor: 4
+  num_streams: 4
+  use_streams: true
+  num_workers: 4
   pin_memory: true
 
 # -- Logging -----------------------------------------------------------------

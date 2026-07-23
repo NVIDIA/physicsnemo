@@ -24,8 +24,9 @@ sign is computed with a :class:`physicsnemo.mesh.spatial.ClusterTree` Barnes-Hut
 summation over the mesh, so the whole pipeline reuses the mesh's own spatial
 data structures and runs identically on CPU and GPU.
 
-:func:`signed_distance_field_mesh` returns the signed distance and the closest
-surface point for each query.
+:func:`signed_distance_field` returns the signed distance, the closest surface
+point, and the nearest face index for each query (as a
+:class:`SignedDistanceFieldResult`).
 
 Algorithm
 ---------
@@ -52,6 +53,8 @@ Algorithm
 
 from __future__ import annotations
 
+from typing import Literal, NamedTuple, TypeAlias, get_args
+
 import torch
 from jaxtyping import Float, Int
 from tensordict import TensorDict
@@ -62,6 +65,38 @@ from physicsnemo.mesh.spatial import _sdf_triton
 from physicsnemo.mesh.spatial._ragged import _ragged_arange
 from physicsnemo.mesh.spatial.bvh import BVH
 from physicsnemo.mesh.spatial.cluster_tree import ClusterTree
+
+# Winding-number summation backends for ``use_sign_winding_number=True``. The
+# runtime validation tuple is derived from the typed ``Literal`` via
+# ``get_args`` so the two can never drift apart.
+WindingBackend: TypeAlias = Literal["clustertree", "bruteforce"]
+
+
+class SignedDistanceFieldResult(NamedTuple):
+    """Result of :func:`signed_distance_field`.
+
+    A named tuple: positional unpacking works, and the fields are
+    self-documenting at call sites that only need a subset.
+
+    Attributes
+    ----------
+    sdf : torch.Tensor
+        Signed distance per query, shape ``query_points.shape[:-1]`` (negative
+        inside, positive outside). ``NaN`` for queries beyond a finite
+        ``max_dist``.
+    hit_points : torch.Tensor
+        Closest point on the mesh per query, shape ``query_points.shape``.
+        ``NaN`` for queries beyond a finite ``max_dist``.
+    hit_faces : torch.Tensor
+        Index into ``mesh.cells`` of the nearest face per query (int64), shape
+        ``query_points.shape[:-1]``. ``-1`` for queries beyond a finite
+        ``max_dist``.
+    """
+
+    sdf: torch.Tensor
+    hit_points: torch.Tensor
+    hit_faces: torch.Tensor
+
 
 # Chunk sizes keep the pairwise tensors bounded for large inputs. These are
 # product-of-counts limits (rows of the materialized intermediate), not raw
@@ -82,6 +117,120 @@ _BVH_LEAF_SIZE = 16
 _WINDING_THETA = 0.5
 _WINDING_LEAF_SIZE = 8
 
+# Relative-height threshold below which a face is treated as degenerate and
+# repaired at build time (see ``_repair_degenerate_faces``): a triangle whose
+# height is less than this fraction of its longest edge has its off-edge vertex
+# displaced perpendicular to that edge by the same fraction of the edge length.
+# Chosen ~1000x float32 epsilon so that float32 rounding of Ericson's region
+# determinants can never misclassify the repaired face, while the repair moves
+# the surface by at most this fraction of the edge length.
+_DEGENERATE_TRI_REL_HEIGHT = 1e-4
+
+
+def _repair_degenerate_faces(
+    face_vertices: Float[torch.Tensor, "n_faces 3 3"],
+) -> Float[torch.Tensor, "n_faces 3 3"]:
+    r"""Displace the off-edge vertex of (near-)degenerate faces off their edge.
+
+    Ericson's Voronoi-region closest-point classification
+    (:func:`_closest_point_on_triangles` and its Triton mirror) assumes a
+    non-degenerate triangle: on a (near-)zero-area face -- repeated vertices or
+    collinear points, which real surface meshes do contain -- several region
+    tests fire vacuously and the cascade can return the wrong feature, silently
+    overestimating the distance. Rather than paying for a degenerate fallback
+    on every ``(query, candidate)`` pair in the hot kernels (~20-25% measured),
+    this repairs the geometry once per call: any face whose height is below
+    :data:`_DEGENERATE_TRI_REL_HEIGHT` times its longest edge has its off-edge
+    vertex moved to the edge midpoint plus a perpendicular offset ``h``, giving
+    an equivalent thin-but-valid triangle over the same edge.
+
+    ``h`` is ``max(rel * L, 8 * eps_f32 * max|coord|)`` with ``L`` the longest
+    edge: the first term keeps the repaired face far above the float32 regime
+    where the region determinants misclassify, and the second keeps the offset
+    representable for small faces far from the origin (where ``rel * L`` would
+    round away against the coordinate magnitude). The closest point, and hence
+    the SDF and hit point, move by at most ``2 h`` -- ``h`` from the repair
+    itself plus up to ``h`` of pruning slack where the repaired face protrudes
+    from its BVH bounds (built from the original geometry) -- and only for
+    queries whose nearest face was degenerate. Point-like faces (all vertices coincident,
+    zero longest edge) are left untouched: every Ericson region returns the
+    single point, so they are already handled exactly.
+
+    Everything is a fixed-shape tensor pass over the faces -- no host
+    readbacks, so the SDF prep stream stays sync-free.
+
+    Parameters
+    ----------
+    face_vertices : torch.Tensor
+        Per-face vertex positions, shape ``(n_faces, 3, 3)`` (float32).
+
+    Returns
+    -------
+    torch.Tensor
+        Repaired per-face vertex positions, shape ``(n_faces, 3, 3)``. Faces
+        above the degeneracy threshold are bit-identical to the input.
+    """
+    a = face_vertices[:, 0, :]
+    b = face_vertices[:, 1, :]
+    c = face_vertices[:, 2, :]
+    ab = b - a
+    ac = c - a
+    bc = c - b
+    ab_sq = (ab * ab).sum(-1)
+    ac_sq = (ac * ac).sum(-1)
+    bc_sq = (bc * bc).sum(-1)
+
+    # degenerate <=> height <= rel * longest edge <=> |ab x ac|^2 <= (rel * L^2)^2
+    area_sq = (torch.linalg.cross(ab, ac, dim=-1) ** 2).sum(-1)
+    scale_sq = torch.maximum(ab_sq, torch.maximum(ac_sq, bc_sq))
+    degenerate = area_sq <= (_DEGENERATE_TRI_REL_HEIGHT * scale_sq) ** 2
+
+    # The longest edge of a (near-)collinear face spans its extreme points, so
+    # the face is (within its height) the segment (e0, e1); the remaining
+    # "off-edge" vertex is the one displaced. 0 -> ab (off c), 1 -> ac (off b),
+    # 2 -> bc (off a). Ties pick either longest edge; both are valid.
+    longest = torch.stack([ab_sq, ac_sq, bc_sq], dim=-1).argmax(dim=-1)
+    is_ab = (longest == 0).unsqueeze(-1)
+    is_ac = (longest == 1).unsqueeze(-1)
+    e0 = torch.where(is_ab | is_ac, a, b)
+    e1 = torch.where(is_ab, b, c)
+
+    # Unit perpendicular to the edge: cross against whichever of x-hat / y-hat
+    # is less aligned with it (at least one of the two always works).
+    edge = e1 - e0
+    x_hat = torch.zeros_like(edge)
+    x_hat[:, 0] = 1.0
+    y_hat = torch.zeros_like(edge)
+    y_hat[:, 1] = 1.0
+    perp = torch.linalg.cross(edge, x_hat, dim=-1)
+    perp_alt = torch.linalg.cross(edge, y_hat, dim=-1)
+    edge_sq = (edge * edge).sum(-1)
+    use_alt = (perp * perp).sum(-1) < 0.5 * edge_sq
+    perp = torch.where(use_alt.unsqueeze(-1), perp_alt, perp)
+    tiny = torch.finfo(face_vertices.dtype).tiny
+    perp = perp / perp.norm(dim=-1, keepdim=True).clamp(min=tiny)
+
+    eps = torch.finfo(face_vertices.dtype).eps
+    coord_scale = face_vertices.abs().amax(dim=(1, 2))
+    h = torch.maximum(
+        _DEGENERATE_TRI_REL_HEIGHT * edge_sq.sqrt(), 8.0 * eps * coord_scale
+    )
+    # Point-like faces (zero longest edge) keep h = 0, i.e. stay untouched.
+    h = torch.where(edge_sq > 0, h, torch.zeros_like(h))
+    off_vertex = 0.5 * (e0 + e1) + perp * h.unsqueeze(-1)
+
+    move_a = (degenerate & (longest == 2)).unsqueeze(-1)
+    move_b = (degenerate & (longest == 1)).unsqueeze(-1)
+    move_c = (degenerate & (longest == 0)).unsqueeze(-1)
+    return torch.stack(
+        [
+            torch.where(move_a, off_vertex, a),
+            torch.where(move_b, off_vertex, b),
+            torch.where(move_c, off_vertex, c),
+        ],
+        dim=1,
+    )
+
 
 def _build_surface_mesh(
     mesh: Mesh,
@@ -91,7 +240,11 @@ def _build_surface_mesh(
     The BVH build and the Triton nearest-triangle kernel assume a float32
     coordinate dtype, so this returns a float32 copy of ``mesh`` alongside the
     per-face vertex positions and the int64 triangle connectivity consumed by
-    the downstream tensor ops.
+    the downstream tensor ops. (Near-)degenerate faces are repaired in the
+    returned ``face_vertices`` (see :func:`_repair_degenerate_faces`) so the
+    closest-point kernels never see a triangle their region classification
+    cannot handle; ``work_mesh`` keeps the original vertices, since the
+    pseudo-normal sign machinery consumes topology, not the repaired geometry.
 
     Parameters
     ----------
@@ -108,7 +261,7 @@ def _build_surface_mesh(
     """
     faces = mesh.cells.to(torch.long)
     work_mesh = Mesh(points=mesh.points.to(torch.float32), cells=faces)
-    face_vertices = work_mesh.points[faces]  # (n_faces, 3, 3)
+    face_vertices = _repair_degenerate_faces(work_mesh.points[faces])
     return work_mesh, face_vertices, faces
 
 
@@ -121,6 +274,15 @@ def _closest_point_on_triangles(
     Vectorized region-classification (Ericson, *Real-Time Collision
     Detection*). Computes, for each ``(query, triangle)`` pair, the point on the
     (closed) triangle nearest to ``query``.
+
+    Ericson's Voronoi-region tests assume a non-degenerate triangle: on a
+    (near-)zero-area face several region tests become vacuously true and the
+    cascade can return the wrong feature (always an overestimate of the
+    distance). The SDF pipeline therefore never feeds this routine a
+    (near-)degenerate triangle: ``_build_surface_mesh`` repairs such faces up
+    front (see :func:`_repair_degenerate_faces`). Point-like faces (all three
+    vertices coincident) are the exception -- every region returns the single
+    point, so they are correct here without repair.
 
     Parameters
     ----------
@@ -711,7 +873,7 @@ def _winding_number_sign(
         lc = c.norm(dim=-1)
 
         # Numerator: triple product a . (b x c).
-        triple = (a * torch.cross(b, c, dim=-1)).sum(-1)
+        triple = (a * torch.linalg.cross(b, c, dim=-1)).sum(-1)
         denom = (
             la * lb * lc
             + (a * b).sum(-1) * lc
@@ -839,7 +1001,7 @@ def _winding_number_sign_clustertree(
 
     Notes
     -----
-    See :func:`signed_distance_field_mesh` for the end-to-end SDF that consumes
+    See :func:`signed_distance_field` for the end-to-end SDF that consumes
     this sign.
     """
     device = query.device
@@ -937,17 +1099,18 @@ def _winding_number_sign_clustertree(
     )
 
 
-def signed_distance_field_mesh(
+def signed_distance_field(
     mesh: Mesh,
     query_points: Float[torch.Tensor, "... 3"],
     max_dist: float | None = None,
     use_sign_winding_number: bool = False,
     *,
-    winding_backend: str = "clustertree",
-) -> tuple[torch.Tensor, torch.Tensor]:
+    winding_backend: WindingBackend = "clustertree",
+) -> SignedDistanceFieldResult:
     r"""Compute the signed distance to a triangle surface mesh.
 
-    Returns the signed distance and the closest surface point for each query.
+    Returns the signed distance, the closest surface point, and the nearest
+    face index for each query.
 
     Parameters
     ----------
@@ -968,23 +1131,33 @@ def signed_distance_field_mesh(
         vertex), which stays correct at sharp/non-convex edges where a single
         face normal would flip the sign (see :func:`_pseudo_normal_sign`). The
         mesh should be watertight for reliable signs in the ``False`` case.
-    winding_backend : str, optional
-        Winding-number summation backend when ``use_sign_winding_number=True``: ``"clustertree"`` (default) for the :class:`physicsnemo.mesh.spatial.ClusterTree` Barnes-Hut sum (``O(n_queries * log n_faces)``, best for large meshes), or ``"bruteforce"`` for the exact fused ``O(n_queries * n_faces)`` sum (faster for small/medium meshes).
+    winding_backend : {"clustertree", "bruteforce"}, optional
+        Winding-number summation backend when ``use_sign_winding_number=True``:
+        ``"clustertree"`` (default) for the
+        :class:`physicsnemo.mesh.spatial.ClusterTree` Barnes-Hut sum
+        (``O(n_queries * log n_faces)``, best for large meshes), or
+        ``"bruteforce"`` for the exact fused ``O(n_queries * n_faces)`` sum
+        (faster for small/medium meshes).
 
     Returns
     -------
-    tuple[torch.Tensor, torch.Tensor]
-        ``(sdf, hit_points)``: signed distance per query
-        (shape ``query_points.shape[:-1]``) and the closest point on the mesh
-        per query (shape ``query_points.shape``).
+    SignedDistanceFieldResult
+        Named tuple ``(sdf, hit_points, hit_faces)``: signed distance per query
+        (shape ``query_points.shape[:-1]``), the closest point on the mesh per
+        query (shape ``query_points.shape``), and the index into ``mesh.cells``
+        of the nearest face per query (int64, shape
+        ``query_points.shape[:-1]``; ``-1`` for queries beyond a finite
+        ``max_dist``).
 
     Raises
     ------
     ValueError
         If ``mesh`` is not a triangle surface in 3D (``n_spatial_dims == 3`` and
         ``n_manifold_dims == 2``), if ``query_points`` does not have a trailing
-        dimension of size 3, or if the mesh has no faces (there is no surface to
-        measure distance to).
+        dimension of size 3, if the mesh has no faces (there is no surface to
+        measure distance to), if ``mesh`` and ``query_points`` are on different
+        devices, if ``winding_backend`` is not a supported backend, or if
+        ``max_dist`` is negative.
 
     Notes
     -----
@@ -1001,18 +1174,30 @@ def signed_distance_field_mesh(
     # mis-typed mesh fails loudly rather than deep inside the BVH/winding kernels.
     if mesh.n_spatial_dims != 3:
         raise ValueError(
-            "signed_distance_field_mesh requires a 3D mesh "
+            "signed_distance_field requires a 3D mesh "
             f"(n_spatial_dims == 3), but got {mesh.n_spatial_dims=}."
         )
     if mesh.n_manifold_dims != 2:
         raise ValueError(
-            "signed_distance_field_mesh requires a triangle mesh "
+            "signed_distance_field requires a triangle mesh "
             f"(n_manifold_dims == 2), but got {mesh.n_manifold_dims=}."
         )
     if mesh.n_cells == 0:
         raise ValueError(
             "mesh has no faces; there is no surface to measure distance to"
         )
+    if mesh.points.device != query_points.device:
+        raise ValueError(
+            "mesh and query_points must be on the same device, but got "
+            f"{mesh.points.device=} and {query_points.device=}."
+        )
+    if winding_backend not in get_args(WindingBackend):
+        raise ValueError(
+            f"winding_backend must be one of {get_args(WindingBackend)}, "
+            f"got {winding_backend!r}"
+        )
+    if max_dist is not None and max_dist < 0:
+        raise ValueError(f"max_dist must be None or non-negative, got {max_dist}")
 
     query_shape = query_points.shape
     out_dtype = query_points.dtype
@@ -1032,9 +1217,12 @@ def signed_distance_field_mesh(
     hit_points = queries.clone()
 
     if n_queries == 0:
-        sdf = sdf.reshape(query_shape[:-1]).to(out_dtype)
-        hit_points = hit_points.reshape(query_shape).to(out_dtype)
-        return sdf, hit_points
+        return SignedDistanceFieldResult(
+            sdf=sdf.reshape(query_shape[:-1]).to(out_dtype),
+            hit_points=hit_points.reshape(query_shape).to(out_dtype),
+            # Always empty here; -1 keeps the "no valid face" sentinel uniform.
+            hit_faces=torch.full(query_shape[:-1], -1, dtype=torch.long, device=device),
+        )
 
     with record_function("sdf/bvh_build"):
         bvh = BVH.from_mesh(work_mesh, leaf_size=_BVH_LEAF_SIZE)
@@ -1076,13 +1264,8 @@ def signed_distance_field_mesh(
             # up to the Barnes-Hut approximation.
             if winding_backend == "bruteforce":
                 sign = _winding_number_sign(face_vertices, queries)
-            elif winding_backend == "clustertree":
-                sign = _winding_number_sign_clustertree(face_vertices, queries)
             else:
-                raise ValueError(
-                    "winding_backend must be 'clustertree' or 'bruteforce', "
-                    f"got {winding_backend!r}"
-                )
+                sign = _winding_number_sign_clustertree(face_vertices, queries)
         else:
             sign = _pseudo_normal_sign(work_mesh, queries, best_face, best_point)
 
@@ -1090,40 +1273,44 @@ def signed_distance_field_mesh(
     hit_points = best_point
 
     if max_dist is not None:
-        # Out-of-band queries keep the initial bound; flag them NaN, not 0.
+        # Out-of-band queries keep the initial bound; flag them NaN, not 0
+        # (and -1 for the face index, which has no NaN).
         missed = best_dist_sq >= max_dist_eff**2
         sdf = torch.where(missed, sdf.new_full((), float("nan")), sdf)
         hit_points = torch.where(
             missed.unsqueeze(-1), hit_points.new_full((), float("nan")), hit_points
         )
+        best_face = torch.where(missed, best_face.new_full((), -1), best_face)
 
-    sdf = sdf.reshape(query_shape[:-1]).to(out_dtype)
-    hit_points = hit_points.reshape(query_shape).to(out_dtype)
-    return sdf, hit_points
+    return SignedDistanceFieldResult(
+        sdf=sdf.reshape(query_shape[:-1]).to(out_dtype),
+        hit_points=hit_points.reshape(query_shape).to(out_dtype),
+        hit_faces=best_face.reshape(query_shape[:-1]),
+    )
 
 
-def _signed_distance_field_mesh_from_arrays(
+def _signed_distance_field_from_arrays(
     mesh_vertices: Float[torch.Tensor, "n_vertices 3"],
     mesh_indices: Int[torch.Tensor, "..."],
     query_points: Float[torch.Tensor, "... 3"],
     max_dist: float | None = None,
     use_sign_winding_number: bool = False,
     *,
-    winding_backend: str = "clustertree",
-) -> tuple[torch.Tensor, torch.Tensor]:
+    winding_backend: WindingBackend = "clustertree",
+) -> SignedDistanceFieldResult:
     r"""[INTERNAL - DO NOT USE] Private array-based SDF helper.
 
     .. warning::
 
        **DON'T USE THIS ONE.** This is a private, temporary entry point. Use
-       the public :func:`signed_distance_field_mesh`, which takes a
+       the public :func:`signed_distance_field`, which takes a
        :class:`~physicsnemo.mesh.Mesh`, instead.
 
        This helper is unexported, carries no backward-compatibility guarantee,
        and may be removed without notice.
 
     It wraps the arrays in a :class:`~physicsnemo.mesh.Mesh` and defers to
-    :func:`signed_distance_field_mesh`, so the numerics are identical.
+    :func:`signed_distance_field`, so the numerics are identical.
 
     Parameters
     ----------
@@ -1134,22 +1321,22 @@ def _signed_distance_field_mesh_from_arrays(
     query_points : torch.Tensor
         Query points, shape ``(..., 3)``.
     max_dist : float or None, optional
-        Maximum search radius; see :func:`signed_distance_field_mesh`.
+        Maximum search radius; see :func:`signed_distance_field`.
     use_sign_winding_number : bool, optional
-        Sign method; see :func:`signed_distance_field_mesh`.
-    winding_backend : str, optional
-        Winding-number backend; see :func:`signed_distance_field_mesh`.
+        Sign method; see :func:`signed_distance_field`.
+    winding_backend : {"clustertree", "bruteforce"}, optional
+        Winding-number backend; see :func:`signed_distance_field`.
 
     Returns
     -------
-    tuple[torch.Tensor, torch.Tensor]
-        ``(sdf, hit_points)``; see :func:`signed_distance_field_mesh`.
+    SignedDistanceFieldResult
+        ``(sdf, hit_points, hit_faces)``; see :func:`signed_distance_field`.
 
     Raises
     ------
     ValueError
         If ``mesh_indices`` is not 1D-flattened or ``(n_faces, 3)``; the
-        remaining validation is performed by :func:`signed_distance_field_mesh`.
+        remaining validation is performed by :func:`signed_distance_field`.
     """
     if mesh_indices.ndim == 2:
         if mesh_indices.shape[-1] != 3:
@@ -1161,7 +1348,7 @@ def _signed_distance_field_mesh_from_arrays(
             "mesh_indices must be either 1D flattened indices or 2D (n_faces, 3)"
         )
     mesh = Mesh(points=mesh_vertices, cells=mesh_indices.reshape(-1, 3))
-    return signed_distance_field_mesh(
+    return signed_distance_field(
         mesh,
         query_points,
         max_dist,
