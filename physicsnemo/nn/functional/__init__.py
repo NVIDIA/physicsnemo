@@ -66,6 +66,7 @@ from .rendering import (
     volume_render,
     wireframe_render,
 )
+from .segments import segment_softmax
 
 __all__ = [
     "displace_points",
@@ -109,6 +110,7 @@ __all__ = [
     "rfft2",
     "point_cloud_render",
     "scalar_field_to_rgba",
+    "segment_softmax",
     "signed_distance_field",
     "smooth_log",
     "spectral_grid_gradient",
