@@ -59,10 +59,15 @@ from physicsnemo.nn.functional.regularization_parameterization import (
     DropPath,
     WeightFact,
 )
+from physicsnemo.nn.functional.sample_without_replacement import (
+    SampleWithoutReplacement,
+)
 
 # FunctionSpec classes listed here must implement ``make_inputs_forward`` for ASV.
 # ``make_inputs_backward`` is optional and only used when backward benchmarks run.
 FUNCTIONAL_SPECS: tuple[type[FunctionSpec], ...] = (
+    # Sampling.
+    SampleWithoutReplacement,
     # Regularization / parameterization.
     DropPath,
     WeightFact,

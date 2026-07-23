@@ -282,10 +282,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Weighted sampling without replacement now uses one exact, chunked
-  exponential-race implementation across datapipes, DoMINO, and remeshing. This
-  removes the `torch.multinomial` `2^24` category limit and fixes
-  incorrect chunk-local indices and biased per-chunk quotas in DoMINO.
+- Sampling without replacement now uses one shared functional across datapipes,
+  DoMINO, and remeshing. It provides an exact strategy using `torch.randperm`
+  or a chunked exponential race for uniform or weighted sampling, plus an
+  explicit low-memory Poisson-gap approximation. This removes the
+  `torch.multinomial` `2^24` category limit, consolidates duplicated Poisson
+  index samplers, and fixes incorrect chunk-local indices and biased per-chunk
+  quotas in DoMINO.
 - Unified external aerodynamics recipe: the aggregate metrics reported for
   vector fields under the bare field name (e.g. `wss_l2`, likewise `_l1` /
   `_mae`) were computed on per-point vector magnitudes, so direction errors

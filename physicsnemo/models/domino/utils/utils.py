@@ -28,8 +28,7 @@ from typing import Any, Sequence
 import torch
 from jaxtyping import Float, Int
 
-from physicsnemo.nn.functional import knn
-from physicsnemo.utils._weighted_sampling import weighted_sample_without_replacement
+from physicsnemo.nn.functional import knn, sample_without_replacement
 
 
 def calculate_center_of_mass(
@@ -547,11 +546,12 @@ def shuffle_array(
     if N_input_points < n_points:
         return points, torch.arange(N_input_points)
 
-    # If there are no weights, use uniform weights:
-    if weights is None:
-        weights = torch.ones(points.shape[0], device=points.device)
-
-    idx = weighted_sample_without_replacement(weights, n_points)
+    idx = sample_without_replacement(
+        N_input_points,
+        n_points,
+        weights=weights,
+        device=points.device,
+    )
 
     # Apply the selection:
     points_selected = points[idx]
@@ -941,7 +941,7 @@ def area_weighted_shuffle_array(
     Note
     ----
     For GPU tensors, the sampling is performed on the current device.
-    The sampling uses ``torch.multinomial`` for efficient weighted sampling.
+    Sampling uses the uncapped exact ``sample_without_replacement`` functional.
 
     Examples
     --------
@@ -1008,7 +1008,7 @@ def solution_weighted_shuffle_array(
     Note
     ----
     For GPU tensors, the sampling is performed on the current device.
-    The sampling uses ``torch.multinomial`` for efficient weighted sampling.
+    Sampling uses the uncapped exact ``sample_without_replacement`` functional.
 
     Examples
     --------

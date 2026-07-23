@@ -21,6 +21,7 @@ This test file duplicates all the docstring examples from the domino utils
 module to ensure that the documented examples work correctly.
 """
 
+import importlib
 import math
 
 import pytest
@@ -44,7 +45,10 @@ from physicsnemo.models.domino.utils import (
     unnormalize,
     unstandardize,
 )
-from physicsnemo.utils import _weighted_sampling
+
+sampling_module = importlib.import_module(
+    "physicsnemo.nn.functional.sample_without_replacement"
+)
 
 
 def test_calculate_center_of_mass():
@@ -167,7 +171,7 @@ def test_shuffle_array_uses_uncapped_sampler(monkeypatch):
         )
 
     monkeypatch.setattr(torch, "multinomial", reject_multinomial)
-    monkeypatch.setattr(_weighted_sampling, "_WEIGHTED_SAMPLE_CHUNK_SIZE", 4)
+    monkeypatch.setattr(sampling_module, "_SAMPLE_CHUNK_SIZE", 4)
     data = torch.arange(6).unsqueeze(-1)
     weights = torch.tensor([0.0, 0.0, 0.0, 0.0, 1.0, 1.0])
 

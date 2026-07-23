@@ -27,8 +27,10 @@ from physicsnemo.core.function_spec import FunctionSpec
 from physicsnemo.nn.functional.geometry.farthest_point_sampling import (
     farthest_point_sampling,
 )
+from physicsnemo.nn.functional.sample_without_replacement import (
+    sample_without_replacement,
+)
 from physicsnemo.utils._index_tuple_ops import unique_index_tuples
-from physicsnemo.utils._weighted_sampling import weighted_sample_without_replacement
 
 from ._kernels import (
     accumulate_vertex_areas,
@@ -50,15 +52,16 @@ def _wp_view(tensor: torch.Tensor, dtype):  # noqa: ANN001, ANN202
     )
 
 
-def _weighted_sample_without_replacement(
+def _sample_remeshing_seeds(
     weights: torch.Tensor,
     count: int,
 ) -> torch.Tensor:
     """Sample remeshing seeds reproducibly with the shared weighted sampler."""
     generator = torch.Generator(device=weights.device).manual_seed(0)
-    return weighted_sample_without_replacement(
-        weights,
+    return sample_without_replacement(
+        weights.shape[0],
         count,
+        weights=weights,
         generator=generator,
     )
 
@@ -71,7 +74,7 @@ def _select_fps_centroids(
 ) -> torch.Tensor:
     """Select high-quality seeds with FPS over an area-weighted candidate set."""
     candidate_count = min(points.shape[0], farthest_point_oversampling * n_clusters)
-    candidate_indices = _weighted_sample_without_replacement(
+    candidate_indices = _sample_remeshing_seeds(
         vertex_areas,
         candidate_count,
     )
@@ -169,7 +172,7 @@ def _select_stratified_centroids(
         available[representatives] = False
         remaining = torch.nonzero(available, as_tuple=False).flatten()
         fill = remaining[
-            _weighted_sample_without_replacement(
+            _sample_remeshing_seeds(
                 vertex_areas[remaining],
                 n_clusters - representatives.numel(),
             )
