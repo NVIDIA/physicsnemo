@@ -24,6 +24,8 @@ This module consolidates tests from:
 - Edge case tests (code path coverage, special conditions)
 """
 
+import math
+
 import pytest
 import torch
 
@@ -245,6 +247,17 @@ class TestMeshValidation:
 ###############################################################################
 
 
+def _single_simplex(points, device):
+    """Create a one-cell simplex mesh from point coordinates."""
+    point_tensor = torch.tensor(points, dtype=torch.float64, device=device)
+    cells = torch.arange(
+        point_tensor.shape[0],
+        dtype=torch.long,
+        device=device,
+    ).unsqueeze(0)
+    return Mesh(points=point_tensor, cells=cells)
+
+
 class TestQualityMetrics:
     """Tests for quality metrics computation."""
 
@@ -318,6 +331,123 @@ class TestQualityMetrics:
                     metrics["quality_score"],
                     torch.ones_like(metrics["quality_score"]),
                 )
+
+    @pytest.mark.parametrize(
+        ("points", "expected_aspect_ratio"),
+        [
+            (
+                [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+                math.sqrt(3.0),
+            ),
+            (
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ],
+                2.0,
+            ),
+        ],
+        ids=["right-triangle", "right-tetrahedron"],
+    )
+    def test_known_nonregular_simplex_aspect_ratio(
+        self,
+        device,
+        points,
+        expected_aspect_ratio,
+    ):
+        """Aspect ratios agree with closed-form 2D and 3D reference values."""
+        metrics = compute_quality_metrics(_single_simplex(points, device))
+
+        torch.testing.assert_close(
+            metrics["aspect_ratio"],
+            torch.tensor(
+                [expected_aspect_ratio],
+                dtype=torch.float64,
+                device=device,
+            ),
+        )
+
+    @pytest.mark.parametrize(
+        "points",
+        [
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+        ],
+        ids=["right-triangle", "right-tetrahedron"],
+    )
+    def test_nonregular_simplex_quality_is_scale_invariant(self, device, points):
+        """Every dimensionless quality metric is unchanged by uniform scaling."""
+        mesh = _single_simplex(points, device)
+        reference = compute_quality_metrics(mesh)
+
+        for scale in (0.25, 2.0, 10.0):
+            actual = compute_quality_metrics(mesh.scale(scale))
+            for metric_name in (
+                "aspect_ratio",
+                "edge_length_ratio",
+                "min_angle",
+                "max_angle",
+                "quality_score",
+            ):
+                torch.testing.assert_close(
+                    actual[metric_name],
+                    reference[metric_name],
+                )
+
+    @pytest.mark.parametrize(
+        ("regular_points", "distorted_points"),
+        [
+            (
+                [
+                    [0.0, 0.0],
+                    [1.0, 0.0],
+                    [0.5, math.sqrt(3.0) / 2.0],
+                ],
+                [[0.0, 0.0], [1.0, 0.0], [0.5, 0.02]],
+            ),
+            (
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.5, math.sqrt(3.0) / 2.0, 0.0],
+                    [
+                        0.5,
+                        math.sqrt(3.0) / 6.0,
+                        math.sqrt(2.0 / 3.0),
+                    ],
+                ],
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.5, 0.5, 0.001],
+                ],
+            ),
+        ],
+        ids=["flattened-triangle", "sliver-tetrahedron"],
+    )
+    def test_quality_ranks_regular_cells_above_distorted_cells(
+        self,
+        device,
+        regular_points,
+        distorted_points,
+    ):
+        """Known flattened and sliver cells rank below regular reference cells."""
+        regular = compute_quality_metrics(_single_simplex(regular_points, device))
+        distorted = compute_quality_metrics(_single_simplex(distorted_points, device))
+
+        assert distorted["aspect_ratio"][0] > regular["aspect_ratio"][0]
+        assert distorted["edge_length_ratio"][0] > regular["edge_length_ratio"][0]
+        assert distorted["min_angle"][0] < regular["min_angle"][0]
+        assert distorted["max_angle"][0] > regular["max_angle"][0]
+        assert distorted["quality_score"][0] < regular["quality_score"][0]
 
     def test_degenerate_triangle_quality(self, device):
         """Test that degenerate triangle has low quality score."""
