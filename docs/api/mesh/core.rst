@@ -16,7 +16,7 @@ calls, and expensive geometric quantities -- centroids, normals, areas, curvatur
 
 Most mesh operations (subdivision, derivatives, transformations) are
 available both as ``Mesh`` methods and as standalone functions in the
-corresponding submodules. Each pair directly shares one canonical function;
+corresponding submodules. Each pair shares one canonical function, and
 normal Python descriptor binding supplies the instance as the standalone
 function's ``mesh`` argument.
 
