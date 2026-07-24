@@ -267,7 +267,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NotImplementedError` (the check is unimplemented) instead of silently returning a
   `None` sentinel that masquerades as "no self-intersections found".
 - `physicsnemo.mesh` quality metrics now use a normalized
-  longest-edge/minimum-altitude aspect ratio. The metric is dimensionless and
+  aspect ratio of longest edge to minimum altitude. The metric is dimensionless and
   scale-invariant for simplices of every manifold dimension, and a regular
   simplex now has `aspect_ratio=1` and `quality_score=1`. This intentionally
   corrects the previous erroneous aspect-ratio and quality-score values.
