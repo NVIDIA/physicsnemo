@@ -10,21 +10,23 @@ on:
   issue_comment:
     types: [created]
 
-concurrency:
-  group: codeowners-info-${{ github.event.pull_request.number || github.event.issue.number }}
-  cancel-in-progress: true
-
 jobs:
   report:
     if: >
       github.event_name == 'pull_request_target' ||
       (github.event.issue.pull_request && github.event.comment.body == '/codeowners-info' &&
        contains(fromJSON('["COLLABORATOR", "MEMBER", "OWNER"]'), github.event.comment.author_association))
+    # Job-level so that skipped runs (issue_comment fires for every comment in
+    # the repo) never enter the group and cancel a real run.
+    concurrency:
+      group: codeowners-info-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write
-      pull-requests: read
+      # Commenting on a PR through the issues API needs pull-requests: write,
+      # not issues: write, for the Actions installation token.
+      pull-requests: write
     steps:
     - name: Create or update CODEOWNERS report
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0

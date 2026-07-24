@@ -78,6 +78,64 @@ def cos_zenith_angle(
     return _star_cos_zenith(julian_centuries, lon_rad, lat_rad)
 
 
+def zenith_azimuth_angles(
+    time: datetime.datetime,
+    lon: T,
+    lat: T,
+    sin_zenith_epsilon: float = 1e-6,
+) -> tuple[T, T, T, T]:
+    r"""
+    Sine and cosine of the solar zenith and azimuth angles for ``lon``,
+    ``lat`` at ``time`` (UTC).
+
+    The azimuth angle follows the north-clockwise convention (0 degrees is
+    north, 90 degrees is east, 180 degrees is south, 270 degrees is west),
+    per the
+    `solar azimuth angle formulas <https://en.wikipedia.org/wiki/Solar_azimuth_angle#Formulas>`_.
+    At exact poles (latitude +/- 90 degrees), azimuth angle is ill defined and
+    sin_azimuth/cos_azimuth return arbitrary values rather than a meaningful result.
+    See :func:`~physicsnemo.utils.zenith_angle.cos_zenith_angle` if only the
+    cosine of the zenith angle is required, and
+    :func:`~physicsnemo.utils.zenith_angle.zenith_azimuth_angles_from_timestamp`
+    for the UNIX-timestamp variant of this function.
+
+    Parameters
+    ----------
+    time : datetime.datetime
+        Time in UTC.
+    lon : float, np.ndarray or torch.Tensor
+        Longitude in degrees (E/W).
+    lat : float, np.ndarray or torch.Tensor
+        Latitude in degrees (N/S).
+    sin_zenith_epsilon : float, optional, default=1e-6
+        Small minimum value applied to sin_zenith to prevent division by zero at
+        sub/anti-solar points.
+
+    Returns
+    -------
+    tuple of (float, np.ndarray or torch.Tensor)
+        Tuple ``(sin_zenith, cos_zenith, sin_azimuth, cos_azimuth)``: the
+        sine and cosine of the solar zenith angle, followed by the sine and
+        cosine of the solar azimuth angle. Each element has the same type
+        as the inputs.
+
+    Examples
+    --------
+    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
+    >>> sin_zenith, cos_zenith, sin_azimuth, cos_azimuth = zenith_azimuth_angles(
+    ...     model_time, lat=360, lon=120
+    ... )
+    >>> [float(x) for x in (sin_zenith, cos_zenith, sin_azimuth, cos_azimuth)]
+    [0.894125037441149, -0.4478173929414352, -0.8995401835123976, -0.43683802289462387]
+    """
+    lon_rad = _deg2rad(lon, dtype=dtype)
+    lat_rad = _deg2rad(lat, dtype=dtype)
+    julian_centuries = _datetime_to_julian_century(time)
+    return _star_zenith_azimuth(
+        julian_centuries, lon_rad, lat_rad, sin_zenith_epsilon=sin_zenith_epsilon
+    )
+
+
 def cos_zenith_angle_from_timestamp(
     timestamp: T,
     lon: T,
@@ -111,6 +169,67 @@ def cos_zenith_angle_from_timestamp(
     lat_rad = _deg2rad(lat, dtype=dtype)
     julian_centuries = _timestamp_to_julian_century(timestamp)
     return _star_cos_zenith(julian_centuries, lon_rad, lat_rad)
+
+
+def zenith_azimuth_angles_from_timestamp(
+    timestamp: T,
+    lon: T,
+    lat: T,
+    sin_zenith_epsilon: float = 1e-6,
+) -> tuple[T, T, T, T]:
+    r"""
+    Sine and cosine of the solar zenith and azimuth angles for ``lon``,
+    ``lat`` at a given UNIX timestamp (UTC).
+
+    Since the UNIX timestamp is a floating point or integer this routine can
+    be compiled with jax. The azimuth angle follows the north-clockwise
+    convention (0 degrees is north, 90 degrees is east, 180 degrees is
+    south, 270 degrees is west), per the
+    `solar azimuth angle formulas <https://en.wikipedia.org/wiki/Solar_azimuth_angle#Formulas>`_.
+    At exact poles (latitude +/- 90 degrees), azimuth angle is ill defined and
+    sin_azimuth/cos_azimuth return arbitrary values rather than a meaningful result.
+    See :func:`~physicsnemo.utils.zenith_angle.cos_zenith_angle_from_timestamp`
+    if only the cosine of the zenith angle is required, and
+    :func:`~physicsnemo.utils.zenith_angle.zenith_azimuth_angles` for the
+    ``datetime``-based variant of this function.
+
+    Parameters
+    ----------
+    timestamp : float, np.ndarray or torch.Tensor
+        UNIX timestamp in seconds.
+    lon : float, np.ndarray or torch.Tensor
+        Longitude in degrees (E/W).
+    lat : float, np.ndarray or torch.Tensor
+        Latitude in degrees (N/S).
+    sin_zenith_epsilon : float, optional, default=1e-6
+        Small minimum value applied to sin_zenith to prevent division by zero at
+        sub/anti-solar points.
+
+    Returns
+    -------
+    tuple of (float, np.ndarray or torch.Tensor)
+        Tuple ``(sin_zenith, cos_zenith, sin_azimuth, cos_azimuth)``: the
+        sine and cosine of the solar zenith angle, followed by the sine and
+        cosine of the solar azimuth angle. Each element has the same type
+        as the inputs.
+
+    Examples
+    --------
+    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
+    >>> sin_zenith, cos_zenith, sin_azimuth, cos_azimuth = (
+    ...     zenith_azimuth_angles_from_timestamp(
+    ...         model_time.timestamp(), lat=360, lon=120
+    ...     )
+    ... )
+    >>> [float(x) for x in (sin_zenith, cos_zenith, sin_azimuth, cos_azimuth)]
+    [0.894125037441149, -0.4478173929414352, -0.8995401835123976, -0.43683802289462387]
+    """
+    lon_rad = _deg2rad(lon, dtype=dtype)
+    lat_rad = _deg2rad(lat, dtype=dtype)
+    julian_centuries = _timestamp_to_julian_century(timestamp)
+    return _star_zenith_azimuth(
+        julian_centuries, lon_rad, lat_rad, sin_zenith_epsilon=sin_zenith_epsilon
+    )
 
 
 def _deg2rad(x: T, dtype: np.typing.DTypeLike | torch.dtype | None = None) -> T:
@@ -161,6 +280,10 @@ def _maximum(x: T, y: T) -> T:
             y = torch.as_tensor(y, dtype=x.dtype, device=x.device)
         return torch.maximum(x, y)
     return np.maximum(x, y)
+
+
+def _clamp(x: T, min: float | None = None, max: float | None = None) -> T:
+    return (x.clamp if isinstance(x, torch.Tensor) else x.clip)(min=min, max=max)
 
 
 def irradiance(
@@ -579,3 +702,53 @@ def _star_cos_zenith(julian_centuries, lon, lat):
         cosine_zenith = cosine_zenith.to(output_dtype)
 
     return cosine_zenith
+
+
+def _star_zenith_azimuth(julian_centuries, lon, lat, sin_zenith_epsilon=1e-6):
+    """
+    Return sine/cosine of solar zenith and azimuth angles.
+    lon, lat in radians. Azimuth measured clockwise from north.
+    sin_zenith is clamped to a small positive minimum value for numerical stability.
+
+    Ref:
+        Azimuth:
+            https://en.wikipedia.org/wiki/Solar_azimuth_angle#Formulas
+        Zenith:
+            https://en.wikipedia.org/wiki/Solar_zenith_angle
+    """
+    if isinstance(lon, torch.Tensor):
+        output_dtype = lon.dtype
+        # Astronomical polynomial evaluations involve values up to ~6e8 degrees,
+        # which exceed float32 precision. Compute in float64 and cast back.
+        lon = lon.to(torch.float64)
+        lat = lat.to(torch.float64)
+        julian_centuries = torch.as_tensor(
+            julian_centuries, dtype=torch.float64, device=lon.device
+        )
+    else:
+        output_dtype = None
+
+    ra, dec = _right_ascension_declination(julian_centuries)
+    h_angle = _local_hour_angle(julian_centuries, lon, ra)
+
+    sin_lat = _sin(lat)
+    cos_lat = _cos(lat)
+    sin_dec = _sin(dec)
+    cos_dec = _cos(dec)
+    sin_h = _sin(h_angle)
+    cos_h = _cos(h_angle)
+
+    cos_zenith = _clamp(sin_lat * sin_dec + cos_lat * cos_dec * cos_h, -1, 1)
+    sin_zenith = _clamp(_sqrt(1.0 - cos_zenith * cos_zenith), min=sin_zenith_epsilon)
+    sin_azimuth = _clamp(-sin_h * cos_dec / sin_zenith, -1, 1)
+    cos_azimuth = _clamp(
+        (sin_dec - cos_zenith * sin_lat) / (sin_zenith * cos_lat), -1, 1
+    )
+
+    if output_dtype is not None:
+        sin_zenith = sin_zenith.to(output_dtype)
+        cos_zenith = cos_zenith.to(output_dtype)
+        sin_azimuth = sin_azimuth.to(output_dtype)
+        cos_azimuth = cos_azimuth.to(output_dtype)
+
+    return (sin_zenith, cos_zenith, sin_azimuth, cos_azimuth)

@@ -19,7 +19,7 @@
 # ---------------------------------------------------------------------------
 # Picks one model template and one dataset, applies the centralized
 # training schedule below, and runs the loop.  Every previously-named
-# recipe (FA variants, GLOBE, multi-dataset Transolver, HiLift) is
+# recipe (FA variants, GLOBE, HiLift) is
 # reproducible from CLI overrides; see the Recipe Gallery in README.md.
 #
 #   Default invocation:
@@ -28,9 +28,8 @@
 #   Pick a different model + dataset:
 #     python src/train.py model=transolver_volume dataset=drivaer_ml_volume
 #
-#   Multi-dataset:
-#     python src/train.py model=transolver_surface dataset=drivaer_ml_surface \
-#         'extra_datasets=[shift_suv_estate_surface, shift_suv_fastback_surface]'
+#   Manifest-split datasets cannot currently be combined with extra_datasets;
+#   multi-dataset training is limited to directory-split datasets.
 ### `_self_` merges before the model template, so model templates may
 ### carry known-good per-model overrides of the schedule below (e.g.
 ### `compile`, `training.optimizer.lr`). CLI overrides still win over both.
@@ -43,9 +42,9 @@ defaults:
 # A string naming a file in datasets/ (without the `.yaml` suffix).
 dataset: drivaer_ml_volume
 
-# Additional datasets to combine via MultiDataset.  Each entry names a
-# file in datasets/.  Empty by default; the Transolver+SHIFT recipe
-# sets this to [shift_suv_estate_surface, shift_suv_fastback_surface].
+# Additional datasets to combine via MultiDataset. Each entry names a
+# file in datasets/. Only directory-split datasets can currently be
+# combined; manifest-split configurations fail loudly at startup.
 extra_datasets: []
 
 # Manifest-mode split selectors.  Setting these requests manifest mode:

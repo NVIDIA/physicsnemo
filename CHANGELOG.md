@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds `zenith_azimuth_angles` and `zenith_azimuth_angles_from_timestamp` to
+  `physicsnemo.utils.zenith_angle`, returning
+  `(sin_zenith, cos_zenith, sin_azimuth, cos_azimuth)` alongside the existing
+  `cos_zenith_angle` / `cos_zenith_angle_from_timestamp` helpers. The azimuth
+  follows the north-clockwise convention.
 - Adds `physicsnemo.nn.shrink_and_perturb_`, an in-place shrink-and-perturb
   weight re-initialization for warm-starting from pretrained weights.
 - Adds dimension-generic volume mesh generation for implicit domains to
@@ -287,6 +292,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Multinomial index sampling now uses one shared `weighted_multinomial`
+  functional across datapipes, DoMINO, and remeshing. Its core API follows
+  `torch.multinomial`, adds allocation-free integer input for uniform
+  populations, and supports sampling with or without replacement. Exact
+  sampling without replacement uses `torch.randperm` or a chunked exponential
+  race, with an explicit low-memory Poisson-gap approximation for uniform
+  sampling. This removes the `torch.multinomial` `2^24` category limit for
+  sampling without replacement, consolidates duplicated Poisson index
+  samplers, and fixes incorrect chunk-local indices and biased per-chunk quotas
+  in DoMINO.
 - Unified external aerodynamics recipe: the aggregate metrics reported for
   vector fields under the bare field name (e.g. `wss_l2`, likewise `_l1` /
   `_mae`) were computed on per-point vector magnitudes, so direction errors
