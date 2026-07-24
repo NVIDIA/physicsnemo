@@ -16,9 +16,9 @@ calls, and expensive geometric quantities -- centroids, normals, areas, curvatur
 
 Most mesh operations (subdivision, derivatives, transformations) are
 available both as ``Mesh`` methods and as standalone functions in the
-corresponding submodules. Each pair shares one canonical implementation; a
-small class-facing adapter preserves method introspection and supplies
-``self`` as the standalone function's ``mesh`` argument.
+corresponding submodules. Each pair directly shares one canonical function;
+normal Python descriptor binding supplies the instance as the standalone
+function's ``mesh`` argument.
 
 To construct a triangle mesh from a surface mesh whose cells are arbitrary
 polygons -- a "polygon soup" (see :doc:`tessellation`) -- use

@@ -253,12 +253,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cells, return self), matching its type hint and `slice_points`;
   `gaussian_curvature_cells` reuses the cached `gaussian_curvature_vertices`
   property instead of recomputing it.
-- `physicsnemo.mesh.Mesh` convenience methods now delegate through small,
-  class-facing adapters to shared canonical implementations, removing duplicate
-  implementation bodies and docstrings while preserving method introspection,
-  type-hint resolution, and bound-method pickling. This includes geometric,
-  deformation (including radial-basis-function deformation), calculus,
-  topology, visualization, and validation operations.
+- `physicsnemo.mesh.Mesh` convenience methods now directly reuse shared
+  canonical functions, removing duplicate implementation bodies and docstrings.
+  This includes geometric, deformation (including radial-basis-function
+  deformation), calculus, topology, visualization, and validation operations.
 - `physicsnemo.mesh`: `draw` and `validate` are now the canonical standalone
   names matching `Mesh.draw` and `Mesh.validate`; `draw_mesh` and
   `validate_mesh` remain as pending-deprecation compatibility names.
