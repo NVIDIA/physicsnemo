@@ -29,9 +29,15 @@ seed: 42
 device: cuda
 
 # Top-level run output directory. Hydra's `outputs/<date>/<time>/` layout
-# is preserved; this is the relative subfolder under that for checkpoints,
-# inference outputs and plots.
+# is preserved; this is the relative subfolder under that for inference
+# outputs and plots.
 output_dir: outputs
+
+# Stable, non-timestamped run directory for checkpoints + tensorboard (see
+# `config.yaml`). A distinct `run_name` keeps the paper-scale run's
+# checkpoints separate from the tutorial run so both auto-resume independently.
+checkpoint_root: outputs
+run_name: aerojepa_paper
 
 # Logging configuration.
 logging:
