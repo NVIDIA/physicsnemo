@@ -5,9 +5,9 @@ Decomposition Method) is a scalable framework for large-domain multi-physics
 analysis. This reference implementation currently runs Schwarz inference on one
 process; large-scale execution requires distributed ownership of subdomains.
 
-This example is based on the FP-DDM domain-decomposition work developed by the
-Samsung CSE (Computational Science and Engineering) team and UNIST, with
-PhysicsNeMo integration by NVIDIA.
+This example demonstrates the PhysicsNeMo integration of the FP-DDM
+domain-decomposition work proposed in DAC 2026 [1] by the Samsung CSE team and
+UNIST.
 
 This example applies an overlapping Schwarz domain-decomposition method to the
 steady two-dimensional thermal equation
