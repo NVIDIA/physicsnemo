@@ -258,7 +258,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   This includes geometric, deformation (including radial-basis-function
   deformation), calculus, topology, visualization, and validation operations.
 - `physicsnemo.mesh`: `draw` and `validate` are now the canonical standalone
-  names matching `Mesh.draw` and `Mesh.validate`; `draw_mesh` and
+  names matching `Mesh.draw` and `Mesh.validate`. The `draw_mesh` and
   `validate_mesh` remain as pending-deprecation compatibility names.
   `Mesh.validate` and `DomainMesh.validate` share the canonical validation
   option order, preserve the historical positional `tolerance` argument, and
