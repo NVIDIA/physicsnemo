@@ -147,9 +147,7 @@ def _replace_project_version(repo_root: Path, new_version: ProjectVersion) -> No
             f"found {len(matches)}"
         )
     match = matches[0]
-    replacement = (
-        f"{match.group('prefix')}{new_version.raw}{match.group('suffix')}"
-    )
+    replacement = f"{match.group('prefix')}{new_version.raw}{match.group('suffix')}"
     updated = content[: match.start()] + replacement + content[match.end() :]
     _write(version_path, updated)
 
@@ -201,9 +199,7 @@ def start_rc(repo_root: Path, release_version: str, release_date: str) -> None:
     _replace_project_version(repo_root, release)
     replacement = f"## [{release.raw}] - {release_date}"
     updated_changelog = (
-        changelog[: heading.start()]
-        + replacement
-        + changelog[heading.end() :]
+        changelog[: heading.start()] + replacement + changelog[heading.end() :]
     )
     _write(changelog_path, updated_changelog)
 
@@ -291,9 +287,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Prepared release version {args.release_version}")
         elif args.command == "prepare-mergeback":
             release_version = prepare_mergeback(repo_root, args.next_dev_version)
-            print(
-                f"Prepared {args.next_dev_version} after release {release_version}"
-            )
+            print(f"Prepared {args.next_dev_version} after release {release_version}")
         else:  # pragma: no cover - argparse prevents this branch
             parser.error(f"Unknown command {args.command}")
     except ReleaseError as exc:
