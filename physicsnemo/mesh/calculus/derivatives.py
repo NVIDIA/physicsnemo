@@ -61,7 +61,7 @@ def compute_point_derivatives(
     for both intrinsic (tangent space) and extrinsic (ambient space) derivatives.
 
     Call it as ``compute_point_derivatives(mesh, ...)`` or as
-    ``mesh.compute_point_derivatives(...)``; the bound method supplies ``mesh``
+    ``mesh.compute_point_derivatives(...)``. The bound method supplies ``mesh``
     automatically.
 
     Parameters
@@ -206,7 +206,7 @@ def compute_cell_derivatives(
     """Compute gradients of cell_data fields.
 
     Call it as ``compute_cell_derivatives(mesh, ...)`` or as
-    ``mesh.compute_cell_derivatives(...)``; the bound method supplies ``mesh``
+    ``mesh.compute_cell_derivatives(...)``. The bound method supplies ``mesh``
     automatically.
 
     Parameters

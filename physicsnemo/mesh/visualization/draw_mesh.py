@@ -60,7 +60,7 @@ def draw(
     This is the main visualization function for Mesh objects. It automatically
     selects the appropriate backend based on spatial dimensions, or allows
     explicit backend specification. Call it as ``draw(mesh, ...)`` or as
-    ``mesh.draw(...)``; the bound method supplies ``mesh`` automatically.
+    ``mesh.draw(...)``. The bound method supplies ``mesh`` automatically.
 
     Parameters
     ----------
@@ -146,6 +146,7 @@ def draw(
     >>> mesh.draw(cell_scalars=("flow", "temperature"))  # doctest: +SKIP
     >>>
     >>> # Customize and display later
+    >>> import matplotlib.pyplot as plt
     >>> ax = mesh.draw(show=False, backend="matplotlib")  # doctest: +SKIP
     >>> ax.set_title("My Mesh")  # doctest: +SKIP
     >>> plt.show()  # doctest: +SKIP

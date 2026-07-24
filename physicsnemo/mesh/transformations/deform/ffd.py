@@ -161,7 +161,7 @@ def free_form_deform(
     the box.
 
     Call it as ``free_form_deform(mesh, ...)`` or as
-    ``mesh.free_form_deform(...)``; the bound method supplies ``mesh``
+    ``mesh.free_form_deform(...)``. The bound method supplies ``mesh``
     automatically.
 
     Parameters

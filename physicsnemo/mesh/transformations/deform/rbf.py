@@ -54,7 +54,7 @@ def radial_basis_function_deform(
     precision.
 
     Call it as ``radial_basis_function_deform(mesh, ...)`` or as
-    ``mesh.radial_basis_function_deform(...)``; the bound method supplies
+    ``mesh.radial_basis_function_deform(...)``. The bound method supplies
     ``mesh`` automatically.
 
     Parameters

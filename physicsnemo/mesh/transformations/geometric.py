@@ -440,7 +440,7 @@ def transform(
 ) -> "Mesh":
     """Apply a linear transformation to the mesh.
 
-    Call it as ``transform(mesh, ...)`` or as ``mesh.transform(...)``; the
+    Call it as ``transform(mesh, ...)`` or as ``mesh.transform(...)``. The
     bound method supplies ``mesh`` automatically.
 
     Parameters
@@ -597,7 +597,7 @@ def translate(
     Translation only affects point positions and centroids. Vector/tensor fields
     are unchanged by translation (they represent directions, not positions).
 
-    Call it as ``translate(mesh, ...)`` or as ``mesh.translate(...)``; the
+    Call it as ``translate(mesh, ...)`` or as ``mesh.translate(...)``. The
     bound method supplies ``mesh`` automatically.
 
     Parameters
@@ -675,7 +675,7 @@ def rotate(
 ) -> "Mesh":
     """Rotate the mesh about an axis by a specified angle.
 
-    Call it as ``rotate(mesh, ...)`` or as ``mesh.rotate(...)``; the bound
+    Call it as ``rotate(mesh, ...)`` or as ``mesh.rotate(...)``. The bound
     method supplies ``mesh`` automatically.
 
     Parameters
@@ -758,7 +758,7 @@ def scale(
 ) -> "Mesh":
     """Scale the mesh by specified factor(s).
 
-    Call it as ``scale(mesh, ...)`` or as ``mesh.scale(...)``; the bound method
+    Call it as ``scale(mesh, ...)`` or as ``mesh.scale(...)``. The bound method
     supplies ``mesh`` automatically.
 
     Parameters

@@ -44,7 +44,7 @@ def displace(
     nested tuple keys) in
     :attr:`~physicsnemo.mesh.mesh.Mesh.point_data`.
 
-    Call it as ``displace(mesh, ...)`` or as ``mesh.displace(...)``; the bound
+    Call it as ``displace(mesh, ...)`` or as ``mesh.displace(...)``. The bound
     method supplies ``mesh`` automatically.
 
     Parameters

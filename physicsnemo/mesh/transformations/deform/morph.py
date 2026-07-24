@@ -52,7 +52,7 @@ def morph(
     their mean displacement. A control may be anywhere in world coordinates and
     need not coincide with a mesh point.
 
-    Call it as ``morph(mesh, ...)`` or as ``mesh.morph(...)``; the bound method
+    Call it as ``morph(mesh, ...)`` or as ``mesh.morph(...)``. The bound method
     supplies ``mesh`` automatically.
 
     Parameters
