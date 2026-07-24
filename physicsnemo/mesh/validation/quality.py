@@ -112,8 +112,15 @@ def _compute_simplex_altitudes(
         0, (mesh.n_cells, n_vertices_per_cell)
     )
 
-    eps = safe_eps(mesh.points.dtype)
-    return n_manifold_dims * cell_measures[:, None] / facet_measures.clamp(min=eps)
+    # An absolute epsilon is not dimensionally valid here: facet measures have
+    # units of length ** (d - 1), while the common tolerance is length-valued.
+    # Guard exact zeros without changing any positive, representable measure.
+    facet_denominators = torch.where(
+        facet_measures > 0,
+        facet_measures,
+        torch.ones_like(facet_measures),
+    )
+    return n_manifold_dims * cell_measures[:, None] / facet_denominators
 
 
 def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
@@ -138,6 +145,12 @@ def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
     TensorDict
         TensorDict of shape (n_cells,) with quality metrics
 
+    Notes
+    -----
+    A 0-simplex has no shape to distort, so its aspect ratio, edge-length
+    ratio, and quality score are 1. Its edge lengths and angles are undefined
+    and reported as ``NaN``.
+
     Examples
     --------
     >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
@@ -155,6 +168,31 @@ def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
     device = mesh.points.device
     dtype = mesh.points.dtype
     n_cells = mesh.n_cells
+
+    if mesh.n_manifold_dims == 0:
+        # A point has no shape to distort, so its dimensionless quality values
+        # are ideal. Edge lengths and angles are undefined for a 0-simplex.
+        ideal = torch.ones((n_cells,), dtype=dtype, device=device)
+        undefined = torch.full(
+            (n_cells,),
+            float("nan"),
+            dtype=dtype,
+            device=device,
+        )
+        return TensorDict(
+            {
+                "aspect_ratio": ideal.clone(),
+                "edge_length_ratio": ideal.clone(),
+                "min_angle": undefined.clone(),
+                "max_angle": undefined.clone(),
+                "min_edge_length": undefined.clone(),
+                "max_edge_length": undefined.clone(),
+                "quality_score": ideal,
+            },
+            batch_size=torch.Size([n_cells]),
+            device=device,
+        )
+
     ### Compute edge lengths for each cell
     edge_lengths = compute_cell_edge_lengths(mesh)  # (n_cells, n_edges_per_cell)
 
@@ -162,12 +200,27 @@ def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
     min_edge = edge_lengths.min(dim=1).values
 
     eps = safe_eps(dtype)
-    edge_length_ratio = max_edge / min_edge.clamp(min=eps)
+    min_edge_denominator = torch.where(
+        min_edge > 0,
+        min_edge,
+        torch.ones_like(min_edge),
+    )
+    edge_length_ratio = max_edge / min_edge_denominator
+    edge_length_ratio = torch.where(
+        min_edge > 0,
+        edge_length_ratio,
+        torch.full_like(edge_length_ratio, float("inf")),
+    )
 
     ### Compute a dimensionless, scale-invariant simplex aspect ratio
     cell_measures = mesh.cell_areas
     min_altitude = _compute_simplex_altitudes(mesh, cell_measures).min(dim=1).values
-    raw_aspect_ratio = max_edge / min_altitude.clamp(min=eps)
+    min_altitude_denominator = torch.where(
+        min_altitude > 0,
+        min_altitude,
+        torch.ones_like(min_altitude),
+    )
+    raw_aspect_ratio = max_edge / min_altitude_denominator
 
     # A regular d-simplex has max_edge / min_altitude = sqrt(2d / (d + 1)).
     # Normalize by that value so 1.0 is ideal in every manifold dimension.
@@ -176,7 +229,7 @@ def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
     )
     aspect_ratio = (raw_aspect_ratio / regular_simplex_ratio).clamp(min=1.0)
     aspect_ratio = torch.where(
-        cell_measures > 0,
+        (cell_measures > 0) & (min_altitude > 0),
         aspect_ratio,
         torch.full_like(aspect_ratio, float("inf")),
     )

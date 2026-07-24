@@ -247,9 +247,9 @@ class TestMeshValidation:
 ###############################################################################
 
 
-def _single_simplex(points, device):
+def _single_simplex(points, device, *, dtype=torch.float64):
     """Create a one-cell simplex mesh from point coordinates."""
-    point_tensor = torch.tensor(points, dtype=torch.float64, device=device)
+    point_tensor = torch.tensor(points, dtype=dtype, device=device)
     cells = torch.arange(
         point_tensor.shape[0],
         dtype=torch.long,
@@ -331,6 +331,37 @@ class TestQualityMetrics:
                     metrics["quality_score"],
                     torch.ones_like(metrics["quality_score"]),
                 )
+
+    def test_small_float32_tetrahedron_quality_is_scale_invariant(self, device):
+        """Small 3D cells do not activate a dimensionally invalid area floor."""
+        mesh = _single_simplex(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.5, math.sqrt(3.0) / 2.0, 0.0],
+                [
+                    0.5,
+                    math.sqrt(3.0) / 6.0,
+                    math.sqrt(2.0 / 3.0),
+                ],
+            ],
+            device,
+            dtype=torch.float32,
+        )
+        reference = compute_quality_metrics(mesh)
+        scaled = compute_quality_metrics(mesh.scale(1e-5))
+
+        for metric_name in (
+            "aspect_ratio",
+            "edge_length_ratio",
+            "min_angle",
+            "max_angle",
+            "quality_score",
+        ):
+            torch.testing.assert_close(
+                scaled[metric_name],
+                reference[metric_name],
+            )
 
     @pytest.mark.parametrize(
         ("points", "expected_aspect_ratio"),
@@ -471,6 +502,37 @@ class TestQualityMetrics:
 
         # Very elongated triangle should have low quality
         assert quality < 0.3
+
+    def test_point_simplex_quality(self, device):
+        """A 0-simplex is shape-perfect with undefined lengths and angles."""
+        mesh = Mesh(
+            points=torch.tensor(
+                [[0.0, 0.0], [1.0, 1.0]],
+                dtype=torch.float32,
+                device=device,
+            ),
+            cells=torch.tensor([[0], [1]], dtype=torch.long, device=device),
+        )
+
+        metrics = compute_quality_metrics(mesh)
+
+        assert metrics.batch_size == torch.Size([2])
+        for metric_name in (
+            "aspect_ratio",
+            "edge_length_ratio",
+            "quality_score",
+        ):
+            torch.testing.assert_close(
+                metrics[metric_name],
+                torch.ones_like(metrics[metric_name]),
+            )
+        for metric_name in (
+            "min_angle",
+            "max_angle",
+            "min_edge_length",
+            "max_edge_length",
+        ):
+            assert torch.isnan(metrics[metric_name]).all()
 
     def test_quality_metrics_angles(self, device):
         """Test that angles are computed for triangles."""
@@ -1080,17 +1142,21 @@ class TestValidationCodePaths:
         # Degenerate check should be skipped (no key or not computed)
 
 
-def test_self_intersection_check_raises_not_implemented():
-    """check_self_intersection is unimplemented and must fail loudly (regardless of
-    raise_on_error) rather than returning a None sentinel that looks like
-    'no self-intersections found'."""
+@pytest.mark.parametrize("raise_on_error", [False, True])
+def test_self_intersection_check_precedes_other_validation_errors(raise_on_error):
+    """The unsupported option fails consistently, even when the mesh is invalid."""
     points = torch.tensor(
         [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 1.0, 0.0]], dtype=torch.float32
     )
-    cells = torch.tensor([[0, 1, 2]], dtype=torch.long)
+    cells = torch.tensor([[0, 1, 3]], dtype=torch.long)
     mesh = Mesh(points=points, cells=cells)
+
     with pytest.raises(NotImplementedError, match="[Ss]elf-intersection"):
-        validate(mesh, check_self_intersection=True, raise_on_error=False)
+        validate(
+            mesh,
+            check_self_intersection=True,
+            raise_on_error=raise_on_error,
+        )
 
 
 if __name__ == "__main__":

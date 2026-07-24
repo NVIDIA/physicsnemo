@@ -54,7 +54,7 @@ def validate(
 
     Performs a comprehensive set of checks to ensure mesh is well-formed
     and suitable for geometric computations. Call it as ``validate(mesh, ...)``
-    or as ``mesh.validate(...)``; the bound method supplies ``mesh``
+    or as ``mesh.validate(...)``. The bound method supplies ``mesh``
     automatically.
 
     Parameters
@@ -113,6 +113,18 @@ def validate(
     >>> report = validate(mesh)
     >>> assert report["valid"] == True
     """
+    ### Reject unsupported options before any other validation can return or raise.
+    if check_self_intersection:
+        # Fail loudly rather than returning a None sentinel that masquerades as
+        # "no self-intersections found". Implementing this needs BVH-accelerated
+        # cell-cell intersection tests (the naive version is O(n^2)).
+        # TODO: implement BVH-accelerated self-intersection detection.
+        raise NotImplementedError(
+            "Self-intersection checking is not yet implemented (it requires "
+            "BVH-accelerated cell-cell intersection tests). Do not pass "
+            "check_self_intersection=True until it is available."
+        )
+
     ### Default tolerance based on point dtype
     if tolerance is None:
         tolerance = safe_eps(mesh.points.dtype)
@@ -278,18 +290,6 @@ def validate(
         else:
             results["is_manifold"] = None  # Only defined for 2D manifolds
             results["n_non_manifold_edges"] = -1  # Not applicable
-
-    ### Check for self-intersections (opt-in only) -- NOT YET IMPLEMENTED.
-    if check_self_intersection:
-        # Fail loudly rather than returning a None sentinel that masquerades as
-        # "no self-intersections found". Implementing this needs BVH-accelerated
-        # cell-cell intersection tests (the naive version is O(n^2)).
-        # TODO: implement BVH-accelerated self-intersection detection.
-        raise NotImplementedError(
-            "Self-intersection checking is not yet implemented (it requires "
-            "BVH-accelerated cell-cell intersection tests). Do not pass "
-            "check_self_intersection=True until it is available."
-        )
 
     return results
 
