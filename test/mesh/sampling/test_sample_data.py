@@ -23,6 +23,7 @@ across spatial dimensions and compute backends.
 import pytest
 import torch
 
+import physicsnemo.mesh.sampling as mesh_sampling
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.sampling import (
     compute_barycentric_coordinates,
@@ -41,6 +42,87 @@ def assert_on_device(tensor: torch.Tensor, expected_device: str) -> None:
     assert actual_device == expected_device, (
         f"Device mismatch: tensor is on {actual_device!r}, expected {expected_device!r}"
     )
+
+
+def _single_triangle_mesh() -> Mesh:
+    """Build a minimal mesh for implementation pass-through tests."""
+    points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+    cells = torch.tensor([[0, 1, 2]])
+    mesh = Mesh(points=points, cells=cells)
+    mesh.cell_data["value"] = torch.tensor([1.0])
+    return mesh
+
+
+@pytest.mark.parametrize(
+    ("call_kwargs", "expected_implementation"),
+    [
+        pytest.param({}, None, id="default"),
+        pytest.param({"implementation": "scipy"}, "scipy", id="explicit"),
+    ],
+)
+def test_sampling_function_forwards_knn_implementation(
+    monkeypatch: pytest.MonkeyPatch,
+    call_kwargs: dict[str, str],
+    expected_implementation: str | None,
+):
+    """Projection sampling forwards its KNN backend to nearest-cell lookup."""
+    mesh = _single_triangle_mesh()
+    query = torch.tensor([[0.25, 0.25]])
+    captured: dict[str, str | None] = {}
+
+    def fake_find_nearest_cells(mesh, query_points, implementation):
+        captured["implementation"] = implementation
+        indices = torch.zeros(len(query_points), dtype=torch.int64)
+        return indices, query_points
+
+    monkeypatch.setitem(
+        sample_data_at_points.__globals__,
+        "find_nearest_cells",
+        fake_find_nearest_cells,
+    )
+
+    sample_data_at_points(
+        mesh,
+        query,
+        project_onto_nearest_cell=True,
+        **call_kwargs,
+    )
+
+    assert captured["implementation"] == expected_implementation
+
+
+@pytest.mark.parametrize(
+    ("call_kwargs", "expected_implementation"),
+    [
+        pytest.param({}, None, id="default"),
+        pytest.param({"implementation": "scipy"}, "scipy", id="explicit"),
+    ],
+)
+def test_mesh_sampling_method_forwards_knn_implementation(
+    monkeypatch: pytest.MonkeyPatch,
+    call_kwargs: dict[str, str],
+    expected_implementation: str | None,
+):
+    """Mesh.sample_data_at_points preserves the selected KNN backend."""
+    mesh = _single_triangle_mesh()
+    query = torch.tensor([[0.25, 0.25]])
+    captured: dict[str, str | None] = {}
+    sentinel = object()
+
+    def fake_sample_data_at_points(**kwargs):
+        captured["implementation"] = kwargs["implementation"]
+        return sentinel
+
+    monkeypatch.setattr(
+        mesh_sampling,
+        "sample_data_at_points",
+        fake_sample_data_at_points,
+    )
+
+    result = mesh.sample_data_at_points(query, **call_kwargs)
+
+    assert result is sentinel
+    assert captured["implementation"] == expected_implementation
 
 
 ### Test Fixtures ###

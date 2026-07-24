@@ -240,6 +240,8 @@ def smooth_laplacian(
     ### smoothing does not change), so they remain valid and are preserved.
     mesh._cache["cell"] = mesh._cache["cell"].empty()
     mesh._cache["point"] = mesh._cache["point"].empty()
+    if "geometry" in mesh._cache:
+        mesh._cache["geometry"] = mesh._cache["geometry"].empty()
     return mesh
 
 

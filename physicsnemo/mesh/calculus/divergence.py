@@ -39,12 +39,10 @@ Physical interpretation: net flux through the dual cell boundary per unit
 volume, with the PDP-flat providing the edge flux estimate.
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import torch
 from jaxtyping import Float
-
-from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -53,6 +51,7 @@ if TYPE_CHECKING:
 def compute_divergence_points_dec(
     mesh: "Mesh",
     vector_field: Float[torch.Tensor, "n_points n_spatial_dims"],
+    implementation: Literal["warp", "torch"] | None = "torch",
 ) -> Float[torch.Tensor, " n_points"]:
     r"""Compute divergence at vertices using DEC.
 
@@ -80,6 +79,8 @@ def compute_divergence_points_dec(
         Simplicial mesh of any manifold dimension.
     vector_field : torch.Tensor
         Vectors at vertices, shape ``(n_points, n_spatial_dims)``.
+    implementation : {"warp", "torch"} or None, optional
+        Functional backend. Defaults to ``"torch"``.
 
     Returns
     -------
@@ -87,53 +88,35 @@ def compute_divergence_points_dec(
         Divergence at vertices, shape ``(n_points,)``.
     """
     from physicsnemo.mesh.geometry.dual_meshes import (
-        compute_cotan_weights_fem,
+        get_or_compute_cotan_weights_fem,
         get_or_compute_dual_volumes_0,
     )
-
-    n_points = mesh.n_points
+    from physicsnemo.nn.functional.derivatives.mesh_cotan_divergence import (
+        mesh_cotan_divergence,
+    )
 
     ### Get FEM cotangent weights and canonical edges (one consistent source)
-    cotan_weights, edges = compute_cotan_weights_fem(mesh)  # (n_edges,), (n_edges, 2)
+    cotan_weights, edges = get_or_compute_cotan_weights_fem(mesh)
 
     ### Get dual 0-cell volumes |⋆v| at vertices
     dual_volumes_0 = get_or_compute_dual_volumes_0(mesh)  # (n_points,)
 
-    ### Edge vectors: (w - v) for each canonical edge [v, w] with v < w
-    edge_vectors = (
-        mesh.points[edges[:, 1]] - mesh.points[edges[:, 0]]
-    )  # (n_edges, n_spatial_dims)
-
-    v0_indices = edges[:, 0]  # (n_edges,)
-    v1_indices = edges[:, 1]  # (n_edges,)
-
-    ### PDP-flat 1-form value: <X_flat, e> = (X(v) + X(w))/2 . (w - v)
-    v_edge = (
-        vector_field[v0_indices] + vector_field[v1_indices]
-    ) / 2  # (n_edges, n_spatial_dims)
-    flat_1form = (v_edge * edge_vectors).sum(dim=-1)  # (n_edges,)
-
-    ### Weighted flux: w_ij × <X_flat, e>
-    weighted_flux = cotan_weights * flat_1form  # (n_edges,)
-
-    ### Scatter-add to vertices with orientation signs
-    # v0 (smaller index): edge points outward from v0's dual cell → positive
-    # v1 (larger index):  edge points inward to v1's dual cell   → negative
-    divergence = torch.zeros(
-        n_points, dtype=vector_field.dtype, device=mesh.points.device
+    return mesh_cotan_divergence(
+        points=mesh.points,
+        edges=edges,
+        cotan_weights=cotan_weights,
+        dual_volumes=dual_volumes_0,
+        vector_field=vector_field,
+        implementation=implementation,
     )
-    divergence.scatter_add_(0, v0_indices, weighted_flux)
-    divergence.scatter_add_(0, v1_indices, -weighted_flux)
-
-    ### Normalize by dual 0-cell volumes
-    divergence = divergence / dual_volumes_0.clamp(min=safe_eps(dual_volumes_0.dtype))
-
-    return divergence
 
 
 def compute_divergence_points_lsq(
     mesh: "Mesh",
     vector_field: Float[torch.Tensor, "n_points n_spatial_dims"],
+    weight_power: float = 2.0,
+    min_neighbors: int = 0,
+    implementation: Literal["warp", "torch"] | None = "torch",
 ) -> Float[torch.Tensor, " n_points"]:
     r"""Compute divergence at vertices using LSQ gradient of each component.
 
@@ -158,25 +141,40 @@ def compute_divergence_points_lsq(
         Simplicial mesh.
     vector_field : torch.Tensor
         Vectors at vertices, shape ``(n_points, n_spatial_dims)``.
+    weight_power : float, optional
+        Exponent for inverse-distance weighting.
+    min_neighbors : int, optional
+        Points with fewer than this many neighbors receive zero divergence.
+    implementation : {"warp", "torch"} or None, optional
+        Functional backend. Defaults to ``"torch"``.
 
     Returns
     -------
     Float[torch.Tensor, " n_points"]
         Divergence at vertices, shape ``(n_points,)``.
     """
-    from physicsnemo.mesh.calculus._lsq_reconstruction import compute_point_gradient_lsq
+    from physicsnemo.nn.functional.derivatives.mesh_lsq_divergence import (
+        mesh_lsq_divergence,
+    )
 
-    ### Single call computes full Jacobian: J[i, k, j] = ∂v_j/∂x_k
-    # Shape: (n_points, n_spatial_dims, n_spatial_dims)
-    jacobian = compute_point_gradient_lsq(mesh, vector_field)
-
-    ### Divergence = trace of Jacobian = Σ_k ∂v_k/∂x_k
-    return torch.einsum("...ii", jacobian)
+    adjacency = mesh.get_point_to_points_adjacency()
+    return mesh_lsq_divergence(
+        points=mesh.points,
+        vector_field=vector_field,
+        neighbor_offsets=adjacency.offsets,
+        neighbor_indices=adjacency.indices,
+        weight_power=weight_power,
+        min_neighbors=min_neighbors,
+        implementation=implementation,
+    )
 
 
 def compute_divergence_cells_lsq(
     mesh: "Mesh",
     vector_field: Float[torch.Tensor, "n_cells n_spatial_dims"],
+    weight_power: float = 2.0,
+    min_neighbors: int = 0,
+    implementation: Literal["warp", "torch"] | None = "torch",
 ) -> Float[torch.Tensor, " n_cells"]:
     r"""Compute divergence at cell centers using the LSQ Jacobian trace.
 
@@ -190,15 +188,29 @@ def compute_divergence_cells_lsq(
         Simplicial mesh.
     vector_field : torch.Tensor
         Vectors at cell centers, shape ``(n_cells, n_spatial_dims)``.
+    weight_power : float, optional
+        Exponent for inverse-distance weighting.
+    min_neighbors : int, optional
+        Cells with fewer than this many neighbors receive zero divergence.
+    implementation : {"warp", "torch"} or None, optional
+        Functional backend. Defaults to ``"torch"``.
 
     Returns
     -------
     Float[torch.Tensor, " n_cells"]
         Divergence at cell centers, shape ``(n_cells,)``.
     """
-    from physicsnemo.mesh.calculus._lsq_reconstruction import compute_cell_gradient_lsq
+    from physicsnemo.nn.functional.derivatives.mesh_lsq_divergence import (
+        mesh_lsq_divergence,
+    )
 
-    # J[i, k, j] = ∂v_j/∂x_k, shape (n_cells, n_spatial_dims, n_spatial_dims)
-    jacobian = compute_cell_gradient_lsq(mesh, vector_field)
-
-    return torch.einsum("...ii", jacobian)
+    adjacency = mesh.get_cell_to_cells_adjacency(adjacency_codimension=1)
+    return mesh_lsq_divergence(
+        points=mesh.cell_centroids,
+        vector_field=vector_field,
+        neighbor_offsets=adjacency.offsets,
+        neighbor_indices=adjacency.indices,
+        weight_power=weight_power,
+        min_neighbors=min_neighbors,
+        implementation=implementation,
+    )

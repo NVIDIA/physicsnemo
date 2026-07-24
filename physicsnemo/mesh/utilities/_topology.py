@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 
 import torch
 from jaxtyping import Int
+from tensordict import TensorDict
 
 from physicsnemo.mesh.boundaries._facet_extraction import extract_candidate_facets
 from physicsnemo.utils._index_tuple_ops import unique_index_tuples
@@ -62,6 +63,15 @@ def extract_unique_edges(
     >>> edges.shape[1]
     2
     """
+    if mesh.n_manifold_dims == 0:
+        # A 0-manifold has vertices but no one-dimensional simplices.  Keep the
+        # edge shape stable so downstream DEC code can handle point clouds and
+        # empty meshes without special-casing malformed ``(0, 0)`` tensors.
+        return (
+            torch.empty((0, 2), dtype=mesh.cells.dtype, device=mesh.cells.device),
+            torch.empty((0,), dtype=torch.long, device=mesh.cells.device),
+        )
+
     if mesh.n_manifold_dims == 1:
         ### 1D meshes: cells ARE edges - sort and deduplicate directly
         sorted_cells = torch.sort(mesh.cells, dim=1)[0]
@@ -82,4 +92,50 @@ def extract_unique_edges(
         index_bound=mesh.n_points,
         return_inverse=True,
     )
+    return unique_edges, inverse_indices
+
+
+def get_or_compute_unique_edges(
+    mesh: "Mesh",
+) -> tuple[Int[torch.Tensor, "n_edges 2"], Int[torch.Tensor, " n_candidates"]]:
+    """Get cached unique edges and their candidate-to-edge mapping.
+
+    Edge connectivity depends only on ``mesh.cells``, so both tensors live in
+    the topology cache and remain valid across geometric transformations.  A
+    legacy serialized mesh may not have a ``"topology"`` cache; it is created
+    lazily in that case.
+
+    Tensors created inside :func:`torch.inference_mode` cannot be saved by a
+    later autograd operation.  When execution returns to grad-enabled mode,
+    inference tensors are therefore recomputed and replaced by ordinary
+    tensors before a DEC functional can save the edge indices for backward.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh.
+
+    Returns
+    -------
+    unique_edges : torch.Tensor
+        Canonically sorted unique edges, shape ``(n_edges, 2)``.
+    inverse_indices : torch.Tensor
+        Candidate-edge to unique-edge mapping.
+    """
+    topology_cache = mesh._cache.get("topology", None)
+    if topology_cache is None:
+        topology_cache = TensorDict({}, device=mesh.points.device)
+        mesh._cache["topology"] = topology_cache
+
+    unique_edges = topology_cache.get("unique_edges", None)
+    inverse_indices = topology_cache.get("unique_edge_inverse_indices", None)
+    needs_refresh = unique_edges is None or inverse_indices is None
+    if torch.is_grad_enabled() and not needs_refresh:
+        needs_refresh = unique_edges.is_inference() or inverse_indices.is_inference()
+
+    if needs_refresh:
+        unique_edges, inverse_indices = extract_unique_edges(mesh)
+        topology_cache["unique_edges"] = unique_edges
+        topology_cache["unique_edge_inverse_indices"] = inverse_indices
+
     return unique_edges, inverse_indices

@@ -82,6 +82,8 @@ class MeshLSQGradient(FunctionSpec):
         ("medium-3d-vector-n2048-k16", 2048, 3, 16, True),
     )
 
+    # Warp QR and torch.linalg.lstsq accumulate fp32 roundoff differently on
+    # ill-conditioned neighborhoods; these bounds cover that solver-order noise.
     _COMPARE_ATOL = 5e-3
     _COMPARE_RTOL = 5e-3
     _COMPARE_BACKWARD_ATOL = 8e-3

@@ -746,10 +746,11 @@ class FunctionSpec:
     def warp_stream_scope(
         wp_launch_stream: wp.Stream | None,
         *,
+        requires_cleanup_guard: bool = True,
         sync_enter: bool = True,
         sync_exit: bool = False,
     ):
-        """Scope Warp work on a borrowed torch stream with a cleanup guard.
+        """Scope Warp work on a borrowed torch stream.
 
         Warp and torch have different stream semantics: Warp streams are
         blocking (they implicitly synchronize with the NULL stream) while torch
@@ -760,9 +761,11 @@ class FunctionSpec:
         the launch finishes, which crashes.
 
         This context manager runs the enclosed Warp work inside
-        ``wp.ScopedStream(wp_launch_stream)``. On exit, a temporary Warp-owned
-        (blocking) stream waits on the borrowed stream so Warp's cleanup is
-        ordered after the compute instead of firing early.
+        ``wp.ScopedStream(wp_launch_stream)``. By default, a temporary
+        Warp-owned (blocking) stream waits on the borrowed stream at exit so
+        Warp's cleanup is ordered after the compute instead of firing early.
+        The guard can be disabled for kernels that use only externally owned
+        buffers and allocate no Warp-managed resources.
 
         Parameters
         ----------
@@ -770,6 +773,11 @@ class FunctionSpec:
             The borrowed Warp stream to launch on (as returned by
             :meth:`warp_launch_context`). ``None`` selects the CPU / no-stream
             path, where the scope is a no-op and no guard is installed.
+        requires_cleanup_guard : bool, optional
+            Whether to order Warp's stream-managed cleanup after the borrowed
+            stream, by default ``True``. Set this to ``False`` only when every
+            kernel buffer is owned externally (for example, by Torch) and the
+            enclosed kernels do not allocate Warp-managed resources.
         sync_enter : bool, optional
             Whether the borrowed stream should wait on Warp's previous stream
             when entering the scope. Set to ``False`` for CUDA Graph capture,
@@ -787,6 +795,18 @@ class FunctionSpec:
         # CPU / no-stream path: no-op scope, no guard needed.
         if wp_launch_stream is None:
             with wp.ScopedStream(None):
+                yield
+            return
+
+        # Externally-owned-buffer paths do not need a Warp-owned stream solely
+        # to guard allocator cleanup, but still honor the requested stream
+        # synchronization behavior.
+        if not requires_cleanup_guard:
+            with wp.ScopedStream(
+                wp_launch_stream,
+                sync_enter=sync_enter,
+                sync_exit=sync_exit,
+            ):
                 yield
             return
 

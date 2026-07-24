@@ -1718,18 +1718,17 @@ class TestEdgeCases:
         laplacian = compute_laplacian_points_dec(mesh, phi)
         assert torch.allclose(laplacian, torch.zeros_like(laplacian), atol=1e-5)
 
-    def test_curl_on_2d_raises(self):
-        """Test that curl on 2D data raises ValueError."""
+    def test_curl_on_1d_raises(self):
+        """Test that curl on 1D data raises ValueError."""
         from physicsnemo.mesh.calculus.curl import compute_curl_points_lsq
 
-        # 2D mesh
-        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]])
-        cells = torch.tensor([[0, 1, 2]])
+        points = torch.tensor([[0.0], [1.0], [2.0]])
+        cells = torch.tensor([[0, 1], [1, 2]])
         mesh = Mesh(points=points, cells=cells)
 
-        v = torch.ones((mesh.n_points, 2))
+        v = torch.ones((mesh.n_points, 1))
 
-        with pytest.raises(ValueError, match="only defined for 3D"):
+        with pytest.raises(ValueError, match="only defined for 2D or 3D"):
             compute_curl_points_lsq(mesh, v)
 
     def test_isolated_point_gradient_zero(self):

@@ -52,11 +52,36 @@ from typing import TYPE_CHECKING
 
 import torch
 from jaxtyping import Float, Int
+from tensordict import TensorDict
 
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
+
+
+def _get_geometry_cache(mesh: "Mesh") -> TensorDict:
+    """Return the mesh-level derived-geometry cache, creating it if needed."""
+    geometry_cache = mesh._cache.get("geometry", None)
+    if geometry_cache is None:
+        # Older serialized meshes predate the top-level geometry cache.  Keep
+        # loading those files backwards compatible and populate lazily.
+        geometry_cache = TensorDict({}, device=mesh.points.device)
+        mesh._cache["geometry"] = geometry_cache
+    return geometry_cache
+
+
+def _get_cell_volumes_for_derived_geometry(
+    mesh: "Mesh",
+) -> Float[torch.Tensor, " n_cells"]:
+    """Return cell volumes without reusing an autograd graph across backwards."""
+    if torch.is_grad_enabled() and mesh.points.requires_grad:
+        from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
+
+        cell_vertices = mesh.points[mesh.cells]
+        relative_vectors = cell_vertices[:, 1:, :] - cell_vertices[:, :1, :]
+        return compute_cell_areas(relative_vectors)
+    return mesh.cell_areas
 
 
 def _scatter_add_cell_contributions_to_vertices(
@@ -358,8 +383,9 @@ def compute_dual_volumes_0(mesh: "Mesh") -> Float[torch.Tensor, " n_points"]:
     if mesh.n_cells == 0:
         return dual_volumes
 
-    ### Get cell volumes (reuse existing computation)
-    cell_volumes = mesh.cell_areas  # (n_cells,) - "areas" is volumes in nD
+    ### Get cell volumes.  Differentiable geometry bypasses mesh.cell_areas so a
+    ### cached autograd graph is never reused by a subsequent backward pass.
+    cell_volumes = _get_cell_volumes_for_derived_geometry(mesh)
 
     ### Dimension-specific computation
     if n_manifold_dims == 1:
@@ -562,32 +588,38 @@ def compute_cotan_weights_fem(
     >>> weights, edges = compute_cotan_weights_fem(mesh)
     >>> # weights[i] is the cotangent weight for edges[i]
     """
-    from itertools import combinations
-
     from physicsnemo.mesh.utilities._topology import extract_unique_edges
+
+    ### Extract unique edges and the inverse mapping from candidate edges
+    unique_edges, inverse_indices = extract_unique_edges(mesh)
+    cotan_weights = _compute_cotan_weights_fem(mesh, unique_edges, inverse_indices)
+    return cotan_weights, unique_edges
+
+
+def _compute_cotan_weights_fem(
+    mesh: "Mesh",
+    unique_edges: Int[torch.Tensor, "n_edges 2"],
+    inverse_indices: Int[torch.Tensor, " n_candidates"],
+) -> Float[torch.Tensor, " n_edges"]:
+    """Compute FEM cotangent weights for precomputed edge topology."""
+    from itertools import combinations
 
     device = mesh.points.device
     dtype = mesh.points.dtype
     n_cells = mesh.n_cells
     n_manifold_dims = mesh.n_manifold_dims
-    n_verts_per_cell = n_manifold_dims + 1  # n+1 vertices in an n-simplex
-
-    ### Extract unique edges and the inverse mapping from candidate edges
-    unique_edges, inverse_indices = extract_unique_edges(mesh)
+    n_verts_per_cell = n_manifold_dims + 1
     n_unique_edges = len(unique_edges)
 
-    ### Handle empty mesh
-    if n_cells == 0:
-        return (
-            torch.zeros(n_unique_edges, dtype=dtype, device=device),
-            unique_edges,
-        )
+    ### Empty meshes and 0-manifolds contain no edges.
+    if n_cells == 0 or n_manifold_dims == 0:
+        return torch.zeros(n_unique_edges, dtype=dtype, device=device)
 
     ### Compute edge vectors from reference vertex (vertex 0 of each cell)
     # cell_vertices: (n_cells, n_verts_per_cell, n_spatial_dims)
     cell_vertices = mesh.points[mesh.cells]
     # E: (n_cells, n_manifold_dims, n_spatial_dims) - rows are e_k = v_k - v_0
-    E = cell_vertices[:, 1:, :] - cell_vertices[:, [0], :]
+    E = cell_vertices[:, 1:, :] - cell_vertices[:, :1, :]
 
     ### Compute Gram matrix G = E @ E^T
     # G: (n_cells, n_manifold_dims, n_manifold_dims)
@@ -608,35 +640,31 @@ def compute_cotan_weights_fem(
     # The contribution from these cells will be zeroed by cell_volumes ~ 0.
     # Written branchlessly so torch.compile can trace through without graph breaks.
     eye = torch.eye(n_manifold_dims, dtype=dtype, device=device)
-    G = G + is_degenerate.float().unsqueeze(-1).unsqueeze(-1) * eye
+    G = G + is_degenerate.to(dtype).unsqueeze(-1).unsqueeze(-1) * eye
 
     ### Invert Gram matrix
     # G_inv: (n_cells, n_manifold_dims, n_manifold_dims)
     G_inv = torch.linalg.inv(G)
 
-    ### Build the gradient dot product matrix C = H @ G_inv @ H^T
-    # H: (n_verts_per_cell, n_manifold_dims) = [[-1,...,-1]; I_n]
-    # This encodes the relationship: grad lambda_0 = -sum(grad lambda_k for k>=1)
-    H = torch.zeros(n_verts_per_cell, n_manifold_dims, dtype=dtype, device=device)
-    H[0, :] = -1.0
-    H[1:, :] = torch.eye(n_manifold_dims, dtype=dtype, device=device)
-
-    # C: (n_cells, n_verts_per_cell, n_verts_per_cell)
-    # C[c, i, j] = grad lambda_i . grad lambda_j in cell c
-    C = H.unsqueeze(0) @ G_inv @ H.T.unsqueeze(0)
+    ### Build C = H @ G_inv @ H^T algebraically, avoiding construction and
+    ### batched multiplication by the tiny constant H = [[-1,...,-1]; I].
+    column_sums = G_inv.sum(dim=-2)
+    row_sums = G_inv.sum(dim=-1)
+    top = torch.cat(
+        [G_inv.sum(dim=(-2, -1), keepdim=True), -column_sums.unsqueeze(-2)],
+        dim=-1,
+    )
+    bottom = torch.cat([-row_sums.unsqueeze(-1), G_inv], dim=-1)
+    C = torch.cat([top, bottom], dim=-2)
 
     ### Extract gradient dot products for each local edge pair
     # Local edge pairs in combinations order (matches extract_candidate_facets)
-    local_pairs = list(combinations(range(n_verts_per_cell), 2))
-    pair_i = torch.as_tensor([p[0] for p in local_pairs], device=device)
-    pair_j = torch.as_tensor([p[1] for p in local_pairs], device=device)
-
-    # grad_dots: (n_cells, n_pairs) - one value per cell per local edge
-    grad_dots = C[:, pair_i, pair_j]
+    local_pairs = combinations(range(n_verts_per_cell), 2)
+    grad_dots = torch.stack([C[:, i, j] for i, j in local_pairs], dim=1)
 
     ### Compute cotangent weight contributions per cell per edge
     # w = -|sigma| * (grad lambda_i . grad lambda_j)
-    cell_volumes = mesh.cell_areas  # (n_cells,)
+    cell_volumes = _get_cell_volumes_for_derived_geometry(mesh)
     weights_per_cell = -cell_volumes[:, None] * grad_dots  # (n_cells, n_pairs)
 
     ### Accumulate contributions to unique edges via scatter_add
@@ -646,6 +674,48 @@ def compute_cotan_weights_fem(
     # weights_per_cell.reshape(-1) aligns with inverse_indices in both cases.
     cotan_weights.scatter_add_(0, inverse_indices, weights_per_cell.reshape(-1))
 
+    return cotan_weights
+
+
+def get_or_compute_cotan_weights_fem(
+    mesh: "Mesh",
+) -> tuple[Float[torch.Tensor, " n_edges"], Int[torch.Tensor, "n_edges 2"]]:
+    r"""Get cached FEM cotangent weights and their canonical edges.
+
+    Topology and geometry are cached separately: canonical edges depend only
+    on ``cells``, while cotangent weights additionally depend on ``points``.
+    Differentiable point geometry always recomputes the weights so repeated
+    backward passes do not reuse a freed autograd graph.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Input simplicial mesh.
+
+    Returns
+    -------
+    cotan_weights : torch.Tensor
+        Cotangent weight for each unique edge, shape ``(n_edges,)``.
+    unique_edges : torch.Tensor
+        Canonically sorted edge indices, shape ``(n_edges, 2)``.
+    """
+    from physicsnemo.mesh.utilities._topology import get_or_compute_unique_edges
+
+    unique_edges, inverse_indices = get_or_compute_unique_edges(mesh)
+    geometry_cache = _get_geometry_cache(mesh)
+
+    if torch.is_grad_enabled() and mesh.points.requires_grad:
+        return (
+            _compute_cotan_weights_fem(mesh, unique_edges, inverse_indices),
+            unique_edges,
+        )
+
+    cotan_weights = geometry_cache.get("cotan_weights_fem", None)
+    if cotan_weights is None or (
+        torch.is_grad_enabled() and cotan_weights.is_inference()
+    ):
+        cotan_weights = _compute_cotan_weights_fem(mesh, unique_edges, inverse_indices)
+        geometry_cache["cotan_weights_fem"] = cotan_weights
     return cotan_weights, unique_edges
 
 
@@ -714,10 +784,14 @@ def get_or_compute_dual_volumes_0(mesh: "Mesh") -> Float[torch.Tensor, " n_point
     Float[torch.Tensor, " n_points"]
         Dual volumes for vertices, shape ``(n_points,)``.
     """
-    cached = mesh._cache.get(("point", "dual_volumes_0"), None)
-    if cached is None:
+    if torch.is_grad_enabled() and mesh.points.requires_grad:
+        return compute_dual_volumes_0(mesh)
+
+    geometry_cache = _get_geometry_cache(mesh)
+    cached = geometry_cache.get("dual_volumes_0", None)
+    if cached is None or (torch.is_grad_enabled() and cached.is_inference()):
         cached = compute_dual_volumes_0(mesh)
-        mesh._cache["point", "dual_volumes_0"] = cached
+        geometry_cache["dual_volumes_0"] = cached
     return cached
 
 

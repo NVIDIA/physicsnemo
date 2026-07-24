@@ -363,6 +363,44 @@ def test_warp_launch_context_missing_warp(monkeypatch):
         FunctionSpec.warp_launch_context(torch.tensor([1.0]))
 
 
+def test_warp_stream_scope_can_skip_cleanup_guard(monkeypatch):
+    events = []
+
+    class DummyScopedStream:
+        def __init__(self, stream, *, sync_enter=True, sync_exit=False):
+            self.stream = stream
+            self.sync_enter = sync_enter
+            self.sync_exit = sync_exit
+
+        def __enter__(self):
+            events.append(("enter", self.stream, self.sync_enter, self.sync_exit))
+
+        def __exit__(self, *args):
+            events.append(("exit", self.stream))
+
+    class UnexpectedGuardStream:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("cleanup guard should not be constructed")
+
+    monkeypatch.setattr(function_spec.wp, "ScopedStream", DummyScopedStream)
+    monkeypatch.setattr(function_spec.wp, "Stream", UnexpectedGuardStream)
+
+    borrowed_stream = object()
+    with FunctionSpec.warp_stream_scope(
+        borrowed_stream,
+        requires_cleanup_guard=False,
+        sync_enter=False,
+        sync_exit=True,
+    ):
+        events.append(("body", borrowed_stream))
+
+    assert events == [
+        ("enter", borrowed_stream, False, True),
+        ("body", borrowed_stream),
+        ("exit", borrowed_stream),
+    ]
+
+
 @pytest.mark.parametrize("sync_enter", [False, True])
 @pytest.mark.parametrize("sync_exit", [False, True])
 def test_warp_stream_scope_forwards_sync_options(monkeypatch, sync_enter, sync_exit):

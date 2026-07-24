@@ -77,6 +77,7 @@ def compute_gradient_points_lsq(
     point_values: Float[torch.Tensor, "n_points ..."],
     weight_power: float = 2.0,
     intrinsic: bool = False,
+    implementation: Literal["warp", "torch"] | None = "torch",
 ) -> Float[torch.Tensor, "n_points n_spatial_dims ..."]:
     r"""Compute gradient at vertices using weighted least-squares.
 
@@ -90,6 +91,10 @@ def compute_gradient_points_lsq(
         Exponent for inverse-distance weighting.
     intrinsic : bool
         If ``True`` and mesh is a manifold, solve LSQ in tangent space.
+    implementation : {"warp", "torch"} or None, optional
+        Backend implementation for the ambient LSQ gradient functional.
+        Intrinsic tangent-space LSQ currently uses its existing Torch
+        implementation.
 
     Returns
     -------
@@ -98,6 +103,13 @@ def compute_gradient_points_lsq(
         ``(n_points, n_spatial_dims, ...)``.
     """
     if intrinsic and mesh.codimension > 0:
+        if implementation not in (None, "torch"):
+            raise NotImplementedError(
+                "Warp implementation is not available for intrinsic tangent-space "
+                "LSQ gradients. Call this function with intrinsic=False or "
+                "implementation='torch' (Mesh.gradient callers can use "
+                "gradient_type='extrinsic')."
+            )
         # Use intrinsic LSQ (solves in tangent space)
         from physicsnemo.mesh.calculus._lsq_intrinsic import (
             compute_point_gradient_lsq_intrinsic,
@@ -110,13 +122,19 @@ def compute_gradient_points_lsq(
             compute_point_gradient_lsq,
         )
 
-        return compute_point_gradient_lsq(mesh, point_values, weight_power)
+        return compute_point_gradient_lsq(
+            mesh,
+            point_values,
+            weight_power,
+            implementation=implementation,
+        )
 
 
 def compute_gradient_cells_lsq(
     mesh: "Mesh",
     cell_values: Float[torch.Tensor, "n_cells ..."],
     weight_power: float = 2.0,
+    implementation: Literal["warp", "torch"] | None = "torch",
 ) -> Float[torch.Tensor, "n_cells n_spatial_dims ..."]:
     r"""Compute gradient at cells using weighted least-squares.
 
@@ -128,6 +146,8 @@ def compute_gradient_cells_lsq(
         Values at cells.
     weight_power : float
         Exponent for inverse-distance weighting.
+    implementation : {"warp", "torch"} or None, optional
+        Backend implementation used by the underlying LSQ gradient functional.
 
     Returns
     -------
@@ -137,7 +157,12 @@ def compute_gradient_cells_lsq(
     """
     from physicsnemo.mesh.calculus._lsq_reconstruction import compute_cell_gradient_lsq
 
-    return compute_cell_gradient_lsq(mesh, cell_values, weight_power)
+    return compute_cell_gradient_lsq(
+        mesh,
+        cell_values,
+        weight_power,
+        implementation=implementation,
+    )
 
 
 def project_to_tangent_space(

@@ -20,6 +20,7 @@ Validates that find_nearest_cells (backed by knn) produces correct
 nearest-neighbor assignments by comparing against brute-force cdist.
 """
 
+import pytest
 import torch
 
 from physicsnemo.mesh.mesh import Mesh
@@ -34,6 +35,36 @@ def _make_point_cloud_mesh(n: int = 100) -> Mesh:
     points = points / points.norm(dim=1, keepdim=True)
     cells = torch.arange(n).unsqueeze(1)
     return Mesh(points=points, cells=cells)
+
+
+@pytest.mark.parametrize(
+    ("call_kwargs", "expected_implementation"),
+    [
+        pytest.param({}, None, id="default"),
+        pytest.param({"implementation": "scipy"}, "scipy", id="explicit"),
+    ],
+)
+def test_knn_implementation_forwarded(
+    monkeypatch: pytest.MonkeyPatch,
+    call_kwargs: dict[str, str],
+    expected_implementation: str | None,
+):
+    """The public helper auto-dispatches by default and forwards choices."""
+    mesh = _make_point_cloud_mesh(3)
+    query = mesh.points[:1]
+    captured: dict[str, str | None] = {}
+
+    def fake_knn(points, queries, k, implementation):
+        captured["implementation"] = implementation
+        indices = torch.zeros((len(queries), k), dtype=torch.int64)
+        distances = torch.zeros((len(queries), k), dtype=queries.dtype)
+        return indices, distances
+
+    monkeypatch.setitem(find_nearest_cells.__globals__, "knn", fake_knn)
+
+    find_nearest_cells(mesh, query, **call_kwargs)
+
+    assert captured["implementation"] == expected_implementation
 
 
 ### knn matches brute-force ###

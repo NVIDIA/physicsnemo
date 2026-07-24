@@ -54,6 +54,7 @@ def compute_point_derivatives(
     keys: str | tuple[str, ...] | Sequence[str | tuple[str, ...]] | None = None,
     method: Literal["lsq", "dec"] = "lsq",
     gradient_type: Literal["intrinsic", "extrinsic", "both"] = "intrinsic",
+    implementation: Literal["warp", "torch"] | None = "torch",
 ) -> "Mesh":
     """Compute gradients of point_data fields.
 
@@ -82,6 +83,13 @@ def compute_point_derivatives(
         - ``"intrinsic"``: Project onto manifold tangent space.
         - ``"extrinsic"``: Full ambient space gradient.
         - ``"both"``: Compute and store both.
+    implementation : {"warp", "torch"} or None, optional
+        Backend implementation used by LSQ gradient functionals. Defaults to
+        ``"torch"`` to preserve backwards-compatible behavior. Requesting
+        ``"warp"`` for intrinsic tangent-space LSQ gradients raises
+        ``NotImplementedError``; use ``gradient_type="extrinsic"`` or
+        ``implementation="torch"``. DEC gradients likewise have no Warp
+        backend.
 
     Returns
     -------
@@ -109,6 +117,16 @@ def compute_point_derivatives(
         project_to_tangent_space,
     )
 
+    if method == "dec" and implementation not in (None, "torch"):
+        if implementation == "warp":
+            raise NotImplementedError(
+                "Warp implementation is not available for DEC gradients. "
+                "Use method='lsq' or implementation='torch'."
+            )
+        raise ValueError(
+            f"Invalid {implementation=!r}. Must be 'warp', 'torch', or None."
+        )
+
     ### Parse keys: normalize to list of key paths
     if keys is None:
         key_list = list(mesh.point_data.keys(include_nested=True, leaves_only=True))
@@ -130,17 +148,26 @@ def compute_point_derivatives(
         if method == "lsq":
             if gradient_type == "intrinsic":
                 grad_intrinsic = compute_gradient_points_lsq(
-                    mesh, field_values, intrinsic=True
+                    mesh,
+                    field_values,
+                    intrinsic=True,
+                    implementation=implementation,
                 )
                 grad_extrinsic = None
             elif gradient_type == "extrinsic":
                 grad_extrinsic = compute_gradient_points_lsq(
-                    mesh, field_values, intrinsic=False
+                    mesh,
+                    field_values,
+                    intrinsic=False,
+                    implementation=implementation,
                 )
                 grad_intrinsic = None
             else:  # "both"
                 grad_extrinsic = compute_gradient_points_lsq(
-                    mesh, field_values, intrinsic=False
+                    mesh,
+                    field_values,
+                    intrinsic=False,
+                    implementation=implementation,
                 )
                 grad_intrinsic = project_to_tangent_space(
                     mesh, grad_extrinsic, location="points"
@@ -198,6 +225,7 @@ def compute_cell_derivatives(
     keys: str | tuple[str, ...] | Sequence[str | tuple[str, ...]] | None = None,
     method: Literal["lsq", "dec"] = "lsq",
     gradient_type: Literal["intrinsic", "extrinsic", "both"] = "intrinsic",
+    implementation: Literal["warp", "torch"] | None = "torch",
 ) -> "Mesh":
     """Compute gradients of cell_data fields.
 
@@ -216,6 +244,9 @@ def compute_cell_derivatives(
         no analogous cell-to-cell operator in the primal DEC complex.
     gradient_type : {"intrinsic", "extrinsic", "both"}
         Type of gradient to compute.
+    implementation : {"warp", "torch"} or None, optional
+        Backend implementation used by LSQ gradient functionals. Defaults to
+        ``"torch"`` to preserve backwards-compatible behavior.
 
     Returns
     -------
@@ -252,7 +283,11 @@ def compute_cell_derivatives(
 
         ### Compute extrinsic gradient
         if method == "lsq":
-            grad_extrinsic = compute_gradient_cells_lsq(mesh, field_values)
+            grad_extrinsic = compute_gradient_cells_lsq(
+                mesh,
+                field_values,
+                implementation=implementation,
+            )
         elif method == "dec":
             raise NotImplementedError(
                 "DEC cell gradients not yet implemented. Use method='lsq'."

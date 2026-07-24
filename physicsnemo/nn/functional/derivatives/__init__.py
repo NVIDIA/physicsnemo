@@ -14,8 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .mesh_cotan_divergence import MeshCotanDivergence, mesh_cotan_divergence
+from .mesh_cotan_laplacian import MeshCotanLaplacian, mesh_cotan_laplacian
 from .mesh_green_gauss_gradient import MeshGreenGaussGradient, mesh_green_gauss_gradient
+from .mesh_lsq_curl import MeshLSQCurl, mesh_lsq_curl
+from .mesh_lsq_divergence import MeshLSQDivergence, mesh_lsq_divergence
 from .mesh_lsq_gradient import MeshLSQGradient, mesh_lsq_gradient
+from .mesh_lsq_laplacian import MeshLSQLaplacian, mesh_lsq_laplacian
 from .meshless_finite_difference import (
     MeshlessFDDerivatives,
     meshless_fd_derivatives,
@@ -40,28 +45,38 @@ from .uniform_grid_gradient import UniformGridGradient, uniform_grid_gradient
 from .uniform_grid_laplacian import UniformGridLaplacian, uniform_grid_laplacian
 
 __all__ = [
-    "UniformGridCurl",
-    "UniformGridDivergence",
-    "UniformGridLaplacian",
+    "MeshCotanDivergence",
+    "MeshCotanLaplacian",
     "MeshGreenGaussGradient",
-    "MeshlessFDDerivatives",
+    "MeshLSQCurl",
+    "MeshLSQDivergence",
     "MeshLSQGradient",
+    "MeshLSQLaplacian",
+    "MeshlessFDDerivatives",
     "RectilinearGridCurl",
     "RectilinearGridDivergence",
     "RectilinearGridGradient",
     "RectilinearGridLaplacian",
     "SpectralGridGradient",
+    "UniformGridCurl",
+    "UniformGridDivergence",
     "UniformGridGradient",
-    "uniform_grid_curl",
-    "uniform_grid_divergence",
-    "uniform_grid_laplacian",
+    "UniformGridLaplacian",
+    "mesh_cotan_divergence",
+    "mesh_cotan_laplacian",
     "mesh_green_gauss_gradient",
-    "meshless_fd_derivatives",
+    "mesh_lsq_curl",
+    "mesh_lsq_divergence",
     "mesh_lsq_gradient",
+    "mesh_lsq_laplacian",
+    "meshless_fd_derivatives",
     "rectilinear_grid_curl",
     "rectilinear_grid_divergence",
     "rectilinear_grid_gradient",
     "rectilinear_grid_laplacian",
     "spectral_grid_gradient",
+    "uniform_grid_curl",
+    "uniform_grid_divergence",
     "uniform_grid_gradient",
+    "uniform_grid_laplacian",
 ]
