@@ -40,13 +40,14 @@ class Elasticity2DSolver:
     spacing is the explicit pair ``(dy, dx)``. Strain and stress use
     ``[B, 2, 2, H, W]`` with both tensor axes ordered ``(y, x)``.
 
-    The plane-stress constitutive law is evaluated at grid points. Adjacent
-    stresses are averaged to one shared face before taking their divergence,
-    so internal forces cancel pairwise. BiCGSTAB solves the resulting
-    matrix-free system with component-wise Dirichlet constraints.
+    Equilibrium uses fully integrated bilinear quadrilateral elements, which
+    give a coercive regular-grid operator without checkerboard modes. Material
+    values are interpolated from the grid points at each quadrature point.
+    BiCGSTAB solves the resulting matrix-free system with component-wise
+    Dirichlet constraints.
     """
 
-    stencil_radius = 2
+    stencil_radius = 1
 
     def __init__(
         self,
@@ -187,27 +188,84 @@ class Elasticity2DSolver:
             .sqrt()
         )
 
-    def _equilibrium(self, stress: torch.Tensor) -> torch.Tensor:
-        """Return conservative ``-div(stress)`` using shared face stresses."""
+    @staticmethod
+    def _element_values(values: torch.Tensor) -> torch.Tensor:
+        """Gather the four corner values of every grid cell."""
 
-        result = torch.zeros(
-            (stress.shape[0], 2, *stress.shape[-2:]),
-            dtype=stress.dtype,
-            device=stress.device,
+        return torch.stack(
+            (
+                values[..., :-1, :-1],
+                values[..., :-1, 1:],
+                values[..., 1:, :-1],
+                values[..., 1:, 1:],
+            ),
+            dim=-1,
         )
-        for axis, step in enumerate(self.spacing):
-            component = stress[:, :, axis]
-            tensor_axis = axis + 2
-            lower = [slice(None)] * component.ndim
-            upper = [slice(None)] * component.ndim
-            lower[tensor_axis] = slice(None, -1)
-            upper[tensor_axis] = slice(1, None)
-            lower = tuple(lower)
-            upper = tuple(upper)
-            face_stress = 0.5 * (component[lower] + component[upper])
-            result[lower] -= face_stress / step
-            result[upper] += face_stress / step
-        return result
+
+    def _equilibrium(
+        self,
+        displacement: torch.Tensor,
+        young_modulus: torch.Tensor,
+        poisson_ratio: torch.Tensor,
+    ) -> torch.Tensor:
+        """Return the volume-normalized Q1 finite-element internal force."""
+
+        dy, dx = self.spacing
+        corners = self._element_values(displacement)
+        young_corners = self._element_values(young_modulus)
+        poisson_corners = self._element_values(poisson_ratio)
+        element_force = torch.zeros_like(corners)
+        quadrature_points = (-(3.0**-0.5), 3.0**-0.5)
+        area_weight = 0.25 * dy * dx
+
+        for eta in quadrature_points:
+            for xi in quadrature_points:
+                shape = (
+                    displacement.new_tensor(
+                        (
+                            (1.0 - eta) * (1.0 - xi),
+                            (1.0 - eta) * (1.0 + xi),
+                            (1.0 + eta) * (1.0 - xi),
+                            (1.0 + eta) * (1.0 + xi),
+                        )
+                    )
+                    * 0.25
+                )
+                derivative_y = displacement.new_tensor(
+                    (-(1.0 - xi), -(1.0 + xi), 1.0 - xi, 1.0 + xi)
+                ) / (2.0 * dy)
+                derivative_x = displacement.new_tensor(
+                    (-(1.0 - eta), 1.0 - eta, -(1.0 + eta), 1.0 + eta)
+                ) / (2.0 * dx)
+                gradient_y = (corners * derivative_y).sum(-1)
+                gradient_x = (corners * derivative_x).sum(-1)
+                young = (young_corners * shape).sum(-1)
+                poisson = (poisson_corners * shape).sum(-1)
+                shear = young / (2.0 * (1.0 + poisson))
+                lame = young * poisson / (1.0 - poisson.square())
+                sigma_yy = (lame + 2.0 * shear) * gradient_y[:, 0:1]
+                sigma_yy += lame * gradient_x[:, 1:2]
+                sigma_xx = lame * gradient_y[:, 0:1]
+                sigma_xx += (lame + 2.0 * shear) * gradient_x[:, 1:2]
+                sigma_yx = shear * (gradient_x[:, 0:1] + gradient_y[:, 1:2])
+                element_force[:, 0:1] += area_weight * (
+                    sigma_yy.unsqueeze(-1) * derivative_y
+                    + sigma_yx.unsqueeze(-1) * derivative_x
+                )
+                element_force[:, 1:2] += area_weight * (
+                    sigma_yx.unsqueeze(-1) * derivative_y
+                    + sigma_xx.unsqueeze(-1) * derivative_x
+                )
+
+        result = torch.zeros_like(displacement)
+        result[..., :-1, :-1] += element_force[..., 0]
+        result[..., :-1, 1:] += element_force[..., 1]
+        result[..., 1:, :-1] += element_force[..., 2]
+        result[..., 1:, 1:] += element_force[..., 3]
+        volume = torch.full_like(displacement[:, :1], dy * dx)
+        volume[..., (0, -1), :] *= 0.5
+        volume[..., :, (0, -1)] *= 0.5
+        return result / volume
 
     def residual(
         self,
@@ -220,8 +278,11 @@ class Elasticity2DSolver:
 
         displacement = self._displacement(displacement, "displacement")
         body_force = self._displacement(body_force, "body_force")
-        stress = self.stress(displacement, young_modulus, poisson_ratio)
-        return self._equilibrium(stress) - body_force
+        young_modulus = self._scalar_field(young_modulus, displacement, "young_modulus")
+        poisson_ratio = self._scalar_field(poisson_ratio, displacement, "poisson_ratio")
+        return (
+            self._equilibrium(displacement, young_modulus, poisson_ratio) - body_force
+        )
 
     @torch.no_grad()
     def solve(
@@ -263,7 +324,7 @@ class Elasticity2DSolver:
         ).reciprocal()
 
         def stiffness(values: torch.Tensor) -> torch.Tensor:
-            return self._equilibrium(self.stress(values, young_modulus, poisson_ratio))
+            return self._equilibrium(values, young_modulus, poisson_ratio)
 
         def apply(values: torch.Tensor) -> torch.Tensor:
             free_values = torch.where(free, values, torch.zeros_like(values))

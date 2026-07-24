@@ -2,7 +2,8 @@
 
 FP-DDM (Foundation-model-based Physics-guided adaptation for the Domain
 Decomposition Method) is a scalable framework for large-domain multi-physics
-analysis.
+analysis. This reference implementation currently runs Schwarz inference on one
+process; large-scale execution requires distributed ownership of subdomains.
 
 This example is based on the FP-DDM domain-decomposition work developed by the
 Samsung CSE (Computational Science and Engineering) team and UNIST, with
@@ -111,17 +112,20 @@ The checkpoint is used directly by default. Physics-guided test-time adaptation
 is optional and disabled; enable it with `run.ttt_steps=<steps>`.
 
 Each run writes the resolved Hydra configuration, per-iteration metrics,
-and NumPy reference fields when requested. Visualization also writes field
-images, iteration series, and MP4 animations.
+and NumPy reference fields when requested. Visualization also writes a static
+conductivity image plus temperature images, an iteration series, and an MP4
+animation.
 
 The overlap RMSE is the stopping metric. Reaching `max_iterations` is an
 iteration-budget limit, not convergence.
 
 ## Run the Elasticity Comparison
 
-The elasticity example solves a two-dimensional plane-stress bending problem
-using numerical local patch solves. It compares a 2 x 2 overlapping DDM result
-with a monolithic solve using the same matrix-free elasticity operator:
+The elasticity example uses numerical local patch solves for a manufactured
+two-dimensional plane-stress bending problem with prescribed displacement
+(Dirichlet) conditions along the entire outer boundary. It compares a 2 x 2
+overlapping DDM result with a monolithic solve using the same matrix-free
+elasticity operator:
 
 ```bash
 python examples/tcad/fp_ddm/run_elasticity.py
@@ -133,7 +137,7 @@ monolithic result, the numerical DDM result, and their absolute difference for b
 displacement magnitude and von Mises stress. Use `--no-plot` when only the
 numerical comparison is needed.
 
-This is the numerical elasticity baseline for the FP-DDM workflow. It does not
+This is a numerical validation baseline for the FP-DDM workflow. It does not
 train or use an elasticity FNO, so it is not a neural FP-DDM result.
 
 ## Configuration
@@ -152,9 +156,9 @@ The main configuration groups are:
 
 The supplied workload uses zero heat source, matching the original FP-DDM setup.
 The synthetic global layout currently requires a square patch grid with square
-patches. Full-domain reference solves are enabled by default and limited to at
-most 26 subdomains. Larger requests emit a warning and continue without
-reference metrics; disable them explicitly with `run.ground_truth=false`.
+patches. Full-domain reference solves are opt-in with `run.ground_truth=true`
+and limited to at most 26 subdomains. Larger requests emit a warning and
+continue without reference metrics.
 
 ## Validation And Scope
 

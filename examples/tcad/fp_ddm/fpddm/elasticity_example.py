@@ -171,8 +171,11 @@ def run_elasticity(
 ) -> ElasticityRunResult:
     """Compare a 2 x 2 overlapping DDM solve with a monolithic solve."""
 
-    if overlap < 4:
-        raise ValueError("elasticity requires at least four shared grid cells")
+    minimum_overlap = 2 * Elasticity2DSolver.stencil_radius
+    if overlap < minimum_overlap:
+        raise ValueError(
+            f"elasticity requires at least {minimum_overlap} shared grid cells"
+        )
     if (size + overlap) % 2:
         raise ValueError("size + overlap must be even for a 2 x 2 decomposition")
     patch_size = (size + overlap) // 2

@@ -203,7 +203,7 @@ def run_fpddm(
             )
     reference = (
         _reference_solve(domain, reference_solver, output_dir, render=render)
-        if bool(run_config.get("ground_truth", True))
+        if bool(run_config.get("ground_truth", False))
         else None
     )
 
@@ -236,26 +236,22 @@ def run_fpddm(
     interface_handler = _build_interface_handler(run_config)
     consistency = InterfaceConsistencyMonitor()
     observers = []
-    if bool(run_config.get("visualize", True)):
-        observers.extend(
-            [
-                AttributeVisualizer(
-                    Fields.TEMPERATURE,
-                    output_dir,
-                    save_name="temperature",
-                    fps=int(visualization_config.get("fps", 10)),
-                    vmin=float(visualization_config.get("temperature_min", 300.0)),
-                    vmax=float(visualization_config.get("temperature_max", 400.0)),
-                ),
-                AttributeVisualizer(
-                    Fields.CONDUCTIVITY,
-                    output_dir,
-                    save_name="conductivity",
-                    fps=int(visualization_config.get("fps", 10)),
-                    vmin=float(visualization_config.get("conductivity_min", 10.0)),
-                    vmax=float(visualization_config.get("conductivity_max", 200.0)),
-                ),
-            ]
+    if render:
+        visualize_array(
+            domain.fields[Fields.CONDUCTIVITY],
+            output_dir / "conductivity.png",
+            vmin=float(visualization_config.get("conductivity_min", 10.0)),
+            vmax=float(visualization_config.get("conductivity_max", 200.0)),
+        )
+        observers.append(
+            AttributeVisualizer(
+                Fields.TEMPERATURE,
+                output_dir,
+                save_name="temperature",
+                fps=int(visualization_config.get("fps", 10)),
+                vmin=float(visualization_config.get("temperature_min", 300.0)),
+                vmax=float(visualization_config.get("temperature_max", 400.0)),
+            )
         )
     if reference is not None:
         observers.extend(

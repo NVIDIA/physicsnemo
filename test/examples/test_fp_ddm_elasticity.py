@@ -28,6 +28,29 @@ from fpddm.elasticity import Elasticity2DSolver  # noqa: E402
 from fpddm.elasticity_example import run_elasticity  # noqa: E402
 
 
+def _checkerboard_problem(size: int):
+    spacing = 1.0 / (size - 1)
+    solver = Elasticity2DSolver(
+        spacing=(spacing, spacing),
+        max_iter=4000,
+        tolerance=1.0e-11,
+        device="cpu",
+        dtype=torch.float64,
+    )
+    row = torch.arange(size)[:, None]
+    column = torch.arange(size)[None, :]
+    checkerboard = (1.0 - 2.0 * ((row + column) % 2)).to(torch.float64)
+    mode = torch.zeros((1, 2, size, size), dtype=torch.float64)
+    mode[:, 0] = checkerboard
+    mask = torch.zeros_like(mode, dtype=torch.bool)
+    mask[..., (0, -1), :] = True
+    mask[..., :, (0, -1)] = True
+    mode.masked_fill_(mask, 0.0)
+    young_modulus = torch.ones((1, size, size), dtype=torch.float64)
+    poisson_ratio = torch.full_like(young_modulus, 0.25)
+    return solver, mode, mask, young_modulus, poisson_ratio
+
+
 def test_plane_stress_operator_matches_affine_solution():
     solver = Elasticity2DSolver(spacing=(0.3, 0.2), device="cpu", dtype=torch.float64)
     y = 0.3 * torch.arange(7, dtype=torch.float64)
@@ -81,6 +104,33 @@ def test_plane_stress_operator_matches_affine_solution():
         atol=1.0e-9,
         rtol=0.0,
     )
+
+
+def test_elasticity_operator_penalizes_checkerboard_mode():
+    solver, mode, _, young_modulus, poisson_ratio = _checkerboard_problem(17)
+    residual = solver.residual(
+        mode, young_modulus, poisson_ratio, torch.zeros_like(mode)
+    )
+    interior_rms = residual[..., 2:-2, 2:-2].square().mean().sqrt()
+
+    assert float(interior_rms) * solver.spacing[0] ** 2 > 1.0
+
+
+def test_checkerboard_force_response_decays_under_refinement():
+    amplitudes = []
+    for size in (17, 33):
+        solver, force, mask, young_modulus, poisson_ratio = _checkerboard_problem(size)
+        displacement = solver.solve(
+            young_modulus,
+            poisson_ratio,
+            force,
+            torch.zeros_like(force),
+            mask,
+        )
+        amplitudes.append(float(displacement.abs().max()))
+
+    refinement_ratio = amplitudes[1] / amplitudes[0]
+    assert 0.15 < refinement_ratio < 0.35
 
 
 def test_elasticity_ddm_matches_monolithic_reference(tmp_path):
