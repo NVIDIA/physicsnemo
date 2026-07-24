@@ -25,7 +25,7 @@ from physicsnemo.mesh.boundaries._facet_extraction import extract_candidate_face
 from physicsnemo.mesh.utilities._duplicate_detection import (
     vectorized_connected_components,
 )
-from physicsnemo.mesh.utilities._index_tuple_ops import unique_index_tuples
+from physicsnemo.utils._index_tuple_ops import unique_index_tuples
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh

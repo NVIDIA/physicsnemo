@@ -21,6 +21,7 @@ from __future__ import annotations
 from typing import Literal
 
 import torch
+from jaxtyping import Float, Int
 
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.utilities._topology import (
@@ -47,11 +48,14 @@ from physicsnemo.nn.functional.geometry.deform import (
     total_measure_energy as _total_measure_energy,
 )
 
-Reduction = Literal["none", "sum", "mean"]
-Implementation = Literal["torch", "warp"]
+_Reduction = Literal["none", "sum", "mean"]
+_Implementation = Literal["torch", "warp"]
 
 
-def _validate_points(reference_mesh: Mesh, points: torch.Tensor) -> None:
+def _validate_points(
+    reference_mesh: Mesh,
+    points: Float[torch.Tensor, "num_points num_dims"],
+) -> None:
     """Validate current coordinates against an unbatched reference mesh."""
 
     if not isinstance(reference_mesh, Mesh):
@@ -83,8 +87,9 @@ def _validate_points(reference_mesh: Mesh, points: torch.Tensor) -> None:
 
 
 def _validate_simplex_inputs(
-    reference_mesh: Mesh, points: torch.Tensor
-) -> torch.Tensor:
+    reference_mesh: Mesh,
+    points: Float[torch.Tensor, "num_points num_dims"],
+) -> Int[torch.Tensor, "num_cells simplex_vertices"]:
     """Validate geometry and return normalized simplex connectivity."""
 
     _validate_points(reference_mesh, points)
@@ -93,13 +98,13 @@ def _validate_simplex_inputs(
 
 def simplex_strain_energy(
     reference_mesh: Mesh,
-    points: torch.Tensor,
+    points: Float[torch.Tensor, "num_points num_dims"],
     *,
     lame_lambda: float = 1.0,
     shear_modulus: float = 1.0,
-    reduction: Reduction = "sum",
-    implementation: Implementation | None = None,
-) -> torch.Tensor:
+    reduction: _Reduction = "sum",
+    implementation: _Implementation | None = None,
+) -> Float[torch.Tensor, "..."]:
     r"""Evaluate reference-relative St. Venant--Kirchhoff strain energy.
 
     The reference mesh supplies undeformed coordinates and simplex
@@ -145,12 +150,12 @@ def simplex_strain_energy(
 
 def simplex_measure_energy(
     reference_mesh: Mesh,
-    points: torch.Tensor,
+    points: Float[torch.Tensor, "num_points num_dims"],
     *,
     target_ratio: float = 1.0,
-    reduction: Reduction = "sum",
-    implementation: Implementation | None = None,
-) -> torch.Tensor:
+    reduction: _Reduction = "sum",
+    implementation: _Implementation | None = None,
+) -> Float[torch.Tensor, "..."]:
     """Penalize local simplex length, area, or volume changes.
 
     Each simplex is compared independently with its reference measure. For a
@@ -190,21 +195,22 @@ def simplex_measure_energy(
 
 def total_measure_energy(
     reference_mesh: Mesh,
-    points: torch.Tensor,
+    points: Float[torch.Tensor, "num_points num_dims"],
     *,
     target_ratio: float = 1.0,
-    reduction: Reduction = "sum",
-    implementation: Implementation | None = None,
-) -> torch.Tensor:
+    reduction: _Reduction = "sum",
+    implementation: _Implementation | None = None,
+) -> Float[torch.Tensor, "..."]:
     """Penalize change in the mesh's total intrinsic measure.
 
     The total length, area, or volume is constrained relative to the reference
     mesh while individual simplices may exchange measure. For a
     full-dimensional mesh, current contributions are signed relative to their
     reference cells. An inverted cell can therefore cancel a non-inverted cell
-    in this aggregate objective; combine it with
+    in this aggregate objective. Combine it with
     :func:`simplex_inversion_energy` when local orientation matters. Embedded
-    simplex contributions are unsigned.
+    simplex contributions are unsigned. The reference mesh must contain at
+    least one simplex.
 
     Parameters
     ----------
@@ -223,6 +229,11 @@ def total_measure_energy(
     -------
     torch.Tensor
         Global measure constraint energy.
+
+    Raises
+    ------
+    ValueError
+        If the reference mesh has no simplices.
     """
 
     cells = _validate_simplex_inputs(reference_mesh, points)
@@ -238,12 +249,12 @@ def total_measure_energy(
 
 def simplex_inversion_energy(
     reference_mesh: Mesh,
-    points: torch.Tensor,
+    points: Float[torch.Tensor, "num_points num_dims"],
     *,
     minimum_jacobian: float = 0.1,
-    reduction: Reduction = "sum",
-    implementation: Implementation | None = None,
-) -> torch.Tensor:
+    reduction: _Reduction = "sum",
+    implementation: _Implementation | None = None,
+) -> Float[torch.Tensor, "..."]:
     """Penalize full-dimensional simplices below a Jacobian threshold.
 
     Signed Jacobians require the manifold and spatial dimensions to match.
@@ -289,11 +300,11 @@ def simplex_inversion_energy(
 
 def surface_bending_energy(
     reference_mesh: Mesh,
-    points: torch.Tensor,
+    points: Float[torch.Tensor, "num_points 3"],
     *,
-    reduction: Reduction = "sum",
-    implementation: Implementation | None = None,
-) -> torch.Tensor:
+    reduction: _Reduction = "sum",
+    implementation: _Implementation | None = None,
+) -> Float[torch.Tensor, "..."]:
     """Evaluate a reference-relative hinge energy on a triangle surface.
 
     Interior edge hinges are extracted from connectivity once and cached on
@@ -337,12 +348,12 @@ def surface_bending_energy(
 
 def closed_surface_volume_energy(
     reference_mesh: Mesh,
-    points: torch.Tensor,
+    points: Float[torch.Tensor, "num_points 3"],
     *,
     target_ratio: float = 1.0,
-    reduction: Reduction = "sum",
-    implementation: Implementation | None = None,
-) -> torch.Tensor:
+    reduction: _Reduction = "sum",
+    implementation: _Implementation | None = None,
+) -> Float[torch.Tensor, "..."]:
     """Penalize enclosed-volume change of a closed triangle surface.
 
     The reference surface must be one nonempty, edge-connected, edge-closed

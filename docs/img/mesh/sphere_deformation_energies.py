@@ -32,7 +32,7 @@ from physicsnemo.mesh.deformation import (
     surface_bending_energy,
 )
 from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
-from physicsnemo.nn.functional import rbf_morph_points
+from physicsnemo.nn.functional import radial_basis_function_deform_points
 
 OUTPUT = Path(__file__).parent / "sphere_deformation_energies.png"
 
@@ -102,9 +102,9 @@ def _deform(
     target_displacement: torch.Tensor,
     implementation: str,
 ) -> torch.Tensor:
-    """Evaluate the exact RBF deformation for one auxiliary-control state."""
+    """Evaluate the radial-basis deformation for one auxiliary-control state."""
 
-    return rbf_morph_points(
+    return radial_basis_function_deform_points(
         reference_points,
         controls,
         _displacements(controls, auxiliary, target_displacement),

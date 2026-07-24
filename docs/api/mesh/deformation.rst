@@ -12,7 +12,7 @@ These functions provide penalty terms, not a deformation solver or exact
 constraint mechanism. A finite penalty weight does not guarantee that an area,
 volume, or inversion limit is satisfied exactly. The caller chooses an
 optimizer, combines the terms with the application objective, and verifies the
-result after optimization. Connectivity remains fixed throughout; topology
+result after optimization. Connectivity remains fixed throughout. Topology
 changes and collision handling are outside this API.
 
 The mesh-level functions accept a reference
@@ -31,14 +31,14 @@ Choosing an Energy
     to rigid motion. Metric strain alone cannot distinguish a reflection from a
     rotation, so use ``simplex_inversion_energy`` as well when orientation must
     be preserved. For an embedded triangle membrane, the Lamé parameters are
-    effective two-dimensional coefficients; plane-stress or plane-strain
+    effective two-dimensional coefficients. Plane-stress or plane-strain
     reduction and thickness scaling remain the caller's responsibility.
 
 ``simplex_measure_energy``
     Penalizes length, area, or volume change in each simplex. This is a local
     regularizer: one expanding element cannot cancel one contracting element.
     Full-dimensional ratios are signed relative to each reference simplex, so
-    this term is also sensitive to reflection; embedded-simplex ratios are
+    this term is also sensitive to reflection. Embedded-simplex ratios are
     unsigned.
 
 ``total_measure_energy``
@@ -46,7 +46,8 @@ Choosing an Energy
     total length, area, or volume while allowing measure to move between
     elements. For full-dimensional meshes the sum is an algebraic signed
     measure relative to the reference cells. It does not prevent a local
-    collapse or cancellation between inverted and non-inverted cells.
+    collapse or cancellation between inverted and non-inverted cells. The
+    reference mesh must contain at least one simplex.
 
 ``simplex_inversion_energy``
     Penalizes signed Jacobian ratios below ``minimum_jacobian``. It applies to
@@ -88,7 +89,7 @@ orientation loss.
         total_measure_energy,
     )
     from physicsnemo.mesh.primitives.planar import unit_square
-    from physicsnemo.nn.functional import rbf_morph_points
+    from physicsnemo.nn.functional import radial_basis_function_deform_points
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     implementation = "warp" if device == "cuda" else "torch"
@@ -121,7 +122,7 @@ orientation loss.
                 target_displacement.unsqueeze(0),
             )
         )
-        points = rbf_morph_points(
+        points = radial_basis_function_deform_points(
             reference.points,
             controls,
             control_displacements,
@@ -191,6 +192,13 @@ available. Both backends support gradients with respect to the current and
 reference coordinates. Cell and hinge indices are discrete topology and are
 not differentiable. Simplex energies in coordinate dimensions above three use
 the Torch backend.
+
+The first mesh-wrapper call after topology changes validates index bounds and
+connectivity on the host. For a CUDA mesh, that one-time validation synchronizes
+the device and is not safe inside CUDA Graph capture. Call the required energy
+once before capture to populate the topology cache. The tensor functionals avoid
+this synchronization by treating valid index values as part of their input
+contract.
 
 Reference simplices, hinge edges, and hinge triangles must be nondegenerate.
 Invalid reference geometry produces ``NaN`` instead of receiving an implicit

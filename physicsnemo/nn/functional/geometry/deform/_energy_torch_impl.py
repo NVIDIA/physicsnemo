@@ -19,12 +19,16 @@
 from __future__ import annotations
 
 import torch
+from jaxtyping import Bool, Float, Int
 
 
 def _safe_topology_indices(
-    topology: torch.Tensor,
+    topology: Int[torch.Tensor, "num_primitives vertices_per_primitive"],
     num_points: int,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[
+    Int[torch.Tensor, "num_primitives vertices_per_primitive"],
+    Bool[torch.Tensor, " num_primitives"],
+]:
     """Return gather-safe indices and a per-primitive bounds mask.
 
     Bounds remain a tensor-side concern so CUDA callers do not synchronize to
@@ -39,9 +43,9 @@ def _safe_topology_indices(
 
 
 def _gather_vertices(
-    points: torch.Tensor,
-    safe_topology: torch.Tensor,
-) -> torch.Tensor:
+    points: Float[torch.Tensor, "batch num_points num_dims"],
+    safe_topology: Int[torch.Tensor, "num_primitives vertices_per_primitive"],
+) -> Float[torch.Tensor, "batch num_primitives vertices_per_primitive num_dims"]:
     """Gather vertices, including the zero-point invalid-topology edge case."""
 
     if points.shape[1] == 0:
@@ -58,7 +62,10 @@ def _gather_vertices(
     return points[:, safe_topology, :]
 
 
-def _simplex_edges(points: torch.Tensor, safe_simplices: torch.Tensor) -> torch.Tensor:
+def _simplex_edges(
+    points: Float[torch.Tensor, "batch num_points num_dims"],
+    safe_simplices: Int[torch.Tensor, "num_simplices vertices_per_simplex"],
+) -> Float[torch.Tensor, "batch num_simplices simplex_dimension num_dims"]:
     """Gather an equivalent edge basis suited to slender simplices.
 
     Edges connect consecutive cell vertices. This unit-determinant basis
@@ -70,7 +77,9 @@ def _simplex_edges(points: torch.Tensor, safe_simplices: torch.Tensor) -> torch.
     return vertices[:, :, 1:, :] - vertices[:, :, :-1, :]
 
 
-def _canonical_simplex_indices(safe_simplices: torch.Tensor) -> torch.Tensor:
+def _canonical_simplex_indices(
+    safe_simplices: Int[torch.Tensor, "num_simplices vertices_per_simplex"],
+) -> Int[torch.Tensor, "num_simplices vertices_per_simplex"]:
     """Choose one connectivity-order-independent simplex vertex order.
 
     Current and reference geometry share this permutation, so relative signed
@@ -89,7 +98,10 @@ def _simplex_factorial(simplex_dimension: int) -> float:
     return (3 * simplex_dimension * simplex_dimension - 7 * simplex_dimension + 6) / 2
 
 
-def _edge_determinant(edges: torch.Tensor, dimension: int) -> torch.Tensor:
+def _edge_determinant(
+    edges: Float[torch.Tensor, "batch num_simplices dimension dimension"],
+    dimension: int,
+) -> Float[torch.Tensor, "batch num_simplices"]:
     """Return the determinant of low-dimensional edge rows."""
 
     if dimension == 1:
@@ -115,9 +127,9 @@ def _edge_determinant(edges: torch.Tensor, dimension: int) -> torch.Tensor:
 
 
 def _unsigned_simplex_measure(
-    edges: torch.Tensor,
+    edges: Float[torch.Tensor, "batch num_simplices simplex_dimension num_dims"],
     simplex_dimension: int,
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "batch num_simplices"]:
     """Return intrinsic simplex measure using modified Gram--Schmidt.
 
     Computing orthogonal residuals avoids the squared condition number and
@@ -150,9 +162,14 @@ def _unsigned_simplex_measure(
 
 
 def _reference_measure(
-    reference_edges: torch.Tensor,
+    reference_edges: Float[
+        torch.Tensor, "batch num_simplices simplex_dimension num_dims"
+    ],
     simplex_dimension: int,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[
+    Float[torch.Tensor, "batch num_simplices"],
+    Bool[torch.Tensor, "batch num_simplices"],
+]:
     """Return reference measure and its strict nondegeneracy mask."""
 
     measure = _unsigned_simplex_measure(reference_edges, simplex_dimension)
@@ -165,12 +182,12 @@ def _reference_measure(
 
 
 def simplex_stvk_terms_torch(
-    points: torch.Tensor,
-    reference_points: torch.Tensor,
-    simplices: torch.Tensor,
-    lame_lambda: float | torch.Tensor,
-    shear_modulus: float | torch.Tensor,
-) -> torch.Tensor:
+    points: Float[torch.Tensor, "batch num_points num_dims"],
+    reference_points: Float[torch.Tensor, "batch num_points num_dims"],
+    simplices: Int[torch.Tensor, "num_simplices vertices_per_simplex"],
+    lame_lambda: float | Float[torch.Tensor, ""],
+    shear_modulus: float | Float[torch.Tensor, ""],
+) -> Float[torch.Tensor, "batch num_simplices"]:
     r"""Return reference-integrated St. Venant--Kirchhoff simplex terms.
 
     Inputs are normalized to ``(B, N, D)`` and the output has shape ``(B, M)``.
@@ -233,10 +250,13 @@ def simplex_stvk_terms_torch(
 
 
 def simplex_measure_components_torch(
-    points: torch.Tensor,
-    reference_points: torch.Tensor,
-    simplices: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    points: Float[torch.Tensor, "batch num_points num_dims"],
+    reference_points: Float[torch.Tensor, "batch num_points num_dims"],
+    simplices: Int[torch.Tensor, "num_simplices vertices_per_simplex"],
+) -> tuple[
+    Float[torch.Tensor, "batch num_simplices"],
+    Float[torch.Tensor, "batch num_simplices"],
+]:
     r"""Return relative measure and reference measure for each simplex.
 
     The ratio is signed for full-dimensional simplices,
@@ -287,11 +307,11 @@ def simplex_measure_components_torch(
 
 
 def simplex_inversion_terms_torch(
-    points: torch.Tensor,
-    reference_points: torch.Tensor,
-    simplices: torch.Tensor,
-    minimum_jacobian: float | torch.Tensor,
-) -> torch.Tensor:
+    points: Float[torch.Tensor, "batch num_points num_dims"],
+    reference_points: Float[torch.Tensor, "batch num_points num_dims"],
+    simplices: Int[torch.Tensor, "num_simplices vertices_per_simplex"],
+    minimum_jacobian: float | Float[torch.Tensor, ""],
+) -> Float[torch.Tensor, "batch num_simplices"]:
     r"""Return signed-Jacobian inversion penalties for full-dimensional cells.
 
     Each term is ``0.5 * V0 * relu(minimum_jacobian - J)^2``. Embedded
@@ -312,8 +332,13 @@ def simplex_inversion_terms_torch(
 
 
 def _signed_dihedral(
-    vertices: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    vertices: Float[torch.Tensor, "batch num_hinges 4 3"],
+) -> tuple[
+    Float[torch.Tensor, "batch num_hinges"],
+    Float[torch.Tensor, "batch num_hinges"],
+    Float[torch.Tensor, "batch num_hinges"],
+    Float[torch.Tensor, "batch num_hinges"],
+]:
     """Return signed hinge angle, edge length, and adjacent doubled areas."""
 
     point_i, point_j, point_k, point_l = vertices.unbind(dim=2)
@@ -359,10 +384,10 @@ def _signed_dihedral(
 
 
 def hinge_bending_terms_torch(
-    points: torch.Tensor,
-    reference_points: torch.Tensor,
-    hinges: torch.Tensor,
-) -> torch.Tensor:
+    points: Float[torch.Tensor, "batch num_points 3"],
+    reference_points: Float[torch.Tensor, "batch num_points 3"],
+    hinges: Int[torch.Tensor, "num_hinges 4"],
+) -> Float[torch.Tensor, "batch num_hinges"]:
     r"""Return reference-relative discrete hinge bending terms.
 
     A hinge row ``(i, j, k, l)`` denotes oriented faces ``(i, j, k)`` and
@@ -414,10 +439,13 @@ def hinge_bending_terms_torch(
 
 
 def closed_surface_volume_contributions_torch(
-    points: torch.Tensor,
-    reference_points: torch.Tensor,
-    triangles: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    points: Float[torch.Tensor, "batch num_points 3"],
+    reference_points: Float[torch.Tensor, "batch num_points 3"],
+    triangles: Int[torch.Tensor, "num_triangles 3"],
+) -> tuple[
+    Float[torch.Tensor, "batch num_triangles"],
+    Float[torch.Tensor, "batch num_triangles"],
+]:
     r"""Return signed per-triangle enclosed-volume contributions.
 
     Triangles must form a closed, consistently oriented surface. The tensor

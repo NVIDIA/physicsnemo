@@ -20,9 +20,10 @@ from __future__ import annotations
 
 import math
 from numbers import Real
-from typing import Literal
+from typing import Callable, Literal
 
 import torch
+from jaxtyping import Float, Int
 
 from physicsnemo.core.function_spec import FunctionSpec
 
@@ -34,7 +35,7 @@ from ._energy_torch_impl import (
     simplex_stvk_terms_torch,
 )
 from ._energy_utils import (
-    Reduction,
+    _Reduction,
     normalize_closed_surface_inputs,
     normalize_hinge_inputs,
     normalize_simplex_inputs,
@@ -48,7 +49,7 @@ from ._warp_impl import (
     simplex_stvk_terms_warp,
 )
 
-Implementation = Literal["torch", "warp"] | None
+_Implementation = Literal["torch", "warp"] | None
 
 
 def _validate_finite_real(
@@ -159,6 +160,11 @@ def _validate_lame_parameters(
     # Check half of the conventional stability expression. This equivalent
     # form keeps every product representable for finite input parameters.
     stability = 0.5 * lame_lambda + shear_modulus / simplex_dimension
+    stability = _validate_finite_real(
+        stability,
+        "0.5 * lame_lambda + shear_modulus / simplex_dimension",
+        dtype,
+    )
     if torch.compiler.is_compiling():
         from torch.fx.experimental.symbolic_shapes import statically_known_true
 
@@ -182,20 +188,20 @@ def _validate_lame_parameters(
 
 
 def _local_measure_terms(
-    ratio: torch.Tensor,
-    reference_measure: torch.Tensor,
+    ratio: Float[torch.Tensor, "..."],
+    reference_measure: Float[torch.Tensor, "..."],
     target_ratio: float,
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "..."]:
     """Compose local measure-preservation terms from backend components."""
 
     return 0.5 * reference_measure * (ratio - target_ratio).square()
 
 
 def _total_measure_terms(
-    ratio: torch.Tensor,
-    reference_measure: torch.Tensor,
+    ratio: Float[torch.Tensor, "..."],
+    reference_measure: Float[torch.Tensor, "..."],
     target_ratio: float,
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "..."]:
     """Compose one total-measure term for each aligned batch item."""
 
     reference_total = reference_measure.sum(dim=-1)
@@ -207,10 +213,10 @@ def _total_measure_terms(
 
 
 def _closed_volume_terms(
-    current_contributions: torch.Tensor,
-    reference_contributions: torch.Tensor,
+    current_contributions: Float[torch.Tensor, "..."],
+    reference_contributions: Float[torch.Tensor, "..."],
     target_ratio: float,
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "..."]:
     """Compose one enclosed-volume term for each aligned batch item."""
 
     current_volume = current_contributions.sum(dim=-1)
@@ -234,7 +240,7 @@ class _DeformationEnergySpec(FunctionSpec):
     def _select_implementation(
         cls,
         points: object,
-        implementation: Implementation,
+        implementation: _Implementation,
     ) -> Literal["torch", "warp"] | None:
         """Select Warp for supported CUDA coordinates and Torch otherwise."""
 
@@ -262,7 +268,11 @@ class _DeformationEnergySpec(FunctionSpec):
         return "torch"
 
     @classmethod
-    def compare_forward(cls, output: torch.Tensor, reference: torch.Tensor) -> None:
+    def compare_forward(
+        cls,
+        output: Float[torch.Tensor, "..."],
+        reference: Float[torch.Tensor, "..."],
+    ) -> None:
         """Compare deformation-energy outputs across backends."""
 
         torch.testing.assert_close(
@@ -274,7 +284,11 @@ class _DeformationEnergySpec(FunctionSpec):
         )
 
     @classmethod
-    def compare_backward(cls, output: torch.Tensor, reference: torch.Tensor) -> None:
+    def compare_backward(
+        cls,
+        output: Float[torch.Tensor, "..."],
+        reference: Float[torch.Tensor, "..."],
+    ) -> None:
         """Compare deformation-energy gradients across backends."""
 
         torch.testing.assert_close(
@@ -293,7 +307,11 @@ def _make_simplex_benchmark_tensors(
     batch_size: int,
     *,
     requires_grad: bool,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[
+    Float[torch.Tensor, "*batch num_points 3"],
+    Float[torch.Tensor, "*batch num_points 3"],
+    Int[torch.Tensor, "num_simplices 4"],
+]:
     """Build deterministic, nondegenerate tetrahedra for benchmarks."""
 
     template = torch.tensor(
@@ -332,7 +350,11 @@ def _make_hinge_benchmark_tensors(
     batch_size: int,
     *,
     requires_grad: bool,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[
+    Float[torch.Tensor, "*batch num_points 3"],
+    Float[torch.Tensor, "*batch num_points 3"],
+    Int[torch.Tensor, "num_hinges 4"],
+]:
     """Build deterministic independent triangle hinges for benchmarks."""
 
     template = torch.tensor(
@@ -366,7 +388,11 @@ def _make_closed_surface_benchmark_tensors(
     batch_size: int,
     *,
     requires_grad: bool,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[
+    Float[torch.Tensor, "*batch num_points 3"],
+    Float[torch.Tensor, "*batch num_points 3"],
+    Int[torch.Tensor, "num_faces 3"],
+]:
     """Build one deterministic closed bipyramid surface for benchmarks."""
 
     if num_faces < 6 or num_faces % 2 != 0:
@@ -480,7 +506,7 @@ class SimplexStrainEnergy(_SimplexEnergySpec):
         terms. Empty inputs have zero sum and mean. Default is ``"sum"``.
     implementation : {"torch", "warp"} or None, optional
         Explicit backend. ``None`` selects Torch on CPU and Warp on CUDA when
-        Warp is available and ``D <= 3``; higher coordinate dimensions use
+        Warp is available and ``D <= 3``. Higher coordinate dimensions use
         Torch.
 
     Returns
@@ -490,11 +516,11 @@ class SimplexStrainEnergy(_SimplexEnergySpec):
 
     Notes
     -----
-    This function returns an energy term for use in an objective; it does not
+    This function returns an energy term for use in an objective. It does not
     run an optimizer or impose a hard constraint. Degenerate reference cells
     produce NaN so invalid rest geometry is not silently regularized. Both
     coordinate tensors are differentiable. Connectivity is discrete and is
-    not differentiable. Torch supports higher-order derivatives; the Warp
+    not differentiable. Torch supports higher-order derivatives. The Warp
     backend's contract is first-order differentiation.
     """
 
@@ -502,14 +528,14 @@ class SimplexStrainEnergy(_SimplexEnergySpec):
 
     @FunctionSpec.register(name="warp", required_imports=("warp>=0.6.0",), rank=0)
     def warp_forward(
-        points: torch.Tensor,
-        reference_points: torch.Tensor,
-        cells: torch.Tensor,
+        points: Float[torch.Tensor, "*batch num_points num_dims"],
+        reference_points: Float[torch.Tensor, "*batch num_points num_dims"],
+        cells: Int[torch.Tensor, "num_cells simplex_vertices"],
         *,
         lame_lambda: float = 1.0,
         shear_modulus: float = 1.0,
-        reduction: Reduction = "sum",
-    ) -> torch.Tensor:
+        reduction: _Reduction = "sum",
+    ) -> Float[torch.Tensor, "..."]:
         """Evaluate StVK terms with Warp."""
 
         points, reference_points, cells, was_unbatched = normalize_simplex_inputs(
@@ -528,14 +554,14 @@ class SimplexStrainEnergy(_SimplexEnergySpec):
 
     @FunctionSpec.register(name="torch", rank=1, baseline=True)
     def torch_forward(
-        points: torch.Tensor,
-        reference_points: torch.Tensor,
-        cells: torch.Tensor,
+        points: Float[torch.Tensor, "*batch num_points num_dims"],
+        reference_points: Float[torch.Tensor, "*batch num_points num_dims"],
+        cells: Int[torch.Tensor, "num_cells simplex_vertices"],
         *,
         lame_lambda: float = 1.0,
         shear_modulus: float = 1.0,
-        reduction: Reduction = "sum",
-    ) -> torch.Tensor:
+        reduction: _Reduction = "sum",
+    ) -> Float[torch.Tensor, "..."]:
         """Evaluate StVK terms with Torch."""
 
         points, reference_points, cells, was_unbatched = normalize_simplex_inputs(
@@ -555,15 +581,15 @@ class SimplexStrainEnergy(_SimplexEnergySpec):
     @classmethod
     def dispatch(
         cls,
-        points: torch.Tensor,
-        reference_points: torch.Tensor,
-        cells: torch.Tensor,
+        points: Float[torch.Tensor, "*batch num_points num_dims"],
+        reference_points: Float[torch.Tensor, "*batch num_points num_dims"],
+        cells: Int[torch.Tensor, "num_cells simplex_vertices"],
         *,
         lame_lambda: float = 1.0,
         shear_modulus: float = 1.0,
-        reduction: Reduction = "sum",
-        implementation: Implementation = None,
-    ) -> torch.Tensor:
+        reduction: _Reduction = "sum",
+        implementation: _Implementation = None,
+    ) -> Float[torch.Tensor, "..."]:
         """Dispatch to a device-appropriate deformation-energy backend."""
 
         implementation = cls._select_implementation(points, implementation)
@@ -609,7 +635,7 @@ class SimplexMeasureEnergy(_SimplexEnergySpec):
     implementation : {"torch", "warp"} or None, optional
         Explicit backend. ``None`` selects Torch on CPU and, when available,
         Warp on CUDA for coordinate dimensions up to three. Higher-dimensional
-        CUDA inputs use Torch; explicitly selecting Warp for them is rejected.
+        CUDA inputs use Torch. Explicitly selecting Warp for them is rejected.
 
     Returns
     -------
@@ -620,7 +646,7 @@ class SimplexMeasureEnergy(_SimplexEnergySpec):
     -----
     This is a penalty energy, not an exact constraint. Reference-degenerate
     cells produce NaN. Both current and reference coordinates are
-    differentiable; connectivity is not. At exact collapse, unsigned embedded
+    differentiable. Connectivity is not. At exact collapse, unsigned embedded
     measure uses a zero current-coordinate subgradient, so this term cannot by
     itself reopen an already collapsed embedded cell. Warp provides first-order
     gradients.
@@ -630,13 +656,20 @@ class SimplexMeasureEnergy(_SimplexEnergySpec):
 
     @staticmethod
     def _forward(
-        backend,
-        points,
-        reference_points,
-        cells,
-        target_ratio,
-        reduction,
-    ):
+        backend: Callable[
+            [
+                Float[torch.Tensor, "batch num_points num_dims"],
+                Float[torch.Tensor, "batch num_points num_dims"],
+                Int[torch.Tensor, "num_cells simplex_vertices"],
+            ],
+            tuple[Float[torch.Tensor, "..."], Float[torch.Tensor, "..."]],
+        ],
+        points: Float[torch.Tensor, "*batch num_points num_dims"],
+        reference_points: Float[torch.Tensor, "*batch num_points num_dims"],
+        cells: Int[torch.Tensor, "num_cells simplex_vertices"],
+        target_ratio: float,
+        reduction: _Reduction,
+    ) -> Float[torch.Tensor, "..."]:
         points, reference_points, cells, was_unbatched = normalize_simplex_inputs(
             points, reference_points, cells
         )
@@ -649,13 +682,13 @@ class SimplexMeasureEnergy(_SimplexEnergySpec):
 
     @FunctionSpec.register(name="warp", required_imports=("warp>=0.6.0",), rank=0)
     def warp_forward(
-        points: torch.Tensor,
-        reference_points: torch.Tensor,
-        cells: torch.Tensor,
+        points: Float[torch.Tensor, "*batch num_points num_dims"],
+        reference_points: Float[torch.Tensor, "*batch num_points num_dims"],
+        cells: Int[torch.Tensor, "num_cells simplex_vertices"],
         *,
         target_ratio: float = 1.0,
-        reduction: Reduction = "sum",
-    ) -> torch.Tensor:
+        reduction: _Reduction = "sum",
+    ) -> Float[torch.Tensor, "..."]:
         """Evaluate local measure terms with Warp."""
 
         return SimplexMeasureEnergy._forward(
@@ -669,13 +702,13 @@ class SimplexMeasureEnergy(_SimplexEnergySpec):
 
     @FunctionSpec.register(name="torch", rank=1, baseline=True)
     def torch_forward(
-        points: torch.Tensor,
-        reference_points: torch.Tensor,
-        cells: torch.Tensor,
+        points: Float[torch.Tensor, "*batch num_points num_dims"],
+        reference_points: Float[torch.Tensor, "*batch num_points num_dims"],
+        cells: Int[torch.Tensor, "num_cells simplex_vertices"],
         *,
         target_ratio: float = 1.0,
-        reduction: Reduction = "sum",
-    ) -> torch.Tensor:
+        reduction: _Reduction = "sum",
+    ) -> Float[torch.Tensor, "..."]:
         """Evaluate local measure terms with Torch."""
 
         return SimplexMeasureEnergy._forward(
@@ -690,14 +723,14 @@ class SimplexMeasureEnergy(_SimplexEnergySpec):
     @classmethod
     def dispatch(
         cls,
-        points: torch.Tensor,
-        reference_points: torch.Tensor,
-        cells: torch.Tensor,
+        points: Float[torch.Tensor, "*batch num_points num_dims"],
+        reference_points: Float[torch.Tensor, "*batch num_points num_dims"],
+        cells: Int[torch.Tensor, "num_cells simplex_vertices"],
         *,
         target_ratio: float = 1.0,
-        reduction: Reduction = "sum",
-        implementation: Implementation = None,
-    ) -> torch.Tensor:
+        reduction: _Reduction = "sum",
+        implementation: _Implementation = None,
+    ) -> Float[torch.Tensor, "..."]:
         """Dispatch to a device-appropriate deformation-energy backend."""
 
         implementation = cls._select_implementation(points, implementation)
@@ -719,7 +752,7 @@ class TotalMeasureEnergy(_SimplexEnergySpec):
     Unlike :func:`simplex_measure_energy`, local cells may expand and contract
     while their aggregate measure remains at the target. Full-dimensional cell
     contributions retain their orientation relative to the corresponding rest
-    cell; embedded-simplex contributions are unsigned.
+    cell. Embedded-simplex contributions are unsigned.
 
     Parameters
     ----------
@@ -738,7 +771,7 @@ class TotalMeasureEnergy(_SimplexEnergySpec):
     implementation : {"torch", "warp"} or None, optional
         Explicit backend. ``None`` selects Torch on CPU and, when available,
         Warp on CUDA for coordinate dimensions up to three. Higher-dimensional
-        CUDA inputs use Torch; explicitly selecting Warp for them is rejected.
+        CUDA inputs use Torch. Explicitly selecting Warp for them is rejected.
 
     Returns
     -------
@@ -748,7 +781,7 @@ class TotalMeasureEnergy(_SimplexEnergySpec):
     Notes
     -----
     This is a soft aggregate constraint. It does not prevent individual cells
-    from collapsing or inverting; combine it with strain and inversion terms
+    from collapsing or inverting. Combine it with strain and inversion terms
     when local validity matters. Empty connectivity is rejected, and a zero or
     invalid total reference measure produces NaN. At exact collapse, unsigned
     embedded measure uses a zero current-coordinate subgradient.
@@ -758,13 +791,20 @@ class TotalMeasureEnergy(_SimplexEnergySpec):
 
     @staticmethod
     def _forward(
-        backend,
-        points,
-        reference_points,
-        cells,
-        target_ratio,
-        reduction,
-    ):
+        backend: Callable[
+            [
+                Float[torch.Tensor, "batch num_points num_dims"],
+                Float[torch.Tensor, "batch num_points num_dims"],
+                Int[torch.Tensor, "num_cells simplex_vertices"],
+            ],
+            tuple[Float[torch.Tensor, "..."], Float[torch.Tensor, "..."]],
+        ],
+        points: Float[torch.Tensor, "*batch num_points num_dims"],
+        reference_points: Float[torch.Tensor, "*batch num_points num_dims"],
+        cells: Int[torch.Tensor, "num_cells simplex_vertices"],
+        target_ratio: float,
+        reduction: _Reduction,
+    ) -> Float[torch.Tensor, "..."]:
         points, reference_points, cells, was_unbatched = normalize_simplex_inputs(
             points, reference_points, cells
         )
@@ -779,13 +819,13 @@ class TotalMeasureEnergy(_SimplexEnergySpec):
 
     @FunctionSpec.register(name="warp", required_imports=("warp>=0.6.0",), rank=0)
     def warp_forward(
-        points: torch.Tensor,
-        reference_points: torch.Tensor,
-        cells: torch.Tensor,
+        points: Float[torch.Tensor, "*batch num_points num_dims"],
+        reference_points: Float[torch.Tensor, "*batch num_points num_dims"],
+        cells: Int[torch.Tensor, "num_cells simplex_vertices"],
         *,
         target_ratio: float = 1.0,
-        reduction: Reduction = "sum",
-    ) -> torch.Tensor:
+        reduction: _Reduction = "sum",
+    ) -> Float[torch.Tensor, "..."]:
         """Evaluate total-measure terms with Warp."""
 
         return TotalMeasureEnergy._forward(
@@ -799,13 +839,13 @@ class TotalMeasureEnergy(_SimplexEnergySpec):
 
     @FunctionSpec.register(name="torch", rank=1, baseline=True)
     def torch_forward(
-        points: torch.Tensor,
-        reference_points: torch.Tensor,
-        cells: torch.Tensor,
+        points: Float[torch.Tensor, "*batch num_points num_dims"],
+        reference_points: Float[torch.Tensor, "*batch num_points num_dims"],
+        cells: Int[torch.Tensor, "num_cells simplex_vertices"],
         *,
         target_ratio: float = 1.0,
-        reduction: Reduction = "sum",
-    ) -> torch.Tensor:
+        reduction: _Reduction = "sum",
+    ) -> Float[torch.Tensor, "..."]:
         """Evaluate total-measure terms with Torch."""
 
         return TotalMeasureEnergy._forward(
@@ -820,14 +860,14 @@ class TotalMeasureEnergy(_SimplexEnergySpec):
     @classmethod
     def dispatch(
         cls,
-        points: torch.Tensor,
-        reference_points: torch.Tensor,
-        cells: torch.Tensor,
+        points: Float[torch.Tensor, "*batch num_points num_dims"],
+        reference_points: Float[torch.Tensor, "*batch num_points num_dims"],
+        cells: Int[torch.Tensor, "num_cells simplex_vertices"],
         *,
         target_ratio: float = 1.0,
-        reduction: Reduction = "sum",
-        implementation: Implementation = None,
-    ) -> torch.Tensor:
+        reduction: _Reduction = "sum",
+        implementation: _Implementation = None,
+    ) -> Float[torch.Tensor, "..."]:
         """Dispatch to a device-appropriate deformation-energy backend."""
 
         implementation = cls._select_implementation(points, implementation)
@@ -885,13 +925,21 @@ class SimplexInversionEnergy(_SimplexEnergySpec):
 
     @staticmethod
     def _forward(
-        backend,
-        points,
-        reference_points,
-        cells,
-        minimum_jacobian,
-        reduction,
-    ):
+        backend: Callable[
+            [
+                Float[torch.Tensor, "batch num_points num_dims"],
+                Float[torch.Tensor, "batch num_points num_dims"],
+                Int[torch.Tensor, "num_cells simplex_vertices"],
+                float,
+            ],
+            Float[torch.Tensor, "..."],
+        ],
+        points: Float[torch.Tensor, "*batch num_points num_dims"],
+        reference_points: Float[torch.Tensor, "*batch num_points num_dims"],
+        cells: Int[torch.Tensor, "num_cells simplex_vertices"],
+        minimum_jacobian: float,
+        reduction: _Reduction,
+    ) -> Float[torch.Tensor, "..."]:
         points, reference_points, cells, was_unbatched = normalize_simplex_inputs(
             points, reference_points, cells
         )
@@ -914,13 +962,13 @@ class SimplexInversionEnergy(_SimplexEnergySpec):
 
     @FunctionSpec.register(name="warp", required_imports=("warp>=0.6.0",), rank=0)
     def warp_forward(
-        points: torch.Tensor,
-        reference_points: torch.Tensor,
-        cells: torch.Tensor,
+        points: Float[torch.Tensor, "*batch num_points num_dims"],
+        reference_points: Float[torch.Tensor, "*batch num_points num_dims"],
+        cells: Int[torch.Tensor, "num_cells simplex_vertices"],
         *,
         minimum_jacobian: float = 0.1,
-        reduction: Reduction = "sum",
-    ) -> torch.Tensor:
+        reduction: _Reduction = "sum",
+    ) -> Float[torch.Tensor, "..."]:
         """Evaluate inversion terms with Warp."""
 
         return SimplexInversionEnergy._forward(
@@ -934,13 +982,13 @@ class SimplexInversionEnergy(_SimplexEnergySpec):
 
     @FunctionSpec.register(name="torch", rank=1, baseline=True)
     def torch_forward(
-        points: torch.Tensor,
-        reference_points: torch.Tensor,
-        cells: torch.Tensor,
+        points: Float[torch.Tensor, "*batch num_points num_dims"],
+        reference_points: Float[torch.Tensor, "*batch num_points num_dims"],
+        cells: Int[torch.Tensor, "num_cells simplex_vertices"],
         *,
         minimum_jacobian: float = 0.1,
-        reduction: Reduction = "sum",
-    ) -> torch.Tensor:
+        reduction: _Reduction = "sum",
+    ) -> Float[torch.Tensor, "..."]:
         """Evaluate inversion terms with Torch."""
 
         return SimplexInversionEnergy._forward(
@@ -955,14 +1003,14 @@ class SimplexInversionEnergy(_SimplexEnergySpec):
     @classmethod
     def dispatch(
         cls,
-        points: torch.Tensor,
-        reference_points: torch.Tensor,
-        cells: torch.Tensor,
+        points: Float[torch.Tensor, "*batch num_points num_dims"],
+        reference_points: Float[torch.Tensor, "*batch num_points num_dims"],
+        cells: Int[torch.Tensor, "num_cells simplex_vertices"],
         *,
         minimum_jacobian: float = 0.1,
-        reduction: Reduction = "sum",
-        implementation: Implementation = None,
-    ) -> torch.Tensor:
+        reduction: _Reduction = "sum",
+        implementation: _Implementation = None,
+    ) -> Float[torch.Tensor, "..."]:
         """Dispatch to a device-appropriate deformation-energy backend."""
 
         implementation = cls._select_implementation(points, implementation)
@@ -1020,7 +1068,7 @@ class SurfaceBendingEnergy(_DeformationEnergySpec):
     model: material thickness and constitutive scaling are not included.
     Degenerate current or reference hinge triangles produce NaN. Dihedral
     wrapping is continuous except at the equivalent-angle branch cut. Both
-    coordinate tensors are differentiable; the discrete hinge construction is
+    coordinate tensors are differentiable. The discrete hinge construction is
     not. Warp provides first-order gradients.
     """
 
@@ -1049,7 +1097,20 @@ class SurfaceBendingEnergy(_DeformationEnergySpec):
         yield "float32-h1024-current-and-reference-gradients", inputs, {}
 
     @staticmethod
-    def _forward(backend, points, reference_points, hinges, reduction):
+    def _forward(
+        backend: Callable[
+            [
+                Float[torch.Tensor, "batch num_points 3"],
+                Float[torch.Tensor, "batch num_points 3"],
+                Int[torch.Tensor, "num_hinges 4"],
+            ],
+            Float[torch.Tensor, "..."],
+        ],
+        points: Float[torch.Tensor, "*batch num_points 3"],
+        reference_points: Float[torch.Tensor, "*batch num_points 3"],
+        hinges: Int[torch.Tensor, "num_hinges 4"],
+        reduction: _Reduction,
+    ) -> Float[torch.Tensor, "..."]:
         points, reference_points, hinges, was_unbatched = normalize_hinge_inputs(
             points, reference_points, hinges
         )
@@ -1058,12 +1119,12 @@ class SurfaceBendingEnergy(_DeformationEnergySpec):
 
     @FunctionSpec.register(name="warp", required_imports=("warp>=0.6.0",), rank=0)
     def warp_forward(
-        points: torch.Tensor,
-        reference_points: torch.Tensor,
-        hinges: torch.Tensor,
+        points: Float[torch.Tensor, "*batch num_points 3"],
+        reference_points: Float[torch.Tensor, "*batch num_points 3"],
+        hinges: Int[torch.Tensor, "num_hinges 4"],
         *,
-        reduction: Reduction = "sum",
-    ) -> torch.Tensor:
+        reduction: _Reduction = "sum",
+    ) -> Float[torch.Tensor, "..."]:
         """Evaluate hinge bending with Warp."""
 
         return SurfaceBendingEnergy._forward(
@@ -1076,12 +1137,12 @@ class SurfaceBendingEnergy(_DeformationEnergySpec):
 
     @FunctionSpec.register(name="torch", rank=1, baseline=True)
     def torch_forward(
-        points: torch.Tensor,
-        reference_points: torch.Tensor,
-        hinges: torch.Tensor,
+        points: Float[torch.Tensor, "*batch num_points 3"],
+        reference_points: Float[torch.Tensor, "*batch num_points 3"],
+        hinges: Int[torch.Tensor, "num_hinges 4"],
         *,
-        reduction: Reduction = "sum",
-    ) -> torch.Tensor:
+        reduction: _Reduction = "sum",
+    ) -> Float[torch.Tensor, "..."]:
         """Evaluate hinge bending with Torch."""
 
         return SurfaceBendingEnergy._forward(
@@ -1095,13 +1156,13 @@ class SurfaceBendingEnergy(_DeformationEnergySpec):
     @classmethod
     def dispatch(
         cls,
-        points: torch.Tensor,
-        reference_points: torch.Tensor,
-        hinges: torch.Tensor,
+        points: Float[torch.Tensor, "*batch num_points 3"],
+        reference_points: Float[torch.Tensor, "*batch num_points 3"],
+        hinges: Int[torch.Tensor, "num_hinges 4"],
         *,
-        reduction: Reduction = "sum",
-        implementation: Implementation = None,
-    ) -> torch.Tensor:
+        reduction: _Reduction = "sum",
+        implementation: _Implementation = None,
+    ) -> Float[torch.Tensor, "..."]:
         """Dispatch to a device-appropriate deformation-energy backend."""
 
         implementation = cls._select_implementation(points, implementation)
@@ -1153,8 +1214,8 @@ class ClosedSurfaceVolumeEnergy(_DeformationEnergySpec):
     Notes
     -----
     This function supplies a penalty term, not an exact volume constraint.
-    It assumes the stated connectivity, edge-closure, and orientation contract;
-    checking those discrete properties belongs outside an iterative optimization
+    It assumes the stated connectivity, edge-closure, and orientation contract.
+    Checking those discrete properties belongs outside an iterative optimization
     loop. Evaluate disconnected components separately. An empty triangle set is
     rejected. Zero or nonfinite reference volume produces NaN.
     Vertex-manifoldness and self-intersection are not checked, and local face
@@ -1194,13 +1255,20 @@ class ClosedSurfaceVolumeEnergy(_DeformationEnergySpec):
 
     @staticmethod
     def _forward(
-        backend,
-        points,
-        reference_points,
-        triangles,
-        target_ratio,
-        reduction,
-    ):
+        backend: Callable[
+            [
+                Float[torch.Tensor, "batch num_points 3"],
+                Float[torch.Tensor, "batch num_points 3"],
+                Int[torch.Tensor, "num_triangles 3"],
+            ],
+            tuple[Float[torch.Tensor, "..."], Float[torch.Tensor, "..."]],
+        ],
+        points: Float[torch.Tensor, "*batch num_points 3"],
+        reference_points: Float[torch.Tensor, "*batch num_points 3"],
+        triangles: Int[torch.Tensor, "num_triangles 3"],
+        target_ratio: float,
+        reduction: _Reduction,
+    ) -> Float[torch.Tensor, "..."]:
         points, reference_points, triangles, was_unbatched = (
             normalize_closed_surface_inputs(points, reference_points, triangles)
         )
@@ -1217,13 +1285,13 @@ class ClosedSurfaceVolumeEnergy(_DeformationEnergySpec):
 
     @FunctionSpec.register(name="warp", required_imports=("warp>=0.6.0",), rank=0)
     def warp_forward(
-        points: torch.Tensor,
-        reference_points: torch.Tensor,
-        triangles: torch.Tensor,
+        points: Float[torch.Tensor, "*batch num_points 3"],
+        reference_points: Float[torch.Tensor, "*batch num_points 3"],
+        triangles: Int[torch.Tensor, "num_triangles 3"],
         *,
         target_ratio: float = 1.0,
-        reduction: Reduction = "sum",
-    ) -> torch.Tensor:
+        reduction: _Reduction = "sum",
+    ) -> Float[torch.Tensor, "..."]:
         """Evaluate enclosed-volume terms with Warp."""
 
         return ClosedSurfaceVolumeEnergy._forward(
@@ -1237,13 +1305,13 @@ class ClosedSurfaceVolumeEnergy(_DeformationEnergySpec):
 
     @FunctionSpec.register(name="torch", rank=1, baseline=True)
     def torch_forward(
-        points: torch.Tensor,
-        reference_points: torch.Tensor,
-        triangles: torch.Tensor,
+        points: Float[torch.Tensor, "*batch num_points 3"],
+        reference_points: Float[torch.Tensor, "*batch num_points 3"],
+        triangles: Int[torch.Tensor, "num_triangles 3"],
         *,
         target_ratio: float = 1.0,
-        reduction: Reduction = "sum",
-    ) -> torch.Tensor:
+        reduction: _Reduction = "sum",
+    ) -> Float[torch.Tensor, "..."]:
         """Evaluate enclosed-volume terms with Torch."""
 
         return ClosedSurfaceVolumeEnergy._forward(
@@ -1258,14 +1326,14 @@ class ClosedSurfaceVolumeEnergy(_DeformationEnergySpec):
     @classmethod
     def dispatch(
         cls,
-        points: torch.Tensor,
-        reference_points: torch.Tensor,
-        triangles: torch.Tensor,
+        points: Float[torch.Tensor, "*batch num_points 3"],
+        reference_points: Float[torch.Tensor, "*batch num_points 3"],
+        triangles: Int[torch.Tensor, "num_triangles 3"],
         *,
         target_ratio: float = 1.0,
-        reduction: Reduction = "sum",
-        implementation: Implementation = None,
-    ) -> torch.Tensor:
+        reduction: _Reduction = "sum",
+        implementation: _Implementation = None,
+    ) -> Float[torch.Tensor, "..."]:
         """Dispatch to a device-appropriate deformation-energy backend."""
 
         implementation = cls._select_implementation(points, implementation)

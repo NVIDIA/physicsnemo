@@ -29,7 +29,7 @@ from physicsnemo.mesh.deformation import (
     total_measure_energy,
 )
 from physicsnemo.mesh.primitives.planar import unit_square
-from physicsnemo.nn.functional import rbf_morph_points
+from physicsnemo.nn.functional import radial_basis_function_deform_points
 
 
 def _signed_triangle_ratios(
@@ -82,7 +82,7 @@ def main() -> None:
     free_displacements = torch.nn.Parameter(reference.points.new_zeros((4, 2)))
 
     def deformed_points() -> torch.Tensor:
-        """Evaluate the exact RBF deformation for the current parameters."""
+        """Evaluate the radial-basis deformation for the current parameters."""
 
         displacements = torch.cat(
             (
@@ -91,7 +91,7 @@ def main() -> None:
                 target_displacement.unsqueeze(0),
             )
         )
-        return rbf_morph_points(
+        return radial_basis_function_deform_points(
             reference.points,
             controls,
             displacements,

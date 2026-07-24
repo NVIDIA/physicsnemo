@@ -218,7 +218,7 @@ Deformation Energies
 
 The deformation-energy functionals compare current point coordinates with a
 fixed reference configuration and topology. They return differentiable penalty
-objectives for use in an optimization loop; they do not solve a constrained
+objectives for use in an optimization loop. They do not solve a constrained
 deformation problem or enforce hard constraints.
 
 For a :class:`~physicsnemo.mesh.mesh.Mesh`, the wrappers in
@@ -256,27 +256,26 @@ The simplex functionals accept unbatched ``(n_points, n_spatial_dims)`` or
 batched ``(batch_size, n_points, n_spatial_dims)`` coordinates with shared
 integer topology. Coordinates must use matching ``torch.float32`` or
 ``torch.float64`` dtypes. ``reduction="none"`` returns one value per simplex or
-hinge;
-for ``total_measure_energy`` and ``closed_surface_volume_energy`` it returns one
-global value per batch item instead. ``"sum"`` and ``"mean"`` reduce all
+hinge. For ``total_measure_energy`` and ``closed_surface_volume_energy``, it
+returns one global value per batch item. ``"sum"`` and ``"mean"`` reduce all
 values to one scalar.
 
 ``simplex_measure_energy`` constrains each element separately, whereas
 ``total_measure_energy`` permits local redistribution and constrains only the
 sum. Full-dimensional measure ratios retain the orientation relative to each
-reference simplex; embedded-simplex ratios are unsigned. The St.
+reference simplex. Embedded-simplex ratios are unsigned. The St.
 Venant--Kirchhoff strain formulation used by
-``simplex_strain_energy`` is reflection-blind; add
+``simplex_strain_energy`` is reflection-blind. Add
 ``simplex_inversion_energy`` when full-dimensional simplex orientation matters.
 Closed-surface volume requires one edge-connected, edge-closed, consistently
-oriented 3D triangle surface; the low-level functional assumes that contract
+oriented 3D triangle surface. The low-level functional assumes that contract
 without checking it. Surface bending is a geometric hinge regularizer rather
 than a material shell model.
 
 The tensor functionals validate topology shape, dtype, and device without
 scanning index values, which would synchronize a CUDA device on every call.
 Indices must therefore be distinct and in range as documented. Invalid index
-values are outside the tensor API contract; use the mesh wrappers when cached
+values are outside the tensor API contract. Use the mesh wrappers when cached
 value validation is needed. Direct tensor calls accept int32 or int64
 connectivity, but normalize int32 connectivity on every call. Use int64 for
 repeated direct calls. Mesh wrappers cache this normalization with the

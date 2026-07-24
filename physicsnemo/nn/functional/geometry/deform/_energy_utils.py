@@ -21,11 +21,15 @@ from __future__ import annotations
 from typing import Literal
 
 import torch
+from jaxtyping import Float, Int
 
-Reduction = Literal["none", "sum", "mean"]
+_Reduction = Literal["none", "sum", "mean"]
 
 
-def _validate_coordinate_tensor(tensor: torch.Tensor, name: str) -> None:
+def _validate_coordinate_tensor(
+    tensor: Float[torch.Tensor, "*batch num_points num_dims"],
+    name: str,
+) -> None:
     """Validate an unbatched or aligned-batch coordinate tensor."""
 
     if not isinstance(tensor, torch.Tensor):
@@ -43,8 +47,8 @@ def _validate_coordinate_tensor(tensor: torch.Tensor, name: str) -> None:
 
 
 def _validate_aligned_coordinates(
-    points: torch.Tensor,
-    reference_points: torch.Tensor,
+    points: Float[torch.Tensor, "*batch num_points num_dims"],
+    reference_points: Float[torch.Tensor, "*batch num_points num_dims"],
 ) -> None:
     """Validate current and reference coordinates without broadcasting."""
 
@@ -68,12 +72,12 @@ def _validate_aligned_coordinates(
 
 
 def _validate_topology(
-    topology: torch.Tensor,
-    points: torch.Tensor,
+    topology: Int[torch.Tensor, "num_primitives vertices_per_primitive"],
+    points: Float[torch.Tensor, "*batch num_points num_dims"],
     *,
     name: str,
     vertices_per_primitive: int | None = None,
-) -> torch.Tensor:
+) -> Int[torch.Tensor, "num_primitives vertices_per_primitive"]:
     """Validate shared connectivity and normalize integer indices to int64."""
 
     if not isinstance(topology, torch.Tensor):
@@ -100,7 +104,9 @@ def _validate_topology(
     return topology.to(dtype=torch.int64)
 
 
-def _as_batched(tensor: torch.Tensor) -> tuple[torch.Tensor, bool]:
+def _as_batched(
+    tensor: Float[torch.Tensor, "*batch num_points num_dims"],
+) -> tuple[Float[torch.Tensor, "batch num_points num_dims"], bool]:
     """Normalize ``(N, D)`` coordinates to ``(1, N, D)`` without copying."""
 
     if tensor.ndim == 2:
@@ -109,10 +115,15 @@ def _as_batched(tensor: torch.Tensor) -> tuple[torch.Tensor, bool]:
 
 
 def normalize_simplex_inputs(
-    points: torch.Tensor,
-    reference_points: torch.Tensor,
-    cells: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool]:
+    points: Float[torch.Tensor, "*batch num_points num_dims"],
+    reference_points: Float[torch.Tensor, "*batch num_points num_dims"],
+    cells: Int[torch.Tensor, "num_cells vertices_per_cell"],
+) -> tuple[
+    Float[torch.Tensor, "batch num_points num_dims"],
+    Float[torch.Tensor, "batch num_points num_dims"],
+    Int[torch.Tensor, "num_cells vertices_per_cell"],
+    bool,
+]:
     """Validate simplex inputs and normalize coordinates to ``(B, N, D)``.
 
     The topology is shared across aligned batches. Cells may be edges,
@@ -142,10 +153,15 @@ def normalize_simplex_inputs(
 
 
 def normalize_hinge_inputs(
-    points: torch.Tensor,
-    reference_points: torch.Tensor,
-    hinges: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool]:
+    points: Float[torch.Tensor, "*batch num_points 3"],
+    reference_points: Float[torch.Tensor, "*batch num_points 3"],
+    hinges: Int[torch.Tensor, "num_hinges 4"],
+) -> tuple[
+    Float[torch.Tensor, "batch num_points 3"],
+    Float[torch.Tensor, "batch num_points 3"],
+    Int[torch.Tensor, "num_hinges 4"],
+    bool,
+]:
     """Validate oriented triangle-hinge inputs and normalize their coordinates.
 
     Each row ``(i, j, k, l)`` represents the adjacent oriented faces
@@ -169,10 +185,15 @@ def normalize_hinge_inputs(
 
 
 def normalize_closed_surface_inputs(
-    points: torch.Tensor,
-    reference_points: torch.Tensor,
-    triangles: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool]:
+    points: Float[torch.Tensor, "*batch num_points 3"],
+    reference_points: Float[torch.Tensor, "*batch num_points 3"],
+    triangles: Int[torch.Tensor, "num_triangles 3"],
+) -> tuple[
+    Float[torch.Tensor, "batch num_points 3"],
+    Float[torch.Tensor, "batch num_points 3"],
+    Int[torch.Tensor, "num_triangles 3"],
+    bool,
+]:
     """Validate oriented triangle-surface inputs and normalize coordinates."""
 
     _validate_aligned_coordinates(points, reference_points)
@@ -191,17 +212,20 @@ def normalize_closed_surface_inputs(
     return points_b3, reference_b3, triangles, was_unbatched
 
 
-def restore_batch(tensor: torch.Tensor, was_unbatched: bool) -> torch.Tensor:
+def restore_batch(
+    tensor: Float[torch.Tensor, "batch num_primitives"],
+    was_unbatched: bool,
+) -> Float[torch.Tensor, "*batch num_primitives"]:
     """Remove the normalization batch dimension when the input was unbatched."""
 
     return tensor.squeeze(0) if was_unbatched else tensor
 
 
 def reduce_energy_terms(
-    terms: torch.Tensor,
-    reduction: Reduction,
+    terms: Float[torch.Tensor, "batch num_primitives"],
+    reduction: _Reduction,
     was_unbatched: bool,
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "..."]:
     """Reduce normalized per-primitive energy terms and restore input rank.
 
     An empty primitive set has zero ``sum`` and ``mean`` energy. This convention

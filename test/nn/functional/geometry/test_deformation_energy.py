@@ -19,6 +19,7 @@
 import inspect
 import math
 from collections.abc import Callable
+from contextlib import contextmanager
 from typing import Literal, get_type_hints
 
 import pytest
@@ -28,7 +29,7 @@ import physicsnemo.nn.functional as functional
 from physicsnemo.core.function_spec import FunctionSpec
 from physicsnemo.nn.functional import (
     closed_surface_volume_energy,
-    rbf_morph_points,
+    radial_basis_function_deform_points,
     simplex_inversion_energy,
     simplex_measure_energy,
     simplex_strain_energy,
@@ -514,6 +515,22 @@ def test_physically_stable_negative_lame_lambda_is_accepted():
         implementation="torch",
     )
     torch.testing.assert_close(actual, torch.tensor(expected, dtype=reference.dtype))
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_stvk_rejects_unrepresentable_combined_lame_coefficient(dtype):
+    reference, cells = _canonical_simplex(1, 1, dtype=dtype)
+    maximum = torch.finfo(dtype).max
+
+    with pytest.raises(ValueError, match="must be finite"):
+        simplex_strain_energy(
+            reference,
+            reference,
+            cells,
+            lame_lambda=maximum,
+            shear_modulus=maximum,
+            implementation="torch",
+        )
 
 
 @pytest.mark.parametrize("volumetric_modulus", [0.0, math.ulp(2.0 / 3.0)])
@@ -1828,6 +1845,62 @@ def test_warp_honors_nondefault_pytorch_stream():
         torch.testing.assert_close(actual, expected)
 
 
+@pytest.mark.cuda
+@requires_module("warp")
+def test_warp_activates_tensor_device_for_multigpu_stream_guards(monkeypatch):
+    if torch.cuda.device_count() < 2:
+        pytest.skip("two CUDA devices are required for the multi-GPU stream test")
+
+    target_device = torch.device("cuda:1")
+    reference, cells = _canonical_simplex(
+        2,
+        2,
+        dtype=torch.float32,
+        device=target_device,
+    )
+    points = (1.1 * reference).requires_grad_()
+    original_launch_context = FunctionSpec.warp_launch_context
+    original_scope = FunctionSpec.warp_stream_scope
+    observed_context_devices = []
+    observed_scope_devices = []
+
+    def assert_tensor_device_for_launch_context(tensor):
+        observed_context_devices.append(torch.cuda.current_device())
+        assert torch.cuda.current_device() == target_device.index
+        return original_launch_context(tensor)
+
+    @contextmanager
+    def assert_tensor_device_is_current(*args, **kwargs):
+        observed_scope_devices.append(torch.cuda.current_device())
+        assert torch.cuda.current_device() == target_device.index
+        with original_scope(*args, **kwargs):
+            yield
+
+    monkeypatch.setattr(
+        FunctionSpec,
+        "warp_launch_context",
+        staticmethod(assert_tensor_device_for_launch_context),
+    )
+    monkeypatch.setattr(
+        FunctionSpec,
+        "warp_stream_scope",
+        staticmethod(assert_tensor_device_is_current),
+    )
+    with torch.cuda.device("cuda:0"):
+        output = simplex_strain_energy(
+            points,
+            reference,
+            cells,
+            implementation="warp",
+        )
+        output.backward()
+        torch.cuda.synchronize(target_device)
+        assert torch.cuda.current_device() == 0
+
+    assert observed_context_devices == [target_device.index, target_device.index]
+    assert observed_scope_devices == [target_device.index, target_device.index]
+
+
 @requires_module("warp")
 def test_warp_custom_ops_pass_pytorch_opcheck():
     from physicsnemo.nn.functional.geometry.deform._warp_impl.energy_op import (
@@ -1909,7 +1982,7 @@ def test_backward_composes_through_rbf_control_displacements():
         dtype=reference.dtype,
         requires_grad=True,
     )
-    points = rbf_morph_points(
+    points = radial_basis_function_deform_points(
         reference,
         controls,
         control_displacements,
