@@ -114,13 +114,7 @@ def validate_caches(
                 f"Cache {cache_name} should exist but is missing"
             )
 
-            mesh_no_cache = Mesh(
-                points=mesh.points,
-                cells=mesh.cells,
-                point_data=mesh.point_data,
-                cell_data=mesh.cell_data,
-                global_data=mesh.global_data,
-            )
+            mesh_no_cache = mesh.strip_caches()
 
             if cache_name == "areas":
                 recomputed = mesh_no_cache.cell_areas
@@ -238,6 +232,7 @@ class TestTranslation:
 
         original_areas = mesh._cache.get(("cell", "areas"), None).clone()
         original_centroids = mesh._cache.get(("cell", "centroids"), None).clone()
+        original_topology = mesh.get_point_to_points_adjacency()
 
         offset = torch.ones(n_spatial_dims, device=device)
         translated = translate(mesh, offset)
@@ -266,6 +261,15 @@ class TestTranslation:
             assert torch.allclose(
                 translated._cache.get(("cell", "normals"), None), original_normals
             ), "Normals should be unchanged by translation"
+
+        cached_topology = translated._cache.get(("topology", "point_to_points"))
+        assert cached_topology is not None
+        assert (
+            cached_topology.offsets.data_ptr() == original_topology.offsets.data_ptr()
+        )
+        assert (
+            cached_topology.indices.data_ptr() == original_topology.indices.data_ptr()
+        )
 
     def test_translate_preserves_data(self):
         """Test that translate preserves vector fields unchanged."""
@@ -700,11 +704,20 @@ class TestTransform:
         """Test identity transformation leaves mesh unchanged."""
         n_manifold_dims = n_spatial_dims - 1
         mesh = create_mesh_with_caches(n_spatial_dims, n_manifold_dims, device=device)
+        original_topology = mesh.get_point_to_points_adjacency()
 
         identity_matrix = torch.eye(n_spatial_dims, device=device)
         transformed = transform(mesh, identity_matrix)
 
         assert torch.allclose(transformed.points, mesh.points)
+        cached_topology = transformed._cache.get(("topology", "point_to_points"))
+        assert cached_topology is not None
+        assert (
+            cached_topology.offsets.data_ptr() == original_topology.offsets.data_ptr()
+        )
+        assert (
+            cached_topology.indices.data_ptr() == original_topology.indices.data_ptr()
+        )
 
     def test_transform_shear_2d(self, device):
         """Test shear transformation in 2D."""

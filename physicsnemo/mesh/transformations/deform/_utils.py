@@ -16,12 +16,10 @@
 
 """Shared utilities for mesh deformation operations."""
 
-from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import torch
 from jaxtyping import Bool, Float
-from tensordict import TensorDict
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -147,13 +145,4 @@ def _mesh_with_deformed_points(
     points: Float[torch.Tensor, "n_points n_spatial_dims"],
 ) -> "Mesh":
     """Construct a geometry-invalidated mesh while retaining topology caches."""
-    device = points.device
-    cache = TensorDict(
-        {
-            "cell": TensorDict({}, batch_size=[mesh.n_cells], device=device),
-            "point": TensorDict({}, batch_size=[mesh.n_points], device=device),
-            "topology": mesh._cache.get("topology", TensorDict({}, device=device)),
-        },
-        device=device,
-    )
-    return replace(mesh, points=points, _cache=cache)
+    return mesh.with_points(points)

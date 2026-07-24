@@ -1115,17 +1115,26 @@ class DomainMesh:
             )
         )
 
-    def strip_caches(self) -> "DomainMesh":
+    def strip_caches(
+        self,
+        keep: Sequence[str | tuple[str, ...]] = (),
+    ) -> "DomainMesh":
         r"""Remove cached geometry from all meshes in the domain.
 
         Delegates to :meth:`Mesh.strip_caches` for each mesh.
 
+        Parameters
+        ----------
+        keep : sequence of str or tuple[str, ...], optional
+            Cache keys to retain on every component mesh. See
+            :meth:`Mesh.strip_caches` for key semantics.
+
         Returns
         -------
         DomainMesh
-            New domain with all cached values cleared.
+            New domain retaining only the requested cached values on each mesh.
         """
-        return self.apply_to_meshes(lambda m: m.strip_caches())
+        return self.apply_to_meshes(lambda m: m.strip_caches(keep=keep))
 
     def subdivide(
         self,
