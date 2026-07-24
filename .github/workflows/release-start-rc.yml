@@ -25,7 +25,7 @@ on:
         required: true
         type: string
       rc_branch:
-        description: "RC branch; leave blank to use <release_version>-rc"
+        description: "RC branch name; must be <release_version>-rc or leave blank"
         required: false
         type: string
       release_date:
