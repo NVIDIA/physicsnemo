@@ -273,7 +273,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   corrects the previous erroneous aspect-ratio and quality-score values.
 - `Mesh.quality_metrics` and `Mesh.statistics` again use explicit property
   getters so their class-facing documentation describes argument-free property
-  access; configurable statistics tolerance remains available through the
+  access. Configurable statistics tolerance remains available through the
   standalone `compute_mesh_statistics` function.
 - Performance improvements in the diffusion module: reduced peak memory of
   DPS-guided diffusion sampling most notably for multi-diffusion at large
