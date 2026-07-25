@@ -39,13 +39,10 @@ from typing import Any
 import torch
 from tensordict import TensorDict, TensorDictBase
 
-### Directory that the decorator-era writer nested the payload under.
-LEGACY_PAYLOAD_DIRNAME = "_tensordict"
-
 
 def _legacy_payload_dir(prefix: str | Path) -> Path | None:
     """Return the decorator-era payload directory, or ``None`` if not one."""
-    payload = Path(prefix) / LEGACY_PAYLOAD_DIRNAME
+    payload = Path(prefix) / "_tensordict"
     return payload if payload.is_dir() else None
 
 
@@ -53,17 +50,20 @@ def install_legacy_memmap_reader(cls: type) -> None:
     """Teach a ``TensorClass`` container to load the decorator-era layout.
 
     Overrides ``load``, ``load_memmap``, and ``_load_memmap`` on ``cls`` so
-    each checks for a nested :data:`LEGACY_PAYLOAD_DIRNAME` directory first,
-    falling through to the stock implementations otherwise. All three are
-    needed: ``load`` / ``load_memmap`` are the public entry points, while
-    ``_load_memmap`` is what ``tensordict`` dispatches to for a *nested*
-    legacy container (a ``DomainMesh``'s ``interior`` and its boundaries).
+    each checks for a nested ``_tensordict/`` directory first, falling through
+    to the stock implementations otherwise. Each override earns its place:
 
-    Overriding the public entry points is also what makes ``device=`` work on
-    legacy files. ``tensordict`` resolves the writing class from the
-    directory's ``meta.json``, and its dispatch to a non-matching class drops
-    everything but the prefix -- so a decorator-era file loaded with
-    ``device="cuda"`` silently came back on the CPU.
+    - ``load`` looks like a redundant proxy, but ``TensorClass``'s metaclass
+      resolves class attributes against the underlying ``TensorDict``, so the
+      stock ``load`` reaches ``TensorDict.load_memmap`` directly and never
+      sees the ``load_memmap`` override below.
+    - ``load_memmap`` is where ``device=`` and ``out=`` are still intact.
+      ``tensordict`` resolves the writing class from the directory's
+      ``meta.json`` and, when that isn't the class it is loading through,
+      forwards only the prefix -- which is why a decorator-era file loaded
+      with ``device="cuda"`` used to come back on the CPU.
+    - ``_load_memmap`` is what ``tensordict`` dispatches to for a *nested*
+      legacy container: a ``DomainMesh``'s ``interior`` and its boundaries.
 
     Parameters
     ----------
@@ -79,10 +79,8 @@ def install_legacy_memmap_reader(cls: type) -> None:
     def _payload_of(out: Any) -> TensorDictBase | None:
         """Unwrap a container passed as ``out=`` to the tensordict it stores.
 
-        ``tensordict`` writes bookkeeping attributes onto whatever it is
-        handed, which a ``tensor_only`` container rejects; it wants the
-        underlying storage. Only that storage is filled, so callers should use
-        the returned value, which is a fully reconstructed ``cls``.
+        ``tensordict`` writes bookkeeping attributes onto whatever it fills,
+        which a ``tensor_only`` container rejects; it wants the storage.
         """
         return out._tensordict if isinstance(out, cls) else out
 
