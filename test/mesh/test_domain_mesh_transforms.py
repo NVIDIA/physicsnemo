@@ -36,6 +36,17 @@ def test_domain_mesh_inherits_tensorclass():
     assert TensorClass in DomainMesh.__bases__
 
 
+def test_domain_mesh_is_not_subscriptable():
+    """Inheriting TensorClass must not expose its configuration subscript.
+
+    ``Mesh[m, s]`` is a dimension specialization; ``DomainMesh`` has no such
+    parametrization, so a subscript is a mistake and must say so rather than
+    return ``TensorClass``'s unrelated configuration class.
+    """
+    with pytest.raises(TypeError, match="not subscriptable"):
+        DomainMesh["nocast"]
+
+
 ### Fixtures
 
 

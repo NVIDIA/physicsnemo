@@ -32,7 +32,21 @@ if TYPE_CHECKING:
     import pyvista
 
 
-class DomainMesh(TensorClass):
+class _DomainMeshMeta(type(TensorClass)):
+    """Keep ``DomainMesh`` unsubscriptable, as it was under ``@tensorclass``.
+
+    ``TensorClass`` subscripts its subclasses to select configuration
+    (``TensorClass["nocast"]``), so without this a mistaken annotation such as
+    ``DomainMesh["wall"]`` would quietly evaluate to an unrelated class instead
+    of raising. ``Mesh`` claims the same syntax for dimension specialization
+    (see ``_MeshTensorClassMeta``); ``DomainMesh`` has no such parametrization.
+    """
+
+    def __getitem__(cls, params: Any) -> type:
+        raise TypeError(f"type '{cls.__name__}' is not subscriptable")
+
+
+class DomainMesh(TensorClass, metaclass=_DomainMeshMeta):
     r"""A simulation domain represented as an interior mesh with named boundary meshes.
 
     A ``DomainMesh`` groups an interior :class:`Mesh` (either a volumetric mesh
