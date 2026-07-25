@@ -23,6 +23,9 @@ All functions and fixtures defined here are automatically available to all test 
 without explicit imports.
 """
 
+import json
+from pathlib import Path
+
 import pytest
 import torch
 
@@ -250,6 +253,32 @@ def assert_on_device(tensor: torch.Tensor, expected_device: str) -> None:
 
 
 ### Pytest Fixtures ###
+
+
+@pytest.fixture
+def serialization_manifest():
+    """Return a helper describing a memmap directory tree.
+
+    Used by the ``.pmsh`` / ``.pdmsh`` golden-fixture tests to compare a fresh
+    save against the committed one. Tensor payload bytes are deliberately
+    ignored -- the manifest records the directory structure, each ``meta.json``,
+    and every other file's size, so it pins the *layout* rather than values
+    that legitimately vary (e.g. floating-point noise from a rebuild).
+    """
+
+    def manifest(root: Path) -> dict[str, object]:
+        described: dict[str, object] = {}
+        for path in sorted(root.rglob("*")):
+            relative = path.relative_to(root).as_posix()
+            if path.is_dir():
+                described[f"{relative}/"] = None
+            elif path.name == "meta.json":
+                described[relative] = json.loads(path.read_text())
+            else:
+                described[relative] = path.stat().st_size
+        return described
+
+    return manifest
 
 
 @pytest.fixture(autouse=True)
