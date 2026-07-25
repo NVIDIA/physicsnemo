@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     import pyvista
 
 
-class _DomainMeshMeta(type(TensorClass)):
+class _DomainMeshTensorClassMeta(type(TensorClass)):
     """Keep ``DomainMesh`` unsubscriptable, as it was under ``@tensorclass``.
 
     ``TensorClass`` subscripts its subclasses to select configuration
@@ -46,7 +46,7 @@ class _DomainMeshMeta(type(TensorClass)):
         raise TypeError(f"type '{cls.__name__}' is not subscriptable")
 
 
-class DomainMesh(TensorClass, metaclass=_DomainMeshMeta):
+class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
     r"""A simulation domain represented as an interior mesh with named boundary meshes.
 
     A ``DomainMesh`` groups an interior :class:`Mesh` (either a volumetric mesh
@@ -1472,14 +1472,10 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshMeta):
 # This is load-critical for *both* on-disk layouts, not just legacy files: the
 # memmap format records nested containers as plain TensorDicts, so `interior`
 # and each boundary arrive here untyped and `__post_init__` would reject them.
-# (The `isinstance(tensordict, cls)` guard is the legacy half: a decorator-era
-# file is already reconstructed before TensorClass's wrapper receives it.)
 _tensorclass_domain_from_tensordict = DomainMesh._from_tensordict.__func__
 
 
 def _domain_from_tensordict(cls, tensordict, non_tensordict=None, safe=True):
-    if isinstance(tensordict, cls):
-        return tensordict
     interior = tensordict.get("interior")
     boundaries = tensordict.get("boundaries")
     if isinstance(interior, TensorDict) or (

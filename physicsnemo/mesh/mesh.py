@@ -3809,24 +3809,6 @@ class Mesh(
         )
 
 
-### TensorClass's load wrapper may receive an already reconstructed Mesh when
-# loading the legacy decorator-based on-disk layout. Avoid wrapping it again.
-_tensorclass_mesh_from_tensordict = Mesh._from_tensordict.__func__
-
-
-def _mesh_from_tensordict(cls, tensordict, non_tensordict=None, safe=True):
-    if isinstance(tensordict, cls):
-        return tensordict
-    return _tensorclass_mesh_from_tensordict(
-        cls,
-        tensordict,
-        non_tensordict=non_tensordict,
-        safe=safe,
-    )
-
-
-Mesh._from_tensordict = classmethod(_mesh_from_tensordict)
-
 install_legacy_memmap_reader(Mesh)
 
 
