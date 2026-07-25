@@ -52,20 +52,77 @@ def _legacy_payload_dir(prefix: str | Path) -> Path | None:
 def install_legacy_memmap_reader(cls: type) -> None:
     """Teach a ``TensorClass`` container to load the decorator-era layout.
 
-    Overrides ``_load_memmap`` on ``cls`` -- the hook ``tensordict`` dispatches
-    to once it has read a directory's ``meta.json`` and resolved which class
-    wrote it -- so that a nested :data:`LEGACY_PAYLOAD_DIRNAME` directory is
-    read explicitly, falling through to the stock implementation otherwise.
+    Overrides ``load``, ``load_memmap``, and ``_load_memmap`` on ``cls`` so
+    each checks for a nested :data:`LEGACY_PAYLOAD_DIRNAME` directory first,
+    falling through to the stock implementations otherwise. All three are
+    needed: ``load`` / ``load_memmap`` are the public entry points, while
+    ``_load_memmap`` is what ``tensordict`` dispatches to for a *nested*
+    legacy container (a ``DomainMesh``'s ``interior`` and its boundaries).
+
+    Overriding the public entry points is also what makes ``device=`` work on
+    legacy files. ``tensordict`` resolves the writing class from the
+    directory's ``meta.json``, and its dispatch to a non-matching class drops
+    everything but the prefix -- so a decorator-era file loaded with
+    ``device="cuda"`` silently came back on the CPU.
 
     Parameters
     ----------
     cls : type
         The ``TensorClass`` subclass to patch, in place.
     """
-    ### Captured before the override is installed, so it stays reachable. This
-    ### is a plain function rather than a bound method: `tensorclass` installs
-    ### it on the class and it resolves the class itself.
-    stock_load_memmap = cls._load_memmap
+    ### Captured before the overrides are installed, so they stay reachable.
+    ### These are plain functions rather than bound methods: `tensorclass`
+    ### installs them on the class and they resolve the class themselves.
+    stock_load_memmap = cls.load_memmap
+    stock_private_load_memmap = cls._load_memmap
+
+    def _payload_of(out: Any) -> TensorDictBase | None:
+        """Unwrap a container passed as ``out=`` to the tensordict it stores.
+
+        ``tensordict`` writes bookkeeping attributes onto whatever it is
+        handed, which a ``tensor_only`` container rejects; it wants the
+        underlying storage. Only that storage is filled, so callers should use
+        the returned value, which is a fully reconstructed ``cls``.
+        """
+        return out._tensordict if isinstance(out, cls) else out
+
+    def load(cls, prefix: str | Path, *args: Any, **kwargs: Any) -> Any:
+        """Load a saved container from disk (a proxy for ``load_memmap``)."""
+        return cls.load_memmap(prefix, *args, **kwargs)
+
+    def load_memmap(
+        cls,
+        prefix: str | Path,
+        device: torch.device | None = None,
+        non_blocking: bool = False,
+        *,
+        out: TensorDictBase | None = None,
+        robust_key: bool | None = None,
+    ) -> Any:
+        """Load from a memory-mapped directory tree, in either layout."""
+        legacy_payload = _legacy_payload_dir(prefix)
+        if legacy_payload is None:
+            return stock_load_memmap(
+                prefix,
+                device,
+                non_blocking,
+                out=_payload_of(out),
+                robust_key=robust_key,
+            )
+        ### The payload is read on its native device and moved afterwards
+        ### rather than passing `device` down, because tensordict dispatches
+        ### each *nested* legacy container through `_load_memmap`, which it
+        ### calls without `device` -- passing it here would leave a DomainMesh
+        ### split across devices. Moving the whole result is a no-op for
+        ### entries already in the right place.
+        result = cls._from_tensordict(
+            TensorDict.load_memmap(
+                legacy_payload, out=_payload_of(out), robust_key=robust_key
+            )
+        )
+        if device is not None:
+            result = result.to(device, non_blocking=non_blocking)
+        return result
 
     def _load_memmap(
         cls,
@@ -78,9 +135,15 @@ def install_legacy_memmap_reader(cls: type) -> None:
         """Reconstruct one container from either on-disk layout."""
         legacy_payload = _legacy_payload_dir(prefix)
         if legacy_payload is None:
-            return stock_load_memmap(prefix, metadata, device=device, out=out, **kwargs)
+            return stock_private_load_memmap(
+                prefix, metadata, device=device, out=out, **kwargs
+            )
         return cls._from_tensordict(
-            TensorDict.load_memmap(legacy_payload, device=device, out=out, **kwargs)
+            TensorDict.load_memmap(
+                legacy_payload, device=device, out=_payload_of(out), **kwargs
+            )
         )
 
+    cls.load = classmethod(load)
+    cls.load_memmap = classmethod(load_memmap)
     cls._load_memmap = classmethod(_load_memmap)
