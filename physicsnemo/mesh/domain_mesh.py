@@ -22,6 +22,7 @@ import torch
 from jaxtyping import Bool, Float
 from tensordict import TensorClass, TensorDict
 
+from physicsnemo.mesh._serialization import install_legacy_memmap_reader
 from physicsnemo.mesh.mesh import Mesh, _requested_float_dtype
 from physicsnemo.mesh.transformations.deform.ffd import _FFDBasis
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
@@ -1453,10 +1454,13 @@ class DomainMesh(TensorClass):
     ### TensorClass overwrites __repr__ even when defined inline.
 
 
-### Match Mesh's legacy-load compatibility: old decorator-based layouts can
-# already be reconstructed before TensorClass's outer wrapper receives them.
+### Restore the declared field types when rebuilding from a plain tensordict.
+# This is load-critical for *both* on-disk layouts, not just legacy files: the
+# memmap format records nested containers as plain TensorDicts, so `interior`
+# and each boundary arrive here untyped and `__post_init__` would reject them.
+# (The `isinstance(tensordict, cls)` guard is the legacy half: a decorator-era
+# file is already reconstructed before TensorClass's wrapper receives it.)
 _tensorclass_domain_from_tensordict = DomainMesh._from_tensordict.__func__
-_tensorclass_domain_load_memmap = DomainMesh._load_memmap
 
 
 def _domain_from_tensordict(cls, tensordict, non_tensordict=None, safe=True):
@@ -1487,38 +1491,7 @@ def _domain_from_tensordict(cls, tensordict, non_tensordict=None, safe=True):
 
 DomainMesh._from_tensordict = classmethod(_domain_from_tensordict)
 
-
-def _domain_load_memmap(
-    cls,
-    prefix,
-    metadata,
-    device=None,
-    out=None,
-    *,
-    robust_key,
-):
-    legacy_prefix = Path(prefix) / "_tensordict"
-    if legacy_prefix.is_dir():
-        tensordict_out = out._tensordict if isinstance(out, cls) else out
-        tensordict = TensorDict.load_memmap(
-            legacy_prefix,
-            device=device,
-            out=tensordict_out,
-            robust_key=robust_key,
-        )
-        if isinstance(out, cls):
-            return out
-        return cls._from_tensordict(tensordict)
-    return _tensorclass_domain_load_memmap(
-        prefix,
-        metadata,
-        device=device,
-        out=out,
-        robust_key=robust_key,
-    )
-
-
-DomainMesh._load_memmap = classmethod(_domain_load_memmap)
+install_legacy_memmap_reader(DomainMesh)
 
 
 ### Override the TensorClass __repr__ with custom formatting.

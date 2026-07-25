@@ -33,6 +33,7 @@ import torch.nn.functional as F
 from jaxtyping import Bool, Float
 from tensordict import NonTensorData, TensorClass, TensorDict
 
+from physicsnemo.mesh._serialization import install_legacy_memmap_reader
 from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
 from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
 from physicsnemo.mesh.transformations.deform import displace, free_form_deform, morph
@@ -3811,7 +3812,6 @@ class Mesh(
 ### TensorClass's load wrapper may receive an already reconstructed Mesh when
 # loading the legacy decorator-based on-disk layout. Avoid wrapping it again.
 _tensorclass_mesh_from_tensordict = Mesh._from_tensordict.__func__
-_tensorclass_mesh_load_memmap = Mesh._load_memmap
 
 
 def _mesh_from_tensordict(cls, tensordict, non_tensordict=None, safe=True):
@@ -3827,38 +3827,7 @@ def _mesh_from_tensordict(cls, tensordict, non_tensordict=None, safe=True):
 
 Mesh._from_tensordict = classmethod(_mesh_from_tensordict)
 
-
-def _mesh_load_memmap(
-    cls,
-    prefix,
-    metadata,
-    device=None,
-    out=None,
-    *,
-    robust_key,
-):
-    legacy_prefix = Path(prefix) / "_tensordict"
-    if legacy_prefix.is_dir():
-        tensordict_out = out._tensordict if isinstance(out, cls) else out
-        tensordict = TensorDict.load_memmap(
-            legacy_prefix,
-            device=device,
-            out=tensordict_out,
-            robust_key=robust_key,
-        )
-        if isinstance(out, cls):
-            return out
-        return cls._from_tensordict(tensordict)
-    return _tensorclass_mesh_load_memmap(
-        prefix,
-        metadata,
-        device=device,
-        out=out,
-        robust_key=robust_key,
-    )
-
-
-Mesh._load_memmap = classmethod(_mesh_load_memmap)
+install_legacy_memmap_reader(Mesh)
 
 
 ### Override the TensorClass __repr__ with custom formatting
