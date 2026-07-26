@@ -92,8 +92,7 @@ performance benefits.
 - **Remeshing**: Uniform Warp-based remeshing on CPU and CUDA for triangle
   surfaces embedded in 3D
 - **Repair**: Remove duplicates, fix orientation, fill holes, clean topology
-- **Morphing**: Dense point displacement and sparse, compactly supported
-  control-point deformation
+- **Morphing**: Dense, Sobolev-filtered, and sparse control-point deformation
 - **Tessellation**: Triangulate polygon soups into simplicial meshes (convex
   fan + [ear clipping](https://en.wikipedia.org/wiki/Polygon_triangulation) for
   non-convex polygons); also `Mesh.from_polygons`
@@ -323,6 +322,7 @@ Comprehensive overview of PhysicsNeMo-Mesh capabilities:
 | Scaling | ✅ | Uniform or anisotropic |
 | Arbitrary matrix transform | ✅ | |
 | Dense point displacement | ✅ | Aligned tensor or `point_data` key, with optional point weights |
+| Sobolev-filtered deformation | ✅ | Differentiable P1 Helmholtz solve with optional fixed points |
 | Sparse control-point morphing | ✅ | Wendland-C2 compact support with scalar or per-control radii |
 | Global radial-basis deformation | ✅ | Thin-plate-spline field with an affine polynomial tail |
 | Extrusion | ✅ | Manifold → higher dimension |
@@ -385,6 +385,14 @@ displacement = torch.zeros_like(mesh.points)
 displacement[:, -1] = 0.05
 displaced = mesh.displace(displacement)
 
+# Sobolev deformation: smooth a dense design field over the mesh
+raw_displacement = torch.zeros_like(mesh.points, requires_grad=True)
+sobolev_deformed = mesh.sobolev_deform(
+    raw_displacement,
+    length_scale=0.1,
+)
+sobolev_deformed.points.square().mean().backward()
+
 # Sparse morphing: one control at the point with the largest last coordinate
 control_index = mesh.points[:, -1].argmax()
 control_points = mesh.points[control_index].unsqueeze(0)  # Shape: (1, D)
@@ -426,6 +434,14 @@ affine polynomial tail, `smoothing=0.0`, and a nonsingular control layout, it
 interpolates every control displacement up to solver precision. Positive
 smoothing adds diagonal regularization and deliberately relaxes interpolation
 accuracy.
+
+Sobolev deformation solves `(M + length_scale² K) u = M d` with a P1 stiffness
+operator and uniform vertex mass scaled by the mean positive lumped P1 mass.
+The length scale uses the same coordinate units as the mesh. The resulting
+filter is self-adjoint in PyTorch's Euclidean vertex coordinates, so autograd
+applies the same smoothing to sensitivities with respect to the raw
+per-vertex displacement. Use `fixed_points` to impose zero displacement at
+selected vertices.
 
 ### Subdivision
 

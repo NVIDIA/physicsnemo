@@ -19,10 +19,12 @@ from .deform import (
     FreeFormDeformPoints,
     MorphPoints,
     RadialBasisFunctionDeformPoints,
+    SobolevDeformPoints,
     displace_points,
     free_form_deform_points,
     morph_points,
     radial_basis_function_deform_points,
+    sobolev_deform_points,
 )
 from .farthest_point_sampling import FarthestPointSampling, farthest_point_sampling
 from .mesh_poisson_disk_sample import MeshPoissonDiskSample, mesh_poisson_disk_sample
@@ -39,6 +41,7 @@ __all__ = [
     "MeshToVoxelFraction",
     "MorphPoints",
     "RadialBasisFunctionDeformPoints",
+    "SobolevDeformPoints",
     "RayMeshIntersect",
     "Remeshing",
     "SignedDistanceField",
@@ -49,6 +52,7 @@ __all__ = [
     "mesh_to_voxel_fraction",
     "morph_points",
     "radial_basis_function_deform_points",
+    "sobolev_deform_points",
     "ray_mesh_intersect",
     "remeshing",
     "signed_distance_field",

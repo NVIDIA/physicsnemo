@@ -47,6 +47,7 @@ from .geometry import (
     ray_mesh_intersect,
     remeshing,
     signed_distance_field,
+    sobolev_deform_points,
 )
 from .interpolation import (
     grid_to_point_interpolation,
@@ -113,6 +114,7 @@ __all__ = [
     "point_cloud_render",
     "scalar_field_to_rgba",
     "signed_distance_field",
+    "sobolev_deform_points",
     "smooth_log",
     "spectral_grid_gradient",
     "spherical_basis",
