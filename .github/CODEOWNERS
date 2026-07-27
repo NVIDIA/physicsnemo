@@ -211,6 +211,7 @@ physicsnemo/utils/profiling/ @coreyjadams
 # ==============================================================================
 
 physicsnemo/mesh/ @peterdsharpe
+physicsnemo/mesh/transformations/deform/ @mehdiataei @loliverhennigh @peterdsharpe
 
 # ==============================================================================
 # METRICS
