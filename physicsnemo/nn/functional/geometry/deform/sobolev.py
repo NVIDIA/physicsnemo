@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import math
 from numbers import Real
+from typing import Literal
 
 import torch
 from jaxtyping import Bool, Float, Int
@@ -27,6 +28,7 @@ from jaxtyping import Bool, Float, Int
 from physicsnemo.core.function_spec import FunctionSpec
 
 from ._sobolev_torch_impl import sobolev_deform_points_torch
+from ._warp_impl import sobolev_deform_points_warp
 
 
 def _validate_scalar_options(
@@ -256,7 +258,7 @@ class SobolevDeformPoints(FunctionSpec):
     :math:`\bar m` is the mean positive lumped P1 vertex mass. :math:`K` is the
     P1 stiffness matrix, and :math:`\ell` is ``length_scale`` in the same
     physical units as ``points``. This uniform mass makes the forward filter
-    self-adjoint in PyTorch's Euclidean vertex coordinates. The reverse pass
+    self-adjoint in standard Euclidean vertex coordinates. The reverse pass
     therefore applies the same smoothing operator to the displacement
     adjoint. The solve uses a matrix-free Jacobi-preconditioned conjugate
     gradient method. Each ambient component is filtered independently.
@@ -288,8 +290,11 @@ class SobolevDeformPoints(FunctionSpec):
     tolerance : float or None, optional
         Positive relative residual tolerance. ``None`` selects ``1e-6`` for
         float32 and ``1e-10`` for float64. Default is ``None``.
-    implementation : {"torch"} or None, optional
-        Explicit backend. ``None`` selects Torch.
+    implementation : {"torch", "warp"} or None, optional
+        Explicit backend. ``None`` selects Torch on CPU. On CUDA, it selects
+        Warp for segments, triangles, and tetrahedra when available. It
+        otherwise selects Torch, with a one-time :class:`RuntimeWarning` when
+        Warp is unavailable. The Warp backend requires CUDA tensors.
 
     Returns
     -------
@@ -305,21 +310,32 @@ class SobolevDeformPoints(FunctionSpec):
         invalid.
     KeyError
         If ``implementation`` does not name a registered backend.
+    ImportError
+        If an explicitly requested backend is unavailable.
     RuntimeError
         If CUDA Graph capture is active or the forward or adjoint PCG solve
         does not reach ``tolerance`` within ``max_iterations``.
 
     Notes
     -----
-    Constant displacements are retained exactly when no points are fixed.
+    Constant displacements are retained to solver precision when no points are
+    fixed.
     Isolated points receive their raw displacement. The uniform mass scale is
     computed over all nonisolated vertices in the supplied topology.
 
-    The pure-Torch solve provides first-order gradients with respect to
-    ``points`` and ``displacement``. Its implicit reverse-mode derivative solves
-    the adjoint of the forward Helmholtz system. This is not an identity-valued
-    surrogate gradient. Higher-order gradients are not supported for a
-    positive length scale.
+    Both backends provide first-order gradients with respect to ``points`` and
+    ``displacement``. Their implicit reverse-mode derivatives solve the
+    adjoint of the forward Helmholtz system. This is not an identity-valued
+    surrogate gradient. The Warp backend evaluates the geometry
+    vector-Jacobian product analytically because Warp's supplied linear
+    solvers do not generate automatic backward kernels. Higher-order gradients
+    are not supported for a positive length scale.
+
+    The Warp backend supports segments, triangles, and tetrahedra. The Torch
+    backend also supports higher-dimensional simplices. Default dispatch keeps
+    higher-dimensional CUDA simplices on Torch.
+    Warp CUDA assembly and geometry pullback use atomic accumulation, so
+    results and point gradients may vary at roundoff between runs.
 
     Forward and backward each run at most ``max_iterations`` matrix-free PCG
     steps. A nonconverged solve raises an error instead of returning an
@@ -328,7 +344,59 @@ class SobolevDeformPoints(FunctionSpec):
     self-intersecting output cells.
     """
 
-    @FunctionSpec.register(name="torch", rank=0, baseline=True)
+    @FunctionSpec.register(name="warp", required_imports=("warp>=1.14.0",), rank=0)
+    def warp_forward(
+        points: Float[torch.Tensor, "*batch num_points num_dims"],
+        cells: Int[torch.Tensor, "num_cells num_cell_points"],
+        displacement: Float[torch.Tensor, "*batch num_points num_dims"],
+        *,
+        length_scale: float,
+        fixed_points: Bool[torch.Tensor, "*batch num_points"] | None = None,
+        max_iterations: int = 128,
+        tolerance: float | None = None,
+    ) -> Float[torch.Tensor, "*batch num_points num_dims"]:
+        """Apply Sobolev deformation with the Warp CUDA backend."""
+
+        if (
+            isinstance(points, torch.Tensor)
+            and points.is_cuda
+            and not torch.compiler.is_compiling()
+            and torch.cuda.is_current_stream_capturing()
+        ):
+            raise RuntimeError(
+                "Sobolev deformation is not supported during CUDA Graph capture "
+                "because P1 operator assembly and solver diagnostics are not "
+                "capture-safe"
+            )
+
+        points_b3, cells, displacement_b3, fixed_b2, was_unbatched = (
+            _normalize_sobolev_inputs(
+                points,
+                cells,
+                displacement,
+                fixed_points,
+            )
+        )
+        if points_b3.device.type != "cuda":
+            raise ValueError("the Warp Sobolev backend requires CUDA tensors")
+        length_scale, max_iterations, tolerance = _validate_scalar_options(
+            length_scale,
+            max_iterations,
+            tolerance,
+            points_b3.dtype,
+        )
+        output = sobolev_deform_points_warp(
+            points_b3,
+            cells,
+            displacement_b3,
+            fixed_b2,
+            length_scale=length_scale,
+            max_iterations=max_iterations,
+            tolerance=tolerance,
+        )
+        return output.squeeze(0) if was_unbatched else output
+
+    @FunctionSpec.register(name="torch", rank=1, baseline=True)
     def torch_forward(
         points: Float[torch.Tensor, "*batch num_points num_dims"],
         cells: Int[torch.Tensor, "num_cells num_cell_points"],
@@ -377,6 +445,50 @@ class SobolevDeformPoints(FunctionSpec):
             tolerance=tolerance,
         )
         return output.squeeze(0) if was_unbatched else output
+
+    @classmethod
+    def dispatch(
+        cls,
+        points: Float[torch.Tensor, "*batch num_points num_dims"],
+        cells: Int[torch.Tensor, "num_cells num_cell_points"],
+        displacement: Float[torch.Tensor, "*batch num_points num_dims"],
+        *,
+        length_scale: float,
+        fixed_points: Bool[torch.Tensor, "*batch num_points"] | None = None,
+        max_iterations: int = 128,
+        tolerance: float | None = None,
+        implementation: Literal["torch", "warp"] | None = None,
+    ) -> Float[torch.Tensor, "*batch num_points num_dims"]:
+        """Select Warp for CUDA inputs and Torch for CPU inputs by default."""
+
+        if implementation is None:
+            impls = cls._get_impls()
+            warp_impl = impls.get("warp")
+            if isinstance(points, torch.Tensor) and points.is_cuda:
+                warp_cells = (
+                    isinstance(cells, torch.Tensor)
+                    and cells.ndim == 2
+                    and cells.shape[-1] in (2, 3, 4)
+                )
+                if not warp_cells:
+                    implementation = "torch"
+                elif warp_impl is not None and warp_impl.available:
+                    implementation = "warp"
+                else:
+                    cls._warn_fallback(warp_impl, impls["torch"])
+                    implementation = "torch"
+            else:
+                implementation = "torch"
+        return super().dispatch(
+            points,
+            cells,
+            displacement,
+            length_scale=length_scale,
+            fixed_points=fixed_points,
+            max_iterations=max_iterations,
+            tolerance=tolerance,
+            implementation=implementation,
+        )
 
     @classmethod
     def make_inputs_forward(cls, device: torch.device | str = "cpu"):

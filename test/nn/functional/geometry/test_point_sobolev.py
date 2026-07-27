@@ -96,7 +96,7 @@ def test_public_exports_and_signature():
     assert geometry.SobolevDeformPoints is SobolevDeformPoints
     assert deform.SobolevDeformPoints is SobolevDeformPoints
     assert issubclass(SobolevDeformPoints, FunctionSpec)
-    assert SobolevDeformPoints.implementations() == ("torch",)
+    assert SobolevDeformPoints.implementations() == ("warp", "torch")
     assert not hasattr(functional, "SobolevDeformPoints")
     for module in (functional, geometry, deform):
         assert "sobolev_deform_points" in module.__all__
@@ -126,6 +126,86 @@ def test_public_exports_and_signature():
     assert signature.parameters["max_iterations"].default == 128
     assert signature.parameters["tolerance"].default is None
     assert signature.parameters["implementation"].default is None
+    assert "warp" in str(signature.parameters["implementation"].annotation)
+
+
+def test_default_dispatch_selects_device_backend(device, monkeypatch):
+    sobolev_module = importlib.import_module(
+        "physicsnemo.nn.functional.geometry.deform.sobolev"
+    )
+    device = torch.device(device)
+    points = torch.tensor([[0.0, 0.0], [1.0, 0.0]], device=device)
+    cells = torch.tensor([[0, 1]], device=device)
+    displacement = torch.zeros_like(points)
+    calls = []
+
+    def torch_spy(normalized_points, *_args, **_kwargs):
+        calls.append("torch")
+        return normalized_points
+
+    def warp_spy(normalized_points, *_args, **_kwargs):
+        calls.append("warp")
+        return normalized_points
+
+    monkeypatch.setattr(
+        sobolev_module,
+        "sobolev_deform_points_torch",
+        torch_spy,
+    )
+    monkeypatch.setattr(
+        sobolev_module,
+        "sobolev_deform_points_warp",
+        warp_spy,
+    )
+
+    warp_impl = SobolevDeformPoints._get_impls()["warp"]
+    expected = "warp" if device.type == "cuda" and warp_impl.available else "torch"
+    output = sobolev_deform_points(
+        points,
+        cells,
+        displacement,
+        length_scale=0.2,
+    )
+    assert calls == [expected]
+    torch.testing.assert_close(output, points)
+
+    if device.type == "cuda" and warp_impl.available:
+        calls.clear()
+        higher_dimensional_points = torch.zeros((5, 4), device=device)
+        higher_dimensional_cells = torch.arange(5, device=device).reshape(1, 5)
+        output = sobolev_deform_points(
+            higher_dimensional_points,
+            higher_dimensional_cells,
+            torch.zeros_like(higher_dimensional_points),
+            length_scale=0.2,
+        )
+        assert calls == ["torch"]
+        torch.testing.assert_close(output, higher_dimensional_points)
+
+        calls.clear()
+        unavailable_warp = type(warp_impl)(
+            name=warp_impl.name,
+            func=warp_impl.func,
+            required_imports=warp_impl.required_imports,
+            rank=warp_impl.rank,
+            baseline=warp_impl.baseline,
+            available=False,
+        )
+        monkeypatch.setitem(
+            SobolevDeformPoints._get_impls(),
+            "warp",
+            unavailable_warp,
+        )
+        FunctionSpec._fallback_warned.discard(SobolevDeformPoints._class_key())
+        with pytest.warns(RuntimeWarning, match="falling back to implementation"):
+            output = sobolev_deform_points(
+                points,
+                cells,
+                displacement,
+                length_scale=0.2,
+            )
+        assert calls == ["torch"]
+        torch.testing.assert_close(output, points)
 
 
 def test_single_segment_has_analytic_solution():
@@ -462,23 +542,218 @@ def test_batched_shared_topology_matches_independent_calls(device):
     torch.testing.assert_close(batched, independent, atol=2.0e-5, rtol=2.0e-5)
 
 
-def test_empty_topology_is_dense_deformation():
-    points = torch.tensor([[0.0, 0.0], [1.0, 2.0]], requires_grad=True)
-    displacement = torch.tensor(
-        [[0.2, -0.1], [-0.3, 0.4]],
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+@pytest.mark.parametrize("simplex", ["segment", "triangle", "tetrahedron"])
+@pytest.mark.parametrize("use_fixed_points", [False, True])
+def test_warp_matches_torch_forward_and_first_gradients(
+    device,
+    dtype,
+    simplex,
+    use_fixed_points,
+):
+    """Warp matches the Torch P1 solve and its implicit adjoint."""
+
+    device = torch.device(device)
+    if device.type != "cuda":
+        pytest.skip("the Warp Sobolev backend requires CUDA")
+    pytest.importorskip("warp")
+
+    if simplex == "segment":
+        base_points = [
+            [0.0, 0.0],
+            [0.3, 0.1],
+            [1.1, -0.05],
+            [1.8, 0.4],
+            [2.5, -0.2],
+        ]
+        cells = [[0, 1], [1, 2], [2, 3]]
+    elif simplex == "triangle":
+        base_points = [
+            [0.0, 0.0, 0.0],
+            [1.2, 0.1, 0.2],
+            [0.8, 1.0, -0.1],
+            [-0.2, 0.7, 0.3],
+            [2.0, 1.8, -0.4],
+        ]
+        cells = [[0, 1, 2], [0, 2, 3]]
+    else:
+        base_points = [
+            [0.0, 0.0, 0.0],
+            [1.1, 0.1, 0.0],
+            [0.2, 0.9, 0.1],
+            [0.1, 0.2, 1.2],
+            [2.0, -0.5, 0.7],
+        ]
+        cells = [[0, 1, 2, 3]]
+
+    points_0 = torch.tensor(base_points, device=device, dtype=dtype)
+    points = torch.stack((points_0, 1.35 * points_0 + 0.2))
+    cells_t = torch.tensor(cells, device=device, dtype=torch.long)
+    values = torch.arange(points.numel(), device=device, dtype=dtype).reshape_as(points)
+    displacement = 0.15 * torch.sin(0.7 * values + 0.3)
+    cotangent = torch.cos(0.4 * values - 0.2)
+    fixed_points = None
+    if use_fixed_points:
+        fixed_points = torch.tensor(
+            [[True, False, False, False, False], [False, False, True, False, True]],
+            device=device,
+        )
+
+    def evaluate(implementation):
+        point_values = points.detach().clone().requires_grad_(True)
+        displacement_values = displacement.detach().clone().requires_grad_(True)
+        output = sobolev_deform_points(
+            point_values,
+            cells_t,
+            displacement_values,
+            length_scale=0.35,
+            fixed_points=fixed_points,
+            max_iterations=128,
+            tolerance=2.0e-6 if dtype == torch.float32 else 1.0e-11,
+            implementation=implementation,
+        )
+        gradients = torch.autograd.grad(
+            (output * cotangent).sum(),
+            (point_values, displacement_values),
+        )
+        return output, gradients
+
+    expected_output, expected_gradients = evaluate("torch")
+    actual_output, actual_gradients = evaluate("warp")
+    if dtype == torch.float32:
+        atol, rtol = 6.0e-5, 6.0e-5
+    else:
+        atol, rtol = 2.0e-9, 2.0e-8
+    torch.testing.assert_close(
+        actual_output,
+        expected_output,
+        atol=atol,
+        rtol=rtol,
+    )
+    for actual, expected in zip(
+        actual_gradients,
+        expected_gradients,
+        strict=True,
+    ):
+        torch.testing.assert_close(actual, expected, atol=atol, rtol=rtol)
+
+
+def test_warp_restarts_from_true_residual_in_float32(device):
+    """Residual replacement reaches the requested float32 tolerance."""
+
+    device = torch.device(device)
+    if device.type != "cuda":
+        pytest.skip("the Warp Sobolev backend requires CUDA")
+    pytest.importorskip("warp")
+
+    num_points = 130
+    x = torch.linspace(0, 3, num_points - 1, device=device)
+    points = torch.cat((x, x.new_tensor([9.0]))).reshape(1, num_points, 1)
+    points.requires_grad_()
+    cells = torch.stack(
+        (
+            torch.arange(num_points - 2, device=device),
+            torch.arange(1, num_points - 1, device=device),
+        ),
+        dim=-1,
+    )
+    generator = torch.Generator(device=device).manual_seed(7301)
+    displacement = 0.1 * torch.randn(
+        points.shape,
+        generator=generator,
+        device=device,
+    )
+    displacement.requires_grad_()
+    fixed_points = torch.zeros((1, num_points), device=device, dtype=torch.bool)
+    fixed_points[:, ::17] = True
+
+    output = sobolev_deform_points(
+        points,
+        cells,
+        displacement,
+        length_scale=0.18,
+        fixed_points=fixed_points,
+        max_iterations=512,
+        tolerance=1.0e-6,
+        implementation="warp",
+    )
+    gradients = torch.autograd.grad(
+        output.square().mean(),
+        (points, displacement),
+    )
+
+    assert torch.isfinite(output).all()
+    assert all(torch.isfinite(gradient).all() for gradient in gradients)
+
+
+def test_warp_relative_tolerance_handles_tiny_fields(device):
+    device = torch.device(device)
+    if device.type != "cuda":
+        pytest.skip("the Warp Sobolev backend requires CUDA")
+    pytest.importorskip("warp")
+
+    points = torch.linspace(0, 1, 9, dtype=torch.float64, device=device)
+    points = points.reshape(-1, 1).requires_grad_()
+    cells = torch.stack(
+        (torch.arange(8, device=device), torch.arange(1, 9, device=device)),
+        dim=-1,
+    )
+    displacement = 1.0e-35 * torch.sin(7 * points.detach())
+    displacement.requires_grad_()
+    output = sobolev_deform_points(
+        points,
+        cells,
+        displacement,
+        length_scale=0.2,
+        max_iterations=128,
+        tolerance=1.0e-10,
+        implementation="warp",
+    )
+    output_adjoint = torch.full_like(output, 1.0e-35)
+    gradients = torch.autograd.grad(
+        output,
+        (points, displacement),
+        output_adjoint,
+    )
+
+    assert all(torch.isfinite(gradient).all() for gradient in gradients)
+
+
+@pytest.mark.parametrize(
+    ("implementation", "device_name"),
+    [("torch", "cpu"), ("warp", "cuda")],
+)
+def test_empty_topology_is_dense_deformation(implementation, device_name):
+    if device_name == "cuda" and not torch.cuda.is_available():
+        pytest.skip("the Warp Sobolev backend requires CUDA")
+    device = torch.device(device_name)
+    points = torch.tensor(
+        [[0.0, 0.0], [1.0, 2.0]],
+        device=device,
         requires_grad=True,
     )
-    cells = torch.empty((0, 2), dtype=torch.long)
+    displacement = torch.tensor(
+        [[0.2, -0.1], [-0.3, 0.4]],
+        device=device,
+        requires_grad=True,
+    )
+    cells = torch.empty((0, 2), dtype=torch.long, device=device)
 
     output = sobolev_deform_points(
         points,
         cells,
         displacement,
         length_scale=10.0,
-        implementation="torch",
+        implementation=implementation,
+    )
+    point_gradient, displacement_gradient = torch.autograd.grad(
+        output.sum(),
+        (points, displacement),
     )
 
     assert torch.equal(output, points + displacement)
+    assert torch.equal(point_gradient, torch.ones_like(points))
+    assert torch.equal(displacement_gradient, torch.ones_like(displacement))
 
 
 def test_gradcheck_with_respect_to_points_and_displacement():
@@ -516,10 +791,19 @@ def test_gradcheck_with_respect_to_points_and_displacement():
     )
 
 
-def test_torch_compile_fullgraph_forward_and_backward():
-    cells = torch.tensor([[0, 1], [1, 2]])
-    base_points = torch.tensor([[0.0], [0.5], [1.0]])
-    base_displacement = torch.tensor([[0.1], [-0.2], [0.3]])
+@pytest.mark.parametrize(
+    ("implementation", "device_name"),
+    [("torch", "cpu"), ("warp", "cuda")],
+)
+def test_torch_compile_fullgraph_forward_and_backward(implementation, device_name):
+    if device_name == "cuda" and not torch.cuda.is_available():
+        pytest.skip("the Warp Sobolev backend requires CUDA")
+    if implementation == "warp":
+        pytest.importorskip("warp")
+    device = torch.device(device_name)
+    cells = torch.tensor([[0, 1], [1, 2]], device=device)
+    base_points = torch.tensor([[0.0], [0.5], [1.0]], device=device)
+    base_displacement = torch.tensor([[0.1], [-0.2], [0.3]], device=device)
 
     def operation(points: torch.Tensor, displacement: torch.Tensor):
         return sobolev_deform_points(
@@ -528,7 +812,7 @@ def test_torch_compile_fullgraph_forward_and_backward():
             displacement,
             length_scale=0.2,
             max_iterations=16,
-            implementation="torch",
+            implementation=implementation,
         )
 
     def evaluate(function):
@@ -608,14 +892,28 @@ def test_torch_compile_one_fullgraph_handles_dynamic_meshes_and_scalars():
     assert len(compiled_graphs) == 1
 
 
-def test_public_api_propagates_fake_tensors():
+@pytest.mark.parametrize(
+    ("implementation", "device_name"),
+    [("torch", "cpu"), ("warp", "cuda")],
+)
+def test_public_api_propagates_fake_tensors(implementation, device_name):
     from torch._subclasses.fake_tensor import FakeTensor, FakeTensorMode
 
+    if device_name == "cuda" and not torch.cuda.is_available():
+        pytest.skip("the Warp Sobolev backend requires CUDA")
     with FakeTensorMode():
-        points = torch.empty((2, 5, 2), dtype=torch.float64)
-        cells = torch.empty((4, 2), dtype=torch.long)
+        points = torch.empty(
+            (2, 5, 2),
+            dtype=torch.float64,
+            device=device_name,
+        )
+        cells = torch.empty((4, 2), dtype=torch.long, device=device_name)
         displacement = torch.empty_like(points)
-        fixed_points = torch.empty((2, 5), dtype=torch.bool)
+        fixed_points = torch.empty(
+            (2, 5),
+            dtype=torch.bool,
+            device=device_name,
+        )
         output = sobolev_deform_points(
             points,
             cells,
@@ -624,7 +922,7 @@ def test_public_api_propagates_fake_tensors():
             fixed_points=fixed_points,
             max_iterations=8,
             tolerance=1.0e-6,
-            implementation="torch",
+            implementation=implementation,
         )
 
     assert isinstance(output, FakeTensor)
@@ -633,7 +931,8 @@ def test_public_api_propagates_fake_tensors():
     assert output.device == points.device
 
 
-def test_sobolev_deform_points_rejects_cuda_graph_capture(device):
+@pytest.mark.parametrize("implementation", ["torch", "warp", None])
+def test_sobolev_deform_points_rejects_cuda_graph_capture(device, implementation):
     device = torch.device(device)
     if device.type != "cuda":
         pytest.skip("CUDA Graph capture requires CUDA")
@@ -655,7 +954,7 @@ def test_sobolev_deform_points_rejects_cuda_graph_capture(device):
         displacement,
         length_scale=0.1,
         max_iterations=32,
-        implementation="torch",
+        implementation=implementation,
     )
     torch.cuda.synchronize(device)
     graph = torch.cuda.CUDAGraph()
@@ -675,7 +974,7 @@ def test_sobolev_deform_points_rejects_cuda_graph_capture(device):
                     displacement,
                     length_scale=0.1,
                     max_iterations=32,
-                    implementation="torch",
+                    implementation=implementation,
                 )
 
 
@@ -817,4 +1116,37 @@ def test_validates_solver_and_boundary_inputs():
             displacement,
             length_scale=1.0,
             implementation="torch",
+        )
+
+
+def test_warp_backend_rejects_cpu_tensors():
+    pytest.importorskip("warp")
+    points = torch.tensor([[0.0], [1.0]])
+    cells = torch.tensor([[0, 1]])
+
+    with pytest.raises(ValueError, match="requires CUDA"):
+        sobolev_deform_points(
+            points,
+            cells,
+            torch.zeros_like(points),
+            length_scale=0.2,
+            implementation="warp",
+        )
+
+
+def test_warp_backend_rejects_higher_dimensional_simplices(device):
+    device = torch.device(device)
+    if device.type != "cuda":
+        pytest.skip("the Warp Sobolev backend requires CUDA")
+    pytest.importorskip("warp")
+    points = torch.eye(5, 4, device=device)
+    cells = torch.arange(5, device=device).reshape(1, 5)
+
+    with pytest.raises(ValueError, match="segment, triangle, and tetrahedron"):
+        sobolev_deform_points(
+            points,
+            cells,
+            torch.zeros_like(points),
+            length_scale=0.2,
+            implementation="warp",
         )

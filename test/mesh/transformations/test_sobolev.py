@@ -78,6 +78,7 @@ def test_sobolev_deform_namespace_and_mesh_method():
         "implementation",
     ]
     assert signature.parameters["length_scale"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert "warp" in str(signature.parameters["implementation"].annotation)
 
 
 def test_mesh_wrapper_resolves_fields_and_preserves_attached_data():

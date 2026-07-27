@@ -126,7 +126,6 @@ def objective(
             length_scale=0.18,
             fixed_points=fixed_points,
             max_iterations=128,
-            implementation="torch",
         )
     else:
         free_displacement = torch.where(

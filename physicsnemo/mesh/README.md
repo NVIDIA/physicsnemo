@@ -438,10 +438,11 @@ accuracy.
 Sobolev deformation solves `(M + length_scale² K) u = M d` with a P1 stiffness
 operator and uniform vertex mass scaled by the mean positive lumped P1 mass.
 The length scale uses the same coordinate units as the mesh. The resulting
-filter is self-adjoint in PyTorch's Euclidean vertex coordinates, so autograd
+filter is self-adjoint in standard Euclidean vertex coordinates, so autograd
 applies the same smoothing to sensitivities with respect to the raw
 per-vertex displacement. Use `fixed_points` to impose zero displacement at
-selected vertices.
+selected vertices. CUDA segments, triangles, and tetrahedra use Warp by
+default. CPU meshes and higher-dimensional simplices use Torch.
 
 ### Subdivision
 

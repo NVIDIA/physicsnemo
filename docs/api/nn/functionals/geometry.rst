@@ -60,18 +60,23 @@ by the mean positive lumped P1 mass. It solves
 ``length_scale`` is :math:`\ell` in the same physical units as ``points``.
 Zero recovers ordinary dense displacement. Larger values attenuate
 short-wavelength changes in the raw displacement and its reverse-mode
-sensitivity. The uniform mass makes this filter self-adjoint in PyTorch's
+sensitivity. The uniform mass makes this filter self-adjoint in standard
 Euclidean vertex coordinates.
 
 ``fixed_points`` is an optional boolean vertex mask. True entries impose zero
 Dirichlet displacement. Boundaries without a fixed mask use the natural
-homogeneous Neumann condition. The pure-Torch matrix-free solve supports one
-mesh or a batch of point tensors that share ``cells``. It is differentiable
-with respect to ``points`` and ``displacement``. Positive length scales support
+homogeneous Neumann condition. The Torch and Warp matrix-free solves support
+one mesh or a batch of point tensors that share ``cells``. Both are
+differentiable with respect to ``points`` and ``displacement``. The Warp
+backend runs on CUDA and uses an explicit implicit-adjoint backward with an
+analytic geometry vector-Jacobian product. CUDA segments, triangles, and
+tetrahedra select Warp by default when it is available. CPU inputs and
+higher-dimensional simplices select Torch. Positive length scales support
 first-order reverse-mode differentiation. Higher-order derivatives are not
 supported. The operation raises an error when a forward or adjoint solve does
 not converge within ``max_iterations``. CUDA Graph capture is not supported
 because P1 operator assembly and solver diagnostics are not capture-safe.
+Warp CUDA results and point gradients may vary at roundoff between runs.
 
 Sparse Control-Point Morphing
 -----------------------------

@@ -42,7 +42,7 @@ def sobolev_deform(
     fixed_points: str | tuple[str, ...] | Bool[torch.Tensor, " n_points"] | None = None,
     max_iterations: int = 128,
     tolerance: float | None = None,
-    implementation: Literal["torch"] | None = None,
+    implementation: Literal["torch", "warp"] | None = None,
 ) -> "Mesh":
     r"""Deform a mesh with a uniform-mass P1 Sobolev displacement.
 
@@ -84,8 +84,11 @@ def sobolev_deform(
     tolerance : float or None, optional
         Positive relative residual tolerance. ``None`` selects a
         dtype-dependent default. Default is ``None``.
-    implementation : {"torch"} or None, optional
-        Backend override. ``None`` selects Torch.
+    implementation : {"torch", "warp"} or None, optional
+        Backend override. ``None`` selects Torch on CPU. On CUDA, it selects
+        Warp for segments, triangles, and tetrahedra when available. It
+        otherwise selects Torch, with a one-time :class:`RuntimeWarning` when
+        Warp is unavailable. The Warp backend requires CUDA tensors.
 
     Returns
     -------
@@ -99,11 +102,15 @@ def sobolev_deform(
     Constant displacements are retained when no points are fixed. Isolated
     points receive their raw displacement.
 
-    The solve participates in autograd through both the source points and the
-    raw displacement. Its reverse-mode derivative is the adjoint of the
-    forward Helmholtz solve, which makes it suitable for smooth vertex-based
-    optimization. A forward or adjoint solve that does not reach ``tolerance``
-    within ``max_iterations`` raises a :class:`RuntimeError`.
+    Both backends participate in autograd through the source points and the raw
+    displacement. Their reverse-mode derivatives solve the adjoint Helmholtz
+    system, which makes the operation suitable for smooth vertex-based
+    optimization. The Warp backend evaluates the geometry vector-Jacobian
+    product analytically. A forward or adjoint solve that does not reach
+    ``tolerance`` within ``max_iterations`` raises a :class:`RuntimeError`.
+    Warp supports segment, triangle, and tetrahedron cells. Higher-dimensional
+    simplices use Torch by default.
+    Warp CUDA results and point gradients may vary at roundoff between runs.
     CUDA Graph capture is not supported because P1 operator assembly and
     solver diagnostics are not capture-safe.
 

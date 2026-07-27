@@ -85,7 +85,7 @@ Sobolev-Filtered Deformation
 
 Here :math:`M=\bar m I` is a uniform vertex mass matrix scaled by the mean
 positive lumped P1 mass, and :math:`K` is the P1 stiffness matrix. The uniform
-mass makes the filter self-adjoint in PyTorch's Euclidean vertex coordinates,
+mass makes the filter self-adjoint in standard Euclidean vertex coordinates,
 so the same operator smooths the displacement and its adjoint.
 ``length_scale`` is :math:`\ell` in the same physical units as
 ``mesh.points``. Larger values suppress variation over longer distances. A
@@ -121,16 +121,20 @@ independently.
 ``fixed_points`` accepts a boolean point mask or a point-data key. True entries
 receive zero displacement, which imposes a homogeneous Dirichlet condition.
 Other mesh boundaries use the natural homogeneous Neumann condition. With no
-fixed points, constant displacements pass through unchanged.
+fixed points, constant displacements pass through to solver precision.
 
-The pure-Torch implementation uses matrix-free preconditioned conjugate
-gradients. ``max_iterations`` and ``tolerance`` control the iterative solve.
-The operation raises an error if either the forward or adjoint solve does not
-reach the requested tolerance. At positive length scales, cells must be
-finite, nondegenerate simplices. Isolated points receive their raw
-displacement.
+The Torch and Warp implementations use matrix-free preconditioned conjugate
+gradients. The Warp implementation runs on CUDA and supplies an explicit
+implicit-adjoint backward with an analytic geometry vector-Jacobian product.
+By default, CUDA segments, triangles, and tetrahedra select Warp when it is
+available. CPU meshes and higher-dimensional simplices select Torch.
+``max_iterations`` and ``tolerance`` control the iterative solve. The operation
+raises an error if either the forward or adjoint solve does not reach the
+requested tolerance. At positive length scales, cells must be finite,
+nondegenerate simplices. Isolated points receive their raw displacement.
 CUDA Graph capture is not supported because P1 operator assembly and solver
-diagnostics are not capture-safe. ``torch.compile`` is supported.
+diagnostics are not capture-safe. Both backends support ``torch.compile``.
+Warp CUDA results and point gradients may vary at roundoff between runs.
 
 .. rubric:: Before and After
 

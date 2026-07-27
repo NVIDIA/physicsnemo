@@ -217,8 +217,9 @@ a noisy target and checks that:
 - The Sobolev adjoint varies more smoothly between neighboring vertices.
 - Fixed boundary vertices do not move.
 
-The example selects CUDA when available and otherwise runs on CPU. It has no
-plotting dependency.
+The example selects CUDA when available and otherwise runs on CPU. CUDA
+segments, triangles, and tetrahedra use the Warp backend by default. CPU
+meshes use Torch. The example has no plotting dependency.
 
 The API guide includes a generated before-and-after visualization of the raw
 and Sobolev-filtered vertex adjoint. The reproducible figure source is
