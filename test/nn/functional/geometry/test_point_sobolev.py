@@ -892,6 +892,109 @@ def test_torch_compile_one_fullgraph_handles_dynamic_meshes_and_scalars():
     assert len(compiled_graphs) == 1
 
 
+def test_torch_compile_runtime_zero_length_uses_exact_dense_branch():
+    compiled_graphs = []
+
+    def operation(points, cells, displacement, fixed_points, length_scale):
+        return sobolev_deform_points(
+            points,
+            cells,
+            displacement,
+            length_scale=length_scale,
+            fixed_points=fixed_points,
+            max_iterations=16,
+            tolerance=1.0e-12,
+            implementation="torch",
+        )
+
+    def counting_backend(graph_module, _example_inputs):
+        compiled_graphs.append(graph_module)
+        return graph_module.forward
+
+    compiled = torch.compile(
+        operation,
+        fullgraph=True,
+        dynamic=True,
+        backend=counting_backend,
+    )
+    cells = torch.tensor([[0, 1], [1, 2]])
+    fixed_points = torch.tensor([False, True, False])
+    valid_points = torch.tensor([[0.0], [0.5], [1.0]], dtype=torch.float64)
+    displacement = torch.tensor([[0.2], [-0.3], [0.4]], dtype=torch.float64)
+
+    for length_scale in (0.2, 0.3):
+        compiled(
+            valid_points.clone().requires_grad_(),
+            cells,
+            displacement.clone().requires_grad_(),
+            fixed_points,
+            length_scale,
+        )
+    assert len(compiled_graphs) == 1
+
+    points = torch.zeros_like(valid_points, requires_grad=True)
+    displacement = displacement.clone().requires_grad_()
+    output = compiled(
+        points,
+        cells,
+        displacement,
+        fixed_points,
+        0.0,
+    )
+    weighted_displacement = torch.where(
+        (~fixed_points).unsqueeze(-1),
+        displacement,
+        torch.zeros_like(displacement),
+    )
+    assert torch.equal(output, points + weighted_displacement)
+    assert len(compiled_graphs) == 2
+
+    loss = output.square().sum()
+    first_gradients = torch.autograd.grad(
+        loss,
+        (points, displacement),
+        create_graph=True,
+    )
+    second_loss = sum(gradient.square().sum() for gradient in first_gradients)
+    second_gradients = torch.autograd.grad(
+        second_loss,
+        (points, displacement),
+    )
+
+    reference_points = points.detach().clone().requires_grad_()
+    reference_displacement = displacement.detach().clone().requires_grad_()
+    reference_output = reference_points + torch.where(
+        (~fixed_points).unsqueeze(-1),
+        reference_displacement,
+        torch.zeros_like(reference_displacement),
+    )
+    reference_first_gradients = torch.autograd.grad(
+        reference_output.square().sum(),
+        (reference_points, reference_displacement),
+        create_graph=True,
+    )
+    reference_second_loss = sum(
+        gradient.square().sum() for gradient in reference_first_gradients
+    )
+    reference_second_gradients = torch.autograd.grad(
+        reference_second_loss,
+        (reference_points, reference_displacement),
+    )
+
+    for actual, expected in zip(
+        first_gradients,
+        reference_first_gradients,
+        strict=True,
+    ):
+        torch.testing.assert_close(actual, expected)
+    for actual, expected in zip(
+        second_gradients,
+        reference_second_gradients,
+        strict=True,
+    ):
+        torch.testing.assert_close(actual, expected)
+
+
 @pytest.mark.parametrize(
     ("implementation", "device_name"),
     [("torch", "cpu"), ("warp", "cuda")],

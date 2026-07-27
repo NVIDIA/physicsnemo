@@ -438,13 +438,7 @@ def sobolev_deform_points_torch(
         displacement,
         torch.zeros_like(displacement),
     )
-    if torch.compiler.is_compiling():
-        from torch.fx.experimental.symbolic_shapes import statically_known_true
-
-        zero_length_scale = statically_known_true(length_scale == 0)
-    else:
-        zero_length_scale = length_scale == 0
-    if zero_length_scale:
+    if length_scale == 0:
         return points + weighted_displacement
 
     filtered_displacement = _SobolevDisplacement.apply(
