@@ -34,7 +34,7 @@ machinery.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import torch
 from tensordict import TensorDict, TensorDictBase
@@ -114,12 +114,18 @@ def install_legacy_memmap_reader(cls: type) -> None:
         ### split across devices. Moving the whole result is a no-op for
         ### entries already in the right place.
         result = cls._from_tensordict(
-            TensorDict.load_memmap(
-                legacy_payload, out=_payload_of(out), robust_key=robust_key
-            )
+            TensorDict.load_memmap(legacy_payload, robust_key=robust_key)
         )
         if device is not None:
             result = result.to(device, non_blocking=non_blocking)
+        if out is not None:
+            payload = cast(TensorDictBase, _payload_of(out))
+            payload.update(
+                result._tensordict,
+                inplace=True,
+                non_blocking=non_blocking,
+            )
+            result = cls._from_tensordict(payload)
         return result
 
     def _load_memmap(

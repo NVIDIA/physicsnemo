@@ -324,6 +324,7 @@ Comprehensive overview of PhysicsNeMo-Mesh capabilities:
 | Arbitrary matrix transform | ✅ | |
 | Dense point displacement | ✅ | Aligned tensor or `point_data` key, with optional point weights |
 | Sparse control-point morphing | ✅ | Wendland-C2 compact support with scalar or per-control radii |
+| Global radial-basis deformation | ✅ | Thin-plate-spline field with an affine polynomial tail |
 | Extrusion | ✅ | Manifold → higher dimension |
 | Coordinate projection (drop ambient dims) | ✅ | `projections.project` (e.g. 3D → 2D embedding) |
 | Surface projection / mesh intersection | ❌ | Manifold → lower *manifold* dimension; work in progress |
@@ -374,7 +375,7 @@ mesh_rotated = mesh.rotate(axis=[0, 0, 1], angle=np.pi/4)
 mesh_scaled = mesh.scale(2.0)  # Or [2.0, 1.0, 0.5] for anisotropic
 ```
 
-### Dense and Sparse Morphing
+### Dense and Sparse Deformation
 
 ```python
 import torch
@@ -396,14 +397,35 @@ morphed = mesh.morph(
     control_displacements,
     radius=0.4 * extent.norm(),
 )
+
+# Global radial-basis deformation: use D + 1 affinely independent box controls
+if torch.any(extent == 0):
+    raise ValueError("RBF example requires nonzero mesh extent in every dimension")
+box_origin = mesh.points.amin(dim=0)
+rbf_controls = torch.cat(
+    (box_origin.unsqueeze(0), box_origin.unsqueeze(0) + torch.diag(extent))
+)
+rbf_displacements = torch.zeros_like(rbf_controls)
+rbf_displacements[-1, -1] = 0.1 * extent.norm()
+rbf_deformed = mesh.radial_basis_function_deform(
+    rbf_controls,
+    rbf_displacements,
+    kernel="thin_plate_spline",
+)
 ```
 
 Tensor-valued radii must remain finite and strictly positive. For a learned
 radius, use a positive parameterization such as
-`torch.nn.functional.softplus(raw_radius) + radius_epsilon`; tensor radius
+`torch.nn.functional.softplus(raw_radius) + radius_epsilon`. Tensor radius
 values are not validated at runtime. Floating `point_weights` are applied as
 supplied and may be signed or greater than one. The current morphing kernel is
 `"wendland_c2"`, which is also the default.
+
+Thin-plate-spline radial-basis deformation has global support. With its default
+affine polynomial tail, `smoothing=0.0`, and a nonsingular control layout, it
+interpolates every control displacement up to solver precision. Positive
+smoothing adds diagonal regularization and deliberately relaxes interpolation
+accuracy.
 
 ### Subdivision
 

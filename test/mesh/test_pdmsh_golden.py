@@ -135,6 +135,22 @@ class TestPdmshGoldenFixture:
         assert (LEGACY_FIXTURE_DIR / "_tensordict").is_dir()
         assert not (CURRENT_FIXTURE_DIR / "_tensordict").exists()
 
+    def test_legacy_out_fills_nested_meshes(self):
+        """A preallocated output receives interior and boundary tensors."""
+        expected = build_canonical_domain_mesh()
+        out = expected._tensordict.apply(torch.zeros_like)
+
+        loaded = DomainMesh.load(LEGACY_FIXTURE_DIR, out=out)
+
+        assert loaded._tensordict is out
+        _assert_mesh_equal(loaded.interior, expected.interior, "interior")
+        for name in expected.boundaries.keys():
+            _assert_mesh_equal(
+                loaded.boundaries[name],
+                expected.boundaries[name],
+                f"boundaries.{name}",
+            )
+
     @pytest.mark.cuda
     def test_load_honors_device(self, fixture_dir: Path):
         """``device=`` reaches the interior and boundaries in both layouts."""

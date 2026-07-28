@@ -18,12 +18,15 @@
 
 from .deform import DisplacePoints, MorphPoints, displace_points, morph_points
 from .ffd import FreeFormDeformPoints, free_form_deform_points
+from .rbf import RadialBasisFunctionDeformPoints, radial_basis_function_deform_points
 
 __all__ = [
     "DisplacePoints",
     "FreeFormDeformPoints",
     "MorphPoints",
+    "RadialBasisFunctionDeformPoints",
     "displace_points",
     "free_form_deform_points",
     "morph_points",
+    "radial_basis_function_deform_points",
 ]

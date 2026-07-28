@@ -43,6 +43,7 @@ from .geometry import (
     mesh_poisson_disk_sample,
     mesh_to_voxel_fraction,
     morph_points,
+    radial_basis_function_deform_points,
     ray_mesh_intersect,
     remeshing,
     signed_distance_field,
@@ -65,6 +66,7 @@ from .rendering import (
     volume_render,
     wireframe_render,
 )
+from .weighted_multinomial import WeightedMultinomial, weighted_multinomial
 
 __all__ = [
     "displace_points",
@@ -90,6 +92,7 @@ __all__ = [
     "mesh_poisson_disk_sample",
     "mesh_to_voxel_fraction",
     "morph_points",
+    "radial_basis_function_deform_points",
     "na1d",
     "na2d",
     "na3d",
@@ -98,6 +101,8 @@ __all__ = [
     "radius_search",
     "real",
     "ray_mesh_intersect",
+    "WeightedMultinomial",
+    "weighted_multinomial",
     "remeshing",
     "rectilinear_grid_curl",
     "rectilinear_grid_divergence",

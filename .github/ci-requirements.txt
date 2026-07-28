@@ -29,18 +29,14 @@
 # Coupling notes (bump in lockstep):
 #   * Dockerfile lines 240-243 still use `>=` lower bounds for the
 #     pure-PyPI specs; tighten in a follow-up.
-#   * The PyG --find-links URL encodes the locked torch version (see
-#     uv.lock for torch 2.11.0+cu128).  PyG wheels carry a local-version
-#     label like `2.1.2+pt211cu128`; per PEP 440 that sorts above plain
-#     `2.1.2`, so a `==2.1.2` pin selects the CUDA wheel without us
-#     hard-coding the full local segment.
+#   * On a torch upgrade, bump the PyG --find-links URL and the
+#     `+pt211cu128` label on the PyG pins together.
 #
 # earth2grid is intentionally NOT installed: the source build is fragile
 # in the CI container.  HEALPix tests skip via @requires_module until
 # earth2grid ships a wheel or the build is fixed.
 
-# PyG CUDA wheel index.  Bump the torch-X.Y.Z+cu128 segment in lockstep
-# with the locked torch version.
+# PyG CUDA wheel index; the URL encodes the locked torch version.
 --find-links https://data.pyg.org/whl/torch-2.11.0+cu128.html
 
 # cuml-cu12 -> cudf -> numba caps numpy at <=2.2; uv.lock pins numpy
@@ -58,16 +54,19 @@ multi-storage-client[boto3]==0.48.0
 tensorstore==0.1.83
 pyarrow==24.0.0
 
-# PyG CUDA wheels.  The `gnns` extra installs CPU-only wheels via
-# `uv sync` (no CUDA toolchain visible at build time), which makes
-# torch_scatter.segment_csr / similar fail on CUDA tensors with
-# "Not compiled with CUDA support".  setup-uv-env passes
-# `--reinstall-package` for each of these four names so they're swapped
-# for the CUDA wheels from the --find-links index above; the rest of
-# the resolved closure is left alone (a bare `--reinstall` would refresh
-# every transitive dep too and break ABI compatibility with lockfile-
-# pinned packages like pyarrow / cudf / cuml).
-torch_scatter==2.1.2
-torch_sparse==0.6.18
-torch_cluster==1.6.3
-pyg_lib==0.6.0
+# PyG CUDA wheels.  `uv sync` installs the `gnns` extra as CPU-only
+# builds (no CUDA toolchain at build time), so CUDA tensors fail with
+# "Not compiled with CUDA support".  setup-uv-env swaps exactly these
+# four packages for the CUDA wheels via `--reinstall-package` (a bare
+# `--reinstall` would also refresh transitive deps and break ABI
+# compatibility with lockfile-pinned pyarrow / cudf / cuml).
+#
+# Keep the `+pt211cu128` label in the pins: PyPI rejects local versions,
+# so these pins can only be satisfied by the --find-links index above.
+# That blocks dependency confusion -- `pyg_lib` in particular is
+# unclaimed on PyPI (the team publishes there as `pyg_library`), so a
+# plain `==0.6.0` pin could match a squatted package.
+torch_scatter==2.1.2+pt211cu128
+torch_sparse==0.6.18+pt211cu128
+torch_cluster==1.6.3+pt211cu128
+pyg_lib==0.6.0+pt211cu128

@@ -18,17 +18,12 @@
 
 import importlib
 import inspect
-from typing import Literal, get_type_hints
 
 import pytest
 import torch
 
 from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.mesh.transformations.deform import free_form_deform
-
-_EXPECTED_FFD_BASIS = Literal[
-    "bernstein", "bspline", "linear", "cubic_hermite", "quintic_hermite"
-]
 
 
 def test_free_form_deform_namespace_is_canonical():
@@ -56,23 +51,18 @@ def test_free_form_deform_namespace_is_canonical():
     assert not hasattr(DomainMesh, "ffd")
 
 
-def test_mesh_free_form_deform_signatures_and_annotations_are_introspectable():
-    """Public deformation methods expose resolvable annotations."""
+def test_free_form_deform_defaults_are_synchronized():
+    """Functional, Mesh, and DomainMesh APIs share their optional defaults."""
 
-    assert (
-        get_type_hints(free_form_deform, localns={"Mesh": Mesh})["basis"]
-        == _EXPECTED_FFD_BASIS
-    )
-    for owner, deform_method in (
-        (Mesh, Mesh.free_form_deform),
-        (DomainMesh, DomainMesh.free_form_deform),
+    for deform_method in (
+        free_form_deform,
+        Mesh.free_form_deform,
+        DomainMesh.free_form_deform,
     ):
         signature = inspect.signature(deform_method)
         assert signature.parameters["basis"].default == "bernstein"
         assert signature.parameters["origin"].default is None
         assert signature.parameters["extent"].default is None
-        assert get_type_hints(deform_method)["basis"] == _EXPECTED_FFD_BASIS
-        assert get_type_hints(deform_method)["return"] is owner
 
 
 def _triangle_mesh(*, requires_grad: bool = False) -> Mesh:

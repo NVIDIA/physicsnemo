@@ -27,6 +27,7 @@ from physicsnemo.core.function_spec import FunctionSpec
 from physicsnemo.nn.functional.geometry.farthest_point_sampling import (
     farthest_point_sampling,
 )
+from physicsnemo.nn.functional.weighted_multinomial import weighted_multinomial
 from physicsnemo.utils._index_tuple_ops import unique_index_tuples
 
 from ._kernels import (
@@ -37,8 +38,6 @@ from ._kernels import (
 )
 
 wp.init()
-
-_WEIGHTED_SAMPLE_CHUNK_SIZE = 1 << 22
 
 
 def _wp_view(tensor: torch.Tensor, dtype):  # noqa: ANN001, ANN202
@@ -51,45 +50,17 @@ def _wp_view(tensor: torch.Tensor, dtype):  # noqa: ANN001, ANN202
     )
 
 
-def _weighted_sample_without_replacement(
+def _sample_remeshing_seeds(
     weights: torch.Tensor,
     count: int,
 ) -> torch.Tensor:
-    """Sample indices by an uncapped, chunked exponential race.
-
-    Each chunk contributes its local ``count`` smallest keys. The global
-    ``count`` smallest keys must be in that union, so the chunking reduces
-    temporary memory without changing the weighted-without-replacement draw.
-    """
-    if count == weights.shape[0]:
-        return torch.arange(weights.shape[0], device=weights.device)
-
+    """Sample remeshing seeds reproducibly with the shared weighted sampler."""
     generator = torch.Generator(device=weights.device).manual_seed(0)
-    candidate_keys = []
-    candidate_indices = []
-    tiny = torch.finfo(weights.dtype).tiny
-    for start in range(0, weights.shape[0], _WEIGHTED_SAMPLE_CHUNK_SIZE):
-        stop = min(start + _WEIGHTED_SAMPLE_CHUNK_SIZE, weights.shape[0])
-        chunk_weights = weights[start:stop].clamp_min(tiny)
-        keys = torch.empty_like(chunk_weights).exponential_(generator=generator)
-        keys.div_(chunk_weights)
-        local_count = min(count, stop - start)
-        local_keys, local_indices = torch.topk(
-            keys,
-            local_count,
-            largest=False,
-            sorted=False,
-        )
-        candidate_keys.append(local_keys)
-        candidate_indices.append(local_indices + start)
-
-    if len(candidate_keys) == 1:
-        return candidate_indices[0]
-
-    keys = torch.cat(candidate_keys)
-    indices = torch.cat(candidate_indices)
-    selected = torch.topk(keys, count, largest=False, sorted=False).indices
-    return indices[selected]
+    return weighted_multinomial(
+        weights,
+        count,
+        generator=generator,
+    )
 
 
 def _select_fps_centroids(
@@ -100,7 +71,7 @@ def _select_fps_centroids(
 ) -> torch.Tensor:
     """Select high-quality seeds with FPS over an area-weighted candidate set."""
     candidate_count = min(points.shape[0], farthest_point_oversampling * n_clusters)
-    candidate_indices = _weighted_sample_without_replacement(
+    candidate_indices = _sample_remeshing_seeds(
         vertex_areas,
         candidate_count,
     )
@@ -198,7 +169,7 @@ def _select_stratified_centroids(
         available[representatives] = False
         remaining = torch.nonzero(available, as_tuple=False).flatten()
         fill = remaining[
-            _weighted_sample_without_replacement(
+            _sample_remeshing_seeds(
                 vertex_areas[remaining],
                 n_clusters - representatives.numel(),
             )

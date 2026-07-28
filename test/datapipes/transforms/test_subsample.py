@@ -17,113 +17,18 @@
 
 """Tests for subsampling transforms."""
 
+import importlib
+
 import pytest
 import torch
 from tensordict import TensorDict
 
-from physicsnemo.datapipes.transforms import (
-    SubsamplePoints,
-    poisson_sample_indices_fixed,
+from physicsnemo.datapipes.transforms import SubsamplePoints
+from physicsnemo.datapipes.transforms.subsample import shuffle_array
+
+sampling_module = importlib.import_module(
+    "physicsnemo.nn.functional.weighted_multinomial"
 )
-
-
-@pytest.mark.parametrize("replacement", [False, True])
-def test_poisson_sample_indices(replacement):
-    """Test Poisson sampling indices generation in both modes."""
-    N = 10000
-    k = 1000
-
-    indices = poisson_sample_indices_fixed(N, k, replacement=replacement)
-
-    assert indices.shape == (k,)
-    assert indices.min() >= 0
-    assert indices.max() < N
-    assert indices.dtype == torch.long
-
-    if not replacement:
-        # No duplicates and strictly increasing when sampling without replacement.
-        assert indices.unique().numel() == k
-        assert torch.all(indices[1:] - indices[:-1] >= 1)
-
-
-@pytest.mark.parametrize("replacement", [False, True])
-def test_poisson_sample_large_array(replacement):
-    """Test Poisson sampling with very large arrays in both modes."""
-    N = 100_000_000  # 100M points
-    k = 10000
-
-    indices = poisson_sample_indices_fixed(N, k, replacement=replacement)
-
-    assert indices.shape == (k,)
-    assert indices.min() >= 0
-    assert indices.max() < N
-
-    if not replacement:
-        # Sort-and-diff check: unique and strictly increasing.
-        sorted_indices, _ = torch.sort(indices)
-        assert torch.equal(sorted_indices, indices)
-        assert torch.all(sorted_indices[1:] - sorted_indices[:-1] >= 1)
-
-
-def test_poisson_sample_no_duplicates_stress():
-    """Stress the duplicate-prone regime (k close to N) without replacement.
-
-    In this regime the mean gap is close to 1, so the original replacement-style
-    algorithm produced duplicates frequently. The without-replacement mode must
-    never return duplicates, across many seeds.
-    """
-    N = 2000
-    k = 1500
-
-    for seed in range(32):
-        gen = torch.Generator().manual_seed(seed)
-        indices = poisson_sample_indices_fixed(N, k, generator=gen, replacement=False)
-        assert indices.shape == (k,)
-        assert indices.unique().numel() == k, (
-            f"Duplicates found with seed={seed} in replacement=False mode"
-        )
-        assert indices.min() >= 0
-        assert indices.max() < N
-
-
-def test_poisson_sample_replacement_may_duplicate():
-    """Document that replacement=True can produce duplicates.
-
-    This is the pre-existing behavior that we keep available under the new
-    ``replacement=True`` flag. Across several seeds in a duplicate-prone
-    regime we expect to see at least one seed with duplicates.
-    """
-    N = 2000
-    k = 1500
-
-    saw_duplicate = False
-    for seed in range(32):
-        gen = torch.Generator().manual_seed(seed)
-        indices = poisson_sample_indices_fixed(N, k, generator=gen, replacement=True)
-        assert indices.shape == (k,)
-        if indices.unique().numel() < k:
-            saw_duplicate = True
-            break
-
-    assert saw_duplicate, (
-        "Expected replacement=True to produce duplicates in a "
-        "duplicate-prone regime (N=2000, k=1500) for at least one seed."
-    )
-
-
-@pytest.mark.parametrize("k", [1000, 1001])
-def test_poisson_sample_requires_k_lt_N(k):
-    """``replacement=False`` must raise when k >= N; ``replacement=True`` works."""
-    N = 1000
-
-    with pytest.raises(ValueError, match="k < N"):
-        poisson_sample_indices_fixed(N, k, replacement=False)
-
-    # With replacement, k >= N is still allowed (duplicates are expected).
-    indices = poisson_sample_indices_fixed(N, k, replacement=True)
-    assert indices.shape == (k,)
-    assert indices.min() >= 0
-    assert indices.max() < N
 
 
 def test_subsample_points_basic():
@@ -211,6 +116,28 @@ def test_subsample_points_weighted():
 
     assert result["surface_coords"].shape == (100, 3)
     assert result["surface_fields"].shape == (100, 2)
+
+
+def test_weighted_shuffle_uses_uncapped_sampler(monkeypatch):
+    def reject_multinomial(*args, **kwargs):
+        raise AssertionError(
+            "torch.multinomial rejects inputs with more than 2**24 categories"
+        )
+
+    monkeypatch.setattr(torch, "multinomial", reject_multinomial)
+    monkeypatch.setattr(sampling_module, "_SAMPLE_CHUNK_SIZE", 4)
+    points = torch.arange(6).unsqueeze(-1)
+    weights = torch.tensor([0.0, 0.0, 0.0, 0.0, 1.0, 1.0])
+
+    sampled, indices = shuffle_array(
+        points,
+        2,
+        weights=weights,
+        generator=torch.Generator().manual_seed(0),
+    )
+
+    assert set(indices.tolist()) == {4, 5}
+    assert torch.equal(sampled, points[indices])
 
 
 def test_subsample_missing_weights_key():
