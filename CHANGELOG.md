@@ -210,8 +210,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CorrDiff example: adds configurable regression loss selection for
   `regression` and `lt_aware_regression` training via model config, including
   selectable robust loss variants (`RegressionHuberLoss`,
-  `RegressionCharbonnierLoss`, `RegressionEdgeAwareLoss`,
-  `RegressionShiftTolerantLoss`, and `RegressionHybridStructuralLoss`).
+  `RegressionCharbonnierLoss`, `RegressionEdgeAwareLoss`, and
+  `RegressionHybridStructuralLoss`).
 
 ### Changed
 

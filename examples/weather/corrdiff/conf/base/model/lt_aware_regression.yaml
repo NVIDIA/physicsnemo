@@ -22,7 +22,6 @@ loss: RegressionLoss
   # - RegressionHuberLoss
   # - RegressionCharbonnierLoss
   # - RegressionEdgeAwareLoss
-  # - RegressionShiftTolerantLoss
   # - RegressionHybridStructuralLoss
 hr_mean_conditioning: False
   # No high-res conditioning for regression.

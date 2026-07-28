@@ -41,7 +41,6 @@ from physicsnemo.diffusion.metrics import (
     RegressionHybridStructuralLoss,
     RegressionLoss,
     RegressionLossCE,
-    RegressionShiftTolerantLoss,
     ResidualLoss,
 )
 from physicsnemo.diffusion.multi_diffusion import RandomPatching2D
@@ -494,7 +493,6 @@ def main(cfg: DictConfig) -> None:
             "RegressionHuberLoss": RegressionHuberLoss,
             "RegressionCharbonnierLoss": RegressionCharbonnierLoss,
             "RegressionEdgeAwareLoss": RegressionEdgeAwareLoss,
-            "RegressionShiftTolerantLoss": RegressionShiftTolerantLoss,
             "RegressionHybridStructuralLoss": RegressionHybridStructuralLoss,
         }
         if regression_loss_name not in regression_loss_map:

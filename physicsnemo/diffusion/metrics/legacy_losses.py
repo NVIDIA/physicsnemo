@@ -33,7 +33,7 @@ warnings.warn(
     "The loss classes 'VPLoss', 'VELoss', 'EDMLoss', 'EDMLossLogUniform', "
     "'EDMLossSR', 'RegressionLoss', 'RegressionHuberLoss', "
     "'RegressionCharbonnierLoss', 'RegressionEdgeAwareLoss', "
-    "'RegressionShiftTolerantLoss', 'RegressionHybridStructuralLoss', "
+    "'RegressionHybridStructuralLoss', "
     "'RegressionLossCE', 'ResidualLoss', and 'VELoss_dfsr' from "
     "'physicsnemo.diffusion.metrics' are legacy "
     "implementations that will be deprecated in a future release. Updated "
@@ -607,41 +607,6 @@ def _charbonnier(x: torch.Tensor, eps: float) -> torch.Tensor:
     return torch.sqrt(x * x + eps * eps)
 
 
-def _shift_tensor_with_mask(
-    tensor: torch.Tensor,
-    dx: int,
-    dy: int,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Shift tensor without wrap-around and return validity mask."""
-    _, _, h, w = tensor.shape
-    shifted = tensor
-
-    if dx > 0:
-        shifted = F.pad(shifted[..., :, :-dx], (dx, 0, 0, 0), value=0.0)
-    elif dx < 0:
-        sx = -dx
-        shifted = F.pad(shifted[..., :, sx:], (0, sx, 0, 0), value=0.0)
-
-    if dy > 0:
-        shifted = F.pad(shifted[..., :-dy, :], (0, 0, dy, 0), value=0.0)
-    elif dy < 0:
-        sy = -dy
-        shifted = F.pad(shifted[..., sy:, :], (0, 0, 0, sy), value=0.0)
-
-    mask = torch.ones((1, 1, h, w), device=tensor.device, dtype=tensor.dtype)
-    if dx > 0:
-        mask[..., :, :dx] = 0.0
-    elif dx < 0:
-        mask[..., :, w + dx :] = 0.0
-
-    if dy > 0:
-        mask[..., :dy, :] = 0.0
-    elif dy < 0:
-        mask[..., h + dy :, :] = 0.0
-
-    return shifted, mask
-
-
 class RegressionHuberLoss:
     """Robust Huber loss for regression with lower outlier sensitivity."""
 
@@ -744,60 +709,6 @@ class RegressionEdgeAwareLoss:
         )
 
         return grad_w * val_loss + self.edge_weight * grad_loss
-
-
-class RegressionShiftTolerantLoss:
-    """Direction-aware robust loss tolerant to small spatial shifts."""
-
-    def __init__(
-        self,
-        eps: float = 1e-3,
-        max_shift: int = 2,
-        shift_mode: str = "x",
-    ):
-        self.eps = eps
-        self.max_shift = max_shift
-        if shift_mode not in {"x", "y", "both"}:
-            raise ValueError("shift_mode must be one of {'x', 'y', 'both'}")
-        self.shift_mode = shift_mode
-
-    def _candidate_shifts(self):
-        if self.shift_mode == "x":
-            return [(dx, 0) for dx in range(-self.max_shift, self.max_shift + 1)]
-        if self.shift_mode == "y":
-            return [(0, dy) for dy in range(-self.max_shift, self.max_shift + 1)]
-        return [
-            (dx, dy)
-            for dx in range(-self.max_shift, self.max_shift + 1)
-            for dy in range(-self.max_shift, self.max_shift + 1)
-        ]
-
-    def __call__(
-        self,
-        net: torch.nn.Module,
-        img_clean: torch.Tensor,
-        img_lr: torch.Tensor,
-        augment_pipe: Optional[
-            Callable[[torch.Tensor], Tuple[torch.Tensor, Optional[torch.Tensor]]]
-        ] = None,
-        lead_time_label: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        y, pred = _regression_forward(
-            net,
-            img_clean,
-            img_lr,
-            augment_pipe=augment_pipe,
-            lead_time_label=lead_time_label,
-        )
-
-        all_losses = []
-        for dx, dy in self._candidate_shifts():
-            y_shifted, valid_mask = _shift_tensor_with_mask(y, dx=dx, dy=dy)
-            candidate = _charbonnier(pred - y_shifted, self.eps)
-            candidate = candidate * valid_mask + (1.0 - valid_mask) * 1e6
-            all_losses.append(candidate)
-
-        return torch.min(torch.stack(all_losses, dim=0), dim=0).values
 
 
 class RegressionHybridStructuralLoss:

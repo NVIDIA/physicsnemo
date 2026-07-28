@@ -27,7 +27,6 @@ from physicsnemo.diffusion.metrics import (
     RegressionHybridStructuralLoss,
     RegressionLoss,
     RegressionLossCE,
-    RegressionShiftTolerantLoss,
     ResidualLoss,
     VELoss,
     VELoss_dfsr,
@@ -283,7 +282,6 @@ def test_call_method_regressionloss_with_lead_time_unet(device):
         RegressionHuberLoss,
         RegressionCharbonnierLoss,
         RegressionEdgeAwareLoss,
-        RegressionShiftTolerantLoss,
         RegressionHybridStructuralLoss,
     ],
 )

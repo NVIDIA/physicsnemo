@@ -48,7 +48,6 @@ from .legacy_losses import (
     RegressionHybridStructuralLoss,
     RegressionLoss,
     RegressionLossCE,
-    RegressionShiftTolerantLoss,
     ResidualLoss,
     VELoss,
     VELoss_dfsr,
