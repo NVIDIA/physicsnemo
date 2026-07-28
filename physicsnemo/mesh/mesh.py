@@ -1794,6 +1794,14 @@ class Mesh:
         ValueError
             If a point_data key already exists in cell_data and overwrite_keys=False.
 
+        Notes
+        -----
+        Point fields are averaged in floating point, so an integer or boolean
+        point field is returned as a ``torch.float64`` cell field. This matches
+        :meth:`cell_data_to_point_data` and avoids truncating non-integral means.
+        The conversion may round integer values whose magnitude exceeds
+        ``2**53``. Floating-point and complex point fields keep their dtype.
+
         Examples
         --------
         >>> mesh = Mesh(points, cells, point_data={"temperature": point_temps})  # doctest: +SKIP
@@ -1814,8 +1822,20 @@ class Mesh:
         ### Convert each point data field to cell data by averaging over cell vertices
         new_cell_data = self.cell_data.clone()
 
+        def _mean_over_cell_vertices(point_values: torch.Tensor) -> torch.Tensor:
+            """Average a single point field over the vertices of each cell."""
+            # Shape: (n_cells, n_vertices_per_cell, *data_shape)
+            cell_values = point_values[self.cells]
+            # Promote integer/bool fields to float first: torch.mean rejects
+            # integer dtypes, and a mean of integers is real-valued anyway.
+            # Casting after the gather rather than the point field before it
+            # keeps the gather on the narrow source dtype, which measures faster.
+            if not cell_values.is_floating_point() and not cell_values.is_complex():
+                cell_values = cell_values.to(torch.float64)
+            return cell_values.mean(dim=1)
+
         converted = self.point_data.apply(
-            lambda point_values: point_values[self.cells].mean(dim=1),
+            _mean_over_cell_vertices,
             batch_size=torch.Size([self.n_cells]),
         )
         new_cell_data.update(converted)
