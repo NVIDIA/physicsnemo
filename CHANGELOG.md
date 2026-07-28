@@ -437,6 +437,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   broke the `test_get_checkpoint_dir` CI test on Windows. The function now
   always joins with `/`, working uniformly for local paths and `fsspec`
   URIs (`msc://`, etc.) across operating systems.
+- Fixed two `Mesh.save`/`Mesh.load` (memmap) defects. First, zero-element
+  tensors were silently lost: TensorDict records their shape and dtype in
+  `meta.json` but writes no backing file, and its loader skips any key whose
+  file is absent. A `cells` of shape `(0, 3)` came back as `(0, 1)` with a
+  different dtype (silently changing `n_manifold_dims`), zero-width
+  `point_data` / `cell_data` / `global_data` fields disappeared, and a mesh
+  with no points, or with an `Adjacency` cached over a point cloud, failed to
+  load at all. `Mesh`, `DomainMesh`, `Adjacency`, `BVH`, `ClusterTree`,
+  `DualInteractionPlan`, and `SourceAggregates` now rebuild those tensors from
+  metadata on load. Second, and independently of empty tensors, loading any
+  mesh with a populated topology cache in a process that had not otherwise
+  imported the adjacency API raised
+  `RuntimeError: Could not find name ...Adjacency` — the offline-preprocess /
+  dataloader-worker pattern. Importing `Mesh` now registers `Adjacency` with
+  TensorDict. Both fixes are read-side only: the on-disk format is unchanged
+  and files remain byte-identical and compatible in both directions.
 
 ### Security
 

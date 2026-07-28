@@ -24,6 +24,10 @@ import torch
 from jaxtyping import Int
 from tensordict import tensorclass
 
+from physicsnemo.mesh.utilities._serialization import (
+    _load_memmap_with_empty_tensors,
+)
+
 
 @tensorclass
 class Adjacency:
@@ -359,3 +363,11 @@ def build_adjacency_from_pairs(
         offsets=offsets,
         indices=sorted_targets,
     )
+
+
+# TensorDict's memmap writer records zero-length ``indices`` in metadata but
+# omits the backing file. Use the mesh-specific loader so an adjacency with no
+# neighbors still round-trips when stored in a Mesh topology cache.
+Adjacency._load_memmap = classmethod(  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    _load_memmap_with_empty_tensors
+)

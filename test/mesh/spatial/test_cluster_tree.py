@@ -41,7 +41,7 @@ import pytest
 import torch
 from tensordict import TensorDict
 
-from physicsnemo.mesh.spatial import ClusterTree
+from physicsnemo.mesh.spatial import ClusterTree, DualInteractionPlan, SourceAggregates
 from physicsnemo.mesh.spatial._ragged import _ragged_arange
 
 # ---------------------------------------------------------------------------
@@ -596,3 +596,70 @@ def test_validate_rejects_corrupted_plan(device):
     plan.fn_broadcast_counts[-1] = 1
     with pytest.raises(ValueError, match="out of bounds"):
         plan.validate()
+
+
+# ---------------------------------------------------------------------------
+# Memmap round-trips: zero-length tensors have no backing file on disk, so
+# every tensorclass here opts into the empty-tensor loader in
+# physicsnemo.mesh.utilities._serialization. Without it these come back `None`.
+# ---------------------------------------------------------------------------
+
+
+def test_empty_cluster_tree_round_trip(tmp_path):
+    """A tree built over no points restores all of its zero-length arrays."""
+    tree = ClusterTree.from_points(torch.empty((0, 3)))
+    empty_fields = [
+        field
+        for field in ClusterTree.__dataclass_fields__
+        if torch.is_tensor(getattr(tree, field)) and getattr(tree, field).numel() == 0
+    ]
+    assert empty_fields, "expected zero-length arrays to exercise the loader"
+
+    tree.save(tmp_path / "tree.pt")
+    loaded = ClusterTree.load(tmp_path / "tree.pt")
+
+    for field in empty_fields:
+        restored = getattr(loaded, field)
+        assert restored is not None, f"{field!r} was dropped on load"
+        assert restored.shape == getattr(tree, field).shape
+        assert restored.dtype == getattr(tree, field).dtype
+
+
+def test_interaction_plan_with_empty_buckets_round_trip(tmp_path, device):
+    """A real traversal that leaves whole categories empty survives save/load.
+
+    Well-separated clouds produce a plan with no near-field and no broadcast
+    survivors, so several of its eleven index tensors are zero-length.
+    """
+    target_points, source_points = _zero_survivor_clouds(device)
+    target_tree = ClusterTree.from_points(target_points, leaf_size=8)
+    source_tree = ClusterTree.from_points(source_points, leaf_size=8)
+    plan = source_tree.find_dual_interaction_pairs(target_tree, theta=1.0)
+    assert plan.fn_broadcast_targets.numel() == 0, "expected an empty bucket"
+
+    plan.save(tmp_path / "plan.pt")
+    loaded = DualInteractionPlan.load(tmp_path / "plan.pt")
+
+    for field in DualInteractionPlan.__dataclass_fields__:
+        original, restored = getattr(plan, field), getattr(loaded, field)
+        assert restored is not None, f"{field!r} was dropped on load"
+        assert restored.shape == original.shape
+        assert restored.dtype == original.dtype
+    loaded.validate()
+
+
+def test_empty_source_aggregates_round_trip(tmp_path):
+    """Aggregates over an empty node set keep their shapes and dtypes."""
+    aggregates = SourceAggregates(
+        node_centroid=torch.empty((0, 3), dtype=torch.float64),
+        node_source_data=torch.empty((0, 2), dtype=torch.float16),
+        batch_size=[],
+    )
+
+    aggregates.save(tmp_path / "aggregates.pt")
+    loaded = SourceAggregates.load(tmp_path / "aggregates.pt")
+
+    assert loaded.node_centroid.shape == (0, 3)
+    assert loaded.node_centroid.dtype == torch.float64
+    assert loaded.node_source_data.shape == (0, 2)
+    assert loaded.node_source_data.dtype == torch.float16

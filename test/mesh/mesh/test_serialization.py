@@ -16,14 +16,21 @@
 
 """Tests for Mesh serialization round-trips (memmap and pickle).
 
-The tensordict memmap format does not serialize tensors with 0 elements. This means
-that point clouds (where cells has shape (0, 1)) lose their cells tensor on save/load,
-causing downstream failures in n_manifold_dims, repr, and any method that accesses cells.
-These tests verify that __post_init__ correctly restores empty cells tensors.
+TensorDict records zero-element tensors in memmap metadata but does not write a
+backing file for them. These tests verify that mesh serialization reconstructs
+those tensors with their original shape and dtype.
 """
 
-import torch
+import os
+import shutil
+import subprocess
+import sys
 
+import pytest
+import torch
+from tensordict import TensorDict
+
+from physicsnemo.mesh.domain_mesh import DomainMesh
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.primitives.basic import two_triangles_2d
 
@@ -164,6 +171,233 @@ class TestMemmapRoundTrip:
         assert loaded.n_spatial_dims == mesh.n_spatial_dims
         assert loaded.n_points == mesh.n_points
         assert loaded.n_cells == mesh.n_cells
+
+    @pytest.mark.parametrize("vertices_per_cell", [1, 2, 3, 4])
+    def test_empty_cells_preserve_shape_and_dtype(self, tmp_path, vertices_per_cell):
+        """Empty connectivity retains its manifold dimension and dtype."""
+        mesh = Mesh(
+            points=torch.randn(5, 4),
+            cells=torch.empty((0, vertices_per_cell), dtype=torch.int32),
+        )
+
+        mesh.save(tmp_path / "mesh.pt")
+        loaded = Mesh.load(tmp_path / "mesh.pt")
+
+        assert loaded.cells.shape == (0, vertices_per_cell)
+        assert loaded.cells.dtype == torch.int32
+        assert loaded.n_manifold_dims == vertices_per_cell - 1
+
+    def test_fully_empty_geometry_preserves_shape_and_dtype(self, tmp_path):
+        """A mesh with no points or cells can be loaded without losing metadata."""
+        mesh = Mesh(
+            points=torch.empty((0, 4), dtype=torch.float64),
+            cells=torch.empty((0, 3), dtype=torch.int32),
+        )
+
+        mesh.save(tmp_path / "mesh.pt")
+        loaded = Mesh.load(tmp_path / "mesh.pt")
+
+        assert loaded.points.shape == (0, 4)
+        assert loaded.points.dtype == torch.float64
+        assert loaded.cells.shape == (0, 3)
+        assert loaded.cells.dtype == torch.int32
+        assert loaded.n_spatial_dims == 4
+        assert loaded.n_manifold_dims == 2
+
+    def test_zero_element_data_preserves_nested_shapes_and_dtypes(self, tmp_path):
+        """Zero-width user fields survive at every association and nesting level."""
+        point_data = TensorDict(
+            {
+                "embedding": torch.empty((3, 0), dtype=torch.float16),
+                "nested": TensorDict(
+                    {"features": torch.empty((3, 2, 0), dtype=torch.float64)},
+                    batch_size=[3],
+                ),
+            },
+            batch_size=[3],
+        )
+        mesh = Mesh(
+            points=torch.randn(3, 3),
+            cells=torch.tensor([[0, 1, 2]], dtype=torch.int64),
+            point_data=point_data,
+            cell_data={"embedding": torch.empty((1, 0), dtype=torch.int16)},
+            global_data={"embedding": torch.empty((2, 0), dtype=torch.float64)},
+        )
+
+        mesh.save(tmp_path / "mesh.pt")
+        loaded = Mesh.load(tmp_path / "mesh.pt")
+
+        assert loaded.point_data["embedding"].shape == (3, 0)
+        assert loaded.point_data["embedding"].dtype == torch.float16
+        assert loaded.point_data["nested", "features"].shape == (3, 2, 0)
+        assert loaded.point_data["nested", "features"].dtype == torch.float64
+        assert loaded.cell_data["embedding"].shape == (1, 0)
+        assert loaded.cell_data["embedding"].dtype == torch.int16
+        assert loaded.global_data["embedding"].shape == (2, 0)
+        assert loaded.global_data["embedding"].dtype == torch.float64
+
+    def test_empty_cached_adjacency_round_trip(self, tmp_path):
+        """A cached adjacency with no indices remains loadable and empty."""
+        mesh = Mesh(points=torch.randn(4, 3))
+        expected = mesh.get_point_to_points_adjacency().to_list()
+
+        mesh.save(tmp_path / "mesh.pt")
+        loaded = Mesh.load(tmp_path / "mesh.pt")
+        adjacency = loaded.get_point_to_points_adjacency()
+
+        assert adjacency.to_list() == expected
+        assert adjacency.indices.shape == (0,)
+        assert adjacency.indices.dtype == torch.int64
+
+    def test_domain_mesh_preserves_nested_empty_tensors(self, tmp_path):
+        """Domain, interior, and boundary empties all survive one round-trip."""
+        interior = Mesh(
+            points=torch.randn(4, 3),
+            cells=torch.empty((0, 4), dtype=torch.int32),
+        )
+        boundary = Mesh(
+            points=torch.empty((0, 3), dtype=torch.float64),
+            cells=torch.empty((0, 3), dtype=torch.int32),
+            point_data={"embedding": torch.empty((0, 2), dtype=torch.float16)},
+        )
+        domain = DomainMesh(
+            interior=interior,
+            boundaries={"empty": boundary},
+            global_data={"embedding": torch.empty((2, 0), dtype=torch.float64)},
+        )
+
+        domain.save(tmp_path / "domain.pt")
+        loaded = DomainMesh.load(tmp_path / "domain.pt")
+
+        assert loaded.interior.cells.shape == (0, 4)
+        assert loaded.interior.cells.dtype == torch.int32
+        assert loaded.boundaries["empty"].points.shape == (0, 3)
+        assert loaded.boundaries["empty"].points.dtype == torch.float64
+        assert loaded.boundaries["empty"].cells.shape == (0, 3)
+        assert loaded.boundaries["empty"].cells.dtype == torch.int32
+        assert loaded.boundaries["empty"].point_data["embedding"].shape == (0, 2)
+        assert loaded.boundaries["empty"].point_data["embedding"].dtype == torch.float16
+        assert loaded.global_data["embedding"].shape == (2, 0)
+        assert loaded.global_data["embedding"].dtype == torch.float64
+
+    def test_restored_empties_share_the_device_of_loaded_tensors(
+        self, tmp_path, device
+    ):
+        """Rebuilt empties land on the same device as the tensors read from disk.
+
+        ``Mesh.__post_init__`` rejects a mesh whose ``points`` and ``cells``
+        disagree on device, so a rebuilt tensor placed on the wrong device
+        breaks the load outright rather than degrading quietly.
+        """
+        mesh = Mesh(
+            points=torch.randn(4, 3, device=device),
+            cells=torch.empty((0, 3), dtype=torch.int32, device=device),
+            point_data={"embedding": torch.empty((4, 0), device=device)},
+        )
+
+        mesh.save(tmp_path / "mesh.pt")
+        loaded = Mesh.load(tmp_path / "mesh.pt")
+
+        assert loaded.cells.device == loaded.points.device
+        assert loaded.point_data["embedding"].device == loaded.points.device
+
+    def test_missing_tensordict_directory_raises_clear_error(self, tmp_path):
+        """An incomplete save directory reports what is missing, not a raw OSError."""
+        mesh = two_triangles_2d.load()
+        mesh.save(tmp_path / "mesh.pt")
+        shutil.rmtree(tmp_path / "mesh.pt" / "_tensordict")
+
+        with pytest.raises(
+            ValueError, match="_tensordict directory seems to be missing"
+        ):
+            Mesh.load(tmp_path / "mesh.pt")
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="A jagged tensor's recorded shape is the shape of its shape "
+        "tensor, which lives in a separate file, so an empty one cannot be "
+        "rebuilt from meta.json alone. Documented in _serialization.py; if this "
+        "starts passing, update those Notes.",
+    )
+    def test_empty_jagged_tensor_round_trip(self, tmp_path):
+        """Known limitation: empty nested (jagged) tensors are still dropped."""
+        mesh = Mesh(
+            points=torch.randn(2, 3),
+            cells=torch.empty((0, 3), dtype=torch.int64),
+        )
+        mesh.global_data["jagged"] = torch.nested.nested_tensor(
+            [torch.empty((0, 2)), torch.empty((0, 2))]
+        )
+
+        mesh.save(tmp_path / "mesh.pt")
+        loaded = Mesh.load(tmp_path / "mesh.pt")
+
+        assert "jagged" in loaded.global_data
+
+
+### Fresh-Process Load Tests ###
+
+# Deliberately imports nothing but ``Mesh``: reaching for an adjacency helper
+# here would register ``Adjacency`` by hand and mask the bug under test.
+_LOAD_MESH_WITH_CACHED_ADJACENCY = """
+import sys
+
+from physicsnemo.mesh.mesh import Mesh
+
+mesh = Mesh.load(sys.argv[1])
+adjacency = mesh._cache["topology", "point_to_points"]
+print(f"{type(adjacency).__name__} {tuple(adjacency.indices.shape)}")
+"""
+
+
+class TestFreshProcessLoad:
+    """Loading must work in a process that has only ever imported ``Mesh``.
+
+    This is the offline-preprocessing / dataloader-worker pattern: one process
+    writes meshes to disk, an unrelated one reads them back.
+    """
+
+    def test_cached_adjacency_loads_in_a_fresh_process(self, tmp_path):
+        """A saved topology cache reconstructs without touching the adjacency API.
+
+        ``TensorDict.load_memmap`` resolves the ``Adjacency`` held in
+        ``_cache["topology"]`` by looking its class up in tensordict's registry,
+        which is only populated as an import side effect. If nothing imports
+        ``physicsnemo.mesh.neighbors``, the load dies with
+        ``RuntimeError: Could not find name ...Adjacency`` -- and note this
+        happens for a perfectly ordinary non-empty adjacency, independent of the
+        zero-element handling the rest of this module covers.
+
+        Runs out-of-process because any in-process test would already have the
+        class registered by an earlier import.
+        """
+        mesh = two_triangles_2d.load()
+        adjacency = mesh.get_point_to_points_adjacency()
+        assert adjacency.indices.numel() > 0, "want a populated cache here"
+        mesh.save(tmp_path / "mesh.pt")
+
+        # Hand the child our own sys.path so it imports the same physicsnemo we
+        # are testing (matters in a git worktree, where the installed
+        # distribution resolves elsewhere).
+        env = {**os.environ, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)}
+        result = subprocess.run(  # noqa: S603 - interpreter and snippet are test constants
+            [
+                sys.executable,
+                "-c",
+                _LOAD_MESH_WITH_CACHED_ADJACENCY,
+                str(tmp_path / "mesh.pt"),
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=600,
+            check=False,
+        )
+
+        assert result.returncode == 0, (
+            f"fresh-process load failed:\n{result.stdout}\n{result.stderr}"
+        )
+        assert result.stdout.strip() == f"Adjacency {tuple(adjacency.indices.shape)}"
 
 
 ### Pickle (torch.save / torch.load) Round-Trip Tests ###

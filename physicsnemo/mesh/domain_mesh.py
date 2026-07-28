@@ -27,6 +27,9 @@ from tensordict import TensorDict, tensorclass
 
 from physicsnemo.mesh.mesh import Mesh, _requested_float_dtype
 from physicsnemo.mesh.transformations.deform.ffd import _FFDBasis
+from physicsnemo.mesh.utilities._serialization import (
+    _load_memmap_with_empty_tensors,
+)
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
 
 if TYPE_CHECKING:
@@ -1684,3 +1687,10 @@ def _domain_mesh_to(self, *args: Any, **kwargs: Any) -> "DomainMesh":
 
 _tensorclass_domain_to = DomainMesh.to  # the generated tensorclass ``to``
 DomainMesh.to = _domain_mesh_to  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+
+
+# Preserve zero-element domain-level fields and delegate nested Mesh loading to
+# Mesh's corresponding format-compatible memmap loader.
+DomainMesh._load_memmap = classmethod(  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    _load_memmap_with_empty_tensors
+)

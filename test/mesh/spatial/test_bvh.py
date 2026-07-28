@@ -761,3 +761,33 @@ class TestBVHParametrized:
         query = torch.tensor([[0.3, 0.3, 0.3]], device=device)
         candidates = bvh.find_candidate_cells(query)
         assert candidates.n_sources == 1
+
+
+class TestBVHSerialization:
+    """Memmap round-trips, including the degenerate all-empty BVH."""
+
+    def test_bvh_over_zero_cell_mesh_survives_round_trip(self, tmp_path, device):
+        """Every node and leaf array of an all-empty BVH is restored.
+
+        A mesh with no cells yields a BVH whose arrays are all zero-length.
+        TensorDict's memmap writer records their shapes in metadata but writes
+        no backing files, so without the empty-tensor loader in
+        `physicsnemo.mesh.utilities._serialization` every field returns `None`.
+        """
+        mesh = Mesh(
+            points=torch.randn(3, 3, device=device),
+            cells=torch.empty((0, 3), dtype=torch.int64, device=device),
+        )
+        bvh = BVH.from_mesh(mesh)
+        assert all(
+            getattr(bvh, field).numel() == 0 for field in BVH.__dataclass_fields__
+        ), "expected an entirely empty BVH"
+
+        bvh.save(tmp_path / "bvh.pt")
+        loaded = BVH.load(tmp_path / "bvh.pt")
+
+        for field in BVH.__dataclass_fields__:
+            original, restored = getattr(bvh, field), getattr(loaded, field)
+            assert restored is not None, f"{field!r} was dropped on load"
+            assert restored.shape == original.shape
+            assert restored.dtype == original.dtype

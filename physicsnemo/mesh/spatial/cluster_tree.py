@@ -54,6 +54,9 @@ from torch.profiler import record_function
 from physicsnemo.mesh.spatial._lbvh import build_lbvh_topology
 from physicsnemo.mesh.spatial._ragged import _ragged_arange
 from physicsnemo.mesh.spatial.bvh import _compute_morton_codes
+from physicsnemo.mesh.utilities._serialization import (
+    _load_memmap_with_empty_tensors,
+)
 
 logger = logging.getLogger("mesh.spatial.cluster_tree")
 
@@ -1374,3 +1377,17 @@ def _fill_leaf_aggregates(
     aabb_min_buf[leaf_nids] = seg_min
     aabb_max_buf[leaf_nids] = seg_max
     total_area_buf[leaf_nids] = leaf_areas
+
+
+# Interaction plans routinely leave whole categories empty (a small point set
+# may have no far-field pairs at all), and TensorDict's memmap writer records
+# zero-length tensors in metadata without writing them to disk.
+ClusterTree._load_memmap = classmethod(  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    _load_memmap_with_empty_tensors
+)
+DualInteractionPlan._load_memmap = classmethod(  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    _load_memmap_with_empty_tensors
+)
+SourceAggregates._load_memmap = classmethod(  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    _load_memmap_with_empty_tensors
+)
