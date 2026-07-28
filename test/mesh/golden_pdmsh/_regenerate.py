@@ -14,33 +14,36 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Regenerate the current ``.pdmsh`` golden fixture.
+"""Regenerate the current ``.pdmsh`` layout manifest.
 
 ``legacy_decorator_square.pdmsh`` is immutable data written by the
 decorator-based ``DomainMesh`` and ``Mesh`` implementations. Regeneration only
-updates ``current_square.pdmsh``, which locks in the current writer layout.
+updates ``current_manifest.json``, which locks in the current writer layout.
 
 Run from the repository root:
 
 .. code-block:: bash
 
-    uv run --no-sync python test/mesh/golden_pdmsh/_regenerate.py
+    uv run --no-sync python -m test.mesh.golden_pdmsh._regenerate
 
-Commit the resulting ``current_square.pdmsh/`` directory without replacing the
-legacy fixture.
+Commit the updated manifest without replacing the legacy fixture.
 """
 
 from __future__ import annotations
 
-import shutil
+import json
+import tempfile
 from pathlib import Path
 
 import torch
 
 from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.mesh.primitives.basic import two_triangles_2d
+from test.mesh._serialization_manifest import serialization_manifest
 
-CURRENT_FIXTURE_DIR: Path = (Path(__file__).parent / "current_square.pdmsh").resolve()
+CURRENT_MANIFEST_PATH: Path = (
+    Path(__file__).parent / "current_manifest.json"
+).resolve()
 LEGACY_FIXTURE_DIR: Path = (
     Path(__file__).parent / "legacy_decorator_square.pdmsh"
 ).resolve()
@@ -88,17 +91,14 @@ def build_canonical_domain_mesh() -> DomainMesh:
     )
 
 
-def regenerate(fixture_dir: Path = CURRENT_FIXTURE_DIR) -> None:
-    """Replace the current fixture with a freshly serialized domain."""
-    if fixture_dir.exists():
-        shutil.rmtree(fixture_dir)
-    fixture_dir.parent.mkdir(parents=True, exist_ok=True)
-    build_canonical_domain_mesh().save(fixture_dir)
-    n_files = sum(1 for path in fixture_dir.rglob("*") if path.is_file())
-    n_bytes = sum(
-        path.stat().st_size for path in fixture_dir.rglob("*") if path.is_file()
-    )
-    print(f"Wrote {fixture_dir.relative_to(Path.cwd())} ({n_files} files, {n_bytes} B)")
+def regenerate(manifest_path: Path = CURRENT_MANIFEST_PATH) -> None:
+    """Write a snapshot of the current writer's directory and metadata layout."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        fixture_dir = Path(tmp_dir) / "current.pdmsh"
+        build_canonical_domain_mesh().save(fixture_dir)
+        manifest = serialization_manifest(fixture_dir)
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    print(f"Wrote {manifest_path.relative_to(Path.cwd())} ({len(manifest)} entries)")
 
 
 if __name__ == "__main__":

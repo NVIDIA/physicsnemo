@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any, Literal, Self
 
 import torch
 from jaxtyping import Bool, Float
-from tensordict import TensorClass, TensorDict
+from tensordict import TensorClass, TensorDict, TensorDictBase
 
 from physicsnemo.mesh._serialization import install_legacy_memmap_reader
 from physicsnemo.mesh.mesh import Mesh, _requested_float_dtype
@@ -1631,7 +1631,12 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
 _tensorclass_domain_from_tensordict = DomainMesh._from_tensordict.__func__
 
 
-def _domain_from_tensordict(cls, tensordict, non_tensordict=None, safe=True):
+def _domain_from_tensordict(
+    cls: type[DomainMesh],
+    tensordict: TensorDictBase,
+    non_tensordict: dict[str, Any] | None = None,
+    safe: bool = True,
+) -> DomainMesh:
     interior = tensordict.get("interior")
     boundaries = tensordict.get("boundaries")
     if isinstance(interior, TensorDict) or (

@@ -14,39 +14,40 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Regenerate the current ``.pmsh`` golden fixture.
+"""Regenerate the current ``.pmsh`` layout manifest.
 
-The companion test keeps two fixtures:
+The companion test keeps two compatibility records:
 
 - ``v2.0_two_triangles.pmsh`` is immutable legacy data written by the
   decorator-based ``Mesh`` implementation. It protects backward reads.
-- ``current_two_triangles.pmsh`` is written by the current implementation and
-  locks in the writer layout.
+- ``current_manifest.json`` is a compact snapshot of the current writer layout.
 
 Run this script when the current ``.pmsh`` writer intentionally changes:
 
 .. code-block:: bash
 
-    uv run --no-sync python test/mesh/mesh/golden_pmsh/_regenerate.py
+    uv run --no-sync python -m test.mesh.mesh.golden_pmsh._regenerate
 
-Then commit the resulting ``current_two_triangles.pmsh/`` directory tree.
-Never regenerate the legacy fixture with current code.
+Then commit the updated manifest. Never regenerate the legacy fixture with
+current code.
 """
 
 from __future__ import annotations
 
-import shutil
+import json
+import tempfile
 from pathlib import Path
 
 import torch
 
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.primitives.basic import two_triangles_2d
+from test.mesh._serialization_manifest import serialization_manifest
 
 ### Fixture identity #########################################################
 
-CURRENT_FIXTURE_DIR: Path = (
-    Path(__file__).parent / "current_two_triangles.pmsh"
+CURRENT_MANIFEST_PATH: Path = (
+    Path(__file__).parent / "current_manifest.json"
 ).resolve()
 LEGACY_FIXTURE_DIR: Path = (Path(__file__).parent / "v2.0_two_triangles.pmsh").resolve()
 
@@ -85,19 +86,14 @@ def build_canonical_mesh() -> Mesh:
     return mesh
 
 
-def regenerate(fixture_dir: Path = CURRENT_FIXTURE_DIR) -> None:
-    """Rebuild the on-disk fixture, replacing any prior copy.
-
-    Memmap save refuses to overwrite an existing directory, so the prior
-    fixture is wiped first.
-    """
-    if fixture_dir.exists():
-        shutil.rmtree(fixture_dir)
-    fixture_dir.parent.mkdir(parents=True, exist_ok=True)
-    build_canonical_mesh().save(fixture_dir)
-    n_files = sum(1 for p in fixture_dir.rglob("*") if p.is_file())
-    n_bytes = sum(p.stat().st_size for p in fixture_dir.rglob("*") if p.is_file())
-    print(f"Wrote {fixture_dir.relative_to(Path.cwd())} ({n_files} files, {n_bytes} B)")
+def regenerate(manifest_path: Path = CURRENT_MANIFEST_PATH) -> None:
+    """Write a snapshot of the current writer's directory and metadata layout."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        fixture_dir = Path(tmp_dir) / "current.pmsh"
+        build_canonical_mesh().save(fixture_dir)
+        manifest = serialization_manifest(fixture_dir)
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    print(f"Wrote {manifest_path.relative_to(Path.cwd())} ({len(manifest)} entries)")
 
 
 if __name__ == "__main__":

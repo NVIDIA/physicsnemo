@@ -70,9 +70,8 @@ def install_legacy_memmap_reader(cls: type) -> None:
     cls : type
         The ``TensorClass`` subclass to patch, in place.
     """
-    ### Captured before the overrides are installed, so they stay reachable.
-    ### These are plain functions rather than bound methods: `tensorclass`
-    ### installs them on the class and they resolve the class themselves.
+    ### TensorClass's metaclass exposes these as wrapper functions rather than
+    ### ordinary bound classmethods. Capture them before installing overrides.
     stock_load_memmap = cls.load_memmap
     stock_private_load_memmap = cls._load_memmap
 
