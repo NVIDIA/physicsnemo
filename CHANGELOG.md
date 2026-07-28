@@ -299,6 +299,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   norms, but a custom `norm` that relies on unobserved entries being zeroed
   before the call may differ. The integer `norm` selector (e.g. `norm=2`) is
   unaffected.
+- `Mesh.transform` and `compute_cotan_weights_fem` now use the non-checking
+  `torch.linalg.inv_ex` / `solve_ex` solvers, and build their index tensors on
+  device. The checked solvers read a status code back to the host on every call,
+  which synchronizes on CUDA; removing that and the index-tensor uploads takes
+  `Mesh.transform` on a cached codimension-one mesh from three host
+  synchronizations to one, and `compute_cotan_weights_fem` from six to three. As
+  a consequence,
+  `Mesh.transform(..., assume_invertible=True)` no longer raises when the matrix
+  is in fact singular: it propagates NaN caches instead, as its docstring now
+  documents. The default `assume_invertible=None` still tests the determinant
+  and is unaffected.
 
 ### Deprecated
 
@@ -311,6 +322,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `compute_cotan_weights_fem`, and the calculus, curvature, and smoothing
+  routines built on it such as `Mesh.laplacian`, no longer fail on degenerate
+  cells in float32. The Gram-matrix regularization is now scale-free, so it also
+  covers cells with no extent — including the null cells that `Mesh.pad` and
+  `Mesh.pad_to_next_power` insert — and flat cells at large coordinate values,
+  both of which previously raised a singular-matrix `_LinAlgError` from
+  `torch.linalg.inv`. Weights for non-degenerate cells are unchanged bit for bit.
 - Multinomial index sampling now uses one shared `weighted_multinomial`
   functional across datapipes, DoMINO, and remeshing. Its core API follows
   `torch.multinomial`, adds allocation-free integer input for uniform
