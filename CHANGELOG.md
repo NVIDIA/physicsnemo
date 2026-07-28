@@ -400,6 +400,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   detached before `.numpy()`); and integer/bool data crashed (`safe_eps` on an
   integer dtype) or truncated via integer division during facet/scatter
   aggregation (now computed in a floating dtype).
+- `physicsnemo.mesh`: averaging a complex point or cell field no longer silently
+  returns `float64` with the imaginary part discarded. Complex tensors are not
+  "floating point" by `torch`'s definition, so facet/scatter aggregation
+  promoted them like an integer field, corrupting
+  `Mesh.cell_data_to_point_data`, `Mesh.get_facet_mesh` (both `data_source`
+  settings), and `repair.merge_duplicate_points`. A `"mean"` still requires
+  real weights, because its divisor is clamped away from zero and `clamp`
+  rejects complex dtypes; a `"sum"` accepts complex weights and promotes to the
+  common dtype of the values and the weights.
 - `physicsnemo.mesh` Morton-code quantization now handles empty inputs, tiny
   extents, half-precision coordinates, and one-dimensional endpoints correctly.
 - `physicsnemo.mesh`: fixed Loop subdivision pulling open boundaries inward (now
