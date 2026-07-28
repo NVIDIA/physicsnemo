@@ -22,4 +22,11 @@ metrics, and generating mesh statistics.
 
 from physicsnemo.mesh.validation.quality import compute_quality_metrics
 from physicsnemo.mesh.validation.statistics import compute_mesh_statistics
-from physicsnemo.mesh.validation.validate import validate_mesh
+from physicsnemo.mesh.validation.validate import validate, validate_mesh
+
+__all__ = [
+    "compute_mesh_statistics",
+    "compute_quality_metrics",
+    "validate",
+    "validate_mesh",
+]

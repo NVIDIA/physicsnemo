@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Fast operations for small bounded integer index tuples."""
+"""Fast tensor operations for small bounded integer index tuples."""
 
 import math
 
@@ -38,7 +38,7 @@ def unique_index_tuples(
     """Deduplicate rows of bounded non-negative integer tuples.
 
     This is a faster specialization of :func:`torch.unique` with ``dim=0`` for
-    mesh topology tensors. Each row is packed into one int64 key using
+    bounded non-negative integer rows. Each row is packed into one int64 key using
     ``index_bound`` as the radix, then one-dimensional ``torch.unique`` is used
     and the unique keys are unpacked back to rows.
 
@@ -47,9 +47,8 @@ def unique_index_tuples(
     rows : torch.Tensor
         Integer tensor with shape ``(n_rows, n_columns)``.
     index_bound : int
-        Strict upper bound for every value in ``rows``. For mesh vertex-index
-        tuples this is usually ``mesh.n_points``; for cell-pair tuples it is
-        usually ``mesh.n_cells``.
+        Strict upper bound for every value in ``rows`` and the radix used to
+        pack each row.
     return_inverse : bool, optional
         Whether to return inverse indices, matching ``torch.unique``.
     return_counts : bool, optional

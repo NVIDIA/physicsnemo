@@ -143,6 +143,51 @@ def test_metric_calculator_expected_keys_match_call():
     assert set(calc.expected_keys()) == computed
 
 
+def test_vector_aggregate_metric_is_direction_sensitive():
+    """The bare-name vector aggregate must penalize direction errors.
+
+    Adversarial case: ``pred = -target`` has the correct magnitude at
+    every point but maximally wrong direction. The aggregate ``wss_*``
+    metrics must say so (relative l1/l2 of a sign flip is exactly 2).
+    Before 2026-07 the bare-name aggregate was a magnitude comparison,
+    so this prediction scored 0 -- the headline vector metric could not
+    see direction errors at all. That broken behavior is not retained
+    under a separate metric key.
+    """
+    t = torch.randn(64, 3)
+    calc = MetricCalculator({"wss": "vector"})
+    out = calc(
+        TensorDict({"wss": -t}, batch_size=[]),
+        TensorDict({"wss": t}, batch_size=[]),
+    )
+    assert out["wss_l1"].item() == pytest.approx(2.0, rel=1e-5)
+    assert out["wss_l2"].item() == pytest.approx(2.0, rel=1e-5)
+    assert out["wss_mae"].item() == pytest.approx(
+        (2 * torch.mean(torch.abs(t.flatten()))).item(), rel=1e-5
+    )
+    assert not any("_mag_" in key for key in out.keys())
+
+
+def test_vector_aggregate_l2_is_frobenius():
+    """The bare-name l2 aggregate is the whole-field relative norm.
+
+    Pins the reduction axes: the field is flattened before the relative
+    norm, so the result is ``||pred - target||_F / ||target||_F`` --
+    not a mean of per-point ratios, which would blow up wherever the
+    target magnitude is near zero (e.g. WSS at stagnation points).
+    """
+    torch.manual_seed(0)
+    t = torch.randn(128, 3)
+    p = t + 0.1 * torch.randn(128, 3)
+    calc = MetricCalculator({"wss": "vector"}, metrics=["l2"])
+    out = calc(
+        TensorDict({"wss": p}, batch_size=[]),
+        TensorDict({"wss": t}, batch_size=[]),
+    )
+    expected = (torch.linalg.norm(p - t) / torch.linalg.norm(t)).item()
+    assert out["wss_l2"].item() == pytest.approx(expected, rel=1e-5)
+
+
 ### ---------------------------------------------------------------------------
 ### Autocast precision contract
 ### ---------------------------------------------------------------------------

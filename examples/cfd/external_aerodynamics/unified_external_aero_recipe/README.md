@@ -34,9 +34,10 @@ The pipeline non-dimensionalizes raw fields to unitless model inputs
 conditions (`U_inf`, `rho_inf`, `p_inf`, ...) live in each file's
 `global_data` and are read by `MeshReaderWithGlobalData`. Because the
 datasets are non-dimensionalized and loaded through the PhysicsNeMo
-datapipes' `MultiDataset` abstraction, you can merge datasets on the fly
-for multi-dataset training; the infrastructure supports it, though we
-haven't extensively tuned it. Non-dimensionalization itself is the
+datapipes' `MultiDataset` abstraction, directory-split datasets can be
+merged on the fly for multi-dataset training. Manifest-split datasets
+currently must be trained one at a time because their sampler indices
+are local to one dataset. Non-dimensionalization itself is the
 `NonDimensionalizeByMetadata` transform in `src/nondim.py`.
 
 ## Quick start
@@ -63,7 +64,7 @@ python src/infer.py model=geotransolver_surface dataset=highlift_surface \
 ```
 
 For the canonical CLI invocations of every named recipe (FA variants,
-GLOBE, multi-dataset Transolver, HiLift, DoMINO), see the
+GLOBE, HiLift, DoMINO), see the
 [Recipe Gallery](#recipe-gallery) section below.
 
 ## Pipeline architecture
@@ -461,7 +462,7 @@ dataset: drivaer_ml_volume
 # Multi-dataset: list of additional datasets to combine via MultiDataset
 extra_datasets: []
 
-# Manifest-mode split selectors (no-op for directory-mode datasets)
+# Non-null selectors request manifest mode; set both to null for directory mode
 train_split: train
 val_split: val
 
@@ -559,10 +560,9 @@ python src/train.py model=transolver_surface dataset=drivaer_ml_surface \
 python src/train.py model=transolver_volume dataset=drivaer_ml_volume \
     training.optimizer.lr=1e-3 training.scheduler.gamma=0.5
 
-# Transolver across DrivAerML + SHIFT SUV (multi-dataset)
-python src/train.py model=transolver_surface dataset=drivaer_ml_surface \
-    'extra_datasets=[shift_suv_estate_surface, shift_suv_fastback_surface]' \
-    training.optimizer.lr=1e-3 training.scheduler.gamma=0.5
+# Multi-dataset training is currently limited to directory-split datasets.
+# DrivAerML and SHIFT SUV use manifests and cannot be combined until their
+# local manifest indices are offset for MultiDataset sampling.
 
 # FLARE
 python src/train.py model=flare_surface dataset=drivaer_ml_surface \
@@ -686,9 +686,10 @@ file you need to edit per machine to point at your local data).
 
 ### Manifest-based data splitting
 
-DrivaerML and HiLift datasets use a `manifest.json` next to the data
-directory to define train/val/test splits. Selection is recipe-side via
-the top-level `train_split` / `val_split` keys in `train.yaml`:
+DrivaerML, HiLift, and SHIFT SUV datasets use a `manifest.json` next to
+the data directory to define train/val/test splits. Selection is
+recipe-side via the top-level `train_split` / `val_split` keys in
+`train.yaml`:
 
 ```yaml
 # in conf/train.yaml
@@ -696,10 +697,11 @@ train_split: train
 val_split: val
 ```
 
-`build_dataloaders` plumbs these into each chosen dataset; manifest-mode
-datasets pick them up via `resolve_manifest_spec`, while directory-mode
-datasets (e.g. SHIFT SUV) ignore them and use the dataset YAML's
-`train_datadir` / `val_datadir`.
+For a single manifest dataset, `build_dataloaders` plumbs these selectors
+into `resolve_manifest_spec`. For directory mode, set both selectors to
+`null` and use the dataset YAML's `train_datadir` / `val_datadir`.
+Manifest and directory modes cannot currently be mixed with
+`extra_datasets` because manifest indices are local to one dataset.
 
 The `ManifestSampler` in `src/datasets.py` resolves manifest entries to
 dataset indices and handles distributed sampling across ranks.

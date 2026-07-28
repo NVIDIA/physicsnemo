@@ -14,16 +14,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Pure-Torch point displacement and compact Shepard morphing kernels."""
+"""Pure-Torch point displacement, Shepard morphing, and lattice FFD kernels."""
 
 from __future__ import annotations
 
 from math import isqrt
 
 import torch
+from jaxtyping import Bool, Float
 from torch.utils.checkpoint import checkpoint
 
-from ._utils import _zero_dependency
+from ._utils import _ffd_window_size, _zero_dependency
 
 # Bound all live pairwise temporaries, rather than only the nominal
 # ``(B, query_chunk, control_chunk, D)`` difference tensor. Profiling the
@@ -394,7 +395,7 @@ def compact_shepard_field_torch(
         return points * 0 + zero
 
     # Dynamo cannot unroll shape-dependent Python chunk loops for symbolic
-    # dimensions. Let Inductor see one vectorized block while compiling; eager
+    # dimensions. Let Inductor see one vectorized block while compiling. Eager
     # execution retains byte-aware blocking below. Activation checkpointing is
     # still required for AOTAutograd training: without it, compiled backward
     # retains the complete O(B*N*C*D) pairwise graph.
@@ -473,6 +474,238 @@ def compact_shepard_field_torch(
     return chunks[0] if len(chunks) == 1 else torch.cat(chunks, dim=1)
 
 
+# FFD temporaries scale with the per-point basis window (all lattice nodes for
+# Bernstein, 4 per axis for B-splines) rather than with pairwise distances, so
+# fewer value-sized tensors stay live than in the Shepard path.
+_FFD_TEMPORARY_BYTE_BUDGET = 256 * 1024 * 1024
+_FFD_LIVE_VALUE_FACTOR = 8
+
+
+def _bernstein_rows(
+    u: Float[torch.Tensor, "*batch"], degree: int
+) -> Float[torch.Tensor, "*batch n_basis"]:
+    """Evaluate all Bernstein polynomials of ``degree`` at ``u``.
+
+    Uses the de Casteljau recurrence instead of the closed form
+    ``C(p, i) u^i (1-u)^(p-i)``: the backward of ``pow`` with a zero exponent
+    forms ``0 * u**-1``, which is NaN at the lattice faces ``u in {0, 1}``.
+    """
+
+    complement = 1 - u
+    rows = [torch.ones_like(u)]
+    for _ in range(degree):
+        raised = [complement * rows[0]]
+        raised.extend(
+            complement * rows[i] + u * rows[i - 1] for i in range(1, len(rows))
+        )
+        raised.append(u * rows[-1])
+        rows = raised
+    return torch.stack(rows, dim=-1)
+
+
+def _bspline_rows(
+    t: Float[torch.Tensor, "*batch"],
+) -> Float[torch.Tensor, "*batch 4"]:
+    """Evaluate the four uniform cubic B-spline weights at cell parameter ``t``."""
+
+    complement = 1 - t
+    t_squared = t * t
+    t_cubed = t_squared * t
+    return torch.stack(
+        [
+            complement * complement * complement / 6,
+            (3 * t_cubed - 6 * t_squared + 4) / 6,
+            (-3 * t_cubed + 3 * t_squared + 3 * t + 1) / 6,
+            t_cubed / 6,
+        ],
+        dim=-1,
+    )
+
+
+def _interpolating_rows(
+    t: Float[torch.Tensor, "*batch"], basis: str
+) -> Float[torch.Tensor, "*batch 2"]:
+    """Evaluate a two-node interpolating basis at cell coordinate ``t``."""
+
+    if basis == "linear":
+        upper = t
+    elif basis == "cubic_hermite":
+        upper = t * t * (3 - 2 * t)
+    else:
+        upper = t * t * t * (t * (6 * t - 15) + 10)
+    return torch.stack((1 - upper, upper), dim=-1)
+
+
+def _ffd_field_chunk(
+    points: Float[torch.Tensor, "batch num_points num_dims"],
+    lattice_displacements: Float[torch.Tensor, "batch lattice_nodes num_dims"],
+    origin: Float[torch.Tensor, "batch num_dims"],
+    extent: Float[torch.Tensor, "batch num_dims"],
+    resolution: tuple[int, ...],
+    basis: str,
+) -> Float[torch.Tensor, "batch num_points num_dims"]:
+    """Evaluate the lattice FFD displacement field for one query block."""
+
+    batch_size, num_points, num_dims = points.shape
+    u = (points - origin.unsqueeze(1)) / extent.unsqueeze(1)
+    inside = ((u >= 0) & (u <= 1)).all(dim=-1)
+    # Outside points are masked below, but their raw lattice coordinates can be
+    # arbitrarily large or non-finite. Substituting a constant keeps every basis
+    # value finite so masked rows backpropagate exact zeros instead of NaNs.
+    u = torch.where(inside.unsqueeze(-1), u, 0.0)
+
+    if basis == "bernstein":
+        weights = points.new_ones(batch_size, num_points, 1)
+        for d, size in enumerate(resolution):
+            rows = _bernstein_rows(u[..., d], size - 1)
+            weights = (weights.unsqueeze(-1) * rows.unsqueeze(-2)).reshape(
+                batch_size, num_points, -1
+            )
+        field = torch.bmm(weights, lattice_displacements)
+    else:
+        interpolating = basis != "bspline"
+        nodes_per_axis = 2 if interpolating else 4
+        strides: list[int] = []
+        stride = 1
+        for size in reversed(resolution):
+            strides.append(stride)
+            stride *= size
+        strides.reverse()
+        weights = points.new_ones(batch_size, num_points, 1)
+        flat_index = torch.zeros(
+            (batch_size, num_points, 1), dtype=torch.long, device=points.device
+        )
+        offsets = torch.arange(nodes_per_axis, device=points.device)
+        for d, size in enumerate(resolution):
+            span = size - 1 if interpolating else size - 3
+            s = u[..., d] * span
+            # The clamp keeps the final span active on the inclusive upper
+            # lattice face, where the raw cell index equals the span count.
+            cell = s.detach().clamp(0, span - 1).floor()
+            cell_coordinate = s - cell
+            rows = (
+                _interpolating_rows(cell_coordinate, basis)
+                if interpolating
+                else _bspline_rows(cell_coordinate)
+            )
+            node = cell.to(torch.long).unsqueeze(-1) + offsets
+            weights = (weights.unsqueeze(-1) * rows.unsqueeze(-2)).reshape(
+                batch_size, num_points, -1
+            )
+            flat_index = (
+                flat_index.unsqueeze(-1) + (node * strides[d]).unsqueeze(-2)
+            ).reshape(batch_size, num_points, -1)
+        window = weights.shape[-1]
+        gathered = torch.gather(
+            lattice_displacements,
+            1,
+            flat_index.reshape(batch_size, num_points * window, 1).expand(
+                -1, -1, num_dims
+            ),
+        ).reshape(batch_size, num_points, window, num_dims)
+        field = (weights.unsqueeze(-1) * gathered).sum(dim=2)
+
+    # ``where`` returns exact zeros for outside rows, even when lattice
+    # displacements are non-finite. Multiplying by a mask would propagate NaNs.
+    return torch.where(inside.unsqueeze(-1), field, 0.0)
+
+
+def _ffd_chunk_size(
+    batch_size: int,
+    num_points: int,
+    window: int,
+    num_dims: int,
+    element_size: int,
+) -> int:
+    """Choose a query block size within the live temporary byte budget."""
+
+    per_point_bytes = (
+        _FFD_LIVE_VALUE_FACTOR
+        * element_size
+        * max(batch_size, 1)
+        * window
+        * (num_dims + 1)
+    )
+    return min(num_points, max(1, _FFD_TEMPORARY_BYTE_BUDGET // per_point_bytes))
+
+
+def ffd_points_torch(
+    points: Float[torch.Tensor, "batch num_points num_dims"],
+    control_displacements: Float[torch.Tensor, "batch lattice_nodes num_dims"],
+    origin: Float[torch.Tensor, "batch num_dims"],
+    extent: Float[torch.Tensor, "batch num_dims"],
+    resolution: tuple[int, ...],
+    basis: str,
+    point_weights: Bool[torch.Tensor, "batch num_points"]
+    | Float[torch.Tensor, "batch num_points"]
+    | None,
+) -> Float[torch.Tensor, "batch num_points num_dims"]:
+    """Deform normalized rank-3 points with a lattice free-form field."""
+
+    batch_size, num_points, num_dims = points.shape
+    if batch_size == 0 or num_points == 0:
+        # The point identity supplies its gradient directly. Connect every other
+        # differentiable input through one scalar zero instead of evaluating an
+        # empty field.
+        zero = _zero_dependency(control_displacements, point_weights)
+        return points + zero
+
+    needs_grad = torch.is_grad_enabled() and any(
+        tensor.requires_grad for tensor in (points, control_displacements)
+    )
+    if torch.compiler.is_compiling():
+        # Dynamo cannot unroll shape-dependent Python chunk loops for symbolic
+        # dimensions. Let Inductor see one vectorized block while compiling.
+        # activation checkpointing reduces saved activations for training but
+        # does not enforce the eager path's temporary-memory budget.
+        if needs_grad:
+            field = checkpoint(
+                _ffd_field_chunk,
+                points,
+                control_displacements,
+                origin,
+                extent,
+                resolution,
+                basis,
+                use_reentrant=False,
+                preserve_rng_state=False,
+            )
+        else:
+            field = _ffd_field_chunk(
+                points, control_displacements, origin, extent, resolution, basis
+            )
+        return displace_points_torch(points, field, point_weights)
+
+    window = _ffd_window_size(resolution, basis)
+    query_chunk = _ffd_chunk_size(
+        batch_size, num_points, window, num_dims, points.element_size()
+    )
+    checkpoint_chunks = needs_grad and query_chunk < num_points
+    chunks: list[torch.Tensor] = []
+    for query_start in range(0, num_points, query_chunk):
+        query = points[:, query_start : query_start + query_chunk]
+        if checkpoint_chunks:
+            field = checkpoint(
+                _ffd_field_chunk,
+                query,
+                control_displacements,
+                origin,
+                extent,
+                resolution,
+                basis,
+                use_reentrant=False,
+                preserve_rng_state=False,
+            )
+        else:
+            field = _ffd_field_chunk(
+                query, control_displacements, origin, extent, resolution, basis
+            )
+        chunks.append(field)
+
+    field = chunks[0] if len(chunks) == 1 else torch.cat(chunks, dim=1)
+    return displace_points_torch(points, field, point_weights)
+
+
 def morph_points_torch(
     points: torch.Tensor,
     control_points: torch.Tensor,
@@ -500,5 +733,6 @@ def morph_points_torch(
 __all__ = [
     "compact_shepard_field_torch",
     "displace_points_torch",
+    "ffd_points_torch",
     "morph_points_torch",
 ]

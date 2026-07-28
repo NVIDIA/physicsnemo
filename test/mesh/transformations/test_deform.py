@@ -355,11 +355,33 @@ def test_domain_morph_rejects_raw_point_weight_tensor():
 def test_domain_morph_evaluates_combined_components_once(monkeypatch):
     domain = _domain_with_coincident_points()
     outlet = Mesh(
-        points=torch.tensor([[2.0, 0.0], [2.0, 1.0]]),
-        cells=torch.tensor([[0, 1]]),
-        point_data={"marker": torch.tensor([0.5, 0.75])},
+        points=torch.tensor([[2.0, 0.0], [2.0, 1.0], [3.0, 0.0]]),
+        cells=torch.tensor([[0, 1], [1, 2]]),
+        point_data={"marker": torch.tensor([0.5, 0.75, 0.25])},
     )
     domain.boundaries["outlet"] = outlet
+
+    control_points = torch.tensor([[0.0, 0.0]])
+    control_displacements = torch.tensor([[0.0, 0.5]])
+    expected = {
+        "interior": domain.interior.morph(
+            control_points,
+            control_displacements,
+            radius=3.0,
+            point_weights="marker",
+            implementation="torch",
+        ),
+        **{
+            name: component.morph(
+                control_points,
+                control_displacements,
+                radius=3.0,
+                point_weights="marker",
+                implementation="torch",
+            )
+            for name, component in domain.boundaries.items()
+        },
+    }
 
     deform_module = importlib.import_module("physicsnemo.nn.functional.geometry.deform")
     original = deform_module.morph_points
@@ -373,8 +395,8 @@ def test_domain_morph_evaluates_combined_components_once(monkeypatch):
 
     monkeypatch.setattr(deform_module, "morph_points", counted_morph_points)
     output = domain.morph(
-        torch.tensor([[0.0, 0.0]]),
-        torch.tensor([[0.0, 0.5]]),
+        control_points,
+        control_displacements,
         radius=3.0,
         point_weights="marker",
         implementation="torch",
@@ -382,10 +404,10 @@ def test_domain_morph_evaluates_combined_components_once(monkeypatch):
 
     assert len(calls) == 1
     assert kernels == ["wendland_c2"]
-    assert calls[0].shape == (7, 2)
-    assert output.interior.n_points == 3
-    assert output.boundaries["wall"].n_points == 2
-    assert output.boundaries["outlet"].n_points == 2
+    assert calls[0].shape == (8, 2)
+    torch.testing.assert_close(output.interior.points, expected["interior"].points)
+    for name, boundary in output.boundaries.items():
+        torch.testing.assert_close(boundary.points, expected[name].points)
 
 
 def test_domain_morph_single_component_avoids_concatenation(monkeypatch):
