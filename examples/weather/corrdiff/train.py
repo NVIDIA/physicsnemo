@@ -34,7 +34,16 @@ from physicsnemo.models.diffusion_unets import CorrDiffRegressionUNet
 from physicsnemo.diffusion.preconditioners import EDMPrecondSuperResolution
 
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.diffusion.metrics import RegressionLoss, ResidualLoss, RegressionLossCE
+from physicsnemo.diffusion.metrics import (
+    RegressionCharbonnierLoss,
+    RegressionEdgeAwareLoss,
+    RegressionHuberLoss,
+    RegressionHybridStructuralLoss,
+    RegressionLoss,
+    RegressionLossCE,
+    RegressionShiftTolerantLoss,
+    ResidualLoss,
+)
 from physicsnemo.diffusion.multi_diffusion import RandomPatching2D
 from physicsnemo.utils.logging.wandb import initialize_wandb
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
@@ -85,6 +94,7 @@ def checkpoint_list(path, suffix=".mdlus"):
 
 # Define safe CUDA profiler tools that fallback to no-ops when CUDA is not available
 def cuda_profiler():
+    """Return a CUDA profiler context manager or a no-op context on CPU."""
     if torch.cuda.is_available():
         return torch.cuda.profiler.profile()
     else:
@@ -92,16 +102,19 @@ def cuda_profiler():
 
 
 def cuda_profiler_start():
+    """Start CUDA profiling only when CUDA is available."""
     if torch.cuda.is_available():
         torch.cuda.profiler.start()
 
 
 def cuda_profiler_stop():
+    """Stop CUDA profiling only when CUDA is available."""
     if torch.cuda.is_available():
         torch.cuda.profiler.stop()
 
 
 def profiler_emit_nvtx():
+    """Return NVTX emit context manager or a no-op context on CPU."""
     if torch.cuda.is_available():
         return torch.autograd.profiler.emit_nvtx()
     else:
@@ -111,6 +124,7 @@ def profiler_emit_nvtx():
 # Train the CorrDiff model using the configurations in "conf/config_training.yaml"
 @hydra.main(version_base="1.2", config_path="conf", config_name="config_training")
 def main(cfg: DictConfig) -> None:
+    """Train CorrDiff using the selected model and loss configuration."""
     # Initialize distributed environment for training
     DistributedManager.initialize()
     dist = DistributedManager()
@@ -474,7 +488,22 @@ def main(cfg: DictConfig) -> None:
             **loss_init_kwargs,
         )
     elif cfg.model.name == "regression" or cfg.model.name == "lt_aware_regression":
-        loss_fn = RegressionLoss()
+        regression_loss_name = getattr(cfg.model, "loss", "RegressionLoss")
+        regression_loss_map = {
+            "RegressionLoss": RegressionLoss,
+            "RegressionHuberLoss": RegressionHuberLoss,
+            "RegressionCharbonnierLoss": RegressionCharbonnierLoss,
+            "RegressionEdgeAwareLoss": RegressionEdgeAwareLoss,
+            "RegressionShiftTolerantLoss": RegressionShiftTolerantLoss,
+            "RegressionHybridStructuralLoss": RegressionHybridStructuralLoss,
+        }
+        if regression_loss_name not in regression_loss_map:
+            valid_losses = ", ".join(regression_loss_map.keys())
+            raise ValueError(
+                f"Invalid regression loss '{regression_loss_name}'. "
+                f"Valid options are: {valid_losses}."
+            )
+        loss_fn = regression_loss_map[regression_loss_name]()
     elif cfg.model.name == "lt_aware_ce_regression":
         loss_fn = RegressionLossCE(prob_channels=prob_channels)
 
