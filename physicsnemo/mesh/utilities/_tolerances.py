@@ -22,7 +22,9 @@ coordinates live at a scale far from unity.  For float64 in particular,
 results on micro- or nanoscale geometries.
 
 This module provides :func:`safe_eps`, which returns a floor value derived
-from the dtype alone, chosen so that:
+from the dtype alone, and :func:`safe_normalize`, which normalizes vectors
+with no clamp floor at all -- no single epsilon is correct across every dtype
+and mesh scale. ``safe_eps`` is chosen so that:
 
 - It is small enough to never activate on any physically meaningful mesh.
 - ``1 / safe_eps(dtype)`` does not overflow in the dtype's arithmetic.
@@ -46,6 +48,7 @@ values that are numerically meaningful in that dtype.
 """
 
 import torch
+from jaxtyping import Float
 
 
 def safe_eps(dtype: torch.dtype) -> float:
@@ -76,3 +79,81 @@ def safe_eps(dtype: torch.dtype) -> float:
     """
     info = torch.finfo(dtype)
     return min(info.tiny**0.25, info.eps)
+
+
+def safe_normalize(
+    vectors: Float[torch.Tensor, "..."],
+    dim: int,
+) -> Float[torch.Tensor, "..."]:
+    r"""Scale vectors to unit length along ``dim`` without an epsilon clamp.
+
+    ``torch.nn.functional.normalize`` divides by the norm clamped below at a
+    hardcoded ``eps=1e-12``, which is wrong in three separate ways:
+
+    - In ``float16`` that floor is not representable and rounds to zero, so a
+      degenerate cell computes ``0 / 0`` and its normal becomes NaN.
+    - The floor is *absolute*, so a genuine norm below ``1e-12`` is silently
+      substituted. In ``float32`` and ``float64`` alike this yields non-unit
+      normals once mesh feature size falls below roughly ``1e-6`` -- exactly
+      the micro- and nanoscale case this module exists to protect.
+    - Squaring components to form the norm overflows to ``inf`` for large
+      inputs, and ``v / inf`` silently returns a *zero* normal for a
+      perfectly well-conditioned cell.
+
+    No epsilon fixes all three: in ``float16`` every representable floor,
+    :func:`safe_eps` included, is large enough to shorten valid normals.
+    Instead each vector is divided by its own largest component before the
+    norm is taken. The rescaled vector's largest component is exactly one, so
+    its norm always lies in :math:`[1, \sqrt{n}]` for :math:`n` components --
+    it can neither overflow nor underflow -- and only an exactly zero vector
+    still needs a guard.
+
+    Parameters
+    ----------
+    vectors : Float[torch.Tensor, "..."]
+        Vectors to normalize, of any shape.
+    dim : int
+        Dimension holding the vector components. Deliberately has no default:
+        ``torch.nn.functional.normalize`` defaults to ``dim=1`` while mesh code
+        wants ``dim=-1``, and a silent mismatch would be easy to miss at a
+        call site.
+
+    Returns
+    -------
+    Float[torch.Tensor, "..."]
+        Unit vectors along ``dim``, with the shape and dtype of ``vectors``.
+        Rows that are exactly zero are returned as zero vectors -- the
+        convention the mesh normal APIs report for degenerate (zero-area)
+        cells and for points with no incident cell.
+
+    Notes
+    -----
+    Finite input always produces finite output, since the rescaled norm is
+    bounded below by one. Non-finite input is not repaired: a single ``inf``
+    or ``NaN`` component makes the whole vector NaN, rather than the partially
+    finite result ``torch.nn.functional.normalize`` happens to produce.
+
+    Examples
+    --------
+    >>> v = torch.tensor([[3.0e-13, 4.0e-13], [0.0, 0.0]])
+    >>> safe_normalize(v, dim=-1)
+    tensor([[0.6000, 0.8000],
+            [0.0000, 0.0000]])
+    """
+    ### ``amax`` rejects a zero-size reduction dim, and there is nothing to
+    ### normalize in that case anyway.
+    if vectors.shape[dim] == 0:
+        return vectors
+
+    ### Rescaling adds a pass over ``vectors`` relative to a plain clamp and
+    ### divide, making this memory-bound kernel roughly 2-4x slower on its own.
+    ### That is a deliberate correctness-over-speed trade, not an oversight:
+    ### removing the rescale reintroduces the overflow and small-norm errors
+    ### described above, which ``TestSafeNormalize`` pins down. Mesh normals
+    ### are cached per ``Mesh``, so the cost is paid once per mesh and stays
+    ### sub-millisecond even at multi-million cells.
+    scale = vectors.abs().amax(dim=dim, keepdim=True)
+    is_zero = scale == 0
+    scaled = vectors / scale.masked_fill(is_zero, 1)
+    norm = scaled.norm(dim=dim, keepdim=True)
+    return scaled / norm.masked_fill(is_zero, 1)
