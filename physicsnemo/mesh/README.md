@@ -328,6 +328,7 @@ Comprehensive overview of PhysicsNeMo-Mesh capabilities:
 | Dense point displacement | ✅ | Aligned tensor or `point_data` key, with optional point weights |
 | Sparse control-point morphing | ✅ | Wendland-C2 compact support with scalar or per-control radii |
 | Global radial-basis deformation | ✅ | Thin-plate-spline field with an affine polynomial tail |
+| Nearest-surface shrinkwrap | ✅ | Differentiable triangle projection with Torch and Warp search backends |
 | **Deformation energies** | | |
 | Simplex strain | ✅ | Reference-relative St. Venant--Kirchhoff energy |
 | Local and total measure | ✅ | Length, area, or volume penalty |
@@ -336,7 +337,7 @@ Comprehensive overview of PhysicsNeMo-Mesh capabilities:
 | Enclosed volume | ✅ | One edge-connected, closed, consistently oriented triangle surface |
 | Extrusion | ✅ | Manifold → higher dimension |
 | Coordinate projection (drop ambient dims) | ✅ | `projections.project` (e.g. 3D → 2D embedding) |
-| Surface projection / mesh intersection | ❌ | Manifold → lower *manifold* dimension; work in progress |
+| Mesh intersection | ❌ | Manifold → lower *manifold* dimension. Work in progress |
 | **Neighbors & Adjacency** | | |
 | Point-to-points | ✅ | Graph edges |
 | Point-to-cells | ✅ | Vertex star |
@@ -435,6 +436,31 @@ affine polynomial tail, `smoothing=0.0`, and a nonsingular control layout, it
 interpolates every control displacement up to solver precision. Positive
 smoothing adds diagonal regularization and deliberately relaxes interpolation
 accuracy.
+
+### Nearest-Surface Shrinkwrap
+
+```python
+# target must be a triangle surface on the same device and dtype
+fitted = mesh.shrinkwrap(
+    target,
+    offset=0.01,
+    max_distance=0.25,
+    point_weights="design_mask",
+)
+```
+
+`point_weights` can be a tensor or a key in `mesh.point_data`. Boolean masks
+can fit selected panel vertices while leaving the remainder fixed. Nearest-face
+selection is discrete. Between face, feature, and distance-cutoff transitions,
+gradients propagate through source points, selected target vertices, floating
+weights, and a tensor-valued `offset`.
+
+Float64 targets use the Torch search because Warp searches in float32. Safe
+float32 coordinates are searched unchanged. Warp falls back to Torch for
+unsafe coordinate magnitudes or face geometry.
+
+Shrinkwrap performs data-dependent validation and search setup. CUDA executions
+with either backend are not supported inside CUDA Graph capture.
 
 ### Subdivision
 

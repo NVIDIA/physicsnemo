@@ -53,6 +53,7 @@ from physicsnemo.mesh.transformations.deform import (
     free_form_deform,
     morph,
     radial_basis_function_deform,
+    shrinkwrap,
 )
 from physicsnemo.mesh.transformations.geometric import (
     rotate,
@@ -2479,6 +2480,8 @@ class Mesh:
     morph = morph
 
     radial_basis_function_deform = radial_basis_function_deform
+
+    shrinkwrap = shrinkwrap
 
     rotate = rotate
 

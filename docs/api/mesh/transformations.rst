@@ -41,7 +41,7 @@ Deformations
 
 .. currentmodule:: physicsnemo.mesh.transformations.deform
 
-The ``deform`` namespace provides four deformation families:
+The ``deform`` namespace provides five deformation families:
 
 - Dense displacement through :func:`displace`, backed by
   :func:`~physicsnemo.nn.functional.displace_points`.
@@ -52,6 +52,8 @@ The ``deform`` namespace provides four deformation families:
   :func:`~physicsnemo.nn.functional.radial_basis_function_deform_points`.
 - Lattice free-form deformation through :func:`free_form_deform`, backed by
   :func:`~physicsnemo.nn.functional.free_form_deform_points`.
+- Nearest-surface conformance through :func:`shrinkwrap`, backed by
+  :func:`~physicsnemo.nn.functional.shrinkwrap_points`.
 
 Each operation is also available as a method on
 :class:`~physicsnemo.mesh.mesh.Mesh`.
@@ -342,6 +344,92 @@ produce two local bulges and a local indentation.
    :alt: Sphere with control lattice, Bernstein taper, and local B-spline sculpt
    :width: 100%
 
+Nearest-Surface Shrinkwrap
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+:meth:`~physicsnemo.mesh.mesh.Mesh.shrinkwrap` projects source vertices to
+their closest points on a triangle target. An optional signed ``offset`` keeps
+the result a specified distance from the target along its oriented face
+normals. ``point_weights`` can fix selected vertices or apply a partial
+projection. ``max_distance`` leaves vertices unchanged when no target surface
+is close enough.
+
+The following call is the central operation in the curved-panel example:
+
+.. code:: python
+
+    conformed = source.shrinkwrap(
+        panel_target,
+        point_weights=movable,
+        max_distance=0.34,
+    )
+
+The example constructs a swept triangle panel and adds a smooth springback
+error to form the source sheet. The boolean ``movable`` mask keeps its green
+root attachment strip fixed. The movable vertices lie on the target surface.
+Color shows how far each source vertex moved.
+
+.. figure:: ../../img/mesh/shrinkwrap_panel_conformance.png
+   :alt: Curved triangle panel, lifted source sheet, and shrinkwrapped result
+   :width: 100%
+
+Nearest-face selection and closest-feature changes are discrete. With those
+choices fixed, gradients propagate through source points, selected target
+vertices, floating point weights, and a tensor-valued ``offset``. At a shared
+edge or vertex, adjacent faces can provide different normals. Use consistently
+oriented target faces and avoid placing offset-sensitive samples exactly on
+shared features.
+
+Torch provides the reference search. Warp accelerates nearest-face search on
+CPU and CUDA. Both backends replay the selected point-to-triangle projection
+with PyTorch in the input dtype. The full example is
+``examples/minimal/mesh/shrinkwrap_panel_conformance.py``.
+Shrinkwrap is available on :class:`~physicsnemo.mesh.mesh.Mesh`, not
+:class:`~physicsnemo.mesh.domain_mesh.DomainMesh`, because one source mesh is
+projected onto one target surface.
+
+Float64 targets use the Torch search because Warp searches in float32. Safe
+float32 coordinates are searched unchanged. Warp falls back to Torch for
+unsafe coordinate magnitudes or face geometry.
+
+Shrinkwrap performs data-dependent validation and nearest-face search setup.
+CUDA executions with either backend are not supported inside CUDA Graph
+capture.
+
+.. rubric:: Shape-Optimization Constraint Example
+
+In shape optimization, an otherwise acceptable design iterate can locally
+cross an admissible clearance surface. This example constructs a closed
+triangulated low-profile enclosure with an inset lid and chamfered walls. A
+boolean mask selects only the vertices above a horizontal clearance plane.
+
+.. code:: python
+
+    feasible = candidate.shrinkwrap(
+        admissible_envelope,
+        point_weights=design_region,
+    )
+
+Before repair, a smooth orange dome protrudes through the blue clearance plane
+while the broad gold lid deformation remains admissible. Shrinkwrap projects
+only the violating vertices back to the limit. After repair, the cap is green,
+the gold optimized surface is retained, and an orange wire outline marks the
+former excess.
+
+All connectivity is triangular. The example checks the repaired-cap residual,
+exact preservation of admissible vertices, closed two-manifold source and
+result connectivity, consistent winding, positive enclosed volume, adjoints,
+and Torch versus Warp agreement. Shrinkwrap restores this geometric
+constraint. It does not run the optimizer or guarantee valid cells for
+arbitrary inputs.
+
+.. figure:: ../../img/mesh/shrinkwrap_solid_surface.png
+   :alt: Selective repair of an optimized enclosure crossing a clearance plane
+   :width: 100%
+
+The full example is
+``examples/minimal/mesh/shrinkwrap_solid_surface.py``.
+
 Domain Meshes
 ^^^^^^^^^^^^^
 
@@ -426,6 +514,8 @@ For optimization-time geometric penalties on a fixed topology, see
 .. autofunction:: morph
 
 .. autofunction:: radial_basis_function_deform
+
+.. autofunction:: shrinkwrap
 
 Projections
 -----------

@@ -68,6 +68,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``physicsnemo.nn.functional``, with mesh-aware wrappers in
   ``physicsnemo.mesh.deformation``. Torch supports higher-order derivatives,
   and Warp provides first-order GPU kernels.
+- Adds differentiable nearest-surface shrinkwrap through
+  `shrinkwrap_points` and `Mesh.shrinkwrap`. Torch provides the reference
+  search, NVIDIA Warp accelerates float32 nearest-face queries on CPU and CUDA,
+  and both backends replay the selected projection with PyTorch autograd.
+  Triangulated examples demonstrate weighted panel conformance and partial
+  design-region projection onto a shape-optimization constraint.
 - Adds `uniform_grid_divergence`, `uniform_grid_curl`, and
   `uniform_grid_laplacian` to `physicsnemo.nn.functional`, with Torch and fused
   Warp implementations for periodic Cartesian grids.
