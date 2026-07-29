@@ -443,6 +443,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   broke the `test_get_checkpoint_dir` CI test on Windows. The function now
   always joins with `/`, working uniformly for local paths and `fsspec`
   URIs (`msc://`, etc.) across operating systems.
+- Mesh normals no longer inherit the hardcoded `eps=1e-12` clamp of
+  `torch.nn.functional.normalize`, which is wrong at both ends of every
+  dtype's range. Cell normals, point normals, normals carried through a
+  `transform`, and `partition_cells` cluster normals now divide each vector
+  by its own largest component before normalizing, which is exact wherever
+  the input is representable. Three distinct failures are fixed. Degenerate
+  (zero-area) cells and points with no incident cell returned NaN in
+  `float16`, where the clamp floor is not representable so the division was
+  `0 / 0`. Cells below roughly `1e-6` units across returned normals that were
+  not unit length in `float32` *and* `float64` alike, since an absolute floor
+  corrupts the highest-precision dtype just as badly as the lowest: a 100 nm
+  cell measured in metres came back with a normal of length `1e-2`. Cells
+  whose cross product nearly fills the dtype came back with a silently *zero*
+  normal, because squaring the components overflowed the norm to `inf`.
+  Well-conditioned meshes are unchanged beyond a one-ULP shift.
 
 ### Security
 

@@ -48,6 +48,77 @@ def _relative_vectors(vertices: list[list[float]]) -> torch.Tensor:
     return (pts[1:] - pts[0]).unsqueeze(0)
 
 
+@pytest.mark.parametrize(
+    "vectors",
+    [
+        torch.zeros((1, 1, 2), dtype=torch.float16),
+        torch.zeros((1, 2, 3), dtype=torch.float16),
+    ],
+)
+def test_degenerate_float16_cell_has_zero_normal(vectors):
+    """Exactly degenerate reduced-precision cells have finite zero normals."""
+    result = compute_cell_normals(vectors)
+
+    assert result.isfinite().all()
+    assert torch.equal(result, torch.zeros_like(result))
+
+
+def test_small_float16_cell_normal_remains_unit_length():
+    """A zero guard must not shorten representable nonzero normals."""
+    vectors = torch.tensor([[[1.0e-4, 0.0]]], dtype=torch.float16)
+
+    result = compute_cell_normals(vectors)
+
+    torch.testing.assert_close(
+        result,
+        torch.tensor([[0.0, 1.0]], dtype=torch.float16),
+    )
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_small_feature_size_cell_normal_remains_unit_length(dtype):
+    """Nanoscale cells still get unit normals, in float64 as much as float32.
+
+    A triangle with edge length :math:`L` has a cross product of magnitude
+    :math:`L^2`, so a 100 nm cell in metres lands at ``1e-14`` -- two orders
+    below the ``eps=1e-12`` floor that ``torch.nn.functional.normalize``
+    clamps to. That floor is absolute rather than dtype-relative, so it
+    corrupts the highest-precision dtype exactly as badly as the lowest:
+    before the fix both returned a normal of length ``1e-2``.
+    """
+    edge_length = 1.0e-7
+    vectors = torch.tensor(
+        [[[edge_length, 0.0, 0.0], [0.0, edge_length, 0.0]]], dtype=dtype
+    )
+
+    result = compute_cell_normals(vectors)
+
+    torch.testing.assert_close(result, torch.tensor([[0.0, 0.0, 1.0]], dtype=dtype))
+
+
+def test_large_magnitude_float16_cell_normal_remains_unit_length():
+    """Cells whose cross product nearly fills float16 keep a unit normal.
+
+    Each component of the cross product here is representable, but their sum
+    of squares is not, so the float16 norm evaluates to ``inf``. Dividing by
+    it returns a *zero* normal for a perfectly well-conditioned cell -- a
+    silently wrong answer rather than a NaN, so nothing downstream flags it.
+    """
+    vectors = torch.tensor(
+        [[[148.0, 0.0, -148.0], [0.0, 256.0, 256.0]]], dtype=torch.float16
+    )
+
+    result = compute_cell_normals(vectors)
+
+    expected = 1.0 / math.sqrt(3.0)
+    torch.testing.assert_close(
+        result,
+        torch.tensor([[expected, -expected, expected]], dtype=torch.float16),
+        rtol=0.0,
+        atol=8 * torch.finfo(torch.float16).eps,
+    )
+
+
 ### Branch 1: _normals_2d (edges in 2D) ###
 
 

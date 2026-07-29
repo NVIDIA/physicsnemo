@@ -390,6 +390,23 @@ class TestIsolatedPoints:
         for i in range(3):
             assert normals[i].norm() > 0.9
 
+    def test_isolated_float16_point_has_zero_normal(self):
+        points = torch.tensor(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [2.0, 2.0, 2.0],
+            ],
+            dtype=torch.float16,
+        )
+        mesh = Mesh(points=points, cells=torch.tensor([[0, 1, 2]]))
+
+        normals = mesh.compute_point_normals(weighting="unweighted")
+
+        assert normals.isfinite().all()
+        assert torch.equal(normals[3], torch.zeros(3, dtype=torch.float16))
+
 
 class TestCaching:
     """Tests for caching behavior of point normals."""
