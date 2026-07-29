@@ -23,6 +23,7 @@ These tests verify that __post_init__ correctly restores empty cells tensors.
 """
 
 import torch
+from tensordict import TensorDict
 
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.primitives.basic import two_triangles_2d
@@ -43,6 +44,23 @@ class TestMemmapRoundTrip:
         assert loaded.cells.shape == mesh.cells.shape
         assert torch.equal(loaded.cells, mesh.cells)
         assert torch.allclose(loaded.points, mesh.points)
+
+    def test_nested_in_tensordict_preserves_mesh_type(self, tmp_path):
+        """A Mesh nested in a TensorDict retains its type after a round-trip."""
+        mesh = two_triangles_2d.load()
+        sample = TensorDict(
+            {
+                "mesh": mesh,
+                "target": torch.tensor(1.0),
+            },
+            batch_size=[],
+        )
+        path = tmp_path / "sample"
+
+        sample.save(path)
+        loaded = TensorDict.load(path)
+
+        assert type(loaded["mesh"]) is Mesh
 
     def test_point_cloud_direct(self, tmp_path):
         """Point cloud created via constructor (cells=None) survives memmap round-trip."""
