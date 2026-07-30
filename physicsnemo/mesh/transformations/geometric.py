@@ -14,16 +14,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Geometric transformations for simplicial meshes.
+"""Linear and affine transformations for simplicial meshes.
 
-This module implements linear and affine transformations with intelligent
-cache handling. By default, all caches are invalidated; transformations
-explicitly opt-in to preserve/transform specific cache fields.
+This module implements geometric point transformations with intelligent cache
+handling. By default, all caches are invalidated; transformations explicitly
+opt in to preserve or update valid cache fields.
 
 Cached fields handled:
 - areas: point_data and cell_data
 - normals: point_data and cell_data
 - centroids: cell_data only
+
 """
 
 from collections.abc import Sequence
@@ -285,7 +286,7 @@ def rotation_matrix(
     device: torch.device,
     dtype: torch.dtype,
 ) -> Float[torch.Tensor, "n_spatial_dims n_spatial_dims"]:
-    r"""Build a rotation matrix from angle and axis.
+    """Build a rotation matrix from angle and axis.
 
     Parameters
     ----------
@@ -317,7 +318,7 @@ def scale_matrix(
     device: torch.device,
     dtype: torch.dtype,
 ) -> Float[torch.Tensor, "n_spatial_dims n_spatial_dims"]:
-    r"""Build a diagonal scale matrix from a factor specification.
+    """Build a diagonal scale matrix from a factor specification.
 
     Parameters
     ----------
@@ -439,6 +440,9 @@ def transform(
 ) -> "Mesh":
     """Apply a linear transformation to the mesh.
 
+    Call it as ``transform(mesh, ...)`` or as ``mesh.transform(...)``. The
+    bound method supplies ``mesh`` automatically.
+
     Parameters
     ----------
     mesh : Mesh
@@ -457,9 +461,20 @@ def transform(
     assume_invertible : bool or None
         Controls cache propagation for square matrices:
 
-        - True: Assume matrix is invertible, propagate caches (compile-safe)
-        - False: Assume matrix is singular, skip cache propagation (compile-safe)
-        - None: Check determinant at runtime (may cause graph breaks under torch.compile)
+        - ``True``: assume ``matrix`` is invertible and propagate caches
+          (compile-safe). This is a promise, not a check. If ``matrix`` is in
+          fact singular, the inverse-transpose step silently yields non-finite
+          values instead of raising, so the propagated ``normals`` and ``areas``
+          caches -- and anything derived from them, such as the sum of
+          ``cell_areas`` -- come back as NaN. Use ``False`` or ``None`` unless
+          you know the matrix is non-singular.
+        - ``False``: assume ``matrix`` is singular and skip cache propagation
+          (compile-safe). Caches are dropped and recomputed lazily on demand,
+          which is always correct, just slower.
+        - ``None`` (default): test ``abs(det(matrix)) > 1e-10`` at runtime and
+          take one of the branches above. Safe for singular input, but the test
+          reads a device scalar back to the host, which synchronizes on CUDA and
+          may cause graph breaks under ``torch.compile``.
 
     Returns
     -------
@@ -491,9 +506,9 @@ def transform(
     device = mesh.points.device
     new_cache = TensorDict(
         {
-            "cell": TensorDict({}, batch_size=[mesh.n_cells]),
-            "point": TensorDict({}, batch_size=[mesh.n_points]),
-            "topology": mesh._cache.get("topology", TensorDict({})),
+            "cell": TensorDict({}, batch_size=[mesh.n_cells], device=device),
+            "point": TensorDict({}, batch_size=[mesh.n_points], device=device),
+            "topology": mesh._cache.get("topology", TensorDict({}, device=device)),
         },
         device=device,
     )
@@ -502,10 +517,11 @@ def transform(
     if matrix.shape[0] == matrix.shape[1]:
         det = matrix.det()
 
+        ### The runtime det test syncs (host readback of a cuda tensor).
         if assume_invertible is not None:
             is_invertible = assume_invertible
         else:
-            is_invertible = det.abs() > 1e-10
+            is_invertible = bool(det.abs() > 1e-10)
 
         if is_invertible:
             det_sign = det.sign()
@@ -521,7 +537,9 @@ def transform(
             elif mesh.codimension == 1:
                 ### Cell (face) normals: the inverse-transpose law is exact per face.
                 if (v := mesh._cache.get(("cell", "normals"), None)) is not None:
-                    transformed = torch.linalg.solve(matrix.T, v.T).T
+                    transformed = torch.linalg.solve_ex(
+                        matrix.T, v.T, check_errors=False
+                    ).result.T
                     norm_scale = transformed.norm(dim=-1)
                     if (areas := mesh._cache.get(("cell", "areas"), None)) is not None:
                         new_cache["cell", "areas"] = areas * det_abs * norm_scale
@@ -547,7 +565,9 @@ def transform(
                         and _is_similarity_transform(matrix)
                     )
                 ):
-                    transformed = torch.linalg.solve(matrix.T, v.T).T
+                    transformed = torch.linalg.solve_ex(
+                        matrix.T, v.T, check_errors=False
+                    ).result.T
                     new_cache["point", "normals"] = det_sign * F.normalize(
                         transformed, dim=-1
                     )
@@ -592,6 +612,9 @@ def translate(
     Translation only affects point positions and centroids. Vector/tensor fields
     are unchanged by translation (they represent directions, not positions).
 
+    Call it as ``translate(mesh, ...)`` or as ``mesh.translate(...)``. The
+    bound method supplies ``mesh`` automatically.
+
     Parameters
     ----------
     mesh : Mesh
@@ -624,9 +647,9 @@ def translate(
     device = mesh.points.device
     new_cache = TensorDict(
         {
-            "cell": TensorDict({}, batch_size=[mesh.n_cells]),
-            "point": TensorDict({}, batch_size=[mesh.n_points]),
-            "topology": mesh._cache.get("topology", TensorDict({})),
+            "cell": TensorDict({}, batch_size=[mesh.n_cells], device=device),
+            "point": TensorDict({}, batch_size=[mesh.n_points], device=device),
+            "topology": mesh._cache.get("topology", TensorDict({}, device=device)),
         },
         device=device,
     )
@@ -666,6 +689,9 @@ def rotate(
     transform_global_data: bool | TensorDict = False,
 ) -> "Mesh":
     """Rotate the mesh about an axis by a specified angle.
+
+    Call it as ``rotate(mesh, ...)`` or as ``mesh.rotate(...)``. The bound
+    method supplies ``mesh`` automatically.
 
     Parameters
     ----------
@@ -746,6 +772,9 @@ def scale(
     assume_invertible: bool | None = None,
 ) -> "Mesh":
     """Scale the mesh by specified factor(s).
+
+    Call it as ``scale(mesh, ...)`` or as ``mesh.scale(...)``. The bound method
+    supplies ``mesh`` automatically.
 
     Parameters
     ----------

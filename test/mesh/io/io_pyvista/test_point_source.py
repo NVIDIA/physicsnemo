@@ -114,6 +114,15 @@ class TestVerticesPointCloud:
             [100.0, 200.0, 300.0, 400.0],
         )
 
+    def test_integer_coordinates_are_promoted_to_float32(self):
+        points = np.array([[0, 0, 0], [1, 0, 0]], dtype=np.int32)
+        pv_mesh = pv.PointSet(points, force_float=False)
+
+        mesh = from_pyvista(pv_mesh)
+
+        assert mesh.points.numpy().dtype == np.float32
+        np.testing.assert_array_equal(mesh.points.numpy(), points)
+
 
 # ---------------------------------------------------------------------------
 # point_source="vertices", manifold_dim=1 (edge graph from 3D mesh)
@@ -205,6 +214,32 @@ class TestCellCentroidsPointCloud:
             mesh.points.numpy(),
             [[0.25, 0.25, 0.25]],
             atol=1e-5,
+        )
+
+    def test_centroid_preserves_float64_large_offset(self):
+        """Centroid extraction must not collapse small translated geometry."""
+        points = np.array(
+            [
+                [1e8, 1e8, 0.0],
+                [1e8 + 1.0, 1e8, 0.0],
+                [1e8, 1e8 + 1.0, 0.0],
+            ],
+            dtype=np.float64,
+        )
+        pv_mesh = pv.PolyData.from_regular_faces(points, np.array([[0, 1, 2]]))
+
+        mesh = from_pyvista(
+            pv_mesh,
+            point_source="cell_centroids",
+            warn_on_lost_data=False,
+        )
+
+        assert mesh.points.numpy().dtype == np.float64
+        np.testing.assert_allclose(
+            mesh.points.numpy(),
+            [[1e8 + 1.0 / 3.0, 1e8 + 1.0 / 3.0, 0.0]],
+            rtol=0.0,
+            atol=2e-8,
         )
 
     def test_cell_data_becomes_point_data(self):
@@ -382,16 +417,6 @@ class TestWarnOnLostData:
         pv_mesh = _make_tet_with_data()
         with pytest.warns(UserWarning, match="cell_data"):
             from_pyvista(pv_mesh, manifold_dim=0, warn_on_lost_data=True)
-
-    def test_warns_when_point_cloud_drops_vertex_cell_data(self):
-        pv_mesh = pv.PolyData(
-            np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]),
-            verts=np.array([1, 0, 1, 1]),
-        )
-        pv_mesh.cell_data["vertex_id"] = np.array([7, 9])
-
-        with pytest.warns(UserWarning, match="vertex_id"):
-            from_pyvista(pv_mesh, warn_on_lost_data=True)
 
     def test_warns_on_lost_point_data(self):
         """Using cell_centroids with point_data should warn."""

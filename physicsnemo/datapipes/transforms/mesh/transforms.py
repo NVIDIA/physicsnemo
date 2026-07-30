@@ -28,13 +28,14 @@ from tensordict import TensorDict
 
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
-from physicsnemo.datapipes.transforms.subsample import poisson_sample_indices_fixed
 from physicsnemo.mesh import (
     MESH_FIELD_ASSOCIATIONS,
     DomainMesh,
     Mesh,
     MeshFieldAssociation,
 )
+from physicsnemo.mesh.calculus.measure import compose_measure_weights
+from physicsnemo.nn.functional import weighted_multinomial
 
 
 @register()
@@ -254,7 +255,13 @@ def _compact_points(mesh: Mesh) -> Mesh:
 
 @register()
 class SubsampleMesh(MeshTransform):
-    r"""Subsample a mesh to a fixed number of cells and/or points."""
+    r"""Subsample a mesh to a fixed number of cells and/or points.
+
+    Cell subsampling preserves the integration measure by recording
+    each stage's inverse inclusion probability into the mesh's measure
+    weights (see :mod:`physicsnemo.mesh.calculus.measure`); point
+    subsampling does not maintain weights.
+    """
 
     def __init__(
         self,
@@ -276,22 +283,33 @@ class SubsampleMesh(MeshTransform):
         if total <= k:
             return torch.arange(total, device=device)
         if total > 2**24:
-            return poisson_sample_indices_fixed(
+            return weighted_multinomial(
                 total,
                 k,
+                strategy="poisson_gap",
                 device=device,
                 generator=self._generator,
             )
-        return torch.randperm(total, device=device, generator=self._generator)[:k]
+        return weighted_multinomial(
+            total,
+            k,
+            strategy="exact",
+            device=device,
+            generator=self._generator,
+        )
 
     def __call__(self, mesh: Mesh) -> Mesh:
         if self.n_cells is not None and mesh.n_cells > self.n_cells:
-            indices = self._random_indices(
-                mesh.n_cells, self.n_cells, mesh.cells.device
-            )
+            n_before = mesh.n_cells
+            indices = self._random_indices(n_before, self.n_cells, mesh.cells.device)
             mesh = mesh.slice_cells(indices)
             if self.compact:
                 mesh = _compact_points(mesh)
+            ### Compose this stage's inverse inclusion probability into the
+            ### mesh's measure weights.
+            ### `_random_indices` is exact below the large-population threshold
+            ### and uses the near-uniform Poisson-gap approximation above it.
+            compose_measure_weights(mesh, n_before / self.n_cells)
 
         if self.n_points is not None and mesh.n_points > self.n_points:
             indices = self._random_indices(
@@ -522,6 +540,12 @@ class NormalizeMeshFields(MeshTransform):
             self._stats: dict[str, dict[str, Float[torch.Tensor, " *shape"] | str]] = (
                 torch.load(stats_file, weights_only=True)
             )
+            # Match the inline branch: stats are float32 regardless of the
+            # dtype they were computed/saved in, so normalization never
+            # promotes field dtypes.
+            for s in self._stats.values():
+                s["mean"] = torch.as_tensor(s["mean"], dtype=torch.float32)
+                s["std"] = torch.as_tensor(s["std"], dtype=torch.float32)
         elif fields is not None:
             self._stats = {}
             for name, cfg in fields.items():
@@ -533,6 +557,31 @@ class NormalizeMeshFields(MeshTransform):
         else:
             raise ValueError("Provide one of 'stats_file' or 'fields'")
 
+    def to(self, device: torch.device | str) -> "NormalizeMeshFields":
+        """Move internal tensors and the nested field statistics to *device*.
+
+        Extends :meth:`MeshTransform.to` by also moving the per-field
+        ``mean`` and ``std`` tensors in ``self._stats`` so the per-sample
+        ``.to()`` in :meth:`__call__` is a no-op.
+
+        Parameters
+        ----------
+        device : torch.device or str
+            Target device.
+
+        Returns
+        -------
+        NormalizeMeshFields
+            ``self``, for chaining.
+        """
+        # Base .to() moves only bare tensor attrs; move the nested stats too
+        # so the per-sample .to() in __call__ is a no-op (no H2D copy/sync).
+        super().to(device)
+        for s in self._stats.values():
+            s["mean"] = s["mean"].to(self._device)
+            s["std"] = s["std"].to(self._device)
+        return self
+
     def __call__(self, mesh: Mesh) -> Mesh:
         ### Clone and z-score the targeted association's TensorDict in
         ### place; fields absent from `_stats` (or absent from the mesh)
@@ -542,9 +591,7 @@ class NormalizeMeshFields(MeshTransform):
             if field_name not in new_td.keys():
                 continue
             val = new_td[field_name].float()
-            mean = stats["mean"].to(dtype=val.dtype, device=val.device)
-            std = stats["std"].to(dtype=val.dtype, device=val.device)
-            new_td[field_name] = (val - mean) / (std + self._eps)
+            new_td[field_name] = (val - stats["mean"]) / (stats["std"] + self._eps)
 
         ### `Mesh.copy` is a tensorclass-provided shallow copy: `points`,
         ### `cells`, the untouched associations, and the geometric `_cache`
@@ -589,10 +636,9 @@ class NormalizeMeshFields(MeshTransform):
             dim = 1 if ftype == "scalar" else n_spatial_dims
             if name in self._stats:
                 stats = self._stats[name]
-                mean = stats["mean"].to(dtype=tensor.dtype, device=tensor.device)
-                std = stats["std"].to(dtype=tensor.dtype, device=tensor.device)
                 out[..., idx : idx + dim] = (
-                    out[..., idx : idx + dim] * (std + self._eps) + mean
+                    out[..., idx : idx + dim] * (stats["std"] + self._eps)
+                    + stats["mean"]
                 )
             idx += dim
         return out
@@ -629,9 +675,7 @@ class NormalizeMeshFields(MeshTransform):
             stats = self._stats.get(name)
             if stats is None:
                 return val
-            mean = stats["mean"].to(dtype=val.dtype, device=val.device)
-            std = stats["std"].to(dtype=val.dtype, device=val.device)
-            return val * (std + self._eps) + mean
+            return val * (stats["std"] + self._eps) + stats["mean"]
 
         ### ``named_apply`` is typed ``TensorDict | None`` for its
         ### in-place mode; the out-of-place path always returns a TD.

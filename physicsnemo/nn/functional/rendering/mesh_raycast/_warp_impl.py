@@ -181,7 +181,7 @@ def mesh_raycast_impl(
         image_height, image_width, device=device
     )
     wp_device, wp_stream = FunctionSpec.warp_launch_context(mesh_vertices_fp32)
-    with wp.ScopedStream(wp_stream):
+    with FunctionSpec.warp_stream_scope(wp_stream):
         wp_vertices = wp.from_torch(mesh_vertices_fp32, dtype=wp.vec3)
         wp_indices = wp.from_torch(mesh_indices_i32, dtype=wp.int32)
         mesh = wp.Mesh(points=wp_vertices, indices=wp_indices)

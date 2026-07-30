@@ -30,6 +30,7 @@ from physicsnemo.nn import (
     ConditioningEmbedderType,
     DetokenizerModuleBase,
     DiTBlock,
+    RotaryEmbedding2DTables,
     TokenizerModuleBase,
     get_conditioning_embedder,
     get_detokenizer,
@@ -263,10 +264,14 @@ class DiT(Module):
 
         is_natten = attention_backend in ("natten2d", "natten2d_rope")
 
-        # Latent (token) grid size, used by the NATTEN backends.
-        self._latent_h = self.input_size[0] // self.patch_size[0]
-        self._latent_w = self.input_size[1] // self.patch_size[1]
-        latent_hw = (self._latent_h, self._latent_w)
+        # Only NATTEN uses the latent grid; other backends may pass a non-2D input_size
+        if is_natten:
+            self._latent_h = self.input_size[0] // self.patch_size[0]
+            self._latent_w = self.input_size[1] // self.patch_size[1]
+            latent_hw = (self._latent_h, self._latent_w)
+        else:
+            self._latent_h = self._latent_w = None
+            latent_hw = None
 
         # Keyword arguments threaded into every attention module's forward.
         if is_natten:
@@ -284,12 +289,21 @@ class DiT(Module):
             )
 
         # Constructor-time attention kwargs (copied so the caller's dict is not
-        # mutated). RoPE attention needs the latent grid at construction so its
-        # cos/sin tables can be precomputed; the mask-token backends need to
-        # allocate their learned mask parameter.
+        # mutated). The mask-token backends need to allocate their learned mask
+        # parameter. RoPE tables are not built per block: the model owns a single
+        # RotaryEmbedding2DTables provider (below) and passes its tables into
+        # every block's forward, so the tables are built, stored, and — under
+        # domain parallelism — sharded exactly once for the whole model.
         attn_kwargs = dict(attn_kwargs)
-        if attention_backend == "natten2d_rope":
-            attn_kwargs["latent_hw"] = latent_hw
+        self._is_rope = attention_backend == "natten2d_rope"
+        self.rope = None
+        if self._is_rope:
+            rope_theta = attn_kwargs.pop("rope_theta", 10000.0)
+            self.rope = RotaryEmbedding2DTables(
+                head_dim=hidden_size // num_heads,
+                latent_hw=latent_hw,
+                theta=rope_theta,
+            )
         if use_nan_mask_tokens:
             attn_kwargs["use_mask_token"] = True
 
@@ -581,6 +595,15 @@ class DiT(Module):
         c = self.conditioning_embedder(t, condition=condition)  # (B, D)
 
         block_attn_kwargs = {**self.attn_kwargs_forward, **attn_kwargs}
+        if self._is_rope:
+            # Fetch the shared RoPE tables once and pass them into every block's
+            # forward. Only forward a latent_hw *override* explicitly supplied by
+            # the caller (variable-resolution inference); the fixed
+            # construction-time grid stays None so the provider returns its
+            # prebuilt tables with no per-call shape comparison on the hot path.
+            rope_cos, rope_sin = self.rope(attn_kwargs.get("latent_hw"))
+            block_attn_kwargs["rope_cos"] = rope_cos
+            block_attn_kwargs["rope_sin"] = rope_sin
         if invalid_mask is not None:
             # Reduce the (B, *spatial) pixel mask to a (B, L) token mask aligned
             # with the token sequence. Under domain parallelism invalid_mask is a

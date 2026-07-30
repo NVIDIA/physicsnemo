@@ -43,13 +43,14 @@ pip install -e ".[mesh]"
 | Tutorial | Topic | What You'll Learn |
 |----------|-------|-------------------|
 | **1. Getting Started** | Core concepts | Mesh structure, data attachment, GPU acceleration |
-| **2. Operations** | Mesh manipulation | Transformations, subdivision, slicing, merging |
+| **2. Operations** | Mesh manipulation | Transformations, displacement, morphing, subdivision, slicing, merging |
 | **3. Discrete Calculus** | Mathematical operators | Gradients, divergence, curl, curvature |
 | **4. Neighbors & Spatial** | Queries | Adjacency, BVH, sampling, interpolation |
 | **5. Quality & Repair** | Mesh health | Validation, quality metrics, repair |
 | **6. ML Integration** | Production workflows | Performance, batching, torch.compile |
 | **7. Domain Mesh** | Simulation domains | DomainMesh, boundaries, transforms, validation |
 | **8. I/O, Interop & Serialization** | Getting data in/out | PyVista import/export, polygon tessellation, save/load |
+| **Deformation energy example** | Shape optimization | RBF deformation with differentiable strain, area, and inversion penalties |
 <!-- markdownlint-enable MD013 -->
 
 ## Running the Tutorials
@@ -97,6 +98,8 @@ Learn the core concepts - a `Mesh` is just 5 fields: 2 for geometry, 3 for data.
 Learn mesh manipulation operations.
 
 - Geometric transformations (translate, rotate, scale, transform)
+- Dense point displacement from tensors or point-data fields
+- Sparse control-point morphing with single or multiple controls
 - Subdivision schemes (linear, Loop, Butterfly)
 - Slicing (slice_cells, slice_points)
 - Merging multiple meshes
@@ -181,6 +184,34 @@ Learn to get meshes in and out of PhysicsNeMo-Mesh.
 - Exporting to PyVista with `to_pyvista`
 - Saving and loading the native, folder-based memmap format, including its
   on-disk layout (`.pmsh` for `Mesh`, `.pdmsh` for `DomainMesh`)
+
+### Tutorial 9: Mesh Generation
+
+**File**: `tutorial_9_mesh_generation.ipynb`
+
+Generate simulation-ready volume meshes from scratch in two ways.
+
+**From an explicit boundary** (`fill_interior`):
+
+- Filling multiply-connected boundary meshes with per-boundary provenance data
+- Verifying the minimum-angle guarantee across resolutions
+
+**From an implicit function** (`mesh_implicit_domain`, `marching_cubes`):
+
+- Using implicit CSG, raw level sets, and the coverage guard
+- Pinning sharp corners with `feature_points`
+- Tetrahedralizing 3D implicit domains
+- Extracting isosurfaces with `marching_cubes`
+- Computing shape gradients through the mesh (differentiable meshing)
+
+### Differentiable Deformation Energy Optimization
+
+**File**: `deformation_energy_optimization.py`
+
+Run a compact shape-optimization example that preserves a prescribed
+radial-basis handle displacement while penalizing strain, total-area change,
+and element inversion. The script uses the Warp backend on CUDA when available
+and falls back to Torch on CPU.
 
 ## Assets
 

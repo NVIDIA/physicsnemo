@@ -60,6 +60,10 @@ def compute_point_derivatives(
     Computes discrete gradients using either DEC or LSQ methods, with support
     for both intrinsic (tangent space) and extrinsic (ambient space) derivatives.
 
+    Call it as ``compute_point_derivatives(mesh, ...)`` or as
+    ``mesh.compute_point_derivatives(...)``. The bound method supplies ``mesh``
+    automatically.
+
     Parameters
     ----------
     mesh : Mesh
@@ -200,6 +204,10 @@ def compute_cell_derivatives(
     gradient_type: Literal["intrinsic", "extrinsic", "both"] = "intrinsic",
 ) -> "Mesh":
     """Compute gradients of cell_data fields.
+
+    Call it as ``compute_cell_derivatives(mesh, ...)`` or as
+    ``mesh.compute_cell_derivatives(...)``. The bound method supplies ``mesh``
+    automatically.
 
     Parameters
     ----------

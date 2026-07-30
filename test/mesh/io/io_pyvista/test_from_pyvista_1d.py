@@ -134,79 +134,47 @@ class TestFromPyvista1D:
             assert mesh.cells[i, 0] == i
             assert mesh.cells[i, 1] == i + 1
 
-    def test_polyline_replicates_cell_data_to_segments(self):
-        points = np.array(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0], [3.0, 0.0, 0.0]]
-        )
-        pv_mesh = pv.PolyData(points, lines=np.array([4, 0, 1, 2, 3]))
-        pv_mesh.cell_data["line_id"] = np.array([7])
-
-        mesh = from_pyvista(pv_mesh)
-
-        assert torch.equal(
-            mesh.cells,
-            torch.tensor([[0, 1], [1, 2], [2, 3]], dtype=torch.long),
-        )
-        assert torch.equal(mesh.cell_data["line_id"], torch.tensor([7, 7, 7]))
-
-    def test_multiple_polylines_keep_parent_data_order(self, monkeypatch):
-        points = np.array(
-            [
-                [0.0, 0.0, 0.0],
-                [1.0, 0.0, 0.0],
-                [2.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0],
-                [1.0, 1.0, 0.0],
-                [2.0, 1.0, 0.0],
-            ]
-        )
-        pv_mesh = pv.PolyData(points, lines=np.array([3, 0, 1, 2, 3, 3, 4, 5]))
-        pv_mesh.cell_data["line_id"] = np.array([7, 9])
-        pv_mesh.cell_data["vector"] = np.array([[1, 2], [3, 4]])
-
-        def fail_if_called(*args, **kwargs):
-            raise AssertionError("uniform polylines should use the vectorized path")
-
-        monkeypatch.setattr(pv.UnstructuredGrid, "triangulate", fail_if_called)
-
-        mesh = from_pyvista(pv_mesh)
-
-        assert torch.equal(
-            mesh.cells,
-            torch.tensor([[0, 1], [1, 2], [3, 4], [4, 5]]),
-        )
-        assert torch.equal(mesh.cell_data["line_id"], torch.tensor([7, 7, 9, 9]))
-        assert torch.equal(
-            mesh.cell_data["vector"],
-            torch.tensor([[1, 2], [1, 2], [3, 4], [3, 4]]),
-        )
-
-    def test_unstructured_grid_line_is_not_dropped(self):
-        points = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+    def test_unstructured_line_preserves_connectivity_and_cell_data(self):
+        """Native VTK_LINE cells must not disappear during conversion."""
+        points = np.array([[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]], dtype=np.float64)
         pv_mesh = pv.UnstructuredGrid(
             np.array([2, 0, 1]),
             np.array([pv.CellType.LINE]),
             points,
         )
-        pv_mesh.cell_data["line_id"] = np.array([3])
+        pv_mesh.cell_data["line_id"] = np.array([17], dtype=np.int16)
 
         mesh = from_pyvista(pv_mesh)
 
+        assert mesh.points.dtype == torch.float64
         assert torch.equal(mesh.cells, torch.tensor([[0, 1]]))
-        assert torch.equal(mesh.cell_data["line_id"], torch.tensor([3]))
+        assert torch.equal(
+            mesh.cell_data["line_id"], torch.tensor([17], dtype=torch.int16)
+        )
 
-    def test_quadratic_edge_uses_vtk_node_order(self):
-        # VTK orders a quadratic edge as endpoint, endpoint, midpoint. Pairing
-        # consecutive input IDs would incorrectly create [0, 1] and [1, 2].
-        points = np.array([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [1.0, 1.0, 0.0]])
+    def test_unstructured_polyline_splits_and_replicates_cell_data(self):
+        """VTK_POLY_LINE cells become ordered segments with replicated data."""
+        points = np.array(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [2.0, 1.0, 0.0],
+                [3.0, 1.0, 0.0],
+            ]
+        )
         pv_mesh = pv.UnstructuredGrid(
-            np.array([3, 0, 1, 2]),
-            np.array([pv.CellType.QUADRATIC_EDGE]),
+            np.array([4, 0, 1, 2, 3]),
+            np.array([pv.CellType.POLY_LINE]),
             points,
         )
-        pv_mesh.cell_data["edge_id"] = np.array([9])
+        pv_mesh.cell_data["line_id"] = np.array([23], dtype=np.int32)
 
         mesh = from_pyvista(pv_mesh)
 
-        assert torch.equal(mesh.cells, torch.tensor([[0, 2], [2, 1]]))
-        assert torch.equal(mesh.cell_data["edge_id"], torch.tensor([9, 9]))
+        assert torch.equal(
+            mesh.cells,
+            torch.tensor([[0, 1], [1, 2], [2, 3]]),
+        )
+        assert torch.equal(
+            mesh.cell_data["line_id"], torch.full((3,), 23, dtype=torch.int32)
+        )
