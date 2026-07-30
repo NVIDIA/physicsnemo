@@ -16,7 +16,7 @@
 
 import warnings
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 import numpy as np
 import torch
@@ -38,6 +38,8 @@ else:
     pv = OptionalImport("pyvista")
     vtk = OptionalImport("vtk")
 
+_PARENT_CELL_ID_KEY = "__physicsnemo_parent_cell_id"
+
 
 def _vtk_data_to_tensor_dict(
     data: "pv.DataSetAttributes",
@@ -56,7 +58,7 @@ def _vtk_data_to_tensor_dict(
             continue
         if indices is not None:
             array = array[indices]
-        if force_copy:
+        elif force_copy:
             array = array.copy()
         tensor_data[str(key)] = torch.as_tensor(array)
     return TensorDict(tensor_data, device="cpu")
@@ -118,6 +120,18 @@ def _linear_cell_specs() -> dict[int, tuple[int, int | None, int | None]]:
     }
 
 
+def _unsupported_linear_cell_types(cell_types: np.ndarray) -> list[int]:
+    """Return sorted cell types outside the trusted linear allowlist."""
+    linear_specs = _linear_cell_specs()
+    return sorted(
+        {
+            int(cell_type)
+            for cell_type in cell_types
+            if int(cell_type) not in linear_specs
+        }
+    )
+
+
 def _validate_vtk_attribute_lengths(
     pyvista_mesh: "pv.PolyData | pv.UnstructuredGrid | pv.PointSet",
 ) -> None:
@@ -171,146 +185,108 @@ def _validate_vtk_cell_array_structure(
             f"{expected_cells + 1} offsets, got {n_cells} cells and "
             f"{len(offsets)} offsets."
         )
-    if len(offsets) == 0 or int(offsets[0]) != 0:
-        raise ValueError(f"Invalid {association}: offsets must start at 0.")
-    if int(offsets[-1]) != len(connectivity):
-        raise ValueError(
-            f"Invalid {association}: final offset {int(offsets[-1])} does not "
-            f"equal connectivity length {len(connectivity)}."
-        )
-    if len(offsets) > 1 and bool((np.diff(offsets) < 0).any()):
-        raise ValueError(f"Invalid {association}: offsets must be monotonic.")
     return offsets, connectivity
 
 
-def _parse_polydata_cell_stream(
-    stream: np.ndarray,
-    association: str,
-    minimum_arity: int,
-    expected_cells: int,
+def _first_invalid_point_id_index(
+    connectivity: np.ndarray,
     n_points: int,
-) -> int | np.ndarray:
-    """Validate a count-prefixed PolyData cell stream and return arities."""
-    stream = np.asarray(stream)
-    if len(stream) == 0:
-        if expected_cells != 0:
-            raise ValueError(
-                f"Invalid PolyData {association} stream: expected "
-                f"{expected_cells} cells, got 0."
-            )
-        return 0
+) -> int | None:
+    """Return the first out-of-bounds connectivity index, if one exists."""
+    if len(connectivity) == 0:
+        return None
+    if int(connectivity.min()) >= 0 and int(connectivity.max()) < n_points:
+        return None
 
-    first_count = int(stream[0])
-    stride = first_count + 1
-    if first_count >= minimum_arity and len(stream) % stride == 0:
-        reshaped = stream.reshape(-1, stride)
-        if bool((reshaped[:, 0] == first_count).all()):
-            if len(reshaped) != expected_cells:
-                raise ValueError(
-                    f"Invalid PolyData {association} stream: expected "
-                    f"{expected_cells} cells, parsed {len(reshaped)}."
-                )
-            point_ids = reshaped[:, 1:]
-            if len(point_ids) > 0 and (
-                int(point_ids.min()) < 0 or int(point_ids.max()) >= n_points
-            ):
-                bad_id = int(point_ids[(point_ids < 0) | (point_ids >= n_points)][0])
-                raise ValueError(
-                    f"Invalid point ID {bad_id} in PolyData {association}: "
-                    f"valid point IDs are in [0, {n_points})."
-                )
-            return first_count
+    # Allocate an elementwise mask only on the malformed error path.
+    invalid = (connectivity < 0) | (connectivity >= n_points)
+    return int(np.flatnonzero(invalid)[0])
 
-    counts: list[int] = []
-    offset = 0
-    while offset < len(stream):
-        count = int(stream[offset])
-        cell_index = len(counts)
-        if count < minimum_arity:
-            raise ValueError(
-                f"Invalid PolyData {association} cell at index {cell_index}: "
-                f"expected at least {minimum_arity} points, got {count}."
-            )
-        end = offset + count + 1
-        if end > len(stream):
-            raise ValueError(
-                f"Invalid PolyData {association} stream at cell {cell_index}: "
-                f"declared {count} points but only {len(stream) - offset - 1} "
-                "remain."
-            )
-        point_ids = stream[offset + 1 : end]
-        if int(point_ids.min()) < 0 or int(point_ids.max()) >= n_points:
-            bad_id = int(point_ids[(point_ids < 0) | (point_ids >= n_points)][0])
-            raise ValueError(
-                f"Invalid point ID {bad_id} in PolyData {association} cell at "
-                f"index {cell_index}: valid point IDs are in [0, {n_points})."
-            )
-        counts.append(count)
-        offset = end
 
-    if offset != len(stream) or len(counts) != expected_cells:
-        raise ValueError(
-            f"Invalid PolyData {association} stream: expected {expected_cells} "
-            f"cells, parsed {len(counts)}, ending at {offset} of {len(stream)}."
-        )
-    return np.asarray(counts, dtype=np.int64)
+def _line_segments_from_vtk_cell_array(
+    offsets: np.ndarray,
+    connectivity: np.ndarray,
+) -> np.ndarray:
+    """Expand VTK line and polyline cells into consecutive two-point segments."""
+    arities = np.diff(offsets)
+    if len(arities) == 0:
+        return np.empty((0, 2), dtype=np.int64)
+    if int(arities.min()) == 2 and int(arities.max()) == 2:
+        return connectivity.reshape(-1, 2).copy()
+
+    # Every connectivity position starts a segment except each cell's final
+    # point, which must not connect to the next cell's first point.
+    is_segment_start = np.ones(len(connectivity) - 1, dtype=np.bool_)
+    is_segment_start[offsets[1:-1] - 1] = False
+    segment_starts = np.flatnonzero(is_segment_start)
+    return np.column_stack(
+        [connectivity[segment_starts], connectivity[segment_starts + 1]]
+    )
 
 
 def _validate_polydata_topology(
     pyvista_mesh: "pv.PolyData",
-) -> dict[str, int | np.ndarray]:
-    """Validate every PolyData cell stream without invoking VTK filters."""
+) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    """Validate every PolyData cell array without invoking VTK filters."""
     specifications = (
         (
             "verts",
-            pyvista_mesh.GetVerts(),
-            pyvista_mesh.verts,
+            pyvista_mesh.GetVerts,
             1,
             pyvista_mesh.GetNumberOfVerts(),
         ),
         (
             "lines",
-            pyvista_mesh.GetLines(),
-            pyvista_mesh.lines,
+            pyvista_mesh.GetLines,
             2,
             pyvista_mesh.GetNumberOfLines(),
         ),
         (
             "faces",
-            pyvista_mesh.GetPolys(),
-            pyvista_mesh.faces,
+            pyvista_mesh.GetPolys,
             3,
             pyvista_mesh.GetNumberOfPolys(),
         ),
         (
             "strips",
-            pyvista_mesh.GetStrips(),
-            pyvista_mesh.strips,
+            pyvista_mesh.GetStrips,
             3,
             pyvista_mesh.GetNumberOfStrips(),
         ),
     )
-    counts = {}
-    for (
-        association,
-        cell_array,
-        stream,
-        minimum_arity,
-        expected_cells,
-    ) in specifications:
-        _validate_vtk_cell_array_structure(
-            cell_array,
+    topology = {}
+    for association, get_cell_array, minimum_arity, expected_cells in specifications:
+        offsets, connectivity = _validate_vtk_cell_array_structure(
+            get_cell_array(),
             f"PolyData {association}",
             int(expected_cells),
         )
-        counts[association] = _parse_polydata_cell_stream(
-            stream,
-            association,
-            minimum_arity,
-            int(expected_cells),
+        arities = np.diff(offsets)
+        invalid_arity_indices = np.flatnonzero(arities < minimum_arity)
+        if len(invalid_arity_indices) > 0:
+            cell_index = int(invalid_arity_indices[0])
+            raise ValueError(
+                f"Invalid PolyData {association} cell at index {cell_index}: "
+                f"expected at least {minimum_arity} points, "
+                f"got {int(arities[cell_index])}."
+            )
+
+        connectivity_index = _first_invalid_point_id_index(
+            connectivity,
             pyvista_mesh.n_points,
         )
-    return counts
+        if connectivity_index is not None:
+            cell_index = int(
+                np.searchsorted(offsets[1:], connectivity_index, side="right")
+            )
+            point_id = int(connectivity[connectivity_index])
+            raise ValueError(
+                f"Invalid point ID {point_id} in PolyData {association} cell at "
+                f"index {cell_index}: valid point IDs are in "
+                f"[0, {pyvista_mesh.n_points})."
+            )
+        topology[association] = (offsets, connectivity)
+    return topology
 
 
 def _validate_unstructured_connectivity_bounds(
@@ -318,22 +294,17 @@ def _validate_unstructured_connectivity_bounds(
     cell_types: np.ndarray,
 ) -> None:
     """Reject invalid point IDs without allocating a full-size success mask."""
-    _, connectivity = _validate_vtk_cell_array_structure(
+    offsets, connectivity = _validate_vtk_cell_array_structure(
         pyvista_mesh.GetCells(),
         "UnstructuredGrid cells",
         pyvista_mesh.n_cells,
     )
-    if len(connectivity) == 0:
+    connectivity_index = _first_invalid_point_id_index(
+        connectivity,
+        pyvista_mesh.n_points,
+    )
+    if connectivity_index is None:
         return
-    minimum_id = int(connectivity.min())
-    maximum_id = int(connectivity.max())
-    if minimum_id >= 0 and maximum_id < pyvista_mesh.n_points:
-        return
-
-    # Allocate an elementwise mask only on the malformed error path.
-    invalid_connectivity = (connectivity < 0) | (connectivity >= pyvista_mesh.n_points)
-    connectivity_index = int(np.flatnonzero(invalid_connectivity)[0])
-    offsets = np.asarray(pyvista_mesh.offset)
     cell_index = int(np.searchsorted(offsets[1:], connectivity_index, side="right"))
     point_id = int(connectivity[connectivity_index])
     cell_type_name = _vtk_cell_type_name(int(cell_types[cell_index]))
@@ -500,11 +471,7 @@ def _unstructured_cell_dimensions(
 
     ### Reject every topology family outside the explicit linear allowlist.
     linear_specs = _linear_cell_specs()
-    unsupported_types = [
-        int(cell_type)
-        for cell_type in unique_cell_types
-        if int(cell_type) not in linear_specs
-    ]
+    unsupported_types = _unsupported_linear_cell_types(unique_cell_types)
     if unsupported_types:
         names = ", ".join(_vtk_cell_type_name(t) for t in unsupported_types)
         raise ValueError(
@@ -521,15 +488,55 @@ def _unstructured_cell_dimensions(
     return type_dimensions[inverse]
 
 
+def _triangulate_with_parent_ids(
+    pyvista_mesh: "pv.PolyData | pv.UnstructuredGrid",
+    parent_ids: np.ndarray,
+) -> tuple["pv.PolyData | pv.UnstructuredGrid", np.ndarray]:
+    """Triangulate cells while retaining one source parent ID per output cell."""
+    # A shallow copy gives the filter an isolated attribute container while
+    # retaining zero-copy geometry. Carry only the provenance that is consumed.
+    working = pyvista_mesh.copy(deep=False)
+    working.cell_data.clear()
+    working.cell_data[_PARENT_CELL_ID_KEY] = parent_ids
+
+    triangulated = working.triangulate()
+    if _PARENT_CELL_ID_KEY in triangulated.cell_data:
+        output_parent_ids = np.asarray(
+            triangulated.cell_data[_PARENT_CELL_ID_KEY],
+            dtype=np.int64,
+        ).copy()
+        del triangulated.cell_data[_PARENT_CELL_ID_KEY]
+    else:
+        output_parent_ids = np.empty(0, dtype=np.int64)
+
+    if len(output_parent_ids) != triangulated.n_cells:
+        raise ValueError(
+            "VTK simplex conversion did not preserve one provenance value per "
+            f"output cell: expected {triangulated.n_cells}, got "
+            f"{len(output_parent_ids)}."
+        )
+    unexpected_parent_ids = np.setdiff1d(
+        np.unique(output_parent_ids),
+        parent_ids,
+        assume_unique=True,
+    )
+    if len(unexpected_parent_ids) > 0:
+        raise ValueError(
+            "VTK simplex conversion produced unknown parent IDs: "
+            f"{unexpected_parent_ids.tolist()}."
+        )
+    return triangulated, output_parent_ids
+
+
 def _select_and_linearize_unstructured_grid(
     pyvista_mesh: "pv.UnstructuredGrid",
     cell_dimensions: np.ndarray,
     target_dim: int,
-) -> tuple["pv.UnstructuredGrid", np.ndarray | None]:
+) -> tuple["pv.UnstructuredGrid", np.ndarray | None, np.ndarray | None]:
     """Select one native dimension and convert its cells to simplices.
 
-    The returned point-ID map is present only when cell extraction compacted
-    the point array.
+    Point and parent-cell ID maps are returned only when output connectivity or
+    cell data must be mapped back to the source grid.
     """
     cell_types = np.asarray(pyvista_mesh.celltypes)
     selected_parent_ids = np.flatnonzero(cell_dimensions == target_dim).astype(np.int64)
@@ -546,14 +553,6 @@ def _select_and_linearize_unstructured_grid(
     if selected_all_cells:
         selected = pyvista_mesh
     else:
-        original_cell_id_key = "vtkOriginalCellIds"
-        user_original_cell_ids = (
-            np.asarray(pyvista_mesh.cell_data[original_cell_id_key])[
-                selected_parent_ids
-            ].copy()
-            if original_cell_id_key in pyvista_mesh.cell_data
-            else None
-        )
         try:
             selected = pyvista_mesh.extract_cells(
                 selected_parent_ids,
@@ -562,8 +561,7 @@ def _select_and_linearize_unstructured_grid(
             )
         except TypeError as error:
             # PyVista 0.46 does not expose the pass_*_ids keywords and always
-            # adds both synthetic arrays. Remove its cell IDs while restoring
-            # any user field that occupied the same name.
+            # adds synthetic ID arrays.
             if "pass_cell_ids" not in str(error) and "pass_point_ids" not in str(error):
                 raise
             # PyVista 0.46 writes synthetic ID fields onto the input dataset.
@@ -571,10 +569,6 @@ def _select_and_linearize_unstructured_grid(
             # containers while retaining zero-copy geometry/data buffers.
             legacy_source = pyvista_mesh.copy(deep=False)
             selected = legacy_source.extract_cells(selected_parent_ids)
-        if original_cell_id_key in selected.cell_data:
-            del selected.cell_data[original_cell_id_key]
-        if user_original_cell_ids is not None:
-            selected.cell_data[original_cell_id_key] = user_original_cell_ids
 
     simplex_type = {
         1: pv.CellType.LINE,
@@ -587,25 +581,14 @@ def _select_and_linearize_unstructured_grid(
             if selected_all_cells
             else np.asarray(selected.point_data["vtkOriginalPointIds"]).copy()
         )
-        return selected, original_point_ids
+        output_parent_ids = None if selected_all_cells else selected_parent_ids
+        return selected, original_point_ids, output_parent_ids
 
-    ### Add collision-safe parent provenance to a non-mutating shallow copy.
-    working = selected.copy(deep=False)
-    provenance_key = "__physicsnemo_parent_cell_id"
-    suffix = 0
-    while provenance_key in working.cell_data:
-        suffix += 1
-        provenance_key = f"__physicsnemo_parent_cell_id_{suffix}"
-    working.cell_data[provenance_key] = selected_parent_ids
-
-    linearized = working.triangulate()
-    if provenance_key in linearized.cell_data:
-        output_parent_ids = np.asarray(
-            linearized.cell_data[provenance_key], dtype=np.int64
-        ).copy()
-        del linearized.cell_data[provenance_key]
-    else:
-        output_parent_ids = np.empty(0, dtype=np.int64)
+    linearized_mesh, output_parent_ids = _triangulate_with_parent_ids(
+        selected,
+        selected_parent_ids,
+    )
+    linearized = cast("pv.UnstructuredGrid", linearized_mesh)
 
     ### Every selected parent must generate at least one output simplex.
     produced_parent_ids = np.unique(output_parent_ids)
@@ -622,12 +605,6 @@ def _select_and_linearize_unstructured_grid(
         )
         raise ValueError(
             f"VTK simplex conversion dropped selected parent cells: {missing_details}."
-        )
-    if len(output_parent_ids) != linearized.n_cells:
-        raise ValueError(
-            "VTK simplex conversion did not preserve one provenance value per "
-            f"output cell: expected {linearized.n_cells}, got "
-            f"{len(output_parent_ids)}."
         )
 
     ### Fail before connectivity extraction if VTK left non-simplex cells.
@@ -649,7 +626,7 @@ def _select_and_linearize_unstructured_grid(
         if selected_all_cells
         else np.asarray(linearized.point_data["vtkOriginalPointIds"]).copy()
     )
-    return linearized, original_point_ids
+    return linearized, original_point_ids, output_parent_ids
 
 
 @require_version_spec("pyvista")
@@ -740,6 +717,10 @@ def from_pyvista(
         raise ValueError(
             f"Invalid {point_source=!r}. Must be 'vertices' or 'cell_centroids'."
         )
+    if manifold_dim not in {"auto", 0, 1, 2, 3}:
+        raise ValueError(
+            f"Invalid {manifold_dim=}. Must be one of {{0, 1, 2, 3}} or 'auto'."
+        )
 
     # VTK filters assume valid attribute tuple counts and may crash otherwise.
     _validate_vtk_attribute_lengths(pyvista_mesh)
@@ -749,7 +730,13 @@ def from_pyvista(
             "UnstructuredGrid cells",
             pyvista_mesh.n_cells,
         )
-    polydata_cell_counts = (
+        n_cell_types = len(np.asarray(pyvista_mesh.celltypes))
+        if n_cell_types != pyvista_mesh.n_cells:
+            raise ValueError(
+                "Invalid UnstructuredGrid cell types: expected "
+                f"{pyvista_mesh.n_cells}, got {n_cell_types}."
+            )
+    polydata_topology = (
         _validate_polydata_topology(pyvista_mesh)
         if isinstance(pyvista_mesh, pv.PolyData)
         else None
@@ -765,13 +752,7 @@ def from_pyvista(
                 cell_types,
                 unique_cell_types,
             )
-            unsupported_types = sorted(
-                {
-                    int(cell_type)
-                    for cell_type in unique_cell_types
-                    if int(cell_type) not in _linear_cell_specs()
-                }
-            )
+            unsupported_types = _unsupported_linear_cell_types(unique_cell_types)
             if unsupported_types:
                 names = ", ".join(
                     _vtk_cell_type_name(cell_type) for cell_type in unsupported_types
@@ -802,9 +783,9 @@ def from_pyvista(
             native_dimensions = {homogeneous_simplex_dim}
             native_dim = homogeneous_simplex_dim
         else:
-            unique_cell_types = set(map(int, np.unique(pyvista_mesh.celltypes)))
-            has_unsupported_topology = not unique_cell_types.issubset(
-                _linear_cell_specs()
+            unique_cell_types = np.unique(pyvista_mesh.celltypes)
+            has_unsupported_topology = bool(
+                _unsupported_linear_cell_types(unique_cell_types)
             )
             if manifold_dim == 0 and has_unsupported_topology:
                 # Point-cloud conversion does not inspect cell connectivity.
@@ -819,20 +800,8 @@ def from_pyvista(
                     else 0
                 )
     else:
-        native_dim = _detect_native_dim(pyvista_mesh)
-        native_dimensions = {native_dim}
-        if isinstance(pyvista_mesh, pv.PolyData):
-            n_verts = _get_count_safely(pyvista_mesh, "n_verts")
-            n_lines = _get_count_safely(pyvista_mesh, "n_lines")
-            native_dimensions = set()
-            if n_verts > 0:
-                native_dimensions.add(0)
-            if n_lines > 0:
-                native_dimensions.add(1)
-            if pyvista_mesh.n_cells > n_verts + n_lines:
-                native_dimensions.add(2)
-            if not native_dimensions:
-                native_dimensions.add(0)
+        native_dimensions = _detect_native_dimensions(pyvista_mesh)
+        native_dim = max(native_dimensions)
 
     if manifold_dim == "auto":
         if isinstance(pyvista_mesh, pv.PointSet) and not isinstance(
@@ -853,15 +822,9 @@ def from_pyvista(
                         f"Please specify manifold_dim explicitly."
                     )
 
-    ### Validate manifold dimension
-    if manifold_dim not in {0, 1, 2, 3}:
-        raise ValueError(
-            f"Invalid {manifold_dim=}. Must be one of {{0, 1, 2, 3}} or 'auto'."
-        )
-
     ### Preprocess mesh based on manifold dimension
     original_point_ids = None
-    polydata_surface_parent_ids = None
+    output_parent_ids = None
     selected_unstructured_cells = False
     is_unstructured = isinstance(pyvista_mesh, pv.UnstructuredGrid)
     homogeneous_simplex_selected = bool(
@@ -869,13 +832,7 @@ def from_pyvista(
         and homogeneous_simplex_dim is not None
         and manifold_dim == homogeneous_simplex_dim
     )
-    has_native_1d_cells = bool(
-        manifold_dim == 1
-        and (
-            homogeneous_simplex_dim == 1
-            or (len(native_cell_dimensions) > 0 and (native_cell_dimensions == 1).any())
-        )
-    )
+    has_native_1d_cells = bool(manifold_dim == 1 and 1 in native_dimensions)
     if homogeneous_simplex_selected:
         selected_unstructured_cells = True
 
@@ -890,10 +847,12 @@ def from_pyvista(
                 f"{manifold_dim}; available dimensions are "
                 f"[{homogeneous_simplex_dim}]."
             )
-        pyvista_mesh, original_point_ids = _select_and_linearize_unstructured_grid(
+        (
             pyvista_mesh,
-            native_cell_dimensions,
-            manifold_dim,
+            original_point_ids,
+            output_parent_ids,
+        ) = _select_and_linearize_unstructured_grid(
+            pyvista_mesh, native_cell_dimensions, manifold_dim
         )
         selected_unstructured_cells = True
 
@@ -903,7 +862,7 @@ def from_pyvista(
                 f"Only PolyData and UnstructuredGrid are supported for manifold dimension 2, got {type(pyvista_mesh)=}."
             )
         if not pyvista_mesh.is_all_triangles:
-            if polydata_cell_counts is None:
+            if polydata_topology is None:
                 raise RuntimeError("PolyData topology metadata was not initialized.")
             n_verts = pyvista_mesh.GetNumberOfVerts()
             n_lines = pyvista_mesh.GetNumberOfLines()
@@ -914,19 +873,10 @@ def from_pyvista(
                     "PolyData has no native surface cells for manifold_dim=2."
                 )
             first_face_parent = n_verts + n_lines
-            selected_surface_parents = np.concatenate(
-                [
-                    np.arange(
-                        first_face_parent,
-                        first_face_parent + n_faces,
-                        dtype=np.int64,
-                    ),
-                    np.arange(
-                        first_face_parent + n_faces,
-                        first_face_parent + n_faces + n_strips,
-                        dtype=np.int64,
-                    ),
-                ]
+            selected_surface_parents = np.arange(
+                first_face_parent,
+                first_face_parent + n_faces + n_strips,
+                dtype=np.int64,
             )
 
             surface = pv.PolyData(
@@ -934,35 +884,15 @@ def from_pyvista(
                 faces=pyvista_mesh.faces,
                 strips=pyvista_mesh.strips,
             )
-            provenance_key = "__physicsnemo_parent_cell_id"
-            suffix = 0
-            while provenance_key in pyvista_mesh.cell_data:
-                suffix += 1
-                provenance_key = f"__physicsnemo_parent_cell_id_{suffix}"
-            surface.cell_data[provenance_key] = selected_surface_parents
-            triangulated = surface.triangulate()
-            output_face_counts = _parse_polydata_cell_stream(
-                triangulated.faces,
-                "faces",
-                3,
-                triangulated.GetNumberOfPolys(),
-                triangulated.n_points,
+            triangulated, output_parent_ids = _triangulate_with_parent_ids(
+                surface,
+                selected_surface_parents,
             )
-            all_output_triangles = (
-                output_face_counts == 3
-                if isinstance(output_face_counts, int)
-                else bool((output_face_counts == 3).all())
-            )
-            if not all_output_triangles:
+            if not triangulated.is_all_triangles:
                 raise ValueError("VTK triangulation left non-triangle PolyData faces.")
-            polydata_surface_parent_ids = np.asarray(
-                triangulated.cell_data[provenance_key],
-                dtype=np.int64,
-            ).copy()
-            del triangulated.cell_data[provenance_key]
             missing_parent_ids = np.setdiff1d(
                 selected_surface_parents,
-                np.unique(polydata_surface_parent_ids),
+                np.unique(output_parent_ids),
                 assume_unique=True,
             )
             if len(missing_parent_ids) > 0:
@@ -984,7 +914,7 @@ def from_pyvista(
 
     geometry_source = (
         source_pyvista_mesh
-        if original_point_ids is not None or polydata_surface_parent_ids is not None
+        if original_point_ids is not None or output_parent_ids is not None
         else pyvista_mesh
     )
 
@@ -995,105 +925,53 @@ def from_pyvista(
         points = points.float()
 
     # Cells
-    polydata_line_parent_ids = None
     if manifold_dim == 0:
         cells = None  # Mesh constructor creates empty cells
 
     elif manifold_dim == 1:
-        # Lines - extract from PyVista lines format.
-        # If the mesh has no native lines (e.g., a 3D volume mesh with
-        # manifold_dim=1 requested explicitly), extract all unique edges
-        # from the mesh topology to build a vertex graph.
+        line_offsets = None
+        line_connectivity = None
+        native_polydata_lines = False
         if selected_unstructured_cells:
-            # Once linearized, the legacy cell array has exactly the same
-            # count-prefixed layout as ``PolyData.lines``.
-            lines_raw = pyvista_mesh.cells
-            native_polydata_lines = False
-        else:
-            lines_raw = getattr(pyvista_mesh, "lines", None)
-            native_polydata_lines = bool(
-                isinstance(pyvista_mesh, pv.PolyData)
-                and lines_raw is not None
-                and len(lines_raw) > 0
+            line_offsets, line_connectivity = _validate_vtk_cell_array_structure(
+                pyvista_mesh.GetCells(),
+                "linearized line cells",
+                pyvista_mesh.n_cells,
+            )
+        elif (
+            isinstance(pyvista_mesh, pv.PolyData)
+            and pyvista_mesh.GetNumberOfLines() > 0
+        ):
+            if polydata_topology is None:
+                raise RuntimeError("PolyData topology metadata was not initialized.")
+            line_offsets, line_connectivity = polydata_topology["lines"]
+            native_polydata_lines = True
+        elif pyvista_mesh.n_cells > 0:
+            # If no native lines exist, derive the unique edge graph from the
+            # higher-dimensional topology.
+            edges_mesh = pyvista_mesh.extract_all_edges()
+            line_offsets, line_connectivity = _validate_vtk_cell_array_structure(
+                edges_mesh.GetLines(),
+                "extracted edge lines",
+                edges_mesh.GetNumberOfLines(),
             )
 
-        if (lines_raw is None or len(lines_raw) == 0) and pyvista_mesh.n_cells > 0:
-            edges_mesh = pyvista_mesh.extract_all_edges()
-            lines_raw = edges_mesh.lines
-            native_polydata_lines = False
-
-        if lines_raw is None or len(lines_raw) == 0:
+        if line_offsets is None or line_connectivity is None:
             cells = torch.empty((0, 2), dtype=torch.long)
         else:
-            lines_array = np.asarray(lines_raw)
-
-            # Fast path: check if all line segments have uniform vertex count
-            # (common case — all edges have 2 vertices, stride = 3)
-            first_count = int(lines_array[0])
-            stride = first_count + 1
-            is_uniform = len(lines_array) % stride == 0 and len(lines_array) >= stride
-            if is_uniform:
-                n_segments = len(lines_array) // stride
-                reshaped = lines_array.reshape(n_segments, stride)
-                is_uniform = bool((reshaped[:, 0] == first_count).all())
-
-            if is_uniform:
-                # Vectorized path: reshape and extract vertex columns
-                point_ids = reshaped[:, 1:]  # (n_segments, first_count)
-
-                # Convert polylines to consecutive line segments
-                if first_count == 2:
-                    # Already line segments — use directly
-                    cells = torch.from_numpy(point_ids.copy()).long()
-                else:
-                    # Polylines with >2 vertices: create consecutive pairs
-                    seg_starts = point_ids[:, :-1].reshape(-1)
-                    seg_ends = point_ids[:, 1:].reshape(-1)
-                    cells = torch.stack(
-                        [
-                            torch.from_numpy(seg_starts.copy()),
-                            torch.from_numpy(seg_ends.copy()),
-                        ],
-                        dim=1,
-                    ).long()
-            else:
-                # Fallback: Python loop for non-uniform segment sizes
-                cells_list = []
-                i = 0
-                while i < len(lines_array):
-                    n_pts = int(lines_array[i])
-                    point_ids = lines_array[i + 1 : i + 1 + n_pts]
-
-                    # Convert polyline to line segments (consecutive pairs)
-                    cells_list.extend(
-                        [
-                            [point_ids[j], point_ids[j + 1]]
-                            for j in range(len(point_ids) - 1)
-                        ]
-                    )
-
-                    i += n_pts + 1
-
-                if cells_list:
-                    cells = torch.from_numpy(np.array(cells_list)).long()
-                else:
-                    cells = torch.empty((0, 2), dtype=torch.long)
+            line_segments = _line_segments_from_vtk_cell_array(
+                line_offsets,
+                line_connectivity,
+            )
+            cells = torch.from_numpy(line_segments).long()
 
             if native_polydata_lines:
-                if polydata_cell_counts is None:
-                    raise RuntimeError(
-                        "PolyData topology metadata was not initialized."
-                    )
-                line_point_counts = polydata_cell_counts["lines"]
+                line_arities = np.diff(line_offsets)
                 n_line_parents = pyvista_mesh.GetNumberOfLines()
-                all_two_point_lines = (
-                    line_point_counts == 2
-                    if isinstance(line_point_counts, int)
-                    else bool(
-                        len(line_point_counts) > 0
-                        and int(line_point_counts.min()) == 2
-                        and int(line_point_counts.max()) == 2
-                    )
+                all_two_point_lines = bool(
+                    len(line_arities) > 0
+                    and int(line_arities.min()) == 2
+                    and int(line_arities.max()) == 2
                 )
                 identity_parent_map = bool(
                     pyvista_mesh.GetNumberOfVerts() == 0
@@ -1108,9 +986,9 @@ def from_pyvista(
                     line_parent_ids = (
                         np.arange(n_line_parents, dtype=np.int64) + first_line_parent
                     )
-                    polydata_line_parent_ids = np.repeat(
+                    output_parent_ids = np.repeat(
                         line_parent_ids,
-                        line_point_counts - 1,
+                        line_arities - 1,
                     )
 
     elif manifold_dim == 2:
@@ -1158,28 +1036,19 @@ def from_pyvista(
         )
 
     ### Return Mesh object
-    # Cell data can only be passed through when the output cells have a
-    # 1:many relationship with input cells (e.g., VTK's triangulate
-    # replicates cell_data to child cells). Explicit UnstructuredGrid
-    # selection preserves only the selected parents; other lower-dimensional
-    # transformations and 0D output cannot pass cell data through.
+    # Identity outputs can share aligned data directly. Every selected or split
+    # output instead indexes the original data through its source-parent map.
     n_output_cells = 0 if cells is None else cells.shape[0]
     pass_cell_data = (
         manifold_dim > 0
         and n_output_cells == pyvista_mesh.n_cells
         and (selected_unstructured_cells or manifold_dim >= native_dim)
     )
-    if polydata_surface_parent_ids is not None:
+    if output_parent_ids is not None:
         output_cell_data = _vtk_data_to_tensor_dict(
             source_pyvista_mesh.cell_data,
             force_copy,
-            indices=polydata_surface_parent_ids,
-        )
-    elif polydata_line_parent_ids is not None:
-        output_cell_data = _vtk_data_to_tensor_dict(
-            source_pyvista_mesh.cell_data,
-            force_copy,
-            indices=polydata_line_parent_ids,
+            indices=output_parent_ids,
         )
     elif pass_cell_data:
         output_cell_data = _vtk_data_to_tensor_dict(
@@ -1511,10 +1380,10 @@ def _build_dual_graph_edges(
     return torch.from_numpy(np.concatenate(chunks, axis=0))
 
 
-def _detect_native_dim(
+def _detect_native_dimensions(
     pyvista_mesh: "pv.PolyData | pv.PointSet",
-) -> int:
-    """Determine the native dimension of a non-UnstructuredGrid dataset.
+) -> set[int]:
+    """Return native dimensions represented by a non-UnstructuredGrid dataset.
 
     Parameters
     ----------
@@ -1523,19 +1392,22 @@ def _detect_native_dim(
 
     Returns
     -------
-    int
-        0, 1, 2, or 3.
+    set[int]
+        Non-empty subset of ``{0, 1, 2}``.
     """
     if pyvista_mesh.n_cells == 0:
-        return 0
+        return {0}
     n_lines = _get_count_safely(pyvista_mesh, "n_lines")
     n_cells = _get_count_safely(pyvista_mesh, "n_cells")
     n_verts = _get_count_safely(pyvista_mesh, "n_verts")
-    if n_cells > n_verts + n_lines:
-        return 2
+    dimensions = set()
+    if n_verts > 0:
+        dimensions.add(0)
     if n_lines > 0:
-        return 1
-    return 0
+        dimensions.add(1)
+    if n_cells > n_verts + n_lines:
+        dimensions.add(2)
+    return dimensions or {0}
 
 
 def _warn_on_data_loss(
@@ -1594,47 +1466,12 @@ def _warn_on_data_loss(
                 if dropped_dims
                 else "all uninterpreted topology dimensions"
             )
-            if isinstance(pyvista_mesh, pv.UnstructuredGrid):
-                unique_cell_types = np.unique(pyvista_mesh.celltypes)
-                has_empty_parent = bool(pv.CellType.EMPTY_CELL in unique_cell_types)
-                linear_cell_types = _linear_cell_specs()
-                unsupported_parent_types = sorted(
-                    int(cell_type)
-                    for cell_type in unique_cell_types
-                    if int(cell_type) not in linear_cell_types
-                )
-            else:
-                has_empty_parent = False
-                unsupported_parent_types = []
-            if has_empty_parent:
-                remediation = (
-                    "EMPTY_CELL parent cell_data cannot be preserved because "
-                    "point-cloud output has no cells and centroid mode rejects "
-                    "EMPTY_CELL; handle or remove those parent tuples before "
-                    "conversion."
-                )
-            elif unsupported_parent_types:
-                names = ", ".join(
-                    _vtk_cell_type_name(cell_type)
-                    for cell_type in unsupported_parent_types
-                )
-                remediation = (
-                    f"Parent cell_data for unsupported topology {names} cannot "
-                    "be preserved by this point-cloud conversion, and centroid "
-                    "mode is outside the safe-linear scope; handle those tuples "
-                    "before conversion."
-                )
-            else:
-                remediation = (
-                    "Use point_source='cell_centroids' to preserve all "
-                    "cell_data as point_data, or set warn_on_lost_data=False to "
-                    "silence this warning."
-                )
             warnings.warn(
                 f"manifold_dim={manifold_dim} with point_source='vertices' "
                 f"drops parent cells from {dropped_description} and discards "
                 f"their cell_data values in {len(cd_keys)} field(s): "
-                f"{cd_keys}. {remediation}",
+                f"{cd_keys}. Handle those parent values before conversion, "
+                "or set warn_on_lost_data=False to silence this warning.",
                 UserWarning,
                 stacklevel=warning_stacklevel,
             )

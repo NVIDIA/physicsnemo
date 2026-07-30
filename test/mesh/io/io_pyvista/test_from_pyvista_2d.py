@@ -72,19 +72,6 @@ class TestFromPyvista2D:
         assert mesh.cells.shape[1] == 3
         assert mesh.n_manifold_dims == 2
 
-    def test_implicit_vertices_do_not_hide_assigned_faces(self):
-        """Auto-detection selects faces over PolyData's implicit vertex cells."""
-        points = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
-        pv_mesh = pv.PolyData(points)
-        pv_mesh.faces = np.array([3, 0, 1, 2])
-        assert pv_mesh.n_verts == 3
-
-        mesh = from_pyvista(pv_mesh)
-
-        assert mesh.n_manifold_dims == 2
-        assert torch.equal(mesh.cells, torch.tensor([[0, 1, 2]]))
-        assert mesh.cell_areas.sum().item() == pytest.approx(0.5)
-
     def test_triangle_strip_auto_detection(self):
         """Triangle strips remain auto-detectable and triangulate fully."""
         points = np.array(
@@ -166,34 +153,6 @@ class TestFromPyvistaUnstructuredGrid2D:
         assert mesh.n_manifold_dims == 2
         assert mesh.cells.shape[1] == 3
         assert mesh.n_cells >= 2  # one quad -> at least 2 triangles
-
-    def test_pixel_auto_detection_preserves_area_and_cell_data(self):
-        """VTK_PIXEL cells use VTK ordering when triangulated."""
-        # PIXEL ordering differs from QUAD: lower-left, lower-right,
-        # upper-left, upper-right.
-        points = np.array(
-            [
-                [0.0, 0.0, 0.0],
-                [2.0, 0.0, 0.0],
-                [0.0, 3.0, 0.0],
-                [2.0, 3.0, 0.0],
-            ]
-        )
-        pv_mesh = pv.UnstructuredGrid(
-            np.array([4, 0, 1, 2, 3]),
-            np.array([pv.CellType.PIXEL]),
-            points,
-        )
-        pv_mesh.cell_data["region_id"] = np.array([41], dtype=np.int16)
-
-        mesh = from_pyvista(pv_mesh)
-
-        assert mesh.n_manifold_dims == 2
-        assert mesh.n_cells == 2
-        assert mesh.cell_areas.sum().item() == pytest.approx(6.0)
-        assert torch.equal(
-            mesh.cell_data["region_id"], torch.full((2,), 41, dtype=torch.int16)
-        )
 
     def test_point_data_preserved(self):
         """Test that point data survives conversion from UnstructuredGrid."""

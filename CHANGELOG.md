@@ -377,18 +377,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pixels, triangle strips, and pentagonal/hexagonal prisms, and selects explicit
   dimensions from mixed `UnstructuredGrid` inputs while preserving selected
   parent data. Explicit 1D conversion still derives the unique edge graph when
-  no native lines exist. Attribute tuple counts are validated before VTK
-  filters; VTK cell-array offsets, `UnstructuredGrid` point-index bounds,
-  linear fixed/variable arities, and polyhedron face/location references are
-  also validated. PolyData line-parent data is replicated exactly when
-  polylines split into segments; other dropped parents and dimensions fail or
-  warn explicitly. Higher-order, control, parametric, abstract, and generic
-  convex-point-set topology is rejected pending globally conforming
-  tessellation; centroid filtering follows the same safe-linear scope and also
-  rejects `EMPTY_CELL` parents to preserve cell-data alignment. Explicit vertex
-  point-cloud conversion remains available without interpreting topology.
-  Homogeneous line, triangle, and tetrahedron grids use a
-  constant-auxiliary-memory validation and dimension-detection path.
+  no native lines exist. Connectivity and attached-data invariants are validated
+  before VTK filters run. Unsupported higher-order topology is rejected pending
+  globally conforming tessellation, while explicit vertex point-cloud conversion
+  remains available without interpreting that topology. Centroid conversion
+  rejects parents that cannot preserve cell-data alignment.
 - `physicsnemo.mesh.sampling.sample_data_at_points` now handles integer and
   boolean fields by returning `float64`, so NaN sentinels and non-integral
   interpolation or multi-cell means are representable (subject to the usual

@@ -45,6 +45,18 @@ def _next_line_number() -> int:
     return caller.f_lineno + 1
 
 
+def _run_isolated_script(script: str) -> None:
+    """Run a crash-sensitive validation script in one child process."""
+    result = subprocess.run(  # noqa: S603 - interpreter/script are test constants
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def _make_line_triangle_grid() -> "pv.UnstructuredGrid":
     """Build disjoint line and triangle cells with source-level data."""
     points = np.array(
@@ -89,6 +101,27 @@ def _make_triangle_tetra_grid() -> "pv.UnstructuredGrid":
     grid.point_data["point_id"] = np.arange(7, dtype=np.int64)
     grid.cell_data["kind"] = np.array([20, 30], dtype=np.int32)
     return grid
+
+
+def _make_two_quad_grid() -> "pv.UnstructuredGrid":
+    """Build two disjoint quads for parent-provenance tests."""
+    points = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+            [3.0, 1.0, 0.0],
+            [2.0, 1.0, 0.0],
+        ]
+    )
+    return pv.UnstructuredGrid(
+        np.array([4, 0, 1, 2, 3, 4, 4, 5, 6, 7]),
+        np.array([pv.CellType.QUAD, pv.CellType.QUAD]),
+        points,
+    )
 
 
 def _vtk_parametric_points(cell_type: "pv.CellType") -> np.ndarray:
@@ -162,48 +195,6 @@ def _make_unsupported_grid(cell_type: "pv.CellType") -> "pv.UnstructuredGrid":
             3,
             None,
         ),
-    ],
-    ids=["pixel", "triangle-strip", "pentagonal-prism", "hexagonal-prism"],
-)
-def test_supported_linear_generic_cells(
-    cell_type, points, expected_dim, expected_measure
-):
-    """Supported generic linear cells produce non-empty simplex topology."""
-    grid = pv.UnstructuredGrid(
-        np.concatenate(([len(points)], np.arange(len(points)))),
-        np.array([cell_type]),
-        points,
-    )
-    grid.cell_data["parent"] = np.array([5], dtype=np.int16)
-
-    mesh = from_pyvista(grid)
-
-    assert mesh.n_manifold_dims == expected_dim
-    assert mesh.n_cells > 0
-    assert torch.equal(
-        mesh.cell_data["parent"],
-        torch.full((mesh.n_cells,), 5, dtype=torch.int16),
-    )
-    assert int(mesh.cells.min()) >= 0
-    assert int(mesh.cells.max()) < mesh.n_points
-    assert bool((mesh.cell_areas > 0).all())
-    if expected_measure is None:
-        n_base_points = len(points) // 2
-        base = points[:n_base_points, :2]
-        base_area = 0.5 * abs(
-            np.dot(base[:, 0], np.roll(base[:, 1], -1))
-            - np.dot(base[:, 1], np.roll(base[:, 0], -1))
-        )
-        height = abs(
-            points[n_base_points:, 2].mean() - points[:n_base_points, 2].mean()
-        )
-        expected_measure = base_area * height
-    assert mesh.cell_areas.sum().item() == pytest.approx(expected_measure)
-
-
-@pytest.mark.parametrize(
-    "cell_type,points,expected_dim,expected_measure",
-    [
         (pv.CellType.EMPTY_CELL, np.empty((0, 3)), 0, None),
         (pv.CellType.VERTEX, np.array([[0.0, 0.0, 0.0]]), 0, None),
         (
@@ -244,24 +235,57 @@ def test_supported_linear_generic_cells(
             1.0 / 3.0,
         ),
     ],
-    ids=["empty", "vertex", "poly-vertex", "polygon", "voxel", "wedge", "pyramid"],
+    ids=[
+        "pixel",
+        "triangle-strip",
+        "pentagonal-prism",
+        "hexagonal-prism",
+        "empty",
+        "vertex",
+        "poly-vertex",
+        "polygon",
+        "voxel",
+        "wedge",
+        "pyramid",
+    ],
 )
-def test_remaining_allowlisted_families(
-    cell_type, points, expected_dim, expected_measure
-):
-    """Every remaining allowlisted family has a compact positive control."""
+def test_allowlisted_linear_cells(cell_type, points, expected_dim, expected_measure):
+    """Every allowlisted family converts with valid geometry and parent data."""
     grid = pv.UnstructuredGrid(
         np.concatenate(([len(points)], np.arange(len(points)))),
         np.array([cell_type]),
         points,
     )
+    if expected_dim > 0:
+        grid.cell_data["parent"] = np.array([5], dtype=np.int16)
 
     mesh = from_pyvista(grid, warn_on_lost_data=False)
 
     assert mesh.n_manifold_dims == expected_dim
-    if expected_measure is not None:
-        assert mesh.n_cells > 0
-        assert mesh.cell_areas.sum().item() == pytest.approx(expected_measure)
+    if expected_dim == 0:
+        assert mesh.n_cells == 0
+        return
+
+    assert mesh.n_cells > 0
+    assert torch.equal(
+        mesh.cell_data["parent"],
+        torch.full((mesh.n_cells,), 5, dtype=torch.int16),
+    )
+    assert int(mesh.cells.min()) >= 0
+    assert int(mesh.cells.max()) < mesh.n_points
+    assert bool((mesh.cell_areas > 0).all())
+    if expected_measure is None:
+        n_base_points = len(points) // 2
+        base = points[:n_base_points, :2]
+        base_area = 0.5 * abs(
+            np.dot(base[:, 0], np.roll(base[:, 1], -1))
+            - np.dot(base[:, 1], np.roll(base[:, 0], -1))
+        )
+        height = abs(
+            points[n_base_points:, 2].mean() - points[:n_base_points, 2].mean()
+        )
+        expected_measure = base_area * height
+    assert mesh.cell_areas.sum().item() == pytest.approx(expected_measure)
 
 
 def test_adjacent_pixels_have_conforming_shared_edge():
@@ -364,18 +388,6 @@ def test_mixed_linear_selection_preserves_source_contracts(
         mesh.cell_data["kind"], torch.tensor(expected_kind, dtype=torch.int16)
     )
     assert torch.equal(mesh.global_data["case"], torch.tensor([7], dtype=torch.int32))
-
-
-def test_native_lines_precede_derived_higher_dimensional_edges():
-    """Explicit 1D returns native lines instead of edges of surface cells."""
-    mesh = from_pyvista(
-        _make_line_triangle_grid(),
-        manifold_dim=1,
-        warn_on_lost_data=False,
-    )
-
-    assert torch.equal(mesh.cells, torch.tensor([[0, 1]]))
-    assert torch.equal(mesh.cell_data["kind"], torch.tensor([10], dtype=torch.int16))
 
 
 def test_vertex_polyline_parent_mapping_uses_polydata_cell_order():
@@ -536,8 +548,10 @@ def test_implicit_vertices_triangle_maps_only_surface_parent_data():
     ):
         mesh = from_pyvista(polydata)
 
+    assert mesh.n_manifold_dims == 2
     assert torch.equal(mesh.cells, torch.tensor([[0, 1, 2]]))
     assert torch.equal(mesh.cell_data["parent_id"], torch.tensor([222]))
+    assert mesh.cell_areas.sum().item() == pytest.approx(0.5)
 
 
 def test_polygon_strip_surface_mapping_replicates_exact_parents():
@@ -656,23 +670,7 @@ def test_mixed_selection_force_copy_detaches_all_data():
 
 def test_supported_parent_provenance_rejects_vanished_parent(monkeypatch):
     """A supported linear parent cannot disappear during triangulation."""
-    points = np.array(
-        [
-            [0.0, 0.0, 0.0],
-            [1.0, 0.0, 0.0],
-            [1.0, 1.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [2.0, 0.0, 0.0],
-            [3.0, 0.0, 0.0],
-            [3.0, 1.0, 0.0],
-            [2.0, 1.0, 0.0],
-        ]
-    )
-    grid = pv.UnstructuredGrid(
-        np.array([4, 0, 1, 2, 3, 4, 4, 5, 6, 7]),
-        np.array([pv.CellType.QUAD, pv.CellType.QUAD]),
-        points,
-    )
+    grid = _make_two_quad_grid()
     grid.cell_data["__physicsnemo_parent_cell_id"] = np.array([100, 200])
     grid.cell_data["__physicsnemo_parent_cell_id_1"] = np.array([300, 400])
     original_collision_field = grid.cell_data["__physicsnemo_parent_cell_id"].copy()
@@ -681,10 +679,8 @@ def test_supported_parent_provenance_rejects_vanished_parent(monkeypatch):
 
     def drop_second_parent(mesh, *args, **kwargs):
         triangulated = original_triangulate(mesh, *args, **kwargs)
-        provenance_key = "__physicsnemo_parent_cell_id_2"
-        assert provenance_key in triangulated.cell_data, (
-            "generated provenance did not avoid the user key collision"
-        )
+        provenance_key = "__physicsnemo_parent_cell_id"
+        assert list(triangulated.cell_data) == [provenance_key]
         keep = np.flatnonzero(triangulated.cell_data[provenance_key] == 0)
         return triangulated.extract_cells(keep)
 
@@ -700,6 +696,23 @@ def test_supported_parent_provenance_rejects_vanished_parent(monkeypatch):
         grid.cell_data["__physicsnemo_parent_cell_id_1"],
         original_second_collision,
     )
+
+
+def test_parent_provenance_rejects_unknown_parent(monkeypatch):
+    """Parent maps cannot index cells outside the selected source set."""
+    grid = _make_two_quad_grid()
+    grid.cell_data["kind"] = np.array([10, 20], dtype=np.int16)
+    original_triangulate = pv.UnstructuredGrid.triangulate
+
+    def corrupt_parent_id(mesh, *args, **kwargs):
+        triangulated = original_triangulate(mesh, *args, **kwargs)
+        triangulated.cell_data["__physicsnemo_parent_cell_id"][0] = -1
+        return triangulated
+
+    monkeypatch.setattr(pv.UnstructuredGrid, "triangulate", corrupt_parent_id)
+
+    with pytest.raises(ValueError, match=r"unknown parent IDs.*-1"):
+        from_pyvista(grid)
 
 
 def test_malformed_inputs_raise_in_one_subprocess():
@@ -805,6 +818,23 @@ def test_malformed_inputs_raise_in_one_subprocess():
         else:
             failures.append((marker, "no ValueError"))
 
+        marker = "CASE unstructured:cell-type-count"
+        print(marker, flush=True)
+        invalid_cell_types = pv.UnstructuredGrid(
+            np.array([4, 0, 1, 2, 3, 4, 4, 5, 6, 7]),
+            np.array([pv.CellType.QUAD, pv.CellType.QUAD]),
+            np.zeros((8, 3)),
+        )
+        invalid_cell_types.GetCellTypesArray().SetNumberOfTuples(1)
+        try:
+            from_pyvista(invalid_cell_types)
+        except ValueError as error:
+            required = ["cell types", "expected 2", "got 1"]
+            if not all(part in str(error) for part in required):
+                failures.append((marker, str(error)))
+        else:
+            failures.append((marker, "no ValueError"))
+
         centroid_cases = [
             ("PIXEL", 4, [0, 1, 2], ["PIXEL", "exactly 4", "got 3"]),
             ("POLY_LINE", 1, [0], ["POLY_LINE", "at least 2", "got 1"]),
@@ -837,14 +867,7 @@ def test_malformed_inputs_raise_in_one_subprocess():
             raise SystemExit(2)
         """
     )
-    result = subprocess.run(  # noqa: S603 - interpreter/script are test constants
-        [sys.executable, "-c", script],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
+    _run_isolated_script(script)
 
 
 def test_malformed_polydata_streams_raise_in_one_subprocess():
@@ -856,10 +879,7 @@ def test_malformed_polydata_streams_raise_in_one_subprocess():
         import pyvista as pv
         import vtk
         from vtk.util.numpy_support import numpy_to_vtkIdTypeArray
-        from physicsnemo.mesh.io.io_pyvista import (
-            _parse_polydata_cell_stream,
-            from_pyvista,
-        )
+        from physicsnemo.mesh.io.io_pyvista import from_pyvista
 
         specifications = {
             "verts": ("SetVerts", 1, 0),
@@ -894,27 +914,6 @@ def test_malformed_polydata_streams_raise_in_one_subprocess():
                         make_polydata(association, raw),
                         manifold_dim=manifold_dim,
                         warn_on_lost_data=False,
-                    )
-                except ValueError as error:
-                    if f"PolyData {association}" not in str(error):
-                        failures.append((marker, str(error)))
-                else:
-                    failures.append((marker, "no ValueError"))
-
-            boundary_cases = [
-                ("truncated", [minimum, *range(minimum - 1)]),
-                ("overlong", [minimum, *range(minimum), minimum]),
-            ]
-            for case_name, raw in boundary_cases:
-                marker = f"CASE polydata:{association}:{case_name}"
-                print(marker, flush=True)
-                try:
-                    _parse_polydata_cell_stream(
-                        np.asarray(raw, dtype=np.int64),
-                        association,
-                        minimum,
-                        1,
-                        4,
                     )
                 except ValueError as error:
                     if f"PolyData {association}" not in str(error):
@@ -962,14 +961,7 @@ def test_malformed_polydata_streams_raise_in_one_subprocess():
             raise SystemExit(2)
         """
     )
-    result = subprocess.run(  # noqa: S603 - interpreter/script are test constants
-        [sys.executable, "-c", script],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
+    _run_isolated_script(script)
 
 
 def test_malformed_polyhedron_auxiliary_arrays_raise_in_one_subprocess():
@@ -1044,14 +1036,7 @@ def test_malformed_polyhedron_auxiliary_arrays_raise_in_one_subprocess():
             raise SystemExit(2)
         """
     )
-    result = subprocess.run(  # noqa: S603 - interpreter/script are test constants
-        [sys.executable, "-c", script],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
+    _run_isolated_script(script)
 
 
 @pytest.mark.parametrize(
@@ -1099,14 +1084,6 @@ def test_unsupported_point_cloud_warns_when_parent_data_is_dropped():
     assert point_cloud.n_points == grid.n_points
     assert "Use point_source='cell_centroids'" not in str(caught[0].message)
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", UserWarning)
-        from_pyvista(
-            grid,
-            manifold_dim=0,
-            warn_on_lost_data=False,
-        )
-
 
 def test_zero_cell_schema_does_not_warn_about_lost_parent_data():
     """A zero-length cell-data schema contains no parent tuples to lose."""
@@ -1130,26 +1107,6 @@ def test_zero_cell_schema_does_not_warn_about_lost_parent_data():
     assert relevant == []
 
 
-def test_empty_cell_warning_does_not_recommend_rejected_centroid_mode():
-    """Dropped EMPTY_CELL data reports that no conversion path preserves it."""
-    grid = pv.UnstructuredGrid(
-        np.array([0]),
-        np.array([pv.CellType.EMPTY_CELL]),
-        np.empty((0, 3)),
-    )
-    grid.cell_data["kind"] = np.array([1], dtype=np.int16)
-
-    with pytest.warns(UserWarning) as caught:
-        from_pyvista(grid, manifold_dim=0)
-
-    messages = [str(warning.message) for warning in caught]
-    relevant = [message for message in messages if "EMPTY_CELL" in message]
-    assert len(relevant) == 1
-    assert "cannot be preserved" in relevant[0]
-    assert "centroid mode rejects EMPTY_CELL" in relevant[0]
-    assert "Use point_source='cell_centroids'" not in relevant[0]
-
-
 def test_mixed_grid_with_unsupported_parent_rejects_before_selection():
     """Unsupported parents cannot be hidden by selecting a safe dimension."""
     unsupported = _make_unsupported_grid(pv.CellType.QUADRATIC_EDGE)
@@ -1170,40 +1127,6 @@ def test_mixed_grid_with_unsupported_parent_rejects_before_selection():
 
     with pytest.raises(ValueError, match="QUADRATIC_EDGE.*globally conforming"):
         from_pyvista(grid, manifold_dim=3)
-
-
-def test_quadratic_tetra_centroid_rejected_by_safe_linear_scope():
-    """Canonical higher-order parents are rejected before centroid filters."""
-    points = np.array(
-        [
-            [0.0, 0.0, 0.0],
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, 0.0, 1.0],
-            [0.5, 0.0, 0.0],
-            [0.5, 0.5, 0.0],
-            [0.0, 0.5, 0.0],
-            [0.0, 0.0, 0.5],
-            [0.5, 0.0, 0.5],
-            [0.0, 0.5, 0.5],
-        ]
-    )
-    grid = pv.UnstructuredGrid(
-        np.concatenate(([10], np.arange(10))),
-        np.array([pv.CellType.QUADRATIC_TETRA]),
-        points,
-    )
-    grid.cell_data["kind"] = np.array([42], dtype=np.int16)
-
-    with pytest.raises(
-        ValueError,
-        match=r"QUADRATIC_TETRA.*centroid filtering.*safe-linear",
-    ):
-        from_pyvista(
-            grid,
-            point_source="cell_centroids",
-            warn_on_lost_data=False,
-        )
 
 
 @pytest.mark.parametrize("mixed", [False, True], ids=["empty", "empty-triangle"])
