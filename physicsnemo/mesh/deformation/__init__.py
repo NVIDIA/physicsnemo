@@ -14,19 +14,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Mesh validation, quality metrics, and statistics.
+"""Differentiable energies for deformed mesh geometry."""
 
-This module provides tools for validating mesh integrity, computing quality
-metrics, and generating mesh statistics.
-"""
-
-from physicsnemo.mesh.validation.quality import compute_quality_metrics
-from physicsnemo.mesh.validation.statistics import compute_mesh_statistics
-from physicsnemo.mesh.validation.validate import validate, validate_mesh
+from physicsnemo.mesh.deformation._energies import (
+    closed_surface_volume_energy,
+    simplex_inversion_energy,
+    simplex_measure_energy,
+    simplex_strain_energy,
+    surface_bending_energy,
+    total_measure_energy,
+)
 
 __all__ = [
-    "compute_mesh_statistics",
-    "compute_quality_metrics",
-    "validate",
-    "validate_mesh",
+    "closed_surface_volume_energy",
+    "simplex_inversion_energy",
+    "simplex_measure_energy",
+    "simplex_strain_energy",
+    "surface_bending_energy",
+    "total_measure_energy",
 ]

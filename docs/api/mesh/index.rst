@@ -183,6 +183,8 @@ Key Features
 - **Geometry transformations**: translation, rotation, scaling, dense point
   displacement, compact control-point morphing, and global radial-basis
   deformation
+- **Differentiable deformation energies**: strain, local and total measure,
+  inversion, closed-surface volume, and surface bending penalties
 - **Tessellation**: triangulate polygon soups into simplicial meshes (convex
   fan with an ear-clip fallback for non-convex polygons), for example, using
   ``Mesh.from_polygons``
@@ -239,6 +241,7 @@ API Reference
    spatial
    sampling
    transformations
+   deformation
    subdivision
    smoothing
    remeshing

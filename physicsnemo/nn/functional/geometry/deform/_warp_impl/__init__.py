@@ -14,8 +14,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Warp backends for compact Shepard, RBF, and lattice deformation."""
+"""Warp backends for point deformation and deformation energies."""
 
+from .energy_op import (
+    closed_surface_volume_contributions_warp,
+    hinge_bending_terms_warp,
+    simplex_inversion_terms_warp,
+    simplex_measure_components_warp,
+    simplex_stvk_terms_warp,
+)
 from .ffd_op import (
     ffd_field_warp_impl,
     ffd_points_warp,
@@ -27,9 +34,14 @@ from .op import (
 from .rbf_op import rbf_field_warp
 
 __all__ = [
+    "closed_surface_volume_contributions_warp",
     "compact_shepard_field_warp_impl",
     "ffd_field_warp_impl",
     "ffd_points_warp",
+    "hinge_bending_terms_warp",
     "morph_points_warp",
     "rbf_field_warp",
+    "simplex_inversion_terms_warp",
+    "simplex_measure_components_warp",
+    "simplex_stvk_terms_warp",
 ]
