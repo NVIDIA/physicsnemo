@@ -474,7 +474,7 @@ adaptive = mesh.remesh(
 from physicsnemo.nn.functional.geometry.remeshing import remeshing
 
 linear_resolution = mesh.point_data["resolution"]
-if linear_resolution.dtype in (torch.float16, torch.bfloat16):
+if linear_resolution.element_size() < 4:
     linear_resolution = linear_resolution.to(torch.float32)
 normalized_resolution = linear_resolution / linear_resolution.amax()
 tuned_points, tuned_cells = remeshing(
@@ -487,11 +487,11 @@ tuned_points, tuned_cells = remeshing(
 ```
 
 Remeshing currently supports triangle surfaces embedded in 3D. It creates new
-topology. Selected float16, bfloat16, float32, or float64 fields can be
-interpolated from the original surface. Cell data and unselected point data
-are discarded. Global data is preserved. The high-level resolution field is a
-relative inverse-edge-length multiplier. The low-level `vertex_density`
-parameter accepts the corresponding raw CVT integration density.
+topology. Selected real floating-point fields can be interpolated from the
+original surface. Cell data and unselected point data are discarded. Global
+data is preserved. The high-level resolution field is a relative
+inverse-edge-length multiplier. The low-level `vertex_density` parameter
+accepts the corresponding raw CVT integration density.
 
 ### Discrete Calculus
 

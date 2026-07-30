@@ -241,23 +241,29 @@ def test_remesh_rejects_categorical_point_data_transfer():
     not hasattr(torch, "float8_e4m3fn"),
     reason="float8 is unavailable in this PyTorch version",
 )
-def test_remesh_rejects_unsupported_float8_fields():
+def test_remesh_accepts_float8_fields():
     source = _tilted_plane(subdivisions=4)
-    source.point_data["float8"] = torch.ones(
-        source.n_points,
+    source.point_data["float8"] = (
+        4.0 + 0.25 * source.points[:, 0] + 0.15 * source.points[:, 1]
+    ).to(
         dtype=torch.float8_e4m3fn,
     )
 
-    with pytest.raises(TypeError, match="supported real floating-point"):
-        source.remesh(
-            16,
-            transfer_point_data="float8",
-        )
-    with pytest.raises(TypeError, match="supported real floating-point"):
-        source.remesh(
-            16,
-            resolution_field="float8",
-        )
+    output = source.remesh(
+        16,
+        max_iterations=1,
+        transfer_point_data="float8",
+        resolution_field="float8",
+    )
+
+    assert output.point_data["float8"].dtype == torch.float8_e4m3fn
+    expected = 4.0 + 0.25 * output.points[:, 0] + 0.15 * output.points[:, 1]
+    torch.testing.assert_close(
+        output.point_data["float8"].to(torch.float32),
+        expected,
+        rtol=0.15,
+        atol=0.15,
+    )
 
 
 @pytest.mark.parametrize(

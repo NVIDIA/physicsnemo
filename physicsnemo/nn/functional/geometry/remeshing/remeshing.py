@@ -32,12 +32,6 @@ _INTEGER_DTYPES = {
     torch.int64,
     torch.uint8,
 }
-_SUPPORTED_DENSITY_DTYPES = {
-    torch.float16,
-    torch.bfloat16,
-    torch.float32,
-    torch.float64,
-}
 # Warp allocates two int32 arrays with ``resolution**3`` entries. A resolution
 # of 256 bounds their combined storage to 128 MiB before point storage.
 _MAX_HASH_GRID_RESOLUTION = 256
@@ -104,10 +98,9 @@ def _validate_inputs(
                 f"{tuple(vertex_density.shape)} for "
                 f"n_vertices={mesh_vertices.shape[0]}"
             )
-        if vertex_density.dtype not in _SUPPORTED_DENSITY_DTYPES:
+        if not torch.is_floating_point(vertex_density):
             raise TypeError(
-                "vertex_density must use a supported floating-point dtype. "
-                "Expected float16, bfloat16, float32, or float64, got "
+                "vertex_density must use a real floating-point dtype, got "
                 f"{vertex_density.dtype}"
             )
         if vertex_density.device != mesh_vertices.device:
@@ -250,11 +243,15 @@ def _remeshing_with_mapping(
 
     from ._warp_impl import remeshing_warp
 
+    detached_density = None if vertex_density is None else vertex_density.detach()
+    if detached_density is not None and detached_density.element_size() < 4:
+        detached_density = detached_density.to(torch.float32)
+
     return remeshing_warp(
         mesh_vertices.detach(),
         mesh_indices.detach(),
         n_clusters,
-        None if vertex_density is None else vertex_density.detach(),
+        detached_density,
         vertex_density_exponent,
         max_iterations,
         float(search_radius_scale),
@@ -290,9 +287,8 @@ class Remeshing(FunctionSpec):
         Positive relative integration density with shape ``(n_vertices,)``.
         Larger values allocate more output vertices near the corresponding
         input vertices. Multiplying the full tensor by a positive constant
-        leaves the objective unchanged. Supported dtypes are float16,
-        bfloat16, float32, and float64. Default is ``None`` for uniform
-        remeshing.
+        leaves the objective unchanged. It must use a real floating-point
+        dtype. Default is ``None`` for uniform remeshing.
     search_radius_scale : float, optional
         Base hash-grid query radius relative to
         ``sqrt(surface_area / n_clusters)``. Nonuniform density automatically
@@ -389,8 +385,8 @@ class Remeshing(FunctionSpec):
             Maximum centroid-relaxation iterations.
         vertex_density : torch.Tensor or None, optional
             Positive relative integration density with shape
-            ``(n_vertices,)``. Supported dtypes are float16, bfloat16,
-            float32, and float64. Default is ``None``.
+            ``(n_vertices,)`` and a real floating-point dtype. Default is
+            ``None``.
         search_radius_scale : float, optional
             Base scale factor for the centroid hash-grid query radius.
             Nonuniform density can enlarge the effective radius.

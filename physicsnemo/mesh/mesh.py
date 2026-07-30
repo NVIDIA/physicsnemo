@@ -2824,14 +2824,14 @@ class Mesh:
         transfer_point_data : bool, str, tuple, list, or None, optional
             Point-data fields to barycentrically interpolate onto output
             vertices. ``True`` transfers every leaf. A key, nested key path, or
-            list selects specific fields. Fields must use float16, bfloat16,
-            float32, or float64. Default is ``False``.
+            list selects specific fields. Fields must use a real floating-point
+            dtype. Default is ``False``.
         resolution_field : str, tuple, or None, optional
             Key or nested key path for a positive scalar point-data field.
             Values specify relative linear resolution. A value twice another
             requests approximately half the local edge spacing within the
-            fixed ``n_clusters`` budget. The field must use float16, bfloat16,
-            float32, or float64. Default is ``None``.
+            fixed ``n_clusters`` budget. The field must use a real
+            floating-point dtype. Default is ``None``.
 
         Returns
         -------

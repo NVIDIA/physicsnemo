@@ -33,12 +33,9 @@ if TYPE_CHECKING:
 
 PointDataKey: TypeAlias = str | tuple[str, ...]
 PointDataSelection: TypeAlias = bool | PointDataKey | list[PointDataKey] | None
-_SUPPORTED_FIELD_DTYPES = {
-    torch.float16,
-    torch.bfloat16,
-    torch.float32,
-    torch.float64,
-}
+# A linear-resolution multiplier is an inverse target edge length. For the
+# squared-distance CVT objective on a 2D surface, its integration density is
+# the fourth power of that multiplier.
 _LINEAR_RESOLUTION_DENSITY_EXPONENT = 4.0
 
 
@@ -129,11 +126,10 @@ def _resolve_resolution_field(
             f"resolution_field {key!r} must have shape ({mesh.n_points},), "
             f"got {tuple(resolution.shape)}"
         )
-    if resolution.dtype not in _SUPPORTED_FIELD_DTYPES:
+    if not torch.is_floating_point(resolution):
         raise TypeError(
-            f"resolution_field {key!r} must use a supported real "
-            "floating-point dtype. Expected float16, bfloat16, float32, or "
-            f"float64, got {resolution.dtype}"
+            f"resolution_field {key!r} must use a real floating-point dtype, "
+            f"got {resolution.dtype}"
         )
     if resolution.device != mesh.points.device:
         raise ValueError(
@@ -151,11 +147,10 @@ def _validate_transfer_fields(
         values = mesh.point_data[key]
         if not isinstance(values, torch.Tensor):
             raise TypeError(f"point_data field {key!r} must be a torch.Tensor")
-        if values.dtype not in _SUPPORTED_FIELD_DTYPES:
+        if not torch.is_floating_point(values):
             raise TypeError(
-                f"point_data field {key!r} must use a supported real "
-                "floating-point dtype for barycentric interpolation. "
-                "Expected float16, bfloat16, float32, or float64, got "
+                f"point_data field {key!r} must use a real floating-point "
+                "dtype for barycentric interpolation, got "
                 f"{values.dtype}"
             )
         if values.shape[0] != mesh.n_points:
@@ -194,9 +189,7 @@ def _interpolate_point_data(
     for key in keys:
         values = mesh.point_data[key]
         accumulation_dtype = (
-            torch.float32
-            if values.dtype in (torch.float16, torch.bfloat16)
-            else values.dtype
+            torch.float32 if values.element_size() < 4 else values.dtype
         )
         gathered = values[source_vertices].to(dtype=accumulation_dtype)
         weights = weights_by_dtype.get(accumulation_dtype)
@@ -241,16 +234,14 @@ def remesh(
         or ``None`` transfers no fields. ``True`` transfers every point-data
         leaf. A string or tuple selects one key or nested key path. A list
         selects several keys or paths. Selected fields must contain real
-        floating-point tensors with float16, bfloat16, float32, or float64
-        dtype. Default is ``False``.
+        floating-point tensors. Default is ``False``.
     resolution_field : str, tuple, or None, optional
         Key or nested key path for a positive scalar point-data field with
         shape ``(n_points,)``. Values specify relative linear resolution. A
         value twice another requests approximately half the local edge
         spacing. The fixed ``n_clusters`` budget and source geometry limit the
-        realized spacing. The field must use float16, bfloat16, float32, or
-        float64. Only relative values matter. Default is ``None`` for uniform
-        remeshing.
+        realized spacing. The field must use a real floating-point dtype. Only
+        relative values matter. Default is ``None`` for uniform remeshing.
 
     Returns
     -------

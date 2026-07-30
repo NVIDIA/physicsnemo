@@ -443,7 +443,7 @@ def _apply_vertex_density(
         return vertex_areas, False
 
     density = vertex_density.detach()
-    if density.dtype in (torch.float16, torch.bfloat16):
+    if density.element_size() < 4:
         density = density.to(torch.float32)
     density = density / density.amax()
     if density_exponent != 1.0:

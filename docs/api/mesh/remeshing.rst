@@ -40,8 +40,7 @@ Transfer Point Data
 
 Set ``transfer_point_data`` to a key, a nested key path, or a list of keys and
 paths. ``True`` selects every point-data leaf. Selected fields must contain
-real floating-point tensors with ``float16``, ``bfloat16``, ``float32``, or
-``float64`` dtype:
+real floating-point tensors:
 
 .. code:: python
 
@@ -96,7 +95,7 @@ Control Local Resolution
 Store a positive scalar field in ``point_data`` and pass its key as
 ``resolution_field``. Its values are relative linear-resolution multipliers.
 A value twice another requests approximately half the local edge spacing.
-The field must use ``float16``, ``bfloat16``, ``float32``, or ``float64``:
+The field must use a real floating-point dtype:
 
 .. code:: python
 
@@ -140,7 +139,7 @@ implementation evolves:
    from physicsnemo.nn.functional import remeshing
 
    linear_resolution = dense.point_data["resolution"]
-   if linear_resolution.dtype in (torch.float16, torch.bfloat16):
+   if linear_resolution.element_size() < 4:
        linear_resolution = linear_resolution.to(torch.float32)
    normalized_resolution = linear_resolution / linear_resolution.amax()
    tuned_points, tuned_cells = remeshing(
@@ -160,9 +159,9 @@ reuses the compiled Warp kernels rather than triggering JIT recompilation.
 
 The tensor functional accepts raw CVT integration density through
 ``vertex_density``. It does not interpret that tensor as linear resolution.
-Promote ``float16`` and ``bfloat16`` values, then normalize before raising the
-field to the fourth power. This follows the conversion order used by
-``Mesh.remesh`` and avoids overflowing reduced-precision inputs.
+Promote values smaller than ``float32``, then normalize before raising the field
+to the fourth power. This follows the conversion order used by ``Mesh.remesh``
+and avoids overflowing reduced-precision inputs.
 
 The Warp implementation uses centroidal relaxation with a hash grid. Uniform
 remeshing uses lumped vertex area as integration mass. Adaptive remeshing
@@ -224,10 +223,10 @@ Behavior and Limitations
   frame and point dtype on return. Resolution fields are detached before they
   affect clustering.
 * Barycentric point-data transfer supports real floating-point tensors. It
-  supports ``float16``, ``bfloat16``, ``float32``, and ``float64`` while
-  preserving trailing component dimensions and the source field dtype.
-  Categorical integer, Boolean, float8, and complex fields are not
-  interpolated.
+  preserves trailing component dimensions and the source field dtype.
+  Dtypes smaller than ``float32`` accumulate in ``float32`` before conversion
+  back to the source dtype. Categorical integer, Boolean, and complex fields
+  are not interpolated.
 * Point-data transfer requires a valid closest source triangle for every
   output vertex. A surface feature that is numerically degenerate in the
   float32 Warp projection can still remesh geometrically, but field transfer

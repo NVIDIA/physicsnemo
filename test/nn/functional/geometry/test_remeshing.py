@@ -195,17 +195,20 @@ def test_remeshing_rejects_invalid_vertex_density_contract(
     not hasattr(torch, "float8_e4m3fn"),
     reason="float8 is unavailable in this PyTorch version",
 )
-def test_remeshing_rejects_float8_vertex_density():
-    vertices = torch.rand(16, 3)
-    indices = torch.tensor([[0, 1, 2], [2, 3, 0]])
+def test_remeshing_accepts_float8_vertex_density():
+    source = plane.load(size=2.0, subdivisions=4)
+    vertex_density = (1.5 + 0.5 * source.points[:, 0]).to(torch.float8_e4m3fn)
 
-    with pytest.raises(TypeError, match="float16"):
-        remeshing(
-            vertices,
-            indices,
-            8,
-            vertex_density=torch.ones(16, dtype=torch.float8_e4m3fn),
-        )
+    output_points, output_cells = remeshing(
+        source.points,
+        source.cells,
+        16,
+        max_iterations=1,
+        vertex_density=vertex_density,
+    )
+
+    assert 3 <= output_points.shape[0] <= 16
+    assert output_cells.shape[0] > 0
 
 
 @pytest.mark.parametrize(
