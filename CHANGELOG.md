@@ -44,9 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds `rectilinear_grid_divergence`, `rectilinear_grid_curl`, and
   `rectilinear_grid_laplacian` to `physicsnemo.nn.functional`, with Torch and
   fused Warp implementations for periodic, nonuniform rectilinear grids.
-- Adds uniform triangle-surface remeshing with NVIDIA Warp on CPU and CUDA,
-  including `remesh`, `Mesh.remesh`, topology cleanup, and advanced
-  tensor-level controls for runtime tuning.
+- Adds triangle-surface remeshing with NVIDIA Warp on CPU and CUDA, including
+  `remesh`, `Mesh.remesh`, topology cleanup, barycentric point-data transfer,
+  attached linear-resolution-field control, and advanced tensor-level tuning.
 - Adds coverage reporting on PRs — an informational `Coverage %` check plus a
   ready-to-enable Codecov integration.
 - Adds differentiable mesh morphing: Torch-backed dense ``displace_points`` /

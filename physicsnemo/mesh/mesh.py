@@ -2798,11 +2798,20 @@ class Mesh:
         n_clusters: builtins.int,
         *,
         max_iterations: builtins.int = 4,
+        transfer_point_data: (
+            builtins.bool
+            | builtins.str
+            | tuple[builtins.str, ...]
+            | list[builtins.str | tuple[builtins.str, ...]]
+            | None
+        ) = False,
+        resolution_field: builtins.str | tuple[builtins.str, ...] | None = None,
     ) -> "Mesh":
-        """Uniformly remesh a triangle surface using Warp on CPU or CUDA.
+        """Remesh a triangle surface and optionally transfer point data.
 
         Remeshing creates new topology with approximately ``n_clusters``
-        vertices and discards point and cell data.
+        vertices. A positive attached field can request relative local linear
+        resolution.
 
         Parameters
         ----------
@@ -2812,6 +2821,17 @@ class Mesh:
         max_iterations : int, optional
             Maximum centroid-relaxation iterations. Default is ``4``. Values
             must be non-negative.
+        transfer_point_data : bool, str, tuple, list, or None, optional
+            Point-data fields to barycentrically interpolate onto output
+            vertices. ``True`` transfers every leaf. A key, nested key path, or
+            list selects specific fields. Fields must use float16, bfloat16,
+            float32, or float64. Default is ``False``.
+        resolution_field : str, tuple, or None, optional
+            Key or nested key path for a positive scalar point-data field.
+            Values specify relative linear resolution. A value twice another
+            requests approximately half the local edge spacing within the
+            fixed ``n_clusters`` budget. The field must use float16, bfloat16,
+            float32, or float64. Default is ``None``.
 
         Returns
         -------
@@ -2822,23 +2842,28 @@ class Mesh:
         Raises
         ------
         TypeError
-            If counts, tuning parameters, or point coordinates have invalid
-            types.
+            If counts, tuning parameters, point coordinates, a field
+            selection, or a selected field has an invalid type.
         ValueError
-            If a count is out of range or geometry is invalid.
+            If a count is out of range or geometry, connectivity, or a
+            selected field is invalid.
+        KeyError
+            If a requested point-data key or path does not exist.
         NotImplementedError
             If this is not a 2D triangle surface embedded in 3D.
         ImportError
             If Warp is unavailable.
         RuntimeError
-            If cleanup cannot reconstruct a nonempty manifold surface.
+            If cleanup cannot reconstruct a nonempty manifold surface or
+            point-data transfer provenance is unavailable.
 
         Notes
         -----
-        Remeshing is non-differentiable. Global data is preserved, while point
-        and cell data are discarded because their associations no longer match
-        the reconstructed topology. Backend-specific tuning is available from
-        the advanced tensor-level
+        Geometry and topology changes are non-differentiable. Barycentrically
+        transferred fields remain differentiable with respect to their source
+        values. Global data is preserved. Cell data and unselected point data
+        are discarded. Backend-specific tuning is available from the
+        tensor-level
         :func:`physicsnemo.nn.functional.remeshing` API.
         """
         from physicsnemo.mesh.remeshing import remesh
@@ -2847,6 +2872,8 @@ class Mesh:
             self,
             n_clusters,
             max_iterations=max_iterations,
+            transfer_point_data=transfer_point_data,
+            resolution_field=resolution_field,
         )
 
     def subdivide(

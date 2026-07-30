@@ -18,6 +18,7 @@
 
 import pytest
 import torch
+from tensordict import TensorDict
 
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.boundaries import is_watertight
@@ -108,6 +109,54 @@ def test_warp_remesh_closed_sphere_contract():
         output.cell_areas.sum() / source.cell_areas.sum() - 1.0
     ).abs()
     assert float(relative_area_error) < 0.05
+
+
+def test_warp_remesh_transfers_point_data_on_cuda_with_autograd():
+    source = sphere_icosahedral.load(subdivisions=2, device="cuda")
+    coefficients = source.points.new_tensor([0.7, -1.1, 0.4])
+    values = (source.points @ coefficients).detach().requires_grad_()
+    source.point_data["design"] = values
+    source.point_data["resolution"] = 1.0 + source.points[:, 2].square()
+
+    stream = torch.cuda.Stream()
+    with torch.cuda.stream(stream):
+        output = source.remesh(
+            48,
+            max_iterations=1,
+            transfer_point_data="design",
+            resolution_field="resolution",
+        )
+        loss = output.point_data["design"].sum()
+    stream.synchronize()
+    loss.backward()
+
+    assert output.point_data["design"].device.type == "cuda"
+    torch.testing.assert_close(
+        output.point_data["design"],
+        output.points @ coefficients,
+        rtol=2.0e-5,
+        atol=2.0e-5,
+    )
+    assert values.grad is not None
+    assert torch.isfinite(values.grad).all()
+
+
+def test_warp_remesh_rejects_point_data_on_another_device():
+    geometry = sphere_icosahedral.load(subdivisions=1, device="cuda")
+    source = Mesh(
+        points=geometry.points,
+        cells=geometry.cells,
+        point_data=TensorDict(
+            {"field": torch.ones(geometry.n_points)},
+            batch_size=[geometry.n_points],
+        ),
+    )
+
+    with pytest.raises(ValueError, match="same device"):
+        source.remesh(
+            24,
+            transfer_point_data="field",
+        )
 
 
 def test_cuda_default_dispatch_and_mesh_method():
