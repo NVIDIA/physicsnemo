@@ -1167,6 +1167,78 @@ def test_opposite_sign_finite_coordinates_do_not_overflow_to_a_miss(
     )
 
 
+@pytest.mark.parametrize(
+    ("dtype", "magnitude"),
+    [
+        (torch.float32, 3.0e38),
+        (torch.float64, 9.0e307),
+    ],
+)
+@pytest.mark.parametrize("implementation", ["torch", "warp"])
+def test_opposite_sign_triangle_edges_remain_valid(
+    device: str,
+    dtype: torch.dtype,
+    magnitude: float,
+    implementation: str,
+):
+    if implementation == "warp":
+        pytest.importorskip("warp")
+    device = torch.device(device)
+    target_points = torch.tensor(
+        [
+            [-magnitude, 0.0, 0.0],
+            [magnitude, 0.0, 0.0],
+            [0.0, magnitude, 0.0],
+        ],
+        device=device,
+        dtype=dtype,
+        requires_grad=True,
+    )
+    target_faces = torch.tensor([[0, 1, 2]], device=device)
+    points = torch.tensor(
+        [[0.0, 0.25 * magnitude, 0.5 * magnitude]],
+        device=device,
+        dtype=dtype,
+        requires_grad=True,
+    )
+
+    output = shrinkwrap_points(
+        points,
+        target_points,
+        target_faces,
+        implementation=implementation,
+    )
+    point_gradient, target_gradient = torch.autograd.grad(
+        output.sum(),
+        (points, target_points),
+    )
+
+    torch.testing.assert_close(
+        output,
+        torch.tensor(
+            [[0.0, 0.25 * magnitude, 0.0]],
+            device=device,
+            dtype=dtype,
+        ),
+    )
+    torch.testing.assert_close(
+        point_gradient,
+        torch.tensor([[1.0, 1.0, 0.0]], device=device, dtype=dtype),
+    )
+    torch.testing.assert_close(
+        target_gradient,
+        torch.tensor(
+            [
+                [0.0, 0.0, -0.125],
+                [0.0, 0.0, 0.375],
+                [0.0, 0.0, 0.75],
+            ],
+            device=device,
+            dtype=dtype,
+        ),
+    )
+
+
 @pytest.mark.parametrize("implementation", ["torch", "warp"])
 def test_unbounded_extreme_distances_preserve_nearest_face_order(
     device: str,

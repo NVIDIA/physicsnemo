@@ -198,11 +198,46 @@ def _stable_scaled_difference_dot(
     return _saturating_product(quotient_scale, normalized_dot)
 
 
+def _safe_edge_subtraction_scale(
+    coordinate_magnitude: torch.Tensor,
+) -> torch.Tensor:
+    """Scale extreme coordinates enough to keep pairwise differences finite."""
+
+    threshold = 0.25 * torch.finfo(coordinate_magnitude.dtype).max
+    return torch.where(
+        coordinate_magnitude > threshold,
+        torch.full_like(coordinate_magnitude, 0.25),
+        torch.ones_like(coordinate_magnitude),
+    ).detach()
+
+
+def _scale_triangles_for_safe_edges(triangles: torch.Tensor) -> torch.Tensor:
+    """Scale each triangle before edge subtraction can overflow."""
+
+    coordinate_magnitude = triangles.abs().amax(dim=(-2, -1))
+    scale = _safe_edge_subtraction_scale(coordinate_magnitude)
+    return triangles * scale[:, None, None]
+
+
 def closest_points_on_triangles(
     query_points: torch.Tensor,
     triangles: torch.Tensor,
 ) -> torch.Tensor:
     """Return paired closest points using scale-normalized triangle math."""
+
+    coordinate_magnitude = torch.maximum(
+        query_points.abs().amax(dim=-1),
+        triangles.abs().amax(dim=(-2, -1)),
+    )
+    coordinate_scale = _safe_edge_subtraction_scale(coordinate_magnitude)
+    scaled_queries = query_points * coordinate_scale[:, None]
+    scaled_triangles = triangles * coordinate_scale[:, None, None]
+    # Uniform coordinate scaling cancels between the input and output of a
+    # closest-point projection. Preserve that identity in the backward graph
+    # so extreme forward scales cannot create overflowing intermediate
+    # cotangents.
+    query_points = query_points + (scaled_queries - query_points).detach()
+    triangles = triangles + (scaled_triangles - triangles).detach()
 
     a = triangles[:, 0]
     b = triangles[:, 1]
@@ -354,15 +389,18 @@ def closest_points_on_triangles(
     closest_face = a + scale_column * (
         query_u.unsqueeze(-1) * axis_u + query_v.unsqueeze(-1) * axis_v
     )
-    return torch.where(face_inside.unsqueeze(-1), closest_face, closest_edge)
+    closest = torch.where(face_inside.unsqueeze(-1), closest_face, closest_edge)
+    unscaled_closest = closest / coordinate_scale[:, None]
+    return closest + (unscaled_closest - closest).detach()
 
 
 def _valid_triangles(triangles: torch.Tensor) -> torch.Tensor:
     """Identify finite triangles with non-negligible relative area."""
 
-    a = triangles[:, 0]
-    b = triangles[:, 1]
-    c = triangles[:, 2]
+    scaled_triangles = _scale_triangles_for_safe_edges(triangles)
+    a = scaled_triangles[:, 0]
+    b = scaled_triangles[:, 1]
+    c = scaled_triangles[:, 2]
     ab = b - a
     ac = c - a
     bc = c - b
@@ -542,8 +580,9 @@ def replay_shrinkwrap_projection(
     )
     hit = hit & (_stable_vector_distance(flat_points, closest) < cutoff)
 
-    edge_ab = triangles[:, 1] - triangles[:, 0]
-    edge_ac = triangles[:, 2] - triangles[:, 0]
+    scaled_triangles = _scale_triangles_for_safe_edges(triangles)
+    edge_ab = scaled_triangles[:, 1] - scaled_triangles[:, 0]
+    edge_ac = scaled_triangles[:, 2] - scaled_triangles[:, 0]
     normal_scale = torch.stack(
         (
             edge_ab.abs().amax(dim=-1),

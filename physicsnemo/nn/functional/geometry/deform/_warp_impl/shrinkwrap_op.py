@@ -128,6 +128,9 @@ def _float32_target_search_is_safe(
     target_magnitude_is_safe = torch.isfinite(target_f32).all() & (
         target_f32.abs().amax() <= _WARP_SAFE_QUERY_MAGNITUDE
     )
+    if not bool(target_magnitude_is_safe):
+        return False
+
     faces = target_faces.reshape(-1, 3).to(torch.int64)
     triangles = target_f32[faces]
     ab = triangles[:, 1] - triangles[:, 0]
@@ -159,9 +162,7 @@ def _float32_target_search_is_safe(
     # valid on CUDA. Keep those faces on the numerically stable Torch search.
     aspect_is_safe = relative_area > _WARP_MIN_RELATIVE_TARGET_AREA
     faces_are_valid = _valid_triangles(triangles)
-    search_is_safe = (
-        target_magnitude_is_safe & faces_are_valid.all() & aspect_is_safe.all()
-    )
+    search_is_safe = faces_are_valid.all() & aspect_is_safe.all()
     return bool(search_is_safe)
 
 
