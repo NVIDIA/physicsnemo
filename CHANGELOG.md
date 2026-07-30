@@ -10,10 +10,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Adds maintainer-run GitHub Actions for creating a versioned RC branch and a
-  disposable merge-back pull request, together with a handoff runbook.
-  Rebasing, conflict resolution, validation, and the final rebase-and-merge
-  remain manual.
 - Adds `zenith_azimuth_angles` and `zenith_azimuth_angles_from_timestamp` to
   `physicsnemo.utils.zenith_angle`, returning
   `(sin_zenith, cos_zenith, sin_azimuth, cos_azimuth)` alongside the existing
