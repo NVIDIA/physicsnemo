@@ -464,6 +464,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Fixes a critical logic inversion in path traversal protection during checkpoint extraction.
+- Enables `weights_only=True` in `torch.load` calls for enhanced security when loading model weights. Note: This may be a breaking change for legacy checkpoints containing custom Python objects not in the allowed list.
+
 ### Dependencies
 
 - Removes `pyacvd` from the `mesh-extras` optional dependencies. Remeshing now

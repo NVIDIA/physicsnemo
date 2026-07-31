@@ -259,17 +259,21 @@ class Module(torch.nn.Module):
 
     @staticmethod
     def _safe_members(tar, local_path):
+        resolved_local_path = os.path.join(os.path.realpath(local_path), "")
         for member in tar.getmembers():
             if (
                 ".." in member.name
                 or os.path.isabs(member.name)
-                or os.path.realpath(os.path.join(local_path, member.name)).startswith(
-                    os.path.realpath(local_path)
+                or not os.path.realpath(os.path.join(local_path, member.name)).startswith(
+                    resolved_local_path
                 )
+                and os.path.realpath(os.path.join(local_path, member.name)) != resolved_local_path
             ):
-                yield member
+                logging.getLogger("core.module").warning(
+                    f"Skipping potentially malicious file: {member.name}"
+                )
             else:
-                print(f"Skipping potentially malicious file: {member.name}")
+                yield member
 
     @classmethod
     def _backward_compat_arg_mapper(
@@ -756,7 +760,9 @@ class Module(torch.nn.Module):
                 model_bytes = archive.read("model.pt")
 
             # Load state dict after closing archive
-            model_dict = torch.load(io.BytesIO(model_bytes), map_location=device)
+            model_dict = torch.load(
+                io.BytesIO(model_bytes), map_location=device, weights_only=True
+            )
 
             # Load state_dict into the model
             _load_state_dict_with_logging(self, model_dict, strict=strict)
@@ -782,7 +788,9 @@ class Module(torch.nn.Module):
 
                 # Load the model weights
                 model_dict = torch.load(
-                    local_path.joinpath("model.pt"), map_location=device
+                    local_path.joinpath("model.pt"),
+                    map_location=device,
+                    weights_only=True,
                 )
 
             # Load state dict into the model
@@ -1063,7 +1071,9 @@ class Module(torch.nn.Module):
                 model_bytes = archive.read("model.pt")
 
             # Load state dict after closing archive
-            model_dict = torch.load(io.BytesIO(model_bytes), map_location=model.device)
+            model_dict = torch.load(
+                io.BytesIO(model_bytes), map_location=model.device, weights_only=True
+            )
 
             # Load state_dict into the model
             _load_state_dict_with_logging(model, model_dict, strict=strict)
@@ -1105,7 +1115,9 @@ class Module(torch.nn.Module):
 
                 # Load the model weights
                 model_dict = torch.load(
-                    local_path.joinpath("model.pt"), map_location=model.device
+                    local_path.joinpath("model.pt"),
+                    map_location=model.device,
+                    weights_only=True,
                 )
 
             # Load state_dict into the model
