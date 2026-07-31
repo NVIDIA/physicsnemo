@@ -124,8 +124,45 @@ def _make_two_quad_grid() -> "pv.UnstructuredGrid":
     )
 
 
+def _make_concave_l_prism() -> "pv.UnstructuredGrid":
+    """Build a valid concave polyhedron that VTK cannot tetrahedralize exactly."""
+    base_xy = np.array(
+        [
+            [0.0, 0.0],
+            [2.0, 0.0],
+            [2.0, 1.0],
+            [1.0, 1.0],
+            [1.0, 2.0],
+            [0.0, 2.0],
+        ]
+    )
+    points = np.vstack(
+        [
+            np.column_stack([base_xy, np.zeros(6)]),
+            np.column_stack([base_xy, np.ones(6)]),
+        ]
+    )
+    base_triangles = [[0, 1, 3], [1, 2, 3], [0, 3, 5], [3, 4, 5]]
+    faces = [
+        *[triangle[::-1] for triangle in base_triangles],
+        *[[point_id + 6 for point_id in triangle] for triangle in base_triangles],
+        *[
+            [index, (index + 1) % 6, (index + 1) % 6 + 6, index + 6]
+            for index in range(6)
+        ],
+    ]
+    polyhedron = [len(faces)]
+    for face in faces:
+        polyhedron.extend([len(face), *face])
+    return pv.UnstructuredGrid(
+        np.array([len(polyhedron), *polyhedron]),
+        np.array([pv.CellType.POLYHEDRON]),
+        points,
+    )
+
+
 def _vtk_parametric_points(cell_type: "pv.CellType") -> np.ndarray:
-    """Return VTK's canonical nodes for a fixed-size linear cell."""
+    """Return VTK's canonical nodes for a fixed-size cell."""
     generic_cell = vtk.vtkGenericCell()
     generic_cell.SetCellType(int(cell_type))
     representative = generic_cell.GetRepresentativeCell()
@@ -387,6 +424,33 @@ def test_mixed_linear_selection_preserves_source_contracts(
     assert torch.equal(
         mesh.cell_data["kind"], torch.tensor(expected_kind, dtype=torch.int16)
     )
+    assert torch.equal(mesh.global_data["case"], torch.tensor([7], dtype=torch.int32))
+
+
+def test_dimension_selection_does_not_filter_user_attributes(monkeypatch):
+    """Selection carries only synthetic IDs through the extraction filter."""
+    grid = _make_line_triangle_grid()
+    original_extract_cells = pv.UnstructuredGrid.extract_cells
+
+    def inspect_extraction_source(mesh, indices, *args, **kwargs):
+        assert list(mesh.point_data) == []
+        assert list(mesh.cell_data) == []
+        assert list(mesh.field_data) == []
+        return original_extract_cells(mesh, indices, *args, **kwargs)
+
+    monkeypatch.setattr(
+        pv.UnstructuredGrid,
+        "extract_cells",
+        inspect_extraction_source,
+    )
+
+    mesh = from_pyvista(grid, manifold_dim=2, warn_on_lost_data=False)
+
+    assert torch.equal(
+        mesh.point_data["point_id"],
+        torch.arange(100, 105, dtype=torch.int32),
+    )
+    assert torch.equal(mesh.cell_data["kind"], torch.tensor([20], dtype=torch.int16))
     assert torch.equal(mesh.global_data["case"], torch.tensor([7], dtype=torch.int32))
 
 
@@ -698,6 +762,36 @@ def test_supported_parent_provenance_rejects_vanished_parent(monkeypatch):
     )
 
 
+def test_triangulation_carries_only_required_provenance(monkeypatch):
+    """Triangulation does not copy user attributes that reload from the source."""
+    grid = _make_two_quad_grid()
+    grid.point_data["point_id"] = np.arange(grid.n_points, dtype=np.int32)
+    grid.cell_data["kind"] = np.array([10, 20], dtype=np.int16)
+    grid.field_data["case"] = np.array([7], dtype=np.int32)
+    original_triangulate = pv.UnstructuredGrid.triangulate
+
+    def inspect_triangulation_source(mesh, *args, **kwargs):
+        assert list(mesh.point_data) == []
+        assert list(mesh.cell_data) == ["__physicsnemo_parent_cell_id"]
+        assert list(mesh.field_data) == []
+        return original_triangulate(mesh, *args, **kwargs)
+
+    monkeypatch.setattr(
+        pv.UnstructuredGrid,
+        "triangulate",
+        inspect_triangulation_source,
+    )
+
+    mesh = from_pyvista(grid)
+
+    assert torch.equal(mesh.point_data["point_id"], torch.arange(8, dtype=torch.int32))
+    assert torch.equal(
+        mesh.cell_data["kind"],
+        torch.tensor([10, 10, 20, 20], dtype=torch.int16),
+    )
+    assert torch.equal(mesh.global_data["case"], torch.tensor([7], dtype=torch.int32))
+
+
 def test_parent_provenance_rejects_unknown_parent(monkeypatch):
     """Parent maps cannot index cells outside the selected source set."""
     grid = _make_two_quad_grid()
@@ -835,6 +929,29 @@ def test_malformed_inputs_raise_in_one_subprocess():
         else:
             failures.append((marker, "no ValueError"))
 
+        marker = "CASE unstructured:multi-component-cell-types"
+        print(marker, flush=True)
+        invalid_cell_type_shape = pv.UnstructuredGrid(
+            np.array([4, 0, 1, 2, 3]),
+            np.array([pv.CellType.QUAD]),
+            np.zeros((4, 3)),
+        )
+        vtk_cell_types = invalid_cell_type_shape.GetCellTypesArray()
+        vtk_cell_types.SetNumberOfComponents(2)
+        vtk_cell_types.SetNumberOfTuples(1)
+        vtk_cell_types.SetComponent(0, 0, int(pv.CellType.QUAD))
+        vtk_cell_types.SetComponent(0, 1, int(pv.CellType.QUAD))
+        vtk_cell_types.Modified()
+        invalid_cell_type_shape.Modified()
+        try:
+            from_pyvista(invalid_cell_type_shape)
+        except ValueError as error:
+            required = ["one-dimensional", "shape (1, 2)"]
+            if not all(part in str(error) for part in required):
+                failures.append((marker, str(error)))
+        else:
+            failures.append((marker, "no ValueError"))
+
         centroid_cases = [
             ("PIXEL", 4, [0, 1, 2], ["PIXEL", "exactly 4", "got 3"]),
             ("POLY_LINE", 1, [0], ["POLY_LINE", "at least 2", "got 1"]),
@@ -843,7 +960,7 @@ def test_malformed_inputs_raise_in_one_subprocess():
                 "QUADRATIC_TETRA",
                 9,
                 list(range(9)),
-                ["QUADRATIC_TETRA", "centroid filtering", "safe-linear"],
+                ["QUADRATIC_TETRA", "exactly 10", "got 9"],
             ),
         ]
         for name, point_count, connectivity, required in centroid_cases:
@@ -989,6 +1106,7 @@ def test_malformed_polyhedron_auxiliary_arrays_raise_in_one_subprocess():
             "face-id": "face point ID 99",
             "location-offset": "POLYHEDRON face locations",
             "location-id": "face-location reference 99",
+            "parent-face-point-set": "connectivity and referenced faces",
         }
         failures = []
         for case_name, expected in cases.items():
@@ -1003,6 +1121,8 @@ def test_malformed_polyhedron_auxiliary_arrays_raise_in_one_subprocess():
                 np.asarray(faces.GetConnectivityArray())[0] = 99
             elif case_name == "location-offset":
                 np.asarray(locations.GetOffsetsArray())[-1] += 1
+            elif case_name == "parent-face-point-set":
+                np.asarray(cells.GetConnectivityArray())[0] = 9
             else:
                 np.asarray(locations.GetConnectivityArray())[0] = 99
 
@@ -1039,6 +1159,59 @@ def test_malformed_polyhedron_auxiliary_arrays_raise_in_one_subprocess():
     _run_isolated_script(script)
 
 
+def test_concave_polyhedron_rejected_before_tetrahedralization():
+    """Concave polyhedra cannot enter VTK's shape-altering tetrahedralizer."""
+    grid = _make_concave_l_prism()
+    assert not bool(grid.GetCell(0).IsConvex())
+
+    with pytest.raises(ValueError, match=r"non-convex.*POLYHEDRON.*index 0"):
+        from_pyvista(grid)
+
+
+def test_translated_float32_concave_polyhedron_remains_rejected():
+    """Legacy-tolerance fallback cannot override VTK 9.6 concavity."""
+    grid = _make_concave_l_prism()
+    grid.points = (grid.points + 1e6).astype(np.float32)
+
+    with pytest.raises(ValueError, match=r"non-convex.*POLYHEDRON.*index 0"):
+        from_pyvista(grid)
+
+
+@pytest.mark.parametrize(
+    "dtype,scale,offset",
+    [
+        (np.float32, 1.0, 0.0),
+        (np.float32, 1.0, 1e6),
+        (np.float64, 1e-9, 0.0),
+        (np.float64, 1.0, 1e6),
+    ],
+)
+def test_convex_polyhedron_check_is_scale_and_precision_robust(
+    dtype,
+    scale,
+    offset,
+):
+    """Valid transformed polyhedra survive the conservative convexity check."""
+    from test.mesh.io.io_pyvista.test_from_pyvista_3d import (
+        _make_pentagonal_prism,
+    )
+
+    angle = np.deg2rad(37.0)
+    rotation = np.array(
+        [
+            [np.cos(angle), -np.sin(angle), 0.0],
+            [np.sin(angle), np.cos(angle), 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+    grid = _make_pentagonal_prism()
+    grid.points = ((grid.points @ rotation.T) * scale + offset).astype(dtype)
+
+    mesh = from_pyvista(grid)
+
+    assert mesh.n_cells > 0
+
+
 @pytest.mark.parametrize(
     "cell_type",
     [
@@ -1056,11 +1229,6 @@ def test_unsupported_topology_rejected_but_point_cloud_allowed(cell_type):
 
     with pytest.raises(ValueError, match=error_pattern):
         from_pyvista(grid)
-    with pytest.raises(
-        ValueError,
-        match=rf"{cell_type.name}.*centroid filtering.*safe-linear",
-    ):
-        from_pyvista(grid, point_source="cell_centroids")
 
     point_cloud = from_pyvista(
         grid,
@@ -1073,6 +1241,105 @@ def test_unsupported_topology_rejected_but_point_cloud_allowed(cell_type):
         point_cloud.point_data["point_id"],
         torch.from_numpy(grid.point_data["point_id"]),
     )
+
+
+@pytest.mark.parametrize(
+    "cell_type",
+    [
+        pv.CellType.QUADRATIC_EDGE,
+        pv.CellType.QUADRATIC_TRIANGLE,
+        pv.CellType.QUADRATIC_QUAD,
+        pv.CellType.QUADRATIC_TETRA,
+        pv.CellType.QUADRATIC_HEXAHEDRON,
+        pv.CellType.QUADRATIC_WEDGE,
+        pv.CellType.QUADRATIC_PYRAMID,
+        pv.CellType.BIQUADRATIC_QUAD,
+        pv.CellType.TRIQUADRATIC_HEXAHEDRON,
+        pv.CellType.TRIQUADRATIC_PYRAMID,
+        pv.CellType.QUADRATIC_LINEAR_QUAD,
+        pv.CellType.QUADRATIC_LINEAR_WEDGE,
+        pv.CellType.BIQUADRATIC_QUADRATIC_WEDGE,
+        pv.CellType.BIQUADRATIC_QUADRATIC_HEXAHEDRON,
+        pv.CellType.BIQUADRATIC_TRIANGLE,
+        pv.CellType.CUBIC_LINE,
+    ],
+)
+def test_fixed_higher_order_centroids_preserve_parent_data(cell_type):
+    """Fixed-size nonlinear cells retain the pre-existing centroid path."""
+    points = _vtk_parametric_points(cell_type)
+    grid = pv.UnstructuredGrid(
+        np.concatenate(([len(points)], np.arange(len(points)))),
+        np.array([cell_type]),
+        points,
+    )
+    grid.cell_data["kind"] = np.array([9], dtype=np.int16)
+
+    mesh = from_pyvista(grid, point_source="cell_centroids")
+
+    assert mesh.n_points == 1
+    assert torch.equal(mesh.point_data["kind"], torch.tensor([9], dtype=torch.int16))
+
+
+@pytest.mark.parametrize(
+    "cell_type",
+    [pv.CellType.QUADRATIC_EDGE, pv.CellType.CUBIC_LINE],
+)
+def test_higher_order_centroid_dual_graph_remains_rejected(cell_type):
+    """Higher-order interpolation nodes cannot become false line endpoints."""
+    points = _vtk_parametric_points(cell_type)
+    grid = pv.UnstructuredGrid(
+        np.concatenate(([len(points)], np.arange(len(points)))),
+        np.array([cell_type]),
+        points,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=rf"{cell_type.name}.*centroid filtering.*linear dual-graph",
+    ):
+        from_pyvista(
+            grid,
+            manifold_dim=1,
+            point_source="cell_centroids",
+        )
+
+
+@pytest.mark.parametrize(
+    "cell_type",
+    [
+        pv.CellType.LAGRANGE_QUADRILATERAL,
+        pv.CellType.BEZIER_CURVE,
+        pv.CellType.CONVEX_POINT_SET,
+    ],
+)
+def test_unvalidated_centroid_families_remain_rejected(cell_type):
+    """Generic and variable-order cells stay outside validated centroid scope."""
+    grid = _make_unsupported_grid(cell_type)
+
+    with pytest.raises(
+        ValueError,
+        match=rf"{cell_type.name}.*centroid filtering.*fixed-size",
+    ):
+        from_pyvista(grid, point_source="cell_centroids")
+
+
+def test_explicit_point_cloud_does_not_inspect_supported_topology():
+    """Vertex-only conversion ignores connectivity even for allowlisted cells."""
+    grid = pv.UnstructuredGrid(
+        np.array([4, 0, 1, 2, 99]),
+        np.array([pv.CellType.PIXEL]),
+        np.zeros((4, 3)),
+    )
+    grid.point_data["point_id"] = np.arange(4, dtype=np.int32)
+
+    mesh = from_pyvista(
+        grid,
+        manifold_dim=0,
+        warn_on_lost_data=False,
+    )
+
+    assert mesh.n_points == 4
+    assert torch.equal(mesh.point_data["point_id"], torch.arange(4, dtype=torch.int32))
 
 
 def test_unsupported_point_cloud_warns_when_parent_data_is_dropped():

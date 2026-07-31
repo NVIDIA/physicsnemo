@@ -39,6 +39,7 @@ else:
     vtk = OptionalImport("vtk")
 
 _PARENT_CELL_ID_KEY = "__physicsnemo_parent_cell_id"
+_ORIGINAL_POINT_ID_KEY = "vtkOriginalPointIds"
 
 
 def _vtk_data_to_tensor_dict(
@@ -120,15 +121,35 @@ def _linear_cell_specs() -> dict[int, tuple[int, int | None, int | None]]:
     }
 
 
-def _unsupported_linear_cell_types(cell_types: np.ndarray) -> list[int]:
-    """Return sorted cell types outside the trusted linear allowlist."""
-    linear_specs = _linear_cell_specs()
+def _fixed_higher_order_cell_specs() -> dict[int, tuple[int, int | None, int | None]]:
+    """Map fixed-size nonlinear cells supported by VTK centroid filtering."""
+    return {
+        int(pv.CellType.QUADRATIC_EDGE): (1, 3, None),
+        int(pv.CellType.QUADRATIC_TRIANGLE): (2, 6, None),
+        int(pv.CellType.QUADRATIC_QUAD): (2, 8, None),
+        int(pv.CellType.QUADRATIC_TETRA): (3, 10, None),
+        int(pv.CellType.QUADRATIC_HEXAHEDRON): (3, 20, None),
+        int(pv.CellType.QUADRATIC_WEDGE): (3, 15, None),
+        int(pv.CellType.QUADRATIC_PYRAMID): (3, 13, None),
+        int(pv.CellType.BIQUADRATIC_QUAD): (2, 9, None),
+        int(pv.CellType.TRIQUADRATIC_HEXAHEDRON): (3, 27, None),
+        int(pv.CellType.TRIQUADRATIC_PYRAMID): (3, 19, None),
+        int(pv.CellType.QUADRATIC_LINEAR_QUAD): (2, 6, None),
+        int(pv.CellType.QUADRATIC_LINEAR_WEDGE): (3, 12, None),
+        int(pv.CellType.BIQUADRATIC_QUADRATIC_WEDGE): (3, 18, None),
+        int(pv.CellType.BIQUADRATIC_QUADRATIC_HEXAHEDRON): (3, 24, None),
+        int(pv.CellType.BIQUADRATIC_TRIANGLE): (2, 7, None),
+        int(pv.CellType.CUBIC_LINE): (1, 4, None),
+    }
+
+
+def _unsupported_cell_types(
+    cell_types: np.ndarray,
+    cell_specs: dict[int, tuple[int, int | None, int | None]],
+) -> list[int]:
+    """Return sorted cell types absent from a supplied specification."""
     return sorted(
-        {
-            int(cell_type)
-            for cell_type in cell_types
-            if int(cell_type) not in linear_specs
-        }
+        {int(cell_type) for cell_type in cell_types if int(cell_type) not in cell_specs}
     )
 
 
@@ -412,22 +433,162 @@ def _validate_polyhedron_auxiliary_arrays(
         )
 
 
-def _validate_supported_linear_cells(
+def _polyhedron_is_convex(
+    polyhedron: "vtk.vtkPolyhedron",
+    source_point_dtype: np.dtype,
+    *,
+    trust_vtk_result: bool,
+) -> bool:
+    """Return whether every polyhedron face defines a supporting plane."""
+    # VTK's C++ predicate is fast and reliable as of VTK 9.6. Earlier versions
+    # can report false for valid prism cells, so retain a geometric fallback.
+    vtk_is_convex = bool(polyhedron.IsConvex())
+    if vtk_is_convex or trust_vtk_result:
+        return vtk_is_convex
+
+    point_values = np.asarray(polyhedron.GetPoints().GetData())
+    point_dtype = (
+        source_point_dtype
+        if np.issubdtype(source_point_dtype, np.floating)
+        else np.dtype(np.float64)
+    )
+    points = point_values.astype(np.float64, copy=False)
+    extent_scale = float(np.linalg.norm(np.ptp(points, axis=0)))
+    if extent_scale == 0.0:
+        return False
+    coordinate_scale = max(
+        float(np.max(np.abs(points), initial=0.0)),
+        extent_scale,
+    )
+    coordinate_spacing = abs(
+        float(np.spacing(np.asarray(coordinate_scale, dtype=point_dtype)))
+    )
+    distance_tolerance = 4.0 * max(
+        coordinate_spacing,
+        np.finfo(point_dtype).eps * extent_scale,
+    )
+    normal_tolerance = 64.0 * np.finfo(np.float64).eps * extent_scale * extent_scale
+
+    ### A convex cell lies entirely within one closed half-space of each face.
+    ### Face winding is irrelevant because either half-space orientation works.
+    for face_index in range(polyhedron.GetNumberOfFaces()):
+        face = polyhedron.GetFace(face_index)
+        face_points = np.asarray(face.GetPoints().GetData()).astype(
+            np.float64,
+            copy=False,
+        )
+        face_edges = face_points[1:] - face_points[0]  # (F - 1, 3)
+        candidate_normals = np.cross(face_edges[:-1], face_edges[1:])
+        candidate_norms = np.linalg.norm(candidate_normals, axis=1)
+        valid_normal_indices = np.flatnonzero(candidate_norms > normal_tolerance)
+        if len(valid_normal_indices) == 0:
+            return False
+        normal_index = int(valid_normal_indices[0])
+        unit_normal = candidate_normals[normal_index] / candidate_norms[normal_index]
+        signed_distances = (points - face_points[0]) @ unit_normal  # (P,)
+        if bool((signed_distances > distance_tolerance).any()) and bool(
+            (signed_distances < -distance_tolerance).any()
+        ):
+            return False
+    return True
+
+
+def _validate_selected_polyhedra_for_tetrahedralization(
+    pyvista_mesh: "pv.UnstructuredGrid",
+    cell_types: np.ndarray,
+    selected_parent_ids: np.ndarray,
+) -> None:
+    """Validate selected polyhedra before VTK tetrahedralization."""
+    polyhedron_parent_ids = selected_parent_ids[
+        cell_types[selected_parent_ids] == pv.CellType.POLYHEDRON
+    ]
+    if len(polyhedron_parent_ids) == 0:
+        return
+
+    ### Primary connectivity and referenced faces must use the same point set.
+    cell_offsets = np.asarray(pyvista_mesh.offset)
+    cell_point_ids = np.asarray(pyvista_mesh.GetCells().GetConnectivityArray())
+    faces = pyvista_mesh.GetPolyhedronFaces()
+    face_offsets = np.asarray(faces.GetOffsetsArray())
+    face_point_ids = np.asarray(faces.GetConnectivityArray())
+    face_locations = pyvista_mesh.GetPolyhedronFaceLocations()
+    location_offsets = np.asarray(face_locations.GetOffsetsArray())
+    face_ids = np.asarray(face_locations.GetConnectivityArray())
+    source_point_dtype = pyvista_mesh.points.dtype
+    vtk_version = vtk.vtkVersion()
+    trust_vtk_result = (
+        vtk_version.GetVTKMajorVersion(),
+        vtk_version.GetVTKMinorVersion(),
+    ) >= (9, 6)
+
+    for parent_id in polyhedron_parent_ids:
+        parent_point_ids = np.sort(
+            cell_point_ids[cell_offsets[parent_id] : cell_offsets[parent_id + 1]]
+        )
+        parent_face_ids = face_ids[
+            location_offsets[parent_id] : location_offsets[parent_id + 1]
+        ]
+        referenced_face_point_ids = np.unique(
+            np.concatenate(
+                [
+                    face_point_ids[face_offsets[face_id] : face_offsets[face_id + 1]]
+                    for face_id in parent_face_ids
+                ]
+            )
+        )
+        if not np.array_equal(parent_point_ids, referenced_face_point_ids):
+            missing_from_faces = np.setdiff1d(
+                parent_point_ids,
+                referenced_face_point_ids,
+            )
+            missing_from_parent = np.setdiff1d(
+                referenced_face_point_ids,
+                parent_point_ids,
+            )
+            raise ValueError(
+                f"Invalid POLYHEDRON cell at index {int(parent_id)}: parent "
+                "connectivity and referenced faces use different point IDs; "
+                f"missing from faces {missing_from_faces.tolist()}, missing "
+                "from parent connectivity "
+                f"{missing_from_parent.tolist()}."
+            )
+
+        polyhedron = vtk.vtkPolyhedron.SafeDownCast(
+            pyvista_mesh.GetCell(int(parent_id))
+        )
+        if polyhedron is None:
+            raise ValueError(
+                f"Invalid VTK POLYHEDRON cell at index {int(parent_id)}: "
+                "cell type did not resolve to vtkPolyhedron."
+            )
+        if _polyhedron_is_convex(
+            polyhedron,
+            source_point_dtype,
+            trust_vtk_result=trust_vtk_result,
+        ):
+            continue
+        raise ValueError(
+            f"Unsupported non-convex VTK POLYHEDRON cell at index "
+            f"{int(parent_id)}: VTK tetrahedralization can alter concave geometry."
+        )
+
+
+def _validate_cells_against_specs(
     pyvista_mesh: "pv.UnstructuredGrid",
     cell_types: np.ndarray,
     unique_cell_types: np.ndarray,
+    cell_specs: dict[int, tuple[int, int | None, int | None]],
 ) -> None:
-    """Validate bounds and arities for supported linear cells only."""
+    """Validate bounds and listed arities without rejecting unlisted cells."""
     _validate_unstructured_connectivity_bounds(pyvista_mesh, cell_types)
     _validate_polyhedron_auxiliary_arrays(pyvista_mesh, cell_types)
     if len(cell_types) == 0:
         return
 
     arities = np.diff(np.asarray(pyvista_mesh.offset))
-    linear_specs = _linear_cell_specs()
     for cell_type_value in unique_cell_types:
         cell_type = int(cell_type_value)
-        spec = linear_specs.get(cell_type)
+        spec = cell_specs.get(cell_type)
         if spec is None:
             continue
         cell_type_name = _vtk_cell_type_name(cell_type)
@@ -463,15 +624,16 @@ def _unstructured_cell_dimensions(
         cell_types,
         return_inverse=True,
     )
-    _validate_supported_linear_cells(
+    linear_specs = _linear_cell_specs()
+    _validate_cells_against_specs(
         pyvista_mesh,
         cell_types,
         unique_cell_types,
+        linear_specs,
     )
 
     ### Reject every topology family outside the explicit linear allowlist.
-    linear_specs = _linear_cell_specs()
-    unsupported_types = _unsupported_linear_cell_types(unique_cell_types)
+    unsupported_types = _unsupported_cell_types(unique_cell_types, linear_specs)
     if unsupported_types:
         names = ", ".join(_vtk_cell_type_name(t) for t in unsupported_types)
         raise ValueError(
@@ -496,7 +658,12 @@ def _triangulate_with_parent_ids(
     # A shallow copy gives the filter an isolated attribute container while
     # retaining zero-copy geometry. Carry only the provenance that is consumed.
     working = pyvista_mesh.copy(deep=False)
+    original_point_ids = working.point_data.get(_ORIGINAL_POINT_ID_KEY)
+    working.point_data.clear()
+    if original_point_ids is not None:
+        working.point_data[_ORIGINAL_POINT_ID_KEY] = original_point_ids
     working.cell_data.clear()
+    working.field_data.clear()
     working.cell_data[_PARENT_CELL_ID_KEY] = parent_ids
 
     triangulated = working.triangulate()
@@ -546,6 +713,12 @@ def _select_and_linearize_unstructured_grid(
             f"UnstructuredGrid has no cells with manifold dimension {target_dim}; "
             f"available dimensions are {available_dimensions}."
         )
+    if target_dim == 3:
+        _validate_selected_polyhedra_for_tetrahedralization(
+            pyvista_mesh,
+            cell_types,
+            selected_parent_ids,
+        )
 
     ### Extract only the requested native dimension. PyVista compacts points,
     ### while vtkOriginalPointIds records how to restore source connectivity.
@@ -553,8 +726,12 @@ def _select_and_linearize_unstructured_grid(
     if selected_all_cells:
         selected = pyvista_mesh
     else:
+        extraction_source = pyvista_mesh.copy(deep=False)
+        extraction_source.point_data.clear()
+        extraction_source.cell_data.clear()
+        extraction_source.field_data.clear()
         try:
-            selected = pyvista_mesh.extract_cells(
+            selected = extraction_source.extract_cells(
                 selected_parent_ids,
                 pass_cell_ids=False,
                 pass_point_ids=True,
@@ -564,11 +741,9 @@ def _select_and_linearize_unstructured_grid(
             # adds synthetic ID arrays.
             if "pass_cell_ids" not in str(error) and "pass_point_ids" not in str(error):
                 raise
-            # PyVista 0.46 writes synthetic ID fields onto the input dataset.
-            # Isolate that mutation to a shallow copy with separate attribute
-            # containers while retaining zero-copy geometry/data buffers.
-            legacy_source = pyvista_mesh.copy(deep=False)
-            selected = legacy_source.extract_cells(selected_parent_ids)
+            # PyVista 0.46 always adds synthetic ID fields to the extraction
+            # source; that mutation is already isolated on the shallow copy.
+            selected = extraction_source.extract_cells(selected_parent_ids)
 
     simplex_type = {
         1: pv.CellType.LINE,
@@ -579,7 +754,7 @@ def _select_and_linearize_unstructured_grid(
         original_point_ids = (
             None
             if selected_all_cells
-            else np.asarray(selected.point_data["vtkOriginalPointIds"]).copy()
+            else np.asarray(selected.point_data[_ORIGINAL_POINT_ID_KEY]).copy()
         )
         output_parent_ids = None if selected_all_cells else selected_parent_ids
         return selected, original_point_ids, output_parent_ids
@@ -624,7 +799,7 @@ def _select_and_linearize_unstructured_grid(
     original_point_ids = (
         None
         if selected_all_cells
-        else np.asarray(linearized.point_data["vtkOriginalPointIds"]).copy()
+        else np.asarray(linearized.point_data[_ORIGINAL_POINT_ID_KEY]).copy()
     )
     return linearized, original_point_ids, output_parent_ids
 
@@ -707,10 +882,11 @@ def from_pyvista(
     families. Higher-order, control-net, parametric, abstract, and generic
     convex-point-set cells are rejected because globally conforming
     tessellation is deferred. Explicit ``manifold_dim=0`` with
-    ``point_source="vertices"`` may still preserve their points without
-    interpreting cell topology. Centroid filtering follows the same strict
-    linear allowlist and additionally rejects ``EMPTY_CELL`` parents because
-    VTK omits their centers.
+    ``point_source="vertices"`` preserves input points without inspecting
+    ``UnstructuredGrid`` connectivity. Centroid point-cloud filtering
+    additionally accepts fixed-size quadratic and cubic cells, which do not
+    require tessellation, and rejects ``EMPTY_CELL`` parents because VTK omits
+    their centers.
     """
     ### Validate point_source
     if point_source not in {"vertices", "cell_centroids"}:
@@ -724,13 +900,20 @@ def from_pyvista(
 
     # VTK filters assume valid attribute tuple counts and may crash otherwise.
     _validate_vtk_attribute_lengths(pyvista_mesh)
-    if isinstance(pyvista_mesh, pv.UnstructuredGrid):
+    uses_unstructured_topology = point_source == "cell_centroids" or manifold_dim != 0
+    if isinstance(pyvista_mesh, pv.UnstructuredGrid) and uses_unstructured_topology:
         _validate_vtk_cell_array_structure(
             pyvista_mesh.GetCells(),
             "UnstructuredGrid cells",
             pyvista_mesh.n_cells,
         )
-        n_cell_types = len(np.asarray(pyvista_mesh.celltypes))
+        cell_types = np.asarray(pyvista_mesh.celltypes)
+        if cell_types.ndim != 1:
+            raise ValueError(
+                "Invalid UnstructuredGrid cell types: expected a "
+                f"one-dimensional array, got shape {cell_types.shape}."
+            )
+        n_cell_types = len(cell_types)
         if n_cell_types != pyvista_mesh.n_cells:
             raise ValueError(
                 "Invalid UnstructuredGrid cell types: expected "
@@ -747,19 +930,30 @@ def from_pyvista(
         if isinstance(pyvista_mesh, pv.UnstructuredGrid):
             cell_types = np.asarray(pyvista_mesh.celltypes)
             unique_cell_types = np.unique(cell_types)
-            _validate_supported_linear_cells(
+            centroid_cell_specs = _linear_cell_specs()
+            centroid_scope = "linear dual-graph cell families"
+            if manifold_dim in {"auto", 0}:
+                centroid_cell_specs |= _fixed_higher_order_cell_specs()
+                centroid_scope = (
+                    "linear and fixed-size quadratic or cubic cell families"
+                )
+            _validate_cells_against_specs(
                 pyvista_mesh,
                 cell_types,
                 unique_cell_types,
+                centroid_cell_specs,
             )
-            unsupported_types = _unsupported_linear_cell_types(unique_cell_types)
+            unsupported_types = _unsupported_cell_types(
+                unique_cell_types,
+                centroid_cell_specs,
+            )
             if unsupported_types:
                 names = ", ".join(
                     _vtk_cell_type_name(cell_type) for cell_type in unsupported_types
                 )
                 raise ValueError(
                     f"Unsupported VTK cell type(s) {names}: centroid filtering "
-                    "is outside this safe-linear conversion scope."
+                    f"is only validated for {centroid_scope}."
                 )
             empty_cell_indices = np.flatnonzero(cell_types == pv.CellType.EMPTY_CELL)
             if len(empty_cell_indices) > 0:
@@ -777,28 +971,23 @@ def from_pyvista(
     source_pyvista_mesh = pyvista_mesh
     native_cell_dimensions = np.empty(0, dtype=np.uint8)
     homogeneous_simplex_dim = None
-    if isinstance(pyvista_mesh, pv.UnstructuredGrid):
+    if manifold_dim == 0:
+        # Point-cloud conversion consumes only points and point-associated data.
+        native_dimensions = set()
+        native_dim = 0
+    elif isinstance(pyvista_mesh, pv.UnstructuredGrid):
         homogeneous_simplex_dim = _homogeneous_simplex_dimension(pyvista_mesh)
         if homogeneous_simplex_dim is not None:
             native_dimensions = {homogeneous_simplex_dim}
             native_dim = homogeneous_simplex_dim
         else:
-            unique_cell_types = np.unique(pyvista_mesh.celltypes)
-            has_unsupported_topology = bool(
-                _unsupported_linear_cell_types(unique_cell_types)
+            native_cell_dimensions = _unstructured_cell_dimensions(pyvista_mesh)
+            native_dimensions = set(map(int, native_cell_dimensions)) or {0}
+            native_dim = (
+                int(native_cell_dimensions.max())
+                if len(native_cell_dimensions) > 0
+                else 0
             )
-            if manifold_dim == 0 and has_unsupported_topology:
-                # Point-cloud conversion does not inspect cell connectivity.
-                native_dimensions = set()
-                native_dim = 0
-            else:
-                native_cell_dimensions = _unstructured_cell_dimensions(pyvista_mesh)
-                native_dimensions = set(map(int, native_cell_dimensions)) or {0}
-                native_dim = (
-                    int(native_cell_dimensions.max())
-                    if len(native_cell_dimensions) > 0
-                    else 0
-                )
     else:
         native_dimensions = _detect_native_dimensions(pyvista_mesh)
         native_dim = max(native_dimensions)
@@ -883,6 +1072,7 @@ def from_pyvista(
                 pyvista_mesh.points,
                 faces=pyvista_mesh.faces,
                 strips=pyvista_mesh.strips,
+                force_float=False,
             )
             triangulated, output_parent_ids = _triangulate_with_parent_ids(
                 surface,
@@ -1219,7 +1409,7 @@ def _from_pyvista_cell_centroids(
             warning_stacklevel=5,
         )
 
-    ### Compute cell centroids (fast C++ filter, works for all cell types)
+    ### Compute cell centroids with VTK's fast C++ filter.
     centroids_np = pyvista_mesh.cell_centers().points
     points = torch.from_numpy(centroids_np.copy())
     if not points.is_floating_point() or points.element_size() < 4:
