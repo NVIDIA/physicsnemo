@@ -24,6 +24,7 @@ Both use tensorclass .load(path) directly; no conversion from other formats.
 
 from __future__ import annotations
 
+import glob as _glob
 import logging
 from pathlib import Path
 from typing import Any, Iterator
@@ -215,13 +216,19 @@ class MeshReader:
         if not self._root.is_dir():
             raise ValueError(f"Path must be a directory: {self._root}")
 
-        self._paths = sorted(self._root.glob(pattern))
+        # glob.glob instead of Path.glob: the latter re-stats each entry and
+        # silently drops entries under Lustre metadata-server load.
+        self._paths = sorted(Path(p) for p in _glob.glob(str(self._root / pattern)))
         if not self._paths:
             raise ValueError(f"No paths matching {pattern!r} found in {self._root}")
 
     def _load_sample(self, index: int) -> Mesh:
         """Load a single Mesh from disk."""
         mesh_path = self._paths[index]
+        if (mesh_path / "zarr.json").exists():
+            from physicsnemo.mesh.io import from_zarr
+
+            return from_zarr(mesh_path)
         return Mesh.load(mesh_path)
 
     def _get_sample_metadata(self, index: int) -> dict[str, Any]:
@@ -406,13 +413,20 @@ class DomainMeshReader:
         if not self._root.is_dir():
             raise ValueError(f"Path must be a directory: {self._root}")
 
-        self._paths = sorted(self._root.glob(pattern))
+        # glob.glob instead of Path.glob: the latter re-stats each entry and
+        # silently drops entries under Lustre metadata-server load.
+        self._paths = sorted(Path(p) for p in _glob.glob(str(self._root / pattern)))
         if not self._paths:
             raise ValueError(f"No paths matching {pattern!r} found in {self._root}")
 
     def _load_sample(self, index: int) -> DomainMesh:
         """Load a single DomainMesh from disk."""
-        return DomainMesh.load(self._paths[index])
+        path = self._paths[index]
+        if (path / "zarr.json").exists():
+            from physicsnemo.mesh.io import from_zarr
+
+            return from_zarr(path)
+        return DomainMesh.load(path)
 
     def __len__(self) -> int:
         return len(self._paths)
@@ -533,7 +547,12 @@ class DomainMeshReader:
                     glob_pattern,
                     matches[0],
                 )
-            new_boundaries[bnd_name] = Mesh.load(matches[0])
+            if (matches[0] / "zarr.json").exists():
+                from physicsnemo.mesh.io import from_zarr
+
+                new_boundaries[bnd_name] = from_zarr(matches[0])
+            else:
+                new_boundaries[bnd_name] = Mesh.load(matches[0])
 
         return DomainMesh(
             interior=dm.interior,
