@@ -267,7 +267,10 @@ class Module(torch.nn.Module):
             )
             is_supported_type = member.isfile() or member.isdir()
             if not stays_within_root or not is_supported_type:
-                logging.warning("Skipping archive member which goes above the archive parent: %s", member.name)
+                logging.warning(
+                    "Skipping archive member which goes above the archive parent: %s",
+                    member.name,
+                )
                 continue
             yield member
 
