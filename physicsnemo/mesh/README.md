@@ -92,8 +92,11 @@ performance benefits.
 - **Remeshing**: Uniform Warp-based remeshing on CPU and CUDA for triangle
   surfaces embedded in 3D
 - **Repair**: Remove duplicates, fix orientation, fill holes, clean topology
-- **Morphing**: Dense point displacement and sparse, compactly supported
-  control-point deformation
+- **Morphing**: Dense point displacement, sparse compact control-point
+  deformation, and global radial-basis deformation
+- **Deformation Energies**: Differentiable strain, local and total measure,
+  inversion, triangle-hinge bending, and enclosed-volume penalties for
+  fixed-topology optimization
 - **Tessellation**: Triangulate polygon soups into simplicial meshes (convex
   fan + [ear clipping](https://en.wikipedia.org/wiki/Polygon_triangulation) for
   non-convex polygons); also `Mesh.from_polygons`
@@ -325,6 +328,12 @@ Comprehensive overview of PhysicsNeMo-Mesh capabilities:
 | Dense point displacement | ✅ | Aligned tensor or `point_data` key, with optional point weights |
 | Sparse control-point morphing | ✅ | Wendland-C2 compact support with scalar or per-control radii |
 | Global radial-basis deformation | ✅ | Thin-plate-spline field with an affine polynomial tail |
+| **Deformation energies** | | |
+| Simplex strain | ✅ | Reference-relative St. Venant--Kirchhoff energy |
+| Local and total measure | ✅ | Length, area, or volume penalty |
+| Inversion | ✅ | Signed-Jacobian penalty for full-dimensional simplices |
+| Surface bending | ✅ | Reference-relative triangle-hinge energy |
+| Enclosed volume | ✅ | One edge-connected, closed, consistently oriented triangle surface |
 | Extrusion | ✅ | Manifold → higher dimension |
 | Coordinate projection (drop ambient dims) | ✅ | `projections.project` (e.g. 3D → 2D embedding) |
 | Surface projection / mesh intersection | ❌ | Manifold → lower *manifold* dimension; work in progress |
@@ -650,6 +659,8 @@ Key design decisions enable these principles:
   interpolation
 - [`physicsnemo.mesh.transformations`](./transformations/) - Geometric
   operations
+- [`physicsnemo.mesh.deformation`](./deformation/) - Differentiable
+  fixed-topology deformation energies
 - [`physicsnemo.mesh.repair`](./repair/) - Mesh cleaning and topology
   repair
 - [`physicsnemo.mesh.validation`](./validation/) - Quality metrics
