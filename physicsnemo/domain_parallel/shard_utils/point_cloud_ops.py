@@ -622,6 +622,10 @@ class GradReducer(torch.autograd.Function):
         # be deepcopied when AOTAutograd caches the backward GraphModule.
         if placement.is_replicate():
             grad_output = funcol.all_reduce(grad_output, "sum", (spec.mesh, 0))
+            # Prevent an asynchronous wrapper from escaping into gradient hooks
+            # or leaf ``.grad`` storage without first completing the reduction.
+            if isinstance(grad_output, funcol.AsyncCollectiveTensor):
+                grad_output = grad_output.wait()
         return grad_output, None
 
 

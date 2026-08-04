@@ -461,6 +461,11 @@ class ConvGradReducer(torch.autograd.Function):
                     grad_weight_or_bias, "sum", (ctx.spec.mesh, mesh_dim)
                 )
 
+        # Do not let the final asynchronous result escape into parameter hooks
+        # or ``param.grad``, where storage may be accessed without dispatch.
+        if isinstance(grad_weight_or_bias, funcol.AsyncCollectiveTensor):
+            grad_weight_or_bias = grad_weight_or_bias.wait()
+
         return grad_weight_or_bias, None
 
 

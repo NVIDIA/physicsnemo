@@ -330,11 +330,17 @@ class PartialGroupNorm(torch.autograd.Function):
         if grad_weight is not None and grad_bias is not None:
             packed_wb = torch.stack([grad_weight, grad_bias], dim=0)  # (2, C)
             packed_wb = funcol.all_reduce(packed_wb, "sum", (spec.mesh, 0))
+            if isinstance(packed_wb, funcol.AsyncCollectiveTensor):
+                packed_wb = packed_wb.wait()
             grad_weight, grad_bias = packed_wb[0], packed_wb[1]
         elif grad_weight is not None:
             grad_weight = funcol.all_reduce(grad_weight, "sum", (spec.mesh, 0))
+            if isinstance(grad_weight, funcol.AsyncCollectiveTensor):
+                grad_weight = grad_weight.wait()
         elif grad_bias is not None:
             grad_bias = funcol.all_reduce(grad_bias, "sum", (spec.mesh, 0))
+            if isinstance(grad_bias, funcol.AsyncCollectiveTensor):
+                grad_bias = grad_bias.wait()
 
         return grad_input, None, None, grad_weight, grad_bias, None
 
