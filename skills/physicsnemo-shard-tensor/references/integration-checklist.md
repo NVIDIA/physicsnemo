@@ -67,6 +67,7 @@ single-GPU baseline; `ddp=4`; `domain=4` (no wrapper + broadcast path);
 `ddp=2,domain=2` with plain DDP; the same with FSDP2; FSDP2 degenerate
 `ddp=1` (params become DTensors, no ddp comms — valid and worth testing);
 each ± compile; one `inference_only`; plus the expected-failure cases
-(invalid mesh factorization, per-domain batch > 1). See
-`examples/minimal/ShardTensorExamples/5_vit_training_loop/test_training_script.py`
-for a pytest harness that launches these through torchrun subprocesses.
+(invalid mesh factorization, per-domain batch > 1). Script it as a small
+pytest harness that launches each configuration of
+`examples/minimal/ShardTensorExamples/5_vit_training_loop/training_script.py`
+through torchrun subprocesses and asserts on exit codes.

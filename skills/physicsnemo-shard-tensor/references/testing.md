@@ -227,7 +227,8 @@ not break the grad checks; hooks/`requires_grad` must be set at
 ## Regression tests for compile support
 
 When a patch must work under `torch.compile`, add a compile variant (see
-`test/domain_parallel/test_compile.py`): compile the module
+`test/domain_parallel/test_compile.py`, added with the torch.compile
+enablement work — absent on builds that predate it): compile the module
 (`backend="inductor"`, `dynamic=False`; the suite historically uses
 `aot_eager` as a fallback backend when inductor is flaky), run forward AND
 backward twice (the second iteration catches guard/recompile issues), and

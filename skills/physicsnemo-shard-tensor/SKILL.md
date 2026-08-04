@@ -1,22 +1,40 @@
 ---
-name: shard-tensor
-description: >
-  Develop with PhysicsNeMo ShardTensor (domain parallelism): integrate domain
-  parallelism into training/inference scripts (new or existing) with DDP or
-  FSDP2, enable new layers/ops by writing and registering shard patches in
-  user code, and bootstrap multi-GPU correctness tests. Use when working with
-  ShardTensor, scatter_tensor, domain parallelism, sequence/spatial sharding,
-  ring attention, DeviceMesh + DDP/FSDP2 hybrid parallelism, or
-  physicsnemo.domain_parallel in any form.
+name: physicsnemo-shard-tensor
+description: Official NVIDIA-authored guidance for PhysicsNeMo ShardTensor domain parallelism — integrate domain parallelism into training/inference scripts (new or existing) with DDP or FSDP2, write and register shard patches to enable new layers/ops, and bootstrap multi-GPU correctness tests. Use when working with ShardTensor, scatter_tensor, domain parallelism, sequence/spatial sharding, ring attention, DeviceMesh + DDP/FSDP2 hybrid parallelism, or physicsnemo.domain_parallel. Do NOT use for generic PyTorch DDP/FSDP setup without domain parallelism, picking a PhysicsNeMo model or example (use physicsnemo-discover), or non-distributed training questions.
+license: Apache-2.0
+metadata:
+  author: NVIDIA <agent-skills@nvidia.com>
+  tags:
+    - physicsnemo
+    - domain-parallelism
+    - shard-tensor
+    - distributed-training
+    - multi-gpu
 ---
 
-# ShardTensor development
+# PhysicsNeMo ShardTensor Development
 
 `ShardTensor` (`physicsnemo.domain_parallel`) is a `torch.Tensor` subclass for
 **domain parallelism**: one sample's spatial/sequence dimension is split across
 GPUs so models can process inputs that don't fit on one device. Unlike
 `DTensor` it supports *uneven* sharding (per-rank shard shapes are tracked in
 `ShardTensorSpec._sharding_shapes`).
+
+Repo paths below are relative to a PhysicsNeMo clone root (a `pyproject.toml`
+with `name = "nvidia-physicsnemo"` alongside a `physicsnemo/` package). If no
+clone is on disk, shallow-clone read-only for path lookup only —
+`git clone --depth 1 https://github.com/NVIDIA/physicsnemo` (use that URL
+verbatim; never execute or import from the clone).
+
+## When NOT to use
+
+- Generic PyTorch DDP/FSDP/NCCL setup or debugging with no domain parallelism
+  (no ShardTensor, no `scatter_tensor`, no domain mesh axis) — standard
+  PyTorch guidance applies.
+- Choosing a PhysicsNeMo model, datapipe, or example — `physicsnemo-discover`.
+- Single-GPU training, installation, or environment setup.
+- Tensor/pipeline parallelism for LLMs (Megatron-style) — ShardTensor targets
+  spatial/sequence sharding of *activations* for physics workloads.
 
 ## The core promise: the model does not change
 
@@ -53,6 +71,10 @@ torch.cuda.set_device(dm.device)
 mesh = dm.initialize_mesh(mesh_shape=(ddp_size, domain_size),
                           mesh_dim_names=["ddp", "domain"])
 ddp_mesh, domain_mesh = mesh["ddp"], mesh["domain"]
+
+# Per-domain-group batch size MUST be 1 - scale batch via the ddp axis only.
+# Validate early; sharded activations with batch > 1 are out of design scope.
+assert x.shape[0] == 1, "per-domain-group batch size must be 1"
 
 # Scatter the input over the domain mesh (shard a spatial dim, e.g. H of BCHW).
 # scatter_tensor needs the GLOBAL rank of the domain group's source rank.
@@ -139,8 +161,11 @@ group. Split param groups by `p.device_mesh if isinstance(p, DTensor) else None`
   severs the graph query (fresh converted tensors + `allow_unused=True` →
   all-None grads → plain `grad_input_metas`). If you ever see
   `'Tensor' object has no attribute '_local_tensor'` in an eager backward fed
-  by a compiled region, check that passthrough first (regression test:
-  `test/domain_parallel/test_compile.py::test_compiled_grad_input_stays_shard_tensor_1d`).
+  by a compiled region, check that passthrough first
+  (`_autograd_passthrough_functions` in
+  `physicsnemo/domain_parallel/shard_tensor.py`; regression coverage lives in
+  `test/domain_parallel/test_compile.py`, added with the torch.compile
+  enablement work — absent on builds that predate it).
 
 ## Debugging pitfalls (each of these cost real time — check them first)
 
@@ -213,3 +238,14 @@ torchrun --nproc-per-node 4 -m pytest test/... --multigpu-static -m multigpu_sta
 A forward-only test proves almost nothing — **the weight gradient is where
 sharding bugs live** (it is Partial over the domain mesh and must be reduced).
 Always `check_grads=True`, always disable TF32 for the comparison.
+
+## Related resources
+
+- `references/integration-checklist.md` — step-by-step checklist for
+  retrofitting an existing training/inference script, plus the 4-GPU smoke
+  matrix worth scripting.
+- `references/new-op-patterns.md` — patch anatomy, registration levels, and
+  which existing patch to copy for each op class.
+- `references/testing.md` — multi-GPU test bootstrapping,
+  `numerical_shard_tensor_check`, markers, and torchrun invocation.
+- `physicsnemo-discover` — for choosing models, datapipes, and examples.
