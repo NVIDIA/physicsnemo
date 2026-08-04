@@ -248,6 +248,34 @@ specific storage format (HDF5, Zarr, NumPy, VTK) and returns CPU tensors
 in a uniform dict interface. Refer to :doc:`physicsnemo.datapipes.readers` for the
 base class API and all built-in readers.
 
+Caching
+^^^^^^^
+
+On network filesystems (Lustre in particular), per-sample read cost is often
+dominated by small, repeated metadata operations rather than data bandwidth.
+``DatasetCache`` is an optional, reader-agnostic two-tier cache (byte-limited
+RAM tier plus a byte-limited disk tier on node-local storage) for small,
+immutable per-sample artifacts: attributes, key lists, glob results, global
+data, and directory-tree samples such as ``.pmsh``/``.pdmsh`` meshes. All
+built-in readers accept a ``cache`` argument; ``MeshReader`` and
+``DomainMeshReader`` get the deepest integration (whole-sample tree entries),
+while ``ZarrReader``/``TensorStoreZarrReader``/``VTKReader`` cache their
+per-sample metadata reads. One instance may be shared across readers.
+
+.. code-block:: python
+
+    from physicsnemo.datapipes import DatasetCache, DomainMeshReader
+
+    cache = DatasetCache(
+        ram_bytes_limit=2 * 2**30,
+        disk_dir="/local/nvme/pn-cache",  # optional; NVMe, tmpfs, scratch
+    )
+    reader = DomainMeshReader("/lustre/dataset", cache=cache)
+
+.. autoclass:: physicsnemo.datapipes.caching.DatasetCache
+    :members:
+    :show-inheritance:
+
 Transforms
 ^^^^^^^^^^
 

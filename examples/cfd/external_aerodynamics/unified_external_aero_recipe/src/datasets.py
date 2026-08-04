@@ -50,6 +50,7 @@ from torch.utils.data import Sampler
 
 import physicsnemo.datapipes  # noqa: F401  (registers ${dp:...} resolvers)
 from physicsnemo.datapipes import DataLoader, MeshDataset, MultiDataset
+from physicsnemo.datapipes.caching import DatasetCache
 from physicsnemo.datapipes.transforms.mesh import NormalizeMeshFields
 from physicsnemo.distributed import DistributedManager
 
@@ -296,6 +297,7 @@ def build_dataset(
     device: str | torch.device | None = "auto",
     num_workers: int = 1,
     pin_memory: bool = False,
+    cache: DatasetCache | None = None,
 ) -> MeshDataset:
     """Build a single MeshDataset from a Hydra-style pipeline config.
 
@@ -324,6 +326,12 @@ def build_dataset(
             prefetch pool.
         pin_memory: If True, the reader places tensors in pinned
             (page-locked) memory for faster async CPU-to-GPU transfers.
+        cache: Optional shared
+            :class:`~physicsnemo.datapipes.caching.DatasetCache` passed to
+            the reader. Removes repeated small/metadata reads (tensordict
+            ``meta.json`` trees, ``global_data`` scalars, extra-boundary
+            globs) on network filesystems. One instance is shared across
+            all datasets/splits; entries are keyed by resolved file path.
 
     Returns:
         Configured ``MeshDataset`` ready to be wrapped in a DataLoader.
@@ -331,7 +339,9 @@ def build_dataset(
     if base_dir is None:
         base_dir = Path(__file__).resolve().parent.parent
 
-    reader = hydra.utils.instantiate(cfg.pipeline.reader, pin_memory=pin_memory)
+    reader = hydra.utils.instantiate(
+        cfg.pipeline.reader, pin_memory=pin_memory, cache=cache
+    )
     resolved = []
 
     target_names = list(
@@ -588,6 +598,7 @@ def _build_manifest_val_dataset(
     device: str | torch.device | None,
     num_workers: int,
     pin_memory: bool,
+    cache: DatasetCache | None = None,
 ) -> MeshDataset | None:
     """Build a dedicated un-augmented validation dataset for manifest mode.
 
@@ -613,6 +624,7 @@ def _build_manifest_val_dataset(
         device=device,
         num_workers=num_workers,
         pin_memory=pin_memory,
+        cache=cache,
     )
 
 
@@ -783,6 +795,17 @@ def build_dataloaders(
     device = "cuda" if torch.cuda.is_available() else "cpu"
     sampler_seed = cfg.training.get("seed", 0) or 0
 
+    ### Optional shared reader cache (cfg.dataloader.cache). One instance
+    ### serves every dataset/split -- entries are keyed by resolved file
+    ### path, so train/val readers over the same files share entries. On
+    ### multi-rank nodes a shared disk_dir is safe (atomic writes).
+    cache_cfg = dl_cfg.get("cache", None)
+    reader_cache: DatasetCache | None = (
+        hydra.utils.instantiate(cache_cfg) if cache_cfg else None
+    )
+    if reader_cache is not None:
+        _LOGGER.info(f"Reader cache enabled: {reader_cache!r}")
+
     ### The primary dataset is `cfg.dataset` (a single string); extras
     ### combine via MultiDataset. The same `train_split`/`val_split`
     ### apply to every chosen dataset; when they are set,
@@ -880,6 +903,7 @@ def build_dataloaders(
                 device=device,
                 num_workers=num_workers,
                 pin_memory=pin_memory,
+                cache=reader_cache,
             )
             train_datasets.append(dataset)
             manifest_train_indices, manifest_val_indices = (
@@ -896,6 +920,7 @@ def build_dataloaders(
                 device=device,
                 num_workers=num_workers,
                 pin_memory=pin_memory,
+                cache=reader_cache,
             )
             continue
 
@@ -907,6 +932,7 @@ def build_dataloaders(
                 device=device,
                 num_workers=num_workers,
                 pin_memory=pin_memory,
+                cache=reader_cache,
             )
         )
         val_datadir = OmegaConf.select(ds_yaml, "val_datadir", default=None)
@@ -919,6 +945,7 @@ def build_dataloaders(
                     device=device,
                     num_workers=num_workers,
                     pin_memory=pin_memory,
+                    cache=reader_cache,
                 )
             )
 

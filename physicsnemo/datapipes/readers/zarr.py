@@ -30,6 +30,7 @@ import torch
 
 from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes._indexing import _cyclic_block_indices
+from physicsnemo.datapipes.caching import DatasetCache
 from physicsnemo.datapipes.readers.base import Reader
 from physicsnemo.datapipes.registry import register
 
@@ -89,6 +90,7 @@ class ZarrReader(Reader):
         include_index_in_metadata: bool = True,
         coordinated_subsampling: Optional[dict[str, Any]] = None,
         cache_stores: bool = True,
+        cache: DatasetCache | None = None,
     ) -> None:
         """
         Initialize the Zarr reader.
@@ -120,6 +122,12 @@ class ZarrReader(Reader):
             If True, cache opened zarr stores to avoid repeated opening and
             prevent executor shutdown errors. Set to False if memory is a
             concern with many groups.
+        cache : DatasetCache, optional
+            Optional :class:`~physicsnemo.datapipes.caching.DatasetCache`.
+            Caches each group's array/attribute key listings, which are
+            otherwise re-discovered from storage on every sample, every
+            epoch. Orthogonal to ``cache_stores`` (which holds opened store
+            handles, not data).
 
         Raises
         ------
@@ -137,6 +145,7 @@ class ZarrReader(Reader):
             pin_memory=pin_memory,
             include_index_in_metadata=include_index_in_metadata,
             coordinated_subsampling=coordinated_subsampling,
+            cache=cache,
         )
 
         self.path = Path(path).expanduser().resolve()
@@ -256,8 +265,10 @@ class ZarrReader(Reader):
         fields_to_load = self.fields
 
         # Discover available arrays and attributes for this sample at runtime
-        available_arrays = set(root.array_keys())
-        available_attrs = set(root.attrs.keys()) if hasattr(root, "attrs") else set()
+        # (a storage listing per sample -- cached when a cache is configured).
+        group_keys = self._group_keys(group_path, root)
+        available_arrays = set(group_keys["arrays"])
+        available_attrs = set(group_keys["attrs"])
         available = available_arrays | available_attrs
 
         # Check for missing required fields (check both arrays and attributes)
@@ -320,6 +331,16 @@ class ZarrReader(Reader):
                 data[field] = self.default_values[field].clone()
 
         return data
+
+    def _group_keys(self, group_path: Path, root: Any) -> dict[str, list[str]]:
+        """Array/attribute key listings for a group (immutable, cacheable)."""
+
+        def _discover() -> dict[str, list[str]]:
+            arrays = sorted(root.array_keys())
+            attrs = sorted(root.attrs.keys()) if hasattr(root, "attrs") else []
+            return {"arrays": arrays, "attrs": attrs}
+
+        return self._cached("zarr-keys/v1", group_path, _discover)
 
     def _convert_attr_to_tensor(self, value: Any, field_name: str) -> torch.Tensor:
         """
