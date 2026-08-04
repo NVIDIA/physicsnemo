@@ -309,10 +309,11 @@ class PhysicsAttentionBase(nn.Module, ABC):
             self.qkv_project = nn.Linear(dim_head, 3 * dim_head, bias=False)
         else:
             self.qkv_project = te.Linear(dim_head, 3 * dim_head, bias=False)
+            # Keep dropout in out_dropout so TE and PyTorch use the same dropout site.
             self.attn_fn = te.DotProductAttention(
                 num_attention_heads=self.heads,
                 kv_channels=self.dim_head,
-                attention_dropout=dropout,
+                attention_dropout=0.0,
                 qkv_format="bshd",
                 softmax_scale=self.scale,
             )

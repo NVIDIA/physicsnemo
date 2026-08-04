@@ -614,11 +614,12 @@ class GALE_FA(nn.Module):
 
         # FLARE's self-attention passes and the cross-attention all have
         # differing q/kv lengths, so TE runs them as cross-attention (BSHD).
+        # Keep dropout in out_dropout so TE and PyTorch use the same dropout site.
         if self.use_te:
             self.attn_fn = te.DotProductAttention(
                 num_attention_heads=self.heads,
                 kv_channels=self.dim_head,
-                attention_dropout=dropout,
+                attention_dropout=0.0,
                 attn_mask_type="no_mask",
                 attention_type="cross",
                 qkv_format="bshd",
