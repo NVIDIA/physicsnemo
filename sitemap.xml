@@ -2,90 +2,90 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>http://www.example.com/</loc>
-         <lastmod>2026-07-16</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>http://www.example.com/blog/</loc>
-         <lastmod>2026-07-16</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>http://www.example.com/blog/tags/</loc>
-         <lastmod>2026-07-16</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>http://www.example.com/blog/author/team/</loc>
-         <lastmod>2026-07-16</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>http://www.example.com/blog/2025/08/27/physicsnemo-release-25-08/</loc>
-         <lastmod>2026-07-16</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>http://www.example.com/blog/2025/09/22/accelerate-ai-physics-with-pyt-and-physicsnemo/</loc>
-         <lastmod>2026-07-16</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>http://www.example.com/blog/2026/03/17/structural-mechanics/</loc>
-         <lastmod>2026-07-16</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>http://www.example.com/blog/2025/10/21/physicsnemo-domino-opt/</loc>
-         <lastmod>2026-07-16</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>http://www.example.com/blog/2026/04/10/earth2-deploy/</loc>
-         <lastmod>2026-07-16</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>http://www.example.com/blog/2026/05/29/physicsnemo-cfd/</loc>
-         <lastmod>2026-07-16</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>http://www.example.com/blog/2026/06/11/physicsnemo-diffusion/</loc>
-         <lastmod>2026-07-16</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>http://www.example.com/blog/2026/07/15/physicsnemo-kmc-surrogate/</loc>
-         <lastmod>2026-07-16</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>http://www.example.com/blog/2026/04/07/physicsnemo-mesh/</loc>
-         <lastmod>2026-07-16</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>http://www.example.com/blog/2025/09/29/physicsnemo-transolver/</loc>
-         <lastmod>2026-07-16</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>http://www.example.com/blog/archive/2026/</loc>
-         <lastmod>2026-07-16</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>http://www.example.com/blog/archive/2025/</loc>
-         <lastmod>2026-07-16</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>http://www.example.com/blog/category/physicsnemo/</loc>
-         <lastmod>2026-07-16</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>http://www.example.com/blog/category/physicsnemo-cfd/</loc>
-         <lastmod>2026-07-16</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>http://www.example.com/blog/category/earth2studio/</loc>
-         <lastmod>2026-07-16</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>http://www.example.com/blog/page/2/</loc>
-         <lastmod>2026-07-16</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>http://www.example.com/blog/archive/2026/page/2/</loc>
-         <lastmod>2026-07-16</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>http://www.example.com/blog/category/physicsnemo/page/2/</loc>
-         <lastmod>2026-07-16</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
 </urlset>
