@@ -196,8 +196,8 @@ To train and test the DoMINO model on AWS dataset, follow these steps:
 ### Training with Domain Parallelism
 
 DoMINO has support for training and inference using domain parallelism in PhysicsNeMo,
-via the `ShardTensor` mechanisms and PyTorch's FSDP2 (`fully_shard`) tools.
-`ShardTensor` is a `torch.Tensor` subclass that is domain-parallel aware: it can live
+using the `ShardTensor` mechanisms and PyTorch's FSDP2 (`fully_shard`) tools.
+`ShardTensor` is a `torch.Tensor` subclass that is domain-parallel aware. It can live
 on multiple GPUs and perform operations in a numerically consistent way, and plain
 `nn.Module`s work on it unmodified.  For more information about the techniques of
 domain parallelism and `ShardTensor`, refer to PhysicsNeMo tutorials such as

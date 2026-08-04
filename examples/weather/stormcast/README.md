@@ -365,7 +365,7 @@ If training seems slow, check your GPU utilization. If it's low, the problem is 
   * Data compression, if bandwidth from storage is the limiting factor
   * Caching data, particularly if your dataset is small enough to be preloaded to memory
 
-Enabling BF16 (`training.perf.fp_optimizations=amp-bf16`) speeds up training considerably but is only recommended for U-Nets. Compiling the training loss with ``torch.compile`` (`training.perf.torch_compile=True`), which will also compile the model forward pass, also typically improves performance; this recipe currently disables it under domain parallelism (sharded ring attention must stay outside compiled regions, and regional compilation is not yet wired into this example).
+Enabling BF16 (`training.perf.fp_optimizations=amp-bf16`) speeds up training considerably but is only recommended for U-Nets. Compiling the training loss with ``torch.compile`` (`training.perf.torch_compile=True`), which will also compile the model forward pass, also typically improves performance. This recipe disables it under domain parallelism (sharded ring attention must stay outside compiled regions, and regional compilation is not yet wired into this example).
 
 ### Training is unstable / not converging
 
