@@ -452,6 +452,20 @@ class GeoTransolver(Module):
         self.use_te = use_te
         self.structured_shape = structured_shape
 
+        # Local multi-scale (ball-query) features are extracted from the geometry
+        # tensor, and the GALE blocks below are sized to include them
+        # (effective_hidden = n_hidden + n_hidden_local * len(radii)). If geometry_dim
+        # is not set, those channels can never be produced, which otherwise surfaces
+        # as a confusing downstream LayerNorm shape mismatch. Fail fast instead.
+        if include_local_features and geometry_dim is None:
+            raise ValueError(
+                "include_local_features=True requires `geometry_dim` to be set: the "
+                "local multi-scale features are extracted from the geometry tensor and "
+                "the GALE blocks are sized to include them. Set `geometry_dim` and pass "
+                "a `geometry` tensor of shape (B, N, geometry_dim), or use "
+                "include_local_features=False."
+            )
+
         # Validate head dimension compatibility
         if not n_hidden % n_head == 0:
             raise ValueError(

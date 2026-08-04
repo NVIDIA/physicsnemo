@@ -1057,3 +1057,42 @@ def test_geotransolver_local_features_compile(device):
 
     assert compiled_out.shape == eager_out.shape
     assert not torch.isnan(compiled_out).any()
+
+
+@requires_module("warp")
+def test_geotransolver_local_features_requires_geometry(device):
+    """include_local_features=True must fail fast without geometry (regression).
+
+    Previously, omitting `geometry` silently skipped the local-feature concat and
+    produced a confusing downstream LayerNorm shape mismatch. The guards raise
+    clear, actionable errors instead.
+    """
+    common = dict(
+        functional_dim=8,
+        out_dim=2,
+        n_layers=2,
+        n_hidden=64,
+        n_head=4,
+        slice_num=8,
+        use_te=False,
+        include_local_features=True,
+        n_hidden_local=16,
+        radii=[0.1, 0.3],
+        neighbors_in_radius=[8, 16],
+    )
+
+    # (A) missing geometry_dim -> clear error at construction
+    with pytest.raises(ValueError, match="geometry_dim"):
+        GeoTransolver(geometry_dim=None, **common)
+
+    # (B) geometry_dim set but `geometry` omitted at forward -> clear error
+    model = GeoTransolver(geometry_dim=3, **common).to(device)
+    fx = torch.randn(2, 128, 8, device=device)
+    pos = torch.rand(2, 128, 3, device=device)
+    with pytest.raises(ValueError, match="geometry"):
+        model(local_embedding=fx, local_positions=pos, geometry=None)
+
+    # (C) geometry provided -> works
+    geo = torch.rand(2, 128, 3, device=device)
+    out = model(local_embedding=fx, local_positions=pos, geometry=geo)
+    assert out.shape == (2, 128, 2)
