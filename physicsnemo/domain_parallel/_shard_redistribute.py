@@ -724,20 +724,31 @@ class ShardRedistribute(torch.autograd.Function):
             chunk_shapes = compute_sharding_shapes_from_chunking_global_shape(
                 device_mesh, placements, global_shape
             )
-            for mesh_dim, placement in enumerate(placements):
-                if not isinstance(placement, Shard):
-                    continue
-                tensor_dim = placement.dim
-                if tensor_dim in target_sharding_shapes:
-                    mesh_size = device_mesh.size(mesh_dim)
-                    per_rank_sizes = target_sharding_shapes[tensor_dim]
-                    if len(per_rank_sizes) == mesh_size:
-                        overridden = []
-                        for rank_size in per_rank_sizes:
-                            rank_shape = list(global_shape)
-                            rank_shape[tensor_dim] = int(rank_size)
-                            overridden.append(rank_shape)
-                        chunk_shapes[mesh_dim] = overridden
+            mesh_coordinate = device_mesh.get_coordinate()
+            for mesh_dim, shapes in chunk_shapes.items():
+                overridden = []
+                for rank, chunk_shape in enumerate(shapes):
+                    rank_shape = list(chunk_shape)
+                    # Preserve every uneven shard in this cross-section. The
+                    # current mesh dim varies with ``rank``; all other mesh
+                    # dims remain fixed at this rank's coordinates.
+                    for preserved_mesh_dim, placement in enumerate(placements):
+                        if not isinstance(placement, Shard):
+                            continue
+                        tensor_dim = placement.dim
+                        per_rank_sizes = target_sharding_shapes.get(tensor_dim)
+                        if per_rank_sizes is None or len(
+                            per_rank_sizes
+                        ) != device_mesh.size(preserved_mesh_dim):
+                            continue
+                        size_rank = (
+                            rank
+                            if preserved_mesh_dim == mesh_dim
+                            else mesh_coordinate[preserved_mesh_dim]
+                        )
+                        rank_shape[tensor_dim] = int(per_rank_sizes[size_rank])
+                    overridden.append(tuple(rank_shape))
+                chunk_shapes[mesh_dim] = overridden
             target_spec._sharding_shapes = {
                 mesh_dim: tuple(tuple(s) for s in shapes)
                 for mesh_dim, shapes in chunk_shapes.items()

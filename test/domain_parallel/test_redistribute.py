@@ -203,6 +203,49 @@ def test_shard_tensor_redistribute2d_even_uneven(
 
 
 @pytest.mark.multigpu_static
+def test_redistribute_preserved_uneven_shard_metadata_2d(distributed_mesh_2d):
+    """Preserved uneven shards must remain valid in every 2D cross-section."""
+    mesh = distributed_mesh_2d
+    initial = shard_tensor_factory(mesh, uneven=True)
+    source = initial.redistribute(placements=[Shard(1), Replicate()])
+
+    source_shapes = source._spec.sharding_shapes()
+    preserved_dim1_sizes = [shape[1] for shape in source_shapes[0]]
+
+    redistributed = source.redistribute(placements=[Shard(1), Shard(2)])
+    redistributed_shapes = redistributed._spec.sharding_shapes()
+    local_shape = tuple(redistributed._local_tensor.shape)
+    mesh_coordinate = mesh.get_coordinate()
+
+    # Each list is a cross-section through this rank's coordinates on the
+    # other mesh dimensions, so its local entry must match the local tensor.
+    for mesh_dim, mesh_rank in enumerate(mesh_coordinate):
+        assert tuple(redistributed_shapes[mesh_dim][mesh_rank]) == local_shape
+
+    # The varying mesh-dim-0 entries and the fixed dim-1 cross terms on
+    # mesh dim 1 must both retain the source's uneven shard sizes.
+    assert [shape[1] for shape in redistributed_shapes[0]] == preserved_dim1_sizes
+    assert all(
+        shape[1] == preserved_dim1_sizes[mesh_coordinate[0]]
+        for shape in redistributed_shapes[1]
+    )
+
+
+@pytest.mark.multigpu_static
+def test_chained_redistribute_uses_current_multidim_metadata(distributed_mesh_2d):
+    """A chained eager transpose must accept metadata returned by redistribute."""
+    mesh = distributed_mesh_2d
+    initial = shard_tensor_factory(mesh, uneven=True)
+    source = initial.redistribute(placements=[Shard(1), Replicate()])
+    expected = source.full_tensor()
+
+    redistributed = source.redistribute(placements=[Shard(1), Shard(2)])
+    chained = redistributed.redistribute(placements=[Shard(3), Shard(2)])
+
+    assert torch.allclose(chained.full_tensor(), expected)
+
+
+@pytest.mark.multigpu_static
 @pytest.mark.parametrize(
     "redistribution_case",
     [
