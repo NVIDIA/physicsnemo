@@ -417,11 +417,19 @@ def _convert_results_to_shard_tensor(
             }
         )
 
+    # Preserve PyTorch's structured tuple results so named fields such as
+    # ``torch.max(...).indices`` remain available after converting their values.
+    if type(result).__module__ == torch.return_types.__name__:
+        return type(result)(
+            _convert_results_to_shard_tensor(d, input_args, use_autograd)
+            for d in result
+        )
+
     # Explicit allowlist mirroring _convert_args_to_dtensor: only walk into
-    # plain tuple / list containers. A generic Iterable check would crash on
-    # things like torch.UntypedStorage (iterable over bytes) or torch.Tensor
-    # because their constructors don't accept a generator. Note: namedtuples
-    # degrade to plain tuple here, same as in the args walker.
+    # tuple / list containers. A generic Iterable check would crash on things
+    # like torch.UntypedStorage (iterable over bytes) or torch.Tensor because
+    # their constructors don't accept a generator. Other tuple subclasses
+    # degrade to plain tuples here.
     if isinstance(result, tuple):
         return tuple(
             _convert_results_to_shard_tensor(d, input_args, use_autograd)

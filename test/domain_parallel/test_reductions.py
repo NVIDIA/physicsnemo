@@ -94,6 +94,30 @@ def test_consecutive_reductions(
 
 
 @pytest.mark.multigpu_static
+def test_max_preserves_torch_return_type(distributed_mesh):
+    """The DTensor fallback must preserve named fields on structured results."""
+    dm = DistributedManager()
+    full_input = torch.randn(2, 128, 4, device=dm.device)
+    shard_tensor = scatter_tensor(
+        full_input,
+        0,
+        distributed_mesh,
+        (Shard(1),),
+        global_shape=full_input.shape,
+        dtype=full_input.dtype,
+        requires_grad=False,
+    )
+    full_input = shard_tensor.full_tensor()
+
+    sharded_result = torch.max(shard_tensor, dim=2)
+    full_result = torch.max(full_input, dim=2)
+
+    assert type(sharded_result) is type(full_result)
+    assert torch.allclose(sharded_result.values.full_tensor(), full_result.values)
+    assert torch.equal(sharded_result.indices.full_tensor(), full_result.indices)
+
+
+@pytest.mark.multigpu_static
 @pytest.mark.parametrize("op", ["sum", "mean"])
 @pytest.mark.parametrize("backward", [True])
 @pytest.mark.parametrize("dim", [None, 0, (0, 1)])
