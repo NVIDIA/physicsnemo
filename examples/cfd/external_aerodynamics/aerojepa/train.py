@@ -494,15 +494,20 @@ def _all_reduce_grads(model: torch.nn.Module, world_size: int) -> None:
     ``optimizer.step()``. Every rank starts from identical weights and applies
     identical averaged gradients, so the models stay in lockstep.
     """
-    grads = []
-    for p in model.parameters():
-        if not p.requires_grad:
-            continue
-        if p.grad is None:
-            # Materialize a zero grad so the collective stays balanced across
-            # ranks (the frozen/trainable split is deterministic per phase).
-            p.grad = torch.zeros_like(p)
-        grads.append(p.grad)
+    # SAFETY: reduce only parameters that actually received a gradient, and do
+    # NOT materialize zero grads for the ones that didn't. Every rank runs the
+    # identical forward/backward graph on the same trainable parameter set, so
+    # the reached (grad-is-not-None) set is identical across ranks and the
+    # coalesced buffers line up element-for-element. Materializing zeros for
+    # unreached params (the previous approach) is not only unnecessary for the
+    # collective but actively harmful: AdamW's decoupled weight decay applies
+    # ``p *= 1 - lr*wd`` to every parameter whose ``.grad`` is not None, so a
+    # forced zero grad silently decays otherwise-untouched parameters on
+    # multi-GPU runs only — a single-vs-multi-GPU divergence. Skipping them
+    # keeps the optimizer's per-parameter behavior identical to single-GPU.
+    grads = [
+        p.grad for p in model.parameters() if p.requires_grad and p.grad is not None
+    ]
     if not grads:
         return
     # Coalesce every gradient into one contiguous buffer and all-reduce ONCE,
@@ -873,6 +878,16 @@ def main(cfg: DictConfig) -> None:
     dm = DistributedManager()
     world_size = dm.world_size
     is_main = dm.rank == 0
+
+    # fp16 + multi-GPU is unsupported: the manual gradient all-reduce averages
+    # unscaled grads directly, with no cross-rank GradScaler coordination, so a
+    # per-rank scaler could diverge (one rank skipping a step on inf/nan while
+    # others step). bf16 needs no scaler and is the supported multi-GPU path.
+    if world_size > 1 and str(cfg.training.precision).lower() == "fp16":
+        raise ValueError(
+            "fp16 + multi-GPU (world_size>1) is unsupported by the manual "
+            "gradient all-reduce; use precision=bf16."
+        )
 
     # Same seed on every rank -> identical model initialization, which manual
     # gradient averaging then keeps in lockstep. (Dataset subsampling uses its

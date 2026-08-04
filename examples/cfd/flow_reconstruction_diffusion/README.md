@@ -26,6 +26,17 @@ Datasets used for model training and sampling can be downloaded via the followin
 
 - Low resolution data measured from random grid locations (input data for the super-resolution task) (<a href="https://figshare.com/ndownloader/files/39214622">link</a>)
 
+After downloading, verify the files against these SHA-256 checksums for the
+immutable, versioned Figshare records
+([high resolution](https://doi.org/10.6084/m9.figshare.22064621.v1),
+[low resolution](https://doi.org/10.6084/m9.figshare.22080935.v1)):
+
+```console
+$ sha256sum kf_2d_re1000_256_40seed.npy kmflow_sampled_data_irregnew.npz
+775ca8435d2f2f1887e39d7e302890c434fb5d839e3521d80db4fff19d14cf89  kf_2d_re1000_256_40seed.npy
+d007da6d934c6882e7f08a43b83520eacd894a6e6471127e899a21e54a14835e  kmflow_sampled_data_irregnew.npz
+```
+
 
 ## Prerequisites
 
@@ -81,4 +92,3 @@ This implementation is based on / inspired by:
 
 - [https://github.com/ermongroup/SDEdit](https://github.com/ermongroup/SDEdit) (SDEdit: Guided Image Synthesis and Editing with Stochastic Differential Equations)
 - [https://github.com/ermongroup/ddim](https://github.com/ermongroup/ddim) (Denoising Diffusion Implicit Models)
-

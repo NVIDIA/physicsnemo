@@ -14,4 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Visualization utilities for physicsnemo.mesh Mesh objects."""
+"""Visualization utilities for :class:`physicsnemo.mesh.Mesh` objects."""
+
+from physicsnemo.mesh.visualization.draw_mesh import draw, draw_mesh
+
+__all__ = ["draw", "draw_mesh"]
