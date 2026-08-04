@@ -144,6 +144,7 @@ physicsnemo/nn/functional/neighbors/knn/ @coreyjadams @peterdsharpe @loliverhenn
 physicsnemo/nn/functional/neighbors/radius_search/ @coreyjadams @peterdsharpe @loliverhennigh
 physicsnemo/nn/functional/natten.py @pzharrington
 physicsnemo/nn/functional/geometry/sdf.py @peterdsharpe @loliverhennigh
+physicsnemo/nn/functional/geometry/deform/ @mehdiataei @loliverhennigh
 
 # Module layers
 physicsnemo/nn/module/ @loliverhennigh
@@ -210,6 +211,7 @@ physicsnemo/utils/profiling/ @coreyjadams
 # ==============================================================================
 
 physicsnemo/mesh/ @peterdsharpe
+physicsnemo/mesh/transformations/deform/ @mehdiataei @loliverhennigh @peterdsharpe
 
 # ==============================================================================
 # METRICS
