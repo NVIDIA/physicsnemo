@@ -129,8 +129,8 @@ def _select_slice_from_replicate(
     target_spec: ShardTensorSpec,
     mesh_dim: int,
     mesh_coord: int,
-    sizes: tuple[int, ...] | None = None,
-) -> tuple[torch.Tensor, tuple[int, ...] | None]:
+    sizes: list[int] | None = None,
+) -> tuple[torch.Tensor, list[int] | None]:
     r"""Select the appropriate slice from a replicated tensor to create a shard.
 
     Parameters
@@ -143,13 +143,13 @@ def _select_slice_from_replicate(
         The mesh dimension along which to shard.
     mesh_coord : int
         The coordinate of this rank in the mesh dimension.
-    sizes : Optional[Tuple[int, ...]], optional
+    sizes : Optional[List[int]], optional
         Size hint for chunking. If provided and matches mesh size, uses
         these sizes for splitting.
 
     Returns
     -------
-    Tuple[torch.Tensor, Optional[Tuple[int, ...]]]
+    Tuple[torch.Tensor, Optional[List[int]]]
         Tuple containing the selected slice that will become this rank's
         shard, and the sizes used (or ``None`` if chunk was used).
 
@@ -188,11 +188,11 @@ def _to_new_shard_dim(
     current_spec: ShardTensorSpec,
     target_spec: ShardTensorSpec,
     mesh_dim: int,
-    size_hint: tuple[int, ...] | None,
+    size_hint: list[int] | None,
     spec_shapes_are_current: bool,
     current_dim: int,
     target_dim: int,
-) -> tuple[torch.Tensor, tuple[int, ...] | None]:
+) -> tuple[torch.Tensor, list[int] | None]:
     r"""Transpose tensor sharding from one dimension to another.
 
     Reshards a tensor from being sharded on ``current_dim`` to being sharded
@@ -209,7 +209,7 @@ def _to_new_shard_dim(
         Specification of target sharding scheme.
     mesh_dim : int
         The device mesh dimension on which we're transposing.
-    size_hint : Optional[Tuple[int, ...]]
+    size_hint : Optional[List[int]]
         If provided, use this to chunk the tensor for both send and recv.
     spec_shapes_are_current : bool
         Whether ``current_spec``'s recorded per-rank sharding shapes still
@@ -226,7 +226,7 @@ def _to_new_shard_dim(
 
     Returns
     -------
-    Tuple[torch.Tensor, Optional[Tuple[int, ...]]]
+    Tuple[torch.Tensor, Optional[List[int]]]
         Tuple containing the resharded tensor and the size hint used
         (may be ``None`` if it was discarded).
     """
@@ -360,7 +360,7 @@ def redistribute_local_shard_tensor(
     *,
     async_op: bool = False,
     is_backward: bool = False,
-    target_sharding_shapes: dict[int, tuple[tuple[int, ...], ...]] | None = None,
+    target_sharding_shapes: dict[int, list[int]] | None = None,
 ) -> torch.Tensor:
     r"""Redistribute a local tensor between different ShardTensorSpec configurations.
 
@@ -396,9 +396,8 @@ def redistribute_local_shard_tensor(
         Whether to run asynchronously.
     is_backward : bool, default=False
         Whether this is a backward pass (affects some redistribution behaviors).
-    target_sharding_shapes : Optional[Dict[int, Tuple[Tuple[int, ...], ...]]], optional
-        Target sharding shapes (plain int tuples) to use for redistribution.
-        Default is empty dict.
+    target_sharding_shapes : Optional[Dict[int, List[int]]], optional
+        Per-rank shard sizes keyed by tensor dimension. Default is ``None``.
 
     Returns
     -------
