@@ -16,7 +16,7 @@
 
 """GALE (Geometry-Aware Latent Embeddings) attention layer and transformer block.
 
-This module provides the GALE attention mechanism and GALE_block transformer block,
+This module provides the GALE attention mechanism and GALEBlock transformer block,
 which extend the Transolver physics attention with cross-attention capabilities for
 geometry and global context embeddings.
 """
@@ -286,7 +286,7 @@ class GALE(PhysicsAttentionIrregularMesh):
     See Also
     --------
     :class:`physicsnemo.models.transolver.Physics_Attention.PhysicsAttentionIrregularMesh` : Base physics attention class.
-    :class:`GALE_block` : Transformer block using GALE attention.
+    :class:`GALEBlock` : Transformer block using GALE attention.
 
     Examples
     --------
@@ -387,7 +387,7 @@ def _gale_cross_init(
     use_te: bool,
     state_mixing_mode: str = "weighted",
 ) -> None:
-    # Match GALE: TE linear only when TE is installed (GALE_block already errors if use_te without TE)
+    # Match GALE: TE linear only when TE is installed (GALEBlock already errors if use_te without TE)
     linear_layer = te.Linear if (use_te and te.available) else nn.Linear
     self.cross_q = linear_layer(dim_head, dim_head)
     self.cross_k = linear_layer(context_dim, dim_head)
@@ -563,7 +563,7 @@ class GALE_FA(nn.Module):
     See Also
     --------
     :class:`GALE` : Original GeoTransolver GALE attention class.
-    :class:`GALE_block` : Transformer block that calls GALE or GALE_FA attention.
+    :class:`GALEBlock` : Transformer block that calls GALE or GALE_FA attention.
 
     Examples
     --------
@@ -748,7 +748,7 @@ class GALE_FA(nn.Module):
         return [self.out_dropout(_out) for _out in outputs]
 
 
-class GALE_block(nn.Module):
+class GALEBlock(nn.Module):
     r"""Transformer encoder block using GALE attention.
 
     This block replaces standard self-attention with the GALE (Geometry-Aware Latent
@@ -816,12 +816,12 @@ class GALE_block(nn.Module):
     See Also
     --------
     :class:`GALE` : The attention mechanism used in this block.
-    :class:`physicsnemo.models.geotransolver.GeoTransolver` : Main model using GALE_block.
+    :class:`physicsnemo.models.geotransolver.GeoTransolver` : Main model using GALEBlock.
 
     Examples
     --------
     >>> import torch
-    >>> block = GALE_block(num_heads=8, hidden_dim=256, dropout=0.1, context_dim=32)
+    >>> block = GALEBlock(num_heads=8, hidden_dim=256, dropout=0.1, context_dim=32)
     >>> fx = (torch.randn(2, 100, 256),)  # Single input tensor in tuple
     >>> context = torch.randn(2, 8, 64, 32)  # Global context
     >>> outputs = block(fx, context)

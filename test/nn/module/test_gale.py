@@ -20,7 +20,7 @@ import torch
 from physicsnemo.nn import (
     GALE,
     GALE_FA,
-    GALE_block,
+    GALEBlock,
 )
 
 # =============================================================================
@@ -309,13 +309,13 @@ def test_gale_fa_concat_project_forward(device):
 
 
 # =============================================================================
-# GALE_block Tests
+# GALEBlock Tests
 # =============================================================================
 
 
 @pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
 def test_gale_block_forward(device, attention_type):
-    """Test GALE_block transformer block forward pass (GALE and GALE_FA)."""
+    """Test GALEBlock transformer block forward pass (GALE and GALE_FA)."""
     torch.manual_seed(42)
 
     hidden_dim = 64
@@ -325,7 +325,7 @@ def test_gale_block_forward(device, attention_type):
     slice_num = 8
     context_dim = hidden_dim // n_head
 
-    block = GALE_block(
+    block = GALEBlock(
         num_heads=n_head,
         hidden_dim=hidden_dim,
         dropout=0.0,
@@ -352,7 +352,7 @@ def test_gale_block_forward(device, attention_type):
 
 @pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
 def test_gale_block_multiple_inputs(device, attention_type):
-    """Test GALE_block with multiple input tensors and attention type (GALE and GALE_FA)."""
+    """Test GALEBlock with multiple input tensors and attention type (GALE and GALE_FA)."""
     torch.manual_seed(42)
 
     hidden_dim = 64
@@ -363,7 +363,7 @@ def test_gale_block_multiple_inputs(device, attention_type):
     slice_num = 8
     context_dim = hidden_dim // n_head
 
-    block = GALE_block(
+    block = GALEBlock(
         num_heads=n_head,
         hidden_dim=hidden_dim,
         dropout=0.0,
@@ -391,7 +391,7 @@ def test_gale_block_multiple_inputs(device, attention_type):
 
 @pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
 def test_gale_block_concat_project(device, attention_type):
-    """Test GALE_block with state_mixing_mode='concat_project'."""
+    """Test GALEBlock with state_mixing_mode='concat_project'."""
     torch.manual_seed(42)
 
     hidden_dim = 64
@@ -401,7 +401,7 @@ def test_gale_block_concat_project(device, attention_type):
     slice_num = 8
     context_dim = hidden_dim // n_head
 
-    block = GALE_block(
+    block = GALEBlock(
         num_heads=n_head,
         hidden_dim=hidden_dim,
         dropout=0.0,

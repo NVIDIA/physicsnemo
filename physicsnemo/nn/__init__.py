@@ -112,7 +112,7 @@ from .module.fully_connected_layers import (
 from .module.gale import (
     GALE,
     GALE_FA,
-    GALE_block,
+    GALEBlock,
     GALEStructuredMesh2D,
     GALEStructuredMesh3D,
 )
