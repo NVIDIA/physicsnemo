@@ -124,6 +124,8 @@ def test_plain_http_package_warns(monkeypatch, tmp_path: Path):
 
 
 def test_https_package_rejects_bad_checksum(monkeypatch, tmp_path: Path):
+    content = b"unexpected content"
+
     class Response:
         def __enter__(self):
             return self
@@ -135,7 +137,7 @@ def test_https_package_rejects_bad_checksum(monkeypatch, tmp_path: Path):
             return None
 
         def iter_content(self, chunk_size):
-            yield b"unexpected content"
+            yield content
 
     monkeypatch.setattr(filesystem.requests, "get", lambda *args, **kwargs: Response())
 
@@ -147,6 +149,22 @@ def test_https_package_rejects_bad_checksum(monkeypatch, tmp_path: Path):
         )
 
     assert list(tmp_path.iterdir()) == []
+
+    cached_url = "https://example.com/assets/cached-model.pt"
+    cache_path = Path(
+        filesystem._download_cached(
+            cached_url,
+            local_cache_path=tmp_path,
+            checksum=hashlib.sha256(content).hexdigest(),
+        )
+    )
+    with pytest.raises(ValueError, match="Checksum mismatch"):
+        filesystem._download_cached(
+            cached_url, local_cache_path=tmp_path, checksum="0" * 64
+        )
+
+    assert cache_path.read_bytes() == content
+    assert [entry.name for entry in tmp_path.iterdir()] == [cache_path.name]
 
 
 def test_https_package_does_not_cache_failed_response(monkeypatch, tmp_path: Path):
@@ -196,6 +214,31 @@ def test_https_package_rejects_plaintext_redirect(monkeypatch, tmp_path: Path):
         )
 
     assert list(tmp_path.iterdir()) == []
+
+
+def test_ngc_bad_checksum_does_not_evict_valid_cache_entry(monkeypatch, tmp_path: Path):
+    """A failed NGC refetch cannot remove an existing valid cache entry."""
+    content = b"shared NGC artifact"
+    url = "ngc://models/org/model@v1/model.pt"
+
+    def download(path, out_path):
+        Path(out_path).write_bytes(content)
+        return out_path
+
+    monkeypatch.setattr(filesystem, "_download_ngc_model_file", download)
+
+    cache_path = Path(
+        filesystem._download_cached(
+            url,
+            local_cache_path=tmp_path,
+            checksum=hashlib.sha256(content).hexdigest(),
+        )
+    )
+    with pytest.raises(ValueError, match="Checksum mismatch"):
+        filesystem._download_cached(url, local_cache_path=tmp_path, checksum="0" * 64)
+
+    assert cache_path.read_bytes() == content
+    assert [entry.name for entry in tmp_path.iterdir()] == [cache_path.name]
 
 
 @pytest.mark.skip("Skipping because slow, need better test solution")

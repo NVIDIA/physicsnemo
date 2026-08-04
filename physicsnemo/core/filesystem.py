@@ -20,9 +20,10 @@ import logging
 import os
 import re
 import tempfile
-import urllib
+import urllib.parse
 import warnings
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 
 import fsspec
@@ -170,6 +171,30 @@ def _validate_checksum(path: str | os.PathLike, checksum: str) -> None:
         )
 
 
+def _install_in_cache(
+    fetch: Callable[[str], object],
+    cache_path: str | os.PathLike,
+    checksum: str | None,
+) -> None:
+    """Fetch, optionally verify, and atomically install a single cache file."""
+    cache_file = Path(cache_path)
+    # Staging beside the cache file keeps the final replacement atomic.
+    with tempfile.NamedTemporaryFile(
+        dir=cache_file.parent,
+        prefix=f"{cache_file.name}.",
+        delete=False,
+    ) as staged:
+        staged_path = Path(staged.name)
+
+    try:
+        fetch(str(staged_path))
+        if checksum is not None:
+            _validate_checksum(staged_path, checksum)
+        os.replace(staged_path, cache_file)
+    finally:
+        staged_path.unlink(missing_ok=True)
+
+
 def _download_cached(
     path: str,
     recursive: bool = False,
@@ -218,74 +243,66 @@ def _download_cached(
             stacklevel=2,
         )
 
-    if os.path.exists(cache_path) and checksum is not None:
+    cache_available = os.path.exists(cache_path)
+    if cache_available and checksum is not None:
         try:
             _validate_checksum(cache_path, checksum)
         except ValueError:
-            logger.warning("Removing cached file with an unexpected checksum: %s", path)
-            os.remove(cache_path)
+            logger.warning(
+                "Refetching cached file with an unexpected checksum: %s", path
+            )
+            # Leave the shared path untouched until a verified replacement is ready.
+            cache_available = False
 
-    # TODO watch for race condition here
-    if not os.path.exists(cache_path):
-        logger.debug("Downloading %s to cache: %s", path, cache_path)
-        if url.scheme in ("s3", "msc"):
-            fs = fsspec.filesystem(fsspec.utils.get_protocol(path))
-            fs.get(path, cache_path, recursive=recursive)
-        elif path.startswith("ngc://models/"):
-            path = _download_ngc_model_file(path, cache_path)
-            if checksum is not None:
-                try:
-                    _validate_checksum(path, checksum)
-                except ValueError:
-                    os.remove(path)
-                    raise
-            return path
-        elif url.scheme in ("http", "https"):
-            temporary_path = None
-            try:
-                with tempfile.NamedTemporaryFile(
-                    dir=local_cache_path, prefix=f"{filename}.", delete=False
-                ) as output:
-                    temporary_path = output.name
-                    with requests.get(path, stream=True, timeout=5) as response:
-                        response_url = getattr(response, "url", path)
-                        if (
-                            url.scheme == "https"
-                            and urllib.parse.urlparse(response_url).scheme != "https"
-                        ):
-                            raise ValueError(
-                                "HTTPS download redirected to a non-HTTPS URL"
-                            )
-                        response.raise_for_status()
-                        for chunk in response.iter_content(chunk_size=8192):
-                            if chunk:
-                                output.write(chunk)
-                if checksum is not None:
-                    _validate_checksum(temporary_path, checksum)
-                os.replace(temporary_path, cache_path)
-                temporary_path = None
-            finally:
-                if temporary_path is not None and os.path.exists(temporary_path):
-                    os.remove(temporary_path)
-        elif url.scheme == "file":
-            path = os.path.join(url.netloc, url.path)
-            if checksum is not None:
-                _validate_checksum(path, checksum)
-            return path
-        else:
-            if checksum is not None:
-                _validate_checksum(path, checksum)
-            return path
-
-    else:
+    if cache_available:
         logger.debug("Opening from cache: %s", cache_path)
+        return cache_path
 
-    if checksum is not None:
-        try:
-            _validate_checksum(cache_path, checksum)
-        except ValueError:
-            os.remove(cache_path)
-            raise
+    logger.debug("Downloading %s to cache: %s", path, cache_path)
+    if url.scheme in ("s3", "msc"):
+        fs = fsspec.filesystem(fsspec.utils.get_protocol(path))
+        if recursive:
+            fs.get(path, cache_path, recursive=True)
+        else:
+            _install_in_cache(
+                lambda destination: fs.get(path, destination),
+                cache_path,
+                checksum,
+            )
+    elif path.startswith("ngc://models/"):
+        if path.endswith(".zip"):
+            return _download_ngc_model_file(path, cache_path)
+        _install_in_cache(
+            lambda destination: _download_ngc_model_file(path, destination),
+            cache_path,
+            checksum,
+        )
+    elif url.scheme in ("http", "https"):
+
+        def fetch_over_http(destination: str) -> None:
+            with requests.get(path, stream=True, timeout=5) as response:
+                response_url = getattr(response, "url", path)
+                if (
+                    url.scheme == "https"
+                    and urllib.parse.urlparse(response_url).scheme != "https"
+                ):
+                    raise ValueError("HTTPS download redirected to a non-HTTPS URL")
+                response.raise_for_status()
+                with open(destination, "wb") as output:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            output.write(chunk)
+
+        _install_in_cache(fetch_over_http, cache_path, checksum)
+    elif url.scheme == "file":
+        path = os.path.join(url.netloc, url.path)
+        if checksum is not None:
+            _validate_checksum(path, checksum)
+        return path
+    else:
+        if checksum is not None:
+            _validate_checksum(path, checksum)
+        return path
 
     return cache_path
 
