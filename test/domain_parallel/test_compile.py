@@ -24,6 +24,8 @@ DTensor does not have to handle and which earlier coerce implementations
 silently dropped (defaulting back to even chunking).
 """
 
+import dataclasses
+
 import pytest
 import torch
 from torch.distributed.tensor import DTensor
@@ -110,6 +112,40 @@ def run_coerce_expected_type_returns_none(mesh):
 @pytest.mark.timeout(120)
 def test_coerce_expected_type_returns_none_1d(distributed_mesh):
     run_coerce_expected_type_returns_none(distributed_mesh)
+
+
+def run_stable_hash_distinguishes_spec_metadata(mesh):
+    spec = shard_tensor_factory(mesh, uneven=True)._spec
+    identical_spec = dataclasses.replace(
+        spec, _sharding_shapes=dict(spec._sharding_shapes)
+    )
+    assert identical_spec._stable_hash() == spec._stable_hash()
+
+    replicated_spec = dataclasses.replace(
+        spec,
+        placements=tuple(Replicate() for _ in range(mesh.ndim)),
+        shard_order=None,
+        _sharding_shapes=None,
+    )
+    assert replicated_spec._stable_hash() != spec._stable_hash()
+
+    different_shapes = dict(spec._sharding_shapes)
+    mesh_dim, shard_shapes = next(
+        (dim, shapes) for dim, shapes in different_shapes.items() if len(shapes) > 1
+    )
+    tensor_dim = spec.placements[mesh_dim].dim
+    changed_shapes = [list(shape) for shape in shard_shapes]
+    changed_shapes[0][tensor_dim] += 1
+    changed_shapes[1][tensor_dim] -= 1
+    different_shapes[mesh_dim] = tuple(tuple(shape) for shape in changed_shapes)
+    different_layout_spec = dataclasses.replace(spec, _sharding_shapes=different_shapes)
+    assert different_layout_spec._stable_hash() != spec._stable_hash()
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+def test_stable_hash_distinguishes_spec_metadata_2d(distributed_mesh_2d):
+    run_stable_hash_distinguishes_spec_metadata(distributed_mesh_2d)
 
 
 def _sum_squares(x):

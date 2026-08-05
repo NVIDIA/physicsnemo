@@ -119,11 +119,10 @@ class ShardTensorSpec(DTensorSpec):
     def _stable_hash(self) -> str:
         r"""Return a cross-process stable hash of this spec.
 
-        Extends ``DTensorSpec._stable_hash`` (mesh via its own stable hash,
-        plus placements, shard order, and tensor metadata) with
-        ``_sharding_shapes``, so equal placements with different uneven
-        layouts don't collide. Consumed by the AOT autograd cache through
-        ``ShardTensor._stable_hash_for_caching``.
+        Extends ``DTensorSpec._stable_hash`` with ``_sharding_shapes`` so
+        different uneven layouts do not collide. PyTorch versions before 2.12
+        use the same metadata in a local fallback. Consumed by the AOT autograd
+        cache through ``ShardTensor._stable_hash_for_caching``.
 
         Returns
         -------
@@ -135,7 +134,20 @@ class ShardTensorSpec(DTensorSpec):
             if self._sharding_shapes is None
             else tuple(sorted(self._sharding_shapes.items()))
         )
-        stable_key = (super()._stable_hash(), sharding_shapes)
+        if torch.__version__ >= (2, 12):
+            stable_key = (super()._stable_hash(), sharding_shapes)
+        else:
+            mesh = self.mesh.mesh
+            stable_key = (
+                self.mesh.device_type,
+                tuple(mesh.shape),
+                tuple(mesh.flatten().tolist()),
+                self.mesh.mesh_dim_names,
+                self.placements,
+                self.shard_order,
+                self.tensor_meta,
+                sharding_shapes,
+            )
         return hashlib.blake2b(repr(stable_key).encode(), digest_size=16).hexdigest()
 
     def sharding_shapes(
