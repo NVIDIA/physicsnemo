@@ -34,6 +34,11 @@ def _assert_plain_gradient(grad: torch.Tensor | None) -> None:
     assert type(grad) is torch.Tensor
 
 
+def _work_registry_size() -> int:
+    r"""Return the number of functional collectives still awaiting a wait."""
+    return torch._C._distributed_c10d._get_work_registry_size()
+
+
 @pytest.mark.multigpu_static
 @pytest.mark.parametrize(
     ("reducer", "placement"),
@@ -44,6 +49,7 @@ def _assert_plain_gradient(grad: torch.Tensor | None) -> None:
 )
 def test_grad_reducers_wait_before_return(distributed_mesh, reducer, placement):
     r"""Gradient reducers must not return an AsyncCollectiveTensor to autograd."""
+    initial_registry_size = _work_registry_size()
     dm = DistributedManager()
     source = torch.ones(8, device=dm.device)
     sharded = scatter_tensor(
@@ -67,11 +73,13 @@ def test_grad_reducers_wait_before_return(distributed_mesh, reducer, placement):
         leaf.grad,
         torch.full_like(leaf, distributed_mesh.size()),
     )
+    assert _work_registry_size() == initial_registry_size
 
 
 @pytest.mark.multigpu_static
 def test_group_norm_waits_for_parameter_gradients(distributed_mesh):
     r"""GroupNorm weight and bias gradients must be materialized before return."""
+    initial_registry_size = _work_registry_size()
     dm = DistributedManager()
     image = torch.randn(2, 4, 16, device=dm.device)
     sharded_image = scatter_tensor(
@@ -93,3 +101,4 @@ def test_group_norm_waits_for_parameter_gradients(distributed_mesh):
         assert len(hook_grads[name]) == 1
         _assert_plain_gradient(hook_grads[name][0])
         _assert_plain_gradient(parameter.grad)
+    assert _work_registry_size() == initial_registry_size

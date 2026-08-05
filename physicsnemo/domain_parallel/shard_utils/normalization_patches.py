@@ -152,6 +152,8 @@ class PartialGroupNorm(torch.autograd.Function):
         # above.
         packed = torch.stack([local_sum, local_sum_sq], dim=0)  # (2, N, G)
         packed = funcol.all_reduce(packed, "sum", (spec.mesh, 0))
+        if isinstance(packed, funcol.AsyncCollectiveTensor):
+            packed = packed.wait()
         global_sum, global_sum_sq = packed[0], packed[1]
 
         global_mean = (global_sum / D_global).unsqueeze(2)  # (N, G, 1)
@@ -302,6 +304,8 @@ class PartialGroupNorm(torch.autograd.Function):
         # ProcessGroup references (see forward for the full rationale).
         packed_sums = torch.cat([sum_dx_hat, sum_dx_hat_y], dim=2)  # (N, G, 2)
         packed_sums = funcol.all_reduce(packed_sums, "sum", (spec.mesh, 0))
+        if isinstance(packed_sums, funcol.AsyncCollectiveTensor):
+            packed_sums = packed_sums.wait()
         sum_dx_hat = packed_sums[:, :, :1]  # (N, G, 1)
         sum_dx_hat_y = packed_sums[:, :, 1:]  # (N, G, 1)
 

@@ -689,6 +689,8 @@ def perform_halo_collective(
                 input_split_sizes,
                 (mesh, mesh_dim),
             )
+            if isinstance(recv_buf, funcol.AsyncCollectiveTensor):
+                recv_buf = recv_buf.wait()
 
         # Split into per-source-rank chunks (some empty), then reshape to
         # the original halo tensor shapes.
