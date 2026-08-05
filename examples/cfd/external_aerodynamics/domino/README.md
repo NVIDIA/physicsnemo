@@ -86,6 +86,20 @@ with `PhysicsNeMo-Curator`.
 
 Download the DrivAer ML dataset using the
 [provided instructions in PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator/blob/main/examples/external_aerodynamics/README.md#download-drivaerml-dataset).
+Before preprocessing, verify downloaded files against the SHA-256 object IDs in
+an immutable dataset revision. For example, the versioned
+[DrivAerML `run_1` files](https://huggingface.co/datasets/neashton/drivaerml/tree/f26d75e0d3dee10ba0e42829bafd0e0d95ca5acc/run_1)
+give these checksums:
+
+```console
+$ sha256sum run_1/boundary_1.vtp run_1/drivaer_1.stl
+01d388402dad7a783db9c666ddb18e6db745aac16a3193c275e0726dd108bb40  run_1/boundary_1.vtp
+411e6651284a26fc94924106b833fd79febc6deba63922c929dd8acfc99720d2  run_1/drivaer_1.stl
+```
+
+Use the same versioned file listing to verify every run selected for
+preprocessing.
+
 The first step for running the DoMINO pipeline requires processing the raw data
 (vtp, vtu and stl) into either Zarr or NumPy format for training.
 Each of the raw simulations files are downloaded in `vtp`, `vtu` and `stl` formats.

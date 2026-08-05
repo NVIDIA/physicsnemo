@@ -30,8 +30,8 @@ from jaxtyping import Float, Int
 from tensordict import TensorDict
 
 from physicsnemo.mesh.utilities._duplicate_detection import compute_canonical_indices
-from physicsnemo.mesh.utilities._index_tuple_ops import unique_index_tuples
 from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
+from physicsnemo.utils._index_tuple_ops import unique_index_tuples
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh

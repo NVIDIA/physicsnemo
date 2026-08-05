@@ -14,11 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# ``tensorclass`` adds a class-scoped ``float`` method. Qualify scalar
-# annotations that must remain resolvable under Python's deferred lookup.
+# Python 3.14 evaluates annotations lazily in the decorated class namespace,
+# where ``tensorclass`` installs dtype-conversion methods such as ``int``.
+# Qualify scalar annotations that must continue to resolve to builtin types.
 import builtins
 import math
 import types
+from collections.abc import Mapping
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -36,9 +38,22 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from tensordict import NonTensorData, TensorDict, tensorclass
 
+from physicsnemo.mesh.boundaries import is_manifold, is_watertight
+from physicsnemo.mesh.calculus import (
+    compute_cell_derivatives,
+    compute_point_derivatives,
+    integrate,
+    integrate_flux,
+    integrate_moment,
+)
 from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
 from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
-from physicsnemo.mesh.transformations.deform import displace, morph
+from physicsnemo.mesh.transformations.deform import (
+    displace,
+    free_form_deform,
+    morph,
+    radial_basis_function_deform,
+)
 from physicsnemo.mesh.transformations.geometric import (
     rotate,
     scale,
@@ -48,12 +63,10 @@ from physicsnemo.mesh.transformations.geometric import (
 from physicsnemo.mesh.utilities._padding import _pad_by_tiling_last, _pad_with_value
 from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
-from physicsnemo.mesh.visualization.draw_mesh import draw_mesh
+from physicsnemo.mesh.validation import validate
+from physicsnemo.mesh.visualization.draw_mesh import draw
 
 if TYPE_CHECKING:
-    import matplotlib.axes
-    import pyvista
-
     from physicsnemo.mesh.neighbors._adjacency import Adjacency
 
 
@@ -714,18 +727,22 @@ class Mesh:
 
     @property
     def n_points(self) -> int:
+        """Number of points in the mesh."""
         return self.points.shape[0]
 
     @property
     def n_spatial_dims(self) -> int:
+        """Dimension of the ambient coordinate space."""
         return self.points.shape[-1]
 
     @property
     def n_cells(self) -> int:
+        """Number of cells in the mesh."""
         return self.cells.shape[0]
 
     @property
     def n_manifold_dims(self) -> int:
+        """Intrinsic dimension of each simplicial cell."""
         return self.cells.shape[-1] - 1
 
     @property
@@ -2099,74 +2116,9 @@ class Mesh:
                 f"Invalid {point_source=!r}. Must be 'vertices' or 'cell_centroids'."
             )
 
-    def is_watertight(self) -> bool:
-        """Check if mesh is watertight (has no boundary).
+    is_manifold = is_manifold
 
-        A mesh is watertight if every codimension-1 facet is shared by exactly 2 cells.
-        This means the mesh forms a closed surface/volume with no holes or gaps.
-
-        Returns
-        -------
-        bool
-            True if mesh is watertight (no boundary facets), False otherwise.
-
-        Examples
-        --------
-        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral, cylinder_open
-        >>> # Closed sphere is watertight
-        >>> sphere = sphere_icosahedral.load(subdivisions=3)
-        >>> assert sphere.is_watertight() == True
-        >>>
-        >>> # Open cylinder with holes at ends
-        >>> cylinder = cylinder_open.load()
-        >>> assert cylinder.is_watertight() == False
-        """
-        from physicsnemo.mesh.boundaries import is_watertight
-
-        return is_watertight(self)
-
-    def is_manifold(
-        self,
-        check_level: Literal["facets", "edges", "full"] = "full",
-    ) -> bool:
-        """Check if mesh is a valid topological manifold.
-
-        A mesh is a manifold if it locally looks like Euclidean space at every point.
-        This function checks various topological constraints depending on the check level.
-
-        Parameters
-        ----------
-        check_level : {"facets", "edges", "full"}, optional
-            Level of checking to perform:
-
-            - "facets": Only check codimension-1 facets (each appears 1-2 times)
-            - "edges": Check facets + edge neighborhoods (for 2D/3D meshes)
-            - "full": Complete manifold validation (default)
-
-        Returns
-        -------
-        bool
-            True if mesh passes the specified manifold checks, False otherwise.
-
-        Notes
-        -----
-        This function checks topological constraints but does not check for
-        geometric self-intersections (which would require expensive spatial queries).
-
-        Examples
-        --------
-        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral, cylinder_open
-        >>> # Valid manifold (sphere)
-        >>> sphere = sphere_icosahedral.load(subdivisions=3)
-        >>> assert sphere.is_manifold() == True
-        >>>
-        >>> # Manifold with boundary (open cylinder)
-        >>> cylinder = cylinder_open.load()
-        >>> assert cylinder.is_manifold() == True  # manifold with boundary is OK
-        """
-        from physicsnemo.mesh.boundaries import is_manifold
-
-        return is_manifold(self, check_level=check_level)
+    is_watertight = is_watertight
 
     def _cached_adjacency(self, cache_key: str, compute_fn, **kwargs):
         r"""Look up or compute-and-cache a topological adjacency.
@@ -2518,656 +2470,39 @@ class Mesh:
             data_padding_value=data_padding_value,
         )
 
-    def draw(
-        self,
-        backend: Literal["matplotlib", "pyvista", "auto"] = "auto",
-        show: bool = True,
-        point_scalars: None | torch.Tensor | str | tuple[str, ...] = None,
-        cell_scalars: None | torch.Tensor | str | tuple[str, ...] = None,
-        cmap: str = "viridis",
-        vmin: float | None = None,
-        vmax: float | None = None,
-        alpha_points: float = 1.0,
-        alpha_cells: float = 1.0,
-        alpha_edges: float = 1.0,
-        show_edges: bool = True,
-        ax: "matplotlib.axes.Axes | pyvista.Plotter | None" = None,
-        backend_options: dict[str, Any] | None = None,
-    ) -> "matplotlib.axes.Axes | pyvista.Plotter":
-        """Draw the mesh using matplotlib or PyVista backend.
+    ### Transformations
 
-        Provides interactive 3D or 2D visualization with support for scalar data
-        coloring, transparency control, and automatic backend selection.
+    displace = displace
 
-        Parameters
-        ----------
-        backend : {"auto", "matplotlib", "pyvista"}
-            Visualization backend to use:
+    free_form_deform = free_form_deform
 
-            - "auto": Automatically select based on n_spatial_dims
-              (matplotlib for 0D/1D/2D, PyVista for 3D)
-            - "matplotlib": Force matplotlib backend (supports 3D via mplot3d)
-            - "pyvista": Force PyVista backend (requires n_spatial_dims <= 3)
-        show : bool
-            Whether to display the plot immediately (calls plt.show() or
-            plotter.show()). If False, returns the plotter/axes for further
-            customization before display.
-        point_scalars : torch.Tensor or str or tuple[str, ...], optional
-            Scalar data to color points. Mutually exclusive with cell_scalars. Can be:
+    morph = morph
 
-            - None: Points use neutral color (black)
-            - torch.Tensor: Direct scalar values, shape (n_points,) or
-              (n_points, ...) where trailing dimensions are L2-normed
-            - str or tuple[str, ...]: Key to lookup in mesh.point_data
-        cell_scalars : torch.Tensor or str or tuple[str, ...], optional
-            Scalar data to color cells. Mutually exclusive with point_scalars. Can be:
+    radial_basis_function_deform = radial_basis_function_deform
 
-            - None: Cells use neutral color (lightblue if no scalars,
-              lightgray if point_scalars active)
-            - torch.Tensor: Direct scalar values, shape (n_cells,) or
-              (n_cells, ...) where trailing dimensions are L2-normed
-            - str or tuple[str, ...]: Key to lookup in mesh.cell_data
-        cmap : str
-            Colormap name for scalar visualization.
-        vmin : float, optional
-            Minimum value for colormap normalization. If None, uses data min.
-        vmax : float, optional
-            Maximum value for colormap normalization. If None, uses data max.
-        alpha_points : float
-            Opacity for points, range [0, 1].
-        alpha_cells : float
-            Opacity for cells/faces, range [0, 1].
-        alpha_edges : float
-            Opacity for cell edges, range [0, 1].
-        show_edges : bool
-            Whether to draw cell edges.
-        ax : matplotlib.axes.Axes or pyvista.Plotter, optional
-            Existing canvas to draw on. For matplotlib, a matplotlib Axes;
-            for PyVista, a pyvista Plotter. If ``None``, a new figure/plotter
-            is created. Use this to overlay multiple meshes on the same scene.
-        backend_options : dict[str, Any], optional
-            Additional keyword arguments forwarded to the underlying
-            visualization backend (e.g. PyVista's ``plotter.add_mesh()``).
+    rotate = rotate
 
-        Returns
-        -------
-        matplotlib.axes.Axes or pyvista.Plotter
-            - matplotlib backend: matplotlib.axes.Axes object
-            - PyVista backend: pyvista.Plotter object
+    scale = scale
 
-        Raises
-        ------
-        ValueError
-            If both point_scalars and cell_scalars are specified,
-            or if n_spatial_dims is not supported by the chosen backend.
-        ImportError
-            If the chosen backend (matplotlib or pyvista) is not installed.
+    transform = transform
 
-        Examples
-        --------
-        >>> # Draw mesh with automatic backend selection
-        >>> mesh.draw()  # doctest: +SKIP
-        >>>
-        >>> # Color cells by pressure data
-        >>> mesh.draw(cell_scalars="pressure", cmap="coolwarm")  # doctest: +SKIP
-        >>>
-        >>> # Color points by velocity magnitude (computing norm of vector field)
-        >>> mesh.draw(point_scalars="velocity")  # velocity is (n_points, 3)  # doctest: +SKIP
-        >>>
-        >>> # Use nested TensorDict key
-        >>> mesh.draw(cell_scalars=("flow", "temperature"))  # doctest: +SKIP
-        >>>
-        >>> # Customize and display later
-        >>> ax = mesh.draw(show=False, backend="matplotlib")  # doctest: +SKIP
-        >>> ax.set_title("My Mesh")  # doctest: +SKIP
-        >>> import matplotlib.pyplot as plt  # doctest: +SKIP
-        >>> plt.show()  # doctest: +SKIP
-        """
-        return draw_mesh(
-            mesh=self,
-            backend=backend,
-            show=show,
-            point_scalars=point_scalars,
-            cell_scalars=cell_scalars,
-            cmap=cmap,
-            vmin=vmin,
-            vmax=vmax,
-            alpha_points=alpha_points,
-            alpha_cells=alpha_cells,
-            alpha_edges=alpha_edges,
-            show_edges=show_edges,
-            ax=ax,
-            backend_options=backend_options,
-        )
+    translate = translate
 
-    def translate(
-        self,
-        offset: torch.Tensor | list | tuple,
-    ) -> "Mesh":
-        """Apply a translation to the mesh.
+    ### Visualization
 
-        Convenience wrapper for physicsnemo.mesh.transformations.translate().
+    draw = draw
 
-        Parameters
-        ----------
-        offset : torch.Tensor or list or tuple
-            Translation vector, shape (n_spatial_dims,).
+    ### Calculus
 
-        Returns
-        -------
-        Mesh
-            New Mesh with translated geometry.
-        """
-        return translate(self, offset)
+    compute_cell_derivatives = compute_cell_derivatives
 
-    def displace(
-        self,
-        displacement: str | tuple[str, ...] | torch.Tensor,
-        *,
-        point_weights: str | tuple[str, ...] | torch.Tensor | None = None,
-        implementation: Literal["torch"] | None = None,
-    ) -> "Mesh":
-        """Displace points by a dense vector field without changing topology.
+    compute_point_derivatives = compute_point_derivatives
 
-        Convenience wrapper for
-        :func:`physicsnemo.mesh.transformations.deform.displace`, which
-        documents all parameters and numerical behavior.
+    integrate = integrate
 
-        Returns
-        -------
-        Mesh
-            New mesh with displaced points, unchanged connectivity and fields.
-        """
-        return displace(
-            self,
-            displacement,
-            point_weights=point_weights,
-            implementation=implementation,
-        )
+    integrate_flux = integrate_flux
 
-    def morph(
-        self,
-        control_points: torch.Tensor,
-        control_displacements: torch.Tensor,
-        *,
-        radius: builtins.float | torch.Tensor,
-        point_weights: str | tuple[str, ...] | torch.Tensor | None = None,
-        kernel: Literal["wendland_c2"] = "wendland_c2",
-        implementation: Literal["torch", "warp"] | None = None,
-    ) -> "Mesh":
-        """Morph points from sparse compactly supported control handles.
-
-        Convenience wrapper for
-        :func:`physicsnemo.mesh.transformations.deform.morph`, which documents
-        all parameters and numerical behavior.
-
-        Returns
-        -------
-        Mesh
-            New mesh with morphed points, unchanged connectivity and fields.
-        """
-        return morph(
-            self,
-            control_points,
-            control_displacements,
-            radius=radius,
-            point_weights=point_weights,
-            kernel=kernel,
-            implementation=implementation,
-        )
-
-    def rotate(
-        self,
-        angle: float,
-        axis: torch.Tensor | list | tuple | Literal["x", "y", "z"] | None = None,
-        center: torch.Tensor | list | tuple | None = None,
-        transform_point_data: bool | TensorDict = False,
-        transform_cell_data: bool | TensorDict = False,
-        transform_global_data: bool | TensorDict = False,
-    ) -> "Mesh":
-        """Rotate the mesh about an axis by a specified angle.
-
-        Convenience wrapper for physicsnemo.mesh.transformations.rotate().
-
-        Parameters
-        ----------
-        angle : float
-            Rotation angle in radians.
-        axis : torch.Tensor or list or tuple or {"x", "y", "z"}, optional
-            Rotation axis vector. None for 2D, shape (3,) for 3D.
-            String literals "x", "y", "z" are converted to unit vectors
-            (1,0,0), (0,1,0), (0,0,1) respectively.
-        center : torch.Tensor or list or tuple, optional
-            Center point for rotation.
-        transform_point_data : bool
-            If True, rotate vector/tensor fields in point_data.
-        transform_cell_data : bool
-            If True, rotate vector/tensor fields in cell_data.
-        transform_global_data : bool
-            If True, rotate vector/tensor fields in global_data.
-
-        Returns
-        -------
-        Mesh
-            New Mesh with rotated geometry.
-        """
-        return rotate(
-            self,
-            angle,
-            axis,
-            center,
-            transform_point_data,
-            transform_cell_data,
-            transform_global_data,
-        )
-
-    def scale(
-        self,
-        factor: float | torch.Tensor,
-        center: torch.Tensor | None = None,
-        transform_point_data: bool | TensorDict = False,
-        transform_cell_data: bool | TensorDict = False,
-        transform_global_data: bool | TensorDict = False,
-        assume_invertible: bool | None = None,
-    ) -> "Mesh":
-        """Scale the mesh by specified factor(s).
-
-        Convenience wrapper for physicsnemo.mesh.transformations.scale().
-
-        Parameters
-        ----------
-        factor : float or torch.Tensor
-            Scale factor (scalar) or factors (per-dimension).
-        center : torch.Tensor, optional
-            Center point for scaling.
-        transform_point_data : bool
-            If True, scale vector/tensor fields in point_data.
-        transform_cell_data : bool
-            If True, scale vector/tensor fields in cell_data.
-        transform_global_data : bool
-            If True, scale vector/tensor fields in global_data.
-        assume_invertible : bool or None, optional
-            Controls cache propagation:
-
-            - True: Assume all factors are non-zero (compile-safe).
-            - False: Skip cache propagation (compile-safe).
-            - None: Check at runtime (may cause graph breaks).
-
-        Returns
-        -------
-        Mesh
-            New Mesh with scaled geometry.
-        """
-        return scale(
-            self,
-            factor,
-            center,
-            transform_point_data,
-            transform_cell_data,
-            transform_global_data,
-            assume_invertible,
-        )
-
-    def transform(
-        self,
-        matrix: torch.Tensor,
-        transform_point_data: bool | TensorDict = False,
-        transform_cell_data: bool | TensorDict = False,
-        transform_global_data: bool | TensorDict = False,
-        assume_invertible: bool | None = None,
-    ) -> "Mesh":
-        """Apply a linear transformation to the mesh.
-
-        Convenience wrapper for physicsnemo.mesh.transformations.transform().
-
-        Parameters
-        ----------
-        matrix : torch.Tensor
-            Transformation matrix, shape (new_n_spatial_dims, n_spatial_dims).
-        transform_point_data : bool
-            If True, transform vector/tensor fields in point_data.
-        transform_cell_data : bool
-            If True, transform vector/tensor fields in cell_data.
-        transform_global_data : bool
-            If True, transform vector/tensor fields in global_data.
-        assume_invertible : bool or None, optional
-            Controls cache propagation for square matrices:
-
-            - True: Assume matrix is invertible (compile-safe).
-            - False: Skip cache propagation (compile-safe).
-            - None: Check at runtime (may cause graph breaks).
-
-        Returns
-        -------
-        Mesh
-            New Mesh with transformed geometry.
-        """
-        return transform(
-            self,
-            matrix,
-            transform_point_data,
-            transform_cell_data,
-            transform_global_data,
-            assume_invertible,
-        )
-
-    def compute_point_derivatives(
-        self,
-        keys: str | tuple[str, ...] | list[str | tuple[str, ...]] | None = None,
-        method: Literal["lsq", "dec"] = "lsq",
-        gradient_type: Literal["intrinsic", "extrinsic", "both"] = "intrinsic",
-    ) -> "Mesh":
-        """Compute gradients of point_data fields.
-
-        This is a convenience method that delegates to physicsnemo.mesh.calculus.compute_point_derivatives.
-
-        Parameters
-        ----------
-        keys : str or tuple[str, ...] or list[str | tuple[str, ...]] or None, optional
-            Fields to compute gradients of. Options:
-
-            - None: All non-cached fields (excludes "_cache" subdictionary)
-            - str: Single field name (e.g., "pressure")
-            - tuple: Nested path (e.g., ("flow", "temperature"))
-            - list: Multiple fields (e.g., ["pressure", "velocity"])
-        method : {"lsq", "dec"}, optional
-            Discretization method:
-
-            - "lsq": Weighted least-squares reconstruction (default, CFD standard)
-            - "dec": Discrete Exterior Calculus (differential geometry)
-        gradient_type : {"intrinsic", "extrinsic", "both"}, optional
-            Type of gradient:
-
-            - "intrinsic": Project onto manifold tangent space (default)
-            - "extrinsic": Full ambient space gradient
-            - "both": Compute and store both
-
-        Returns
-        -------
-        Mesh
-            A new Mesh with gradient fields added to point_data (the input mesh is
-            not modified; its point_data is cloned). Field naming:
-            "{field}_gradient" or "{field}_gradient_intrinsic/extrinsic"
-
-        Examples
-        --------
-        >>> import torch
-        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
-        >>> mesh = two_triangles_2d.load()
-        >>> mesh.point_data["pressure"] = torch.randn(mesh.n_points)
-        >>> # Compute gradient of pressure
-        >>> mesh_grad = mesh.compute_point_derivatives(keys="pressure")
-        >>> grad_p = mesh_grad.point_data["pressure_gradient"]
-        """
-        from physicsnemo.mesh.calculus import compute_point_derivatives
-
-        return compute_point_derivatives(
-            mesh=self,
-            keys=keys,
-            method=method,
-            gradient_type=gradient_type,
-        )
-
-    def compute_cell_derivatives(
-        self,
-        keys: str | tuple[str, ...] | list[str | tuple[str, ...]] | None = None,
-        method: Literal["lsq", "dec"] = "lsq",
-        gradient_type: Literal["intrinsic", "extrinsic", "both"] = "intrinsic",
-    ) -> "Mesh":
-        """Compute gradients of cell_data fields.
-
-        This is a convenience method that delegates to
-        :func:`physicsnemo.mesh.calculus.compute_cell_derivatives`.
-
-        Parameters
-        ----------
-        keys : str or tuple[str, ...] or list[str | tuple[str, ...]] or None, optional
-            Fields to compute gradients of (same format as compute_point_derivatives).
-        method : {"lsq"}, optional
-            Discretization method for cell-centered data. Currently only
-            ``"lsq"`` (weighted least-squares) is implemented. DEC
-            gradients for cell-centered data are not available because the
-            standard DEC exterior derivative maps vertex 0-forms to edge
-            1-forms; there is no analogous cell-to-cell operator in the
-            primal DEC complex.
-        gradient_type : {"intrinsic", "extrinsic", "both"}, optional
-            Type of gradient to compute.
-
-        Returns
-        -------
-        Mesh
-            A new Mesh with gradient fields added to ``cell_data``.
-
-        Raises
-        ------
-        NotImplementedError
-            If ``method="dec"`` is requested.
-
-        Examples
-        --------
-        >>> import torch
-        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
-        >>> mesh = two_triangles_2d.load()
-        >>> mesh.cell_data["pressure"] = torch.randn(mesh.n_cells)
-        >>> # Compute gradient of cell-centered pressure
-        >>> mesh_grad = mesh.compute_cell_derivatives(keys="pressure")
-        """
-        from physicsnemo.mesh.calculus import compute_cell_derivatives
-
-        return compute_cell_derivatives(
-            mesh=self,
-            keys=keys,
-            method=method,
-            gradient_type=gradient_type,
-        )
-
-    def integrate(
-        self,
-        field: str | tuple[str, ...] | torch.Tensor,
-        data_source: Literal["cells", "points"] = "cells",
-        *,
-        nan_policy: Literal["omit", "propagate"] = "omit",
-    ) -> torch.Tensor:
-        r"""Integrate a field over the mesh domain.
-
-        Computes :math:`\int_\Omega f\,d\Omega` using the appropriate
-        quadrature rule for the field's discretization.  Cell data is
-        treated as piecewise-constant (P0); point data is treated as
-        piecewise-linear (P1) via the vertex-averaging rule (exact for
-        linear fields, second-order accurate for smooth fields).
-
-        The manifold dimension determines the measure automatically:
-        arc length for ``Mesh[1, ...]``, surface area for ``Mesh[2, ...]``,
-        volume for ``Mesh[3, ...]``, etc.
-
-        Parameters
-        ----------
-        field : str, tuple[str, ...], or torch.Tensor
-            Field to integrate:
-
-            - ``str`` or ``tuple``: looked up in ``cell_data`` or
-              ``point_data`` according to ``data_source``.
-            - ``torch.Tensor``: used directly.
-        data_source : {"cells", "points"}
-            Whether ``field`` is cell-centered (P0) or vertex-centered (P1).
-        nan_policy : {"omit", "propagate"}, default "omit"
-            NaN reduction behavior. ``"omit"`` preserves the historical
-            masked-data behavior; ``"propagate"`` uses an ordinary sum so
-            NaN contributions remain visible.
-
-        Returns
-        -------
-        torch.Tensor
-            Integral value.  Shape matches ``field.shape[1:]`` (trailing
-            dimensions are preserved: scalar -> 0-d, vector -> 1-d, etc.).
-
-        Raises
-        ------
-        KeyError
-            If ``field`` is a string key not present in the specified
-            data source.
-        ValueError
-            If the mesh has no cells, or if a raw tensor has the wrong
-            leading dimension for the specified ``data_source``.
-
-        Examples
-        --------
-        >>> import torch
-        >>> from physicsnemo.mesh import Mesh
-        >>> pts = torch.tensor([[0., 0.], [1., 0.], [0.5, 1.]])
-        >>> cells = torch.tensor([[0, 1, 2]])
-        >>> mesh = Mesh(points=pts, cells=cells)
-        >>> mesh.cell_data["p"] = torch.tensor([3.0])
-        >>> mesh.integrate("p")
-        tensor(1.5000)
-        """
-        from physicsnemo.mesh.calculus.integration import integrate
-
-        return integrate(
-            mesh=self,
-            field=field,
-            data_source=data_source,
-            nan_policy=nan_policy,
-        )
-
-    def integrate_flux(
-        self,
-        field: str | tuple[str, ...] | torch.Tensor,
-        data_source: Literal["cells", "points"] = "cells",
-        *,
-        nan_policy: Literal["omit", "propagate"] = "omit",
-    ) -> torch.Tensor:
-        r"""Compute the surface flux integral for codimension-1 meshes.
-
-        Computes :math:`\int_\Gamma \mathbf{F} \cdot \mathbf{n}\,d\Gamma`,
-        the oriented flux of a vector field through the mesh surface.  Only
-        defined for codimension-1 meshes where unique cell normals exist.
-
-        Parameters
-        ----------
-        field : str, tuple[str, ...], or torch.Tensor
-            Vector field with last dimension equal to ``n_spatial_dims``.
-        data_source : {"cells", "points"}
-            Whether ``field`` is cell-centered or vertex-centered.
-        nan_policy : {"omit", "propagate"}, default "omit"
-            Whether NaN cell-flux contributions are omitted or propagated.
-
-        Returns
-        -------
-        torch.Tensor
-            Scalar flux value (0-d tensor).
-
-        Raises
-        ------
-        KeyError
-            If ``field`` is a string key not present in the specified
-            data source.
-        ValueError
-            If the mesh is not codimension-1, or if the field's last
-            dimension does not match ``n_spatial_dims``.
-
-        Examples
-        --------
-        >>> import torch
-        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
-        >>> sphere = sphere_icosahedral.load(subdivisions=2)
-        >>> # Constant field through a closed surface -> zero flux
-        >>> v = torch.ones(sphere.n_cells, 3)
-        >>> sphere.integrate_flux(v).abs() < 1e-5
-        tensor(True)
-        """
-        from physicsnemo.mesh.calculus.integration import integrate_flux
-
-        return integrate_flux(
-            mesh=self,
-            field=field,
-            data_source=data_source,
-            nan_policy=nan_policy,
-        )
-
-    def integrate_moment(
-        self,
-        left: str | tuple[str, ...] | torch.Tensor,
-        right: str | tuple[str, ...] | torch.Tensor,
-        *,
-        aligned_dims: int = 0,
-        accumulation_dtype: torch.dtype | None = torch.float32,
-        nan_policy: Literal["omit", "propagate"] = "omit",
-    ) -> torch.Tensor:
-        r"""Integrate the outer product of two cell-centered fields.
-
-        Computes the P0 quadrature moment
-        :math:`M = \sum_c |\sigma_c|\, a_c \otimes b_c`, where ``a`` is
-        ``left``, ``b`` is ``right``, and :math:`|\sigma_c|` is the cell's
-        effective measure (see
-        :mod:`physicsnemo.mesh.calculus.measure`).  By default the result has
-        shape
-        ``left.shape[1:] + right.shape[1:]``.  ``aligned_dims`` may
-        designate a common leading subset of the trailing dimensions as
-        independent groups; those axes appear only once in the output
-        rather than participating in the outer product.
-
-        Parameters
-        ----------
-        left, right : str, tuple[str, ...], or torch.Tensor
-            Cell-centered fields.  String and tuple keys are resolved from
-            ``cell_data``.  Their leading dimensions must equal
-            ``n_cells``; arbitrary trailing dimensions are supported.
-        aligned_dims : int, default=0
-            Number of leading trailing dimensions shared by ``left`` and
-            ``right`` and treated as aligned batch/group axes.  For
-            example, inputs shaped ``(N, H, A)`` and ``(N, H, B)`` with
-            ``aligned_dims=1`` produce ``(H, A, B)`` instead of
-            ``(H, A, H, B)``.
-        accumulation_dtype : torch.dtype or None, default torch.float32
-            Minimum dtype used by the weighted matrix product.  The default
-            accumulates reduced-precision inputs in at least FP32 without
-            downcasting FP64 inputs.  Pass ``None`` to use ordinary input
-            promotion with no additional precision floor.
-        nan_policy : {"omit", "propagate"}, default "omit"
-            ``"omit"`` replaces NaN field contributions with zero before
-            the matrix product.  ``"propagate"`` leaves them untouched.
-
-        Returns
-        -------
-        torch.Tensor
-            Weighted outer-product moment with shape ``aligned_shape +
-            left_event_shape + right_event_shape``.
-
-        Raises
-        ------
-        KeyError
-            If a named field is absent from ``cell_data``.
-        TypeError
-            If ``aligned_dims`` is not an integer or ``accumulation_dtype``
-            is not floating-point or complex.
-        ValueError
-            If the mesh has no cells, a leading dimension is wrong, aligned
-            dimensions are invalid, or ``nan_policy`` is invalid.
-
-        Examples
-        --------
-        >>> import torch
-        >>> from physicsnemo.mesh import Mesh
-        >>> pts = torch.tensor([[0., 0.], [1., 0.], [0.5, 1.]])
-        >>> cells = torch.tensor([[0, 1, 2]])
-        >>> mesh = Mesh(points=pts, cells=cells)
-        >>> mesh.cell_data["a"] = torch.tensor([[1.0, 2.0]])
-        >>> mesh.cell_data["b"] = torch.tensor([[3.0, 4.0]])
-        >>> mesh.integrate_moment("a", "b")
-        tensor([[1.5000, 2.0000],
-                [3.0000, 4.0000]])
-        """
-        from physicsnemo.mesh.calculus.integration import integrate_moment
-
-        return integrate_moment(
-            mesh=self,
-            left=left,
-            right=right,
-            aligned_dims=aligned_dims,
-            accumulation_dtype=accumulation_dtype,
-            nan_policy=nan_policy,
-        )
+    integrate_moment = integrate_moment
 
     def gradient(
         self,
@@ -3393,75 +2728,18 @@ class Mesh:
                     f"Invalid {data_source=!r}. Must be 'points' or 'cells'."
                 )
 
-    def validate(
-        self,
-        check_degenerate_cells: bool = True,
-        check_duplicate_vertices: bool = True,
-        check_inverted_cells: bool = False,
-        check_out_of_bounds: bool = True,
-        check_manifoldness: bool = False,
-        tolerance: float = 1e-10,
-        raise_on_error: bool = False,
-    ):
-        """Validate mesh integrity and detect common errors.
-
-        Convenience method that delegates to physicsnemo.mesh.validation.validate_mesh.
-
-        Parameters
-        ----------
-        check_degenerate_cells : bool, optional
-            Check for zero/negative area cells.
-        check_duplicate_vertices : bool, optional
-            Check for coincident vertices.
-        check_inverted_cells : bool, optional
-            Check for negative orientation.
-        check_out_of_bounds : bool, optional
-            Check cell indices are valid.
-        check_manifoldness : bool, optional
-            Check manifold topology (2D only).
-        tolerance : float, optional
-            Tolerance for geometric checks.
-        raise_on_error : bool, optional
-            Raise ValueError on first error vs return report.
-
-        Returns
-        -------
-        dict
-            Dictionary with validation results.
-
-        Examples
-        --------
-        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
-        >>> mesh = two_triangles_2d.load()
-        >>> report = mesh.validate()
-        >>> assert report["valid"] == True
-        """
-        from physicsnemo.mesh.validation import validate_mesh
-
-        return validate_mesh(
-            mesh=self,
-            check_degenerate_cells=check_degenerate_cells,
-            check_duplicate_vertices=check_duplicate_vertices,
-            check_inverted_cells=check_inverted_cells,
-            check_out_of_bounds=check_out_of_bounds,
-            check_manifoldness=check_manifoldness,
-            tolerance=tolerance,
-            raise_on_error=raise_on_error,
-        )
+    ### Validation
 
     @property
-    def quality_metrics(self):
-        """Compute geometric quality metrics for all cells.
+    def quality_metrics(self) -> TensorDict:
+        """Compute geometric quality metrics for every cell.
 
         Returns
         -------
         TensorDict
-            Per-cell quality metrics:
-
-            - aspect_ratio: max_edge / characteristic_length
-            - edge_length_ratio: max_edge / min_edge
-            - min_angle, max_angle: Interior angles (triangles only)
-            - quality_score: Combined metric in [0,1] (1.0 is perfect)
+            Per-cell metrics including normalized aspect ratio, edge-length
+            ratio, minimum and maximum angles, and a combined quality score.
+            A regular simplex has aspect ratio and quality score equal to 1.
 
         Examples
         --------
@@ -3469,20 +2747,32 @@ class Mesh:
         >>> mesh = two_triangles_2d.load()
         >>> metrics = mesh.quality_metrics
         >>> assert "quality_score" in metrics.keys()
+
+        See Also
+        --------
+        physicsnemo.mesh.validation.compute_quality_metrics
+            Standalone functional form.
         """
         from physicsnemo.mesh.validation import compute_quality_metrics
 
         return compute_quality_metrics(self)
 
     @property
-    def statistics(self):
-        """Compute summary statistics for mesh.
+    def statistics(
+        self,
+    ) -> Mapping[
+        str,
+        builtins.int
+        | builtins.float
+        | tuple[builtins.float, builtins.float, builtins.float, builtins.float],
+    ]:
+        """Compute summary statistics for the mesh.
 
         Returns
         -------
-        dict
-            Mesh statistics including counts, edge length distributions,
-            area distributions, and quality metrics.
+        Mapping
+            Mesh counts and distributions of edge lengths, cell measures,
+            aspect ratios, and quality scores.
 
         Examples
         --------
@@ -3490,10 +2780,74 @@ class Mesh:
         >>> mesh = two_triangles_2d.load()
         >>> stats = mesh.statistics
         >>> assert "n_points" in stats and "n_cells" in stats
+
+        See Also
+        --------
+        physicsnemo.mesh.validation.compute_mesh_statistics
+            Standalone functional form, including a configurable degeneracy
+            tolerance.
         """
         from physicsnemo.mesh.validation import compute_mesh_statistics
 
         return compute_mesh_statistics(self)
+
+    validate = validate
+
+    def remesh(
+        self,
+        n_clusters: builtins.int,
+        *,
+        max_iterations: builtins.int = 4,
+    ) -> "Mesh":
+        """Uniformly remesh a triangle surface using Warp on CPU or CUDA.
+
+        Remeshing creates new topology with approximately ``n_clusters``
+        vertices and discards point and cell data.
+
+        Parameters
+        ----------
+        n_clusters : int
+            Target output vertex count. Must be between 3 and ``n_points``,
+            inclusive.
+        max_iterations : int, optional
+            Maximum centroid-relaxation iterations. Default is ``4``. Values
+            must be non-negative.
+
+        Returns
+        -------
+        Mesh
+            Remeshed triangle surface on the same device and with the same
+            point dtype as this mesh.
+
+        Raises
+        ------
+        TypeError
+            If counts, tuning parameters, or point coordinates have invalid
+            types.
+        ValueError
+            If a count is out of range or geometry is invalid.
+        NotImplementedError
+            If this is not a 2D triangle surface embedded in 3D.
+        ImportError
+            If Warp is unavailable.
+        RuntimeError
+            If cleanup cannot reconstruct a nonempty manifold surface.
+
+        Notes
+        -----
+        Remeshing is non-differentiable. Global data is preserved, while point
+        and cell data are discarded because their associations no longer match
+        the reconstructed topology. Backend-specific tuning is available from
+        the advanced tensor-level
+        :func:`physicsnemo.nn.functional.remeshing` API.
+        """
+        from physicsnemo.mesh.remeshing import remesh
+
+        return remesh(
+            self,
+            n_clusters,
+            max_iterations=max_iterations,
+        )
 
     def subdivide(
         self,

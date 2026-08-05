@@ -43,9 +43,9 @@ defaults:
 # A string naming a file in datasets/ (without the `.yaml` suffix).
 dataset: drivaer_ml_volume
 
-# Additional datasets to combine via MultiDataset.  Each entry names a
-# file in datasets/.  Empty by default; the Transolver+SHIFT recipe
-# sets this to [shift_suv_estate_surface, shift_suv_fastback_surface].
+# Additional datasets to combine via MultiDataset. Each entry names a
+# file in datasets/. Manifest selections are offset into the combined
+# index space independently for every chosen dataset.
 extra_datasets: []
 
 # Manifest-mode split selectors.  Setting these requests manifest mode:

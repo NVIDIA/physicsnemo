@@ -17,7 +17,7 @@
 # GeoTransolver with GALE attention (default).
 # Uses geometry-aware cross-attention instead of Transolver's structured grid.
 
-_target_: physicsnemo.experimental.models.geotransolver.GeoTransolver
+_target_: physicsnemo.models.geotransolver.GeoTransolver
 _convert_: all
 
 functional_dim: 3

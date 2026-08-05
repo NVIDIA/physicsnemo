@@ -297,7 +297,6 @@ utils-extras = [
 ]
 mesh-extras = [
     "matplotlib>=3.10.8",
-    "pyacvd>=0.3.2",
     "pyvista>=0.47.0",
     "vtk>=9.6.0",
 ]
@@ -401,8 +400,14 @@ Fengwu = "physicsnemo.models.fengwu:Fengwu"
 # FIGConvNet
 FIGConvUNet = "physicsnemo.models.figconvnet:FIGConvUNet"
 
+# FLARE
+FLARE = "physicsnemo.models.flare:FLARE"
+
 # FNO
 FNO = "physicsnemo.models.fno:FNO"
+
+# GeoTransolver
+GeoTransolver = "physicsnemo.models.geotransolver:GeoTransolver"
 
 # GraphCast
 GraphCastNet = "physicsnemo.models.graphcast:GraphCastNet"
