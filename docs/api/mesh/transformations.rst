@@ -382,8 +382,7 @@ shared features.
 
 Torch provides the reference search. Warp accelerates nearest-face search on
 CPU and CUDA. Both backends replay the selected point-to-triangle projection
-with PyTorch in the input dtype. The full example is
-``examples/minimal/mesh/shrinkwrap_panel_conformance.py``.
+with PyTorch in the input dtype.
 Shrinkwrap is available on :class:`~physicsnemo.mesh.mesh.Mesh`, not
 :class:`~physicsnemo.mesh.domain_mesh.DomainMesh`, because one source mesh is
 projected onto one target surface.
@@ -426,9 +425,6 @@ arbitrary inputs.
 .. figure:: ../../img/mesh/shrinkwrap_solid_surface.png
    :alt: Selective repair of an optimized enclosure crossing a clearance plane
    :width: 100%
-
-The full example is
-``examples/minimal/mesh/shrinkwrap_solid_surface.py``.
 
 Domain Meshes
 ^^^^^^^^^^^^^

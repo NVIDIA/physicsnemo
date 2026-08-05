@@ -43,14 +43,13 @@ pip install -e ".[mesh]"
 | Tutorial | Topic | What You'll Learn |
 |----------|-------|-------------------|
 | **1. Getting Started** | Core concepts | Mesh structure, data attachment, GPU acceleration |
-| **2. Operations** | Mesh manipulation | Transformations, displacement, morphing, subdivision, slicing, merging |
+| **2. Operations** | Mesh manipulation | Transformations, subdivision, slicing, merging |
 | **3. Discrete Calculus** | Mathematical operators | Gradients, divergence, curl, curvature |
 | **4. Neighbors & Spatial** | Queries | Adjacency, BVH, sampling, interpolation |
 | **5. Quality & Repair** | Mesh health | Validation, quality metrics, repair |
 | **6. ML Integration** | Production workflows | Performance, batching, torch.compile |
 | **7. Domain Mesh** | Simulation domains | DomainMesh, boundaries, transforms, validation |
 | **8. I/O, Interop & Serialization** | Getting data in/out | PyVista import/export, polygon tessellation, save/load |
-| **Deformation energy example** | Shape optimization | RBF deformation with differentiable strain, area, and inversion penalties |
 <!-- markdownlint-enable MD013 -->
 
 ## Running the Tutorials
@@ -98,8 +97,6 @@ Learn the core concepts - a `Mesh` is just 5 fields: 2 for geometry, 3 for data.
 Learn mesh manipulation operations.
 
 - Geometric transformations (translate, rotate, scale, transform)
-- Dense point displacement from tensors or point-data fields
-- Sparse control-point morphing with single or multiple controls
 - Subdivision schemes (linear, Loop, Butterfly)
 - Slicing (slice_cells, slice_points)
 - Merging multiple meshes
@@ -203,54 +200,6 @@ Generate simulation-ready volume meshes from scratch in two ways.
 - Tetrahedralizing 3D implicit domains
 - Extracting isosurfaces with `marching_cubes`
 - Computing shape gradients through the mesh (differentiable meshing)
-
-### Differentiable Deformation Energy Optimization
-
-**File**: `deformation_energy_optimization.py`
-
-Run a compact shape-optimization example that preserves a prescribed
-radial-basis handle displacement while penalizing strain, total-area change,
-and element inversion. The script uses the Warp backend on CUDA when available
-and falls back to Torch on CPU.
-
-## Standalone Examples
-
-### Curved Panel Conformance
-
-**File**: `shrinkwrap_panel_conformance.py`
-
-Shrinkwrap a lifted triangle sheet onto a swept target panel while preserving
-a fixed root strip:
-
-```bash
-python examples/minimal/mesh/shrinkwrap_panel_conformance.py \
-    --output shrinkwrap_panel_conformance.png
-```
-
-The script always validates the Torch reference backend on CPU and additionally
-checks Warp on CUDA when available. The output compares the triangle target,
-the imperfect shell, and the conforming result colored by correction
-magnitude.
-
-### Shape-Optimization Constraint Projection
-
-**File**: `shrinkwrap_solid_surface.py`
-
-Repair a localized constraint violation on a simulated optimized solid:
-
-```bash
-python examples/minimal/mesh/shrinkwrap_solid_surface.py \
-    --output shrinkwrap_solid_surface.png
-```
-
-The example builds a closed triangulated low-profile enclosure with an inset
-lid and chamfered walls. Its broad gold lid deformation stays below a blue
-clearance plane, while one smooth orange dome crosses the limit. A boolean
-point mask selects only the vertices above the plane. Shrinkwrap repairs that
-cap in green and preserves the admissible optimized surface exactly. The
-script validates the repaired-cap residual, exact preservation of unselected
-vertices, closed connectivity, positive enclosed volume, adjoints, and Torch
-versus Warp agreement.
 
 ## Assets
 

@@ -18,7 +18,7 @@
 
 This documentation figure is self-contained. It builds both meshes directly
 with PyTorch, calls the real :meth:`physicsnemo.mesh.Mesh.shrinkwrap` API, and
-renders all three panels without importing code from the runnable example.
+renders all three panels directly.
 
 The Torch backend is validated on CPU. When CUDA is available, the Warp result
 is also checked against Torch.
