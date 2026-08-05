@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DomainMeshReader` transparently read zarr stores alongside
   `.pmsh`/`.pdmsh` (opt in via `pattern`). Requires optional `zarr >= 3`
   and a tensordict release with the zarr backend.
+- Adds configurable activation checkpointing to Transolver and GeoTransolver.
+  GeoTransolver supports checkpointing context construction, per-stream input
+  projections, GALE blocks, and output projections, with PyTorch and
+  Transformer Engine checkpoint backends.
 - Promotes GeoTransolver out of `experimental` to
   `physicsnemo.models.geotransolver.GeoTransolver`, together with the FLARE
   model (`physicsnemo.models.flare.FLARE`) and the reusable GALE and FLARE

@@ -20,6 +20,8 @@ Transolver's parameters are all replicated, so it is distributed with DDP while
 the point/functional inputs are sharded along the sequence axis; ShardTensor
 auto-promotion handles the plain weights meeting sharded activations. The shared
 harness runs the distributed forward/backward against a single-GPU reference.
+The cases cover both the legacy default path and activation checkpointing, so
+backward recomputation also exercises the differentiable cross-rank reductions.
 """
 
 import numpy
@@ -35,7 +37,7 @@ from test.domain_parallel.models.harness import (
 )
 
 
-def _build_transolver(structured_shape):
+def _build_transolver(structured_shape, activation_checkpointing):
     """Construct a small Transolver for distributed checks."""
 
     def build(device):
@@ -55,9 +57,20 @@ def _build_transolver(structured_shape):
             ref=1,
             unified_pos=False,
             use_te=False,
+            activation_checkpointing=activation_checkpointing,
         ).to(device)
 
     return build
+
+
+def _local_mean_loss(output):
+    """Use the production ShardTensor boundary before scalar backward."""
+    if hasattr(output, "to_local"):
+        # ShardTensor's replicated-parameter bridge sums gradient
+        # contributions across the domain mesh. Scale each rank-local mean so
+        # that the sum equals the mean over the full token domain.
+        return output.to_local().mean() / output.device_mesh.size()
+    return output.mean()
 
 
 # Per-axis side length by dimensionality. The harness builds a *full* (gathered)
@@ -69,7 +82,7 @@ def _build_transolver(structured_shape):
 _SIDE_BY_NDIMS = {2: 128, 3: 24}
 
 
-def _nd_case(n_dims):
+def _nd_case(n_dims, activation_checkpointing):
     """A structured n-D case; inputs sharded along the sequence axis (dim 1)."""
     spatial_dims = (_SIDE_BY_NDIMS[n_dims],) * n_dims
 
@@ -96,11 +109,18 @@ def _nd_case(n_dims):
         assert d_out._spec.placements == (Shard(1),)
 
     return DomainParallelModelCase(
-        name=f"structured_{n_dims}d",
-        build_model=_build_transolver(spatial_dims),
+        name=(
+            f"structured_{n_dims}d-"
+            f"{'checkpointed' if activation_checkpointing else 'default'}"
+        ),
+        build_model=_build_transolver(spatial_dims, activation_checkpointing),
         build_inputs=build_inputs,
         shard_inputs=shard_inputs,
         output_check_fn=check_output,
+        loss_fn=_local_mean_loss,
+        # Preserve the historical eval-mode reference for the default path;
+        # checkpointing cases must train so recomputation is exercised.
+        train_mode=activation_checkpointing,
         # Structured attention uses convs; the sharded path runs them on a
         # local shard + halo while the reference runs the full grid, and cuDNN
         # picks different algorithms per input size. The resulting fp32
@@ -111,7 +131,7 @@ def _nd_case(n_dims):
     )
 
 
-def _irregular_case():
+def _irregular_case(activation_checkpointing):
     """An unstructured (point-cloud) case; sequence axis sharded (dim 1)."""
     spatial_dims = (16384,)
 
@@ -135,15 +155,27 @@ def _irregular_case():
         assert d_out._spec.placements == (Shard(1),)
 
     return DomainParallelModelCase(
-        name="irregular",
-        build_model=_build_transolver(None),
+        name=(f"irregular-{'checkpointed' if activation_checkpointing else 'default'}"),
+        build_model=_build_transolver(None, activation_checkpointing),
         build_inputs=build_inputs,
         shard_inputs=shard_inputs,
         output_check_fn=check_output,
+        loss_fn=_local_mean_loss,
+        # Preserve the historical eval-mode reference for the default path;
+        # checkpointing cases must train so recomputation is exercised.
+        train_mode=activation_checkpointing,
     )
 
 
-_CASES = [_nd_case(2), _nd_case(3), _irregular_case()]
+_CASES = [
+    case
+    for activation_checkpointing in (False, True)
+    for case in (
+        _nd_case(2, activation_checkpointing),
+        _nd_case(3, activation_checkpointing),
+        _irregular_case(activation_checkpointing),
+    )
+]
 
 
 @pytest.mark.multigpu_static

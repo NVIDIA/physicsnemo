@@ -42,6 +42,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from jaxtyping import Float
+from torch.utils.checkpoint import checkpoint as activation_checkpoint
 
 import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.meta import ModelMetaData
@@ -380,6 +381,12 @@ class Transolver(Module):
         Whether to include time embeddings.
     plus : bool, optional, default=False
         Whether to use Transolver++ variant.
+    activation_checkpointing : bool | float, optional, default=False
+        Activation checkpointing of Transolver blocks during training. ``True``
+        or ``1.0`` checkpoints all blocks, ``False`` or ``0.0`` disables
+        checkpointing, and a value in ``(0, 1)`` checkpoints that leading
+        fraction of blocks. Checkpointing trades additional computation during
+        the backward pass for lower activation memory usage.
 
     Forward
     -------
@@ -462,6 +469,7 @@ class Transolver(Module):
         use_te: bool = True,
         time_input: bool = False,
         plus: bool = False,
+        activation_checkpointing: bool | float = False,
     ) -> None:
         super().__init__(meta=MetaData())
 
@@ -495,6 +503,9 @@ class Transolver(Module):
 
         self.structured_shape = structured_shape
         self.unified_pos = unified_pos
+        self._activation_checkpointing_ratio = self._parse_checkpointing_param(
+            activation_checkpointing
+        )
 
         # Set up positional embeddings
         if unified_pos:
@@ -562,6 +573,69 @@ class Transolver(Module):
             ]
         )
         self.initialize_weights()
+
+    @staticmethod
+    def _parse_checkpointing_param(
+        activation_checkpointing: bool | float,
+    ) -> float:
+        r"""Parse the activation-checkpointing argument into a ratio.
+
+        Parameters
+        ----------
+        activation_checkpointing : bool | float
+            ``True`` / ``1.0`` for all blocks, ``False`` / ``0.0`` for none,
+            or a fraction in ``(0, 1)``.
+
+        Returns
+        -------
+        float
+            The fraction of leading Transolver blocks to checkpoint.
+        """
+        # ``bool`` is a subclass of ``int``, so handle it before numbers.
+        if isinstance(activation_checkpointing, bool):
+            return 1.0 if activation_checkpointing else 0.0
+        if not isinstance(activation_checkpointing, (int, float)):
+            raise TypeError(
+                "activation_checkpointing must be bool or numeric, got "
+                f"{type(activation_checkpointing).__name__}"
+            )
+
+        ratio = float(activation_checkpointing)
+        if not 0.0 <= ratio <= 1.0:
+            raise ValueError(
+                "activation_checkpointing must be bool or a float in [0, 1], "
+                f"got {ratio}"
+            )
+        return ratio
+
+    def _should_checkpoint_block(self, block_idx: int) -> bool:
+        r"""Return whether a block should use activation checkpointing."""
+        if not self.training or not torch.is_grad_enabled():
+            return False
+
+        # Full-object pickles created before activation checkpointing was added
+        # bypass ``__init__`` when loaded and therefore do not have this
+        # attribute. Treat those models exactly like the historical default.
+        ratio = getattr(self, "_activation_checkpointing_ratio", 0.0)
+        if ratio <= 0.0:
+            return False
+        if ratio >= 1.0:
+            return True
+        return block_idx < round(ratio * len(self.blocks))
+
+    def _checkpoint_block(
+        self, block: TransolverBlock, fx: torch.Tensor
+    ) -> torch.Tensor:
+        r"""Checkpoint a block with the backend-appropriate implementation.
+
+        Transformer Engine's wrapper establishes the activation-recompute
+        contexts needed by its modules, including FP8 state and CUDA RNG
+        handling. The native PyTorch backend uses the recommended
+        non-reentrant checkpoint implementation directly.
+        """
+        if self.use_te:
+            return te.checkpoint(block, fx, use_reentrant=False)
+        return activation_checkpoint(block, fx, use_reentrant=False)
 
     def initialize_weights(self) -> None:
         r"""Initialize model weights using truncated normal distribution."""
@@ -725,8 +799,11 @@ class Transolver(Module):
             fx = fx + time_emb
 
         # Apply transformer blocks
-        for block in self.blocks:
-            fx = block(fx)
+        for block_idx, block in enumerate(self.blocks):
+            if self._should_checkpoint_block(block_idx):
+                fx = self._checkpoint_block(block, fx)
+            else:
+                fx = block(fx)
 
         # Reshape back to structured format if needed
         if self.structured_shape is not None:
