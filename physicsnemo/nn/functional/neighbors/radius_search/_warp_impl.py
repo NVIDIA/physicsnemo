@@ -67,12 +67,14 @@ def count_neighbors(
         wp_launch_stream (wp.Stream | None): The stream to launch the kernel on.
         radius (float): The radius that bounds the search.
         N_queries (int): Total number of query points.
-        sync (bool): If True, copies count to CPU and returns (int, wp_offset).
-            If False, returns (gpu_count_tensor, wp_offset) for batched sync.
+        sync (bool): If True, copies count to CPU and returns
+            ``(int, torch_offset)``. If False, returns
+            ``(gpu_count_tensor, torch_offset)`` for batched sync.
 
     Returns:
-        When sync=True: tuple[int, wp.array] -- total count and offset array.
-        When sync=False: tuple[torch.Tensor, wp.array] -- GPU-side count tensor and offset array.
+        When sync=True: tuple[int, torch.Tensor] -- total count and int64 offsets.
+        When sync=False: tuple[torch.Tensor, torch.Tensor] -- GPU-side count
+        tensor and int64 offsets.
     """
     wp_result_count = wp.zeros(N_queries, device=wp_points.device, dtype=wp.int32)
 
@@ -86,19 +88,26 @@ def count_neighbors(
         block_dim=BLOCK_DIM,
     )
 
-    wp_offset = wp.zeros(N_queries + 1, device=wp_points.device, dtype=wp.int32)
-    torch_offset = wp.to_torch(wp_offset)
     torch_result_count = wp.to_torch(wp_result_count)
-    torch.cumsum(torch_result_count, dim=0, out=torch_offset[1:])
+    torch_offset_64 = torch.empty(
+        N_queries + 1, device=torch_result_count.device, dtype=torch.int64
+    )
+    torch_offset_64[0] = 0
+    torch.cumsum(
+        torch_result_count,
+        dim=0,
+        dtype=torch.int64,
+        out=torch_offset_64[1:],
+    )
 
     if sync:
         pin_memory = torch.cuda.is_available()
-        pinned_buffer = torch.zeros(1, dtype=torch.int32, pin_memory=pin_memory)
-        pinned_buffer.copy_(torch_offset[-1:])
-        return pinned_buffer.item(), wp_offset
+        pinned_buffer = torch.zeros(1, dtype=torch.int64, pin_memory=pin_memory)
+        pinned_buffer.copy_(torch_offset_64[-1:])
+        return pinned_buffer.item(), torch_offset_64
 
     # Return the last element as a 1-element GPU tensor for batch-sync later
-    return torch_offset[-1:], wp_offset
+    return torch_offset_64[-1:], torch_offset_64
 
 
 def gather_neighbors(
@@ -247,9 +256,9 @@ def radius_search_impl(
 
             # Count pass: collect all counts without syncing individually
             count_tensors = []
-            wp_offsets = []
+            offset_tensors = []
             for b in range(B):
-                count_t, wp_off = count_neighbors(
+                count_t, offsets = count_neighbors(
                     grids[b],
                     wp_points_per_b[b],
                     wp_queries_per_b[b],
@@ -260,7 +269,7 @@ def radius_search_impl(
                     sync=(B == 1),
                 )
                 count_tensors.append(count_t)
-                wp_offsets.append(wp_off)
+                offset_tensors.append(offsets)
 
             # Sync: for B==1 count_tensors[0] is already an int;
             # for B>1 we batch-sync all GPU tensors at once
@@ -269,15 +278,24 @@ def radius_search_impl(
             else:
                 gpu_counts = torch.cat(count_tensors, dim=0)
                 pin_memory = torch.cuda.is_available()
-                cpu_counts = torch.zeros(B, dtype=torch.int32, pin_memory=pin_memory)
+                cpu_counts = torch.zeros(B, dtype=torch.int64, pin_memory=pin_memory)
                 cpu_counts.copy_(gpu_counts)
                 total_counts = cpu_counts.tolist()
 
             for tc in total_counts:
-                if not tc < 2**31 - 1:
+                if tc >= torch.iinfo(torch.int32).max:
                     raise RuntimeError(
                         f"Total found neighbors is too large: {tc} >= 2**31 - 1"
                     )
+
+            # The kernels use int32 offsets. Cast only after every int64 total
+            # has passed the range check above.
+            offset_tensors_i32 = [
+                offsets.to(dtype=torch.int32) for offsets in offset_tensors
+            ]
+            wp_offsets = [
+                wp.from_torch(offsets, dtype=wp.int32) for offsets in offset_tensors_i32
+            ]
 
             # Gather per batch element, concatenate with batch indices
             all_indices = []

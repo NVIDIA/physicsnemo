@@ -29,7 +29,7 @@ GALE
     Geometry-Aware Latent Embeddings attention layer.
 GALE_FA
     GALE with FLARE self-attention backend.
-GALE_block
+GALEBlock
     Transformer block using GALE or GALE_FA attention.
 GALEStructuredMesh2D
     GALE with Conv2d slice projection for 2D structured grids.
@@ -76,7 +76,7 @@ from physicsnemo.nn import (
     GALE,
     GALE_FA,
     ConcreteDropout,
-    GALE_block,
+    GALEBlock,
     GALEStructuredMesh2D,
     GALEStructuredMesh3D,
     collect_concrete_dropout_losses,
@@ -97,7 +97,7 @@ __all__ = [
     "GeoTransolverMetaData",
     "GALE",
     "GALE_FA",
-    "GALE_block",
+    "GALEBlock",
     "GALEStructuredMesh2D",
     "GALEStructuredMesh3D",
     "ContextProjector",

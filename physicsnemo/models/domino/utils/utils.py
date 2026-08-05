@@ -28,7 +28,7 @@ from typing import Any, Sequence
 import torch
 from jaxtyping import Float, Int
 
-from physicsnemo.nn.functional import knn
+from physicsnemo.nn.functional import knn, weighted_multinomial
 
 
 def calculate_center_of_mass(
@@ -509,12 +509,6 @@ def shuffle_array(
 
     Optionally, you can provide weights to use in the sampling.
 
-    Note
-    ----
-    The implementation with ``torch.multinomial`` is constrained to
-    :math:`2^{24}` points. If the input is larger than that, it will be
-    split and sampled from each chunk.
-
     Parameters
     ----------
     points : torch.Tensor
@@ -552,50 +546,12 @@ def shuffle_array(
     if N_input_points < n_points:
         return points, torch.arange(N_input_points)
 
-    # If there are no weights, use uniform weights:
-    if weights is None:
-        weights = torch.ones(points.shape[0], device=points.device)
-
-    # Using torch multinomial for this.
-    # Multinomial can't work with more than 2^24 input points.
-
-    # So apply chunking and stich back together in that case.
-    # Assume each chunk gets a number proportional to it's size,
-    # (but make sure they add up to n_points!)
-
-    max_chunk_size = 2**24
-
-    N_chunks = (N_input_points // max_chunk_size) + 1
-
-    # Divide the weights into these chunks
-    chunk_weights = torch.chunk(weights, N_chunks)
-
-    # Determine how mant points to compute per chunk:
-    points_per_chunk = [
-        round(n_points * c.shape[0] / N_input_points) for c in chunk_weights
-    ]
-
-    gap = n_points - sum(points_per_chunk)
-
-    if gap > 0:
-        for g in range(gap):
-            points_per_chunk[g] += 1
-    elif gap < 0:
-        for g in range(-gap):
-            points_per_chunk[g] -= 1
-
-    # Create a list of indexes per chunk:
-    idx_chunks = [
-        torch.multinomial(
-            w,
-            p,
-            replacement=False,
-        )
-        for w, p in zip(chunk_weights, points_per_chunk)
-    ]
-
-    # Stitch the chunks back together:
-    idx = torch.cat(idx_chunks)
+    sampling_input = weights if weights is not None else N_input_points
+    idx = weighted_multinomial(
+        sampling_input,
+        n_points,
+        device=points.device,
+    )
 
     # Apply the selection:
     points_selected = points[idx]
@@ -985,7 +941,7 @@ def area_weighted_shuffle_array(
     Note
     ----
     For GPU tensors, the sampling is performed on the current device.
-    The sampling uses ``torch.multinomial`` for efficient weighted sampling.
+    Sampling uses the uncapped exact ``weighted_multinomial`` functional.
 
     Examples
     --------
@@ -1052,7 +1008,7 @@ def solution_weighted_shuffle_array(
     Note
     ----
     For GPU tensors, the sampling is performed on the current device.
-    The sampling uses ``torch.multinomial`` for efficient weighted sampling.
+    Sampling uses the uncapped exact ``weighted_multinomial`` functional.
 
     Examples
     --------
@@ -1141,7 +1097,7 @@ def sample_points_on_mesh(
             mesh_areas = 0.5 * normals_norm
 
     # Next, use the areas to compute a weighted sampling of the triangles:
-    target_triangles = torch.multinomial(
+    target_triangles = weighted_multinomial(
         mesh_areas,
         n_points,
         replacement=True,

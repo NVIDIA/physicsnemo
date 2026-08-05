@@ -188,12 +188,13 @@ class FLARE(nn.Module):
         self.self_v = linear_layer(dim_head, dim_head)
 
         # Transformer Engine cross-attention supports the unequal global and
-        # token sequence lengths used by both FLARE attention passes.
+        # token sequence lengths used by both FLARE attention passes. Keep
+        # dropout in out_dropout so TE and PyTorch use the same dropout site.
         if self.use_te:
             self.attn_fn = te.DotProductAttention(
                 num_attention_heads=self.heads,
                 kv_channels=self.dim_head,
-                attention_dropout=dropout,
+                attention_dropout=0.0,
                 attn_mask_type="no_mask",
                 attention_type="cross",
                 qkv_format="bshd",

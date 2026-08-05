@@ -36,7 +36,7 @@ from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.models.transolver.transolver import _TransolverMlp
-from physicsnemo.nn import GALE_block
+from physicsnemo.nn import GALEBlock
 
 from .context_projector import GlobalContextBuilder
 
@@ -318,7 +318,7 @@ class GeoTransolver(Module):
     See Also
     --------
     :class:`~physicsnemo.nn.module.gale.GALE` : The attention mechanism used in GeoTransolver.
-    :class:`~physicsnemo.nn.module.gale.GALE_block` : Transformer block using GALE attention.
+    :class:`~physicsnemo.nn.module.gale.GALEBlock` : Transformer block using GALE attention.
     :class:`~physicsnemo.models.geotransolver.context_projector.ContextProjector` : Projects context features onto physical states.
 
     Examples
@@ -506,7 +506,7 @@ class GeoTransolver(Module):
         # GALE transformer blocks
         self.blocks = nn.ModuleList(
             [
-                GALE_block(
+                GALEBlock(
                     num_heads=n_head,
                     hidden_dim=effective_hidden,
                     dropout=dropout,

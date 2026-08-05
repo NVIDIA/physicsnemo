@@ -89,10 +89,14 @@ performance benefits.
   (interpolating) schemes
 - **Smoothing**: [Laplacian smoothing](https://en.wikipedia.org/wiki/Laplacian_smoothing)
   with feature preservation
-- **Remeshing**: Uniform remeshing via clustering (dimension-agnostic)
+- **Remeshing**: Uniform Warp-based remeshing on CPU and CUDA for triangle
+  surfaces embedded in 3D
 - **Repair**: Remove duplicates, fix orientation, fill holes, clean topology
-- **Morphing**: Dense point displacement and sparse, compactly supported
-  control-point deformation
+- **Morphing**: Dense point displacement, sparse compact control-point
+  deformation, and global radial-basis deformation
+- **Deformation Energies**: Differentiable strain, local and total measure,
+  inversion, triangle-hinge bending, and enclosed-volume penalties for
+  fixed-topology optimization
 - **Tessellation**: Triangulate polygon soups into simplicial meshes (convex
   fan + [ear clipping](https://en.wikipedia.org/wiki/Polygon_triangulation) for
   non-convex polygons); also `Mesh.from_polygons`
@@ -305,7 +309,7 @@ Comprehensive overview of PhysicsNeMo-Mesh capabilities:
 | **Smoothing** | | |
 | Laplacian smoothing | ✅ | |
 | **Remeshing** | | |
-| Uniform remeshing | ✅ | Clustering-based |
+| Uniform remeshing | ✅ | Warp (CPU and CUDA) |
 | **Tessellation** | | |
 | Polygon-soup triangulation | ✅ | Convex fan + ear-clip; `Mesh.from_polygons` |
 | **Spatial Queries** | | |
@@ -323,6 +327,13 @@ Comprehensive overview of PhysicsNeMo-Mesh capabilities:
 | Arbitrary matrix transform | ✅ | |
 | Dense point displacement | ✅ | Aligned tensor or `point_data` key, with optional point weights |
 | Sparse control-point morphing | ✅ | Wendland-C2 compact support with scalar or per-control radii |
+| Global radial-basis deformation | ✅ | Thin-plate-spline field with an affine polynomial tail |
+| **Deformation energies** | | |
+| Simplex strain | ✅ | Reference-relative St. Venant--Kirchhoff energy |
+| Local and total measure | ✅ | Length, area, or volume penalty |
+| Inversion | ✅ | Signed-Jacobian penalty for full-dimensional simplices |
+| Surface bending | ✅ | Reference-relative triangle-hinge energy |
+| Enclosed volume | ✅ | One edge-connected, closed, consistently oriented triangle surface |
 | Extrusion | ✅ | Manifold → higher dimension |
 | Coordinate projection (drop ambient dims) | ✅ | `projections.project` (e.g. 3D → 2D embedding) |
 | Surface projection / mesh intersection | ❌ | Manifold → lower *manifold* dimension; work in progress |
@@ -373,7 +384,7 @@ mesh_rotated = mesh.rotate(axis=[0, 0, 1], angle=np.pi/4)
 mesh_scaled = mesh.scale(2.0)  # Or [2.0, 1.0, 0.5] for anisotropic
 ```
 
-### Dense and Sparse Morphing
+### Dense and Sparse Deformation
 
 ```python
 import torch
@@ -395,14 +406,35 @@ morphed = mesh.morph(
     control_displacements,
     radius=0.4 * extent.norm(),
 )
+
+# Global radial-basis deformation: use D + 1 affinely independent box controls
+if torch.any(extent == 0):
+    raise ValueError("RBF example requires nonzero mesh extent in every dimension")
+box_origin = mesh.points.amin(dim=0)
+rbf_controls = torch.cat(
+    (box_origin.unsqueeze(0), box_origin.unsqueeze(0) + torch.diag(extent))
+)
+rbf_displacements = torch.zeros_like(rbf_controls)
+rbf_displacements[-1, -1] = 0.1 * extent.norm()
+rbf_deformed = mesh.radial_basis_function_deform(
+    rbf_controls,
+    rbf_displacements,
+    kernel="thin_plate_spline",
+)
 ```
 
 Tensor-valued radii must remain finite and strictly positive. For a learned
 radius, use a positive parameterization such as
-`torch.nn.functional.softplus(raw_radius) + radius_epsilon`; tensor radius
+`torch.nn.functional.softplus(raw_radius) + radius_epsilon`. Tensor radius
 values are not validated at runtime. Floating `point_weights` are applied as
 supplied and may be signed or greater than one. The current morphing kernel is
 `"wendland_c2"`, which is also the default.
+
+Thin-plate-spline radial-basis deformation has global support. With its default
+affine polynomial tail, `smoothing=0.0`, and a nonsingular control layout, it
+interpolates every control displacement up to solver precision. Positive
+smoothing adds diagonal regularization and deliberately relaxes interpolation
+accuracy.
 
 ### Subdivision
 
@@ -411,6 +443,29 @@ refined = mesh.subdivide(levels=2, filter="linear")    # Topology only
 smooth = mesh.subdivide(levels=2, filter="loop")       # C² continuous
 interp = mesh.subdivide(levels=2, filter="butterfly")  # Interpolating
 ```
+
+### Remeshing
+
+```python
+# The result remains on the input device.
+coarse = mesh.remesh(n_clusters=1_000)
+
+# Move the mesh to CUDA first to accelerate large inputs.
+coarse_cuda = mesh.to("cuda").remesh(n_clusters=1_000)
+
+# Backend tuning is available through the advanced tensor functional.
+from physicsnemo.nn.functional.geometry.remeshing import remeshing
+
+tuned_points, tuned_cells = remeshing(
+    mesh.points,
+    mesh.cells,
+    n_clusters=1_000,
+    search_radius_scale=2.0,
+)
+```
+
+Remeshing currently supports triangle surfaces embedded in 3D. It creates new
+topology, so point and cell data are discarded. Global data is preserved.
 
 ### Discrete Calculus
 
@@ -604,6 +659,8 @@ Key design decisions enable these principles:
   interpolation
 - [`physicsnemo.mesh.transformations`](./transformations/) - Geometric
   operations
+- [`physicsnemo.mesh.deformation`](./deformation/) - Differentiable
+  fixed-topology deformation energies
 - [`physicsnemo.mesh.repair`](./repair/) - Mesh cleaning and topology
   repair
 - [`physicsnemo.mesh.validation`](./validation/) - Quality metrics

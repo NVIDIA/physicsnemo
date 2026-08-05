@@ -137,6 +137,17 @@ def signed_distance_field_impl(
         raise ValueError(
             "mesh_indices must be either 1D flattened indices or 2D (n_faces, 3)"
         )
+    if mesh_indices.numel() == 0 or mesh_indices.numel() % 3 != 0:
+        raise ValueError("mesh_indices must contain complete triangle faces")
+
+    min_index = int(mesh_indices.min().item())
+    max_index = int(mesh_indices.max().item())
+    if min_index < 0 or max_index >= mesh_vertices.shape[0]:
+        raise ValueError(
+            "mesh_indices must index existing vertices; "
+            f"got range [{min_index}, {max_index}] for "
+            f"{mesh_vertices.shape[0]} vertices"
+        )
 
     input_shape = input_points.shape
 
