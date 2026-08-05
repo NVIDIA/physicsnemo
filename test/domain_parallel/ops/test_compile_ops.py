@@ -40,6 +40,7 @@ from torch.distributed.tensor.placement_types import Replicate, Shard
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.domain_parallel import scatter_tensor
+from physicsnemo.domain_parallel.shard_utils.conv_patches import ConvGradReducer
 from physicsnemo.domain_parallel.shard_utils.halo import HaloConfig, unhalo_padding
 from physicsnemo.domain_parallel.shard_utils.point_cloud_ops import GradReducer
 
@@ -170,6 +171,23 @@ class GradReducerWrapper(torch.nn.Module):
 
     def forward(self, tensor: torch.Tensor) -> torch.Tensor:
         return GradReducer.apply(tensor, self.spec)
+
+
+class ConvGradReducerWrapper(torch.nn.Module):
+    r"""``ConvGradReducer.apply(tensor, spec)`` (exercises ``ConvGradReducer``).
+
+    The ``spec`` is captured as a non-tensor module attribute so it is a
+    constant from dynamo's perspective. ``ConvGradReducer`` is the trivial
+    identity in forward; the work happens in backward (all-reduce on sharded
+    mesh dims).
+    """
+
+    def __init__(self, spec):
+        super().__init__()
+        self.spec = spec
+
+    def forward(self, tensor: torch.Tensor) -> torch.Tensor:
+        return ConvGradReducer.apply(tensor, self.spec)
 
 
 # ---------------------------------------------------------------------------
@@ -454,3 +472,32 @@ def test_compile_grad_reducer_1d(distributed_mesh):
     tensor = torch.rand(4, 16, device=dm.device, requires_grad=True)
 
     _run_compile_fwd_bwd(GradReducerWrapper(spec=spec), [tensor])
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(180)
+def test_compile_conv_grad_reducer_1d(distributed_mesh):
+    r"""Compile + backward through ``ConvGradReducer``.
+
+    Forward is identity; backward all-reduces over each sharded mesh dim.
+    We feed a plain tensor + the spec from a Shard-placed ShardTensor so the
+    backward path actually exercises the functional all-reduce.
+    """
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+
+    dm = DistributedManager()
+
+    base = torch.rand(4, 16, device=dm.device)
+    sharded = scatter_tensor(
+        base,
+        global_src=0,
+        mesh=distributed_mesh,
+        placements=(Shard(0),),
+        requires_grad=False,
+    )
+    spec = sharded._spec
+
+    tensor = torch.rand(4, 16, device=dm.device, requires_grad=True)
+
+    _run_compile_fwd_bwd(ConvGradReducerWrapper(spec=spec), [tensor])
