@@ -466,8 +466,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Dependencies
 
-- Pins TensorDict to `tensordict-nightly[zarr]==2026.8.4` to consume the latest
-  nightly TensorDict APIs with Zarr support.
+- Pins TensorDict to `tensordict-nightly[zarr]` to consume the latest
+  nightly TensorDict APIs with Zarr support and several other bugfixes.
 - Removes `pyacvd` from the `mesh-extras` optional dependencies. Remeshing now
   uses NVIDIA Warp.
 - Updates the minimum supported `warp-lang` version to 1.14.0.
