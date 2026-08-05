@@ -119,10 +119,14 @@ class ShardTensorSpec(DTensorSpec):
     def _stable_hash(self) -> str:
         r"""Return a cross-process stable hash of this spec.
 
-        Extends ``DTensorSpec._stable_hash`` with ``_sharding_shapes`` so
-        different uneven layouts do not collide. PyTorch versions before 2.12
-        use the same metadata in a local fallback. Consumed by the AOT autograd
-        cache through ``ShardTensor._stable_hash_for_caching``.
+        Extends ``DTensorSpec._stable_hash`` with ``_sharding_shapes`` and
+        ``_local_shape`` so different uneven layouts do not collide.
+        ``_local_shape`` matters when ``_sharding_shapes`` is ``None``: the
+        spec then carries nothing else that distinguishes this rank's slice
+        of an uneven layout from an even chunking of the same global shape.
+        PyTorch versions before 2.12 use the same metadata in a local
+        fallback. Consumed by the AOT autograd cache through
+        ``ShardTensor._stable_hash_for_caching``.
 
         Returns
         -------
@@ -134,8 +138,9 @@ class ShardTensorSpec(DTensorSpec):
             if self._sharding_shapes is None
             else tuple(sorted(self._sharding_shapes.items()))
         )
+        local_shape = None if self._local_shape is None else tuple(self._local_shape)
         if torch.__version__ >= (2, 12):
-            stable_key = (super()._stable_hash(), sharding_shapes)
+            stable_key = (super()._stable_hash(), sharding_shapes, local_shape)
         else:
             mesh = self.mesh.mesh
             stable_key = (
@@ -147,6 +152,7 @@ class ShardTensorSpec(DTensorSpec):
                 self.shard_order,
                 self.tensor_meta,
                 sharding_shapes,
+                local_shape,
             )
         return hashlib.blake2b(repr(stable_key).encode(), digest_size=16).hexdigest()
 

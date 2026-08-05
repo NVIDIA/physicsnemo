@@ -33,7 +33,10 @@ from torch.distributed.tensor.placement_types import Partial, Replicate, Shard
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.domain_parallel import ShardTensor, scatter_tensor
-from physicsnemo.domain_parallel._shard_tensor_spec import ShardTensorSpec
+from physicsnemo.domain_parallel._shard_tensor_spec import (
+    ShardTensorSpec,
+    compute_sharding_shapes_from_chunking_global_shape,
+)
 from test.domain_parallel.test_redistribute import shard_tensor_factory
 
 
@@ -184,11 +187,85 @@ def run_stable_hash_distinguishes_spec_metadata(mesh):
     different_layout_spec = dataclasses.replace(spec, _sharding_shapes=different_shapes)
     assert different_layout_spec._stable_hash() != spec._stable_hash()
 
+    # With _sharding_shapes=None the spec carries nothing else that
+    # distinguishes uneven layouts, so _local_shape must be folded in:
+    # same global shape + placements but a different local slice must hash
+    # differently (AOT-cache key discrimination on each rank).
+    none_spec = dataclasses.replace(spec, _sharding_shapes=None)
+    other_local = torch.Size(tuple(d + 1 for d in none_spec._local_shape))
+    none_spec_other_local = dataclasses.replace(none_spec, _local_shape=other_local)
+    assert none_spec._stable_hash() != none_spec_other_local._stable_hash()
+
 
 @pytest.mark.multigpu_static
 @pytest.mark.timeout(120)
 def test_stable_hash_distinguishes_spec_metadata_2d(distributed_mesh_2d):
     run_stable_hash_distinguishes_spec_metadata(distributed_mesh_2d)
+
+
+def run_unflatten_checks_even_chunk_assumption(mesh):
+    r"""``__tensor_unflatten__`` with a shapeless spec must not silently
+    assume even chunking for an uneven shard.
+
+    When ``_sharding_shapes`` is ``None``, unflatten derives shapes by
+    chunking the global shape. For an unevenly sharded tensor that
+    derivation is wrong, bakes wrong collective sizes into compiled graphs,
+    and Dynamo guards can't discriminate (None == None): ranks whose local
+    shard contradicts the chunk assumption must raise instead.
+    """
+    st = shard_tensor_factory(mesh, uneven=True)
+    stripped = dataclasses.replace(st._spec, _sharding_shapes=None)
+    global_shape = tuple(st._spec.tensor_meta.shape)
+    stride = st._spec.tensor_meta.stride
+
+    chunk = compute_sharding_shapes_from_chunking_global_shape(
+        mesh, st._spec.placements, global_shape
+    )
+    coords = mesh.get_coordinate()
+    local_shape = tuple(st._local_tensor.shape)
+    mismatch = any(tuple(chunk[m][coords[m]]) != local_shape for m in chunk)
+
+    if mismatch:
+        with pytest.raises(RuntimeError, match="unevenly sharded"):
+            ShardTensor.__tensor_unflatten__(
+                {"_local_tensor": st._local_tensor},
+                (stripped, False),
+                global_shape,
+                stride,
+            )
+    else:
+        out = ShardTensor.__tensor_unflatten__(
+            {"_local_tensor": st._local_tensor},
+            (stripped, False),
+            global_shape,
+            stride,
+        )
+        assert isinstance(out, ShardTensor)
+
+    # An evenly sharded tensor must still unflatten fine from a shapeless
+    # spec (the chunk assumption holds).
+    st_even = shard_tensor_factory(mesh, uneven=False)
+    stripped_even = dataclasses.replace(st_even._spec, _sharding_shapes=None)
+    out_even = ShardTensor.__tensor_unflatten__(
+        {"_local_tensor": st_even._local_tensor},
+        (stripped_even, False),
+        tuple(st_even._spec.tensor_meta.shape),
+        st_even._spec.tensor_meta.stride,
+    )
+    assert isinstance(out_even, ShardTensor)
+    assert tuple(out_even._local_tensor.shape) == tuple(st_even._local_tensor.shape)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+def test_unflatten_checks_even_chunk_assumption_1d(distributed_mesh):
+    run_unflatten_checks_even_chunk_assumption(distributed_mesh)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+def test_unflatten_checks_even_chunk_assumption_2d(distributed_mesh_2d):
+    run_unflatten_checks_even_chunk_assumption(distributed_mesh_2d)
 
 
 def _sum_squares(x):

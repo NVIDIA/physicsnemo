@@ -946,6 +946,38 @@ class ShardTensor(torch.Tensor):
                 mesh_dim: tuple(tuple(s) for s in shapes)
                 for mesh_dim, shapes in chunk_shapes.items()
             }
+            # Chunk derivation assumes an even (torch.chunk) layout. When the
+            # spec arrived with no ``_sharding_shapes`` at all, verify that
+            # assumption against the actual local shard: an unevenly sharded
+            # tensor whose spec lost its shapes would otherwise get even-chunk
+            # collective sizes baked into the compiled graph — silently wrong
+            # results, and Dynamo's guards cannot discriminate (None == None).
+            # Only checkable when both sides are concrete (static shapes);
+            # symbolic recompute is faithful by construction (see above).
+            local_shape = tuple(local_tensor.shape)
+            coords = spec.mesh.get_coordinate()
+            if (
+                spec._sharding_shapes is None
+                and coords is not None
+                and all(type(d) is int for d in local_shape)
+            ):
+                for mesh_dim in sharding_shapes:
+                    expected = sharding_shapes[mesh_dim][coords[mesh_dim]]
+                    if (
+                        all(type(d) is int for d in expected)
+                        and expected != local_shape
+                    ):
+                        raise RuntimeError(
+                            "ShardTensor crossed a torch.compile boundary with "
+                            "_sharding_shapes=None, and its local shard shape "
+                            f"{local_shape} does not match the even-chunk "
+                            f"assumption {expected} (mesh dim {mesh_dim}, "
+                            f"global shape {tuple(outer_size)}). This tensor "
+                            "is unevenly sharded but its spec lost the shard "
+                            "shapes; compiling would bake wrong collective "
+                            "sizes into the graph. Construct it with explicit "
+                            "or inferred sharding_shapes before compiling."
+                        )
 
         unflatten_spec = ShardTensorSpec(
             mesh=spec.mesh,
