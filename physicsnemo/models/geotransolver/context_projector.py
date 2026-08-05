@@ -39,6 +39,7 @@ import torch
 import torch.nn as nn
 from einops import rearrange
 from jaxtyping import Float
+from torch.distributed.tensor.placement_types import Replicate
 
 from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.nn import BQWarp, ConcreteDropout, Mlp
@@ -49,6 +50,20 @@ from physicsnemo.nn.module.physics_attention import (
 
 te = OptionalImport("transformer_engine.pytorch")
 TE_AVAILABLE = te.available
+
+
+def _replicate_slice_context(tensor: torch.Tensor) -> torch.Tensor:
+    r"""Resolve domain-partial slice axes while preserving other placements."""
+    if hasattr(tensor, "redistribute"):
+        placements = tensor.placements
+        if any(placement.is_partial() for placement in placements):
+            return tensor.redistribute(
+                placements=[
+                    Replicate() if placement.is_partial() else placement
+                    for placement in placements
+                ]
+            )
+    return tensor
 
 
 def _structured_grid_to_conv_input(
@@ -1034,7 +1049,10 @@ class GlobalContextBuilder(nn.Module):
                 context_feats = self.local_extractors[i].extract_context_features(
                     spatial_coords, geometry
                 )
-                context_parts.extend(context_feats)
+                context_parts.extend(
+                    _replicate_slice_context(context_feat)
+                    for context_feat in context_feats
+                )
 
                 # Get concatenated local features for skip connection
                 local_feats = self.local_extractors[i].extract_local_features(
@@ -1044,7 +1062,9 @@ class GlobalContextBuilder(nn.Module):
 
         # Tokenize geometry features
         if self.geometry_tokenizer is not None and geometry is not None:
-            geometry_context = self.geometry_tokenizer(geometry)
+            geometry_context = _replicate_slice_context(
+                self.geometry_tokenizer(geometry)
+            )
             # Detach the returned copy so downstream observers (e.g. the OOD
             # guard) don't keep the backward graph alive.
             geometry_context_detached = geometry_context.detach()
@@ -1052,7 +1072,9 @@ class GlobalContextBuilder(nn.Module):
 
         # Tokenize global embedding
         if self.global_tokenizer is not None and global_embedding is not None:
-            context_parts.append(self.global_tokenizer(global_embedding))
+            context_parts.append(
+                _replicate_slice_context(self.global_tokenizer(global_embedding))
+            )
 
         # Concatenate all context features along the last dimension
         context = torch.cat(context_parts, dim=-1) if context_parts else None

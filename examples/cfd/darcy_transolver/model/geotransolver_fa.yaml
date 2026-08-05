@@ -42,3 +42,5 @@ state_mixing_mode: concat_project
 structured_shape:
   - ${resolution}
   - ${resolution}
+activation_checkpointing: False
+activation_checkpointing_components: [blocks]
