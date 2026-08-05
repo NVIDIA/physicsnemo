@@ -248,7 +248,7 @@ class GALE(PhysicsAttentionIrregularMesh):
     slice_num : int, optional
         Number of learned physical state slices. Default is 64.
     use_te : bool, optional
-        Whether to use Transformer Engine backend when available. Default is True.
+        Whether to use Transformer Engine backend when available. Default is False.
     plus : bool, optional
         Whether to use Transolver++ features. Default is False.
     context_dim : int, optional
@@ -291,7 +291,7 @@ class GALE(PhysicsAttentionIrregularMesh):
     Examples
     --------
     >>> import torch
-    >>> gale = GALE(dim=256, heads=8, dim_head=32, context_dim=32)
+    >>> gale = GALE(dim=256, heads=8, dim_head=32, context_dim=32, use_te=False)
     >>> x = (torch.randn(2, 100, 256),)  # Single input tensor in tuple
     >>> context = torch.randn(2, 8, 64, 32)  # Context for cross-attention
     >>> outputs = gale(x, context)
@@ -308,7 +308,7 @@ class GALE(PhysicsAttentionIrregularMesh):
         dim_head: int = 64,
         dropout: float = 0.0,
         slice_num: int = 64,
-        use_te: bool = True,
+        use_te: bool = False,
         plus: bool = False,
         context_dim: int = 0,
         concrete_dropout: bool = False,
@@ -446,7 +446,7 @@ class GALEStructuredMesh2D(
         dropout: float = 0.0,
         slice_num: int = 64,
         kernel: int = 3,
-        use_te: bool = True,
+        use_te: bool = False,
         plus: bool = False,
         context_dim: int = 0,
         state_mixing_mode: str = "weighted",
@@ -479,7 +479,7 @@ class GALEStructuredMesh3D(
         dropout: float = 0.0,
         slice_num: int = 64,
         kernel: int = 3,
-        use_te: bool = True,
+        use_te: bool = False,
         plus: bool = False,
         context_dim: int = 0,
         state_mixing_mode: str = "weighted",
@@ -774,7 +774,7 @@ class GALE_block(nn.Module):
     slice_num : int, optional
         Number of learned physical state slices. Default is 32.
     use_te : bool, optional
-        Whether to use Transformer Engine backend. Default is ``True``.
+        Whether to use Transformer Engine backend. Default is ``False``.
     plus : bool, optional
         Whether to use Transolver++ features. Default is ``False``.
     context_dim : int, optional
@@ -821,7 +821,7 @@ class GALE_block(nn.Module):
     Examples
     --------
     >>> import torch
-    >>> block = GALE_block(num_heads=8, hidden_dim=256, dropout=0.1, context_dim=32)
+    >>> block = GALE_block(num_heads=8, hidden_dim=256, dropout=0.1, context_dim=32, use_te=False)
     >>> fx = (torch.randn(2, 100, 256),)  # Single input tensor in tuple
     >>> context = torch.randn(2, 8, 64, 32)  # Global context
     >>> outputs = block(fx, context)
@@ -841,7 +841,7 @@ class GALE_block(nn.Module):
         last_layer: bool = False,
         out_dim: int = 1,
         slice_num: int = 32,
-        use_te: bool = True,
+        use_te: bool = False,
         plus: bool = False,
         context_dim: int = 0,
         spatial_shape: tuple[int, ...] | None = None,
