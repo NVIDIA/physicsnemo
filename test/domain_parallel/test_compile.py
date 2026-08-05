@@ -112,6 +112,73 @@ def test_coerce_expected_type_returns_none_1d(distributed_mesh):
     run_coerce_expected_type_returns_none(distributed_mesh)
 
 
+def run_stable_hash_distinguishes_spec_metadata(mesh):
+    st = shard_tensor_factory(mesh, uneven=True)
+    spec = st._spec
+
+    identical_spec = ShardTensorSpec(
+        mesh=spec.mesh,
+        placements=spec.placements,
+        tensor_meta=spec.tensor_meta,
+        _local_shape=spec._local_shape,
+        _sharding_shapes=dict(spec._sharding_shapes),
+    )
+    assert identical_spec._stable_hash() == spec._stable_hash()
+
+    # Mapping insertion order is not part of the logical sharding layout.
+    reordered_shapes = dict(reversed(tuple(spec._sharding_shapes.items())))
+    reordered_spec = ShardTensorSpec(
+        mesh=spec.mesh,
+        placements=spec.placements,
+        tensor_meta=spec.tensor_meta,
+        _local_shape=spec._local_shape,
+        _sharding_shapes=reordered_shapes,
+    )
+    assert reordered_spec._stable_hash() == spec._stable_hash()
+
+    # Unknown layouts isolate placement metadata contributed by the parent hash.
+    unknown_layout_spec = ShardTensorSpec(
+        mesh=spec.mesh,
+        placements=spec.placements,
+        tensor_meta=spec.tensor_meta,
+        _local_shape=spec._local_shape,
+        _sharding_shapes=None,
+    )
+    different_placements_spec = ShardTensorSpec(
+        mesh=spec.mesh,
+        placements=tuple(Replicate() for _ in range(mesh.ndim)),
+        tensor_meta=spec.tensor_meta,
+        _local_shape=spec.tensor_meta.shape,
+        _sharding_shapes=None,
+    )
+    assert (
+        different_placements_spec._stable_hash() != unknown_layout_spec._stable_hash()
+    )
+
+    # Change an uneven layout while preserving its global extent.
+    different_shapes = dict(spec._sharding_shapes)
+    mesh_dim, shard_shapes = next(iter(different_shapes.items()))
+    tensor_dim = spec.placements[mesh_dim].dim
+    changed_shapes = [list(shape) for shape in shard_shapes]
+    changed_shapes[0][tensor_dim] += 1
+    changed_shapes[1][tensor_dim] -= 1
+    different_shapes[mesh_dim] = tuple(tuple(shape) for shape in changed_shapes)
+    different_shapes_spec = ShardTensorSpec(
+        mesh=spec.mesh,
+        placements=spec.placements,
+        tensor_meta=spec.tensor_meta,
+        _local_shape=spec._local_shape,
+        _sharding_shapes=different_shapes,
+    )
+    assert different_shapes_spec._stable_hash() != spec._stable_hash()
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+def test_stable_hash_distinguishes_spec_metadata_2d(distributed_mesh_2d):
+    run_stable_hash_distinguishes_spec_metadata(distributed_mesh_2d)
+
+
 def _sum_squares(x):
     return (x**2).sum()
 

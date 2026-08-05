@@ -124,9 +124,12 @@ class ShardTensorSpec(DTensorSpec):
         str
             Deterministic hex digest identifying this spec.
         """
-        stable_key = (self.mesh._stable_hash(),) + self._hash_key()[1:]
-        if self._sharding_shapes is not None:
-            stable_key = stable_key + (tuple(sorted(self._sharding_shapes.items())),)
+        sharding_shapes = (
+            None
+            if self._sharding_shapes is None
+            else tuple(sorted(self._sharding_shapes.items()))
+        )
+        stable_key = (super()._stable_hash(), sharding_shapes)
         return hashlib.blake2b(repr(stable_key).encode(), digest_size=16).hexdigest()
 
     def sharding_shapes(

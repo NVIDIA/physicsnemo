@@ -423,7 +423,7 @@ def test_compile_ring_sdpa_fullgraph_errors(distributed_mesh):
     k_s = scatter_tensor(k, 0, distributed_mesh, (Shard(2),), requires_grad=True)
     v_s = scatter_tensor(v, 0, distributed_mesh, (Shard(2),), requires_grad=True)
 
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match=r"record_stream|functionaliz"):
         _run_compile_fwd_bwd(SDPAWrapper(), [q_s, k_s, v_s], fullgraph=True)
 
 
