@@ -42,6 +42,12 @@ class ShardTensorSpec(DTensorSpec):
     placements of shards. This is useful when the tensor is distributed in
     an uneven or unexpected way.
 
+    Placement metadata describes the local data's current semantic state.
+    In particular, ``Partial`` means the local tensor is an additive
+    contribution with a pending collective reduction. Fully reduced data must
+    use ``Replicate``; ``Partial`` is never a layout-only label, including for
+    gradients.
+
     Attributes
     ----------
     _local_shape : Optional[torch.Size]

@@ -36,6 +36,7 @@ The module provides:
 
 from __future__ import annotations
 
+import dataclasses
 from typing import (
     Any,
     Callable,
@@ -47,6 +48,7 @@ import torch
 from torch.distributed.tensor._dtensor_spec import TensorMeta
 from torch.distributed.tensor.placement_types import (
     Partial,
+    Replicate,
     Shard,
 )
 
@@ -332,8 +334,23 @@ def create_sharded_grad_input(
     Returns
     -------
     ShardTensor
-        A distributed tensor with the same sharding as the original input.
+        A distributed tensor matching the original sharding, with any input
+        ``Partial`` placements normalized to ``Replicate``.
     """
+    # A reduction's cotangent is fully materialized on every rank before it is
+    # expanded to the input's local shape. If the primal input was Partial,
+    # reusing that label would falsely claim this complete gradient still
+    # needed reduction.
+    grad_placements = tuple(
+        Replicate() if placement.is_partial() else placement
+        for placement in original_spec.placements
+    )
+    grad_spec = (
+        original_spec
+        if grad_placements == original_spec.placements
+        else dataclasses.replace(original_spec, placements=grad_placements)
+    )
+
     # In custom autograd backward, return the input gradient directly as a
     # ShardTensor value. Avoid ``from_local`` here (which routes through a
     # separate autograd Function) so the gradient is attached unambiguously to
@@ -341,8 +358,33 @@ def create_sharded_grad_input(
     return ShardTensor.__new__(
         ShardTensor,
         local_tensor=local_grad_input,
-        spec=original_spec,
+        spec=grad_spec,
         requires_grad=False,
+    )
+
+
+def resolve_partial_cotangent(grad_output: ShardTensor) -> ShardTensor:
+    r"""Resolve pending reductions before consuming a reduction cotangent.
+
+    Parameters
+    ----------
+    grad_output : ShardTensor
+        Incoming cotangent for a sharded reduction.
+
+    Returns
+    -------
+    ShardTensor
+        The cotangent with every ``Partial`` placement reduced to ``Replicate``.
+    """
+    if not any(placement.is_partial() for placement in grad_output.placements):
+        return grad_output
+    placements = tuple(
+        Replicate() if placement.is_partial() else placement
+        for placement in grad_output.placements
+    )
+    return grad_output.redistribute(
+        device_mesh=grad_output.device_mesh,
+        placements=placements,
     )
 
 
@@ -496,7 +538,9 @@ class ShardedSum(ShardedReductionBase):
         keepdim = ctx.keepdim
         local_grad_shape = ctx.local_grad_shape
 
-        # Get local grad output
+        # A genuine Partial cotangent contains only this rank's contribution.
+        # Resolve it before broadcasting across the original local input.
+        grad_output = resolve_partial_cotangent(grad_output)
         local_grad_output = grad_output._local_tensor
 
         if is_full_reduction:
@@ -651,7 +695,9 @@ class ShardedMean(ShardedReductionBase):
         local_grad_shape = ctx.local_grad_shape
         global_shape = original_spec.tensor_meta.shape
 
-        # Get local grad output
+        # A genuine Partial cotangent contains only this rank's contribution.
+        # Resolve it before broadcasting across the original local input.
+        grad_output = resolve_partial_cotangent(grad_output)
         local_grad_output = grad_output._local_tensor
 
         if is_full_reduction:

@@ -37,7 +37,8 @@ Test cases include:
 import pytest
 import torch
 import torch.distributed as dist
-from torch.distributed.tensor.placement_types import Replicate, Shard
+from torch.distributed.tensor import DTensor
+from torch.distributed.tensor.placement_types import Partial, Replicate, Shard
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.domain_parallel import ShardTensor
@@ -107,6 +108,86 @@ def shard_tensor_factory(mesh, requires_grad=False, uneven=True):
     )
 
     return st
+
+
+def rank_distinct_partial_factory(mesh, requires_grad=False):
+    coordinate = mesh.get_coordinate()
+    linear_rank = 0
+    mesh_size = 1
+    for mesh_dim, mesh_rank in enumerate(coordinate):
+        linear_rank = linear_rank * mesh.size(mesh_dim) + mesh_rank
+        mesh_size *= mesh.size(mesh_dim)
+
+    dm = DistributedManager()
+    local = torch.full(
+        (8, 8),
+        float(linear_rank + 1),
+        device=dm.device,
+        requires_grad=requires_grad,
+    )
+    dtensor = DTensor.from_local(
+        local,
+        mesh,
+        [Partial()] * mesh.ndim,
+        run_check=False,
+    )
+    partial = ShardTensor.from_dtensor(dtensor)
+    expected = torch.full(
+        local.shape,
+        float(mesh_size * (mesh_size + 1) // 2),
+        device=dm.device,
+    )
+    return partial, expected
+
+
+def run_partial_redistribution_semantics(mesh):
+    partial, expected = rank_distinct_partial_factory(mesh)
+
+    replicated = partial.redistribute(
+        placements=[Replicate()] * mesh.ndim,
+    )
+    assert replicated.placements == tuple(Replicate() for _ in range(mesh.ndim))
+    torch.testing.assert_close(replicated._local_tensor, expected)
+
+    shard_placements = [Shard(0)] + [Replicate()] * (mesh.ndim - 1)
+    sharded = partial.redistribute(placements=shard_placements)
+    assert sharded.placements == tuple(shard_placements)
+    torch.testing.assert_close(sharded.full_tensor(), expected)
+
+
+@pytest.mark.multigpu_static
+def test_partial_redistribution_semantics_1d(distributed_mesh):
+    run_partial_redistribution_semantics(distributed_mesh)
+
+
+@pytest.mark.multigpu_static
+def test_partial_redistribution_semantics_2d(distributed_mesh_2d):
+    run_partial_redistribution_semantics(distributed_mesh_2d)
+
+
+def run_partial_redistribution_backward_emits_replicate(mesh):
+    partial, _ = rank_distinct_partial_factory(mesh)
+    partial = partial.detach().requires_grad_(True)
+    replicated = partial.redistribute(placements=[Replicate()] * mesh.ndim)
+
+    replicated.to_local().sum().backward()
+
+    assert partial.grad is not None
+    assert partial.grad.placements == tuple(Replicate() for _ in range(mesh.ndim))
+    torch.testing.assert_close(
+        partial.grad._local_tensor,
+        torch.ones_like(partial.grad._local_tensor),
+    )
+
+
+@pytest.mark.multigpu_static
+def test_partial_redistribution_backward_emits_replicate_1d(distributed_mesh):
+    run_partial_redistribution_backward_emits_replicate(distributed_mesh)
+
+
+@pytest.mark.multigpu_static
+def test_partial_redistribution_backward_emits_replicate_2d(distributed_mesh_2d):
+    run_partial_redistribution_backward_emits_replicate(distributed_mesh_2d)
 
 
 @pytest.mark.multigpu_static

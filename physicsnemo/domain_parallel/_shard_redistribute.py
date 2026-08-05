@@ -395,7 +395,16 @@ def redistribute_local_shard_tensor(
     async_op : bool, default=False
         Whether to run asynchronously.
     is_backward : bool, default=False
-        Whether this is a backward pass (affects some redistribution behaviors).
+        Whether this is a backward redistribution. For example, a forward
+        ``Partial`` to ``Replicate`` redistribution combines every rank's
+        contribution. In backward, each original contribution receives the
+        same full gradient. Converting that gradient back to ``Partial`` would
+        split it up only for a later operation to combine it again, so backward
+        keeps it replicated instead. The caller must therefore label the
+        returned gradient ``Replicate``. Labeling it ``Partial`` would falsely
+        request another reduction and could multiply the gradient by the mesh
+        size. This exception applies only while reversing a redistribution;
+        ordinary ``Partial`` tensors still represent pending reductions.
     target_sharding_shapes : Optional[Dict[int, List[int]]], optional
         Per-rank shard sizes keyed by tensor dimension. Default is ``None``.
 
@@ -548,13 +557,10 @@ def redistribute_local_shard_tensor(
         elif target.is_partial():
             if current.is_replicate():
                 partial_spec = cast(Partial, target)
-                # skip the replicate to partial transformation when we are in backward pass
-                # In this case we keep the grad as replicate, this is because we don't
-                # want to convert the replicated gradients back to partial, although
-                # that's logically conform with the same layout, converting the gradients
-                # back to partial is actually useless as you would have to do reduce later
-                # which would be more expensive than keeping it replicate! For this reason,
-                # we keep the replicate grad here.
+                # In a reverse redistribution, keep the fully reduced gradient
+                # instead of partitioning it only to reduce it again later.
+                # ShardRedistribute.backward normalizes the emitted placement to
+                # Replicate so the returned tensor's metadata matches this data.
                 new_local_tensor = (
                     partial_spec._partition_value(local_tensor, device_mesh, i)
                     if not is_backward
@@ -565,9 +571,10 @@ def redistribute_local_shard_tensor(
                     raise RuntimeError(
                         f"redistribute from {current} to {target} not supported yet"
                     )
-                # for backward shard -> partial, we just need to convert the shard to replicate
+                # Gather the reverse-path shard into complete data. The caller
+                # emits Replicate metadata rather than the temporary Partial
+                # target used to describe the inverse forward transform.
                 current_placement = cast(Shard, current)
-                # TODO - resolve sharding to partials?
                 new_local_tensor = current_placement._to_replicate_tensor(
                     local_tensor, device_mesh, i, transform_info.logical_shape
                 )
@@ -816,11 +823,12 @@ class ShardRedistribute(torch.autograd.Function):
             target_sharding_shapes=target_sharding_shapes,
         )
 
-        # normalize the target placement to replicate if it is partial
+        # Reverse redistribution deliberately keeps complete gradients instead
+        # of manufacturing pending reductions. Label those values Replicate so
+        # every emitted Partial continues to mean "reduction required."
         normalized_placements: list[Placement] = []
         for previous_placement in previous_spec.placements:
             if previous_placement.is_partial():
-                # keep target placement to replicate instead of partial in this case
                 normalized_placements.append(Replicate())
             else:
                 normalized_placements.append(previous_placement)

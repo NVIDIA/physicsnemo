@@ -465,7 +465,9 @@ class _ToTorchTensor(torch.autograd.Function):
         input : ShardTensor
             ShardTensor to convert.
         grad_placements : Sequence[Placement], optional
-            Sequence of placements to use for gradients.
+            Sequence of placements to use for gradients. When omitted, input
+            ``Partial`` placements are normalized to ``Replicate`` because the
+            cotangent of a local contribution is fully materialized.
 
         Returns
         -------
@@ -517,7 +519,13 @@ class _ToTorchTensor(torch.autograd.Function):
                 grad_placements = ctx.grad_placements
                 grad_sharding_shapes = shard_tensor_spec._sharding_shapes
         else:
-            grad_placements = shard_tensor_spec.placements
+            # The local view of a Partial value exposes this rank's
+            # contribution. Its incoming cotangent is complete local gradient
+            # data, not another pending reduction, so emit Replicate metadata.
+            grad_placements = tuple(
+                Replicate() if placement.is_partial() else placement
+                for placement in shard_tensor_spec.placements
+            )
             grad_sharding_shapes = shard_tensor_spec._sharding_shapes
         if grad_sharding_shapes is None:
             grad_sharding_shapes = "infer"
@@ -659,6 +667,14 @@ class ShardTensor(torch.Tensor):
     - Tracks and propagates shard size information across operations
     - Handles redistribution of unevenly sharded tensors
     - Provides custom collective operations optimized for uneven sharding
+
+    A ``Partial`` placement always describes a pending reduction. Its local
+    tensor is this rank's contribution to the logical value, not a replicated
+    copy of that value. Resolve it with :meth:`redistribute` or
+    :meth:`full_tensor` before treating the local data as complete. This rule
+    also applies to gradients: backward paths that retain a fully replicated
+    gradient label it ``Replicate`` rather than using ``Partial`` as layout-only
+    metadata.
 
     Like ``DTensor``, operations are dispatched through PyTorch's dispatcher
     system. Most operations work by:
@@ -965,13 +981,14 @@ class ShardTensor(torch.Tensor):
     # ``Replicate`` and AOT raises:
     #     "During the backward, we encountered a tensor subclass where we
     #      guessed its metadata incorrectly."
-    # These two hooks mirror DTensor's implementation in
-    # ``torch.distributed.tensor._api`` and reconcile the two ends:
-    # (1) at trace time, rewrite the expected metadata so any Partial
-    #     placement becomes Replicate (so the recorded tangent metadata
-    #     matches what runtime will actually produce);
-    # (2) at runtime, redistribute the incoming tangent to whatever
-    #     placement the expected spec demands.
+    # These hooks mirror DTensor's implementation in
+    # ``torch.distributed.tensor._api`` and reconcile the two ends without
+    # weakening Partial's meaning:
+    # (1) at trace time, resolve a forward Partial value and record Replicate
+    #     as the expected tangent layout;
+    # (2) at runtime, redistribute the incoming tangent according to its real
+    #     placement. A Partial runtime tangent is an unreduced contribution and
+    #     resolving it to Replicate must perform the reduction.
 
     def __coerce_tangent_metadata__(self) -> "ShardTensor":
         """Trace-time hook: coerce this tensor so its metadata matches a tangent.
@@ -1004,32 +1021,22 @@ class ShardTensor(torch.Tensor):
 
         (spec, _requires_grad) = flatten_spec
 
+        # __coerce_tangent_metadata__ resolves Partial before AOT records the
+        # expected tangent metadata. Seeing Partial in the recorded target means
+        # that normalization was bypassed; stamping that label onto complete
+        # data would make the placement lie about whether reduction is pending.
+        if any(isinstance(p, Partial) for p in spec.placements):
+            raise RuntimeError(
+                "AOTAutograd recorded a Partial tangent target for ShardTensor; "
+                "__coerce_tangent_metadata__ must normalize expected tangent "
+                "placements to Replicate"
+            )
+
         if (
             self._spec.placements == spec.placements
             and self._spec._sharding_shapes == spec._sharding_shapes
         ):
             return self
-
-        # Tangent (grad-direction) convention, matching ShardRedistribute.backward's
-        # spec normalization and _ShardTensorToDTensor.backward's relabel: a
-        # Partial label on a tangent marks replicate-valued data, NOT a pending
-        # reduction. Any Partial <-> Replicate mismatch here must therefore be
-        # a free relabel. Redistributing it for real would all-reduce an
-        # already-full tangent (x mesh_size) or partition it (/ mesh_size).
-        # So: move data with Partial normalized to Replicate on both sides,
-        # then stamp the recorded placements verbatim (AOT requires the
-        # returned tangent's metadata to match the recorded spec exactly).
-        def _normalize(placements: tuple) -> tuple:
-            return tuple(
-                Replicate() if isinstance(p, Partial) else p for p in placements
-            )
-
-        current_spec = self._spec
-        if any(isinstance(p, Partial) for p in current_spec.placements):
-            current_spec = dataclasses.replace(
-                current_spec, placements=_normalize(current_spec.placements)
-            )
-        normalized_target_placements = _normalize(spec.placements)
 
         # Bypass ``self.redistribute()`` so we can thread the recorded per-tensor-dim
         # shard sizes through to the local redistribute (the public API drops them).
@@ -1044,20 +1051,20 @@ class ShardTensor(torch.Tensor):
 
         move_spec = ShardTensorSpec(
             mesh=self.device_mesh,
-            placements=normalized_target_placements,
+            placements=spec.placements,
             tensor_meta=self._spec.tensor_meta,
             _sharding_shapes=spec._sharding_shapes,
         )
         new_local = redistribute_local_shard_tensor(
             self._local_tensor,
-            current_spec,
+            self._spec,
             move_spec,
             async_op=False,
             target_sharding_shapes=target_sharding_shapes_by_tensor_dim,
         )
 
-        # Final stamp: the recorded placements exactly as AOT expects them,
-        # including any Partial labels (a relabel of the moved data).
+        # The recorded target contains no Partial, so this metadata describes
+        # the communication performed above rather than relabeling local data.
         target_spec = ShardTensorSpec(
             mesh=self.device_mesh,
             placements=spec.placements,
@@ -1148,28 +1155,54 @@ class ShardTensor(torch.Tensor):
     def grad(self) -> "ShardTensor | None":  # type: ignore[override]
         """Return the accumulated gradient, wrapped as a :class:`ShardTensor`.
 
-        If no gradient has been accumulated yet, returns ``None``.
+        If the autograd engine stored a distributed gradient, its placements
+        are preserved rather than inherited from the primal tensor. Plain local
+        gradients cannot carry a pending reduction and therefore normalize any
+        primal ``Partial`` placement to ``Replicate``. If no gradient has been
+        accumulated yet, returns ``None``.
         """
         with torch._C.DisableTorchFunctionSubclass():
             c_grad = torch.Tensor.grad.__get__(self)
         if c_grad is not None:
             if isinstance(c_grad, ShardTensor):
                 return c_grad
+            if isinstance(c_grad, DTensor):
+                grad_spec = _resolve_spec_for_dtensor(c_grad, (self,))
+                return _dtensor_to_shard_tensor(c_grad, grad_spec)
+            grad_spec = self._spec
+            if any(placement.is_partial() for placement in grad_spec.placements):
+                grad_spec = dataclasses.replace(
+                    grad_spec,
+                    placements=tuple(
+                        Replicate() if placement.is_partial() else placement
+                        for placement in grad_spec.placements
+                    ),
+                )
             return ShardTensor.__new__(
                 ShardTensor,
-                local_tensor=c_grad._local_tensor
-                if isinstance(c_grad, DTensor)
-                else c_grad,
-                spec=self._spec,
+                local_tensor=c_grad,
+                spec=grad_spec,
                 requires_grad=False,
             )
         local_grad = self._local_tensor.grad
         if local_grad is None:
             return None
+        grad_spec = self._spec
+        if any(placement.is_partial() for placement in grad_spec.placements):
+            # A plain local gradient is the complete cotangent of this rank's
+            # contribution. It has no distributed pending-reduction metadata
+            # of its own, so do not inherit Partial from the primal.
+            grad_spec = dataclasses.replace(
+                grad_spec,
+                placements=tuple(
+                    Replicate() if placement.is_partial() else placement
+                    for placement in grad_spec.placements
+                ),
+            )
         return ShardTensor.__new__(
             ShardTensor,
             local_tensor=local_grad,
-            spec=self._spec,
+            spec=grad_spec,
             requires_grad=False,
         )
 
@@ -1406,6 +1439,8 @@ class ShardTensor(torch.Tensor):
         grad_placements : Optional[Sequence[Placement]], optional
             Future layout of gradients. If provided, gradients will be
             constructed with this placement scheme during backward pass.
+            Specifying ``Partial`` declares that each returned local gradient
+            is an additive contribution with a pending reduction.
 
         Returns
         -------
@@ -1439,6 +1474,8 @@ class ShardTensor(torch.Tensor):
         grad_placements : Optional[Sequence[Placement]], optional
             Future layout of gradients. If provided, gradients will be
             constructed with this placement scheme during backward pass.
+            Specifying ``Partial`` declares that each returned local gradient
+            is an additive contribution with a pending reduction.
 
         Returns
         -------

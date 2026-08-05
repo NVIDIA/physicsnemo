@@ -274,20 +274,55 @@ def test_compiled_grad_input_stays_shard_tensor_1d(distributed_mesh, partial_inp
 
 
 def _partial_shard_tensor(mesh, local):
-    # Partial local shape == global shape; build through DTensor.from_local
-    # (accepts Partial directly) + communication-free spec inference.
+    # Partial local shape equals global shape. DTensor.from_local accepts the
+    # pending-reduction placement directly and avoids an eager collective.
     dt = DTensor.from_local(local, mesh, [Partial()] * mesh.ndim, run_check=False)
     return ShardTensor.from_dtensor(dt)
 
 
-def run_coerce_partial_to_replicate_relabels(mesh):
-    # Grad-direction convention: a Partial-labeled tangent is replicate-valued.
-    # Coercing it to a recorded Replicate spec must RELABEL, not all-reduce —
-    # a real reduction multiplies the tangent by the mesh size. Regression
-    # test for the 4x compiled-grad bug with Partial inputs.
+def _rank_distinct_partial_shard_tensor(mesh):
+    coordinate = mesh.get_coordinate()
+    linear_rank = 0
+    mesh_size = 1
+    for mesh_dim, mesh_rank in enumerate(coordinate):
+        linear_rank = linear_rank * mesh.size(mesh_dim) + mesh_rank
+        mesh_size *= mesh.size(mesh_dim)
+
     dm = DistributedManager()
-    local = torch.full((8, 4), 3.0, device=dm.device)
+    local = torch.full((8, 4), float(linear_rank + 1), device=dm.device)
     st = _partial_shard_tensor(mesh, local)
+    expected = torch.full(
+        local.shape,
+        float(mesh_size * (mesh_size + 1) // 2),
+        device=dm.device,
+    )
+    return st, expected
+
+
+def run_trace_tangent_coercion_reduces_partial(mesh):
+    st, expected = _rank_distinct_partial_shard_tensor(mesh)
+
+    coerced = st.__coerce_tangent_metadata__()
+
+    assert isinstance(coerced, ShardTensor)
+    assert coerced.placements == tuple(Replicate() for _ in range(mesh.ndim))
+    torch.testing.assert_close(coerced._local_tensor, expected)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+def test_trace_tangent_coercion_reduces_partial_1d(distributed_mesh):
+    run_trace_tangent_coercion_reduces_partial(distributed_mesh)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+def test_trace_tangent_coercion_reduces_partial_2d(distributed_mesh_2d):
+    run_trace_tangent_coercion_reduces_partial(distributed_mesh_2d)
+
+
+def run_runtime_tangent_coercion_reduces_partial(mesh):
+    st, expected = _rank_distinct_partial_shard_tensor(mesh)
 
     recorded = ShardTensorSpec(
         mesh=st._spec.mesh,
@@ -299,28 +334,22 @@ def run_coerce_partial_to_replicate_relabels(mesh):
 
     assert isinstance(coerced, ShardTensor)
     assert coerced._spec.placements == recorded.placements
-    assert torch.allclose(coerced._local_tensor, local), (
-        "Partial->Replicate tangent coercion changed values (all-reduced "
-        "an already-full tangent?)"
-    )
+    torch.testing.assert_close(coerced._local_tensor, expected)
 
 
 @pytest.mark.multigpu_static
 @pytest.mark.timeout(120)
-def test_coerce_partial_to_replicate_relabels_1d(distributed_mesh):
-    run_coerce_partial_to_replicate_relabels(distributed_mesh)
+def test_runtime_tangent_coercion_reduces_partial_1d(distributed_mesh):
+    run_runtime_tangent_coercion_reduces_partial(distributed_mesh)
 
 
 @pytest.mark.multigpu_static
 @pytest.mark.timeout(120)
-def test_coerce_partial_to_replicate_relabels_2d(distributed_mesh_2d):
-    run_coerce_partial_to_replicate_relabels(distributed_mesh_2d)
+def test_runtime_tangent_coercion_reduces_partial_2d(distributed_mesh_2d):
+    run_runtime_tangent_coercion_reduces_partial(distributed_mesh_2d)
 
 
-def run_coerce_replicate_to_partial_relabels(mesh):
-    # Reverse direction: recorded spec says Partial, runtime tangent arrived
-    # Replicate. Must relabel (values unchanged), not partition (divide by
-    # mesh size) — the latent inverse of the 4x bug.
+def run_runtime_tangent_coercion_rejects_partial_target(mesh):
     dm = DistributedManager()
     local = torch.full((8, 4), 3.0, device=dm.device)
     st = ShardTensor.from_local(
@@ -333,16 +362,128 @@ def run_coerce_replicate_to_partial_relabels(mesh):
         tensor_meta=st._spec.tensor_meta,
         _sharding_shapes=None,
     )
-    coerced = st.__coerce_same_metadata_as_tangent__((recorded, False))
+    with pytest.raises(
+        RuntimeError, match="recorded a Partial tangent target for ShardTensor"
+    ):
+        st.__coerce_same_metadata_as_tangent__((recorded, False))
 
-    assert isinstance(coerced, ShardTensor)
-    assert coerced._spec.placements == recorded.placements
-    assert torch.allclose(coerced._local_tensor, local), (
-        "Replicate->Partial tangent coercion changed values (partitioned the tangent?)"
-    )
+    partial = _partial_shard_tensor(mesh, local)
+    with pytest.raises(
+        RuntimeError, match="recorded a Partial tangent target for ShardTensor"
+    ):
+        partial.__coerce_same_metadata_as_tangent__((partial._spec, False))
 
 
 @pytest.mark.multigpu_static
 @pytest.mark.timeout(120)
-def test_coerce_replicate_to_partial_relabels_1d(distributed_mesh):
-    run_coerce_replicate_to_partial_relabels(distributed_mesh)
+def test_runtime_tangent_coercion_rejects_partial_target_1d(distributed_mesh):
+    run_runtime_tangent_coercion_rejects_partial_target(distributed_mesh)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+def test_runtime_tangent_coercion_rejects_partial_target_2d(distributed_mesh_2d):
+    run_runtime_tangent_coercion_rejects_partial_target(distributed_mesh_2d)
+
+
+def run_genuine_partial_cotangent_enters_compiled_backward(mesh, op):
+    dm = DistributedManager()
+    device = dm.device
+    torch.manual_seed(23)
+
+    feature_size = 16
+    batch_shape = (8,) * mesh.ndim
+    full_activation = torch.arange(
+        torch.tensor(batch_shape).prod().item() * feature_size,
+        dtype=torch.float32,
+        device=device,
+    ).reshape(*batch_shape, feature_size)
+    full_activation = full_activation / full_activation.numel()
+    activation_placements = tuple(Shard(dim) for dim in range(mesh.ndim))
+    activation = scatter_tensor(
+        full_activation,
+        0,
+        mesh,
+        activation_placements,
+        global_shape=full_activation.shape,
+        dtype=full_activation.dtype,
+        requires_grad=False,
+    )
+    replicate_placements = tuple(Replicate() for _ in range(mesh.ndim))
+
+    if op == "pointwise":
+        parameter_data = torch.linspace(-0.7, 0.9, feature_size, device=device)
+
+        def producer(value):
+            return torch.sin(value) * 2.0
+
+        def consume(distributed_activation, produced):
+            return distributed_activation * produced
+
+    elif op == "linear":
+        parameter_data = torch.linspace(
+            -0.5,
+            0.8,
+            4 * feature_size,
+            device=device,
+        ).reshape(4, feature_size)
+
+        def producer(value):
+            return torch.tanh(value) * 1.5
+
+        def consume(distributed_activation, produced):
+            return torch.nn.functional.linear(distributed_activation, produced)
+
+    else:
+        raise ValueError(f"Unsupported op: {op}")
+
+    def run_once(producer_fn):
+        parameter_local = parameter_data.detach().clone().requires_grad_(True)
+        parameter = ShardTensor.from_local(
+            parameter_local,
+            mesh,
+            replicate_placements,
+        )
+        produced = producer_fn(parameter)
+        tangent_placements = []
+        produced.register_hook(lambda grad: tangent_placements.append(grad.placements))
+        consume(activation, produced).full_tensor().sum().backward()
+        assert parameter_local.grad is not None
+        return parameter_local.grad.detach().clone(), tangent_placements
+
+    reference_parameter = parameter_data.detach().clone().requires_grad_(True)
+    consume(full_activation, producer(reference_parameter)).sum().backward()
+    reference_grad = reference_parameter.grad
+    assert reference_grad is not None
+
+    eager_grad, eager_tangents = run_once(producer)
+    assert eager_tangents
+    assert eager_tangents[0] == tuple(Partial() for _ in range(mesh.ndim))
+    torch.testing.assert_close(eager_grad, reference_grad)
+
+    torch._dynamo.reset()
+    compiled = torch.compile(
+        producer,
+        fullgraph=True,
+        backend="aot_eager",
+        dynamic=False,
+    )
+    for _ in range(2):
+        compiled_grad, compiled_tangents = run_once(compiled)
+        assert compiled_tangents
+        assert compiled_tangents[0] == tuple(Partial() for _ in range(mesh.ndim))
+        torch.testing.assert_close(compiled_grad, reference_grad)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(180)
+@pytest.mark.parametrize("op", ["pointwise", "linear"])
+def test_genuine_partial_cotangent_enters_compiled_backward_1d(distributed_mesh, op):
+    run_genuine_partial_cotangent_enters_compiled_backward(distributed_mesh, op)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(180)
+@pytest.mark.parametrize("op", ["pointwise", "linear"])
+def test_genuine_partial_cotangent_enters_compiled_backward_2d(distributed_mesh_2d, op):
+    run_genuine_partial_cotangent_enters_compiled_backward(distributed_mesh_2d, op)
