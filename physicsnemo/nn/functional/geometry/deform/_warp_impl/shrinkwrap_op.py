@@ -18,8 +18,6 @@
 
 from __future__ import annotations
 
-import math
-
 import torch
 import warp as wp
 
@@ -37,7 +35,9 @@ wp.config.log_level = wp.LOG_WARNING
 _FLOAT_DTYPES = (torch.float32, torch.float64)
 _INDEX_DTYPES = (torch.int32, torch.int64)
 _WARP_MAX_DISTANCE = float(torch.finfo(torch.float32).max)
-_WARP_SAFE_QUERY_MAGNITUDE = 0.25 * math.sqrt(_WARP_MAX_DISTANCE)
+_WARP_MAX_COORDINATE_MAGNITUDE = float(2**20)
+_WARP_MIN_EDGE_SCALE = float(2**-20)
+_WARP_MAX_EDGE_SCALE = float(2**20)
 _WARP_MIN_RELATIVE_TARGET_AREA = 256.0 * torch.finfo(torch.float32).eps
 
 
@@ -91,9 +91,10 @@ def _prepare_float32_search_coordinates(
 
     target_f32 = target_points.detach().contiguous()
     query_f32 = query_points.detach()
-    # Warp uses float32 squared-distance math. Far rows use Torch below.
+    # Warp's closest-point intermediates include products of dot products.
+    # Queries outside the verified float32 range use Torch below.
     warp_query_mask = torch.isfinite(query_f32).all(dim=-1) & (
-        query_f32.abs().amax(dim=-1) <= _WARP_SAFE_QUERY_MAGNITUDE
+        query_f32.abs().amax(dim=-1) <= _WARP_MAX_COORDINATE_MAGNITUDE
     )
     query_f32 = torch.where(
         warp_query_mask.unsqueeze(-1),
@@ -126,7 +127,7 @@ def _float32_target_search_is_safe(
 
     target_f32 = target_points.detach()
     target_magnitude_is_safe = torch.isfinite(target_f32).all() & (
-        target_f32.abs().amax() <= _WARP_SAFE_QUERY_MAGNITUDE
+        target_f32.abs().amax() <= _WARP_MAX_COORDINATE_MAGNITUDE
     )
     if not bool(target_magnitude_is_safe):
         return False
@@ -161,8 +162,15 @@ def _float32_target_search_is_safe(
     # Warp's float32 mesh query can miss very skinny faces that are otherwise
     # valid on CUDA. Keep those faces on the numerically stable Torch search.
     aspect_is_safe = relative_area > _WARP_MIN_RELATIVE_TARGET_AREA
+    edge_scale_is_safe = (edge_scale >= _WARP_MIN_EDGE_SCALE) & (
+        edge_scale <= _WARP_MAX_EDGE_SCALE
+    )
     faces_are_valid = _valid_triangles(triangles)
-    search_is_safe = faces_are_valid.all() & aspect_is_safe.all()
+    # The lower edge and relative-area bounds keep Warp's normal-length square
+    # above 2^-110. The coordinate and upper-edge bounds keep its closest-point
+    # products below 72 * 2^80. Both have ample room inside float32's normal
+    # exponent range on CPU and CUDA.
+    search_is_safe = (faces_are_valid & aspect_is_safe & edge_scale_is_safe).all()
     return bool(search_is_safe)
 
 

@@ -1673,6 +1673,120 @@ def test_warp_nearest_face_custom_op_opcheck():
 
 
 @pytest.mark.parametrize(
+    ("scale", "target_base", "query_base"),
+    [
+        pytest.param(
+            1.0e12,
+            [
+                [-4.0, -4.0, -4.0],
+                [5.0, -5.0, 4.0],
+                [1.0, -2.0, -4.0],
+                [-1.0, 3.0, 2.0],
+                [4.0, -2.0, -1.0],
+                [-4.0, -2.0, -5.0],
+            ],
+            [[0.0, -2.0, -4.0]],
+            id="large",
+        ),
+        pytest.param(
+            1.0e-10,
+            [
+                [-1.148144006729126, -1.1588678359985352, 0.32547101378440857],
+                [-0.6315053701400757, -2.839993953704834, -1.3249573707580566],
+                [0.17842842638492584, -2.1337530612945557, 1.052357792854309],
+                [-0.8036359548568726, -0.28084245324134827, 0.7696762681007385],
+                [-0.6595596075057983, -0.7979276776313782, 0.18383125960826874],
+                [0.22934740781784058, 0.5146290063858032, 0.99376380443573],
+            ],
+            [[-1.145442247390747, -1.3315942287445068, 0.2230386883020401]],
+            id="small",
+        ),
+    ],
+)
+def test_warp_unsafe_target_scale_uses_torch_fallback(
+    device: str,
+    monkeypatch: pytest.MonkeyPatch,
+    scale: float,
+    target_base: list[list[float]],
+    query_base: list[list[float]],
+):
+    pytest.importorskip("warp")
+    from physicsnemo.nn.functional.geometry.deform._warp_impl import shrinkwrap_op
+
+    device = torch.device(device)
+    target_points = (
+        torch.tensor(target_base, device=device, dtype=torch.float32) * scale
+    )
+    target_faces = torch.tensor([[0, 1, 2], [3, 4, 5]], device=device)
+    query_points = (
+        torch.tensor(
+            query_base,
+            device=device,
+            dtype=torch.float32,
+        )
+        * scale
+    )
+    torch_search = shrinkwrap_op.nearest_surface_faces_torch
+    fallback_calls = 0
+
+    def counted_torch_search(*args, **kwargs):
+        nonlocal fallback_calls
+        fallback_calls += 1
+        return torch_search(*args, **kwargs)
+
+    monkeypatch.setattr(
+        shrinkwrap_op,
+        "nearest_surface_faces_torch",
+        counted_torch_search,
+    )
+    face_ids = shrinkwrap_op.nearest_surface_faces_warp(
+        target_points,
+        target_faces,
+        query_points,
+        max_distance=torch.inf,
+    )
+
+    assert fallback_calls == 1
+    torch.testing.assert_close(
+        face_ids,
+        torch.tensor([0], device=device),
+        rtol=0,
+        atol=0,
+    )
+
+
+@pytest.mark.parametrize(
+    ("edge_scale", "expected_safe"),
+    [
+        (2.0**-21, False),
+        (2.0**-20, True),
+        (2.0**20, True),
+        (2.0**21, False),
+    ],
+)
+def test_warp_float32_target_scale_gate(
+    edge_scale: float,
+    expected_safe: bool,
+):
+    from physicsnemo.nn.functional.geometry.deform._warp_impl.shrinkwrap_op import (
+        _float32_target_search_is_safe,
+    )
+
+    half_scale = 0.5 * edge_scale
+    target_points = torch.tensor(
+        [
+            [-half_scale, -half_scale, 0.0],
+            [half_scale, -half_scale, 0.0],
+            [-half_scale, half_scale, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+    target_faces = torch.tensor([[0, 1, 2]])
+
+    assert _float32_target_search_is_safe(target_points, target_faces) is expected_safe
+
+
+@pytest.mark.parametrize(
     ("dtype", "scale"),
     [(torch.float32, 1.0e20), (torch.float64, 1.0e150)],
 )
