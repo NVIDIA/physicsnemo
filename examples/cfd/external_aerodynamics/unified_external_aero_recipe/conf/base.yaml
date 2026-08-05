@@ -24,7 +24,17 @@
 
 # -- Runtime knobs -----------------------------------------------------------
 precision: "bfloat16"
+
+# When `profile: true`, the loop drives an Nsight Systems capture window via
+# cudaProfilerStart/Stop (see profile.sh, which sets
+# `--capture-range=cudaProfilerApi --capture-range-end=stop`). The first
+# `warmup_steps` steps run un-captured so torch.compile / cuDNN autotune /
+# the CUDA allocator can settle; the next `profile_steps` steps are captured,
+# after which the run stops. Has no effect when `profile: false`.
 profile: false
+warmup_steps: 5
+profile_steps: 5
+
 augment: false
 benchmark_io: false
 

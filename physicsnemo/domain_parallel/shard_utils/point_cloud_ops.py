@@ -26,7 +26,6 @@ from torch.distributed.tensor.placement_types import (
     Shard,
 )
 
-from physicsnemo.core.function_spec import FunctionSpec
 from physicsnemo.domain_parallel import ShardTensor, ShardTensorSpec
 from physicsnemo.domain_parallel.shard_utils.patch_core import (
     MissingShardPatch,
@@ -206,6 +205,8 @@ def ringless_ball_query(
         **bq_kwargs,
     )
 
+    
+
     max_points = bq_kwargs["max_points"]
 
     indices_placement = {}
@@ -351,40 +352,39 @@ def merge_outputs(
         n_points = current_indices.shape[0]
         max_neighbors = current_indices.shape[1]
 
-    _, stream = FunctionSpec.warp_launch_context(current_indices)
+    stream = wp.stream_from_torch(current_indices.device)
 
-    with FunctionSpec.warp_stream_scope(stream):
-        if batched:
-            for b in range(B):
-                wp.launch(
-                    merge_indices_and_points,
-                    dim=n_points,
-                    inputs=[
-                        wp.from_torch(current_indices[b], return_ctype=True),
-                        wp.from_torch(current_num_neighbors[b], return_ctype=True),
-                        wp.from_torch(current_points[b], return_ctype=True),
-                        wp.from_torch(incoming_indices[b], return_ctype=True),
-                        wp.from_torch(incoming_num_neighbors[b], return_ctype=True),
-                        wp.from_torch(incoming_points[b], return_ctype=True),
-                        max_neighbors,
-                    ],
-                    stream=stream,
-                )
-        else:
+    if batched:
+        for b in range(B):
             wp.launch(
                 merge_indices_and_points,
                 dim=n_points,
                 inputs=[
-                    wp.from_torch(current_indices, return_ctype=True),
-                    wp.from_torch(current_num_neighbors, return_ctype=True),
-                    wp.from_torch(current_points, return_ctype=True),
-                    wp.from_torch(incoming_indices, return_ctype=True),
-                    wp.from_torch(incoming_num_neighbors, return_ctype=True),
-                    wp.from_torch(incoming_points, return_ctype=True),
+                    wp.from_torch(current_indices[b], return_ctype=True),
+                    wp.from_torch(current_num_neighbors[b], return_ctype=True),
+                    wp.from_torch(current_points[b], return_ctype=True),
+                    wp.from_torch(incoming_indices[b], return_ctype=True),
+                    wp.from_torch(incoming_num_neighbors[b], return_ctype=True),
+                    wp.from_torch(incoming_points[b], return_ctype=True),
                     max_neighbors,
                 ],
                 stream=stream,
             )
+    else:
+        wp.launch(
+            merge_indices_and_points,
+            dim=n_points,
+            inputs=[
+                wp.from_torch(current_indices, return_ctype=True),
+                wp.from_torch(current_num_neighbors, return_ctype=True),
+                wp.from_torch(current_points, return_ctype=True),
+                wp.from_torch(incoming_indices, return_ctype=True),
+                wp.from_torch(incoming_num_neighbors, return_ctype=True),
+                wp.from_torch(incoming_points, return_ctype=True),
+                max_neighbors,
+            ],
+            stream=stream,
+        )
 
     return current_indices, current_num_neighbors, current_points
 
@@ -458,6 +458,10 @@ class RingBallQuery(torch.autograd.Function):
         ctx.radius = bq_kwargs["radius"]
         ctx.return_dists = bq_kwargs["return_dists"]
         ctx.return_points = bq_kwargs["return_points"]
+        # Explicit radius-search variant (e.g. Morton/BVH), if any. Threaded into
+        # the custom op so the sharded ring path honors config-driven selection
+        # instead of silently falling back to the env var.
+        ctx.variant = bq_kwargs.get("variant", None)
 
         for i in range(world_size):
             source_rank = (mesh_rank - i) % world_size
@@ -474,6 +478,7 @@ class RingBallQuery(torch.autograd.Function):
                 ctx.max_points,
                 ctx.return_dists,
                 ctx.return_points,
+                ctx.variant,
             )
             # Store the result with its source rank
             rank_results[source_rank] = (
@@ -707,6 +712,7 @@ def repackage_radius_search_wrapper_args(
     max_points: int | None = None,
     return_dists: bool = False,
     return_points: bool = False,
+    variant: str | None = None,
     *args,
     **kwargs,
 ) -> tuple[ShardTensor, ShardTensor, dict]:
@@ -730,6 +736,10 @@ def repackage_radius_search_wrapper_args(
         Whether to return distances.
     return_points : bool, default=False
         Whether to return points.
+    variant : str | None, optional
+        Explicit radius-search backend variant threaded into the custom op.
+        Captured here (rather than absorbed into ``*args``) so it survives the
+        repackaging and reaches both the ring and ringless paths.
     *args : Any
         Additional positional arguments.
     **kwargs : Any
@@ -747,6 +757,7 @@ def repackage_radius_search_wrapper_args(
         "max_points": max_points,
         "return_dists": return_dists,
         "return_points": return_points,
+        "variant": variant,
     }
 
     # Add any explicitly passed parameters

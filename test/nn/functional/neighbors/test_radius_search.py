@@ -20,8 +20,18 @@ import torch
 from physicsnemo.nn.functional import radius_search
 from physicsnemo.nn.functional.neighbors import RadiusSearch
 from physicsnemo.nn.functional.neighbors.radius_search._warp_impl import (
+    radius_search_bvh,
+)
+from physicsnemo.nn.functional.neighbors.radius_search._warp_impl import (
     radius_search_impl as radius_search_warp,
 )
+from physicsnemo.nn.functional.neighbors.radius_search._morton_impl import (
+    radius_search_morton,
+)
+from physicsnemo.nn.functional.neighbors.radius_search._morton_dense_impl import (
+    radius_search_morton_dense,
+)
+from physicsnemo.nn.functional.neighbors.radius_search.utils import format_returns
 from test.conftest import requires_module
 
 
@@ -643,3 +653,844 @@ def test_radius_search_batched_opcheck(device: str):
         radius_search_warp,
         args=(points, queries, 1.5, 8, True, True),
     )
+
+
+_EXACT_BACKENDS = ("torch", "warp")
+
+
+def _skip_unavailable_backend(implementation: str, device: str) -> None:
+    if implementation == "warp":
+        pytest.importorskip("warp")
+
+
+def _assert_static_neighbors_match_brute_force(
+    points: torch.Tensor,
+    queries: torch.Tensor,
+    radius: float,
+    implementation: str,
+) -> None:
+    """Check an untruncated static result without assuming neighbor order."""
+    max_points = max(1, points.shape[-2])
+    indices, selected_points, distances = radius_search(
+        points,
+        queries,
+        radius=radius,
+        max_points=max_points,
+        return_dists=True,
+        return_points=True,
+        implementation=implementation,
+    )
+
+    was_unbatched = points.ndim == 2
+    points_b = points.unsqueeze(0) if was_unbatched else points
+    queries_b = queries.unsqueeze(0) if was_unbatched else queries
+    indices_b = indices.unsqueeze(0) if was_unbatched else indices
+    selected_points_b = (
+        selected_points.unsqueeze(0) if was_unbatched else selected_points
+    )
+    distances_b = distances.unsqueeze(0) if was_unbatched else distances
+    expected_distances = torch.cdist(
+        queries_b.float(),
+        points_b.float(),
+        compute_mode="donot_use_mm_for_euclid_dist",
+    )
+
+    for batch_idx in range(points_b.shape[0]):
+        for query_idx in range(queries_b.shape[1]):
+            expected_ids = torch.nonzero(
+                expected_distances[batch_idx, query_idx] <= radius,
+                as_tuple=False,
+            ).flatten()
+            count = expected_ids.numel()
+            actual_ids = indices_b[batch_idx, query_idx, :count].long()
+            torch.testing.assert_close(
+                actual_ids.sort().values,
+                expected_ids.sort().values,
+            )
+            torch.testing.assert_close(
+                selected_points_b[batch_idx, query_idx, :count],
+                points_b[batch_idx, actual_ids],
+            )
+            torch.testing.assert_close(
+                distances_b[batch_idx, query_idx, :count].float(),
+                expected_distances[batch_idx, query_idx, actual_ids],
+                atol=1e-5,
+                rtol=1e-5,
+            )
+            assert (indices_b[batch_idx, query_idx, count:] == 0).all()
+
+
+# ---------------------------------------------------------------------------
+# Tiled-BVH radius-search tests (Morton-ordered, CUDA-only)
+# ---------------------------------------------------------------------------
+
+
+def _assert_neighbor_sets_match_bruteforce(
+    points: torch.Tensor,
+    queries: torch.Tensor,
+    radius: float,
+    indices: torch.Tensor,
+    num_neighbors: torch.Tensor,
+    distances: torch.Tensor | None,
+    selected_points: torch.Tensor | None,
+) -> None:
+    """Compare per-query neighbor sets against a brute-force cdist reference.
+
+    Assumes the test was set up so no query exceeds ``max_points`` neighbors,
+    i.e. every backend returns the complete (un-truncated) neighbor set, which
+    makes the comparison order-invariant and exact.
+    """
+    dist_matrix = torch.cdist(
+        queries.float(), points.float(), compute_mode="donot_use_mm_for_euclid_dist"
+    )
+    within = dist_matrix <= radius
+
+    expected_counts = within.sum(dim=1)
+    torch.testing.assert_close(
+        num_neighbors.to(torch.int64), expected_counts.to(torch.int64)
+    )
+
+    for q in range(queries.shape[0]):
+        k = int(num_neighbors[q])
+        expected_idx = set(within[q].nonzero().flatten().tolist())
+        got_idx = set(indices[q, :k].tolist())
+        assert got_idx == expected_idx, f"neighbor index set mismatch at query {q}"
+
+        if distances is not None:
+            got_d = torch.sort(distances[q, :k].float())[0]
+            exp_d = torch.sort(dist_matrix[q][within[q]])[0]
+            torch.testing.assert_close(got_d, exp_d, atol=1e-4, rtol=1e-4)
+
+        if selected_points is not None:
+            ref_pts = points[indices[q, :k].long()].float()
+            torch.testing.assert_close(
+                selected_points[q, :k].float(), ref_pts, atol=1e-5, rtol=1e-5
+            )
+
+
+# Validate tiled-BVH radius search against a brute-force reference (unbatched).
+@requires_module("warp")
+@pytest.mark.parametrize("return_dists", [True, False])
+@pytest.mark.parametrize("return_points", [True, False])
+def test_radius_search_bvh_matches_reference(
+    device: str,
+    return_dists: bool,
+    return_points: bool,
+):
+    if device == "cpu":
+        pytest.skip("radius_search_bvh is CUDA-only (tiled BVH queries are GPU-only)")
+
+    torch.manual_seed(0)
+    n_points, n_queries, max_points = 256, 64, 64
+    points = torch.rand(n_points, 3, device=device)
+    queries = torch.rand(n_queries, 3, device=device)
+    radius = 0.1  # small enough that no query exceeds max_points neighbors
+
+    indices, sel_points, distances, num_neighbors = radius_search_bvh(
+        points,
+        queries,
+        radius=radius,
+        max_points=max_points,
+        return_dists=return_dists,
+        return_points=return_points,
+    )
+
+    assert indices.shape == (n_queries, max_points)
+    assert num_neighbors.shape == (n_queries,)
+    assert int(num_neighbors.max()) <= max_points
+
+    _assert_neighbor_sets_match_bruteforce(
+        points,
+        queries,
+        radius,
+        indices,
+        num_neighbors,
+        distances if return_dists else None,
+        sel_points if return_points else None,
+    )
+
+
+# Validate tiled-BVH radius search for batched inputs against brute force.
+@requires_module("warp")
+@pytest.mark.parametrize("batch_size", [1, 3])
+def test_radius_search_bvh_batched_matches_reference(device: str, batch_size: int):
+    if device == "cpu":
+        pytest.skip("radius_search_bvh is CUDA-only (tiled BVH queries are GPU-only)")
+
+    torch.manual_seed(1)
+    n_points, n_queries, max_points = 200, 48, 64
+    points = torch.rand(batch_size, n_points, 3, device=device)
+    queries = torch.rand(batch_size, n_queries, 3, device=device)
+    radius = 0.1
+
+    indices, sel_points, distances, num_neighbors = radius_search_bvh(
+        points,
+        queries,
+        radius=radius,
+        max_points=max_points,
+        return_dists=True,
+        return_points=True,
+    )
+
+    assert indices.shape == (batch_size, n_queries, max_points)
+    assert num_neighbors.shape == (batch_size, n_queries)
+
+    # Validate shapes/bounds with the shared helper using the formatted return.
+    results = format_returns(
+        indices, sel_points, distances, return_dists=True, return_points=True
+    )
+    _assert_batched_radius_outputs(
+        batch_size,
+        n_points,
+        n_queries,
+        radius,
+        max_points,
+        True,
+        True,
+        results,
+    )
+
+    # Per-(batch, query) neighbor sets must match brute force.
+    for b in range(batch_size):
+        _assert_neighbor_sets_match_bruteforce(
+            points[b],
+            queries[b],
+            radius,
+            indices[b],
+            num_neighbors[b],
+            distances[b],
+            sel_points[b],
+        )
+
+
+# Verify 2D input == batched[0] for the tiled-BVH path.
+@requires_module("warp")
+def test_radius_search_bvh_2d_3d_equivalence(device: str):
+    if device == "cpu":
+        pytest.skip("radius_search_bvh is CUDA-only (tiled BVH queries are GPU-only)")
+
+    torch.manual_seed(7)
+    pts_2d = torch.rand(128, 3, device=device)
+    qs_2d = torch.rand(40, 3, device=device)
+    radius, max_points = 0.12, 64
+
+    idx_2d, _, _, num_2d = radius_search_bvh(
+        pts_2d, qs_2d, radius=radius, max_points=max_points
+    )
+    idx_3d, _, _, num_3d = radius_search_bvh(
+        pts_2d.unsqueeze(0), qs_2d.unsqueeze(0), radius=radius, max_points=max_points
+    )
+
+    assert idx_2d.shape == (40, max_points)
+    assert idx_3d.shape == (1, 40, max_points)
+    torch.testing.assert_close(num_2d, num_3d[0])
+    # Counts and per-query neighbor sets are order-invariant; compare as sets.
+    for q in range(40):
+        k = int(num_2d[q])
+        assert set(idx_2d[q, :k].tolist()) == set(idx_3d[0, q, :k].tolist())
+
+
+# Optional benchmark: time tiled-BVH vs the hash-grid warp backend and
+# cross-check correctness on a medium case (marked slow so it is opt-in).
+@pytest.mark.slow
+@requires_module("warp")
+def test_radius_search_bvh_benchmark(device: str):
+    if device == "cpu":
+        pytest.skip("radius_search_bvh is CUDA-only (tiled BVH queries are GPU-only)")
+
+    import time
+
+    torch.manual_seed(0)
+    n_points, n_queries, max_points = 8192, 4096, 32
+    points = torch.rand(n_points, 3, device=device)
+    queries = torch.rand(n_queries, 3, device=device)
+    radius = 0.05
+
+    def _run(fn):
+        torch.cuda.synchronize()
+        start = time.perf_counter()
+        out = fn()
+        torch.cuda.synchronize()
+        return out, time.perf_counter() - start
+
+    # Warm up both backends (JIT/codegen, BVH build paths).
+    radius_search_bvh(points, queries, radius, max_points, True, True)
+    radius_search_warp(points, queries, radius, max_points, True, True)
+
+    (bvh_idx, _, _, bvh_num), bvh_t = _run(
+        lambda: radius_search_bvh(points, queries, radius, max_points, True, True)
+    )
+    (_, _, _, _), hash_t = _run(
+        lambda: radius_search_warp(points, queries, radius, max_points, True, True)
+    )
+
+    print(
+        f"\n[radius_search] tiled-BVH={bvh_t * 1e3:.2f} ms  "
+        f"hash-grid={hash_t * 1e3:.2f} ms  "
+        f"(N={n_points}, Q={n_queries}, r={radius}, max_points={max_points})"
+    )
+
+    # Correctness cross-check against brute force (radius small -> no truncation).
+    assert int(bvh_num.max()) <= max_points
+    _assert_neighbor_sets_match_bruteforce(
+        points, queries, radius, bvh_idx, bvh_num, None, None
+    )
+
+
+# ---------------------------------------------------------------------------
+# Morton-grid radius-search tests (scalar / fma / gemm; Morton-ordered, CUDA-only)
+# ---------------------------------------------------------------------------
+
+
+# Validate each Morton variant against a brute-force reference (unbatched).
+@requires_module("warp")
+@pytest.mark.parametrize("variant", ["scalar", "fma", "gemm"])
+@pytest.mark.parametrize("return_dists", [True, False])
+@pytest.mark.parametrize("return_points", [True, False])
+def test_radius_search_morton_matches_reference(
+    device: str,
+    variant: str,
+    return_dists: bool,
+    return_points: bool,
+):
+    if device == "cpu":
+        pytest.skip("radius_search_morton is CUDA-only")
+
+    torch.manual_seed(0)
+    n_points, n_queries, max_points = 256, 64, 64
+    points = torch.rand(n_points, 3, device=device)
+    queries = torch.rand(n_queries, 3, device=device)
+    radius = 0.1  # small enough that no query exceeds max_points neighbors
+
+    indices, sel_points, distances, num_neighbors = radius_search_morton(
+        points,
+        queries,
+        radius=radius,
+        max_points=max_points,
+        return_dists=return_dists,
+        return_points=return_points,
+        variant=variant,
+    )
+
+    assert indices.shape == (n_queries, max_points)
+    assert num_neighbors.shape == (n_queries,)
+    assert int(num_neighbors.max()) <= max_points
+
+    _assert_neighbor_sets_match_bruteforce(
+        points,
+        queries,
+        radius,
+        indices,
+        num_neighbors,
+        distances if return_dists else None,
+        sel_points if return_points else None,
+    )
+
+
+# Validate each Morton variant for batched inputs against brute force.
+@requires_module("warp")
+@pytest.mark.parametrize("variant", ["scalar", "fma", "gemm"])
+@pytest.mark.parametrize("batch_size", [1, 3])
+def test_radius_search_morton_batched_matches_reference(
+    device: str, variant: str, batch_size: int
+):
+    if device == "cpu":
+        pytest.skip("radius_search_morton is CUDA-only")
+
+    torch.manual_seed(1)
+    n_points, n_queries, max_points = 200, 48, 64
+    points = torch.rand(batch_size, n_points, 3, device=device)
+    queries = torch.rand(batch_size, n_queries, 3, device=device)
+    radius = 0.1
+
+    indices, sel_points, distances, num_neighbors = radius_search_morton(
+        points,
+        queries,
+        radius=radius,
+        max_points=max_points,
+        return_dists=True,
+        return_points=True,
+        variant=variant,
+    )
+
+    assert indices.shape == (batch_size, n_queries, max_points)
+    assert num_neighbors.shape == (batch_size, n_queries)
+
+    for b in range(batch_size):
+        _assert_neighbor_sets_match_bruteforce(
+            points[b],
+            queries[b],
+            radius,
+            indices[b],
+            num_neighbors[b],
+            distances[b],
+            sel_points[b],
+        )
+
+
+# Verify 2D input == batched[0] for a Morton variant.
+@requires_module("warp")
+@pytest.mark.parametrize("variant", ["scalar", "fma", "gemm"])
+def test_radius_search_morton_2d_3d_equivalence(device: str, variant: str):
+    if device == "cpu":
+        pytest.skip("radius_search_morton is CUDA-only")
+
+    torch.manual_seed(7)
+    pts_2d = torch.rand(128, 3, device=device)
+    qs_2d = torch.rand(40, 3, device=device)
+    radius, max_points = 0.12, 64
+
+    idx_2d, _, _, num_2d = radius_search_morton(
+        pts_2d, qs_2d, radius=radius, max_points=max_points, variant=variant
+    )
+    idx_3d, _, _, num_3d = radius_search_morton(
+        pts_2d.unsqueeze(0),
+        qs_2d.unsqueeze(0),
+        radius=radius,
+        max_points=max_points,
+        variant=variant,
+    )
+
+    assert idx_2d.shape == (40, max_points)
+    assert idx_3d.shape == (1, 40, max_points)
+    torch.testing.assert_close(num_2d, num_3d[0])
+    # Per-query neighbor sets are order-invariant; compare as sets.
+    for q in range(40):
+        k = int(num_2d[q])
+        assert set(idx_2d[q, :k].tolist()) == set(idx_3d[0, q, :k].tolist())
+
+
+# Verify the env-var dispatch routes radius_search(implementation="warp") through
+# the Morton path and matches the torch backend (order-invariant, no truncation).
+@requires_module("warp")
+@pytest.mark.parametrize("variant", ["scalar", "fma", "gemm"])
+def test_radius_search_morton_dispatch_parity(
+    device: str, variant: str, monkeypatch
+):
+    if device == "cpu":
+        pytest.skip("radius_search_morton is CUDA-only")
+
+    torch.manual_seed(2)
+    points = torch.rand(512, 3, device=device)
+    queries = torch.rand(64, 3, device=device)
+    radius, max_points = 0.1, 128  # large max_points -> no truncation
+
+    monkeypatch.setenv("PHYSICSNEMO_RADIUS_SEARCH_MORTON", variant)
+    warp_out = radius_search(
+        points,
+        queries,
+        radius=radius,
+        max_points=max_points,
+        return_dists=True,
+        return_points=True,
+        implementation="warp",
+    )
+    monkeypatch.delenv("PHYSICSNEMO_RADIUS_SEARCH_MORTON", raising=False)
+    torch_out = radius_search(
+        points,
+        queries,
+        radius=radius,
+        max_points=max_points,
+        return_dists=True,
+        return_points=True,
+        implementation="torch",
+    )
+
+    RadiusSearch.compare_forward(warp_out, torch_out)
+
+
+# dense_fma_e2e is the sort-free twin of dense_fma (row-major cell bins + unsorted
+# queries, no radix sort). Verify it (a) matches a brute-force reference and (b)
+# returns the exact same neighbor sets/counts as dense_fma, for unbatched and
+# batched inputs. max_points is large enough that no query is truncated.
+@requires_module("warp")
+@pytest.mark.parametrize("batch_size", [1, 3])
+def test_radius_search_morton_dense_fma_e2e_parity(device: str, batch_size: int):
+    if device == "cpu":
+        pytest.skip("radius_search_morton_dense is CUDA-only")
+
+    torch.manual_seed(3)
+    n_points, n_queries, max_points = 300, 80, 128
+    points = torch.rand(batch_size, n_points, 3, device=device)
+    queries = torch.rand(batch_size, n_queries, 3, device=device)
+    radius = 0.1  # small enough that no query exceeds max_points neighbors
+
+    idx_base, _, _, num_base = radius_search_morton_dense(
+        points,
+        queries,
+        radius=radius,
+        max_points=max_points,
+        variant="dense_fma",
+    )
+    idx_e2e, sel_e2e, dist_e2e, num_e2e = radius_search_morton_dense(
+        points,
+        queries,
+        radius=radius,
+        max_points=max_points,
+        return_dists=True,
+        return_points=True,
+        variant="dense_fma_e2e",
+    )
+
+    assert idx_e2e.shape == (batch_size, n_queries, max_points)
+    assert num_e2e.shape == (batch_size, n_queries)
+
+    for b in range(batch_size):
+        # (a) dense_fma_e2e matches the brute-force reference.
+        _assert_neighbor_sets_match_bruteforce(
+            points[b],
+            queries[b],
+            radius,
+            idx_e2e[b],
+            num_e2e[b],
+            dist_e2e[b],
+            sel_e2e[b],
+        )
+        # (b) identical per-query counts and neighbor sets as dense_fma.
+        torch.testing.assert_close(num_e2e[b], num_base[b])
+        for q in range(n_queries):
+            k = int(num_base[b, q])
+            assert (
+                set(idx_e2e[b, q, :k].tolist()) == set(idx_base[b, q, :k].tolist())
+            ), f"neighbor set mismatch (batch {b}, query {q})"
+
+
+# Confirm the env-var dispatch recognizes and routes the new dense_fma_e2e variant
+# end to end through radius_search(implementation="warp"), matching the torch backend.
+@requires_module("warp")
+def test_radius_search_dense_fma_e2e_dispatch_parity(device: str, monkeypatch):
+    if device == "cpu":
+        pytest.skip("radius_search_morton_dense is CUDA-only")
+
+    torch.manual_seed(2)
+    points = torch.rand(512, 3, device=device)
+    queries = torch.rand(64, 3, device=device)
+    radius, max_points = 0.1, 128  # large max_points -> no truncation
+
+    monkeypatch.setenv("PHYSICSNEMO_RADIUS_SEARCH_MORTON", "dense_fma_e2e")
+    warp_out = radius_search(
+        points,
+        queries,
+        radius=radius,
+        max_points=max_points,
+        return_dists=True,
+        return_points=True,
+        implementation="warp",
+    )
+    monkeypatch.delenv("PHYSICSNEMO_RADIUS_SEARCH_MORTON", raising=False)
+    torch_out = radius_search(
+        points,
+        queries,
+        radius=radius,
+        max_points=max_points,
+        return_dists=True,
+        return_points=True,
+        implementation="torch",
+    )
+
+    RadiusSearch.compare_forward(warp_out, torch_out)
+
+
+# dense_fma_store_opt is the store-optimized twin of dense_fma (shared-memory
+# staged flush + host-gathered points, no in-kernel vec3 scatter). Verify it (a)
+# matches a brute-force reference and (b) returns the exact same neighbor
+# sets/counts as dense_fma, for unbatched and batched inputs. max_points is large
+# enough that no query is truncated, but stays within FMA_STAGE_CAP.
+@requires_module("warp")
+@pytest.mark.parametrize("batch_size", [1, 3])
+def test_radius_search_morton_dense_fma_store_opt_parity(device: str, batch_size: int):
+    if device == "cpu":
+        pytest.skip("radius_search_morton_dense is CUDA-only")
+
+    torch.manual_seed(3)
+    n_points, n_queries, max_points = 300, 80, 128
+    points = torch.rand(batch_size, n_points, 3, device=device)
+    queries = torch.rand(batch_size, n_queries, 3, device=device)
+    radius = 0.1  # small enough that no query exceeds max_points neighbors
+
+    idx_base, _, _, num_base = radius_search_morton_dense(
+        points,
+        queries,
+        radius=radius,
+        max_points=max_points,
+        variant="dense_fma",
+    )
+    idx_opt, sel_opt, dist_opt, num_opt = radius_search_morton_dense(
+        points,
+        queries,
+        radius=radius,
+        max_points=max_points,
+        return_dists=True,
+        return_points=True,
+        variant="dense_fma_store_opt",
+    )
+
+    assert idx_opt.shape == (batch_size, n_queries, max_points)
+    assert num_opt.shape == (batch_size, n_queries)
+
+    for b in range(batch_size):
+        # (a) dense_fma_store_opt matches the brute-force reference (this also
+        # checks the host-gathered points equal points[indices]).
+        _assert_neighbor_sets_match_bruteforce(
+            points[b],
+            queries[b],
+            radius,
+            idx_opt[b],
+            num_opt[b],
+            dist_opt[b],
+            sel_opt[b],
+        )
+        # (b) identical per-query counts and neighbor sets as dense_fma.
+        torch.testing.assert_close(num_opt[b], num_base[b])
+        for q in range(n_queries):
+            k = int(num_base[b, q])
+            assert (
+                set(idx_opt[b, q, :k].tolist()) == set(idx_base[b, q, :k].tolist())
+            ), f"neighbor set mismatch (batch {b}, query {q})"
+
+
+# Confirm the env-var dispatch recognizes and routes the new dense_fma_store_opt
+# variant end to end through radius_search(implementation="warp").
+@requires_module("warp")
+def test_radius_search_dense_fma_store_opt_dispatch_parity(device: str, monkeypatch):
+    if device == "cpu":
+        pytest.skip("radius_search_morton_dense is CUDA-only")
+
+    torch.manual_seed(2)
+    points = torch.rand(512, 3, device=device)
+    queries = torch.rand(64, 3, device=device)
+    radius, max_points = 0.1, 128  # large max_points -> no truncation
+
+    monkeypatch.setenv("PHYSICSNEMO_RADIUS_SEARCH_MORTON", "dense_fma_store_opt")
+    warp_out = radius_search(
+        points,
+        queries,
+        radius=radius,
+        max_points=max_points,
+        return_dists=True,
+        return_points=True,
+        implementation="warp",
+    )
+    monkeypatch.delenv("PHYSICSNEMO_RADIUS_SEARCH_MORTON", raising=False)
+    torch_out = radius_search(
+        points,
+        queries,
+        radius=radius,
+        max_points=max_points,
+        return_dists=True,
+        return_points=True,
+        implementation="torch",
+    )
+
+    RadiusSearch.compare_forward(warp_out, torch_out)
+
+
+# ---------------------------------------------------------------------------
+# Config-driven backend selection: choosing a variant directly by name via
+# ``radius_search(implementation="<variant>")`` (no env var required). This is the
+# path exercised by GeoTransolver's ``radius_search_implementation`` config.
+# ---------------------------------------------------------------------------
+
+
+# All Warp CUDA variants selectable via ``implementation=`` and routed through the
+# Warp custom op (Morton hash/dense variants plus the tiled BVH).
+_NAME_SELECTABLE_VARIANTS = [
+    "scalar",
+    "fma",
+    "gemm",
+    "dense_fma",
+    "dense_fma_e2e",
+    "dense_fma_store_opt",
+    "dense_fma_mem_opt",
+    "dense_fma_mm",
+    "dense_gemm",
+    "sparse_fma_e2e",
+    "bvh",
+]
+
+# Subset with a verified brute-force/torch reference, used for parity-vs-torch.
+_NAME_PARITY_VARIANTS = [
+    "scalar",
+    "fma",
+    "gemm",
+    "dense_fma",
+    "dense_fma_e2e",
+    "dense_fma_store_opt",
+    "sparse_fma_e2e",
+    "bvh",
+]
+
+
+def _set_variant_env(monkeypatch, variant: str) -> None:
+    """Point the legacy env-var selectors at ``variant`` (and clear the other)."""
+    monkeypatch.delenv("PHYSICSNEMO_RADIUS_SEARCH_MORTON", raising=False)
+    monkeypatch.delenv("PHYSICSNEMO_RADIUS_SEARCH_BVH", raising=False)
+    if variant == "bvh":
+        monkeypatch.setenv("PHYSICSNEMO_RADIUS_SEARCH_BVH", "1")
+    else:
+        monkeypatch.setenv("PHYSICSNEMO_RADIUS_SEARCH_MORTON", variant)
+
+
+# Selecting a variant by name must match the torch baseline (order-invariant, no
+# truncation), proving config-driven selection is correct end to end.
+@requires_module("warp")
+@pytest.mark.parametrize("variant", _NAME_PARITY_VARIANTS)
+def test_radius_search_variant_selection_matches_torch(device: str, variant: str):
+    if device == "cpu":
+        pytest.skip("radius-search variants are CUDA-only")
+
+    torch.manual_seed(2)
+    points = torch.rand(512, 3, device=device)
+    queries = torch.rand(64, 3, device=device)
+    radius, max_points = 0.1, 128  # large max_points -> no truncation
+
+    variant_out = radius_search(
+        points,
+        queries,
+        radius=radius,
+        max_points=max_points,
+        return_dists=True,
+        return_points=True,
+        implementation=variant,
+    )
+    torch_out = radius_search(
+        points,
+        queries,
+        radius=radius,
+        max_points=max_points,
+        return_dists=True,
+        return_points=True,
+        implementation="torch",
+    )
+
+    RadiusSearch.compare_forward(variant_out, torch_out)
+
+
+# Selecting a variant by name must route to the exact same kernel as the legacy
+# env-var mechanism. This covers every variant (including the benchmark-only
+# dense_* kernels and the BVH backend) without depending on kernel correctness.
+@requires_module("warp")
+@pytest.mark.parametrize("variant", _NAME_SELECTABLE_VARIANTS)
+def test_radius_search_variant_selection_matches_env(
+    device: str, variant: str, monkeypatch
+):
+    if device == "cpu":
+        pytest.skip("radius-search variants are CUDA-only")
+
+    torch.manual_seed(2)
+    points = torch.rand(512, 3, device=device)
+    queries = torch.rand(64, 3, device=device)
+    radius, max_points = 0.1, 128  # large max_points -> no truncation
+
+    # New path: select by name with no env var set.
+    monkeypatch.delenv("PHYSICSNEMO_RADIUS_SEARCH_MORTON", raising=False)
+    monkeypatch.delenv("PHYSICSNEMO_RADIUS_SEARCH_BVH", raising=False)
+    by_name = radius_search(
+        points,
+        queries,
+        radius=radius,
+        max_points=max_points,
+        return_dists=True,
+        return_points=True,
+        implementation=variant,
+    )
+
+    # Legacy path: same kernel selected via the env var + implementation="warp".
+    _set_variant_env(monkeypatch, variant)
+    by_env = radius_search(
+        points,
+        queries,
+        radius=radius,
+        max_points=max_points,
+        return_dists=True,
+        return_points=True,
+        implementation="warp",
+    )
+    monkeypatch.delenv("PHYSICSNEMO_RADIUS_SEARCH_MORTON", raising=False)
+    monkeypatch.delenv("PHYSICSNEMO_RADIUS_SEARCH_BVH", raising=False)
+
+    RadiusSearch.compare_forward(by_name, by_env)
+
+
+# Autograd must survive config-driven variant selection: variants run inside the
+# Warp custom op, so its shared backward should still populate point gradients,
+# identically to the legacy env-var path.
+@requires_module("warp")
+def test_radius_search_variant_selection_preserves_autograd(device: str, monkeypatch):
+    if device == "cpu":
+        pytest.skip("radius-search variants are CUDA-only")
+
+    torch.manual_seed(4)
+    radius, max_points = 0.1, 64
+    queries = torch.rand(48, 3, device=device)
+    base_points = torch.rand(300, 3, device=device)
+
+    # Config-driven selection (implementation="dense_fma"), env unset.
+    monkeypatch.delenv("PHYSICSNEMO_RADIUS_SEARCH_MORTON", raising=False)
+    pts_name = base_points.clone().requires_grad_(True)
+    _, sel_name = radius_search(
+        pts_name,
+        queries,
+        radius=radius,
+        max_points=max_points,
+        return_points=True,
+        implementation="dense_fma",
+    )
+    sel_name.pow(2).sum().backward()
+    assert pts_name.grad is not None
+    assert torch.isfinite(pts_name.grad).all()
+    assert pts_name.grad.abs().sum() > 0
+
+    # Legacy env-var selection of the same kernel -> identical gradients.
+    monkeypatch.setenv("PHYSICSNEMO_RADIUS_SEARCH_MORTON", "dense_fma")
+    pts_env = base_points.clone().requires_grad_(True)
+    _, sel_env = radius_search(
+        pts_env,
+        queries,
+        radius=radius,
+        max_points=max_points,
+        return_points=True,
+        implementation="warp",
+    )
+    sel_env.pow(2).sum().backward()
+    monkeypatch.delenv("PHYSICSNEMO_RADIUS_SEARCH_MORTON", raising=False)
+
+    torch.testing.assert_close(pts_name.grad, pts_env.grad)
+
+
+# An explicit variant passed via implementation= must take precedence over the
+# env-var fallback (which here points at a different kernel).
+@requires_module("warp")
+def test_radius_search_explicit_variant_overrides_env(device: str, monkeypatch):
+    if device == "cpu":
+        pytest.skip("radius-search variants are CUDA-only")
+
+    from physicsnemo.nn.functional.neighbors.radius_search import (
+        _morton_dense_impl as dense_mod,
+    )
+
+    seen: list[str | None] = []
+    original = dense_mod.radius_search_morton_dense
+
+    def _spy(*args, **kwargs):
+        seen.append(kwargs.get("variant"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(dense_mod, "radius_search_morton_dense", _spy)
+    # Env requests the hash-scalar kernel (not a dense kernel)...
+    monkeypatch.setenv("PHYSICSNEMO_RADIUS_SEARCH_MORTON", "scalar")
+
+    torch.manual_seed(5)
+    points = torch.rand(256, 3, device=device)
+    queries = torch.rand(32, 3, device=device)
+    # ...but the explicit variant must win and route to the dense kernel.
+    radius_search(
+        points,
+        queries,
+        radius=0.1,
+        max_points=64,
+        return_points=True,
+        implementation="dense_fma",
+    )
+
+    assert seen == ["dense_fma"]

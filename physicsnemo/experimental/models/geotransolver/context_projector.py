@@ -35,6 +35,8 @@ GlobalContextBuilder
 
 from __future__ import annotations
 
+import os
+
 import torch
 import torch.nn as nn
 from einops import rearrange
@@ -511,6 +513,11 @@ class GeometricFeatureProcessor(nn.Module):
         Dimension of the input features to query.
     hidden_dim : int
         Output dimension after MLP processing.
+    radius_search_implementation : str | None, optional
+        Radius-search backend passed to :class:`~physicsnemo.nn.BQWarp`. If None
+        (default), selected automatically. See
+        :func:`~physicsnemo.nn.functional.radius_search` for the full list of
+        accepted backend/variant names.
 
     Forward
     -------
@@ -550,11 +557,16 @@ class GeometricFeatureProcessor(nn.Module):
         neighbors_in_radius: int,
         feature_dim: int,
         hidden_dim: int,
+        radius_search_implementation: str | None = None,
     ) -> None:
         super().__init__()
 
         # Ball query for neighbor search within radius
-        self.bq_warp = BQWarp(radius=radius, neighbors_in_radius=neighbors_in_radius)
+        self.bq_warp = BQWarp(
+            radius=radius,
+            neighbors_in_radius=neighbors_in_radius,
+            implementation=radius_search_implementation,
+        )
 
         # MLP to process flattened neighbor features
         self.mlp = Mlp(
@@ -565,27 +577,29 @@ class GeometricFeatureProcessor(nn.Module):
             drop=0.0,
         )
 
-    def forward(
+    def query_neighbors(
         self,
         query_points: Float[torch.Tensor, "batch points spatial_dim"],
         key_features: Float[torch.Tensor, "batch points features"],
-    ) -> Float[torch.Tensor, "batch points hidden_dim"]:
-        r"""Query neighbors and process features.
+    ) -> Float[torch.Tensor, "batch points flattened"]:
+        r"""Run the ball query and flatten the neighbor features.
+
+        This is the expensive, MLP-independent half of :meth:`forward`. It is
+        split out so callers that need the same neighbor gather more than once
+        (e.g. both the context and the local-skip pathway) can share a single
+        ball query. The result can be fed to :meth:`apply_mlp`.
 
         Parameters
         ----------
         query_points : torch.Tensor
-            Query coordinates of shape :math:`(B, N, 3)` where :math:`B` is batch size
-            and :math:`N` is number of query points.
+            Query coordinates of shape :math:`(B, N, 3)`.
         key_features : torch.Tensor
-            Features to query from of shape :math:`(B, N, C)` where :math:`C` is the
-            feature dimension.
+            Features to gather of shape :math:`(B, N, C)`.
 
         Returns
         -------
         torch.Tensor
-            Processed features of shape :math:`(B, N, D)` where :math:`D` is the
-            hidden dimension.
+            Flattened neighbor features of shape :math:`(B, N, K \cdot C)`.
         """
         ### Input validation
         if not torch.compiler.is_compiling():
@@ -601,13 +615,65 @@ class GeometricFeatureProcessor(nn.Module):
                 )
 
         # Query neighbors within radius: (B, N, K, C)
+        if os.environ.get("PROFILE_RUN") == "1":
+            torch.cuda.nvtx.range_push("bq_warp")
         _, neighbors = self.bq_warp(query_points, key_features)
+        if os.environ.get("PROFILE_RUN") == "1":
+            torch.cuda.nvtx.range_pop()
 
         # Flatten neighbor features for MLP: (B, N, K, C) -> (B, N, K*C)
-        neighbors_flat = rearrange(neighbors, "b n k c -> b n (k c)")
+        return rearrange(neighbors, "b n k c -> b n (k c)")
 
-        # Process through MLP with tanh activation for bounded output
+    def apply_mlp(
+        self,
+        neighbors_flat: Float[torch.Tensor, "batch points flattened"],
+    ) -> Float[torch.Tensor, "batch points hidden_dim"]:
+        r"""Process flattened neighbor features through the MLP.
+
+        The cheap, per-pathway half of :meth:`forward`. Pairs with
+        :meth:`query_neighbors`.
+
+        Parameters
+        ----------
+        neighbors_flat : torch.Tensor
+            Flattened neighbor features of shape :math:`(B, N, K \cdot C)`.
+
+        Returns
+        -------
+        torch.Tensor
+            Processed features of shape :math:`(B, N, D)`.
+        """
+        # tanh keeps the output bounded
         return torch.nn.functional.tanh(self.mlp(neighbors_flat))
+
+    def forward(
+        self,
+        query_points: Float[torch.Tensor, "batch points spatial_dim"],
+        key_features: Float[torch.Tensor, "batch points features"],
+        cfg=None,
+    ) -> Float[torch.Tensor, "batch points hidden_dim"]:
+        r"""Query neighbors and process features.
+
+        Parameters
+        ----------
+        query_points : torch.Tensor
+            Query coordinates of shape :math:`(B, N, 3)` where :math:`B` is batch size
+            and :math:`N` is number of query points.
+        key_features : torch.Tensor
+            Features to query from of shape :math:`(B, N, C)` where :math:`C` is the
+            feature dimension.
+        cfg : optional
+            Optional profiling configuration exposing a ``profile`` attribute. When
+            ``cfg.profile`` is ``True``, NVTX ranges are emitted around the ball-query
+            operation. Default is ``None``.
+
+        Returns
+        -------
+        torch.Tensor
+            Processed features of shape :math:`(B, N, D)` where :math:`D` is the
+            hidden dimension.
+        """
+        return self.apply_mlp(self.query_neighbors(query_points, key_features))
 
 
 class MultiScaleFeatureExtractor(nn.Module):
@@ -638,6 +704,11 @@ class MultiScaleFeatureExtractor(nn.Module):
         Whether to use Transformer Engine. Default is ``True``.
     plus : bool, optional
         Whether to use Transolver++ features. Default is ``False``.
+    radius_search_implementation : str | None, optional
+        Radius-search backend forwarded to each
+        :class:`GeometricFeatureProcessor`. If None (default), selected
+        automatically. See :func:`~physicsnemo.nn.functional.radius_search` for
+        the full list of accepted backend/variant names.
 
     Forward
     -------
@@ -686,6 +757,7 @@ class MultiScaleFeatureExtractor(nn.Module):
         use_te: bool = True,
         plus: bool = False,
         concrete_dropout: bool = False,
+        radius_search_implementation: str | None = None,
     ) -> None:
         super().__init__()
         self.num_scales = len(radii)
@@ -694,7 +766,11 @@ class MultiScaleFeatureExtractor(nn.Module):
         self.processors = nn.ModuleList(
             [
                 GeometricFeatureProcessor(
-                    radii[i], neighbors_in_radius[i], geometry_dim, hidden_dim
+                    radii[i],
+                    neighbors_in_radius[i],
+                    geometry_dim,
+                    hidden_dim,
+                    radius_search_implementation=radius_search_implementation,
                 )
                 for i in range(self.num_scales)
             ]
@@ -717,10 +793,88 @@ class MultiScaleFeatureExtractor(nn.Module):
             ]
         )
 
+    def extract_features(
+        self,
+        spatial_coords: Float[torch.Tensor, "batch points spatial_dim"],
+        geometry: Float[torch.Tensor, "batch points geometry_dim"],
+        cfg=None,
+        share_query: bool | None = None,
+    ) -> tuple[
+        list[Float[torch.Tensor, "batch heads slices dim"]],
+        Float[torch.Tensor, "batch points total_hidden"],
+    ]:
+        r"""Extract both context and local features, sharing the ball query.
+
+        Combines :meth:`extract_context_features` and
+        :meth:`extract_local_features`. The two pathways differ only in the
+        argument order they pass to the per-scale processor:
+
+        - context: ``processor(spatial_coords, geometry)``
+        - local:   ``processor(geometry, spatial_coords)``
+
+        When ``spatial_coords`` and ``geometry`` are the *same tensor object*
+        (the common case, e.g. both resolve to ``interior.points``), those two
+        calls issue an identical ball query and produce the identical flattened
+        neighbor tensor. In that case this method runs the ball query **once**
+        per scale and feeds the shared result to both the tokenizer (context)
+        and the local-skip pathway, roughly halving ball-query work.
+
+        When the two tensors differ, the pathways are genuinely distinct and
+        this method falls back to two separate queries per scale, exactly
+        reproducing the original behavior.
+
+        Parameters
+        ----------
+        spatial_coords : torch.Tensor
+            Spatial coordinates of shape :math:`(B, N, 3)`.
+        geometry : torch.Tensor
+            Geometry features of shape :math:`(B, N, C_{geo})`.
+        cfg : optional
+            Optional profiling configuration forwarded to each
+            :class:`GeometricFeatureProcessor`. Default is ``None``.
+
+        Returns
+        -------
+        tuple[list[torch.Tensor], torch.Tensor]
+            ``(context_feats, local_feats)`` where ``context_feats`` is a list
+            of tokenized context tensors (one per scale, each
+            :math:`(B, H, S, D)`) and ``local_feats`` is the concatenated local
+            tensor of shape :math:`(B, N, D_{total})`.
+        """
+        # Fast path: identical query/key across pathways -> one ball query.
+        #
+        # ``share_query`` may be forced by the caller. This matters under
+        # ``torch.compile``: Dynamo gives ``spatial_coords`` and ``geometry``
+        # distinct proxy identities even when they are the same runtime tensor,
+        # so the ``is`` check below traces to ``False`` and the compiled graph
+        # would always take the slow 2-query path. Passing an explicit Python
+        # bool lets Dynamo specialize on a constant and keep the fast path.
+        if share_query is None:
+            share_query = spatial_coords is geometry
+
+        context_feats: list[torch.Tensor] = []
+        local_parts: list[torch.Tensor] = []
+        for processor, tokenizer in zip(self.processors, self.tokenizers):
+            if share_query:
+                # Path A and Path B gather the same neighbors; query once.
+                neighbors_flat = processor.query_neighbors(spatial_coords, geometry)
+                shared = processor.apply_mlp(neighbors_flat)
+                context_feats.append(tokenizer(shared))
+                local_parts.append(shared)
+            else:
+                # Distinct search spaces; preserve original per-pathway calls.
+                context_feats.append(
+                    tokenizer(processor(spatial_coords, geometry, cfg=cfg))
+                )
+                local_parts.append(processor(geometry, spatial_coords, cfg=cfg))
+
+        return context_feats, torch.cat(local_parts, dim=-1)
+
     def extract_context_features(
         self,
         spatial_coords: Float[torch.Tensor, "batch points spatial_dim"],
         geometry: Float[torch.Tensor, "batch points geometry_dim"],
+        cfg=None,
     ) -> list[Float[torch.Tensor, "batch heads slices dim"]]:
         r"""Extract and tokenize features for context.
 
@@ -730,6 +884,9 @@ class MultiScaleFeatureExtractor(nn.Module):
             Spatial coordinates of shape :math:`(B, N, 3)`.
         geometry : torch.Tensor
             Geometry features of shape :math:`(B, N, C_{geo})`.
+        cfg : optional
+            Optional profiling configuration forwarded to each
+            :class:`GeometricFeatureProcessor`. Default is ``None``.
 
         Returns
         -------
@@ -738,7 +895,7 @@ class MultiScaleFeatureExtractor(nn.Module):
             :math:`(B, H, S, D)`.
         """
         return [
-            tokenizer(processor(spatial_coords, geometry))
+            tokenizer(processor(spatial_coords, geometry, cfg=cfg))
             for processor, tokenizer in zip(self.processors, self.tokenizers)
         ]
 
@@ -746,6 +903,7 @@ class MultiScaleFeatureExtractor(nn.Module):
         self,
         spatial_coords: Float[torch.Tensor, "batch points spatial_dim"],
         geometry: Float[torch.Tensor, "batch points geometry_dim"],
+        cfg=None,
     ) -> Float[torch.Tensor, "batch points total_hidden"]:
         r"""Extract and concatenate features for local pathway.
 
@@ -755,6 +913,9 @@ class MultiScaleFeatureExtractor(nn.Module):
             Spatial coordinates of shape :math:`(B, N, 3)`.
         geometry : torch.Tensor
             Geometry features of shape :math:`(B, N, C_{geo})`.
+        cfg : optional
+            Optional profiling configuration forwarded to each
+            :class:`GeometricFeatureProcessor`. Default is ``None``.
 
         Returns
         -------
@@ -763,7 +924,10 @@ class MultiScaleFeatureExtractor(nn.Module):
             :math:`D_{total}` is ``hidden_dim * num_scales``.
         """
         return torch.cat(
-            [processor(geometry, spatial_coords) for processor in self.processors],
+            [
+                processor(geometry, spatial_coords, cfg=cfg)
+                for processor in self.processors
+            ],
             dim=-1,
         )
 
@@ -809,6 +973,11 @@ class GlobalContextBuilder(nn.Module):
         If set, disables ball-query extractors and uses
         :class:`StructuredContextProjector` for geometry when ``geometry_dim``
         is set. Default is ``None``.
+    radius_search_implementation : str | None, optional
+        Radius-search backend forwarded to the local multi-scale extractors. If
+        None (default), selected automatically. See
+        :func:`~physicsnemo.nn.functional.radius_search` for the full list of
+        accepted backend/variant names.
 
     Forward
     -------
@@ -859,6 +1028,8 @@ class GlobalContextBuilder(nn.Module):
         include_local_features: bool = False,
         structured_shape: tuple[int, ...] | None = None,
         concrete_dropout: bool = False,
+        radius_search_implementation: str | None = None,
+        share_geometry_positions: bool | None = None,
     ) -> None:
         super().__init__()
 
@@ -867,6 +1038,15 @@ class GlobalContextBuilder(nn.Module):
             radii = [0.05, 0.25]
         if neighbors_in_radius is None:
             neighbors_in_radius = [8, 32]
+
+        # When True, assume geometry and local_positions are the same tensor so
+        # the local ball query is shared between the context and local-skip
+        # pathways (one query per scale instead of two). When None, this is
+        # decided per-call by a runtime identity check, which is correct in
+        # eager mode but always resolves False under torch.compile. Set True
+        # from configs where forward_kwargs wire geometry and local_positions
+        # to the same source (e.g. both interior.points).
+        self.share_geometry_positions = share_geometry_positions
 
         dim_head = n_hidden // n_head
         context_dim = 0
@@ -895,6 +1075,7 @@ class GlobalContextBuilder(nn.Module):
                         use_te,
                         plus,
                         concrete_dropout=concrete_dropout,
+                        radius_search_implementation=radius_search_implementation,
                     )
                     for _ in functional_dims
                 ]
@@ -963,6 +1144,7 @@ class GlobalContextBuilder(nn.Module):
         geometry: Float[torch.Tensor, "batch tokens geometry_dim"] | None = None,
         global_embedding: Float[torch.Tensor, "batch global_tokens global_dim"]
         | None = None,
+        cfg= None
     ) -> tuple[
         Float[torch.Tensor, "batch heads slices context_dim"] | None,
         list[Float[torch.Tensor, "batch tokens local_features"]] | None,
@@ -1022,28 +1204,44 @@ class GlobalContextBuilder(nn.Module):
             raise ValueError(
                 "Local positions are required if local features are enabled."
             )
-
+        
+        # if os.environ.get("PROFILE_RUN") == "1":
+        #     torch.cuda.nvtx.range_push("multi-scale-features")
+   
         # Extract multi-scale features if enabled
         if self.local_extractors is not None and geometry is not None:
             local_features = []
             for i, embedding in enumerate(local_embeddings):
                 spatial_coords = local_positions[i]  # Extract coordinates
-
-                # Get tokenized context features from multi-scale extractor
-                context_feats = self.local_extractors[i].extract_context_features(
-                    spatial_coords, geometry
+                if os.environ.get("PROFILE_RUN") == "1":
+                    torch.cuda.nvtx.range_push(f"loc_embed:{i} features")
+                # Get tokenized context features and concatenated local skip
+                # features in one pass. When spatial_coords and geometry are the
+                # same tensor, the shared ball query is run once instead of
+                # twice per scale.
+                context_feats, local_feats = self.local_extractors[i].extract_features(
+                    spatial_coords,
+                    geometry,
+                    cfg=cfg,
+                    share_query=self.share_geometry_positions,
                 )
+                if os.environ.get("PROFILE_RUN") == "1":
+                    torch.cuda.nvtx.range_pop()
                 context_parts.extend(context_feats)
-
-                # Get concatenated local features for skip connection
-                local_feats = self.local_extractors[i].extract_local_features(
-                    spatial_coords, geometry
-                )
                 local_features.append(local_feats)
+
+        # if os.environ.get("PROFILE_RUN") == "1":
+        #     torch.cuda.nvtx.range_pop()
+        
+
 
         # Tokenize geometry features
         if self.geometry_tokenizer is not None and geometry is not None:
+            if os.environ.get("PROFILE_RUN") == "1":
+                torch.cuda.nvtx.range_push("geometry")
             geometry_context = self.geometry_tokenizer(geometry)
+            if os.environ.get("PROFILE_RUN") == "1":
+                torch.cuda.nvtx.range_pop()
             # Detach the returned copy so downstream observers (e.g. the OOD
             # guard) don't keep the backward graph alive.
             geometry_context_detached = geometry_context.detach()
@@ -1051,7 +1249,11 @@ class GlobalContextBuilder(nn.Module):
 
         # Tokenize global embedding
         if self.global_tokenizer is not None and global_embedding is not None:
+            if os.environ.get("PROFILE_RUN") == "1":
+                torch.cuda.nvtx.range_push('global tokenizer')
             context_parts.append(self.global_tokenizer(global_embedding))
+            if os.environ.get("PROFILE_RUN") == "1":
+                torch.cuda.nvtx.range_pop()
 
         # Concatenate all context features along the last dimension
         context = torch.cat(context_parts, dim=-1) if context_parts else None

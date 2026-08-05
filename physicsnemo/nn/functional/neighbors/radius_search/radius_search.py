@@ -20,7 +20,9 @@ from jaxtyping import Float
 from physicsnemo.core.function_spec import FunctionSpec
 
 from ._torch_impl import radius_search as radius_search_torch
+from ._warp_impl import _WARP_VARIANTS
 from ._warp_impl import radius_search as radius_search_warp
+from .utils import radius_search_timing_enabled, time_radius_search
 
 
 class RadiusSearch(FunctionSpec):
@@ -71,8 +73,17 @@ class RadiusSearch(FunctionSpec):
             Defaults to False.
         return_points (bool, optional): If True, returns the actual neighbor points in addition to
             their indices. Defaults to False.
-        implementation (str, optional): Explicit implementation name ("warp" or "torch").
-            Defaults to None, which selects by rank.
+        implementation (str, optional): Explicit backend selection. Base backends are
+            ``"warp"`` (Warp hash grid) and ``"torch"`` (brute force). On the CUDA
+            ``max_points`` path the Warp backend also exposes experimental variants
+            selectable directly by name: ``"scalar"`` / ``"fma"`` / ``"gemm"``
+            (Morton hash grid), ``"dense_fma"`` / ``"dense_fma_e2e"`` /
+            ``"dense_fma_store_opt"`` / ``"dense_fma_mem_opt"`` / ``"dense_fma_mm"`` /
+            ``"dense_gemm"`` / ``"custom_grid_cell"`` (Morton dense-cell;
+            ``"custom_grid_cell"`` is a WIP experimental cell-centric memory-optimized
+            launch that is not runnable yet), ``"sparse_fma_e2e"`` (sparse hash-grid
+            cells), and ``"bvh"`` (Morton-ordered tiled LBVH). Defaults to None,
+            which selects the lowest-rank available base backend.
 
     Returns:
         tuple | torch.Tensor:
@@ -109,10 +120,17 @@ class RadiusSearch(FunctionSpec):
         max_points: int | None = None,
         return_dists: bool = False,
         return_points: bool = False,
+        variant: str | None = None,
     ) -> tuple[torch.Tensor, ...]:
-        """Warp-accelerated radius search using spatial hash grids."""
+        """Warp-accelerated radius search using spatial hash grids.
+
+        ``variant`` selects a Morton/BVH sub-variant on the CUDA
+        ``max_points`` path (injected by :meth:`RadiusSearch.dispatch` when the
+        user requests one via ``implementation=``). When None, the hash-grid
+        kernel runs unless a ``PHYSICSNEMO_RADIUS_SEARCH_*`` env var is set.
+        """
         return radius_search_warp(
-            points, queries, radius, max_points, return_dists, return_points
+            points, queries, radius, max_points, return_dists, return_points, variant
         )
 
     @FunctionSpec.register(name="torch", rank=1, baseline=True)
@@ -128,6 +146,52 @@ class RadiusSearch(FunctionSpec):
         return radius_search_torch(
             points, queries, radius, max_points, return_dists, return_points
         )
+
+    @classmethod
+    def dispatch(cls, *args, **kwargs):
+        """Dispatch to a backend, translating Warp variant names.
+
+        The Morton/BVH variants are sub-variants of the ``warp`` backend rather
+        than separately registered implementations. Selecting one by name
+        (e.g. ``implementation="dense_fma"`` or ``implementation="bvh"``) rewrites
+        the request to ``implementation="warp"`` plus an explicit ``variant`` that
+        is threaded into the Warp custom op, which preserves the op's shared
+        autograd backward. The base backends ``warp`` / ``torch`` and the
+        automatic ``None`` selection are unaffected.
+
+        Parameters
+        ----------
+        *args, **kwargs
+            Arguments forwarded to the selected implementation. ``implementation``
+            may name a base backend or any value in ``_WARP_VARIANTS``.
+
+        Returns
+        -------
+        object
+            The implementation result.
+        """
+        implementation = kwargs.get("implementation")
+        if implementation in _WARP_VARIANTS:
+            kwargs["implementation"] = "warp"
+            kwargs["variant"] = implementation
+
+        # Fast path: no timing overhead unless explicitly enabled.
+        if not radius_search_timing_enabled():
+            return super().dispatch(*args, **kwargs)
+
+        # Opt-in CUDA-event timing (PHYSICSNEMO_RADIUS_SEARCH_TIMING). Label each
+        # call by the user-requested backend so a benchmark can attribute per-call
+        # GPU time to each implementation; carry radius/max_points for per-site
+        # breakdowns. ``radius`` is the 3rd positional arg of ``radius_search``.
+        label = implementation if implementation is not None else "auto"
+        radius = args[2] if len(args) >= 3 else kwargs.get("radius")
+        max_points = kwargs.get("max_points")
+        if max_points is None and len(args) >= 4:
+            max_points = args[3]
+        with time_radius_search(
+            label, meta={"radius": radius, "max_points": max_points}
+        ):
+            return super().dispatch(*args, **kwargs)
 
     @classmethod
     def make_inputs_forward(

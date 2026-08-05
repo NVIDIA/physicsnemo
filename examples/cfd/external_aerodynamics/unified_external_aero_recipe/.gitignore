@@ -9,3 +9,5 @@ checkpoints/
 *.mdlus
 *.tfevents*
 *.parquet
+bench_out/
+profile_out/

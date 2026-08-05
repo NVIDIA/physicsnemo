@@ -22,6 +22,8 @@ By default, it will project a grid of points to a 1D set of points.
 Supports arbitrary batch sizes.
 """
 
+import os
+
 import torch
 import torch.nn as nn
 from einops import rearrange
@@ -43,6 +45,7 @@ class BQWarp(nn.Module):
         self,
         radius: float = 0.25,
         neighbors_in_radius: int | None = 10,
+        implementation: str | None = None,
     ):
         """
         Initialize the BQWarp layer.
@@ -50,14 +53,17 @@ class BQWarp(nn.Module):
         Args:
             radius: Radius for ball query operation
             neighbors_in_radius: Maximum number of neighbors to return within radius. If None, all neighbors will be returned.
+            implementation: Radius-search implementation to use. If None, the
+                implementation is selected automatically.
         """
         super().__init__()
 
         self.radius = radius
         self.neighbors_in_radius = neighbors_in_radius
+        self.implementation = implementation
 
     def forward(
-        self, x: torch.Tensor, p_grid: torch.Tensor, reverse_mapping: bool = True
+        self, x: torch.Tensor, p_grid: torch.Tensor, reverse_mapping: bool = True, cfg= None
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Performs ball query operation to find neighboring points and their features.
@@ -93,22 +99,33 @@ class BQWarp(nn.Module):
                 p_grid = rearrange(p_grid, "b nx ny nz c -> b (nx ny nz) c")
             else:
                 raise ValueError("p_grid must be 3D, 4D, 5D only")
+        
+        if os.environ.get("PROFILE_RUN") == "1" or os.environ.get("PROFILE_RUN_DEEP") == "1":
+            torch.cuda.nvtx.range_push('bq_warp')
+       
+        radius_search_kwargs = {
+            "max_points": self.neighbors_in_radius,
+            "return_points": True,
+            "implementation": self.implementation,
+        }
 
         if reverse_mapping:
+            
             mapping, outputs = radius_search(
                 x,
                 p_grid,
                 self.radius,
-                self.neighbors_in_radius,
-                return_points=True,
+                **radius_search_kwargs,
             )
+
         else:
             mapping, outputs = radius_search(
                 p_grid,
                 x,
                 self.radius,
-                self.neighbors_in_radius,
-                return_points=True,
+                **radius_search_kwargs,
             )
+        if os.environ.get("PROFILE_RUN") == "1" or os.environ.get("PROFILE_RUN_DEEP") == "1":
+            torch.cuda.nvtx.range_pop()
 
         return mapping, outputs

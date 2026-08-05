@@ -43,7 +43,7 @@ from einops import rearrange
 from jaxtyping import Float
 from torch.autograd.profiler import record_function
 from torch.distributed.tensor.placement_types import Replicate
-
+import os
 from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.nn import gumbel_softmax
 
@@ -166,25 +166,35 @@ def _compute_slices_from_projections(
         # Transolver++ uses learned per-token temperature
         temp = temperature + proj_temperature(fx)
         clamped_temp = torch.clamp(temp, min=0.01).to(slice_projections.dtype)
+        
+        if os.environ.get("PROFILE_RUN") == "1":
+            torch.cuda.nvtx.range_push("Grumbel Softmax")
+        
         slice_weights = gumbel_softmax(slice_projections, clamped_temp)  # (B, N, H, S)
+        
+        if os.environ.get("PROFILE_RUN") == "1":
+            torch.cuda.nvtx.range_pop()
     else:
         # Standard Transolver uses global temperature
         clamped_temp = torch.clamp(temperature, min=0.5, max=5).to(
             slice_projections.dtype
         )
         slice_weights = nn.functional.softmax(
-            slice_projections / clamped_temp, dim=-1
+            slice_projections / clamped_temp, dim=-1,
+            dtype = slice_projections.dtype,
         )  # (B, N, H, S)
 
     # Cast to the computation type (since the parameter is probably fp32)
     slice_weights = slice_weights.to(slice_projections.dtype)
 
+
+    # ----------CHANGED ---------------
     # Computing the slice tokens is a matmul followed by a normalization.
     # It can, unfortunately, overflow in reduced precision, so normalize first:
-    slice_norm = slice_weights.sum(1) + 1e-2  # (B, H, S)
+    # slice_norm = slice_weights.sum(1) + 1e-2  # (B, H, S)
     # Sharded note: slice_norm will be a partial sum at this point.
     # That's because the we're summing over the tokens, which are distributed
-    normed_weights = slice_weights / (slice_norm[:, None, :, :])
+    # normed_weights = slice_weights / (slice_norm[:, None, :, :]).to(slice_projections.dtype)
     # Normed weights has shape (B, N, H, S)
 
     # Sharded note: normed_weights will resolve the partial slice_norm
@@ -195,11 +205,82 @@ def _compute_slices_from_projections(
 
     # Like the weight norm, this sum is a **partial** sum since we are summing
     # over the tokens
-
+    # if os.environ.get("PROFILE_RUN") == "1":
+    #     torch.cuda.nvtx.range_push("slice token matmul")
+    
     # Aggregate features: (B, N, H, S)^T @ (B, N, H, D) -> (B, H, S, D)
-    slice_token = torch.matmul(
-        normed_weights.permute(0, 2, 3, 1), fx.permute(0, 2, 1, 3)
+    # slice_token = torch.matmul(
+    #     normed_weights.permute(0, 2, 3, 1), fx.permute(0, 2, 1, 3)
+    # )
+
+    # ----------------CHANGED-------------------------
+
+    # slice_norm = slice_weights.sum(dim=1, dtype=torch.float32) + 1e-2
+    # import ipdb; ipdb.set_trace()
+    # numerator = torch.matmul(slice_weights.permute(0, 2, 3, 1), fx.permute(0, 2, 1, 3)).to(torch.float32)#, out_dtype=torch.float32)
+    # slice_token = (numerator / slice_norm[..., None]).to(slice_weights.dtype)
+
+    # slice_weights: (B, N, H, S)
+# fx:            (B, N, H, D)
+    B, N, H, S = slice_weights.shape
+    D = fx.shape[-1]
+
+    # Sum over tokens. Accumulate in FP32 for BF16/FP16.
+    acc_dtype = (
+        torch.float32
+        if slice_weights.dtype in (torch.float16, torch.bfloat16)
+        else slice_weights.dtype
     )
+    slice_norm = slice_weights.sum(dim=1, dtype=acc_dtype) + 1e-2  # (B, H, S)
+
+    # Convert to batched head-major matrices:
+    # weights_bh:  (B*H, N, S)
+    # features_bh: (B*H, N, D)
+    weights_bh = (
+        slice_weights.permute(0, 2, 1, 3)
+        .reshape(B * H, N, S)
+    )
+    features_bh = (
+        fx.permute(0, 2, 1, 3)
+        .reshape(B * H, N, D)
+    )
+
+    if os.environ.get("PROFILE_RUN") == "1":
+        torch.cuda.nvtx.range_push("slice token matmul")
+
+    # if (
+    #     weights_bh.is_cuda
+    #     and weights_bh.dtype in (torch.float16, torch.bfloat16)
+    # ):
+    #     numerator = torch.bmm(
+    #         weights_bh.transpose(1, 2),  # (B*H, S, N)
+    #         features_bh,                 # (B*H, N, D)
+    #     )
+    # elif weights_bh.dtype in (torch.float16, torch.bfloat16):
+    #     # CPU/testing fallback
+    #     numerator = torch.bmm(
+    #         weights_bh.transpose(1, 2).float(),
+    #         features_bh.float(),
+    #     )
+    # else:
+    #     numerator = torch.bmm(
+    #         weights_bh.transpose(1, 2),
+    #         features_bh,
+    #     )
+    # import ipdb; ipdb.set_trace()
+    numerator = torch.bmm(weights_bh.transpose(1, 2),features_bh,).reshape(B, H, S, D)
+    # numerator = numerator.reshape(B, H, S, D)
+
+    # Divide only the small (B,H,S,D) result.
+    slice_token = (
+        numerator / slice_norm.unsqueeze(-1)
+    ).to(fx.dtype)
+
+    if os.environ.get("PROFILE_RUN") == "1":
+        torch.cuda.nvtx.range_pop()
+
+    # if os.environ.get("PROFILE_RUN") == "1":
+    #     torch.cuda.nvtx.range_pop()
 
     # Return the original weights, not the normed weights:
     return slice_weights, slice_token

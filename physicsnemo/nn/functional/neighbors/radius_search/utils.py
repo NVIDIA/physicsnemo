@@ -14,11 +14,247 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+import json
+import os
+import threading
+from pathlib import Path
+from typing import Any
+
 import torch
 
 
+_CAPTURE_LOCK = threading.Lock()
+_CAPTURE_COUNT = 0
+_TIMING_LOCK = threading.Lock()
+# Each entry: (implementation_label, meta_dict, start_event, end_event).
+_TIMING_EVENTS: list[tuple[str, dict, Any, Any]] = []
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
+def radius_search_timing_enabled() -> bool:
+    return _env_flag("PHYSICSNEMO_RADIUS_SEARCH_TIMING")
+
+
+class _RadiusSearchTimer:
+    def __init__(self, implementation: str, meta: dict | None = None):
+        self.implementation = implementation
+        self.meta = meta or {}
+        self.start_event: Any | None = None
+        self.end_event: Any | None = None
+
+    def __enter__(self):
+        if not radius_search_timing_enabled():
+            return self
+        if not torch.cuda.is_available():
+            return self
+        if getattr(torch.compiler, "is_compiling", lambda: False)():
+            return self
+
+        self.start_event = torch.cuda.Event(enable_timing=True)
+        self.end_event = torch.cuda.Event(enable_timing=True)
+        self.start_event.record()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self.start_event is not None and self.end_event is not None:
+            self.end_event.record()
+            with _TIMING_LOCK:
+                _TIMING_EVENTS.append(
+                    (self.implementation, self.meta, self.start_event, self.end_event)
+                )
+        return False
+
+
+def time_radius_search(
+    implementation: str, meta: dict | None = None
+) -> _RadiusSearchTimer:
+    """Context manager that CUDA-event-times an enclosed radius-search call.
+
+    Recording is a no-op unless ``PHYSICSNEMO_RADIUS_SEARCH_TIMING`` is set and
+    CUDA is available. ``meta`` (e.g. ``{"radius": ..., "max_points": ...}``) is
+    stored alongside the timing so per-call-site breakdowns are possible.
+    """
+    return _RadiusSearchTimer(implementation, meta)
+
+
+def reset_radius_search_timing() -> None:
+    with _TIMING_LOCK:
+        _TIMING_EVENTS.clear()
+
+
+def radius_search_timing_records(reset: bool = False) -> list[dict[str, Any]]:
+    """Return the individual CUDA-event timings recorded since the last reset.
+
+    Each record is a dict with keys ``implementation``, ``radius``,
+    ``max_points`` and ``elapsed_ms``. The recorded events are synchronized
+    before their elapsed time is read. Unlike
+    :func:`summarize_radius_search_timing`, this preserves every per-call sample
+    so callers can compute their own statistics (mean/median/std/var). When
+    ``reset`` is True the internal buffer is cleared after reading.
+    """
+    with _TIMING_LOCK:
+        events = list(_TIMING_EVENTS)
+        if reset:
+            _TIMING_EVENTS.clear()
+
+    for _, _, _, end_event in events:
+        end_event.synchronize()
+
+    records: list[dict[str, Any]] = []
+    for implementation, meta, start_event, end_event in events:
+        meta = meta or {}
+        records.append(
+            {
+                "implementation": implementation,
+                "radius": meta.get("radius"),
+                "max_points": meta.get("max_points"),
+                "elapsed_ms": float(start_event.elapsed_time(end_event)),
+            }
+        )
+    return records
+
+
+def summarize_radius_search_timing() -> dict[str, float | int]:
+    with _TIMING_LOCK:
+        events = list(_TIMING_EVENTS)
+        _TIMING_EVENTS.clear()
+
+    summary: dict[str, float | int] = {
+        "neighbor_search_ms": 0.0,
+        "neighbor_search_calls": 0,
+    }
+    if not events:
+        return summary
+
+    for _, _, _, end_event in events:
+        end_event.synchronize()
+
+    by_impl_ms: dict[str, float] = {}
+    by_impl_calls: dict[str, int] = {}
+    total_ms = 0.0
+    for implementation, _meta, start_event, end_event in events:
+        elapsed_ms = float(start_event.elapsed_time(end_event))
+        total_ms += elapsed_ms
+        by_impl_ms[implementation] = by_impl_ms.get(implementation, 0.0) + elapsed_ms
+        by_impl_calls[implementation] = by_impl_calls.get(implementation, 0) + 1
+
+    summary["neighbor_search_ms"] = total_ms
+    summary["neighbor_search_calls"] = len(events)
+    for implementation, elapsed_ms in sorted(by_impl_ms.items()):
+        key = implementation.replace("-", "_")
+        summary[f"neighbor_search_{key}_ms"] = elapsed_ms
+        summary[f"neighbor_search_{key}_calls"] = by_impl_calls[implementation]
+    return summary
+
+
+def _capture_enabled_for(implementation: str) -> bool:
+    capture_dir = os.getenv("PHYSICSNEMO_RADIUS_SEARCH_CAPTURE_DIR")
+    if not capture_dir:
+        return False
+
+    allowed = os.getenv("PHYSICSNEMO_RADIUS_SEARCH_CAPTURE_IMPLS")
+    if not allowed:
+        return True
+    return implementation in {item.strip() for item in allowed.split(",") if item.strip()}
+
+
+def maybe_capture_radius_search(
+    implementation: str,
+    points: torch.Tensor,
+    queries: torch.Tensor,
+    radius: float,
+    max_points: int | None,
+    return_dists: bool,
+    return_points: bool,
+    *,
+    num_neighbors: torch.Tensor | None = None,
+    extra_metadata: dict[str, Any] | None = None,
+) -> None:
+    """Optionally save radius-search inputs for standalone replay/benchmarking.
+
+    Capture is disabled unless ``PHYSICSNEMO_RADIUS_SEARCH_CAPTURE_DIR`` is set.
+    ``PHYSICSNEMO_RADIUS_SEARCH_CAPTURE_LIMIT`` limits files per process; the
+    default is 1 to avoid accidentally filling disks during long training runs.
+    Set the limit to 0 for unlimited capture.
+    """
+    if not _capture_enabled_for(implementation):
+        return
+    if getattr(torch.compiler, "is_compiling", lambda: False)():
+        return
+
+    global _CAPTURE_COUNT
+    limit = _env_int("PHYSICSNEMO_RADIUS_SEARCH_CAPTURE_LIMIT", 1)
+    with _CAPTURE_LOCK:
+        if limit > 0 and _CAPTURE_COUNT >= limit:
+            return
+        capture_id = _CAPTURE_COUNT
+        _CAPTURE_COUNT += 1
+
+    capture_dir = Path(os.environ["PHYSICSNEMO_RADIUS_SEARCH_CAPTURE_DIR"])
+    capture_dir.mkdir(parents=True, exist_ok=True)
+    rank = _env_int("RANK", 0)
+    filename = f"rank{rank:03d}_{capture_id:06d}_{implementation}.pt"
+    path = capture_dir / filename
+
+    metadata: dict[str, Any] = {
+        "implementation": implementation,
+        "radius": float(radius),
+        "max_points": max_points,
+        "return_dists": bool(return_dists),
+        "return_points": bool(return_points),
+        "points_shape": tuple(points.shape),
+        "queries_shape": tuple(queries.shape),
+        "points_dtype": str(points.dtype),
+        "queries_dtype": str(queries.dtype),
+        "points_device": str(points.device),
+        "queries_device": str(queries.device),
+        "rank": rank,
+        "capture_id": capture_id,
+        "path": str(path),
+    }
+    if extra_metadata:
+        metadata.update(extra_metadata)
+
+    payload: dict[str, Any] = {
+        "metadata": metadata,
+        "points": points.detach().cpu(),
+        "queries": queries.detach().cpu(),
+        "radius": float(radius),
+        "max_points": max_points,
+        "return_dists": bool(return_dists),
+        "return_points": bool(return_points),
+    }
+    if num_neighbors is not None and num_neighbors.numel() > 0:
+        payload["num_neighbors"] = num_neighbors.detach().cpu()
+
+    torch.save(payload, path)
+    with (capture_dir / "manifest.jsonl").open("a", encoding="utf-8") as f:
+        f.write(json.dumps(metadata, sort_keys=True) + "\n")
+
+
 def validate_inputs(points: torch.Tensor, queries: torch.Tensor):
-    """Validate and normalize inputs to (B, N, 3) shape. Returns (points, queries, was_unbatched)."""
+    """Validate and normalize inputs to (B, N, 3) shape.
+
+    Returns ``(points, queries, was_unbatched)``.
+    """
     if points.ndim == 2 and queries.ndim == 2:
         return points.unsqueeze(0), queries.unsqueeze(0), True
     elif points.ndim == 3 and queries.ndim == 3:

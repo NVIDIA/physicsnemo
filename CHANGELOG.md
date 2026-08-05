@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds experimental CUDA radius-search backends for the `max_points` path,
+  selectable by name via `radius_search(..., implementation=...)`: Morton
+  hash-grid variants (`scalar`, `fma`, `gemm`), Morton dense-cell variants
+  (`dense_fma`, `dense_fma_e2e`, `dense_fma_store_opt`, `dense_fma_mem_opt`,
+  `dense_fma_mm`, `dense_gemm`), a sparse hash-grid variant (`sparse_fma_e2e`)
+  whose memory scales with occupied cells rather than the bounding box, and a
+  Morton-ordered tiled LBVH (`bvh`). All run
+  inside the existing Warp custom op, so they share its autograd backward and
+  `torch.compile` support. GeoTransolver exposes the choice through the
+  `radius_search_implementation` config key.
 - Adds `zenith_azimuth_angles` and `zenith_azimuth_angles_from_timestamp` to
   `physicsnemo.utils.zenith_angle`, returning
   `(sin_zenith, cos_zenith, sin_azimuth, cos_azimuth)` alongside the existing

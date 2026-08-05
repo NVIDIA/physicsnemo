@@ -24,6 +24,7 @@ structure and global context throughout the forward pass.
 from __future__ import annotations
 
 import math
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -265,13 +266,32 @@ class GeoTransolver(Module):
         training, and emits warnings on out-of-distribution inputs during
         inference. Default is ``None``.
     attention_type : str, optional
-        attention_type is used to choose the attention type (GALE or GALE_FA). 
+        attention_type is used to choose the attention type (GALE or GALE_FA).
         Default is ``"GALE"``.
     state_mixing_mode : str, optional
         How to blend self-attention and cross-attention outputs in GALE layers.
         ``"weighted"`` uses a learnable sigmoid-gated weighted sum.
         ``"concat_project"`` concatenates the two along the head dimension and
         projects back with a linear layer. Default is ``"weighted"``.
+    share_geometry_positions : bool | None, optional
+        Controls whether the local ball query is shared between the context and
+        local-skip pathways. When ``geometry`` and ``local_positions`` are the
+        same tensor, both pathways issue an identical radius search, so it can
+        run once per scale instead of twice. Set ``True`` to force sharing
+        (required under ``torch.compile``, which cannot see through the runtime
+        tensor-identity check). ``None`` (default) decides per-call via an
+        identity check—correct in eager mode, but always falls back to the
+        slower two-query path when compiled. Only affects the
+        ``include_local_features=True`` mesh path. Default is ``None``.
+
+    radius_search_implementation : str | None, optional
+        Radius-search backend used for local geometric features, forwarded to
+        :func:`~physicsnemo.nn.functional.radius_search`. If None (default), the
+        backend is selected automatically. Base backends: ``"warp"``, ``"torch"``.
+        Warp CUDA ``max_points`` variants selectable by name: ``"scalar"``,
+        ``"fma"``, ``"gemm"``, ``"dense_fma"``, ``"dense_fma_e2e"``,
+        ``"dense_fma_store_opt"``, ``"dense_fma_mem_opt"``, ``"dense_fma_mm"``,
+        ``"dense_gemm"``, ``"sparse_fma_e2e"``, ``"bvh"``.
 
     Forward
     -------
@@ -303,7 +323,7 @@ class GeoTransolver(Module):
         layout—flattened :math:`(B, N, C_{out})` or spatial
         :math:`(B, H, W, C_{out})` / :math:`(B, H, W, D, C_{out})` when
         inputs were 4D/5D.
-        
+
         When ``return_embedding_states=True``, returns a 2-tuple
         ``(output, embedding_states)`` where ``output`` follows the same
         rules above, and ``embedding_states`` is of shape
@@ -425,6 +445,8 @@ class GeoTransolver(Module):
         attention_type: str = "GALE",
         concrete_dropout: bool = False,
         state_mixing_mode: str = "weighted",
+        radius_search_implementation: str | None = None,
+        share_geometry_positions: bool | None = None,
     ) -> None:
         super().__init__(meta=GeoTransolverMetaData())
         self.__name__ = "GeoTransolver"
@@ -483,6 +505,8 @@ class GeoTransolver(Module):
             include_local_features=self.include_local_features,
             structured_shape=structured_shape,
             concrete_dropout=concrete_dropout,
+            radius_search_implementation=radius_search_implementation,
+            share_geometry_positions=share_geometry_positions,
         )
         context_dim = self.context_builder.get_context_dim()
 
@@ -612,6 +636,7 @@ class GeoTransolver(Module):
         geometry: Float[torch.Tensor, "batch tokens geometry_dim"] | None = None,
         time: torch.Tensor | None = None,
         return_embedding_states: bool = False,
+        cfg: DictConfig= None
     ) -> (
         Float[torch.Tensor, "batch tokens out_dim"]
         | tuple[Float[torch.Tensor, "batch tokens out_dim"], ...]
@@ -661,7 +686,6 @@ class GeoTransolver(Module):
         """
         # Track whether input was a single tensor for output format
         single_input = isinstance(local_embedding, torch.Tensor)
-
         # Time embedding not yet supported
         if time is not None:
             raise NotImplementedError(
@@ -670,9 +694,15 @@ class GeoTransolver(Module):
             )
 
         # Normalize inputs to tuple format
+        if os.environ.get("PROFILE_RUN") == "1":
+            torch.cuda.nvtx.range_push('normalize local embedding tensor')
+
         local_embedding = _normalize_tensor(local_embedding)
         if local_positions is not None:
             local_positions = _normalize_tensor(local_positions)
+
+        if os.environ.get("PROFILE_RUN") == "1":
+            torch.cuda.nvtx.range_pop()
 
         unflatten_output = False
         if self.structured_shape is not None:
@@ -717,12 +747,19 @@ class GeoTransolver(Module):
                 )
 
         # Build context embeddings and extract local features
+        if os.environ.get("PROFILE_RUN") == "1":
+            torch.cuda.nvtx.range_push("build context")
+
         embedding_states, local_embedding_bq, geo_ctx = (
             self.context_builder.build_context(
-                local_embedding, local_positions, geometry, global_embedding
+                local_embedding, local_positions, geometry, global_embedding, cfg
             )
         )
+        if os.environ.get("PROFILE_RUN") == "1":
+            torch.cuda.nvtx.range_pop()
 
+        if os.environ.get("PROFILE_RUN") == "1":
+            torch.cuda.nvtx.range_push("ood guard")
         # --- OOD Guard ---
         if self.ood_guard is not None:
             # Pool (B, H, S, D) -> (B, D); guard expects pre-pooled latents.
@@ -733,24 +770,48 @@ class GeoTransolver(Module):
                 self.ood_guard.collect(global_embedding, geo_latent)
             else:
                 self.ood_guard.check(global_embedding, geo_latent)
-
+        if os.environ.get("PROFILE_RUN") == "1":
+            torch.cuda.nvtx.range_pop()
         # Project inputs to hidden dimension: (B, N, C) -> (B, N, n_hidden)
+        if os.environ.get("PROFILE_RUN") == "1":
+            torch.cuda.nvtx.range_push("project inp to hidden DIM")
         x = [self.preprocess[i](le) for i, le in enumerate(local_embedding)]
 
+        if os.environ.get("PROFILE_RUN") == "1":
+            torch.cuda.nvtx.range_pop()
         # Concatenate local features if enabled
         if self.include_local_features and local_embedding_bq is not None:
+            if os.environ.get("PROFILE_RUN") == "1":
+                torch.cuda.nvtx.range_push('concatenate local features')
             x = [
                 torch.cat([x[i], local_embedding_bq[i]], dim=-1)
                 for i in range(len(x))
             ]
+            if os.environ.get("PROFILE_RUN") == "1":
+                torch.cuda.nvtx.range_pop()
 
         # Pass through GALE transformer blocks with context cross-attention
-        for block in self.blocks:
+        if os.environ.get("PROFILE_RUN") == "1":
+            torch.cuda.nvtx.range_push(f"GALE BLOCKS")
+        
+        for block_idx_prof, block in enumerate(self.blocks):
+            if os.environ.get("PROFILE_RUN") == "1":
+                torch.cuda.nvtx.range_push(f"GALE block idx:{block_idx_prof}")
             x = block(tuple(x), embedding_states)
+            if os.environ.get("PROFILE_RUN") == "1":
+                torch.cuda.nvtx.range_pop()
+            
+        if os.environ.get("PROFILE_RUN") == "1":
+            torch.cuda.nvtx.range_pop()
 
         # Project to output dimensions: (B, N, n_hidden) -> (B, N, out_dim)
+        if os.environ.get("PROFILE_RUN") == "1":
+            torch.cuda.nvtx.range_push('project to output dim')
         x = [self.ln_mlp_out[i](x[i]) for i in range(len(x))]
 
+        if os.environ.get("PROFILE_RUN") == "1":
+            torch.cuda.nvtx.range_pop()
+        
         if self.structured_shape is not None and unflatten_output:
             B = x[0].shape[0]
             for i in range(len(x)):

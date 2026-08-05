@@ -41,6 +41,7 @@ from physicsnemo.nn.module.physics_attention import (
 from physicsnemo.experimental.nn.flare_attention import _flare_self_attention
 
 from physicsnemo.nn import ConcreteDropout
+import os
 
 # Check optional dependency availability
 TE_AVAILABLE = check_version_spec("transformer_engine", "0.1.0", hard_fail=False)
@@ -185,6 +186,9 @@ def _gale_forward_impl(
                     f"Expected 3D input tensor (B, N, C) at index {i}, "
                     f"got {tensor.ndim}D tensor with shape {tuple(tensor.shape)}"
                 )
+    if os.environ.get('PROFILE_RUN')=="1" or os.environ.get("PROFILE_RUN_DEEP")=='1':
+        torch.cuda.nvtx.range_push('GALE: Project INPUT TO SLICE')
+    # try:
     if module.plus:
         x_mid = [module.project_input_onto_slices(_x) for _x in x]
         fx_mid = [_x_mid for _x_mid in x_mid]
@@ -192,13 +196,29 @@ def _gale_forward_impl(
         x_mid, fx_mid = zip(
             *[module.project_input_onto_slices(_x) for _x in x]
         )
+    # finally:
+    if os.environ.get('PROFILE_RUN')=="1" or os.environ.get("PROFILE_RUN_DEEP")=='1':
+        torch.cuda.nvtx.range_pop()
+
+    if os.environ.get('PROFILE_RUN')=="1" or os.environ.get("PROFILE_RUN_DEEP")=='1':
+        torch.cuda.nvtx.range_push('GALE: SLICE Projections')
     slice_projections = [module.in_project_slice(_x_mid) for _x_mid in x_mid]
+    if os.environ.get('PROFILE_RUN')=="1" or os.environ.get("PROFILE_RUN_DEEP")=='1':
+            torch.cuda.nvtx.range_pop()
+
+    if os.environ.get('PROFILE_RUN')=="1" or os.environ.get("PROFILE_RUN_DEEP")=='1':
+        torch.cuda.nvtx.range_push('GALE: Comp. Slice')
     slice_weights, slice_tokens = zip(
         *[
             module._compute_slices_from_projections(proj, _fx_mid)
             for proj, _fx_mid in zip(slice_projections, fx_mid)
         ]
     )
+    if os.environ.get('PROFILE_RUN')=="1" or os.environ.get("PROFILE_RUN_DEEP")=='1':
+            torch.cuda.nvtx.range_pop()
+    
+    if os.environ.get('PROFILE_RUN')=="1":
+        torch.cuda.nvtx.range_push('GALE: Comp. Slice Attention')
     if module.use_te:
         self_slice_token = [
             module._compute_slice_attention_te(_slice_token)
@@ -209,7 +229,12 @@ def _gale_forward_impl(
             module._compute_slice_attention_sdpa(_slice_token)
             for _slice_token in slice_tokens
         ]
+    if os.environ.get('PROFILE_RUN')=="1":
+        torch.cuda.nvtx.range_pop()
+    
     if context is not None:
+        if os.environ.get('PROFILE_RUN')=="1":
+            torch.cuda.nvtx.range_push('GALE: Comp. CROSS Attn Slice ')
         cross_slice_token = [
             module.compute_slice_attention_cross([_slice_token], context)[0]
             for _slice_token in slice_tokens
@@ -222,13 +247,22 @@ def _gale_forward_impl(
             )
             for sst, cst in zip(self_slice_token, cross_slice_token)
         ]
+        if os.environ.get('PROFILE_RUN')=="1":
+            torch.cuda.nvtx.range_pop()
+
     else:
         # Use only self-attention when no context is provided
         out_slice_token = self_slice_token
+    
+    if os.environ.get('PROFILE_RUN')=="1" or os.environ.get("PROFILE_RUN_DEEP")=='1':
+        torch.cuda.nvtx.range_push('Project attention outputs')
     outputs = [
         module._project_attention_outputs(ost, sw)
         for ost, sw in zip(out_slice_token, slice_weights)
     ]
+
+    if os.environ.get('PROFILE_RUN')=="1" or os.environ.get("PROFILE_RUN_DEEP")=='1':
+        torch.cuda.nvtx.range_pop()
     return outputs
 
 
@@ -955,25 +989,53 @@ class GALE_block(nn.Module):
                         f"Expected 3D input tensor (B, N, C) at index {i}, "
                         f"got {tensor.ndim}D tensor with shape {tuple(tensor.shape)}"
                     )
-
+        if os.environ.get("PROFILE_RUN_DEEP")=='1':
+            torch.cuda.nvtx.range_push("layer norm + gale attention")
         # Apply pre-normalization to all inputs
         normed_inputs = [self.ln_1(_fx) for _fx in fx]
 
         # Apply GALE attention with cross-attention to global context
         attn = self.Attn(tuple(normed_inputs), global_context)
 
+        if os.environ.get("PROFILE_RUN_DEEP")=='1':
+            torch.cuda.nvtx.range_pop()
+        
+        if os.environ.get("PROFILE_RUN") == "1":
+            torch.cuda.nvtx.range_push("Res. Conn after attention")
+        
         # Residual connection after attention
         fx_out = [attn[i] + fx[i] for i in range(len(fx))]
+
+        if os.environ.get("PROFILE_RUN") == "1":
+            torch.cuda.nvtx.range_pop()
+
+        if os.environ.get("PROFILE_RUN") == "1":
+            torch.cuda.nvtx.range_push("Attention Dropout")
 
         # Concrete dropout after attention residual
         if self.attn_dropout is not None:
             fx_out = [self.attn_dropout(_fx) for _fx in fx_out]
 
+        if os.environ.get("PROFILE_RUN") == "1":
+            torch.cuda.nvtx.range_pop()
+
+        if os.environ.get("PROFILE_RUN") == "1" or os.environ.get("PROFILE_RUN_DEEP")=='1':
+            torch.cuda.nvtx.range_push("feed forward with Res Conn.")
+        
         # Feed-forward network with residual connection
         fx_out = [self.ln_mlp1(_fx) + _fx for _fx in fx_out]
 
+        if os.environ.get("PROFILE_RUN") == "1" or os.environ.get("PROFILE_RUN_DEEP")=='1':
+            torch.cuda.nvtx.range_pop()
+
         # Concrete dropout after FFN residual
+        if os.environ.get("PROFILE_RUN") == "1":
+            torch.cuda.nvtx.range_push("Concrete Dropout")
+
         if self.ffn_dropout is not None:
             fx_out = [self.ffn_dropout(_fx) for _fx in fx_out]
-
+        
+        if os.environ.get("PROFILE_RUN") == "1":
+            torch.cuda.nvtx.range_pop()
+        
         return fx_out

@@ -33,17 +33,17 @@ Usage::
     python src/train.py benchmark_io=true +training.benchmark_max_steps=20
 """
 
+import json
 import os
 import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import nullcontext
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import hydra
 import torch
 import torch.distributed as dist
 from datasets import build_dataloaders
-from jaxtyping import Float
 from loss import LossCalculator
 from metrics import MetricCalculator, resolve_metrics
 from omegaconf import DictConfig, OmegaConf
@@ -66,16 +66,253 @@ from utils import (
 
 from physicsnemo import datapipes  # noqa: F401 - registers ${dp:...} resolver
 from physicsnemo.datapipes import DataLoader
-from physicsnemo.distributed import DistributedManager, fused_all_reduce
+from physicsnemo.distributed import DistributedManager
 from physicsnemo.mesh import MESH_FIELD_ASSOCIATIONS, DomainMesh, Mesh
+from physicsnemo.nn.functional.neighbors.radius_search.utils import (
+    radius_search_timing_enabled,
+    radius_search_timing_records,
+    reset_radius_search_timing,
+)
 from physicsnemo.utils import load_checkpoint, save_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo.utils.profiling import Profiler, profile
 
-### When `cfg.profile` is set, every train / val epoch breaks out of its
-### batch loop after this many steps. Keeps profiling traces short enough
-### to be useful without changing the rest of the training contract.
-_PROFILE_MAX_STEPS = 10
+# Radius-search backend selection is driven by the model config
+# (``model.radius_search_implementation`` in the model YAML). That value is
+# threaded into GeoTransolver's ball-query layers and selects the backend/variant
+# directly via ``physicsnemo.nn.functional.radius_search`` -- no env var needed.
+# The legacy ``PHYSICSNEMO_RADIUS_SEARCH_MORTON`` / ``PHYSICSNEMO_RADIUS_SEARCH_BVH``
+# env vars still act as a fallback when the config value is null, but are no longer
+# set here so the YAML stays the single source of truth.
+
+
+def cuda_profiler_start() -> None:
+    """Open an Nsight Systems capture range via ``cudaProfilerStart``.
+
+    No-op when CUDA is unavailable. Pairs with ``profile.sh``'s
+    ``--capture-range=cudaProfilerApi`` flag: nsys discards everything
+    until this fires, so warmup steps stay out of the report.
+    """
+    if torch.cuda.is_available():
+        torch.cuda.profiler.start()
+
+
+def cuda_profiler_stop() -> None:
+    """Close the Nsight Systems capture range via ``cudaProfilerStop``.
+
+    No-op when CUDA is unavailable. Pairs with ``profile.sh``'s
+    ``--capture-range-end=stop`` flag, which finalizes the report when
+    this fires.
+    """
+    if torch.cuda.is_available():
+        torch.cuda.profiler.stop()
+
+
+class _CudaProfilerWindow:
+    """Drive ``cudaProfilerStart`` / ``cudaProfilerStop`` around a step window.
+
+    Counts steps across the run and toggles the CUDA profiler so nsys
+    captures exactly ``profile_steps`` steps after an initial
+    ``warmup_steps`` settle-in period (``torch.compile`` warmup, cuDNN
+    autotune, allocator growth). Once the window closes the controller
+    flips :attr:`finished`, signalling the caller to end the run -- there
+    is no point running un-captured steps under nsys.
+
+    Args:
+        warmup_steps: Steps to run before ``cudaProfilerStart`` fires.
+        profile_steps: Steps to capture before ``cudaProfilerStop`` fires.
+        logger: Logger used to announce the capture boundaries.
+    """
+
+    def __init__(self, warmup_steps: int, profile_steps: int, logger: Any) -> None:
+        self.warmup_steps = warmup_steps
+        self.profile_steps = profile_steps
+        self._logger = logger
+        self._step = 0
+        self.started = False
+        self.finished = False
+
+    def on_step_begin(self) -> bool:
+        """Toggle the profiler at the window edges; call atop each step.
+
+        Returns ``True`` once the capture window has closed (the caller
+        should stop iterating), ``False`` while warming up or capturing.
+        The profiler is stopped *before* the work of the closing step, so
+        only the ``profile_steps`` fully-captured steps land in the report.
+        """
+        if self._step == self.warmup_steps:
+            self._logger.info(
+                f"[profile] cudaProfilerStart at step {self._step} "
+                f"(capturing {self.profile_steps} step(s))"
+            )
+            cuda_profiler_start()
+            self.started = True
+        if self._step == self.warmup_steps + self.profile_steps:
+            self._logger.info(f"[profile] cudaProfilerStop at step {self._step}")
+            cuda_profiler_stop()
+            self.finished = True
+            return True
+        self._step += 1
+        return False
+
+    def close(self) -> None:
+        """Close a still-open capture at run end (safety net).
+
+        Normally :meth:`on_step_begin` stops the profiler exactly at the
+        window edge. If the run exhausts its steps mid-capture (e.g. the
+        window is wider than the available steps), this stops the profiler
+        so nsys finalizes a bounded report instead of running open-ended.
+        """
+        if self.started and not self.finished:
+            self._logger.info("[profile] cudaProfilerStop at run end (window unclosed)")
+            cuda_profiler_stop()
+            self.finished = True
+
+
+# ---------------------------------------------------------------------------
+# Model-forward timing (paired with the radius-search benchmark)
+# ---------------------------------------------------------------------------
+# Per-step CUDA-event timings of the entire model forward, collected during the
+# radius-search benchmark window (see _RadiusSearchTimingCapture) so the report
+# can show radius-search cost relative to the full forward pass.
+_FORWARD_TIMING_EVENTS: list[tuple[Any, Any]] = []
+
+
+class _ForwardTimer:
+    """CUDA-event-time the enclosed model forward.
+
+    No-op unless ``PHYSICSNEMO_RADIUS_SEARCH_TIMING`` is set, CUDA is available,
+    and we run eagerly (``torch.compile`` traces the context manager away, so
+    forward timings are only collected with ``compile=false``).
+    """
+
+    def __enter__(self) -> "_ForwardTimer":
+        self._start = None
+        self._end = None
+        if not radius_search_timing_enabled():
+            return self
+        if not torch.cuda.is_available():
+            return self
+        if getattr(torch.compiler, "is_compiling", lambda: False)():
+            return self
+        self._start = torch.cuda.Event(enable_timing=True)
+        self._end = torch.cuda.Event(enable_timing=True)
+        self._start.record()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> bool:
+        if self._start is not None and self._end is not None:
+            self._end.record()
+            _FORWARD_TIMING_EVENTS.append((self._start, self._end))
+        return False
+
+
+def _reset_forward_timing() -> None:
+    """Discard any collected model-forward timings."""
+    _FORWARD_TIMING_EVENTS.clear()
+
+
+def _forward_timing_samples(reset: bool = False) -> list[float]:
+    """Return per-step model-forward times in ms (syncing on the events first)."""
+    events = list(_FORWARD_TIMING_EVENTS)
+    if reset:
+        _FORWARD_TIMING_EVENTS.clear()
+    for _, end_event in events:
+        end_event.synchronize()
+    return [
+        float(start_event.elapsed_time(end_event))
+        for start_event, end_event in events
+    ]
+
+
+class _RadiusSearchTimingCapture:
+    """Capture per-call radius-search CUDA-event timings over a step window.
+
+    Drop-in for the ``profile_ctrl`` slot in the training loop: it exposes the
+    same ``on_step_begin() -> bool`` / ``finished`` / ``close()`` interface, so
+    no changes to the epoch loop are needed. It runs ``warmup`` untimed steps
+    (to absorb Warp JIT, cuDNN autotune and allocator growth), resets the
+    timing buffer, then times ``steps`` steps and writes every per-call record
+    to ``out_path`` before signalling the run to stop.
+
+    Activated by :func:`main` when ``PHYSICSNEMO_RADIUS_SEARCH_TIMING_OUT`` is
+    set. Also requires ``PHYSICSNEMO_RADIUS_SEARCH_TIMING=1`` (so the
+    ``radius_search`` dispatch records events) and ``compile=false`` (so the
+    per-call Python timing hook actually runs each step rather than being traced
+    away by ``torch.compile``).
+
+    Args:
+        out_path: Destination JSON path (``{"metadata": ..., "records": [...]}``).
+        warmup: Untimed warmup steps.
+        steps: Timed steps to capture.
+        meta: Run metadata stored alongside the records (implementation, dataset,
+            sampling_resolution, device, ...).
+        logger: Logger for progress messages.
+    """
+
+    def __init__(
+        self,
+        out_path: str,
+        warmup: int,
+        steps: int,
+        meta: dict[str, Any],
+        logger: Any,
+    ) -> None:
+        self.out_path = out_path
+        self.warmup = max(0, warmup)
+        self.steps = max(1, steps)
+        self.meta = meta
+        self._logger = logger
+        self._step = 0
+        self.finished = False
+
+    def on_step_begin(self) -> bool:
+        """Advance the counter; reset after warmup, dump + stop at window end.
+
+        Returns ``True`` once the timed window is complete so the caller breaks
+        out of the epoch loop.
+        """
+        if self.finished:
+            return True
+        if self._step == self.warmup:
+            # Discard warmup samples so only steady-state steps are measured.
+            reset_radius_search_timing()
+            _reset_forward_timing()
+            self._logger.info(
+                f"[rs-bench] warmup complete ({self.warmup} steps); "
+                f"timing {self.steps} steps"
+            )
+        if self._step >= self.warmup + self.steps:
+            self._dump()
+            self.finished = True
+            return True
+        self._step += 1
+        return False
+
+    def close(self) -> None:
+        """Dump whatever was captured if the run ended before the window closed."""
+        if not self.finished:
+            self._logger.info(
+                "[rs-bench] run ended before the timing window closed; "
+                "dumping partial capture"
+            )
+            self._dump()
+            self.finished = True
+
+    def _dump(self) -> None:
+        records = radius_search_timing_records(reset=True)
+        forward_ms = _forward_timing_samples(reset=True)
+        payload = {
+            "metadata": self.meta,
+            "records": records,
+            "forward_ms": forward_ms,
+        }
+        with open(self.out_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+        self._logger.info(
+            f"[rs-bench] wrote {len(records)} radius-search records and "
+            f"{len(forward_ms)} forward-pass timings -> {self.out_path}"
+        )
 
 
 ### ---------------------------------------------------------------------------
@@ -103,35 +340,38 @@ def _flatten_config(
 
 
 def _reduce_and_average(
-    loss_sum: Float[torch.Tensor, ""],
+    loss_sum: float,
     losses_td: TensorDict | None,
     metrics_td: TensorDict | None,
     n_samples: int,
     *,
     device: torch.device | str,
 ) -> tuple[float, dict[str, float], dict[str, float]]:
-    """Collapse rank-local loss/metric *sums* into a global mean-of-means.
+    """Collapse rank-local loss/metric *sums* + a sample count into global means.
 
     Under DDP each rank only sees its own shard, so the numbers we log are
-    meaningless until reduced across ranks. This divides the rank-local sums
-    (``loss_sum`` plus the 0-D ``losses_td`` / ``metrics_td`` leaves) by the
-    local sample count, then averages those per-rank means across ranks with
-    one fused ``AVG`` ``all_reduce``
-    (:func:`physicsnemo.distributed.fused_all_reduce`). Under even shards
-    (train ``drop_last=True``, val pads) that equals the true global mean and
-    keeps the integer count out of the float reduction buffer. It is
-    granularity-neutral, mirrors the inference-side ``infer._allreduce_sums``,
-    and is called at two boundaries:
+    meaningless until reduced across ranks. This takes a rank-local *sum*
+    (``loss_sum`` plus the 0-D ``losses_td`` / ``metrics_td`` leaves) and the
+    matching sample count, reduces them across ranks once, and divides by the
+    *global* count to produce sample-weighted means. It is granularity-neutral
+    and called at two boundaries:
 
-    - Per step, with ``n_samples == 1``, so the logged iteration curves are
-      global all-rank means rather than rank-0's shard.
-    - Per epoch, with ``n_samples == n_local`` and the running epoch sums, for
-      the dataset-wide summary.
+    - Per step, with ``n_samples == 1`` (one sample per batch), so the logged
+      iteration curves are global all-rank means rather than rank-0's shard.
+    - Per epoch, with ``n_samples == n_local`` and the running epoch sums, so
+      the summary is a global mean over the whole dataset.
+
+    Reducing sums and a count (rather than per-rank means) is what makes the
+    result correct for uneven shards: ``global_sum / global_count`` weights
+    every sample equally no matter how the dataset split across ranks. The
+    values are packed into a single ``float32`` buffer, so each call costs one
+    ``all_reduce`` and one device-to-host sync (the ``.tolist()``). It mirrors
+    the inference-side reducer ``infer._allreduce_sums``.
 
     Args:
         loss_sum: Rank-local sum of scalar losses over the ``n_samples`` being
-            collapsed, as a 0-D on-device tensor -- one step's detached
-            ``loss`` per step, or the running epoch-loss tensor -- not a mean.
+            collapsed -- one step's ``loss.item()`` per step, or the epoch
+            running sum -- not a mean.
         losses_td: Rank-local per-field loss sum: a 0-D (``batch_size=[]``)
             ``TensorDict`` whose leaves are summed scalar losses, one per loss
             term. ``None`` is the "zero samples" sentinel (see Notes); it does
@@ -142,44 +382,60 @@ def _reduce_and_average(
         n_samples: Number of samples this rank contributed to ``loss_sum`` and
             the accumulators (``1`` per step, ``n_local`` per epoch; equal to
             the step count because the recipe runs ``batch_size == 1``).
-        device: The rank's collective/compute device (``dist_manager.device``),
-            where the ``all_reduce`` runs.
+        device: Device on which to build the reduction buffer. Must be the
+            rank's collective/compute device (``dist_manager.device``) so the
+            NCCL ``all_reduce`` runs on the correct device.
 
     Returns:
-        A ``(avg_loss, avg_losses, avg_metrics)`` tuple of Python floats:
-        ``avg_loss`` is the global mean loss, ``avg_losses`` is
-        ``{loss_name: mean}``, and ``avg_metrics`` is ``{metric_name: mean}``.
-        The dict keys and their order are taken from ``losses_td`` /
-        ``metrics_td``. On the ``None`` sentinel it returns
-        ``(loss_sum.item() / max(n_samples, 1), {}, {})`` without entering the
-        collective.
+        A ``(avg_loss, avg_losses, avg_metrics)`` tuple where ``avg_loss`` is
+        the global mean loss, ``avg_losses`` is ``{loss_name: global_mean}``,
+        and ``avg_metrics`` is ``{metric_name: global_mean}``. The dict keys
+        and their order are taken from ``losses_td`` / ``metrics_td``. On the
+        ``None`` sentinel it returns ``(loss_sum / max(n_samples, 1), {}, {})``
+        without entering the collective.
 
     Notes:
-        The per-step collective is deadlock-free only because every rank runs
-        the same step count (train ``drop_last=True``, val pads) and packs the
-        same leaves in the same order (all ranks share one ``target_config``).
-        Single-process skips the reduction, leaving single-GPU logs unchanged.
+        Single-process (or ``world_size == 1``) skips the reduction, so the
+        result is identical to plain ``sum / n_samples`` averaging and
+        single-GPU logs are unchanged.
+
+        Calling this per step adds one collective per iteration, which is only
+        deadlock-free because every rank issues the same number of collectives
+        -- i.e. every rank runs the same step count. The recipe's samplers
+        guarantee that: train uses ``drop_last=True`` and val pads to even
+        shards, so no rank finishes early and skips a step's ``all_reduce``.
+
+        The one fused ``all_reduce`` is valid only because every rank packs
+        the same leaves in the same order, which holds since all ranks share
+        one ``target_config`` (identical loss/metric keys). The ``None`` early
+        return similarly assumes ranks are seeded together: under DDP every
+        rank gets at least one sample, so the accumulators are non-``None`` on
+        all ranks at once.
     """
     if losses_td is None or metrics_td is None:
-        return loss_sum.item() / max(n_samples, 1), {}, {}
-    ### Divide by the local sample count first, then AVG across ranks: a
-    ### mean-of-means equal to the global mean under even shards, with no
-    ### integer count entering the float reduction buffer.
-    n = max(n_samples, 1)
-    bundle = TensorDict(
-        {
-            "loss": loss_sum / n,
-            "losses": losses_td / n,
-            "metrics": metrics_td / n,
-        },
+        return loss_sum / max(n_samples, 1), {}, {}
+    loss_keys = cast(list[str], list(losses_td.keys()))
+    metric_keys = cast(list[str], list(metrics_td.keys()))
+    leaves = cast(
+        list[torch.Tensor], list(losses_td.values()) + list(metrics_td.values())
     )
-    ### Pull the reduced bundle host-side once; .item() off the CPU copy is then
-    ### a free index, with no per-leaf device sync (AVG is a no-op single-process).
-    reduced = fused_all_reduce(bundle, op=dist.ReduceOp.AVG, device=device).cpu()
+    ### [loss_sum, n_samples, *loss_sums, *metric_sums] -> one collective.
+    packed = torch.cat(
+        [
+            torch.tensor([loss_sum, float(n_samples)], device=device),
+            torch.stack(leaves).float().to(device),
+        ]
+    )
+    if dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1:
+        dist.all_reduce(packed)
+    reduced_loss, reduced_n, *leaf_sums = packed.tolist()
+    n = max(reduced_n, 1.0)
+    n_loss = len(loss_keys)
+    averaged = [v / n for v in leaf_sums]
     return (
-        reduced["loss"].item(),
-        {key: value.item() for key, value in reduced["losses"].items()},
-        {key: value.item() for key, value in reduced["metrics"].items()},
+        reduced_loss / n,
+        dict(zip(loss_keys, averaged[:n_loss])),
+        dict(zip(metric_keys, averaged[n_loss:])),
     )
 
 
@@ -190,7 +446,7 @@ def _reduce_and_average(
 
 def _log_to_tensorboard(
     writer: SummaryWriter | None,
-    values: Mapping[str, float | Float[torch.Tensor, ""]],
+    values: Mapping[str, float | torch.Tensor],
     tag_prefix: str,
     global_step: int,
 ) -> None:
@@ -219,7 +475,8 @@ def forward_pass(
     *,
     output_type: IOType,
     target_config: dict[str, FieldType],
-) -> tuple[Float[torch.Tensor, ""], TensorDict, TensorDict]:
+    cfg: DictConfig = None
+) -> tuple[torch.Tensor, TensorDict, TensorDict]:
     """Run a forward pass + loss + metrics on one collated batch.
 
     Args:
@@ -254,17 +511,35 @@ def forward_pass(
 
     ### Inputs keep their native dtype; autocast handles model-internal precision.
     with get_autocast_context(precision):
-        output = model(**forward_kwargs)
+        # import ipdb; ipdb.set_trace()
+        if os.environ.get("PROFILE_RUN") == "1":
+            torch.cuda.nvtx.range_push("model_forward")
+        with _ForwardTimer():
+            output = model(**forward_kwargs, cfg=cfg)
+        if os.environ.get("PROFILE_RUN") == "1":
+            torch.cuda.nvtx.range_pop()
+
+    if os.environ.get("PROFILE_RUN") == "1":
+        torch.cuda.nvtx.range_push("normalize output to tensordict")
 
     pred_td = normalize_output_to_tensordict(output, target_config, output_type)
 
+    if os.environ.get("PROFILE_RUN") == "1":
+        torch.cuda.nvtx.range_pop()
     ### Loss runs in float32 to avoid bf16 precision loss in the reduction.
     pred_f32 = pred_td.float()
     target_f32 = targets.float()
-
+    if os.environ.get("PROFILE_RUN") == "1":
+        torch.cuda.nvtx.range_push("loss calculator")
     loss, loss_td = loss_calculator(pred_f32, target_f32)
+    if os.environ.get("PROFILE_RUN") == "1":
+        torch.cuda.nvtx.range_pop()
     with torch.no_grad():
+        if os.environ.get("PROFILE_RUN") == "1":
+            torch.cuda.nvtx.range_push("metric_calc")
         metric_td = metric_calculator(pred_f32, target_f32)
+        if os.environ.get("PROFILE_RUN") == "1":
+            torch.cuda.nvtx.range_pop()
     ### Detach (don't sync) the per-field TDs so the caller controls when
     ### a D2H copy happens; running ``.item()`` here would serialise the
     ### forward kernels against the host. ``TensorDict.detach()`` walks
@@ -295,6 +570,7 @@ def _run_epoch(
     scaler: GradScaler | None = None,
     writer: SummaryWriter | None = None,
     log_jsonl: Callable[[dict[str, Any]], None] | None = None,
+    profile_ctrl: "_CudaProfilerWindow | None" = None,
 ) -> tuple[float, dict[str, float]]:
     """Run one training-or-validation epoch.
 
@@ -330,23 +606,43 @@ def _run_epoch(
     log_prefix = "Epoch" if is_train else "Val Epoch"
     is_rank0 = dist_manager.rank == 0
 
-    ### All three accumulators live on-device, so epoch sums build up with no
-    ### per-step host sync (the only per-step D2H is inside _reduce_and_average).
-    ### total_loss is float64 for accumulation precision, downcast to float32 at
-    ### the epoch reduce. None = not yet seeded; n_local is this rank's local
-    ### sample count.
-    total_loss = torch.zeros((), dtype=torch.float64, device=dist_manager.device)
+    ### `total_loss` is a Python float fed by the per-step print line's
+    ### sync; `total_losses_td` / `total_metrics_td` are on-device
+    ### TensorDict accumulators (one 0-D leaf per field) that defer
+    ### their D2H transfer to the single batched ``.tolist()`` at
+    ### end-of-epoch. ``None`` here means "not yet seeded"; the first
+    ### iteration clones the per-step TensorDict to break aliasing.
+    ### ``n_local`` below is this rank's step/sample count. The averaging
+    ### denominator is the GLOBAL count that ``_reduce_and_average``
+    ### all-reduces from each rank's ``n_local`` at end-of-epoch; the local
+    ### value is reused directly only for the per-rank step-rate line.
+    total_loss = 0.0
     total_losses_td: TensorDict | None = None
     total_metrics_td: TensorDict | None = None
     precision = getattr(cfg, "precision", "float32")
     n_local = 0
     num_steps = len(dataloader)
     epoch_t0 = time.perf_counter()
-    with grad_ctx:
+
+    _nvtx_ctx = torch.autograd.profiler.emit_nvtx() if cfg.profile else nullcontext()
+
+    with grad_ctx, _nvtx_ctx:
         step_t0 = time.perf_counter()
         for i, batch in enumerate(dataloader):
+            ### nsys capture control: open the window after warmup, close
+            ### it (and stop the run) once `profile_steps` have been
+            ### captured. Only train passes a controller, so val never
+            ### lands inside the trace.
+            if profile_ctrl is not None and profile_ctrl.on_step_begin():
+                break
+
+
+            if cfg.profile:
+                torch.cuda.nvtx.range_push(f"step:{i}")
             batch = recursive_to_device(batch, dist_manager.device)
 
+            if cfg.profile:
+                torch.cuda.nvtx.range_push(f"forward_pass")
             loss, losses, metrics = forward_pass(
                 batch,
                 model,
@@ -355,20 +651,40 @@ def _run_epoch(
                 metric_calculator,
                 output_type=output_type,
                 target_config=target_config,
+                cfg = cfg
             )
+            if cfg.profile:
+                torch.cuda.nvtx.range_pop()
 
             if is_train:
+                if cfg.profile:
+                    torch.cuda.nvtx.range_push(f"optimizer-0-grad")
                 optimizer.zero_grad()
+                if cfg.profile:
+                    torch.cuda.nvtx.range_pop()
                 if precision == "float16" and scaler is not None:
+                    if cfg.profile:
+                        torch.cuda.nvtx.range_push(f"backward")
                     scaler.scale(loss).backward()
+                    if cfg.profile:
+                        torch.cuda.nvtx.range_pop()
                     scaler.step(optimizer)
                     scaler.update()
                 else:
+                    if cfg.profile:
+                        torch.cuda.nvtx.range_push(f"backward")
                     loss.backward()
+                    if cfg.profile:
+                        torch.cuda.nvtx.range_pop()
                     optimizer.step()
                 if cfg.training.get("scheduler_update_mode", "epoch") == "step":
                     scheduler.step()
 
+            if cfg.profile:
+                torch.cuda.nvtx.range_pop()
+
+            if cfg.profile:
+                torch.cuda.nvtx.range_push("other ops + logging")
             ### Accumulate on-device with no sync. First iteration clones
             ### so subsequent in-place ``add_`` calls don't alias the
             ### per-step TDs; both accumulators are seeded in lock-step
@@ -383,10 +699,10 @@ def _run_epoch(
                 total_metrics_td.add_(metrics)
             n_local += 1
 
-            ### Detached scalar loss: accumulate the epoch sum on-device (no
-            ### host sync) and feed the per-step reducer below.
-            loss_det = loss.detach()
-            total_loss += loss_det
+            ### Per-step sync for the print line; lands after backward +
+            ### optimizer.step so it overlaps with queued GPU work.
+            this_loss = loss.detach().item()
+            total_loss += this_loss
 
             step_dt = time.perf_counter() - step_t0
             mem_gb = (
@@ -404,7 +720,7 @@ def _run_epoch(
             ### keep the per-step collective deadlock-free (see
             ### ``_reduce_and_average``).
             step_loss, step_losses, step_metrics = _reduce_and_average(
-                loss_det, losses, metrics, 1, device=dist_manager.device
+                this_loss, losses, metrics, 1, device=dist_manager.device
             )
 
             ### Train mode includes Mem in the per-step line; val drops it
@@ -417,10 +733,13 @@ def _run_epoch(
                 f"{mem_str}"
             )
 
-            ### Per-step TensorBoard is train-only (val_writer is epoch-only);
-            ### per-step JSONL is written in both modes so downstream tooling gets
-            ### val step-times directly. The logged values are global all-rank
-            ### means (rank 0 is only the writer).
+            ### Per-step TensorBoard: train only (val_writer is intentionally
+            ### epoch-only to keep dashboards uncluttered). Per-step JSONL is
+            ### emitted in both modes so downstream tooling can compute val
+            ### step-time statistics directly instead of inferring them from
+            ### ``val_ts - train_ts``. The logged loss / metrics are the global
+            ### all-rank means from ``_reduce_and_average`` above (not rank-0's
+            ### shard); rank 0 is only the writer.
             if is_rank0:
                 if is_train:
                     global_step = epoch * num_steps + i
@@ -483,18 +802,17 @@ def _run_epoch(
                         }
                     )
 
-            if cfg.profile and i >= _PROFILE_MAX_STEPS:
-                break
             step_t0 = time.perf_counter()
+            if cfg.profile:
+                torch.cuda.nvtx.range_pop()
 
     epoch_dt = time.perf_counter() - epoch_t0
     n = max(n_local, 1)
-    ### Reduce the epoch sums + sample count across ranks once so logged
-    ### loss/metrics are global averages (not rank-0's shard) under DDP; `n`
-    ### above stays local for the per-rank step-rate line. Downcast the float64
-    ### loss accumulator to float32 so every reduced leaf shares one dtype.
+    ### Reduce the epoch sums + sample count across ranks once, so logged
+    ### loss/metrics are the GLOBAL averages (not rank-0's shard) under
+    ### DDP. `n` above is kept local for the per-rank step-rate line below.
     avg_loss, avg_losses, avg_metrics = _reduce_and_average(
-        total_loss.float(),
+        total_loss,
         total_losses_td,
         total_metrics_td,
         n_local,
@@ -542,6 +860,7 @@ def train_epoch(
     target_config: dict[str, FieldType],
     train_writer: SummaryWriter | None = None,
     log_jsonl: Callable[[dict[str, Any]], None] | None = None,
+    profile_ctrl: "_CudaProfilerWindow | None" = None,
 ) -> tuple[float, dict[str, float]]:
     """Run one training epoch (delegates to :func:`_run_epoch` in train mode)."""
     return _run_epoch(
@@ -561,6 +880,7 @@ def train_epoch(
         scaler=scaler,
         writer=train_writer,
         log_jsonl=log_jsonl,
+        profile_ctrl=profile_ctrl,
     )
 
 
@@ -660,6 +980,8 @@ def benchmark_io_epoch(
     label: str,
     logger: Any,
     max_steps: int | None = None,
+    *,
+    profile_ctrl: "_CudaProfilerWindow | None" = None,
 ) -> None:
     """Iterate a dataloader without any model logic and report I/O timing.
 
@@ -670,6 +992,10 @@ def benchmark_io_epoch(
         logger: Logger for console output.
         max_steps: Stop after this many batches. ``None`` means exhaust
             the loader.
+        profile_ctrl: Optional nsys capture-window controller. When given,
+            the loop opens / closes the ``cudaProfilerStart``/``Stop``
+            window around the configured step range and stops once the
+            window has closed.
     """
     import statistics
 
@@ -678,6 +1004,11 @@ def benchmark_io_epoch(
 
     step_t0 = time.perf_counter()
     for i, batch in enumerate(dataloader):
+        ### nsys capture control: same warmup/capture window as training,
+        ### applied to pure dataloader iteration (benchmark_io=true).
+        if profile_ctrl is not None and profile_ctrl.on_step_begin():
+            break
+
         dt = time.perf_counter() - step_t0
         times.append(dt)
 
@@ -743,8 +1074,10 @@ def main(cfg: DictConfig) -> None:
     Args:
         cfg: Hydra config containing ``model``, ``training``, ``dataset``,
             ``data``, ``output_dir``, ``run_id``, ``precision``,
-            ``compile``, ``profile``, ``benchmark_io``, ``logging``, and
-            related keys.
+            ``compile``, ``profile``, ``warmup_steps``, ``profile_steps``,
+            ``benchmark_io``, ``logging``, and related keys. ``warmup_steps``
+            / ``profile_steps`` bound the nsys capture window when
+            ``profile`` is set (see :class:`_CudaProfilerWindow`).
     """
 
     DistributedManager.initialize()
@@ -804,6 +1137,15 @@ def main(cfg: DictConfig) -> None:
             }
         )
 
+    ### nsys capture window (cudaProfilerStart/Stop), shared by the I/O
+    ### benchmark and the training loop. ``None`` when not profiling, in
+    ### which case both loops run to their normal completion.
+    profile_ctrl = (
+        _CudaProfilerWindow(cfg.warmup_steps, cfg.profile_steps, logger)
+        if cfg.profile
+        else None
+    )
+
     # -- I/O benchmark mode: iterate dataloaders, skip model entirely -----------
     if cfg.get("benchmark_io", False):
         num_epochs = cfg.training.num_epochs
@@ -816,8 +1158,22 @@ def main(cfg: DictConfig) -> None:
             for epoch in range(num_epochs):
                 logger.info(f"--- Epoch {epoch + 1}/{num_epochs} ---")
                 train_loader.set_epoch(epoch)
-                benchmark_io_epoch(train_loader, "train", logger, max_steps=max_steps)
+                benchmark_io_epoch(
+                    train_loader,
+                    "train",
+                    logger,
+                    max_steps=max_steps,
+                    profile_ctrl=profile_ctrl,
+                )
+                ### Under nsys, the capture window drives the run length:
+                ### skip val and stop as soon as the window has closed.
+                if profile_ctrl is not None:
+                    if profile_ctrl.finished:
+                        break
+                    continue
                 benchmark_io_epoch(val_loader, "val", logger, max_steps=max_steps)
+        if profile_ctrl is not None:
+            profile_ctrl.close()
         logger.info("benchmark_io complete!")
         if is_rank0:
             if train_writer is not None:
@@ -905,10 +1261,60 @@ def main(cfg: DictConfig) -> None:
         "scheduler": scheduler,
         "models": model,
     }
-    loaded_epoch = load_checkpoint(device=device, **ckpt_args)
+
+    loaded_epoch = load_checkpoint(device=dist_manager.device, **ckpt_args)
+
+    #loaded_epoch = load_checkpoint(device=device, **ckpt_args)
+
 
     if cfg.compile:
+        torch._dynamo.config.verbose = True
+        torch._dynamo.config.suppress_errors = False
+        torch._logging.set_logs(recompiles=True, graph_breaks=True)
         model = torch.compile(model)
+
+    # -- Radius-search kernel timing capture (opt-in) ---------------------------
+    # When PHYSICSNEMO_RADIUS_SEARCH_TIMING_OUT is set, take over the step-window
+    # control slot (profile_ctrl) to time radius-search calls over a fixed window
+    # and dump per-call records. This is what bench.sh drives per implementation.
+    rs_timing_out = os.environ.get("PHYSICSNEMO_RADIUS_SEARCH_TIMING_OUT")
+    if rs_timing_out:
+        if cfg.compile:
+            logger.info(
+                "[rs-bench] WARNING: compile=true prevents per-call radius-search "
+                "timing (the dispatch hook is traced away by torch.compile). "
+                "Re-run with compile=false for accurate kernel timings."
+            )
+        rs_warmup = int(os.environ.get("PHYSICSNEMO_RS_BENCH_WARMUP", "10"))
+        rs_steps = int(os.environ.get("PHYSICSNEMO_RS_BENCH_STEPS", "50"))
+        rs_impl = cfg.model.get("radius_search_implementation", None)
+        profile_ctrl = _RadiusSearchTimingCapture(
+            out_path=rs_timing_out,
+            warmup=rs_warmup,
+            steps=rs_steps,
+            meta={
+                "implementation": rs_impl if rs_impl is not None else "auto",
+                "dataset": cfg.get("dataset"),
+                "sampling_resolution": cfg.get("sampling_resolution"),
+                "batch_size": cfg.training.get("batch_size"),
+                "precision": cfg.precision,
+                "compile": cfg.compile,
+                "num_parameters": num_params,
+                "device": (
+                    torch.cuda.get_device_name()
+                    if torch.cuda.is_available()
+                    else "cpu"
+                ),
+                "torch_version": torch.__version__,
+                "warmup": rs_warmup,
+                "steps": rs_steps,
+            },
+            logger=logger,
+        )
+        logger.info(
+            f"[rs-bench] capturing radius-search timings for "
+            f"implementation='{profile_ctrl.meta['implementation']}' -> {rs_timing_out}"
+        )
 
     num_epochs = cfg.training.num_epochs
     logger.info(f"Starting training for {num_epochs} epochs...")
@@ -935,7 +1341,17 @@ def main(cfg: DictConfig) -> None:
                 target_config=target_config,
                 train_writer=train_writer,
                 log_jsonl=log_jsonl,
+                profile_ctrl=profile_ctrl,
             )
+
+            ### Under nsys, the capture window bounds the run: skip
+            ### validation / checkpointing and exit as soon as the window
+            ### has closed (the report is already finalized by then).
+            if profile_ctrl is not None:
+                if profile_ctrl.finished:
+                    logger.info("[profile] capture window complete; ending run")
+                    break
+                continue
 
             val_loss, val_metrics = val_epoch(
                 val_loader,
@@ -982,7 +1398,13 @@ def main(cfg: DictConfig) -> None:
             if cfg.training.get("scheduler_update_mode", "epoch") == "epoch":
                 scheduler.step()
 
-    if is_rank0:
+
+    ### Safety net: if the run ended mid-capture (window wider than the
+    ### available steps), make sure nsys gets its cudaProfilerStop.
+    if profile_ctrl is not None:
+        profile_ctrl.close()
+
+    if dist_manager.rank == 0:
         if train_writer is not None:
             train_writer.close()
         if val_writer is not None:
@@ -999,13 +1421,19 @@ def main(cfg: DictConfig) -> None:
 def launch(cfg: DictConfig) -> None:
     """Hydra entry point: configure profiling and delegate to :func:`main`.
 
+    Profiling in this recipe is driven by Nsight Systems via ``profile.sh``
+    (``--capture-range=cudaProfilerApi``): when ``cfg.profile`` is set,
+    :func:`main` opens a ``cudaProfilerStart``/``cudaProfilerStop`` window
+    around ``warmup_steps``..``warmup_steps + profile_steps``. The torch
+    (kineto) profiler is intentionally *not* enabled here -- it contends
+    with nsys for CUPTI, which corrupts the capture -- so the
+    :class:`~physicsnemo.utils.profiling.Profiler` context stays inert and
+    only its NVTX annotation hooks remain available.
+
     Args:
         cfg: Hydra-composed config (override with ``--config-name``).
-            When ``cfg.profile`` is truthy, torch profiling is enabled.
     """
     profiler = Profiler()
-    if cfg.profile:
-        profiler.enable("torch")
     profiler.initialize()
     main(cfg)
     profiler.finalize()
