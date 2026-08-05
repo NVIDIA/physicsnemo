@@ -59,10 +59,14 @@ def test_flare_use_te_forward_backward(device):
         dim=64,
         heads=4,
         dim_head=16,
+        dropout=0.25,
         n_global_queries=7,
         use_te=True,
     ).to(device)
     x = torch.randn(2, 19, 64, device=device, requires_grad=True)
+
+    assert flare.attn_fn.attention_dropout == 0.0
+    assert flare.out_dropout.p == 0.25
 
     out = flare(x)
     assert out.shape == x.shape

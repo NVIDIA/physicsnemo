@@ -14,108 +14,95 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Main remeshing entry point.
+"""Public Mesh API for Warp-accelerated surface remeshing."""
 
-This module wires together all components of the remeshing pipeline.
-"""
+from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from physicsnemo.core.version_check import OptionalImport, require_version_spec
+from physicsnemo.nn.functional.geometry.remeshing import remeshing
 
-### Optional dependency. ``pyacvd`` is a lazy proxy: construction does not
-### import the package; the friendly ``ImportError`` (with the
-### ``[mesh-extras]`` install hint) fires only on first attribute access. The
-### ``@require_version_spec("pyacvd")`` decorator on ``remesh`` raises that
-### same error proactively before any function-body work happens.
 if TYPE_CHECKING:
-    import pyacvd
-
     from physicsnemo.mesh.mesh import Mesh
-else:
-    pyacvd = OptionalImport("pyacvd")
 
 
-@require_version_spec("pyacvd")
 def remesh(
-    mesh: "Mesh",
+    mesh: Mesh,
     n_clusters: int,
-) -> "Mesh":
-    """Uniform remeshing of a 2D triangle surface (in 3D) via clustering.
+    *,
+    max_iterations: int = 4,
+) -> Mesh:
+    """Uniformly remesh a triangle surface using Warp on CPU or CUDA.
 
-    Creates a simplified mesh with approximately ``n_clusters`` vertices
-    uniformly distributed across the geometry. Uses the ACVD (Approximate
-    Centroidal Voronoi Diagram) clustering algorithm.
-
-    The algorithm:
-    1. Weights vertices by their dual volumes (Voronoi areas)
-    2. Initializes clusters via area-based region growing
-    3. Minimizes energy by iteratively reassigning vertices
-    4. Reconstructs a simplified mesh from cluster adjacency
-
-    This is restricted to 2D triangle surfaces embedded in 3D space -- the only
-    case the underlying ``pyacvd`` ACVD clustering supports.
+    Warp performs area-weighted centroidal clustering, projects cluster centers
+    back to the source surface with a bounding volume hierarchy, and
+    reconstructs compact triangle connectivity.
 
     Parameters
     ----------
     mesh : Mesh
-        Input mesh to remesh
+        Input triangle surface. Only 2D triangle manifolds embedded in 3D are
+        supported.
     n_clusters : int
-        Target number of output vertices. The actual number may vary
-        slightly depending on mesh topology.
+        Target output vertex count. Cleanup can produce slightly fewer vertices.
+        Must be between 3 and the input point count, inclusive.
+    max_iterations : int, optional
+        Maximum centroid-relaxation iterations. Default is ``4``. Values must
+        be non-negative.
 
     Returns
     -------
     Mesh
-        Remeshed mesh with approximately ``n_clusters`` vertices. The vertices are
-        cluster centroids, and cells connect adjacent clusters.
+        Geometry-only remeshed surface on the input device. Point and cell data
+        are discarded because topology changes. Global data is preserved.
 
     Raises
     ------
+    TypeError
+        If counts, tuning parameters, or point coordinates have invalid types.
+    ValueError
+        If a count is out of range or coordinates or connectivity are invalid.
     NotImplementedError
-        If the mesh is not a 2D triangle surface embedded in 3D.
+        If ``mesh`` is not a 2D triangle surface embedded in 3D.
     ImportError
-        If the optional ``pyacvd`` dependency is not installed.
-
-    Examples
-    --------
-    >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
-    >>> from physicsnemo.mesh.remeshing import remesh
-    >>> mesh = sphere_icosahedral.load(subdivisions=3)
-    >>> # Remesh a triangle mesh to approximately 100 cluster centroids
-    >>> simplified = remesh(mesh, n_clusters=100)
-    >>> assert simplified.n_cells > 0
+        If Warp is unavailable.
+    RuntimeError
+        If cleanup cannot reconstruct a nonempty manifold triangle surface.
 
     Notes
     -----
-    - Restricted to 2D triangle surfaces embedded in 3D (``pyacvd`` limitation)
-    - Preserves mesh topology qualitatively but not quantitatively
-    - Point and cell data are not transferred (topology changes fundamentally)
-    - Output cell orientation may differ from input
+    Remeshing is intentionally non-differentiable. Warp computes in centered
+    and scaled coordinates in float32, then restores the input point dtype and
+    coordinate frame. Because clustering uses spatial distance rather than
+    mesh connectivity, sheets or thin features separated by less than the mean
+    cluster spacing can be assigned to a common cluster and welded together.
+    Projection can map distinct cluster centroids to the same surface position.
+    Output vertices are compacted by connectivity but are not welded by
+    position. Backend-specific tuning remains available through
+    :func:`physicsnemo.nn.functional.remeshing`. These advanced parameters may
+    change as the implementation evolves.
     """
-    from physicsnemo.mesh.io.io_pyvista import from_pyvista, to_pyvista
-    from physicsnemo.mesh.mesh import Mesh
-    from physicsnemo.mesh.repair import repair_mesh
-
-    # pyacvd ACVD clustering is a triangle-surface algorithm: it only handles a
-    # PolyData of triangles (a 2D manifold in 3D). Guard explicitly so any other
-    # mesh gets a clear error instead of a confusing downstream pyacvd failure.
     if mesh.n_manifold_dims != 2 or mesh.n_spatial_dims != 3:
         raise NotImplementedError(
-            "remesh only supports 2D triangle surfaces embedded in 3D "
-            "(the pyacvd ACVD clustering is surface-only). Got "
-            f"n_manifold_dims={mesh.n_manifold_dims}, "
-            f"n_spatial_dims={mesh.n_spatial_dims}."
+            "remesh only supports 2D triangle surfaces embedded in 3D. Got "
+            f"n_manifold_dims={mesh.n_manifold_dims} and "
+            f"n_spatial_dims={mesh.n_spatial_dims}"
         )
 
-    clustering = pyacvd.Clustering(to_pyvista(mesh))
-    clustering.cluster(n_clusters)
-    new_mesh, _stats = repair_mesh(from_pyvista(clustering.create_mesh()))
-
-    # pyacvd/pyvista round-trip through float32 on CPU. Restore the input's device
-    # and dtype. (Mesh.to(dtype) can't be used here -- it would also cast the
-    # integer cells; remesh discards field data, so only points/cells are kept.)
-    return Mesh(
-        points=new_mesh.points.to(device=mesh.points.device, dtype=mesh.points.dtype),
-        cells=new_mesh.cells.to(device=mesh.points.device),
+    output_points, output_cells = remeshing(
+        mesh.points,
+        mesh.cells,
+        n_clusters,
+        max_iterations=max_iterations,
     )
+
+    from physicsnemo.mesh.mesh import Mesh
+
+    return Mesh(
+        points=output_points,
+        cells=output_cells,
+        global_data=mesh.global_data.clone(),
+    )
+
+
+__all__ = ["remesh"]

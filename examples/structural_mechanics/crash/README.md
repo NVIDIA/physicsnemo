@@ -223,7 +223,7 @@ It watches two surfaces:
 
 To enable the guard, wrap a constructed `GeoTransolver` with
 `GuardedGeoTransolver` (from `physicsnemo.experimental.guardrails.embedded`).
-The wrapper observes the two surfaces above via a forward hook and delegates the
+The wrapper observes the two surfaces above through a forward hook and delegates the
 forward pass unchanged:
 
 ```python

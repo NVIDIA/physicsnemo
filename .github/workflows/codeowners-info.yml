@@ -1,0 +1,147 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: CODEOWNERS info
+
+on:
+  pull_request_target:
+    types: [opened]
+  issue_comment:
+    types: [created]
+
+jobs:
+  report:
+    if: >
+      github.event_name == 'pull_request_target' ||
+      (github.event.issue.pull_request && github.event.comment.body == '/codeowners-info' &&
+       contains(fromJSON('["COLLABORATOR", "MEMBER", "OWNER"]'), github.event.comment.author_association))
+    # Job-level so that skipped runs (issue_comment fires for every comment in
+    # the repo) never enter the group and cancel a real run.
+    concurrency:
+      group: codeowners-info-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Commenting on a PR through the issues API needs pull-requests: write,
+      # not issues: write, for the Actions installation token.
+      pull-requests: write
+    steps:
+    - name: Create or update CODEOWNERS report
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+      with:
+        script: |
+          const marker = '<!-- physicsnemo-codeowners-info -->';
+          const {owner, repo} = context.repo;
+          const pull_number = Number(process.env.PR_NUMBER);
+
+          const [{data: pull}, files, reviews] = await Promise.all([
+            github.rest.pulls.get({owner, repo, pull_number}),
+            github.paginate(github.rest.pulls.listFiles, {owner, repo, pull_number, per_page: 100}),
+            github.paginate(github.rest.pulls.listReviews, {owner, repo, pull_number, per_page: 100}),
+          ]);
+          const {data: source} = await github.rest.repos.getContent({
+            owner, repo, path: '.github/CODEOWNERS', ref: pull.base.ref,
+          });
+
+          // Convert the subset of gitignore globs used by this repository.
+          function matcher(raw) {
+            let pattern = raw.replace(/^\.\//, '');
+            const rooted = raw.startsWith('/') || raw.startsWith('./') || pattern.slice(0, -1).includes('/');
+            pattern = pattern.replace(/^\//, '');
+            const directory = pattern.endsWith('/');
+            if (directory) pattern = pattern.slice(0, -1);
+            let regex = rooted ? '^' : '(?:^|.*/)';
+            for (let i = 0; i < pattern.length; i++) {
+              if (pattern[i] === '*' && pattern[i + 1] === '*') {
+                i++;
+                if (pattern[i + 1] === '/') {
+                  i++;
+                  regex += '(?:.*/)?';
+                } else {
+                  regex += '.*';
+                }
+              } else if (pattern[i] === '*') {
+                regex += '[^/]*';
+              } else if (pattern[i] === '?') {
+                regex += '[^/]';
+              } else {
+                regex += pattern[i].replace(/[\\^$+?.()|{}\[\]]/g, '\\$&');
+              }
+            }
+            const last = pattern.split('/').pop();
+            return new RegExp(regex + (directory || !/[*?]/.test(last) ? '(?:/.*)?$' : '$'));
+          }
+
+          const rules = Buffer.from(source.content, source.encoding).toString().split(/\r?\n/)
+            .map(line => line.trim())
+            .filter(line => line && !line.startsWith('#'))
+            .map(line => line.split(/\s+/).filter(token => !token.startsWith('#')))
+            .map(([pattern, ...owners]) => ({match: matcher(pattern), owners}));
+
+          // A later approval replaces an earlier change request; comments do not
+          // change review state. Dismissed approvals are no longer approvals.
+          const state = new Map();
+          for (const review of reviews.sort((a, b) => a.id - b.id)) {
+            const login = review.user?.login.toLowerCase();
+            if (!login) continue;
+            if (review.state === 'APPROVED') state.set(login, true);
+            if (['CHANGES_REQUESTED', 'DISMISSED'].includes(review.state)) state.set(login, false);
+          }
+          const approvals = new Set([...state].filter(([, approved]) => approved).map(([login]) => login));
+          const approved = codeowner => codeowner.startsWith('@') && approvals.has(codeowner.slice(1).toLowerCase());
+
+          const byOwner = new Map();
+          const covered = new Set();
+          const unowned = [];
+          for (const {filename} of files) {
+            let fileOwners = [];
+            for (const rule of rules) if (rule.match.test(filename)) fileOwners = rule.owners;
+            if (!fileOwners.length) unowned.push(filename);
+            if (fileOwners.some(approved)) covered.add(filename);
+            for (const codeowner of fileOwners) {
+              if (!byOwner.has(codeowner)) byOwner.set(codeowner, []);
+              byOwner.get(codeowner).push(filename);
+            }
+          }
+
+          const safe = value => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          const list = paths => paths.map(path => `- <code>${safe(path)}</code>`).join('\n');
+          const sections = [];
+          for (const [codeowner, paths] of [...byOwner].sort()) {
+            const remaining = paths.filter(path => !covered.has(path));
+            const done = approved(codeowner) || !remaining.length;
+            const shown = done ? paths : remaining;
+            const note = done && !approved(codeowner) ? ' (covered by co-owner)' : '';
+            sections.push(
+              `<details${done ? '' : ' open'}>` +
+              `<summary>${done ? '✅' : '⏳'} ${codeowner} — ${shown.length} file(s)${note}</summary>\n\n` +
+              `${list(shown)}\n\n</details>`,
+            );
+          }
+
+          let body = [
+            marker,
+            '## CODEOWNERS review map',
+            '',
+            `Current for commit \`${pull.head.sha.slice(0, 12)}\`. An approval covers every file listed for that owner; one owner is sufficient for shared files.`,
+            '',
+            ...sections,
+          ].join('\n');
+          if (unowned.length) {
+            body += `\n\n### No CODEOWNER\n\n${list(unowned)}`;
+          }
+          body += '\n\n_Comment `/codeowners-info` to refresh._';
+
+          const comments = await github.paginate(github.rest.issues.listComments, {
+            owner, repo, issue_number: pull_number, per_page: 100,
+          });
+          const existing = comments.find(comment => comment.user.type === 'Bot' && comment.body?.includes(marker));
+          if (existing) {
+            await github.rest.issues.updateComment({owner, repo, comment_id: existing.id, body});
+          } else {
+            await github.rest.issues.createComment({owner, repo, issue_number: pull_number, body});
+          }

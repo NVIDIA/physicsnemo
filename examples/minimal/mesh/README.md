@@ -50,6 +50,7 @@ pip install -e ".[mesh]"
 | **6. ML Integration** | Production workflows | Performance, batching, torch.compile |
 | **7. Domain Mesh** | Simulation domains | DomainMesh, boundaries, transforms, validation |
 | **8. I/O, Interop & Serialization** | Getting data in/out | PyVista import/export, polygon tessellation, save/load |
+| **Deformation energy example** | Shape optimization | RBF deformation with differentiable strain, area, and inversion penalties |
 <!-- markdownlint-enable MD013 -->
 
 ## Running the Tutorials
@@ -202,6 +203,15 @@ Generate simulation-ready volume meshes from scratch in two ways.
 - Tetrahedralizing 3D implicit domains
 - Extracting isosurfaces with `marching_cubes`
 - Computing shape gradients through the mesh (differentiable meshing)
+
+### Differentiable Deformation Energy Optimization
+
+**File**: `deformation_energy_optimization.py`
+
+Run a compact shape-optimization example that preserves a prescribed
+radial-basis handle displacement while penalizing strain, total-area change,
+and element inversion. The script uses the Warp backend on CUDA when available
+and falls back to Torch on CPU.
 
 ## Assets
 

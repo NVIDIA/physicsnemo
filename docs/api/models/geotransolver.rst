@@ -1,16 +1,49 @@
 GeoTransolver
-=============
+==============
 
-GeoTransolver extends the Transolver physics-attention architecture with
-geometry and global-context awareness. It constructs global context embeddings
-from geometry and global features by projecting them onto physical state spaces,
-then uses these embeddings throughout its GALE attention blocks via
-cross-attention, letting geometric and global information guide the learned
-physical-state dynamics.
+The GeoTransolver model extends Transolver with Geometry-Aware Latent Embeddings
+(GALE) attention. It combines physics-aware self-attention over learned state
+slices with cross-attention to geometry and global context, supporting both
+unstructured meshes and structured 2D or 3D grids.
 
-For more information on GeoTransolver, please see the `GeoTransolver paper <https://arxiv.org/abs/2512.20399>`_.
+GALE layers use either
+:class:`~physicsnemo.nn.module.physics_attention.PhysicsAttentionBase` (the default
+setting) or
+:class:`~physicsnemo.nn.module.flare_attention.FLARE` (with ``attention_type="GALE_FA"``)
+as the self-attention backend.
+
+For more information on GeoTransolver, see the `GeoTransolver paper
+<https://arxiv.org/abs/2512.20399>`__.
 
 .. autoclass:: physicsnemo.models.geotransolver.geotransolver.GeoTransolver
+    :show-inheritance:
+    :members:
+    :exclude-members: forward
+
+Building blocks
+---------------
+
+.. autoclass:: physicsnemo.models.geotransolver.context_projector.ContextProjector
+    :show-inheritance:
+    :members:
+    :exclude-members: forward
+
+.. autoclass:: physicsnemo.models.geotransolver.context_projector.StructuredContextProjector
+    :show-inheritance:
+    :members:
+    :exclude-members: forward
+
+.. autoclass:: physicsnemo.models.geotransolver.context_projector.GeometricFeatureProcessor
+    :show-inheritance:
+    :members:
+    :exclude-members: forward
+
+.. autoclass:: physicsnemo.models.geotransolver.context_projector.MultiScaleFeatureExtractor
+    :show-inheritance:
+    :members:
+    :exclude-members: forward
+
+.. autoclass:: physicsnemo.models.geotransolver.context_projector.GlobalContextBuilder
     :show-inheritance:
     :members:
     :exclude-members: forward
@@ -18,28 +51,15 @@ For more information on GeoTransolver, please see the `GeoTransolver paper <http
 FLARE attention backend
 -----------------------
 
-GeoTransolver uses GALE attention by default. For large meshes, you can swap the
-physics-attention slice mechanism for the
-`FLARE <https://arxiv.org/abs/2508.12594>`_ (Fast Low-rank Attention Routing Engine)
-backend by setting ``attention_type="GALE_FA"``. GALE_FA keeps GeoTransolver's
-geometry- and context-aware cross-attention while using FLARE for the self-attention
-pass over learned physical-state slices, reducing attention cost at scale. See also
-the :doc:`FLARE model <flare>` documentation.
+For large meshes, setting ``attention_type="GALE_FA"`` swaps the
+physics-attention slice mechanism for the `FLARE
+<https://arxiv.org/abs/2508.12594>`__ (Fast Low-rank Attention Routing Engine)
+backend. GALE_FA keeps GeoTransolver's geometry- and context-aware
+cross-attention while using FLARE for the self-attention pass over learned
+physical-state slices, reducing attention cost at scale. See also the
+:doc:`FLARE model <flare>` documentation.
 
 .. autoclass:: physicsnemo.nn.module.gale.GALE_FA
-    :show-inheritance:
-    :members:
-    :exclude-members: forward
-
-Context building
-----------------
-
-.. autoclass:: physicsnemo.models.geotransolver.context_projector.GlobalContextBuilder
-    :show-inheritance:
-    :members:
-    :exclude-members: forward
-
-.. autoclass:: physicsnemo.models.geotransolver.context_projector.ContextProjector
     :show-inheritance:
     :members:
     :exclude-members: forward

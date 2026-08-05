@@ -210,7 +210,7 @@ class ContextProjector(_SliceToContextMixin, nn.Module):
     slice_num : int, optional
         Number of learned physical state slices. Default is 64.
     use_te : bool, optional
-        Whether to use Transformer Engine backend when available. Default is ``True``.
+        Whether to use Transformer Engine backend when available. Default is ``False``.
     plus : bool, optional
         Whether to use Transolver++ features. Default is ``False``.
 
@@ -239,7 +239,7 @@ class ContextProjector(_SliceToContextMixin, nn.Module):
     Examples
     --------
     >>> import torch
-    >>> projector = ContextProjector(dim=64, heads=8, dim_head=32, slice_num=32)
+    >>> projector = ContextProjector(dim=64, heads=8, dim_head=32, slice_num=32, use_te=False)
     >>> x = torch.randn(2, 100, 64)  # (batch, tokens, features)
     >>> slice_tokens = projector(x)
     >>> slice_tokens.shape
@@ -253,7 +253,7 @@ class ContextProjector(_SliceToContextMixin, nn.Module):
         dim_head: int = 64,
         dropout: float = 0.0,
         slice_num: int = 64,
-        use_te: bool = True,
+        use_te: bool = False,
         plus: bool = False,
         concrete_dropout: bool = False,
     ) -> None:
@@ -395,7 +395,7 @@ class StructuredContextProjector(_SliceToContextMixin, nn.Module):
         dropout: float = 0.0,
         slice_num: int = 64,
         kernel: int = 3,
-        use_te: bool = True,
+        use_te: bool = False,
         plus: bool = False,
         concrete_dropout: bool = False,
     ) -> None:
@@ -628,7 +628,7 @@ class MultiScaleFeatureExtractor(nn.Module):
     slice_num : int, optional
         Number of slices for context tokenization. Default is 64.
     use_te : bool, optional
-        Whether to use Transformer Engine. Default is ``True``.
+        Whether to use Transformer Engine. Default is ``False``.
     plus : bool, optional
         Whether to use Transolver++ features. Default is ``False``.
 
@@ -655,6 +655,7 @@ class MultiScaleFeatureExtractor(nn.Module):
     ...     hidden_dim=32,
     ...     n_head=8,
     ...     dim_head=32,
+    ...     use_te=False,
     ... )
     >>> spatial_coords = torch.randn(2, 100, 3)
     >>> geometry = torch.randn(2, 100, 3)
@@ -676,7 +677,7 @@ class MultiScaleFeatureExtractor(nn.Module):
         dim_head: int,
         dropout: float = 0.0,
         slice_num: int = 64,
-        use_te: bool = True,
+        use_te: bool = False,
         plus: bool = False,
         concrete_dropout: bool = False,
     ) -> None:
@@ -793,7 +794,7 @@ class GlobalContextBuilder(nn.Module):
     slice_num : int, optional
         Number of slices for tokenization. Default is 32.
     use_te : bool, optional
-        Whether to use Transformer Engine. Default is ``True``.
+        Whether to use Transformer Engine. Default is ``False``.
     plus : bool, optional
         Whether to use Transolver++ features. Default is ``False``.
     include_local_features : bool, optional
@@ -824,6 +825,7 @@ class GlobalContextBuilder(nn.Module):
     ...     global_dim=16,
     ...     n_hidden=256,
     ...     n_head=8,
+    ...     use_te=False,
     ... )
     >>> local_embeddings = (torch.randn(2, 100, 64),)
     >>> geometry = torch.randn(2, 100, 3)
@@ -847,7 +849,7 @@ class GlobalContextBuilder(nn.Module):
         n_head: int = 8,
         dropout: float = 0.0,
         slice_num: int = 32,
-        use_te: bool = True,
+        use_te: bool = False,
         plus: bool = False,
         include_local_features: bool = False,
         structured_shape: tuple[int, ...] | None = None,

@@ -16,7 +16,7 @@
 
 """GALE (Geometry-Aware Latent Embeddings) attention layer and transformer block.
 
-This module provides the GALE attention mechanism and GALE_block transformer block,
+This module provides the GALE attention mechanism and GALEBlock transformer block,
 which extend the Transolver physics attention with cross-attention capabilities for
 geometry and global context embeddings.
 """
@@ -248,7 +248,7 @@ class GALE(PhysicsAttentionIrregularMesh):
     slice_num : int, optional
         Number of learned physical state slices. Default is 64.
     use_te : bool, optional
-        Whether to use Transformer Engine backend when available. Default is True.
+        Whether to use Transformer Engine backend when available. Default is False.
     plus : bool, optional
         Whether to use Transolver++ features. Default is False.
     context_dim : int, optional
@@ -286,12 +286,12 @@ class GALE(PhysicsAttentionIrregularMesh):
     See Also
     --------
     :class:`physicsnemo.models.transolver.Physics_Attention.PhysicsAttentionIrregularMesh` : Base physics attention class.
-    :class:`GALE_block` : Transformer block using GALE attention.
+    :class:`GALEBlock` : Transformer block using GALE attention.
 
     Examples
     --------
     >>> import torch
-    >>> gale = GALE(dim=256, heads=8, dim_head=32, context_dim=32)
+    >>> gale = GALE(dim=256, heads=8, dim_head=32, context_dim=32, use_te=False)
     >>> x = (torch.randn(2, 100, 256),)  # Single input tensor in tuple
     >>> context = torch.randn(2, 8, 64, 32)  # Context for cross-attention
     >>> outputs = gale(x, context)
@@ -308,7 +308,7 @@ class GALE(PhysicsAttentionIrregularMesh):
         dim_head: int = 64,
         dropout: float = 0.0,
         slice_num: int = 64,
-        use_te: bool = True,
+        use_te: bool = False,
         plus: bool = False,
         context_dim: int = 0,
         concrete_dropout: bool = False,
@@ -387,7 +387,7 @@ def _gale_cross_init(
     use_te: bool,
     state_mixing_mode: str = "weighted",
 ) -> None:
-    # Match GALE: TE linear only when TE is installed (GALE_block already errors if use_te without TE)
+    # Match GALE: TE linear only when TE is installed (GALEBlock already errors if use_te without TE)
     linear_layer = te.Linear if (use_te and te.available) else nn.Linear
     self.cross_q = linear_layer(dim_head, dim_head)
     self.cross_k = linear_layer(context_dim, dim_head)
@@ -446,7 +446,7 @@ class GALEStructuredMesh2D(
         dropout: float = 0.0,
         slice_num: int = 64,
         kernel: int = 3,
-        use_te: bool = True,
+        use_te: bool = False,
         plus: bool = False,
         context_dim: int = 0,
         state_mixing_mode: str = "weighted",
@@ -479,7 +479,7 @@ class GALEStructuredMesh3D(
         dropout: float = 0.0,
         slice_num: int = 64,
         kernel: int = 3,
-        use_te: bool = True,
+        use_te: bool = False,
         plus: bool = False,
         context_dim: int = 0,
         state_mixing_mode: str = "weighted",
@@ -563,7 +563,7 @@ class GALE_FA(nn.Module):
     See Also
     --------
     :class:`GALE` : Original GeoTransolver GALE attention class.
-    :class:`GALE_block` : Transformer block that calls GALE or GALE_FA attention.
+    :class:`GALEBlock` : Transformer block that calls GALE or GALE_FA attention.
 
     Examples
     --------
@@ -614,11 +614,12 @@ class GALE_FA(nn.Module):
 
         # FLARE's self-attention passes and the cross-attention all have
         # differing q/kv lengths, so TE runs them as cross-attention (BSHD).
+        # Keep dropout in out_dropout so TE and PyTorch use the same dropout site.
         if self.use_te:
             self.attn_fn = te.DotProductAttention(
                 num_attention_heads=self.heads,
                 kv_channels=self.dim_head,
-                attention_dropout=dropout,
+                attention_dropout=0.0,
                 attn_mask_type="no_mask",
                 attention_type="cross",
                 qkv_format="bshd",
@@ -748,7 +749,7 @@ class GALE_FA(nn.Module):
         return [self.out_dropout(_out) for _out in outputs]
 
 
-class GALE_block(nn.Module):
+class GALEBlock(nn.Module):
     r"""Transformer encoder block using GALE attention.
 
     This block replaces standard self-attention with the GALE (Geometry-Aware Latent
@@ -774,7 +775,7 @@ class GALE_block(nn.Module):
     slice_num : int, optional
         Number of learned physical state slices. Default is 32.
     use_te : bool, optional
-        Whether to use Transformer Engine backend. Default is ``True``.
+        Whether to use Transformer Engine backend. Default is ``False``.
     plus : bool, optional
         Whether to use Transolver++ features. Default is ``False``.
     context_dim : int, optional
@@ -816,12 +817,12 @@ class GALE_block(nn.Module):
     See Also
     --------
     :class:`GALE` : The attention mechanism used in this block.
-    :class:`physicsnemo.models.geotransolver.GeoTransolver` : Main model using GALE_block.
+    :class:`physicsnemo.models.geotransolver.GeoTransolver` : Main model using GALEBlock.
 
     Examples
     --------
     >>> import torch
-    >>> block = GALE_block(num_heads=8, hidden_dim=256, dropout=0.1, context_dim=32)
+    >>> block = GALEBlock(num_heads=8, hidden_dim=256, dropout=0.1, context_dim=32, use_te=False)
     >>> fx = (torch.randn(2, 100, 256),)  # Single input tensor in tuple
     >>> context = torch.randn(2, 8, 64, 32)  # Global context
     >>> outputs = block(fx, context)
@@ -841,7 +842,7 @@ class GALE_block(nn.Module):
         last_layer: bool = False,
         out_dim: int = 1,
         slice_num: int = 32,
-        use_te: bool = True,
+        use_te: bool = False,
         plus: bool = False,
         context_dim: int = 0,
         spatial_shape: tuple[int, ...] | None = None,

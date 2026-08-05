@@ -14,7 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 import pytest
 import torch
 
@@ -86,6 +85,60 @@ def test_geotransolver_forward(device, attention_type, use_geometry, use_global)
     assert isinstance(outputs, torch.Tensor)
     assert outputs.shape == (batch_size, n_tokens, 4)
     assert not torch.isnan(outputs).any()
+
+
+def test_geotransolver_forward_returns_embedding_states(device):
+    """Test returning geometry and global context embedding states."""
+    torch.manual_seed(42)
+
+    batch_size = 2
+    n_tokens = 100
+    n_geom_tokens = 345
+    n_global = 5
+    n_hidden = 64
+    n_head = 4
+    slice_num = 8
+
+    model = GeoTransolver(
+        functional_dim=32,
+        out_dim=4,
+        geometry_dim=3,
+        global_dim=16,
+        n_layers=2,
+        n_hidden=n_hidden,
+        dropout=0.0,
+        n_head=n_head,
+        act="gelu",
+        mlp_ratio=2,
+        slice_num=slice_num,
+        use_te=False,
+        time_input=False,
+        plus=False,
+        include_local_features=False,
+    ).to(device)
+
+    local_emb = torch.randn(batch_size, n_tokens, 32, device=device)
+    geometry = torch.randn(batch_size, n_geom_tokens, 3, device=device)
+    global_emb = torch.randn(batch_size, n_global, 16, device=device)
+
+    outputs, embedding_states = model(
+        local_emb,
+        global_embedding=global_emb,
+        geometry=geometry,
+        return_embedding_states=True,
+    )
+
+    assert isinstance(outputs, torch.Tensor)
+    assert outputs.shape == (batch_size, n_tokens, 4)
+    assert not torch.isnan(outputs).any()
+    assert isinstance(embedding_states, torch.Tensor)
+    assert embedding_states.shape == (
+        batch_size,
+        n_head,
+        slice_num,
+        2 * (n_hidden // n_head),
+    )
+    assert not torch.isnan(embedding_states).any()
 
 
 def test_geotransolver_forward_tuple_inputs(device):
@@ -466,6 +519,19 @@ def test_geotransolver_te_gale_fa(device):
 # =============================================================================
 # Checkpoint Tests
 # =============================================================================
+
+
+def test_geotransolver_legacy_checkpoint_class_path():
+    """Test resolving the model class path stored by experimental checkpoints."""
+    from physicsnemo.experimental.models.geotransolver import (
+        GeoTransolver as LegacyPackageGeoTransolver,
+    )
+    from physicsnemo.experimental.models.geotransolver.geotransolver import (
+        GeoTransolver as LegacyModuleGeoTransolver,
+    )
+
+    assert LegacyPackageGeoTransolver is GeoTransolver
+    assert LegacyModuleGeoTransolver is GeoTransolver
 
 
 def test_geotransolver_checkpoint(device):

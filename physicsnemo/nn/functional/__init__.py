@@ -37,13 +37,22 @@ from .equivariant_ops import (
 )
 from .fourier_spectral import imag, irfft, irfft2, real, rfft, rfft2, view_as_complex
 from .geometry import (
+    closed_surface_volume_energy,
     displace_points,
     farthest_point_sampling,
+    free_form_deform_points,
     mesh_poisson_disk_sample,
     mesh_to_voxel_fraction,
     morph_points,
+    radial_basis_function_deform_points,
     ray_mesh_intersect,
+    remeshing,
     signed_distance_field,
+    simplex_inversion_energy,
+    simplex_measure_energy,
+    simplex_strain_energy,
+    surface_bending_energy,
+    total_measure_energy,
 )
 from .interpolation import (
     grid_to_point_interpolation,
@@ -63,13 +72,16 @@ from .rendering import (
     volume_render,
     wireframe_render,
 )
+from .weighted_multinomial import WeightedMultinomial, weighted_multinomial
 
 __all__ = [
+    "closed_surface_volume_energy",
     "displace_points",
     "irfft",
     "irfft2",
     "drop_path",
     "farthest_point_sampling",
+    "free_form_deform_points",
     "uniform_grid_curl",
     "uniform_grid_divergence",
     "uniform_grid_laplacian",
@@ -87,6 +99,7 @@ __all__ = [
     "mesh_poisson_disk_sample",
     "mesh_to_voxel_fraction",
     "morph_points",
+    "radial_basis_function_deform_points",
     "na1d",
     "na2d",
     "na3d",
@@ -95,6 +108,9 @@ __all__ = [
     "radius_search",
     "real",
     "ray_mesh_intersect",
+    "WeightedMultinomial",
+    "weighted_multinomial",
+    "remeshing",
     "rectilinear_grid_curl",
     "rectilinear_grid_divergence",
     "rectilinear_grid_gradient",
@@ -104,9 +120,14 @@ __all__ = [
     "point_cloud_render",
     "scalar_field_to_rgba",
     "signed_distance_field",
+    "simplex_inversion_energy",
+    "simplex_measure_energy",
+    "simplex_strain_energy",
     "smooth_log",
     "spectral_grid_gradient",
     "spherical_basis",
+    "surface_bending_energy",
+    "total_measure_energy",
     "uniform_grid_gradient",
     "vector_field_to_rgba",
     "vector_project",

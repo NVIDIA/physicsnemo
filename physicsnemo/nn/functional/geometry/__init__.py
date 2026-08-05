@@ -14,26 +14,66 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .deform import DisplacePoints, MorphPoints, displace_points, morph_points
+from .deform import (
+    ClosedSurfaceVolumeEnergy,
+    DisplacePoints,
+    FreeFormDeformPoints,
+    MorphPoints,
+    RadialBasisFunctionDeformPoints,
+    SimplexInversionEnergy,
+    SimplexMeasureEnergy,
+    SimplexStrainEnergy,
+    SurfaceBendingEnergy,
+    TotalMeasureEnergy,
+    closed_surface_volume_energy,
+    displace_points,
+    free_form_deform_points,
+    morph_points,
+    radial_basis_function_deform_points,
+    simplex_inversion_energy,
+    simplex_measure_energy,
+    simplex_strain_energy,
+    surface_bending_energy,
+    total_measure_energy,
+)
 from .farthest_point_sampling import FarthestPointSampling, farthest_point_sampling
 from .mesh_poisson_disk_sample import MeshPoissonDiskSample, mesh_poisson_disk_sample
 from .mesh_to_voxel_fraction import MeshToVoxelFraction, mesh_to_voxel_fraction
 from .ray_mesh_intersect import RayMeshIntersect, ray_mesh_intersect
+from .remeshing import Remeshing, remeshing
 from .sdf import SignedDistanceField, signed_distance_field
 
 __all__ = [
+    "ClosedSurfaceVolumeEnergy",
     "DisplacePoints",
+    "FreeFormDeformPoints",
     "FarthestPointSampling",
     "MeshPoissonDiskSample",
     "MeshToVoxelFraction",
     "MorphPoints",
+    "RadialBasisFunctionDeformPoints",
     "RayMeshIntersect",
+    "Remeshing",
     "SignedDistanceField",
+    "SimplexInversionEnergy",
+    "SimplexMeasureEnergy",
+    "SimplexStrainEnergy",
+    "SurfaceBendingEnergy",
+    "TotalMeasureEnergy",
+    "closed_surface_volume_energy",
     "displace_points",
     "farthest_point_sampling",
+    "free_form_deform_points",
     "mesh_poisson_disk_sample",
     "mesh_to_voxel_fraction",
     "morph_points",
+    "radial_basis_function_deform_points",
     "ray_mesh_intersect",
+    "remeshing",
     "signed_distance_field",
+    "simplex_inversion_energy",
+    "simplex_measure_energy",
+    "simplex_strain_energy",
+    "surface_bending_energy",
+    "total_measure_energy",
 ]

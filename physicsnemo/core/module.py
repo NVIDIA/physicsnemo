@@ -259,17 +259,20 @@ class Module(torch.nn.Module):
 
     @staticmethod
     def _safe_members(tar, local_path):
+        extraction_root = Path(local_path).resolve()
         for member in tar.getmembers():
-            if (
-                ".." in member.name
-                or os.path.isabs(member.name)
-                or os.path.realpath(os.path.join(local_path, member.name)).startswith(
-                    os.path.realpath(local_path)
+            destination = (extraction_root / member.name).resolve()
+            stays_within_root = (
+                destination == extraction_root or extraction_root in destination.parents
+            )
+            is_supported_type = member.isfile() or member.isdir()
+            if not stays_within_root or not is_supported_type:
+                logging.warning(
+                    "Skipping archive member which goes above the archive parent: %s",
+                    member.name,
                 )
-            ):
-                yield member
-            else:
-                print(f"Skipping potentially malicious file: {member.name}")
+                continue
+            yield member
 
     @classmethod
     def _backward_compat_arg_mapper(

@@ -22,8 +22,8 @@ named target field declared in ``target_config`` produces:
 - For ``"scalar"`` types: per-metric values (``l1``, ``l2``, ``mae`` by
   default), keyed ``"<prefix>/<name>_<metric>"``.
 - For ``"vector"`` types: per-component values
-  (``"<prefix>/<name>_x_<metric>"`` etc.) plus aggregate magnitude values
-  (``"<prefix>/<name>_<metric>"``).
+  (``"<prefix>/<name>_x_<metric>"`` etc.) plus aggregate values over all
+  components jointly (``"<prefix>/<name>_<metric>"``).
 
 Metrics are reported unweighted -- per-field weighting belongs in the
 loss, not in diagnostic summaries.
@@ -189,8 +189,8 @@ class MetricCalculator:
     def expected_keys(self) -> list[str]:
         """The exact key set :meth:`__call__` produces, derivable without data.
 
-        Vector fields contribute one key per spatial component plus the
-        aggregate-magnitude key; scalars contribute one key per metric.
+        Vector fields contribute keys per spatial component plus the bare-name
+        aggregate keys; scalars contribute one key per metric.
         Lets callers pre-size accumulators identically on every rank --
         e.g. ``infer.py`` zero-fills its running sums with these keys so
         the cross-rank all-reduce packs the same tensor length even on a
@@ -232,8 +232,9 @@ class MetricCalculator:
             0-D ``TensorDict`` (``batch_size=[]``) keyed by
             ``"<prefix>/<name>_<metric>"`` for scalar fields and by
             ``"<prefix>/<name>_<comp>_<metric>"`` plus
-            ``"<prefix>/<name>_<metric>"`` (aggregate magnitude) for
-            vector fields. Slash-containing keys are stored verbatim;
+            ``"<prefix>/<name>_<metric>"`` (aggregate over all components
+            jointly) for vector fields.
+            Slash-containing keys are stored verbatim;
             TensorDict only treats ``/`` as nested when the caller
             explicitly invokes ``flatten_keys("/")``.
         """
@@ -262,10 +263,13 @@ class MetricCalculator:
                         out.update(
                             self._metrics_for_tensor(p[..., i], t[..., i], (name, comp))
                         )
-                    ### Aggregate magnitude metric.
-                    p_mag = torch.linalg.vector_norm(p, dim=-1)
-                    t_mag = torch.linalg.vector_norm(t, dim=-1)
-                    out.update(self._metrics_for_tensor(p_mag, t_mag, (name,)))
+                    ### Aggregate vector metric under the bare field name:
+                    ### all components jointly, flattened so the relative
+                    ### norms reduce over the whole field (Frobenius for
+                    ### l2) and direction errors count.
+                    out.update(
+                        self._metrics_for_tensor(p.flatten(-2), t.flatten(-2), (name,))
+                    )
 
         return TensorDict(out)
 

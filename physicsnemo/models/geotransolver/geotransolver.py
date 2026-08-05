@@ -36,7 +36,7 @@ from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.models.transolver.transolver import _TransolverMlp
-from physicsnemo.nn import GALE_block
+from physicsnemo.nn import GALEBlock
 
 from .context_projector import GlobalContextBuilder
 
@@ -230,7 +230,7 @@ class GeoTransolver(Module):
         the number of learned states each layer should project inputs onto.
         Default is 32.
     use_te : bool, optional
-        Whether to use Transformer Engine backend when available. Default is ``True``.
+        Whether to use Transformer Engine backend when available. Default is ``False``.
     time_input : bool, optional
         Whether to include time embeddings. Default is ``False``.
     plus : bool, optional
@@ -318,7 +318,7 @@ class GeoTransolver(Module):
     See Also
     --------
     :class:`~physicsnemo.nn.module.gale.GALE` : The attention mechanism used in GeoTransolver.
-    :class:`~physicsnemo.nn.module.gale.GALE_block` : Transformer block using GALE attention.
+    :class:`~physicsnemo.nn.module.gale.GALEBlock` : Transformer block using GALE attention.
     :class:`~physicsnemo.models.geotransolver.context_projector.ContextProjector` : Projects context features onto physical states.
 
     Examples
@@ -357,6 +357,17 @@ class GeoTransolver(Module):
     >>> output.shape
     torch.Size([2, 1000, 3])
 
+    To also retrieve the geometry/global context embeddings:
+
+    >>> output, emb_states = model(
+    ...     local_emb,
+    ...     global_embedding=global_emb,
+    ...     geometry=geometry,
+    ...     return_embedding_states=True,
+    ... )
+    >>> emb_states.shape[0] == 2  # batch dimension preserved
+    True
+
     Structured 2D grid:
 
     >>> model = GeoTransolver(
@@ -371,17 +382,6 @@ class GeoTransolver(Module):
     >>> y = model(torch.randn(2, 8, 8, 3))
     >>> y.shape
     torch.Size([2, 8, 8, 1])
-
-    To also retrieve the geometry/global context embeddings:
-
-    >>> output, emb_states = model(
-    ...     local_emb,
-    ...     global_embedding=global_emb,
-    ...     geometry=geometry,
-    ...     return_embedding_states=True,
-    ... )
-    >>> emb_states.shape[0] == 2  # batch dimension preserved
-    True
     """
 
     def __init__(
@@ -397,7 +397,7 @@ class GeoTransolver(Module):
         act: str = "gelu",
         mlp_ratio: int = 4,
         slice_num: int = 32,
-        use_te: bool = True,
+        use_te: bool = False,
         time_input: bool = False,
         plus: bool = False,
         include_local_features: bool = False,
@@ -506,7 +506,7 @@ class GeoTransolver(Module):
         # GALE transformer blocks
         self.blocks = nn.ModuleList(
             [
-                GALE_block(
+                GALEBlock(
                     num_heads=n_head,
                     hidden_dim=effective_hidden,
                     dropout=dropout,

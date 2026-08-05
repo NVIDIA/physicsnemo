@@ -35,6 +35,17 @@ from test.common import (
 from test.conftest import requires_module
 
 
+def test_flare_legacy_checkpoint_class_path():
+    """Test resolving the model class path stored by experimental checkpoints."""
+    from physicsnemo.experimental.models.flare import FLARE as LegacyPackageFLARE
+    from physicsnemo.experimental.models.flare.flare import (
+        FLARE as LegacyModuleFLARE,
+    )
+
+    assert LegacyPackageFLARE is FLARE
+    assert LegacyModuleFLARE is FLARE
+
+
 @pytest.mark.parametrize(
     "config",
     ["default_structured", "custom_irregular"],
