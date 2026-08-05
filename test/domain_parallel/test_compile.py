@@ -99,6 +99,49 @@ def test_coerce_same_placements_unknown_shapes_1d(distributed_mesh):
     run_coerce_same_placements_unknown_shapes(distributed_mesh)
 
 
+def run_coerce_empty_and_none_shapes_are_identity(mesh):
+    # ``{}`` (fully-replicated / op-result rewrap) vs ``None`` (fresh spec)
+    # both mean "no per-shard shape info": with matching placements the hook
+    # must early-return self rather than redistribute, in both directions.
+    st = shard_tensor_factory(mesh, uneven=False).redistribute(
+        placements=_replicate_placements(mesh)
+    )
+
+    st_empty = ShardTensor.__new__(
+        ShardTensor,
+        local_tensor=st._local_tensor,
+        spec=dataclasses.replace(st._spec, _sharding_shapes={}),
+        requires_grad=False,
+    )
+    recorded_none = dataclasses.replace(st._spec, _sharding_shapes=None)
+    assert st_empty.__coerce_same_metadata_as_tangent__((recorded_none, False)) is (
+        st_empty
+    )
+
+    st_none = ShardTensor.__new__(
+        ShardTensor,
+        local_tensor=st._local_tensor,
+        spec=dataclasses.replace(st._spec, _sharding_shapes=None),
+        requires_grad=False,
+    )
+    recorded_empty = dataclasses.replace(st._spec, _sharding_shapes={})
+    assert st_none.__coerce_same_metadata_as_tangent__((recorded_empty, False)) is (
+        st_none
+    )
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+def test_coerce_empty_and_none_shapes_are_identity_1d(distributed_mesh):
+    run_coerce_empty_and_none_shapes_are_identity(distributed_mesh)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+def test_coerce_empty_and_none_shapes_are_identity_2d(distributed_mesh_2d):
+    run_coerce_empty_and_none_shapes_are_identity(distributed_mesh_2d)
+
+
 def run_coerce_expected_type_returns_none(mesh):
     # Mismatched expected_type must short-circuit to None (DTensor convention).
     st = shard_tensor_factory(mesh, uneven=True)

@@ -545,3 +545,51 @@ def test_shard_tensor_retain_grad(distributed_mesh):
 @pytest.mark.timeout(120)
 def test_shard_tensor_retain_grad_2d(distributed_mesh_2d):
     run_shard_tensor_retain_grad(distributed_mesh_2d)
+
+
+def run_eager_autograd_grad_returns_shard_tensor(mesh):
+    r"""Eager ``torch.autograd.grad(loss, [st])`` must return ShardTensor grads.
+
+    ``torch.autograd.grad`` is routed through ``_autograd_passthrough_functions``
+    (it queries gradients for these exact tensor objects, so the DTensor
+    fallback would ask about tensors that aren't in the graph). The passthrough
+    runs it under ``DisableTorchFunctionSubclass``, which only suppresses
+    ``__torch_function__`` re-entry: the backward graph was recorded on the
+    subclass and executes via ``__torch_dispatch__``, so the returned grads
+    must still be ShardTensor-typed — in eager just as inside AOTAutograd's
+    joint trace.
+    """
+    shard_x = shard_tensor_factory(mesh, uneven=False).detach().requires_grad_(True)
+
+    # Leaf grad, with a local reference for the values.
+    full_ref = shard_x.full_tensor().detach().requires_grad_(True)
+    (ref_grad,) = torch.autograd.grad((full_ref**2).sum(), [full_ref])
+
+    y = shard_x**2
+    loss = y.full_tensor().sum()
+    (grad_leaf,) = torch.autograd.grad(loss, [shard_x], create_graph=False)
+
+    assert isinstance(grad_leaf, ShardTensor), (
+        f"eager autograd.grad returned {type(grad_leaf)} for a ShardTensor leaf"
+    )
+    assert torch.allclose(grad_leaf.full_tensor(), ref_grad)
+
+    # Non-leaf grad must also stay ShardTensor-typed.
+    y2 = shard_x * 3.0
+    loss2 = y2.full_tensor().sum()
+    (grad_nonleaf,) = torch.autograd.grad(loss2, [y2])
+    assert isinstance(grad_nonleaf, ShardTensor), (
+        f"eager autograd.grad returned {type(grad_nonleaf)} for a non-leaf ShardTensor"
+    )
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+def test_eager_autograd_grad_returns_shard_tensor(distributed_mesh):
+    run_eager_autograd_grad_returns_shard_tensor(distributed_mesh)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+def test_eager_autograd_grad_returns_shard_tensor_2d(distributed_mesh_2d):
+    run_eager_autograd_grad_returns_shard_tensor(distributed_mesh_2d)

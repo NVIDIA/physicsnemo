@@ -1032,9 +1032,14 @@ class ShardTensor(torch.Tensor):
                 "placements to Replicate"
             )
 
-        if (
-            self._spec.placements == spec.placements
-            and self._spec._sharding_shapes == spec._sharding_shapes
+        # ``{}`` (fully-replicated / op-result rewrap) and ``None`` (unknown)
+        # both carry no per-shard shape information, so with matching
+        # placements there is nothing to reconcile; strict ``==`` would treat
+        # them as different and fall into a data-no-op redistribute whose
+        # result spec downgrades ``_sharding_shapes`` to ``None`` (a later
+        # ``sharding_shapes()`` query then pays a blocking all-gather).
+        if self._spec.placements == spec.placements and (
+            (self._spec._sharding_shapes or None) == (spec._sharding_shapes or None)
         ):
             return self
 
