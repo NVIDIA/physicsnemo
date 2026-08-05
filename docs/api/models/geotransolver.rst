@@ -12,7 +12,7 @@ setting) or
 :class:`~physicsnemo.nn.module.flare_attention.FLARE` (with ``attention_type="GALE_FA"``)
 as the self-attention backend.
 
-For more information on GeoTransolver, see the `GeoTransolver paper
+For more information on GeoTransolver, refer to the `GeoTransolver paper
 <https://arxiv.org/abs/2512.20399>`__.
 
 .. autoclass:: physicsnemo.models.geotransolver.geotransolver.GeoTransolver
