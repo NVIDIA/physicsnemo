@@ -324,6 +324,16 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
     - :meth:`init_latents`: Initialize latent state (sampling)
     - :meth:`get_denoiser`: Get ODE/SDE RHS (sampling)
 
+    Attributes
+    ----------
+    is_edm_parameterization : bool, default=False
+        Whether the schedule satisfies :math:`\sigma(t) = t` and
+        :math:`\alpha(t) = 1`, so that the diffusion time is the noise level.
+        Solvers derived only for this case, such as
+        :class:`~physicsnemo.diffusion.samplers.solvers.DPMSolverPlusPlus2M`,
+        are rejected by :func:`~physicsnemo.diffusion.samplers.sample`
+        otherwise. Subclasses satisfying both identities may set it to ``True``.
+
     Examples
     --------
     **Example 1:** A minimal EDM-like noise schedule. Only the abstract methods
@@ -335,6 +345,10 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
     ... )
     >>>
     >>> class SimpleEDMScheduler(LinearGaussianNoiseScheduler):
+    ...     # sigma(t) = t and alpha(t) = 1 below, so opt in to the solvers
+    ...     # that require the EDM parameterization.
+    ...     is_edm_parameterization = True
+    ...
     ...     def __init__(self, sigma_min=0.002, sigma_max=80.0, rho=7.0):
     ...         self.sigma_min = sigma_min
     ...         self.sigma_max = sigma_max
@@ -385,6 +399,10 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
     torch.Size([2, 4])
 
     """
+
+    # Kept off the NoiseScheduler protocol, which is runtime_checkable: a new
+    # required member would break isinstance for duck-typed schedulers.
+    is_edm_parameterization: bool = False
 
     @abstractmethod
     def sigma(
@@ -1302,6 +1320,8 @@ class EDMNoiseScheduler(LinearGaussianNoiseScheduler):
     torch.Size([4, 3])
     """
 
+    is_edm_parameterization: bool = True
+
     def __init__(
         self,
         sigma_min: float = 0.002,
@@ -1810,6 +1830,8 @@ class IDDPMNoiseScheduler(LinearGaussianNoiseScheduler):
     torch.Size([4, 3, 8, 8])
     """
 
+    is_edm_parameterization: bool = True
+
     def __init__(
         self,
         sigma_min: float = 0.002,
@@ -2283,6 +2305,8 @@ class StudentTEDMNoiseScheduler(LinearGaussianNoiseScheduler):
     >>> xN.shape
     torch.Size([4, 3, 8, 8])
     """
+
+    is_edm_parameterization: bool = True
 
     def __init__(
         self,

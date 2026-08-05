@@ -792,3 +792,233 @@ class EDMStochasticHeunSolver(Solver):
         x_next = mask_bc * x_heun + (1 - mask_bc) * x_euler
 
         return x_next
+
+
+class DPMSolverPlusPlus2M(Solver):
+    r"""
+    DPM-Solver++(2M): second-order multistep solver for diffusion ODEs.
+
+    Unlike :class:`HeunSolver`, which attains second order with *two* denoiser
+    evaluations per step, this solver attains second order with a *single*
+    evaluation per step by reusing the previous step's data prediction
+    (a linear-multistep, Adams--Bashforth-style scheme applied to the
+    probability-flow ODE in exponential-integrator form). For a fixed budget of
+    network function evaluations it can therefore take twice as many steps as a
+    second-order single-step method.
+
+    This implementation targets the variance-exploding (EDM) parameterization,
+    where the diffusion time equals the noise level (:math:`t = \sigma`) and
+    :math:`\alpha_t = 1`. Writing :math:`\lambda = -\ln \sigma`, with step size
+    :math:`h = \lambda_{n-1} - \lambda_n` so that
+    :math:`e^{-h} = \sigma_{n-1} / \sigma_n`, the update is
+
+    .. math::
+        \mathbf{x}_{n-1} = e^{-h}\, \mathbf{x}_n
+                           + \left(1 - e^{-h}\right) \bar{\mathbf{D}}_n ,
+
+    where the extrapolated data prediction is
+
+    .. math::
+        \bar{\mathbf{D}}_n = \left(1 + \frac{1}{2r}\right) \mathbf{D}_n
+                             - \frac{1}{2r} \mathbf{D}_{n+1} ,
+        \qquad r = \frac{h_{n+1}}{h_n} ,
+
+    and :math:`\mathbf{D}_n` is the denoised (data-space) prediction at step
+    :math:`n`. On the first step -- and whenever no history is available -- the
+    scheme falls back to the first-order update
+    :math:`\bar{\mathbf{D}}_n = \mathbf{D}_n`, which for :math:`\alpha_t = 1` is
+    algebraically identical to an explicit Euler step in :math:`\sigma`.
+
+    The final step, where :math:`\sigma_{n-1} = 0`, likewise returns
+    :math:`\mathbf{D}_n` rather than the extrapolation
+    :math:`\bar{\mathbf{D}}_n`. This lowers the order of that one step relative
+    to a literal reading of Algorithm 2, and matches k-diffusion's terminal
+    handling and diffusers' ``lower_order_final`` behavior.
+
+    The multistep extrapolation can amplify rounding error when two adjacent
+    timesteps are extremely close, since the coefficient then scales a difference
+    of successive data predictions that is itself near the precision of the
+    latent dtype. Very fine schedules may likewise become rounding-limited with
+    ``float16`` or ``bfloat16`` latents; prefer ``float32`` latent arithmetic in
+    that regime.
+
+    .. warning::
+
+        The EDM parameterization is a **requirement**, not a default. Under any
+        other parameterization :math:`\mathbf{x} - t \cdot \text{RHS}` is not the
+        model's data prediction and :math:`-\ln t` is not the schedule's log-SNR
+        variable, so the update -- while still a consistent integrator -- is not
+        DPM-Solver++. :func:`~physicsnemo.diffusion.samplers.sample` rejects
+        incompatible noise schedulers; when calling :meth:`step` directly, it is
+        the caller's responsibility to supply an EDM schedule.
+
+    .. note::
+
+        This solver is **stateful**: it caches the previous data prediction and
+        step size across calls to :meth:`step`. Call :meth:`reset` before
+        starting a new sampling trajectory when reusing an instance;
+        :func:`~physicsnemo.diffusion.samplers.sample` does this automatically.
+        A single instance cannot be shared by two interleaved trajectories.
+
+    Parameters
+    ----------
+    denoiser : Denoiser
+        A callable implementing the
+        :class:`~physicsnemo.diffusion.Denoiser` interface. Here it is
+        expected to return the right hand side of the ODE,
+        :math:`(\mathbf{x} - \mathbf{D}) / t`; the data prediction is recovered
+        internally as :math:`\mathbf{D} = \mathbf{x} - t \cdot \text{RHS}`.
+        Typically obtained via
+        :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.get_denoiser`,
+        but any callable with the correct signature can be used.
+
+    Note
+    ----
+    Reference: `DPM-Solver++: Fast Solver for Guided Sampling of Diffusion
+    Probabilistic Models <https://arxiv.org/abs/2211.01095>`_, Algorithm 2.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.diffusion.samplers.solvers import DPMSolverPlusPlus2M
+    >>>
+    >>> denoiser = lambda x, t: x / (1 + t.view(-1, 1, 1, 1)**2)  # Toy denoiser
+    >>> solver = DPMSolverPlusPlus2M(denoiser)
+    >>> x_t = torch.randn(1, 3, 8, 8)
+    >>> x_t = solver.step(x_t, torch.tensor([2.0]), torch.tensor([1.0]))
+    >>> x_t = solver.step(x_t, torch.tensor([1.0]), torch.tensor([0.5]))
+    >>> x_t.shape
+    torch.Size([1, 3, 8, 8])
+    >>> isinstance(solver, Solver)
+    True
+    """
+
+    # Read by ``sample`` to reject incompatible noise schedulers; the class
+    # warning above explains why the EDM parameterization is required.
+    _requires_edm_parameterization = True
+
+    # Opts this solver into the ``reset`` lifecycle call in ``sample``. Gated on
+    # a marker rather than on ``hasattr(solver, "reset")`` so that a pre-existing
+    # user-defined solver with an unrelated ``reset`` method is left untouched.
+    _requires_state_reset = True
+
+    # Multistep history, cleared by ``reset``.
+    _D_prev: Tensor | None
+    _h_prev: Tensor | None
+
+    def __init__(self, denoiser: Denoiser) -> None:
+        self.denoiser = denoiser
+        self.reset()
+
+    def reset(self) -> None:
+        r"""
+        Clear the multistep history, starting a fresh trajectory.
+
+        Drops the cached data prediction and step size from the previous
+        :meth:`step` call, so that the next call uses the first-order fallback,
+        and releases the cached latent-sized tensor.
+        :func:`~physicsnemo.diffusion.samplers.sample` calls this automatically
+        at the start of every trajectory. Call it explicitly when driving
+        :meth:`step` in a hand-written loop and reusing the instance for more
+        than one trajectory.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        None
+        """
+        self._D_prev = None
+        self._h_prev = None
+
+    def step(
+        self,
+        x: Float[Tensor, " B *dims"],
+        t_cur: Float[Tensor, " B"],
+        t_next: Float[Tensor, " B"],
+    ) -> Float[Tensor, " B *dims"]:
+        r"""
+        Perform one DPM-Solver++(2M) integration step.
+
+        Parameters
+        ----------
+        x : Tensor
+            Current noisy latent state :math:`\mathbf{x}_{n}` of shape
+            :math:`(B, *)` where :math:`B` is the batch size.
+        t_cur : Tensor
+            Current diffusion time :math:`t_n` of shape :math:`(B,)`.
+        t_next : Tensor
+            Target diffusion time :math:`t_{n-1}` of shape :math:`(B,)`.
+
+        Returns
+        -------
+        Tensor
+            Updated latent state :math:`\mathbf{x}_{n-1}` at time
+            ``t_next``, same shape as ``x``.
+        """
+        # Ensure contiguous strides so successive denoiser calls (across
+        # sampling steps) present the same stride layout to torch.compile,
+        # avoiding spurious recompilations / silently divergent traces.
+        t_cur = t_cur.contiguous()
+        t_next = t_next.contiguous()
+
+        # Reshape t for broadcasting: (B,) -> (B, 1, ..., 1)
+        expected_shape = (-1,) + (1,) * (x.ndim - 1)
+        t_cur_bc = t_cur.reshape(expected_shape)
+        t_next_bc = t_next.reshape(expected_shape)
+
+        # At t == 0 the state is already denoised and the denoiser is singular,
+        # since it returns (x - D) / t. Evaluate at a surrogate time to keep the
+        # call finite; the result is discarded, as such a step is the identity.
+        is_degenerate = t_cur_bc == 0
+        t_cur_safe = torch.where(is_degenerate, torch.ones_like(t_cur_bc), t_cur_bc)
+
+        # Single RHS evaluation; recover the data prediction D = x - t * RHS.
+        D = x - t_cur_safe * self.denoiser(x, t_cur_safe.reshape(t_cur.shape))
+
+        # Where t_next == 0 the extrapolation is dropped and the update returns D,
+        # matching the reference implementations. The surrogate keeps log() and the
+        # division by h finite on the unselected branch.
+        is_final = t_next_bc == 0
+        t_next_safe = torch.where(is_final, 0.5 * t_cur_safe, t_next_bc)
+
+        # Step size in lambda = -log(sigma), computed in at least float32: the
+        # coefficients below are conditioned on the ratio of successive sizes.
+        compute_dtype = torch.promote_types(t_cur_bc.dtype, torch.float32)
+        ratio_hp = t_next_safe.to(compute_dtype) / t_cur_safe.to(compute_dtype)
+        h = -torch.log(ratio_hp)
+        ratio = ratio_hp.to(x.dtype)
+
+        if self._D_prev is None or self._h_prev is None:
+            D_bar = D  # first-order fallback (exact exponential / DDIM)
+        else:
+            # Extrapolate the data prediction in lambda to lambda_cur + h/2:
+            # D + (1 / 2r) * (D - D_prev), r = h_prev / h, written h / (2 * h_prev).
+            # A repeated timestep gives h_prev == 0. Use a finite dummy
+            # denominator because torch.where evaluates both branches; the zero
+            # coefficient then falls back to first order.
+            has_history = self._h_prev != 0
+            h_prev_safe = torch.where(
+                has_history, self._h_prev, torch.ones_like(self._h_prev)
+            )
+            coeff = torch.where(
+                has_history, h / (2.0 * h_prev_safe), torch.zeros_like(h)
+            ).to(x.dtype)
+            D_bar = (1.0 + coeff) * D - coeff * self._D_prev
+
+        x_next = torch.where(
+            is_degenerate,
+            x,
+            torch.where(is_final, D, ratio * x + (1.0 - ratio) * D_bar),
+        )
+
+        # Cache unconditionally to avoid a data-dependent branch (device sync,
+        # breaks fullgraph); `reset` clears it. Terminal and degenerate steps ran
+        # on a surrogate time, so their step size is not a real one and is stored
+        # as zero; a repeated timestep naturally yields h == 0 already.
+        self._D_prev = D
+        self._h_prev = torch.where(is_final | is_degenerate, torch.zeros_like(h), h)
+
+        return x_next

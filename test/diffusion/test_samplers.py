@@ -26,11 +26,17 @@ from physicsnemo.diffusion.guidance import (
 )
 from physicsnemo.diffusion.noise_schedulers import (
     EDMNoiseScheduler,
+    IDDPMNoiseScheduler,
+    StudentTEDMNoiseScheduler,
     VENoiseScheduler,
     VPNoiseScheduler,
 )
+from physicsnemo.diffusion.noise_schedulers.domain_parallel import (
+    DomainParallelNoiseScheduler,
+)
 from physicsnemo.diffusion.samplers import sample
 from physicsnemo.diffusion.samplers.solvers import (
+    DPMSolverPlusPlus2M,
     EulerSolver,
     HeunSolver,
 )
@@ -1002,3 +1008,290 @@ class TestGradientFlow:
             for p in model.parameters()
         )
         assert has_grad
+
+
+# =============================================================================
+# DPM-Solver++(2M) Sampler Integration
+# =============================================================================
+
+
+@pytest.mark.usefixtures("deterministic_settings")
+class TestDPMSolverPlusPlus2MSampling:
+    """sample() integration for the stateful multistep solver."""
+
+    SHAPE = (BATCH, 3, 8, 6)
+
+    def _components(self, device, sched_cls=EDMNoiseScheduler, num_steps=NUM_STEPS):
+        return _make_sampling_components(
+            sched_cls,
+            {},
+            self.SHAPE,
+            Conv2dX0Predictor,
+            {"channels": 3},
+            device,
+            num_steps=num_steps,
+        )
+
+    def test_entry_reset_discards_hand_driven_state(self, device):
+        """sample() must clear history it did not create.
+
+        The exit reset alone is not enough: a caller may drive ``step`` by hand
+        -- a documented use -- and then pass the same instance to ``sample``.
+        Without the reset at entry, that stale data prediction is extrapolated
+        into the first step of the new trajectory.
+        """
+        scheduler, _, denoiser, xN = self._components(device, num_steps=6)
+        solver = DPMSolverPlusPlus2M(denoiser)
+
+        # Prime with a non-terminal step from an unrelated trajectory.
+        solver.step(
+            xN,
+            torch.full((BATCH,), 40.0, device=device),
+            torch.full((BATCH,), 12.0, device=device),
+        )
+        assert solver._D_prev is not None
+
+        primed = sample(denoiser, xN, scheduler, 6, solver=solver)
+        fresh = sample(denoiser, xN, scheduler, 6, solver=DPMSolverPlusPlus2M(denoiser))
+        torch.testing.assert_close(primed, fresh, rtol=0, atol=0)
+
+        # The cached latent-sized tensor must not outlive the trajectory either.
+        assert solver._D_prev is None
+        assert solver._h_prev is None
+
+    def test_reset_hook_requires_the_marker(self, device):
+        """sample() must not call reset() on a solver that did not opt in.
+
+        ``reset`` is a common method name, so a pre-existing user-defined solver
+        may already have one meaning something else entirely. The lifecycle call
+        is gated on ``_requires_state_reset`` so that such a solver keeps its
+        previous behavior.
+        """
+        scheduler, _, denoiser, xN = self._components(device)
+
+        class _UnrelatedReset:
+            """Solver whose reset() is its own business, not sampler lifecycle."""
+
+            def __init__(self, den):
+                self.denoiser, self.reset_calls = den, 0
+
+            def reset(self):
+                self.reset_calls += 1
+
+            def step(self, x, t_cur, t_next):
+                shape = (-1,) + (1,) * (x.ndim - 1)
+                return x + (
+                    t_next.reshape(shape) - t_cur.reshape(shape)
+                ) * self.denoiser(x, t_cur)
+
+        solver = _UnrelatedReset(denoiser)
+        assert not hasattr(solver, "_requires_state_reset")
+        sample(denoiser, xN, scheduler, NUM_STEPS, solver=solver)
+        assert solver.reset_calls == 0
+
+        # The shipped solver does opt in, so it is still reset.
+        opted_in = DPMSolverPlusPlus2M(denoiser)
+        assert opted_in._requires_state_reset is True
+        sample(denoiser, xN, scheduler, NUM_STEPS, solver=opted_in)
+        assert opted_in._D_prev is None
+
+    def test_history_released_after_error(self, device):
+        """Cached history must also be released when sampling raises."""
+        scheduler, _, denoiser, xN = self._components(device)
+
+        calls = []
+
+        def failing_denoiser(x, t):
+            calls.append(1)
+            if len(calls) > 1:
+                raise RuntimeError("boom")
+            return denoiser(x, t)
+
+        solver = DPMSolverPlusPlus2M(failing_denoiser)
+        with pytest.raises(RuntimeError, match="boom"):
+            sample(failing_denoiser, xN, scheduler, 4, solver=solver)
+        assert solver._D_prev is None
+        assert solver._h_prev is None
+
+    def test_multistep_path_is_exercised(self, device):
+        """Guard against a trajectory that never leaves the first-order path.
+
+        With ``num_steps=2`` the first step has no history and the second lands
+        on ``t = 0``, where the update returns the data prediction and discards
+        the extrapolation -- so the result is bit-equal to Euler and proves
+        nothing about the multistep coefficients. At least three steps are
+        needed for the second-order path to affect the output.
+        """
+        scheduler, _, denoiser, xN = self._components(device, num_steps=4)
+
+        def relative_gap(num_steps):
+            dpm = sample(denoiser, xN, scheduler, num_steps, solver="dpmpp_2m")
+            # The registry key and a hand-built instance must agree exactly:
+            # sample() constructs the solver itself on the string path, and only
+            # the instance path additionally has state to reset.
+            by_instance = sample(
+                denoiser, xN, scheduler, num_steps, solver=DPMSolverPlusPlus2M(denoiser)
+            )
+            torch.testing.assert_close(dpm, by_instance, rtol=0, atol=0)
+            euler = sample(denoiser, xN, scheduler, num_steps, solver="euler")
+            return float((dpm - euler).abs().max() / dpm.abs().max())
+
+        # Two steps: identical up to floating-point round-off.
+        assert relative_gap(2) < 1e-4
+        # Three steps: the multistep update reaches the output. Measured gap is
+        # ~5e-1, i.e. four orders of magnitude above the two-step round-off.
+        assert relative_gap(3) > 1e-2
+
+    @pytest.mark.parametrize("as_instance", [False, True], ids=["by_name", "instance"])
+    def test_rejects_non_edm_scheduler(self, device, as_instance):
+        """Both dispatch paths must reject an incompatible parameterization."""
+        for sched_cls in (VENoiseScheduler, VPNoiseScheduler):
+            scheduler, _, denoiser, xN = self._components(device, sched_cls=sched_cls)
+            solver = DPMSolverPlusPlus2M(denoiser) if as_instance else "dpmpp_2m"
+            with pytest.raises(ValueError, match="EDM parameterization"):
+                sample(denoiser, xN, scheduler, NUM_STEPS, solver=solver)
+
+    def test_accepts_wrapped_edm_scheduler(self, device):
+        """A scheduler wrapped for domain-parallel sampling is still EDM.
+
+        The wrapper only changes tensor placement, so unwrapping it is required
+        or domain-parallel sampling would be rejected for no reason.
+        """
+        scheduler, _, denoiser, xN = self._components(device)
+
+        class _Wrapper:
+            """Stand-in for DomainParallelNoiseScheduler's public unwrap API.
+
+            Deliberately has no ``__getattr__``: the real class delegates
+            explicitly rather than by fallback, so the capability is *not*
+            readable on the wrapper itself. Without the unwrap in
+            ``_check_edm_parameterization`` this scheduler would be rejected.
+            """
+
+            def __init__(self, inner):
+                self._inner = inner
+
+            @property
+            def inner_scheduler(self):
+                return self._inner
+
+            def timesteps(self, *args, **kwargs):
+                return self._inner.timesteps(*args, **kwargs)
+
+        assert hasattr(DomainParallelNoiseScheduler, "inner_scheduler")
+
+        wrapped = _Wrapper(scheduler)
+        assert not getattr(wrapped, "is_edm_parameterization", False)
+
+        out = sample(denoiser, xN, wrapped, NUM_STEPS, solver="dpmpp_2m")
+        assert torch.isfinite(out).all()
+
+    @pytest.mark.usefixtures("nop_compile")
+    def test_compiled_sample(self, device):
+        """The whole trajectory compiles fullgraph and reuses its graph."""
+        torch._dynamo.config.error_on_recompile = False
+        torch._dynamo.reset()
+
+        scheduler, _, denoiser, xN = self._components(device, num_steps=4)
+        solver = DPMSolverPlusPlus2M(denoiser)
+
+        def do_sample(x):
+            return sample(denoiser, x, scheduler, 4, solver=solver)
+
+        compiled = torch.compile(do_sample, fullgraph=True)
+        with torch.no_grad():
+            first = compiled(xN)
+        torch._dynamo.config.error_on_recompile = True
+        try:
+            with torch.no_grad():
+                second = compiled(xN)
+        finally:
+            torch._dynamo.config.error_on_recompile = False
+
+        assert torch.isfinite(first).all()
+        torch.testing.assert_close(first, second, rtol=0, atol=0)
+
+        # Compiling must not change the trajectory. Comparing the two compiled
+        # runs above only shows the graph is reused, not that it is right.
+        eager = sample(denoiser, xN, scheduler, 4, solver=DPMSolverPlusPlus2M(denoiser))
+        torch.testing.assert_close(first, eager, rtol=1e-4, atol=1e-4)
+
+    @pytest.mark.parametrize("guidance_config", GUIDANCE_CONFIGS)
+    def test_dps_guidance_reuse_is_clean(self, device, guidance_config):
+        """Guided sampling must be repeatable on one solver instance.
+
+        DPS denoisers attach a per-step autograd graph, so the cached data
+        prediction is the one place a guided run could retain state or leak a
+        graph into the next trajectory.
+        """
+        scheduler, _, denoiser, xN = _make_sampling_components(
+            EDMNoiseScheduler,
+            {},
+            self.SHAPE,
+            Conv2dX0Predictor,
+            {"channels": 3},
+            device,
+            num_steps=4,
+            guidance_config=guidance_config,
+        )
+        solver = DPMSolverPlusPlus2M(denoiser)
+
+        with torch.no_grad():
+            first = sample(denoiser, xN, scheduler, 4, solver=solver)
+            second = sample(denoiser, xN, scheduler, 4, solver=solver)
+
+        assert first.shape == self.SHAPE
+        assert torch.isfinite(first).all()
+        torch.testing.assert_close(first, second, rtol=0, atol=0)
+        assert solver._D_prev is None
+        assert solver._h_prev is None
+        # Under no_grad the result must not carry a graph from the guidance.
+        assert not first.requires_grad
+        assert first.grad_fn is None
+
+    @pytest.mark.parametrize(
+        "sched_cls,sched_kwargs",
+        [(IDDPMNoiseScheduler, {}), (StudentTEDMNoiseScheduler, {})],
+        ids=["iddpm", "student_t_edm"],
+    )
+    def test_accepts_non_inheriting_edm_scheduler(
+        self, device, sched_cls, sched_kwargs
+    ):
+        """Schedulers declaring the parameterization without inheriting it.
+
+        IDDPM and Student-t EDM both satisfy sigma(t) = t and alpha(t) = 1
+        without deriving from EDMNoiseScheduler -- they differ only in their
+        timestep ladder and latent distribution -- so an inheritance-based
+        check would reject them incorrectly.
+        """
+        scheduler, _, denoiser, xN = _make_sampling_components(
+            sched_cls,
+            sched_kwargs,
+            self.SHAPE,
+            Conv2dX0Predictor,
+            {"channels": 3},
+            device,
+            num_steps=4,
+        )
+        out = sample(denoiser, xN, scheduler, 4, solver="dpmpp_2m")
+        assert out.shape == self.SHAPE
+        assert torch.isfinite(out).all()
+
+    @pytest.mark.parametrize(
+        "sched_cls", [VENoiseScheduler, VPNoiseScheduler], ids=["ve", "vp"]
+    )
+    @pytest.mark.usefixtures("nop_compile")
+    def test_rejects_non_edm_scheduler_when_compiled(self, device, sched_cls):
+        """Scheduler compatibility validation must survive fullgraph tracing."""
+        torch._dynamo.config.error_on_recompile = False
+        torch._dynamo.reset()
+
+        scheduler, _, denoiser, xN = self._components(device, sched_cls=sched_cls)
+
+        def do_sample(x):
+            return sample(denoiser, x, scheduler, NUM_STEPS, solver="dpmpp_2m")
+
+        with pytest.raises(
+            (ValueError, torch._dynamo.exc.Unsupported), match="EDM parameterization"
+        ):
+            torch.compile(do_sample, fullgraph=True)(xN)

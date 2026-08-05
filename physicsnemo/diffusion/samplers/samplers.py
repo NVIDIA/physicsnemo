@@ -29,6 +29,7 @@ from physicsnemo.diffusion.noise_schedulers import NoiseScheduler
 from physicsnemo.domain_parallel.shard_tensor import scatter_tensor
 
 from .solvers import (
+    DPMSolverPlusPlus2M,
     EDMStochasticEulerSolver,
     EDMStochasticHeunSolver,
     EulerSolver,
@@ -41,7 +42,47 @@ SOLVERS: Dict[str, type[Solver]] = {
     "heun": HeunSolver,
     "edm_stochastic_euler": EDMStochasticEulerSolver,
     "edm_stochastic_heun": EDMStochasticHeunSolver,
+    "dpmpp_2m": DPMSolverPlusPlus2M,
 }
+
+
+def _check_edm_parameterization(
+    noise_scheduler: NoiseScheduler, solver: Solver
+) -> None:
+    r"""Raise if ``noise_scheduler`` is not in the EDM parameterization.
+
+    Compatibility is read from the scheduler's ``is_edm_parameterization``
+    attribute rather than probed numerically, because converting a tensor
+    comparison to a Python boolean would break
+    ``torch.compile(..., fullgraph=True)``.
+
+    Parameters
+    ----------
+    noise_scheduler : NoiseScheduler
+        The scheduler to validate. A
+        :class:`~physicsnemo.diffusion.noise_schedulers.DomainParallelNoiseScheduler`
+        is unwrapped and its inner scheduler is validated instead.
+    solver : Solver
+        The solver requiring the parameterization; used in the error message.
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    ValueError
+        If the scheduler is not declared to be in the EDM parameterization.
+    """
+    # Unwrap the domain-parallel adapter: it only changes tensor placement.
+    inner = getattr(noise_scheduler, "inner_scheduler", noise_scheduler)
+
+    if not getattr(inner, "is_edm_parameterization", False):
+        raise ValueError(
+            f"{type(solver).__name__} requires a noise scheduler in the EDM "
+            f"parameterization (sigma(t) = t, alpha(t) = 1), but "
+            f"{type(inner).__name__} does not set is_edm_parameterization=True."
+        )
 
 
 def _maybe_replicate_timesteps(
@@ -78,7 +119,9 @@ def sample(
     xN: Float[Tensor, " B *dims"],
     noise_scheduler: NoiseScheduler,
     num_steps: int,
-    solver: Literal["euler", "heun", "edm_stochastic_euler", "edm_stochastic_heun"]
+    solver: Literal[
+        "euler", "heun", "edm_stochastic_euler", "edm_stochastic_heun", "dpmpp_2m"
+    ]
     | Solver = "heun",
     time_steps: Float[Tensor, " N_plus_1"] | None = None,
     solver_options: Dict[str, Any] | None = None,
@@ -216,6 +259,11 @@ def sample(
           the EDM paper with configurable noise injection. See
           :class:`~physicsnemo.diffusion.samplers.solvers.EDMStochasticHeunSolver`.
 
+        * ``"dpmpp_2m"``: Second-order multistep DPM-Solver++, using a single
+          denoiser evaluation per step. Requires a noise scheduler in the EDM
+          parameterization.
+          See :class:`~physicsnemo.diffusion.samplers.solvers.DPMSolverPlusPlus2M`.
+
     time_steps : Tensor | None, default=None
         Optional 1D tensor of shape :math:`(N + 1,)` containing explicit
         diffusion time values :math:`t_N, t_{N-1}, ..., t_0` in decreasing
@@ -320,6 +368,11 @@ def sample(
     >>>
     >>> # Define a minimal EDM-like scheduler from scratch
     >>> class MinimalScheduler:
+    ...     # sigma=t and alpha=1 below, so opt in to the solvers that require
+    ...     # the EDM parameterization. Duck-typed schedulers can set this too:
+    ...     # it is read defensively, not required by the protocol.
+    ...     is_edm_parameterization = True
+    ...
     ...     def timesteps(self, num_steps, *, device=None, dtype=None):
     ...         return torch.linspace(1.0, 0.0, num_steps + 1,
     ...                               device=device, dtype=dtype)
@@ -391,6 +444,23 @@ def sample(
     # callers that intentionally backprop through sample() are unaffected.
     outer_grad_enabled = torch.is_grad_enabled()
 
+    # Reject incompatible solver/scheduler parameterizations before evaluating
+    # the denoiser.
+    if getattr(solver_, "_requires_edm_parameterization", False):
+        _check_edm_parameterization(noise_scheduler, solver_)
+
+    # Stateful solvers opt into a reset hook, cleared here so a reused instance
+    # cannot leak state from a previous trajectory. Gated on the marker rather
+    # than on the presence of a ``reset`` method: ``reset`` is a common name, and
+    # a pre-existing solver that happens to define one for its own purposes must
+    # keep its previous behavior. The hook stays outside the runtime-checkable
+    # ``Solver`` protocol so that solvers implementing only ``step`` still match.
+    reset = getattr(solver_, "reset", None)
+    if not getattr(solver_, "_requires_state_reset", False):
+        reset = None
+    if callable(reset):
+        reset()
+
     # Main sampling loop
     samples: List[Tensor] = []
     x = xN
@@ -404,26 +474,31 @@ def sample(
                 f"valid indices are in range(0, {n_steps})."
             )
 
-    for i in range(n_steps):
-        t_cur = t_steps[i]
-        t_next = t_steps[i + 1]
+    try:
+        for i in range(n_steps):
+            t_cur = t_steps[i]
+            t_next = t_steps[i + 1]
 
-        # Expand t to batch dimension: scalar -> (B,)
-        batch_size = x.shape[0]
-        t_cur_batch = t_cur.expand(batch_size)
-        t_next_batch = t_next.expand(batch_size)
+            # Expand t to batch dimension: scalar -> (B,)
+            batch_size = x.shape[0]
+            t_cur_batch = t_cur.expand(batch_size)
+            t_next_batch = t_next.expand(batch_size)
 
-        # Perform one solver step
-        x = solver_.step(x, t_cur_batch, t_next_batch)
-        if not outer_grad_enabled:
-            x = x.detach()
+            # Perform one solver step
+            x = solver_.step(x, t_cur_batch, t_next_batch)
+            if not outer_grad_enabled:
+                x = x.detach()
 
-        # Collect sample if requested
-        if time_eval is not None and i in time_eval:
-            samples.append(x.clone())
+            # Collect sample if requested
+            if time_eval is not None and i in time_eval:
+                samples.append(x.clone())
 
-    # Return based on time_eval
-    if time_eval is not None:
-        return samples
+        # Return based on time_eval
+        if time_eval is not None:
+            return samples
 
-    return x
+        return x
+    finally:
+        # Release cached solver state on success or failure.
+        if callable(reset):
+            reset()

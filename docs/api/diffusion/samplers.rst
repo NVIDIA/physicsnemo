@@ -406,6 +406,11 @@ There are two ways to use solvers:
 - ``"edm_stochastic_heun"`` ---
   :class:`~physicsnemo.diffusion.samplers.solvers.EDMStochasticHeunSolver`.
   Second-order with configurable stochastic noise injection.
+- ``"dpmpp_2m"`` ---
+  :class:`~physicsnemo.diffusion.samplers.solvers.DPMSolverPlusPlus2M`.
+  Second-order multistep, one denoiser evaluation per step.  Requires a noise
+  scheduler in the EDM parameterization (:math:`\sigma(t) = t`,
+  :math:`\alpha(t) = 1`).
 
 **Custom solvers** can be defined by implementing the
 :class:`~physicsnemo.diffusion.samplers.solvers.Solver` protocol: any object
@@ -498,6 +503,14 @@ Solvers
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. autoclass:: physicsnemo.diffusion.samplers.solvers.EDMStochasticHeunSolver
+    :show-inheritance:
+    :members:
+    :exclude-members: __init__
+
+:code:`DPMSolverPlusPlus2M`
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. autoclass:: physicsnemo.diffusion.samplers.solvers.DPMSolverPlusPlus2M
     :show-inheritance:
     :members:
     :exclude-members: __init__
