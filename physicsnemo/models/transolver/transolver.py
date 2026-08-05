@@ -42,7 +42,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 from jaxtyping import Float
-from torch.utils.checkpoint import checkpoint as activation_checkpoint
 
 import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.meta import ModelMetaData
@@ -53,6 +52,12 @@ from physicsnemo.nn.module.physics_attention import (
     PhysicsAttentionIrregularMesh,
     PhysicsAttentionStructuredMesh2D,
     PhysicsAttentionStructuredMesh3D,
+)
+
+from .activation_checkpointing import (
+    checkpoint_block,
+    parse_checkpointing_param,
+    should_checkpoint_block,
 )
 
 TE_AVAILABLE = check_version_spec("transformer_engine", hard_fail=False)
@@ -503,7 +508,7 @@ class Transolver(Module):
 
         self.structured_shape = structured_shape
         self.unified_pos = unified_pos
-        self._activation_checkpointing_ratio = self._parse_checkpointing_param(
+        self._activation_checkpointing_ratio = parse_checkpointing_param(
             activation_checkpointing
         )
 
@@ -574,54 +579,17 @@ class Transolver(Module):
         )
         self.initialize_weights()
 
-    @staticmethod
-    def _parse_checkpointing_param(
-        activation_checkpointing: bool | float,
-    ) -> float:
-        r"""Parse the activation-checkpointing argument into a ratio.
-
-        Parameters
-        ----------
-        activation_checkpointing : bool | float
-            ``True`` / ``1.0`` for all blocks, ``False`` / ``0.0`` for none,
-            or a fraction in ``(0, 1)``.
-
-        Returns
-        -------
-        float
-            The fraction of leading Transolver blocks to checkpoint.
-        """
-        # ``bool`` is a subclass of ``int``, so handle it before numbers.
-        if isinstance(activation_checkpointing, bool):
-            return 1.0 if activation_checkpointing else 0.0
-        if not isinstance(activation_checkpointing, (int, float)):
-            raise TypeError(
-                "activation_checkpointing must be bool or numeric, got "
-                f"{type(activation_checkpointing).__name__}"
-            )
-
-        ratio = float(activation_checkpointing)
-        if not 0.0 <= ratio <= 1.0:
-            raise ValueError(
-                "activation_checkpointing must be bool or a float in [0, 1], "
-                f"got {ratio}"
-            )
-        return ratio
-
     def _should_checkpoint_block(self, block_idx: int) -> bool:
         r"""Return whether a block should use activation checkpointing."""
-        if not self.training or not torch.is_grad_enabled():
-            return False
-
         # Full-object pickles created before activation checkpointing was added
         # bypass ``__init__`` when loaded and therefore do not have this
         # attribute. Treat those models exactly like the historical default.
-        ratio = getattr(self, "_activation_checkpointing_ratio", 0.0)
-        if ratio <= 0.0:
-            return False
-        if ratio >= 1.0:
-            return True
-        return block_idx < round(ratio * len(self.blocks))
+        return should_checkpoint_block(
+            block_idx,
+            len(self.blocks),
+            getattr(self, "_activation_checkpointing_ratio", 0.0),
+            training=self.training,
+        )
 
     def _checkpoint_block(
         self, block: TransolverBlock, fx: torch.Tensor
@@ -633,9 +601,12 @@ class Transolver(Module):
         handling. The native PyTorch backend uses the recommended
         non-reentrant checkpoint implementation directly.
         """
-        if self.use_te:
-            return te.checkpoint(block, fx, use_reentrant=False)
-        return activation_checkpoint(block, fx, use_reentrant=False)
+        return checkpoint_block(
+            block,
+            fx,
+            use_te=self.use_te,
+            te_module=te,
+        )
 
     def initialize_weights(self) -> None:
         r"""Initialize model weights using truncated normal distribution."""
