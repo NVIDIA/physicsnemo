@@ -83,7 +83,9 @@ def test_wrapper_collect_then_check_runs(device):
     model = _make_model(device)
     guarded = GuardedGeoTransolver(
         model, OODGuardConfig(buffer_size=8, knn_k=3, sensitivity=1.5)
-    )
+    ).to(device)
+    assert guarded.ood_guard.global_min.device == torch.device(device)
+    assert guarded.ood_guard.geo_embeddings.device == torch.device(device)
 
     batch_size = 2
     inputs = _inputs(device, batch_size)
@@ -108,7 +110,7 @@ def test_wrapper_forwards_output_unchanged(device):
     with torch.no_grad():
         ref = model(**inputs)
 
-    guarded = GuardedGeoTransolver(model, OODGuardConfig(buffer_size=8))
+    guarded = GuardedGeoTransolver(model, OODGuardConfig(buffer_size=8)).to(device)
     guarded.eval()
     with torch.no_grad():
         wrapped = guarded(**inputs)
