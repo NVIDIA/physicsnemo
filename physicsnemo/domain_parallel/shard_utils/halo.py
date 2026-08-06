@@ -518,11 +518,15 @@ def halo_padding_bwd_primitive(
         halo_config.communication_method,
     )
 
-    # Apply halo gradients
+    # ``local_grad`` is a view into ``grad_output`` and ``apply_grad_halo``
+    # accumulates in place. Own the memory before writing: the engine's
+    # grad_output must never be mutated by a backward, and expanded grads
+    # (e.g. the stride-0 ones from ``.sum().backward()``) reject in-place
+    # writes outright.
     final_grad_local = apply_grad_halo(
         mesh,
         halo_config,
-        local_grad,
+        local_grad.clone(),
         grad_from_left,
         grad_from_right,
     )

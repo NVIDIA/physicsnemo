@@ -584,3 +584,47 @@ def test_genuine_partial_cotangent_enters_compiled_backward_1d(distributed_mesh,
 @pytest.mark.parametrize("op", ["pointwise", "linear"])
 def test_genuine_partial_cotangent_enters_compiled_backward_2d(distributed_mesh_2d, op):
     run_genuine_partial_cotangent_enters_compiled_backward(distributed_mesh_2d, op)
+
+
+def run_unbind_compiles_fullgraph(mesh):
+    r"""``torch.unbind`` on ShardTensor must survive compile(fullgraph=True).
+
+    The function-level unbind handler routes through ``to_local`` /
+    ``from_local`` (``_FromTorchTensor.apply``). This locks in that the
+    bridge stays dynamo-traceable end to end — forward values, backward
+    values, and ShardTensor-typed grads, compiled vs. a local reference.
+    """
+    if mesh.ndim != 1:
+        pytest.skip("unbind probe is written for 1d meshes")
+    dm = DistributedManager()
+    world = mesh.size(0)
+    rank = mesh.get_local_rank(0)
+
+    torch.manual_seed(1234)
+    full = torch.randn(3, 4 * world, 4, device=dm.device)
+    local = full[:, rank * 4 : (rank + 1) * 4].clone()
+    st = ShardTensor.from_local(local, mesh, (Shard(1),)).detach().requires_grad_(True)
+
+    def f(x):
+        a, b, c = torch.unbind(x, 0)
+        return (a * 2 + b * b + c).sum()
+
+    ref = full.clone().requires_grad_(True)
+    ref_loss = f(ref)
+    (ref_grad,) = torch.autograd.grad(ref_loss, [ref])
+
+    torch._dynamo.reset()
+    compiled = torch.compile(f, fullgraph=True, backend="aot_eager", dynamic=False)
+    loss = compiled(st)
+    loss_plain = loss.full_tensor() if isinstance(loss, ShardTensor) else loss
+    (grad,) = torch.autograd.grad(loss_plain, [st])
+
+    torch.testing.assert_close(loss_plain, ref_loss)
+    assert isinstance(grad, ShardTensor)
+    torch.testing.assert_close(grad.full_tensor(), ref_grad)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(180)
+def test_unbind_compiles_fullgraph_1d(distributed_mesh):
+    run_unbind_compiles_fullgraph(distributed_mesh)

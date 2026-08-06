@@ -41,7 +41,11 @@ from torch.distributed.tensor.placement_types import Replicate, Shard
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.domain_parallel import scatter_tensor
 from physicsnemo.domain_parallel.shard_utils.conv_patches import ConvGradReducer
-from physicsnemo.domain_parallel.shard_utils.halo import HaloConfig, unhalo_padding
+from physicsnemo.domain_parallel.shard_utils.halo import (
+    HaloConfig,
+    halo_padding,
+    unhalo_padding,
+)
 from physicsnemo.domain_parallel.shard_utils.point_cloud_ops import GradReducer
 
 
@@ -134,6 +138,23 @@ class UnhaloPaddingWrapper(torch.nn.Module):
 
     def forward(self, tensor: torch.Tensor) -> torch.Tensor:
         return unhalo_padding(tensor, self.mesh, self.halo_config)
+
+
+class HaloPaddingWrapper(torch.nn.Module):
+    r"""``halo_padding(...)`` (exercises ``HaloPadding``).
+
+    Unlike ``UnHaloPadding``, this drives ``perform_halo_collective`` — the
+    funcol ``all_to_all_single_autograd`` exchange — in both forward and
+    backward.
+    """
+
+    def __init__(self, mesh, halo_config: HaloConfig):
+        super().__init__()
+        self.mesh = mesh
+        self.halo_config = halo_config
+
+    def forward(self, tensor: torch.Tensor) -> torch.Tensor:
+        return halo_padding(tensor, self.mesh, self.halo_config)
 
 
 class GroupNormWrapper(torch.nn.Module):
@@ -361,6 +382,53 @@ def test_compile_unhalo_padding_1d(distributed_mesh):
         UnhaloPaddingWrapper(mesh=distributed_mesh, halo_config=halo_config),
         [tensor],
     )
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(180)
+def test_compile_halo_padding_1d(distributed_mesh):
+    r"""Compile + backward through ``HaloPadding``'s funcol a2a exchange.
+
+    This is the only compile test that executes ``perform_halo_collective``
+    (``UnHaloPadding`` is collective-free in both directions), so it checks
+    values against eager, not just traceability: a misrouted exchange would
+    still produce well-shaped outputs.
+    """
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+
+    dm = DistributedManager()
+    local_group = distributed_mesh.get_group(0)
+    local_size = dist.get_world_size(group=local_group)
+    if local_size < 2:
+        pytest.skip("HaloPadding requires at least 2 ranks on the mesh dim")
+
+    halo_size = 2
+    H = 32
+    torch.manual_seed(42 + dm.rank)
+    base = torch.rand(2, 4, H, device=dm.device)
+
+    halo_config = HaloConfig(
+        mesh_dim=0,
+        tensor_dim=2,
+        halo_size=halo_size,
+        communication_method="a2a",
+    )
+
+    # Eager reference: output + input grad.
+    eager_input = base.clone().requires_grad_(True)
+    eager_out = halo_padding(eager_input, distributed_mesh, halo_config)
+    _scalar_loss(eager_out).backward()
+    assert eager_input.grad is not None
+
+    compiled_input = base.clone().requires_grad_(True)
+    compiled_out = _run_compile_fwd_bwd(
+        HaloPaddingWrapper(mesh=distributed_mesh, halo_config=halo_config),
+        [compiled_input],
+    )
+
+    torch.testing.assert_close(compiled_out, eager_out)
+    torch.testing.assert_close(compiled_input.grad, eager_input.grad)
 
 
 @pytest.mark.multigpu_static
