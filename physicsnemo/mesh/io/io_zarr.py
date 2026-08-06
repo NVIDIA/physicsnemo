@@ -141,28 +141,70 @@ def to_zarr(
     root.attrs[_TYPE_ATTR] = type(obj).__name__
 
 
+def _open_group(store) -> "zarr.Group":
+    """Open a zarr group read-only (verifying backend availability)."""
+    _require_backends()
+    return zarr.open_group(str(store), mode="r")
+
+
+def _read_full(arr, device=None) -> torch.Tensor:
+    """Read a whole zarr array as a tensor."""
+    return torch.as_tensor(arr[...], device=device)
+
+
+def _read_rows(arr, runs: list[tuple[int, int]], device=None) -> torch.Tensor:
+    """Read one or more contiguous leading-dimension row runs and concatenate.
+
+    Only the chunks intersecting the runs are fetched/decoded.
+    """
+    parts = [torch.as_tensor(arr[s:e], device=device) for s, e in runs]
+    return parts[0] if len(parts) == 1 else torch.cat(parts, dim=0)
+
+
+def _read_index(arr, index, device=None) -> torch.Tensor:
+    """Gather rows of a zarr array by (sorted) integer index."""
+    import numpy as np
+
+    idx = np.asarray(index)
+    return torch.as_tensor(arr[idx], device=device)
+
+
+def _read_tree(group: "zarr.Group", name: str, device=None, leaf_reader=None):
+    """Recursively read a field subtree (e.g. ``point_data``) as a TensorDict.
+
+    ``leaf_reader(arr) -> Tensor`` selects what to read per array; default is
+    the full array. Nested TensorDicts round-trip as nested groups.
+    """
+    from tensordict import TensorDict
+
+    if name not in group:
+        return TensorDict({}, batch_size=[])
+    reader = leaf_reader or (lambda a: _read_full(a, device))
+
+    def _walk(grp):
+        out = {}
+        for key, arr in grp.arrays():
+            out[key] = reader(arr)
+        for key, sub in grp.groups():
+            out[key] = _walk(sub)
+        return out
+
+    return TensorDict(_walk(group[name]), batch_size=[])
+
+
 def _mesh_from_group(group: "zarr.Group", device) -> Mesh:
     """Materialize one mesh group as an in-memory Mesh."""
-
-    def _tensor(arr):
-        return torch.as_tensor(arr[...], device=device)
-
-    def _tree(name):
-        if name not in group:
-            return {}
-        return {k: _tensor(v) for k, v in group[name].arrays()}
-
     # The memmap format does not persist 0-element tensors but zarr does;
     # map an empty cells array back to "no cells" for a clean point cloud.
     cells = None
     if "cells" in group and group["cells"].shape[0] > 0:
-        cells = _tensor(group["cells"])
+        cells = _read_full(group["cells"], device)
     return Mesh(
-        points=_tensor(group["points"]),
+        points=_read_full(group["points"], device),
         cells=cells,
-        point_data=_tree("point_data"),
-        cell_data=_tree("cell_data"),
-        global_data=_tree("global_data"),
+        point_data=_read_tree(group, "point_data", device),
+        cell_data=_read_tree(group, "cell_data", device),
+        global_data=_read_tree(group, "global_data", device),
     )
 
 
@@ -182,8 +224,7 @@ def from_zarr(
     device : torch.device, str, or None
         Device for the returned tensors (default CPU).
     """
-    _require_backends()
-    root = zarr.open_group(str(store), mode="r")
+    root = _open_group(store)
     mesh_type = root.attrs.get(_TYPE_ATTR)
     if mesh_type is None and "points" in root:
         # A mesh subgroup inside a DomainMesh store (e.g.
@@ -193,12 +234,7 @@ def from_zarr(
     if mesh_type == "Mesh":
         return _mesh_from_group(root, device)
     if mesh_type == "DomainMesh":
-        global_data = {}
-        if "global_data" in root:
-            global_data = {
-                k: torch.as_tensor(v[...], device=device)
-                for k, v in root["global_data"].arrays()
-            }
+        global_data = _read_tree(root, "global_data", device)
         return DomainMesh(
             interior=_mesh_from_group(root["interior"], device),
             boundaries={

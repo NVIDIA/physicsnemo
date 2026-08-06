@@ -1,0 +1,12 @@
+{
+  "attributes": {
+    "__tensordict__": {
+      "batch_size": [
+        25
+      ],
+      "version": 1
+    }
+  },
+  "zarr_format": 3,
+  "node_type": "group"
+}
