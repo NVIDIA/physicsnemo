@@ -14,8 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Legacy checkpoint shim for the FLARE model."""
+r"""FLARE Transolver: Transolver with FLARE attention.
 
-from physicsnemo.models.flare.flare import FLARE
+This module provides FLARE, a Transolver variant that uses
+FLARE (Fast Low-rank Attention Routing Engine) attention.
+"""
+
+from .flare import FLARE
 
 __all__ = ["FLARE"]

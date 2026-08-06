@@ -43,7 +43,7 @@ To train the model, first we compute normalization factors on the dataset to mak
 
 > By default, the normalization sets the mean to 0.0 and std to 1.0 of all labels in the dataset, computing the mean across the train dataset. You could adapt this to a different normalization, however take care to update both the preprocessing as well as inference scripts. Min/Max is another popular strategy.
 
-To configure your training run, use `hydra`. The config contains sections for the model, data, optimizer, and training settings. For details on the model parameters, see the API for `physicsnemo.models.transolver` and `physicsnemo.experimental.models.geotransolver`.
+To configure your training run, use `hydra`. The config contains sections for the model, data, optimizer, and training settings. For details on the model parameters, refer to the API for `physicsnemo.models.transolver` and `physicsnemo.models.geotransolver`.
 
 To fit the training into memory, you can apply on-the-fly downsampling to the data with `data.resolution=N`, where `N` is how many points per GPU to use. This dataloader will yield the full data examples in shapes of `[1, K, f]` where `K` is the resolution of the mesh, and `f` is the feature space (3 for points, normals, etc. 4 for surface fields). Downsampling happens in the preprocessing pipeline.
 
