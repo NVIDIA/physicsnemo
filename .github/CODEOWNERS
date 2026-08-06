@@ -71,6 +71,10 @@ docs/api/datapipes/physicsnemo.datapipes.transforms.rst @megnvidia @coreyjadams
 # Mesh documentation
 docs/api/mesh/ @megnvidia @peterdsharpe
 
+# Geometry documentation
+docs/api/geometry/ @megnvidia @mehdiataei @loliverhennigh
+docs/img/geometry/ @mehdiataei @loliverhennigh
+
 # Metrics documentation
 docs/api/physicsnemo.metrics.rst @megnvidia @dallasfoster @nickgeneva
 
@@ -120,6 +124,7 @@ docs/test_scripts/ @megnvidia @ktangsali
 # ==============================================================================
 
 benchmarks/ @loliverhennigh
+benchmarks/physicsnemo/geometry/ @mehdiataei @loliverhennigh
 
 # ==============================================================================
 # CORE FRAMEWORK - physicsnemo/core/
@@ -145,6 +150,7 @@ physicsnemo/nn/functional/neighbors/radius_search/ @coreyjadams @peterdsharpe @l
 physicsnemo/nn/functional/natten.py @pzharrington
 physicsnemo/nn/functional/geometry/sdf.py @peterdsharpe @loliverhennigh
 physicsnemo/nn/functional/geometry/deform/ @mehdiataei @loliverhennigh
+physicsnemo/nn/functional/geometry/remeshing/ @mehdiataei @loliverhennigh
 
 # Module layers
 physicsnemo/nn/module/ @loliverhennigh
@@ -211,7 +217,12 @@ physicsnemo/utils/profiling/ @coreyjadams
 # ==============================================================================
 
 physicsnemo/mesh/ @peterdsharpe
-physicsnemo/mesh/transformations/deform/ @mehdiataei @loliverhennigh @peterdsharpe
+
+# ==============================================================================
+# GEOMETRY MODULE
+# ==============================================================================
+
+physicsnemo/geometry/ @mehdiataei @loliverhennigh
 
 # ==============================================================================
 # METRICS
@@ -397,6 +408,7 @@ examples/healthcare/brain_anomaly_detection/
 examples/minimal/
 examples/minimal/datapipes/ @coreyjadams
 examples/minimal/mesh/ @peterdsharpe
+examples/minimal/geometry/ @mehdiataei @loliverhennigh
 examples/minimal/neighbor_list/ @coreyjadams @peterdsharpe
 examples/minimal/ShardTensorExamples/ @coreyjadams
 
@@ -486,6 +498,7 @@ test/metrics/
 
 test/active_learning/ @laserkelvin @dallasfoster
 test/mesh/ @peterdsharpe
+test/geometry/ @mehdiataei @loliverhennigh
 test/optim/ @peterdsharpe
 test/diffusion/ @CharlelieLrt
 test/utils/
