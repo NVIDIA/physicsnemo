@@ -15,7 +15,7 @@ as the self-attention backend.
 For more information on GeoTransolver, refer to the `GeoTransolver paper
 <https://arxiv.org/abs/2512.20399>`__.
 
-Activation checkpointing
+Activation Checkpointing
 ------------------------
 
 GeoTransolver supports configurable activation checkpointing during training.
