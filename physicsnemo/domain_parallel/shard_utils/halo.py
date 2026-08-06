@@ -592,6 +592,16 @@ def perform_halo_collective(
     local_size = dist.get_world_size(group=local_group)
 
     if method == "p2p":
+        # ``P2POp`` / ``batch_isend_irecv`` / ``set_device`` have no FX
+        # representation, so this branch cannot be traced. Fail loudly at
+        # trace time instead of letting dynamo graph-break unpredictably
+        # inside the autograd.Function. Eager p2p is unaffected.
+        if torch.compiler.is_compiling():
+            raise RuntimeError(
+                "Halo exchange with communication_method='p2p' is not "
+                "supported under torch.compile; use 'a2a' (the default), "
+                "which lowers to a traceable funcol all-to-all."
+            )
         # Point-to-point communication
         id_of_right = local_rank + 1 if local_rank < local_size - 1 else None
         id_of_left = local_rank - 1 if local_rank > 0 else None

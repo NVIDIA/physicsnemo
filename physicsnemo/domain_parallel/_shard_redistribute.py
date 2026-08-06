@@ -833,6 +833,12 @@ class ShardRedistribute(torch.autograd.Function):
             else:
                 normalized_placements.append(previous_placement)
 
+        # Carry the source spec's per-rank shard shapes onto the grad: the
+        # normalization above only rewrites Partial -> Replicate, so the Shard
+        # placements (the only mesh dims with entries) are previous_spec's
+        # verbatim. Omitting them leaves an uneven grad with a shapeless spec,
+        # which __tensor_unflatten__ rejects at compile boundaries (even-chunk
+        # assumption) and which would otherwise gather shapes lazily.
         spec = ShardTensorSpec(
             previous_spec.device_mesh,
             tuple(normalized_placements),
@@ -842,6 +848,11 @@ class ShardRedistribute(torch.autograd.Function):
                 dtype=grad_output.dtype,
             ),
             _local_shape=output.shape,
+            _sharding_shapes=(
+                dict(previous_spec._sharding_shapes)
+                if previous_spec._sharding_shapes is not None
+                else None
+            ),
         )
         output_shard_tensor = shard_tensor.ShardTensor(
             output,

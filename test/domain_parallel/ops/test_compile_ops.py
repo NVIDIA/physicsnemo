@@ -157,6 +157,22 @@ class HaloPaddingWrapper(torch.nn.Module):
         return halo_padding(tensor, self.mesh, self.halo_config)
 
 
+class ConvWrapper(torch.nn.Module):
+    r"""``nn.Conv1d`` on a ShardTensor input.
+
+    End-to-end sharded convolution: halo exchange (funcol a2a) on the input
+    plus ``ConvGradReducer`` on the weight gradients, all inside one compiled
+    region.
+    """
+
+    def __init__(self, conv: torch.nn.Module):
+        super().__init__()
+        self.conv = conv
+
+    def forward(self, tensor: torch.Tensor) -> torch.Tensor:
+        return self.conv(tensor)
+
+
 class GroupNormWrapper(torch.nn.Module):
     r"""``F.group_norm`` on a ShardTensor (exercises ``PartialGroupNorm``)."""
 
@@ -429,6 +445,91 @@ def test_compile_halo_padding_1d(distributed_mesh):
 
     torch.testing.assert_close(compiled_out, eager_out)
     torch.testing.assert_close(compiled_input.grad, eager_input.grad)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(180)
+def test_compile_sharded_conv1d_1d(distributed_mesh):
+    r"""Compile + backward through a sharded Conv1d, value-checked.
+
+    Drives the full sharded-conv chain under one compiled region: halo
+    exchange (funcol a2a) on the sharded input and ``ConvGradReducer``'s
+    all-reduce on the weight grads. Output, input grad, and weight/bias
+    grads are compared against a single-device reference.
+    """
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+
+    dm = DistributedManager()
+    local_group = distributed_mesh.get_group(0)
+    local_size = dist.get_world_size(group=local_group)
+    if local_size < 2:
+        pytest.skip("halo exchange requires at least 2 ranks on the mesh dim")
+
+    # Same weights and same global image on every rank (seeded identically).
+    torch.manual_seed(0)
+    conv = torch.nn.Conv1d(4, 8, kernel_size=3, padding=1).to(dm.device)
+    image = torch.rand(2, 4, 32 * local_size, device=dm.device)
+
+    sharded = scatter_tensor(
+        image,
+        global_src=0,
+        mesh=distributed_mesh,
+        placements=(Shard(2),),
+        requires_grad=True,
+    )
+
+    # Single-device reference with cloned weights.
+    ref_conv = torch.nn.Conv1d(4, 8, kernel_size=3, padding=1).to(dm.device)
+    ref_conv.load_state_dict(conv.state_dict())
+    ref_input = image.clone().requires_grad_(True)
+    ref_out = ref_conv(ref_input)
+    ref_out.sum().backward()
+
+    out = _run_compile_fwd_bwd(ConvWrapper(conv), [sharded])
+
+    torch.testing.assert_close(out.full_tensor(), ref_out)
+    assert sharded.grad is not None
+    torch.testing.assert_close(sharded.grad.full_tensor(), ref_input.grad)
+    torch.testing.assert_close(conv.weight.grad, ref_conv.weight.grad)
+    torch.testing.assert_close(conv.bias.grad, ref_conv.bias.grad)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(180)
+def test_compile_halo_padding_p2p_raises(distributed_mesh):
+    r"""``torch.compile`` over a p2p halo exchange must fail with a clear error.
+
+    The p2p branch of ``perform_halo_collective`` (``P2POp`` /
+    ``batch_isend_irecv`` / ``set_device``) has no FX representation, so it
+    guards itself with a trace-time ``RuntimeError`` pointing users at
+    ``'a2a'``. Eager p2p is unaffected by the guard.
+    """
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+
+    dm = DistributedManager()
+    local_group = distributed_mesh.get_group(0)
+    local_size = dist.get_world_size(group=local_group)
+    if local_size < 2:
+        pytest.skip("HaloPadding requires at least 2 ranks on the mesh dim")
+
+    tensor = torch.rand(2, 4, 32, device=dm.device, requires_grad=True)
+    halo_config = HaloConfig(
+        mesh_dim=0,
+        tensor_dim=2,
+        halo_size=2,
+        communication_method="p2p",
+    )
+
+    torch._dynamo.reset()
+    compiled = torch.compile(
+        HaloPaddingWrapper(mesh=distributed_mesh, halo_config=halo_config),
+        backend="aot_eager",
+        fullgraph=True,
+    )
+    with pytest.raises(Exception, match="p2p"):
+        compiled(tensor)
 
 
 @pytest.mark.multigpu_static

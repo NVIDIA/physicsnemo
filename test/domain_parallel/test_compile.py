@@ -25,6 +25,7 @@ silently dropped (defaulting back to even chunking).
 """
 
 import dataclasses
+import math
 
 import pytest
 import torch
@@ -268,33 +269,47 @@ def test_unflatten_checks_even_chunk_assumption_2d(distributed_mesh_2d):
     run_unflatten_checks_even_chunk_assumption(distributed_mesh_2d)
 
 
-def _sum_squares(x):
-    return (x**2).sum()
+def run_compile_backward_uneven_shard(mesh, op):
+    r"""Numerical grad-equivalence for reductions under compile, uneven shards.
 
-
-def run_compile_backward_uneven_shard(mesh):
-    # Smoke test: compile + backward over an uneven ShardTensor must not raise
-    # AOTAutograd's "guessed metadata incorrectly" tangent error. Gradient values
-    # are validated by the direct __coerce_same_metadata_as_tangent__ tests.
+    The gradient of ``(x**2).sum()`` is ``2*x`` and of ``(x**2).mean()`` is
+    ``2*x / N`` (``N`` = global element count) -- closed forms that make the
+    compiled backward's values checkable per-rank without a second autograd
+    graph.
+    """
     x = shard_tensor_factory(mesh, uneven=True).detach().requires_grad_(True)
 
+    def f(t):
+        y = t**2
+        return y.sum() if op == "sum" else y.mean()
+
     torch._dynamo.reset()
-    compiled = torch.compile(_sum_squares, fullgraph=True, backend="aot_eager")
+    compiled = torch.compile(f, fullgraph=True, backend="aot_eager")
 
     loss = compiled(x)
     loss.backward()
 
+    grad = x.grad
+    assert isinstance(grad, ShardTensor)
+    assert grad._spec.placements == x._spec.placements
+    expected = 2.0 * x._local_tensor.detach()
+    if op == "mean":
+        expected = expected / math.prod(x._spec.tensor_meta.shape)
+    torch.testing.assert_close(grad.to_local(), expected)
+
 
 @pytest.mark.multigpu_static
 @pytest.mark.timeout(180)
-def test_compile_backward_uneven_shard_1d(distributed_mesh):
-    run_compile_backward_uneven_shard(distributed_mesh)
+@pytest.mark.parametrize("op", ["sum", "mean"])
+def test_compile_backward_uneven_shard_1d(distributed_mesh, op):
+    run_compile_backward_uneven_shard(distributed_mesh, op)
 
 
 @pytest.mark.multigpu_static
 @pytest.mark.timeout(180)
-def test_compile_backward_uneven_shard_2d(distributed_mesh_2d):
-    run_compile_backward_uneven_shard(distributed_mesh_2d)
+@pytest.mark.parametrize("op", ["sum", "mean"])
+def test_compile_backward_uneven_shard_2d(distributed_mesh_2d, op):
+    run_compile_backward_uneven_shard(distributed_mesh_2d, op)
 
 
 # --- Regression: grads for ShardTensor *inputs* of a compiled region ---------
@@ -628,3 +643,87 @@ def run_unbind_compiles_fullgraph(mesh):
 @pytest.mark.timeout(180)
 def test_unbind_compiles_fullgraph_1d(distributed_mesh):
     run_unbind_compiles_fullgraph(distributed_mesh)
+
+
+def run_unbind_dispatch_function_consistency(mesh):
+    r"""The two unbind handlers must agree on values and metadata.
+
+    ``torch.unbind`` routes through the ``__torch_function__``-level handler
+    (``unbind_wrapper``, to_local/from_local bridge); the same call under
+    ``DisableTorchFunctionSubclass`` reaches the dispatcher and lands in the
+    ``aten.unbind.int`` handler (``_unbind_dispatch``, direct construction).
+    Values, placements, and sharding shapes must match between the two.
+    """
+    if mesh.ndim != 1:
+        pytest.skip("unbind consistency check is written for 1d meshes")
+    dm = DistributedManager()
+    world = mesh.size(0)
+    rank = mesh.get_local_rank(0)
+
+    torch.manual_seed(7)
+    full = torch.randn(3, 4 * world, 4, device=dm.device)
+    local = full[:, rank * 4 : (rank + 1) * 4].clone()
+    st = ShardTensor.from_local(local, mesh, (Shard(1),))
+
+    outs_function = torch.unbind(st, 0)
+    with torch._C.DisableTorchFunctionSubclass():
+        outs_dispatch = torch.unbind(st, 0)
+
+    assert len(outs_function) == len(outs_dispatch) == 3
+
+    def _norm_shapes(spec):
+        return {
+            k: tuple(tuple(s) for s in v) for k, v in spec.sharding_shapes().items()
+        }
+
+    for out_fn, out_dp in zip(outs_function, outs_dispatch):
+        assert isinstance(out_fn, ShardTensor)
+        assert isinstance(out_dp, ShardTensor)
+        assert out_fn._spec.placements == out_dp._spec.placements
+        assert _norm_shapes(out_fn._spec) == _norm_shapes(out_dp._spec)
+        torch.testing.assert_close(out_fn.to_local(), out_dp.to_local())
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+def test_unbind_dispatch_function_consistency_1d(distributed_mesh):
+    run_unbind_dispatch_function_consistency(distributed_mesh)
+
+
+def run_compile_backward_redistribute_uneven(mesh):
+    r"""A compiled backward must route an uneven grad through a shape-reading op.
+
+    Forward redistributes uneven Shard -> Replicate, so the compiled backward
+    redistributes the grad Replicate -> uneven Shard. That adjoint reads the
+    recorded per-rank shard shapes (the funcol gather-v/scatter path in
+    ``_shard_redistribute``) inside the compiled backward, with a
+    closed-form value check (grad of ``(r**2).sum()`` is ``2*x`` locally).
+    """
+    x = shard_tensor_factory(mesh, uneven=True).detach().requires_grad_(True)
+    replicate = [Replicate()] * mesh.ndim
+
+    def f(t):
+        r = t.redistribute(placements=replicate)
+        return (r**2).sum()
+
+    torch._dynamo.reset()
+    compiled = torch.compile(f, fullgraph=True, backend="aot_eager")
+    compiled(x).backward()
+
+    grad = x.grad
+    assert isinstance(grad, ShardTensor)
+    assert grad._spec.placements == x._spec.placements
+    assert tuple(grad.to_local().shape) == tuple(x._local_tensor.shape)
+    torch.testing.assert_close(grad.to_local(), 2.0 * x._local_tensor.detach())
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(180)
+def test_compile_backward_redistribute_uneven_1d(distributed_mesh):
+    run_compile_backward_redistribute_uneven(distributed_mesh)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(180)
+def test_compile_backward_redistribute_uneven_2d(distributed_mesh_2d):
+    run_compile_backward_redistribute_uneven(distributed_mesh_2d)
