@@ -53,28 +53,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rectilinear_grid_laplacian` to `physicsnemo.nn.functional`, with Torch and
   fused Warp implementations for periodic, nonuniform rectilinear grids.
 - Adds uniform triangle-surface remeshing with NVIDIA Warp on CPU and CUDA,
-  including `remesh`, `Mesh.remesh`, topology cleanup, and advanced
-  tensor-level controls for runtime tuning.
+  including the Mesh-aware `physicsnemo.geometry.remeshing.remesh`, topology
+  cleanup, and advanced tensor-level controls in `physicsnemo.nn.functional`.
 - Adds coverage reporting on PRs — an informational `Coverage %` check plus a
   ready-to-enable Codecov integration.
 - Adds differentiable mesh morphing: Torch-backed dense ``displace_points`` /
-  ``Mesh.displace`` and Torch/NVIDIA Warp compact sparse-control
-  ``morph_points`` / ``Mesh.morph`` / ``DomainMesh.morph``.
+  ``physicsnemo.geometry.displace`` and Torch/NVIDIA Warp compact
+  sparse-control ``morph_points`` / ``physicsnemo.geometry.morph``. The
+  Geometry adapters accept Mesh and, where applicable, DomainMesh inputs.
 - Adds thin-plate-spline radial-basis deformation through
-  `radial_basis_function_deform_points`,
-  `Mesh.radial_basis_function_deform`, and
-  `DomainMesh.radial_basis_function_deform`. PyTorch performs the differentiable
-  coefficient solve. Torch and fused NVIDIA Warp backends evaluate the field.
+  `radial_basis_function_deform_points` and
+  `physicsnemo.geometry.radial_basis_function_deform` for Mesh or
+  DomainMesh inputs. PyTorch performs the differentiable coefficient solve.
+  Torch and fused NVIDIA Warp backends evaluate the field.
 - Adds differentiable lattice free-form deformation with Torch and NVIDIA Warp
   backends: dimension-generic ``free_form_deform_points`` /
-  ``Mesh.free_form_deform`` / ``DomainMesh.free_form_deform`` with Bernstein
-  (classic FFD) and locally supported uniform cubic B-spline bases, plus
-  node-interpolating `linear`, `cubic_hermite`, and `quintic_hermite` modes.
+  ``physicsnemo.geometry.free_form_deform`` for Mesh or DomainMesh inputs with
+  Bernstein (classic FFD) and locally supported uniform cubic B-spline bases,
+  plus node-interpolating `linear`, `cubic_hermite`, and `quintic_hermite`
+  modes.
 - Adds fixed-topology ``simplex_strain_energy``, ``simplex_measure_energy``,
   ``total_measure_energy``, ``simplex_inversion_energy``,
   ``closed_surface_volume_energy``, and ``surface_bending_energy`` to
   ``physicsnemo.nn.functional``, with mesh-aware wrappers in
-  ``physicsnemo.mesh.deformation``. Torch supports higher-order derivatives,
+  ``physicsnemo.geometry.energies``. Torch supports higher-order derivatives,
   and Warp provides first-order GPU kernels.
 - Adds `uniform_grid_divergence`, `uniform_grid_curl`, and
   `uniform_grid_laplacian` to `physicsnemo.nn.functional`, with Torch and fused
@@ -244,7 +246,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rest of the branch uses autocast. This is a no-op under full precision, so
   fp32 outputs are unchanged. Also fixes a stale module docstring that
   referenced removed trunk/MLP-branch builder helpers.
-- `physicsnemo.mesh.remeshing.remesh` now raises `NotImplementedError` for
+- `physicsnemo.geometry.remeshing.remesh` now raises `NotImplementedError` for
   non-2D-in-3D inputs (the remeshing implementation is surface-only) instead
   of failing confusingly downstream, and its docstring reflects that
   restriction.
@@ -269,8 +271,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   property instead of recomputing it.
 - `physicsnemo.mesh.Mesh` convenience methods now directly reuse shared
   canonical functions, removing duplicate implementation bodies and docstrings.
-  This includes geometric, deformation (including radial-basis-function
-  deformation), calculus, topology, visualization, and validation operations.
+  This includes geometric, calculus, topology, visualization, and validation
+  operations.
 - `physicsnemo.mesh`: `draw` and `validate` are now the canonical standalone
   names matching `Mesh.draw` and `Mesh.validate`. The `draw_mesh` and
   `validate_mesh` remain as pending-deprecation compatibility names.
@@ -400,7 +402,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   converting them to `float32` before crossing the NumPy boundary.
 - `physicsnemo.mesh.projections.extrude` now returns consistently oriented cells
   for full-dimensional (codimension-0) output.
-- `physicsnemo.mesh.remeshing.remesh` now preserves the input mesh's device and
+- `physicsnemo.geometry.remeshing.remesh` now preserves the input mesh's device and
   floating dtype instead of dropping them to CPU/float32.
 - `physicsnemo.mesh.io.to_pyvista` now preserves supported dtypes for attached
   point, cell, and global data instead of narrowing every array to `float32`.

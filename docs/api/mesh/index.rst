@@ -178,13 +178,9 @@ Key Features
   intrinsic (tangent space) and extrinsic (ambient space) variants
 - **Differential geometry**: Gaussian curvature, mean curvature, normals,
   tangent spaces
-- **Mesh operations**: subdivision (linear, Loop, Butterfly), smoothing,
-  remeshing, repair
-- **Geometry transformations**: translation, rotation, scaling, dense point
-  displacement, compact control-point morphing, and global radial-basis
-  deformation
-- **Differentiable deformation energies**: strain, local and total measure,
-  inversion, closed-surface volume, and surface bending penalties
+- **Mesh operations**: subdivision (linear, Loop, Butterfly), smoothing, and
+  repair
+- **Geometry transformations**: translation, rotation, and scaling
 - **Tessellation**: triangulate polygon soups into simplicial meshes (convex
   fan with an ear-clip fallback for non-convex polygons), for example, using
   ``Mesh.from_polygons``
@@ -212,8 +208,7 @@ Tutorials
 Runnable Jupyter notebook tutorials are available in ``examples/minimal/mesh/``:
 
 1. **Getting Started** -- mesh creation, data attachment, GPU usage, autograd
-2. **Operations** -- transformations, displacement, morphing, subdivision,
-   slicing, merging, boundaries
+2. **Operations** -- transformations, subdivision, slicing, merging, boundaries
 3. **Discrete Calculus** -- gradients, divergence, curl, curvature
 4. **Neighbors & Spatial** -- adjacency queries, BVH, sampling, interpolation
 5. **Quality & Repair** -- validation, quality metrics, repair pipeline
@@ -225,6 +220,9 @@ Runnable Jupyter notebook tutorials are available in ``examples/minimal/mesh/``:
 
 API Reference
 -------------
+
+Deformation, deformation-energy, and uniform-remeshing operations that accept
+Mesh objects are documented separately under :doc:`../geometry/index`.
 
 .. toctree::
    :maxdepth: 2
@@ -240,11 +238,10 @@ API Reference
    neighbors
    spatial
    sampling
+   partitioning
    transformations
-   deformation
    subdivision
    smoothing
-   remeshing
    repair
    validation
    visualization

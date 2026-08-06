@@ -157,8 +157,10 @@ def test_remeshing_rejects_invalid_tensor_inputs():
 @pytest.mark.parametrize(
     "imports",
     [
-        "import physicsnemo.mesh.remeshing; import physicsnemo.nn.functional.geometry",
-        "import physicsnemo.nn.functional.geometry; import physicsnemo.mesh.remeshing",
+        "import physicsnemo.geometry; import physicsnemo.nn.functional.geometry",
+        "import physicsnemo.nn.functional.geometry; import physicsnemo.geometry",
+        "import physicsnemo.geometry; import physicsnemo.mesh",
+        "import physicsnemo.mesh; import physicsnemo.geometry",
     ],
 )
 def test_remeshing_import_order(imports):

@@ -191,7 +191,7 @@ class Remeshing(FunctionSpec):
     This low-level functional performs area-weighted centroidal clustering,
     projects cluster centers onto the source surface, and reconstructs compact
     triangle connectivity. The operation is intentionally non-differentiable.
-    Most users should call :func:`physicsnemo.mesh.remeshing.remesh`, which
+    Most users should call :func:`physicsnemo.geometry.remeshing.remesh`, which
     accepts and returns :class:`physicsnemo.mesh.Mesh` objects.
 
     Parameters

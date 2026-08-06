@@ -15,6 +15,7 @@ layers =
    active_learning : diffusion
    sym
    models : datapipes : metrics : domain_parallel : optim
+   geometry
    mesh
    nn
    utils

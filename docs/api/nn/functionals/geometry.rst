@@ -130,13 +130,11 @@ evaluation phase. The checked coefficient solve is not supported inside CUDA
 Graph capture. Use :func:`torch.compile` when compiled execution is needed.
 
 For connectivity-preserving object APIs, use
-:meth:`~physicsnemo.mesh.mesh.Mesh.displace`,
-:meth:`~physicsnemo.mesh.mesh.Mesh.morph`, or
-:meth:`~physicsnemo.mesh.mesh.Mesh.radial_basis_function_deform`. A
-:class:`~physicsnemo.mesh.domain_mesh.DomainMesh` provides
-:meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.morph` and
-:meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.radial_basis_function_deform`
-for shared sparse fields across all components.
+:func:`physicsnemo.geometry.displace`, :func:`physicsnemo.geometry.morph`, or
+:func:`physicsnemo.geometry.radial_basis_function_deform`. Dense displacement
+accepts a :class:`~physicsnemo.mesh.mesh.Mesh`. Morphing and radial-basis
+deformation also accept :class:`~physicsnemo.mesh.domain_mesh.DomainMesh` for
+shared sparse fields across all components.
 
 Lattice Free-Form Deformation
 -----------------------------
@@ -210,8 +208,7 @@ memory budget is therefore not enforced. Very large Bernstein workloads may
 require substantially more peak memory when compiled.
 
 For connectivity-preserving object APIs, use
-:meth:`~physicsnemo.mesh.mesh.Mesh.free_form_deform` or
-:meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.free_form_deform`.
+:func:`physicsnemo.geometry.free_form_deform` with a Mesh or DomainMesh.
 
 Deformation Energies
 --------------------
@@ -222,7 +219,7 @@ objectives for use in an optimization loop. They do not solve a constrained
 deformation problem or enforce hard constraints.
 
 For a :class:`~physicsnemo.mesh.mesh.Mesh`, the wrappers in
-:mod:`physicsnemo.mesh.deformation` validate and cache connectivity and build
+:mod:`physicsnemo.geometry.energies` validate and cache connectivity and build
 triangle hinges automatically.
 
 .. autofunction:: physicsnemo.nn.functional.simplex_strain_energy

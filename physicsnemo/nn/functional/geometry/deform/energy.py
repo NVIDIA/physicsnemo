@@ -1048,7 +1048,7 @@ class SurfaceBendingEnergy(_DeformationEnergySpec):
         Construct hinges from unique triangles with at most two incident
         triangles per edge, and omit boundary edges. Build them once from fixed
         topology and reuse them during optimization. The
-        :func:`physicsnemo.mesh.deformation.surface_bending_energy` wrapper
+        :func:`physicsnemo.geometry.energies.surface_bending_energy` wrapper
         validates these conditions, constructs the hinges, and caches them.
     reduction : {"none", "sum", "mean"}, optional
         ``"none"`` returns ``(H,)`` or ``(B, H)``. ``"sum"`` and ``"mean"``

@@ -52,11 +52,10 @@ DomainMesh
 .. currentmodule:: physicsnemo.mesh.domain_mesh
 
 The :class:`DomainMesh` class groups an interior mesh with named boundary
-meshes and domain-level data. Operations such as
-:meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.morph` and
-:meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.radial_basis_function_deform`
-apply one consistent geometry change to every component and return a new
-domain.
+meshes and domain-level data. Functions such as
+:func:`physicsnemo.geometry.morph` and
+:func:`physicsnemo.geometry.radial_basis_function_deform` can apply one
+consistent geometry change to every component and return a new domain.
 
 .. autoclass:: DomainMesh
    :members:

@@ -14,13 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Transformations for mesh geometry.
+"""Linear and affine transformations for mesh geometry."""
 
-Linear and affine operations are exported directly. Nonlinear operations are
-grouped under :mod:`physicsnemo.mesh.transformations.deform`.
-"""
-
-from physicsnemo.mesh.transformations import deform
 from physicsnemo.mesh.transformations.geometric import (
     rotate,
     rotation_matrix,
@@ -31,7 +26,6 @@ from physicsnemo.mesh.transformations.geometric import (
 )
 
 __all__ = [
-    "deform",
     "rotate",
     "rotation_matrix",
     "scale",

@@ -18,10 +18,8 @@
 
 The function is also available from ``physicsnemo.nn.functional``, and both the
 function and its :class:`Remeshing` specification are available from
-``physicsnemo.nn.functional.geometry``. Most users should use
-:mod:`physicsnemo.mesh.remeshing`. The tensor functional exposes
-backend-specific tuning parameters that may change as the implementation
-evolves.
+``physicsnemo.nn.functional.geometry``. Mesh-aware remeshing lives in
+:mod:`physicsnemo.geometry.remeshing`.
 """
 
 from .remeshing import Remeshing, remeshing
