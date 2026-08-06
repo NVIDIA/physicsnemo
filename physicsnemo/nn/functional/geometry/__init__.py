@@ -15,16 +15,28 @@
 # limitations under the License.
 
 from .deform import (
+    ClosedSurfaceVolumeEnergy,
     DisplacePoints,
     FreeFormDeformPoints,
     MorphPoints,
     RadialBasisFunctionDeformPoints,
+    SimplexInversionEnergy,
+    SimplexMeasureEnergy,
+    SimplexStrainEnergy,
     SobolevDeformPoints,
+    SurfaceBendingEnergy,
+    TotalMeasureEnergy,
+    closed_surface_volume_energy,
     displace_points,
     free_form_deform_points,
     morph_points,
     radial_basis_function_deform_points,
+    simplex_inversion_energy,
+    simplex_measure_energy,
+    simplex_strain_energy,
     sobolev_deform_points,
+    surface_bending_energy,
+    total_measure_energy,
 )
 from .farthest_point_sampling import FarthestPointSampling, farthest_point_sampling
 from .mesh_poisson_disk_sample import MeshPoissonDiskSample, mesh_poisson_disk_sample
@@ -34,6 +46,7 @@ from .remeshing import Remeshing, remeshing
 from .sdf import SignedDistanceField, signed_distance_field
 
 __all__ = [
+    "ClosedSurfaceVolumeEnergy",
     "DisplacePoints",
     "FreeFormDeformPoints",
     "FarthestPointSampling",
@@ -41,10 +54,16 @@ __all__ = [
     "MeshToVoxelFraction",
     "MorphPoints",
     "RadialBasisFunctionDeformPoints",
-    "SobolevDeformPoints",
     "RayMeshIntersect",
     "Remeshing",
     "SignedDistanceField",
+    "SimplexInversionEnergy",
+    "SimplexMeasureEnergy",
+    "SimplexStrainEnergy",
+    "SobolevDeformPoints",
+    "SurfaceBendingEnergy",
+    "TotalMeasureEnergy",
+    "closed_surface_volume_energy",
     "displace_points",
     "farthest_point_sampling",
     "free_form_deform_points",
@@ -52,8 +71,13 @@ __all__ = [
     "mesh_to_voxel_fraction",
     "morph_points",
     "radial_basis_function_deform_points",
-    "sobolev_deform_points",
     "ray_mesh_intersect",
     "remeshing",
     "signed_distance_field",
+    "simplex_inversion_energy",
+    "simplex_measure_energy",
+    "simplex_strain_energy",
+    "sobolev_deform_points",
+    "surface_bending_energy",
+    "total_measure_energy",
 ]
