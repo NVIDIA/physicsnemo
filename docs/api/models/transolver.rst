@@ -35,7 +35,7 @@ handled correctly. Evaluation and ``torch.no_grad()`` execution are unchanged.
 
 The option works in eager execution and can also be combined with
 ``torch.compile``. The explicit block policy remains useful under compilation.
-it provides a predictable recomputation boundary rather than relying only on
+It provides a predictable recomputation boundary rather than relying only on
 the compiler's automatic, speed-oriented rematerialization choices.
 
 .. autoclass:: physicsnemo.models.transolver.transolver.Transolver
