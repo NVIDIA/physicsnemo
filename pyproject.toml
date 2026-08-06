@@ -22,7 +22,6 @@ dynamic = ["version", "optional_dependencies"]
 
 dependencies = [
     "onnx>=1.14.0",
-    # Require the current public device API baseline and Warp 1.14 fixes.
     "warp-lang>=1.14.0",
     "pandas>=2.2.0",
     "nvtx>=0.2.10",
