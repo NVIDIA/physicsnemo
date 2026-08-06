@@ -800,21 +800,35 @@ class DPMSolverPlusPlus2M(Solver):
 
     Unlike :class:`HeunSolver`, which attains second order with *two* denoiser
     evaluations per step, this solver attains second order with a *single*
-    evaluation per step by reusing the previous step's data prediction
-    (a linear-multistep, Adams--Bashforth-style scheme applied to the
-    probability-flow ODE in exponential-integrator form). For a fixed budget of
-    network function evaluations it can therefore take twice as many steps as a
-    second-order single-step method.
+    evaluation per step by reusing the previous step's data prediction: an
+    exponential-integrator multistep update of the probability-flow ODE. For a
+    fixed budget of denoiser evaluations it can therefore take twice as many
+    steps as a second-order single-step method.
 
-    This implementation targets the variance-exploding (EDM) parameterization,
-    where the diffusion time equals the noise level (:math:`t = \sigma`) and
-    :math:`\alpha_t = 1`. Writing :math:`\lambda = -\ln \sigma`, with step size
-    :math:`h = \lambda_{n-1} - \lambda_n` so that
-    :math:`e^{-h} = \sigma_{n-1} / \sigma_n`, the update is
+    The scheme applies to linear-Gaussian diffusion schedules
+    :math:`\mathbf{x}_t = \alpha_t \mathbf{x}_0 + \sigma_t \boldsymbol{\epsilon}`
+    whose schedule functions return finite, strictly positive :math:`\alpha` and
+    :math:`\sigma` at every step before the zero-noise endpoint, and for which
+    :math:`\mathrm{d}\lambda / \mathrm{d}t \neq 0` there, where
+    :math:`\lambda = \ln(\alpha / \sigma)`. Positivity is a requirement on the
+    returned values, not on the schedule in exact arithmetic: a schedule whose
+    :math:`\alpha` underflows to zero in the dtype of the time-steps is outside
+    this range. The recovery below divides by
+    :math:`\alpha \dot{\sigma} - \sigma \dot{\alpha}`, which equals
+    :math:`-\alpha \sigma \, \mathrm{d}\lambda / \mathrm{d}t`, so a
+    stationary :math:`\lambda` is not admissible even if it is monotonic.
+    With :math:`\lambda` (half the log-SNR) and step size
+    :math:`h = \lambda_{n-1} - \lambda_n`, so that
 
     .. math::
-        \mathbf{x}_{n-1} = e^{-h}\, \mathbf{x}_n
-                           + \left(1 - e^{-h}\right) \bar{\mathbf{D}}_n ,
+        e^{-h} = \frac{\alpha_n \sigma_{n-1}}{\alpha_{n-1} \sigma_n} ,
+
+    the update is
+
+    .. math::
+        \mathbf{x}_{n-1} = \frac{\sigma_{n-1}}{\sigma_n}\, \mathbf{x}_n
+                           + \alpha_{n-1} \left(1 - e^{-h}\right)
+                             \bar{\mathbf{D}}_n ,
 
     where the extrapolated data prediction is
 
@@ -824,33 +838,65 @@ class DPMSolverPlusPlus2M(Solver):
         \qquad r = \frac{h_{n+1}}{h_n} ,
 
     and :math:`\mathbf{D}_n` is the denoised (data-space) prediction at step
-    :math:`n`. On the first step -- and whenever no history is available -- the
-    scheme falls back to the first-order update
+    :math:`n`. On the first step -- and whenever no usable history is available,
+    including after a zero-length step in :math:`\lambda` -- the scheme falls
+    back to the first-order update
     :math:`\bar{\mathbf{D}}_n = \mathbf{D}_n`, which for :math:`\alpha_t = 1` is
     algebraically identical to an explicit Euler step in :math:`\sigma`.
 
-    The final step, where :math:`\sigma_{n-1} = 0`, likewise returns
+    The final step, where :math:`\sigma_{n-1} = 0`, likewise uses
     :math:`\mathbf{D}_n` rather than the extrapolation
-    :math:`\bar{\mathbf{D}}_n`. This lowers the order of that one step relative
+    :math:`\bar{\mathbf{D}}_n`. It returns
+    :math:`\alpha_{n-1} \mathbf{D}_n`, which is :math:`\mathbf{D}_n` only
+    when :math:`\alpha = 1`. This lowers the order of that one step relative
     to a literal reading of Algorithm 2, and matches k-diffusion's terminal
     handling and diffusers' ``lower_order_final`` behavior.
 
-    The multistep extrapolation can amplify rounding error when two adjacent
-    timesteps are extremely close, since the coefficient then scales a difference
-    of successive data predictions that is itself near the precision of the
-    latent dtype. Very fine schedules may likewise become rounding-limited with
-    ``float16`` or ``bfloat16`` latents; prefer ``float32`` latent arithmetic in
-    that regime.
+    The multistep extrapolation amplifies rounding error when the previous step
+    is much shorter than the current one in :math:`\lambda`, since the
+    coefficient :math:`h_n / (2 h_{n+1})` is then large and scales the difference
+    of successive data predictions. Very fine or strongly non-uniform schedules
+    may become rounding-limited with ``float16`` or ``bfloat16`` latents; prefer
+    ``float32`` latent arithmetic in that regime.
 
-    .. warning::
+    .. note::
 
-        The EDM parameterization is a **requirement**, not a default. Under any
-        other parameterization :math:`\mathbf{x} - t \cdot \text{RHS}` is not the
-        model's data prediction and :math:`-\ln t` is not the schedule's log-SNR
-        variable, so the update -- while still a consistent integrator -- is not
-        DPM-Solver++. :func:`~physicsnemo.diffusion.samplers.sample` rejects
-        incompatible noise schedulers; when calling :meth:`step` directly, it is
-        the caller's responsibility to supply an EDM schedule.
+        When selected by name,
+        :func:`~physicsnemo.diffusion.samplers.sample` configures the solver from
+        its noise scheduler. For direct construction, including passing an
+        instance to :func:`~physicsnemo.diffusion.samplers.sample`, omitting the
+        four schedule functions selects the EDM defaults
+        (:math:`\alpha_t = 1`, :math:`\sigma_t = t`); provide all four for
+        another schedule. Successive manual :meth:`step` calls must
+        belong to one uninterrupted trajectory.
+
+    The four schedule functions are supplied together or not at all; a partial
+    set is rejected, since it would combine a custom schedule with the EDM
+    defaults (:math:`\alpha_t = 1`, :math:`\sigma_t = t`) for the rest. The
+    signatures of the ``denoiser`` and of the four schedule functions are:
+
+    .. code-block:: python
+
+        def denoiser(
+            x: Tensor,  # shape: (B, *dims)
+            t: Tensor,  # shape: (B,)
+        ) -> Tensor: ...  # ODE right-hand side, same shape as x
+
+        def alpha_fn(
+            t: Tensor,  # shape: (B, 1, ..., 1)
+        ) -> Tensor: ...  # alpha_t, broadcastable to the shape of t
+
+        def sigma_fn(
+            t: Tensor,  # shape: (B, 1, ..., 1)
+        ) -> Tensor: ...  # sigma_t, broadcastable to the shape of t
+
+        def alpha_dot_fn(
+            t: Tensor,  # shape: (B, 1, ..., 1)
+        ) -> Tensor: ...  # d(alpha_t)/dt, broadcastable to the shape of t
+
+        def sigma_dot_fn(
+            t: Tensor,  # shape: (B, 1, ..., 1)
+        ) -> Tensor: ...  # d(sigma_t)/dt, broadcastable to the shape of t
 
     .. note::
 
@@ -865,12 +911,26 @@ class DPMSolverPlusPlus2M(Solver):
     denoiser : Denoiser
         A callable implementing the
         :class:`~physicsnemo.diffusion.Denoiser` interface. Here it is
-        expected to return the right hand side of the ODE,
-        :math:`(\mathbf{x} - \mathbf{D}) / t`; the data prediction is recovered
-        internally as :math:`\mathbf{D} = \mathbf{x} - t \cdot \text{RHS}`.
+        expected to return the right-hand side of the probability-flow ODE.
+        The data prediction is recovered internally as
+
+        .. math::
+            \mathbf{D} = \frac{\dot{\sigma} \mathbf{x} - \sigma\,
+            \text{RHS}}{\alpha \dot{\sigma} - \sigma \dot{\alpha}} ,
+
+        which for the EDM schedule reduces to
+        :math:`\mathbf{x} - t \cdot \text{RHS}`.
         Typically obtained via
         :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.get_denoiser`,
         but any callable with the correct signature can be used.
+    alpha_fn : Callable[[Tensor], Tensor] | None, default=None
+        The schedule coefficient :math:`\alpha_t`.
+    sigma_fn : Callable[[Tensor], Tensor] | None, default=None
+        The noise level :math:`\sigma_t`.
+    alpha_dot_fn : Callable[[Tensor], Tensor] | None, default=None
+        The derivative :math:`\dot{\alpha}_t`.
+    sigma_dot_fn : Callable[[Tensor], Tensor] | None, default=None
+        The derivative :math:`\dot{\sigma}_t`.
 
     Note
     ----
@@ -893,21 +953,59 @@ class DPMSolverPlusPlus2M(Solver):
     True
     """
 
-    # Read by ``sample`` to reject incompatible noise schedulers; the class
-    # warning above explains why the EDM parameterization is required.
-    _requires_edm_parameterization = True
-
     # Opts this solver into the ``reset`` lifecycle call in ``sample``. Gated on
     # a marker rather than on ``hasattr(solver, "reset")`` so that a pre-existing
     # user-defined solver with an unrelated ``reset`` method is left untouched.
     _requires_state_reset = True
 
+    # Tells ``sample`` to inject the schedule functions of its noise scheduler.
+    # Kept off the ``Solver`` protocol, which is runtime checkable: a new member
+    # would make ``isinstance`` fail for solvers that implement only ``step``.
+    _requires_schedule_fns = True
+
     # Multistep history, cleared by ``reset``.
     _D_prev: Tensor | None
     _h_prev: Tensor | None
 
-    def __init__(self, denoiser: Denoiser) -> None:
+    def __init__(
+        self,
+        denoiser: Denoiser,
+        *,
+        alpha_fn: Callable[[Tensor], Tensor] | None = None,
+        sigma_fn: Callable[[Tensor], Tensor] | None = None,
+        alpha_dot_fn: Callable[[Tensor], Tensor] | None = None,
+        sigma_dot_fn: Callable[[Tensor], Tensor] | None = None,
+    ) -> None:
         self.denoiser = denoiser
+        provided = [alpha_fn, sigma_fn, alpha_dot_fn, sigma_dot_fn]
+        if any(f is not None for f in provided) and not all(
+            f is not None for f in provided
+        ):
+            missing = [
+                name
+                for name, f in zip(
+                    ("alpha_fn", "sigma_fn", "alpha_dot_fn", "sigma_dot_fn"), provided
+                )
+                if f is None
+            ]
+            raise ValueError(
+                "The schedule functions must be given together or not at all, "
+                f"but {', '.join(missing)} "
+                + ("is" if len(missing) == 1 else "are")
+                + " missing. Supplying only some of them would silently combine a "
+                "custom schedule with the EDM defaults for the rest."
+            )
+
+        # Default to the EDM schedule (alpha = 1, sigma = t), which makes the
+        # update reduce to the variance-exploding form.
+        self.alpha_fn = alpha_fn if alpha_fn is not None else torch.ones_like
+        self.sigma_fn = sigma_fn if sigma_fn is not None else (lambda t: t)
+        self.alpha_dot_fn = (
+            alpha_dot_fn if alpha_dot_fn is not None else torch.zeros_like
+        )
+        self.sigma_dot_fn = (
+            sigma_dot_fn if sigma_dot_fn is not None else torch.ones_like
+        )
         self.reset()
 
     def reset(self) -> None:
@@ -969,30 +1067,46 @@ class DPMSolverPlusPlus2M(Solver):
         t_cur_bc = t_cur.reshape(expected_shape)
         t_next_bc = t_next.reshape(expected_shape)
 
-        # At t == 0 the state is already denoised and the denoiser is singular,
-        # since it returns (x - D) / t. Evaluate at a surrogate time to keep the
-        # call finite; the result is discarded, as such a step is the identity.
-        is_degenerate = t_cur_bc == 0
+        a_cur, s_cur = self.alpha_fn(t_cur_bc), self.sigma_fn(t_cur_bc)
+        a_next, s_next = self.alpha_fn(t_next_bc), self.sigma_fn(t_next_bc)
+        a_dot, s_dot = self.alpha_dot_fn(t_cur_bc), self.sigma_dot_fn(t_cur_bc)
+
+        # At sigma == 0 the state is noise-free, and the right-hand side may be
+        # singular there. Evaluate at a surrogate time to keep the call finite;
+        # the result is dropped below, as such a step is the identity.
+        is_degenerate = s_cur == 0
         t_cur_safe = torch.where(is_degenerate, torch.ones_like(t_cur_bc), t_cur_bc)
+        a_cur = torch.where(is_degenerate, torch.ones_like(a_cur), a_cur)
+        s_cur = torch.where(is_degenerate, torch.ones_like(s_cur), s_cur)
+        a_dot = torch.where(is_degenerate, torch.zeros_like(a_dot), a_dot)
+        s_dot = torch.where(is_degenerate, torch.ones_like(s_dot), s_dot)
 
-        # Single RHS evaluation; recover the data prediction D = x - t * RHS.
-        D = x - t_cur_safe * self.denoiser(x, t_cur_safe.reshape(t_cur.shape))
+        # Single evaluation; recover the data prediction from the right-hand
+        # side. Written to avoid an explicit division by sigma near the
+        # endpoint. For the EDM schedule this is x - t * RHS.
+        rhs = self.denoiser(x, t_cur_safe.reshape(t_cur.shape))
+        D = (s_dot * x - s_cur * rhs) / (a_cur * s_dot - s_cur * a_dot)
 
-        # Where t_next == 0 the extrapolation is dropped and the update returns D,
-        # matching the reference implementations. The surrogate keeps log() and the
-        # division by h finite on the unselected branch.
-        is_final = t_next_bc == 0
-        t_next_safe = torch.where(is_final, 0.5 * t_cur_safe, t_next_bc)
+        # Step in lambda = log(alpha / sigma), half the log-SNR. lambda diverges
+        # at the zero-noise endpoint, so the general branch is evaluated with a
+        # strictly positive surrogate and the final mask selects alpha_next * D.
+        is_final = s_next == 0
+        s_next_safe = torch.where(is_final, 0.5 * s_cur, s_next)
 
-        # Step size in lambda = -log(sigma), computed in at least float32: the
-        # coefficients below are conditioned on the ratio of successive sizes.
         compute_dtype = torch.promote_types(t_cur_bc.dtype, torch.float32)
-        ratio_hp = t_next_safe.to(compute_dtype) / t_cur_safe.to(compute_dtype)
-        h = -torch.log(ratio_hp)
-        ratio = ratio_hp.to(x.dtype)
+        emh_hp = (s_next_safe.to(compute_dtype) * a_cur.to(compute_dtype)) / (
+            a_next.to(compute_dtype) * s_cur.to(compute_dtype)
+        )
+        h = -torch.log(emh_hp)
+        # expm1 rather than 1 - exp(-h): the latter cancels catastrophically for
+        # the small h of a fine ladder, losing most of the value in bfloat16.
+        one_minus_emh = (-torch.expm1(-h)).to(x.dtype)
+        # Computed in the same promoted dtype. On non-terminal EDM steps it
+        # equals exp(-h); matching precision avoids rounding differences.
+        sigma_ratio = (s_next.to(compute_dtype) / s_cur.to(compute_dtype)).to(x.dtype)
 
         if self._D_prev is None or self._h_prev is None:
-            D_bar = D  # first-order fallback (exact exponential / DDIM)
+            D_bar = D  # first-order DPM-Solver++ update
         else:
             # Extrapolate the data prediction in lambda to lambda_cur + h/2:
             # D + (1 / 2r) * (D - D_prev), r = h_prev / h, written h / (2 * h_prev).
@@ -1008,16 +1122,17 @@ class DPMSolverPlusPlus2M(Solver):
             ).to(x.dtype)
             D_bar = (1.0 + coeff) * D - coeff * self._D_prev
 
+        general = sigma_ratio * x + a_next * one_minus_emh * D_bar
+        # At sigma_next == 0, use the lower-order final update alpha_next * D
+        # instead of the extrapolated D_bar; see the class docstring.
         x_next = torch.where(
-            is_degenerate,
-            x,
-            torch.where(is_final, D, ratio * x + (1.0 - ratio) * D_bar),
+            is_degenerate, x, torch.where(is_final, a_next * D, general)
         )
 
         # Cache unconditionally to avoid a data-dependent branch (device sync,
-        # breaks fullgraph); `reset` clears it. Terminal and degenerate steps ran
-        # on a surrogate time, so their step size is not a real one and is stored
-        # as zero; a repeated timestep naturally yields h == 0 already.
+        # breaks fullgraph); `reset` clears it. Terminal and degenerate steps use
+        # a surrogate step size, which is not a real one, so store zero; a
+        # repeated timestep naturally yields h == 0 already.
         self._D_prev = D
         self._h_prev = torch.where(is_final | is_degenerate, torch.zeros_like(h), h)
 

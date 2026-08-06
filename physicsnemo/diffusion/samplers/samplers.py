@@ -46,43 +46,47 @@ SOLVERS: Dict[str, type[Solver]] = {
 }
 
 
-def _check_edm_parameterization(
-    noise_scheduler: NoiseScheduler, solver: Solver
-) -> None:
-    r"""Raise if ``noise_scheduler`` is not in the EDM parameterization.
+_SCHEDULE_FNS = ("alpha_fn", "sigma_fn", "alpha_dot_fn", "sigma_dot_fn")
 
-    Compatibility is read from the scheduler's ``is_edm_parameterization``
-    attribute rather than probed numerically, because converting a tensor
-    comparison to a Python boolean would break
-    ``torch.compile(..., fullgraph=True)``.
+
+def _schedule_fns(noise_scheduler: NoiseScheduler) -> Dict[str, Any]:
+    r"""Extract the linear-Gaussian schedule functions required by a solver.
+
+    Solvers written for general linear-Gaussian schedules
+    :math:`\mathbf{x}_t = \alpha_t \mathbf{x}_0 + \sigma_t \boldsymbol{\epsilon}`
+    need :math:`\alpha`, :math:`\sigma` and their time derivatives: the first
+    two to advance the state, the derivatives to recover the data prediction
+    from the ODE right-hand side that the denoiser returns.
 
     Parameters
     ----------
     noise_scheduler : NoiseScheduler
-        The scheduler to validate. A
+        The scheduler from which to obtain the schedule functions. A
         :class:`~physicsnemo.diffusion.noise_schedulers.DomainParallelNoiseScheduler`
-        is unwrapped and its inner scheduler is validated instead.
-    solver : Solver
-        The solver requiring the parameterization; used in the error message.
+        is unwrapped first, since it delegates rather than exposing these
+        methods itself.
 
     Returns
     -------
-    None
+    Dict[str, Any]
+        Keyword arguments for the solver constructor.
 
     Raises
     ------
     ValueError
-        If the scheduler is not declared to be in the EDM parameterization.
+        If the scheduler does not provide callable ``alpha``, ``sigma``,
+        ``alpha_dot`` and ``sigma_dot`` methods.
     """
-    # Unwrap the domain-parallel adapter: it only changes tensor placement.
     inner = getattr(noise_scheduler, "inner_scheduler", noise_scheduler)
-
-    if not getattr(inner, "is_edm_parameterization", False):
+    fns = {key: getattr(inner, key[: -len("_fn")], None) for key in _SCHEDULE_FNS}
+    missing = sorted(k[: -len("_fn")] for k, v in fns.items() if not callable(v))
+    if missing:
         raise ValueError(
-            f"{type(solver).__name__} requires a noise scheduler in the EDM "
-            f"parameterization (sigma(t) = t, alpha(t) = 1), but "
-            f"{type(inner).__name__} does not set is_edm_parameterization=True."
+            f"{type(inner).__name__} does not provide {', '.join(missing)}, which "
+            "this solver needs to advance a general linear-Gaussian schedule and "
+            "to recover the data prediction from the denoiser output."
         )
+    return fns
 
 
 def _maybe_replicate_timesteps(
@@ -260,8 +264,8 @@ def sample(
           :class:`~physicsnemo.diffusion.samplers.solvers.EDMStochasticHeunSolver`.
 
         * ``"dpmpp_2m"``: Second-order multistep DPM-Solver++, using a single
-          denoiser evaluation per step. Requires a noise scheduler in the EDM
-          parameterization.
+          denoiser evaluation per step. Configured from the noise scheduler, so
+          it applies to general linear-Gaussian schedules.
           See :class:`~physicsnemo.diffusion.samplers.solvers.DPMSolverPlusPlus2M`.
 
     time_steps : Tensor | None, default=None
@@ -274,7 +278,9 @@ def sample(
         Additional options passed to the solver constructor. Only used when
         ``solver`` is a string; must be empty when ``solver`` is a
         :class:`Solver` instance. See individual solver classes for available
-        options.
+        options. Solvers configured from the noise scheduler (currently
+        ``"dpmpp_2m"``) ignore any schedule functions given here: the scheduler
+        also provides the time-steps, so it is authoritative.
     time_eval : List[int] | None, default=None
         Indices of time-steps at which to return intermediate samples. Must
         contain values in ``range(0, num_steps)`` (or ``range(0,
@@ -368,11 +374,6 @@ def sample(
     >>>
     >>> # Define a minimal EDM-like scheduler from scratch
     >>> class MinimalScheduler:
-    ...     # sigma=t and alpha=1 below, so opt in to the solvers that require
-    ...     # the EDM parameterization. Duck-typed schedulers can set this too:
-    ...     # it is read defensively, not required by the protocol.
-    ...     is_edm_parameterization = True
-    ...
     ...     def timesteps(self, num_steps, *, device=None, dtype=None):
     ...         return torch.linspace(1.0, 0.0, num_steps + 1,
     ...                               device=device, dtype=dtype)
@@ -415,7 +416,13 @@ def sample(
                 f"Unknown solver '{solver}'. Available solvers: {available}."
             )
         solver_cls = SOLVERS[solver]
-        solver_ = solver_cls(denoiser, **solver_options)
+        # Copy so the caller's dict is never mutated, and let the scheduler be
+        # authoritative: the time-steps come from it, so schedule functions
+        # describing anything else would silently disagree with them.
+        options = dict(solver_options)
+        if getattr(solver_cls, "_requires_schedule_fns", False):
+            options.update(_schedule_fns(noise_scheduler))
+        solver_ = solver_cls(denoiser, **options)
     else:
         # Assume solver is a Solver-like object with a step method
         if solver_options:
@@ -443,11 +450,6 @@ def sample(
     # loop. Under default (caller grad enabled), preserve the graph so
     # callers that intentionally backprop through sample() are unaffected.
     outer_grad_enabled = torch.is_grad_enabled()
-
-    # Reject incompatible solver/scheduler parameterizations before evaluating
-    # the denoiser.
-    if getattr(solver_, "_requires_edm_parameterization", False):
-        _check_edm_parameterization(noise_scheduler, solver_)
 
     # Stateful solvers opt into a reset hook, cleared here so a reused instance
     # cannot leak state from a previous trajectory. Gated on the marker rather

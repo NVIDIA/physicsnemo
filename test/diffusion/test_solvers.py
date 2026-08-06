@@ -21,7 +21,11 @@ import math
 import pytest
 import torch
 
-from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
+from physicsnemo.diffusion.noise_schedulers import (
+    EDMNoiseScheduler,
+    VENoiseScheduler,
+    VPNoiseScheduler,
+)
 from physicsnemo.diffusion.samplers.solvers import (
     DPMSolverPlusPlus2M,
     EDMStochasticEulerSolver,
@@ -339,7 +343,7 @@ class TestStepCompile:
         # Warm stateful solvers so this generic test covers steady-state graph
         # reuse. Bootstrap compilation is covered by
         # TestDPMSolverPlusPlus2M.test_compile_from_fresh_state_matches_eager.
-        if hasattr(solver, "reset"):
+        if getattr(solver, "_requires_state_reset", False):
             with torch.no_grad():
                 solver.step(x, t_cur, t_next)
 
@@ -369,11 +373,11 @@ class TestStepCompile:
 
 
 def _analytic_denoiser(scale: float = 1.0):
-    """ODE right-hand side for a Gaussian prior with standard deviation ``scale``.
+    r"""ODE right-hand side for a Gaussian data distribution with standard deviation ``scale``.
 
-    For :math:`p(x) = \\mathcal{N}(0, s^2)` the optimal denoiser is
+    For :math:`p(x) = \mathcal{N}(0, s^2)` the optimal denoiser is
     :math:`D(x, t) = x s^2 / (s^2 + t^2)`, and the probability-flow ODE has the
-    closed-form solution :math:`x(t) = C \\sqrt{s^2 + t^2}`. This gives an exact
+    closed-form solution :math:`x(t) = C \sqrt{s^2 + t^2}`. This gives an exact
     reference trajectory to measure the convergence order against.
     """
 
@@ -386,17 +390,23 @@ def _analytic_denoiser(scale: float = 1.0):
 
 
 def _exact_solution(x_init, t_init, t_final, scale=1.0):
-    """Exact PF-ODE solution for the Gaussian prior of ``_analytic_denoiser``."""
+    """Exact PF-ODE solution for the Gaussian data distribution of ``_analytic_denoiser``."""
     return x_init * math.sqrt(scale**2 + t_final**2) / math.sqrt(scale**2 + t_init**2)
 
 
 class TestDPMSolverPlusPlus2MConstructor:
     """Tests for DPMSolverPlusPlus2M constructor."""
 
-    def test_attributes(self):
+    def test_default_attributes(self):
         solver = DPMSolverPlusPlus2M(_identity_denoiser)
         assert solver.denoiser is _identity_denoiser
         assert isinstance(solver, Solver)
+        # Without schedule functions the solver uses the EDM schedule.
+        t = torch.tensor(3.0)
+        assert solver.alpha_fn(t) == torch.ones_like(t)
+        assert solver.sigma_fn(t) == t
+        assert solver.alpha_dot_fn(t) == torch.zeros_like(t)
+        assert solver.sigma_dot_fn(t) == torch.ones_like(t)
 
 
 @pytest.mark.usefixtures("deterministic_settings")
@@ -582,7 +592,95 @@ class TestDPMSolverPlusPlus2M:
                 # A zero-length step must be exactly the identity.
                 torch.testing.assert_close(x, x_prev, rtol=0, atol=0)
 
-    def test_zero_time_is_the_identity_and_differentiable(self, device):
+    @pytest.mark.parametrize(
+        "sched_cls", [VPNoiseScheduler, VENoiseScheduler], ids=["vp", "ve"]
+    )
+    def test_converges_on_vp_and_ve_schedules(self, device, sched_cls):
+        """Second-order behavior is not specific to the EDM parameterization.
+
+        Results are compared with the exact solution because solvers can use
+        different terminal updates. The window is deliberately narrow and the
+        assertions broad: coarse ladders are pre-asymptotic, and on VE the error
+        changes sign near 150 steps, so an order estimated across that crossing
+        is meaningless.
+        """
+        sched = sched_cls()
+        scale = 1.0
+
+        def x0_predictor(x, t):
+            t_bc = t.reshape((-1,) + (1,) * (x.ndim - 1))
+            a, sg = sched.alpha(t_bc), sched.sigma(t_bc)
+            return x * a * scale**2 / (a**2 * scale**2 + sg**2)
+
+        denoiser = sched.get_denoiser(x0_predictor=x0_predictor, denoising_type="ode")
+
+        errors = []
+        for num_steps in (24, 32, 48, 64):
+            ts = sched.timesteps(num_steps, device=device, dtype=torch.float64)
+            a0, s0 = sched.alpha(ts[0]), sched.sigma(ts[0])
+            aT, sT = sched.alpha(ts[-1]), sched.sigma(ts[-1])
+            scale0 = float(torch.sqrt(a0**2 * scale**2 + s0**2))
+            xT = make_input((1, 64), seed=41, device=device).double() * scale0
+            exact = xT * float(torch.sqrt(aT**2 * scale**2 + sT**2)) / scale0
+
+            solver = DPMSolverPlusPlus2M(
+                denoiser,
+                alpha_fn=sched.alpha,
+                sigma_fn=sched.sigma,
+                alpha_dot_fn=sched.alpha_dot,
+                sigma_dot_fn=sched.sigma_dot,
+            )
+            x = xT
+            for t_cur, t_next in zip(ts[:-1], ts[1:]):
+                x = solver.step(x, t_cur.expand(1), t_next.expand(1))
+            errors.append(float((x - exact).abs().max() / exact.abs().max()))
+
+        assert all(errors[i + 1] < errors[i] for i in range(len(errors) - 1)), (
+            f"error did not decrease monotonically: {errors}"
+        )
+        # Refining 24 -> 64 steps is a factor 8/3; a second-order method gains
+        # roughly (8/3)^2 ~ 7x. Assert well below that to stay robust.
+        assert errors[0] / errors[-1] > 3.0, f"convergence too slow: {errors}"
+
+    def test_rejects_partial_schedule_functions(self):
+        """Partially supplied schedule functions must be rejected.
+
+        Accepting a subset would silently combine a custom schedule with the
+        EDM defaults for the rest, which integrates a different ODE than the
+        caller intended.
+        """
+        denoiser = _analytic_denoiser()
+        with pytest.raises(ValueError, match="together or not at all"):
+            DPMSolverPlusPlus2M(denoiser, sigma_fn=lambda t: t)
+
+    def test_terminal_step_scales_the_data_prediction_by_alpha(self):
+        """The final step must return ``alpha_next * D``, not ``D``.
+
+        Every shipped scheduler has ``alpha == 1`` at the zero-noise endpoint
+        and reaches ``sigma == 0`` only at ``t == 0``, so neither the factor
+        nor the detection on ``sigma`` rather than ``t`` is observable there.
+        This schedule has ``alpha(1) = 1.5`` and ``sigma(1) = 0``, separating
+        both.
+        """
+        rhs = torch.full((1, 4), 0.25)
+        solver = DPMSolverPlusPlus2M(
+            lambda x, t: rhs,
+            alpha_fn=lambda t: 1.0 + t / 2.0,
+            sigma_fn=lambda t: t - 1.0,
+            alpha_dot_fn=lambda t: torch.full_like(t, 0.5),
+            sigma_dot_fn=torch.ones_like,
+        )
+        x = torch.linspace(-1.0, 1.0, 4).reshape(1, 4)
+        # One ordinary step first: without history the extrapolation equals D,
+        # and the general branch would land on the same value as the terminal
+        # one, so detecting the final step on sigma would not be observable.
+        x = solver.step(x, torch.tensor([3.0]), torch.tensor([2.0]))
+        # D = (sigma_dot x - sigma rhs) / (alpha sigma_dot - sigma alpha_dot)
+        # is (x - rhs) / 1.5 at t = 2, so alpha_next * D is exactly x - rhs.
+        x_next = solver.step(x, torch.tensor([2.0]), torch.tensor([1.0]))
+        torch.testing.assert_close(x_next, x - rhs)
+
+    def test_zero_sigma_is_the_identity_and_differentiable(self, device):
         """Repeated and zero timesteps stay finite and differentiable.
 
         The denoiser returns ``(x - D) / t`` and is singular at zero, so it runs

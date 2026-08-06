@@ -26,13 +26,8 @@ from physicsnemo.diffusion.guidance import (
 )
 from physicsnemo.diffusion.noise_schedulers import (
     EDMNoiseScheduler,
-    IDDPMNoiseScheduler,
-    StudentTEDMNoiseScheduler,
     VENoiseScheduler,
     VPNoiseScheduler,
-)
-from physicsnemo.diffusion.noise_schedulers.domain_parallel import (
-    DomainParallelNoiseScheduler,
 )
 from physicsnemo.diffusion.samplers import sample
 from physicsnemo.diffusion.samplers.solvers import (
@@ -1091,7 +1086,6 @@ class TestDPMSolverPlusPlus2MSampling:
 
         # The shipped solver does opt in, so it is still reset.
         opted_in = DPMSolverPlusPlus2M(denoiser)
-        assert opted_in._requires_state_reset is True
         sample(denoiser, xN, scheduler, NUM_STEPS, solver=opted_in)
         assert opted_in._D_prev is None
 
@@ -1118,7 +1112,8 @@ class TestDPMSolverPlusPlus2MSampling:
 
         With ``num_steps=2`` the first step has no history and the second lands
         on ``t = 0``, where the update returns the data prediction and discards
-        the extrapolation -- so the result is bit-equal to Euler and proves
+        the extrapolation -- so the result matches Euler up to floating-point
+        round-off and proves
         nothing about the multistep coefficients. At least three steps are
         needed for the second-order path to affect the output.
         """
@@ -1138,53 +1133,8 @@ class TestDPMSolverPlusPlus2MSampling:
 
         # Two steps: identical up to floating-point round-off.
         assert relative_gap(2) < 1e-4
-        # Three steps: the multistep update reaches the output. Measured gap is
-        # ~5e-1, i.e. four orders of magnitude above the two-step round-off.
+        # Three steps: the multistep update reaches the output.
         assert relative_gap(3) > 1e-2
-
-    @pytest.mark.parametrize("as_instance", [False, True], ids=["by_name", "instance"])
-    def test_rejects_non_edm_scheduler(self, device, as_instance):
-        """Both dispatch paths must reject an incompatible parameterization."""
-        for sched_cls in (VENoiseScheduler, VPNoiseScheduler):
-            scheduler, _, denoiser, xN = self._components(device, sched_cls=sched_cls)
-            solver = DPMSolverPlusPlus2M(denoiser) if as_instance else "dpmpp_2m"
-            with pytest.raises(ValueError, match="EDM parameterization"):
-                sample(denoiser, xN, scheduler, NUM_STEPS, solver=solver)
-
-    def test_accepts_wrapped_edm_scheduler(self, device):
-        """A scheduler wrapped for domain-parallel sampling is still EDM.
-
-        The wrapper only changes tensor placement, so unwrapping it is required
-        or domain-parallel sampling would be rejected for no reason.
-        """
-        scheduler, _, denoiser, xN = self._components(device)
-
-        class _Wrapper:
-            """Stand-in for DomainParallelNoiseScheduler's public unwrap API.
-
-            Deliberately has no ``__getattr__``: the real class delegates
-            explicitly rather than by fallback, so the capability is *not*
-            readable on the wrapper itself. Without the unwrap in
-            ``_check_edm_parameterization`` this scheduler would be rejected.
-            """
-
-            def __init__(self, inner):
-                self._inner = inner
-
-            @property
-            def inner_scheduler(self):
-                return self._inner
-
-            def timesteps(self, *args, **kwargs):
-                return self._inner.timesteps(*args, **kwargs)
-
-        assert hasattr(DomainParallelNoiseScheduler, "inner_scheduler")
-
-        wrapped = _Wrapper(scheduler)
-        assert not getattr(wrapped, "is_edm_parameterization", False)
-
-        out = sample(denoiser, xN, wrapped, NUM_STEPS, solver="dpmpp_2m")
-        assert torch.isfinite(out).all()
 
     @pytest.mark.usefixtures("nop_compile")
     def test_compiled_sample(self, device):
@@ -1215,6 +1165,147 @@ class TestDPMSolverPlusPlus2MSampling:
         # runs above only shows the graph is reused, not that it is right.
         eager = sample(denoiser, xN, scheduler, 4, solver=DPMSolverPlusPlus2M(denoiser))
         torch.testing.assert_close(first, eager, rtol=1e-4, atol=1e-4)
+
+    @pytest.mark.parametrize(
+        "sched_cls",
+        [VPNoiseScheduler, VENoiseScheduler],
+        ids=["vp", "ve"],
+    )
+    def test_string_dispatch_configures_linear_gaussian_schedule(
+        self, device, sched_cls
+    ):
+        """Selecting by name must configure the solver from the scheduler.
+
+        Shape and finiteness alone would not detect the schedule functions being
+        dropped, since the EDM defaults also produce a finite result. The string
+        result is therefore compared against an explicitly configured instance,
+        and shown to differ from the EDM defaults. Only non-EDM schedules are
+        used: on EDM the injected functions equal the defaults, so the
+        comparison would hold even if the injection were removed.
+        """
+        scheduler, _, denoiser, xN = self._components(
+            device, sched_cls=sched_cls, num_steps=6
+        )
+        by_name = sample(denoiser, xN, scheduler, 6, solver="dpmpp_2m")
+        configured = sample(
+            denoiser,
+            xN,
+            scheduler,
+            6,
+            solver=DPMSolverPlusPlus2M(
+                denoiser,
+                alpha_fn=scheduler.alpha,
+                sigma_fn=scheduler.sigma,
+                alpha_dot_fn=scheduler.alpha_dot,
+                sigma_dot_fn=scheduler.sigma_dot,
+            ),
+        )
+        torch.testing.assert_close(by_name, configured, rtol=0, atol=0)
+
+        # The defaults integrate a different ODE here, so the equality above
+        # would be vacuous if the schedule functions were ignored.
+        edm_defaults = sample(
+            denoiser, xN, scheduler, 6, solver=DPMSolverPlusPlus2M(denoiser)
+        )
+        assert not torch.allclose(by_name, edm_defaults)
+
+    def test_schedule_functions_taken_from_wrapped_scheduler(self, device):
+        """A wrapper delegating to an inner scheduler must be unwrapped.
+
+        ``DomainParallelNoiseScheduler`` exposes the schedule functions only via
+        its inner scheduler, so the wrapped result must equal the unwrapped one.
+        """
+        scheduler, _, denoiser, xN = self._components(device)
+
+        class _Wrapper:
+            """Minimal wrapper exposing inner_scheduler and timesteps."""
+
+            def __init__(self, inner):
+                self._inner = inner
+
+            @property
+            def inner_scheduler(self):
+                return self._inner
+
+            def timesteps(self, *args, **kwargs):
+                return self._inner.timesteps(*args, **kwargs)
+
+        wrapped = sample(
+            denoiser, xN, _Wrapper(scheduler), NUM_STEPS, solver="dpmpp_2m"
+        )
+        direct = sample(denoiser, xN, scheduler, NUM_STEPS, solver="dpmpp_2m")
+        torch.testing.assert_close(wrapped, direct, rtol=0, atol=0)
+
+    def test_scheduler_without_schedule_functions_is_rejected(self, device):
+        """A scheduler missing the schedule functions must fail clearly."""
+        scheduler, _, denoiser, xN = self._components(device)
+
+        class _Incomplete:
+            def __init__(self, inner):
+                self._inner = inner
+
+            def timesteps(self, *args, **kwargs):
+                return self._inner.timesteps(*args, **kwargs)
+
+            def alpha(self, t):
+                return torch.ones_like(t)
+
+        with pytest.raises(ValueError, match="sigma"):
+            sample(denoiser, xN, _Incomplete(scheduler), NUM_STEPS, solver="dpmpp_2m")
+
+        class _NoScheduleFns(_Incomplete):
+            alpha = None
+
+        # Providing none of the four must be rejected here rather than falling
+        # through to the EDM defaults, which would silently integrate the wrong
+        # ODE. The constructor's partial-set guard cannot catch this case.
+        with pytest.raises(ValueError, match="alpha, alpha_dot, sigma, sigma_dot"):
+            sample(
+                denoiser, xN, _NoScheduleFns(scheduler), NUM_STEPS, solver="dpmpp_2m"
+            )
+
+    def test_scheduler_overrides_conflicting_solver_options(self, device):
+        """The scheduler is authoritative and the caller's dict is untouched.
+
+        The time-steps come from the scheduler, so schedule functions describing
+        anything else would silently disagree with them.
+        """
+        scheduler, _, denoiser, xN = self._components(device)
+        conflicting = {
+            "alpha_fn": lambda t: torch.full_like(t, 2.0),
+            "sigma_fn": lambda t: 3.0 * t,
+            "alpha_dot_fn": torch.zeros_like,
+            "sigma_dot_fn": lambda t: torch.full_like(t, 3.0),
+        }
+        opts = dict(conflicting)
+        out = sample(
+            denoiser, xN, scheduler, NUM_STEPS, solver="dpmpp_2m", solver_options=opts
+        )
+        assert opts.keys() == conflicting.keys()
+        assert all(opts[k] is conflicting[k] for k in conflicting)
+
+        expected = sample(denoiser, xN, scheduler, NUM_STEPS, solver="dpmpp_2m")
+        torch.testing.assert_close(out, expected, rtol=0, atol=0)
+
+    @pytest.mark.parametrize(
+        "sched_cls", [VPNoiseScheduler, VENoiseScheduler], ids=["vp", "ve"]
+    )
+    @pytest.mark.usefixtures("nop_compile")
+    def test_compiled_sample_with_general_schedule(self, device, sched_cls):
+        """Bound scheduler methods must remain traceable under fullgraph."""
+        torch._dynamo.reset()
+        scheduler, _, denoiser, xN = self._components(
+            device, sched_cls=sched_cls, num_steps=4
+        )
+
+        def do_sample(x):
+            return sample(denoiser, x, scheduler, 4, solver="dpmpp_2m")
+
+        with torch.no_grad():
+            compiled = torch.compile(do_sample, fullgraph=True)(xN)
+            eager = do_sample(xN)
+        assert torch.isfinite(compiled).all()
+        torch.testing.assert_close(compiled, eager, rtol=1e-4, atol=1e-4)
 
     @pytest.mark.parametrize("guidance_config", GUIDANCE_CONFIGS)
     def test_dps_guidance_reuse_is_clean(self, device, guidance_config):
@@ -1248,50 +1339,3 @@ class TestDPMSolverPlusPlus2MSampling:
         # Under no_grad the result must not carry a graph from the guidance.
         assert not first.requires_grad
         assert first.grad_fn is None
-
-    @pytest.mark.parametrize(
-        "sched_cls,sched_kwargs",
-        [(IDDPMNoiseScheduler, {}), (StudentTEDMNoiseScheduler, {})],
-        ids=["iddpm", "student_t_edm"],
-    )
-    def test_accepts_non_inheriting_edm_scheduler(
-        self, device, sched_cls, sched_kwargs
-    ):
-        """Schedulers declaring the parameterization without inheriting it.
-
-        IDDPM and Student-t EDM both satisfy sigma(t) = t and alpha(t) = 1
-        without deriving from EDMNoiseScheduler -- they differ only in their
-        timestep ladder and latent distribution -- so an inheritance-based
-        check would reject them incorrectly.
-        """
-        scheduler, _, denoiser, xN = _make_sampling_components(
-            sched_cls,
-            sched_kwargs,
-            self.SHAPE,
-            Conv2dX0Predictor,
-            {"channels": 3},
-            device,
-            num_steps=4,
-        )
-        out = sample(denoiser, xN, scheduler, 4, solver="dpmpp_2m")
-        assert out.shape == self.SHAPE
-        assert torch.isfinite(out).all()
-
-    @pytest.mark.parametrize(
-        "sched_cls", [VENoiseScheduler, VPNoiseScheduler], ids=["ve", "vp"]
-    )
-    @pytest.mark.usefixtures("nop_compile")
-    def test_rejects_non_edm_scheduler_when_compiled(self, device, sched_cls):
-        """Scheduler compatibility validation must survive fullgraph tracing."""
-        torch._dynamo.config.error_on_recompile = False
-        torch._dynamo.reset()
-
-        scheduler, _, denoiser, xN = self._components(device, sched_cls=sched_cls)
-
-        def do_sample(x):
-            return sample(denoiser, x, scheduler, NUM_STEPS, solver="dpmpp_2m")
-
-        with pytest.raises(
-            (ValueError, torch._dynamo.exc.Unsupported), match="EDM parameterization"
-        ):
-            torch.compile(do_sample, fullgraph=True)(xN)

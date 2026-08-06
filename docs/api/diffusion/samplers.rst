@@ -408,9 +408,8 @@ There are two ways to use solvers:
   Second-order with configurable stochastic noise injection.
 - ``"dpmpp_2m"`` ---
   :class:`~physicsnemo.diffusion.samplers.solvers.DPMSolverPlusPlus2M`.
-  Second-order multistep, one denoiser evaluation per step.  Requires a noise
-  scheduler in the EDM parameterization (:math:`\sigma(t) = t`,
-  :math:`\alpha(t) = 1`).
+  Second-order multistep, one denoiser evaluation per step.  Configured from
+  the noise scheduler, so it applies to general linear-Gaussian schedules.
 
 **Custom solvers** can be defined by implementing the
 :class:`~physicsnemo.diffusion.samplers.solvers.Solver` protocol: any object

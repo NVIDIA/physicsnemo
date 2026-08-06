@@ -216,7 +216,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds `DPMSolverPlusPlus2M` (string key `"dpmpp_2m"`) to
   `physicsnemo.diffusion.samplers`, a second-order multistep DPM-Solver++ that
   reuses the previous step's data prediction and so needs only one denoiser
-  evaluation per step. Requires a noise scheduler in the EDM parameterization.
+  evaluation per step. Works with general linear-Gaussian noise schedulers.
 
 ### Changed
 
