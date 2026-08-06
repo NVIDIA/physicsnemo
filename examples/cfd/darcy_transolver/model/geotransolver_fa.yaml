@@ -16,9 +16,12 @@
 
 # GeoTransolver with GALE_FA (FLARE attention backend).
 # Combines FLARE-style global-query self-attention with GALE geometry/context
-# cross-attention.  use_te must be False for GALE_FA.
+# cross-attention.  use_te switches the model's dense/norm layers and the
+# GALE_FA attention (self + cross) to Transformer Engine (requires
+# transformer_engine); with use_te=False everything uses PyTorch ops and
+# scaled_dot_product_attention.
 
-_target_: physicsnemo.experimental.models.geotransolver.GeoTransolver
+_target_: physicsnemo.models.geotransolver.GeoTransolver
 _convert_: all
 
 functional_dim: 3

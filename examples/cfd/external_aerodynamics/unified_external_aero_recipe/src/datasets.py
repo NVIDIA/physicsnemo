@@ -230,6 +230,11 @@ def resolve_manifest_spec(ds_yaml: DictConfig, ds_cfg_block: DictConfig) -> dict
     prevents the silent fallback to directory mode, which - combined with
     a dataset YAML that has no ``val_datadir`` - would otherwise leave the
     val loader iterating the train data.
+
+    Warns (but still returns ``None``) when directory mode is selected for
+    a dataset that nonetheless has a sibling ``manifest.json``: that
+    combination silently sweeps the manifest's held-out val / test entries
+    into the training set.
     """
     train_manifest = ds_cfg_block.get("train_manifest", None)
     val_manifest = ds_cfg_block.get("val_manifest", None)
@@ -237,12 +242,16 @@ def resolve_manifest_spec(ds_yaml: DictConfig, ds_cfg_block: DictConfig) -> dict
     train_split = ds_cfg_block.get("train_split", None)
     val_split = ds_cfg_block.get("val_split", None)
 
+    train_datadir = OmegaConf.select(ds_yaml, "train_datadir", default=None)
+    sibling_manifest: Path | None = (
+        Path(str(train_datadir)) / "manifest.json" if train_datadir else None
+    )
+
     ### Auto-derive manifest path from `train_datadir/manifest.json` when
     ### the user gave a split key but no explicit manifest path.
-    train_datadir = OmegaConf.select(ds_yaml, "train_datadir", default=None)
     derived_path: Path | None = None
-    if manifest is None and train_split is not None and train_datadir:
-        derived_path = Path(str(train_datadir)) / "manifest.json"
+    if manifest is None and train_split is not None and sibling_manifest is not None:
+        derived_path = sibling_manifest
         if derived_path.exists():
             manifest = str(derived_path)
 
@@ -261,13 +270,9 @@ def resolve_manifest_spec(ds_yaml: DictConfig, ds_cfg_block: DictConfig) -> dict
         )
         if user_intended_manifest:
             looked_for = (
-                str(derived_path)
-                if derived_path is not None
-                else (
-                    f"{Path(str(train_datadir)) / 'manifest.json'}"
-                    if train_datadir
-                    else "<no train_datadir set in dataset YAML>"
-                )
+                str(sibling_manifest)
+                if sibling_manifest is not None
+                else "<no train_datadir set in dataset YAML>"
             )
             raise ValueError(
                 f"Manifest mode was requested but no usable manifest could be "
@@ -278,6 +283,23 @@ def resolve_manifest_spec(ds_yaml: DictConfig, ds_cfg_block: DictConfig) -> dict
                 f"Either set 'manifest:' (or 'train_manifest:' / "
                 f"'val_manifest:') explicitly in the data block, or place a "
                 f"manifest.json next to the dataset's train_datadir."
+            )
+        ### Genuine directory mode, but a manifest sits right next to the
+        ### data. Almost always a misconfiguration: left silent, every run
+        ### under train_datadir -- including the manifest's held-out val /
+        ### test entries -- is swept into training. This is easy to hit now
+        ### that mixing manifest- and directory-mode datasets requires
+        ### clearing the top-level split selectors, so warn loudly.
+        if sibling_manifest is not None and sibling_manifest.exists():
+            _LOGGER.warning(
+                "Directory mode selected for a dataset that has a manifest "
+                "at %s, so the manifest's splits are ignored: every run "
+                "under %s (including its held-out val/test entries) will be "
+                "used for training. Set 'train_split' / 'val_split', or set "
+                "'train_manifest' / 'val_manifest' on the dataset YAML, to "
+                "honor the manifest.",
+                str(sibling_manifest),
+                str(train_datadir),
             )
         return None
     return {
@@ -678,12 +700,12 @@ def _build_directory_samplers(
 
 def _build_manifest_samplers(
     train_indices: list[int],
-    val_indices: list[int] | None,
+    val_indices: list[int],
     *,
     dist_manager: DistributedManager,
     sampler_seed: int,
 ) -> tuple[ManifestSampler, ManifestSampler]:
-    """ManifestSamplers (with distributed sharding when world_size > 1)."""
+    """ManifestSamplers over global dataset indices, with optional sharding."""
     use_distributed = dist_manager.world_size > 1
     rank = dist_manager.rank if use_distributed else 0
     world_size = dist_manager.world_size if use_distributed else 1
@@ -696,21 +718,6 @@ def _build_manifest_samplers(
         world_size=world_size,
         drop_last=True,
     )
-    ### When no explicit val split is configured, fall back to the train
-    ### indices but build a separate non-shuffled, no-drop sampler so val
-    ### iteration is deterministic and covers every sample. This used to
-    ### happen silently; warn loudly so the duplication shows up in the
-    ### run log instead of producing a "val == train" loss curve that
-    ### looks correct.
-    if val_indices is None:
-        _LOGGER.warning(
-            "Manifest mode: no val_split / val_manifest configured; "
-            "validation will iterate the train split (%d samples). "
-            "Set 'val_split:' or 'val_manifest:' on the data block to "
-            "use a real holdout.",
-            len(train_indices),
-        )
-        val_indices = train_indices
     val_sampler = ManifestSampler(
         val_indices,
         shuffle=False,
@@ -750,13 +757,11 @@ def build_dataloaders(
     directory (mirroring directory mode); otherwise it shares the train
     dataset.
 
-    NOTE (limitation): manifest mode currently supports exactly one
-    chosen dataset. Combining a manifest dataset with any additional
-    dataset, whether manifest- or directory-based, would apply local
-    indices to a :class:`MultiDataset` without the required offsets (and
-    multiple manifest datasets also overwrite the single stored index
-    pair). Lifting this limitation requires accumulating offset-shifted
-    indices for every dataset.
+    Multiple datasets may use either split strategy. Each dataset's local
+    train and validation indices are shifted by its cumulative offset in
+    the corresponding :class:`MultiDataset` before the samplers are built.
+    Directory-mode datasets contribute their full local index ranges when
+    combined with manifest-mode datasets.
     """
     recipe_root = Path(__file__).resolve().parent.parent
     batch_size = cfg.training.get("batch_size", 1)
@@ -793,11 +798,12 @@ def build_dataloaders(
     extras: list[str] = list(cfg.get("extra_datasets", []) or [])
     dataset_names: list[str] = [primary_name, *extras]
 
-    train_datasets: list = []
-    val_datasets: list = []
-    manifest_train_indices: list[int] | None = None
-    manifest_val_indices: list[int] | None = None
-    manifest_val_dataset: MeshDataset | None = None
+    train_datasets: list[MeshDataset] = []
+    val_datasets: list[MeshDataset] = []
+    combined_train_indices: list[int] = []
+    combined_val_indices: list[int] = []
+    train_offset = 0
+    val_offset = 0
     using_manifests = False
     first_targets: dict[str, str] | None = None
     first_metrics: list[str] | None = None
@@ -872,24 +878,45 @@ def build_dataloaders(
             }
         )
         manifest_spec = resolve_manifest_spec(ds_yaml, ds_cfg_block)
+        dataset = build_dataset(
+            ds_yaml,
+            augment=augment,
+            device=device,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+        )
+        train_datasets.append(dataset)
+
         if manifest_spec is not None:
             using_manifests = True
-            dataset = build_dataset(
-                ds_yaml,
-                augment=augment,
-                device=device,
-                num_workers=num_workers,
-                pin_memory=pin_memory,
-            )
-            train_datasets.append(dataset)
-            manifest_train_indices, manifest_val_indices = (
+            local_train_indices, local_val_indices = (
                 _resolve_manifest_indices_from_spec(dataset.reader, manifest_spec)
             )
+            combined_train_indices.extend(
+                train_offset + index for index in local_train_indices
+            )
+            train_offset += len(dataset)
+
+            ### A missing validation split falls back per dataset, before
+            ### offsets are applied. This keeps that dataset's training
+            ### selection in validation without accidentally pulling in
+            ### another dataset's indices.
+            if local_val_indices is None:
+                _LOGGER.warning(
+                    "Manifest mode for dataset %r: no val_split / "
+                    "val_manifest configured; validation will iterate "
+                    "that dataset's train split (%d samples). Set "
+                    "'val_split:' or 'val_manifest:' to use a real holdout.",
+                    ds_name,
+                    len(local_train_indices),
+                )
+                local_val_indices = local_train_indices
+
             ### Augmentations are training-only: when enabled, give
             ### validation its own un-augmented dataset over the same
-            ### directory so eval is never augmented (matching directory
-            ### mode). Stays None when augment is off, so val shares the
-            ### train dataset.
+            ### directory so eval is never augmented. Otherwise this entry
+            ### shares its training dataset, preserving the same local index
+            ### space without constructing another reader.
             manifest_val_dataset = _build_manifest_val_dataset(
                 ds_yaml,
                 augment=augment,
@@ -897,38 +924,34 @@ def build_dataloaders(
                 num_workers=num_workers,
                 pin_memory=pin_memory,
             )
+            val_dataset = (
+                manifest_val_dataset if manifest_val_dataset is not None else dataset
+            )
+            val_datasets.append(val_dataset)
+            combined_val_indices.extend(
+                val_offset + index for index in local_val_indices
+            )
+            val_offset += len(val_dataset)
             continue
 
         ### Directory mode: separate readers / datasets per split.
-        train_datasets.append(
-            build_dataset(
-                ds_yaml,
-                augment=augment,
+        combined_train_indices.extend(range(train_offset, train_offset + len(dataset)))
+        train_offset += len(dataset)
+        val_datadir = OmegaConf.select(ds_yaml, "val_datadir", default=None)
+        if val_datadir and Path(val_datadir).exists():
+            val_yaml = OmegaConf.merge(ds_yaml, {"train_datadir": val_datadir})
+            val_dataset = build_dataset(
+                val_yaml,
+                augment=False,
                 device=device,
                 num_workers=num_workers,
                 pin_memory=pin_memory,
             )
-        )
-        val_datadir = OmegaConf.select(ds_yaml, "val_datadir", default=None)
-        if val_datadir and Path(val_datadir).exists():
-            val_yaml = OmegaConf.merge(ds_yaml, {"train_datadir": val_datadir})
-            val_datasets.append(
-                build_dataset(
-                    val_yaml,
-                    augment=False,
-                    device=device,
-                    num_workers=num_workers,
-                    pin_memory=pin_memory,
-                )
+            val_datasets.append(val_dataset)
+            combined_val_indices.extend(
+                range(val_offset, val_offset + len(val_dataset))
             )
-
-    if using_manifests and len(train_datasets) > 1:
-        raise NotImplementedError(
-            "multi-dataset manifest mode is not implemented: manifest "
-            "train/val indices are local to one dataset but would be applied "
-            "to the combined dataset. Use a single manifest dataset, or "
-            "directory mode for multi-dataset training."
-        )
+            val_offset += len(val_dataset)
 
     if not train_datasets:
         raise RuntimeError(
@@ -952,18 +975,13 @@ def build_dataloaders(
     train_dataset = _combine_datasets(train_datasets)
 
     if using_manifests:
-        ### Manifest mode: train and val share one underlying reader; the
-        ### samplers carve out the per-split index sets. When augmentations
-        ### are enabled, validation uses a dedicated un-augmented dataset
-        ### (built in the loop above) so eval is never augmented -- matching
-        ### directory mode; otherwise the chains are identical and val
-        ### shares the train dataset.
-        val_dataset = (
-            manifest_val_dataset if manifest_val_dataset is not None else train_dataset
-        )
+        ### At least one manifest selection requires explicit samplers for
+        ### the whole concatenation. The accumulated indices already include
+        ### full directory-mode ranges and independent train/val offsets.
+        val_dataset = _combine_datasets(val_datasets)
         train_sampler, val_sampler = _build_manifest_samplers(
-            manifest_train_indices,
-            manifest_val_indices,
+            combined_train_indices,
+            combined_val_indices,
             dist_manager=dist_manager,
             sampler_seed=sampler_seed,
         )

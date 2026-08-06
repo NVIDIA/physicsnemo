@@ -416,6 +416,9 @@ caches and recompute them lazily. They retain topology caches.
    :meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.validate` explicitly when a
    deformation could compromise validity.
 
+For optimization-time geometric penalties on a fixed topology, see
+:doc:`deformation`.
+
 .. autofunction:: displace
 
 .. autofunction:: free_form_deform

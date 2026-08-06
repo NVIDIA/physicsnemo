@@ -14,11 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""FLARE Transolver: Transolver with FLARE attention.
-
-This module provides FLARE, a Transolver variant that uses
-FLARE (Fast Low-rank Attention Routing Engine) attention.
-"""
+"""Legacy checkpoint shim for the FLARE model."""
 
 from .flare import FLARE
 

@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: physicsnemo.experimental.models.geotransolver.GeoTransolver
+_target_: physicsnemo.models.geotransolver.GeoTransolver
 functional_dim: 6
 global_dim: 2
 geometry_dim: 3

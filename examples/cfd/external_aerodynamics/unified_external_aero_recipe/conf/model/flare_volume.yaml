@@ -33,7 +33,7 @@ forward_kwargs:
     expand_like: embedding
 
 model:
-  _target_: physicsnemo.experimental.models.flare.FLARE
+  _target_: physicsnemo.models.flare.FLARE
   out_dim: ${out_dim}     # auto-set from the chosen dataset's `targets:` block
   functional_dim: 3       # fx = freestream velocity U_inf (3)
   embedding_dim: 7        # embedding = points (3) + SDF (1) + SDF normals (3)
