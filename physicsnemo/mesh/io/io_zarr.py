@@ -139,6 +139,10 @@ def to_zarr(
 
     root = zarr.open_group(str(store), mode="a")
     root.attrs[_TYPE_ATTR] = type(obj).__name__
+    # Consolidate metadata: opening the store then costs one metadata read
+    # instead of one per group -- on networked filesystems (Lustre) each
+    # uncached lookup is a metadata-server round-trip.
+    zarr.consolidate_metadata(root.store)
 
 
 def _open_group(store) -> "zarr.Group":

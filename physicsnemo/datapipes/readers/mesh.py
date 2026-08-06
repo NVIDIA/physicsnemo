@@ -305,13 +305,22 @@ class MeshReader:
                 # window from the store. The generator derivation matches
                 # __getitem__, so the draw is identical to subsampling after
                 # an eager load (whose subsample then no-ops).
+                # Cache opened store handles: re-opening walks the store's
+                # group-metadata chain, and on networked filesystems every
+                # uncached lookup is a metadata-server round-trip per draw.
+                cache = getattr(self, "_zarr_groups", None)
+                if cache is None:
+                    cache = self._zarr_groups = {}
+                group = cache.get(mesh_path)
+                if group is None:
+                    group = cache[mesh_path] = io_zarr._open_group(mesh_path)
                 generator = (
                     None
                     if self._seed_base is None
                     else spawn_generator(self._seed_base, self._epoch, index)
                 )
                 return _zarr_mesh_subsampled(
-                    io_zarr._open_group(mesh_path),
+                    group,
                     self.subsample_n_cells,
                     self.subsample_n_points,
                     generator,
@@ -528,7 +537,12 @@ class DomainMeshReader:
                     if self._seed_base is None
                     else spawn_generator(self._seed_base, self._epoch, index)
                 )
-                root = io_zarr._open_group(path)
+                cache = getattr(self, "_zarr_groups", None)
+                if cache is None:
+                    cache = self._zarr_groups = {}
+                root = cache.get(path)
+                if root is None:
+                    root = cache[path] = io_zarr._open_group(path)
                 interior = _zarr_mesh_subsampled(
                     root["interior"],
                     self.subsample_n_cells,
