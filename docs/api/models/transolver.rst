@@ -6,7 +6,7 @@ mechanism for solving partial differential equations on structured and unstructu
 meshes. It projects inputs onto physics-informed slices before applying attention,
 enabling efficient learning of physical systems.
 
-Activation checkpointing
+Activation Checkpointing
 ------------------------
 
 Transolver can checkpoint its transformer blocks during training to reduce the
