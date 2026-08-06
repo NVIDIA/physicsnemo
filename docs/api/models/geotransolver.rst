@@ -12,7 +12,7 @@ setting) or
 :class:`~physicsnemo.nn.module.flare_attention.FLARE` (with ``attention_type="GALE_FA"``)
 as the self-attention backend.
 
-Activation checkpointing
+Activation Checkpointing
 ------------------------
 
 GeoTransolver supports configurable activation checkpointing during training.
