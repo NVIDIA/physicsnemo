@@ -40,20 +40,15 @@ import torch.nn as nn
 from einops import rearrange
 from jaxtyping import Float
 
-from physicsnemo.core.version_check import check_version_spec
-from physicsnemo.nn import BQWarp
-from physicsnemo.nn import Mlp
+from physicsnemo.core.version_check import OptionalImport
+from physicsnemo.nn import BQWarp, ConcreteDropout, Mlp
 from physicsnemo.nn.module.physics_attention import (
     _compute_slices_from_projections,
     _project_input,
 )
 
-from physicsnemo.nn import ConcreteDropout
-
-# Check optional dependency availability
-TE_AVAILABLE = check_version_spec("transformer_engine", "0.1.0", hard_fail=False)
-if TE_AVAILABLE:
-    import transformer_engine.pytorch as te
+te = OptionalImport("transformer_engine.pytorch")
+TE_AVAILABLE = te.available
 
 
 def _structured_grid_to_conv_input(
@@ -101,15 +96,11 @@ def _structured_grid_to_conv_input(
     if ndim == 2:
         H, W = spatial_shape
         if tokens != H * W:
-            raise ValueError(
-                f"Expected N={H * W} tokens for 2D grid, got N={tokens}"
-            )
+            raise ValueError(f"Expected N={H * W} tokens for 2D grid, got N={tokens}")
         return x.view(batch, H, W, channels).permute(0, 3, 1, 2)
     H, W, D = spatial_shape
     if tokens != H * W * D:
-        raise ValueError(
-            f"Expected N={H * W * D} tokens for 3D grid, got N={tokens}"
-        )
+        raise ValueError(f"Expected N={H * W * D} tokens for 3D grid, got N={tokens}")
     return x.view(batch, H, W, D, channels).permute(0, 4, 1, 2, 3)
 
 
@@ -219,7 +210,7 @@ class ContextProjector(_SliceToContextMixin, nn.Module):
     slice_num : int, optional
         Number of learned physical state slices. Default is 64.
     use_te : bool, optional
-        Whether to use Transformer Engine backend when available. Default is ``True``.
+        Whether to use Transformer Engine backend when available. Default is ``False``.
     plus : bool, optional
         Whether to use Transolver++ features. Default is ``False``.
 
@@ -242,13 +233,13 @@ class ContextProjector(_SliceToContextMixin, nn.Module):
 
     See Also
     --------
-    :class:`~physicsnemo.experimental.models.geotransolver.gale.GALE` : Full GALE attention layer that uses these projected context features.
-    :class:`~physicsnemo.experimental.models.geotransolver.GeoTransolver` : Main model that uses ContextProjector for geometry and global embeddings.
+    :class:`~physicsnemo.nn.module.gale.GALE` : Full GALE attention layer that uses these projected context features.
+    :class:`~physicsnemo.models.geotransolver.GeoTransolver` : Main model that uses ContextProjector for geometry and global embeddings.
 
     Examples
     --------
     >>> import torch
-    >>> projector = ContextProjector(dim=64, heads=8, dim_head=32, slice_num=32)
+    >>> projector = ContextProjector(dim=64, heads=8, dim_head=32, slice_num=32, use_te=False)
     >>> x = torch.randn(2, 100, 64)  # (batch, tokens, features)
     >>> slice_tokens = projector(x)
     >>> slice_tokens.shape
@@ -262,7 +253,7 @@ class ContextProjector(_SliceToContextMixin, nn.Module):
         dim_head: int = 64,
         dropout: float = 0.0,
         slice_num: int = 64,
-        use_te: bool = True,
+        use_te: bool = False,
         plus: bool = False,
         concrete_dropout: bool = False,
     ) -> None:
@@ -323,8 +314,12 @@ class ContextProjector(_SliceToContextMixin, nn.Module):
         """
         fx = None if self.plus else self.in_project_fx
         return _project_input(
-            x, self.in_project_x, self.heads, self.dim_head,
-            "B N (H D) -> B N H D", project_fx=fx,
+            x,
+            self.in_project_x,
+            self.heads,
+            self.dim_head,
+            "B N (H D) -> B N H D",
+            project_fx=fx,
         )
 
     def forward(
@@ -374,9 +369,7 @@ class ContextProjector(_SliceToContextMixin, nn.Module):
         slice_projections = self.in_project_slice(projected_x)
 
         # Compute weighted aggregation of features into slice tokens
-        _, slice_tokens = self._compute_slices(
-            slice_projections, feature_projection
-        )
+        _, slice_tokens = self._compute_slices(slice_projections, feature_projection)
 
         # Apply concrete dropout to output slice tokens
         if self.output_dropout is not None:
@@ -402,7 +395,7 @@ class StructuredContextProjector(_SliceToContextMixin, nn.Module):
         dropout: float = 0.0,
         slice_num: int = 64,
         kernel: int = 3,
-        use_te: bool = True,
+        use_te: bool = False,
         plus: bool = False,
         concrete_dropout: bool = False,
     ) -> None:
@@ -455,9 +448,7 @@ class StructuredContextProjector(_SliceToContextMixin, nn.Module):
         ]
     ):
         B, N, C = x.shape
-        grid = _structured_grid_to_conv_input(
-            x, B, N, C, self._nd, self.spatial_shape
-        )
+        grid = _structured_grid_to_conv_input(x, B, N, C, self._nd, self.spatial_shape)
         pattern = (
             "B (H D) h w -> B (h w) H D"
             if self._nd == 2
@@ -465,8 +456,12 @@ class StructuredContextProjector(_SliceToContextMixin, nn.Module):
         )
         fx = None if self.plus else self.in_project_fx
         return _project_input(
-            grid, self.in_project_x, self.heads, self.dim_head,
-            pattern, project_fx=fx,
+            grid,
+            self.in_project_x,
+            self.heads,
+            self.dim_head,
+            pattern,
+            project_fx=fx,
         )
 
     def forward(
@@ -483,9 +478,7 @@ class StructuredContextProjector(_SliceToContextMixin, nn.Module):
         else:
             projected_x, feature_projection = self._grid_project(x)
         slice_projections = self.in_project_slice(projected_x)
-        _, slice_tokens = self._compute_slices(
-            slice_projections, feature_projection
-        )
+        _, slice_tokens = self._compute_slices(slice_projections, feature_projection)
 
         # Apply concrete dropout to output slice tokens
         if self.output_dropout is not None:
@@ -635,7 +628,7 @@ class MultiScaleFeatureExtractor(nn.Module):
     slice_num : int, optional
         Number of slices for context tokenization. Default is 64.
     use_te : bool, optional
-        Whether to use Transformer Engine. Default is ``True``.
+        Whether to use Transformer Engine. Default is ``False``.
     plus : bool, optional
         Whether to use Transolver++ features. Default is ``False``.
 
@@ -662,6 +655,7 @@ class MultiScaleFeatureExtractor(nn.Module):
     ...     hidden_dim=32,
     ...     n_head=8,
     ...     dim_head=32,
+    ...     use_te=False,
     ... )
     >>> spatial_coords = torch.randn(2, 100, 3)
     >>> geometry = torch.randn(2, 100, 3)
@@ -683,7 +677,7 @@ class MultiScaleFeatureExtractor(nn.Module):
         dim_head: int,
         dropout: float = 0.0,
         slice_num: int = 64,
-        use_te: bool = True,
+        use_te: bool = False,
         plus: bool = False,
         concrete_dropout: bool = False,
     ) -> None:
@@ -800,7 +794,7 @@ class GlobalContextBuilder(nn.Module):
     slice_num : int, optional
         Number of slices for tokenization. Default is 32.
     use_te : bool, optional
-        Whether to use Transformer Engine. Default is ``True``.
+        Whether to use Transformer Engine. Default is ``False``.
     plus : bool, optional
         Whether to use Transolver++ features. Default is ``False``.
     include_local_features : bool, optional
@@ -820,7 +814,7 @@ class GlobalContextBuilder(nn.Module):
     --------
     :class:`ContextProjector` : Used for tokenizing geometry and global embeddings.
     :class:`MultiScaleFeatureExtractor` : Used for multi-scale local features.
-    :class:`~physicsnemo.experimental.models.geotransolver.GeoTransolver` : Main model that uses this builder.
+    :class:`~physicsnemo.models.geotransolver.GeoTransolver` : Main model that uses this builder.
 
     Examples
     --------
@@ -831,6 +825,7 @@ class GlobalContextBuilder(nn.Module):
     ...     global_dim=16,
     ...     n_hidden=256,
     ...     n_head=8,
+    ...     use_te=False,
     ... )
     >>> local_embeddings = (torch.randn(2, 100, 64),)
     >>> geometry = torch.randn(2, 100, 3)
@@ -854,7 +849,7 @@ class GlobalContextBuilder(nn.Module):
         n_head: int = 8,
         dropout: float = 0.0,
         slice_num: int = 32,
-        use_te: bool = True,
+        use_te: bool = False,
         plus: bool = False,
         include_local_features: bool = False,
         structured_shape: tuple[int, ...] | None = None,
@@ -919,7 +914,13 @@ class GlobalContextBuilder(nn.Module):
                 )
             else:
                 self.geometry_tokenizer = ContextProjector(
-                    geometry_dim, n_head, dim_head, dropout, slice_num, use_te, plus=plus, 
+                    geometry_dim,
+                    n_head,
+                    dim_head,
+                    dropout,
+                    slice_num,
+                    use_te,
+                    plus=plus,
                     concrete_dropout=concrete_dropout,
                 )
             context_dim += dim_head

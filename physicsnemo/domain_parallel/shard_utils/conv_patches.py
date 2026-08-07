@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 import torch
-import torch.distributed as dist
+import torch.distributed._functional_collectives as funcol
 from torch.distributed.tensor import DTensor
 from torch.distributed.tensor.placement_types import (
     Shard,
@@ -408,16 +408,13 @@ class ConvGradReducer(torch.autograd.Function):
 
     @staticmethod
     def forward(
-        ctx: torch.autograd.function.FunctionCtx,
         weight_or_bias: torch.Tensor,
         spec: ShardTensorSpec,
     ) -> torch.Tensor:
-        r"""Forward pass that saves the spec for backward.
+        r"""Forward pass: return the weight/bias tensor unchanged.
 
         Parameters
         ----------
-        ctx : torch.autograd.function.FunctionCtx
-            Autograd context for saving variables for backward.
         weight_or_bias : torch.Tensor
             The weight or bias tensor to pass through.
         spec : ShardTensorSpec
@@ -428,15 +425,20 @@ class ConvGradReducer(torch.autograd.Function):
         torch.Tensor
             The input tensor unchanged.
         """
-        ctx.spec = spec
         return weight_or_bias
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        r"""Save the input ShardTensorSpec for the backward all-reduce."""
+        _weight_or_bias, spec = inputs
+        ctx.spec = spec
 
     @staticmethod
     def backward(
         ctx: torch.autograd.function.FunctionCtx,
         grad_weight_or_bias: torch.Tensor,
     ) -> tuple[torch.Tensor, None]:
-        r"""Backward pass that performs allreduce on gradients.
+        r"""Backward pass: all-reduce gradients over each sharded mesh dim.
 
         Parameters
         ----------
@@ -452,8 +454,17 @@ class ConvGradReducer(torch.autograd.Function):
         """
         for mesh_dim in range(ctx.spec.mesh.ndim):
             if ctx.spec.placements[mesh_dim].is_shard():
-                group = ctx.spec.mesh.get_group(mesh_dim)
-                dist.all_reduce(grad_weight_or_bias, group=group)
+                # funcol.all_reduce returns a new tensor (AsyncCollectiveTensor)
+                # that auto-waits when used; assigning back into the loop var
+                # serializes the iterations correctly.
+                grad_weight_or_bias = funcol.all_reduce(
+                    grad_weight_or_bias, "sum", (ctx.spec.mesh, mesh_dim)
+                )
+
+        # Do not let the final asynchronous result escape into parameter hooks
+        # or ``param.grad``, where storage may be accessed without dispatch.
+        if isinstance(grad_weight_or_bias, funcol.AsyncCollectiveTensor):
+            grad_weight_or_bias = grad_weight_or_bias.wait()
 
         return grad_weight_or_bias, None
 

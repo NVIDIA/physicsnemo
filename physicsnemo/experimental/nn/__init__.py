@@ -21,8 +21,7 @@ that are under active development. These components may have breaking API
 changes between releases.
 """
 
-from .flare_attention import FLARE
-from .diffusion_unet_3d_blocks import UNetBlock3D, Conv3D, GroupNorm3D, UNetAttention3D
+from .diffusion_unet_3d_blocks import Conv3D, GroupNorm3D, UNetAttention3D, UNetBlock3D
 from .rope import (
     build_axial_rope_cos_sin_2d_continuous,
     build_rope_cos_sin_1d_continuous,
@@ -42,7 +41,6 @@ from .point_utils import (
 )
 
 __all__ = [
-    "FLARE",
     "UNetBlock3D",
     "Conv3D",
     "GroupNorm3D",

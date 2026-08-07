@@ -130,10 +130,9 @@ class Trainer:
         # Initialize components
         self._setup_data()
 
-        # All ranks use the same seed so parameter initialization is identical.
-        # FSDP2 (fully_shard) does not broadcast initial weights from rank 0,
-        # so this deterministic seeding is what keeps the unsharded parameter
-        # values consistent across ranks.
+        # Identical seeding keeps initialization consistent across the ddp
+        # axis; the domain axis is
+        # additionally synced explicitly in distribute_model.
         torch.manual_seed(self.cfg.training.seed)
 
         # Create model and move to device

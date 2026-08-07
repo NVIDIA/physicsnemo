@@ -36,6 +36,7 @@ The module provides:
 
 from __future__ import annotations
 
+import dataclasses
 from typing import (
     Any,
     Callable,
@@ -47,6 +48,7 @@ import torch
 from torch.distributed.tensor._dtensor_spec import TensorMeta
 from torch.distributed.tensor.placement_types import (
     Partial,
+    Replicate,
     Shard,
 )
 
@@ -180,14 +182,14 @@ def compute_result_placements(
 
 
 def reduction_shape(
-    S: torch.Size, dim: DimT = None, keepdim: bool = False
-) -> torch.Size:
+    S: tuple[int, ...], dim: DimT = None, keepdim: bool = False
+) -> tuple[int, ...]:
     r"""Calculate the resulting shape after a reduction operation.
 
     Parameters
     ----------
-    S : torch.Size
-        Original shape of the tensor.
+    S : tuple[int, ...]
+        Original shape of the tensor (may be a ``torch.Size`` or plain tuple).
     dim : DimT, optional
         The dimension(s) to reduce. Can be ``None``, ``int``, or iterable of ints.
     keepdim : bool, default=False
@@ -195,12 +197,15 @@ def reduction_shape(
 
     Returns
     -------
-    torch.Size
-        The shape after reduction.
+    tuple[int, ...]
+        The shape after reduction, returned as a plain int tuple (not
+        ``torch.Size``) so the result can be safely embedded in a
+        ``ShardTensorSpec._sharding_shapes`` dict without triggering dynamo's
+        symbolic-shape special-casing for ``torch.Size``.
     """
     shape = list(S)
     if dim is None:
-        return torch.Size([1] * len(shape)) if keepdim else torch.Size([])
+        return tuple([1] * len(shape)) if keepdim else tuple()
 
     # Use enhanced normalize_dim to handle iterable and negative dims
     dim = normalize_dim(dim, len(shape), handle_negatives=True)
@@ -211,12 +216,12 @@ def reduction_shape(
     else:
         for d in sorted(dim, reverse=True):
             del shape[d]
-    return torch.Size(shape)
+    return tuple(shape)
 
 
 def compute_result_sharding_shapes(
     tensor: ShardTensor, dim: DimT, keepdim: bool
-) -> dict[int, list[torch.Size]]:
+) -> dict[int, list[tuple[int, ...]]]:
     r"""Compute sharding sizes for the result of a reduction operation.
 
     Parameters
@@ -230,8 +235,8 @@ def compute_result_sharding_shapes(
 
     Returns
     -------
-    Dict[int, List[torch.Size]]
-        Mapping of mesh dimensions to sharding shapes.
+    Dict[int, List[Tuple[int, ...]]]
+        Mapping of mesh dimensions to plain int tuple sharding shapes.
     """
     if is_full_reduction(dim, tensor.ndim):
         return {}
@@ -257,7 +262,7 @@ def build_reduction_result(
     local_result: torch.Tensor,
     input_tensor: ShardTensor,
     placements: list[Partial | Shard],
-    sharding_shapes: dict[int, list[torch.Size]],
+    sharding_shapes: dict[int, list[tuple[int, ...]]],
 ) -> ShardTensor:
     r"""Construct a ShardTensor result from a local reduction output.
 
@@ -273,7 +278,7 @@ def build_reduction_result(
         The original input ShardTensor (used for device mesh).
     placements : List[Union[Partial, Shard]]
         Result placements from :func:`compute_result_placements`.
-    sharding_shapes : Dict[int, List[torch.Size]]
+    sharding_shapes : Dict[int, List[Tuple[int, ...]]]
         Result sharding shapes from :func:`compute_result_sharding_shapes`.
 
     Returns
@@ -299,7 +304,12 @@ def build_reduction_result(
             dtype=local_result.dtype,
         ),
         _local_shape=local_result.shape,
-        _sharding_shapes={dim: tuple(s) for dim, s in sharding_shapes.items()},
+        # Normalize to plain int tuples (never torch.Size) for the
+        # _sharding_shapes field; see ShardTensorSpec docstring.
+        _sharding_shapes={
+            dim: tuple(tuple(inner) for inner in s)
+            for dim, s in sharding_shapes.items()
+        },
     )
     return ShardTensor.__new__(
         ShardTensor,
@@ -324,8 +334,23 @@ def create_sharded_grad_input(
     Returns
     -------
     ShardTensor
-        A distributed tensor with the same sharding as the original input.
+        A distributed tensor matching the original sharding, with any input
+        ``Partial`` placements normalized to ``Replicate``.
     """
+    # A reduction's cotangent is fully materialized on every rank before it is
+    # expanded to the input's local shape. If the primal input was Partial,
+    # reusing that label would falsely claim this complete gradient still
+    # needed reduction.
+    grad_placements = tuple(
+        Replicate() if placement.is_partial() else placement
+        for placement in original_spec.placements
+    )
+    grad_spec = (
+        original_spec
+        if grad_placements == original_spec.placements
+        else dataclasses.replace(original_spec, placements=grad_placements)
+    )
+
     # In custom autograd backward, return the input gradient directly as a
     # ShardTensor value. Avoid ``from_local`` here (which routes through a
     # separate autograd Function) so the gradient is attached unambiguously to
@@ -333,8 +358,33 @@ def create_sharded_grad_input(
     return ShardTensor.__new__(
         ShardTensor,
         local_tensor=local_grad_input,
-        spec=original_spec,
+        spec=grad_spec,
         requires_grad=False,
+    )
+
+
+def resolve_partial_cotangent(grad_output: ShardTensor) -> ShardTensor:
+    r"""Resolve pending reductions before consuming a reduction cotangent.
+
+    Parameters
+    ----------
+    grad_output : ShardTensor
+        Incoming cotangent for a sharded reduction.
+
+    Returns
+    -------
+    ShardTensor
+        The cotangent with every ``Partial`` placement reduced to ``Replicate``.
+    """
+    if not any(placement.is_partial() for placement in grad_output.placements):
+        return grad_output
+    placements = tuple(
+        Replicate() if placement.is_partial() else placement
+        for placement in grad_output.placements
+    )
+    return grad_output.redistribute(
+        device_mesh=grad_output.device_mesh,
+        placements=placements,
     )
 
 
@@ -398,7 +448,6 @@ class ShardedSum(ShardedReductionBase):
 
     @staticmethod
     def forward(
-        ctx: Any,
         tensor: ShardTensor,
         dim: DimT = None,
         keepdim: bool = False,
@@ -408,8 +457,6 @@ class ShardedSum(ShardedReductionBase):
 
         Parameters
         ----------
-        ctx : torch.autograd.function.FunctionCtx
-            The autograd context object.
         tensor : ShardTensor
             The input ShardTensor to be reduced.
         dim : DimT, optional
@@ -423,17 +470,48 @@ class ShardedSum(ShardedReductionBase):
         -------
         ShardTensor
             The result of sum reduction.
+
+        Notes
+        -----
+        The body runs under ``torch._C.DisableTorchFunctionSubclass``.
+        Reason: new-style autograd.Function (per-PyTorch design) executes
+        ``forward`` with grad-mode ON, and any property access on the
+        ShardTensor input (e.g. ``tensor.ndim`` -- a C-level getset
+        descriptor) re-enters ``__torch_function__`` -> the DTensor
+        fallback -> ``_ShardTensorToDTensor.apply``. The resulting
+        ``BackwardCFunction`` has a ``next_functions`` accessor that
+        raises a "legacy access pattern" error on newer PyTorch,
+        blocking AOTAutograd from walking the autograd graph. Shielding
+        these metadata-only accesses fully avoids that bridge for the
+        sum path.
         """
-        dim, keepdim = ShardedReductionBase.setup_ctx(ctx, tensor, dim, keepdim)
+        with torch._C.DisableTorchFunctionSubclass():
+            dim_n = normalize_dim(dim, tensor.ndim)
+            keepdim_n = bool(keepdim)
 
-        local_result = aten.sum(
-            tensor._local_tensor, dim=dim, keepdim=keepdim, dtype=dtype
-        )
+            local_result = aten.sum(
+                tensor._local_tensor, dim=dim_n, keepdim=keepdim_n, dtype=dtype
+            )
 
-        placements = compute_result_placements(tensor, dim, "sum")
-        sharding_shapes = compute_result_sharding_shapes(tensor, dim, keepdim)
+            placements = compute_result_placements(tensor, dim_n, "sum")
+            sharding_shapes = compute_result_sharding_shapes(tensor, dim_n, keepdim_n)
 
-        return build_reduction_result(local_result, tensor, placements, sharding_shapes)
+            return build_reduction_result(
+                local_result, tensor, placements, sharding_shapes
+            )
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        r"""Save the input ShardTensorSpec + normalized dim/keepdim for backward.
+
+        Same ``DisableTorchFunctionSubclass`` shielding as ``forward`` so the
+        property accesses inside ``ShardedReductionBase.setup_ctx`` (e.g.
+        ``tensor.ndim``, ``tensor.requires_grad``) don't bridge through the
+        AOT-hostile autograd Function fallback.
+        """
+        tensor, dim, keepdim, _dtype = inputs
+        with torch._C.DisableTorchFunctionSubclass():
+            ShardedReductionBase.setup_ctx(ctx, tensor, dim, keepdim)
 
     @staticmethod
     def backward(
@@ -460,7 +538,9 @@ class ShardedSum(ShardedReductionBase):
         keepdim = ctx.keepdim
         local_grad_shape = ctx.local_grad_shape
 
-        # Get local grad output
+        # A genuine Partial cotangent contains only this rank's contribution.
+        # Resolve it before broadcasting across the original local input.
+        grad_output = resolve_partial_cotangent(grad_output)
         local_grad_output = grad_output._local_tensor
 
         if is_full_reduction:
@@ -501,7 +581,6 @@ class ShardedMean(ShardedReductionBase):
 
     @staticmethod
     def forward(
-        ctx: Any,
         tensor: ShardTensor,
         dim: DimT = None,
         keepdim: bool = False,
@@ -511,8 +590,6 @@ class ShardedMean(ShardedReductionBase):
 
         Parameters
         ----------
-        ctx : torch.autograd.function.FunctionCtx
-            The autograd context object.
         tensor : ShardTensor
             The input ShardTensor to be reduced.
         dim : DimT, optional
@@ -526,38 +603,71 @@ class ShardedMean(ShardedReductionBase):
         -------
         ShardTensor
             The result of mean reduction.
+
+        Notes
+        -----
+        The body runs under ``torch._C.DisableTorchFunctionSubclass``.
+        Reason: new-style autograd.Function (per-PyTorch design) executes
+        ``forward`` with grad-mode ON, and any property access on the
+        ShardTensor input (e.g. ``tensor.ndim`` -- a C-level getset
+        descriptor) re-enters ``__torch_function__`` -> the DTensor
+        fallback -> ``_ShardTensorToDTensor.apply``. The resulting
+        ``BackwardCFunction`` has a ``next_functions`` accessor that
+        raises a "legacy access pattern" error on newer PyTorch,
+        blocking AOTAutograd from walking the autograd graph. Shielding
+        these metadata-only accesses fully avoids that bridge for the
+        mean path.
         """
-        dim, keepdim = ShardedReductionBase.setup_ctx(ctx, tensor, dim, keepdim)
+        with torch._C.DisableTorchFunctionSubclass():
+            dim_n = normalize_dim(dim, tensor.ndim)
+            keepdim_n = bool(keepdim)
 
-        # Get local tensor
-        local_tensor = tensor._local_tensor
+            # Get local tensor
+            local_tensor = tensor._local_tensor
 
-        # Compute proper weighting for mean
-        weight = 1.0
+            # Compute proper weighting for mean
+            weight = 1.0
 
-        # Normalize dimensions for consistent handling
-        if is_full_reduction(dim, tensor.ndim):
-            # For full reduction, use all dimensions
-            reduction_dims = set(range(tensor.ndim))
-        else:
-            # Only use the normalized dimensions for partial reduction
-            reduction_dims = dim
+            # Normalize dimensions for consistent handling
+            if is_full_reduction(dim_n, tensor.ndim):
+                # For full reduction, use all dimensions
+                reduction_dims = set(range(tensor.ndim))
+            else:
+                # Only use the normalized dimensions for partial reduction
+                reduction_dims = dim_n
 
-        # Calculate weight based on local vs global shape ratio for reduction dimensions
-        local_shape = local_tensor.shape
-        global_shape = tensor.shape
+            # Calculate weight based on local vs global shape ratio for reduction dimensions
+            local_shape = local_tensor.shape
+            global_shape = tensor.shape
 
-        for d in reduction_dims:
-            weight *= local_shape[d] / global_shape[d]
+            for d in reduction_dims:
+                weight *= local_shape[d] / global_shape[d]
 
-        # Perform local mean and apply weighting for uneven shards
-        local_result = aten.mean(local_tensor, dim=dim, keepdim=keepdim, dtype=dtype)
-        local_result = local_result * weight
+            # Perform local mean and apply weighting for uneven shards
+            local_result = aten.mean(
+                local_tensor, dim=dim_n, keepdim=keepdim_n, dtype=dtype
+            )
+            local_result = local_result * weight
 
-        placements = compute_result_placements(tensor, dim, "sum")
-        sharding_shapes = compute_result_sharding_shapes(tensor, dim, keepdim)
+            placements = compute_result_placements(tensor, dim_n, "sum")
+            sharding_shapes = compute_result_sharding_shapes(tensor, dim_n, keepdim_n)
 
-        return build_reduction_result(local_result, tensor, placements, sharding_shapes)
+            return build_reduction_result(
+                local_result, tensor, placements, sharding_shapes
+            )
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        r"""Save the input ShardTensorSpec + normalized dim/keepdim for backward.
+
+        Same ``DisableTorchFunctionSubclass`` shielding as ``forward`` so the
+        property accesses inside ``ShardedReductionBase.setup_ctx`` (e.g.
+        ``tensor.ndim``, ``tensor.requires_grad``) don't bridge through the
+        AOT-hostile autograd Function fallback.
+        """
+        tensor, dim, keepdim, _dtype = inputs
+        with torch._C.DisableTorchFunctionSubclass():
+            ShardedReductionBase.setup_ctx(ctx, tensor, dim, keepdim)
 
     @staticmethod
     def backward(
@@ -585,7 +695,9 @@ class ShardedMean(ShardedReductionBase):
         local_grad_shape = ctx.local_grad_shape
         global_shape = original_spec.tensor_meta.shape
 
-        # Get local grad output
+        # A genuine Partial cotangent contains only this rank's contribution.
+        # Resolve it before broadcasting across the original local input.
+        grad_output = resolve_partial_cotangent(grad_output)
         local_grad_output = grad_output._local_tensor
 
         if is_full_reduction:

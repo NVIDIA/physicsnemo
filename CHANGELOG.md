@@ -16,6 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DomainMeshReader` transparently read zarr stores alongside
   `.pmsh`/`.pdmsh` (opt in via `pattern`). Requires optional `zarr >= 3`
   and a tensordict release with the zarr backend.
+- Promotes GeoTransolver out of `experimental` to
+  `physicsnemo.models.geotransolver.GeoTransolver`, together with the FLARE
+  model (`physicsnemo.models.flare.FLARE`) and the reusable GALE and FLARE
+  attention layers (`physicsnemo.nn.GALE`, `physicsnemo.nn.GALEBlock`,
+  `physicsnemo.nn.FLARE`). The embedded OOD guard is decoupled from the model.
+  Wrap a GuardedGeoTransolver (or call
+  `attach_ood_guard`) to enable out-of-distribution guarding. The
+  model argument is removed.
 - Adds `zenith_azimuth_angles` and `zenith_azimuth_angles_from_timestamp` to
   `physicsnemo.utils.zenith_angle`, returning
   `(sin_zenith, cos_zenith, sin_azimuth, cos_azimuth)` alongside the existing
@@ -58,6 +66,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds differentiable mesh morphing: Torch-backed dense ``displace_points`` /
   ``Mesh.displace`` and Torch/NVIDIA Warp compact sparse-control
   ``morph_points`` / ``Mesh.morph`` / ``DomainMesh.morph``.
+- Adds differentiable Sobolev mesh deformation through
+  `sobolev_deform_points` and `Mesh.sobolev_deform`. A matrix-free,
+  uniform-mass P1 Helmholtz solve smooths dense per-vertex displacements and
+  their adjoints, with optional fixed-point constraints. Torch and CUDA Warp
+  backends provide explicit implicit-adjoint differentiation.
 - Adds thin-plate-spline radial-basis deformation through
   `radial_basis_function_deform_points`,
   `Mesh.radial_basis_function_deform`, and

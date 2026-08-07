@@ -37,7 +37,8 @@ Test cases include:
 import pytest
 import torch
 import torch.distributed as dist
-from torch.distributed.tensor.placement_types import Replicate, Shard
+from torch.distributed.tensor import DTensor
+from torch.distributed.tensor.placement_types import Partial, Replicate, Shard
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.domain_parallel import ShardTensor
@@ -107,6 +108,86 @@ def shard_tensor_factory(mesh, requires_grad=False, uneven=True):
     )
 
     return st
+
+
+def rank_distinct_partial_factory(mesh, requires_grad=False):
+    coordinate = mesh.get_coordinate()
+    linear_rank = 0
+    mesh_size = 1
+    for mesh_dim, mesh_rank in enumerate(coordinate):
+        linear_rank = linear_rank * mesh.size(mesh_dim) + mesh_rank
+        mesh_size *= mesh.size(mesh_dim)
+
+    dm = DistributedManager()
+    local = torch.full(
+        (8, 8),
+        float(linear_rank + 1),
+        device=dm.device,
+        requires_grad=requires_grad,
+    )
+    dtensor = DTensor.from_local(
+        local,
+        mesh,
+        [Partial()] * mesh.ndim,
+        run_check=False,
+    )
+    partial = ShardTensor.from_dtensor(dtensor)
+    expected = torch.full(
+        local.shape,
+        float(mesh_size * (mesh_size + 1) // 2),
+        device=dm.device,
+    )
+    return partial, expected
+
+
+def run_partial_redistribution_semantics(mesh):
+    partial, expected = rank_distinct_partial_factory(mesh)
+
+    replicated = partial.redistribute(
+        placements=[Replicate()] * mesh.ndim,
+    )
+    assert replicated.placements == tuple(Replicate() for _ in range(mesh.ndim))
+    torch.testing.assert_close(replicated._local_tensor, expected)
+
+    shard_placements = [Shard(0)] + [Replicate()] * (mesh.ndim - 1)
+    sharded = partial.redistribute(placements=shard_placements)
+    assert sharded.placements == tuple(shard_placements)
+    torch.testing.assert_close(sharded.full_tensor(), expected)
+
+
+@pytest.mark.multigpu_static
+def test_partial_redistribution_semantics_1d(distributed_mesh):
+    run_partial_redistribution_semantics(distributed_mesh)
+
+
+@pytest.mark.multigpu_static
+def test_partial_redistribution_semantics_2d(distributed_mesh_2d):
+    run_partial_redistribution_semantics(distributed_mesh_2d)
+
+
+def run_partial_redistribution_backward_emits_replicate(mesh):
+    partial, _ = rank_distinct_partial_factory(mesh)
+    partial = partial.detach().requires_grad_(True)
+    replicated = partial.redistribute(placements=[Replicate()] * mesh.ndim)
+
+    replicated.to_local().sum().backward()
+
+    assert partial.grad is not None
+    assert partial.grad.placements == tuple(Replicate() for _ in range(mesh.ndim))
+    torch.testing.assert_close(
+        partial.grad._local_tensor,
+        torch.ones_like(partial.grad._local_tensor),
+    )
+
+
+@pytest.mark.multigpu_static
+def test_partial_redistribution_backward_emits_replicate_1d(distributed_mesh):
+    run_partial_redistribution_backward_emits_replicate(distributed_mesh)
+
+
+@pytest.mark.multigpu_static
+def test_partial_redistribution_backward_emits_replicate_2d(distributed_mesh_2d):
+    run_partial_redistribution_backward_emits_replicate(distributed_mesh_2d)
 
 
 @pytest.mark.multigpu_static
@@ -200,6 +281,49 @@ def test_shard_tensor_redistribute2d_even_uneven(
     run_shard_tensor_redistribute(
         distributed_mesh_2d, redistribution_case, uneven=uneven, verbose=verbose
     )
+
+
+@pytest.mark.multigpu_static
+def test_redistribute_preserved_uneven_shard_metadata_2d(distributed_mesh_2d):
+    """Preserved uneven shards must remain valid in every 2D cross-section."""
+    mesh = distributed_mesh_2d
+    initial = shard_tensor_factory(mesh, uneven=True)
+    source = initial.redistribute(placements=[Shard(1), Replicate()])
+
+    source_shapes = source._spec.sharding_shapes()
+    preserved_dim1_sizes = [shape[1] for shape in source_shapes[0]]
+
+    redistributed = source.redistribute(placements=[Shard(1), Shard(2)])
+    redistributed_shapes = redistributed._spec.sharding_shapes()
+    local_shape = tuple(redistributed._local_tensor.shape)
+    mesh_coordinate = mesh.get_coordinate()
+
+    # Each list is a cross-section through this rank's coordinates on the
+    # other mesh dimensions, so its local entry must match the local tensor.
+    for mesh_dim, mesh_rank in enumerate(mesh_coordinate):
+        assert tuple(redistributed_shapes[mesh_dim][mesh_rank]) == local_shape
+
+    # The varying mesh-dim-0 entries and the fixed dim-1 cross terms on
+    # mesh dim 1 must both retain the source's uneven shard sizes.
+    assert [shape[1] for shape in redistributed_shapes[0]] == preserved_dim1_sizes
+    assert all(
+        shape[1] == preserved_dim1_sizes[mesh_coordinate[0]]
+        for shape in redistributed_shapes[1]
+    )
+
+
+@pytest.mark.multigpu_static
+def test_chained_redistribute_uses_current_multidim_metadata(distributed_mesh_2d):
+    """A chained eager transpose must accept metadata returned by redistribute."""
+    mesh = distributed_mesh_2d
+    initial = shard_tensor_factory(mesh, uneven=True)
+    source = initial.redistribute(placements=[Shard(1), Replicate()])
+    expected = source.full_tensor()
+
+    redistributed = source.redistribute(placements=[Shard(1), Shard(2)])
+    chained = redistributed.redistribute(placements=[Shard(3), Shard(2)])
+
+    assert torch.allclose(chained.full_tensor(), expected)
 
 
 @pytest.mark.multigpu_static

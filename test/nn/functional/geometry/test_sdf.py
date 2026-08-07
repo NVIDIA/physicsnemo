@@ -154,3 +154,16 @@ def test_signed_distance_field_error_handling(device: str):
     bad_connectivity_rank = torch.zeros(1, 2, 3, device=device, dtype=torch.int32)
     with pytest.raises(ValueError, match="1D flattened indices or 2D"):
         signed_distance_field(mesh_vertices, bad_connectivity_rank, query_points)
+
+    with pytest.raises(ValueError, match="index existing vertices"):
+        signed_distance_field(
+            mesh_vertices,
+            torch.tensor([0, 1, 12], device=device, dtype=torch.int32),
+            query_points,
+        )
+    with pytest.raises(ValueError, match="index existing vertices"):
+        signed_distance_field(
+            mesh_vertices,
+            torch.tensor([-1, 1, 2], device=device, dtype=torch.int32),
+            query_points,
+        )
