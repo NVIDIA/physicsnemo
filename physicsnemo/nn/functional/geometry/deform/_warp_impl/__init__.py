@@ -32,6 +32,11 @@ from .op import (
     morph_points_warp,
 )
 from .rbf_op import rbf_field_warp
+from .sobolev_op import (
+    sobolev_deform_points_warp,
+    sobolev_displacement_warp_backward_impl,
+    sobolev_displacement_warp_impl,
+)
 
 __all__ = [
     "closed_surface_volume_contributions_warp",
@@ -44,4 +49,7 @@ __all__ = [
     "simplex_inversion_terms_warp",
     "simplex_measure_components_warp",
     "simplex_stvk_terms_warp",
+    "sobolev_deform_points_warp",
+    "sobolev_displacement_warp_backward_impl",
+    "sobolev_displacement_warp_impl",
 ]

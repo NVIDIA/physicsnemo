@@ -58,7 +58,7 @@ class _Block(nn.Module):
         self.Attn = _Attn(d)
         self.norm = nn.LayerNorm(d)
         self.mlp = nn.Linear(d, d)
-        # GALE_block-style FFN naming (non-TE path): Sequential(LayerNorm, Mlp)
+        # GALEBlock-style FFN naming (non-TE path): Sequential(LayerNorm, Mlp)
         self.ln_mlp1 = nn.Sequential(nn.LayerNorm(d), _Ffn(d))
 
 

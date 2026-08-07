@@ -41,10 +41,12 @@ Deformations
 
 .. currentmodule:: physicsnemo.mesh.transformations.deform
 
-The ``deform`` namespace provides four deformation families:
+The ``deform`` namespace provides five deformation families:
 
 - Dense displacement through :func:`displace`, backed by
   :func:`~physicsnemo.nn.functional.displace_points`.
+- Sobolev-filtered dense displacement through :func:`sobolev_deform`, backed
+  by :func:`~physicsnemo.nn.functional.sobolev_deform_points`.
 - Compact sparse-control morphing through :func:`morph`, backed by
   :func:`~physicsnemo.nn.functional.morph_points`.
 - Global radial-basis deformation through
@@ -70,6 +72,100 @@ explicit mutation of the source mesh's attached data.
     # Point-data fields can drive the same operation.
     mesh.point_data["design_displacement"] = displacement
     displaced_from_data = mesh.displace("design_displacement")
+
+Sobolev-Filtered Deformation
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+:meth:`~physicsnemo.mesh.mesh.Mesh.sobolev_deform` turns a raw displacement
+:math:`d` into a spatially smooth displacement :math:`u` by solving
+
+.. math::
+
+   (M + \ell^2 K)u = M d.
+
+Here :math:`M=\bar m I` is a uniform vertex mass matrix scaled by the mean
+positive lumped P1 mass, and :math:`K` is the P1 stiffness matrix. The uniform
+mass makes the filter self-adjoint in standard Euclidean vertex coordinates,
+so the same operator smooths the displacement and its adjoint.
+``length_scale`` is :math:`\ell` in the same physical units as
+``mesh.points``. Larger values suppress variation over longer distances. A
+zero length scale applies the raw displacement exactly at unfixed vertices.
+This discrete Helmholtz filter is motivated by the implicit formulation for
+node-based shape optimization studied by
+`Najian Asl and Bletzinger <https://doi.org/10.1007/s00158-023-03548-2>`_.
+
+.. code:: python
+
+    reference_points = mesh.points.detach()
+    candidate_vertices = reference_points.clone().requires_grad_()
+    raw_displacement = candidate_vertices - reference_points
+    smooth = mesh.sobolev_deform(
+        raw_displacement,
+        length_scale=0.2,
+    )
+
+    objective = smooth.points.square().mean()
+    objective.backward()
+    smooth_vertex_adjoint = candidate_vertices.grad
+
+The forward deformation is the uniform-mass discrete Helmholtz solve itself. Its
+first-order implicit backward solves the matching adjoint system. Optimize
+candidate vertex coordinates by subtracting fixed reference points and passing
+that offset as ``raw_displacement``. The adjoint with respect to those
+candidate vertices receives the same Sobolev filter. Gradients with respect to
+the reference coordinates also include the geometric dependence of the
+P1 stiffness and mass scale. Higher-order derivatives are not supported for a
+positive length scale. Each ambient displacement component is filtered
+independently.
+
+``fixed_points`` accepts a boolean point mask or a point-data key. True entries
+receive zero displacement, which imposes a homogeneous Dirichlet condition.
+Other mesh boundaries use the natural homogeneous Neumann condition. With no
+fixed points, constant displacements pass through to solver precision.
+
+The Torch and Warp implementations use matrix-free preconditioned conjugate
+gradients. The Warp implementation runs on CUDA and supplies an explicit
+implicit-adjoint backward with an analytic geometry vector-Jacobian product.
+By default, CUDA segments, triangles, and tetrahedra select Warp when it is
+available. CPU meshes and higher-dimensional simplices select Torch.
+``max_iterations`` and ``tolerance`` control the iterative solve. The operation
+raises an error if either the forward or adjoint solve does not reach the
+requested tolerance. At positive length scales, cells must be finite,
+nondegenerate simplices. Isolated points receive their raw displacement.
+CUDA Graph capture is not supported because P1 operator assembly and solver
+diagnostics are not capture-safe. Both backends support ``torch.compile``.
+Warp CUDA results and point gradients may vary at roundoff between runs.
+
+.. rubric:: Before and After
+
+The panels show the initial objective adjoint with respect to candidate vertex
+coordinates. The raw field contains checkerboard-scale oscillation. Applying
+the Sobolev deformation filters that adjoint over the mesh while retaining the
+fixed boundary. Both panels use the same color and arrow scale.
+
+.. figure:: ../../img/mesh/sobolev_adjoint_field.png
+   :alt: Raw noisy vertex adjoint and smoother Sobolev-filtered adjoint
+   :width: 100%
+
+.. rubric:: Three-Dimensional Surface Example
+
+The standalone 3D example applies the same workflow to a triangulated sheet
+with points shaped ``(N, 3)``. Its objective pulls the center upward while the
+boundary remains fixed.
+
+.. code:: console
+
+    python examples/minimal/mesh/sobolev_surface_shape_optimization.py
+
+The arrows show the normalized negative adjoint, which is the gradient-descent
+update direction. Each panel applies that field to the sheet geometry for
+visibility. The raw panel is corrugated by vertex-scale oscillations. The
+Sobolev panel gives the same broad upward pull with a smooth surface. Orange
+points mark the fixed boundary, and both panels use one shared scale.
+
+.. figure:: ../../img/mesh/sobolev_adjoint_field_3d.png
+   :alt: Raw and Sobolev-filtered upward updates on a fixed-boundary sheet
+   :width: 100%
 
 Sparse controls are useful when only a small set of design handles is known. A
 control point is a location in world coordinates, and its control displacement
@@ -426,6 +522,8 @@ For optimization-time geometric penalties on a fixed topology, see
 .. autofunction:: morph
 
 .. autofunction:: radial_basis_function_deform
+
+.. autofunction:: sobolev_deform
 
 Projections
 -----------
