@@ -19,13 +19,15 @@ from __future__ import annotations
 from typing import Any, Callable
 
 import torch
-import torch.distributed._functional_collectives as funcol
 from torch.distributed.tensor import DTensor
 from torch.distributed.tensor.placement_types import (
     Shard,
 )
 
-from physicsnemo.domain_parallel import ShardTensor, ShardTensorSpec
+from physicsnemo.domain_parallel import ShardTensor
+from physicsnemo.domain_parallel.shard_utils.grad_ops import (  # noqa: F401
+    ConvGradReducer,
+)
 from physicsnemo.domain_parallel.shard_utils.patch_core import (
     MissingShardPatch,
 )
@@ -397,76 +399,6 @@ def compute_haloed_and_padded_input_shape(
         output_shape[halo_config.tensor_dim] += padding
 
     return tuple(output_shape)
-
-
-class ConvGradReducer(torch.autograd.Function):
-    r"""Custom autograd function that performs an allreduce on gradients in backward pass.
-
-    This makes defining a forward-only shard patch easier. If you need to allreduce
-    weight grads in the backward pass, call this on the weight in the forward pass.
-    """
-
-    @staticmethod
-    def forward(
-        weight_or_bias: torch.Tensor,
-        spec: ShardTensorSpec,
-    ) -> torch.Tensor:
-        r"""Forward pass: return the weight/bias tensor unchanged.
-
-        Parameters
-        ----------
-        weight_or_bias : torch.Tensor
-            The weight or bias tensor to pass through.
-        spec : ShardTensorSpec
-            Shard spec of the convolutional input (not the weight_or_bias).
-
-        Returns
-        -------
-        torch.Tensor
-            The input tensor unchanged.
-        """
-        return weight_or_bias
-
-    @staticmethod
-    def setup_context(ctx, inputs, output) -> None:
-        r"""Save the input ShardTensorSpec for the backward all-reduce."""
-        _weight_or_bias, spec = inputs
-        ctx.spec = spec
-
-    @staticmethod
-    def backward(
-        ctx: torch.autograd.function.FunctionCtx,
-        grad_weight_or_bias: torch.Tensor,
-    ) -> tuple[torch.Tensor, None]:
-        r"""Backward pass: all-reduce gradients over each sharded mesh dim.
-
-        Parameters
-        ----------
-        ctx : torch.autograd.function.FunctionCtx
-            Autograd context containing saved variables from forward.
-        grad_weight_or_bias : torch.Tensor
-            Gradient of the loss with respect to weight or bias.
-
-        Returns
-        -------
-        Tuple[torch.Tensor, None]
-            Tuple of (reduced gradient, ``None`` for spec).
-        """
-        for mesh_dim in range(ctx.spec.mesh.ndim):
-            if ctx.spec.placements[mesh_dim].is_shard():
-                # funcol.all_reduce returns a new tensor (AsyncCollectiveTensor)
-                # that auto-waits when used; assigning back into the loop var
-                # serializes the iterations correctly.
-                grad_weight_or_bias = funcol.all_reduce(
-                    grad_weight_or_bias, "sum", (ctx.spec.mesh, mesh_dim)
-                )
-
-        # Do not let the final asynchronous result escape into parameter hooks
-        # or ``param.grad``, where storage may be accessed without dispatch.
-        if isinstance(grad_weight_or_bias, funcol.AsyncCollectiveTensor):
-            grad_weight_or_bias = grad_weight_or_bias.wait()
-
-        return grad_weight_or_bias, None
 
 
 @profile
