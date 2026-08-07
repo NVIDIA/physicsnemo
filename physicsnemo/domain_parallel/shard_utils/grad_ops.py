@@ -53,6 +53,7 @@ class ContiguousGrad(torch.autograd.Function):
 
     @staticmethod
     def forward(x: torch.Tensor) -> torch.Tensor:
+        r"""Return ``x`` unchanged (as a fresh alias for autograd metadata)."""
         return x.view_as(x)
 
     @staticmethod
