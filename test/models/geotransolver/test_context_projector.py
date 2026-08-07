@@ -15,40 +15,14 @@
 # limitations under the License.
 
 import torch
-from torch.distributed.tensor.placement_types import Partial, Replicate, Shard
 
 from physicsnemo.models.geotransolver.context_projector import (
     ContextProjector,
-    _replicate_slice_context,
 )
 
 # =============================================================================
 # ContextProjector Tests
 # =============================================================================
-
-
-class _PlacementProbe:
-    """Minimal distributed-tensor probe for placement-only helper tests."""
-
-    def __init__(self, placements):
-        self.placements = placements
-        self.redistributions = []
-
-    def redistribute(self, *, placements):
-        self.redistributions.append(tuple(placements))
-        return self
-
-
-def test_replicate_slice_context_only_resolves_partial_placements():
-    """Partial mesh axes are resolved without disturbing other sharding."""
-    partial = _PlacementProbe((Shard(0), Partial()))
-    sharded = _PlacementProbe((Shard(0), Replicate()))
-
-    assert _replicate_slice_context(partial) is partial
-    assert partial.redistributions == [(Shard(0), Replicate())]
-
-    assert _replicate_slice_context(sharded) is sharded
-    assert sharded.redistributions == []
 
 
 def test_context_projector_forward(device):

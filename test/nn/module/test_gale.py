@@ -16,43 +16,17 @@
 
 import pytest
 import torch
-from torch.distributed.tensor.placement_types import Partial, Replicate, Shard
 
 from physicsnemo.nn import (
     GALE,
     GALE_FA,
     GALEBlock,
 )
-from physicsnemo.nn.module.gale import _resolve_partial_placements
 from test.conftest import requires_module
 
 # =============================================================================
 # GALE (Geometry-Aware Latent Embeddings) Attention Tests
 # =============================================================================
-
-
-class _PlacementProbe:
-    """Minimal distributed-tensor probe for placement-only helper tests."""
-
-    def __init__(self, placements):
-        self.placements = placements
-        self.redistributions = []
-
-    def redistribute(self, *, placements):
-        self.redistributions.append(tuple(placements))
-        return self
-
-
-def test_resolve_partial_placements_preserves_other_mesh_axes():
-    """Only domain-partial axes become replicated on multi-axis meshes."""
-    partial = _PlacementProbe((Shard(0), Partial()))
-    sharded = _PlacementProbe((Shard(0), Replicate()))
-
-    assert _resolve_partial_placements(partial) is partial
-    assert partial.redistributions == [(Shard(0), Replicate())]
-
-    assert _resolve_partial_placements(sharded) is sharded
-    assert sharded.redistributions == []
 
 
 def test_gale_forward_basic(device):

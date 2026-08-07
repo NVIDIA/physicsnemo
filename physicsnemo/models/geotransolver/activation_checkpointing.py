@@ -6,7 +6,7 @@
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-# http://www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,39 +18,26 @@ r"""Activation-checkpointing helpers for GeoTransolver."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from typing import Any
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.nn as nn
-from torch.utils.checkpoint import checkpoint as activation_checkpoint
 
-from physicsnemo.nn import GALEBlock
+from physicsnemo.models.activation_checkpointing import (
+    run_checkpoint,
+    should_checkpoint_interleaved_block,
+)
 
-from .context_projector import GlobalContextBuilder
+if TYPE_CHECKING:
+    from physicsnemo.nn import GALEBlock
+
+    from .context_projector import GlobalContextBuilder
 
 DEFAULT_CHECKPOINTING_COMPONENTS = frozenset({"blocks"})
 CHECKPOINTABLE_COMPONENTS = DEFAULT_CHECKPOINTING_COMPONENTS | frozenset(
     {"context", "preprocess", "output"}
 )
-
-
-def parse_checkpointing_param(activation_checkpointing: bool | float) -> float:
-    r"""Parse an activation-checkpointing argument into a ratio in ``[0, 1]``."""
-    if isinstance(activation_checkpointing, bool):
-        return 1.0 if activation_checkpointing else 0.0
-    if not isinstance(activation_checkpointing, (int, float)):
-        raise TypeError(
-            "activation_checkpointing must be bool or numeric, got "
-            f"{type(activation_checkpointing).__name__}"
-        )
-
-    ratio = float(activation_checkpointing)
-    if not 0.0 <= ratio <= 1.0:
-        raise ValueError(
-            f"activation_checkpointing must be bool or a float in [0, 1], got {ratio}"
-        )
-    return ratio
 
 
 def parse_checkpointing_components(
@@ -99,24 +86,15 @@ def should_checkpoint_block(
     *,
     training: bool,
 ) -> bool:
-    r"""Return whether a leading GALE block should be checkpointed."""
+    r"""Return whether a GALE block is in the interleaved checkpoint set."""
     if not should_checkpoint_component("blocks", ratio, components, training=training):
         return False
-    if ratio >= 1.0:
-        return True
-    return block_idx < round(ratio * block_count)
-
-
-def run_checkpoint(
-    function: Callable[..., Any],
-    *inputs: torch.Tensor,
-    use_te: bool,
-    te_module: Any,
-):
-    r"""Call the backend-appropriate non-reentrant checkpoint wrapper."""
-    if use_te:
-        return te_module.checkpoint(function, *inputs, use_reentrant=False)
-    return activation_checkpoint(function, *inputs, use_reentrant=False)
+    return should_checkpoint_interleaved_block(
+        block_idx,
+        block_count,
+        ratio,
+        training=training,
+    )
 
 
 def run_checkpointed_component(

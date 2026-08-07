@@ -47,6 +47,10 @@ import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.models.activation_checkpointing import (
+    parse_checkpointing_param,
+    should_checkpoint_interleaved_block,
+)
 from physicsnemo.nn import Mlp, PositionalEmbedding
 from physicsnemo.nn.module.physics_attention import (
     PhysicsAttentionIrregularMesh,
@@ -54,11 +58,7 @@ from physicsnemo.nn.module.physics_attention import (
     PhysicsAttentionStructuredMesh3D,
 )
 
-from .activation_checkpointing import (
-    checkpoint_block,
-    parse_checkpointing_param,
-    should_checkpoint_block,
-)
+from .activation_checkpointing import checkpoint_block
 
 TE_AVAILABLE = check_version_spec("transformer_engine", hard_fail=False)
 if TE_AVAILABLE:
@@ -389,9 +389,10 @@ class Transolver(Module):
     activation_checkpointing : bool | float, optional, default=False
         Activation checkpointing of Transolver blocks during training. ``True``
         or ``1.0`` checkpoints all blocks, ``False`` or ``0.0`` disables
-        checkpointing, and a value in ``(0, 1)`` checkpoints that leading
-        fraction of blocks. Checkpointing trades additional computation during
-        the backward pass for lower activation memory usage.
+        checkpointing, and a value in ``(0, 1)`` checkpoints that fraction of
+        blocks, distributed evenly across the block stack.
+        Checkpointing trades additional computation during the backward pass
+        for lower activation memory usage.
 
     Forward
     -------
@@ -584,7 +585,7 @@ class Transolver(Module):
         # Full-object pickles created before activation checkpointing was added
         # bypass ``__init__`` when loaded and therefore do not have this
         # attribute. Treat those models exactly like the historical default.
-        return should_checkpoint_block(
+        return should_checkpoint_interleaved_block(
             block_idx,
             len(self.blocks),
             getattr(self, "_activation_checkpointing_ratio", 0.0),

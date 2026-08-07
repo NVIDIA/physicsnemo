@@ -36,6 +36,7 @@ import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.core.version_check import OptionalImport
+from physicsnemo.models.activation_checkpointing import parse_checkpointing_param
 from physicsnemo.models.transolver.transolver import _TransolverMlp
 from physicsnemo.nn import GALEBlock
 
@@ -44,8 +45,6 @@ from .activation_checkpointing import (
     build_context,
     checkpoint_block,
     parse_checkpointing_components,
-    parse_checkpointing_param,
-    run_checkpoint,
     run_checkpointed_component,
     should_checkpoint_block,
     should_checkpoint_component,
@@ -273,8 +272,8 @@ class GeoTransolver(Module):
     activation_checkpointing : bool | float, optional, default=False
         Activation checkpointing of GALE blocks during training. ``True`` or
         ``1.0`` checkpoints all blocks, ``False`` or ``0.0`` disables
-        checkpointing, and a value in ``(0, 1)`` checkpoints that leading
-        fraction of blocks.
+        checkpointing, and a value in ``(0, 1)`` checkpoints that fraction of
+        blocks, distributed evenly across the block stack.
     activation_checkpointing_components : tuple[str, ...] | list[str], optional
         Components covered when activation checkpointing is enabled. Supported
         values are ``"context"``, ``"preprocess"``, ``"blocks"``, and
@@ -618,15 +617,6 @@ class GeoTransolver(Module):
                 DEFAULT_CHECKPOINTING_COMPONENTS,
             ),
             training=self.training,
-        )
-
-    def _run_checkpoint(self, function, *inputs: torch.Tensor):
-        r"""Call the backend-appropriate non-reentrant checkpoint wrapper."""
-        return run_checkpoint(
-            function,
-            *inputs,
-            use_te=self.use_te,
-            te_module=te,
         )
 
     def _run_checkpointed_component(

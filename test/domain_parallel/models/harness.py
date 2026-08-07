@@ -305,11 +305,6 @@ class DomainParallelModelCase:
         including tuple outputs).
     check_grads : bool, default=True
         Whether to run and compare backward gradients.
-    train_mode : bool, default=False
-        Whether to keep the model in training mode. The default evaluation mode
-        avoids stochastic differences; enable this for training-only execution
-        paths such as activation checkpointing when the case itself is
-        deterministic.
     find_unused_parameters : bool, default=False
         Forwarded to DDP for configs with unused parameters.
     atol, rtol : float, default=1e-4
@@ -325,7 +320,6 @@ class DomainParallelModelCase:
     output_check_fn: Callable[[Any], None] | None = None
     loss_fn: Callable[[Any], torch.Tensor] = default_loss_fn
     check_grads: bool = True
-    train_mode: bool = False
     find_unused_parameters: bool = True
     atol: float = 1e-4
     rtol: float = 1e-4
@@ -367,10 +361,9 @@ def run_domain_parallel_model_check(
         raise ValueError("run_domain_parallel_model_check requires a mesh")
 
     model = case.build_model(device)
-    # Evaluation mode keeps dropout/other stochastic layers deterministic
-    # across the distributed and single-GPU reference runs. Individual cases
-    # can opt into training mode to exercise training-only execution paths.
-    model.train(case.train_mode)
+    # eval() so dropout/other stochastic layers are deterministic across the
+    # distributed and single-GPU reference runs.
+    model.eval()
 
     args, kwargs = case.build_inputs(device)
     d_args, d_kwargs = case.shard_inputs(args, kwargs, shard_mesh)

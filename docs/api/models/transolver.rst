@@ -11,9 +11,11 @@ Activation Checkpointing
 
 Transolver can checkpoint its transformer blocks during training to reduce the
 activations retained for the backward pass. Set ``activation_checkpointing=True``
-to checkpoint every block, or provide a fraction in ``(0, 1)`` to checkpoint that
-leading fraction of the block stack. The default is ``False`` and preserves the
-existing execution path.
+to checkpoint every block, or provide a fraction in ``(0, 1)`` to checkpoint
+that fraction of blocks, distributed evenly across the block stack. The default
+is ``False`` and preserves the existing execution path.
+The fractional form provides a model-depth-independent control for trading
+activation memory against backward recomputation without specifying block indices.
 
 .. code-block:: python
 
