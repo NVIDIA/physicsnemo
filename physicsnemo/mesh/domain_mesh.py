@@ -14,17 +14,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# ``tensorclass`` adds a class-scoped ``float`` method. Qualify scalar
-# annotations that must remain resolvable under Python's deferred lookup.
-import builtins
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Self
 
 import torch
 from jaxtyping import Bool, Float
-from tensordict import TensorDict, tensorclass
+from tensordict import TensorClass, TensorDict, TensorDictBase
 
+from physicsnemo.mesh._serialization import install_legacy_memmap_reader
 from physicsnemo.mesh.mesh import Mesh, _requested_float_dtype
 from physicsnemo.mesh.transformations.deform.ffd import _FFDBasis
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
@@ -34,8 +32,21 @@ if TYPE_CHECKING:
     import pyvista
 
 
-@tensorclass
-class DomainMesh:
+class _DomainMeshTensorClassMeta(type(TensorClass)):
+    """Keep ``DomainMesh`` unsubscriptable, as it was under ``@tensorclass``.
+
+    ``TensorClass`` subscripts its subclasses to select configuration
+    (``TensorClass["nocast"]``), so without this a mistaken annotation such as
+    ``DomainMesh["wall"]`` would quietly evaluate to an unrelated class instead
+    of raising. ``Mesh`` claims the same syntax for dimension specialization
+    (see ``_MeshTensorClassMeta``); ``DomainMesh`` has no such parametrization.
+    """
+
+    def __getitem__(cls, params: Any) -> type:
+        raise TypeError(f"type '{cls.__name__}' is not subscriptable")
+
+
+class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
     r"""A simulation domain represented as an interior mesh with named boundary meshes.
 
     A ``DomainMesh`` groups an interior :class:`Mesh` (either a volumetric mesh
@@ -612,7 +623,7 @@ class DomainMesh:
         control_points: torch.Tensor,
         control_displacements: torch.Tensor,
         *,
-        radius: builtins.float | torch.Tensor,
+        radius: float | torch.Tensor,
         point_weights: str | tuple[str, ...] | None = None,
         kernel: Literal["wendland_c2"] = "wendland_c2",
         implementation: Literal["torch", "warp"] | None = None,
@@ -726,8 +737,8 @@ class DomainMesh:
         control_displacements: Float[torch.Tensor, "n_controls n_spatial_dims"],
         *,
         kernel: Literal["thin_plate_spline"] = "thin_plate_spline",
-        polynomial: builtins.bool = True,
-        smoothing: builtins.float = 0.0,
+        polynomial: bool = True,
+        smoothing: float = 0.0,
         point_weights: str | tuple[str, ...] | None = None,
         implementation: Literal["torch", "warp"] | None = None,
     ) -> "DomainMesh":
@@ -867,12 +878,8 @@ class DomainMesh:
             torch.Tensor, "*lattice_resolution n_spatial_dims"
         ],
         *,
-        origin: Float[torch.Tensor, " n_spatial_dims"]
-        | Sequence[builtins.float]
-        | None = None,
-        extent: Float[torch.Tensor, " n_spatial_dims"]
-        | Sequence[builtins.float]
-        | None = None,
+        origin: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float] | None = None,
+        extent: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float] | None = None,
         basis: _FFDBasis = "bernstein",
         point_weights: str | tuple[str, ...] | None = None,
         implementation: Literal["torch", "warp"] | None = None,
@@ -1614,11 +1621,52 @@ class DomainMesh:
         return canvas
 
     ### Repr is defined after the class body (see below) because
-    ### @tensorclass overwrites __repr__ even when defined inline.
+    ### TensorClass overwrites __repr__ even when defined inline.
 
 
-### Override the tensorclass __repr__ with custom formatting.
-# Must be done after class definition because @tensorclass overrides __repr__
+### Restore the declared field types when rebuilding from a plain tensordict.
+# This is load-critical for *both* on-disk layouts, not just legacy files: the
+# memmap format records nested containers as plain TensorDicts, so `interior`
+# and each boundary arrive here untyped and `__post_init__` would reject them.
+_tensorclass_domain_from_tensordict = DomainMesh._from_tensordict.__func__
+
+
+def _domain_from_tensordict(
+    cls: type[DomainMesh],
+    tensordict: TensorDictBase,
+    non_tensordict: dict[str, Any] | None = None,
+    safe: bool = True,
+) -> DomainMesh:
+    interior = tensordict.get("interior")
+    boundaries = tensordict.get("boundaries")
+    if isinstance(interior, TensorDict) or (
+        isinstance(boundaries, TensorDict)
+        and any(isinstance(mesh, TensorDict) for mesh in boundaries.values())
+    ):
+        tensordict = tensordict.copy()
+        if isinstance(interior, TensorDict):
+            tensordict["interior"] = Mesh._from_tensordict(interior)
+        if isinstance(boundaries, TensorDict):
+            boundaries = boundaries.copy()
+            for name, mesh in boundaries.items():
+                if isinstance(mesh, TensorDict):
+                    boundaries[name] = Mesh._from_tensordict(mesh)
+            tensordict["boundaries"] = boundaries
+    return _tensorclass_domain_from_tensordict(
+        cls,
+        tensordict,
+        non_tensordict=non_tensordict,
+        safe=safe,
+    )
+
+
+DomainMesh._from_tensordict = classmethod(_domain_from_tensordict)
+
+install_legacy_memmap_reader(DomainMesh)
+
+
+### Override the TensorClass __repr__ with custom formatting.
+# Must be done after class definition because TensorClass overrides __repr__
 # even when defined inside the class body (same pattern as Mesh).
 def _domain_mesh_repr(self: DomainMesh) -> str:
     """Format a readable summary of the domain mesh."""
@@ -1657,7 +1705,7 @@ def _domain_mesh_repr(self: DomainMesh) -> str:
 DomainMesh.__repr__ = _domain_mesh_repr  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
 
 
-### Override the tensorclass ``to`` for the same reason as ``Mesh.to``: a floating/
+### Override the TensorClass ``to`` for the same reason as ``Mesh.to``: a floating/
 # complex dtype cast via the generated tensorclass ``to`` recurses into the interior/
 # boundary meshes and casts their integer ``cells`` to a float dtype, which fails
 # ``Mesh.__post_init__``. Only an explicitly requested floating dtype takes the

@@ -229,6 +229,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `physicsnemo.mesh.Mesh` and `DomainMesh` now inherit directly from
+  `TensorClass`, use the resulting root-level `.pmsh` / `.pdmsh` layout, and
+  continue to load decorator-era serialized data (including honoring
+  `device=`, which was previously ignored on load). Note that the change is
+  not forward-compatible: `.pmsh` / `.pdmsh` files written by this release
+  load as plain `TensorDict` objects, with no error, in PhysicsNeMo 2.1.x and
+  earlier. Readers of newly written files should be on 2.2.0+. This is also a
+  breaking change for downstream subclasses: a fieldless subclass no longer
+  inherits the concrete `Mesh` or `DomainMesh` constructor defaults and must
+  define its own compatible `__init__`. Defaults on `Mesh` and `DomainMesh`
+  themselves are unchanged.
 - Optimizes the production container build by consolidating related filesystem
   operations, using BuildKit bind and cache mounts, and separating custom,
   declared, and project dependency installation. Reduces total physicsnemo layers

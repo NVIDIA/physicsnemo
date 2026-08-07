@@ -21,6 +21,7 @@ import math
 
 import pytest
 import torch
+from tensordict import TensorClass
 
 from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.mesh.primitives.basic import (
@@ -30,6 +31,22 @@ from physicsnemo.mesh.primitives.basic import (
     single_triangle_3d,
     two_tetrahedra,
 )
+
+
+def test_domain_mesh_inherits_tensorclass():
+    assert TensorClass in DomainMesh.__bases__
+
+
+def test_domain_mesh_is_not_subscriptable():
+    """Inheriting TensorClass must not expose its configuration subscript.
+
+    ``Mesh[m, s]`` is a dimension specialization; ``DomainMesh`` has no such
+    parametrization, so a subscript is a mistake and must say so rather than
+    return ``TensorClass``'s unrelated configuration class.
+    """
+    with pytest.raises(TypeError, match="not subscriptable"):
+        DomainMesh["nocast"]
+
 
 ### Fixtures
 

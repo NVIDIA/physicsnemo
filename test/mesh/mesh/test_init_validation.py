@@ -26,10 +26,14 @@ appropriate errors for:
 
 import pytest
 import torch
-from tensordict import TensorDict
+from tensordict import TensorClass, TensorDict
 
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.mesh import _requested_float_dtype
+
+
+def test_mesh_inherits_tensorclass():
+    assert TensorClass in Mesh.__bases__
 
 
 class TestPointsValidation:
