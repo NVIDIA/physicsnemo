@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 
 PointDataKey: TypeAlias = str | tuple[str, ...]
 PointDataSelection: TypeAlias = bool | PointDataKey | list[PointDataKey] | None
+ResolutionField: TypeAlias = PointDataKey | torch.Tensor | None
 # A linear-resolution multiplier is an inverse target edge length. For the
 # squared-distance CVT objective on a 2D surface, its integration density is
 # the fourth power of that multiplier.
@@ -100,41 +101,46 @@ def _point_data_keys(
 
 def _resolve_resolution_field(
     mesh: Mesh,
-    key: PointDataKey | None,
+    field: ResolutionField,
 ) -> torch.Tensor | None:
-    """Resolve and validate an attached linear-resolution field."""
-    if key is None:
+    """Resolve and validate a direct or attached linear-resolution field."""
+    if field is None:
         return None
-    if not isinstance(key, (str, tuple)):
-        raise TypeError("resolution_field must be a point_data key/path or None")
-    if isinstance(key, tuple) and (
-        not key or not all(isinstance(part, str) for part in key)
-    ):
-        raise TypeError("resolution_field paths must be nonempty tuples of strings")
-    key = _canonical_point_data_key(key)
-    available = list(mesh.point_data.keys(include_nested=True, leaves_only=True))
-    if key not in available:
-        raise KeyError(
-            f"resolution_field {key!r} was not found in point_data. "
-            f"Available keys: {available}"
-        )
-    resolution = mesh.point_data[key]
-    if not isinstance(resolution, torch.Tensor):
-        raise TypeError(f"resolution_field {key!r} must resolve to a torch.Tensor")
+    if isinstance(field, torch.Tensor):
+        resolution = field
+        description = "resolution_field"
+    else:
+        if not isinstance(field, (str, tuple)):
+            raise TypeError(
+                "resolution_field must be a torch.Tensor, point_data key/path, or None"
+            )
+        if isinstance(field, tuple) and (
+            not field or not all(isinstance(part, str) for part in field)
+        ):
+            raise TypeError("resolution_field paths must be nonempty tuples of strings")
+        key = _canonical_point_data_key(field)
+        available = list(mesh.point_data.keys(include_nested=True, leaves_only=True))
+        if key not in available:
+            raise KeyError(
+                f"resolution_field {key!r} was not found in point_data. "
+                f"Available keys: {available}"
+            )
+        resolution = mesh.point_data[key]
+        description = f"resolution_field {key!r}"
+        if not isinstance(resolution, torch.Tensor):
+            raise TypeError(f"{description} must resolve to a torch.Tensor")
     if resolution.shape != (mesh.n_points,):
         raise ValueError(
-            f"resolution_field {key!r} must have shape ({mesh.n_points},), "
+            f"{description} must have shape ({mesh.n_points},), "
             f"got {tuple(resolution.shape)}"
         )
     if not torch.is_floating_point(resolution):
         raise TypeError(
-            f"resolution_field {key!r} must use a real floating-point dtype, "
+            f"{description} must use a real floating-point dtype, "
             f"got {resolution.dtype}"
         )
     if resolution.device != mesh.points.device:
-        raise ValueError(
-            f"resolution_field {key!r} and mesh points must be on the same device"
-        )
+        raise ValueError(f"{description} and mesh points must be on the same device")
     return resolution
 
 
@@ -209,14 +215,15 @@ def remesh(
     *,
     max_iterations: int = 4,
     transfer_point_data: PointDataSelection = False,
-    resolution_field: PointDataKey | None = None,
+    resolution_field: ResolutionField = None,
 ) -> Mesh:
     """Remesh a triangle surface with point-data and resolution controls.
 
     Warp performs integration-mass-weighted centroidal clustering, projects
     cluster centers back to the source surface with a bounding volume
-    hierarchy, and reconstructs compact triangle connectivity. A positive
-    point-data field can specify relative local linear resolution.
+    hierarchy, and reconstructs compact triangle connectivity. A direct
+    positive tensor or an attached point-data field can specify relative local
+    linear resolution.
 
     Parameters
     ----------
@@ -235,13 +242,16 @@ def remesh(
         leaf. A string or tuple selects one key or nested key path. A list
         selects several keys or paths. Selected fields must contain real
         floating-point tensors. Default is ``False``.
-    resolution_field : str, tuple, or None, optional
-        Key or nested key path for a positive scalar point-data field with
-        shape ``(n_points,)``. Values specify relative linear resolution. A
-        value twice another requests approximately half the local edge
-        spacing. The fixed ``n_clusters`` budget and source geometry limit the
-        realized spacing. The field must use a real floating-point dtype. Only
-        relative values matter. Default is ``None`` for uniform remeshing.
+    resolution_field : str, tuple, torch.Tensor, or None, optional
+        Positive scalar tensor with shape ``(n_points,)``, or a key or nested
+        key path resolving to one in ``mesh.point_data``. Values specify
+        relative linear resolution. A value twice another requests
+        approximately half the local edge spacing. The fixed ``n_clusters``
+        budget and source geometry limit the realized spacing. The field must
+        use a real floating-point dtype on the mesh device. Direct tensor
+        entries correspond to ``mesh.points`` order and are not attached to or
+        transferred with the output mesh. Only relative values matter. Default
+        is ``None`` for uniform remeshing.
 
     Returns
     -------

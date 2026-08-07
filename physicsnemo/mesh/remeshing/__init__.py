@@ -26,8 +26,8 @@ This module provides two complementary algorithms for mesh coarsening:
 
 **Surface remeshing** (:func:`remesh`):
     Creates new triangle topology on CPU or CUDA using Warp. Selected point
-    data can be interpolated onto the result, and an attached positive field
-    can control local resolution.
+    data can be interpolated onto the result, and a direct or attached positive
+    field can control local resolution.
 
 ``partition_cells`` is also a natural building block for a pure-PyTorch
 centroidal Voronoi tessellation (CVT): Lloyd's algorithm iterates from

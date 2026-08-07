@@ -9,9 +9,9 @@ of output vertices, not triangles. Cleanup can produce slightly fewer
 vertices.
 
 Remeshing can barycentrically interpolate selected ``point_data`` onto the new
-vertices. An attached positive scalar field can also specify relative linear
-resolution within the fixed vertex budget. Cell data is discarded. Global
-data, point dtype, and device are preserved.
+vertices. A direct positive scalar tensor or an attached point-data field can
+also specify relative linear resolution within the fixed vertex budget. Cell
+data is discarded. Global data, point dtype, and device are preserved.
 
 CPU and CUDA Example
 --------------------
@@ -92,23 +92,27 @@ subset.
 Control Local Resolution
 ------------------------
 
-Store a positive scalar field in ``point_data`` and pass its key as
-``resolution_field``. Its values are relative linear-resolution multipliers.
-A value twice another requests approximately half the local edge spacing.
-The field must use a real floating-point dtype:
+Pass a positive scalar tensor directly as ``resolution_field``, or store it in
+``point_data`` and pass its key. Its values are relative linear-resolution
+multipliers. A value twice another requests approximately half the local edge
+spacing. The field must use a real floating-point dtype on the mesh device:
 
 .. code:: python
 
    x = dense.points[:, 0]
-   dense.point_data["resolution"] = 1.0 + 2.0 * torch.exp(
+   resolution = 1.0 + 2.0 * torch.exp(
        -((x - 0.25) / 0.08).square()
    )
 
    adaptive = dense.remesh(
        n_clusters=4_096,
-       resolution_field="resolution",
+       resolution_field=resolution,
        transfer_point_data=["temperature"],
    )
+
+Direct tensor entries correspond to ``dense.points`` order. Passing the tensor
+does not attach it to either mesh or transfer it to the output. Passing a
+``point_data`` key remains useful when the field is already attached.
 
 Only relative values matter. Multiplying the entire resolution field by a
 positive constant leaves the remeshing objective unchanged. The values are
@@ -138,7 +142,7 @@ implementation evolves:
 
    from physicsnemo.nn.functional import remeshing
 
-   linear_resolution = dense.point_data["resolution"]
+   linear_resolution = resolution
    if linear_resolution.element_size() < 4:
        linear_resolution = linear_resolution.to(torch.float32)
    normalized_resolution = linear_resolution / linear_resolution.amax()

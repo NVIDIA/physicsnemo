@@ -463,17 +463,17 @@ coarse_with_data = mesh.remesh(
 )
 
 # Request higher linear resolution away from x=0.
-mesh.point_data["resolution"] = 1.0 + 1.5 * mesh.points[:, 0].square()
+resolution = 1.0 + 1.5 * mesh.points[:, 0].square()
 adaptive = mesh.remesh(
     n_clusters=1_000,
-    resolution_field="resolution",
+    resolution_field=resolution,
     transfer_point_data=["temperature"],
 )
 
 # Backend tuning is available through the advanced tensor functional.
 from physicsnemo.nn.functional.geometry.remeshing import remeshing
 
-linear_resolution = mesh.point_data["resolution"]
+linear_resolution = resolution
 if linear_resolution.element_size() < 4:
     linear_resolution = linear_resolution.to(torch.float32)
 normalized_resolution = linear_resolution / linear_resolution.amax()

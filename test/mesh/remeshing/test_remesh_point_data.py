@@ -111,6 +111,27 @@ def test_remesh_accepts_single_component_tensor_dict_paths():
     )
 
 
+def test_remesh_accepts_resolution_tensor_without_attaching_point_data():
+    source = _tilted_plane(subdivisions=8)
+    resolution = 1.0 + source.points[:, 0].square()
+
+    direct = source.remesh(
+        32,
+        max_iterations=2,
+        resolution_field=resolution,
+    )
+
+    assert _leaf_keys(source) == set()
+    source.point_data["resolution"] = resolution
+    attached = source.remesh(
+        32,
+        max_iterations=2,
+        resolution_field="resolution",
+    )
+    torch.testing.assert_close(direct.points, attached.points)
+    torch.testing.assert_close(direct.cells, attached.cells)
+
+
 def test_remesh_point_data_transfer_preserves_field_autograd():
     source = _tilted_plane()
     source_values = (1.0 + source.points[:, 0].square()).detach().requires_grad_()
@@ -226,6 +247,21 @@ def test_remesh_rejects_missing_resolution_field():
         )
 
 
+def test_remesh_rejects_invalid_resolution_field_type():
+    source = _tilted_plane(subdivisions=4)
+
+    with pytest.raises(TypeError, match="torch.Tensor, point_data key/path"):
+        source.remesh(16, resolution_field=1.0)
+
+
+def test_remesh_rejects_resolution_tensor_on_another_device():
+    source = _tilted_plane(subdivisions=4)
+    resolution = torch.ones(source.n_points, device="meta")
+
+    with pytest.raises(ValueError, match="same device"):
+        source.remesh(16, resolution_field=resolution)
+
+
 def test_remesh_rejects_categorical_point_data_transfer():
     source = _tilted_plane(subdivisions=4)
     source.point_data["region"] = torch.zeros(source.n_points, dtype=torch.int64)
@@ -278,7 +314,8 @@ def test_remesh_accepts_float8_fields():
         ("negative", ValueError, "resolution_field.*strictly positive"),
     ],
 )
-def test_remesh_rejects_invalid_resolution_field(case, error, match):
+@pytest.mark.parametrize("direct", [False, True], ids=["point-data-key", "tensor"])
+def test_remesh_rejects_invalid_resolution_field(case, error, match, direct):
     source = _tilted_plane(subdivisions=4)
     if case == "nonscalar":
         values = torch.ones(source.n_points, 2)
@@ -296,12 +333,16 @@ def test_remesh_rejects_invalid_resolution_field(case, error, match):
             values[0] = 0.0
         elif case == "negative":
             values[0] = -1.0
-    source.point_data["density"] = values
+    if direct:
+        resolution_field = values
+    else:
+        source.point_data["density"] = values
+        resolution_field = "density"
 
     with pytest.raises(error, match=match):
         source.remesh(
             16,
-            resolution_field="density",
+            resolution_field=resolution_field,
         )
 
 
