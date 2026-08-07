@@ -125,7 +125,7 @@ def test_transolver_constructor(config):
     [(False, 0.0), (True, 1.0), (0.0, 0.0), (0.5, 0.5), (1.0, 1.0)],
 )
 def test_transolver_activation_checkpointing_configuration(value, expected):
-    """Checkpointing accepts booleans or a fraction of leading blocks."""
+    """Checkpointing accepts booleans or an interleaved fraction of blocks."""
     model = Transolver(
         functional_dim=2,
         embedding_dim=3,
@@ -141,10 +141,14 @@ def test_transolver_activation_checkpointing_configuration(value, expected):
 
     assert model._activation_checkpointing_ratio == expected
     model.train()
-    expected_blocks = round(expected * len(model.blocks))
-    assert [model._should_checkpoint_block(i) for i in range(len(model.blocks))] == [
-        i < expected_blocks for i in range(len(model.blocks))
-    ]
+    expected_masks = {
+        0.0: [False, False, False, False],
+        0.5: [True, False, True, False],
+        1.0: [True, True, True, True],
+    }
+    assert [model._should_checkpoint_block(i) for i in range(len(model.blocks))] == (
+        expected_masks[expected]
+    )
 
     # Activation checkpointing is a training-time memory optimization.
     model.eval()
@@ -288,7 +292,7 @@ def test_transolver_activation_checkpointing_reduces_saved_activations(plus):
 
 
 def test_transolver_activation_checkpointing_recomputes_selected_blocks(monkeypatch):
-    """Only the selected leading blocks are recomputed during backward."""
+    """Only the selected interleaved blocks are recomputed during backward."""
     model = Transolver(
         functional_dim=2,
         embedding_dim=3,
@@ -316,7 +320,7 @@ def test_transolver_activation_checkpointing_recomputes_selected_blocks(monkeypa
     fx = torch.randn(2, 16, 2)
     embedding = torch.randn(2, 16, 3)
     model(fx, embedding=embedding).square().mean().backward()
-    assert call_counts == [2, 2, 1, 1]
+    assert call_counts == [2, 1, 2, 1]
 
 
 def test_transolver_activation_checkpointing_uses_te_wrapper(monkeypatch):

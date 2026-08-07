@@ -28,7 +28,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 from jaxtyping import Float
-from torch.distributed.tensor.placement_types import Replicate
 
 import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.version_check import OptionalImport
@@ -44,25 +43,6 @@ from .physics_attention import (
 )
 
 te = OptionalImport("transformer_engine.pytorch")
-
-
-def _has_partial_placement(tensor: torch.Tensor) -> bool:
-    r"""Return whether a distributed tensor contains a partial placement."""
-    return hasattr(tensor, "placements") and any(
-        placement.is_partial() for placement in tensor.placements
-    )
-
-
-def _resolve_partial_placements(tensor: torch.Tensor) -> torch.Tensor:
-    r"""Resolve partial mesh axes while preserving every other placement."""
-    if not _has_partial_placement(tensor):
-        return tensor
-    return tensor.redistribute(
-        placements=[
-            Replicate() if placement.is_partial() else placement
-            for placement in tensor.placements
-        ]
-    )
 
 
 def _mix_self_and_cross(
@@ -132,24 +112,6 @@ def _gale_compute_slice_attention_cross(
         of shape :math:`(B, H, S, D)`.
     """
     q_input = torch.cat(slice_tokens, dim=-2)
-    shard_template = None
-    has_partial_aggregate = _has_partial_placement(q_input) or _has_partial_placement(
-        context
-    )
-    if has_partial_aggregate and hasattr(q_input, "redistribute"):
-        # Slice tokens are partial sums when the input token axis is sharded.
-        # Resolve them before SDPA, then compute the small replicated attention
-        # locally on each rank. This avoids PyTorch 2.6 DTensor linear backward
-        # attempting an unsafe view of SDPA's strided gradient.
-        q_input = _resolve_partial_placements(q_input)
-        shard_template = q_input
-        q_input = q_input.to_local()
-    if has_partial_aggregate and hasattr(context, "redistribute"):
-        context = _resolve_partial_placements(context)
-        if shard_template is None:
-            shard_template = context
-        context = context.to_local()
-
     q = module.cross_q(q_input)
     k = module.cross_k(context)
     v = module.cross_v(context)
@@ -167,12 +129,6 @@ def _gale_compute_slice_attention_cross(
     else:
         cross_attention = torch.nn.functional.scaled_dot_product_attention(
             q, k, v, is_causal=False
-        )
-    if shard_template is not None:
-        cross_attention = type(shard_template).from_local(
-            cross_attention,
-            shard_template.device_mesh,
-            shard_template.placements,
         )
     cross_attention = torch.split(cross_attention, slice_tokens[0].shape[-2], dim=-2)
     return list(cross_attention)

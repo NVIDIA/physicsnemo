@@ -17,8 +17,10 @@ Activation Checkpointing
 
 GeoTransolver supports configurable activation checkpointing during training.
 Set ``activation_checkpointing=True`` to checkpoint every selected component,
-or provide a fraction in ``(0, 1)`` to checkpoint that leading fraction of the
-GALE block stack. Checkpointing is disabled by default.
+or provide a fraction in ``(0, 1)`` to checkpoint that fraction of GALE blocks,
+distributed evenly across the block stack. Checkpointing is disabled by default.
+The fractional form provides a model-depth-independent control for trading
+activation memory against backward recomputation without specifying block indices.
 
 The ``activation_checkpointing_components`` argument selects the checkpoint
 boundaries. Supported values are ``"context"``, ``"preprocess"``, ``"blocks"``,
@@ -46,11 +48,6 @@ Checkpointing is active only in training mode when gradients are enabled. The
 native backend uses PyTorch's non-reentrant checkpoint implementation, while
 ``use_te=True`` uses Transformer Engine's checkpoint wrapper. The option can be
 combined with ``torch.compile``.
-
-With ShardTensor domain parallelism, checkpointing is validated for standard
-GALE with token-sharded inputs and ``include_local_features=False``. GALE_FA
-with mixed placements and gradients through distributed ball-query coordinates
-remain limited by the underlying distributed operators.
 
 .. autoclass:: physicsnemo.models.geotransolver.geotransolver.GeoTransolver
     :show-inheritance:

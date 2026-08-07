@@ -1132,6 +1132,7 @@ def test_geotransolver_local_features_compile(device):
     assert not torch.isnan(compiled_out).any()
 
 
+@requires_module("transformer_engine")
 def test_geotransolver_te_full_component_checkpointing(monkeypatch):
     """TE checkpointing preserves GeoTransolver outputs and gradients."""
     if not torch.cuda.is_available():
@@ -1292,10 +1293,14 @@ def test_geotransolver_activation_checkpointing_configuration(value, expected):
     assert model._activation_checkpointing_ratio == expected
     assert model._activation_checkpointing_components == frozenset({"blocks"})
     model.train()
-    expected_blocks = round(expected * len(model.blocks))
-    assert [model._should_checkpoint_block(i) for i in range(len(model.blocks))] == [
-        i < expected_blocks for i in range(len(model.blocks))
-    ]
+    expected_masks = {
+        0.0: [False, False, False, False],
+        0.5: [True, False, True, False],
+        1.0: [True, True, True, True],
+    }
+    assert [model._should_checkpoint_block(i) for i in range(len(model.blocks))] == (
+        expected_masks[expected]
+    )
     model.eval()
     assert not any(model._should_checkpoint_block(i) for i in range(len(model.blocks)))
 
@@ -1730,7 +1735,7 @@ def test_geotransolver_activation_checkpointing_recomputes_selected_blocks(
     local_embedding = torch.randn(2, 16, 3)
     geometry = torch.randn(2, 16, 3)
     model(local_embedding, geometry=geometry).square().mean().backward()
-    assert call_counts == [2, 2, 1, 1]
+    assert call_counts == [2, 1, 2, 1]
 
 
 def test_geotransolver_activation_checkpointing_uses_te_wrapper(monkeypatch):
