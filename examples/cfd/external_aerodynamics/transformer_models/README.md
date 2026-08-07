@@ -72,7 +72,7 @@ Several other important configuration settings are available:
 
 > **Note** Like other parameters of the model, changing the value of `model.use_te` will make checkpoints incompatible.
 
-The training script supports data-parallel training via PyTorch DDP. In a future update, we may enable domain parallelism via FSDP and ShardTensor.
+The training script supports data-parallel training via PyTorch DDP. A possible future change might enable domain parallelism usingShardTensor (with DDP or FSDP2 `fully_shard` on the data-parallel axis).
 
 The script can be launched on a single GPU with, for example,
 

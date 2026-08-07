@@ -51,6 +51,7 @@ from .geometry import (
     simplex_inversion_energy,
     simplex_measure_energy,
     simplex_strain_energy,
+    sobolev_deform_points,
     surface_bending_energy,
     total_measure_energy,
 )
@@ -123,6 +124,7 @@ __all__ = [
     "simplex_inversion_energy",
     "simplex_measure_energy",
     "simplex_strain_energy",
+    "sobolev_deform_points",
     "smooth_log",
     "spectral_grid_gradient",
     "spherical_basis",

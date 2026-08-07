@@ -257,9 +257,9 @@ def knn_sharded_wrapper(
 
     output_queries_shard_shapes = {}
     for mesh_dim in input_queries_spec.sharding_shapes().keys():
+        # Plain int tuples (never torch.Size) for _sharding_shapes.
         shard_shapes = tuple(
-            torch.Size((s[0], k))
-            for s in input_queries_spec.sharding_shapes()[mesh_dim]
+            (int(s[0]), int(k)) for s in input_queries_spec.sharding_shapes()[mesh_dim]
         )
         output_queries_shard_shapes[mesh_dim] = shard_shapes
 

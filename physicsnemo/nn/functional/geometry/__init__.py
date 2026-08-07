@@ -23,6 +23,7 @@ from .deform import (
     SimplexInversionEnergy,
     SimplexMeasureEnergy,
     SimplexStrainEnergy,
+    SobolevDeformPoints,
     SurfaceBendingEnergy,
     TotalMeasureEnergy,
     closed_surface_volume_energy,
@@ -33,6 +34,7 @@ from .deform import (
     simplex_inversion_energy,
     simplex_measure_energy,
     simplex_strain_energy,
+    sobolev_deform_points,
     surface_bending_energy,
     total_measure_energy,
 )
@@ -58,6 +60,7 @@ __all__ = [
     "SimplexInversionEnergy",
     "SimplexMeasureEnergy",
     "SimplexStrainEnergy",
+    "SobolevDeformPoints",
     "SurfaceBendingEnergy",
     "TotalMeasureEnergy",
     "closed_surface_volume_energy",
@@ -74,6 +77,7 @@ __all__ = [
     "simplex_inversion_energy",
     "simplex_measure_energy",
     "simplex_strain_energy",
+    "sobolev_deform_points",
     "surface_bending_energy",
     "total_measure_energy",
 ]

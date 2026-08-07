@@ -146,7 +146,6 @@ class RingSDPA(torch.autograd.Function):
 
     @staticmethod
     def forward(
-        ctx,
         q: torch.Tensor,
         k: torch.Tensor,
         v: torch.Tensor,
@@ -154,7 +153,7 @@ class RingSDPA(torch.autograd.Function):
         mesh: DeviceMesh,
         ring_config: RingPassingConfig,
         attn_args: dict,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         r"""Forward pass for the ring attention implementation.
 
         Overlaps communication with computation using a dedicated comm stream
@@ -164,8 +163,6 @@ class RingSDPA(torch.autograd.Function):
 
         Parameters
         ----------
-        ctx : torch.autograd.function.FunctionCtx
-            Autograd context for saving tensors/variables for backward.
         q : torch.Tensor
             Query tensor of shape :math:`(B, H, S, D)`.
         k : torch.Tensor
@@ -183,13 +180,12 @@ class RingSDPA(torch.autograd.Function):
 
         Returns
         -------
-        torch.Tensor
-            Output tensor of shape :math:`(B, H, S, D)`.
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+            Tuple of ``(output, global_log_sumexp, philox_seed,
+            philox_offset)`` of shape :math:`(B, H, S, D)` for output and the
+            intermediate stats needed by backward. The public wrapper
+            discards the extras and they are marked non-differentiable.
         """
-
-        ctx.attn_args = attn_args
-        ctx.mesh = mesh
-        ctx.ring_config = ring_config
 
         # Accumulation state (log-space for numerical stability)
         log_global_output = None
@@ -290,6 +286,13 @@ class RingSDPA(torch.autograd.Function):
             log_global_output - global_log_sumexp
         )
 
+        return stable_output, global_log_sumexp, philox_seed, philox_offset
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        r"""Save inputs and forward-computed stats for the backward pass."""
+        q, k, v, attn_mask, mesh, ring_config, attn_args = inputs
+        stable_output, global_log_sumexp, philox_seed, philox_offset = output
         ctx.save_for_backward(
             q,
             k,
@@ -300,13 +303,19 @@ class RingSDPA(torch.autograd.Function):
             philox_seed,
             philox_offset,
         )
+        ctx.attn_args = attn_args
+        ctx.mesh = mesh
+        ctx.ring_config = ring_config
         ctx.grad_input_mask = (True, True, True, attn_mask is not None)
-
-        return stable_output
+        ctx.mark_non_differentiable(global_log_sumexp, philox_seed, philox_offset)
 
     @staticmethod
     def backward(
-        ctx, grad_output: torch.Tensor
+        ctx,
+        grad_output: torch.Tensor,
+        _grad_log_sumexp: torch.Tensor | None = None,
+        _grad_philox_seed: torch.Tensor | None = None,
+        _grad_philox_offset: torch.Tensor | None = None,
     ) -> tuple[
         torch.Tensor,
         torch.Tensor,
@@ -507,7 +516,6 @@ class RingSDPABlocking(torch.autograd.Function):
 
     @staticmethod
     def forward(
-        ctx,
         q: torch.Tensor,
         k: torch.Tensor,
         v: torch.Tensor,
@@ -515,15 +523,13 @@ class RingSDPABlocking(torch.autograd.Function):
         mesh: DeviceMesh,
         ring_config: RingPassingConfig,
         attn_args: dict,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         r"""Forward pass for the ring attention implementation.
 
         This implementation will NOT overlap the communication with the computation.
 
         Parameters
         ----------
-        ctx : torch.autograd.function.FunctionCtx
-            Autograd context for saving tensors/variables for backward.
         q : torch.Tensor
             Query tensor of shape :math:`(B, H, S, D)`.
         k : torch.Tensor
@@ -541,13 +547,12 @@ class RingSDPABlocking(torch.autograd.Function):
 
         Returns
         -------
-        torch.Tensor
-            Output tensor of shape :math:`(B, H, S, D)`.
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+            Tuple of ``(output, global_log_sumexp, philox_seed,
+            philox_offset)`` of shape :math:`(B, H, S, D)` for output and the
+            intermediate stats needed by backward. The public wrapper
+            discards the extras and they are marked non-differentiable.
         """
-
-        ctx.attn_args = attn_args
-        ctx.mesh = mesh
-        ctx.ring_config = ring_config
 
         # Create buffers to store outputs
         log_global_output = None
@@ -589,14 +594,21 @@ class RingSDPABlocking(torch.autograd.Function):
             global_log_sumexp = add_log_sumexp(global_log_sumexp, log_sumexp)
 
             # send k and v to the next rank:
-            current_k = perform_ring_iteration(current_k, ctx.mesh, ctx.ring_config)
-            current_v = perform_ring_iteration(current_v, ctx.mesh, ctx.ring_config)
+            current_k = perform_ring_iteration(current_k, mesh, ring_config)
+            current_v = perform_ring_iteration(current_v, mesh, ring_config)
 
         # Compute the final output
         stable_output = sign_global_output * torch.exp(
             log_global_output - global_log_sumexp
         )
 
+        return stable_output, global_log_sumexp, philox_seed, philox_offset
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        r"""Save inputs and forward-computed stats for the backward pass."""
+        q, k, v, attn_mask, mesh, ring_config, attn_args = inputs
+        stable_output, global_log_sumexp, philox_seed, philox_offset = output
         ctx.save_for_backward(
             q,
             k,
@@ -607,13 +619,19 @@ class RingSDPABlocking(torch.autograd.Function):
             philox_seed,
             philox_offset,
         )
+        ctx.attn_args = attn_args
+        ctx.mesh = mesh
+        ctx.ring_config = ring_config
         ctx.grad_input_mask = (True, True, True, attn_mask is not None)
-
-        return stable_output
+        ctx.mark_non_differentiable(global_log_sumexp, philox_seed, philox_offset)
 
     @staticmethod
     def backward(
-        ctx, grad_output: torch.Tensor
+        ctx,
+        grad_output: torch.Tensor,
+        _grad_log_sumexp: torch.Tensor | None = None,
+        _grad_philox_seed: torch.Tensor | None = None,
+        _grad_philox_offset: torch.Tensor | None = None,
     ) -> tuple[
         torch.Tensor,
         torch.Tensor,
@@ -711,6 +729,7 @@ class RingSDPABlocking(torch.autograd.Function):
         return grad_q, grad_k, grad_v, grad_attn_mask, None, None, None
 
 
+@torch.compiler.disable(recursive=True)
 def ring_sdpa(
     q: ShardTensor,
     k: ShardTensor,
@@ -723,6 +742,30 @@ def ring_sdpa(
     The implementation is a ring communication pattern. Each rank computes attention
     locally on its tensors, and then kv is passed to the next rank while receiving from
     the previous rank.
+
+    Notes
+    -----
+    ``torch.compile`` around this function is currently unsupported and
+    will error. The ``@torch.compiler.disable`` decorator below blocks
+    dynamo's symbolic tracing of the body, which is *necessary* (the
+    overlap path uses ``torch.cuda.stream``, ``torch.cuda.Event``,
+    ``tensor.record_stream``, and async ``Work`` handles -- none of which
+    have an FX representation), but it is **not sufficient**: AOTAutograd
+    re-executes the captured graph against ``FunctionalTensor`` inputs
+    during metadata propagation, and our ``ShardTensor``
+    ``__torch_function__`` dispatcher re-enters this function on the
+    captured SDPA node, where ``record_stream``'s alias annotation trips
+    PyTorch's functionalization layer.
+
+    Eager (no ``torch.compile``) usage works as designed: this is the
+    overlap-K/V-with-compute attention kernel used by sharded models in
+    production. Compile support for sharded attention requires a separate
+    refactor of the ring (drop ``record_stream``, switch
+    ``perform_ring_iteration`` to functional p2p collectives, replace the
+    explicit ``cuda.stream`` overlap with implicit collective overlap).
+    Until then, callers that need ``torch.compile`` must either keep
+    sharded attention outside the compiled region or avoid sharded
+    attention entirely.
 
     Parameters
     ----------
@@ -770,7 +813,12 @@ def ring_sdpa(
     else:
         latn_mask = None
 
-    x = RingSDPA.apply(lq, lk, lv, latn_mask, q._spec.mesh, ring_config, kwargs)
+    # RingSDPA returns (output, global_log_sumexp, philox_seed, philox_offset);
+    # the three trailing tensors are intermediate stats marked non-differentiable
+    # and consumed only by its backward pass.
+    x, _, _, _ = RingSDPA.apply(
+        lq, lk, lv, latn_mask, q._spec.mesh, ring_config, kwargs
+    )
 
     # Convert back to ShardTensor
     x = ShardTensor.from_local(

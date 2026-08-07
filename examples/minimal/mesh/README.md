@@ -204,6 +204,40 @@ Generate simulation-ready volume meshes from scratch in two ways.
 - Extracting isosurfaces with `marching_cubes`
 - Computing shape gradients through the mesh (differentiable meshing)
 
+## Standalone Examples
+
+### Sobolev Shape Optimization
+
+**File**: `sobolev_shape_optimization.py`
+
+Compare direct dense displacement with P1 Sobolev deformation on a small
+triangulated square. The script optimizes candidate vertex coordinates against
+a noisy target and checks that:
+
+- Both differentiable objectives decrease.
+- The Sobolev adjoint varies more smoothly between neighboring vertices.
+- Fixed boundary vertices do not move.
+
+The example selects CUDA when available and otherwise runs on CPU. CUDA
+segments, triangles, and tetrahedra use the Warp backend by default. CPU
+meshes use Torch. The example has no plotting dependency.
+
+The API guide includes a generated before-and-after visualization of the raw
+and Sobolev-filtered vertex adjoint. The reproducible figure source is
+`docs/img/mesh/sobolev_adjoint_field.py`.
+
+### 3D Sobolev Sheet Shape Optimization
+
+**File**: `sobolev_surface_shape_optimization.py`
+
+Apply the same optimization to a triangulated sheet embedded in three
+dimensions. The objective pulls its center upward while the boundary remains
+fixed. The example checks loss reduction, fixed anchors, and smoother vertex
+adjoints.
+
+The API guide includes a generated sheet visualization. Its reproducible
+source is `docs/img/mesh/sobolev_adjoint_field_3d.py`.
+
 ### Differentiable Deformation Energy Optimization
 
 **File**: `deformation_energy_optimization.py`
