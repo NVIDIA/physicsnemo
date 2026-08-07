@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import torch
+from tensordict import TensorDict
 
 from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.mesh.domain_mesh import DomainMesh
@@ -55,46 +56,6 @@ _TYPE_ATTR = "physicsnemo_mesh_type"
 #: Default chunk length (rows) for every array's leading dimension. Matches
 #: the common training ``subsample_n_cells`` so one draw touches ~1 chunk.
 DEFAULT_CHUNK_ROWS = 200_000
-
-
-def _require_backends():
-    """Verify zarr >= 3 and that tensordict carries the zarr storage backend."""
-    if int(zarr.__version__.split(".")[0]) < 3:
-        raise ImportError(
-            f"zarr >= 3 required for the tensordict zarr backend, "
-            f"found {zarr.__version__}."
-        )
-    from tensordict import TensorDict
-
-    if not hasattr(TensorDict, "from_zarr"):
-        import tensordict
-
-        raise ImportError(
-            "This tensordict version has no zarr storage backend "
-            f"(found {tensordict.__version__}; need the release containing "
-            "pytorch/tensordict#1754)."
-        )
-
-
-def _propagate_nested_create_kwargs():
-    """Work around pytorch/tensordict#1758: ``to_zarr`` create-kwargs are
-    dropped for nested leaves (``PersistentTensorDict._make_nested`` does not
-    propagate ``self.kwargs``), so ``chunks``/``compressors`` only apply at
-    the root. All mesh data is nested. Remove once fixed upstream.
-    """
-    from tensordict.persistent import PersistentTensorDict
-
-    if getattr(PersistentTensorDict, "_pn_nested_kwargs_patch", False):
-        return
-    orig = PersistentTensorDict._make_nested
-
-    def _make_nested(self, key, group):
-        out = orig(self, key, group)
-        out.kwargs = self.kwargs
-        return out
-
-    PersistentTensorDict._make_nested = _make_nested
-    PersistentTensorDict._pn_nested_kwargs_patch = True
 
 
 def to_zarr(
@@ -124,8 +85,6 @@ def to_zarr(
     >>> to_zarr(domain_mesh, "run_1.zarr")  # doctest: +SKIP
     >>> reloaded = from_zarr("run_1.zarr")  # doctest: +SKIP
     """
-    _require_backends()
-    _propagate_nested_create_kwargs()
     if not isinstance(obj, (Mesh, DomainMesh)):
         raise TypeError(f"Expected Mesh or DomainMesh, got {type(obj).__name__}")
 
@@ -146,8 +105,7 @@ def to_zarr(
 
 
 def _open_group(store) -> "zarr.Group":
-    """Open a zarr group read-only (verifying backend availability)."""
-    _require_backends()
+    """Open a zarr group read-only."""
     return zarr.open_group(str(store), mode="r")
 
 
@@ -179,8 +137,6 @@ def _read_tree(group: "zarr.Group", name: str, device=None, leaf_reader=None):
     ``leaf_reader(arr) -> Tensor`` selects what to read per array; default is
     the full array. Nested TensorDicts round-trip as nested groups.
     """
-    from tensordict import TensorDict
-
     if name not in group:
         return TensorDict({}, batch_size=[])
     reader = leaf_reader or (lambda a: _read_full(a, device))
