@@ -48,6 +48,13 @@ from physicsnemo.mesh.calculus import (
 )
 from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
 from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
+
+# Imported at runtime, not merely for typing: a saved Mesh's topology cache can
+# hold `Adjacency` entries, and TensorDict can only reconstruct a tensorclass it
+# has already seen registered. Without this, loading such a mesh in a process
+# that has not otherwise touched the adjacency API fails with
+# `RuntimeError: Could not find name ...Adjacency`.
+from physicsnemo.mesh.neighbors._adjacency import Adjacency
 from physicsnemo.mesh.transformations.deform import (
     displace,
     free_form_deform,
@@ -63,13 +70,12 @@ from physicsnemo.mesh.transformations.geometric import (
 )
 from physicsnemo.mesh.utilities._padding import _pad_by_tiling_last, _pad_with_value
 from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
+from physicsnemo.mesh.utilities._serialization import (
+    _load_memmap_with_empty_tensors,
+)
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
 from physicsnemo.mesh.validation import validate
 from physicsnemo.mesh.visualization.draw_mesh import draw
-
-if TYPE_CHECKING:
-    from physicsnemo.mesh.neighbors._adjacency import Adjacency
-
 
 # A field on a `Mesh` is "associated with" either points (e.g. a per-vertex
 # temperature), cells (e.g. a per-element pressure), or the mesh-as-a-whole
@@ -3140,3 +3146,10 @@ def _mesh_to(self, *args: Any, **kwargs: Any) -> "Mesh":
 
 _tensorclass_mesh_to = Mesh.to  # the generated tensorclass ``to``
 Mesh.to = _mesh_to  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+
+
+# Preserve zero-element tensors -- notably a point cloud's `cells` -- which
+# TensorDict's memmap writer records in metadata but never writes to disk.
+Mesh._load_memmap = classmethod(  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    _load_memmap_with_empty_tensors
+)

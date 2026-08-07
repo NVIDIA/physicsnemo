@@ -34,6 +34,9 @@ from tensordict import tensorclass
 from physicsnemo.mesh.neighbors._adjacency import Adjacency, build_adjacency_from_pairs
 from physicsnemo.mesh.spatial._lbvh import build_lbvh_topology
 from physicsnemo.mesh.spatial._ragged import _ragged_arange
+from physicsnemo.mesh.utilities._serialization import (
+    _load_memmap_with_empty_tensors,
+)
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -658,3 +661,10 @@ class BVH:
             n_targets=len(self.sorted_cell_order),
         )
         return adjacency.truncate_per_source(max_candidates_per_point)
+
+
+# A BVH over a mesh with no cells has zero-length node and leaf arrays, which
+# TensorDict's memmap writer records in metadata but never writes to disk.
+BVH._load_memmap = classmethod(  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    _load_memmap_with_empty_tensors
+)
