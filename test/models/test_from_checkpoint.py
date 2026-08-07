@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import io
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -131,3 +133,27 @@ def test_from_checkpoint_override(device):
         )
 
     Path("checkpoint.mdlus").unlink(missing_ok=False)
+
+
+def test_checkpoint_archive_members_stay_within_destination(tmp_path):
+    archive_buffer = io.BytesIO()
+    with tarfile.open(fileobj=archive_buffer, mode="w") as archive:
+        for name in ("model.pt", "../outside.pt", "/absolute.pt"):
+            content = b"checkpoint"
+            member = tarfile.TarInfo(name)
+            member.size = len(content)
+            archive.addfile(member, io.BytesIO(content))
+
+        link = tarfile.TarInfo("linked-model.pt")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "../outside.pt"
+        archive.addfile(link)
+
+    archive_buffer.seek(0)
+    with tarfile.open(fileobj=archive_buffer, mode="r") as archive:
+        safe_names = [
+            member.name
+            for member in physicsnemo.core.Module._safe_members(archive, tmp_path)
+        ]
+
+    assert safe_names == ["model.pt"]

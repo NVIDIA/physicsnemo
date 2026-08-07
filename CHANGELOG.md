@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Promotes GeoTransolver out of `experimental` to
+  `physicsnemo.models.geotransolver.GeoTransolver`, together with the FLARE
+  model (`physicsnemo.models.flare.FLARE`) and the reusable GALE and FLARE
+  attention layers (`physicsnemo.nn.GALE`, `physicsnemo.nn.GALEBlock`,
+  `physicsnemo.nn.FLARE`). The embedded OOD guard is decoupled from the model.
+  Wrap a GuardedGeoTransolver (or call
+  `attach_ood_guard`) to enable out-of-distribution guarding. The
+  model argument is removed.
 - Adds `zenith_azimuth_angles` and `zenith_azimuth_angles_from_timestamp` to
   `physicsnemo.utils.zenith_angle`, returning
   `(sin_zenith, cos_zenith, sin_azimuth, cos_azimuth)` alongside the existing
@@ -52,6 +60,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds differentiable mesh morphing: Torch-backed dense ``displace_points`` /
   ``Mesh.displace`` and Torch/NVIDIA Warp compact sparse-control
   ``morph_points`` / ``Mesh.morph`` / ``DomainMesh.morph``.
+- Adds differentiable Sobolev mesh deformation through
+  `sobolev_deform_points` and `Mesh.sobolev_deform`. A matrix-free,
+  uniform-mass P1 Helmholtz solve smooths dense per-vertex displacements and
+  their adjoints, with optional fixed-point constraints. Torch and CUDA Warp
+  backends provide explicit implicit-adjoint differentiation.
 - Adds thin-plate-spline radial-basis deformation through
   `radial_basis_function_deform_points`,
   `Mesh.radial_basis_function_deform`, and
@@ -311,6 +324,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   norms, but a custom `norm` that relies on unobserved entries being zeroed
   before the call may differ. The integer `norm` selector (e.g. `norm=2`) is
   unaffected.
+- `Mesh.transform` and `compute_cotan_weights_fem` now use the non-checking
+  `torch.linalg.inv_ex` / `solve_ex` solvers, and build their index tensors on
+  device. The checked solvers read a status code back to the host on every call,
+  which synchronizes on CUDA; removing that and the index-tensor uploads takes
+  `Mesh.transform` on a cached codimension-one mesh from three host
+  synchronizations to one, and `compute_cotan_weights_fem` from six to three. As
+  a consequence,
+  `Mesh.transform(..., assume_invertible=True)` no longer raises when the matrix
+  is in fact singular: it propagates NaN caches instead, as its docstring now
+  documents. The default `assume_invertible=None` still tests the determinant
+  and is unaffected.
 
 ### Deprecated
 
@@ -323,6 +347,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `compute_cotan_weights_fem`, and the calculus, curvature, and smoothing
+  routines built on it such as `Mesh.laplacian`, no longer fail on degenerate
+  cells in float32. The Gram-matrix regularization is now scale-free, so it also
+  covers cells with no extent — including the null cells that `Mesh.pad` and
+  `Mesh.pad_to_next_power` insert — and flat cells at large coordinate values,
+  both of which previously raised a singular-matrix `_LinAlgError` from
+  `torch.linalg.inv`. Weights for non-degenerate cells are unchanged bit for bit.
 - Multinomial index sampling now uses one shared `weighted_multinomial`
   functional across datapipes, DoMINO, and remeshing. Its core API follows
   `torch.multinomial`, adds allocation-free integer input for uniform
@@ -454,6 +485,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Dependencies
 
+- Pins TensorDict to `tensordict-nightly[zarr]` to consume the latest
+  nightly TensorDict APIs with Zarr support and several other bugfixes.
 - Removes `pyacvd` from the `mesh-extras` optional dependencies. Remeshing now
   uses NVIDIA Warp.
 - Updates the minimum supported `warp-lang` version to 1.14.0.

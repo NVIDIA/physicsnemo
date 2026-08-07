@@ -82,8 +82,10 @@ def sharded_signed_distance_field(
         # Output shape is always (N, 1), hit point is (N, 3)
         input_shard_shapes = input_points._spec.sharding_shapes()
 
+        # Plain int tuples (never torch.Size) for _sharding_shapes -- see
+        # ShardTensorSpec field docs for the dynamo / fakeification rationale.
         output_shard_shapes = {
-            mesh_dim: tuple(torch.Size((s[0],)) for s in input_shard_shapes[mesh_dim])
+            mesh_dim: tuple((int(s[0]),) for s in input_shard_shapes[mesh_dim])
             for mesh_dim in input_shard_shapes.keys()
         }
 

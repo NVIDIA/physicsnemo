@@ -41,7 +41,7 @@ forward_kwargs:
   global_embedding: global_data.U_inf
 
 model:
-  _target_: physicsnemo.experimental.models.geotransolver.GeoTransolver
+  _target_: physicsnemo.models.geotransolver.GeoTransolver
   out_dim: ${out_dim}     # auto-set from the chosen dataset's `targets:` block
   functional_dim: 6       # local_embedding = geometry coords (3) + normals (3)
   geometry_dim: 3         # point coordinates

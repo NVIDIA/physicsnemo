@@ -17,11 +17,12 @@
 import pytest
 import torch
 
-from physicsnemo.experimental.models.geotransolver.gale import (
+from physicsnemo.nn import (
     GALE,
     GALE_FA,
-    GALE_block,
+    GALEBlock,
 )
+from test.conftest import requires_module
 
 # =============================================================================
 # GALE (Geometry-Aware Latent Embeddings) Attention Tests
@@ -133,6 +134,28 @@ def test_gale_forward_multiple_inputs(device):
 # =============================================================================
 # GALE_FA Attention Tests
 # =============================================================================
+
+
+@requires_module("transformer_engine>=2.14.0")
+@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
+def test_gale_te_uses_only_concrete_output_dropout(device, attention_type):
+    """Test TE attention leaves dropout to the shared ConcreteDropout layer."""
+    if device == "cpu":
+        pytest.skip("Transformer Engine requires CUDA")
+
+    attention_cls = GALE if attention_type == "GALE" else GALE_FA
+    attention = attention_cls(
+        dim=64,
+        heads=4,
+        dim_head=16,
+        dropout=0.25,
+        use_te=True,
+        context_dim=16,
+        concrete_dropout=True,
+    ).to(device)
+
+    assert attention.attn_fn.attention_dropout == 0.0
+    assert torch.allclose(attention.out_dropout.p, torch.tensor(0.25, device=device))
 
 
 def test_gale_fa_forward_basic(device):
@@ -309,13 +332,13 @@ def test_gale_fa_concat_project_forward(device):
 
 
 # =============================================================================
-# GALE_block Tests
+# GALEBlock Tests
 # =============================================================================
 
 
 @pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
 def test_gale_block_forward(device, attention_type):
-    """Test GALE_block transformer block forward pass (GALE and GALE_FA)."""
+    """Test GALEBlock transformer block forward pass (GALE and GALE_FA)."""
     torch.manual_seed(42)
 
     hidden_dim = 64
@@ -325,7 +348,7 @@ def test_gale_block_forward(device, attention_type):
     slice_num = 8
     context_dim = hidden_dim // n_head
 
-    block = GALE_block(
+    block = GALEBlock(
         num_heads=n_head,
         hidden_dim=hidden_dim,
         dropout=0.0,
@@ -352,7 +375,7 @@ def test_gale_block_forward(device, attention_type):
 
 @pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
 def test_gale_block_multiple_inputs(device, attention_type):
-    """Test GALE_block with multiple input tensors and attention type (GALE and GALE_FA)."""
+    """Test GALEBlock with multiple input tensors and attention type (GALE and GALE_FA)."""
     torch.manual_seed(42)
 
     hidden_dim = 64
@@ -363,7 +386,7 @@ def test_gale_block_multiple_inputs(device, attention_type):
     slice_num = 8
     context_dim = hidden_dim // n_head
 
-    block = GALE_block(
+    block = GALEBlock(
         num_heads=n_head,
         hidden_dim=hidden_dim,
         dropout=0.0,
@@ -391,7 +414,7 @@ def test_gale_block_multiple_inputs(device, attention_type):
 
 @pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
 def test_gale_block_concat_project(device, attention_type):
-    """Test GALE_block with state_mixing_mode='concat_project'."""
+    """Test GALEBlock with state_mixing_mode='concat_project'."""
     torch.manual_seed(42)
 
     hidden_dim = 64
@@ -401,7 +424,7 @@ def test_gale_block_concat_project(device, attention_type):
     slice_num = 8
     context_dim = hidden_dim // n_head
 
-    block = GALE_block(
+    block = GALEBlock(
         num_heads=n_head,
         hidden_dim=hidden_dim,
         dropout=0.0,

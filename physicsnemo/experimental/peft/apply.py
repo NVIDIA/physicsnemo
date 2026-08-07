@@ -67,13 +67,13 @@ def _build_matcher(config: LoRAConfig) -> Callable[[str, nn.Module], bool]:
 
 
 # Default feed-forward MLP target patterns for known PhysicsNeMo transformer
-# blocks (e.g. GALE_block / TransolverBlock). Regex over fully-qualified names;
+# blocks (e.g. GALEBlock / TransolverBlock). Regex over fully-qualified names;
 # editable by users for custom architectures. The registry decides whether each
 # match is the fused te.LayerNormMLP or plain Linears, and non-Linear matches
 # (norms, activations) are filtered out by type.
 _MLP_TARGET_PATTERNS: list[str] = [
-    r"\.ln_mlp1$",  # GALE_block FFN under TE: fused te.LayerNormMLP
-    r"\.ln_mlp1\.\d+\.layers\.\d+$",  # GALE_block FFN non-TE: Sequential(LayerNorm, Mlp(layers=...))
+    r"\.ln_mlp1$",  # GALEBlock FFN under TE: fused te.LayerNormMLP
+    r"\.ln_mlp1\.\d+\.layers\.\d+$",  # GALEBlock FFN non-TE: Sequential(LayerNorm, Mlp(layers=...))
 ]
 
 

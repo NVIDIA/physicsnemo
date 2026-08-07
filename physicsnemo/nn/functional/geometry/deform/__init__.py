@@ -34,6 +34,7 @@ from .energy import (
 from .ffd import FreeFormDeformPoints, free_form_deform_points
 from .rbf import RadialBasisFunctionDeformPoints, radial_basis_function_deform_points
 from .shrinkwrap import ShrinkwrapPoints, shrinkwrap_points
+from .sobolev import SobolevDeformPoints, sobolev_deform_points
 
 __all__ = [
     "ClosedSurfaceVolumeEnergy",
@@ -45,6 +46,7 @@ __all__ = [
     "SimplexInversionEnergy",
     "SimplexMeasureEnergy",
     "SimplexStrainEnergy",
+    "SobolevDeformPoints",
     "SurfaceBendingEnergy",
     "TotalMeasureEnergy",
     "closed_surface_volume_energy",
@@ -56,6 +58,7 @@ __all__ = [
     "simplex_inversion_energy",
     "simplex_measure_energy",
     "simplex_strain_energy",
+    "sobolev_deform_points",
     "surface_bending_energy",
     "total_measure_energy",
 ]

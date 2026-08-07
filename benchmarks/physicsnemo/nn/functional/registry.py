@@ -51,6 +51,7 @@ from physicsnemo.nn.functional.geometry import (
     RayMeshIntersect,
     ShrinkwrapPoints,
     SignedDistanceField,
+    SobolevDeformPoints,
 )
 from physicsnemo.nn.functional.interpolation import (
     GridToPointInterpolation,
@@ -98,6 +99,7 @@ FUNCTIONAL_SPECS: tuple[type[FunctionSpec], ...] = (
     MeshToVoxelFraction,
     RayMeshIntersect,
     SignedDistanceField,
+    SobolevDeformPoints,
     # Interpolation.
     GridToPointInterpolation,
     PointToGridInterpolation,
