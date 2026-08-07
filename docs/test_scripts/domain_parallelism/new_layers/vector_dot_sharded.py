@@ -2,7 +2,8 @@ import torch
 import torch.distributed as dist
 import time
 
-from physicsnemo.distributed import DistributedManager, scatter_tensor, ShardTensor
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.domain_parallel import scatter_tensor, ShardTensor
 from torch.distributed.tensor.placement_types import Shard, Replicate
 
 def sharded_dot_product(func: Callable, types: Tuple, args: Tuple, kwargs: Dict):
