@@ -192,7 +192,12 @@ def test_plot_and_save_roundtrip(tmp_path: Path):
     k, ens_pow, tgt_pow = power_spectra_per_variable(ens_mean, tgt2)
     spec_path = tmp_path / "spec.png"
     was_plotted = plot_power_spectra(
-        k, ens_pow, tgt_pow, ["v0", "v1"], lead_idx=0, out_path=str(spec_path)
+        k,
+        ens_pow,
+        tgt_pow,
+        ["v0", "v1"],
+        lead_hours_all=np.array([6.0]),
+        out_path=str(spec_path),
     )
     if was_plotted:
         assert spec_path.is_file() and spec_path.stat().st_size > 0

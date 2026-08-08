@@ -187,6 +187,8 @@ def build_model(
     state_channels: int,
     background_channels: int,
     invariant_channels: int,
+    input_height: int = 721,
+    input_width: int = 1440,
 ) -> FGNDiT:
     if cfg.model.background_channels not in ("auto", background_channels):
         raise ValueError("config model.background_channels disagrees with dataset")
@@ -202,6 +204,8 @@ def build_model(
         background_channels=background_channels,
         invariant_channels=invariant_channels,
         latent_dim=int(cfg.model.latent_dim),
+        input_height=input_height,
+        input_width=input_width,
         patch_size=ps,
         hidden_size=int(cfg.model.hidden_size),
         depth=int(cfg.model.depth),

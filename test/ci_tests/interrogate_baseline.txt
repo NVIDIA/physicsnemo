@@ -810,3 +810,8 @@ examples/weather/fgn/utils/trainer.py:Trainer
 examples/weather/fgn/utils/trainer.py:Trainer.save_checkpoint
 examples/weather/fgn/utils/trainer.py:Trainer.train
 examples/weather/fgn/utils/trainer.py:find_latest_model_checkpoint
+examples/weather/fgn/datasets/synthetic.py:SyntheticFGNDataset.background_channels
+examples/weather/fgn/datasets/synthetic.py:SyntheticFGNDataset.get_invariants
+examples/weather/fgn/datasets/synthetic.py:SyntheticFGNDataset.image_shape
+examples/weather/fgn/datasets/synthetic.py:SyntheticFGNDataset.output_only_channels
+examples/weather/fgn/datasets/synthetic.py:SyntheticFGNDataset.state_channels

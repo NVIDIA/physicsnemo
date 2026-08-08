@@ -150,11 +150,14 @@ class Trainer:
             invariant_channels = int(self.invariants.shape[0])
 
         self.logger.info("Building model")
+        _H, _W = self.train_dataset.image_shape()
         self.model = build_model(
             self.cfg,
             state_channels=len(self.train_dataset.state_channels()),
             background_channels=len(self.train_dataset.background_channels()),
             invariant_channels=invariant_channels,
+            input_height=_H,
+            input_width=_W,
         ).to(self.device)
         self.logger.info(
             f"Model ready on {self.device} "
