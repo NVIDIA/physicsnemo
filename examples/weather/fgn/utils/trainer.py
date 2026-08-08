@@ -353,36 +353,36 @@ class Trainer:
         num_samples = int(self.cfg.training.loss.num_samples)
         mse_weight = float(self.cfg.training.loss.mse_weight)
 
-        # For each rollout step, run N-member ensemble, score against that
-        # step's ground truth, then advance history by appending each member's
-        # prediction (so the N trajectories diverge in parallel).
-        # History shape per member: (B, T, C, H, W).
         B, T, C, H, W = history.shape
-        per_member_hist = (
-            history.unsqueeze(1).expand(B, num_samples, T, C, H, W).contiguous()
+        N = num_samples
+
+        # Stack batch and sample axes into a single batch axis for one forward
+        # pass per AR step instead of N serial passes (WeatherNext2 §run_model_
+        # with_sample_as_batch pattern).  (B,N,T,C,H,W) → (B*N, T, C, H, W).
+        hist_bn = history.unsqueeze(1).expand(B, N, T, C, H, W).reshape(B * N, T, C, H, W)
+        bg_bn = background.unsqueeze(1).expand(B, N, *background.shape[1:]).reshape(
+            B * N, *background.shape[1:]
         )
+        inv_bn = None
+        if invariants is not None:
+            inv_bn = invariants.unsqueeze(1).expand(B, N, *invariants.shape[1:]).reshape(
+                B * N, *invariants.shape[1:]
+            )
 
         step_losses: list[torch.Tensor] = []
         for k in range(ar_steps):
-            members = []
-            for n in range(num_samples):
-                hist_n = per_member_hist[:, n]
-                latent = torch.randn(
-                    hist_n.shape[0],
-                    int(self.cfg.model.latent_dim),
-                    device=self.device,
-                    dtype=torch.float32,
-                )
-                with torch.autocast("cuda", dtype=torch.bfloat16, enabled=self.amp):
-                    members.append(
-                        self.model(
-                            history=hist_n,
-                            latent=latent,
-                            background=background,
-                            invariants=invariants,
-                        )
-                    )
-            preds = torch.stack(members, dim=1).float()  # (B, N, C, H, W)
+            latent = torch.randn(
+                B * N, int(self.cfg.model.latent_dim), device=self.device, dtype=torch.float32
+            )
+            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=self.amp):
+                pred_bn = self.model(
+                    history=hist_bn,
+                    latent=latent,
+                    background=bg_bn,
+                    invariants=inv_bn,
+                ).float()  # (B*N, C, H, W)
+
+            preds = pred_bn.reshape(B, N, C, H, W)  # (B, N, C, H, W)
 
             step_loss = fair_crps(preds, target[:, k], weights=self.loss_weights)
             if mse_weight > 0.0:
@@ -393,18 +393,15 @@ class Trainer:
 
             if k < ar_steps - 1:
                 # Paper §3: predicted-only channels (e.g. tp06) must not be
-                # fed back as input on the next AR step — mirrors
-                # earth2studio gencast_mini's zeroing of tp12 in inputs.
-                # Clone before mutating because ``preds`` is still used in
-                # ``step_loss`` and autograd is tracking it.
-                next_frame = preds
+                # fed back as input on the next AR step.
+                next_bn = pred_bn
                 output_only = self.train_dataset.output_only_channels()
                 if output_only:
-                    next_frame = next_frame.clone()
+                    next_bn = next_bn.clone()
                     for ci in output_only:
-                        next_frame[:, :, ci].zero_()
-                per_member_hist = torch.cat(
-                    [per_member_hist[:, :, 1:], next_frame.unsqueeze(2)], dim=2
+                        next_bn[:, ci].zero_()
+                hist_bn = torch.cat(
+                    [hist_bn[:, 1:], next_bn.unsqueeze(1)], dim=1
                 )
 
         return torch.stack(step_losses).mean()

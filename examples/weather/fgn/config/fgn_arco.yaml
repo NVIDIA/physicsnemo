@@ -75,6 +75,13 @@ training:
     mse_weight: 0.1
     use_channel_weights: true   # GraphCast-style per-variable weights (§2.2.3)
     use_area_weights: true      # cos(lat) area weighting
+    # Production per-variable downweights (WeatherNext2 fgn_loss_function_kwargs).
+    # msl and tp06 are noisy/sparse; 10m winds are given extra weight.
+    channel_loss_weights:
+      msl: 0.1
+      u10m: 0.3
+      v10m: 0.3
+      tp06: 0.1
   optimizer:
     # Paper Table A.2: Stage 3 (0.25° ERA5) uses lr=8e-5 with 1000-step warmup.
     # Stage 1 (1° 12h) uses lr=8e-4 — override on CLI if running Stage 1.
