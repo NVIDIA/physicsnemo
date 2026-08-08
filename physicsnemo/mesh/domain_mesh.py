@@ -1259,8 +1259,10 @@ class DomainMesh:
         check_inverted_cells: bool = False,
         check_out_of_bounds: bool = True,
         check_manifoldness: bool = False,
-        tolerance: float = 1e-10,
+        tolerance: float | None = None,
         raise_on_error: bool = False,
+        *,
+        check_self_intersection: bool = False,
     ) -> dict[str, Any]:
         r"""Validate all meshes in the domain and aggregate results.
 
@@ -1279,10 +1281,15 @@ class DomainMesh:
             Check cell indices are valid.
         check_manifoldness : bool, optional
             Check manifold topology.
-        tolerance : float, optional
-            Tolerance for geometric checks.
+        tolerance : float | None, optional
+            Tolerance for geometric checks. If ``None`` (default), each mesh
+            uses a dtype-aware epsilon.
         raise_on_error : bool, optional
             Raise ``ValueError`` on first error vs return report.
+        check_self_intersection : bool, optional
+            Request self-intersection checks for every component. This option
+            is keyword-only and not yet implemented; passing ``True`` raises
+            ``NotImplementedError``.
 
         Returns
         -------
@@ -1295,6 +1302,12 @@ class DomainMesh:
             - ``"boundaries"``: ``dict[str, Mapping[str, ...]]`` of per-boundary
               reports.
             - ``"valid"``: ``bool``, ``True`` only if all meshes pass validation.
+
+        Raises
+        ------
+        NotImplementedError
+            If ``check_self_intersection=True`` because component-level
+            self-intersection checking is not yet implemented.
         """
         kwargs: dict[str, Any] = dict(
             check_degenerate_cells=check_degenerate_cells,
@@ -1302,6 +1315,7 @@ class DomainMesh:
             check_inverted_cells=check_inverted_cells,
             check_out_of_bounds=check_out_of_bounds,
             check_manifoldness=check_manifoldness,
+            check_self_intersection=check_self_intersection,
             tolerance=tolerance,
             raise_on_error=raise_on_error,
         )

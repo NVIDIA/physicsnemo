@@ -37,6 +37,9 @@ def is_watertight(mesh: "Mesh") -> bool:
     A mesh is watertight if every codimension-1 facet is shared by exactly 2 cells.
     This means the mesh forms a closed surface/volume with no holes or gaps.
 
+    Call it as ``is_watertight(mesh)`` or as ``mesh.is_watertight()``. The
+    bound method supplies ``mesh`` automatically.
+
     Parameters
     ----------
     mesh : Mesh
@@ -93,6 +96,9 @@ def is_manifold(
 
     A mesh is a manifold if it locally looks like Euclidean space at every point.
     This function checks various topological constraints depending on the check level.
+
+    Call it as ``is_manifold(mesh, ...)`` or as ``mesh.is_manifold(...)``. The
+    bound method supplies ``mesh`` automatically.
 
     Parameters
     ----------

@@ -19,7 +19,8 @@
 import pytest
 import torch
 
-from physicsnemo.experimental.nn import FLARE
+from physicsnemo.nn import FLARE
+from test.conftest import requires_module
 
 
 def test_flare_forward(device):
@@ -47,10 +48,33 @@ def test_flare_configs(device, heads, dim_head):
     assert out.shape == x.shape
 
 
-def test_flare_use_te_raises():
-    """Test that use_te=True raises ValueError."""
-    with pytest.raises(ValueError, match="does not support Transformer Engine"):
-        FLARE(dim=64, heads=4, dim_head=16, use_te=True)
+@requires_module("transformer_engine>=2.14.0")
+def test_flare_use_te_forward_backward(device):
+    """Test TE cross-attention with unequal global and token sequence lengths."""
+    if device == "cpu":
+        pytest.skip("Transformer Engine requires CUDA")
+
+    torch.manual_seed(42)
+    flare = FLARE(
+        dim=64,
+        heads=4,
+        dim_head=16,
+        dropout=0.25,
+        n_global_queries=7,
+        use_te=True,
+    ).to(device)
+    x = torch.randn(2, 19, 64, device=device, requires_grad=True)
+
+    assert flare.attn_fn.attention_dropout == 0.0
+    assert flare.out_dropout.p == 0.25
+
+    out = flare(x)
+    assert out.shape == x.shape
+    assert not torch.isnan(out).any()
+
+    out.sum().backward()
+    assert x.grad is not None
+    assert not torch.isnan(x.grad).any()
 
 
 def test_flare_gradient_flow(device):
