@@ -359,20 +359,29 @@ class Trainer:
         # Stack batch and sample axes into a single batch axis for one forward
         # pass per AR step instead of N serial passes (WeatherNext2 §run_model_
         # with_sample_as_batch pattern).  (B,N,T,C,H,W) → (B*N, T, C, H, W).
-        hist_bn = history.unsqueeze(1).expand(B, N, T, C, H, W).reshape(B * N, T, C, H, W)
-        bg_bn = background.unsqueeze(1).expand(B, N, *background.shape[1:]).reshape(
-            B * N, *background.shape[1:]
+        hist_bn = (
+            history.unsqueeze(1).expand(B, N, T, C, H, W).reshape(B * N, T, C, H, W)
+        )
+        bg_bn = (
+            background.unsqueeze(1)
+            .expand(B, N, *background.shape[1:])
+            .reshape(B * N, *background.shape[1:])
         )
         inv_bn = None
         if invariants is not None:
-            inv_bn = invariants.unsqueeze(1).expand(B, N, *invariants.shape[1:]).reshape(
-                B * N, *invariants.shape[1:]
+            inv_bn = (
+                invariants.unsqueeze(1)
+                .expand(B, N, *invariants.shape[1:])
+                .reshape(B * N, *invariants.shape[1:])
             )
 
         step_losses: list[torch.Tensor] = []
         for k in range(ar_steps):
             latent = torch.randn(
-                B * N, int(self.cfg.model.latent_dim), device=self.device, dtype=torch.float32
+                B * N,
+                int(self.cfg.model.latent_dim),
+                device=self.device,
+                dtype=torch.float32,
             )
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=self.amp):
                 pred_bn = self.model(
@@ -400,9 +409,7 @@ class Trainer:
                     next_bn = next_bn.clone()
                     for ci in output_only:
                         next_bn[:, ci].zero_()
-                hist_bn = torch.cat(
-                    [hist_bn[:, 1:], next_bn.unsqueeze(1)], dim=1
-                )
+                hist_bn = torch.cat([hist_bn[:, 1:], next_bn.unsqueeze(1)], dim=1)
 
         return torch.stack(step_losses).mean()
 
