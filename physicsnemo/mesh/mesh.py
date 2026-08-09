@@ -54,6 +54,7 @@ from physicsnemo.mesh.transformations.deform import (
     free_form_deform,
     morph,
     radial_basis_function_deform,
+    shrinkwrap,
     sobolev_deform,
 )
 from physicsnemo.mesh.transformations.geometric import (
@@ -2481,6 +2482,8 @@ class Mesh:
     morph = morph
 
     radial_basis_function_deform = radial_basis_function_deform
+
+    shrinkwrap = shrinkwrap
 
     sobolev_deform = sobolev_deform
 

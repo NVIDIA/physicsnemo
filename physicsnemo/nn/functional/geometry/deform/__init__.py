@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Point-deformation functionals and reference-relative deformation energies."""
+"""Point deformation, surface projection, and deformation-energy functionals."""
 
 from .deform import DisplacePoints, MorphPoints, displace_points, morph_points
 from .energy import (
@@ -33,6 +33,7 @@ from .energy import (
 )
 from .ffd import FreeFormDeformPoints, free_form_deform_points
 from .rbf import RadialBasisFunctionDeformPoints, radial_basis_function_deform_points
+from .shrinkwrap import ShrinkwrapPoints, shrinkwrap_points
 from .sobolev import SobolevDeformPoints, sobolev_deform_points
 
 __all__ = [
@@ -41,6 +42,7 @@ __all__ = [
     "FreeFormDeformPoints",
     "MorphPoints",
     "RadialBasisFunctionDeformPoints",
+    "ShrinkwrapPoints",
     "SimplexInversionEnergy",
     "SimplexMeasureEnergy",
     "SimplexStrainEnergy",
@@ -52,6 +54,7 @@ __all__ = [
     "free_form_deform_points",
     "morph_points",
     "radial_basis_function_deform_points",
+    "shrinkwrap_points",
     "simplex_inversion_energy",
     "simplex_measure_energy",
     "simplex_strain_energy",
