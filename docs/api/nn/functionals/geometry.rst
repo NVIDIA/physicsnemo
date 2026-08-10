@@ -26,6 +26,58 @@ Point Displacement
     )
     moved.square().sum().backward()
 
+Sobolev Point Deformation
+-------------------------
+
+.. autofunction:: physicsnemo.nn.functional.sobolev_deform_points
+
+.. code:: python
+
+    import torch
+    from physicsnemo.nn.functional import sobolev_deform_points
+
+    points = torch.tensor(
+        [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+        requires_grad=True,
+    )
+    cells = torch.tensor([[0, 1, 2], [0, 2, 3]])
+    displacement = torch.tensor(
+        [[0.0, 0.0], [0.0, 0.2], [0.0, -0.2], [0.0, 0.0]],
+        requires_grad=True,
+    )
+
+    smooth = sobolev_deform_points(
+        points,
+        cells,
+        displacement,
+        length_scale=0.25,
+    )
+    smooth.square().mean().backward()
+
+The operation assembles a P1 stiffness matrix and a uniform vertex mass scaled
+by the mean positive lumped P1 mass. It solves
+:math:`(M + \ell^2 K)u = Md` and returns :math:`x + u`.
+``length_scale`` is :math:`\ell` in the same physical units as ``points``.
+Zero recovers ordinary dense displacement. Larger values attenuate
+short-wavelength changes in the raw displacement and its reverse-mode
+sensitivity. The uniform mass makes this filter self-adjoint in standard
+Euclidean vertex coordinates.
+
+``fixed_points`` is an optional boolean vertex mask. True entries impose zero
+Dirichlet displacement. Boundaries without a fixed mask use the natural
+homogeneous Neumann condition. The Torch and Warp matrix-free solves support
+one mesh or a batch of point tensors that share ``cells``. Both are
+differentiable with respect to ``points`` and ``displacement``. The Warp
+backend runs on CUDA and uses an explicit implicit-adjoint backward with an
+analytic geometry vector-Jacobian product. CUDA segments, triangles, and
+tetrahedra select Warp by default when it is available. CPU inputs and
+higher-dimensional simplices select Torch. Positive length scales support
+first-order reverse-mode differentiation. Higher-order derivatives are not
+supported. The operation raises an error when a forward or adjoint solve does
+not converge within ``max_iterations``. CUDA Graph capture is not supported
+because P1 operator assembly and solver diagnostics are not capture-safe.
+Warp CUDA results and point gradients may vary at roundoff between runs.
+
 Sparse Control-Point Morphing
 -----------------------------
 
@@ -284,6 +336,87 @@ topology.
 Torch provides higher-order derivatives. Warp provides a first-order CUDA
 path. Because its backward uses atomic accumulation at shared vertices, Warp
 gradient results can have small run-to-run floating-point differences.
+
+Nearest-Surface Shrinkwrap
+--------------------------
+
+Shrinkwrap projects each source point to the nearest location on a triangle
+target surface. Optional point weights scale the displacement between the
+source and projected positions. A signed offset moves the projection along the
+selected target face normal.
+
+.. autofunction:: physicsnemo.nn.functional.shrinkwrap_points
+
+.. code:: python
+
+    import torch
+    from physicsnemo.nn.functional import shrinkwrap_points
+
+    target_points = torch.tensor(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ],
+        requires_grad=True,
+    )
+    target_faces = torch.tensor([[0, 1, 2], [0, 2, 3]])
+    points = torch.tensor(
+        [[0.25, 0.25, 0.30], [0.75, 0.75, 0.45]],
+        requires_grad=True,
+    )
+    weights = torch.tensor([0.5, 1.0], requires_grad=True)
+    offset = torch.tensor(0.02, requires_grad=True)
+
+    wrapped = shrinkwrap_points(
+        points,
+        target_points,
+        target_faces,
+        point_weights=weights,
+        offset=offset,
+    )
+    wrapped.square().mean().backward()
+
+Source points use one of these shapes:
+
+- ``(N, 3)``
+- ``(B, N, 3)``
+
+One triangle target is shared across the source batches. Keep the following
+projection rules in mind:
+
+- A positive ``offset`` follows target face winding.
+- A finite ``max_distance`` leaves points at or beyond the cutoff unchanged.
+
+Nearest-face selection, closest-feature changes, and distance gating are
+discrete. Between those transitions, gradients propagate through the following
+values:
+
+- Source points
+- Selected target vertices
+- Floating-point weights
+- A tensor-valued ``offset``
+
+Target connectivity is not differentiable.
+
+Torch provides the reference nearest-face search. Warp accelerates that search
+on CPU and CUDA. Both backends evaluate the selected projection with PyTorch
+in the input dtype. Exact ties at target edges or vertices can select different
+adjacent faces. Their closest point is the same, but a nonzero face-normal
+offset can differ.
+
+Search backend rules differ by dtype and geometry:
+
+- ``float64`` targets use the Torch search because Warp searches in ``float32``.
+- Warp searches safe ``float32`` coordinates unchanged.
+- Warp falls back to Torch for unsafe coordinate magnitudes or face geometry.
+
+Shrinkwrap performs data-dependent validation and nearest-face search setup.
+Do not run CUDA executions with either backend inside CUDA Graph capture.
+
+For a connectivity-preserving object API and a triangle-panel example, use
+:meth:`~physicsnemo.mesh.mesh.Mesh.shrinkwrap`.
 
 Mesh Poisson Disk Sample
 ------------------------

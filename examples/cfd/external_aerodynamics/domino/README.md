@@ -196,11 +196,12 @@ To train and test the DoMINO model on AWS dataset, follow these steps:
 ### Training with Domain Parallelism
 
 DoMINO has support for training and inference using domain parallelism in PhysicsNeMo,
-via the `ShardTensor` mechanisms and pytorch's FSDP tools.  `ShardTensor`, built on
-PyTorch's `DTensor` object, is a domain-parallel-aware tensor that can live on multiple
-GPUs and perform operations in a numerically consistent way.  For more information
-about the techniques of domain parallelism and `ShardTensor`, refer to PhysicsNeMo
-tutorials such as [`ShardTensor`](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.distributed.shardtensor.html).
+using the `ShardTensor` mechanisms and PyTorch's FSDP2 (`fully_shard`) tools.
+`ShardTensor` is a `torch.Tensor` subclass that is domain-parallel aware. It can live
+on multiple GPUs and perform operations in a numerically consistent way, and plain
+`nn.Module`s work on it unmodified.  For more information about the techniques of
+domain parallelism and `ShardTensor`, refer to PhysicsNeMo tutorials such as
+[`ShardTensor`](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.domain_parallel.html).
 
 In DoMINO specifically, domain parallelism has been enabled in two ways, which
 can be used concurrently or separately.  First, the input sampled volumetric
@@ -229,6 +230,10 @@ parallelism over the latent space and input/output points, respectively.
 Setting domain_size > 1 without specifying `shard_points=True` or `shard_grid=True`
 will result in a runtime error during configuration - if you do not want to use
 domain_parallelism, leave `domain_size=1`.
+
+At model startup, the training script synchronizes the plain model parameters and
+buffers across each domain-parallel group. It then applies FSDP2 over the
+data-parallel mesh.
 
 ### Performance Optimizations
 

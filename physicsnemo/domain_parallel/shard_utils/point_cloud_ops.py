@@ -20,6 +20,7 @@ from typing import Any, Callable
 
 import torch
 import torch.distributed as dist
+import torch.distributed._functional_collectives as funcol
 import warp as wp
 from torch.distributed.tensor.placement_types import (
     Replicate,
@@ -120,21 +121,22 @@ def ring_ball_query(
 
         mp = indices_shard.shape[-1]
         d = queries.shape[-1]
+        # Plain int tuples (never torch.Size) for _sharding_shapes -- see
+        # ShardTensorSpec._sharding_shapes field docs.
         indices_shard_output_sharding = {
             0: tuple(
-                torch.Size([*s[:q_shard_dim], s[q_shard_dim], mp])
+                tuple([*s[:q_shard_dim], s[q_shard_dim], mp])
                 for s in queries_shard_sizes
             ),
         }
         num_neighbors_shard_output_sharding = {
             0: tuple(
-                torch.Size([*s[:q_shard_dim], s[q_shard_dim]])
-                for s in queries_shard_sizes
+                tuple([*s[:q_shard_dim], s[q_shard_dim]]) for s in queries_shard_sizes
             ),
         }
         outputs_shard_output_sharding = {
             0: tuple(
-                torch.Size([*s[:q_shard_dim], s[q_shard_dim], mp, d])
+                tuple([*s[:q_shard_dim], s[q_shard_dim], mp, d])
                 for s in queries_shard_sizes
             ),
         }
@@ -219,14 +221,15 @@ def ringless_ball_query(
     q_shard_dim = queries_placement.dim if queries_placement.is_shard() else 0
 
     for i_dim, s in queries._spec.sharding_shapes().items():
+        # Plain int tuples (never torch.Size) for _sharding_shapes.
         indices_placement[i_dim] = tuple(
-            torch.Size([*_s[:q_shard_dim], _s[q_shard_dim], max_points]) for _s in s
+            tuple([*_s[:q_shard_dim], _s[q_shard_dim], max_points]) for _s in s
         )
         num_neighbors_placement[i_dim] = tuple(
-            torch.Size([*_s[:q_shard_dim], _s[q_shard_dim]]) for _s in s
+            tuple([*_s[:q_shard_dim], _s[q_shard_dim]]) for _s in s
         )
         output_points_placement[i_dim] = tuple(
-            torch.Size([*_s[:q_shard_dim], _s[q_shard_dim], max_points, 3]) for _s in s
+            tuple([*_s[:q_shard_dim], _s[q_shard_dim], max_points, 3]) for _s in s
         )
 
     indices = ShardTensor.from_local(
@@ -398,7 +401,6 @@ class RingBallQuery(torch.autograd.Function):
 
     @staticmethod
     def forward(
-        ctx: torch.autograd.function.FunctionCtx,
         points: torch.Tensor,
         queries: torch.Tensor,
         mesh: Any,
@@ -411,8 +413,6 @@ class RingBallQuery(torch.autograd.Function):
 
         Parameters
         ----------
-        ctx : torch.autograd.function.FunctionCtx
-            Context for saving variables for backward pass.
         points : torch.Tensor
             First set of points.
         queries : torch.Tensor
@@ -433,9 +433,6 @@ class RingBallQuery(torch.autograd.Function):
         Tuple[torch.Tensor, torch.Tensor, torch.Tensor]
             Tuple of (mapping, outputs, None, num_neighbors) tensors.
         """
-        ctx.mesh = mesh
-        ctx.ring_config = ring_config
-
         # Create buffers to store outputs
         current_indices = None
         current_num_neighbors = None
@@ -454,10 +451,10 @@ class RingBallQuery(torch.autograd.Function):
         # For uneven point clouds, the global stide is important:
         strides = [s[shard_dim] for s in shard_sizes]
 
-        ctx.max_points = bq_kwargs["max_points"]
-        ctx.radius = bq_kwargs["radius"]
-        ctx.return_dists = bq_kwargs["return_dists"]
-        ctx.return_points = bq_kwargs["return_points"]
+        max_points = bq_kwargs["max_points"]
+        radius = bq_kwargs["radius"]
+        return_dists = bq_kwargs["return_dists"]
+        return_points = bq_kwargs["return_points"]
 
         for i in range(world_size):
             source_rank = (mesh_rank - i) % world_size
@@ -470,10 +467,10 @@ class RingBallQuery(torch.autograd.Function):
             ) = radius_search_impl(
                 current_points,
                 current_queries,
-                ctx.radius,
-                ctx.max_points,
-                ctx.return_dists,
-                ctx.return_points,
+                radius,
+                max_points,
+                return_dists,
+                return_points,
             )
             # Store the result with its source rank
             rank_results[source_rank] = (
@@ -490,8 +487,8 @@ class RingBallQuery(torch.autograd.Function):
                 # Don't do a ring on the last iteration.
                 current_points = perform_ring_iteration(
                     current_points,
-                    ctx.mesh,
-                    ctx.ring_config,
+                    mesh,
+                    ring_config,
                     recv_shape=shard_sizes[next_source_rank],
                 )
 
@@ -513,11 +510,26 @@ class RingBallQuery(torch.autograd.Function):
                 )
 
                 stride += strides[r]
-        ctx.save_for_backward(
-            points, queries, current_indices, current_num_neighbors, current_out_points
-        )
 
         return current_indices, current_out_points, None, current_num_neighbors
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        r"""Save context for the (currently unimplemented) backward pass.
+
+        Backward is not implemented and raises ``MissingShardPatch``. We still
+        stash ``mesh``, ``ring_config``, and the ball-query kwargs so that if a
+        backward is added later it has the information it needs.
+        """
+        _points, _queries, mesh, ring_config, _shard_sizes, _shard_dim, bq_kwargs = (
+            inputs
+        )
+        ctx.mesh = mesh
+        ctx.ring_config = ring_config
+        ctx.max_points = bq_kwargs["max_points"]
+        ctx.radius = bq_kwargs["radius"]
+        ctx.return_dists = bq_kwargs["return_dists"]
+        ctx.return_points = bq_kwargs["return_points"]
 
     @staticmethod
     def backward(
@@ -558,16 +570,13 @@ class GradReducer(torch.autograd.Function):
 
     @staticmethod
     def forward(
-        ctx: torch.autograd.function.FunctionCtx,
         input: torch.Tensor,
         spec: ShardTensorSpec,
     ) -> torch.Tensor:
-        r"""Forward pass that saves the spec for backward.
+        r"""Forward pass: return the input tensor unchanged.
 
         Parameters
         ----------
-        ctx : torch.autograd.function.FunctionCtx
-            Autograd context for saving variables for backward.
         input : torch.Tensor
             Input tensor to pass through.
         spec : ShardTensorSpec
@@ -578,8 +587,13 @@ class GradReducer(torch.autograd.Function):
         torch.Tensor
             The input tensor unchanged.
         """
-        ctx.spec = spec
         return input
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        r"""Save the input ShardTensorSpec for the backward all-reduce."""
+        _input, spec = inputs
+        ctx.spec = spec
 
     @staticmethod
     def backward(
@@ -602,11 +616,16 @@ class GradReducer(torch.autograd.Function):
         """
         spec = ctx.spec
         placement = spec.placements[0]
-        # Perform an allreduce on the gradient
+        # Perform an allreduce on the gradient. funcol rather than
+        # dist.all_reduce so an AOT-captured backward graph holds a
+        # DeviceMesh instead of a ProcessGroup ScriptObject, which cannot
+        # be deepcopied when AOTAutograd caches the backward GraphModule.
         if placement.is_replicate():
-            dist.all_reduce(
-                grad_output, op=dist.ReduceOp.SUM, group=spec.mesh.get_group(0)
-            )
+            grad_output = funcol.all_reduce(grad_output, "sum", (spec.mesh, 0))
+            # Prevent an asynchronous wrapper from escaping into gradient hooks
+            # or leaf ``.grad`` storage without first completing the reduction.
+            if isinstance(grad_output, funcol.AsyncCollectiveTensor):
+                grad_output = grad_output.wait()
         return grad_output, None
 
 

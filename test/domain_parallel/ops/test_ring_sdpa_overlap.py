@@ -101,7 +101,10 @@ def test_ring_sdpa_forward_matches_blocking(
 
     attn_args = {"dropout_p": 0.0, "is_causal": False, "scale": None}
 
-    out_blocking = RingSDPABlocking.apply(
+    # Both RingSDPA and RingSDPABlocking now return (output, *stats); the
+    # trailing stats are intermediate non-differentiable tensors needed by
+    # backward only.
+    out_blocking, *_ = RingSDPABlocking.apply(
         q,
         k,
         v,
@@ -110,7 +113,7 @@ def test_ring_sdpa_forward_matches_blocking(
         ring_config,
         attn_args,
     )
-    out_overlap = RingSDPA.apply(
+    out_overlap, *_ = RingSDPA.apply(
         q,
         k,
         v,
@@ -176,7 +179,9 @@ def test_ring_sdpa_backward_matches_blocking(
     k_b.requires_grad_(True)
     v_b.requires_grad_(True)
 
-    out_b = RingSDPABlocking.apply(q_b, k_b, v_b, None, mesh, ring_config, attn_args)
+    out_b, *_ = RingSDPABlocking.apply(
+        q_b, k_b, v_b, None, mesh, ring_config, attn_args
+    )
     loss_b = out_b.mean()
     loss_b.backward()
 
@@ -185,7 +190,7 @@ def test_ring_sdpa_backward_matches_blocking(
     k_o = k_b.detach().clone().requires_grad_(True)
     v_o = v_b.detach().clone().requires_grad_(True)
 
-    out_o = RingSDPA.apply(q_o, k_o, v_o, None, mesh, ring_config, attn_args)
+    out_o, *_ = RingSDPA.apply(q_o, k_o, v_o, None, mesh, ring_config, attn_args)
     loss_o = out_o.mean()
     loss_o.backward()
 

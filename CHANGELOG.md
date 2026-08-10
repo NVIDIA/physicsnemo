@@ -53,14 +53,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds `rectilinear_grid_divergence`, `rectilinear_grid_curl`, and
   `rectilinear_grid_laplacian` to `physicsnemo.nn.functional`, with Torch and
   fused Warp implementations for periodic, nonuniform rectilinear grids.
-- Adds uniform triangle-surface remeshing with NVIDIA Warp on CPU and CUDA,
-  including `remesh`, `Mesh.remesh`, topology cleanup, and advanced
-  tensor-level controls for runtime tuning.
+- Adds triangle-surface remeshing with NVIDIA Warp on CPU and CUDA, including
+  `remesh`, `Mesh.remesh`, topology cleanup, barycentric point-data transfer,
+  direct or attached linear-resolution-field control, and advanced tensor-level
+  tuning.
 - Adds coverage reporting on PRs — an informational `Coverage %` check plus a
   ready-to-enable Codecov integration.
 - Adds differentiable mesh morphing: Torch-backed dense ``displace_points`` /
   ``Mesh.displace`` and Torch/NVIDIA Warp compact sparse-control
   ``morph_points`` / ``Mesh.morph`` / ``DomainMesh.morph``.
+- Adds differentiable Sobolev mesh deformation through
+  `sobolev_deform_points` and `Mesh.sobolev_deform`. A matrix-free,
+  uniform-mass P1 Helmholtz solve smooths dense per-vertex displacements and
+  their adjoints, with optional fixed-point constraints. Torch and CUDA Warp
+  backends provide explicit implicit-adjoint differentiation.
 - Adds thin-plate-spline radial-basis deformation through
   `radial_basis_function_deform_points`,
   `Mesh.radial_basis_function_deform`, and
@@ -77,6 +83,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``physicsnemo.nn.functional``, with mesh-aware wrappers in
   ``physicsnemo.mesh.deformation``. Torch supports higher-order derivatives,
   and Warp provides first-order GPU kernels.
+- Adds differentiable nearest-surface shrinkwrap through
+  `shrinkwrap_points` and `Mesh.shrinkwrap`. Torch provides the reference
+  search, NVIDIA Warp accelerates ``float32`` nearest-face queries on CPU and
+  CUDA. Both backends replay the selected projection with PyTorch autograd.
+  Triangulated examples demonstrate weighted panel conformance and partial
+  design-region projection onto a shape-optimization constraint.
 - Adds `uniform_grid_divergence`, `uniform_grid_curl`, and
   `uniform_grid_laplacian` to `physicsnemo.nn.functional`, with Torch and fused
   Warp implementations for periodic Cartesian grids.
@@ -475,6 +487,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Dependencies
 
+- Pins TensorDict to `tensordict-nightly[zarr]` to consume the latest
+  nightly TensorDict APIs with Zarr support and several other bugfixes.
 - Removes `pyacvd` from the `mesh-extras` optional dependencies. Remeshing now
   uses NVIDIA Warp.
 - Updates the minimum supported `warp-lang` version to 1.14.0.

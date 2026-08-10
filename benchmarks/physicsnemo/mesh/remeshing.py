@@ -25,8 +25,9 @@ from physicsnemo.mesh.remeshing import remesh
 class RemeshBenchmark:
     """Measure warmed, end-to-end CUDA remeshing.
 
-    Setup performs one untimed call so imports, Warp kernel compilation, and
-    allocator initialization do not distort steady-state measurements.
+    Setup performs one untimed call per benchmark variant so imports, Warp
+    kernel compilation, and allocator initialization do not distort
+    steady-state measurements.
     """
 
     params = [4, 5, 6, 7, 8, 9]
@@ -45,13 +46,48 @@ class RemeshBenchmark:
             subdivisions=subdivisions,
             device="cuda",
         )
+        z = self.mesh.points[:, 2]
+        self.mesh.point_data["temperature"] = torch.sin(7.0 * z)
+        self.mesh.point_data["resolution"] = 1.0 + 2.0 * torch.exp(
+            -((z - 0.2) / 0.18).square()
+        )
         self.n_clusters = max(3, self.mesh.n_points // 8)
         self.output = remesh(self.mesh, self.n_clusters)
+        self.transfer_output = remesh(
+            self.mesh,
+            self.n_clusters,
+            transfer_point_data=["temperature"],
+        )
+        self.adaptive_output = remesh(
+            self.mesh,
+            self.n_clusters,
+            transfer_point_data=["temperature"],
+            resolution_field="resolution",
+        )
         torch.cuda.synchronize()
 
     def time_remesh(self, subdivisions: int) -> None:
         """Time complete clustering, projection, and topology reconstruction."""
         self.output = remesh(self.mesh, self.n_clusters)
+        torch.cuda.synchronize(self.mesh.points.device)
+
+    def time_remesh_with_point_data(self, subdivisions: int) -> None:
+        """Time remeshing with one barycentrically transferred scalar field."""
+        self.transfer_output = remesh(
+            self.mesh,
+            self.n_clusters,
+            transfer_point_data=["temperature"],
+        )
+        torch.cuda.synchronize(self.mesh.points.device)
+
+    def time_remesh_with_resolution_field(self, subdivisions: int) -> None:
+        """Time scalar transfer and resolution-controlled remeshing."""
+        self.adaptive_output = remesh(
+            self.mesh,
+            self.n_clusters,
+            transfer_point_data=["temperature"],
+            resolution_field="resolution",
+        )
         torch.cuda.synchronize(self.mesh.points.device)
 
     def track_output_vertices(self, subdivisions: int) -> int:
