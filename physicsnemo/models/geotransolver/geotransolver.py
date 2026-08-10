@@ -36,9 +36,19 @@ import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.core.version_check import OptionalImport
+from physicsnemo.models.activation_checkpointing import parse_checkpointing_param
 from physicsnemo.models.transolver.transolver import _TransolverMlp
 from physicsnemo.nn import GALEBlock
 
+from .activation_checkpointing import (
+    DEFAULT_CHECKPOINTING_COMPONENTS,
+    build_context,
+    checkpoint_block,
+    parse_checkpointing_components,
+    run_checkpointed_component,
+    should_checkpoint_block,
+    should_checkpoint_component,
+)
 from .context_projector import GlobalContextBuilder
 
 te = OptionalImport("transformer_engine.pytorch")
@@ -259,6 +269,18 @@ class GeoTransolver(Module):
         ``"weighted"`` uses a learnable sigmoid-gated weighted sum.
         ``"concat_project"`` concatenates the two along the head dimension and
         projects back with a linear layer. Default is ``"weighted"``.
+    activation_checkpointing : bool | float, optional, default=False
+        Activation checkpointing of GALE blocks during training. ``True`` or
+        ``1.0`` checkpoints all blocks, ``False`` or ``0.0`` disables
+        checkpointing, and a value in ``(0, 1)`` checkpoints that fraction of
+        blocks, distributed evenly across the block stack.
+    activation_checkpointing_components : tuple[str, ...] | list[str], optional
+        Components covered when activation checkpointing is enabled. Supported
+        values are ``"context"``, ``"preprocess"``, ``"blocks"``, and
+        ``"output"``. The default ``("blocks",)`` matches Transolver's
+        block-only policy. A fractional ``activation_checkpointing`` value
+        applies to the block stack; other selected components are either fully
+        checkpointed or disabled.
 
     Forward
     -------
@@ -411,6 +433,8 @@ class GeoTransolver(Module):
         attention_type: Literal["GALE", "GALE_FA"] = "GALE",
         concrete_dropout: bool = False,
         state_mixing_mode: str = "weighted",
+        activation_checkpointing: bool | float = False,
+        activation_checkpointing_components: tuple[str, ...] | list[str] = ("blocks",),
     ) -> None:
         super().__init__(meta=GeoTransolverMetaData())
         self.__name__ = "GeoTransolver"
@@ -439,6 +463,17 @@ class GeoTransolver(Module):
         self.include_local_features = include_local_features
         self.use_te = use_te
         self.structured_shape = structured_shape
+        self._activation_checkpointing_ratio = parse_checkpointing_param(
+            activation_checkpointing
+        )
+        self._activation_checkpointing_components = parse_checkpointing_components(
+            activation_checkpointing_components
+        )
+        # Module.__new__ captures raw constructor values before validation.
+        # Normalize Hydra/OmegaConf sequences so .mdlus metadata stays JSON-safe.
+        self._args["__args__"]["activation_checkpointing_components"] = tuple(
+            sorted(self._activation_checkpointing_components)
+        )
 
         # Validate head dimension compatibility
         if n_head <= 0:
@@ -556,6 +591,86 @@ class GeoTransolver(Module):
                 nn.SiLU(),
                 nn.Linear(n_hidden, n_hidden),
             )
+
+    def _should_checkpoint_block(self, block_idx: int) -> bool:
+        r"""Return whether a GALE block should use activation checkpointing."""
+        return should_checkpoint_block(
+            block_idx,
+            len(self.blocks),
+            getattr(self, "_activation_checkpointing_ratio", 0.0),
+            getattr(
+                self,
+                "_activation_checkpointing_components",
+                DEFAULT_CHECKPOINTING_COMPONENTS,
+            ),
+            training=self.training,
+        )
+
+    def _should_checkpoint_component(self, component: str) -> bool:
+        r"""Return whether a non-fractional component should be checkpointed."""
+        return should_checkpoint_component(
+            component,
+            getattr(self, "_activation_checkpointing_ratio", 0.0),
+            getattr(
+                self,
+                "_activation_checkpointing_components",
+                DEFAULT_CHECKPOINTING_COMPONENTS,
+            ),
+            training=self.training,
+        )
+
+    def _run_checkpointed_component(
+        self,
+        component: str,
+        function: nn.Module,
+        input_tensor: torch.Tensor,
+    ) -> torch.Tensor:
+        r"""Run a single-tensor component directly or under checkpointing."""
+        return run_checkpointed_component(
+            function,
+            input_tensor,
+            enabled=self._should_checkpoint_component(component),
+            use_te=self.use_te,
+            te_module=te,
+        )
+
+    def _checkpoint_block(
+        self,
+        block: GALEBlock,
+        x: tuple[torch.Tensor, ...] | list[torch.Tensor],
+        embedding_states: torch.Tensor | None,
+    ) -> list[torch.Tensor]:
+        r"""Checkpoint a multi-stream GALE block with explicit tensor inputs."""
+        return checkpoint_block(
+            block,
+            x,
+            embedding_states,
+            use_te=self.use_te,
+            te_module=te,
+        )
+
+    def _build_context(
+        self,
+        local_embedding: tuple[torch.Tensor, ...],
+        local_positions: tuple[torch.Tensor, ...] | None,
+        geometry: torch.Tensor | None,
+        global_embedding: torch.Tensor | None,
+    ) -> tuple[
+        torch.Tensor | None,
+        list[torch.Tensor] | None,
+        torch.Tensor | None,
+    ]:
+        r"""Build context directly or under a flattened checkpoint boundary."""
+        return build_context(
+            self.context_builder,
+            local_embedding,
+            local_positions,
+            geometry,
+            global_embedding,
+            checkpoint_enabled=self._should_checkpoint_component("context"),
+            use_te=self.use_te,
+            te_module=te,
+        )
 
     def forward(
         self,
@@ -715,12 +830,15 @@ class GeoTransolver(Module):
         # Build context embeddings and extract local features. The third
         # return value (detached geometry latent) is consumed by an optional
         # external OOD guard wrapper via a forward hook, not here.
-        embedding_states, local_embedding_bq, _ = self.context_builder.build_context(
+        embedding_states, local_embedding_bq, _ = self._build_context(
             local_embedding, local_positions, geometry, global_embedding
         )
 
         # Project inputs to hidden dimension: (B, N, C) -> (B, N, n_hidden)
-        x = [self.preprocess[i](le) for i, le in enumerate(local_embedding)]
+        x = [
+            self._run_checkpointed_component("preprocess", self.preprocess[i], le)
+            for i, le in enumerate(local_embedding)
+        ]
 
         # Concatenate local features if enabled
         if self.include_local_features and local_embedding_bq is not None:
@@ -729,15 +847,21 @@ class GeoTransolver(Module):
             ]
 
         # Pass through GALE transformer blocks with context cross-attention
-        for block in self.blocks:
-            x = block(tuple(x), embedding_states)
+        for block_idx, block in enumerate(self.blocks):
+            if self._should_checkpoint_block(block_idx):
+                x = self._checkpoint_block(block, x, embedding_states)
+            else:
+                x = block(tuple(x), embedding_states)
 
         # Per-point features just before the output projection. Shape per
         # stream: (B, N, effective_hidden). Captured for pointwise heads.
         point_features = list(x)
 
         # Project to output dimensions: (B, N, n_hidden) -> (B, N, out_dim)
-        x = [self.ln_mlp_out[i](x[i]) for i in range(len(x))]
+        x = [
+            self._run_checkpointed_component("output", self.ln_mlp_out[i], x[i])
+            for i in range(len(x))
+        ]
 
         if self.structured_shape is not None and unflatten_output:
             B = x[0].shape[0]

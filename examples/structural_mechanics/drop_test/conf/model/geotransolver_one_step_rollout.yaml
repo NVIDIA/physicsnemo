@@ -26,6 +26,8 @@ n_layers: 6
 use_te: false
 time_input: false
 include_local_features: true
+activation_checkpointing: false
+activation_checkpointing_components: [blocks]
 
 ### Rollout parameters ###
 num_time_steps: ${training.num_time_steps}

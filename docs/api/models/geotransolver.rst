@@ -12,6 +12,43 @@ setting) or
 :class:`~physicsnemo.nn.module.flare_attention.FLARE` (with ``attention_type="GALE_FA"``)
 as the self-attention backend.
 
+Activation Checkpointing
+------------------------
+
+GeoTransolver supports configurable activation checkpointing during training.
+Set ``activation_checkpointing=True`` to checkpoint every selected component,
+or provide a fraction in ``(0, 1)`` to checkpoint that fraction of GALE blocks,
+distributed evenly across the block stack. Checkpointing is disabled by default.
+The fractional form provides a model-depth-independent control for trading
+activation memory against backward recomputation without specifying block indices.
+
+The ``activation_checkpointing_components`` argument selects the checkpoint
+boundaries. Supported values are ``"context"``, ``"preprocess"``, ``"blocks"``,
+and ``"output"``. The default is ``("blocks",)`` for compatibility with
+Transolver's block-only policy. For example, full-scope checkpointing is enabled
+with:
+
+.. code-block:: python
+
+    model = GeoTransolver(
+        functional_dim=8,
+        out_dim=4,
+        geometry_dim=3,
+        use_te=False,
+        activation_checkpointing=True,
+        activation_checkpointing_components=(
+            "context",
+            "preprocess",
+            "blocks",
+            "output",
+        ),
+    )
+
+Checkpointing is active only in training mode when gradients are enabled. The
+native backend uses PyTorch's non-reentrant checkpoint implementation, while
+``use_te=True`` uses Transformer Engine's checkpoint wrapper. The option can be
+combined with ``torch.compile``.
+
 .. autoclass:: physicsnemo.models.geotransolver.geotransolver.GeoTransolver
     :show-inheritance:
     :members:

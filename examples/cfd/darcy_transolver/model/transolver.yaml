@@ -34,3 +34,4 @@ structured_shape:
   - ${resolution}
 use_te: False
 time_input: False
+activation_checkpointing: False

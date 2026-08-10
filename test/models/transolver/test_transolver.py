@@ -14,13 +14,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import gc
+import pickle
 import random
+from types import SimpleNamespace
 
 import pytest
 import torch
 
 from physicsnemo.core.module import Module
 from physicsnemo.models.transolver import Transolver
+from physicsnemo.models.transolver import transolver as transolver_module
 from test.common import (
     check_ort_version,
     validate_amp,
@@ -33,6 +37,28 @@ from test.common import (
     validate_onnx_runtime,
 )
 from test.conftest import requires_module
+
+
+def _assert_parameter_gradients_close(
+    actual: torch.nn.Module,
+    expected: torch.nn.Module,
+    *,
+    atol: float,
+    rtol: float,
+) -> None:
+    """Compare every named parameter gradient without relying on iteration order."""
+    actual_parameters = dict(actual.named_parameters())
+    expected_parameters = dict(expected.named_parameters())
+    assert actual_parameters.keys() == expected_parameters.keys()
+
+    for name, expected_parameter in expected_parameters.items():
+        torch.testing.assert_close(
+            actual_parameters[name].grad,
+            expected_parameter.grad,
+            atol=atol,
+            rtol=rtol,
+            msg=lambda msg, name=name: f"{name}: {msg}",
+        )
 
 
 @pytest.mark.parametrize(
@@ -92,6 +118,363 @@ def test_transolver_constructor(config):
     assert hasattr(model, "preprocess"), "Model should have preprocess MLP"
     assert hasattr(model, "blocks"), "Model should have transformer blocks"
     assert hasattr(model, "meta"), "Model should have metadata"
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [(False, 0.0), (True, 1.0), (0.0, 0.0), (0.5, 0.5), (1.0, 1.0)],
+)
+def test_transolver_activation_checkpointing_configuration(value, expected):
+    """Checkpointing accepts booleans or an interleaved fraction of blocks."""
+    model = Transolver(
+        functional_dim=2,
+        embedding_dim=3,
+        out_dim=1,
+        n_layers=4,
+        n_hidden=16,
+        n_head=4,
+        slice_num=4,
+        structured_shape=None,
+        use_te=False,
+        activation_checkpointing=value,
+    )
+
+    assert model._activation_checkpointing_ratio == expected
+    model.train()
+    expected_masks = {
+        0.0: [False, False, False, False],
+        0.5: [True, False, True, False],
+        1.0: [True, True, True, True],
+    }
+    assert [model._should_checkpoint_block(i) for i in range(len(model.blocks))] == (
+        expected_masks[expected]
+    )
+
+    # Activation checkpointing is a training-time memory optimization.
+    model.eval()
+    assert not any(model._should_checkpoint_block(i) for i in range(len(model.blocks)))
+
+
+@pytest.mark.parametrize(
+    "value,error",
+    [(-0.1, ValueError), (1.1, ValueError), ("all", TypeError), (None, TypeError)],
+)
+def test_transolver_activation_checkpointing_rejects_invalid_values(value, error):
+    """Invalid checkpointing policies fail during model construction."""
+    with pytest.raises(error, match="activation_checkpointing"):
+        Transolver(
+            functional_dim=2,
+            embedding_dim=3,
+            out_dim=1,
+            n_hidden=16,
+            n_head=4,
+            structured_shape=None,
+            use_te=False,
+            activation_checkpointing=value,
+        )
+
+
+@pytest.mark.parametrize(
+    "structured_shape,plus,time_input",
+    [
+        (None, False, False),
+        (None, True, True),
+        ((4, 5), False, False),
+        ((3, 3, 2), True, False),
+    ],
+    ids=["irregular", "irregular_plus_time", "structured_2d", "structured_3d_plus"],
+)
+def test_transolver_activation_checkpointing_matches_outputs_and_gradients(
+    device, structured_shape, plus, time_input
+):
+    """Checkpointed blocks reproduce outputs and gradients, including RNG use."""
+    kwargs = dict(
+        functional_dim=2,
+        embedding_dim=3,
+        out_dim=2,
+        n_layers=3,
+        n_hidden=16,
+        dropout=0.2,
+        n_head=4,
+        mlp_ratio=2,
+        slice_num=4,
+        structured_shape=structured_shape,
+        use_te=False,
+        time_input=time_input,
+        plus=plus,
+    )
+    torch.manual_seed(1)
+    plain = Transolver(**kwargs, activation_checkpointing=False).to(device)
+    checkpointed = Transolver(**kwargs, activation_checkpointing=True).to(device)
+    checkpointed.load_state_dict(plain.state_dict())
+    plain.train()
+    checkpointed.train()
+
+    spatial = structured_shape if structured_shape is not None else (24,)
+    fx_plain = torch.randn(2, *spatial, 2, device=device, requires_grad=True)
+    emb_plain = torch.randn(2, *spatial, 3, device=device, requires_grad=True)
+    fx_checkpointed = fx_plain.detach().clone().requires_grad_(True)
+    emb_checkpointed = emb_plain.detach().clone().requires_grad_(True)
+    time_plain = (
+        torch.rand(2, device=device, requires_grad=True) if time_input else None
+    )
+    time_checkpointed = (
+        time_plain.detach().clone().requires_grad_(True) if time_input else None
+    )
+
+    # Reset the RNG because dropout and Transolver++ slice routing are stochastic.
+    torch.manual_seed(7)
+    out_plain = plain(fx_plain, embedding=emb_plain, time=time_plain)
+    torch.manual_seed(7)
+    out_checkpointed = checkpointed(
+        fx_checkpointed, embedding=emb_checkpointed, time=time_checkpointed
+    )
+    torch.testing.assert_close(out_checkpointed, out_plain, atol=1e-6, rtol=1e-5)
+
+    out_plain.square().mean().backward()
+    out_checkpointed.square().mean().backward()
+
+    torch.testing.assert_close(
+        fx_checkpointed.grad, fx_plain.grad, atol=1e-6, rtol=1e-5
+    )
+    torch.testing.assert_close(
+        emb_checkpointed.grad, emb_plain.grad, atol=1e-6, rtol=1e-5
+    )
+    if time_input:
+        torch.testing.assert_close(
+            time_checkpointed.grad, time_plain.grad, atol=1e-6, rtol=1e-5
+        )
+    _assert_parameter_gradients_close(checkpointed, plain, atol=1e-6, rtol=1e-5)
+
+
+@pytest.mark.parametrize("plus", [False, True], ids=["standard", "plus"])
+def test_transolver_activation_checkpointing_reduces_saved_activations(plus):
+    """Checkpointing saves fewer forward activations for backward."""
+    kwargs = dict(
+        functional_dim=2,
+        embedding_dim=3,
+        out_dim=2,
+        n_layers=4,
+        n_hidden=32,
+        n_head=4,
+        mlp_ratio=2,
+        slice_num=8,
+        structured_shape=None,
+        use_te=False,
+        plus=plus,
+    )
+    plain = Transolver(**kwargs, activation_checkpointing=False)
+    checkpointed = Transolver(**kwargs, activation_checkpointing=True)
+    checkpointed.load_state_dict(plain.state_dict())
+    plain.train()
+    checkpointed.train()
+    fx = torch.randn(2, 256, 2)
+    embedding = torch.randn(2, 256, 3)
+
+    def saved_activation_bytes(model):
+        total = 0
+
+        def pack(tensor):
+            nonlocal total
+            total += tensor.numel() * tensor.element_size()
+            return tensor
+
+        with torch.autograd.graph.saved_tensors_hooks(pack, lambda tensor: tensor):
+            model(fx, embedding=embedding).square().mean()
+        return total
+
+    plain_bytes = saved_activation_bytes(plain)
+    checkpointed_bytes = saved_activation_bytes(checkpointed)
+    assert checkpointed_bytes < 0.5 * plain_bytes, (
+        "checkpointing did not cut saved activation bytes by at least 50%: "
+        f"{checkpointed_bytes} bytes versus {plain_bytes} bytes"
+    )
+
+
+def test_transolver_activation_checkpointing_recomputes_selected_blocks(monkeypatch):
+    """Only the selected interleaved blocks are recomputed during backward."""
+    model = Transolver(
+        functional_dim=2,
+        embedding_dim=3,
+        out_dim=2,
+        n_layers=4,
+        n_hidden=16,
+        n_head=4,
+        slice_num=4,
+        structured_shape=None,
+        use_te=False,
+        activation_checkpointing=0.5,
+    )
+    model.train()
+    call_counts = [0] * len(model.blocks)
+
+    for block_idx, block in enumerate(model.blocks):
+        original_forward = block.forward
+
+        def counting_forward(fx, idx=block_idx, forward=original_forward):
+            call_counts[idx] += 1
+            return forward(fx)
+
+        monkeypatch.setattr(block, "forward", counting_forward)
+
+    fx = torch.randn(2, 16, 2)
+    embedding = torch.randn(2, 16, 3)
+    model(fx, embedding=embedding).square().mean().backward()
+    assert call_counts == [2, 1, 2, 1]
+
+
+def test_transolver_activation_checkpointing_uses_te_wrapper(monkeypatch):
+    """TE blocks route through TE's state-aware non-reentrant checkpoint."""
+    model = Transolver(
+        functional_dim=2,
+        embedding_dim=3,
+        out_dim=2,
+        n_layers=2,
+        n_hidden=16,
+        n_head=4,
+        slice_num=4,
+        structured_shape=None,
+        use_te=False,
+        activation_checkpointing=True,
+    )
+    model.train()
+    calls = []
+
+    def fake_te_checkpoint(function, *args, **kwargs):
+        calls.append((function, kwargs))
+        return function(*args)
+
+    monkeypatch.setattr(
+        transolver_module,
+        "te",
+        SimpleNamespace(checkpoint=fake_te_checkpoint),
+    )
+    # Construction with use_te=True requires the optional CUDA package. Flip
+    # only the routing flag so this backend-selection invariant is testable on
+    # every CI platform; the CUDA integration test below exercises real TE.
+    model.use_te = True
+
+    fx = torch.randn(2, 16, 2)
+    embedding = torch.randn(2, 16, 3)
+    model(fx, embedding=embedding)
+
+    assert [function for function, _ in calls] == list(model.blocks)
+    assert all(kwargs == {"use_reentrant": False} for _, kwargs in calls)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
+def test_transolver_activation_checkpointing_reduces_peak_cuda_memory():
+    """Checkpointing lowers peak allocated CUDA memory for a training step."""
+
+    def peak_step_bytes(activation_checkpointing):
+        torch.cuda.empty_cache()
+        model = Transolver(
+            functional_dim=2,
+            embedding_dim=3,
+            out_dim=4,
+            n_layers=6,
+            n_hidden=128,
+            n_head=8,
+            mlp_ratio=4,
+            slice_num=32,
+            structured_shape=None,
+            use_te=False,
+            activation_checkpointing=activation_checkpointing,
+        ).to("cuda")
+        model.train()
+        fx = torch.randn(1, 4096, 2, device="cuda")
+        embedding = torch.randn(1, 4096, 3, device="cuda")
+        torch.cuda.synchronize()
+        baseline = torch.cuda.memory_allocated()
+        torch.cuda.reset_peak_memory_stats()
+
+        model(fx, embedding=embedding).square().mean().backward()
+        torch.cuda.synchronize()
+        peak_delta = torch.cuda.max_memory_allocated() - baseline
+
+        del model, fx, embedding
+        gc.collect()
+        torch.cuda.empty_cache()
+        return peak_delta
+
+    plain_peak = peak_step_bytes(False)
+    checkpointed_peak = peak_step_bytes(True)
+    assert checkpointed_peak < plain_peak, (
+        f"checkpointing peaked at {checkpointed_peak} bytes versus {plain_peak} bytes"
+    )
+
+
+@pytest.mark.parametrize(
+    "structured_shape,plus",
+    [(None, False), ((4, 4), True)],
+    ids=["irregular", "structured_2d_plus"],
+)
+def test_transolver_activation_checkpointing_torch_compile(
+    device, structured_shape, plus
+):
+    """torch.compile preserves checkpointed output and gradient numerics."""
+    kwargs = dict(
+        functional_dim=2,
+        embedding_dim=3,
+        out_dim=2,
+        n_layers=2,
+        n_hidden=16,
+        dropout=0.2,
+        n_head=4,
+        mlp_ratio=2,
+        slice_num=4,
+        structured_shape=structured_shape,
+        use_te=False,
+        plus=plus,
+    )
+    plain = Transolver(**kwargs, activation_checkpointing=False).to(device)
+    checkpointed = Transolver(**kwargs, activation_checkpointing=True).to(device)
+    checkpointed.load_state_dict(plain.state_dict())
+    plain.train()
+    checkpointed.train()
+    # AOTAutograd exercises the checkpointed backward path quickly on CPU;
+    # CUDA uses the recipe's real inductor backend.
+    compile_backend = "inductor" if str(device).startswith("cuda") else "aot_eager"
+    compiled_plain = torch.compile(plain, backend=compile_backend, fullgraph=True)
+    compiled_checkpointed = torch.compile(
+        checkpointed, backend=compile_backend, fullgraph=True
+    )
+
+    spatial = structured_shape if structured_shape is not None else (16,)
+    fx_plain = torch.randn(2, *spatial, 2, device=device, requires_grad=True)
+    emb_plain = torch.randn(2, *spatial, 3, device=device, requires_grad=True)
+    fx_compiled = fx_plain.detach().clone().requires_grad_(True)
+    emb_compiled = emb_plain.detach().clone().requires_grad_(True)
+
+    torch.manual_seed(11)
+    out_plain = compiled_plain(fx_plain, embedding=emb_plain)
+    out_plain.square().mean().backward()
+    torch.manual_seed(11)
+    out_compiled = compiled_checkpointed(fx_compiled, embedding=emb_compiled)
+    out_compiled.square().mean().backward()
+    torch.testing.assert_close(out_compiled, out_plain, atol=1e-6, rtol=1e-5)
+    torch.testing.assert_close(fx_compiled.grad, fx_plain.grad, atol=1e-6, rtol=1e-5)
+    torch.testing.assert_close(emb_compiled.grad, emb_plain.grad, atol=1e-6, rtol=1e-5)
+    _assert_parameter_gradients_close(checkpointed, plain, atol=1e-6, rtol=1e-5)
+
+
+def test_transolver_activation_checkpointing_amp(device):
+    """Checkpointed blocks support mixed-precision training."""
+    model = Transolver(
+        functional_dim=2,
+        embedding_dim=3,
+        out_dim=2,
+        n_layers=2,
+        n_hidden=16,
+        n_head=4,
+        slice_num=4,
+        structured_shape=None,
+        use_te=False,
+        activation_checkpointing=True,
+    ).to(device)
+    fx = torch.randn(2, 16, 2, device=device)
+    embedding = torch.randn(2, 16, 3, device=device)
+    assert validate_amp(model, (fx, embedding), iterations=1)
 
 
 def test_transolver2d_forward(device):
@@ -298,7 +681,7 @@ def test_transolver_te(pytestconfig):
 
     torch.manual_seed(0)
 
-    model = Transolver(
+    kwargs = dict(
         structured_shape=None,
         n_layers=8,
         n_hidden=64,
@@ -314,7 +697,8 @@ def test_transolver_te(pytestconfig):
         ref=1,
         unified_pos=False,
         use_te=True,
-    ).to("cuda")
+    )
+    model = Transolver(**kwargs).to("cuda")
 
     bsize = 4
 
@@ -330,6 +714,134 @@ def test_transolver_te(pytestconfig):
         file_name="models/transolver/data/transolver_irregular_te_output.pth",
         atol=1e-3,
     )
+
+
+@requires_module("transformer_engine")
+def test_transolver_te_activation_checkpointing(monkeypatch):
+    """Checkpointed TE blocks preserve outputs and gradients."""
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+
+    # Transformer Engine disables the fused bias+GELU path while executing a
+    # non-reentrant checkpoint. Construct both comparison models with that
+    # path disabled so this test compares checkpointing rather than different
+    # TE kernels.
+    monkeypatch.setenv("NVTE_BIAS_GELU_NVFUSION", "0")
+    torch.manual_seed(0)
+
+    kwargs = dict(
+        structured_shape=None,
+        n_layers=2,
+        n_hidden=64,
+        dropout=0,
+        n_head=4,
+        time_input=False,
+        act="gelu",
+        mlp_ratio=1,
+        functional_dim=2,
+        embedding_dim=3,
+        out_dim=1,
+        slice_num=32,
+        ref=1,
+        unified_pos=False,
+        use_te=True,
+    )
+    plain = Transolver(**kwargs, activation_checkpointing=False).to("cuda")
+    checkpointed = Transolver(**kwargs, activation_checkpointing=True).to("cuda")
+    checkpointed.load_state_dict(plain.state_dict())
+    plain.train()
+    checkpointed.train()
+
+    # Compare the actual checkpointed backward path on a small workload.
+    fx_plain = torch.randn(2, 512, 2, device="cuda", requires_grad=True)
+    emb_plain = torch.randn(2, 512, 3, device="cuda", requires_grad=True)
+    fx_checkpointed = fx_plain.detach().clone().requires_grad_(True)
+    emb_checkpointed = emb_plain.detach().clone().requires_grad_(True)
+
+    out_plain = plain(fx_plain, emb_plain)
+    out_plain.square().mean().backward()
+    out_checkpointed = checkpointed(fx_checkpointed, emb_checkpointed)
+    out_checkpointed.square().mean().backward()
+
+    torch.testing.assert_close(out_checkpointed, out_plain, atol=1e-5, rtol=1e-4)
+    torch.testing.assert_close(
+        fx_checkpointed.grad, fx_plain.grad, atol=1e-5, rtol=1e-4
+    )
+    torch.testing.assert_close(
+        emb_checkpointed.grad, emb_plain.grad, atol=1e-5, rtol=1e-4
+    )
+    _assert_parameter_gradients_close(checkpointed, plain, atol=1e-5, rtol=1e-4)
+
+
+@requires_module("transformer_engine")
+def test_transolver_te_fp8_activation_checkpointing(monkeypatch):
+    """Checkpointed TE blocks preserve FP8 outputs and gradients."""
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+
+    import transformer_engine.pytorch as te_runtime
+    from transformer_engine.common import recipe as te_recipe
+    from transformer_engine.pytorch.quantization import FP8GlobalStateManager
+
+    fp8_available, reason = te_runtime.is_fp8_available(return_reason=True)
+    if not fp8_available:
+        pytest.skip(reason)
+
+    # Keep the reference and checkpointed executions on the same deterministic
+    # TE kernel path. TE also applies this restriction internally during
+    # non-reentrant recomputation.
+    monkeypatch.setenv("NVTE_BIAS_GELU_NVFUSION", "0")
+
+    kwargs = dict(
+        structured_shape=None,
+        n_layers=2,
+        n_hidden=64,
+        dropout=0,
+        n_head=4,
+        time_input=False,
+        act="gelu",
+        mlp_ratio=2,
+        functional_dim=2,
+        embedding_dim=14,
+        out_dim=16,
+        slice_num=16,
+        ref=1,
+        unified_pos=False,
+        use_te=True,
+    )
+    dtype = torch.bfloat16
+    torch.manual_seed(0)
+    plain = Transolver(**kwargs, activation_checkpointing=False).to(
+        device="cuda", dtype=dtype
+    )
+    checkpointed = Transolver(**kwargs, activation_checkpointing=True).to(
+        device="cuda", dtype=dtype
+    )
+    checkpointed.load_state_dict(plain.state_dict())
+    plain.train()
+    checkpointed.train()
+
+    fx_plain = torch.randn(2, 32, 2, device="cuda", dtype=dtype, requires_grad=True)
+    emb_plain = torch.randn(2, 32, 14, device="cuda", dtype=dtype, requires_grad=True)
+    fx_checkpointed = fx_plain.detach().clone().requires_grad_(True)
+    emb_checkpointed = emb_plain.detach().clone().requires_grad_(True)
+
+    def run(model, functional_input, embedding):
+        FP8GlobalStateManager.reset()
+        with te_runtime.autocast(enabled=True, recipe=te_recipe.DelayedScaling()):
+            output = model(functional_input, embedding)
+        output.float().square().mean().backward()
+        return output
+
+    out_plain = run(plain, fx_plain, emb_plain)
+    out_checkpointed = run(checkpointed, fx_checkpointed, emb_checkpointed)
+
+    # Match Transformer Engine's own full-recompute FP8 tolerances.
+    tolerances = dict(atol=0.0675, rtol=0.125)
+    torch.testing.assert_close(out_checkpointed, out_plain, **tolerances)
+    torch.testing.assert_close(fx_checkpointed.grad, fx_plain.grad, **tolerances)
+    torch.testing.assert_close(emb_checkpointed.grad, emb_plain.grad, **tolerances)
+    _assert_parameter_gradients_close(checkpointed, plain, **tolerances)
 
 
 def test_transolver_checkpoint(device):
@@ -384,6 +896,76 @@ def test_transolver_checkpoint(device):
             embedding,
         ),
     )
+
+
+def test_transolver_activation_checkpointing_serialization(tmp_path):
+    """The checkpointing policy round-trips without adding state-dict keys."""
+    kwargs = dict(
+        functional_dim=2,
+        embedding_dim=3,
+        out_dim=1,
+        n_layers=4,
+        n_hidden=16,
+        n_head=4,
+        slice_num=4,
+        structured_shape=None,
+        use_te=False,
+    )
+    default_model = Transolver(**kwargs)
+    checkpointed_model = Transolver(**kwargs, activation_checkpointing=0.5)
+    checkpointed_model.load_state_dict(default_model.state_dict())
+    assert checkpointed_model.state_dict().keys() == default_model.state_dict().keys()
+
+    checkpoint_path = tmp_path / "transolver_checkpointed.mdlus"
+    checkpointed_model.save(checkpoint_path)
+    restored = Module.from_checkpoint(checkpoint_path)
+    assert isinstance(restored, Transolver)
+    assert restored._activation_checkpointing_ratio == 0.5
+    assert restored.state_dict().keys() == default_model.state_dict().keys()
+
+    # Simulate constructor metadata from a checkpoint written before the new
+    # optional argument existed. Instantiation must fall back to disabled.
+    legacy_args = {
+        **default_model._args,
+        "__args__": default_model._args["__args__"].copy(),
+    }
+    legacy_args["__args__"].pop("activation_checkpointing")
+    legacy_restored = Module.instantiate(legacy_args)
+    assert isinstance(legacy_restored, Transolver)
+    assert legacy_restored._activation_checkpointing_ratio == 0.0
+
+
+def test_transolver_legacy_full_object_pickle_defaults_checkpointing_off():
+    """Full-object pickles made before the new attribute remain executable."""
+    model = Transolver(
+        functional_dim=2,
+        embedding_dim=3,
+        out_dim=1,
+        n_layers=2,
+        n_hidden=16,
+        n_head=4,
+        slice_num=4,
+        structured_shape=None,
+        use_te=False,
+    )
+    fx = torch.randn(2, 16, 2, requires_grad=True)
+    embedding = torch.randn(2, 16, 3, requires_grad=True)
+    expected = model(fx, embedding=embedding).detach()
+
+    # Loading a full-object pickle does not invoke ``__init__``. Removing the
+    # field reproduces an object serialized by the pre-checkpointing class.
+    del model._activation_checkpointing_ratio
+    restored = pickle.loads(pickle.dumps(model))  # noqa: S301 - trusted local fixture
+
+    assert not hasattr(restored, "_activation_checkpointing_ratio")
+    restored_fx = fx.detach().clone().requires_grad_(True)
+    restored_embedding = embedding.detach().clone().requires_grad_(True)
+    actual = restored(restored_fx, embedding=restored_embedding)
+    torch.testing.assert_close(actual, expected)
+    actual.square().mean().backward()
+    assert restored_fx.grad is not None
+    assert restored_embedding.grad is not None
+    assert all(parameter.grad is not None for parameter in restored.parameters())
 
 
 @check_ort_version()

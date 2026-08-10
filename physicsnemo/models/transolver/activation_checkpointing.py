@@ -14,22 +14,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: rollout.GeoTransolverAutoregressiveRolloutTraining
-_convert_: all
+r"""Activation-checkpointing helpers for Transolver."""
 
-functional_dim: 4   # vel_norm (3) + features; override in experiment if using global_features
-out_dim: 3          # acceleration per step
-geometry_dim: 3
-global_dim: 3       # override in experiment if no global features (e.g. global_dim: null)
-slice_num: 128
-n_layers: 6
-use_te: false
-time_input: false
-include_local_features: true
-activation_checkpointing: false
-activation_checkpointing_components: [blocks]
+from typing import Any, Callable
 
-### Rollout parameters ###
-num_time_steps: ${training.num_time_steps}
-dt: 5e-3
-initial_vel: 9.22   # override in experiment for dataset-specific impact velocity
+import torch
+
+from physicsnemo.models.activation_checkpointing import run_checkpoint
+
+
+def checkpoint_block(
+    block: Callable[[torch.Tensor], torch.Tensor],
+    input_tensor: torch.Tensor,
+    *,
+    use_te: bool,
+    te_module: Any,
+) -> torch.Tensor:
+    r"""Checkpoint a block with the backend-appropriate implementation."""
+    return run_checkpoint(
+        block,
+        input_tensor,
+        use_te=use_te,
+        te_module=te_module,
+    )

@@ -38,3 +38,5 @@ state_mixing_mode: weighted
 structured_shape:
   - ${resolution}
   - ${resolution}
+activation_checkpointing: False
+activation_checkpointing_components: [blocks]
