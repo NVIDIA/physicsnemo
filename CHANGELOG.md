@@ -14,11 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `physicsnemo.models.geotransolver.GeoTransolver`, together with the FLARE
   model (`physicsnemo.models.flare.FLARE`) and the reusable GALE and FLARE
   attention layers (`physicsnemo.nn.GALE`, `physicsnemo.nn.GALEBlock`,
-  `physicsnemo.nn.FLARE`). The embedded OOD guard is decoupled from the model:
-  wrap a constructed GeoTransolver with
+  `physicsnemo.nn.FLARE`). The embedded OOD guard is decoupled from the model.
+  Wrap a constructed GeoTransolver with
   `physicsnemo.experimental.guardrails.embedded.GuardedGeoTransolver` (or
-  `attach_ood_guard`) to enable out-of-distribution guarding — the
-  `guard_config` model argument is removed.
+  `attach_ood_guard`) to enable out-of-distribution guarding. PhysicsNeMo removes 
+  the  `guard_config` model argument.
 - Adds `zenith_azimuth_angles` and `zenith_azimuth_angles_from_timestamp` to
   `physicsnemo.utils.zenith_angle`, returning
   `(sin_zenith, cos_zenith, sin_azimuth, cos_azimuth)` alongside the existing

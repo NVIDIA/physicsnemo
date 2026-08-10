@@ -48,7 +48,7 @@ Building blocks
     :members:
     :exclude-members: forward
 
-FLARE attention backend
+FLARE Attention Backend
 -----------------------
 
 For large meshes, setting ``attention_type="GALE_FA"`` swaps the
@@ -56,7 +56,7 @@ physics-attention slice mechanism for the `FLARE
 <https://arxiv.org/abs/2508.12594>`__ (Fast Low-rank Attention Routing Engine)
 backend. GALE_FA keeps GeoTransolver's geometry- and context-aware
 cross-attention while using FLARE for the self-attention pass over learned
-physical-state slices, reducing attention cost at scale. See also the
+physical-state slices, reducing attention cost at scale. Refer also the
 :doc:`FLARE model <flare>` documentation.
 
 .. autoclass:: physicsnemo.nn.module.gale.GALE_FA
