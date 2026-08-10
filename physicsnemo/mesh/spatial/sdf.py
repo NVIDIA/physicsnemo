@@ -26,13 +26,10 @@ op composes with torch streams (e.g. datapipe prefetch) without host
 synchronization.
 
 :func:`signed_distance_field` returns the signed distance, the closest surface
-point, and the nearest face index for each query (as a
-:class:`SignedDistanceFieldResult`).
+point, and the nearest face index for each query.
 """
 
 from __future__ import annotations
-
-from typing import NamedTuple
 
 import torch
 from jaxtyping import Float, Int
@@ -185,38 +182,16 @@ def _splice_repaired_faces(
     return torch.cat([points, new_vertices]), new_cells
 
 
-class SignedDistanceFieldResult(NamedTuple):
-    """Result of :func:`signed_distance_field`.
-
-    A named tuple: positional unpacking works, and the fields are
-    self-documenting at call sites that only need a subset.
-
-    Attributes
-    ----------
-    sdf : torch.Tensor
-        Signed distance per query, shape ``query_points.shape[:-1]`` (negative
-        inside, positive outside). ``NaN`` for queries beyond a finite
-        ``max_dist``.
-    hit_points : torch.Tensor
-        Closest point on the mesh per query, shape ``query_points.shape``.
-        ``NaN`` for queries beyond a finite ``max_dist``.
-    hit_faces : torch.Tensor
-        Index into ``mesh.cells`` of the nearest face per query (int64), shape
-        ``query_points.shape[:-1]``. ``-1`` for queries beyond a finite
-        ``max_dist``.
-    """
-
-    sdf: torch.Tensor
-    hit_points: torch.Tensor
-    hit_faces: torch.Tensor
-
-
 def signed_distance_field(
     mesh: Mesh,
     query_points: Float[torch.Tensor, "... 3"],
     max_dist: float | None = None,
     use_sign_winding_number: bool = False,
-) -> SignedDistanceFieldResult:
+) -> tuple[
+    Float[torch.Tensor, "..."],
+    Float[torch.Tensor, "... 3"],
+    Int[torch.Tensor, "..."],
+]:
     r"""Compute the signed distance to a triangle surface mesh.
 
     Returns the signed distance, the closest surface point, and the nearest
@@ -248,13 +223,14 @@ def signed_distance_field(
 
     Returns
     -------
-    SignedDistanceFieldResult
-        Named tuple ``(sdf, hit_points, hit_faces)``: signed distance per query
-        (shape ``query_points.shape[:-1]``), the closest point on the mesh per
-        query (shape ``query_points.shape``), and the index into ``mesh.cells``
-        of the nearest face per query (int64, shape
-        ``query_points.shape[:-1]``; ``-1`` for queries beyond a finite
-        ``max_dist``).
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        ``(sdf, hit_points, hit_faces)``: signed distance per query
+        (shape ``query_points.shape[:-1]``; negative inside, positive
+        outside), the closest point on the mesh per query (shape
+        ``query_points.shape``), and the index into ``mesh.cells`` of the
+        nearest face per query (int64, shape ``query_points.shape[:-1]``).
+        Queries beyond a finite ``max_dist`` return ``NaN`` for the distance
+        and hit point and ``-1`` for the hit face.
 
     Raises
     ------
@@ -321,14 +297,10 @@ def signed_distance_field(
         mesh.points.to(torch.float32), mesh.cells.to(torch.long)
     )
 
-    sdf, hit_points, hit_faces = _warp_signed_distance_field(
+    return _warp_signed_distance_field(
         points,
         cells,
         query_points,
         max_dist=max_dist_eff,
         use_sign_winding_number=use_sign_winding_number,
-    )
-
-    return SignedDistanceFieldResult(
-        sdf=sdf, hit_points=hit_points, hit_faces=hit_faces
     )

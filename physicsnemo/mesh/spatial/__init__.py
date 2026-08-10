@@ -29,16 +29,12 @@ from physicsnemo.mesh.spatial.cluster_tree import (
     DualInteractionPlan,
     SourceAggregates,
 )
-from physicsnemo.mesh.spatial.sdf import (
-    SignedDistanceFieldResult,
-    signed_distance_field,
-)
+from physicsnemo.mesh.spatial.sdf import signed_distance_field
 
 __all__ = [
     "BVH",
     "ClusterTree",
     "DualInteractionPlan",
-    "SignedDistanceFieldResult",
     "SourceAggregates",
     "signed_distance_field",
 ]
