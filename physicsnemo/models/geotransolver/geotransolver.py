@@ -26,6 +26,7 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Literal
 
 import torch
 import torch.nn as nn
@@ -248,8 +249,10 @@ class GeoTransolver(Module):
         (Conv2d/Conv3d GALE; no ball-query local features). Inputs may be
         flattened :math:`(B, N, C)` with :math:`N = H W` or :math:`H W D`, or
         spatial :math:`(B, H, W, C)` / :math:`(B, H, W, D, C)`. Default is ``None``.
-    attention_type : str, optional
-        attention_type is used to choose the attention type (GALE or GALE_FA).
+    attention_type : {"GALE", "GALE_FA"}, optional
+        Attention implementation used inside each GALE block: ``"GALE"`` for the
+        reference version, ``"GALE_FA"`` for the flash-attention one.  Validated
+        in :class:`~physicsnemo.nn.GALEBlock`, which raises on any other value.
         Default is ``"GALE"``.
     state_mixing_mode : str, optional
         How to blend self-attention and cross-attention outputs in GALE layers.
@@ -405,7 +408,7 @@ class GeoTransolver(Module):
         neighbors_in_radius: list[int] | None = None,
         n_hidden_local: int = 32,
         structured_shape: tuple[int, ...] | None = None,
-        attention_type: str = "GALE",
+        attention_type: Literal["GALE", "GALE_FA"] = "GALE",
         concrete_dropout: bool = False,
         state_mixing_mode: str = "weighted",
     ) -> None:
@@ -569,7 +572,9 @@ class GeoTransolver(Module):
         | None = None,
         geometry: Float[torch.Tensor, "batch tokens geometry_dim"] | None = None,
         time: torch.Tensor | None = None,
+        *,
         return_embedding_states: bool = False,
+        return_point_features: bool = False,
     ) -> (
         Float[torch.Tensor, "batch tokens out_dim"]
         | tuple[Float[torch.Tensor, "batch tokens out_dim"], ...]
@@ -596,19 +601,32 @@ class GeoTransolver(Module):
             Geometry features of shape :math:`(B, N, C_{geo})`. Default is ``None``.
         time : torch.Tensor | None, optional
             Time embedding (not yet implemented). Default is ``None``.
-        return_embedding_states : bool, optional
+        return_embedding_states : bool, optional, keyword-only
             If ``True``, return ``(output, embedding_states)`` instead of just
             ``output``.  The ``embedding_states`` tensor contains geometry/global
             context of shape :math:`(B, H, S, D_c)`.  Default is ``False``.
+        return_point_features : bool, optional, keyword-only
+            If ``True``, also return the per-point features computed just before
+            the output projection (``ln_mlp_out``), of shape
+            :math:`(B, N, D_{eff})` where
+            :math:`D_{eff} = n\_hidden + n\_hidden\_local \cdot len(radii)`.
+            These per-point latents are intended for attaching pointwise heads
+            (e.g. a field GP head for per-point uncertainty).  Returned as the
+            last element of the output tuple.  Default is ``False``.
 
         Returns
         -------
         Float[torch.Tensor, "batch tokens out_dim"] | tuple[Float[torch.Tensor, "batch tokens out_dim"], Float[torch.Tensor, "batch heads slices context_dim"]]
-            When ``return_embedding_states=False`` (default): output tensor of
-            shape :math:`(B, N, C_{out})`.
+            With neither flag set (default): output tensor of shape
+            :math:`(B, N, C_{out})`.
 
-            When ``return_embedding_states=True``: a 2-tuple
-            ``(output, embedding_states)``.
+            With one flag set: a 2-tuple, ``(output, embedding_states)`` or
+            ``(output, point_features)``.
+
+            With both set: the 3-tuple
+            ``(output, embedding_states, point_features)``.  The two flags are
+            keyword-only, since they share a return signature and reading a
+            bare ``True`` at the call site would not say which was meant.
 
         Raises
         ------
@@ -714,6 +732,10 @@ class GeoTransolver(Module):
         for block in self.blocks:
             x = block(tuple(x), embedding_states)
 
+        # Per-point features just before the output projection. Shape per
+        # stream: (B, N, effective_hidden). Captured for pointwise heads.
+        point_features = list(x)
+
         # Project to output dimensions: (B, N, n_hidden) -> (B, N, out_dim)
         x = [self.ln_mlp_out[i](x[i]) for i in range(len(x))]
 
@@ -730,9 +752,15 @@ class GeoTransolver(Module):
         # Return same format as input (single tensor or tuple)
         if single_input:
             x = x[0]
+            point_features_out = point_features[0]
         else:
             x = tuple(x)
+            point_features_out = tuple(point_features)
 
+        if return_embedding_states and return_point_features:
+            return x, embedding_states, point_features_out
         if return_embedding_states:
             return x, embedding_states
+        if return_point_features:
+            return x, point_features_out
         return x

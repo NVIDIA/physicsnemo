@@ -141,6 +141,156 @@ def test_geotransolver_forward_returns_embedding_states(device):
     assert not torch.isnan(embedding_states).any()
 
 
+def _small_model(device, **overrides):
+    """Small GeoTransolver for the return-option tests."""
+    kwargs = dict(
+        functional_dim=32,
+        out_dim=4,
+        geometry_dim=3,
+        global_dim=16,
+        n_layers=2,
+        n_hidden=64,
+        dropout=0.0,
+        n_head=4,
+        act="gelu",
+        mlp_ratio=2,
+        slice_num=8,
+        use_te=False,
+        time_input=False,
+        plus=False,
+        include_local_features=False,
+    )
+    kwargs.update(overrides)
+    return GeoTransolver(**kwargs).to(device)
+
+
+def test_geotransolver_return_options(device):
+    """All four combinations of the two return flags agree on the prediction.
+
+    Covers the return signature rather than the numbers: which object comes
+    back, in what order, and that asking for extras does not change the output.
+    """
+    torch.manual_seed(42)
+
+    batch_size = 2
+    n_tokens = 100
+    n_hidden = 64
+    model = _small_model(device, n_hidden=n_hidden).eval()
+
+    local_emb = torch.randn(batch_size, n_tokens, 32, device=device)
+    geometry = torch.randn(batch_size, 235, 3, device=device)
+    global_emb = torch.randn(batch_size, 5, 16, device=device)
+    inputs = dict(global_embedding=global_emb, geometry=geometry)
+
+    with torch.no_grad():
+        plain = model(local_emb, **inputs)
+        out_states, states = model(local_emb, **inputs, return_embedding_states=True)
+        out_feats, point_features = model(
+            local_emb, **inputs, return_point_features=True
+        )
+        out_both, states_both, feats_both = model(
+            local_emb,
+            **inputs,
+            return_embedding_states=True,
+            return_point_features=True,
+        )
+
+    assert isinstance(plain, torch.Tensor)
+    assert plain.shape == (batch_size, n_tokens, 4)
+
+    # Point features are the pre-readout latents, so n_hidden wide here.
+    assert point_features.shape == (batch_size, n_tokens, n_hidden)
+    assert feats_both.shape == point_features.shape
+    assert states_both.shape == states.shape
+
+    # The flags must not perturb the prediction, in any combination.
+    for other in (out_states, out_feats, out_both):
+        assert torch.equal(plain, other)
+
+
+def test_geotransolver_return_flags_are_keyword_only(device):
+    """The two return flags cannot be passed positionally."""
+    model = _small_model(device)
+    local_emb = torch.randn(1, 16, 32, device=device)
+
+    with pytest.raises(TypeError):
+        model(local_emb, None, None, None, None, True)
+
+
+def test_geotransolver_point_features_with_local_features(device):
+    """Local features widen the point features by n_hidden_local per radius."""
+    torch.manual_seed(42)
+
+    n_hidden = 64
+    n_hidden_local = 32
+    radii = [0.05, 0.25]
+    model = _small_model(
+        device,
+        n_hidden=n_hidden,
+        include_local_features=True,
+        radii=radii,
+        neighbors_in_radius=[8, 32],
+        n_hidden_local=n_hidden_local,
+    ).eval()
+
+    batch_size = 1
+    n_tokens = 100
+    local_emb = torch.randn(batch_size, n_tokens, 32, device=device)
+
+    with torch.no_grad():
+        outputs, point_features = model(
+            local_emb,
+            local_positions=local_emb[:, :, :3],
+            global_embedding=torch.randn(batch_size, 5, 16, device=device),
+            geometry=torch.randn(batch_size, 235, 3, device=device),
+            return_point_features=True,
+        )
+
+    assert outputs.shape == (batch_size, n_tokens, 4)
+    assert point_features.shape == (
+        batch_size,
+        n_tokens,
+        n_hidden + n_hidden_local * len(radii),
+    )
+    assert not torch.isnan(point_features).any()
+
+
+def test_geotransolver_point_features_tuple_inputs(device):
+    """Tuple inputs return one point-feature tensor per stream."""
+    torch.manual_seed(42)
+
+    functional_dims = (32, 48)
+    out_dims = (4, 6)
+    n_hidden = 64
+    model = _small_model(
+        device,
+        functional_dim=functional_dims,
+        out_dim=out_dims,
+        n_hidden=n_hidden,
+    ).eval()
+
+    batch_size = 2
+    n_tokens = (100, 150)
+    local_embs = tuple(
+        torch.randn(batch_size, n, d, device=device)
+        for n, d in zip(n_tokens, functional_dims)
+    )
+
+    with torch.no_grad():
+        outputs, point_features = model(
+            local_embs,
+            local_positions=tuple(emb[:, :, :3] for emb in local_embs),
+            global_embedding=torch.randn(batch_size, 5, 16, device=device),
+            geometry=torch.randn(batch_size, 235, 3, device=device),
+            return_point_features=True,
+        )
+
+    assert len(outputs) == len(point_features) == 2
+    for i, n in enumerate(n_tokens):
+        assert outputs[i].shape == (batch_size, n, out_dims[i])
+        assert point_features[i].shape == (batch_size, n, n_hidden)
+
+
 def test_geotransolver_forward_tuple_inputs(device):
     """Test GeoTransolver model forward pass with tuple inputs/outputs (multi-head)."""
     torch.manual_seed(42)
