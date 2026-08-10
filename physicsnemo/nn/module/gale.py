@@ -28,6 +28,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 from jaxtyping import Float
+from torch.distributed.tensor.placement_types import Replicate
 
 import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.version_check import OptionalImport
@@ -112,6 +113,17 @@ def _gale_compute_slice_attention_cross(
         of shape :math:`(B, H, S, D)`.
     """
     q_input = torch.cat(slice_tokens, dim=-2)
+
+    # Slice tokens and context are reductions over the (possibly sharded)
+    # token axis: distributed inputs arrive as unreduced Partial sums, and
+    # everything from here on (projection bias, softmax) is nonlinear in
+    # them. Resolve to Replicate before projecting. Duck-typed because nn
+    # cannot import domain_parallel.
+    if hasattr(q_input, "redistribute"):
+        q_input = q_input.redistribute(placements=[Replicate()])
+    if hasattr(context, "redistribute"):
+        context = context.redistribute(placements=[Replicate()])
+
     q = module.cross_q(q_input)
     k = module.cross_k(context)
     v = module.cross_v(context)

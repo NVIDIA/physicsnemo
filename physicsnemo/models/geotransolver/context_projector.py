@@ -39,6 +39,7 @@ import torch
 import torch.nn as nn
 from einops import rearrange
 from jaxtyping import Float
+from torch.distributed.tensor.placement_types import Replicate
 
 from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.nn import BQWarp, ConcreteDropout, Mlp
@@ -1056,5 +1057,13 @@ class GlobalContextBuilder(nn.Module):
 
         # Concatenate all context features along the last dimension
         context = torch.cat(context_parts, dim=-1) if context_parts else None
+
+        # The tokenizers reduce over the (possibly sharded) point axis, so a
+        # distributed context arrives as an unreduced Partial sum, and every
+        # downstream block consumes it nonlinearly. Resolve it once here --
+        # a single differentiable all-reduce reused by all layers. Duck-typed
+        # because models cannot import domain_parallel.
+        if context is not None and hasattr(context, "redistribute"):
+            context = context.redistribute(placements=[Replicate()])
 
         return context, local_features, geometry_context_detached
