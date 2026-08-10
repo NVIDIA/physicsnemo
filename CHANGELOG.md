@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds `ShardTensor` support for GeoTransolver and FLARE models.
 - Promotes GeoTransolver out of `experimental` to
   `physicsnemo.models.geotransolver.GeoTransolver`, together with the FLARE
   model (`physicsnemo.models.flare.FLARE`) and the reusable GALE and FLARE
