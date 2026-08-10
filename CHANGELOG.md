@@ -194,23 +194,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (matching the training/validation loop), and reuses the trainer's
   dataloader / collate / metric tooling (refactored into `datasets.py`
   and `utils.py`).
-- Adds a mesh-native signed distance field to `physicsnemo.mesh.spatial`
-  (`physicsnemo.mesh.spatial.signed_distance_field`), built on the `BVH`
-  and `ClusterTree` spatial structures it lives alongside. Returns a
-  `SignedDistanceFieldResult` named tuple: the signed distance, the closest
-  surface point, and the nearest-face index per query.
-  The nearest-triangle query runs as a single-kernel per-thread BVH traversal
-  (Triton on CUDA, a bounded-stack PyTorch DFS as the CPU reference; per-query
-  indices are int64 so query counts past tens of millions do not overflow). The
-  sign is computed either from the angle-weighted pseudo-normal of the closest
-  mesh feature — face, edge, or vertex, which stays correct at sharp/non-convex
-  edges where a single face normal flips the sign — or, with
-  `use_sign_winding_number=True`, from
-  a `ClusterTree` dual-tree Barnes-Hut generalized-winding-number summation that
-  runs identically on CPU and GPU (robust on non-watertight meshes). The private
-  datapipes implementation (`physicsnemo.datapipes.transforms._sdf_torch` /
-  `_sdf_triton`, including its bespoke Triton winding kernel) is superseded and
-  removed; the public datapipes SDF transform delegates here.
+- Adds a `Mesh`-typed signed distance field to `physicsnemo.mesh.spatial`
+  (`physicsnemo.mesh.spatial.signed_distance_field`), a wrapper over the
+  Warp-backed `physicsnemo.nn.functional.signed_distance_field` op (CPU and
+  CUDA). Returns a `SignedDistanceFieldResult` named tuple: the signed
+  distance, the closest surface point, and the nearest-face index per query.
+  The sign is computed either from the angle-weighted pseudo-normal of the
+  closest mesh feature (`wp.mesh_query_point_sign_normal`) — which stays
+  correct at sharp/non-convex edges where a single face normal flips the
+  sign — or, with `use_sign_winding_number=True`, from the generalized
+  winding number (`wp.mesh_query_point_sign_winding_number`, robust on
+  non-watertight meshes). (Near-)degenerate faces, which the Warp mesh query
+  would otherwise skip, are repaired into equivalent thin-but-valid triangles
+  before the query. The private datapipes implementation
+  (`physicsnemo.datapipes.transforms._sdf_torch` / `_sdf_triton`, including
+  its bespoke Triton winding kernel) is superseded and removed; the public
+  datapipes SDF transform delegates here.
 - Added an iterable style dataset to physicsnemo datapipes, for on-the-fly gpu simulations.
 - DPS guidance now supports **non-uniform guidance strength**: the `std_y` and
   `gamma` arguments of `physicsnemo.diffusion.guidance.ModelConsistencyDPSGuidance`
@@ -236,6 +235,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `physicsnemo.nn.functional.signed_distance_field` now returns a 3-tuple
+  `(sdf, hit_points, hit_faces)` — `hit_faces` is the int64 index of the
+  triangle holding each closest point. Queries with no triangle within
+  `max_dist` now return `NaN` distance/hit point and a `-1` face index
+  (previously the out-of-band results were undefined: the kernel read from
+  an uninitialized face index). Mesh-index range validation on CUDA inputs is
+  now a device-side assert instead of a host-synchronizing check, so the op
+  is safe on a sync-free prefetch stream; the eager `ValueError` is kept on
+  CPU. `physicsnemo.mesh.spatial.signed_distance_field` delegates to this op
+  exclusively — its Triton nearest-triangle kernel, pure-PyTorch DFS
+  fallback, `ClusterTree` winding-number sign backends, and the
+  `winding_backend` parameter are removed (both winding backends are replaced
+  by Warp's winding-number query). Note the pure-PyTorch nearest-triangle
+  path was vectorized while Warp's CPU mesh query is per-point, so CPU
+  throughput characteristics change; CUDA is the intended execution target.
 - Optimizes the production container build by consolidating related filesystem
   operations, using BuildKit bind and cache mounts, and separating custom,
   declared, and project dependency installation. Reduces total physicsnemo layers

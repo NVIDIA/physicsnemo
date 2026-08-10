@@ -35,22 +35,19 @@ Signed Distance Field
 
 :func:`signed_distance_field` computes the signed distance from a set of
 query points to a triangle surface mesh, together with the closest point on the
-surface for each query. It is a mesh-native, pure-PyTorch implementation that
-reuses the spatial acceleration structures in this module, so it runs
-identically on CPU and GPU.
+surface for each query. It is a :class:`~physicsnemo.mesh.Mesh`-typed wrapper
+around the Warp-backed :func:`physicsnemo.nn.functional.signed_distance_field`
+op, which runs NVIDIA Warp mesh queries on CPU and CUDA.
 
-The unsigned distance and closest point come from a bounded-stack
-depth-first nearest-triangle search over the :class:`BVH` (a single-kernel
-Triton traversal is used on CUDA when available, otherwise a pure-PyTorch DFS).
 The **sign** is determined by one of two methods, selected with
 ``use_sign_winding_number``:
 
-- ``False`` (default): the angle-weighted pseudo-normal of the nearest face.
-  This is fast and robust for **watertight** meshes.
-- ``True``: the generalized winding number (Jacobson et al., 2013), evaluated
-  with a :class:`ClusterTree` dual-tree Barnes-Hut summation over the mesh. This
-  is robust for **non-watertight / self-intersecting** ("soup") geometry and
-  scales as :math:`O(N_\text{query} \log N_\text{faces})`.
+- ``False`` (default): the angle-weighted pseudo-normal of the closest mesh
+  feature (``wp.mesh_query_point_sign_normal``). This is fast and robust for
+  **watertight** meshes.
+- ``True``: the generalized winding number
+  (``wp.mesh_query_point_sign_winding_number``). This is robust for
+  **non-watertight / self-intersecting** ("soup") geometry.
 
 .. code:: python
 

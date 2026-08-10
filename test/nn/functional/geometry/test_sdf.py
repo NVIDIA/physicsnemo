@@ -59,7 +59,7 @@ def test_signed_distance_field_warp(dtype: torch.dtype, device: str):
         dtype=dtype,
     )
 
-    sdf_out, hit_points = signed_distance_field(
+    sdf_out, hit_points, hit_faces = signed_distance_field(
         mesh_vertices=mesh_vertices,
         mesh_indices=mesh_indices_flat,
         input_points=query_points,
@@ -83,6 +83,41 @@ def test_signed_distance_field_warp(dtype: torch.dtype, device: str):
         rtol=1e-6,
     )
 
+    # Hit faces: int64 indices of the geometrically correct triangles. The
+    # first query is nearest the far face [9, 10, 11] (face 3); the second is
+    # nearest the x = 0 face [6, 7, 8] (face 2).
+    assert hit_faces.dtype == torch.int64
+    torch.testing.assert_close(
+        hit_faces, torch.tensor([3, 2], device=device, dtype=torch.int64)
+    )
+
+
+# Queries beyond max_dist report the NaN/NaN/-1 miss sentinels.
+@requires_module("warp")
+def test_signed_distance_field_miss(device: str):
+    device = torch.device(device)
+    mesh_vertices = _tetrahedron_vertices().to(device=device, dtype=torch.float32)
+    mesh_indices = torch.arange(12, device=device, dtype=torch.int32)
+    query_points = torch.tensor(
+        [[0.05, 0.1, 0.1], [100.0, 100.0, 100.0]],
+        device=device,
+        dtype=torch.float32,
+    )
+
+    sdf_out, hit_points, hit_faces = signed_distance_field(
+        mesh_vertices, mesh_indices, query_points, max_dist=1.0
+    )
+
+    # In-band query resolves normally.
+    assert torch.isfinite(sdf_out[0])
+    assert torch.isfinite(hit_points[0]).all()
+    assert hit_faces[0] >= 0
+
+    # Out-of-band query: NaN distance/hit point, -1 face.
+    assert torch.isnan(sdf_out[1])
+    assert torch.isnan(hit_points[1]).all()
+    assert hit_faces[1] == -1
+
 
 # Validate SDF index-shape compatibility paths.
 @requires_module("warp")
@@ -98,14 +133,15 @@ def test_signed_distance_field_index_layout_compatibility(device: str):
     query_points = torch.tensor([[0.1, 0.2, 0.3]], device=device, dtype=torch.float32)
 
     # Accept both flattened and (n_faces, 3) connectivity layouts.
-    sdf_flat, hit_flat = signed_distance_field(
+    sdf_flat, hit_flat, faces_flat = signed_distance_field(
         mesh_vertices, mesh_indices_flat, query_points
     )
-    sdf_faces, hit_faces = signed_distance_field(
+    sdf_faces, hit_faces, faces_faces = signed_distance_field(
         mesh_vertices, mesh_indices_faces, query_points
     )
     torch.testing.assert_close(sdf_flat, sdf_faces)
     torch.testing.assert_close(hit_flat, hit_faces)
+    torch.testing.assert_close(faces_flat, faces_faces)
 
 
 # Validate benchmark input generation contract for SDF.
@@ -118,7 +154,7 @@ def test_signed_distance_field_make_inputs_forward(device: str):
     assert isinstance(args, tuple)
     assert isinstance(kwargs, dict)
 
-    sdf_out, hit_points = SignedDistanceField.dispatch(
+    sdf_out, hit_points, hit_faces = SignedDistanceField.dispatch(
         *args,
         implementation="warp",
         **kwargs,
@@ -126,6 +162,8 @@ def test_signed_distance_field_make_inputs_forward(device: str):
     assert sdf_out.ndim == 1
     assert hit_points.ndim == 2
     assert hit_points.shape[1] == 3
+    assert hit_faces.ndim == 1
+    assert hit_faces.dtype == torch.int64
 
 
 # Validate SDF input and shape error handling paths.
@@ -155,15 +193,24 @@ def test_signed_distance_field_error_handling(device: str):
     with pytest.raises(ValueError, match="1D flattened indices or 2D"):
         signed_distance_field(mesh_vertices, bad_connectivity_rank, query_points)
 
+
+# Out-of-range index validation raises eagerly on CPU only: on CUDA it is a
+# device-side assert (sync-free by design), which would poison the CUDA
+# context if triggered in-process, so it is not exercised here.
+@requires_module("warp")
+def test_signed_distance_field_index_range_validation_cpu():
+    mesh_vertices = _tetrahedron_vertices().to(dtype=torch.float32)
+    query_points = torch.tensor([[0.1, 0.2, 0.3]], dtype=torch.float32)
+
     with pytest.raises(ValueError, match="index existing vertices"):
         signed_distance_field(
             mesh_vertices,
-            torch.tensor([0, 1, 12], device=device, dtype=torch.int32),
+            torch.tensor([0, 1, 12], dtype=torch.int32),
             query_points,
         )
     with pytest.raises(ValueError, match="index existing vertices"):
         signed_distance_field(
             mesh_vertices,
-            torch.tensor([-1, 1, 2], device=device, dtype=torch.int32),
+            torch.tensor([-1, 1, 2], dtype=torch.int32),
             query_points,
         )
