@@ -37,7 +37,7 @@ model. Concretely, with ``N = 2345`` unevenly sharded over 2 ranks as
   This shape appears in GeoTransolver's slice projection,
   ``Linear(dim_head, slice_num)`` applied to ``(B, N_geo, heads, dim_head)``.
 
-This handler skips the flatten entirely: gather weight/bias to plain local
+This handler skips the flatten entirely: localize weight/bias to plain
 tensors, compute the linear locally, and wrap the output with the input's
 placements (feature dim replaced by ``out_features`` in the shard shapes --
 uneven shapes are fine at the ShardTensor level). Inputs outside that
@@ -109,18 +109,19 @@ def linear_wrapper(
         for placement in input_spec.placements
     )
 
-    def gather_param(param: torch.Tensor | None) -> torch.Tensor | None:
+    def localize_param(param: torch.Tensor | None) -> torch.Tensor | None:
         if param is None or not isinstance(param, (ShardTensor, DTensor)):
             # Plain tensor: grads must be reduced eagerly.
             return param if param is None else GradReducer.apply(param, input_spec)
         if all(p.is_replicate() for p in param._spec.placements):
             # No-comm unwrap; the Partial cotangent resolves lazily downstream.
             return param.to_local(grad_placements=param_grad_placements)
-        # Gather; the redistribute backward reduce-scatters the Partial cotangent.
+        # Sharded param: a real gather, whose backward reduce-scatters the
+        # Partial cotangent.
         return param.full_tensor(grad_placements=param_grad_placements)
 
-    local_weight = gather_param(weight)
-    local_bias = gather_param(bias)
+    local_weight = localize_param(weight)
+    local_bias = localize_param(bias)
 
     local_output = torch.nn.functional.linear(
         input.to_local(), local_weight, local_bias
