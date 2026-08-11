@@ -61,7 +61,6 @@ class ConditionalLayerNorm(torch.nn.Module):
         channel_depth: int,
         mlp_hidden_dims: List[int] = [128, 128],
         activation: torch.nn.Module = None,
-        eps: float = 1e-5,
         n_faces: int = 12,
         norm_op: str = "torch",
         init_cln_to_zero: bool = False,
@@ -80,8 +79,6 @@ class ConditionalLayerNorm(torch.nn.Module):
             Hidden layer sizes for MLPs predicting gamma and beta.
         activation : DictConfig
             Activation function configuration for the MLPs.
-        eps : float
-            Numerical stability constant.
         n_faces : int
             Number of faces in the Healpix grid, used for reshaping.
         norm_op : str
@@ -94,7 +91,6 @@ class ConditionalLayerNorm(torch.nn.Module):
             to make CLN behave like standard LayerNorm at initialization.
         """
         super().__init__()
-        self.eps = eps
         self.condition_shape = condition_shape
         self.channel_depth = channel_depth
         self.hidden_dims = mlp_hidden_dims
