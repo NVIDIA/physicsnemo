@@ -854,10 +854,10 @@ def test_HEALPixUNet_forward_is_diagnostic(
     constant_data,
     pytestconfig,
 ):
-    """When ``output_time_dim == 1`` and ``input_time_dim > 1`` the model
-    should switch to diagnostic mode: the usual
-    ``output_time_dim % input_time_dim == 0`` requirement is bypassed and the
-    output has a single time step regardless of ``input_time_dim``.
+    """With ``is_diagnostic=True`` (and ``output_time_dim == 1``) the model runs
+    in diagnostic mode: the usual ``output_time_dim % input_time_dim == 0``
+    requirement is bypassed and the output has a single time step regardless of
+    ``input_time_dim``.
     """
     in_channels = 2
     out_channels = 2
@@ -876,6 +876,7 @@ def test_HEALPixUNet_forward_is_diagnostic(
         decoder_input_channels=0,
         input_time_dim=input_time_dim,
         output_time_dim=output_time_dim,
+        is_diagnostic=True,
     ).to(device)
 
     assert model.is_diagnostic
@@ -904,10 +905,10 @@ def test_HEALPixUNet_forward_is_diagnostic(
 def test_HEALPixUNet_diagnostic_residual_prediction_raises(
     device, unet_encoder_dict, unet_decoder_dict, pytestconfig
 ):
-    """A diagnostic model (``output_time_dim == 1`` and ``input_time_dim > 1``)
-    cannot predict a residual, so requesting ``residual_prediction=True`` must
-    raise ``ValueError``; the same configuration with
-    ``residual_prediction=False`` must construct successfully.
+    """A diagnostic model (``is_diagnostic=True``) cannot predict a residual, so
+    requesting ``residual_prediction=True`` must raise ``ValueError``; the same
+    configuration with ``residual_prediction=False`` must construct
+    successfully.
     """
     common_kwargs = dict(
         encoder=unet_encoder_dict,
@@ -918,6 +919,7 @@ def test_HEALPixUNet_diagnostic_residual_prediction_raises(
         decoder_input_channels=0,
         input_time_dim=2,
         output_time_dim=1,
+        is_diagnostic=True,
     )
 
     with pytest.raises(
@@ -929,6 +931,33 @@ def test_HEALPixUNet_diagnostic_residual_prediction_raises(
     model = HEALPixUNet(**common_kwargs, residual_prediction=False).to(device)
     assert model.is_diagnostic
     assert not model.residual_prediction
+
+    del model
+    torch.cuda.empty_cache()
+
+
+def test_HEALPixUNet_diagnostic_requires_output_time_dim_one(
+    device, unet_encoder_dict, unet_decoder_dict, pytestconfig
+):
+    """``is_diagnostic=True`` requires ``output_time_dim == 1``; any other value
+    must raise ``ValueError``, while ``output_time_dim == 1`` constructs
+    successfully."""
+    common_kwargs = dict(
+        encoder=unet_encoder_dict,
+        decoder=unet_decoder_dict,
+        input_channels=2,
+        output_channels=2,
+        n_constants=1,
+        decoder_input_channels=0,
+        input_time_dim=2,
+        is_diagnostic=True,
+    )
+
+    with pytest.raises(ValueError, match="must have output_time_dim == 1"):
+        HEALPixUNet(**common_kwargs, output_time_dim=2).to(device)
+
+    model = HEALPixUNet(**common_kwargs, output_time_dim=1).to(device)
+    assert model.is_diagnostic
 
     del model
     torch.cuda.empty_cache()

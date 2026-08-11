@@ -100,6 +100,10 @@ class HEALPixRecUNet(Module):
         If ``False``, the couplings will be passed to the model in the channel dimension first.
     constraints : list[DictConfig], optional
         Optional constraints to be applied to the model outputs.
+    is_diagnostic : bool, optional
+        If ``True``, the model runs in diagnostic mode: it performs a single
+        forward step and produces exactly one output time
+        (``output_time_dim`` must be ``1``). Defaults to ``False``.
 
     Forward
     -------
@@ -165,6 +169,7 @@ class HEALPixRecUNet(Module):
         residual_prediction: bool = True,
         couplings_time_first: bool = True,
         constraints: list[DictConfig] = None,
+        is_diagnostic: bool = False,
     ):
         r"""Initialize the recurrent DLWP HEALPix UNet."""
         super().__init__(meta=MetaData())
@@ -203,14 +208,20 @@ class HEALPixRecUNet(Module):
         self.residual_prediction = residual_prediction
         self.couplings_time_first = couplings_time_first
 
-        # Number of passes through the model, or a diagnostic model with only one output time
-        self.is_diagnostic = self.output_time_dim == 1 and self.input_time_dim > 1
+        # A diagnostic model performs a single forward step and produces
+        # exactly one output time.
+        self.is_diagnostic = is_diagnostic
+        if self.is_diagnostic and self.output_time_dim != 1:
+            raise ValueError(
+                "A diagnostic model (is_diagnostic=True) must have "
+                f"output_time_dim == 1 (got {self.output_time_dim})."
+            )
 
         # We can't have a diagnostic model that tries to predict a residual
         if self.residual_prediction and self.is_diagnostic:
             raise ValueError(
                 "A diagnostic model cannot predict a residual. Please set "
-                "residual_prediction to False when output_time_dim is 1."
+                "residual_prediction to False when is_diagnostic is True."
             )
 
         if not self.is_diagnostic and (self.output_time_dim % self.input_time_dim != 0):
