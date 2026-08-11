@@ -254,6 +254,9 @@ def integrate(
     selects P0 cell quadrature or P1 point quadrature from ``data_source`` and
     resolves ``field`` from a string key or tensor.
 
+    Call it as ``integrate(mesh, ...)`` or as ``mesh.integrate(...)``. The
+    bound method supplies ``mesh`` automatically.
+
     Parameters
     ----------
     mesh : Mesh
@@ -513,6 +516,10 @@ def integrate_moment(
     outer product. The implementation evaluates a batched weighted matrix
     product and never materializes the per-cell outer product.
 
+    Call it as ``integrate_moment(mesh, ...)`` or as
+    ``mesh.integrate_moment(...)``. The bound method supplies ``mesh``
+    automatically.
+
     Parameters
     ----------
     mesh : Mesh
@@ -616,6 +623,9 @@ def integrate_flux(
 
     This is only defined for codimension-1 meshes (surfaces in 3D, curves
     in 2D) where unique cell normals exist.
+
+    Call it as ``integrate_flux(mesh, ...)`` or as ``mesh.integrate_flux(...)``.
+    The bound method supplies ``mesh`` automatically.
 
     For cell data, the flux is:
 

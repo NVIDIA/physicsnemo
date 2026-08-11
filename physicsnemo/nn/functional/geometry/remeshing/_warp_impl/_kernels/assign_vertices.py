@@ -24,7 +24,7 @@ def assign_vertices(
     hash_grid_id: wp.uint64,
     points: wp.array(dtype=wp.vec3f),
     centroids: wp.array(dtype=wp.vec3f),
-    vertex_areas: wp.array(dtype=wp.float32),
+    vertex_masses: wp.array(dtype=wp.float32),
     labels: wp.array(dtype=wp.int32),
     centroid_sums: wp.array2d(dtype=wp.float32),
     centroid_areas: wp.array(dtype=wp.float32),
@@ -63,7 +63,7 @@ def assign_vertices(
 
     labels[point_index] = best_index
     if accumulate != 0:
-        weight = vertex_areas[point_index]
+        weight = vertex_masses[point_index]
         weighted_point = weight * point
         wp.atomic_add(centroid_sums, best_index, 0, weighted_point[0])
         wp.atomic_add(centroid_sums, best_index, 1, weighted_point[1])

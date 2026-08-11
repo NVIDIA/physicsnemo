@@ -47,8 +47,11 @@ from physicsnemo.nn.functional.geometry import (
     MeshPoissonDiskSample,
     MeshToVoxelFraction,
     MorphPoints,
+    RadialBasisFunctionDeformPoints,
     RayMeshIntersect,
+    ShrinkwrapPoints,
     SignedDistanceField,
+    SobolevDeformPoints,
 )
 from physicsnemo.nn.functional.interpolation import (
     GridToPointInterpolation,
@@ -59,10 +62,13 @@ from physicsnemo.nn.functional.regularization_parameterization import (
     DropPath,
     WeightFact,
 )
+from physicsnemo.nn.functional.weighted_multinomial import WeightedMultinomial
 
 # FunctionSpec classes listed here must implement ``make_inputs_forward`` for ASV.
 # ``make_inputs_backward`` is optional and only used when backward benchmarks run.
 FUNCTIONAL_SPECS: tuple[type[FunctionSpec], ...] = (
+    # Sampling.
+    WeightedMultinomial,
     # Regularization / parameterization.
     DropPath,
     WeightFact,
@@ -85,12 +91,15 @@ FUNCTIONAL_SPECS: tuple[type[FunctionSpec], ...] = (
     # Geometry.
     DisplacePoints,
     MorphPoints,
+    RadialBasisFunctionDeformPoints,
     FreeFormDeformPoints,
+    ShrinkwrapPoints,
     FarthestPointSampling,
     MeshPoissonDiskSample,
     MeshToVoxelFraction,
     RayMeshIntersect,
     SignedDistanceField,
+    SobolevDeformPoints,
     # Interpolation.
     GridToPointInterpolation,
     PointToGridInterpolation,

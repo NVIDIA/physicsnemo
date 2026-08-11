@@ -174,3 +174,20 @@ def test_mesh_raycast_error_handling(device: str):
             180.0,
             implementation="warp",
         )
+
+    for invalid_indices in (
+        torch.tensor([0, 1, 3], device=device, dtype=torch.int32),
+        torch.tensor([-1, 1, 2], device=device, dtype=torch.int32),
+    ):
+        with pytest.raises(ValueError, match="index existing vertices"):
+            mesh_raycast(
+                mesh_vertices,
+                invalid_indices,
+                16,
+                16,
+                eye,
+                center,
+                up,
+                45.0,
+                implementation="warp",
+            )

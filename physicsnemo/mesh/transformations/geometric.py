@@ -440,6 +440,9 @@ def transform(
 ) -> "Mesh":
     """Apply a linear transformation to the mesh.
 
+    Call it as ``transform(mesh, ...)`` or as ``mesh.transform(...)``. The
+    bound method supplies ``mesh`` automatically.
+
     Parameters
     ----------
     mesh : Mesh
@@ -458,9 +461,20 @@ def transform(
     assume_invertible : bool or None
         Controls cache propagation for square matrices:
 
-        - True: Assume matrix is invertible, propagate caches (compile-safe)
-        - False: Assume matrix is singular, skip cache propagation (compile-safe)
-        - None: Check determinant at runtime (may cause graph breaks under torch.compile)
+        - ``True``: assume ``matrix`` is invertible and propagate caches
+          (compile-safe). This is a promise, not a check. If ``matrix`` is in
+          fact singular, the inverse-transpose step silently yields non-finite
+          values instead of raising, so the propagated ``normals`` and ``areas``
+          caches -- and anything derived from them, such as the sum of
+          ``cell_areas`` -- come back as NaN. Use ``False`` or ``None`` unless
+          you know the matrix is non-singular.
+        - ``False``: assume ``matrix`` is singular and skip cache propagation
+          (compile-safe). Caches are dropped and recomputed lazily on demand,
+          which is always correct, just slower.
+        - ``None`` (default): test ``abs(det(matrix)) > 1e-10`` at runtime and
+          take one of the branches above. Safe for singular input, but the test
+          reads a device scalar back to the host, which synchronizes on CUDA and
+          may cause graph breaks under ``torch.compile``.
 
     Returns
     -------
@@ -523,7 +537,9 @@ def transform(
             elif mesh.codimension == 1:
                 ### Cell (face) normals: the inverse-transpose law is exact per face.
                 if (v := mesh._cache.get(("cell", "normals"), None)) is not None:
-                    transformed = torch.linalg.solve(matrix.T, v.T).T
+                    transformed = torch.linalg.solve_ex(
+                        matrix.T, v.T, check_errors=False
+                    ).result.T
                     norm_scale = transformed.norm(dim=-1)
                     if (areas := mesh._cache.get(("cell", "areas"), None)) is not None:
                         new_cache["cell", "areas"] = areas * det_abs * norm_scale
@@ -549,7 +565,9 @@ def transform(
                         and _is_similarity_transform(matrix)
                     )
                 ):
-                    transformed = torch.linalg.solve(matrix.T, v.T).T
+                    transformed = torch.linalg.solve_ex(
+                        matrix.T, v.T, check_errors=False
+                    ).result.T
                     new_cache["point", "normals"] = det_sign * F.normalize(
                         transformed, dim=-1
                     )
@@ -593,6 +611,9 @@ def translate(
 
     Translation only affects point positions and centroids. Vector/tensor fields
     are unchanged by translation (they represent directions, not positions).
+
+    Call it as ``translate(mesh, ...)`` or as ``mesh.translate(...)``. The
+    bound method supplies ``mesh`` automatically.
 
     Parameters
     ----------
@@ -668,6 +689,9 @@ def rotate(
     transform_global_data: bool | TensorDict = False,
 ) -> "Mesh":
     """Rotate the mesh about an axis by a specified angle.
+
+    Call it as ``rotate(mesh, ...)`` or as ``mesh.rotate(...)``. The bound
+    method supplies ``mesh`` automatically.
 
     Parameters
     ----------
@@ -748,6 +772,9 @@ def scale(
     assume_invertible: bool | None = None,
 ) -> "Mesh":
     """Scale the mesh by specified factor(s).
+
+    Call it as ``scale(mesh, ...)`` or as ``mesh.scale(...)``. The bound method
+    supplies ``mesh`` automatically.
 
     Parameters
     ----------

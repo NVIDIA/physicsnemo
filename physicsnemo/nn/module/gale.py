@@ -16,7 +16,7 @@
 
 """GALE (Geometry-Aware Latent Embeddings) attention layer and transformer block.
 
-This module provides the GALE attention mechanism and GALE_block transformer block,
+This module provides the GALE attention mechanism and GALEBlock transformer block,
 which extend the Transolver physics attention with cross-attention capabilities for
 geometry and global context embeddings.
 """
@@ -30,21 +30,19 @@ from einops import rearrange
 from jaxtyping import Float
 
 import physicsnemo  # noqa: F401 for docs
-from physicsnemo.core.version_check import check_version_spec, OptionalImport
-from physicsnemo.nn import Mlp
-from physicsnemo.nn.module.physics_attention import (
+from physicsnemo.core.version_check import OptionalImport
+
+from .concrete_dropout import ConcreteDropout
+from .flare_attention import _flare_self_attention, _flare_self_attention_te
+from .mlp_layers import Mlp
+from .physics_attention import (
     PhysicsAttentionIrregularMesh,
     PhysicsAttentionStructuredMesh2D,
     PhysicsAttentionStructuredMesh3D,
     _project_input,
 )
-from physicsnemo.experimental.nn.flare_attention import _flare_self_attention
 
-from physicsnemo.nn import ConcreteDropout
-
-# Check optional dependency availability
-TE_AVAILABLE = check_version_spec("transformer_engine", "0.1.0", hard_fail=False)
-te = OptionalImport("transformer_engine.pytorch", "0.1.0")
+te = OptionalImport("transformer_engine.pytorch")
 
 
 def _mix_self_and_cross(
@@ -132,17 +130,14 @@ def _gale_compute_slice_attention_cross(
         cross_attention = torch.nn.functional.scaled_dot_product_attention(
             q, k, v, is_causal=False
         )
-    cross_attention = torch.split(
-        cross_attention, slice_tokens[0].shape[-2], dim=-2
-    )
+    cross_attention = torch.split(cross_attention, slice_tokens[0].shape[-2], dim=-2)
     return list(cross_attention)
 
 
 def _gale_forward_impl(
     module: nn.Module,
     x: tuple[Float[torch.Tensor, "batch tokens channels"], ...],
-    context: Float[torch.Tensor, "batch heads context_slices context_dim"]
-    | None,
+    context: Float[torch.Tensor, "batch heads context_slices context_dim"] | None,
 ) -> list[Float[torch.Tensor, "batch tokens channels"]]:
     r"""Single implementation of the GALE forward pipeline.
 
@@ -189,9 +184,7 @@ def _gale_forward_impl(
         x_mid = [module.project_input_onto_slices(_x) for _x in x]
         fx_mid = [_x_mid for _x_mid in x_mid]
     else:
-        x_mid, fx_mid = zip(
-            *[module.project_input_onto_slices(_x) for _x in x]
-        )
+        x_mid, fx_mid = zip(*[module.project_input_onto_slices(_x) for _x in x])
     slice_projections = [module.in_project_slice(_x_mid) for _x_mid in x_mid]
     slice_weights, slice_tokens = zip(
         *[
@@ -216,7 +209,9 @@ def _gale_forward_impl(
         ]
         out_slice_token = [
             _mix_self_and_cross(
-                sst, cst, module.state_mixing_mode,
+                sst,
+                cst,
+                module.state_mixing_mode,
                 state_mixing=getattr(module, "state_mixing", None),
                 concat_project=getattr(module, "concat_project", None),
             )
@@ -253,7 +248,7 @@ class GALE(PhysicsAttentionIrregularMesh):
     slice_num : int, optional
         Number of learned physical state slices. Default is 64.
     use_te : bool, optional
-        Whether to use Transformer Engine backend when available. Default is True.
+        Whether to use Transformer Engine backend when available. Default is False.
     plus : bool, optional
         Whether to use Transolver++ features. Default is False.
     context_dim : int, optional
@@ -291,12 +286,12 @@ class GALE(PhysicsAttentionIrregularMesh):
     See Also
     --------
     :class:`physicsnemo.models.transolver.Physics_Attention.PhysicsAttentionIrregularMesh` : Base physics attention class.
-    :class:`GALE_block` : Transformer block using GALE attention.
+    :class:`GALEBlock` : Transformer block using GALE attention.
 
     Examples
     --------
     >>> import torch
-    >>> gale = GALE(dim=256, heads=8, dim_head=32, context_dim=32)
+    >>> gale = GALE(dim=256, heads=8, dim_head=32, context_dim=32, use_te=False)
     >>> x = (torch.randn(2, 100, 256),)  # Single input tensor in tuple
     >>> context = torch.randn(2, 8, 64, 32)  # Context for cross-attention
     >>> outputs = gale(x, context)
@@ -313,7 +308,7 @@ class GALE(PhysicsAttentionIrregularMesh):
         dim_head: int = 64,
         dropout: float = 0.0,
         slice_num: int = 64,
-        use_te: bool = True,
+        use_te: bool = False,
         plus: bool = False,
         context_dim: int = 0,
         concrete_dropout: bool = False,
@@ -351,9 +346,7 @@ class GALE(PhysicsAttentionIrregularMesh):
         list[torch.Tensor]
             List of cross-attention outputs, each of shape :math:`(B, H, S, D)`.
         """
-        return _gale_compute_slice_attention_cross(
-            self, slice_tokens, context
-        )
+        return _gale_compute_slice_attention_cross(self, slice_tokens, context)
 
     def forward(
         self,
@@ -394,8 +387,8 @@ def _gale_cross_init(
     use_te: bool,
     state_mixing_mode: str = "weighted",
 ) -> None:
-    # Match GALE: TE linear only when TE is installed (GALE_block already errors if use_te without TE)
-    linear_layer = te.Linear if (use_te and TE_AVAILABLE) else nn.Linear
+    # Match GALE: TE linear only when TE is installed (GALEBlock already errors if use_te without TE)
+    linear_layer = te.Linear if (use_te and te.available) else nn.Linear
     self.cross_q = linear_layer(dim_head, dim_head)
     self.cross_k = linear_layer(context_dim, dim_head)
     self.cross_v = linear_layer(context_dim, dim_head)
@@ -428,9 +421,7 @@ class _GALEStructuredForwardMixin:
         slice_tokens: list[Float[torch.Tensor, "batch heads slices dim"]],
         context: Float[torch.Tensor, "batch heads context_slices context_dim"],
     ) -> list[Float[torch.Tensor, "batch heads slices dim"]]:
-        return _gale_compute_slice_attention_cross(
-            self, slice_tokens, context
-        )
+        return _gale_compute_slice_attention_cross(self, slice_tokens, context)
 
     def forward(
         self,
@@ -441,7 +432,9 @@ class _GALEStructuredForwardMixin:
         return _gale_forward_impl(self, x, context)
 
 
-class GALEStructuredMesh2D(_GALEStructuredForwardMixin, PhysicsAttentionStructuredMesh2D):
+class GALEStructuredMesh2D(
+    _GALEStructuredForwardMixin, PhysicsAttentionStructuredMesh2D
+):
     r"""GALE with Conv2d slice projection for 2D structured grids (see :class:`GALE`)."""
 
     def __init__(
@@ -453,7 +446,7 @@ class GALEStructuredMesh2D(_GALEStructuredForwardMixin, PhysicsAttentionStructur
         dropout: float = 0.0,
         slice_num: int = 64,
         kernel: int = 3,
-        use_te: bool = True,
+        use_te: bool = False,
         plus: bool = False,
         context_dim: int = 0,
         state_mixing_mode: str = "weighted",
@@ -472,7 +465,9 @@ class GALEStructuredMesh2D(_GALEStructuredForwardMixin, PhysicsAttentionStructur
         _gale_cross_init(self, dim_head, context_dim, use_te, state_mixing_mode)
 
 
-class GALEStructuredMesh3D(_GALEStructuredForwardMixin, PhysicsAttentionStructuredMesh3D):
+class GALEStructuredMesh3D(
+    _GALEStructuredForwardMixin, PhysicsAttentionStructuredMesh3D
+):
     r"""GALE with Conv3d slice projection for 3D structured grids (see :class:`GALE`)."""
 
     def __init__(
@@ -484,7 +479,7 @@ class GALEStructuredMesh3D(_GALEStructuredForwardMixin, PhysicsAttentionStructur
         dropout: float = 0.0,
         slice_num: int = 64,
         kernel: int = 3,
-        use_te: bool = True,
+        use_te: bool = False,
         plus: bool = False,
         context_dim: int = 0,
         state_mixing_mode: str = "weighted",
@@ -568,7 +563,7 @@ class GALE_FA(nn.Module):
     See Also
     --------
     :class:`GALE` : Original GeoTransolver GALE attention class.
-    :class:`GALE_block` : Transformer block that calls GALE or GALE_FA attention.
+    :class:`GALEBlock` : Transformer block that calls GALE or GALE_FA attention.
 
     Examples
     --------
@@ -590,16 +585,14 @@ class GALE_FA(nn.Module):
         dim_head: int = 64,
         dropout: float = 0.0,
         n_global_queries: int = 64,
-        use_te: bool = True,
+        use_te: bool = False,
         context_dim: int = 0,
         concrete_dropout: bool = False,
         state_mixing_mode: str = "weighted",
     ):
-        if use_te:
-            raise ValueError(
-                "GALE_FA does not support Transformer Engine backend. "
-                "Use use_te=False; TE disables FlashAttention for differing q/k sizes in FLARE attention."
-            )
+        # With use_te, linear projections and attention run on Transformer
+        # Engine; otherwise on PyTorch. A missing TE install raises with an
+        # install hint on first use, so no extra guard is needed here.
         super().__init__()
         self.use_te = use_te
         self.heads = heads
@@ -618,6 +611,20 @@ class GALE_FA(nn.Module):
         self.in_project_x = linear_layer(dim, inner_dim)
         self.self_k = linear_layer(dim_head, dim_head)
         self.self_v = linear_layer(dim_head, dim_head)
+
+        # FLARE's self-attention passes and the cross-attention all have
+        # differing q/kv lengths, so TE runs them as cross-attention (BSHD).
+        # Keep dropout in out_dropout so TE and PyTorch use the same dropout site.
+        if self.use_te:
+            self.attn_fn = te.DotProductAttention(
+                num_attention_heads=self.heads,
+                kv_channels=self.dim_head,
+                attention_dropout=0.0,
+                attn_mask_type="no_mask",
+                attention_type="cross",
+                qkv_format="bshd",
+                softmax_scale=self.scale,
+            )
 
         if context_dim > 0:
             _gale_cross_init(self, dim_head, context_dim, use_te, state_mixing_mode)
@@ -663,32 +670,70 @@ class GALE_FA(nn.Module):
         # Input projection: (B, N, C) -> (B, N, H, D) -> (B, H, N, D)
         x_mid = [
             _project_input(
-                _x, self.in_project_x, self.heads, self.dim_head,
+                _x,
+                self.in_project_x,
+                self.heads,
+                self.dim_head,
                 "B N (H D) -> B N H D",
             ).permute(0, 2, 1, 3)
             for _x in x
         ]
 
         # FLARE self-attention per input
-        self_attention = [
-            _flare_self_attention(
-                _x_mid, self.q_global, self.self_k, self.self_v, self.scale,
-            )
-            for _x_mid in x_mid
-        ]
+        if self.use_te:
+            self_attention = [
+                _flare_self_attention_te(
+                    _x_mid,
+                    self.q_global,
+                    self.self_k,
+                    self.self_v,
+                    self.attn_fn,
+                    self.heads,
+                )
+                for _x_mid in x_mid
+            ]
+        else:
+            self_attention = [
+                _flare_self_attention(
+                    _x_mid,
+                    self.q_global,
+                    self.self_k,
+                    self.self_v,
+                    self.scale,
+                )
+                for _x_mid in x_mid
+            ]
 
         # Cross-attention with context and state mixing
         if context is not None:
-            q = [self.cross_q(_x_mid) for _x_mid in x_mid]
-            k = self.cross_k(context)
-            v = self.cross_v(context)
-            cross_attention = [
-                F.scaled_dot_product_attention(_q, k, v, scale=self.scale)
-                for _q in q
-            ]
+            if self.use_te:
+                # TE cross-attention: reshape (B, H, S, D) -> bshd, run through
+                # the shared DotProductAttention, then back to (B, H, N, D).
+                k = rearrange(self.cross_k(context), "b h s d -> b s h d")
+                v = rearrange(self.cross_v(context), "b h s d -> b s h d")
+                cross_attention = [
+                    rearrange(
+                        self.attn_fn(
+                            rearrange(self.cross_q(_x_mid), "b h n d -> b n h d"), k, v
+                        ),
+                        "b n (h d) -> b h n d",
+                        h=self.heads,
+                    )
+                    for _x_mid in x_mid
+                ]
+            else:
+                q = [self.cross_q(_x_mid) for _x_mid in x_mid]
+                k = self.cross_k(context)
+                v = self.cross_v(context)
+                cross_attention = [
+                    F.scaled_dot_product_attention(_q, k, v, scale=self.scale)
+                    for _q in q
+                ]
             outputs = [
                 _mix_self_and_cross(
-                    sa, ca, self.state_mixing_mode,
+                    sa,
+                    ca,
+                    self.state_mixing_mode,
                     state_mixing=getattr(self, "state_mixing", None),
                     concat_project=getattr(self, "concat_project", None),
                 )
@@ -704,7 +749,7 @@ class GALE_FA(nn.Module):
         return [self.out_dropout(_out) for _out in outputs]
 
 
-class GALE_block(nn.Module):
+class GALEBlock(nn.Module):
     r"""Transformer encoder block using GALE attention.
 
     This block replaces standard self-attention with the GALE (Geometry-Aware Latent
@@ -730,7 +775,7 @@ class GALE_block(nn.Module):
     slice_num : int, optional
         Number of learned physical state slices. Default is 32.
     use_te : bool, optional
-        Whether to use Transformer Engine backend. Default is ``True``.
+        Whether to use Transformer Engine backend. Default is ``False``.
     plus : bool, optional
         Whether to use Transolver++ features. Default is ``False``.
     context_dim : int, optional
@@ -772,12 +817,12 @@ class GALE_block(nn.Module):
     See Also
     --------
     :class:`GALE` : The attention mechanism used in this block.
-    :class:`physicsnemo.experimental.models.geotransolver.GeoTransolver` : Main model using GALE_block.
+    :class:`physicsnemo.models.geotransolver.GeoTransolver` : Main model using GALEBlock.
 
     Examples
     --------
     >>> import torch
-    >>> block = GALE_block(num_heads=8, hidden_dim=256, dropout=0.1, context_dim=32)
+    >>> block = GALEBlock(num_heads=8, hidden_dim=256, dropout=0.1, context_dim=32, use_te=False)
     >>> fx = (torch.randn(2, 100, 256),)  # Single input tensor in tuple
     >>> context = torch.randn(2, 8, 64, 32)  # Global context
     >>> outputs = block(fx, context)
@@ -797,7 +842,7 @@ class GALE_block(nn.Module):
         last_layer: bool = False,
         out_dim: int = 1,
         slice_num: int = 32,
-        use_te: bool = True,
+        use_te: bool = False,
         plus: bool = False,
         context_dim: int = 0,
         spatial_shape: tuple[int, ...] | None = None,
@@ -806,12 +851,6 @@ class GALE_block(nn.Module):
         state_mixing_mode: str = "weighted",
     ) -> None:
         super().__init__()
-
-        if use_te and not TE_AVAILABLE:
-            raise ImportError(
-                "Transformer Engine is not installed. "
-                "Please install it with: pip install transformer-engine>=0.1.0"
-            )
 
         self.last_layer = last_layer
 
@@ -824,7 +863,7 @@ class GALE_block(nn.Module):
         dim_head = hidden_dim // num_heads
         # First match on attention backend, then on spatial shape
         match attention_type:
-            case 'GALE':
+            case "GALE":
                 if spatial_shape is None:
                     self.Attn = GALE(
                         hidden_dim,
@@ -872,7 +911,7 @@ class GALE_block(nn.Module):
                     raise ValueError(
                         f"spatial_shape must be None, length-2, or length-3; got {spatial_shape!r}"
                     )
-            case 'GALE_FA':
+            case "GALE_FA":
                 self.Attn = GALE_FA(
                     hidden_dim,
                     heads=num_heads,
