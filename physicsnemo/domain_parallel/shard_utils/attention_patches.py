@@ -1069,6 +1069,11 @@ def sdpa_wrapper(
 
     # --- Replicated K/V: attention is local over the full K/V set. ----------
     if not kv_sharded:
+        if q_sharded and kwargs["is_causal"]:
+            # The local kernel would mask against shard-local row indices.
+            raise MissingShardPatch(
+                "is_causal is not supported with sharded q and replicated k/v"
+            )
         # A mask indexes (..., S_q, S_kv): its rows must be laid out like q.
         if attn_mask is not None and hasattr(attn_mask, "_spec"):
             if attn_mask._spec.placements[0] != q_placement:
@@ -1081,8 +1086,8 @@ def sdpa_wrapper(
         local_v = v.to_local()
         if q_sharded:
             # Rule 2 backward clause: dK/dV are partial sums over q's shards.
-            local_k = GradReducer.apply(local_k, k._spec)
-            local_v = GradReducer.apply(local_v, v._spec)
+            local_k = GradReducer.apply(local_k, q._spec)
+            local_v = GradReducer.apply(local_v, q._spec)
 
         local_output = torch.nn.functional.scaled_dot_product_attention(
             ContiguousGrad.apply(q.to_local()),
@@ -1096,6 +1101,17 @@ def sdpa_wrapper(
     # --- Sharded K/V: blocks accumulate via the log-sum-exp combine. --------
     if q_sharded:
         # Ring: rotate K/V blocks past each q shard.
+        if kwargs["is_causal"]:
+            # Each ring block would apply a locally-anchored causal mask.
+            raise MissingShardPatch(
+                "is_causal is not supported with sharded q and sharded k/v"
+            )
+        if kwargs["dropout_p"] != 0.0:
+            # The ring saves one philox seed/offset for backward, so per-block
+            # dropout masks cannot be recomputed faithfully.
+            raise MissingShardPatch(
+                "dropout is not supported with sharded q and sharded k/v"
+            )
         if attn_mask is not None and hasattr(attn_mask, "_spec"):
             if attn_mask._spec.placements[0] != q_placement:
                 raise MissingShardPatch("attn_mask must share q's placement")
