@@ -58,9 +58,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds `rectilinear_grid_divergence`, `rectilinear_grid_curl`, and
   `rectilinear_grid_laplacian` to `physicsnemo.nn.functional`, with Torch and
   fused Warp implementations for periodic, nonuniform rectilinear grids.
-- Adds uniform triangle-surface remeshing with NVIDIA Warp on CPU and CUDA,
-  including `remesh`, `Mesh.remesh`, topology cleanup, and advanced
-  tensor-level controls for runtime tuning.
+- Adds triangle-surface remeshing with NVIDIA Warp on CPU and CUDA, including
+  `remesh`, `Mesh.remesh`, topology cleanup, barycentric point-data transfer,
+  direct or attached linear-resolution-field control, and advanced tensor-level
+  tuning.
 - Adds coverage reporting on PRs — an informational `Coverage %` check plus a
   ready-to-enable Codecov integration.
 - Adds differentiable mesh morphing: Torch-backed dense ``displace_points`` /
@@ -87,6 +88,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``physicsnemo.nn.functional``, with mesh-aware wrappers in
   ``physicsnemo.mesh.deformation``. Torch supports higher-order derivatives,
   and Warp provides first-order GPU kernels.
+- Adds differentiable nearest-surface shrinkwrap through
+  `shrinkwrap_points` and `Mesh.shrinkwrap`. Torch provides the reference
+  search, NVIDIA Warp accelerates ``float32`` nearest-face queries on CPU and
+  CUDA. Both backends replay the selected projection with PyTorch autograd.
+  Triangulated examples demonstrate weighted panel conformance and partial
+  design-region projection onto a shape-optimization constraint.
 - Adds `uniform_grid_divergence`, `uniform_grid_curl`, and
   `uniform_grid_laplacian` to `physicsnemo.nn.functional`, with Torch and fused
   Warp implementations for periodic Cartesian grids.
@@ -163,6 +170,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   protocols and `physicsnemo.experimental.uq.VariationalGPHead`, with a
   layered structure (generic AL driver / GP-UQ recipe / aero adapter)
   designed for reuse on other UQ-based regression problems.
+- Adds `FieldVariationalGPHead` to `physicsnemo.experimental.uq`, a pointwise
+  independent multitask variational GP head for per-point, multi-channel *field*
+  uncertainty. It is the field sibling of `VariationalGPHead` (which pools a
+  geometry to one embedding and predicts a scalar): it keeps the point dimension
+  and returns one Gaussian posterior per point per channel, so a single forward
+  pass yields the field prediction, the total predictive variance and the
+  epistemic-only variance — no ensembling or MC-Dropout. Backbone-agnostic (it
+  consumes only a `(..., input_dim)` feature tensor), with an optional DKL MLP,
+  a Matérn ARD kernel (5/2 by default), float64 GP internals, an `l2_radial` feature
+  normalization that preserves the radial out-of-distribution cue, and an
+  optional heteroscedastic observation-noise MLP. Includes a surface field-GP
+  training recipe for GeoTransolver
+  (`examples/cfd/external_aerodynamics/transformer_models/src/train_field_gp.py`).
+- Adds a `return_point_features` forward flag to
+  `physicsnemo.models.geotransolver.GeoTransolver`, which additionally returns
+  the per-point latents computed just before the output projection. These are
+  the features a pointwise head such as `FieldVariationalGPHead` consumes.
 - Adds `LatentNoveltyQueryStrategy` to the active-learning aero recipe,
   a third acquisition strategy that ranks unlabeled samples by their
   average kNN cosine distance in the encoder's learned geometry latent
@@ -239,6 +263,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operations, using BuildKit bind and cache mounts, and separating custom,
   declared, and project dependency installation. Reduces total physicsnemo layers
   by around 78%.
+- `GeoTransolver.forward`'s `return_embedding_states` and `return_point_features`
+  are now keyword-only. They share a return signature, so a positional `True` did
+  not say which was meant. Callers already passing them by keyword are unaffected.
 - `ShardTensor.redistribute` now computes receive shapes analytically when
   sharding shapes are known, skipping the shape-negotiation `all_to_all`
   collective (falls back to the collective only when shapes are unavailable).
@@ -335,6 +362,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is in fact singular: it propagates NaN caches instead, as its docstring now
   documents. The default `assume_invertible=None` still tests the determinant
   and is unaffected.
+- `physicsnemo.experimental.uq.VariationalGPHead` now takes `n_train` as a
+  required keyword-only argument, along with every argument after `input_dim`.
+  It was annotated optional while the constructor raised on `None`, so callers
+  that already pass it by keyword are unaffected. It also gains `matern_nu`,
+  which was previously hardcoded to 2.5 (still the default).
 
 ### Deprecated
 

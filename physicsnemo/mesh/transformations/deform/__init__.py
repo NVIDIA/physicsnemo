@@ -20,6 +20,7 @@ from physicsnemo.mesh.transformations.deform.displace import displace
 from physicsnemo.mesh.transformations.deform.ffd import free_form_deform
 from physicsnemo.mesh.transformations.deform.morph import morph
 from physicsnemo.mesh.transformations.deform.rbf import radial_basis_function_deform
+from physicsnemo.mesh.transformations.deform.shrinkwrap import shrinkwrap
 from physicsnemo.mesh.transformations.deform.sobolev import sobolev_deform
 
 __all__ = [
@@ -27,5 +28,6 @@ __all__ = [
     "free_form_deform",
     "morph",
     "radial_basis_function_deform",
+    "shrinkwrap",
     "sobolev_deform",
 ]
