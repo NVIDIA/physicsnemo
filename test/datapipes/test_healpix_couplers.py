@@ -82,8 +82,13 @@ def _coupled_fields(batch):
     ``ConstantCoupler`` broadcasts the first time step and sizes its buffer from
     the provided field, so the caller is responsible for providing a
     consistently shaped field.
+
+    The time dimension is deliberately distinct from ``batch`` so the buffer's
+    batch axis (index 1 after the coupler's permute) is pinned to the batch and
+    not accidentally satisfied by the time axis.
     """
-    return torch.rand(batch, _FACE, batch, len([0, 1]), _HEIGHT, _WIDTH)
+    n_time = batch + 3
+    return torch.rand(batch, _FACE, n_time, len([0, 1]), _HEIGHT, _WIDTH)
 
 
 def test_set_coupled_fields_adapts_to_provided_batch_size():
