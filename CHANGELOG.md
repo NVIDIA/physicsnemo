@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds zarr save/load for `Mesh` and `DomainMesh` via tensordict's zarr
+  storage backend: `physicsnemo.mesh.io.to_zarr` / `from_zarr`, with
+  training-appropriate chunking and zstd compression. `MeshReader` and
+  `DomainMeshReader` transparently read zarr stores alongside
+  `.pmsh`/`.pdmsh` (opt in via `pattern`). Requires optional `zarr >= 3`
+  and a tensordict release with the zarr backend.
 - Promotes GeoTransolver out of `experimental` to
   `physicsnemo.models.geotransolver.GeoTransolver`, together with the FLARE
   model (`physicsnemo.models.flare.FLARE`) and the reusable GALE and FLARE
@@ -165,6 +171,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   protocols and `physicsnemo.experimental.uq.VariationalGPHead`, with a
   layered structure (generic AL driver / GP-UQ recipe / aero adapter)
   designed for reuse on other UQ-based regression problems.
+- Adds `FieldVariationalGPHead` to `physicsnemo.experimental.uq`, a pointwise
+  independent multitask variational GP head for per-point, multi-channel *field*
+  uncertainty. It is the field sibling of `VariationalGPHead` (which pools a
+  geometry to one embedding and predicts a scalar): it keeps the point dimension
+  and returns one Gaussian posterior per point per channel, so a single forward
+  pass yields the field prediction, the total predictive variance and the
+  epistemic-only variance — no ensembling or MC-Dropout. Backbone-agnostic (it
+  consumes only a `(..., input_dim)` feature tensor), with an optional DKL MLP,
+  a Matérn ARD kernel (5/2 by default), float64 GP internals, an `l2_radial` feature
+  normalization that preserves the radial out-of-distribution cue, and an
+  optional heteroscedastic observation-noise MLP. Includes a surface field-GP
+  training recipe for GeoTransolver
+  (`examples/cfd/external_aerodynamics/transformer_models/src/train_field_gp.py`).
+- Adds a `return_point_features` forward flag to
+  `physicsnemo.models.geotransolver.GeoTransolver`, which additionally returns
+  the per-point latents computed just before the output projection. These are
+  the features a pointwise head such as `FieldVariationalGPHead` consumes.
 - Adds `LatentNoveltyQueryStrategy` to the active-learning aero recipe,
   a third acquisition strategy that ranks unlabeled samples by their
   average kNN cosine distance in the encoder's learned geometry latent
@@ -195,23 +218,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (matching the training/validation loop), and reuses the trainer's
   dataloader / collate / metric tooling (refactored into `datasets.py`
   and `utils.py`).
-- Adds a mesh-native signed distance field to `physicsnemo.mesh.spatial`
-  (`physicsnemo.mesh.spatial.signed_distance_field`), built on the `BVH`
-  and `ClusterTree` spatial structures it lives alongside. Returns a
-  `SignedDistanceFieldResult` named tuple: the signed distance, the closest
-  surface point, and the nearest-face index per query.
-  The nearest-triangle query runs as a single-kernel per-thread BVH traversal
-  (Triton on CUDA, a bounded-stack PyTorch DFS as the CPU reference; per-query
-  indices are int64 so query counts past tens of millions do not overflow). The
-  sign is computed either from the angle-weighted pseudo-normal of the closest
-  mesh feature — face, edge, or vertex, which stays correct at sharp/non-convex
-  edges where a single face normal flips the sign — or, with
-  `use_sign_winding_number=True`, from
-  a `ClusterTree` dual-tree Barnes-Hut generalized-winding-number summation that
-  runs identically on CPU and GPU (robust on non-watertight meshes). The private
-  datapipes implementation (`physicsnemo.datapipes.transforms._sdf_torch` /
-  `_sdf_triton`, including its bespoke Triton winding kernel) is superseded and
-  removed; the public datapipes SDF transform delegates here.
+- Adds `physicsnemo.mesh.spatial.signed_distance_field`, a `Mesh`-typed
+  wrapper over the Warp-backed `physicsnemo.nn.functional.signed_distance_field`
+  op (CPU and CUDA), returning `(sdf, hit_points, hit_faces)` per query. The
+  sign comes from Warp's angle-weighted pseudo-normal (robust at
+  sharp/non-convex edges) or, with `use_sign_winding_number=True`, its
+  generalized winding number (robust on non-watertight meshes).
+  (Near-)degenerate faces, which the Warp mesh query would otherwise skip,
+  are repaired into equivalent thin-but-valid triangles before the query.
+  Supersedes and removes the private datapipes implementation
+  (`physicsnemo.datapipes.transforms._sdf_torch` / `_sdf_triton`); the public
+  datapipes SDF transform delegates here.
 - Added an iterable style dataset to physicsnemo datapipes, for on-the-fly gpu simulations.
 - DPS guidance now supports **non-uniform guidance strength**: the `std_y` and
   `gamma` arguments of `physicsnemo.diffusion.guidance.ModelConsistencyDPSGuidance`
@@ -237,10 +254,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `physicsnemo.nn.functional.signed_distance_field` now returns a 3-tuple
+  `(sdf, hit_points, hit_faces)` — `hit_faces` is the int64 index of the
+  triangle holding each closest point. Queries with no triangle within
+  `max_dist` now return `NaN` distance/hit point and a `-1` face index
+  (previously the out-of-band results were undefined: the kernel read from
+  an uninitialized face index). Mesh-index range validation on CUDA inputs is
+  now a device-side assert instead of a host-synchronizing check, so the op
+  is safe on a sync-free prefetch stream; the eager `ValueError` is kept on
+  CPU.
 - Optimizes the production container build by consolidating related filesystem
   operations, using BuildKit bind and cache mounts, and separating custom,
   declared, and project dependency installation. Reduces total physicsnemo layers
   by around 78%.
+- `GeoTransolver.forward`'s `return_embedding_states` and `return_point_features`
+  are now keyword-only. They share a return signature, so a positional `True` did
+  not say which was meant. Callers already passing them by keyword are unaffected.
 - `ShardTensor.redistribute` now computes receive shapes analytically when
   sharding shapes are known, skipping the shape-negotiation `all_to_all`
   collective (falls back to the collective only when shapes are unavailable).
@@ -337,6 +366,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is in fact singular: it propagates NaN caches instead, as its docstring now
   documents. The default `assume_invertible=None` still tests the determinant
   and is unaffected.
+- `physicsnemo.experimental.uq.VariationalGPHead` now takes `n_train` as a
+  required keyword-only argument, along with every argument after `input_dim`.
+  It was annotated optional while the constructor raised on `None`, so callers
+  that already pass it by keyword are unaffected. It also gains `matern_nu`,
+  which was previously hardcoded to 2.5 (still the default).
 
 ### Deprecated
 
@@ -349,6 +383,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `MeshReader` / `DomainMeshReader` sample discovery no longer uses
+  `pathlib.Path.glob`, which can silently drop entries under filesystem
+  metadata-server load (Lustre), causing training to proceed on a subset
+  of the dataset.
 - `compute_cotan_weights_fem`, and the calculus, curvature, and smoothing
   routines built on it such as `Mesh.laplacian`, no longer fail on degenerate
   cells in float32. The Gram-matrix regularization is now scale-free, so it also

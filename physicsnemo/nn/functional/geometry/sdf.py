@@ -16,7 +16,7 @@
 
 import torch
 import warp as wp
-from jaxtyping import Float
+from jaxtyping import Float, Int
 
 from physicsnemo.core.function_spec import FunctionSpec
 
@@ -32,6 +32,7 @@ def _bvh_query_distance(
     max_dist: wp.float32,
     sdf: wp.array(dtype=wp.float32),
     sdf_hit_point: wp.array(dtype=wp.vec3f),
+    sdf_hit_face: wp.array(dtype=wp.int64),
     use_sign_winding_number: bool = False,
 ):
     """
@@ -47,8 +48,11 @@ def _bvh_query_distance(
             for the closest point on the mesh.
         sdf (wp.array): An array to store the computed signed distances.
         sdf_hit_point (wp.array): An array to store the computed hit points.
-        sdf_hit_point_id (wp.array): An array to store the computed hit point ids.
+        sdf_hit_face (wp.array): An array to store the hit face indices.
         use_sign_winding_number (bool): Flag to use sign_winding_number method for SDF.
+
+    Queries that find no triangle within `max_dist` leave their output slots
+    untouched; the host wrapper pre-fills them (NaN distance/hit point, -1 face).
 
     Returns:
         None
@@ -60,6 +64,9 @@ def _bvh_query_distance(
     else:
         res = wp.mesh_query_point_sign_normal(mesh_id, points[tid], max_dist)
 
+    if not res.result:
+        return
+
     mesh = wp.mesh_get(mesh_id)
 
     p0 = mesh.points[mesh.indices[3 * res.face + 0]]
@@ -70,6 +77,7 @@ def _bvh_query_distance(
 
     sdf[tid] = res.sign * wp.abs(wp.length(points[tid] - p_closest))
     sdf_hit_point[tid] = p_closest
+    sdf_hit_face[tid] = wp.int64(res.face)
 
 
 @torch.library.custom_op("physicsnemo::signed_distance_field", mutates_args=())
@@ -79,7 +87,7 @@ def signed_distance_field_impl(
     input_points: torch.Tensor,
     max_dist: float = 1e8,
     use_sign_winding_number: bool = False,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Computes the signed distance field (SDF) for a given mesh and input points.
 
@@ -88,39 +96,36 @@ def signed_distance_field_impl(
 
     Parameters:
     ----------
-        mesh_vertices (np.ndarray): Coordinates of the vertices of the mesh;
+        mesh_vertices (torch.Tensor): Coordinates of the vertices of the mesh;
             shape: (n_vertices, 3)
-        mesh_indices (np.ndarray): Indices corresponding to the faces of the
-            mesh; shape: (n_faces, 3)
-        input_points (np.ndarray): Coordinates of the points for which to
-            compute the SDF; shape: (n_points, 3)
+        mesh_indices (torch.Tensor): Indices corresponding to the faces of the
+            mesh; shape: (n_faces, 3) or flattened (n_faces * 3,)
+        input_points (torch.Tensor): Coordinates of the points for which to
+            compute the SDF; shape: (..., 3)
         max_dist (float, optional): Maximum distance within which
             to search for the closest point on the mesh. Default is 1e8.
-        include_hit_points (bool, optional): Whether to include hit points in
-            the output. Here,
         use_sign_winding_number (bool, optional): Whether to use sign winding
             number method for SDF. Default is False. If False, your mesh should
             be watertight to obtain correct results.
-        return_cupy (bool, optional): Whether to return a CuPy array. Default is
-            None, which means the function will automatically determine the
-            appropriate return type based on the input types.
 
     Returns:
     -------
-    Returns:
-        tuple[torch.Tensor, torch.Tensor] of:
-            - signed distance to the mesh, per input point
-            - hit point, per input point. "hit points" are the points on the
-            mesh that are closest to the input points, and hence, are
-            defining the SDF.
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor] of:
+            - signed distance to the mesh, per input point; shape (...,)
+            - hit point, per input point; shape (..., 3). "hit points" are the
+            points on the mesh that are closest to the input points, and
+            hence, are defining the SDF.
+            - hit face, per input point; shape (...,), int64 index of the
+            triangle containing the hit point.
 
-    Example:
-    -------
-    >>> mesh_vertices = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
-    >>> mesh_indices = torch.tensor((0, 1, 2))
-    >>> input_points = torch.tensor((0.5, 0.5, 0.5))
-    >>> signed_distance_field(mesh_vertices, mesh_indices, input_points)
-    (tensor([0.5]), tensor([0.5, 0.5, 0.5]))
+        Queries with no triangle within ``max_dist`` return NaN for the
+        distance and hit point and -1 for the hit face.
+
+    Note:
+        On CUDA inputs the mesh-index range validation is performed with a
+        device-side assert so the op stays free of host synchronization; an
+        out-of-range index surfaces as a CUDA assert at the next
+        synchronization point rather than an immediate ``ValueError``.
     """
 
     if input_points.shape[-1] != 3:
@@ -140,25 +145,48 @@ def signed_distance_field_impl(
     if mesh_indices.numel() == 0 or mesh_indices.numel() % 3 != 0:
         raise ValueError("mesh_indices must contain complete triangle faces")
 
-    min_index = int(mesh_indices.min().item())
-    max_index = int(mesh_indices.max().item())
-    if min_index < 0 or max_index >= mesh_vertices.shape[0]:
-        raise ValueError(
-            "mesh_indices must index existing vertices; "
-            f"got range [{min_index}, {max_index}] for "
-            f"{mesh_vertices.shape[0]} vertices"
+    n_vertices = mesh_vertices.shape[0]
+    if mesh_indices.is_cuda:
+        # Device-side assert: keeps the op free of host synchronization. An
+        # out-of-range index fails at the next synchronization point.
+        torch._assert_async(
+            ((mesh_indices >= 0) & (mesh_indices < n_vertices)).all(),
+            "mesh_indices must index existing vertices",
         )
+    else:
+        min_index = int(mesh_indices.min().item())
+        max_index = int(mesh_indices.max().item())
+        if min_index < 0 or max_index >= n_vertices:
+            raise ValueError(
+                "mesh_indices must index existing vertices; "
+                f"got range [{min_index}, {max_index}] for "
+                f"{n_vertices} vertices"
+            )
 
     input_shape = input_points.shape
+    out_dtype = input_points.dtype
 
     # Flatten the input points:
     input_points = input_points.reshape(-1, 3)
 
     N = len(input_points)
 
-    # Allocate output tensors with torch:
-    sdf = torch.zeros(N, dtype=torch.float32, device=input_points.device)
-    sdf_hit_point = torch.zeros(N, 3, dtype=torch.float32, device=input_points.device)
+    # Allocate output tensors with torch, pre-filled with the miss sentinels
+    # (NaN distance/hit point, -1 face) so the kernel only writes hits:
+    sdf = torch.full(
+        (N,), float("nan"), dtype=torch.float32, device=input_points.device
+    )
+    sdf_hit_point = torch.full(
+        (N, 3), float("nan"), dtype=torch.float32, device=input_points.device
+    )
+    sdf_hit_face = torch.full((N,), -1, dtype=torch.int64, device=input_points.device)
+
+    if N == 0:
+        return (
+            sdf.reshape(input_shape[:-1]).to(out_dtype),
+            sdf_hit_point.reshape(input_shape).to(out_dtype),
+            sdf_hit_face.reshape(input_shape[:-1]),
+        )
 
     wp_launch_device, wp_launch_stream = FunctionSpec.warp_launch_context(input_points)
 
@@ -175,6 +203,7 @@ def signed_distance_field_impl(
         # Convert output points:
         wp_sdf = wp.from_torch(sdf, dtype=wp.float32)
         wp_sdf_hit_point = wp.from_torch(sdf_hit_point, dtype=wp.vec3f)
+        wp_sdf_hit_face = wp.from_torch(sdf_hit_face, dtype=wp.int64)
 
         mesh = wp.Mesh(
             points=wp_vertices,
@@ -191,6 +220,7 @@ def signed_distance_field_impl(
                 max_dist,
                 wp_sdf,
                 wp_sdf_hit_point,
+                wp_sdf_hit_face,
                 use_sign_winding_number,
             ],
             device=wp_launch_device,
@@ -200,8 +230,9 @@ def signed_distance_field_impl(
     # Unflatten the output to be like the input:
     sdf = sdf.reshape(input_shape[:-1])
     sdf_hit_point = sdf_hit_point.reshape(input_shape)
+    sdf_hit_face = sdf_hit_face.reshape(input_shape[:-1])
 
-    return sdf.to(input_points.dtype), sdf_hit_point.to(input_points.dtype)
+    return sdf.to(out_dtype), sdf_hit_point.to(out_dtype), sdf_hit_face
 
 
 @signed_distance_field_impl.register_fake
@@ -211,21 +242,24 @@ def signed_distance_field_impl_fake(
     input_points: torch.Tensor,
     max_dist: float = 1e8,
     use_sign_winding_number: bool = False,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     if mesh_vertices.device != input_points.device:
         raise RuntimeError("mesh_vertices and input_points must be on the same device")
 
     if mesh_vertices.device != mesh_indices.device:
         raise RuntimeError("mesh_vertices and mesh_indices must be on the same device")
 
-    N = input_points.shape[0]
-
-    sdf_output = torch.empty(N, 1, device=input_points.device, dtype=input_points.dtype)
+    sdf_output = torch.empty(
+        input_points.shape[:-1], device=input_points.device, dtype=input_points.dtype
+    )
     sdf_hit_point_output = torch.empty(
-        N, 3, device=input_points.device, dtype=input_points.dtype
+        input_points.shape, device=input_points.device, dtype=input_points.dtype
+    )
+    sdf_hit_face_output = torch.empty(
+        input_points.shape[:-1], device=input_points.device, dtype=torch.int64
     )
 
-    return sdf_output, sdf_hit_point_output
+    return sdf_output, sdf_hit_point_output, sdf_hit_face_output
 
 
 class SignedDistanceField(FunctionSpec):
@@ -256,10 +290,15 @@ class SignedDistanceField(FunctionSpec):
 
     Returns
     -------
-    tuple[torch.Tensor, torch.Tensor]
-        A tuple ``(sdf, hit_points)`` where:
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        A tuple ``(sdf, hit_points, hit_faces)`` where:
         - ``sdf`` contains signed distances at each query point.
         - ``hit_points`` contains the closest point on the mesh for each query.
+        - ``hit_faces`` contains the int64 index of the triangle holding each
+          closest point.
+
+        Queries with no triangle within ``max_dist`` return ``NaN`` for the
+        distance and hit point and ``-1`` for the hit face.
 
     Examples
     --------
@@ -268,7 +307,7 @@ class SignedDistanceField(FunctionSpec):
     ... )
     >>> mesh_indices = torch.tensor([(0, 1, 2)])
     >>> input_points = torch.tensor([(0.5, 0.5, 0.5)])
-    >>> sdf, hit_points = signed_distance_field(
+    >>> sdf, hit_points, hit_faces = signed_distance_field(
     ...     mesh_vertices, mesh_indices, input_points
     ... )
     """
@@ -288,7 +327,11 @@ class SignedDistanceField(FunctionSpec):
         input_points: Float[torch.Tensor, "... 3"],
         max_dist: float = 1e8,
         use_sign_winding_number: bool = False,
-    ) -> tuple[Float[torch.Tensor, "..."], Float[torch.Tensor, "... 3"]]:
+    ) -> tuple[
+        Float[torch.Tensor, "..."],
+        Float[torch.Tensor, "... 3"],
+        Int[torch.Tensor, "..."],
+    ]:
         return signed_distance_field_impl(
             mesh_vertices,
             mesh_indices,
