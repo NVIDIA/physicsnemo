@@ -1020,6 +1020,50 @@ def test_HEALPixRecUNet_forward_is_diagnostic(
     torch.cuda.empty_cache()
 
 
+def test_HEALPixRecUNet_diagnostic_residual_prediction_raises(
+    device, encoder_dict, decoder_dict, pytestconfig
+):
+    """A diagnostic model (``output_time_dim == 1`` and ``input_time_dim > 1``)
+    cannot predict a residual, so requesting ``residual_prediction=True``
+    (including the ``HEALPixRecUNet`` default) must raise ``ValueError``; the
+    same configuration with ``residual_prediction=False`` must construct
+    successfully.
+    """
+    common_kwargs = dict(
+        encoder=encoder_dict,
+        decoder=decoder_dict,
+        input_channels=2,
+        output_channels=2,
+        n_constants=1,
+        decoder_input_channels=0,
+        input_time_dim=2,
+        output_time_dim=1,
+        presteps=1,
+        delta_time="6h",
+        reset_cycle="6h",
+    )
+
+    # explicit residual_prediction=True
+    with pytest.raises(
+        ValueError, match="A diagnostic model cannot predict a residual"
+    ):
+        HEALPixRecUNet(**common_kwargs, residual_prediction=True).to(device)
+
+    # the default (residual_prediction=True) is also rejected for a diagnostic model
+    with pytest.raises(
+        ValueError, match="A diagnostic model cannot predict a residual"
+    ):
+        HEALPixRecUNet(**common_kwargs).to(device)
+
+    # the same diagnostic configuration is valid without residual prediction
+    model = HEALPixRecUNet(**common_kwargs, residual_prediction=False).to(device)
+    assert model.is_diagnostic
+    assert not model.residual_prediction
+
+    del model
+    torch.cuda.empty_cache()
+
+
 @torch.no_grad()
 def test_HEALPixRecUNet_reshape_inputs_enable_nhwc(
     device,

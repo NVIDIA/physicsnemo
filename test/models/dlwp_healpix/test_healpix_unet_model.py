@@ -901,6 +901,39 @@ def test_HEALPixUNet_forward_is_diagnostic(
     torch.cuda.empty_cache()
 
 
+def test_HEALPixUNet_diagnostic_residual_prediction_raises(
+    device, unet_encoder_dict, unet_decoder_dict, pytestconfig
+):
+    """A diagnostic model (``output_time_dim == 1`` and ``input_time_dim > 1``)
+    cannot predict a residual, so requesting ``residual_prediction=True`` must
+    raise ``ValueError``; the same configuration with
+    ``residual_prediction=False`` must construct successfully.
+    """
+    common_kwargs = dict(
+        encoder=unet_encoder_dict,
+        decoder=unet_decoder_dict,
+        input_channels=2,
+        output_channels=2,
+        n_constants=1,
+        decoder_input_channels=0,
+        input_time_dim=2,
+        output_time_dim=1,
+    )
+
+    with pytest.raises(
+        ValueError, match="A diagnostic model cannot predict a residual"
+    ):
+        HEALPixUNet(**common_kwargs, residual_prediction=True).to(device)
+
+    # the same diagnostic configuration is valid without residual prediction
+    model = HEALPixUNet(**common_kwargs, residual_prediction=False).to(device)
+    assert model.is_diagnostic
+    assert not model.residual_prediction
+
+    del model
+    torch.cuda.empty_cache()
+
+
 def test_HEALPixUNet_backward_compat_arg_mapper():
     """Legacy (version ``0.1.0``) checkpoints used ``dlwp_healpix_layers``
     Hydra targets; ``_backward_compat_arg_mapper`` must remap them to the

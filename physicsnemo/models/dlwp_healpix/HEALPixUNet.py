@@ -190,6 +190,14 @@ class HEALPixUNet(Module):
 
         # Number of passes through the model, or a diagnostic model with only one output time
         self.is_diagnostic = self.output_time_dim == 1 and self.input_time_dim > 1
+
+        # We can't have a diagnostic model that tries to predict a residual
+        if self.residual_prediction and self.is_diagnostic:
+            raise ValueError(
+                "A diagnostic model cannot predict a residual. Please set "
+                "residual_prediction to False when output_time_dim is 1."
+            )
+
         if not self.is_diagnostic and (self.output_time_dim % self.input_time_dim != 0):
             raise ValueError(
                 f"'output_time_dim' must be a multiple of 'input_time_dim' (got "
