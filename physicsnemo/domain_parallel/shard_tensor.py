@@ -1199,10 +1199,15 @@ class ShardTensor(torch.Tensor):
 
     @requires_grad.setter
     def requires_grad(self, value: bool) -> None:
-        """Set ``requires_grad`` on both the wrapper and the local tensor."""
+        """Set ``requires_grad`` on both the wrapper and the local tensor.
+
+        Skip the local write when it's a no-op: a non-leaf local (e.g. the
+        fake tensor dynamo traces) rejects any requires_grad write.
+        """
         with torch._C.DisableTorchFunctionSubclass():
             torch.Tensor.requires_grad.__set__(self, value)
-        self._local_tensor.requires_grad = value
+        if self._local_tensor.requires_grad != value:
+            self._local_tensor.requires_grad = value
 
     def requires_grad_(self, requires_grad: bool = True) -> "ShardTensor":
         """Set ``requires_grad`` in-place on both the wrapper and local tensor.
@@ -1219,7 +1224,8 @@ class ShardTensor(torch.Tensor):
         """
         with torch._C.DisableTorchFunctionSubclass():
             torch.Tensor.requires_grad.__set__(self, requires_grad)
-        self._local_tensor.requires_grad_(requires_grad)
+        if self._local_tensor.requires_grad != requires_grad:
+            self._local_tensor.requires_grad_(requires_grad)
         return self
 
     @property  # type: ignore[override]

@@ -37,39 +37,31 @@ model. Concretely, with ``N = 2345`` unevenly sharded over 2 ranks as
   This shape appears in GeoTransolver's slice projection,
   ``Linear(dim_head, slice_num)`` applied to ``(B, N_geo, heads, dim_head)``.
 
-This handler skips the flatten entirely: compute the linear locally and wrap
-the output with the input's placements (feature dim replaced by
-``out_features`` in the shard shapes -- uneven shapes are fine at the
-ShardTensor level). Weight/bias gradients are per-rank partial sums over the
-input's sharded dims, reduced by :class:`ConvGradReducer`. Any configuration
-outside that contract (``Partial`` input placements, feature-dim sharding,
-non-replicated weights) falls back to the DTensor path unchanged.
+This handler skips the flatten entirely: gather weight/bias to plain local
+tensors, compute the linear locally, and wrap the output with the input's
+placements (feature dim replaced by ``out_features`` in the shard shapes --
+uneven shapes are fine at the ShardTensor level). Inputs outside that
+contract (``Partial`` placements, feature-dim sharding) fall back to the
+DTensor path unchanged.
+
+Weight/bias grads are per-rank partial sums over the input's sharded mesh
+dims. Distributed parameters declare that via ``grad_placements``, so the
+cotangent leaves the wrapper as a genuine ``Partial`` and is reduced lazily
+downstream; plain tensors have no distributed boundary to carry that
+through, so :class:`ConvGradReducer` reduces their grads eagerly.
 """
 
 from typing import Any, Callable
 
 import torch
 from torch.distributed.tensor import DTensor
+from torch.distributed.tensor.placement_types import Partial, Replicate
 
 from physicsnemo.domain_parallel import ShardTensor
 from physicsnemo.domain_parallel.shard_tensor import (
     _torch_function_fallback_via_dtensor,
 )
 from physicsnemo.domain_parallel.shard_utils.grad_ops import ConvGradReducer
-
-
-def _replicated_local(tensor: torch.Tensor | None) -> torch.Tensor | None:
-    r"""Return the local view of a fully-replicated tensor, or ``None``.
-
-    ``None`` (no bias) and plain tensors pass through; distributed tensors
-    yield their local view only if fully replicated. Returns
-    ``NotImplemented`` for anything else so the caller can fall back.
-    """
-    if tensor is None or not isinstance(tensor, DTensor):
-        return tensor
-    if all(p.is_replicate() for p in tensor._spec.placements):
-        return tensor.to_local()
-    return NotImplemented
 
 
 def linear_wrapper(
@@ -106,17 +98,29 @@ def linear_wrapper(
         p.is_replicate() or (p.is_shard() and p.dim != feature_dim)
         for p in input._spec.placements
     )
-    local_weight = _replicated_local(weight) if local_path else NotImplemented
-    local_bias = _replicated_local(bias) if local_path else NotImplemented
-
-    if local_weight is NotImplemented or local_bias is NotImplemented:
+    if not local_path:
         return _torch_function_fallback_via_dtensor(func, args, kwargs)
 
-    # Weight/bias grads are partial sums over the input's sharded dims.
     input_spec = input._spec
-    local_weight = ConvGradReducer.apply(local_weight, input_spec)
-    if local_bias is not None:
-        local_bias = ConvGradReducer.apply(local_bias, input_spec)
+
+    # Param grads are partial sums on mesh dims where the input is sharded.
+    param_grad_placements = tuple(
+        Partial() if placement.is_shard() else Replicate()
+        for placement in input_spec.placements
+    )
+
+    def gather_param(param: torch.Tensor | None) -> torch.Tensor | None:
+        if param is None or not isinstance(param, (ShardTensor, DTensor)):
+            # Plain tensor: grads must be reduced eagerly.
+            return param if param is None else ConvGradReducer.apply(param, input_spec)
+        if all(p.is_replicate() for p in param._spec.placements):
+            # No-comm unwrap; the Partial cotangent resolves lazily downstream.
+            return param.to_local(grad_placements=param_grad_placements)
+        # Gather; the redistribute backward reduce-scatters the Partial cotangent.
+        return param.full_tensor(grad_placements=param_grad_placements)
+
+    local_weight = gather_param(weight)
+    local_bias = gather_param(bias)
 
     local_output = torch.nn.functional.linear(
         input.to_local(), local_weight, local_bias
