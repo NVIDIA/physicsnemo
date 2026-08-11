@@ -21,9 +21,8 @@ backward. Shard patches place them on tensors entering a local computation
 so that the gradients crossing back out satisfy a distributed or layout
 invariant the surrounding graph relies on:
 
-- :class:`GradReducer` / :class:`ConvGradReducer` -- all-reduce gradients
-  that are rank-local partial sums (each over a different placement
-  condition; see their docstrings).
+- :class:`GradReducer` -- all-reduce gradients that are rank-local partial
+  sums over another tensor's sharded mesh dims.
 - :class:`ContiguousGrad` -- normalize kernel-layout gradients (e.g. the
   BSHD layout attention kernels emit) to contiguous.
 
@@ -38,7 +37,7 @@ import torch.distributed._functional_collectives as funcol
 
 from physicsnemo.domain_parallel._shard_tensor_spec import ShardTensorSpec
 
-__all__ = ["ContiguousGrad", "ConvGradReducer", "GradReducer"]
+__all__ = ["ContiguousGrad", "GradReducer"]
 
 
 class ContiguousGrad(torch.autograd.Function):
@@ -67,12 +66,19 @@ class ContiguousGrad(torch.autograd.Function):
 
 
 class GradReducer(torch.autograd.Function):
-    r"""Custom autograd function that performs an allreduce on gradients if they are replicated."""
+    r"""Identity forward; all-reduces the gradient in backward.
+
+    Apply to a tensor entering a local computation whose gradient is a
+    rank-local partial sum: pass the spec of the *counterpart* tensor whose
+    sharding splits the contraction (e.g. the sharded input for a
+    conv/linear weight, sharded q for replicated k/v in attention). The
+    gradient is summed over each mesh dim where that spec is sharded.
+    """
 
     @staticmethod
     def forward(
         input: torch.Tensor,
-        spec: ShardTensorSpec,
+        ref_spec: ShardTensorSpec,
     ) -> torch.Tensor:
         r"""Forward pass: return the input tensor unchanged.
 
@@ -80,8 +86,9 @@ class GradReducer(torch.autograd.Function):
         ----------
         input : torch.Tensor
             Input tensor to pass through.
-        spec : ShardTensorSpec
-            Shard specification for determining reduction behavior.
+        ref_spec : ShardTensorSpec
+            Spec of the counterpart tensor whose sharded mesh dims make
+            ``input``'s gradient a partial sum (not ``input``'s own spec).
 
         Returns
         -------
@@ -92,16 +99,16 @@ class GradReducer(torch.autograd.Function):
 
     @staticmethod
     def setup_context(ctx, inputs, output) -> None:
-        r"""Save the input ShardTensorSpec for the backward all-reduce."""
-        _input, spec = inputs
-        ctx.spec = spec
+        r"""Save the reference ShardTensorSpec for the backward all-reduce."""
+        _input, ref_spec = inputs
+        ctx.ref_spec = ref_spec
 
     @staticmethod
     def backward(
         ctx: torch.autograd.function.FunctionCtx,
         grad_output: torch.Tensor,
     ) -> tuple[torch.Tensor, None]:
-        r"""Backward pass that performs allreduce on gradients if replicated.
+        r"""Backward pass: all-reduce over each sharded mesh dim of the ref spec.
 
         Parameters
         ----------
@@ -113,84 +120,20 @@ class GradReducer(torch.autograd.Function):
         Returns
         -------
         Tuple[torch.Tensor, None]
-            Tuple of (reduced gradient, ``None`` for spec).
+            Tuple of (reduced gradient, ``None`` for ref_spec).
         """
-        spec = ctx.spec
-        placement = spec.placements[0]
-        if placement.is_replicate():
-            grad_output = funcol.all_reduce(grad_output, "sum", (spec.mesh, 0))
-            # Prevent an asynchronous wrapper from escaping into gradient hooks
-            # or leaf ``.grad`` storage without first completing the reduction.
-            if isinstance(grad_output, funcol.AsyncCollectiveTensor):
-                grad_output = grad_output.wait()
-        return grad_output, None
-
-
-class ConvGradReducer(torch.autograd.Function):
-    r"""Custom autograd function that performs an allreduce on gradients in backward pass.
-
-    This makes defining a forward-only shard patch easier. If you need to allreduce
-    weight grads in the backward pass, call this on the weight in the forward pass.
-    """
-
-    @staticmethod
-    def forward(
-        weight_or_bias: torch.Tensor,
-        spec: ShardTensorSpec,
-    ) -> torch.Tensor:
-        r"""Forward pass: return the weight/bias tensor unchanged.
-
-        Parameters
-        ----------
-        weight_or_bias : torch.Tensor
-            The weight or bias tensor to pass through.
-        spec : ShardTensorSpec
-            Shard spec of the convolutional input (not the weight_or_bias).
-
-        Returns
-        -------
-        torch.Tensor
-            The input tensor unchanged.
-        """
-        return weight_or_bias
-
-    @staticmethod
-    def setup_context(ctx, inputs, output) -> None:
-        r"""Save the input ShardTensorSpec for the backward all-reduce."""
-        _weight_or_bias, spec = inputs
-        ctx.spec = spec
-
-    @staticmethod
-    def backward(
-        ctx: torch.autograd.function.FunctionCtx,
-        grad_weight_or_bias: torch.Tensor,
-    ) -> tuple[torch.Tensor, None]:
-        r"""Backward pass: all-reduce gradients over each sharded mesh dim.
-
-        Parameters
-        ----------
-        ctx : torch.autograd.function.FunctionCtx
-            Autograd context containing saved variables from forward.
-        grad_weight_or_bias : torch.Tensor
-            Gradient of the loss with respect to weight or bias.
-
-        Returns
-        -------
-        Tuple[torch.Tensor, None]
-            Tuple of (reduced gradient, ``None`` for spec).
-        """
-        for mesh_dim in range(ctx.spec.mesh.ndim):
-            if ctx.spec.placements[mesh_dim].is_shard():
+        for mesh_dim in range(ctx.ref_spec.mesh.ndim):
+            if ctx.ref_spec.placements[mesh_dim].is_shard():
                 # funcol.all_reduce returns a new tensor (AsyncCollectiveTensor)
                 # that auto-waits when used; assigning back into the loop var
                 # serializes the iterations correctly.
-                grad_weight_or_bias = funcol.all_reduce(
-                    grad_weight_or_bias, "sum", (ctx.spec.mesh, mesh_dim)
+                grad_output = funcol.all_reduce(
+                    grad_output, "sum", (ctx.ref_spec.mesh, mesh_dim)
                 )
 
         # Do not let the final asynchronous result escape into parameter hooks
         # or ``param.grad``, where storage may be accessed without dispatch.
-        if isinstance(grad_weight_or_bias, funcol.AsyncCollectiveTensor):
-            grad_weight_or_bias = grad_weight_or_bias.wait()
+        if isinstance(grad_output, funcol.AsyncCollectiveTensor):
+            grad_output = grad_output.wait()
 
-        return grad_weight_or_bias, None
+        return grad_output, None

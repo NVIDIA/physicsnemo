@@ -197,9 +197,8 @@ def ringless_ball_query(
     local_points = points.to_local()
     local_queries = queries.to_local()
 
-    # if queries is sharded, then it will compute a partial gradient of queries
-    # in the backwards pass.  So, this operation will do the reduction going backward
-    # by summing:
+    # With queries sharded, the grad of the replicated points is a partial
+    # sum over the query shards; reduce it in backward.
     queries_placement = queries._spec.placements[0]
     if queries_placement.is_shard():
         local_points = GradReducer.apply(local_points, queries._spec)

@@ -23,8 +23,7 @@ from torch.distributed.tensor.placement_types import Replicate, Shard
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.domain_parallel import scatter_tensor
-from physicsnemo.domain_parallel.shard_utils.conv_patches import ConvGradReducer
-from physicsnemo.domain_parallel.shard_utils.point_cloud_ops import GradReducer
+from physicsnemo.domain_parallel.shard_utils.grad_ops import GradReducer
 
 
 def _assert_plain_gradient(grad: torch.Tensor | None) -> None:
@@ -41,14 +40,18 @@ def _work_registry_size() -> int:
 
 @pytest.mark.multigpu_static
 @pytest.mark.parametrize(
-    ("reducer", "placement"),
+    ("placement", "reduces"),
     [
-        pytest.param(ConvGradReducer, Shard(0), id="conv"),
-        pytest.param(GradReducer, Replicate(), id="point-cloud"),
+        pytest.param(Shard(0), True, id="sharded-ref"),
+        pytest.param(Replicate(), False, id="replicated-ref"),
     ],
 )
-def test_grad_reducers_wait_before_return(distributed_mesh, reducer, placement):
-    r"""Gradient reducers must not return an AsyncCollectiveTensor to autograd."""
+def test_grad_reducer_waits_before_return(distributed_mesh, placement, reduces):
+    r"""GradReducer must not return an AsyncCollectiveTensor to autograd.
+
+    It all-reduces over the ref spec's sharded mesh dims and is the identity
+    when the ref spec is replicated.
+    """
     initial_registry_size = _work_registry_size()
     dm = DistributedManager()
     source = torch.ones(8, device=dm.device)
@@ -64,15 +67,13 @@ def test_grad_reducers_wait_before_return(distributed_mesh, reducer, placement):
     hook_grads = []
     leaf.register_hook(hook_grads.append)
 
-    reducer.apply(leaf, sharded._spec).sum().backward()
+    GradReducer.apply(leaf, sharded._spec).sum().backward()
 
     assert len(hook_grads) == 1
     _assert_plain_gradient(hook_grads[0])
     _assert_plain_gradient(leaf.grad)
-    torch.testing.assert_close(
-        leaf.grad,
-        torch.full_like(leaf, distributed_mesh.size()),
-    )
+    expected = distributed_mesh.size() if reduces else 1.0
+    torch.testing.assert_close(leaf.grad, torch.full_like(leaf, expected))
     assert _work_registry_size() == initial_registry_size
 
 

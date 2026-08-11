@@ -48,7 +48,7 @@ Weight/bias grads are per-rank partial sums over the input's sharded mesh
 dims. Distributed parameters declare that via ``grad_placements``, so the
 cotangent leaves the wrapper as a genuine ``Partial`` and is reduced lazily
 downstream; plain tensors have no distributed boundary to carry that
-through, so :class:`ConvGradReducer` reduces their grads eagerly.
+through, so :class:`GradReducer` reduces their grads eagerly.
 """
 
 from typing import Any, Callable
@@ -61,7 +61,7 @@ from physicsnemo.domain_parallel import ShardTensor
 from physicsnemo.domain_parallel.shard_tensor import (
     _torch_function_fallback_via_dtensor,
 )
-from physicsnemo.domain_parallel.shard_utils.grad_ops import ConvGradReducer
+from physicsnemo.domain_parallel.shard_utils.grad_ops import GradReducer
 
 
 def linear_wrapper(
@@ -112,7 +112,7 @@ def linear_wrapper(
     def gather_param(param: torch.Tensor | None) -> torch.Tensor | None:
         if param is None or not isinstance(param, (ShardTensor, DTensor)):
             # Plain tensor: grads must be reduced eagerly.
-            return param if param is None else ConvGradReducer.apply(param, input_spec)
+            return param if param is None else GradReducer.apply(param, input_spec)
         if all(p.is_replicate() for p in param._spec.placements):
             # No-comm unwrap; the Partial cotangent resolves lazily downstream.
             return param.to_local(grad_placements=param_grad_placements)

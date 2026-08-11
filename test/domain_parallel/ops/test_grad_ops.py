@@ -17,7 +17,7 @@
 r"""Direct contract tests for the autograd boundary guards in
 ``shard_utils/grad_ops.py``.
 
-``GradReducer`` / ``ConvGradReducer`` distributed behavior is covered in
+``GradReducer`` distributed behavior is covered in
 ``test_async_collective_gradients.py`` and ``test_compile_ops.py``;
 ``ContiguousGrad`` is collective-free and tested here single-rank.
 """

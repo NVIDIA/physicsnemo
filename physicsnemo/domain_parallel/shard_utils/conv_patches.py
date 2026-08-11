@@ -26,7 +26,7 @@ from torch.distributed.tensor.placement_types import (
 
 from physicsnemo.domain_parallel import ShardTensor
 from physicsnemo.domain_parallel.shard_utils.grad_ops import (  # noqa: F401
-    ConvGradReducer,
+    GradReducer,
 )
 from physicsnemo.domain_parallel.shard_utils.patch_core import (
     MissingShardPatch,
@@ -519,9 +519,9 @@ def partial_conv_nd(
     #####################################################################
     # For the backward pass: on input sharded dimensions, we need to to reduce the
     # the grads for weight and bias:
-    weight = ConvGradReducer.apply(weight, input_spec)
+    weight = GradReducer.apply(weight, input_spec)
     if bias is not None:
-        bias = ConvGradReducer.apply(bias, input_spec)
+        bias = GradReducer.apply(bias, input_spec)
 
     # Perform the convolution on the padded tensor
     local_output = func(local_input, weight, bias, **conv_kwargs)
