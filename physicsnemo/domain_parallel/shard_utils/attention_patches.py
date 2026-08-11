@@ -23,6 +23,7 @@ import torch.distributed as dist
 import torch.distributed._functional_collectives as funcol
 from torch.autograd.profiler import record_function
 from torch.distributed import DeviceMesh
+from torch.distributed.tensor.placement_types import Replicate
 
 from physicsnemo.domain_parallel import ShardTensor
 from physicsnemo.domain_parallel.shard_utils.grad_ops import (
@@ -1006,6 +1007,24 @@ def sdpa_wrapper(
     #    sharded (with q replicated, every rank computes identical grads).
 
     q, k, v, attn_mask, kwargs = repackage_sdpa_args(*args, **kwargs)
+
+    # Resolve pending reductions before inspecting placements, as the DTensor
+    # dispatcher would have. Only Partial is rewritten; Shard stays sharded.
+    def resolve_partial(t):
+        if t is None or not hasattr(t, "_spec"):
+            return t
+        if any(p.is_partial() for p in t._spec.placements):
+            t = t.redistribute(
+                placements=tuple(
+                    Replicate() if p.is_partial() else p for p in t._spec.placements
+                )
+            )
+        return t
+
+    q = resolve_partial(q)
+    k = resolve_partial(k)
+    v = resolve_partial(v)
+    attn_mask = resolve_partial(attn_mask)
 
     if not (q._spec.mesh == k._spec.mesh == v._spec.mesh):
         raise MissingShardPatch("q, k, and v must all be on the same mesh")
