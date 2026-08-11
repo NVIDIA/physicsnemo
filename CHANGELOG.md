@@ -23,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `physicsnemo.nn.FLARE`). The embedded OOD guard is decoupled from the model.
   Wrap a constructed GeoTransolver with
   `physicsnemo.experimental.guardrails.embedded.GuardedGeoTransolver` (or
-  `attach_ood_guard`) to enable out-of-distribution guarding. PhysicsNeMo removes 
+  `attach_ood_guard`) to enable out-of-distribution guarding. PhysicsNeMo removes
   the  `guard_config` model argument.
 - Adds `zenith_azimuth_angles` and `zenith_azimuth_angles_from_timestamp` to
   `physicsnemo.utils.zenith_angle`, returning
