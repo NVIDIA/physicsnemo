@@ -337,6 +337,87 @@ Torch provides higher-order derivatives. Warp provides a first-order CUDA
 path. Because its backward uses atomic accumulation at shared vertices, Warp
 gradient results can have small run-to-run floating-point differences.
 
+Nearest-Surface Shrinkwrap
+--------------------------
+
+Shrinkwrap projects each source point to the nearest location on a triangle
+target surface. Optional point weights scale the displacement between the
+source and projected positions. A signed offset moves the projection along the
+selected target face normal.
+
+.. autofunction:: physicsnemo.nn.functional.shrinkwrap_points
+
+.. code:: python
+
+    import torch
+    from physicsnemo.nn.functional import shrinkwrap_points
+
+    target_points = torch.tensor(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ],
+        requires_grad=True,
+    )
+    target_faces = torch.tensor([[0, 1, 2], [0, 2, 3]])
+    points = torch.tensor(
+        [[0.25, 0.25, 0.30], [0.75, 0.75, 0.45]],
+        requires_grad=True,
+    )
+    weights = torch.tensor([0.5, 1.0], requires_grad=True)
+    offset = torch.tensor(0.02, requires_grad=True)
+
+    wrapped = shrinkwrap_points(
+        points,
+        target_points,
+        target_faces,
+        point_weights=weights,
+        offset=offset,
+    )
+    wrapped.square().mean().backward()
+
+Source points use one of these shapes:
+
+- ``(N, 3)``
+- ``(B, N, 3)``
+
+One triangle target is shared across the source batches. Keep the following
+projection rules in mind:
+
+- A positive ``offset`` follows target face winding.
+- A finite ``max_distance`` leaves points at or beyond the cutoff unchanged.
+
+Nearest-face selection, closest-feature changes, and distance gating are
+discrete. Between those transitions, gradients propagate through the following
+values:
+
+- Source points
+- Selected target vertices
+- Floating-point weights
+- A tensor-valued ``offset``
+
+Target connectivity is not differentiable.
+
+Torch provides the reference nearest-face search. Warp accelerates that search
+on CPU and CUDA. Both backends evaluate the selected projection with PyTorch
+in the input dtype. Exact ties at target edges or vertices can select different
+adjacent faces. Their closest point is the same, but a nonzero face-normal
+offset can differ.
+
+Search backend rules differ by dtype and geometry:
+
+- ``float64`` targets use the Torch search because Warp searches in ``float32``.
+- Warp searches safe ``float32`` coordinates unchanged.
+- Warp falls back to Torch for unsafe coordinate magnitudes or face geometry.
+
+Shrinkwrap performs data-dependent validation and nearest-face search setup.
+Do not run CUDA executions with either backend inside CUDA Graph capture.
+
+For a connectivity-preserving object API and a triangle-panel example, use
+:meth:`~physicsnemo.mesh.mesh.Mesh.shrinkwrap`.
+
 Mesh Poisson Disk Sample
 ------------------------
 

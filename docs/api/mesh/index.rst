@@ -212,8 +212,7 @@ Tutorials
 Runnable Jupyter notebook tutorials are available in ``examples/minimal/mesh/``:
 
 1. **Getting Started** -- mesh creation, data attachment, GPU usage, autograd
-2. **Operations** -- transformations, displacement, morphing, subdivision,
-   slicing, merging, boundaries
+2. **Operations** -- transformations, subdivision, slicing, merging, boundaries
 3. **Discrete Calculus** -- gradients, divergence, curl, curvature
 4. **Neighbors & Spatial** -- adjacency queries, BVH, sampling, interpolation
 5. **Quality & Repair** -- validation, quality metrics, repair pipeline

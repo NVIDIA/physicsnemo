@@ -22,7 +22,6 @@ dynamic = ["version", "optional_dependencies"]
 
 dependencies = [
     "onnx>=1.14.0",
-    # Require the current public device API baseline and Warp 1.14 fixes.
     "warp-lang>=1.14.0",
     "pandas>=2.2.0",
     "nvtx>=0.2.10",
@@ -45,7 +44,7 @@ dependencies = [
     "jaxtyping>=0.3.3",
     "termcolor>=3.2.0",
     "hydra-core>=1.3.2",
-    "tensordict>=0.12.4",
+    "tensordict-nightly[zarr]==2026.8.6",
     "omegaconf>=2.3.0",
     "importlib-metadata>=8.7.1",
     "psutil>=6.0.0",

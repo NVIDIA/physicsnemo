@@ -48,11 +48,13 @@ from physicsnemo.mesh.calculus import (
 )
 from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
 from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
+from physicsnemo.mesh.remeshing import remesh
 from physicsnemo.mesh.transformations.deform import (
     displace,
     free_form_deform,
     morph,
     radial_basis_function_deform,
+    shrinkwrap,
     sobolev_deform,
 )
 from physicsnemo.mesh.transformations.geometric import (
@@ -2481,6 +2483,8 @@ class Mesh:
 
     radial_basis_function_deform = radial_basis_function_deform
 
+    shrinkwrap = shrinkwrap
+
     sobolev_deform = sobolev_deform
 
     rotate = rotate
@@ -2796,61 +2800,7 @@ class Mesh:
 
     validate = validate
 
-    def remesh(
-        self,
-        n_clusters: builtins.int,
-        *,
-        max_iterations: builtins.int = 4,
-    ) -> "Mesh":
-        """Uniformly remesh a triangle surface using Warp on CPU or CUDA.
-
-        Remeshing creates new topology with approximately ``n_clusters``
-        vertices and discards point and cell data.
-
-        Parameters
-        ----------
-        n_clusters : int
-            Target output vertex count. Must be between 3 and ``n_points``,
-            inclusive.
-        max_iterations : int, optional
-            Maximum centroid-relaxation iterations. Default is ``4``. Values
-            must be non-negative.
-
-        Returns
-        -------
-        Mesh
-            Remeshed triangle surface on the same device and with the same
-            point dtype as this mesh.
-
-        Raises
-        ------
-        TypeError
-            If counts, tuning parameters, or point coordinates have invalid
-            types.
-        ValueError
-            If a count is out of range or geometry is invalid.
-        NotImplementedError
-            If this is not a 2D triangle surface embedded in 3D.
-        ImportError
-            If Warp is unavailable.
-        RuntimeError
-            If cleanup cannot reconstruct a nonempty manifold surface.
-
-        Notes
-        -----
-        Remeshing is non-differentiable. Global data is preserved, while point
-        and cell data are discarded because their associations no longer match
-        the reconstructed topology. Backend-specific tuning is available from
-        the advanced tensor-level
-        :func:`physicsnemo.nn.functional.remeshing` API.
-        """
-        from physicsnemo.mesh.remeshing import remesh
-
-        return remesh(
-            self,
-            n_clusters,
-            max_iterations=max_iterations,
-        )
+    remesh = remesh
 
     def subdivide(
         self,
