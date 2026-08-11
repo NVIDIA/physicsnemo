@@ -57,3 +57,30 @@ def gather_full(result):
     return type(result)(
         *(x.full_tensor() if hasattr(x, "full_tensor") else x for x in result)
     )
+
+
+def _gather(t: torch.Tensor) -> torch.Tensor:
+    return t.full_tensor() if hasattr(t, "full_tensor") else t
+
+
+@pytest.fixture(autouse=True)
+def _patch_torch_comparisons(monkeypatch):
+    """Gather ShardTensors before any comparison that DTensor can't propagate.
+
+    ``torch.allclose`` and ``torch.equal`` are data-dependent reductions
+    (they return a scalar whose value depends on every shard) so DTensor's
+    sharding propagator raises DataDependentOutputException.  Gathering to a
+    plain replicated tensor on each rank before comparing is semantically
+    identical and avoids the DTensor dispatch path entirely.
+    """
+    _orig_allclose = torch.allclose
+    _orig_equal = torch.equal
+
+    def _allclose(input, other, *args, **kwargs):
+        return _orig_allclose(_gather(input), _gather(other), *args, **kwargs)
+
+    def _equal(input, other):
+        return _orig_equal(_gather(input), _gather(other))
+
+    monkeypatch.setattr(torch, "allclose", _allclose)
+    monkeypatch.setattr(torch, "equal", _equal)
