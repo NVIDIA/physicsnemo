@@ -29,6 +29,7 @@ from physicsnemo.diffusion.noise_schedulers import NoiseScheduler
 from physicsnemo.domain_parallel.shard_tensor import scatter_tensor
 
 from .solvers import (
+    DPMSolverPlusPlus2M,
     EDMStochasticEulerSolver,
     EDMStochasticHeunSolver,
     EulerSolver,
@@ -41,7 +42,51 @@ SOLVERS: Dict[str, type[Solver]] = {
     "heun": HeunSolver,
     "edm_stochastic_euler": EDMStochasticEulerSolver,
     "edm_stochastic_heun": EDMStochasticHeunSolver,
+    "dpmpp_2m": DPMSolverPlusPlus2M,
 }
+
+
+_SCHEDULE_FNS = ("alpha_fn", "sigma_fn", "alpha_dot_fn", "sigma_dot_fn")
+
+
+def _schedule_fns(noise_scheduler: NoiseScheduler) -> Dict[str, Any]:
+    r"""Extract the linear-Gaussian schedule functions required by a solver.
+
+    Solvers written for general linear-Gaussian schedules
+    :math:`\mathbf{x}_t = \alpha_t \mathbf{x}_0 + \sigma_t \boldsymbol{\epsilon}`
+    need :math:`\alpha`, :math:`\sigma` and their time derivatives: the first
+    two to advance the state, the derivatives to recover the data prediction
+    from the ODE right-hand side that the denoiser returns.
+
+    Parameters
+    ----------
+    noise_scheduler : NoiseScheduler
+        The scheduler from which to obtain the schedule functions. A
+        :class:`~physicsnemo.diffusion.noise_schedulers.DomainParallelNoiseScheduler`
+        is unwrapped first, since it delegates rather than exposing these
+        methods itself.
+
+    Returns
+    -------
+    Dict[str, Any]
+        Keyword arguments for the solver constructor.
+
+    Raises
+    ------
+    ValueError
+        If the scheduler does not provide callable ``alpha``, ``sigma``,
+        ``alpha_dot`` and ``sigma_dot`` methods.
+    """
+    inner = getattr(noise_scheduler, "inner_scheduler", noise_scheduler)
+    fns = {key: getattr(inner, key[: -len("_fn")], None) for key in _SCHEDULE_FNS}
+    missing = sorted(k[: -len("_fn")] for k, v in fns.items() if not callable(v))
+    if missing:
+        raise ValueError(
+            f"{type(inner).__name__} does not provide {', '.join(missing)}, which "
+            "this solver needs to advance a general linear-Gaussian schedule and "
+            "to recover the data prediction from the denoiser output."
+        )
+    return fns
 
 
 def _maybe_replicate_timesteps(
@@ -78,7 +123,9 @@ def sample(
     xN: Float[Tensor, " B *dims"],
     noise_scheduler: NoiseScheduler,
     num_steps: int,
-    solver: Literal["euler", "heun", "edm_stochastic_euler", "edm_stochastic_heun"]
+    solver: Literal[
+        "euler", "heun", "edm_stochastic_euler", "edm_stochastic_heun", "dpmpp_2m"
+    ]
     | Solver = "heun",
     time_steps: Float[Tensor, " N_plus_1"] | None = None,
     solver_options: Dict[str, Any] | None = None,
@@ -216,6 +263,11 @@ def sample(
           the EDM paper with configurable noise injection. See
           :class:`~physicsnemo.diffusion.samplers.solvers.EDMStochasticHeunSolver`.
 
+        * ``"dpmpp_2m"``: Second-order multistep DPM-Solver++, using a single
+          denoiser evaluation per step. Configured from the noise scheduler, so
+          it applies to general linear-Gaussian schedules.
+          See :class:`~physicsnemo.diffusion.samplers.solvers.DPMSolverPlusPlus2M`.
+
     time_steps : Tensor | None, default=None
         Optional 1D tensor of shape :math:`(N + 1,)` containing explicit
         diffusion time values :math:`t_N, t_{N-1}, ..., t_0` in decreasing
@@ -226,7 +278,9 @@ def sample(
         Additional options passed to the solver constructor. Only used when
         ``solver`` is a string; must be empty when ``solver`` is a
         :class:`Solver` instance. See individual solver classes for available
-        options.
+        options. Solvers configured from the noise scheduler (currently
+        ``"dpmpp_2m"``) ignore any schedule functions given here: the scheduler
+        also provides the time-steps, so it is authoritative.
     time_eval : List[int] | None, default=None
         Indices of time-steps at which to return intermediate samples. Must
         contain values in ``range(0, num_steps)`` (or ``range(0,
@@ -362,7 +416,13 @@ def sample(
                 f"Unknown solver '{solver}'. Available solvers: {available}."
             )
         solver_cls = SOLVERS[solver]
-        solver_ = solver_cls(denoiser, **solver_options)
+        # Copy so the caller's dict is never mutated, and let the scheduler be
+        # authoritative: the time-steps come from it, so schedule functions
+        # describing anything else would silently disagree with them.
+        options = dict(solver_options)
+        if getattr(solver_cls, "_requires_schedule_fns", False):
+            options.update(_schedule_fns(noise_scheduler))
+        solver_ = solver_cls(denoiser, **options)
     else:
         # Assume solver is a Solver-like object with a step method
         if solver_options:
@@ -391,6 +451,18 @@ def sample(
     # callers that intentionally backprop through sample() are unaffected.
     outer_grad_enabled = torch.is_grad_enabled()
 
+    # Stateful solvers opt into a reset hook, cleared here so a reused instance
+    # cannot leak state from a previous trajectory. Gated on the marker rather
+    # than on the presence of a ``reset`` method: ``reset`` is a common name, and
+    # a pre-existing solver that happens to define one for its own purposes must
+    # keep its previous behavior. The hook stays outside the runtime-checkable
+    # ``Solver`` protocol so that solvers implementing only ``step`` still match.
+    reset = getattr(solver_, "reset", None)
+    if not getattr(solver_, "_requires_state_reset", False):
+        reset = None
+    if callable(reset):
+        reset()
+
     # Main sampling loop
     samples: List[Tensor] = []
     x = xN
@@ -404,26 +476,31 @@ def sample(
                 f"valid indices are in range(0, {n_steps})."
             )
 
-    for i in range(n_steps):
-        t_cur = t_steps[i]
-        t_next = t_steps[i + 1]
+    try:
+        for i in range(n_steps):
+            t_cur = t_steps[i]
+            t_next = t_steps[i + 1]
 
-        # Expand t to batch dimension: scalar -> (B,)
-        batch_size = x.shape[0]
-        t_cur_batch = t_cur.expand(batch_size)
-        t_next_batch = t_next.expand(batch_size)
+            # Expand t to batch dimension: scalar -> (B,)
+            batch_size = x.shape[0]
+            t_cur_batch = t_cur.expand(batch_size)
+            t_next_batch = t_next.expand(batch_size)
 
-        # Perform one solver step
-        x = solver_.step(x, t_cur_batch, t_next_batch)
-        if not outer_grad_enabled:
-            x = x.detach()
+            # Perform one solver step
+            x = solver_.step(x, t_cur_batch, t_next_batch)
+            if not outer_grad_enabled:
+                x = x.detach()
 
-        # Collect sample if requested
-        if time_eval is not None and i in time_eval:
-            samples.append(x.clone())
+            # Collect sample if requested
+            if time_eval is not None and i in time_eval:
+                samples.append(x.clone())
 
-    # Return based on time_eval
-    if time_eval is not None:
-        return samples
+        # Return based on time_eval
+        if time_eval is not None:
+            return samples
 
-    return x
+        return x
+    finally:
+        # Release cached solver state on success or failure.
+        if callable(reset):
+            reset()
