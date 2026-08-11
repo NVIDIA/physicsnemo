@@ -970,6 +970,20 @@ def sdpa_wrapper(
 ) -> ShardTensor:  # noqa: C901
     r"""Wrapper for ``torch.nn.functional.scaled_dot_product_attention`` to support sharded tensors.
 
+    Two rules govern every placement combination (S_q and S_kv are
+    independent throughout, so cross-attention is supported everywhere):
+
+    1. The output follows q. q never moves; a sharded q parallelizes
+       attention rows across ranks.
+    2. The K/V placement decides communication. Sharded K/V blocks must be
+       accumulated with the log-sum-exp combine: a ring when q is also
+       sharded (each q block must visit every K/V block), a single static
+       fold when q is replicated (every rank already holds all of q and
+       one K/V block). Replicated K/V needs no forward communication; the
+       only distributed concern is backward, where dK/dV are partial sums
+       over q's shards and need an all-reduce -- and only when q is
+       sharded (with q replicated, every rank computes identical grads).
+
     Parameters
     ----------
     func : Callable
@@ -991,20 +1005,6 @@ def sdpa_wrapper(
     MissingShardPatch
         If sharding of inputs is not on the same mesh, or is not on a 1D mesh.
     """
-
-    # Two rules govern every placement combination (S_q and S_kv are
-    # independent throughout, so cross-attention is supported everywhere):
-    #
-    # 1. The output follows q. q never moves; a sharded q parallelizes
-    #    attention rows across ranks.
-    # 2. The K/V placement decides communication. Sharded K/V blocks must be
-    #    accumulated with the log-sum-exp combine: a ring when q is also
-    #    sharded (each q block must visit every K/V block), a single static
-    #    fold when q is replicated (every rank already holds all of q and
-    #    one K/V block). Replicated K/V needs no forward communication; the
-    #    only distributed concern is backward, where dK/dV are partial sums
-    #    over q's shards and need an all-reduce -- and only when q is
-    #    sharded (with q replicated, every rank computes identical grads).
 
     q, k, v, attn_mask, kwargs = repackage_sdpa_args(*args, **kwargs)
 
