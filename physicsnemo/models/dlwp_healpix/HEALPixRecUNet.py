@@ -505,17 +505,19 @@ class HEALPixRecUNet(Module):
                     )
             else:
                 s = step - self.presteps + prestep
+                # Only the prognostic channels of the previous output are fed
+                # back in; any extra (diagnostic) output channels are dropped.
+                prognostics = outputs[s - 1][:, :, :, : self.input_channels]
                 if len(self.couplings) > 0:
                     input_tensor = self._reshape_inputs(
-                        inputs=[outputs[s - 1][:, :, :, : self.input_channels]]
+                        inputs=[prognostics]
                         + list(inputs[1:3])
                         + [inputs[3][step - (prestep - self.presteps)]],
                         step=s + 1,
                     )
                 else:
                     input_tensor = self._reshape_inputs(
-                        inputs=[outputs[s - 1][:, :, :, : self.input_channels]]
-                        + list(inputs[1:]),
+                        inputs=[prognostics] + list(inputs[1:]),
                         step=s + 1,
                     )
             if conditions_cln is not None:
@@ -600,17 +602,19 @@ class HEALPixRecUNet(Module):
                         step=s,
                     )
             else:
+                # Only the prognostic channels of the previous output are fed
+                # back in; any extra (diagnostic) output channels are dropped.
+                prognostics = outputs[-1][:, :, :, : self.input_channels]
                 if len(self.couplings) > 0:
                     input_tensor = self._reshape_inputs(
-                        inputs=[outputs[-1][:, :, :, : self.input_channels]]
+                        inputs=[prognostics]
                         + list(inputs[1:3])
                         + [inputs[3][self.presteps + step]],
                         step=step + self.presteps,
                     )
                 else:
                     input_tensor = self._reshape_inputs(
-                        inputs=[outputs[-1][:, :, :, : self.input_channels]]
-                        + list(inputs[1:]),
+                        inputs=[prognostics] + list(inputs[1:]),
                         step=step + self.presteps,
                     )
 

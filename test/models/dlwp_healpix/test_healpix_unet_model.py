@@ -934,6 +934,74 @@ def test_HEALPixUNet_diagnostic_residual_prediction_raises(
     torch.cuda.empty_cache()
 
 
+@torch.no_grad()
+def test_HEALPixUNet_forward_diagnostic_output_channel(
+    device,
+    unet_encoder_dict,
+    unet_decoder_dict,
+    test_data,
+    insolation_data,
+    constant_data,
+    pytestconfig,
+):
+    """A model whose output includes an extra diagnostic channel
+    (``output_channels > input_channels``) must run across multiple
+    integration steps: only the prognostic channels of each step's output are
+    fed back into the next step, so the extra diagnostic channel does not
+    break the autoregressive loop.
+    """
+    in_channels = 2
+    out_channels = 3  # one extra diagnostic channel beyond the prognostic inputs
+    n_constants = 2
+    decoder_input_channels = 1
+    input_time_dim = 2
+    output_time_dim = 4  # 2 integration steps -> exercises the step>0 feedback path
+    batch_size = 2
+    size = 16
+
+    fix_random_seeds(seed=42)
+    x = test_data(
+        batch_size=batch_size,
+        time_dim=input_time_dim,
+        channels=in_channels,
+        img_size=size,
+        device=device,
+    )
+    decoder_inputs = insolation_data(
+        batch_size=batch_size,
+        time_dim=output_time_dim,
+        img_size=size,
+        device=device,
+    )
+    constants = constant_data(channels=n_constants, img_size=size, device=device)
+    inputs = [x, decoder_inputs, constants]
+
+    model = HEALPixUNet(
+        encoder=unet_encoder_dict,
+        decoder=unet_decoder_dict,
+        input_channels=in_channels,
+        output_channels=out_channels,
+        n_constants=n_constants,
+        decoder_input_channels=decoder_input_channels,
+        input_time_dim=input_time_dim,
+        output_time_dim=output_time_dim,
+        residual_prediction=False,
+    ).to(device)
+
+    # more than one integration step, and a genuine diagnostic output channel
+    assert model.integration_steps == 2
+    assert not model.is_diagnostic
+
+    output = model(inputs)
+
+    expected_shape = [batch_size, 12, output_time_dim, out_channels, size, size]
+    assert list(output.shape) == expected_shape
+    assert torch.isfinite(output).all()
+
+    del model, inputs
+    torch.cuda.empty_cache()
+
+
 def test_HEALPixUNet_backward_compat_arg_mapper():
     """Legacy (version ``0.1.0``) checkpoints used ``dlwp_healpix_layers``
     Hydra targets; ``_backward_compat_arg_mapper`` must remap them to the

@@ -1065,6 +1065,80 @@ def test_HEALPixRecUNet_diagnostic_residual_prediction_raises(
 
 
 @torch.no_grad()
+def test_HEALPixRecUNet_forward_diagnostic_output_channel(
+    device,
+    encoder_dict,
+    decoder_dict,
+    test_data,
+    insolation_data,
+    constant_data,
+    pytestconfig,
+):
+    """A model whose output includes an extra diagnostic channel
+    (``output_channels > input_channels``) must run across multiple
+    integration steps (including the ``presteps`` warm-up): only the
+    prognostic channels of each step's output are fed back into the next
+    step, so the extra diagnostic channel does not break the autoregressive
+    loop.
+    """
+    in_channels = 2
+    out_channels = 3  # one extra diagnostic channel beyond the prognostic inputs
+    n_constants = 2
+    decoder_input_channels = 1
+    input_time_dim = 2
+    output_time_dim = 4  # 2 integration steps -> exercises the step>0 feedback path
+    presteps = 1  # exercises the warm-up feedback path in _initialize_hidden
+    batch_size = 2
+    size = 16
+
+    fix_random_seeds(seed=42)
+    model = HEALPixRecUNet(
+        encoder=encoder_dict,
+        decoder=decoder_dict,
+        input_channels=in_channels,
+        output_channels=out_channels,
+        n_constants=n_constants,
+        decoder_input_channels=decoder_input_channels,
+        input_time_dim=input_time_dim,
+        output_time_dim=output_time_dim,
+        presteps=presteps,
+        delta_time="6h",
+        reset_cycle="6h",
+        residual_prediction=False,
+    ).to(device)
+
+    # more than one integration step, and a genuine diagnostic output channel
+    assert model.integration_steps == 2
+    assert not model.is_diagnostic
+
+    total_steps = presteps + model.integration_steps
+    x = test_data(
+        batch_size=batch_size,
+        time_dim=total_steps * input_time_dim,
+        channels=in_channels,
+        img_size=size,
+        device=device,
+    )
+    decoder_inputs = insolation_data(
+        batch_size=batch_size,
+        time_dim=total_steps * output_time_dim,
+        img_size=size,
+        device=device,
+    )
+    constants = constant_data(channels=n_constants, img_size=size, device=device)
+    inputs = [x, decoder_inputs, constants]
+
+    output = model(inputs)
+
+    expected_shape = [batch_size, 12, output_time_dim, out_channels, size, size]
+    assert list(output.shape) == expected_shape
+    assert torch.isfinite(output).all()
+
+    del model, inputs
+    torch.cuda.empty_cache()
+
+
+@torch.no_grad()
 def test_HEALPixRecUNet_reshape_inputs_enable_nhwc(
     device,
     encoder_dict,

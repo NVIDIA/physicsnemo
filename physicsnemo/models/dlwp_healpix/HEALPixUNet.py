@@ -476,13 +476,16 @@ class HEALPixUNet(Module):
                 else:
                     input_tensor = self._reshape_inputs(inputs, step)
             else:
+                # Only the prognostic channels of the previous output are fed
+                # back in; any extra (diagnostic) output channels are dropped.
+                prognostics = outputs[-1][:, :, :, : self.input_channels]
                 if len(self.couplings) > 0:
                     input_tensor = self._reshape_inputs(
-                        [outputs[-1]] + list(inputs[1:3]) + [inputs[3][step]], step
+                        [prognostics] + list(inputs[1:3]) + [inputs[3][step]], step
                     )
                 else:
                     input_tensor = self._reshape_inputs(
-                        [outputs[-1]] + list(inputs[1:]), step
+                        [prognostics] + list(inputs[1:]), step
                     )
             if conditions_cln is not None:
                 kwargs = {"conditions_cln": conditions_cln[step]}
