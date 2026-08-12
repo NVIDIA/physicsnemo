@@ -30,7 +30,6 @@ from physicsnemo.metrics.climate.healpix_loss import (
 )
 from test.conftest import requires_module
 
-xr = pytest.importorskip("xarray")
 
 
 @pytest.fixture
@@ -244,6 +243,7 @@ def test_OceanMSE(
     rtol: float = 1e-3,
     atol: float = 1e-3,
 ):
+    xr = pytest.importorskip("xarray")
     num_channels = 3
     channels, pred_tensor_np, targ_tensor_np = test_data(
         channels=num_channels, img_shape=(32, 32)
@@ -322,6 +322,7 @@ def test_WeightedOceanMSE(
     rtol: float = 1e-3,
     atol: float = 1e-3,
 ):
+    xr = pytest.importorskip("xarray")
     num_channels = 3
     identity_weights = [1, 1, 1]  # same as OceanMSE
     test_weights = [2.0, 0.5, 1]  # Check positive and negative weighing factors

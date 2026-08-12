@@ -30,12 +30,7 @@ the NFS-backed test dataset.
 """
 
 import numpy as np
-import pandas as pd
 import pytest
-
-pytest.importorskip("xarray")
-omegaconf = pytest.importorskip("omegaconf")
-import xarray as xr  # noqa: E402
 
 from physicsnemo.datapipes.healpix.coupledtimeseries_dataset import (  # noqa: E402
     CoupledTimeSeriesDataset,
@@ -57,6 +52,7 @@ _FACE, _HEIGHT, _WIDTH = 2, 3, 4
 
 
 def _scaling_config(variables):
+    omegaconf = pytest.importorskip("omegaconf")
     return omegaconf.OmegaConf.create(
         {v: {"mean": _SCALING[v][0], "std": _SCALING[v][1]} for v in variables}
     )
@@ -68,6 +64,8 @@ def _make_dataset(channel_in, channel_out, n_time=8):
     Input channel ``i`` is filled with the constant ``i + 1`` so that the
     normalized value is deterministic and easy to assert against.
     """
+    pd = pytest.importorskip("pandas")
+    xr = pytest.importorskip("xarray")
     time = pd.date_range("1979-01-01", periods=n_time, freq="3h")
 
     inputs = np.empty(

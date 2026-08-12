@@ -20,7 +20,7 @@
 import copy
 from typing import List
 
-import torch as th
+import torch
 
 try:
     from apex.normalization import FusedLayerNorm
@@ -30,13 +30,13 @@ except ImportError:
     _APEX_AVAILABLE = False
 
 
-class ConditionalLayerNormReference(th.nn.Module):
+class ConditionalLayerNormReference(torch.nn.Module):
     def __init__(
         self,
         condition_shape: int,
         channel_depth: int,
         mlp_hidden_dims: List[int] = [128, 128],
-        activation: th.nn.Module = None,
+        activation: torch.nn.Module = None,
         eps: float = 1e-5,
         n_faces: int = 12,
         norm_op: str = "torch",
@@ -48,7 +48,7 @@ class ConditionalLayerNormReference(th.nn.Module):
         self.condition_shape = condition_shape
         self.channel_depth = channel_depth
         self.hidden_dims = mlp_hidden_dims
-        self.activation = activation if activation is not None else th.nn.Identity()
+        self.activation = activation if activation is not None else torch.nn.Identity()
         self.gamma_mlp = self._make_mlp(
             self.condition_shape, self.hidden_dims, self.channel_depth, self.activation
         )
@@ -65,7 +65,7 @@ class ConditionalLayerNormReference(th.nn.Module):
             self.beta_mlp[-1].bias.data.zero_()
 
         if norm_op == "torch":
-            self.norm = th.nn.LayerNorm(channel_depth, elementwise_affine=False)
+            self.norm = torch.nn.LayerNorm(channel_depth, elementwise_affine=False)
         elif norm_op == "apex":
             if not _APEX_AVAILABLE:
                 raise ImportError(
@@ -78,20 +78,20 @@ class ConditionalLayerNormReference(th.nn.Module):
         in_dim: int,
         hidden_dims: List[int],
         out_dim: int,
-        activation: th.nn.Module,
-    ) -> th.nn.Sequential:
+        activation: torch.nn.Module,
+    ) -> torch.nn.Sequential:
         layers = []
         for hdim in hidden_dims:
-            layers.append(th.nn.Linear(in_dim, hdim))
+            layers.append(torch.nn.Linear(in_dim, hdim))
             if activation:
                 # some variations of _make_mlp may have duplicate activation submodule buffers (e.g. CappedGELU ``cap``)
                 # so we need to deepcopy the activation submodule buffers
                 layers.append(copy.deepcopy(activation))
             in_dim = hdim
-        layers.append(th.nn.Linear(in_dim, out_dim))
-        return th.nn.Sequential(*layers)
+        layers.append(torch.nn.Linear(in_dim, out_dim))
+        return torch.nn.Sequential(*layers)
 
-    def forward(self, x: th.Tensor, conditions: th.Tensor) -> th.Tensor:
+    def forward(self, x: torch.Tensor, conditions: torch.Tensor) -> torch.Tensor:
         x = x.permute(0, 2, 3, 1)
         x_norm = self.norm(x)
 

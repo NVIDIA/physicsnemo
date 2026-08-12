@@ -24,13 +24,9 @@ tiny in-memory datasets so they run without the NFS-backed test dataset.
 """
 
 import numpy as np
-import pandas as pd
 import pytest
 
-pytest.importorskip("xarray")
 import torch  # noqa: E402
-import xarray as xr  # noqa: E402
-
 from physicsnemo.datapipes.healpix.couplers import ConstantCoupler  # noqa: E402
 
 _FACE, _HEIGHT, _WIDTH = 2, 3, 4
@@ -39,6 +35,9 @@ _FACE, _HEIGHT, _WIDTH = 2, 3, 4
 def _make_coupler_dataset(channel_in, n_time=8):
     """Minimal dataset; the coupler only reads ``inputs.shape[2:]`` from it to
     determine its spatial dimensions."""
+    xr = pytest.importorskip("xarray")
+    pd = pytest.importorskip("pandas")
+
     return xr.Dataset(
         data_vars={
             "inputs": (
