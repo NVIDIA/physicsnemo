@@ -134,7 +134,7 @@ RUN --mount=type=bind,source=pyproject.toml,target=/tmp/pyproject.toml,ro \
         --extra datapipes-extras \
         --extra gnns \
         --extra sym && \
-    python -c 'import torch, torch_scatter, torch_sparse; print("PyG ABI check passed:", torch.__version__)'
+    python -c 'import torch, torch_cluster, torch_scatter, torch_sparse; import natten.libnatten; print("Native extension ABI check passed:", torch.__version__)'
 
 # Branch the release builder after dependency installation. The CI stage below
 # branches directly from dependencies and therefore never installs PhysicsNeMo.
