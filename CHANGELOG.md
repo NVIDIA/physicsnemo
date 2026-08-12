@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.2.0] - 2026-XX-YY
+## [2.2.0] - 2026-08-27
 
 ### Added
 
@@ -255,6 +255,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Splits the monolithic `physicsnemo.diffusion.noise_schedulers.noise_schedulers`
+  and `physicsnemo.diffusion.samplers.solvers` modules into one module per class,
+  named after the schedule or solver it defines, with the `NoiseScheduler` and
+  `Solver` protocols in a `base.py` of their respective sub-package.
+  Implementations are unchanged and every class is still re-exported from
+  `physicsnemo.diffusion.noise_schedulers` and `physicsnemo.diffusion.samplers`,
+  so the public import paths stay the same. The two old module paths remain as
+  deprecated shims that re-export the same classes and raise a
+  `DeprecationWarning` on import, so existing code keeps working. Import from
+  `physicsnemo.diffusion.noise_schedulers` and `physicsnemo.diffusion.samplers`
+  instead.
 - `physicsnemo.nn.functional.signed_distance_field` now returns a 3-tuple
   `(sdf, hit_points, hit_faces)` — `hit_faces` is the int64 index of the
   triangle holding each closest point. Queries with no triangle within
