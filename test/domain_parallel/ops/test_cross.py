@@ -71,11 +71,12 @@ def test_cross_sharded(distributed_mesh):
 
 
 def test_cross_sharded_with_plain_constant(distributed_mesh):
-    r"""Shard(0) x plain (3,) constant: promotion + broadcast (the closed
-    PR's crash case -- promoted plain tensors are DTensors, not ShardTensors)."""
+    r"""Shard(0) x plain (1, 3) constant: promotion + broadcast (the closed
+    PR's crash case -- promoted plain tensors are DTensors, not ShardTensors).
+    linalg.cross only broadcasts equal-rank inputs, so the constant is rank 2."""
     dm = DistributedManager()
     a, _ = _seeded_pair(dm.device)
-    axis = torch.tensor([0.0, 0.0, 1.0], device=dm.device)
+    axis = torch.tensor([[0.0, 0.0, 1.0]], device=dm.device)
     a_s = scatter_tensor(a, 0, distributed_mesh, (Shard(0),))
 
     result = torch.linalg.cross(a_s, axis)
@@ -83,6 +84,18 @@ def test_cross_sharded_with_plain_constant(distributed_mesh):
     assert isinstance(result, ShardTensor)
     assert result._spec.placements == (Shard(0),)
     torch.testing.assert_close(result.full_tensor(), torch.linalg.cross(a, axis))
+
+
+def test_cross_rank_mismatch_matches_eager(distributed_mesh):
+    r"""A rank-mismatched operand is rejected with eager torch's error:
+    linalg.cross requires equal-rank inputs even on plain tensors."""
+    dm = DistributedManager()
+    a, _ = _seeded_pair(dm.device)
+    axis = torch.tensor([0.0, 0.0, 1.0], device=dm.device)
+    a_s = scatter_tensor(a, 0, distributed_mesh, (Shard(0),))
+
+    with pytest.raises(RuntimeError, match="same number of dimensions"):
+        torch.linalg.cross(a_s, axis)
 
 
 def test_cross_resolves_partial(distributed_mesh):
