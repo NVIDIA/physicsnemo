@@ -23,6 +23,7 @@ from typing import Callable, Optional, Tuple, Union
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 
 from physicsnemo.core.warnings import LegacyFeatureWarning
@@ -30,8 +31,11 @@ from physicsnemo.diffusion.multi_diffusion import RandomPatching2D
 
 warnings.warn(
     "The loss classes 'VPLoss', 'VELoss', 'EDMLoss', 'EDMLossLogUniform', "
-    "'EDMLossSR', 'RegressionLoss', 'RegressionLossCE', 'ResidualLoss', and "
-    "'VELoss_dfsr' from 'physicsnemo.diffusion.metrics' are legacy "
+    "'EDMLossSR', 'RegressionLoss', 'RegressionHuberLoss', "
+    "'RegressionCharbonnierLoss', 'RegressionEdgeAwareLoss', "
+    "'RegressionHybridStructuralLoss', "
+    "'RegressionLossCE', 'ResidualLoss', and 'VELoss_dfsr' from "
+    "'physicsnemo.diffusion.metrics' are legacy "
     "implementations that will be deprecated in a future release. Updated "
     "implementations will be provided in an upcoming version.",
     LegacyFeatureWarning,
@@ -551,6 +555,229 @@ class RegressionLoss:
         loss = weight * ((D_yn - y) ** 2)
 
         return loss
+
+
+def _regression_forward(
+    net: torch.nn.Module,
+    img_clean: torch.Tensor,
+    img_lr: torch.Tensor,
+    augment_pipe: Optional[
+        Callable[[torch.Tensor], Tuple[torch.Tensor, Optional[torch.Tensor]]]
+    ] = None,
+    lead_time_label: Optional[torch.Tensor] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Run the shared regression forward path and return target/prediction."""
+    img_tot = torch.cat((img_clean, img_lr), dim=1)
+    y_tot, augment_labels = (
+        augment_pipe(img_tot) if augment_pipe is not None else (img_tot, None)
+    )
+    y = y_tot[:, : img_clean.shape[1], :, :]
+    y_lr = y_tot[:, img_clean.shape[1] :, :, :]
+
+    zero_input = torch.zeros_like(y, device=img_clean.device)
+    if lead_time_label is not None:
+        pred = net(
+            zero_input,
+            y_lr,
+            force_fp32=False,
+            lead_time_label=lead_time_label,
+            augment_labels=augment_labels,
+        )
+    else:
+        pred = net(
+            zero_input,
+            y_lr,
+            force_fp32=False,
+            augment_labels=augment_labels,
+        )
+
+    return y, pred
+
+
+def _gradient_map(x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Compute finite-difference gradients with same spatial shape as input."""
+    grad_x = x[..., :, 1:] - x[..., :, :-1]
+    grad_y = x[..., 1:, :] - x[..., :-1, :]
+    grad_x = F.pad(grad_x, (0, 1, 0, 0), mode="replicate")
+    grad_y = F.pad(grad_y, (0, 0, 0, 1), mode="replicate")
+    return grad_x, grad_y
+
+
+def _charbonnier(x: torch.Tensor, eps: float) -> torch.Tensor:
+    return torch.sqrt(x * x + eps * eps)
+
+
+class RegressionHuberLoss:
+    """Robust Huber loss for regression with lower outlier sensitivity."""
+
+    def __init__(self, delta: float = 0.5):
+        self.delta = delta
+
+    def __call__(
+        self,
+        net: torch.nn.Module,
+        img_clean: torch.Tensor,
+        img_lr: torch.Tensor,
+        augment_pipe: Optional[
+            Callable[[torch.Tensor], Tuple[torch.Tensor, Optional[torch.Tensor]]]
+        ] = None,
+        lead_time_label: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        y, pred = _regression_forward(
+            net,
+            img_clean,
+            img_lr,
+            augment_pipe=augment_pipe,
+            lead_time_label=lead_time_label,
+        )
+        err = pred - y
+        abs_err = torch.abs(err)
+        return torch.where(
+            abs_err <= self.delta,
+            0.5 * err * err,
+            self.delta * (abs_err - 0.5 * self.delta),
+        )
+
+
+class RegressionCharbonnierLoss:
+    """Smooth robust regression loss using the Charbonnier penalty."""
+
+    def __init__(self, eps: float = 1e-3):
+        self.eps = eps
+
+    def __call__(
+        self,
+        net: torch.nn.Module,
+        img_clean: torch.Tensor,
+        img_lr: torch.Tensor,
+        augment_pipe: Optional[
+            Callable[[torch.Tensor], Tuple[torch.Tensor, Optional[torch.Tensor]]]
+        ] = None,
+        lead_time_label: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        y, pred = _regression_forward(
+            net,
+            img_clean,
+            img_lr,
+            augment_pipe=augment_pipe,
+            lead_time_label=lead_time_label,
+        )
+        return _charbonnier(pred - y, self.eps)
+
+
+class RegressionEdgeAwareLoss:
+    """Regression loss that combines value and gradient penalties."""
+
+    def __init__(
+        self,
+        eps: float = 1e-3,
+        edge_weight: float = 0.6,
+        edge_emphasis: float = 2.0,
+    ):
+        self.eps = eps
+        self.edge_weight = edge_weight
+        self.edge_emphasis = edge_emphasis
+
+    def __call__(
+        self,
+        net: torch.nn.Module,
+        img_clean: torch.Tensor,
+        img_lr: torch.Tensor,
+        augment_pipe: Optional[
+            Callable[[torch.Tensor], Tuple[torch.Tensor, Optional[torch.Tensor]]]
+        ] = None,
+        lead_time_label: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        y, pred = _regression_forward(
+            net,
+            img_clean,
+            img_lr,
+            augment_pipe=augment_pipe,
+            lead_time_label=lead_time_label,
+        )
+
+        val_loss = _charbonnier(pred - y, self.eps)
+
+        gx_t, gy_t = _gradient_map(y)
+        gx_p, gy_p = _gradient_map(pred)
+        grad_mag_t = torch.sqrt(gx_t * gx_t + gy_t * gy_t + self.eps * self.eps)
+        grad_w = 1.0 + self.edge_emphasis * grad_mag_t / (
+            grad_mag_t.mean(dim=(-2, -1), keepdim=True) + self.eps
+        )
+        grad_loss = 0.5 * (
+            _charbonnier(gx_p - gx_t, self.eps) + _charbonnier(gy_p - gy_t, self.eps)
+        )
+
+        return grad_w * val_loss + self.edge_weight * grad_loss
+
+
+class RegressionHybridStructuralLoss:
+    """Combined robust loss across value, edge, and local structure terms."""
+
+    def __init__(
+        self,
+        eps: float = 1e-3,
+        value_weight: float = 1.0,
+        edge_weight: float = 0.5,
+        ssim_weight: float = 0.3,
+    ):
+        self.eps = eps
+        self.value_weight = value_weight
+        self.edge_weight = edge_weight
+        self.ssim_weight = ssim_weight
+
+    def _dssim(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        c1 = 0.01 * 0.01
+        c2 = 0.03 * 0.03
+        mu_p = F.avg_pool2d(pred, kernel_size=3, stride=1, padding=1)
+        mu_t = F.avg_pool2d(target, kernel_size=3, stride=1, padding=1)
+        var_p = (
+            F.avg_pool2d(pred * pred, kernel_size=3, stride=1, padding=1) - mu_p * mu_p
+        )
+        var_t = (
+            F.avg_pool2d(target * target, kernel_size=3, stride=1, padding=1)
+            - mu_t * mu_t
+        )
+        cov_pt = (
+            F.avg_pool2d(pred * target, kernel_size=3, stride=1, padding=1)
+            - mu_p * mu_t
+        )
+        ssim_num = (2.0 * mu_p * mu_t + c1) * (2.0 * cov_pt + c2)
+        ssim_den = (mu_p * mu_p + mu_t * mu_t + c1) * (var_p + var_t + c2)
+        ssim = ssim_num / (ssim_den + self.eps)
+        return 0.5 * (1.0 - ssim)
+
+    def __call__(
+        self,
+        net: torch.nn.Module,
+        img_clean: torch.Tensor,
+        img_lr: torch.Tensor,
+        augment_pipe: Optional[
+            Callable[[torch.Tensor], Tuple[torch.Tensor, Optional[torch.Tensor]]]
+        ] = None,
+        lead_time_label: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        y, pred = _regression_forward(
+            net,
+            img_clean,
+            img_lr,
+            augment_pipe=augment_pipe,
+            lead_time_label=lead_time_label,
+        )
+
+        value_term = _charbonnier(pred - y, self.eps)
+        gx_t, gy_t = _gradient_map(y)
+        gx_p, gy_p = _gradient_map(pred)
+        edge_term = 0.5 * (
+            _charbonnier(gx_p - gx_t, self.eps) + _charbonnier(gy_p - gy_t, self.eps)
+        )
+        dssim_term = self._dssim(pred, y)
+
+        return (
+            self.value_weight * value_term
+            + self.edge_weight * edge_term
+            + self.ssim_weight * dssim_term
+        )
 
 
 class ResidualLoss:

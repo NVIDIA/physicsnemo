@@ -252,6 +252,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   next event (the new particle's features and inter-event delay) from the
   current particle population, an optional background mesh, and the simulation
   time. Independent rollouts form an ensemble for uncertainty quantification.
+- CorrDiff example: adds configurable regression loss selection for
+  `regression` and `lt_aware_regression` training via model config, including
+  selectable robust loss variants (`RegressionHuberLoss`,
+  `RegressionCharbonnierLoss`, `RegressionEdgeAwareLoss`, and
+  `RegressionHybridStructuralLoss`).
 
 ### Changed
 

@@ -21,6 +21,10 @@ import torch
 from physicsnemo.diffusion.metrics import (
     EDMLoss,
     EDMLossLogUniform,
+    RegressionCharbonnierLoss,
+    RegressionEdgeAwareLoss,
+    RegressionHuberLoss,
+    RegressionHybridStructuralLoss,
     RegressionLoss,
     RegressionLossCE,
     ResidualLoss,
@@ -268,6 +272,29 @@ def test_call_method_regressionloss_with_lead_time_unet(device):
     lead_time_label = torch.tensor(8).to(device)
     loss_func = RegressionLoss()
     loss_value = loss_func(model, img_clean, img_lr, lead_time_label=lead_time_label)
+    assert isinstance(loss_value, torch.Tensor)
+    assert loss_value.shape == img_clean.shape
+
+
+@pytest.mark.parametrize(
+    "loss_cls",
+    [
+        RegressionHuberLoss,
+        RegressionCharbonnierLoss,
+        RegressionEdgeAwareLoss,
+        RegressionHybridStructuralLoss,
+    ],
+)
+def test_custom_regression_losses_call_method(loss_cls):
+    def fake_net(input, y_lr, augment_labels=None, force_fp32=False):
+        return torch.zeros_like(input)
+
+    loss_func = loss_cls()
+    img_clean = torch.randn(2, 3, 8, 8)
+    img_lr = torch.randn(2, 4, 8, 8)
+
+    loss_value = loss_func(fake_net, img_clean, img_lr)
+
     assert isinstance(loss_value, torch.Tensor)
     assert loss_value.shape == img_clean.shape
 
