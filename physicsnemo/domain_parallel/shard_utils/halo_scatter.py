@@ -55,6 +55,18 @@ def _funcol_group_arg(group: object) -> object:
     return group
 
 
+def _accumulator_dtype(dtype: torch.dtype) -> torch.dtype:
+    r"""Higher-precision dtype for folding scatter contributions: ``float32`` accumulates
+    in ``float64`` and reduced-precision (``float16``/``bfloat16``) in ``float32``; all
+    other dtypes accumulate in place. Row folds sum many contributions, so accumulating in
+    the input precision loses significance for the smaller float types."""
+    if dtype == torch.float32:
+        return torch.float64
+    if dtype in (torch.float16, torch.bfloat16):
+        return torch.float32
+    return dtype
+
+
 def _halo_group_name(group: object) -> str:
     r"""Resolve *group* to a c10d group-name string (``""`` = default world group), the
     traceable token a ``custom_op`` can carry in place of a ``ProcessGroup``."""
@@ -150,9 +162,8 @@ class _FuncolHaloBackend:
             send_rows, send_counts, recv_counts, group
         )
 
-        # Fold returned contributions into the lent owned rows; float64 accumulator
-        # for float32 inputs.
-        acc_dtype = torch.float64 if padded.dtype == torch.float32 else padded.dtype
+        # Fold returned contributions into the lent owned rows in higher precision.
+        acc_dtype = _accumulator_dtype(padded.dtype)
         owned = padded[:n_owned].to(acc_dtype)
         offset = 0
         for j in range(world_size):
@@ -254,7 +265,7 @@ class _SymmMemHaloBackend:
         readers = [s for s in range(world_size) if int(send_sizes[s][rank]) > 0]
         sources = [j for j in range(world_size) if int(send_sizes[rank][j]) > 0]
 
-        acc_dtype = torch.float64 if dtype == torch.float32 else dtype
+        acc_dtype = _accumulator_dtype(dtype)
         owned = padded[:n_owned].to(acc_dtype)
         with torch.cuda.device(padded.device):
             handle = symm_mem.get_symm_mem_workspace(
@@ -401,16 +412,13 @@ def _group_is_multinode(group: object) -> bool:
     group_name = _symm_group_name(group)
     cached = _group_multinode_cache.get(group_name)
     if cached is None:
-        try:
-            world = dist.get_world_size(pg)
-            gathered: list[object] = [None] * world
-            dist.all_gather_object(gathered, socket.gethostname(), group=pg)
-            cached = len({str(h) for h in gathered}) > 1
-        except Exception:  # pragma: no cover - fall back to a local heuristic
-            try:
-                cached = dist.get_world_size(pg) > torch.cuda.device_count()
-            except Exception:
-                cached = False
+        # All ranks run the same collective and derive the same answer; a failure raises
+        # (identically on every rank) rather than being swallowed, since a divergent
+        # backend choice between ranks would deadlock the subsequent halo collectives.
+        world = dist.get_world_size(pg)
+        gathered: list[object] = [None] * world
+        dist.all_gather_object(gathered, socket.gethostname(), group=pg)
+        cached = len({str(h) for h in gathered}) > 1
         _group_multinode_cache[group_name] = cached
     return cached
 
@@ -624,11 +632,24 @@ def register_halo_scatter_handlers() -> None:
         ShardTensor,
         _torch_function_fallback_via_dtensor,
     )
+    from physicsnemo.domain_parallel.shard_utils.patch_core import MissingShardPatch
+
+    def _assert_single_mesh_dim(spec) -> None:
+        # The routing (owner/ghost row indices) is 1-D; a multi-dim mesh is unsupported and
+        # must fail loudly here rather than mis-route silently.
+        if spec.mesh.ndim != 1:
+            raise MissingShardPatch(
+                "halo scatter-correction supports sharding over a single mesh dimension "
+                f"only; got a {spec.mesh.ndim}-D mesh."
+            )
 
     def _local(x):
-        # ``index`` / ``src`` may arrive promoted to a Replicate DTensor (the base
-        # ``_promote_plain_handler_args`` runs before this handler). Unwrap it with the
-        # differentiable ``to_local()`` -- the raw ``_local_tensor`` would sever the
+        # ShardTensor args (the accumulator ``self``) return the raw ``_local_tensor``: the
+        # correction's backward is supplied by the ``halo_scatter_correct`` custom op and
+        # the ``_WrapLocalAsShard`` wrapper below, so ``to_local()`` here would splice a
+        # redundant autograd node. ``index`` / ``src`` instead arrive promoted to a
+        # Replicate DTensor (the base ``_promote_plain_handler_args`` runs first), and must
+        # use the differentiable ``to_local()`` -- the raw ``_local_tensor`` would sever the
         # ``from_local`` bridge and drop the gradient back to the plain source.
         if isinstance(x, ShardTensor):
             return x._local_tensor
@@ -676,13 +697,23 @@ def register_halo_scatter_handlers() -> None:
             return _WrapLocalAsShard.apply(local, type(src), src._spec, routing)
         return _build(type(src), local, src._spec, routing, False)
 
+    def _apply_scatter(oop, local_self, dim, local_index, local_src, kwargs):
+        # ``index_add`` takes an ``alpha`` scale that ``scatter_add`` lacks; thread it
+        # through so a non-default ``alpha`` is honoured instead of silently dropped.
+        if oop is torch.Tensor.index_add and "alpha" in kwargs:
+            return oop(local_self, dim, local_index, local_src, alpha=kwargs["alpha"])
+        return oop(local_self, dim, local_index, local_src)
+
     def _scatter_handler(f, types, args, kwargs):
         self = args[0]
         routing = _routing(self)
         if routing is None:
             return _torch_function_fallback_via_dtensor(f, args, kwargs)
+        _assert_single_mesh_dim(self._spec)
         dim, index, src = args[1], args[2], args[3]
-        local_result = f(_local(self), dim, _local(index), _local(src))
+        local_result = _apply_scatter(
+            f, _local(self), dim, _local(index), _local(src), kwargs
+        )
         corrected = halo_scatter_correct(local_result, routing, group=self._spec.mesh)
         return _wrap_like(self, corrected, routing, _needs_grad(self, index, src))
 
@@ -698,8 +729,11 @@ def register_halo_scatter_handlers() -> None:
         routing = _routing(self)
         if routing is None:
             return _torch_function_fallback_via_dtensor(f, args, kwargs)
+        _assert_single_mesh_dim(self._spec)
         dim, index, src = args[1], args[2], args[3]
-        local_result = _inplace_to_oop[f](_local(self), dim, _local(index), _local(src))
+        local_result = _apply_scatter(
+            _inplace_to_oop[f], _local(self), dim, _local(index), _local(src), kwargs
+        )
         corrected = halo_scatter_correct(local_result, routing, group=self._spec.mesh)
         out = _wrap_like(self, corrected, routing, _needs_grad(self, index, src))
         # Write corrected values into local storage so a caller reusing the accumulator sees

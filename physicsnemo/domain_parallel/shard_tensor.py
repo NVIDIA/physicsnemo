@@ -1548,8 +1548,9 @@ class ShardTensor(torch.Tensor):
         else:
             res = _torch_function_fallback_via_dtensor(func, args, kwargs)
         # Ride subclass routing metadata onto op outputs (eager only; under compile it
-        # travels via the flatten context). No-op for base ShardTensor.
-        if cls._subclass_propagated_attrs and not torch.compiler.is_compiling():
+        # travels via the flatten context). No-op for base ShardTensor. ``is_compiling()``
+        # reads False inside ``__torch_function__``, so gate on ``_is_tracing`` (as above).
+        if cls._subclass_propagated_attrs and not _is_tracing(args, kwargs):
             source = cls._find_metadata_source(args, kwargs)
             if source is not None:
                 cls._propagate_subclass_metadata(res, source)
