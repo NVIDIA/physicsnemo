@@ -28,13 +28,14 @@ from tensordict import TensorDict
 
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
-from physicsnemo.datapipes.transforms.subsample import poisson_sample_indices_fixed
 from physicsnemo.mesh import (
     MESH_FIELD_ASSOCIATIONS,
     DomainMesh,
     Mesh,
     MeshFieldAssociation,
 )
+from physicsnemo.mesh.calculus.measure import compose_measure_weights
+from physicsnemo.nn.functional import weighted_multinomial
 
 
 @register()
@@ -254,7 +255,13 @@ def _compact_points(mesh: Mesh) -> Mesh:
 
 @register()
 class SubsampleMesh(MeshTransform):
-    r"""Subsample a mesh to a fixed number of cells and/or points."""
+    r"""Subsample a mesh to a fixed number of cells and/or points.
+
+    Cell subsampling preserves the integration measure by recording
+    each stage's inverse inclusion probability into the mesh's measure
+    weights (see :mod:`physicsnemo.mesh.calculus.measure`); point
+    subsampling does not maintain weights.
+    """
 
     def __init__(
         self,
@@ -276,22 +283,33 @@ class SubsampleMesh(MeshTransform):
         if total <= k:
             return torch.arange(total, device=device)
         if total > 2**24:
-            return poisson_sample_indices_fixed(
+            return weighted_multinomial(
                 total,
                 k,
+                strategy="poisson_gap",
                 device=device,
                 generator=self._generator,
             )
-        return torch.randperm(total, device=device, generator=self._generator)[:k]
+        return weighted_multinomial(
+            total,
+            k,
+            strategy="exact",
+            device=device,
+            generator=self._generator,
+        )
 
     def __call__(self, mesh: Mesh) -> Mesh:
         if self.n_cells is not None and mesh.n_cells > self.n_cells:
-            indices = self._random_indices(
-                mesh.n_cells, self.n_cells, mesh.cells.device
-            )
+            n_before = mesh.n_cells
+            indices = self._random_indices(n_before, self.n_cells, mesh.cells.device)
             mesh = mesh.slice_cells(indices)
             if self.compact:
                 mesh = _compact_points(mesh)
+            ### Compose this stage's inverse inclusion probability into the
+            ### mesh's measure weights.
+            ### `_random_indices` is exact below the large-population threshold
+            ### and uses the near-uniform Poisson-gap approximation above it.
+            compose_measure_weights(mesh, n_before / self.n_cells)
 
         if self.n_points is not None and mesh.n_points > self.n_points:
             indices = self._random_indices(

@@ -14,13 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for the mesh-native signed distance field.
+"""Tests for the mesh signed distance field.
 
-The nearest-triangle query is backed by :class:`physicsnemo.mesh.spatial.BVH`
-(Triton fast path on CUDA, bounded-stack PyTorch DFS as the reference); the
-winding-number sign is computed with a
-:class:`physicsnemo.mesh.spatial.ClusterTree` Barnes-Hut summation, with the
-exact ``O(n_queries * n_faces)`` torch sum as the oracle.
+:func:`physicsnemo.mesh.spatial.signed_distance_field` delegates to the
+Warp-backed :func:`physicsnemo.nn.functional.signed_distance_field` op
+(``wp.mesh_query_point_sign_normal`` / ``wp.mesh_query_point_sign_winding_number``),
+so correctness here is validated against analytic ground truth (sphere,
+tetrahedron, L-prism) rather than an internal reference implementation.
 """
 
 import math
@@ -29,10 +29,7 @@ import pytest
 import torch
 
 from physicsnemo.mesh import Mesh
-from physicsnemo.mesh.spatial.sdf import (
-    _signed_distance_field_from_arrays,
-    signed_distance_field,
-)
+from physicsnemo.mesh.spatial.sdf import signed_distance_field
 
 
 # Build a simple tetrahedron surface mesh as four triangles (a deterministic
@@ -245,6 +242,65 @@ def _inside_l(points: torch.Tensor, thickness: float = 1.0) -> torch.Tensor:
     return in_z & in_xy
 
 
+def _closest_point_on_triangles(query: torch.Tensor, tri: torch.Tensor) -> torch.Tensor:
+    """Closest point on each (non-degenerate) triangle to its paired query point.
+
+    Test-local oracle: vectorized Voronoi-region classification (Ericson,
+    *Real-Time Collision Detection*, section 5.1.5), independent of the
+    implementation under test.
+
+    Parameters
+    ----------
+    query : torch.Tensor
+        Query points, shape ``(n, 3)``.
+    tri : torch.Tensor
+        Triangle vertices, shape ``(n, 3, 3)`` (vertex axis is dim 1).
+    """
+    a, b, c = tri[:, 0], tri[:, 1], tri[:, 2]
+    ab, ac = b - a, c - a
+
+    ap = query - a
+    d1, d2 = (ab * ap).sum(-1), (ac * ap).sum(-1)
+    bp = query - b
+    d3, d4 = (ab * bp).sum(-1), (ac * bp).sum(-1)
+    cp = query - c
+    d5, d6 = (ab * cp).sum(-1), (ac * cp).sum(-1)
+
+    vc = d1 * d4 - d3 * d2
+    vb = d5 * d2 - d1 * d6
+    va = d3 * d6 - d5 * d4
+
+    # Start from the face-interior projection, then override with each Voronoi
+    # region. Applying the cascade's tests in reverse order reproduces its
+    # priority; masked-out lanes may divide by zero, which ``torch.where``
+    # discards.
+    denom = va + vb + vc
+    v = (vb / denom).unsqueeze(-1)
+    w = (vc / denom).unsqueeze(-1)
+    closest = a + ab * v + ac * w
+
+    t_bc = ((d4 - d3) / ((d4 - d3) + (d5 - d6))).unsqueeze(-1)
+    on_bc = (va <= 0) & (d4 - d3 >= 0) & (d5 - d6 >= 0)
+    closest = torch.where(on_bc.unsqueeze(-1), b + (c - b) * t_bc, closest)
+
+    t_ac = (d2 / (d2 - d6)).unsqueeze(-1)
+    on_ac = (vb <= 0) & (d2 >= 0) & (d6 <= 0)
+    closest = torch.where(on_ac.unsqueeze(-1), a + ac * t_ac, closest)
+
+    t_ab = (d1 / (d1 - d3)).unsqueeze(-1)
+    on_ab = (vc <= 0) & (d1 >= 0) & (d3 <= 0)
+    closest = torch.where(on_ab.unsqueeze(-1), a + ab * t_ab, closest)
+
+    at_c = (d6 >= 0) & (d5 <= d6)
+    closest = torch.where(at_c.unsqueeze(-1), c, closest)
+    at_b = (d3 >= 0) & (d4 <= d3)
+    closest = torch.where(at_b.unsqueeze(-1), b, closest)
+    at_a = (d1 <= 0) & (d2 <= 0)
+    closest = torch.where(at_a.unsqueeze(-1), a, closest)
+
+    return closest
+
+
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 @pytest.mark.parametrize("use_winding", [False, True])
 def test_sdf_tetrahedron_reference(dtype, use_winding, device):
@@ -277,25 +333,6 @@ def test_sdf_tetrahedron_reference(dtype, use_winding, device):
         atol=1e-4,
         rtol=1e-4,
     )
-
-
-def test_sdf_index_layout_compatibility(device):
-    """Flat and (n_faces, 3) connectivity agree (private array helper)."""
-    device = torch.device(device)
-    tet = _tetrahedron_mesh().to(device)
-    # The array helper is tested directly here, so pull its inputs from the mesh.
-    mesh_indices_flat = tet.cells.reshape(-1)
-    mesh_indices_faces = tet.cells
-    query_points = torch.tensor([[0.1, 0.2, 0.3]], device=device, dtype=torch.float32)
-
-    sdf_flat, hit_flat, _ = _signed_distance_field_from_arrays(
-        tet.points, mesh_indices_flat, query_points
-    )
-    sdf_faces, hit_faces, _ = _signed_distance_field_from_arrays(
-        tet.points, mesh_indices_faces, query_points
-    )
-    torch.testing.assert_close(sdf_flat, sdf_faces)
-    torch.testing.assert_close(hit_flat, hit_faces)
 
 
 @pytest.mark.parametrize("use_winding", [False, True])
@@ -340,22 +377,6 @@ def test_sdf_preserves_input_shape(device):
     assert hit_faces.dtype == torch.long
 
 
-def test_sdf_public_matches_private_arrays(device):
-    """The public Mesh API and the private array helper agree exactly."""
-    device = torch.device(device)
-    mesh = _uv_sphere_mesh().to(device)
-
-    torch.manual_seed(0)
-    query = (torch.rand(4096, 3, device=device) * 3.0 - 1.5).float()
-
-    sdf_pub, hit_pub, _ = signed_distance_field(mesh, query)
-    sdf_priv, hit_priv, _ = _signed_distance_field_from_arrays(
-        mesh.points, mesh.cells, query
-    )
-    torch.testing.assert_close(sdf_pub, sdf_priv)
-    torch.testing.assert_close(hit_pub, hit_priv)
-
-
 def test_sdf_error_handling(device):
     """Input validation for the public (Mesh) SDF interface."""
     device = torch.device(device)
@@ -376,48 +397,19 @@ def test_sdf_error_handling(device):
     with pytest.raises(ValueError, match="3D mesh"):
         signed_distance_field(Mesh(points=flat_points, cells=mesh.cells), query)
 
-    # An unknown winding backend is rejected up front (before any BVH work),
-    # even when the winding-number sign path is not selected.
-    with pytest.raises(ValueError, match="winding_backend"):
-        signed_distance_field(mesh, query, winding_backend="warp")
-
     # A negative search radius is rejected rather than silently behaving
     # like its absolute value.
     with pytest.raises(ValueError, match="max_dist"):
         signed_distance_field(mesh, query, max_dist=-1.0)
 
 
-def test_sdf_winding_backend_selection(device):
-    """Both winding backends agree through the public API on a closed surface."""
-    device = torch.device(device)
-    mesh = _uv_sphere_mesh().to(device)
-
-    torch.manual_seed(0)
-    query = (torch.rand(512, 3, device=device) * 3.0 - 1.5).float()
-
-    sdf_tree, hit_tree, _ = signed_distance_field(
-        mesh, query, use_sign_winding_number=True, winding_backend="clustertree"
-    )
-    sdf_brute, hit_brute, _ = signed_distance_field(
-        mesh, query, use_sign_winding_number=True, winding_backend="bruteforce"
-    )
-
-    # The unsigned distance and hit point come from the same nearest-triangle
-    # search; only the sign may differ, and away from the surface it must not.
-    torch.testing.assert_close(hit_tree, hit_brute)
-    near_surface = sdf_brute.abs() < 0.05
-    assert torch.all(sdf_tree[~near_surface] == sdf_brute[~near_surface])
-
-
 def test_sdf_hit_faces_identify_nearest_face(device):
     """``hit_faces`` indexes the face that realizes the reported distance.
 
-    Recomputing the closest point on the returned face must reproduce both the
-    hit point and the unsigned distance. On CUDA this also checks the Triton
-    kernel's mapping from BVH-sorted cell order back to input face indices.
+    Recomputing the closest point on the returned face (with the test-local
+    Ericson oracle) must reproduce both the hit point and the unsigned
+    distance.
     """
-    from physicsnemo.mesh.spatial.sdf import _closest_point_on_triangles
-
     device = torch.device(device)
     mesh = _uv_sphere_mesh().to(device)
 
@@ -437,21 +429,6 @@ def test_sdf_hit_faces_identify_nearest_face(device):
     torch.testing.assert_close(closest, hit, atol=1e-6, rtol=1e-5)
 
 
-def test_sdf_array_connectivity_validation(device):
-    """The private array helper still validates raw connectivity layout."""
-    device = torch.device(device)
-    vertices = _tetrahedron_mesh().to(device).points
-    query = torch.tensor([[0.1, 0.2, 0.3]], device=device, dtype=torch.float32)
-
-    bad_connectivity_shape = torch.zeros(4, 4, device=device, dtype=torch.int32)
-    with pytest.raises(ValueError, match=r"shape \(n_faces, 3\)"):
-        _signed_distance_field_from_arrays(vertices, bad_connectivity_shape, query)
-
-    bad_connectivity_rank = torch.zeros(1, 2, 3, device=device, dtype=torch.int32)
-    with pytest.raises(ValueError, match="1D flattened indices or 2D"):
-        _signed_distance_field_from_arrays(vertices, bad_connectivity_rank, query)
-
-
 def test_sdf_empty_mesh_raises(device):
     """A mesh with no faces has no surface, so the query must raise."""
     device = torch.device(device)
@@ -468,13 +445,12 @@ def test_sdf_empty_mesh_raises(device):
 def test_repair_degenerate_faces(device):
     """Degenerate faces are repaired into valid thin triangles; others untouched.
 
-    Ericson's Voronoi-region cascade assumes a non-degenerate triangle: on
-    zero-area faces several region tests fire vacuously and the cascade can
-    return the wrong feature (an overestimated distance). The build step must
-    therefore replace every repeated-vertex or collinear face with a valid
-    thin triangle spanning the same longest edge, moving the surface by no
-    more than the documented offset ``h``, while leaving valid faces
-    bit-identical and point-like faces (exact under Ericson) alone.
+    Warp's mesh closest-point query skips (near-)zero-area faces, silently
+    reporting the distance to some farther valid face instead. The call-time
+    repair must therefore replace every repeated-vertex or collinear face with
+    a valid thin triangle spanning the same longest edge, moving the surface by
+    no more than the documented offset ``h``, while leaving valid faces
+    bit-identical and point-like faces alone.
     """
     from physicsnemo.mesh.spatial.sdf import (
         _DEGENERATE_TRI_REL_HEIGHT,
@@ -534,7 +510,7 @@ def test_repair_degenerate_faces(device):
         )
         assert torch.all(dist_to_orig <= h)
 
-    # Point-like faces are exact under Ericson already: left untouched.
+    # Point-like faces are left untouched (there is no edge to span).
     point_tri = torch.stack([a, a, a], dim=1)
     assert torch.equal(_repair_degenerate_faces(point_tri), point_tri)
 
@@ -554,9 +530,8 @@ def test_sdf_degenerate_face_mesh(device):
 
     End-to-end regression: a repeated-vertex face spanning the segment
     (0,0,0)-(4,0,0) must report the distance to that segment (nearest point
-    (4,0,0) here) to within the documented repair offset -- not the distance
-    to one of its vertices (an error of ~4 here before the fix). On CUDA this
-    exercises the Triton kernel path; on CPU the torch DFS.
+    (4,0,0) here) -- not the distance to one of its vertices (an error of ~4
+    here if the degenerate face were mishandled).
     """
     device = torch.device(device)
     # One repeated-vertex face spanning a segment, plus a far valid triangle so
@@ -578,8 +553,6 @@ def test_sdf_degenerate_face_mesh(device):
     query = torch.tensor([[4.5, 0.2, 0.0]], dtype=torch.float32, device=device)
     sdf_out, hit, _ = signed_distance_field(mesh, query, use_sign_winding_number=True)
 
-    # The repair moves the surface by at most 2 h = 2 * 1e-4 * 4; assert to
-    # 1e-3 to leave headroom over float32 arithmetic on top of that bound.
     true_dist = math.hypot(0.5, 0.2)
     torch.testing.assert_close(
         sdf_out.abs(),
@@ -631,15 +604,14 @@ def test_sdf_max_dist_unbounded_and_narrow_band(device):
     assert (faces_in_band >= 0).all()
 
 
-def test_sdf_pseudo_normal_sign_wrong_at_sharp_edges(device):
-    r"""Document the nearest-face pseudo-normal sign bug at sharp edges.
+def test_sdf_pseudo_normal_sign_correct_at_sharp_edges_l_prism(device):
+    r"""The default sign is robust at sharp convex and reflex edges.
 
-    The default sign method classifies a query as inside/outside using the
-    outward normal of the *single* nearest triangle. Near a sharp convex or
-    reflex edge the nearest feature is the edge itself - shared by two faces with
-    very different normals - so picking one face's normal can flip the sign. A
-    robust implementation uses the angle-weighted pseudo-normal or the
-    generalized winding number.
+    Near a sharp edge the nearest feature is shared by two faces with very
+    different normals, so a naive single-face normal flips the sign. Warp's
+    ``mesh_query_point_sign_normal`` uses an angle-weighted pseudo-normal at
+    the closest feature, which must classify the L-prism's interior correctly
+    away from the surface.
     """
     device = torch.device(device)
     mesh = _l_prism_mesh().to(device)
@@ -667,10 +639,8 @@ def test_sdf_pseudo_normal_sign_wrong_at_sharp_edges(device):
 
     n_wrong = int(wrong.sum())
     assert n_wrong == 0, (
-        f"Nearest-face pseudo-normal sign misclassified {n_wrong} of "
-        f"{int(away.sum())} points near the L-prism's sharp edges. The single "
-        f"nearest-face normal is unreliable at sharp convex/reflex edges; use an "
-        f"angle-weighted pseudo-normal or the winding number for the sign."
+        f"Pseudo-normal sign misclassified {n_wrong} of "
+        f"{int(away.sum())} points near the L-prism's sharp edges."
     )
 
 
@@ -678,10 +648,9 @@ def test_sdf_winding_sign_correct_at_sharp_edges(device):
     r"""Control: the winding-number sign is correct on the same L-prism.
 
     Identical sharp-edged mesh as
-    ``test_sdf_pseudo_normal_sign_wrong_at_sharp_edges`` but with
+    ``test_sdf_pseudo_normal_sign_correct_at_sharp_edges_l_prism`` but with
     ``use_sign_winding_number=True``. The generalized winding number is robust at
-    sharp edges, so the sign matches the analytic interior. This confirms the mesh
-    is valid and isolates the failure to the pseudo-normal method.
+    sharp edges, so the sign matches the analytic interior.
     """
     device = torch.device(device)
     mesh = _l_prism_mesh().to(device)
@@ -693,72 +662,41 @@ def test_sdf_winding_sign_correct_at_sharp_edges(device):
 
     sdf_out, _, _ = signed_distance_field(mesh, query, use_sign_winding_number=True)
 
-    # Exclude a near-surface band: the CUDA Barnes-Hut winding approximation is
-    # only loose right at the surface (cf. test_winding_sign_triton_matches_exact).
+    # Exclude a near-surface band: Warp's winding-number query is an
+    # approximation (Barnes-Hut-style far-field expansion) that is only loose
+    # right at the surface.
     inside = _l_prism_inside(query)
     away = sdf_out.abs() > 0.05
     wrong = ((sdf_out < 0) != inside) & away
     assert int(wrong.sum()) == 0
 
 
-# ---------------------------------------------------------------------------
-# ClusterTree winding-number sign: the Barnes-Hut summation must agree with the
-# exact O(n_queries * n_faces) torch sum (the oracle) away from the surface,
-# where the winding number is unambiguous. Runs on both CPU and CUDA.
-# ---------------------------------------------------------------------------
+def test_sdf_winding_sign_non_watertight(device):
+    """On a holed (non-watertight) surface the winding-number sign is robust.
 
-
-def test_clustertree_winding_sign_matches_exact_oracle(device):
-    """Tree-accelerated winding sign agrees with the exact winding sign."""
-    from physicsnemo.mesh.spatial.sdf import (
-        _build_surface_mesh,
-        _winding_number_sign,
-        _winding_number_sign_clustertree,
-    )
-
-    device = torch.device(device)
-    mesh = _uv_sphere_mesh().to(device)
-
-    torch.manual_seed(0)
-    query = (torch.rand(4096, 3, device=device) * 3.0 - 1.5).float()
-    radius = query.norm(dim=-1)
-    away = (radius - 1.0).abs() > 0.05  # exclude the near-surface shell
-
-    _, face_vertices, _ = _build_surface_mesh(mesh)
-
-    sign_fast = _winding_number_sign_clustertree(face_vertices, query)
-    sign_exact = _winding_number_sign(face_vertices, query)
-
-    assert torch.all(sign_fast[away] == sign_exact[away])
-
-
-def test_clustertree_winding_sign_non_watertight(device):
-    """On a holed (non-watertight) surface the winding sign is still robust.
-
-    The generalized winding number degrades gracefully on open meshes; the
-    ClusterTree Barnes-Hut summation must still match the exact oracle away from
-    the surface and from the hole's rim.
+    The generalized winding number degrades gracefully on open meshes: away
+    from the surface and from the hole's rim, the sign must still match the
+    analytic sphere interior. (The pseudo-normal sign has no such guarantee on
+    open meshes, which is exactly why ``use_sign_winding_number=True`` exists.)
     """
-    from physicsnemo.mesh.spatial.sdf import (
-        _build_surface_mesh,
-        _winding_number_sign,
-        _winding_number_sign_clustertree,
-    )
-
     device = torch.device(device)
     mesh = _open_uv_sphere_mesh().to(device)
 
     torch.manual_seed(1)
     query = (torch.rand(4096, 3, device=device) * 3.0 - 1.5).float()
     radius = query.norm(dim=-1)
-    away = (radius - 1.0).abs() > 0.1  # exclude near-surface / near-hole shell
+    # Exclude the near-surface shell and a cone around the missing south cap,
+    # where the winding number legitimately transitions through 0.5.
+    near_hole = (query[:, 2] < -0.7) | (
+        (query - torch.tensor([[0.0, 0.0, -1.0]], device=device)).norm(dim=-1) < 0.5
+    )
+    away = ((radius - 1.0).abs() > 0.1) & ~near_hole
 
-    _, face_vertices, _ = _build_surface_mesh(mesh)
+    sdf_out, _, _ = signed_distance_field(mesh, query, use_sign_winding_number=True)
 
-    sign_fast = _winding_number_sign_clustertree(face_vertices, query)
-    sign_exact = _winding_number_sign(face_vertices, query)
-
-    assert torch.all(sign_fast[away] == sign_exact[away])
+    inside = radius < 1.0
+    wrong = ((sdf_out < 0) != inside) & away
+    assert int(wrong.sum()) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -772,9 +710,16 @@ def test_clustertree_winding_sign_non_watertight(device):
 
 
 def _l_prism_probe_grid(device: torch.device, thickness: float = 1.0):
-    """A dense grid of probes straddling the L-prism's surface and reflex edge."""
-    g = torch.linspace(-0.5, 2.5, 31)
-    z = torch.linspace(-0.4, thickness + 0.4, 13)
+    """A dense grid of probes straddling the L-prism's surface and reflex edge.
+
+    The grid is shifted off the mesh's round coordinates: an unshifted grid
+    contains points *exactly* equidistant to several surface features (e.g.
+    ``(0.5, 1.0, 0.5)`` ties the ``x = 0`` wall, both caps, and the reflex
+    corner), where the nearest feature -- and hence the pseudo-normal sign --
+    is legitimately ambiguous and implementation-defined.
+    """
+    g = torch.linspace(-0.5, 2.5, 31) + 0.0137
+    z = torch.linspace(-0.4, thickness + 0.4, 13) + 0.0071
     gx, gy, gz = torch.meshgrid(g, g, z, indexing="ij")
     return torch.stack([gx, gy, gz], dim=-1).reshape(-1, 3).to(device)
 
@@ -790,9 +735,9 @@ def test_sdf_winding_sign_correct_at_sharp_edges_grid(device):
 
     sdf_out, _, _ = signed_distance_field(mesh, query, use_sign_winding_number=True)
 
-    # Compare signs away from the surface. The default ClusterTree backend is a
-    # Barnes-Hut approximation whose winding number is only unreliable in a thin
-    # band hugging the (sharp) surface, so exclude points within 0.1 of it.
+    # Compare signs away from the surface. Warp's winding-number query is an
+    # approximation that is only unreliable in a thin band hugging the (sharp)
+    # surface, so exclude points within 0.1 of it.
     away = sdf_out.abs() > 0.1
     expected = torch.where(
         gt_inside, -torch.ones_like(sdf_out), torch.ones_like(sdf_out)
@@ -825,137 +770,10 @@ def test_sdf_pseudo_normal_sign_correct_at_sharp_edges(device):
 
 
 # ---------------------------------------------------------------------------
-# Edge pseudo-normal grouping: the default (pseudo-normal) sign path sums the
-# incident face normals per edge. The grouping was rewritten to avoid
-# ``torch.unique(edges, dim=0)`` (a host sync that stalled the SDF prep stream),
-# so it must still match a direct ``torch.unique`` reference exactly.
-# ---------------------------------------------------------------------------
-
-
-def _edge_pseudonormals_unique_reference(
-    tri_faces: torch.Tensor, face_normals: torch.Tensor
-) -> torch.Tensor:
-    """Reference edge pseudo-normals via ``torch.unique`` (the pre-rewrite path)."""
-    n_faces = tri_faces.shape[0]
-    v0, v1, v2 = tri_faces[:, 0], tri_faces[:, 1], tri_faces[:, 2]
-    edges = torch.stack(
-        [
-            torch.stack([v0, v1], dim=1),
-            torch.stack([v1, v2], dim=1),
-            torch.stack([v2, v0], dim=1),
-        ],
-        dim=1,
-    ).reshape(-1, 2)
-    edges, _ = torch.sort(edges, dim=1)
-    unique_edges, inverse = torch.unique(edges, dim=0, return_inverse=True)
-    fn_per_edge = face_normals.repeat_interleave(3, dim=0)
-    edge_accum = torch.zeros(
-        unique_edges.shape[0], 3, dtype=face_normals.dtype, device=face_normals.device
-    )
-    edge_accum.index_add_(0, inverse, fn_per_edge)
-    return edge_accum[inverse].reshape(n_faces, 3, 3)
-
-
-def test_edge_pseudonormals_matches_unique_reference(device):
-    """Sync-free edge-pseudonormal grouping equals the ``torch.unique`` reference.
-
-    Exercises a closed surface with shared edges (every edge is incident to two
-    faces) so the per-edge accumulation is non-trivial.
-    """
-    from physicsnemo.mesh.spatial.sdf import _build_surface_mesh, _edge_pseudonormals
-
-    device = torch.device(device)
-    mesh = _uv_sphere_mesh().to(device)
-
-    work_mesh, _, tri_faces = _build_surface_mesh(mesh)
-    face_normals = work_mesh.cell_normals.float()
-
-    got = _edge_pseudonormals(tri_faces, face_normals)
-    expected = _edge_pseudonormals_unique_reference(tri_faces, face_normals)
-    torch.testing.assert_close(got, expected, atol=1e-5, rtol=1e-5)
-
-
-# ---------------------------------------------------------------------------
-# Triton GPU kernel parity (CUDA-only): the kernel is the nearest-triangle fast
-# path, the pure-PyTorch bounded-stack DFS is the reference oracle.
+# Stream-overlap safety (CUDA-only).
 # ---------------------------------------------------------------------------
 
 _CUDA = torch.cuda.is_available()
-
-
-def _triton_available() -> bool:
-    if not _CUDA:
-        return False
-    from physicsnemo.mesh.spatial import _sdf_triton
-
-    return _sdf_triton.available()
-
-
-@pytest.mark.skipif(not _CUDA, reason="CUDA required for the Triton SDF kernel")
-def test_sdf_triton_nearest_matches_torch_reference():
-    """The Triton nearest-triangle kernel matches the torch DFS reference.
-
-    Distances are unique, so they must agree tightly. The winning face / closest
-    point can differ on exact ties, so those are compared via the query-to-point
-    distance rather than the face index.
-    """
-    if not _triton_available():
-        pytest.skip("triton not available")
-
-    from physicsnemo.mesh.spatial import BVH, _sdf_triton
-    from physicsnemo.mesh.spatial.sdf import _build_surface_mesh, _nearest_face_bvh
-
-    device = torch.device("cuda")
-    mesh = _uv_sphere_mesh().to(device)
-
-    torch.manual_seed(0)
-    query = (torch.rand(8192, 3, device=device) * 3.0 - 1.5).float()
-
-    work_mesh, face_vertices, _ = _build_surface_mesh(mesh)
-    bvh = BVH.from_mesh(work_mesh)
-
-    ref_dist_sq, _, ref_pt = _nearest_face_bvh(bvh, face_vertices, query, 1e8)
-    tri_dist_sq, _, tri_pt = _sdf_triton.nearest_triangle_triton(
-        bvh, face_vertices, query, 1e8
-    )
-
-    torch.testing.assert_close(
-        tri_dist_sq.sqrt(), ref_dist_sq.sqrt(), atol=1e-4, rtol=1e-4
-    )
-    d_ref = (query - ref_pt).norm(dim=-1)
-    d_tri = (query - tri_pt).norm(dim=-1)
-    torch.testing.assert_close(d_tri, d_ref, atol=1e-4, rtol=1e-4)
-
-
-@pytest.mark.skipif(not _CUDA, reason="CUDA required for the Triton SDF kernel")
-@pytest.mark.parametrize("use_winding", [False, True])
-def test_sdf_triton_end_to_end_matches_reference(use_winding, monkeypatch):
-    """Full signed_distance_field: Triton path matches the torch fallback."""
-    if not _triton_available():
-        pytest.skip("triton not available")
-
-    from physicsnemo.mesh.spatial import _sdf_triton
-
-    device = torch.device("cuda")
-    mesh = _uv_sphere_mesh().to(device)
-
-    torch.manual_seed(0)
-    query = (torch.rand(4096, 3, device=device) * 3.0 - 1.5).float()
-
-    # Triton fast path (default dispatch on CUDA).
-    sdf_triton, _, _ = signed_distance_field(
-        mesh, query, use_sign_winding_number=use_winding
-    )
-
-    # Force the pure-PyTorch nearest-triangle reference by disabling the Triton
-    # dispatch. The winding-number sign uses the (device-agnostic) ClusterTree
-    # path in both cases.
-    monkeypatch.setattr(_sdf_triton, "available", lambda: False)
-    sdf_ref, _, _ = signed_distance_field(
-        mesh, query, use_sign_winding_number=use_winding
-    )
-
-    torch.testing.assert_close(sdf_triton, sdf_ref, atol=1e-4, rtol=1e-4)
 
 
 @pytest.mark.skipif(not _CUDA, reason="CUDA required to check stream-sync-free SDF")
@@ -963,12 +781,12 @@ def test_sdf_no_winding_path_is_sync_free():
     """The default (pseudo-normal) SDF path issues no host<->device syncs.
 
     The SDF transform runs on the dataloader's preprocessing stream; any host
-    sync (e.g. the former ``torch.unique`` in ``_edge_pseudonormals``) blocks the
-    main thread mid-enqueue and prevents the prep-stream SDF kernels from
-    overlapping the compute-stream model. ``set_sync_debug_mode("error")`` turns
-    any synchronizing CUDA call into a ``RuntimeError``, so a clean second run
-    proves the path is overlap-safe. The winding-number sign path is
-    intentionally excluded -- its ClusterTree traversal still syncs.
+    sync blocks the main thread mid-enqueue and prevents the prep-stream SDF
+    kernels from overlapping the compute-stream model.
+    ``set_sync_debug_mode("error")`` turns any synchronizing CUDA call into a
+    ``RuntimeError``, so a clean second run proves the path is overlap-safe.
+    (Mesh-index range validation on CUDA is a device-side ``_assert_async``
+    for exactly this reason.)
     """
     device = torch.device("cuda")
     mesh = _uv_sphere_mesh().to(device)
@@ -976,9 +794,9 @@ def test_sdf_no_winding_path_is_sync_free():
     torch.manual_seed(0)
     query = (torch.rand(8192, 3, device=device) * 3.0 - 1.5).float()
 
-    # Warm up OUTSIDE the guard: first-call costs (Triton autotune ``do_bench``,
-    # lazy module loading, caching-allocator growth) legitimately synchronize.
-    # The guarded run below reuses the same query shape so no new autotune key or
+    # Warm up OUTSIDE the guard: first-call costs (Warp module compilation and
+    # loading, ``wp.init()``, caching-allocator growth) legitimately
+    # synchronize. The guarded run below reuses the same query shape so no new
     # allocation is triggered.
     signed_distance_field(mesh, query, use_sign_winding_number=False)
     torch.cuda.synchronize()

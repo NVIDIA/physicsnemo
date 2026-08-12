@@ -30,120 +30,7 @@ from tensordict import TensorDict
 
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.base import Transform
-
-
-def poisson_sample_indices_fixed(
-    N: int,
-    k: int,
-    device=None,
-    generator: torch.Generator | None = None,
-    *,
-    replacement: bool = False,
-) -> torch.Tensor:
-    """
-    Near-uniform sampler of indices for very large arrays.
-
-    This function provides nearly uniform sampling for cases where the number
-    of indices is very large (> 2^24) and :func:`torch.multinomial` cannot work.
-    Unlike using :func:`torch.randperm`, there is no need to materialize and
-    randomize the entire tensor of indices.
-
-    The sampling uses exponentially distributed gaps to achieve near-uniform
-    coverage. Two modes are available:
-
-    - ``replacement=False`` (default): each gap is constrained to be at least
-      one index unit, so the resulting indices are strictly increasing and
-      therefore unique. Requires ``k < N`` strictly.
-    - ``replacement=True``: raw exponential gaps are used. The gaps can be
-      arbitrarily small, so consecutive indices may collide after flooring,
-      i.e. duplicates are possible.
-
-    Parameters
-    ----------
-    N : int
-        Total number of available indices.
-    k : int
-        Number of indices to sample.
-    device : torch.device, optional
-        Device for the output tensor.
-    generator : torch.Generator, optional
-        Random generator for reproducibility.
-    replacement : bool, keyword-only, default=False
-        If ``False``, sample without replacement (no duplicate indices). If
-        ``True``, sample with replacement (duplicates possible).
-
-    Returns
-    -------
-    torch.Tensor
-        Tensor of shape :math:`(k,)` containing sampled indices.
-
-    Raises
-    ------
-    ValueError
-        If ``replacement=False`` and ``k >= N``, since sampling ``k`` unique
-        indices from ``N`` requires ``k < N``.
-
-    Examples
-    --------
-    >>> indices = poisson_sample_indices_fixed(1000000, 10000)
-    >>> print(indices.shape)
-    torch.Size([10000])
-    """
-    if replacement:
-        # Draw exponential gaps off of random initializations
-        gaps = torch.rand(k, device=device, generator=generator).exponential_()
-
-        summed = gaps.sum()
-
-        # Normalize so total cumulative sum == N
-        gaps *= N / summed
-
-        # Compute cumulative positions
-        idx = torch.cumsum(gaps, dim=0)
-
-        # Shift down so range starts at 0 and ends below N
-        idx -= gaps[0] / 2
-
-        # Round to nearest integer index
-        idx = torch.clamp(idx.floor().long(), min=0, max=N - 1)
-
-        return idx
-
-    # Without-replacement path: enforce a minimum gap of 1 index unit so that
-    # flooring cumulative positions yields strictly increasing (unique) indices.
-    if k >= N:
-        raise ValueError(
-            f"poisson_sample_indices_fixed requires k < N when "
-            f"replacement=False, but got k={k} and N={N}."
-        )
-
-    # Draw exponential gaps off of random initializations. Use float64 for the
-    # cumulative arithmetic: with N up to ~1e8+, float32 precision near the top
-    # of the range (~8) would swallow the +1 minimum-gap shift and let
-    # consecutive floored positions collide.
-    gaps = torch.rand(
-        k, device=device, generator=generator, dtype=torch.float64
-    ).exponential_()
-
-    # Scale so the raw exponential portion sums to (N - k); adding 1 to every
-    # gap then makes the minimum gap >= 1 while keeping the total sum == N.
-    gaps *= (N - k) / gaps.sum()
-    gaps += 1.0
-
-    # Compute cumulative positions; positions span [gaps[0], N] with each
-    # successive position differing by at least 1.
-    idx = torch.cumsum(gaps, dim=0)
-
-    # Shift down so the first index lands near 0 (still >= 0 since gaps[0] >= 1)
-    idx -= gaps[0]
-
-    # Floor to integer indices. Because every gap is >= 1 and the cumulative
-    # sum is computed in float64 (preserving the +1 separation even at large
-    # N), floor(pos_{i+1}) is strictly greater than floor(pos_i), so the
-    # resulting indices are unique.
-    idx = torch.clamp(idx.floor().long(), min=0, max=N - 1)
-
-    return idx
+from physicsnemo.nn.functional import weighted_multinomial
 
 
 def shuffle_array(
@@ -182,21 +69,17 @@ def shuffle_array(
         indices = torch.arange(N, device=device)
         return points, indices
 
-    if weights is not None:
-        # Weighted sampling
-        indices = torch.multinomial(
-            weights, n_points, replacement=False, generator=generator
-        )
-    else:
-        # Uniform sampling
-        if N > 2**24:
-            # Use Poisson sampling for very large arrays
-            indices = poisson_sample_indices_fixed(
-                N, n_points, device=device, generator=generator
-            )
-        else:
-            # Use standard multinomial for smaller arrays
-            indices = torch.randperm(N, device=device, generator=generator)[:n_points]
+    strategy = (
+        "poisson_gap" if weights is None and N > 2**24 and n_points < N else "exact"
+    )
+    sampling_input = weights if weights is not None else N
+    indices = weighted_multinomial(
+        sampling_input,
+        n_points,
+        strategy=strategy,
+        device=device,
+        generator=generator,
+    )
 
     sampled_points = points[indices]
     return sampled_points, indices
@@ -214,8 +97,8 @@ class SubsamplePoints(Transform):
 
     Supports two sampling algorithms:
 
-    - ``"poisson_fixed"``: Near-uniform sampling for very large datasets (> 2^24 points)
-    - ``"uniform"``: Standard uniform sampling
+    - ``"poisson_fixed"``: Poisson-gap coverage for very large datasets
+    - ``"uniform"``: Exact uniform sampling
 
     Optionally supports weighted sampling (e.g., area-weighted for surface meshes)
     by providing a ``weights_key``.
@@ -228,7 +111,8 @@ class SubsamplePoints(Transform):
     n_points : int
         Number of points to sample.
     algorithm : {"poisson_fixed", "uniform"}, default="poisson_fixed"
-        Sampling algorithm to use.
+        Sampling algorithm to use. ``"poisson_fixed"`` selects the low-memory
+        Poisson-gap approximation above :math:`2^{24}` candidates.
     weights_key : str, optional
         Optional key for sampling weights (e.g., ``"surface_areas"``
         for area-weighted surface sampling). When provided, samples
@@ -294,7 +178,9 @@ class SubsamplePoints(Transform):
         n_points : int
             Number of points to sample.
         algorithm : {"poisson_fixed", "uniform"}, default="poisson_fixed"
-            Sampling algorithm to use.
+            Sampling algorithm to use. ``"poisson_fixed"`` selects the
+            low-memory Poisson-gap approximation above :math:`2^{24}`
+            candidates.
         weights_key : str, optional
             Optional key for sampling weights (e.g., ``"surface_areas"``
             for area-weighted surface sampling). When provided, samples
@@ -377,20 +263,21 @@ class SubsamplePoints(Transform):
                 generator=self._generator,
             )
         elif self.algorithm == "poisson_fixed" and N > 2**24:
-            indices = poisson_sample_indices_fixed(
+            indices = weighted_multinomial(
                 N,
                 self.n_points,
+                strategy="poisson_gap",
                 device=device,
                 generator=self._generator,
-                replacement=False,
             )
         else:
-            # Use uniform sampling
-            indices = torch.randperm(
+            indices = weighted_multinomial(
                 N,
+                self.n_points,
+                strategy="exact",
                 device=device,
                 generator=self._generator,
-            )[: self.n_points]
+            )
 
         # Apply indices to all keys
         updates = {}

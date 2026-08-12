@@ -23,6 +23,12 @@ output_dir: "runs"
 checkpoint_dir: null  # Optional: set custom checkpoint path, defaults to output_dir
 run_id: "geotransolver/surface/bq"
 
+# RNG seed. null leaves every generator unseeded (the historical behavior: the
+# weights and the datapipe's point subsampling come off torch's entropy-seeded
+# global RNG, so two runs differ but neither reproduces). An integer fixes both,
+# and is what distinguishes the members of a deep ensemble from each other.
+seed: null
+
 # Performance considerations:
 precision: float32 # float32, float16, bfloat16, or float8
 compile: true

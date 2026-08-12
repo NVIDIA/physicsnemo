@@ -214,6 +214,24 @@ class TestNumpyReaderCoordinatedSubsampling:
         # Non-target keys should be full size
         assert data["areas"].shape == (n_points,)
 
+    def test_coordinated_subsampling_wraps_cyclically(self, monkeypatch):
+        values = np.arange(10, dtype=np.float32)
+        np.savez(self.temp_path / "sample_000.npz", values=values)
+        reader = NumpyReader(
+            self.temp_path,
+            file_pattern="sample_*.npz",
+            coordinated_subsampling={"n_points": 4, "target_keys": ["values"]},
+        )
+        monkeypatch.setattr(
+            reader,
+            "_index_generator",
+            lambda _: torch.Generator().manual_seed(2),
+        )
+
+        data, _ = reader[0]
+
+        torch.testing.assert_close(data["values"], torch.tensor([8.0, 9.0, 0.0, 1.0]))
+
     def test_supports_coordinated_subsampling(self):
         """Test that coordinated subsampling is only supported in directory mode."""
         # Directory mode: supported

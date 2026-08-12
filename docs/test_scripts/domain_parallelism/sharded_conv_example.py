@@ -2,12 +2,11 @@ import torch
 
 from torch.distributed.tensor import (
     Shard,
-    distribute_module,
 )
 
 
-from physicsnemo.distributed import (
-    DistributedManager,
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.domain_parallel import (
     ShardTensor,
     scatter_tensor,
 )
@@ -73,21 +72,16 @@ mesh = dm.initialize_mesh(mesh_shape=(-1,), mesh_dim_names=("domain_parallel",))
 sharded_tensor = scatter_tensor(original_tensor, 0, mesh, (Shard(2),), requires_grad=True)
 
 
-################################
-# Sharded - distribute the model
-################################
-
-# We tell pytorch that the convolution will work on distributed tensors:
-# And, over the same mesh!
-distributed_conv = distribute_module(conv, mesh)
-
-
 #####################################
 # Sharded - forward + loss + backward
 #####################################
 
-# Now, we can do the distributed convolution:
-sharded_output = distributed_conv(sharded_tensor)
+# Note that we do NOT need to modify the model at all: when the plain
+# convolution's weights meet the sharded input, ShardTensor automatically
+# promotes them to replicated distributed tensors, and their gradients are
+# reduced over the mesh in the backward pass.  Vanilla nn.Modules work
+# unmodified on sharded inputs.
+sharded_output = conv(sharded_tensor)
 sharded_output.mean().backward()
 
 

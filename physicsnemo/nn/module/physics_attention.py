@@ -45,7 +45,8 @@ from torch.autograd.profiler import record_function
 from torch.distributed.tensor.placement_types import Replicate
 
 from physicsnemo.core.version_check import OptionalImport
-from physicsnemo.nn import gumbel_softmax
+
+from .gumbel_softmax import gumbel_softmax
 
 # Note: We use duck typing to check for ShardTensor instead of importing it
 # directly to avoid circular imports (domain_parallel imports from nn).
@@ -131,7 +132,7 @@ def _compute_slices_from_projections(
     Standalone implementation of the temperature-scaled softmax slice
     aggregation used by :class:`PhysicsAttentionBase` and reusable by any
     module that needs the same project-to-slices-then-aggregate pattern
-    (e.g. :class:`~physicsnemo.experimental.models.geotransolver.context_projector.ContextProjector`).
+    (e.g. :class:`~physicsnemo.models.geotransolver.context_projector.ContextProjector`).
 
     In domain-parallel settings, this performs an implicit allreduce when
     summing over the sharded token dimension.
@@ -308,10 +309,11 @@ class PhysicsAttentionBase(nn.Module, ABC):
             self.qkv_project = nn.Linear(dim_head, 3 * dim_head, bias=False)
         else:
             self.qkv_project = te.Linear(dim_head, 3 * dim_head, bias=False)
+            # Keep dropout in out_dropout so TE and PyTorch use the same dropout site.
             self.attn_fn = te.DotProductAttention(
                 num_attention_heads=self.heads,
                 kv_channels=self.dim_head,
-                attention_dropout=dropout,
+                attention_dropout=0.0,
                 qkv_format="bshd",
                 softmax_scale=self.scale,
             )

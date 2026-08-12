@@ -157,15 +157,15 @@ silent no-ops.
 ### TensorDict stochastic transforms
 
 - **`SubsamplePoints`** — declares `_generator` and passes it to
-  `torch.randperm`, `torch.multinomial`, and
-  `poisson_sample_indices_fixed`.
+  `weighted_multinomial` for exact and Poisson-gap sampling.
 
 ### Mesh stochastic transforms
 
 - **`RandomScaleMesh`**, **`RandomTranslateMesh`**,
   **`RandomRotateMesh`** — sample augmentation parameters from
   `torch.distributions.Distribution` objects via ICDF + generator.
-- **`SubsampleMesh`** — uses `torch.randperm` / `poisson_sample_indices_fixed`.
+- **`SubsampleMesh`** — uses `weighted_multinomial` with the exact or
+  Poisson-gap strategy.
 
 ### `Compose`
 
@@ -204,11 +204,11 @@ generators are unaffected by the threaded producer.
 
 | Reader | Randomness | Per-`(seed, epoch, index)` RNG |
 |---|---|---|
-| `MeshReader` | `torch.randint` (contiguous block selection) | Yes |
-| `DomainMeshReader` | `torch.randint` | Yes |
-| `NumpyReader` | `torch.randint` (coordinated subsampling) | Yes |
-| `ZarrReader` | `torch.randint` | Yes |
-| `TensorStoreZarrReader` | `torch.randint` | Yes |
+| `MeshReader` | `torch.randint` (cyclic block selection) | Yes |
+| `DomainMeshReader` | `torch.randint` (cyclic block selection) | Yes |
+| `NumpyReader` | `torch.randint` (cyclic coordinated subsampling) | Yes |
+| `ZarrReader` | `torch.randint` (cyclic coordinated subsampling) | Yes |
+| `TensorStoreZarrReader` | `torch.randint` (cyclic coordinated subsampling) | Yes |
 | `HDF5Reader` | None | n/a (inherited base) |
 | `VTKReader` | None | n/a (inherited base) |
 
