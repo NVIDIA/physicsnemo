@@ -28,6 +28,7 @@ import pytest
 
 import torch  # noqa: E402
 from physicsnemo.datapipes.healpix.couplers import ConstantCoupler  # noqa: E402
+from test.conftest import requires_module
 
 _FACE, _HEIGHT, _WIDTH = 2, 3, 4
 
@@ -89,7 +90,8 @@ def _coupled_fields(batch):
     n_time = batch + 3
     return torch.rand(batch, _FACE, n_time, len([0, 1]), _HEIGHT, _WIDTH)
 
-
+@requires_module("xarray")
+@requires_module("pandas")
 def test_set_coupled_fields_adapts_to_provided_batch_size():
     """The old ``batch_size`` mismatch ``ValueError`` was removed: providing a
     field whose batch differs from the configured ``batch_size`` no longer
@@ -107,6 +109,8 @@ def test_set_coupled_fields_adapts_to_provided_batch_size():
     assert coupler.construct_integrated_couplings() is coupler.preset_coupled_fields
 
 
+@requires_module("xarray")
+@requires_module("pandas")
 def test_set_coupled_fields_matches_configured_batch_size():
     """Sanity: a field whose batch equals the configured batch_size still
     works."""
