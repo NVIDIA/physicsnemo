@@ -273,7 +273,9 @@ def test_blockwise_logsumexp_fold_matches_full_sdpa():
             attn_bias=None,
             compute_log_sumexp=True,
         )[:2]
-        log_sumexp = log_sumexp.unsqueeze(-1)
+        # Newer torch pads log_sumexp's query dim to a 32-element alignment; slice
+        # back to the real query length before broadcasting against output.
+        log_sumexp = log_sumexp[..., : output.shape[2]].unsqueeze(-1)
         log_output = torch.log(torch.abs(output))
         sign_output = torch.sign(output)
         log_global_output, sign_global_output = stable_signed_accumulate(
