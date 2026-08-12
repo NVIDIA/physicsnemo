@@ -40,13 +40,12 @@ from torch.distributed.tensor.placement_types import Replicate, Shard
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.domain_parallel import scatter_tensor
-from physicsnemo.domain_parallel.shard_utils.conv_patches import ConvGradReducer
+from physicsnemo.domain_parallel.shard_utils.grad_ops import GradReducer
 from physicsnemo.domain_parallel.shard_utils.halo import (
     HaloConfig,
     halo_padding,
     unhalo_padding,
 )
-from physicsnemo.domain_parallel.shard_utils.point_cloud_ops import GradReducer
 
 
 def _scalar_loss(out: Any) -> torch.Tensor:
@@ -161,7 +160,7 @@ class ConvWrapper(torch.nn.Module):
     r"""``nn.Conv1d`` on a ShardTensor input.
 
     End-to-end sharded convolution: halo exchange (funcol a2a) on the input
-    plus ``ConvGradReducer`` on the weight gradients, all inside one compiled
+    plus ``GradReducer`` on the weight gradients, all inside one compiled
     region.
     """
 
@@ -198,8 +197,8 @@ class GradReducerWrapper(torch.nn.Module):
 
     The ``spec`` is captured as a non-tensor module attribute so it is a
     constant from dynamo's perspective. ``GradReducer`` is the trivial
-    identity in forward; the work happens in backward (all-reduce on
-    replicated mesh dims).
+    identity in forward; the work happens in backward (all-reduce on the ref
+    spec's sharded mesh dims).
     """
 
     def __init__(self, spec):
@@ -208,23 +207,6 @@ class GradReducerWrapper(torch.nn.Module):
 
     def forward(self, tensor: torch.Tensor) -> torch.Tensor:
         return GradReducer.apply(tensor, self.spec)
-
-
-class ConvGradReducerWrapper(torch.nn.Module):
-    r"""``ConvGradReducer.apply(tensor, spec)`` (exercises ``ConvGradReducer``).
-
-    The ``spec`` is captured as a non-tensor module attribute so it is a
-    constant from dynamo's perspective. ``ConvGradReducer`` is the trivial
-    identity in forward; the work happens in backward (all-reduce on sharded
-    mesh dims).
-    """
-
-    def __init__(self, spec):
-        super().__init__()
-        self.spec = spec
-
-    def forward(self, tensor: torch.Tensor) -> torch.Tensor:
-        return ConvGradReducer.apply(tensor, self.spec)
 
 
 # ---------------------------------------------------------------------------
@@ -453,7 +435,7 @@ def test_compile_sharded_conv1d_1d(distributed_mesh):
     r"""Compile + backward through a sharded Conv1d, value-checked.
 
     Drives the full sharded-conv chain under one compiled region: halo
-    exchange (funcol a2a) on the sharded input and ``ConvGradReducer``'s
+    exchange (funcol a2a) on the sharded input and ``GradReducer``'s
     all-reduce on the weight grads. Output, input grad, and weight/bias
     grads are compared against a single-device reference.
     """
@@ -616,12 +598,18 @@ def test_compile_ring_sdpa_fullgraph_errors(distributed_mesh):
 
 @pytest.mark.multigpu_static
 @pytest.mark.timeout(180)
-def test_compile_grad_reducer_1d(distributed_mesh):
+@pytest.mark.parametrize(
+    "placement",
+    [
+        pytest.param(Shard(0), id="sharded-ref"),
+        pytest.param(Replicate(), id="replicated-ref"),
+    ],
+)
+def test_compile_grad_reducer_1d(distributed_mesh, placement):
     r"""Compile + backward through ``GradReducer``.
 
-    Forward is identity; backward all-reduces over each replicated mesh
-    dim. We feed a plain tensor + the spec from a Replicate-placed
-    ShardTensor so the backward path actually exercises the all-reduce.
+    Forward is identity; backward all-reduces over each sharded mesh dim of
+    the ref spec (no-op for a replicated ref). Both variants must compile.
     """
     if not torch.cuda.is_available():
         pytest.skip("CUDA is not available")
@@ -629,44 +617,14 @@ def test_compile_grad_reducer_1d(distributed_mesh):
     dm = DistributedManager()
 
     base = torch.rand(4, 16, device=dm.device)
-    replicated_shard = scatter_tensor(
+    ref = scatter_tensor(
         base,
         global_src=0,
         mesh=distributed_mesh,
-        placements=(Replicate(),),
+        placements=(placement,),
         requires_grad=False,
     )
-    spec = replicated_shard._spec
 
     tensor = torch.rand(4, 16, device=dm.device, requires_grad=True)
 
-    _run_compile_fwd_bwd(GradReducerWrapper(spec=spec), [tensor])
-
-
-@pytest.mark.multigpu_static
-@pytest.mark.timeout(180)
-def test_compile_conv_grad_reducer_1d(distributed_mesh):
-    r"""Compile + backward through ``ConvGradReducer``.
-
-    Forward is identity; backward all-reduces over each sharded mesh dim.
-    We feed a plain tensor + the spec from a Shard-placed ShardTensor so the
-    backward path actually exercises the functional all-reduce.
-    """
-    if not torch.cuda.is_available():
-        pytest.skip("CUDA is not available")
-
-    dm = DistributedManager()
-
-    base = torch.rand(4, 16, device=dm.device)
-    sharded = scatter_tensor(
-        base,
-        global_src=0,
-        mesh=distributed_mesh,
-        placements=(Shard(0),),
-        requires_grad=False,
-    )
-    spec = sharded._spec
-
-    tensor = torch.rand(4, 16, device=dm.device, requires_grad=True)
-
-    _run_compile_fwd_bwd(ConvGradReducerWrapper(spec=spec), [tensor])
+    _run_compile_fwd_bwd(GradReducerWrapper(spec=ref._spec), [tensor])

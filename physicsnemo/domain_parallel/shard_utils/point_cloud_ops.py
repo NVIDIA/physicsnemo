@@ -20,7 +20,6 @@ from typing import Any, Callable
 
 import torch
 import torch.distributed as dist
-import torch.distributed._functional_collectives as funcol
 import warp as wp
 from torch.distributed.tensor.placement_types import (
     Replicate,
@@ -28,7 +27,10 @@ from torch.distributed.tensor.placement_types import (
 )
 
 from physicsnemo.core.function_spec import FunctionSpec
-from physicsnemo.domain_parallel import ShardTensor, ShardTensorSpec
+from physicsnemo.domain_parallel import ShardTensor
+from physicsnemo.domain_parallel.shard_utils.grad_ops import (  # noqa: F401
+    GradReducer,
+)
 from physicsnemo.domain_parallel.shard_utils.patch_core import (
     MissingShardPatch,
 )
@@ -195,9 +197,8 @@ def ringless_ball_query(
     local_points = points.to_local()
     local_queries = queries.to_local()
 
-    # if queries is sharded, then it will compute a partial gradient of queries
-    # in the backwards pass.  So, this operation will do the reduction going backward
-    # by summing:
+    # With queries sharded, the grad of the replicated points is a partial
+    # sum over the query shards; reduce it in backward.
     queries_placement = queries._spec.placements[0]
     if queries_placement.is_shard():
         local_points = GradReducer.apply(local_points, queries._spec)
@@ -563,70 +564,6 @@ class RingBallQuery(torch.autograd.Function):
         """
 
         raise MissingShardPatch("Backward pass for ring ball query not implemented.")
-
-
-class GradReducer(torch.autograd.Function):
-    r"""Custom autograd function that performs an allreduce on gradients if they are replicated."""
-
-    @staticmethod
-    def forward(
-        input: torch.Tensor,
-        spec: ShardTensorSpec,
-    ) -> torch.Tensor:
-        r"""Forward pass: return the input tensor unchanged.
-
-        Parameters
-        ----------
-        input : torch.Tensor
-            Input tensor to pass through.
-        spec : ShardTensorSpec
-            Shard specification for determining reduction behavior.
-
-        Returns
-        -------
-        torch.Tensor
-            The input tensor unchanged.
-        """
-        return input
-
-    @staticmethod
-    def setup_context(ctx, inputs, output) -> None:
-        r"""Save the input ShardTensorSpec for the backward all-reduce."""
-        _input, spec = inputs
-        ctx.spec = spec
-
-    @staticmethod
-    def backward(
-        ctx: torch.autograd.function.FunctionCtx,
-        grad_output: torch.Tensor,
-    ) -> tuple[torch.Tensor, None]:
-        r"""Backward pass that performs allreduce on gradients if replicated.
-
-        Parameters
-        ----------
-        ctx : torch.autograd.function.FunctionCtx
-            Autograd context containing saved variables from forward.
-        grad_output : torch.Tensor
-            Gradient of the loss with respect to the output.
-
-        Returns
-        -------
-        Tuple[torch.Tensor, None]
-            Tuple of (reduced gradient, ``None`` for spec).
-        """
-        spec = ctx.spec
-        placement = spec.placements[0]
-        # Perform an allreduce on the gradient. funcol rather than
-        # dist.all_reduce so an AOT-captured backward graph holds a
-        # DeviceMesh instead of a ProcessGroup ScriptObject, which cannot
-        # be deepcopied when AOTAutograd caches the backward GraphModule.
-        if placement.is_replicate():
-            grad_output = funcol.all_reduce(grad_output, "sum", (spec.mesh, 0))
-            # Prevent an asynchronous wrapper from escaping into gradient hooks
-            # or leaf ``.grad`` storage without first completing the reduction.
-            if isinstance(grad_output, funcol.AsyncCollectiveTensor):
-                grad_output = grad_output.wait()
-        return grad_output, None
 
 
 def radius_search_wrapper(

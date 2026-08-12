@@ -29,9 +29,9 @@ from torch.distributed.tensor import DTensor
 from torch.distributed.tensor.placement_types import Replicate, Shard
 
 from physicsnemo.diffusion.base import Denoiser
-from physicsnemo.diffusion.noise_schedulers.noise_schedulers import (
+from physicsnemo.diffusion.noise_schedulers.base import NoiseScheduler
+from physicsnemo.diffusion.noise_schedulers.linear_gaussian import (
     LinearGaussianNoiseScheduler,
-    NoiseScheduler,
 )
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.domain_parallel.shard_tensor import scatter_tensor
