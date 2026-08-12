@@ -129,9 +129,9 @@ def _expected_normalized(channel):
     return (value - mean) / std
 
 
-@requires_module("xarray") # for dataset creation via _make_dataset
-@requires_module("pandas") # for dataset creation via _make_dataset
-@requires_module("omegaconf") # for scaling config via _scaling_config
+@requires_module("xarray")  # for dataset creation via _make_dataset
+@requires_module("pandas")  # for dataset creation via _make_dataset
+@requires_module("omegaconf")  # for scaling config via _scaling_config
 def test_timeseries_scaling_uses_channel_out_without_diagnostics():
     """No diagnostic outputs: input scaling is selected from channel_out."""
     ds = _make_dataset(["a", "b"], ["a", "b"])
@@ -149,9 +149,9 @@ def test_timeseries_scaling_uses_channel_out_without_diagnostics():
     np.testing.assert_allclose(dset.input_scaling["std"].ravel(), [2.0, 4.0])
 
 
-@requires_module("xarray") # for dataset creation via _make_dataset
-@requires_module("pandas") # for dataset creation via _make_dataset
-@requires_module("omegaconf") # for scaling config via _scaling_config
+@requires_module("xarray")  # for dataset creation via _make_dataset
+@requires_module("pandas")  # for dataset creation via _make_dataset
+@requires_module("omegaconf")  # for scaling config via _scaling_config
 def test_timeseries_scaling_uses_channel_in_with_diagnostics():
     """Diagnostic output ('diag' in channel_out only) forces channel_in
     scaling, so its size matches the loaded input array."""
@@ -173,9 +173,9 @@ def test_timeseries_scaling_uses_channel_in_with_diagnostics():
     assert dset.target_scaling["mean"].shape[1] == 3
 
 
-@requires_module("xarray") # for dataset creation via _make_dataset
-@requires_module("pandas") # for dataset creation via _make_dataset
-@requires_module("omegaconf") # for scaling config via _scaling_config
+@requires_module("xarray")  # for dataset creation via _make_dataset
+@requires_module("pandas")  # for dataset creation via _make_dataset
+@requires_module("omegaconf")  # for scaling config via _scaling_config
 def test_timeseries_getitem_normalizes_with_channel_in_scaling():
     """With diagnostic outputs, __getitem__ normalizes the full input array
     against the channel_in scaling and returns channel_in-many channels."""
@@ -197,9 +197,9 @@ def test_timeseries_getitem_normalizes_with_channel_in_scaling():
     np.testing.assert_allclose(inputs[:, :, :, 1], _expected_normalized("b"))
 
 
-@requires_module("xarray") # for dataset creation via _make_dataset
-@requires_module("pandas") # for dataset creation via _make_dataset
-@requires_module("omegaconf") # for scaling config via _scaling_config
+@requires_module("xarray")  # for dataset creation via _make_dataset
+@requires_module("pandas")  # for dataset creation via _make_dataset
+@requires_module("omegaconf")  # for scaling config via _scaling_config
 def test_coupled_getitem_slices_coupled_scaling_with_diagnostics():
     """Coupled model with an extra output: input scaling is taken from
     channel_in (prognostic + coupled) and the coupled tail is sliced off so the
@@ -229,9 +229,9 @@ def test_coupled_getitem_slices_coupled_scaling_with_diagnostics():
     np.testing.assert_allclose(inputs[:, :, :, 1], _expected_normalized("b"))
 
 
-@requires_module("xarray") # for dataset creation via _make_dataset
-@requires_module("pandas") # for dataset creation via _make_dataset
-@requires_module("omegaconf") # for scaling config via _scaling_config
+@requires_module("xarray")  # for dataset creation via _make_dataset
+@requires_module("pandas")  # for dataset creation via _make_dataset
+@requires_module("omegaconf")  # for scaling config via _scaling_config
 def test_coupled_getitem_without_diagnostics_uses_channel_out_scaling():
     """Coupled model with no extra outputs: channel_out scaling is used and no
     slicing is applied."""

@@ -25,8 +25,8 @@ tiny in-memory datasets so they run without the NFS-backed test dataset.
 
 import numpy as np
 import pytest
-
 import torch  # noqa: E402
+
 from physicsnemo.datapipes.healpix.couplers import ConstantCoupler  # noqa: E402
 from test.conftest import requires_module
 
@@ -89,6 +89,7 @@ def _coupled_fields(batch):
     """
     n_time = batch + 3
     return torch.rand(batch, _FACE, n_time, len([0, 1]), _HEIGHT, _WIDTH)
+
 
 @requires_module("xarray")
 @requires_module("pandas")

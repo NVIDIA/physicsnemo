@@ -31,7 +31,6 @@ from physicsnemo.metrics.climate.healpix_loss import (
 from test.conftest import requires_module
 
 
-
 @pytest.fixture
 def test_data():
     # create dummy data
