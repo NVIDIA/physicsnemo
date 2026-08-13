@@ -173,10 +173,10 @@ physicsnemo/domain_parallel/shard_utils/ @coreyjadams
 # DATAPIPES
 # ==============================================================================
 
-physicsnemo/datapipes/ @coreyjadams
+physicsnemo/datapipes/ @coreyjadams @negin513
 physicsnemo/datapipes/benchmarks/
-physicsnemo/datapipes/readers/ @coreyjadams
-physicsnemo/datapipes/transforms/ @coreyjadams
+physicsnemo/datapipes/readers/ @coreyjadams @negin513
+physicsnemo/datapipes/transforms/ @coreyjadams @negin513
 
 physicsnemo/datapipes/cae/domino_datapipe.py  @coreyjadams
 physicsnemo/datapipes/cae/mesh_datapipe.py @mnabian
@@ -458,8 +458,8 @@ test/nn/
 
 test/distributed/ @coreyjadams
 test/domain_parallel/ @coreyjadams
-test/datapipes/core/ @coreyjadams
-test/datapipes/ @coreyjadams
+test/datapipes/core/ @coreyjadams @negin513
+test/datapipes/ @coreyjadams @negin513
 
 # ==============================================================================
 # TESTS - Models
