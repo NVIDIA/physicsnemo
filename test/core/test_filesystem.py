@@ -295,3 +295,48 @@ def test_ngc_model_file_invalid():
     package = filesystem.Package(test_url, seperator="/")
     with pytest.raises(ValueError):
         package.get("dlwp_cubesphere.zip")
+
+
+@pytest.fixture
+def memory_object_store(monkeypatch):
+    """Route s3:// URLs at an in-memory obstore store for download tests."""
+    obstore = pytest.importorskip("obstore")
+    store = obstore.store.MemoryStore()
+    obstore.put(store, "models/weights.bin", b"w" * (1024 * 32))
+    obstore.put(store, "models/nested/config.json", b'{"a": 1}')
+
+    def fake_store_and_key(path):
+        assert path.startswith("s3://bucket/")
+        return store, path.removeprefix("s3://bucket/")
+
+    monkeypatch.setattr(filesystem, "_obstore_store_and_key", fake_store_and_key)
+    return store
+
+
+def test_obstore_download_file(tmp_path: Path, memory_object_store):
+    dest = tmp_path / "weights.bin"
+    filesystem._obstore_download_file("s3://bucket/models/weights.bin", str(dest))
+    assert dest.read_bytes() == b"w" * (1024 * 32)
+
+
+def test_obstore_download_recursive(tmp_path: Path, memory_object_store):
+    dest = tmp_path / "pkg"
+    filesystem._obstore_download_recursive("s3://bucket/models", str(dest))
+    assert (dest / "weights.bin").read_bytes() == b"w" * (1024 * 32)
+    assert (dest / "nested" / "config.json").read_bytes() == b'{"a": 1}'
+
+
+def test_obstore_download_recursive_missing_prefix(tmp_path: Path, memory_object_store):
+    with pytest.raises(FileNotFoundError):
+        filesystem._obstore_download_recursive(
+            "s3://bucket/models/absent", str(tmp_path / "x")
+        )
+
+
+def test_s3_download_cached_uses_obstore(tmp_path: Path, memory_object_store):
+    local = filesystem._download_cached(
+        "s3://bucket/models/weights.bin",
+        local_cache_path=tmp_path,
+        checksum=hashlib.sha256(b"w" * (1024 * 32)).hexdigest(),
+    )
+    assert Path(local).read_bytes() == b"w" * (1024 * 32)

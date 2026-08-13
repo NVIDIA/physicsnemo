@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Adds `ShardTensor` support for GeoTransolver and FLARE models.
+- Migrates HealDA `ZarrLoader` remote reads and `s3://` downloads in
+  `physicsnemo.core.filesystem` from fsspec/s3fs to GIL-free obstore.
 - Adds zarr save/load for `Mesh` and `DomainMesh` via tensordict's zarr
   storage backend: `physicsnemo.mesh.io.to_zarr` / `from_zarr`, with
   training-appropriate chunking and zstd compression. `MeshReader` and
