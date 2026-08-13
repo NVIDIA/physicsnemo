@@ -40,10 +40,6 @@ from physicsnemo.mesh.transformations.geometric import (
     translate,
 )
 
-pv = pytest.importorskip("pyvista", minversion="0.46.4")
-
-from physicsnemo.mesh.io.io_pyvista import from_pyvista, to_pyvista  # noqa: E402
-
 ###############################################################################
 # Helper Functions
 ###############################################################################
@@ -190,6 +186,9 @@ class TestTranslation:
 
     def test_translate_against_pyvista(self, device):
         """Cross-validate against PyVista translate."""
+        pv = pytest.importorskip("pyvista", minversion="0.46.4")
+        from physicsnemo.mesh.io.io_pyvista import from_pyvista, to_pyvista
+
         pv_mesh = pv.examples.load_airplane()
         tm_mesh = from_pyvista(pv_mesh)
         tm_mesh = Mesh(
@@ -293,6 +292,9 @@ class TestRotation:
     @pytest.mark.parametrize("axis_idx,angle", [(0, 45.0), (1, 30.0), (2, 60.0)])
     def test_rotate_against_pyvista(self, axis_idx, angle, device):
         """Cross-validate against PyVista rotation."""
+        pv = pytest.importorskip("pyvista", minversion="0.46.4")
+        from physicsnemo.mesh.io.io_pyvista import from_pyvista, to_pyvista
+
         pv_mesh = pv.examples.load_airplane()
         tm_mesh = from_pyvista(pv_mesh)
         tm_mesh = Mesh(
@@ -417,6 +419,9 @@ class TestScale:
 
     def test_scale_against_pyvista(self, device):
         """Cross-validate against PyVista scale."""
+        pv = pytest.importorskip("pyvista", minversion="0.46.4")
+        from physicsnemo.mesh.io.io_pyvista import from_pyvista, to_pyvista
+
         pv_mesh = pv.examples.load_airplane()
         tm_mesh = from_pyvista(pv_mesh)
         tm_mesh = Mesh(

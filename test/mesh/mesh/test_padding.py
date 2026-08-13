@@ -44,26 +44,17 @@ def create_simple_mesh(
     add_point_data: bool = False,
     add_cell_data: bool = False,
 ) -> Mesh:
-    """Create a simple mesh for testing."""
-    torch.manual_seed(42)
-    points = torch.randn(n_points, n_spatial_dims, device=device)
-    cells = torch.randint(0, n_points, (n_cells, n_manifold_dims + 1), device=device)
+    """Create a simple mesh for testing (delegates to the shared factory)."""
+    from test.mesh.conftest import make_test_mesh
 
-    point_data = {}
-    cell_data = {}
-
-    if add_point_data:
-        point_data["temperature"] = torch.randn(n_points, device=device)
-        point_data["velocity"] = torch.randn(n_points, 3, device=device)
-
-    if add_cell_data:
-        cell_data["pressure"] = torch.randn(n_cells, device=device)
-
-    return Mesh(
-        points=points,
-        cells=cells,
-        point_data=point_data,
-        cell_data=cell_data,
+    return make_test_mesh(
+        n_spatial_dims,
+        n_manifold_dims,
+        device,
+        n_points=n_points,
+        n_cells=n_cells,
+        point_data={"temperature": (), "velocity": (3,)} if add_point_data else None,
+        cell_data={"pressure": ()} if add_cell_data else None,
     )
 
 

@@ -260,7 +260,9 @@ class RingSDPA(torch.autograd.Function):
                     **attn_args,
                 )
 
-                log_sumexp = log_sumexp.unsqueeze(-1)
+                # Newer torch pads log_sumexp's query dim to a 32-element alignment;
+                # slice back to the real query length before it broadcasts against output.
+                log_sumexp = log_sumexp[..., : output.shape[2]].unsqueeze(-1)
                 log_output = torch.log(torch.abs(output))
                 sign_output = torch.sign(output)
 
@@ -584,8 +586,9 @@ class RingSDPABlocking(torch.autograd.Function):
                 **attn_args,
             )
 
-            # Add an extra dimension to the log_sumexp:
-            log_sumexp = log_sumexp.unsqueeze(-1)
+            # Add an extra dimension to the log_sumexp. Newer torch pads its query dim to a
+            # 32-element alignment, so slice back to the real query length first.
+            log_sumexp = log_sumexp[..., : output.shape[2]].unsqueeze(-1)
             log_output = torch.log(torch.abs(output))
             sign_output = torch.sign(output)
 

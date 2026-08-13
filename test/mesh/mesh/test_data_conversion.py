@@ -26,73 +26,9 @@ import torch
 from physicsnemo.mesh.mesh import Mesh
 
 ### Helper Functions ###
-
-
-def create_simple_mesh(
-    n_spatial_dims: int, n_manifold_dims: int, device: torch.device | str = "cpu"
-):
-    """Create a simple mesh for testing."""
-    if n_manifold_dims > n_spatial_dims:
-        raise ValueError(
-            f"Manifold dimension {n_manifold_dims} cannot exceed spatial dimension {n_spatial_dims}"
-        )
-
-    if n_manifold_dims == 1:
-        if n_spatial_dims == 2:
-            points = torch.tensor(
-                [[0.0, 0.0], [1.0, 0.0], [1.5, 1.0], [0.5, 1.5]], device=device
-            )
-        elif n_spatial_dims == 3:
-            points = torch.tensor(
-                [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 1.0]],
-                device=device,
-            )
-        else:
-            raise ValueError(f"Unsupported {n_spatial_dims=}")
-        cells = torch.tensor([[0, 1], [1, 2], [2, 3]], device=device, dtype=torch.int64)
-    elif n_manifold_dims == 2:
-        if n_spatial_dims == 2:
-            points = torch.tensor(
-                [[0.0, 0.0], [1.0, 0.0], [0.5, 1.0], [1.5, 0.5]], device=device
-            )
-        elif n_spatial_dims == 3:
-            points = torch.tensor(
-                [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 1.0, 0.0], [1.5, 0.5, 0.5]],
-                device=device,
-            )
-        else:
-            raise ValueError(f"Unsupported {n_spatial_dims=}")
-        cells = torch.tensor([[0, 1, 2], [1, 3, 2]], device=device, dtype=torch.int64)
-    elif n_manifold_dims == 3:
-        if n_spatial_dims == 3:
-            points = torch.tensor(
-                [
-                    [0.0, 0.0, 0.0],
-                    [1.0, 0.0, 0.0],
-                    [0.0, 1.0, 0.0],
-                    [0.0, 0.0, 1.0],
-                    [1.0, 1.0, 1.0],
-                ],
-                device=device,
-            )
-            cells = torch.tensor(
-                [[0, 1, 2, 3], [1, 2, 3, 4]], device=device, dtype=torch.int64
-            )
-        else:
-            raise ValueError("3-simplices require 3D embedding space")
-    else:
-        raise ValueError(f"Unsupported {n_manifold_dims=}")
-
-    return Mesh(points=points, cells=cells)
-
-
-def assert_on_device(tensor: torch.Tensor, expected_device: str) -> None:
-    """Assert tensor is on expected device."""
-    actual_device = tensor.device.type
-    assert actual_device == expected_device, (
-        f"Device mismatch: tensor is on {actual_device!r}, expected {expected_device!r}"
-    )
-
+# The point/cell literals previously duplicated here are the shared
+# conftest factory's canonical meshes.
+from test.mesh.conftest import assert_on_device, create_simple_mesh  # noqa: E402
 
 ### Test Fixtures ###
 
