@@ -23,6 +23,10 @@
 # radii / neighbor counts therefore match the surface-style scale and
 # the local-feature path is disabled.  Same volume forward_kwargs as
 # the DrivAerML volume template.
+dataset_reader_overrides:
+  # This point-based model consumes only the volume interior.
+  drop_in_file_boundaries: true
+
 input_type: tensors
 output_type: tensors
 

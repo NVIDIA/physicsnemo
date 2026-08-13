@@ -59,6 +59,7 @@ from tensordict import TensorDict
 from physicsnemo.mesh import DomainMesh, Mesh
 
 from collate import build_collate_fn
+from datasets import _apply_dataset_reader_overrides
 from loss import LossCalculator
 from output_normalize import normalize_output_to_tensordict
 from utils import field_dim
@@ -103,6 +104,33 @@ def _compose_train_cfg(
         version_base=None,
     ):
         return compose(config_name="train", overrides=cli_overrides)
+
+
+@pytest.mark.parametrize(
+    "model,dataset,expected_drop",
+    [
+        ("globe_volume", "drivaer_ml_volume", False),
+        ("geotransolver_volume", "drivaer_ml_volume", True),
+        ("geotransolver_volume_highlift", "highlift_volume", True),
+        ("transolver_volume", "drivaer_ml_volume", True),
+        ("flare_volume", "drivaer_ml_volume", True),
+        ("domino_volume", "drivaer_ml_volume", True),
+    ],
+)
+def test_volume_dataset_reader_boundary_policy(
+    model: str, dataset: str, expected_drop: bool
+) -> None:
+    """Point models opt into dropping boundaries; GLOBE keeps the safe default."""
+    dataset_path = _RECIPE_ROOT / "datasets" / f"{dataset}.yaml"
+    dataset_cfg = OmegaConf.load(dataset_path)
+    train_cfg = _compose_train_cfg(model, dataset)
+
+    assert dataset_cfg.pipeline.reader.drop_in_file_boundaries is False
+    resolved = _apply_dataset_reader_overrides(dataset_cfg, train_cfg)
+    assert resolved.pipeline.reader.drop_in_file_boundaries is expected_drop
+    if model == "globe_volume":
+        assert "dataset_reader_overrides" not in train_cfg
+        assert train_cfg.forward_kwargs.boundary_meshes.vehicle == "boundaries.vehicle"
 
 
 ### ---------------------------------------------------------------------------

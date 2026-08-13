@@ -427,6 +427,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pathlib.Path.glob`, which can silently drop entries under filesystem
   metadata-server load (Lustre), causing training to proceed on a subset
   of the dataset.
+- Unified external aerodynamics volume datasets now preserve in-file boundaries
+  by default, so GLOBE can resolve `boundaries.vehicle` during collation.
+  Point-based volume model templates explicitly opt into the existing
+  boundary-dropping reader optimization.
 - `compute_cotan_weights_fem`, and the calculus, curvature, and smoothing
   routines built on it such as `Mesh.laplacian`, no longer fail on degenerate
   cells in float32. The Gram-matrix regularization is now scale-free, so it also
