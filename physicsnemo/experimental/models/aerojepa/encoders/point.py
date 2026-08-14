@@ -214,7 +214,7 @@ class PointClusterGraphPool(nn.Module):
         hidden_dim: int,
         num_layers: int,
         dropout: float,
-        use_te: bool = True,
+        use_te: bool = False,
     ):
         super().__init__()
         self.point_feature_dim = int(point_feature_dim)
@@ -417,7 +417,7 @@ class PointTransformer(Module):
         tokenizer_graph_pool_layers: int,
         use_gen_conditioning: bool = False,
         gen_conditioning_dim: int | None,
-        use_te: bool = True,
+        use_te: bool = False,
     ):
         super().__init__(meta=AeroJEPAMetaData())
         # ``tokenizer_prototype_coords`` is a torch.Tensor and is not
