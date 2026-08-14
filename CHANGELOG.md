@@ -892,6 +892,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added example for 2D urban flow generation using diffusion models:
+  - Complete training/generation/evaluation pipeline for EDM-based
+    turbulent flow synthesis
 - Added mixture_of_experts for weather example in physicsnemo.examples.weather.
   **⚠️Warning:** - It uses experimental DiT model subject to future API changes.
   Added some modifications to DiT architecture in physicsnemo.experimental.models.dit.
