@@ -1,0 +1,18 @@
+# NVIDIA writing guidelines (Technical Content > Marketing Claims):
+# "Avoid flowery language or comparisons with third-party products."
+extends: existence
+message: "Avoid flowery marketing language like '%s' in technical content."
+level: warning
+ignorecase: true
+tokens:
+  - supercharged?
+  - "world's leading"
+  - world-leading
+  - game-changing
+  - revolutionary
+  - groundbreaking
+  - cutting-edge
+  - best-in-class
+  - blazing(?:ly)?[- ]fast
+  - unparalleled
+  - unrivaled
