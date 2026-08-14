@@ -1,0 +1,18 @@
+[project]
+name = "diffusion-sda"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12, <3.14"
+dependencies = [
+    "earth2studio[data]",
+    "matplotlib>=3.10.8",
+    "nvidia-physicsnemo",
+    "zarr>=3.1.5",
+]
+
+[tool.uv.sources]
+nvidia-physicsnemo = { path = "../../../" }
+
+[tool.setuptools]
+package-dir = {"" = "."} 

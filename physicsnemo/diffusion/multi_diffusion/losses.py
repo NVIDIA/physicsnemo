@@ -30,6 +30,29 @@ from physicsnemo.diffusion.noise_schedulers import NoiseScheduler
 from physicsnemo.diffusion.utils.utils import _unwrap_module, apply_loss_weight
 
 
+def _unwrap_multi_diffusion(model: torch.nn.Module) -> MultiDiffusionModel2D:
+    """Peel off DDP / torch.compile wrappers to reach the underlying
+    :class:`MultiDiffusionModel2D`.
+
+    The unwrapping order handles arbitrary nesting of
+    ``DistributedDataParallel`` (``model.module``) and ``torch.compile``
+    (``OptimizedModule._orig_mod``).
+    """
+    m = model
+    while not isinstance(m, MultiDiffusionModel2D):
+        if isinstance(m, torch._dynamo.eval_frame.OptimizedModule):
+            m = m._orig_mod
+        elif hasattr(m, "module"):
+            m = m.module
+        else:
+            raise TypeError(
+                f"Could not unwrap a MultiDiffusionModel2D from "
+                f"{type(model).__name__}. Found leaf type "
+                f"{type(m).__name__}."
+            )
+    return m
+
+
 class _CompiledPatchX:
     """Cached ``torch.compile``-d wrapper around
     :meth:`~MultiDiffusionModel2D.patch_x`.
