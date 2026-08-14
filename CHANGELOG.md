@@ -776,6 +776,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `torch.nn.init.trunc_normal_` that emits a `DeprecationWarning` on
   call, replacing the frozen in-tree copy of the legacy inverse-CDF
   implementation. Use `torch.nn.init.trunc_normal_` directly.
+- Deprecates the CorrDiff example (`examples/weather/corrdiff`), which no longer
+  receives maintenance, bug fixes, or new features. Use the regional
+  high-resolution weather model example (`examples/weather/stormcast`) instead.
+  That example unifies regional diffusion-based weather models, and covers the
+  CorrDiff downscaling setting alongside other diffusion-based settings.
 
 ### Removed
 
