@@ -275,6 +275,23 @@ def _find_mesh_in_args(*objs: object) -> DeviceMesh | None:
     return None
 
 
+def _needs_promotion(tensor: torch.Tensor) -> bool:
+    r"""Whether a plain tensor participating in ShardTensor dispatch must be
+    promoted to a ``Replicate`` DTensor.
+
+    Scalars (0-dim) are normally exempt -- DTensor handles them natively via
+    implicit replication -- EXCEPT when they carry gradient state: the
+    implicit path emits the scalar's cotangent as a DTensor with no
+    ``from_local`` bridge to unwrap it, depositing a DTensor ``.grad`` on a
+    plain leaf (e.g. a learnable scalar gate). Promoting grad-tracking
+    scalars routes them through the differentiable bridge, whose backward
+    returns a plain local gradient.
+    """
+    if tensor.dim() >= 1:
+        return True
+    return torch.is_grad_enabled() and tensor.requires_grad
+
+
 def _promote_plain_tensor_to_dtensor(tensor: torch.Tensor, mesh: DeviceMesh) -> DTensor:
     r"""Promote a plain ``torch.Tensor`` to a ``Replicate`` DTensor on ``mesh``.
 
@@ -304,7 +321,7 @@ def _promote_plain_handler_args(
     -- the same contract the DTensor fallback provides via
     ``_convert_args_to_dtensor``, and with the same rules: promotion honors
     the promotion mode (no-op when ``DISABLED``), requires a reference mesh
-    from an accompanying ShardTensor, exempts scalar (0-dim) tensors (which
+    from an accompanying ShardTensor, exempts grad-free scalar tensors (which
     distributed ops handle natively), and promotes only exact
     ``torch.Tensor`` / ``nn.Parameter`` instances. Reuses
     :func:`_promote_plain_tensor_to_dtensor`, including its differentiable
@@ -324,7 +341,7 @@ def _promote_plain_handler_args(
         # (AsyncCollectiveTensor, functional-tensor wrappers, ...) wrapped in
         # a DTensor nests distributed wrappers, and view ops on the nested
         # tensor re-enter this dispatch without terminating.
-        if type(obj) in (torch.Tensor, torch.nn.Parameter) and obj.ndim > 0:
+        if type(obj) in (torch.Tensor, torch.nn.Parameter) and _needs_promotion(obj):
             return _promote_plain_tensor_to_dtensor(obj, mesh)
         return obj
 
@@ -407,8 +424,9 @@ def _convert_args_to_dtensor(
     Plain ``torch.Tensor`` arguments are auto-promoted to a ``Replicate``
     DTensor on ``ref_mesh`` according to ``ShardTensor._promotion_mode`` (see
     :class:`TensorPromotionMode`). Promotion is skipped when the mode is
-    ``DISABLED``, when there is no reference mesh, or for scalar (0-dim)
-    tensors (which DTensor handles natively).
+    ``DISABLED``, when there is no reference mesh, or for grad-free scalar
+    (0-dim) tensors (which DTensor handles natively; grad-tracking scalars
+    need the differentiable bridge -- see :func:`_needs_promotion`).
     """
     match arg:
         case ShardTensor():
@@ -434,7 +452,7 @@ def _convert_args_to_dtensor(
         case torch.Tensor() if (
             ShardTensor._promotion_mode is not TensorPromotionMode.DISABLED
             and ref_mesh is not None
-            and arg.dim() >= 1
+            and _needs_promotion(arg)
         ):
             return _promote_plain_tensor_to_dtensor(arg, ref_mesh)
         case _:
