@@ -488,6 +488,129 @@ class SetGlobalField(MeshTransform):
 
 
 @register()
+class ComputeUnitGlobalVector(MeshTransform):
+    r"""Store the unit direction of a ``global_data`` vector as a new field.
+
+    Computes ``global_data[output_field] = v / |v|`` from
+    ``global_data[vector_field]``. The source must be one finite, nonzero
+    rank-one spatial vector whose length matches the mesh's spatial dimension.
+    The source vector is not modified, so pipelines that need the original
+    (e.g. to convert model outputs back to physical units) keep working. An
+    existing field under ``output_field`` is overwritten.
+
+    Typical use: condition a model on a flow *direction* rather than a
+    raw dimensional velocity. Place this transform before a rotation
+    augmentation with ``transform_global_data=True`` so the direction rotates
+    together with the source vector and the geometry. If a pipeline also uses
+    :class:`MeshToDomainMesh`, place this transform before that conversion when
+    the generated boundary should also receive the derived field. Placing it
+    after the conversion writes only to the resulting domain-level
+    ``global_data``.
+
+    On a :class:`~physicsnemo.mesh.DomainMesh`, the direction is computed
+    from and written to the domain-level ``global_data``.
+    """
+
+    def __init__(
+        self,
+        vector_field: str,
+        output_field: str,
+    ) -> None:
+        super().__init__()
+        if output_field == vector_field:
+            raise ValueError(
+                f"{type(self).__name__}: output_field must differ from "
+                f"vector_field ({vector_field!r})."
+            )
+        self._vector_field = vector_field
+        self._output_field = output_field
+
+    def _direction(self, global_data: TensorDict, n_spatial_dims: int) -> torch.Tensor:
+        if self._vector_field not in global_data.keys():
+            raise KeyError(
+                f"{type(self).__name__}: {self._vector_field!r} not found "
+                f"in global_data (available: {sorted(global_data.keys())!r})."
+            )
+        source = global_data[self._vector_field]
+        if not source.dtype.is_floating_point:
+            raise ValueError(
+                f"{type(self).__name__}: {self._vector_field!r} must be a "
+                f"floating-point tensor, got dtype {source.dtype}."
+            )
+        if source.ndim != 1:
+            raise ValueError(
+                f"{type(self).__name__}: {self._vector_field!r} must be a "
+                f"single rank-one vector, got shape {tuple(source.shape)}."
+            )
+        if source.shape[0] != n_spatial_dims:
+            raise ValueError(
+                f"{type(self).__name__}: {self._vector_field!r} must have "
+                f"length {n_spatial_dims} to match the mesh spatial dimension, "
+                f"got shape {tuple(source.shape)}."
+            )
+        ### Normalize in at least float32. Scaling by the largest component
+        ### before taking the norm avoids overflow and underflow for finite
+        ### vectors near the limits of float32/float64. Return in the source
+        ### dtype so later geometric transforms compose with the source field.
+        vector = source.to(torch.promote_types(source.dtype, torch.float32))
+        if not torch.all(torch.isfinite(vector)):
+            raise ValueError(
+                f"{type(self).__name__}: {self._vector_field!r} must contain "
+                "only finite values."
+            )
+        scale = vector.abs().amax()
+        if scale == 0.0:
+            raise ValueError(
+                f"{type(self).__name__}: |{self._vector_field}| must be positive."
+            )
+        scaled = vector / scale
+        return (scaled / torch.linalg.vector_norm(scaled)).to(dtype=source.dtype)
+
+    def __call__(self, mesh: Mesh) -> Mesh:
+        new_gd = mesh.global_data.clone()
+        new_gd[self._output_field] = self._direction(
+            mesh.global_data, mesh.n_spatial_dims
+        )
+        return Mesh(
+            points=mesh.points,
+            cells=mesh.cells,
+            point_data=mesh.point_data,
+            cell_data=mesh.cell_data,
+            global_data=new_gd,
+        )
+
+    def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
+        """Derive the unit direction on a :class:`DomainMesh`.
+
+        The direction is computed from and written to the domain-level
+        ``global_data``; sub-mesh records are left unchanged.
+
+        Parameters
+        ----------
+        domain : DomainMesh
+            Input domain mesh (interior + boundaries).
+
+        Returns
+        -------
+        DomainMesh
+            Domain mesh with ``output_field`` added to the domain-level
+            ``global_data``.
+        """
+        new_gd = domain.global_data.clone()
+        new_gd[self._output_field] = self._direction(
+            domain.global_data, domain.interior.n_spatial_dims
+        )
+        return DomainMesh(
+            interior=domain.interior,
+            boundaries=domain.boundaries,
+            global_data=new_gd,
+        )
+
+    def extra_repr(self) -> str:
+        return f"{self._output_field} = {self._vector_field} / |{self._vector_field}|"
+
+
+@register()
 class NormalizeMeshFields(MeshTransform):
     r"""Standardize mesh data fields with direction-preserving vector support.
 
