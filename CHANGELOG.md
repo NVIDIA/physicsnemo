@@ -440,6 +440,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and interior elements equal inclusion probability.
 - Cell-subsampled GLOBE inputs now retain their effective integration measure,
   preventing area-weighted outputs and gradients from collapsing.
+- `SetGlobalField` now writes injected fields to the domain-level `global_data`
+  of a `DomainMesh`, in addition to the existing per-sub-mesh broadcast.
+  Previously, code reading `DomainMesh.global_data` never saw the injected
+  fields.
 - `physicsnemo.mesh.io.from_pyvista(..., force_copy=True)` now copies attached
   point, cell, and global data as well as geometry. The matching new
   `to_pyvista(..., force_copy=True)` option prevents exported PyVista geometry
