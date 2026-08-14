@@ -283,7 +283,8 @@ Recent examples of research teams using PhysicsNeMo are the
 [ORNL team](https://arxiv.org/abs/2404.05768),
 [TU Munich CFD team](https://www.nvidia.com/en-us/on-demand/session/gtc24-s62237/), etc.
 
-Please navigate to this page for a complete list of research work leveraging PhysicsNeMo.
+Navigate to [Research and Publications Using PhysicsNeMo](docs/research.md)
+for a complete list of research work leveraging PhysicsNeMo.
 For a list of enterprises using PhysicsNeMo, refer to the [PhysicsNeMo Webpage](https://developer.nvidia.com/physicsnemo).
 
 Using PhysicsNeMo and interested in showcasing your work on
@@ -540,6 +541,15 @@ please consider citing:
       url={https://arxiv.org/abs/2605.11111},
 }
 ```
+
+## Share Your Research
+
+Publishing a paper that uses PhysicsNeMo? Add it to our
+[Research and Publications Using PhysicsNeMo](docs/research.md) page so the
+community can find it. Open a
+[Research paper submission](https://github.com/NVIDIA/physicsnemo/issues/new?template=research_paper.yml)
+issue with your paper's details, or edit
+[`docs/research.md`](docs/research.md) directly and open a pull request.
 
 ## Communication
 
