@@ -795,6 +795,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same key ordering as the benchmark runner.
 - Fixed graph break caused by `FunctionSpec` dispatch (`max(key=)` is not supported by `torch.compile`)
 - Fixed bug in Pangu, FengWu attention window shift for asymmetric longitudes
+- Fixed over-masking of the cyclic longitude axis in `get_shift_window_mask` for
+  Pangu/FengWu shifted-window attention. The mask now partitions only the
+  (pressure level, latitude) plane, matching the original Pangu-Weather paper's
+  treatment of longitude as a cyclic dimension whose wrap-around windows
+  "are directly merged into one window".
 - Fixed a bug in `mesh.sampling.find_nearest_cells`, where a mixup between L2 and L-inf norms
   could cause slightly incorrect nearest-neighbor assignments in highly skewed meshes.
 - Fixed TensorDict key-ordering bug in GLOBE's Barnes-Hut kernel that caused
