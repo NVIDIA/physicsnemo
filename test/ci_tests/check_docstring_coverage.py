@@ -87,9 +87,9 @@ def _parse_interrogate_output(output: str, repo_root: Path) -> list[str]:
 
     for line in output.splitlines():
         ### Section header
-        # Interrogate section headers vary by version ("==== ... ====" vs
-        # "===== ... ====="), so accept both 4+ and 5+ equals styles.
-        m = re.match(r"={4,}\s+Coverage for (.+?)\s*={4,}", line)
+        # Interrogate section headers vary by version and use different
+        # numbers of equals signs, e.g. "= Coverage ... =" or "===== ... =====".
+        m = re.match(r"=+\s+Coverage for (.+?)\s*=+", line)
         if m:
             current_dir = m.group(1).rstrip("/")
             current_file = ""
