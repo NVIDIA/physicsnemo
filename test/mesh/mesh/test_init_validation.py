@@ -29,7 +29,7 @@ import torch
 from tensordict import TensorDict
 
 from physicsnemo.mesh import Mesh
-from physicsnemo.mesh.mesh import _requested_float_dtype
+from physicsnemo.mesh.mesh import _requested_dtype
 
 
 class TestPointsValidation:
@@ -77,6 +77,50 @@ class TestPointsValidation:
         with pytest.raises(ValueError, match=r"`points` must have shape.*got.*shape"):
             Mesh(points=points, cells=cells)
 
+    @pytest.mark.parametrize(
+        "dtype", [torch.int64, torch.int32, torch.uint8, torch.bool]
+    )
+    def test_non_floating_points_promoted_to_float32(self, dtype):
+        """Test that non-floating, non-complex coordinates become float32.
+
+        Integer coordinates are accepted rather than rejected (PR #1781's
+        PyVista policy treats them as a legitimate input), but they are promoted
+        so geometry does not evaluate in integer arithmetic.
+        """
+        mesh = Mesh(
+            points=torch.ones((3, 2), dtype=dtype),
+            cells=torch.tensor([[0, 1, 2]]),
+        )
+
+        assert mesh.points.dtype == torch.float32
+
+    @pytest.mark.parametrize(
+        "dtype", [torch.float16, torch.bfloat16, torch.float64, torch.complex64]
+    )
+    def test_floating_and_complex_points_preserved(self, dtype):
+        """Test that the float32 promotion does not narrow or widen valid dtypes."""
+        mesh = Mesh(
+            points=torch.ones((3, 2), dtype=dtype),
+            cells=torch.tensor([[0, 1, 2]]),
+        )
+
+        assert mesh.points.dtype == dtype
+
+    def test_integer_points_do_not_truncate_cell_areas(self):
+        """Regression: integer coordinates used to make `cell_areas` silently wrong.
+
+        Geometry evaluated in integer arithmetic truncated the result, so this
+        unit right triangle of exact area 0.5 reported 0 -- with no error. The
+        wrongness was data-dependent (an exact area of 6.0 came out right),
+        which is what made it dangerous.
+        """
+        mesh = Mesh(
+            points=torch.tensor([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=torch.int64),
+            cells=torch.tensor([[0, 1, 2]]),
+        )
+
+        torch.testing.assert_close(mesh.cell_areas, torch.tensor([0.5]))
+
 
 class TestCellsValidation:
     """Tests for cells tensor validation."""
@@ -115,6 +159,13 @@ class TestCellsValidation:
         with pytest.raises((ValueError, IndexError)):
             Mesh(points=points, cells=cells)
 
+    def test_cells_require_at_least_one_vertex_column(self):
+        with pytest.raises(ValueError, match="at least one vertex index"):
+            Mesh(
+                points=torch.randn(3, 2),
+                cells=torch.empty((3, 0), dtype=torch.long),
+            )
+
 
 class TestCellsDtypeValidation:
     """Tests for cells dtype validation."""
@@ -133,19 +184,32 @@ class TestCellsDtypeValidation:
         mesh = Mesh(points=points, cells=cells)
         assert mesh.cells.dtype == torch.int32
 
-    def test_cells_int16_valid(self):
-        """Test that int16 cells are accepted."""
+    @pytest.mark.parametrize(
+        "dtype",
+        [
+            torch.uint8,
+            torch.uint16,
+            torch.uint32,
+            torch.uint64,
+            torch.int8,
+            torch.int16,
+        ],
+    )
+    def test_small_integer_cells_normalized_to_int64(self, dtype):
         points = torch.randn(10, 3)
-        cells = torch.randint(0, 10, (5, 3), dtype=torch.int16)
+        cells = torch.tensor([[0, 1, 2], [2, 3, 4]], dtype=dtype)
+
         mesh = Mesh(points=points, cells=cells)
-        assert mesh.cells.dtype == torch.int16
+
+        assert mesh.cells.dtype == torch.int64
+        torch.testing.assert_close(mesh.cell_centroids, points[mesh.cells].mean(dim=1))
 
     def test_cells_float32_raises(self):
         """Test that float32 cells raise TypeError."""
         points = torch.randn(10, 3)
         cells = torch.randint(0, 10, (5, 3)).float()  # float32
 
-        with pytest.raises(TypeError, match=r"`cells` must have an int-like dtype"):
+        with pytest.raises(TypeError, match=r"`cells` must have an integer dtype"):
             Mesh(points=points, cells=cells)
 
     def test_cells_float64_raises(self):
@@ -153,7 +217,7 @@ class TestCellsDtypeValidation:
         points = torch.randn(10, 3)
         cells = torch.randint(0, 10, (5, 3)).double()  # float64
 
-        with pytest.raises(TypeError, match=r"`cells` must have an int-like dtype"):
+        with pytest.raises(TypeError, match=r"`cells` must have an integer dtype"):
             Mesh(points=points, cells=cells)
 
     def test_cells_float16_raises(self):
@@ -161,8 +225,15 @@ class TestCellsDtypeValidation:
         points = torch.randn(10, 3)
         cells = torch.randint(0, 10, (5, 3)).half()  # float16
 
-        with pytest.raises(TypeError, match=r"`cells` must have an int-like dtype"):
+        with pytest.raises(TypeError, match=r"`cells` must have an integer dtype"):
             Mesh(points=points, cells=cells)
+
+    @pytest.mark.parametrize("dtype", [torch.bool, torch.complex64])
+    def test_non_integer_cells_raise(self, dtype):
+        cells = torch.ones((2, 3), dtype=dtype)
+
+        with pytest.raises(TypeError, match=r"`cells` must have an integer dtype"):
+            Mesh(points=torch.randn(4, 3), cells=cells)
 
 
 class TestDimensionValidation:
@@ -395,7 +466,7 @@ def test_to_same_float_dtype_preserves_integer_cells():
     """Regression (PR #1716 review): casting to the float dtype the mesh already has
     must still take the cells-safe path. The old `probe.dtype != points.dtype` guard
     fell through to the generated tensorclass `.to`, which cast the integer cells to
-    float and re-raised 'cells must have an int-like dtype'."""
+    float and re-raised 'cells must have an integer dtype'."""
     mesh = Mesh(
         points=torch.randn(4, 3).double(),  # already float64
         cells=torch.tensor([[0, 1, 2], [1, 3, 2]]),
@@ -434,19 +505,16 @@ def test_to_float_dtype_forwards_transfer_kwargs():
         (("cpu", torch.float64), {}, torch.float64),  # to(device, dtype) positional
         ((torch.zeros(1, dtype=torch.float64),), {}, torch.float64),  # to(other)
         ((), {"dtype": torch.float64}, torch.float64),  # to(dtype=...)
-        ((torch.complex64,), {}, torch.complex64),  # complex is cast-worthy
+        ((torch.complex64,), {}, torch.complex64),
         (("cuda",), {}, None),  # device-only (str)
         ((), {"device": "cpu"}, None),  # device-only (kwarg)
-        ((torch.int32,), {}, None),  # integer dtype -> delegate
+        ((torch.int32,), {}, torch.int32),
         ((), {}, None),  # no args
     ],
 )
-def test_requested_float_dtype_detects_overloads(args, kwargs, expected):
-    """`_requested_float_dtype` drives the cast-vs-delegate decision: it must detect an
-    explicitly requested float/complex dtype across torch's `.to` overloads (positional
-    dtype, device+dtype, `other` tensor, `dtype=` kwarg) and return None for device-only
-    moves and integer dtypes -- independent of any current dtype."""
-    assert _requested_float_dtype(args, kwargs) == expected
+def test_requested_dtype_detects_overloads(args, kwargs, expected):
+    """The Mesh mover must detect dtype requests across Tensor.to overloads."""
+    assert _requested_dtype(args, kwargs) == expected
 
 
 def test_to_other_tensor_overload_casts_floats_preserves_int_cells():
@@ -459,3 +527,19 @@ def test_to_other_tensor_overload_casts_floats_preserves_int_cells():
     assert out.points.dtype == torch.float64
     assert out.cells.dtype == torch.int64
     assert out.point_data["region"].dtype == torch.int64
+
+
+def test_to_rejects_integer_coordinate_dtype():
+    mesh = Mesh(points=torch.randn(3, 2), cells=torch.tensor([[0, 1]]))
+
+    with pytest.raises(TypeError, match="coordinates must remain floating point"):
+        mesh.to(torch.int32)
+
+
+def test_to_complex_preserves_integer_cells():
+    mesh = Mesh(points=torch.randn(3, 2), cells=torch.tensor([[0, 1]]))
+
+    converted = mesh.to(torch.complex64)
+
+    assert converted.points.dtype == torch.complex64
+    assert converted.cells.dtype == torch.int64

@@ -477,6 +477,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to the integer `cells` tensor. A floating/complex dtype is now applied only to
   floating tensors; the integer `cells` (and any integer data) are preserved. Device
   moves are unchanged.
+- `physicsnemo.mesh`: `Mesh` now promotes integer point coordinates to `float32` at
+  construction, matching the `from_pyvista`/`to_pyvista` coordinate policy. Such a
+  mesh previously evaluated geometry in integer arithmetic, which made `cell_areas`
+  silently wrong in a data-dependent way (a unit right triangle reported area `0`
+  rather than `0.5`) and made `cell_centroids`, `cell_normals`, and `validate()`
+  raise. Floating-point, reduced-precision, and complex coordinates are unchanged.
+- `physicsnemo.mesh`: `Mesh` connectivity validation is stricter. `cells` in an
+  integer dtype narrower than `int32` is normalized to `int64`; such a mesh
+  previously constructed successfully and then raised `IndexError` on first use,
+  with `uint8` silently reinterpreted by PyTorch as a boolean mask. `cells` must now
+  also have a genuine integer dtype (`bool` and complex dtypes were previously
+  accepted) and at least one vertex index per cell (zero-width `cells` produced a
+  negative `n_manifold_dims` and all-`NaN` centroids).
+- `physicsnemo.mesh`: `Mesh.to()` and `DomainMesh.to()` now raise `TypeError` for a
+  non-floating, non-complex `dtype`. Previously the cast was delegated to the
+  generated tensorclass `to`, which silently produced a mesh whose `points` and
+  `cells` were both integer or boolean and which had bypassed all validation.
 - `physicsnemo.mesh`: fixed several silent-wrong-result bugs — `slice_cells`
   carried stale point-level and non-local (`gaussian_curvature`) caches onto the
   sliced mesh; the intrinsic LSQ gradient returned all-zeros for codimension >= 2
