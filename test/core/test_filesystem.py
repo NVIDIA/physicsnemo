@@ -340,3 +340,28 @@ def test_s3_download_cached_uses_obstore(tmp_path: Path, memory_object_store):
         checksum=hashlib.sha256(b"w" * (1024 * 32)).hexdigest(),
     )
     assert Path(local).read_bytes() == b"w" * (1024 * 32)
+
+
+def test_obstore_download_recursive_rejects_traversal(tmp_path: Path, monkeypatch):
+    """Keys with parent-directory components must not escape the destination.
+
+    obstore's own Path type already rejects ".." segments, so a hostile
+    listing is simulated with a stub module to exercise the guard directly.
+    """
+    import sys
+    import types
+
+    pytest.importorskip("obstore")
+
+    fake_obstore = types.SimpleNamespace(
+        list=lambda store, prefix: [[{"path": "models/../../escape.txt"}]]
+    )
+    monkeypatch.setitem(sys.modules, "obstore", fake_obstore)
+    monkeypatch.setattr(
+        filesystem, "_obstore_store_and_key", lambda path: (None, "models")
+    )
+
+    dest = tmp_path / "pkg"
+    with pytest.raises(ValueError, match="outside destination"):
+        filesystem._obstore_download_recursive("s3://bucket/models", str(dest))
+    assert not (tmp_path.parent / "escape.txt").exists()

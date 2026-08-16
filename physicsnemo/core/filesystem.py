@@ -190,13 +190,20 @@ def _obstore_download_recursive(path: str, destination: str) -> None:
     prefix = prefix.rstrip("/")
     url = urllib.parse.urlparse(path)
     base = f"{url.scheme}://{url.netloc}"
+    dest_root = Path(destination).resolve()
     found = False
     for batch in obstore.list(store, prefix):
         for meta in batch:
             found = True
             key = meta["path"]
             rel = key[len(prefix) :].lstrip("/") if prefix else key
-            dest = Path(destination) / rel
+            dest = (dest_root / rel).resolve()
+            # Listed keys are remote-controlled; refuse any that resolve
+            # outside the destination root (e.g. ".." components)
+            if not dest.is_relative_to(dest_root):
+                raise ValueError(
+                    f"Refusing to write outside destination directory: {key!r}"
+                )
             dest.parent.mkdir(parents=True, exist_ok=True)
             _obstore_download_file(f"{base}/{key}", str(dest))
     if not found:
