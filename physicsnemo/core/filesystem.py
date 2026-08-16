@@ -161,6 +161,55 @@ def _file_sha256(path: str | os.PathLike) -> str:
     return digest.hexdigest()
 
 
+def _obstore_store_and_key(path: str) -> tuple:
+    """Split an object-store URL into an obstore store and bucket-relative key."""
+    from obstore.store import from_url
+
+    url = urllib.parse.urlparse(path)
+    store = from_url(f"{url.scheme}://{url.netloc}")
+    return store, url.path.lstrip("/")
+
+
+def _obstore_download_file(path: str, destination: str) -> None:
+    """Stream a single object-store file to ``destination`` via obstore."""
+    import obstore
+
+    store, key = _obstore_store_and_key(path)
+    result = obstore.get(store, key)
+    with open(destination, "wb") as f:
+        for chunk in result.stream(min_chunk_size=8 * 1024 * 1024):
+            f.write(chunk)
+
+
+def _obstore_download_recursive(path: str, destination: str) -> None:
+    """Download every object under an object-store prefix via obstore,
+    preserving the relative directory layout under ``destination``."""
+    import obstore
+
+    store, prefix = _obstore_store_and_key(path)
+    prefix = prefix.rstrip("/")
+    url = urllib.parse.urlparse(path)
+    base = f"{url.scheme}://{url.netloc}"
+    dest_root = Path(destination).resolve()
+    found = False
+    for batch in obstore.list(store, prefix):
+        for meta in batch:
+            found = True
+            key = meta["path"]
+            rel = key[len(prefix) :].lstrip("/") if prefix else key
+            dest = (dest_root / rel).resolve()
+            # Listed keys are remote-controlled; refuse any that resolve
+            # outside the destination root (e.g. ".." components)
+            if not dest.is_relative_to(dest_root):
+                raise ValueError(
+                    f"Refusing to write outside destination directory: {key!r}"
+                )
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            _obstore_download_file(f"{base}/{key}", str(dest))
+    if not found:
+        raise FileNotFoundError(f"No objects found under {path}")
+
+
 def _validate_checksum(path: str | os.PathLike, checksum: str) -> None:
     if re.fullmatch(r"[0-9a-fA-F]{64}", checksum) is None:
         raise ValueError("checksum must be a 64-character SHA-256 hex digest")
@@ -259,7 +308,16 @@ def _download_cached(
         return cache_path
 
     logger.debug("Downloading %s to cache: %s", path, cache_path)
-    if url.scheme in ("s3", "msc"):
+    if url.scheme == "s3":
+        if recursive:
+            _obstore_download_recursive(path, cache_path)
+        else:
+            _install_in_cache(
+                lambda destination: _obstore_download_file(path, destination),
+                cache_path,
+                checksum,
+            )
+    elif url.scheme == "msc":
         fs = fsspec.filesystem(fsspec.utils.get_protocol(path))
         if recursive:
             fs.get(path, cache_path, recursive=True)

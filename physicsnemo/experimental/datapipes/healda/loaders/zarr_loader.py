@@ -34,13 +34,40 @@ from physicsnemo.core.version_check import OptionalImport
 xr = OptionalImport("xarray")
 zarr = OptionalImport("zarr")
 _zarr_sync = OptionalImport("zarr.core.sync")
+_obstore_store = OptionalImport("obstore.store")
 
 NO_LEVEL = -1  # sentinel for 2D (surface) variables that lack a pressure level
+
+# fsspec storage_options keys translated to obstore config names so existing
+# call sites keep working across the fsspec -> obstore migration
+_FSSPEC_TO_OBSTORE_OPTIONS = {
+    "anon": "skip_signature",
+    "key": "access_key_id",
+    "secret": "secret_access_key",
+    "token": "session_token",
+    "endpoint_url": "endpoint",
+    "region_name": "region",
+}
 
 
 def _is_local(path):
     url = urllib.parse.urlparse(path)
     return url.scheme == ""
+
+
+def _open_remote_store(path: str, storage_options: dict | None):
+    """Read-only zarr store for a remote URL, backed by obstore.
+
+    obstore's Rust client fetches chunks off the GIL and independently of the
+    event loop, outperforming the fsspec/s3fs path for the many-small-GET
+    workload of per-timestep zarr reads.
+    """
+    config = {
+        _FSSPEC_TO_OBSTORE_OPTIONS.get(k, k): v
+        for k, v in (storage_options or {}).items()
+    }
+    store = _obstore_store.from_url(path, **config)
+    return zarr.storage.ObjectStore(store, read_only=True)
 
 
 async def _getitem(array, index):
@@ -62,7 +89,11 @@ class ZarrLoader:
         variables_2d: List of 2D variable names.
         levels: Pressure levels to extract.
         level_coord_name: Name of the vertical coordinate in the zarr store.
-        storage_options: fsspec storage options for remote stores.
+        storage_options: Options for remote stores. Common fsspec-style keys
+            (``anon``, ``key``, ``secret``, ``token``, ``endpoint_url``,
+            ``region_name``) are translated for obstore; other keys are
+            forwarded to ``obstore.store.from_url`` as-is. Used verbatim as
+            fsspec storage options if obstore is not installed.
         time_sel_method: Passed to ``pd.Index.get_indexer(method=)``.
         variables_static: List of static (time-invariant) variable names.
     """
@@ -87,6 +118,14 @@ class ZarrLoader:
 
         if isinstance(path, str) and _is_local(path):
             storage_options = None
+        elif isinstance(path, str):
+            try:
+                path = _open_remote_store(path, storage_options)
+                storage_options = None
+            except ImportError:
+                # obstore not installed; fall back to zarr's fsspec-based
+                # remote store resolution via storage_options
+                pass
 
         self.group = _zarr_sync.sync(
             zarr.api.asynchronous.open_group(
