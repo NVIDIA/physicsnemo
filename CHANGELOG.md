@@ -669,6 +669,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added support for Batched radius search, which enables Domino
   and GeoTransolver with local features and batch size > 1.
 - Added the underfill recipe.
+- Adds Functional Generative Networks (FGN) weather training example
+  (`examples/weather/fgn`). Implements the latent-conditioned U-Net
+  stochastic generator from
+  `arXiv:2506.10772 <https://arxiv.org/abs/2506.10772>`_ (WeatherNext 2)
+  as a PhysicsNeMo ``Module``, trained with fair-CRPS loss on ERA5 via the
+  earth2studio ARCO data source. Supports autoregressive rollout training
+  with per-channel normalization, FSDP2 + ShardTensor domain parallelism
+  (matching the StormCast FSDP2 migration), and deep-ensemble inference
+  (paper §2.2.1). Training includes NaN/Inf gradient guards (``nan_to_num``
+  before ``optimizer.step``), configurable gradient norm clipping (default
+  1.0, matching StormCast), and distributed loss synchronization via
+  ``all_reduce`` on both train and validation losses. Includes a standalone
+  evaluation script (``eval.py``) reproducing the paper §4 diagnostics:
+  CRPS/RMSE/spread-skill scorecard heatmaps (Figure 2a), spread vs RMSE
+  calibration panels for key variables (Figure 2b-f), average- and
+  max-pooled CRPS heatmaps across spatial scales (Figure 3a-b), derived
+  variable CRPS line plots (Figure 3c), spherical-harmonic power spectra
+  for 2t/q700/z500 (Figure 3e-j), and Relative Economic Value (REV) curves
+  (Figure 2g-h) at p90/p95/p99 exceedance thresholds. Evaluation uses
+  biased CRPS (not fair-CRPS) per paper §4.1, consistent with the deep
+  ensemble violating the independence assumption of the fair estimator.
 
 ### Changed
 

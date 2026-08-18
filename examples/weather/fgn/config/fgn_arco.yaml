@@ -1,0 +1,92 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# ARCO ERA5 training config — practical starting point for a single-GPU run
+# that reproduces the paper's channel set and loss settings (arXiv:2506.10772).
+#
+# Prerequisites:
+#   1. Run scripts/compute_arco_stats.py to create the stats file.
+#   2. Set dataset.stats_path to that file (override below or on the CLI).
+#
+# Usage (Stage-1 single-step training):
+#   python train.py --config-name fgn_arco \
+#     dataset.stats_path=/path/to/stats.npz \
+#     training.experiment_name=fgn_era5 training.run_id=0
+#
+# Usage (Stage-4 AR finetune, paper Table A.2):
+#   python scripts/stage4_ar_schedule.py \
+#     --config-name fgn_arco \
+#     --rundir /path/to/stage4 \
+#     --stats-path /path/to/stats.npz
+
+defaults:
+  - fgn         # pulls in training/default + model defaults
+  - _self_
+
+dataset:
+  name: arco.ArcoFGNDataset
+  # Full ERA5 variables from paper §2.1 / Table A.1. Set to null to use
+  # the dataset's built-in default variable list.
+  state_variables: null
+  invariant_variables:
+    - z       # geopotential at surface (orography)
+    - lsm     # land-sea mask
+  step_hours: 6
+  history_frames: 2
+  future_frames: ${training.ar_steps}
+  # Use 2018–2022 for training, 2023 for validation (paper split).
+  train_start: "2018-01-01"
+  train_end: "2022-12-31"
+  val_start: "2023-01-01"
+  val_end: "2023-12-31"
+  spatial_stride: 1       # full 0.25° resolution (721 × 1440)
+  static_date: "2016-01-01"
+  arco_cache: true
+  stats_path: ???         # required — run scripts/compute_arco_stats.py first
+  tp_accumulation_hours: null   # set to 6 to include tp06 (paper §3)
+
+model:
+  latent_dim: 32
+  patch_size: [4, 4]
+  hidden_size: 384
+  depth: 12
+  num_heads: 8
+  attention_backend: timm
+  detokenizer: proj_reshape_2d_conv
+
+training:
+  experiment_name: fgn_era5
+  run_id: "0"
+  # Paper trains with batch_size=64 on multi-GPU. With a single H100 at batch=4
+  # the linear scaling rule (lr ∝ batch_size) suggests lr ≈ 8e-5 × (4/64) = 5e-6,
+  # but in practice lr=8e-5 works fine for quick experiments; reduce for long runs.
+  batch_size: 4
+  total_train_steps: 5000   # ~1 h on a single H100 at full resolution
+  print_progress_freq: 100
+  checkpoint_freq: 500
+  validation_freq: 500
+  validation_steps: 8       # batches per rank per validation call
+  validation_metrics: true
+  validation_ensemble_size: 4
+  ar_steps: 1               # Stage 1; use stage4_ar_schedule.py for ramp
+  loss:
+    num_samples: 4
+    mse_weight: 0.1
+    use_channel_weights: true   # GraphCast-style per-variable weights (§2.2.3)
+    use_area_weights: true      # cos(lat) area weighting
+    # Per-variable loss weights. Noisy/sparse surface variables are downweighted;
+    # geopotential is already halved by use_channel_weights (build_channel_weights).
+    channel_loss_weights:
+      msl: 0.1
+      u10m: 0.05
+      v10m: 0.05
+      sst: 0.1
+      tp06: 0.1
+  optimizer:
+    # Paper Table A.2: Stage 3 (0.25° ERA5) uses lr=8e-5 with 1000-step warmup.
+    # Stage 1 (1° 12h) uses lr=8e-4 — override on CLI if running Stage 1.
+    lr: 8.0e-5
+    weight_decay: 0.1
+    lr_warmup_steps: 1000
+    lr_min: 0.0
