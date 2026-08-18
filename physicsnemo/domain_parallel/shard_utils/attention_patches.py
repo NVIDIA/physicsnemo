@@ -20,10 +20,16 @@ from typing import Any, Callable
 
 import torch
 import torch.distributed as dist
+import torch.distributed._functional_collectives as funcol
 from torch.autograd.profiler import record_function
 from torch.distributed import DeviceMesh
+from torch.distributed.tensor.placement_types import Replicate
 
 from physicsnemo.domain_parallel import ShardTensor
+from physicsnemo.domain_parallel.shard_utils.grad_ops import (
+    ContiguousGrad,
+    GradReducer,
+)
 from physicsnemo.domain_parallel.shard_utils.patch_core import (
     MissingShardPatch,
 )
@@ -827,6 +833,135 @@ def ring_sdpa(
     return x
 
 
+class ReplicatedQSDPA(torch.autograd.Function):
+    r"""SDPA with replicated queries against sequence-sharded keys/values.
+
+    Each rank holds the full query set and one block of K/V along the
+    sequence dimension. The forward computes local partial attention with
+    its log-sum-exp, then combines across the mesh with the standard
+    flash-attention reduction: gather the per-block normalizers, form the
+    global log-sum-exp, rescale each partial output, and all-reduce.
+
+    The backward mirrors :class:`RingSDPABlocking`'s per-block step: the
+    efficient-attention backward kernel with the *global* output and
+    log-sum-exp against the *local* K/V block yields exact block gradients.
+    ``grad_q`` is a sum of per-block contributions (all-reduce); ``grad_k`` /
+    ``grad_v`` stay local to the block.
+
+    All tensors here are plain local tensors of shape :math:`(B, H, S, D)`;
+    the caller handles ShardTensor packing.
+    """
+
+    @staticmethod
+    def forward(
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        mesh: DeviceMesh,
+        attn_args: dict,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        r"""Compute the combined attention output over all K/V blocks.
+
+        Returns ``(output, global_log_sumexp, philox_seed, philox_offset)``;
+        the extras are consumed by backward and marked non-differentiable.
+        """
+        (
+            output,
+            log_sumexp,
+            philox_seed,
+            philox_offset,
+        ) = aten._scaled_dot_product_efficient_attention(
+            q,
+            k,
+            v,
+            None,
+            compute_log_sumexp=True,
+            **attn_args,
+        )
+
+        # The kernel pads log_sumexp's sequence dim to an alignment multiple;
+        # combine over the valid region only.
+        s_q = q.shape[2]
+        valid_lse = log_sumexp[..., :s_q]
+
+        mesh_size = mesh.size(0)
+        gathered_lse = funcol.all_gather_tensor(
+            valid_lse.contiguous(), gather_dim=0, group=(mesh, 0)
+        )
+        if isinstance(gathered_lse, funcol.AsyncCollectiveTensor):
+            gathered_lse = gathered_lse.wait()
+        global_log_sumexp = torch.logsumexp(
+            gathered_lse.view(mesh_size, *valid_lse.shape), dim=0
+        )
+
+        rescaled = output * torch.exp(valid_lse - global_log_sumexp).unsqueeze(-1)
+        global_output = funcol.all_reduce(rescaled, "sum", (mesh, 0))
+        if isinstance(global_output, funcol.AsyncCollectiveTensor):
+            global_output = global_output.wait()
+
+        # The backward kernel expects log_sumexp in the forward kernel's
+        # (padded) layout: embed the combined values in the valid region and
+        # leave the padding as-is.
+        if log_sumexp.shape[-1] != s_q:
+            lse_for_backward = log_sumexp.clone()
+            lse_for_backward[..., :s_q] = global_log_sumexp
+        else:
+            lse_for_backward = global_log_sumexp
+
+        return global_output, lse_for_backward, philox_seed, philox_offset
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        r"""Save inputs and the combined stats for the backward pass."""
+        q, k, v, mesh, attn_args = inputs
+        global_output, global_log_sumexp, philox_seed, philox_offset = output
+        ctx.save_for_backward(
+            q, k, v, global_output, global_log_sumexp, philox_seed, philox_offset
+        )
+        ctx.mesh = mesh
+        ctx.attn_args = attn_args
+        ctx.mark_non_differentiable(global_log_sumexp, philox_seed, philox_offset)
+
+    @staticmethod
+    def backward(
+        ctx,
+        grad_output: torch.Tensor,
+        _grad_log_sumexp: torch.Tensor | None = None,
+        _grad_philox_seed: torch.Tensor | None = None,
+        _grad_philox_offset: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, None, None]:
+        q, k, v, output, log_sumexp, philox_seed, philox_offset = ctx.saved_tensors
+
+        (
+            grad_q,
+            grad_k,
+            grad_v,
+            _grad_attn_mask,
+        ) = aten._scaled_dot_product_efficient_attention_backward(
+            grad_output.contiguous(),
+            q,
+            k,
+            v,
+            None,
+            output,
+            log_sumexp,
+            philox_seed,
+            philox_offset,
+            grad_input_mask=(True, True, True, False),
+            **ctx.attn_args,
+        )
+
+        # Every K/V block contributes to the (replicated) queries' gradient.
+        grad_q = funcol.all_reduce(grad_q.contiguous(), "sum", (ctx.mesh, 0))
+        if isinstance(grad_q, funcol.AsyncCollectiveTensor):
+            grad_q = grad_q.wait()
+
+        # The backward kernel returns grads in its BSHD layout; the upstream
+        # graph folded contiguous forward tensors, so hand back grads in the
+        # layout it recorded against.
+        return grad_q, grad_k.contiguous(), grad_v.contiguous(), None, None
+
+
 def sdpa_wrapper(
     func: Callable,
     types: tuple[Any, ...],
@@ -834,6 +969,20 @@ def sdpa_wrapper(
     kwargs: dict[str, Any],
 ) -> ShardTensor:  # noqa: C901
     r"""Wrapper for ``torch.nn.functional.scaled_dot_product_attention`` to support sharded tensors.
+
+    Two rules govern every placement combination (S_q and S_kv are
+    independent throughout, so cross-attention is supported everywhere):
+
+    1. The output follows q. q never moves; a sharded q parallelizes
+       attention rows across ranks.
+    2. The K/V placement decides communication. Sharded K/V blocks must be
+       accumulated with the log-sum-exp combine: a ring when q is also
+       sharded (each q block must visit every K/V block), a single static
+       fold when q is replicated (every rank already holds all of q and
+       one K/V block). Replicated K/V needs no forward communication; the
+       only distributed concern is backward, where dK/dV are partial sums
+       over q's shards and need an all-reduce -- and only when q is
+       sharded (with q replicated, every rank computes identical grads).
 
     Parameters
     ----------
@@ -859,51 +1008,136 @@ def sdpa_wrapper(
 
     q, k, v, attn_mask, kwargs = repackage_sdpa_args(*args, **kwargs)
 
-    # Make sure all tensors are on the same mesh
+    # Resolve pending reductions before inspecting placements, as the DTensor
+    # dispatcher would have. Only Partial is rewritten; Shard stays sharded.
+    def resolve_partial(t):
+        if t is None or not hasattr(t, "_spec"):
+            return t
+        if any(p.is_partial() for p in t._spec.placements):
+            t = t.redistribute(
+                placements=tuple(
+                    Replicate() if p.is_partial() else p for p in t._spec.placements
+                )
+            )
+        return t
+
+    q = resolve_partial(q)
+    k = resolve_partial(k)
+    v = resolve_partial(v)
+    attn_mask = resolve_partial(attn_mask)
+
     if not (q._spec.mesh == k._spec.mesh == v._spec.mesh):
         raise MissingShardPatch("q, k, and v must all be on the same mesh")
-
-    # Make sure the mesh is 1D
     if q._spec.mesh.ndim != 1:
         raise MissingShardPatch("q must be on a 1D mesh")
 
-    # This is to implement sequence-parallel attention.
-    # Make sure the shardings are all the same:
-    if not (q._spec.placements[0] == k._spec.placements[0] == v._spec.placements[0]):
-        raise MissingShardPatch("q, k, and v must all be on the same placement")
+    q_placement = q._spec.placements[0]
+    k_placement = k._spec.placements[0]
+    v_placement = v._spec.placements[0]
 
-    # Make sure the attention mask, if provided, has the same placement as q, k, and v
-    if attn_mask is not None and hasattr(attn_mask, "_spec"):
-        if attn_mask._spec.placements[0] != q._spec.placements[0]:
-            raise MissingShardPatch(
-                "attn_mask must have the same placement as q, k, and v"
+    if k_placement != v_placement:
+        raise MissingShardPatch("k and v must have the same placement")
+    if q_placement.is_shard() and q_placement.dim != 2:
+        raise MissingShardPatch("q may only be sharded on the sequence dim (2)")
+    if k_placement.is_shard() and k_placement.dim != 2:
+        raise MissingShardPatch("k/v may only be sharded on the sequence dim (2)")
+
+    mesh = q._spec.mesh
+    q_sharded = q_placement.is_shard()
+    kv_sharded = k_placement.is_shard()
+
+    def wrap_output_like_q(local_output: torch.Tensor) -> ShardTensor:
+        # Rule 1: the output carries q's placement. Its shape follows q on
+        # (B, H, S) and v on the head dim.
+        #
+        # SDPA kernels return BSHD-contiguous memory viewed as BHSD, while
+        # from_local's spec inference claims C-contiguous strides; make the
+        # data match the claim.
+        local_output = local_output.contiguous()
+        if q_sharded:
+            q_shard_shapes = q._spec.sharding_shapes()[0]
+            output_shard_shapes = {
+                0: [tuple(s[:-1]) + (v.shape[-1],) for s in q_shard_shapes]
+            }
+            return ShardTensor.from_local(
+                local_output,
+                mesh,
+                q._spec.placements,
+                sharding_shapes=output_shard_shapes,
             )
+        return ShardTensor.from_local(local_output, mesh, q._spec.placements)
 
-    # if the placements are replicated (which is what we expect in transolver's
-    # Physics Attention)
-    # then just run locally and convert the output back to a replicated tensor:
+    # --- Replicated K/V: attention is local over the full K/V set. ----------
+    if not kv_sharded:
+        if q_sharded and kwargs["is_causal"]:
+            # The local kernel would mask against shard-local row indices.
+            raise MissingShardPatch(
+                "is_causal is not supported with sharded q and replicated k/v"
+            )
+        # A mask indexes (..., S_q, S_kv): its rows must be laid out like q.
+        if attn_mask is not None and hasattr(attn_mask, "_spec"):
+            if attn_mask._spec.placements[0] != q_placement:
+                raise MissingShardPatch("attn_mask must share q's placement")
+        local_mask = (
+            attn_mask.to_local() if hasattr(attn_mask, "to_local") else attn_mask
+        )
 
-    if v._spec.placements[0].is_replicate():
-        local_q = q.to_local()
         local_k = k.to_local()
         local_v = v.to_local()
-        if attn_mask is not None:
-            local_attn_mask = attn_mask.to_local()
-        else:
-            local_attn_mask = None
-        local_output = torch.nn.functional.scaled_dot_product_attention(
-            local_q, local_k, local_v, attn_mask=local_attn_mask, **kwargs
-        )
+        if q_sharded:
+            # Rule 2 backward clause: dK/dV are partial sums over q's shards.
+            local_k = GradReducer.apply(local_k, q._spec)
+            local_v = GradReducer.apply(local_v, q._spec)
 
-        output = ShardTensor.from_local(
-            local_output,
-            q._spec.mesh,
-            q._spec.placements,
-            # We don't have to worry about sharding shapes here since it's not sharded ...
+        local_output = torch.nn.functional.scaled_dot_product_attention(
+            ContiguousGrad.apply(q.to_local()),
+            ContiguousGrad.apply(local_k),
+            ContiguousGrad.apply(local_v),
+            attn_mask=local_mask,
+            **kwargs,
         )
-        return output
-    else:
+        return wrap_output_like_q(local_output)
+
+    # --- Sharded K/V: blocks accumulate via the log-sum-exp combine. --------
+    if q_sharded:
+        # Ring: rotate K/V blocks past each q shard.
+        if kwargs["is_causal"]:
+            # Each ring block would apply a locally-anchored causal mask.
+            raise MissingShardPatch(
+                "is_causal is not supported with sharded q and sharded k/v"
+            )
+        if kwargs["dropout_p"] != 0.0:
+            # The ring saves one philox seed/offset for backward, so per-block
+            # dropout masks cannot be recomputed faithfully.
+            raise MissingShardPatch(
+                "dropout is not supported with sharded q and sharded k/v"
+            )
+        if attn_mask is not None and hasattr(attn_mask, "_spec"):
+            if attn_mask._spec.placements[0] != q_placement:
+                raise MissingShardPatch("attn_mask must share q's placement")
         return ring_sdpa(q, k, v, attn_mask, **kwargs)
+
+    # Static fold: full q everywhere, one K/V block per rank, no rotation.
+    if attn_mask is not None:
+        raise MissingShardPatch(
+            "attn_mask is not supported with replicated q and sharded k/v"
+        )
+    if kwargs["is_causal"]:
+        raise MissingShardPatch(
+            "is_causal is not supported with replicated q and sharded k/v"
+        )
+    if kwargs["dropout_p"] != 0.0:
+        raise MissingShardPatch(
+            "dropout is not supported with replicated q and sharded k/v"
+        )
+    local_output, _lse, _seed, _offset = ReplicatedQSDPA.apply(
+        q.to_local().contiguous(),
+        k.to_local().contiguous(),
+        v.to_local().contiguous(),
+        mesh,
+        kwargs,
+    )
+    return wrap_output_like_q(local_output)
 
 
 def repackage_sdpa_args(

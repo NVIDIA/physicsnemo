@@ -55,7 +55,7 @@ def test_local_package_checksum(tmp_path: Path):
     content = b"local package content"
     file_path = tmp_path / "model.pt"
     file_path.write_bytes(content)
-    package = filesystem.Package(str(tmp_path), seperator="/")
+    package = filesystem.Package(str(tmp_path), seperator=os.sep)
 
     path = package.get("model.pt", checksum=hashlib.sha256(content).hexdigest())
     assert path == str(file_path)

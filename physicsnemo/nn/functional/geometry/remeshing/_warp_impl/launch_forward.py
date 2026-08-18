@@ -39,6 +39,8 @@ from ._kernels import (
 
 wp.init()
 
+_MAX_AUTOMATIC_SEARCH_RADIUS_SCALE = 12.0
+
 
 def _wp_view(tensor: torch.Tensor, dtype):  # noqa: ANN001, ANN202
     """Return a zero-copy Warp launch descriptor for a detached tensor."""
@@ -65,14 +67,14 @@ def _sample_remeshing_seeds(
 
 def _select_fps_centroids(
     points: torch.Tensor,
-    vertex_areas: torch.Tensor,
+    vertex_masses: torch.Tensor,
     n_clusters: int,
     farthest_point_oversampling: int,
 ) -> torch.Tensor:
-    """Select high-quality seeds with FPS over an area-weighted candidate set."""
+    """Select high-quality seeds with FPS over a mass-weighted candidate set."""
     candidate_count = min(points.shape[0], farthest_point_oversampling * n_clusters)
     candidate_indices = _sample_remeshing_seeds(
-        vertex_areas,
+        vertex_masses,
         candidate_count,
     )
     candidates = points[candidate_indices]
@@ -82,6 +84,25 @@ def _select_fps_centroids(
         random_start=False,
     )
     return candidates[selected].clone()
+
+
+def _adaptive_seed_masses_and_radius_factor(
+    vertex_areas: torch.Tensor,
+    vertex_masses: torch.Tensor,
+) -> tuple[torch.Tensor, float]:
+    """Return ideal 2D generator masses and low-density spacing factor."""
+    positive_area = vertex_areas > 0.0
+    density = (
+        vertex_masses[positive_area]
+        / vertex_areas[positive_area].clamp_min(torch.finfo(torch.float32).tiny)
+    ).clamp_min(torch.finfo(torch.float32).tiny)
+    generator_density = torch.sqrt(density)
+    seed_masses = torch.zeros_like(vertex_masses)
+    seed_masses[positive_area] = vertex_areas[positive_area] * generator_density
+
+    mean_generator_density = seed_masses.sum() / vertex_areas.sum()
+    radius_factor = torch.sqrt(mean_generator_density / generator_density.amin())
+    return seed_masses, float(radius_factor.item())
 
 
 def _voxel_representatives(
@@ -132,7 +153,7 @@ def _voxel_representatives(
 
 def _select_stratified_centroids(
     points: torch.Tensor,
-    vertex_areas: torch.Tensor,
+    vertex_masses: torch.Tensor,
     n_clusters: int,
     total_area: float,
     voxel_width_scale: float,
@@ -158,7 +179,9 @@ def _select_stratified_centroids(
     if representatives.numel() > n_clusters:
         generator = torch.Generator(device=points.device).manual_seed(0)
         selection = torch.randperm(
-            representatives.numel(), device=points.device, generator=generator
+            representatives.numel(),
+            device=points.device,
+            generator=generator,
         )[:n_clusters]
         representatives = representatives[selection]
     elif representatives.numel() < n_clusters:
@@ -170,7 +193,7 @@ def _select_stratified_centroids(
         remaining = torch.nonzero(available, as_tuple=False).flatten()
         fill = remaining[
             _sample_remeshing_seeds(
-                vertex_areas[remaining],
+                vertex_masses[remaining],
                 n_clusters - representatives.numel(),
             )
         ]
@@ -315,12 +338,14 @@ def _build_output_tensors(
     source_points: torch.Tensor,
     source_cells: torch.Tensor,
     centroids: torch.Tensor,
+    source_faces: torch.Tensor,
+    barycentric_coordinates: torch.Tensor,
     labels: torch.Tensor,
     n_clusters: int,
     normalization_center: torch.Tensor,
     normalization_scale: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Reconstruct, clean, and compact triangle connectivity."""
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Reconstruct topology and compact projection provenance with vertices."""
     mapped_cells = labels.to(torch.int64)[source_cells.to(torch.int64)]
     output_cells = _deduplicate_faces(mapped_cells, n_clusters)
     if output_cells.numel() == 0:
@@ -360,7 +385,14 @@ def _build_output_tensors(
     output_points = output_points * normalization_scale + normalization_center
     output_points = output_points.to(dtype=source_points.dtype)
     output_cells = compact_cells.reshape(-1, 3).to(dtype=torch.int64)
-    return output_points, output_cells
+    output_source_faces = source_faces[used_centroids].to(dtype=torch.int64)
+    output_barycentric_coordinates = barycentric_coordinates[used_centroids]
+    return (
+        output_points,
+        output_cells,
+        output_source_faces,
+        output_barycentric_coordinates,
+    )
 
 
 def _normalize_points_for_warp(
@@ -399,18 +431,49 @@ def _normalize_points_for_warp(
     )
 
 
+def _apply_vertex_density(
+    vertex_areas: torch.Tensor,
+    vertex_density: torch.Tensor | None,
+    total_area: float,
+    density_exponent: float = 1.0,
+    density_name: str = "vertex_density",
+) -> tuple[torch.Tensor, bool]:
+    """Convert relative density into stable CVT integration masses."""
+    if vertex_density is None:
+        return vertex_areas, False
+
+    density = vertex_density.detach()
+    if density.element_size() < 4:
+        density = density.to(torch.float32)
+    density = density / density.amax()
+    if density_exponent != 1.0:
+        density = density.pow(density_exponent)
+    density = density.to(dtype=torch.float32)
+    density = density.clamp_min(torch.finfo(torch.float32).tiny)
+    vertex_masses = vertex_areas * density
+    vertex_masses = vertex_masses * (total_area / vertex_masses.sum())
+    if not bool(torch.isfinite(vertex_masses).all()):
+        raise ValueError(
+            f"{density_name} has a dynamic range that cannot be represented "
+            "during float32 Warp remeshing"
+        )
+    return vertex_masses, True
+
+
 def launch_remeshing(
     mesh_vertices: torch.Tensor,
     mesh_indices: torch.Tensor,
     n_clusters: int,
     *,
+    vertex_density: torch.Tensor | None,
+    vertex_density_exponent: float,
     max_iterations: int,
     search_radius_scale: float,
     voxel_width_scale: float,
     hash_grid_resolution: int,
     farthest_point_threshold: int,
     farthest_point_oversampling: int,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Remesh a triangle surface with Warp CVT clustering."""
     (
         points,
@@ -441,18 +504,42 @@ def launch_remeshing(
     total_area = float(vertex_areas.sum().item())
     if not math.isfinite(total_area) or total_area <= 0.0:
         raise ValueError("mesh must have positive finite surface area")
+    density_name = (
+        "resolution_field" if vertex_density_exponent == 4.0 else "vertex_density"
+    )
+    vertex_masses, adaptive_density = _apply_vertex_density(
+        vertex_areas,
+        vertex_density,
+        total_area,
+        vertex_density_exponent,
+        density_name,
+    )
+    if adaptive_density:
+        adaptive_seed_masses, adaptive_radius_factor = (
+            _adaptive_seed_masses_and_radius_factor(
+                vertex_areas,
+                vertex_masses,
+            )
+        )
+    else:
+        adaptive_seed_masses = vertex_masses
+        adaptive_radius_factor = 1.0
 
     if n_clusters <= farthest_point_threshold:
         centroids = _select_fps_centroids(
             points,
-            vertex_areas,
+            vertex_masses,
             n_clusters,
             farthest_point_oversampling,
         )
+    elif adaptive_density:
+        centroids = points[
+            _sample_remeshing_seeds(adaptive_seed_masses, n_clusters)
+        ].clone()
     else:
         centroids = _select_stratified_centroids(
             points,
-            vertex_areas,
+            vertex_masses,
             n_clusters,
             total_area,
             voxel_width_scale,
@@ -465,8 +552,16 @@ def launch_remeshing(
         n_clusters, 3, dtype=torch.float32, device=points.device
     )
     centroid_areas = torch.zeros(n_clusters, dtype=torch.float32, device=points.device)
+    # Density-aware allocation creates wider centroid gaps in low-density
+    # regions. Expand the hash query to the largest expected local spacing so
+    # those vertices avoid the quadratic brute-force fallback. The automatic
+    # adjustment never reduces a user-supplied scale.
+    effective_search_radius_scale = min(
+        search_radius_scale * adaptive_radius_factor,
+        max(search_radius_scale, _MAX_AUTOMATIC_SEARCH_RADIUS_SCALE),
+    )
     search_radius = max(
-        search_radius_scale * math.sqrt(total_area / n_clusters),
+        effective_search_radius_scale * math.sqrt(total_area / n_clusters),
         torch.finfo(torch.float32).tiny,
     )
 
@@ -485,7 +580,7 @@ def launch_remeshing(
             centroid_grid.id,
             _wp_view(points, wp.vec3f),
             _wp_view(centroids, wp.vec3f),
-            _wp_view(vertex_areas, wp.float32),
+            _wp_view(vertex_masses, wp.float32),
             _wp_view(labels, wp.int32),
             _wp_view(centroid_sums, wp.float32),
             _wp_view(centroid_areas, wp.float32),
@@ -534,12 +629,26 @@ def launch_remeshing(
             points=wp_points,
             indices=wp.from_torch(flat_cells, dtype=wp.int32),
         )
+        source_faces = torch.full(
+            (n_clusters,),
+            -1,
+            dtype=torch.int32,
+            device=points.device,
+        )
+        barycentric_coordinates = torch.full(
+            (n_clusters, 3),
+            torch.nan,
+            dtype=torch.float32,
+            device=points.device,
+        )
         wp.launch(
             project_centroids_to_surface,
             dim=n_clusters,
             inputs=[
                 source_surface.id,
                 _wp_view(centroids, wp.vec3f),
+                _wp_view(source_faces, wp.int32),
+                _wp_view(barycentric_coordinates, wp.vec3f),
                 float(1.0e30),
             ],
             device=wp_launch_device,
@@ -550,6 +659,8 @@ def launch_remeshing(
         mesh_vertices,
         mesh_indices,
         centroids,
+        source_faces,
+        barycentric_coordinates,
         labels,
         n_clusters,
         normalization_center,

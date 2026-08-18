@@ -177,9 +177,16 @@ class _ShardTensorToDTensor(torch.autograd.Function):
         # Keep the cached uneven sharding shapes, but adopt the gradient's
         # placements so a Replicate->Partial flip isn't dropped (which would
         # skip the all-reduce at the plain-tensor boundary). Shard dims are
-        # unchanged, so the cached shard shapes stay valid.
-        if grad_placements != tuple(cached_spec.placements):
-            cached_spec = dataclasses.replace(cached_spec, placements=grad_placements)
+        # unchanged, so the cached shard shapes stay valid. Likewise adopt
+        # the gradient's tensor_meta: the grad shares the primal's shape but
+        # not necessarily its stride (grad-of-permute is permute-of-grad),
+        # and stamping the primal's stride onto differently-laid-out grad
+        # memory breaks downstream .view() calls.
+        cached_spec = dataclasses.replace(
+            cached_spec,
+            placements=grad_placements,
+            tensor_meta=grad_output._spec.tensor_meta,
+        )
         return (_dtensor_to_shard_tensor(grad_output, cached_spec),)
 
 
@@ -204,13 +211,19 @@ def _resolve_spec_for_dtensor(
             and dtensor._spec.placements == arg._spec.placements
         ):
             return arg._spec
-    return _infer_shard_tensor_spec_from_local_chunks(
+    spec = _infer_shard_tensor_spec_from_local_chunks(
         dtensor._local_tensor,
         dtensor._spec.mesh,
         dtensor._spec.placements,
         sharding_shapes="chunk",
         global_shape=dtensor.shape,
     )
+    # Adopt the result's own tensor_meta: chunk inference fabricates a
+    # C-contiguous stride, which is wrong for non-contiguous results (e.g.
+    # permute). A lying stride makes the wrapper report is_contiguous()=True
+    # -- .contiguous() becomes a no-op -- and downstream .view() calls fail
+    # against the actual local layout.
+    return dataclasses.replace(spec, tensor_meta=dtensor._spec.tensor_meta)
 
 
 # This is a thread-safe reentry guard.
@@ -278,6 +291,49 @@ def _promote_plain_tensor_to_dtensor(tensor: torch.Tensor, mesh: DeviceMesh) -> 
         )
     placements = [Replicate()] * mesh.ndim
     return DTensor.from_local(tensor, mesh, placements)
+
+
+def _promote_plain_handler_args(
+    args: tuple[object, ...], kwargs: dict[str, object]
+) -> tuple[tuple[object, ...], dict[str, object]]:
+    r"""Promote plain tensors in handler args to ``Replicate`` DTensors.
+
+    Applied in ``__torch_function__`` before every registered function
+    handler, so handlers uniformly see distributed tensors with a ``_spec``
+    -- the same contract the DTensor fallback provides via
+    ``_convert_args_to_dtensor``, and with the same rules: promotion honors
+    the promotion mode (no-op when ``DISABLED``), requires a reference mesh
+    from an accompanying ShardTensor, exempts scalar (0-dim) tensors (which
+    distributed ops handle natively), and promotes only exact
+    ``torch.Tensor`` / ``nn.Parameter`` instances. Reuses
+    :func:`_promote_plain_tensor_to_dtensor`, including its differentiable
+    ``from_local`` bridge back to the plain tensor (e.g. a DDP-replicated
+    parameter like FLARE's ``q_global``). Walks only the top level of
+    ``args``/``kwargs``.
+    """
+    if ShardTensor._promotion_mode is TensorPromotionMode.DISABLED:
+        return args, kwargs
+
+    mesh = _find_mesh_in_args(args, kwargs)
+    if mesh is None:
+        return args, kwargs
+
+    def promote(obj: object) -> object:
+        # Exact types only: a tensor subclass with its own dispatch behavior
+        # (AsyncCollectiveTensor, functional-tensor wrappers, ...) wrapped in
+        # a DTensor nests distributed wrappers, and view ops on the nested
+        # tensor re-enter this dispatch without terminating.
+        if type(obj) in (torch.Tensor, torch.nn.Parameter) and obj.ndim > 0:
+            return _promote_plain_tensor_to_dtensor(obj, mesh)
+        return obj
+
+    # Same guard the fallback's conversions run under: ops that
+    # DTensor.from_local performs on its input (view_as) must pass through
+    # __torch_function__ plainly, not recurse into handlers or the fallback.
+    with _conversion_scope():
+        return tuple(promote(a) for a in args), {
+            k: promote(v) for k, v in kwargs.items()
+        }
 
 
 def _dispatch_fallback_via_dtensor(
@@ -812,6 +868,12 @@ class ShardTensor(torch.Tensor):
     def register_function_handler(cls, func: Callable, handler: Callable) -> None:
         r"""Register a handler for a Python-level function or method.
 
+        Before the handler is called, plain non-scalar ``torch.Tensor``
+        arguments are promoted to ``Replicate`` DTensors on the mesh of the
+        accompanying ShardTensor arguments (honoring the promotion mode) --
+        the same contract the DTensor fallback provides -- so handlers
+        uniformly receive distributed tensors with a ``_spec``.
+
         Parameters
         ----------
         func : Callable
@@ -1137,10 +1199,15 @@ class ShardTensor(torch.Tensor):
 
     @requires_grad.setter
     def requires_grad(self, value: bool) -> None:
-        """Set ``requires_grad`` on both the wrapper and the local tensor."""
+        """Set ``requires_grad`` on both the wrapper and the local tensor.
+
+        Skip the local write when it's a no-op: a non-leaf local (e.g. the
+        fake tensor dynamo traces) rejects any requires_grad write.
+        """
         with torch._C.DisableTorchFunctionSubclass():
             torch.Tensor.requires_grad.__set__(self, value)
-        self._local_tensor.requires_grad = value
+        if self._local_tensor.requires_grad != value:
+            self._local_tensor.requires_grad = value
 
     def requires_grad_(self, requires_grad: bool = True) -> "ShardTensor":
         """Set ``requires_grad`` in-place on both the wrapper and local tensor.
@@ -1157,7 +1224,8 @@ class ShardTensor(torch.Tensor):
         """
         with torch._C.DisableTorchFunctionSubclass():
             torch.Tensor.requires_grad.__set__(self, requires_grad)
-        self._local_tensor.requires_grad_(requires_grad)
+        if self._local_tensor.requires_grad != requires_grad:
+            self._local_tensor.requires_grad_(requires_grad)
         return self
 
     @property  # type: ignore[override]
@@ -1299,8 +1367,10 @@ class ShardTensor(torch.Tensor):
             with torch._C.DisableTorchFunctionSubclass():
                 return func(*args, **kwargs)
         if func in cls._function_registry and cls._enable_shard_patches:
+            args, kwargs = _promote_plain_handler_args(args, kwargs)
             return cls._function_registry[func](func, types, args, kwargs)
         if str(func) in cls._named_function_registry and cls._enable_shard_patches:
+            args, kwargs = _promote_plain_handler_args(args, kwargs)
             return cls._named_function_registry[str(func)](func, types, args, kwargs)
         res = _torch_function_fallback_via_dtensor(func, args, kwargs)
         return res

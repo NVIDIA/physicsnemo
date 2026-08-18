@@ -89,8 +89,8 @@ performance benefits.
   (interpolating) schemes
 - **Smoothing**: [Laplacian smoothing](https://en.wikipedia.org/wiki/Laplacian_smoothing)
   with feature preservation
-- **Remeshing**: Uniform Warp-based remeshing on CPU and CUDA for triangle
-  surfaces embedded in 3D
+- **Remeshing**: Warp-based uniform and field-controlled remeshing on CPU and
+  CUDA, with barycentric point-data transfer
 - **Repair**: Remove duplicates, fix orientation, fill holes, clean topology
 - **Deformation**: Dense point displacement, Sobolev-filtered deformation,
   sparse compact control-point deformation, global radial-basis deformation,
@@ -311,6 +311,8 @@ Comprehensive overview of PhysicsNeMo-Mesh capabilities:
 | Laplacian smoothing | ✅ | |
 | **Remeshing** | | |
 | Uniform remeshing | ✅ | Warp (CPU and CUDA) |
+| Resolution-field control | ✅ | Relative linear resolution per vertex |
+| Point-data transfer | ✅ | Autograd with respect to source field values |
 | **Tessellation** | | |
 | Polygon-soup triangulation | ✅ | Convex fan + ear-clip; `Mesh.from_polygons` |
 | **Spatial Queries** | | |
@@ -498,19 +500,43 @@ coarse = mesh.remesh(n_clusters=1_000)
 # Move the mesh to CUDA first to accelerate large inputs.
 coarse_cuda = mesh.to("cuda").remesh(n_clusters=1_000)
 
+# Transfer selected floating-point fields to the new vertices.
+mesh.point_data["temperature"] = mesh.points[:, 2]
+coarse_with_data = mesh.remesh(
+    n_clusters=1_000,
+    transfer_point_data=["temperature"],
+)
+
+# Request higher linear resolution away from x=0.
+resolution = 1.0 + 1.5 * mesh.points[:, 0].square()
+adaptive = mesh.remesh(
+    n_clusters=1_000,
+    resolution_field=resolution,
+    transfer_point_data=["temperature"],
+)
+
 # Backend tuning is available through the advanced tensor functional.
 from physicsnemo.nn.functional.geometry.remeshing import remeshing
 
+linear_resolution = resolution
+if linear_resolution.element_size() < 4:
+    linear_resolution = linear_resolution.to(torch.float32)
+normalized_resolution = linear_resolution / linear_resolution.amax()
 tuned_points, tuned_cells = remeshing(
     mesh.points,
     mesh.cells,
     n_clusters=1_000,
+    vertex_density=normalized_resolution.pow(4),
     search_radius_scale=2.0,
 )
 ```
 
 Remeshing currently supports triangle surfaces embedded in 3D. It creates new
-topology, so point and cell data are discarded. Global data is preserved.
+topology. Selected real floating-point fields can be interpolated from the
+original surface. Cell data and unselected point data are discarded. Global
+data is preserved. The high-level resolution field is a relative
+inverse-edge-length multiplier. The low-level `vertex_density` parameter
+accepts the corresponding raw CVT integration density.
 
 ### Discrete Calculus
 
