@@ -17,12 +17,15 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import torch
 import torch.nn.functional as F
+from jaxtyping import Float
 
-from physicsnemo.core import ModelMetaData, Module
+from physicsnemo.core.meta import ModelMetaData
+from physicsnemo.core.module import Module
 from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
 
 
@@ -39,6 +42,25 @@ def nested_to(
     return x.to(**kwargs)
 
 
+@dataclass
+class MetaData(ModelMetaData):
+    """Capability flags shared by all FGN backbone classes."""
+
+    # Optimization
+    jit: bool = False
+    cuda_graphs: bool = False
+    amp_cpu: bool = False
+    amp_gpu: bool = True
+    torch_fx: bool = False
+    # Data type
+    bf16: bool = True
+    # Inference
+    onnx: bool = False
+    # Physics informed
+    func_torch: bool = False
+    auto_grad: bool = False
+
+
 class FGNDiT(Module, register=True):
     r"""DiT-based backbone for FGN (arXiv:2506.10772 §2.3).
 
@@ -52,19 +74,19 @@ class FGNDiT(Module, register=True):
     Parameters
     ----------
     state_channels : int
-        Number of prognostic channels C.
+        Number of prognostic channels :math:`C`.
     history_frames : int, optional, default=2
-        Number of past frames T concatenated as input.
+        Number of past frames :math:`T` concatenated as input.
     background_channels : int, optional, default=0
         Slowly-varying background channels (e.g. SST).
     invariant_channels : int, optional, default=0
         Static invariant channels (e.g. orography, land-sea mask).
     latent_dim : int, optional, default=32
-        Dimension of z (paper §2.3 uses 32).
+        Dimension of :math:`z` (paper §2.3 uses 32).
     input_height, input_width : int
         Spatial dimensions of the input grid (default 721×1440 for 0.25° ERA5).
     patch_size : int or (int, int), optional, default=(4, 4)
-        Spatial patch size.  (4,4) → 181×360 = 65k tokens (16× compression).
+        Spatial patch size.  ``(4, 4)`` → 181×360 = 65 k tokens (16× compression).
     hidden_size : int, optional, default=384
         Transformer hidden dimension.
     depth : int, optional, default=12
@@ -79,6 +101,36 @@ class FGNDiT(Module, register=True):
         Detokenizer variant.  ``"proj_reshape_2d_conv"`` adds a zero-init
         residual conv head after unprojection to suppress checkerboard
         artifacts on spiky channels (e.g. precipitation, vertical velocity).
+
+    Forward
+    -------
+    history : torch.Tensor
+        History state of shape :math:`(B, T, C, H, W)`.
+    latent : torch.Tensor
+        Noise latent of shape :math:`(B, latent\_dim)`.
+    background : torch.Tensor, optional
+        Background channels of shape :math:`(B, C_{bg}, H, W)`.
+    invariants : torch.Tensor, optional
+        Static invariant channels of shape :math:`(B, C_{inv}, H, W)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Predicted next state of shape :math:`(B, C, H, W)`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from utils.nn import FGNDiT
+    >>> model = FGNDiT(state_channels=3, history_frames=2, latent_dim=4,
+    ...                input_height=8, input_width=16,
+    ...                patch_size=(2, 2), hidden_size=16, depth=2, num_heads=2,
+    ...                attention_backend="timm")
+    >>> history = torch.randn(1, 2, 3, 8, 16)
+    >>> latent = torch.randn(1, 4)
+    >>> out = model(history, latent)
+    >>> out.shape
+    torch.Size([1, 3, 8, 16])
     """
 
     def __init__(
@@ -103,7 +155,7 @@ class FGNDiT(Module, register=True):
     ):
         from physicsnemo.models.dit import DiT
 
-        super().__init__(meta=ModelMetaData())
+        super().__init__(meta=MetaData())
         self.state_channels = state_channels
         self.history_frames = history_frames
         self.background_channels = background_channels
@@ -149,17 +201,28 @@ class FGNDiT(Module, register=True):
 
     def forward(
         self,
-        history: torch.Tensor,
-        latent: torch.Tensor,
-        background: torch.Tensor | None = None,
-        invariants: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        if history.ndim != 5:
-            raise ValueError("history must have shape [B, T, C, H, W]")
-        batch, frames, channels, height, width = history.shape
-        if frames != self.history_frames or channels != self.state_channels:
-            raise ValueError("history shape does not match model configuration")
+        history: Float[torch.Tensor, "B T C H W"],
+        latent: Float[torch.Tensor, "B latent_dim"],
+        background: Float[torch.Tensor, "B C_bg H W"] | None = None,
+        invariants: Float[torch.Tensor, "B C_inv H W"] | None = None,
+    ) -> Float[torch.Tensor, "B C H W"]:
+        r"""Run a forward pass of the FGN DiT backbone."""
+        if not torch.compiler.is_compiling():
+            if history.ndim != 5:
+                raise ValueError(
+                    f"Expected history of shape (B, T, C, H, W), "
+                    f"got {tuple(history.shape)}"
+                )
+            if (
+                history.shape[1] != self.history_frames
+                or history.shape[2] != self.state_channels
+            ):
+                raise ValueError(
+                    f"Expected history frames={self.history_frames}, "
+                    f"channels={self.state_channels}, got shape {tuple(history.shape)}"
+                )
 
+        batch, frames, channels, height, width = history.shape
         pieces = [history.reshape(batch, frames * channels, height, width)]
         if background is not None:
             pieces.append(background)
@@ -187,27 +250,28 @@ class FGNGraphCast(Module, register=True):
     r"""Grid-Mesh-Grid GNN backbone for FGN (arXiv:2506.10772 §2.3).
 
     Wraps PhysicsNeMo's ``GraphCastNet`` (icosahedral grid-mesh-grid GNN) with
-    FGN's stochastic latent conditioning.  The latent vector ``z~N(0,I)^latent_dim``
-    is spatially broadcast to ``(B, latent_dim, H, W)`` and concatenated with
-    the other input channels before the encoder, making every grid node aware of
-    the global noise draw.
+    FGN's stochastic latent conditioning.  The latent vector
+    ``z ~ N(0,I)^latent_dim`` is broadcast to shape
+    :math:`(B, latent\_dim, H, W)` and concatenated with the other input
+    channels before the encoder, making every grid node aware of the global
+    noise draw.
 
     Parameters
     ----------
     state_channels : int
-        Number of prognostic state channels.
+        Number of prognostic state channels :math:`C`.
     history_frames : int, optional, default=2
-        Number of past frames concatenated as input.
+        Number of past frames :math:`T` concatenated as input.
     background_channels : int, optional, default=0
         Slowly-varying background channels (e.g. SST).
     invariant_channels : int, optional, default=0
         Static invariant channels (e.g. orography, land-sea mask).
     latent_dim : int, optional, default=32
-        Dimension of the noise latent z.
+        Dimension of the noise latent :math:`z`.
     input_res : tuple[int, int], optional, default=(721, 1440)
-        Spatial (H, W) resolution of the lat-lon grid.
+        Spatial :math:`(H, W)` resolution of the lat-lon grid.
     mesh_level : int, optional, default=6
-        Icosahedral mesh refinement level (6 → ~40 km resolution).
+        Icosahedral mesh refinement level (6 → ≈40 km resolution).
     hidden_dim : int, optional, default=768
         Hidden dimension for all GNN layers.
     processor_layers : int, optional, default=16
@@ -217,6 +281,35 @@ class FGNGraphCast(Module, register=True):
         attention-based mesh processing.
     num_attention_heads : int, optional, default=4
         Attention heads (only used when ``processor_type="GraphTransformer"``).
+
+    Forward
+    -------
+    history : torch.Tensor
+        History state of shape :math:`(B, T, C, H, W)`.
+    latent : torch.Tensor
+        Noise latent of shape :math:`(B, latent\_dim)`.
+    background : torch.Tensor, optional
+        Background channels of shape :math:`(B, C_{bg}, H, W)`.
+    invariants : torch.Tensor, optional
+        Static invariant channels of shape :math:`(B, C_{inv}, H, W)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Predicted next state of shape :math:`(B, C, H, W)`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from utils.nn import FGNGraphCast
+    >>> model = FGNGraphCast(state_channels=3, history_frames=2, latent_dim=4,
+    ...                      input_res=(4, 8), mesh_level=3,
+    ...                      hidden_dim=16, processor_layers=3)
+    >>> history = torch.randn(1, 2, 3, 4, 8)
+    >>> latent = torch.randn(1, 4)
+    >>> out = model(history, latent)
+    >>> out.shape
+    torch.Size([1, 3, 4, 8])
     """
 
     def __init__(
@@ -235,7 +328,7 @@ class FGNGraphCast(Module, register=True):
         ] = "MessagePassing",
         num_attention_heads: int = 4,
     ):
-        super().__init__(meta=ModelMetaData())
+        super().__init__(meta=MetaData())
         self.state_channels = state_channels
         self.history_frames = history_frames
         self.background_channels = background_channels
@@ -262,26 +355,30 @@ class FGNGraphCast(Module, register=True):
 
     def forward(
         self,
-        history: torch.Tensor,
-        latent: torch.Tensor,
-        background: torch.Tensor | None = None,
-        invariants: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        if history.ndim != 5:
-            raise ValueError("history must have shape [B, T, C, H, W]")
-        batch, frames, channels, height, width = history.shape
+        history: Float[torch.Tensor, "B T C H W"],
+        latent: Float[torch.Tensor, "B latent_dim"],
+        background: Float[torch.Tensor, "B C_bg H W"] | None = None,
+        invariants: Float[torch.Tensor, "B C_inv H W"] | None = None,
+    ) -> Float[torch.Tensor, "B C H W"]:
+        r"""Run a forward pass of the FGN GraphCast backbone."""
+        if not torch.compiler.is_compiling():
+            if history.ndim != 5:
+                raise ValueError(
+                    f"Expected history of shape (B, T, C, H, W), "
+                    f"got {tuple(history.shape)}"
+                )
 
+        batch, frames, channels, height, width = history.shape
         pieces = [history.reshape(batch, frames * channels, height, width)]
         if background is not None:
             pieces.append(background)
         if invariants is not None:
             pieces.append(invariants)
-        # Broadcast z to every grid node so each location gets the global noise.
+        # Broadcast z to every grid node so each location sees the global noise.
         z_spatial = latent.unsqueeze(-1).unsqueeze(-1).expand(batch, -1, height, width)
         pieces.append(z_spatial)
         x = torch.cat(pieces, dim=1)  # (B, C_in, H, W)
 
-        # GraphCastNet returns (B, C_out, H, W) when input is (B, C_in, H, W)
         return self.backbone(x)
 
 
@@ -293,6 +390,28 @@ def build_model(
     input_height: int = 721,
     input_width: int = 1440,
 ) -> FGNDiT | FGNGraphCast:
+    """Instantiate the FGN backbone specified by ``cfg.model.backbone``.
+
+    Parameters
+    ----------
+    cfg : omegaconf.DictConfig
+        Hydra config with a ``model`` sub-config.
+    state_channels : int
+        Number of prognostic state channels.
+    background_channels : int
+        Number of slowly-varying background channels.
+    invariant_channels : int
+        Number of static invariant channels.
+    input_height : int, optional, default=721
+        Spatial height of the input grid.
+    input_width : int, optional, default=1440
+        Spatial width of the input grid.
+
+    Returns
+    -------
+    FGNDiT or FGNGraphCast
+        Constructed model.
+    """
     if cfg.model.background_channels not in ("auto", background_channels):
         raise ValueError("config model.background_channels disagrees with dataset")
     if cfg.model.invariant_channels not in ("auto", invariant_channels):
