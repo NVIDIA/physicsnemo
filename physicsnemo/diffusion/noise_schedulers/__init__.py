@@ -17,6 +17,7 @@
 from .base import NoiseScheduler  # noqa: F401
 from .edm import EDMNoiseScheduler  # noqa: F401
 from .edm_log_uniform import EDMLogUniformNoiseScheduler  # noqa: F401
+from .flow_matching import FlowMatchingNoiseScheduler  # noqa: F401
 from .iddpm import IDDPMNoiseScheduler  # noqa: F401
 from .linear_gaussian import LinearGaussianNoiseScheduler  # noqa: F401
 from .student_t_edm import StudentTEDMNoiseScheduler  # noqa: F401

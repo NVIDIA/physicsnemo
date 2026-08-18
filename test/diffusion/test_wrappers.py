@@ -101,3 +101,38 @@ def test_concat_wrapper_plain_tensor_as_image_condition():
 
     out = wrapper(x, t, cond_image)
     assert out.shape == (2, 3, 8, 8)
+
+
+class _RecordTimeModel(torch.nn.Module):
+    """Backbone stand-in that records the ``t`` it was called with."""
+
+    def __init__(self, out_channels: int = 3):
+        super().__init__()
+        self.net = torch.nn.Conv2d(4, out_channels, kernel_size=1)
+        self.last_t = None
+
+    def forward(self, x, t, condition=None, **kwargs):
+        self.last_t = t
+        return self.net(x)
+
+
+def test_concat_wrapper_default_time_scale_is_identity():
+    model = _RecordTimeModel()
+    wrapper = ConcatConditionWrapper(model)
+    x = torch.randn(2, 3, 8, 8)
+    t = torch.rand(2)
+    cond_image = torch.randn(2, 1, 8, 8)
+
+    wrapper(x, t, cond_image)
+    torch.testing.assert_close(model.last_t, t)
+
+
+def test_concat_wrapper_time_scale_rescales_t():
+    model = _RecordTimeModel()
+    wrapper = ConcatConditionWrapper(model, time_scale=999.0)
+    x = torch.randn(2, 3, 8, 8)
+    t = torch.rand(2)
+    cond_image = torch.randn(2, 1, 8, 8)
+
+    wrapper(x, t, cond_image)
+    torch.testing.assert_close(model.last_t, 999.0 * t)

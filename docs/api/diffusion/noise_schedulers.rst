@@ -111,6 +111,8 @@ available at three levels:
   - :class:`IDDPMNoiseScheduler` --- Improved DDPM schedule.
   - :class:`StudentTEDMNoiseScheduler` --- EDM variant with Student-t noise
     for heavy-tailed data.
+  - :class:`FlowMatchingNoiseScheduler` --- Rectified flow / conditional
+    optimal transport schedule, for training with a velocity objective.
 
 
 API Reference
@@ -175,6 +177,14 @@ API Reference
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. autoclass:: physicsnemo.diffusion.noise_schedulers.StudentTEDMNoiseScheduler
+    :show-inheritance:
+    :members:
+    :exclude-members: __init__
+
+:code:`FlowMatchingNoiseScheduler`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: physicsnemo.diffusion.noise_schedulers.FlowMatchingNoiseScheduler
     :show-inheritance:
     :members:
     :exclude-members: __init__

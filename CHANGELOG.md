@@ -252,6 +252,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   next event (the new particle's features and inter-event delay) from the
   current particle population, an optional background mesh, and the simulation
   time. Independent rollouts form an ensemble for uncertainty quantification.
+- Adds rectified flow matching to the diffusion framework:
+  `physicsnemo.diffusion.noise_schedulers.FlowMatchingNoiseScheduler` and `physicsnemo.diffusion.metrics.losses.FlowMatchingLoss`
+  (velocity objective, also usable with `"x0"`/`"epsilon"`/`"score"`
+  prediction types on any `LinearGaussianNoiseScheduler`). `get_denoiser` and
+  `LinearGaussianNoiseScheduler` gain `velocity_predictor` support and
+  `x0_to_velocity` / `velocity_to_x0` conversions. `ConcatConditionWrapper`
+  gains a `time_scale` argument for rescaling `t` into a backbone's expected
+  embedding range.
 
 ### Changed
 

@@ -25,6 +25,13 @@ training.  :class:`~physicsnemo.diffusion.metrics.losses.WeightedMSEDSMLoss`
 extends it with an element-wise weight tensor for masking specific spatial
 regions or channels (for example, land versus ocean in weather applications).
 
+:class:`~physicsnemo.diffusion.metrics.losses.FlowMatchingLoss` implements
+the conditional flow matching (rectified flow) objective, regressing a
+velocity-predictor (or an x0-, epsilon-, or score-predictor converted
+internally) against the conditional velocity of a linear-Gaussian path. It is
+typically paired with
+:class:`~physicsnemo.diffusion.noise_schedulers.FlowMatchingNoiseScheduler`.
+
 .. code-block:: python
 
     from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
@@ -67,6 +74,13 @@ API Reference
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. autoclass:: physicsnemo.diffusion.metrics.losses.WeightedMSEDSMLoss
+    :members:
+    :exclude-members: __init__
+
+:code:`FlowMatchingLoss`
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: physicsnemo.diffusion.metrics.losses.FlowMatchingLoss
     :members:
     :exclude-members: __init__
 

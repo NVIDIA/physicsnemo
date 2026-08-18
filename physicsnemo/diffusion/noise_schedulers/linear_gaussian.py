@@ -725,21 +725,137 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
         sigma_t_bc = self.sigma(t_bc)
         return (x_t - alpha_t_bc * x0) / sigma_t_bc
 
+    def x0_to_velocity(
+        self,
+        x0: Float[Tensor, " B *dims"],
+        x_t: Float[Tensor, " B *dims"],
+        t: Float[Tensor, " B"],
+    ) -> Float[Tensor, " B *dims"]:
+        r"""
+        Convert x0-prediction to velocity prediction.
+
+        The velocity is the conditional time derivative of the forward
+        process :math:`\mathbf{x}_t = \alpha(t)\mathbf{x}_0
+        + \sigma(t)\boldsymbol{\epsilon}`:
+
+        .. math::
+            \mathbf{v} = \dot{\alpha}(t)\mathbf{x}_0
+            + \dot{\sigma}(t)\boldsymbol{\epsilon}
+            = \frac{\dot{\sigma}(t)}{\sigma(t)} \mathbf{x}_t
+            + \left(\dot{\alpha}(t)
+            - \frac{\dot{\sigma}(t)}{\sigma(t)}\alpha(t)\right)
+            \hat{\mathbf{x}}_0
+
+        This is the target parameterization used in flow matching. See
+        :class:`~physicsnemo.diffusion.noise_schedulers.FlowMatchingNoiseScheduler`
+        and
+        :class:`~physicsnemo.diffusion.metrics.losses.FlowMatchingLoss`.
+
+        Parameters
+        ----------
+        x0 : Tensor
+            Predicted clean data :math:`\hat{\mathbf{x}}_0` of shape
+            :math:`(B, *)`.
+        x_t : Tensor
+            Current noisy state :math:`\mathbf{x}_t` with same shape as
+            ``x0``.
+        t : Tensor
+            Diffusion time of shape :math:`(B,)`.
+
+        Returns
+        -------
+        Tensor
+            Velocity with same shape as ``x0``.
+
+        Examples
+        --------
+        >>> from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
+        >>> scheduler = EDMNoiseScheduler()
+        >>> x0 = torch.randn(2, 4)
+        >>> x_t = torch.randn(2, 4)
+        >>> t = torch.tensor([1.0, 1.0])
+        >>> v = scheduler.x0_to_velocity(x0, x_t, t)
+        >>> v.shape
+        torch.Size([2, 4])
+        """
+        expected_shape = (-1,) + (1,) * (x0.ndim - 1)
+        t_bc = t.reshape(expected_shape)
+        alpha_t_bc = self.alpha(t_bc)
+        alpha_dot_t_bc = self.alpha_dot(t_bc)
+        sigma_t_bc = self.sigma(t_bc)
+        sigma_dot_t_bc = self.sigma_dot(t_bc)
+        ratio = sigma_dot_t_bc / sigma_t_bc
+        return ratio * x_t + (alpha_dot_t_bc - ratio * alpha_t_bc) * x0
+
+    def velocity_to_x0(
+        self,
+        velocity: Float[Tensor, " B *dims"],
+        x_t: Float[Tensor, " B *dims"],
+        t: Float[Tensor, " B"],
+    ) -> Float[Tensor, " B *dims"]:
+        r"""
+        Convert velocity prediction to x0-prediction.
+
+        Inverse of :meth:`x0_to_velocity`:
+
+        .. math::
+            \hat{\mathbf{x}}_0 = \frac{\dot{\sigma}(t)\mathbf{x}_t
+            - \sigma(t)\hat{\mathbf{v}}}
+            {\dot{\sigma}(t)\alpha(t) - \dot{\alpha}(t)\sigma(t)}
+
+        Parameters
+        ----------
+        velocity : Tensor
+            Predicted velocity :math:`\hat{\mathbf{v}}` of shape
+            :math:`(B, *)`.
+        x_t : Tensor
+            Current noisy state :math:`\mathbf{x}_t` with same shape as
+            ``velocity``.
+        t : Tensor
+            Diffusion time of shape :math:`(B,)`.
+
+        Returns
+        -------
+        Tensor
+            Estimated clean data :math:`\hat{\mathbf{x}}_0` with same shape
+            as ``velocity``.
+
+        Examples
+        --------
+        >>> from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
+        >>> scheduler = EDMNoiseScheduler()
+        >>> v = torch.randn(2, 4)
+        >>> x_t = torch.randn(2, 4)
+        >>> t = torch.tensor([1.0, 1.0])
+        >>> x0_est = scheduler.velocity_to_x0(v, x_t, t)
+        >>> x0_est.shape
+        torch.Size([2, 4])
+        """
+        expected_shape = (-1,) + (1,) * (velocity.ndim - 1)
+        t_bc = t.reshape(expected_shape)
+        alpha_t_bc = self.alpha(t_bc)
+        alpha_dot_t_bc = self.alpha_dot(t_bc)
+        sigma_t_bc = self.sigma(t_bc)
+        sigma_dot_t_bc = self.sigma_dot(t_bc)
+        denom = sigma_dot_t_bc * alpha_t_bc - alpha_dot_t_bc * sigma_t_bc
+        return (sigma_dot_t_bc * x_t - sigma_t_bc * velocity) / denom
+
     def get_denoiser(
         self,
         *,
         score_predictor: Predictor | None = None,
         x0_predictor: Predictor | None = None,
         epsilon_predictor: Predictor | None = None,
+        velocity_predictor: Predictor | None = None,
         denoising_type: Literal["ode", "sde"] = "ode",
         **kwargs: Any,
     ) -> Denoiser:
         r"""
         Factory that converts a predictor to a denoiser for sampling.
 
-        Accepts exactly one of **score-predictor**, **x0-predictor**, or
-        **epsilon-predictor**. The returned denoiser computes the right-hand
-        side of the reverse ODE or SDE.
+        Accepts exactly one of **score-predictor**, **x0-predictor**,
+        **epsilon-predictor**, or **velocity-predictor**. The returned
+        denoiser computes the right-hand side of the reverse ODE or SDE.
 
         For ODE (``denoising_type="ode"``):
 
@@ -756,7 +872,9 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
         where :math:`s(\mathbf{x}, t)` is the score. When an x0-predictor is
         provided, the score is computed internally via :meth:`x0_to_score`.
         When an epsilon-predictor is provided, the score is computed internally
-        via :meth:`epsilon_to_score`. When a score-predictor is provided, it
+        via :meth:`epsilon_to_score`. When a velocity-predictor is provided,
+        the score is computed internally via :meth:`velocity_to_x0` followed
+        by :meth:`x0_to_score`. When a score-predictor is provided, it
         is used directly. *Note:* As usually done in SDE integration, the
         stochastic term :math:`g(t) d\mathbf{W}` is handled by the solver,
         not returned by the denoiser itself.
@@ -779,6 +897,12 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
             :math:`\hat{\boldsymbol{\epsilon}}`. The score is computed
             internally via :meth:`epsilon_to_score`. Mutually exclusive with
             ``score_predictor`` and ``x0_predictor``.
+        velocity_predictor : Predictor, optional
+            A velocity-predictor that takes ``(x_t, t)`` and returns an
+            estimate of the velocity :math:`\hat{\mathbf{v}}` (e.g. a model
+            trained with flow matching on this scheduler's path). The score
+            is computed internally via :meth:`velocity_to_x0` and
+            :meth:`x0_to_score`. Mutually exclusive with the other predictors.
         denoising_type : {"ode", "sde"}, default="ode"
             Type of reverse process. Use ``"ode"`` for deterministic sampling,
             ``"sde"`` for stochastic sampling.
@@ -794,8 +918,8 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
         Raises
         ------
         ValueError
-            If not exactly one of ``score_predictor``, ``x0_predictor``, or
-            ``epsilon_predictor`` is provided.
+            If not exactly one of ``score_predictor``, ``x0_predictor``,
+            ``epsilon_predictor``, or ``velocity_predictor`` is provided.
 
         Examples
         --------
@@ -833,12 +957,18 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
         """
         # Validate: exactly one predictor must be provided
         provided = sum(
-            p is not None for p in (score_predictor, x0_predictor, epsilon_predictor)
+            p is not None
+            for p in (
+                score_predictor,
+                x0_predictor,
+                epsilon_predictor,
+                velocity_predictor,
+            )
         )
         if provided != 1:
             raise ValueError(
-                "Exactly one of 'score_predictor', 'x0_predictor', or "
-                "'epsilon_predictor' must be provided."
+                "Exactly one of 'score_predictor', 'x0_predictor', "
+                "'epsilon_predictor', or 'velocity_predictor' must be provided."
             )
 
         # Capture methods as local variables to avoid referencing self
@@ -856,6 +986,19 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
                 return x0_to_score(x0, x, t)
 
             score_fn = _score
+        elif velocity_predictor is not None:
+            velocity_to_x0 = self.velocity_to_x0
+            x0_to_score_v = self.x0_to_score
+
+            def _score_from_velocity(
+                x: Float[Tensor, " B *dims"],
+                t: Float[Tensor, " B"],
+            ) -> Float[Tensor, " B *dims"]:
+                v = velocity_predictor(x, t)
+                x0 = velocity_to_x0(v, x, t)
+                return x0_to_score_v(x0, x, t)
+
+            score_fn = _score_from_velocity
         elif epsilon_predictor is not None:
             eps_to_score = self.epsilon_to_score
 

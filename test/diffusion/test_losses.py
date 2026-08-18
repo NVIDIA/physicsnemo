@@ -14,14 +14,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for MSEDSMLoss and WeightedMSEDSMLoss."""
+"""Tests for MSEDSMLoss, WeightedMSEDSMLoss, and FlowMatchingLoss."""
 
 import pytest
 import torch
 
-from physicsnemo.diffusion.metrics.losses import MSEDSMLoss, WeightedMSEDSMLoss
+from physicsnemo.diffusion.metrics.losses import (
+    FlowMatchingLoss,
+    MSEDSMLoss,
+    WeightedMSEDSMLoss,
+)
 from physicsnemo.diffusion.noise_schedulers import (
     EDMNoiseScheduler,
+    FlowMatchingNoiseScheduler,
     VENoiseScheduler,
     VPNoiseScheduler,
 )
@@ -637,3 +642,269 @@ class TestWeightedMSEDSMLossWithPreconditioner:
             compare_outputs(losses[1], ref["loss_1"], **tolerances)
             compare_outputs(params[0], ref["param_0"], **tolerances)
             compare_outputs(params[1], ref["param_1"], **tolerances)
+
+
+# =============================================================================
+# FlowMatchingLoss — Constants and Helpers
+# =============================================================================
+
+FM_PREDICTION_TYPES = ["velocity", "x0", "epsilon", "score"]
+
+# FlowMatchingNoiseScheduler is singular at t=0 for the x0 conversion and at
+# t=1 for the epsilon/score conversions (see FlowMatchingNoiseScheduler and
+# FlowMatchingLoss docstrings), so each prediction type gets a scheduler with
+# a time range that avoids its singularity.
+FM_SCHEDULER_KWARGS = {
+    "velocity": {},
+    "x0": {"t_min": 1e-3},
+    "epsilon": {"t_max": 0.999},
+    "score": {"t_max": 0.999},
+}
+
+
+def _make_flow_matching_loss(model, scheduler, prediction_type):
+    """Create a FlowMatchingLoss with the given prediction type."""
+    return FlowMatchingLoss(model, scheduler, prediction_type=prediction_type)
+
+
+def _run_fm_training_loop(loss_fn, model, x0, condition=None, steps=TRAIN_STEPS):
+    """Run a minimal training loop and return per-step loss + param snapshots."""
+    losses = []
+    params = []
+    for _ in range(steps):
+        loss = loss_fn(x0, condition=condition)
+        loss.backward()
+        losses.append(loss.detach().cpu())
+        with torch.no_grad():
+            for p in model.parameters():
+                if p.grad is not None:
+                    p -= LR * p.grad
+                    p.grad = None
+        params.append(_first_param(model).cpu())
+    return losses, params
+
+
+# =============================================================================
+# FlowMatchingLoss — Constructor Tests
+# =============================================================================
+
+
+class TestFlowMatchingLossConstructor:
+    """Tests for FlowMatchingLoss constructor and validation."""
+
+    def test_constructor(self):
+        model = instantiate_model_deterministic(FlatLinearX0Predictor, features=48)
+        scheduler = FlowMatchingNoiseScheduler()
+        loss_fn = FlowMatchingLoss(model, scheduler)
+        assert loss_fn.model is model
+        assert loss_fn.noise_scheduler is scheduler
+
+    def test_invalid_prediction_type(self):
+        model = instantiate_model_deterministic(FlatLinearX0Predictor, features=48)
+        with pytest.raises(ValueError, match="prediction_type"):
+            FlowMatchingLoss(model, FlowMatchingNoiseScheduler(), prediction_type="bad")
+
+    def test_invalid_reduction(self):
+        model = instantiate_model_deterministic(FlatLinearX0Predictor, features=48)
+        with pytest.raises(ValueError, match="reduction"):
+            FlowMatchingLoss(model, FlowMatchingNoiseScheduler(), reduction="bad")
+
+    def test_requires_linear_gaussian_scheduler(self):
+        """Non-linear-Gaussian schedulers (missing alpha_dot/sigma_dot) are rejected."""
+
+        class _NotLinearGaussian:
+            def sample_time(self, N, *, device=None, dtype=None):
+                return torch.rand(N, device=device, dtype=dtype)
+
+            def loss_weight(self, t):
+                return torch.ones_like(t)
+
+        model = instantiate_model_deterministic(FlatLinearX0Predictor, features=48)
+        with pytest.raises(ValueError, match="LinearGaussianNoiseScheduler"):
+            FlowMatchingLoss(model, _NotLinearGaussian())
+
+    def test_reduction_none(self):
+        model = instantiate_model_deterministic(FlatLinearX0Predictor, features=48)
+        scheduler = FlowMatchingNoiseScheduler()
+        loss_fn = FlowMatchingLoss(model, scheduler, reduction="none")
+        x0 = make_input((BATCH, 3, 16))
+        out = loss_fn(x0)
+        assert out.shape == x0.shape
+
+    def test_reduction_sum(self):
+        model = instantiate_model_deterministic(FlatLinearX0Predictor, features=48)
+        scheduler = FlowMatchingNoiseScheduler()
+        loss_fn = FlowMatchingLoss(model, scheduler, reduction="sum")
+        x0 = make_input((BATCH, 3, 16))
+        out = loss_fn(x0)
+        assert out.ndim == 0
+
+
+# =============================================================================
+# FlowMatchingLoss — Non-Regression Tests
+# =============================================================================
+
+
+@pytest.mark.parametrize(
+    "prediction_type", FM_PREDICTION_TYPES, ids=FM_PREDICTION_TYPES
+)
+@pytest.mark.parametrize(
+    "spatial_name,shape,predictor_cls,predictor_kwargs",
+    SPATIAL_CONFIGS,
+    ids=[c[0] for c in SPATIAL_CONFIGS],
+)
+class TestFlowMatchingLossNonRegression:
+    """Non-regression training loop tests for FlowMatchingLoss."""
+
+    def test_training_loop(
+        self,
+        deterministic_settings,
+        device,
+        tolerances,
+        prediction_type,
+        spatial_name,
+        shape,
+        predictor_cls,
+        predictor_kwargs,
+    ):
+        model = instantiate_model_deterministic(
+            predictor_cls, seed=0, **predictor_kwargs
+        ).to(device)
+        scheduler = FlowMatchingNoiseScheduler(**FM_SCHEDULER_KWARGS[prediction_type])
+        loss_fn = _make_flow_matching_loss(model, scheduler, prediction_type)
+
+        x0 = make_input(shape, seed=GLOBAL_SEED, device=device)
+        param_before = _first_param(model).cpu()
+
+        losses, params = _run_fm_training_loop(loss_fn, model, x0)
+
+        for loss_val in losses:
+            assert loss_val.ndim == 0 and torch.isfinite(loss_val)
+        assert not torch.equal(param_before, params[0])
+        assert not torch.equal(params[0], params[1])
+
+        ref_file = f"{REF_PREFIX}fm_{spatial_name}_{prediction_type}.pth"
+        if "cuda" in str(device):
+            ref = load_or_create_reference(ref_file, None)
+            assert losses[0].shape == ref["loss_0"].shape
+            assert params[0].shape == ref["param_0"].shape
+        else:
+            ref = load_or_create_reference(
+                ref_file,
+                lambda: {
+                    "loss_0": losses[0],
+                    "loss_1": losses[1],
+                    "param_0": params[0],
+                    "param_1": params[1],
+                },
+            )
+            compare_outputs(losses[0], ref["loss_0"], **tolerances)
+            compare_outputs(losses[1], ref["loss_1"], **tolerances)
+            compare_outputs(params[0], ref["param_0"], **tolerances)
+            compare_outputs(params[1], ref["param_1"], **tolerances)
+
+
+# =============================================================================
+# FlowMatchingLoss — Gradient Flow Tests
+# =============================================================================
+
+
+class TestFlowMatchingLossGradientFlow:
+    """Tests that gradients flow through FlowMatchingLoss."""
+
+    @pytest.mark.parametrize(
+        "prediction_type", FM_PREDICTION_TYPES, ids=FM_PREDICTION_TYPES
+    )
+    def test_gradient_flow(self, device, prediction_type):
+        model = instantiate_model_deterministic(
+            Conv2dX0Predictor, seed=0, channels=3
+        ).to(device)
+        scheduler = FlowMatchingNoiseScheduler(**FM_SCHEDULER_KWARGS[prediction_type])
+        loss_fn = _make_flow_matching_loss(model, scheduler, prediction_type)
+
+        x0 = make_input((BATCH, 3, 8, 6), seed=GLOBAL_SEED, device=device)
+        loss = loss_fn(x0)
+        loss.backward()
+
+        has_grad = any(
+            p.grad is not None and not torch.isnan(p.grad).any()
+            for p in model.parameters()
+        )
+        assert has_grad
+
+
+# =============================================================================
+# FlowMatchingLoss — Compile Tests
+# =============================================================================
+
+
+@pytest.mark.usefixtures("nop_compile")
+@pytest.mark.parametrize(
+    "prediction_type", FM_PREDICTION_TYPES, ids=FM_PREDICTION_TYPES
+)
+class TestFlowMatchingLossCompile:
+    """Double-call compile tests for FlowMatchingLoss."""
+
+    def test_compile(
+        self,
+        deterministic_settings,
+        device,
+        prediction_type,
+    ):
+        """Compiled loss produces finite output and graph is reused on second call."""
+        torch._dynamo.config.error_on_recompile = True
+
+        model = instantiate_model_deterministic(
+            Conv2dX0Predictor, seed=0, channels=3
+        ).to(device)
+        scheduler = FlowMatchingNoiseScheduler(**FM_SCHEDULER_KWARGS[prediction_type])
+        loss_fn = _make_flow_matching_loss(model, scheduler, prediction_type)
+
+        x0 = make_input((BATCH, 3, 8, 6), seed=GLOBAL_SEED, device=device)
+
+        compiled_loss_fn = torch.compile(loss_fn, fullgraph=True)
+
+        # First call — triggers tracing
+        loss_1 = compiled_loss_fn(x0)
+        assert loss_1.ndim == 0 and torch.isfinite(loss_1)
+
+        # Second call — must reuse the graph
+        loss_2 = compiled_loss_fn(x0)
+        assert loss_2.ndim == 0 and torch.isfinite(loss_2)
+
+
+# =============================================================================
+# FlowMatchingLoss — Sampling Round-Trip
+# =============================================================================
+
+
+class TestFlowMatchingLossSamplingRoundTrip:
+    """End-to-end sanity check: train briefly, then sample from the result."""
+
+    def test_train_then_sample(self, device):
+        from physicsnemo.diffusion.samplers import sample
+
+        model = instantiate_model_deterministic(
+            Conv2dX0Predictor, seed=0, channels=3
+        ).to(device)
+        scheduler = FlowMatchingNoiseScheduler()
+        loss_fn = FlowMatchingLoss(model, scheduler)
+
+        x0 = make_input((BATCH, 3, 8, 6), seed=GLOBAL_SEED, device=device)
+        for _ in range(TRAIN_STEPS):
+            loss = loss_fn(x0)
+            loss.backward()
+            with torch.no_grad():
+                for p in model.parameters():
+                    if p.grad is not None:
+                        p -= LR * p.grad
+                        p.grad = None
+
+        num_steps = 4
+        t_steps = scheduler.timesteps(num_steps, device=device)
+        xN = scheduler.init_latents((3, 8, 6), t_steps[0].expand(BATCH), device=device)
+        denoiser = scheduler.get_denoiser(velocity_predictor=model)
+        with torch.no_grad():
+            samples = sample(denoiser, xN, scheduler, num_steps=num_steps)
+        assert samples.shape == (BATCH, 3, 8, 6)
+        assert torch.isfinite(samples).all()
