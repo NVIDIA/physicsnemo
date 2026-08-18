@@ -23,6 +23,7 @@ import torch
 import torch.nn.functional as F
 
 from physicsnemo.core import ModelMetaData, Module
+from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
 
 
 def nested_to(
@@ -182,6 +183,108 @@ class FGNDiT(Module, register=True):
         ]
 
 
+class FGNGraphCast(Module, register=True):
+    r"""Grid-Mesh-Grid GNN backbone for FGN (arXiv:2506.10772 §2.3).
+
+    Wraps PhysicsNeMo's ``GraphCastNet`` (icosahedral grid-mesh-grid GNN) with
+    FGN's stochastic latent conditioning.  The latent vector ``z~N(0,I)^latent_dim``
+    is spatially broadcast to ``(B, latent_dim, H, W)`` and concatenated with
+    the other input channels before the encoder, making every grid node aware of
+    the global noise draw.
+
+    Parameters
+    ----------
+    state_channels : int
+        Number of prognostic state channels.
+    history_frames : int, optional, default=2
+        Number of past frames concatenated as input.
+    background_channels : int, optional, default=0
+        Slowly-varying background channels (e.g. SST).
+    invariant_channels : int, optional, default=0
+        Static invariant channels (e.g. orography, land-sea mask).
+    latent_dim : int, optional, default=32
+        Dimension of the noise latent z.
+    input_res : tuple[int, int], optional, default=(721, 1440)
+        Spatial (H, W) resolution of the lat-lon grid.
+    mesh_level : int, optional, default=6
+        Icosahedral mesh refinement level (6 → ~40 km resolution).
+    hidden_dim : int, optional, default=768
+        Hidden dimension for all GNN layers.
+    processor_layers : int, optional, default=16
+        Number of message-passing or transformer processor layers.
+    processor_type : str, optional, default="MessagePassing"
+        ``"MessagePassing"`` for GNN-MP or ``"GraphTransformer"`` for
+        attention-based mesh processing.
+    num_attention_heads : int, optional, default=4
+        Attention heads (only used when ``processor_type="GraphTransformer"``).
+    """
+
+    def __init__(
+        self,
+        state_channels: int,
+        history_frames: int = 2,
+        background_channels: int = 0,
+        invariant_channels: int = 0,
+        latent_dim: int = 32,
+        input_res: tuple[int, int] = (721, 1440),
+        mesh_level: int = 6,
+        hidden_dim: int = 768,
+        processor_layers: int = 16,
+        processor_type: Literal[
+            "MessagePassing", "GraphTransformer"
+        ] = "MessagePassing",
+        num_attention_heads: int = 4,
+    ):
+        super().__init__(meta=ModelMetaData())
+        self.state_channels = state_channels
+        self.history_frames = history_frames
+        self.background_channels = background_channels
+        self.invariant_channels = invariant_channels
+        self.latent_dim = latent_dim
+        self.input_res = input_res
+
+        input_dim = (
+            history_frames * state_channels
+            + background_channels
+            + invariant_channels
+            + latent_dim
+        )
+        self.backbone = GraphCastNet(
+            mesh_level=mesh_level,
+            input_res=input_res,
+            input_dim_grid_nodes=input_dim,
+            output_dim_grid_nodes=state_channels,
+            hidden_dim=hidden_dim,
+            processor_layers=processor_layers,
+            processor_type=processor_type,
+            num_attention_heads=num_attention_heads,
+        )
+
+    def forward(
+        self,
+        history: torch.Tensor,
+        latent: torch.Tensor,
+        background: torch.Tensor | None = None,
+        invariants: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        if history.ndim != 5:
+            raise ValueError("history must have shape [B, T, C, H, W]")
+        batch, frames, channels, height, width = history.shape
+
+        pieces = [history.reshape(batch, frames * channels, height, width)]
+        if background is not None:
+            pieces.append(background)
+        if invariants is not None:
+            pieces.append(invariants)
+        # Broadcast z to every grid node so each location gets the global noise.
+        z_spatial = latent.unsqueeze(-1).unsqueeze(-1).expand(batch, -1, height, width)
+        pieces.append(z_spatial)
+        x = torch.cat(pieces, dim=1)  # (B, C_in, H, W)
+
+        # GraphCastNet returns (B, C_out, H, W) when input is (B, C_in, H, W)
+        return self.backbone(x)
+
+
 def build_model(
     cfg,
     state_channels: int,
@@ -189,11 +292,28 @@ def build_model(
     invariant_channels: int,
     input_height: int = 721,
     input_width: int = 1440,
-) -> FGNDiT:
+) -> FGNDiT | FGNGraphCast:
     if cfg.model.background_channels not in ("auto", background_channels):
         raise ValueError("config model.background_channels disagrees with dataset")
     if cfg.model.invariant_channels not in ("auto", invariant_channels):
         raise ValueError("config model.invariant_channels disagrees with dataset")
+
+    backbone = str(getattr(cfg.model, "backbone", "dit")).lower()
+
+    if backbone == "graphcast":
+        return FGNGraphCast(
+            state_channels=state_channels,
+            history_frames=int(cfg.model.history_frames),
+            background_channels=background_channels,
+            invariant_channels=invariant_channels,
+            latent_dim=int(cfg.model.latent_dim),
+            input_res=(input_height, input_width),
+            mesh_level=int(getattr(cfg.model, "mesh_level", 6)),
+            hidden_dim=int(getattr(cfg.model, "hidden_dim", 768)),
+            processor_layers=int(getattr(cfg.model, "processor_layers", 16)),
+            processor_type=str(getattr(cfg.model, "processor_type", "MessagePassing")),
+            num_attention_heads=int(getattr(cfg.model, "num_attention_heads", 4)),
+        )
 
     ps: tuple[int, int] = (
         tuple(cfg.model.patch_size) if hasattr(cfg.model, "patch_size") else (4, 4)

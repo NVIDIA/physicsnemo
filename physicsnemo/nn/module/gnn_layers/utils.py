@@ -81,7 +81,11 @@ def set_checkpoint_fn(do_checkpointing: bool) -> Callable:
 
 if PYG_AVAILABLE:
     pyg_data = importlib.import_module("torch_geometric.data")
-    torch_scatter = importlib.import_module("torch_scatter")
+    _pyg_scatter = importlib.import_module("torch_geometric.utils").scatter
+    try:
+        torch_scatter = importlib.import_module("torch_scatter")
+    except (ImportError, OSError):
+        torch_scatter = None
     PyGData = pyg_data.Data
     PyGHeteroData = pyg_data.HeteroData
 
@@ -273,7 +277,7 @@ if PYG_AVAILABLE:
             _, dst = graph[graph.edge_types[0]].edge_index.long()
         else:
             _, dst = graph.edge_index.long()
-        h_dest = torch_scatter.scatter(
+        h_dest = _pyg_scatter(
             efeat, dst, dim=0, dim_size=nfeat.shape[0], reduce=aggregation
         )
         cat_feat = torch.cat((h_dest, nfeat), -1)

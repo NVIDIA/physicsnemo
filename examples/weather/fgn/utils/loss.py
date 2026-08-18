@@ -124,19 +124,31 @@ def build_channel_weights(state_channels: list[str]) -> np.ndarray:
         p: float(sum(lvls)) for p, lvls in prefix_levels.items()
     }
 
+    # Explicit surface / cyclone weights (§2.2.3 and cyclone tracking variant).
+    _EXPLICIT: dict[str, float] = {
+        "t2m": 1.0,
+        "u10m": 0.05,
+        "v10m": 0.05,
+        # All other surface channels default to 0.1; cyclone channels are 10.0.
+    }
+    _CYCLONE_PREFIX = ("cyclone_exists", "cyclone_wind", "cyclone_pres")
+
     weights = np.zeros(len(state_channels), dtype=np.float32)
     for i, ch in enumerate(state_channels):
-        m = _atmos_re.match(ch)
-        if m:
-            prefix, level = m.group(1), int(m.group(2))
-            w = level / prefix_sum[prefix]
-            if prefix == "z":
-                w *= 0.5
-            weights[i] = w
-        elif ch == "t2m":
-            weights[i] = 1.0
+        if any(ch.startswith(pfx) for pfx in _CYCLONE_PREFIX):
+            weights[i] = 10.0
+        elif ch in _EXPLICIT:
+            weights[i] = _EXPLICIT[ch]
         else:
-            weights[i] = 0.1
+            m = _atmos_re.match(ch)
+            if m:
+                prefix, level = m.group(1), int(m.group(2))
+                w = level / prefix_sum[prefix]
+                if prefix == "z":
+                    w *= 0.5
+                weights[i] = w
+            else:
+                weights[i] = 0.1
 
     return weights
 

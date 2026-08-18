@@ -760,6 +760,7 @@ examples/weather/fgn/test_loss.py:test_area_weights_normalised_to_unit_mean
 examples/weather/fgn/test_loss.py:test_channel_weights_atmospheric_linear_by_level
 examples/weather/fgn/test_loss.py:test_channel_weights_geopotential_halved
 examples/weather/fgn/test_loss.py:test_channel_weights_paper_table_a1_mixed
+examples/weather/fgn/test_loss.py:test_channel_weights_cyclone_channels
 examples/weather/fgn/test_loss.py:test_channel_weights_surface_and_t2m
 examples/weather/fgn/test_loss.py:test_ensemble_mean_mse_matches_hand
 examples/weather/fgn/test_loss.py:test_fair_crps_matches_naive_reference

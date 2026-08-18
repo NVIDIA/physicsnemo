@@ -199,9 +199,9 @@ def test_ensemble_mean_mse_matches_hand():
 
 
 def test_channel_weights_surface_and_t2m():
-    # Paper scheme: surface → 0.1; t2m special-cased to 1.0.
+    # u10m/v10m → 0.05, t2m → 1.0, others → 0.1
     w = build_channel_weights(["u10m", "v10m", "t2m", "msl"])
-    assert np.allclose(w, [0.1, 0.1, 1.0, 0.1])
+    assert np.allclose(w, [0.05, 0.05, 1.0, 0.1])
 
 
 def test_channel_weights_atmospheric_linear_by_level():
@@ -243,11 +243,21 @@ def test_channel_weights_paper_table_a1_mixed():
     # z at level L_i gets half the temperature weight at level L_i.
     assert math.isclose(w[0] * 2.0, w[2], abs_tol=1e-6)  # z500 -> t500
     assert math.isclose(w[1] * 2.0, w[3], abs_tol=1e-6)  # z850 -> t850
-    # Surface layout (float32 tolerance).
-    assert math.isclose(w[4], 0.1, abs_tol=1e-6)
-    assert math.isclose(w[5], 0.1, abs_tol=1e-6)
+    # Surface layout (float32 tolerance): u10m/v10m → 0.05, t2m → 1.0, msl → 0.1.
+    assert math.isclose(w[4], 0.05, abs_tol=1e-6)
+    assert math.isclose(w[5], 0.05, abs_tol=1e-6)
     assert math.isclose(w[6], 1.0, abs_tol=1e-6)
     assert math.isclose(w[7], 0.1, abs_tol=1e-6)
+
+
+def test_channel_weights_cyclone_channels():
+    w = build_channel_weights(
+        ["t2m", "cyclone_exists_0", "cyclone_wind_0", "cyclone_pres_0"]
+    )
+    assert math.isclose(w[0], 1.0, abs_tol=1e-6)
+    assert math.isclose(w[1], 10.0, abs_tol=1e-6)
+    assert math.isclose(w[2], 10.0, abs_tol=1e-6)
+    assert math.isclose(w[3], 10.0, abs_tol=1e-6)
 
 
 # ---------------------------------------------------------------------------
