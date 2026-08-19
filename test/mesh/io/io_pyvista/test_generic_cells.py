@@ -618,6 +618,40 @@ def test_implicit_vertices_triangle_maps_only_surface_parent_data():
     assert mesh.cell_areas.sum().item() == pytest.approx(0.5)
 
 
+def test_triangle_and_strip_surface_mapping_preserves_every_parent():
+    """Triangle faces and strips are linearized independently on VTK 9.6."""
+    points = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+            [2.0, 1.0, 0.0],
+            [3.0, 1.0, 0.0],
+        ]
+    )
+    polydata = pv.PolyData(
+        points,
+        faces=np.array([3, 0, 1, 2]),
+        strips=np.array([4, 3, 4, 5, 6]),
+    )
+    polydata.cell_data["parent_id"] = np.array([10, 20], dtype=np.int16)
+
+    assert polydata.is_all_triangles
+    mesh = from_pyvista(polydata)
+
+    assert torch.equal(
+        mesh.cells,
+        torch.tensor([[0, 1, 2], [3, 4, 5], [5, 4, 6]]),
+    )
+    assert torch.equal(
+        mesh.cell_data["parent_id"],
+        torch.tensor([10, 20, 20], dtype=torch.int16),
+    )
+    assert mesh.cell_areas.sum().item() == pytest.approx(1.5)
+
+
 def test_polygon_strip_surface_mapping_replicates_exact_parents():
     """Quad, polygon, and strip children inherit their exact parent tuples."""
     points = np.array(

@@ -695,6 +695,96 @@ def _triangulate_with_parent_ids(
     return triangulated, output_parent_ids
 
 
+def _polydata_surface_triangles(
+    pyvista_mesh: "pv.PolyData",
+    topology: dict[str, tuple[np.ndarray, np.ndarray]],
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """Triangulate polygon faces and strips with exact source parent IDs."""
+    n_verts = pyvista_mesh.GetNumberOfVerts()
+    n_lines = pyvista_mesh.GetNumberOfLines()
+    n_faces = pyvista_mesh.GetNumberOfPolys()
+    n_strips = pyvista_mesh.GetNumberOfStrips()
+    if n_faces + n_strips == 0:
+        raise ValueError("PolyData has no native surface cells for manifold_dim=2.")
+
+    face_offsets, face_connectivity = topology["faces"]
+    all_faces_triangles = bool((np.diff(face_offsets) == 3).all())
+    if n_verts == 0 and n_lines == 0 and n_strips == 0 and all_faces_triangles:
+        return pyvista_mesh.regular_faces, None
+
+    first_face_parent = n_verts + n_lines
+    triangle_parts: list[np.ndarray] = []
+    parent_parts: list[np.ndarray] = []
+
+    if n_faces > 0:
+        face_parent_ids = np.arange(
+            first_face_parent,
+            first_face_parent + n_faces,
+            dtype=np.int64,
+        )
+        if all_faces_triangles:
+            triangle_parts.append(face_connectivity.reshape(-1, 3))
+            parent_parts.append(face_parent_ids)
+        else:
+            faces = pv.PolyData(
+                pyvista_mesh.points,
+                faces=pyvista_mesh.faces,
+                force_float=False,
+            )
+            triangulated_faces, face_output_parent_ids = _triangulate_with_parent_ids(
+                faces, face_parent_ids
+            )
+            if not triangulated_faces.is_all_triangles:
+                raise ValueError("VTK triangulation left non-triangle PolyData faces.")
+            triangle_parts.append(triangulated_faces.regular_faces)
+            parent_parts.append(face_output_parent_ids)
+
+    if n_strips > 0:
+        strip_parent_ids = np.arange(
+            first_face_parent + n_faces,
+            first_face_parent + n_faces + n_strips,
+            dtype=np.int64,
+        )
+        strips = pv.PolyData(
+            pyvista_mesh.points,
+            strips=pyvista_mesh.strips,
+            force_float=False,
+        )
+        triangulated_strips, strip_output_parent_ids = _triangulate_with_parent_ids(
+            strips,
+            strip_parent_ids,
+        )
+        if not triangulated_strips.is_all_triangles:
+            raise ValueError("VTK triangulation left non-triangle PolyData strips.")
+        triangle_parts.append(triangulated_strips.regular_faces)
+        parent_parts.append(strip_output_parent_ids)
+
+    triangles = (
+        triangle_parts[0]
+        if len(triangle_parts) == 1
+        else np.concatenate(triangle_parts, axis=0)
+    )
+    output_parent_ids = (
+        parent_parts[0] if len(parent_parts) == 1 else np.concatenate(parent_parts)
+    )
+    selected_surface_parents = np.arange(
+        first_face_parent,
+        first_face_parent + n_faces + n_strips,
+        dtype=np.int64,
+    )
+    missing_parent_ids = np.setdiff1d(
+        selected_surface_parents,
+        np.unique(output_parent_ids),
+        assume_unique=True,
+    )
+    if len(missing_parent_ids) > 0:
+        raise ValueError(
+            "VTK triangulation dropped selected PolyData surface parents "
+            f"{missing_parent_ids.tolist()}."
+        )
+    return triangles, output_parent_ids
+
+
 def _select_and_linearize_unstructured_grid(
     pyvista_mesh: "pv.UnstructuredGrid",
     cell_dimensions: np.ndarray,
@@ -1014,6 +1104,7 @@ def from_pyvista(
     ### Preprocess mesh based on manifold dimension
     original_point_ids = None
     output_parent_ids = None
+    polydata_tri_faces = None
     selected_unstructured_cells = False
     is_unstructured = isinstance(pyvista_mesh, pv.UnstructuredGrid)
     homogeneous_simplex_selected = bool(
@@ -1050,47 +1141,12 @@ def from_pyvista(
             raise NotImplementedError(
                 f"Only PolyData and UnstructuredGrid are supported for manifold dimension 2, got {type(pyvista_mesh)=}."
             )
-        if not pyvista_mesh.is_all_triangles:
-            if polydata_topology is None:
-                raise RuntimeError("PolyData topology metadata was not initialized.")
-            n_verts = pyvista_mesh.GetNumberOfVerts()
-            n_lines = pyvista_mesh.GetNumberOfLines()
-            n_faces = pyvista_mesh.GetNumberOfPolys()
-            n_strips = pyvista_mesh.GetNumberOfStrips()
-            if n_faces + n_strips == 0:
-                raise ValueError(
-                    "PolyData has no native surface cells for manifold_dim=2."
-                )
-            first_face_parent = n_verts + n_lines
-            selected_surface_parents = np.arange(
-                first_face_parent,
-                first_face_parent + n_faces + n_strips,
-                dtype=np.int64,
-            )
-
-            surface = pv.PolyData(
-                pyvista_mesh.points,
-                faces=pyvista_mesh.faces,
-                strips=pyvista_mesh.strips,
-                force_float=False,
-            )
-            triangulated, output_parent_ids = _triangulate_with_parent_ids(
-                surface,
-                selected_surface_parents,
-            )
-            if not triangulated.is_all_triangles:
-                raise ValueError("VTK triangulation left non-triangle PolyData faces.")
-            missing_parent_ids = np.setdiff1d(
-                selected_surface_parents,
-                np.unique(output_parent_ids),
-                assume_unique=True,
-            )
-            if len(missing_parent_ids) > 0:
-                raise ValueError(
-                    "VTK triangulation dropped selected PolyData surface "
-                    f"parents {missing_parent_ids.tolist()}."
-                )
-            pyvista_mesh = triangulated
+        if polydata_topology is None:
+            raise RuntimeError("PolyData topology metadata was not initialized.")
+        polydata_tri_faces, output_parent_ids = _polydata_surface_triangles(
+            pyvista_mesh,
+            polydata_topology,
+        )
 
     elif manifold_dim == 3:
         raise ValueError(
@@ -1184,7 +1240,9 @@ def from_pyvista(
     elif manifold_dim == 2:
         # After triangulation, extract the (n_cells, 3) connectivity array
         if isinstance(pyvista_mesh, pv.PolyData):
-            tri_faces = _maybe_copy(pyvista_mesh.regular_faces)
+            if polydata_tri_faces is None:
+                raise RuntimeError("PolyData surface triangles were not initialized.")
+            tri_faces = _maybe_copy(polydata_tri_faces)
         elif isinstance(pyvista_mesh, pv.UnstructuredGrid):
             # cells_dict materializes independent regular connectivity arrays.
             tri_faces = pyvista_mesh.cells_dict[np.uint8(pv.CellType.TRIANGLE)]
