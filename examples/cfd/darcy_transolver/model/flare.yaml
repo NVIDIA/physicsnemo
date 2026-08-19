@@ -40,3 +40,4 @@ structured_shape:
 time_input: False
 use_te: False
 activation_checkpointing: False
+checkpointing_ratio: 1.0

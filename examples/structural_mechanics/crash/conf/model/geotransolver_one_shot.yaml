@@ -27,6 +27,7 @@ use_te: false
 time_input: false
 include_local_features: true
 activation_checkpointing: false
+checkpointing_ratio: 1.0
 activation_checkpointing_components: [blocks]
 
 ### Rollout parameters ###

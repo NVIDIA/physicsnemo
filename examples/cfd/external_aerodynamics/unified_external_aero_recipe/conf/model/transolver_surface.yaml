@@ -51,3 +51,4 @@ model:
   use_te: false
   plus: false
   activation_checkpointing: false
+  checkpointing_ratio: 1.0

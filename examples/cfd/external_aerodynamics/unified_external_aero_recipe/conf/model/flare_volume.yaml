@@ -48,3 +48,4 @@ model:
   structured_shape: null  # unstructured mesh
   use_te: false
   activation_checkpointing: false
+  checkpointing_ratio: 1.0

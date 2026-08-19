@@ -32,3 +32,4 @@ use_te: false
 time_input: false
 plus: false
 activation_checkpointing: false
+checkpointing_ratio: 1.0

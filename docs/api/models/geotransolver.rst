@@ -20,10 +20,11 @@ Activation Checkpointing
 
 GeoTransolver supports configurable activation checkpointing during training.
 Set ``activation_checkpointing=True`` to checkpoint every selected component,
-or provide a fraction in ``(0, 1)`` to checkpoint that fraction of GALE blocks,
-distributed evenly across the block stack. Checkpointing is disabled by default.
-The fractional form provides a model-depth-independent control for trading
+and set ``checkpointing_ratio`` to a value in ``[0, 1]`` to checkpoint that
+fraction of GALE blocks, distributed evenly across the block stack. The ratio
+defaults to ``1.0``. This provides a model-depth-independent control for trading
 activation memory against backward recomputation without specifying block indices.
+Checkpointing is disabled by default.
 
 The ``activation_checkpointing_components`` argument selects the checkpoint
 boundaries. Supported values are ``"context"``, ``"preprocess"``, ``"blocks"``,
@@ -39,6 +40,7 @@ with:
         geometry_dim=3,
         use_te=False,
         activation_checkpointing=True,
+        checkpointing_ratio=0.5,
         activation_checkpointing_components=(
             "context",
             "preprocess",
