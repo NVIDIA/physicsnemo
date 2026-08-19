@@ -541,7 +541,8 @@ class TestUNetBlock3D:
         block = UNetBlock3D(amp_mode=True, **kwargs).to(device)
         x = torch.randn(*x_shape, device=device)
         emb = torch.randn(*emb_shape, device=device)
-        with torch.autocast(device_type=device, dtype=torch.bfloat16):
+        dev_type = torch.device(device).type
+        with torch.autocast(device_type=dev_type, dtype=torch.bfloat16):
             out = block(x, emb)
         assert not torch.isnan(out.float()).any()
 
@@ -552,7 +553,8 @@ class TestUNetBlock3D:
         block = UNetBlock3D(**kwargs).to(device)
         x = torch.randn(*x_shape, device=device)
         emb = torch.randn(*emb_shape, device=device)
-        with torch.autocast(device_type=device, dtype=torch.bfloat16):
+        dev_type = torch.device(device).type
+        with torch.autocast(device_type=dev_type, dtype=torch.bfloat16):
             with pytest.raises(RuntimeError, match="amp_mode"):
                 block(x, emb)
 

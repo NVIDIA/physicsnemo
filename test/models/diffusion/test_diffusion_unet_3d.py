@@ -282,7 +282,8 @@ class TestArchitecture:
             DiffusionUNet3D, seed=0, amp_mode=True, **arch_kwargs
         ).to(device)
         data = _generate_batch_data(arch_kwargs, x_shape, GLOBAL_SEED, device)
-        with torch.autocast(device_type=device, dtype=torch.bfloat16):
+        dev_type = torch.device(device).type
+        with torch.autocast(device_type=dev_type, dtype=torch.bfloat16):
             out = model(data["x"], data["t"], condition=data["condition"])
         assert out.shape == x_shape
         assert out.dtype == torch.bfloat16
@@ -296,7 +297,8 @@ class TestArchitecture:
             DiffusionUNet3D, seed=0, **arch_kwargs
         ).to(device)
         data = _generate_batch_data(arch_kwargs, x_shape, GLOBAL_SEED, device)
-        with torch.autocast(device_type=device, dtype=torch.bfloat16):
+        dev_type = torch.device(device).type
+        with torch.autocast(device_type=dev_type, dtype=torch.bfloat16):
             with pytest.raises(RuntimeError, match="amp_mode"):
                 model(data["x"], data["t"], condition=data["condition"])
 
