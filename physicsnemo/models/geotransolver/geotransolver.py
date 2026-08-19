@@ -35,7 +35,7 @@ import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.core.version_check import OptionalImport
-from physicsnemo.models.activation_checkpointing import parse_checkpointing_param
+from physicsnemo.models.activation_checkpointing import resolve_checkpointing_ratio
 from physicsnemo.models.transolver.transolver import _TransolverMlp
 from physicsnemo.nn import GALEBlock
 
@@ -266,18 +266,18 @@ class GeoTransolver(Module):
         ``"weighted"`` uses a learnable sigmoid-gated weighted sum.
         ``"concat_project"`` concatenates the two along the head dimension and
         projects back with a linear layer. Default is ``"weighted"``.
-    activation_checkpointing : bool | float, optional, default=False
-        Activation checkpointing of GALE blocks during training. ``True`` or
-        ``1.0`` checkpoints all blocks, ``False`` or ``0.0`` disables
-        checkpointing, and a value in ``(0, 1)`` checkpoints that fraction of
-        blocks, distributed evenly across the block stack.
+    activation_checkpointing : bool, optional, default=False
+        Whether to enable activation checkpointing during training.
+    checkpointing_ratio : float, optional, default=1.0
+        Fraction of GALE blocks to checkpoint when
+        ``activation_checkpointing=True``. Selected blocks are distributed
+        evenly across the block stack.
     activation_checkpointing_components : tuple[str, ...] | list[str], optional
         Components covered when activation checkpointing is enabled. Supported
         values are ``"context"``, ``"preprocess"``, ``"blocks"``, and
         ``"output"``. The default ``("blocks",)`` matches Transolver's
-        block-only policy. A fractional ``activation_checkpointing`` value
-        applies to the block stack; other selected components are either fully
-        checkpointed or disabled.
+        block-only policy. ``checkpointing_ratio`` applies to the block stack;
+        other selected components are either fully checkpointed or disabled.
 
     Forward
     -------
@@ -430,7 +430,8 @@ class GeoTransolver(Module):
         attention_type: str = "GALE",
         concrete_dropout: bool = False,
         state_mixing_mode: str = "weighted",
-        activation_checkpointing: bool | float = False,
+        activation_checkpointing: bool = False,
+        checkpointing_ratio: float = 1.0,
         activation_checkpointing_components: tuple[str, ...] | list[str] = ("blocks",),
     ) -> None:
         super().__init__(meta=GeoTransolverMetaData())
@@ -460,8 +461,8 @@ class GeoTransolver(Module):
         self.include_local_features = include_local_features
         self.use_te = use_te
         self.structured_shape = structured_shape
-        self._activation_checkpointing_ratio = parse_checkpointing_param(
-            activation_checkpointing
+        self._activation_checkpointing_ratio = resolve_checkpointing_ratio(
+            activation_checkpointing, checkpointing_ratio
         )
         self._activation_checkpointing_components = parse_checkpointing_components(
             activation_checkpointing_components

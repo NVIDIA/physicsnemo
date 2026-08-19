@@ -23,23 +23,28 @@ import torch
 from torch.utils.checkpoint import checkpoint as activation_checkpoint
 
 
-def parse_checkpointing_param(activation_checkpointing: bool | float) -> float:
-    r"""Parse an activation-checkpointing argument into a ratio in ``[0, 1]``."""
-    # ``bool`` is a subclass of ``int``, so handle it before numbers.
-    if isinstance(activation_checkpointing, bool):
-        return 1.0 if activation_checkpointing else 0.0
-    if not isinstance(activation_checkpointing, (int, float)):
+def resolve_checkpointing_ratio(
+    activation_checkpointing: bool, checkpointing_ratio: float
+) -> float:
+    r"""Validate checkpointing controls and return the effective block ratio."""
+    if not isinstance(activation_checkpointing, bool):
         raise TypeError(
-            "activation_checkpointing must be bool or numeric, got "
+            "activation_checkpointing must be bool, got "
             f"{type(activation_checkpointing).__name__}"
         )
-
-    ratio = float(activation_checkpointing)
-    if not 0.0 <= ratio <= 1.0:
-        raise ValueError(
-            f"activation_checkpointing must be bool or a float in [0, 1], got {ratio}"
+    # ``bool`` is a subclass of ``int`` but is not a meaningful ratio here.
+    if isinstance(checkpointing_ratio, bool) or not isinstance(
+        checkpointing_ratio, (int, float)
+    ):
+        raise TypeError(
+            "checkpointing_ratio must be numeric, got "
+            f"{type(checkpointing_ratio).__name__}"
         )
-    return ratio
+
+    ratio = float(checkpointing_ratio)
+    if not 0.0 <= ratio <= 1.0:
+        raise ValueError(f"checkpointing_ratio must be in [0, 1], got {ratio}")
+    return ratio if activation_checkpointing else 0.0
 
 
 def should_checkpoint_interleaved_block(

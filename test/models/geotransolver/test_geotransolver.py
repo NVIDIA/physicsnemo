@@ -1279,10 +1279,16 @@ def test_geotransolver_te_fp8_full_component_checkpointing(monkeypatch, attentio
 
 
 @pytest.mark.parametrize(
-    "value,expected",
-    [(False, 0.0), (True, 1.0), (0.0, 0.0), (0.5, 0.5), (1.0, 1.0)],
+    "enabled,ratio,expected",
+    [
+        (False, 1.0, 0.0),
+        (False, 0.5, 0.0),
+        (True, 0.0, 0.0),
+        (True, 0.5, 0.5),
+        (True, 1.0, 1.0),
+    ],
 )
-def test_geotransolver_activation_checkpointing_configuration(value, expected):
+def test_geotransolver_activation_checkpointing_configuration(enabled, ratio, expected):
     model = GeoTransolver(
         functional_dim=3,
         out_dim=2,
@@ -1291,7 +1297,8 @@ def test_geotransolver_activation_checkpointing_configuration(value, expected):
         n_head=4,
         slice_num=4,
         use_te=False,
-        activation_checkpointing=value,
+        activation_checkpointing=enabled,
+        checkpointing_ratio=ratio,
     )
 
     assert model._activation_checkpointing_ratio == expected
@@ -1309,12 +1316,9 @@ def test_geotransolver_activation_checkpointing_configuration(value, expected):
     assert not any(model._should_checkpoint_block(i) for i in range(len(model.blocks)))
 
 
-@pytest.mark.parametrize(
-    "value,error",
-    [(-0.1, ValueError), (1.1, ValueError), ("all", TypeError), (None, TypeError)],
-)
-def test_geotransolver_activation_checkpointing_rejects_invalid_values(value, error):
-    with pytest.raises(error, match="activation_checkpointing"):
+@pytest.mark.parametrize("value", [0, 0.5, 1, "all", None])
+def test_geotransolver_activation_checkpointing_rejects_non_boolean_switch(value):
+    with pytest.raises(TypeError, match="activation_checkpointing"):
         GeoTransolver(
             functional_dim=3,
             out_dim=2,
@@ -1323,6 +1327,30 @@ def test_geotransolver_activation_checkpointing_rejects_invalid_values(value, er
             slice_num=4,
             use_te=False,
             activation_checkpointing=value,
+        )
+
+
+@pytest.mark.parametrize(
+    "value,error",
+    [
+        (-0.1, ValueError),
+        (1.1, ValueError),
+        (True, TypeError),
+        ("all", TypeError),
+        (None, TypeError),
+    ],
+)
+def test_geotransolver_activation_checkpointing_rejects_invalid_ratio(value, error):
+    with pytest.raises(error, match="checkpointing_ratio"):
+        GeoTransolver(
+            functional_dim=3,
+            out_dim=2,
+            n_hidden=16,
+            n_head=4,
+            slice_num=4,
+            use_te=False,
+            activation_checkpointing=True,
+            checkpointing_ratio=value,
         )
 
 
@@ -1724,7 +1752,8 @@ def test_geotransolver_activation_checkpointing_recomputes_selected_blocks(
         n_head=4,
         slice_num=4,
         use_te=False,
-        activation_checkpointing=0.5,
+        activation_checkpointing=True,
+        checkpointing_ratio=0.5,
     )
     model.train()
     call_counts = [0] * len(model.blocks)
@@ -1939,7 +1968,9 @@ def test_geotransolver_activation_checkpointing_serialization(tmp_path):
         use_te=False,
     )
     default_model = GeoTransolver(**kwargs)
-    checkpointed_model = GeoTransolver(**kwargs, activation_checkpointing=0.5)
+    checkpointed_model = GeoTransolver(
+        **kwargs, activation_checkpointing=True, checkpointing_ratio=0.5
+    )
     checkpointed_model.load_state_dict(default_model.state_dict())
     assert checkpointed_model.state_dict().keys() == default_model.state_dict().keys()
 
@@ -1955,6 +1986,7 @@ def test_geotransolver_activation_checkpointing_serialization(tmp_path):
         "__args__": default_model._args["__args__"].copy(),
     }
     legacy_args["__args__"].pop("activation_checkpointing")
+    legacy_args["__args__"].pop("checkpointing_ratio")
     legacy_args["__args__"].pop("activation_checkpointing_components")
     legacy_restored = Module.instantiate(legacy_args)
     assert isinstance(legacy_restored, GeoTransolver)

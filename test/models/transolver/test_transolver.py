@@ -121,11 +121,17 @@ def test_transolver_constructor(config):
 
 
 @pytest.mark.parametrize(
-    "value,expected",
-    [(False, 0.0), (True, 1.0), (0.0, 0.0), (0.5, 0.5), (1.0, 1.0)],
+    "enabled,ratio,expected",
+    [
+        (False, 1.0, 0.0),
+        (False, 0.5, 0.0),
+        (True, 0.0, 0.0),
+        (True, 0.5, 0.5),
+        (True, 1.0, 1.0),
+    ],
 )
-def test_transolver_activation_checkpointing_configuration(value, expected):
-    """Checkpointing accepts booleans or an interleaved fraction of blocks."""
+def test_transolver_activation_checkpointing_configuration(enabled, ratio, expected):
+    """Checkpointing uses a boolean switch and an interleaved block ratio."""
     model = Transolver(
         functional_dim=2,
         embedding_dim=3,
@@ -136,7 +142,8 @@ def test_transolver_activation_checkpointing_configuration(value, expected):
         slice_num=4,
         structured_shape=None,
         use_te=False,
-        activation_checkpointing=value,
+        activation_checkpointing=enabled,
+        checkpointing_ratio=ratio,
     )
 
     assert model._activation_checkpointing_ratio == expected
@@ -155,13 +162,10 @@ def test_transolver_activation_checkpointing_configuration(value, expected):
     assert not any(model._should_checkpoint_block(i) for i in range(len(model.blocks)))
 
 
-@pytest.mark.parametrize(
-    "value,error",
-    [(-0.1, ValueError), (1.1, ValueError), ("all", TypeError), (None, TypeError)],
-)
-def test_transolver_activation_checkpointing_rejects_invalid_values(value, error):
-    """Invalid checkpointing policies fail during model construction."""
-    with pytest.raises(error, match="activation_checkpointing"):
+@pytest.mark.parametrize("value", [0, 0.5, 1, "all", None])
+def test_transolver_activation_checkpointing_rejects_non_boolean_switch(value):
+    """The checkpointing switch accepts booleans only."""
+    with pytest.raises(TypeError, match="activation_checkpointing"):
         Transolver(
             functional_dim=2,
             embedding_dim=3,
@@ -171,6 +175,32 @@ def test_transolver_activation_checkpointing_rejects_invalid_values(value, error
             structured_shape=None,
             use_te=False,
             activation_checkpointing=value,
+        )
+
+
+@pytest.mark.parametrize(
+    "value,error",
+    [
+        (-0.1, ValueError),
+        (1.1, ValueError),
+        (True, TypeError),
+        ("all", TypeError),
+        (None, TypeError),
+    ],
+)
+def test_transolver_activation_checkpointing_rejects_invalid_ratio(value, error):
+    """Invalid checkpointing ratios fail during model construction."""
+    with pytest.raises(error, match="checkpointing_ratio"):
+        Transolver(
+            functional_dim=2,
+            embedding_dim=3,
+            out_dim=1,
+            n_hidden=16,
+            n_head=4,
+            structured_shape=None,
+            use_te=False,
+            activation_checkpointing=True,
+            checkpointing_ratio=value,
         )
 
 
@@ -303,7 +333,8 @@ def test_transolver_activation_checkpointing_recomputes_selected_blocks(monkeypa
         slice_num=4,
         structured_shape=None,
         use_te=False,
-        activation_checkpointing=0.5,
+        activation_checkpointing=True,
+        checkpointing_ratio=0.5,
     )
     model.train()
     call_counts = [0] * len(model.blocks)
@@ -912,7 +943,9 @@ def test_transolver_activation_checkpointing_serialization(tmp_path):
         use_te=False,
     )
     default_model = Transolver(**kwargs)
-    checkpointed_model = Transolver(**kwargs, activation_checkpointing=0.5)
+    checkpointed_model = Transolver(
+        **kwargs, activation_checkpointing=True, checkpointing_ratio=0.5
+    )
     checkpointed_model.load_state_dict(default_model.state_dict())
     assert checkpointed_model.state_dict().keys() == default_model.state_dict().keys()
 
@@ -930,6 +963,7 @@ def test_transolver_activation_checkpointing_serialization(tmp_path):
         "__args__": default_model._args["__args__"].copy(),
     }
     legacy_args["__args__"].pop("activation_checkpointing")
+    legacy_args["__args__"].pop("checkpointing_ratio")
     legacy_restored = Module.instantiate(legacy_args)
     assert isinstance(legacy_restored, Transolver)
     assert legacy_restored._activation_checkpointing_ratio == 0.0

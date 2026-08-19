@@ -48,7 +48,7 @@ from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.models.activation_checkpointing import (
-    parse_checkpointing_param,
+    resolve_checkpointing_ratio,
     should_checkpoint_interleaved_block,
 )
 from physicsnemo.nn import Mlp, PositionalEmbedding
@@ -386,11 +386,11 @@ class Transolver(Module):
         Whether to include time embeddings.
     plus : bool, optional, default=False
         Whether to use Transolver++ variant.
-    activation_checkpointing : bool | float, optional, default=False
-        Activation checkpointing of Transolver blocks during training. ``True``
-        or ``1.0`` checkpoints all blocks, ``False`` or ``0.0`` disables
-        checkpointing, and a value in ``(0, 1)`` checkpoints that fraction of
-        blocks, distributed evenly across the block stack.
+    activation_checkpointing : bool, optional, default=False
+        Whether to checkpoint Transolver blocks during training.
+    checkpointing_ratio : float, optional, default=1.0
+        Fraction of blocks to checkpoint when ``activation_checkpointing=True``.
+        Selected blocks are distributed evenly across the block stack.
         Checkpointing trades additional computation during the backward pass
         for lower activation memory usage.
 
@@ -475,7 +475,8 @@ class Transolver(Module):
         use_te: bool = True,
         time_input: bool = False,
         plus: bool = False,
-        activation_checkpointing: bool | float = False,
+        activation_checkpointing: bool = False,
+        checkpointing_ratio: float = 1.0,
     ) -> None:
         super().__init__(meta=MetaData())
 
@@ -509,8 +510,8 @@ class Transolver(Module):
 
         self.structured_shape = structured_shape
         self.unified_pos = unified_pos
-        self._activation_checkpointing_ratio = parse_checkpointing_param(
-            activation_checkpointing
+        self._activation_checkpointing_ratio = resolve_checkpointing_ratio(
+            activation_checkpointing, checkpointing_ratio
         )
 
         # Set up positional embeddings

@@ -71,6 +71,7 @@ def darcy_trainer(cfg: DictConfig) -> None:
         use_te=cfg.model.use_te,
         time_input=cfg.model.time_input,
         activation_checkpointing=cfg.model.get("activation_checkpointing", False),
+        checkpointing_ratio=cfg.model.get("checkpointing_ratio", 1.0),
     ).to(dist.device)
 
     loss_fun = TestLoss(size_average=False)

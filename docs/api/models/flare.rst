@@ -13,9 +13,10 @@ Activation Checkpointing
 ------------------------
 
 FLARE supports the same block-level activation-checkpointing policy as
-Transolver. Set ``activation_checkpointing=True`` to checkpoint every FLARE
-block, or provide a fraction in ``(0, 1)`` to checkpoint that fraction of
-blocks, distributed evenly across the block stack. The default is ``False``.
+Transolver. Set ``activation_checkpointing=True`` to enable checkpointing. By
+default every FLARE block is checkpointed; set ``checkpointing_ratio`` to a
+value in ``[0, 1]`` to checkpoint that fraction of blocks, distributed evenly
+across the block stack. Checkpointing is disabled by default.
 
 .. code-block:: python
 
@@ -25,6 +26,7 @@ blocks, distributed evenly across the block stack. The default is ``False``.
         out_dim=1,
         structured_shape=None,
         activation_checkpointing=True,
+        checkpointing_ratio=0.5,
     )
 
 Checkpointing is active only during gradient-enabled training. The native
