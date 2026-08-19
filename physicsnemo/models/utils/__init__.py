@@ -14,26 +14,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""Activation-checkpointing helpers for Transolver."""
-
-from typing import Any, Callable
-
-import torch
-
-from physicsnemo.models.activation_checkpointing import run_checkpoint
-
-
-def checkpoint_block(
-    block: Callable[[torch.Tensor], torch.Tensor],
-    input_tensor: torch.Tensor,
-    *,
-    use_te: bool,
-    te_module: Any,
-) -> torch.Tensor:
-    r"""Checkpoint a block with the backend-appropriate implementation."""
-    return run_checkpoint(
-        block,
-        input_tensor,
-        use_te=use_te,
-        te_module=te_module,
-    )
+r"""Utilities shared across PhysicsNeMo model architectures."""

@@ -47,8 +47,9 @@ import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.core.version_check import check_version_spec
-from physicsnemo.models.activation_checkpointing import (
+from physicsnemo.models.utils.activation_checkpointing import (
     resolve_checkpointing_ratio,
+    run_checkpoint,
     should_checkpoint_interleaved_block,
 )
 from physicsnemo.nn import Mlp, PositionalEmbedding
@@ -57,8 +58,6 @@ from physicsnemo.nn.module.physics_attention import (
     PhysicsAttentionStructuredMesh2D,
     PhysicsAttentionStructuredMesh3D,
 )
-
-from .activation_checkpointing import checkpoint_block
 
 TE_AVAILABLE = check_version_spec("transformer_engine", hard_fail=False)
 if TE_AVAILABLE:
@@ -601,7 +600,7 @@ class Transolver(Module):
         handling. The native PyTorch backend uses the recommended
         non-reentrant checkpoint implementation directly.
         """
-        return checkpoint_block(
+        return run_checkpoint(
             block,
             fx,
             use_te=self.use_te,
