@@ -592,9 +592,7 @@ class Transolver(Module):
             training=self.training,
         )
 
-    def _checkpoint_block(
-        self, block: TransolverBlock, fx: torch.Tensor
-    ) -> torch.Tensor:
+    def _checkpoint_block(self, block: nn.Module, fx: torch.Tensor) -> torch.Tensor:
         r"""Checkpoint a block with the backend-appropriate implementation.
 
         Transformer Engine's wrapper establishes the activation-recompute

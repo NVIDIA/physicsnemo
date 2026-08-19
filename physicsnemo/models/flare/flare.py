@@ -141,6 +141,11 @@ class FLARE(CoreTransolver):
         Whether to include time embeddings. Default is ``False``.
     use_te : bool, optional, default=False
         Whether to use Transformer Engine layers and attention.
+    activation_checkpointing : bool | float, optional, default=False
+        Activation checkpointing of FLARE blocks during training. ``True`` or
+        ``1.0`` checkpoints all blocks, ``False`` or ``0.0`` disables
+        checkpointing, and a value in ``(0, 1)`` checkpoints that fraction of
+        blocks, distributed evenly across the block stack.
 
     Forward
     -------
@@ -173,6 +178,7 @@ class FLARE(CoreTransolver):
         structured_shape: None | tuple[int, ...] = None,
         time_input: bool = False,
         use_te: bool = False,
+        activation_checkpointing: bool | float = False,
     ) -> None:
         super().__init__(
             functional_dim=functional_dim,
@@ -191,6 +197,7 @@ class FLARE(CoreTransolver):
             use_te=use_te,
             time_input=time_input,
             plus=False,
+            activation_checkpointing=activation_checkpointing,
         )
 
         # Replace physics attention blocks with FLARE blocks
