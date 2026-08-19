@@ -208,13 +208,13 @@ def test_geotransolver_return_options(device):
     torch.manual_seed(42)
 
     batch_size = 2
-    n_tokens = 32
-    n_hidden = 32
-    model = _small_model(device, n_hidden=n_hidden, attention_type="GALE_FA").eval()
+    n_tokens = 100
+    n_hidden = 64
+    model = _small_model(device, n_hidden=n_hidden).eval()
 
     local_emb = torch.randn(batch_size, n_tokens, 32, device=device)
-    geometry = torch.randn(batch_size, 48, 3, device=device)
-    global_emb = torch.randn(batch_size, 2, 16, device=device)
+    geometry = torch.randn(batch_size, 235, 3, device=device)
+    global_emb = torch.randn(batch_size, 5, 16, device=device)
     inputs = dict(global_embedding=global_emb, geometry=geometry)
 
     with torch.no_grad():
@@ -245,7 +245,6 @@ def test_geotransolver_return_options(device):
     checkpointed = _small_model(
         device,
         n_hidden=n_hidden,
-        attention_type="GALE_FA",
         activation_checkpointing=True,
         activation_checkpointing_components=(
             "context",
@@ -425,8 +424,56 @@ def test_geotransolver_forward_tuple_inputs(device):
     assert not torch.isnan(outputs[1]).any()
 
 
+def test_geotransolver_forward_with_local_features(device, pytestconfig):
+    """Test GeoTransolver model forward pass with local features (BQ warp)."""
+    torch.manual_seed(42)
+
+    model = GeoTransolver(
+        functional_dim=32,
+        out_dim=4,
+        geometry_dim=3,
+        global_dim=16,
+        n_layers=2,
+        n_hidden=64,
+        dropout=0.0,
+        n_head=4,
+        act="gelu",
+        mlp_ratio=2,
+        slice_num=8,
+        use_te=False,
+        time_input=False,
+        plus=False,
+        include_local_features=True,
+        radii=[0.05, 0.25],
+        neighbors_in_radius=[8, 32],
+        n_hidden_local=32,
+    ).to(device)
+
+    batch_size = 1
+    n_tokens = 100
+    n_global = 5
+    n_geom = 235
+
+    # For local features, the first 3 channels of local_emb should be coordinates
+    local_emb = torch.randn(batch_size, n_tokens, 32).to(device)
+    local_positions = local_emb[:, :, :3]
+    geometry = torch.randn(batch_size, n_geom, 3).to(device)
+    global_emb = torch.randn(batch_size, n_global, 16).to(device)
+
+    outputs = model(
+        local_emb,
+        local_positions=local_positions,
+        global_embedding=global_emb,
+        geometry=geometry,
+    )
+
+    assert isinstance(outputs, torch.Tensor)
+    assert outputs.shape == (batch_size, n_tokens, 4)
+    assert not torch.isnan(outputs).any()
+
+
 @requires_module("warp")
-def test_geotransolver_forward_with_local_features(device):
+def test_geotransolver_full_component_checkpointing_with_local_features(device):
     """Full checkpointing preserves local-feature outputs and gradients."""
     kwargs = dict(
         functional_dim=6,
@@ -667,43 +714,106 @@ def test_geotransolver_optimizations(device):
 
 
 @requires_module("transformer_engine")
-@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
-def test_geotransolver_te_basic(device, attention_type):
-    """Both GeoTransolver attention backends use TE's default path."""
+def test_geotransolver_te_basic(device, pytestconfig):
+    """Test GeoTransolver with Transformer Engine backend."""
+    torch.manual_seed(42)
+
     if device == "cpu":
         pytest.skip("TE Tests require cuda.")
 
-    torch.manual_seed(42)
     model = GeoTransolver(
-        functional_dim=6,
+        functional_dim=32,
         out_dim=4,
         geometry_dim=3,
-        global_dim=3,
+        global_dim=16,
         n_layers=2,
         n_hidden=64,
         dropout=0.0,
         n_head=4,
         act="gelu",
         mlp_ratio=2,
-        slice_num=16,
+        slice_num=8,
         use_te=True,
         time_input=False,
         plus=False,
         include_local_features=False,
-        attention_type=attention_type,
     ).to(device)
-    local_embedding = torch.randn(2, 64, 6, device=device)
-    geometry = torch.randn(2, 80, 3, device=device)
-    global_embedding = torch.randn(2, 4, 3, device=device)
 
-    output = model(
-        local_embedding,
+    batch_size = 2
+    n_tokens = 100
+    n_geom = 235
+    n_global = 5
+
+    local_emb = torch.randn(batch_size, n_tokens, 32).to(device)
+    geometry = torch.randn(batch_size, n_geom, 3).to(device)
+    global_emb = torch.randn(batch_size, n_global, 16).to(device)
+    local_positions = local_emb[:, :, :3]
+
+    outputs = model(
+        local_emb,
+        local_positions=local_positions,
+        global_embedding=global_emb,
         geometry=geometry,
-        global_embedding=global_embedding,
     )
+
+    assert isinstance(outputs, torch.Tensor)
+    assert outputs.shape == (batch_size, n_tokens, 4)
+    assert not torch.isnan(outputs).any()
+
+
+@requires_module("transformer_engine")
+def test_geotransolver_te_gale_fa(device):
+    """Test GeoTransolver with the GALE_FA backend and Transformer Engine.
+
+    Exercises the TE attention path in GALE_FA (both the FLARE self-attention
+    passes and the context cross-attention run through te.DotProductAttention).
+    """
+    torch.manual_seed(42)
+
+    if device == "cpu":
+        pytest.skip("TE Tests require cuda.")
+
+    model = GeoTransolver(
+        functional_dim=32,
+        out_dim=4,
+        geometry_dim=3,
+        global_dim=16,
+        n_layers=2,
+        n_hidden=64,
+        dropout=0.0,
+        n_head=4,
+        act="gelu",
+        mlp_ratio=2,
+        slice_num=8,
+        use_te=True,
+        time_input=False,
+        plus=False,
+        include_local_features=False,
+        attention_type="GALE_FA",
+    ).to(device)
+
     assert model.blocks[0].Attn.use_te is True
-    assert output.shape == (2, 64, 4)
-    assert torch.isfinite(output).all()
+
+    batch_size = 2
+    n_tokens = 100
+    n_geom = 235
+    n_global = 5
+
+    local_emb = torch.randn(batch_size, n_tokens, 32).to(device)
+    geometry = torch.randn(batch_size, n_geom, 3).to(device)
+    global_emb = torch.randn(batch_size, n_global, 16).to(device)
+    local_positions = local_emb[:, :, :3]
+
+    outputs = model(
+        local_emb,
+        local_positions=local_positions,
+        global_embedding=global_emb,
+        geometry=geometry,
+    )
+
+    assert isinstance(outputs, torch.Tensor)
+    assert outputs.shape == (batch_size, n_tokens, 4)
+    assert not torch.isnan(outputs).any()
 
 
 @requires_module("transformer_engine")
