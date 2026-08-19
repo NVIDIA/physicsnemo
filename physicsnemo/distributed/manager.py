@@ -576,7 +576,9 @@ class DistributedManager(object):
             manager._rank = rank
             manager._world_size = world_size
             if local_rank is None:
-                manager._local_rank = rank % torch.cuda.device_count()
+                # On CPU-only hosts there are no devices to assign by rank
+                n_devices = torch.cuda.device_count()
+                manager._local_rank = rank % n_devices if n_devices > 0 else 0
             else:
                 manager._local_rank = local_rank
 
@@ -585,13 +587,16 @@ class DistributedManager(object):
         )
 
         if manager._distributed:
-            # Setup distributed process group
+            # Setup distributed process group. device_id must be an
+            # accelerator device: recent PyTorch versions raise when a CPU
+            # device is passed, so only bind a device on CUDA.
+            device_id = manager.device if manager.device.type == "cuda" else None
             try:
                 dist.init_process_group(
                     backend,
                     rank=manager.rank,
                     world_size=manager.world_size,
-                    device_id=manager.device,
+                    device_id=device_id,
                 )
             except TypeError:
                 # device_id only introduced in PyTorch 2.3
@@ -741,6 +746,26 @@ class DistributedManager(object):
         parent: Optional[str] = None,
         verbose: bool = False,
     ):  # pragma: no cover
+        """Create the process subgroup described by a ``ProcessGroupNode``.
+
+        Creates the subgroup for ``node`` (whose ``size`` must already be
+        populated) under the optional ``parent`` group, together with the
+        corresponding orthogonal process group.
+
+        Parameters
+        ----------
+        node : ProcessGroupNode
+            Node describing the process group to create.
+        parent : str, optional
+            Name of the parent process group, by default None.
+        verbose : bool, optional
+            Print group creation details, by default False.
+
+        Returns
+        -------
+        str
+            Name of the orthogonal process group that was created.
+        """
         if node.size is None:
             raise AssertionError(
                 "Cannot create groups from a ProcessGroupNode that is not fully"
@@ -762,6 +787,19 @@ class DistributedManager(object):
     def create_groups_from_config(
         config: ProcessGroupConfig, verbose: bool = False
     ):  # pragma: no cover
+        """Create nested process groups from a ``ProcessGroupConfig`` tree.
+
+        Traverses the config tree breadth-first, creating each group with
+        :meth:`create_group_from_node`. Deprecated on PyTorch > 2.4 in favor
+        of ``DeviceMesh`` and :meth:`initialize_mesh`.
+
+        Parameters
+        ----------
+        config : ProcessGroupConfig
+            Tree of process groups to create.
+        verbose : bool, optional
+            Print group creation details, by default False.
+        """
         if torch.__version__ > "2.4":
             warnings.warn(
                 "DistributedManager.create_groups_from_config is no longer the most simple "
@@ -814,6 +852,7 @@ class DistributedManager(object):
             and DistributedManager._shared_state["_is_initialized"]
             and "_distributed" in DistributedManager._shared_state
             and DistributedManager._shared_state["_distributed"]
+            and dist.is_initialized()
         ):
             if barrier:
                 if torch.cuda.is_available():
