@@ -46,8 +46,8 @@ with:
 
 Checkpointing is active only in training mode when gradients are enabled. The
 native backend uses PyTorch's non-reentrant checkpoint implementation, while
-``use_te=True`` uses Transformer Engine's checkpoint wrapper. The option can be
-combined with ``torch.compile``.
+``use_te=True`` uses Transformer Engine's checkpoint wrapper. The native
+PyTorch checkpoint backend can be combined with ``torch.compile``.
 
 .. autoclass:: physicsnemo.models.geotransolver.geotransolver.GeoTransolver
     :show-inheritance:

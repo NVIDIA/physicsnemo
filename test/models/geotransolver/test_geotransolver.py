@@ -1133,7 +1133,8 @@ def test_geotransolver_local_features_compile(device):
 
 
 @requires_module("transformer_engine")
-def test_geotransolver_te_full_component_checkpointing(monkeypatch):
+@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
+def test_geotransolver_te_full_component_checkpointing(monkeypatch, attention_type):
     """TE checkpointing preserves GeoTransolver outputs and gradients."""
     if not torch.cuda.is_available():
         pytest.skip("CUDA is not available")
@@ -1151,6 +1152,7 @@ def test_geotransolver_te_full_component_checkpointing(monkeypatch):
         mlp_ratio=2,
         slice_num=16,
         use_te=True,
+        attention_type=attention_type,
     )
     torch.manual_seed(0)
     plain = GeoTransolver(**kwargs, activation_checkpointing=False).cuda()
@@ -1192,7 +1194,8 @@ def test_geotransolver_te_full_component_checkpointing(monkeypatch):
 
 
 @requires_module("transformer_engine")
-def test_geotransolver_te_fp8_full_component_checkpointing(monkeypatch):
+@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
+def test_geotransolver_te_fp8_full_component_checkpointing(monkeypatch, attention_type):
     """TE FP8 recomputation preserves GeoTransolver outputs and gradients."""
     if not torch.cuda.is_available():
         pytest.skip("CUDA is not available")
@@ -1217,6 +1220,7 @@ def test_geotransolver_te_fp8_full_component_checkpointing(monkeypatch):
         mlp_ratio=2,
         slice_num=16,
         use_te=True,
+        attention_type=attention_type,
     )
     torch.manual_seed(0)
     plain = GeoTransolver(**kwargs, activation_checkpointing=False).to(
@@ -1472,8 +1476,9 @@ def test_geotransolver_activation_checkpointing_reduces_saved_activations():
     assert checkpointed_bytes < plain_bytes
 
 
+@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
 def test_geotransolver_full_component_checkpointing_matches_outputs_and_gradients(
-    device,
+    device, attention_type
 ):
     components = ("context", "preprocess", "blocks", "output")
     kwargs = dict(
@@ -1489,7 +1494,7 @@ def test_geotransolver_full_component_checkpointing_matches_outputs_and_gradient
         slice_num=4,
         use_te=False,
         plus=True,
-        attention_type="GALE",
+        attention_type=attention_type,
         concrete_dropout=True,
     )
     torch.manual_seed(3)
@@ -1819,7 +1824,8 @@ def test_geotransolver_full_component_checkpointing_uses_te_wrapper(monkeypatch)
     ]
 
 
-def test_geotransolver_activation_checkpointing_torch_compile(device):
+@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
+def test_geotransolver_activation_checkpointing_torch_compile(device, attention_type):
     kwargs = dict(
         functional_dim=3,
         out_dim=2,
@@ -1831,6 +1837,7 @@ def test_geotransolver_activation_checkpointing_torch_compile(device):
         mlp_ratio=2,
         slice_num=4,
         use_te=False,
+        attention_type=attention_type,
     )
     plain = GeoTransolver(**kwargs, activation_checkpointing=False).to(device)
     checkpointed = GeoTransolver(**kwargs, activation_checkpointing=True).to(device)
@@ -1864,7 +1871,10 @@ def test_geotransolver_activation_checkpointing_torch_compile(device):
     _assert_parameter_gradients_close(checkpointed, plain, atol=1e-6, rtol=1e-5)
 
 
-def test_geotransolver_full_component_checkpointing_torch_compile(device):
+@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
+def test_geotransolver_full_component_checkpointing_torch_compile(
+    device, attention_type
+):
     kwargs = dict(
         functional_dim=3,
         out_dim=2,
@@ -1876,6 +1886,7 @@ def test_geotransolver_full_component_checkpointing_torch_compile(device):
         mlp_ratio=2,
         slice_num=4,
         use_te=False,
+        attention_type=attention_type,
     )
     plain = GeoTransolver(**kwargs, activation_checkpointing=False).to(device)
     full = GeoTransolver(
