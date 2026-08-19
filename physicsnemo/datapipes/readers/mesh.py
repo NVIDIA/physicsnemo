@@ -25,6 +25,7 @@ Both use tensorclass .load(path) directly; no conversion from other formats.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -45,10 +46,123 @@ DEFAULT_MESH_EXTENSION = ".pmsh"
 DEFAULT_DOMAIN_MESH_EXTENSION = ".pdmsh"
 
 
+def _pread_leaf(
+    t: torch.Tensor,
+    runs: list[tuple[int, int]] | None = None,
+    *,
+    pin_memory: bool = False,
+) -> torch.Tensor | None:
+    """Materialize a memory-mapped tensor by reading it, not by faulting it in.
+
+    Reads the whole tensor, or only the rows covered by *runs*
+    (``(start, length)`` pairs), into a fresh buffer with
+    :func:`os.preadv`.  The result is identical to indexing the memory map
+    and copying, but the kernel fills the destination directly: no page
+    faults, one call per run instead of one fault per page, and no mapped
+    pages left charged to the process.
+
+    Returns ``None`` when *t* is not a whole, contiguous, memory-mapped
+    tensor, or the platform has no ``preadv``, leaving the caller to use
+    the ordinary path.
+    """
+    filename = getattr(t, "filename", None)
+    if filename is None or getattr(t, "index", None) is not None:
+        return None
+    if not hasattr(os, "preadv") or not t.is_contiguous() or t.numel() == 0:
+        return None
+    ### A view into a larger mapping would need the parent's layout to locate
+    ### its bytes on disk; only a whole tensor maps 1:1 onto its backing file.
+    if t.storage_offset() != 0 or t.untyped_storage().nbytes() != t.nbytes:
+        return None
+
+    if runs is None:
+        ranges = [(0, t.nbytes)]
+        shape = t.shape
+    else:
+        if t.ndim == 0:
+            return None
+        row_bytes = t.nbytes // t.shape[0]
+        ranges = [(start * row_bytes, length * row_bytes) for start, length in runs]
+        shape = torch.Size((sum(length for _, length in runs), *t.shape[1:]))
+
+    buf = torch.empty(
+        sum(nbytes for _, nbytes in ranges), dtype=torch.uint8, pin_memory=pin_memory
+    )
+    # os.preadv needs the buffer protocol, which Tensor does not implement.
+    view = buf.numpy()
+    fd = os.open(filename, os.O_RDONLY)
+    try:
+        pos = 0
+        for offset, nbytes in ranges:
+            if os.preadv(fd, [view[pos : pos + nbytes]], offset) != nbytes:
+                raise OSError(
+                    f"short read of {nbytes} bytes at offset {offset} in {filename}"
+                )
+            pos += nbytes
+    finally:
+        os.close(fd)
+    return buf.view(t.dtype).reshape(shape)
+
+
+def _contiguous_runs(indices: torch.Tensor) -> list[tuple[int, int]] | None:
+    """Rewrite row *indices* as ``(start, length)`` runs of consecutive rows.
+
+    Each run is one byte range, so selecting a block becomes one or two
+    reads instead of a gather over the mapping.
+    :func:`_cyclic_block_indices` produces exactly that shape: one
+    ascending run, or two when the block wraps past the end of the array.
+
+    Returns ``None`` when the indices would need more than two runs,
+    which tells the caller to fall back to ordinary indexing.  The runs
+    are read off the tensor rather than recomputed from the block's start
+    and length, so the bytes read stay in step with the indices even if
+    the sampler changes.
+    """
+    if indices.ndim != 1 or indices.numel() == 0:
+        return None
+    breaks = (indices.diff() != 1).nonzero().flatten()
+    if breaks.numel() > 1:
+        return None
+    return [
+        (int(run[0]), run.numel())
+        for run in indices.tensor_split((breaks + 1).tolist())
+    ]
+
+
+def _read_rows(
+    t: torch.Tensor,
+    indices: torch.Tensor,
+    runs: list[tuple[int, int]] | None,
+    pin_memory: bool,
+) -> torch.Tensor:
+    """Rows *indices* of *t*, read with ``pread`` when *t* is memory-mapped."""
+    if runs is not None:
+        out = _pread_leaf(t, runs, pin_memory=pin_memory)
+        if out is not None:
+            return out
+    return t[indices]
+
+
+def _pin_memory(md: Mesh | DomainMesh) -> Mesh | DomainMesh:
+    """``pin_memory()`` that reads memory-mapped leaves instead of faulting them.
+
+    Every leaf is copied either way; this only changes how the bytes reach
+    the pinned buffer.
+    """
+
+    def pin(t: torch.Tensor) -> torch.Tensor:
+        out = _pread_leaf(t, pin_memory=True)
+        return t.pin_memory() if out is None else out
+
+    return md.apply(pin)
+
+
 def _subsample_mesh_points(
     mesh: Mesh,
     n_points: int,
     generator: torch.Generator | None = None,
+    *,
+    pin_memory: bool = False,
 ) -> Mesh:
     """Subsample a Mesh to *n_points* via a cyclic contiguous block read.
 
@@ -63,6 +177,10 @@ def _subsample_mesh_points(
     measure weights: dropping points removes cells implicitly, with
     no per-cell inclusion probability to invert.  Prefer cell
     subsampling when downstream code integrates over the mesh.
+
+    ``pin_memory`` reads the selected rows of memmap-backed data straight
+    into pinned memory (see :func:`_pread_leaf`), sparing the caller's
+    later ``pin_memory()`` a second copy.
     """
     if mesh.n_points <= n_points:
         return mesh
@@ -73,10 +191,14 @@ def _subsample_mesh_points(
         device=mesh.points.device,
     )
     if mesh.n_cells == 0:
+        runs = _contiguous_runs(indices)
         return Mesh(
-            points=mesh.points[indices],
+            points=_read_rows(mesh.points, indices, runs, pin_memory),
             cells=mesh.cells,
-            point_data=mesh.point_data[indices],
+            point_data=mesh.point_data.apply(
+                lambda t: _read_rows(t, indices, runs, pin_memory),
+                batch_size=indices.shape,
+            ),
             cell_data=mesh.cell_data,
             global_data=mesh.global_data,
         )
@@ -134,6 +256,8 @@ def _subsample_mesh(
     n_cells: int | None = None,
     n_points: int | None = None,
     generator: torch.Generator | None = None,
+    *,
+    pin_memory: bool = False,
 ) -> Mesh:
     """Apply cell and/or point subsampling to a single Mesh.
 
@@ -143,7 +267,9 @@ def _subsample_mesh(
     if n_cells is not None:
         mesh = _subsample_mesh_cells(mesh, n_cells, generator=generator)
     if n_points is not None:
-        mesh = _subsample_mesh_points(mesh, n_points, generator=generator)
+        mesh = _subsample_mesh_points(
+            mesh, n_points, generator=generator, pin_memory=pin_memory
+        )
     return mesh
 
 
@@ -178,7 +304,9 @@ class MeshReader:
             Glob pattern for mesh paths under ``path``. Default matches ``**/*.pmsh``.
         pin_memory : bool, default=False
             If True, place tensors in pinned (page-locked) memory for faster
-            async CPU→GPU transfers.
+            async CPU→GPU transfers.  Memmap-backed data is read into that
+            buffer rather than faulted in through the mapping, so the
+            process keeps no mapped pages of the samples it has read.
         include_index_in_metadata : bool, default=True
             If True, include sample index in metadata.
         subsample_n_points : int, optional
@@ -297,10 +425,11 @@ class MeshReader:
             self.subsample_n_cells,
             self.subsample_n_points,
             generator=generator,
+            pin_memory=self.pin_memory,
         )
 
         if self.pin_memory:
-            mesh = mesh.pin_memory()
+            mesh = _pin_memory(mesh)
 
         metadata = self._get_sample_metadata(index)
         if self.include_index_in_metadata:
@@ -355,7 +484,9 @@ class DomainMeshReader:
             Default matches ``**/*.pdmsh``.
         pin_memory : bool, default=False
             If True, place tensors in pinned (page-locked) memory for faster
-            async CPU→GPU transfers.
+            async CPU→GPU transfers.  Memmap-backed data is read into that
+            buffer rather than faulted in through the mapping, so the
+            process keeps no mapped pages of the samples it has read.
         include_index_in_metadata : bool, default=True
             If True, include sample index in metadata.
         subsample_n_points : int, optional
@@ -538,6 +669,7 @@ class DomainMeshReader:
                 n_cells=self.subsample_n_cells,
                 n_points=self.subsample_n_points,
                 generator=generator,
+                pin_memory=self.pin_memory,
             )
             interior = _subsample_mesh(dm.interior, **sub_kw)
             boundaries = {
@@ -555,7 +687,7 @@ class DomainMeshReader:
             dm = self._load_extra_boundaries(dm, index)
 
         if self.pin_memory:
-            dm = dm.pin_memory()
+            dm = _pin_memory(dm)
 
         metadata: dict[str, Any] = {
             "source_path": str(self._paths[index]),

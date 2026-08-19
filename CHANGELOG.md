@@ -280,6 +280,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   norms, but a custom `norm` that relies on unobserved entries being zeroed
   before the call may differ. The integer `norm` selector (e.g. `norm=2`) is
   unaffected.
+- `MeshReader` and `DomainMeshReader` now use `preadv` to load tensor data.
+  Any tensor the reader cannot locate exactly on disk (not memory-mapped, a
+  view of a larger mapping, or a platform without `preadv`) takes the previous
+  path. Explicit reads keep the pages of already-read samples out of the
+  process resident set, and can be faster where page faults are expensive,
+  such as cold data on a network filesystem. Readers that neither subsample
+  nor pin are unaffected.
 
 ### Deprecated
 
