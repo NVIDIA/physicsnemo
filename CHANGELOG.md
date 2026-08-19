@@ -403,9 +403,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pathlib.Path.glob`, which can silently drop entries under filesystem
   metadata-server load (Lustre), causing training to proceed on a subset
   of the dataset.
-- FLARE's Transformer Engine path now materializes broadcast global queries
-  before attention, preventing non-finite results during FP8 activation
-  recomputation for batches larger than one.
 - `compute_cotan_weights_fem`, and the calculus, curvature, and smoothing
   routines built on it such as `Mesh.laplacian`, no longer fail on degenerate
   cells in float32. The Gram-matrix regularization is now scale-free, so it also
