@@ -36,8 +36,10 @@ import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.core.version_check import OptionalImport
-from physicsnemo.models.activation_checkpointing import resolve_checkpointing_ratio
 from physicsnemo.models.transolver.transolver import _TransolverMlp
+from physicsnemo.models.utils.activation_checkpointing import (
+    resolve_checkpointing_ratio,
+)
 from physicsnemo.nn import GALEBlock
 
 from .activation_checkpointing import (

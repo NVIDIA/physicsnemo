@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any
 import torch
 import torch.nn as nn
 
-from physicsnemo.models.activation_checkpointing import (
+from physicsnemo.models.utils.activation_checkpointing import (
     run_checkpoint,
     should_checkpoint_interleaved_block,
 )
