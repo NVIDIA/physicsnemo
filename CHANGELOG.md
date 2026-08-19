@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds `ExponentialEulerSolver`, `EDMStochasticExponentialEulerSolver`, and
+  `DPMPlusPlus2M` to `physicsnemo.diffusion.samplers`.
+  `ExponentialEulerSolver` supports DDIM-like sampling for distilled few-step
+  models, its stochastic counterpart adds EDM-style churn and configurable
+  re-noising, and `DPMPlusPlus2M` provides efficient second-order sampling.
+  Users can select all three solvers by string key through
+  `physicsnemo.diffusion.samplers.sample`.
 - Adds `ShardTensor` support for GeoTransolver and FLARE models.
 - Adds zarr save/load for `Mesh` and `DomainMesh` via tensordict's zarr
   storage backend: `physicsnemo.mesh.io.to_zarr` / `from_zarr`, with
@@ -255,6 +262,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Extends `LinearGaussianNoiseScheduler` with `get_linear_denoiser`, which
+  exposes the linear coefficient required by exponential solvers while
+  preserving the selected predictor parameterization and ODE or SDE dynamics.
 - Splits the monolithic `physicsnemo.diffusion.noise_schedulers.noise_schedulers`
   and `physicsnemo.diffusion.samplers.solvers` modules into one module per class,
   named after the schedule or solver it defines, with the `NoiseScheduler` and

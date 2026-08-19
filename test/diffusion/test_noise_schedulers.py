@@ -203,7 +203,7 @@ class TestLinearGaussianNoiseScheduler:
             LinearGaussianNoiseScheduler()
 
     def test_incomplete_subclass_raises(self):
-        """Subclass missing abstract methods cannot be instantiated."""
+        """A subclass missing abstract methods raises at instantiation."""
 
         class IncompleteScheduler(LinearGaussianNoiseScheduler):
             def sigma(self, t):
@@ -638,6 +638,47 @@ class TestSpatialMethodNonRegression:
             s.get_denoiser()
         with pytest.raises(ValueError, match="denoising_type"):
             s.get_denoiser(x0_predictor=pred, denoising_type="bad")
+        with pytest.raises(ValueError, match="prediction_type"):
+            s.get_linear_denoiser(prediction_type="bad")
+
+    def test_get_linear_denoiser_absorbs_x_dependence(
+        self,
+        device,
+        tolerances,
+        sched_cls,
+        sched_kwargs,
+        sched_name,
+        spatial_name,
+        shape,
+        predictor_cls,
+        predictor_kwargs,
+    ):
+        """With the prediction held fixed, the residual full(x, t) - lam(t)*x
+        must not depend on x: the linear coefficient absorbs all the linear
+        x-dependence of the RHS, for every parameterization (ODE and SDE)."""
+        s = sched_cls(**sched_kwargs)
+        pred_value = make_input(shape, seed=140, device=device)
+
+        def const_pred(x_, t_):
+            return pred_value
+
+        x1 = make_input(shape, seed=141, device=device)
+        x2 = make_input(shape, seed=142, device=device)
+        t = make_input((shape[0],), seed=143, device=device).abs() * 0.3 + 0.2
+        t_bc = t.reshape(-1, *([1] * (x1.ndim - 1)))
+
+        for prediction_type in ("x0", "score", "epsilon"):
+            for denoising_type in ("ode", "sde"):
+                full = s.get_denoiser(
+                    **{f"{prediction_type}_predictor": const_pred},
+                    denoising_type=denoising_type,
+                )
+                lam = s.get_linear_denoiser(
+                    prediction_type, denoising_type=denoising_type
+                )
+                n1 = full(x1, t) - lam(t_bc) * x1
+                n2 = full(x2, t) - lam(t_bc) * x2
+                compare_outputs(n1, n2, **tolerances)
 
     def test_x0_to_score_to_x0_roundtrip(
         self,
@@ -755,7 +796,7 @@ class TestSpatialMethodNonRegression:
         # Build denoiser from epsilon predictor
         denoiser_eps = s.get_denoiser(epsilon_predictor=eps_pred)
 
-        # Build equivalent score predictor and denoiser
+        # Build a matching score predictor and denoiser
         def score_pred(x, t):
             eps = eps_pred(x, t)
             return s.epsilon_to_score(eps, t)
@@ -836,7 +877,7 @@ class TestDenoiserCompile:
         predictor_cls,
         predictor_kwargs,
     ):
-        """Compiled denoiser closure matches eager and graph is reused."""
+        """Compiled denoiser closure matches eager and reuses the graph."""
         torch._dynamo.config.error_on_recompile = True
 
         s = sched_cls(**sched_kwargs)

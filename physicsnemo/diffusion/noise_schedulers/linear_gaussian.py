@@ -17,13 +17,13 @@
 """Abstract base class for linear-Gaussian noise schedules."""
 
 from abc import ABC, abstractmethod
-from typing import Any, Literal, Tuple
+from typing import Any, Callable, Literal, Tuple
 
 import torch
 from jaxtyping import Float
 from torch import Tensor
 
-from physicsnemo.diffusion.base import Denoiser, Predictor
+from physicsnemo.diffusion.base import Denoiser, Predictor, PredictorType
 
 from .base import NoiseScheduler
 
@@ -89,6 +89,8 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
     - :meth:`add_noise`: Add noise to clean data (training)
     - :meth:`init_latents`: Initialize latent state (sampling)
     - :meth:`get_denoiser`: Get ODE/SDE RHS (sampling)
+    - :meth:`get_linear_denoiser`: Build the linear-coefficient callback used
+      by exponential ODE/SDE solvers
 
     Examples
     --------
@@ -761,6 +763,10 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
         stochastic term :math:`g(t) d\mathbf{W}` is handled by the solver,
         not returned by the denoiser itself.
 
+        Exponential integrators also need the coefficient of the linear part
+        of this right-hand side. Build that callback with
+        :meth:`get_linear_denoiser` using the same predictor configuration.
+
         Parameters
         ----------
         score_predictor : Predictor, optional
@@ -904,6 +910,111 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
             raise ValueError(
                 f"denoising_type must be 'ode' or 'sde', got '{denoising_type}'"
             )
+
+    def get_linear_denoiser(
+        self,
+        prediction_type: PredictorType = "x0",
+        denoising_type: Literal["ode", "sde"] = "ode",
+    ) -> Callable[[Float[Tensor, " *shape"]], Float[Tensor, " *shape"]]:
+        r"""
+        Return the linear coefficient required by exponential solvers.
+
+        Use this method with :meth:`get_denoiser` when a solver needs the
+        linear part of the diffusion dynamics separately. For a semi-linear
+        right-hand side,
+
+        .. math::
+            \frac{d\mathbf{x}}{dt} = A(t) \, \mathbf{x}
+            + N(\mathbf{x}, t)
+
+        this method returns :math:`A(t)`, while :meth:`get_denoiser` returns
+        the full right-hand side. Pass the resulting callback as ``linear_fn``
+        to solvers such as
+        :class:`~physicsnemo.diffusion.samplers.ExponentialEulerSolver`.
+
+        .. note::
+
+            Configure ``prediction_type`` and ``denoising_type`` to match the
+            predictor and denoiser used by the solver. The returned callable
+            computes the coefficient :math:`A(t)`, not
+            :math:`A(t) \, \mathbf{x}`.
+
+        Parameters
+        ----------
+        prediction_type : PredictorType, default="x0"
+            Parameterization used by the matching denoiser. Choose ``"x0"``,
+            ``"score"``, or ``"epsilon"`` to match the predictor supplied to
+            :meth:`get_denoiser`.
+        denoising_type : {"ode", "sde"}, default="ode"
+            Chooses the linear coefficient for the probability-flow ODE or
+            reverse SDE. Use the same value when calling :meth:`get_denoiser`.
+
+        Returns
+        -------
+        Callable
+            Function mapping diffusion time :math:`t` to the linear
+            coefficient :math:`A(t)`.
+
+        Raises
+        ------
+        ValueError
+            If ``prediction_type`` is not ``"x0"``, ``"score"``, or
+            ``"epsilon"``.
+
+        Examples
+        --------
+        Build matching full and linear callbacks for an x0-predictor.
+        Subtracting :math:`A(t) \, \mathbf{x}` from the full right-hand side
+        gives the nonlinear term:
+
+        >>> import torch
+        >>> from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
+        >>> scheduler = EDMNoiseScheduler()
+        >>> x0_pred = lambda x, t: x / (1 + t.view(-1, 1, 1, 1)**2)  # Toy x0-predictor
+        >>> linear = scheduler.get_linear_denoiser(prediction_type="x0")
+        >>> full = scheduler.get_denoiser(x0_predictor=x0_pred)
+        >>> x = torch.randn(2, 3, 8, 8)
+        >>> t = torch.tensor([5.0, 5.0])
+        >>> linear(t).shape
+        torch.Size([2])
+        >>> nonlinear = full(x, t) - linear(t).view(-1, 1, 1, 1) * x
+        >>> nonlinear.shape
+        torch.Size([2, 3, 8, 8])
+        """
+        # Capture methods as local variables to avoid referencing self
+        alpha = self.alpha
+        alpha_dot = self.alpha_dot
+        sigma = self.sigma
+        sigma_dot = self.sigma_dot
+
+        if prediction_type in ("score", "epsilon"):
+            # score- and noise-parameterizations share the drift coefficient
+            def linear_denoiser(
+                t: Float[Tensor, " *shape"],
+            ) -> Float[Tensor, " *shape"]:
+                return alpha_dot(t) / alpha(t)
+
+        elif prediction_type == "x0" and denoising_type == "ode":
+
+            def linear_denoiser(
+                t: Float[Tensor, " *shape"],
+            ) -> Float[Tensor, " *shape"]:
+                return sigma_dot(t) / sigma(t)
+
+        elif prediction_type == "x0":
+
+            def linear_denoiser(
+                t: Float[Tensor, " *shape"],
+            ) -> Float[Tensor, " *shape"]:
+                return 2 * sigma_dot(t) / sigma(t) - alpha_dot(t) / alpha(t)
+
+        else:
+            raise ValueError(
+                f"prediction_type must be 'x0', 'score', or 'epsilon', got "
+                f"'{prediction_type}'"
+            )
+
+        return linear_denoiser
 
     def add_noise(
         self,

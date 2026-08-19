@@ -15,9 +15,14 @@
 # limitations under the License.
 
 from .base import Solver  # noqa: F401
+from .dpmpp_2m import DPMPlusPlus2M  # noqa: F401
 from .edm_stochastic_euler import EDMStochasticEulerSolver  # noqa: F401
+from .edm_stochastic_exponential_euler import (  # noqa: F401
+    EDMStochasticExponentialEulerSolver,
+)
 from .edm_stochastic_heun import EDMStochasticHeunSolver  # noqa: F401
 from .euler import EulerSolver  # noqa: F401
+from .exponential_euler import ExponentialEulerSolver  # noqa: F401
 from .heun import HeunSolver  # noqa: F401
 from .legacy_deterministic_sampler import deterministic_sampler  # noqa: F401
 from .legacy_stochastic_sampler import stochastic_sampler  # noqa: F401
