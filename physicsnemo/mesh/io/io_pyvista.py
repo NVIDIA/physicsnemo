@@ -368,11 +368,107 @@ def _homogeneous_simplex_dimension(
     return simplex_dimensions[cell_type]
 
 
+def _validate_polyhedron_face_complex(
+    parent_id: int,
+    parent_point_ids: np.ndarray,
+    parent_face_ids: np.ndarray,
+    face_offsets: np.ndarray,
+    face_point_ids: np.ndarray,
+) -> None:
+    """Validate one polyhedron's parent/face topology as a closed shell."""
+    unique_parent_point_ids, parent_point_counts = np.unique(
+        parent_point_ids,
+        return_counts=True,
+    )
+    repeated_parent_points = unique_parent_point_ids[parent_point_counts > 1]
+
+    referenced_faces: list[np.ndarray] = []
+    seen_face_point_sets: dict[tuple[int, ...], int] = {}
+    edge_to_local_faces: dict[tuple[int, int], list[int]] = {}
+    for local_face_index, face_id_value in enumerate(parent_face_ids):
+        face_id = int(face_id_value)
+        point_ids = face_point_ids[face_offsets[face_id] : face_offsets[face_id + 1]]
+        unique_point_ids, point_counts = np.unique(point_ids, return_counts=True)
+        repeated_point_ids = unique_point_ids[point_counts > 1]
+        if len(repeated_point_ids) > 0:
+            raise ValueError(
+                f"Invalid POLYHEDRON face {face_id} referenced by cell at index "
+                f"{parent_id}: face repeats point ID {int(repeated_point_ids[0])}."
+            )
+
+        face_point_set = tuple(sorted(map(int, point_ids)))
+        previous_face_id = seen_face_point_sets.get(face_point_set)
+        if previous_face_id is not None:
+            raise ValueError(
+                f"Invalid POLYHEDRON cell at index {parent_id}: duplicate faces "
+                f"{previous_face_id} and {face_id} use the same point IDs."
+            )
+        seen_face_point_sets[face_point_set] = face_id
+        referenced_faces.append(point_ids)
+
+        for start, end in zip(point_ids, np.roll(point_ids, -1)):
+            edge = tuple(sorted((int(start), int(end))))
+            edge_to_local_faces.setdefault(edge, []).append(local_face_index)
+
+    referenced_face_point_ids = np.unique(np.concatenate(referenced_faces))
+    if not np.array_equal(unique_parent_point_ids, referenced_face_point_ids):
+        missing_from_faces = np.setdiff1d(
+            unique_parent_point_ids,
+            referenced_face_point_ids,
+        )
+        missing_from_parent = np.setdiff1d(
+            referenced_face_point_ids,
+            unique_parent_point_ids,
+        )
+        raise ValueError(
+            f"Invalid POLYHEDRON cell at index {parent_id}: parent "
+            "connectivity and referenced faces use different point IDs; "
+            f"missing from faces {missing_from_faces.tolist()}, missing "
+            f"from parent connectivity {missing_from_parent.tolist()}."
+        )
+    if len(repeated_parent_points) > 0:
+        raise ValueError(
+            f"Invalid POLYHEDRON cell at index {parent_id}: parent connectivity "
+            f"repeats point ID {int(repeated_parent_points[0])}."
+        )
+
+    for edge, incident_faces in edge_to_local_faces.items():
+        if len(incident_faces) != 2:
+            raise ValueError(
+                f"Invalid POLYHEDRON cell at index {parent_id}: edge "
+                f"{list(edge)} must belong to exactly 2 faces in a closed shell, "
+                f"got {len(incident_faces)}."
+            )
+
+    face_adjacency = [set() for _ in parent_face_ids]
+    for first_face, second_face in edge_to_local_faces.values():
+        face_adjacency[first_face].add(second_face)
+        face_adjacency[second_face].add(first_face)
+    connected_faces = {0}
+    pending_faces = [0]
+    while pending_faces:
+        face_index = pending_faces.pop()
+        new_neighbors = face_adjacency[face_index] - connected_faces
+        connected_faces.update(new_neighbors)
+        pending_faces.extend(new_neighbors)
+    if len(connected_faces) != len(parent_face_ids):
+        disconnected_face_ids = [
+            int(parent_face_ids[index])
+            for index in range(len(parent_face_ids))
+            if index not in connected_faces
+        ]
+        raise ValueError(
+            f"Invalid POLYHEDRON cell at index {parent_id}: referenced faces "
+            "must form one connected closed shell; disconnected face IDs "
+            f"include {disconnected_face_ids}."
+        )
+
+
 def _validate_polyhedron_auxiliary_arrays(
     pyvista_mesh: "pv.UnstructuredGrid",
     cell_types: np.ndarray,
 ) -> None:
-    """Validate VTK polyhedron face and face-location arrays."""
+    """Validate VTK polyhedron auxiliary arrays and face complexes."""
     n_polyhedra = int((cell_types == pv.CellType.POLYHEDRON).sum())
     if n_polyhedra == 0:
         return
@@ -430,6 +526,24 @@ def _validate_polyhedron_auxiliary_arrays(
         raise ValueError(
             f"Invalid POLYHEDRON face-location reference {bad_face_id}: valid "
             f"face IDs are in [0, {n_faces})."
+        )
+
+    cell_offsets = np.asarray(pyvista_mesh.offset)
+    cell_point_ids = np.asarray(pyvista_mesh.GetCells().GetConnectivityArray())
+    for parent_id_value in np.flatnonzero(polyhedron_mask):
+        parent_id = int(parent_id_value)
+        parent_point_ids = cell_point_ids[
+            cell_offsets[parent_id] : cell_offsets[parent_id + 1]
+        ]
+        parent_face_ids = face_ids[
+            location_offsets[parent_id] : location_offsets[parent_id + 1]
+        ]
+        _validate_polyhedron_face_complex(
+            parent_id,
+            parent_point_ids,
+            parent_face_ids,
+            face_offsets,
+            face_point_ids,
         )
 
 
@@ -505,15 +619,6 @@ def _validate_selected_polyhedra_for_tetrahedralization(
     if len(polyhedron_parent_ids) == 0:
         return
 
-    ### Primary connectivity and referenced faces must use the same point set.
-    cell_offsets = np.asarray(pyvista_mesh.offset)
-    cell_point_ids = np.asarray(pyvista_mesh.GetCells().GetConnectivityArray())
-    faces = pyvista_mesh.GetPolyhedronFaces()
-    face_offsets = np.asarray(faces.GetOffsetsArray())
-    face_point_ids = np.asarray(faces.GetConnectivityArray())
-    face_locations = pyvista_mesh.GetPolyhedronFaceLocations()
-    location_offsets = np.asarray(face_locations.GetOffsetsArray())
-    face_ids = np.asarray(face_locations.GetConnectivityArray())
     source_point_dtype = pyvista_mesh.points.dtype
     vtk_version = vtk.vtkVersion()
     trust_vtk_result = (
@@ -522,37 +627,6 @@ def _validate_selected_polyhedra_for_tetrahedralization(
     ) >= (9, 6)
 
     for parent_id in polyhedron_parent_ids:
-        parent_point_ids = np.sort(
-            cell_point_ids[cell_offsets[parent_id] : cell_offsets[parent_id + 1]]
-        )
-        parent_face_ids = face_ids[
-            location_offsets[parent_id] : location_offsets[parent_id + 1]
-        ]
-        referenced_face_point_ids = np.unique(
-            np.concatenate(
-                [
-                    face_point_ids[face_offsets[face_id] : face_offsets[face_id + 1]]
-                    for face_id in parent_face_ids
-                ]
-            )
-        )
-        if not np.array_equal(parent_point_ids, referenced_face_point_ids):
-            missing_from_faces = np.setdiff1d(
-                parent_point_ids,
-                referenced_face_point_ids,
-            )
-            missing_from_parent = np.setdiff1d(
-                referenced_face_point_ids,
-                parent_point_ids,
-            )
-            raise ValueError(
-                f"Invalid POLYHEDRON cell at index {int(parent_id)}: parent "
-                "connectivity and referenced faces use different point IDs; "
-                f"missing from faces {missing_from_faces.tolist()}, missing "
-                "from parent connectivity "
-                f"{missing_from_parent.tolist()}."
-            )
-
         polyhedron = vtk.vtkPolyhedron.SafeDownCast(
             pyvista_mesh.GetCell(int(parent_id))
         )

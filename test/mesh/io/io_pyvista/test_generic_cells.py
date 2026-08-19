@@ -1193,6 +1193,137 @@ def test_malformed_polyhedron_auxiliary_arrays_raise_in_one_subprocess():
     _run_isolated_script(script)
 
 
+def test_malformed_polyhedron_face_complexes_raise_on_every_path():
+    """Common shell validation protects tetrahedron, centroid, and edge filters."""
+    script = textwrap.dedent(
+        """
+        import sys
+        import numpy as np
+        import pyvista as pv
+        import vtk
+        from physicsnemo.mesh.io.io_pyvista import from_pyvista
+        from test.mesh.io.io_pyvista.test_from_pyvista_3d import (
+            _make_pentagonal_prism,
+        )
+
+        def make_polyhedron(points, faces):
+            face_stream = [len(faces)]
+            for face in faces:
+                face_stream.extend([len(face), *face])
+            return pv.UnstructuredGrid(
+                np.array([len(face_stream), *face_stream]),
+                np.array([pv.CellType.POLYHEDRON]),
+                np.asarray(points, dtype=float),
+            )
+
+        def clone(cell_array):
+            result = vtk.vtkCellArray()
+            result.DeepCopy(cell_array)
+            return result
+
+        def make_parent_face_mismatch():
+            base = _make_pentagonal_prism()
+            faces = clone(base.GetPolyhedronFaces())
+            locations = clone(base.GetPolyhedronFaceLocations())
+            cells = clone(base.GetCells())
+            np.asarray(cells.GetConnectivityArray())[0] = 9
+            vtk_grid = vtk.vtkUnstructuredGrid()
+            vtk_grid.SetPoints(base.GetPoints())
+            vtk_grid.SetPolyhedralCells(
+                base.GetCellTypesArray(),
+                cells,
+                locations,
+                faces,
+            )
+            return pv.wrap(vtk_grid)
+
+        tetra_points = np.array([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ])
+        tetra_faces = [
+            [0, 2, 1],
+            [0, 1, 3],
+            [1, 2, 3],
+            [2, 0, 3],
+        ]
+        duplicate_missing = make_polyhedron(
+            tetra_points,
+            [tetra_faces[0], tetra_faces[0], tetra_faces[1], tetra_faces[1]],
+        )
+        repeated_face_point = make_polyhedron(
+            tetra_points,
+            [[0, 1, 1], *tetra_faces[1:]],
+        )
+
+        pyramid_points = np.array([
+            [-1.0, -1.0, 0.0],
+            [1.0, -1.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [-1.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ])
+        open_shell = make_polyhedron(
+            pyramid_points,
+            [[0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4]],
+        )
+
+        two_shell_points = np.vstack(
+            [tetra_points, tetra_points + np.array([3.0, 0.0, 0.0])]
+        )
+        two_shell_faces = [
+            *tetra_faces,
+            *[[point_id + 4 for point_id in face] for face in tetra_faces],
+        ]
+        disconnected_shells = make_polyhedron(two_shell_points, two_shell_faces)
+
+        cases = [
+            (
+                "parent-face-point-set",
+                make_parent_face_mismatch(),
+                "connectivity and referenced faces",
+            ),
+            ("duplicate-missing", duplicate_missing, "duplicate faces"),
+            ("repeated-face-point", repeated_face_point, "face repeats point ID"),
+            ("open-shell", open_shell, "exactly 2 faces"),
+            (
+                "disconnected-shells",
+                disconnected_shells,
+                "one connected closed shell",
+            ),
+        ]
+        conversions = [
+            ("tetrahedralization", {}),
+            (
+                "centroids",
+                {"manifold_dim": 0, "point_source": "cell_centroids"},
+            ),
+            ("edges", {"manifold_dim": 1}),
+        ]
+
+        failures = []
+        for case_name, grid, expected in cases:
+            for conversion_name, kwargs in conversions:
+                marker = f"CASE {case_name}:{conversion_name}"
+                print(marker, flush=True)
+                try:
+                    from_pyvista(grid, warn_on_lost_data=False, **kwargs)
+                except ValueError as error:
+                    if expected not in str(error):
+                        failures.append((marker, str(error)))
+                else:
+                    failures.append((marker, "no ValueError"))
+
+        if failures:
+            print(repr(failures), file=sys.stderr)
+            raise SystemExit(2)
+        """
+    )
+    _run_isolated_script(script)
+
+
 def test_concave_polyhedron_rejected_before_tetrahedralization():
     """Concave polyhedra cannot enter VTK's shape-altering tetrahedralizer."""
     grid = _make_concave_l_prism()
