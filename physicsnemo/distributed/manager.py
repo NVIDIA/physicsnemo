@@ -310,15 +310,12 @@ class DistributedManager(object):
         """Setup method using generic initialization"""
         rank = int(os.environ.get("RANK"))
         world_size = int(os.environ.get("WORLD_SIZE"))
-        if "LOCAL_RANK" in os.environ:
-            local_rank = os.environ.get("LOCAL_RANK")
-            if local_rank is not None:
-                local_rank = int(local_rank)
-            else:
-                local_rank = rank % torch.cuda.device_count()
-
-        else:
-            local_rank = rank % torch.cuda.device_count()
+        local_rank = os.environ.get("LOCAL_RANK")
+        if local_rank is not None:
+            local_rank = int(local_rank)
+        # When LOCAL_RANK is not provided, leave it as None so that setup()
+        # derives it (rank modulo the accelerator count, or 0 on CPU-only
+        # hosts).
 
         # Read env variables
         addr = os.environ.get("MASTER_ADDR")
