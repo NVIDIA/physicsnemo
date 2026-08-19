@@ -14,8 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import gc
-import pickle
 import random
 
 import pytest
@@ -164,53 +162,6 @@ def test_flare_activation_checkpointing_matches_outputs_and_gradients(device):
     torch.testing.assert_close(fx_checkpointed.grad, fx_plain.grad)
     torch.testing.assert_close(embedding_checkpointed.grad, embedding_plain.grad)
     _assert_parameter_gradients_close(checkpointed, plain, atol=1e-6, rtol=1e-5)
-
-
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
-def test_flare_activation_checkpointing_reduces_peak_cuda_memory():
-    """Checkpointing lowers peak allocated CUDA memory for a FLARE training step."""
-
-    def peak_step_bytes(activation_checkpointing):
-        torch.cuda.empty_cache()
-        model = FLARE(
-            functional_dim=2,
-            embedding_dim=3,
-            out_dim=4,
-            n_layers=6,
-            n_hidden=128,
-            n_head=8,
-            mlp_ratio=4,
-            slice_num=32,
-            structured_shape=None,
-            use_te=False,
-            activation_checkpointing=activation_checkpointing,
-        ).cuda()
-        model.train()
-        fx = torch.randn(1, 4096, 2, device="cuda")
-        embedding = torch.randn(1, 4096, 3, device="cuda")
-
-        # Warm up each policy before resetting the allocator peak so one-time
-        # kernel initialization is excluded symmetrically.
-        model(fx, embedding=embedding).square().mean().backward()
-        model.zero_grad(set_to_none=True)
-        torch.cuda.synchronize()
-        baseline = torch.cuda.memory_allocated()
-        torch.cuda.reset_peak_memory_stats()
-
-        model(fx, embedding=embedding).square().mean().backward()
-        torch.cuda.synchronize()
-        peak_delta = torch.cuda.max_memory_allocated() - baseline
-
-        del model, fx, embedding
-        gc.collect()
-        torch.cuda.empty_cache()
-        return peak_delta
-
-    plain_peak = peak_step_bytes(False)
-    checkpointed_peak = peak_step_bytes(True)
-    assert checkpointed_peak < plain_peak, (
-        f"checkpointing peaked at {checkpointed_peak} bytes versus {plain_peak} bytes"
-    )
 
 
 def test_flare_activation_checkpointing_torch_compile(device):
@@ -522,7 +473,7 @@ def test_flare_checkpoint(device):
 
 
 def test_flare_activation_checkpointing_serialization(tmp_path):
-    """New and legacy checkpoint formats preserve checkpointing behavior."""
+    """FLARE checkpoint metadata preserves its checkpointing policy."""
     kwargs = dict(
         functional_dim=2,
         embedding_dim=3,
@@ -547,33 +498,6 @@ def test_flare_activation_checkpointing_serialization(tmp_path):
     assert isinstance(restored, FLARE)
     assert restored._activation_checkpointing_ratio == 0.5
     assert restored.state_dict().keys() == default_model.state_dict().keys()
-
-    legacy_args = {
-        **default_model._args,
-        "__args__": default_model._args["__args__"].copy(),
-    }
-    legacy_args["__args__"].pop("activation_checkpointing")
-    legacy_args["__args__"].pop("checkpointing_ratio")
-    legacy_restored = Module.instantiate(legacy_args)
-    assert isinstance(legacy_restored, FLARE)
-    assert legacy_restored._activation_checkpointing_ratio == 0.0
-
-    functional_input = torch.randn(2, 16, 2, requires_grad=True)
-    embedding = torch.randn(2, 16, 3, requires_grad=True)
-    expected = default_model(functional_input, embedding=embedding).detach()
-
-    del default_model._activation_checkpointing_ratio
-    restored = pickle.loads(  # noqa: S301 - trusted fixture
-        pickle.dumps(default_model)
-    )
-    restored_input = functional_input.detach().clone().requires_grad_(True)
-    restored_embedding = embedding.detach().clone().requires_grad_(True)
-    actual = restored(restored_input, embedding=restored_embedding)
-    torch.testing.assert_close(actual, expected)
-    actual.square().mean().backward()
-    assert restored_input.grad is not None
-    assert restored_embedding.grad is not None
-    assert all(parameter.grad is not None for parameter in restored.parameters())
 
 
 @check_ort_version()

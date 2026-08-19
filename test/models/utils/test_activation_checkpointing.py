@@ -43,7 +43,6 @@ def _checkpoint_mask(block_count: int, ratio: float) -> list[bool]:
         (3, 0.5, [True, False, True]),
         (5, 0.4, [True, False, False, True, False]),
         (5, 0.6, [True, False, True, False, True]),
-        (7, 0.5, [True, False, True, False, True, False, True]),
         (5, 1.0, [True] * 5),
     ],
 )

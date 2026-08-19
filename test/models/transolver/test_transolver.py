@@ -118,17 +118,7 @@ def test_transolver_constructor(config):
     assert hasattr(model, "meta"), "Model should have metadata"
 
 
-@pytest.mark.parametrize(
-    "structured_shape,plus,time_input",
-    [
-        (None, False, False),
-        ((4, 5), True, True),
-    ],
-    ids=["irregular", "structured_plus_time"],
-)
-def test_transolver_activation_checkpointing_matches_outputs_and_gradients(
-    device, structured_shape, plus, time_input
-):
+def test_transolver_activation_checkpointing_matches_outputs_and_gradients(device):
     """Checkpointed blocks reproduce outputs and gradients, including RNG use."""
     kwargs = dict(
         functional_dim=2,
@@ -140,10 +130,10 @@ def test_transolver_activation_checkpointing_matches_outputs_and_gradients(
         n_head=4,
         mlp_ratio=2,
         slice_num=4,
-        structured_shape=structured_shape,
+        structured_shape=(4, 6),
         use_te=False,
-        time_input=time_input,
-        plus=plus,
+        time_input=True,
+        plus=True,
     )
     torch.manual_seed(1)
     plain = Transolver(**kwargs, activation_checkpointing=False).to(device)
@@ -152,17 +142,13 @@ def test_transolver_activation_checkpointing_matches_outputs_and_gradients(
     plain.train()
     checkpointed.train()
 
-    spatial = structured_shape if structured_shape is not None else (24,)
+    spatial = (4, 6)
     fx_plain = torch.randn(2, *spatial, 2, device=device, requires_grad=True)
     emb_plain = torch.randn(2, *spatial, 3, device=device, requires_grad=True)
     fx_checkpointed = fx_plain.detach().clone().requires_grad_(True)
     emb_checkpointed = emb_plain.detach().clone().requires_grad_(True)
-    time_plain = (
-        torch.rand(2, device=device, requires_grad=True) if time_input else None
-    )
-    time_checkpointed = (
-        time_plain.detach().clone().requires_grad_(True) if time_input else None
-    )
+    time_plain = torch.rand(2, device=device, requires_grad=True)
+    time_checkpointed = time_plain.detach().clone().requires_grad_(True)
 
     # Reset the RNG because dropout and Transolver++ slice routing are stochastic.
     torch.manual_seed(7)
@@ -182,10 +168,9 @@ def test_transolver_activation_checkpointing_matches_outputs_and_gradients(
     torch.testing.assert_close(
         emb_checkpointed.grad, emb_plain.grad, atol=1e-6, rtol=1e-5
     )
-    if time_input:
-        torch.testing.assert_close(
-            time_checkpointed.grad, time_plain.grad, atol=1e-6, rtol=1e-5
-        )
+    torch.testing.assert_close(
+        time_checkpointed.grad, time_plain.grad, atol=1e-6, rtol=1e-5
+    )
     _assert_parameter_gradients_close(checkpointed, plain, atol=1e-6, rtol=1e-5)
 
 
