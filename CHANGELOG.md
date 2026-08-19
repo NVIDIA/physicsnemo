@@ -20,8 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds configurable activation checkpointing to Transolver, FLARE, and
   GeoTransolver. Transolver and FLARE support interleaved block checkpointing;
   GeoTransolver supports checkpointing context construction, per-stream input
-  projections, GALE or GALE_FA blocks, and output projections. All three models
-  support PyTorch and Transformer Engine checkpoint backends.
+  projections, GALE or GALE_FA blocks, and output projections.
 - Promotes GeoTransolver out of `experimental` to
   `physicsnemo.models.geotransolver.GeoTransolver`, together with the FLARE
   model (`physicsnemo.models.flare.FLARE`) and the reusable GALE and FLARE
