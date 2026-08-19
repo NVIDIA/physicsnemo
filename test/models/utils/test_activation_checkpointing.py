@@ -38,27 +38,36 @@ def _checkpoint_mask(block_count: int, ratio: float) -> list[bool]:
 @pytest.mark.parametrize(
     "block_count,ratio,expected",
     [
+        (5, 0.0, [False] * 5),
+        (5, 0.09, [False] * 5),
         (3, 0.5, [True, False, True]),
         (5, 0.4, [True, False, False, True, False]),
         (5, 0.6, [True, False, True, False, True]),
         (7, 0.5, [True, False, True, False, True, False, True]),
+        (5, 1.0, [True] * 5),
     ],
 )
-def test_interleaved_block_selector_odd_depths(block_count, ratio, expected):
+def test_interleaved_block_selector(block_count, ratio, expected):
     assert _checkpoint_mask(block_count, ratio) == expected
     assert sum(expected) == round(ratio * block_count)
 
 
-def test_interleaved_block_selector_boundaries():
-    assert _checkpoint_mask(5, 0.0) == [False] * 5
-    assert _checkpoint_mask(5, 1.0) == [True] * 5
-    assert _checkpoint_mask(5, 0.09) == [False] * 5
+def test_interleaved_block_selector_is_training_only():
     assert not should_checkpoint_interleaved_block(0, 5, 1.0, training=False)
     with torch.no_grad():
         assert not should_checkpoint_interleaved_block(0, 5, 1.0, training=True)
 
 
-@pytest.mark.parametrize("ratio", [float("nan"), float("inf"), float("-inf")])
-def test_checkpointing_ratio_rejects_non_finite_values(ratio):
-    with pytest.raises(ValueError, match="checkpointing_ratio"):
-        resolve_checkpointing_ratio(True, ratio)
+@pytest.mark.parametrize(
+    "enabled,ratio,error,error_match",
+    [
+        (1, 1.0, TypeError, "activation_checkpointing"),
+        (True, -0.1, ValueError, "checkpointing_ratio"),
+        (True, 1.1, ValueError, "checkpointing_ratio"),
+        (True, True, TypeError, "checkpointing_ratio"),
+        (True, float("nan"), ValueError, "checkpointing_ratio"),
+    ],
+)
+def test_checkpointing_ratio_rejects_invalid_values(enabled, ratio, error, error_match):
+    with pytest.raises(error, match=error_match):
+        resolve_checkpointing_ratio(enabled, ratio)

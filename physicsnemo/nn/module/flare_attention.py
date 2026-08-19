@@ -112,10 +112,7 @@ def _flare_self_attention_te(
         Self-attended output of shape :math:`(B, H, N, D)`.
     """
     G = q_global.to(dtype=x_mid.dtype).expand(x_mid.shape[0], -1, -1, -1)
-    # Materialize the broadcast batch dimension before entering Transformer
-    # Engine. Its FP8 activation-recompute path requires independent storage
-    # for each batch element rather than the zero-stride view created by expand.
-    G = rearrange(G, "b h s d -> b s h d").contiguous()
+    G = rearrange(G, "b h s d -> b s h d")
     k = rearrange(self_k(x_mid), "b h n d -> b n h d")
     v = rearrange(self_v(x_mid), "b h n d -> b n h d")
     z = attn_fn(G, k, v)

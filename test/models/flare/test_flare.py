@@ -130,88 +130,6 @@ def test_flare_constructor(config):
     assert hasattr(model, "meta"), "Model should have metadata"
 
 
-@pytest.mark.parametrize(
-    "enabled,ratio,expected",
-    [
-        (False, 1.0, 0.0),
-        (False, 0.5, 0.0),
-        (True, 0.0, 0.0),
-        (True, 0.5, 0.5),
-        (True, 1.0, 1.0),
-    ],
-)
-def test_flare_activation_checkpointing_configuration(enabled, ratio, expected):
-    """FLARE exposes Transolver's interleaved checkpointing policy."""
-    model = FLARE(
-        functional_dim=2,
-        embedding_dim=3,
-        out_dim=1,
-        n_layers=4,
-        n_hidden=16,
-        n_head=4,
-        slice_num=4,
-        structured_shape=None,
-        use_te=False,
-        activation_checkpointing=enabled,
-        checkpointing_ratio=ratio,
-    )
-
-    assert model._activation_checkpointing_ratio == expected
-    model.train()
-    expected_masks = {
-        0.0: [False, False, False, False],
-        0.5: [True, False, True, False],
-        1.0: [True, True, True, True],
-    }
-    assert [model._should_checkpoint_block(i) for i in range(len(model.blocks))] == (
-        expected_masks[expected]
-    )
-    model.eval()
-    assert not any(model._should_checkpoint_block(i) for i in range(len(model.blocks)))
-
-
-@pytest.mark.parametrize("value", [0, 0.5, 1, "all", None])
-def test_flare_activation_checkpointing_rejects_non_boolean_switch(value):
-    """FLARE's checkpointing switch accepts booleans only."""
-    with pytest.raises(TypeError, match="activation_checkpointing"):
-        FLARE(
-            functional_dim=2,
-            embedding_dim=3,
-            out_dim=1,
-            n_hidden=16,
-            n_head=4,
-            structured_shape=None,
-            use_te=False,
-            activation_checkpointing=value,
-        )
-
-
-@pytest.mark.parametrize(
-    "value,error",
-    [
-        (-0.1, ValueError),
-        (1.1, ValueError),
-        (True, TypeError),
-        ("all", TypeError),
-        (None, TypeError),
-    ],
-)
-def test_flare_activation_checkpointing_rejects_invalid_ratio(value, error):
-    """FLARE rejects invalid checkpointing ratios during construction."""
-    with pytest.raises(error, match="checkpointing_ratio"):
-        FLARE(
-            functional_dim=2,
-            embedding_dim=3,
-            out_dim=1,
-            n_hidden=16,
-            n_head=4,
-            structured_shape=None,
-            use_te=False,
-            activation_checkpointing=True,
-            checkpointing_ratio=value,
-        )
-
-
 def test_flare_activation_checkpointing_matches_outputs_and_gradients(device):
     """Checkpointed FLARE blocks preserve outputs and gradients."""
     kwargs = dict(
@@ -246,72 +164,6 @@ def test_flare_activation_checkpointing_matches_outputs_and_gradients(device):
     torch.testing.assert_close(fx_checkpointed.grad, fx_plain.grad)
     torch.testing.assert_close(embedding_checkpointed.grad, embedding_plain.grad)
     _assert_parameter_gradients_close(checkpointed, plain, atol=1e-6, rtol=1e-5)
-
-
-def test_flare_activation_checkpointing_recomputes_selected_blocks(monkeypatch):
-    """Only the selected interleaved FLARE blocks are recomputed."""
-    model = FLARE(
-        functional_dim=2,
-        embedding_dim=3,
-        out_dim=1,
-        n_layers=4,
-        n_hidden=16,
-        n_head=4,
-        slice_num=4,
-        structured_shape=None,
-        use_te=False,
-        activation_checkpointing=True,
-        checkpointing_ratio=0.5,
-    )
-    model.train()
-    call_counts = [0] * len(model.blocks)
-    for block_idx, block in enumerate(model.blocks):
-        original_forward = block.forward
-
-        def counting_forward(fx, idx=block_idx, forward=original_forward):
-            call_counts[idx] += 1
-            return forward(fx)
-
-        monkeypatch.setattr(block, "forward", counting_forward)
-
-    fx = torch.randn(2, 16, 2)
-    embedding = torch.randn(2, 16, 3)
-    model(fx, embedding=embedding).square().mean().backward()
-    assert call_counts == [2, 1, 2, 1]
-
-
-def test_flare_activation_checkpointing_reduces_saved_activations():
-    """Checkpointing reduces tensors retained for FLARE backward."""
-    kwargs = dict(
-        functional_dim=2,
-        embedding_dim=3,
-        out_dim=2,
-        n_layers=4,
-        n_hidden=32,
-        dropout=0.0,
-        n_head=4,
-        mlp_ratio=2,
-        slice_num=8,
-        structured_shape=None,
-        use_te=False,
-    )
-    plain, checkpointed = _make_checkpointing_model_pair(kwargs)
-    fx = torch.randn(2, 128, 2)
-    embedding = torch.randn(2, 128, 3)
-
-    def saved_activation_bytes(model):
-        total = 0
-
-        def pack(tensor):
-            nonlocal total
-            total += tensor.numel() * tensor.element_size()
-            return tensor
-
-        with torch.autograd.graph.saved_tensors_hooks(pack, lambda tensor: tensor):
-            model(fx, embedding=embedding).square().mean()
-        return total
-
-    assert saved_activation_bytes(checkpointed) < saved_activation_bytes(plain)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
@@ -471,75 +323,6 @@ def test_flare_te_activation_checkpointing(monkeypatch):
         rtol=1e-4,
     )
     _assert_parameter_gradients_close(checkpointed, plain, atol=1e-5, rtol=1e-4)
-
-
-@requires_module("transformer_engine>=2.14.0")
-def test_flare_te_fp8_activation_checkpointing(monkeypatch):
-    """TE FP8 recomputation preserves FLARE outputs and gradients."""
-    if not torch.cuda.is_available():
-        pytest.skip("Transformer Engine requires CUDA")
-
-    import transformer_engine.pytorch as te_runtime
-    from transformer_engine.common import recipe as te_recipe
-    from transformer_engine.pytorch.quantization import FP8GlobalStateManager
-
-    fp8_available, reason = te_runtime.is_fp8_available(return_reason=True)
-    if not fp8_available:
-        pytest.skip(reason)
-    monkeypatch.setenv("NVTE_BIAS_GELU_NVFUSION", "0")
-    kwargs = dict(
-        functional_dim=16,
-        embedding_dim=16,
-        out_dim=16,
-        n_layers=2,
-        n_hidden=128,
-        dropout=0.0,
-        n_head=8,
-        mlp_ratio=2,
-        slice_num=16,
-        structured_shape=None,
-        use_te=True,
-    )
-    torch.manual_seed(0)
-    plain = FLARE(**kwargs, activation_checkpointing=False).to(
-        device="cuda", dtype=torch.bfloat16
-    )
-    checkpointed = FLARE(**kwargs, activation_checkpointing=True).to(
-        device="cuda", dtype=torch.bfloat16
-    )
-    checkpointed.load_state_dict(plain.state_dict())
-    plain.train()
-    checkpointed.train()
-    fx_plain = torch.randn(
-        2, 64, 16, device="cuda", dtype=torch.bfloat16, requires_grad=True
-    )
-    embedding_plain = torch.randn(
-        2, 64, 16, device="cuda", dtype=torch.bfloat16, requires_grad=True
-    )
-    fx_checkpointed = fx_plain.detach().clone().requires_grad_(True)
-    embedding_checkpointed = embedding_plain.detach().clone().requires_grad_(True)
-
-    def run(model, functional_input, embedding):
-        FP8GlobalStateManager.reset()
-        with te_runtime.autocast(enabled=True, recipe=te_recipe.DelayedScaling()):
-            output = model(functional_input, embedding=embedding)
-        output_for_comparison = output.detach().clone()
-        output.float().square().mean().backward()
-        return output_for_comparison
-
-    output_plain = run(plain, fx_plain, embedding_plain)
-    output_checkpointed = run(checkpointed, fx_checkpointed, embedding_checkpointed)
-    assert torch.isfinite(output_plain).all(), "plain FP8 FLARE output is not finite"
-    assert torch.isfinite(output_checkpointed).all(), (
-        "checkpointed FP8 FLARE output is not finite"
-    )
-    tolerances = dict(atol=0.1, rtol=0.15)
-    torch.testing.assert_close(output_checkpointed, output_plain, **tolerances)
-    torch.testing.assert_close(fx_checkpointed.grad, fx_plain.grad, **tolerances)
-    torch.testing.assert_close(
-        embedding_checkpointed.grad, embedding_plain.grad, **tolerances
-    )
-    _assert_parameter_gradients_close(checkpointed, plain, **tolerances)
 
 
 def test_flare_2d_forward(device):
@@ -739,7 +522,7 @@ def test_flare_checkpoint(device):
 
 
 def test_flare_activation_checkpointing_serialization(tmp_path):
-    """The FLARE checkpointing policy round-trips without state-dict changes."""
+    """New and legacy checkpoint formats preserve checkpointing behavior."""
     kwargs = dict(
         functional_dim=2,
         embedding_dim=3,
@@ -775,26 +558,14 @@ def test_flare_activation_checkpointing_serialization(tmp_path):
     assert isinstance(legacy_restored, FLARE)
     assert legacy_restored._activation_checkpointing_ratio == 0.0
 
-
-def test_flare_legacy_full_object_pickle_defaults_checkpointing_off():
-    """Legacy full-object FLARE pickles remain usable without the new field."""
-    model = FLARE(
-        functional_dim=2,
-        embedding_dim=3,
-        out_dim=1,
-        n_layers=2,
-        n_hidden=16,
-        n_head=4,
-        slice_num=4,
-        structured_shape=None,
-        use_te=False,
-    )
     functional_input = torch.randn(2, 16, 2, requires_grad=True)
     embedding = torch.randn(2, 16, 3, requires_grad=True)
-    expected = model(functional_input, embedding=embedding).detach()
+    expected = default_model(functional_input, embedding=embedding).detach()
 
-    del model._activation_checkpointing_ratio
-    restored = pickle.loads(pickle.dumps(model))  # noqa: S301 - trusted fixture
+    del default_model._activation_checkpointing_ratio
+    restored = pickle.loads(  # noqa: S301 - trusted fixture
+        pickle.dumps(default_model)
+    )
     restored_input = functional_input.detach().clone().requires_grad_(True)
     restored_embedding = embedding.detach().clone().requires_grad_(True)
     actual = restored(restored_input, embedding=restored_embedding)

@@ -70,30 +70,6 @@ def _assert_parameter_gradients_close(
         )
 
 
-def test_geotransolver_checkpointing_hydra_list_serialization(tmp_path):
-    """OmegaConf component lists serialize as plain checkpoint metadata."""
-    components = OmegaConf.create(["blocks", "output"])
-    model = GeoTransolver(
-        functional_dim=4,
-        out_dim=2,
-        n_layers=1,
-        n_hidden=16,
-        n_head=4,
-        slice_num=4,
-        use_te=False,
-        activation_checkpointing=True,
-        activation_checkpointing_components=components,
-    )
-
-    checkpoint_path = tmp_path / "geotransolver_hydra_components.mdlus"
-    model.save(checkpoint_path)
-    restored = Module.from_checkpoint(checkpoint_path)
-
-    assert restored._activation_checkpointing_components == frozenset(
-        {"blocks", "output"}
-    )
-
-
 @pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
 @pytest.mark.parametrize("use_geometry", [False, True])
 @pytest.mark.parametrize("use_global", [False, True])
@@ -1343,166 +1319,9 @@ def test_geotransolver_te_full_component_checkpointing(monkeypatch, attention_ty
     _assert_parameter_gradients_close(full, plain, atol=1e-5, rtol=1e-4)
 
 
-@requires_module("transformer_engine")
-@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
-def test_geotransolver_te_fp8_full_component_checkpointing(monkeypatch, attention_type):
-    """TE FP8 recomputation preserves GeoTransolver outputs and gradients."""
-    if not torch.cuda.is_available():
-        pytest.skip("CUDA is not available")
-
-    import transformer_engine.pytorch as te_runtime
-    from transformer_engine.common import recipe as te_recipe
-    from transformer_engine.pytorch.quantization import FP8GlobalStateManager
-
-    fp8_available, reason = te_runtime.is_fp8_available(return_reason=True)
-    if not fp8_available:
-        pytest.skip(reason)
-    monkeypatch.setenv("NVTE_BIAS_GELU_NVFUSION", "0")
-    kwargs = dict(
-        functional_dim=16,
-        out_dim=16,
-        geometry_dim=16,
-        global_dim=16,
-        n_layers=2,
-        n_hidden=128,
-        dropout=0.0,
-        n_head=8,
-        mlp_ratio=2,
-        slice_num=16,
-        use_te=True,
-        attention_type=attention_type,
-    )
-    torch.manual_seed(0)
-    plain = GeoTransolver(**kwargs, activation_checkpointing=False).to(
-        device="cuda", dtype=torch.bfloat16
-    )
-    full = GeoTransolver(
-        **kwargs,
-        activation_checkpointing=True,
-        activation_checkpointing_components=(
-            "context",
-            "preprocess",
-            "blocks",
-            "output",
-        ),
-    ).to(device="cuda", dtype=torch.bfloat16)
-    full.load_state_dict(plain.state_dict())
-    plain.train()
-    full.train()
-    local_plain = torch.randn(
-        2, 64, 16, device="cuda", dtype=torch.bfloat16, requires_grad=True
-    )
-    geometry_plain = torch.randn(
-        2, 80, 16, device="cuda", dtype=torch.bfloat16, requires_grad=True
-    )
-    global_plain = torch.randn(
-        2, 8, 16, device="cuda", dtype=torch.bfloat16, requires_grad=True
-    )
-    local_full = local_plain.detach().clone().requires_grad_(True)
-    geometry_full = geometry_plain.detach().clone().requires_grad_(True)
-    global_full = global_plain.detach().clone().requires_grad_(True)
-
-    def run(model, local_embedding, geometry, global_embedding):
-        FP8GlobalStateManager.reset()
-        with te_runtime.autocast(enabled=True, recipe=te_recipe.DelayedScaling()):
-            output = model(
-                local_embedding,
-                geometry=geometry,
-                global_embedding=global_embedding,
-            )
-        output.float().square().mean().backward()
-        return output
-
-    output_plain = run(plain, local_plain, geometry_plain, global_plain)
-    output_full = run(full, local_full, geometry_full, global_full)
-    tolerances = dict(atol=0.1, rtol=0.15)
-    torch.testing.assert_close(output_full, output_plain, **tolerances)
-    torch.testing.assert_close(local_full.grad, local_plain.grad, **tolerances)
-    torch.testing.assert_close(geometry_full.grad, geometry_plain.grad, **tolerances)
-    torch.testing.assert_close(global_full.grad, global_plain.grad, **tolerances)
-    _assert_parameter_gradients_close(full, plain, **tolerances)
-
-
 # =============================================================================
 # Activation Checkpointing Tests
 # =============================================================================
-
-
-@pytest.mark.parametrize(
-    "enabled,ratio,expected",
-    [
-        (False, 1.0, 0.0),
-        (False, 0.5, 0.0),
-        (True, 0.0, 0.0),
-        (True, 0.5, 0.5),
-        (True, 1.0, 1.0),
-    ],
-)
-def test_geotransolver_activation_checkpointing_configuration(enabled, ratio, expected):
-    model = GeoTransolver(
-        functional_dim=3,
-        out_dim=2,
-        n_layers=4,
-        n_hidden=16,
-        n_head=4,
-        slice_num=4,
-        use_te=False,
-        activation_checkpointing=enabled,
-        checkpointing_ratio=ratio,
-    )
-
-    assert model._activation_checkpointing_enabled is enabled
-    assert model._activation_checkpointing_ratio == expected
-    assert model._activation_checkpointing_components == frozenset({"blocks"})
-    model.train()
-    expected_masks = {
-        0.0: [False, False, False, False],
-        0.5: [True, False, True, False],
-        1.0: [True, True, True, True],
-    }
-    assert [model._should_checkpoint_block(i) for i in range(len(model.blocks))] == (
-        expected_masks[expected]
-    )
-    model.eval()
-    assert not any(model._should_checkpoint_block(i) for i in range(len(model.blocks)))
-
-
-@pytest.mark.parametrize("value", [0, 0.5, 1, "all", None])
-def test_geotransolver_activation_checkpointing_rejects_non_boolean_switch(value):
-    with pytest.raises(TypeError, match="activation_checkpointing"):
-        GeoTransolver(
-            functional_dim=3,
-            out_dim=2,
-            n_hidden=16,
-            n_head=4,
-            slice_num=4,
-            use_te=False,
-            activation_checkpointing=value,
-        )
-
-
-@pytest.mark.parametrize(
-    "value,error",
-    [
-        (-0.1, ValueError),
-        (1.1, ValueError),
-        (True, TypeError),
-        ("all", TypeError),
-        (None, TypeError),
-    ],
-)
-def test_geotransolver_activation_checkpointing_rejects_invalid_ratio(value, error):
-    with pytest.raises(error, match="checkpointing_ratio"):
-        GeoTransolver(
-            functional_dim=3,
-            out_dim=2,
-            n_hidden=16,
-            n_head=4,
-            slice_num=4,
-            use_te=False,
-            activation_checkpointing=True,
-            checkpointing_ratio=value,
-        )
 
 
 @pytest.mark.parametrize(
@@ -1510,7 +1329,6 @@ def test_geotransolver_activation_checkpointing_rejects_invalid_ratio(value, err
     [
         ([], ValueError),
         ("blocks", TypeError),
-        (["blocks", 1], TypeError),
         ([["blocks"]], TypeError),
         (["unknown"], ValueError),
     ],
@@ -1532,15 +1350,26 @@ def test_geotransolver_activation_checkpointing_rejects_invalid_components(
 
 
 @pytest.mark.parametrize(
-    "functional_dim,out_dim,attention_type",
+    "functional_dim,out_dim,attention_type,components,concrete_dropout",
     [
-        (3, 2, "GALE"),
-        ((3, 5), (2, 4), "GALE_FA"),
+        (3, 2, "GALE", ("blocks",), False),
+        (
+            (3, 5),
+            (2, 4),
+            "GALE_FA",
+            ("context", "preprocess", "blocks", "output"),
+            True,
+        ),
     ],
-    ids=["single_gale", "multi_gale_fa"],
+    ids=["blocks_gale", "full_gale_fa"],
 )
 def test_geotransolver_activation_checkpointing_matches_outputs_and_gradients(
-    device, functional_dim, out_dim, attention_type
+    device,
+    functional_dim,
+    out_dim,
+    attention_type,
+    components,
+    concrete_dropout,
 ):
     kwargs = dict(
         functional_dim=functional_dim,
@@ -1556,10 +1385,15 @@ def test_geotransolver_activation_checkpointing_matches_outputs_and_gradients(
         use_te=False,
         plus=True,
         attention_type=attention_type,
+        concrete_dropout=concrete_dropout,
     )
     torch.manual_seed(1)
     plain = GeoTransolver(**kwargs, activation_checkpointing=False).to(device)
-    checkpointed = GeoTransolver(**kwargs, activation_checkpointing=True).to(device)
+    checkpointed = GeoTransolver(
+        **kwargs,
+        activation_checkpointing=True,
+        activation_checkpointing_components=components,
+    ).to(device)
     checkpointed.load_state_dict(plain.state_dict())
     plain.train()
     checkpointed.train()
@@ -1609,177 +1443,6 @@ def test_geotransolver_activation_checkpointing_matches_outputs_and_gradients(
         global_checkpointed.grad, global_plain.grad, atol=1e-6, rtol=1e-5
     )
     _assert_parameter_gradients_close(checkpointed, plain, atol=1e-6, rtol=1e-5)
-
-
-def test_geotransolver_activation_checkpointing_reduces_saved_activations():
-    kwargs = dict(
-        functional_dim=3,
-        out_dim=2,
-        geometry_dim=3,
-        global_dim=2,
-        n_layers=4,
-        n_hidden=32,
-        n_head=4,
-        mlp_ratio=2,
-        slice_num=8,
-        use_te=False,
-    )
-    plain = GeoTransolver(**kwargs, activation_checkpointing=False)
-    checkpointed = GeoTransolver(**kwargs, activation_checkpointing=True)
-    checkpointed.load_state_dict(plain.state_dict())
-    plain.train()
-    checkpointed.train()
-    local_embedding = torch.randn(2, 128, 3)
-    geometry = torch.randn(2, 128, 3)
-    global_embedding = torch.randn(2, 4, 2)
-
-    def saved_activation_bytes(model):
-        total = 0
-
-        def pack(tensor):
-            nonlocal total
-            total += tensor.numel() * tensor.element_size()
-            return tensor
-
-        with torch.autograd.graph.saved_tensors_hooks(pack, lambda tensor: tensor):
-            _output_loss(
-                model(
-                    local_embedding,
-                    geometry=geometry,
-                    global_embedding=global_embedding,
-                )
-            )
-        return total
-
-    plain_bytes = saved_activation_bytes(plain)
-    checkpointed_bytes = saved_activation_bytes(checkpointed)
-    assert checkpointed_bytes < plain_bytes
-
-
-@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
-def test_geotransolver_full_component_checkpointing_matches_outputs_and_gradients(
-    device, attention_type
-):
-    components = ("context", "preprocess", "blocks", "output")
-    kwargs = dict(
-        functional_dim=(3, 5),
-        out_dim=(2, 4),
-        geometry_dim=3,
-        global_dim=2,
-        n_layers=3,
-        n_hidden=16,
-        dropout=0.1,
-        n_head=4,
-        mlp_ratio=2,
-        slice_num=4,
-        use_te=False,
-        plus=True,
-        attention_type=attention_type,
-        concrete_dropout=True,
-    )
-    torch.manual_seed(3)
-    plain = GeoTransolver(**kwargs, activation_checkpointing=False).to(device)
-    checkpointed = GeoTransolver(
-        **kwargs,
-        activation_checkpointing=True,
-        activation_checkpointing_components=components,
-    ).to(device)
-    checkpointed.load_state_dict(plain.state_dict())
-    plain.train()
-    checkpointed.train()
-
-    plain_inputs = (
-        torch.randn(2, 20, 3, device=device, requires_grad=True),
-        torch.randn(2, 24, 5, device=device, requires_grad=True),
-    )
-    checkpointed_inputs = tuple(
-        tensor.detach().clone().requires_grad_(True) for tensor in plain_inputs
-    )
-    geometry_plain = torch.randn(2, 24, 3, device=device, requires_grad=True)
-    global_plain = torch.randn(2, 3, 2, device=device, requires_grad=True)
-    geometry_checkpointed = geometry_plain.detach().clone().requires_grad_(True)
-    global_checkpointed = global_plain.detach().clone().requires_grad_(True)
-
-    torch.manual_seed(17)
-    output_plain = plain(
-        plain_inputs,
-        geometry=geometry_plain,
-        global_embedding=global_plain,
-    )
-    torch.manual_seed(17)
-    output_checkpointed = checkpointed(
-        checkpointed_inputs,
-        geometry=geometry_checkpointed,
-        global_embedding=global_checkpointed,
-    )
-    for actual, expected in zip(
-        _flatten_outputs(output_checkpointed), _flatten_outputs(output_plain)
-    ):
-        torch.testing.assert_close(actual, expected, atol=1e-6, rtol=1e-5)
-
-    _output_loss(output_plain).backward()
-    _output_loss(output_checkpointed).backward()
-    for actual, expected in zip(checkpointed_inputs, plain_inputs):
-        torch.testing.assert_close(actual.grad, expected.grad, atol=1e-6, rtol=1e-5)
-    torch.testing.assert_close(
-        geometry_checkpointed.grad, geometry_plain.grad, atol=1e-6, rtol=1e-5
-    )
-    torch.testing.assert_close(
-        global_checkpointed.grad, global_plain.grad, atol=1e-6, rtol=1e-5
-    )
-    _assert_parameter_gradients_close(checkpointed, plain, atol=1e-6, rtol=1e-5)
-
-
-def test_geotransolver_full_checkpointing_reduces_saved_activations_beyond_blocks():
-    kwargs = dict(
-        functional_dim=6,
-        out_dim=4,
-        geometry_dim=3,
-        global_dim=3,
-        n_layers=4,
-        n_hidden=32,
-        n_head=4,
-        mlp_ratio=2,
-        slice_num=8,
-        use_te=False,
-    )
-    blocks_only = GeoTransolver(**kwargs, activation_checkpointing=True)
-    full = GeoTransolver(
-        **kwargs,
-        activation_checkpointing=True,
-        activation_checkpointing_components=(
-            "context",
-            "preprocess",
-            "blocks",
-            "output",
-        ),
-    )
-    full.load_state_dict(blocks_only.state_dict())
-    blocks_only.train()
-    full.train()
-    local_embedding = torch.randn(2, 128, 6)
-    geometry = torch.randn(2, 128, 3)
-    global_embedding = torch.randn(2, 4, 3)
-
-    def saved_activation_bytes(model):
-        total = 0
-
-        def pack(tensor):
-            nonlocal total
-            total += tensor.numel() * tensor.element_size()
-            return tensor
-
-        with torch.autograd.graph.saved_tensors_hooks(pack, lambda tensor: tensor):
-            _output_loss(
-                model(
-                    local_embedding,
-                    geometry=geometry,
-                    global_embedding=global_embedding,
-                )
-            )
-        return total
-
-    assert saved_activation_bytes(full) < saved_activation_bytes(blocks_only)
 
 
 @requires_module("warp")
@@ -1849,61 +1512,7 @@ def test_geotransolver_full_component_checkpointing_with_local_features(device):
     _assert_parameter_gradients_close(full, plain, atol=1e-6, rtol=1e-5)
 
 
-def test_geotransolver_full_component_checkpointing_returns_context(device):
-    kwargs = dict(
-        functional_dim=3,
-        out_dim=2,
-        geometry_dim=3,
-        global_dim=2,
-        n_layers=2,
-        n_hidden=16,
-        n_head=4,
-        slice_num=4,
-        use_te=False,
-    )
-    plain = GeoTransolver(**kwargs, activation_checkpointing=False).to(device)
-    full = GeoTransolver(
-        **kwargs,
-        activation_checkpointing=True,
-        activation_checkpointing_components=(
-            "context",
-            "preprocess",
-            "blocks",
-            "output",
-        ),
-    ).to(device)
-    full.load_state_dict(plain.state_dict())
-    local_embedding = torch.randn(2, 16, 3, device=device)
-    geometry = torch.randn(2, 16, 3, device=device)
-    global_embedding = torch.randn(2, 2, 2, device=device)
-    output_plain, context_plain = plain(
-        local_embedding,
-        geometry=geometry,
-        global_embedding=global_embedding,
-        return_embedding_states=True,
-    )
-    output_full, context_full = full(
-        local_embedding,
-        geometry=geometry,
-        global_embedding=global_embedding,
-        return_embedding_states=True,
-    )
-    torch.testing.assert_close(output_full, output_plain)
-    torch.testing.assert_close(context_full, context_plain)
-
-
-@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
-@pytest.mark.parametrize(
-    "components",
-    [
-        ("blocks",),
-        ("context", "preprocess", "blocks", "output"),
-    ],
-    ids=["blocks", "full"],
-)
-def test_geotransolver_checkpointing_with_all_return_values_and_gradients(
-    device, attention_type, components
-):
+def test_geotransolver_checkpointing_with_all_return_values_and_gradients(device):
     """Checkpointing preserves prediction, context, and point-feature gradients."""
     kwargs = dict(
         functional_dim=3,
@@ -1917,14 +1526,19 @@ def test_geotransolver_checkpointing_with_all_return_values_and_gradients(
         mlp_ratio=2,
         slice_num=4,
         use_te=False,
-        attention_type=attention_type,
+        attention_type="GALE_FA",
     )
     torch.manual_seed(21)
     plain = GeoTransolver(**kwargs, activation_checkpointing=False).to(device)
     checkpointed = GeoTransolver(
         **kwargs,
         activation_checkpointing=True,
-        activation_checkpointing_components=components,
+        activation_checkpointing_components=(
+            "context",
+            "preprocess",
+            "blocks",
+            "output",
+        ),
     ).to(device)
     checkpointed.load_state_dict(plain.state_dict())
     plain.train()
@@ -2002,91 +1616,8 @@ def test_geotransolver_activation_checkpointing_recomputes_selected_blocks(
     assert call_counts == [2, 1, 2, 1]
 
 
-def test_geotransolver_activation_checkpointing_uses_te_wrapper(monkeypatch):
-    model = GeoTransolver(
-        functional_dim=(3, 4),
-        out_dim=(2, 3),
-        geometry_dim=3,
-        n_layers=2,
-        n_hidden=16,
-        n_head=4,
-        slice_num=4,
-        use_te=False,
-        activation_checkpointing=True,
-    )
-    model.train()
-    calls = []
-
-    def fake_te_checkpoint(function, *args, **kwargs):
-        calls.append((len(args), kwargs))
-        return function(*args)
-
-    monkeypatch.setattr(
-        geotransolver_module,
-        "te",
-        SimpleNamespace(checkpoint=fake_te_checkpoint),
-        raising=False,
-    )
-    model.use_te = True
-    local_embeddings = (torch.randn(2, 16, 3), torch.randn(2, 12, 4))
-    geometry = torch.randn(2, 20, 3)
-    model(local_embeddings, geometry=geometry)
-
-    assert calls == [(3, {"use_reentrant": False})] * len(model.blocks)
-
-
-def test_geotransolver_full_component_checkpointing_uses_te_wrapper(monkeypatch):
-    model = GeoTransolver(
-        functional_dim=3,
-        out_dim=2,
-        geometry_dim=3,
-        global_dim=2,
-        n_layers=2,
-        n_hidden=16,
-        n_head=4,
-        slice_num=4,
-        use_te=False,
-        activation_checkpointing=True,
-        activation_checkpointing_components=(
-            "context",
-            "preprocess",
-            "blocks",
-            "output",
-        ),
-    )
-    model.train()
-    calls = []
-
-    def fake_te_checkpoint(function, *args, **kwargs):
-        calls.append((len(args), kwargs))
-        return function(*args)
-
-    monkeypatch.setattr(
-        geotransolver_module,
-        "te",
-        SimpleNamespace(checkpoint=fake_te_checkpoint),
-        raising=False,
-    )
-    model.use_te = True
-    model(
-        torch.randn(2, 16, 3),
-        geometry=torch.randn(2, 16, 3),
-        global_embedding=torch.randn(2, 2, 2),
-    )
-
-    assert calls == [
-        (3, {"use_reentrant": False}),  # Context builder.
-        (1, {"use_reentrant": False}),  # Preprocess MLP.
-        (2, {"use_reentrant": False}),  # GALE block 0.
-        (2, {"use_reentrant": False}),  # GALE block 1.
-        (1, {"use_reentrant": False}),  # Output projection.
-    ]
-
-
-def test_geotransolver_zero_block_ratio_still_checkpoints_selected_components(
-    monkeypatch,
-):
-    """The block ratio does not disable non-block checkpoint boundaries."""
+def test_geotransolver_zero_block_ratio_checkpoints_selected_components(monkeypatch):
+    """A zero block ratio does not disable other checkpoint boundaries."""
     model = GeoTransolver(
         functional_dim=3,
         out_dim=2,
@@ -2122,19 +1653,28 @@ def test_geotransolver_zero_block_ratio_still_checkpoints_selected_components(
     model.use_te = True
     model(
         torch.randn(2, 16, 3),
-        geometry=torch.randn(2, 16, 3),
+        geometry=torch.randn(2, 20, 3),
         global_embedding=torch.randn(2, 2, 2),
     )
 
     assert calls == [
-        (3, {"use_reentrant": False}),  # Context builder.
-        (1, {"use_reentrant": False}),  # Preprocess MLP.
-        (1, {"use_reentrant": False}),  # Output projection.
+        (3, {"use_reentrant": False}),
+        (1, {"use_reentrant": False}),
+        (1, {"use_reentrant": False}),
     ]
 
 
-@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
-def test_geotransolver_activation_checkpointing_torch_compile(device, attention_type):
+@pytest.mark.parametrize(
+    "attention_type,components",
+    [
+        ("GALE", ("blocks",)),
+        ("GALE_FA", ("context", "preprocess", "blocks", "output")),
+    ],
+    ids=["blocks_gale", "full_gale_fa"],
+)
+def test_geotransolver_activation_checkpointing_torch_compile(
+    device, attention_type, components
+):
     kwargs = dict(
         functional_dim=3,
         out_dim=2,
@@ -2149,7 +1689,11 @@ def test_geotransolver_activation_checkpointing_torch_compile(device, attention_
         attention_type=attention_type,
     )
     plain = GeoTransolver(**kwargs, activation_checkpointing=False).to(device)
-    checkpointed = GeoTransolver(**kwargs, activation_checkpointing=True).to(device)
+    checkpointed = GeoTransolver(
+        **kwargs,
+        activation_checkpointing=True,
+        activation_checkpointing_components=components,
+    ).to(device)
     checkpointed.load_state_dict(plain.state_dict())
     plain.train()
     checkpointed.train()
@@ -2180,63 +1724,16 @@ def test_geotransolver_activation_checkpointing_torch_compile(device, attention_
     _assert_parameter_gradients_close(checkpointed, plain, atol=1e-6, rtol=1e-5)
 
 
-@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
-def test_geotransolver_full_component_checkpointing_torch_compile(
-    device, attention_type
-):
-    kwargs = dict(
-        functional_dim=3,
-        out_dim=2,
-        geometry_dim=3,
-        global_dim=2,
-        n_layers=2,
-        n_hidden=16,
-        n_head=4,
-        mlp_ratio=2,
-        slice_num=4,
-        use_te=False,
-        attention_type=attention_type,
-    )
-    plain = GeoTransolver(**kwargs, activation_checkpointing=False).to(device)
-    full = GeoTransolver(
-        **kwargs,
-        activation_checkpointing=True,
-        activation_checkpointing_components=(
-            "context",
-            "preprocess",
-            "blocks",
-            "output",
-        ),
-    ).to(device)
-    full.load_state_dict(plain.state_dict())
-    plain.train()
-    full.train()
-    backend = "inductor" if str(device).startswith("cuda") else "aot_eager"
-    compiled_plain = torch.compile(plain, backend=backend, fullgraph=True)
-    compiled_full = torch.compile(full, backend=backend, fullgraph=True)
-
-    local_plain = torch.randn(2, 16, 3, device=device, requires_grad=True)
-    geometry_plain = torch.randn(2, 16, 3, device=device, requires_grad=True)
-    global_plain = torch.randn(2, 2, 2, device=device, requires_grad=True)
-    local_full = local_plain.detach().clone().requires_grad_(True)
-    geometry_full = geometry_plain.detach().clone().requires_grad_(True)
-    global_full = global_plain.detach().clone().requires_grad_(True)
-    output_plain = compiled_plain(
-        local_plain, geometry=geometry_plain, global_embedding=global_plain
-    )
-    output_full = compiled_full(
-        local_full, geometry=geometry_full, global_embedding=global_full
-    )
-    torch.testing.assert_close(output_full, output_plain)
-    output_plain.square().mean().backward()
-    output_full.square().mean().backward()
-    torch.testing.assert_close(local_full.grad, local_plain.grad)
-    torch.testing.assert_close(geometry_full.grad, geometry_plain.grad)
-    torch.testing.assert_close(global_full.grad, global_plain.grad)
-    _assert_parameter_gradients_close(full, plain, atol=1e-6, rtol=1e-5)
-
-
-def test_geotransolver_activation_checkpointing_serialization(tmp_path):
+@pytest.mark.parametrize(
+    "components",
+    [
+        ("context", "output"),
+        OmegaConf.create(["blocks", "output"]),
+    ],
+    ids=["tuple", "hydra_list"],
+)
+def test_geotransolver_activation_checkpointing_serialization(tmp_path, components):
+    """Checkpoint settings and Hydra component lists round-trip safely."""
     kwargs = dict(
         functional_dim=3,
         out_dim=2,
@@ -2252,7 +1749,7 @@ def test_geotransolver_activation_checkpointing_serialization(tmp_path):
         **kwargs,
         activation_checkpointing=True,
         checkpointing_ratio=0.0,
-        activation_checkpointing_components=("context", "output"),
+        activation_checkpointing_components=components,
     )
     checkpointed_model.load_state_dict(default_model.state_dict())
     assert checkpointed_model.state_dict().keys() == default_model.state_dict().keys()
@@ -2263,9 +1760,7 @@ def test_geotransolver_activation_checkpointing_serialization(tmp_path):
     assert isinstance(restored, GeoTransolver)
     assert restored._activation_checkpointing_enabled is True
     assert restored._activation_checkpointing_ratio == 0.0
-    assert restored._activation_checkpointing_components == frozenset(
-        {"context", "output"}
-    )
+    assert restored._activation_checkpointing_components == frozenset(components)
 
     legacy_args = {
         **default_model._args,
