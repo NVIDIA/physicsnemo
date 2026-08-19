@@ -22,6 +22,12 @@ calibrating during training and checking during inference.  Contrast with
 data offline prior to inference.
 """
 
+from .geotransolver_guard import GuardedGeoTransolver, attach_ood_guard
 from .ood_guard import OODGuard, OODGuardConfig
 
-__all__ = ["OODGuard", "OODGuardConfig"]
+__all__ = [
+    "GuardedGeoTransolver",
+    "OODGuard",
+    "OODGuardConfig",
+    "attach_ood_guard",
+]

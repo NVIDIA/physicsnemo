@@ -23,9 +23,11 @@ import warp as wp
 def project_centroids_to_surface(
     mesh_id: wp.uint64,
     centroids: wp.array(dtype=wp.vec3f),
+    source_faces: wp.array(dtype=wp.int32),
+    barycentric_coordinates: wp.array(dtype=wp.vec3f),
     max_distance: wp.float32,
 ):
-    """Project centroids to their closest points on the source surface."""
+    """Project centroids and record their source-triangle coordinates."""
     centroid_index = wp.tid()
     query = wp.mesh_query_point_no_sign(
         mesh_id, centroids[centroid_index], max_distance
@@ -36,4 +38,10 @@ def project_centroids_to_surface(
             query.face,
             query.u,
             query.v,
+        )
+        source_faces[centroid_index] = query.face
+        barycentric_coordinates[centroid_index] = wp.vec3f(
+            query.u,
+            query.v,
+            1.0 - query.u - query.v,
         )
