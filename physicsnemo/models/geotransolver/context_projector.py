@@ -39,6 +39,7 @@ import torch
 import torch.nn as nn
 from einops import rearrange
 from jaxtyping import Float
+from torch.distributed.tensor.placement_types import Replicate
 
 from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.nn import BQWarp, ConcreteDropout, Mlp

@@ -48,13 +48,13 @@ def parse_checkpointing_components(
         raise TypeError(
             "activation_checkpointing_components must be a sequence of strings"
         )
-    normalized = frozenset(components)
-    if not normalized:
+    if not components:
         raise ValueError(
             "activation_checkpointing_components must contain at least one component"
         )
-    if not all(isinstance(component, str) for component in normalized):
+    if not all(isinstance(component, str) for component in components):
         raise TypeError("activation_checkpointing_components must contain only strings")
+    normalized = frozenset(components)
     unknown = normalized - CHECKPOINTABLE_COMPONENTS
     if unknown:
         raise ValueError(
@@ -67,7 +67,7 @@ def parse_checkpointing_components(
 
 def should_checkpoint_component(
     component: str,
-    ratio: float,
+    enabled: bool,
     components: frozenset[str],
     *,
     training: bool,
@@ -75,7 +75,7 @@ def should_checkpoint_component(
     r"""Return whether a GeoTransolver component should be checkpointed."""
     if not training or not torch.is_grad_enabled():
         return False
-    return ratio > 0.0 and component in components
+    return enabled and component in components
 
 
 def should_checkpoint_block(
@@ -87,7 +87,7 @@ def should_checkpoint_block(
     training: bool,
 ) -> bool:
     r"""Return whether a GALE block is in the interleaved checkpoint set."""
-    if not should_checkpoint_component("blocks", ratio, components, training=training):
+    if "blocks" not in components:
         return False
     return should_checkpoint_interleaved_block(
         block_idx,

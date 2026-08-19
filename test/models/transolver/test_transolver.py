@@ -415,6 +415,11 @@ def test_transolver_activation_checkpointing_reduces_peak_cuda_memory():
         model.train()
         fx = torch.randn(1, 4096, 2, device="cuda")
         embedding = torch.randn(1, 4096, 3, device="cuda")
+
+        # Warm up each policy before resetting the allocator peak so one-time
+        # kernel initialization is excluded symmetrically.
+        model(fx, embedding=embedding).square().mean().backward()
+        model.zero_grad(set_to_none=True)
         torch.cuda.synchronize()
         baseline = torch.cuda.memory_allocated()
         torch.cuda.reset_peak_memory_stats()

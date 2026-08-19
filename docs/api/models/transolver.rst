@@ -37,10 +37,11 @@ PyTorch's checkpoint implementation, while ``use_te=True`` uses Transformer
 Engine's checkpoint wrapper so that its activation-recompute and FP8 state are
 handled correctly. Evaluation and ``torch.no_grad()`` execution are unchanged.
 
-The option works in eager execution and can also be combined with
-``torch.compile``. The explicit block policy remains useful under compilation.
-It provides a predictable recomputation boundary rather than relying only on
-the compiler's automatic, speed-oriented rematerialization choices.
+The native PyTorch checkpoint backend works in eager execution and can also be
+combined with ``torch.compile``. The explicit block policy remains useful under
+compilation. It provides a predictable recomputation boundary rather than
+relying only on the compiler's automatic, speed-oriented rematerialization
+choices.
 
 .. autoclass:: physicsnemo.models.transolver.transolver.Transolver
     :show-inheritance:

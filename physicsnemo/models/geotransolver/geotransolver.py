@@ -466,6 +466,7 @@ class GeoTransolver(Module):
         self.include_local_features = include_local_features
         self.use_te = use_te
         self.structured_shape = structured_shape
+        self._activation_checkpointing_enabled = activation_checkpointing
         self._activation_checkpointing_ratio = resolve_checkpointing_ratio(
             activation_checkpointing, checkpointing_ratio
         )
@@ -613,7 +614,14 @@ class GeoTransolver(Module):
         r"""Return whether a non-fractional component should be checkpointed."""
         return should_checkpoint_component(
             component,
-            getattr(self, "_activation_checkpointing_ratio", 0.0),
+            # Full-object pickles bypass ``__init__`` when loaded. Checkpoints
+            # from the first checkpointing implementation have only the ratio;
+            # older objects have neither field and therefore remain disabled.
+            getattr(
+                self,
+                "_activation_checkpointing_enabled",
+                getattr(self, "_activation_checkpointing_ratio", 0.0) > 0.0,
+            ),
             getattr(
                 self,
                 "_activation_checkpointing_components",
