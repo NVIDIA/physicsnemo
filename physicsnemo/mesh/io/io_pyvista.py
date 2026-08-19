@@ -464,11 +464,304 @@ def _validate_polyhedron_face_complex(
         )
 
 
+def _gather_vtk_rows(
+    offsets: np.ndarray,
+    values: np.ndarray,
+    row_ids: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Gather ragged VTK rows without a Python loop.
+
+    Returns the gathered values, their zero-based output-row IDs, and an
+    offsets array for the gathered rows.
+    """
+    row_lengths = offsets[row_ids + 1] - offsets[row_ids]
+    gathered_offsets = np.empty(len(row_ids) + 1, dtype=np.int64)
+    gathered_offsets[0] = 0
+    np.cumsum(row_lengths, out=gathered_offsets[1:])
+    n_values = int(gathered_offsets[-1])
+    if n_values == 0:
+        return (
+            np.empty(0, dtype=values.dtype),
+            np.empty(0, dtype=np.int64),
+            gathered_offsets,
+        )
+
+    output_row_ids = np.repeat(
+        np.arange(len(row_ids), dtype=np.int64),
+        row_lengths,
+    )
+    value_indices = (
+        np.repeat(offsets[row_ids], row_lengths)
+        + np.arange(n_values, dtype=np.int64)
+        - np.repeat(gathered_offsets[:-1], row_lengths)
+    )
+    return values[value_indices], output_row_ids, gathered_offsets
+
+
+def _unique_owner_values(
+    owner_ids: np.ndarray,
+    values: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Sort owner/value pairs and identify their first occurrences."""
+    order = np.lexsort((values, owner_ids))
+    sorted_owners = owner_ids[order]
+    sorted_values = values[order]
+    is_first = np.ones(len(order), dtype=bool)
+    if len(order) > 1:
+        is_first[1:] = (sorted_owners[1:] != sorted_owners[:-1]) | (
+            sorted_values[1:] != sorted_values[:-1]
+        )
+    return sorted_owners, sorted_values, is_first
+
+
+def _polyhedron_face_point_offsets(
+    parent_ids: np.ndarray,
+    location_offsets: np.ndarray,
+    face_ids: np.ndarray,
+    face_offsets: np.ndarray,
+) -> np.ndarray:
+    """Return cumulative referenced face-point counts for selected parents."""
+    count_chunk_size = 256
+    face_point_offsets = np.empty(len(parent_ids) + 1, dtype=np.int64)
+    face_point_offsets[0] = 0
+    for count_start in range(0, len(parent_ids), count_chunk_size):
+        count_end = min(count_start + count_chunk_size, len(parent_ids))
+        chunk_face_ids, _, chunk_face_offsets = _gather_vtk_rows(
+            location_offsets,
+            face_ids,
+            parent_ids[count_start:count_end],
+        )
+        chunk_face_lengths = (
+            face_offsets[chunk_face_ids + 1] - face_offsets[chunk_face_ids]
+        )
+        face_point_offsets[count_start + 1 : count_end + 1] = np.add.reduceat(
+            chunk_face_lengths,
+            chunk_face_offsets[:-1],
+        )
+    np.cumsum(face_point_offsets[1:], out=face_point_offsets[1:])
+    return face_point_offsets
+
+
+def _polyhedron_validation_batches(
+    parent_ids: np.ndarray,
+    location_offsets: np.ndarray,
+    face_ids: np.ndarray,
+    face_offsets: np.ndarray,
+    *,
+    max_cells: int = 4096,
+    max_face_points: int = 1 << 18,
+) -> Iterator[np.ndarray]:
+    """Batch structurally valid parents by cell and referenced-point counts."""
+    face_point_offsets = _polyhedron_face_point_offsets(
+        parent_ids,
+        location_offsets,
+        face_ids,
+        face_offsets,
+    )
+
+    batch_start = 0
+    while batch_start < len(parent_ids):
+        point_limited_end = int(
+            np.searchsorted(
+                face_point_offsets,
+                face_point_offsets[batch_start] + max_face_points,
+                side="right",
+            )
+            - 1
+        )
+        batch_end = max(
+            batch_start + 1,
+            min(
+                batch_start + max_cells,
+                point_limited_end,
+                len(parent_ids),
+            ),
+        )
+        yield parent_ids[batch_start:batch_end]
+        batch_start = batch_end
+
+
+def _validate_polyhedron_face_complexes(
+    parent_ids: np.ndarray,
+    cell_offsets: np.ndarray,
+    cell_point_ids: np.ndarray,
+    location_offsets: np.ndarray,
+    face_ids: np.ndarray,
+    face_offsets: np.ndarray,
+    face_point_ids: np.ndarray,
+) -> None:
+    """Batch-check prevalidated polyhedron arrays with exact diagnostics.
+
+    Every parent is expected to reference at least four faces, and every face
+    is expected to contain at least three valid point IDs. The auxiliary-array
+    validator enforces those structural preconditions before calling here.
+    """
+    # Bound temporary sort buffers by both cells and gathered face-point IDs.
+    # A single unusually large cell remains indivisible and forms its own batch.
+    for batch_parent_ids in _polyhedron_validation_batches(
+        parent_ids,
+        location_offsets,
+        face_ids,
+        face_offsets,
+    ):
+        n_parents = len(batch_parent_ids)
+        candidate_owners = np.zeros(n_parents, dtype=bool)
+
+        parent_points, point_owners, _ = _gather_vtk_rows(
+            cell_offsets,
+            cell_point_ids,
+            batch_parent_ids,
+        )
+        parent_face_ids, face_owners, _ = _gather_vtk_rows(
+            location_offsets,
+            face_ids,
+            batch_parent_ids,
+        )
+        face_points, point_face_ids, gathered_face_offsets = _gather_vtk_rows(
+            face_offsets,
+            face_point_ids,
+            parent_face_ids,
+        )
+        face_point_owners = face_owners[point_face_ids]
+
+        # Repeated points in either parent connectivity or an individual face.
+        sorted_owners, sorted_points, is_first = _unique_owner_values(
+            point_owners,
+            parent_points,
+        )
+        candidate_owners[sorted_owners[~is_first]] = True
+        sorted_face_ids, _, is_first_face_point = _unique_owner_values(
+            point_face_ids, face_points
+        )
+        candidate_owners[face_owners[sorted_face_ids[~is_first_face_point]]] = True
+
+        # Compare the parent and referenced-face point sets exactly. Each
+        # source is unique before merging, so unmatched pairs occur once and
+        # matching pairs occur twice.
+        unique_parent_owners = sorted_owners[is_first]
+        unique_parent_points = sorted_points[is_first]
+        face_set_owners, face_set_points, is_first_face_set_point = (
+            _unique_owner_values(face_point_owners, face_points)
+        )
+        unique_face_owners = face_set_owners[is_first_face_set_point]
+        unique_face_points = face_set_points[is_first_face_set_point]
+        set_owners = np.concatenate((unique_parent_owners, unique_face_owners))
+        set_points = np.concatenate((unique_parent_points, unique_face_points))
+        set_order = np.lexsort((set_points, set_owners))
+        set_owners = set_owners[set_order]
+        set_points = set_points[set_order]
+        matched = np.zeros(len(set_order), dtype=bool)
+        if len(set_order) > 1:
+            equal_neighbors = (set_owners[1:] == set_owners[:-1]) & (
+                set_points[1:] == set_points[:-1]
+            )
+            matched[:-1] |= equal_neighbors
+            matched[1:] |= equal_neighbors
+        candidate_owners[set_owners[~matched]] = True
+
+        # Identical point sets imply identical integer signatures. Signature
+        # collisions only add a scalar diagnostic check; they cannot hide an
+        # invalid duplicate face.
+        face_lengths = np.diff(gathered_face_offsets)
+        face_starts = gathered_face_offsets[:-1]
+        face_sums = np.add.reduceat(face_points, face_starts)
+        face_square_sums = np.add.reduceat(face_points * face_points, face_starts)
+        face_xors = np.bitwise_xor.reduceat(face_points, face_starts)
+        signature_order = np.lexsort(
+            (
+                face_xors,
+                face_square_sums,
+                face_sums,
+                face_lengths,
+                face_owners,
+            )
+        )
+        if len(signature_order) > 1:
+            previous = signature_order[:-1]
+            current = signature_order[1:]
+            duplicate_signatures = (
+                (face_owners[current] == face_owners[previous])
+                & (face_lengths[current] == face_lengths[previous])
+                & (face_sums[current] == face_sums[previous])
+                & (face_square_sums[current] == face_square_sums[previous])
+                & (face_xors[current] == face_xors[previous])
+            )
+            candidate_owners[face_owners[current[duplicate_signatures]]] = True
+
+        # Every undirected edge in a closed shell has exactly two incident
+        # faces. Retain the corresponding face pairs for connectivity below.
+        edge_ends = np.roll(face_points, -1)
+        edge_ends[gathered_face_offsets[1:] - 1] = face_points[
+            gathered_face_offsets[:-1]
+        ]
+        edge_lows = np.minimum(face_points, edge_ends)
+        edge_highs = np.maximum(face_points, edge_ends)
+        edge_order = np.lexsort((edge_highs, edge_lows, face_point_owners))
+        ordered_edge_owners = face_point_owners[edge_order]
+        ordered_edge_lows = edge_lows[edge_order]
+        ordered_edge_highs = edge_highs[edge_order]
+        edge_group_starts = np.flatnonzero(
+            np.r_[
+                True,
+                (ordered_edge_owners[1:] != ordered_edge_owners[:-1])
+                | (ordered_edge_lows[1:] != ordered_edge_lows[:-1])
+                | (ordered_edge_highs[1:] != ordered_edge_highs[:-1]),
+            ]
+        )
+        edge_group_lengths = np.diff(np.r_[edge_group_starts, len(edge_order)])
+        invalid_edge_groups = edge_group_lengths != 2
+        candidate_owners[
+            ordered_edge_owners[edge_group_starts[invalid_edge_groups]]
+        ] = True
+
+        paired_edge_starts = edge_group_starts[~invalid_edge_groups]
+        ordered_point_face_ids = point_face_ids[edge_order]
+        first_faces = ordered_point_face_ids[paired_edge_starts]
+        second_faces = ordered_point_face_ids[paired_edge_starts + 1]
+
+        # Propagate component labels in parallel. Unusually deep face graphs
+        # conservatively fall back to the scalar checker if 32 rounds do not
+        # converge; non-convergence can only create a false-positive candidate.
+        component_labels = np.arange(len(parent_face_ids), dtype=np.int64)
+        for _ in range(32):
+            old_labels = component_labels
+            pair_labels = np.minimum(
+                component_labels[first_faces],
+                component_labels[second_faces],
+            )
+            component_labels = component_labels.copy()
+            np.minimum.at(component_labels, first_faces, pair_labels)
+            np.minimum.at(component_labels, second_faces, pair_labels)
+            component_labels = component_labels[component_labels]
+            if np.array_equal(component_labels, old_labels):
+                break
+        minimum_labels = np.full(n_parents, len(parent_face_ids), dtype=np.int64)
+        maximum_labels = np.full(n_parents, -1, dtype=np.int64)
+        np.minimum.at(minimum_labels, face_owners, component_labels)
+        np.maximum.at(maximum_labels, face_owners, component_labels)
+        candidate_owners[minimum_labels != maximum_labels] = True
+
+        # The scalar implementation is retained as the authoritative error
+        # reporter and confirms the deliberately conservative candidates.
+        for owner in np.flatnonzero(candidate_owners):
+            parent_id = int(batch_parent_ids[owner])
+            _validate_polyhedron_face_complex(
+                parent_id,
+                cell_point_ids[cell_offsets[parent_id] : cell_offsets[parent_id + 1]],
+                face_ids[location_offsets[parent_id] : location_offsets[parent_id + 1]],
+                face_offsets,
+                face_point_ids,
+            )
+
+
 def _validate_polyhedron_auxiliary_arrays(
     pyvista_mesh: "pv.UnstructuredGrid",
     cell_types: np.ndarray,
+    *,
+    validate_face_complexes: bool = True,
+    face_complex_parent_ids: np.ndarray | None = None,
 ) -> None:
-    """Validate VTK polyhedron auxiliary arrays and face complexes."""
+    """Validate polyhedron arrays and, when requested, selected face complexes."""
     n_polyhedra = int((cell_types == pv.CellType.POLYHEDRON).sum())
     if n_polyhedra == 0:
         return
@@ -528,23 +821,24 @@ def _validate_polyhedron_auxiliary_arrays(
             f"face IDs are in [0, {n_faces})."
         )
 
+    if not validate_face_complexes:
+        return
+    if face_complex_parent_ids is None:
+        face_complex_parent_ids = np.flatnonzero(polyhedron_mask)
+    if len(face_complex_parent_ids) == 0:
+        return
+
     cell_offsets = np.asarray(pyvista_mesh.offset)
     cell_point_ids = np.asarray(pyvista_mesh.GetCells().GetConnectivityArray())
-    for parent_id_value in np.flatnonzero(polyhedron_mask):
-        parent_id = int(parent_id_value)
-        parent_point_ids = cell_point_ids[
-            cell_offsets[parent_id] : cell_offsets[parent_id + 1]
-        ]
-        parent_face_ids = face_ids[
-            location_offsets[parent_id] : location_offsets[parent_id + 1]
-        ]
-        _validate_polyhedron_face_complex(
-            parent_id,
-            parent_point_ids,
-            parent_face_ids,
-            face_offsets,
-            face_point_ids,
-        )
+    _validate_polyhedron_face_complexes(
+        np.asarray(face_complex_parent_ids, dtype=np.int64),
+        cell_offsets,
+        cell_point_ids,
+        location_offsets,
+        face_ids,
+        face_offsets,
+        face_point_ids,
+    )
 
 
 def _polyhedron_is_convex(
@@ -652,10 +946,13 @@ def _validate_cells_against_specs(
     cell_types: np.ndarray,
     unique_cell_types: np.ndarray,
     cell_specs: dict[int, tuple[int, int | None, int | None]],
+    *,
+    validate_polyhedron_topology: bool = True,
 ) -> None:
     """Validate bounds and listed arities without rejecting unlisted cells."""
     _validate_unstructured_connectivity_bounds(pyvista_mesh, cell_types)
-    _validate_polyhedron_auxiliary_arrays(pyvista_mesh, cell_types)
+    if validate_polyhedron_topology:
+        _validate_polyhedron_auxiliary_arrays(pyvista_mesh, cell_types)
     if len(cell_types) == 0:
         return
 
@@ -704,6 +1001,7 @@ def _unstructured_cell_dimensions(
         cell_types,
         unique_cell_types,
         linear_specs,
+        validate_polyhedron_topology=False,
     )
 
     ### Reject every topology family outside the explicit linear allowlist.
@@ -877,6 +1175,15 @@ def _select_and_linearize_unstructured_grid(
             f"UnstructuredGrid has no cells with manifold dimension {target_dim}; "
             f"available dimensions are {available_dimensions}."
         )
+    selected_polyhedron_ids = selected_parent_ids[
+        cell_types[selected_parent_ids] == pv.CellType.POLYHEDRON
+    ]
+    _validate_polyhedron_auxiliary_arrays(
+        pyvista_mesh,
+        cell_types,
+        validate_face_complexes=len(selected_polyhedron_ids) > 0,
+        face_complex_parent_ids=selected_polyhedron_ids,
+    )
     if target_dim == 3:
         _validate_selected_polyhedra_for_tetrahedralization(
             pyvista_mesh,
@@ -1029,7 +1336,8 @@ def from_pyvista(
     Raises
     ------
     ValueError
-        If manifold dimension cannot be determined or is invalid.
+        If manifold dimension cannot be determined or is invalid, or if
+        consumed topology is malformed or unsupported.
     ImportError
         If pyvista is not installed.
 
@@ -1051,6 +1359,12 @@ def from_pyvista(
     additionally accepts fixed-size quadratic and cubic cells, which do not
     require tessellation, and rejects ``EMPTY_CELL`` parents because VTK omits
     their centers.
+
+    Polyhedron auxiliary-array structure is checked before any VTK topology
+    filter runs. Closed-shell face complexes are checked in bounded batches
+    only for polyhedra consumed by the requested conversion. Cell-centroid and
+    derived-edge conversions consume every input cell and therefore check
+    every polyhedron face complex.
     """
     ### Validate point_source
     if point_source not in {"vertices", "cell_centroids"}:
@@ -1269,6 +1583,11 @@ def from_pyvista(
         elif pyvista_mesh.n_cells > 0:
             # If no native lines exist, derive the unique edge graph from the
             # higher-dimensional topology.
+            if isinstance(pyvista_mesh, pv.UnstructuredGrid):
+                _validate_polyhedron_auxiliary_arrays(
+                    pyvista_mesh,
+                    np.asarray(pyvista_mesh.celltypes),
+                )
             edges_mesh = pyvista_mesh.extract_all_edges()
             line_offsets, line_connectivity = _validate_vtk_cell_array_structure(
                 edges_mesh.GetLines(),

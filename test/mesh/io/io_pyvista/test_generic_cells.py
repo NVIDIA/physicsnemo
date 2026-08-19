@@ -161,6 +161,65 @@ def _make_concave_l_prism() -> "pv.UnstructuredGrid":
     )
 
 
+def _make_bulk_polyhedra(
+    n_polyhedra: int,
+    malformed_parent_id: int | None = None,
+) -> "pv.UnstructuredGrid":
+    """Build alternating tetrahedral and pyramidal polyhedron parents."""
+    tetra_points = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+    tetra_faces = [[0, 2, 1], [0, 1, 3], [1, 2, 3], [2, 0, 3]]
+    pyramid_points = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.5, 0.5, 1.0],
+        ]
+    )
+    pyramid_faces = [
+        [0, 3, 2, 1],
+        [0, 1, 4],
+        [1, 2, 4],
+        [2, 3, 4],
+        [3, 0, 4],
+    ]
+
+    points = []
+    cells = []
+    point_offset = 0
+    for parent_id in range(n_polyhedra):
+        base_points, base_faces = (
+            (tetra_points, tetra_faces)
+            if parent_id % 2 == 0
+            else (pyramid_points, pyramid_faces)
+        )
+        points.append(base_points + np.array([2.0 * parent_id, 0.0, 0.0]))
+        faces = [list(face) for face in base_faces]
+        if parent_id == malformed_parent_id:
+            faces.append(list(faces[0]))
+        face_stream = [len(faces)]
+        for face in faces:
+            face_stream.extend(
+                [len(face), *(point_offset + point_id for point_id in face)]
+            )
+        cells.extend([len(face_stream), *face_stream])
+        point_offset += len(base_points)
+
+    return pv.UnstructuredGrid(
+        np.asarray(cells),
+        np.full(n_polyhedra, pv.CellType.POLYHEDRON),
+        np.vstack(points),
+    )
+
+
 def _vtk_parametric_points(cell_type: "pv.CellType") -> np.ndarray:
     """Return VTK's canonical nodes for a fixed-size cell."""
     generic_cell = vtk.vtkGenericCell()
@@ -1322,6 +1381,119 @@ def test_malformed_polyhedron_face_complexes_raise_on_every_path():
         """
     )
     _run_isolated_script(script)
+
+
+def test_unselected_polyhedron_face_complex_is_not_deeply_validated():
+    """Explicit dimensional selection validates only topology it consumes."""
+    points = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+            [2.0, 1.0, 0.0],
+        ]
+    )
+    tetra_faces = [[0, 2, 1], [0, 1, 3]]
+    malformed_face_stream = [
+        4,
+        *[value for face in tetra_faces for value in (len(face), *face)],
+        *[value for face in tetra_faces for value in (len(face), *face)],
+    ]
+    grid = pv.UnstructuredGrid(
+        np.array(
+            [
+                len(malformed_face_stream),
+                *malformed_face_stream,
+                3,
+                4,
+                5,
+                6,
+            ]
+        ),
+        np.array([pv.CellType.POLYHEDRON, pv.CellType.TRIANGLE]),
+        points,
+    )
+
+    with pytest.raises(ValueError, match=r"index 0: duplicate faces"):
+        from_pyvista(grid, manifold_dim=3, warn_on_lost_data=False)
+
+    mesh = from_pyvista(grid, manifold_dim=2, warn_on_lost_data=False)
+
+    assert torch.equal(mesh.cells, torch.tensor([[4, 5, 6]]))
+
+    np.asarray(grid.GetPolyhedronFaces().GetConnectivityArray())[0] = 99
+    with pytest.raises(ValueError, match="face point ID 99"):
+        from_pyvista(grid, manifold_dim=2, warn_on_lost_data=False)
+
+
+def test_bulk_valid_polyhedra_use_batched_face_complex_fast_path(monkeypatch):
+    """Valid bulk topology avoids one scalar validation call per cell."""
+    n_polyhedra = 128
+    grid = _make_bulk_polyhedra(n_polyhedra)
+
+    def unexpected_scalar_fallback(*args, **kwargs):
+        raise AssertionError("valid bulk topology used the scalar diagnostic path")
+
+    monkeypatch.setattr(
+        io_pyvista,
+        "_validate_polyhedron_face_complex",
+        unexpected_scalar_fallback,
+    )
+
+    mesh = from_pyvista(
+        grid,
+        manifold_dim=0,
+        point_source="cell_centroids",
+        warn_on_lost_data=False,
+    )
+
+    assert mesh.n_points == n_polyhedra
+
+
+def test_polyhedron_validation_batches_respect_face_point_budget():
+    """Ragged parents split on gathered values as well as parent count."""
+    grid = _make_bulk_polyhedra(5)
+    face_locations = grid.GetPolyhedronFaceLocations()
+    faces = grid.GetPolyhedronFaces()
+
+    def batch_lists(max_face_points):
+        return [
+            batch.tolist()
+            for batch in io_pyvista._polyhedron_validation_batches(
+                np.arange(5, dtype=np.int64),
+                np.asarray(face_locations.GetOffsetsArray()),
+                np.asarray(face_locations.GetConnectivityArray()),
+                np.asarray(faces.GetOffsetsArray()),
+                max_cells=3,
+                max_face_points=max_face_points,
+            )
+        ]
+
+    assert batch_lists(28) == [[0, 1], [2, 3], [4]]
+    assert batch_lists(8) == [[0], [1], [2], [3], [4]]
+
+
+def test_batched_polyhedron_error_uses_parent_id_across_batch_boundary():
+    """A diagnostic after the cell-count boundary retains its source ID."""
+    malformed_parent_id = 4159
+    grid = _make_bulk_polyhedra(
+        malformed_parent_id + 1,
+        malformed_parent_id=malformed_parent_id,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=rf"index {malformed_parent_id}: duplicate faces",
+    ):
+        from_pyvista(
+            grid,
+            manifold_dim=0,
+            point_source="cell_centroids",
+            warn_on_lost_data=False,
+        )
 
 
 def test_concave_polyhedron_rejected_before_tetrahedralization():
