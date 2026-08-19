@@ -534,6 +534,28 @@ class TestUNetBlock3D:
         assert x.grad is not None
         assert not torch.isnan(x.grad).any()
 
+    def test_amp_mode_autocast_forward(
+        self, config_name, kwargs, x_shape, emb_shape, device
+    ):
+        """With amp_mode=True the block runs under torch.autocast."""
+        block = UNetBlock3D(amp_mode=True, **kwargs).to(device)
+        x = torch.randn(*x_shape, device=device)
+        emb = torch.randn(*emb_shape, device=device)
+        with torch.autocast(device_type=device, dtype=torch.bfloat16):
+            out = block(x, emb)
+        assert not torch.isnan(out.float()).any()
+
+    def test_amp_mode_default_raises_under_autocast(
+        self, config_name, kwargs, x_shape, emb_shape, device
+    ):
+        """With the default amp_mode=False, autocast execution raises."""
+        block = UNetBlock3D(**kwargs).to(device)
+        x = torch.randn(*x_shape, device=device)
+        emb = torch.randn(*emb_shape, device=device)
+        with torch.autocast(device_type=device, dtype=torch.bfloat16):
+            with pytest.raises(RuntimeError, match="amp_mode"):
+                block(x, emb)
+
     @pytest.mark.usefixtures("nop_compile")
     def test_compile(
         self,
