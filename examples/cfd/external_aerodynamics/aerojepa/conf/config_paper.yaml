@@ -28,6 +28,10 @@ defaults:
 seed: 42
 device: cuda
 
+# Use standard PyTorch layers by default. Set `use_te=true` to propagate
+# Transformer Engine through every encoder, decoder, and predictor component.
+use_te: false
+
 # Top-level run output directory. Hydra's `outputs/<date>/<time>/` layout
 # is preserved; this is the relative subfolder under that for inference
 # outputs and plots.
