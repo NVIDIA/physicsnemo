@@ -36,10 +36,9 @@ Each test:
    output shape matches ``target_config``.
 7. Computes the dict-based loss to confirm pred / target shapes line up.
 
-Tests skip if the model class is not importable (e.g., FLARE under
-``physicsnemo.experimental`` may be gated, or DoMINO is not yet wired
-up). The test set deliberately excludes DoMINO recipes because their
-``forward_kwargs`` references fields the dataset doesn't expose
+Tests skip if the model class is not importable (for example, DoMINO
+is not yet wired up). The test set deliberately excludes DoMINO recipes
+because their ``forward_kwargs`` references fields the dataset doesn't expose
 (documented in the model template comments).
 """
 

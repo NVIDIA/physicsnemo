@@ -14,11 +14,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Legacy checkpoint shim for the GeoTransolver model."""
+"""Legacy import shim for the GALE attention layers."""
 
-from physicsnemo.models.geotransolver.geotransolver import (
-    GeoTransolver,
-    GeoTransolverMetaData,
+from physicsnemo.nn.module.gale import (
+    GALE,
+    GALE_FA,
+    GALEStructuredMesh2D,
+    GALEStructuredMesh3D,
 )
 
-__all__ = ["GeoTransolver", "GeoTransolverMetaData"]
+# The move out of experimental renamed GALE_block to GALEBlock.
+from physicsnemo.nn.module.gale import GALEBlock as GALE_block
+
+__all__ = [
+    "GALE",
+    "GALE_FA",
+    "GALE_block",
+    "GALEStructuredMesh2D",
+    "GALEStructuredMesh3D",
+]

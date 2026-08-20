@@ -14,11 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Legacy checkpoint shim for the GeoTransolver model."""
+"""Legacy import shim for the GeoTransolver context projector components."""
 
-from physicsnemo.models.geotransolver.geotransolver import (
-    GeoTransolver,
-    GeoTransolverMetaData,
+from physicsnemo.models.geotransolver.context_projector import (
+    ContextProjector,
+    GeometricFeatureProcessor,
+    GlobalContextBuilder,
+    MultiScaleFeatureExtractor,
+    StructuredContextProjector,
 )
 
-__all__ = ["GeoTransolver", "GeoTransolverMetaData"]
+__all__ = [
+    "ContextProjector",
+    "GeometricFeatureProcessor",
+    "GlobalContextBuilder",
+    "MultiScaleFeatureExtractor",
+    "StructuredContextProjector",
+]

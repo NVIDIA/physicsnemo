@@ -14,11 +14,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Legacy checkpoint shim for the GeoTransolver model."""
+"""Legacy import shim for the FLARE attention layer."""
 
-from physicsnemo.models.geotransolver.geotransolver import (
-    GeoTransolver,
-    GeoTransolverMetaData,
+import warnings
+
+from physicsnemo.core.warnings import LegacyFeatureWarning
+from physicsnemo.nn.module.flare_attention import FLARE
+
+warnings.warn(
+    "Importing from 'physicsnemo.experimental.nn.flare_attention' is deprecated. "
+    "Use 'from physicsnemo.nn import FLARE' instead. "
+    "This backward-compatibility shim will be removed in a future release.",
+    LegacyFeatureWarning,
+    stacklevel=2,
 )
 
-__all__ = ["GeoTransolver", "GeoTransolverMetaData"]
+__all__ = ["FLARE"]
