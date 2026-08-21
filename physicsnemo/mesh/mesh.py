@@ -1624,7 +1624,7 @@ class Mesh:
 
     def _cache_with_only(
         self,
-        keep: Sequence[str | tuple[str, ...]] = (),
+        keep: str | tuple[str, ...] | Sequence[str | tuple[str, ...]] = (),
     ) -> TensorDict:
         """Return an independent cache container containing only ``keep``.
 
@@ -1632,7 +1632,18 @@ class Mesh:
         ``TensorDict`` container is shallow-copied so populating a cache on a
         derived mesh cannot mutate the source mesh's cache structure.
         """
-        cache = self._cache.select(*keep, strict=False).copy()
+        if isinstance(keep, str):
+            keys: Sequence[str | tuple[str, ...]] = [keep]
+        elif (
+            isinstance(keep, tuple)
+            and keep
+            and all(isinstance(part, str) for part in keep)
+        ):
+            keys = [keep]
+        else:
+            keys = keep
+
+        cache = self._cache.select(*keys, strict=False).copy()
         device = self.points.device
         for category, batch_size in (
             ("cell", torch.Size([self.n_cells])),
@@ -1652,7 +1663,7 @@ class Mesh:
         *,
         points: torch.Tensor,
         cells: torch.Tensor,
-        keep: Sequence[str | tuple[str, ...]],
+        keep: str | tuple[str, ...] | Sequence[str | tuple[str, ...]],
     ) -> "Mesh":
         """Build a same-index mesh with selected structural fields replaced."""
         return Mesh(
@@ -1668,7 +1679,7 @@ class Mesh:
         self,
         points: torch.Tensor,
         *,
-        keep: Sequence[str | tuple[str, ...]] = ("topology",),
+        keep: str | tuple[str, ...] | Sequence[str | tuple[str, ...]] = "topology",
     ) -> "Mesh":
         r"""Return a mesh with replacement point coordinates.
 
@@ -1683,7 +1694,7 @@ class Mesh:
         ----------
         points : torch.Tensor
             Replacement coordinates with shape ``(n_points, new_n_spatial_dims)``.
-        keep : sequence of str or tuple[str, ...], optional
+        keep : str, tuple[str, ...], or sequence of either, optional
             Cache keys to retain. Uses the same key semantics as
             :meth:`strip_caches`; defaults to the complete ``"topology"`` cache.
 
@@ -1735,7 +1746,7 @@ class Mesh:
         self,
         cells: torch.Tensor,
         *,
-        keep: Sequence[str | tuple[str, ...]] = (),
+        keep: str | tuple[str, ...] | Sequence[str | tuple[str, ...]] = (),
     ) -> "Mesh":
         r"""Return a mesh with replacement cell connectivity.
 
@@ -1749,7 +1760,7 @@ class Mesh:
         ----------
         cells : torch.Tensor
             Replacement connectivity with the same shape as :attr:`cells`.
-        keep : sequence of str or tuple[str, ...], optional
+        keep : str, tuple[str, ...], or sequence of either, optional
             Cache keys to retain. Uses the same key semantics as
             :meth:`strip_caches`; defaults to retaining nothing.
 
@@ -3160,7 +3171,7 @@ class Mesh:
 
     def strip_caches(
         self,
-        keep: Sequence[str | tuple[str, ...]] = (),
+        keep: str | tuple[str, ...] | Sequence[str | tuple[str, ...]] = (),
     ) -> "Mesh":
         r"""Return a new mesh with cached values removed.
 
@@ -3175,10 +3186,11 @@ class Mesh:
 
         Parameters
         ----------
-        keep : sequence of str or tuple[str, ...], optional
-            Cache keys to retain. Strings select a complete top-level cache such as
-            ``"topology"``; tuples select a nested entry such as
-            ``("cell", "areas")``. Missing keys are ignored.
+        keep : str, tuple[str, ...], or sequence of either, optional
+            Cache keys to retain. A string selects a complete top-level cache such
+            as ``"topology"``; a tuple selects one nested entry such as
+            ``("cell", "areas")``. Pass a sequence such as a list to retain
+            multiple keys. Missing keys are ignored.
 
         Returns
         -------
@@ -3186,13 +3198,19 @@ class Mesh:
             A new mesh with the same geometry and data, retaining only the requested
             cached values.
 
+        Notes
+        -----
+        Data and cache ``TensorDict`` containers are shallow-copied, while their
+        tensor leaves are shared. Structural changes to the returned containers do
+        not affect the source mesh.
+
         Examples
         --------
         >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
         >>> mesh = sphere_icosahedral.load(subdivisions=2)
         >>> _ = mesh.cell_normals  # Triggers caching
         >>> mesh_clean = mesh.strip_caches()  # Remove cached normals
-        >>> mesh_with_areas = mesh.strip_caches(keep=[("cell", "areas")])
+        >>> mesh_with_areas = mesh.strip_caches(keep=("cell", "areas"))
         """
         return self._new_with_structure(
             points=self.points,

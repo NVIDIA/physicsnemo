@@ -1117,7 +1117,7 @@ class DomainMesh:
 
     def strip_caches(
         self,
-        keep: Sequence[str | tuple[str, ...]] = (),
+        keep: str | tuple[str, ...] | Sequence[str | tuple[str, ...]] = (),
     ) -> "DomainMesh":
         r"""Remove cached geometry from all meshes in the domain.
 
@@ -1125,7 +1125,7 @@ class DomainMesh:
 
         Parameters
         ----------
-        keep : sequence of str or tuple[str, ...], optional
+        keep : str, tuple[str, ...], or sequence of either, optional
             Cache keys to retain on every component mesh. See
             :meth:`Mesh.strip_caches` for key semantics.
 

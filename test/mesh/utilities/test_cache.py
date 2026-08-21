@@ -249,12 +249,25 @@ class TestStripCaches:
         mesh = Mesh(points=torch.zeros(1, 2))
         mesh._cache["topology", "custom"] = torch.tensor(1)
 
-        stripped = mesh.strip_caches(keep=["topology"])
+        stripped = mesh.strip_caches(keep="topology")
 
         torch.testing.assert_close(
             stripped._cache["topology", "custom"],
             mesh._cache["topology", "custom"],
         )
+
+    def test_keep_accepts_one_nested_key_as_a_tuple(self):
+        mesh = Mesh(
+            points=torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]),
+            cells=torch.tensor([[0, 1, 2]]),
+        )
+        _ = mesh.cell_areas
+        _ = mesh.cell_centroids
+
+        stripped = mesh.strip_caches(keep=("cell", "areas"))
+
+        torch.testing.assert_close(stripped._cache["cell", "areas"], mesh.cell_areas)
+        assert stripped._cache.get(("cell", "centroids"), None) is None
 
     def test_retained_cache_containers_are_independent(self):
         mesh = Mesh(points=torch.zeros(1, 2))
@@ -268,6 +281,19 @@ class TestStripCaches:
             stripped._cache["topology", "original"],
             mesh._cache["topology", "original"],
         )
+
+    def test_data_containers_are_independent_and_tensor_leaves_are_shared(self):
+        mesh = Mesh(
+            points=torch.zeros(1, 2),
+            point_data={"value": torch.tensor([1.0])},
+        )
+
+        stripped = mesh.strip_caches()
+        stripped.point_data["derived"] = torch.tensor([2.0])
+
+        assert stripped.point_data is not mesh.point_data
+        assert stripped.point_data["value"] is mesh.point_data["value"]
+        assert "derived" not in mesh.point_data
 
 
 class TestWithPoints:
@@ -314,7 +340,7 @@ class TestWithPoints:
 
         updated = mesh.with_points(
             mesh.points.clone(),
-            keep=[("cell", "areas")],
+            keep=("cell", "areas"),
         )
 
         torch.testing.assert_close(updated._cache["cell", "areas"], mesh.cell_areas)
@@ -396,7 +422,7 @@ class TestWithCells:
 
         updated = mesh.with_cells(
             mesh.cells[:, [0, 2, 1]],
-            keep=[("cell", "areas")],
+            keep=("cell", "areas"),
         )
 
         torch.testing.assert_close(updated._cache["cell", "areas"], mesh.cell_areas)

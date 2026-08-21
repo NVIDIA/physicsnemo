@@ -292,7 +292,7 @@ class TestStripCaches:
             _ = mesh.cell_areas
             _ = mesh.cell_normals
 
-        stripped = dm.strip_caches(keep=[("cell", "areas")])
+        stripped = dm.strip_caches(keep=("cell", "areas"))
 
         for _, mesh in stripped.all_meshes():
             assert mesh._cache.get(("cell", "areas"), None) is not None

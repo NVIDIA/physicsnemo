@@ -42,6 +42,39 @@ polygons -- a "polygon soup" (see :doc:`tessellation`) -- use
     mesh = mesh.compute_point_derivatives(keys="T", method="lsq")
     print(mesh.point_data["T_gradient"])  # shape (3, 2)
 
+Cache-aware functional updates
+------------------------------
+
+Use the cache-aware replacement methods when creating a mesh that keeps the
+same point or cell indexing. Each method returns a new ``Mesh`` with independent
+``TensorDict`` containers while sharing their tensor leaves.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Method
+     - Intended change
+     - Default cache policy
+   * - :meth:`Mesh.with_data`
+     - Replace point, cell, or global field data
+     - Retain every geometry and topology cache
+   * - :meth:`Mesh.with_points`
+     - Replace coordinates without changing point indexing or connectivity
+     - Retain topology; clear geometry caches
+   * - :meth:`Mesh.with_cells`
+     - Replace connectivity without changing cell indexing or simplex type
+     - Clear every cache
+   * - :meth:`Mesh.strip_caches`
+     - Remove cached values without changing the mesh
+     - Clear every cache
+
+The ``keep`` override accepts a top-level string such as ``"topology"``, one
+nested-key tuple such as ``("cell", "areas")``, or a sequence of keys. Use a
+list when retaining multiple keys, for example
+``["topology", ("cell", "areas")]``. Retaining a cache that depends on replaced
+geometry or connectivity is an expert operation; the caller is responsible for
+its validity.
+
 .. autoclass:: Mesh
    :members:
    :show-inheritance:
