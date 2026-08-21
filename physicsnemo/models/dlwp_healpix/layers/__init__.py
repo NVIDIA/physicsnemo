@@ -38,8 +38,10 @@ from .healpix_blocks import (
     SymmetricConvNeXtBlock,
     TransposedConvUpsample,
 )
+from .healpix_constraints import NonnegativeConstraint
 from .healpix_decoder import UNetDecoder
 from .healpix_encoder import UNetEncoder
+from .normalization import ConditionalLayerNorm
 
 __all__ = [
     "BasicConvBlock",
@@ -52,6 +54,8 @@ __all__ = [
     "TransposedConvUpsample",
     "UNetDecoder",
     "UNetEncoder",
+    "ConditionalLayerNorm",
+    "NonnegativeConstraint",
     "HEALPixFoldFaces",
     "HEALPixLayer",
     "HEALPixPadding",
@@ -62,10 +66,10 @@ __all__ = [
 ]
 
 
-# Remapping methods for backwards compatibility of legacy checkpoints
-
-
 def _remap_target(target: str) -> str:
+    """
+    Remapping methods for backwards compatibility of legacy checkpoints
+    """
     explicit = {
         "physicsnemo.models.dlwp_healpix_layers.healpix_encoder.UNetEncoder": "physicsnemo.models.dlwp_healpix.layers.UNetEncoder",
         "physicsnemo.models.dlwp_healpix_layers.healpix_decoder.UNetDecoder": "physicsnemo.models.dlwp_healpix.layers.UNetDecoder",
@@ -92,6 +96,14 @@ def _remap_target(target: str) -> str:
     if target.startswith("physicsnemo.models.dlwp_healpix_layers.healpix_layers."):
         cls_name = target.split(".")[-1]
         return f"physicsnemo.nn.{cls_name}"
+
+    if target.startswith("physicsnemo.models.dlwp_healpix_layers.normalization."):
+        cls_name = target.split(".")[-1]
+        return f"physicsnemo.models.dlwp_healpix.layers.normalization.{cls_name}"
+
+    if target.startswith("physicsnemo.models.dlwp_healpix_layers.healpix_constraints."):
+        cls_name = target.split(".")[-1]
+        return f"physicsnemo.models.dlwp_healpix.layers.healpix_constraints.{cls_name}"
 
     if target.startswith("physicsnemo.models.dlwp_healpix_layers."):
         cls_name = target.split(".")[-1]
@@ -127,6 +139,9 @@ def _remap_target(target: str) -> str:
 
 
 def _remap_obj(obj):
+    """
+    Remapping of Dictionary and Hydra DictConfig objects to new targets.
+    """
     from omegaconf import DictConfig, OmegaConf
 
     if isinstance(obj, DictConfig):

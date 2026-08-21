@@ -41,14 +41,24 @@ Deformations
 
 .. currentmodule:: physicsnemo.mesh.transformations.deform
 
-Dense displacement, sparse control-point morphing, and lattice free-form
-deformation are available from the ``deform`` namespace and as methods on
-:class:`~physicsnemo.mesh.mesh.Mesh`.
+The ``deform`` namespace provides six deformation families:
 
-The mesh methods wrap the tensor-level
-:func:`~physicsnemo.nn.functional.displace_points`,
-:func:`~physicsnemo.nn.functional.morph_points`, and
-:func:`~physicsnemo.nn.functional.free_form_deform_points` operations.
+- Dense displacement through :func:`displace`, backed by
+  :func:`~physicsnemo.nn.functional.displace_points`.
+- Sobolev-filtered dense displacement through :func:`sobolev_deform`, backed
+  by :func:`~physicsnemo.nn.functional.sobolev_deform_points`.
+- Compact sparse-control morphing through :func:`morph`, backed by
+  :func:`~physicsnemo.nn.functional.morph_points`.
+- Global radial-basis deformation through
+  :func:`radial_basis_function_deform`, backed by
+  :func:`~physicsnemo.nn.functional.radial_basis_function_deform_points`.
+- Lattice free-form deformation through :func:`free_form_deform`, backed by
+  :func:`~physicsnemo.nn.functional.free_form_deform_points`.
+- Nearest-surface conformance through :func:`shrinkwrap`, backed by
+  :func:`~physicsnemo.nn.functional.shrinkwrap_points`.
+
+Each operation is also available as a method on
+:class:`~physicsnemo.mesh.mesh.Mesh`.
 
 Dense displacement accepts a tensor or a point-data key (including a nested
 tuple key). The operation returns a new mesh without changing ``mesh.points``.
@@ -64,6 +74,97 @@ explicit mutation of the source mesh's attached data.
     # Point-data fields can drive the same operation.
     mesh.point_data["design_displacement"] = displacement
     displaced_from_data = mesh.displace("design_displacement")
+
+Sobolev-Filtered Deformation
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+:meth:`~physicsnemo.mesh.mesh.Mesh.sobolev_deform` turns a raw displacement
+:math:`d` into a spatially smooth displacement :math:`u` by solving
+
+.. math::
+
+   (M + \ell^2 K)u = M d.
+
+Here :math:`M=\bar m I` is a uniform vertex mass matrix scaled by the mean
+positive lumped P1 mass, and :math:`K` is the P1 stiffness matrix. The uniform
+mass makes the filter self-adjoint in standard Euclidean vertex coordinates,
+so the same operator smooths the displacement and its adjoint.
+``length_scale`` is :math:`\ell` in the same physical units as
+``mesh.points``. Larger values suppress variation over longer distances. A
+zero length scale applies the raw displacement exactly at unfixed vertices.
+This discrete Helmholtz filter is motivated by the implicit formulation for
+node-based shape optimization studied by
+`Najian Asl and Bletzinger <https://doi.org/10.1007/s00158-023-03548-2>`_.
+
+.. code:: python
+
+    reference_points = mesh.points.detach()
+    candidate_vertices = reference_points.clone().requires_grad_()
+    raw_displacement = candidate_vertices - reference_points
+    smooth = mesh.sobolev_deform(
+        raw_displacement,
+        length_scale=0.2,
+    )
+
+    objective = smooth.points.square().mean()
+    objective.backward()
+    smooth_vertex_adjoint = candidate_vertices.grad
+
+The forward deformation is the uniform-mass discrete Helmholtz solve itself. Its
+first-order implicit backward solves the matching adjoint system. Optimize
+candidate vertex coordinates by subtracting fixed reference points and passing
+that offset as ``raw_displacement``. The adjoint with respect to those
+candidate vertices receives the same Sobolev filter. Gradients with respect to
+the reference coordinates also include the geometric dependence of the
+P1 stiffness and mass scale. Higher-order derivatives are not supported for a
+positive length scale. Each ambient displacement component is filtered
+independently.
+
+``fixed_points`` accepts a boolean point mask or a point-data key. True entries
+receive zero displacement, which imposes a homogeneous Dirichlet condition.
+Other mesh boundaries use the natural homogeneous Neumann condition. With no
+fixed points, constant displacements pass through to solver precision.
+
+The Torch and Warp implementations use matrix-free preconditioned conjugate
+gradients. The Warp implementation runs on CUDA and supplies an explicit
+implicit-adjoint backward with an analytic geometry vector-Jacobian product.
+By default, CUDA segments, triangles, and tetrahedra select Warp when it is
+available. CPU meshes and higher-dimensional simplices select Torch.
+``max_iterations`` and ``tolerance`` control the iterative solve. The operation
+raises an error if either the forward or adjoint solve does not reach the
+requested tolerance. At positive length scales, cells must be finite,
+nondegenerate simplices. Isolated points receive their raw displacement.
+CUDA Graph capture is not supported because P1 operator assembly and solver
+diagnostics are not capture-safe. Both backends support ``torch.compile``.
+Warp CUDA results and point gradients may vary at roundoff between runs.
+
+.. rubric:: Before and After
+
+The panels show the initial objective adjoint with respect to candidate vertex
+coordinates. The raw field contains checkerboard-scale oscillation. Applying
+the Sobolev deformation filters that adjoint over the mesh while retaining the
+fixed boundary. Both panels use the same color and arrow scale.
+
+.. figure:: ../../img/mesh/sobolev_adjoint_field.png
+   :alt: Raw noisy vertex adjoint and smoother Sobolev-filtered adjoint
+   :width: 100%
+
+.. rubric:: Three-Dimensional Surface Example
+
+The 3D figure applies the same workflow to a triangulated sheet with points
+shaped ``(N, 3)``. Its objective pulls the center upward while the boundary
+remains fixed. The reproducible figure source is
+``docs/img/mesh/sobolev_adjoint_field_3d.py``.
+
+The arrows show the normalized negative adjoint, which is the gradient-descent
+update direction. Each panel applies that field to the sheet geometry for
+visibility. The raw panel is corrugated by vertex-scale oscillations. The
+Sobolev panel gives the same broad upward pull with a smooth surface. Orange
+points mark the fixed boundary, and both panels use one shared scale.
+
+.. figure:: ../../img/mesh/sobolev_adjoint_field_3d.png
+   :alt: Raw and Sobolev-filtered upward updates on a fixed-boundary sheet
+   :width: 100%
 
 Sparse controls are useful when only a small set of design handles is known. A
 control point is a location in world coordinates, and its control displacement
@@ -130,15 +231,15 @@ selected. Each row of ``control_points`` pairs with the same row of
 The radius is a Euclidean support distance in the same coordinate units as the
 mesh. A control's influence vanishes smoothly at its support boundary. Where
 supports overlap, all active controls are evaluated together using a stationary
-zero-displacement background; the result is not a simple sum or average. Points
+zero-displacement background. The result is not a simple sum or average. Points
 outside every support remain unchanged. Put simultaneous controls in one call,
 because applying several morphs sequentially evaluates later fields on already
 modified coordinates and is therefore order-dependent.
 
-The ``kernel`` keyword names the compact radial kernel used by the field;
+The ``kernel`` keyword names the compact radial kernel used by the field.
 ``"wendland_c2"`` is currently the supported value and the default.
 
-Every tensor-valued radius must remain finite and strictly positive; its values
+Every tensor-valued radius must remain finite and strictly positive. Its values
 are not validated at runtime. When a model learns the radius, use a positive
 parameterization such as
 ``torch.nn.functional.softplus(raw_radius) + radius_epsilon`` rather than
@@ -154,6 +255,124 @@ and magnitudes.
 
 .. figure:: ../../img/mesh/sphere_morphing.png
    :alt: Original sphere and single-control and multiple-control sphere morphing
+   :width: 100%
+
+Global Radial-Basis Deformation
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Radial-basis deformation fits one global displacement field through sparse
+handles. With zero smoothing and a nonsingular control layout, the fitted field
+interpolates each prescribed control displacement up to solver precision.
+Optional point weights are applied after interpolation. Unlike compact Shepard
+morphing, every control generally influences every point. Fixed controls are
+therefore useful as anchors.
+
+The standard affine polynomial tail reproduces affine displacement fields. The
+controls must affinely span the coordinate space, and the augmented system must
+be nonsingular. This formulation follows the thin-plate-spline interpolant
+described by Bookstein [1].
+
+[1] F. L. Bookstein, "Principal warps: thin-plate splines and the decomposition
+of deformations," IEEE Transactions on Pattern Analysis and Machine
+Intelligence, vol. 11, no. 6, pp. 567-585, 1989.
+https://doi.org/10.1109/34.24792
+
+.. rubric:: Two-Dimensional Example
+
+A mesh with ``n_spatial_dims=2`` requires at least three non-collinear controls
+when the affine tail is enabled. This example fixes the four corners of a
+triangulated square and moves a fifth handle at the midpoint of its upper edge.
+
+.. code:: python
+
+    import torch
+    from physicsnemo.mesh.primitives.planar import unit_square
+
+    mesh_2d = unit_square.load(subdivisions=4)
+    controls_2d = mesh_2d.points.new_tensor(
+        [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0.5, 1.0]]
+    )
+    displacements_2d = torch.zeros_like(controls_2d)
+    displacements_2d[-1] = controls_2d.new_tensor([0.15, 0.35])
+
+    deformed_2d = mesh_2d.radial_basis_function_deform(
+        controls_2d,
+        displacements_2d,
+        kernel="thin_plate_spline",
+        polynomial=True,
+        smoothing=0.0,
+    )
+
+    handle_index = torch.linalg.vector_norm(
+        mesh_2d.points - controls_2d[-1], dim=1
+    ).argmin()
+    torch.testing.assert_close(
+        deformed_2d.points[handle_index],
+        controls_2d[-1] + displacements_2d[-1],
+        atol=2.0e-5,
+        rtol=2.0e-5,
+    )
+
+The corner controls remain fixed while the upper edge and interior deform
+smoothly. The hollow green marker in the output panel shows the handle's source
+position.
+
+.. figure:: ../../img/mesh/square_rbf_morph.png
+   :alt: Two-dimensional global RBF deformation of a triangulated square
+   :width: 100%
+
+.. rubric:: Three-Dimensional Example
+
+In three dimensions, the affine tail requires at least four controls spanning
+the coordinate space. Practical layouts usually use more. The sphere example
+uses its six axis-extreme vertices as controls.
+
+.. code:: python
+
+    control_indices = torch.stack(
+        (
+            mesh.points[:, 2].argmax(),
+            mesh.points[:, 2].argmin(),
+            mesh.points[:, 0].argmax(),
+            mesh.points[:, 0].argmin(),
+            mesh.points[:, 1].argmax(),
+            mesh.points[:, 1].argmin(),
+        )
+    )
+    rbf_controls = mesh.points[control_indices]
+    rbf_displacements = torch.zeros_like(rbf_controls)
+    rbf_displacements[0, 2] = 0.55
+
+    exact_rbf = mesh.radial_basis_function_deform(
+        rbf_controls,
+        rbf_displacements,
+        kernel="thin_plate_spline",
+        polynomial=True,
+        smoothing=0.0,
+    )
+
+    torch.testing.assert_close(
+        exact_rbf.points[control_indices],
+        rbf_controls + rbf_displacements,
+        atol=2.0e-5,
+        rtol=2.0e-5,
+    )
+
+``smoothing=0.0`` interpolates the controls up to solver precision. A positive
+smoothing value adds diagonal regularization. This deliberately relaxes
+interpolation accuracy.
+
+Both evaluation backends use PyTorch for the dense coefficient solve. The Warp
+backend fuses evaluation over the mesh points without materializing its full
+point/control kernel matrix.
+
+Orange controls are fixed anchors. Green controls mark moved handles, and the
+arrows show their displacement directions. The labels give the prescribed
+magnitudes. With zero smoothing, the deformed surfaces interpolate all six
+control displacements up to solver precision.
+
+.. figure:: ../../img/mesh/sphere_rbf_morph.png
+   :alt: Original sphere with one-handle and two-handle RBF deformations
    :width: 100%
 
 Lattice Free-Form Deformation
@@ -218,6 +437,88 @@ produce two local bulges and a local indentation.
    :alt: Sphere with control lattice, Bernstein taper, and local B-spline sculpt
    :width: 100%
 
+Nearest-Surface Shrinkwrap
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+:meth:`~physicsnemo.mesh.mesh.Mesh.shrinkwrap` projects source vertices to
+their closest points on a triangle target. An optional signed ``offset`` keeps
+the result a specified distance from the target along its oriented face
+normals. ``point_weights`` can fix selected vertices or apply a partial
+projection. ``max_distance`` leaves vertices unchanged when no target surface
+is close enough.
+
+The following call is the central operation in the curved-panel example:
+
+.. code:: python
+
+    conformed = source.shrinkwrap(
+        panel_target,
+        point_weights=movable,
+        max_distance=0.34,
+    )
+
+The example constructs a swept triangle panel and adds a smooth springback
+error to form the source sheet. The boolean ``movable`` mask keeps its green
+root attachment strip fixed. The movable vertices lie on the target surface.
+Color shows how far each source vertex moved.
+
+.. figure:: ../../img/mesh/shrinkwrap_panel_conformance.png
+   :alt: Curved triangle panel, lifted source sheet, and shrinkwrapped result
+   :width: 100%
+
+Nearest-face selection and closest-feature changes are discrete. With those
+choices fixed, gradients propagate through source points, selected target
+vertices, floating point weights, and a tensor-valued ``offset``. At a shared
+edge or vertex, adjacent faces can provide different normals. Use consistently
+oriented target faces and avoid placing offset-sensitive samples exactly on
+shared features.
+
+Torch provides the reference search. Warp accelerates nearest-face search on
+CPU and CUDA. Both backends replay the selected point-to-triangle projection
+with PyTorch in the input dtype.
+Shrinkwrap is available on :class:`~physicsnemo.mesh.mesh.Mesh`, not
+:class:`~physicsnemo.mesh.domain_mesh.DomainMesh`, because one source mesh is
+projected onto one target surface.
+
+Float64 targets use the Torch search because Warp searches in float32. Safe
+float32 coordinates are searched unchanged. Warp falls back to Torch for
+unsafe coordinate magnitudes or face geometry.
+
+Shrinkwrap performs data-dependent validation and nearest-face search setup.
+CUDA executions with either backend are not supported inside CUDA Graph
+capture.
+
+.. rubric:: Shape-Optimization Constraint Example
+
+In shape optimization, an otherwise acceptable design iterate can locally
+cross an admissible clearance surface. This example constructs a closed
+triangulated low-profile enclosure with an inset lid and chamfered walls. A
+boolean mask selects only the vertices above a horizontal clearance plane.
+
+.. code:: python
+
+    feasible = candidate.shrinkwrap(
+        admissible_envelope,
+        point_weights=design_region,
+    )
+
+Before repair, a smooth orange dome protrudes through the blue clearance plane
+while the broad gold lid deformation remains admissible. Shrinkwrap projects
+only the violating vertices back to the limit. After repair, the cap is green,
+the gold optimized surface is retained, and an orange wire outline marks the
+former excess.
+
+All connectivity is triangular. The example checks the repaired-cap residual,
+exact preservation of admissible vertices, closed two-manifold source and
+result connectivity, consistent winding, positive enclosed volume, adjoints,
+and Torch versus Warp agreement. Shrinkwrap restores this geometric
+constraint. It does not run the optimizer or guarantee valid cells for
+arbitrary inputs.
+
+.. figure:: ../../img/mesh/shrinkwrap_solid_surface.png
+   :alt: Selective repair of an optimized enclosure crossing a clearance plane
+   :width: 100%
+
 Domain Meshes
 ^^^^^^^^^^^^^
 
@@ -225,11 +526,16 @@ Domain Meshes
 world-coordinate control field on the interior and every named boundary. With
 ``point_weights=None``, coincident component points receive identical motion.
 Domain point weights must instead be a point-data key (or nested tuple key)
-present in every component; raw weight tensors are rejected because component
+present in every component. Raw weight tensors are rejected because component
 point counts can differ. Every resolved field must use one common dtype across
 the domain: bool for a hard mask, or the same floating dtype as the mesh points.
 Coincident points remain coincident under a point-weight key only when their
 resolved values also match.
+
+:meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.radial_basis_function_deform`
+follows the same component and point-weight rules while fitting one global RBF
+field. The coefficient system is solved once, and the combined interior and
+boundary points are evaluated together before the component meshes are rebuilt.
 
 .. code:: python
 
@@ -287,11 +593,20 @@ caches and recompute them lazily. They retain topology caches.
    :meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.validate` explicitly when a
    deformation could compromise validity.
 
+For optimization-time geometric penalties on a fixed topology, see
+:doc:`deformation`.
+
 .. autofunction:: displace
 
 .. autofunction:: free_form_deform
 
 .. autofunction:: morph
+
+.. autofunction:: radial_basis_function_deform
+
+.. autofunction:: shrinkwrap
+
+.. autofunction:: sobolev_deform
 
 Projections
 -----------

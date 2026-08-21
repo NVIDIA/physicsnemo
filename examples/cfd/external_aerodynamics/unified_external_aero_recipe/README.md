@@ -34,9 +34,10 @@ The pipeline non-dimensionalizes raw fields to unitless model inputs
 conditions (`U_inf`, `rho_inf`, `p_inf`, ...) live in each file's
 `global_data` and are read by `MeshReaderWithGlobalData`. Because the
 datasets are non-dimensionalized and loaded through the PhysicsNeMo
-datapipes' `MultiDataset` abstraction, you can merge datasets on the fly
-for multi-dataset training; the infrastructure supports it, though we
-haven't extensively tuned it. Non-dimensionalization itself is the
+datapipes' `MultiDataset` abstraction, you can merge directory- and
+manifest-split datasets on the fly for multi-dataset training. Manifest
+indices are resolved within each dataset and shifted into the combined
+index space before sampling. Non-dimensionalization itself is the
 `NonDimensionalizeByMetadata` transform in `src/nondim.py`.
 
 ## Quick start
@@ -461,7 +462,7 @@ dataset: drivaer_ml_volume
 # Multi-dataset: list of additional datasets to combine via MultiDataset
 extra_datasets: []
 
-# Manifest-mode split selectors (no-op for directory-mode datasets)
+# Split selectors applied independently to every chosen manifest dataset
 train_split: train
 val_split: val
 
@@ -686,9 +687,10 @@ file you need to edit per machine to point at your local data).
 
 ### Manifest-based data splitting
 
-DrivaerML and HiLift datasets use a `manifest.json` next to the data
-directory to define train/val/test splits. Selection is recipe-side via
-the top-level `train_split` / `val_split` keys in `train.yaml`:
+DrivaerML, HiLift, and SHIFT SUV datasets use a `manifest.json` next to
+the data directory to define train/val/test splits. Selection is
+recipe-side via the top-level `train_split` / `val_split` keys in
+`train.yaml`:
 
 ```yaml
 # in conf/train.yaml
@@ -696,10 +698,21 @@ train_split: train
 val_split: val
 ```
 
-`build_dataloaders` plumbs these into each chosen dataset; manifest-mode
-datasets pick them up via `resolve_manifest_spec`, while directory-mode
-datasets (e.g. SHIFT SUV) ignore them and use the dataset YAML's
-`train_datadir` / `val_datadir`.
+`build_dataloaders` resolves the selected split independently for every
+chosen manifest dataset. It then shifts each dataset's local indices by
+that dataset's cumulative `MultiDataset` offset before constructing the
+train and validation samplers. Directory-mode datasets can participate in
+the same run and contribute their complete local ranges. Because non-null
+top-level split selectors request manifest mode for every chosen dataset,
+a manifest/directory mix should set them to `null` and provide explicit
+`train_manifest` / `val_manifest` paths on the manifest dataset YAML.
+
+Do not skip that second step. With the selectors cleared and no explicit
+`train_manifest`, a dataset that *has* a `manifest.json` falls back to
+directory mode and sweeps every run under `train_datadir` — including the
+manifest's held-out val/test entries — into training. `resolve_manifest_spec`
+logs a warning when it sees that combination; treat it as an error in your
+config.
 
 The `ManifestSampler` in `src/datasets.py` resolves manifest entries to
 dataset indices and handles distributed sampling across ranks.

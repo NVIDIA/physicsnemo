@@ -67,13 +67,13 @@ def _build_matcher(config: LoRAConfig) -> Callable[[str, nn.Module], bool]:
 
 
 # Default feed-forward MLP target patterns for known PhysicsNeMo transformer
-# blocks (e.g. GALE_block / TransolverBlock). Regex over fully-qualified names;
+# blocks (e.g. GALEBlock / TransolverBlock). Regex over fully-qualified names;
 # editable by users for custom architectures. The registry decides whether each
 # match is the fused te.LayerNormMLP or plain Linears, and non-Linear matches
 # (norms, activations) are filtered out by type.
 _MLP_TARGET_PATTERNS: list[str] = [
-    r"\.ln_mlp1$",  # GALE_block FFN under TE: fused te.LayerNormMLP
-    r"\.ln_mlp1\.\d+\.layers\.\d+$",  # GALE_block FFN non-TE: Sequential(LayerNorm, Mlp(layers=...))
+    r"\.ln_mlp1$",  # GALEBlock FFN under TE: fused te.LayerNormMLP
+    r"\.ln_mlp1\.\d+\.layers\.\d+$",  # GALEBlock FFN non-TE: Sequential(LayerNorm, Mlp(layers=...))
 ]
 
 
@@ -169,9 +169,20 @@ def _freeze_base_except_extras(
                         p.requires_grad = True
 
 
-def apply_lora(model: nn.Module, config: LoRAConfig) -> ApplyResult:
+def apply_lora(model: nn.Module, config: LoRAConfig, compute_fingerprint: bool = True) -> ApplyResult:
     """In-place: wrap matched ``Linear`` / ``te.Linear`` layers with LoRA and
     freeze the base (except ``extras_trainable``).
+
+    Parameters
+    ----------
+    model : nn.Module
+        Model to mutate in place.
+    config : LoRAConfig
+        LoRA configuration controlling target selection, rank, scaling,
+        initialization, dropout, and any extra trainable modules.
+    compute_fingerprint : bool, optional
+        If ``True``, compute and store a fingerprint of the pristine base model
+        before wrapping layers. Set to ``False`` to skip this cost.
 
     Raises
     ------
@@ -187,7 +198,10 @@ def apply_lora(model: nn.Module, config: LoRAConfig) -> ApplyResult:
 
     # Fingerprint the PRISTINE base before any mutation — once layers are
     # wrapped, the original structure can no longer be recovered.
-    fingerprint = compute_base_fingerprint(model)
+    if compute_fingerprint:
+        fingerprint = compute_base_fingerprint(model)
+    else:
+        fingerprint = ""
 
     targets = resolve_targets(model, config)
     if not targets:

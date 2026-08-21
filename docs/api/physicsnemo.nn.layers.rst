@@ -8,6 +8,7 @@ PhysicsNeMo Layers
 
    nn/layers/activations
    nn/layers/attention_transformers
+   nn/layers/flare_attention
    nn/layers/convolutional
    nn/layers/embeddings
    nn/layers/fourier_spectral

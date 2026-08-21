@@ -14,11 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 import pytest
 import torch
 
-from physicsnemo.experimental.models.geotransolver.geotransolver import (
+from physicsnemo.models.geotransolver.geotransolver import (
     GeoTransolver,
 )
 from test.common import (  # noqa E402
@@ -88,6 +87,210 @@ def test_geotransolver_forward(device, attention_type, use_geometry, use_global)
     assert not torch.isnan(outputs).any()
 
 
+def test_geotransolver_forward_returns_embedding_states(device):
+    """Test returning geometry and global context embedding states."""
+    torch.manual_seed(42)
+
+    batch_size = 2
+    n_tokens = 100
+    n_geom_tokens = 345
+    n_global = 5
+    n_hidden = 64
+    n_head = 4
+    slice_num = 8
+
+    model = GeoTransolver(
+        functional_dim=32,
+        out_dim=4,
+        geometry_dim=3,
+        global_dim=16,
+        n_layers=2,
+        n_hidden=n_hidden,
+        dropout=0.0,
+        n_head=n_head,
+        act="gelu",
+        mlp_ratio=2,
+        slice_num=slice_num,
+        use_te=False,
+        time_input=False,
+        plus=False,
+        include_local_features=False,
+    ).to(device)
+
+    local_emb = torch.randn(batch_size, n_tokens, 32, device=device)
+    geometry = torch.randn(batch_size, n_geom_tokens, 3, device=device)
+    global_emb = torch.randn(batch_size, n_global, 16, device=device)
+
+    outputs, embedding_states = model(
+        local_emb,
+        global_embedding=global_emb,
+        geometry=geometry,
+        return_embedding_states=True,
+    )
+
+    assert isinstance(outputs, torch.Tensor)
+    assert outputs.shape == (batch_size, n_tokens, 4)
+    assert not torch.isnan(outputs).any()
+    assert isinstance(embedding_states, torch.Tensor)
+    assert embedding_states.shape == (
+        batch_size,
+        n_head,
+        slice_num,
+        2 * (n_hidden // n_head),
+    )
+    assert not torch.isnan(embedding_states).any()
+
+
+def _small_model(device, **overrides):
+    """Small GeoTransolver for the return-option tests."""
+    kwargs = dict(
+        functional_dim=32,
+        out_dim=4,
+        geometry_dim=3,
+        global_dim=16,
+        n_layers=2,
+        n_hidden=64,
+        dropout=0.0,
+        n_head=4,
+        act="gelu",
+        mlp_ratio=2,
+        slice_num=8,
+        use_te=False,
+        time_input=False,
+        plus=False,
+        include_local_features=False,
+    )
+    kwargs.update(overrides)
+    return GeoTransolver(**kwargs).to(device)
+
+
+def test_geotransolver_return_options(device):
+    """All four combinations of the two return flags agree on the prediction.
+
+    Covers the return signature rather than the numbers: which object comes
+    back, in what order, and that asking for extras does not change the output.
+    """
+    torch.manual_seed(42)
+
+    batch_size = 2
+    n_tokens = 100
+    n_hidden = 64
+    model = _small_model(device, n_hidden=n_hidden).eval()
+
+    local_emb = torch.randn(batch_size, n_tokens, 32, device=device)
+    geometry = torch.randn(batch_size, 235, 3, device=device)
+    global_emb = torch.randn(batch_size, 5, 16, device=device)
+    inputs = dict(global_embedding=global_emb, geometry=geometry)
+
+    with torch.no_grad():
+        plain = model(local_emb, **inputs)
+        out_states, states = model(local_emb, **inputs, return_embedding_states=True)
+        out_feats, point_features = model(
+            local_emb, **inputs, return_point_features=True
+        )
+        out_both, states_both, feats_both = model(
+            local_emb,
+            **inputs,
+            return_embedding_states=True,
+            return_point_features=True,
+        )
+
+    assert isinstance(plain, torch.Tensor)
+    assert plain.shape == (batch_size, n_tokens, 4)
+
+    # Point features are the pre-readout latents, so n_hidden wide here.
+    assert point_features.shape == (batch_size, n_tokens, n_hidden)
+    assert feats_both.shape == point_features.shape
+    assert states_both.shape == states.shape
+
+    # The flags must not perturb the prediction, in any combination.
+    for other in (out_states, out_feats, out_both):
+        assert torch.equal(plain, other)
+
+
+def test_geotransolver_return_flags_are_keyword_only(device):
+    """The two return flags cannot be passed positionally."""
+    model = _small_model(device)
+    local_emb = torch.randn(1, 16, 32, device=device)
+
+    with pytest.raises(TypeError):
+        model(local_emb, None, None, None, None, True)
+
+
+def test_geotransolver_point_features_with_local_features(device):
+    """Local features widen the point features by n_hidden_local per radius."""
+    torch.manual_seed(42)
+
+    n_hidden = 64
+    n_hidden_local = 32
+    radii = [0.05, 0.25]
+    model = _small_model(
+        device,
+        n_hidden=n_hidden,
+        include_local_features=True,
+        radii=radii,
+        neighbors_in_radius=[8, 32],
+        n_hidden_local=n_hidden_local,
+    ).eval()
+
+    batch_size = 1
+    n_tokens = 100
+    local_emb = torch.randn(batch_size, n_tokens, 32, device=device)
+
+    with torch.no_grad():
+        outputs, point_features = model(
+            local_emb,
+            local_positions=local_emb[:, :, :3],
+            global_embedding=torch.randn(batch_size, 5, 16, device=device),
+            geometry=torch.randn(batch_size, 235, 3, device=device),
+            return_point_features=True,
+        )
+
+    assert outputs.shape == (batch_size, n_tokens, 4)
+    assert point_features.shape == (
+        batch_size,
+        n_tokens,
+        n_hidden + n_hidden_local * len(radii),
+    )
+    assert not torch.isnan(point_features).any()
+
+
+def test_geotransolver_point_features_tuple_inputs(device):
+    """Tuple inputs return one point-feature tensor per stream."""
+    torch.manual_seed(42)
+
+    functional_dims = (32, 48)
+    out_dims = (4, 6)
+    n_hidden = 64
+    model = _small_model(
+        device,
+        functional_dim=functional_dims,
+        out_dim=out_dims,
+        n_hidden=n_hidden,
+    ).eval()
+
+    batch_size = 2
+    n_tokens = (100, 150)
+    local_embs = tuple(
+        torch.randn(batch_size, n, d, device=device)
+        for n, d in zip(n_tokens, functional_dims)
+    )
+
+    with torch.no_grad():
+        outputs, point_features = model(
+            local_embs,
+            local_positions=tuple(emb[:, :, :3] for emb in local_embs),
+            global_embedding=torch.randn(batch_size, 5, 16, device=device),
+            geometry=torch.randn(batch_size, 235, 3, device=device),
+            return_point_features=True,
+        )
+
+    assert len(outputs) == len(point_features) == 2
+    for i, n in enumerate(n_tokens):
+        assert outputs[i].shape == (batch_size, n, out_dims[i])
+        assert point_features[i].shape == (batch_size, n, n_hidden)
+
+
 def test_geotransolver_forward_tuple_inputs(device):
     """Test GeoTransolver model forward pass with tuple inputs/outputs (multi-head)."""
     torch.manual_seed(42)
@@ -141,7 +344,6 @@ def test_geotransolver_forward_tuple_inputs(device):
     assert not torch.isnan(outputs[1]).any()
 
 
-@requires_module("warp")
 def test_geotransolver_forward_with_local_features(device, pytestconfig):
     """Test GeoTransolver model forward pass with local features (BQ warp)."""
     torch.manual_seed(42)
@@ -409,9 +611,77 @@ def test_geotransolver_te_basic(device, pytestconfig):
     assert not torch.isnan(outputs).any()
 
 
+@requires_module("transformer_engine")
+def test_geotransolver_te_gale_fa(device):
+    """Test GeoTransolver with the GALE_FA backend and Transformer Engine.
+
+    Exercises the TE attention path in GALE_FA (both the FLARE self-attention
+    passes and the context cross-attention run through te.DotProductAttention).
+    """
+    torch.manual_seed(42)
+
+    if device == "cpu":
+        pytest.skip("TE Tests require cuda.")
+
+    model = GeoTransolver(
+        functional_dim=32,
+        out_dim=4,
+        geometry_dim=3,
+        global_dim=16,
+        n_layers=2,
+        n_hidden=64,
+        dropout=0.0,
+        n_head=4,
+        act="gelu",
+        mlp_ratio=2,
+        slice_num=8,
+        use_te=True,
+        time_input=False,
+        plus=False,
+        include_local_features=False,
+        attention_type="GALE_FA",
+    ).to(device)
+
+    assert model.blocks[0].Attn.use_te is True
+
+    batch_size = 2
+    n_tokens = 100
+    n_geom = 235
+    n_global = 5
+
+    local_emb = torch.randn(batch_size, n_tokens, 32).to(device)
+    geometry = torch.randn(batch_size, n_geom, 3).to(device)
+    global_emb = torch.randn(batch_size, n_global, 16).to(device)
+    local_positions = local_emb[:, :, :3]
+
+    outputs = model(
+        local_emb,
+        local_positions=local_positions,
+        global_embedding=global_emb,
+        geometry=geometry,
+    )
+
+    assert isinstance(outputs, torch.Tensor)
+    assert outputs.shape == (batch_size, n_tokens, 4)
+    assert not torch.isnan(outputs).any()
+
+
 # =============================================================================
 # Checkpoint Tests
 # =============================================================================
+
+
+def test_geotransolver_legacy_checkpoint_class_path():
+    """Test resolving the model class path stored by experimental checkpoints."""
+    from physicsnemo.experimental.models.geotransolver import (
+        GeoTransolver as LegacyPackageGeoTransolver,
+    )
+    from physicsnemo.experimental.models.geotransolver.geotransolver import (
+        GeoTransolver as LegacyModuleGeoTransolver,
+    )
+
+    assert LegacyPackageGeoTransolver is GeoTransolver
+    assert LegacyModuleGeoTransolver is GeoTransolver
 
 
 def test_geotransolver_checkpoint(device):
@@ -843,115 +1113,10 @@ def test_geotransolver_metadata():
 
 
 # =============================================================================
-# Embedded OOD guard (guard_config) integration
-# =============================================================================
-
-
-def _make_guarded_model(device, guard_config):
-    """Minimal guard-enabled GeoTransolver used by the tests below."""
-    return GeoTransolver(
-        functional_dim=32,
-        out_dim=4,
-        geometry_dim=3,
-        global_dim=16,
-        n_layers=2,
-        n_hidden=64,
-        dropout=0.0,
-        n_head=4,
-        act="gelu",
-        mlp_ratio=2,
-        slice_num=8,
-        use_te=False,
-        time_input=False,
-        plus=False,
-        include_local_features=False,
-        guard_config=guard_config,
-    ).to(device)
-
-
-def test_geotransolver_guard_config_none_leaves_guard_unattached(device):
-    """``guard_config=None`` (the default) produces no OOD guard."""
-    model = _make_guarded_model(device, guard_config=None)
-    assert model.ood_guard is None
-
-
-def test_geotransolver_guard_config_dict_attaches_and_runs(device):
-    """Dict ``guard_config`` attaches an ``OODGuard`` wired through the forward pass."""
-    torch.manual_seed(42)
-
-    model = _make_guarded_model(
-        device,
-        guard_config={"buffer_size": 8, "knn_k": 3, "sensitivity": 1.5},
-    )
-    assert model.ood_guard is not None
-
-    batch_size = 2
-    local_emb = torch.randn(batch_size, 50, 32, device=device)
-    local_positions = local_emb[:, :, :3]
-    geometry = torch.randn(batch_size, 80, 3, device=device)
-    global_emb = torch.randn(batch_size, 1, 16, device=device)
-
-    # Training forward should populate the guard's buffers.
-    model.train()
-    _ = model(
-        local_emb,
-        local_positions=local_positions,
-        global_embedding=global_emb,
-        geometry=geometry,
-    )
-    assert model.ood_guard.geo_ptr.item() == batch_size
-    assert not torch.isinf(model.ood_guard.global_min).any()
-
-    # Eval forward should run the checks (threshold may remain inf until the
-    # buffer has enough samples, which is acceptable — we just verify no crash).
-    model.eval()
-    _ = model(
-        local_emb,
-        local_positions=local_positions,
-        global_embedding=global_emb,
-        geometry=geometry,
-    )
-
-
-@pytest.mark.parametrize(
-    "bad_config,expected_exc,match",
-    [
-        # Unknown field: OODGuardConfig rejects at construction.
-        ({"buffer_size": 8, "nope": 1}, TypeError, "unexpected keyword argument"),
-        # Missing required field.
-        ({}, TypeError, "buffer_size"),
-        # Non-dict type.
-        (42, TypeError, "guard_config must be a dict"),
-    ],
-)
-def test_geotransolver_guard_config_invalid_inputs(bad_config, expected_exc, match):
-    """Invalid ``guard_config`` values raise at construction with clear messages."""
-    with pytest.raises(expected_exc, match=match):
-        _make_guarded_model("cpu", guard_config=bad_config)
-
-
-def test_geotransolver_guard_config_without_any_surface_raises():
-    """Enabling the guard without either ``global_dim`` or ``geometry_dim`` raises."""
-    with pytest.raises(ValueError, match="nothing to watch"):
-        GeoTransolver(
-            functional_dim=32,
-            out_dim=4,
-            geometry_dim=None,
-            global_dim=None,
-            n_layers=2,
-            n_hidden=64,
-            n_head=4,
-            use_te=False,
-            guard_config={"buffer_size": 8},
-        )
-
-
-# =============================================================================
 # Batched local-features tests (B > 1)
 # =============================================================================
 
 
-@requires_module("warp")
 def test_geotransolver_local_features_batch_gt_1(device):
     """GeoTransolver with local features should work with batch_size > 1."""
     torch.manual_seed(42)
@@ -999,7 +1164,6 @@ def test_geotransolver_local_features_batch_gt_1(device):
     assert not torch.isnan(outputs).any()
 
 
-@requires_module("warp")
 def test_geotransolver_local_features_compile(device):
     """GeoTransolver with local features should be compilable (max_points path)."""
     if "cuda" in device:

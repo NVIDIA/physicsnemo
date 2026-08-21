@@ -28,7 +28,6 @@ from tensordict import TensorDict
 
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
-from physicsnemo.datapipes.transforms.subsample import poisson_sample_indices_fixed
 from physicsnemo.mesh import (
     MESH_FIELD_ASSOCIATIONS,
     DomainMesh,
@@ -36,6 +35,7 @@ from physicsnemo.mesh import (
     MeshFieldAssociation,
 )
 from physicsnemo.mesh.calculus.measure import compose_measure_weights
+from physicsnemo.nn.functional import weighted_multinomial
 
 
 @register()
@@ -283,13 +283,20 @@ class SubsampleMesh(MeshTransform):
         if total <= k:
             return torch.arange(total, device=device)
         if total > 2**24:
-            return poisson_sample_indices_fixed(
+            return weighted_multinomial(
                 total,
                 k,
+                strategy="poisson_gap",
                 device=device,
                 generator=self._generator,
             )
-        return torch.randperm(total, device=device, generator=self._generator)[:k]
+        return weighted_multinomial(
+            total,
+            k,
+            strategy="exact",
+            device=device,
+            generator=self._generator,
+        )
 
     def __call__(self, mesh: Mesh) -> Mesh:
         if self.n_cells is not None and mesh.n_cells > self.n_cells:
@@ -300,8 +307,8 @@ class SubsampleMesh(MeshTransform):
                 mesh = _compact_points(mesh)
             ### Compose this stage's inverse inclusion probability into the
             ### mesh's measure weights.
-            ### `_random_indices` is a uniform k-of-N sample, so every
-            ### cell's inclusion probability is k/N exactly.
+            ### `_random_indices` is exact below the large-population threshold
+            ### and uses the near-uniform Poisson-gap approximation above it.
             compose_measure_weights(mesh, n_before / self.n_cells)
 
         if self.n_points is not None and mesh.n_points > self.n_points:
@@ -441,6 +448,10 @@ class SetGlobalField(MeshTransform):
     Typical use: inject a per-dataset inlet velocity vector so that
     downstream rotation transforms (with ``transform_global_data=True``)
     rotate it consistently with the mesh geometry.
+
+    On a :class:`~physicsnemo.mesh.DomainMesh`, the fields are written to
+    the domain-level ``global_data`` as well as to every sub-mesh's
+    ``global_data``.
     """
 
     def __init__(
@@ -464,6 +475,34 @@ class SetGlobalField(MeshTransform):
             self._fields.to(device=mesh.points.device, dtype=mesh.points.dtype)
         )
         return mesh.with_data(global_data=new_gd)
+
+    def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
+        """Inject the fields into a :class:`DomainMesh`.
+
+        Writes the fields to the domain-level ``global_data`` in addition
+        to the base-class broadcast, which only reaches sub-mesh
+        ``global_data``.
+
+        Parameters
+        ----------
+        domain : DomainMesh
+            Input domain mesh (interior + boundaries).
+
+        Returns
+        -------
+        DomainMesh
+            Domain mesh with the fields set in the domain-level and every
+            sub-mesh ``global_data``.
+        """
+        domain = super().apply_to_domain(domain)
+        reference = domain.interior.points
+        new_gd = domain.global_data.clone()
+        new_gd.update(self._fields.to(device=reference.device, dtype=reference.dtype))
+        return DomainMesh(
+            interior=domain.interior,
+            boundaries=domain.boundaries,
+            global_data=new_gd,
+        )
 
     def extra_repr(self) -> str:
         shapes = {k: tuple(v.shape) for k, v in self._fields.items()}

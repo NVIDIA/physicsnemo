@@ -120,11 +120,14 @@ DIM_LABEL = {"2": "2D", "3": "3D"}
 # ---------------------------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------------------------
-# Matches new single-file-per-size format only (with size suffix)
-# e.g. benchmark_results_1bs_3d_FP32_16dp_1ddp_768-768px.csv
+# Matches the single-file-per-size format, with the model tag and optional
+# fsdp/compile suffixes.  Files from before the --model flag (no model tag)
+# also match, defaulting the model group to empty.
+# e.g. benchmark_results_vit_1bs_3d_FP32_16dp_1ddp_768-768px_fsdp_compiled.csv
 _FNAME_RE = re.compile(
-    r"benchmark_results_(?P<bs>\d+)bs_(?P<dim>\d+)d_(?P<dtype>\w+)"
-    r"_(?P<dp>\d+)dp_(?P<ddp>\d+)ddp_\d+-\d+px\.csv$"
+    r"benchmark_results_(?:(?P<model>[a-z0-9]+)_)?(?P<bs>\d+)bs_(?P<dim>\d+)d"
+    r"_(?P<dtype>[A-Za-z0-9]+)_(?P<dp>\d+)dp_(?P<ddp>\d+)ddp_\d+-\d+px"
+    r"(?P<tags>(?:_fsdp)?(?:_compiled)?)\.csv$"
 )
 
 _NUMERIC_COLS = {

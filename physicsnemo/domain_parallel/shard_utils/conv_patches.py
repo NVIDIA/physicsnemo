@@ -19,13 +19,15 @@ from __future__ import annotations
 from typing import Any, Callable
 
 import torch
-import torch.distributed as dist
 from torch.distributed.tensor import DTensor
 from torch.distributed.tensor.placement_types import (
     Shard,
 )
 
-from physicsnemo.domain_parallel import ShardTensor, ShardTensorSpec
+from physicsnemo.domain_parallel import ShardTensor
+from physicsnemo.domain_parallel.shard_utils.grad_ops import (  # noqa: F401
+    GradReducer,
+)
 from physicsnemo.domain_parallel.shard_utils.patch_core import (
     MissingShardPatch,
 )
@@ -399,65 +401,6 @@ def compute_haloed_and_padded_input_shape(
     return tuple(output_shape)
 
 
-class ConvGradReducer(torch.autograd.Function):
-    r"""Custom autograd function that performs an allreduce on gradients in backward pass.
-
-    This makes defining a forward-only shard patch easier. If you need to allreduce
-    weight grads in the backward pass, call this on the weight in the forward pass.
-    """
-
-    @staticmethod
-    def forward(
-        ctx: torch.autograd.function.FunctionCtx,
-        weight_or_bias: torch.Tensor,
-        spec: ShardTensorSpec,
-    ) -> torch.Tensor:
-        r"""Forward pass that saves the spec for backward.
-
-        Parameters
-        ----------
-        ctx : torch.autograd.function.FunctionCtx
-            Autograd context for saving variables for backward.
-        weight_or_bias : torch.Tensor
-            The weight or bias tensor to pass through.
-        spec : ShardTensorSpec
-            Shard spec of the convolutional input (not the weight_or_bias).
-
-        Returns
-        -------
-        torch.Tensor
-            The input tensor unchanged.
-        """
-        ctx.spec = spec
-        return weight_or_bias
-
-    @staticmethod
-    def backward(
-        ctx: torch.autograd.function.FunctionCtx,
-        grad_weight_or_bias: torch.Tensor,
-    ) -> tuple[torch.Tensor, None]:
-        r"""Backward pass that performs allreduce on gradients.
-
-        Parameters
-        ----------
-        ctx : torch.autograd.function.FunctionCtx
-            Autograd context containing saved variables from forward.
-        grad_weight_or_bias : torch.Tensor
-            Gradient of the loss with respect to weight or bias.
-
-        Returns
-        -------
-        Tuple[torch.Tensor, None]
-            Tuple of (reduced gradient, ``None`` for spec).
-        """
-        for mesh_dim in range(ctx.spec.mesh.ndim):
-            if ctx.spec.placements[mesh_dim].is_shard():
-                group = ctx.spec.mesh.get_group(mesh_dim)
-                dist.all_reduce(grad_weight_or_bias, group=group)
-
-        return grad_weight_or_bias, None
-
-
 @profile
 def partial_conv_nd(
     func: callable,
@@ -576,9 +519,9 @@ def partial_conv_nd(
     #####################################################################
     # For the backward pass: on input sharded dimensions, we need to to reduce the
     # the grads for weight and bias:
-    weight = ConvGradReducer.apply(weight, input_spec)
+    weight = GradReducer.apply(weight, input_spec)
     if bias is not None:
-        bias = ConvGradReducer.apply(bias, input_spec)
+        bias = GradReducer.apply(bias, input_spec)
 
     # Perform the convolution on the padded tensor
     local_output = func(local_input, weight, bias, **conv_kwargs)

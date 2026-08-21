@@ -14,8 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# DEPRECATED: this example is no longer maintained. Use the regional
+# high-resolution weather model example in examples/weather/stormcast instead.
+
 import os
 import time
+import warnings
 from contextlib import nullcontext
 
 import psutil
@@ -111,6 +115,17 @@ def profiler_emit_nvtx():
 # Train the CorrDiff model using the configurations in "conf/config_training.yaml"
 @hydra.main(version_base="1.2", config_path="conf", config_name="config_training")
 def main(cfg: DictConfig) -> None:
+    # Default stacklevel (1) attributes the warning to __main__, otherwise Python's
+    # default filters silently drop it.
+    warnings.warn(
+        "The CorrDiff example is deprecated and is no longer maintained. Use the "
+        "regional high-resolution weather model example in examples/weather/stormcast "
+        "instead. It is a unified recipe for regional diffusion-based weather models, "
+        "and supports the downscaling setting implemented here as well as other "
+        "diffusion-based settings.",
+        DeprecationWarning,
+    )
+
     # Initialize distributed environment for training
     DistributedManager.initialize()
     dist = DistributedManager()
