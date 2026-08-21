@@ -99,6 +99,8 @@ class PrototypeTokenJEPAHead(Module):
         Hidden multiplier inside each block's ``AdaLNResidualMLP``. Default 4.
     dropout : float, optional
         Dropout used throughout. Default 0.0.
+    use_te : bool, optional, default=False
+        Use Transformer Engine layers.
     """
 
     def __init__(
@@ -113,7 +115,7 @@ class PrototypeTokenJEPAHead(Module):
         query_pe_bands: int = 6,
         mlp_ratio: int = 4,
         dropout: float = 0.0,
-        use_te: bool = True,
+        use_te: bool = False,
     ):
         super().__init__(meta=AeroJEPAMetaData())
         self.token_dim = int(token_dim)
