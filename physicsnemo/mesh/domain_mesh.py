@@ -1051,10 +1051,6 @@ class DomainMesh:
                 torch.cat(resolved_point_weights, dim=0) if has_point_weights else None
             )
 
-        from physicsnemo.mesh.transformations.deform._utils import (
-            _mesh_with_deformed_points,
-        )
-
         combined_output = apply_field(combined_points, combined_point_weights)
         output_points = (
             (combined_output,)
@@ -1062,7 +1058,7 @@ class DomainMesh:
             else combined_output.split(point_counts, dim=0)
         )
         output_meshes = [
-            _mesh_with_deformed_points(component, points)
+            component.with_points(points)
             for component, points in zip(component_meshes, output_points)
         ]
 

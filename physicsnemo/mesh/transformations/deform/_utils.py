@@ -138,11 +138,3 @@ def _resolve_domain_point_weights(
                 )
             resolved_point_weights.append(component_point_weights)
     return resolved_point_weights
-
-
-def _mesh_with_deformed_points(
-    mesh: "Mesh",
-    points: Float[torch.Tensor, "n_points n_spatial_dims"],
-) -> "Mesh":
-    """Construct a geometry-invalidated mesh while retaining topology caches."""
-    return mesh.with_points(points)
