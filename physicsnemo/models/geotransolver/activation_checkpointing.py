@@ -156,91 +156,17 @@ def build_context(
     list[torch.Tensor] | None,
     torch.Tensor | None,
 ]:
-    r"""Build context directly or under a flattened checkpoint boundary."""
-    if not checkpoint_enabled:
-        return context_builder.build_context(
-            local_embedding, local_positions, geometry, global_embedding
+    r"""Run the canonical context builder directly or under checkpointing."""
+    if checkpoint_enabled:
+        return run_checkpoint(
+            context_builder.build_context,
+            local_embedding,
+            local_positions,
+            geometry,
+            global_embedding,
+            use_te=use_te,
+            te_module=te_module,
         )
-
-    stream_count = len(local_embedding)
-    has_local_features = (
-        context_builder.local_extractors is not None and geometry is not None
+    return context_builder.build_context(
+        local_embedding, local_positions, geometry, global_embedding
     )
-    has_geometry_context = (
-        context_builder.geometry_tokenizer is not None and geometry is not None
-    )
-    has_global_context = (
-        context_builder.global_tokenizer is not None and global_embedding is not None
-    )
-    has_context = has_local_features or has_geometry_context or has_global_context
-
-    # Preserve the context builder's validation and no-op behavior when there
-    # is no tensor-producing component to checkpoint.
-    if (
-        not local_embedding
-        or not has_context
-        or (
-            has_local_features
-            and (
-                local_positions is None
-                or not all(
-                    isinstance(position, torch.Tensor) for position in local_positions
-                )
-            )
-        )
-    ):
-        return context_builder.build_context(
-            local_embedding, local_positions, geometry, global_embedding
-        )
-
-    checkpoint_inputs: tuple[torch.Tensor, ...] = tuple(local_embedding)
-    if has_local_features:
-        checkpoint_inputs = (*checkpoint_inputs, *local_positions)
-    if geometry is not None:
-        checkpoint_inputs = (*checkpoint_inputs, geometry)
-    if global_embedding is not None:
-        checkpoint_inputs = (*checkpoint_inputs, global_embedding)
-
-    def context_forward(*inputs: torch.Tensor) -> tuple[torch.Tensor, ...]:
-        offset = 0
-        embeddings = tuple(inputs[offset : offset + stream_count])
-        offset += stream_count
-        if has_local_features:
-            positions = tuple(inputs[offset : offset + stream_count])
-            offset += stream_count
-        else:
-            positions = local_positions
-        geometry_input = inputs[offset] if geometry is not None else None
-        offset += int(geometry is not None)
-        global_input = inputs[offset] if global_embedding is not None else None
-        context, local_features, geometry_context = context_builder.build_context(
-            embeddings,
-            positions,
-            geometry_input,
-            global_input,
-        )
-        flat_outputs = [context]
-        if has_local_features:
-            flat_outputs.extend(local_features)
-        if has_geometry_context:
-            flat_outputs.append(geometry_context)
-        return tuple(flat_outputs)
-
-    flat_outputs = run_checkpoint(
-        context_forward,
-        *checkpoint_inputs,
-        use_te=use_te,
-        te_module=te_module,
-    )
-    if isinstance(flat_outputs, torch.Tensor):
-        flat_outputs = (flat_outputs,)
-
-    offset = 0
-    context = flat_outputs[offset]
-    offset += 1
-    local_features = None
-    if has_local_features:
-        local_features = list(flat_outputs[offset : offset + stream_count])
-        offset += stream_count
-    geometry_context = flat_outputs[offset] if has_geometry_context else None
-    return context, local_features, geometry_context

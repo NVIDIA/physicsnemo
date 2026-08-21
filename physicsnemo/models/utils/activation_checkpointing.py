@@ -72,11 +72,16 @@ def should_checkpoint_interleaved_block(
 
 def run_checkpoint(
     function: Callable[..., Any],
-    *inputs: torch.Tensor,
+    *inputs: Any,
     use_te: bool,
     te_module: Any,
-):
-    r"""Call the backend-appropriate non-reentrant checkpoint wrapper."""
+) -> Any:
+    r"""Call the backend-appropriate non-reentrant checkpoint wrapper.
+
+    Non-reentrant checkpointing supports nested inputs and outputs, including
+    optional values passed positionally. This lets callers checkpoint the
+    canonical model function instead of duplicating it to flatten arguments.
+    """
     if use_te:
         return te_module.checkpoint(function, *inputs, use_reentrant=False)
     return activation_checkpoint(function, *inputs, use_reentrant=False)

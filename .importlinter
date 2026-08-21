@@ -90,17 +90,9 @@ containers=
    physicsnemo.models
 layers = 
    mesh_reduced
+   flare | geotransolver
    afno | dlwp | dlwp_healpix | dit | domino | dpot | fengwu | figconvnet | fno | graphcast | meshgraphnet | pangu | pix2pix | rnn |  srrn | swinvrnn | topodiff | transolver  | vfgn | diffusion_unets
    unet
-
-[importlinter:contract:physicsnemo-transformer-models]
-name = Control Transformer Model Dependencies in PhysicsNeMo models
-type = layers
-containers=
-   physicsnemo.models
-layers =
-   flare | geotransolver
-   transolver
    utils
 
 [importlinter:contract:physicsnemo-diffusion]

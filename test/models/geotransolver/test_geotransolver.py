@@ -1645,7 +1645,7 @@ def test_geotransolver_zero_block_ratio_checkpoints_selected_components(monkeypa
     )
 
     assert calls == [
-        (3, {"use_reentrant": False}),
+        (4, {"use_reentrant": False}),
         (1, {"use_reentrant": False}),
         (1, {"use_reentrant": False}),
     ]
