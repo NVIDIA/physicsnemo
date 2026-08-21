@@ -14,7 +14,7 @@
 # limitations under the License.
 
 import torch
-from torch.cuda.amp import GradScaler
+from torch.amp import GradScaler
 import time, os
 import numpy as np
 import hydra

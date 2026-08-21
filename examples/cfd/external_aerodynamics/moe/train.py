@@ -25,7 +25,7 @@ from omegaconf import DictConfig
 from torch.utils.data import DataLoader, DistributedSampler
 import numpy as np
 from tqdm import tqdm
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 
 from dataset import ProcessedVTPDataset
 from model import MoEGatingNet

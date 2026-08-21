@@ -16,7 +16,7 @@
 
 import torch
 from torch.profiler import profile, record_function, ProfilerActivity
-from torch.cuda.amp import autocast
+from torch.amp import autocast
 
 import sys
 
