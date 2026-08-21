@@ -24,9 +24,9 @@ structure and global context throughout the forward pass.
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 import torch
 import torch.nn as nn
@@ -44,7 +44,6 @@ from physicsnemo.nn import GALEBlock
 
 from .activation_checkpointing import (
     DEFAULT_CHECKPOINTING_COMPONENTS,
-    build_context,
     checkpoint_block,
     parse_checkpointing_components,
     run_checkpointed_component,
@@ -633,13 +632,13 @@ class GeoTransolver(Module):
     def _run_checkpointed_component(
         self,
         component: str,
-        function: nn.Module,
-        input_tensor: torch.Tensor,
-    ) -> torch.Tensor:
-        r"""Run a single-tensor component directly or under checkpointing."""
+        function: Callable[..., Any],
+        *inputs: Any,
+    ) -> Any:
+        r"""Run a selected component directly or under checkpointing."""
         return run_checkpointed_component(
             function,
-            input_tensor,
+            *inputs,
             enabled=self._should_checkpoint_component(component),
             use_te=self.use_te,
             te_module=te,
@@ -671,16 +670,14 @@ class GeoTransolver(Module):
         list[torch.Tensor] | None,
         torch.Tensor | None,
     ]:
-        r"""Build context directly or under a flattened checkpoint boundary."""
-        return build_context(
-            self.context_builder,
+        r"""Build context directly or under activation checkpointing."""
+        return self._run_checkpointed_component(
+            "context",
+            self.context_builder.build_context,
             local_embedding,
             local_positions,
             geometry,
             global_embedding,
-            checkpoint_enabled=self._should_checkpoint_component("context"),
-            use_te=self.use_te,
-            te_module=te,
         )
 
     def forward(

@@ -18,11 +18,10 @@ r"""Activation-checkpointing helpers for GeoTransolver."""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
 import torch
-import torch.nn as nn
 
 from physicsnemo.models.utils.activation_checkpointing import (
     run_checkpoint,
@@ -31,8 +30,6 @@ from physicsnemo.models.utils.activation_checkpointing import (
 
 if TYPE_CHECKING:
     from physicsnemo.nn import GALEBlock
-
-    from .context_projector import GlobalContextBuilder
 
 DEFAULT_CHECKPOINTING_COMPONENTS = frozenset({"blocks"})
 CHECKPOINTABLE_COMPONENTS = DEFAULT_CHECKPOINTING_COMPONENTS | frozenset(
@@ -98,19 +95,16 @@ def should_checkpoint_block(
 
 
 def run_checkpointed_component(
-    function: nn.Module,
-    input_tensor: torch.Tensor,
-    *,
+    function: Callable[..., Any],
+    *inputs: Any,
     enabled: bool,
     use_te: bool,
     te_module: Any,
-) -> torch.Tensor:
-    r"""Run a single-tensor component directly or under checkpointing."""
+) -> Any:
+    r"""Run a component directly or under checkpointing."""
     if enabled:
-        return run_checkpoint(
-            function, input_tensor, use_te=use_te, te_module=te_module
-        )
-    return function(input_tensor)
+        return run_checkpoint(function, *inputs, use_te=use_te, te_module=te_module)
+    return function(*inputs)
 
 
 def checkpoint_block(
@@ -139,34 +133,3 @@ def checkpoint_block(
         te_module=te_module,
     )
     return list(outputs)
-
-
-def build_context(
-    context_builder: GlobalContextBuilder,
-    local_embedding: tuple[torch.Tensor, ...],
-    local_positions: tuple[torch.Tensor, ...] | None,
-    geometry: torch.Tensor | None,
-    global_embedding: torch.Tensor | None,
-    *,
-    checkpoint_enabled: bool,
-    use_te: bool,
-    te_module: Any,
-) -> tuple[
-    torch.Tensor | None,
-    list[torch.Tensor] | None,
-    torch.Tensor | None,
-]:
-    r"""Run the canonical context builder directly or under checkpointing."""
-    if checkpoint_enabled:
-        return run_checkpoint(
-            context_builder.build_context,
-            local_embedding,
-            local_positions,
-            geometry,
-            global_embedding,
-            use_te=use_te,
-            te_module=te_module,
-        )
-    return context_builder.build_context(
-        local_embedding, local_positions, geometry, global_embedding
-    )
