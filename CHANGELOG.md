@@ -10,6 +10,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds `ShardTensor` support for GeoTransolver and FLARE models.
+- Adds zarr save/load for `Mesh` and `DomainMesh` via tensordict's zarr
+  storage backend: `physicsnemo.mesh.io.to_zarr` / `from_zarr`, with
+  training-appropriate chunking and zstd compression. `MeshReader` and
+  `DomainMeshReader` transparently read zarr stores alongside
+  `.pmsh`/`.pdmsh` (opt in via `pattern`). Requires optional `zarr >= 3`
+  and a tensordict release with the zarr backend.
+- Promotes GeoTransolver out of `experimental` to
+  `physicsnemo.models.geotransolver.GeoTransolver`, together with the FLARE
+  model (`physicsnemo.models.flare.FLARE`) and the reusable GALE and FLARE
+  attention layers (`physicsnemo.nn.GALE`, `physicsnemo.nn.GALEBlock`,
+  `physicsnemo.nn.FLARE`). The embedded OOD guard is decoupled from the model.
+  Wrap a constructed GeoTransolver with
+  `physicsnemo.experimental.guardrails.embedded.GuardedGeoTransolver` (or
+  `attach_ood_guard`) to enable out-of-distribution guarding. PhysicsNeMo removes
+  the  `guard_config` model argument.
 - Adds `zenith_azimuth_angles` and `zenith_azimuth_angles_from_timestamp` to
   `physicsnemo.utils.zenith_angle`, returning
   `(sin_zenith, cos_zenith, sin_azimuth, cos_azimuth)` alongside the existing
@@ -44,14 +60,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds `rectilinear_grid_divergence`, `rectilinear_grid_curl`, and
   `rectilinear_grid_laplacian` to `physicsnemo.nn.functional`, with Torch and
   fused Warp implementations for periodic, nonuniform rectilinear grids.
-- Adds uniform triangle-surface remeshing with NVIDIA Warp on CPU and CUDA,
-  including `remesh`, `Mesh.remesh`, topology cleanup, and advanced
-  tensor-level controls for runtime tuning.
+- Adds triangle-surface remeshing with NVIDIA Warp on CPU and CUDA, including
+  `remesh`, `Mesh.remesh`, topology cleanup, barycentric point-data transfer,
+  direct or attached linear-resolution-field control, and advanced tensor-level
+  tuning.
 - Adds coverage reporting on PRs — an informational `Coverage %` check plus a
   ready-to-enable Codecov integration.
 - Adds differentiable mesh morphing: Torch-backed dense ``displace_points`` /
   ``Mesh.displace`` and Torch/NVIDIA Warp compact sparse-control
   ``morph_points`` / ``Mesh.morph`` / ``DomainMesh.morph``.
+- Adds differentiable Sobolev mesh deformation through
+  `sobolev_deform_points` and `Mesh.sobolev_deform`. A matrix-free,
+  uniform-mass P1 Helmholtz solve smooths dense per-vertex displacements and
+  their adjoints, with optional fixed-point constraints. Torch and CUDA Warp
+  backends provide explicit implicit-adjoint differentiation.
 - Adds thin-plate-spline radial-basis deformation through
   `radial_basis_function_deform_points`,
   `Mesh.radial_basis_function_deform`, and
@@ -62,6 +84,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``Mesh.free_form_deform`` / ``DomainMesh.free_form_deform`` with Bernstein
   (classic FFD) and locally supported uniform cubic B-spline bases, plus
   node-interpolating `linear`, `cubic_hermite`, and `quintic_hermite` modes.
+- Adds fixed-topology ``simplex_strain_energy``, ``simplex_measure_energy``,
+  ``total_measure_energy``, ``simplex_inversion_energy``,
+  ``closed_surface_volume_energy``, and ``surface_bending_energy`` to
+  ``physicsnemo.nn.functional``, with mesh-aware wrappers in
+  ``physicsnemo.mesh.deformation``. Torch supports higher-order derivatives,
+  and Warp provides first-order GPU kernels.
+- Adds differentiable nearest-surface shrinkwrap through
+  `shrinkwrap_points` and `Mesh.shrinkwrap`. Torch provides the reference
+  search, NVIDIA Warp accelerates ``float32`` nearest-face queries on CPU and
+  CUDA. Both backends replay the selected projection with PyTorch autograd.
+  Triangulated examples demonstrate weighted panel conformance and partial
+  design-region projection onto a shape-optimization constraint.
 - Adds `uniform_grid_divergence`, `uniform_grid_curl`, and
   `uniform_grid_laplacian` to `physicsnemo.nn.functional`, with Torch and fused
   Warp implementations for periodic Cartesian grids.
@@ -138,6 +172,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   protocols and `physicsnemo.experimental.uq.VariationalGPHead`, with a
   layered structure (generic AL driver / GP-UQ recipe / aero adapter)
   designed for reuse on other UQ-based regression problems.
+- Adds `FieldVariationalGPHead` to `physicsnemo.experimental.uq`, a pointwise
+  independent multitask variational GP head for per-point, multi-channel *field*
+  uncertainty. It is the field sibling of `VariationalGPHead` (which pools a
+  geometry to one embedding and predicts a scalar): it keeps the point dimension
+  and returns one Gaussian posterior per point per channel, so a single forward
+  pass yields the field prediction, the total predictive variance and the
+  epistemic-only variance — no ensembling or MC-Dropout. Backbone-agnostic (it
+  consumes only a `(..., input_dim)` feature tensor), with an optional DKL MLP,
+  a Matérn ARD kernel (5/2 by default), float64 GP internals, an `l2_radial` feature
+  normalization that preserves the radial out-of-distribution cue, and an
+  optional heteroscedastic observation-noise MLP. Includes a surface field-GP
+  training recipe for GeoTransolver
+  (`examples/cfd/external_aerodynamics/transformer_models/src/train_field_gp.py`).
+- Adds a `return_point_features` forward flag to
+  `physicsnemo.models.geotransolver.GeoTransolver`, which additionally returns
+  the per-point latents computed just before the output projection. These are
+  the features a pointwise head such as `FieldVariationalGPHead` consumes.
 - Adds `LatentNoveltyQueryStrategy` to the active-learning aero recipe,
   a third acquisition strategy that ranks unlabeled samples by their
   average kNN cosine distance in the encoder's learned geometry latent
@@ -168,23 +219,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (matching the training/validation loop), and reuses the trainer's
   dataloader / collate / metric tooling (refactored into `datasets.py`
   and `utils.py`).
-- Adds a mesh-native signed distance field to `physicsnemo.mesh.spatial`
-  (`physicsnemo.mesh.spatial.signed_distance_field`), built on the `BVH`
-  and `ClusterTree` spatial structures it lives alongside. Returns a
-  `SignedDistanceFieldResult` named tuple: the signed distance, the closest
-  surface point, and the nearest-face index per query.
-  The nearest-triangle query runs as a single-kernel per-thread BVH traversal
-  (Triton on CUDA, a bounded-stack PyTorch DFS as the CPU reference; per-query
-  indices are int64 so query counts past tens of millions do not overflow). The
-  sign is computed either from the angle-weighted pseudo-normal of the closest
-  mesh feature — face, edge, or vertex, which stays correct at sharp/non-convex
-  edges where a single face normal flips the sign — or, with
-  `use_sign_winding_number=True`, from
-  a `ClusterTree` dual-tree Barnes-Hut generalized-winding-number summation that
-  runs identically on CPU and GPU (robust on non-watertight meshes). The private
-  datapipes implementation (`physicsnemo.datapipes.transforms._sdf_torch` /
-  `_sdf_triton`, including its bespoke Triton winding kernel) is superseded and
-  removed; the public datapipes SDF transform delegates here.
+- Adds `physicsnemo.mesh.spatial.signed_distance_field`, a `Mesh`-typed
+  wrapper over the Warp-backed `physicsnemo.nn.functional.signed_distance_field`
+  op (CPU and CUDA), returning `(sdf, hit_points, hit_faces)` per query. The
+  sign comes from Warp's angle-weighted pseudo-normal (robust at
+  sharp/non-convex edges) or, with `use_sign_winding_number=True`, its
+  generalized winding number (robust on non-watertight meshes).
+  (Near-)degenerate faces, which the Warp mesh query would otherwise skip,
+  are repaired into equivalent thin-but-valid triangles before the query.
+  Supersedes and removes the private datapipes implementation
+  (`physicsnemo.datapipes.transforms._sdf_torch` / `_sdf_triton`); the public
+  datapipes SDF transform delegates here.
 - Added an iterable style dataset to physicsnemo datapipes, for on-the-fly gpu simulations.
 - DPS guidance now supports **non-uniform guidance strength**: the `std_y` and
   `gamma` arguments of `physicsnemo.diffusion.guidance.ModelConsistencyDPSGuidance`
@@ -210,10 +255,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Splits the monolithic `physicsnemo.diffusion.noise_schedulers.noise_schedulers`
+  and `physicsnemo.diffusion.samplers.solvers` modules into one module per class,
+  named after the schedule or solver it defines, with the `NoiseScheduler` and
+  `Solver` protocols in a `base.py` of their respective sub-package.
+  Implementations are unchanged and every class is still re-exported from
+  `physicsnemo.diffusion.noise_schedulers` and `physicsnemo.diffusion.samplers`,
+  so the public import paths stay the same. The two old module paths remain as
+  deprecated shims that re-export the same classes and raise a
+  `DeprecationWarning` on import, so existing code keeps working. Import from
+  `physicsnemo.diffusion.noise_schedulers` and `physicsnemo.diffusion.samplers`
+  instead.
+- `physicsnemo.nn.functional.signed_distance_field` now returns a 3-tuple
+  `(sdf, hit_points, hit_faces)` — `hit_faces` is the int64 index of the
+  triangle holding each closest point. Queries with no triangle within
+  `max_dist` now return `NaN` distance/hit point and a `-1` face index
+  (previously the out-of-band results were undefined: the kernel read from
+  an uninitialized face index). Mesh-index range validation on CUDA inputs is
+  now a device-side assert instead of a host-synchronizing check, so the op
+  is safe on a sync-free prefetch stream; the eager `ValueError` is kept on
+  CPU.
 - Optimizes the production container build by consolidating related filesystem
   operations, using BuildKit bind and cache mounts, and separating custom,
   declared, and project dependency installation. Reduces total physicsnemo layers
   by around 78%.
+- `GeoTransolver.forward`'s `return_embedding_states` and `return_point_features`
+  are now keyword-only. They share a return signature, so a positional `True` did
+  not say which was meant. Callers already passing them by keyword are unaffected.
 - `ShardTensor.redistribute` now computes receive shapes analytically when
   sharding shapes are known, skipping the shape-negotiation `all_to_all`
   collective (falls back to the collective only when shapes are unavailable).
@@ -299,6 +367,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   norms, but a custom `norm` that relies on unobserved entries being zeroed
   before the call may differ. The integer `norm` selector (e.g. `norm=2`) is
   unaffected.
+- `Mesh.transform` and `compute_cotan_weights_fem` now use the non-checking
+  `torch.linalg.inv_ex` / `solve_ex` solvers, and build their index tensors on
+  device. The checked solvers read a status code back to the host on every call,
+  which synchronizes on CUDA; removing that and the index-tensor uploads takes
+  `Mesh.transform` on a cached codimension-one mesh from three host
+  synchronizations to one, and `compute_cotan_weights_fem` from six to three. As
+  a consequence,
+  `Mesh.transform(..., assume_invertible=True)` no longer raises when the matrix
+  is in fact singular: it propagates NaN caches instead, as its docstring now
+  documents. The default `assume_invertible=None` still tests the determinant
+  and is unaffected.
+- `physicsnemo.experimental.uq.VariationalGPHead` now takes `n_train` as a
+  required keyword-only argument, along with every argument after `input_dim`.
+  It was annotated optional while the constructor raised on `None`, so callers
+  that already pass it by keyword are unaffected. It also gains `matern_nu`,
+  which was previously hardcoded to 2.5 (still the default).
 
 ### Deprecated
 
@@ -311,6 +395,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `MeshReader` / `DomainMeshReader` sample discovery no longer uses
+  `pathlib.Path.glob`, which can silently drop entries under filesystem
+  metadata-server load (Lustre), causing training to proceed on a subset
+  of the dataset.
+- `compute_cotan_weights_fem`, and the calculus, curvature, and smoothing
+  routines built on it such as `Mesh.laplacian`, no longer fail on degenerate
+  cells in float32. The Gram-matrix regularization is now scale-free, so it also
+  covers cells with no extent — including the null cells that `Mesh.pad` and
+  `Mesh.pad_to_next_power` insert — and flat cells at large coordinate values,
+  both of which previously raised a singular-matrix `_LinAlgError` from
+  `torch.linalg.inv`. Weights for non-degenerate cells are unchanged bit for bit.
 - Multinomial index sampling now uses one shared `weighted_multinomial`
   functional across datapipes, DoMINO, and remeshing. Its core API follows
   `torch.multinomial`, adds allocation-free integer input for uniform
@@ -349,6 +444,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   point, cell, and global data as well as geometry. The matching new
   `to_pyvista(..., force_copy=True)` option prevents exported PyVista geometry
   and data from mutating the source `Mesh` through shared CPU storage.
+- `physicsnemo.mesh.io.from_pyvista` now supports native line/poly-line grids,
+  pixels, triangle strips, and pentagonal/hexagonal prisms, and selects explicit
+  dimensions from mixed `UnstructuredGrid` inputs while preserving selected
+  parent data. Explicit 1D conversion still derives the unique edge graph when
+  no native lines exist. Connectivity and attached-data invariants are validated
+  before VTK filters run. Unsupported higher-order topology is rejected pending
+  globally conforming tessellation, while explicit vertex point-cloud conversion
+  remains available without interpreting that topology. Centroid conversion
+  rejects parents that cannot preserve cell-data alignment.
 - `physicsnemo.mesh.sampling.sample_data_at_points` now handles integer and
   boolean fields by returning `float64`, so NaN sentinels and non-integral
   interpolation or multi-cell means are representable (subject to the usual
@@ -448,6 +552,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Dependencies
 
+- Pins TensorDict to `tensordict-nightly[zarr]` to consume the latest
+  nightly TensorDict APIs with Zarr support and several other bugfixes.
 - Removes `pyacvd` from the `mesh-extras` optional dependencies. Remeshing now
   uses NVIDIA Warp.
 - Updates the minimum supported `warp-lang` version to 1.14.0.
@@ -685,6 +791,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `torch.nn.init.trunc_normal_` that emits a `DeprecationWarning` on
   call, replacing the frozen in-tree copy of the legacy inverse-CDF
   implementation. Use `torch.nn.init.trunc_normal_` directly.
+- Deprecates the CorrDiff example (`examples/weather/corrdiff`), which no longer
+  receives maintenance, bug fixes, or new features. Use the regional
+  high-resolution weather model example (`examples/weather/stormcast`) instead.
+  That example unifies regional diffusion-based weather models, and covers the
+  CorrDiff downscaling setting alongside other diffusion-based settings.
 
 ### Removed
 

@@ -20,7 +20,7 @@ import pytest
 import torch
 
 from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
-from physicsnemo.diffusion.samplers.solvers import (
+from physicsnemo.diffusion.samplers import (
     EDMStochasticEulerSolver,
     EDMStochasticHeunSolver,
     EulerSolver,

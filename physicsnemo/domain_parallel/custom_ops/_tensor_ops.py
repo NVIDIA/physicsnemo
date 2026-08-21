@@ -94,10 +94,10 @@ def _unbind_output_metadata(
         elif p.is_partial():
             raise RuntimeError("Partial placement not supported yet for unbind")
 
-    out_sharding_shapes: dict[int, list[torch.Size]] = {
-        mesh_dim: [
-            torch.Size(list(cs[:dim]) + list(cs[dim + 1 :])) for cs in shard_shapes
-        ]
+    # Plain int tuples (never torch.Size) -- see ShardTensorSpec._sharding_shapes
+    # field docs for the dynamo / fakeification rationale.
+    out_sharding_shapes: dict[int, list[tuple[int, ...]]] = {
+        mesh_dim: [tuple(list(cs[:dim]) + list(cs[dim + 1 :])) for cs in shard_shapes]
         for mesh_dim, shard_shapes in input_spec.sharding_shapes().items()
     }
 

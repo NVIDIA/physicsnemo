@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 
 import torch
@@ -41,20 +42,36 @@ class ShardTensorSpec(DTensorSpec):
     placements of shards. This is useful when the tensor is distributed in
     an uneven or unexpected way.
 
+    Placement metadata describes the local data's current semantic state.
+    In particular, ``Partial`` means the local tensor is an additive
+    contribution with a pending collective reduction. Fully reduced data must
+    use ``Replicate``; ``Partial`` is never a layout-only label, including for
+    gradients.
+
     Attributes
     ----------
     _local_shape : Optional[torch.Size]
         The shape of the local shard of the tensor.
-    _sharding_shapes : Optional[dict[int, Tuple[torch.Size, ...]]]
+    _sharding_shapes : Optional[dict[int, Tuple[Tuple[int, ...], ...]]]
         Mapping from mesh dimension to shard shapes. Keys are mesh dimensions,
-        values are tuples of ``torch.Size`` representing shard shapes along
+        values are tuples of plain int tuples representing shard shapes along
         that dimension. Shard shapes are only tracked along the sharded
         dimensions, not replicated dimensions.
+
+        Storage type note: we deliberately use plain ``tuple[int, ...]``
+        rather than ``torch.Size`` here. ``torch.Size`` is special-cased by
+        PyTorch's symbolic shape machinery: when a ``ShardTensor`` is
+        fakeified by dynamo, any ``torch.Size`` stored in this dict has its
+        contained ints converted into unbacked ``SymInt``s. Those SymInts
+        then orphan whenever an op's output drops or filters
+        ``_sharding_shapes`` (e.g. Partial-only outputs from reductions),
+        producing ``PendingUnbackedSymbolNotFound`` errors during AOT
+        tracing. Plain Python int tuples don't trigger this path.
     """
 
     _local_shape: torch.Size | None = field(default_factory=lambda: None)
     # This dict is a mapping from the mesh dimension to the shard shapes, _not_ the tensor index
-    _sharding_shapes: dict[int, tuple[torch.Size, ...]] | None = field(
+    _sharding_shapes: dict[int, tuple[tuple[int, ...], ...]] | None = field(
         default_factory=lambda: None
     )
 
@@ -99,9 +116,49 @@ class ShardTensorSpec(DTensorSpec):
             self._hash = self._hash_impl()
         return self._hash
 
+    def _stable_hash(self) -> str:
+        r"""Return a cross-process stable hash of this spec.
+
+        Extends ``DTensorSpec._stable_hash`` with ``_sharding_shapes`` and
+        ``_local_shape`` so different uneven layouts do not collide.
+        ``_local_shape`` matters when ``_sharding_shapes`` is ``None``: the
+        spec then carries nothing else that distinguishes this rank's slice
+        of an uneven layout from an even chunking of the same global shape.
+        PyTorch versions before 2.12 use the same metadata in a local
+        fallback. Consumed by the AOT autograd cache through
+        ``ShardTensor._stable_hash_for_caching``.
+
+        Returns
+        -------
+        str
+            Deterministic hex digest identifying this spec.
+        """
+        sharding_shapes = (
+            None
+            if self._sharding_shapes is None
+            else tuple(sorted(self._sharding_shapes.items()))
+        )
+        local_shape = None if self._local_shape is None else tuple(self._local_shape)
+        if torch.__version__ >= (2, 12):
+            stable_key = (super()._stable_hash(), sharding_shapes, local_shape)
+        else:
+            mesh = self.mesh.mesh
+            stable_key = (
+                self.mesh.device_type,
+                tuple(mesh.shape),
+                tuple(mesh.flatten().tolist()),
+                self.mesh.mesh_dim_names,
+                self.placements,
+                self.shard_order,
+                self.tensor_meta,
+                sharding_shapes,
+                local_shape,
+            )
+        return hashlib.blake2b(repr(stable_key).encode(), digest_size=16).hexdigest()
+
     def sharding_shapes(
         self, mesh_dim: int | None = None
-    ) -> dict[int, tuple[torch.Size, ...]] | tuple[torch.Size, ...]:
+    ) -> dict[int, tuple[tuple[int, ...], ...]] | tuple[tuple[int, ...], ...]:
         r"""Get the shapes of shards along specified mesh dimensions.
 
         Parameters
@@ -111,7 +168,7 @@ class ShardTensorSpec(DTensorSpec):
 
         Returns
         -------
-        Union[Dict[int, Tuple[torch.Size, ...]], Tuple[torch.Size, ...]]
+        Union[Dict[int, Tuple[Tuple[int, ...], ...]], Tuple[Tuple[int, ...], ...]]
             Dictionary of shard shapes by mesh dim if ``mesh_dim`` is ``None``,
             or tuple of shapes for the specific mesh dimension.
         """
@@ -309,7 +366,7 @@ def _gather_shard_shapes_for_dim(
 
     dist.all_gather(all_shapes, local_shape, group=local_group)
 
-    all_shapes = [torch.Size(s.cpu().tolist()) for s in all_shapes]
+    all_shapes = [tuple(s.cpu().tolist()) for s in all_shapes]
 
     if do_checks:
         # Check that all shapes are the same rank
@@ -336,7 +393,7 @@ def _all_gather_shard_shapes(
     placements: tuple[Placement, ...],
     target_mesh: DeviceMesh,
     do_checks: bool = False,
-) -> tuple[dict[int, tuple[torch.Size, ...]], tuple[int, ...]]:
+) -> tuple[dict[int, tuple[tuple[int, ...], ...]], tuple[int, ...]]:
     r"""Gather shard shapes from all ranks across all sharded mesh dimensions.
 
     Parameters
@@ -352,7 +409,7 @@ def _all_gather_shard_shapes(
 
     Returns
     -------
-    Tuple[Dict[int, Tuple[torch.Size, ...]], Tuple[int, ...]]
+    Tuple[Dict[int, Tuple[Tuple[int, ...], ...]], Tuple[int, ...]]
         Tuple containing:
 
         - Dictionary mapping mesh dimensions to tuples of shard shapes.
@@ -389,13 +446,13 @@ def compute_sharding_shapes_from_chunking_global_shape(
     mesh: DeviceMesh,
     placements: tuple[Placement, ...],
     global_shape: tuple[int, ...],
-) -> dict[int, list[torch.Size]]:
+) -> dict[int, list[tuple[int, ...]]]:
     r"""Compute shard sizes for each mesh dimension based on global shape.
 
     For each sharded dimension in the mesh, computes the chunk sizes that
     would result from evenly dividing the global tensor shape. Returns a
-    mapping from mesh dimensions to lists of ``torch.Size`` objects
-    representing the shape of each shard.
+    mapping from mesh dimensions to lists of plain int tuples representing
+    the shape of each shard.
 
     Parameters
     ----------
@@ -408,8 +465,8 @@ def compute_sharding_shapes_from_chunking_global_shape(
 
     Returns
     -------
-    Dict[int, List[torch.Size]]
-        Dictionary mapping mesh dimensions to lists of ``torch.Size`` objects
+    Dict[int, List[Tuple[int, ...]]]
+        Dictionary mapping mesh dimensions to lists of plain int tuples
         representing shard shapes for that dimension.
 
     Raises
@@ -420,54 +477,45 @@ def compute_sharding_shapes_from_chunking_global_shape(
     if len(placements) != mesh.ndim:
         raise ValueError("Number of placements must match mesh dimensions")
 
-    # First compute raw chunk sizes for each sharded dimension
-    temp_sharding_shapes: dict[int, list[int]] = {}
-    for i in range(mesh.ndim):
-        if isinstance(placements[i], Shard):
-            # Compute the chunk size for this dimension:
-            input_dim = global_shape[placements[i].dim]
-            chunked_shapes = compute_split_shapes(input_dim, mesh.size(i))
+    # Compute the full per-rank chunk-size lists for each sharded mesh dim
+    # (the same on every rank, derived purely from the global shape +
+    # mesh size via ``compute_split_shapes``).
+    chunk_sizes_per_dim: dict[int, list[int]] = {}
+    for m in range(mesh.ndim):
+        if isinstance(placements[m], Shard):
+            input_dim = global_shape[placements[m].dim]
+            chunk_sizes_per_dim[m] = compute_split_shapes(input_dim, mesh.size(m))
 
-            # for each tensor in the list
-
-            temp_sharding_shapes[i] = chunked_shapes
-
-    # Temp sharding shapes always has a key for each mesh dim.
-    # Each is a list with length = size of that mesh dim.
-
-    # Initialize shapes for all sharded dimensions, but using the global shape.
-    # We will update next.
-    sharding_shapes = {
-        mesh_dim: [list(global_shape) for _ in chunks]
-        for mesh_dim, chunks in temp_sharding_shapes.items()
+    # This rank's chunk for each sharded mesh dim. Used to fill in tensor
+    # dims sharded along *other* mesh dims when constructing a given mesh
+    # dim's per-rank shape list.
+    this_rank_chunks: dict[int, int] = {
+        m: chunks[mesh.get_local_rank(m)] for m, chunks in chunk_sizes_per_dim.items()
     }
 
-    # This rank's chunk size along each sharded mesh dim:
-    my_chunks = {
-        mesh_dim: shape_list[mesh.get_local_rank(mesh_dim)]
-        for mesh_dim, shape_list in temp_sharding_shapes.items()
-    }
+    # For each sharded mesh dim ``m``, build a list of length ``mesh.size(m)``
+    # where entry ``r`` is the local shape that rank ``r`` (along mesh_dim
+    # ``m``) holds. Along tensor dim ``placements[m].dim`` the value is
+    # rank ``r``'s chunk (varies). Along tensor dims sharded by *other*
+    # mesh dims, we use this rank's coordinate -- matching the historical
+    # multi-dim semantics where ``_sharding_shapes[mesh_dim][r]`` is the
+    # rank-``r``-on-mesh-dim-``m`` cross-section through this rank's
+    # coordinates on every other mesh dim.
+    sharding_shapes: dict[int, list[tuple[int, ...]]] = {}
+    for m, chunks in chunk_sizes_per_dim.items():
+        shape_list: list[tuple[int, ...]] = []
+        for r, rank_chunk in enumerate(chunks):
+            shape = list(global_shape)
+            shape[placements[m].dim] = rank_chunk
+            for other_m, other_chunk in this_rank_chunks.items():
+                if other_m == m:
+                    continue
+                shape[placements[other_m].dim] = other_chunk
+            # Plain int tuple (not torch.Size) -- see field docstring.
+            shape_list.append(tuple(shape))
+        sharding_shapes[m] = shape_list
 
-    # Finally, update the sharded shape with the right chunk size.
-    # sharding_shapes[mesh_dim][k] is the local shard shape of the rank at
-    # position k along `mesh_dim`, holding every other mesh coordinate at
-    # this rank's position: the tensor dim sharded along `mesh_dim` takes
-    # rank k's chunk size, while tensor dims sharded along other mesh dims
-    # take this rank's chunk size.
-    for mesh_dim, shape_list in sharding_shapes.items():
-        for inner_mesh_dim, chunks in temp_sharding_shapes.items():
-            tensor_dim = placements[inner_mesh_dim].dim
-            for k, shape in enumerate(shape_list):
-                if inner_mesh_dim == mesh_dim:
-                    shape[tensor_dim] = chunks[k]
-                else:
-                    shape[tensor_dim] = my_chunks[inner_mesh_dim]
-
-    # Convert to immutable torch.Size
-    return {
-        mesh_dim: [torch.Size(tuple(size)) for size in sizes]
-        for mesh_dim, sizes in sharding_shapes.items()
-    }
+    return sharding_shapes
 
 
 def _infer_shard_tensor_spec_from_local_chunks(
@@ -590,7 +638,13 @@ def _infer_shard_tensor_spec_from_local_chunks(
         shape=tuple(global_shape), stride=stride, dtype=local_chunk.dtype
     )
 
-    sharding_shapes = {dim: tuple(s) for dim, s in shard_shapes_by_dim.items()}
+    # Normalize inner shapes to plain int tuples (never torch.Size) -- see the
+    # ``ShardTensorSpec._sharding_shapes`` field docstring for the dynamo /
+    # fakeification rationale.
+    sharding_shapes = {
+        dim: tuple(tuple(inner) for inner in shapes)
+        for dim, shapes in shard_shapes_by_dim.items()
+    }
     return ShardTensorSpec(
         mesh=target_mesh,
         placements=placements,

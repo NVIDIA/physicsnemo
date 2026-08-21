@@ -219,7 +219,7 @@ def test_stl_gen(pytestconfig, backend, sphere_stl, tmp_path):
     )
 
     # SDF only accepts torch tensors:
-    sdf_test, _ = signed_distance_field(
+    sdf_test, _, _ = signed_distance_field(
         torch.from_numpy(vertices_3d),
         torch.from_numpy(vert_indices),
         torch.from_numpy(coords),

@@ -32,15 +32,17 @@ properties - no topology reconstruction and no external dependencies.
 repeat).
 """
 
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 import torch
 import torch.nn.functional as F
 from jaxtyping import Float, Int
 
-from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
 from physicsnemo.nn.functional.neighbors import knn
+
+if TYPE_CHECKING:
+    from physicsnemo.mesh.mesh import Mesh
 
 
 class CellPartition(NamedTuple):
@@ -69,7 +71,7 @@ class CellPartition(NamedTuple):
 
 
 def partition_cells(
-    mesh: Mesh,
+    mesh: "Mesh",
     seeds: Float[torch.Tensor, "n_seeds n_spatial_dims"],
 ) -> CellPartition:
     """Partition mesh cells into Voronoi regions around seed points.

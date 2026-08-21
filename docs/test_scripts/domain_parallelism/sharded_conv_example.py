@@ -1,15 +1,13 @@
 import torch
-
 from torch.distributed.tensor import (
     Shard,
-    distribute_module,
 )
 
-
-from physicsnemo.distributed import (
-    DistributedManager,
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.domain_parallel import (
     ShardTensor,
     scatter_tensor,
+    sync_module_over_mesh,
 )
 
 DistributedManager.initialize()
@@ -73,21 +71,21 @@ mesh = dm.initialize_mesh(mesh_shape=(-1,), mesh_dim_names=("domain_parallel",))
 sharded_tensor = scatter_tensor(original_tensor, 0, mesh, (Shard(2),), requires_grad=True)
 
 
-################################
-# Sharded - distribute the model
-################################
-
-# We tell pytorch that the convolution will work on distributed tensors:
-# And, over the same mesh!
-distributed_conv = distribute_module(conv, mesh)
-
-
 #####################################
 # Sharded - forward + loss + backward
 #####################################
 
-# Now, we can do the distributed convolution:
-sharded_output = distributed_conv(sharded_tensor)
+# Note that we do NOT need to modify the model at all: when the plain
+# convolution's weights meet the sharded input, ShardTensor automatically
+# promotes them to replicated distributed tensors, and their gradients are
+# reduced over the mesh in the backward pass.  Vanilla nn.Modules work
+# unmodified on sharded inputs.
+#
+# The one thing that IS needed: each rank constructed its own conv with its
+# own random initialization, so broadcast the weights over the mesh first.
+sync_module_over_mesh(conv, mesh)
+
+sharded_output = conv(sharded_tensor)
 sharded_output.mean().backward()
 
 
@@ -109,11 +107,11 @@ if dm.rank == 0:
     # Only check on rank 0 because we used it's data and weights for the sharded tensor.
     # Check that the output is the same as the single-device output:
     assert torch.allclose(full_output, single_gpu_output)
-    print(f"Global operation matches local! ")
+    print("Global operation matches local!")
 
     # Check that the gradient is correct:
     assert torch.allclose(original_tensor_grad, full_grad)
-    print(f"Gradient check passed!")
+    print("Gradient check passed!")
 
     
 print(f"Distributed grad sharding and local shape: {sharded_tensor.grad._spec.placements}, {sharded_tensor.grad.to_local().shape}")

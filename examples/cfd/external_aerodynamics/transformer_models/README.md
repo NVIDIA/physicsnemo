@@ -43,7 +43,7 @@ To train the model, first we compute normalization factors on the dataset to mak
 
 > By default, the normalization sets the mean to 0.0 and std to 1.0 of all labels in the dataset, computing the mean across the train dataset. You could adapt this to a different normalization, however take care to update both the preprocessing as well as inference scripts. Min/Max is another popular strategy.
 
-To configure your training run, use `hydra`. The config contains sections for the model, data, optimizer, and training settings. For details on the model parameters, see the API for `physicsnemo.models.transolver` and `physicsnemo.experimental.models.geotransolver`.
+To configure your training run, use `hydra`. The config contains sections for the model, data, optimizer, and training settings. For details on the model parameters, refer to the API for `physicsnemo.models.transolver` and `physicsnemo.models.geotransolver`.
 
 To fit the training into memory, you can apply on-the-fly downsampling to the data with `data.resolution=N`, where `N` is how many points per GPU to use. This dataloader will yield the full data examples in shapes of `[1, K, f]` where `K` is the resolution of the mesh, and `f` is the feature space (3 for points, normals, etc. 4 for surface fields). Downsampling happens in the preprocessing pipeline.
 
@@ -72,7 +72,7 @@ Several other important configuration settings are available:
 
 > **Note** Like other parameters of the model, changing the value of `model.use_te` will make checkpoints incompatible.
 
-The training script supports data-parallel training via PyTorch DDP. In a future update, we may enable domain parallelism via FSDP and ShardTensor.
+The training script supports data-parallel training via PyTorch DDP. A possible future change might enable domain parallelism usingShardTensor (with DDP or FSDP2 `fully_shard` on the data-parallel axis).
 
 The script can be launched on a single GPU with, for example,
 
@@ -222,7 +222,27 @@ Transolver++ is supported with the `plus` flag to the model. In our experiments,
 
 ## Uncertainty Quantification
 
-GeoTransolver supports two complementary UQ methods: a **Variational GP Head** for scalar-level (drag coefficient) uncertainty, and **Concrete Dropout / MC-Dropout** for per-point field uncertainty.  They can be used independently or together.
+GeoTransolver supports three complementary UQ methods:
+
+| Method | Granularity | Cost at inference |
+|--------|-------------|-------------------|
+| **Variational GP Head** | one scalar (drag coefficient) per geometry | single pass |
+| **Field Variational GP Head** | per-point, per-channel field | single pass |
+| **Concrete Dropout / MC-Dropout** | per-point, per-channel field | N stochastic passes |
+
+They can be used independently or together.  The two GP heads are siblings built
+on the same variational-GP machinery — the scalar head pools a geometry to one
+embedding, while the field head keeps the point dimension.
+
+### Dependencies
+
+Both GP heads need `gpytorch`.  Install it using:
+
+```bash
+pip install nvidia-physicsnemo[uq-extras]
+# or simply:
+pip install gpytorch
+```
 
 ## Variational GP Head
 
@@ -317,7 +337,7 @@ OOD test sets are auto-discovered from the config — any key matching `test_*` 
 
 #### Example: KDE of ID vs OOD signals
 
-![KDE of disagreement and GP std dev for in-distribution vs OOD samples](../../../docs/img/kde_id_vs_ood.png)
+![KDE of disagreement and GP std dev for in-distribution vs OOD samples](../../../../docs/img/kde_id_vs_ood.png)
 
 The model was trained exclusively on **DrivAerStar Fastback** geometries (class F).  The figure above shows kernel density estimates of the two UQ signals evaluated on the in-distribution Fastback validation set and five OOD vehicle classes from different sources and body styles.
 
@@ -329,8 +349,8 @@ The model was trained exclusively on **DrivAerStar Fastback** geometries (class 
 
 | Choice | Rationale |
 |--------|-----------|
-| **Float64 GP internals** | Short lengthscales on L2-normalised embeddings make K_uu ill-conditioned in float32.  Float64 eliminates Cholesky failures at the source. |
-| **L2-normalised embeddings** | Constrains pairwise distances to [0, 2], making GP lengthscale priors more interpretable and stable. |
+| **Float64 GP internals** | Short lengthscales on L2-normalized embeddings make K_uu ill-conditioned in float32.  Float64 eliminates Cholesky failures at the source. |
+| **L2-normalized embeddings** | Constrains pairwise distances to [0, 2], making GP lengthscale priors more interpretable and stable. |
 | **Spectral norm on embedding layers** | Preserves distances in the embedding space (SNGP-style), preventing the encoder from collapsing different inputs to the same point. |
 | **Matérn-5/2 ARD kernel** | Smooth, twice-differentiable, with per-dimension lengthscales that learn which embedding dimensions matter. |
 | **Gamma priors on lengthscale & outputscale** | Prevents the GP from collapsing to trivial solutions (infinite lengthscale → constant predictions, zero outputscale → zero variance). |
@@ -377,16 +397,6 @@ lambda_consistency: 0.0
 consistency_detach_transolver: false  # default; set true to save memory
 ```
 
-### Dependencies
-
-The GP head requires `gpytorch`.  Install it alongside PhysicsNeMo:
-
-```bash
-pip install nvidia-physicsnemo[uq-extras]
-# or simply:
-pip install gpytorch
-```
-
 ### References
 
 - **DrivaerML dataset:** [DrivaerML: A Large-Scale Parametric Car Dataset](https://caemldatasets.org/drivaerml/) — Elahi et al., NeurIPS 2024
@@ -395,6 +405,323 @@ pip install gpytorch
 - **Variational GPs:** [Scalable Variational Gaussian Process Classification](https://arxiv.org/abs/1411.2005) — Hensman et al., 2015
 - **Deep Kernel Learning:** [Deep Kernel Learning](https://arxiv.org/abs/1511.02222) — Wilson et al., 2016
 - **SNGP / DUE:** [Simple and Principled Uncertainty Estimation with Deterministic Deep Learning](https://arxiv.org/abs/2006.10108) — van Amersfoort et al., 2020
+
+---
+
+## Field Variational GP Head
+
+### Overview
+
+Where the scalar GP head above predicts one number per geometry, the **field**
+GP head (`FieldVariationalGPHead`) *replaces the GeoTransolver readout* and
+predicts the surface field itself: one independent Gaussian posterior per point,
+per channel (pressure + 3 wall-shear-stress components).  The posterior mean is
+the field prediction and the posterior variance is the per-point uncertainty, so
+a **single forward pass** yields both — no ensembling and no MC-Dropout sampling.
+
+The uncertainty is distance-aware: it grows as a point's features move away from
+the learned inducing points, which is what makes it usable for out-of-distribution
+detection and active learning rather than just error bars.
+
+### Architecture
+
+```
+                                      ┌──────────────────────────────┐
+ Input geometry ──► GeoTransolver ──► │  FieldVariationalGPHead      │
+                    (per-point        │                              │
+                     features,        │  DKL MLP ──► feature norm    │──► mean      (B, N, 4)
+                     pre-readout)     │       └──► Matérn-5/2 ARD    │──► variance  (B, N, 4)
+                     (B, N, D)        │            multitask VGP     │──► epistemic (B, N, 4)
+                                      │       └──► noise MLP         │
+                                      └──────────────────────────────┘
+```
+
+| Module | Location | Purpose |
+|--------|----------|---------|
+| `FieldVariationalGPHead` | `physicsnemo.experimental.uq` | Per-point independent multitask variational GP with Matérn-5/2 ARD kernel, float64 internals, optional DKL MLP and input-dependent observation noise |
+
+### The variance decomposition
+
+`predict()` returns the total predictive variance *and* its epistemic part
+separately, so the two can be used for different jobs:
+
+```
+total_variance(x)  =  epistemic_variance(x)  +  sigma^2(x)
+                      ^^^^^^^^^^^^^^^^^^^^      ^^^^^^^^^
+                      GP posterior variance     input-dependent
+                      (distance-aware; grows    observation noise
+                      away from inducing pts)   (the noise MLP)
+```
+
+Use `epistemic_variance` for "where is the model uncertain?" maps, out-of-distribution
+detection and active-learning acquisition; use the total `variance` for calibrated
+prediction intervals and for calibration metrics (z-RMS, coverage, NLPD).
+
+**Naming the second term.** In the loss it is exactly the variance of the Gaussian
+likelihood, so the methods-level name is **input-dependent observation noise** —
+the standard heteroscedastic-GP quantity (Goldberg et al., 1998; Lázaro-Gredilla &
+Titsias, 2011). Do not read it as measurement noise here. DrivAerStar targets are
+deterministic steady-RANS solutions, so a geometry maps to one field and there is
+no irreducible observational scatter to learn. What `sigma^2(x)` actually absorbs is
+the part of the residual the GP mean cannot represent, which makes it a learned
+**model-discrepancy variance** in the Kennedy & O'Hagan (2001) sense — a map of
+where the surrogate is structurally wrong. That reading, not "inherent flow
+variability", is what the per-point noise field supports.
+
+We therefore avoid the word *aleatoric* for it, and reuse only the mechanism from
+Kendall & Gal (2017): `sigma(x)` is amortized by a small MLP on the same DKL
+features the kernel sees, trained through the noise-attenuated Gaussian
+log-likelihood.
+
+**It is a point estimate, and that has a cost.** The classical variational
+treatment places a second GP on the log-noise, so the objective carries its own
+`KL(q(g)||p(g))` term that actively resists the noise function running to extremes.
+Amortizing with a deterministic network drops both the prior and that KL, so
+nothing shrinks `sigma(x)`. `gp_head.noise_std_range` and `head_grad_clip_norm` are the
+substitute guard, and they are load-bearing rather than cosmetic: without an adequate
+floor on `sigma` the noise collapsed mid-training.
+
+**Why a network rather than a second GP.** Cost at this scale.  The alternative —
+a second variational process on the log-noise, as in Liu et al. (2018b) — needs its
+own inducing set, Cholesky factor and KL term, roughly doubling the head's
+variational state and adding a second `O(M^3)` factorization per step, where the
+noise MLP adds two `[64, 64]` layers.
+
+### Training
+
+The settled recipe is the config's defaults, so no hyperparameter overrides are
+needed — only the data paths and a run id:
+
+```bash
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+torchrun --nproc-per-node=8 src/train_field_gp.py \
+    data.train.data_path=/data/datasets/drivaerstar/surface_files_zarr/class_F/train \
+    data.val.data_path=/data/datasets/drivaerstar/surface_files_zarr/class_F/val \
+    run_id=geotransolver/surface/field_gp
+```
+
+The loss is
+
+```
+w_nll * neg_elbo + lambda_mean_mse * mse + dist_penalty_weight * dist_pen
+```
+
+with both `beta` (the KL weight) and `w_nll` (the weight on the whole negative
+ELBO) ramped from 0 over the first 30 epochs.  The ordering matters: the
+mean-MSE anchor leads the early epochs so the backbone and GP mean become
+accurate *before* the likelihood term is free to shrink the variance.
+
+#### The auxiliary terms
+
+The terms around `neg_elbo` — the mean anchor, the two ramps, the latent distance
+penalty and the gradient clipping — belong to the training script rather than to
+the head, so they are configured here:
+
+| Config key | Default | What it controls |
+| --- | --- | --- |
+| `lambda_mean_mse` | `1.0` | Weight of a direct MSE on the GP posterior mean, which keeps the mean accurate while the ELBO is free to trade accuracy for variance. |
+| `nll_warmup_start` / `_end` | `0` / `30` | Epoch window over which `w_nll`, the weight on the whole negative ELBO, ramps 0 → 1, so the mean anchor leads the early epochs. |
+| `beta_warmup_start` / `_end` | `0` / `30` | Epoch window over which the KL weight ramps 0 → 1, so the data-fit term shapes the posterior before the prior pulls on it. |
+| `gp_kl_weight` | `0.5` | Constant multiplier on the KL weight once the ramp completes.  Below `1.0` the posterior keeps more per-point structure. |
+| `head_grad_clip_norm` | `10.0` | Max global grad-norm over the head's parameters (`0` disables).  The `1/σ²(x)` weighting of the heteroscedastic ELBO produces occasional very large steps when one point's noise dips. |
+| `dist_penalty_weight` / `_pairs` / `_margin` | `0.5` / `4096` / `1.0` | One-sided hinge pushing point pairs with distant targets apart in kernel space, so the kernel can assign them different variance.  Both distances are normalized by their batch mean, so only relative geometry is shaped.  `0.0` disables. |
+
+These are load-bearing rather than cosmetic.  Without the mean anchor and the
+ramps the ELBO can buy likelihood by inflating the variance before the mean field
+is accurate, and the run settles into a collapsed variance.
+
+Two further knobs are cost rather than stability decisions: `gp_points_per_step:
+12288` bounds the `O(points)` GP solve per step (`null` uses every point the
+dataloader provides), and `gp_head.n_inducing: 1024` sets how finely the posterior
+can resolve the feature space, at `O(M³)` per step.  Those inducing points are
+seeded from real backbone features once, before the first epoch, rather than left
+at their random-normal defaults — see the learning-rate discussion below and the
+porting notes.
+
+The head itself is a hydra `_target_` block under `gp_head`, so the config is the
+single source of truth for its structure and every script (train, inference,
+plotting) instantiates it identically.  Only `input_dim` and `n_train` are
+supplied in code, since they are runtime quantities.  Three of the defaults are
+load-bearing and worth understanding before changing them:
+
+- **`gp_head.feature_norm: l2_radial`** — fixes the GP-input feature scale so the
+  kernel lengthscale (not the DKL map) does the smoothing, while appending the
+  standardized feature magnitude as an extra ARD dimension.  Normalizing onto
+  the unit sphere *without* that magnitude erases the radial OOD cue and drives
+  the OOD/in-distribution std ratio to ~1.0x.
+- **`gp_head.noise_mlp_hidden: [64, 64]`** — makes the observation noise
+  input-dependent.  With one constant noise per channel the total predictive std
+  ranks points identically to the epistemic std, so per-point error ranking gets
+  no benefit from the (dominant) noise share of the variance.
+- **`gp_head.noise_std_range: [0.01, 10.0]`** — the heteroscedastic ELBO weights
+  each point by `1/σ²(x)`, and the `0.01` floor caps that weight at `1e4` on
+  unit-scale normalized fields, so no single point can dominate the gradient.  It
+  sits just below the σ band the trained noise head occupies, which bounds the
+  weight without reshaping the noise field being learned.  The floor also applies
+  at inference, since `predict()` evaluates `σ(x)` through the same clamp.
+
+> **Normalization** — DrivAerStar surface fields are stored in raw physical units
+> (Pa), so this config points `data.normalization_dir` at
+> `src/normalization/drivaerstar/`.  The stats in `src/` are nondimensional
+> (pressure-coefficient form) and belong to the DrivAer AWS runs; using them here
+> would mis-scale every field.
+
+#### Choosing the head learning rates
+
+The head gets its own `AdamW`, combined with the backbone's `Muon` (2-D weights)
++ `AdamW` (everything else) in a single `CombinedOptimizer`.  Muon is configured
+with `adjust_lr_fn="match_rms_adamw"` at the same rate, so `training.optimizer.lr`
+(`1e-3` by default) is the one reference number the head's rates are set against:
+
+| Head parameter group | Rate | vs. backbone |
+| --- | --- | --- |
+| `gp_layer.variational_parameters()` — inducing values, Cholesky factor | `1e-2` | 10x |
+| `gp_layer.hyperparameters()` — ARD lengthscales, outputscale | `1e-2` | 10x |
+| `likelihood` — per-task noise | `1e-2` | 10x |
+| `log_base_noise` — per-task log base noise std | `1e-2` | 10x |
+| `feature_extractor` — DKL MLP | `1e-3` | 1x |
+| `noise_head` — noise MLP | `1e-3` | 1x |
+
+**The split is by parameter kind, not by module.**  Network weights train at the
+backbone's rate; GP-native parameters — a variational distribution, kernel
+hyperparameters, a noise *scale* — train 10x faster.  The heteroscedastic noise
+model straddles that line deliberately: `log_base_noise` is a per-task scale in
+the same family as the likelihood noise, while `noise_head` produces the
+input-dependent modulation around it and is ordinary MLP weights.
+
+The 10x suits what those parameters are.  They are few, low-dimensional and
+parameterize a distribution directly, so they tolerate large steps — and they are
+chasing a moving target, since the features beneath them shift with every
+backbone step.  Inducing points are seeded from real backbone features once,
+before the first epoch, and the variational parameters are what keep the
+posterior aligned with those features as they drift.  Holding the DKL and noise
+MLPs *at* the backbone rate keeps the composed map (backbone → DKL → kernel)
+advancing at one speed, so the kernel's input distribution stays as stable as the
+features feeding it.  `train_gp_combined.py` applies the same 10x / 1x convention
+to the scalar head, which keeps the two directly comparable.
+
+To retune, move the two regimes together and keep the ratio: set the MLP groups
+to the new `training.optimizer.lr` and the GP-native groups to 10x it.  These
+rates live in the `head_param_groups` list in `src/train_field_gp.py`, so it is a
+code edit rather than a config override.  `StepLR` wraps the combined optimizer
+and scales every group by the same factor, so the ratio holds for the whole run;
+with the default `step_size: 100` and `num_epochs: 100` no decay lands inside the
+run, making it effectively constant-rate.  Head weight decay is `1e-4`, matching
+the backbone.
+
+### Inference
+
+```bash
+python src/inference_field_gp.py \
+    run_id=geotransolver/surface/field_gp \
+    +checkpoint_epoch=100
+```
+
+#### Example: uncertainty across DrivAerStar body styles
+
+![Per-point epistemic std of surface pressure on three DrivAerStar body styles](../../../../docs/img/field_gp_drivaerstar.png)
+
+The head was trained on **Fastback** geometries (class F) alone and then
+evaluated on the **Notchback** and **Estateback** classes.  Each panel shows the
+per-point epistemic standard deviation of surface pressure on a shared color
+scale, all of it from a single forward pass.
+
+The uncertainty field is smooth and follows the geometry rather than scattering
+as per-point noise, and its magnitude tracks geometric similarity to the
+training set.  The Notchback, the closest of the three to a Fastback, stays near
+the in-distribution level, while the Estateback's extended roof and tailgate are
+the most uncertain region in the figure.
+
+### Using the head with another backbone
+
+The head is model-agnostic: it consumes a feature tensor and nothing else.  There
+is no dependency on mesh topology, and coordinates are not a separate input (any
+positional encoding the backbone applies simply arrives inside the features).
+The contract is:
+
+1. the backbone emits per-point features with last dimension `input_dim` — any
+   leading batch/point dims are flattened internally, so `(B, N, D)`, `(N, D)`
+   and `(B, T, N, D)` all work;
+2. targets are `(..., num_tasks)` with matching leading dims.
+
+So attaching it to DoMINO, MeshGraphNet or any other point-wise encoder means
+exposing whatever that model computes before its final projection:
+
+```python
+from physicsnemo.experimental.uq import FieldVariationalGPHead
+
+head = FieldVariationalGPHead(
+    input_dim=feat_dim,          # backbone feature width
+    num_tasks=4,                 # output channels
+    n_train=n_points_per_epoch,  # ELBO normalizer
+    mlp_hidden=[128, 16],
+    feature_norm="l2_radial",
+)
+
+feats = backbone.encode(batch)              # (B, N, feat_dim)
+mean, neg_elbo = head.forward_and_loss(feats, targets, beta=beta)
+loss = neg_elbo + lambda_mse * mse(mean, targets)
+```
+
+The snippet runs, but it is not the full recipe.  The terms in
+[The auxiliary terms](#the-auxiliary-terms) live in the training script, so a new
+backbone needs its own copy of them.  Most carry over unchanged; two need
+retuning:
+
+- **The noise floor scales with your targets.**  `noise_std_range[0]` works by
+  sitting just below the σ band the noise head settles into, which depends
+  entirely on how the targets are normalized.  The `0.01` here suits
+  unit-variance standardized fields.  On a different target scale the same number
+  either binds at every point or stops guarding the `1/σ²(x)` weighting
+  altogether, so move it with the targets and check it against the σ range the
+  run actually logs.
+- **The warmup windows are in epochs, not fractions.**  `30` of `100` here; a
+  shorter or longer run needs the window moved to keep the same ordering, since a
+  ramp that ends after training does nothing but scale the loss down.
+
+The mean anchor, gradient clipping and the `0.5` KL weight are backbone-agnostic
+and can be carried over as they are.  The distance penalty is the one genuinely
+optional term (`dist_penalty_weight: 0.0` disables it) and it costs one extra
+`transform_features` call per step.
+
+Three further practical notes:
+
+- **Seed the inducing points** from real features once the backbone is warm
+  (`head.set_inducing_points(...)`); random-normal inducing locations in a
+  feature space the backbone has never visited start the GP badly conditioned.
+- **`n_train`** is the total number of training *points* per epoch (geometries x
+  points per geometry), not the number of geometries.  It only sets the ELBO's
+  KL normalization, but getting it wrong rescales the KL term.
+- **Prefer config over code** for anything structural.  Inside this example the
+  head is never constructed with literals as shown above; it comes from the
+  `gp_head` block via `hydra.utils.instantiate`, which is what keeps training and
+  evaluation in agreement about the checkpoint's layout.  A new backbone needs
+  its own `gp_head` block (only `input_dim` changes, in general) rather than a
+  second copy of these arguments in Python.
+
+### References
+
+*Sparse variational GP — the inducing points and the ELBO:*
+
+- **Variational Learning of Inducing Variables in Sparse Gaussian Processes:** [Titsias, AISTATS 2009](https://proceedings.mlr.press/v5/titsias09a.html) — the inducing-point variational bound
+- **Gaussian Processes for Big Data:** [Hensman, Fusi & Lawrence, UAI 2013](https://arxiv.org/abs/1309.6835) — the minibatch `(1/N) * sum E_q[log p] - KL` form. `_hetero_neg_elbo` mirrors this normalization deliberately so it matches GPyTorch's `VariationalELBO`, and `n_train` is the `N` here
+
+*GP on neural-network features:*
+
+- **Stochastic Variational Deep Kernel Learning:** [Wilson, Hu, Salakhutdinov & Xing, NeurIPS 2016](https://arxiv.org/abs/1611.00336) — the construction this head implements (DKL MLP feeding a variational GP)
+- **The Promises and Pitfalls of Deep Kernel Learning:** [Ober, Rasmussen & van der Wilk, UAI 2021](https://arxiv.org/abs/2102.12108) — documents the DKL overfitting and feature-collapse modes. Directly relevant to why `gp_head.feature_norm` and the lengthscale priors are not optional here
+
+*Input-dependent observation noise:*
+
+- **Regression with Input-dependent Noise: A Gaussian Process Treatment:** Goldberg, Williams & Bishop, NIPS 1997 — the original heteroscedastic GP
+- **Variational Heteroscedastic Gaussian Process Regression:** Lázaro-Gredilla & Titsias, ICML 2011 — the variational treatment, with a second GP on the log-noise
+- **Large-scale Heteroscedastic Regression via Gaussian Process:** [Liu, Ong & Cai, 2018b](https://arxiv.org/abs/1811.01179) — a sparse, minibatch-capable heteroscedastic ELBO; the closest published objective to ours, with the noise carried by a second GP rather than our noise MLP
+- **What Uncertainties Do We Need in Bayesian Deep Learning for Computer Vision?:** [Kendall & Gal, NeurIPS 2017](https://arxiv.org/abs/1703.04977) — the amortized-network noise head and noise-attenuated likelihood we actually use. We borrow the mechanism, not the "aleatoric" interpretation (see [The variance decomposition](#the-variance-decomposition))
+
+*Interpreting the noise term, and multi-output structure:*
+
+- **Bayesian Calibration of Computer Models:** [Kennedy & O'Hagan, JRSS-B 2001](https://doi.org/10.1111/1467-9868.00294) — model discrepancy: the gap between a deterministic simulator and truth, which is what `sigma^2(x)` absorbs on a deterministic RANS dataset
+- **Remarks on Multi-Output Gaussian Process Regression:** [Liu, Cai & Ong, Knowledge-Based Systems 2018a](https://doi.org/10.1016/j.knosys.2017.12.034) — multi-output GP structure; this head uses the independent-per-task case (no cross-channel covariance)
 
 ---
 

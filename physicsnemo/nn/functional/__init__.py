@@ -37,6 +37,7 @@ from .equivariant_ops import (
 )
 from .fourier_spectral import imag, irfft, irfft2, real, rfft, rfft2, view_as_complex
 from .geometry import (
+    closed_surface_volume_energy,
     displace_points,
     farthest_point_sampling,
     free_form_deform_points,
@@ -46,7 +47,14 @@ from .geometry import (
     radial_basis_function_deform_points,
     ray_mesh_intersect,
     remeshing,
+    shrinkwrap_points,
     signed_distance_field,
+    simplex_inversion_energy,
+    simplex_measure_energy,
+    simplex_strain_energy,
+    sobolev_deform_points,
+    surface_bending_energy,
+    total_measure_energy,
 )
 from .interpolation import (
     grid_to_point_interpolation,
@@ -69,6 +77,7 @@ from .rendering import (
 from .weighted_multinomial import WeightedMultinomial, weighted_multinomial
 
 __all__ = [
+    "closed_surface_volume_energy",
     "displace_points",
     "irfft",
     "irfft2",
@@ -112,10 +121,17 @@ __all__ = [
     "rfft2",
     "point_cloud_render",
     "scalar_field_to_rgba",
+    "shrinkwrap_points",
     "signed_distance_field",
+    "simplex_inversion_energy",
+    "simplex_measure_energy",
+    "simplex_strain_energy",
+    "sobolev_deform_points",
     "smooth_log",
     "spectral_grid_gradient",
     "spherical_basis",
+    "surface_bending_energy",
+    "total_measure_energy",
     "uniform_grid_gradient",
     "vector_field_to_rgba",
     "vector_project",
