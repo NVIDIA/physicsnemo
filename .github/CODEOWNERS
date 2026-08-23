@@ -163,20 +163,23 @@ physicsnemo/nn/module/pade.py @peterdsharpe
 # ==============================================================================
 
 # Distributed training utilities
-physicsnemo/distributed/ @coreyjadams
+physicsnemo/distributed/ @coreyjadams @negin513
 
 # Domain parallelism (ShardTensor, shard utilities)
-physicsnemo/domain_parallel/ @coreyjadams
-physicsnemo/domain_parallel/shard_utils/ @coreyjadams
+physicsnemo/domain_parallel/ @coreyjadams @negin513
+physicsnemo/domain_parallel/shard_utils/ @coreyjadams @negin513
+
+# FSDP2 utilities
+physicsnemo/distributed/fsdp2/ @negin513
 
 # ==============================================================================
 # DATAPIPES
 # ==============================================================================
 
-physicsnemo/datapipes/ @coreyjadams
+physicsnemo/datapipes/ @coreyjadams @negin513
 physicsnemo/datapipes/benchmarks/
-physicsnemo/datapipes/readers/ @coreyjadams
-physicsnemo/datapipes/transforms/ @coreyjadams
+physicsnemo/datapipes/readers/ @coreyjadams @negin513
+physicsnemo/datapipes/transforms/ @coreyjadams @negin513
 
 physicsnemo/datapipes/cae/domino_datapipe.py  @coreyjadams
 physicsnemo/datapipes/cae/mesh_datapipe.py @mnabian
@@ -192,7 +195,7 @@ physicsnemo/datapipes/healpix/ @pzharrington
 # ==============================================================================
 
 physicsnemo/utils/capture.py @nickgeneva @ktangsali
-physicsnemo/utils/checkpoint.py @CharlelieLrt
+physicsnemo/utils/checkpoint.py @CharlelieLrt @negin513
 physicsnemo/utils/insolation.py @pzharrington
 physicsnemo/utils/memory.py @coreyjadams
 physicsnemo/utils/zenith_angle.py @pzharrington
@@ -456,10 +459,10 @@ test/nn/
 # TESTS - Infrastructure
 # ==============================================================================
 
-test/distributed/ @coreyjadams
-test/domain_parallel/ @coreyjadams
-test/datapipes/core/ @coreyjadams
-test/datapipes/ @coreyjadams
+test/distributed/ @coreyjadams @negin513
+test/domain_parallel/ @coreyjadams @negin513
+test/datapipes/core/ @coreyjadams @negin513
+test/datapipes/ @coreyjadams @negin513
 
 # ==============================================================================
 # TESTS - Models

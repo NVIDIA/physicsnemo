@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches: [main, "*-rc"]
   schedule:
     - cron: '0 6 * * *'  # 6 AM UTC daily
   workflow_dispatch:  # Allows manual triggering from GitHub UI

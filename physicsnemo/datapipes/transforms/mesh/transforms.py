@@ -452,6 +452,10 @@ class SetGlobalField(MeshTransform):
     Typical use: inject a per-dataset inlet velocity vector so that
     downstream rotation transforms (with ``transform_global_data=True``)
     rotate it consistently with the mesh geometry.
+
+    On a :class:`~physicsnemo.mesh.DomainMesh`, the fields are written to
+    the domain-level ``global_data`` as well as to every sub-mesh's
+    ``global_data``.
     """
 
     def __init__(
@@ -479,6 +483,34 @@ class SetGlobalField(MeshTransform):
             cells=mesh.cells,
             point_data=mesh.point_data,
             cell_data=mesh.cell_data,
+            global_data=new_gd,
+        )
+
+    def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
+        """Inject the fields into a :class:`DomainMesh`.
+
+        Writes the fields to the domain-level ``global_data`` in addition
+        to the base-class broadcast, which only reaches sub-mesh
+        ``global_data``.
+
+        Parameters
+        ----------
+        domain : DomainMesh
+            Input domain mesh (interior + boundaries).
+
+        Returns
+        -------
+        DomainMesh
+            Domain mesh with the fields set in the domain-level and every
+            sub-mesh ``global_data``.
+        """
+        domain = super().apply_to_domain(domain)
+        reference = domain.interior.points
+        new_gd = domain.global_data.clone()
+        new_gd.update(self._fields.to(device=reference.device, dtype=reference.dtype))
+        return DomainMesh(
+            interior=domain.interior,
+            boundaries=domain.boundaries,
             global_data=new_gd,
         )
 
