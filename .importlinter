@@ -9,12 +9,14 @@ contract_types =
 name = Prevent Upward Imports in the PhysicsNemo Structure
 type = layers
 exhaustive = True
+ignore_imports =
+   physicsnemo -> physicsnemo.compat
 exhaustive_ignores =
-   compat
    conftest
 containers=
    physicsnemo
 layers = 
+   compat
    experimental
    deploy | active_learning | diffusion | sym
    models : datapipes : metrics : domain_parallel : optim
@@ -43,11 +45,11 @@ exhaustive = True
 containers=
    physicsnemo.distributed
 layers = 
-   fft | autograd | fused_all_reduce
+   fft | autograd
    mappings
    utils
    manager
-   config
+   config | fused_all_reduce
 
 [importlinter:contract:physicsnemo-utils]
 name = Control Dependencies in PhysicsNeMo utils
@@ -71,8 +73,7 @@ layers =
    module.fourier_layers | module.transformer_layers | module.unet_layers
    module.dgm_layers | module.mlp_layers | module.fully_connected_layers | module.gnn_layers | module.attention_layers
    module.activations | module.ball_query | module.conv_layers  | module.drop | module.fft | module.fused_silu | module.kan_layers  | module.resample_layers | module.siren_layers | module.spectral_layers | module.transformer_decoder  | module.weight_fact | module.weight_norm | module.embedding_layers | module.group_norm | module.hpx
-   functional
-   module.utils
+   functional | module.utils
 
 [importlinter:contract:physicsnemo-mesh-nn]
 name = Keep NN Functionals below Mesh and NN Modules
@@ -88,9 +89,7 @@ exhaustive = True
 containers=
    physicsnemo.nn.module.gnn_layers
 layers = 
-   bsms | embedder
-   mesh_graph_decoder | mesh_graph_encoder
-   mesh_node_block | mesh_edge_block
+   bsms | embedder | mesh_graph_decoder | mesh_graph_encoder | mesh_node_block | mesh_edge_block
    mesh_graph_mlp 
    utils  
    graph
