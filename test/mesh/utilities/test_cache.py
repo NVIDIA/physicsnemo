@@ -358,13 +358,13 @@ class TestWithPoints:
     def test_rejects_changed_point_count(self):
         mesh = self._cached_triangle()
 
-        with pytest.raises(ValueError, match="must preserve point indexing"):
+        with pytest.raises(RuntimeError, match="must preserve point indexing"):
             mesh.with_points(mesh.points[:-1])
 
     def test_rejects_non_matrix_points(self):
         mesh = self._cached_triangle()
 
-        with pytest.raises(ValueError, match="replacement coordinates with shape"):
+        with pytest.raises(RuntimeError, match="replacement coordinates with shape"):
             mesh.with_points(torch.zeros(mesh.n_points))
 
     def test_result_containers_are_independent(self):
@@ -432,20 +432,20 @@ class TestWithCells:
     def test_rejects_changed_cell_count(self):
         mesh = self._cached_triangle()
 
-        with pytest.raises(ValueError, match="must preserve cell indexing"):
+        with pytest.raises(RuntimeError, match="must preserve cell indexing"):
             mesh.with_cells(mesh.cells[:0])
 
     def test_rejects_changed_simplex_type(self):
         mesh = self._cached_triangle()
         tetrahedra = torch.cat([mesh.cells, mesh.cells[:, :1]], dim=1)
 
-        with pytest.raises(ValueError, match="simplex type"):
+        with pytest.raises(RuntimeError, match="simplex type"):
             mesh.with_cells(tetrahedra)
 
     def test_rejects_non_matrix_cells(self):
         mesh = self._cached_triangle()
 
-        with pytest.raises(ValueError, match="replacement connectivity with shape"):
+        with pytest.raises(RuntimeError, match="replacement connectivity with shape"):
             mesh.with_cells(mesh.cells[0])
 
     def test_rejects_floating_point_cells(self):

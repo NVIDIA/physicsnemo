@@ -1706,7 +1706,7 @@ class Mesh:
 
         Raises
         ------
-        ValueError
+        RuntimeError
             If the replacement is not a coordinate matrix or changes the number
             of points.
 
@@ -1724,17 +1724,17 @@ class Mesh:
         ...     torch.nn.functional.pad(mesh.points, (0, 1))
         ... )
         """
-        if not torch.compiler.is_compiling():
-            if points.ndim != 2:
-                raise ValueError(
-                    "with_points requires replacement coordinates with shape "
-                    f"(n_points, n_spatial_dims), but got {points.shape}."
-                )
-            if points.shape[0] != self.n_points:
-                raise ValueError(
-                    "with_points must preserve point indexing, but the replacement "
-                    f"has {points.shape[0]} points and the mesh has {self.n_points}."
-                )
+        torch._check(
+            points.ndim == 2,
+            lambda: (
+                "with_points requires replacement coordinates with shape "
+                "(n_points, n_spatial_dims)."
+            ),
+        )
+        torch._check(
+            points.shape[0] == self.n_points,
+            lambda: "with_points must preserve point indexing.",
+        )
 
         return self._new_with_structure(
             points=points,
@@ -1772,7 +1772,7 @@ class Mesh:
 
         Raises
         ------
-        ValueError
+        RuntimeError
             If the replacement is not a connectivity matrix or changes the cell
             count or simplex type.
 
@@ -1789,18 +1789,21 @@ class Mesh:
         ...     mesh.cells[:, [0, 2, 1]]
         ... )
         """
-        if not torch.compiler.is_compiling():
-            if cells.ndim != 2:
-                raise ValueError(
-                    "with_cells requires replacement connectivity with shape "
-                    f"(n_cells, n_vertices_per_cell), but got {cells.shape}."
-                )
-            if cells.shape != self.cells.shape:
-                raise ValueError(
-                    "with_cells must preserve cell indexing and simplex type, but "
-                    f"the replacement has shape {cells.shape} and the mesh has "
-                    f"cells with shape {self.cells.shape}."
-                )
+        torch._check(
+            cells.ndim == 2,
+            lambda: (
+                "with_cells requires replacement connectivity with shape "
+                "(n_cells, n_vertices_per_cell)."
+            ),
+        )
+        torch._check(
+            cells.shape[0] == self.cells.shape[0],
+            lambda: "with_cells must preserve cell indexing.",
+        )
+        torch._check(
+            cells.shape[1] == self.cells.shape[1],
+            lambda: "with_cells must preserve simplex type.",
+        )
 
         return self._new_with_structure(
             points=self.points,

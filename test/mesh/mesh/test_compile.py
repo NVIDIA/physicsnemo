@@ -201,3 +201,36 @@ def test_cache_rebuild_paths_under_fullgraph_compile(
 
     for actual, reference in zip(compiled, expected):
         torch.testing.assert_close(actual, reference)
+
+
+def test_with_points_checks_point_count_under_fullgraph_compile(
+    triangle_3d: tuple[torch.Tensor, torch.Tensor],
+) -> None:
+    """Compiled coordinate replacement must preserve point indexing."""
+    points, cells = triangle_3d
+
+    def fn(p: torch.Tensor, c: torch.Tensor, replacement: torch.Tensor) -> torch.Tensor:
+        return Mesh(points=p, cells=c).with_points(replacement).points
+
+    compiled = torch.compile(fn, backend="eager", fullgraph=True, dynamic=True)
+    torch.testing.assert_close(compiled(points, cells, points.clone()), points)
+
+    with pytest.raises(RuntimeError, match="must preserve point indexing"):
+        compiled(points, cells, points[:-1])
+
+
+def test_with_cells_checks_simplex_type_under_fullgraph_compile(
+    triangle_3d: tuple[torch.Tensor, torch.Tensor],
+) -> None:
+    """Compiled connectivity replacement must preserve simplex type."""
+    points, cells = triangle_3d
+
+    def fn(p: torch.Tensor, c: torch.Tensor, replacement: torch.Tensor) -> torch.Tensor:
+        return Mesh(points=p, cells=c).with_cells(replacement).cells
+
+    compiled = torch.compile(fn, backend="eager", fullgraph=True, dynamic=True)
+    torch.testing.assert_close(compiled(points, cells, cells.clone()), cells)
+
+    tetrahedra = torch.cat([cells, cells[:, :1]], dim=1)
+    with pytest.raises(RuntimeError, match="must preserve simplex type"):
+        compiled(points, cells, tetrahedra)
