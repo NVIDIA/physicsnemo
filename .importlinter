@@ -74,6 +74,13 @@ layers =
    functional
    module.utils
 
+[importlinter:contract:physicsnemo-mesh-nn]
+name = Keep NN Functionals below Mesh and NN Modules
+type = layers
+layers =
+   physicsnemo.mesh | physicsnemo.nn.module
+   physicsnemo.nn.functional
+
 [importlinter:contract:physicsnemo-nn-gnn-layers]
 name = Control Internal Dependencies in PhysicsNeMo nn GNN Layers
 type = layers
