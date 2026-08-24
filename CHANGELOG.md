@@ -130,6 +130,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds `FourierPositionalEmbedding` to `physicsnemo.nn`, a deterministic
   axis-wise (NeRF-style) Fourier positional embedding for continuous
   coordinates with no learnable parameters.
+- Adds optional ``filename_format`` to ``save_checkpoint`` for custom model
+  checkpoint basenames (e.g. zero-padded epochs via ``"{name}.{epoch:06d}"``).
+- Adds ``Module._backward_compat_state_dict_mapper`` for version-aware
+  state-dict key remapping in ``Module.from_checkpoint``.
 - Adds radiation transport example (`examples/nuclear_engineering/radiation_transport`)
 - Adds agent skills structure, and initial skill for 'discoverability'.
 - Adds the experimental AeroJEPA model
