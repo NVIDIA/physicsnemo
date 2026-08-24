@@ -69,11 +69,15 @@ same point or cell indexing. Each method returns a new ``Mesh`` with independent
      - Clear every cache
 
 The ``keep`` override accepts any of the following:
-nested-key tuple such as ``("cell", "areas")``, or a sequence of keys. Use a
-list when retaining multiple keys, for example
+
+- A top-level string such as ``"topology"``
+- A single nested-key tuple such as ``("cell", "areas")``
+- A sequence of keys
+
+Use a list when retaining multiple keys, for example
 ``["topology", ("cell", "areas")]``. Retaining a cache that depends on replaced
-geometry or connectivity is an expert operation; the caller is responsible for
-its validity.
+geometry or connectivity is an expert operation. You are responsible for the
+validity of the retained cache.
 
 .. autoclass:: Mesh
    :members:
