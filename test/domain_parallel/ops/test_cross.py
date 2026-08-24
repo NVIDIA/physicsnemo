@@ -25,7 +25,7 @@ gradient flow -- all value-checked against single-device references.
 
 import pytest
 import torch
-from torch.distributed.tensor import DTensor
+from torch.distributed.tensor import DTensor, distribute_tensor
 from torch.distributed.tensor.placement_types import Partial, Replicate, Shard
 
 from physicsnemo.distributed import DistributedManager
@@ -120,15 +120,31 @@ def test_cross_resolves_partial(distributed_mesh):
 
 
 def test_cross_rejects_sharded_dim(distributed_mesh):
-    r"""Cross along the sharded dimension has no local implementation."""
+    r"""Cross along the sharded dimension has no local implementation.
+
+    The (3, M) operands are sharded on dim 0 -- the size-3 cross dim -- so
+    on world sizes above 3 some ranks hold zero rows. Built with
+    ``from_local`` + explicit shard shapes (communication-free): the op
+    must raise identically on every rank, and a collective here could be
+    left half-posted when it does, wedging the rest of the static suite.
+    """
     dm = DistributedManager()
+    ws = distributed_mesh.size(0)
     torch.manual_seed(13)
-    # (3, M) tensors sharded on dim 0, crossing along that same dim.
-    m = 4 * distributed_mesh.size(0)
-    a = torch.randn(3, m, device=dm.device)
-    b = torch.randn(3, m, device=dm.device)
-    a_s = scatter_tensor(a, 0, distributed_mesh, (Shard(0),))
-    b_s = scatter_tensor(b, 0, distributed_mesh, (Shard(0),))
+    m = 4 * ws
+    # Chunk-style split of 3 rows over ws ranks, padded with empty shards.
+    row_chunks = [c.numel() for c in torch.arange(3).chunk(ws)]
+    row_chunks += [0] * (ws - len(row_chunks))
+    shard_shapes = {0: [(rows, m) for rows in row_chunks]}
+
+    local_a = torch.randn(row_chunks[dm.rank], m, device=dm.device)
+    local_b = torch.randn(row_chunks[dm.rank], m, device=dm.device)
+    a_s = ShardTensor.from_local(
+        local_a, distributed_mesh, (Shard(0),), shard_shapes, global_shape=(3, m)
+    )
+    b_s = ShardTensor.from_local(
+        local_b, distributed_mesh, (Shard(0),), shard_shapes, global_shape=(3, m)
+    )
 
     with pytest.raises(RuntimeError, match="sharded dimension"):
         torch.linalg.cross(a_s, b_s, dim=0)
@@ -180,3 +196,134 @@ def test_tensor_cross_method(distributed_mesh):
 
     assert isinstance(result, ShardTensor)
     torch.testing.assert_close(result.full_tensor(), a.cross(b, dim=-1))
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the confirmed handler gaps: every supported call must
+# match native PyTorch in forward AND backward. A replicated operand is
+# localized without a forward collective, and its rank-local gradient
+# contributions are reduced before reaching the original tensor.
+# ---------------------------------------------------------------------------
+
+
+def test_cross_replicated_operand_grad_is_reduced(distributed_mesh):
+    r"""Primary reproducer: Shard(0) x replicated-with-grad.
+
+    The sharded operand's gradient is rank-local and already correct (the
+    control below). The replicated operand's gradient must be the sum of
+    every rank's contribution; the buggy handler returns only the local one.
+    """
+    dm = DistributedManager()
+    ws = distributed_mesh.size(0)
+    coord = dm.rank
+
+    torch.manual_seed(29)
+    full_a = torch.randn(2 * ws, 3, device=dm.device)
+
+    local_a = full_a.chunk(ws, dim=0)[coord].clone().requires_grad_(True)
+    sharded_a = ShardTensor.from_local(
+        local_a,
+        distributed_mesh,
+        (Shard(0),),
+        sharding_shapes="chunk",
+        global_shape=tuple(full_a.shape),
+    )
+    axis = torch.tensor([[0.25, -0.5, 2.0]], device=dm.device, requires_grad=True)
+
+    torch.linalg.cross(sharded_a, axis).full_tensor().sum().backward()
+
+    ref_a = full_a.detach().clone().requires_grad_(True)
+    ref_axis = axis.detach().clone().requires_grad_(True)
+    torch.linalg.cross(ref_a, ref_axis).sum().backward()
+
+    # Control: the sharded operand's local gradient is correct.
+    torch.testing.assert_close(local_a.grad, ref_a.grad.chunk(ws, dim=0)[coord])
+    # Bug: the replicated operand only sees its rank-local contribution.
+    torch.testing.assert_close(axis.grad, ref_axis.grad)
+
+
+def test_cross_sharded_with_full_size_replicate(distributed_mesh):
+    r"""Shard(0) x full-size Replicate() must localize the replicated
+    operand to the reference shard; the buggy handler crosses the (n/ws, 3)
+    local shard against the full (n, 3) tensor and fails on shapes."""
+    dm = DistributedManager()
+    n = 2 * distributed_mesh.size(0)
+    torch.manual_seed(31)
+    a = torch.randn(n, 3, device=dm.device)
+    b = torch.randn(n, 3, device=dm.device)
+
+    a_s = scatter_tensor(a, 0, distributed_mesh, (Shard(0),))
+    b_s = ShardTensor.from_local(b, distributed_mesh, (Replicate(),))
+
+    result = torch.linalg.cross(a_s, b_s)
+
+    assert isinstance(result, ShardTensor)
+    torch.testing.assert_close(result.full_tensor(), torch.linalg.cross(a, b))
+
+
+def test_cross_replicated_shardtensor_with_sharded_dtensor(distributed_mesh):
+    r"""Replicated ShardTensor x sharded DTensor: the handler must not pick
+    the DTensor as its output reference and then read ShardTensor-only
+    metadata (AttributeError: 'DTensorSpec' has no 'sharding_shapes')."""
+    dm = DistributedManager()
+    n = 2 * distributed_mesh.size(0)
+    torch.manual_seed(37)
+    a = torch.randn(n, 3, device=dm.device)
+    b = torch.randn(n, 3, device=dm.device)
+
+    a_s = ShardTensor.from_local(a, distributed_mesh, (Replicate(),))
+    b_d = distribute_tensor(b, distributed_mesh, [Shard(0)])
+
+    result = torch.linalg.cross(a_s, b_d)
+
+    torch.testing.assert_close(result.full_tensor(), torch.linalg.cross(a, b))
+
+
+def test_torch_cross_dim_none_uses_first_input_shape(distributed_mesh):
+    r"""torch.cross(dim=None) picks the first size-3 dim of the FIRST INPUT
+    (dim 2 for a (1, 4, 3) input), matching native PyTorch -- not the first
+    size-3 dim of the broadcast output shape (dim 0 for (3, 4, 3))."""
+    dm = DistributedManager()
+    torch.manual_seed(41)
+    a = torch.randn(1, 4, 3, device=dm.device)
+    b = torch.randn(3, 4, 3, device=dm.device)
+
+    a_s = ShardTensor.from_local(a, distributed_mesh, (Replicate(),))
+    b_s = ShardTensor.from_local(b, distributed_mesh, (Replicate(),))
+
+    result = torch.cross(a_s, b_s)
+
+    torch.testing.assert_close(result.full_tensor(), torch.cross(a, b))
+
+
+def test_cross_compile_with_plain_tensor(distributed_mesh):
+    r"""Under torch.compile the mixed plain-tensor/ShardTensor call must go
+    through plain-tensor promotion instead of failing during tracing; the
+    ShardTensor/ShardTensor control for this path compiles cleanly."""
+    dm = DistributedManager()
+    ws = distributed_mesh.size(0)
+    n = 2 * ws
+    torch.manual_seed(43)
+    a = torch.randn(n, 3, device=dm.device)
+    axis = torch.tensor([[0.25, -0.5, 2.0]], device=dm.device)
+
+    # from_local with "chunk" shapes: communication-free construction whose
+    # spec carries plain int tuples, which dynamo handles cleanly.
+    local_a = a.chunk(ws, dim=0)[dm.rank].clone()
+    a_s = ShardTensor.from_local(
+        local_a,
+        distributed_mesh,
+        (Shard(0),),
+        sharding_shapes="chunk",
+        global_shape=(n, 3),
+    )
+
+    torch._dynamo.reset()
+
+    def fn(x, y):
+        return torch.linalg.cross(x, y)
+
+    compiled = torch.compile(fn, fullgraph=True, backend="aot_eager")
+    result = compiled(a_s, axis)
+
+    torch.testing.assert_close(result.full_tensor(), torch.linalg.cross(a, axis))
