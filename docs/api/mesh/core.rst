@@ -42,7 +42,7 @@ polygons -- a "polygon soup" (see :doc:`tessellation`) -- use
     mesh = mesh.compute_point_derivatives(keys="T", method="lsq")
     print(mesh.point_data["T_gradient"])  # shape (3, 2)
 
-Cache-aware functional updates
+Cache-Aware Functional Updates
 ------------------------------
 
 Use the cache-aware replacement methods when creating a mesh that keeps the
