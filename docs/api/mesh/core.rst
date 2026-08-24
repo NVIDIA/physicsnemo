@@ -68,7 +68,7 @@ same point or cell indexing. Each method returns a new ``Mesh`` with independent
      - Remove cached values without changing the mesh
      - Clear every cache
 
-The ``keep`` override accepts a top-level string such as ``"topology"``, one
+The ``keep`` override accepts any of the following:
 nested-key tuple such as ``("cell", "areas")``, or a sequence of keys. Use a
 list when retaining multiple keys, for example
 ``["topology", ("cell", "areas")]``. Retaining a cache that depends on replaced
