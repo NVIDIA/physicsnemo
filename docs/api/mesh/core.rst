@@ -60,7 +60,7 @@ same point or cell indexing. Each method returns a new ``Mesh`` with independent
      - Retain every geometry and topology cache
    * - :meth:`Mesh.with_points`
      - Replace coordinates without changing point indexing or connectivity
-     - Retain topology; clear geometry caches
+     - Retain topology and clear geometry caches
    * - :meth:`Mesh.with_cells`
      - Replace connectivity without changing cell indexing or simplex type
      - Clear every cache
