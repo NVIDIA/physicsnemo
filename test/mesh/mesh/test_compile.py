@@ -194,7 +194,8 @@ def test_cache_rebuild_paths_under_fullgraph_compile(
         )
         mesh = mesh.slice_cells(torch.tensor([0], device=c.device))
         mesh = mesh.pad(target_n_points=4, target_n_cells=2)
-        return mesh.points, mesh.cells, mesh.cell_areas
+        mesh = mesh.with_data(point_data={"coordinate": mesh.points[:, 0]})
+        return mesh.points, mesh.cells, mesh.cell_areas, mesh.point_data["coordinate"]
 
     expected = fn(points, cells)
     compiled = torch.compile(fn, backend="eager", fullgraph=True)(points, cells)

@@ -21,6 +21,7 @@ import builtins
 import math
 import types
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -1666,7 +1667,8 @@ class Mesh:
         keep: str | tuple[str, ...] | Sequence[str | tuple[str, ...]],
     ) -> "Mesh":
         """Build a same-index mesh with selected structural fields replaced."""
-        return Mesh(
+        return replace(
+            self,
             points=points,
             cells=cells,
             point_data=self.point_data.copy(),
@@ -1867,9 +1869,8 @@ class Mesh:
                 return value.copy()
             return value
 
-        return Mesh(
-            points=self.points,
-            cells=self.cells,
+        return replace(
+            self,
             point_data=_replacement(point_data, self.point_data),
             cell_data=_replacement(cell_data, self.cell_data),
             global_data=_replacement(global_data, self.global_data),

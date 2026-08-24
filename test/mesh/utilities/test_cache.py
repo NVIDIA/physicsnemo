@@ -26,6 +26,17 @@ import torch
 from physicsnemo.mesh import Mesh
 
 
+class TaggedMesh(Mesh):
+    """Custom mesh subtype used to guard functional update behavior."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        object.__setattr__(self, "constructed_spatial_dims", self.n_spatial_dims)
+
+    def tag(self) -> str:
+        return "tagged"
+
+
 class TestFreshMeshEmptyCache:
     """Tests that a freshly constructed Mesh has empty caches."""
 
@@ -463,3 +474,27 @@ class TestWithCells:
 
         assert "derived" not in mesh.cell_data
         assert mesh._cache.get(("cell", "derived"), None) is None
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["with_points", "with_cells", "with_data", "displace"],
+)
+def test_cache_aware_updates_preserve_concrete_mesh_type(operation: str):
+    mesh = TaggedMesh(
+        points=torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]),
+        cells=torch.tensor([[0, 1, 2]]),
+    )
+
+    if operation == "with_points":
+        updated = mesh.with_points(torch.nn.functional.pad(mesh.points, (0, 1)))
+    elif operation == "with_cells":
+        updated = mesh.with_cells(mesh.cells.clone())
+    elif operation == "with_data":
+        updated = mesh.with_data(point_data={"value": torch.arange(mesh.n_points)})
+    else:
+        updated = mesh.displace(torch.zeros_like(mesh.points))
+
+    assert type(updated) is TaggedMesh
+    assert updated.tag() == "tagged"
+    assert updated.constructed_spatial_dims == updated.n_spatial_dims
