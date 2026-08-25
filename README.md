@@ -41,7 +41,7 @@ For CUDA 12, a basic install, optional features, or source setup, see
 <!-- markdownlint-disable MD013 MD033 -->
 <table width="100%">
   <tr>
-    <th width="50%" align="center">Automotive aerodynamics</th>
+    <th width="50%" align="center">Aerodynamics</th>
     <th width="50%" align="center">Semiconductor packaging</th>
   </tr>
   <tr>
@@ -53,7 +53,7 @@ For CUDA 12, a basic install, optional features, or source setup, see
     <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/underfill_dispensing"><strong>Underfill dispensing</strong></a>: transient epoxy-interface prediction with GeoTransolver</td>
   </tr>
   <tr>
-    <th width="50%" align="center">Regional weather</th>
+    <th width="50%" align="center">Weather Forecasting</th>
     <th width="50%" align="center">Structural mechanics</th>
   </tr>
   <tr>
