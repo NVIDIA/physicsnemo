@@ -40,19 +40,58 @@ geophysics, healthcare, manufacturing, and more.
 
 ## See PhysicsNeMo in action
 
-| Automotive aerodynamics | Industrial fluid dynamics |
-| :---: | :---: |
-| [![DrivAerML cars colored by pressure and wall-shear-stress variation across model checkpoints](https://raw.githubusercontent.com/NVIDIA/physicsnemo-cfd/main/workflows/nim_inference/notebooks/img/variations_due_to_checkpoint.png)](https://github.com/NVIDIA/physicsnemo-cfd/blob/main/workflows/nim_inference/notebooks/benchmarking_in_absence_of_gt.ipynb) | [![Simulation, prediction, and difference for a transient tank-filling velocity field](https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/tank_filling_velocity.gif)](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/transient_conjugate_heat_transfer_tank_fill) |
-| [**DoMINO on DrivAerML**](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/external_aerodynamics/domino): pressure and wall-shear-stress checkpoint sensitivity | [**Tank filling**](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/transient_conjugate_heat_transfer_tank_fill): transient compressible flow and conjugate heat transfer |
-| **Regional weather** | **Structural mechanics** |
-| [![StormCast prediction beside a high-resolution weather analysis](https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/stormcast_rollout.gif)](https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/stormcast) | [![Predicted and simulated crush-can deformation with error](https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/crash/crushcan.gif)](https://github.com/NVIDIA/physicsnemo/tree/main/examples/structural_mechanics/crash) |
-| [**StormCast**](https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/stormcast): generative regional weather forecasting | [**Crash dynamics**](https://github.com/NVIDIA/physicsnemo/tree/main/examples/structural_mechanics/crash): transient surrogates on deforming meshes |
-| **Geophysics** | **Healthcare** |
-| [![Diffusion FWI ground truth, samples, and ensemble mean](https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/diffusion_fwi_predictions.png)](https://github.com/NVIDIA/physicsnemo/tree/main/examples/geophysics/diffusion_fwi) | [![Graph neural network and reference blood-flow fields in patient-specific vessels](https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/bloodflow_1d_mgn_results.gif)](https://github.com/NVIDIA/physicsnemo/tree/main/examples/healthcare/bloodflow_1d_mgn) |
-| [**Diffusion FWI**](https://github.com/NVIDIA/physicsnemo/tree/main/examples/geophysics/diffusion_fwi): guided generative full-waveform inversion | [**Cardiovascular flow**](https://github.com/NVIDIA/physicsnemo/tree/main/examples/healthcare/bloodflow_1d_mgn): reduced-order prediction with MeshGraphNet |
-| **Nuclear engineering** | **Additive manufacturing** |
-| [![Target, prediction, and absolute error for radiation transport in a hohlraum](https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/radiation_transport/transolver_hohlraum.png)](https://github.com/NVIDIA/physicsnemo/tree/main/examples/nuclear_engineering/radiation_transport) | [![Predicted deformation of a metal busbar during sintering](https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/vfgn_doc/busbar.gif)](https://github.com/NVIDIA/physicsnemo/tree/main/examples/additive_manufacturing/sintering_physics) |
-| [**Radiation transport**](https://github.com/NVIDIA/physicsnemo/tree/main/examples/nuclear_engineering/radiation_transport): physics-informed Transolver surrogate | [**Metal sintering**](https://github.com/NVIDIA/physicsnemo/tree/main/examples/additive_manufacturing/sintering_physics): graph-based deformation prediction |
+<!-- markdownlint-disable MD013 MD033 -->
+<table width="100%">
+  <tr>
+    <th width="50%" align="center">Automotive aerodynamics</th>
+    <th width="50%" align="center">Industrial fluid dynamics</th>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo-cfd/blob/main/workflows/nim_inference/notebooks/benchmarking_in_absence_of_gt.ipynb"><img width="100%" alt="DrivAerML cars colored by pressure and wall-shear-stress variation across model checkpoints" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo-cfd/main/workflows/nim_inference/notebooks/img/variations_due_to_checkpoint.png"></a></td>
+    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/transient_conjugate_heat_transfer_tank_fill"><img width="100%" alt="Simulation, prediction, and difference for a transient tank-filling velocity field" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/tank_filling_velocity.gif"></a></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/external_aerodynamics/domino"><strong>DoMINO on DrivAerML</strong></a>: pressure and wall-shear-stress checkpoint sensitivity</td>
+    <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/transient_conjugate_heat_transfer_tank_fill"><strong>Tank filling</strong></a>: transient compressible flow and conjugate heat transfer</td>
+  </tr>
+  <tr>
+    <th width="50%" align="center">Regional weather</th>
+    <th width="50%" align="center">Structural mechanics</th>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/stormcast"><img width="100%" alt="StormCast prediction beside a high-resolution weather analysis" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/stormcast_rollout.gif"></a></td>
+    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/structural_mechanics/crash"><img width="100%" alt="Predicted and simulated crush-can deformation with error" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/crash/crushcan.gif"></a></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/stormcast"><strong>StormCast</strong></a>: generative regional weather forecasting</td>
+    <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/structural_mechanics/crash"><strong>Crash dynamics</strong></a>: transient surrogates on deforming meshes</td>
+  </tr>
+  <tr>
+    <th width="50%" align="center">Geophysics</th>
+    <th width="50%" align="center">Healthcare</th>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/geophysics/diffusion_fwi"><img width="100%" alt="Diffusion FWI ground truth, samples, and ensemble mean" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/diffusion_fwi_predictions.png"></a></td>
+    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/healthcare/bloodflow_1d_mgn"><img width="100%" alt="Graph neural network and reference blood-flow fields in patient-specific vessels" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/bloodflow_1d_mgn_results.gif"></a></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/geophysics/diffusion_fwi"><strong>Diffusion FWI</strong></a>: guided generative full-waveform inversion</td>
+    <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/healthcare/bloodflow_1d_mgn"><strong>Cardiovascular flow</strong></a>: reduced-order prediction with MeshGraphNet</td>
+  </tr>
+  <tr>
+    <th width="50%" align="center">Nuclear engineering</th>
+    <th width="50%" align="center">Additive manufacturing</th>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/nuclear_engineering/radiation_transport"><img width="100%" alt="Target, prediction, and absolute error for radiation transport in a hohlraum" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/radiation_transport/transolver_hohlraum.png"></a></td>
+    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/additive_manufacturing/sintering_physics"><img width="100%" alt="Predicted deformation of a metal busbar during sintering" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/vfgn_doc/busbar.gif"></a></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/nuclear_engineering/radiation_transport"><strong>Radiation transport</strong></a>: physics-informed Transolver surrogate</td>
+    <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/additive_manufacturing/sintering_physics"><strong>Metal sintering</strong></a>: graph-based deformation prediction</td>
+  </tr>
+</table>
+<!-- markdownlint-enable MD013 MD033 -->
 
 Every visual above comes from a PhysicsNeMo recipe or workflow. Select an image to
 open its source, data context, and instructions.
