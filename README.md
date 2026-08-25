@@ -130,6 +130,18 @@ constraints. Explore by physical domain:
 Browse the [complete example catalog](https://github.com/NVIDIA/physicsnemo/blob/main/examples/README.md)
 for every available recipe.
 
+### Explore the PhysicsNeMo ecosystem
+
+PhysicsNeMo supplies reusable models, training components, and recipes. For a
+domain-focused application layer or data preparation, continue with:
+
+| Need | Continue with |
+| --- | --- |
+| **Scientific data preparation** | [PhysicsNeMo Curator](https://github.com/NVIDIA/physicsnemo-curator) for extract, transform, and load (ETL) pipelines that prepare AI-ready scientific and engineering datasets |
+| **Engineering inference and design** | [PhysicsNeMo CFD](https://github.com/NVIDIA/physicsnemo-cfd) for inference, evaluation, benchmarking, and design workflows |
+| **Weather and climate** | [Earth2Studio](https://github.com/NVIDIA/earth2studio) for building and deploying AI weather and climate workflows |
+| **Atomistic simulation** | [NVIDIA ALCHEMI Toolkit](https://github.com/NVIDIA/nvalchemi-toolkit) for GPU-first training, inference, and dynamics workflows, with optimized primitives from [ALCHEMI Toolkit Ops](https://github.com/NVIDIA/nvalchemi-toolkit-ops) |
+
 ## Choose a model family
 
 PhysicsNeMo models are ordinary `torch.nn.Module` objects. Choose a family by the
@@ -273,21 +285,7 @@ cd physicsnemo
 uv sync --extra cu13
 ```
 
-## Ecosystem and learning resources
-
-PhysicsNeMo is used across a broader open-source physics AI ecosystem:
-
-- [PhysicsNeMo Curator](https://github.com/NVIDIA/physicsnemo-curator) accelerates
-  extract, transform, and load (ETL) pipelines for AI-ready scientific and
-  engineering datasets.
-- [PhysicsNeMo CFD](https://github.com/NVIDIA/physicsnemo-cfd) provides inference,
-  evaluation, benchmarking, and design workflows for engineering and CFD models.
-- [Earth2Studio](https://github.com/NVIDIA/earth2studio) builds and deploys AI weather
-  and climate workflows.
-- [NVIDIA ALCHEMI Toolkit](https://github.com/NVIDIA/nvalchemi-toolkit) builds
-  GPU-first training, inference, and dynamics workflows for AI atomic simulation,
-  with optimized primitives from
-  [ALCHEMI Toolkit Ops](https://github.com/NVIDIA/nvalchemi-toolkit-ops).
+## Learning resources
 
 Learn through the [PhysicsNeMo notebooks on Hugging Face](https://huggingface.co/collections/nvidia/physicsnemo),
 the [AI for Science bootcamp](https://github.com/openhackathons-org/End-to-End-AI-for-Science),
