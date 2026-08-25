@@ -27,12 +27,12 @@
 #
 # How to run:
 #   The lock must be generated in a resolution context that matches the CI
-#   runners (Linux x86_64, glibc, CUDA 12.8, Python 3.12).  Running this on
+#   runners (Linux x86_64, glibc, CUDA 13.3, Python 3.12).  Running this on
 #   macOS or with a different Python will produce a lock incompatible with the
 #   runners and silently break the testmon-stability guarantee.
 #
 #     docker run --rm -v "$PWD:/work" -w /work \
-#       nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04 \
+#       nvidia/cuda:13.3.1-cudnn-devel-ubuntu24.04 \
 #       bash .github/regen-ci-deps-lock.sh
 #
 #   After it completes, review the diff and commit the updated
@@ -43,11 +43,11 @@ set -euo pipefail
 
 # These MUST match the workflow `env:` values in
 # .github/workflows/github-{pr,nightly-uv}.yml.  Bump in lockstep.
-EXTRAS_TAG="${EXTRAS_TAG:-cu12,natten-cu12,utils-extras,mesh-extras,nn-extras,model-extras,datapipes-extras,uq-extras,gnns,sym,transformer-engine-cu12}"
+EXTRAS_TAG="${EXTRAS_TAG:-cu13,natten-cu13,utils-extras,mesh-extras,nn-extras,model-extras,datapipes-extras,uq-extras,gnns,sym,transformer-engine-cu13}"
 UV_VERSION="${UV_VERSION:-0.11.7}"
 # Matches the `--find-links` URL committed to .github/ci-requirements.txt.
-# Bump the torch-X.Y.Z+cu128 segment in lockstep with the locked torch version.
-PYG_FIND_LINKS_URL="${PYG_FIND_LINKS_URL:-https://data.pyg.org/whl/torch-2.11.0+cu128.html}"
+# Bump the torch-X.Y.Z+cu130 segment in lockstep with the locked torch version.
+PYG_FIND_LINKS_URL="${PYG_FIND_LINKS_URL:-https://data.pyg.org/whl/torch-2.12.0+cu130.html}"
 
 cd "$(dirname "$0")/.."
 
@@ -97,17 +97,22 @@ rm -rf .venv
 UV_LINK_MODE=copy UV_FROZEN=1 uv sync --frozen --group dev "${extra_flags[@]}"
 
 # ----------------------------------------------------------------------------
-# Step 2: swap the CPU-built PyG wheels for the CUDA wheels from the
-# --find-links index.  Done BEFORE the compile so the closure records the
-# CUDA local version segments (e.g. torch_scatter==2.1.2+pt211cu128) that
-# CI will actually install.
+# Step 2: swap the CPU-built PyG wheels for CUDA builds.  scatter/sparse/
+# pyg_lib come from the --find-links index; torch_cluster is built from
+# its PyPI sdist (no pt212cu130 wheel exists -- see ci-requirements.txt),
+# hence --no-build-isolation-package + FORCE_CUDA + the fixed arch list,
+# mirroring setup-uv-env.  Done BEFORE the compile so the closure records
+# the CUDA local version segments (e.g. torch_scatter==2.1.2+pt212cu130)
+# that CI will actually install.
 # ----------------------------------------------------------------------------
 echo "::: install CI-only deps + PyG CUDA wheels ..."
-UV_LINK_MODE=copy uv pip install --python .venv/bin/python \
+UV_LINK_MODE=copy FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST=9.0 \
+  uv pip install --python .venv/bin/python \
   --reinstall-package torch_scatter \
   --reinstall-package torch_sparse \
   --reinstall-package torch_cluster \
   --reinstall-package pyg_lib \
+  --no-build-isolation-package torch_cluster \
   -r .github/ci-requirements.txt
 
 # ----------------------------------------------------------------------------
@@ -132,8 +137,12 @@ echo "    captured $(wc -l < "$venv_constraints") pinned packages from .venv"
 # `--constraint` so the layered install in CI is deterministic.
 # ----------------------------------------------------------------------------
 echo "::: uv pip compile ..."
+# --no-build-isolation: resolving the torch_cluster sdist requires building
+# its metadata, and its setup.py imports torch; --python already points at
+# the torch-bearing .venv built in step 1.
 uv pip compile \
   --python .venv/bin/python \
+  --no-build-isolation \
   --find-links "$PYG_FIND_LINKS_URL" \
   --constraint "$venv_constraints" \
   --output-file .github/ci-requirements.lock \
