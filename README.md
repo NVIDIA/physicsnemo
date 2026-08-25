@@ -77,15 +77,15 @@ For CUDA 12, a basic install, optional features, or source setup, see
     <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/healthcare/bloodflow_1d_mgn"><strong>Cardiovascular flow</strong></a>: reduced-order prediction with MeshGraphNet</td>
   </tr>
   <tr>
-    <th width="50%" align="center">Nuclear engineering</th>
+    <th width="50%" align="center">Data-center thermal design</th>
     <th width="50%" align="center">Additive manufacturing</th>
   </tr>
   <tr>
-    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/nuclear_engineering/radiation_transport"><img width="100%" alt="Target, prediction, and absolute error for radiation transport in a hohlraum" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/radiation_transport/transolver_hohlraum.png"></a></td>
+    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/datacenter"><img width="100%" alt="Animated temperature field inside a data-center hot aisle" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/datacenter_design_cfd.gif"></a></td>
     <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/additive_manufacturing/sintering_physics"><img width="100%" alt="Predicted sintering deformation and displacement magnitude for a helical metal component" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/vfgn_doc/screw.gif"></a></td>
   </tr>
   <tr>
-    <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/nuclear_engineering/radiation_transport"><strong>Radiation transport</strong></a>: physics-informed Transolver surrogate</td>
+    <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/datacenter"><strong>Data-center airflow</strong></a>: real-time temperature and airflow prediction with a 3D U-Net surrogate</td>
     <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/additive_manufacturing/sintering_physics"><strong>Metal sintering</strong></a>: graph-based deformation prediction</td>
   </tr>
 </table>
