@@ -42,26 +42,26 @@ For CUDA 12, a basic install, optional features, or source setup, see
 <table width="100%">
   <tr>
     <th width="50%" align="center">Aerodynamics</th>
-    <th width="50%" align="center">Semiconductor packaging</th>
+    <th width="50%" align="center">Weather Forecasting</th>
   </tr>
   <tr>
     <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/external_aerodynamics/active_learning_aero"><img width="100%" alt="Ground-truth and GeoTransolver-predicted pressure and wall-shear-stress fields on a held-out ShiftSUV" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/al_shiftsuv_field_predictions.png"></a></td>
-    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/underfill_dispensing"><img width="100%" alt="GeoTransolver prediction and CFD simulation of an advancing epoxy interface" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/underfill/G20.gif"></a></td>
+    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/stormcast"><img width="100%" alt="StormCast prediction beside a high-resolution weather analysis" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/stormcast_rollout.gif"></a></td>
   </tr>
   <tr>
     <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/external_aerodynamics/unified_external_aero_recipe"><strong>Unified external aerodynamics</strong></a>: train and compare current surface and volume models</td>
-    <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/underfill_dispensing"><strong>Underfill dispensing</strong></a>: transient epoxy-interface prediction with GeoTransolver</td>
+    <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/stormcast"><strong>StormCast</strong></a>: generative regional weather forecasting</td>
   </tr>
   <tr>
-    <th width="50%" align="center">Weather Forecasting</th>
+    <th width="50%" align="center">Semiconductor packaging</th>
     <th width="50%" align="center">Structural mechanics</th>
   </tr>
   <tr>
-    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/stormcast"><img width="100%" alt="StormCast prediction beside a high-resolution weather analysis" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/stormcast_rollout.gif"></a></td>
+    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/underfill_dispensing"><img width="100%" alt="GeoTransolver prediction and CFD simulation of an advancing epoxy interface" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/underfill/G20.gif"></a></td>
     <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/structural_mechanics/crash"><img width="100%" alt="Finite-element simulation and PhysicsNeMo prediction of full-vehicle crash deformation" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/crash/crash.gif"></a></td>
   </tr>
   <tr>
-    <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/stormcast"><strong>StormCast</strong></a>: generative regional weather forecasting</td>
+    <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/underfill_dispensing"><strong>Underfill dispensing</strong></a>: transient epoxy-interface prediction with GeoTransolver</td>
     <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/structural_mechanics/crash"><strong>Crash dynamics</strong></a>: transient surrogates on deforming meshes</td>
   </tr>
   <tr>
