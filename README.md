@@ -33,10 +33,18 @@ transformers, diffusion models, GPU-accelerated scientific data processing, and
 distributed training together in one composable stack.
 
 Use one model or numerical kernel in an existing project, or adapt an end-to-end
-recipe for computational fluid dynamics (CFD), weather, structural mechanics,
-geophysics, healthcare, manufacturing, and more.
+recipe.
 
 <!-- Keep repository links absolute because this README is also rendered on PyPI. -->
+
+## Installation
+
+```bash
+pip install "nvidia-physicsnemo[cu13]"
+```
+
+For CUDA 12, CPU-only environments, containers, optional features, and source
+installs, see the [installation guide](https://docs.nvidia.com/physicsnemo/latest/getting-started/installation.html).
 
 ## See PhysicsNeMo in action
 
@@ -108,72 +116,36 @@ open its source, data context, and instructions.
 - **More than a model zoo.** Data pipelines, differentiable geometry, numerical
   kernels, metrics, checkpointing, profiling, and deployment utilities support the
   rest of the workflow.
-- **Start from runnable science.** The example catalog includes training, inference,
-  configuration, data preparation, and validation across many physical domains.
-
-## Installation
-
-Install the library from PyPI:
-
-```bash
-pip install nvidia-physicsnemo
-```
-
-Choose an explicit CUDA backend when you also want the CUDA-matched PyTorch and
-RAPIDS stack:
-
-```bash
-pip install "nvidia-physicsnemo[cu13]"
-```
-
-Replace `cu13` with `cu12` for a CUDA 12 environment. Feature extras can be
-combined with a backend, for example `nvidia-physicsnemo[cu13,gnns]`. To run a
-recipe, clone this repository and follow that recipe's README for its data and
-optional dependencies.
-
-See the [installation guide](https://docs.nvidia.com/physicsnemo/latest/getting-started/installation.html)
-for system requirements, source and editable installs, all extras, and the
-[PhysicsNeMo container](https://catalog.ngc.nvidia.com/orgs/nvidia/physicsnemo/containers/physicsnemo/-/tags?_lr=1).
 
 ## What can you build?
 
-Start with the physical question. Each recipe is one reference combination of a
-model, datapipe, training strategy, and configuration that you can adapt or remix.
+The gallery above shows representative workflows. Explore more starting points
+by physical domain:
 
-- 🚗 **Engineering design and CFD:** predict surface and volume fields for
-  [external aerodynamics](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/external_aerodynamics),
-  accelerate [data-center airflow](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/datacenter),
-  or model [transient tank filling](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/transient_conjugate_heat_transfer_tank_fill).
+- 🚗 **Engineering design and CFD:** train and compare current surface and volume
+  models with the
+  [unified external-aerodynamics recipe](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/external_aerodynamics/unified_external_aero_recipe)
+  or accelerate [data-center airflow](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/datacenter).
 - 🌦️ **Weather, climate, and water:** build global forecasts from the
-  [weather recipes](https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather),
-  generate convection-scale ensembles with
-  [StormCast](https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/stormcast),
+  [weather recipes](https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather)
   or predict [floods](https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/flood_modeling).
 - 🏗️ **Structures and manufacturing:** emulate
-  [crash dynamics](https://github.com/NVIDIA/physicsnemo/tree/main/examples/structural_mechanics/crash),
-  [deforming structures](https://github.com/NVIDIA/physicsnemo/tree/main/examples/structural_mechanics/deforming_plate),
-  or [metal sintering](https://github.com/NVIDIA/physicsnemo/tree/main/examples/additive_manufacturing/sintering_physics).
-- 🌍 **Geophysics and subsurface systems:** solve inverse problems with
-  [Diffusion FWI](https://github.com/NVIDIA/physicsnemo/tree/main/examples/geophysics/diffusion_fwi)
-  or build [reservoir surrogates](https://github.com/NVIDIA/physicsnemo/tree/main/examples/reservoir_simulation).
-- 🫀 **Healthcare:** learn reduced-order
-  [cardiovascular flow](https://github.com/NVIDIA/physicsnemo/tree/main/examples/healthcare/bloodflow_1d_mgn)
-  or perform [brain anomaly detection](https://github.com/NVIDIA/physicsnemo/tree/main/examples/healthcare/brain_anomaly_detection).
+  [deforming structures](https://github.com/NVIDIA/physicsnemo/tree/main/examples/structural_mechanics/deforming_plate).
+- 🌍 **Geophysics and subsurface systems:** build
+  [reservoir surrogates](https://github.com/NVIDIA/physicsnemo/tree/main/examples/reservoir_simulation).
+- 🫀 **Healthcare:** perform
+  [brain anomaly detection](https://github.com/NVIDIA/physicsnemo/tree/main/examples/healthcare/brain_anomaly_detection).
 - ⚛️ **Molecular, materials, and nuclear systems:** predict
-  [molecular forces](https://github.com/NVIDIA/physicsnemo/tree/main/examples/molecular_dynamics/lennard_jones),
-  emulate [kinetic Monte Carlo](https://github.com/NVIDIA/physicsnemo/tree/main/examples/kinetic_monte_carlo),
-  or learn [radiation transport](https://github.com/NVIDIA/physicsnemo/tree/main/examples/nuclear_engineering/radiation_transport).
+  [molecular forces](https://github.com/NVIDIA/physicsnemo/tree/main/examples/molecular_dynamics/lennard_jones)
+  or emulate [kinetic Monte Carlo](https://github.com/NVIDIA/physicsnemo/tree/main/examples/kinetic_monte_carlo).
 - ✨ **Generative and inverse physics:** compose the
   [diffusion toolkit](https://docs.nvidia.com/physicsnemo/latest/physicsnemo/api_diffusion.html)
-  with recipes for [topology generation](https://github.com/NVIDIA/physicsnemo/tree/main/examples/generative/topodiff)
-  and full-waveform inversion.
+  with [topology-generation recipes](https://github.com/NVIDIA/physicsnemo/tree/main/examples/generative/topodiff).
 - 🔁 **Simulation-data loops:** select new simulations with
-  [active learning](https://github.com/NVIDIA/physicsnemo/tree/main/examples/active_learning)
-  and prepare heterogeneous scientific data with
-  [PhysicsNeMo Curator](https://github.com/NVIDIA/physicsnemo-curator).
+  [active learning](https://github.com/NVIDIA/physicsnemo/tree/main/examples/active_learning).
 
 Browse the [complete example catalog](https://github.com/NVIDIA/physicsnemo/blob/main/examples/README.md)
-or the [interactive notebooks on Hugging Face](https://huggingface.co/collections/nvidia/physicsnemo).
+for every available recipe.
 
 ## Choose a model family
 
@@ -310,10 +282,14 @@ requests all help the project.
 - Ask questions and share work in [GitHub Discussions](https://github.com/NVIDIA/physicsnemo/discussions).
 - Report a bug or propose a feature through [GitHub Issues](https://github.com/NVIDIA/physicsnemo/issues).
 - Look for issues labeled [help wanted](https://github.com/NVIDIA/physicsnemo/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22).
-- Read the [contribution guide](https://github.com/NVIDIA/physicsnemo/blob/main/CONTRIBUTING.md),
-  [code of conduct](https://github.com/NVIDIA/physicsnemo/blob/main/CODE_OF_CONDUCT.MD),
-  and [security policy](https://github.com/NVIDIA/physicsnemo/blob/main/SECURITY.md)
-  before opening a pull request or security report.
+- **Before opening a pull request, read the
+  [contribution guide](https://github.com/NVIDIA/physicsnemo/blob/main/CONTRIBUTING.md)
+  and coordinate the proposed work with maintainers in an issue or discussion.**
+  Every pull request should correspond to an open issue; for substantial changes,
+  wait for maintainer feedback before starting implementation.
+- Follow the [code of conduct](https://github.com/NVIDIA/physicsnemo/blob/main/CODE_OF_CONDUCT.MD),
+  and report vulnerabilities privately through the
+  [security policy](https://github.com/NVIDIA/physicsnemo/blob/main/SECURITY.md).
 
 For release history and upgrade notes, see the
 [changelog](https://github.com/NVIDIA/physicsnemo/blob/main/CHANGELOG.md),
