@@ -181,9 +181,9 @@ flowchart TB
   base["Reusable foundations<br/><a href='https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/mesh'>Mesh</a> · <a href='https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/nn'>NN</a> · <a href='https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/utils'>Utils</a> · <a href='https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/distributed'>Distributed</a> · <a href='https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/core'>Core</a>"]
   apps -->|"build on"| blocks
   blocks -->|"reuse"| base
-  classDef workflow fill:#edf7dd,stroke:#5a8f00,color:#111111
-  classDef building fill:#e8f1f8,stroke:#2c6e9f,color:#111111
-  classDef foundation fill:#f2f2f2,stroke:#666666,color:#111111
+  classDef workflow fill:#F5FAEF,stroke:#76B900,stroke-width:2px,color:#111111
+  classDef building fill:#EEF7E1,stroke:#76B900,stroke-width:2px,color:#111111
+  classDef foundation fill:#E8F5D0,stroke:#76B900,stroke-width:2px,color:#111111
   class apps workflow
   class blocks building
   class base foundation
