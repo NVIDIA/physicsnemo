@@ -22,29 +22,25 @@
 </p>
 <!-- markdownlint-enable MD013 MD033 MD041 -->
 
-NVIDIA PhysicsNeMo is an open-source framework for physics machine learning
-(physics ML), scientific machine learning (SciML), and AI for science and
-engineering. It helps teams turn simulation data, observations, and physical
-knowledge into surrogate, forecasting, generative, and inverse models for physical
-systems.
+NVIDIA PhysicsNeMo is an open-source framework for physics machine learning (physics
+ML), scientific machine learning (SciML), and AI for science and engineering. It helps
+teams turn simulation data, observations, and physical knowledge into surrogate,
+forecasting, generative, and inverse models for physical systems.
 
 Built on PyTorch, PhysicsNeMo brings neural operators, graph neural networks,
 transformers, diffusion models, GPU-accelerated scientific data processing, and
 distributed training together in one composable stack.
 
-Use one model or numerical kernel in an existing project, or adapt an end-to-end
-recipe.
+Use one model or numerical kernel in an existing project, or adapt an end-to-end recipe.
 
 <!-- Keep repository links absolute because this README is also rendered on PyPI. -->
-
-## Installation
 
 ```bash
 pip install "nvidia-physicsnemo[cu13]"
 ```
 
-For CUDA 12, CPU-only environments, containers, optional features, and source
-installs, see the [installation guide](https://docs.nvidia.com/physicsnemo/latest/getting-started/installation.html).
+For CUDA 12, a basic install, optional features, or source setup, see
+[installation options](#installation-options).
 
 ## See PhysicsNeMo in action
 
@@ -52,15 +48,15 @@ installs, see the [installation guide](https://docs.nvidia.com/physicsnemo/lates
 <table width="100%">
   <tr>
     <th width="50%" align="center">Automotive aerodynamics</th>
-    <th width="50%" align="center">Industrial fluid dynamics</th>
+    <th width="50%" align="center">Semiconductor packaging</th>
   </tr>
   <tr>
-    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo-cfd/blob/main/workflows/nim_inference/notebooks/benchmarking_in_absence_of_gt.ipynb"><img width="100%" alt="DrivAerML cars colored by pressure and wall-shear-stress variation across model checkpoints" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo-cfd/main/workflows/nim_inference/notebooks/img/variations_due_to_checkpoint.png"></a></td>
-    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/transient_conjugate_heat_transfer_tank_fill"><img width="100%" alt="Simulation, prediction, and difference for a transient tank-filling velocity field" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/tank_filling_velocity.gif"></a></td>
+    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/external_aerodynamics/active_learning_aero"><img width="100%" alt="Ground-truth and GeoTransolver-predicted pressure and wall-shear-stress fields on a held-out ShiftSUV" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/al_shiftsuv_field_predictions.png"></a></td>
+    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/underfill_dispensing"><img width="100%" alt="GeoTransolver prediction and CFD simulation of an advancing epoxy interface" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/underfill/G20.gif"></a></td>
   </tr>
   <tr>
-    <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/external_aerodynamics/domino"><strong>DoMINO on DrivAerML</strong></a>: pressure and wall-shear-stress checkpoint sensitivity</td>
-    <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/transient_conjugate_heat_transfer_tank_fill"><strong>Tank filling</strong></a>: transient compressible flow and conjugate heat transfer</td>
+    <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/external_aerodynamics/unified_external_aero_recipe"><strong>Unified external aerodynamics</strong></a>: train and compare current surface and volume models</td>
+    <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/underfill_dispensing"><strong>Underfill dispensing</strong></a>: transient epoxy-interface prediction with GeoTransolver</td>
   </tr>
   <tr>
     <th width="50%" align="center">Regional weather</th>
@@ -68,7 +64,7 @@ installs, see the [installation guide](https://docs.nvidia.com/physicsnemo/lates
   </tr>
   <tr>
     <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/stormcast"><img width="100%" alt="StormCast prediction beside a high-resolution weather analysis" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/stormcast_rollout.gif"></a></td>
-    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/structural_mechanics/crash"><img width="100%" alt="Predicted and simulated crush-can deformation with error" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/crash/crushcan.gif"></a></td>
+    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/structural_mechanics/crash"><img width="100%" alt="Finite-element simulation and PhysicsNeMo prediction of full-vehicle crash deformation" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/crash/crash.gif"></a></td>
   </tr>
   <tr>
     <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/stormcast"><strong>StormCast</strong></a>: generative regional weather forecasting</td>
@@ -79,8 +75,8 @@ installs, see the [installation guide](https://docs.nvidia.com/physicsnemo/lates
     <th width="50%" align="center">Healthcare</th>
   </tr>
   <tr>
-    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/geophysics/diffusion_fwi"><img width="100%" alt="Diffusion FWI ground truth, samples, and ensemble mean" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/diffusion_fwi_predictions.png"></a></td>
-    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/healthcare/bloodflow_1d_mgn"><img width="100%" alt="Graph neural network and reference blood-flow fields in patient-specific vessels" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/bloodflow_1d_mgn_results.gif"></a></td>
+    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/geophysics/diffusion_fwi"><img width="100%" alt="Physics-informed Diffusion FWI ground truth, ensemble samples, and ensemble mean" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/diffusion_fwi_pi_predictions.png"></a></td>
+    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/healthcare/bloodflow_1d_mgn"><img width="100%" alt="MeshGraphNet and reference pressure and flow-rate fields along patient-specific vessel centerlines" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/bloodflow_1d_mgn_results.gif"></a></td>
   </tr>
   <tr>
     <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/geophysics/diffusion_fwi"><strong>Diffusion FWI</strong></a>: guided generative full-waveform inversion</td>
@@ -92,7 +88,7 @@ installs, see the [installation guide](https://docs.nvidia.com/physicsnemo/lates
   </tr>
   <tr>
     <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/nuclear_engineering/radiation_transport"><img width="100%" alt="Target, prediction, and absolute error for radiation transport in a hohlraum" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/radiation_transport/transolver_hohlraum.png"></a></td>
-    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/additive_manufacturing/sintering_physics"><img width="100%" alt="Predicted deformation of a metal busbar during sintering" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/vfgn_doc/busbar.gif"></a></td>
+    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/additive_manufacturing/sintering_physics"><img width="100%" alt="Predicted sintering deformation and displacement magnitude for a helical metal component" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/vfgn_doc/screw.gif"></a></td>
   </tr>
   <tr>
     <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/nuclear_engineering/radiation_transport"><strong>Radiation transport</strong></a>: physics-informed Transolver surrogate</td>
@@ -101,8 +97,8 @@ installs, see the [installation guide](https://docs.nvidia.com/physicsnemo/lates
 </table>
 <!-- markdownlint-enable MD013 MD033 -->
 
-Every visual above comes from a PhysicsNeMo recipe or workflow. Select an image to
-open its source, data context, and instructions.
+Every visual above comes from a PhysicsNeMo recipe or workflow. Select an image for its
+source and data context, or its caption for the recommended starting point.
 
 ## Why PhysicsNeMo
 
@@ -111,16 +107,16 @@ open its source, data context, and instructions.
 - **Built for scientific representations.** Work with regular grids, meshes, point
   clouds, graphs, and nested physical fields while preserving their structure.
 - **Scale the sample itself.** Use `ShardTensor` domain parallelism to split a single
-  high-resolution sample across GPUs, alongside PyTorch DistributedDataParallel (DDP)
-  or Fully Sharded Data Parallel 2 (FSDP2).
+  high-resolution sample across GPUs, alongside PyTorch DistributedDataParallel (DDP) or
+  Fully Sharded Data Parallel 2 (FSDP2).
 - **More than a model zoo.** Data pipelines, differentiable geometry, numerical
   kernels, metrics, checkpointing, profiling, and deployment utilities support the
   rest of the workflow.
 
 ## What can you build?
 
-The gallery above shows representative workflows. Explore more starting points
-by physical domain:
+The gallery above shows representative workflows. Explore more starting points by
+physical domain:
 
 - 🚗 **Engineering design and CFD:** train and compare current surface and volume
   models with the
@@ -171,8 +167,8 @@ application. These lists are starting points, not rankings.
   and [GLOBE](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/experimental/models/globe)
   *(experimental; API may change)*.
 
-Transolver, FLARE, and GeoTransolver also support structured inputs; they are
-grouped here by their common point-set and unstructured-mesh workflows.
+Transolver, FLARE, and GeoTransolver also support structured inputs; they are grouped
+here by their common point-set and unstructured-mesh workflows.
 
 ### By specialized task
 
@@ -243,11 +239,42 @@ and [AeroJEPA](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/exper
 alongside uncertainty quantification, guardrails, parameter-efficient fine-tuning
 with LoRA, and other research utilities.
 
-> **API stability:** APIs under `physicsnemo.experimental` are incubating and may
-> change between releases. Stable modules follow the project's semantic-versioning
-> policy; see the
-> [changelog](https://github.com/NVIDIA/physicsnemo/blob/main/CHANGELOG.md) for
+> **API stability:** APIs under `physicsnemo.experimental` are incubating and may change
+> between releases. Stable modules follow the project's semantic-versioning policy; see
+> the [changelog](https://github.com/NVIDIA/physicsnemo/blob/main/CHANGELOG.md) for
 > additions, changes, deprecations, and removals.
+
+## Installation options
+
+See [`pyproject.toml`](https://github.com/NVIDIA/physicsnemo/blob/main/pyproject.toml)
+for currently supported Python versions, optional dependency groups, and exact
+dependency constraints. The command at the top of this README selects the CUDA 13
+backend; use the CUDA 12 backend instead with:
+
+```bash
+pip install "nvidia-physicsnemo[cu12]"
+```
+
+For a basic installation that uses PyPI's default PyTorch distribution and does not
+install the CUDA-specific RAPIDS packages:
+
+```bash
+pip install nvidia-physicsnemo
+```
+
+Optional features compose with either backend, for example:
+
+```bash
+pip install "nvidia-physicsnemo[cu13,gnns]"
+```
+
+To work from a source checkout with [uv](https://docs.astral.sh/uv/):
+
+```bash
+git clone https://github.com/NVIDIA/physicsnemo.git
+cd physicsnemo
+uv sync --extra cu13
+```
 
 ## Ecosystem and learning resources
 
@@ -258,8 +285,8 @@ PhysicsNeMo is used across a broader open-source physics AI ecosystem:
   engineering datasets.
 - [PhysicsNeMo CFD](https://github.com/NVIDIA/physicsnemo-cfd) provides inference,
   evaluation, benchmarking, and design workflows for engineering and CFD models.
-- [Earth2Studio](https://github.com/NVIDIA/earth2studio) builds and deploys AI
-  weather and climate workflows.
+- [Earth2Studio](https://github.com/NVIDIA/earth2studio) builds and deploys AI weather
+  and climate workflows.
 - [NVIDIA ALCHEMI Toolkit](https://github.com/NVIDIA/nvalchemi-toolkit) builds
   GPU-first training, inference, and dynamics workflows for AI atomic simulation,
   with optimized primitives from
