@@ -108,7 +108,7 @@ def create_domain_boundaries(
             target_n_spatial_dims=3,
         ).translate([0.0, 0.0, ground_z])
         # Flip cell winding so normals point upward (+z, into the fluid domain)
-        return Mesh(points=mesh.points, cells=mesh.cells[:, [0, 2, 1]])
+        return mesh.with_cells(mesh.cells[:, [0, 2, 1]])
 
     return {
         "slip_floor": _ground_patch(x_upstream, x_bl),
@@ -281,7 +281,7 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
         )
 
         if geometry_only:
-            boundary = Mesh(points=boundary.points, cells=boundary.cells)
+            boundary = boundary.with_data(point_data={}, cell_data={}, global_data={})
 
         if voronoi:
             ### The Voronoi path replaces both areas AND normals with
@@ -493,12 +493,12 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
 
         ### Build the prediction Mesh (geometry + prediction targets)
         prediction_mesh = from_pyvista(pv_surface_pt)
-        prediction_mesh = Mesh(
-            points=prediction_mesh.points,
-            cells=prediction_mesh.cells,
+        prediction_mesh = prediction_mesh.with_data(
             point_data=prediction_mesh.point_data.select("C_p", "C_f").apply(
                 torch.Tensor.float
             ),
+            cell_data={},
+            global_data={},
         )
 
         ### Parse geometry reference CSV
@@ -642,15 +642,13 @@ def postprocess(
     # pred_mesh is a point cloud (no cells), so we construct a surface
     # mesh with true_mesh's cell connectivity for integration.
     a_ref = float(sample.dimensional_constants["A_ref"])
-    pred_surface = Mesh(
-        points=true_mesh.points,
-        cells=true_mesh.cells,
+    pred_surface = true_mesh.with_data(
         point_data=pred_mesh.point_data,
+        cell_data={},
+        global_data={},
     )
 
-    return Mesh(
-        points=true_mesh.points,
-        cells=true_mesh.cells,
+    return true_mesh.with_data(
         point_data=TensorDict(
             {
                 "true": true_selected,
@@ -659,6 +657,7 @@ def postprocess(
             },
             batch_size=[true_mesh.n_points],
         ),
+        cell_data={},
         global_data=TensorDict(
             {
                 "pred": compute_surface_force_coefficients(

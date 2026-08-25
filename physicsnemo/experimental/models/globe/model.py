@@ -727,11 +727,10 @@ class GLOBE(Module):
                 device=mesh.points.device,
             )
             new_cell_data.update(result_td)
-            new_meshes[bc_type] = Mesh(
-                points=mesh.points,
-                cells=mesh.cells,
+            new_meshes[bc_type] = mesh.with_data(
+                point_data={},
                 cell_data=new_cell_data,
-                _cache=mesh._cache,
+                global_data={},
             )
         return new_meshes
 
@@ -880,9 +879,8 @@ class GLOBE(Module):
         ### their declared feature keys.)
         with record_function("globe::enrich_meshes"):
             boundary_meshes = {
-                bc_type: Mesh(
-                    points=mesh.points,
-                    cells=mesh.cells,
+                bc_type: mesh.with_data(
+                    point_data={},
                     cell_data=TensorDict(
                         {
                             "physical": mesh.cell_data,
@@ -898,7 +896,7 @@ class GLOBE(Module):
                         batch_size=torch.Size([mesh.n_cells]),
                         device=device,
                     ),
-                    _cache=mesh._cache,
+                    global_data={},
                 )
                 for bc_type, mesh in boundary_meshes.items()
             }

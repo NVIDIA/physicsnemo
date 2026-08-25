@@ -174,13 +174,7 @@ class ComputeSDFFromBoundary(MeshTransform):
             normals = normals / norm
             new_pd[self.normals_field] = normals
 
-        new_interior = Mesh(
-            points=domain.interior.points,
-            cells=domain.interior.cells,
-            point_data=new_pd,
-            cell_data=domain.interior.cell_data,
-            global_data=domain.interior.global_data,
-        )
+        new_interior = domain.interior.with_data(point_data=new_pd)
 
         return DomainMesh(
             interior=new_interior,
