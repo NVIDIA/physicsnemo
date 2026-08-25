@@ -18,9 +18,12 @@ name: Bootstrap cuDNN CI container
 description: Install OS dependencies and uv in CUDA cuDNN container jobs
 inputs:
   python-version:
-    description: Python major.minor expected in the container
+    description: |
+      Python major.minor for the CI environment.  Informational here: the
+      container's apt python3 may be older (Ubuntu 24.04 ships 3.12); the
+      actual venv interpreter is provisioned by uv in setup-uv-env.
     required: false
-    default: "3.12"
+    default: "3.13"
   uv-version:
     description: |
       Exact uv version to install. Pinning is required because the uv
@@ -28,7 +31,7 @@ inputs:
       otherwise silently invalidate the wheel store). Bump in lockstep
       with the workflow's UV_VERSION env value.
     required: false
-    default: "0.11.7"
+    default: "0.12.5"
 runs:
   using: composite
   steps:

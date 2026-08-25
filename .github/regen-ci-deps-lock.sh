@@ -27,7 +27,7 @@
 #
 # How to run:
 #   The lock must be generated in a resolution context that matches the CI
-#   runners (Linux x86_64, glibc, CUDA 13.3, Python 3.12).  Running this on
+#   runners (Linux x86_64, glibc, CUDA 13.3, Python 3.13).  Running this on
 #   macOS or with a different Python will produce a lock incompatible with the
 #   runners and silently break the testmon-stability guarantee.
 #
@@ -44,7 +44,10 @@ set -euo pipefail
 # These MUST match the workflow `env:` values in
 # .github/workflows/github-{pr,nightly-uv}.yml.  Bump in lockstep.
 EXTRAS_TAG="${EXTRAS_TAG:-cu13,natten-cu13,utils-extras,mesh-extras,nn-extras,model-extras,datapipes-extras,uq-extras,gnns,sym,transformer-engine-cu13}"
-UV_VERSION="${UV_VERSION:-0.11.7}"
+UV_VERSION="${UV_VERSION:-0.12.5}"
+# Venv interpreter, provisioned by uv (`uv sync --python`); matches the
+# workflow PYTHON_VERSION env values.
+PYTHON_VERSION="${PYTHON_VERSION:-3.13}"
 # Matches the `--find-links` URL committed to .github/ci-requirements.txt.
 # Bump the torch-X.Y.Z+cu130 segment in lockstep with the locked torch version.
 PYG_FIND_LINKS_URL="${PYG_FIND_LINKS_URL:-https://data.pyg.org/whl/torch-2.12.0+cu130.html}"
@@ -94,7 +97,7 @@ for e in "${extras[@]}"; do
   fi
 done
 rm -rf .venv
-UV_LINK_MODE=copy UV_FROZEN=1 uv sync --frozen --group dev "${extra_flags[@]}"
+UV_LINK_MODE=copy UV_FROZEN=1 uv sync --frozen --python "$PYTHON_VERSION" --group dev "${extra_flags[@]}"
 
 # ----------------------------------------------------------------------------
 # Step 2: swap the CPU-built PyG wheels for CUDA builds.  scatter/sparse/

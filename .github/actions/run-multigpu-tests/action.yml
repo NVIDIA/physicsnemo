@@ -62,6 +62,7 @@ runs:
     - name: Setup uv environment from cache
       uses: ./.github/actions/setup-uv-env
       with:
+        python-version: ${{ inputs.python-version }}
         uv-cache-key-prefix: ${{ inputs.uv-cache-key-prefix }}
         uv-cache-key-suffix: latest
         extras: ${{ inputs.extras }}

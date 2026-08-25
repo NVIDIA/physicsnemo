@@ -51,8 +51,8 @@ env:
   # ---- Container baseline identity ---------------------------------------
   # MUST match the nightly workflow so cache keys align.  See
   # .github/CACHE_CONTRACT.md for the full design.
-  PYTHON_VERSION: "3.12"
-  UV_VERSION: "0.11.7"
+  PYTHON_VERSION: "3.13"
+  UV_VERSION: "0.12.5"
   CONTAINER_ID: "cuda13.3.1-cudnn-devel-ubuntu24.04"
   # All feature extras + cu13 backend + matching natten wheel index.  This
   # powers the @requires_module / pytest.importorskip tests that would
@@ -66,10 +66,10 @@ env:
   # The `-fullextras` suffix is bumped relative to the previous prefix so
   # the first run under the expanded EXTRAS_TAG rebuilds the wheel cache
   # from scratch instead of layering on top of a stale narrower cache.
-  UV_CACHE_KEY_PREFIX:   "uv-cache-nightly-cuda13.3.1-cudnn-devel-ubuntu24.04-py3.12-uv0.11.7-fullextras"
+  UV_CACHE_KEY_PREFIX:   "uv-cache-nightly-cuda13.3.1-cudnn-devel-ubuntu24.04-py3.13-uv0.12.5-fullextras"
   TESTMON_CACHE_KEY_PREFIX:  "testmon-nightly"
   COVERAGE_CACHE_KEY_PREFIX: "coverage-nightly"
-  JIT_CACHE_KEY_PREFIX: "jit-cache-cuda13.3.1-cudnn-devel-ubuntu24.04-py3.12"
+  JIT_CACHE_KEY_PREFIX: "jit-cache-cuda13.3.1-cudnn-devel-ubuntu24.04-py3.13"
   JIT_CACHE_DIR: "/root/.cache/jit"
 
   # ---- uv read-only defaults --------------------------------------------
@@ -109,6 +109,7 @@ jobs:
     - name: Setup uv environment from cache
       uses: ./.github/actions/setup-uv-env
       with:
+        python-version: ${{ env.PYTHON_VERSION }}
         uv-cache-key-prefix: ${{ env.UV_CACHE_KEY_PREFIX }}
         uv-cache-key-suffix: "latest"
         extras: ${{ env.EXTRAS_TAG }}
@@ -174,6 +175,7 @@ jobs:
     - name: Setup uv environment from cache
       uses: ./.github/actions/setup-uv-env
       with:
+        python-version: ${{ env.PYTHON_VERSION }}
         uv-cache-key-prefix: ${{ env.UV_CACHE_KEY_PREFIX }}
         uv-cache-key-suffix: "latest"
         extras: ${{ env.EXTRAS_TAG }}

@@ -52,6 +52,14 @@ inputs:
       as repeated `--extra` flags).  Defaults to "cu13".
     required: false
     default: "cu13"
+  python-version:
+    description: |
+      Python major.minor for the venv, passed to `uv sync --python`.  The
+      Ubuntu container's apt python3 lags behind (24.04 ships 3.12), so uv
+      provisions a managed CPython of this version instead.  Part of the
+      uv cache key prefix -- bump in lockstep with the workflow env.
+    required: false
+    default: "3.13"
 outputs:
   uv_cache_hit:
     description: Whether the uv download cache had an exact key hit
@@ -134,7 +142,7 @@ runs:
             extra_flags+=(--extra "$e_trimmed")
           fi
         done
-        uv sync --frozen --group dev "${extra_flags[@]}"
+        uv sync --frozen --python "${{ inputs.python-version }}" --group dev "${extra_flags[@]}"
         echo "::endgroup::"
 
     # --- Verification phase ----------------------------------------------
@@ -147,6 +155,14 @@ runs:
         set -euo pipefail
         echo "::group::verify environment"
         .venv/bin/python --version
+        # Hard-fail on a python version mismatch: the uv cache key prefix
+        # encodes the python version, so a silently different interpreter
+        # would poison the shared wheel cache.
+        actual_py="$(.venv/bin/python -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')"
+        if [ "$actual_py" != "${{ inputs.python-version }}" ]; then
+          echo "::error::venv python version mismatch: expected ${{ inputs.python-version }}, got ${actual_py}"
+          exit 1
+        fi
         .venv/bin/python -c "import torch; print(f'torch={torch.__version__} cuda={torch.version.cuda}')"
         echo "::endgroup::"
 
