@@ -17,6 +17,7 @@
   <a href="https://docs.nvidia.com/physicsnemo/latest/">Documentation</a> ·
   <a href="https://github.com/NVIDIA/physicsnemo/blob/main/examples/README.md">Examples</a> ·
   <a href="https://docs.nvidia.com/physicsnemo/latest/physicsnemo/api_models.html">Models</a> ·
+  <a href="https://nvidia.github.io/physicsnemo/blog/">Blog</a> ·
   <a href="https://github.com/NVIDIA/physicsnemo/discussions">Discussions</a> ·
   <a href="https://github.com/NVIDIA/physicsnemo/blob/main/CONTRIBUTING.md">Contributing</a>
 </p>
@@ -115,7 +116,9 @@ source and data context, or its caption for the recommended starting point.
 
 ## What can you build?
 
-The gallery above shows representative workflows. Explore more starting points by
+PhysicsNeMo is a framework for building new physics ML systems, not a fixed catalog
+of pretrained models. Adapt an end-to-end recipe or compose the framework around
+your data, geometry, physics, and deployment constraints. Explore starting points by
 physical domain:
 
 - 🚗 **Engineering design and CFD:** train and compare current surface and volume
@@ -145,41 +148,39 @@ for every available recipe.
 
 ## Choose a model family
 
-PhysicsNeMo models are ordinary `torch.nn.Module` objects. Start with a model's
-primary data representation, then narrow by task. Categories overlap intentionally—a
-model such as GraphCast has both a graph representation and a weather-specific
-application. These lists are starting points, not rankings.
+PhysicsNeMo models are ordinary `torch.nn.Module` objects. Start with the
+representation your data already has, then narrow by use case. The tables below map
+representative families to source and documented starting points; families overlap, and
+this is not a ranking.
 
-### By data representation
+### Surrogates and dynamics
 
-- **Regular grids and fields:** [AFNO](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/afno),
-  [DPOT](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/dpot),
-  [FNO](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/fno), and
-  [U-Net](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/unet).
-- **Graphs and meshes:** [MeshGraphNet](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/meshgraphnet),
-  [GraphCast](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/graphcast),
-  and [VFGN](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/vfgn).
-- **Point clouds and unstructured discretizations:** [Transolver](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/transolver),
-  [FLARE](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/flare),
-  [DoMINO](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/domino),
-  [FIGConvNet](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/figconvnet),
-  [GeoTransolver](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/geotransolver),
-  and [GLOBE](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/experimental/models/globe)
-  *(experimental; API may change)*.
+| Model family | Data representation | Known uses and starting points |
+| --- | --- | --- |
+| [FNO](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/fno) / [DPOT](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/dpot) | Regular Cartesian grids; DPOT adds a time/history axis | Neural PDE operators and autoregressive dynamics: [Darcy flow with FNO](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/darcy_fno), [DPOT paper](https://arxiv.org/abs/2403.03542) |
+| [MeshGraphNet](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/meshgraphnet) / [VFGN](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/vfgn) | Node-edge graphs over unstructured meshes | Mesh dynamics and reduced-order simulation: [vehicle crash](https://github.com/NVIDIA/physicsnemo/tree/main/examples/structural_mechanics/crash), [cardiovascular flow](https://github.com/NVIDIA/physicsnemo/tree/main/examples/healthcare/bloodflow_1d_mgn), [metal sintering](https://github.com/NVIDIA/physicsnemo/tree/main/examples/additive_manufacturing/sintering_physics) |
+| [Transolver](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/transolver) / [FLARE](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/flare) | Point sets and structured or unstructured discretizations | PDE surrogates on large discretizations: [Darcy flow](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/darcy_transolver), [external aerodynamics](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/external_aerodynamics/unified_external_aero_recipe) |
+| [GeoTransolver](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/geotransolver) | Point clouds or structured/unstructured grids, with geometry and global context | Geometry-aware CAE: [external aerodynamics](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/external_aerodynamics/unified_external_aero_recipe), [underfill dispensing](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/underfill_dispensing) |
+| [DoMINO](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/domino) | Geometry points, sampled surface/volume fields, and structured SDF grids | Surface and volume field prediction for automotive aerodynamics: [paper](https://arxiv.org/abs/2501.13350) |
+| [FIGConvNet](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/figconvnet) | Large 3D point clouds represented with factorized 2D grids | 3D CAE field and scalar prediction: [external aerodynamics](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/external_aerodynamics/figconvnet), [vehicle crash](https://github.com/NVIDIA/physicsnemo/tree/main/examples/structural_mechanics/crash) |
+| [GLOBE](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/experimental/models/globe) *(experimental; API may change)* | Boundary meshes and arbitrary query points | Boundary-driven PDEs and large-geometry CAE: [external aerodynamics](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/external_aerodynamics/unified_external_aero_recipe), [paper](https://arxiv.org/abs/2511.15856) |
+| [AeroJEPA](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/experimental/models/aerojepa) *(experimental; API may change)* | 3D surface point clouds, operating conditions, and query points | Aerodynamic representation learning and field prediction: [tutorial](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/external_aerodynamics/aerojepa), [paper](https://arxiv.org/abs/2605.05586) |
 
-Transolver, FLARE, and GeoTransolver also support structured inputs; they are grouped
-here by their common point-set and unstructured-mesh workflows.
+### Weather and climate
 
-### By specialized task
+| Model family | Data representation | Known uses and starting points |
+| --- | --- | --- |
+| [AFNO](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/afno) | Regular 2D fields | Global forecasting: [unified weather recipe](https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/unified_recipe) |
+| [GraphCast](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/graphcast) | Latitude-longitude fields and a multiscale icosahedral mesh graph | Global autoregressive forecasting: [recipe](https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/graphcast), [paper](https://arxiv.org/abs/2212.12794) |
+| [Pangu-Weather](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/pangu) / [FengWu](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/fengwu) | Multilevel latitude-longitude grids | Global medium-range forecasting: [Pangu-Weather recipe](https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/pangu_weather), [FengWu paper](https://arxiv.org/abs/2304.02948) |
+| [DLWP](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/dlwp) / [DLWP-HEALPix](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/dlwp_healpix) | Cubed-sphere grids or HEALPix meshes | Global and coupled forecasting: [DLWP](https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/dlwp), [DLWP-HEALPix](https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/dlwp_healpix) |
 
-- **Weather and climate:** [GraphCast](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/graphcast),
-  [Pangu-Weather](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/pangu),
-  [FengWu](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/fengwu),
-  [DLWP](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/dlwp), and
-  [DLWP-HEALPix](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/dlwp_healpix).
-- **Generative modeling:** [DiT](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/dit),
-  [diffusion U-Nets](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/diffusion_unets),
-  and [TopoDiff](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/topodiff).
+### Generative and inverse models
+
+| Model family | Data representation | Known uses and starting points |
+| --- | --- | --- |
+| [Diffusion U-Nets](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/diffusion_unets) / [DiT](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/dit) | 2D fields or patch tokens | Stochastic regional forecasting, downscaling, and inverse problems: [StormCast and StormScope](https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/stormcast), [diffusion FWI](https://github.com/NVIDIA/physicsnemo/tree/main/examples/geophysics/diffusion_fwi) |
+| [TopoDiff](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/topodiff) | 2D topology fields conditioned on design constraints | Generative topology optimization: [recipe](https://github.com/NVIDIA/physicsnemo/tree/main/examples/generative/topodiff), [paper](https://arxiv.org/abs/2208.09591) |
 
 See the [model catalog](https://docs.nvidia.com/physicsnemo/latest/physicsnemo/api_models.html)
 for the full API and configuration details.
@@ -244,6 +245,17 @@ with LoRA, and other research utilities.
 > the [changelog](https://github.com/NVIDIA/physicsnemo/blob/main/CHANGELOG.md) for
 > additions, changes, deprecations, and removals.
 
+## Use PhysicsNeMo with coding agents
+
+PhysicsNeMo ships NVIDIA-authored skills for compatible coding agents such as Codex
+and Claude Code. Give your agent the relevant `SKILL.md`; each skill defines its
+scope, repository-aware workflow, guardrails, and evaluation evidence.
+
+| Goal | Agent skill |
+| --- | --- |
+| Find the right model, datapipe, example, or documentation for a SciML task | [PhysicsNeMo Discover](https://github.com/NVIDIA/physicsnemo/blob/main/skills/physicsnemo-discover/SKILL.md) searches the live repository to make task-specific recommendations ([evaluation](https://github.com/NVIDIA/physicsnemo/blob/main/skills/physicsnemo-discover/BENCHMARK.md)). |
+| Add domain parallelism to training or inference | [PhysicsNeMo ShardTensor](https://github.com/NVIDIA/physicsnemo/blob/main/skills/physicsnemo-shard-tensor/SKILL.md) guides DDP/FSDP2 integration, shard-aware operations, and multi-GPU correctness tests ([evaluation](https://github.com/NVIDIA/physicsnemo/blob/main/skills/physicsnemo-shard-tensor/BENCHMARK.md)). |
+
 ## Installation options
 
 See [`pyproject.toml`](https://github.com/NVIDIA/physicsnemo/blob/main/pyproject.toml)
@@ -294,8 +306,7 @@ PhysicsNeMo is used across a broader open-source physics AI ecosystem:
 
 Learn through the [PhysicsNeMo notebooks on Hugging Face](https://huggingface.co/collections/nvidia/physicsnemo),
 the [AI for Science bootcamp](https://github.com/openhackathons-org/End-to-End-AI-for-Science),
-the [self-paced NVIDIA Deep Learning Institute course](https://learn.nvidia.com/courses/course-detail?course_id=course-v1:DLI+S-OV-04+V1),
-and the [PhysicsNeMo developer blog](https://nvidia.github.io/physicsnemo/blog/).
+and the [self-paced NVIDIA Deep Learning Institute course](https://learn.nvidia.com/courses/course-detail?course_id=course-v1:DLI+S-OV-04+V1).
 Pretrained models and datasets are available through the
 [NGC catalog](https://catalog.ngc.nvidia.com/search?orderBy=scoreDESC&page=&pageSize=&query=PhysicsNeMo).
 
