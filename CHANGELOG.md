@@ -334,6 +334,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `physicsnemo.mesh`: `validate(check_self_intersection=True)` now raises
   `NotImplementedError` (the check is unimplemented) instead of silently returning a
   `None` sentinel that masquerades as "no self-intersections found".
+- `Mesh.strip_caches` and `DomainMesh.strip_caches` now accept a `keep`
+  argument for retaining selected cache entries while clearing the rest.
+  `Mesh.with_points` and `Mesh.with_cells` provide cache-aware coordinate and
+  connectivity replacement for operations that preserve point or cell indexing,
+  while data-only mesh transforms now preserve valid geometry and topology caches
+  through `Mesh.with_data`.
 - `physicsnemo.mesh` quality metrics now use a normalized
   aspect ratio of longest edge to minimum altitude. The metric is dimensionless and
   scale-invariant for simplices of every manifold dimension, and a regular
@@ -440,6 +446,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and interior elements equal inclusion probability.
 - Cell-subsampled GLOBE inputs now retain their effective integration measure,
   preventing area-weighted outputs and gradients from collapsing.
+- `SetGlobalField` now writes injected fields to the domain-level `global_data`
+  of a `DomainMesh`, in addition to the existing per-sub-mesh broadcast.
+  Previously, code reading `DomainMesh.global_data` never saw the injected
+  fields.
 - `physicsnemo.mesh.io.from_pyvista(..., force_copy=True)` now copies attached
   point, cell, and global data as well as geometry. The matching new
   `to_pyvista(..., force_copy=True)` option prevents exported PyVista geometry
@@ -459,6 +469,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `float64` precision limits). Point-data interpolation now promotes field and
   geometry dtypes consistently, and accumulation uses fewer full-sized
   temporaries and CUDA host synchronizations.
+- `Mesh.point_data_to_cell_data` now handles integer and boolean point fields
+  by returning `float64`, instead of raising `mean(): could not infer output
+  dtype`. A mean of integers is generally non-integral, so it is computed in
+  floating point (subject to the usual `float64` precision limits). This
+  matches `Mesh.cell_data_to_point_data`, which already promoted discrete
+  fields the same way; floating-point and complex fields are unaffected.
 - `physicsnemo.mesh.projections.extrude` now produces a *conforming* (crack-free)
   simplicial complex for multi-cell inputs. Each prism was previously tessellated
   using the per-cell local vertex order, so adjacent cells that listed a shared

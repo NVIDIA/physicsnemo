@@ -307,6 +307,53 @@ class TestPointDataToCellData:
         expected = torch.tensor([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]).mean(dim=0)
         assert torch.allclose(result.cell_data["velocity"][0], expected)
 
+    @pytest.mark.parametrize(
+        ("values", "expected"),
+        [
+            (torch.tensor([1, 2, 4], dtype=torch.int64), 7.0 / 3.0),
+            (torch.tensor([1, 2, 4], dtype=torch.int32), 7.0 / 3.0),
+            (torch.tensor([True, False, True]), 2.0 / 3.0),
+        ],
+        ids=["int64", "int32", "bool"],
+    )
+    def test_discrete_point_field_promoted_to_float(self, values, expected):
+        """Integer and boolean means are computed without dtype errors or truncation."""
+        mesh = Mesh(
+            points=torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]),
+            cells=torch.tensor([[0, 1, 2]]),
+            point_data={"label": values},
+        )
+
+        result = mesh.point_data_to_cell_data().cell_data["label"]
+
+        assert result.dtype == torch.float64
+        torch.testing.assert_close(
+            result, torch.tensor([expected], dtype=torch.float64)
+        )
+
+    @pytest.mark.parametrize(
+        "dtype",
+        [torch.float32, torch.float64, torch.float16, torch.bfloat16, torch.complex64],
+        ids=str,
+    )
+    def test_continuous_point_field_dtype_unchanged(self, dtype):
+        """Floating and complex point fields pass through the promotion untouched.
+
+        The promotion only fires for the dtypes that ``torch.mean`` rejects
+        outright, so it cannot change the result of any conversion that already
+        worked.
+        """
+        mesh = Mesh(
+            points=torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]),
+            cells=torch.tensor([[0, 1, 2]]),
+            point_data={"field": torch.tensor([1, 2, 4]).to(dtype)},
+        )
+
+        result = mesh.point_data_to_cell_data().cell_data["field"]
+
+        assert result.dtype == dtype
+        torch.testing.assert_close(result, torch.tensor([7.0 / 3.0]).to(dtype))
+
     def test_preserves_original_data(self):
         """Test that original point data is preserved."""
         points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])

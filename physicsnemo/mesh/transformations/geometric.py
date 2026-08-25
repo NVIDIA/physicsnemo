@@ -17,13 +17,13 @@
 """Linear and affine transformations for simplicial meshes.
 
 This module implements geometric point transformations with intelligent cache
-handling. By default, all caches are invalidated; transformations explicitly
-opt in to preserve or update valid cache fields.
+handling. Topology caches survive coordinate-only changes; geometry caches are
+invalidated unless a transformation explicitly preserves or updates them.
 
 Cached fields handled:
-- areas: point_data and cell_data
-- normals: point_data and cell_data
-- centroids: cell_data only
+- areas: point and cell cache categories
+- normals: point and cell cache categories
+- centroids: cell cache category only
 
 """
 
@@ -503,15 +503,11 @@ def transform(
             )
 
     new_points = mesh.points @ matrix.T
-    device = mesh.points.device
-    new_cache = TensorDict(
-        {
-            "cell": TensorDict({}, batch_size=[mesh.n_cells], device=device),
-            "point": TensorDict({}, batch_size=[mesh.n_points], device=device),
-            "topology": mesh._cache.get("topology", TensorDict({}, device=device)),
-        },
-        device=device,
-    )
+
+    ### Start from the cache policy for coordinate replacement: retain topology,
+    # invalidate geometry, then opt individual transformed values back in below.
+    transformed_mesh = mesh.with_points(new_points)
+    new_cache = transformed_mesh._cache
 
     ### Opt-in: areas and normals (only for square invertible matrices)
     if matrix.shape[0] == matrix.shape[1]:
@@ -591,16 +587,20 @@ def transform(
         "global_data",
     )
 
-    from physicsnemo.mesh.mesh import Mesh
+    if (
+        transform_point_data is not False
+        or transform_cell_data is not False
+        or transform_global_data is not False
+    ):
+        transformed_mesh = transformed_mesh.with_data(
+            point_data=(new_point_data if transform_point_data is not False else None),
+            cell_data=new_cell_data if transform_cell_data is not False else None,
+            global_data=(
+                new_global_data if transform_global_data is not False else None
+            ),
+        )
 
-    return Mesh(
-        points=new_points,
-        cells=mesh.cells,
-        point_data=new_point_data,
-        cell_data=new_cell_data,
-        global_data=new_global_data,
-        _cache=new_cache,
-    )
+    return transformed_mesh
 
 
 def translate(
@@ -644,36 +644,23 @@ def translate(
             )
 
     new_points = mesh.points + offset
-    device = mesh.points.device
-    new_cache = TensorDict(
-        {
-            "cell": TensorDict({}, batch_size=[mesh.n_cells], device=device),
-            "point": TensorDict({}, batch_size=[mesh.n_points], device=device),
-            "topology": mesh._cache.get("topology", TensorDict({}, device=device)),
-        },
-        device=device,
+    translated_mesh = mesh.with_points(
+        new_points,
+        keep=(
+            "topology",
+            ("cell", "areas"),
+            ("cell", "centroids"),
+            ("cell", "normals"),
+            ("point", "areas"),
+            ("point", "normals"),
+        ),
     )
-
-    ### Areas and normals are unchanged by translation
-    for category in ("cell", "point"):
-        for key in ("areas", "normals"):
-            if (v := mesh._cache.get((category, key), None)) is not None:
-                new_cache[category, key] = v
 
     ### Centroids are translated
     if (v := mesh._cache.get(("cell", "centroids"), None)) is not None:
-        new_cache["cell", "centroids"] = v + offset
+        translated_mesh._cache["cell", "centroids"] = v + offset
 
-    from physicsnemo.mesh.mesh import Mesh
-
-    return Mesh(
-        points=new_points,
-        cells=mesh.cells,
-        point_data=mesh.point_data,
-        cell_data=mesh.cell_data,
-        global_data=mesh.global_data,
-        _cache=new_cache,
-    )
+    return translated_mesh
 
 
 def rotate(

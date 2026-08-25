@@ -283,6 +283,21 @@ class TestStripCaches:
         dm2 = dm.strip_caches()
         assert "normals" not in dm2.interior._cache["cell"].keys()
 
+    def test_propagates_keep_to_all_meshes(self):
+        dm = DomainMesh(
+            interior=single_triangle_3d.load(),
+            boundaries={"wall": single_triangle_3d.load()},
+        )
+        for _, mesh in dm.all_meshes():
+            _ = mesh.cell_areas
+            _ = mesh.cell_normals
+
+        stripped = dm.strip_caches(keep=("cell", "areas"))
+
+        for _, mesh in stripped.all_meshes():
+            assert mesh._cache.get(("cell", "areas"), None) is not None
+            assert mesh._cache.get(("cell", "normals"), None) is None
+
 
 class TestSubdivide:
     """Tests for DomainMesh.subdivide passthrough."""
