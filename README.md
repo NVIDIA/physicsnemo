@@ -23,16 +23,9 @@
 </p>
 <!-- markdownlint-enable MD013 MD033 MD041 -->
 
-NVIDIA PhysicsNeMo is an open-source framework for physics machine learning (physics
-ML), scientific machine learning (SciML), and AI for science and engineering. It helps
-teams turn simulation data, observations, and physical knowledge into surrogate,
-forecasting, generative, and inverse models for physical systems.
-
-Built on PyTorch, PhysicsNeMo brings neural operators, graph neural networks,
-transformers, diffusion models, GPU-accelerated scientific data processing, and
-distributed training together in one composable stack.
-
-Use one model or numerical kernel in an existing project, or adapt an end-to-end recipe.
+NVIDIA PhysicsNeMo is an open-source PyTorch framework for physics machine learning
+(physics ML), scientific machine learning (SciML), and AI for science and engineering.
+It provides reusable library components and end-to-end training recipes.
 
 <!-- Keep repository links absolute because this README is also rendered on PyPI. -->
 
@@ -98,8 +91,7 @@ For CUDA 12, a basic install, optional features, or source setup, see
 </table>
 <!-- markdownlint-enable MD013 MD033 -->
 
-Every visual above comes from a PhysicsNeMo recipe or workflow. Select an image for its
-source and data context, or its caption for the recommended starting point.
+Every visual above comes from a PhysicsNeMo recipe or workflow.
 
 ## Why PhysicsNeMo
 
@@ -110,18 +102,13 @@ source and data context, or its caption for the recommended starting point.
 - **Scale the sample itself.** Use `ShardTensor` domain parallelism to split a single
   high-resolution sample across GPUs, alongside PyTorch DistributedDataParallel (DDP) or
   Fully Sharded Data Parallel 2 (FSDP2).
-- **More than a model zoo.** Data pipelines, differentiable geometry, numerical
-  kernels, metrics, checkpointing, profiling, and deployment utilities support the
-  rest of the workflow.
 
 ## What can you build?
 
-PhysicsNeMo is a framework for building new physics ML systems, not a fixed catalog
-of pretrained models. Adapt an end-to-end recipe or compose the framework around
-your data, geometry, physics, and deployment constraints. Explore starting points by
-physical domain:
+Start from a recipe and adapt it to your data, geometry, physics, and deployment
+constraints. Explore by physical domain:
 
-- 🚗 **Engineering design and CFD:** train and compare current surface and volume
+- ✈️ **Engineering design and CFD:** train and compare current surface and volume
   models with the
   [unified external-aerodynamics recipe](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/external_aerodynamics/unified_external_aero_recipe)
   or accelerate [data-center airflow](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/datacenter).
@@ -148,10 +135,9 @@ for every available recipe.
 
 ## Choose a model family
 
-PhysicsNeMo models are ordinary `torch.nn.Module` objects. Start with the
-representation your data already has, then narrow by use case. The tables below map
-representative families to source and documented starting points; families overlap, and
-this is not a ranking.
+PhysicsNeMo models are ordinary `torch.nn.Module` objects. Choose a family by the
+representation of your data and the task you need to solve. Model names link to source
+code; the final column links to examples and papers.
 
 ### Surrogates and dynamics
 
@@ -247,14 +233,16 @@ with LoRA, and other research utilities.
 
 ## Use PhysicsNeMo with coding agents
 
-PhysicsNeMo ships NVIDIA-authored skills for compatible coding agents such as Codex
-and Claude Code. Give your agent the relevant `SKILL.md`; each skill defines its
-scope, repository-aware workflow, guardrails, and evaluation evidence.
+The repository includes two NVIDIA-authored skills for Codex, Claude Code, and other
+compatible coding agents:
 
-| Goal | Agent skill |
-| --- | --- |
-| Find the right model, datapipe, example, or documentation for a SciML task | [PhysicsNeMo Discover](https://github.com/NVIDIA/physicsnemo/blob/main/skills/physicsnemo-discover/SKILL.md) searches the live repository to make task-specific recommendations ([evaluation](https://github.com/NVIDIA/physicsnemo/blob/main/skills/physicsnemo-discover/BENCHMARK.md)). |
-| Add domain parallelism to training or inference | [PhysicsNeMo ShardTensor](https://github.com/NVIDIA/physicsnemo/blob/main/skills/physicsnemo-shard-tensor/SKILL.md) guides DDP/FSDP2 integration, shard-aware operations, and multi-GPU correctness tests ([evaluation](https://github.com/NVIDIA/physicsnemo/blob/main/skills/physicsnemo-shard-tensor/BENCHMARK.md)). |
+- [PhysicsNeMo Discover](https://github.com/NVIDIA/physicsnemo/blob/main/skills/physicsnemo-discover/SKILL.md)
+  finds models, datapipes, examples, and documentation for a SciML task
+  ([evaluation](https://github.com/NVIDIA/physicsnemo/blob/main/skills/physicsnemo-discover/BENCHMARK.md)).
+- [PhysicsNeMo ShardTensor](https://github.com/NVIDIA/physicsnemo/blob/main/skills/physicsnemo-shard-tensor/SKILL.md)
+  helps add domain parallelism, integrate DDP or FSDP2, implement shard-aware
+  operations, and write multi-GPU correctness tests
+  ([evaluation](https://github.com/NVIDIA/physicsnemo/blob/main/skills/physicsnemo-shard-tensor/BENCHMARK.md)).
 
 ## Installation options
 
@@ -312,10 +300,7 @@ Pretrained models and datasets are available through the
 
 ## Community and contributing
 
-PhysicsNeMo is developed in the open, and contributions are welcome from first-time
-contributors and experienced SciML developers alike. Code, model architectures,
-numerical kernels, examples, documentation, bug reports, and research-driven feature
-requests all help the project.
+Contributions to the library, examples, and documentation are welcome.
 
 - Ask questions and share work in [GitHub Discussions](https://github.com/NVIDIA/physicsnemo/discussions).
 - Report a bug or propose a feature through [GitHub Issues](https://github.com/NVIDIA/physicsnemo/issues).
