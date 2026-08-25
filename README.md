@@ -121,9 +121,6 @@ constraints. Explore by physical domain:
   [reservoir surrogates](https://github.com/NVIDIA/physicsnemo/tree/main/examples/reservoir_simulation).
 - 🫀 **Healthcare:** perform
   [brain anomaly detection](https://github.com/NVIDIA/physicsnemo/tree/main/examples/healthcare/brain_anomaly_detection).
-- ⚛️ **Molecular, materials, and nuclear systems:** predict
-  [molecular forces](https://github.com/NVIDIA/physicsnemo/tree/main/examples/molecular_dynamics/lennard_jones)
-  or emulate [kinetic Monte Carlo](https://github.com/NVIDIA/physicsnemo/tree/main/examples/kinetic_monte_carlo).
 - ✨ **Generative and inverse physics:** compose the
   [diffusion toolkit](https://docs.nvidia.com/physicsnemo/latest/physicsnemo/api_diffusion.html)
   with [topology-generation recipes](https://github.com/NVIDIA/physicsnemo/tree/main/examples/generative/topodiff).
