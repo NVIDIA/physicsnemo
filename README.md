@@ -7,7 +7,7 @@
 
 <div align="center">
   <a href="https://pypi.org/project/nvidia-physicsnemo/"><img alt="PyPI" src="https://img.shields.io/pypi/v/nvidia-physicsnemo?label=PyPI&style=flat-square"></a>
-  <a href="https://pypi.org/project/nvidia-physicsnemo/"><img alt="Downloads" src="https://img.shields.io/pypi/dm/nvidia-physicsnemo?style=flat-square"></a>
+  <a href="https://pepy.tech/projects/nvidia-physicsnemo"><img alt="PyPI downloads" src="https://api.pepy.tech/badge/nvidia-physicsnemo/month"></a>
   <a href="https://docs.nvidia.com/physicsnemo/latest/"><img alt="Documentation" src="https://img.shields.io/badge/docs-latest-76B900?style=flat-square"></a>
   <a href="https://github.com/NVIDIA/physicsnemo/actions/workflows/install-ci.yml"><img alt="Install CI" src="https://img.shields.io/github/actions/workflow/status/NVIDIA/physicsnemo/install-ci.yml?branch=main&label=install%20CI&style=flat-square"></a>
   <a href="https://app.codecov.io/gh/NVIDIA/physicsnemo"><img alt="Codecov" src="https://img.shields.io/codecov/c/github/NVIDIA/physicsnemo/main?style=flat-square"></a>
