@@ -14,15 +14,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# ``TensorClass`` provides class-scoped dtype-conversion methods. Qualify scalar
+# annotations that must remain resolvable under Python's deferred lookup.
+import builtins
 from collections.abc import Callable, Iterator, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Self
 
 import torch
 from jaxtyping import Bool, Float
-from tensordict import TensorClass, TensorDict, TensorDictBase
+from tensordict import TensorClass, TensorDict
 
-from physicsnemo.mesh._serialization import install_legacy_memmap_reader
+from physicsnemo.mesh._serialization import install_mesh_memmap_reader
 from physicsnemo.mesh.mesh import Mesh, _requested_float_dtype
 from physicsnemo.mesh.transformations.deform.ffd import _FFDBasis
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
@@ -131,8 +135,8 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
     """
 
     interior: Mesh
-    boundaries: TensorDict[str, Mesh]
-    global_data: TensorDict
+    boundaries: TensorDict[str, Mesh] = None  # type: ignore[assignment]
+    global_data: TensorDict = None  # type: ignore[assignment]
 
     def __init__(
         self,
@@ -243,7 +247,8 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
         ...     lambda m: m.subdivide(levels=1), boundaries=True, interior=False
         ... )
         """
-        return DomainMesh(
+        return replace(
+            self,
             interior=fn(self.interior) if interior else self.interior.clone(),
             boundaries=(
                 self.boundaries.apply(fn, call_on_nested=True)
@@ -737,8 +742,8 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
         control_displacements: Float[torch.Tensor, "n_controls n_spatial_dims"],
         *,
         kernel: Literal["thin_plate_spline"] = "thin_plate_spline",
-        polynomial: bool = True,
-        smoothing: float = 0.0,
+        polynomial: builtins.bool = True,
+        smoothing: builtins.float = 0.0,
         point_weights: str | tuple[str, ...] | None = None,
         implementation: Literal["torch", "warp"] | None = None,
     ) -> "DomainMesh":
@@ -1074,7 +1079,8 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
             name: output_meshes[index]
             for index, name in enumerate(self.boundaries.keys(), start=1)
         }
-        return DomainMesh(
+        return replace(
+            self,
             interior=interior,
             boundaries=boundaries,
             global_data=self.global_data.clone(),
@@ -1629,45 +1635,7 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
     ### TensorClass overwrites __repr__ even when defined inline.
 
 
-### Restore the declared field types when rebuilding from a plain tensordict.
-# This is load-critical for *both* on-disk layouts, not just legacy files: the
-# memmap format records nested containers as plain TensorDicts, so `interior`
-# and each boundary arrive here untyped and `__post_init__` would reject them.
-_tensorclass_domain_from_tensordict = DomainMesh._from_tensordict.__func__
-
-
-def _domain_from_tensordict(
-    cls: type[DomainMesh],
-    tensordict: TensorDictBase,
-    non_tensordict: dict[str, Any] | None = None,
-    safe: bool = True,
-) -> DomainMesh:
-    interior = tensordict.get("interior")
-    boundaries = tensordict.get("boundaries")
-    if isinstance(interior, TensorDict) or (
-        isinstance(boundaries, TensorDict)
-        and any(isinstance(mesh, TensorDict) for mesh in boundaries.values())
-    ):
-        tensordict = tensordict.copy()
-        if isinstance(interior, TensorDict):
-            tensordict["interior"] = Mesh._from_tensordict(interior)
-        if isinstance(boundaries, TensorDict):
-            boundaries = boundaries.copy()
-            for name, mesh in boundaries.items():
-                if isinstance(mesh, TensorDict):
-                    boundaries[name] = Mesh._from_tensordict(mesh)
-            tensordict["boundaries"] = boundaries
-    return _tensorclass_domain_from_tensordict(
-        cls,
-        tensordict,
-        non_tensordict=non_tensordict,
-        safe=safe,
-    )
-
-
-DomainMesh._from_tensordict = classmethod(_domain_from_tensordict)
-
-install_legacy_memmap_reader(DomainMesh)
+install_mesh_memmap_reader(DomainMesh)
 
 
 ### Override the TensorClass __repr__ with custom formatting.
@@ -1714,25 +1682,25 @@ DomainMesh.__repr__ = _domain_mesh_repr  # type: ignore[method-assign]  # ty: ig
 # complex dtype cast via the generated tensorclass ``to`` recurses into the interior/
 # boundary meshes and casts their integer ``cells`` to a float dtype, which fails
 # ``Mesh.__post_init__``. Only an explicitly requested floating dtype takes the
-# per-mesh path through the (cells-safe) ``Mesh.to`` via ``apply_to_meshes`` (with
-# ``global_data`` cast too); device-only moves and non-float dtypes are delegated
-# unchanged (cells-safe and metadata-preserving).
+# recursive floating-leaf cast path; device-only moves and non-float dtypes are
+# delegated unchanged (cells-safe and metadata-preserving).
 def _domain_mesh_to(self, *args: Any, **kwargs: Any) -> "DomainMesh":
     cast_dtype = _requested_float_dtype(args, kwargs)
     if cast_dtype is None:
         return _tensorclass_domain_to(self, *args, **kwargs)
 
-    # Per-mesh: route through the (fixed, cells-safe) ``Mesh.to``. Resolve the target
-    # device with a zero-length probe, then move ``global_data`` to that device
-    # (forwarding all transfer options except ``dtype``) and cast its floating leaves.
+    # Resolve the target device with a zero-length probe, move all leaves without a
+    # dtype conversion, then cast every floating leaf in one recursive pass. This
+    # preserves concrete DomainMesh / Mesh subtypes and their additional fields.
     probe = self.interior.points[:0].to(*args, **kwargs)
-    moved = self.apply_to_meshes(lambda mesh: mesh.to(*args, **kwargs))
     transfer_kwargs = {k: v for k, v in kwargs.items() if k != "dtype"}
     transfer_kwargs["device"] = probe.device
-    moved.global_data = moved.global_data.to(**transfer_kwargs).apply(
-        lambda t: t.to(cast_dtype) if (t.is_floating_point() or t.is_complex()) else t
-    )
-    return moved
+    moved = _tensorclass_domain_to(self, **transfer_kwargs)
+
+    def _cast(t: torch.Tensor) -> torch.Tensor:
+        return t.to(cast_dtype) if (t.is_floating_point() or t.is_complex()) else t
+
+    return moved.apply(_cast)
 
 
 _tensorclass_domain_to = DomainMesh.to  # the generated tensorclass ``to``

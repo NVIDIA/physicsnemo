@@ -14,6 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Python 3.14 evaluates annotations lazily in the class namespace, where
+# ``TensorClass`` provides dtype-conversion methods such as ``int``. Qualify
+# scalar annotations that must continue to resolve to builtin types.
+import builtins
 import math
 import types
 from collections.abc import Mapping
@@ -35,7 +39,7 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from tensordict import NonTensorData, TensorClass, TensorDict
 
-from physicsnemo.mesh._serialization import install_legacy_memmap_reader
+from physicsnemo.mesh._serialization import install_mesh_memmap_reader
 from physicsnemo.mesh.boundaries import is_manifold, is_watertight
 from physicsnemo.mesh.calculus import (
     compute_cell_derivatives,
@@ -339,11 +343,11 @@ class Mesh(
     """
 
     points: torch.Tensor  # shape: (n_points, n_spatial_dimensions)
-    cells: torch.Tensor  # shape: (n_cells, n_manifold_dimensions + 1)
-    point_data: TensorDict
-    cell_data: TensorDict
-    global_data: TensorDict
-    _cache: TensorDict
+    cells: torch.Tensor = None  # type: ignore[assignment]
+    point_data: TensorDict = None  # type: ignore[assignment]
+    cell_data: TensorDict = None  # type: ignore[assignment]
+    global_data: TensorDict = None  # type: ignore[assignment]
+    _cache: TensorDict = None  # type: ignore[assignment]
 
     def __init__(
         self,
@@ -2970,7 +2974,9 @@ class Mesh(
         self,
     ) -> Mapping[
         str,
-        int | float | tuple[float, float, float, float],
+        builtins.int
+        | builtins.float
+        | tuple[builtins.float, builtins.float, builtins.float, builtins.float],
     ]:
         """Compute summary statistics for the mesh.
 
@@ -3229,7 +3235,7 @@ class Mesh(
         )
 
 
-install_legacy_memmap_reader(Mesh)
+install_mesh_memmap_reader(Mesh)
 
 
 ### Override the TensorClass __repr__ with custom formatting
@@ -3299,12 +3305,7 @@ def _mesh_to(self, *args: Any, **kwargs: Any) -> "Mesh":
     def _cast(t: torch.Tensor) -> torch.Tensor:
         return t.to(cast_dtype) if (t.is_floating_point() or t.is_complex()) else t
 
-    moved.points = _cast(moved.points)
-    moved.point_data = moved.point_data.apply(_cast)
-    moved.cell_data = moved.cell_data.apply(_cast)
-    moved.global_data = moved.global_data.apply(_cast)
-    moved._cache = moved._cache.apply(_cast)
-    return moved
+    return moved.apply(_cast)
 
 
 _tensorclass_mesh_to = Mesh.to  # the generated tensorclass ``to``

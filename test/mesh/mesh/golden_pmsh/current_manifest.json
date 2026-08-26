@@ -1,12 +1,12 @@
 {
-  "_cache/cell/meta.json": {
+  "_tensordict/_cache/cell/meta.json": {
     "_type": "<class 'tensordict._td.TensorDict'>",
     "device": "cpu",
     "shape": [
       2
     ]
   },
-  "_cache/meta.json": {
+  "_tensordict/_cache/meta.json": {
     "_type": "<class 'tensordict._td.TensorDict'>",
     "cell": {
       "type": "TensorDict"
@@ -20,21 +20,21 @@
       "type": "TensorDict"
     }
   },
-  "_cache/point/meta.json": {
+  "_tensordict/_cache/point/meta.json": {
     "_type": "<class 'tensordict._td.TensorDict'>",
     "device": "cpu",
     "shape": [
       4
     ]
   },
-  "_cache/topology/meta.json": {
+  "_tensordict/_cache/topology/meta.json": {
     "_type": "<class 'tensordict._td.TensorDict'>",
     "device": "cpu",
     "shape": []
   },
-  "cell_data/c_scalar.memmap": 8,
-  "cell_data/c_vector.memmap": 24,
-  "cell_data/meta.json": {
+  "_tensordict/cell_data/c_scalar.memmap": 8,
+  "_tensordict/cell_data/c_vector.memmap": 24,
+  "_tensordict/cell_data/meta.json": {
     "_type": "<class 'tensordict._td.TensorDict'>",
     "c_scalar": {
       "device": "cpu",
@@ -58,10 +58,10 @@
       2
     ]
   },
-  "cells.memmap": 48,
-  "global_data/g_scalar.memmap": 4,
-  "global_data/g_vector.memmap": 12,
-  "global_data/meta.json": {
+  "_tensordict/cells.memmap": 48,
+  "_tensordict/global_data/g_scalar.memmap": 4,
+  "_tensordict/global_data/g_vector.memmap": 12,
+  "_tensordict/global_data/meta.json": {
     "_type": "<class 'tensordict._td.TensorDict'>",
     "device": "cpu",
     "g_scalar": {
@@ -80,7 +80,7 @@
     },
     "shape": []
   },
-  "meta.json": {
+  "_tensordict/meta.json": {
     "_cache": {
       "type": "TensorDict"
     },
@@ -115,7 +115,7 @@
     },
     "shape": []
   },
-  "point_data/meta.json": {
+  "_tensordict/point_data/meta.json": {
     "_type": "<class 'tensordict._td.TensorDict'>",
     "device": "cpu",
     "p_scalar": {
@@ -139,7 +139,10 @@
       4
     ]
   },
-  "point_data/p_scalar.memmap": 16,
-  "point_data/p_vector.memmap": 48,
-  "points.memmap": 32
+  "_tensordict/point_data/p_scalar.memmap": 16,
+  "_tensordict/point_data/p_vector.memmap": 48,
+  "_tensordict/points.memmap": 32,
+  "meta.json": {
+    "_type": "<class 'physicsnemo.mesh.mesh.Mesh'>"
+  }
 }

@@ -37,6 +37,30 @@ def test_domain_mesh_inherits_tensorclass():
     assert TensorClass in DomainMesh.__bases__
 
 
+class FieldlessDomainMesh(DomainMesh):
+    """Downstream-style DomainMesh subclass with no redeclared fields."""
+
+
+class DomainMeshWithExtra(DomainMesh):
+    """DomainMesh subtype with one additional floating field."""
+
+    extra: torch.Tensor = None  # type: ignore[assignment]
+
+
+class MeshWithExtra(Mesh):
+    """Nested Mesh subtype with one additional floating field."""
+
+    extra: torch.Tensor = None  # type: ignore[assignment]
+
+
+def test_fieldless_subclass_keeps_constructor_defaults():
+    domain = FieldlessDomainMesh(single_triangle_2d.load())
+
+    assert type(domain) is FieldlessDomainMesh
+    assert domain.n_boundaries == 0
+    assert not list(domain.global_data.keys())
+
+
 def test_domain_mesh_is_not_subscriptable():
     """Inheriting TensorClass must not expose its configuration subscript.
 
@@ -788,6 +812,37 @@ def test_domain_mesh_to_float_dtype_preserves_integer_cells():
     assert dm64.boundaries["b"].points.dtype == torch.float64
     assert dm64.boundaries["b"].cells.dtype == torch.int64
     assert dm64.global_data["scale"].dtype == torch.float64
+
+
+def test_domain_mesh_operations_preserve_subclass_fields():
+    """Transforms and dtype conversion preserve the subtype and added fields."""
+    base = single_triangle_2d.load()
+    interior = MeshWithExtra(
+        points=base.points,
+        cells=base.cells,
+        extra=torch.arange(3, dtype=torch.float32),
+    )
+    domain = DomainMeshWithExtra(
+        interior=interior,
+        boundaries={"wall": interior.clone()},
+        extra=torch.tensor(2.0, dtype=torch.float32),
+    )
+
+    translated = domain.translate([1.0, 0.0])
+    converted = domain.to(torch.float64)
+
+    assert type(translated) is DomainMeshWithExtra
+    assert type(translated.interior) is MeshWithExtra
+    assert type(translated.boundaries["wall"]) is MeshWithExtra
+    assert torch.equal(translated.extra, domain.extra)
+    assert type(converted) is DomainMeshWithExtra
+    assert type(converted.interior) is MeshWithExtra
+    assert type(converted.boundaries["wall"]) is MeshWithExtra
+    assert converted.extra.dtype == torch.float64
+    assert converted.interior.extra.dtype == torch.float64
+    assert converted.boundaries["wall"].extra.dtype == torch.float64
+    assert converted.interior.points.dtype == torch.float64
+    assert converted.interior.cells.dtype == torch.int64
 
 
 def test_domain_mesh_to_same_float_dtype_preserves_integer_cells():

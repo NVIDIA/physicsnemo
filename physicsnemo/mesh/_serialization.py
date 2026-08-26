@@ -14,79 +14,70 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""Backward-compatible reads of decorator-era ``.pmsh`` / ``.pdmsh`` files.
+"""Small adapters around TensorClass's native memmap reader.
 
-Through PhysicsNeMo 2.1.x, :class:`~physicsnemo.mesh.Mesh` and
-:class:`~physicsnemo.mesh.DomainMesh` were built by the ``@tensorclass``
-decorator, whose memmap writer nested the payload one directory down::
-
-    square.pdmsh/
-        meta.json          <- {"_type": "...DomainMesh"}
-        _tensordict/       <- the actual fields
-
-Inheriting from ``TensorClass`` instead writes those fields at the root of the
-directory, so :func:`install_legacy_memmap_reader` teaches a container to
-recognize the old nesting and read it explicitly. Files written by the current
-code need no special handling; they load through ``tensordict``'s own
-machinery.
+TensorDict's typed writer and reader handle both current directly inherited
+``TensorClass`` containers and decorator-era ``Mesh`` / ``DomainMesh`` files.
+PhysicsNeMo only needs to unwrap a structured ``out=`` container and prevent a
+requested device from conflicting with preallocated output storage.
 """
 
 from __future__ import annotations
 
+from functools import wraps
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import torch
-from tensordict import TensorDict, TensorDictBase
+from tensordict import TensorDictBase
 
 
-def _legacy_payload_dir(prefix: str | Path) -> Path | None:
-    """Return the decorator-era payload directory, or ``None`` if not one."""
-    payload = Path(prefix) / "_tensordict"
-    return payload if payload.is_dir() else None
+def _resolved_device(device: torch.device | str) -> torch.device:
+    """Resolve an index-free CUDA device for comparison with tensor devices."""
+    device = torch.device(device)
+    if device.type == "cuda" and device.index is None:
+        return torch.device("cuda", torch.cuda.current_device())
+    return device
 
 
-def install_legacy_memmap_reader(cls: type) -> None:
-    """Teach a ``TensorClass`` container to load the decorator-era layout.
+def _validate_out_device(
+    out: TensorDictBase | None,
+    device: torch.device | str | None,
+) -> None:
+    """Reject an ``out`` whose storage cannot satisfy ``device``."""
+    if out is None or device is None:
+        return
 
-    Overrides ``load``, ``load_memmap``, and ``_load_memmap`` on ``cls`` so
-    each checks for a nested ``_tensordict/`` directory first, falling through
-    to the stock implementations otherwise. Each override earns its place:
+    out_devices = {
+        value.device
+        for value in out.values(include_nested=True, leaves_only=True)
+        if isinstance(value, torch.Tensor)
+    }
+    if not out_devices and out.device is not None:
+        out_devices.add(out.device)
 
-    - ``load`` looks like a redundant proxy, but ``TensorClass``'s metaclass
-      resolves class attributes against the underlying ``TensorDict``, so the
-      stock ``load`` reaches ``TensorDict.load_memmap`` directly and never
-      sees the ``load_memmap`` override below.
-    - ``load_memmap`` is where ``device=`` and ``out=`` are still intact.
-      ``tensordict`` resolves the writing class from the directory's
-      ``meta.json`` and, when that isn't the class it is loading through,
-      forwards only the prefix -- which is why a decorator-era file loaded
-      with ``device="cuda"`` used to come back on the CPU.
-    - ``_load_memmap`` is what ``tensordict`` dispatches to for a *nested*
-      legacy container: a ``DomainMesh``'s ``interior`` and its boundaries.
+    requested = _resolved_device(device)
+    if out_devices and out_devices != {requested}:
+        formatted = ", ".join(sorted(map(str, out_devices)))
+        raise ValueError(
+            f"`device={requested}` conflicts with `out` tensors on {formatted}; "
+            "`device` and `out` must target the same device."
+        )
 
-    Parameters
-    ----------
-    cls : type
-        The ``TensorClass`` subclass to patch, in place.
-    """
-    ### TensorClass's metaclass exposes these as wrapper functions rather than
-    ### ordinary bound classmethods. Capture them before installing overrides.
+
+def install_mesh_memmap_reader(cls: type) -> None:
+    """Install PhysicsNeMo's thin adapter while preserving TensorClass metadata."""
+    stock_load = cls.load
     stock_load_memmap = cls.load_memmap
-    stock_private_load_memmap = cls._load_memmap
 
     def _payload_of(out: Any) -> TensorDictBase | None:
-        """Unwrap a container passed as ``out=`` to the tensordict it stores.
-
-        ``tensordict`` writes bookkeeping attributes onto whatever it fills,
-        which a ``tensor_only`` container rejects; it wants the storage.
-        """
         return out._tensordict if isinstance(out, cls) else out
 
+    @wraps(stock_load)
     def load(cls, prefix: str | Path, *args: Any, **kwargs: Any) -> Any:
-        """Load a saved container from disk (a proxy for ``load_memmap``)."""
         return cls.load_memmap(prefix, *args, **kwargs)
 
+    @wraps(stock_load_memmap)
     def load_memmap(
         cls,
         prefix: str | Path,
@@ -94,59 +85,29 @@ def install_legacy_memmap_reader(cls: type) -> None:
         non_blocking: bool = False,
         *,
         out: TensorDictBase | None = None,
-        robust_key: bool | None = None,
+        robust_key: bool | None = True,
+        subpath: Any = None,
+        mode: str = "r",
+        num_threads: int = 0,
     ) -> Any:
-        """Load from a memory-mapped directory tree, in either layout."""
-        legacy_payload = _legacy_payload_dir(prefix)
-        if legacy_payload is None:
-            return stock_load_memmap(
-                prefix,
-                device,
-                non_blocking,
-                out=_payload_of(out),
-                robust_key=robust_key,
-            )
-        ### The payload is read on its native device and moved afterwards
-        ### rather than passing `device` down, because tensordict dispatches
-        ### each *nested* legacy container through `_load_memmap`, which it
-        ### calls without `device` -- passing it here would leave a DomainMesh
-        ### split across devices. Moving the whole result is a no-op for
-        ### entries already in the right place.
-        result = cls._from_tensordict(
-            TensorDict.load_memmap(legacy_payload, robust_key=robust_key)
+        payload = _payload_of(out)
+        _validate_out_device(payload, device)
+        return stock_load_memmap(
+            prefix,
+            device,
+            non_blocking,
+            out=payload,
+            robust_key=robust_key,
+            subpath=subpath,
+            mode=mode,
+            num_threads=num_threads,
         )
-        if device is not None:
-            result = result.to(device, non_blocking=non_blocking)
-        if out is not None:
-            payload = cast(TensorDictBase, _payload_of(out))
-            payload.update(
-                result._tensordict,
-                inplace=True,
-                non_blocking=non_blocking,
-            )
-            result = cls._from_tensordict(payload)
-        return result
 
-    def _load_memmap(
-        cls,
-        prefix: str | Path,
-        metadata: dict,
-        device: torch.device | None = None,
-        out: TensorDictBase | None = None,
-        **kwargs: Any,
-    ) -> Any:
-        """Reconstruct one container from either on-disk layout."""
-        legacy_payload = _legacy_payload_dir(prefix)
-        if legacy_payload is None:
-            return stock_private_load_memmap(
-                prefix, metadata, device=device, out=out, **kwargs
-            )
-        return cls._from_tensordict(
-            TensorDict.load_memmap(
-                legacy_payload, device=device, out=_payload_of(out), **kwargs
-            )
-        )
+    # ``stock_*`` are already descriptor-resolved functions whose signatures do
+    # not include ``cls``. Leaving ``__wrapped__`` in place makes classmethod
+    # binding strip ``prefix`` from the public signature a second time.
+    del load.__wrapped__
+    del load_memmap.__wrapped__
 
     cls.load = classmethod(load)
     cls.load_memmap = classmethod(load_memmap)
-    cls._load_memmap = classmethod(_load_memmap)

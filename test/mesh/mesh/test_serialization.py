@@ -22,11 +22,34 @@ causing downstream failures in n_manifold_dims, repr, and any method that access
 These tests verify that __post_init__ correctly restores empty cells tensors.
 """
 
-import torch
-from tensordict import TensorDict
+import inspect
 
-from physicsnemo.mesh.mesh import Mesh
+import pytest
+import torch
+from tensordict import TensorClass, TensorDict
+
+from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.mesh.primitives.basic import two_triangles_2d
+
+
+class MeshSubclass(Mesh):
+    """Mesh subtype used to verify inherited TensorClass behavior."""
+
+    extra: torch.Tensor = None  # type: ignore[assignment]
+
+
+class DomainMeshSubclass(DomainMesh):
+    """DomainMesh subtype used to verify inherited TensorClass behavior."""
+
+    extra: torch.Tensor = None  # type: ignore[assignment]
+
+
+class TrainingSample(TensorClass):
+    """Representative user tensorclass that nests a Mesh."""
+
+    mesh: Mesh
+    target: torch.Tensor
+
 
 ### Memmap Round-Trip Tests ###
 
@@ -61,6 +84,72 @@ class TestMemmapRoundTrip:
         loaded = TensorDict.load(path)
 
         assert type(loaded["mesh"]) is Mesh
+
+    def test_nested_in_tensorclass_preserves_mesh_type(self, tmp_path):
+        """A Mesh nested in another TensorClass retains its concrete type."""
+        sample = TrainingSample(
+            mesh=two_triangles_2d.load(),
+            target=torch.tensor(1.0),
+        )
+        path = tmp_path / "sample"
+
+        sample.save(path)
+        loaded = TrainingSample.load(path)
+
+        assert type(loaded) is TrainingSample
+        assert type(loaded.mesh) is Mesh
+
+    def test_domain_nested_in_tensordict_preserves_types(self, tmp_path):
+        """A nested DomainMesh retains its own and its child Mesh types."""
+        mesh = two_triangles_2d.load()
+        sample = TensorDict(
+            {"domain": DomainMesh(interior=mesh, boundaries={"wall": mesh.clone()})},
+            batch_size=[],
+        )
+        path = tmp_path / "domain-sample"
+
+        sample.save(path)
+        loaded = TensorDict.load(path)
+
+        assert type(loaded["domain"]) is DomainMesh
+        assert type(loaded["domain"].interior) is Mesh
+        assert type(loaded["domain"].boundaries["wall"]) is Mesh
+
+    def test_mesh_subclass_round_trip(self, tmp_path):
+        """A Mesh subclass and its additional field survive a round-trip."""
+        mesh = MeshSubclass(
+            points=torch.randn(4, 2),
+            extra=torch.arange(4, dtype=torch.float32),
+        )
+        path = tmp_path / "mesh-subclass"
+
+        mesh.save(path)
+        loaded = MeshSubclass.load(path)
+
+        assert type(loaded) is MeshSubclass
+        assert torch.equal(loaded.extra, mesh.extra)
+
+    def test_domain_round_trip_preserves_all_subtypes(self, tmp_path):
+        """Recorded parent and child types drive DomainMesh reconstruction."""
+        mesh = MeshSubclass(
+            points=torch.randn(4, 2),
+            extra=torch.arange(4, dtype=torch.float32),
+        )
+        domain = DomainMeshSubclass(
+            interior=mesh,
+            boundaries={"wall": mesh.clone()},
+            extra=torch.tensor(2.0),
+        )
+        path = tmp_path / "domain-subclass"
+
+        domain.save(path)
+        loaded = DomainMeshSubclass.load(path)
+
+        assert type(loaded) is DomainMeshSubclass
+        assert type(loaded.interior) is MeshSubclass
+        assert type(loaded.boundaries["wall"]) is MeshSubclass
+        assert torch.equal(loaded.interior.extra, mesh.extra)
+        assert torch.equal(loaded.extra, domain.extra)
 
     def test_point_cloud_direct(self, tmp_path):
         """Point cloud created via constructor (cells=None) survives memmap round-trip."""
@@ -215,3 +304,14 @@ class TestTorchSaveLoadRoundTrip:
         assert loaded.cells.shape == (0, 1)
         assert loaded.n_manifold_dims == 0
         assert repr(loaded)  # should not raise
+
+
+@pytest.mark.parametrize("cls", (Mesh, DomainMesh))
+def test_load_runtime_metadata_matches_tensordict_api(cls):
+    """The public loaders retain TensorClass signatures, docs, and return types."""
+    assert inspect.signature(cls.load) == inspect.signature(TensorClass.load)
+    assert inspect.signature(cls.load_memmap) == inspect.signature(
+        TensorClass.load_memmap
+    )
+    assert inspect.getdoc(cls.load) == inspect.getdoc(TensorClass.load)
+    assert inspect.getdoc(cls.load_memmap) == inspect.getdoc(TensorClass.load_memmap)
