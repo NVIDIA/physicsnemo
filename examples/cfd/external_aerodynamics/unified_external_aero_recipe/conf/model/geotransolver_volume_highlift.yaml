@@ -54,3 +54,6 @@ model:
   radii: [0.1, 0.5, 2.0]
   neighbors_in_radius: [16, 32, 64]
   n_hidden_local: 32
+  activation_checkpointing: false
+  checkpointing_ratio: 1.0
+  activation_checkpointing_components: [blocks]

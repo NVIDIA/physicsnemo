@@ -14,21 +14,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: rollout.GeoTransolverTimeConditional
-_convert_: all
-
-functional_dim: 4   
-out_dim: 3        
-geometry_dim: 3
-global_dim: null
-slice_num: 128
-n_layers: 6
-use_te: false
-time_input: false
-include_local_features: true
-activation_checkpointing: false
-checkpointing_ratio: 1.0
-activation_checkpointing_components: [blocks]
-
-### Rollout parameters ###
-num_time_steps: ${training.num_time_steps}
+r"""Utilities shared across PhysicsNeMo model architectures."""
