@@ -6,11 +6,12 @@
 </p>
 
 <div align="center">
-  <a href="https://pypi.org/project/nvidia-physicsnemo/"><img alt="PyPI" src="https://img.shields.io/pypi/v/nvidia-physicsnemo?label=PyPI"></a>
-  <a href="https://docs.nvidia.com/physicsnemo/latest/"><img alt="Documentation" src="https://img.shields.io/badge/docs-latest-76B900"></a>
-  <a href="https://github.com/NVIDIA/physicsnemo/actions/workflows/install-ci.yml"><img alt="Install CI" src="https://github.com/NVIDIA/physicsnemo/actions/workflows/install-ci.yml/badge.svg"></a>
-  <a href="https://app.codecov.io/gh/NVIDIA/physicsnemo"><img alt="Codecov" src="https://codecov.io/gh/NVIDIA/physicsnemo/branch/main/graph/badge.svg"></a>
-  <a href="https://github.com/NVIDIA/physicsnemo/blob/main/LICENSE.txt"><img alt="License" src="https://img.shields.io/github/license/NVIDIA/physicsnemo"></a>
+  <a href="https://pypi.org/project/nvidia-physicsnemo/"><img alt="PyPI" src="https://img.shields.io/pypi/v/nvidia-physicsnemo?label=PyPI&style=flat-square"></a>
+  <a href="https://pypi.org/project/nvidia-physicsnemo/"><img alt="Downloads" src="https://img.shields.io/pypi/dm/nvidia-physicsnemo?style=flat-square"></a>
+  <a href="https://docs.nvidia.com/physicsnemo/latest/"><img alt="Documentation" src="https://img.shields.io/badge/docs-latest-76B900?style=flat-square"></a>
+  <a href="https://github.com/NVIDIA/physicsnemo/actions/workflows/install-ci.yml"><img alt="Install CI" src="https://img.shields.io/github/actions/workflow/status/NVIDIA/physicsnemo/install-ci.yml?branch=main&label=install%20CI&style=flat-square"></a>
+  <a href="https://app.codecov.io/gh/NVIDIA/physicsnemo"><img alt="Codecov" src="https://img.shields.io/codecov/c/github/NVIDIA/physicsnemo/main?style=flat-square"></a>
+  <a href="https://github.com/NVIDIA/physicsnemo/blob/main/LICENSE.txt"><img alt="License" src="https://img.shields.io/github/license/NVIDIA/physicsnemo?style=flat-square"></a>
 </div>
 
 <p align="center">
