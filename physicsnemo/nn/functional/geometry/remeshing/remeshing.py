@@ -42,6 +42,7 @@ def _validate_inputs(
     mesh_vertices: Float[torch.Tensor, "n_vertices 3"],
     mesh_indices: Integer[torch.Tensor, "n_faces 3"],
     n_clusters: int,
+    vertex_density: torch.Tensor | None,
     max_iterations: int,
     search_radius_scale: float,
     voxel_width_scale: float,
@@ -84,6 +85,28 @@ def _validate_inputs(
             "n_clusters cannot exceed the input vertex count. Got "
             f"n_clusters={n_clusters} and n_vertices={mesh_vertices.shape[0]}"
         )
+
+    if vertex_density is not None:
+        if not isinstance(vertex_density, torch.Tensor):
+            raise TypeError("vertex_density must be a torch.Tensor or None")
+        if (
+            vertex_density.ndim != 1
+            or vertex_density.shape[0] != mesh_vertices.shape[0]
+        ):
+            raise ValueError(
+                "vertex_density must have shape (n_vertices,). Got "
+                f"{tuple(vertex_density.shape)} for "
+                f"n_vertices={mesh_vertices.shape[0]}"
+            )
+        if not torch.is_floating_point(vertex_density):
+            raise TypeError(
+                "vertex_density must use a real floating-point dtype, got "
+                f"{vertex_density.dtype}"
+            )
+        if vertex_density.device != mesh_vertices.device:
+            raise ValueError(
+                "vertex_density and mesh_vertices must be on the same device"
+            )
 
     if isinstance(max_iterations, bool) or not isinstance(max_iterations, int):
         raise TypeError(
@@ -185,14 +208,69 @@ def _make_uv_sphere(
     return mesh_vertices.contiguous(), mesh_indices.contiguous()
 
 
+def _remeshing_with_mapping(
+    mesh_vertices: Float[torch.Tensor, "n_vertices 3"],
+    mesh_indices: Integer[torch.Tensor, "n_faces 3"],
+    n_clusters: int,
+    *,
+    max_iterations: int = 4,
+    vertex_density: torch.Tensor | None = None,
+    vertex_density_exponent: float = 1.0,
+    search_radius_scale: float = 1.6,
+    voxel_width_scale: float = 1.15,
+    hash_grid_resolution: int = 128,
+    farthest_point_threshold: int = 256,
+    farthest_point_oversampling: int = 4,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Run Warp remeshing and return source-triangle projection metadata."""
+    _validate_inputs(
+        mesh_vertices,
+        mesh_indices,
+        n_clusters,
+        vertex_density,
+        max_iterations,
+        search_radius_scale,
+        voxel_width_scale,
+        hash_grid_resolution,
+        farthest_point_threshold,
+        farthest_point_oversampling,
+    )
+    if mesh_vertices.device.type not in ("cpu", "cuda"):
+        raise ValueError(
+            "The Warp remeshing functional supports CPU and CUDA tensors. "
+            f"Got device {mesh_vertices.device}."
+        )
+
+    from ._warp_impl import remeshing_warp
+
+    detached_density = None if vertex_density is None else vertex_density.detach()
+    if detached_density is not None and detached_density.element_size() < 4:
+        detached_density = detached_density.to(torch.float32)
+
+    return remeshing_warp(
+        mesh_vertices.detach(),
+        mesh_indices.detach(),
+        n_clusters,
+        detached_density,
+        vertex_density_exponent,
+        max_iterations,
+        float(search_radius_scale),
+        float(voxel_width_scale),
+        hash_grid_resolution,
+        farthest_point_threshold,
+        farthest_point_oversampling,
+    )
+
+
 class Remeshing(FunctionSpec):
     """Remesh a triangle surface represented by tensors.
 
-    This low-level functional performs area-weighted centroidal clustering,
-    projects cluster centers onto the source surface, and reconstructs compact
-    triangle connectivity. The operation is intentionally non-differentiable.
-    Most users should call :func:`physicsnemo.mesh.remeshing.remesh`, which
-    accepts and returns :class:`physicsnemo.mesh.Mesh` objects.
+    This low-level functional performs integration-mass-weighted centroidal
+    clustering, projects cluster centers onto the source surface, and
+    reconstructs compact triangle connectivity. The operation is intentionally
+    non-differentiable. Most users should call
+    :func:`physicsnemo.mesh.remeshing.remesh`, which accepts and returns
+    :class:`physicsnemo.mesh.Mesh` objects.
 
     Parameters
     ----------
@@ -205,23 +283,32 @@ class Remeshing(FunctionSpec):
         Target output vertex count between 3 and ``n_vertices``, inclusive.
     max_iterations : int, optional
         Maximum centroid-relaxation iterations. Default is ``4``.
+    vertex_density : torch.Tensor or None, optional
+        Positive relative integration density with shape ``(n_vertices,)``.
+        Larger values allocate more output vertices near the corresponding
+        input vertices. Multiplying the full tensor by a positive constant
+        leaves the objective unchanged. It must use a real floating-point
+        dtype. Default is ``None`` for uniform remeshing.
     search_radius_scale : float, optional
-        Hash-grid query radius relative to
-        ``sqrt(surface_area / n_clusters)``. Default is ``1.6``.
+        Base hash-grid query radius relative to
+        ``sqrt(surface_area / n_clusters)``. Nonuniform density automatically
+        enlarges the effective radius to cover wider low-density spacing.
+        Default is ``1.6``.
     voxel_width_scale : float, optional
         Spatial-stratification voxel width relative to
-        ``sqrt(surface_area / n_clusters)``. Default is ``1.15``.
+        ``sqrt(surface_area / n_clusters)`` for the large uniform initializer.
+        It does not affect density-aware initialization. Default is ``1.15``.
     hash_grid_resolution : int, optional
         Resolution of each axis of the centroid hash grid. Must be at most
         ``256``, which bounds its two dense cell-offset arrays to 128 MiB.
         Default is ``128``.
     farthest_point_threshold : int, optional
         Use farthest-point initialization when ``n_clusters`` is at most this
-        value. Set to ``0`` to always use voxel initialization. Default is
-        ``256``.
+        value. Set to ``0`` to disable farthest-point initialization. Default
+        is ``256``.
     farthest_point_oversampling : int, optional
-        Area-weighted farthest-point candidate-pool size as a multiple of
-        ``n_clusters``. Default is ``4``.
+        Integration-mass-weighted farthest-point candidate-pool size as a
+        multiple of ``n_clusters``. Default is ``4``.
     implementation : {"warp"} | None, optional
         Explicit backend selection. Only ``"warp"`` is currently available.
 
@@ -274,6 +361,7 @@ class Remeshing(FunctionSpec):
         n_clusters: int,
         *,
         max_iterations: int = 4,
+        vertex_density: torch.Tensor | None = None,
         search_radius_scale: float = 1.6,
         voxel_width_scale: float = 1.15,
         hash_grid_resolution: int = 128,
@@ -295,14 +383,21 @@ class Remeshing(FunctionSpec):
             Target output vertex count.
         max_iterations : int, optional
             Maximum centroid-relaxation iterations.
+        vertex_density : torch.Tensor or None, optional
+            Positive relative integration density with shape
+            ``(n_vertices,)`` and a real floating-point dtype. Default is
+            ``None``.
         search_radius_scale : float, optional
-            Scale factor for the centroid hash-grid query radius.
+            Base scale factor for the centroid hash-grid query radius.
+            Nonuniform density can enlarge the effective radius.
         voxel_width_scale : float, optional
-            Scale factor for spatial-stratification voxel width.
+            Scale factor for the large uniform spatial-stratification voxel
+            width. It does not affect density-aware initialization.
         hash_grid_resolution : int, optional
             Resolution of each centroid hash-grid axis.
         farthest_point_threshold : int, optional
-            Largest target that uses farthest-point initialization.
+            Largest target that uses farthest-point initialization. Set to
+            ``0`` to disable it.
         farthest_point_oversampling : int, optional
             Candidate-pool multiplier for farthest-point initialization.
 
@@ -324,36 +419,19 @@ class Remeshing(FunctionSpec):
             If topology reconstruction cannot produce a nonempty manifold
             surface.
         """
-        _validate_inputs(
+        result = _remeshing_with_mapping(
             mesh_vertices,
             mesh_indices,
             n_clusters,
-            max_iterations,
-            search_radius_scale,
-            voxel_width_scale,
-            hash_grid_resolution,
-            farthest_point_threshold,
-            farthest_point_oversampling,
+            max_iterations=max_iterations,
+            vertex_density=vertex_density,
+            search_radius_scale=search_radius_scale,
+            voxel_width_scale=voxel_width_scale,
+            hash_grid_resolution=hash_grid_resolution,
+            farthest_point_threshold=farthest_point_threshold,
+            farthest_point_oversampling=farthest_point_oversampling,
         )
-        if mesh_vertices.device.type not in ("cpu", "cuda"):
-            raise ValueError(
-                "The Warp remeshing functional supports CPU and CUDA tensors. "
-                f"Got device {mesh_vertices.device}."
-            )
-
-        from ._warp_impl import remeshing_warp
-
-        return remeshing_warp(
-            mesh_vertices.detach(),
-            mesh_indices.detach(),
-            n_clusters,
-            max_iterations,
-            float(search_radius_scale),
-            float(voxel_width_scale),
-            hash_grid_resolution,
-            farthest_point_threshold,
-            farthest_point_oversampling,
-        )
+        return result[0], result[1]
 
     @classmethod
     def make_inputs_forward(cls, device: torch.device | str = "cpu"):

@@ -47,6 +47,11 @@ import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.models.utils.activation_checkpointing import (
+    resolve_checkpointing_ratio,
+    run_checkpoint,
+    should_checkpoint_interleaved_block,
+)
 from physicsnemo.nn import Mlp, PositionalEmbedding
 from physicsnemo.nn.module.physics_attention import (
     PhysicsAttentionIrregularMesh,
@@ -380,6 +385,13 @@ class Transolver(Module):
         Whether to include time embeddings.
     plus : bool, optional, default=False
         Whether to use Transolver++ variant.
+    activation_checkpointing : bool, optional, default=False
+        Whether to checkpoint Transolver blocks during training.
+    checkpointing_ratio : float, optional, default=1.0
+        Fraction of blocks to checkpoint when ``activation_checkpointing=True``.
+        Selected blocks are distributed evenly across the block stack.
+        Checkpointing trades additional computation during the backward pass
+        for lower activation memory usage.
 
     Forward
     -------
@@ -462,6 +474,8 @@ class Transolver(Module):
         use_te: bool = True,
         time_input: bool = False,
         plus: bool = False,
+        activation_checkpointing: bool = False,
+        checkpointing_ratio: float = 1.0,
     ) -> None:
         super().__init__(meta=MetaData())
 
@@ -495,6 +509,9 @@ class Transolver(Module):
 
         self.structured_shape = structured_shape
         self.unified_pos = unified_pos
+        self._activation_checkpointing_ratio = resolve_checkpointing_ratio(
+            activation_checkpointing, checkpointing_ratio
+        )
 
         # Set up positional embeddings
         if unified_pos:
@@ -562,6 +579,33 @@ class Transolver(Module):
             ]
         )
         self.initialize_weights()
+
+    def _should_checkpoint_block(self, block_idx: int) -> bool:
+        r"""Return whether a block should use activation checkpointing."""
+        # Full-object pickles created before activation checkpointing was added
+        # bypass ``__init__`` when loaded and therefore do not have this
+        # attribute. Treat those models exactly like the historical default.
+        return should_checkpoint_interleaved_block(
+            block_idx,
+            len(self.blocks),
+            getattr(self, "_activation_checkpointing_ratio", 0.0),
+            training=self.training,
+        )
+
+    def _checkpoint_block(self, block: nn.Module, fx: torch.Tensor) -> torch.Tensor:
+        r"""Checkpoint a block with the backend-appropriate implementation.
+
+        Transformer Engine's wrapper establishes the activation-recompute
+        contexts needed by its modules, including FP8 state and CUDA RNG
+        handling. The native PyTorch backend uses the recommended
+        non-reentrant checkpoint implementation directly.
+        """
+        return run_checkpoint(
+            block,
+            fx,
+            use_te=self.use_te,
+            te_module=te,
+        )
 
     def initialize_weights(self) -> None:
         r"""Initialize model weights using truncated normal distribution."""
@@ -725,8 +769,11 @@ class Transolver(Module):
             fx = fx + time_emb
 
         # Apply transformer blocks
-        for block in self.blocks:
-            fx = block(fx)
+        for block_idx, block in enumerate(self.blocks):
+            if self._should_checkpoint_block(block_idx):
+                fx = self._checkpoint_block(block, fx)
+            else:
+                fx = block(fx)
 
         # Reshape back to structured format if needed
         if self.structured_shape is not None:

@@ -33,16 +33,19 @@ The tests verify:
 
 - Consecutive reductions produce correct results
 - ``sum`` and ``mean`` operations work correctly on sharded tensors
+- Genuine ``Partial`` cotangents are reduced before reduction backward expands
+  them over the input shard
 - Backward passes produce correctly shaped and valued gradients
 - Gradient specs match input tensor specs (same placements and sharding shapes)
 """
 
 import pytest
 import torch
-from torch.distributed.tensor.placement_types import Shard
+from torch.distributed.tensor import DTensor
+from torch.distributed.tensor.placement_types import Partial, Shard
 
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.domain_parallel import scatter_tensor
+from physicsnemo.domain_parallel import ShardTensor, scatter_tensor
 
 
 @pytest.mark.multigpu_static
@@ -91,6 +94,130 @@ def test_consecutive_reductions(
     full_result = sharded_result.full_tensor()
 
     assert torch.allclose(baseline, full_result)
+
+
+@pytest.mark.multigpu_static
+def test_max_preserves_torch_return_type(distributed_mesh):
+    """The DTensor fallback must preserve named fields on structured results."""
+    dm = DistributedManager()
+    full_input = torch.randn(2, 128, 4, device=dm.device)
+    shard_tensor = scatter_tensor(
+        full_input,
+        0,
+        distributed_mesh,
+        (Shard(1),),
+        global_shape=full_input.shape,
+        dtype=full_input.dtype,
+        requires_grad=False,
+    )
+    full_input = shard_tensor.full_tensor()
+
+    sharded_result = torch.max(shard_tensor, dim=2)
+    full_result = torch.max(full_input, dim=2)
+
+    assert type(sharded_result) is type(full_result)
+    assert torch.allclose(sharded_result.values.full_tensor(), full_result.values)
+    assert torch.equal(sharded_result.indices.full_tensor(), full_result.indices)
+
+
+def run_partial_reduction_local_semantics(mesh):
+    dm = DistributedManager()
+    global_shape = (2,) + (16,) * mesh.ndim + (3,)
+    full_input = torch.arange(
+        torch.tensor(global_shape).prod().item(),
+        dtype=torch.float32,
+        device=dm.device,
+    ).reshape(global_shape)
+    placements = tuple(Shard(mesh_dim + 1) for mesh_dim in range(mesh.ndim))
+    shard_tensor = scatter_tensor(
+        full_input,
+        0,
+        mesh,
+        placements,
+        global_shape=global_shape,
+        dtype=full_input.dtype,
+        requires_grad=False,
+    )
+    reduction_dims = tuple(range(1, mesh.ndim + 1))
+
+    partial_result = shard_tensor.sum(dim=reduction_dims)
+
+    assert partial_result.placements == tuple(Partial() for _ in range(mesh.ndim))
+    expected_local = shard_tensor._local_tensor.sum(dim=reduction_dims)
+    torch.testing.assert_close(partial_result.to_local(), expected_local)
+    torch.testing.assert_close(
+        partial_result.full_tensor(), full_input.sum(dim=reduction_dims)
+    )
+
+
+@pytest.mark.multigpu_static
+def test_partial_reduction_local_semantics_1d(distributed_mesh):
+    run_partial_reduction_local_semantics(distributed_mesh)
+
+
+@pytest.mark.multigpu_static
+def test_partial_reduction_local_semantics_2d(distributed_mesh_2d):
+    run_partial_reduction_local_semantics(distributed_mesh_2d)
+
+
+def run_reduction_backward_resolves_partial_cotangent(mesh):
+    dm = DistributedManager()
+    global_shape = (2,) + (16,) * mesh.ndim + (3,)
+    full_input = torch.randn(global_shape, device=dm.device)
+    placements = tuple(Shard(mesh_dim + 1) for mesh_dim in range(mesh.ndim))
+    shard_tensor = scatter_tensor(
+        full_input,
+        0,
+        mesh,
+        placements,
+        global_shape=global_shape,
+        dtype=full_input.dtype,
+        requires_grad=True,
+    )
+    reduction_dims = tuple(range(1, mesh.ndim + 1))
+    partial_result = shard_tensor.sum(dim=reduction_dims)
+
+    coordinate = mesh.get_coordinate()
+    linear_rank = 0
+    mesh_size = 1
+    for mesh_dim, mesh_rank in enumerate(coordinate):
+        linear_rank = linear_rank * mesh.size(mesh_dim) + mesh_rank
+        mesh_size *= mesh.size(mesh_dim)
+    local_cotangent = torch.full(
+        partial_result.shape,
+        float(linear_rank + 1),
+        device=dm.device,
+    )
+    dtensor_cotangent = DTensor.from_local(
+        local_cotangent,
+        mesh,
+        [Partial()] * mesh.ndim,
+        run_check=False,
+    )
+    partial_cotangent = ShardTensor.from_dtensor(dtensor_cotangent)
+
+    (grad_input,) = torch.autograd.grad(
+        partial_result,
+        shard_tensor,
+        grad_outputs=partial_cotangent,
+    )
+
+    assert grad_input.placements == placements
+    expected_value = float(mesh_size * (mesh_size + 1) // 2)
+    torch.testing.assert_close(
+        grad_input._local_tensor,
+        torch.full_like(grad_input._local_tensor, expected_value),
+    )
+
+
+@pytest.mark.multigpu_static
+def test_reduction_backward_resolves_partial_cotangent_1d(distributed_mesh):
+    run_reduction_backward_resolves_partial_cotangent(distributed_mesh)
+
+
+@pytest.mark.multigpu_static
+def test_reduction_backward_resolves_partial_cotangent_2d(distributed_mesh_2d):
+    run_reduction_backward_resolves_partial_cotangent(distributed_mesh_2d)
 
 
 @pytest.mark.multigpu_static
