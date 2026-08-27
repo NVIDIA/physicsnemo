@@ -79,7 +79,7 @@ env:
   # Keep CONTAINER_ID in sync with the `image:` tag below.
   PYTHON_VERSION: "3.13"
   UV_VERSION: "0.12.5"
-  CONTAINER_ID: "cuda13.3.1-cudnn-devel-ubuntu24.04"
+  CONTAINER_ID: "cuda13.3.1-devel-ubuntu24.04"
   # All feature extras + cu13 backend + matching natten wheel index.  This
   # powers the @requires_module / pytest.importorskip tests that would
   # otherwise be skipped due to missing optional dependencies.  Modules
@@ -95,10 +95,10 @@ env:
   # to the previous prefix so the first run under the expanded EXTRAS_TAG
   # rebuilds the wheel cache from scratch instead of layering on top of
   # a stale narrower cache.
-  UV_CACHE_KEY_PREFIX:   "uv-cache-nightly-cuda13.3.1-cudnn-devel-ubuntu24.04-py3.13-uv0.12.5-fullextras"
+  UV_CACHE_KEY_PREFIX:   "uv-cache-nightly-cuda13.3.1-devel-ubuntu24.04-py3.13-uv0.12.5-fullextras"
   TESTMON_CACHE_KEY_PREFIX:  "testmon-nightly"
   COVERAGE_CACHE_KEY_PREFIX: "coverage-nightly"
-  JIT_CACHE_KEY_PREFIX: "jit-cache-cuda13.3.1-cudnn-devel-ubuntu24.04-py3.13"
+  JIT_CACHE_KEY_PREFIX: "jit-cache-cuda13.3.1-devel-ubuntu24.04-py3.13"
   JIT_CACHE_DIR: "/root/.cache/jit"
 
   # ---- uv read-only defaults --------------------------------------------
@@ -126,7 +126,7 @@ jobs:
     name: Build Environment
     runs-on: linux-amd64-cpu8
     container:
-      image: nvidia/cuda:13.3.1-cudnn-devel-ubuntu24.04
+      image: nvidia/cuda:13.3.1-devel-ubuntu24.04
       # /dev/shm defaults to 64 MiB in docker, which DALI's multiprocess
       # worker pool exhausts via SemLock allocations and trips ENOSPC
       # ("No space left on device") in datapipes tests.  2 GiB is plenty
@@ -186,7 +186,7 @@ jobs:
     needs: build-environment
     runs-on: linux-amd64-gpu-h100-latest-1
     container:
-      image: nvidia/cuda:13.3.1-cudnn-devel-ubuntu24.04
+      image: nvidia/cuda:13.3.1-devel-ubuntu24.04
       # /dev/shm defaults to 64 MiB in docker, which DALI's multiprocess
       # worker pool exhausts via SemLock allocations and trips ENOSPC
       # ("No space left on device") in datapipes tests.  2 GiB is plenty
@@ -293,7 +293,7 @@ jobs:
       # with github-pr.yml.
       COVERAGE_FAIL_UNDER: "70"
     container:
-      image: nvidia/cuda:13.3.1-cudnn-devel-ubuntu24.04
+      image: nvidia/cuda:13.3.1-devel-ubuntu24.04
       # /dev/shm defaults to 64 MiB in docker, which DALI's multiprocess
       # worker pool exhausts via SemLock allocations and trips ENOSPC
       # ("No space left on device") in datapipes tests.  2 GiB is plenty

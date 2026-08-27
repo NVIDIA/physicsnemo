@@ -38,7 +38,7 @@ jobs:
     name: Regen ci-requirements.lock
     runs-on: linux-amd64-cpu8
     container:
-      image: nvidia/cuda:13.3.1-cudnn-devel-ubuntu24.04
+      image: nvidia/cuda:13.3.1-devel-ubuntu24.04
 
     steps:
     - uses: actions/checkout@v5

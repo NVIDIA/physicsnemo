@@ -14,8 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-name: Bootstrap cuDNN CI container
-description: Install OS dependencies and uv in CUDA cuDNN container jobs
+name: Bootstrap CUDA CI container
+description: |
+  Install OS dependencies and uv in CUDA container jobs.  The container is
+  deliberately the plain `devel` variant (no system cuDNN): torch's pip
+  wheels pin their own nvidia-cudnn-cu13, and a second system copy caused
+  the loader to mix sub-libraries from the two installs (undefined-symbol
+  crashes at import).  All CUDA libraries come from pip; the container
+  contributes only the toolchain (nvcc) and OS packages.
 inputs:
   python-version:
     description: |

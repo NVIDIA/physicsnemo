@@ -68,8 +68,8 @@ env:
   PYTHON_VERSION: "3.13"
   UV_VERSION: "0.12.5"
   EXTRAS_TAG: "cu13,natten-cu13,utils-extras,mesh-extras,nn-extras,model-extras,datapipes-extras,uq-extras,gnns,sym,transformer-engine-cu13"
-  UV_CACHE_KEY_PREFIX: "uv-cache-nightly-cuda13.3.1-cudnn-devel-ubuntu24.04-py3.13-uv0.12.5-fullextras"
-  JIT_CACHE_KEY: "jit-cache-cuda13.3.1-cudnn-devel-ubuntu24.04-py3.13-latest"
+  UV_CACHE_KEY_PREFIX: "uv-cache-nightly-cuda13.3.1-devel-ubuntu24.04-py3.13-uv0.12.5-fullextras"
+  JIT_CACHE_KEY: "jit-cache-cuda13.3.1-devel-ubuntu24.04-py3.13-latest"
   JIT_CACHE_DIR: "/root/.cache/jit"
   # Two GPUs match the runner inventory already used by this repository.
   # Set both static repository variables together to exercise the cases that
@@ -138,7 +138,7 @@ jobs:
       actions: read
       contents: read
     container:
-      image: nvidia/cuda:13.3.1-cudnn-devel-ubuntu24.04
+      image: nvidia/cuda:13.3.1-devel-ubuntu24.04
       options: --shm-size=2g
 
     steps:
@@ -176,7 +176,7 @@ jobs:
       actions: read
       contents: read
     container:
-      image: nvidia/cuda:13.3.1-cudnn-devel-ubuntu24.04
+      image: nvidia/cuda:13.3.1-devel-ubuntu24.04
       options: --shm-size=2g
 
     steps:

@@ -32,7 +32,7 @@
 #   runners and silently break the testmon-stability guarantee.
 #
 #     docker run --rm -v "$PWD:/work" -w /work \
-#       nvidia/cuda:13.3.1-cudnn-devel-ubuntu24.04 \
+#       nvidia/cuda:13.3.1-devel-ubuntu24.04 \
 #       bash .github/regen-ci-deps-lock.sh
 #
 #   After it completes, review the diff and commit the updated
