@@ -107,6 +107,14 @@ numpy-stl==3.2.0
     # via
     #   -c /__w/_temp/uv-venv-state.txt
     #   -r .github/ci-requirements.txt
+nvidia-cublas==13.6.1.10
+    # via
+    #   -c /__w/_temp/uv-venv-state.txt
+    #   -r .github/ci-requirements.txt
+nvidia-cuda-nvrtc==13.0.88
+    # via
+    #   -c /__w/_temp/uv-venv-state.txt
+    #   nvidia-cublas
 opentelemetry-api==1.42.1
     # via
     #   -c /__w/_temp/uv-venv-state.txt
