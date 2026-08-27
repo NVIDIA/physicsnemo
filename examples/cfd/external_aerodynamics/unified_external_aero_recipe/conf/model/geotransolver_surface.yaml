@@ -60,3 +60,6 @@ model:
   neighbors_in_radius: [16, 32, 64]
   n_hidden_local: 32
   state_mixing_mode: "weighted"  # "weighted" (default) or "concat_project"
+  activation_checkpointing: false
+  checkpointing_ratio: 1.0
+  activation_checkpointing_components: [blocks]

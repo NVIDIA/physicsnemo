@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DomainMeshReader` transparently read zarr stores alongside
   `.pmsh`/`.pdmsh` (opt in via `pattern`). Requires optional `zarr >= 3`
   and a tensordict release with the zarr backend.
+- Adds configurable activation checkpointing to Transolver, FLARE, and
+  GeoTransolver. Transolver and FLARE support interleaved block checkpointing;
+  GeoTransolver supports checkpointing context construction, per-stream input
+  projections, GALE or GALE_FA blocks, and output projections.
 - Promotes GeoTransolver out of `experimental` to
   `physicsnemo.models.geotransolver.GeoTransolver`, together with the FLARE
   model (`physicsnemo.models.flare.FLARE`) and the reusable GALE and FLARE
@@ -334,6 +338,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `physicsnemo.mesh`: `validate(check_self_intersection=True)` now raises
   `NotImplementedError` (the check is unimplemented) instead of silently returning a
   `None` sentinel that masquerades as "no self-intersections found".
+- `Mesh.strip_caches` and `DomainMesh.strip_caches` now accept a `keep`
+  argument for retaining selected cache entries while clearing the rest.
+  `Mesh.with_points` and `Mesh.with_cells` provide cache-aware coordinate and
+  connectivity replacement for operations that preserve point or cell indexing,
+  while data-only mesh transforms now preserve valid geometry and topology caches
+  through `Mesh.with_data`.
 - `physicsnemo.mesh` quality metrics now use a normalized
   aspect ratio of longest edge to minimum altitude. The metric is dimensionless and
   scale-invariant for simplices of every manifold dimension, and a regular

@@ -1051,10 +1051,6 @@ class DomainMesh:
                 torch.cat(resolved_point_weights, dim=0) if has_point_weights else None
             )
 
-        from physicsnemo.mesh.transformations.deform._utils import (
-            _mesh_with_deformed_points,
-        )
-
         combined_output = apply_field(combined_points, combined_point_weights)
         output_points = (
             (combined_output,)
@@ -1062,7 +1058,7 @@ class DomainMesh:
             else combined_output.split(point_counts, dim=0)
         )
         output_meshes = [
-            _mesh_with_deformed_points(component, points)
+            component.with_points(points)
             for component, points in zip(component_meshes, output_points)
         ]
 
@@ -1115,17 +1111,26 @@ class DomainMesh:
             )
         )
 
-    def strip_caches(self) -> "DomainMesh":
+    def strip_caches(
+        self,
+        keep: str | tuple[str, ...] | Sequence[str | tuple[str, ...]] = (),
+    ) -> "DomainMesh":
         r"""Remove cached geometry from all meshes in the domain.
 
         Delegates to :meth:`Mesh.strip_caches` for each mesh.
 
+        Parameters
+        ----------
+        keep : str, tuple[str, ...], or sequence of either, optional
+            Cache keys to retain on every component mesh. See
+            :meth:`Mesh.strip_caches` for key semantics.
+
         Returns
         -------
         DomainMesh
-            New domain with all cached values cleared.
+            New domain retaining only the requested cached values on each mesh.
         """
-        return self.apply_to_meshes(lambda m: m.strip_caches())
+        return self.apply_to_meshes(lambda m: m.strip_caches(keep=keep))
 
     def subdivide(
         self,
