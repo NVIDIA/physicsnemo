@@ -133,6 +133,10 @@ runs:
         # non-cudnn container lacks; this tells TE to use headers from the
         # pip nvidia-* wheels instead (TE build_tools get_cuda_include_dirs).
         NVTE_BUILD_USE_NVIDIA_WHEELS: "1"
+        # Backstop for headers the wheels in TE's build env don't carry
+        # (crt/, cccl): CPATH acts as trailing -I dirs, so wheel headers
+        # keep priority and the toolkit fills the gaps.
+        CPATH: "/usr/local/cuda/include"
       run: |
         set -euo pipefail
         echo "::group::build venv (extras=${{ inputs.extras }})"

@@ -98,8 +98,10 @@ for e in "${extras[@]}"; do
 done
 rm -rf .venv
 # NVTE_BUILD_USE_NVIDIA_WHEELS: cudnn.h for the transformer-engine-torch
-# sdist build comes from the pip nvidia-* wheels (mirrors setup-uv-env).
+# sdist build comes from the pip nvidia-* wheels; CPATH backstops headers
+# the wheels don't carry (crt/, cccl).  Mirrors setup-uv-env.
 UV_LINK_MODE=copy UV_FROZEN=1 NVTE_BUILD_USE_NVIDIA_WHEELS=1 \
+  CPATH=/usr/local/cuda/include \
   uv sync --frozen --python "$PYTHON_VERSION" --group dev "${extra_flags[@]}"
 
 # ----------------------------------------------------------------------------
