@@ -97,7 +97,10 @@ for e in "${extras[@]}"; do
   fi
 done
 rm -rf .venv
-UV_LINK_MODE=copy UV_FROZEN=1 uv sync --frozen --python "$PYTHON_VERSION" --group dev "${extra_flags[@]}"
+# NVTE_BUILD_USE_NVIDIA_WHEELS: cudnn.h for the transformer-engine-torch
+# sdist build comes from the pip nvidia-* wheels (mirrors setup-uv-env).
+UV_LINK_MODE=copy UV_FROZEN=1 NVTE_BUILD_USE_NVIDIA_WHEELS=1 \
+  uv sync --frozen --python "$PYTHON_VERSION" --group dev "${extra_flags[@]}"
 
 # ----------------------------------------------------------------------------
 # Step 2: swap the CPU-built PyG wheels for CUDA builds.  scatter/sparse/

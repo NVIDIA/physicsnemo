@@ -129,6 +129,10 @@ runs:
         UV_LINK_MODE: copy
         UV_FROZEN: "1"
         UV_NO_SYNC: "1"
+        # The transformer-engine-torch sdist build needs cudnn.h, which the
+        # non-cudnn container lacks; this tells TE to use headers from the
+        # pip nvidia-* wheels instead (TE build_tools get_cuda_include_dirs).
+        NVTE_BUILD_USE_NVIDIA_WHEELS: "1"
       run: |
         set -euo pipefail
         echo "::group::build venv (extras=${{ inputs.extras }})"
