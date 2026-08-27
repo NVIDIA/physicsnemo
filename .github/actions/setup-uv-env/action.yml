@@ -153,6 +153,22 @@ runs:
         uv sync --frozen --python "${{ inputs.python-version }}" --group dev "${extra_flags[@]}"
         echo "::endgroup::"
 
+    # The transformer-engine wheel bundles a prebuilt transformer_engine_torch
+    # extension in wheel_lib/, compiled against an older torch C++ ABI, and
+    # TE's loader prefers it over the extension uv builds from sdist against
+    # the locked torch (search order: package dir, then site-packages).
+    # Remove the stale bundled copy so the from-source build is used.
+    - name: Prefer from-source transformer_engine_torch over bundled binary
+      shell: bash
+      run: |
+        set -euo pipefail
+        site_pkgs="$(.venv/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
+        if ! ls "${site_pkgs}"/transformer_engine_torch.cpython-*.so >/dev/null 2>&1; then
+          echo "::error::sdist-built transformer_engine_torch extension not found in site-packages"
+          exit 1
+        fi
+        rm -fv "${site_pkgs}"/transformer_engine/wheel_lib/transformer_engine_torch.cpython-*.so
+
     # --- Verification phase ----------------------------------------------
     # Use .venv/bin/python directly so uv cannot, even theoretically,
     # trigger an implicit resync.  This is the read-only access pattern
