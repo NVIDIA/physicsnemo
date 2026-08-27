@@ -237,9 +237,10 @@ alongside uncertainty quantification, guardrails, parameter-efficient fine-tunin
 with LoRA, and other research utilities.
 
 > **API stability:** APIs under `physicsnemo.experimental` are incubating and may change
-> between releases. Stable modules follow the project's semantic-versioning policy. Refer to
-> the [changelog](https://github.com/NVIDIA/physicsnemo/blob/main/CHANGELOG.md) for
-> additions, changes, deprecations, and removals.
+> between releases. Stable modules follow the project's semantic-versioning policy.
+> Refer to the [changelog][api-changelog] for API changes and removals.
+
+[api-changelog]: https://github.com/NVIDIA/physicsnemo/blob/main/CHANGELOG.md
 
 ## Use PhysicsNeMo with Coding Agents
 
