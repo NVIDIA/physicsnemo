@@ -405,6 +405,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `requires-python` no longer excludes Python 3.14 patch releases. Under PEP 440
+  `<=3.14` means `<=3.14.0`, so `pip install` failed on 3.14.1 and later even
+  though the `cp314` wheel installs and works. The bound is now `<3.15`.
 - `MeshReader` / `DomainMeshReader` sample discovery no longer uses
   `pathlib.Path.glob`, which can silently drop entries under filesystem
   metadata-server load (Lustre), causing training to proceed on a subset
