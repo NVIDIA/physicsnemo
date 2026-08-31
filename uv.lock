@@ -1,6 +1,6 @@
 version = 1
 revision = 3
-requires-python = ">=3.11, <=3.14"
+requires-python = ">=3.11, <3.15"
 resolution-markers = [
     "python_full_version >= '3.13' and platform_machine == 'ARM64' and sys_platform == 'win32' and extra != 'extra-18-nvidia-physicsnemo-cu12' and extra == 'extra-18-nvidia-physicsnemo-cu13' and extra != 'extra-18-nvidia-physicsnemo-natten-cu12' and extra == 'extra-18-nvidia-physicsnemo-natten-cu13' and extra != 'extra-18-nvidia-physicsnemo-transformer-engine-cu12' and extra == 'extra-18-nvidia-physicsnemo-transformer-engine-cu13'",
     "python_full_version == '3.12.*' and platform_machine == 'ARM64' and sys_platform == 'win32' and extra != 'extra-18-nvidia-physicsnemo-cu12' and extra == 'extra-18-nvidia-physicsnemo-cu13' and extra != 'extra-18-nvidia-physicsnemo-natten-cu12' and extra == 'extra-18-nvidia-physicsnemo-natten-cu13' and extra != 'extra-18-nvidia-physicsnemo-transformer-engine-cu12' and extra == 'extra-18-nvidia-physicsnemo-transformer-engine-cu13'",
