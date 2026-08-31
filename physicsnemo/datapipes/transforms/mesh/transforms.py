@@ -368,9 +368,7 @@ class DropMeshFields(MeshTransform):
         ### ``TensorDict.exclude(*keys)`` is null-safe: it returns a
         ### fresh TD minus the named keys (silently tolerating missing
         ### ones) and is a no-op clone when the key list is empty.
-        return Mesh(
-            points=mesh.points,
-            cells=mesh.cells,
+        return mesh.with_data(
             point_data=mesh.point_data.exclude(*self._point_data_keys),
             cell_data=mesh.cell_data.exclude(*self._cell_data_keys),
             global_data=mesh.global_data.exclude(*self._global_data_keys),
@@ -423,9 +421,7 @@ class RenameMeshFields(MeshTransform):
             if self._global_data_map
             else mesh.global_data
         )
-        return Mesh(
-            points=mesh.points,
-            cells=mesh.cells,
+        return mesh.with_data(
             point_data=new_pd,
             cell_data=new_cd,
             global_data=new_gd,
@@ -452,6 +448,10 @@ class SetGlobalField(MeshTransform):
     Typical use: inject a per-dataset inlet velocity vector so that
     downstream rotation transforms (with ``transform_global_data=True``)
     rotate it consistently with the mesh geometry.
+
+    On a :class:`~physicsnemo.mesh.DomainMesh`, the fields are written to
+    the domain-level ``global_data`` as well as to every sub-mesh's
+    ``global_data``.
     """
 
     def __init__(
@@ -474,11 +474,33 @@ class SetGlobalField(MeshTransform):
         new_gd.update(
             self._fields.to(device=mesh.points.device, dtype=mesh.points.dtype)
         )
-        return Mesh(
-            points=mesh.points,
-            cells=mesh.cells,
-            point_data=mesh.point_data,
-            cell_data=mesh.cell_data,
+        return mesh.with_data(global_data=new_gd)
+
+    def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
+        """Inject the fields into a :class:`DomainMesh`.
+
+        Writes the fields to the domain-level ``global_data`` in addition
+        to the base-class broadcast, which only reaches sub-mesh
+        ``global_data``.
+
+        Parameters
+        ----------
+        domain : DomainMesh
+            Input domain mesh (interior + boundaries).
+
+        Returns
+        -------
+        DomainMesh
+            Domain mesh with the fields set in the domain-level and every
+            sub-mesh ``global_data``.
+        """
+        domain = super().apply_to_domain(domain)
+        reference = domain.interior.points
+        new_gd = domain.global_data.clone()
+        new_gd.update(self._fields.to(device=reference.device, dtype=reference.dtype))
+        return DomainMesh(
+            interior=domain.interior,
+            boundaries=domain.boundaries,
             global_data=new_gd,
         )
 
@@ -593,13 +615,11 @@ class NormalizeMeshFields(MeshTransform):
             val = new_td[field_name].float()
             new_td[field_name] = (val - stats["mean"]) / (stats["std"] + self._eps)
 
-        ### `Mesh.copy` is a tensorclass-provided shallow copy: `points`,
-        ### `cells`, the untouched associations, and the geometric `_cache`
-        ### (centroids / areas / normals) are all shared with `mesh`, then
-        ### `setattr` swaps in the freshly-cloned association.
-        new_mesh = mesh.copy()  # ty: ignore[unresolved-attribute]
-        setattr(new_mesh, self._association, new_td)
-        return new_mesh
+        return mesh.with_data(
+            point_data=new_td if self._association == "point_data" else None,
+            cell_data=new_td if self._association == "cell_data" else None,
+            global_data=new_td if self._association == "global_data" else None,
+        )
 
     def inverse_tensor(
         self,
@@ -733,24 +753,12 @@ class ComputeSurfaceNormals(MeshTransform):
             normals = mesh.cell_normals
             new_cd = mesh.cell_data.clone()
             new_cd[self.field_name] = normals
-            return Mesh(
-                points=mesh.points,
-                cells=mesh.cells,
-                point_data=mesh.point_data,
-                cell_data=new_cd,
-                global_data=mesh.global_data,
-            )
+            return mesh.with_data(cell_data=new_cd)
         else:
             normals = mesh.point_normals
             new_pd = mesh.point_data.clone()
             new_pd[self.field_name] = normals
-            return Mesh(
-                points=mesh.points,
-                cells=mesh.cells,
-                point_data=new_pd,
-                cell_data=mesh.cell_data,
-                global_data=mesh.global_data,
-            )
+            return mesh.with_data(point_data=new_pd)
 
     def extra_repr(self) -> str:
         return f"store_as={self.store_as!r}, field_name={self.field_name!r}"
@@ -1079,13 +1087,7 @@ class MeshToDomainMesh(MeshTransform):
             if self._cell_data_targets
             else mesh.cell_data
         )
-        boundary = Mesh(
-            points=mesh.points,
-            cells=mesh.cells,
-            point_data=mesh.point_data,
-            cell_data=boundary_cell_data,
-            global_data=mesh.global_data,
-        )
+        boundary = mesh.with_data(cell_data=boundary_cell_data)
         return DomainMesh(
             interior=interior,
             boundaries={self._boundary_name: boundary},
@@ -1109,13 +1111,7 @@ class MeshToDomainMesh(MeshTransform):
             if self._point_data_targets
             else mesh.point_data
         )
-        boundary = Mesh(
-            points=mesh.points,
-            cells=mesh.cells,
-            point_data=boundary_point_data,
-            cell_data=mesh.cell_data,
-            global_data=mesh.global_data,
-        )
+        boundary = mesh.with_data(point_data=boundary_point_data)
         return DomainMesh(
             interior=interior,
             boundaries={self._boundary_name: boundary},

@@ -131,10 +131,4 @@ class MeshReaderWithGlobalData(MeshReader):
             )
         merged.update(ext_td)
 
-        return Mesh(
-            points=mesh.points,
-            cells=mesh.cells,
-            point_data=mesh.point_data,
-            cell_data=mesh.cell_data,
-            global_data=merged,
-        )
+        return mesh.with_data(global_data=merged)
