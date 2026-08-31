@@ -105,14 +105,15 @@ runs:
         UV_LINK_MODE: copy
         UV_FROZEN: "1"
         UV_NO_SYNC: "1"
-        # Pin uv to the container's python3 and forbid managed-CPython
-        # downloads.  Without this, uv discovers any interpreter that
-        # satisfies requires-python and can silently build the venv on a
-        # different Python than the container baseline the cache key
-        # advertises (the interpreter-swap that masked #1952).  With the
-        # pin, an incompatible requires-python bound fails the sync loudly.
+        # Pin uv to the container's python3, reject managed interpreters,
+        # and forbid downloads.  Without this, uv discovers any interpreter
+        # that satisfies requires-python and can silently build the venv on
+        # a different Python than the container baseline the cache key
+        # advertises (the interpreter-swap that masked #1952).  With these
+        # constraints, an incompatible requires-python bound fails loudly.
         UV_PYTHON: python3
         UV_PYTHON_DOWNLOADS: never
+        UV_NO_MANAGED_PYTHON: "1"
       run: |
         set -euo pipefail
         echo "::group::build venv (extras=${{ inputs.extras }})"
