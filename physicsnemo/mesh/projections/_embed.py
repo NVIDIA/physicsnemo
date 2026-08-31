@@ -180,20 +180,6 @@ def embed(
         suffix = mesh.points[:, insert_at:]
         new_points = torch.cat([prefix, zeros, suffix], dim=1)
 
-    ### Preserve cells (topology unchanged)
-    new_cells = mesh.cells
-
-    ### Preserve user data, but clear cached properties
-    # Cached properties depend on spatial embedding and must be recomputed
-    new_point_data = mesh.point_data
-    new_cell_data = mesh.cell_data
-    new_global_data = mesh.global_data
-
-    ### Create new mesh with modified spatial dimensions
-    return Mesh(
-        points=new_points,
-        cells=new_cells,
-        point_data=new_point_data,
-        cell_data=new_cell_data,
-        global_data=new_global_data,
-    )
+    ### Connectivity is unchanged, so retain topology while invalidating all
+    # embedding-dependent geometry caches.
+    return mesh.with_points(new_points)

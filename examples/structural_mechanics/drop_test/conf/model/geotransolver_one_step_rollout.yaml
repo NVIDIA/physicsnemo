@@ -26,6 +26,11 @@ n_layers: 6
 use_te: false
 time_input: false
 include_local_features: true
+# Keep model-level checkpointing disabled: the rollout wrapper checkpoints each
+# complete step during training.
+activation_checkpointing: false
+checkpointing_ratio: 1.0
+activation_checkpointing_components: [blocks]
 
 ### Rollout parameters ###
 num_time_steps: ${training.num_time_steps}

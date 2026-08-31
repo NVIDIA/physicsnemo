@@ -8,12 +8,17 @@ contract_types =
 [importlinter:contract:physicsnemo-modules]
 name = Prevent Upward Imports in the PhysicsNemo Structure
 type = layers
+exhaustive = True
+ignore_imports =
+   physicsnemo -> physicsnemo.compat
+exhaustive_ignores =
+   conftest
 containers=
    physicsnemo
 layers = 
+   compat
    experimental
-   active_learning : diffusion
-   sym
+   deploy | active_learning | diffusion | sym
    models : datapipes : metrics : domain_parallel : optim
    mesh
    nn
@@ -24,17 +29,19 @@ layers =
 [importlinter:contract:physicsnemo-core]
 name = Control Dependencies in PhysicsNeMo core
 type = layers
+exhaustive = True
 containers=
    physicsnemo.core
 layers = 
-   module : registry
-   meta
+   module
+   registry | meta | function_spec
    warnings | version_check | filesystem
 
 
 [importlinter:contract:physicsnemo-distributed]
 name = Control Dependencies in PhysicsNeMo distributed
 type = layers
+exhaustive = True
 containers=
    physicsnemo.distributed
 layers = 
@@ -42,11 +49,12 @@ layers =
    mappings
    utils
    manager
-   config
+   config | fused_all_reduce
 
 [importlinter:contract:physicsnemo-utils]
 name = Control Dependencies in PhysicsNeMo utils
 type = layers
+exhaustive = True
 containers=
    physicsnemo.utils
 layers = 
@@ -54,7 +62,7 @@ layers =
    profiling
    checkpoint
    capture
-   logging | memory
+   logging | memory | _index_tuple_ops
 
 [importlinter:contract:physicsnemo-nn]
 name = Control Dependencies in PhysicsNeMo nn
@@ -65,18 +73,23 @@ layers =
    module.fourier_layers | module.transformer_layers | module.unet_layers
    module.dgm_layers | module.mlp_layers | module.fully_connected_layers | module.gnn_layers | module.attention_layers
    module.activations | module.ball_query | module.conv_layers  | module.drop | module.fft | module.fused_silu | module.kan_layers  | module.resample_layers | module.siren_layers | module.spectral_layers | module.transformer_decoder  | module.weight_fact | module.weight_norm | module.embedding_layers | module.group_norm | module.hpx
-   functional
-   module.utils
+   functional | module.utils
+
+[importlinter:contract:physicsnemo-mesh-nn]
+name = Keep NN Functionals below Mesh and NN Modules
+type = layers
+layers =
+   physicsnemo.mesh | physicsnemo.nn.module
+   physicsnemo.nn.functional
 
 [importlinter:contract:physicsnemo-nn-gnn-layers]
 name = Control Internal Dependencies in PhysicsNeMo nn GNN Layers
 type = layers
+exhaustive = True
 containers=
    physicsnemo.nn.module.gnn_layers
 layers = 
-   bsms
-   mesh_graph_decoder | mesh_graph_encoder
-   mesh_node_block | mesh_edge_block
+   bsms | embedder | mesh_graph_decoder | mesh_graph_encoder | mesh_node_block | mesh_edge_block
    mesh_graph_mlp 
    utils  
    graph
@@ -86,28 +99,33 @@ layers =
 [importlinter:contract:physicsnemo-models]
 name = Prevent Imports between physicsnemo models
 type = layers
+exhaustive = True
 containers=
    physicsnemo.models
 layers = 
-   mesh_reduced
+   mesh_reduced | flare | geotransolver
    afno | dlwp | dlwp_healpix | dit | domino | dpot | fengwu | figconvnet | fno | graphcast | meshgraphnet | pangu | pix2pix | rnn |  srrn | swinvrnn | topodiff | transolver  | vfgn | diffusion_unets
    unet
+   mlp
+   utils
 
 [importlinter:contract:physicsnemo-diffusion]
 name = Control Internal Dependencies in PhysicsNeMo diffusion
 type = layers
+exhaustive = True
 containers=
    physicsnemo.diffusion
 layers = 
    generate
-   samplers : metrics
-   multi_diffusion : preconditioners : guidance
+   samplers | metrics
+   multi_diffusion | preconditioners | guidance
    noise_schedulers
-   utils
+   utils | base
 
 [importlinter:contract:physicsnemo-sym]
 name = Control Internal Dependencies in PhysicsNeMo sym
 type = layers
+exhaustive = True
 containers=
    physicsnemo.sym
 layers = 

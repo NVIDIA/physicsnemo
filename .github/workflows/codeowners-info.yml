@@ -14,7 +14,7 @@ jobs:
   report:
     if: >
       github.event_name == 'pull_request_target' ||
-      (github.event.issue.pull_request && github.event.comment.body == '/codeowners-info' &&
+      (github.event.issue.pull_request && startsWith(github.event.comment.body, '/codeowners-info') &&
        contains(fromJSON('["COLLABORATOR", "MEMBER", "OWNER"]'), github.event.comment.author_association))
     # Job-level so that skipped runs (issue_comment fires for every comment in
     # the repo) never enter the group and cancel a real run.

@@ -44,6 +44,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DomainMeshReader` transparently read zarr stores alongside
   `.pmsh`/`.pdmsh` (opt in via `pattern`). Requires optional `zarr >= 3`
   and a tensordict release with the zarr backend.
+- Adds configurable activation checkpointing to Transolver, FLARE, and
+  GeoTransolver. Transolver and FLARE support interleaved block checkpointing;
+  GeoTransolver supports checkpointing context construction, per-stream input
+  projections, GALE or GALE_FA blocks, and output projections.
 - Promotes GeoTransolver out of `experimental` to
   `physicsnemo.models.geotransolver.GeoTransolver`, together with the FLARE
   model (`physicsnemo.models.flare.FLARE`) and the reusable GALE and FLARE
@@ -391,6 +395,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `physicsnemo.mesh`: `validate(check_self_intersection=True)` now raises
   `NotImplementedError` (the check is unimplemented) instead of silently returning a
   `None` sentinel that masquerades as "no self-intersections found".
+- `Mesh.strip_caches` and `DomainMesh.strip_caches` now accept a `keep`
+  argument for retaining selected cache entries while clearing the rest.
+  `Mesh.with_points` and `Mesh.with_cells` provide cache-aware coordinate and
+  connectivity replacement for operations that preserve point or cell indexing,
+  while data-only mesh transforms now preserve valid geometry and topology caches
+  through `Mesh.with_data`.
 - `physicsnemo.mesh` quality metrics now use a normalized
   aspect ratio of longest edge to minimum altitude. The metric is dimensionless and
   scale-invariant for simplices of every manifold dimension, and a regular
@@ -519,16 +529,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and interior elements equal inclusion probability.
 - Cell-subsampled GLOBE inputs now retain their effective integration measure,
   preventing area-weighted outputs and gradients from collapsing.
+- `SetGlobalField` now writes injected fields to the domain-level `global_data`
+  of a `DomainMesh`, in addition to the existing per-sub-mesh broadcast.
+  Previously, code reading `DomainMesh.global_data` never saw the injected
+  fields.
 - `physicsnemo.mesh.io.from_pyvista(..., force_copy=True)` now copies attached
   point, cell, and global data as well as geometry. The matching new
   `to_pyvista(..., force_copy=True)` option prevents exported PyVista geometry
   and data from mutating the source `Mesh` through shared CPU storage.
+- `physicsnemo.mesh.io.from_pyvista` now supports native line/poly-line grids,
+  pixels, triangle strips, and pentagonal/hexagonal prisms, and selects explicit
+  dimensions from mixed `UnstructuredGrid` inputs while preserving selected
+  parent data. Explicit 1D conversion still derives the unique edge graph when
+  no native lines exist. Connectivity and attached-data invariants are validated
+  before VTK filters run. Unsupported higher-order topology is rejected pending
+  globally conforming tessellation, while explicit vertex point-cloud conversion
+  remains available without interpreting that topology. Centroid conversion
+  rejects parents that cannot preserve cell-data alignment.
 - `physicsnemo.mesh.sampling.sample_data_at_points` now handles integer and
   boolean fields by returning `float64`, so NaN sentinels and non-integral
   interpolation or multi-cell means are representable (subject to the usual
   `float64` precision limits). Point-data interpolation now promotes field and
   geometry dtypes consistently, and accumulation uses fewer full-sized
   temporaries and CUDA host synchronizations.
+- `Mesh.point_data_to_cell_data` now handles integer and boolean point fields
+  by returning `float64`, instead of raising `mean(): could not infer output
+  dtype`. A mean of integers is generally non-integral, so it is computed in
+  floating point (subject to the usual `float64` precision limits). This
+  matches `Mesh.cell_data_to_point_data`, which already promoted discrete
+  fields the same way; floating-point and complex fields are unaffected.
 - `physicsnemo.mesh.projections.extrude` now produces a *conforming* (crack-free)
   simplicial complex for multi-cell inputs. Each prism was previously tessellated
   using the per-cell local vertex order, so adjacent cells that listed a shared
@@ -856,6 +885,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `torch.nn.init.trunc_normal_` that emits a `DeprecationWarning` on
   call, replacing the frozen in-tree copy of the legacy inverse-CDF
   implementation. Use `torch.nn.init.trunc_normal_` directly.
+- Deprecates the CorrDiff example (`examples/weather/corrdiff`), which no longer
+  receives maintenance, bug fixes, or new features. Use the regional
+  high-resolution weather model example (`examples/weather/stormcast`) instead.
+  That example unifies regional diffusion-based weather models, and covers the
+  CorrDiff downscaling setting alongside other diffusion-based settings.
 
 ### Removed
 

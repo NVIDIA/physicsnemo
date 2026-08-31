@@ -93,10 +93,4 @@ def load(
     # Apply perturbation
     perturbed_points = mesh.points + perturbation
 
-    return Mesh(
-        points=perturbed_points,
-        cells=mesh.cells,
-        point_data=mesh.point_data,
-        cell_data=mesh.cell_data,
-        global_data=mesh.global_data,
-    )
+    return mesh.with_points(perturbed_points)
