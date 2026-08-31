@@ -109,10 +109,7 @@ runs:
         set -euo pipefail
         python3 --version
         uv --version
-        # Hard-fail if the container's python3 is not the major.minor the
-        # cache key advertises -- same rationale as the uv pin check below.
-        # A container image update that changes the Python minor would
-        # otherwise silently reuse caches keyed to the old interpreter.
+        # Keep the container Python aligned with its cache key.
         actual_py="$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
         if [ "$actual_py" != "$EXPECTED_PYTHON_VERSION" ]; then
           echo "::error::Python version mismatch: expected ${EXPECTED_PYTHON_VERSION}, got ${actual_py}"

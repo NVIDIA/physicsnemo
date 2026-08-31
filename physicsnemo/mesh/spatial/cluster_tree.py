@@ -42,8 +42,6 @@ far-field monopole approximation. The two classes share
 independent.
 """
 
-# ``tensorclass`` conversion methods shadow builtin names during Python 3.14
-# annotation evaluation, so scalar types in the decorated classes are qualified.
 import builtins
 import logging
 from typing import NamedTuple

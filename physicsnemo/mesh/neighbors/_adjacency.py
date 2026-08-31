@@ -20,8 +20,6 @@ This module provides the Adjacency tensorclass for representing ragged arrays
 using offset-indices encoding, commonly used in graph and mesh processing.
 """
 
-# ``tensorclass`` conversion methods shadow builtin names during Python 3.14
-# annotation evaluation, so scalar types in the decorated class are qualified.
 import builtins
 
 import torch

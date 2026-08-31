@@ -25,8 +25,6 @@ O(log N) Python iterations instead of the O(N) iterations required by a naive
 sequential approach, enabling scalability to hundreds of millions of cells.
 """
 
-# ``tensorclass`` conversion methods shadow builtin names during Python 3.14
-# annotation evaluation, so scalar types in the decorated class are qualified.
 import builtins
 from typing import TYPE_CHECKING
 

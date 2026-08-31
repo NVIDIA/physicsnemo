@@ -105,12 +105,7 @@ runs:
         UV_LINK_MODE: copy
         UV_FROZEN: "1"
         UV_NO_SYNC: "1"
-        # Pin uv to the container's python3, reject managed interpreters,
-        # and forbid downloads.  Without this, uv discovers any interpreter
-        # that satisfies requires-python and can silently build the venv on
-        # a different Python than the container baseline the cache key
-        # advertises (the interpreter-swap that masked #1952).  With these
-        # constraints, an incompatible requires-python bound fails loudly.
+        # Use only the container's Python.
         UV_PYTHON: python3
         UV_PYTHON_DOWNLOADS: never
         UV_NO_MANAGED_PYTHON: "1"
@@ -140,9 +135,7 @@ runs:
         set -euo pipefail
         echo "::group::verify environment"
         .venv/bin/python --version
-        # Hard-fail if the venv's interpreter is not the system python3 the
-        # sync step pinned -- same rationale as the uv version pin check:
-        # otherwise the cache key would lie about which Python built it.
+        # Keep the venv Python aligned with the cache key.
         venv_py="$(.venv/bin/python -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
         sys_py="$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
         if [ "$venv_py" != "$sys_py" ]; then

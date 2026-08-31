@@ -36,11 +36,7 @@ on:
 # Note: env context not available in container.image, so we hardcode the value
 
 env:
-  # Pin uv to the NGC container's python3, reject managed interpreters,
-  # and forbid downloads.  The whole point of this workflow is testing
-  # against the container's own Python/torch stack; without these constraints,
-  # uv can silently build or run the venv on a different Python (the
-  # interpreter-swap that masked #1952).  An incompatible bound must fail.
+  # Use only the container's Python.
   UV_PYTHON: python3
   UV_PYTHON_DOWNLOADS: never
   UV_NO_MANAGED_PYTHON: "1"
