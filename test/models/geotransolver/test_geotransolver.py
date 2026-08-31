@@ -14,19 +14,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import gc
 import importlib
+import pickle
 import re
 import sys
-import gc
-import pickle
 from types import SimpleNamespace
 
 import pytest
 import torch
 from omegaconf import OmegaConf
 
-from physicsnemo.core.warnings import LegacyFeatureWarning
 from physicsnemo.core.module import Module
+from physicsnemo.core.warnings import LegacyFeatureWarning
 from physicsnemo.models.geotransolver import geotransolver as geotransolver_module
 from physicsnemo.models.geotransolver.geotransolver import (
     GeoTransolver,
