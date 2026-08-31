@@ -68,8 +68,9 @@ dm = DistributedManager()
 torch.cuda.set_device(dm.device)
 
 # ddp_size * domain_size must equal world size. Build BOTH axes explicitly.
-mesh = dm.initialize_mesh(mesh_shape=(ddp_size, domain_size),
-                          mesh_dim_names=["ddp", "domain"])
+mesh = dm.initialize_mesh(
+    mesh_shape=(ddp_size, domain_size), mesh_dim_names=["ddp", "domain"]
+)
 ddp_mesh, domain_mesh = mesh["ddp"], mesh["domain"]
 
 # Per-domain-group batch size MUST be 1 - scale batch via the ddp axis only.
@@ -79,8 +80,9 @@ assert x.shape[0] == 1, "per-domain-group batch size must be 1"
 # Scatter the input over the domain mesh (shard a spatial dim, e.g. H of BCHW).
 # scatter_tensor needs the GLOBAL rank of the domain group's source rank.
 src = torch.distributed.get_global_rank(domain_mesh.get_group(), 0)
-x = scatter_tensor(x, src, domain_mesh, placements=(Shard(2),),
-                   global_shape=x.shape, dtype=x.dtype)
+x = scatter_tensor(
+    x, src, domain_mesh, placements=(Shard(2),), global_shape=x.shape, dtype=x.dtype
+)
 # Targets/labels are usually replicated:
 target = scatter_tensor(target, src, domain_mesh, placements=(Replicate(),))
 ```
@@ -121,8 +123,10 @@ with torch.no_grad():
 # DTensor on the domain mesh (params are static -> DTensor's even chunking is
 # exactly right; ShardTensor is for the possibly-uneven ACTIVATIONS):
 from torch.distributed.tensor import distribute_tensor
+
 model.pos_embed = nn.Parameter(
-    distribute_tensor(model.pos_embed.data, domain_mesh, [Shard(1)]))
+    distribute_tensor(model.pos_embed.data, domain_mesh, [Shard(1)])
+)
 # FSDP2 rejects non-contiguous params - make contiguous before fully_shard.
 ```
 
