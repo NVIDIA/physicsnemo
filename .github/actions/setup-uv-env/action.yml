@@ -105,6 +105,10 @@ runs:
         UV_LINK_MODE: copy
         UV_FROZEN: "1"
         UV_NO_SYNC: "1"
+        # Use only the container's Python.
+        UV_PYTHON: python3
+        UV_PYTHON_DOWNLOADS: never
+        UV_NO_MANAGED_PYTHON: "1"
       run: |
         set -euo pipefail
         echo "::group::build venv (extras=${{ inputs.extras }})"
@@ -131,6 +135,13 @@ runs:
         set -euo pipefail
         echo "::group::verify environment"
         .venv/bin/python --version
+        # Keep the venv Python aligned with the cache key.
+        venv_py="$(.venv/bin/python -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+        sys_py="$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+        if [ "$venv_py" != "$sys_py" ]; then
+          echo "::error::venv Python ${venv_py} does not match system python3 ${sys_py}"
+          exit 1
+        fi
         .venv/bin/python -c "import torch; print(f'torch={torch.__version__} cuda={torch.version.cuda}')"
         echo "::endgroup::"
 

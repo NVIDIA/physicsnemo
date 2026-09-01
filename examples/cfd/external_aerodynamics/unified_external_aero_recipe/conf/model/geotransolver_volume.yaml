@@ -31,6 +31,10 @@
 # `interior.point_data`.  The contract is satisfied because the loss
 # only extracts target names; non-target fields like `sdf` can be
 # referenced as inputs without contaminating the loss.
+dataset_reader_overrides:
+  # This point-based model consumes only the volume interior.
+  drop_in_file_boundaries: true
+
 input_type: tensors
 output_type: tensors
 

@@ -1,5 +1,6 @@
 trimesh>=4.5.0
 torch_geometric>=2.6.1
+tensorboard
 pyvista
 vtk
 wandb

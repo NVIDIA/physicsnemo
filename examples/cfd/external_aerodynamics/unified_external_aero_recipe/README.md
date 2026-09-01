@@ -515,6 +515,10 @@ Notes on the composition:
 - Forward kwargs live alongside the model in the same template because
   they are a property of the model class's forward signature, not an
   independent dimension.
+- Model templates may declare `dataset_reader_overrides`; `build_dataloaders`
+  merges those keys into each selected dataset's reader config. Volume datasets
+  preserve in-file boundaries by default; point-based volume templates opt into
+  dropping them, while GLOBE keeps the lossless default it requires.
 - The model template's `out_dim: ${out_dim}` interpolation resolves
   against a top-level `out_dim` value that `build_dataloaders()`
   computes from the chosen dataset's `targets:` block (sum of channel

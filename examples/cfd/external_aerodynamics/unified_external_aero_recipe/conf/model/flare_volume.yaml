@@ -20,6 +20,10 @@
 # ---------------------------------------------------------------------------
 # Same volume forward signature as Transolver volume; only the
 # attention backbone differs.
+dataset_reader_overrides:
+  # This point-based model consumes only the volume interior.
+  drop_in_file_boundaries: true
+
 input_type: tensors
 output_type: tensors
 
