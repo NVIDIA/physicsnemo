@@ -74,6 +74,56 @@ def test_manager(monkeypatch):
     DistributedManager.cleanup()
 
 
+def test_manager_setup_cpu_gloo(monkeypatch):
+    """setup() must work on CPU-only hosts (gloo backend, no accelerator).
+
+    Regression test: passing a CPU torch.device as ``device_id`` to
+    ``init_process_group`` raises on recent PyTorch versions, and deriving
+    ``local_rank`` from ``torch.cuda.device_count()`` divides by zero when
+    no accelerator is present.
+    """
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 0)
+
+    DistributedManager.setup(
+        rank=0,
+        world_size=1,
+        local_rank=None,
+        addr="localhost",
+        port="12356",
+        backend="gloo",
+        method="env",
+    )
+    manager = DistributedManager()
+
+    assert manager.is_initialized()
+    assert manager.device.type == "cpu"
+    assert manager.local_rank == 0
+    assert torch.distributed.is_initialized()
+    DistributedManager.cleanup()
+
+
+def test_manager_initialize_env_cpu_no_local_rank(monkeypatch):
+    """initialize() via env variables must work on CPU-only hosts when
+    LOCAL_RANK is not set (local rank derivation must not divide by the
+    accelerator count)."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 0)
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("WORLD_SIZE", "1")
+    monkeypatch.setenv("MASTER_ADDR", "localhost")
+    monkeypatch.setenv("MASTER_PORT", "12357")
+    monkeypatch.delenv("LOCAL_RANK", raising=False)
+
+    DistributedManager.initialize()
+    manager = DistributedManager()
+
+    assert manager.is_initialized()
+    assert manager.device.type == "cpu"
+    assert manager.local_rank == 0
+    DistributedManager.cleanup()
+
+
 def test_manager_slurm(monkeypatch):
     # Test distributed manager with Slurm variables
     monkeypatch.setenv("MASTER_ADDR", "localhost")
