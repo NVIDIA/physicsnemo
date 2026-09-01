@@ -97,11 +97,16 @@ for e in "${extras[@]}"; do
   fi
 done
 rm -rf .venv
-# NVTE_BUILD_USE_NVIDIA_WHEELS: cudnn.h for the transformer-engine-torch
-# sdist build comes from the pip nvidia-* wheels; CPATH backstops headers
-# the wheels don't carry (crt/, cccl).  Mirrors setup-uv-env.
-UV_LINK_MODE=copy UV_FROZEN=1 NVTE_BUILD_USE_NVIDIA_WHEELS=1 \
-  CPATH=/usr/local/cuda/include \
+# This is a temporary hack for transformer engine and cuda13.
+# It can be removed when this PR merges upstream:
+# https://github.com/NVIDIA/TransformerEngine/pull/3251
+# That PR was open against v2.18, so we need TE > 2.18 
+# to resolve before removing this env hack:
+SP="$PWD/.venv/lib/python${PYTHON_VERSION}/site-packages"
+UV_LINK_MODE=copy UV_FROZEN=1 \
+  CUDA_HOME="$SP/nvidia/cu13" \
+  CPLUS_INCLUDE_PATH="$SP/nvidia/cudnn/include:$SP/nvidia/nccl/include" \
+  MAX_JOBS=16 \
   uv sync --frozen --python "$PYTHON_VERSION" --group dev "${extra_flags[@]}"
 
 # ----------------------------------------------------------------------------
