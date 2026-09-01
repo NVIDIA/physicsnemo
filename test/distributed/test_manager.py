@@ -396,5 +396,66 @@ def test_process_groups_from_config(monkeypatch):
     )
 
 
+def _track_env(monkeypatch, name):
+    # Register ``name`` with monkeypatch's undo stack even when it is unset,
+    # so a value written by the code under test is removed at teardown.
+    monkeypatch.setenv(name, "tracked")
+    monkeypatch.delenv(name)
+
+
+def test_isolate_torch_compile_cache_sets_per_rank_dir(monkeypatch):
+    """Multi-rank setup gives each local rank its own inductor cache dir."""
+    _track_env(monkeypatch, "TORCHINDUCTOR_CACHE_DIR")
+    monkeypatch.delenv("PHYSICSNEMO_SHARED_TORCH_COMPILE_CACHE", raising=False)
+
+    DistributedManager._isolate_torch_compile_cache(local_rank=3, world_size=8)
+
+    cache_dir = os.environ.get("TORCHINDUCTOR_CACHE_DIR")
+    assert cache_dir is not None
+    assert cache_dir.endswith("_rank3")
+
+
+def test_isolate_torch_compile_cache_single_rank_untouched(monkeypatch):
+    """A single-rank run keeps torch's default shared cache."""
+    _track_env(monkeypatch, "TORCHINDUCTOR_CACHE_DIR")
+
+    DistributedManager._isolate_torch_compile_cache(local_rank=0, world_size=1)
+
+    assert "TORCHINDUCTOR_CACHE_DIR" not in os.environ
+
+
+def test_isolate_torch_compile_cache_respects_user_dir(monkeypatch):
+    """An explicitly configured cache dir is never overridden."""
+    monkeypatch.setenv("TORCHINDUCTOR_CACHE_DIR", "/my/own/cache")
+
+    DistributedManager._isolate_torch_compile_cache(local_rank=1, world_size=4)
+
+    assert os.environ["TORCHINDUCTOR_CACHE_DIR"] == "/my/own/cache"
+
+
+def test_isolate_torch_compile_cache_overrides_torch_default_writeback(monkeypatch):
+    """torch's cache_dir() writes its DEFAULT into the env on first use;
+    that write-back must not be mistaken for a user-configured dir."""
+    cache_dir_utils = pytest.importorskip("torch._inductor.runtime.cache_dir_utils")
+
+    _track_env(monkeypatch, "TORCHINDUCTOR_CACHE_DIR")
+    monkeypatch.delenv("PHYSICSNEMO_SHARED_TORCH_COMPILE_CACHE", raising=False)
+    monkeypatch.setenv("TORCHINDUCTOR_CACHE_DIR", cache_dir_utils.default_cache_dir())
+
+    DistributedManager._isolate_torch_compile_cache(local_rank=2, world_size=4)
+
+    assert os.environ["TORCHINDUCTOR_CACHE_DIR"].endswith("_rank2")
+
+
+def test_isolate_torch_compile_cache_opt_out(monkeypatch):
+    """PHYSICSNEMO_SHARED_TORCH_COMPILE_CACHE=1 keeps the shared default."""
+    _track_env(monkeypatch, "TORCHINDUCTOR_CACHE_DIR")
+    monkeypatch.setenv("PHYSICSNEMO_SHARED_TORCH_COMPILE_CACHE", "1")
+
+    DistributedManager._isolate_torch_compile_cache(local_rank=1, world_size=4)
+
+    assert "TORCHINDUCTOR_CACHE_DIR" not in os.environ
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

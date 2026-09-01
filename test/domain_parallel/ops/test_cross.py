@@ -120,13 +120,9 @@ def test_cross_resolves_partial(distributed_mesh):
 
 
 def test_cross_rejects_sharded_dim(distributed_mesh):
-    r"""Cross along the sharded dimension has no local implementation.
-
-    The (3, M) operands are sharded on dim 0 -- the size-3 cross dim -- so
-    on world sizes above 3 some ranks hold zero rows. Built with
-    ``from_local`` + explicit shard shapes (communication-free): the op
-    must raise identically on every rank, and a collective here could be
-    left half-posted when it does, wedging the rest of the static suite.
+    r"""Cross along the sharded dimension is rejected. Built with
+    ``from_local`` + explicit shard shapes so the raise is collective-free
+    and identical on every rank (a half-posted collective wedges the suite).
     """
     dm = DistributedManager()
     ws = distributed_mesh.size(0)
@@ -199,20 +195,14 @@ def test_tensor_cross_method(distributed_mesh):
 
 
 # ---------------------------------------------------------------------------
-# Regression tests for the confirmed handler gaps: every supported call must
-# match native PyTorch in forward AND backward. A replicated operand is
-# localized without a forward collective, and its rank-local gradient
-# contributions are reduced before reaching the original tensor.
+# Regression tests: supported cross calls match native PyTorch in forward
+# and backward.
 # ---------------------------------------------------------------------------
 
 
 def test_cross_replicated_operand_grad_is_reduced(distributed_mesh):
-    r"""Primary reproducer: Shard(0) x replicated-with-grad.
-
-    The sharded operand's gradient is rank-local and already correct (the
-    control below). The replicated operand's gradient must be the sum of
-    every rank's contribution; the buggy handler returns only the local one.
-    """
+    r"""Primary reproducer: the replicated operand's gradient must be the
+    sum of every rank's contribution."""
     dm = DistributedManager()
     ws = distributed_mesh.size(0)
     coord = dm.rank
@@ -243,9 +233,8 @@ def test_cross_replicated_operand_grad_is_reduced(distributed_mesh):
 
 
 def test_cross_sharded_with_full_size_replicate(distributed_mesh):
-    r"""Shard(0) x full-size Replicate() must localize the replicated
-    operand to the reference shard; the buggy handler crosses the (n/ws, 3)
-    local shard against the full (n, 3) tensor and fails on shapes."""
+    r"""Shard(0) x full-size Replicate(): the replicated operand is
+    localized to the reference shard."""
     dm = DistributedManager()
     n = 2 * distributed_mesh.size(0)
     torch.manual_seed(31)
@@ -262,9 +251,7 @@ def test_cross_sharded_with_full_size_replicate(distributed_mesh):
 
 
 def test_cross_replicated_shardtensor_with_sharded_dtensor(distributed_mesh):
-    r"""Replicated ShardTensor x sharded DTensor: the handler must not pick
-    the DTensor as its output reference and then read ShardTensor-only
-    metadata (AttributeError: 'DTensorSpec' has no 'sharding_shapes')."""
+    r"""Replicated ShardTensor x sharded DTensor works as a mixed pair."""
     dm = DistributedManager()
     n = 2 * distributed_mesh.size(0)
     torch.manual_seed(37)
@@ -280,9 +267,8 @@ def test_cross_replicated_shardtensor_with_sharded_dtensor(distributed_mesh):
 
 
 def test_torch_cross_dim_none_uses_first_input_shape(distributed_mesh):
-    r"""torch.cross(dim=None) picks the first size-3 dim of the FIRST INPUT
-    (dim 2 for a (1, 4, 3) input), matching native PyTorch -- not the first
-    size-3 dim of the broadcast output shape (dim 0 for (3, 4, 3))."""
+    r"""torch.cross(dim=None) resolves the dim from the first input's
+    shape, matching native PyTorch (not the broadcast output shape)."""
     dm = DistributedManager()
     torch.manual_seed(41)
     a = torch.randn(1, 4, 3, device=dm.device)
@@ -297,9 +283,7 @@ def test_torch_cross_dim_none_uses_first_input_shape(distributed_mesh):
 
 
 def test_cross_compile_with_plain_tensor(distributed_mesh):
-    r"""Under torch.compile the mixed plain-tensor/ShardTensor call must go
-    through plain-tensor promotion instead of failing during tracing; the
-    ShardTensor/ShardTensor control for this path compiles cleanly."""
+    r"""The mixed plain-tensor/ShardTensor call survives torch.compile."""
     dm = DistributedManager()
     ws = distributed_mesh.size(0)
     n = 2 * ws
@@ -307,8 +291,7 @@ def test_cross_compile_with_plain_tensor(distributed_mesh):
     a = torch.randn(n, 3, device=dm.device)
     axis = torch.tensor([[0.25, -0.5, 2.0]], device=dm.device)
 
-    # from_local with "chunk" shapes: communication-free construction whose
-    # spec carries plain int tuples, which dynamo handles cleanly.
+    # from_local "chunk" construction: communication-free, dynamo-friendly.
     local_a = a.chunk(ws, dim=0)[dm.rank].clone()
     a_s = ShardTensor.from_local(
         local_a,

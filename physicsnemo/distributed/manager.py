@@ -585,6 +585,11 @@ class DistributedManager(object):
         )
 
         if manager._distributed:
+            DistributedManager._isolate_torch_compile_cache(
+                manager._local_rank, manager._world_size
+            )
+
+        if manager._distributed:
             # Setup distributed process group
             try:
                 dist.init_process_group(
@@ -608,6 +613,73 @@ class DistributedManager(object):
             torch.cuda.empty_cache()
 
         manager._initialization_method = method
+
+    @staticmethod
+    def _isolate_torch_compile_cache(local_rank: int, world_size: int) -> None:
+        """Give each rank its own ``torch.compile`` (inductor) cache directory.
+
+        Ranks sharing a node also share inductor's default cache
+        (``/tmp/torchinductor_$USER``). Inductor's cache keys are
+        device-index agnostic, so when shard tensor has variable sized
+        local data per GPU on the same node, if they share a compile cache
+        it's a race condition: whoever writes first is fine, and the
+        other ranks will fail.
+
+        Per-local-rank cache directories remove the sharing (and every
+        other cross-rank cache race). Costs one compilation per rank where
+        sharing previously deduplicated them; set
+        ``PHYSICSNEMO_SHARED_TORCH_COMPILE_CACHE=1`` to keep the shared
+        default, or set ``TORCHINDUCTOR_CACHE_DIR`` yourself (always
+        respected).
+
+        Parameters
+        ----------
+        local_rank : int
+            This process's rank within its node.
+        world_size : int
+            Total world size; single-rank runs are left untouched.
+        """
+        if world_size <= 1:
+            return
+        if os.environ.get("PHYSICSNEMO_SHARED_TORCH_COMPILE_CACHE") == "1":
+            return
+        existing = os.environ.get("TORCHINDUCTOR_CACHE_DIR")
+        if existing is not None:
+            # torch's cache_dir() writes its DEFAULT back into the env on
+            # first use (for its compile workers), so a pre-setup inductor
+            # touch makes the default look user-set. Only a non-default
+            # value is a genuine user choice.
+            try:
+                from torch._inductor.runtime.cache_dir_utils import (
+                    default_cache_dir,
+                )
+
+                if existing != default_cache_dir():
+                    return
+            except (ImportError, AttributeError):
+                return
+
+        import getpass
+        import tempfile
+
+        try:
+            user = getpass.getuser()
+        except (KeyError, OSError):  # no passwd entry (e.g. some containers)
+            user = "user"
+        cache_dir = os.path.join(
+            tempfile.gettempdir(), f"torchinductor_{user}_rank{local_rank}"
+        )
+        os.environ["TORCHINDUCTOR_CACHE_DIR"] = cache_dir
+
+        # Inductor memoizes its cache-dir lookup; drop any value cached
+        # before this point. Best effort: the internal module has moved
+        # between torch releases.
+        try:
+            from torch._inductor.runtime.cache_dir_utils import cache_dir as _cd
+
+            _cd.cache_clear()
+        except (ImportError, AttributeError):
+            pass
 
     @staticmethod
     def create_process_subgroup(
@@ -741,6 +813,22 @@ class DistributedManager(object):
         parent: Optional[str] = None,
         verbose: bool = False,
     ):  # pragma: no cover
+        """Create the process group for ``node`` plus its orthogonal group.
+
+        Parameters
+        ----------
+        node : ProcessGroupNode
+            Fully populated node (``node.size`` must be set).
+        parent : Optional[str], optional
+            Name of the parent process group to subdivide. Default None.
+        verbose : bool, default=False
+            Print group creation details.
+
+        Returns
+        -------
+        str
+            Name of the orthogonal group, usable as the parent for siblings.
+        """
         if node.size is None:
             raise AssertionError(
                 "Cannot create groups from a ProcessGroupNode that is not fully"
@@ -762,6 +850,19 @@ class DistributedManager(object):
     def create_groups_from_config(
         config: ProcessGroupConfig, verbose: bool = False
     ):  # pragma: no cover
+        """Create every process group described by a ProcessGroupConfig tree.
+
+        Traverses the tree breadth-first; each child subdivides its parent's
+        (orthogonal) group so siblings form independent process blocks.
+        Deprecated on torch > 2.4 in favor of ``initialize_mesh``.
+
+        Parameters
+        ----------
+        config : ProcessGroupConfig
+            Tree of process group nodes to instantiate.
+        verbose : bool, default=False
+            Print traversal and group creation details.
+        """
         if torch.__version__ > "2.4":
             warnings.warn(
                 "DistributedManager.create_groups_from_config is no longer the most simple "

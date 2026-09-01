@@ -285,34 +285,18 @@ def _normalize_cross_dim(
 
 
 # ---------------------------------------------------------------------------
-# Cross products (torch.cross / Tensor.cross / torch.linalg.cross).
-#
-# Built in the same idiom as custom_ops/_reductions.py: one new-style
-# autograd.Function whose forward does pure metadata math plus a local aten
-# op on raw local tensors and constructs the output ShardTensor directly,
-# and whose backward is hand-written (local cross-product gradients, then
-# an explicit funcol all-reduce where a replicated operand's gradient is a
-# rank-local partial sum). No from_local/to_local/GradReducer bridges.
-#
-# A plain-tensor operand stays a plain tensor throughout: its layout is
-# implicitly Replicate, and it receives a plain gradient straight from the
-# autograd.Function. This is what keeps the mixed plain/ShardTensor case
-# alive under torch.compile -- constructing distributed wrappers inside a
-# handler does not survive dynamo fake propagation.
-#
-# NOTE: ShardTensor subclasses ``torch.Tensor``, NOT ``DTensor`` (compile-
-# safe subclassing), so distributed-tensor checks in this file must always
-# name both types.
+# Cross products (torch.cross / Tensor.cross / torch.linalg.cross), in the
+# _reductions.py idiom: metadata prep + local aten op + direct ShardTensor
+# construction, with a hand-written backward. Plain-tensor operands stay
+# plain (wrapper construction inside a handler does not survive dynamo fake
+# propagation); their layout is implicitly Replicate. ShardTensor subclasses
+# torch.Tensor, NOT DTensor, so distributed checks must name both types.
 # ---------------------------------------------------------------------------
 
 
 class _CrossPrep:
-    r"""Deterministic per-call metadata for a cross product (no tensor math).
-
-    Computed identically in ``ShardedCross.forward`` and ``setup_context``
-    (new-style autograd functions cannot pass intermediates between the two)
-    and by the dispatch-level handler.
-    """
+    r"""Per-call cross-product metadata; recomputed deterministically in
+    ``forward`` and ``setup_context`` (which cannot share intermediates)."""
 
     __slots__ = (
         "mesh",
@@ -336,18 +320,34 @@ def _cross_pick_ref(
     dim_offset: int,
     op_name: str,
 ) -> int:
-    r"""Validate placements and pick the operand the output layout follows.
+    r"""Validate placements and pick the index of the reference operand.
 
-    All rules run against GLOBAL shapes (a plain tensor's shape IS its
-    global shape, and its placements are implicitly fully Replicate):
+    Against global shapes: no sharding on the cross dim; placements
+    identical or one operand fully replicated; the reference (sharded
+    preferred) must span the broadcast output shape.
 
-    - Neither operand may be sharded on the cross dimension.
-    - Placements must be identical, or one operand fully replicated.
-    - The reference operand's global shape must equal the broadcast output
-      shape, so its placements and shard shapes describe the result exactly.
-      A sharded operand is preferred as the reference.
+    Parameters
+    ----------
+    shapes : tuple
+        Global shape of each operand (a plain tensor's shape is global).
+    placements : tuple
+        Placements of each operand (plain tensors: all ``Replicate``).
+    out_shape : tuple
+        Broadcast output shape.
+    dim_offset : int
+        Negative (trailing) cross-dimension offset.
+    op_name : str
+        Operation name for error messages.
 
-    Returns the index (0 or 1) of the reference operand.
+    Returns
+    -------
+    int
+        Index (0 or 1) of the reference operand.
+
+    Raises
+    ------
+    RuntimeError
+        If the layout combination is unsupported.
     """
     for shape, plc in zip(shapes, placements):
         if any(p.is_shard() and p.dim == len(shape) + dim_offset for p in plc):
@@ -378,13 +378,22 @@ def _cross_pick_ref(
 def _replicated_shard_slices(
     local_shape: tuple, ref_spec: ShardTensorSpec
 ) -> list[tuple[int, int, int]]:
-    r"""Slices localizing a replicated full-size local tensor to the ref shard.
+    r"""Compute slices localizing a replicated local tensor to the ref shard.
 
-    Returns ``(dim, offset, length)`` triples, one per reference mesh dim
-    that shards a dimension the operand actually spans. Dimensions the
-    operand broadcasts over (size 1, or absent leading dims) get no slice.
-    Offsets come from the reference spec's shard shapes, so uneven sharding
-    is honored. Pure metadata; no communication.
+    Broadcast dims get no slice; offsets come from the reference's shard
+    shapes (uneven-safe). No communication.
+
+    Parameters
+    ----------
+    local_shape : tuple
+        Shape of the replicated operand's local tensor.
+    ref_spec : ShardTensorSpec
+        Spec of the reference operand whose shard defines the slices.
+
+    Returns
+    -------
+    list[tuple[int, int, int]]
+        ``(dim, offset, length)`` per sharded dim the operand spans.
     """
     slices: list[tuple[int, int, int]] = []
     coords = ref_spec.mesh.get_coordinate()
@@ -410,11 +419,22 @@ def _cross_prepare(
 ) -> _CrossPrep:
     r"""Resolve metadata, the cross dim, and localized locals for a cross.
 
-    Takes the raw ``dim`` argument (possibly ``None``) and normalizes it
-    against the global shapes, so callers never compute shapes themselves.
-    Only ``_spec`` / ``_local_tensor`` attributes are read from distributed
-    operands (plain-attribute access; never re-enters dispatch), and tensor
-    methods are called only on raw local tensors.
+    Reads only ``_spec`` / ``_local_tensor`` from distributed operands and
+    calls tensor methods only on raw locals, so it never re-enters dispatch.
+
+    Parameters
+    ----------
+    input_tensor, other_tensor : ShardTensor, DTensor, or torch.Tensor
+        The operands; plain tensors are implicitly replicated.
+    dim : int or None
+        Raw cross dim argument, normalized against global shapes.
+    op_name : str
+        Operation name for error messages.
+
+    Returns
+    -------
+    _CrossPrep
+        Metadata plus localized local tensors.
     """
     tensors = (input_tensor, other_tensor)
     specs = []
@@ -462,10 +482,7 @@ def _cross_prepare(
     prep.full_local_shapes = [tuple(local.shape) for local in prep.locals_]
     prep.slices = [[], []]
     if prep.ref_sharded:
-        # A fully replicated operand holds the global extent on every rank;
-        # the local cross needs only the slice matching this rank's shard of
-        # the reference operand. (When the reference is sharded, a fully
-        # replicated operand is never the reference.)
+        # Localize replicated operands to this rank's shard of the reference.
         for i in range(2):
             if prep.replicated[i]:
                 prep.slices[i] = _replicated_shard_slices(
@@ -481,9 +498,21 @@ def _build_cross_output(
 ) -> ShardTensor:
     r"""Construct the output ShardTensor directly from reference metadata.
 
-    Same construction as ``build_reduction_result`` in ``_reductions.py``:
-    an explicit ``ShardTensorSpec`` plus ``ShardTensor.__new__``, with no
-    ``from_local`` autograd side effects.
+    Explicit spec + ``__new__``; no ``from_local`` autograd side effects.
+
+    Parameters
+    ----------
+    local_result : torch.Tensor
+        Locally computed cross product.
+    prep : _CrossPrep
+        Metadata from :func:`_cross_prepare`.
+    requires_grad : bool
+        Forwarded to the ShardTensor constructor.
+
+    Returns
+    -------
+    ShardTensor
+        Result carrying the reference operand's layout.
     """
     if prep.ref_sharded:
         placements = tuple(prep.ref_placements)
@@ -527,13 +556,24 @@ def _sum_grad_to_shape(grad: torch.Tensor, shape: tuple) -> torch.Tensor:
 def _assemble_cross_grad(
     grad_local: torch.Tensor, i: int, ctx: Any
 ) -> torch.Tensor | ShardTensor:
-    r"""Assemble operand ``i``'s gradient from the local cross-product gradient.
+    r"""Assemble one operand's gradient from the local cross-product gradient.
 
-    Broadcast-reduce to the (localized) operand shape, zero-pad any forward
-    slices back to full size, all-reduce a replicated operand's rank-local
-    partial sum over the reference's sharded mesh dims, then wrap: plain
-    inputs get plain gradients, distributed inputs get a ShardTensor with
-    their own spec (``create_sharded_grad_input``).
+    Broadcast-reduce, zero-pad any forward slices, all-reduce a replicated
+    operand's partial sums, then wrap.
+
+    Parameters
+    ----------
+    grad_local : torch.Tensor
+        Local gradient from the backward cross product.
+    i : int
+        Operand index (0 or 1).
+    ctx : Any
+        Autograd context saved by ``setup_context``.
+
+    Returns
+    -------
+    torch.Tensor or ShardTensor
+        Plain gradient for plain inputs; ShardTensor otherwise.
     """
     grad_local = _sum_grad_to_shape(grad_local, tuple(ctx.saved_tensors[i].shape))
 
@@ -545,10 +585,8 @@ def _assemble_cross_grad(
         grad_local = padded
 
     if ctx.replicated[i] and ctx.ref_sharded:
-        # Every rank's local cross consumed only its shard of the reference,
-        # so this gradient is a rank-local partial sum: reduce it before it
-        # reaches the original tensor. funcol keeps the AOT-captured
-        # backward graph deepcopy-safe (see shard_utils/grad_ops.py).
+        # Rank-local partial sum; funcol keeps the AOT-captured backward
+        # graph deepcopy-safe (see shard_utils/grad_ops.py).
         for mesh_dim, placement in enumerate(ctx.ref_placements):
             if placement.is_shard():
                 grad_local = funcol.all_reduce(grad_local, "sum", (ctx.mesh, mesh_dim))
@@ -563,12 +601,9 @@ def _assemble_cross_grad(
 class ShardedCross(torch.autograd.Function):
     r"""Custom autograd function for cross products on ShardTensor.
 
-    Forward computes the cross product locally per shard: with the cross
-    dimension unsharded, the product is elementwise over the (possibly
-    sharded) batch dimensions. Backward uses bilinearity: for ``c = a x b``
-    with cotangent ``g``, ``<g, da x b> = da . (b x g)`` and
-    ``<g, a x db> = db . (g x a)``, so both gradients are themselves local
-    cross products.
+    With the cross dim unsharded, forward is elementwise over the batch
+    dims and runs locally per shard. Backward uses bilinearity:
+    ``<g, da x b> = da . (b x g)`` and ``<g, a x db> = db . (g x a)``.
     """
 
     @staticmethod
@@ -577,9 +612,22 @@ class ShardedCross(torch.autograd.Function):
     ) -> ShardTensor:
         r"""Local cross product plus direct output construction.
 
-        The body runs under ``DisableTorchFunctionSubclass`` for the same
-        reason as ``ShardedSum.forward``: metadata accesses on ShardTensor
-        inputs must not re-enter ``__torch_function__``.
+        Shielded like ``ShardedSum.forward`` so metadata accesses on
+        ShardTensor inputs cannot re-enter ``__torch_function__``.
+
+        Parameters
+        ----------
+        input_tensor, other_tensor : ShardTensor, DTensor, or torch.Tensor
+            The operands; plain tensors are implicitly replicated.
+        dim : int or None
+            Raw cross dim argument.
+        op_name : str
+            Operation name for error messages.
+
+        Returns
+        -------
+        ShardTensor
+            Cross product carrying the reference operand's layout.
         """
         with torch._C.DisableTorchFunctionSubclass():
             prep = _cross_prepare(input_tensor, other_tensor, dim, op_name)
@@ -609,12 +657,24 @@ class ShardedCross(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        r"""Hand-written backward: local cross gradients + explicit reduction."""
+        r"""Hand-written backward: local cross gradients + explicit reduction.
+
+        Parameters
+        ----------
+        ctx : torch.autograd.function.FunctionCtx
+            Context saved by ``setup_context``.
+        grad_output : ShardTensor, DTensor, or torch.Tensor
+            Cotangent of the output.
+
+        Returns
+        -------
+        tuple
+            Gradients for ``(input, other)`` and ``None`` for dim/op_name.
+        """
         dim_offset = ctx.dim_offset
         local_input, local_other = ctx.saved_tensors
 
-        # A genuine Partial cotangent contains only this rank's contribution;
-        # resolve it before the local math (cross is bilinear).
+        # Resolve a Partial cotangent before the local math (cross is bilinear).
         if isinstance(grad_output, ShardTensor):
             grad_output = resolve_partial_cotangent(grad_output)
             local_grad = grad_output._local_tensor
@@ -645,11 +705,24 @@ def _cross_wrapper_impl(
 ) -> ShardTensor:
     r"""Shared ``__torch_function__`` implementation for the cross variants.
 
-    Thin, like ``sum_wrapper``: unpack arguments, normalize distributed
-    operands (DTensor -> ShardTensor via the public ``from_dtensor``, which
-    self-returns for ShardTensors) and resolve pending Partial reductions,
-    resolve the cross dim against global shapes, then delegate to
-    ``ShardedCross.apply``. Plain tensors pass through untouched.
+    Unpack args, normalize DTensors to ShardTensors, resolve Partials, and
+    delegate to ``ShardedCross.apply``. Plain tensors pass through untouched.
+
+    Parameters
+    ----------
+    args : tuple
+        Positional arguments: ``(input, other)`` and optionally ``dim``.
+    kwargs : dict
+        Keyword arguments (may contain ``dim`` and ``out``).
+    default_dim : int or None
+        Default dim of the intercepted op (``-1`` for linalg.cross).
+    op_name : str
+        Operation name for error messages.
+
+    Returns
+    -------
+    ShardTensor
+        Cross product carrying the reference operand's layout.
     """
     input_tensor = args[0] if len(args) > 0 else kwargs.get("input")
     other_tensor = args[1] if len(args) > 1 else kwargs.get("other")
@@ -704,10 +777,22 @@ def _cross_dispatch_impl(
 ) -> ShardTensor:
     r"""Shared ``__torch_dispatch__`` implementation for the aten cross ops.
 
-    Below autograd: the same metadata + local-math path as the forward of
-    ``ShardedCross``, with the output's ``requires_grad`` left False (the
-    engine above the dispatcher adjusts it). Partial placements are rejected
-    rather than resolved -- collectives are the function-level handler's job.
+    The forward path of ``ShardedCross``, below autograd. Partials are
+    rejected, not resolved -- collectives are the function-level handler's job.
+
+    Parameters
+    ----------
+    input_tensor, other_tensor : ShardTensor or DTensor
+        The distributed operands.
+    dim : int or None
+        Cross dim from the aten schema.
+    op_name : str
+        Operation name for error messages.
+
+    Returns
+    -------
+    ShardTensor
+        Cross product; ``requires_grad`` adjusted after the dispatcher.
     """
     for t in (input_tensor, other_tensor):
         if isinstance(t, (ShardTensor, DTensor)) and any(
