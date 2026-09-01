@@ -734,14 +734,23 @@ def _cross_wrapper_impl(
     ):
         raise RuntimeError(f"{op_name} on ShardTensor requires tensor inputs")
 
-    if isinstance(input_tensor, (ShardTensor, DTensor)):
-        input_tensor = _resolve_partial_placements(
-            ShardTensor.from_dtensor(input_tensor)
-        )
-    if isinstance(other_tensor, (ShardTensor, DTensor)):
-        other_tensor = _resolve_partial_placements(
-            ShardTensor.from_dtensor(other_tensor)
-        )
+    def normalize(t):
+        if not isinstance(t, (ShardTensor, DTensor)):
+            return t  # plain tensor: implicitly replicated, handled natively
+        if (
+            not isinstance(t, ShardTensor)
+            and t.requires_grad
+            and t.grad_fn is None
+            and torch.is_grad_enabled()
+        ):
+            # Graph-connect a leaf DTensor so from_dtensor takes its
+            # differentiable bridge; the plain path would deposit the
+            # gradient on the throwaway conversion wrapper.
+            t = t.view_as(t)
+        return _resolve_partial_placements(ShardTensor.from_dtensor(t))
+
+    input_tensor = normalize(input_tensor)
+    other_tensor = normalize(other_tensor)
 
     return ShardedCross.apply(input_tensor, other_tensor, dim, op_name)
 

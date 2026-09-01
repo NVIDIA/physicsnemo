@@ -266,6 +266,31 @@ def test_cross_replicated_shardtensor_with_sharded_dtensor(distributed_mesh):
     torch.testing.assert_close(result.full_tensor(), torch.linalg.cross(a, b))
 
 
+def test_cross_leaf_dtensor_gradient_not_dropped(distributed_mesh):
+    r"""A leaf DTensor operand receives its gradient through backward.
+
+    Converting a leaf (``grad_fn is None``) DTensor severs it from the
+    graph: the gradient lands on the throwaway conversion wrapper and the
+    user's ``.grad`` silently stays ``None``.
+    """
+    dm = DistributedManager()
+    n = 2 * distributed_mesh.size(0)
+    torch.manual_seed(47)
+    a = torch.randn(n, 3, device=dm.device)
+    w_full = torch.randn(n, 3, device=dm.device)
+
+    a_s = ShardTensor.from_local(a, distributed_mesh, (Replicate(),))
+    w = distribute_tensor(w_full, distributed_mesh, [Shard(0)]).requires_grad_(True)
+
+    torch.linalg.cross(a_s, w).full_tensor().sum().backward()
+
+    ref_w = w_full.detach().clone().requires_grad_(True)
+    torch.linalg.cross(a, ref_w).sum().backward()
+
+    assert w.grad is not None, "leaf DTensor gradient was dropped"
+    torch.testing.assert_close(w.grad.full_tensor(), ref_w.grad)
+
+
 def test_torch_cross_dim_none_uses_first_input_shape(distributed_mesh):
     r"""torch.cross(dim=None) resolves the dim from the first input's
     shape, matching native PyTorch (not the broadcast output shape)."""
