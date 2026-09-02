@@ -28,6 +28,12 @@ from typing import Literal, Optional
 import torch
 from tensordict import TensorDict
 
+from physicsnemo.datapipes.keys import (
+    as_nested_key,
+    as_nested_keys,
+    get_leaf,
+    key_to_str,
+)
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.base import Transform
 
@@ -301,10 +307,12 @@ class SubsamplePoints(Transform):
             are drawn according to the weights distribution.
         """
         super().__init__()
-        self.input_keys = input_keys
+        self.input_keys = as_nested_keys(input_keys)
         self.n_points = n_points
         self.algorithm = algorithm
-        self.weights_key = weights_key
+        self.weights_key = (
+            as_nested_key(weights_key) if weights_key is not None else None
+        )
         self._generator: torch.Generator | None = None
 
     def __call__(self, data: TensorDict) -> TensorDict:
@@ -331,25 +339,21 @@ class SubsamplePoints(Transform):
         if not self.input_keys:
             return data
 
-        # Check that all keys are present
-        for key in self.input_keys:
-            if key not in data.keys():
-                raise KeyError(
-                    f"Key '{key}' not found in data. "
-                    f"Available keys: {list(data.keys())}"
-                )
+        # Resolve all keys (raises with the available leaf keys if one is missing)
+        tensors = {key: get_leaf(data, key, what="Key") for key in self.input_keys}
 
         # Get the first key to determine indices
         first_key = self.input_keys[0]
-        first_tensor = data[first_key]
+        first_tensor = tensors[first_key]
         N = first_tensor.shape[0]
 
         # Check that all keys have the same first dimension
         for key in self.input_keys[1:]:
-            if data[key].shape[0] != N:
+            if tensors[key].shape[0] != N:
                 raise ValueError(
                     f"All keys must have the same first dimension. "
-                    f"Key '{first_key}' has {N}, but '{key}' has {data[key].shape[0]}"
+                    f"Key '{key_to_str(first_key)}' has {N}, but "
+                    f"'{key_to_str(key)}' has {tensors[key].shape[0]}"
                 )
 
         # Skip if already fewer points than requested
@@ -359,12 +363,7 @@ class SubsamplePoints(Transform):
         # Get weights if provided
         weights = None
         if self.weights_key is not None:
-            if self.weights_key not in data.keys():
-                raise KeyError(
-                    f"Weights key '{self.weights_key}' not found in data. "
-                    f"Available keys: {list(data.keys())}"
-                )
-            weights = data[self.weights_key]
+            weights = get_leaf(data, self.weights_key, what="Weights key")
 
         # Sample indices
         device = first_tensor.device
@@ -393,9 +392,7 @@ class SubsamplePoints(Transform):
             )[: self.n_points]
 
         # Apply indices to all keys
-        updates = {}
-        for key in self.input_keys:
-            updates[key] = data[key][indices]
+        updates = {key: tensor[indices] for key, tensor in tensors.items()}
 
         return data.update(updates)
 

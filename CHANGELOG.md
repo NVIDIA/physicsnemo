@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds `physicsnemo.datapipes.keys` (`as_nested_key`, `get_leaf`,
+  `rename_keys`, ...) and routes every config-driven field name in
+  `physicsnemo.datapipes` through it, so a `"."` in a YAML field name
+  (`"solution.pressure"`) addresses a leaf inside a nested `TensorDict`.
+  `RenameMeshFields`, `DropMeshFields`, `NormalizeMeshFields`,
+  `SetGlobalField`, `MeshToDomainMesh`, `ComputeSurfaceNormals`,
+  `RestructureTensorDict`, `Normalize`, `ConcatFields`, `NormalizeVectors`,
+  `SubsamplePoints`, `FieldSlice`, `BroadcastGlobalFeatures`,
+  `BoundingBoxFilter`, `KNearestNeighbors`, `CenterOfMass`, `CreateGrid`,
+  `ComputeSDF`, `ComputeNormals`, `Translate`, `Scale`, `ConstantField`,
+  `Rename`, `Purge`, and both collators accept nested field names; missing
+  fields are reported with the full leaf listing. Nested `Mesh` data no
+  longer needs to be flattened before use.
 - Adds Point-Transformer local vector-attention blocks to `physicsnemo.nn`.
 - Adds an `is_causal` option to `TimmSelfAttention` in `physicsnemo.nn` for
   causal self-attention.
@@ -161,6 +174,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Nested `TensorDict` fields no longer fall through the datapipes silently.
+  `RenameMeshFields` and `NormalizeMeshFields` skipped nested fields because
+  they tested membership against top-level `td.keys()`, while
+  `NormalizeMeshFields.inverse_td` un-normalized *any* leaf whose last path
+  component matched a stats entry (`named_apply` without `nested_keys=True`);
+  both now key on the full nested path. `ConcatCollator` no longer crashes on
+  grouped fields, `Reader(pin_memory=True)` no longer crashes on nested
+  sample dicts, `ZarrReader` accepts `fields=["group/array"]` paths,
+  `MultiDataset(output_strict=True)` compares leaf keys, and
+  `DomainMesh.__repr__` lists nested `global_data` leaves.
+- `from_pyvista` / `to_pyvista` now round-trip nested `Mesh` data keys:
+  nested leaves are written as `"/"`-joined VTK array names
+  (`("solution", "p")` -> `"solution/p"`) and split back on read; previously
+  the written name was the Python `repr` of the tuple and the nesting was lost.
+- GLOBE no longer raises on a nested `global_data_ranks` declaration: the
+  `global_data.select(...)` pre-filter now uses nested keys instead of the
+  `"."`-joined names TensorDict does not parse.
+- `unified_external_aero_recipe`: `targets:`, `NonDimensionalizeByMetadata`
+  fields, `extract_targets`, loss / metric lookups, output normalization,
+  `attach_and_save`, and the global-data merge collision check all resolve
+  `"group.field"` names to nested leaves; `NonDimensionalizeByMetadata.inverse_td`
+  matches by full key rather than leaf name; TensorDict-valued forward kwargs
+  are batch-wrapped leaf by leaf in `input_type: tensors` mode.
 - `physicsnemo.mesh.projections.extrude` now produces a *conforming* (crack-free)
   simplicial complex for multi-cell inputs. Each prism was previously tessellated
   using the per-cell local vertex order, so adjacent cells that listed a shared

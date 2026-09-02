@@ -28,6 +28,13 @@ import numpy as np
 import torch
 from tensordict import TensorDict
 
+from physicsnemo.datapipes.keys import (
+    NestedKey,
+    as_nested_key,
+    as_nested_keys,
+    get_leaf,
+    key_to_str,
+)
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.base import Transform
 
@@ -100,7 +107,9 @@ class Normalize(Transform):
         Parameters
         ----------
         input_keys : list[str]
-            List of field names to normalize.
+            List of field names to normalize. A ``"."`` in a name addresses
+            a nested field (``"solution.pressure"``); the stats dicts and
+            ``.npz`` file use the same spelling.
         means : dict[str, float | torch.Tensor] or float or torch.Tensor, optional
             Mean values for mean_std method. Either a dict mapping field names
             to values, or a single value applied to all fields. Deprecated if
@@ -131,7 +140,7 @@ class Normalize(Transform):
         if not input_keys:
             raise ValueError("input_keys cannot be empty")
 
-        self.input_keys = list(input_keys)
+        self.input_keys: list[NestedKey] = as_nested_keys(input_keys)
         self.eps = eps
 
         # Handle backward compatibility: if means/stds provided without method
@@ -194,15 +203,19 @@ class Normalize(Transform):
         stat_name: str,
     ) -> dict[str, torch.Tensor]:
         """Process statistics into dict of tensors for each field."""
-        result: dict[str, torch.Tensor] = {}
+        result: dict[NestedKey, torch.Tensor] = {}
 
         if isinstance(stats, dict):
+            ### Stats dicts are keyed by config strings; normalize them so
+            ### ``"solution.p"`` and ``("solution", "p")`` both match.
+            by_key = {as_nested_key(k): v for k, v in stats.items()}
             for key in self.input_keys:
-                if key not in stats:
+                if key not in by_key:
                     raise ValueError(
-                        f"{stat_name.capitalize()} not provided for field '{key}'"
+                        f"{stat_name.capitalize()} not provided for field "
+                        f"'{key_to_str(key)}'"
                     )
-                val = stats[key]
+                val = by_key[key]
                 result[key] = (
                     torch.as_tensor(val) if not isinstance(val, torch.Tensor) else val
                 )
@@ -254,15 +267,16 @@ class Normalize(Transform):
         mins_dict = {}
         maxs_dict = {}
 
-        # Process each field
+        # Process each field (npz entries are named by the "."-joined key)
         for key in self.input_keys:
-            if key not in data:
+            name = key_to_str(key)
+            if name not in data:
                 raise ValueError(
-                    f"Field '{key}' not found in stats file. "
+                    f"Field '{name}' not found in stats file. "
                     f"Available fields: {list(data.keys())}"
                 )
 
-            field_stats = data[key]
+            field_stats = data[name]
             if isinstance(field_stats, np.ndarray) and field_stats.dtype == object:
                 # It's a dict stored as numpy object
                 field_stats = field_stats.item()
@@ -306,12 +320,7 @@ class Normalize(Transform):
         updates = {}
 
         for key in self.input_keys:
-            if key not in data.keys():
-                raise KeyError(
-                    f"Field '{key}' not found in data. Available: {list(data.keys())}"
-                )
-
-            tensor = data[key]
+            tensor = get_leaf(data, key)
 
             if self.method == "mean_std":
                 mean = self._means[key]
@@ -370,10 +379,7 @@ class Normalize(Transform):
         updates = {}
 
         for key in self.input_keys:
-            if key not in data.keys():
-                raise KeyError(f"Field '{key}' not found in data")
-
-            tensor = data[key]
+            tensor = get_leaf(data, key)
 
             if self.method == "mean_std":
                 mean = self._means[key]
@@ -410,7 +416,7 @@ class Normalize(Transform):
 
     def load_state_dict(self, state_dict: dict[str, Any]) -> None:
         """Load normalization parameters."""
-        self.input_keys = state_dict["input_keys"]
+        self.input_keys = as_nested_keys(state_dict["input_keys"])
         self.method = state_dict.get(
             "method", "mean_std"
         )  # Default for backward compat

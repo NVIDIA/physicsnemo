@@ -773,9 +773,13 @@ class GLOBE(Module):
         ### may carry e.g. metadata fields) without polluting the kernel
         ### feature stream. A user-supplied leaf that's missing from the
         ### declaration is caught by `validate_data_contains_ranks`
-        ### below.
+        ### below. ``flatten_rank_spec`` yields "."-joined names, which
+        ### TensorDict does not parse, so split them into nested keys.
         global_data = global_data.select(
-            *flatten_rank_spec(self.global_data_ranks).keys()
+            *(
+                tuple(name.split("."))
+                for name in flatten_rank_spec(self.global_data_ranks)
+            )
         )
 
         ### Input validation

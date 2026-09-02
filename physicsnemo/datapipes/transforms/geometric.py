@@ -28,6 +28,12 @@ from typing import Optional
 import torch
 from tensordict import TensorDict
 
+from physicsnemo.datapipes.keys import (
+    as_nested_key,
+    as_nested_keys,
+    get_leaf,
+    with_leaf_name,
+)
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.base import Transform
 from physicsnemo.mesh.spatial.sdf import signed_distance_field_mesh
@@ -107,12 +113,16 @@ class ComputeSDF(Transform):
             Optional key to store closest points on mesh.
         """
         super().__init__()
-        self.input_keys = input_keys
-        self.output_key = output_key
-        self.mesh_coords_key = mesh_coords_key
-        self.mesh_faces_key = mesh_faces_key
+        self.input_keys = as_nested_keys(input_keys)
+        self.output_key = as_nested_key(output_key)
+        self.mesh_coords_key = as_nested_key(mesh_coords_key)
+        self.mesh_faces_key = as_nested_key(mesh_faces_key)
         self.use_winding_number = use_winding_number
-        self.closest_points_key = closest_points_key
+        self.closest_points_key = (
+            as_nested_key(closest_points_key)
+            if closest_points_key is not None
+            else None
+        )
 
     def __call__(self, data: TensorDict) -> TensorDict:
         """
@@ -134,22 +144,16 @@ class ComputeSDF(Transform):
             If mesh or query point keys are not found in the data.
         """
         # Get mesh data
-        if self.mesh_coords_key not in data:
-            raise KeyError(f"Mesh coordinates key '{self.mesh_coords_key}' not found")
-        if self.mesh_faces_key not in data:
-            raise KeyError(f"Mesh faces key '{self.mesh_faces_key}' not found")
-
-        mesh_coords = data[self.mesh_coords_key]
-        mesh_faces = data[self.mesh_faces_key].to(torch.int32)
+        mesh_coords = get_leaf(data, self.mesh_coords_key, what="Mesh coordinates key")
+        mesh_faces = get_leaf(data, self.mesh_faces_key, what="Mesh faces key").to(
+            torch.int32
+        )
 
         updates = {}
 
         # Compute SDF for each input key
         for key in self.input_keys:
-            if key not in data:
-                raise KeyError(f"Input key '{key}' not found")
-
-            query_points = data[key]
+            query_points = get_leaf(data, key, what="Input key")
 
             # Compute SDF and closest points
             sdf, closest_points = signed_distance_field_mesh(
@@ -165,10 +169,16 @@ class ComputeSDF(Transform):
                 if self.closest_points_key is not None:
                     updates[self.closest_points_key] = closest_points
             else:
-                suffix = f"_{key}"
-                updates[f"{self.output_key}{suffix}"] = sdf.reshape(-1, 1)
+                ### Suffix the output leaf name with the input's leaf name,
+                ### keeping the output key's own nesting.
+                leaf = key if isinstance(key, str) else key[-1]
+                updates[with_leaf_name(self.output_key, lambda n: f"{n}_{leaf}")] = (
+                    sdf.reshape(-1, 1)
+                )
                 if self.closest_points_key is not None:
-                    updates[f"{self.closest_points_key}{suffix}"] = closest_points
+                    updates[
+                        with_leaf_name(self.closest_points_key, lambda n: f"{n}_{leaf}")
+                    ] = closest_points
 
         return data.update(updates)
 
@@ -242,10 +252,10 @@ class ComputeNormals(Transform):
             If True, use center_of_mass fallback for zero distances.
         """
         super().__init__()
-        self.positions_key = positions_key
-        self.closest_points_key = closest_points_key
-        self.center_of_mass_key = center_of_mass_key
-        self.output_key = output_key
+        self.positions_key = as_nested_key(positions_key)
+        self.closest_points_key = as_nested_key(closest_points_key)
+        self.center_of_mass_key = as_nested_key(center_of_mass_key)
+        self.output_key = as_nested_key(output_key)
         self.handle_zero_distance = handle_zero_distance
 
     def __call__(self, data: TensorDict) -> TensorDict:
@@ -262,9 +272,13 @@ class ComputeNormals(Transform):
         TensorDict
             TensorDict with computed normals added.
         """
-        positions = data[self.positions_key]
-        closest_points = data[self.closest_points_key]
-        center_of_mass = data[self.center_of_mass_key]
+        positions = get_leaf(data, self.positions_key, what="Positions key")
+        closest_points = get_leaf(
+            data, self.closest_points_key, what="Closest points key"
+        )
+        center_of_mass = get_leaf(
+            data, self.center_of_mass_key, what="Center of mass key"
+        )
 
         # Ensure center_of_mass has shape (1, 3)
         if center_of_mass.ndim == 1:
@@ -370,9 +384,11 @@ class Translate(Transform):
             like center of mass.
         """
         super().__init__()
-        self.input_keys = input_keys
-        self.center_key_or_value = center_key_or_value
-        self.is_key = isinstance(center_key_or_value, str)
+        self.input_keys = as_nested_keys(input_keys)
+        self.is_key = not isinstance(center_key_or_value, torch.Tensor)
+        self.center_key_or_value = (
+            as_nested_key(center_key_or_value) if self.is_key else center_key_or_value
+        )
         self.subtract = subtract
 
     def __call__(self, data: TensorDict) -> TensorDict:
@@ -397,15 +413,9 @@ class Translate(Transform):
             If center_key_or_value is not a string or torch.Tensor.
         """
         # Get center value
-        if isinstance(self.center_key_or_value, str):
-            if self.center_key_or_value not in data:
-                raise KeyError(f"Center key '{self.center_key_or_value}' not found")
-            center = data[self.center_key_or_value]
+        if self.is_key:
+            center = get_leaf(data, self.center_key_or_value, what="Center key")
         else:
-            if not isinstance(self.center_key_or_value, torch.Tensor):
-                raise TypeError(
-                    f"center_key_or_value should be torch.Tensor but got {type(self.center_key_or_value)}"
-                )
             center = self.center_key_or_value
             # Move to same device as data if needed
             if data.device is not None and center.device != data.device:
@@ -419,10 +429,8 @@ class Translate(Transform):
         updates = {}
         for key in self.input_keys:
             if key in data:
-                if self.subtract:
-                    updates[key] = data[key] - center
-                else:
-                    updates[key] = data[key] + center
+                value = get_leaf(data, key, what="Input key")
+                updates[key] = value - center if self.subtract else value + center
 
         return data.update(updates)
 
@@ -505,7 +513,7 @@ class Scale(Transform):
             Use divide=True when normalizing data by a reference scale.
         """
         super().__init__()
-        self.input_keys = input_keys
+        self.input_keys = as_nested_keys(input_keys)
         self.scale = scale
         self.divide = divide
 
@@ -537,10 +545,8 @@ class Scale(Transform):
         updates = {}
         for key in self.input_keys:
             if key in data:
-                if self.divide:
-                    updates[key] = data[key] / scale
-                else:
-                    updates[key] = data[key] * scale
+                value = get_leaf(data, key, what="Input key")
+                updates[key] = value / scale if self.divide else value * scale
 
         return data.update(updates)
 

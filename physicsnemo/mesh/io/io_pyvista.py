@@ -38,14 +38,28 @@ else:
     vtk = OptionalImport("vtk")
 
 
-def _vtk_data_to_tensor_dict(data) -> dict[str, torch.Tensor]:  # noqa: ANN001
-    """Convert a PyVista/VTK data container to a plain tensor dictionary."""
-    tensor_data: dict[str, torch.Tensor] = {}
+### VTK data arrays live in a flat namespace, so nested TensorDict keys are
+### serialized as ``"/"``-joined paths (``("solution", "p")`` <-> ``"solution/p"``),
+### mirroring how HDF5 / zarr spell group paths. ``"/"`` rather than ``"."``
+### because dots do occur in real-world VTK array names.
+_VTK_KEY_SEPARATOR = "/"
+
+
+def _vtk_data_to_tensor_dict(data) -> dict[str | tuple[str, ...], torch.Tensor]:  # noqa: ANN001
+    """Convert a PyVista/VTK data container to a tensor dictionary.
+
+    Array names containing ``"/"`` are split into nested TensorDict keys, so
+    a mesh written by :func:`to_pyvista` round-trips with its nesting intact.
+    """
+    tensor_data: dict[str | tuple[str, ...], torch.Tensor] = {}
     for key, value in dict(data).items():
         array = np.asarray(value)
         if not np.issubdtype(array.dtype, np.number) and array.dtype != np.bool_:
             continue
-        tensor_data[str(key)] = torch.as_tensor(array)
+        name = str(key)
+        parts = tuple(name.split(_VTK_KEY_SEPARATOR))
+        nested_key = parts if len(parts) > 1 and all(parts) else name
+        tensor_data[nested_key] = torch.as_tensor(array)
     return tensor_data
 
 
@@ -393,15 +407,17 @@ def to_pyvista(
     else:
         raise ValueError(f"Unsupported {mesh.n_manifold_dims=}. Must be 0, 1, 2, or 3.")
 
-    ### Copy data to PyVista (flatten high-rank tensors for VTK compatibility)
+    ### Copy data to PyVista (flatten high-rank tensors for VTK compatibility).
+    ### Nested keys become "/"-joined array names; see _VTK_KEY_SEPARATOR.
     for source, target in [
         (mesh.point_data, pv_mesh.point_data),
         (mesh.cell_data, pv_mesh.cell_data),
         (mesh.global_data, pv_mesh.field_data),
     ]:
         for k, v in source.items(include_nested=True, leaves_only=True):
+            name = k if isinstance(k, str) else _VTK_KEY_SEPARATOR.join(k)
             arr = v.detach().float().cpu().numpy()
-            target[str(k)] = arr.reshape(arr.shape[0], -1) if arr.ndim > 2 else arr
+            target[name] = arr.reshape(arr.shape[0], -1) if arr.ndim > 2 else arr
 
     return pv_mesh
 

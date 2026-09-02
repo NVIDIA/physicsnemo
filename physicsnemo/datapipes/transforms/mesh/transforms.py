@@ -26,6 +26,14 @@ import torch
 from jaxtyping import Float, Int
 from tensordict import TensorDict
 
+from physicsnemo.datapipes.keys import (
+    KEY_SEPARATOR,
+    NestedKey,
+    as_nested_key,
+    as_nested_keys,
+    key_to_str,
+    rename_keys,
+)
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
 from physicsnemo.datapipes.transforms.subsample import poisson_sample_indices_fixed
@@ -310,20 +318,9 @@ class SubsampleMesh(MeshTransform):
         return ", ".join(parts)
 
 
-def _rename_td_keys(td: TensorDict, mapping: dict[str, str]) -> TensorDict:
-    """Rename keys in a TensorDict, returning a new TensorDict.
-
-    Uses :meth:`tensordict.TensorDict.rename_key_` for each entry --
-    that's the named TensorDict API for the operation, equivalent to
-    ``td[new] = td.pop(old)`` but explicit. Missing source keys are
-    silently skipped.
-    """
-    out = td.clone()
-    present = set(out.keys())
-    for old_key, new_key in mapping.items():
-        if old_key in present:
-            out.rename_key_(old_key, new_key)
-    return out
+def _parse_key_mapping(mapping: dict[str, str] | None) -> dict[NestedKey, NestedKey]:
+    """Normalize a YAML ``{old: new}`` rename map into TensorDict keys."""
+    return {as_nested_key(k): as_nested_key(v) for k, v in (mapping or {}).items()}
 
 
 @register()
@@ -333,6 +330,9 @@ class DropMeshFields(MeshTransform):
     Useful for dropping fields that would interfere with downstream
     transforms (e.g. removing a scalar ``TimeValue`` from ``global_data``
     before a rotation that expects all global fields to be 3-vectors).
+
+    Field names may address nested leaves with ``"."`` (``"solution.p"``);
+    see :mod:`physicsnemo.datapipes.keys`.
     """
 
     def __init__(
@@ -342,9 +342,9 @@ class DropMeshFields(MeshTransform):
         global_data: list[str] | None = None,
     ) -> None:
         super().__init__()
-        self._point_data_keys = point_data or []
-        self._cell_data_keys = cell_data or []
-        self._global_data_keys = global_data or []
+        self._point_data_keys = as_nested_keys(point_data)
+        self._cell_data_keys = as_nested_keys(cell_data)
+        self._global_data_keys = as_nested_keys(global_data)
 
     def __call__(self, mesh: Mesh) -> Mesh:
         ### ``TensorDict.exclude(*keys)`` is null-safe: it returns a
@@ -376,6 +376,11 @@ class RenameMeshFields(MeshTransform):
     Useful for harmonizing field names across datasets that store
     the same physical quantity under different keys (e.g.
     ``pMeanTrim`` vs ``pressure_average``).
+
+    Both sides of a mapping may address nested leaves with ``"."``, so
+    ``{"solution.pMeanTrim": "pressure"}`` hoists a nested field to the top
+    level and ``{"p": "solution.p"}`` does the reverse. Missing source keys
+    are silently skipped.
     """
 
     def __init__(
@@ -385,23 +390,23 @@ class RenameMeshFields(MeshTransform):
         global_data: dict[str, str] | None = None,
     ) -> None:
         super().__init__()
-        self._point_data_map = point_data or {}
-        self._cell_data_map = cell_data or {}
-        self._global_data_map = global_data or {}
+        self._point_data_map = _parse_key_mapping(point_data)
+        self._cell_data_map = _parse_key_mapping(cell_data)
+        self._global_data_map = _parse_key_mapping(global_data)
 
     def __call__(self, mesh: Mesh) -> Mesh:
         new_pd = (
-            _rename_td_keys(mesh.point_data, self._point_data_map)
+            rename_keys(mesh.point_data, self._point_data_map, strict=False)
             if self._point_data_map
             else mesh.point_data
         )
         new_cd = (
-            _rename_td_keys(mesh.cell_data, self._cell_data_map)
+            rename_keys(mesh.cell_data, self._cell_data_map, strict=False)
             if self._cell_data_map
             else mesh.cell_data
         )
         new_gd = (
-            _rename_td_keys(mesh.global_data, self._global_data_map)
+            rename_keys(mesh.global_data, self._global_data_map, strict=False)
             if self._global_data_map
             else mesh.global_data
         )
@@ -438,18 +443,18 @@ class SetGlobalField(MeshTransform):
 
     def __init__(
         self,
-        fields: dict[str, torch.Tensor | list[float]],
+        fields: dict[str, torch.Tensor | list[float] | dict],
     ) -> None:
         super().__init__()
         ### Coerce + bundle into a single TensorDict so the per-sample
         ### path in __call__ can collapse to a batched ``td.to(...)`` plus
-        ### ``new_gd.update(...)`` (no Python-level per-key loop).
-        coerced: dict[str, torch.Tensor] = {}
-        for k, v in fields.items():
-            if not isinstance(v, torch.Tensor):
-                v = torch.tensor(v, dtype=torch.float32)
-            coerced[k] = v
-        self._fields: TensorDict = TensorDict(coerced, batch_size=[])
+        ### ``new_gd.update(...)`` (no Python-level per-key loop). The
+        ### constructor turns nested dicts into sub-TensorDicts and lists
+        ### into tensors; ``unflatten_keys`` then nests ``"a.b"`` names.
+        ### dtype is aligned to the mesh in ``__call__``.
+        self._fields: TensorDict = TensorDict(fields, batch_size=[]).unflatten_keys(
+            KEY_SEPARATOR
+        )
 
     def __call__(self, mesh: Mesh) -> Mesh:
         new_gd = mesh.global_data.clone()
@@ -465,7 +470,10 @@ class SetGlobalField(MeshTransform):
         )
 
     def extra_repr(self) -> str:
-        shapes = {k: tuple(v.shape) for k, v in self._fields.items()}
+        shapes = {
+            key_to_str(k): tuple(v.shape)
+            for k, v in self._fields.items(include_nested=True, leaves_only=True)
+        }
         return f"fields={shapes}"
 
 
@@ -500,6 +508,10 @@ class NormalizeMeshFields(MeshTransform):
         - _target_: ${dp:NormalizeMeshFields}
           association: point_data
           stats_file: /path/to/norm_stats.pt
+
+    Field names may address nested leaves with ``"."``
+    (``"solution.pressure"``); the same spelling is used in ``stats_file``
+    and in the ``target_config`` passed to :meth:`inverse_tensor`.
     """
 
     def __init__(
@@ -519,27 +531,33 @@ class NormalizeMeshFields(MeshTransform):
         self._eps = eps
 
         if stats_file is not None:
-            self._stats: dict[str, dict[str, Float[torch.Tensor, " *shape"] | str]] = (
-                torch.load(stats_file, weights_only=True)
-            )
+            raw_stats: dict = torch.load(stats_file, weights_only=True)
         elif fields is not None:
-            self._stats = {}
-            for name, cfg in fields.items():
-                self._stats[name] = {
+            raw_stats = {
+                name: {
                     "type": cfg["type"],
                     "mean": torch.as_tensor(cfg["mean"], dtype=torch.float32),
                     "std": torch.as_tensor(cfg["std"], dtype=torch.float32),
                 }
+                for name, cfg in fields.items()
+            }
         else:
             raise ValueError("Provide one of 'stats_file' or 'fields'")
+        ### Stats are keyed by normalized TensorDict key so a nested field
+        ### spelled ``"solution.p"`` in YAML / on disk matches the leaf
+        ### ``("solution", "p")`` that ``named_apply(nested_keys=True)``
+        ### and ``new_td[key]`` see.
+        self._stats: dict[
+            NestedKey, dict[str, Float[torch.Tensor, " *shape"] | str]
+        ] = {as_nested_key(name): stats for name, stats in raw_stats.items()}
 
     def __call__(self, mesh: Mesh) -> Mesh:
         ### Clone and z-score the targeted association's TensorDict in
         ### place; fields absent from `_stats` (or absent from the mesh)
-        ### are left untouched.
+        ### are left untouched. ``key in td`` handles nested keys.
         new_td = getattr(mesh, self._association).clone()
         for field_name, stats in self._stats.items():
-            if field_name not in new_td.keys():
+            if field_name not in new_td:
                 continue
             val = new_td[field_name].float()
             mean = stats["mean"].to(dtype=val.dtype, device=val.device)
@@ -587,8 +605,8 @@ class NormalizeMeshFields(MeshTransform):
         idx = 0
         for name, ftype in target_config.items():
             dim = 1 if ftype == "scalar" else n_spatial_dims
-            if name in self._stats:
-                stats = self._stats[name]
+            stats = self._stats.get(as_nested_key(name))
+            if stats is not None:
                 mean = stats["mean"].to(dtype=tensor.dtype, device=tensor.device)
                 std = stats["std"].to(dtype=tensor.dtype, device=tensor.device)
                 out[..., idx : idx + dim] = (
@@ -622,10 +640,12 @@ class NormalizeMeshFields(MeshTransform):
             whose leaves are in physical units.
         """
 
-        ### ``named_apply`` walks every leaf and collects the returns
-        ### into a fresh TD; leaves whose name is absent from
-        ### ``self._stats`` pass through unchanged.
-        def _inverse_field(name: str, val: torch.Tensor) -> torch.Tensor:
+        ### ``named_apply(nested_keys=True)`` walks every leaf, passing the
+        ### full key (a string at the top level, a tuple when nested) so a
+        ### nested leaf is matched against the same key the forward pass
+        ### used, and collects the returns into a fresh TD; leaves absent
+        ### from ``self._stats`` pass through unchanged.
+        def _inverse_field(name: NestedKey, val: torch.Tensor) -> torch.Tensor:
             stats = self._stats.get(name)
             if stats is None:
                 return val
@@ -635,17 +655,19 @@ class NormalizeMeshFields(MeshTransform):
 
         ### ``named_apply`` is typed ``TensorDict | None`` for its
         ### in-place mode; the out-of-place path always returns a TD.
-        return td.named_apply(_inverse_field)  # ty: ignore[invalid-return-type]
+        return td.named_apply(_inverse_field, nested_keys=True)  # ty: ignore[invalid-return-type]
 
     @property
-    def stats(self) -> dict:
-        """Normalization statistics dict (for serialization)."""
-        return self._stats
+    def stats(self) -> dict[str, dict]:
+        """Normalization statistics keyed by ``"."``-joined field name (for serialization)."""
+        return {key_to_str(k): v for k, v in self._stats.items()}
 
     def extra_repr(self) -> str:
         parts = []
         for name, s in self._stats.items():
-            parts.append(f"{name}({s['type']}): mean={s['mean']}, std={s['std']}")
+            parts.append(
+                f"{key_to_str(name)}({s['type']}): mean={s['mean']}, std={s['std']}"
+            )
         return f"association={self._association!r}, " + ", ".join(parts)
 
 
@@ -682,7 +704,7 @@ class ComputeSurfaceNormals(MeshTransform):
                 f"store_as must be 'cell_data' or 'point_data', got {store_as!r}"
             )
         self.store_as = store_as
-        self.field_name = field_name
+        self.field_name = as_nested_key(field_name)
 
     def __call__(self, mesh: Mesh) -> Mesh:
         if self.store_as == "cell_data":
@@ -794,15 +816,6 @@ class MeshToTensorDict(MeshTransform):
         return TensorDict(out, batch_size=[])
 
 
-def _resolve_td_path(td: TensorDict, dotted_key: str) -> Float[torch.Tensor, " *shape"]:
-    """Resolve a dot-separated key path into a tensor from a TensorDict."""
-    parts = dotted_key.split(".")
-    current = td
-    for part in parts:
-        current = current[part]
-    return current
-
-
 @register()
 class ComputeCellCentroids(MeshTransform):
     r"""Compute cell centroids from points and cells in a TensorDict.
@@ -829,8 +842,9 @@ class RestructureTensorDict(MeshTransform):
     from the flat layout and assembles them into a structured dict
     (e.g. separate ``input`` and ``output`` groups for model training).
 
-    Each group is defined as ``{dest_key: source_path}`` where
-    ``source_path`` uses dots for nesting (e.g. ``point_data.pressure``).
+    Each group is defined as ``{dest_key: source_path}`` where both
+    ``source_path`` and ``dest_key`` use dots for nesting (e.g.
+    ``point_data.pressure``; see :mod:`physicsnemo.datapipes.keys`).
 
     Example YAML::
 
@@ -849,13 +863,14 @@ class RestructureTensorDict(MeshTransform):
         self._groups = groups
 
     def __call__(self, td: TensorDict) -> TensorDict:  # type: ignore[override]
-        out: dict = {}
+        out = TensorDict({}, batch_size=[])
         for group_name, mapping in self._groups.items():
-            group: dict = {}
             for dest_key, source_path in mapping.items():
-                group[dest_key] = _resolve_td_path(td, source_path)
-            out[group_name] = TensorDict(group, batch_size=[])
-        return TensorDict(out, batch_size=[])
+                out.set(
+                    as_nested_key(f"{group_name}{KEY_SEPARATOR}{dest_key}"),
+                    td[as_nested_key(source_path)],
+                )
+        return out
 
     def extra_repr(self) -> str:
         lines = []
@@ -980,8 +995,10 @@ class MeshToDomainMesh(MeshTransform):
                 f"interior_points must be one of "
                 f"{self._IMPLEMENTED_INTERIOR_POINTS!r}, got {interior_points!r}"
             )
-        self._cell_data_targets: list[str] = list(cell_data_targets or [])
-        self._point_data_targets: list[str] = list(point_data_targets or [])
+        ### Targets may address nested leaves (``"solution.C_p"``);
+        ### ``select`` / ``exclude`` below accept the parsed tuple keys.
+        self._cell_data_targets: list[NestedKey] = as_nested_keys(cell_data_targets)
+        self._point_data_targets: list[NestedKey] = as_nested_keys(point_data_targets)
         self._interior_points = interior_points
         self._boundary_name = boundary_name
 

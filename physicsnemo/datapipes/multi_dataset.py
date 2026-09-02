@@ -32,6 +32,7 @@ import torch
 from tensordict import TensorDict
 
 from physicsnemo.datapipes._rng import fork_generator
+from physicsnemo.datapipes.keys import format_leaf_keys
 from physicsnemo.datapipes.protocols import DatasetBase
 from physicsnemo.datapipes.registry import register
 
@@ -69,7 +70,9 @@ def _validate_strict_outputs(datasets: Sequence[DatasetBase]) -> list[str]:
         if len(ds) == 0:
             continue
         data, _ = ds[0]
-        keys = sorted(data.keys())
+        ### Compare leaf keys (nested included) so two datasets whose groups
+        ### hold different leaves are caught here, not mid-epoch in collate.
+        keys = format_leaf_keys(data)
         if ref_keys is None:
             ref_keys = keys
             ref_index = i

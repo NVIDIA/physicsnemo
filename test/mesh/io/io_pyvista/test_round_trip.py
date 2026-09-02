@@ -137,6 +137,36 @@ class TestRoundTrip:
             pv_reconstructed.field_data["metadata"], pv_original.field_data["metadata"]
         )
 
+    def test_round_trip_nested_data_keys(self):
+        """Nested TensorDict keys survive Mesh → PyVista → Mesh as "/"-joined names."""
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]]
+        )
+        cells = torch.tensor([[0, 1, 2], [0, 2, 3]])
+        mesh = Mesh(
+            points=points,
+            cells=cells,
+            point_data={"solution": {"p": torch.arange(4.0), "v": torch.ones(4, 3)}},
+            cell_data={"flat": torch.zeros(2), "grp": {"sub": {"q": torch.ones(2)}}},
+            global_data={"ref": {"L": torch.tensor([2.0])}},
+        )
+
+        pv_mesh = to_pyvista(mesh)
+        assert "solution/p" in pv_mesh.point_data
+        assert "solution/v" in pv_mesh.point_data
+        assert "grp/sub/q" in pv_mesh.cell_data
+        assert "ref/L" in pv_mesh.field_data
+
+        back = from_pyvista(pv_mesh)
+        assert set(back.point_data.keys(True, True)) == {
+            ("solution", "p"),
+            ("solution", "v"),
+        }
+        assert torch.allclose(back.point_data["solution", "p"], torch.arange(4.0))
+        assert ("grp", "sub", "q") in back.cell_data
+        assert "flat" in back.cell_data
+        assert torch.allclose(back.global_data["ref", "L"], torch.tensor([2.0]))
+
 
 ### Parametrized Tests for Device Handling ###
 

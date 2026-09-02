@@ -28,6 +28,15 @@ from typing import Optional
 import torch
 from tensordict import TensorDict
 
+from physicsnemo.datapipes.keys import (
+    as_nested_key,
+    as_nested_keys,
+    format_leaf_keys,
+    get_leaf,
+    key_to_str,
+    leaf_keys,
+    rename_keys,
+)
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.base import Transform
 
@@ -40,9 +49,11 @@ class Rename(Transform):
     Replaces existing key names with new names according to a mapping.
     The tensor data is preserved, only the keys are changed.
 
-    Nested tensordicts can use this too. The keys are flattened with a '.'
-    separator: a["b"]["d"] will map to a["b.d"] for renaming. If you want to
-    replace d, you'd provide {"a.d" : "a.c"} in the mapping file.
+    Nested tensordicts can use this too: a ``'.'`` in a name addresses a
+    nested key, so ``{"a.d": "a.c"}`` renames ``a["d"]`` to ``a["c"]`` and
+    ``{"a.d": "d"}`` hoists it to the top level. Renaming a whole
+    sub-TensorDict (``{"a": "b"}``) is also supported. See
+    :mod:`physicsnemo.datapipes.keys`.
 
     Parameters
     ----------
@@ -87,6 +98,9 @@ class Rename(Transform):
         super().__init__()
         self.mapping = mapping
         self.strict = strict
+        self._key_mapping = {
+            as_nested_key(old): as_nested_key(new) for old, new in mapping.items()
+        }
 
     def __call__(self, data: TensorDict) -> TensorDict:
         """
@@ -109,34 +123,7 @@ class Rename(Transform):
         ValueError
             If a new key name already exists in the data.
         """
-        # Flatten keys to handle nested TensorDicts
-        data_f = data.flatten_keys(separator=".")
-        data_keys = set(str(k) for k in data_f.keys())
-
-        # Check for missing keys if strict mode
-        if self.strict:
-            missing_keys = set(self.mapping.keys()) - data_keys
-            if missing_keys:
-                raise KeyError(
-                    f"Keys not found in data: {missing_keys}. "
-                    f"Available keys: {list(data_f.keys())}"
-                )
-
-        # Check for conflicts with new names
-        keys_to_rename = set(self.mapping.keys()) & data_keys
-        new_names = {self.mapping[k] for k in keys_to_rename}
-        keys_not_renamed = data_keys - keys_to_rename
-
-        conflicts = new_names & keys_not_renamed
-        if conflicts:
-            raise ValueError(f"New key names conflict with existing keys: {conflicts}")
-
-        # Rename keys in-place on flattened data
-        for old_key, new_key in self.mapping.items():
-            if old_key in data_f.keys():
-                data_f.rename_key_(old_key, new_key)
-
-        return data_f.unflatten_keys(separator=".")
+        return rename_keys(data, self._key_mapping, strict=self.strict)
 
     def extra_repr(self) -> str:
         """
@@ -248,25 +235,6 @@ class Purge(Transform):
         self.drop_only = drop_only
         self.strict = strict
 
-    @staticmethod
-    def _to_nested_key(key: str) -> str | tuple[str, ...]:
-        """
-        Convert a dot-separated key string to a tuple for nested access.
-
-        Parameters
-        ----------
-        key : str
-            Key string, possibly with dots for nested access.
-
-        Returns
-        -------
-        str or tuple[str, ...]
-            Original string if no dots, otherwise tuple of parts.
-        """
-        if "." in key:
-            return tuple(key.split("."))
-        return key
-
     def __call__(self, data: TensorDict) -> TensorDict:
         """
         Remove or keep specified keys from the TensorDict.
@@ -286,40 +254,37 @@ class Purge(Transform):
         KeyError
             If strict=True and a specified key is not found.
         """
-        # Get all keys including nested ones (as tuples for nested, strings for flat)
-        available_keys = set(data.keys(include_nested=True, leaves_only=True))
+        ### Leaf keys, nested ones included (tuples for nested, strings for flat)
+        available_keys = set(leaf_keys(data))
 
         if self.keep_only is not None:
-            # Keep only mode: use TensorDict.select
-            # Convert dot-separated strings to tuples for nested key access
-            keys_to_keep = [self._to_nested_key(k) for k in self.keep_only]
+            keys_to_keep = as_nested_keys(self.keep_only)
 
             if self.strict:
                 missing_keys = set(keys_to_keep) - available_keys
                 if missing_keys:
                     raise KeyError(
-                        f"Keys specified in 'keep_only' not found in data: {missing_keys}. "
-                        f"Available keys: {list(available_keys)}"
+                        f"Keys specified in 'keep_only' not found in data: "
+                        f"{sorted(map(key_to_str, missing_keys))}. "
+                        f"Available keys: {format_leaf_keys(data)}"
                     )
 
-            # Use select which handles nested keys properly
-            # strict=False to allow missing keys in non-strict mode
+            ### ``select`` handles nested keys; strict=False tolerates missing ones
             return data.select(*keys_to_keep, strict=self.strict)
 
         elif self.drop_only is not None:
-            # Drop only mode: use TensorDict.exclude
-            # Convert dot-separated strings to tuples for nested key access
-            keys_to_drop = [self._to_nested_key(k) for k in self.drop_only]
+            keys_to_drop = as_nested_keys(self.drop_only)
 
             if self.strict:
                 missing_keys = set(keys_to_drop) - available_keys
                 if missing_keys:
                     raise KeyError(
-                        f"Keys specified in 'drop_only' not found in data: {missing_keys}. "
-                        f"Available keys: {list(available_keys)}"
+                        f"Keys specified in 'drop_only' not found in data: "
+                        f"{sorted(map(key_to_str, missing_keys))}. "
+                        f"Available keys: {format_leaf_keys(data)}"
                     )
 
-            # Use exclude which handles nested keys properly
+            ### ``exclude`` handles nested keys
             return data.exclude(*keys_to_drop)
 
         else:
@@ -430,8 +395,8 @@ class ConstantField(Transform):
             the reference tensor.
         """
         super().__init__()
-        self.reference_key = reference_key
-        self.output_key = output_key
+        self.reference_key = as_nested_key(reference_key)
+        self.output_key = as_nested_key(output_key)
         self.fill_value = fill_value
         self.output_dim = output_dim
 
@@ -454,13 +419,7 @@ class ConstantField(Transform):
         KeyError
             If the reference key is not found in the data.
         """
-        if self.reference_key not in data.keys():
-            raise KeyError(
-                f"Reference key '{self.reference_key}' not found in data. "
-                f"Available keys: {list(data.keys())}"
-            )
-
-        reference = data[self.reference_key]
+        reference = get_leaf(data, self.reference_key, what="Reference key")
         n_points = reference.shape[0]
 
         constant_tensor = torch.full(
@@ -482,8 +441,8 @@ class ConstantField(Transform):
             String with transform parameters.
         """
         return (
-            f"reference_key={self.reference_key}, "
-            f"output_key={self.output_key}, "
+            f"reference_key={key_to_str(self.reference_key)}, "
+            f"output_key={key_to_str(self.output_key)}, "
             f"fill_value={self.fill_value}, "
             f"output_dim={self.output_dim}"
         )

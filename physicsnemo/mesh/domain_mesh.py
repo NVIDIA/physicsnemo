@@ -1150,10 +1150,13 @@ def _domain_mesh_repr(self: DomainMesh) -> str:
             lines.append(f"        {name.ljust(max_bc_len)}: {first}")
             lines.extend(f"        {line}" for line in rest)
 
-    ### Global data (only if non-empty)
-    gd_keys = sorted(self.global_data.keys())
-    if gd_keys:
-        items = ", ".join(f"{k}: {tuple(self.global_data[k].shape)}" for k in gd_keys)
+    ### Global data (only if non-empty); nested leaves print as "a.b: shape"
+    gd_items = sorted(
+        (".".join(k) if isinstance(k, tuple) else k, tuple(v.shape))
+        for k, v in self.global_data.items(include_nested=True, leaves_only=True)
+    )
+    if gd_items:
+        items = ", ".join(f"{k}: {shape}" for k, shape in gd_items)
         lines.append(f"    global_data: {{{items}}}")
 
     lines.append(")")
