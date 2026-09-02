@@ -19,12 +19,13 @@ matching* (DSM).  The model is trained to recover clean data from a noisy
 version, with the :ref:`noise scheduler <diffusion_noise_schedulers>` handling
 time sampling, noise injection, and loss weighting.
 
-:class:`~physicsnemo.diffusion.metrics.losses.MSEDSMLoss` implements the
-MSE-based DSM loss and supports both x0-predictor and score-predictor
-training. :class:`~physicsnemo.diffusion.metrics.losses.FlowMatchingLoss` 
-implements the flow matching loss. It regresses a flow-predictor, or an
-x0-, epsilon-, or score-predictor converted through user-provided callbacks,
-against the flow of a linear-Gaussian path.
+The :class:`~physicsnemo.diffusion.metrics.losses.MSEDSMLoss` class implements
+the MSE-based denoising score matching loss, the standard choice for
+diffusion. The :class:`~physicsnemo.diffusion.metrics.losses.FlowMatchingLoss`
+class provides the corresponding loss for flow matching. It trains the model
+to predict the velocity of a linear-Gaussian path from noise to data. Both
+losses support training an x0-predictor as well as other parameterizations,
+converting them internally as needed.
 
 :class:`~physicsnemo.diffusion.metrics.losses.WeightedFlowMatchingLoss`
 and :class:`~physicsnemo.diffusion.metrics.losses.WeightedMSEDSMLoss`
