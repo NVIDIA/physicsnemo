@@ -44,7 +44,7 @@ from typing import Any
 
 from tensordict import TensorDict
 
-from physicsnemo.datapipes.keys import format_leaf_keys
+from physicsnemo.datapipes.keys import key_to_str, leaf_keys
 from physicsnemo.datapipes.readers.mesh import MeshReader
 from physicsnemo.datapipes.registry import register
 from physicsnemo.mesh import Mesh
@@ -120,11 +120,11 @@ class MeshReaderWithGlobalData(MeshReader):
 
         ext_td = TensorDict.load_memmap(ext_path)
         merged = mesh.global_data.clone()
-        ### Compare leaves (nested included): two groups sharing a name but
-        ### holding different leaves are not a collision, and ``update``
-        ### merges them recursively.
+        ### Compare the actual leaf keys (nested included): two groups sharing
+        ### a name but holding different leaves are not a collision, and
+        ### ``update`` merges them recursively.
         collisions = sorted(
-            set(format_leaf_keys(ext_td)) & set(format_leaf_keys(merged))
+            key_to_str(k) for k in set(leaf_keys(ext_td)) & set(leaf_keys(merged))
         )
         if collisions:
             raise ValueError(

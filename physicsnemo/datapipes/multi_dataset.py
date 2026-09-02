@@ -32,7 +32,7 @@ import torch
 from tensordict import TensorDict
 
 from physicsnemo.datapipes._rng import fork_generator
-from physicsnemo.datapipes.keys import format_leaf_keys
+from physicsnemo.datapipes.keys import format_leaf_keys, leaf_keys
 from physicsnemo.datapipes.protocols import DatasetBase
 from physicsnemo.datapipes.registry import register
 
@@ -64,25 +64,29 @@ def _validate_strict_outputs(datasets: Sequence[DatasetBase]) -> list[str]:
     """
     if not datasets:
         return []
-    ref_keys: Optional[list[str]] = None
+    ref_keys: Optional[set] = None
+    ref_names: list[str] = []
     ref_index: Optional[int] = None
     for i, ds in enumerate(datasets):
         if len(ds) == 0:
             continue
         data, _ = ds[0]
-        ### Compare leaf keys (nested included) so two datasets whose groups
-        ### hold different leaves are caught here, not mid-epoch in collate.
-        keys = format_leaf_keys(data)
+        ### Compare the actual leaf keys (nested included) so two datasets
+        ### whose groups hold different leaves are caught here, not mid-epoch
+        ### in collate; a literal "a.b" and a nested ("a", "b") stay distinct.
+        keys = set(leaf_keys(data))
         if ref_keys is None:
             ref_keys = keys
+            ref_names = format_leaf_keys(data)
             ref_index = i
         elif keys != ref_keys:
             raise ValueError(
                 "output_strict=True requires identical output keys (TensorDict keys) "
-                f"across datasets: dataset {ref_index} has {ref_keys}, dataset {i} has {keys}"
+                f"across datasets: dataset {ref_index} has {ref_names}, "
+                f"dataset {i} has {format_leaf_keys(data)}"
             )
     if ref_keys is not None:
-        return list(ref_keys)
+        return ref_names
     first = datasets[0]
     return list(first.field_names) if hasattr(first, "field_names") else []
 
