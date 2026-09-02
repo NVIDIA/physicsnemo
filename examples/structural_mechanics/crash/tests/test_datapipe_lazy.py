@@ -20,6 +20,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
 import zarr
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -30,7 +31,10 @@ import zarr_reader
 
 def _create_store(store_path: Path, num_timesteps: int = 4, num_nodes: int = 5):
     store_path.mkdir(exist_ok=True)
-    mesh_pos = np.random.randn(num_timesteps, num_nodes, 3).astype(np.float32)
+    mesh_pos = np.arange(num_timesteps * num_nodes * 3, dtype=np.float32).reshape(
+        num_timesteps, num_nodes, 3
+    )
+    mesh_pos *= np.array([3.0, 5.0, 7.0], dtype=np.float32)
     thickness = np.ones(num_nodes, dtype=np.float32)
     edges = np.array([[0, 1], [1, 2], [2, 3]], dtype=np.int64)
     store = zarr.open(str(store_path), mode="w")
@@ -72,3 +76,32 @@ def test_lazy_datapipe_defers_materialization(lazy_zarr_dir):
     assert sample.node_features["coords"].shape == (5, 3)
     assert dataset.mesh_pos_seq[0] is not None
     assert dataset.mesh_pos_seq[1] is None
+
+
+def test_lazy_graph_matches_eager_edge_normalization(lazy_zarr_dir):
+    """Lazy and eager graphs use the same position scale for edge features."""
+    common_kwargs = {
+        "data_dir": lazy_zarr_dir,
+        "split": "train",
+        "num_samples": 2,
+        "num_steps": 4,
+        "static_features": ["thickness"],
+    }
+    eager = datapipe.CrashGraphDataset(
+        reader=zarr_reader.Reader(lazy_load=False),
+        stats_dir=str(Path(lazy_zarr_dir) / "eager_stats"),
+        **common_kwargs,
+    )
+    lazy = datapipe.CrashGraphDataset(
+        reader=zarr_reader.Reader(lazy_load=True),
+        stats_dir=str(Path(lazy_zarr_dir) / "lazy_stats"),
+        **common_kwargs,
+    )
+
+    torch.testing.assert_close(
+        lazy.edge_stats["edge_mean"], eager.edge_stats["edge_mean"]
+    )
+    torch.testing.assert_close(
+        lazy.edge_stats["edge_std"], eager.edge_stats["edge_std"]
+    )
+    torch.testing.assert_close(lazy[0].graph.edge_attr, eager[0].graph.edge_attr)
