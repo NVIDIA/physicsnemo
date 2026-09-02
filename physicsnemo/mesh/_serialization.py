@@ -89,6 +89,7 @@ def install_mesh_memmap_reader(cls: type) -> None:
         subpath: Any = None,
         mode: str = "r",
         num_threads: int = 0,
+        allow_pickle: bool | None = None,
     ) -> Any:
         payload = _payload_of(out)
         _validate_out_device(payload, device)
@@ -101,6 +102,7 @@ def install_mesh_memmap_reader(cls: type) -> None:
             subpath=subpath,
             mode=mode,
             num_threads=num_threads,
+            allow_pickle=allow_pickle,
         )
 
     # ``stock_*`` are already descriptor-resolved functions whose signatures do
