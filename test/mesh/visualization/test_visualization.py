@@ -24,6 +24,7 @@ import pytest
 import torch
 
 from physicsnemo.mesh import Mesh
+from physicsnemo.mesh.visualization import draw, draw_mesh
 
 matplotlib = pytest.importorskip("matplotlib")
 pv = pytest.importorskip("pyvista")
@@ -116,6 +117,19 @@ def test_explicit_matplotlib_backend_2d():
     mesh = create_2d_triangle_mesh()
     ax = mesh.draw(backend="matplotlib", show=False)
     assert isinstance(ax, matplotlib.axes.Axes)
+    plt.close("all")
+
+
+def test_pending_deprecation_alias_matches_draw():
+    """The legacy functional name remains usable during migration."""
+    mesh = create_2d_triangle_mesh()
+
+    expected = draw(mesh, backend="matplotlib", show=False)
+    with pytest.warns(PendingDeprecationWarning, match="draw_mesh"):
+        actual = draw_mesh(mesh, backend="matplotlib", show=False)
+
+    assert isinstance(expected, matplotlib.axes.Axes)
+    assert isinstance(actual, matplotlib.axes.Axes)
     plt.close("all")
 
 
@@ -254,6 +268,25 @@ def test_cell_scalars_tensor():
     cell_scalars = torch.rand(mesh.n_cells)
     ax = mesh.draw(show=False, backend="matplotlib", cell_scalars=cell_scalars)
     assert isinstance(ax, matplotlib.axes.Axes)
+    plt.close("all")
+
+
+def test_volume_cell_scalars_do_not_mutate_source_cache():
+    """Surface extraction uses an independent cache container."""
+    mesh = create_3d_tetrahedral_mesh()
+    cached_centroids = mesh.cell_centroids
+    cache_keys = set(mesh._cache.keys(include_nested=True, leaves_only=True))
+
+    ax = mesh.draw(
+        show=False,
+        backend="matplotlib",
+        cell_scalars=torch.ones(mesh.n_cells),
+    )
+
+    assert isinstance(ax, matplotlib.axes.Axes)
+    assert mesh._cache["cell", "centroids"] is cached_centroids
+    assert set(mesh._cache.keys(include_nested=True, leaves_only=True)) == cache_keys
+    assert "_viz_cell_scalars" not in mesh.cell_data
     plt.close("all")
 
 

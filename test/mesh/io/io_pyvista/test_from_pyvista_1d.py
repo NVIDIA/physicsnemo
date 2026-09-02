@@ -133,3 +133,48 @@ class TestFromPyvista1D:
         for i in range(19):
             assert mesh.cells[i, 0] == i
             assert mesh.cells[i, 1] == i + 1
+
+    def test_unstructured_line_preserves_connectivity_and_cell_data(self):
+        """Native VTK_LINE cells must not disappear during conversion."""
+        points = np.array([[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]], dtype=np.float64)
+        pv_mesh = pv.UnstructuredGrid(
+            np.array([2, 0, 1]),
+            np.array([pv.CellType.LINE]),
+            points,
+        )
+        pv_mesh.cell_data["line_id"] = np.array([17], dtype=np.int16)
+
+        mesh = from_pyvista(pv_mesh)
+
+        assert mesh.points.dtype == torch.float64
+        assert torch.equal(mesh.cells, torch.tensor([[0, 1]]))
+        assert torch.equal(
+            mesh.cell_data["line_id"], torch.tensor([17], dtype=torch.int16)
+        )
+
+    def test_unstructured_polyline_splits_and_replicates_cell_data(self):
+        """VTK_POLY_LINE cells become ordered segments with replicated data."""
+        points = np.array(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [2.0, 1.0, 0.0],
+                [3.0, 1.0, 0.0],
+            ]
+        )
+        pv_mesh = pv.UnstructuredGrid(
+            np.array([4, 0, 1, 2, 3]),
+            np.array([pv.CellType.POLY_LINE]),
+            points,
+        )
+        pv_mesh.cell_data["line_id"] = np.array([23], dtype=np.int32)
+
+        mesh = from_pyvista(pv_mesh)
+
+        assert torch.equal(
+            mesh.cells,
+            torch.tensor([[0, 1], [1, 2], [2, 3]]),
+        )
+        assert torch.equal(
+            mesh.cell_data["line_id"], torch.full((3,), 23, dtype=torch.int32)
+        )

@@ -18,9 +18,10 @@
 
 from __future__ import annotations
 
-from sympy import Eq, Function, Matrix, init_printing, preview
-
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.sym.computation import Computation
+
+sympy = OptionalImport("sympy")
 
 
 class PDE:
@@ -59,14 +60,14 @@ class PDE:
 
     def pprint(self, print_latex: bool = False) -> None:
         """Pretty-print the equations."""
-        init_printing(use_latex=True)
+        sympy.init_printing(use_latex=True)
         for key, value in self.equations.items():
             print(str(key) + ": " + str(value))
         if print_latex:
-            preview(
-                Matrix(
+            sympy.preview(
+                sympy.Matrix(
                     [
-                        Eq(Function(name, real=True), eq)
+                        sympy.Eq(sympy.Function(name, real=True), eq)
                         for name, eq in self.equations.items()
                     ]
                 ),

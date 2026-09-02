@@ -25,6 +25,7 @@ O(log N) Python iterations instead of the O(N) iterations required by a naive
 sequential approach, enabling scalability to hundreds of millions of cells.
 """
 
+import builtins
 from typing import TYPE_CHECKING
 
 import torch
@@ -79,16 +80,33 @@ def _compute_morton_codes(
 
     N, D = centroids.shape
     device = centroids.device
+    if D == 0:
+        raise ValueError("centroids must contain at least one spatial dimension")
+    if N == 0:
+        return torch.empty(0, dtype=torch.int64, device=device)
 
-    ### Bits per dimension: 63 // D keeps total code <= 63 bits (non-negative int64)
-    n_bits = 63 // D
+    ### Bits per dimension: keep the total code within non-negative int64. For
+    ### D=1, a 63-bit grid maximum rounds to 2^63 in floating point before the
+    ### int64 conversion. Limit that case to 62 bits to avoid overflow.
+    n_bits = min(62, 63 // D)
     max_val = (1 << n_bits) - 1
 
-    ### Quantize centroids to integer grid [0, 2^n_bits - 1]
-    cmin = centroids.min(dim=0).values  # (D,)
-    cmax = centroids.max(dim=0).values  # (D,)
-    extent = (cmax - cmin).clamp(min=1e-30)  # avoid division by zero
-    coords = ((centroids - cmin) / extent * max_val).long().clamp(0, max_val)  # (N, D)
+    ### Quantize centroids to integer grid [0, 2^n_bits - 1]. Half-precision
+    ### dtypes cannot represent this grid's scale, so normalize in at least
+    ### float32 while retaining float64 input precision.
+    quantization_dtype = (
+        torch.float64 if centroids.dtype == torch.float64 else torch.float32
+    )
+    quantization_points = centroids.to(quantization_dtype)
+    cmin = quantization_points.min(dim=0).values  # (D,)
+    cmax = quantization_points.max(dim=0).values  # (D,)
+    extent = cmax - cmin
+    # Preserve every representable nonzero extent. Constant axes have a zero
+    # numerator, so replacing only their zero denominator maps them to zero.
+    safe_extent = torch.where(extent != 0, extent, torch.ones_like(extent))
+    coords = (
+        ((quantization_points - cmin) / safe_extent * max_val).long().clamp(0, max_val)
+    )  # (N, D)
 
     ### Bit-interleave all dimensions: bit b of dim d -> position b*D + d.
     if device.type == "cuda":
@@ -295,12 +313,12 @@ class BVH:
     sorted_cell_order: Int[torch.Tensor, " n_cells"]
 
     @property
-    def n_nodes(self) -> int:
+    def n_nodes(self) -> builtins.int:
         """Number of nodes in the BVH."""
         return self.node_aabb_min.shape[0]
 
     @property
-    def n_spatial_dims(self) -> int:
+    def n_spatial_dims(self) -> builtins.int:
         """Dimensionality of the spatial space."""
         return self.node_aabb_min.shape[1]
 
@@ -310,7 +328,7 @@ class BVH:
         return self.node_aabb_min.device
 
     @classmethod
-    def from_mesh(cls, mesh: "Mesh", leaf_size: int = 1) -> "BVH":
+    def from_mesh(cls, mesh: "Mesh", leaf_size: builtins.int = 1) -> "BVH":
         """Construct a BVH from a mesh using morton-code LBVH.
 
         Cells are sorted by the morton code of their centroids, then the tree
@@ -481,8 +499,8 @@ class BVH:
     def _traverse(
         self,
         query_points: Float[torch.Tensor, "n_queries n_spatial_dims"],
-        max_candidates_per_point: int | None,
-        aabb_tolerance: float,
+        max_candidates_per_point: builtins.int | None,
+        aabb_tolerance: builtins.float,
     ) -> tuple[
         Int[torch.Tensor, " n_pairs"],
         Int[torch.Tensor, " n_pairs"],
@@ -592,8 +610,8 @@ class BVH:
     def find_candidate_cells(
         self,
         query_points: Float[torch.Tensor, "n_queries n_spatial_dims"],
-        max_candidates_per_point: int | None = 32,
-        aabb_tolerance: float = 1e-6,
+        max_candidates_per_point: builtins.int | None = 32,
+        aabb_tolerance: builtins.float = 1e-6,
     ) -> Adjacency:
         r"""Find candidate cells that might contain each query point.
 

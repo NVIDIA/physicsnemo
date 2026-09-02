@@ -144,6 +144,14 @@ def mesh_raycast_impl(
         raise ValueError("mesh_indices must be 1D or have shape (num_faces, 3)")
     if mesh_indices.numel() == 0 or mesh_indices.numel() % 3 != 0:
         raise ValueError("mesh_indices must contain complete triangle faces")
+    min_index = int(mesh_indices.min().item())
+    max_index = int(mesh_indices.max().item())
+    if min_index < 0 or max_index >= mesh_vertices.shape[0]:
+        raise ValueError(
+            "mesh_indices must index existing vertices; "
+            f"got range [{min_index}, {max_index}] for "
+            f"{mesh_vertices.shape[0]} vertices"
+        )
     if vertex_colors is not None and face_colors is not None:
         raise ValueError("Pass either vertex_colors or face_colors, not both")
     _validate_image_shape(image_height, image_width)
@@ -181,7 +189,7 @@ def mesh_raycast_impl(
         image_height, image_width, device=device
     )
     wp_device, wp_stream = FunctionSpec.warp_launch_context(mesh_vertices_fp32)
-    with wp.ScopedStream(wp_stream):
+    with FunctionSpec.warp_stream_scope(wp_stream):
         wp_vertices = wp.from_torch(mesh_vertices_fp32, dtype=wp.vec3)
         wp_indices = wp.from_torch(mesh_indices_i32, dtype=wp.int32)
         mesh = wp.Mesh(points=wp_vertices, indices=wp_indices)

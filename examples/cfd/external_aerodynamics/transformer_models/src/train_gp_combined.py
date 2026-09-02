@@ -24,7 +24,7 @@ Trains both models jointly with three loss terms:
 
 The head and consistency losses activate after a configurable warmup period
 with a linear ramp (default: epochs 50–60).  For the GP head, inducing points
-are re-initialised at the warmup start from the now-meaningful embeddings.
+are re-initialized at the warmup start from the now-meaningful embeddings.
 
 The ``head_type`` config key selects the drag head:
   * ``gp``  — :class:`~physicsnemo.experimental.uq.VariationalGPHead`
@@ -712,6 +712,14 @@ def main(cfg: DictConfig):
         val_head_mse_sum = 0.0
         val_consistency_gap_sum = 0.0
         val_metrics_sum: dict[str, float] = {}
+        # Per-geometry (drag epistemic std, true drag |err|) for a drag-ranking
+        # Spearman — the active-learning objective, logged identically to the
+        # field-GP run so the two are directly comparable. For the scalar drag GP
+        # the head's posterior std IS a per-geometry signal (no field integral),
+        # and the constant likelihood-noise floor doesn't change the rank order,
+        # so total-vs-epistemic variance give the same Spearman.
+        drag_epi_local: list[float] = []
+        drag_err_local: list[float] = []
 
         full_val_iter = iter(val_dl_full) if val_dl_full is not None else None
 
@@ -792,6 +800,12 @@ def main(cfg: DictConfig):
                 val_head_mse = F.mse_loss(pred_mean, drag_target_v).item()
                 val_head_mse_sum += val_head_mse
 
+                if use_gp:
+                    std_v = pred_var.reshape(-1).clamp_min(1e-12).sqrt()
+                    err_v = (pred_mean - drag_target_v).reshape(-1).abs()
+                    drag_epi_local.extend(std_v.detach().cpu().tolist())
+                    drag_err_local.extend(err_v.detach().cpu().tolist())
+
                 if batch_full_v is not None:
                     trans_cd = compute_transolver_drag_full_mesh(
                         batch_full_v,
@@ -809,6 +823,35 @@ def main(cfg: DictConfig):
                     f"Field MSE: {val_mse:.6f}  Head MSE: {val_head_mse:.6f}"
                 )
 
+        # ---- Drag ranking Spearman across ALL val geometries ----
+        # Gather per-geometry (epi drag-std, true drag |err|) from every rank so
+        # rank 0 computes one global rank correlation. All ranks must call the
+        # collective, even those with an empty shard.
+        val_drag_spearman = float("nan")
+        n_drag = 0
+        if use_gp:
+            if (
+                dist.is_available()
+                and dist.is_initialized()
+                and dist.get_world_size() > 1
+            ):
+                g_err: list = [None] * dist.get_world_size()
+                g_epi: list = [None] * dist.get_world_size()
+                dist.all_gather_object(g_err, drag_err_local)
+                dist.all_gather_object(g_epi, drag_epi_local)
+                all_err = [v for part in g_err for v in part]
+                all_epi = [v for part in g_epi for v in part]
+            else:
+                all_err, all_epi = drag_err_local, drag_epi_local
+            n_drag = len(all_err)
+            if n_drag >= 2:
+                a = np.asarray(all_epi, dtype=np.float64)
+                b = np.asarray(all_err, dtype=np.float64)
+                ra = np.argsort(np.argsort(a)).astype(np.float64)
+                rb = np.argsort(np.argsort(b)).astype(np.float64)
+                if ra.std() > 0 and rb.std() > 0:
+                    val_drag_spearman = float(np.corrcoef(ra, rb)[0, 1])
+
         # ---- Epoch-level validation summary ----
         vn = max(val_epoch_len, 1)
         avg_val_mse = val_mse_sum / vn
@@ -820,7 +863,8 @@ def main(cfg: DictConfig):
             f"Epoch [{epoch}/{cfg.training.num_epochs}] "
             f"Avg Val Head MSE: {avg_val_head_mse:.6f}  "
             f"Avg Val Field MSE: {avg_val_mse:.6f}  "
-            f"Avg Val Consistency Gap: {avg_val_gap:.6f}"
+            f"Avg Val Consistency Gap: {avg_val_gap:.6f}  "
+            f"drag_spearman={val_drag_spearman:+.3f} (n={n_drag})"
         )
         if avg_val_metrics:
             table = tabulate(
@@ -834,6 +878,10 @@ def main(cfg: DictConfig):
             val_writer.add_scalar("epoch/mse_loss", avg_val_mse, epoch)
             val_writer.add_scalar("epoch/head_mse", avg_val_head_mse, epoch)
             val_writer.add_scalar("epoch/consistency_gap", avg_val_gap, epoch)
+            if use_gp and n_drag >= 2:
+                val_writer.add_scalar(
+                    "epoch/val_drag_spearman", val_drag_spearman, epoch
+                )
             for mk, mv in avg_val_metrics.items():
                 val_writer.add_scalar(f"epoch/{mk}", mv, epoch)
 

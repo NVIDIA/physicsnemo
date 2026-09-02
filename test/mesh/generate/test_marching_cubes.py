@@ -179,3 +179,11 @@ class TestMarchingCubesValidation:
     def test_rejects_4d_input(self):
         with pytest.raises(NotImplementedError, match="3D scalar fields"):
             marching_cubes(torch.randn(10, 10, 10, 10))
+
+    def test_accepts_bfloat16_field(self):
+        sdf, _ = _sphere_sdf(resolution=16)
+
+        mesh = marching_cubes(sdf.to(torch.bfloat16))
+
+        assert mesh.n_points > 0
+        assert mesh.points.dtype == torch.float32

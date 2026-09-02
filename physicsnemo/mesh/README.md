@@ -89,8 +89,15 @@ performance benefits.
   (interpolating) schemes
 - **Smoothing**: [Laplacian smoothing](https://en.wikipedia.org/wiki/Laplacian_smoothing)
   with feature preservation
-- **Remeshing**: Uniform remeshing via clustering (dimension-agnostic)
+- **Remeshing**: Warp-based uniform and field-controlled remeshing on CPU and
+  CUDA, with barycentric point-data transfer
 - **Repair**: Remove duplicates, fix orientation, fill holes, clean topology
+- **Deformation**: Dense point displacement, Sobolev-filtered deformation,
+  sparse compact control-point deformation, global radial-basis deformation,
+  lattice free-form deformation, and nearest-surface shrinkwrap
+- **Deformation Energies**: Differentiable strain, local and total measure,
+  inversion, triangle-hinge bending, and enclosed-volume penalties for
+  fixed-topology optimization
 - **Tessellation**: Triangulate polygon soups into simplicial meshes (convex
   fan + [ear clipping](https://en.wikipedia.org/wiki/Polygon_triangulation) for
   non-convex polygons); also `Mesh.from_polygons`
@@ -303,7 +310,9 @@ Comprehensive overview of PhysicsNeMo-Mesh capabilities:
 | **Smoothing** | | |
 | Laplacian smoothing | ✅ | |
 | **Remeshing** | | |
-| Uniform remeshing | ✅ | Clustering-based |
+| Uniform remeshing | ✅ | Warp (CPU and CUDA) |
+| Resolution-field control | ✅ | Relative linear resolution per vertex |
+| Point-data transfer | ✅ | Autograd with respect to source field values |
 | **Tessellation** | | |
 | Polygon-soup triangulation | ✅ | Convex fan + ear-clip; `Mesh.from_polygons` |
 | **Spatial Queries** | | |
@@ -319,9 +328,20 @@ Comprehensive overview of PhysicsNeMo-Mesh capabilities:
 | Rotation | ✅ | In 2D or 3D (angle-axis); for higher dimensions rotation is ill-defined, use `transform()` instead |
 | Scaling | ✅ | Uniform or anisotropic |
 | Arbitrary matrix transform | ✅ | |
+| Dense point displacement | ✅ | Aligned tensor or `point_data` key, with optional point weights |
+| Sobolev-filtered deformation | ✅ | Differentiable P1 Helmholtz solve with optional fixed points |
+| Sparse control-point morphing | ✅ | Wendland-C2 compact support with scalar or per-control radii |
+| Global radial-basis deformation | ✅ | Thin-plate-spline field with an affine polynomial tail |
+| Nearest-surface shrinkwrap | ✅ | Differentiable triangle projection with Torch and Warp search backends |
+| **Deformation energies** | | |
+| Simplex strain | ✅ | Reference-relative St. Venant--Kirchhoff energy |
+| Local and total measure | ✅ | Length, area, or volume penalty |
+| Inversion | ✅ | Signed-Jacobian penalty for full-dimensional simplices |
+| Surface bending | ✅ | Reference-relative triangle-hinge energy |
+| Enclosed volume | ✅ | One edge-connected, closed, consistently oriented triangle surface |
 | Extrusion | ✅ | Manifold → higher dimension |
 | Coordinate projection (drop ambient dims) | ✅ | `projections.project` (e.g. 3D → 2D embedding) |
-| Surface projection / mesh intersection | ❌ | Manifold → lower *manifold* dimension; work in progress |
+| Mesh intersection | ❌ | Manifold → lower *manifold* dimension. Work in progress |
 | **Neighbors & Adjacency** | | |
 | Point-to-points | ✅ | Graph edges |
 | Point-to-cells | ✅ | Vertex star |
@@ -369,6 +389,100 @@ mesh_rotated = mesh.rotate(axis=[0, 0, 1], angle=np.pi/4)
 mesh_scaled = mesh.scale(2.0)  # Or [2.0, 1.0, 0.5] for anisotropic
 ```
 
+### Dense and Sparse Deformation
+
+```python
+import torch
+
+# Dense displacement: one displacement vector per mesh point
+displacement = torch.zeros_like(mesh.points)
+displacement[:, -1] = 0.05
+displaced = mesh.displace(displacement)
+
+# Sobolev deformation: smooth a dense design field over the mesh
+raw_displacement = torch.zeros_like(mesh.points, requires_grad=True)
+sobolev_deformed = mesh.sobolev_deform(
+    raw_displacement,
+    length_scale=0.1,
+)
+sobolev_deformed.points.square().mean().backward()
+
+# Sparse morphing: one control at the point with the largest last coordinate
+control_index = mesh.points[:, -1].argmax()
+control_points = mesh.points[control_index].unsqueeze(0)  # Shape: (1, D)
+extent = mesh.points.amax(dim=0) - mesh.points.amin(dim=0)
+control_displacements = torch.zeros_like(control_points)
+control_displacements[:, -1] = 0.1 * extent.norm()
+
+morphed = mesh.morph(
+    control_points,
+    control_displacements,
+    radius=0.4 * extent.norm(),
+)
+
+# Global radial-basis deformation: use D + 1 affinely independent box controls
+if torch.any(extent == 0):
+    raise ValueError("RBF example requires nonzero mesh extent in every dimension")
+box_origin = mesh.points.amin(dim=0)
+rbf_controls = torch.cat(
+    (box_origin.unsqueeze(0), box_origin.unsqueeze(0) + torch.diag(extent))
+)
+rbf_displacements = torch.zeros_like(rbf_controls)
+rbf_displacements[-1, -1] = 0.1 * extent.norm()
+rbf_deformed = mesh.radial_basis_function_deform(
+    rbf_controls,
+    rbf_displacements,
+    kernel="thin_plate_spline",
+)
+```
+
+Tensor-valued radii must remain finite and strictly positive. For a learned
+radius, use a positive parameterization such as
+`torch.nn.functional.softplus(raw_radius) + radius_epsilon`. Tensor radius
+values are not validated at runtime. Floating `point_weights` are applied as
+supplied and may be signed or greater than one. The current morphing kernel is
+`"wendland_c2"`, which is also the default.
+
+Thin-plate-spline radial-basis deformation has global support. With its default
+affine polynomial tail, `smoothing=0.0`, and a nonsingular control layout, it
+interpolates every control displacement up to solver precision. Positive
+smoothing adds diagonal regularization and deliberately relaxes interpolation
+accuracy.
+
+Sobolev deformation solves `(M + length_scale² K) u = M d` with a P1 stiffness
+operator and uniform vertex mass scaled by the mean positive lumped P1 mass.
+The length scale uses the same coordinate units as the mesh. The resulting
+filter is self-adjoint in standard Euclidean vertex coordinates, so autograd
+applies the same smoothing to sensitivities with respect to the raw
+per-vertex displacement. Use `fixed_points` to impose zero displacement at
+selected vertices. CUDA segments, triangles, and tetrahedra use Warp by
+default. CPU meshes and higher-dimensional simplices use Torch.
+
+### Nearest-Surface Shrinkwrap
+
+```python
+# target must be a triangle surface on the same device and dtype
+fitted = mesh.shrinkwrap(
+    target,
+    offset=0.01,
+    max_distance=0.25,
+    point_weights="design_mask",
+)
+```
+
+`point_weights` can be a tensor or a key in `mesh.point_data`. Boolean masks
+can fit selected panel vertices while leaving the remainder fixed. Nearest-face
+selection is discrete. Between face, feature, and distance-cutoff transitions,
+gradients propagate through source points, selected target vertices, floating
+weights, and a tensor-valued `offset`.
+
+Float64 targets use the Torch search because Warp searches in float32. Safe
+float32 coordinates are searched unchanged. Warp falls back to Torch for
+unsafe coordinate magnitudes or face geometry.
+
+Shrinkwrap performs data-dependent validation and search setup. CUDA executions
+with either backend are not supported inside CUDA Graph capture.
+
 ### Subdivision
 
 ```python
@@ -376,6 +490,53 @@ refined = mesh.subdivide(levels=2, filter="linear")    # Topology only
 smooth = mesh.subdivide(levels=2, filter="loop")       # C² continuous
 interp = mesh.subdivide(levels=2, filter="butterfly")  # Interpolating
 ```
+
+### Remeshing
+
+```python
+# The result remains on the input device.
+coarse = mesh.remesh(n_clusters=1_000)
+
+# Move the mesh to CUDA first to accelerate large inputs.
+coarse_cuda = mesh.to("cuda").remesh(n_clusters=1_000)
+
+# Transfer selected floating-point fields to the new vertices.
+mesh.point_data["temperature"] = mesh.points[:, 2]
+coarse_with_data = mesh.remesh(
+    n_clusters=1_000,
+    transfer_point_data=["temperature"],
+)
+
+# Request higher linear resolution away from x=0.
+resolution = 1.0 + 1.5 * mesh.points[:, 0].square()
+adaptive = mesh.remesh(
+    n_clusters=1_000,
+    resolution_field=resolution,
+    transfer_point_data=["temperature"],
+)
+
+# Backend tuning is available through the advanced tensor functional.
+from physicsnemo.nn.functional.geometry.remeshing import remeshing
+
+linear_resolution = resolution
+if linear_resolution.element_size() < 4:
+    linear_resolution = linear_resolution.to(torch.float32)
+normalized_resolution = linear_resolution / linear_resolution.amax()
+tuned_points, tuned_cells = remeshing(
+    mesh.points,
+    mesh.cells,
+    n_clusters=1_000,
+    vertex_density=normalized_resolution.pow(4),
+    search_radius_scale=2.0,
+)
+```
+
+Remeshing currently supports triangle surfaces embedded in 3D. It creates new
+topology. Selected real floating-point fields can be interpolated from the
+original surface. Cell data and unselected point data are discarded. Global
+data is preserved. The high-level resolution field is a relative
+inverse-edge-length multiplier. The low-level `vertex_density` parameter
+accepts the corresponding raw CVT integration density.
 
 ### Discrete Calculus
 
@@ -569,6 +730,8 @@ Key design decisions enable these principles:
   interpolation
 - [`physicsnemo.mesh.transformations`](./transformations/) - Geometric
   operations
+- [`physicsnemo.mesh.deformation`](./deformation/) - Differentiable
+  fixed-topology deformation energies
 - [`physicsnemo.mesh.repair`](./repair/) - Mesh cleaning and topology
   repair
 - [`physicsnemo.mesh.validation`](./validation/) - Quality metrics

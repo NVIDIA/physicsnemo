@@ -60,6 +60,28 @@ class TestRoundTrip:
         assert pv_reconstructed.n_cells == pv_original.n_cells
         assert np.allclose(pv_reconstructed.points, pv_original.points)
 
+    def test_round_trip_preserves_large_offset_float64_geometry(self):
+        """Supported coordinate precision must not narrow at either boundary."""
+        points = np.array(
+            [
+                [1e8, 1e8, 0.0],
+                [1e8 + 1.0, 1e8, 0.0],
+                [1e8, 1e8 + 1.0, 0.0],
+            ],
+            dtype=np.float64,
+        )
+        original = pv.PolyData.from_regular_faces(points, np.array([[0, 1, 2]]))
+
+        mesh = from_pyvista(original)
+        reconstructed = to_pyvista(mesh)
+
+        assert mesh.points.dtype == torch.float64
+        torch.testing.assert_close(
+            mesh.cell_areas, torch.tensor([0.5], dtype=torch.float64)
+        )
+        assert reconstructed.points.dtype == np.float64
+        assert np.array_equal(reconstructed.points, points)
+
     def test_round_trip_3d_tetbeam(self):
         """Test round-trip conversion preserves geometry for 3D mesh."""
         pv_original = pv.examples.load_tetbeam()

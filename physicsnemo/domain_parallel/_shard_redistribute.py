@@ -17,10 +17,10 @@
 from __future__ import annotations
 
 from itertools import accumulate
+from math import prod
 from typing import cast
 
 import torch
-import torch.distributed as dist
 import torch.distributed._functional_collectives as funcol
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.tensor._dtensor_spec import (
@@ -37,7 +37,10 @@ from torch.distributed.tensor.placement_types import (
 )
 
 import physicsnemo.domain_parallel.shard_tensor as shard_tensor
-from physicsnemo.domain_parallel._shard_tensor_spec import ShardTensorSpec
+from physicsnemo.domain_parallel._shard_tensor_spec import (
+    ShardTensorSpec,
+    compute_sharding_shapes_from_chunking_global_shape,
+)
 
 # TODO:
 # DTensor makes assumptions about sharding sizes.
@@ -82,7 +85,6 @@ def _to_replicate_tensor(
     """
     # Get the mesh for the group:
     mesh = current_spec.mesh
-    group = mesh.get_group(mesh_dim)
 
     # Ensure contiguous data for the reduction:
     local_tensor = local_tensor.contiguous()
@@ -100,14 +102,26 @@ def _to_replicate_tensor(
     for i, t in enumerate(tensor_dim_shapes):
         base_shapes[i][tensor_dim] = tensor_dim_shapes[i]
 
-    # Create a spot for the output:
-    output = [
-        torch.empty(s, device=local_tensor.device, dtype=local_tensor.dtype)
-        for s in base_shapes
-    ]
-    dist.all_gather(output, local_tensor, group=group)
+    # Gather with funcol rather than dist.all_gather so a captured graph
+    # holds a DeviceMesh reference instead of a c10d ProcessGroup
+    # ScriptObject: AOTAutograd deepcopies the backward GraphModule during
+    # caching, and ProcessGroup has no __getstate__. funcol.all_gather_tensor
+    # requires equal shapes across ranks, so pad the flattened shard to the
+    # largest shard's numel and slice per-rank afterwards.
+    numels = [prod(s) for s in base_shapes]
+    max_numel = max(numels)
+    send = local_tensor.reshape(-1)
+    if send.numel() < max_numel:
+        send = torch.nn.functional.pad(send, (0, max_numel - send.numel()))
+    gathered = funcol.all_gather_tensor(send, gather_dim=0, group=(mesh, mesh_dim))
+    if isinstance(gathered, funcol.AsyncCollectiveTensor):
+        gathered = gathered.wait()
 
-    return torch.cat(output, dim=tensor_dim).contiguous()
+    shards = [
+        gathered[i * max_numel : i * max_numel + numels[i]].view(shape)
+        for i, shape in enumerate(base_shapes)
+    ]
+    return torch.cat(shards, dim=tensor_dim).contiguous()
 
 
 def _select_slice_from_replicate(
@@ -115,8 +129,8 @@ def _select_slice_from_replicate(
     target_spec: ShardTensorSpec,
     mesh_dim: int,
     mesh_coord: int,
-    sizes: tuple[int, ...] | None = None,
-) -> tuple[torch.Tensor, tuple[int, ...] | None]:
+    sizes: list[int] | None = None,
+) -> tuple[torch.Tensor, list[int] | None]:
     r"""Select the appropriate slice from a replicated tensor to create a shard.
 
     Parameters
@@ -129,13 +143,13 @@ def _select_slice_from_replicate(
         The mesh dimension along which to shard.
     mesh_coord : int
         The coordinate of this rank in the mesh dimension.
-    sizes : Optional[Tuple[int, ...]], optional
+    sizes : Optional[List[int]], optional
         Size hint for chunking. If provided and matches mesh size, uses
         these sizes for splitting.
 
     Returns
     -------
-    Tuple[torch.Tensor, Optional[Tuple[int, ...]]]
+    Tuple[torch.Tensor, Optional[List[int]]]
         Tuple containing the selected slice that will become this rank's
         shard, and the sizes used (or ``None`` if chunk was used).
 
@@ -171,12 +185,14 @@ def _select_slice_from_replicate(
 
 def _to_new_shard_dim(
     local_tensor: torch.Tensor,
+    current_spec: ShardTensorSpec,
     target_spec: ShardTensorSpec,
     mesh_dim: int,
-    size_hint: tuple[int, ...] | None,
+    size_hint: list[int] | None,
+    spec_shapes_are_current: bool,
     current_dim: int,
     target_dim: int,
-) -> tuple[torch.Tensor, tuple[int, ...] | None]:
+) -> tuple[torch.Tensor, list[int] | None]:
     r"""Transpose tensor sharding from one dimension to another.
 
     Reshards a tensor from being sharded on ``current_dim`` to being sharded
@@ -187,12 +203,22 @@ def _to_new_shard_dim(
     ----------
     local_tensor : torch.Tensor
         The local shard of the tensor to reshard.
+    current_spec : ShardTensorSpec
+        Specification of current sharding scheme.
     target_spec : ShardTensorSpec
         Specification of target sharding scheme.
     mesh_dim : int
         The device mesh dimension on which we're transposing.
-    size_hint : Optional[Tuple[int, ...]]
+    size_hint : Optional[List[int]]
         If provided, use this to chunk the tensor for both send and recv.
+    spec_shapes_are_current : bool
+        Whether ``current_spec``'s recorded per-rank sharding shapes still
+        describe ``local_tensor``. The caller sets this from the hop
+        sequence of the enclosing redistribute (true only until the first
+        transform mutates the local tensor), which is derived from
+        placements and therefore identical on every rank -- the fast path
+        below must be taken by all ranks or none, so this decision may not
+        depend on rank-local state.
     current_dim : int
         Currently sharded on this tensor dimension.
     target_dim : int
@@ -200,7 +226,7 @@ def _to_new_shard_dim(
 
     Returns
     -------
-    Tuple[torch.Tensor, Optional[Tuple[int, ...]]]
+    Tuple[torch.Tensor, Optional[List[int]]]
         Tuple containing the resharded tensor and the size hint used
         (may be ``None`` if it was discarded).
     """
@@ -210,7 +236,6 @@ def _to_new_shard_dim(
 
     device_mesh = target_spec.mesh
     mesh_size = device_mesh.size(mesh_dim=mesh_dim)
-    group = device_mesh.get_group(mesh_dim=mesh_dim)
 
     # To use the size hint, and preserve the original sharding, we need to insist that
     # the mesh_size and the length of size hint is equal
@@ -229,30 +254,97 @@ def _to_new_shard_dim(
     # Also, cast to list for all_to_all:
     chunks = [c.contiguous() for c in chunks]
 
-    # TODO - remove this all_to_all by enabling recv shape from known information.
+    # Try to compute recv shapes analytically, with no communication:
+    # - the target-dim chunk size we're about to receive is whatever *we*
+    #   compute for our own slot, since every rank derives its chunk sizes
+    #   from the same (already-replicated) global extent via the same
+    #   deterministic chunking rule -- it's not actually rank-dependent.
+    # - the current-dim extent of the sender is already recorded per-rank
+    #   on `current_spec`.
+    # Whether the fast path applies is decided by `spec_shapes_are_current`,
+    # which the caller derives from the hop sequence (identical on all
+    # ranks by construction). It must NOT be decided from rank-local state
+    # such as `local_tensor.shape`: ranks disagreeing here means a subset
+    # skips the shape-negotiation all_to_all below and the collectives
+    # mismatch. The shape comparison is therefore an assertion (corrupt or
+    # inconsistent specs should fail loudly), not a fallback condition.
+    recv_shapes = None
+    if (
+        spec_shapes_are_current
+        and current_spec._sharding_shapes is not None
+        and mesh_dim in current_spec._sharding_shapes
+    ):
+        current_shapes_by_rank = current_spec._sharding_shapes[mesh_dim]
+        my_coord = device_mesh.get_coordinate()[mesh_dim]
+        if len(current_shapes_by_rank) != mesh_size:
+            raise RuntimeError(
+                f"current_spec records {len(current_shapes_by_rank)} shapes "
+                f"for mesh dim {mesh_dim}, expected {mesh_size}."
+            )
+        if torch.Size(current_shapes_by_rank[my_coord]) != torch.Size(
+            local_tensor.shape
+        ):
+            raise RuntimeError(
+                f"current_spec records shape {current_shapes_by_rank[my_coord]} "
+                f"for this rank on mesh dim {mesh_dim}, but the local tensor "
+                f"has shape {tuple(local_tensor.shape)}. The spec's sharding "
+                "shapes are stale or corrupt."
+            )
+        my_target_chunk_size = chunks[my_coord].shape[target_dim]
+        recv_shapes = []
+        for sender_shape in current_shapes_by_rank:
+            if len(sender_shape) != local_tensor.ndim:
+                raise RuntimeError(
+                    f"current_spec records shape {tuple(sender_shape)} for a "
+                    f"peer rank on mesh dim {mesh_dim}, which has different "
+                    f"rank than the local tensor shape "
+                    f"{tuple(local_tensor.shape)}."
+                )
+            recv_shape = list(sender_shape)
+            recv_shape[target_dim] = my_target_chunk_size
+            recv_shapes.append(recv_shape)
 
-    send_shapes = [
-        torch.tensor(c.shape, device=local_tensor.device, dtype=torch.int32)
-        for c in chunks
-    ]
-    recv_shapes = [torch.empty_like(s) for s in send_shapes]
+    if recv_shapes is None:
+        # Fallback: negotiate recv shapes with the sender ranks directly.
+        # funcol (with a mesh group, not a ProcessGroup) keeps this legal
+        # inside AOT-captured backward graphs, which get deepcopied.
+        # Every per-destination shape tensor has ndim elements, so the
+        # exchange is an even all_to_all_single (None split sizes).
+        ndim = local_tensor.ndim
+        send_shape_buf = torch.cat(
+            [
+                torch.tensor(c.shape, device=local_tensor.device, dtype=torch.int64)
+                for c in chunks
+            ]
+        )
+        recv_shape_buf = funcol.all_to_all_single(
+            send_shape_buf, None, None, (device_mesh, mesh_dim)
+        )
+        if isinstance(recv_shape_buf, funcol.AsyncCollectiveTensor):
+            recv_shape_buf = recv_shape_buf.wait()
 
-    # Gather the send shape from every rank:
-    # For all to all, we _have_ to send and receive from every rank.
-    # But we can optimize the null-communication
-    dist.all_to_all(recv_shapes, send_shapes, group=group)
+        # Turn the recv_shapes back into plain int shape lists.
+        recv_shapes = [
+            recv_shape_buf[i * ndim : (i + 1) * ndim].tolist() for i in range(mesh_size)
+        ]
 
-    # Turn the recv_shapes back into torch shapes:
-    recv_shapes = [list(torch.Size(r)) for r in recv_shapes]
+    # Exchange the data itself as one flattened all_to_all_single (funcol for
+    # the same compile/deepcopy reason as above): concatenate the flattened
+    # per-destination chunks in ascending rank order, with explicit uneven
+    # split sizes on both sides.
+    input_split_sizes = [c.numel() for c in chunks]
+    output_split_sizes = [prod(shape) for shape in recv_shapes]
+    send_buf = torch.cat([c.reshape(-1) for c in chunks])
+    recv_buf = funcol.all_to_all_single(
+        send_buf, output_split_sizes, input_split_sizes, (device_mesh, mesh_dim)
+    )
+    if isinstance(recv_buf, funcol.AsyncCollectiveTensor):
+        recv_buf = recv_buf.wait()
 
-    # Create the buffers for recv:
     recv_buffers = [
-        torch.empty(shape, device=local_tensor.device, dtype=local_tensor.dtype)
-        for shape in recv_shapes
+        chunk.view(shape)
+        for chunk, shape in zip(torch.split(recv_buf, output_split_sizes), recv_shapes)
     ]
-
-    # chunks is the send buffer.
-    dist.all_to_all(recv_buffers, chunks, group=group)
 
     # Take the received tensors and stack them along the target dimension:
     stacked_tensor = torch.cat(recv_buffers, dim=current_dim).contiguous()
@@ -268,7 +360,7 @@ def redistribute_local_shard_tensor(
     *,
     async_op: bool = False,
     is_backward: bool = False,
-    target_sharding_shapes: dict[int, tuple[torch.Size, ...]] | None = None,
+    target_sharding_shapes: dict[int, list[int]] | None = None,
 ) -> torch.Tensor:
     r"""Redistribute a local tensor between different ShardTensorSpec configurations.
 
@@ -303,9 +395,18 @@ def redistribute_local_shard_tensor(
     async_op : bool, default=False
         Whether to run asynchronously.
     is_backward : bool, default=False
-        Whether this is a backward pass (affects some redistribution behaviors).
-    target_sharding_shapes : Optional[Dict[int, Tuple[torch.Size, ...]]], optional
-        Target sharding shapes to use for redistribution. Default is empty dict.
+        Whether this is a backward redistribution. For example, a forward
+        ``Partial`` to ``Replicate`` redistribution combines every rank's
+        contribution. In backward, each original contribution receives the
+        same full gradient. Converting that gradient back to ``Partial`` would
+        split it up only for a later operation to combine it again, so backward
+        keeps it replicated instead. The caller must therefore label the
+        returned gradient ``Replicate``. Labeling it ``Partial`` would falsely
+        request another reduction and could multiply the gradient by the mesh
+        size. This exception applies only while reversing a redistribution;
+        ordinary ``Partial`` tensors still represent pending reductions.
+    target_sharding_shapes : Optional[Dict[int, List[int]]], optional
+        Per-rank shard sizes keyed by tensor dimension. Default is ``None``.
 
     Returns
     -------
@@ -351,6 +452,13 @@ def redistribute_local_shard_tensor(
 
     if len(transform_infos) == 0:
         return local_tensor
+
+    # `current_spec`'s recorded per-rank sharding shapes describe the local
+    # tensors only until the first hop below mutates them. This flag is a
+    # function of the hop sequence alone (derived from placements, so
+    # identical on every rank) -- see `_to_new_shard_dim` for why the
+    # fast-path decision must be rank-uniform.
+    spec_shapes_are_current = True
 
     for transform_info in transform_infos:
         i = transform_info.mesh_dim
@@ -430,9 +538,11 @@ def redistribute_local_shard_tensor(
 
                     new_local_tensor, size_hint = _to_new_shard_dim(
                         local_tensor,
+                        current_spec,  # Known per-rank shapes, to avoid negotiating recv sizes.
                         target_spec,  # Send the whole spec so we can infer full recv sizes.
                         i,  # The mesh dim we're transposing sharding on.
                         size_hint,
+                        spec_shapes_are_current,  # Rank-uniform fast-path gate.
                         current.dim,  # Current tensor dimension.
                         target_placement.dim,  # Target tensor dimension.
                     )
@@ -447,13 +557,10 @@ def redistribute_local_shard_tensor(
         elif target.is_partial():
             if current.is_replicate():
                 partial_spec = cast(Partial, target)
-                # skip the replicate to partial transformation when we are in backward pass
-                # In this case we keep the grad as replicate, this is because we don't
-                # want to convert the replicated gradients back to partial, although
-                # that's logically conform with the same layout, converting the gradients
-                # back to partial is actually useless as you would have to do reduce later
-                # which would be more expensive than keeping it replicate! For this reason,
-                # we keep the replicate grad here.
+                # In a reverse redistribution, keep the fully reduced gradient
+                # instead of partitioning it only to reduce it again later.
+                # ShardRedistribute.backward normalizes the emitted placement to
+                # Replicate so the returned tensor's metadata matches this data.
                 new_local_tensor = (
                     partial_spec._partition_value(local_tensor, device_mesh, i)
                     if not is_backward
@@ -464,9 +571,10 @@ def redistribute_local_shard_tensor(
                     raise RuntimeError(
                         f"redistribute from {current} to {target} not supported yet"
                     )
-                # for backward shard -> partial, we just need to convert the shard to replicate
+                # Gather the reverse-path shard into complete data. The caller
+                # emits Replicate metadata rather than the temporary Partial
+                # target used to describe the inverse forward transform.
                 current_placement = cast(Shard, current)
-                # TODO - resolve sharding to partials?
                 new_local_tensor = current_placement._to_replicate_tensor(
                     local_tensor, device_mesh, i, transform_info.logical_shape
                 )
@@ -479,6 +587,10 @@ def redistribute_local_shard_tensor(
                 "Failed to create new local tensor during redistribution"
             )
         local_tensor = new_local_tensor
+        # This hop transformed the local tensor (the `current == target`
+        # shortcut above skips this point), so the spec's recorded shapes
+        # no longer describe it.
+        spec_shapes_are_current = False
 
     if new_local_tensor is None:
         raise RuntimeError("redistribute failed!")
@@ -549,7 +661,6 @@ class ShardRedistribute(torch.autograd.Function):
 
     @staticmethod
     def forward(
-        ctx: torch.autograd.function.FunctionCtx,
         input: "shard_tensor.ShardTensor",
         device_mesh: DeviceMesh,
         placements: tuple[Placement, ...],
@@ -559,8 +670,6 @@ class ShardRedistribute(torch.autograd.Function):
 
         Parameters
         ----------
-        ctx : torch.autograd.function.FunctionCtx
-            Autograd context for saving tensors/variables for backward.
         input : ShardTensor
             Input sharded tensor to redistribute.
         device_mesh : DeviceMesh
@@ -576,9 +685,6 @@ class ShardRedistribute(torch.autograd.Function):
             Redistributed sharded tensor with new placement scheme.
         """
         current_spec = input._spec
-
-        ctx.current_spec = current_spec
-        ctx.async_op = async_op
 
         if current_spec.placements != placements:
             # We have to assume, here, that the current spec has correct sharding_shapes.
@@ -612,6 +718,47 @@ class ShardRedistribute(torch.autograd.Function):
             )
             # Set the local shape:
             target_spec._local_shape = output.shape
+
+            # Populate _sharding_shapes on the target spec so downstream
+            # consumers (especially under torch.compile) don't trip
+            # `_all_gather_shard_shapes` -- a blocking collective that is
+            # not AOT-traceable. Start from chunk semantics (pure
+            # arithmetic, no comms) and override preserved-shard tensor
+            # dims with the precomputed per-rank sizes from
+            # `target_sharding_shapes` so uneven sharding is preserved.
+            global_shape = tuple(input._spec.tensor_meta.shape)
+            chunk_shapes = compute_sharding_shapes_from_chunking_global_shape(
+                device_mesh, placements, global_shape
+            )
+            mesh_coordinate = device_mesh.get_coordinate()
+            for mesh_dim, shapes in chunk_shapes.items():
+                overridden = []
+                for rank, chunk_shape in enumerate(shapes):
+                    rank_shape = list(chunk_shape)
+                    # Preserve every uneven shard in this cross-section. The
+                    # current mesh dim varies with ``rank``; all other mesh
+                    # dims remain fixed at this rank's coordinates.
+                    for preserved_mesh_dim, placement in enumerate(placements):
+                        if not isinstance(placement, Shard):
+                            continue
+                        tensor_dim = placement.dim
+                        per_rank_sizes = target_sharding_shapes.get(tensor_dim)
+                        if per_rank_sizes is None or len(
+                            per_rank_sizes
+                        ) != device_mesh.size(preserved_mesh_dim):
+                            continue
+                        size_rank = (
+                            rank
+                            if preserved_mesh_dim == mesh_dim
+                            else mesh_coordinate[preserved_mesh_dim]
+                        )
+                        rank_shape[tensor_dim] = int(per_rank_sizes[size_rank])
+                    overridden.append(tuple(rank_shape))
+                chunk_shapes[mesh_dim] = overridden
+            target_spec._sharding_shapes = {
+                mesh_dim: tuple(tuple(s) for s in shapes)
+                for mesh_dim, shapes in chunk_shapes.items()
+            }
         else:
             # use the same local tensor if placements are the same.
             output = input._local_tensor
@@ -622,6 +769,20 @@ class ShardRedistribute(torch.autograd.Function):
             target_spec,
             requires_grad=input.requires_grad,
         )
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        r"""Save the source spec and ``async_op`` flag for the backward redistribute.
+
+        ``DisableTorchFunctionSubclass`` shielding avoids re-entering the
+        ShardTensor ``__torch_function__`` fallback while reading
+        ``input._spec`` -- the same AOT-hostile bridge motivated the
+        shielding in ``ShardedSum.setup_context``.
+        """
+        input, _device_mesh, _placements, async_op = inputs
+        with torch._C.DisableTorchFunctionSubclass():
+            ctx.current_spec = input._spec
+        ctx.async_op = async_op
 
     @staticmethod
     def backward(
@@ -662,15 +823,22 @@ class ShardRedistribute(torch.autograd.Function):
             target_sharding_shapes=target_sharding_shapes,
         )
 
-        # normalize the target placement to replicate if it is partial
+        # Reverse redistribution deliberately keeps complete gradients instead
+        # of manufacturing pending reductions. Label those values Replicate so
+        # every emitted Partial continues to mean "reduction required."
         normalized_placements: list[Placement] = []
         for previous_placement in previous_spec.placements:
             if previous_placement.is_partial():
-                # keep target placement to replicate instead of partial in this case
                 normalized_placements.append(Replicate())
             else:
                 normalized_placements.append(previous_placement)
 
+        # Carry the source spec's per-rank shard shapes onto the grad: the
+        # normalization above only rewrites Partial -> Replicate, so the Shard
+        # placements (the only mesh dims with entries) are previous_spec's
+        # verbatim. Omitting them leaves an uneven grad with a shapeless spec,
+        # which __tensor_unflatten__ rejects at compile boundaries (even-chunk
+        # assumption) and which would otherwise gather shapes lazily.
         spec = ShardTensorSpec(
             previous_spec.device_mesh,
             tuple(normalized_placements),
@@ -680,6 +848,11 @@ class ShardRedistribute(torch.autograd.Function):
                 dtype=grad_output.dtype,
             ),
             _local_shape=output.shape,
+            _sharding_shapes=(
+                dict(previous_spec._sharding_shapes)
+                if previous_spec._sharding_shapes is not None
+                else None
+            ),
         )
         output_shard_tensor = shard_tensor.ShardTensor(
             output,

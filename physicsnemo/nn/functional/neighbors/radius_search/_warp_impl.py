@@ -67,12 +67,14 @@ def count_neighbors(
         wp_launch_stream (wp.Stream | None): The stream to launch the kernel on.
         radius (float): The radius that bounds the search.
         N_queries (int): Total number of query points.
-        sync (bool): If True, copies count to CPU and returns (int, wp_offset).
-            If False, returns (gpu_count_tensor, wp_offset) for batched sync.
+        sync (bool): If True, copies count to CPU and returns
+            ``(int, torch_offset)``. If False, returns
+            ``(gpu_count_tensor, torch_offset)`` for batched sync.
 
     Returns:
-        When sync=True: tuple[int, wp.array] -- total count and offset array.
-        When sync=False: tuple[torch.Tensor, wp.array] -- GPU-side count tensor and offset array.
+        When sync=True: tuple[int, torch.Tensor] -- total count and int64 offsets.
+        When sync=False: tuple[torch.Tensor, torch.Tensor] -- GPU-side count
+        tensor and int64 offsets.
     """
     wp_result_count = wp.zeros(N_queries, device=wp_points.device, dtype=wp.int32)
 
@@ -86,19 +88,26 @@ def count_neighbors(
         block_dim=BLOCK_DIM,
     )
 
-    wp_offset = wp.zeros(N_queries + 1, device=wp_points.device, dtype=wp.int32)
-    torch_offset = wp.to_torch(wp_offset)
     torch_result_count = wp.to_torch(wp_result_count)
-    torch.cumsum(torch_result_count, dim=0, out=torch_offset[1:])
+    torch_offset_64 = torch.empty(
+        N_queries + 1, device=torch_result_count.device, dtype=torch.int64
+    )
+    torch_offset_64[0] = 0
+    torch.cumsum(
+        torch_result_count,
+        dim=0,
+        dtype=torch.int64,
+        out=torch_offset_64[1:],
+    )
 
     if sync:
         pin_memory = torch.cuda.is_available()
-        pinned_buffer = torch.zeros(1, dtype=torch.int32, pin_memory=pin_memory)
-        pinned_buffer.copy_(torch_offset[-1:])
-        return pinned_buffer.item(), wp_offset
+        pinned_buffer = torch.zeros(1, dtype=torch.int64, pin_memory=pin_memory)
+        pinned_buffer.copy_(torch_offset_64[-1:])
+        return pinned_buffer.item(), torch_offset_64
 
     # Return the last element as a 1-element GPU tensor for batch-sync later
-    return torch_offset[-1:], wp_offset
+    return torch_offset_64[-1:], torch_offset_64
 
 
 def gather_neighbors(
@@ -223,7 +232,7 @@ def radius_search_impl(
     # Compute follows data.
     wp_launch_device, wp_launch_stream = FunctionSpec.warp_launch_context(points)
 
-    with wp.ScopedStream(wp_launch_stream):
+    with FunctionSpec.warp_stream_scope(wp_launch_stream):
         # Build one hash grid per batch element (Python loop)
         grids = []
         wp_points_per_b = []
@@ -247,9 +256,9 @@ def radius_search_impl(
 
             # Count pass: collect all counts without syncing individually
             count_tensors = []
-            wp_offsets = []
+            offset_tensors = []
             for b in range(B):
-                count_t, wp_off = count_neighbors(
+                count_t, offsets = count_neighbors(
                     grids[b],
                     wp_points_per_b[b],
                     wp_queries_per_b[b],
@@ -260,7 +269,7 @@ def radius_search_impl(
                     sync=(B == 1),
                 )
                 count_tensors.append(count_t)
-                wp_offsets.append(wp_off)
+                offset_tensors.append(offsets)
 
             # Sync: for B==1 count_tensors[0] is already an int;
             # for B>1 we batch-sync all GPU tensors at once
@@ -269,15 +278,24 @@ def radius_search_impl(
             else:
                 gpu_counts = torch.cat(count_tensors, dim=0)
                 pin_memory = torch.cuda.is_available()
-                cpu_counts = torch.zeros(B, dtype=torch.int32, pin_memory=pin_memory)
+                cpu_counts = torch.zeros(B, dtype=torch.int64, pin_memory=pin_memory)
                 cpu_counts.copy_(gpu_counts)
                 total_counts = cpu_counts.tolist()
 
             for tc in total_counts:
-                if not tc < 2**31 - 1:
+                if tc >= torch.iinfo(torch.int32).max:
                     raise RuntimeError(
                         f"Total found neighbors is too large: {tc} >= 2**31 - 1"
                     )
+
+            # The kernels use int32 offsets. Cast only after every int64 total
+            # has passed the range check above.
+            offset_tensors_i32 = [
+                offsets.to(dtype=torch.int32) for offsets in offset_tensors
+            ]
+            wp_offsets = [
+                wp.from_torch(offsets, dtype=wp.int32) for offsets in offset_tensors_i32
+            ]
 
             # Gather per batch element, concatenate with batch indices
             all_indices = []
@@ -323,10 +341,15 @@ def radius_search_impl(
             # Deterministic output path: always use batched 2D kernel launch
             # ---------------------------------------------------------------
 
-            # Build warp array of grid IDs
-            grid_ids_tensor = torch.tensor(
-                [g.id for g in grids], dtype=torch.int64, device=points.device
+            # Build warp array of grid IDs.
+            # Construct in pinned host memory first so the H2D copy is
+            # stream-ordered (non_blocking) rather than a blocking cudaMemcpy.
+            _grid_ids_cpu = torch.tensor(
+                [g.id for g in grids],
+                dtype=torch.int64,
+                pin_memory=torch.cuda.is_available(),
             )
+            grid_ids_tensor = _grid_ids_cpu.to(points.device, non_blocking=True)
             wp_grid_ids = wp.from_torch(
                 grid_ids_tensor, dtype=wp.uint64, return_ctype=True
             )
@@ -581,82 +604,85 @@ def apply_grad_to_points(
     if max_points is not None and not num_neighbors.is_contiguous():
         num_neighbors = num_neighbors.contiguous()
 
-    if max_points is None:
-        # Dynamic path: indexes is (2, total) unbatched or (3, total) batched.
-        # scatter_add_unlimited works on flat (N, 3) grad tensors, so we loop
-        # over batch elements (trivially 1 iteration for unbatched).
-        if indexes.shape[-1] > 0:
-            if indexes.shape[0] == 3:
-                # Batched: row 0 is batch index, rows 1-2 are query/point indices
-                B = point_grads.shape[0]
-                for b_idx in range(B):
-                    mask = indexes[0] == b_idx
-                    b_indexes = indexes[1:, mask]
-                    b_grad_out = grad_points_out[mask]
-                    if b_indexes.shape[1] > 0:
-                        wp.launch(
-                            kernel=scatter_add_unlimited,
-                            dim=b_indexes.shape[1],
-                            inputs=[
-                                wp.from_torch(
-                                    b_indexes, dtype=wp.int32, return_ctype=True
-                                ),
-                                wp.from_torch(
-                                    b_grad_out, dtype=wp.vec3, return_ctype=True
-                                ),
-                                wp.from_torch(
-                                    point_grads[b_idx],
-                                    dtype=wp.vec3,
-                                    return_ctype=True,
-                                ),
-                            ],
-                            device=wp_launch_device,
-                            stream=wp_launch_stream,
-                            block_dim=BLOCK_DIM,
-                        )
-            else:
-                # Unbatched: rows 0-1 are query/point indices
-                wp.launch(
-                    kernel=scatter_add_unlimited,
-                    dim=indexes.shape[1],
-                    inputs=[
-                        wp.from_torch(indexes, dtype=wp.int32, return_ctype=True),
-                        wp.from_torch(
-                            grad_points_out, dtype=wp.vec3, return_ctype=True
-                        ),
-                        wp.from_torch(point_grads, dtype=wp.vec3, return_ctype=True),
-                    ],
-                    device=wp_launch_device,
-                    stream=wp_launch_stream,
-                    block_dim=BLOCK_DIM,
-                )
+    with FunctionSpec.warp_stream_scope(wp_launch_stream):
+        if max_points is None:
+            # Dynamic path: indexes is (2, total) unbatched or (3, total) batched.
+            # scatter_add_unlimited works on flat (N, 3) grad tensors, so we loop
+            # over batch elements (trivially 1 iteration for unbatched).
+            if indexes.shape[-1] > 0:
+                if indexes.shape[0] == 3:
+                    # Batched: row 0 is batch index, rows 1-2 are query/point indices
+                    B = point_grads.shape[0]
+                    for b_idx in range(B):
+                        mask = indexes[0] == b_idx
+                        b_indexes = indexes[1:, mask]
+                        b_grad_out = grad_points_out[mask]
+                        if b_indexes.shape[1] > 0:
+                            wp.launch(
+                                kernel=scatter_add_unlimited,
+                                dim=b_indexes.shape[1],
+                                inputs=[
+                                    wp.from_torch(
+                                        b_indexes, dtype=wp.int32, return_ctype=True
+                                    ),
+                                    wp.from_torch(
+                                        b_grad_out, dtype=wp.vec3, return_ctype=True
+                                    ),
+                                    wp.from_torch(
+                                        point_grads[b_idx],
+                                        dtype=wp.vec3,
+                                        return_ctype=True,
+                                    ),
+                                ],
+                                device=wp_launch_device,
+                                stream=wp_launch_stream,
+                                block_dim=BLOCK_DIM,
+                            )
+                else:
+                    # Unbatched: rows 0-1 are query/point indices
+                    wp.launch(
+                        kernel=scatter_add_unlimited,
+                        dim=indexes.shape[1],
+                        inputs=[
+                            wp.from_torch(indexes, dtype=wp.int32, return_ctype=True),
+                            wp.from_torch(
+                                grad_points_out, dtype=wp.vec3, return_ctype=True
+                            ),
+                            wp.from_torch(
+                                point_grads, dtype=wp.vec3, return_ctype=True
+                            ),
+                        ],
+                        device=wp_launch_device,
+                        stream=wp_launch_stream,
+                        block_dim=BLOCK_DIM,
+                    )
 
-    else:
-        # Deterministic path: always use batched kernel.
-        # Unsqueeze 2D tensors to 3D so we can use a single kernel variant.
-        if indexes.ndim == 2:
-            indexes = indexes.unsqueeze(0)
-            num_neighbors = num_neighbors.unsqueeze(0)
-            grad_points_out = grad_points_out.unsqueeze(0)
-            point_grads = point_grads.unsqueeze(0)
+        else:
+            # Deterministic path: always use batched kernel.
+            # Unsqueeze 2D tensors to 3D so we can use a single kernel variant.
+            if indexes.ndim == 2:
+                indexes = indexes.unsqueeze(0)
+                num_neighbors = num_neighbors.unsqueeze(0)
+                grad_points_out = grad_points_out.unsqueeze(0)
+                point_grads = point_grads.unsqueeze(0)
 
-        B = indexes.shape[0]
-        wp.launch(
-            kernel=scatter_add_batched,
-            dim=(B, indexes.shape[1]),
-            inputs=[
-                wp.from_torch(indexes, dtype=wp.int32, return_ctype=True),
-                wp.from_torch(num_neighbors, dtype=wp.int32, return_ctype=True),
-                wp.from_torch(grad_points_out, dtype=wp.vec3, return_ctype=True),
-                wp.from_torch(point_grads, dtype=wp.vec3, return_ctype=True),
-            ],
-            device=wp_launch_device,
-            stream=wp_launch_stream,
-            block_dim=BLOCK_DIM,
-        )
+            B = indexes.shape[0]
+            wp.launch(
+                kernel=scatter_add_batched,
+                dim=(B, indexes.shape[1]),
+                inputs=[
+                    wp.from_torch(indexes, dtype=wp.int32, return_ctype=True),
+                    wp.from_torch(num_neighbors, dtype=wp.int32, return_ctype=True),
+                    wp.from_torch(grad_points_out, dtype=wp.vec3, return_ctype=True),
+                    wp.from_torch(point_grads, dtype=wp.vec3, return_ctype=True),
+                ],
+                device=wp_launch_device,
+                stream=wp_launch_stream,
+                block_dim=BLOCK_DIM,
+            )
 
-        if point_grads.shape[0] == 1 and len(points_shape) == 2:
-            point_grads = point_grads.squeeze(0)
+            if point_grads.shape[0] == 1 and len(points_shape) == 2:
+                point_grads = point_grads.squeeze(0)
 
     return point_grads
 

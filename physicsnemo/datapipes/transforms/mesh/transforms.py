@@ -36,13 +36,14 @@ from physicsnemo.datapipes.keys import (
 )
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
-from physicsnemo.datapipes.transforms.subsample import poisson_sample_indices_fixed
 from physicsnemo.mesh import (
     MESH_FIELD_ASSOCIATIONS,
     DomainMesh,
     Mesh,
     MeshFieldAssociation,
 )
+from physicsnemo.mesh.calculus.measure import compose_measure_weights
+from physicsnemo.nn.functional import weighted_multinomial
 
 
 @register()
@@ -262,7 +263,13 @@ def _compact_points(mesh: Mesh) -> Mesh:
 
 @register()
 class SubsampleMesh(MeshTransform):
-    r"""Subsample a mesh to a fixed number of cells and/or points."""
+    r"""Subsample a mesh to a fixed number of cells and/or points.
+
+    Cell subsampling preserves the integration measure by recording
+    each stage's inverse inclusion probability into the mesh's measure
+    weights (see :mod:`physicsnemo.mesh.calculus.measure`); point
+    subsampling does not maintain weights.
+    """
 
     def __init__(
         self,
@@ -284,22 +291,33 @@ class SubsampleMesh(MeshTransform):
         if total <= k:
             return torch.arange(total, device=device)
         if total > 2**24:
-            return poisson_sample_indices_fixed(
+            return weighted_multinomial(
                 total,
                 k,
+                strategy="poisson_gap",
                 device=device,
                 generator=self._generator,
             )
-        return torch.randperm(total, device=device, generator=self._generator)[:k]
+        return weighted_multinomial(
+            total,
+            k,
+            strategy="exact",
+            device=device,
+            generator=self._generator,
+        )
 
     def __call__(self, mesh: Mesh) -> Mesh:
         if self.n_cells is not None and mesh.n_cells > self.n_cells:
-            indices = self._random_indices(
-                mesh.n_cells, self.n_cells, mesh.cells.device
-            )
+            n_before = mesh.n_cells
+            indices = self._random_indices(n_before, self.n_cells, mesh.cells.device)
             mesh = mesh.slice_cells(indices)
             if self.compact:
                 mesh = _compact_points(mesh)
+            ### Compose this stage's inverse inclusion probability into the
+            ### mesh's measure weights.
+            ### `_random_indices` is exact below the large-population threshold
+            ### and uses the near-uniform Poisson-gap approximation above it.
+            compose_measure_weights(mesh, n_before / self.n_cells)
 
         if self.n_points is not None and mesh.n_points > self.n_points:
             indices = self._random_indices(
@@ -350,9 +368,7 @@ class DropMeshFields(MeshTransform):
         ### ``TensorDict.exclude(*keys)`` is null-safe: it returns a
         ### fresh TD minus the named keys (silently tolerating missing
         ### ones) and is a no-op clone when the key list is empty.
-        return Mesh(
-            points=mesh.points,
-            cells=mesh.cells,
+        return mesh.with_data(
             point_data=mesh.point_data.exclude(*self._point_data_keys),
             cell_data=mesh.cell_data.exclude(*self._cell_data_keys),
             global_data=mesh.global_data.exclude(*self._global_data_keys),
@@ -410,9 +426,7 @@ class RenameMeshFields(MeshTransform):
             if self._global_data_map
             else mesh.global_data
         )
-        return Mesh(
-            points=mesh.points,
-            cells=mesh.cells,
+        return mesh.with_data(
             point_data=new_pd,
             cell_data=new_cd,
             global_data=new_gd,
@@ -439,6 +453,10 @@ class SetGlobalField(MeshTransform):
     Typical use: inject a per-dataset inlet velocity vector so that
     downstream rotation transforms (with ``transform_global_data=True``)
     rotate it consistently with the mesh geometry.
+
+    On a :class:`~physicsnemo.mesh.DomainMesh`, the fields are written to
+    the domain-level ``global_data`` as well as to every sub-mesh's
+    ``global_data``.
     """
 
     def __init__(
@@ -461,11 +479,33 @@ class SetGlobalField(MeshTransform):
         new_gd.update(
             self._fields.to(device=mesh.points.device, dtype=mesh.points.dtype)
         )
-        return Mesh(
-            points=mesh.points,
-            cells=mesh.cells,
-            point_data=mesh.point_data,
-            cell_data=mesh.cell_data,
+        return mesh.with_data(global_data=new_gd)
+
+    def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
+        """Inject the fields into a :class:`DomainMesh`.
+
+        Writes the fields to the domain-level ``global_data`` in addition
+        to the base-class broadcast, which only reaches sub-mesh
+        ``global_data``.
+
+        Parameters
+        ----------
+        domain : DomainMesh
+            Input domain mesh (interior + boundaries).
+
+        Returns
+        -------
+        DomainMesh
+            Domain mesh with the fields set in the domain-level and every
+            sub-mesh ``global_data``.
+        """
+        domain = super().apply_to_domain(domain)
+        reference = domain.interior.points
+        new_gd = domain.global_data.clone()
+        new_gd.update(self._fields.to(device=reference.device, dtype=reference.dtype))
+        return DomainMesh(
+            interior=domain.interior,
+            boundaries=domain.boundaries,
             global_data=new_gd,
         )
 
@@ -532,6 +572,12 @@ class NormalizeMeshFields(MeshTransform):
 
         if stats_file is not None:
             raw_stats: dict = torch.load(stats_file, weights_only=True)
+            # Match the inline branch: stats are float32 regardless of the
+            # dtype they were computed/saved in, so normalization never
+            # promotes field dtypes.
+            for s in raw_stats.values():
+                s["mean"] = torch.as_tensor(s["mean"], dtype=torch.float32)
+                s["std"] = torch.as_tensor(s["std"], dtype=torch.float32)
         elif fields is not None:
             raw_stats = {
                 name: {
@@ -551,6 +597,31 @@ class NormalizeMeshFields(MeshTransform):
             NestedKey, dict[str, Float[torch.Tensor, " *shape"] | str]
         ] = {as_nested_key(name): stats for name, stats in raw_stats.items()}
 
+    def to(self, device: torch.device | str) -> "NormalizeMeshFields":
+        """Move internal tensors and the nested field statistics to *device*.
+
+        Extends :meth:`MeshTransform.to` by also moving the per-field
+        ``mean`` and ``std`` tensors in ``self._stats`` so the per-sample
+        ``.to()`` in :meth:`__call__` is a no-op.
+
+        Parameters
+        ----------
+        device : torch.device or str
+            Target device.
+
+        Returns
+        -------
+        NormalizeMeshFields
+            ``self``, for chaining.
+        """
+        # Base .to() moves only bare tensor attrs; move the nested stats too
+        # so the per-sample .to() in __call__ is a no-op (no H2D copy/sync).
+        super().to(device)
+        for s in self._stats.values():
+            s["mean"] = s["mean"].to(self._device)
+            s["std"] = s["std"].to(self._device)
+        return self
+
     def __call__(self, mesh: Mesh) -> Mesh:
         ### Clone and z-score the targeted association's TensorDict in
         ### place; fields absent from `_stats` (or absent from the mesh)
@@ -560,17 +631,13 @@ class NormalizeMeshFields(MeshTransform):
             if field_name not in new_td:
                 continue
             val = new_td[field_name].float()
-            mean = stats["mean"].to(dtype=val.dtype, device=val.device)
-            std = stats["std"].to(dtype=val.dtype, device=val.device)
-            new_td[field_name] = (val - mean) / (std + self._eps)
+            new_td[field_name] = (val - stats["mean"]) / (stats["std"] + self._eps)
 
-        ### `Mesh.copy` is a tensorclass-provided shallow copy: `points`,
-        ### `cells`, the untouched associations, and the geometric `_cache`
-        ### (centroids / areas / normals) are all shared with `mesh`, then
-        ### `setattr` swaps in the freshly-cloned association.
-        new_mesh = mesh.copy()  # ty: ignore[unresolved-attribute]
-        setattr(new_mesh, self._association, new_td)
-        return new_mesh
+        return mesh.with_data(
+            point_data=new_td if self._association == "point_data" else None,
+            cell_data=new_td if self._association == "cell_data" else None,
+            global_data=new_td if self._association == "global_data" else None,
+        )
 
     def inverse_tensor(
         self,
@@ -607,10 +674,9 @@ class NormalizeMeshFields(MeshTransform):
             dim = 1 if ftype == "scalar" else n_spatial_dims
             stats = self._stats.get(as_nested_key(name))
             if stats is not None:
-                mean = stats["mean"].to(dtype=tensor.dtype, device=tensor.device)
-                std = stats["std"].to(dtype=tensor.dtype, device=tensor.device)
                 out[..., idx : idx + dim] = (
-                    out[..., idx : idx + dim] * (std + self._eps) + mean
+                    out[..., idx : idx + dim] * (stats["std"] + self._eps)
+                    + stats["mean"]
                 )
             idx += dim
         return out
@@ -649,9 +715,7 @@ class NormalizeMeshFields(MeshTransform):
             stats = self._stats.get(name)
             if stats is None:
                 return val
-            mean = stats["mean"].to(dtype=val.dtype, device=val.device)
-            std = stats["std"].to(dtype=val.dtype, device=val.device)
-            return val * (std + self._eps) + mean
+            return val * (stats["std"] + self._eps) + stats["mean"]
 
         ### ``named_apply`` is typed ``TensorDict | None`` for its
         ### in-place mode; the out-of-place path always returns a TD.
@@ -711,24 +775,12 @@ class ComputeSurfaceNormals(MeshTransform):
             normals = mesh.cell_normals
             new_cd = mesh.cell_data.clone()
             new_cd[self.field_name] = normals
-            return Mesh(
-                points=mesh.points,
-                cells=mesh.cells,
-                point_data=mesh.point_data,
-                cell_data=new_cd,
-                global_data=mesh.global_data,
-            )
+            return mesh.with_data(cell_data=new_cd)
         else:
             normals = mesh.point_normals
             new_pd = mesh.point_data.clone()
             new_pd[self.field_name] = normals
-            return Mesh(
-                points=mesh.points,
-                cells=mesh.cells,
-                point_data=new_pd,
-                cell_data=mesh.cell_data,
-                global_data=mesh.global_data,
-            )
+            return mesh.with_data(point_data=new_pd)
 
     def extra_repr(self) -> str:
         return f"store_as={self.store_as!r}, field_name={self.field_name!r}"
@@ -1052,13 +1104,7 @@ class MeshToDomainMesh(MeshTransform):
             if self._cell_data_targets
             else mesh.cell_data
         )
-        boundary = Mesh(
-            points=mesh.points,
-            cells=mesh.cells,
-            point_data=mesh.point_data,
-            cell_data=boundary_cell_data,
-            global_data=mesh.global_data,
-        )
+        boundary = mesh.with_data(cell_data=boundary_cell_data)
         return DomainMesh(
             interior=interior,
             boundaries={self._boundary_name: boundary},
@@ -1082,13 +1128,7 @@ class MeshToDomainMesh(MeshTransform):
             if self._point_data_targets
             else mesh.point_data
         )
-        boundary = Mesh(
-            points=mesh.points,
-            cells=mesh.cells,
-            point_data=boundary_point_data,
-            cell_data=mesh.cell_data,
-            global_data=mesh.global_data,
-        )
+        boundary = mesh.with_data(point_data=boundary_point_data)
         return DomainMesh(
             interior=interior,
             boundaries={self._boundary_name: boundary},

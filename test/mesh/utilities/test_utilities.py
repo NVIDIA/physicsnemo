@@ -61,6 +61,14 @@ class TestPadding:
         assert padded.shape == (4, 2)
         assert torch.equal(padded[-2:], tensor[-1:].expand(2, -1))
 
+    def test_pad_by_tiling_last_empty_tensor(self):
+        """An empty tensor has no last row, so padding uses zero rows."""
+        tensor = torch.empty((0, 3), dtype=torch.float64)
+
+        padded = _pad_by_tiling_last(tensor, 2)
+
+        torch.testing.assert_close(padded, torch.zeros((2, 3), dtype=torch.float64))
+
     def test_pad_with_value_simple(self):
         """Test padding with constant value."""
         tensor = torch.tensor([[1, 2], [3, 4]], dtype=torch.long)

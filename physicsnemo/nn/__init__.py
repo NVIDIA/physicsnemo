@@ -92,6 +92,7 @@ from .module.embedding_layers import (
     PositionalEmbedding,
     SinusoidalTimestepEmbedding,
 )
+from .module.flare_attention import FLARE
 from .module.fourier_layers import (
     FourierFilter,
     FourierLayer,
@@ -107,6 +108,13 @@ from .module.fully_connected_layers import (
     ConvNdKernel1Layer,
     FCLayer,
     Linear,
+)
+from .module.gale import (
+    GALE,
+    GALE_FA,
+    GALEBlock,
+    GALEStructuredMesh2D,
+    GALEStructuredMesh3D,
 )
 from .module.group_norm import GroupNorm, get_group_norm
 from .module.gumbel_softmax import GumbelSoftmax, gumbel_softmax
@@ -137,8 +145,8 @@ from .module.resample_layers import (
     UpSample3D,
 )
 from .module.rope import (
-    RotaryPositionEmbedding1D,
-    RotaryPositionEmbedding2D,
+    RotaryEmbedding1DTables,
+    RotaryEmbedding2DTables,
     apply_rotary_pos_emb,
     build_axial_rope_cos_sin_2d,
     build_rope_cos_sin_1d,
@@ -158,5 +166,6 @@ from .module.transformer_layers import (
     SwinTransformer,
 )
 from .module.unet_layers import UNetBlock
+from .module.utils.weight_init import shrink_and_perturb_
 from .module.weight_fact import WeightFactLinear
 from .module.weight_norm import WeightNormLinear

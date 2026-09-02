@@ -242,7 +242,7 @@ def _generate_uniform_surface_samples_warp(
     )
 
     wp_launch_device, wp_launch_stream = FunctionSpec.warp_launch_context(tri_vertices)
-    with wp.ScopedStream(wp_launch_stream):
+    with FunctionSpec.warp_stream_scope(wp_launch_stream):
         wp.launch(
             kernel=_generate_surface_candidates,
             dim=num_samples,
@@ -309,7 +309,7 @@ def _weighted_sample_elimination_warp(
     wp_launch_device, wp_launch_stream = FunctionSpec.warp_launch_context(
         sample_positions
     )
-    with wp.ScopedStream(wp_launch_stream):
+    with FunctionSpec.warp_stream_scope(wp_launch_stream):
         wp_sample_positions = wp.from_torch(
             sample_positions,
             dtype=wp.vec3f,
@@ -332,10 +332,10 @@ def _weighted_sample_elimination_warp(
             device=sample_positions.device,
             dtype=torch.int32,
         )
-        row_ptr = torch.empty(
+        row_ptr_64 = torch.empty(
             (num_samples + 1,),
             device=sample_positions.device,
-            dtype=torch.int32,
+            dtype=torch.int64,
         )
         wp_neighbor_counts = wp.from_torch(
             neighbor_counts,
@@ -354,9 +354,19 @@ def _weighted_sample_elimination_warp(
             device=wp_launch_device,
             stream=wp_launch_stream,
         )
-        row_ptr[0] = 0
-        torch.cumsum(neighbor_counts, dim=0, out=row_ptr[1:])
-        total_edges = int(row_ptr[-1].item())
+        row_ptr_64[0] = 0
+        torch.cumsum(
+            neighbor_counts,
+            dim=0,
+            dtype=torch.int64,
+            out=row_ptr_64[1:],
+        )
+        total_edges = int(row_ptr_64[-1].item())
+        if total_edges >= torch.iinfo(torch.int32).max:
+            raise ValueError(
+                "Weighted-sample neighbor count exceeds the supported int32 range"
+            )
+        row_ptr = row_ptr_64.to(dtype=torch.int32)
         max_row_size = int(neighbor_counts.max().item()) if num_samples > 0 else 0
         row_ptr_cpu = row_ptr.detach().cpu().numpy()
 
@@ -662,7 +672,7 @@ def _mesh_poisson_disk_sample_warp(
     )
 
     wp_launch_device, wp_launch_stream = FunctionSpec.warp_launch_context(mesh_vertices)
-    with wp.ScopedStream(wp_launch_stream):
+    with FunctionSpec.warp_stream_scope(wp_launch_stream):
         # Convert static input tensors once for repeated kernel launches.
         wp_triangle_vertices = wp.from_torch(
             tri_vertices, dtype=wp.vec3f, return_ctype=True

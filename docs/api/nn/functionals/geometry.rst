@@ -1,6 +1,423 @@
 Geometry Functionals
 ====================
 
+Point Displacement
+------------------
+
+.. autofunction:: physicsnemo.nn.functional.displace_points
+
+.. code:: python
+
+    import torch
+    from physicsnemo.nn.functional import displace_points
+
+    points = torch.tensor(
+        [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]], requires_grad=True
+    )
+    displacement = torch.tensor(
+        [[0.0, 1.0], [0.0, 1.0], [0.0, 1.0]], requires_grad=True
+    )
+    point_weights = torch.tensor([0.0, 0.5, 1.0])
+
+    moved = displace_points(
+        points,
+        displacement,
+        point_weights=point_weights,
+    )
+    moved.square().sum().backward()
+
+Sobolev Point Deformation
+-------------------------
+
+.. autofunction:: physicsnemo.nn.functional.sobolev_deform_points
+
+.. code:: python
+
+    import torch
+    from physicsnemo.nn.functional import sobolev_deform_points
+
+    points = torch.tensor(
+        [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+        requires_grad=True,
+    )
+    cells = torch.tensor([[0, 1, 2], [0, 2, 3]])
+    displacement = torch.tensor(
+        [[0.0, 0.0], [0.0, 0.2], [0.0, -0.2], [0.0, 0.0]],
+        requires_grad=True,
+    )
+
+    smooth = sobolev_deform_points(
+        points,
+        cells,
+        displacement,
+        length_scale=0.25,
+    )
+    smooth.square().mean().backward()
+
+The operation assembles a P1 stiffness matrix and a uniform vertex mass scaled
+by the mean positive lumped P1 mass. It solves
+:math:`(M + \ell^2 K)u = Md` and returns :math:`x + u`.
+``length_scale`` is :math:`\ell` in the same physical units as ``points``.
+Zero recovers ordinary dense displacement. Larger values attenuate
+short-wavelength changes in the raw displacement and its reverse-mode
+sensitivity. The uniform mass makes this filter self-adjoint in standard
+Euclidean vertex coordinates.
+
+``fixed_points`` is an optional boolean vertex mask. True entries impose zero
+Dirichlet displacement. Boundaries without a fixed mask use the natural
+homogeneous Neumann condition. The Torch and Warp matrix-free solves support
+one mesh or a batch of point tensors that share ``cells``. Both are
+differentiable with respect to ``points`` and ``displacement``. The Warp
+backend runs on CUDA and uses an explicit implicit-adjoint backward with an
+analytic geometry vector-Jacobian product. CUDA segments, triangles, and
+tetrahedra select Warp by default when it is available. CPU inputs and
+higher-dimensional simplices select Torch. Positive length scales support
+first-order reverse-mode differentiation. Higher-order derivatives are not
+supported. The operation raises an error when a forward or adjoint solve does
+not converge within ``max_iterations``. CUDA Graph capture is not supported
+because P1 operator assembly and solver diagnostics are not capture-safe.
+Warp CUDA results and point gradients may vary at roundoff between runs.
+
+Sparse Control-Point Morphing
+-----------------------------
+
+.. autofunction:: physicsnemo.nn.functional.morph_points
+
+.. code:: python
+
+    import torch
+    from physicsnemo.nn.functional import morph_points
+
+    x = torch.linspace(0.0, 1.0, 9)
+    points = torch.stack((x, torch.zeros_like(x)), dim=-1).requires_grad_()
+    control_points = points.detach()[[0, -1]].clone().requires_grad_()
+    control_displacements = points.new_tensor(
+        [[0.0, 0.25], [0.0, -0.15]], requires_grad=True
+    )
+    radii = points.new_tensor([0.8, 0.8])
+
+    morphed = morph_points(
+        points,
+        control_points,
+        control_displacements,
+        radius=radii,
+        kernel="wendland_c2",
+    )
+    morphed.square().mean().backward()
+
+This allows an optimizer—or a model producing the control displacements—to
+learn a deformation from a differentiable objective on ``morphed``.
+
+Global Radial-Basis Deformation
+-------------------------------
+
+.. autofunction:: physicsnemo.nn.functional.radial_basis_function_deform_points
+
+.. code:: python
+
+    import torch
+    from physicsnemo.nn.functional import radial_basis_function_deform_points
+
+    points = torch.tensor(
+        [[0.25, 0.25], [0.75, 0.25], [0.75, 0.75], [0.25, 0.75]],
+        requires_grad=True,
+    )
+    controls = torch.tensor(
+        [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+        requires_grad=True,
+    )
+    control_displacements = torch.tensor(
+        [[0.0, 0.0], [0.0, 0.0], [0.15, 0.25], [0.0, 0.0]],
+        requires_grad=True,
+    )
+
+    exact = radial_basis_function_deform_points(
+        points,
+        controls,
+        control_displacements,
+        kernel="thin_plate_spline",
+        polynomial=True,
+        smoothing=0.0,
+    )
+    exact.square().mean().backward()
+
+With zero smoothing and a nonsingular control layout, the fitted field
+interpolates every control displacement up to solver precision. The affine
+polynomial tail also reproduces affine displacement fields. A positive
+``smoothing`` value adds diagonal regularization and relaxes interpolation.
+Thin-plate-spline fields have global support, unlike the compact Shepard field
+used by :func:`~physicsnemo.nn.functional.morph_points`. This formulation
+follows the thin-plate-spline interpolant described by Bookstein [1].
+
+[1] F. L. Bookstein, "Principal warps: thin-plate splines and the decomposition
+of deformations," IEEE Transactions on Pattern Analysis and Machine
+Intelligence, vol. 11, no. 6, pp. 567-585, 1989.
+https://doi.org/10.1109/34.24792
+
+Performance and Compilation
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Dense point displacement uses Torch on every device. Compact morphing and
+radial-basis deformation use Torch by default on CPU and Warp by default on
+CUDA. If Warp is unavailable, automatic CUDA dispatch falls back to Torch,
+while explicitly requesting ``implementation="warp"`` raises an
+``ImportError``.
+For a repeatedly evaluated, fixed-shape CUDA deformation wrapped in
+:func:`torch.compile`, benchmark ``implementation="torch"`` as well. Compiler
+fusion can make that path faster after its one-time compilation cost. Keep the
+backend explicit when comparing compiled and eager runs.
+
+Compact morphing and radial-basis deformation evaluate every query/control pair.
+Their computational cost is proportional to
+``batch_size * n_points * n_controls * n_spatial_dims``. Pass all simultaneous
+controls in one call. For a
+:class:`~physicsnemo.mesh.domain_mesh.DomainMesh`, the object API combines its
+interior and boundary queries into one field evaluation before rebuilding the
+individual component meshes.
+
+Radial-basis deformation additionally solves a dense control system with cubic
+cost in ``n_controls``. Both backends use the same differentiable PyTorch solve.
+``implementation="warp"`` selects a fused Warp evaluator for the point/control
+evaluation phase. The checked coefficient solve is not supported inside CUDA
+Graph capture. Use :func:`torch.compile` when compiled execution is needed.
+
+For connectivity-preserving object APIs, use
+:meth:`~physicsnemo.mesh.mesh.Mesh.displace`,
+:meth:`~physicsnemo.mesh.mesh.Mesh.morph`, or
+:meth:`~physicsnemo.mesh.mesh.Mesh.radial_basis_function_deform`. A
+:class:`~physicsnemo.mesh.domain_mesh.DomainMesh` provides
+:meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.morph` and
+:meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.radial_basis_function_deform`
+for shared sparse fields across all components.
+
+Lattice Free-Form Deformation
+-----------------------------
+
+.. autofunction:: physicsnemo.nn.functional.free_form_deform_points
+
+.. code:: python
+
+    import torch
+    from physicsnemo.nn.functional import free_form_deform_points
+
+    points = torch.rand(1024, 3)
+    control_displacements = torch.zeros(4, 4, 4, 3, requires_grad=True)
+    origin = points.new_zeros(3)
+    extent = points.new_ones(3)
+
+    deformed = free_form_deform_points(
+        points,
+        control_displacements,
+        origin=origin,
+        extent=extent,
+        basis="bernstein",
+    )
+    deformed.square().mean().backward()
+
+With zero control displacements, the operation is exactly the identity, so a
+lattice initialized at zero is a well-behaved starting point for shape
+optimization. An optimizer, or a model that produces the lattice
+displacements, learns the deformation from a differentiable objective on
+``deformed``.
+
+For repeated GPU calls, create ``origin`` and ``extent`` once as device tensors,
+as shown in the example. Python sequences are convenient for one-off calls.
+Each invocation with sequence inputs creates and transfers new tensors.
+
+Choosing a basis:
+
+- ``"bernstein"`` provides classic free-form deformation. Every lattice node
+  influences every point in the box, which suits coarse design lattices. The
+  polynomial degree, global support, and evaluation cost grow with the
+  resolution.
+- ``"bspline"`` uses uniform cubic B-splines with local four-node-per-axis
+  support. The per-point cost is independent of the lattice resolution, so it
+  scales to fine lattices for local sculpting and registration-style
+  deformation. Along an axis with ``n``
+  coefficients, index ``i`` is associated with the Greville coordinate
+  ``(i - 1) / (n - 3)``. The first and last coefficient planes therefore lie
+  one knot spacing outside the evaluation box.
+- ``"linear"``, ``"cubic_hermite"``, and ``"quintic_hermite"`` use the two
+  neighboring lattice nodes per axis and exactly reproduce every control-node
+  displacement. ``"linear"`` is piecewise multilinear and C0 across cell
+  boundaries. The cubic and quintic Hermite variants are C1 and C2,
+  respectively. These modes suit design parameters whose values must be
+  attained at the lattice nodes.
+
+For ``"bernstein"``, the evaluation cost is proportional to
+``batch_size * n_points * prod(resolution) * n_spatial_dims``. For
+``"bspline"``, it is proportional to
+``batch_size * n_points * 4**n_spatial_dims * n_spatial_dims``. The
+node-interpolating modes use ``2**n_spatial_dims`` controls per point. Points
+outside the lattice box remain unchanged. A sufficient condition for continuity
+with a fixed exterior is to zero the outermost coefficient plane on every
+Bernstein or node-interpolating face. For cubic B-splines, zero the first and
+last three coefficient planes on every axis because three planes have nonzero
+weight at each box face.
+
+Eager Torch evaluation chunks query points to keep estimated live FFD
+temporaries within 256 MiB. Under :func:`torch.compile`, the Torch backend uses
+one vectorized block because symbolic chunk loops cannot be unrolled. The eager
+memory budget is therefore not enforced. Very large Bernstein workloads may
+require substantially more peak memory when compiled.
+
+For connectivity-preserving object APIs, use
+:meth:`~physicsnemo.mesh.mesh.Mesh.free_form_deform` or
+:meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.free_form_deform`.
+
+Deformation Energies
+--------------------
+
+The deformation-energy functionals compare current point coordinates with a
+fixed reference configuration and topology. They return differentiable penalty
+objectives for use in an optimization loop. They do not solve a constrained
+deformation problem or enforce hard constraints.
+
+For a :class:`~physicsnemo.mesh.mesh.Mesh`, the wrappers in
+:mod:`physicsnemo.mesh.deformation` validate and cache connectivity and build
+triangle hinges automatically.
+
+.. autofunction:: physicsnemo.nn.functional.simplex_strain_energy
+
+.. autofunction:: physicsnemo.nn.functional.simplex_measure_energy
+
+.. autofunction:: physicsnemo.nn.functional.total_measure_energy
+
+.. autofunction:: physicsnemo.nn.functional.simplex_inversion_energy
+
+.. autofunction:: physicsnemo.nn.functional.surface_bending_energy
+
+.. autofunction:: physicsnemo.nn.functional.closed_surface_volume_energy
+
+.. code:: python
+
+    from physicsnemo.nn.functional import (
+        simplex_inversion_energy,
+        simplex_strain_energy,
+        total_measure_energy,
+    )
+
+    loss = (
+        simplex_strain_energy(points, reference_points, cells)
+        + 40.0 * total_measure_energy(points, reference_points, cells)
+        + 10.0 * simplex_inversion_energy(points, reference_points, cells)
+    )
+    loss.backward()
+
+The simplex functionals accept unbatched ``(n_points, n_spatial_dims)`` or
+batched ``(batch_size, n_points, n_spatial_dims)`` coordinates with shared
+integer topology. Coordinates must use matching ``torch.float32`` or
+``torch.float64`` dtypes. ``reduction="none"`` returns one value per simplex or
+hinge. For ``total_measure_energy`` and ``closed_surface_volume_energy``, it
+returns one global value per batch item. ``"sum"`` and ``"mean"`` reduce all
+values to one scalar.
+
+``simplex_measure_energy`` constrains each element separately, whereas
+``total_measure_energy`` permits local redistribution and constrains only the
+sum. Full-dimensional measure ratios retain the orientation relative to each
+reference simplex. Embedded-simplex ratios are unsigned. The St.
+Venant--Kirchhoff strain formulation used by
+``simplex_strain_energy`` is reflection-blind. Add
+``simplex_inversion_energy`` when full-dimensional simplex orientation matters.
+Closed-surface volume requires one edge-connected, edge-closed, consistently
+oriented 3D triangle surface. The low-level functional assumes that contract
+without checking it. Surface bending is a geometric hinge regularizer rather
+than a material shell model.
+
+The tensor functionals validate topology shape, dtype, and device without
+scanning index values, which would synchronize a CUDA device on every call.
+Indices must therefore be distinct and in range as documented. Invalid index
+values are outside the tensor API contract. Use the mesh wrappers when cached
+value validation is needed. Direct tensor calls accept int32 or int64
+connectivity, but normalize int32 connectivity on every call. Use int64 for
+repeated direct calls. Mesh wrappers cache this normalization with the
+topology.
+
+Torch provides higher-order derivatives. Warp provides a first-order CUDA
+path. Because its backward uses atomic accumulation at shared vertices, Warp
+gradient results can have small run-to-run floating-point differences.
+
+Nearest-Surface Shrinkwrap
+--------------------------
+
+Shrinkwrap projects each source point to the nearest location on a triangle
+target surface. Optional point weights scale the displacement between the
+source and projected positions. A signed offset moves the projection along the
+selected target face normal.
+
+.. autofunction:: physicsnemo.nn.functional.shrinkwrap_points
+
+.. code:: python
+
+    import torch
+    from physicsnemo.nn.functional import shrinkwrap_points
+
+    target_points = torch.tensor(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ],
+        requires_grad=True,
+    )
+    target_faces = torch.tensor([[0, 1, 2], [0, 2, 3]])
+    points = torch.tensor(
+        [[0.25, 0.25, 0.30], [0.75, 0.75, 0.45]],
+        requires_grad=True,
+    )
+    weights = torch.tensor([0.5, 1.0], requires_grad=True)
+    offset = torch.tensor(0.02, requires_grad=True)
+
+    wrapped = shrinkwrap_points(
+        points,
+        target_points,
+        target_faces,
+        point_weights=weights,
+        offset=offset,
+    )
+    wrapped.square().mean().backward()
+
+Source points use one of these shapes:
+
+- ``(N, 3)``
+- ``(B, N, 3)``
+
+One triangle target is shared across the source batches. Keep the following
+projection rules in mind:
+
+- A positive ``offset`` follows target face winding.
+- A finite ``max_distance`` leaves points at or beyond the cutoff unchanged.
+
+Nearest-face selection, closest-feature changes, and distance gating are
+discrete. Between those transitions, gradients propagate through the following
+values:
+
+- Source points
+- Selected target vertices
+- Floating-point weights
+- A tensor-valued ``offset``
+
+Target connectivity is not differentiable.
+
+Torch provides the reference nearest-face search. Warp accelerates that search
+on CPU and CUDA. Both backends evaluate the selected projection with PyTorch
+in the input dtype. Exact ties at target edges or vertices can select different
+adjacent faces. Their closest point is the same, but a nonzero face-normal
+offset can differ.
+
+Search backend rules differ by dtype and geometry:
+
+- ``float64`` targets use the Torch search because Warp searches in ``float32``.
+- Warp searches safe ``float32`` coordinates unchanged.
+- Warp falls back to Torch for unsafe coordinate magnitudes or face geometry.
+
+Shrinkwrap performs data-dependent validation and nearest-face search setup.
+Do not run CUDA executions with either backend inside CUDA Graph capture.
+
+For a connectivity-preserving object API and a triangle-panel example, use
+:meth:`~physicsnemo.mesh.mesh.Mesh.shrinkwrap`.
+
 Mesh Poisson Disk Sample
 ------------------------
 
@@ -27,6 +444,25 @@ mesh and the occupied voxels inferred by ``mesh_to_voxel_fraction``.
 
 .. figure:: /img/nn/functional/geometry/mesh_to_voxel_fraction/mesh_to_voxel_rotation.gif
    :alt: Mesh to voxel fraction mesh and occupied-voxel rotation animation
+   :width: 85%
+
+Surface Remeshing
+-----------------
+
+.. autofunction:: physicsnemo.nn.functional.remeshing
+
+Ray Mesh Intersect
+------------------
+
+.. autofunction:: physicsnemo.nn.functional.ray_mesh_intersect
+
+.. rubric:: Visualization
+
+This visualization shows a batch of rays intersecting a triangulated sphere,
+with hits, misses, hit points, and surface normals.
+
+.. figure:: /img/nn/functional/geometry/ray_mesh_intersect/ray_mesh_intersect_overview.png
+   :alt: Ray mesh intersection overview with rays, hit points, and normals
    :width: 85%
 
 Signed Distance Field

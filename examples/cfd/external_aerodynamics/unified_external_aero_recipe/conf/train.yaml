@@ -31,18 +31,21 @@
 #   Multi-dataset:
 #     python src/train.py model=transolver_surface dataset=drivaer_ml_surface \
 #         'extra_datasets=[shift_suv_estate_surface, shift_suv_fastback_surface]'
+### `_self_` merges before the model template, so model templates may
+### carry known-good per-model overrides of the schedule below (e.g.
+### `compile`, `training.optimizer.lr`). CLI overrides still win over both.
 defaults:
   - base
-  - model: geotransolver_volume
   - _self_
+  - model: geotransolver_volume
 
 # -- Dataset selection -------------------------------------------------------
 # A string naming a file in datasets/ (without the `.yaml` suffix).
 dataset: drivaer_ml_volume
 
-# Additional datasets to combine via MultiDataset.  Each entry names a
-# file in datasets/.  Empty by default; the Transolver+SHIFT recipe
-# sets this to [shift_suv_estate_surface, shift_suv_fastback_surface].
+# Additional datasets to combine via MultiDataset. Each entry names a
+# file in datasets/. Manifest selections are offset into the combined
+# index space independently for every chosen dataset.
 extra_datasets: []
 
 # Manifest-mode split selectors.  Setting these requests manifest mode:

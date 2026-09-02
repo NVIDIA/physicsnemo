@@ -35,6 +35,7 @@ except ImportError:
 
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
+from uuid import uuid4
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -140,7 +141,7 @@ class WandBLogger(Logger):
             resume = "allow"
 
         if wandb_id is None:
-            wandb_id = wandb.util.generate_id()
+            wandb_id = uuid4().hex
             # Save wandb_id if it exists in config and has not been written
             wandb_id_file = os.path.join(config.output, "wandb_id.txt")
             if not os.path.exists(wandb_id_file):

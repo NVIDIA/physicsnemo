@@ -88,7 +88,7 @@ A complete sampling workflow involves these steps:
 
 5. **Optionally configure a custom solver** (:math:`\text{Step}` in the
    equation) by instantiating a
-   :class:`~physicsnemo.diffusion.samplers.solvers.Solver` (see
+   :class:`~physicsnemo.diffusion.samplers.Solver` (see
    :ref:`Available Solvers <diffusion_available_solvers>`), or simply pass a
    built-in string key (for example, ``"heun"``) to :func:`sample`.
 
@@ -330,7 +330,7 @@ Example: Custom Solver and Custom Time-Steps
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 This example shows how to define a solver from scratch by implementing the
-:class:`~physicsnemo.diffusion.samplers.solvers.Solver` protocol.  Any object
+:class:`~physicsnemo.diffusion.samplers.Solver` protocol.  Any object
 with a ``step(x, t_cur, t_next)`` method can serve as :math:`\text{Step}` in
 the :ref:`sampling equation <diffusion_sampling_equation>`.  Here we implement
 a simple implicit trapezoidal rule (second-order Runge-Kutta), and pair it with
@@ -396,19 +396,19 @@ There are two ways to use solvers:
 
 **Built-in solvers** can be selected by passing a string key to :func:`sample`:
 
-- ``"euler"`` --- :class:`~physicsnemo.diffusion.samplers.solvers.EulerSolver`.
+- ``"euler"`` --- :class:`~physicsnemo.diffusion.samplers.EulerSolver`.
   First-order.  Fast (one denoiser evaluation per step) but lower quality.
-- ``"heun"`` --- :class:`~physicsnemo.diffusion.samplers.solvers.HeunSolver`.
+- ``"heun"`` --- :class:`~physicsnemo.diffusion.samplers.HeunSolver`.
   Second-order.  Higher quality but twice as expensive per step.
 - ``"edm_stochastic_euler"`` ---
-  :class:`~physicsnemo.diffusion.samplers.solvers.EDMStochasticEulerSolver`.
+  :class:`~physicsnemo.diffusion.samplers.EDMStochasticEulerSolver`.
   First-order with configurable stochastic noise injection.
 - ``"edm_stochastic_heun"`` ---
-  :class:`~physicsnemo.diffusion.samplers.solvers.EDMStochasticHeunSolver`.
+  :class:`~physicsnemo.diffusion.samplers.EDMStochasticHeunSolver`.
   Second-order with configurable stochastic noise injection.
 
 **Custom solvers** can be defined by implementing the
-:class:`~physicsnemo.diffusion.samplers.solvers.Solver` protocol: any object
+:class:`~physicsnemo.diffusion.samplers.Solver` protocol: any object
 with a ``step(x, t_cur, t_next)`` method.  Pass the instance directly to
 :func:`sample` for full control over the integration method.
 
@@ -466,14 +466,14 @@ Solvers
 :code:`Solver`
 ^^^^^^^^^^^^^^
 
-.. autoclass:: physicsnemo.diffusion.samplers.solvers.Solver
+.. autoclass:: physicsnemo.diffusion.samplers.Solver
     :members:
     :exclude-members: __init__
 
 :code:`EulerSolver`
 ^^^^^^^^^^^^^^^^^^^
 
-.. autoclass:: physicsnemo.diffusion.samplers.solvers.EulerSolver
+.. autoclass:: physicsnemo.diffusion.samplers.EulerSolver
     :show-inheritance:
     :members:
     :exclude-members: __init__
@@ -481,7 +481,7 @@ Solvers
 :code:`HeunSolver`
 ^^^^^^^^^^^^^^^^^^
 
-.. autoclass:: physicsnemo.diffusion.samplers.solvers.HeunSolver
+.. autoclass:: physicsnemo.diffusion.samplers.HeunSolver
     :show-inheritance:
     :members:
     :exclude-members: __init__
@@ -489,7 +489,7 @@ Solvers
 :code:`EDMStochasticEulerSolver`
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. autoclass:: physicsnemo.diffusion.samplers.solvers.EDMStochasticEulerSolver
+.. autoclass:: physicsnemo.diffusion.samplers.EDMStochasticEulerSolver
     :show-inheritance:
     :members:
     :exclude-members: __init__
@@ -497,7 +497,7 @@ Solvers
 :code:`EDMStochasticHeunSolver`
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. autoclass:: physicsnemo.diffusion.samplers.solvers.EDMStochasticHeunSolver
+.. autoclass:: physicsnemo.diffusion.samplers.EDMStochasticHeunSolver
     :show-inheritance:
     :members:
     :exclude-members: __init__

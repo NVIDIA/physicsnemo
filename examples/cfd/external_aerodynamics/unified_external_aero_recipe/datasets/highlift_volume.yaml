@@ -34,6 +34,13 @@ pipeline:
     pattern: "geo_LHC*/*.pdmsh"
     subsample_n_points: ${sampling_resolution}
     subsample_n_cells: ${sampling_resolution}
+    # Interior consumed as a point cloud; drop tet topology so the point
+    # subsample is a cheap contiguous block read (see drivaer_ml_volume.yaml).
+    drop_interior_cells: true
+    # Preserve in-file boundaries as the lossless default. Point-based model
+    # templates that consume only the interior explicitly opt into dropping
+    # them to skip per-sample subsampling and pinning.
+    drop_in_file_boundaries: false
     extra_boundaries:
       stl_geometry:
         pattern: "*.stl.pmsh"
