@@ -617,7 +617,7 @@ def validation_step(
         for i_batch, sample_batched in enumerate(dataloader):
             sampled_batched = dict_to_device(sample_batched, device)
 
-            with autocast(enabled=False):
+            with autocast("cuda", enabled=False):
                 if add_physics_loss:
                     prediction_vol, prediction_surf = model(
                         sampled_batched, return_volume_neighbors=True
@@ -682,7 +682,7 @@ def train_epoch(
             autocast_enabled = False
         else:
             autocast_enabled = True
-        with autocast(enabled=autocast_enabled):
+        with autocast("cuda", enabled=autocast_enabled):
             with nvtx.range("Model Forward Pass"):
                 if add_physics_loss:
                     prediction_vol, prediction_surf = model(

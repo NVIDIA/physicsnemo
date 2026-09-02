@@ -305,7 +305,7 @@ def validate_combo_optims(
         cuda_graphs_enabled = False
         amp_device = "cpu"
         amp_dtype = torch.bfloat16
-        scaler = torch.amp.GradScaler("cuda", enabled=False)  # Always false on CPU
+        scaler = torch.amp.GradScaler("cpu", enabled=False)  # Always false on CPU
     else:
         amp_enabled = model.meta.amp_gpu
         cuda_graphs_enabled = model.meta.cuda_graphs

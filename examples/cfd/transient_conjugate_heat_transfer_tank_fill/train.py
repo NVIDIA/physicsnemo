@@ -79,7 +79,7 @@ def train_one_epoch(
         optimizer.zero_grad(set_to_none=True)
 
         # Forward pass (with autocast if enabled)
-        with autocast(enabled=use_amp):
+        with autocast("cuda", enabled=use_amp):
             # Forward pass
             pred_vol, pred_surf = model(batch)
 
@@ -147,7 +147,7 @@ def evaluate(
         batch = dict_to_device(batch, device)
 
         # Forward pass (with autocast if enabled)
-        with autocast(enabled=use_amp):
+        with autocast("cuda", enabled=use_amp):
             # Forward pass
             pred_vol, pred_surf = model(batch)
 

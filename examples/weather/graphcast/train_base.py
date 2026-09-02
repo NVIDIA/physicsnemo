@@ -28,7 +28,7 @@ class BaseTrainer:
         pass
 
     def rollout(self, grid_nfeat, y):
-        with autocast(enabled=self.amp, dtype=self.amp_dtype):
+        with autocast("cuda", enabled=self.amp, dtype=self.amp_dtype):
             total_loss = 0
             pred_prev = grid_nfeat
             for i in range(y.size(dim=1)):

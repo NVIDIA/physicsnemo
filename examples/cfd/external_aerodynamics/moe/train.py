@@ -186,7 +186,7 @@ def train_gating_networks(dataset, cfg):
             )  # (N, 12)
 
             # --- Forward  ---
-            with autocast(enabled=cfg.use_amp):
+            with autocast("cuda", enabled=cfg.use_amp):
                 gate_p = pressure_gating(p_gating_input)  # (N, 3)
                 pred_p = torch.sum(gate_p * p_preds, dim=1, keepdim=True)  # (N, 1)
 
