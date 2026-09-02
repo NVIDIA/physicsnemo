@@ -157,15 +157,15 @@ silent no-ops.
 ### TensorDict stochastic transforms
 
 - **`SubsamplePoints`** — declares `_generator` and passes it to
-  `torch.randperm`, `torch.multinomial`, and
-  `poisson_sample_indices_fixed`.
+  `weighted_multinomial` for exact and Poisson-gap sampling.
 
 ### Mesh stochastic transforms
 
 - **`RandomScaleMesh`**, **`RandomTranslateMesh`**,
   **`RandomRotateMesh`** — sample augmentation parameters from
   `torch.distributions.Distribution` objects via ICDF + generator.
-- **`SubsampleMesh`** — uses `torch.randperm` / `poisson_sample_indices_fixed`.
+- **`SubsampleMesh`** — uses `weighted_multinomial` with the exact or
+  Poisson-gap strategy.
 
 ### `Compose`
 

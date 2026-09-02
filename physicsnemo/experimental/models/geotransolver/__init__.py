@@ -14,69 +14,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""GeoTransolver: Geometry-Aware Physics Attention Transformer.
+r"""Legacy import shims for the GeoTransolver model and its components.
 
-This module provides the GeoTransolver model and its components for learning
-physics-based representations with geometry and global context awareness.
+The model, its metadata, and the context projector components now live in
+:mod:`physicsnemo.models.geotransolver`; the GALE attention layers now live in
+:mod:`physicsnemo.nn`. Import them from there instead:
 
-Classes
--------
-GeoTransolver
-    Main model class combining GALE attention with geometry and global context.
-GeoTransolverMetaData
-    Data class for storing essential meta data needed for the GeoTransolver model.
-GALE
-    Geometry-Aware Latent Embeddings attention layer.
-GALE_FA
-    GALE with FLARE self-attention backend.
-GALE_block
-    Transformer block using GALE or GALE_FA attention.
-GALEStructuredMesh2D
-    GALE with Conv2d slice projection for 2D structured grids.
-GALEStructuredMesh3D
-    GALE with Conv3d slice projection for 3D structured grids.
-ContextProjector
-    Projects context features onto physical state slices.
-StructuredContextProjector
-    Context projector with Conv2d/Conv3d geometry encoding on structured grids.
-GeometricFeatureProcessor
-    Processes geometric features at a single spatial scale using BQWarp.
-MultiScaleFeatureExtractor
-    Multi-scale geometric feature extraction over multiple radii.
-GlobalContextBuilder
-    Orchestrates context construction for the model.
+.. code-block:: python
 
-Functions
----------
-collect_concrete_dropout_losses
-    Collect concrete dropout regularization losses from a model.
-get_concrete_dropout_rates
-    Get concrete dropout rates from a model.
+    from physicsnemo.models.geotransolver import ContextProjector, GeoTransolver
+    from physicsnemo.nn import GALE, GALEBlock
 
-Examples
---------
-Basic usage:
-
->>> import torch
->>> from physicsnemo.experimental.models.geotransolver import GeoTransolver
->>> model = GeoTransolver(
-...     functional_dim=64,
-...     out_dim=3,
-...     n_hidden=256,
-...     n_layers=4,
-...     use_te=False,
-... )
->>> x = torch.randn(2, 1000, 64)
->>> output = model(x)
->>> output.shape
-torch.Size([2, 1000, 3])
+Importing from this legacy namespace emits a
+:class:`~physicsnemo.core.warnings.LegacyFeatureWarning`; PhysicsNeMo will
+remove these shims in a future release.
 """
 
+import warnings
+
+from physicsnemo.core.warnings import LegacyFeatureWarning
 from physicsnemo.nn import (
-      ConcreteDropout,
-      collect_concrete_dropout_losses,
-      get_concrete_dropout_rates,
+    ConcreteDropout,
+    collect_concrete_dropout_losses,
+    get_concrete_dropout_rates,
 )
+
 from .context_projector import (
     ContextProjector,
     GeometricFeatureProcessor,
@@ -92,6 +54,16 @@ from .gale import (
     GALEStructuredMesh3D,
 )
 from .geotransolver import GeoTransolver, GeoTransolverMetaData
+
+warnings.warn(
+    "Importing from 'physicsnemo.experimental.models.geotransolver' is deprecated. "
+    "Import GeoTransolver, its metadata, and the context projector components "
+    "from 'physicsnemo.models.geotransolver', and the GALE attention layers "
+    "(GALE_block is now named GALEBlock) from 'physicsnemo.nn' instead. "
+    "This backward-compatibility shim will be removed in a future release.",
+    LegacyFeatureWarning,
+    stacklevel=2,
+)
 
 __all__ = [
     "GeoTransolver",

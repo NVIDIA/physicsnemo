@@ -20,10 +20,7 @@ from typing import TYPE_CHECKING, Literal
 
 import torch
 
-from physicsnemo.mesh.transformations.deform._utils import (
-    _mesh_with_deformed_points,
-    _resolve_point_field,
-)
+from physicsnemo.mesh.transformations.deform._utils import _resolve_point_field
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -43,6 +40,9 @@ def displace(
     ``displacement`` and ``point_weights`` may be raw tensors or keys (including
     nested tuple keys) in
     :attr:`~physicsnemo.mesh.mesh.Mesh.point_data`.
+
+    Call it as ``displace(mesh, ...)`` or as ``mesh.displace(...)``. The bound
+    method supplies ``mesh`` automatically.
 
     Parameters
     ----------
@@ -91,4 +91,4 @@ def displace(
         point_weights=point_weights_t,
         implementation=implementation,
     )
-    return _mesh_with_deformed_points(mesh, points)
+    return mesh.with_points(points)

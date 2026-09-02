@@ -238,6 +238,70 @@ def create_single_cell_mesh(
     return Mesh(points=points, cells=cells)
 
 
+def make_test_mesh(
+    n_spatial_dims: int,
+    n_manifold_dims: int,
+    device: "torch.device | str" = "cpu",
+    *,
+    n_points: int | None = None,
+    n_cells: int | None = None,
+    seed: int = 42,
+    point_data: dict[str, tuple[int, ...]] | None = None,
+    cell_data: dict[str, tuple[int, ...]] | None = None,
+    global_data: dict[str, float] | None = None,
+):
+    """Build a test mesh; the single construction seam for the mesh suite.
+
+    Two modes:
+
+    - ``n_points is None``: the canonical small literal mesh for the
+      dimension combination (delegates to :func:`create_simple_mesh`).
+    - ``n_points`` given: a seeded random mesh of that size (``randn``
+      points, ``randint`` cells), with optional data fields. ``point_data``
+      / ``cell_data`` map field name to trailing shape (``()`` for scalar
+      per-entity fields); ``global_data`` maps name to a scalar value.
+      Fields are drawn in insertion order after points and cells, so a
+      given (seed, spec) is byte-reproducible.
+
+    The distributed mesh test suite overrides this function to produce
+    ShardTensor-backed meshes; route new test-mesh construction through it
+    (directly or via the ``mesh_factory`` fixture) rather than adding
+    per-file builders.
+    """
+    from physicsnemo.mesh.mesh import Mesh
+
+    if n_points is None:
+        return create_simple_mesh(n_spatial_dims, n_manifold_dims, device)
+
+    if n_cells is None:
+        n_cells = max(n_points // 2, 1)
+
+    torch.manual_seed(seed)
+    points = torch.randn(n_points, n_spatial_dims, device=device)
+    cells = torch.randint(0, n_points, (n_cells, n_manifold_dims + 1), device=device)
+
+    built_point_data = {
+        name: torch.randn(n_points, *shape, device=device)
+        for name, shape in (point_data or {}).items()
+    }
+    built_cell_data = {
+        name: torch.randn(n_cells, *shape, device=device)
+        for name, shape in (cell_data or {}).items()
+    }
+    built_global_data = {
+        name: torch.tensor(value, device=device)
+        for name, value in (global_data or {}).items()
+    }
+
+    return Mesh(
+        points=points,
+        cells=cells,
+        point_data=built_point_data,
+        cell_data=built_cell_data,
+        global_data=built_global_data,
+    )
+
+
 ### Assertion Helpers ###
 
 
@@ -287,6 +351,16 @@ def device(request):
     the pytest_collection_modifyitems hook.
     """
     return request.param
+
+
+@pytest.fixture
+def mesh_factory():
+    """The shared test-mesh construction seam (see :func:`make_test_mesh`).
+
+    Injected as a fixture so a distributed conftest can override it to
+    produce ShardTensor-backed meshes and rerun the same tests.
+    """
+    return make_test_mesh
 
 
 @pytest.fixture(params=DIMENSION_CONFIGS_2D)

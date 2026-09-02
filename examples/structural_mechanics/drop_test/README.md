@@ -23,7 +23,7 @@ The implementation uses a GeoTransolver backbone with one-shot training and is c
 pip install -r requirements.txt
 ```
 
-GeoTransolver lives under `physicsnemo.experimental.models`, so a standard PhysicsNeMo install is sufficient — no extras required.
+GeoTransolver lives under `physicsnemo.models`, so a standard PhysicsNeMo install needs no extras.
 
 ## Data Preprocessing
 

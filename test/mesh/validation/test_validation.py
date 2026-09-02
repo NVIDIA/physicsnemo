@@ -24,6 +24,8 @@ This module consolidates tests from:
 - Edge case tests (code path coverage, special conditions)
 """
 
+import math
+
 import pytest
 import torch
 
@@ -31,6 +33,7 @@ from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.validation import (
     compute_mesh_statistics,
     compute_quality_metrics,
+    validate,
     validate_mesh,
 )
 
@@ -58,11 +61,49 @@ class TestMeshValidation:
 
         mesh = Mesh(points=points, cells=cells)
 
-        report = validate_mesh(mesh)
+        report = validate(mesh)
 
         assert report["valid"]
         assert report["n_degenerate_cells"] == 0
         assert report["n_out_of_bounds_cells"] == 0
+
+    def test_pending_deprecation_alias_matches_validate(self, device):
+        """The legacy functional name preserves behavior while users migrate."""
+        points = torch.tensor(
+            [[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]],
+            dtype=torch.float32,
+            device=device,
+        )
+        mesh = Mesh(
+            points=points,
+            cells=torch.tensor([[0, 1, 2]], dtype=torch.long, device=device),
+        )
+
+        expected = validate(mesh)
+        with pytest.warns(PendingDeprecationWarning, match="validate_mesh"):
+            actual = validate_mesh(mesh)
+
+        assert actual.keys() == expected.keys()
+        for key in actual:
+            if isinstance(actual[key], torch.Tensor):
+                assert torch.equal(actual[key], expected[key])
+            else:
+                assert actual[key] == expected[key]
+
+    def test_mesh_validate_preserves_positional_tolerance(self, device):
+        """The sixth historical method argument remains ``tolerance``."""
+        points = torch.tensor(
+            [[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]],
+            dtype=torch.float32,
+            device=device,
+        )
+        mesh = Mesh(
+            points=points,
+            cells=torch.tensor([[0, 1, 2]], dtype=torch.long, device=device),
+        )
+
+        report = mesh.validate(True, True, False, True, False, 1e-6)
+        assert report["valid"]
 
     def test_out_of_bounds_indices(self, device):
         """Test detection of out-of-bounds cell indices."""
@@ -81,7 +122,7 @@ class TestMeshValidation:
 
         mesh = Mesh(points=points, cells=cells)
 
-        report = validate_mesh(mesh, check_out_of_bounds=True, raise_on_error=False)
+        report = validate(mesh, check_out_of_bounds=True, raise_on_error=False)
 
         assert not report["valid"]
         assert report["n_out_of_bounds_cells"] == 1
@@ -111,7 +152,7 @@ class TestMeshValidation:
 
         mesh = Mesh(points=points, cells=cells)
 
-        report = validate_mesh(mesh, check_degenerate_cells=True, raise_on_error=False)
+        report = validate(mesh, check_degenerate_cells=True, raise_on_error=False)
 
         assert not report["valid"]
         assert report["n_degenerate_cells"] >= 1
@@ -133,9 +174,7 @@ class TestMeshValidation:
 
         mesh = Mesh(points=points, cells=cells)
 
-        report = validate_mesh(
-            mesh, check_duplicate_vertices=True, raise_on_error=False
-        )
+        report = validate(mesh, check_duplicate_vertices=True, raise_on_error=False)
 
         assert not report["valid"]
         assert report["n_duplicate_vertices"] >= 1
@@ -157,7 +196,7 @@ class TestMeshValidation:
         mesh = Mesh(points=points, cells=cells)
 
         with pytest.raises(ValueError, match="out-of-bounds"):
-            validate_mesh(mesh, check_out_of_bounds=True, raise_on_error=True)
+            validate(mesh, check_out_of_bounds=True, raise_on_error=True)
 
     def test_manifoldness_check_2d(self, device):
         """Test manifoldness check for 2D meshes."""
@@ -184,7 +223,7 @@ class TestMeshValidation:
 
         mesh = Mesh(points=points, cells=cells)
 
-        report = validate_mesh(mesh, check_manifoldness=True)
+        report = validate(mesh, check_manifoldness=True)
 
         # Should be manifold (each edge shared by at most 2 faces)
         assert report["is_manifold"]
@@ -197,7 +236,7 @@ class TestMeshValidation:
 
         mesh = Mesh(points=points, cells=cells)
 
-        report = validate_mesh(mesh)
+        report = validate(mesh)
 
         # Empty mesh should be valid
         assert report["valid"]
@@ -206,6 +245,17 @@ class TestMeshValidation:
 ###############################################################################
 # Quality Metrics Tests
 ###############################################################################
+
+
+def _single_simplex(points, device, *, dtype=torch.float64):
+    """Create a one-cell simplex mesh from point coordinates."""
+    point_tensor = torch.tensor(points, dtype=dtype, device=device)
+    cells = torch.arange(
+        point_tensor.shape[0],
+        dtype=torch.long,
+        device=device,
+    ).unsqueeze(0)
+    return Mesh(points=point_tensor, cells=cells)
 
 
 class TestQualityMetrics:
@@ -234,13 +284,201 @@ class TestQualityMetrics:
         assert "aspect_ratio" in metrics.keys()
         assert "edge_length_ratio" in metrics.keys()
 
-        # Equilateral triangle should have high quality
-        quality = metrics["quality_score"][0]
-        assert quality > 0.7  # High quality (formula gives ~0.75 for equilateral)
+        torch.testing.assert_close(
+            metrics["aspect_ratio"],
+            torch.ones_like(metrics["aspect_ratio"]),
+        )
+        torch.testing.assert_close(
+            metrics["edge_length_ratio"],
+            torch.ones_like(metrics["edge_length_ratio"]),
+        )
+        torch.testing.assert_close(
+            metrics["quality_score"],
+            torch.ones_like(metrics["quality_score"]),
+        )
 
-        # Edge length ratio should be close to 1.0
-        edge_ratio = metrics["edge_length_ratio"][0]
-        assert edge_ratio < 1.1  # Nearly equal edges
+    def test_regular_simplex_quality_is_scale_invariant(self, device):
+        """Regular simplices remain ideal under uniform scaling in every dimension."""
+        from physicsnemo.mesh.primitives.volumes import tetrahedron_volume
+
+        meshes = (
+            Mesh(
+                points=torch.tensor([[0.0], [1.0]], device=device),
+                cells=torch.tensor([[0, 1]], dtype=torch.long, device=device),
+            ),
+            Mesh(
+                points=torch.tensor(
+                    [
+                        [0.0, 0.0],
+                        [1.0, 0.0],
+                        [0.5, (3**0.5) / 2],
+                    ],
+                    device=device,
+                ),
+                cells=torch.tensor([[0, 1, 2]], dtype=torch.long, device=device),
+            ),
+            tetrahedron_volume.load(device=device),
+        )
+
+        for mesh in meshes:
+            for scale in (0.5, 1.0, 2.0, 10.0):
+                metrics = compute_quality_metrics(mesh.scale(scale))
+                torch.testing.assert_close(
+                    metrics["aspect_ratio"],
+                    torch.ones_like(metrics["aspect_ratio"]),
+                )
+                torch.testing.assert_close(
+                    metrics["quality_score"],
+                    torch.ones_like(metrics["quality_score"]),
+                )
+
+    def test_small_float32_tetrahedron_quality_is_scale_invariant(self, device):
+        """Small 3D cells do not activate a dimensionally invalid area floor."""
+        mesh = _single_simplex(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.5, math.sqrt(3.0) / 2.0, 0.0],
+                [
+                    0.5,
+                    math.sqrt(3.0) / 6.0,
+                    math.sqrt(2.0 / 3.0),
+                ],
+            ],
+            device,
+            dtype=torch.float32,
+        )
+        reference = compute_quality_metrics(mesh)
+        scaled = compute_quality_metrics(mesh.scale(1e-5))
+
+        for metric_name in (
+            "aspect_ratio",
+            "edge_length_ratio",
+            "min_angle",
+            "max_angle",
+            "quality_score",
+        ):
+            torch.testing.assert_close(
+                scaled[metric_name],
+                reference[metric_name],
+            )
+
+    @pytest.mark.parametrize(
+        ("points", "expected_aspect_ratio"),
+        [
+            (
+                [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+                math.sqrt(3.0),
+            ),
+            (
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ],
+                2.0,
+            ),
+        ],
+        ids=["right-triangle", "right-tetrahedron"],
+    )
+    def test_known_nonregular_simplex_aspect_ratio(
+        self,
+        device,
+        points,
+        expected_aspect_ratio,
+    ):
+        """Aspect ratios agree with closed-form 2D and 3D reference values."""
+        metrics = compute_quality_metrics(_single_simplex(points, device))
+
+        torch.testing.assert_close(
+            metrics["aspect_ratio"],
+            torch.tensor(
+                [expected_aspect_ratio],
+                dtype=torch.float64,
+                device=device,
+            ),
+        )
+
+    @pytest.mark.parametrize(
+        "points",
+        [
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+        ],
+        ids=["right-triangle", "right-tetrahedron"],
+    )
+    def test_nonregular_simplex_quality_is_scale_invariant(self, device, points):
+        """Every dimensionless quality metric is unchanged by uniform scaling."""
+        mesh = _single_simplex(points, device)
+        reference = compute_quality_metrics(mesh)
+
+        for scale in (0.25, 2.0, 10.0):
+            actual = compute_quality_metrics(mesh.scale(scale))
+            for metric_name in (
+                "aspect_ratio",
+                "edge_length_ratio",
+                "min_angle",
+                "max_angle",
+                "quality_score",
+            ):
+                torch.testing.assert_close(
+                    actual[metric_name],
+                    reference[metric_name],
+                )
+
+    @pytest.mark.parametrize(
+        ("regular_points", "distorted_points"),
+        [
+            (
+                [
+                    [0.0, 0.0],
+                    [1.0, 0.0],
+                    [0.5, math.sqrt(3.0) / 2.0],
+                ],
+                [[0.0, 0.0], [1.0, 0.0], [0.5, 0.02]],
+            ),
+            (
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.5, math.sqrt(3.0) / 2.0, 0.0],
+                    [
+                        0.5,
+                        math.sqrt(3.0) / 6.0,
+                        math.sqrt(2.0 / 3.0),
+                    ],
+                ],
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.5, 0.5, 0.001],
+                ],
+            ),
+        ],
+        ids=["flattened-triangle", "sliver-tetrahedron"],
+    )
+    def test_quality_ranks_regular_cells_above_distorted_cells(
+        self,
+        device,
+        regular_points,
+        distorted_points,
+    ):
+        """Known flattened and sliver cells rank below regular reference cells."""
+        regular = compute_quality_metrics(_single_simplex(regular_points, device))
+        distorted = compute_quality_metrics(_single_simplex(distorted_points, device))
+
+        assert distorted["aspect_ratio"][0] > regular["aspect_ratio"][0]
+        assert distorted["edge_length_ratio"][0] > regular["edge_length_ratio"][0]
+        assert distorted["min_angle"][0] < regular["min_angle"][0]
+        assert distorted["max_angle"][0] > regular["max_angle"][0]
+        assert distorted["quality_score"][0] < regular["quality_score"][0]
 
     def test_degenerate_triangle_quality(self, device):
         """Test that degenerate triangle has low quality score."""
@@ -264,6 +502,37 @@ class TestQualityMetrics:
 
         # Very elongated triangle should have low quality
         assert quality < 0.3
+
+    def test_point_simplex_quality(self, device):
+        """A 0-simplex is shape-perfect with undefined lengths and angles."""
+        mesh = Mesh(
+            points=torch.tensor(
+                [[0.0, 0.0], [1.0, 1.0]],
+                dtype=torch.float32,
+                device=device,
+            ),
+            cells=torch.tensor([[0], [1]], dtype=torch.long, device=device),
+        )
+
+        metrics = compute_quality_metrics(mesh)
+
+        assert metrics.batch_size == torch.Size([2])
+        for metric_name in (
+            "aspect_ratio",
+            "edge_length_ratio",
+            "quality_score",
+        ):
+            torch.testing.assert_close(
+                metrics[metric_name],
+                torch.ones_like(metrics[metric_name]),
+            )
+        for metric_name in (
+            "min_angle",
+            "max_angle",
+            "min_edge_length",
+            "max_edge_length",
+        ):
+            assert torch.isnan(metrics[metric_name]).all()
 
     def test_quality_metrics_angles(self, device):
         """Test that angles are computed for triangles."""
@@ -535,7 +804,7 @@ class TestMeshAPIIntegration:
 
         mesh = Mesh(points=points, cells=cells)
 
-        report = validate_mesh(mesh, check_out_of_bounds=True, raise_on_error=False)
+        report = validate(mesh, check_out_of_bounds=True, raise_on_error=False)
 
         assert not report["valid"]
         assert report["n_out_of_bounds_cells"] == 1
@@ -620,6 +889,14 @@ class TestQualityMetricsEdgeCases:
         assert torch.isclose(
             metrics["min_angle"][0], metrics["max_angle"][0], atol=1e-5
         )
+        torch.testing.assert_close(
+            metrics["aspect_ratio"],
+            torch.ones_like(metrics["aspect_ratio"]),
+        )
+        torch.testing.assert_close(
+            metrics["quality_score"],
+            torch.ones_like(metrics["quality_score"]),
+        )
 
 
 ###############################################################################
@@ -692,7 +969,7 @@ class TestValidationCodePaths:
         mesh = Mesh(points=points, cells=cells)
 
         # Duplicate check now works for all mesh sizes using vectorized spatial hashing
-        report = validate_mesh(mesh, check_duplicate_vertices=True)
+        report = validate(mesh, check_duplicate_vertices=True)
 
         # Should return actual count (0 since grid points are well-spaced)
         assert report["n_duplicate_vertices"] == 0
@@ -722,7 +999,7 @@ class TestValidationCodePaths:
 
         mesh = Mesh(points=points, cells=cells)
 
-        report = validate_mesh(mesh, check_inverted_cells=True, raise_on_error=False)
+        report = validate(mesh, check_inverted_cells=True, raise_on_error=False)
 
         # Should detect one inverted cell
         assert report["n_inverted_cells"] >= 1
@@ -756,7 +1033,7 @@ class TestValidationCodePaths:
 
         mesh = Mesh(points=points, cells=cells)
 
-        report = validate_mesh(mesh, check_manifoldness=True, raise_on_error=False)
+        report = validate(mesh, check_manifoldness=True, raise_on_error=False)
 
         # Should detect non-manifold edge
         assert not report["is_manifold"]
@@ -769,7 +1046,7 @@ class TestValidationCodePaths:
 
         mesh = Mesh(points=points, cells=cells)
 
-        report = validate_mesh(
+        report = validate(
             mesh,
             check_degenerate_cells=True,
             check_out_of_bounds=True,
@@ -798,7 +1075,7 @@ class TestValidationCodePaths:
 
         mesh = Mesh(points=points, cells=cells)
 
-        report = validate_mesh(mesh, check_inverted_cells=True)
+        report = validate(mesh, check_inverted_cells=True)
 
         # Should return -1 (not applicable for codimension != 0)
         assert report["n_inverted_cells"] == -1 or report["n_inverted_cells"] == 0
@@ -827,7 +1104,7 @@ class TestValidationCodePaths:
 
         mesh = Mesh(points=points, cells=cells)
 
-        report = validate_mesh(mesh, check_manifoldness=True)
+        report = validate(mesh, check_manifoldness=True)
 
         # Should return None or -1 for non-2D manifolds
         assert (
@@ -853,7 +1130,7 @@ class TestValidationCodePaths:
         mesh = Mesh(points=points, cells=cells)
 
         # Should not crash even though area computation would fail
-        report = validate_mesh(
+        report = validate(
             mesh,
             check_out_of_bounds=True,
             check_degenerate_cells=True,
@@ -865,17 +1142,21 @@ class TestValidationCodePaths:
         # Degenerate check should be skipped (no key or not computed)
 
 
-def test_self_intersection_check_raises_not_implemented():
-    """check_self_intersection is unimplemented and must fail loudly (regardless of
-    raise_on_error) rather than returning a None sentinel that looks like
-    'no self-intersections found'."""
+@pytest.mark.parametrize("raise_on_error", [False, True])
+def test_self_intersection_check_precedes_other_validation_errors(raise_on_error):
+    """The unsupported option fails consistently, even when the mesh is invalid."""
     points = torch.tensor(
         [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 1.0, 0.0]], dtype=torch.float32
     )
-    cells = torch.tensor([[0, 1, 2]], dtype=torch.long)
+    cells = torch.tensor([[0, 1, 3]], dtype=torch.long)
     mesh = Mesh(points=points, cells=cells)
+
     with pytest.raises(NotImplementedError, match="[Ss]elf-intersection"):
-        validate_mesh(mesh, check_self_intersection=True, raise_on_error=False)
+        validate(
+            mesh,
+            check_self_intersection=True,
+            raise_on_error=raise_on_error,
+        )
 
 
 if __name__ == "__main__":

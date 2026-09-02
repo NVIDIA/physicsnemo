@@ -16,6 +16,7 @@
 
 """Tests for DomainMesh transform passthrough methods."""
 
+import inspect
 import math
 
 import pytest
@@ -282,6 +283,21 @@ class TestStripCaches:
         dm2 = dm.strip_caches()
         assert "normals" not in dm2.interior._cache["cell"].keys()
 
+    def test_propagates_keep_to_all_meshes(self):
+        dm = DomainMesh(
+            interior=single_triangle_3d.load(),
+            boundaries={"wall": single_triangle_3d.load()},
+        )
+        for _, mesh in dm.all_meshes():
+            _ = mesh.cell_areas
+            _ = mesh.cell_normals
+
+        stripped = dm.strip_caches(keep=("cell", "areas"))
+
+        for _, mesh in stripped.all_meshes():
+            assert mesh._cache.get(("cell", "areas"), None) is not None
+            assert mesh._cache.get(("cell", "normals"), None) is None
+
 
 class TestSubdivide:
     """Tests for DomainMesh.subdivide passthrough."""
@@ -362,6 +378,16 @@ class TestComputeCellDerivatives:
 class TestValidate:
     """Tests for DomainMesh.validate passthrough."""
 
+    def test_options_match_mesh_validate(self):
+        """Domain validation should expose the canonical per-mesh options."""
+        mesh_options = list(inspect.signature(Mesh.validate).parameters.values())[1:]
+        domain_options = list(
+            inspect.signature(DomainMesh.validate).parameters.values()
+        )[1:]
+        assert [
+            (option.name, option.kind, option.default) for option in domain_options
+        ] == [(option.name, option.kind, option.default) for option in mesh_options]
+
     def test_report_structure(self, tet_domain):
         report = tet_domain.validate()
         assert "interior" in report
@@ -388,6 +414,15 @@ class TestValidate:
         dm = DomainMesh(interior=interior)
         report = dm.validate()
         assert not report["valid"]
+
+    def test_self_intersection_option_propagates(self, tet_domain):
+        with pytest.raises(NotImplementedError, match="[Ss]elf-intersection"):
+            tet_domain.validate(check_self_intersection=True)
+
+    def test_positional_tolerance_is_preserved(self, tet_domain):
+        """The sixth historical argument remains the geometric tolerance."""
+        report = tet_domain.validate(True, True, False, True, False, 1e-6)
+        assert isinstance(report["valid"], bool)
 
 
 ### Boundary watertightness

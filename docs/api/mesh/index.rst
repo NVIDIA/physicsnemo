@@ -181,7 +181,10 @@ Key Features
 - **Mesh operations**: subdivision (linear, Loop, Butterfly), smoothing,
   remeshing, repair
 - **Geometry transformations**: translation, rotation, scaling, dense point
-  displacement, and sparse control-point morphing
+  displacement, compact control-point morphing, and global radial-basis
+  deformation
+- **Differentiable deformation energies**: strain, local and total measure,
+  inversion, closed-surface volume, and surface bending penalties
 - **Tessellation**: triangulate polygon soups into simplicial meshes (convex
   fan with an ear-clip fallback for non-convex polygons), for example, using
   ``Mesh.from_polygons``
@@ -209,8 +212,7 @@ Tutorials
 Runnable Jupyter notebook tutorials are available in ``examples/minimal/mesh/``:
 
 1. **Getting Started** -- mesh creation, data attachment, GPU usage, autograd
-2. **Operations** -- transformations, displacement, morphing, subdivision,
-   slicing, merging, boundaries
+2. **Operations** -- transformations, subdivision, slicing, merging, boundaries
 3. **Discrete Calculus** -- gradients, divergence, curl, curvature
 4. **Neighbors & Spatial** -- adjacency queries, BVH, sampling, interpolation
 5. **Quality & Repair** -- validation, quality metrics, repair pipeline
@@ -238,6 +240,7 @@ API Reference
    spatial
    sampling
    transformations
+   deformation
    subdivision
    smoothing
    remeshing

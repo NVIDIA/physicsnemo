@@ -37,6 +37,7 @@ import hydra
 import torch
 import torch.distributed as dist
 from hydra.core.hydra_config import HydraConfig
+from hydra.utils import to_absolute_path
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
@@ -493,15 +494,20 @@ def _all_reduce_grads(model: torch.nn.Module, world_size: int) -> None:
     ``optimizer.step()``. Every rank starts from identical weights and applies
     identical averaged gradients, so the models stay in lockstep.
     """
-    grads = []
-    for p in model.parameters():
-        if not p.requires_grad:
-            continue
-        if p.grad is None:
-            # Materialize a zero grad so the collective stays balanced across
-            # ranks (the frozen/trainable split is deterministic per phase).
-            p.grad = torch.zeros_like(p)
-        grads.append(p.grad)
+    # SAFETY: reduce only parameters that actually received a gradient, and do
+    # NOT materialize zero grads for the ones that didn't. Every rank runs the
+    # identical forward/backward graph on the same trainable parameter set, so
+    # the reached (grad-is-not-None) set is identical across ranks and the
+    # coalesced buffers line up element-for-element. Materializing zeros for
+    # unreached params (the previous approach) is not only unnecessary for the
+    # collective but actively harmful: AdamW's decoupled weight decay applies
+    # ``p *= 1 - lr*wd`` to every parameter whose ``.grad`` is not None, so a
+    # forced zero grad silently decays otherwise-untouched parameters on
+    # multi-GPU runs only — a single-vs-multi-GPU divergence. Skipping them
+    # keeps the optimizer's per-parameter behavior identical to single-GPU.
+    grads = [
+        p.grad for p in model.parameters() if p.requires_grad and p.grad is not None
+    ]
     if not grads:
         return
     # Coalesce every gradient into one contiguous buffer and all-reduce ONCE,
@@ -746,6 +752,32 @@ def _save_checkpoint(
     log.info("Saved checkpoint to %s", path)
 
 
+def _epoch_of(ckpt: Path) -> int:
+    """Parse the integer epoch from an ``epoch_<N>.pt`` filename (``-1`` if
+    unparseable)."""
+    try:
+        return int(ckpt.stem.split("_")[-1])
+    except ValueError:
+        return -1
+
+
+def _latest_checkpoint(ckpt_dir: Path) -> Path | None:
+    """Return the highest-epoch ``epoch_*.pt`` in ``ckpt_dir``, or ``None``.
+
+    Selected by the integer epoch parsed from the filename (not a
+    lexicographic sort), so it stays correct past ``epoch_9999.pt`` and for
+    mixed zero-pad widths. Files whose stem does not parse to an epoch (e.g.
+    a stray ``epoch_abc.pt``) are ignored, so an all-unparseable directory
+    resolves to ``None`` (fresh start) rather than a silently-wrong file.
+    Used to resume automatically from a stable checkpoint directory.
+    """
+    ckpt_dir = Path(ckpt_dir)
+    if not ckpt_dir.is_dir():
+        return None
+    ckpts = [p for p in ckpt_dir.glob("epoch_*.pt") if _epoch_of(p) >= 0]
+    return max(ckpts, key=_epoch_of) if ckpts else None
+
+
 def _load_initial_state(
     cfg: DictConfig,
     *,
@@ -754,51 +786,63 @@ def _load_initial_state(
     lr_scheduler: Any,
     ema: ExponentialMovingAverage | None,
     device: torch.device,
+    ckpt_dir: Path,
 ) -> tuple[int, float]:
-    """Optionally initialise from a checkpoint before training.
+    """Restore training state before the loop, resuming automatically.
 
-    Two mutually exclusive modes, both off by default:
+    Resolution order:
 
-    * ``training.resume``: resume an interrupted run -- restore the model,
-      optimizer, LR scheduler, EMA shadow and epoch/best-val counters and
-      continue the schedule from where it stopped.
-    * ``training.init_from_checkpoint``: start a *new* run from pretrained
-      weights -- load the model weights only (fresh optimizer, epoch 0). With
-      ``strict=false`` a checkpoint that only holds a subset of modules (e.g.
-      encoders + predictor) loads those and leaves the rest at initialization.
-      Combined with two-phase training this is how a decoder is trained on top
-      of frozen pretrained encoders + predictor.
+    1. **Explicit resume** (``training.resume.enabled`` + ``checkpoint_path``):
+       restore from that specific checkpoint (e.g. one produced elsewhere).
+    2. **Automatic resume:** if the run's stable ``ckpt_dir`` already holds an
+       ``epoch_*.pt``, restore the latest and continue. This is what lets a
+       resubmitted / singleton-chained job pick up where it stopped with no
+       config change -- the fix for Hydra's timestamped per-run dirs.
+    3. **Init from pretrained** (``training.init_from_checkpoint.path``): load
+       model weights only (fresh optimizer, epoch 0). With ``strict=false`` a
+       checkpoint holding a subset of modules loads those and leaves the rest
+       at initialization (e.g. a decoder on frozen pretrained encoders).
+    4. Otherwise start fresh from epoch 0.
 
     Returns the ``(start_epoch, best_val_loss)`` the training loop should use.
     """
     train_cfg = cfg.training
-
     resume_cfg = train_cfg.get("resume", None)
+
+    # (1) explicit external path wins; else (2) latest in the stable ckpt_dir.
+    explicit = None
     if resume_cfg is not None and bool(resume_cfg.get("enabled", False)):
-        ckpt_path = resume_cfg.get("checkpoint_path")
-        if not ckpt_path:
-            raise ValueError("training.resume.enabled=true requires checkpoint_path.")
+        explicit = resume_cfg.get("checkpoint_path")
+        if not explicit:
+            raise ValueError(
+                "training.resume.enabled=true requires checkpoint_path; omit "
+                "resume.enabled to auto-resume from the run's checkpoint dir."
+            )
+    resume_path = explicit or _latest_checkpoint(ckpt_dir)
+
+    if resume_path:
         # Trusted (self-produced) checkpoint: weights_only=False so the bundled
         # optimizer / scheduler state loads too.
-        payload = torch.load(str(ckpt_path), map_location=device, weights_only=False)
-        model.load_state_dict(
-            payload["model"], strict=bool(resume_cfg.get("strict", True))
+        payload = torch.load(str(resume_path), map_location=device, weights_only=False)
+        strict = bool(resume_cfg.get("strict", True)) if resume_cfg else True
+        load_opt = bool(resume_cfg.get("load_optimizer", True)) if resume_cfg else True
+        load_sched = (
+            bool(resume_cfg.get("load_scheduler", True)) if resume_cfg else True
         )
-        if bool(resume_cfg.get("load_optimizer", True)) and payload.get("optimizer"):
+        model.load_state_dict(payload["model"], strict=strict)
+        if load_opt and payload.get("optimizer"):
             optimizer.load_state_dict(payload["optimizer"])
-        if (
-            bool(resume_cfg.get("load_scheduler", True))
-            and lr_scheduler is not None
-            and payload.get("lr_scheduler")
-        ):
+        if load_sched and lr_scheduler is not None and payload.get("lr_scheduler"):
             lr_scheduler.load_state_dict(payload["lr_scheduler"])
         if ema is not None and payload.get("ema_shadow"):
             ema.shadow = {k: v.to(device) for k, v in payload["ema_shadow"].items()}
         start_epoch = int(payload.get("epoch", 0))
         best_val = float(payload.get("best_val_loss", float("inf")))
+        mode = "explicit" if explicit else "auto"
         log.info(
-            "Resumed from %s at epoch %d (best_val=%.4e)",
-            ckpt_path,
+            "[resume:%s] Resumed from %s at epoch %d (best_val=%.4e)",
+            mode,
+            resume_path,
             start_epoch,
             best_val,
         )
@@ -835,16 +879,36 @@ def main(cfg: DictConfig) -> None:
     world_size = dm.world_size
     is_main = dm.rank == 0
 
+    # fp16 + multi-GPU is unsupported: the manual gradient all-reduce averages
+    # unscaled grads directly, with no cross-rank GradScaler coordination, so a
+    # per-rank scaler could diverge (one rank skipping a step on inf/nan while
+    # others step). bf16 needs no scaler and is the supported multi-GPU path.
+    if world_size > 1 and str(cfg.training.precision).lower() == "fp16":
+        raise ValueError(
+            "fp16 + multi-GPU (world_size>1) is unsupported by the manual "
+            "gradient all-reduce; use precision=bf16."
+        )
+
     # Same seed on every rank -> identical model initialization, which manual
     # gradient averaging then keeps in lockstep. (Dataset subsampling uses its
     # own per-call RNG and is sharded by the DistributedSampler.)
     set_seed(int(cfg.seed))
     device = dm.device
     output_dir = Path(HydraConfig.get().runtime.output_dir)
-    ckpt_dir = output_dir / cfg.output_dir / "checkpoints"
-    tb_dir = output_dir / cfg.output_dir / "tensorboard"
+    # Checkpoints + tensorboard go to a STABLE per-run directory resolved
+    # relative to the launch dir (not Hydra's timestamped run dir), so a
+    # resubmitted / singleton-chained job resumes from the same place instead
+    # of starting fresh in a new `outputs/<date>/<time>/` folder each time.
+    run_dir = Path(to_absolute_path(str(cfg.checkpoint_root))) / str(cfg.run_name)
+    ckpt_dir = run_dir / "checkpoints"
+    tb_dir = run_dir / "tensorboard"
     if is_main:
-        log.info("Output dir: %s  (world_size=%d)", output_dir, world_size)
+        log.info(
+            "Hydra dir: %s | run dir: %s  (world_size=%d)",
+            output_dir,
+            run_dir,
+            world_size,
+        )
 
     # Data prep + loaders. Only rank 0 builds the split/stats artifacts; the
     # other ranks wait at the barrier, then read the finished files.
@@ -939,6 +1003,7 @@ def main(cfg: DictConfig) -> None:
         lr_scheduler=lr_scheduler,
         ema=ema,
         device=device,
+        ckpt_dir=ckpt_dir,
     )
 
     for epoch in range(start_epoch, int(cfg.training.epochs)):

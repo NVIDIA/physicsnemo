@@ -104,10 +104,17 @@ runs:
       shell: bash
       env:
         EXPECTED_UV_VERSION: ${{ inputs.uv-version }}
+        EXPECTED_PYTHON_VERSION: ${{ inputs.python-version }}
       run: |
         set -euo pipefail
         python3 --version
         uv --version
+        # Keep the container Python aligned with its cache key.
+        actual_py="$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+        if [ "$actual_py" != "$EXPECTED_PYTHON_VERSION" ]; then
+          echo "::error::Python version mismatch: expected ${EXPECTED_PYTHON_VERSION}, got ${actual_py}"
+          exit 1
+        fi
         # Hard-fail if the installed uv does not match the pin -- otherwise
         # the cache prefix would lie about which uv produced the wheels.
         actual_uv="$(uv --version | awk '{print $2}')"
