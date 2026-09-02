@@ -203,8 +203,8 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
         self,
         fn: Callable[[Mesh], Mesh],
         *,
-        interior: bool = True,
-        boundaries: bool = True,
+        interior: builtins.bool = True,
+        boundaries: builtins.bool = True,
     ) -> "DomainMesh":
         r"""Apply a Mesh-to-Mesh function to meshes in the domain.
 
@@ -394,7 +394,7 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
 
     def translate(
         self,
-        offset: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float],
+        offset: Float[torch.Tensor, " n_spatial_dims"] | Sequence[builtins.float],
     ) -> "DomainMesh":
         r"""Translate all meshes in the domain by a constant offset.
 
@@ -415,15 +415,17 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
 
     def rotate(
         self,
-        angle: float,
+        angle: builtins.float,
         axis: Float[torch.Tensor, " n_spatial_dims"]
-        | Sequence[float]
+        | Sequence[builtins.float]
         | Literal["x", "y", "z"]
         | None = None,
-        center: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float] | None = None,
-        transform_point_data: bool | TensorDict = False,
-        transform_cell_data: bool | TensorDict = False,
-        transform_global_data: bool | TensorDict = False,
+        center: Float[torch.Tensor, " n_spatial_dims"]
+        | Sequence[builtins.float]
+        | None = None,
+        transform_point_data: builtins.bool | TensorDict = False,
+        transform_cell_data: builtins.bool | TensorDict = False,
+        transform_global_data: builtins.bool | TensorDict = False,
     ) -> "DomainMesh":
         r"""Rotate all meshes in the domain about an axis.
 
@@ -493,12 +495,14 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
 
     def scale(
         self,
-        factor: float | Float[torch.Tensor, " n_spatial_dims"],
-        center: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float] | None = None,
-        transform_point_data: bool | TensorDict = False,
-        transform_cell_data: bool | TensorDict = False,
-        transform_global_data: bool | TensorDict = False,
-        assume_invertible: bool | None = None,
+        factor: builtins.float | Float[torch.Tensor, " n_spatial_dims"],
+        center: Float[torch.Tensor, " n_spatial_dims"]
+        | Sequence[builtins.float]
+        | None = None,
+        transform_point_data: builtins.bool | TensorDict = False,
+        transform_cell_data: builtins.bool | TensorDict = False,
+        transform_global_data: builtins.bool | TensorDict = False,
+        assume_invertible: builtins.bool | None = None,
     ) -> "DomainMesh":
         r"""Scale all meshes in the domain by specified factor(s).
 
@@ -567,10 +571,10 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
     def transform(
         self,
         matrix: Float[torch.Tensor, "new_n_spatial_dims n_spatial_dims"],
-        transform_point_data: bool | TensorDict = False,
-        transform_cell_data: bool | TensorDict = False,
-        transform_global_data: bool | TensorDict = False,
-        assume_invertible: bool | None = None,
+        transform_point_data: builtins.bool | TensorDict = False,
+        transform_cell_data: builtins.bool | TensorDict = False,
+        transform_global_data: builtins.bool | TensorDict = False,
+        assume_invertible: builtins.bool | None = None,
     ) -> "DomainMesh":
         r"""Apply a linear transformation to all meshes in the domain.
 
@@ -1090,10 +1094,10 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
 
     def clean(
         self,
-        tolerance: float = 1e-12,
-        merge_points: bool = True,
-        remove_duplicate_cells: bool = True,
-        remove_unused_points: bool = True,
+        tolerance: builtins.float = 1e-12,
+        merge_points: builtins.bool = True,
+        remove_duplicate_cells: builtins.bool = True,
+        remove_unused_points: builtins.bool = True,
     ) -> "DomainMesh":
         r"""Clean and repair all meshes in the domain.
 
@@ -1147,7 +1151,7 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
 
     def subdivide(
         self,
-        levels: int = 1,
+        levels: builtins.int = 1,
         filter: Literal["linear", "butterfly", "loop"] = "linear",
     ) -> "DomainMesh":
         r"""Subdivide all meshes in the domain.
@@ -1170,7 +1174,9 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
 
     ### Data Operations
 
-    def cell_data_to_point_data(self, overwrite_keys: bool = False) -> "DomainMesh":
+    def cell_data_to_point_data(
+        self, overwrite_keys: builtins.bool = False
+    ) -> "DomainMesh":
         r"""Convert cell data to point data on all meshes in the domain.
 
         Delegates to :meth:`Mesh.cell_data_to_point_data` for each mesh.
@@ -1189,7 +1195,9 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
             lambda m: m.cell_data_to_point_data(overwrite_keys=overwrite_keys)
         )
 
-    def point_data_to_cell_data(self, overwrite_keys: bool = False) -> "DomainMesh":
+    def point_data_to_cell_data(
+        self, overwrite_keys: builtins.bool = False
+    ) -> "DomainMesh":
         r"""Convert point data to cell data on all meshes in the domain.
 
         Delegates to :meth:`Mesh.point_data_to_cell_data` for each mesh.
@@ -1272,15 +1280,15 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
 
     def validate(
         self,
-        check_degenerate_cells: bool = True,
-        check_duplicate_vertices: bool = True,
-        check_inverted_cells: bool = False,
-        check_out_of_bounds: bool = True,
-        check_manifoldness: bool = False,
-        tolerance: float | None = None,
-        raise_on_error: bool = False,
+        check_degenerate_cells: builtins.bool = True,
+        check_duplicate_vertices: builtins.bool = True,
+        check_inverted_cells: builtins.bool = False,
+        check_out_of_bounds: builtins.bool = True,
+        check_manifoldness: builtins.bool = False,
+        tolerance: builtins.float | None = None,
+        raise_on_error: builtins.bool = False,
         *,
-        check_self_intersection: bool = False,
+        check_self_intersection: builtins.bool = False,
     ) -> dict[str, Any]:
         r"""Validate all meshes in the domain and aggregate results.
 
@@ -1363,7 +1371,7 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
         return sorted(self.boundaries.keys())
 
     @property
-    def n_boundaries(self) -> int:
+    def n_boundaries(self) -> builtins.int:
         """Number of boundary meshes.
 
         Returns
@@ -1417,7 +1425,7 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
         """
         yield from self.all_meshes()
 
-    def merge_boundaries(self, preserve_data: bool = False) -> Mesh:
+    def merge_boundaries(self, preserve_data: builtins.bool = False) -> Mesh:
         """Merge all boundary meshes into a single :class:`Mesh`.
 
         Produces a mesh containing the concatenated points and cells from
@@ -1460,7 +1468,7 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
         geometry_only = [Mesh(points=b.points, cells=b.cells) for b in boundaries]
         return Mesh.merge(geometry_only)
 
-    def is_boundary_watertight(self, tolerance: float = 1e-6) -> bool:
+    def is_boundary_watertight(self, tolerance: builtins.float = 1e-6) -> builtins.bool:
         r"""Check whether the merged boundary meshes form a watertight surface.
 
         Merges all boundary meshes via :meth:`merge_boundaries`, deduplicates
@@ -1503,16 +1511,16 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
         self,
         *,
         backend: Literal["matplotlib", "pyvista", "auto"] = "auto",
-        show: bool = True,
+        show: builtins.bool = True,
         point_scalars: None | torch.Tensor | str | tuple[str, ...] = None,
         cell_scalars: None | torch.Tensor | str | tuple[str, ...] = None,
         cmap: str = "viridis",
-        vmin: float | None = None,
-        vmax: float | None = None,
-        alpha_points: float = 1.0,
-        alpha_cells: float = 1.0,
-        alpha_edges: float = 1.0,
-        show_edges: bool = False,
+        vmin: builtins.float | None = None,
+        vmax: builtins.float | None = None,
+        alpha_points: builtins.float = 1.0,
+        alpha_cells: builtins.float = 1.0,
+        alpha_edges: builtins.float = 1.0,
+        show_edges: builtins.bool = False,
         boundary_kwargs: dict[str, Any] | None = None,
         ax: "matplotlib.axes.Axes | pyvista.Plotter | None" = None,
         backend_options: dict[str, Any] | None = None,

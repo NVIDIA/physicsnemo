@@ -2,7 +2,7 @@ name: Install CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "*-rc"]
   pull_request:
     branches: [main, "*-rc"]
   schedule:
@@ -46,8 +46,8 @@ jobs:
       matrix:
         # Matrix varies by event type:
         #   PR/merge_group:  ubuntu × 3.12 only (1 job)
-        #   push:            ubuntu × all Python versions (3 jobs)
-        #   schedule/manual: ubuntu × all versions + ubuntu-arm/mac/win × 3.13 (6 jobs)
+        #   push:            ubuntu × all Python versions (4 jobs)
+        #   schedule/manual: ubuntu × all versions + arm/mac/win × 3.14 (7 jobs)
         include: >-
           ${{
             (github.event_name == 'pull_request' || github.event_name == 'merge_group')
@@ -66,11 +66,8 @@ jobs:
                 {"os": "ubuntu-latest",    "python-version": "3.12"},
                 {"os": "ubuntu-latest",    "python-version": "3.13"},
                 {"os": "ubuntu-latest",    "python-version": "3.14"},
-                {"os": "ubuntu-24.04-arm", "python-version": "3.13"},
                 {"os": "ubuntu-24.04-arm", "python-version": "3.14"},
-                {"os": "macos-latest",     "python-version": "3.13"},
                 {"os": "macos-latest",     "python-version": "3.14"},
-                {"os": "windows-latest",   "python-version": "3.13"},
                 {"os": "windows-latest",   "python-version": "3.14"}
               ]')
           }}
@@ -79,6 +76,7 @@ jobs:
     - uses: actions/checkout@v6
 
     - uses: actions/setup-python@v6
+      id: setup_python
       with:
         python-version: ${{ matrix.python-version }}
 
@@ -102,7 +100,23 @@ jobs:
           }}
 
     - name: Install package with uv
+      env:
+        UV_PYTHON: ${{ steps.setup_python.outputs.python-path }}
+        UV_PYTHON_DOWNLOADS: never
       run: uv sync --frozen --group dev
 
+    - name: Verify Python version
+      env:
+        UV_PYTHON: ${{ steps.setup_python.outputs.python-path }}
+        UV_PYTHON_DOWNLOADS: never
+      run: >-
+        uv run --no-sync python -c
+        "import sys; expected=tuple(map(int, '${{ matrix.python-version }}'.split('.')));
+        actual=sys.version_info[:2]; assert actual == expected,
+        f'Expected Python {expected}, got {sys.version}'"
+
     - name: Run tests
-      run: uv run pytest test/
+      env:
+        UV_PYTHON: ${{ steps.setup_python.outputs.python-path }}
+        UV_PYTHON_DOWNLOADS: never
+      run: uv run --no-sync pytest test/

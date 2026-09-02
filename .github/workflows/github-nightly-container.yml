@@ -34,6 +34,13 @@ on:
 
 # Container image used across all jobs - update this single value to change everywhere
 # Note: env context not available in container.image, so we hardcode the value
+
+env:
+  # Use only the container's Python.
+  UV_PYTHON: python3
+  UV_PYTHON_DOWNLOADS: never
+  UV_NO_MANAGED_PYTHON: "1"
+
 jobs:
   # Stage 1: Build and cache the environment
   build-environment:

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
-# You may not use this file except in compliance with the License.
+# you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
@@ -14,21 +14,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-defaults:
-  -  core
+"""Legacy import shim for the FLARE attention layer."""
 
-# Overrides for volume data:
-mode: volume
+import warnings
 
-# Sample volume points while training. Inference overrides this to read all points.
-volume_sample_from_disk: true
+from physicsnemo.core.warnings import LegacyFeatureWarning
+from physicsnemo.nn.module.flare_attention import FLARE
 
-# volume-specific needs:
-data_keys:
-  - "volume_fields"
-  - "volume_mesh_centers"
-  - "stl_faces"
-  - "stl_centers"
-  - "stl_coordinates"
-  - "air_density"
-  - "stream_velocity"
+warnings.warn(
+    "Importing from 'physicsnemo.experimental.nn.flare_attention' is deprecated. "
+    "Use 'from physicsnemo.nn import FLARE' instead. "
+    "This backward-compatibility shim will be removed in a future release.",
+    LegacyFeatureWarning,
+    stacklevel=2,
+)
+
+__all__ = ["FLARE"]

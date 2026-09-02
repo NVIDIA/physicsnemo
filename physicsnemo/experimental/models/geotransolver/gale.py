@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
-# You may not use this file except in compliance with the License.
+# you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
@@ -14,21 +14,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-defaults:
-  -  core
+"""Legacy import shim for the GALE attention layers."""
 
-# Overrides for volume data:
-mode: volume
+from physicsnemo.nn.module.gale import (
+    GALE,
+    GALE_FA,
+    GALEStructuredMesh2D,
+    GALEStructuredMesh3D,
+)
 
-# Sample volume points while training. Inference overrides this to read all points.
-volume_sample_from_disk: true
+# The move out of experimental renamed GALE_block to GALEBlock.
+from physicsnemo.nn.module.gale import GALEBlock as GALE_block
 
-# volume-specific needs:
-data_keys:
-  - "volume_fields"
-  - "volume_mesh_centers"
-  - "stl_faces"
-  - "stl_centers"
-  - "stl_coordinates"
-  - "air_density"
-  - "stream_velocity"
+__all__ = [
+    "GALE",
+    "GALE_FA",
+    "GALE_block",
+    "GALEStructuredMesh2D",
+    "GALEStructuredMesh3D",
+]

@@ -22,6 +22,10 @@
 # pipeline does not yet expose all the volume-grid / neighbor features
 # DoMINO's full forward expects).  The forward_kwargs spec below is
 # illustrative; see the surface variant for context.
+dataset_reader_overrides:
+  # This point-based model consumes only the volume interior.
+  drop_in_file_boundaries: true
+
 input_type: tensors
 output_type: tensors
 

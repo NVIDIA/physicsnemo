@@ -15,7 +15,10 @@
 # limitations under the License.
 
 import gc
+import importlib
 import pickle
+import re
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -23,6 +26,7 @@ import torch
 from omegaconf import OmegaConf
 
 from physicsnemo.core.module import Module
+from physicsnemo.core.warnings import LegacyFeatureWarning
 from physicsnemo.models.geotransolver import geotransolver as geotransolver_module
 from physicsnemo.models.geotransolver.geotransolver import (
     GeoTransolver,
@@ -904,6 +908,30 @@ def test_geotransolver_legacy_checkpoint_class_path():
 
     assert LegacyPackageGeoTransolver is GeoTransolver
     assert LegacyModuleGeoTransolver is GeoTransolver
+
+
+def test_geotransolver_legacy_import_paths():
+    """Test the component import paths used before the move out of experimental."""
+    import physicsnemo.models.geotransolver as production_pkg
+
+    # Drop the cached legacy modules so the shim warning fires again.
+    for module_name in list(sys.modules):
+        if module_name.startswith("physicsnemo.experimental.models.geotransolver"):
+            del sys.modules[module_name]
+
+    with pytest.warns(
+        LegacyFeatureWarning, match=re.escape("physicsnemo.models.geotransolver")
+    ):
+        legacy_pkg = importlib.import_module(
+            "physicsnemo.experimental.models.geotransolver"
+        )
+
+    for legacy_name in legacy_pkg.__all__:
+        # The move out of experimental renamed GALE_block to GALEBlock.
+        production_name = "GALEBlock" if legacy_name == "GALE_block" else legacy_name
+        assert getattr(legacy_pkg, legacy_name) is getattr(
+            production_pkg, production_name
+        ), f"'{legacy_name}' does not resolve to production '{production_name}'"
 
 
 def test_geotransolver_checkpoint(device):
