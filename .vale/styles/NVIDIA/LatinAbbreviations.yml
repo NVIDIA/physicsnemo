@@ -1,0 +1,13 @@
+# Spell out Latin abbreviations in prose (per tech-writer convention:
+# "e.g." becomes "for example"). Adapted from the MIT-licensed Microsoft
+# style for Vale.
+extends: substitution
+message: "Use '%s' instead of '%s'."
+ignorecase: true
+level: error
+nonword: true
+action:
+  name: replace
+swap:
+  '\b(?:eg|e\.g\.)[\s,]': for example
+  '\b(?:ie|i\.e\.)[\s,]': that is

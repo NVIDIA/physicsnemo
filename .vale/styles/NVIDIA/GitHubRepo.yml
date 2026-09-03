@@ -1,0 +1,9 @@
+# NVIDIA writing guidelines (Technical Content > GitHub Repositories):
+# "Use a forward slash and a repository name for GitHub links."
+# Correct: the /NVIDIA/NeMo GitHub repo. Incorrect: the GitHub repo.
+extends: existence
+message: "Name the repository when referring to it, e.g. 'the /NVIDIA/PhysicsNeMo GitHub repo'."
+level: suggestion
+ignorecase: true
+raw:
+  - '\bthe GitHub repo(?:sitory)?\b'
