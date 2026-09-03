@@ -328,6 +328,53 @@ class TestDataInheritance:
                 rtol=1e-5,
             ), f"Edge [{v0}, {v1}] expected {expected}"
 
+    @pytest.mark.parametrize(
+        "data_source",
+        [pytest.param("cells", id="cells"), pytest.param("points", id="points")],
+    )
+    def test_complex_data_inheritance_preserves_imaginary_part(self, data_source):
+        """Regression: complex fields survive both data-inheritance routes.
+
+        Complex tensors are not "floating point" by ``torch``'s definition, so
+        both the cell-to-facet scatter and the point-to-facet vertex average
+        previously promoted them to float64 like an integer field, discarding
+        the imaginary part. Both routes are settings of one public method, so
+        they must agree.
+        """
+        ### Two triangles sharing edge [1, 2]
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+        cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
+
+        if data_source == "cells":
+            # Both triangles bound the shared edge: mean(1+2j, 3+6j) = 2+4j.
+            mesh = Mesh(
+                points=points,
+                cells=cells,
+                cell_data={"impedance": torch.tensor([1 + 2j, 3 + 6j])},
+            )
+            expected = torch.tensor(2 + 4j)
+        else:
+            # The shared edge averages its endpoints: mean(2+2j, 4+4j) = 3+3j.
+            mesh = Mesh(
+                points=points,
+                cells=cells,
+                point_data={
+                    "impedance": torch.tensor([1 + 1j, 2 + 2j, 4 + 4j, 8 + 8j])
+                },
+            )
+            expected = torch.tensor(3 + 3j)
+
+        facet_mesh = mesh.get_facet_mesh(data_source=data_source)
+
+        shared_edge_idx = torch.where(
+            (facet_mesh.cells[:, 0] == 1) & (facet_mesh.cells[:, 1] == 2)
+        )[0]
+        assert len(shared_edge_idx) == 1
+
+        impedance = facet_mesh.cell_data["impedance"]
+        assert impedance.dtype == torch.complex64
+        torch.testing.assert_close(impedance[shared_edge_idx[0]], expected)
+
     def test_multidimensional_data_aggregation(self):
         """Test that multidimensional face data is aggregated correctly."""
         ### Create two triangles
