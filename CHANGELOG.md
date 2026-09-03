@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NormalizeMeshFields.inverse_td` matched leaves by their last name only).
 - `from_pyvista` / `to_pyvista` round-trip nested `Mesh` data keys, and GLOBE
   accepts a nested `global_data_ranks` declaration.
+- Fixes out-of-bounds reads in the `Darcy2D` multi-grid solver for
+  `nr_multigrids >= 3` that could return huge or NaN pressure fields, and
+  corrects the coarse-node coordinates used by bilinear upsampling for
+  reduction factors greater than 2.
 
 ### Security
 

@@ -57,6 +57,11 @@ def index_zero_edges_batched_2d(
 ):  # pragma: no cover
     """Index batched 2d array with zero on edges
 
+    Any index outside ``[0, lx) x [0, ly)`` returns zero. Multi-grid stencils
+    with a reduction factor greater than 2 can step several cells past the
+    boundary, so this must cover the whole out-of-range domain and not just
+    the immediately adjacent cell.
+
     Parameters
     ----------
     array : wp.array3d
@@ -77,16 +82,9 @@ def index_zero_edges_batched_2d(
     float
         Array value
     """
-    if x == -1:
+    if x < 0 or x >= lx or y < 0 or y >= ly:
         return 0.0
-    elif x == lx:
-        return 0.0
-    elif y == -1:
-        return 0.0
-    elif y == ly:
-        return 0.0
-    else:
-        return array[b, x, y]
+    return array[b, x, y]
 
 
 @wp.func
