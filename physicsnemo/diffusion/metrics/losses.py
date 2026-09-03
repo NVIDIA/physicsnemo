@@ -171,9 +171,10 @@ class MSEDSMLoss:
         model wrapped with a preconditioner (e.g.,
         :class:`~physicsnemo.diffusion.preconditioners.EDMPreconditioner`).
         The output is interpreted according to ``prediction_type``: as a
-        clean-data estimate when ``"x0"``, or as a score when ``"score"``.
-        Must satisfy the
-        :class:`~physicsnemo.diffusion.DiffusionModel` protocol.
+        clean-data estimate when ``"x0"``, as a score when ``"score"``, as
+        noise when ``"epsilon"``, or as a flow (velocity) when ``"flow"``.
+        Must implement the :class:`~physicsnemo.diffusion.DiffusionModel`
+        protocol.
     noise_scheduler : NoiseScheduler
         Noise scheduler implementing the
         :class:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler`
@@ -200,14 +201,13 @@ class MSEDSMLoss:
     flow_to_x0_fn : Callable[[Tensor, Tensor, Tensor], Tensor], optional
         Callback to convert a flow (velocity) prediction to an
         :math:`\hat{\mathbf{x}}_0` estimate. Required when
-        ``prediction_type="flow"``, e.g.
-        :meth:`~physicsnemo.diffusion.noise_schedulers.LinearGaussianNoiseScheduler.flow_to_x0`.
+        ``prediction_type="flow"``. See above for the expected signature.
     reduction : Literal["none", "mean", "sum"], default="mean"
         Reduction to apply to the output: ``"none"`` returns the
         per-element loss, ``"mean"`` returns the mean over all elements,
         ``"sum"`` returns the sum over all elements. For irregular data
-        (padded batches, point clouds, graphs), use ``"none"`` and apply
-        your own reduction, such as a masked mean.
+        (e.g. padded batches, point clouds, etc.), use ``"none"`` and apply
+        your own reduction.
 
     Raises
     ------
@@ -503,7 +503,7 @@ class WeightedMSEDSMLoss:
     Parameters
     ----------
     model : DiffusionModel
-        Diffusion model to train. Must satisfy the
+        Diffusion model to train. Must implement the
         :class:`~physicsnemo.diffusion.DiffusionModel` protocol.
     noise_scheduler : NoiseScheduler
         Noise scheduler implementing the
@@ -526,8 +526,8 @@ class WeightedMSEDSMLoss:
     reduction : {"none", "mean", "sum"}, default="mean"
         Reduction to apply to the output: ``"none"`` returns the
         per-element loss, ``"mean"`` the mean, ``"sum"`` the sum. For
-        irregular data (padded batches, point clouds, graphs), use
-        ``"none"`` and apply your own reduction, such as a masked mean.
+        irregular data (e.g. padded batches, point clouds, etc.), use
+        ``"none"`` and apply your own reduction.
 
     Examples
     --------
@@ -683,32 +683,22 @@ class WeightedMSEDSMLoss:
 
 class FlowMatchingLoss:
     r"""
-    Flow matching loss with a flow (velocity) regression target.
+    Mean-squared-error loss for training flow-matching models with a flow
+    (velocity) target.
 
-    Given clean data :math:`\mathbf{x}_0` and a linear-Gaussian path
-    :math:`\mathbf{x}_t = \alpha(t)\mathbf{x}_0
-    + \sigma(t)\boldsymbol{\epsilon}`, the loss is:
+    This is the flow-matching counterpart of :class:`MSEDSMLoss`. It
+    regresses the model's prediction against a flow target
+    :math:`\mathbf{v}(\mathbf{x}_0, \mathbf{x}_t, t)` instead of
+    against clean data :math:`\mathbf{x}_0`:
 
     .. math::
         \mathcal{L} = \mathbb{E}_{t, \boldsymbol{\epsilon}}
         \left[ w(t) \left\| \hat{\mathbf{v}}(\mathbf{x}_t, t)
-        - \left(\dot{\alpha}(t)\mathbf{x}_0
-        + \dot{\sigma}(t)\boldsymbol{\epsilon}\right) \right\|^2 \right]
+        - \mathbf{v}(\mathbf{x}_0, \mathbf{x}_t, t) \right\|^2 \right]
 
-    With the default
-    :class:`~physicsnemo.diffusion.noise_schedulers.RectifiedFlowNoiseScheduler`,
-    the target reduces to the standard rectified-flow form
-    :math:`\mathbf{v} = \boldsymbol{\epsilon} - \mathbf{x}_0` with uniform
-    time sampling and unit loss weight. Any
-    :class:`~physicsnemo.diffusion.noise_schedulers.LinearGaussianNoiseScheduler`
-    subclass works, not only the flow matching path.
-
-    .. note::
-
-        For the flow matching path, the x0-to-flow conversion is singular
-        at :math:`t = 0` and the epsilon/score conversions at
-        :math:`t = 1`; restrict sampled times accordingly (e.g.
-        ``RectifiedFlowNoiseScheduler(t_min=1e-3)`` for x0 prediction).
+    See :class:`MSEDSMLoss` for the shared mechanics: the noise
+    scheduler interface (time sampling, noise injection, loss weighting),
+    the ``model`` signature, and the ``reduction`` options.
 
     .. warning::
 
@@ -717,48 +707,41 @@ class FlowMatchingLoss:
         :class:`~physicsnemo.diffusion.noise_schedulers.DomainParallelNoiseScheduler`;
         a plain scheduler with sharded data raises a ``ValueError``.
 
-    .. note::
-
-        Flow matching times live in ``[0, 1]``, while DDPM++/DiT-style
-        timestep embedders expect inputs spanning roughly ``[0, 1000]``.
-        Scale ``t`` inside your model (e.g. multiply by ``999.0`` before
-        the time embedding), identically at training and sampling time — a
-        mismatched scale silently shifts the embedding out of its trained
-        range.
-
     Parameters
     ----------
     model : DiffusionModel
-        Diffusion model to train. ``prediction_type`` sets how the loss
-        interprets the output. Must follow the
+        Flow-matching model to train.
+        The loss interprets the output according to ``prediction_type``: as a
+        flow (velocity) estimate when ``"flow"``, as clean data when
+        ``"x0"``, as a score when ``"score"``, or as noise when
+        ``"epsilon"``. Must implement the
         :class:`~physicsnemo.diffusion.DiffusionModel` protocol.
     noise_scheduler : NoiseScheduler
         Noise scheduler implementing the
         :class:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler`
-        protocol, used for time sampling, noise injection, and loss
-        weighting. Typically a
-        :class:`~physicsnemo.diffusion.noise_schedulers.RectifiedFlowNoiseScheduler`.
+        protocol (see :class:`MSEDSMLoss` for details).
     prediction_type : PredictorType, default="flow"
         The prediction the model outputs. Use ``"flow"`` when the
         model directly predicts the flow (velocity) (the most common case
         for flow matching). Use ``"x0"``, ``"score"``, or ``"epsilon"``
         when the model predicts clean data, the score, or the noise; the
         matching ``*_to_flow_fn`` callback then converts the prediction to
-        a flow estimate.
+        the flow target :math:`\mathbf{v}`.
     x0_to_flow_fn : Callable[[Tensor, Tensor, Tensor], Tensor]
-        Callback ``(x0, x_t, t) -> flow`` computing the flow from clean
-        data. Always required: it computes the regression target, and also
-        converts the prediction when ``prediction_type="x0"``. For
+        Callback ``(x0, x_t, t) -> v`` computing the flow target
+        :math:`\mathbf{v}(\mathbf{x}_0, \mathbf{x}_t, t)` (see the equation
+        above) from clean data. Always required. For
         :class:`~physicsnemo.diffusion.noise_schedulers.LinearGaussianNoiseScheduler`
-        subclasses, pass
+        subclasses, in most cases pass
         :meth:`~physicsnemo.diffusion.noise_schedulers.LinearGaussianNoiseScheduler.x0_to_flow`.
     score_to_flow_fn : Callable[[Tensor, Tensor, Tensor], Tensor], optional
-        Callback to convert a score prediction to a flow estimate. Required
-        when ``prediction_type="score"``, e.g.
-        :meth:`~physicsnemo.diffusion.noise_schedulers.LinearGaussianNoiseScheduler.score_to_flow`.
+        Callback ``(score, x_t, t) -> v`` converting a score prediction to
+        the flow target :math:`\mathbf{v}`. Required when
+        ``prediction_type="score"``.
     epsilon_to_flow_fn : Callable[[Tensor, Tensor, Tensor], Tensor], optional
-        Callback to convert an epsilon (noise) prediction to a flow
-        estimate. Required when ``prediction_type="epsilon"``.
+        Callback ``(epsilon, x_t, t) -> v`` converting an epsilon (noise)
+        prediction to the flow target :math:`\mathbf{v}`. Required when
+        ``prediction_type="epsilon"``.
     reduction : Literal["none", "mean", "sum"], default="mean"
         Reduction to apply to the output: ``"none"`` returns the
         per-element loss, ``"mean"`` returns the mean over all elements,
@@ -927,24 +910,25 @@ class FlowMatchingLoss:
 
 class WeightedFlowMatchingLoss:
     r"""
-    Weighted flow matching loss.
+    Weighted mean-squared-error flow matching loss.
 
-    Identical to :class:`FlowMatchingLoss` but adds a
+    Identical to :class:`FlowMatchingLoss` but accepts a
     ``weight`` argument that multiplies the per-element squared error.
 
     .. math::
         \mathcal{L} = \mathbb{E}_{t, \boldsymbol{\epsilon}}
         \left[ w(t) \left\| \mathbf{m} \odot
         \left(\hat{\mathbf{v}}(\mathbf{x}_t, t)
-        - \left(\dot{\alpha}(t)\mathbf{x}_0
-        + \dot{\sigma}(t)\boldsymbol{\epsilon}\right)\right) \right\|^2 \right]
+        - \mathbf{v}(\mathbf{x}_0, \mathbf{x}_t, t)\right) \right\|^2 \right]
 
     where :math:`\mathbf{m}` is the element-wise weight (e.g., a binary
-    mask over spatial regions, channels, or padded elements of
-    variable-size point clouds or graphs). Note that ``weight`` differs
-    from the time-dependent loss weight :math:`w(t)` of the noise
-    scheduler. See :class:`FlowMatchingLoss` for prediction types,
-    signatures, singularities, and the time-scaling caveat.
+    mask). A common use case is masking out certain spatial regions or
+    channels of the state.
+
+    .. note::
+
+        The ``weight`` argument is **not** related to the time-dependent
+        loss weight :math:`w(t)` provided by the noise scheduler.
 
     .. warning::
 
@@ -956,31 +940,30 @@ class WeightedFlowMatchingLoss:
     Parameters
     ----------
     model : DiffusionModel
-        Diffusion model to train. ``prediction_type`` sets how the loss
-        interprets the output. Must follow the
+        Flow-matching model to train. Must implement the
         :class:`~physicsnemo.diffusion.DiffusionModel` protocol.
     noise_scheduler : NoiseScheduler
         Noise scheduler implementing the
         :class:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler`
-        protocol. See :class:`FlowMatchingLoss`.
+        protocol.
     prediction_type : PredictorType, default="flow"
-        The prediction the model outputs. See :class:`FlowMatchingLoss`.
+        The prediction the model outputs.
     x0_to_flow_fn : callable
-        Callback ``(x0, x_t, t) -> flow`` computing the flow from clean
-        data. Always required: it computes the regression target. See
-        :class:`FlowMatchingLoss`.
+        Callback ``(x0, x_t, t) -> v`` computing the flow target
+        :math:`\mathbf{v}` from clean data. Always required.
     score_to_flow_fn : callable, optional
-        Callback to convert a score prediction to a flow estimate. Required
-        when ``prediction_type="score"``.
+        Callback ``(score, x_t, t) -> v`` converting a score prediction to
+        the flow target :math:`\mathbf{v}`. Required when
+        ``prediction_type="score"``.
     epsilon_to_flow_fn : callable, optional
-        Callback to convert an epsilon (noise) prediction to a flow
-        estimate. Required when ``prediction_type="epsilon"``.
-    reduction : Literal["none", "mean", "sum"], default="mean"
+        Callback ``(epsilon, x_t, t) -> v`` converting an epsilon (noise)
+        prediction to the flow target :math:`\mathbf{v}`. Required when
+        ``prediction_type="epsilon"``.
+    reduction : {"none", "mean", "sum"}, default="mean"
         Reduction to apply to the output: ``"none"`` returns the
-        per-element loss, ``"mean"`` returns the mean over all elements,
-        ``"sum"`` returns the sum over all elements. For irregular data
-        (padded batches, point clouds, graphs), use ``"none"`` and apply
-        your own reduction, such as a masked mean.
+        per-element loss, ``"mean"`` the mean, ``"sum"`` the sum. For
+        irregular data (e.g. padded batches, point clouds, etc.), use
+        ``"none"`` and apply your own reduction.
 
     Raises
     ------
