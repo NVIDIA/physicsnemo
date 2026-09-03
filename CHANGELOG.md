@@ -118,6 +118,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The contract is dimension-generic; `n = 3` raises `NotImplementedError`
   pending exact boundary recovery. Also adds `polygon_interior_point`,
   which returns a point strictly inside a simple polygon.
+- Adds `mesh_lsq_hessian` to `physicsnemo.nn.functional`, providing a
+  differentiable, scale-normalized quadratic least-squares reconstruction of
+  full symmetric Hessians on unstructured CSR neighborhoods, with Torch and
+  Warp implementations.
 - Adds `rectilinear_grid_divergence`, `rectilinear_grid_curl`, and
   `rectilinear_grid_laplacian` to `physicsnemo.nn.functional`, with Torch and
   fused Warp implementations for periodic, nonuniform rectilinear grids.
