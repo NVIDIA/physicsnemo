@@ -640,6 +640,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   broke the `test_get_checkpoint_dir` CI test on Windows. The function now
   always joins with `/`, working uniformly for local paths and `fsspec`
   URIs (`msc://`, etc.) across operating systems.
+- `DefaultTrainingLoop` no longer applies two optimizer updates per minibatch
+  when `enable_static_capture=True`. `StaticCaptureTraining` steps the optimizer
+  through its grad scaler, and the loop stepped again on the same gradients,
+  doubling the effective learning rate and bypassing the grad scaler's
+  inf/nan check.
 
 ### Security
 
