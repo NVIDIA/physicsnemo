@@ -68,7 +68,10 @@ def _nested_domain(n: int = 8) -> DomainMesh:
 
 
 class TestExtractTargets:
+    """``extract_targets`` with dotted target names."""
+
     def test_nested_targets_selected_with_nesting_kept(self):
+        """Nested targets are selected and keep their nesting and batch size."""
         domain = _nested_domain()
         targets = extract_targets(domain, TARGETS)
         assert set(targets.keys(include_nested=True, leaves_only=True)) == {
@@ -78,6 +81,7 @@ class TestExtractTargets:
         assert targets.batch_size == domain.interior.point_data.batch_size
 
     def test_missing_nested_target_lists_leaves(self):
+        """A missing nested target raises KeyError listing the available leaves."""
         domain = _nested_domain()
         try:
             extract_targets(domain, {"solution.nope": "scalar"})
@@ -88,7 +92,10 @@ class TestExtractTargets:
 
 
 class TestOutputNormalize:
+    """Model-output adapters produce the same nested structure as the targets."""
+
     def test_tensor_output_split_matches_nested_targets(self):
+        """A (B, N, C) tensor output splits into the targets' nested key set."""
         domain = _nested_domain()
         targets = extract_targets(domain, TARGETS).unsqueeze(0)
         pred = normalize_output_to_tensordict(torch.randn(1, 8, 4), TARGETS, "tensors")
@@ -96,18 +103,23 @@ class TestOutputNormalize:
         validate_field_coverage(TARGETS, pred, targets)
 
     def test_split_concat_scalar_squeezed_vector_kept(self):
+        """Scalar leaves drop the channel dim; vector leaves keep it."""
         pred = split_concat_by_target(torch.randn(1, 8, 4), TARGETS)
         assert pred["solution", "gauge_pressure"].shape == (1, 8)
         assert pred["solution", "wall_shear_stress"].shape == (1, 8, 3)
 
     def test_mesh_output_select_nested(self):
+        """A Mesh output's nested point_data leaves are selected by dotted name."""
         domain = _nested_domain()
         pred = normalize_output_to_tensordict(domain.interior, TARGETS, "mesh")
         assert ("solution", "wall_shear_stress") in pred
 
 
 class TestLossAndMetrics:
+    """Loss and metric calculators look up nested leaves and emit flat keys."""
+
     def test_loss_and_metrics_on_nested_tensordicts(self):
+        """Nested pred/target TensorDicts yield flat, config-spelled loss and metric keys."""
         domain = _nested_domain()
         target = extract_targets(domain, TARGETS).unsqueeze(0)
         pred = split_concat_by_target(torch.randn(1, 8, 4), TARGETS)
@@ -126,6 +138,7 @@ class TestLossAndMetrics:
         assert "solution.wall_shear_stress_x_l2" in metrics.keys()
 
     def test_validate_field_coverage_reports_nested_missing(self):
+        """A missing nested target is reported by its dotted name."""
         pred = TensorDict(
             {"solution": {"gauge_pressure": torch.zeros(2)}}, batch_size=[]
         )
@@ -138,6 +151,8 @@ class TestLossAndMetrics:
 
 
 class TestNonDimensionalize:
+    """``NonDimensionalizeByMetadata`` forward and inverse on nested fields."""
+
     def _nondim(self):
         return NonDimensionalizeByMetadata(
             fields={
@@ -148,6 +163,7 @@ class TestNonDimensionalize:
         )
 
     def test_forward_on_domain_transforms_nested_leaf(self):
+        """The DomainMesh path non-dimensionalizes a nested leaf and leaves others alone."""
         domain = _nested_domain()
         out = self._nondim().apply_to_domain(domain)
         q_inf, p_inf, *_ = freestream_scales(domain.global_data)
@@ -162,6 +178,7 @@ class TestNonDimensionalize:
         )
 
     def test_inverse_td_round_trip_nested(self):
+        """``inverse_td`` recovers the original nested fields."""
         domain = _nested_domain()
         nondim = self._nondim()
         forward = nondim.apply_to_domain(domain).interior.point_data
@@ -182,6 +199,7 @@ class TestNonDimensionalize:
             assert torch.allclose(back[key], domain.interior.point_data[key], atol=1e-4)
 
     def test_inverse_td_does_not_match_by_leaf_name(self):
+        """``inverse_td`` matches on the full key, not the last path component."""
         ### A leaf named "p" inside an unrelated group must not be redimmed
         ### by stats declared for the top-level "p".
         nondim = NonDimensionalizeByMetadata(fields={"p": "stress"})
@@ -196,7 +214,10 @@ class TestNonDimensionalize:
 
 
 class TestCollate:
+    """The tensors-mode collate on nested targets and group-valued kwargs."""
+
     def test_tensors_mode_batches_nested_targets_and_group_kwargs(self):
+        """Nested targets and a TensorDict-valued kwarg both get the batch dim."""
         domain = _nested_domain()
         collate = build_collate_fn(
             "tensors",
