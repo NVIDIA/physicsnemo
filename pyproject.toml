@@ -84,6 +84,7 @@ conflicts = [
 torch-sparse = ["torch"]
 torch-cluster = ["torch"]
 torch-scatter = ["torch"]
+transformer-engine-torch = [{ requirement = "torch", match-runtime = true }]
 
 [[tool.uv.index]]
 name = "nvidia"
