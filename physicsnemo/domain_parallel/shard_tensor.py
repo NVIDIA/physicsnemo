@@ -50,6 +50,7 @@ from physicsnemo.domain_parallel._shard_tensor_spec import (
     _infer_shard_tensor_spec_from_local_chunks,
     _stride_from_contiguous_shape_C_style,
     compute_sharding_shapes_from_chunking_global_shape,
+    validate_aligned_sharding,
 )
 
 aten = torch.ops.aten
@@ -354,6 +355,45 @@ def _promote_plain_handler_args(
         }
 
 
+def _collect_shard_tensor_specs(obj: object, out: list) -> None:
+    r"""Recursively collect the specs of every ShardTensor in ``obj``.
+
+    Walks the same container types as :func:`_convert_args_to_dtensor`
+    (``Mapping``/``tuple``/``list``).
+    """
+    if isinstance(obj, ShardTensor):
+        out.append(obj._spec)
+    elif isinstance(obj, DTensor):
+        # DTensor is iterable; exit early deliberately (its shard boundaries
+        # are implicitly even and it carries no ShardTensor spec to compare).
+        return
+    elif isinstance(obj, (tuple, list)):
+        for item in obj:
+            _collect_shard_tensor_specs(item, out)
+    elif isinstance(obj, Mapping):
+        for item in obj.values():
+            _collect_shard_tensor_specs(item, out)
+
+
+def _validate_aligned_shard_boundaries(
+    func: object, args: tuple[object, ...], kwargs: dict[str, object] | None
+) -> None:
+    r"""Fallback-path front end for :func:`validate_aligned_sharding`.
+
+    Collects the specs of every ShardTensor operand in ``args``/``kwargs``
+    and runs the unified alignment check (issue #1943) before the DTensor
+    fallback pairs local tensors.
+    """
+    specs: list = []
+    _collect_shard_tensor_specs(args, specs)
+    if kwargs:
+        _collect_shard_tensor_specs(kwargs, specs)
+    if len(specs) < 2:
+        return
+    name = getattr(func, "__name__", None) or str(func)
+    validate_aligned_sharding(specs, name)
+
+
 def _dispatch_fallback_via_dtensor(
     func: torch._ops.OpOverload,
     args: tuple[object, ...],
@@ -364,6 +404,7 @@ def _dispatch_fallback_via_dtensor(
     Native Autograd wraps this hook, so we must NOT build an internal graph
     using .apply(). We just do the math and let PyTorch track the outer graph.
     """
+    _validate_aligned_shard_boundaries(func, args, kwargs)
     ref_mesh = _find_mesh_in_args(args, kwargs)
     with _conversion_scope():
         converted_args = tuple(
@@ -391,6 +432,7 @@ def _torch_function_fallback_via_dtensor(
     Because this executes at the Python API level (above Autograd), we MUST
     use autograd functions (.apply) to bridge the tracking manually.
     """
+    _validate_aligned_shard_boundaries(func, args, kwargs)
     ref_mesh = _find_mesh_in_args(args, kwargs)
     with _conversion_scope():
         converted_args = tuple(

@@ -39,6 +39,7 @@ from physicsnemo.domain_parallel import ShardTensor
 from physicsnemo.domain_parallel._shard_tensor_spec import (
     ShardTensorSpec,
     _stride_from_contiguous_shape_C_style,
+    validate_aligned_sharding,
 )
 from physicsnemo.domain_parallel.custom_ops._reductions import (
     create_sharded_grad_input,
@@ -464,6 +465,10 @@ def _cross_prepare(
     )
     out_shape = tuple(torch.broadcast_shapes(*shapes))
     dim_offset = _normalize_cross_dim(out_shape, shapes[0], dim, op_name)
+
+    # This checks the shardings match locally too, not just the global shapes
+    # and placements:
+    validate_aligned_sharding([s for s in specs if s is not None], op_name)
 
     ref_index = _cross_pick_ref(shapes, placements, out_shape, dim_offset, op_name)
 
