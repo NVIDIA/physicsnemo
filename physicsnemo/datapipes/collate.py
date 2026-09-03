@@ -40,6 +40,7 @@ from physicsnemo.datapipes.keys import (
     get_leaf,
     key_to_str,
     leaf_keys,
+    require_keys,
 )
 
 
@@ -197,6 +198,8 @@ class DefaultCollator(Collator):
         # Use TensorDict.stack() for efficient batching
         if self.keys is not None:
             # Filter to only requested keys
+            for data in data_list:
+                require_keys(data, self.keys, what="Key")
             data_list = [data.select(*self.keys) for data in data_list]
 
         batched_data = torch.stack(data_list, dim=self.stack_dim)

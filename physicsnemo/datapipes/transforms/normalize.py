@@ -427,13 +427,23 @@ class Normalize(Transform):
         self.eps = state_dict["eps"]
 
         if self.method == "mean_std":
-            self._means = {k: v.clone() for k, v in state_dict["means"].items()}
-            self._stds = {k: v.clone() for k, v in state_dict["stds"].items()}
+            ### Normalize the keys too, so a state dict saved with dotted
+            ### string names loads against tuple-keyed ``input_keys``.
+            self._means = {
+                as_nested_key(k): v.clone() for k, v in state_dict["means"].items()
+            }
+            self._stds = {
+                as_nested_key(k): v.clone() for k, v in state_dict["stds"].items()
+            }
             self._mins = None
             self._maxs = None
         else:  # min_max
-            self._mins = {k: v.clone() for k, v in state_dict["mins"].items()}
-            self._maxs = {k: v.clone() for k, v in state_dict["maxs"].items()}
+            self._mins = {
+                as_nested_key(k): v.clone() for k, v in state_dict["mins"].items()
+            }
+            self._maxs = {
+                as_nested_key(k): v.clone() for k, v in state_dict["maxs"].items()
+            }
             self._means = None
             self._stds = None
 

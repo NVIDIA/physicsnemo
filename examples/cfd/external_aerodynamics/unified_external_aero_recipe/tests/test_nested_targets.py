@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import torch
 from collate import build_collate_fn
+from forces import ForceContext
 from forward_kwargs import extract_targets
 from loss import LossCalculator
 from metrics import MetricCalculator
@@ -211,6 +212,27 @@ class TestNonDimensionalize:
         )
         assert torch.allclose(out["p"], torch.full((2,), 4.0))
         assert torch.equal(out["other", "p"], torch.ones(2))
+
+
+class TestForces:
+    """Force-coefficient integration with nested pressure / shear field names."""
+
+    def test_coefficients_resolve_nested_field_names(self):
+        """``ForceContext.coefficients`` indexes nested leaves by dotted name."""
+        domain = _nested_domain()
+        ctx = ForceContext(
+            pressure_field="solution.gauge_pressure",
+            shear_field="solution.wall_shear_stress",
+            reference_area=1.0,
+            reference_length=None,
+            moment_center=torch.zeros(3),
+            up_direction=torch.tensor([0.0, 0.0, 1.0]),
+        )
+        coeff = extract_targets(domain, TARGETS)
+        out = ctx.coefficients(domain, coeff, coeff, normalizer=None)
+        assert out is not None
+        pred, true = out
+        assert pred == true
 
 
 class TestCollate:

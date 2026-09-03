@@ -188,6 +188,22 @@ class TestRoundTrip:
         assert ("grp", "sub", "q") in back.cell_data
         assert "flat" in back.cell_data
         assert torch.allclose(back.global_data["ref", "L"], torch.tensor([2.0]))
+        ### The bookkeeping marker is not surfaced as a data field.
+        assert set(back.global_data.keys(True, True)) == {("ref", "L")}
+
+    def test_external_slash_names_stay_literal(self):
+        """Arrays named by other tools (e.g. "U [m/s]") are not split into groups."""
+        pv_mesh = pv.Sphere(theta_resolution=6, phi_resolution=6)
+        pv_mesh.clear_data()
+        pv_mesh.point_data["U [m/s]"] = np.zeros(
+            (pv_mesh.n_points, 3), dtype=np.float32
+        )
+        pv_mesh.cell_data["p"] = np.zeros(pv_mesh.n_cells, dtype=np.float32)
+        pv_mesh.cell_data["p/grad"] = np.zeros((pv_mesh.n_cells, 3), dtype=np.float32)
+
+        mesh = from_pyvista(pv_mesh)
+        assert "U [m/s]" in mesh.point_data
+        assert set(mesh.cell_data.keys(True, True)) == {"p", "p/grad"}
 
 
 ### Parametrized Tests for Device Handling ###

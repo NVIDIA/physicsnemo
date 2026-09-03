@@ -39,7 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   component matched a stats entry (`named_apply` without `nested_keys=True`);
   both now key on the full nested path. `ConcatCollator` no longer crashes on
   grouped fields, `Reader(pin_memory=True)` no longer crashes on nested
-  sample dicts, `ZarrReader` accepts `fields=["group/array"]` paths,
+  sample dicts, `ZarrReader` no longer rejects `fields=["group/array"]` paths
+  that zarr itself resolves (the array is stored under that literal name),
   `MultiDataset(output_strict=True)` compares leaf keys, and
   `DomainMesh.__repr__` lists nested `global_data` leaves.
 - `from_pyvista` / `to_pyvista` now round-trip nested `Mesh` data keys:

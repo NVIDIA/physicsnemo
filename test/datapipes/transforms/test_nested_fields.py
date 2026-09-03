@@ -106,6 +106,13 @@ class TestDropMeshFields:
         out = DropMeshFields(cell_data=["solution"])(_surface_mesh())
         assert _leaves(out.cell_data) == {"normals"}
 
+    def test_path_through_leaf_is_a_silent_miss_not_a_crash(self):
+        ### "normals.x" descends through the leaf tensor "normals"; TensorDict's
+        ### own exclude raises AttributeError on that, DropMeshFields must not.
+        mesh = _surface_mesh()
+        out = DropMeshFields(cell_data=["normals.x"])(mesh)
+        assert _leaves(out.cell_data) == _leaves(mesh.cell_data)
+
 
 class TestNormalizeMeshFields:
     def _stats(self):
@@ -170,6 +177,25 @@ class TestNormalizeMeshFields:
             .allclose(norm(_surface_mesh()).cell_data["solution", "pMeanTrim"])
         )
 
+    def test_stats_setter_replaces_live_stats(self):
+        ### ``stats`` returns a copy, so mutating it is a no-op; the setter is
+        ### how persisted stats get applied (infer.py relies on this).
+        norm = NormalizeMeshFields(association="cell_data", fields=self._stats())
+        norm.stats.clear()
+        assert norm.stats  # unchanged
+        norm.stats = {
+            "solution.pMeanTrim": {
+                "type": "scalar",
+                "mean": torch.tensor(0.0),
+                "std": torch.tensor(1.0),
+            }
+        }
+        out = norm(_surface_mesh())
+        assert torch.allclose(
+            out.cell_data["solution", "pMeanTrim"],
+            _surface_mesh().cell_data["solution", "pMeanTrim"] / (1.0 + norm._eps),
+        )
+
 
 class TestSetGlobalField:
     def test_nested_yaml_dict_and_dotted_name(self):
@@ -203,6 +229,12 @@ class TestComputeSurfaceNormals:
 
 
 class TestMeshToDomainMesh:
+    def test_missing_or_leaf_prefix_target_raises_key_error(self):
+        with pytest.raises(KeyError, match="solution.pMeanTrim"):
+            MeshToDomainMesh(cell_data_targets=["solution.nope"])(_surface_mesh())
+        with pytest.raises(KeyError, match="normals.x"):
+            MeshToDomainMesh(cell_data_targets=["normals.x"])(_surface_mesh())
+
     def test_nested_target_moved_to_interior(self):
         mesh = _surface_mesh()
         domain = MeshToDomainMesh(cell_data_targets=["solution.pMeanTrim"])(mesh)
@@ -374,6 +406,20 @@ class TestCollators:
             dim=0, keys=["solution.p"], batch_idx_key="meta.batch_idx"
         )(self._samples())
         assert set(out.keys(True, True)) == {("solution", "p"), ("meta", "batch_idx")}
+
+    def test_default_collator_bad_key_is_key_error(self):
+        samples = [(TensorDict({"a": torch.zeros(2)}), {}) for _ in range(2)]
+        with pytest.raises(KeyError, match="a.x"):
+            dp.DefaultCollator(keys=["a.x"])(samples)
+
+    def test_purge_non_strict_tolerates_path_through_leaf(self):
+        td = TensorDict({"x": torch.zeros(6, 3), "w": torch.ones(6)}, batch_size=[])
+        assert set(
+            dp.Purge(keep_only=["x", "x.y"], strict=False)(td).keys(True, True)
+        ) == {"x"}
+        assert set(
+            dp.Purge(drop_only=["x.y"], strict=False)(td).keys(True, True)
+        ) == set(td.keys(True, True))
 
     def test_default_collator_dotted_keys(self):
         samples = [

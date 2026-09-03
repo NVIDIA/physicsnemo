@@ -172,9 +172,15 @@ def get_leaf(td: TensorDict, key: NestedKey, *, what: str = "Field") -> torch.Te
     except ValueError:
         value = None
     if value is None:
+        hint = ""
+        if isinstance(key, tuple) and key_to_str(key) in td:
+            hint = (
+                f" A top-level field literally named {key_to_str(key)!r} exists; "
+                f"address it as a one-element list, [{key_to_str(key)!r}]."
+            )
         raise KeyError(
             f"{what} {key_to_str(key)!r} not found in data. "
-            f"Available fields: {format_leaf_keys(td)}"
+            f"Available fields: {format_leaf_keys(td)}.{hint}"
         )
     if isinstance(value, TensorDict):
         raise TypeError(
@@ -183,6 +189,28 @@ def get_leaf(td: TensorDict, key: NestedKey, *, what: str = "Field") -> torch.Te
             f"its leaves, e.g. {key_to_str(key)!r} + '.' + <leaf name>."
         )
     return value
+
+
+def require_keys(
+    td: TensorDict, keys: Iterable[NestedKey], *, what: str = "Field"
+) -> None:
+    r"""Raise ``KeyError`` listing the available leaves if any key is absent from ``td``.
+
+    Use before ``td.select(*keys)``: TensorDict's own error for a path that
+    runs through a leaf tensor is an ``AttributeError``, and its message for
+    a missing key lists only the top level.
+    """
+    missing = [key_to_str(k) for k in keys if k not in td]
+    if missing:
+        raise KeyError(
+            f"{what}{'s' if len(missing) > 1 else ''} {missing} not found in data. "
+            f"Available fields: {format_leaf_keys(td)}"
+        )
+
+
+def present_keys(td: TensorDict, keys: Iterable[NestedKey]) -> list[NestedKey]:
+    r"""The subset of ``keys`` present in ``td``, for null-safe ``exclude`` / ``select``."""
+    return [k for k in keys if k in td]
 
 
 def rename_keys(
@@ -251,6 +279,19 @@ def rename_keys(
         out.del_(old)
     for new, value in moved:
         out.set(new, value)
+    ### Hoisting the last leaf out of a group leaves an empty sub-TensorDict
+    ### behind; drop such groups (walking up) so the result has no empty
+    ### containers the caller did not ask for.
+    for old in present:
+        parent = old[:-1] if isinstance(old, tuple) else ()
+        while parent:
+            group = out.get(parent, None)
+            if not isinstance(group, TensorDict) or group.is_empty():
+                if group is not None:
+                    out.del_(parent)
+                parent = parent[:-1]
+            else:
+                break
     return out
 
 

@@ -30,7 +30,9 @@ from physicsnemo.datapipes.keys import (
     get_leaf,
     key_to_str,
     leaf_keys,
+    present_keys,
     rename_keys,
+    require_keys,
     with_leaf_name,
 )
 
@@ -185,3 +187,30 @@ class TestRenameKeys:
         td = _nested_td()
         with pytest.raises(ValueError, match="same name"):
             rename_keys(td, {("solution", "p"): "x", "sdf": "x"}, strict=True)
+
+    def test_hoisting_last_leaf_prunes_empty_group(self):
+        td = TensorDict({"a": {"b": {"d": torch.zeros(3)}}, "x": torch.zeros(3)}, [3])
+        out = rename_keys(td, {("a", "b", "d"): "d"}, strict=True)
+        assert set(out.keys()) == {"d", "x"}
+        ### A group that still has leaves is kept.
+        out = rename_keys(_nested_td(), {("solution", "p"): "p"}, strict=True)
+        assert set(out.keys(True, True)) == {"p", ("solution", "v"), "sdf"}
+
+
+class TestKeyGuards:
+    def test_require_keys_reports_missing_with_leaf_listing(self):
+        td = _nested_td()
+        require_keys(td, [("solution", "p"), "sdf"])
+        ### A path running through a leaf tensor is "missing", not an AttributeError.
+        with pytest.raises(KeyError, match="sdf.x"):
+            require_keys(td, [("sdf", "x")])
+
+    def test_present_keys_filters_paths_through_leaves(self):
+        td = _nested_td()
+        assert present_keys(td, [("sdf", "x"), "sdf", ("solution", "zz")]) == ["sdf"]
+
+    def test_get_leaf_hints_at_literal_dotted_name(self):
+        td = TensorDict({"p.mean": torch.zeros(2)}, batch_size=[2])
+        with pytest.raises(KeyError, match="one-element list"):
+            get_leaf(td, as_nested_key("p.mean"))
+        assert get_leaf(td, as_nested_key(["p.mean"])).shape == (2,)

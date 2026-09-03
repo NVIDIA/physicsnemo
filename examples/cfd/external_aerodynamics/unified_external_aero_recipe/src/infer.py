@@ -474,8 +474,9 @@ def main(cfg: DictConfig) -> None:
             for live in {
                 id(n): n for n in (normalizer, val_normalizer) if n is not None
             }.values():
-                live.stats.clear()
-                live.stats.update(saved_stats)
+                ### ``stats`` returns a copy; the setter replaces the live
+                ### statistics (re-keying dotted names to nested keys).
+                live.stats = saved_stats
 
     if cfg.get("compile", False):
         model = torch.compile(model)

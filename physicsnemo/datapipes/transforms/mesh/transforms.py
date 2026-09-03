@@ -33,7 +33,9 @@ from physicsnemo.datapipes.keys import (
     as_nested_key,
     as_nested_keys,
     key_to_str,
+    present_keys,
     rename_keys,
+    require_keys,
 )
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
@@ -366,13 +368,19 @@ class DropMeshFields(MeshTransform):
         self._global_data_keys = as_nested_keys(global_data)
 
     def __call__(self, mesh: Mesh) -> Mesh:
-        ### ``TensorDict.exclude(*keys)`` is null-safe: it returns a
-        ### fresh TD minus the named keys (silently tolerating missing
-        ### ones) and is a no-op clone when the key list is empty.
+        ### ``TensorDict.exclude(*keys)`` is null-safe for missing keys and a
+        ### no-op clone when the key list is empty, but a nested key whose
+        ### prefix is a leaf tensor makes it raise, so filter to present keys.
         return mesh.with_data(
-            point_data=mesh.point_data.exclude(*self._point_data_keys),
-            cell_data=mesh.cell_data.exclude(*self._cell_data_keys),
-            global_data=mesh.global_data.exclude(*self._global_data_keys),
+            point_data=mesh.point_data.exclude(
+                *present_keys(mesh.point_data, self._point_data_keys)
+            ),
+            cell_data=mesh.cell_data.exclude(
+                *present_keys(mesh.cell_data, self._cell_data_keys)
+            ),
+            global_data=mesh.global_data.exclude(
+                *present_keys(mesh.global_data, self._global_data_keys)
+            ),
         )
 
     def extra_repr(self) -> str:
@@ -735,8 +743,17 @@ class NormalizeMeshFields(MeshTransform):
 
     @property
     def stats(self) -> dict[str, dict]:
-        """Normalization statistics keyed by ``"."``-joined field name (for serialization)."""
+        """Normalization statistics keyed by ``"."``-joined field name (for serialization).
+
+        Returns a fresh dict; to replace the live statistics (e.g. with the
+        ones persisted next to a checkpoint) assign to this property.
+        """
         return {key_to_str(k): v for k, v in self._stats.items()}
+
+    @stats.setter
+    def stats(self, value: Mapping[str, dict]) -> None:
+        """Replace the live statistics; names are re-keyed via :func:`as_nested_key`."""
+        self._stats = {as_nested_key(name): dict(s) for name, s in value.items()}
 
     def extra_repr(self) -> str:
         parts = []
@@ -1101,6 +1118,7 @@ class MeshToDomainMesh(MeshTransform):
     def _call_cell_centroids(self, mesh: Mesh) -> DomainMesh:
         ### Build the interior as a point cloud at cell centroids, with target
         ### cell_data fields moved into interior.point_data.
+        require_keys(mesh.cell_data, self._cell_data_targets, what="Target field")
         interior_point_data = (
             mesh.cell_data.select(*self._cell_data_targets)
             if self._cell_data_targets
@@ -1126,6 +1144,7 @@ class MeshToDomainMesh(MeshTransform):
     def _call_vertices(self, mesh: Mesh) -> DomainMesh:
         ### Build the interior as a point cloud at the input mesh's vertices,
         ### with target point_data fields moved into interior.point_data.
+        require_keys(mesh.point_data, self._point_data_targets, what="Target field")
         interior_point_data = (
             mesh.point_data.select(*self._point_data_targets)
             if self._point_data_targets

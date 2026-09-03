@@ -35,6 +35,7 @@ from physicsnemo.datapipes.keys import (
     get_leaf,
     key_to_str,
     leaf_keys,
+    present_keys,
     rename_keys,
 )
 from physicsnemo.datapipes.registry import register
@@ -269,8 +270,12 @@ class Purge(Transform):
                         f"Available keys: {format_leaf_keys(data)}"
                     )
 
-            ### ``select`` handles nested keys; strict=False tolerates missing ones
-            return data.select(*keys_to_keep, strict=self.strict)
+            ### ``select`` handles nested keys; in non-strict mode drop the
+            ### missing ones ourselves (a path through a leaf tensor would
+            ### otherwise make ``select`` raise rather than skip).
+            if not self.strict:
+                keys_to_keep = present_keys(data, keys_to_keep)
+            return data.select(*keys_to_keep)
 
         elif self.drop_only is not None:
             keys_to_drop = as_nested_keys(self.drop_only)
@@ -284,8 +289,9 @@ class Purge(Transform):
                         f"Available keys: {format_leaf_keys(data)}"
                     )
 
-            ### ``exclude`` handles nested keys
-            return data.exclude(*keys_to_drop)
+            ### ``exclude`` handles nested keys; filter to present ones for
+            ### the same reason as above.
+            return data.exclude(*present_keys(data, keys_to_drop))
 
         else:
             # Default: drop nothing, keep everything
