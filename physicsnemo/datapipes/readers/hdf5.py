@@ -34,6 +34,7 @@ try:
 except ImportError:
     HAS_H5PY = False
 
+from physicsnemo.datapipes.caching import DatasetCache
 from physicsnemo.datapipes.readers.base import Reader
 from physicsnemo.datapipes.registry import register
 
@@ -73,6 +74,7 @@ class HDF5Reader(Reader):
         index_key: Optional[str] = None,
         pin_memory: bool = False,
         include_index_in_metadata: bool = True,
+        cache: DatasetCache | None = None,
     ) -> None:
         """
         Initialize the HDF5 reader.
@@ -92,6 +94,11 @@ class HDF5Reader(Reader):
             If True, place tensors in pinned memory for faster GPU transfer.
         include_index_in_metadata : bool, default=True
             If True, include sample index in metadata.
+        cache : DatasetCache, optional
+            Optional :class:`~physicsnemo.datapipes.caching.DatasetCache`,
+            accepted for a uniform reader API. HDF5 sample loads are
+            dominated by dataset reads (real data, not repeated metadata),
+            so this reader currently routes nothing through the cache.
 
         Raises
         ------
@@ -110,6 +117,7 @@ class HDF5Reader(Reader):
         super().__init__(
             pin_memory=pin_memory,
             include_index_in_metadata=include_index_in_metadata,
+            cache=cache,
         )
 
         self.path = Path(path)

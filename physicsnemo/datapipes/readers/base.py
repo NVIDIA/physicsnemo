@@ -26,12 +26,16 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Iterator
+from pathlib import Path
+from typing import Any, Callable, Iterator, TypeVar
 
 import torch
 from tensordict import TensorDict
 
 from physicsnemo.datapipes._rng import spawn_generator
+from physicsnemo.datapipes.caching import DatasetCache, cached_or_load
+
+T = TypeVar("T")
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +91,7 @@ class Reader(ABC):
         pin_memory: bool = False,
         include_index_in_metadata: bool = True,
         coordinated_subsampling: dict[str, Any] | None = None,
+        cache: DatasetCache | None = None,
     ) -> None:
         """
         Initialize the reader.
@@ -110,10 +115,20 @@ class Reader(ABC):
             point has equal inclusion probability while reads retain storage
             locality. This allows configuration via Hydra. Readers that don't
             support coordinated subsampling will ignore this parameter.
+        cache : DatasetCache, optional
+            Optional :class:`~physicsnemo.datapipes.caching.DatasetCache` for
+            small, immutable per-sample artifacts (attributes, key lists,
+            global data). Subclasses opt individual reads in via
+            :meth:`_cached`; readers that never call it ignore this
+            parameter. The same instance may be shared across readers.
         """
         self.pin_memory = pin_memory
         self.include_index_in_metadata = include_index_in_metadata
         self._coordinated_subsampling_config = coordinated_subsampling
+        self._cache = cache
+        # Memoized field_names: the default _get_field_names() loads a full
+        # sample, so recomputing it per access is a repeated-I/O trap.
+        self._field_names_memo: list[str] | None = None
         # Base seed + epoch for deterministic per-index RNG. See
         # :meth:`_index_generator`. ``None`` means no seed was provided
         # (random draws fall back to the global default RNG).
@@ -213,12 +228,17 @@ class Reader(ABC):
         """
         List of field names available in samples.
 
+        Memoized after the first access: the default implementation loads a
+        full sample to derive keys, which is too expensive to repeat.
+
         Returns
         -------
         list[str]
             Field names.
         """
-        return self._get_field_names()
+        if self._field_names_memo is None:
+            self._field_names_memo = self._get_field_names()
+        return self._field_names_memo
 
     def __getitem__(self, index: int) -> tuple[TensorDict, dict[str, Any]]:
         """
@@ -239,13 +259,13 @@ class Reader(ABC):
         IndexError
             If index is out of range.
         """
-        # Handle negative indexing
+        # Handle negative indexing. len() is evaluated once: it can be
+        # storage-backed in some readers, and __getitem__ is the hot path.
+        n = len(self)
         if index < 0:
-            index = len(self) + index
-        if index < 0 or index >= len(self):
-            raise IndexError(
-                f"Index {index} out of range for reader with {len(self)} samples"
-            )
+            index = n + index
+        if index < 0 or index >= n:
+            raise IndexError(f"Index {index} out of range for reader with {n} samples")
 
         # Load data
         data_dict = self._load_sample(index)
@@ -343,6 +363,48 @@ class Reader(ABC):
         if self._seed_base is None:
             return None
         return spawn_generator(self._seed_base, self._epoch, index)
+
+    def _cached(
+        self,
+        kind: str,
+        path: Path | str,
+        loader: Callable[..., T],
+        *,
+        src: Path | str | None = None,
+    ) -> T:
+        """Route a small, immutable read through the optional cache.
+
+        With no cache configured this is a transparent call to *loader*
+        (``loader(src)`` when *src* is given, else ``loader()``), so callers
+        need no cache-aware branching. With a cache, the entry is keyed by
+        ``(kind, resolved path)``; pass ``src`` for directory-tree sources
+        loaded by a stock path-taking loader (see
+        :meth:`DatasetCache.get_or_load`).
+
+        Only use for data that is identical every epoch: raw file contents,
+        attributes, glob results -- never subsampled or RNG-dependent
+        results.
+
+        Parameters
+        ----------
+        kind : str
+            Entry type with a format version, e.g. ``"zarr-attrs/v1"``.
+        path : Path or str
+            Path identifying the entry; resolved to collapse symlinks and
+            relative roots. Append ``"::suffix"`` details via *kind* keys of
+            your own if one file yields several entries.
+        loader : Callable
+            Loads the value on a cache miss.
+        src : Path or str, optional
+            If given, marks a tree-backed entry: *loader* is called with a
+            path (the cache's local mirror when available, else *src*).
+
+        Returns
+        -------
+        T
+            The loaded (possibly cached) value.
+        """
+        return cached_or_load(self._cache, kind, path, loader, src=src)
 
     def close(self) -> None:
         """

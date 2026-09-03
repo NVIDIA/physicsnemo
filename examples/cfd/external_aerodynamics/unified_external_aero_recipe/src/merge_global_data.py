@@ -110,14 +110,19 @@ class MeshReaderWithGlobalData(MeshReader):
         ### Resolve ``../...`` against the sample directory itself; the
         ### result must already exist on disk (we don't lazily create).
         ext_path = (sample_path / self._merge_rel_path).resolve()
-        if not ext_path.exists():
-            raise FileNotFoundError(
-                f"merge_global_data_from path not found: {ext_path} "
-                f"(resolved from sample {sample_path} + "
-                f"{self._merge_rel_path!r})"
-            )
 
-        ext_td = TensorDict.load_memmap(ext_path)
+        def _load_external() -> TensorDict:
+            if not ext_path.exists():
+                raise FileNotFoundError(
+                    f"merge_global_data_from path not found: {ext_path} "
+                    f"(resolved from sample {sample_path} + "
+                    f"{self._merge_rel_path!r})"
+                )
+            return TensorDict.load_memmap(ext_path)
+
+        ### Tiny scalars re-read every sample, every epoch: the poster child
+        ### for the reader cache. One entry per distinct global_data dir.
+        ext_td = self._cached("global-data/v1", ext_path, _load_external)
         merged = mesh.global_data.clone()
         collisions = sorted(set(ext_td.keys()) & set(merged.keys()))
         if collisions:

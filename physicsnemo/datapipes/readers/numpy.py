@@ -29,6 +29,7 @@ import numpy as np
 import torch
 
 from physicsnemo.datapipes._indexing import _cyclic_block_indices
+from physicsnemo.datapipes.caching import DatasetCache
 from physicsnemo.datapipes.readers.base import Reader
 from physicsnemo.datapipes.registry import register
 
@@ -66,6 +67,7 @@ class NumpyReader(Reader):
         pin_memory: bool = False,
         include_index_in_metadata: bool = True,
         coordinated_subsampling: Optional[dict[str, Any]] = None,
+        cache: DatasetCache | None = None,
     ) -> None:
         """
         Initialize the NumPy reader.
@@ -94,6 +96,12 @@ class NumpyReader(Reader):
             Optional dict to configure coordinated subsampling (directory mode
             only). If provided, must contain ``n_points`` (int) and
             ``target_keys`` (list of str).
+        cache : DatasetCache, optional
+            Optional :class:`~physicsnemo.datapipes.caching.DatasetCache`,
+            accepted for a uniform reader API. ``.npz`` sample loads are
+            dominated by array decompression (real data, not repeated
+            metadata), so this reader currently routes nothing through the
+            cache.
 
         Raises
         ------
@@ -106,6 +114,7 @@ class NumpyReader(Reader):
             pin_memory=pin_memory,
             include_index_in_metadata=include_index_in_metadata,
             coordinated_subsampling=coordinated_subsampling,
+            cache=cache,
         )
 
         self.path = Path(path).expanduser().resolve()

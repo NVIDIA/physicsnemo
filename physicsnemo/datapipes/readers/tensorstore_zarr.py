@@ -32,6 +32,7 @@ import torch
 
 from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.datapipes._indexing import _cyclic_block_indices
+from physicsnemo.datapipes.caching import DatasetCache
 from physicsnemo.datapipes.readers.base import Reader
 from physicsnemo.datapipes.registry import register
 
@@ -98,6 +99,7 @@ class TensorStoreZarrReader(Reader):
         pin_memory: bool = False,
         include_index_in_metadata: bool = True,
         coordinated_subsampling: Optional[dict[str, Any]] = None,
+        cache: DatasetCache | None = None,
     ) -> None:
         """
         Initialize the TensorStore Zarr reader.
@@ -129,6 +131,14 @@ class TensorStoreZarrReader(Reader):
         coordinated_subsampling : dict[str, Any], optional
             Optional dict to configure coordinated subsampling. If provided,
             must contain ``n_points`` (int) and ``target_keys`` (list of str).
+        cache : DatasetCache, optional
+            Optional :class:`~physicsnemo.datapipes.caching.DatasetCache`.
+            Caches per-group attributes (otherwise a full key listing plus a
+            metadata read per sample, per epoch) and each field's resolved
+            TensorStore spec (so warm opens use ``assume_metadata`` and skip
+            the per-array metadata read entirely). Complements the
+            TensorStore chunk cache (``cache_bytes_limit``), which covers
+            array data but not metadata reads.
 
         Raises
         ------
@@ -150,6 +160,7 @@ class TensorStoreZarrReader(Reader):
             pin_memory=pin_memory,
             include_index_in_metadata=include_index_in_metadata,
             coordinated_subsampling=coordinated_subsampling,
+            cache=cache,
         )
 
         self.path = Path(path).expanduser().resolve()
@@ -236,7 +247,20 @@ class TensorStoreZarrReader(Reader):
         return self._available_fields
 
     def _read_attributes(self, group_path: Path) -> dict[str, Any]:
-        """Read attributes from a Zarr group (v2 or v3)."""
+        """Read attributes from a Zarr group (v2 or v3).
+
+        Routed through the optional reader cache: attributes are immutable
+        per group but this read otherwise costs a full key listing plus a
+        metadata read per sample, per epoch.
+        """
+        return self._cached(
+            "ts-zarr-attrs/v1",
+            group_path,
+            lambda: self._read_attributes_from_store(group_path),
+        )
+
+    def _read_attributes_from_store(self, group_path: Path) -> dict[str, Any]:
+        """Read attributes from storage (the cache-miss path)."""
         store_spec = {"driver": "file", "path": str(group_path)}
         store = ts.KvStore.open(store_spec).result()
 
@@ -257,6 +281,39 @@ class TensorStoreZarrReader(Reader):
             return {k: torch.tensor(v) for k, v in metadata.items()}
 
         return {}
+
+    def _open_field_store(self, group_path: Path, key: str) -> Any:
+        """Open one field's TensorStore (returns a future).
+
+        Without a reader cache this is a plain ``ts.open``, which reads the
+        array's metadata (``.zarray`` / ``zarr.json``) from storage on every
+        sample, every epoch. With a cache, the *resolved spec* -- driver,
+        dtype, chunk metadata, transform -- is cached per field on first
+        open, and subsequent opens pass it back with ``assume_metadata=True``
+        so TensorStore skips the metadata read entirely; only chunk data is
+        touched.
+        """
+        spec = {
+            "driver": "auto",
+            "kvstore": {
+                "driver": "file",
+                "path": str(group_path / key),
+            },
+        }
+        if self._cache is None:
+            return ts.open(spec, create=False, open=True, context=self._context)
+
+        resolved_spec = self._cached(
+            "ts-zarr-spec/v1",
+            group_path / key,
+            lambda: (
+                ts.open(spec, create=False, open=True, context=self._context)
+                .result()
+                .spec()
+                .to_json()
+            ),
+        )
+        return ts.open(resolved_spec, context=self._context, assume_metadata=True)
 
     def _load_sample(self, index: int) -> dict[str, torch.Tensor]:
         """Load a single sample from a Zarr group using TensorStore."""
@@ -294,17 +351,7 @@ class TensorStoreZarrReader(Reader):
         for key in fields_from_arrays:
             if key not in available:
                 continue
-
-            spec = {
-                "driver": "auto",
-                "kvstore": {
-                    "driver": "file",
-                    "path": str(group_path / key),
-                },
-            }
-            read_futures[key] = ts.open(
-                spec, create=False, open=True, context=self._context
-            )
+            read_futures[key] = self._open_field_store(group_path, key)
 
         # Wait for opens to complete
         stores = {key: future.result() for key, future in read_futures.items()}
