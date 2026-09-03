@@ -811,3 +811,23 @@ def test_domain_mesh_to_float_dtype_forwards_transfer_kwargs():
     assert out.interior.points.dtype == torch.float64
     assert out.interior.cells.dtype == torch.int64
     assert out.global_data["scale"].dtype == torch.float64
+
+
+def test_domain_mesh_to_rejects_integer_coordinate_dtype():
+    dm = DomainMesh(
+        interior=Mesh(points=torch.randn(3, 2), cells=torch.tensor([[0, 1]]))
+    )
+
+    with pytest.raises(TypeError, match="coordinates must remain floating point"):
+        dm.to(torch.int32)
+
+
+def test_domain_mesh_to_complex_preserves_integer_cells():
+    dm = DomainMesh(
+        interior=Mesh(points=torch.randn(3, 2), cells=torch.tensor([[0, 1]]))
+    )
+
+    converted = dm.to(torch.complex64)
+
+    assert converted.interior.points.dtype == torch.complex64
+    assert converted.interior.cells.dtype == torch.int64
