@@ -50,6 +50,10 @@ from .test_multi_diffusion_models import (
     _make_condition,
 )
 
+# =============================================================================
+# Constants and Configurations
+# =============================================================================
+
 REF_PREFIX = "test_multi_diffusion_losses_"
 LR = 1e-2
 TRAIN_STEPS = 2
@@ -68,9 +72,22 @@ LOSS_CONFIGS = [
     ("cond_patch", "score", (IMG_H, IMG_W), PATCH_SHAPE, "cond_patch_score_sq"),
     ("uncond", "epsilon", (IMG_H, IMG_W), PATCH_SHAPE, "uncond_eps_sq"),
     ("cond_patch", "epsilon", (IMG_H, IMG_W), PATCH_SHAPE, "cond_patch_eps_sq"),
+    ("uncond", "flow", (IMG_H, IMG_W), PATCH_SHAPE, "uncond_flow_sq"),
+    ("cond_patch", "flow", (IMG_H, IMG_W), PATCH_SHAPE, "cond_patch_flow_sq"),
     ("uncond", "x0", (IMG_H_NS, IMG_W_NS), PATCH_SHAPE_NS, "uncond_x0_ns"),
     ("cond_patch", "x0", (IMG_H_NS, IMG_W_NS), PATCH_SHAPE_NS, "cond_patch_x0_ns"),
 ]
+
+COMPILE_LOSS_CONFIGS = [
+    ("uncond", "x0", (IMG_H, IMG_W), PATCH_SHAPE, "uncond_x0_sq"),
+    ("cond_patch", "x0", (IMG_H, IMG_W), PATCH_SHAPE, "cond_patch_x0_sq"),
+    ("uncond", "score", (IMG_H, IMG_W), PATCH_SHAPE, "uncond_score_sq"),
+    ("uncond", "epsilon", (IMG_H, IMG_W), PATCH_SHAPE, "uncond_eps_sq"),
+    ("uncond", "flow", (IMG_H, IMG_W), PATCH_SHAPE, "uncond_flow_sq"),
+]
+
+_LOSS_IDS = [c[4] for c in LOSS_CONFIGS]
+_COMPILE_LOSS_IDS = [c[4] for c in COMPILE_LOSS_CONFIGS]
 
 
 # =============================================================================
@@ -83,55 +100,31 @@ def _first_param(model: MultiDiffusionModel2D) -> torch.Tensor:
     return next(model.model.parameters()).detach().clone()
 
 
-def _make_loss(md, scheduler, prediction_type):
-    """Create a MultiDiffusionMSEDSMLoss with the given prediction type."""
+def _make_loss(loss_cls, md, scheduler, prediction_type):
+    """Create a loss of type *loss_cls* with the given prediction type."""
     kwargs = {}
     if prediction_type == "score":
         kwargs["score_to_x0_fn"] = scheduler.score_to_x0
     elif prediction_type == "epsilon":
         kwargs["epsilon_to_x0_fn"] = scheduler.epsilon_to_x0
-    return MultiDiffusionMSEDSMLoss(
-        md, scheduler, prediction_type=prediction_type, **kwargs
-    )
+    elif prediction_type == "flow":
+        kwargs["flow_to_x0_fn"] = scheduler.flow_to_x0
+    return loss_cls(md, scheduler, prediction_type=prediction_type, **kwargs)
 
 
-def _make_weighted_loss(md, scheduler, prediction_type):
-    """Create a MultiDiffusionWeightedMSEDSMLoss with the given prediction type."""
-    kwargs = {}
-    if prediction_type == "score":
-        kwargs["score_to_x0_fn"] = scheduler.score_to_x0
-    elif prediction_type == "epsilon":
-        kwargs["epsilon_to_x0_fn"] = scheduler.epsilon_to_x0
-    return MultiDiffusionWeightedMSEDSMLoss(
-        md, scheduler, prediction_type=prediction_type, **kwargs
-    )
-
-
-def _run_training_loop(loss_fn, md_model, x0, condition, steps=TRAIN_STEPS):
-    """Run a minimal training loop and return per-step loss + param snapshots."""
-    losses = []
-    params = []
-    for _ in range(steps):
-        loss = loss_fn(x0, condition=condition)
-        loss.backward()
-        losses.append(loss.detach().cpu())
-        with torch.no_grad():
-            for p in md_model.parameters():
-                if p.grad is not None:
-                    p -= LR * p.grad
-                    p.grad = None
-        params.append(_first_param(md_model).cpu())
-    return losses, params
-
-
-def _run_weighted_training_loop(
-    loss_fn, md_model, x0, weight, condition, steps=TRAIN_STEPS
+def _run_training_loop(
+    loss_fn, md_model, x0, condition, weight=None, steps=TRAIN_STEPS
 ):
-    """Run a minimal training loop with weighted loss."""
+    """Run a minimal training loop and return per-step loss + param snapshots.
+
+    Passes ``weight`` through to the loss call when provided (weighted
+    losses); omits it otherwise.
+    """
+    loss_kwargs = {} if weight is None else {"weight": weight}
     losses = []
     params = []
     for _ in range(steps):
-        loss = loss_fn(x0, weight=weight, condition=condition)
+        loss = loss_fn(x0, condition=condition, **loss_kwargs)
         loss.backward()
         losses.append(loss.detach().cpu())
         with torch.no_grad():
@@ -141,6 +134,52 @@ def _run_weighted_training_loop(
                     p.grad = None
         params.append(_first_param(md_model).cpu())
     return losses, params
+
+
+def _check_non_regression(losses, params, param_before, ref_file, device, tolerances):
+    """Assert finite training-loop invariants and compare against goldens.
+
+    On CUDA, the noise scheduler's internal RNG (sample_time, add_noise)
+    produces a different random stream than on CPU even with the same seed,
+    so only shapes and finiteness get verified there. Full value comparison
+    happens on CPU only.
+    """
+    for loss_val in losses:
+        assert loss_val.ndim == 0 and torch.isfinite(loss_val)
+    assert not torch.equal(param_before, params[0])
+    assert not torch.equal(params[0], params[1])
+
+    if "cuda" in str(device):
+        ref = load_or_create_reference(ref_file, None)
+        assert losses[0].shape == ref["loss_0"].shape
+        assert params[0].shape == ref["param_0"].shape
+    else:
+        ref = load_or_create_reference(
+            ref_file,
+            lambda: {
+                "loss_0": losses[0],
+                "loss_1": losses[1],
+                "param_0": params[0],
+                "param_1": params[1],
+            },
+        )
+        compare_outputs(losses[0], ref["loss_0"], **tolerances)
+        compare_outputs(losses[1], ref["loss_1"], **tolerances)
+        compare_outputs(params[0], ref["param_0"], **tolerances)
+        compare_outputs(params[1], ref["param_1"], **tolerances)
+
+
+def _create_preconditioned_md_model(seed=0):
+    """Full realistic pipeline: EDMPreconditioner(backbone) inside MultiDiffusionModel2D.
+
+    sigma_data stays consistent between the preconditioner and the
+    EDMNoiseScheduler used in the loss, mirroring the SDA recipe pattern.
+    """
+    backbone = instantiate_model_deterministic(
+        Conv2dX0Predictor, seed=seed, channels=CHANNELS
+    )
+    precond = EDMPreconditioner(backbone, sigma_data=SIGMA_DATA)
+    return MultiDiffusionModel2D(model=precond, global_spatial_shape=(IMG_H, IMG_W))
 
 
 # =============================================================================
@@ -173,17 +212,22 @@ class TestConstructor:
         with pytest.raises(ValueError, match="prediction_type"):
             MultiDiffusionMSEDSMLoss(md, EDMNoiseScheduler(), prediction_type="bad")
 
-    def test_score_requires_fn(self):
+    @pytest.mark.parametrize(
+        "prediction_type,missing_fn",
+        [
+            ("score", "score_to_x0_fn"),
+            ("epsilon", "epsilon_to_x0_fn"),
+            ("flow", "flow_to_x0_fn"),
+        ],
+    )
+    def test_requires_conversion_fn(self, prediction_type, missing_fn):
+        """Non-x0 prediction types require the matching conversion callback."""
         md = _create_md_model("uncond")
         md.set_random_patching(patch_shape=PATCH_SHAPE, patch_num=PATCH_NUM)
-        with pytest.raises(ValueError, match="score_to_x0_fn"):
-            MultiDiffusionMSEDSMLoss(md, EDMNoiseScheduler(), prediction_type="score")
-
-    def test_epsilon_requires_fn(self):
-        md = _create_md_model("uncond")
-        md.set_random_patching(patch_shape=PATCH_SHAPE, patch_num=PATCH_NUM)
-        with pytest.raises(ValueError, match="epsilon_to_x0_fn"):
-            MultiDiffusionMSEDSMLoss(md, EDMNoiseScheduler(), prediction_type="epsilon")
+        with pytest.raises(ValueError, match=missing_fn):
+            MultiDiffusionMSEDSMLoss(
+                md, EDMNoiseScheduler(), prediction_type=prediction_type
+            )
 
     def test_epsilon_constructor(self):
         md = _create_md_model("uncond")
@@ -231,7 +275,7 @@ class TestConstructor:
 @pytest.mark.parametrize(
     "config_name,prediction_type,img_shape,patch_shape,tag",
     LOSS_CONFIGS,
-    ids=[c[4] for c in LOSS_CONFIGS],
+    ids=_LOSS_IDS,
 )
 class TestMSEDSMLossNonRegression:
     """Non-regression training loop tests for MultiDiffusionMSEDSMLoss."""
@@ -250,7 +294,7 @@ class TestMSEDSMLossNonRegression:
         md = _create_md_model(config_name, img_shape=img_shape).to(device)
         md.set_random_patching(patch_shape=patch_shape, patch_num=PATCH_NUM)
         scheduler = EDMNoiseScheduler()
-        loss_fn = _make_loss(md, scheduler, prediction_type)
+        loss_fn = _make_loss(MultiDiffusionMSEDSMLoss, md, scheduler, prediction_type)
 
         H, W = img_shape
         x0 = make_input((BATCH, CHANNELS, H, W), seed=GLOBAL_SEED, device=device)
@@ -259,35 +303,10 @@ class TestMSEDSMLossNonRegression:
 
         losses, params = _run_training_loop(loss_fn, md, x0, condition)
 
-        for loss_val in losses:
-            assert loss_val.ndim == 0 and torch.isfinite(loss_val)
-        assert not torch.equal(param_before, params[0])
-        assert not torch.equal(params[0], params[1])
-
-        # On CUDA, the noise scheduler's internal RNG (sample_time,
-        # add_noise) produces a different random stream than on CPU even
-        # with the same seed, so we only verify shapes and finiteness.
-        # Full value comparison is done on CPU only.
-        if "cuda" in str(device):
-            ref_file = f"{REF_PREFIX}mse_{tag}_train.pth"
-            ref = load_or_create_reference(ref_file, None)
-            assert losses[0].shape == ref["loss_0"].shape
-            assert params[0].shape == ref["param_0"].shape
-        else:
-            ref_file = f"{REF_PREFIX}mse_{tag}_train.pth"
-            ref = load_or_create_reference(
-                ref_file,
-                lambda: {
-                    "loss_0": losses[0],
-                    "loss_1": losses[1],
-                    "param_0": params[0],
-                    "param_1": params[1],
-                },
-            )
-            compare_outputs(losses[0], ref["loss_0"], **tolerances)
-            compare_outputs(losses[1], ref["loss_1"], **tolerances)
-            compare_outputs(params[0], ref["param_0"], **tolerances)
-            compare_outputs(params[1], ref["param_1"], **tolerances)
+        ref_file = f"{REF_PREFIX}mse_{tag}_train.pth"
+        _check_non_regression(
+            losses, params, param_before, ref_file, device, tolerances
+        )
 
 
 # =============================================================================
@@ -298,7 +317,7 @@ class TestMSEDSMLossNonRegression:
 @pytest.mark.parametrize(
     "config_name,prediction_type,img_shape,patch_shape,tag",
     LOSS_CONFIGS,
-    ids=[c[4] for c in LOSS_CONFIGS],
+    ids=_LOSS_IDS,
 )
 class TestWeightedMSEDSMLossNonRegression:
     """Non-regression training loop tests for MultiDiffusionWeightedMSEDSMLoss."""
@@ -317,7 +336,9 @@ class TestWeightedMSEDSMLossNonRegression:
         md = _create_md_model(config_name, img_shape=img_shape).to(device)
         md.set_random_patching(patch_shape=patch_shape, patch_num=PATCH_NUM)
         scheduler = EDMNoiseScheduler()
-        loss_fn = _make_weighted_loss(md, scheduler, prediction_type)
+        loss_fn = _make_loss(
+            MultiDiffusionWeightedMSEDSMLoss, md, scheduler, prediction_type
+        )
 
         H, W = img_shape
         x0 = make_input((BATCH, CHANNELS, H, W), seed=GLOBAL_SEED, device=device)
@@ -326,60 +347,24 @@ class TestWeightedMSEDSMLossNonRegression:
         condition = _make_condition(config_name, img_shape=img_shape, device=device)
         param_before = _first_param(md).cpu()
 
-        losses, params = _run_weighted_training_loop(loss_fn, md, x0, weight, condition)
+        losses, params = _run_training_loop(loss_fn, md, x0, condition, weight=weight)
 
-        for loss_val in losses:
-            assert loss_val.ndim == 0 and torch.isfinite(loss_val)
-        assert not torch.equal(param_before, params[0])
-        assert not torch.equal(params[0], params[1])
-
-        # On CUDA only check shapes (see TestMSEDSMLossNonRegression note).
-        if "cuda" in str(device):
-            ref_file = f"{REF_PREFIX}wmse_{tag}_train.pth"
-            ref = load_or_create_reference(ref_file, None)
-            assert losses[0].shape == ref["loss_0"].shape
-            assert params[0].shape == ref["param_0"].shape
-        else:
-            ref_file = f"{REF_PREFIX}wmse_{tag}_train.pth"
-            ref = load_or_create_reference(
-                ref_file,
-                lambda: {
-                    "loss_0": losses[0],
-                    "loss_1": losses[1],
-                    "param_0": params[0],
-                    "param_1": params[1],
-                },
-            )
-            compare_outputs(losses[0], ref["loss_0"], **tolerances)
-            compare_outputs(losses[1], ref["loss_1"], **tolerances)
-            compare_outputs(params[0], ref["param_0"], **tolerances)
-            compare_outputs(params[1], ref["param_1"], **tolerances)
+        ref_file = f"{REF_PREFIX}wmse_{tag}_train.pth"
+        _check_non_regression(
+            losses, params, param_before, ref_file, device, tolerances
+        )
 
 
 # =============================================================================
 # Compile Tests
 # =============================================================================
 
-# The multi-diffusion losses manage their own internal compilation via
-# _CompiledPatchX (lru_cache + torch.compile on patch_x). They cannot be
-# wrapped in an outer torch.compile due to nested compilation + lru_cache
-# conflicts. These tests verify that the internal compilation works correctly:
-# the loss is called twice with error_on_recompile to ensure the internally
-# compiled patch_x graph is reused across calls and patch resets.
-
-COMPILE_LOSS_CONFIGS = [
-    ("uncond", "x0", (IMG_H, IMG_W), PATCH_SHAPE, "uncond_x0_sq"),
-    ("cond_patch", "x0", (IMG_H, IMG_W), PATCH_SHAPE, "cond_patch_x0_sq"),
-    ("uncond", "score", (IMG_H, IMG_W), PATCH_SHAPE, "uncond_score_sq"),
-    ("uncond", "epsilon", (IMG_H, IMG_W), PATCH_SHAPE, "uncond_eps_sq"),
-]
-
 
 @pytest.mark.usefixtures("nop_compile")
 @pytest.mark.parametrize(
     "config_name,prediction_type,img_shape,patch_shape,tag",
     COMPILE_LOSS_CONFIGS,
-    ids=[c[4] for c in COMPILE_LOSS_CONFIGS],
+    ids=_COMPILE_LOSS_IDS,
 )
 class TestMSEDSMLossCompile:
     """Verify internal _CompiledPatchX compilation is reused across calls."""
@@ -400,7 +385,7 @@ class TestMSEDSMLossCompile:
         md = _create_md_model(config_name, img_shape=img_shape).to(device)
         md.set_random_patching(patch_shape=patch_shape, patch_num=PATCH_NUM)
         scheduler = EDMNoiseScheduler()
-        loss_fn = _make_loss(md, scheduler, prediction_type)
+        loss_fn = _make_loss(MultiDiffusionMSEDSMLoss, md, scheduler, prediction_type)
 
         H, W = img_shape
         x0 = make_input((BATCH, CHANNELS, H, W), seed=GLOBAL_SEED, device=device)
@@ -419,7 +404,7 @@ class TestMSEDSMLossCompile:
 @pytest.mark.parametrize(
     "config_name,prediction_type,img_shape,patch_shape,tag",
     COMPILE_LOSS_CONFIGS,
-    ids=[c[4] for c in COMPILE_LOSS_CONFIGS],
+    ids=_COMPILE_LOSS_IDS,
 )
 class TestWeightedMSEDSMLossCompile:
     """Verify internal _CompiledPatchX compilation is reused across calls."""
@@ -440,7 +425,9 @@ class TestWeightedMSEDSMLossCompile:
         md = _create_md_model(config_name, img_shape=img_shape).to(device)
         md.set_random_patching(patch_shape=patch_shape, patch_num=PATCH_NUM)
         scheduler = EDMNoiseScheduler()
-        loss_fn = _make_weighted_loss(md, scheduler, prediction_type)
+        loss_fn = _make_loss(
+            MultiDiffusionWeightedMSEDSMLoss, md, scheduler, prediction_type
+        )
 
         H, W = img_shape
         x0 = make_input((BATCH, CHANNELS, H, W), seed=GLOBAL_SEED, device=device)
@@ -462,19 +449,6 @@ class TestWeightedMSEDSMLossCompile:
 # =============================================================================
 
 
-def _create_preconditioned_md_model(seed=0):
-    """Full realistic pipeline: EDMPreconditioner(backbone) inside MultiDiffusionModel2D.
-
-    sigma_data is kept consistent between the preconditioner and the
-    EDMNoiseScheduler used in the loss, mirroring the SDA recipe pattern.
-    """
-    backbone = instantiate_model_deterministic(
-        Conv2dX0Predictor, seed=seed, channels=CHANNELS
-    )
-    precond = EDMPreconditioner(backbone, sigma_data=SIGMA_DATA)
-    return MultiDiffusionModel2D(model=precond, global_spatial_shape=(IMG_H, IMG_W))
-
-
 class TestMSEDSMLossWithPreconditionedInnerModel:
     """Non-regression tests for MultiDiffusionMSEDSMLoss with a preconditioned inner model.
 
@@ -491,46 +465,14 @@ class TestMSEDSMLossWithPreconditionedInnerModel:
         loss_fn = MultiDiffusionMSEDSMLoss(md, scheduler)
 
         x0 = make_input(INPUT_SHAPE, seed=GLOBAL_SEED, device=device)
-        param_before = next(md.parameters()).detach().clone().cpu()
+        param_before = _first_param(md).cpu()
 
-        losses = []
-        params = []
-        for _ in range(TRAIN_STEPS):
-            loss = loss_fn(x0)
-            loss.backward()
-            losses.append(loss.detach().cpu())
-            with torch.no_grad():
-                for p in md.parameters():
-                    if p.grad is not None:
-                        p -= LR * p.grad
-                        p.grad = None
-            params.append(next(md.parameters()).detach().clone().cpu())
+        losses, params = _run_training_loop(loss_fn, md, x0, condition=None)
 
-        for loss_val in losses:
-            assert loss_val.ndim == 0 and torch.isfinite(loss_val)
-        assert not torch.equal(param_before, params[0])
-        assert not torch.equal(params[0], params[1])
-
-        if "cuda" in str(device):
-            ref_file = f"{REF_PREFIX}precond_edm_train.pth"
-            ref = load_or_create_reference(ref_file, None)
-            assert losses[0].shape == ref["loss_0"].shape
-            assert params[0].shape == ref["param_0"].shape
-        else:
-            ref_file = f"{REF_PREFIX}precond_edm_train.pth"
-            ref = load_or_create_reference(
-                ref_file,
-                lambda: {
-                    "loss_0": losses[0],
-                    "loss_1": losses[1],
-                    "param_0": params[0],
-                    "param_1": params[1],
-                },
-            )
-            compare_outputs(losses[0], ref["loss_0"], **tolerances)
-            compare_outputs(losses[1], ref["loss_1"], **tolerances)
-            compare_outputs(params[0], ref["param_0"], **tolerances)
-            compare_outputs(params[1], ref["param_1"], **tolerances)
+        ref_file = f"{REF_PREFIX}precond_edm_train.pth"
+        _check_non_regression(
+            losses, params, param_before, ref_file, device, tolerances
+        )
 
 
 class TestWeightedMSEDSMLossWithPreconditionedInnerModel:
@@ -549,43 +491,13 @@ class TestWeightedMSEDSMLossWithPreconditionedInnerModel:
         x0 = make_input(INPUT_SHAPE, seed=GLOBAL_SEED, device=device)
         weight = torch.ones_like(x0)
         weight[:, :, :, : IMG_W // 2] = 0.0
-        param_before = next(md.parameters()).detach().clone().cpu()
+        param_before = _first_param(md).cpu()
 
-        losses = []
-        params = []
-        for _ in range(TRAIN_STEPS):
-            loss = loss_fn(x0, weight=weight)
-            loss.backward()
-            losses.append(loss.detach().cpu())
-            with torch.no_grad():
-                for p in md.parameters():
-                    if p.grad is not None:
-                        p -= LR * p.grad
-                        p.grad = None
-            params.append(next(md.parameters()).detach().clone().cpu())
+        losses, params = _run_training_loop(
+            loss_fn, md, x0, condition=None, weight=weight
+        )
 
-        for loss_val in losses:
-            assert loss_val.ndim == 0 and torch.isfinite(loss_val)
-        assert not torch.equal(param_before, params[0])
-        assert not torch.equal(params[0], params[1])
-
-        if "cuda" in str(device):
-            ref_file = f"{REF_PREFIX}weighted_precond_edm_train.pth"
-            ref = load_or_create_reference(ref_file, None)
-            assert losses[0].shape == ref["loss_0"].shape
-            assert params[0].shape == ref["param_0"].shape
-        else:
-            ref_file = f"{REF_PREFIX}weighted_precond_edm_train.pth"
-            ref = load_or_create_reference(
-                ref_file,
-                lambda: {
-                    "loss_0": losses[0],
-                    "loss_1": losses[1],
-                    "param_0": params[0],
-                    "param_1": params[1],
-                },
-            )
-            compare_outputs(losses[0], ref["loss_0"], **tolerances)
-            compare_outputs(losses[1], ref["loss_1"], **tolerances)
-            compare_outputs(params[0], ref["param_0"], **tolerances)
-            compare_outputs(params[1], ref["param_1"], **tolerances)
+        ref_file = f"{REF_PREFIX}weighted_precond_edm_train.pth"
+        _check_non_regression(
+            losses, params, param_before, ref_file, device, tolerances
+        )

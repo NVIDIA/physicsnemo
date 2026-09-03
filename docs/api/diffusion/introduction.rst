@@ -6,27 +6,40 @@ Introduction
 .. currentmodule:: physicsnemo.diffusion
 
 The PhysicsNeMo diffusion framework provides a modular, composable toolkit for
-building, training, and sampling from diffusion models.  It is designed for
-scientists and engineers who want to apply diffusion-based generative modeling
-to real-world problems, from weather forecasting and climate downscaling to
-geophysical inversion and materials design, while remaining flexible enough for
-research-level experimentation.
+building, training, and sampling from diffusion and flow-matching models. It serves
+scientists and engineers who want to apply diffusion and flow-matching
+generative modeling to real-world problems. Applications range from weather
+forecasting and climate downscaling to geophysical inversion and materials
+design. The framework remains flexible enough for research-level
+experimentation.
 
 Diffusion models learn to generate data by reversing a gradual noising process.
-During training, the model sees data that has been corrupted by varying amounts
-of noise, and it learns to predict the clean data (or, equivalently, the noise
-or the score) from the corrupted version.  At inference time, the model starts
-from pure noise and iteratively removes it, step by step, to produce a new
-sample.  
+During training, the model receives data corrupted by varying amounts of
+noise. It learns to predict the clean data (or, equivalently, the noise
+or the score) from the corrupted version. At inference time, the model
+starts from pure noise and iteratively removes it, step by step, to produce
+a new sample.  
 
-This basic recipe turns out to be remarkably powerful. Diffusion models achieve state-of-the-art results in image generation, and, therefore, are
-increasingly used for scientific applications where the goal is to sample from
+Flow matching is a related paradigm. Instead of reversing a noising
+process, the model learns a velocity field that transports samples along a
+probability path from pure noise to the target distribution. This module
+supports flow matching alongside diffusion, reusing the same backbones,
+preconditioners, samplers, and guidance.
+
+Because this module handles diffusion and flow matching within a single
+unified API, the rest of this reference uses the two terms interchangeably.
+The framework restricts no component to diffusion-only. Unless explicitly
+noted, every abstraction applies to both paradigms.
+
+This basic recipe turns out to be powerful. Diffusion and flow-matching models achieve
+state-of-the-art results in image generation. Users increasingly apply them for
+scientific applications where the goal is to sample from
 complex, high-dimensional distributions conditioned on physical observations
 or constraints.
 
 The framework is organized around a small number of clearly defined
-abstractions.  Each abstraction maps to a specific role in the diffusion
-pipeline and the abstractions compose naturally. The abstractions include: 
+abstractions. Each abstraction maps to a specific role in the diffusion or
+flow-matching pipeline and the abstractions compose naturally. The abstractions include: 
 
 * a :ref:`noise scheduler <diffusion_noise_schedulers>` to control the forward and reverse processes 
 * a :ref:`model backbone <diffusion_model_backbones>` to implement the neural network 
@@ -59,7 +72,7 @@ training and inference.
      - Optionally rescales inputs/outputs for stable training
      - Acts as the predictor passed to the denoiser factory
    * - :ref:`Losses <diffusion_metrics>`
-     - Denoising score matching objective
+     - Denoising score matching and flow matching objectives
      -
    * - :ref:`Samplers and solvers <diffusion_samplers>`
      -
@@ -85,11 +98,13 @@ solver.
 Design Philosophy: Layered Customization
 -----------------------------------------
 
-Diffusion models are used across a wide spectrum of applications in scientific
-machine learning and physics-AI, by users with very different needs, for example: 
+Diffusion and flow-matching models span a wide spectrum of applications in scientific
+machine learning and physics-AI, with users who have different needs, for example: 
 
-* diffusion experts who require full control over the forward process, the solver, or the guidance mechanism
-* domain experts in science and engineering who use diffusion as a tool and need reliable, easy-to-use components  
+* diffusion and flow-matching experts who require full control over the forward
+  process, the solver, or the guidance mechanism
+* domain experts in science and engineering who use diffusion or flow matching
+  as a tool and need reliable, easy-to-use components  
 
 The framework is designed to serve both audiences.
 
@@ -164,8 +179,8 @@ Core Concepts: DiffusionModel, Predictor, and Denoiser
 ------------------------------------------------------
 
 The framework defines three protocol classes that capture the key signatures
-involved in a diffusion pipeline.  Understanding the distinction between them
-is essential.
+involved in a diffusion or flow-matching pipeline. Understanding the
+distinction between them is essential.
 
 **DiffusionModel** (:class:`DiffusionModel`)
     The interface for models during **training**.  A :class:`DiffusionModel`
@@ -176,10 +191,12 @@ is essential.
     :math:`\nabla_{\mathbf{x}} \log p(\mathbf{x})`, noise
     :math:`\boldsymbol{\epsilon}`, or velocity :math:`\mathbf{v}`.
     Which target the model predicts depends on the training objective and
-    the choice of preconditioner.
+    the choice of preconditioner. Despite its name, the protocol applies
+    equally to flow-matching models: the signature is the same whether the
+    model predicts a denoising target or a flow/velocity target.
 
 **Predictor** (:class:`Predictor`)
-    The interface for trained models during **inference**.  A
+    The interface for trained models during **inference**. A
     :class:`Predictor` is a callable ``(x, t) -> prediction`` that does not
     require conditioning as a separate argument.  A predictor is typically
     obtained from a :class:`DiffusionModel` by binding the conditioning using
@@ -208,11 +225,11 @@ These three types form a pipeline:
 
     Training:   data  ->  NoiseScheduler.add_noise  ->  DiffusionModel  ->  Loss
 
-    Inference:  DiffusionModel  ->  partial(...) / closure  ->  Predictor
-                Predictor  ->  (optional: + Guidance)       ->  Predictor
-                Predictor  ->  (optional: x0 <-> score)     ->  Predictor
-                Predictor  ->  NoiseScheduler.get_denoiser  ->  Denoiser
-                Denoiser  ->  Solver.step  (sample loop)    ->  samples
+    Inference:  DiffusionModel  ->  partial(...) / closure                    ->  Predictor
+                Predictor  ->  (optional: + Guidance)                         ->  Predictor
+                Predictor  ->  (optional: x0 <-> score, flow <-> score, etc.) ->  Predictor
+                Predictor  ->  NoiseScheduler.get_denoiser                    ->  Denoiser
+                Denoiser  ->  Solver.step  (sample loop)                      ->  samples
 
 In the inference pipeline, ``partial(...)`` binds the conditioning into the
 predictor (a closure or wrapper function achieves the same result).
@@ -220,30 +237,35 @@ predictor (a closure or wrapper function achieves the same result).
 level---for example, DPS guidance combines an x0-predictor with observation
 constraints to produce a guided score-predictor.  When the predictor type does
 not match what the denoiser factory expects (for example, the model was trained as an
-x0-predictor but guidance produces a score), the noise scheduler can convert
-between the two via ``x0_to_score`` / ``score_to_x0``.
+x0-predictor but guidance produces a score), the noise scheduler converts
+between prediction types via its conversion methods (such as
+``x0_to_score`` and ``x0_to_flow``).
 
 
 Prediction Types
 ----------------
 
-Diffusion models can be trained to predict different targets.  The PhysicsNeMo
-framework currently supports three prediction types, enumerated by the
+You can train diffusion and flow-matching models to predict different targets. The PhysicsNeMo
+framework supports four prediction types, enumerated by the
 :data:`~physicsnemo.diffusion.base.PredictorType` alias:
 
-- **x0-predictor** (``"x0"``): The model estimates the clean data
+- **x0-predictor** (``"x0"``): the model estimates the clean data
   :math:`\hat{\mathbf{x}}_0` from the noisy state :math:`\mathbf{x}_t`.
   This is the most common choice when using a
   :ref:`preconditioner <diffusion_preconditioners>`.
 
-- **Score-predictor** (``"score"``): The model estimates the score function
+- **Score-predictor** (``"score"``): the model estimates the score function
   :math:`\nabla_{\mathbf{x}} \log p(\mathbf{x}_t)`.
 
-- **Epsilon-predictor** (``"epsilon"``): The model estimates the noise
+- **Epsilon-predictor** (``"epsilon"``): the model estimates the noise
   :math:`\hat{\boldsymbol{\epsilon}}` such that
   :math:`\mathbf{x}_t = \alpha(t)\mathbf{x}_0 + \sigma(t)\boldsymbol{\epsilon}`.
 
-For linear-Gaussian noise schedules these three representations are
+- **Flow-predictor** (``"flow"``): the model estimates the velocity
+  :math:`\hat{\mathbf{v}} = \dot{\mathbf{x}}_t` of the probability path, as
+  used in flow matching.
+
+For linear-Gaussian noise schedules these four representations are
 analytically interchangeable, and the framework handles the conversion
 internally when building a denoiser for sampling.  For other schedule
 families, the conversion depends on the specific formulation and may need to

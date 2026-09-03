@@ -6,18 +6,19 @@ Model Backbones
 .. currentmodule:: physicsnemo.diffusion
 
 The backbone is the underlying neural network architecture in a diffusion
-model.  A backbone does not necessarily satisfy the
+or flow-matching model. A backbone does not necessarily meet the
 :class:`~physicsnemo.diffusion.DiffusionModel` protocol directly---many
 popular architectures have their own forward signatures.  When a backbone's
 signature differs, a thin adapter or wrapper is needed to bridge the gap (see
 :ref:`adapters <backbone_adapters>` below).
 
 PhysicsNeMo ships two families of architectures specialized for diffusion
-(UNets and DiT), but the framework is not restricted to them.  Any model from
-the :doc:`PhysicsNeMo model zoo <../../api_models>`, such as
+and flow matching (UNets and DiT), but the framework is not restricted to
+them. Any model from the :doc:`PhysicsNeMo model zoo <../../api_models>` can
+serve as a backbone. Examples include
 :class:`~physicsnemo.models.mlp.FullyConnected`,
-:class:`~physicsnemo.models.fno.FNO`, or graph neural networks, can be used
-as a backbone, either directly or as a building block inside a larger model.
+:class:`~physicsnemo.models.fno.FNO`, and graph neural networks, used
+directly or as a building block inside a larger model.
 Models from external libraries can also be integrated (see
 :ref:`below <backbone_external_models>`).
 
@@ -39,10 +40,11 @@ see the :ref:`Diffusion UNets API reference <diffusion_unet_api>`.
 Diffusion Transformer (DiT)
 ---------------------------
 
-The Diffusion Transformer (DiT) is a Vision Transformer backbone for diffusion
-models.  It operates on image patches via a patchify embedding, processes
-tokens with a sequence of transformer blocks conditioned through adaptive
-layer normalization, and reconstructs the output using an unpatchify step.
+The Diffusion Transformer (DiT) is a Vision Transformer backbone for
+diffusion and flow-matching models. It operates on image patches through a
+patchify embedding, processes tokens with a sequence of transformer blocks
+conditioned through adaptive layer normalization, and reconstructs the
+output using an unpatchify step.
 
 Compared to UNets, DiT has fewer inductive biases, that is, it does not assume locality
 or multi-scale structure.  This makes it more flexible. For instance,
@@ -85,7 +87,7 @@ expects ``(x, t, condition)``.  A short adapter class solves this:
 Using External or Custom Models
 -------------------------------
 
-The diffusion framework is not limited to PhysicsNeMo-native backbones.  Any
+The framework is not limited to PhysicsNeMo-native backbones. Any
 model that satisfies the :class:`~physicsnemo.diffusion.DiffusionModel`
 interface can be used with the framework's
 :ref:`preconditioners <diffusion_preconditioners>`,
