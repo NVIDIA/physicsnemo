@@ -160,3 +160,28 @@ class TestRenameKeys:
         td = _nested_td()
         with pytest.raises(ValueError, match="conflict"):
             rename_keys(td, {("solution", "p"): "sdf"}, strict=True)
+
+    def test_chained_rename_keeps_every_value(self):
+        ### ``a -> b, b -> c`` must move both values, not overwrite ``b``
+        ### with ``a`` before ``b`` has been moved on.
+        td = TensorDict({"a": torch.tensor([1.0]), "b": torch.tensor([2.0])}, [1])
+        out = rename_keys(td, {"a": "b", "b": "c"}, strict=True)
+        assert {k: v.item() for k, v in out.items()} == {"b": 1.0, "c": 2.0}
+
+    def test_swap_rename(self):
+        td = TensorDict({"a": torch.tensor([1.0]), "b": torch.tensor([2.0])}, [1])
+        out = rename_keys(td, {"a": "b", "b": "a"}, strict=True)
+        assert {k: v.item() for k, v in out.items()} == {"a": 2.0, "b": 1.0}
+
+    def test_nested_chain_across_groups(self):
+        td = _nested_td()
+        out = rename_keys(
+            td, {("solution", "p"): "sdf", "sdf": ("solution", "p")}, strict=True
+        )
+        assert torch.equal(out["sdf"], td["solution", "p"])
+        assert torch.equal(out["solution", "p"], td["sdf"])
+
+    def test_duplicate_destination_raises(self):
+        td = _nested_td()
+        with pytest.raises(ValueError, match="same name"):
+            rename_keys(td, {("solution", "p"): "x", "sdf": "x"}, strict=True)

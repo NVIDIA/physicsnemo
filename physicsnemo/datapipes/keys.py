@@ -195,8 +195,9 @@ def rename_keys(
 
     Both sides of ``mapping`` may be top-level or nested keys; a leaf can be
     moved between groups (``("raw", "p") -> "pressure"``) and a whole group
-    can be renamed (``"raw" -> "solution"``). Leaf tensors are shared with
-    ``td``; only the container tree is copied.
+    can be renamed (``"raw" -> "solution"``). All moves are simultaneous, so
+    chains (``a -> b, b -> c``) and swaps (``a -> b, b -> a``) are safe. Leaf
+    tensors are shared with ``td``; only the container tree is copied.
 
     Parameters
     ----------
@@ -215,7 +216,7 @@ def rename_keys(
         In strict mode, when a source key is absent.
     ValueError
         When a destination key already exists and is not itself being
-        renamed away.
+        renamed away, or when two sources map to the same destination.
     """
     present = [old for old in mapping if old in td]
     if strict:
@@ -228,17 +229,28 @@ def rename_keys(
     conflicts = [
         key_to_str(mapping[old])
         for old in present
-        if mapping[old] in td and mapping[old] not in mapping
+        if mapping[old] in td and mapping[old] not in present
     ]
     if conflicts:
         raise ValueError(f"New key names conflict with existing keys: {conflicts}")
+    destinations = [mapping[old] for old in present]
+    duplicates = sorted(
+        {key_to_str(d) for d in destinations if destinations.count(d) > 1}
+    )
+    if duplicates:
+        raise ValueError(f"Several keys are renamed to the same name: {duplicates}")
 
     ### ``clone(recurse=False)`` copies the container tree (including nested
     ### sub-TensorDicts) but not the tensors, so renaming inside a sub-TD
-    ### cannot leak back into ``td``.
+    ### cannot leak back into ``td``. Detach every source before writing any
+    ### destination so a chain ``a -> b, b -> c`` (or a swap) cannot
+    ### overwrite a value that is still waiting to be moved.
     out = td.clone(recurse=False)
+    moved = [(mapping[old], out.get(old)) for old in present]
     for old in present:
-        out.rename_key_(old, mapping[old])
+        out.del_(old)
+    for new, value in moved:
+        out.set(new, value)
     return out
 
 
