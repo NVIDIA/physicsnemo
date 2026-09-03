@@ -119,11 +119,12 @@ class MSEDSMLoss:
     - **Loss weighting** via :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.loss_weight`: returns
       the per-sample weight :math:`w(t)`.
 
-    The model can be trained to either directly predict the clean data
-    :math:`\hat{\mathbf{x}}_0` (``prediction_type="x0"``, default) or to
-    predict the score, which is then converted to an
-    :math:`\hat{\mathbf{x}}_0` estimate via a user-provided
-    ``score_to_x0_fn`` callback (``prediction_type="score"``).
+    The model can directly predict the clean data
+    :math:`\hat{\mathbf{x}}_0` (``prediction_type="x0"``, default), or
+    predict the score, noise, or flow (``prediction_type="score"``,
+    ``"epsilon"``, or ``"flow"``); the matching user-provided
+    ``*_to_x0_fn`` callback then converts the prediction to an
+    :math:`\hat{\mathbf{x}}_0` estimate.
 
     .. warning::
 
@@ -218,6 +219,8 @@ class MSEDSMLoss:
         If ``prediction_type="score"`` and ``score_to_x0_fn`` is ``None``.
     ValueError
         If ``prediction_type="epsilon"`` and ``epsilon_to_x0_fn`` is ``None``.
+    ValueError
+        If ``prediction_type="flow"`` and ``flow_to_x0_fn`` is ``None``.
 
     Examples
     --------
@@ -692,7 +695,7 @@ class FlowMatchingLoss:
     against clean data :math:`\mathbf{x}_0`:
 
     .. math::
-        \mathcal{L} = \mathbb{E}_{t, \boldsymbol{\epsilon}}
+        \mathcal{L} = \mathbb{E}_{t}
         \left[ w(t) \left\| \hat{\mathbf{v}}(\mathbf{x}_t, t)
         - \mathbf{v}(\mathbf{x}_0, \mathbf{x}_t, t) \right\|^2 \right]
 
@@ -916,7 +919,7 @@ class WeightedFlowMatchingLoss:
     ``weight`` argument that multiplies the per-element squared error.
 
     .. math::
-        \mathcal{L} = \mathbb{E}_{t, \boldsymbol{\epsilon}}
+        \mathcal{L} = \mathbb{E}_{t}
         \left[ w(t) \left\| \mathbf{m} \odot
         \left(\hat{\mathbf{v}}(\mathbf{x}_t, t)
         - \mathbf{v}(\mathbf{x}_0, \mathbf{x}_t, t)\right) \right\|^2 \right]
@@ -976,8 +979,7 @@ class WeightedFlowMatchingLoss:
 
     Examples
     --------
-    Apply a binary mask so the loss covers only unmasked elements
-    (e.g., padded atoms in a batch of variable-size point clouds):
+    Apply a binary mask so the loss covers only unmasked elements:
 
     >>> import torch
     >>> from physicsnemo.core import Module

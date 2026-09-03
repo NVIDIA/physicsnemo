@@ -72,7 +72,7 @@ training and inference.
      - Optionally rescales inputs/outputs for stable training
      - Acts as the predictor passed to the denoiser factory
    * - :ref:`Losses <diffusion_metrics>`
-     - Denoising score matching objective
+     - Denoising score matching and flow matching objectives
      -
    * - :ref:`Samplers and solvers <diffusion_samplers>`
      -

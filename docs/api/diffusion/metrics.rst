@@ -29,8 +29,9 @@ converting them internally as needed.
 
 :class:`~physicsnemo.diffusion.metrics.losses.WeightedFlowMatchingLoss`
 and :class:`~physicsnemo.diffusion.metrics.losses.WeightedMSEDSMLoss`
-extends it with an element-wise weight tensor for masking specific spatial
-regions or channels (for example, land versus ocean in weather applications).
+extend their unweighted counterparts with an element-wise weight tensor for
+masking specific spatial regions or channels (for example, land versus ocean
+in weather applications).
 
 .. code-block:: python
 
