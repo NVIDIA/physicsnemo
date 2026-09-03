@@ -213,6 +213,19 @@ def present_keys(td: TensorDict, keys: Iterable[NestedKey]) -> list[NestedKey]:
     return [k for k in keys if k in td]
 
 
+def _nested_pairs(keys: Sequence[NestedKey]) -> tuple[NestedKey, NestedKey] | None:
+    """Return ``(outer, inner)`` if one key path is a strict prefix of another."""
+    paths = [((k,) if isinstance(k, str) else k, k) for k in keys]
+    for outer_path, outer in paths:
+        for inner_path, inner in paths:
+            if (
+                len(inner_path) > len(outer_path)
+                and inner_path[: len(outer_path)] == outer_path
+            ):
+                return outer, inner
+    return None
+
+
 def rename_keys(
     td: TensorDict,
     mapping: Mapping[NestedKey, NestedKey],
@@ -223,9 +236,14 @@ def rename_keys(
 
     Both sides of ``mapping`` may be top-level or nested keys; a leaf can be
     moved between groups (``("raw", "p") -> "pressure"``) and a whole group
-    can be renamed (``"raw" -> "solution"``). All moves are simultaneous, so
-    chains (``a -> b, b -> c``) and swaps (``a -> b, b -> a``) are safe. Leaf
-    tensors are shared with ``td``; only the container tree is copied.
+    can be renamed (``"raw" -> "solution"``). Every source is read from the
+    original tree before any destination is written, so chains
+    (``a -> b, b -> c``) and swaps (``a -> b, b -> a``) are safe. A mapping
+    that names both a group and a key inside it (``"raw"`` and
+    ``("raw", "p")``) is rejected: the group move carries its children with
+    it, so the result would depend on which entry ran first. Rename the group
+    and then its leaves in two steps instead. Leaf tensors are shared with
+    ``td``; only the container tree is copied.
 
     Parameters
     ----------
@@ -244,7 +262,8 @@ def rename_keys(
         In strict mode, when a source key is absent.
     ValueError
         When a destination key already exists and is not itself being
-        renamed away, or when two sources map to the same destination.
+        renamed away, when two sources map to the same destination, or when
+        one source or destination path lies inside another.
     """
     present = [old for old in mapping if old in td]
     if strict:
@@ -267,6 +286,15 @@ def rename_keys(
     )
     if duplicates:
         raise ValueError(f"Several keys are renamed to the same name: {duplicates}")
+    for label, keys in (("source", present), ("destination", destinations)):
+        overlap = _nested_pairs(keys)
+        if overlap:
+            outer, inner = overlap
+            raise ValueError(
+                f"Rename {label} {key_to_str(inner)!r} lies inside {label} "
+                f"{key_to_str(outer)!r}; a group and a key inside it cannot be "
+                f"renamed in one mapping. Rename the group first, then its keys."
+            )
 
     ### ``clone(recurse=False)`` copies the container tree (including nested
     ### sub-TensorDicts) but not the tensors, so renaming inside a sub-TD

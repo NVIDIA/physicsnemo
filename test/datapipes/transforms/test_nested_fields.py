@@ -378,8 +378,13 @@ class TestTensorDictTransforms:
         td = self._td()
         kept = dp.Purge(keep_only=["solution.p"])(td)
         assert set(kept.keys(True, True)) == {("solution", "p")}
-        renamed = dp.Rename(mapping={"solution.p": "pressure", "solution": "sol"})(td)
-        assert "pressure" in renamed and ("sol", "v") in renamed
+        renamed = dp.Rename(mapping={"solution.p": "pressure", "x": "pos"})(td)
+        assert (
+            "pressure" in renamed and "pos" in renamed and ("solution", "v") in renamed
+        )
+        ### A group and a key inside it cannot share one mapping (order-dependent).
+        with pytest.raises(ValueError, match="lies inside"):
+            dp.Rename(mapping={"solution.p": "pressure", "solution": "sol"})(td)
 
 
 class TestCollators:

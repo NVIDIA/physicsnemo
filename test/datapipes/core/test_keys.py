@@ -188,6 +188,30 @@ class TestRenameKeys:
         with pytest.raises(ValueError, match="same name"):
             rename_keys(td, {("solution", "p"): "x", "sdf": "x"}, strict=True)
 
+    def test_group_and_inner_key_in_one_mapping_rejected_in_any_order(self):
+        ### Renaming "raw" carries "raw.p" along, so pairing the two in one
+        ### mapping is order-dependent; reject both orders identically.
+        td = TensorDict(
+            {"a": torch.zeros(2), "raw": {"p": torch.zeros(2), "q": torch.zeros(2)}},
+            batch_size=[],
+        )
+        for mapping in (
+            {"raw": "sol", ("raw", "p"): "pp"},
+            {("raw", "p"): "pp", "raw": "sol"},
+        ):
+            with pytest.raises(ValueError, match="lies inside"):
+                rename_keys(td, mapping, strict=True)
+        ### Overlapping destinations are rejected too.
+        with pytest.raises(ValueError, match="lies inside"):
+            rename_keys(td, {"a": "x", ("raw", "p"): ("x", "p")}, strict=True)
+        ### Two steps give the unambiguous result.
+        out = rename_keys(
+            rename_keys(td, {"raw": "sol"}, strict=True),
+            {("sol", "p"): "pp"},
+            strict=True,
+        )
+        assert set(leaf_keys(out)) == {"a", ("sol", "q"), "pp"}
+
     def test_hoisting_last_leaf_prunes_empty_group(self):
         td = TensorDict({"a": {"b": {"d": torch.zeros(3)}}, "x": torch.zeros(3)}, [3])
         out = rename_keys(td, {("a", "b", "d"): "d"}, strict=True)
