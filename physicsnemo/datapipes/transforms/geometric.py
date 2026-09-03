@@ -29,15 +29,22 @@ import torch
 from tensordict import TensorDict
 
 from physicsnemo.datapipes.keys import (
+    NestedKey,
     as_nested_key,
     as_nested_keys,
     get_leaf,
+    key_to_str,
     with_leaf_name,
 )
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.base import Transform
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.spatial.sdf import signed_distance_field
+
+
+def _path_tag(key: NestedKey) -> str:
+    """``"_"``-join a key path for use inside a derived field name."""
+    return key if isinstance(key, str) else "_".join(key)
 
 
 @register()
@@ -124,6 +131,39 @@ class ComputeSDF(Transform):
             if closest_points_key is not None
             else None
         )
+        ### With several inputs, each output is the output key suffixed with
+        ### the *full* input path ("_"-joined), so ``interior.coords`` and
+        ### ``inlet.coords`` do not both land on ``sdf_coords``. Derive the
+        ### names once and refuse any collision rather than let the last
+        ### input silently overwrite the others.
+        if len(self.input_keys) == 1:
+            self._output_keys = {self.input_keys[0]: self.output_key}
+            self._closest_keys = {self.input_keys[0]: self.closest_points_key}
+        else:
+            self._output_keys = {
+                k: with_leaf_name(self.output_key, lambda n, k=k: f"{n}_{_path_tag(k)}")
+                for k in self.input_keys
+            }
+            self._closest_keys = {
+                k: (
+                    with_leaf_name(
+                        self.closest_points_key,
+                        lambda n, k=k: f"{n}_{_path_tag(k)}",
+                    )
+                    if self.closest_points_key is not None
+                    else None
+                )
+                for k in self.input_keys
+            }
+            for derived in (self._output_keys, self._closest_keys):
+                names = [v for v in derived.values() if v is not None]
+                if len(set(names)) != len(names):
+                    raise ValueError(
+                        f"ComputeSDF input_keys {[key_to_str(k) for k in self.input_keys]} "
+                        f"derive colliding output names "
+                        f"{sorted({key_to_str(n) for n in names if names.count(n) > 1})}; "
+                        f"rename the inputs so their '_'-joined paths are distinct."
+                    )
 
     def __call__(self, data: TensorDict) -> TensorDict:
         """
@@ -166,22 +206,10 @@ class ComputeSDF(Transform):
                 use_sign_winding_number=self.use_winding_number,
             )
 
-            # Store SDF with output key (add suffix if multiple inputs)
-            if len(self.input_keys) == 1:
-                updates[self.output_key] = sdf.reshape(-1, 1)
-                if self.closest_points_key is not None:
-                    updates[self.closest_points_key] = closest_points
-            else:
-                ### Suffix the output leaf name with the input's leaf name,
-                ### keeping the output key's own nesting.
-                leaf = key if isinstance(key, str) else key[-1]
-                updates[with_leaf_name(self.output_key, lambda n: f"{n}_{leaf}")] = (
-                    sdf.reshape(-1, 1)
-                )
-                if self.closest_points_key is not None:
-                    updates[
-                        with_leaf_name(self.closest_points_key, lambda n: f"{n}_{leaf}")
-                    ] = closest_points
+            # Store under the per-input names derived in __init__
+            updates[self._output_keys[key]] = sdf.reshape(-1, 1)
+            if self._closest_keys[key] is not None:
+                updates[self._closest_keys[key]] = closest_points
 
         return data.update(updates)
 
