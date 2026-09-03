@@ -124,11 +124,7 @@ import torch
 from physicsnemo.mesh import Mesh
 
 # Create a triangle mesh in 2D
-points = torch.tensor([
-    [0.0, 0.0],
-    [1.0, 0.0],
-    [0.5, 1.0]
-])
+points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]])
 
 # Indicates that points 0, 1, and 2 form a cell (in 2D, a triangle)
 cells = torch.tensor([[0, 1, 2]])
@@ -184,6 +180,7 @@ mesh = from_pyvista(pv_mesh)
 
 # Or, equivalently:
 from physicsnemo.mesh.primitives.pyvista_datasets.airplane import load
+
 mesh = load()
 
 print(mesh)
@@ -385,7 +382,7 @@ Comprehensive overview of PhysicsNeMo-Mesh capabilities:
 import numpy as np
 
 mesh_translated = mesh.translate([1.0, 0.0, 0.0])
-mesh_rotated = mesh.rotate(axis=[0, 0, 1], angle=np.pi/4)
+mesh_rotated = mesh.rotate(axis=[0, 0, 1], angle=np.pi / 4)
 mesh_scaled = mesh.scale(2.0)  # Or [2.0, 1.0, 0.5] for anisotropic
 ```
 
@@ -486,8 +483,8 @@ with either backend are not supported inside CUDA Graph capture.
 ### Subdivision
 
 ```python
-refined = mesh.subdivide(levels=2, filter="linear")    # Topology only
-smooth = mesh.subdivide(levels=2, filter="loop")       # C² continuous
+refined = mesh.subdivide(levels=2, filter="linear")  # Topology only
+smooth = mesh.subdivide(levels=2, filter="loop")  # C² continuous
 interp = mesh.subdivide(levels=2, filter="butterfly")  # Interpolating
 ```
 
@@ -541,10 +538,13 @@ accepts the corresponding raw CVT integration density.
 ### Discrete Calculus
 
 ```python
-from physicsnemo.mesh.calculus import compute_divergence_points_lsq, compute_curl_points_lsq
+from physicsnemo.mesh.calculus import (
+    compute_divergence_points_lsq,
+    compute_curl_points_lsq,
+)
 
 # Gradient
-mesh.point_data["pressure"] = (mesh.points ** 2).sum(dim=-1)
+mesh.point_data["pressure"] = (mesh.points**2).sum(dim=-1)
 mesh_grad = mesh.compute_point_derivatives(keys="pressure", method="lsq")
 grad_p = mesh_grad.point_data["pressure_gradient"]  # (n_points, n_spatial_dims)
 
@@ -627,12 +627,14 @@ cached geometry.
 annotations and runtime `isinstance` checks:
 
 ```python
-def compute_normals(mesh: Mesh[2, 3]) -> torch.Tensor:
-    ...  # accepts only triangle meshes in 3D
+def compute_normals(
+    mesh: Mesh[2, 3],
+) -> torch.Tensor: ...  # accepts only triangle meshes in 3D
 
-isinstance(mesh, Mesh[2, 3])    # True for triangles in 3D
+
+isinstance(mesh, Mesh[2, 3])  # True for triangles in 3D
 isinstance(mesh, Mesh[1, ...])  # True for any edge mesh
-Mesh[2, 3].boundary             # -> Mesh[1, 3]
+Mesh[2, 3].boundary  # -> Mesh[1, 3]
 ```
 
 Use `...` (Ellipsis) to leave a dimension unconstrained.
@@ -671,6 +673,7 @@ The following patterns may cause graph breaks under `torch.compile`:
    ```python
    # Preprocessing (may have graph breaks)
    neighbors = mesh.get_point_to_points_adjacency()
+
 
    # Compilable inner loop
    @torch.compile

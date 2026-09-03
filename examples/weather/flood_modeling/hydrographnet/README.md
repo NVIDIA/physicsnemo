@@ -124,7 +124,7 @@ dataset = HydroGraphDataset(
     prefix="M80",
     split="train",  # or "test"
     n_time_steps=2,
-    return_physics=True
+    return_physics=True,
 )
 ```
 

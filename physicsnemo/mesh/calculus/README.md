@@ -171,7 +171,7 @@ grad = compute_gradient_points_lsq(
     mesh,
     scalar_field,
     weight_power=2.0,  # Inverse distance weighting
-    intrinsic=False    # Set True for tangent-space gradients on manifolds
+    intrinsic=False,  # Set True for tangent-space gradients on manifolds
 )
 
 # At cell centers
@@ -286,14 +286,14 @@ See [^meyer2003-s32_34], [^desbrun2005-s3], and [^hirani2003-def245].
 ```python
 # Unified interface for derivatives
 mesh_with_grad = mesh.compute_point_derivatives(
-    keys=['pressure', 'temperature'],
-    method='lsq',  # or 'dec' for Laplacian only
-    gradient_type='extrinsic',  # or 'intrinsic' for manifolds
+    keys=["pressure", "temperature"],
+    method="lsq",  # or 'dec' for Laplacian only
+    gradient_type="extrinsic",  # or 'intrinsic' for manifolds
     weight_power=2.0,
 )
 
 # Access results
-grad_p = mesh_with_grad.point_data['pressure_gradient']  # (n_points, n_spatial_dims)
+grad_p = mesh_with_grad.point_data["pressure_gradient"]  # (n_points, n_spatial_dims)
 ```
 
 ### Direct Operator Calls
@@ -377,13 +377,13 @@ from physicsnemo.mesh.calculus.laplacian import compute_laplacian_points_dec
 mesh = ...  # 2D surface in 3D
 
 # Add scalar field (e.g., temperature distribution)
-temperature = mesh.point_data['temperature']
+temperature = mesh.point_data["temperature"]
 
 # Compute intrinsic Laplacian
 laplacian = compute_laplacian_points_dec(mesh, temperature)
 
 # Use for diffusion: dT/dt = kappa * Lap T
-mesh.point_data['laplacian_T'] = laplacian
+mesh.point_data["laplacian_T"] = laplacian
 ```
 
 ### Example 2: Gradient on Manifold (Intrinsic)
@@ -402,7 +402,7 @@ grad_intrinsic = compute_gradient_points_lsq(
 assert torch.allclose(
     (grad_intrinsic * mesh.point_normals).sum(dim=-1),
     torch.zeros(mesh.n_points),
-    atol=1e-6
+    atol=1e-6,
 )
 ```
 
