@@ -37,6 +37,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds `ExponentialEulerSolver`, `EDMStochasticExponentialEulerSolver`,
+  `DPMPlusPlus2M`, and `DPMPlusPlus2MUniC2` to
+  `physicsnemo.diffusion.samplers`. `ExponentialEulerSolver` supports
+  DDIM-like sampling for distilled few-step models, its stochastic
+  counterpart adds EDM-style churn and configurable re-noising,
+  `DPMPlusPlus2M` provides efficient second-order sampling, and
+  `DPMPlusPlus2MUniC2` adds a UniC-2 corrector stage that raises
+  DPM-Solver++(2M) to third order while keeping one denoiser evaluation
+  per step. The solvers share an extended semi-linear callback API
+  (`bias_fn`, `bias_int_fn`, `slope_fn`); users can select all four
+  solvers by string key through `physicsnemo.diffusion.samplers.sample`.
 - Adds `ShardTensor` support for GeoTransolver and FLARE models.
 - Adds zarr save/load for `Mesh` and `DomainMesh` via tensordict's zarr
   storage backend: `physicsnemo.mesh.io.to_zarr` / `from_zarr`, with
@@ -316,6 +327,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Extends `LinearGaussianNoiseScheduler` with two new methods:
+  `get_linear_denoiser` exposes the extended semi-linear structure used by
+  the new exponential and multistep solvers, returning a tuple of bias,
+  antiderivative, and slope callables (`bias`, `bias_int`, `slope`) and
+  taking a single `prediction_type` string; `snr` exposes the schedule's
+  signal-to-noise ratio, used as the multistep extrapolation coordinate by
+  `DPMPlusPlus2M` and `DPMPlusPlus2MUniC2`. Both complement `get_denoiser()`
+  while preserving the selected predictor parameterization and ODE or SDE
+  dynamics.
 - Splits the monolithic `physicsnemo.diffusion.noise_schedulers.noise_schedulers`
   and `physicsnemo.diffusion.samplers.solvers` modules into one module per class,
   named after the schedule or solver it defines, with the `NoiseScheduler` and
