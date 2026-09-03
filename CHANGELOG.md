@@ -313,6 +313,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   next event (the new particle's features and inter-event delay) from the
   current particle population, an optional background mesh, and the simulation
   time. Independent rollouts form an ensemble for uncertainty quantification.
+- Adds an FP-DDM domain-decomposition example (`examples/tcad/fp_ddm`): an
+  overlapping Schwarz method for steady 2-D thermal problems with a
+  physics-informed PhysicsNeMo FNO local solver, a matrix-free finite-volume
+  reference solver, and a numerical plane-stress elasticity baseline.
 
 ### Changed
 
