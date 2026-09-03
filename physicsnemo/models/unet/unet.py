@@ -31,7 +31,11 @@ from physicsnemo.core.version_check import check_version_spec
 TE_AVAILABLE = check_version_spec("transformer_engine", "0.10.0", hard_fail=False)
 
 if TE_AVAILABLE:
-    te = importlib.import_module("transformer_engine.pytorch")
+    try:
+        te = importlib.import_module("transformer_engine.pytorch")
+    except (ImportError, OSError):
+        TE_AVAILABLE = False
+        te = None
 else:
     te = None
 
