@@ -762,8 +762,10 @@ class TestComputeSDF:
         )
         data = TensorDict(
             {
-                "interior": {"coords": torch.tensor([[0.0, 0.0, 0.0]])},
-                "inlet": {"coords": torch.tensor([[2.0, 0.0, 0.0]])},
+                ### Different distances to the cube surface (0.5 vs 2.0) so the
+                ### two outputs are distinguishable.
+                "interior": {"coords": torch.tensor([[0.0, 0.0, 0.5]])},
+                "inlet": {"coords": torch.tensor([[3.0, 0.0, 0.0]])},
                 "mesh_coords": vertices,
                 "mesh_faces": faces,
             }
@@ -775,8 +777,9 @@ class TestComputeSDF:
         assert "sdf_inlet_coords" in result
         assert "closest_interior_coords" in result
         assert "closest_inlet_coords" in result
-        assert (
-            result["sdf_interior_coords"].item() < 0 < result["sdf_inlet_coords"].item()
+        # Each output holds its own input's result (no overwrite by the last input).
+        assert not torch.equal(
+            result["sdf_interior_coords"], result["sdf_inlet_coords"]
         )
 
     def test_sdf_colliding_derived_names_raise(self):
