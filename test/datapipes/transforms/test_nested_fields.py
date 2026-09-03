@@ -106,6 +106,10 @@ class TestDropMeshFields:
         out = DropMeshFields(cell_data=["solution"])(_surface_mesh())
         assert _leaves(out.cell_data) == {"normals"}
 
+    def test_dropping_last_leaf_prunes_empty_group(self):
+        out = DropMeshFields(point_data=["geom.sdf"])(_surface_mesh())
+        assert set(out.point_data.keys()) == {"id"}
+
     def test_path_through_leaf_is_a_silent_miss_not_a_crash(self):
         ### "normals.x" descends through the leaf tensor "normals"; TensorDict's
         ### own exclude raises AttributeError on that, DropMeshFields must not.
@@ -183,6 +187,17 @@ class TestNormalizeMeshFields:
         norm = NormalizeMeshFields(association="cell_data", fields=self._stats())
         norm.stats.clear()
         assert norm.stats  # unchanged
+        ### The setter coerces to float32 like __init__ does.
+        norm.stats = {
+            "solution.wssMeanTrim": {
+                "type": "vector",
+                "mean": torch.zeros(3, dtype=torch.float64),
+                "std": torch.ones(3, dtype=torch.float64),
+            }
+        }
+        assert norm(_surface_mesh()).cell_data["solution", "wssMeanTrim"].dtype == (
+            torch.float32
+        )
         norm.stats = {
             "solution.pMeanTrim": {
                 "type": "scalar",
@@ -385,6 +400,22 @@ class TestTensorDictTransforms:
         ### A group and a key inside it cannot share one mapping (order-dependent).
         with pytest.raises(ValueError, match="lies inside"):
             dp.Rename(mapping={"solution.p": "pressure", "solution": "sol"})(td)
+
+
+class TestReaderFieldNames:
+    def test_field_names_include_nested_and_non_tensor_entries(self):
+        class _Reader(dp.Reader):
+            def __len__(self):
+                return 1
+
+            def _load_sample(self, index):
+                return {
+                    "x": torch.zeros(3),
+                    "g": {"y": torch.ones(3)},
+                    "name": "case_a",
+                }
+
+        assert _Reader().field_names == ["x", ("g", "y"), "name"]
 
 
 class TestCollators:

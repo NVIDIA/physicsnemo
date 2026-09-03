@@ -32,8 +32,8 @@ from physicsnemo.datapipes.keys import (
     NestedKey,
     as_nested_key,
     as_nested_keys,
+    exclude_keys,
     key_to_str,
-    present_keys,
     rename_keys,
     require_keys,
 )
@@ -368,19 +368,12 @@ class DropMeshFields(MeshTransform):
         self._global_data_keys = as_nested_keys(global_data)
 
     def __call__(self, mesh: Mesh) -> Mesh:
-        ### ``TensorDict.exclude(*keys)`` is null-safe for missing keys and a
-        ### no-op clone when the key list is empty, but a nested key whose
-        ### prefix is a leaf tensor makes it raise, so filter to present keys.
+        ### ``exclude_keys`` tolerates missing keys and drops groups emptied
+        ### by removing their last leaf.
         return mesh.with_data(
-            point_data=mesh.point_data.exclude(
-                *present_keys(mesh.point_data, self._point_data_keys)
-            ),
-            cell_data=mesh.cell_data.exclude(
-                *present_keys(mesh.cell_data, self._cell_data_keys)
-            ),
-            global_data=mesh.global_data.exclude(
-                *present_keys(mesh.global_data, self._global_data_keys)
-            ),
+            point_data=exclude_keys(mesh.point_data, self._point_data_keys),
+            cell_data=exclude_keys(mesh.cell_data, self._cell_data_keys),
+            global_data=exclude_keys(mesh.global_data, self._global_data_keys),
         )
 
     def extra_repr(self) -> str:
@@ -752,8 +745,21 @@ class NormalizeMeshFields(MeshTransform):
 
     @stats.setter
     def stats(self, value: Mapping[str, dict]) -> None:
-        """Replace the live statistics; names are re-keyed via :func:`as_nested_key`."""
-        self._stats = {as_nested_key(name): dict(s) for name, s in value.items()}
+        """Replace the live statistics; names are re-keyed via :func:`as_nested_key`.
+
+        Applies the same float32 coercion as ``__init__`` and moves the
+        tensors to the device a previous :meth:`to` selected.
+        """
+        self._stats = {
+            as_nested_key(name): {
+                **s,
+                "mean": torch.as_tensor(s["mean"], dtype=torch.float32),
+                "std": torch.as_tensor(s["std"], dtype=torch.float32),
+            }
+            for name, s in value.items()
+        }
+        if self._device is not None:
+            self.to(self._device)
 
     def extra_repr(self) -> str:
         parts = []
@@ -1130,7 +1136,7 @@ class MeshToDomainMesh(MeshTransform):
         )
         ### Build the boundary by stripping target fields from cell_data.
         boundary_cell_data = (
-            mesh.cell_data.exclude(*self._cell_data_targets)
+            exclude_keys(mesh.cell_data, self._cell_data_targets)
             if self._cell_data_targets
             else mesh.cell_data
         )
@@ -1155,7 +1161,7 @@ class MeshToDomainMesh(MeshTransform):
             point_data=interior_point_data,
         )
         boundary_point_data = (
-            mesh.point_data.exclude(*self._point_data_targets)
+            exclude_keys(mesh.point_data, self._point_data_targets)
             if self._point_data_targets
             else mesh.point_data
         )

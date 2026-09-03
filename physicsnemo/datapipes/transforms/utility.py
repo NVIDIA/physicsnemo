@@ -31,6 +31,7 @@ from tensordict import TensorDict
 from physicsnemo.datapipes.keys import (
     as_nested_key,
     as_nested_keys,
+    exclude_keys,
     format_leaf_keys,
     get_leaf,
     key_to_str,
@@ -291,7 +292,7 @@ class Purge(Transform):
 
             ### ``exclude`` handles nested keys; filter to present ones for
             ### the same reason as above.
-            return data.exclude(*present_keys(data, keys_to_drop))
+            return exclude_keys(data, keys_to_drop)
 
         else:
             # Default: drop nothing, keep everything

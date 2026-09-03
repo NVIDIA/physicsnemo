@@ -26,6 +26,7 @@ from physicsnemo.datapipes.keys import (
     KEY_SEPARATOR,
     as_nested_key,
     as_nested_keys,
+    exclude_keys,
     format_leaf_keys,
     get_leaf,
     key_to_str,
@@ -56,13 +57,11 @@ class TestAsNestedKey:
         assert as_nested_key("a.b.c") == ("a", "b", "c")
 
     def test_sequence_is_taken_verbatim(self):
-        ### A list lets a leaf name that itself contains "." be addressed.
-        assert as_nested_key(["solution", "p.mean"]) == ("solution", "p.mean")
+        assert as_nested_key(["solution", "pressure"]) == ("solution", "pressure")
         assert as_nested_key(("solution", "p")) == ("solution", "p")
 
     def test_single_element_sequence_collapses_to_string(self):
         assert as_nested_key(["pressure"]) == "pressure"
-        assert as_nested_key(["p.mean"]) == "p.mean"
 
     def test_separator_matches_tensordict_default(self):
         ### The config separator is deliberately the one TensorDict itself
@@ -233,8 +232,11 @@ class TestKeyGuards:
         td = _nested_td()
         assert present_keys(td, [("sdf", "x"), "sdf", ("solution", "zz")]) == ["sdf"]
 
-    def test_get_leaf_hints_at_literal_dotted_name(self):
-        td = TensorDict({"p.mean": torch.zeros(2)}, batch_size=[2])
-        with pytest.raises(KeyError, match="one-element list"):
-            get_leaf(td, as_nested_key("p.mean"))
-        assert get_leaf(td, as_nested_key(["p.mean"])).shape == (2,)
+    def test_exclude_keys_prunes_emptied_groups(self):
+        td = TensorDict({"a": {"b": {"d": torch.zeros(3)}}, "x": torch.zeros(3)}, [3])
+        out = exclude_keys(td, [("a", "b", "d"), ("nope", "z")])
+        assert set(out.keys()) == {"x"}
+        ### A group that still has leaves is kept; input untouched.
+        out = exclude_keys(_nested_td(), [("solution", "p")])
+        assert set(out.keys(True, True)) == {("solution", "v"), "sdf"}
+        assert ("solution", "p") in _nested_td()

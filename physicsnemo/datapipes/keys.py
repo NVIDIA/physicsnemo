@@ -31,9 +31,13 @@ through :func:`as_nested_key`. The convention is:
   leaf ``("solution", "gauge_pressure")``. This matches the separator used by
   ``TensorDict.flatten_keys`` and by the existing ``Rename`` / ``Purge`` /
   ``RestructureTensorDict`` transforms.
-- A list / tuple of strings is taken verbatim as the key path, so a leaf whose
-  name itself contains a ``"."`` can still be addressed unambiguously
-  (``["p.mean"]``).
+- A list / tuple of strings is taken verbatim as the key path (the form to use
+  from Python when the key is already a tuple).
+
+``"."`` and ``"/"`` are therefore reserved in field names: ``"."`` is the
+config-string nesting separator and ``"/"`` is the on-disk one (VTK, HDF5,
+zarr). A leaf whose own name contains either character is not supported;
+name it something else.
 
 Everything else in this module exists so that downstream code never has to
 iterate ``td.keys()`` without ``include_nested=True, leaves_only=True``, and
@@ -88,8 +92,8 @@ def as_nested_key(key: str | Sequence[str]) -> NestedKey:
     'pressure'
     >>> as_nested_key("solution.pressure")
     ('solution', 'pressure')
-    >>> as_nested_key(["solution", "p.mean"])
-    ('solution', 'p.mean')
+    >>> as_nested_key(["solution", "pressure"])
+    ('solution', 'pressure')
     """
     if isinstance(key, str):
         parts: tuple[str, ...] = tuple(key.split(KEY_SEPARATOR))
@@ -172,15 +176,9 @@ def get_leaf(td: TensorDict, key: NestedKey, *, what: str = "Field") -> torch.Te
     except ValueError:
         value = None
     if value is None:
-        hint = ""
-        if isinstance(key, tuple) and key_to_str(key) in td:
-            hint = (
-                f" A top-level field literally named {key_to_str(key)!r} exists; "
-                f"address it as a one-element list, [{key_to_str(key)!r}]."
-            )
         raise KeyError(
             f"{what} {key_to_str(key)!r} not found in data. "
-            f"Available fields: {format_leaf_keys(td)}.{hint}"
+            f"Available fields: {format_leaf_keys(td)}"
         )
     if isinstance(value, TensorDict):
         raise TypeError(
@@ -211,6 +209,32 @@ def require_keys(
 def present_keys(td: TensorDict, keys: Iterable[NestedKey]) -> list[NestedKey]:
     r"""The subset of ``keys`` present in ``td``, for null-safe ``exclude`` / ``select``."""
     return [k for k in keys if k in td]
+
+
+def _prune_empty_ancestors(td: TensorDict, key: NestedKey) -> None:
+    """Delete the groups above ``key`` that are now empty, walking upward."""
+    parent = key[:-1] if isinstance(key, tuple) else ()
+    while parent:
+        group = td.get(parent, None)
+        if isinstance(group, TensorDict) and group.is_empty():
+            td.del_(parent)
+            parent = parent[:-1]
+        else:
+            break
+
+
+def exclude_keys(td: TensorDict, keys: Iterable[NestedKey]) -> TensorDict:
+    r"""``td.exclude(*keys)`` that tolerates missing keys and prunes emptied groups.
+
+    Removing the last leaf of a group with plain ``exclude`` leaves an empty
+    sub-TensorDict behind; this drops such groups so the result has no empty
+    containers the caller did not ask for. Leaf tensors are shared with ``td``.
+    """
+    keys = present_keys(td, keys)
+    out = td.exclude(*keys)
+    for key in keys:
+        _prune_empty_ancestors(out, key)
+    return out
 
 
 def _nested_pairs(keys: Sequence[NestedKey]) -> tuple[NestedKey, NestedKey] | None:
@@ -308,18 +332,10 @@ def rename_keys(
     for new, value in moved:
         out.set(new, value)
     ### Hoisting the last leaf out of a group leaves an empty sub-TensorDict
-    ### behind; drop such groups (walking up) so the result has no empty
-    ### containers the caller did not ask for.
+    ### behind; drop such groups so the result has no empty containers the
+    ### caller did not ask for.
     for old in present:
-        parent = old[:-1] if isinstance(old, tuple) else ()
-        while parent:
-            group = out.get(parent, None)
-            if not isinstance(group, TensorDict) or group.is_empty():
-                if group is not None:
-                    out.del_(parent)
-                parent = parent[:-1]
-            else:
-                break
+        _prune_empty_ancestors(out, old)
     return out
 
 

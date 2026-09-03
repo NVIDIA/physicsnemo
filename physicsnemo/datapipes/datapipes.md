@@ -100,8 +100,10 @@ a config routes it through `physicsnemo.datapipes.keys.as_nested_key`:
 - A `"."` in a name addresses a nested leaf: `"solution.gauge_pressure"`
   is `("solution", "gauge_pressure")`. This is the same separator
   `TensorDict.flatten_keys` uses.
-- A list of strings is taken verbatim, so a leaf whose own name contains a
-  `"."` is still reachable: `["p.mean"]`.
+- `"."` and `"/"` are reserved: `"."` is the config nesting separator and
+  `"/"` is the on-disk one (VTK, HDF5, zarr). Do not use either inside a
+  field name; a leaf literally named `p.mean` is unsupported and will be
+  read as the nested key `("p", "mean")`.
 
 Users never have to flatten or unflatten a TensorDict to reach a nested
 field. When writing new datapipe code, use `key in td` (works for both

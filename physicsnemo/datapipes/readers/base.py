@@ -29,7 +29,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Iterator
 
 import torch
-from tensordict import TensorDict
+from tensordict import TensorDict, is_leaf_nontensor
 
 from physicsnemo.datapipes._rng import spawn_generator
 
@@ -172,8 +172,12 @@ class Reader(ABC):
         """
         if len(self) == 0:
             return []
-        data = self._load_sample(0)
-        return list(TensorDict(data).keys(include_nested=True, leaves_only=True))
+        td = TensorDict(self._load_sample(0))
+        ### ``is_leaf_nontensor`` keeps non-tensor entries (strings, None)
+        ### in the listing, as they were before nesting was supported.
+        return list(
+            td.keys(include_nested=True, leaves_only=True, is_leaf=is_leaf_nontensor)
+        )
 
     def _get_sample_metadata(self, index: int) -> dict[str, Any]:
         """
