@@ -418,7 +418,7 @@
   
   
   <span class="md-ellipsis">
-    July 2026
+    September 2026
     
   </span>
   
@@ -596,6 +596,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#aerojepa-from-research-to-enterprise-use" class="md-nav__link">
+    <span class="md-ellipsis">
+      AeroJEPA: From Research to Enterprise Use
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#a-probabilistic-surrogate-for-kinetic-monte-carlo-simulations" class="md-nav__link">
     <span class="md-ellipsis">
       A Probabilistic Surrogate for Kinetic Monte Carlo Simulations
@@ -626,15 +635,6 @@
   <a href="#building-ai-surrogate-models-for-structural-and-automotive-crash-analysis-with-nvidia-physicsnemo" class="md-nav__link">
     <span class="md-ellipsis">
       Building AI Surrogate Models for Structural and Automotive Crash Analysis with NVIDIA PhysicsNeMo
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#optimizing-and-scaling-domino" class="md-nav__link">
-    <span class="md-ellipsis">
-      Optimizing and Scaling DoMINO
     </span>
   </a>
   
@@ -716,6 +716,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#aerojepa-from-research-to-enterprise-use" class="md-nav__link">
+    <span class="md-ellipsis">
+      AeroJEPA: From Research to Enterprise Use
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#a-probabilistic-surrogate-for-kinetic-monte-carlo-simulations" class="md-nav__link">
     <span class="md-ellipsis">
       A Probabilistic Surrogate for Kinetic Monte Carlo Simulations
@@ -751,15 +760,6 @@
   
 </li>
       
-        <li class="md-nav__item">
-  <a href="#optimizing-and-scaling-domino" class="md-nav__link">
-    <span class="md-ellipsis">
-      Optimizing and Scaling DoMINO
-    </span>
-  </a>
-  
-</li>
-      
     </ul>
   
 </nav>
@@ -774,6 +774,55 @@
       <header class="md-typeset">
         <h1 id="physicsnemo">PhysicsNeMo</h1>
       </header>
+      
+        <article class="md-post md-post--excerpt">
+  <header class="md-post__header">
+    
+      <nav class="md-post__authors md-typeset">
+        
+          <span class="md-author">
+            <img src="../../../author-images/mohammad_headshot.png" alt="Mohammad Nabian">
+          </span>
+        
+      </nav>
+    
+    <div class="md-post__meta md-meta">
+      <ul class="md-meta__list">
+        <li class="md-meta__item">
+          <time datetime="2026-09-02 00:00:00+00:00">September 2, 2026</time></li>
+        
+          <li class="md-meta__item">
+            in
+            
+              <a href="./" class="md-meta__link">PhysicsNeMo</a></li>
+        
+        
+          
+          <li class="md-meta__item">
+            
+              13 min read
+            
+          </li>
+        
+      </ul>
+      
+    </div>
+  </header>
+  <div class="md-post__content md-typeset">
+    <h2 id="aerojepa-from-research-to-enterprise-use"><a class="toclink" href="../../2026/09/02/aerojepa/">AeroJEPA: From Research to Enterprise Use</a></h2>
+<p>AI-enhanced simulation solutions now support high-fidelity computational fluid dynamics (CFD) simulations for aerodynamic design. Such solutions leverage AI surrogates trained on a corpus of simulated data, and several challenges remain before these solutions become more generalizable. Examples include the transferability of pretrained models, from cross-regime generalization to geometry and boundary condition generation, and the question of what constitutes a universal CFD input/output representation for training on diverse corpora of datasets.</p>
+<p>One such challenge is an effective latent representation of the geometry and flow physics that can encode the physical variables. A “good” latent representation helps in scaling by compressing the data. It also preserves the structures that transfer across prediction tasks. For foundation models, this means capturing reusable concepts while filtering out incidental details such as resolution, mesh, or data format. A strong latent space improves sample efficiency, supports generalization to new domains, enables multiple input and output modalities, and makes downstream adaptation cheaper. If the latent space discards important information or encodes dataset-specific shortcuts, scaling the model or training data only reinforces those limitations.</p>
+<p><a href="https://arxiv.org/abs/2605.05586">AeroJEPA</a>, introduced by Giral et al., takes on the challenge of creating a compact latent representation through predictive latent learning. The model is the result of a broad collaboration across universities in the US and Spain, led by Professor Ricardo Vinuesa’s group at the University of Michigan. Instead of predicting only a large flow field, it learns a compact representation of the flow that can be decoded when needed and used directly for downstream analysis. This post introduces the central idea behind AeroJEPA and highlights what the experiments show. It also describes how the researchers leveraged PhysicsNeMo and its open-source development to turn the research implementation into a scalable and optimized production workflow that other researchers and enterprises can train, evaluate, and customize.</p>
+
+    
+      <nav class="md-post__action">
+        <a href="../../2026/09/02/aerojepa/">
+          Continue reading
+        </a>
+      </nav>
+    
+  </div>
+</article>
       
         <article class="md-post md-post--excerpt">
   <header class="md-post__header">
@@ -960,58 +1009,6 @@
     
       <nav class="md-post__action">
         <a href="../../2026/03/17/structural-mechanics/">
-          Continue reading
-        </a>
-      </nav>
-    
-  </div>
-</article>
-      
-        <article class="md-post md-post--excerpt">
-  <header class="md-post__header">
-    
-      <nav class="md-post__authors md-typeset">
-        
-          <span class="md-author">
-            <img src="../../../author-images/corey_headshot.jpg" alt="Corey Adams">
-          </span>
-        
-      </nav>
-    
-    <div class="md-post__meta md-meta">
-      <ul class="md-meta__list">
-        <li class="md-meta__item">
-          <time datetime="2025-10-21 00:00:00+00:00">October 21, 2025</time></li>
-        
-          <li class="md-meta__item">
-            in
-            
-              <a href="./" class="md-meta__link">PhysicsNeMo</a></li>
-        
-        
-          
-          <li class="md-meta__item">
-            
-              20 min read
-            
-          </li>
-        
-      </ul>
-      
-    </div>
-  </header>
-  <div class="md-post__content md-typeset">
-    <h2 id="optimizing-and-scaling-domino"><a class="toclink" href="../../2025/10/21/physicsnemo-domino-opt/">Optimizing and Scaling DoMINO</a></h2>
-<p><a href="https://arxiv.org/abs/2501.13350">DoMINO</a> is one of the most popular and accurate models in PhysicsNeMo, with 
-top accuracy metrics as measured by <a href="https://github.com/NVIDIA/physicsnemo-cfd">physicsnemo-cfd</a>.
-Originally developed by and for PhysicsNeMo, DoMINO has been overhauled for
-performance optimizations and scale out enhancements.  In this blog post, we'll highlight the performance
-enhancements we've made to DoMINO - giving more than 30x end to end speed up on DrivAerML training -
-as well as how you can use them from PhysicsNeMo for your own models.</p>
-
-    
-      <nav class="md-post__action">
-        <a href="../../2025/10/21/physicsnemo-domino-opt/">
           Continue reading
         </a>
       </nav>

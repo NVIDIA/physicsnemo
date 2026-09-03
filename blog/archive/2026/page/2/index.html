@@ -24,7 +24,7 @@
     
     
       
-        <title>July 2026 - NVIDIA PhysicsNeMo</title>
+        <title>September 2026 - NVIDIA PhysicsNeMo</title>
       
     
     
@@ -65,7 +65,7 @@
       
         <meta  property="og:type"  content="website" >
       
-        <meta  property="og:title"  content="July 2026 - NVIDIA PhysicsNeMo" >
+        <meta  property="og:title"  content="September 2026 - NVIDIA PhysicsNeMo" >
       
         <meta  property="og:description"  content="PhysicsNeMo blog" >
       
@@ -81,7 +81,7 @@
       
         <meta  name="twitter:card"  content="summary_large_image" >
       
-        <meta  name="twitter:title"  content="July 2026 - NVIDIA PhysicsNeMo" >
+        <meta  name="twitter:title"  content="September 2026 - NVIDIA PhysicsNeMo" >
       
         <meta  name="twitter:description"  content="PhysicsNeMo blog" >
       
@@ -108,7 +108,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#july-2026" class="md-skip">
+        <a href="#september-2026" class="md-skip">
           Skip to content
         </a>
       
@@ -142,7 +142,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              July 2026
+              September 2026
             
           </span>
         </div>
@@ -429,7 +429,7 @@
   
   
   <span class="md-ellipsis">
-    July 2026
+    September 2026
     
   </span>
   
@@ -442,7 +442,7 @@
   
   
   <span class="md-ellipsis">
-    July 2026
+    September 2026
     
   </span>
   
@@ -463,6 +463,15 @@
       Table of contents
     </label>
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#introducing-physicsnemo-mesh-gpu-accelerated-mesh-processing-for-scientific-ml" class="md-nav__link">
+    <span class="md-ellipsis">
+      Introducing PhysicsNeMo-Mesh: GPU-Accelerated Mesh Processing for Scientific ML
+    </span>
+  </a>
+  
+</li>
       
         <li class="md-nav__item">
   <a href="#building-ai-surrogate-models-for-structural-and-automotive-crash-analysis-with-nvidia-physicsnemo" class="md-nav__link">
@@ -678,6 +687,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#introducing-physicsnemo-mesh-gpu-accelerated-mesh-processing-for-scientific-ml" class="md-nav__link">
+    <span class="md-ellipsis">
+      Introducing PhysicsNeMo-Mesh: GPU-Accelerated Mesh Processing for Scientific ML
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#building-ai-surrogate-models-for-structural-and-automotive-crash-analysis-with-nvidia-physicsnemo" class="md-nav__link">
     <span class="md-ellipsis">
       Building AI Surrogate Models for Structural and Automotive Crash Analysis with NVIDIA PhysicsNeMo
@@ -698,8 +716,56 @@
   <div class="md-content" data-md-component="content">
     <div class="md-content__inner">
       <header class="md-typeset">
-        <h1 id="july-2026">July 2026</h1>
+        <h1 id="september-2026">September 2026</h1>
       </header>
+      
+        <article class="md-post md-post--excerpt">
+  <header class="md-post__header">
+    
+      <nav class="md-post__authors md-typeset">
+        
+          <span class="md-author">
+            <img src="../../../../../author-images/peter_s_headshot.jpg" alt="Peter Sharpe">
+          </span>
+        
+      </nav>
+    
+    <div class="md-post__meta md-meta">
+      <ul class="md-meta__list">
+        <li class="md-meta__item">
+          <time datetime="2026-04-07 00:00:00+00:00">April 7, 2026</time></li>
+        
+          <li class="md-meta__item">
+            in
+            
+              <a href="../../../../category/physicsnemo/" class="md-meta__link">PhysicsNeMo</a></li>
+        
+        
+          
+          <li class="md-meta__item">
+            
+              10 min read
+            
+          </li>
+        
+      </ul>
+      
+    </div>
+  </header>
+  <div class="md-post__content md-typeset">
+    <h2 id="introducing-physicsnemo-mesh-gpu-accelerated-mesh-processing-for-scientific-ml"><a class="toclink" href="../../../../2026/04/07/physicsnemo-mesh/">Introducing PhysicsNeMo-Mesh: GPU-Accelerated Mesh Processing for Scientific ML</a></h2>
+<p>PhysicsNeMo-Mesh is a GPU-accelerated mesh processing module, built on PyTorch and TensorDict, and included in the open-source PhysicsNeMo library. It provides a) a GPU-native, high-performance mesh data structure with design choices that are particularly well-suited for ML workflows, and b) a diverse suite of accelerated mesh operations that can be used to bridge existing gaps between data preprocessing and training/inference.</p>
+<p>Its native data format allows loading meshes from disk much more quickly than VTU (9x-88x faster in our testing; hardware-dependent) while preserving the full mesh structure that flat tensor formats like zarr typically discard. This gives you the speed you need for training while retaining the geometric and physical context needed for model- and dataset-agnostic workflows. In this post, we'll show what PhysicsNeMo-Mesh can do for your training pipeline.</p>
+
+    
+      <nav class="md-post__action">
+        <a href="../../../../2026/04/07/physicsnemo-mesh/">
+          Continue reading
+        </a>
+      </nav>
+    
+  </div>
+</article>
       
         <article class="md-post md-post--excerpt">
   <header class="md-post__header">
