@@ -37,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds `amp_mode` support to the experimental `DiffusionUNet3D` and
+  `UNetBlock3D`, threading the flag through their internal layers so the 3D
+  diffusion U-Net can be trained under `torch.autocast` mixed precision,
+  matching the behavior of `SongUNet` and the 2D `UNetBlock`.
 - Adds `ShardTensor` support for GeoTransolver and FLARE models.
 - Adds zarr save/load for `Mesh` and `DomainMesh` via tensordict's zarr
   storage backend: `physicsnemo.mesh.io.to_zarr` / `from_zarr`, with

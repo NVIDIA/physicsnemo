@@ -276,6 +276,44 @@ class TestArchitecture:
         assert x.grad is not None
         assert not torch.isnan(x.grad).any()
 
+    def test_amp_mode_autocast_forward(self, arch_name, arch_kwargs, x_shape, device):
+        """With amp_mode=True the forward runs under torch.autocast."""
+        model = instantiate_model_deterministic(
+            DiffusionUNet3D, seed=0, amp_mode=True, **arch_kwargs
+        ).to(device)
+        data = _generate_batch_data(arch_kwargs, x_shape, GLOBAL_SEED, device)
+        dev_type = torch.device(device).type
+        with torch.autocast(device_type=dev_type, dtype=torch.bfloat16):
+            out = model(data["x"], data["t"], condition=data["condition"])
+        assert out.shape == x_shape
+        assert out.dtype == torch.bfloat16
+        assert not torch.isnan(out.float()).any()
+
+    def test_amp_mode_default_raises_under_autocast(
+        self, arch_name, arch_kwargs, x_shape, device
+    ):
+        """With the default amp_mode=False, autocast execution raises."""
+        model = instantiate_model_deterministic(
+            DiffusionUNet3D, seed=0, **arch_kwargs
+        ).to(device)
+        data = _generate_batch_data(arch_kwargs, x_shape, GLOBAL_SEED, device)
+        dev_type = torch.device(device).type
+        with torch.autocast(device_type=dev_type, dtype=torch.bfloat16):
+            with pytest.raises(RuntimeError, match="amp_mode"):
+                model(data["x"], data["t"], condition=data["condition"])
+
+    def test_amp_mode_true_without_autocast(
+        self, arch_name, arch_kwargs, x_shape, device
+    ):
+        """amp_mode=True still runs in full precision outside autocast."""
+        model = instantiate_model_deterministic(
+            DiffusionUNet3D, seed=0, amp_mode=True, **arch_kwargs
+        ).to(device)
+        data = _generate_batch_data(arch_kwargs, x_shape, GLOBAL_SEED, device)
+        out = model(data["x"], data["t"], condition=data["condition"])
+        assert out.shape == x_shape
+        assert out.dtype == data["x"].dtype
+
     @pytest.mark.usefixtures("nop_compile")
     def test_compile(
         self,

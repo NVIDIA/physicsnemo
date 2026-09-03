@@ -130,6 +130,11 @@ class DiffusionUNet3D(Module):
         Set to ``False`` for faster inference without bottleneck attention.
     activation : Literal["silu", "gelu"], optional, default="silu"
         Activation function used inside the 3D U-Net blocks.
+    amp_mode : bool, optional, default=False
+        A flag indicating whether mixed-precision (AMP) training is enabled.
+        Threaded through to all sub-layers; when ``False``, running the model
+        under ``torch.autocast`` raises an error, and when ``True``, dtype
+        handling is delegated to autocast.
 
     Forward
     -------
@@ -243,6 +248,7 @@ class DiffusionUNet3D(Module):
         checkpoint_level: int = 0,
         bottleneck_attention: bool = True,
         activation: Literal["silu", "gelu"] = "silu",
+        amp_mode: bool = False,
     ):
         if len(channel_mult) != num_levels:
             raise ValueError(
@@ -272,6 +278,7 @@ class DiffusionUNet3D(Module):
         self.num_levels = num_levels
         self._input_shape_mult = 2 ** (num_levels - 1)
         self.checkpoint_level = checkpoint_level
+        self.amp_mode = amp_mode
 
         emb_channels = model_channels * channel_mult_emb
         self.emb_channels = emb_channels
@@ -294,24 +301,40 @@ class DiffusionUNet3D(Module):
             init=init,
             init_zero=init_zero,
             init_attn=init_attn,
+            amp_mode=amp_mode,
         )
 
         if self.embedding_type != "zero":
             self.map_noise = (
-                PositionalEmbedding(num_channels=noise_channels, endpoint=True)
+                PositionalEmbedding(
+                    num_channels=noise_channels, endpoint=True, amp_mode=amp_mode
+                )
                 if embedding_type == "positional"
-                else FourierEmbedding(num_channels=noise_channels)
+                else FourierEmbedding(
+                    num_channels=noise_channels, amp_mode=amp_mode
+                )
             )
             self.map_condition = (
-                Linear(in_features=vec_cond_dim, out_features=noise_channels, **init)
+                Linear(
+                    in_features=vec_cond_dim,
+                    out_features=noise_channels,
+                    amp_mode=amp_mode,
+                    **init,
+                )
                 if vec_cond_dim > 0
                 else None
             )
             self.map_layer0 = Linear(
-                in_features=noise_channels, out_features=emb_channels, **init
+                in_features=noise_channels,
+                out_features=emb_channels,
+                amp_mode=amp_mode,
+                **init,
             )
             self.map_layer1 = Linear(
-                in_features=emb_channels, out_features=emb_channels, **init
+                in_features=emb_channels,
+                out_features=emb_channels,
+                amp_mode=amp_mode,
+                **init,
             )
         else:
             # FSDP-compatible zero buffer; persistent=False keeps it out of state_dict
