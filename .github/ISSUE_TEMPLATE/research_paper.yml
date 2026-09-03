@@ -1,0 +1,53 @@
+# SPDX-FileCopyrightText: Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Research Paper Submission
+description: Submit a paper that uses PhysicsNeMo for the research list
+title: "[PAPER]: "
+labels: ["research-paper", "? - Needs Triage"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to help PhysicsNeMo and share your research!
+        - By submitting this issue, you agree to follow our [Code of Conduct](https://github.com/NVIDIA/physicsnemo/blob/main/CONTRIBUTING.md)
+        - You also confirm that you have searched the [existing research list](https://github.com/NVIDIA/physicsnemo/blob/main/docs/research.md) and this paper is not already included
+        - Inclusion does not imply endorsement; submissions are reviewed before being added. Authors may also request a correction or removal through this form.
+        - Put the paper title in the issue title above, after `[PAPER]:`.
+
+  - type: input
+    id: link
+    attributes:
+      label: arXiv / DOI link
+      placeholder: "https://arxiv.org/abs/2501.13350"
+    validations:
+      required: true
+
+  - type: textarea
+    id: usage
+    attributes:
+      label: How PhysicsNeMo was used
+      description: Which PhysicsNeMo models, modules, or examples did you use? Quote a sentence from the paper if possible, and link your code if it is available.
+      placeholder: "Example: We trained the DoMINO neural operator from PhysicsNeMo for aerodynamic surrogate modeling. Code: https://github.com/..."
+    validations:
+      required: true
+
+  - type: input
+    id: domain
+    attributes:
+      label: Domain
+      description: The application area this work falls under.
+      placeholder: "CFD / CAE, weather, subsurface, structural mechanics, ..."
