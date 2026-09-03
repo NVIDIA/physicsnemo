@@ -21,6 +21,7 @@ Normalize - Standardize tensor values by mean and standard deviation or min-max 
 from __future__ import annotations
 
 import warnings
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -205,7 +206,10 @@ class Normalize(Transform):
         """Process statistics into dict of tensors for each field."""
         result: dict[NestedKey, torch.Tensor] = {}
 
-        if isinstance(stats, dict):
+        ### ``Mapping`` rather than ``dict`` so an OmegaConf ``DictConfig``
+        ### (what Hydra passes with the default ``_convert_``) is a stats
+        ### dict, not a scalar.
+        if isinstance(stats, Mapping):
             ### Stats dicts are keyed by config strings; normalize them so
             ### ``"solution.p"`` and ``("solution", "p")`` both match.
             by_key = {as_nested_key(k): v for k, v in stats.items()}

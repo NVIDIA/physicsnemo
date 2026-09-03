@@ -20,6 +20,8 @@ FieldSlice - Select specific indices or slices from tensor dimensions.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+
 import torch
 from tensordict import TensorDict
 
@@ -185,11 +187,13 @@ class FieldSlice(Transform):
         TypeError
             If spec is not a list or dict.
         """
-        if isinstance(spec, list):
+        ### ``Sequence`` / ``Mapping`` rather than ``list`` / ``dict`` so the
+        ### OmegaConf containers Hydra passes are accepted too.
+        if isinstance(spec, Sequence):
             # Index selection: [0, 2, 5]
-            indices = torch.tensor(spec, dtype=torch.long, device=tensor.device)
+            indices = torch.tensor(list(spec), dtype=torch.long, device=tensor.device)
             return torch.index_select(tensor, dim, indices)
-        elif isinstance(spec, dict):
+        elif isinstance(spec, Mapping):
             # Slice selection: {"start": 0, "stop": 5, "step": 1}
             start = spec.get("start", None)
             stop = spec.get("stop", None)

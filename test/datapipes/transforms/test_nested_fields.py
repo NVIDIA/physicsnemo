@@ -183,6 +183,16 @@ class TestSetGlobalField:
             "flow.U_inf" in SetGlobalField(fields={"flow": {"U_inf": 1.0}}).extra_repr()
         )
 
+    def test_accepts_omegaconf_containers(self):
+        ### ``hydra.utils.instantiate`` passes DictConfig / ListConfig (not
+        ### dict / list) unless ``_convert_`` is set; the transform must cope.
+        from omegaconf import OmegaConf
+
+        cfg = OmegaConf.create({"flow": {"U_inf": [30.0, 0.0, 0.0]}, "ref.L": 2.0})
+        out = SetGlobalField(fields=cfg)(_surface_mesh())
+        assert out.global_data["flow", "U_inf"].tolist() == [30.0, 0.0, 0.0]
+        assert out.global_data["ref", "L"].item() == 2.0
+
 
 class TestComputeSurfaceNormals:
     def test_nested_destination(self):
@@ -271,6 +281,30 @@ class TestTensorDictTransforms:
         assert out["x"].shape == (3, 3)
         assert out["solution", "p"].shape == (3,)
         assert out["solution", "v"].shape == (3, 3)
+
+    def test_normalize_and_field_slice_accept_omegaconf(self):
+        ### Hydra passes DictConfig / ListConfig with its default ``_convert_``.
+        from omegaconf import OmegaConf
+
+        cfg = OmegaConf.create(
+            {
+                "input_keys": ["solution.p"],
+                "means": {"solution.p": 1.0},
+                "stds": {"solution.p": 2.0},
+            }
+        )
+        norm = dp.Normalize(
+            input_keys=cfg.input_keys, method="mean_std", means=cfg.means, stds=cfg.stds
+        )
+        out = norm(self._td())
+        assert torch.allclose(
+            out["solution", "p"], (torch.arange(6.0) - 1.0) / (2.0 + norm.eps)
+        )
+
+        sliced = dp.FieldSlice(
+            slicing=OmegaConf.create({"solution.v": {"-1": [0, 2]}})
+        )(self._td())
+        assert sliced["solution", "v"].shape == (6, 2)
 
     def test_field_slice_nested(self):
         out = dp.FieldSlice(slicing={"solution.v": {"-1": [0, 2]}})(self._td())

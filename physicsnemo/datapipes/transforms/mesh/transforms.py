@@ -20,6 +20,7 @@ Deterministic mesh transforms (Mesh -> Mesh) and terminal conversions.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from typing import Literal
 
 import torch
@@ -443,6 +444,15 @@ class RenameMeshFields(MeshTransform):
         return ", ".join(parts)
 
 
+def _as_plain_containers(value):  # noqa: ANN001, ANN202
+    """Recursively copy Mapping / Sequence containers (e.g. OmegaConf) into dict / list."""
+    if isinstance(value, Mapping):
+        return {k: _as_plain_containers(v) for k, v in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, str):
+        return [_as_plain_containers(v) for v in value]
+    return value
+
+
 @register()
 class SetGlobalField(MeshTransform):
     r"""Inject constant tensor fields into a Mesh's global_data.
@@ -461,7 +471,7 @@ class SetGlobalField(MeshTransform):
 
     def __init__(
         self,
-        fields: dict[str, torch.Tensor | list[float] | dict],
+        fields: Mapping[str, torch.Tensor | Sequence[float] | Mapping],
     ) -> None:
         super().__init__()
         ### Coerce + bundle into a single TensorDict so the per-sample
@@ -469,10 +479,12 @@ class SetGlobalField(MeshTransform):
         ### ``new_gd.update(...)`` (no Python-level per-key loop). The
         ### constructor turns nested dicts into sub-TensorDicts and lists
         ### into tensors; ``unflatten_keys`` then nests ``"a.b"`` names.
-        ### dtype is aligned to the mesh in ``__call__``.
-        self._fields: TensorDict = TensorDict(fields, batch_size=[]).unflatten_keys(
-            KEY_SEPARATOR
-        )
+        ### dtype is aligned to the mesh in ``__call__``. Hydra hands us
+        ### OmegaConf containers, which the constructor rejects, so copy
+        ### into plain dicts / lists first.
+        self._fields: TensorDict = TensorDict(
+            _as_plain_containers(fields), batch_size=[]
+        ).unflatten_keys(KEY_SEPARATOR)
 
     def __call__(self, mesh: Mesh) -> Mesh:
         new_gd = mesh.global_data.clone()
