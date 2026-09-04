@@ -67,8 +67,8 @@ env:
   # the first run under the expanded EXTRAS_TAG rebuilds the wheel cache
   # from scratch instead of layering on top of a stale narrower cache.
   UV_CACHE_KEY_PREFIX:   "uv-cache-nightly-cuda13.3.1-devel-ubuntu24.04-py3.12-uv0.12.5-fullextras"
-  TESTMON_CACHE_KEY_PREFIX:  "testmon-nightly"
-  COVERAGE_CACHE_KEY_PREFIX: "coverage-nightly"
+  TESTMON_CACHE_KEY_PREFIX:  "testmon-nightly-cu13"
+  COVERAGE_CACHE_KEY_PREFIX: "coverage-nightly-cu13"
   JIT_CACHE_KEY_PREFIX: "jit-cache-cuda13.3.1-devel-ubuntu24.04-py3.12"
   JIT_CACHE_DIR: "/root/.cache/jit"
 
