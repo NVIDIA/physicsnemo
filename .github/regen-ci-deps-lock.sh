@@ -99,22 +99,35 @@ rm -rf .venv
 # https://github.com/NVIDIA/TransformerEngine/pull/3251
 # That PR was open against v2.18, so we need TE > 2.18
 # to resolve before removing this env hack:
+#
+# The PyG sdists (torch-cluster/scatter/sparse) are excluded from BOTH
+# syncs, mirroring setup-uv-env: `uv sync` would build them CPU-only at
+# ~10 min each only for Step 2 to replace them, and for torch_cluster the
+# CPU-only wheel would be cached keyed on the sdist alone, so Step 2's
+# `--reinstall-package torch_cluster` would reuse it instead of rebuilding
+# with FORCE_CUDA.  Excluding them here makes Step 2 the only install.
+pyg_skip=(
+  --no-install-package torch-cluster
+  --no-install-package torch-scatter
+  --no-install-package torch-sparse
+)
 UV_LINK_MODE=copy UV_FROZEN=1 \
-  uv sync --frozen --group dev "${extra_flags[@]}" \
+  uv sync --frozen --group dev "${extra_flags[@]}" "${pyg_skip[@]}" \
   --no-install-package transformer-engine-torch
 SP="$(.venv/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
 UV_LINK_MODE=copy UV_FROZEN=1 \
   CUDA_HOME="$SP/nvidia/cu13" \
   CPLUS_INCLUDE_PATH="$SP/nvidia/cudnn/include:$SP/nvidia/nccl/include" \
   MAX_JOBS=16 \
-  uv sync --frozen --group dev "${extra_flags[@]}"
+  uv sync --frozen --group dev "${extra_flags[@]}" "${pyg_skip[@]}"
 
 # ----------------------------------------------------------------------------
-# Step 2: swap the CPU-built PyG wheels for CUDA builds.  scatter/sparse/
+# Step 2: install the CUDA builds of the PyG packages.  scatter/sparse/
 # pyg_lib come from the --find-links index; torch_cluster is built from
 # its PyPI sdist (no pt212cu130 wheel exists -- see ci-requirements.txt),
 # hence --no-build-isolation-package + FORCE_CUDA + the fixed arch list,
-# mirroring setup-uv-env.  Done BEFORE the compile so the closure records
+# mirroring setup-uv-env.  None of them are present after Step 1, so this
+# is their first and only install.  Done BEFORE the compile so the closure records
 # the CUDA local version segments (e.g. torch_scatter==2.1.2+pt212cu130)
 # that CI will actually install.
 # ----------------------------------------------------------------------------

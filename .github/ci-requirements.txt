@@ -61,12 +61,14 @@ multi-storage-client[boto3]==0.48.0
 tensorstore==0.1.83
 pyarrow==24.0.0
 
-# PyG CUDA wheels.  `uv sync` installs the `gnns` extra as CPU-only
-# builds (no CUDA toolchain at build time), so CUDA tensors fail with
-# "Not compiled with CUDA support".  setup-uv-env swaps exactly these
-# four packages for the CUDA wheels via `--reinstall-package` (a bare
-# `--reinstall` would also refresh transitive deps and break ABI
-# compatibility with lockfile-pinned pyarrow / cudf / cuml).
+# PyG CUDA wheels.  Left to itself, `uv sync` would build the `gnns`
+# extra's PyG sdists CPU-only (no CUDA toolchain at build time), so CUDA
+# tensors would fail with "Not compiled with CUDA support".  setup-uv-env
+# therefore excludes torch-cluster/scatter/sparse from `uv sync` entirely
+# (`--no-install-package`) and installs exactly these four packages from
+# here instead, via `--reinstall-package` (a bare `--reinstall` would also
+# refresh transitive deps and break ABI compatibility with lockfile-pinned
+# pyarrow / cudf / cuml).
 #
 # Keep the `+pt212cu130` label in the pins: PyPI rejects local versions,
 # so these pins can only be satisfied by the --find-links index above.
@@ -79,7 +81,9 @@ pyg_lib==0.8.0+pt212cu130
 
 # torch_cluster has NO prebuilt wheel on the torch-2.12.0+cu130 PyG index
 # (the pt212cu130 build was never published), so it is pinned to the plain
-# PyPI sdist and built from source with CUDA enabled.  setup-uv-env passes
+# PyPI sdist and built from source with CUDA enabled.  setup-uv-env
+# excludes it from `uv sync` (`--no-install-package torch-cluster`) so no
+# CPU-only build ever lands in the uv cache, then installs it here with
 # `--no-build-isolation-package torch_cluster` (the sdist's setup.py
 # imports torch, which the synced .venv provides) plus FORCE_CUDA=1 and a
 # fixed TORCH_CUDA_ARCH_LIST so the uv-cached built wheel is valid on the

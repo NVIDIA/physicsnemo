@@ -143,13 +143,31 @@ runs:
         # https://github.com/NVIDIA/TransformerEngine/pull/3251
         # That PR was open against v2.18, so we need TE > 2.18
         # to resolve before removing this env hack:
-        uv sync --frozen --group dev "${extra_flags[@]}" \
+        #
+        # `--no-install-package torch-{cluster,scatter,sparse}` (BOTH
+        # syncs): the `gnns` extra would otherwise build all three PyG
+        # packages from their sdists here, in an isolated build env with
+        # no CUDA toolchain configured, producing CPU-only wheels at
+        # ~10 min each.  All three are replaced in "Install CI-only test
+        # dependencies" anyway (scatter/sparse by prebuilt cu130 wheels,
+        # torch_cluster by a FORCE_CUDA=1 source build), so building them
+        # here is pure waste -- and for torch_cluster it is actively
+        # harmful: uv caches the built wheel keyed on the sdist alone
+        # (env vars are not part of the key), so the later
+        # `--reinstall-package torch_cluster` would silently reuse the
+        # CPU-only wheel instead of rebuilding with CUDA.
+        pyg_skip=(
+          --no-install-package torch-cluster
+          --no-install-package torch-scatter
+          --no-install-package torch-sparse
+        )
+        uv sync --frozen --group dev "${extra_flags[@]}" "${pyg_skip[@]}" \
           --no-install-package transformer-engine-torch
         sp="$(.venv/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
         CUDA_HOME="$sp/nvidia/cu13" \
         CPLUS_INCLUDE_PATH="$sp/nvidia/cudnn/include:$sp/nvidia/nccl/include" \
         MAX_JOBS=16 \
-          uv sync --frozen --group dev "${extra_flags[@]}"
+          uv sync --frozen --group dev "${extra_flags[@]}" "${pyg_skip[@]}"
         echo "::endgroup::"
 
     # --- Verification phase ----------------------------------------------
@@ -218,8 +236,12 @@ runs:
         UV_LINK_MODE: copy
         # torch_cluster is built from its PyPI sdist (no pt212cu130 wheel
         # exists on the PyG index -- see .github/ci-requirements.txt).
-        # FORCE_CUDA=1 makes the build compile its CUDA kernels even on
-        # the GPU-less build-environment runner that warms the uv cache,
+        # This step is the ONLY place it gets built: the `uv sync` calls
+        # above exclude it via `--no-install-package torch-cluster`, so
+        # there is no earlier CPU-only build in the uv cache for this
+        # step to reuse.  FORCE_CUDA=1 makes the build compile its CUDA
+        # kernels even on the GPU-less build-environment runner that
+        # warms the uv cache (nvcc comes from the cuda devel container),
         # and the fixed arch list keeps the cached wheel valid on the
         # H100 (sm90) GPU runners that consume it.
         FORCE_CUDA: "1"
@@ -227,11 +249,15 @@ runs:
       run: |
         set -euo pipefail
         echo "::group::install CI-only test dependencies"
-        # `--reinstall-package` (NOT bare `--reinstall`) is scoped to the
-        # four PyG names so we swap their CPU-only wheels (installed by
-        # `uv sync` via the `gnns` extra) for CUDA builds: scatter/sparse/
-        # pyg_lib from the --find-links index baked into the requirements
-        # file, torch_cluster built from source (see below).  Bare
+        # This step installs the CUDA builds of the four PyG packages:
+        # scatter/sparse/pyg_lib from the --find-links index baked into
+        # the requirements file, torch_cluster built from source (see
+        # below).  None of them are present after `uv sync` (the PyG
+        # sdists are excluded there), so these are plain installs; the
+        # `--reinstall-package` flags are kept as a guard so a CPU-only
+        # copy can never survive if that exclusion is ever dropped.
+        # `--reinstall-package` (NOT bare `--reinstall`) is scoped to
+        # exactly those four names on purpose.  Bare
         # `--reinstall` would imply `--refresh` over the FULL resolved
         # closure (~60 packages including transitive deps like pyarrow,
         # cryptography, opentelemetry), bumping them to whatever's
