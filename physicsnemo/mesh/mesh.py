@@ -14,9 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Python 3.14 evaluates annotations lazily in the decorated class namespace,
-# where ``tensorclass`` installs dtype-conversion methods such as ``int``.
-# Qualify scalar annotations that must continue to resolve to builtin types.
+# Python 3.14 evaluates annotations lazily in the class namespace, where
+# ``TensorClass`` provides dtype-conversion methods such as ``int``. Qualify
+# scalar annotations that must continue to resolve to builtin types.
 import builtins
 import math
 import types
@@ -37,8 +37,9 @@ from typing import (
 import torch
 import torch.nn.functional as F
 from jaxtyping import Float
-from tensordict import NonTensorData, TensorDict, tensorclass
+from tensordict import NonTensorData, TensorClass, TensorDict
 
+from physicsnemo.mesh._serialization import install_mesh_memmap_reader
 from physicsnemo.mesh.boundaries import is_manifold, is_watertight
 from physicsnemo.mesh.calculus import (
     compute_cell_derivatives,
@@ -92,8 +93,19 @@ MESH_FIELD_ASSOCIATIONS: tuple[MeshFieldAssociation, ...] = get_args(
 )
 
 
-@tensorclass(tensor_only=True, shadow=True)
-class Mesh:
+class _MeshTensorClassMeta(type(TensorClass)):
+    """Preserve ``Mesh[m, s]`` over TensorClass's configuration subscript."""
+
+    def __getitem__(cls, params: Any) -> type:
+        return cls.__class_getitem__(params)
+
+
+class Mesh(
+    TensorClass,
+    tensor_only=True,
+    shadow=True,
+    metaclass=_MeshTensorClassMeta,
+):
     r"""A PyTorch-based, dimensionally-generic Mesh data structure.
 
     A ``Mesh`` is a discrete representation of an n-dimensional manifold embedded
@@ -331,11 +343,11 @@ class Mesh:
     """
 
     points: torch.Tensor  # shape: (n_points, n_spatial_dimensions)
-    cells: torch.Tensor  # shape: (n_cells, n_manifold_dimensions + 1)
-    point_data: TensorDict
-    cell_data: TensorDict
-    global_data: TensorDict
-    _cache: TensorDict
+    cells: torch.Tensor = None  # type: ignore[assignment]
+    point_data: TensorDict = None  # type: ignore[assignment]
+    cell_data: TensorDict = None  # type: ignore[assignment]
+    global_data: TensorDict = None  # type: ignore[assignment]
+    _cache: TensorDict = None  # type: ignore[assignment]
 
     def __init__(
         self,
@@ -599,7 +611,7 @@ class Mesh:
         )
 
     if TYPE_CHECKING:
-        # Type stub for the `to` method dynamically added by @tensorclass.
+        # Type stub for the `to` method dynamically added by TensorClass.
         # This provides proper type hints without shadowing the runtime implementation.
         def to(self, *args: Any, **kwargs: Any) -> Self:
             """Move mesh and all attached data to specified device, dtype, or format.
@@ -3225,8 +3237,11 @@ class Mesh:
         )
 
 
-### Override the tensorclass __repr__ with custom formatting
-# Note: Must be done after class definition because @tensorclass overrides __repr__
+install_mesh_memmap_reader(Mesh)
+
+
+### Override the TensorClass __repr__ with custom formatting
+# Must be done after class definition because TensorClass overrides __repr__
 # even when defined inside the class body
 def _mesh_repr(self) -> str:
     return format_mesh_repr(self)
@@ -3235,14 +3250,14 @@ def _mesh_repr(self) -> str:
 Mesh.__repr__ = _mesh_repr  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
 
 
-### Override the tensorclass ``to`` so a floating/complex dtype is applied only to
+### Override the TensorClass ``to`` so a floating/complex dtype is applied only to
 # floating tensors. The generated tensorclass ``to`` casts *every* leaf -- including
 # the integer ``cells`` -- which then fails ``__post_init__``'s int-dtype check, so
 # ``mesh.to(torch.float64)`` was broken for any mesh with cells. Only an explicitly
 # requested floating/complex dtype takes the cells-safe path; device-only moves and
 # non-float dtypes are delegated unchanged to the generated ``to`` so device metadata,
 # ``non_blocking``, etc. behave exactly as before. Reassigned after the class because
-# @tensorclass overrides a body-defined ``to`` (same reason as ``__repr__`` above).
+# TensorClass overrides a body-defined ``to`` (same reason as ``__repr__`` above).
 def _requested_float_dtype(
     args: tuple[Any, ...], kwargs: dict[str, Any]
 ) -> torch.dtype | None:
@@ -3292,12 +3307,7 @@ def _mesh_to(self, *args: Any, **kwargs: Any) -> "Mesh":
     def _cast(t: torch.Tensor) -> torch.Tensor:
         return t.to(cast_dtype) if (t.is_floating_point() or t.is_complex()) else t
 
-    moved.points = _cast(moved.points)
-    moved.point_data = moved.point_data.apply(_cast)
-    moved.cell_data = moved.cell_data.apply(_cast)
-    moved.global_data = moved.global_data.apply(_cast)
-    moved._cache = moved._cache.apply(_cast)
-    return moved
+    return moved.apply(_cast)
 
 
 _tensorclass_mesh_to = Mesh.to  # the generated tensorclass ``to``

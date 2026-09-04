@@ -332,6 +332,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `physicsnemo.mesh.Mesh` and `DomainMesh` now inherit directly from
+  `TensorClass`. Existing constructor defaults and `Mesh[m, s]` runtime
+  specialization remain available, nested mesh types survive memmap round
+  trips, and decorator-era `.pmsh` / `.pdmsh` files remain readable.
 - Splits the monolithic `physicsnemo.diffusion.noise_schedulers.noise_schedulers`
   and `physicsnemo.diffusion.samplers.solvers` modules into one module per class,
   named after the schedule or solver it defines, with the `NoiseScheduler` and

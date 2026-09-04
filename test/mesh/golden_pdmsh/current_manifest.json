@@ -1,0 +1,400 @@
+{
+  "_tensordict/boundaries/inlet/_tensordict/_cache/cell/meta.json": {
+    "_type": "<class 'tensordict._td.TensorDict'>",
+    "device": "cpu",
+    "shape": [
+      1
+    ]
+  },
+  "_tensordict/boundaries/inlet/_tensordict/_cache/meta.json": {
+    "_type": "<class 'tensordict._td.TensorDict'>",
+    "cell": {
+      "type": "TensorDict"
+    },
+    "device": "cpu",
+    "point": {
+      "type": "TensorDict"
+    },
+    "shape": [],
+    "topology": {
+      "type": "TensorDict"
+    }
+  },
+  "_tensordict/boundaries/inlet/_tensordict/_cache/point/meta.json": {
+    "_type": "<class 'tensordict._td.TensorDict'>",
+    "device": "cpu",
+    "shape": [
+      2
+    ]
+  },
+  "_tensordict/boundaries/inlet/_tensordict/_cache/topology/meta.json": {
+    "_type": "<class 'tensordict._td.TensorDict'>",
+    "device": "cpu",
+    "shape": []
+  },
+  "_tensordict/boundaries/inlet/_tensordict/cell_data/boundary_id.memmap": 8,
+  "_tensordict/boundaries/inlet/_tensordict/cell_data/meta.json": {
+    "_type": "<class 'tensordict._td.TensorDict'>",
+    "boundary_id": {
+      "device": "cpu",
+      "dtype": "torch.int64",
+      "is_nested": false,
+      "shape": [
+        1
+      ]
+    },
+    "device": "cpu",
+    "shape": [
+      1
+    ]
+  },
+  "_tensordict/boundaries/inlet/_tensordict/cells.memmap": 16,
+  "_tensordict/boundaries/inlet/_tensordict/global_data/meta.json": {
+    "_type": "<class 'tensordict._td.TensorDict'>",
+    "device": "cpu",
+    "reference_value": {
+      "device": "cpu",
+      "dtype": "torch.float32",
+      "is_nested": false,
+      "shape": []
+    },
+    "shape": []
+  },
+  "_tensordict/boundaries/inlet/_tensordict/global_data/reference_value.memmap": 4,
+  "_tensordict/boundaries/inlet/_tensordict/meta.json": {
+    "_cache": {
+      "type": "TensorDict"
+    },
+    "_type": "<class 'tensordict._td.TensorDict'>",
+    "cell_data": {
+      "type": "TensorDict"
+    },
+    "cells": {
+      "device": "cpu",
+      "dtype": "torch.int64",
+      "is_nested": false,
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "device": "cpu",
+    "global_data": {
+      "type": "TensorDict"
+    },
+    "point_data": {
+      "type": "TensorDict"
+    },
+    "points": {
+      "device": "cpu",
+      "dtype": "torch.float32",
+      "is_nested": false,
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "shape": []
+  },
+  "_tensordict/boundaries/inlet/_tensordict/point_data/distance.memmap": 8,
+  "_tensordict/boundaries/inlet/_tensordict/point_data/meta.json": {
+    "_type": "<class 'tensordict._td.TensorDict'>",
+    "device": "cpu",
+    "distance": {
+      "device": "cpu",
+      "dtype": "torch.float32",
+      "is_nested": false,
+      "shape": [
+        2
+      ]
+    },
+    "shape": [
+      2
+    ]
+  },
+  "_tensordict/boundaries/inlet/_tensordict/points.memmap": 16,
+  "_tensordict/boundaries/inlet/meta.json": {
+    "_type": "<class 'physicsnemo.mesh.mesh.Mesh'>"
+  },
+  "_tensordict/boundaries/meta.json": {
+    "_type": "<class 'tensordict._td.TensorDict'>",
+    "device": "cpu",
+    "inlet": {
+      "type": "Mesh"
+    },
+    "shape": [],
+    "wall": {
+      "type": "Mesh"
+    }
+  },
+  "_tensordict/boundaries/wall/_tensordict/_cache/cell/meta.json": {
+    "_type": "<class 'tensordict._td.TensorDict'>",
+    "device": "cpu",
+    "shape": [
+      1
+    ]
+  },
+  "_tensordict/boundaries/wall/_tensordict/_cache/meta.json": {
+    "_type": "<class 'tensordict._td.TensorDict'>",
+    "cell": {
+      "type": "TensorDict"
+    },
+    "device": "cpu",
+    "point": {
+      "type": "TensorDict"
+    },
+    "shape": [],
+    "topology": {
+      "type": "TensorDict"
+    }
+  },
+  "_tensordict/boundaries/wall/_tensordict/_cache/point/meta.json": {
+    "_type": "<class 'tensordict._td.TensorDict'>",
+    "device": "cpu",
+    "shape": [
+      2
+    ]
+  },
+  "_tensordict/boundaries/wall/_tensordict/_cache/topology/meta.json": {
+    "_type": "<class 'tensordict._td.TensorDict'>",
+    "device": "cpu",
+    "shape": []
+  },
+  "_tensordict/boundaries/wall/_tensordict/cell_data/boundary_id.memmap": 8,
+  "_tensordict/boundaries/wall/_tensordict/cell_data/meta.json": {
+    "_type": "<class 'tensordict._td.TensorDict'>",
+    "boundary_id": {
+      "device": "cpu",
+      "dtype": "torch.int64",
+      "is_nested": false,
+      "shape": [
+        1
+      ]
+    },
+    "device": "cpu",
+    "shape": [
+      1
+    ]
+  },
+  "_tensordict/boundaries/wall/_tensordict/cells.memmap": 16,
+  "_tensordict/boundaries/wall/_tensordict/global_data/meta.json": {
+    "_type": "<class 'tensordict._td.TensorDict'>",
+    "device": "cpu",
+    "reference_value": {
+      "device": "cpu",
+      "dtype": "torch.float32",
+      "is_nested": false,
+      "shape": []
+    },
+    "shape": []
+  },
+  "_tensordict/boundaries/wall/_tensordict/global_data/reference_value.memmap": 4,
+  "_tensordict/boundaries/wall/_tensordict/meta.json": {
+    "_cache": {
+      "type": "TensorDict"
+    },
+    "_type": "<class 'tensordict._td.TensorDict'>",
+    "cell_data": {
+      "type": "TensorDict"
+    },
+    "cells": {
+      "device": "cpu",
+      "dtype": "torch.int64",
+      "is_nested": false,
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "device": "cpu",
+    "global_data": {
+      "type": "TensorDict"
+    },
+    "point_data": {
+      "type": "TensorDict"
+    },
+    "points": {
+      "device": "cpu",
+      "dtype": "torch.float32",
+      "is_nested": false,
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "shape": []
+  },
+  "_tensordict/boundaries/wall/_tensordict/point_data/distance.memmap": 8,
+  "_tensordict/boundaries/wall/_tensordict/point_data/meta.json": {
+    "_type": "<class 'tensordict._td.TensorDict'>",
+    "device": "cpu",
+    "distance": {
+      "device": "cpu",
+      "dtype": "torch.float32",
+      "is_nested": false,
+      "shape": [
+        2
+      ]
+    },
+    "shape": [
+      2
+    ]
+  },
+  "_tensordict/boundaries/wall/_tensordict/points.memmap": 16,
+  "_tensordict/boundaries/wall/meta.json": {
+    "_type": "<class 'physicsnemo.mesh.mesh.Mesh'>"
+  },
+  "_tensordict/global_data/meta.json": {
+    "_type": "<class 'tensordict._td.TensorDict'>",
+    "device": "cpu",
+    "reynolds": {
+      "device": "cpu",
+      "dtype": "torch.float32",
+      "is_nested": false,
+      "shape": []
+    },
+    "shape": [],
+    "time": {
+      "device": "cpu",
+      "dtype": "torch.float32",
+      "is_nested": false,
+      "shape": []
+    }
+  },
+  "_tensordict/global_data/reynolds.memmap": 4,
+  "_tensordict/global_data/time.memmap": 4,
+  "_tensordict/interior/_tensordict/_cache/cell/meta.json": {
+    "_type": "<class 'tensordict._td.TensorDict'>",
+    "device": "cpu",
+    "shape": [
+      2
+    ]
+  },
+  "_tensordict/interior/_tensordict/_cache/meta.json": {
+    "_type": "<class 'tensordict._td.TensorDict'>",
+    "cell": {
+      "type": "TensorDict"
+    },
+    "device": "cpu",
+    "point": {
+      "type": "TensorDict"
+    },
+    "shape": [],
+    "topology": {
+      "type": "TensorDict"
+    }
+  },
+  "_tensordict/interior/_tensordict/_cache/point/meta.json": {
+    "_type": "<class 'tensordict._td.TensorDict'>",
+    "device": "cpu",
+    "shape": [
+      4
+    ]
+  },
+  "_tensordict/interior/_tensordict/_cache/topology/meta.json": {
+    "_type": "<class 'tensordict._td.TensorDict'>",
+    "device": "cpu",
+    "shape": []
+  },
+  "_tensordict/interior/_tensordict/cell_data/material.memmap": 16,
+  "_tensordict/interior/_tensordict/cell_data/meta.json": {
+    "_type": "<class 'tensordict._td.TensorDict'>",
+    "device": "cpu",
+    "material": {
+      "device": "cpu",
+      "dtype": "torch.int64",
+      "is_nested": false,
+      "shape": [
+        2
+      ]
+    },
+    "shape": [
+      2
+    ]
+  },
+  "_tensordict/interior/_tensordict/cells.memmap": 48,
+  "_tensordict/interior/_tensordict/global_data/case_id.memmap": 8,
+  "_tensordict/interior/_tensordict/global_data/meta.json": {
+    "_type": "<class 'tensordict._td.TensorDict'>",
+    "case_id": {
+      "device": "cpu",
+      "dtype": "torch.int64",
+      "is_nested": false,
+      "shape": []
+    },
+    "device": "cpu",
+    "shape": []
+  },
+  "_tensordict/interior/_tensordict/meta.json": {
+    "_cache": {
+      "type": "TensorDict"
+    },
+    "_type": "<class 'tensordict._td.TensorDict'>",
+    "cell_data": {
+      "type": "TensorDict"
+    },
+    "cells": {
+      "device": "cpu",
+      "dtype": "torch.int64",
+      "is_nested": false,
+      "shape": [
+        2,
+        3
+      ]
+    },
+    "device": "cpu",
+    "global_data": {
+      "type": "TensorDict"
+    },
+    "point_data": {
+      "type": "TensorDict"
+    },
+    "points": {
+      "device": "cpu",
+      "dtype": "torch.float32",
+      "is_nested": false,
+      "shape": [
+        4,
+        2
+      ]
+    },
+    "shape": []
+  },
+  "_tensordict/interior/_tensordict/point_data/meta.json": {
+    "_type": "<class 'tensordict._td.TensorDict'>",
+    "device": "cpu",
+    "shape": [
+      4
+    ],
+    "temperature": {
+      "device": "cpu",
+      "dtype": "torch.float32",
+      "is_nested": false,
+      "shape": [
+        4
+      ]
+    }
+  },
+  "_tensordict/interior/_tensordict/point_data/temperature.memmap": 16,
+  "_tensordict/interior/_tensordict/points.memmap": 32,
+  "_tensordict/interior/meta.json": {
+    "_type": "<class 'physicsnemo.mesh.mesh.Mesh'>"
+  },
+  "_tensordict/meta.json": {
+    "_type": "<class 'tensordict._td.TensorDict'>",
+    "boundaries": {
+      "type": "TensorDict"
+    },
+    "device": "cpu",
+    "global_data": {
+      "type": "TensorDict"
+    },
+    "interior": {
+      "type": "Mesh"
+    },
+    "shape": []
+  },
+  "meta.json": {
+    "_type": "<class 'physicsnemo.mesh.domain_mesh.DomainMesh'>"
+  }
+}
