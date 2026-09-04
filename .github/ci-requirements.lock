@@ -5,12 +5,12 @@ attrs==26.1.0
     #   -c /__w/_temp/uv-venv-state.txt
     #   jsonschema
     #   referencing
-boto3==1.43.85
+boto3==1.43.88
     # via
     #   -c /__w/_temp/uv-venv-state.txt
     #   moto
     #   multi-storage-client
-botocore==1.43.85
+botocore==1.43.88
     # via
     #   -c /__w/_temp/uv-venv-state.txt
     #   boto3
