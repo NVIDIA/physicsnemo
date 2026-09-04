@@ -749,6 +749,49 @@ class TestComputeSDF:
         assert "sdf_query_a" in result
         assert "sdf_query_b" in result
 
+    def test_sdf_multiple_nested_inputs_get_distinct_outputs(self, simple_cube_mesh):
+        """Nested inputs sharing a leaf name must not collide on the output name."""
+        vertices, faces = simple_cube_mesh
+
+        transform = ComputeSDF(
+            input_keys=["interior.coords", "inlet.coords"],
+            output_key="sdf",
+            mesh_coords_key="mesh_coords",
+            mesh_faces_key="mesh_faces",
+            closest_points_key="closest",
+        )
+        data = TensorDict(
+            {
+                ### Different distances to the cube surface (0.5 vs 2.0) so the
+                ### two outputs are distinguishable.
+                "interior": {"coords": torch.tensor([[0.0, 0.0, 0.5]])},
+                "inlet": {"coords": torch.tensor([[3.0, 0.0, 0.0]])},
+                "mesh_coords": vertices,
+                "mesh_faces": faces,
+            }
+        )
+        result = transform(data)
+
+        # Suffix is the full "_"-joined input path, not just the leaf name.
+        assert "sdf_interior_coords" in result
+        assert "sdf_inlet_coords" in result
+        assert "closest_interior_coords" in result
+        assert "closest_inlet_coords" in result
+        # Each output holds its own input's result (no overwrite by the last input).
+        assert not torch.equal(
+            result["sdf_interior_coords"], result["sdf_inlet_coords"]
+        )
+
+    def test_sdf_colliding_derived_names_raise(self):
+        """Inputs whose '_'-joined paths coincide are rejected up front."""
+        with pytest.raises(ValueError, match="colliding output names"):
+            ComputeSDF(
+                input_keys=["a_b.c", "a.b_c"],
+                output_key="sdf",
+                mesh_coords_key="mesh_coords",
+                mesh_faces_key="mesh_faces",
+            )
+
     def test_sdf_repr(self):
         """Test string representation."""
         transform = ComputeSDF(

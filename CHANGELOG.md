@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds `physicsnemo.datapipes.keys` and routes every config-driven field name
+  in `physicsnemo.datapipes` through it, so a `"."` in a YAML field name
+  (`"solution.pressure"`) addresses a leaf inside a nested `TensorDict`.
+  Nested `Mesh` data no longer needs to be flattened before use.
+
 ### Changed
 
 ### Deprecated
@@ -18,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Datapipe transforms, collators, readers, and the unified external aero
+  recipe no longer silently skip or mis-handle nested `TensorDict` fields
+  (membership was tested against top-level `td.keys()`, and
+  `NormalizeMeshFields.inverse_td` matched leaves by their last name only).
+- `from_pyvista` / `to_pyvista` round-trip nested `Mesh` data keys, and GLOBE
+  accepts a nested `global_data_ranks` declaration.
 - Fixes out-of-bounds reads in the `Darcy2D` multi-grid solver for
   `nr_multigrids >= 3` that could return huge or NaN pressure fields, and
   corrects the coarse-node coordinates used by bilinear upsampling for

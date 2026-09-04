@@ -44,6 +44,7 @@ from typing import Any
 
 from tensordict import TensorDict
 
+from physicsnemo.datapipes.keys import key_to_str, leaf_keys
 from physicsnemo.datapipes.readers.mesh import MeshReader
 from physicsnemo.datapipes.registry import register
 from physicsnemo.mesh import Mesh
@@ -119,7 +120,24 @@ class MeshReaderWithGlobalData(MeshReader):
 
         ext_td = TensorDict.load_memmap(ext_path)
         merged = mesh.global_data.clone()
-        collisions = sorted(set(ext_td.keys()) & set(merged.keys()))
+
+        ### Compare leaf key *paths* (nested included): two groups sharing a
+        ### name but holding different leaves are not a collision (``update``
+        ### merges them recursively), but a leaf on one side whose path is a
+        ### prefix of, or equal to, a leaf path on the other would be
+        ### overwritten by ``update``, so that is.
+        def _paths(td: TensorDict) -> list[tuple[str, ...]]:
+            return [(k,) if isinstance(k, str) else k for k in leaf_keys(td)]
+
+        ext_paths, merged_paths = _paths(ext_td), _paths(merged)
+        collisions = sorted(
+            {
+                key_to_str(a if len(a) <= len(b) else b)
+                for a in ext_paths
+                for b in merged_paths
+                if a[: len(b)] == b or b[: len(a)] == a
+            }
+        )
         if collisions:
             raise ValueError(
                 f"global_data key collision while merging {ext_path} "

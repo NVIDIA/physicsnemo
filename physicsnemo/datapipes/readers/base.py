@@ -29,7 +29,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Iterator
 
 import torch
-from tensordict import TensorDict
+from tensordict import TensorDict, is_leaf_nontensor
 
 from physicsnemo.datapipes._rng import spawn_generator
 
@@ -157,22 +157,27 @@ class Reader(ABC):
         """
         raise NotImplementedError
 
-    def _get_field_names(self) -> list[str]:
+    def _get_field_names(self) -> list[str | tuple[str, ...]]:
         """
         Return the list of field names in samples.
 
         Override this to provide field names without loading a sample.
-        Default implementation loads sample 0 and extracts keys.
+        Default implementation loads sample 0 and extracts its leaf keys;
+        fields inside nested groups are reported as tuple paths.
 
         Returns
         -------
-        list[str]
+        list[str | tuple[str, ...]]
             List of field names available in samples.
         """
         if len(self) == 0:
             return []
-        data = self._load_sample(0)
-        return list(data.keys())
+        td = TensorDict(self._load_sample(0))
+        ### ``is_leaf_nontensor`` keeps non-tensor entries (strings, None)
+        ### in the listing, as they were before nesting was supported.
+        return list(
+            td.keys(include_nested=True, leaves_only=True, is_leaf=is_leaf_nontensor)
+        )
 
     def _get_sample_metadata(self, index: int) -> dict[str, Any]:
         """
@@ -255,12 +260,12 @@ class Reader(ABC):
         if self.include_index_in_metadata:
             metadata["index"] = index
 
-        # Pin memory if requested
-        if self.pin_memory:
-            data_dict = {k: v.pin_memory() for k, v in data_dict.items()}
-
-        # Create TensorDict
+        # Create TensorDict (nested dicts become nested sub-TensorDicts)
         data = TensorDict(data_dict, device=torch.device("cpu"))
+
+        # Pin memory if requested; TensorDict.pin_memory walks every leaf
+        if self.pin_memory:
+            data = data.pin_memory()
 
         return data, metadata
 

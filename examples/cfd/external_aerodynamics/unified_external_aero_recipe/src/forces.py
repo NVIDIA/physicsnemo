@@ -87,6 +87,7 @@ from nondim import NondimFieldType
 from omegaconf import DictConfig
 from tensordict import TensorDict
 
+from physicsnemo.datapipes.keys import as_nested_key
 from physicsnemo.mesh import DomainMesh, Mesh
 
 ### Coefficient keys returned by :func:`force_moment_coefficients`, in a
@@ -327,16 +328,20 @@ class ForceContext:
             reference_length=ref_len,
             length_scale=length_scale,
         )
+        ### Field names come from the dataset YAML and may spell nested
+        ### leaves ("solution.pressure"); resolve them to TensorDict keys.
+        pressure_key = as_nested_key(self.pressure_field)
+        shear_key = as_nested_key(self.shear_field)
         pred = force_moment_coefficients(
             vehicle,
-            pred_coeff[self.pressure_field],
-            pred_coeff[self.shear_field],
+            pred_coeff[pressure_key],
+            pred_coeff[shear_key],
             **common,
         )
         true = force_moment_coefficients(
             vehicle,
-            true_coeff[self.pressure_field],
-            true_coeff[self.shear_field],
+            true_coeff[pressure_key],
+            true_coeff[shear_key],
             **common,
         )
         return pred, true
