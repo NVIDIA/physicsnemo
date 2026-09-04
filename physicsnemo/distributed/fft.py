@@ -39,7 +39,7 @@ def conj_pad_helper_2d(tensor, pad_dim, other_dim, new_size):
 
     # gather
     tensor_pad_gather = gather_from_parallel_region(
-        tensor_pad, dim=other_dim, group="spatial_parallel"
+        tensor_pad, dim=other_dim, shapes=None, group="spatial_parallel"
     )
 
     # flip dims

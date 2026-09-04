@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixes a `TypeError` in `DistributedIRFFT2` caused by a missing `shapes`
+  argument in the `gather_from_parallel_region` call inside
+  `conj_pad_helper_2d`.
 - Datapipe transforms, collators, readers, and the unified external aero
   recipe no longer silently skip or mis-handle nested `TensorDict` fields
   (membership was tested against top-level `td.keys()`, and
