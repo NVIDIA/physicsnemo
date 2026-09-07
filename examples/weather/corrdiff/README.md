@@ -381,7 +381,9 @@ To train CorrDiff on a custom dataset, you need to implement a custom dataset cl
 
 The most important method is `__getitem__`, which must return a tuple of tensors:
 ```python
-def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+def __getitem__(
+    self, idx: int
+) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
     """
     Returns:
         Tuple containing:
