@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `MeshReader` / `DomainMeshReader` cell subsampling compacts unreferenced
+  vertices with a direct row gather instead of `Mesh.slice_points`, avoiding
+  two full-mesh-sized index tensors per sample on memmap-backed meshes.
+  Output is unchanged.
+
 ### Deprecated
 
 ### Removed

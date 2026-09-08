@@ -118,15 +118,51 @@ def _subsample_mesh_cells(
         device=mesh.cells.device,
     )
     mesh = mesh.slice_cells(indices)
-    # Compact: drop vertices not referenced by any surviving cell
-    referenced = torch.unique(mesh.cells)
+    # Compact: drop vertices not referenced by any surviving cell. Done
+    # directly (unique + inverse remap + row gather) rather than through
+    # Mesh.slice_points, which allocates two n_points-sized index tensors
+    # and scatter-gathers the kept rows -- on a 142M-vertex, memmap-backed
+    # surface that is ~2.3 GB of temporaries per 10k-cell sample. Same
+    # result and ordering (ascending referenced ids) as slice_points and
+    # as the zarr partial-read path.
+    referenced, inverse = torch.unique(mesh.cells, return_inverse=True)
     if referenced.numel() < mesh.n_points:
-        mesh = mesh.slice_points(referenced)
+        mesh = Mesh(
+            points=_gather_rows(mesh.points, referenced),
+            cells=inverse.reshape(mesh.cells.shape),
+            point_data=mesh.point_data.apply(
+                lambda v: _gather_rows(v, referenced),
+                batch_size=[referenced.numel()],
+            ),
+            cell_data=mesh.cell_data,
+            global_data=mesh.global_data,
+        )
     ### Compose the Horvitz-Thompson weight for this sampling stage.
-    ### slice_cells/slice_points returned fresh TensorDicts, so the
-    ### in-place update cannot leak into the memmap-backed source.
+    ### slice_cells returned a fresh cell_data TensorDict, so the in-place
+    ### update cannot leak into the memmap-backed source.
     compose_measure_weights(mesh, n_total / n_cells)
     return mesh
+
+
+_RANGE_READ_MAX_BYTES = 256 * 2**20
+
+
+def _gather_rows(t: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
+    """``t[idx]`` for sorted ``idx``, as a fresh tensor.
+
+    When the referenced rows span at most ``_RANGE_READ_MAX_BYTES``, read
+    the whole range with one sequential slice ``t[lo:hi]`` and index it in
+    memory, so a memmap-backed ``t`` sees one sequential read instead of
+    one page fault per row. Otherwise fall back to the plain gather.
+    """
+    if idx.numel() == 0 or t.ndim == 0:
+        return t[idx]
+    lo = int(idx[0])
+    hi = int(idx[-1]) + 1
+    row_bytes = t.element_size() * (t[0].numel() if t.ndim > 1 else 1)
+    if (hi - lo) * row_bytes <= _RANGE_READ_MAX_BYTES:
+        return t[lo:hi][idx - lo]
+    return t[idx]
 
 
 def _indices_to_runs(indices: torch.Tensor) -> list[tuple[int, int]]:
