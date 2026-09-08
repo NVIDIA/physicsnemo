@@ -314,7 +314,10 @@ For each field, the loss type is applied per the field's type (`scalar`
 or `vector`); per-field losses are then weighted by the optional
 `training.field_weights` block in the model YAML and summed.
 
-Supported loss types: Huber (default), MSE, relative MSE.
+Supported loss types (`training.loss_type`): `huber` (default), `mse`,
+`relative_mse` (`sum((pred - target)^2) / sum(target^2)`, per field), and
+`relative_l2` (its square root). `rmse` is a deprecated alias for
+`relative_mse` and warns.
 Supported metrics: relative L1, relative L2, MAE.
 
 **`training.field_weights`** is a model-side dict that multiplies each
@@ -772,7 +775,7 @@ TensorBoard / JSONL files; no external tracker required.
 | `src/nondim.py` | Recipe-local transform: `NonDimensionalizeByMetadata` (with `inverse` / `inverse_td` for re-dimensionalization). Registered into the global datapipe registry. Supports pressure, stress, velocity, temperature, density, and identity field types. |
 | `src/forward_kwargs.py` | Spec resolver. Walks declarative `forward_kwargs:` specs (paths, lists, nested dicts, `expand_like` modifiers) into actual `model.forward()` kwargs against a DomainMesh. Also provides `extract_targets` (interior.point_data lookup by target name). |
 | `src/collate.py` | `build_collate_fn(input_type, forward_kwargs_spec, target_config)`. Resolves forward kwargs from each `DomainMesh` sample, extracts targets from `interior.point_data`. For `input_type='tensors'`, batch-wraps tensors with the right token / per-element padding; for `input_type='mesh'`, passes Mesh / dict / scalar values through unchanged. |
-| `src/loss.py` | `LossCalculator` — TensorDict-based loss for mixed scalar/vector fields. Supports Huber, MSE, relative MSE. Optional `field_weights` per-field multiplicative weights. Normalizes total loss by number of output channels. |
+| `src/loss.py` | `LossCalculator` — TensorDict-based loss for mixed scalar/vector fields. Supports Huber, MSE, relative MSE, relative L2. Optional `field_weights` per-field multiplicative weights. Normalizes total loss by number of output channels. |
 | `src/metrics.py` | `MetricCalculator` — TensorDict-based metrics (relative L1, relative L2, MAE) with optional distributed all-reduce; reports per-field and per-component (x/y/z) metrics for vector fields. `resolve_metrics(cfg)` reads the recipe-side `cfg.metrics`. |
 | `src/output_normalize.py` | `normalize_output_to_tensordict` (Mesh -> `point_data.select`, tensor -> per-target slicing via `split_concat_by_target`) and `require_output_type(cfg)`. Tensorboard-free so the unit tests can import it directly. |
 | `src/forces.py` | Integrated aerodynamic force/moment coefficients from surface predictions. `force_moment_coefficients` integrates the traction `-Cp*n + Cf` over the vehicle via `Mesh.integrate`, projected onto drag/lift/side + roll/pitch/yaw axes; `ForceContext` / `ForceAccumulator` wrap the per-run config + accumulation. |

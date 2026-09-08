@@ -36,6 +36,7 @@ to how many channels each field contributes.
 from __future__ import annotations
 
 import logging
+import warnings
 from typing import Literal
 
 import torch
@@ -45,12 +46,18 @@ from tensordict import TensorDict
 from utils import FieldType, align_scalar_shapes, field_dim, validate_field_coverage
 
 from physicsnemo.datapipes.keys import as_nested_key
+from physicsnemo.metrics.general.relative_error import relative_l2, relative_mse
 
 _LOGGER = logging.getLogger("training.loss")
 
 DEFAULT_HUBER_DELTA = 1.0
 
-LossType = Literal["huber", "mse", "rmse"]
+### ``"rmse"`` is a deprecated alias for ``"relative_mse"``: the quantity it
+### always computed is the target-normalized relative MSE (no square root
+### anywhere), so the old name misled anyone comparing against reported RMSE
+### numbers. ``LossCalculator`` rewrites it on construction with a warning.
+LossType = Literal["huber", "mse", "relative_mse", "relative_l2", "rmse"]
+_VALID_LOSS_TYPES = ("huber", "mse", "relative_mse", "relative_l2", "rmse")
 
 
 ### ---------------------------------------------------------------------------
@@ -83,10 +90,10 @@ def _scalar_loss(
         return F.huber_loss(pred, target, reduction="mean", delta=delta)
     if loss_type == "mse":
         return torch.mean((pred - target) ** 2)
-    if loss_type == "rmse":
-        num = torch.mean((pred - target) ** 2)
-        denom = torch.mean(target**2)
-        return num / (denom + eps)
+    if loss_type == "relative_mse":
+        return relative_mse(pred, target, eps=eps)
+    if loss_type == "relative_l2":
+        return relative_l2(pred, target, eps=eps)
     raise ValueError(f"Unknown loss_type {loss_type!r}")
 
 
@@ -100,8 +107,8 @@ def _vector_loss(
     """Per-component scalar loss summed across components.
 
     For a vector field of dimension ``D``, the result is
-    ``D * mean_huber_over_all_elements`` (or the MSE / RMSE analogue),
-    not a single mean over the flattened tensor.
+    ``D * mean_huber_over_all_elements`` (or the MSE / relative-error
+    analogue), not a single mean over the flattened tensor.
     """
     if pred.shape != target.shape:
         raise ValueError(
@@ -110,11 +117,16 @@ def _vector_loss(
         )
     n_components = pred.shape[-1]
 
-    if loss_type == "rmse":
-        ### Per-component relative MSE, summed.
-        diff_sq = torch.mean((pred - target) ** 2, dim=tuple(range(pred.ndim - 1)))
-        target_sq = torch.mean(target**2, dim=tuple(range(pred.ndim - 1)))
-        return torch.sum(diff_sq / (target_sq + eps))
+    ### Relative errors: each component normalized by its own target energy
+    ### (reduce over every axis but the last), then summed across components.
+    if loss_type == "relative_mse":
+        return torch.sum(
+            relative_mse(pred, target, dim=tuple(range(pred.ndim - 1)), eps=eps)
+        )
+    if loss_type == "relative_l2":
+        return torch.sum(
+            relative_l2(pred, target, dim=tuple(range(pred.ndim - 1)), eps=eps)
+        )
 
     total = torch.zeros((), device=pred.device, dtype=pred.dtype)
     for i in range(n_components):
@@ -140,7 +152,10 @@ class LossCalculator:
         target_config: ``{name: scalar|vector}`` mapping. Iteration order
             determines the order in the loss dict and the channel weighting
             in the total.
-        loss_type: One of ``"huber"``, ``"mse"``, ``"rmse"``.
+        loss_type: One of ``"huber"``, ``"mse"``, ``"relative_mse"``
+            (``sum((pred - target)^2) / sum(target^2)``), or ``"relative_l2"``
+            (its square root). ``"rmse"`` is a deprecated alias for
+            ``"relative_mse"`` and warns.
         n_spatial_dims: Vector field dimensionality. Used to compute
             channel counts for the normalization denominator.
         field_weights: Optional per-field multiplicative weights. Each
@@ -167,11 +182,24 @@ class LossCalculator:
         normalize_by_channels: bool = True,
         delta: float = DEFAULT_HUBER_DELTA,
     ) -> None:
-        if loss_type not in ("huber", "mse", "rmse"):
+        if loss_type not in _VALID_LOSS_TYPES:
             raise ValueError(
                 f"Unknown loss_type {loss_type!r}; expected one of "
-                f"'huber', 'mse', 'rmse'."
+                f"{_VALID_LOSS_TYPES!r}."
             )
+        if loss_type == "rmse":
+            ### FutureWarning rather than DeprecationWarning: this is a
+            ### user-facing config value, and DeprecationWarning is hidden
+            ### by default outside ``__main__``.
+            warnings.warn(
+                'loss_type="rmse" is a deprecated misnomer: the quantity it '
+                "computes is the target-normalized relative MSE (no square "
+                'root). Use "relative_mse" (identical quantity) or '
+                '"relative_l2" (its square root). The alias will be removed.',
+                FutureWarning,
+                stacklevel=2,
+            )
+            loss_type = "relative_mse"
         ### `target_config` values are required to be lowercase per the
         ### `FieldType` contract; we copy the dict verbatim so callers can
         ### mutate their original without affecting us.

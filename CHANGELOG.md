@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Deprecated
 
+- Unified external aerodynamics recipe: `training.loss_type: rmse` is
+  deprecated in favour of `relative_mse`, which names what it always
+  computed (target-normalized relative MSE, no square root); `relative_l2`
+  is added for the square root. Both delegate to
+  `physicsnemo.metrics.general.relative_error`. `rmse` still works and
+  warns.
+
 ### Removed
 
 ### Fixed
