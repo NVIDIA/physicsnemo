@@ -18,6 +18,7 @@ import atexit
 import os
 import queue
 import warnings
+from datetime import timedelta
 from typing import Optional, Tuple
 from warnings import warn
 
@@ -387,6 +388,10 @@ class DistributedManager(object):
         listed above. Initialization method can also be explicitly controlled using the
         `PHYSICSNEMO_DISTRIBUTED_INITIALIZATION_METHOD` environment variable and setting it
         to one of the options above.
+
+        The process-group timeout can be overridden by setting the
+        `PHYSICSNEMO_DIST_TIMEOUT_S` environment variable to a number of seconds.
+        When unset, the backend default (10 minutes for NCCL) is used.
         """
         if DistributedManager.is_initialized():
             warn("Distributed manager is already initialized")
@@ -590,6 +595,14 @@ class DistributedManager(object):
             )
 
         if manager._distributed:
+            # Optional process-group timeout override (seconds). The backend
+            # default (10 minutes for NCCL) is too long when a rank dies
+            # between collectives, since its peers hang for the full window,
+            # and too short when a long step or a stalled file system delays
+            # one rank. Unset leaves the backend default in place.
+            timeout_env = os.environ.get("PHYSICSNEMO_DIST_TIMEOUT_S")
+            timeout = timedelta(seconds=float(timeout_env)) if timeout_env else None
+
             # Setup distributed process group
             try:
                 dist.init_process_group(
@@ -597,6 +610,7 @@ class DistributedManager(object):
                     rank=manager.rank,
                     world_size=manager.world_size,
                     device_id=manager.device,
+                    timeout=timeout,
                 )
             except TypeError:
                 # device_id only introduced in PyTorch 2.3
@@ -604,6 +618,7 @@ class DistributedManager(object):
                     backend,
                     rank=manager.rank,
                     world_size=manager.world_size,
+                    timeout=timeout,
                 )
 
         if torch.cuda.is_available():
