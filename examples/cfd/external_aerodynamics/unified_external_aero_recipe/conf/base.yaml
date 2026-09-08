@@ -36,6 +36,12 @@ training:
   loss_type: "huber"
   batch_size: 1
   scheduler_update_mode: "epoch"
+  # Every step already passes a rank-synchronized failure barrier before
+  # backward (any rank's data/forward exception fails all ranks loudly
+  # instead of hanging the collective). Set a positive value here to also
+  # treat a non-finite loss, or a finite loss above the value, as a step
+  # failure (adds one host sync per step for the loss read).
+  divergence_loss_threshold: null
   optimizer:
     weight_decay: 1.0e-4
     betas: [0.9, 0.999]

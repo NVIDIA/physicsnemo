@@ -23,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Unified external aerodynamics recipe: a data-loading or forward-pass
+  failure on one rank now fails every rank together instead of leaving the
+  others hanging in the next collective until the NCCL timeout; an optional
+  `training.divergence_loss_threshold` aborts on non-finite or exploding
+  losses; the epoch-mode scheduler is stepped before the checkpoint is
+  written so a resumed run matches a continuous one (older checkpoints are
+  migrated on load); fp16 `GradScaler` state is checkpointed; the final
+  epoch is always checkpointed.
 - Datapipe transforms, collators, readers, and the unified external aero
   recipe no longer silently skip or mis-handle nested `TensorDict` fields
   (membership was tested against top-level `td.keys()`, and
