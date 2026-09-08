@@ -200,3 +200,40 @@ def test_load_from_checkpoint(device, override):
             )
     registry.__clear_registry__()
     registry.__restore_registry__()
+
+
+@pytest.mark.parametrize("legacy_format", [False, True], ids=["zip", "tar"])
+def test_save_overwrites_existing_checkpoint(tmp_path, legacy_format):
+    file_name = tmp_path / "checkpoint.mdlus"
+    M1(1.0).save(file_name, legacy_format=legacy_format)
+    M1(2.0).save(file_name, legacy_format=legacy_format)
+
+    m_loaded = M1.from_checkpoint(str(file_name))
+    assert m_loaded.b == 2.0
+    # No temporary files left next to the checkpoint
+    assert [p.name for p in tmp_path.iterdir()] == ["checkpoint.mdlus"]
+
+
+@pytest.mark.parametrize("legacy_format", [False, True], ids=["zip", "tar"])
+def test_save_failure_leaves_destination_intact(tmp_path, monkeypatch, legacy_format):
+    from fsspec.implementations.local import LocalFileSystem
+
+    file_name = tmp_path / "checkpoint.mdlus"
+    M1(1.0).save(file_name, legacy_format=legacy_format)
+    original_bytes = file_name.read_bytes()
+
+    # Simulate the process dying part-way through the transfer to the
+    # destination filesystem: a truncated file is written, then an error.
+    def truncated_put(self, lpath, rpath, *args, **kwargs):
+        with open(rpath, "wb") as f:
+            f.write(b"partial")
+        raise RuntimeError("killed mid-transfer")
+
+    monkeypatch.setattr(LocalFileSystem, "put", truncated_put)
+    with pytest.raises(RuntimeError, match="killed mid-transfer"):
+        M1(2.0).save(file_name, legacy_format=legacy_format)
+    monkeypatch.undo()
+
+    assert file_name.read_bytes() == original_bytes
+    assert [p.name for p in tmp_path.iterdir()] == ["checkpoint.mdlus"]
+    assert M1.from_checkpoint(str(file_name)).b == 1.0

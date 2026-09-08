@@ -27,6 +27,7 @@ import os
 import re
 import tarfile
 import tempfile
+import uuid
 import warnings
 import zipfile
 from pathlib import Path
@@ -67,6 +68,24 @@ def _load_state_dict_with_logging(
             f"Unexpected keys when loading {module.__class__.__name__}: {unexpected_keys}"
         )
     return missing_keys, unexpected_keys
+
+
+def _put_atomic(fs, local_path: Path | str, file_name: str) -> None:
+    """Copy ``local_path`` to ``file_name`` on ``fs`` without exposing a partial file.
+
+    The file is first transferred to a sibling temporary name and then moved
+    into place, so that a process killed mid-transfer (e.g. a job hitting its
+    wall-time limit) leaves either the previous complete file or the new one,
+    never a truncated archive. On failure the temporary file is removed.
+    """
+    tmp_name = f"{file_name}.tmp-{uuid.uuid4().hex}"
+    try:
+        fs.put(str(local_path), tmp_name)
+        fs.mv(tmp_name, file_name)
+    except BaseException:
+        if fs.exists(tmp_name):
+            fs.rm(tmp_name)
+        raise
 
 
 def _ignore_device_buffer_keys(module, incompatible_keys):
@@ -604,7 +623,7 @@ class Module(torch.nn.Module):
                     archive.writestr("metadata.json", metadata_str)
 
                 # Upload to final destination
-                fs.put(tmp_path, file_name)
+                _put_atomic(fs, tmp_path, file_name)
             finally:
                 # Clean up temporary file
                 if os.path.exists(tmp_path):
@@ -632,7 +651,7 @@ class Module(torch.nn.Module):
                         tar.add(str(file), arcname=file.name)
 
                 # Upload to final destination
-                fs.put(local_path / "model.tar", file_name)
+                _put_atomic(fs, local_path / "model.tar", file_name)
 
     @staticmethod
     def _detect_checkpoint_format(file_path: str) -> str:
