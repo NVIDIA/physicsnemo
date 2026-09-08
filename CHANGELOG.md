@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The unified external aero recipe no longer writes `MeshToDomainMesh`'s
+  reserved query-measure key into saved inference outputs, and its force
+  documentation and subsampling warning now describe coefficients from a
+  subsampled surface as unbiased estimates (the measure weights recorded by
+  `SubsampleMesh` already enter `Mesh.integrate`) rather than as values shrunk
+  by the kept-area fraction.
 - Datapipe transforms, collators, readers, and the unified external aero
   recipe no longer silently skip or mis-handle nested `TensorDict` fields
   (membership was tested against top-level `td.keys()`, and
