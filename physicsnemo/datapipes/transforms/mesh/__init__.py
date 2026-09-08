@@ -29,6 +29,7 @@ from physicsnemo.datapipes.transforms.mesh.augmentations import (
 )
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
 from physicsnemo.datapipes.transforms.mesh.transforms import (
+    TARGET_QUADRATURE_MEASURE_KEY,
     CenterMesh,
     ComputeCellCentroids,
     ComputeSurfaceNormals,
@@ -59,6 +60,7 @@ __all__ = [
     "SetGlobalField",
     "NormalizeMeshFields",
     "MeshToDomainMesh",
+    "TARGET_QUADRATURE_MEASURE_KEY",
     "MeshToTensorDict",
     "RestructureTensorDict",
     "RandomScaleMesh",

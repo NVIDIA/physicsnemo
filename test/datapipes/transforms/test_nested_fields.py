@@ -29,6 +29,7 @@ from tensordict import TensorDict
 
 import physicsnemo.datapipes as dp
 from physicsnemo.datapipes.transforms.mesh import (
+    TARGET_QUADRATURE_MEASURE_KEY,
     ComputeSurfaceNormals,
     DropMeshFields,
     MeshToDomainMesh,
@@ -253,7 +254,10 @@ class TestMeshToDomainMesh:
     def test_nested_target_moved_to_interior(self):
         mesh = _surface_mesh()
         domain = MeshToDomainMesh(cell_data_targets=["solution.pMeanTrim"])(mesh)
-        assert _leaves(domain.interior.point_data) == {("solution", "pMeanTrim")}
+        assert _leaves(domain.interior.point_data) == {
+            ("solution", "pMeanTrim"),
+            TARGET_QUADRATURE_MEASURE_KEY,
+        }
         boundary = domain.boundaries["vehicle"]
         assert ("solution", "pMeanTrim") not in boundary.cell_data
         assert ("solution", "wssMeanTrim") in boundary.cell_data

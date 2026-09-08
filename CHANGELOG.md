@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in `physicsnemo.datapipes` through it, so a `"."` in a YAML field name
   (`"solution.pressure"`) addresses a leaf inside a nested `TensorDict`.
   Nested `Mesh` data no longer needs to be flattened before use.
+- `MeshToDomainMesh` in `cell_centroids` mode records each source cell's
+  effective measure (area times any composed measure weights) on the interior
+  under the reserved `point_data` key `TARGET_QUADRATURE_MEASURE_KEY`, so
+  integrals and weighted losses over the query points remain possible after
+  the cells are gone.
 
 ### Changed
 
