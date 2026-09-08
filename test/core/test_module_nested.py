@@ -232,8 +232,26 @@ def test_save_failure_leaves_destination_intact(tmp_path, monkeypatch, legacy_fo
     monkeypatch.setattr(LocalFileSystem, "put", truncated_put)
     with pytest.raises(RuntimeError, match="killed mid-transfer"):
         M1(2.0).save(file_name, legacy_format=legacy_format)
-    monkeypatch.undo()
 
     assert file_name.read_bytes() == original_bytes
     assert [p.name for p in tmp_path.iterdir()] == ["checkpoint.mdlus"]
     assert M1.from_checkpoint(str(file_name)).b == 1.0
+
+
+def test_save_failure_cleanup_error_does_not_mask_transfer_error(tmp_path, monkeypatch):
+    """If removing the temporary file fails too, the transfer error still surfaces."""
+    from fsspec.implementations.local import LocalFileSystem
+
+    file_name = tmp_path / "checkpoint.mdlus"
+
+    def failing_put(self, lpath, rpath, *args, **kwargs):
+        raise RuntimeError("killed mid-transfer")
+
+    def failing_rm(self, path, *args, **kwargs):
+        raise OSError("filesystem unavailable")
+
+    monkeypatch.setattr(LocalFileSystem, "put", failing_put)
+    monkeypatch.setattr(LocalFileSystem, "rm", failing_rm)
+    with pytest.raises(RuntimeError, match="killed mid-transfer"):
+        M1(1.0).save(file_name)
+    assert list(tmp_path.iterdir()) == []

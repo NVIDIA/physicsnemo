@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Set, Union
 
 import torch
+from fsspec.implementations.local import LocalFileSystem
 
 from physicsnemo.core.filesystem import _download_cached, _get_fs
 from physicsnemo.core.meta import ModelMetaData
@@ -76,15 +77,26 @@ def _put_atomic(fs, local_path: Path | str, file_name: str) -> None:
     The file is first transferred to a sibling temporary name and then moved
     into place, so that a process killed mid-transfer (e.g. a job hitting its
     wall-time limit) leaves either the previous complete file or the new one,
-    never a truncated archive. On failure the temporary file is removed.
+    never a truncated archive. On a local filesystem the final step is an
+    atomic ``os.replace``; on remote filesystems it is ``fs.mv``, which is only
+    as atomic as the backend makes it. A kill between the two steps can leave
+    a stray ``<file_name>.tmp-*`` file behind; the destination is unaffected.
     """
     tmp_name = f"{file_name}.tmp-{uuid.uuid4().hex}"
     try:
         fs.put(str(local_path), tmp_name)
-        fs.mv(tmp_name, file_name)
+        if isinstance(fs, LocalFileSystem):
+            # fs.mv is shutil.move, which refuses to overwrite an existing
+            # destination on Windows; os.replace overwrites atomically everywhere.
+            os.replace(fs._strip_protocol(tmp_name), fs._strip_protocol(file_name))
+        else:
+            fs.mv(tmp_name, file_name)
     except BaseException:
-        if fs.exists(tmp_name):
+        # Best-effort cleanup: never let a failing rm mask the transfer error.
+        try:
             fs.rm(tmp_name)
+        except Exception:
+            pass
         raise
 
 
