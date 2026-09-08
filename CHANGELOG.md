@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in `physicsnemo.datapipes` through it, so a `"."` in a YAML field name
   (`"solution.pressure"`) addresses a leaf inside a nested `TensorDict`.
   Nested `Mesh` data no longer needs to be flattened before use.
+- Adds `ComputeFreestreamDirection` and `DropDegenerateCells` transforms to
+  the unified external aerodynamics recipe and uses them in the surface
+  dataset configs.
 
 ### Changed
 

@@ -143,6 +143,18 @@ flowchart LR
   `L_ref` (rather than scaling x/y/z independently) so geometry aspect
   ratios are preserved.
 
+- **ComputeFreestreamDirection** — Surface pipelines.  Writes the unit
+  freestream direction `U_inf / |U_inf|` to `global_data.U_inf_dir`.
+  `NonDimensionalizeByMetadata` leaves `global_data` untouched, so this is
+  the nondimensional form of the freestream available to models; `U_inf`
+  itself stays physical for force integration and inference.
+
+- **DropDegenerateCells** — Surface pipelines.  Drops cells whose area
+  is zero or non-finite.  Sliver cells can round to zero area in float32
+  after centering or rotation and would otherwise get an all-zero normal
+  from `ComputeSurfaceNormals`.  Runs last so it sees the points the
+  model sees.
+
 - **ComputeSDFFromBoundary** — Volume pipelines only.  Computes a
   signed distance field (and surface normals) from an auxiliary STL
   boundary mesh loaded via the reader's `extra_boundaries` option.

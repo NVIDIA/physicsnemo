@@ -49,6 +49,12 @@ pipeline:
   transforms:
     - _target_: ${dp:DropMeshFields}
       global_data: [TimeValue]
+    # Unit freestream direction as a new global leaf `U_inf_dir` (`U_inf`
+    # stays physical). Placed before CenterMesh so the rotation augmentation
+    # (inserted after CenterMesh) rotates it together with the geometry.
+    - _target_: ${dp:ComputeFreestreamDirection}
+      velocity_field: U_inf
+      output_field: U_inf_dir
     - _target_: ${dp:CenterMesh}
       use_area_weighting: false
     - _target_: ${dp:NonDimensionalizeByMetadata}
@@ -69,6 +75,10 @@ pipeline:
       field_name: normals
     - _target_: ${dp:SubsampleMesh}
       n_cells: ${sampling_resolution}
+    # DrivAerML surfaces contain sliver cells (areas ~1e-11 m^2) whose area
+    # can round to exactly zero in float32 after centering / rotation; drop
+    # them last so the check sees the same points the model will.
+    - _target_: ${dp:DropDegenerateCells}
     # Terminal transform: convert the surface Mesh into a DomainMesh per the
     # recipe's prediction-vs-input contract. `interior` becomes a Mesh[0, 3]
     # point cloud at the cell centroids (where the model predicts), with the
