@@ -29,7 +29,6 @@ import numpy as np
 import torch
 
 from physicsnemo.core.version_check import OptionalImport
-from physicsnemo.datapipes._indexing import _cyclic_block_indices
 from physicsnemo.datapipes.readers.base import Reader
 from physicsnemo.datapipes.registry import register
 
@@ -239,21 +238,15 @@ class ZarrReader(Reader):
         """
         return (path / "zarr.json").exists() or (path / ".zgroup").exists()
 
-    def _load_sample(self, index: int) -> dict[str, torch.Tensor]:
-        """Load a single sample from a Zarr group."""
-        # Per-sample generator: reproducible regardless of read order/thread.
-        generator = self._index_generator(index)
+    def _open_sample(self, index: int) -> tuple[Any, set[str]]:
+        """Open the sample's group and validate required-field availability."""
         if self._single_group_mode:
             # Single group: index into first dimension of each array
             group_path = self._groups[0]
-            root = self._open_zarr_store(group_path)
         else:
             # Directory mode: each group is one sample
             group_path = self._groups[index]
-            root = self._open_zarr_store(group_path)
-
-        data = {}
-        fields_to_load = self.fields
+        root = self._open_zarr_store(group_path)
 
         # Discover available arrays and attributes for this sample at runtime
         available_arrays = set(root.array_keys())
@@ -263,7 +256,7 @@ class ZarrReader(Reader):
         # Check for missing required fields (check both arrays and attributes).
         # ``array_keys()`` lists only direct children, so a path into a
         # sub-group (``"solution/pressure"``) is resolved via ``in root``.
-        required_fields = set(fields_to_load) - set(self.default_values.keys())
+        required_fields = set(self.fields) - set(self.default_values.keys())
         missing_fields = {
             f for f in required_fields if f not in available and f not in root
         }
@@ -273,31 +266,25 @@ class ZarrReader(Reader):
                 f"Available arrays: {list(available_arrays)}, "
                 f"Available attributes: {list(available_attrs)}"
             )
+        return root, available_attrs
 
-        # Determine cyclic block indices if coordinated subsampling is enabled.
-        subsample_indices = None
-        target_keys_set = set()
-        if self._coordinated_subsampling_config is not None:
-            n_points = self._coordinated_subsampling_config["n_points"]
-            target_keys_set = set(self._coordinated_subsampling_config["target_keys"])
+    def _array_rows(self, array) -> int:
+        """Row count of an array's batch dim (dim 1 in single-group mode)."""
+        return array.shape[1] if self._single_group_mode else array.shape[0]
 
-            # Find the range from the first available target key. A cyclic
-            # block gives every point equal inclusion probability while
-            # retaining contiguous storage locality.
-            for field in target_keys_set:
-                if field in root:
-                    if self._single_group_mode:
-                        # In single group mode, subsample along dimensions after the first
-                        array_shape = root[field].shape[1]
-                    else:
-                        array_shape = root[field].shape[0]
-                    subsample_indices = _cyclic_block_indices(
-                        array_shape, n_points, generator=generator
-                    ).numpy()
-                    break
+    def _load_sample(self, index: int) -> dict[str, torch.Tensor]:
+        """Load a single sample from a Zarr group."""
+        # Per-sample generator: reproducible regardless of read order/thread.
+        generator = self._index_generator(index)
+        root, available_attrs = self._open_sample(index)
+        subsample_indices, target_keys_set = self._window_indices(
+            lambda key: self._array_rows(root[key]) if key in root else None,
+            generator,
+        )
 
+        data = {}
         # Load each field
-        for field in fields_to_load:
+        for field in self.fields:
             if field in root:
                 if self._single_group_mode:
                     # Single group mode: index into first dimension
