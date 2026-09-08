@@ -222,14 +222,17 @@ def test_save_failure_leaves_destination_intact(tmp_path, monkeypatch, legacy_fo
     M1(1.0).save(file_name, legacy_format=legacy_format)
     original_bytes = file_name.read_bytes()
 
-    # Simulate the process dying part-way through the transfer to the
-    # destination filesystem: a truncated file is written, then an error.
-    def truncated_put(self, lpath, rpath, *args, **kwargs):
-        with open(rpath, "wb") as f:
-            f.write(b"partial")
+    # Simulate the process dying part-way through writing the archive: some
+    # bytes reach the destination filesystem, then an error.
+    real_open = LocalFileSystem.open
+
+    def truncated_open(self, path, mode="rb", *args, **kwargs):
+        f = real_open(self, path, mode, *args, **kwargs)
+        f.write(b"partial")
+        f.close()
         raise RuntimeError("killed mid-transfer")
 
-    monkeypatch.setattr(LocalFileSystem, "put", truncated_put)
+    monkeypatch.setattr(LocalFileSystem, "open", truncated_open)
     with pytest.raises(RuntimeError, match="killed mid-transfer"):
         M1(2.0).save(file_name, legacy_format=legacy_format)
 
@@ -247,14 +250,14 @@ def test_save_failure_cleanup_error_does_not_mask_transfer_error(
 
     file_name = tmp_path / "checkpoint.mdlus"
 
-    def failing_put(self, lpath, rpath, *args, **kwargs):
+    def failing_open(self, path, mode="rb", *args, **kwargs):
         raise RuntimeError("killed mid-transfer")
 
-    def failing_rm(self, path, *args, **kwargs):
+    def failing_exists(self, path, *args, **kwargs):
         raise OSError("filesystem unavailable")
 
-    monkeypatch.setattr(LocalFileSystem, "put", failing_put)
-    monkeypatch.setattr(LocalFileSystem, "rm", failing_rm)
+    monkeypatch.setattr(LocalFileSystem, "open", failing_open)
+    monkeypatch.setattr(LocalFileSystem, "exists", failing_exists)
     with caplog.at_level("WARNING", logger="core.module"):
         with pytest.raises(RuntimeError, match="killed mid-transfer"):
             M1(1.0).save(file_name)

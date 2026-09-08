@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import importlib.metadata
 import inspect
@@ -71,20 +72,23 @@ def _load_state_dict_with_logging(
     return missing_keys, unexpected_keys
 
 
-def _put_atomic(fs, local_path: Path | str, file_name: str) -> None:
-    """Copy ``local_path`` to ``file_name`` on ``fs`` without exposing a partial file.
+@contextlib.contextmanager
+def _atomic_write(fs, file_name: str):
+    """Open ``file_name`` on ``fs`` for writing so the destination never holds a partial file.
 
-    The file is first transferred to a sibling temporary name and then moved
-    into place, so that a process killed mid-transfer (e.g. a job hitting its
-    wall-time limit) leaves either the previous complete file or the new one,
-    never a truncated archive. On a local filesystem the final step is an
-    atomic ``os.replace``; on remote filesystems it is ``fs.mv``, which is only
-    as atomic as the backend makes it. A kill between the two steps can leave
-    a stray ``<file_name>.tmp-*`` file behind; the destination is unaffected.
+    The data is written to a sibling temporary name and moved into place once
+    the ``with`` block exits cleanly, so a process killed mid-write (e.g. a job
+    hitting its wall-time limit) leaves either the previous complete file or
+    the new one, never a truncated archive. On a local filesystem the final
+    step is an atomic ``os.replace``; on remote filesystems it is ``fs.mv``,
+    which is only as atomic as the backend makes it. A kill between the two
+    steps can leave a stray ``<file_name>.tmp-*`` file behind; the destination
+    is unaffected.
     """
     tmp_name = f"{file_name}.tmp-{uuid.uuid4().hex}"
     try:
-        fs.put(str(local_path), tmp_name)
+        with fs.open(tmp_name, "wb") as f:
+            yield f
         if isinstance(fs, LocalFileSystem):
             # os.replace overwrites atomically on every platform; fs.mv does not.
             os.replace(fs._strip_protocol(tmp_name), fs._strip_protocol(file_name))
@@ -92,7 +96,8 @@ def _put_atomic(fs, local_path: Path | str, file_name: str) -> None:
             fs.mv(tmp_name, file_name)
     except BaseException:
         try:
-            fs.rm(tmp_name)
+            if fs.exists(tmp_name):
+                fs.rm(tmp_name)
         except Exception as exc:
             logging.getLogger("core.module").warning(
                 "Could not remove temporary checkpoint file %s: %s", tmp_name, exc
@@ -614,32 +619,24 @@ class Module(torch.nn.Module):
         fs = _get_fs(file_name)
 
         if not legacy_format:
-            # Save in zip format (default)
-            try:
-                with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
-                    tmp_path = tmp.name
+            # Save in zip format (default), written straight to the destination
+            with (
+                _atomic_write(fs, file_name) as f,
+                zipfile.ZipFile(f, "w", zipfile.ZIP_STORED) as archive,
+            ):
+                # Save model state dict
+                state_dict_buffer = io.BytesIO()
+                _sd = _state_dict if _state_dict is not None else self.state_dict()
+                torch.save(_sd, state_dict_buffer)
+                archive.writestr("model.pt", state_dict_buffer.getvalue())
 
-                with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_STORED) as archive:
-                    # Save model state dict
-                    state_dict_buffer = io.BytesIO()
-                    _sd = _state_dict if _state_dict is not None else self.state_dict()
-                    torch.save(_sd, state_dict_buffer)
-                    archive.writestr("model.pt", state_dict_buffer.getvalue())
+                # Save args
+                args_str = json.dumps(_args)
+                archive.writestr("args.json", args_str)
 
-                    # Save args
-                    args_str = json.dumps(_args)
-                    archive.writestr("args.json", args_str)
-
-                    # Save metadata
-                    metadata_str = json.dumps(metadata_info)
-                    archive.writestr("metadata.json", metadata_str)
-
-                # Upload to final destination
-                _put_atomic(fs, tmp_path, file_name)
-            finally:
-                # Clean up temporary file
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
+                # Save metadata
+                metadata_str = json.dumps(metadata_info)
+                archive.writestr("metadata.json", metadata_str)
         else:
             # Save in legacy tar format
             with tempfile.TemporaryDirectory() as temp_dir:
@@ -657,13 +654,14 @@ class Module(torch.nn.Module):
                 with open(local_path / "metadata.json", "w") as f:
                     json.dump(metadata_info, f)
 
-                # Create tar archive
-                with tarfile.open(local_path / "model.tar", "w") as tar:
+                # Create tar archive, written straight to the destination
+                # ("w|" streams, so remote file objects need not be seekable)
+                with (
+                    _atomic_write(fs, file_name) as f,
+                    tarfile.open(fileobj=f, mode="w|") as tar,
+                ):
                     for file in local_path.iterdir():
                         tar.add(str(file), arcname=file.name)
-
-                # Upload to final destination
-                _put_atomic(fs, local_path / "model.tar", file_name)
 
     @staticmethod
     def _detect_checkpoint_format(file_path: str) -> str:
