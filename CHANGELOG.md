@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in `physicsnemo.datapipes` through it, so a `"."` in a YAML field name
   (`"solution.pressure"`) addresses a leaf inside a nested `TensorDict`.
   Nested `Mesh` data no longer needs to be flattened before use.
+- Adds `physicsnemo.mesh.FieldLayout`, which packs the named scalar and vector
+  fields of a point `TensorDict` into two dense channel tensors in a fixed,
+  name-sorted order and unpacks them back, plus `validate_rank_spec` for
+  checking a `{name: rank}` schema.
 
 ### Changed
 
