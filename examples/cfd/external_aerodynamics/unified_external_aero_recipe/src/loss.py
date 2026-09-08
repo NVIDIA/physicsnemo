@@ -46,7 +46,7 @@ from tensordict import TensorDict
 from utils import FieldType, align_scalar_shapes, field_dim, validate_field_coverage
 
 from physicsnemo.datapipes.keys import as_nested_key
-from physicsnemo.metrics.general.relative_error import relative_l2, relative_mse
+from physicsnemo.metrics.general.relative_error import relative_mse
 
 _LOGGER = logging.getLogger("training.loss")
 
@@ -56,8 +56,8 @@ DEFAULT_HUBER_DELTA = 1.0
 ### always computed is the target-normalized relative MSE (no square root
 ### anywhere), so the old name misled anyone comparing against reported RMSE
 ### numbers. ``LossCalculator`` rewrites it on construction with a warning.
-LossType = Literal["huber", "mse", "relative_mse", "relative_l2", "rmse"]
-_VALID_LOSS_TYPES = ("huber", "mse", "relative_mse", "relative_l2", "rmse")
+LossType = Literal["huber", "mse", "relative_mse", "rmse"]
+_VALID_LOSS_TYPES = ("huber", "mse", "relative_mse", "rmse")
 
 
 ### ---------------------------------------------------------------------------
@@ -92,8 +92,6 @@ def _scalar_loss(
         return torch.mean((pred - target) ** 2)
     if loss_type == "relative_mse":
         return relative_mse(pred, target, eps=eps)
-    if loss_type == "relative_l2":
-        return relative_l2(pred, target, eps=eps)
     raise ValueError(f"Unknown loss_type {loss_type!r}")
 
 
@@ -117,15 +115,11 @@ def _vector_loss(
         )
     n_components = pred.shape[-1]
 
-    ### Relative errors: each component normalized by its own target energy
+    ### Relative MSE: each component normalized by its own target energy
     ### (reduce over every axis but the last), then summed across components.
     if loss_type == "relative_mse":
         return torch.sum(
             relative_mse(pred, target, dim=tuple(range(pred.ndim - 1)), eps=eps)
-        )
-    if loss_type == "relative_l2":
-        return torch.sum(
-            relative_l2(pred, target, dim=tuple(range(pred.ndim - 1)), eps=eps)
         )
 
     total = torch.zeros((), device=pred.device, dtype=pred.dtype)
@@ -152,10 +146,10 @@ class LossCalculator:
         target_config: ``{name: scalar|vector}`` mapping. Iteration order
             determines the order in the loss dict and the channel weighting
             in the total.
-        loss_type: One of ``"huber"``, ``"mse"``, ``"relative_mse"``
-            (``sum((pred - target)^2) / sum(target^2)``), or ``"relative_l2"``
-            (its square root). ``"rmse"`` is a deprecated alias for
-            ``"relative_mse"`` and warns.
+        loss_type: One of ``"huber"``, ``"mse"``, or ``"relative_mse"``
+            (``sum((pred - target)^2) / sum(target^2)``). ``"rmse"`` is
+            accepted only as a deprecated alias for ``"relative_mse"`` and
+            warns.
         n_spatial_dims: Vector field dimensionality. Used to compute
             channel counts for the normalization denominator.
         field_weights: Optional per-field multiplicative weights. Each
@@ -194,8 +188,10 @@ class LossCalculator:
             warnings.warn(
                 'loss_type="rmse" is a deprecated misnomer: the quantity it '
                 "computes is the target-normalized relative MSE (no square "
-                'root). Use "relative_mse" (identical quantity) or '
-                '"relative_l2" (its square root). The alias will be removed.',
+                'root). Use "relative_mse", which computes the same quantity '
+                "for any target with nonzero energy (only the denominator "
+                "floor for an all-zero target differs). The alias will be "
+                "removed.",
                 FutureWarning,
                 stacklevel=2,
             )

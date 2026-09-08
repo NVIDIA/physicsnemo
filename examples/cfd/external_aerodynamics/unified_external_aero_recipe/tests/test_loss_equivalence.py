@@ -147,9 +147,7 @@ class TestReferenceTotal:
         assert "loss/total" in loss_dict
         assert torch.allclose(loss_dict["loss/total"], ref_total, atol=1e-7, rtol=1e-6)
 
-    @pytest.mark.parametrize(
-        "loss_type", ["huber", "mse", "relative_mse", "relative_l2"]
-    )
+    @pytest.mark.parametrize("loss_type", ["huber", "mse", "relative_mse"])
     def test_per_field_keys_match_target_config(self, loss_type):
         """Per field keys match target config."""
         torch.manual_seed(0)
@@ -182,7 +180,7 @@ def _random_fields(seed: int = 11) -> tuple[TensorDict, TensorDict]:
 
 
 class TestRelativeLosses:
-    """``relative_mse`` / ``relative_l2`` semantics and the ``"rmse"`` alias."""
+    """``relative_mse`` semantics and the ``"rmse"`` alias."""
 
     def test_relative_mse_is_target_normalized_mse_per_field(self):
         """Scalar: ``mean(err^2) / mean(target^2)``; vector: per component, summed."""
@@ -200,27 +198,6 @@ class TestRelativeLosses:
         )
         assert torch.allclose(ldict["loss/pressure"], ref_scalar, rtol=1e-6)
         assert torch.allclose(ldict["loss/wss"], ref_vector, rtol=1e-6)
-
-    def test_relative_l2_is_sqrt_of_relative_mse_per_field(self):
-        """``relative_l2`` takes the root per field (before channel normalization)."""
-        pred, target = _random_fields()
-        target_config = {"pressure": "scalar", "wss": "vector"}
-        _, mse_dict = LossCalculator(target_config, loss_type="relative_mse")(
-            pred, target
-        )
-        _, l2_dict = LossCalculator(target_config, loss_type="relative_l2")(
-            pred, target
-        )
-        assert torch.allclose(
-            l2_dict["loss/pressure"], mse_dict["loss/pressure"].sqrt()
-        )
-        ### The vector field sums per-component roots, so it is not simply the
-        ### root of the summed relative MSE; check it against the components.
-        p, t = pred["wss"], target["wss"]
-        ref = torch.sum(
-            (torch.mean((p - t) ** 2, dim=(0, 1)) / torch.mean(t**2, dim=(0, 1))).sqrt()
-        )
-        assert torch.allclose(l2_dict["loss/wss"], ref, rtol=1e-6)
 
     def test_rmse_alias_warns_and_matches_relative_mse(self):
         """``"rmse"`` warns once at construction and computes ``relative_mse``."""
