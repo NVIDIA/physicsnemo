@@ -17,11 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `Mesh.slice_points` no longer builds two full-mesh index tensors to remap
-  cells; kept vertices are located by binary search and memory-mapped rows are
-  read in one range when they are close together. Results are unchanged; slicing
-  a few thousand points out of a mesh with hundreds of millions of vertices now
-  costs what is kept rather than what exists.
+- `Mesh.slice_points` picks its cell-remapping algorithm by mesh shape: the
+  full-mesh lookup table as before, or a binary search over the kept ids when the
+  mesh has far more points than cell-vertex entries (a reader keeping a block of
+  cells out of a mesh with hundreds of millions of vertices). Memory-mapped rows
+  are read in one range when they are close together. Results are unchanged.
 
 ### Deprecated
 

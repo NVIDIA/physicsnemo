@@ -71,6 +71,11 @@ from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
 from physicsnemo.mesh.validation import validate
 from physicsnemo.mesh.visualization.draw_mesh import draw
 
+### slice_points remaps cells through a full-mesh lookup table unless the mesh
+### has more than this many points per cell-vertex entry, in which case it
+### binary-searches the kept ids instead (see slice_points for the measurement).
+_SEARCH_REMAP_RATIO = 64
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.neighbors._adjacency import Adjacency
 
@@ -1408,12 +1413,17 @@ class Mesh:
             kept_indices < 0, kept_indices + n_points, kept_indices
         )
 
-        ### Remap cells and filter out cells with any removed vertices. The
-        ### kept ids are sorted once and each cell vertex is located by binary
-        ### search; a vertex is kept iff the search lands on an equal id. This
-        ### replaces a full-mesh old->new lookup table, whose two n_points-sized
-        ### tensors dominated the cost of slicing a few thousand points out of
-        ### a mesh with hundreds of millions.
+        ### Remap cells and filter out cells with any removed vertices. Two
+        ### algorithms with the same result, chosen by mesh shape:
+        ###  * a full-mesh old->new lookup table (two n_points-long tensors,
+        ###    then one gather over the cell connectivity) when the mesh is not
+        ###    much larger than its connectivity -- the usual full-mesh slice;
+        ###  * a sort of the kept ids plus a binary search per cell vertex when
+        ###    the connectivity is small next to n_points -- e.g. a reader that
+        ###    keeps a block of 10k cells out of a mesh with 10^8 vertices,
+        ###    where the table's allocation and fill dominated everything.
+        ### Measured crossover on synthetic meshes: the search wins from about
+        ### n_points ~ 300 x cells.numel(); the table is faster below ~ 30 x.
         n_kept = kept_indices.numel()
         cells = self.cells
         if n_kept == 0:
@@ -1421,6 +1431,14 @@ class Mesh:
                 cells.shape[0], dtype=torch.bool, device=device
             )
             new_cells = cells[valid_cells_mask]
+        elif n_points <= _SEARCH_REMAP_RATIO * cells.numel():
+            old_to_new = torch.full((n_points,), -1, dtype=torch.long, device=device)
+            old_to_new[kept_indices] = torch.arange(
+                n_kept, dtype=torch.long, device=device
+            )
+            remapped_cells = old_to_new[cells]
+            valid_cells_mask = (remapped_cells >= 0).all(dim=-1)
+            new_cells = remapped_cells[valid_cells_mask]
         else:
             sorted_kept, order = torch.sort(kept_indices, stable=True)
             # right=True then -1 selects the LAST equal entry, so a point id

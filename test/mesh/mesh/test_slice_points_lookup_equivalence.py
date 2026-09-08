@@ -23,7 +23,16 @@ loaded from disk."""
 import pytest
 import torch
 
+import physicsnemo.mesh.mesh as mesh_module
 from physicsnemo.mesh import Mesh
+
+
+@pytest.fixture(autouse=True, params=["lookup_table", "binary_search"])
+def _force_remap_algorithm(request, monkeypatch):
+    """Run every test on both cell-remapping algorithms of ``slice_points``:
+    the ratio threshold is pushed to force the lookup table or the search."""
+    ratio = 10**12 if request.param == "lookup_table" else 0
+    monkeypatch.setattr(mesh_module, "_SEARCH_REMAP_RATIO", ratio)
 
 
 def _reference_slice_points(mesh: Mesh, indices) -> Mesh:
