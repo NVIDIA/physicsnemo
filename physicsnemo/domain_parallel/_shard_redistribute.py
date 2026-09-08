@@ -24,6 +24,7 @@ import torch
 import torch.distributed._functional_collectives as funcol
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.tensor._dtensor_spec import (
+    DTensorSpec,
     TensorMeta,
 )
 from torch.distributed.tensor._redistribute import (
@@ -353,6 +354,21 @@ def _to_new_shard_dim(
     return stacked_tensor, size_hint
 
 
+def _plan_key(spec: DTensorSpec) -> DTensorSpec:
+    r"""Immutable, canonical key for torch's cached redistribute planner.
+
+    A plain ``DTensorSpec`` hashes and compares on mesh, placements and
+    ``tensor_meta`` only -- it carries no lazily-populated sharding shapes, so
+    it can sit in a ``functools.cache`` without going stale.
+    """
+    meta = spec.tensor_meta
+    if meta is not None:
+        meta = TensorMeta(tuple(meta.shape), tuple(meta.stride), meta.dtype)
+    return DTensorSpec(
+        mesh=spec.mesh, placements=tuple(spec.placements), tensor_meta=meta
+    )
+
+
 def redistribute_local_shard_tensor(
     local_tensor: torch.Tensor,
     current_spec: ShardTensorSpec,
@@ -437,18 +453,24 @@ def redistribute_local_shard_tensor(
         # which should be an empty tensor
         return local_tensor
 
-    # This is an internal-focused step.  If the target_spec has the same placements and mesh
-    # as the current, but is missing sharding sizes, we can use the current spec's sharding sizes.
-    # if target_spec._sharding_sizes is None:
-    #     if target_spec.placements == current_spec.placements and target_spec.mesh == current_spec.mesh:
-    #         target_spec._sharding_sizes = current_spec.sharding_shapes()
-
     # For sharded tensors, we use the same order of transformation as DTensor.
     # However, often we need to ignore the provided logical shape and substitute
     # a sharded shape instead.
     # This is done by providing a target_sharding_shapes dict above.
 
-    transform_infos = _gen_transform_infos(current_spec, target_spec)
+    # The transform routing decision is cached, by pytorch, as an optimization
+    # step.  ShardTensor spec can be bad for this: sharding shapes can
+    # be populated AFTER they are used as cache keys, meaning they will essentially
+    # ALWAYS trigger a cache miss.  This leads to the cache growing unbounded
+    # and really slowing everything down.
+    #
+    # We don't need sharding shapes when deciding WHAT redistribute path to take.
+    # We need them when doing the redistribute, but the DTensor info is enough.
+    # So, we strip down the spec to just DTensor specs and that enables a smoother
+    # cache experience:
+    transform_infos = _gen_transform_infos(
+        _plan_key(current_spec), _plan_key(target_spec)
+    )
 
     if len(transform_infos) == 0:
         return local_tensor
