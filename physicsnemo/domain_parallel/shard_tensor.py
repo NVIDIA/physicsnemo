@@ -182,10 +182,14 @@ class _ShardTensorToDTensor(torch.autograd.Function):
         # the gradient's tensor_meta: the grad shares the primal's shape but
         # not necessarily its stride (grad-of-permute is permute-of-grad),
         # and stamping the primal's stride onto differently-laid-out grad
-        # memory breaks downstream .view() calls.
+        # memory breaks downstream .view() calls. The shard order must follow
+        # the placements: DTensorSpec asserts that every Shard placement has a
+        # matching entry, so a Shard primal with a Replicate cotangent (a
+        # replicated result gathered from sharded rows) would otherwise fail.
         cached_spec = dataclasses.replace(
             cached_spec,
             placements=grad_placements,
+            shard_order=grad_output._spec.shard_order,
             tensor_meta=grad_output._spec.tensor_meta,
         )
         return (_dtensor_to_shard_tensor(grad_output, cached_spec),)
