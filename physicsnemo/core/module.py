@@ -86,14 +86,11 @@ def _put_atomic(fs, local_path: Path | str, file_name: str) -> None:
     try:
         fs.put(str(local_path), tmp_name)
         if isinstance(fs, LocalFileSystem):
-            # fs.mv is shutil.move, which refuses to overwrite an existing
-            # destination on Windows; os.replace overwrites atomically everywhere.
+            # os.replace overwrites atomically on every platform; fs.mv does not.
             os.replace(fs._strip_protocol(tmp_name), fs._strip_protocol(file_name))
         else:
             fs.mv(tmp_name, file_name)
     except BaseException:
-        # Best-effort cleanup: a failing rm must not replace the transfer error
-        # (interrupts are not Exceptions and still propagate from here).
         try:
             fs.rm(tmp_name)
         except Exception as exc:
