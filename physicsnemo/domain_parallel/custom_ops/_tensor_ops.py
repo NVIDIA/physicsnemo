@@ -198,6 +198,11 @@ def unbind_wrapper(
     input_tensor: ShardTensor = args[0]
     dim: int = args[1] if len(args) > 1 else kwargs.get("dim", 0)
 
+    # Resolve pending reductions before slicing: unbinding an unreduced
+    # partial sum would silently drop the reduction. Differentiable
+    # allreduce, Shard placements untouched (same treatment as SDPA/cross).
+    input_tensor = _resolve_partial_placements(input_tensor)
+
     input_spec = input_tensor._spec
     dim, new_placements, out_sharding_shapes = _unbind_output_metadata(input_spec, dim)
 
@@ -850,6 +855,28 @@ def _cross_dispatch(
     return _cross_dispatch_impl(input_tensor, other_tensor, dim, "cross")
 
 
+def _detach__dispatch(tensor: ShardTensor) -> ShardTensor:
+    r"""Dispatch handler for ``aten.detach_.default``.
+
+    DTensor registers no sharding strategy for the in-place ``detach_``, so
+    the fallback route raises. Detach is purely local: detach the local
+    tensor (shares storage, drops autograd state) and rewrap with the same
+    spec.
+
+    This deliberately returns a new wrapper rather than mutating ``tensor``
+    in place: re-entering ``aten.detach_`` on the wrapper from inside its
+    own ``__torch_dispatch__`` would recurse, and the caller that reaches
+    this handler is AOT functionalization -- the machinery whose job is
+    rewriting in-place ops into functional form -- which consumes the
+    returned value.
+    """
+    return ShardTensor(
+        tensor._local_tensor.detach(),
+        tensor._spec,
+        requires_grad=False,
+    )
+
+
 # Python-level function handlers (__torch_function__).
 ShardTensor.register_function_handler(torch.unbind, unbind_wrapper)
 ShardTensor.register_function_handler(torch.Tensor.unbind, unbind_wrapper)
@@ -861,3 +888,4 @@ ShardTensor.register_function_handler(torch.Tensor.cross, cross_wrapper)
 ShardTensor.register_dispatch_handler(aten.unbind.int, _unbind_dispatch)
 ShardTensor.register_dispatch_handler(aten.linalg_cross.default, _linalg_cross_dispatch)
 ShardTensor.register_dispatch_handler(aten.cross.default, _cross_dispatch)
+ShardTensor.register_dispatch_handler(aten.detach_.default, _detach__dispatch)

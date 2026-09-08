@@ -36,7 +36,7 @@ from physicsnemo.domain_parallel.shard_utils.patch_core import (
 )
 from physicsnemo.domain_parallel.shard_utils.ring import (
     RingPassingConfig,
-    perform_ring_iteration,
+    perform_ring_iteration_funcol,
 )
 from physicsnemo.nn.functional.neighbors.radius_search._warp_impl import (
     radius_search_impl,
@@ -483,10 +483,12 @@ class RingBallQuery(torch.autograd.Function):
             # For point clouds, we need to pass the size of the incoming shard.
             next_source_rank = (source_rank - 1) % world_size
 
-            # TODO - this operation should be done async and checked for completion at the start of the next loop.
+            # TODO - issue this shift with wait=False before the local
+            # radius search and finish_ring_iteration afterwards to overlap
+            # communication with compute.
             if i != world_size - 1:
                 # Don't do a ring on the last iteration.
-                current_points = perform_ring_iteration(
+                current_points = perform_ring_iteration_funcol(
                     current_points,
                     mesh,
                     ring_config,
