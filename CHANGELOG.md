@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PHYSICSNEMO_DIST_TIMEOUT_S`; unset or empty configuration keeps PyTorch's
   backend default. Invalid timeouts are rejected before initialization state
   changes, allowing corrected configuration to be retried.
+- `ShardTensor` ring attention, ring kNN and ring ball query run on functional
+  collectives; ring attention works under `torch.compile` as an eager
+  graph-break region. In-place `detach_` on a `ShardTensor` is supported.
 
 ### Changed
 
@@ -31,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cells out of a mesh with hundreds of millions of vertices). Index
   normalization avoids allocating a full-mesh range and preserves empty slices,
   integer indices, and boolean masks. Point fields use ordinary indexed gathers.
+- The stream-based ring helpers `perform_ring_iteration_async` and
+  `get_comm_stream` are removed; use `perform_ring_iteration_funcol` with
+  `wait=False` and `finish_ring_iteration` for overlap.
 
 ### Deprecated
 
@@ -78,6 +84,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `scatter_tensor` returns a shard that owns its storage, stream recording on
   wrapped tensors works, and several `torch.compile` tracing issues are
   resolved.
+- `torch.unbind` on a `Partial` `ShardTensor` resolves the pending reduction
+  before slicing instead of silently dropping it.
 
 ### Security
 
