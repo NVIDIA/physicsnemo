@@ -92,11 +92,14 @@ def _put_atomic(fs, local_path: Path | str, file_name: str) -> None:
         else:
             fs.mv(tmp_name, file_name)
     except BaseException:
-        # Best-effort cleanup: never let a failing rm mask the transfer error.
+        # Best-effort cleanup: a failing rm must not replace the transfer error
+        # (interrupts are not Exceptions and still propagate from here).
         try:
             fs.rm(tmp_name)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.getLogger("core.module").warning(
+                "Could not remove temporary checkpoint file %s: %s", tmp_name, exc
+            )
         raise
 
 

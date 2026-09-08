@@ -238,8 +238,11 @@ def test_save_failure_leaves_destination_intact(tmp_path, monkeypatch, legacy_fo
     assert M1.from_checkpoint(str(file_name)).b == 1.0
 
 
-def test_save_failure_cleanup_error_does_not_mask_transfer_error(tmp_path, monkeypatch):
-    """If removing the temporary file fails too, the transfer error still surfaces."""
+def test_save_failure_cleanup_error_does_not_mask_transfer_error(
+    tmp_path, monkeypatch, caplog
+):
+    """If removing the temporary file fails too, the transfer error still surfaces
+    and the cleanup failure is logged rather than silently dropped."""
     from fsspec.implementations.local import LocalFileSystem
 
     file_name = tmp_path / "checkpoint.mdlus"
@@ -252,6 +255,8 @@ def test_save_failure_cleanup_error_does_not_mask_transfer_error(tmp_path, monke
 
     monkeypatch.setattr(LocalFileSystem, "put", failing_put)
     monkeypatch.setattr(LocalFileSystem, "rm", failing_rm)
-    with pytest.raises(RuntimeError, match="killed mid-transfer"):
-        M1(1.0).save(file_name)
+    with caplog.at_level("WARNING", logger="core.module"):
+        with pytest.raises(RuntimeError, match="killed mid-transfer"):
+            M1(1.0).save(file_name)
     assert list(tmp_path.iterdir()) == []
+    assert any("filesystem unavailable" in r.getMessage() for r in caplog.records)
