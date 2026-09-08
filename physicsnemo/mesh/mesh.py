@@ -65,6 +65,7 @@ from physicsnemo.mesh.transformations.geometric import (
     translate,
 )
 from physicsnemo.mesh.utilities._padding import _pad_by_tiling_last, _pad_with_value
+from physicsnemo.mesh.utilities._row_gather import gather_rows
 from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
 from physicsnemo.mesh.validation import validate
@@ -1386,38 +1387,65 @@ class Mesh:
         if indices is None or indices is ...:
             return self
 
-        ### Normalize indices to a 1D tensor of point indices to keep
-        all_indices = torch.arange(self.n_points, device=self.points.device)
+        ### Normalize indices to a 1D tensor of point indices to keep. Nothing
+        ### here is sized by n_points: a boolean mask becomes its nonzero
+        ### positions and a slice expands to its own range, so slicing a huge
+        ### (possibly memory-mapped) mesh costs what is kept, not what exists.
+        device = self.points.device
+        n_points = self.n_points
         if isinstance(indices, int):
-            kept_indices = torch.tensor([indices], device=self.points.device)
+            kept_indices = torch.tensor([indices], device=device)
+        elif isinstance(indices, slice):
+            kept_indices = torch.arange(*indices.indices(n_points), device=device)
         else:
-            # Works for slice, Tensor (int or bool), and Sequence
-            kept_indices = all_indices[indices]
-
-        ### Build old-to-new point index mapping
-        # old_to_new[old_idx] = new_idx if kept, else -1
-        old_to_new = torch.full(
-            (self.n_points,), -1, dtype=torch.long, device=self.points.device
-        )
-        old_to_new[kept_indices] = torch.arange(
-            len(kept_indices), dtype=torch.long, device=self.points.device
+            # Tensor (int or bool) or Sequence of ints / bools
+            idx = torch.as_tensor(indices, device=device)
+            if idx.dtype == torch.bool:
+                kept_indices = idx.nonzero().squeeze(-1)
+            else:
+                kept_indices = idx.reshape(-1).long()
+        kept_indices = torch.where(
+            kept_indices < 0, kept_indices + n_points, kept_indices
         )
 
-        ### Remap cells and filter out cells with any removed vertices
-        remapped_cells = old_to_new[self.cells]  # (n_cells, n_verts_per_cell)
-        valid_cells_mask = (remapped_cells >= 0).all(
-            dim=-1
-        )  # cells with all verts kept
-
-        ### Extract valid cells with remapped indices
-        new_cells = remapped_cells[valid_cells_mask]
+        ### Remap cells and filter out cells with any removed vertices. The
+        ### kept ids are sorted once and each cell vertex is located by binary
+        ### search; a vertex is kept iff the search lands on an equal id. This
+        ### replaces a full-mesh old->new lookup table, whose two n_points-sized
+        ### tensors dominated the cost of slicing a few thousand points out of
+        ### a mesh with hundreds of millions.
+        n_kept = kept_indices.numel()
+        cells = self.cells
+        if n_kept == 0:
+            valid_cells_mask = torch.zeros(
+                cells.shape[0], dtype=torch.bool, device=device
+            )
+            new_cells = cells[valid_cells_mask]
+        else:
+            sorted_kept, order = torch.sort(kept_indices, stable=True)
+            # right=True then -1 selects the LAST equal entry, so a point id
+            # listed more than once in `indices` maps to its last position,
+            # matching the lookup-table semantics.
+            pos = (
+                torch.searchsorted(sorted_kept, cells.to(sorted_kept.dtype), right=True)
+                - 1
+            ).clamp_min(0)
+            valid_cells_mask = (sorted_kept[pos] == cells).all(dim=-1)
+            new_cells = order[pos[valid_cells_mask]]
         # cast: TensorDict[bool_mask] returns TensorCollection | Tensor statically;
         # the runtime is always TensorDict because cell_data is itself a TensorDict.
         new_cell_data = cast(TensorDict, self.cell_data[valid_cells_mask])
 
-        ### Slice points and point_data
-        new_points = self.points[kept_indices]
-        new_point_data = cast(TensorDict, self.point_data[kept_indices])
+        ### Slice points and point_data. gather_rows reads memory-mapped rows
+        ### as one range when the kept ids are local instead of one page per row.
+        new_points = gather_rows(self.points, kept_indices)
+        new_point_data = cast(
+            TensorDict,
+            self.point_data.apply(
+                lambda leaf: gather_rows(leaf, kept_indices),
+                batch_size=torch.Size([n_kept]),
+            ),
+        )
 
         return Mesh(
             points=new_points,

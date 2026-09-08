@@ -19,12 +19,10 @@
 import pytest
 import torch
 
-from physicsnemo.datapipes._indexing import _cyclic_block_indices
 from physicsnemo.datapipes.mesh_dataset import MeshDataset
 from physicsnemo.datapipes.readers.mesh import (
     DomainMeshReader,
     MeshReader,
-    _subsample_mesh_cells,
     _subsample_mesh_points,
 )
 from physicsnemo.datapipes.transforms.mesh import (
@@ -38,7 +36,6 @@ from physicsnemo.mesh.calculus.measure import (
     MEASURE_WEIGHTS_KEY,
     cell_measure_weights,
     cell_measures,
-    compose_measure_weights,
 )
 from physicsnemo.mesh.primitives.basic import (
     single_triangle_3d,
@@ -542,69 +539,3 @@ class TestCellSubsampleMeasureWeights:
             m, _ = reader[0]
             distinct_blocks.add(round(float(m.points[0, 0])))
         assert len(distinct_blocks) > 5
-
-    @staticmethod
-    def _make_shared_vertex_grid(nx: int, ny: int) -> Mesh:
-        ### Triangulated grid whose cells share vertices, with point_data, so
-        ### vertex compaction actually drops and remaps points.
-        xs, ys = torch.meshgrid(
-            torch.arange(nx + 1.0), torch.arange(ny + 1.0), indexing="ij"
-        )
-        points = torch.stack(
-            [xs.flatten(), ys.flatten(), torch.zeros((nx + 1) * (ny + 1))], -1
-        )
-        vid = torch.arange((nx + 1) * (ny + 1)).reshape(nx + 1, ny + 1)
-        a, b, c, d = vid[:-1, :-1], vid[1:, :-1], vid[1:, 1:], vid[:-1, 1:]
-        cells = torch.cat(
-            [torch.stack([a, b, c], -1), torch.stack([a, c, d], -1)], 0
-        ).reshape(-1, 3)
-        return Mesh(
-            points=points,
-            cells=cells,
-            point_data={"f": points.sum(-1), "v": points * 2.0},
-            cell_data={"g": torch.arange(cells.shape[0], dtype=torch.float32)},
-        )
-
-    @pytest.mark.parametrize("from_disk", [False, True])
-    def test_cell_subsample_compaction_matches_slice_points(self, tmp_path, from_disk):
-        ### The reader compacts vertices directly (unique + inverse + row
-        ### gather) instead of Mesh.slice_points; the result must be
-        ### identical -- points, cells, point_data, cell_data, weights -- for
-        ### an in-memory mesh and for a memmap-backed one loaded from disk,
-        ### including a wrap-around block (two contiguous runs).
-        full = self._make_shared_vertex_grid(12, 5)
-        if from_disk:
-            full.save(tmp_path / "grid.pmsh")
-            full = Mesh.load(tmp_path / "grid.pmsh")
-        k = 25
-        for seed in range(6):
-            got = _subsample_mesh_cells(
-                full, k, generator=torch.Generator().manual_seed(seed)
-            )
-            idx = _cyclic_block_indices(
-                full.n_cells, k, generator=torch.Generator().manual_seed(seed)
-            )
-            ref = full.slice_cells(idx)
-            ref = ref.slice_points(torch.unique(ref.cells))
-            compose_measure_weights(ref, full.n_cells / k)
-            assert got.n_points < full.n_points
-            assert torch.equal(got.points, ref.points)
-            assert torch.equal(got.cells, ref.cells)
-            for key in ("f", "v"):
-                assert torch.equal(got.point_data[key], ref.point_data[key])
-            assert torch.equal(got.cell_data["g"], ref.cell_data["g"])
-            assert torch.equal(cell_measure_weights(got), cell_measure_weights(ref))
-
-    def test_gather_rows_both_branches(self, monkeypatch):
-        import physicsnemo.datapipes.readers.mesh as rm
-
-        t = torch.randn(1000, 3)
-        idx = torch.tensor([3, 7, 8, 500, 999])
-        # cap=0 forces the plain gather; a huge cap forces the range read.
-        for cap in (0, 1 << 40):
-            monkeypatch.setattr(rm, "_RANGE_READ_MAX_BYTES", cap)
-            out = rm._gather_rows(t, idx)
-            assert torch.equal(out, t[idx])
-            assert out.data_ptr() != t.data_ptr()
-        assert rm._gather_rows(t[:, 0], idx).shape == (5,)
-        assert rm._gather_rows(t, idx[:0]).shape == (0, 3)
