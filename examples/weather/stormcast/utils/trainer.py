@@ -857,9 +857,9 @@ class Trainer:
         # Clean NaN gradients
         for param in self.net.parameters():
             if param.grad is not None:
-                torch.nan_to_num(
-                    param.grad, nan=0, posinf=1e5, neginf=-1e5, out=param.grad
-                )
+                grad = param.grad
+                local = grad.to_local() if hasattr(grad, "to_local") else grad
+                local.nan_to_num_(nan=0, posinf=1e5, neginf=-1e5)
 
         self.optimizer.step()
         step_scheduler(
