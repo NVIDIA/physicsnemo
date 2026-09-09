@@ -45,7 +45,6 @@ import torchinfo
 import torch
 import torch.distributed as dist
 from torch.distributed.fsdp import fully_shard
-from torch.distributed.tensor import distribute_module
 
 from torch.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel
@@ -58,6 +57,7 @@ from tensordict import TensorDict
 
 
 from physicsnemo.distributed import DistributedManager, fused_all_reduce
+from physicsnemo.domain_parallel import sync_module_over_mesh
 from physicsnemo.utils import load_checkpoint, save_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
@@ -580,10 +580,7 @@ def main(cfg: DictConfig) -> None:
                 static_graph=True,
             )
         else:
-            model = distribute_module(
-                model,
-                device_mesh=domain_mesh,
-            )
+            sync_module_over_mesh(model, domain_mesh)
             model = fully_shard(model, mesh=data_mesh)
 
     ######################################################
@@ -772,15 +769,18 @@ def main(cfg: DictConfig) -> None:
         if dist.rank == 0:
             print(f"Device {dist.device}, Best val loss {best_vloss}")
 
-        if dist.rank == 0 and (epoch + 1) % cfg.train.checkpoint_interval == 0.0:
-            save_checkpoint(
-                to_absolute_path(model_save_path),
-                models=model,
-                optimizer=optimizer,
-                scheduler=scheduler,
-                scaler=scaler,
-                epoch=epoch,
-            )
+        if (epoch + 1) % cfg.train.checkpoint_interval == 0.0:
+            # FSDP2 state gathering is collective, while DDP/plain checkpoints
+            # only need the global rank-zero writer.
+            if domain_mesh is not None or dist.rank == 0:
+                save_checkpoint(
+                    to_absolute_path(model_save_path),
+                    models=model,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    scaler=scaler,
+                    epoch=epoch,
+                )
 
         epoch_number += 1
 

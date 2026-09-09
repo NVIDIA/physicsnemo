@@ -332,10 +332,10 @@ def _weighted_sample_elimination_warp(
             device=sample_positions.device,
             dtype=torch.int32,
         )
-        row_ptr = torch.empty(
+        row_ptr_64 = torch.empty(
             (num_samples + 1,),
             device=sample_positions.device,
-            dtype=torch.int32,
+            dtype=torch.int64,
         )
         wp_neighbor_counts = wp.from_torch(
             neighbor_counts,
@@ -354,9 +354,19 @@ def _weighted_sample_elimination_warp(
             device=wp_launch_device,
             stream=wp_launch_stream,
         )
-        row_ptr[0] = 0
-        torch.cumsum(neighbor_counts, dim=0, out=row_ptr[1:])
-        total_edges = int(row_ptr[-1].item())
+        row_ptr_64[0] = 0
+        torch.cumsum(
+            neighbor_counts,
+            dim=0,
+            dtype=torch.int64,
+            out=row_ptr_64[1:],
+        )
+        total_edges = int(row_ptr_64[-1].item())
+        if total_edges >= torch.iinfo(torch.int32).max:
+            raise ValueError(
+                "Weighted-sample neighbor count exceeds the supported int32 range"
+            )
+        row_ptr = row_ptr_64.to(dtype=torch.int32)
         max_row_size = int(neighbor_counts.max().item()) if num_samples > 0 else 0
         row_ptr_cpu = row_ptr.detach().cpu().numpy()
 

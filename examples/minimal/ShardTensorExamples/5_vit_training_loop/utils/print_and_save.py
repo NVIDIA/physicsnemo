@@ -87,10 +87,14 @@ def _result_to_row(result, args, world_size):
 def get_csv_filename(args, precision_mode):
     """Generate the CSV filename for this benchmark run."""
     os.makedirs("results", exist_ok=True)
+    compile_tag = "_compiled" if getattr(args, "compile", False) else ""
+    fsdp_tag = "_fsdp" if getattr(args, "fsdp", False) else ""
+    model_tag = getattr(args, "model", "vit")
     return (
-        f"results/benchmark_results_{args.batch_size}bs_{args.dimension}d"
-        f"_{precision_mode}_{args.domain_size}dp_{args.ddp_size}ddp"
-        f"_{args.image_size_start}-{args.image_size_stop}px.csv"
+        f"results/benchmark_results_{model_tag}_{args.batch_size}bs"
+        f"_{args.dimension}d_{precision_mode}_{args.domain_size}dp"
+        f"_{args.ddp_size}ddp_{args.image_size_start}-{args.image_size_stop}px"
+        f"{fsdp_tag}{compile_tag}.csv"
     )
 
 
@@ -118,9 +122,8 @@ def print_and_save_results(results, args, precision_mode, world_size):
 
     # Print summary table
     print("\n" + "=" * 80)
-    print(
-        f"BENCHMARK SUMMARY - Hybrid ViT Base in {args.dimension}D ({precision_mode})"
-    )
+    model_name = getattr(args, "model", "vit")
+    print(f"BENCHMARK SUMMARY - {model_name} in {args.dimension}D ({precision_mode})")
     print("=" * 80)
     print(tabulate(table_data, headers=HEADERS, tablefmt="grid"))
 

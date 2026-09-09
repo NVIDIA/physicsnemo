@@ -27,9 +27,7 @@ from jaxtyping import Bool, Float
 from torch import Tensor
 
 from physicsnemo.core.module import Module
-from physicsnemo.experimental.models.geotransolver.context_projector import (
-    ContextProjector,
-)
+from physicsnemo.models.geotransolver import ContextProjector
 from physicsnemo.nn.module.embedding_layers import PositionalEmbedding
 
 # Numerical floor added to a standard deviation before dividing by it.

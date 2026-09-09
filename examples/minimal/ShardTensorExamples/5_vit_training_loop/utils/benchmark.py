@@ -18,6 +18,7 @@
 import torch
 
 import torch.optim as optim
+from torch.distributed.tensor import DTensor
 
 from .measure_perf import benchmark_model
 from .measure_memory import get_model_memory_usage
@@ -28,7 +29,8 @@ def end_to_end_benchmark(args, model, inputs, full_img_size, device, num_classes
 
     Measures forward/training time and peak memory for both inference and
     training modes, then tears down the model and frees GPU memory.
-    On RuntimeError (e.g. OOM), returns infinity sentinels instead of raising.
+    Any error raised during benchmarking propagates to the caller with its
+    full traceback (errors are no longer caught and converted to sentinels).
 
     Args:
         args: Parsed CLI arguments (controls warmup iters, precision, etc.).
@@ -53,61 +55,61 @@ def end_to_end_benchmark(args, model, inputs, full_img_size, device, num_classes
     # Create optimizer (only needed for training)
     optimizer = None
     if not inference_only:
-        optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.05)
+        # AdamW's foreach path batches every param of a group into single
+        # _foreach_* ops, which cannot mix plain tensors with DTensors (or
+        # DTensors on different meshes).  Foreach batching never crosses param
+        # groups, so split params by tensor type / mesh to keep each group
+        # homogeneous while retaining the fast foreach path.
+        param_groups = {}
+        for p in model.parameters():
+            key = p.device_mesh if isinstance(p, DTensor) else None
+            param_groups.setdefault(key, []).append(p)
+        optimizer = optim.AdamW(
+            [{"params": params} for params in param_groups.values()],
+            lr=1e-3,
+            weight_decay=0.05,
+        )
 
-    try:
-        # Benchmark model
-        forward_time, training_time = benchmark_model(
+    # Benchmark model
+    forward_time, training_time = benchmark_model(
+        model,
+        x,
+        target,
+        optimizer,
+        num_warmup=args.num_warmup,
+        num_iterations=args.num_iterations,
+        use_mixed_precision=args.use_mixed_precision,
+        inference_only=inference_only,
+    )
+
+    # Memory usage - always measure inference
+    inference_memory = get_model_memory_usage(
+        model, x, mode="inference", use_mixed_precision=args.use_mixed_precision
+    )
+
+    # Only measure training memory if not inference-only
+    training_memory = None
+    if not inference_only:
+        training_memory = get_model_memory_usage(
             model,
             x,
             target,
             optimizer,
-            num_warmup=args.num_warmup,
-            num_iterations=args.num_iterations,
+            mode="training",
             use_mixed_precision=args.use_mixed_precision,
-            inference_only=inference_only,
         )
 
-        # Memory usage - always measure inference
-        inference_memory = get_model_memory_usage(
-            model, x, mode="inference", use_mixed_precision=args.use_mixed_precision
-        )
-
-        # Only measure training memory if not inference-only
-        training_memory = None
-        if not inference_only:
-            training_memory = get_model_memory_usage(
-                model,
-                x,
-                target,
-                optimizer,
-                mode="training",
-                use_mixed_precision=args.use_mixed_precision,
-            )
-
-        # Store results
-        results = {
-            "image_size": full_img_size[0],
-            "params": num_params,
-            "forward_time": forward_time,
-            "training_time": training_time,
-            "inference_memory": inference_memory,
-            "training_memory": training_memory,
-            "mixed_precision": args.use_mixed_precision and torch.cuda.is_available(),
-        }
-
-    except RuntimeError as e:
-        print(f"    Error: {e}")
-        # Store failed result
-        results = {
-            "image_size": full_img_size[0],
-            "params": num_params,
-            "forward_time": float("inf"),
-            "training_time": float("inf") if not inference_only else None,
-            "inference_memory": float("inf"),
-            "training_memory": float("inf") if not inference_only else None,
-            "mixed_precision": args.use_mixed_precision and torch.cuda.is_available(),
-        }
+    # Store results
+    results = {
+        "image_size": full_img_size[0],
+        "params": num_params,
+        "forward_time": forward_time,
+        "training_time": training_time,
+        "inference_memory": inference_memory,
+        "training_memory": training_memory,
+        "mixed_precision": args.use_mixed_precision and torch.cuda.is_available(),
+        "compile": getattr(args, "compile", False),
+    }
 
     # Clear cache to free memory
     if torch.cuda.is_available():

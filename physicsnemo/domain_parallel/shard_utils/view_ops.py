@@ -385,11 +385,11 @@ def _compute_view_placements(
 
 
 def _compute_view_sharding_shapes(
-    old_sharding_shapes: dict[int, tuple[torch.Size, ...]] | None,
+    old_sharding_shapes: dict[int, tuple[tuple[int, ...], ...]] | None,
     global_old: Sequence[int],
     global_new: Sequence[int],
     placements: tuple[Placement, ...],
-) -> dict[int, tuple[torch.Size, ...]] | None:
+) -> dict[int, tuple[tuple[int, ...], ...]] | None:
     r"""Compute new per-rank sharding shapes after a view.
 
     For each rank, maps its old local shape to the new local shape using the
@@ -398,7 +398,7 @@ def _compute_view_sharding_shapes(
 
     Parameters
     ----------
-    old_sharding_shapes : dict[int, tuple[torch.Size, ...]] or None
+    old_sharding_shapes : dict[int, tuple[tuple[int, ...], ...]] or None
         Old sharding shapes from the input spec.
     global_old : Sequence[int]
         Global shape before view.
@@ -409,20 +409,22 @@ def _compute_view_sharding_shapes(
 
     Returns
     -------
-    dict[int, tuple[torch.Size, ...]] or None
-        New sharding shapes, or ``None`` if input was ``None``.
+    dict[int, tuple[tuple[int, ...], ...]] or None
+        New sharding shapes as plain int tuples (see
+        ``ShardTensorSpec._sharding_shapes`` field docs), or ``None`` if
+        input was ``None``.
     """
     if old_sharding_shapes is None:
         return None
 
-    new_sharding: dict[int, tuple[torch.Size, ...]] = {}
+    new_sharding: dict[int, tuple[tuple[int, ...], ...]] = {}
     for mesh_dim, rank_shapes in old_sharding_shapes.items():
-        new_rank_shapes: list[torch.Size] = []
+        new_rank_shapes: list[tuple[int, ...]] = []
         for rank_shape in rank_shapes:
             new_shape = _compute_local_view_shape(
                 global_old, tuple(rank_shape), global_new, placements
             )
-            new_rank_shapes.append(torch.Size(new_shape))
+            new_rank_shapes.append(tuple(new_shape))
         new_sharding[mesh_dim] = tuple(new_rank_shapes)
 
     return new_sharding
@@ -604,7 +606,6 @@ class ShardedView(torch.autograd.Function):
 
     @staticmethod
     def forward(
-        ctx: torch.autograd.function.FunctionCtx,
         tensor: ShardTensor,
         target_shape: tuple[int, ...],
     ) -> ShardTensor:
@@ -612,8 +613,6 @@ class ShardedView(torch.autograd.Function):
 
         Parameters
         ----------
-        ctx : torch.autograd.function.FunctionCtx
-            Autograd context for saving state for backward.
         tensor : ShardTensor
             Input sharded tensor.
         target_shape : tuple[int, ...]
@@ -624,9 +623,21 @@ class ShardedView(torch.autograd.Function):
         ShardTensor
             Viewed ShardTensor.
         """
-        ctx.input_global_shape = tuple(tensor.shape)
         out = _sharded_view_forward(tensor, target_shape)
         return out
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        r"""Save the input global shape so backward can view back to it.
+
+        ``DisableTorchFunctionSubclass`` shielding avoids re-entering the
+        ShardTensor ``__torch_function__`` fallback while reading
+        ``tensor.shape`` (a C-level getset descriptor) -- the same AOT-hostile
+        bridge that motivated the shielding in ``ShardedSum.setup_context``.
+        """
+        tensor, _target_shape = inputs
+        with torch._C.DisableTorchFunctionSubclass():
+            ctx.input_global_shape = tuple(tensor.shape)
 
     @staticmethod
     def backward(

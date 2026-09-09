@@ -42,6 +42,7 @@ far-field monopole approximation. The two classes share
 independent.
 """
 
+import builtins
 import logging
 from typing import NamedTuple
 
@@ -104,22 +105,22 @@ class DualInteractionPlan:
     fn_broadcast_counts: Int[torch.Tensor, " n_fn"]
 
     @property
-    def n_near(self) -> int:
+    def n_near(self) -> builtins.int:
         """Number of (near,near) exact individual interaction pairs."""
         return self.near_target_ids.shape[0]
 
     @property
-    def n_far_nodes(self) -> int:
+    def n_far_nodes(self) -> builtins.int:
         """Number of (far,far) node-to-node pairs (each = one kernel eval)."""
         return self.far_target_node_ids.shape[0]
 
     @property
-    def n_nf(self) -> int:
+    def n_nf(self) -> builtins.int:
         """Number of (near,far) target-point-to-source-node pairs."""
         return self.nf_target_ids.shape[0]
 
     @property
-    def n_fn(self) -> int:
+    def n_fn(self) -> builtins.int:
         """Number of (far,near) target-node-to-source-point pairs."""
         return self.fn_target_node_ids.shape[0]
 
@@ -631,17 +632,17 @@ class ClusterTree:
     max_depth: torch.Tensor
 
     @property
-    def n_nodes(self) -> int:
+    def n_nodes(self) -> builtins.int:
         """Number of nodes in the tree."""
         return self.node_aabb_min.shape[0]
 
     @property
-    def n_sources(self) -> int:
+    def n_sources(self) -> builtins.int:
         """Number of source points."""
         return self.sorted_source_order.shape[0]
 
     @property
-    def n_spatial_dims(self) -> int:
+    def n_spatial_dims(self) -> builtins.int:
         """Spatial dimensionality."""
         return self.node_aabb_min.shape[1]
 
@@ -650,7 +651,7 @@ class ClusterTree:
         cls,
         points: Float[torch.Tensor, "n_points n_dims"],
         *,
-        leaf_size: int = 1,
+        leaf_size: builtins.int = 1,
         areas: Float[torch.Tensor, " n_points"] | None = None,
     ) -> "ClusterTree":
         r"""Build a cluster tree from a set of points via morton-code LBVH.
@@ -905,9 +906,9 @@ class ClusterTree:
     def find_dual_interaction_pairs(
         self,
         target_tree: "ClusterTree",
-        theta: float = 1.0,
+        theta: builtins.float = 1.0,
         *,
-        expand_far_targets: bool = False,
+        expand_far_targets: builtins.bool = False,
     ) -> DualInteractionPlan:
         r"""Find near-field and far-field pairs via dual-tree traversal.
 

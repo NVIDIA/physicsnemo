@@ -45,7 +45,7 @@ def create_sphere_mesh(radius=1.0, subdivisions=0, device="cpu"):
     mesh = mesh.subdivide(subdivisions, "loop")
 
     # Project to perfect sphere
-    mesh.points = F.normalize(mesh.points, dim=-1) * radius
+    mesh = mesh.with_points(F.normalize(mesh.points, dim=-1) * radius)
 
     return mesh
 

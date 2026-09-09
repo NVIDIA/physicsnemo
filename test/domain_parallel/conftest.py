@@ -38,10 +38,26 @@ def disable_tf32():
     # (~1e-3 relative error) makes them diverge. Force full fp32.
     prev_cudnn = torch.backends.cudnn.allow_tf32
     prev_matmul = torch.backends.cuda.matmul.allow_tf32
+    matmul_backend = torch.backends.cuda.matmul
+    cudnn_conv_backend = getattr(torch.backends.cudnn, "conv", None)
+    prev_matmul_precision = getattr(matmul_backend, "fp32_precision", None)
+    prev_cudnn_conv_precision = (
+        getattr(cudnn_conv_backend, "fp32_precision", None)
+        if cudnn_conv_backend is not None
+        else None
+    )
     torch.backends.cudnn.allow_tf32 = False
     torch.backends.cuda.matmul.allow_tf32 = False
+    if prev_matmul_precision is not None:
+        matmul_backend.fp32_precision = "ieee"
+    if prev_cudnn_conv_precision is not None:
+        cudnn_conv_backend.fp32_precision = "ieee"
     try:
         yield
     finally:
         torch.backends.cudnn.allow_tf32 = prev_cudnn
         torch.backends.cuda.matmul.allow_tf32 = prev_matmul
+        if prev_matmul_precision is not None:
+            matmul_backend.fp32_precision = prev_matmul_precision
+        if prev_cudnn_conv_precision is not None:
+            cudnn_conv_backend.fp32_precision = prev_cudnn_conv_precision

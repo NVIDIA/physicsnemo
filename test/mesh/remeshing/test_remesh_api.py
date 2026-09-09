@@ -32,15 +32,15 @@ def test_remesh_public_signatures():
         "mesh",
         "n_clusters",
         "max_iterations",
+        "transfer_point_data",
+        "resolution_field",
     )
+    assert Mesh.remesh is remesh
     mesh_remesh_signature = inspect.signature(Mesh.remesh)
-    assert tuple(mesh_remesh_signature.parameters) == (
-        "self",
-        "n_clusters",
-        "max_iterations",
-    )
+    assert mesh_remesh_signature == remesh_signature
     assert remesh_signature.parameters["max_iterations"].default == 4
-    assert mesh_remesh_signature.parameters["max_iterations"].default == 4
+    assert remesh_signature.parameters["transfer_point_data"].default is False
+    assert remesh_signature.parameters["resolution_field"].default is None
 
 
 def test_remesh_runs_on_cpu():

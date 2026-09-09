@@ -503,3 +503,51 @@ def test_fix_orientation_component_size_not_overcounted():
     assert oriented.n_cells == mesh.n_cells
     assert stats["n_components"] == 1
     assert stats["largest_component_size"] == mesh.n_cells
+
+
+def test_fix_orientation_preserves_data_and_invalidates_caches():
+    """Rewinding indexed cells preserves fields without retaining stale caches."""
+    from physicsnemo.mesh.repair.orientation import fix_orientation
+
+    mesh = Mesh(
+        points=torch.tensor(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [0.0, 1.0, 0.0],
+            ]
+        ),
+        cells=torch.tensor(
+            [
+                [0, 1, 2],
+                [0, 3, 2],  # Opposite winding from the first triangle.
+            ]
+        ),
+        point_data={"point_id": torch.arange(4)},
+        cell_data={"cell_id": torch.arange(2)},
+        global_data={"case": torch.tensor(1)},
+    )
+    mesh._cache["point", "sentinel"] = torch.ones(mesh.n_points)
+    mesh._cache["topology", "sentinel"] = torch.tensor(1)
+
+    oriented, stats = fix_orientation(mesh)
+
+    assert stats["n_faces_flipped"] == 1
+    torch.testing.assert_close(oriented.point_data["point_id"], torch.arange(4))
+    torch.testing.assert_close(oriented.cell_data["cell_id"], torch.arange(2))
+    torch.testing.assert_close(oriented.global_data["case"], torch.tensor(1))
+    assert (
+        oriented.point_data["point_id"].data_ptr()
+        != mesh.point_data["point_id"].data_ptr()
+    )
+    assert (
+        oriented.cell_data["cell_id"].data_ptr() != mesh.cell_data["cell_id"].data_ptr()
+    )
+    assert not oriented._cache["cell"].keys()
+    assert not oriented._cache["point"].keys()
+    assert not oriented._cache["topology"].keys()
+    torch.testing.assert_close(
+        oriented.cell_normals[:, 2],
+        torch.ones(oriented.n_cells),
+    )

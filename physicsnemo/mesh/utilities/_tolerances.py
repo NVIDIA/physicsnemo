@@ -132,6 +132,8 @@ def safe_normalize(
     bounded below by one. Non-finite input is not repaired: a single ``inf``
     or ``NaN`` component makes the whole vector NaN, rather than the partially
     finite result ``torch.nn.functional.normalize`` happens to produce.
+    This is a forward-value guarantee: derivatives near zero can exceed the
+    dtype's range, including intermediate derivatives of upstream geometry.
 
     Examples
     --------

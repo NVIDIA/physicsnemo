@@ -33,7 +33,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 import torch
-import torch.distributed as dist
+import torch.distributed._functional_collectives as funcol
 from torch.distributed.tensor import DTensor
 
 from physicsnemo.domain_parallel import ShardTensor, ShardTensorSpec
@@ -69,20 +69,17 @@ class PartialGroupNorm(torch.autograd.Function):
 
     @staticmethod
     def forward(
-        ctx: Any,
         input: torch.Tensor,
         spec: ShardTensorSpec,
         num_groups: int,
         weight: torch.Tensor | None,
         bias: torch.Tensor | None,
         eps: float,
-    ) -> ShardTensor:
+    ) -> tuple[ShardTensor, torch.Tensor, torch.Tensor]:
         r"""Apply group normalization over a sharded tensor.
 
         Parameters
         ----------
-        ctx : torch.autograd.function.FunctionCtx
-            Autograd context for saving tensors/variables for backward.
         input : torch.Tensor
             Local input tensor of shape :math:`(N, C, *)`.
         spec : ShardTensorSpec
@@ -98,8 +95,12 @@ class PartialGroupNorm(torch.autograd.Function):
 
         Returns
         -------
-        ShardTensor
-            Normalized tensor of same shape as input.
+        tuple[ShardTensor, torch.Tensor, torch.Tensor]
+            Tuple of ``(normalized_output, global_mean, global_rstd)`` where
+            the trailing two tensors of shape ``(N, G)`` are intermediate
+            statistics needed by the backward pass; the public wrapper
+            ``group_norm_wrapper`` discards them, and ``setup_context``
+            marks them non-differentiable.
         """
         # These are local shapes:
         N, C = input.shape[0], input.shape[1]
@@ -119,8 +120,6 @@ class PartialGroupNorm(torch.autograd.Function):
             raise MissingShardPatch(
                 "Group normalization is not implemented for sharded tensors along the channel dimension"
             )
-
-        group = spec.mesh.get_group(mesh_dim=0)
 
         # Cast weight/bias to input dtype once.
         if weight is not None:
@@ -143,9 +142,18 @@ class PartialGroupNorm(torch.autograd.Function):
         local_sum = x.sum(dim=2)  # (N, G)
         local_sum_sq = x.pow(2).sum(dim=2)  # (N, G)
 
-        # Fuse into one all-reduce for lower latency.
+        # Fuse into one all-reduce for lower latency. We use the functional
+        # collective (parameterized by (mesh, mesh_dim)) rather than
+        # ``dist.all_reduce(group=...)`` so the AOT-captured backward graph
+        # holds a ``DeviceMesh`` reference instead of a C++ ``ProcessGroup``
+        # ScriptObject; AOTAutograd ``deepcopy``s the backward GraphModule
+        # during caching and ``ProcessGroup`` has no ``__getstate__``.
+        # ``mesh_dim=0`` is safe here because ``mesh.ndim > 1`` is rejected
+        # above.
         packed = torch.stack([local_sum, local_sum_sq], dim=0)  # (2, N, G)
-        dist.all_reduce(packed, group=group)
+        packed = funcol.all_reduce(packed, "sum", (spec.mesh, 0))
+        if isinstance(packed, funcol.AsyncCollectiveTensor):
+            packed = packed.wait()
         global_sum, global_sum_sq = packed[0], packed[1]
 
         global_mean = (global_sum / D_global).unsqueeze(2)  # (N, G, 1)
@@ -175,26 +183,55 @@ class PartialGroupNorm(torch.autograd.Function):
 
         local_output = y.view(input.shape)
 
-        # -- Save for backward ----------------------------------------------
-        ctx.save_for_backward(input, weight, bias)
-        ctx.global_mean = global_mean.squeeze(2)  # (N, G)
-        ctx.global_rstd = global_rstd.squeeze(2)  # (N, G)
-        ctx.num_groups = num_groups
-        ctx.eps = eps
-        ctx.spec = spec
-
-        return ShardTensor.from_local(
+        shard_output = ShardTensor.from_local(
             local_output,
             spec.mesh,
             spec.placements,
             sharding_shapes=spec.sharding_shapes(),
         )
 
+        # Return statistics so setup_context can save them; the public
+        # wrapper discards these extras and they are marked non-diff.
+        return shard_output, global_mean.squeeze(2), global_rstd.squeeze(2)
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        r"""Save tensors and metadata for the backward pass.
+
+        ``global_mean`` and ``global_rstd`` are intermediate statistics
+        computed by ``forward`` and returned as extra outputs; we save them
+        via ``save_for_backward`` and mark them non-differentiable so they
+        don't appear in the autograd graph as live tensors.
+        """
+        input, spec, num_groups, weight, bias, eps = inputs
+        _shard_output, global_mean, global_rstd = output
+
+        # Re-cast weight/bias to match the input dtype so the backward sees
+        # the same dtype as forward used.
+        if weight is not None:
+            weight = weight.to(input.dtype)
+        if bias is not None:
+            bias = bias.to(input.dtype)
+
+        ctx.save_for_backward(input, weight, bias, global_mean, global_rstd)
+        ctx.num_groups = num_groups
+        ctx.eps = eps
+        ctx.spec = spec
+        ctx.mark_non_differentiable(global_mean, global_rstd)
+
     @staticmethod
     def backward(
-        ctx: Any, grad_output: ShardTensor
+        ctx: Any,
+        grad_output: ShardTensor,
+        _grad_mean: torch.Tensor | None = None,
+        _grad_rstd: torch.Tensor | None = None,
     ) -> tuple[
-        torch.Tensor, None, None, torch.Tensor | None, torch.Tensor | None, None
+        torch.Tensor,
+        None,
+        None,
+        torch.Tensor | None,
+        torch.Tensor | None,
+        None,
     ]:
         r"""Backward pass for distributed group normalization.
 
@@ -218,7 +255,7 @@ class PartialGroupNorm(torch.autograd.Function):
             Tuple containing gradients for (input, spec, num_groups, weight, bias, eps).
             ``None`` values indicate non-differentiable parameters.
         """
-        input, weight, bias = ctx.saved_tensors
+        input, weight, bias, global_mean, global_rstd = ctx.saved_tensors
         num_groups = ctx.num_groups
         N, C = input.shape[0], input.shape[1]
         channels_per_group = C // num_groups
@@ -230,11 +267,7 @@ class PartialGroupNorm(torch.autograd.Function):
         if local_grad_output.dtype != input.dtype:
             local_grad_output = local_grad_output.to(input.dtype)
 
-        global_mean = ctx.global_mean  # (N, G)
-        global_rstd = ctx.global_rstd  # (N, G)
-
         spec = ctx.spec
-        group = spec.mesh.get_group(mesh_dim=0)
 
         # Total elements in reduction dimension (correct for uneven sharding).
         global_spatial = spec.tensor_meta.shape[2:]
@@ -267,8 +300,12 @@ class PartialGroupNorm(torch.autograd.Function):
         sum_dx_hat = dx_hat.sum(dim=2, keepdim=True)  # (N, G, 1)
         sum_dx_hat_y = (dx_hat * y).sum(dim=2, keepdim=True)  # (N, G, 1)
 
+        # Functional collective: keeps the AOT backward graph free of raw
+        # ProcessGroup references (see forward for the full rationale).
         packed_sums = torch.cat([sum_dx_hat, sum_dx_hat_y], dim=2)  # (N, G, 2)
-        dist.all_reduce(packed_sums, group=group)
+        packed_sums = funcol.all_reduce(packed_sums, "sum", (spec.mesh, 0))
+        if isinstance(packed_sums, funcol.AsyncCollectiveTensor):
+            packed_sums = packed_sums.wait()
         sum_dx_hat = packed_sums[:, :, :1]  # (N, G, 1)
         sum_dx_hat_y = packed_sums[:, :, 1:]  # (N, G, 1)
 
@@ -292,15 +329,22 @@ class PartialGroupNorm(torch.autograd.Function):
             grad_out_c = local_grad_output.view(N, C, HxW_local)
             grad_bias = grad_out_c.sum(dim=(0, 2))  # (C,)
 
-        # Fuse the two small all-reduces when both are needed.
+        # Fuse the two small all-reduces when both are needed. Same functional
+        # collective rationale as above.
         if grad_weight is not None and grad_bias is not None:
             packed_wb = torch.stack([grad_weight, grad_bias], dim=0)  # (2, C)
-            dist.all_reduce(packed_wb, group=group)
+            packed_wb = funcol.all_reduce(packed_wb, "sum", (spec.mesh, 0))
+            if isinstance(packed_wb, funcol.AsyncCollectiveTensor):
+                packed_wb = packed_wb.wait()
             grad_weight, grad_bias = packed_wb[0], packed_wb[1]
         elif grad_weight is not None:
-            dist.all_reduce(grad_weight, group=group)
+            grad_weight = funcol.all_reduce(grad_weight, "sum", (spec.mesh, 0))
+            if isinstance(grad_weight, funcol.AsyncCollectiveTensor):
+                grad_weight = grad_weight.wait()
         elif grad_bias is not None:
-            dist.all_reduce(grad_bias, group=group)
+            grad_bias = funcol.all_reduce(grad_bias, "sum", (spec.mesh, 0))
+            if isinstance(grad_bias, funcol.AsyncCollectiveTensor):
+                grad_bias = grad_bias.wait()
 
         return grad_input, None, None, grad_weight, grad_bias, None
 
@@ -341,7 +385,10 @@ def group_norm_wrapper(
         bias = bias.full_tensor()
 
     output_spec = input._spec
-    x = PartialGroupNorm.apply(
+    # PartialGroupNorm returns (output, global_mean, global_rstd); the two
+    # extras are intermediate statistics marked non-differentiable and only
+    # needed by its backward pass.
+    x, _, _ = PartialGroupNorm.apply(
         input.to_local(), output_spec, num_groups, weight, bias, eps
     )
 

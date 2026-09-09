@@ -32,6 +32,33 @@ The [`requirements.txt`](requirements.txt) file lists the additional dependencie
 pip install -r requirements.txt
 ```
 
+### Optional acceleration backends
+
+The recipe uses standard PyTorch layers by default. Transformer Engine is listed
+in `requirements.txt` so it is available as an opt-in acceleration backend; enable
+it consistently across the context encoder, target encoder, decoder, and predictor
+with the single Hydra override:
+
+```bash
+python train.py data.path=/path/to/SuperWing_Dataset use_te=true
+```
+
+Use the same `use_te` setting when loading a checkpoint for inference.
+
+AeroJEPA leaves k-nearest-neighbor backend selection to PhysicsNeMo. For CUDA
+tensors, PhysicsNeMo uses RAPIDS cuML (with CuPy) when both are installed. If
+they are unavailable, it emits a one-time warning and falls back to the PyTorch
+implementation, so RAPIDS is not required to build or run this example. Install
+PhysicsNeMo with the matching `cu12` or `cu13` extra if you want the accelerated
+cuML path, for example:
+
+```bash
+pip install "nvidia-physicsnemo[cu13]"
+```
+
+On CPU, PhysicsNeMo prefers SciPy when available and otherwise falls back to
+PyTorch.
+
 ## 2. Get the SuperWing Dataset
 
 The dataset lives on the Hugging Face Hub at

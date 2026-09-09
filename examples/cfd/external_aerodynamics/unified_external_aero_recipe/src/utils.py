@@ -32,6 +32,7 @@ from omegaconf import DictConfig, OmegaConf
 from tensordict import TensorDict
 from torch.amp import autocast
 
+from physicsnemo.datapipes.keys import as_nested_key
 from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.optim import CombinedOptimizer, Muon
 
@@ -206,7 +207,8 @@ def validate_field_coverage(
     against the right tensor.
     """
     for label, source in (("pred", pred), ("target", target)):
-        missing = set(target_config) - set(source.keys())
+        ### ``key in td`` resolves nested keys; ``set(td.keys())`` would not.
+        missing = [name for name in target_config if as_nested_key(name) not in source]
         if missing:
             raise KeyError(f"{label} is missing target fields {sorted(missing)!r}")
 

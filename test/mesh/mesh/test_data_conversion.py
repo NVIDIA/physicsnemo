@@ -26,73 +26,9 @@ import torch
 from physicsnemo.mesh.mesh import Mesh
 
 ### Helper Functions ###
-
-
-def create_simple_mesh(
-    n_spatial_dims: int, n_manifold_dims: int, device: torch.device | str = "cpu"
-):
-    """Create a simple mesh for testing."""
-    if n_manifold_dims > n_spatial_dims:
-        raise ValueError(
-            f"Manifold dimension {n_manifold_dims} cannot exceed spatial dimension {n_spatial_dims}"
-        )
-
-    if n_manifold_dims == 1:
-        if n_spatial_dims == 2:
-            points = torch.tensor(
-                [[0.0, 0.0], [1.0, 0.0], [1.5, 1.0], [0.5, 1.5]], device=device
-            )
-        elif n_spatial_dims == 3:
-            points = torch.tensor(
-                [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 1.0]],
-                device=device,
-            )
-        else:
-            raise ValueError(f"Unsupported {n_spatial_dims=}")
-        cells = torch.tensor([[0, 1], [1, 2], [2, 3]], device=device, dtype=torch.int64)
-    elif n_manifold_dims == 2:
-        if n_spatial_dims == 2:
-            points = torch.tensor(
-                [[0.0, 0.0], [1.0, 0.0], [0.5, 1.0], [1.5, 0.5]], device=device
-            )
-        elif n_spatial_dims == 3:
-            points = torch.tensor(
-                [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 1.0, 0.0], [1.5, 0.5, 0.5]],
-                device=device,
-            )
-        else:
-            raise ValueError(f"Unsupported {n_spatial_dims=}")
-        cells = torch.tensor([[0, 1, 2], [1, 3, 2]], device=device, dtype=torch.int64)
-    elif n_manifold_dims == 3:
-        if n_spatial_dims == 3:
-            points = torch.tensor(
-                [
-                    [0.0, 0.0, 0.0],
-                    [1.0, 0.0, 0.0],
-                    [0.0, 1.0, 0.0],
-                    [0.0, 0.0, 1.0],
-                    [1.0, 1.0, 1.0],
-                ],
-                device=device,
-            )
-            cells = torch.tensor(
-                [[0, 1, 2, 3], [1, 2, 3, 4]], device=device, dtype=torch.int64
-            )
-        else:
-            raise ValueError("3-simplices require 3D embedding space")
-    else:
-        raise ValueError(f"Unsupported {n_manifold_dims=}")
-
-    return Mesh(points=points, cells=cells)
-
-
-def assert_on_device(tensor: torch.Tensor, expected_device: str) -> None:
-    """Assert tensor is on expected device."""
-    actual_device = tensor.device.type
-    assert actual_device == expected_device, (
-        f"Device mismatch: tensor is on {actual_device!r}, expected {expected_device!r}"
-    )
-
+# The point/cell literals previously duplicated here are the shared
+# conftest factory's canonical meshes.
+from test.mesh.conftest import assert_on_device, create_simple_mesh  # noqa: E402
 
 ### Test Fixtures ###
 
@@ -306,6 +242,53 @@ class TestPointDataToCellData:
         ### Cell should get average of vertex vectors
         expected = torch.tensor([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]).mean(dim=0)
         assert torch.allclose(result.cell_data["velocity"][0], expected)
+
+    @pytest.mark.parametrize(
+        ("values", "expected"),
+        [
+            (torch.tensor([1, 2, 4], dtype=torch.int64), 7.0 / 3.0),
+            (torch.tensor([1, 2, 4], dtype=torch.int32), 7.0 / 3.0),
+            (torch.tensor([True, False, True]), 2.0 / 3.0),
+        ],
+        ids=["int64", "int32", "bool"],
+    )
+    def test_discrete_point_field_promoted_to_float(self, values, expected):
+        """Integer and boolean means are computed without dtype errors or truncation."""
+        mesh = Mesh(
+            points=torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]),
+            cells=torch.tensor([[0, 1, 2]]),
+            point_data={"label": values},
+        )
+
+        result = mesh.point_data_to_cell_data().cell_data["label"]
+
+        assert result.dtype == torch.float64
+        torch.testing.assert_close(
+            result, torch.tensor([expected], dtype=torch.float64)
+        )
+
+    @pytest.mark.parametrize(
+        "dtype",
+        [torch.float32, torch.float64, torch.float16, torch.bfloat16, torch.complex64],
+        ids=str,
+    )
+    def test_continuous_point_field_dtype_unchanged(self, dtype):
+        """Floating and complex point fields pass through the promotion untouched.
+
+        The promotion only fires for the dtypes that ``torch.mean`` rejects
+        outright, so it cannot change the result of any conversion that already
+        worked.
+        """
+        mesh = Mesh(
+            points=torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]),
+            cells=torch.tensor([[0, 1, 2]]),
+            point_data={"field": torch.tensor([1, 2, 4]).to(dtype)},
+        )
+
+        result = mesh.point_data_to_cell_data().cell_data["field"]
+
+        assert result.dtype == dtype
+        torch.testing.assert_close(result, torch.tensor([7.0 / 3.0]).to(dtype))
 
     def test_preserves_original_data(self):
         """Test that original point data is preserved."""

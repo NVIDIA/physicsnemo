@@ -57,6 +57,7 @@ from torch.distributed.tensor.placement_types import Shard
 from torch.nn.parallel import DistributedDataParallel
 
 from physicsnemo.distributed import DistributedManager
+from physicsnemo.domain_parallel import sync_module_over_mesh
 from test.domain_parallel.ops.utils import (
     default_loss_fn,
     numerical_shard_tensor_check,
@@ -208,6 +209,11 @@ def wrap_fsdp_spatial(
     torch.nn.Module
         The FSDP2-wrapped model.
     """
+    # FSDP2 does no initial weight synchronization on any axis, and the
+    # domain replicas must start identical. Production pairs fully_shard
+    # with sync_module_over_mesh; do the same here (before params become
+    # DTensors), with verification on since test models are small.
+    sync_module_over_mesh(model, domain_mesh, verify=True)
     shard_spatial_params_(model, domain_mesh, selector)
     # FSDP2 rejects non-contiguous parameters; make them contiguous first.
     with torch.no_grad():

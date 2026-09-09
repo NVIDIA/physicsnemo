@@ -31,6 +31,7 @@ from utils.nn import nested_to
 
 from physicsnemo.diffusion.noise_schedulers import DomainParallelNoiseScheduler
 from physicsnemo.distributed import DistributedManager
+from physicsnemo.domain_parallel import sync_module_over_mesh
 from physicsnemo.domain_parallel.shard_tensor import (
     ShardTensor,
     scatter_tensor,
@@ -254,9 +255,10 @@ class ParallelHelper:
         replicated -- across domain ranks. FSDP2 then additionally shards them
         across the ``ddp`` mesh, producing 2D-mesh DTensor parameters.
 
-        Identical parameter initialization across ranks is assumed (the
-        trainer sets ``torch.manual_seed`` before model construction); FSDP2
-        does not perform a sync-from-rank-0 broadcast on its own.
+        Plain parameters and buffers are first broadcast over the domain mesh,
+        so the independent FSDP groups at each domain coordinate start from
+        matching state. FSDP2 then shards parameters across the ``ddp`` axis
+        and reconstructs them with an all-gather before computation.
 
         Parameters
         ----------
@@ -282,6 +284,7 @@ class ParallelHelper:
                 if not p.is_contiguous():
                     p.data = p.data.contiguous()
 
+        sync_module_over_mesh(model, self.mesh["domain"])
         if self.use_shard_tensor:
             self._shard_spatial_params(model)
         fully_shard(model, mesh=self.mesh["ddp"])

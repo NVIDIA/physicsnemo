@@ -28,6 +28,25 @@ _SAMPLE_CHUNK_SIZE = 1 << 22
 _RANDPERM_POPULATION_LIMIT = 1 << 24
 
 
+def _devices_match(
+    first: torch.device | str,
+    second: torch.device | str,
+) -> bool:
+    """Return whether two device specifications select the same device."""
+    first = torch.device(first)
+    second = torch.device(second)
+    if first.type != second.type:
+        return False
+    if first.type == "cpu":
+        return True
+    if first.type == "cuda" and (first.index is None or second.index is None):
+        current = torch.cuda.current_device()
+        first_index = current if first.index is None else first.index
+        second_index = current if second.index is None else second.index
+        return first_index == second_index
+    return first == second
+
+
 def _sample_exact_without_replacement(
     population_size: int,
     num_samples: int,
@@ -256,7 +275,9 @@ class WeightedMultinomial(FunctionSpec):
                 raise ValueError(
                     "poisson_gap sampling requires an integer uniform population."
                 )
-            if requested_device is not None and requested_device != weights.device:
+            if requested_device is not None and not _devices_match(
+                requested_device, weights.device
+            ):
                 raise ValueError(
                     "device must match input.device when weights are supplied, got "
                     f"{requested_device} and {weights.device}."
@@ -288,7 +309,9 @@ class WeightedMultinomial(FunctionSpec):
 
         if strategy == "poisson_gap" and replacement:
             raise ValueError("poisson_gap sampling does not support replacement.")
-        if generator is not None and torch.device(generator.device) != sample_device:
+        if generator is not None and not _devices_match(
+            generator.device, sample_device
+        ):
             raise ValueError(
                 "generator.device must match the sampling device, got "
                 f"{generator.device} and {sample_device}."

@@ -119,6 +119,25 @@ def test_large_magnitude_float16_cell_normal_remains_unit_length():
     )
 
 
+@pytest.mark.parametrize("scale", [1.0e-7, 1.0, 1.0e7])
+def test_triangle_normal_gradients_are_scale_invariant(scale):
+    """Rescaling a well-conditioned triangle preserves its shape derivatives."""
+    shape = torch.tensor(
+        [[[1.0, 0.2, 0.3], [0.1, 1.0, 0.4]]], dtype=torch.float64, requires_grad=True
+    )
+    result = compute_cell_normals(scale * shape)
+    reference = torch.nn.functional.normalize(
+        torch.linalg.cross(shape[:, 0], shape[:, 1]), dim=-1
+    )
+    probe = torch.tensor([[0.3, -0.7, 0.5]], dtype=torch.float64)
+
+    gradient = torch.autograd.grad((result * probe).sum(), shape)[0]
+    expected_gradient = torch.autograd.grad((reference * probe).sum(), shape)[0]
+
+    torch.testing.assert_close(result, reference)
+    torch.testing.assert_close(gradient, expected_gradient)
+
+
 ### Branch 1: _normals_2d (edges in 2D) ###
 
 

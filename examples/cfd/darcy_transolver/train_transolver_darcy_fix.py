@@ -58,7 +58,7 @@ prof = Profiler()
 
 
 _GEOTRANSOLVER_TARGETS = {
-    "physicsnemo.experimental.models.geotransolver.GeoTransolver",
+    "physicsnemo.models.geotransolver.GeoTransolver",
 }
 
 

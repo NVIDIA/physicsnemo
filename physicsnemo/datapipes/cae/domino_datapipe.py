@@ -612,7 +612,7 @@ class DoMINODataPipe(Dataset):
         ########################################################################
 
         # SDF calculation on the volume grid using WARP
-        sdf_grid, _ = signed_distance_field(
+        sdf_grid, _, _ = signed_distance_field(
             normed_vertices,
             stl_indices,
             grid,
@@ -621,7 +621,7 @@ class DoMINODataPipe(Dataset):
 
         # Get the SDF of all the selected volume coordinates,
         # And keep the closest point to each one.
-        sdf_nodes, sdf_node_closest_point = signed_distance_field(
+        sdf_nodes, sdf_node_closest_point, _ = signed_distance_field(
             normed_vertices,
             stl_indices,
             volume_coordinates,
@@ -719,7 +719,7 @@ class DoMINODataPipe(Dataset):
         mesh_indices_flattened = data_dict["stl_faces"].to(torch.int32)
 
         # Compute signed distance function for the surface grid:
-        sdf_surf_grid, _ = signed_distance_field(
+        sdf_surf_grid, _, _ = signed_distance_field(
             mesh_vertices=normed_vertices,
             mesh_indices=mesh_indices_flattened,
             input_points=surf_grid,

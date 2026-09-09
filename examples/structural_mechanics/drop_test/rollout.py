@@ -20,7 +20,7 @@ from torch.utils.checkpoint import checkpoint as ckpt
 from physicsnemo.models.transolver import Transolver
 from physicsnemo.models.meshgraphnet import MeshGraphNet
 from physicsnemo.models.figconvnet.figconvunet import FIGConvUNet
-from physicsnemo.experimental.models.geotransolver import GeoTransolver
+from physicsnemo.models.geotransolver import GeoTransolver
 
 from datapipe import SimSample
 

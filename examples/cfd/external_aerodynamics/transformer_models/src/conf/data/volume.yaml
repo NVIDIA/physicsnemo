@@ -20,6 +20,9 @@ defaults:
 # Overrides for volume data:
 mode: volume
 
+# Sample volume points while training. Inference overrides this to read all points.
+volume_sample_from_disk: true
+
 # volume-specific needs:
 data_keys:
   - "volume_fields"

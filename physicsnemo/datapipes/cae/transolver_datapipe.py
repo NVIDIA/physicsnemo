@@ -306,7 +306,7 @@ class TransolverDataPipe(Dataset):
             if self.config.scale_invariance:
                 coords = coords / scale_factor
 
-            sdf, closest_points = signed_distance_field(
+            sdf, closest_points, _ = signed_distance_field(
                 coords,
                 data_dict["stl_faces"].flatten().to(torch.int32),
                 positions,

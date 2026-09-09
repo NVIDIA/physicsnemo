@@ -210,6 +210,18 @@ will run a test using domain parallel size of 2. When domain parallelism is used
 
 Domain parallelism introduces some additional communication overhead and therefore should only be used if even a local batch size of 1 cannot fit on a single GPU.
 
+Before spatial parameters are sharded and FSDP is applied, the recipe
+broadcasts plain parameters and buffers over the domain mesh
+(`sync_module_over_mesh`), so the independent FSDP groups at each domain
+coordinate start from matching state. FSDP2 then shards parameters over the
+data-parallel axis and reconstructs them with an all-gather before computation;
+identical seeding is retained for reproducibility. After backward,
+gradients of domain-replicated parameters are averaged over the domain mesh
+(spatially sharded parameters are excluded) before gradient clipping and the
+optimizer step.  This averaging is unique to the stormcast recipe - in general
+this is not needed for domain parallelism, but is done here for bitwise identical
+stability.
+
 ### Memory Management
 
 The default configuration uses a batch size of 64 (controlled by `training.batch_size`), as used in the StormCast paper. If you have few GPUs and/or GPUs with limited memory, the default setting of `training.batch_size_per_gpu: 'auto'` may cause you to run out of memory. In that case, you can reduce the per-GPU memory utilization by manually setting `training.batch_size_per_gpu` to an integer value smaller than `training.batch_size` divided by the number of GPUs. The training code will automatically employ gradient accumulation to maintain the desired effective batch size specified by `training.batch_size` while using less memory, at the cost of longer training time.
@@ -353,7 +365,7 @@ If training seems slow, check your GPU utilization. If it's low, the problem is 
   * Data compression, if bandwidth from storage is the limiting factor
   * Caching data, particularly if your dataset is small enough to be preloaded to memory
 
-Enabling BF16 (`training.perf.fp_optimizations=amp-bf16`) speeds up training considerably but is only recommended for U-Nets. Compiling the training loss with ``torch.compile`` (`training.perf.torch_compile=True`), which will also compile the model forward pass, also typically improves performance but is not compatible with domain parallelism.
+Enabling BF16 (`training.perf.fp_optimizations=amp-bf16`) speeds up training considerably but is only recommended for U-Nets. Compiling the training loss with ``torch.compile`` (`training.perf.torch_compile=True`), which will also compile the model forward pass, also typically improves performance. This recipe disables it under domain parallelism (sharded ring attention must stay outside compiled regions, and regional compilation is not yet wired into this example).
 
 ### Training is unstable / not converging
 

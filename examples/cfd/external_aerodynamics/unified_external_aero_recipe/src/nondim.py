@@ -32,6 +32,7 @@ import torch
 from jaxtyping import Float
 from tensordict import TensorDict
 
+from physicsnemo.datapipes.keys import NestedKey, as_nested_key
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
 from physicsnemo.mesh import (
@@ -163,7 +164,8 @@ class NonDimensionalizeByMetadata(MeshTransform):
     Args:
         fields: Mapping of ``{field_name: field_type}`` where *field_type*
             is one of ``"pressure"``, ``"stress"``, ``"velocity"``,
-            ``"temperature"``, ``"density"``, or ``"identity"``.
+            ``"temperature"``, ``"density"``, or ``"identity"``. A ``"."``
+            in a field name addresses a nested leaf (``"solution.p"``).
         association: Mesh field association containing the fields
             (``"point_data"`` or ``"cell_data"``).
 
@@ -194,6 +196,10 @@ class NonDimensionalizeByMetadata(MeshTransform):
                     f"Must be one of {sorted(_FIELD_TYPES)}."
                 )
         self._fields = fields
+        ### Same mapping keyed by TensorDict key, for nested-aware lookups.
+        self._field_keys: dict[NestedKey, NondimFieldType] = {
+            as_nested_key(name): ftype for name, ftype in fields.items()
+        }
         self._association = association
 
     def _transform_mesh(
@@ -224,8 +230,9 @@ class NonDimensionalizeByMetadata(MeshTransform):
         ### Clone and non-dimensionalize the targeted association's
         ### TensorDict in place.
         new_td = getattr(mesh, self._association).clone()
-        for field_name, ftype in self._fields.items():
-            if skip_missing and field_name not in new_td.keys():
+        for field_name, ftype in self._field_keys.items():
+            ### ``key in td`` resolves nested keys; ``td.keys()`` would not.
+            if skip_missing and field_name not in new_td:
                 continue
             val = new_td[field_name].float()
             new_td[field_name] = field_fn(
@@ -333,11 +340,14 @@ class NonDimensionalizeByMetadata(MeshTransform):
             whose leaves are in physical units.
         """
 
-        ### ``named_apply`` walks every leaf in ``td`` and collects the
-        ### returns into a fresh TD; leaves whose name is absent from
-        ### ``field_types`` pass through unchanged.
-        def _redim(name: str, val: torch.Tensor) -> torch.Tensor:
-            ftype = field_types.get(name)
+        ### ``named_apply(nested_keys=True)`` walks every leaf in ``td``,
+        ### passing the full key (tuple when nested), and collects the
+        ### returns into a fresh TD; leaves absent from ``field_types``
+        ### pass through unchanged.
+        by_key = {as_nested_key(name): ftype for name, ftype in field_types.items()}
+
+        def _redim(name: NestedKey, val: torch.Tensor) -> torch.Tensor:
+            ftype = by_key.get(name)
             if ftype is None:
                 return val
             return _redim_field(
@@ -352,7 +362,7 @@ class NonDimensionalizeByMetadata(MeshTransform):
 
         ### ``named_apply`` is typed ``TensorDict | None`` for its
         ### in-place mode; the out-of-place path always returns a TD.
-        return td.named_apply(_redim)  # ty: ignore[invalid-return-type]
+        return td.named_apply(_redim, nested_keys=True)  # ty: ignore[invalid-return-type]
 
     def extra_repr(self) -> str:
         return f"fields={self._fields}, association={self._association!r}"

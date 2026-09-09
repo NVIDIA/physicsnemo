@@ -28,7 +28,7 @@ from typing import Optional
 import torch
 from torch.utils.checkpoint import checkpoint as ckpt
 
-from physicsnemo.experimental.models.geotransolver import GeoTransolver
+from physicsnemo.models.geotransolver import GeoTransolver
 from datapipe import SimSample
 
 
