@@ -140,6 +140,21 @@ class TestPointsValidation:
 
         assert int(mesh.points[0, 0]) == value
 
+    @pytest.mark.parametrize("dtype", [torch.int64, torch.uint64])
+    @pytest.mark.parametrize("metadata_only", ["meta", "fake"])
+    def test_integer_geometry_without_concrete_values(self, dtype, metadata_only):
+        """Shape-only construction defers value checks until data is available."""
+        from contextlib import nullcontext
+
+        from torch._subclasses.fake_tensor import FakeTensorMode
+
+        context = FakeTensorMode() if metadata_only == "fake" else nullcontext()
+        device = "meta" if metadata_only == "meta" else "cpu"
+        with context:
+            mesh = Mesh(points=torch.ones(3, 2, dtype=dtype, device=device))
+            assert mesh.points.dtype == torch.float64
+            assert mesh.points.shape == (3, 2)
+
     def test_explicit_float_conversion_allows_rounding(self):
         """Callers can deliberately choose floating precision before construction."""
         points = torch.tensor([[2**53 + 1, 0]], dtype=torch.int64).double()
@@ -257,6 +272,13 @@ class TestCellsDtypeValidation:
 
         assert mesh.cells.dtype == torch.int64
         torch.testing.assert_close(mesh.cell_centroids, points[mesh.cells].mean(dim=1))
+
+    @pytest.mark.parametrize("index", [2**63, 2**64 - 1])
+    def test_uint64_connectivity_cannot_wrap_negative(self, index, device):
+        """An overflowing unsigned ID must not become a valid negative index."""
+        cells = torch.tensor([[0, 1, index]], dtype=torch.uint64, device=device)
+        with pytest.raises(ValueError, match="uint64 indices.*int64"):
+            Mesh(points=torch.randn(3, 2, device=device), cells=cells)
 
     def test_cells_float32_raises(self):
         """Test that float32 cells raise TypeError."""
@@ -484,7 +506,8 @@ class TestParametrized:
         assert mesh.n_manifold_dims == n_manifold_dims
 
 
-def test_to_float_dtype_preserves_integer_cells_and_data():
+@pytest.mark.parametrize("known_device", [False, True])
+def test_to_float_dtype_preserves_integer_cells_and_data(known_device):
     """Regression: Mesh.to(<float dtype>) must cast floating tensors only. The
     integer `cells` (and integer data) must NOT be cast to a float dtype, which
     previously raised in __post_init__ ('cells must have an int-like dtype')."""
@@ -492,8 +515,13 @@ def test_to_float_dtype_preserves_integer_cells_and_data():
     mesh.point_data["temp"] = torch.randn(4)  # float -> cast
     mesh.point_data["region"] = torch.tensor([1, 2, 3, 4])  # int -> preserved
     _ = mesh.cell_areas  # warm a float cache
+    if known_device:
+        mesh = mesh.to("cpu")
 
     m64 = mesh.to(torch.float64)
+    assert mesh.points.dtype == torch.float32
+    assert mesh.point_data["temp"].dtype == torch.float32
+    assert mesh._cache["cell", "areas"].dtype == torch.float32
     assert m64.points.dtype == torch.float64
     assert m64.cells.dtype == torch.int64
     assert m64.point_data["temp"].dtype == torch.float64

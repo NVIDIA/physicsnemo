@@ -108,6 +108,20 @@ _INTEGER_DTYPES = frozenset(
 _NON_INDEXING_INTEGER_DTYPES = _INTEGER_DTYPES - {torch.int32, torch.int64}
 
 
+def _check_geometry_values(valid: torch.Tensor, message: str) -> None:
+    """Check tensor values eagerly or retain the assertion in a compiled graph."""
+    if torch.compiler.is_compiling() or valid.device.type == "meta":
+        torch._assert_async(valid, message)
+        return
+
+    from torch._subclasses.fake_tensor import is_fake
+
+    if is_fake(valid):
+        torch._assert_async(valid, message)
+    elif not bool(valid):
+        raise ValueError(message)
+
+
 @tensorclass(tensor_only=True, shadow=True)
 class Mesh:
     r"""A PyTorch-based, dimensionally-generic Mesh data structure.
@@ -212,7 +226,8 @@ class Mesh:
         Cell connectivity with shape :math:`(N_c, D_m + 1)`. Each row contains
         indices into ``points`` defining one simplex. Must be an integer dtype;
         dtypes other than ``int32``/``int64`` are converted to ``int64`` so the
-        connectivity is directly usable as a PyTorch index tensor.
+        connectivity is directly usable as a PyTorch index tensor. Values in
+        ``uint64`` connectivity must fit in ``int64``.
         Defaults to an empty 0-simplex tensor for point-cloud meshes.
     point_data : TensorDict or dict[str, torch.Tensor], optional
         Per-vertex data. Dicts are automatically converted to TensorDict.
@@ -227,7 +242,8 @@ class Mesh:
         If ``points`` or ``cells`` is not 2D, cells have no vertex column,
         manifold dimension exceeds spatial dimension, or ``points`` and
         ``cells`` are on different devices, or integer coordinates cannot be
-        represented exactly in ``float64``.
+        represented exactly in ``float64``, or ``uint64`` connectivity overflows
+        ``int64``. Compiled value checks raise a backend assertion instead.
     TypeError
         If cell indices are not an integer dtype.
 
@@ -481,14 +497,8 @@ class Mesh:
                     f"but got {self.points.device=} and {self.cells.device=}."
                 )
 
-        ### Normalize geometry dtypes so every Mesh is usable by geometry ops
-        # Integer coordinates are the one dtype family that fails *silently*:
-        # geometry evaluates in integer arithmetic, so `cell_areas` truncates and
-        # a unit right triangle reports area 0 rather than 0.5. Float32 exactly
-        # represents every integer up to 16 bits; wider coordinates need float64
-        # to avoid collapsing edges at large offsets. Float64 cannot represent
-        # every 64-bit integer, so reject lossy implicit conversions. Floating
-        # and complex inputs are already an explicit choice of precision.
+        ### Promote integer geometry without silently moving vertices.
+        # Float32 covers every <=16-bit integer; wider dtypes need float64.
         if not (self.points.is_floating_point() or self.points.is_complex()):
             source_dtype = self.points.dtype
             target_dtype = (
@@ -499,22 +509,26 @@ class Mesh:
             )
             converted_points = self.points.to(target_dtype)
             if source_dtype in {torch.int64, torch.uint64}:
-                # CUDA float-to-integer casts saturate at the upper bound: a
-                # rounded maximum integer can round-trip despite being inexact.
-                # Check the exclusive bound as well as the round trip. This
-                # value check only synchronizes for 64-bit integer input.
+                # CUDA casts can saturate, so round-trip equality alone misses
+                # maximum integers rounded up to the exclusive upper bound.
                 exact = (converted_points.to(source_dtype) == self.points) & (
                     converted_points < builtins.float(torch.iinfo(source_dtype).max + 1)
                 )
-                if not bool(exact.all()):
-                    raise ValueError(
-                        "Integer mesh coordinates cannot be represented exactly in "
-                        "float64. Convert points to a floating dtype explicitly "
-                        "to allow rounding."
-                    )
+                _check_geometry_values(
+                    exact.all(),
+                    "Integer mesh coordinates cannot be represented exactly in "
+                    "float64. Convert points to a floating dtype explicitly "
+                    "to allow rounding.",
+                )
             self.points = converted_points
         if self.cells.dtype in _NON_INDEXING_INTEGER_DTYPES:
-            self.cells = self.cells.to(torch.int64)
+            cells = self.cells.to(torch.int64)
+            if self.cells.dtype == torch.uint64:
+                _check_geometry_values(
+                    (cells >= 0).all(),
+                    "`cells` contains uint64 indices that cannot be represented in int64.",
+                )
+            self.cells = cells
 
     @classmethod
     def from_polygons(
@@ -3336,15 +3350,14 @@ def _requested_dtype(
 
 
 def _mesh_to(self, *args: Any, **kwargs: Any) -> "Mesh":
-    requested_dtype = _requested_dtype(args, kwargs)
-    if requested_dtype is not None and not (
-        requested_dtype.is_floating_point or requested_dtype.is_complex
+    cast_dtype = _requested_dtype(args, kwargs)
+    if cast_dtype is not None and not (
+        cast_dtype.is_floating_point or cast_dtype.is_complex
     ):
         raise TypeError(
             "Mesh coordinates must remain floating point or complex; "
-            f"cannot convert a Mesh to {requested_dtype}."
+            f"cannot convert a Mesh to {cast_dtype}."
         )
-    cast_dtype = requested_dtype
     if cast_dtype is None:
         # For a device-only move, the generated tensorclass ``to`` preserves
         # per-leaf dtypes and forwards ``non_blocking``/etc. unchanged.
@@ -3364,12 +3377,8 @@ def _mesh_to(self, *args: Any, **kwargs: Any) -> "Mesh":
     def _cast(t: torch.Tensor) -> torch.Tensor:
         return t.to(cast_dtype) if (t.is_floating_point() or t.is_complex()) else t
 
-    moved.points = _cast(moved.points)
-    moved.point_data = moved.point_data.apply(_cast)
-    moved.cell_data = moved.cell_data.apply(_cast)
-    moved.global_data = moved.global_data.apply(_cast)
-    moved._cache = moved._cache.apply(_cast)
-    return moved
+    # A no-op device move may return self. Apply functionally to preserve it.
+    return moved.apply(_cast)
 
 
 _tensorclass_mesh_to = Mesh.to  # the generated tensorclass ``to``

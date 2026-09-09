@@ -1687,15 +1687,14 @@ DomainMesh.__repr__ = _domain_mesh_repr  # type: ignore[method-assign]  # ty: ig
 # per-mesh path through the (cells-safe) ``Mesh.to`` via ``apply_to_meshes`` (with
 # ``global_data`` cast too). Device-only moves are delegated unchanged.
 def _domain_mesh_to(self, *args: Any, **kwargs: Any) -> "DomainMesh":
-    requested_dtype = _requested_dtype(args, kwargs)
-    if requested_dtype is not None and not (
-        requested_dtype.is_floating_point or requested_dtype.is_complex
+    cast_dtype = _requested_dtype(args, kwargs)
+    if cast_dtype is not None and not (
+        cast_dtype.is_floating_point or cast_dtype.is_complex
     ):
         raise TypeError(
             "Mesh coordinates must remain floating point or complex; "
-            f"cannot convert a DomainMesh to {requested_dtype}."
+            f"cannot convert a DomainMesh to {cast_dtype}."
         )
-    cast_dtype = requested_dtype
     if cast_dtype is None:
         return _tensorclass_domain_to(self, *args, **kwargs)
 
