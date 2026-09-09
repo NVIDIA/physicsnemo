@@ -527,7 +527,9 @@ class Natten2DSelfAttention(AttentionModuleBase):
             2, 0, 3, 1, 4
         )  # (3, B, num_heads, N, head_dim)
         q, k, v = qkv.unbind(0)
-        q, k = self.q_norm(q), self.k_norm(k)
+        # LayerNorm is an autocast-to-fp32 operation. Cast its outputs back to
+        # the QKV projection dtype because NATTEN requires Q, K, and V to match.
+        q, k = self.q_norm(q).to(v.dtype), self.k_norm(k).to(v.dtype)
 
         # Windowed neighborhood self-attention
         q, k, v = map(
@@ -639,7 +641,9 @@ class RopeNatten2DSelfAttention(Natten2DSelfAttention):
             2, 0, 3, 1, 4
         )  # (3, B, num_heads, N, head_dim)
         q, k, v = qkv.unbind(0)
-        q, k = self.q_norm(q), self.k_norm(k)
+        # LayerNorm is an autocast-to-fp32 operation. Cast its outputs back to
+        # the QKV projection dtype because NATTEN requires Q, K, and V to match.
+        q, k = self.q_norm(q).to(v.dtype), self.k_norm(k).to(v.dtype)
 
         # Reshape Q, K to spatial layout for RoPE indexing.
         q_2d = q.reshape(B, self.num_heads, h, w, self.head_dim)

@@ -17,11 +17,13 @@
 import pytest
 import torch
 
+import physicsnemo.nn.module.dit_layers as dit_layers
 from physicsnemo.nn.module.dit_layers import (
     ConvDetokenizer,
     DiTBlock,
     Natten2DSelfAttention,
     ProjReshape2DDetokenizer,
+    RopeNatten2DSelfAttention,
     TimmSelfAttention,
 )
 from physicsnemo.nn.module.rope import (
@@ -397,6 +399,49 @@ def test_mask_token_arithmetic_matches_where():
     attn_no_mask = Natten2DSelfAttention(hidden_size, num_heads, attn_kernel=3)
     assert attn_no_mask.mask_token is None
     assert torch.equal(attn_no_mask._apply_mask_token(x, invalid), x)
+
+
+@pytest.mark.parametrize(
+    "attention_class", [Natten2DSelfAttention, RopeNatten2DSelfAttention]
+)
+def test_natten_qk_norm_preserves_projection_dtype(monkeypatch, attention_class):
+    """Autocast-promoted normalization must not give NATTEN mixed Q/K/V dtypes."""
+    hidden_size, num_heads = 32, 4
+    h, w = 4, 4
+    head_dim = hidden_size // num_heads
+    attn = attention_class(
+        hidden_size=hidden_size,
+        num_heads=num_heads,
+        attn_kernel=3,
+        qk_norm=True,
+    ).to(torch.bfloat16)
+
+    # Stand in for the autocast float32 cast policy, which applies to LayerNorm
+    # regardless of the norm backend and is not reproducible on CPU.
+    class PromoteToFloat(torch.nn.Module):
+        def forward(self, x):
+            return x.float()
+
+    attn.q_norm = PromoteToFloat()
+    attn.k_norm = PromoteToFloat()
+
+    kwargs = {"latent_hw": (h, w)}
+    if attention_class is RopeNatten2DSelfAttention:
+        rope_cos, rope_sin = build_axial_rope_cos_sin_2d(h, w, head_dim)
+        kwargs |= {"rope_cos": rope_cos, "rope_sin": rope_sin}
+
+    observed = {}
+
+    def fake_na2d(q, k, v, **_kwargs):
+        observed["dtypes"] = (q.dtype, k.dtype, v.dtype)
+        return v
+
+    monkeypatch.setattr(dit_layers, "_na2d_func", fake_na2d)
+    x = torch.randn(2, h * w, hidden_size, dtype=torch.bfloat16)
+    output = attn(x, **kwargs)
+
+    assert observed["dtypes"] == (torch.bfloat16,) * 3
+    assert output.dtype == torch.bfloat16
 
 
 # --- ConvDetokenizer tests ---

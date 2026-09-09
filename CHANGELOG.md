@@ -34,6 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `Natten2DSelfAttention` and `RopeNatten2DSelfAttention` with `qk_norm=True` no
+  longer fail under `torch.autocast`. `LayerNorm` is an autocast-to-float32
+  operation, so the normalized queries and keys were returned as float32 while
+  the values stayed in the autocast dtype, and NATTEN requires queries, keys,
+  and values to share a dtype. The normalized queries and keys are now cast
+  back to the dtype of the QKV projection.
 - Datapipe transforms, collators, readers, and the unified external aero
   recipe no longer silently skip or mis-handle nested `TensorDict` fields
   (membership was tested against top-level `td.keys()`, and
