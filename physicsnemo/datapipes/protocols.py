@@ -44,6 +44,8 @@ from typing import Any, Iterator, Optional
 import torch
 from tensordict import is_tensor_collection
 
+from physicsnemo.datapipes._domain_parallel import assemble_if_proto
+
 
 @contextlib.contextmanager
 def preprocessing_stream(stream: Optional["torch.cuda.Stream"]):
@@ -118,10 +120,11 @@ class HostPayload:
     """A sample produced by the (thread-safe) I/O stage, staged on the host.
 
     A ``HostPayload`` is the boundary object between the I/O producer and
-    the main-thread consumer. It carries a CPU ``TensorDict`` (ideally
-    pinned, so the subsequent host-to-device copy can be asynchronous)
-    plus metadata. It is produced by a worker thread, which must not
-    launch device kernels.
+    the main-thread consumer. It carries a CPU sample -- a ``TensorDict``,
+    a mesh, or a domain-parallel ``ShardedProto`` of local rows -- ideally
+    pinned, so the subsequent host-to-device copy can be asynchronous, plus
+    metadata. It is produced by a worker thread, which must not launch
+    device kernels.
 
     Parameters
     ----------
@@ -130,7 +133,8 @@ class HostPayload:
         for map-style datasets, or any opaque descriptor for
         descriptor-driven sources.
     data : Any, optional
-        Host ``TensorDict`` (or mesh) payload. ``None`` on error.
+        Host ``TensorDict``, mesh, or ``ShardedProto`` payload. ``None`` on
+        error.
     metadata : dict, optional
         Per-sample metadata produced by the reader.
     error : Exception, optional
@@ -233,6 +237,26 @@ class DatasetBase(ABC):
         lst = self._events_pending
         self._events_pending = []
         return lst
+
+    @staticmethod
+    def _assemble(data: Any) -> Any:
+        """Assemble a domain-parallel proto payload; no-op for plain samples.
+
+        Readers configured for domain-parallel reading return a
+        ``ShardedProto`` of this rank's rows; after the device transfer the
+        dataset turns it into the sample with ``Shard(0)`` ShardTensors.
+
+        Parameters
+        ----------
+        data : Any
+            Device-side payload.
+
+        Returns
+        -------
+        Any
+            The assembled sample, or *data* unchanged.
+        """
+        return assemble_if_proto(data)
 
     @abstractmethod
     def _load(self, index: int) -> tuple[Any, dict[str, Any]]:
