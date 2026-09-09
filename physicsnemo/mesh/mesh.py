@@ -65,7 +65,6 @@ from physicsnemo.mesh.transformations.geometric import (
     translate,
 )
 from physicsnemo.mesh.utilities._padding import _pad_by_tiling_last, _pad_with_value
-from physicsnemo.mesh.utilities._row_gather import gather_rows
 from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
 from physicsnemo.mesh.validation import validate
@@ -1351,9 +1350,10 @@ class Mesh:
             Indices or mask to select points. Supports:
 
             - ``int``: Single point index
-            - ``slice``: Python slice object
+            - ``slice``: Python slice object with a positive step
             - ``Ellipsis`` or ``None``: Keep all points (returns self)
-            - ``torch.Tensor``: Integer indices or boolean mask
+            - ``torch.Tensor``: One-dimensional int32/int64 indices or a
+              boolean mask of length ``n_points`` (uint8 masks are also accepted)
             - ``Sequence[int | bool]``: List/tuple of indices or boolean mask
 
         Returns
@@ -1401,14 +1401,35 @@ class Mesh:
         if isinstance(indices, int):
             kept_indices = torch.tensor([indices], device=device)
         elif isinstance(indices, slice):
-            kept_indices = torch.arange(*indices.indices(n_points), device=device)
+            start, stop, step = indices.indices(n_points)
+            if step < 0:
+                raise ValueError("step must be greater than zero")
+            kept_indices = torch.arange(start, max(start, stop), step, device=device)
         else:
             # Tensor (int or bool) or Sequence of ints / bools
-            idx = torch.as_tensor(indices, device=device)
-            if idx.dtype == torch.bool:
+            idx = (
+                torch.empty(0, dtype=torch.long, device=device)
+                if not isinstance(indices, torch.Tensor) and len(indices) == 0
+                else torch.as_tensor(indices, device=device)
+            )
+            if idx.ndim != 1:
+                raise IndexError("point indices or masks must be one-dimensional")
+            if idx.dtype in (torch.bool, torch.uint8):
+                if idx.numel() != n_points:
+                    raise IndexError(
+                        f"point mask must have length {n_points}, got {idx.numel()}"
+                    )
                 kept_indices = idx.nonzero().squeeze(-1)
             else:
-                kept_indices = idx.reshape(-1).long()
+                if idx.dtype not in (torch.int32, torch.int64):
+                    raise IndexError("point indices must have dtype int32 or int64")
+                kept_indices = idx.long()
+
+        ### Gather using the original indices so native indexing rejects
+        ### out-of-range negative values before normalization. This also avoids
+        ### scalar min/max reductions or extra copies for memory-mapped fields.
+        new_points = self.points[kept_indices]
+        new_point_data = cast(TensorDict, self.point_data[kept_indices])
         kept_indices = torch.where(
             kept_indices < 0, kept_indices + n_points, kept_indices
         )
@@ -1453,17 +1474,6 @@ class Mesh:
         # cast: TensorDict[bool_mask] returns TensorCollection | Tensor statically;
         # the runtime is always TensorDict because cell_data is itself a TensorDict.
         new_cell_data = cast(TensorDict, self.cell_data[valid_cells_mask])
-
-        ### Slice points and point_data. gather_rows reads memory-mapped rows
-        ### as one range when the kept ids are local instead of one page per row.
-        new_points = gather_rows(self.points, kept_indices)
-        new_point_data = cast(
-            TensorDict,
-            self.point_data.apply(
-                lambda leaf: gather_rows(leaf, kept_indices),
-                batch_size=torch.Size([n_kept]),
-            ),
-        )
 
         return Mesh(
             points=new_points,
