@@ -67,13 +67,19 @@ Conventions and assumptions:
   L_ref`` to integrate on a physical-scale surface; areas and moment
   arms are translation-invariant, so the lost ``CenterMesh`` offset does
   not affect forces (and only shifts the moment reference for moments).
-- **Subsampled surfaces.** ``SubsampleMesh`` records each kept cell's
-  inverse inclusion probability (``n_before / n_kept``) as its measure
-  weight, and ``Mesh.integrate`` multiplies by it. Coefficients computed
-  from a subsampled ``vehicle`` mesh are therefore unbiased estimates of
-  the full-surface integrals (a Horvitz--Thompson estimator), not values
-  shrunk by the kept-area fraction -- but they are stochastic, with
-  sampling noise that grows as fewer cells are kept.
+- **Subsampled surfaces.** ``SubsampleMesh`` records the cell-count
+  correction ``n_before / n_kept`` as a measure weight, and
+  ``Mesh.integrate`` multiplies by it to compensate for the retained-area
+  shrinkage. This gives an unbiased Horvitz--Thompson estimate when every
+  cell has inclusion probability ``n_kept / n_before`` and its field value
+  and physical moment reference are fixed independently of the sample.
+  The large-population ``poisson_gap`` sampler is approximate, so this
+  guarantee does not apply to every ``SubsampleMesh`` path. Predictions
+  that depend on the sampled geometry can introduce additional bias.
+  Likewise, centering after reader-level subsampling changes the physical
+  moment origin between samples; measure weights cannot correct that
+  frame change. Subsampled coefficients can have both sampling noise and
+  bias and should be checked for convergence with surface resolution.
   ``ForceContext.coefficients``'s 1:1 points/cells contract check cannot
   tell an exact full-surface integral from such an estimate; ``infer.py``
   warns when a vehicle's cell count sits at the ``sampling_resolution``
