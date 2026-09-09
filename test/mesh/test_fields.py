@@ -154,6 +154,52 @@ def test_field_layout_vectors_rotate_with_the_frame():
     torch.testing.assert_close(rotated.vectors, packed.vectors @ rotation.T)
 
 
+def test_field_layout_ignores_unselected_metadata_and_colliding_names():
+    """Unselected leaves cannot override a selected tuple path's validation."""
+    layout = FieldLayout({"a": {"b": 0}}, spatial_dim=3)
+    data = TensorDict(
+        {
+            "a": {"b": torch.arange(4, dtype=torch.float32)},
+            "a.b": torch.ones(4, 3),
+            "case": "metadata",
+        },
+        batch_size=[4],
+    )
+
+    packed = layout.pack(data)
+
+    torch.testing.assert_close(packed.scalars[:, 0], data["a", "b"])
+    assert packed.vectors.shape == (4, 0, 3)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_field_layout_custom_separator_preserves_distinct_tuple_paths(reverse):
+    """Literal dots stay distinct from nested paths in either insertion order."""
+    layout = FieldLayout({"a.b": 0, "a": {"b": 1}}, spatial_dim=3, sep="/")
+    entries = [
+        ("a.b", torch.arange(4, dtype=torch.float32)),
+        ("a", {"b": torch.ones(4, 3)}),
+    ]
+    if reverse:
+        entries.reverse()
+    data = TensorDict(dict(entries), batch_size=[4])
+
+    packed = layout.pack(data)
+    unpacked = layout.unpack(packed)
+
+    assert layout.scalar_names == ("a.b",)
+    assert layout.vector_names == ("a/b",)
+    torch.testing.assert_close(unpacked["a.b"], data["a.b"])
+    torch.testing.assert_close(unpacked["a", "b"], data["a", "b"])
+
+
+def test_field_layout_rejects_selected_nontensor_leaf():
+    """A selected metadata leaf gets a field-specific error."""
+    data = TensorDict({"case": "metadata"}, batch_size=[4])
+    with pytest.raises(TypeError, match="Field 'case' must be a tensor"):
+        FieldLayout({"case": 0}, spatial_dim=3).pack(data)
+
+
 @pytest.mark.parametrize(
     ("ranks", "expected_scalar_shape", "expected_vector_shape"),
     [

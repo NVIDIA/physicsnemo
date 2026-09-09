@@ -34,7 +34,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Collection
 from copy import deepcopy
-from typing import NamedTuple, TypeAlias, Union, cast
+from typing import NamedTuple, TypeAlias, Union
 
 import torch
 from tensordict import TensorDict
@@ -356,14 +356,18 @@ class FieldLayout:
                 "FieldLayout expects a point TensorDict with one batch dimension "
                 f"(N,), got batch_size={tuple(data.batch_size)}"
             )
-        validate_data_contains_ranks(
-            data=data,
-            declared_ranks=self._rank_spec,
-            source_label="data",
-        )
-
         n_points = data.batch_size[0]
-        tensors = [cast(torch.Tensor, data[path]) for _, path, _ in self._entries]
+        tensors: list[torch.Tensor] = []
+        for name, path, rank in self._entries:
+            tensor = data.get(path, None)
+            if tensor is None:
+                raise ValueError(
+                    f"data is missing leaf {name!r} (declared rank {rank})"
+                )
+            if not isinstance(tensor, torch.Tensor):
+                raise TypeError(f"Field {name!r} must be a tensor")
+            tensors.append(tensor)
+
         reference = tensors[0]
         for (name, _, rank), tensor in zip(self._entries, tensors, strict=True):
             expected = (n_points,) if rank == 0 else (n_points, self.spatial_dim)
