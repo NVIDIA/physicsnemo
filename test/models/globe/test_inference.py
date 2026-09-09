@@ -16,12 +16,69 @@
 
 import pytest
 import torch
+from tensordict import TensorDict
 
 from physicsnemo.experimental.models.globe.model import GLOBE
 from physicsnemo.mesh.primitives.procedural import lumpy_sphere
 
 # Number of prediction points to evaluate at
 N_PREDICTION_POINTS = 5
+
+
+def test_communication_meshes_have_independent_cache_containers(monkeypatch) -> None:
+    """Communication updates preserve caches without aliasing their containers."""
+    model = GLOBE(
+        n_spatial_dims=3,
+        output_field_ranks={"pressure": 0},
+        boundary_source_data_ranks={"no_slip": {}},
+        reference_length_names=["test_length"],
+        reference_area=1.0,
+        hidden_layer_sizes=[8],
+    )
+
+    mesh = lumpy_sphere.load(subdivisions=0)
+    mesh = mesh.with_data(
+        point_data={"discarded": torch.ones(mesh.n_points)},
+        cell_data={
+            "physical": TensorDict(
+                {"input": torch.ones(mesh.n_cells)},
+                batch_size=[mesh.n_cells],
+            )
+        },
+        global_data={"discarded": torch.tensor(1.0)},
+    )
+    cached_centroids = mesh.cell_centroids
+
+    def _fake_evaluate_hyperlayer(**kwargs) -> TensorDict:
+        target_points = kwargs["target_points"]
+        return TensorDict(
+            {"latent": torch.ones(target_points.shape[0])},
+            batch_size=[target_points.shape[0]],
+        )
+
+    monkeypatch.setattr(model, "_evaluate_hyperlayer", _fake_evaluate_hyperlayer)
+    result = model._evaluate_communication_hyperlayer(
+        layer_idx=0,
+        boundary_meshes={"no_slip": mesh},
+        reference_lengths={},
+        global_data=None,
+        cluster_trees={"no_slip": None},
+        comm_plans={"no_slip": {}},
+        source_areas={},
+    )["no_slip"]
+
+    # The historical reconstruction intentionally retained only cell data.
+    assert not list(result.point_data.keys())
+    assert not list(result.global_data.keys())
+    assert set(result.cell_data.keys()) == {"physical", "latent"}
+
+    # Geometry caches remain reusable, while structural mutations on the
+    # communication result cannot leak back into its input mesh.
+    assert result._cache is not mesh._cache
+    assert result._cache["cell"] is not mesh._cache["cell"]
+    assert result._cache["cell", "centroids"] is cached_centroids
+    result._cache["cell", "probe"] = torch.ones(mesh.n_cells)
+    assert "probe" not in mesh._cache["cell"]
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])

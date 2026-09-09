@@ -18,4 +18,6 @@ PhysicsNeMo Models
    api/models/diffusion_unets.rst
    api/models/dit.rst
    api/models/transolver.rst
+   api/models/flare.rst
+   api/models/geotransolver.rst
    api/models/weather.rst

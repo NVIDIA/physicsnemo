@@ -9,3 +9,4 @@ scikit-learn
 tqdm
 tensorboard
 einops
+transformer_engine[pytorch]

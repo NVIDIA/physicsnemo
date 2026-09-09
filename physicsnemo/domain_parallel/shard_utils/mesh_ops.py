@@ -30,7 +30,7 @@ def sharded_signed_distance_field(
     input_points: ShardTensor,
     max_dist: float = 1e8,
     use_sign_winding_number: bool = False,
-) -> tuple[ShardTensor, ShardTensor]:
+) -> tuple[ShardTensor, ShardTensor, ShardTensor]:
     r"""Compute the signed distance field for a (possibly sharded) mesh.
 
     Parameters
@@ -48,11 +48,12 @@ def sharded_signed_distance_field(
 
     Returns
     -------
-    tuple[ShardTensor, ShardTensor]
+    tuple[ShardTensor, ShardTensor, ShardTensor]
         A tuple containing:
 
         - ``sharded_sdf_output`` : Signed distance field values
         - ``sharded_sdf_hit_point_output`` : Hit point coordinates
+        - ``sharded_sdf_hit_face_output`` : Hit face indices
     """
 
     # We can not actually compute the signed distance function on a sharded mesh.
@@ -66,7 +67,7 @@ def sharded_signed_distance_field(
 
     local_input_points = input_points.to_local()
 
-    local_sdf, local_sdf_hit_point = signed_distance_field(
+    local_sdf, local_sdf_hit_point, local_sdf_hit_face = signed_distance_field(
         local_mesh_vertices,
         local_mesh_indices,
         local_input_points,
@@ -82,8 +83,10 @@ def sharded_signed_distance_field(
         # Output shape is always (N, 1), hit point is (N, 3)
         input_shard_shapes = input_points._spec.sharding_shapes()
 
+        # Plain int tuples (never torch.Size) for _sharding_shapes -- see
+        # ShardTensorSpec field docs for the dynamo / fakeification rationale.
         output_shard_shapes = {
-            mesh_dim: tuple(torch.Size((s[0],)) for s in input_shard_shapes[mesh_dim])
+            mesh_dim: tuple((int(s[0]),) for s in input_shard_shapes[mesh_dim])
             for mesh_dim in input_shard_shapes.keys()
         }
 
@@ -101,6 +104,14 @@ def sharded_signed_distance_field(
             sharding_shapes=input_shard_shapes,
         ).reshape(input_points.shape)
 
+        # Hit faces share the (N,) layout of the sdf output:
+        sharded_sdf_hit_face_output = ShardTensor.from_local(
+            local_sdf_hit_face,
+            input_points._spec.mesh,
+            input_points._spec.placements,
+            sharding_shapes=output_shard_shapes,
+        ).reshape(input_points.shape[:-1])
+
     else:
         # The input points were replicated, use that for output:
         sharded_sdf_output = ShardTensor.from_local(
@@ -113,8 +124,17 @@ def sharded_signed_distance_field(
             input_points._spec.mesh,
             input_points._spec.placements,
         )
+        sharded_sdf_hit_face_output = ShardTensor.from_local(
+            local_sdf_hit_face,
+            input_points._spec.mesh,
+            input_points._spec.placements,
+        )
 
-    return sharded_sdf_output, sharded_sdf_hit_point_output
+    return (
+        sharded_sdf_output,
+        sharded_sdf_hit_point_output,
+        sharded_sdf_hit_face_output,
+    )
 
 
 def repackage_radius_search_wrapper_args(
@@ -169,7 +189,7 @@ def sharded_signed_distance_field_wrapper(
     types: tuple[Any, ...],
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
-) -> tuple[ShardTensor, ShardTensor]:
+) -> tuple[ShardTensor, ShardTensor, ShardTensor]:
     r"""Wrapper for ``sharded_signed_distance_field`` to support sharded tensors.
 
     Parameters
@@ -185,8 +205,9 @@ def sharded_signed_distance_field_wrapper(
 
     Returns
     -------
-    tuple[ShardTensor, ShardTensor]
-        A tuple containing the signed distance field and hit point tensors.
+    tuple[ShardTensor, ShardTensor, ShardTensor]
+        A tuple containing the signed distance field, hit point, and hit face
+        tensors.
     """
 
     return sharded_signed_distance_field(*args, **kwargs)

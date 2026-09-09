@@ -17,18 +17,24 @@
 """Variational Gaussian Process head for uncertainty-aware scalar regression.
 
 Provides :class:`VariationalGPHead`, a module that can be attached to any
-neural-network encoder to produce calibrated uncertainty estimates for a
-scalar target.  Built on GPyTorch's variational inference machinery with
-inducing points.
+neural-network encoder to produce a predictive distribution over a scalar
+target.  Built on GPyTorch's variational inference machinery with inducing
+points.
+
+This head consumes **one pooled embedding per sample** and predicts **one
+scalar per sample**.  For per-point, multi-channel *field* predictions (one
+Gaussian posterior per point per channel), use its sibling
+:class:`~physicsnemo.experimental.uq.FieldVariationalGPHead`, which shares the
+same variational-GP design but keeps the point dimension.
 
 Key design choices
 ------------------
-* **Float64 GP internals (default)** — Short lengthscales on L2-normalised
+* **Float64 GP internals (default)** — Short lengthscales on L2-normalized
   embeddings make the inducing-point covariance matrix K_uu ill-conditioned
   in float32.  By default, GP computations (kernel, variational strategy,
   likelihood) run in float64; inputs are upcast on entry and outputs are
   downcast on exit so gradients flow through the encoder seamlessly.
-  This behaviour is controlled by the *use_double* flag.
+  This behavior is controlled by the *use_double* flag.
 * **Optional DKL feature extractor** — A small MLP can be inserted between
   the encoder embedding and the GP kernel (Deep Kernel Learning).  The MLP
   runs in the caller's precision for speed.
@@ -74,7 +80,7 @@ def _require_gpytorch() -> None:
 
 
 class _VariationalGPLayer(_ApproximateGP):
-    """Low-level variational GP with Matérn-5/2 ARD kernel.
+    """Low-level variational GP with a Matérn ARD kernel.
 
     This is an internal building block used by :class:`VariationalGPHead`.
     Users should not need to instantiate it directly.
@@ -92,6 +98,9 @@ class _VariationalGPLayer(_ApproximateGP):
         ``(concentration, rate)`` for a Gamma prior on lengthscales.
     outputscale_prior : tuple[float, float] | None
         ``(concentration, rate)`` for a Gamma prior on the output scale.
+    matern_nu : float
+        Smoothness order of the Matérn kernel.  GPyTorch implements 0.5, 1.5
+        and 2.5.
     """
 
     def __init__(
@@ -101,6 +110,7 @@ class _VariationalGPLayer(_ApproximateGP):
         lengthscale_range: tuple[float, float] = (0.01, 10.0),
         lengthscale_prior: tuple[float, float] | None = None,
         outputscale_prior: tuple[float, float] | None = None,
+        matern_nu: float = 2.5,
     ) -> None:
         _require_gpytorch()
         variational_distribution = CholeskyVariationalDistribution(
@@ -121,7 +131,7 @@ class _VariationalGPLayer(_ApproximateGP):
             ls_prior_obj = gpytorch.priors.GammaPrior(*lengthscale_prior)
 
         base_kernel = gpytorch.kernels.MaternKernel(
-            nu=2.5,
+            nu=matern_nu,
             ard_num_dims=input_dim,
             lengthscale_constraint=ls_constraint,
             lengthscale_prior=ls_prior_obj,
@@ -167,18 +177,20 @@ class VariationalGPHead(nn.Module):
     r"""Variational GP head with configurable precision and jitter.
 
     Attach this module to any encoder that produces fixed-size embeddings to
-    obtain calibrated uncertainty estimates for a scalar regression target.
+    obtain a predictive distribution over a scalar regression target.  Whether
+    that distribution is calibrated is a property of the training recipe, not
+    of the head: check it against held-out data before relying on the interval.
 
     Parameters
     ----------
     input_dim : int, optional
         Dimension of the input embedding vector. Default is 32.
+    n_train : int
+        Total number of training examples, the ELBO's normalization constant.
+        Required, and keyword-only along with everything after it.
     n_inducing : int, optional
         Number of inducing points for the variational approximation.
         Default is 64.
-    n_train : int
-        Total number of training examples (required for the ELBO
-        normalisation constant).
     inducing_points : torch.Tensor | None, optional
         Initial inducing point locations ``(M, D)``.  If *None*, random
         normal points are used. Default is ``None``.
@@ -191,6 +203,12 @@ class VariationalGPHead(nn.Module):
     outputscale_prior : tuple[float, float] | None, optional
         ``(concentration, rate)`` for a Gamma prior on the output scale,
         e.g. ``(2.0, 0.5)`` gives mean 4.0. Default is ``None``.
+    matern_nu : float, optional
+        Smoothness order of the Matérn kernel: sample paths are
+        ``ceil(matern_nu) - 1`` times differentiable, so the default 2.5 gives
+        twice-differentiable functions.  0.5 is the exponential kernel, too
+        rough for a smooth response surface, and the RBF limit tends to
+        over-smooth.  GPyTorch implements 0.5, 1.5 and 2.5.  Default is 2.5.
     mlp_hidden : list[int] | None, optional
         Hidden layer sizes for an optional DKL feature extractor MLP
         inserted before the GP kernel.  ``None`` means the embedding
@@ -243,12 +261,14 @@ class VariationalGPHead(nn.Module):
     def __init__(
         self,
         input_dim: int = 32,
+        *,
+        n_train: int,
         n_inducing: int = 64,
-        n_train: int | None = None,
         inducing_points: torch.Tensor | None = None,
         lengthscale_range: tuple[float, float] = (0.01, 10.0),
         lengthscale_prior: tuple[float, float] | None = None,
         outputscale_prior: tuple[float, float] | None = None,
+        matern_nu: float = 2.5,
         mlp_hidden: list[int] | None = None,
         use_double: bool = True,
         jitter: tuple[float, float] = (1e-3, 1e-4),
@@ -256,8 +276,6 @@ class VariationalGPHead(nn.Module):
     ) -> None:
         super().__init__()
         _require_gpytorch()
-        if n_train is None:
-            raise ValueError("n_train is required for the ELBO normalisation constant")
 
         self._use_double = use_double
         self._jitter = jitter
@@ -291,6 +309,7 @@ class VariationalGPHead(nn.Module):
             lengthscale_range=lengthscale_range,
             lengthscale_prior=lengthscale_prior,
             outputscale_prior=outputscale_prior,
+            matern_nu=matern_nu,
         )
         likelihood = gpytorch.likelihoods.GaussianLikelihood()
 
@@ -395,9 +414,7 @@ class VariationalGPHead(nn.Module):
         return neg_elbo
 
     @torch.no_grad()
-    def predict(
-        self, embedding: Float[torch.Tensor, "batch dim"]
-    ) -> GPPrediction:
+    def predict(self, embedding: Float[torch.Tensor, "batch dim"]) -> GPPrediction:
         r"""Produce predictions with calibrated uncertainty intervals.
 
         Temporarily switches the module to eval mode, runs inference with

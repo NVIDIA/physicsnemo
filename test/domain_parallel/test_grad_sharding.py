@@ -34,6 +34,10 @@ Test cases include:
 - Partial gradient boundary: a replicated ``from_local`` weight mixed with a
   sharded activation produces a ``Partial`` gradient that must be resolved to
   ``Replicate`` (all-reduce) before crossing back to the plain leaf.
+- Partial gradient identity: distributed leaf gradients retain their own
+  pending-reduction placement instead of inheriting the primal placement.
+- Explicit ``grad_placements``: requesting ``Partial`` declares rank-local
+  gradient contributions that resolve to their summed global value.
 - Autograd passthrough: ``register_hook`` / ``retain_grad`` bind to the real
   ShardTensor node and fire in backward (the mechanism FSDP2 depends on).
 
@@ -45,7 +49,7 @@ requirement).
 import pytest
 import torch
 from torch.distributed.tensor import DTensor, distribute_tensor
-from torch.distributed.tensor.placement_types import Replicate, Shard
+from torch.distributed.tensor.placement_types import Partial, Replicate, Shard
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.domain_parallel import ShardTensor
@@ -359,6 +363,129 @@ def test_from_local_partial_grad_boundary_2d(distributed_mesh_2d):
     run_from_local_partial_grad_boundary(distributed_mesh_2d)
 
 
+def run_partial_primal_gradients_emit_replicate(mesh):
+    dm = DistributedManager()
+    local = torch.randn(8, 4, device=dm.device)
+    dtensor = DTensor.from_local(
+        local,
+        mesh,
+        [Partial()] * mesh.ndim,
+        run_check=False,
+    )
+
+    local_view_input = ShardTensor.from_dtensor(dtensor).detach().requires_grad_(True)
+    local_view_input.to_local().sum().backward()
+    assert local_view_input.grad is not None
+    assert local_view_input.grad.placements == tuple(
+        Replicate() for _ in range(mesh.ndim)
+    )
+
+    reduction_input = ShardTensor.from_dtensor(dtensor).detach().requires_grad_(True)
+    reduction_input.sum().backward()
+    assert reduction_input.grad is not None
+    assert reduction_input.grad.placements == tuple(
+        Replicate() for _ in range(mesh.ndim)
+    )
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+def test_partial_primal_gradients_emit_replicate_1d(distributed_mesh):
+    run_partial_primal_gradients_emit_replicate(distributed_mesh)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+def test_partial_primal_gradients_emit_replicate_2d(distributed_mesh_2d):
+    run_partial_primal_gradients_emit_replicate(distributed_mesh_2d)
+
+
+def run_leaf_grad_preserves_genuine_partial_placement(mesh):
+    dm = DistributedManager()
+    shard_x = shard_tensor_factory(mesh, uneven=False)
+    x_full = shard_x.full_tensor()
+    weight = ShardTensor.from_local(
+        torch.randn(x_full.shape[-1], device=dm.device),
+        mesh,
+        [Replicate()] * mesh.ndim,
+    ).detach()
+    weight.requires_grad_(True)
+
+    (shard_x * weight).full_tensor().sum().backward()
+
+    assert weight.grad is not None
+    assert weight.grad.placements == tuple(Partial() for _ in range(mesh.ndim))
+    expected = x_full.sum(dim=tuple(range(x_full.ndim - 1)))
+    # The distributed and reference sums use different FP32 accumulation
+    # orders across thousands of values. Bound the resulting roundoff while
+    # still catching a missing or duplicated mesh reduction.
+    torch.testing.assert_close(
+        weight.grad.full_tensor(),
+        expected,
+        atol=1e-4,
+        rtol=1e-5,
+    )
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+def test_leaf_grad_preserves_genuine_partial_placement_1d(distributed_mesh):
+    run_leaf_grad_preserves_genuine_partial_placement(distributed_mesh)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+def test_leaf_grad_preserves_genuine_partial_placement_2d(distributed_mesh_2d):
+    run_leaf_grad_preserves_genuine_partial_placement(distributed_mesh_2d)
+
+
+def run_explicit_partial_grad_placements_are_pending_reduction(mesh):
+    dm = DistributedManager()
+    value = ShardTensor.from_local(
+        torch.randn(8, 4, device=dm.device),
+        mesh,
+        [Replicate()] * mesh.ndim,
+    ).detach()
+    value.requires_grad_(True)
+
+    coordinate = mesh.get_coordinate()
+    linear_rank = 0
+    mesh_size = 1
+    for mesh_dim, mesh_rank in enumerate(coordinate):
+        linear_rank = linear_rank * mesh.size(mesh_dim) + mesh_rank
+        mesh_size *= mesh.size(mesh_dim)
+    local_view = value.to_local(
+        grad_placements=tuple(Partial() for _ in range(mesh.ndim))
+    )
+    (local_view * float(linear_rank + 1)).sum().backward()
+
+    assert value.grad is not None
+    assert value.grad.placements == tuple(Partial() for _ in range(mesh.ndim))
+    torch.testing.assert_close(
+        value.grad._local_tensor,
+        torch.full_like(value.grad._local_tensor, float(linear_rank + 1)),
+    )
+    expected_value = float(mesh_size * (mesh_size + 1) // 2)
+    torch.testing.assert_close(
+        value.grad.full_tensor(),
+        torch.full_like(value.grad._local_tensor, expected_value),
+    )
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+def test_explicit_partial_grad_placements_are_pending_reduction_1d(distributed_mesh):
+    run_explicit_partial_grad_placements_are_pending_reduction(distributed_mesh)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+def test_explicit_partial_grad_placements_are_pending_reduction_2d(
+    distributed_mesh_2d,
+):
+    run_explicit_partial_grad_placements_are_pending_reduction(distributed_mesh_2d)
+
+
 def run_shard_tensor_register_hook_fires(mesh):
     r"""A backward hook registered on a ShardTensor must fire in backward.
 
@@ -418,3 +545,51 @@ def test_shard_tensor_retain_grad(distributed_mesh):
 @pytest.mark.timeout(120)
 def test_shard_tensor_retain_grad_2d(distributed_mesh_2d):
     run_shard_tensor_retain_grad(distributed_mesh_2d)
+
+
+def run_eager_autograd_grad_returns_shard_tensor(mesh):
+    r"""Eager ``torch.autograd.grad(loss, [st])`` must return ShardTensor grads.
+
+    ``torch.autograd.grad`` is routed through ``_autograd_passthrough_functions``
+    (it queries gradients for these exact tensor objects, so the DTensor
+    fallback would ask about tensors that aren't in the graph). The passthrough
+    runs it under ``DisableTorchFunctionSubclass``, which only suppresses
+    ``__torch_function__`` re-entry: the backward graph was recorded on the
+    subclass and executes via ``__torch_dispatch__``, so the returned grads
+    must still be ShardTensor-typed — in eager just as inside AOTAutograd's
+    joint trace.
+    """
+    shard_x = shard_tensor_factory(mesh, uneven=False).detach().requires_grad_(True)
+
+    # Leaf grad, with a local reference for the values.
+    full_ref = shard_x.full_tensor().detach().requires_grad_(True)
+    (ref_grad,) = torch.autograd.grad((full_ref**2).sum(), [full_ref])
+
+    y = shard_x**2
+    loss = y.full_tensor().sum()
+    (grad_leaf,) = torch.autograd.grad(loss, [shard_x], create_graph=False)
+
+    assert isinstance(grad_leaf, ShardTensor), (
+        f"eager autograd.grad returned {type(grad_leaf)} for a ShardTensor leaf"
+    )
+    assert torch.allclose(grad_leaf.full_tensor(), ref_grad)
+
+    # Non-leaf grad must also stay ShardTensor-typed.
+    y2 = shard_x * 3.0
+    loss2 = y2.full_tensor().sum()
+    (grad_nonleaf,) = torch.autograd.grad(loss2, [y2])
+    assert isinstance(grad_nonleaf, ShardTensor), (
+        f"eager autograd.grad returned {type(grad_nonleaf)} for a non-leaf ShardTensor"
+    )
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+def test_eager_autograd_grad_returns_shard_tensor(distributed_mesh):
+    run_eager_autograd_grad_returns_shard_tensor(distributed_mesh)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+def test_eager_autograd_grad_returns_shard_tensor_2d(distributed_mesh_2d):
+    run_eager_autograd_grad_returns_shard_tensor(distributed_mesh_2d)

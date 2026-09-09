@@ -40,8 +40,8 @@ from physicsnemo.domain_parallel import ShardTensor
 aten = torch.ops.aten
 
 
-def unsqueeze_shape(shape: torch.Size | Sequence[int], dim: int) -> torch.Size:
-    r"""Return a new torch.Size with a singleton dimension inserted at ``dim``.
+def unsqueeze_shape(shape: torch.Size | Sequence[int], dim: int) -> tuple[int, ...]:
+    r"""Return a new plain int tuple with a singleton dimension inserted at ``dim``.
 
     If ``dim`` is within the current rank, the new dimension is inserted at
     that index. This mirrors the behavior of ``torch.unsqueeze`` at the shape level.
@@ -55,12 +55,13 @@ def unsqueeze_shape(shape: torch.Size | Sequence[int], dim: int) -> torch.Size:
 
     Returns
     -------
-    torch.Size
-        A new ``torch.Size`` with the inserted dimension.
+    tuple[int, ...]
+        A plain int tuple with the inserted dimension (never a ``torch.Size``,
+        so it can be safely embedded in ``ShardTensorSpec._sharding_shapes``).
     """
     o_shape = list(shape)
     o_shape.insert(dim, 1)
-    return torch.Size(tuple(o_shape))
+    return tuple(o_shape)
 
 
 def normalize_dim(dim: int, tensor_rank: int) -> int:
@@ -152,7 +153,7 @@ def unsqueeze_wrapper(
             output_placements.append(p)
 
     in_sharding_shapes = input._spec.sharding_shapes()
-    out_sharding_shapes: dict[int, list[torch.Size]] = {
+    out_sharding_shapes: dict[int, list[tuple[int, ...]]] = {
         mesh_dim: [unsqueeze_shape(s, dim) for s in in_sharding_shapes[mesh_dim]]
         for mesh_dim in in_sharding_shapes.keys()
     }

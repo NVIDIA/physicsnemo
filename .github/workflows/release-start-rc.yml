@@ -1,0 +1,214 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: "Release: Start RC"
+run-name: "Start RC ${{ inputs.release_version }} by @${{ github.actor }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: "Final release version, for example 2.3.0"
+        required: true
+        type: string
+      rc_branch:
+        description: "RC branch name; must be <release_version>-rc or leave blank"
+        required: false
+        type: string
+      release_date:
+        description: "Release date in YYYY-MM-DD form"
+        required: true
+        type: string
+      dry_run:
+        description: "Prepare and validate without pushing or creating an issue"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: physicsnemo-release-operations
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  start-rc:
+    name: Create RC branch
+    runs-on: ubuntu-latest
+    env:
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      DRY_RUN: ${{ inputs.dry_run }}
+      GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN || github.token }}
+      RC_BRANCH_INPUT: ${{ inputs.rc_branch }}
+      RELEASE_DATE: ${{ inputs.release_date }}
+      RELEASE_VERSION: ${{ inputs.release_version }}
+
+    steps:
+      - name: Require dispatch from the default branch
+        run: |
+          if [[ "$GITHUB_REF_NAME" != "$DEFAULT_BRANCH" ]]; then
+            echo "::error::Run this workflow from the $DEFAULT_BRANCH branch."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch }}
+          token: ${{ secrets.RELEASE_AUTOMATION_TOKEN || github.token }}
+
+      - name: Prepare RC commit
+        id: release
+        run: |
+          rc_branch="$RC_BRANCH_INPUT"
+          if [[ -z "$rc_branch" ]]; then
+            rc_branch="${RELEASE_VERSION}-rc"
+          fi
+
+          if ! git check-ref-format --branch "$rc_branch" >/dev/null; then
+            echo "::error::Invalid RC branch name: $rc_branch"
+            exit 1
+          fi
+          if [[ "$rc_branch" != "${RELEASE_VERSION}-rc" ]]; then
+            echo "::error::RC branch must be named ${RELEASE_VERSION}-rc."
+            exit 1
+          fi
+
+          printf 'branch=%s\n' "$rc_branch" >> "$GITHUB_OUTPUT"
+
+          if git ls-remote --exit-code --heads origin \
+            "refs/heads/$rc_branch" >/dev/null 2>&1; then
+            git fetch --no-tags origin \
+              "refs/heads/$rc_branch:refs/remotes/origin/$rc_branch"
+            existing_version="$(
+              git show "origin/$rc_branch:physicsnemo/__init__.py" |
+                sed -n 's/^__version__ = "\([^"]*\)"$/\1/p'
+            )"
+            existing_heading="$(
+              git show "origin/$rc_branch:CHANGELOG.md" |
+                awk '/^## \[/ && !found { print; found=1 }'
+            )"
+            expected_heading="## [$RELEASE_VERSION] - $RELEASE_DATE"
+            if [[ "$existing_version" != "$RELEASE_VERSION" ||
+                  "$existing_heading" != "$expected_heading" ]]; then
+              echo "::error::$rc_branch already exists but does not match the requested release."
+              echo "::error::Found version '$existing_version' and heading '$existing_heading'."
+              exit 1
+            fi
+
+            base_sha="$(git merge-base HEAD "origin/$rc_branch")"
+            rc_sha="$(git rev-parse "origin/$rc_branch")"
+            printf 'already_exists=true\n' >> "$GITHUB_OUTPUT"
+            printf 'base_sha=%s\n' "$base_sha" >> "$GITHUB_OUTPUT"
+            printf 'rc_sha=%s\n' "$rc_sha" >> "$GITHUB_OUTPUT"
+            echo "$rc_branch already exists with the expected release state."
+            exit 0
+          fi
+
+          base_sha="$(git rev-parse HEAD)"
+          git switch -c "$rc_branch"
+          python3 tools/release.py start-rc \
+            --release-version "$RELEASE_VERSION" \
+            --release-date "$RELEASE_DATE"
+          git diff --check
+          git add CHANGELOG.md physicsnemo/__init__.py
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: prepare $RELEASE_VERSION release"
+          rc_sha="$(git rev-parse HEAD)"
+
+          printf 'already_exists=false\n' >> "$GITHUB_OUTPUT"
+          printf 'base_sha=%s\n' "$base_sha" >> "$GITHUB_OUTPUT"
+          printf 'rc_sha=%s\n' "$rc_sha" >> "$GITHUB_OUTPUT"
+
+          if [[ "$DRY_RUN" == "true" ]]; then
+            echo "Dry run: skipping push of $rc_branch."
+          else
+            git push origin "HEAD:refs/heads/$rc_branch"
+          fi
+
+      - name: Create or find release tracking issue
+        id: tracking
+        if: ${{ ! inputs.dry_run }}
+        env:
+          BASE_SHA: ${{ steps.release.outputs.base_sha }}
+          RC_BRANCH: ${{ steps.release.outputs.branch }}
+          RC_SHA: ${{ steps.release.outputs.rc_sha }}
+        run: |
+          tracking_title="Release $RELEASE_VERSION tracking"
+          tracking_url="$(
+            gh issue list --state all --limit 100 --json title,url |
+              jq -r --arg title "$tracking_title" \
+                '[.[] | select(.title == $title) | .url][0] // empty'
+          )"
+
+          if [[ -z "$tracking_url" ]]; then
+            body_file="$(mktemp)"
+            {
+              echo "## Release details"
+              echo
+              echo "- Release: \`$RELEASE_VERSION\`"
+              echo "- Release date: \`$RELEASE_DATE\`"
+              echo "- RC branch: \`$RC_BRANCH\`"
+              echo "- Freeze base: \`$BASE_SHA\`"
+              echo "- Initial RC tip: \`$RC_SHA\`"
+              echo "- Started by: @$GITHUB_ACTOR"
+              echo "- Workflow run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+              echo
+              echo "## Checklist"
+              echo
+              echo "- [ ] Complete RC testing and bug fixes."
+              echo "- [ ] Publish and verify the $RELEASE_VERSION release."
+              echo "- [ ] Run **Release: Prepare RC Merge-back**."
+              echo "- [ ] Rebase the disposable merge-back branch onto \`$DEFAULT_BRANCH\`."
+              echo "- [ ] Resolve changelog conflicts and pass CI."
+              echo "- [ ] Merge the merge-back PR using **Rebase and merge**."
+              echo "- [ ] Confirm the RC branch still exists and was not rewritten."
+            } > "$body_file"
+            tracking_url="$(
+              gh issue create --title "$tracking_title" --body-file "$body_file"
+            )"
+          fi
+
+          printf 'url=%s\n' "$tracking_url" >> "$GITHUB_OUTPUT"
+
+      - name: Write workflow summary
+        if: ${{ always() && steps.release.outcome == 'success' }}
+        env:
+          BASE_SHA: ${{ steps.release.outputs.base_sha }}
+          RC_BRANCH: ${{ steps.release.outputs.branch }}
+          RC_SHA: ${{ steps.release.outputs.rc_sha }}
+          TRACKING_URL: ${{ steps.tracking.outputs.url }}
+        run: |
+          {
+            echo "## RC preparation"
+            echo
+            echo "- Release: \`$RELEASE_VERSION\`"
+            echo "- RC branch: \`$RC_BRANCH\`"
+            echo "- Freeze base: \`$BASE_SHA\`"
+            echo "- RC tip: \`$RC_SHA\`"
+            echo "- Dry run: \`$DRY_RUN\`"
+            if [[ -n "$TRACKING_URL" ]]; then
+              echo "- Tracking issue: $TRACKING_URL"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

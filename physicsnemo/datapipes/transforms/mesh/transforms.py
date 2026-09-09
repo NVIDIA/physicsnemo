@@ -20,12 +20,23 @@ Deterministic mesh transforms (Mesh -> Mesh) and terminal conversions.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from typing import Literal
 
 import torch
 from jaxtyping import Float, Int
 from tensordict import TensorDict
 
+from physicsnemo.datapipes.keys import (
+    KEY_SEPARATOR,
+    NestedKey,
+    as_nested_key,
+    as_nested_keys,
+    exclude_keys,
+    key_to_str,
+    rename_keys,
+    require_keys,
+)
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
 from physicsnemo.mesh import (
@@ -328,20 +339,9 @@ class SubsampleMesh(MeshTransform):
         return ", ".join(parts)
 
 
-def _rename_td_keys(td: TensorDict, mapping: dict[str, str]) -> TensorDict:
-    """Rename keys in a TensorDict, returning a new TensorDict.
-
-    Uses :meth:`tensordict.TensorDict.rename_key_` for each entry --
-    that's the named TensorDict API for the operation, equivalent to
-    ``td[new] = td.pop(old)`` but explicit. Missing source keys are
-    silently skipped.
-    """
-    out = td.clone()
-    present = set(out.keys())
-    for old_key, new_key in mapping.items():
-        if old_key in present:
-            out.rename_key_(old_key, new_key)
-    return out
+def _parse_key_mapping(mapping: dict[str, str] | None) -> dict[NestedKey, NestedKey]:
+    """Normalize a YAML ``{old: new}`` rename map into TensorDict keys."""
+    return {as_nested_key(k): as_nested_key(v) for k, v in (mapping or {}).items()}
 
 
 @register()
@@ -351,6 +351,9 @@ class DropMeshFields(MeshTransform):
     Useful for dropping fields that would interfere with downstream
     transforms (e.g. removing a scalar ``TimeValue`` from ``global_data``
     before a rotation that expects all global fields to be 3-vectors).
+
+    Field names may address nested leaves with ``"."`` (``"solution.p"``);
+    see :mod:`physicsnemo.datapipes.keys`.
     """
 
     def __init__(
@@ -360,20 +363,17 @@ class DropMeshFields(MeshTransform):
         global_data: list[str] | None = None,
     ) -> None:
         super().__init__()
-        self._point_data_keys = point_data or []
-        self._cell_data_keys = cell_data or []
-        self._global_data_keys = global_data or []
+        self._point_data_keys = as_nested_keys(point_data)
+        self._cell_data_keys = as_nested_keys(cell_data)
+        self._global_data_keys = as_nested_keys(global_data)
 
     def __call__(self, mesh: Mesh) -> Mesh:
-        ### ``TensorDict.exclude(*keys)`` is null-safe: it returns a
-        ### fresh TD minus the named keys (silently tolerating missing
-        ### ones) and is a no-op clone when the key list is empty.
-        return Mesh(
-            points=mesh.points,
-            cells=mesh.cells,
-            point_data=mesh.point_data.exclude(*self._point_data_keys),
-            cell_data=mesh.cell_data.exclude(*self._cell_data_keys),
-            global_data=mesh.global_data.exclude(*self._global_data_keys),
+        ### ``exclude_keys`` tolerates missing keys and drops groups emptied
+        ### by removing their last leaf.
+        return mesh.with_data(
+            point_data=exclude_keys(mesh.point_data, self._point_data_keys),
+            cell_data=exclude_keys(mesh.cell_data, self._cell_data_keys),
+            global_data=exclude_keys(mesh.global_data, self._global_data_keys),
         )
 
     def extra_repr(self) -> str:
@@ -394,6 +394,11 @@ class RenameMeshFields(MeshTransform):
     Useful for harmonizing field names across datasets that store
     the same physical quantity under different keys (e.g.
     ``pMeanTrim`` vs ``pressure_average``).
+
+    Both sides of a mapping may address nested leaves with ``"."``, so
+    ``{"solution.pMeanTrim": "pressure"}`` hoists a nested field to the top
+    level and ``{"p": "solution.p"}`` does the reverse. Missing source keys
+    are silently skipped.
     """
 
     def __init__(
@@ -403,29 +408,27 @@ class RenameMeshFields(MeshTransform):
         global_data: dict[str, str] | None = None,
     ) -> None:
         super().__init__()
-        self._point_data_map = point_data or {}
-        self._cell_data_map = cell_data or {}
-        self._global_data_map = global_data or {}
+        self._point_data_map = _parse_key_mapping(point_data)
+        self._cell_data_map = _parse_key_mapping(cell_data)
+        self._global_data_map = _parse_key_mapping(global_data)
 
     def __call__(self, mesh: Mesh) -> Mesh:
         new_pd = (
-            _rename_td_keys(mesh.point_data, self._point_data_map)
+            rename_keys(mesh.point_data, self._point_data_map, strict=False)
             if self._point_data_map
             else mesh.point_data
         )
         new_cd = (
-            _rename_td_keys(mesh.cell_data, self._cell_data_map)
+            rename_keys(mesh.cell_data, self._cell_data_map, strict=False)
             if self._cell_data_map
             else mesh.cell_data
         )
         new_gd = (
-            _rename_td_keys(mesh.global_data, self._global_data_map)
+            rename_keys(mesh.global_data, self._global_data_map, strict=False)
             if self._global_data_map
             else mesh.global_data
         )
-        return Mesh(
-            points=mesh.points,
-            cells=mesh.cells,
+        return mesh.with_data(
             point_data=new_pd,
             cell_data=new_cd,
             global_data=new_gd,
@@ -442,6 +445,15 @@ class RenameMeshFields(MeshTransform):
         return ", ".join(parts)
 
 
+def _as_plain_containers(value):  # noqa: ANN001, ANN202
+    """Recursively copy Mapping / Sequence containers (e.g. OmegaConf) into dict / list."""
+    if isinstance(value, Mapping):
+        return {k: _as_plain_containers(v) for k, v in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, str):
+        return [_as_plain_containers(v) for v in value]
+    return value
+
+
 @register()
 class SetGlobalField(MeshTransform):
     r"""Inject constant tensor fields into a Mesh's global_data.
@@ -452,38 +464,69 @@ class SetGlobalField(MeshTransform):
     Typical use: inject a per-dataset inlet velocity vector so that
     downstream rotation transforms (with ``transform_global_data=True``)
     rotate it consistently with the mesh geometry.
+
+    On a :class:`~physicsnemo.mesh.DomainMesh`, the fields are written to
+    the domain-level ``global_data`` as well as to every sub-mesh's
+    ``global_data``.
     """
 
     def __init__(
         self,
-        fields: dict[str, torch.Tensor | list[float]],
+        fields: Mapping[str, torch.Tensor | Sequence[float] | Mapping],
     ) -> None:
         super().__init__()
         ### Coerce + bundle into a single TensorDict so the per-sample
         ### path in __call__ can collapse to a batched ``td.to(...)`` plus
-        ### ``new_gd.update(...)`` (no Python-level per-key loop).
-        coerced: dict[str, torch.Tensor] = {}
-        for k, v in fields.items():
-            if not isinstance(v, torch.Tensor):
-                v = torch.tensor(v, dtype=torch.float32)
-            coerced[k] = v
-        self._fields: TensorDict = TensorDict(coerced, batch_size=[])
+        ### ``new_gd.update(...)`` (no Python-level per-key loop). The
+        ### constructor turns nested dicts into sub-TensorDicts and lists
+        ### into tensors; ``unflatten_keys`` then nests ``"a.b"`` names.
+        ### dtype is aligned to the mesh in ``__call__``. Hydra hands us
+        ### OmegaConf containers, which the constructor rejects, so copy
+        ### into plain dicts / lists first.
+        self._fields: TensorDict = TensorDict(
+            _as_plain_containers(fields), batch_size=[]
+        ).unflatten_keys(KEY_SEPARATOR)
 
     def __call__(self, mesh: Mesh) -> Mesh:
         new_gd = mesh.global_data.clone()
         new_gd.update(
             self._fields.to(device=mesh.points.device, dtype=mesh.points.dtype)
         )
-        return Mesh(
-            points=mesh.points,
-            cells=mesh.cells,
-            point_data=mesh.point_data,
-            cell_data=mesh.cell_data,
+        return mesh.with_data(global_data=new_gd)
+
+    def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
+        """Inject the fields into a :class:`DomainMesh`.
+
+        Writes the fields to the domain-level ``global_data`` in addition
+        to the base-class broadcast, which only reaches sub-mesh
+        ``global_data``.
+
+        Parameters
+        ----------
+        domain : DomainMesh
+            Input domain mesh (interior + boundaries).
+
+        Returns
+        -------
+        DomainMesh
+            Domain mesh with the fields set in the domain-level and every
+            sub-mesh ``global_data``.
+        """
+        domain = super().apply_to_domain(domain)
+        reference = domain.interior.points
+        new_gd = domain.global_data.clone()
+        new_gd.update(self._fields.to(device=reference.device, dtype=reference.dtype))
+        return DomainMesh(
+            interior=domain.interior,
+            boundaries=domain.boundaries,
             global_data=new_gd,
         )
 
     def extra_repr(self) -> str:
-        shapes = {k: tuple(v.shape) for k, v in self._fields.items()}
+        shapes = {
+            key_to_str(k): tuple(v.shape)
+            for k, v in self._fields.items(include_nested=True, leaves_only=True)
+        }
         return f"fields={shapes}"
 
 
@@ -518,6 +561,10 @@ class NormalizeMeshFields(MeshTransform):
         - _target_: ${dp:NormalizeMeshFields}
           association: point_data
           stats_file: /path/to/norm_stats.pt
+
+    Field names may address nested leaves with ``"."``
+    (``"solution.pressure"``); the same spelling is used in ``stats_file``
+    and in the ``target_config`` passed to :meth:`inverse_tensor`.
     """
 
     def __init__(
@@ -537,25 +584,31 @@ class NormalizeMeshFields(MeshTransform):
         self._eps = eps
 
         if stats_file is not None:
-            self._stats: dict[str, dict[str, Float[torch.Tensor, " *shape"] | str]] = (
-                torch.load(stats_file, weights_only=True)
-            )
+            raw_stats: dict = torch.load(stats_file, weights_only=True)
             # Match the inline branch: stats are float32 regardless of the
             # dtype they were computed/saved in, so normalization never
             # promotes field dtypes.
-            for s in self._stats.values():
+            for s in raw_stats.values():
                 s["mean"] = torch.as_tensor(s["mean"], dtype=torch.float32)
                 s["std"] = torch.as_tensor(s["std"], dtype=torch.float32)
         elif fields is not None:
-            self._stats = {}
-            for name, cfg in fields.items():
-                self._stats[name] = {
+            raw_stats = {
+                name: {
                     "type": cfg["type"],
                     "mean": torch.as_tensor(cfg["mean"], dtype=torch.float32),
                     "std": torch.as_tensor(cfg["std"], dtype=torch.float32),
                 }
+                for name, cfg in fields.items()
+            }
         else:
             raise ValueError("Provide one of 'stats_file' or 'fields'")
+        ### Stats are keyed by normalized TensorDict key so a nested field
+        ### spelled ``"solution.p"`` in YAML / on disk matches the leaf
+        ### ``("solution", "p")`` that ``named_apply(nested_keys=True)``
+        ### and ``new_td[key]`` see.
+        self._stats: dict[
+            NestedKey, dict[str, Float[torch.Tensor, " *shape"] | str]
+        ] = {as_nested_key(name): stats for name, stats in raw_stats.items()}
 
     def to(self, device: torch.device | str) -> "NormalizeMeshFields":
         """Move internal tensors and the nested field statistics to *device*.
@@ -585,21 +638,19 @@ class NormalizeMeshFields(MeshTransform):
     def __call__(self, mesh: Mesh) -> Mesh:
         ### Clone and z-score the targeted association's TensorDict in
         ### place; fields absent from `_stats` (or absent from the mesh)
-        ### are left untouched.
+        ### are left untouched. ``key in td`` handles nested keys.
         new_td = getattr(mesh, self._association).clone()
         for field_name, stats in self._stats.items():
-            if field_name not in new_td.keys():
+            if field_name not in new_td:
                 continue
             val = new_td[field_name].float()
             new_td[field_name] = (val - stats["mean"]) / (stats["std"] + self._eps)
 
-        ### `Mesh.copy` is a tensorclass-provided shallow copy: `points`,
-        ### `cells`, the untouched associations, and the geometric `_cache`
-        ### (centroids / areas / normals) are all shared with `mesh`, then
-        ### `setattr` swaps in the freshly-cloned association.
-        new_mesh = mesh.copy()  # ty: ignore[unresolved-attribute]
-        setattr(new_mesh, self._association, new_td)
-        return new_mesh
+        return mesh.with_data(
+            point_data=new_td if self._association == "point_data" else None,
+            cell_data=new_td if self._association == "cell_data" else None,
+            global_data=new_td if self._association == "global_data" else None,
+        )
 
     def inverse_tensor(
         self,
@@ -634,8 +685,8 @@ class NormalizeMeshFields(MeshTransform):
         idx = 0
         for name, ftype in target_config.items():
             dim = 1 if ftype == "scalar" else n_spatial_dims
-            if name in self._stats:
-                stats = self._stats[name]
+            stats = self._stats.get(as_nested_key(name))
+            if stats is not None:
                 out[..., idx : idx + dim] = (
                     out[..., idx : idx + dim] * (stats["std"] + self._eps)
                     + stats["mean"]
@@ -668,10 +719,12 @@ class NormalizeMeshFields(MeshTransform):
             whose leaves are in physical units.
         """
 
-        ### ``named_apply`` walks every leaf and collects the returns
-        ### into a fresh TD; leaves whose name is absent from
-        ### ``self._stats`` pass through unchanged.
-        def _inverse_field(name: str, val: torch.Tensor) -> torch.Tensor:
+        ### ``named_apply(nested_keys=True)`` walks every leaf, passing the
+        ### full key (a string at the top level, a tuple when nested) so a
+        ### nested leaf is matched against the same key the forward pass
+        ### used, and collects the returns into a fresh TD; leaves absent
+        ### from ``self._stats`` pass through unchanged.
+        def _inverse_field(name: NestedKey, val: torch.Tensor) -> torch.Tensor:
             stats = self._stats.get(name)
             if stats is None:
                 return val
@@ -679,17 +732,41 @@ class NormalizeMeshFields(MeshTransform):
 
         ### ``named_apply`` is typed ``TensorDict | None`` for its
         ### in-place mode; the out-of-place path always returns a TD.
-        return td.named_apply(_inverse_field)  # ty: ignore[invalid-return-type]
+        return td.named_apply(_inverse_field, nested_keys=True)  # ty: ignore[invalid-return-type]
 
     @property
-    def stats(self) -> dict:
-        """Normalization statistics dict (for serialization)."""
-        return self._stats
+    def stats(self) -> dict[str, dict]:
+        """Normalization statistics keyed by ``"."``-joined field name (for serialization).
+
+        Returns a fresh dict; to replace the live statistics (e.g. with the
+        ones persisted next to a checkpoint) assign to this property.
+        """
+        return {key_to_str(k): v for k, v in self._stats.items()}
+
+    @stats.setter
+    def stats(self, value: Mapping[str, dict]) -> None:
+        """Replace the live statistics; names are re-keyed via :func:`as_nested_key`.
+
+        Applies the same float32 coercion as ``__init__`` and moves the
+        tensors to the device a previous :meth:`to` selected.
+        """
+        self._stats = {
+            as_nested_key(name): {
+                **s,
+                "mean": torch.as_tensor(s["mean"], dtype=torch.float32),
+                "std": torch.as_tensor(s["std"], dtype=torch.float32),
+            }
+            for name, s in value.items()
+        }
+        if self._device is not None:
+            self.to(self._device)
 
     def extra_repr(self) -> str:
         parts = []
         for name, s in self._stats.items():
-            parts.append(f"{name}({s['type']}): mean={s['mean']}, std={s['std']}")
+            parts.append(
+                f"{key_to_str(name)}({s['type']}): mean={s['mean']}, std={s['std']}"
+            )
         return f"association={self._association!r}, " + ", ".join(parts)
 
 
@@ -726,31 +803,19 @@ class ComputeSurfaceNormals(MeshTransform):
                 f"store_as must be 'cell_data' or 'point_data', got {store_as!r}"
             )
         self.store_as = store_as
-        self.field_name = field_name
+        self.field_name = as_nested_key(field_name)
 
     def __call__(self, mesh: Mesh) -> Mesh:
         if self.store_as == "cell_data":
             normals = mesh.cell_normals
             new_cd = mesh.cell_data.clone()
             new_cd[self.field_name] = normals
-            return Mesh(
-                points=mesh.points,
-                cells=mesh.cells,
-                point_data=mesh.point_data,
-                cell_data=new_cd,
-                global_data=mesh.global_data,
-            )
+            return mesh.with_data(cell_data=new_cd)
         else:
             normals = mesh.point_normals
             new_pd = mesh.point_data.clone()
             new_pd[self.field_name] = normals
-            return Mesh(
-                points=mesh.points,
-                cells=mesh.cells,
-                point_data=new_pd,
-                cell_data=mesh.cell_data,
-                global_data=mesh.global_data,
-            )
+            return mesh.with_data(point_data=new_pd)
 
     def extra_repr(self) -> str:
         return f"store_as={self.store_as!r}, field_name={self.field_name!r}"
@@ -838,15 +903,6 @@ class MeshToTensorDict(MeshTransform):
         return TensorDict(out, batch_size=[])
 
 
-def _resolve_td_path(td: TensorDict, dotted_key: str) -> Float[torch.Tensor, " *shape"]:
-    """Resolve a dot-separated key path into a tensor from a TensorDict."""
-    parts = dotted_key.split(".")
-    current = td
-    for part in parts:
-        current = current[part]
-    return current
-
-
 @register()
 class ComputeCellCentroids(MeshTransform):
     r"""Compute cell centroids from points and cells in a TensorDict.
@@ -873,8 +929,9 @@ class RestructureTensorDict(MeshTransform):
     from the flat layout and assembles them into a structured dict
     (e.g. separate ``input`` and ``output`` groups for model training).
 
-    Each group is defined as ``{dest_key: source_path}`` where
-    ``source_path`` uses dots for nesting (e.g. ``point_data.pressure``).
+    Each group is defined as ``{dest_key: source_path}`` where both
+    ``source_path`` and ``dest_key`` use dots for nesting (e.g.
+    ``point_data.pressure``; see :mod:`physicsnemo.datapipes.keys`).
 
     Example YAML::
 
@@ -893,13 +950,14 @@ class RestructureTensorDict(MeshTransform):
         self._groups = groups
 
     def __call__(self, td: TensorDict) -> TensorDict:  # type: ignore[override]
-        out: dict = {}
+        out = TensorDict({}, batch_size=[])
         for group_name, mapping in self._groups.items():
-            group: dict = {}
             for dest_key, source_path in mapping.items():
-                group[dest_key] = _resolve_td_path(td, source_path)
-            out[group_name] = TensorDict(group, batch_size=[])
-        return TensorDict(out, batch_size=[])
+                out.set(
+                    as_nested_key(f"{group_name}{KEY_SEPARATOR}{dest_key}"),
+                    td[as_nested_key(source_path)],
+                )
+        return out
 
     def extra_repr(self) -> str:
         lines = []
@@ -1024,8 +1082,10 @@ class MeshToDomainMesh(MeshTransform):
                 f"interior_points must be one of "
                 f"{self._IMPLEMENTED_INTERIOR_POINTS!r}, got {interior_points!r}"
             )
-        self._cell_data_targets: list[str] = list(cell_data_targets or [])
-        self._point_data_targets: list[str] = list(point_data_targets or [])
+        ### Targets may address nested leaves (``"solution.C_p"``);
+        ### ``select`` / ``exclude`` below accept the parsed tuple keys.
+        self._cell_data_targets: list[NestedKey] = as_nested_keys(cell_data_targets)
+        self._point_data_targets: list[NestedKey] = as_nested_keys(point_data_targets)
         self._interior_points = interior_points
         self._boundary_name = boundary_name
 
@@ -1064,6 +1124,7 @@ class MeshToDomainMesh(MeshTransform):
     def _call_cell_centroids(self, mesh: Mesh) -> DomainMesh:
         ### Build the interior as a point cloud at cell centroids, with target
         ### cell_data fields moved into interior.point_data.
+        require_keys(mesh.cell_data, self._cell_data_targets, what="Target field")
         interior_point_data = (
             mesh.cell_data.select(*self._cell_data_targets)
             if self._cell_data_targets
@@ -1075,17 +1136,11 @@ class MeshToDomainMesh(MeshTransform):
         )
         ### Build the boundary by stripping target fields from cell_data.
         boundary_cell_data = (
-            mesh.cell_data.exclude(*self._cell_data_targets)
+            exclude_keys(mesh.cell_data, self._cell_data_targets)
             if self._cell_data_targets
             else mesh.cell_data
         )
-        boundary = Mesh(
-            points=mesh.points,
-            cells=mesh.cells,
-            point_data=mesh.point_data,
-            cell_data=boundary_cell_data,
-            global_data=mesh.global_data,
-        )
+        boundary = mesh.with_data(cell_data=boundary_cell_data)
         return DomainMesh(
             interior=interior,
             boundaries={self._boundary_name: boundary},
@@ -1095,6 +1150,7 @@ class MeshToDomainMesh(MeshTransform):
     def _call_vertices(self, mesh: Mesh) -> DomainMesh:
         ### Build the interior as a point cloud at the input mesh's vertices,
         ### with target point_data fields moved into interior.point_data.
+        require_keys(mesh.point_data, self._point_data_targets, what="Target field")
         interior_point_data = (
             mesh.point_data.select(*self._point_data_targets)
             if self._point_data_targets
@@ -1105,17 +1161,11 @@ class MeshToDomainMesh(MeshTransform):
             point_data=interior_point_data,
         )
         boundary_point_data = (
-            mesh.point_data.exclude(*self._point_data_targets)
+            exclude_keys(mesh.point_data, self._point_data_targets)
             if self._point_data_targets
             else mesh.point_data
         )
-        boundary = Mesh(
-            points=mesh.points,
-            cells=mesh.cells,
-            point_data=boundary_point_data,
-            cell_data=mesh.cell_data,
-            global_data=mesh.global_data,
-        )
+        boundary = mesh.with_data(point_data=boundary_point_data)
         return DomainMesh(
             interior=interior,
             boundaries={self._boundary_name: boundary},

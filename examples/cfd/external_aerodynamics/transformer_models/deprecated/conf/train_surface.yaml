@@ -45,6 +45,8 @@ model:
   structured_shape: null
   use_te: true     # Use transformer engine
   time_input: false # Whether to use time embeddings
+  activation_checkpointing: false # Set true to reduce training memory
+  checkpointing_ratio: 1.0 # Fraction of blocks to checkpoint when enabled
 
 scheduler:
   name: "OneCycleLR"

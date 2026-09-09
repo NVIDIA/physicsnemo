@@ -17,8 +17,26 @@
 import torch
 import torch.nn as nn
 from torch.amp import autocast
+import torch.distributed._functional_collectives as funcol
+from torch.distributed.tensor import DTensor
 
 import contextlib
+
+
+def _wait_pending_collectives(tensor):
+    """Wait on any in-flight functional collective held by ``tensor``.
+
+    ShardTensor issues async functional collectives that are only waited when
+    their result is first used.  The memory probes below discard their
+    results, so without this the pending work stays registered and PyTorch
+    prints "unwaited collective calls" warnings at process exit.
+    """
+    if tensor is None:
+        return
+    if isinstance(tensor, DTensor):
+        tensor = tensor.to_local()
+    if isinstance(tensor, funcol.AsyncCollectiveTensor):
+        tensor.wait()
 
 
 def get_model_memory_usage(
@@ -48,7 +66,8 @@ def get_model_memory_usage(
     if mode == "inference":
         with torch.no_grad():
             with context:
-                _ = model(x)
+                output = model(x)
+        _wait_pending_collectives(output)
 
     elif mode == "training":
         if target is None or optimizer is None:
@@ -60,5 +79,12 @@ def get_model_memory_usage(
             output = model(x)
             loss = nn.CrossEntropyLoss()(output, target)
         loss.backward()
+
+        # This pass measures memory only: the loss is never read and no
+        # optimizer.step() consumes the gradients, so drain their async
+        # collectives here.
+        _wait_pending_collectives(loss)
+        for param in model.parameters():
+            _wait_pending_collectives(param.grad)
 
     return torch.cuda.max_memory_allocated() / 1024**3  # GB

@@ -25,7 +25,7 @@ import pytest
 import torch
 import warp as wp
 
-from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+from physicsnemo.mesh.primitives.surfaces import plane, sphere_icosahedral
 from physicsnemo.nn.functional import remeshing
 from physicsnemo.nn.functional.geometry import Remeshing
 from physicsnemo.nn.functional.geometry.remeshing._warp_impl._kernels import (
@@ -34,6 +34,8 @@ from physicsnemo.nn.functional.geometry.remeshing._warp_impl._kernels import (
     update_centroids,
 )
 from physicsnemo.nn.functional.geometry.remeshing._warp_impl.launch_forward import (
+    _adaptive_seed_masses_and_radius_factor,
+    _apply_vertex_density,
     _remove_nonmanifold_faces,
     _voxel_representatives,
 )
@@ -49,6 +51,7 @@ def test_remeshing_function_spec_contract():
         "mesh_indices",
         "n_clusters",
         "max_iterations",
+        "vertex_density",
         "search_radius_scale",
         "voxel_width_scale",
         "hash_grid_resolution",
@@ -155,6 +158,86 @@ def test_remeshing_rejects_invalid_tensor_inputs():
 
 
 @pytest.mark.parametrize(
+    ("vertex_density", "error", "match"),
+    [
+        ([1.0] * 16, TypeError, "torch.Tensor or None"),
+        (torch.ones(16, 1), ValueError, "shape"),
+        (torch.ones(15), ValueError, "shape"),
+        (torch.ones(16, dtype=torch.int64), TypeError, "floating-point"),
+        (torch.ones(16, dtype=torch.bool), TypeError, "floating-point"),
+        (torch.ones(16, device="meta"), ValueError, "same device"),
+    ],
+    ids=[
+        "not-a-tensor",
+        "rank-two",
+        "wrong-length",
+        "integer",
+        "boolean",
+        "wrong-device",
+    ],
+)
+def test_remeshing_rejects_invalid_vertex_density_contract(
+    vertex_density, error, match
+):
+    vertices = torch.rand(16, 3)
+    indices = torch.tensor([[0, 1, 2], [2, 3, 0]])
+
+    with pytest.raises(error, match=match):
+        remeshing(
+            vertices,
+            indices,
+            8,
+            vertex_density=vertex_density,
+        )
+
+
+@pytest.mark.skipif(
+    not hasattr(torch, "float8_e4m3fn"),
+    reason="float8 is unavailable in this PyTorch version",
+)
+def test_remeshing_accepts_float8_vertex_density():
+    source = plane.load(size=2.0, subdivisions=4)
+    vertex_density = (1.5 + 0.5 * source.points[:, 0]).to(torch.float8_e4m3fn)
+
+    output_points, output_cells = remeshing(
+        source.points,
+        source.cells,
+        16,
+        max_iterations=1,
+        vertex_density=vertex_density,
+    )
+
+    assert 3 <= output_points.shape[0] <= 16
+    assert output_cells.shape[0] > 0
+
+
+@pytest.mark.parametrize(
+    ("value", "match"),
+    [
+        (torch.nan, "finite"),
+        (torch.inf, "finite"),
+        (0.0, "strictly positive"),
+        (-1.0, "strictly positive"),
+    ],
+    ids=["nan", "infinity", "zero", "negative"],
+)
+def test_remeshing_rejects_invalid_vertex_density_values(value, match):
+    source = sphere_icosahedral.load(subdivisions=1)
+    vertex_density = torch.ones(source.n_points)
+    vertex_density[0] = value
+
+    with pytest.raises(ValueError, match=match):
+        remeshing(
+            source.points,
+            source.cells,
+            24,
+            vertex_density=vertex_density,
+            max_iterations=1,
+            implementation="warp",
+        )
+
+
+@pytest.mark.parametrize(
     "imports",
     [
         "import physicsnemo.mesh.remeshing; import physicsnemo.nn.functional.geometry",
@@ -209,13 +292,29 @@ def test_remeshing_cpu_torch_compile():
     assert output_indices.dtype == torch.int64
 
 
-def test_remeshing_cpu_custom_op_contract():
+@pytest.mark.parametrize("density_exponent", [None, 1.0, 4.0])
+def test_remeshing_cpu_custom_op_contract(density_exponent):
     from physicsnemo.nn.functional.geometry.remeshing._warp_impl import remeshing_warp
 
     source = sphere_icosahedral.load(subdivisions=1)
+    vertex_density = (
+        None if density_exponent is None else 1.0 + source.points[:, 2].square()
+    )
     torch.library.opcheck(
         remeshing_warp,
-        args=(source.points, source.cells, 24, 1, 1.6, 1.15, 128, 256, 4),
+        args=(
+            source.points,
+            source.cells,
+            24,
+            vertex_density,
+            1.0 if density_exponent is None else density_exponent,
+            1,
+            1.6,
+            1.15,
+            128,
+            256,
+            4,
+        ),
         rtol=1.0e-4,
         atol=1.0e-4,
     )
@@ -281,6 +380,8 @@ def test_project_centroids_uses_warp_barycentric_convention():
     points = torch.tensor([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
     indices = torch.tensor([0, 1, 2], dtype=torch.int32)
     centroids = torch.tensor([[0.6, 0.2, 1.0]])
+    source_faces = torch.full((1,), -1, dtype=torch.int32)
+    barycentric_coordinates = torch.full((1, 3), torch.nan)
     source_surface = wp.Mesh(
         points=wp.from_torch(points, dtype=wp.vec3f),
         indices=wp.from_torch(indices, dtype=wp.int32),
@@ -292,12 +393,214 @@ def test_project_centroids_uses_warp_barycentric_convention():
         inputs=[
             source_surface.id,
             wp.from_torch(centroids, dtype=wp.vec3f),
+            wp.from_torch(source_faces, dtype=wp.int32),
+            wp.from_torch(barycentric_coordinates, dtype=wp.vec3f),
             float(1.0e30),
         ],
         device="cpu",
     )
 
     torch.testing.assert_close(centroids, torch.tensor([[0.6, 0.2, 0.0]]))
+    torch.testing.assert_close(source_faces, torch.tensor([0], dtype=torch.int32))
+    torch.testing.assert_close(
+        barycentric_coordinates,
+        torch.tensor([[0.5, 0.3, 0.2]]),
+    )
+    reconstructed = (
+        points[indices.to(torch.int64)] * barycentric_coordinates[0].unsqueeze(1)
+    ).sum(dim=0)
+    torch.testing.assert_close(reconstructed, centroids[0])
+
+
+def test_remeshing_vertex_density_is_scale_invariant():
+    source = plane.load(size=2.0, subdivisions=20)
+    vertex_density = torch.where(
+        source.points[:, 0] > 0.35,
+        source.points.new_tensor(64.0),
+        source.points.new_tensor(1.0),
+    )
+    kwargs = {
+        "max_iterations": 4,
+        "farthest_point_threshold": 0,
+        "implementation": "warp",
+    }
+
+    reference_points, reference_cells = remeshing(
+        source.points,
+        source.cells,
+        64,
+        vertex_density=vertex_density,
+        **kwargs,
+    )
+    scaled_points, scaled_cells = remeshing(
+        source.points,
+        source.cells,
+        64,
+        vertex_density=8.0 * vertex_density,
+        **kwargs,
+    )
+
+    torch.testing.assert_close(scaled_points, reference_points)
+    torch.testing.assert_close(scaled_cells, reference_cells)
+
+
+def test_remeshing_constant_vertex_density_matches_uniform_result():
+    source = plane.load(size=2.0, subdivisions=20)
+    kwargs = {
+        "max_iterations": 4,
+        "farthest_point_threshold": 0,
+        "implementation": "warp",
+    }
+
+    uniform_points, uniform_cells = remeshing(
+        source.points,
+        source.cells,
+        64,
+        **kwargs,
+    )
+    density_points, density_cells = remeshing(
+        source.points,
+        source.cells,
+        64,
+        vertex_density=torch.full(
+            (source.n_points,),
+            7.5,
+            dtype=source.points.dtype,
+        ),
+        **kwargs,
+    )
+
+    torch.testing.assert_close(density_points, uniform_points)
+    torch.testing.assert_close(density_cells, uniform_cells)
+
+
+def test_vertex_density_normalization_preserves_float16_dynamic_range():
+    vertex_areas = torch.ones(2)
+    vertex_density = torch.tensor([1.0e-3, 65_504.0], dtype=torch.float16)
+
+    vertex_masses, adaptive = _apply_vertex_density(
+        vertex_areas,
+        vertex_density,
+        total_area=2.0,
+    )
+
+    assert adaptive
+    torch.testing.assert_close(
+        vertex_masses[0] / vertex_masses[1],
+        torch.tensor(1.0e-3 / 65_504.0),
+        rtol=2.0e-3,
+        atol=0.0,
+    )
+
+
+def test_linear_resolution_exponent_maps_to_cvt_density():
+    vertex_areas = torch.ones(3)
+    linear_resolution = torch.tensor([1.0, 2.0, 4.0])
+
+    raw_density_masses, raw_adaptive = _apply_vertex_density(
+        vertex_areas,
+        linear_resolution,
+        total_area=3.0,
+    )
+    converted_masses, adaptive = _apply_vertex_density(
+        vertex_areas,
+        linear_resolution,
+        total_area=3.0,
+        density_exponent=4.0,
+    )
+    direct_masses, direct_adaptive = _apply_vertex_density(
+        vertex_areas,
+        linear_resolution.pow(4),
+        total_area=3.0,
+    )
+
+    assert raw_adaptive
+    assert adaptive
+    assert direct_adaptive
+    torch.testing.assert_close(converted_masses, direct_masses)
+    torch.testing.assert_close(
+        raw_density_masses[1] / raw_density_masses[0],
+        torch.tensor(2.0),
+    )
+    torch.testing.assert_close(
+        converted_masses[1] / converted_masses[0],
+        torch.tensor(16.0),
+    )
+
+
+def test_adaptive_seed_masses_follow_ideal_2d_generator_density():
+    vertex_areas = torch.ones(4)
+    integration_density = torch.tensor([1.0, 1.0, 16.0, 16.0])
+    vertex_masses, adaptive = _apply_vertex_density(
+        vertex_areas,
+        integration_density,
+        total_area=4.0,
+    )
+
+    seed_masses, radius_factor = _adaptive_seed_masses_and_radius_factor(
+        vertex_areas,
+        vertex_masses,
+    )
+
+    assert adaptive
+    torch.testing.assert_close(
+        seed_masses[2] / seed_masses[0],
+        torch.tensor(4.0),
+    )
+    assert radius_factor == pytest.approx(2.5**0.5)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_linear_resolution_normalizes_before_fourth_power(dtype):
+    linear_resolution = torch.tensor(
+        [1.0, torch.finfo(dtype).max],
+        dtype=dtype,
+    )
+
+    vertex_masses, adaptive = _apply_vertex_density(
+        torch.ones(2),
+        linear_resolution,
+        total_area=2.0,
+        density_exponent=4.0,
+    )
+
+    assert adaptive
+    assert torch.isfinite(vertex_masses).all()
+    assert (vertex_masses > 0.0).all()
+    assert vertex_masses[1] > vertex_masses[0]
+
+
+def test_remeshing_vertex_density_biases_local_resolution():
+    source = plane.load(size=2.0, subdivisions=20)
+    high_density_region = source.points[:, 0] > 0.35
+    vertex_density = torch.where(
+        high_density_region,
+        source.points.new_tensor(64.0),
+        source.points.new_tensor(1.0),
+    )
+    kwargs = {
+        "max_iterations": 4,
+        "farthest_point_threshold": 0,
+        "implementation": "warp",
+    }
+
+    uniform_points, _ = remeshing(
+        source.points,
+        source.cells,
+        64,
+        **kwargs,
+    )
+    adaptive_points, _ = remeshing(
+        source.points,
+        source.cells,
+        64,
+        vertex_density=vertex_density,
+        **kwargs,
+    )
+
+    uniform_fraction = (uniform_points[:, 0] > 0.35).float().mean()
+    adaptive_fraction = (adaptive_points[:, 0] > 0.35).float().mean()
+    assert float(adaptive_fraction) > float(uniform_fraction) + 0.15
 
 
 @pytest.mark.cuda
@@ -324,6 +627,7 @@ def test_remeshing_tensor_api_contract():
 @pytest.mark.cuda
 def test_remeshing_public_api_torch_compile():
     source = sphere_icosahedral.load(subdivisions=1, device="cuda")
+    vertex_density = 1.0 + source.points[:, 2].square()
     compiled = torch.compile(remeshing, backend="eager", fullgraph=True, dynamic=True)
 
     output_vertices, output_indices = compiled(
@@ -331,6 +635,7 @@ def test_remeshing_public_api_torch_compile():
         source.cells,
         24,
         max_iterations=1,
+        vertex_density=vertex_density,
         implementation="warp",
     )
 
@@ -352,7 +657,19 @@ def test_remeshing_custom_op_contract():
     source.points[:, 1].add_(3.7e-4 * ramp.square())
     torch.library.opcheck(
         remeshing_warp,
-        args=(source.points, source.cells, 32, 1, 1.6, 1.15, 128, 256, 4),
+        args=(
+            source.points,
+            source.cells,
+            32,
+            None,
+            1.0,
+            1,
+            1.6,
+            1.15,
+            128,
+            256,
+            4,
+        ),
         rtol=1.0e-4,
         atol=1.0e-4,
     )

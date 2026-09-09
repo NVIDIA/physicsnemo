@@ -57,6 +57,6 @@ def load(
     noise = noise_amplitude * torch.randn(
         mesh.n_points, 1, generator=generator, device=device
     )
-    mesh.points = mesh.points * noise.exp()
+    mesh = mesh.with_points(mesh.points * noise.exp())
 
     return mesh.subdivide(subdivisions, "loop")

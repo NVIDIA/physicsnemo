@@ -29,10 +29,10 @@ from physicsnemo.diffusion.noise_schedulers import (
     VENoiseScheduler,
     VPNoiseScheduler,
 )
-from physicsnemo.diffusion.samplers import sample
-from physicsnemo.diffusion.samplers.solvers import (
+from physicsnemo.diffusion.samplers import (
     EulerSolver,
     HeunSolver,
+    sample,
 )
 
 from .conftest import GLOBAL_SEED

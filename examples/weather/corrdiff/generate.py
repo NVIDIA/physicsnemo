@@ -14,7 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# DEPRECATED: this example is no longer maintained. Use the regional
+# high-resolution weather model example in examples/weather/stormcast instead.
+
 import contextlib
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
@@ -55,6 +59,17 @@ def main(cfg: DictConfig) -> None:
     """Generate random images using the techniques described in the paper
     "Elucidating the Design Space of Diffusion-Based Generative Models".
     """
+
+    # Default stacklevel (1) attributes the warning to __main__, otherwise Python's
+    # default filters silently drop it.
+    warnings.warn(
+        "The CorrDiff example is deprecated and is no longer maintained. Use the "
+        "regional high-resolution weather model example in examples/weather/stormcast "
+        "instead. It is a unified recipe for regional diffusion-based weather models, "
+        "and supports the downscaling setting implemented here as well as other "
+        "diffusion-based settings.",
+        DeprecationWarning,
+    )
 
     # Initialize distributed manager
     DistributedManager.initialize()

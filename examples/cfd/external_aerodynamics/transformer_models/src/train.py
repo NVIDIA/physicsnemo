@@ -16,6 +16,7 @@
 
 # Core python imports:
 import os
+import random
 import time
 from pathlib import Path
 from typing import Literal, Any, Callable
@@ -75,7 +76,12 @@ if TE_AVAILABLE:
 else:
     te, Format, DelayedScaling = None, None, None
 
-# This will go away when checkpointing is refined further below:
+# physicsnemo's ``.mdlus`` checkpoints store the model's instantiation arguments
+# alongside its weights so a model can be rebuilt from the file alone, and those
+# arguments arrive from hydra as OmegaConf nodes rather than plain containers.
+# ``torch.load`` runs with ``weights_only=True``, which refuses to unpickle any
+# type not on its allowlist, so resuming a run fails on the config until these are
+# registered. This will go away when checkpointing is refined further below:
 torch.serialization.add_safe_globals([omegaconf.listconfig.ListConfig])
 torch.serialization.add_safe_globals([omegaconf.base.ContainerMetadata])
 torch.serialization.add_safe_globals([Any])
@@ -150,6 +156,26 @@ class CombinedOptimizer(Optimizer):
         self.param_groups = [g for opt in self.optimizers for g in opt.param_groups]
 
 
+def seed_everything(seed: int, rank: int) -> None:
+    """Seed the RNGs this recipe draws from, offsetting each rank.
+
+    Two things depend on the torch global RNG and are therefore controlled here:
+    the model's weight initialization, and the datapipe's point/geometry
+    subsampling (``weighted_multinomial`` is called without an explicit
+    generator). Only rank 0's initialization actually survives -- DDP broadcasts
+    module state at construction -- so the *run's* weights are a function of
+    ``seed`` alone, while the ``+ rank`` offset keeps each rank drawing a
+    different point subset, as it does today with unseeded RNGs.
+
+    ``DistributedManager.initialize()`` already sets ``np.random.seed(rank)``,
+    which is identical across runs; reseeding here folds ``seed`` back in.
+    """
+    torch.manual_seed(seed + rank)
+    torch.cuda.manual_seed_all(seed + rank)
+    np.random.seed(seed + rank)
+    random.seed(seed + rank)
+
+
 def get_autocast_context(precision: str) -> nullcontext:
     """
     Returns the appropriate autocast context for mixed precision training.
@@ -174,8 +200,22 @@ def get_autocast_context(precision: str) -> nullcontext:
         return nullcontext()
 
 
+#: Precision settings the recipes understand.  Worth checking against, because
+#: ``cast_precisions`` treats anything it does not recognize as a no-op: a
+#: mistyped precision would otherwise run silently in float32.
+PRECISIONS = ("float32", "float16", "bfloat16", "float8")
+Precision = Literal["float32", "float16", "bfloat16", "float8"]
+
+
+def validate_precision(precision: str) -> Precision:
+    """Return *precision* unchanged, or raise if no recipe supports it."""
+    if precision not in PRECISIONS:
+        raise ValueError(f"precision must be one of {PRECISIONS}, got {precision!r}")
+    return precision
+
+
 @tensorwise
-def cast_precisions(tensor: torch.Tensor, precision: str) -> torch.Tensor:
+def cast_precisions(tensor: torch.Tensor, precision: Precision) -> torch.Tensor:
     """
     Casts the tensors to the specified precision.
 
@@ -403,6 +443,10 @@ def train_epoch(
     total_metrics = {}
 
     precision = getattr(cfg, "precision", "float32")
+    # Optional gradient accumulation (default 1 = step every batch). Mirrors
+    # train_field_gp.py so the deterministic baseline can match the GP run's
+    # effective batch size for an apples-to-apples comparison.
+    accumulation_steps = getattr(cfg.training, "gradient_accumulation_steps", 1)
     start_time = time.time()
 
     for i, batch in enumerate(dataloader):
@@ -425,16 +469,24 @@ def train_epoch(
             if reg_loss.requires_grad:
                 loss = loss + lambda_reg * reg_loss
 
-        optimizer.zero_grad()
-        if precision == "float16" and scaler is not None:
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            loss.backward()
-            optimizer.step()
+        if i % accumulation_steps == 0:
+            optimizer.zero_grad()
 
-        if not isinstance(scheduler, torch.optim.lr_scheduler.StepLR):
+        scaled_loss = loss / accumulation_steps
+        is_step_boundary = (i + 1) % accumulation_steps == 0 or (i + 1) == epoch_len
+        if precision == "float16" and scaler is not None:
+            scaler.scale(scaled_loss).backward()
+            if is_step_boundary:
+                scaler.step(optimizer)
+                scaler.update()
+        else:
+            scaled_loss.backward()
+            if is_step_boundary:
+                optimizer.step()
+
+        if is_step_boundary and not isinstance(
+            scheduler, torch.optim.lr_scheduler.StepLR
+        ):
             scheduler.step()
 
         end_time = time.time()
@@ -645,6 +697,15 @@ def main(cfg: DictConfig):
     # Set up logging
     logger = RankZeroLoggingWrapper(PythonLogger(name="training"), dist_manager)
 
+    # Optional RNG seed (null = unseeded, the historical behavior). Set before
+    # the model is built so the seed determines the initialization. Deep-ensemble
+    # members differ only in this value.
+    seed = getattr(cfg, "seed", None)
+    if seed is not None:
+        seed = int(seed)
+        seed_everything(seed, dist_manager.rank)
+        logger.info(f"Seeded run: seed={seed} (+rank offset)")
+
     # Set checkpoint directory - defaults to output_dir if not specified
     checkpoint_dir = getattr(cfg, "checkpoint_dir", None)
     if checkpoint_dir is None:
@@ -731,13 +792,16 @@ def main(cfg: DictConfig):
     num_replicas = dist_manager.world_size
     data_rank = dist_manager.rank
 
-    # Set up distributed samplers
+    # Set up distributed samplers. DistributedSampler's own default seed is 0, so
+    # without this the shuffle order is identical in every run; passing the run
+    # seed gives each deep-ensemble member a different epoch ordering too.
     train_sampler = torch.utils.data.distributed.DistributedSampler(
         train_dataloader,
         num_replicas=num_replicas,
         rank=data_rank,
         shuffle=True,
         drop_last=True,
+        **({"seed": seed} if seed is not None else {}),
     )
 
     val_sampler = torch.utils.data.distributed.DistributedSampler(

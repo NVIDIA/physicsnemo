@@ -1,0 +1,177 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+defaults:
+  - training: base
+  - model: geotransolver
+  - data: surface
+
+output_dir: "runs"
+checkpoint_dir: null
+run_id: "geotransolver/surface/field_gp"
+
+# RNG seed. Everything stochastic in this recipe draws from torch's global RNG:
+# the backbone's initialization, the datapipe's point sampling, the inducing-point
+# draw, the per-step GP subsample and the distance penalty's point pairs. An
+# integer makes the run repeatable; null (the default, and what produced the
+# README results) leaves the run unseeded, so torch keeps the nondeterministic
+# seed it picks at startup and every run draws differently.
+seed: null
+
+# --- Field Gaussian-process (GP) head ---
+# The GP head replaces the readout: posterior mean = per-point field
+# prediction, posterior variance = per-point uncertainty. Instantiated with
+# hydra, so this block is the single source of truth for the head's structure
+# and every script (train / inference / plot) builds it identically -- which is
+# what lets an eval run load a training checkpoint. The two arguments not listed
+# here are supplied at runtime: `input_dim` (the backbone feature width, probed
+# with one forward pass) and `n_train`, the number of training points the
+# evidence lower bound (ELBO) is normalized by.
+gp_head:
+  _target_: physicsnemo.experimental.uq.FieldVariationalGPHead
+
+  num_tasks: 4                 # pressure + 3 wall-shear-stress components
+  n_inducing: 1024             # inducing points per task (shared structure)
+
+  # Deep kernel learning (DKL) feature extractor: a pointwise multi-layer
+  # perceptron (MLP) between the (wide) backbone features and the GP kernel,
+  # trained jointly with it. Narrowing the features keeps the kernel's
+  # per-dimension lengthscales affordable and the 1024 inducing points able to
+  # cover the space. null = feed backbone features straight to the GP.
+  mlp_hidden: [128, 16]
+
+  # Lengthscale: [lower, upper] hard constraint on the kernel's per-dimension
+  # lengthscales -- one per DKL output dimension, which is what automatic
+  # relevance determination (ARD) means here: the kernel learns how far to smooth
+  # along each feature separately, and can switch a feature off by growing its
+  # lengthscale. The 2.0 cap keeps it from going near-global (which flattens the
+  # per-point variance into a single geometry-wide number).
+  lengthscale_range: [0.01, 2.0]
+  # Lengthscale prior: [concentration, rate] for Gamma. null = no prior.
+  # Both priors below only enter the loss through GPyTorch's VariationalELBO,
+  # i.e. on the homoscedastic path. noise_mlp_hidden is set further down, so
+  # this recipe trains through the hand-built heteroscedastic ELBO and the
+  # priors are inert; the lengthscale_range constraint above is what binds.
+  lengthscale_prior: [2.0, 3.0]
+  # Outputscale prior: [concentration, rate] for Gamma. null = no prior.
+  outputscale_prior: [2.0, 0.5]
+
+  # Feature normalization applied to the GP-input (DKL) features. Fixes the
+  # feature scale so the lengthscale must do the smoothing, preventing the DKL
+  # map from shrinking feature distances to defeat the lengthscale cap.
+  # One of: none | l2_radial.
+  #   l2_radial -> keep the direction of the feature vector (scaled to unit L2
+  #                norm) AND append its standardized pre-norm magnitude as one
+  #                extra ARD dimension. The magnitude is what carries the radial
+  #                out-of-distribution (OOD) cue: features for an unfamiliar
+  #                geometry sit further from the origin, and projecting onto the
+  #                unit sphere alone erases that (the OOD-to-in-distribution std
+  #                ratio falls to ~1.0x).
+  feature_norm: l2_radial
+
+  # Heteroscedastic observation noise: hidden sizes of an MLP mapping GP-input
+  # features -> per-point, per-channel observation noise. null keeps one learned
+  # noise scalar per channel, which dominates the total predictive variance and,
+  # being constant, makes the total std rank points identically to the epistemic
+  # std. Making it input-dependent is what lets the total std rank |error|.
+  noise_mlp_hidden: [64, 64]
+  # Hard clamp [lo, hi] on the per-point noise std. The lower bound is load
+  # bearing: the heteroscedastic ELBO weights each point by 1/sigma^2(x), and a
+  # 0.01 floor caps that weight at 1e4 on unit-scale normalized fields, so no
+  # single point can dominate the gradient. It sits just below the sigma band the
+  # trained noise head occupies, which bounds the weight without reshaping the
+  # noise field being learned. The clamp also applies at inference, since
+  # predict() evaluates sigma(x) through it.
+  noise_std_range: [0.01, 10.0]
+
+# Max global grad-norm for the GP head (0 = no clipping).
+head_grad_clip_norm: 10.0
+
+# --- Annealing the two halves of the ELBO ---
+# The negative ELBO is the field loss. It splits into a data-fit term (the
+# expected negative log likelihood, NLL) and a Kullback-Leibler (KL) divergence
+# pulling the variational posterior toward the prior. Ramp the KL weight (beta)
+# 0->1 over the window so the data-fit term shapes the backbone + GP mean first.
+beta_warmup_start: 0
+beta_warmup_end: 30
+# Constant multiplier on beta once the ramp completes (<1 loosens the KL pull
+# toward the prior, letting the posterior keep more per-point structure).
+gp_kl_weight: 0.5
+# Ramp the weight on the whole negative ELBO 0->1 over this window, so the
+# auxiliary mean-squared-error (MSE) anchor below leads the early epochs and the
+# GP mean is accurate before the likelihood term is free to flatten the variance.
+nll_warmup_start: 0
+nll_warmup_end: 30
+
+# Auxiliary MSE on the GP mean for early-training stability (0 disables).
+lambda_mean_mse: 1.0
+
+# --- Latent distance penalty ---
+# One-sided hinge forcing point pairs with large target differences to also be
+# far apart in GP-input (kernel) space, so the kernel can express larger
+# variance where predictions differ. 0.0 disables.
+dist_penalty_weight: 0.5
+dist_penalty_pairs: 4096       # random point pairs sampled per geometry
+dist_penalty_margin: 1.0       # multiplier on the normalized target distance
+
+# Further point subsampling for the GP step (null = use all points the
+# dataloader provides at data.resolution). Bounds the O(points) GP solve.
+gp_points_per_step: 12288
+# Points per geometry used to size the ELBO num_data normalizer.
+# Defaults to data.resolution when null.
+points_per_geometry: null
+
+# --- Performance ---
+# Use float32 — the GP internals run in float64 regardless. float16 + GradScaler
+# is not recommended with the float64 GP loss.
+precision: float32
+
+# --- Training overrides ---
+training:
+  save_interval: 1
+  num_epochs: 100
+  gradient_accumulation_steps: 8
+
+model:
+  functional_dim: 6
+  include_local_features: true
+  radii: [0.01, 0.05, 0.25, 1.0, 2.5, 5.0]
+  neighbors_in_radius: [4, 8, 16, 64, 128, 256]
+  n_hidden_local: 32
+
+data:
+  include_sdf: false
+  include_geometry: true
+  # STL points sampled to represent the geometry. Must not exceed the smallest
+  # mesh in the dataset: the datapipe samples without replacement, so a request
+  # larger than the available points is an error. The smallest DrivAerStar
+  # class_F meshes are ~265k points (13% sit below 300k), so 200k clears every
+  # geometry in both the train and val splits.
+  geometry_sampling: 200_000
+  broadcast_global_features: false
+  # DrivAerStar surface fields are stored in raw physical units (Pa), so they
+  # need their own normalization stats. The stats in `src/` are nondimensional
+  # (pressure-coefficient form) and belong to the DrivAer AWS runs -- pointing
+  # this at `src/` would silently mis-scale every field by ~700x.
+  normalization_dir: "src/normalization/drivaerstar/"
+  # Points sampled per geometry per epoch. The GP cost scales with this, and
+  # `gp_points_per_step` subsamples further for the kernel solve itself.
+  resolution: 51200
+  preload_depth: 4
+
+logging:
+  level: INFO
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'

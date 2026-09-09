@@ -26,7 +26,7 @@ from hydra import compose, initialize
 from omegaconf import DictConfig
 from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict
 from torch.distributed.tensor import DTensor
-from utils import trainer
+from utils import parallel, trainer
 
 from physicsnemo.distributed import DistributedManager
 
@@ -35,26 +35,31 @@ DistributedManager.initialize()
 
 # Retrieve and fixture configs
 def _load_config(config_name: str) -> DictConfig:
+    """Load a StormCast test configuration through Hydra."""
     with initialize(version_base=None, config_path="config", job_name="test_training"):
         return compose(config_name=config_name)
 
 
 @pytest.fixture
 def cfg_regression():
+    """Return the regression UNet test configuration."""
     return _load_config(config_name="test_regression_unet.yaml")
 
 
 @pytest.fixture
 def cfg_diffusion():
+    """Return the diffusion DiT test configuration."""
     return _load_config(config_name="test_diffusion.yaml")
 
 
 @pytest.fixture
 def cfg_diffusion_unet():
+    """Return the diffusion UNet test configuration."""
     return _load_config(config_name="test_diffusion_unet.yaml")
 
 
 def _setup_rundir(tmp_path, num_procs):
+    """Create and share a temporary run directory across all test ranks."""
     # Set up rundir in the temporary directory
     _rundir = tmp_path / "rundir"
     _rundir.mkdir()
@@ -68,6 +73,42 @@ def _setup_rundir(tmp_path, num_procs):
         rundir = output_list[0]
 
     return rundir
+
+
+def test_distribute_model_syncs_before_sharding(monkeypatch):
+    """Verify startup synchronization precedes spatial and FSDP sharding."""
+    helper = object.__new__(parallel.ParallelHelper)
+    helper.use_shard_tensor = True
+    domain_mesh = object()
+    ddp_mesh = object()
+    helper.mesh = {"domain": domain_mesh, "ddp": ddp_mesh}
+    model = torch.nn.Linear(2, 2)
+    calls = []
+
+    monkeypatch.setattr(
+        parallel,
+        "sync_module_over_mesh",
+        lambda module, mesh: calls.append(("sync", module, mesh)),
+    )
+    monkeypatch.setattr(
+        helper,
+        "_shard_spatial_params",
+        lambda module: calls.append(("spatial", module)),
+    )
+    monkeypatch.setattr(
+        parallel,
+        "fully_shard",
+        lambda module, mesh: calls.append(("fsdp", module, mesh)),
+    )
+
+    result = helper.distribute_model(model)
+
+    assert result is model
+    assert calls == [
+        ("sync", model, domain_mesh),
+        ("spatial", model),
+        ("fsdp", model, ddp_mesh),
+    ]
 
 
 @pytest.mark.parametrize("net_architecture", ["unet", "dit"])

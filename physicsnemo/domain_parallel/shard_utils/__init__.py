@@ -38,6 +38,7 @@ if ST_AVAILABLE:
             sharded_select_helper,
         )
         from .knn import knn_sharded_wrapper
+        from .linear_patches import linear_wrapper
         from .mesh_ops import sharded_signed_distance_field_wrapper
         from .natten_patches import na1d_wrapper, na2d_wrapper, na3d_wrapper
         from .normalization_patches import group_norm_wrapper

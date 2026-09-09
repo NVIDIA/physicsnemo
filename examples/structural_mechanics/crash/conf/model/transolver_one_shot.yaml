@@ -26,6 +26,8 @@ unified_pos: false
 structured_shape: null
 use_te: false
 time_input: false
+activation_checkpointing: false
+checkpointing_ratio: 1.0
 
 ### Rollout parameters ###
 num_time_steps: ${training.num_time_steps}

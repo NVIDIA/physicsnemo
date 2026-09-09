@@ -19,7 +19,7 @@ import time
 
 import hydra
 from hydra.utils import instantiate, to_absolute_path
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 
 import torch
 from torch.amp import GradScaler, autocast
@@ -31,7 +31,13 @@ from torch_geometric.loader import DataLoader as PyGDataLoader
 from physicsnemo.distributed.manager import DistributedManager
 from physicsnemo.utils import load_checkpoint, save_checkpoint
 
-from loggers import CompositeLogger, ExperimentLogger, get_gpu_info, init_python_logging
+from loggers import (
+    CompositeLogger,
+    ExperimentLogger,
+    config_summary,
+    get_gpu_info,
+    init_python_logging,
+)
 
 
 logger = logging.getLogger("lmgn")
@@ -211,7 +217,7 @@ def main(cfg: DictConfig) -> None:
     dist = DistributedManager()
 
     init_python_logging(cfg, dist.rank)
-    logger.info(f"Config summary:\n{OmegaConf.to_yaml(cfg, sort_keys=True)}")
+    logger.info(f"Config summary:\n{config_summary(cfg)}")
     logger.info(get_gpu_info())
 
     # Initialize loggers.

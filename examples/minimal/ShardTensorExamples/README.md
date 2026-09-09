@@ -21,10 +21,12 @@ passing scheme.
 4. Convolution - See how to apply a loss function and backward pass for domain
 parallel operations, and validate numerical accuracy and gradient placements.
 
-5. ViT - Learn how to implement a fully training loop with domain parallelism,
-and benchmark computational speed and memory usage.  Shows the differences in
-the training script for a single-GPU, 1D (DDP) and 2D (ShardTensor + FSDP)
-parallelism.
+5. Training Loop - Learn how to implement a full training loop with domain
+parallelism, and benchmark computational speed and memory usage across
+several architectures (ViT with ring attention, ConvNet with halo
+convolutions, neighborhood attention).  Shows the differences in the
+training script for single-GPU, 1D (DDP) and 2D (ShardTensor + DDP or
+FSDP2 `fully_shard`) parallelism.
 
 6. Ring Attention - Benchmark and scale the attention operation with ShardTensor,
 using the RingAttention mechanism.
@@ -36,4 +38,4 @@ Learn more about the tools used in these examples:
 - [PyTorch Distributed API and Guide](https://docs.pytorch.org/docs/stable/distributed.html)
 - [DTensor](https://docs.pytorch.org/docs/stable/distributed.tensor.html)
 - [PhysicsNeMo Domain Parallelism Guide](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/tutorials/domain_parallelism_entry_point.html)
-- [ShardTensor API](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.distributed.shardtensor.html)
+- [ShardTensor API](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.domain_parallel.html)

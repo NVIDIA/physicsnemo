@@ -727,11 +727,10 @@ class GLOBE(Module):
                 device=mesh.points.device,
             )
             new_cell_data.update(result_td)
-            new_meshes[bc_type] = Mesh(
-                points=mesh.points,
-                cells=mesh.cells,
+            new_meshes[bc_type] = mesh.with_data(
+                point_data={},
                 cell_data=new_cell_data,
-                _cache=mesh._cache,
+                global_data={},
             )
         return new_meshes
 
@@ -796,9 +795,13 @@ class GLOBE(Module):
         ### may carry e.g. metadata fields) without polluting the kernel
         ### feature stream. A user-supplied leaf that's missing from the
         ### declaration is caught by `validate_data_contains_ranks`
-        ### below.
+        ### below. ``flatten_rank_spec`` yields "."-joined names, which
+        ### TensorDict does not parse, so split them into nested keys.
         global_data = global_data.select(
-            *flatten_rank_spec(self.global_data_ranks).keys()
+            *(
+                tuple(name.split("."))
+                for name in flatten_rank_spec(self.global_data_ranks)
+            )
         )
 
         ### Input validation
@@ -880,9 +883,8 @@ class GLOBE(Module):
         ### their declared feature keys.)
         with record_function("globe::enrich_meshes"):
             boundary_meshes = {
-                bc_type: Mesh(
-                    points=mesh.points,
-                    cells=mesh.cells,
+                bc_type: mesh.with_data(
+                    point_data={},
                     cell_data=TensorDict(
                         {
                             "physical": mesh.cell_data,
@@ -898,7 +900,7 @@ class GLOBE(Module):
                         batch_size=torch.Size([mesh.n_cells]),
                         device=device,
                     ),
-                    _cache=mesh._cache,
+                    global_data={},
                 )
                 for bc_type, mesh in boundary_meshes.items()
             }
