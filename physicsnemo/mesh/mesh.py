@@ -204,9 +204,10 @@ class Mesh:
     points : torch.Tensor
         Vertex coordinates with shape :math:`(N_p, D_s)`. Floating-point
         (including ``float16``/``bfloat16``) and complex coordinates are kept
-        as given; any other dtype is converted to ``float32``, matching the
-        coordinate policy of :func:`~physicsnemo.mesh.io.from_pyvista` and
-        :func:`~physicsnemo.mesh.io.to_pyvista`.
+        as given. Boolean and integer dtypes up to 16 bits are converted to
+        ``float32``; wider integers use ``float64``. Integer coordinates must
+        be exactly representable in the target dtype. To explicitly allow
+        rounding, convert ``points`` to a floating dtype before construction.
     cells : torch.Tensor, optional
         Cell connectivity with shape :math:`(N_c, D_m + 1)`. Each row contains
         indices into ``points`` defining one simplex. Must be an integer dtype;
@@ -225,7 +226,8 @@ class Mesh:
     ValueError
         If ``points`` or ``cells`` is not 2D, cells have no vertex column,
         manifold dimension exceeds spatial dimension, or ``points`` and
-        ``cells`` are on different devices.
+        ``cells`` are on different devices, or integer coordinates cannot be
+        represented exactly in ``float64``.
     TypeError
         If cell indices are not an integer dtype.
 
@@ -482,12 +484,35 @@ class Mesh:
         ### Normalize geometry dtypes so every Mesh is usable by geometry ops
         # Integer coordinates are the one dtype family that fails *silently*:
         # geometry evaluates in integer arithmetic, so `cell_areas` truncates and
-        # a unit right triangle reports area 0 rather than 0.5. Promote to float32,
-        # matching the coordinate policy `from_pyvista`/`to_pyvista` apply at the
-        # I/O boundary. Reduced-precision and complex coordinates are left alone:
-        # both are legitimate in-memory representations that fail loudly instead.
+        # a unit right triangle reports area 0 rather than 0.5. Float32 exactly
+        # represents every integer up to 16 bits; wider coordinates need float64
+        # to avoid collapsing edges at large offsets. Float64 cannot represent
+        # every 64-bit integer, so reject lossy implicit conversions. Floating
+        # and complex inputs are already an explicit choice of precision.
         if not (self.points.is_floating_point() or self.points.is_complex()):
-            self.points = self.points.to(torch.float32)
+            source_dtype = self.points.dtype
+            target_dtype = (
+                torch.float64
+                if source_dtype
+                in {torch.int32, torch.uint32, torch.int64, torch.uint64}
+                else torch.float32
+            )
+            converted_points = self.points.to(target_dtype)
+            if source_dtype in {torch.int64, torch.uint64}:
+                # CUDA float-to-integer casts saturate at the upper bound: a
+                # rounded maximum integer can round-trip despite being inexact.
+                # Check the exclusive bound as well as the round trip. This
+                # value check only synchronizes for 64-bit integer input.
+                exact = (converted_points.to(source_dtype) == self.points) & (
+                    converted_points < builtins.float(torch.iinfo(source_dtype).max + 1)
+                )
+                if not bool(exact.all()):
+                    raise ValueError(
+                        "Integer mesh coordinates cannot be represented exactly in "
+                        "float64. Convert points to a floating dtype explicitly "
+                        "to allow rounding."
+                    )
+            self.points = converted_points
         if self.cells.dtype in _NON_INDEXING_INTEGER_DTYPES:
             self.cells = self.cells.to(torch.int64)
 

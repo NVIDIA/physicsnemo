@@ -78,21 +78,75 @@ class TestPointsValidation:
             Mesh(points=points, cells=cells)
 
     @pytest.mark.parametrize(
-        "dtype", [torch.int64, torch.int32, torch.uint8, torch.bool]
+        "dtype, expected_dtype",
+        [
+            (torch.int64, torch.float64),
+            (torch.uint64, torch.float64),
+            (torch.int32, torch.float64),
+            (torch.uint32, torch.float64),
+            (torch.int16, torch.float32),
+            (torch.uint16, torch.float32),
+            (torch.int8, torch.float32),
+            (torch.uint8, torch.float32),
+            (torch.bool, torch.float32),
+        ],
     )
-    def test_non_floating_points_promoted_to_float32(self, dtype):
-        """Test that non-floating, non-complex coordinates become float32.
-
-        Integer coordinates are accepted rather than rejected (PR #1781's
-        PyVista policy treats them as a legitimate input), but they are promoted
-        so geometry does not evaluate in integer arithmetic.
-        """
+    def test_integer_points_promoted_without_narrowing(self, dtype, expected_dtype):
+        """Integer coordinates use a floating dtype wide enough for their values."""
         mesh = Mesh(
             points=torch.ones((3, 2), dtype=dtype),
             cells=torch.tensor([[0, 1, 2]]),
         )
 
-        assert mesh.points.dtype == torch.float32
+        assert mesh.points.dtype == expected_dtype
+
+    @pytest.mark.parametrize("dtype", [torch.int32, torch.int64, torch.uint64])
+    def test_translated_integer_triangle_preserves_geometry(self, dtype, device):
+        """A large offset must not collapse an edge during coordinate promotion."""
+        points = torch.tensor(
+            [[2**24, 0, 0], [2**24 + 1, 0, 0], [2**24, 2, 0]],
+            dtype=dtype,
+            device=device,
+        )
+        mesh = Mesh(points=points, cells=torch.tensor([[0, 1, 2]], device=device))
+
+        torch.testing.assert_close(mesh.points, points.to(torch.float64))
+        torch.testing.assert_close(
+            mesh.cell_areas, torch.tensor([1.0], dtype=torch.float64, device=device)
+        )
+
+    @pytest.mark.parametrize(
+        "dtype, value",
+        [
+            (torch.int64, 2**53 + 1),
+            (torch.int64, -(2**53 + 1)),
+            (torch.int64, 2**63 - 1),
+            (torch.uint64, 2**53 + 1),
+            (torch.uint64, 2**64 - 1),
+        ],
+    )
+    def test_inexact_integer_coordinates_rejected(self, dtype, value, device):
+        """Construction must not round coordinates unrepresentable in float64."""
+        with pytest.raises(ValueError, match="cannot be represented exactly"):
+            Mesh(points=torch.tensor([[value, 0]], dtype=dtype, device=device))
+
+    @pytest.mark.parametrize(
+        "dtype, value",
+        [(torch.int64, -(2**63)), (torch.int64, 2**60), (torch.uint64, 2**63)],
+    )
+    def test_exact_large_integer_coordinates_accepted(self, dtype, value, device):
+        """Representable large powers of two need not be rejected by a range cap."""
+        mesh = Mesh(points=torch.tensor([[value, 0]], dtype=dtype, device=device))
+
+        assert int(mesh.points[0, 0]) == value
+
+    def test_explicit_float_conversion_allows_rounding(self):
+        """Callers can deliberately choose floating precision before construction."""
+        points = torch.tensor([[2**53 + 1, 0]], dtype=torch.int64).double()
+
+        mesh = Mesh(points=points)
+
+        assert mesh.points is points
 
     @pytest.mark.parametrize(
         "dtype", [torch.float16, torch.bfloat16, torch.float64, torch.complex64]
@@ -119,7 +173,7 @@ class TestPointsValidation:
             cells=torch.tensor([[0, 1, 2]]),
         )
 
-        torch.testing.assert_close(mesh.cell_areas, torch.tensor([0.5]))
+        torch.testing.assert_close(mesh.cell_areas, torch.tensor([0.5]).double())
 
 
 class TestCellsValidation:

@@ -612,9 +612,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to the integer `cells` tensor. A floating/complex dtype is now applied only to
   floating tensors; the integer `cells` (and any integer data) are preserved. Device
   moves are unchanged.
-- `physicsnemo.mesh`: `Mesh` now promotes integer point coordinates to `float32` at
-  construction, matching the `from_pyvista`/`to_pyvista` coordinate policy. Such a
-  mesh previously evaluated geometry in integer arithmetic, which made `cell_areas`
+- `physicsnemo.mesh`: `Mesh` now promotes integer point coordinates to floating
+  point at construction: boolean and up-to-16-bit integers use `float32`, while
+  wider integers use `float64`. Inexact 64-bit integer conversions raise instead
+  of silently moving vertices; explicitly cast coordinates first to allow rounding.
+  Such a mesh previously evaluated geometry in integer arithmetic, which made `cell_areas`
   silently wrong in a data-dependent way (a unit right triangle reported area `0`
   rather than `0.5`) and made `cell_centroids`, `cell_normals`, and `validate()`
   raise. Floating-point, reduced-precision, and complex coordinates are unchanged.
