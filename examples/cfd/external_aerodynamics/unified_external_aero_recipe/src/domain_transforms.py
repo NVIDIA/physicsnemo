@@ -21,10 +21,9 @@ Small mesh transforms used by the surface dataset pipelines.
   into ``global_data`` as a new leaf.  ``NonDimensionalizeByMetadata``
   scales fields and geometry but never ``global_data``, so this is the
   only nondimensional form of the freestream a model can read.
-- :class:`DropDegenerateCells` removes cells whose area is zero or
-  non-finite.  Such cells get an all-zero normal from
-  ``ComputeSurfaceNormals`` and can appear after centering or rotation
-  rounds a sliver cell's area to exactly zero in float32.
+- :class:`DropDegenerateCells` checks the current coordinates for collapsed
+  or non-finite cells. For 3D surface triangles, a direct cross product
+  retains thin valid faces even when the float32 Gram area cancels to zero.
 
 Recipe-local module registered into the global datapipe component
 registry so components can be referenced via ``${dp:...}`` in Hydra
@@ -43,6 +42,7 @@ from tensordict import TensorDict
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
 from physicsnemo.mesh import DomainMesh, Mesh
+from physicsnemo.mesh.geometry import compute_cell_areas
 
 
 @register()
@@ -112,24 +112,42 @@ class ComputeFreestreamDirection(MeshTransform):
 
 @register()
 class DropDegenerateCells(MeshTransform):
-    r"""Drop cells whose area is non-finite or non-positive.
+    r"""Drop cells with non-finite or degenerate current geometry.
 
-    Sliver cells with areas near float32 resolution can have their
-    recomputed area round to exactly zero after centering or rotation.
-    Place this last in the transform chain so it sees the same points the
-    model will.  Meshes without such cells pass through unchanged.
+    For 3D surface triangles, use a direct cross product in float64 to
+    avoid cancellation in the Gram area formula. Other simplex dimensions
+    use their geometric measure recomputed in float64. Cached areas are
+    ignored: this check concerns the coordinates after centering, rotation,
+    and scaling, which can collapse a face through rounding.
+
+    Place this last in the transform chain so it sees the same coordinates
+    the model will. Meshes without rejected cells pass through unchanged.
+    Only cells and their associated data are sliced; vertices are retained.
     """
 
     def __call__(self, mesh: Mesh) -> Mesh:
         if mesh.n_cells == 0:
             return mesh
-        areas = mesh.cell_areas
-        keep = torch.isfinite(areas) & (areas > 0)
+        cell_points = mesh.points[mesh.cells].to(torch.float64)
+        edges = cell_points[:, 1:] - cell_points[:, :1]
+        finite_points = torch.isfinite(cell_points).all(dim=(-2, -1))
+        if mesh.n_manifold_dims == 2 and mesh.n_spatial_dims == 3:
+            area_vectors = torch.linalg.cross(edges[:, 0], edges[:, 1])
+            # A nonzero component suffices: squaring a tiny area vector to
+            # compute its norm could underflow and discard a valid face.
+            keep = (
+                finite_points
+                & torch.isfinite(area_vectors).all(dim=-1)
+                & (area_vectors != 0).any(dim=-1)
+            )
+        else:
+            areas = compute_cell_areas(edges)
+            keep = finite_points & torch.isfinite(areas) & (areas > 0)
         n_bad = int((~keep).sum())
         if n_bad == 0:
             return mesh
         warn(
             f"DropDegenerateCells: dropping {n_bad} cell(s) with "
-            "non-finite or non-positive area"
+            "non-finite or degenerate geometry"
         )
         return mesh.slice_cells(keep)

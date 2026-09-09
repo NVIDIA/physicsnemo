@@ -74,8 +74,8 @@ pipeline:
       field_name: normals
     - _target_: ${dp:SubsampleMesh}
       n_cells: ${sampling_resolution}
-    # Drop cells whose area rounds to zero in float32 after centering /
-    # rotation; placed last so it sees the same points the model will.
+    # Check the final coordinates for collapsed/non-finite faces. Direct
+    # cross products preserve thin valid faces despite Gram-area cancellation.
     - _target_: ${dp:DropDegenerateCells}
     # Terminal: convert the surface Mesh into a DomainMesh per the recipe
     # contract. cell_data_targets are auto-injected from the `targets:` block.

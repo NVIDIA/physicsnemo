@@ -75,9 +75,8 @@ pipeline:
       field_name: normals
     - _target_: ${dp:SubsampleMesh}
       n_cells: ${sampling_resolution}
-    # DrivAerML surfaces contain sliver cells (areas ~1e-11 m^2) whose area
-    # can round to exactly zero in float32 after centering / rotation; drop
-    # them last so the check sees the same points the model will.
+    # Check the final coordinates for collapsed/non-finite faces. Direct
+    # cross products preserve thin valid faces despite Gram-area cancellation.
     - _target_: ${dp:DropDegenerateCells}
     # Terminal transform: convert the surface Mesh into a DomainMesh per the
     # recipe's prediction-vs-input contract. `interior` becomes a Mesh[0, 3]
