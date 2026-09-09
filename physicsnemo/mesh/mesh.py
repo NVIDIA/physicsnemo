@@ -1392,10 +1392,11 @@ class Mesh:
         if indices is None or indices is ...:
             return self
 
-        ### Normalize indices to a 1D tensor of point indices to keep. Nothing
-        ### here is sized by n_points: a boolean mask becomes its nonzero
-        ### positions and a slice expands to its own range, so slicing a huge
-        ### (possibly memory-mapped) mesh costs what is kept, not what exists.
+        ### Normalize indices to a 1D tensor of point indices to keep. For
+        ### integer indices and slices nothing here is sized by n_points (a
+        ### slice expands to its own range), so slicing a huge, possibly
+        ### memory-mapped mesh costs what is kept, not what exists. A boolean
+        ### mask is necessarily n_points long and is scanned once by nonzero().
         device = self.points.device
         n_points = self.n_points
         if isinstance(indices, int):
@@ -1438,21 +1439,30 @@ class Mesh:
         ### algorithms with the same result, chosen by mesh shape:
         ###  * a full-mesh old->new lookup table (two n_points-long tensors,
         ###    then one gather over the cell connectivity) when the mesh is not
-        ###    much larger than its connectivity -- the usual full-mesh slice;
+        ###    much larger than its connectivity -- the usual full-mesh slice --
+        ###    or when most points are kept, since the search's sort of the
+        ###    kept ids would then cost more than filling the table;
         ###  * a sort of the kept ids plus a binary search per cell vertex when
-        ###    the connectivity is small next to n_points -- e.g. a reader that
-        ###    keeps a block of 10k cells out of a mesh with 10^8 vertices,
-        ###    where the table's allocation and fill dominated everything.
+        ###    the connectivity and the kept set are both small next to
+        ###    n_points -- e.g. a reader that keeps a block of 10k cells out of
+        ###    a mesh with 10^8 vertices, where the table's allocation and fill
+        ###    dominated everything.
         ### Measured crossover on synthetic meshes: the search wins from about
-        ### n_points ~ 300 x cells.numel(); the table is faster below ~ 30 x.
+        ### n_points ~ 300 x cells.numel(); the table is faster below ~ 30 x,
+        ### and from n_kept ~ n_points / 30 upwards regardless of connectivity.
+        ### Remapped connectivity is always int64, as before this choice existed.
         n_kept = kept_indices.numel()
         cells = self.cells
-        if n_kept == 0:
+        if n_kept == 0 or cells.numel() == 0:
+            # Nothing to remap: no points kept, or a point cloud without cells.
             valid_cells_mask = torch.zeros(
                 cells.shape[0], dtype=torch.bool, device=device
             )
-            new_cells = cells[valid_cells_mask]
-        elif n_points <= _SEARCH_REMAP_RATIO * cells.numel():
+            new_cells = cells.new_empty((0, cells.shape[1]), dtype=torch.long)
+        elif (
+            n_points <= _SEARCH_REMAP_RATIO * cells.numel()
+            or n_kept * _SEARCH_REMAP_RATIO >= n_points
+        ):
             old_to_new = torch.full((n_points,), -1, dtype=torch.long, device=device)
             old_to_new[kept_indices] = torch.arange(
                 n_kept, dtype=torch.long, device=device

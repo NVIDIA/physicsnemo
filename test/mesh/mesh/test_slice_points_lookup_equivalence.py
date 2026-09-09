@@ -186,6 +186,44 @@ def test_rejects_negative_slice_steps_like_native_indexing(indices):
         mesh.slice_points(indices)
 
 
+@pytest.mark.parametrize(
+    "indices",
+    [
+        [0, 1, 2],  # lookup table or search, by the forced ratio
+        slice(100, 200),  # nothing kept: the empty branch
+    ],
+)
+def test_int32_connectivity_remaps_to_int64_on_every_branch(indices):
+    """Remapped connectivity is int64 whatever the input dtype, in all three
+    branches, as the lookup table always produced."""
+    mesh = _random_mesh()
+    mesh = Mesh(
+        points=mesh.points,
+        cells=mesh.cells.to(torch.int32),
+        point_data=mesh.point_data,
+        cell_data=mesh.cell_data,
+    )
+    assert mesh.cells.dtype == torch.int32
+    got = mesh.slice_points(indices)
+    want = _reference_slice_points(mesh, indices)
+    assert got.cells.dtype == torch.int64
+    assert want.cells.dtype == torch.int64
+    _assert_same_mesh(got, want)
+
+
+def test_point_cloud_skips_the_remap():
+    """A mesh without cells keeps its empty connectivity; only points are sliced."""
+    torch.manual_seed(0)
+    cloud = Mesh(points=torch.randn(50, 3), point_data={"f": torch.randn(50)})
+    kept = torch.tensor([7, 3, 3, 40])
+    got = cloud.slice_points(kept)
+    assert got.n_points == 4
+    assert got.n_cells == 0
+    assert got.cells.shape == (0, 1)
+    assert got.cells.dtype == torch.int64
+    _assert_same_mesh(got, _reference_slice_points(cloud, kept))
+
+
 def test_matches_lookup_table_on_random_selections():
     """Random unsorted subsets of a larger mesh."""
     mesh = _random_mesh(n_points=200, n_cells=400)
