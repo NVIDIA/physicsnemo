@@ -36,11 +36,11 @@ training:
   loss_type: "huber"
   batch_size: 1
   scheduler_update_mode: "epoch"
-  # Every step already passes a rank-synchronized failure barrier before
-  # backward (any rank's data/forward exception fails all ranks loudly
-  # instead of hanging the collective). Set a positive value here to also
-  # treat a non-finite loss, or a finite loss above the value, as a step
-  # failure (adds one host sync per step for the loss read).
+  # Each step synchronizes loading/transfer errors before DDP forward and
+  # forward/loss errors before backward. Failures inside model collectives
+  # or backward still rely on the process-group timeout. Set a positive
+  # value to also reject non-finite losses or losses above this value
+  # (adds one host sync per step for the loss read).
   divergence_loss_threshold: null
   optimizer:
     weight_decay: 1.0e-4

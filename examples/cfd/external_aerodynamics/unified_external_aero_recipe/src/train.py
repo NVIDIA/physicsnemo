@@ -320,21 +320,20 @@ def _step_failure_barrier(
     epoch: int,
     step: int,
     dist_manager: DistributedManager,
+    phase: str = "step",
 ) -> None:
-    """Fail every rank together when any rank's step failed.
+    """Fail every rank together at a shared boundary between collectives.
 
-    A rank that raises anywhere between two collectives (data loading, a
-    transform, forward, a validation check in the model) would otherwise
-    exit alone while its peers block in the next allreduce until the
-    process-group timeout fires (10 minutes by default for NCCL), with no
-    hint of which rank failed or why.  Every step therefore all-reduces a
-    failure flag at one fixed point before backward: the failing rank
-    re-raises its real exception, and healthy peers raise a "peer rank
-    failed" error instead of hanging.  Cost is one tiny collective plus a
-    host read per step, alongside the logging reduce the loop already
-    pays.  Residual exposure: a rank whose CUDA context is already dead
-    may fail inside this barrier itself; the process-group timeout is the
-    backstop for that case.
+    Every rank must reach this rendezvous in the same collective order. The
+    epoch loop calls it after loading/transfer, before DDP forward can run
+    buffer broadcasts or rebuild buckets, and again after forward/loss,
+    before backward. A failing rank preserves its original exception and
+    peers raise a coordinated failure. Each rendezvous costs one tiny
+    all-reduce and a host read.
+
+    Errors inside model collectives, backward, or an unusable CUDA context
+    can prevent ranks from reaching the same rendezvous. The process-group
+    timeout remains the backstop for those failures.
     """
     if dist_manager.world_size > 1:
         flag = torch.tensor(
@@ -347,12 +346,14 @@ def _step_failure_barrier(
             return
         if step_error is None:
             raise RuntimeError(
-                f"a peer rank failed during {mode} epoch {epoch}, step {step}; "
+                f"a peer rank failed during {mode} epoch {epoch}, step {step} "
+                f"({phase}); "
                 "failing together instead of hanging in the next collective"
             )
     if step_error is not None:
         raise RuntimeError(
-            f"{mode} step failed at epoch {epoch}, step {step} on this rank; "
+            f"{mode} step failed at epoch {epoch}, step {step} on this rank "
+            f"({phase}); "
             "all ranks are stopping together"
         ) from step_error
 
@@ -384,8 +385,8 @@ def _finish_epoch(
         return False
 
     completed_epochs = epoch + 1
-    ### The one fact resume needs: whether fp16 GradScaler state was
-    ### persisted.  The metadata block's presence also marks the checkpoint
+    ### Record whether fp16 GradScaler state was persisted. RNG and
+    ### stochastic data state are not saved here. The block also marks the checkpoint
     ### as post-dating the scheduler-ordering fix (see
     ### ``_reconcile_loaded_checkpoint``).
     checkpoint_metadata = {
@@ -413,32 +414,40 @@ def _reconcile_loaded_checkpoint(
     scaler: GradScaler | None,
     logger: Any,
 ) -> dict[str, Any]:
-    """Migrate legacy recipe checkpoint state and report resume fidelity.
+    """Migrate legacy state and report scheduler/scaler restoration.
 
     Checkpoints written before the recipe metadata block existed stored an
     epoch-mode scheduler before its end-of-epoch ``step()``.  Their epoch
     value already meant "completed epochs", so advancing the restored
     scheduler once recovers the state that continuous training would have
     used next.  Those checkpoints did not save the fp16 ``GradScaler`` at
-    all; that state is not reconstructable and is reported as a non-exact
-    resume instead of being silently reset.
+    all; that state is not reconstructable and is reported as missing.
+    This only describes scheduler/scaler state. Checkpoints do not restore
+    RNG or stochastic data state, so exact trajectory continuation remains
+    unverified even when both scheduler and scaler are restored.
     """
     report: dict[str, Any] = {
         "loaded_epoch": loaded_epoch,
         "legacy_checkpoint": False,
         "legacy_scheduler_step_applied": False,
-        "resume_exact": True,
+        "scheduler_scaler_state_restored": False,
+        "trajectory_exactness": "not_applicable",
     }
     if loaded_epoch == 0:
         report["checkpoint_found"] = False
         return report
 
     report["checkpoint_found"] = True
+    report["scheduler_scaler_state_restored"] = True
+    report["trajectory_exactness"] = "unverified"
+    report["trajectory_exactness_reason"] = (
+        "RNG and stochastic data state are not saved or restored"
+    )
     recipe_metadata = metadata.get(_CHECKPOINT_METADATA_KEY)
     if recipe_metadata is not None:
         if scaler is not None and not recipe_metadata.get("scaler_state_saved", False):
-            report["resume_exact"] = False
-            report["non_exact_reason"] = "checkpoint declared no fp16 scaler state"
+            report["scheduler_scaler_state_restored"] = False
+            report["missing_state_reason"] = "checkpoint declared no fp16 scaler state"
             logger.warning(
                 "Checkpoint declares that fp16 GradScaler state was not saved; "
                 "resume is not numerically equivalent to a continuous run."
@@ -455,8 +464,10 @@ def _reconcile_loaded_checkpoint(
             "saved before their end-of-epoch scheduler step."
         )
     if scaler is not None:
-        report["resume_exact"] = False
-        report["non_exact_reason"] = "legacy checkpoint has no recoverable scaler state"
+        report["scheduler_scaler_state_restored"] = False
+        report["missing_state_reason"] = (
+            "legacy checkpoint has no recoverable scaler state"
+        )
         logger.warning(
             "Unversioned legacy fp16 checkpoints did not persist GradScaler "
             "state. The model/optimizer/scheduler resume was loaded, but the "
@@ -540,18 +551,33 @@ def _run_epoch(
     epoch_t0 = time.perf_counter()
     with grad_ctx:
         step_t0 = time.perf_counter()
-        ### Manual iteration so the loader's own __next__ (which re-raises
-        ### per-sample transform/reader failures) sits inside the step's
-        ### failure barrier along with the forward pass. Per-rank step
-        ### counts are equal by sampler construction, so every rank runs
-        ### the same number of barrier collectives.
-        iterator = iter(dataloader)
+        ### Samplers provide equal per-rank step counts. Include iterator
+        ### initialization in the loading phase so worker startup failures
+        ### also rendezvous before any healthy rank enters DDP forward.
+        iterator = None
         for i in range(num_steps):
             step_error: BaseException | None = None
             try:
+                if iterator is None:
+                    iterator = iter(dataloader)
                 batch = next(iterator)
                 batch = recursive_to_device(batch, dist_manager.device)
+            except Exception as err:  # noqa: BLE001 -- barrier re-raises
+                step_error = err
+                logger.error(
+                    f"{mode} data loading at step {i} (epoch {epoch}) failed: {err!r}"
+                )
+            _step_failure_barrier(
+                step_error,
+                mode=mode,
+                epoch=epoch,
+                step=i,
+                dist_manager=dist_manager,
+                phase="data loading",
+            )
 
+            step_error = None
+            try:
                 loss, losses, metrics = forward_pass(
                     batch,
                     model,
@@ -576,7 +602,12 @@ def _run_epoch(
                     f"{mode} step {i} (epoch {epoch}) failed on this rank: {err!r}"
                 )
             _step_failure_barrier(
-                step_error, mode=mode, epoch=epoch, step=i, dist_manager=dist_manager
+                step_error,
+                mode=mode,
+                epoch=epoch,
+                step=i,
+                dist_manager=dist_manager,
+                phase="forward/loss",
             )
 
             if is_train:
