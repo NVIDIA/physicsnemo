@@ -170,6 +170,61 @@ def test_weighted_sampling_with_replacement_matches_torch_multinomial():
     assert 0 not in indices
 
 
+@pytest.mark.parametrize("device", ["cpu:0", "cpu:1"])
+def test_accepts_equivalent_cpu_device_aliases(device):
+    indices = weighted_multinomial(
+        4,
+        2,
+        device=device,
+        generator=torch.Generator().manual_seed(0),
+    )
+
+    assert indices.device == torch.device("cpu")
+    assert torch.unique(indices).numel() == 2
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_accepts_indexless_cuda_generator_on_current_device():
+    device = torch.device("cuda", torch.cuda.current_device())
+
+    indices = weighted_multinomial(
+        4,
+        2,
+        device=device,
+        generator=torch.Generator(device="cuda").manual_seed(0),
+    )
+
+    assert indices.device == device
+    assert torch.unique(indices).numel() == 2
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_accepts_indexless_cuda_device_for_indexed_weights():
+    device = torch.device("cuda", torch.cuda.current_device())
+    weights = torch.ones(4, device=device)
+
+    indices = weighted_multinomial(
+        weights,
+        2,
+        device="cuda",
+        generator=torch.Generator(device=device).manual_seed(0),
+    )
+
+    assert indices.device == device
+    assert torch.unique(indices).numel() == 2
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_rejects_generator_on_different_device():
+    with pytest.raises(ValueError, match="generator.device"):
+        weighted_multinomial(
+            4,
+            2,
+            device="cuda",
+            generator=torch.Generator(),
+        )
+
+
 @pytest.mark.parametrize("population_size", [10_000, 100_000_000])
 def test_poisson_gap_sampling_is_ordered_and_unique(population_size):
     num_samples = 1_000

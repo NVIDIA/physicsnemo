@@ -15,11 +15,14 @@
 # limitations under the License.
 
 import random
+import re
+import sys
 
 import pytest
 import torch
 
 from physicsnemo.core.module import Module
+from physicsnemo.core.warnings import LegacyFeatureWarning
 from physicsnemo.models.flare import FLARE
 from test.common import (
     check_ort_version,
@@ -70,10 +73,18 @@ def _make_checkpointing_model_pair(
 
 def test_flare_legacy_checkpoint_class_path():
     """Test resolving the model class path stored by experimental checkpoints."""
-    from physicsnemo.experimental.models.flare import FLARE as LegacyPackageFLARE
-    from physicsnemo.experimental.models.flare.flare import (
-        FLARE as LegacyModuleFLARE,
-    )
+    # Drop the cached legacy modules so the shim warning fires again.
+    for module_name in list(sys.modules):
+        if module_name.startswith("physicsnemo.experimental.models.flare"):
+            del sys.modules[module_name]
+
+    with pytest.warns(
+        LegacyFeatureWarning, match=re.escape("physicsnemo.models.flare")
+    ):
+        from physicsnemo.experimental.models.flare import FLARE as LegacyPackageFLARE
+        from physicsnemo.experimental.models.flare.flare import (
+            FLARE as LegacyModuleFLARE,
+        )
 
     assert LegacyPackageFLARE is FLARE
     assert LegacyModuleFLARE is FLARE

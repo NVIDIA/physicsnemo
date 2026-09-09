@@ -14,8 +14,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Legacy checkpoint shim for the FLARE model."""
+r"""Legacy import shims for the FLARE model.
+
+The model now lives in :mod:`physicsnemo.models.flare`. Import it from there
+instead:
+
+.. code-block:: python
+
+    from physicsnemo.models.flare import FLARE
+
+Importing from this legacy namespace emits a
+:class:`~physicsnemo.core.warnings.LegacyFeatureWarning`; PhysicsNeMo will
+remove these shims in a future release.
+"""
+
+import warnings
+
+from physicsnemo.core.warnings import LegacyFeatureWarning
 
 from .flare import FLARE
+
+warnings.warn(
+    "Importing from 'physicsnemo.experimental.models.flare' is deprecated. "
+    "Use 'from physicsnemo.models.flare import FLARE' instead. "
+    "This backward-compatibility shim will be removed in a future release.",
+    LegacyFeatureWarning,
+    stacklevel=2,
+)
 
 __all__ = ["FLARE"]
