@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Deprecated
 
+- Unified external aerodynamics recipe: `training.loss_type: rmse` is
+  deprecated in favour of `relative_mse`, which names what it always
+  computed (target-normalized relative MSE, no square root) and delegates
+  to `physicsnemo.metrics.general.relative_error`. `rmse` still works and
+  warns.
+
 ### Removed
 
 ### Fixed
@@ -36,6 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `nr_multigrids >= 3` that could return huge or NaN pressure fields, and
   corrects the coarse-node coordinates used by bilinear upsampling for
   reduction factors greater than 2.
+- `Module.save` now writes `.mdlus` checkpoints atomically (transfer to a
+  temporary sibling name, then rename into place), so a process killed
+  mid-write no longer leaves an unloadable truncated checkpoint. Also fixes
+  `legacy_format=True`, which failed with `FileNotFoundError` on current
+  fsspec versions.
 
 ### Security
 
