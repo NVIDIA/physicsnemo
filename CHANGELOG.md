@@ -23,9 +23,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   collectives; ring attention works under `torch.compile` as an eager
   graph-break region. In-place `detach_` on a `ShardTensor` is supported.
 - `radius_search` on sharded inputs works under `torch.compile`.
+- Domain-parallel (rank-local) reading in the datapipes: `ZarrReader`,
+  `TensorStoreZarrReader`, `MeshReader` and `DomainMeshReader` accept a
+  `domain_parallel` dict and a 1-D `device_mesh`; each rank reads only its
+  rows and the dataset assembles `Shard(0)` ShardTensors on the device.
+  Custom readers opt in by implementing `Reader._load_sample_domain_parallel`
+  with the exported `DomainParallelConfig` / `resolve_leaf_placements`.
 
 ### Changed
 
+- `CenterMesh` materializes the center of mass on sharded meshes so the offset
+  stays a plain tensor.
 - `index_select` and integer-tensor indexing on a `ShardTensor` exchange only
   the requested rows instead of all-gathering the source; no host sync, and
   `torch.compile` safe.

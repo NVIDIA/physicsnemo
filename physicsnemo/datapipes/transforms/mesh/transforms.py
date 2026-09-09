@@ -212,8 +212,16 @@ class CenterMesh(MeshTransform):
             areas = mesh.cell_areas  # (n_cells,)
             centroids = mesh.cell_centroids  # (n_cells, n_spatial_dims)
             total_area = areas.sum()
-            return (centroids * areas.unsqueeze(-1)).sum(dim=0) / total_area
-        return mesh.points.mean(dim=0)
+            com = (centroids * areas.unsqueeze(-1)).sum(dim=0) / total_area
+        else:
+            com = mesh.points.mean(dim=0)
+        # On a sharded mesh the reduction yields a ShardTensor. Materialize
+        # it: the offset broadcasts against plain and sharded tensors alike,
+        # whereas a ShardTensor offset would promote every plain sub-mesh it
+        # touches (e.g. a replicated SDF reference surface) into ShardTensors.
+        if hasattr(com, "full_tensor"):
+            com = com.full_tensor()
+        return com
 
     def __call__(self, mesh: Mesh) -> Mesh:
         return mesh.translate(-self._compute_com(mesh))
