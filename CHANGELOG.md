@@ -14,9 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in `physicsnemo.datapipes` through it, so a `"."` in a YAML field name
   (`"solution.pressure"`) addresses a leaf inside a nested `TensorDict`.
   Nested `Mesh` data no longer needs to be flattened before use.
-- `DistributedManager` reads an optional `PHYSICSNEMO_DIST_TIMEOUT_S`
-  environment variable (seconds) and passes it as the process-group timeout
-  to `torch.distributed.init_process_group`. Unset keeps the backend default.
+- `DistributedManager.initialize(timeout=...)` accepts numeric seconds or a
+  `timedelta` for the default process-group timeout. Explicit values override
+  `PHYSICSNEMO_DIST_TIMEOUT_S`; unset or empty configuration keeps PyTorch's
+  backend default. Invalid timeouts are rejected before initialization state
+  changes, allowing corrected configuration to be retried.
 
 ### Changed
 
