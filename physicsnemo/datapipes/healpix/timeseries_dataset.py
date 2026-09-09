@@ -26,7 +26,6 @@ import numpy as np
 import pandas as pd
 import torch
 from omegaconf import DictConfig, OmegaConf
-from torch.utils.data import Dataset
 
 from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.datapipe import Datapipe
@@ -50,9 +49,9 @@ class MetaData(DatapipeMetaData):
     ddp_sharding: bool = False
 
 
-class TimeSeriesDataset(Dataset, Datapipe):
+class TimeSeriesDataset(Datapipe):
     """
-    Dataset for sampling from continuous time-series data, compatible with pytorch data loading.
+    Datapipe for sampling from continuous time-series data, compatible with pytorch data loading.
     """
 
     def __init__(
@@ -244,13 +243,26 @@ class TimeSeriesDataset(Dataset, Datapipe):
         scaling_da = scaling_df.to_xarray().astype("float32")
 
         # REMARK: we remove the xarray overhead from these
+        # base (non-coupled) datasets have no 'couplings' attribute, and coupled
+        # datasets may be configured with an empty couplings list; treat both as
+        # zero coupled variables rather than indexing into an empty/missing list.
+        couplings = getattr(self, "couplings", [])
+        num_coupled_vars = len(couplings[0].variables) if couplings else 0
         try:
-            # we use channel_out instead of channel_in because
-            # the list of input channels may contain data fetched outside
-            # the datasets such as coupled fields
-            self.input_scaling = scaling_da.sel(
-                index=self.ds.channel_out.values
-            ).rename({"index": "channel_in"})
+            # for models with extra (diagnostic) outputs the number of output
+            # channels no longer matches the number of prognostic input channels
+            # (input channels minus any coupled fields). In that case scale the
+            # inputs by 'channel_in'; otherwise 'channel_out' is still needed
+            # because the input channel list may reference data fetched outside
+            # the dataset such as coupled fields.
+            if len(self.ds.channel_out) != (len(self.ds.channel_in) - num_coupled_vars):
+                self.input_scaling = scaling_da.sel(
+                    index=self.ds.channel_in.values
+                ).rename({"index": "channel_in"})
+            else:
+                self.input_scaling = scaling_da.sel(
+                    index=self.ds.channel_out.values
+                ).rename({"index": "channel_in"})
             self.input_scaling = {
                 "mean": np.expand_dims(
                     self.input_scaling["mean"].to_numpy(), (0, 2, 3, 4)

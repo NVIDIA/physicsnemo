@@ -22,7 +22,7 @@ This module provides:
 * Drag-target extraction from dataloader batches.
 * An MLP drag-prediction head (``DragMLP``) used as a GP-free baseline.
 * Embedding-reduction factory (``create_embedding_reduction``).
-* GP warmup helpers, inducing-point re-initialisation, and gradient syncing.
+* GP warmup helpers, inducing-point re-initialization, and gradient syncing.
 * Spectral-norm utilities for SNGP-style distance preservation.
 * Checkpoint loading helpers.
 
@@ -123,7 +123,7 @@ def compute_drag_target_from_batch(
 ) -> torch.Tensor:
     """Extract a GP-scaled drag target from a dataloader batch.
 
-    Unnormalises predicted surface fields, integrates pressure and shear to
+    Unnormalizes predicted surface fields, integrates pressure and shear to
     obtain the drag coefficient Cd, then returns ``Cd / drag_scale`` as a
     ``(1,)`` tensor suitable for GP training.
     """
@@ -139,8 +139,16 @@ def compute_drag_target_from_batch(
     p = fields_phys[:, 0]
     wss = fields_phys[:, 1:4]
 
-    normals = batch["surface_normals"].squeeze(0).to(device, dtype=fields_phys.dtype)
-    area = batch["surface_areas"].squeeze(0).to(device, dtype=fields_phys.dtype)
+    # With point subsampling (data.resolution < full mesh) the datapipe emits the
+    # subsampled, field-aligned normals/areas under the *_sub keys and omits the
+    # full arrays. Fall back to those so the integral matches the subsampled
+    # `fields` (this is exactly the field-GP drag path).
+    normals_key = (
+        "surface_normals" if "surface_normals" in batch else "surface_normals_sub"
+    )
+    areas_key = "surface_areas" if "surface_areas" in batch else "surface_areas_sub"
+    normals = batch[normals_key].squeeze(0).to(device, dtype=fields_phys.dtype)
+    area = batch[areas_key].squeeze(0).to(device, dtype=fields_phys.dtype)
     p, wss = p.to(device), wss.to(device)
 
     coeff = 2.0 / (FRONTAL_AREA * REFERENCE_DENSITY * REFERENCE_VELOCITY**2)
@@ -304,7 +312,33 @@ def create_embedding_reduction(
 
 
 def gp_ramp_weight(epoch: int, warmup_start: int, warmup_end: int) -> float:
-    """Linear ramp: 0 before *warmup_start*, 0→1 over [start, end), 1 after."""
+    """Linear ramp: 0 before *warmup_start*, 0→1 over [start, end), 1 after.
+
+    Used for KL annealing, and for the ramp on the whole negative ELBO: early
+    on the objective is dominated by its data-fit term, which behaves like a
+    regression loss and lets the backbone and GP mean learn a sensible field
+    before the KL pulls the variational posterior toward the prior.
+
+    An empty or inverted window (``warmup_end <= warmup_start``) means the ramp
+    is disabled and returns 1.0 throughout, so a recipe can switch it off by
+    setting both ends equal.
+
+    Parameters
+    ----------
+    epoch : int
+        Current epoch.
+    warmup_start : int
+        First epoch of the ramp.
+    warmup_end : int
+        Epoch at which the weight reaches 1.0.
+
+    Returns
+    -------
+    float
+        Weight in ``[0, 1]``.
+    """
+    if warmup_end <= warmup_start:
+        return 1.0
     if epoch < warmup_start:
         return 0.0
     if epoch >= warmup_end:
@@ -342,7 +376,7 @@ def reinitialize_inducing_points(
     seeds them from a forward pass over the current data so the GP
     posterior covers the current embedding distribution. The variational
     mean is zeroed and the variational covariance is reset to a small
-    identity, restarting GP-side optimisation cleanly while leaving the
+    identity, restarting GP-side optimization cleanly while leaving the
     encoder unchanged.
 
     Parameters
@@ -396,7 +430,7 @@ def reinitialize_inducing_points(
             return_embedding_states=True,
         )
         reduced = embedding_reduction(emb_states.flatten(1, 2))
-        init_embeddings.append(reduced.cpu())
+        init_embeddings.append(reduced)
 
     dataloader.dataset.set_indices(train_indices)
 
@@ -409,7 +443,7 @@ def reinitialize_inducing_points(
     vd.variational_mean.data.zero_()
     vd.chol_variational_covar.data.copy_(torch.eye(n_inducing, device=device) * 0.01)
     logger.info(
-        f"Re-initialised {n_inducing} inducing points from current embeddings "
+        f"Re-initialized {n_inducing} inducing points from current embeddings "
         f"(norm range [{init_embeddings_t.norm(dim=1).min():.4f}, "
         f"{init_embeddings_t.norm(dim=1).max():.4f}])"
     )

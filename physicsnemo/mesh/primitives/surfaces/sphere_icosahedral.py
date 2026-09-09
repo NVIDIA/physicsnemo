@@ -86,12 +86,6 @@ def load(
         # After linear subdivision, new vertices are at edge midpoints which
         # lie inside the sphere. Project them back to the sphere surface.
         norms = torch.norm(mesh.points, dim=-1, keepdim=True)
-        mesh = Mesh(
-            points=mesh.points / norms * radius,
-            cells=mesh.cells,
-            point_data=mesh.point_data,
-            cell_data=mesh.cell_data,
-            global_data=mesh.global_data,
-        )
+        mesh = mesh.with_points(mesh.points / norms * radius)
 
     return mesh

@@ -51,13 +51,194 @@ def test_package(tmp_path: Path):
     assert ans == string
 
 
-def test_http_package():
-    test_url = "http://raw.githubusercontent.com/NVIDIA/modulus/main/docs/img"
-    package = filesystem.Package(test_url, seperator="/")
-    path = package.get("modulus-pipes.jpg")
+def test_local_package_checksum(tmp_path: Path):
+    content = b"local package content"
+    file_path = tmp_path / "model.pt"
+    file_path.write_bytes(content)
+    package = filesystem.Package(str(tmp_path), seperator=os.sep)
 
-    known_checksum = "e075b2836d03f7971f754354807dcdca51a7875c8297cb161557946736d1f7fc"
+    path = package.get("model.pt", checksum=hashlib.sha256(content).hexdigest())
+    assert path == str(file_path)
+
+    with pytest.raises(ValueError, match="Checksum mismatch"):
+        package.get("model.pt", checksum="0" * 64)
+
+
+def test_https_package(monkeypatch, tmp_path: Path):
+    content = b"test package content"
+    known_checksum = hashlib.sha256(content).hexdigest()
+    status_checked = False
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def raise_for_status(self):
+            nonlocal status_checked
+            status_checked = True
+
+        def iter_content(self, chunk_size):
+            assert chunk_size == 8192
+            yield content
+
+    monkeypatch.setattr(filesystem.requests, "get", lambda *args, **kwargs: Response())
+
+    path = filesystem._download_cached(
+        "https://example.com/assets/model.pt",
+        local_cache_path=tmp_path,
+        checksum=known_checksum,
+    )
+
+    assert status_checked
     assert calculate_checksum(path) == known_checksum
+
+
+def test_plain_http_package_warns(monkeypatch, tmp_path: Path):
+    content = b"test package content"
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def raise_for_status(self):
+            return None
+
+        def iter_content(self, chunk_size):
+            yield content
+
+    monkeypatch.setattr(filesystem.requests, "get", lambda *args, **kwargs: Response())
+
+    with pytest.warns(UserWarning, match="plain HTTP"):
+        path = filesystem._download_cached(
+            "http://example.com/assets/model.pt",
+            local_cache_path=tmp_path,
+        )
+
+    assert Path(path).read_bytes() == content
+
+
+def test_https_package_rejects_bad_checksum(monkeypatch, tmp_path: Path):
+    content = b"unexpected content"
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def raise_for_status(self):
+            return None
+
+        def iter_content(self, chunk_size):
+            yield content
+
+    monkeypatch.setattr(filesystem.requests, "get", lambda *args, **kwargs: Response())
+
+    with pytest.raises(ValueError, match="Checksum mismatch"):
+        filesystem._download_cached(
+            "https://example.com/assets/model.pt",
+            local_cache_path=tmp_path,
+            checksum="0" * 64,
+        )
+
+    assert list(tmp_path.iterdir()) == []
+
+    cached_url = "https://example.com/assets/cached-model.pt"
+    cache_path = Path(
+        filesystem._download_cached(
+            cached_url,
+            local_cache_path=tmp_path,
+            checksum=hashlib.sha256(content).hexdigest(),
+        )
+    )
+    with pytest.raises(ValueError, match="Checksum mismatch"):
+        filesystem._download_cached(
+            cached_url, local_cache_path=tmp_path, checksum="0" * 64
+        )
+
+    assert cache_path.read_bytes() == content
+    assert [entry.name for entry in tmp_path.iterdir()] == [cache_path.name]
+
+
+def test_https_package_does_not_cache_failed_response(monkeypatch, tmp_path: Path):
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def raise_for_status(self):
+            raise filesystem.requests.HTTPError("not found")
+
+    monkeypatch.setattr(filesystem.requests, "get", lambda *args, **kwargs: Response())
+
+    with pytest.raises(filesystem.requests.HTTPError):
+        filesystem._download_cached(
+            "https://example.com/assets/missing.pt",
+            local_cache_path=tmp_path,
+        )
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_https_package_rejects_plaintext_redirect(monkeypatch, tmp_path: Path):
+    class Response:
+        url = "http://example.com/model.pt"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def raise_for_status(self):
+            return None
+
+        def iter_content(self, chunk_size):
+            yield b"unexpected content"
+
+    monkeypatch.setattr(filesystem.requests, "get", lambda *args, **kwargs: Response())
+
+    with pytest.raises(ValueError, match="redirected to a non-HTTPS URL"):
+        filesystem._download_cached(
+            "https://example.com/assets/model.pt",
+            local_cache_path=tmp_path,
+        )
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_ngc_bad_checksum_does_not_evict_valid_cache_entry(monkeypatch, tmp_path: Path):
+    """A failed NGC refetch cannot remove an existing valid cache entry."""
+    content = b"shared NGC artifact"
+    url = "ngc://models/org/model@v1/model.pt"
+
+    def download(path, out_path):
+        Path(out_path).write_bytes(content)
+        return out_path
+
+    monkeypatch.setattr(filesystem, "_download_ngc_model_file", download)
+
+    cache_path = Path(
+        filesystem._download_cached(
+            url,
+            local_cache_path=tmp_path,
+            checksum=hashlib.sha256(content).hexdigest(),
+        )
+    )
+    with pytest.raises(ValueError, match="Checksum mismatch"):
+        filesystem._download_cached(url, local_cache_path=tmp_path, checksum="0" * 64)
+
+    assert cache_path.read_bytes() == content
+    assert [entry.name for entry in tmp_path.iterdir()] == [cache_path.name]
 
 
 @pytest.mark.skip("Skipping because slow, need better test solution")

@@ -205,6 +205,8 @@ class QueryTokenDecoder(Module):
         features. Default ``False``.
     extra_sdf_inv_eps : float, optional
         Epsilon for the ``1/(|sdf|+eps)`` channel. Default ``1e-3``.
+    use_te : bool, optional, default=False
+        Use Transformer Engine layers.
 
     Raises
     ------
@@ -242,7 +244,7 @@ class QueryTokenDecoder(Module):
         final_refinement_siren_omega0: float = 30.0,
         extra_sdf_features_enabled: bool = False,
         extra_sdf_inv_eps: float = 1e-3,
-        use_te: bool = True,
+        use_te: bool = False,
     ):
         super().__init__(meta=AeroJEPAMetaData())
         self.use_sdf = bool(use_sdf)

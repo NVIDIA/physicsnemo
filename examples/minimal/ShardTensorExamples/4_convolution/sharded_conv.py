@@ -15,15 +15,13 @@
 # limitations under the License.
 
 import torch
-
-from torch.distributed.tensor import (
-    Shard,
-    distribute_module,
-)
-
+from torch.distributed.tensor import Shard
 
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.domain_parallel import ShardTensor, scatter_tensor
+from physicsnemo.domain_parallel import (
+    scatter_tensor,
+    sync_module_over_mesh,
+)
 
 DistributedManager.initialize()
 dm = DistributedManager()
@@ -61,7 +59,7 @@ original_tensor_grad = original_tensor.grad.data.clone()
 # DeviceMesh is a pytorch object - you can initialize it directly, or for added
 # flexibility physicsnemo can infer up to one mesh dimension for you
 # (as a -1, like in a tensor.reshape() call...)
-mesh = dm.initialize_mesh(mesh_shape=(-1,), mesh_dim_names=("domain_parallel",))
+mesh = dm.initialize_mesh(mesh_shape=(-1,), mesh_dim_names=("domain",))
 
 # A mesh, by the way, refers to devices and not data: it's a mesh of connected
 # GPUs in this case, and the python DeviceMesh can be reused as many times as needed.
@@ -88,21 +86,20 @@ sharded_tensor = scatter_tensor(
 )
 
 
-################################
-# Sharded - distribute the model
-################################
+######################################
+# Sharded - synchronize initialization
+######################################
 
-# We tell pytorch that the convolution will work on distributed tensors:
-# And, over the same mesh!
-distributed_conv = distribute_module(conv, mesh)
+# each rank constructed its own conv with
+# its own random initialization. Broadcast the weights over the mesh so every
+# rank computes with the same model.
+sync_module_over_mesh(conv, mesh)
 
 
 #####################################
 # Sharded - forward + loss + backward
 #####################################
-
-# Now, we can do the distributed convolution:
-sharded_output = distributed_conv(sharded_tensor)
+sharded_output = conv(sharded_tensor)
 sharded_output.mean().backward()
 
 
@@ -123,11 +120,11 @@ if dm.rank == 0:
     # Only check on rank 0 because we used it's data and weights for the sharded tensor.
     # Check that the output is the same as the single-device output:
     assert torch.allclose(full_output, single_gpu_output, atol=1e-3, rtol=1e-3)
-    print(f"Global operation matches local! ")
+    print("Global operation matches local!")
 
     # Check that the gradient is correct:
     assert torch.allclose(original_tensor_grad, full_grad)
-    print(f"Gradient check passed!")
+    print("Gradient check passed!")
 
 
 print(

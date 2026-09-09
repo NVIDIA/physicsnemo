@@ -20,9 +20,12 @@ FieldSlice - Select specific indices or slices from tensor dimensions.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+
 import torch
 from tensordict import TensorDict
 
+from physicsnemo.datapipes.keys import as_nested_key, get_leaf
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.base import Transform
 
@@ -116,6 +119,8 @@ class FieldSlice(Transform):
         """
         super().__init__()
         self.slicing = slicing
+        ### Field names may address nested leaves ("solution.velocity").
+        self._slicing = {as_nested_key(k): v for k, v in slicing.items()}
 
     def __call__(self, data: TensorDict) -> TensorDict:
         """
@@ -138,14 +143,8 @@ class FieldSlice(Transform):
         """
         updates = {}
 
-        for field_name, dim_specs in self.slicing.items():
-            if field_name not in data.keys():
-                raise KeyError(
-                    f"Field '{field_name}' not found in data. "
-                    f"Available: {list(data.keys())}"
-                )
-
-            tensor = data[field_name]
+        for field_name, dim_specs in self._slicing.items():
+            tensor = get_leaf(data, field_name)
 
             for dim_key, spec in dim_specs.items():
                 # Handle string keys from Hydra/YAML (e.g., "-1" -> -1)
@@ -188,11 +187,13 @@ class FieldSlice(Transform):
         TypeError
             If spec is not a list or dict.
         """
-        if isinstance(spec, list):
+        ### ``Sequence`` / ``Mapping`` rather than ``list`` / ``dict`` so the
+        ### OmegaConf containers Hydra passes are accepted too.
+        if isinstance(spec, Sequence):
             # Index selection: [0, 2, 5]
-            indices = torch.tensor(spec, dtype=torch.long, device=tensor.device)
+            indices = torch.tensor(list(spec), dtype=torch.long, device=tensor.device)
             return torch.index_select(tensor, dim, indices)
-        elif isinstance(spec, dict):
+        elif isinstance(spec, Mapping):
             # Slice selection: {"start": 0, "stop": 5, "step": 1}
             start = spec.get("start", None)
             stop = spec.get("stop", None)

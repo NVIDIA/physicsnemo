@@ -190,6 +190,8 @@ class PointClusterGraphPool(nn.Module):
         Number of message-passing iterations. Clamped to at least 1.
     dropout : float
         Dropout used inside the message and update MLPs.
+    use_te : bool, optional, default=False
+        Use Transformer Engine layers.
 
     Shape
     -----
@@ -214,7 +216,7 @@ class PointClusterGraphPool(nn.Module):
         hidden_dim: int,
         num_layers: int,
         dropout: float,
-        use_te: bool = True,
+        use_te: bool = False,
     ):
         super().__init__()
         self.point_feature_dim = int(point_feature_dim)
@@ -381,6 +383,8 @@ class PointTransformer(Module):
     gen_conditioning_dim : int or None
         Dimension of the conditioning vector; required when
         ``use_gen_conditioning=True``.
+    use_te : bool, optional, default=False
+        Use Transformer Engine layers.
 
     Raises
     ------
@@ -417,7 +421,7 @@ class PointTransformer(Module):
         tokenizer_graph_pool_layers: int,
         use_gen_conditioning: bool = False,
         gen_conditioning_dim: int | None,
-        use_te: bool = True,
+        use_te: bool = False,
     ):
         super().__init__(meta=AeroJEPAMetaData())
         # ``tokenizer_prototype_coords`` is a torch.Tensor and is not

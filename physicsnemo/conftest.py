@@ -128,6 +128,8 @@ CUDA_UNAVAILABLE_MESSAGES = (
     "No CUDA GPUs are available",
     "cuda runtime error",
     "CUDA out of memory",
+    "TransformerEngine needs CUDA",
+    "CUDAGuardImpl initialized with non-CUDA DeviceType",
 )
 
 

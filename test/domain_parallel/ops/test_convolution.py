@@ -53,22 +53,6 @@ from physicsnemo.domain_parallel import scatter_tensor
 from .utils import generate_image_like_data, numerical_shard_tensor_check
 
 
-@pytest.fixture(autouse=True)
-def disable_tf32():
-    # Sharded conv is mathematically identical to local conv; TF32 (~1e-3
-    # relative error) makes the full-image and per-shard paths diverge past
-    # the 1e-5 tolerance. Force full fp32 for exact numerical comparison.
-    prev_cudnn = torch.backends.cudnn.allow_tf32
-    prev_matmul = torch.backends.cuda.matmul.allow_tf32
-    torch.backends.cudnn.allow_tf32 = False
-    torch.backends.cuda.matmul.allow_tf32 = False
-    try:
-        yield
-    finally:
-        torch.backends.cudnn.allow_tf32 = prev_cudnn
-        torch.backends.cuda.matmul.allow_tf32 = prev_matmul
-
-
 @pytest.mark.multigpu_static
 @pytest.mark.parametrize("H", [32, 256])
 @pytest.mark.parametrize(
@@ -243,7 +227,7 @@ def test_conv2d_1dmesh(
 
 
 @pytest.mark.multigpu_static
-@pytest.mark.parametrize("H", [32, 256])
+@pytest.mark.parametrize("H", [128, 256])
 @pytest.mark.parametrize(
     "C_in",
     [
@@ -376,7 +360,7 @@ def test_conv2d_2dmesh(
 
 
 @pytest.mark.multigpu_static
-@pytest.mark.parametrize("H", [32, 256])
+@pytest.mark.parametrize("H", [64, 256])
 @pytest.mark.parametrize(
     "C_in",
     [

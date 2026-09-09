@@ -213,6 +213,30 @@ class TestCellCentroidsCorner:
         assert "airfoil" in domain.boundaries.keys()
         assert "vehicle" not in domain.boundaries.keys()
 
+    def test_boundary_preserves_caches_but_interior_starts_fresh(self):
+        mesh = _two_triangle_mesh_3d()
+        areas = mesh.cell_areas
+        point_normals = mesh.point_normals
+        mesh._cache["topology", "sentinel"] = torch.tensor(7)
+
+        domain = MeshToDomainMesh(cell_data_targets=["C_p"])(mesh)
+        boundary = domain.boundaries["vehicle"]
+
+        assert boundary._cache["cell", "areas"].data_ptr() == areas.data_ptr()
+        assert (
+            boundary._cache["point", "normals"].data_ptr() == point_normals.data_ptr()
+        )
+        torch.testing.assert_close(
+            boundary._cache["topology", "sentinel"],
+            mesh._cache["topology", "sentinel"],
+        )
+        assert not domain.interior._cache["cell"].keys()
+        assert not domain.interior._cache["point"].keys()
+        assert not domain.interior._cache["topology"].keys()
+
+        boundary._cache["topology", "derived"] = torch.tensor(8)
+        assert mesh._cache.get(("topology", "derived"), None) is None
+
 
 # ---------------------------------------------------------------------------
 # (point_data_targets, interior_points='vertices') corner
@@ -245,6 +269,28 @@ class TestVerticesCorner:
         )
         domain = transform(mesh)
         assert torch.allclose(domain.interior.point_data["phi"], mesh.point_data["phi"])
+
+    def test_boundary_preserves_caches_but_interior_starts_fresh(self):
+        mesh = _two_triangle_mesh_3d()
+        areas = mesh.cell_areas
+        mesh._cache["topology", "sentinel"] = torch.tensor(7)
+
+        domain = MeshToDomainMesh(
+            point_data_targets=["vertex_label"], interior_points="vertices"
+        )(mesh)
+        boundary = domain.boundaries["vehicle"]
+
+        assert boundary._cache["cell", "areas"].data_ptr() == areas.data_ptr()
+        torch.testing.assert_close(
+            boundary._cache["topology", "sentinel"],
+            mesh._cache["topology", "sentinel"],
+        )
+        assert not domain.interior._cache["cell"].keys()
+        assert not domain.interior._cache["point"].keys()
+        assert not domain.interior._cache["topology"].keys()
+
+        boundary._cache["cell", "derived"] = torch.zeros(boundary.n_cells)
+        assert mesh._cache.get(("cell", "derived"), None) is None
 
 
 # ---------------------------------------------------------------------------

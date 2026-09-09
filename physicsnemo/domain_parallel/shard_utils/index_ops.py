@@ -47,7 +47,6 @@ class ShardedIndexSelect(torch.autograd.Function):
 
     @staticmethod
     def forward(
-        ctx: torch.autograd.function.FunctionCtx,
         tensor: ShardTensor,
         dim: int,
         index: ShardTensor,
@@ -59,8 +58,6 @@ class ShardedIndexSelect(torch.autograd.Function):
 
         Parameters
         ----------
-        ctx : torch.autograd.function.FunctionCtx
-            Context object to store information for backward pass.
         tensor : ShardTensor
             Input tensor to select from.
         dim : int
@@ -81,19 +78,12 @@ class ShardedIndexSelect(torch.autograd.Function):
         # This is the simplest implementation, to enable functionality.
         # It could be optimized for very large tensors to ensure performace.
 
-        # We save the local version of the index and the input tensor spec for the backwards pass
-
-        ctx.spec = tensor._spec
-        ctx.grad_shape = tensor._local_tensor.shape
-        ctx.dim = dim
-
         # First - Make sure we have the full input tensor
         # Triggers an all_gather(_v) for (uneven) tensors.
         local_tensor = tensor.full_tensor()
 
         # Perform the index select using the local values of the index:
         local_index = index.to_local()
-        ctx.save_for_backward(index)
 
         # Get everything requested from the local index:
         local_values = aten.index_select(local_tensor, dim, local_index)
@@ -113,14 +103,10 @@ class ShardedIndexSelect(torch.autograd.Function):
                 for local_chunk_size in index_shard_sizes:
                     this_shard_size = output_size
                     this_shard_size[dim] = local_chunk_size[0]
-                    # Make sure it's a tuple:
-                    output_shard_sizes[mesh_dim].append(
-                        torch.Size(tuple(this_shard_size))
-                    )
-                # Make sure it's a tuple:
+                    # Plain int tuples (never torch.Size) -- see
+                    # ShardTensorSpec._sharding_shapes field docs.
+                    output_shard_sizes[mesh_dim].append(tuple(this_shard_size))
                 output_shard_sizes[mesh_dim] = tuple(output_shard_sizes[mesh_dim])
-
-            ctx.output_shard_sizes = output_shard_sizes
 
             return_tensor = ShardTensor.from_local(
                 local_values,
@@ -155,6 +141,22 @@ class ShardedIndexSelect(torch.autograd.Function):
             raise MissingShardPatch(
                 f"Index select is not implemented for {index_placement} sharding."
             )
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        r"""Save the source ShardTensorSpec, local shape, dim, and index for backward.
+
+        ``DisableTorchFunctionSubclass`` shielding avoids re-entering the
+        ShardTensor ``__torch_function__`` fallback while reading
+        ``tensor._spec`` / ``tensor._local_tensor`` -- the same AOT-hostile
+        bridge motivated the shielding in ``ShardedSum.setup_context``.
+        """
+        tensor, dim, index = inputs
+        with torch._C.DisableTorchFunctionSubclass():
+            ctx.spec = tensor._spec
+            ctx.grad_shape = tensor._local_tensor.shape
+        ctx.dim = dim
+        ctx.save_for_backward(index)
 
     @staticmethod
     def backward(
@@ -347,9 +349,8 @@ def sharded_select_helper(tensor: ShardTensor, dim: int, index: int) -> ShardTen
             for local_chunk_size in index_shard_sizes:
                 local_chunk_size_list = list(local_chunk_size)
                 local_chunk_size_list.pop(dim)
-                output_shard_sizes[mesh_dim].append(
-                    torch.Size(tuple(local_chunk_size_list))
-                )
+                # Plain int tuples (never torch.Size) for _sharding_shapes.
+                output_shard_sizes[mesh_dim].append(tuple(local_chunk_size_list))
             output_shard_sizes[mesh_dim] = tuple(output_shard_sizes[mesh_dim])
 
         output_spec = ShardTensorSpec(
@@ -433,9 +434,8 @@ def sharded_select_backward_helper(
             # We need to insert input_sizes[dim] at index:
             local_chunk_size_list = list(local_chunk_size)
             local_chunk_size_list.insert(dim, input_sizes[dim])
-            output_shard_sizes[mesh_dim].append(
-                torch.Size(tuple(local_chunk_size_list))
-            )
+            # Plain int tuples (never torch.Size) for _sharding_shapes.
+            output_shard_sizes[mesh_dim].append(tuple(local_chunk_size_list))
         output_shard_sizes[mesh_dim] = tuple(output_shard_sizes[mesh_dim])
 
     output_spec = ShardTensorSpec(

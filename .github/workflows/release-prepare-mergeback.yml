@@ -1,0 +1,331 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: "Release: Prepare RC Merge-back"
+run-name: "Prepare ${{ inputs.rc_branch }} merge-back by @${{ github.actor }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      rc_branch:
+        description: "Completed RC branch, for example 2.3.0-rc"
+        required: true
+        type: string
+      next_dev_version:
+        description: "Next development version, for example 2.4.0a0"
+        required: true
+        type: string
+      dry_run:
+        description: "Prepare and validate without pushing or opening a PR"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: physicsnemo-release-operations
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  prepare-mergeback:
+    name: Create merge-back PR
+    runs-on: ubuntu-latest
+    env:
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      DRY_RUN: ${{ inputs.dry_run }}
+      GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN || github.token }}
+      NEXT_DEV_VERSION: ${{ inputs.next_dev_version }}
+      RC_BRANCH: ${{ inputs.rc_branch }}
+
+    steps:
+      - name: Require dispatch from the default branch
+        run: |
+          if [[ "$GITHUB_REF_NAME" != "$DEFAULT_BRANCH" ]]; then
+            echo "::error::Run this workflow from the $DEFAULT_BRANCH branch."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch }}
+          token: ${{ secrets.RELEASE_AUTOMATION_TOKEN || github.token }}
+
+      - name: Resolve release state
+        id: release
+        run: |
+          if ! git check-ref-format --branch "$RC_BRANCH" >/dev/null; then
+            echo "::error::Invalid RC branch name: $RC_BRANCH"
+            exit 1
+          fi
+
+          git fetch --no-tags origin \
+            "refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH" \
+            "refs/heads/$RC_BRANCH:refs/remotes/origin/$RC_BRANCH"
+          git switch --detach "origin/$RC_BRANCH"
+
+          release_version="$(python3 tools/release.py show-version)"
+          if [[ ! "$release_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::RC branch package version is not final: $release_version"
+            exit 1
+          fi
+          if [[ "$RC_BRANCH" != "${release_version}-rc" ]]; then
+            echo "::error::RC branch $RC_BRANCH does not match release $release_version."
+            exit 1
+          fi
+
+          rc_sha="$(git rev-parse "origin/$RC_BRANCH")"
+          main_sha="$(git rev-parse "origin/$DEFAULT_BRANCH")"
+          printf 'release_version=%s\n' "$release_version" >> "$GITHUB_OUTPUT"
+          printf 'rc_sha=%s\n' "$rc_sha" >> "$GITHUB_OUTPUT"
+          printf 'main_sha=%s\n' "$main_sha" >> "$GITHUB_OUTPUT"
+
+          existing_pr="$(
+            gh pr list --state open --base "$DEFAULT_BRANCH" --limit 100 \
+              --json url,headRefName,body |
+              jq -c --arg rc "$RC_BRANCH" --arg next "$NEXT_DEV_VERSION" '
+                [
+                  .[]
+                  | select(
+                      ((.body // "") | contains(
+                        "<!-- release-rc-branch: " + $rc + " -->"
+                      ))
+                      and
+                      ((.body // "") | contains(
+                        "<!-- release-next-version: " + $next + " -->"
+                      ))
+                    )
+                ][0] // empty
+              '
+          )"
+          if [[ -n "$existing_pr" ]]; then
+            printf 'already_exists=true\n' >> "$GITHUB_OUTPUT"
+            printf 'branch=%s\n' \
+              "$(jq -r '.headRefName' <<< "$existing_pr")" >> "$GITHUB_OUTPUT"
+            printf 'pr_url=%s\n' \
+              "$(jq -r '.url' <<< "$existing_pr")" >> "$GITHUB_OUTPUT"
+            echo "An open merge-back PR already exists."
+            exit 0
+          fi
+
+          branch_prefix="${RC_BRANCH}-rebase"
+          branch_number=1
+          resume_branch=false
+          while true; do
+            candidate="${branch_prefix}${branch_number}"
+            if ! git ls-remote --exit-code --heads origin \
+              "refs/heads/$candidate" >/dev/null 2>&1; then
+              mergeback_branch="$candidate"
+              break
+            fi
+
+            candidate_pr="$(
+              gh pr list --state all --head "$candidate" --limit 1 \
+                --json number --jq '.[0].number // empty'
+            )"
+            if [[ -z "$candidate_pr" ]]; then
+              git fetch --no-tags origin \
+                "refs/heads/$candidate:refs/remotes/origin/$candidate"
+              candidate_version="$(
+                git show "origin/$candidate:physicsnemo/__init__.py" |
+                  sed -n 's/^__version__ = "\([^"]*\)"$/\1/p'
+              )"
+              candidate_heading="$(
+                git show "origin/$candidate:CHANGELOG.md" |
+                  awk '/^## \[/ && !found { print; found=1 }'
+              )"
+              next_release_version="${NEXT_DEV_VERSION%a0}"
+              expected_heading="## [$next_release_version] - 2026-XX-YY"
+              commit_count="$(
+                git rev-list --count \
+                  "origin/$RC_BRANCH..origin/$candidate"
+              )"
+              if git merge-base --is-ancestor \
+                "origin/$RC_BRANCH" "origin/$candidate" &&
+                [[ "$candidate_version" == "$NEXT_DEV_VERSION" ]] &&
+                [[ "$candidate_heading" == "$expected_heading" ]] &&
+                [[ "$commit_count" == "1" ]]; then
+                mergeback_branch="$candidate"
+                resume_branch=true
+                echo "Resuming merge-back branch $candidate after a partial run."
+                break
+              fi
+            fi
+            branch_number=$((branch_number + 1))
+          done
+          printf 'already_exists=false\n' >> "$GITHUB_OUTPUT"
+          printf 'branch=%s\n' "$mergeback_branch" >> "$GITHUB_OUTPUT"
+          printf 'resume_branch=%s\n' "$resume_branch" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare next-development commit
+        if: >-
+          ${{ steps.release.outputs.already_exists != 'true' &&
+              steps.release.outputs.resume_branch != 'true' }}
+        env:
+          MERGEBACK_BRANCH: ${{ steps.release.outputs.branch }}
+        run: |
+          git switch -c "$MERGEBACK_BRANCH" "origin/$RC_BRANCH"
+          python3 tools/release.py prepare-mergeback \
+            --next-dev-version "$NEXT_DEV_VERSION"
+          git diff --check
+          git add CHANGELOG.md physicsnemo/__init__.py
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: start $NEXT_DEV_VERSION development"
+
+          if [[ "$DRY_RUN" == "true" ]]; then
+            echo "Dry run: skipping push of $MERGEBACK_BRANCH."
+          else
+            git push origin "HEAD:refs/heads/$MERGEBACK_BRANCH"
+          fi
+
+      - name: Open draft merge-back PR
+        id: pull-request
+        if: >-
+          ${{ steps.release.outputs.already_exists != 'true' &&
+              ! inputs.dry_run }}
+        env:
+          MERGEBACK_BRANCH: ${{ steps.release.outputs.branch }}
+          RELEASE_VERSION: ${{ steps.release.outputs.release_version }}
+        run: |
+          body_file="$(mktemp)"
+          {
+            printf '<!-- release-rc-branch: %s -->\n' "$RC_BRANCH"
+            printf '<!-- release-next-version: %s -->\n' "$NEXT_DEV_VERSION"
+            cat <<'EOF'
+
+          ## Summary
+
+          This is the disposable merge-back branch for the completed RC. The
+          original RC branch must remain unchanged.
+
+          The branch has the next development version commit, but it has not
+          been rebased onto `main`. Follow the manual steps below before marking
+          this pull request ready for review.
+
+          ## Manual rebase
+
+          ```bash
+          git fetch origin
+          EOF
+            printf 'git switch -c %s --track origin/%s\n' \
+              "$MERGEBACK_BRANCH" "$MERGEBACK_BRANCH"
+            printf 'git rebase origin/%s\n' "$DEFAULT_BRANCH"
+            cat <<'EOF'
+
+          # Resolve each conflict, then:
+          git add <resolved-files>
+          git rebase --continue
+
+          # After the rebase completes:
+          git push --force-with-lease
+          ```
+
+          Do not merge `main` into this branch. Do not rebase or force-push the
+          original RC branch.
+
+          When resolving `CHANGELOG.md`, keep released work under the final
+          release section and preserve main-only development work under the next
+          development section.
+
+          ## Checklist
+
+          - [ ] The disposable branch has been rebased onto the latest `main`.
+          - [ ] `CHANGELOG.md` contains both the final and next-development sections.
+          - [ ] The package version is the requested next development version.
+          - [ ] The original RC branch remains unchanged.
+          - [ ] Normal GitHub and Blossom CI pass.
+          - [ ] Reviewers approve the reconciled changelog and code.
+          - [ ] This PR is merged with **Rebase and merge**, not squash.
+
+          See `docs/release-process.md` for recovery and verification steps.
+          EOF
+          } > "$body_file"
+
+          pr_url="$(
+            gh pr create \
+              --draft \
+              --base "$DEFAULT_BRANCH" \
+              --head "$MERGEBACK_BRANCH" \
+              --title "$RELEASE_VERSION RC merge-back" \
+              --body-file "$body_file"
+          )"
+          printf 'url=%s\n' "$pr_url" >> "$GITHUB_OUTPUT"
+
+      - name: Link merge-back PR from the tracking issue
+        if: >-
+          ${{ ! inputs.dry_run &&
+              (steps.pull-request.outputs.url != '' ||
+               steps.release.outputs.pr_url != '') }}
+        env:
+          NEW_PR_URL: ${{ steps.pull-request.outputs.url }}
+          RELEASE_VERSION: ${{ steps.release.outputs.release_version }}
+          RESUMED_PR_URL: ${{ steps.release.outputs.pr_url }}
+        run: |
+          pr_url="$NEW_PR_URL"
+          if [[ -z "$pr_url" ]]; then
+            pr_url="$RESUMED_PR_URL"
+          fi
+          tracking_title="Release $RELEASE_VERSION tracking"
+          issue_number="$(
+            gh issue list --state open --limit 100 --json number,title |
+              jq -r --arg title "$tracking_title" \
+                '[.[] | select(.title == $title) | .number][0] // empty'
+          )"
+          if [[ -n "$issue_number" ]]; then
+            gh issue comment "$issue_number" \
+              --body "Merge-back preparation PR: $pr_url"
+          fi
+
+      - name: Write workflow summary
+        if: ${{ always() && steps.release.outcome == 'success' }}
+        env:
+          MAIN_SHA: ${{ steps.release.outputs.main_sha }}
+          MERGEBACK_BRANCH: ${{ steps.release.outputs.branch }}
+          NEW_PR_URL: ${{ steps.pull-request.outputs.url }}
+          RC_SHA: ${{ steps.release.outputs.rc_sha }}
+          RELEASE_VERSION: ${{ steps.release.outputs.release_version }}
+          RESUMED_PR_URL: ${{ steps.release.outputs.pr_url }}
+        run: |
+          pr_url="$NEW_PR_URL"
+          if [[ -z "$pr_url" ]]; then
+            pr_url="$RESUMED_PR_URL"
+          fi
+          {
+            echo "## Merge-back preparation"
+            echo
+            echo "- Release: \`$RELEASE_VERSION\`"
+            echo "- RC branch: \`$RC_BRANCH\` at \`$RC_SHA\`"
+            echo "- Main at preparation: \`$MAIN_SHA\`"
+            echo "- Disposable branch: \`$MERGEBACK_BRANCH\`"
+            echo "- Next version: \`$NEXT_DEV_VERSION\`"
+            echo "- Dry run: \`$DRY_RUN\`"
+            if [[ -n "$pr_url" ]]; then
+              echo "- Draft PR: $pr_url"
+            fi
+            echo
+            echo "The disposable branch still requires a manual rebase onto"
+            echo "\`$DEFAULT_BRANCH\` before review and merge."
+          } >> "$GITHUB_STEP_SUMMARY"

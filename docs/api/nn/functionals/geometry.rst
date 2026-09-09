@@ -26,6 +26,58 @@ Point Displacement
     )
     moved.square().sum().backward()
 
+Sobolev Point Deformation
+-------------------------
+
+.. autofunction:: physicsnemo.nn.functional.sobolev_deform_points
+
+.. code:: python
+
+    import torch
+    from physicsnemo.nn.functional import sobolev_deform_points
+
+    points = torch.tensor(
+        [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+        requires_grad=True,
+    )
+    cells = torch.tensor([[0, 1, 2], [0, 2, 3]])
+    displacement = torch.tensor(
+        [[0.0, 0.0], [0.0, 0.2], [0.0, -0.2], [0.0, 0.0]],
+        requires_grad=True,
+    )
+
+    smooth = sobolev_deform_points(
+        points,
+        cells,
+        displacement,
+        length_scale=0.25,
+    )
+    smooth.square().mean().backward()
+
+The operation assembles a P1 stiffness matrix and a uniform vertex mass scaled
+by the mean positive lumped P1 mass. It solves
+:math:`(M + \ell^2 K)u = Md` and returns :math:`x + u`.
+``length_scale`` is :math:`\ell` in the same physical units as ``points``.
+Zero recovers ordinary dense displacement. Larger values attenuate
+short-wavelength changes in the raw displacement and its reverse-mode
+sensitivity. The uniform mass makes this filter self-adjoint in standard
+Euclidean vertex coordinates.
+
+``fixed_points`` is an optional boolean vertex mask. True entries impose zero
+Dirichlet displacement. Boundaries without a fixed mask use the natural
+homogeneous Neumann condition. The Torch and Warp matrix-free solves support
+one mesh or a batch of point tensors that share ``cells``. Both are
+differentiable with respect to ``points`` and ``displacement``. The Warp
+backend runs on CUDA and uses an explicit implicit-adjoint backward with an
+analytic geometry vector-Jacobian product. CUDA segments, triangles, and
+tetrahedra select Warp by default when it is available. CPU inputs and
+higher-dimensional simplices select Torch. Positive length scales support
+first-order reverse-mode differentiation. Higher-order derivatives are not
+supported. The operation raises an error when a forward or adjoint solve does
+not converge within ``max_iterations``. CUDA Graph capture is not supported
+because P1 operator assembly and solver diagnostics are not capture-safe.
+Warp CUDA results and point gradients may vary at roundoff between runs.
+
 Sparse Control-Point Morphing
 -----------------------------
 
@@ -212,6 +264,159 @@ require substantially more peak memory when compiled.
 For connectivity-preserving object APIs, use
 :meth:`~physicsnemo.mesh.mesh.Mesh.free_form_deform` or
 :meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.free_form_deform`.
+
+Deformation Energies
+--------------------
+
+The deformation-energy functionals compare current point coordinates with a
+fixed reference configuration and topology. They return differentiable penalty
+objectives for use in an optimization loop. They do not solve a constrained
+deformation problem or enforce hard constraints.
+
+For a :class:`~physicsnemo.mesh.mesh.Mesh`, the wrappers in
+:mod:`physicsnemo.mesh.deformation` validate and cache connectivity and build
+triangle hinges automatically.
+
+.. autofunction:: physicsnemo.nn.functional.simplex_strain_energy
+
+.. autofunction:: physicsnemo.nn.functional.simplex_measure_energy
+
+.. autofunction:: physicsnemo.nn.functional.total_measure_energy
+
+.. autofunction:: physicsnemo.nn.functional.simplex_inversion_energy
+
+.. autofunction:: physicsnemo.nn.functional.surface_bending_energy
+
+.. autofunction:: physicsnemo.nn.functional.closed_surface_volume_energy
+
+.. code:: python
+
+    from physicsnemo.nn.functional import (
+        simplex_inversion_energy,
+        simplex_strain_energy,
+        total_measure_energy,
+    )
+
+    loss = (
+        simplex_strain_energy(points, reference_points, cells)
+        + 40.0 * total_measure_energy(points, reference_points, cells)
+        + 10.0 * simplex_inversion_energy(points, reference_points, cells)
+    )
+    loss.backward()
+
+The simplex functionals accept unbatched ``(n_points, n_spatial_dims)`` or
+batched ``(batch_size, n_points, n_spatial_dims)`` coordinates with shared
+integer topology. Coordinates must use matching ``torch.float32`` or
+``torch.float64`` dtypes. ``reduction="none"`` returns one value per simplex or
+hinge. For ``total_measure_energy`` and ``closed_surface_volume_energy``, it
+returns one global value per batch item. ``"sum"`` and ``"mean"`` reduce all
+values to one scalar.
+
+``simplex_measure_energy`` constrains each element separately, whereas
+``total_measure_energy`` permits local redistribution and constrains only the
+sum. Full-dimensional measure ratios retain the orientation relative to each
+reference simplex. Embedded-simplex ratios are unsigned. The St.
+Venant--Kirchhoff strain formulation used by
+``simplex_strain_energy`` is reflection-blind. Add
+``simplex_inversion_energy`` when full-dimensional simplex orientation matters.
+Closed-surface volume requires one edge-connected, edge-closed, consistently
+oriented 3D triangle surface. The low-level functional assumes that contract
+without checking it. Surface bending is a geometric hinge regularizer rather
+than a material shell model.
+
+The tensor functionals validate topology shape, dtype, and device without
+scanning index values, which would synchronize a CUDA device on every call.
+Indices must therefore be distinct and in range as documented. Invalid index
+values are outside the tensor API contract. Use the mesh wrappers when cached
+value validation is needed. Direct tensor calls accept int32 or int64
+connectivity, but normalize int32 connectivity on every call. Use int64 for
+repeated direct calls. Mesh wrappers cache this normalization with the
+topology.
+
+Torch provides higher-order derivatives. Warp provides a first-order CUDA
+path. Because its backward uses atomic accumulation at shared vertices, Warp
+gradient results can have small run-to-run floating-point differences.
+
+Nearest-Surface Shrinkwrap
+--------------------------
+
+Shrinkwrap projects each source point to the nearest location on a triangle
+target surface. Optional point weights scale the displacement between the
+source and projected positions. A signed offset moves the projection along the
+selected target face normal.
+
+.. autofunction:: physicsnemo.nn.functional.shrinkwrap_points
+
+.. code:: python
+
+    import torch
+    from physicsnemo.nn.functional import shrinkwrap_points
+
+    target_points = torch.tensor(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ],
+        requires_grad=True,
+    )
+    target_faces = torch.tensor([[0, 1, 2], [0, 2, 3]])
+    points = torch.tensor(
+        [[0.25, 0.25, 0.30], [0.75, 0.75, 0.45]],
+        requires_grad=True,
+    )
+    weights = torch.tensor([0.5, 1.0], requires_grad=True)
+    offset = torch.tensor(0.02, requires_grad=True)
+
+    wrapped = shrinkwrap_points(
+        points,
+        target_points,
+        target_faces,
+        point_weights=weights,
+        offset=offset,
+    )
+    wrapped.square().mean().backward()
+
+Source points use one of these shapes:
+
+- ``(N, 3)``
+- ``(B, N, 3)``
+
+One triangle target is shared across the source batches. Keep the following
+projection rules in mind:
+
+- A positive ``offset`` follows target face winding.
+- A finite ``max_distance`` leaves points at or beyond the cutoff unchanged.
+
+Nearest-face selection, closest-feature changes, and distance gating are
+discrete. Between those transitions, gradients propagate through the following
+values:
+
+- Source points
+- Selected target vertices
+- Floating-point weights
+- A tensor-valued ``offset``
+
+Target connectivity is not differentiable.
+
+Torch provides the reference nearest-face search. Warp accelerates that search
+on CPU and CUDA. Both backends evaluate the selected projection with PyTorch
+in the input dtype. Exact ties at target edges or vertices can select different
+adjacent faces. Their closest point is the same, but a nonzero face-normal
+offset can differ.
+
+Search backend rules differ by dtype and geometry:
+
+- ``float64`` targets use the Torch search because Warp searches in ``float32``.
+- Warp searches safe ``float32`` coordinates unchanged.
+- Warp falls back to Torch for unsafe coordinate magnitudes or face geometry.
+
+Shrinkwrap performs data-dependent validation and nearest-face search setup.
+Do not run CUDA executions with either backend inside CUDA Graph capture.
+
+For a connectivity-preserving object API and a triangle-panel example, use
+:meth:`~physicsnemo.mesh.mesh.Mesh.shrinkwrap`.
 
 Mesh Poisson Disk Sample
 ------------------------

@@ -30,16 +30,10 @@ _ATTN = r"blocks\.\d+\.Attn\.(in_project_x|in_project_fx|qkv_project|out_linear|
 
 
 @requires_module("transformer_engine")
-@requires_module("warp")
-@requires_module("jaxtyping")
-@requires_module("tensordict")
 def test_geotransolver_attention_and_wrap_mlp():
     if not torch.cuda.is_available():
         pytest.skip("TE GeoTransolver requires CUDA.")
 
-    from physicsnemo.experimental.models.geotransolver.geotransolver import (
-        GeoTransolver,
-    )
     from physicsnemo.experimental.peft import (
         LoRAConfig,
         apply_lora,
@@ -49,6 +43,9 @@ def test_geotransolver_attention_and_wrap_mlp():
     from physicsnemo.experimental.peft.lora import (
         LoRA_te_LayerNormMLP,
         LoRA_te_Linear,
+    )
+    from physicsnemo.models.geotransolver.geotransolver import (
+        GeoTransolver,
     )
 
     torch.manual_seed(0)

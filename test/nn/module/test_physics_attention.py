@@ -30,10 +30,31 @@ from physicsnemo.nn.module.physics_attention import (
     PhysicsAttentionStructuredMesh2D,
     PhysicsAttentionStructuredMesh3D,
 )
+from test.conftest import requires_module
 
 # =============================================================================
 # PhysicsAttentionIrregularMesh Tests
 # =============================================================================
+
+
+@requires_module("transformer_engine>=2.14.0")
+def test_physics_attention_te_uses_only_output_dropout(device):
+    """Test TE attention leaves dropout to the shared output dropout layer."""
+    if device == "cpu":
+        pytest.skip("Transformer Engine requires CUDA")
+
+    attention = PhysicsAttentionIrregularMesh(
+        dim=64,
+        heads=4,
+        dim_head=16,
+        dropout=0.25,
+        slice_num=8,
+        use_te=True,
+        plus=False,
+    ).to(device)
+
+    assert attention.attn_fn.attention_dropout == 0.0
+    assert attention.out_dropout.p == 0.25
 
 
 class TestPhysicsAttentionIrregularMesh:

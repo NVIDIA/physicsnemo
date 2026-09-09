@@ -90,6 +90,8 @@ class TargetTransformer(BaseTargetEncoder):
         Hidden dim for the graph pool.
     tokenizer_graph_pool_layers : int, optional
         Message-passing layers in the graph pool. Default 2.
+    use_te : bool, optional, default=False
+        Use Transformer Engine layers.
     """
 
     supports_batched_forward = True
@@ -117,7 +119,7 @@ class TargetTransformer(BaseTargetEncoder):
         tokenizer_cluster_pooling: str = "mean",
         tokenizer_graph_pool_hidden_dim: int | None = None,
         tokenizer_graph_pool_layers: int = 2,
-        use_te: bool = True,
+        use_te: bool = False,
     ):
         super().__init__(meta=AeroJEPAMetaData())
         if isinstance(tokenizer_prototype_coords, torch.Tensor):

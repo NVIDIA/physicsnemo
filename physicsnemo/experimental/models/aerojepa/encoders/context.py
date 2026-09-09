@@ -98,6 +98,8 @@ class ContextTransformer(BaseContextEncoder):
         Append the three solid-normal channels. Default ``False``.
     use_solid_n_dot_uinf : bool, optional
         Append the solid-normal · u-inf channel. Default ``False``.
+    use_te : bool, optional, default=False
+        Use Transformer Engine layers.
     """
 
     supports_batched_forward = True
@@ -128,7 +130,7 @@ class ContextTransformer(BaseContextEncoder):
         use_sdf: bool = False,
         use_solid_normals: bool = False,
         use_solid_n_dot_uinf: bool = False,
-        use_te: bool = True,
+        use_te: bool = False,
     ):
         super().__init__(meta=AeroJEPAMetaData())
         if isinstance(tokenizer_prototype_coords, torch.Tensor):

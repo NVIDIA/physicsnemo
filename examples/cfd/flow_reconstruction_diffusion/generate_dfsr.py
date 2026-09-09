@@ -492,7 +492,7 @@ def load_flow_data(path, stat_path=None):
 def load_recons_data(ref_path, sample_path, data_kw, smoothing, smoothing_scale):
     """Loads recons data"""
     print("Loading low-res input data from: ", sample_path)
-    with np.load(sample_path, allow_pickle=True) as f:
+    with np.load(sample_path, allow_pickle=False) as f:
         sampled_data = f[data_kw][-4:, ...].copy().astype(np.float32)
     sampled_data = torch.as_tensor(sampled_data, dtype=torch.float32)
     print("Loading high-res reference data from: ", ref_path)

@@ -294,8 +294,9 @@ def partial_interpolate_nd(
 
     result_shapes = {}
     for mesh_dim, sharding_shape in input._spec.sharding_shapes().items():
+        # Plain int tuples (never torch.Size) for _sharding_shapes.
         updated_shapes = tuple(
-            torch.Size(compute_interpolate_output_shape(s, interp_kwargs))
+            tuple(compute_interpolate_output_shape(s, interp_kwargs))
             for s in sharding_shape
         )
         result_shapes[mesh_dim] = updated_shapes

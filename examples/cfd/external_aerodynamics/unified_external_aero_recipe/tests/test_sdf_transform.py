@@ -130,6 +130,24 @@ def test_sdf_normals_far_points_keep_closest_point_direction():
     torch.testing.assert_close(normals, expected, atol=1e-5, rtol=1e-5)
 
 
+def test_sdf_update_preserves_independent_interior_caches():
+    """Adding point fields preserves valid caches without sharing containers."""
+    interior = torch.tensor([[5.0, 0.0, 2.0]], dtype=torch.float32)
+    domain = _domain_with_interior(interior)
+    cached = torch.ones(domain.interior.n_points)
+    domain.interior._cache["point", "probe"] = cached
+
+    result = ComputeSDFFromBoundary().apply_to_domain(domain)
+
+    assert result.interior._cache is not domain.interior._cache
+    assert result.interior._cache["point"] is not domain.interior._cache["point"]
+    assert result.interior._cache["point", "probe"] is cached
+    result.interior._cache["point", "result_only"] = torch.ones(
+        domain.interior.n_points
+    )
+    assert "result_only" not in domain.interior._cache["point"]
+
+
 def test_sdf_normals_degenerate_hit_face_stays_finite():
     """A near-wall query hitting a degenerate face must not get a junk normal.
 

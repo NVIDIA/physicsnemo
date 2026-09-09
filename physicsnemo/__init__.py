@@ -24,7 +24,7 @@ from .core.module import Module  # noqa E402
 
 wp.config.log_level = wp.LOG_WARNING
 
-__version__ = "2.2.0a0"
+__version__ = "2.3.0a0"
 
 
 # Backwards-compatibility is opt-in. Enable with env var or via enable_compat().

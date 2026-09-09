@@ -127,17 +127,9 @@ def draw_mesh_matplotlib(
         ### get_facet_mesh can propagate them to boundary facets via averaging.
         ### We clone to avoid mutating the caller's mesh.
         if cell_scalar_values is not None:
-            from physicsnemo.mesh import Mesh
-
             augmented_cell_data = mesh.cell_data.clone()
             augmented_cell_data[_VIZ_KEY] = cell_scalar_values
-            mesh = Mesh(
-                points=mesh.points,
-                cells=mesh.cells,
-                point_data=mesh.point_data,
-                cell_data=augmented_cell_data,
-                global_data=mesh.global_data,
-            )
+            mesh = mesh.with_data(cell_data=augmented_cell_data)
 
         mesh = mesh.get_facet_mesh(
             manifold_codimension=mesh.n_manifold_dims - 2,

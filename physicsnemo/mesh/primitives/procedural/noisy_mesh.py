@@ -58,10 +58,4 @@ def load(
     # Add scaled noise to points
     noisy_points = base_mesh.points + noise_scale * noise
 
-    return Mesh(
-        points=noisy_points,
-        cells=base_mesh.cells,
-        point_data=base_mesh.point_data,
-        cell_data=base_mesh.cell_data,
-        global_data=base_mesh.global_data,
-    )
+    return base_mesh.with_points(noisy_points)
