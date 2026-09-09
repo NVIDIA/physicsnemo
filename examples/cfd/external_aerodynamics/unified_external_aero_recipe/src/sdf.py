@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import torch
 
+from physicsnemo.datapipes.keys import as_nested_key
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
 from physicsnemo.mesh import DomainMesh, Mesh
@@ -84,8 +85,11 @@ class ComputeSDFFromBoundary(MeshTransform):
     ) -> None:
         super().__init__()
         self.boundary_name = boundary_name
-        self.sdf_field = sdf_field
-        self.normals_field = normals_field
+        ### Field names may spell nested leaves ("geom.sdf").
+        self.sdf_field = as_nested_key(sdf_field)
+        self.normals_field = (
+            as_nested_key(normals_field) if normals_field is not None else None
+        )
         self.use_winding_number = use_winding_number
 
     def __call__(self, mesh: Mesh) -> Mesh:
