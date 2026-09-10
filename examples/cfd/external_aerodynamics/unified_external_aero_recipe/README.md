@@ -314,7 +314,10 @@ For each field, the loss type is applied per the field's type (`scalar`
 or `vector`); per-field losses are then weighted by the optional
 `training.field_weights` block in the model YAML and summed.
 
-Supported loss types: Huber (default), MSE, relative MSE.
+Supported loss types (`training.loss_type`): `huber` (default), `mse`, and
+`relative_mse` (`sum((pred - target)^2) / sum(target^2)`, per field; per
+component and summed for vector fields). `rmse` is a deprecated alias for
+`relative_mse` and warns.
 Supported metrics: relative L1, relative L2, MAE.
 
 **`training.field_weights`** is a model-side dict that multiplies each
