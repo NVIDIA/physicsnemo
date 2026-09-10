@@ -30,6 +30,12 @@ from physicsnemo.domain_parallel import scatter_tensor
 from .utils import numerical_shard_tensor_check
 
 
+def _sum_of_squares(out):
+    """Loss with O(1) gradients: the default mean gives ~1e-6 grads on these
+    shapes, and an absolute tolerance then accepts garbage."""
+    return out.float().square().sum()
+
+
 class SDPAWrapper(torch.nn.Module):
     """
     TESTING ONLY
@@ -164,6 +170,7 @@ def test_sdpa_sequence_parallel_autocast(distributed_mesh, backward, amp):
         check_grads=backward,
         atol=tol,
         rtol=tol,
+        loss_fn=_sum_of_squares,
         amp=amp,
         amp_dtype=torch.bfloat16,
     )
@@ -235,6 +242,7 @@ def test_sdpa_replicated_q_sharded_kv(
         check_grads=backward,
         atol=tol,
         rtol=tol,
+        loss_fn=_sum_of_squares,
         amp=amp,
         amp_dtype=torch.bfloat16,
         output_check_fn=_assert_placements((Replicate(),)),
@@ -286,6 +294,7 @@ def test_sdpa_sharded_q_replicated_kv(
         check_grads=backward,
         atol=tol,
         rtol=tol,
+        loss_fn=_sum_of_squares,
         amp=amp,
         amp_dtype=torch.bfloat16,
         output_check_fn=_assert_placements((Shard(2),)),
