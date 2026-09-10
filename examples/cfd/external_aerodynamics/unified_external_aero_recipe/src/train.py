@@ -56,6 +56,7 @@ from utils import (
     FieldType,
     Phase,
     Precision,
+    build_distributed_meshes,
     build_muon_optimizer,
     get_autocast_context,
     make_jsonl_logger,
@@ -67,6 +68,7 @@ from utils import (
 from physicsnemo import datapipes  # noqa: F401 - registers ${dp:...} resolver
 from physicsnemo.datapipes import DataLoader
 from physicsnemo.distributed import DistributedManager, fused_all_reduce
+from physicsnemo.domain_parallel import sync_module_over_mesh
 from physicsnemo.mesh import MESH_FIELD_ASSOCIATIONS, DomainMesh, Mesh
 from physicsnemo.utils import load_checkpoint, save_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
@@ -100,6 +102,17 @@ def _flatten_config(
 ### ---------------------------------------------------------------------------
 ### Aggregation
 ### ---------------------------------------------------------------------------
+
+
+def materialize(t: torch.Tensor | TensorDict) -> torch.Tensor | TensorDict:
+    """Resolve sharded 0-D results to plain tensors, recursing into TensorDicts.
+
+    ShardTensor leaves are gathered with ``full_tensor()``; plain tensors pass
+    through.
+    """
+    if isinstance(t, TensorDict):
+        return TensorDict({key: materialize(value) for key, value in t.items()})
+    return t.full_tensor() if hasattr(t, "full_tensor") else t
 
 
 def _reduce_and_average(
@@ -160,6 +173,10 @@ def _reduce_and_average(
         same leaves in the same order (all ranks share one ``target_config``).
         Single-process skips the reduction, leaving single-GPU logs unchanged.
     """
+    ### Inputs are plain tensors even under domain parallelism: ``forward_pass``
+    ### materializes the logging TensorDicts and ``_run_epoch`` the detached
+    ### loss, so values are identical across each domain group and the
+    ### world-wide AVG below equals the ddp-axis mean.
     if losses_td is None or metrics_td is None:
         return loss_sum.item() / max(n_samples, 1), {}, {}
     ### Divide by the local sample count first, then AVG across ranks: a
@@ -268,8 +285,15 @@ def forward_pass(
     ### Detach (don't sync) the per-field TDs so the caller controls when
     ### a D2H copy happens; running ``.item()`` here would serialise the
     ### forward kernels against the host. ``TensorDict.detach()`` walks
-    ### every leaf in one fast-apply pass.
-    return loss, loss_td.detach(), metric_td.detach()
+    ### every leaf in one fast-apply pass. Under domain parallelism the
+    ### leaves are ShardTensors; the detached LOGGING copies are materialized
+    ### to plain tensors while the live ``loss`` stays untouched for
+    ### ``backward()``.
+    return (
+        loss,
+        materialize(loss_td.detach()),
+        materialize(metric_td.detach()),
+    )
 
 
 ### ---------------------------------------------------------------------------
@@ -384,8 +408,9 @@ def _run_epoch(
             n_local += 1
 
             ### Detached scalar loss: accumulate the epoch sum on-device (no
-            ### host sync) and feed the per-step reducer below.
-            loss_det = loss.detach()
+            ### host sync) and feed the per-step reducer below. Materialized
+            ### so the plain accumulator never sees a ShardTensor.
+            loss_det = materialize(loss.detach())
             total_loss += loss_det
 
             step_dt = time.perf_counter() - step_t0
@@ -692,6 +717,7 @@ def benchmark_io_epoch(
             f"dt={dt:.4f}s  Mem={mem_gb:.2f}GB  {shapes}"
         )
         for name, t in named_tensors:
+            t = materialize(t)  # sharded leaves: stats over the full tensor
             v_flat = t.float() if t.is_floating_point() else t.to(torch.float32)
             logger.info(
                 f"    {name:30s}  "
@@ -753,9 +779,16 @@ def main(cfg: DictConfig) -> None:
     is_rank0 = dist_manager.rank == 0
     logger = RankZeroLoggingWrapper(PythonLogger(name="training"), dist_manager)
 
+    domain_mesh, data_mesh = build_distributed_meshes(cfg, dist_manager, logger)
+
+    ### Seed per data-parallel replica: every rank of a domain group works on
+    ### the same sample and must draw identical dropout / augmentation RNG.
     seed = cfg.training.get("seed", None)
-    set_seed(seed, rank=dist_manager.rank)
-    logger.info(f"Random seed: {seed} (rank offset: {dist_manager.rank})")
+    seed_rank = (
+        data_mesh.get_local_rank() if data_mesh is not None else dist_manager.rank
+    )
+    set_seed(seed, rank=seed_rank)
+    logger.info(f"Random seed: {seed} (rank offset: {seed_rank})")
 
     checkpoint_dir = getattr(cfg, "checkpoint_dir", None) or cfg.output_dir
 
@@ -772,7 +805,9 @@ def main(cfg: DictConfig) -> None:
         val_writer = SummaryWriter(log_dir=os.path.join(run_dir, "tb", "val"))
         log_jsonl = make_jsonl_logger(os.path.join(run_dir, "metrics.jsonl"))
 
-    train_loader, val_loader, normalizer, dataset_info = build_dataloaders(cfg)
+    train_loader, val_loader, normalizer, dataset_info = build_dataloaders(
+        cfg, domain_mesh=domain_mesh, data_mesh=data_mesh
+    )
     target_config: dict[str, FieldType] = dataset_info["targets"]
     ### `metrics_list` is derived later from cfg.metrics (recipe-side);
     ### build_dataloaders no longer ships a "metrics" key in dataset_info.
@@ -833,6 +868,12 @@ def main(cfg: DictConfig) -> None:
     logger.info(f"Parameters: {num_params:,}")
 
     model.to(device)
+
+    if domain_mesh is not None:
+        # All ranks in a domain group process the same sample and must hold
+        # identical weights; DDP below all-reduces gradients over the flat
+        # world, which covers both the ddp and domain axes.
+        sync_module_over_mesh(model, domain_mesh)
 
     if dist_manager.world_size > 1:
         model = torch.nn.parallel.DistributedDataParallel(
