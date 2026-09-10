@@ -67,6 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolved.
 - `torch.unbind` on a `Partial` `ShardTensor` resolves the pending reduction
   before slicing instead of silently dropping it.
+- Fixed autocasting bugs for some attention operations in domain parallelism.
 
 ### Security
 

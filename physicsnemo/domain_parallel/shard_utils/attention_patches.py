@@ -42,6 +42,33 @@ from physicsnemo.domain_parallel.shard_utils.ring import (
 aten = torch.ops.aten
 
 
+def _apply_autocast(*tensors: torch.Tensor) -> tuple[torch.Tensor, ...]:
+    r"""Cast floating-point inputs to the active autocast dtype, if any.
+
+    The sharded attention paths call the efficient-attention kernels directly
+    inside ``autograd.Function``s. Autocast would cast the kernel's inputs on
+    the way in, but the Function saves the *uncast* tensors for backward and
+    the backward kernel requires q/k/v, output and grad_output in one dtype.
+    Casting here, before the Function, makes the saved tensors match what the
+    kernel actually ran on. A no-op when autocast is off.
+
+    Parameters
+    ----------
+    *tensors : torch.Tensor
+        Local q/k/v (and optional mask) tensors.
+
+    Returns
+    -------
+    tuple[torch.Tensor, ...]
+        The inputs, cast where they are floating point and autocast is active.
+    """
+    device_type = tensors[0].device.type
+    if not torch.is_autocast_enabled(device_type):
+        return tensors
+    dtype = torch.get_autocast_dtype(device_type)
+    return tuple(t.to(dtype) if t.is_floating_point() else t for t in tensors)
+
+
 def add_log_sumexp(
     log_a: torch.Tensor | None, log_b: torch.Tensor | None
 ) -> torch.Tensor:
@@ -254,9 +281,12 @@ class RingSDPA(torch.autograd.Function):
                 current_v = finish_ring_iteration(next_v_flat, v.shape)
 
         # Final normalization
-        stable_output = sign_global_output * torch.exp(
-            log_global_output - global_log_sumexp
-        )
+        # The log-space accumulators are fp32 (the kernel's log_sumexp dtype),
+        # so this product is fp32 even for bf16/fp16 q. The backward kernel
+        # requires output and q in the same dtype; cast back before returning.
+        stable_output = (
+            sign_global_output * torch.exp(log_global_output - global_log_sumexp)
+        ).to(q.dtype)
 
         return stable_output, global_log_sumexp, philox_seed, philox_offset
 
@@ -523,9 +553,12 @@ class RingSDPABlocking(torch.autograd.Function):
             current_v = perform_ring_iteration_funcol(current_v, mesh, ring_config)
 
         # Compute the final output
-        stable_output = sign_global_output * torch.exp(
-            log_global_output - global_log_sumexp
-        )
+        # The log-space accumulators are fp32 (the kernel's log_sumexp dtype),
+        # so this product is fp32 even for bf16/fp16 q. The backward kernel
+        # requires output and q in the same dtype; cast back before returning.
+        stable_output = (
+            sign_global_output * torch.exp(log_global_output - global_log_sumexp)
+        ).to(q.dtype)
 
         return stable_output, global_log_sumexp, philox_seed, philox_offset
 
@@ -719,14 +752,14 @@ def ring_sdpa(
     )
 
     # First, get the tensors locally and perform halos:
-    lq, lk, lv = (
+    lq, lk, lv = _apply_autocast(
         q.to_local().contiguous(),
         k.to_local().contiguous(),
         v.to_local().contiguous(),
     )
 
     if attn_mask is not None:
-        latn_mask = attn_mask.to_local().contiguous()
+        (latn_mask,) = _apply_autocast(attn_mask.to_local().contiguous())
     else:
         latn_mask = None
 
@@ -809,6 +842,10 @@ class ReplicatedQSDPA(torch.autograd.Function):
         global_output = funcol.all_reduce(rescaled, "sum", (mesh, 0))
         if isinstance(global_output, funcol.AsyncCollectiveTensor):
             global_output = global_output.wait()
+        # log_sumexp is fp32, so ``rescaled`` is fp32 for bf16/fp16 inputs. The
+        # backward kernel requires output and q in the same dtype; without this
+        # cast a bf16 model gets garbage gradients.
+        global_output = global_output.to(output.dtype)
 
         # The backward kernel expects log_sumexp in the forward kernel's
         # (padded) layout: embed the combined values in the valid region and
@@ -1042,9 +1079,11 @@ def sdpa_wrapper(
             "dropout is not supported with replicated q and sharded k/v"
         )
     local_output, _lse, _seed, _offset = ReplicatedQSDPA.apply(
-        q.to_local().contiguous(),
-        k.to_local().contiguous(),
-        v.to_local().contiguous(),
+        *_apply_autocast(
+            q.to_local().contiguous(),
+            k.to_local().contiguous(),
+            v.to_local().contiguous(),
+        ),
         mesh,
         kwargs,
     )
