@@ -129,6 +129,46 @@ def test_sdpa_sequence_parallel(
     )
 
 
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize("backward", [False, True])
+@pytest.mark.parametrize("amp", [False, True])
+def test_sdpa_sequence_parallel_autocast(distributed_mesh, backward, amp):
+    """Ring SDPA with and without bf16 autocast at one configuration.
+
+    Under autocast the fp32 log-space accumulators must not leak into the
+    output dtype: the backward kernel needs q, output and grad_output alike.
+    """
+
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+
+    dm = DistributedManager()
+    batch_size, seq_len, num_heads, head_dim = 2, 256, 8, 32
+
+    q = generate_sequence_data(batch_size, seq_len, num_heads, head_dim).to(dm.device)
+    k = generate_sequence_data(batch_size, seq_len, num_heads, head_dim).to(dm.device)
+    v = generate_sequence_data(batch_size, seq_len, num_heads, head_dim).to(dm.device)
+
+    placements = (Shard(2),)
+    sq = scatter_tensor(q, 0, distributed_mesh, placements, requires_grad=backward)
+    sk = scatter_tensor(k, 0, distributed_mesh, placements, requires_grad=backward)
+    sv = scatter_tensor(v, 0, distributed_mesh, placements, requires_grad=backward)
+
+    tol = 5e-2 if amp else 1e-5
+
+    numerical_shard_tensor_check(
+        distributed_mesh,
+        SDPAWrapper(),
+        [sq, sk, sv],
+        {},
+        check_grads=backward,
+        atol=tol,
+        rtol=tol,
+        amp=amp,
+        amp_dtype=torch.bfloat16,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Mixed-placement SDPA, as used by FLARE and GALE_FA:
 #   pass 1: sdpa(G_replicated, k_sharded, v_sharded)  -- latent tokens attend
@@ -155,8 +195,9 @@ def _assert_placements(expected_placements):
 @pytest.mark.parametrize("seq_len_q", [64])
 @pytest.mark.parametrize("seq_len_kv", [256])
 @pytest.mark.parametrize("backward", [False, True])
+@pytest.mark.parametrize("amp", [False, True])
 def test_sdpa_replicated_q_sharded_kv(
-    distributed_mesh, batch_size, seq_len_q, seq_len_kv, backward
+    distributed_mesh, batch_size, seq_len_q, seq_len_kv, backward, amp
 ):
     r"""FLARE pass 1: replicated queries attending to a sharded point cloud.
 
@@ -182,14 +223,20 @@ def test_sdpa_replicated_q_sharded_kv(
     sk = scatter_tensor(k, 0, distributed_mesh, (Shard(2),), requires_grad=backward)
     sv = scatter_tensor(v, 0, distributed_mesh, (Shard(2),), requires_grad=backward)
 
+    # bf16 autocast is the recipe's precision. The log-sum-exp stats are fp32,
+    # so the combine must cast back to q's dtype for the backward kernel.
+    tol = 5e-2 if amp else 1e-4
+
     numerical_shard_tensor_check(
         distributed_mesh,
         SDPAWrapper(),
         [sq, sk, sv],
         {},
         check_grads=backward,
-        atol=1e-4,
-        rtol=1e-4,
+        atol=tol,
+        rtol=tol,
+        amp=amp,
+        amp_dtype=torch.bfloat16,
         output_check_fn=_assert_placements((Replicate(),)),
     )
 
@@ -200,8 +247,9 @@ def test_sdpa_replicated_q_sharded_kv(
 @pytest.mark.parametrize("seq_len_q", [256])
 @pytest.mark.parametrize("seq_len_kv", [64])
 @pytest.mark.parametrize("backward", [False, True])
+@pytest.mark.parametrize("amp", [False, True])
 def test_sdpa_sharded_q_replicated_kv(
-    distributed_mesh, batch_size, seq_len_q, seq_len_kv, backward
+    distributed_mesh, batch_size, seq_len_q, seq_len_kv, backward, amp
 ):
     r"""FLARE pass 2: sharded queries attending to replicated keys/values.
 
@@ -226,13 +274,19 @@ def test_sdpa_sharded_q_replicated_kv(
     sk = scatter_tensor(k, 0, distributed_mesh, (Replicate(),), requires_grad=backward)
     sv = scatter_tensor(v, 0, distributed_mesh, (Replicate(),), requires_grad=backward)
 
+    # bf16 autocast is the recipe's precision. The log-sum-exp stats are fp32,
+    # so the combine must cast back to q's dtype for the backward kernel.
+    tol = 5e-2 if amp else 1e-4
+
     numerical_shard_tensor_check(
         distributed_mesh,
         SDPAWrapper(),
         [sq, sk, sv],
         {},
         check_grads=backward,
-        atol=1e-4,
-        rtol=1e-4,
+        atol=tol,
+        rtol=tol,
+        amp=amp,
+        amp_dtype=torch.bfloat16,
         output_check_fn=_assert_placements((Shard(2),)),
     )
