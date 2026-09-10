@@ -928,7 +928,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   implementation. Use `torch.nn.init.trunc_normal_` directly.
 - Deprecates the CorrDiff example (`examples/weather/corrdiff`), which no longer
   receives maintenance, bug fixes, or new features. Use the regional
-  high-resolution weather model example (`examples/weather/stormcast`) instead.
+  high-resolution weather model example (`examples/weather/regional_weather_diffusion`) instead.
   That example unifies regional diffusion-based weather models, and covers the
   CorrDiff downscaling setting alongside other diffusion-based settings.
 
