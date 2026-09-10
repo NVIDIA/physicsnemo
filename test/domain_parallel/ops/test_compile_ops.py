@@ -196,6 +196,22 @@ class SDPAWrapper(torch.nn.Module):
         return torch.nn.functional.scaled_dot_product_attention(q, k, v)
 
 
+class BallQueryWrapper(torch.nn.Module):
+    r"""``radius_search`` on sharded points/queries (exercises ``RingBallQuery``).
+
+    Sums the neighbor points per query so the module returns one tensor; with
+    ``max_points`` above any neighbor count the sum is order independent.
+    """
+
+    def forward(self, points: torch.Tensor, queries: torch.Tensor) -> torch.Tensor:
+        from physicsnemo.nn.functional import radius_search
+
+        _, neighbor_points = radius_search(
+            points, queries, radius=0.2, max_points=64, return_points=True
+        )
+        return neighbor_points.sum(dim=-2)
+
+
 class GradReducerWrapper(torch.nn.Module):
     r"""``GradReducer.apply(tensor, spec)`` (exercises ``GradReducer``).
 
@@ -625,3 +641,36 @@ def test_compile_grad_reducer_1d(distributed_mesh, placement):
     tensor = torch.rand(4, 16, device=dm.device, requires_grad=True)
 
     _run_compile_fwd_bwd(GradReducerWrapper(spec=ref._spec), [tensor])
+
+
+@pytest.mark.multigpu_static
+def test_compile_ring_ball_query(distributed_mesh):
+    r"""Sharded ``radius_search`` traces end to end under ``torch.compile``.
+
+    Dynamo fake-propagates the ``radius_search_warp`` custom op through the
+    ShardTensor handler, so every kernel the ring launches must be an opaque
+    custom op with a fake impl (the per-block merge used to be a raw warp
+    launch). Forward only: ``RingBallQuery`` has no backward.
+    """
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+
+    dm = DistributedManager()
+    torch.manual_seed(0)
+    points = torch.rand(1, 2048, 3, device=dm.device)
+    queries = torch.rand(1, 1024, 3, device=dm.device)
+
+    points_s = scatter_tensor(
+        points, global_src=0, mesh=distributed_mesh, placements=(Shard(1),)
+    )
+    queries_s = scatter_tensor(
+        queries, global_src=0, mesh=distributed_mesh, placements=(Shard(1),)
+    )
+
+    eager_out = BallQueryWrapper()(points_s, queries_s)
+    compiled_out = _run_compile_fwd_bwd(
+        BallQueryWrapper(), [points_s, queries_s], backward=False
+    )
+
+    assert compiled_out._spec.placements == (Shard(1),)
+    torch.testing.assert_close(compiled_out.to_local(), eager_out.to_local())

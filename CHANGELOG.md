@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ShardTensor` ring attention, ring kNN and ring ball query run on functional
   collectives; ring attention works under `torch.compile` as an eager
   graph-break region. In-place `detach_` on a `ShardTensor` is supported.
+- `radius_search` on sharded inputs works under `torch.compile`.
 
 ### Changed
 
