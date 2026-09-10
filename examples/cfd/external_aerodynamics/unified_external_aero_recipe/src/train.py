@@ -949,6 +949,12 @@ def main(cfg: DictConfig) -> None:
     loaded_epoch = load_checkpoint(device=device, **ckpt_args)
 
     if cfg.compile:
+        if domain_mesh is not None:
+            # DDPOptimizer splits the compiled graph into gradient buckets and
+            # re-fakeifies tensors at each split; it does not understand
+            # ShardTensor and fails with "expected size <global>==<local>".
+            # DDP itself is unaffected.
+            torch._dynamo.config.optimize_ddp = False
         model = torch.compile(model)
 
     num_epochs = cfg.training.num_epochs
