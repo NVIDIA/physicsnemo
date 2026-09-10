@@ -49,6 +49,14 @@ dataloader:
   num_workers: 4
   pin_memory: true
 
+# -- Domain parallelism -------------------------------------------------------
+# Shard each sample over `domain_size` GPUs; the rest of the block is the
+# readers' `domain_parallel` policy (see physicsnemo.datapipes.readers.Reader).
+domain_parallelism:
+  domain_size: 1          # number of gpus per batch
+  auto_shard_size: 10000
+  placements: {}
+
 # -- Logging -----------------------------------------------------------------
 logging:
   log_every_n_steps: 10
