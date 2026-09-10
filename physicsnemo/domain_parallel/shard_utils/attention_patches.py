@@ -69,6 +69,31 @@ def _apply_autocast(*tensors: torch.Tensor) -> tuple[torch.Tensor, ...]:
     return tuple(t.to(dtype) if t.is_floating_point() else t for t in tensors)
 
 
+def _kernel_output_layout(t: torch.Tensor) -> torch.Tensor:
+    r"""Return ``t`` in the attention kernels' output memory layout.
+
+    The efficient-attention kernels write their ``(B, H, S, D)`` output with
+    ``(B, S, H, D)``-contiguous memory. In half precision the backward kernel
+    computes ``delta = rowsum(dO * O)`` itself and reads ``O`` assuming that
+    layout, so a saved output in plain ``(B, H, S, D)``-contiguous order gives
+    garbage dQ/dK (dV is unaffected); fp32 computes ``delta`` with strided ops
+    and does not care. Elementwise products of the kernel output keep the
+    layout, but collectives return contiguous tensors. No copy if ``t`` is
+    already in that layout.
+
+    Parameters
+    ----------
+    t : torch.Tensor
+        ``(B, H, S, D)`` attention output.
+
+    Returns
+    -------
+    torch.Tensor
+        Same values, ``(B, S, H, D)``-contiguous memory viewed as ``(B, H, S, D)``.
+    """
+    return t.transpose(1, 2).contiguous().transpose(1, 2)
+
+
 def add_log_sumexp(
     log_a: torch.Tensor | None, log_b: torch.Tensor | None
 ) -> torch.Tensor:
@@ -284,9 +309,11 @@ class RingSDPA(torch.autograd.Function):
         # The log-space accumulators are fp32 (the kernel's log_sumexp dtype),
         # so this product is fp32 even for bf16/fp16 q. The backward kernel
         # requires output and q in the same dtype; cast back before returning.
-        stable_output = (
-            sign_global_output * torch.exp(log_global_output - global_log_sumexp)
-        ).to(q.dtype)
+        stable_output = _kernel_output_layout(
+            (sign_global_output * torch.exp(log_global_output - global_log_sumexp)).to(
+                q.dtype
+            )
+        )
 
         return stable_output, global_log_sumexp, philox_seed, philox_offset
 
@@ -556,9 +583,11 @@ class RingSDPABlocking(torch.autograd.Function):
         # The log-space accumulators are fp32 (the kernel's log_sumexp dtype),
         # so this product is fp32 even for bf16/fp16 q. The backward kernel
         # requires output and q in the same dtype; cast back before returning.
-        stable_output = (
-            sign_global_output * torch.exp(log_global_output - global_log_sumexp)
-        ).to(q.dtype)
+        stable_output = _kernel_output_layout(
+            (sign_global_output * torch.exp(log_global_output - global_log_sumexp)).to(
+                q.dtype
+            )
+        )
 
         return stable_output, global_log_sumexp, philox_seed, philox_offset
 
@@ -845,7 +874,9 @@ class ReplicatedQSDPA(torch.autograd.Function):
         # log_sumexp is fp32, so ``rescaled`` is fp32 for bf16/fp16 inputs. The
         # backward kernel requires output and q in the same dtype; without this
         # cast a bf16 model gets garbage gradients.
-        global_output = global_output.to(output.dtype)
+        # all_reduce hands back a plain contiguous tensor; the saved output
+        # must be in the kernel's layout for the half-precision backward.
+        global_output = _kernel_output_layout(global_output.to(output.dtype))
 
         # The backward kernel expects log_sumexp in the forward kernel's
         # (padded) layout: embed the combined values in the valid region and
