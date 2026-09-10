@@ -29,6 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rows and the dataset assembles `Shard(0)` ShardTensors on the device.
   Custom readers opt in by implementing `Reader._load_sample_domain_parallel`
   with the exported `DomainParallelConfig` / `resolve_leaf_placements`.
+- The unified external aero recipe trains with optoinal domain parallelism
+  (`domain_parallelism.domain_size`), reading samples sharded and running the
+  model on ShardTensors over a domain x data-parallel device mesh.
 
 ### Changed
 
