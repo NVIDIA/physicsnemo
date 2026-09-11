@@ -36,6 +36,7 @@ dependencies = [
     "urllib3>=2.7.0",
     "GitPython>=3.1.49",
     "s3fs>=2023.5.0",
+    "obstore>=0.6.0",
     "packaging>=24.2",
     "timm>=1.0.22",
     "einops>=0.8.1",
