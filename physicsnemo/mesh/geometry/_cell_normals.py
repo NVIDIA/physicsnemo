@@ -34,7 +34,7 @@ factorization which does not support reduced-precision dtypes.
 import torch
 from jaxtyping import Float
 
-from physicsnemo.mesh.utilities._tolerances import safe_normalize
+from physicsnemo.nn.functional import safe_normalize
 
 
 def compute_cell_normals(
@@ -76,17 +76,11 @@ def compute_cell_normals(
 
     match n_spatial_dims:
         case 2:
-            result = _normals_2d(relative_vectors)
+            return _normals_2d(relative_vectors)
         case 3:
-            result = _normals_3d(relative_vectors)
+            return _normals_3d(relative_vectors)
         case _:
-            result = _normals_general(relative_vectors)
-
-    # Lock the dtype contract: under CUDA ``torch.autocast`` (e.g. bf16),
-    # ``safe_normalize`` uses ``aten::norm``, which is on the fp32 cast list,
-    # so the closed-form branches can silently return fp32 even when
-    # ``relative_vectors`` is bf16.
-    return result.to(relative_vectors.dtype)
+            return _normals_general(relative_vectors)
 
 
 # ---------------------------------------------------------------------------

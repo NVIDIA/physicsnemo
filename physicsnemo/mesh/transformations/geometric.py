@@ -35,7 +35,7 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from tensordict import TensorDict
 
-from physicsnemo.mesh.utilities._tolerances import safe_normalize
+from physicsnemo.nn.functional import safe_normalize
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh

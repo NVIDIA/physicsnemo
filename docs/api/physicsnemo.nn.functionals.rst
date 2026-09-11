@@ -20,6 +20,7 @@ in the documentation for performance comparisons.
 
    nn/functionals/sampling
    nn/functionals/neighbors
+   nn/functionals/normalization
    nn/functionals/derivatives
    nn/functionals/geometry
    nn/functionals/fourier_spectral

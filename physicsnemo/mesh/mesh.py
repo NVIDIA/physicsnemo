@@ -65,10 +65,10 @@ from physicsnemo.mesh.transformations.geometric import (
 )
 from physicsnemo.mesh.utilities._padding import _pad_by_tiling_last, _pad_with_value
 from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
-from physicsnemo.mesh.utilities._tolerances import safe_normalize
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
 from physicsnemo.mesh.validation import validate
 from physicsnemo.mesh.visualization.draw_mesh import draw
+from physicsnemo.nn.functional import safe_normalize
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.neighbors._adjacency import Adjacency

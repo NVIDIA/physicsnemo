@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds `physicsnemo.nn.functional.safe_normalize` for vector normalization
+  across floating-point dtypes and scales, preserving zero vectors and the
+  input dtype under autocast.
 - Adds `physicsnemo.datapipes.keys` and routes every config-driven field name
   in `physicsnemo.datapipes` through it, so a `"."` in a YAML field name
   (`"solution.pressure"`) addresses a leaf inside a nested `TensorDict`.
