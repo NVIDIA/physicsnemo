@@ -34,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed an issue in `Natten2DSelfAttention` and `RopeNatten2DSelfAttention`
+  with `qk_norm=True` mixing `LayerNorm` fp32 Q/K outputs with autocasted V
+  dtypes.
 - Datapipe transforms, collators, readers, and the unified external aero
   recipe no longer silently skip or mis-handle nested `TensorDict` fields
   (membership was tested against top-level `td.keys()`, and
