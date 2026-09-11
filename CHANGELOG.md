@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in `physicsnemo.datapipes` through it, so a `"."` in a YAML field name
   (`"solution.pressure"`) addresses a leaf inside a nested `TensorDict`.
   Nested `Mesh` data no longer needs to be flattened before use.
+- `DistributedManager.initialize(timeout=...)` accepts numeric seconds or a
+  `timedelta` for the default process-group timeout. Explicit values override
+  `PHYSICSNEMO_DIST_TIMEOUT_S`; unset or empty configuration keeps PyTorch's
+  backend default. Invalid timeouts are rejected before initialization state
+  changes, allowing corrected configuration to be retried.
 
 ### Changed
 
@@ -29,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Normalizes cell, point, transformed, and partition-cluster mesh normals
+  robustly across floating-point dtypes and scales. Zero vectors remain zero,
+  small nonzero vectors retain unit length, and large finite vectors avoid
+  norm overflow.
 - Datapipe transforms, collators, readers, and the unified external aero
   recipe no longer silently skip or mis-handle nested `TensorDict` fields
   (membership was tested against top-level `td.keys()`, and
@@ -630,6 +639,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   detached before `.numpy()`); and integer/bool data crashed (`safe_eps` on an
   integer dtype) or truncated via integer division during facet/scatter
   aggregation (now computed in a floating dtype).
+- `physicsnemo.mesh`: averaging a complex point or cell field no longer silently
+  returns `float64` with the imaginary part discarded. Complex tensors are not
+  "floating point" by `torch`'s definition, so facet/scatter aggregation
+  promoted them like an integer field, corrupting
+  `Mesh.cell_data_to_point_data`, `Mesh.get_facet_mesh` (both `data_source`
+  settings), and `repair.merge_duplicate_points`. A `"mean"` still requires
+  real weights, because its divisor is clamped away from zero and `clamp`
+  rejects complex dtypes; a `"sum"` accepts complex weights and promotes to the
+  common dtype of the values and the weights.
 - `physicsnemo.mesh` Morton-code quantization now handles empty inputs, tiny
   extents, half-precision coordinates, and one-dimensional endpoints correctly.
 - `physicsnemo.mesh`: fixed Loop subdivision pulling open boundaries inward (now
@@ -667,21 +685,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   broke the `test_get_checkpoint_dir` CI test on Windows. The function now
   always joins with `/`, working uniformly for local paths and `fsspec`
   URIs (`msc://`, etc.) across operating systems.
-- Mesh normals no longer inherit the hardcoded `eps=1e-12` clamp of
-  `torch.nn.functional.normalize`, which is wrong at both ends of every
-  dtype's range. Cell normals, point normals, normals carried through a
-  `transform`, and `partition_cells` cluster normals now divide each vector
-  by its own largest component before normalizing, which is exact wherever
-  the input is representable. Three distinct failures are fixed. Degenerate
-  (zero-area) cells and points with no incident cell returned NaN in
-  `float16`, where the clamp floor is not representable so the division was
-  `0 / 0`. Cells below roughly `1e-6` units across returned normals that were
-  not unit length in `float32` *and* `float64` alike, since an absolute floor
-  corrupts the highest-precision dtype just as badly as the lowest: a 100 nm
-  cell measured in metres came back with a normal of length `1e-2`. Cells
-  whose cross product nearly fills the dtype came back with a silently *zero*
-  normal, because squaring the components overflowed the norm to `inf`.
-  Well-conditioned meshes are unchanged beyond a one-ULP shift.
 
 ### Security
 
@@ -929,7 +932,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   implementation. Use `torch.nn.init.trunc_normal_` directly.
 - Deprecates the CorrDiff example (`examples/weather/corrdiff`), which no longer
   receives maintenance, bug fixes, or new features. Use the regional
-  high-resolution weather model example (`examples/weather/stormcast`) instead.
+  high-resolution weather model example (`examples/weather/regional_weather_diffusion`) instead.
   That example unifies regional diffusion-based weather models, and covers the
   CorrDiff downscaling setting alongside other diffusion-based settings.
 
