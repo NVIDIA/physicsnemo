@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PHYSICSNEMO_DIST_TIMEOUT_S`; unset or empty configuration keeps PyTorch's
   backend default. Invalid timeouts are rejected before initialization state
   changes, allowing corrected configuration to be retried.
+- Adds `physicsnemo.mesh.FieldLayout`, which packs the named scalar and vector
+  fields of a point `TensorDict` into two dense channel tensors in a fixed,
+  name-sorted order and unpacks them back, plus `validate_rank_spec` for
+  checking a `{name: rank}` schema.
 
 ### Changed
 
