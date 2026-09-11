@@ -604,8 +604,11 @@ class TestRequireVersionSpecAdditional:
 # =============================================================================
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
-# Matches `pip install [quote]<dist>[<extras>]` and captures dist + extras.
-_EXTRAS_INSTALL_RE = re.compile(r"pip install\s+\"?([A-Za-z0-9_.-]+)\[([^\]]+)\]")
+# Matches every `<dist>[<extras>]` requirement anywhere in a hint, including
+# secondary alternatives such as `# or "nvidia-physicsnemo[cu12]"`. The
+# distribution name must directly abut the bracket, so prose like
+# "part of the [gnns] group" is not matched.
+_EXTRAS_INSTALL_RE = re.compile(r"(?<![\w.-])([A-Za-z0-9_.-]+)\[([A-Za-z0-9_.,\s-]+)\]")
 
 
 @pytest.fixture(scope="module")
