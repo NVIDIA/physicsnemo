@@ -17,13 +17,13 @@
 """Abstract base class for linear-Gaussian noise schedules."""
 
 from abc import ABC, abstractmethod
-from typing import Any, Literal, Tuple
+from typing import Any, Callable, Literal, Tuple
 
 import torch
 from jaxtyping import Float
 from torch import Tensor
 
-from physicsnemo.diffusion.base import Denoiser, Predictor
+from physicsnemo.diffusion.base import Denoiser, Predictor, PredictorType
 
 from .base import NoiseScheduler
 
@@ -84,11 +84,15 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
 
     - :meth:`drift`: Drift term :math:`f(\mathbf{x}, t)` for ODE/SDE
     - :meth:`diffusion`: Squared diffusion term :math:`g^2(\mathbf{x}, t)`
+    - :meth:`snr`: Signal-to-noise ratio :math:`\alpha(t) / \sigma(t)`
     - :meth:`x0_to_score`: Convert x0-prediction to score
     - :meth:`score_to_x0`: Convert score to x0-prediction
     - :meth:`add_noise`: Add noise to clean data (training)
     - :meth:`init_latents`: Initialize latent state (sampling)
     - :meth:`get_denoiser`: Get ODE/SDE RHS (sampling)
+    - :meth:`get_linear_denoiser`: Get the coefficients to decompose the
+         ODE/SDE RHS into a semi-linear form, used by exponential ODE/SDE
+         solvers
 
     Examples
     --------
@@ -424,6 +428,25 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
             - 2 * (alpha_dot_t_bc / alpha_t_bc) * sigma_t_bc**2
         )
         return g_sq_bc
+
+    def snr(
+        self,
+        t: Float[Tensor, " *shape"],
+    ) -> Float[Tensor, " *shape"]:
+        r"""
+        Compute the signal-to-noise ratio :math:`\alpha(t) / \sigma(t)`.
+
+        Parameters
+        ----------
+        t : Tensor
+            Diffusion time tensor of any shape.
+
+        Returns
+        -------
+        Tensor
+            Signal-to-noise ratio with same shape as ``t``.
+        """
+        return self.alpha(t) / self.sigma(t)
 
     def x0_to_score(
         self,
@@ -761,6 +784,10 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
         stochastic term :math:`g(t) d\mathbf{W}` is handled by the solver,
         not returned by the denoiser itself.
 
+        Exponential integrators also need the coefficient of the linear part
+        of this right-hand side. Build that callback with
+        :meth:`get_linear_denoiser` using the same predictor configuration.
+
         Parameters
         ----------
         score_predictor : Predictor, optional
@@ -904,6 +931,149 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
             raise ValueError(
                 f"denoising_type must be 'ode' or 'sde', got '{denoising_type}'"
             )
+
+    def get_linear_denoiser(
+        self,
+        prediction_type: PredictorType = "x0",
+        denoising_type: Literal["ode", "sde"] = "ode",
+    ) -> tuple[
+        Callable[[Float[Tensor, " *shape"]], Float[Tensor, " *shape"]],
+        Callable[[Float[Tensor, " *shape"]], Float[Tensor, " *shape"]],
+        Callable[[Float[Tensor, " *shape"]], Float[Tensor, " *shape"]],
+    ]:
+        r"""
+        Use this method with :meth:`get_denoiser` when a solver needs the
+        affine structure of the diffusion dynamics. For an extended semi-linear
+        right-hand side,
+
+        .. math::
+            \frac{d\mathbf{x}}{dt} = a(t) \, \mathbf{x}
+            + b(t) \, G(\mathbf{x}, t)
+
+        This method returns the tuple
+        :math:`(a(t), \mathcal{A}(t), b(t))`, where
+        :math:`a(t)` is the bias coefficient with antiderivative
+        :math:`\mathcal{A}(t)` (:math:`\mathcal{A}'(t) = a(t)`), and
+        :math:`b(t)` is the slope coefficient. The :meth:`get_denoiser` returns
+        the full right-hand side.
+
+        .. note::
+
+            Configure ``prediction_type`` and ``denoising_type`` to match the
+            predictor and denoiser used by the solver.
+
+        Parameters
+        ----------
+        prediction_type : PredictorType, default="x0"
+            Parameterization used by the matching denoiser. Choose ``"x0"``,
+            ``"score"``, or ``"epsilon"`` to match the predictor supplied to
+            :meth:`get_denoiser`.
+        denoising_type : {"ode", "sde"}, default="ode"
+            Chooses the coefficients for the probability-flow ODE or
+            reverse SDE. Use the same value when calling :meth:`get_denoiser`.
+
+        Returns
+        -------
+        tuple[Callable, Callable, Callable]
+            Functions mapping diffusion time :math:`t` to the bias
+            :math:`a(t)`, its antiderivative :math:`\mathcal{A}(t)`, and the
+            slope :math:`b(t)`.
+
+        Raises
+        ------
+        ValueError
+            If ``prediction_type`` is not ``"x0"``, ``"score"``, or
+            ``"epsilon"``.
+
+        Examples
+        --------
+        This example shows how to build matching full and affine callbacks for
+        an x0-predictor. Subtracting :math:`a(t) \, \mathbf{x}` from the full
+        right-hand side gives the nonlinear term:
+
+        >>> import torch
+        >>> from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
+        >>> scheduler = EDMNoiseScheduler()
+        >>> x0_pred = lambda x, t: x / (1 + t.view(-1, 1, 1, 1)**2)  # Toy x0-predictor
+        >>> bias, bias_int, slope = scheduler.get_linear_denoiser(
+        ...     prediction_type="x0"
+        ... )
+        >>> full = scheduler.get_denoiser(x0_predictor=x0_pred)
+        >>> x = torch.randn(2, 3, 8, 8)
+        >>> t = torch.tensor([5.0, 5.0])
+        >>> bias(t).shape
+        torch.Size([2])
+        >>> nonlinear = full(x, t) - bias(t).view(-1, 1, 1, 1) * x
+        >>> nonlinear.shape
+        torch.Size([2, 3, 8, 8])
+        """
+        # Capture methods as local variables to avoid referencing self
+        alpha = self.alpha
+        alpha_dot = self.alpha_dot
+        sigma = self.sigma
+        sigma_dot = self.sigma_dot
+
+        if prediction_type in ("score", "epsilon"):
+            # score- and noise-parameterizations share the bias coefficient;
+            # the reverse SDE doubles the slope of the noise-prediction term
+            factor = 1.0 if denoising_type == "ode" else 2.0
+
+            def bias(
+                t: Float[Tensor, " *shape"],
+            ) -> Float[Tensor, " *shape"]:
+                return alpha_dot(t) / alpha(t)
+
+            def bias_int(
+                t: Float[Tensor, " *shape"],
+            ) -> Float[Tensor, " *shape"]:
+                return torch.log(alpha(t))
+
+            def slope(
+                t: Float[Tensor, " *shape"],
+            ) -> Float[Tensor, " *shape"]:
+                return factor * (sigma_dot(t) - sigma(t) * alpha_dot(t) / alpha(t))
+
+        elif prediction_type == "x0" and denoising_type == "ode":
+
+            def bias(
+                t: Float[Tensor, " *shape"],
+            ) -> Float[Tensor, " *shape"]:
+                return sigma_dot(t) / sigma(t)
+
+            def bias_int(
+                t: Float[Tensor, " *shape"],
+            ) -> Float[Tensor, " *shape"]:
+                return torch.log(sigma(t))
+
+            def slope(
+                t: Float[Tensor, " *shape"],
+            ) -> Float[Tensor, " *shape"]:
+                return alpha_dot(t) - alpha(t) * sigma_dot(t) / sigma(t)
+
+        elif prediction_type == "x0":
+
+            def bias(
+                t: Float[Tensor, " *shape"],
+            ) -> Float[Tensor, " *shape"]:
+                return 2 * sigma_dot(t) / sigma(t) - alpha_dot(t) / alpha(t)
+
+            def bias_int(
+                t: Float[Tensor, " *shape"],
+            ) -> Float[Tensor, " *shape"]:
+                return 2 * torch.log(sigma(t)) - torch.log(alpha(t))
+
+            def slope(
+                t: Float[Tensor, " *shape"],
+            ) -> Float[Tensor, " *shape"]:
+                return 2 * (alpha_dot(t) - alpha(t) * sigma_dot(t) / sigma(t))
+
+        else:
+            raise ValueError(
+                f"prediction_type must be 'x0', 'score', or 'epsilon', got "
+                f"'{prediction_type}'"
+            )
+
+        return bias, bias_int, slope
 
     def add_noise(
         self,

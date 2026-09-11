@@ -406,6 +406,18 @@ There are two ways to use solvers:
 - ``"edm_stochastic_heun"`` ---
   :class:`~physicsnemo.diffusion.samplers.EDMStochasticHeunSolver`.
   Second-order with configurable stochastic noise injection.
+- ``"exponential_euler"`` ---
+  :class:`~physicsnemo.diffusion.samplers.ExponentialEulerSolver`.
+  First-order solver for DDIM-like sampling and distilled few-step models.
+- ``"edm_stochastic_exponential_euler"`` ---
+  :class:`~physicsnemo.diffusion.samplers.EDMStochasticExponentialEulerSolver`.
+  Stochastic solver for distilled few-step and consistency models.
+- ``"dpmpp_2m"`` ---
+  :class:`~physicsnemo.diffusion.samplers.DPMPlusPlus2M`.
+  Efficient second-order DPM-Solver++(2M) solver for high-quality sampling.
+- ``"dpmpp_2m_unic2"`` ---
+  :class:`~physicsnemo.diffusion.samplers.DPMPlusPlus2MUniC2`.
+  Third-order UniC2 predictor-corrector built on DPM-Solver++(2M).
 
 **Custom solvers** can be defined by implementing the
 :class:`~physicsnemo.diffusion.samplers.Solver` protocol: any object
@@ -498,6 +510,38 @@ Solvers
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. autoclass:: physicsnemo.diffusion.samplers.EDMStochasticHeunSolver
+    :show-inheritance:
+    :members:
+    :exclude-members: __init__
+
+:code:`ExponentialEulerSolver`
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. autoclass:: physicsnemo.diffusion.samplers.ExponentialEulerSolver
+    :show-inheritance:
+    :members:
+    :exclude-members: __init__
+
+:code:`EDMStochasticExponentialEulerSolver`
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. autoclass:: physicsnemo.diffusion.samplers.EDMStochasticExponentialEulerSolver
+    :show-inheritance:
+    :members:
+    :exclude-members: __init__
+
+:code:`DPMPlusPlus2M`
+^^^^^^^^^^^^^^^^^^^^^
+
+.. autoclass:: physicsnemo.diffusion.samplers.DPMPlusPlus2M
+    :show-inheritance:
+    :members:
+    :exclude-members: __init__
+
+:code:`DPMPlusPlus2MUniC2`
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. autoclass:: physicsnemo.diffusion.samplers.DPMPlusPlus2MUniC2
     :show-inheritance:
     :members:
     :exclude-members: __init__

@@ -93,8 +93,12 @@ class _CustomEulerSolver:
         return x + (t_next_bc - t_cur_bc) * d
 
 
-# (solver_key, solver_options, sampler_name, uses_rng). "_custom_euler" maps to
-# a _CustomEulerSolver instance via _make_solver_arg.
+# (solver_key, solver_options, sampler_name, uses_rng). "_custom_euler" maps
+# to a _CustomEulerSolver instance via _make_solver_arg. The "_use_*" keys are
+# sentinels resolved by _make_solver_arg: they build schedule callbacks from
+# the scheduler of the test. The configs of the exponential and
+# DPM-Solver++(2M) solvers mirror the docstring examples of their classes;
+# the scheduler axis of the tests covers the noise schedules of the examples.
 SAMPLER_CONFIGS = [
     ("euler", {}, "euler", False),
     ("heun", {}, "heun", False),
@@ -111,6 +115,57 @@ SAMPLER_CONFIGS = [
         {"S_churn": 20, "num_steps": NUM_STEPS},
         "stoch_heun",
         True,
+    ),
+    # DDIM sampling: the affine coefficients of the x0-parameterization
+    (
+        "exponential_euler",
+        {"_use_linear_fn": True, "_use_slope_fn": True},
+        "exponential_euler",
+        False,
+    ),
+    # EDM-style churn on top of the exponential Euler update
+    (
+        "edm_stochastic_exponential_euler",
+        {
+            "S_churn": 40,
+            "num_steps": 18,
+            "_use_linear_fn": True,
+            "_use_slope_fn": True,
+        },
+        "stoch_exp_euler",
+        True,
+    ),
+    # Stochastic DDIM (full noise renewal) for distilled few-step and
+    # consistency models
+    (
+        "edm_stochastic_exponential_euler",
+        {
+            "renoise": 1.0,
+            "_use_linear_fn": True,
+            "_use_slope_fn": True,
+            "_use_sigma_fns": True,
+        },
+        "stoch_exp_euler_renoise",
+        True,
+    ),
+    # Classical two-step Adams-Bashforth: default callbacks
+    ("dpmpp_2m", {}, "dpmpp_2m_ab2", False),
+    # Original DPM-Solver++(2M): log-SNR extrapolation coordinate
+    (
+        "dpmpp_2m",
+        {"_use_linear_fn": True, "_use_slope_fn": True, "_use_log_snr_lambda": True},
+        "dpmpp_2m",
+        False,
+    ),
+    # Corrected two-step Adams-Bashforth: default callbacks
+    ("dpmpp_2m_unic2", {}, "dpmpp_2m_unic2_default", False),
+    # DPM-Solver++(2M) with the UniC-2 corrector: log-SNR extrapolation
+    # coordinate
+    (
+        "dpmpp_2m_unic2",
+        {"_use_linear_fn": True, "_use_slope_fn": True, "_use_log_snr_lambda": True},
+        "dpmpp_2m_unic2",
+        False,
     ),
 ]
 
@@ -192,11 +247,34 @@ def _make_sampling_components(
     return scheduler, model, denoiser, xN
 
 
-def _make_solver_arg(solver_key, solver_options, denoiser):
-    """Build the solver argument for sample() from config fields."""
+def _make_solver_arg(
+    solver_key,
+    solver_options,
+    denoiser,
+    scheduler=None,
+    predictor_type="x0",
+):
+    """Build the solver argument for sample() from config fields, resolving
+    the "_use_*" sentinels with the scheduler of the test."""
     if solver_key == "_custom_euler":
         return _CustomEulerSolver(denoiser), None
-    return solver_key, solver_options or None
+    opts = dict(solver_options) if solver_options else {}
+    if opts.pop("_use_sigma_fns", False):
+        opts["sigma_fn"] = scheduler.sigma
+        opts["sigma_inv_fn"] = scheduler.sigma_inv
+        opts["alpha_fn"] = scheduler.alpha
+    if opts.pop("_use_linear_fn", False):
+        # The affine callbacks follow the parameterization of the denoiser
+        (
+            opts["bias_fn"],
+            opts["bias_int_fn"],
+            slope_fn,
+        ) = scheduler.get_linear_denoiser(prediction_type=predictor_type)
+        if opts.pop("_use_slope_fn", False):
+            opts["slope_fn"] = slope_fn
+    if opts.pop("_use_log_snr_lambda", False):
+        opts["lambda_fn"] = lambda t: torch.log(scheduler.snr(t))
+    return solver_key, opts or None
 
 
 # =============================================================================
@@ -241,7 +319,7 @@ class TestSampleNonRegression:
         sampler_name,
         uses_rng,
     ):
-        scheduler, _, denoiser, xN = _make_sampling_components(
+        scheduler, model, denoiser, xN = _make_sampling_components(
             sched_cls,
             sched_kwargs,
             shape,
@@ -250,7 +328,13 @@ class TestSampleNonRegression:
             device,
             predictor_type=predictor_type,
         )
-        solver_arg, opts = _make_solver_arg(solver_key, solver_options, denoiser)
+        solver_arg, opts = _make_solver_arg(
+            solver_key,
+            solver_options,
+            denoiser,
+            scheduler=scheduler,
+            predictor_type=predictor_type,
+        )
 
         if "cuda" in str(device) and uses_rng:
 
@@ -316,7 +400,7 @@ class TestSampleNonRegression:
         sampler_name,
         uses_rng,
     ):
-        scheduler, _, denoiser, xN = _make_sampling_components(
+        scheduler, model, denoiser, xN = _make_sampling_components(
             sched_cls,
             sched_kwargs,
             shape,
@@ -325,7 +409,13 @@ class TestSampleNonRegression:
             device,
             predictor_type=predictor_type,
         )
-        solver_arg, opts = _make_solver_arg(solver_key, solver_options, denoiser)
+        solver_arg, opts = _make_solver_arg(
+            solver_key,
+            solver_options,
+            denoiser,
+            scheduler=scheduler,
+            predictor_type=predictor_type,
+        )
 
         if "cuda" in str(device) and uses_rng:
 
@@ -656,7 +746,7 @@ class TestSampleCompile:
         """Sampling with a compiled denoiser matches eager; graph reused on 2nd call."""
         torch._dynamo.config.error_on_recompile = True
 
-        scheduler, _, denoiser, xN = _make_sampling_components(
+        scheduler, model, denoiser, xN = _make_sampling_components(
             sched_cls,
             sched_kwargs,
             shape,
@@ -669,10 +759,18 @@ class TestSampleCompile:
         compiled_denoiser = torch.compile(denoiser, fullgraph=True)
 
         solver_eager, opts_eager = _make_solver_arg(
-            solver_key, solver_options, denoiser
+            solver_key,
+            solver_options,
+            denoiser,
+            scheduler=scheduler,
+            predictor_type=predictor_type,
         )
         solver_compiled, opts_compiled = _make_solver_arg(
-            solver_key, solver_options, compiled_denoiser
+            solver_key,
+            solver_options,
+            compiled_denoiser,
+            scheduler=scheduler,
+            predictor_type=predictor_type,
         )
 
         with torch.no_grad():
@@ -822,14 +920,22 @@ class TestFullSamplerCompile:
         if solver_key == "_custom_euler":
             pytest.skip("Custom solver instances are tested in TestSampleCompile")
 
+        solver_arg, opts = _make_solver_arg(
+            solver_key,
+            solver_options,
+            denoiser,
+            scheduler=scheduler,
+            predictor_type=predictor_type,
+        )
+
         def do_sample(x):
             return sample(
                 denoiser,
                 x,
                 scheduler,
                 NUM_STEPS_SHORT,
-                solver=solver_key,
-                solver_options=solver_options or None,
+                solver=solver_arg,
+                solver_options=opts,
             )
 
         compiled_sample = torch.compile(do_sample, fullgraph=True)
@@ -948,7 +1054,13 @@ class TestGradientFlow:
             num_steps=NUM_STEPS_SHORT,
             predictor_type=predictor_type,
         )
-        solver_arg, opts = _make_solver_arg(solver_key, solver_options, denoiser)
+        solver_arg, opts = _make_solver_arg(
+            solver_key,
+            solver_options,
+            denoiser,
+            scheduler=scheduler,
+            predictor_type=predictor_type,
+        )
 
         x0 = sample(
             denoiser,
