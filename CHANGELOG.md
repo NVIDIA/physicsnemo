@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PHYSICSNEMO_DIST_TIMEOUT_S`; unset or empty configuration keeps PyTorch's
   backend default. Invalid timeouts are rejected before initialization state
   changes, allowing corrected configuration to be retried.
+- `MeshToDomainMesh` in `cell_centroids` mode records each source cell's
+  effective measure (area times any composed measure weights) on the interior
+  under the reserved `point_data` key `TARGET_QUADRATURE_MEASURE_KEY`, so
+  integrals and weighted losses over the query points remain possible after
+  the cells are gone.
 
 ### Changed
 
@@ -34,6 +39,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The unified external aero recipe no longer writes `MeshToDomainMesh`'s
+  reserved query-measure key into saved inference outputs, and its force
+  documentation and subsampling warning now explain how measure weights
+  compensate for retained-area shrinkage. Exact unbiasedness requires the
+  correct inclusion probabilities, fixed fields, and a fixed physical moment
+  origin; approximate sampling and sample-dependent frames can introduce bias.
 - Datapipe transforms, collators, readers, and the unified external aero
   recipe no longer silently skip or mis-handle nested `TensorDict` fields
   (membership was tested against top-level `td.keys()`, and

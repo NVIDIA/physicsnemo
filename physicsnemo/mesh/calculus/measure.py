@@ -80,6 +80,24 @@ if TYPE_CHECKING:
 MEASURE_WEIGHTS_KEY: str = "_measure_weights"
 
 
+def _validate_measure_weight_shape(
+    mesh: "Mesh", weights: torch.Tensor
+) -> Float[torch.Tensor, " n_cells"]:
+    """Enforce the reserved field's one-scalar-per-cell contract.
+
+    ``cell_data``'s batch dimension only checks the leading axis, so a
+    ``(n_cells, 1)`` tensor is storable but would broadcast wrongly against
+    ``cell_areas``.
+    """
+    expected = (mesh.n_cells,)
+    if weights.shape != expected:
+        raise ValueError(
+            f"{MEASURE_WEIGHTS_KEY!r} must have shape {expected} "
+            f"(one scalar per cell), got {tuple(weights.shape)}"
+        )
+    return weights
+
+
 def cell_measure_weights(mesh: "Mesh") -> Float[torch.Tensor, " n_cells"]:
     r"""Per-cell measure weights of *mesh* (ones when none are recorded).
 
@@ -94,7 +112,7 @@ def cell_measure_weights(mesh: "Mesh") -> Float[torch.Tensor, " n_cells"]:
         return torch.ones(
             mesh.n_cells, dtype=mesh.points.dtype, device=mesh.points.device
         )
-    return weights
+    return _validate_measure_weight_shape(mesh, weights)
 
 
 def cell_measures(mesh: "Mesh") -> Float[torch.Tensor, " n_cells"]:
@@ -114,7 +132,7 @@ def cell_measures(mesh: "Mesh") -> Float[torch.Tensor, " n_cells"]:
     weights = mesh.cell_data.get(MEASURE_WEIGHTS_KEY, None)
     if weights is None:
         return cell_areas
-    return cell_areas * weights
+    return cell_areas * _validate_measure_weight_shape(mesh, weights)
 
 
 def compose_measure_weights(mesh: "Mesh", factor: float | torch.Tensor) -> None:
@@ -135,4 +153,11 @@ def compose_measure_weights(mesh: "Mesh", factor: float | torch.Tensor) -> None:
         This producer's weight contribution; a scalar or a per-cell tensor
         broadcast against the existing weights.
     """
+    if isinstance(factor, torch.Tensor) and factor.ndim != 0:
+        expected = (mesh.n_cells,)
+        if factor.shape != expected:
+            raise ValueError(
+                f"measure-weight factor must be a scalar or have shape "
+                f"{expected}, got {tuple(factor.shape)}"
+            )
     mesh.cell_data[MEASURE_WEIGHTS_KEY] = cell_measure_weights(mesh) * factor

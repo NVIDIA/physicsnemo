@@ -35,6 +35,7 @@ from nondim import NonDimensionalizeByMetadata, freestream_scales
 from omegaconf import OmegaConf
 from tensordict import TensorDict
 
+from physicsnemo.datapipes.transforms.mesh import TARGET_QUADRATURE_MEASURE_KEY
 from physicsnemo.mesh import DomainMesh
 
 _RECIPE = Path(__file__).resolve().parent.parent
@@ -257,3 +258,18 @@ def test_attach_and_save_rescale_geometry_scales_points(tmp_path):
 
     reloaded = DomainMesh.load(str(out_path))
     assert torch.allclose(reloaded.interior.points, orig_points * l_ref, atol=1e-4)
+
+
+def test_attach_and_save_drops_query_measure(tmp_path):
+    """The training-geometry query measure is not written to the artifact."""
+    targets = {"pressure": "scalar", "wss": "vector"}
+    domain = make_surface_domain_mesh(targets, n_cells=16)
+    domain.interior.point_data[TARGET_QUADRATURE_MEASURE_KEY] = torch.ones(
+        domain.interior.n_points
+    )
+    phys = domain.interior.point_data.select("pressure", "wss")
+    out_path = tmp_path / "m.pdmsh"
+    infer.attach_and_save(domain, phys, phys, targets, out_path, rescale_geometry=True)
+
+    reloaded = DomainMesh.load(str(out_path))
+    assert TARGET_QUADRATURE_MEASURE_KEY not in reloaded.interior.point_data

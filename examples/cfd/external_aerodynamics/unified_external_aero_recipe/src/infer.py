@@ -99,6 +99,7 @@ from utils import (
 
 from physicsnemo import datapipes  # noqa: F401 - registers ${dp:...} resolver
 from physicsnemo.datapipes.keys import as_nested_key, with_leaf_name
+from physicsnemo.datapipes.transforms.mesh import TARGET_QUADRATURE_MEASURE_KEY
 from physicsnemo.distributed import DistributedManager, fused_all_reduce
 from physicsnemo.mesh import DomainMesh
 from physicsnemo.utils import load_checkpoint
@@ -277,8 +278,9 @@ def attach_and_save(
     Writes ``pred_<name>`` and ``true_<name>`` onto a copy of the
     interior's ``point_data`` (the training-space target fields are
     dropped to avoid ambiguity with their physical ``true_<name>``
-    counterparts; non-target inputs like ``sdf`` are kept). The result is
-    saved with :meth:`DomainMesh.save` as a native ``.pdmsh`` tree.
+    counterparts; non-target inputs like ``sdf`` are kept; the query
+    measure ``MeshToDomainMesh`` records is dropped). The result is saved
+    with :meth:`DomainMesh.save` as a native ``.pdmsh`` tree.
 
     When *rescale_geometry* is set and ``L_ref`` is available, every mesh
     in the domain is scaled by ``L_ref`` to recover physical-scale
@@ -295,9 +297,13 @@ def attach_and_save(
     ### Names may spell nested leaves ("solution.p"); ``key in td`` and
     ### ``exclude`` resolve them, and the pred_/true_ prefix goes on the
     ### leaf so the nesting is preserved: ("solution", "pred_p").
+    ### The query measure is in training-geometry units and would be stale
+    ### once the geometry is rescaled, so it is not written either.
     target_keys = [as_nested_key(n) for n in target_config]
-    present_targets = [k for k in target_keys if k in interior.point_data]
-    new_pd = interior.point_data.exclude(*present_targets).clone()
+    drop_keys = [k for k in target_keys if k in interior.point_data]
+    if TARGET_QUADRATURE_MEASURE_KEY in interior.point_data:
+        drop_keys.append(TARGET_QUADRATURE_MEASURE_KEY)
+    new_pd = interior.point_data.exclude(*drop_keys).clone()
     for key, val in pred_phys.items(include_nested=True, leaves_only=True):
         new_pd[with_leaf_name(key, lambda n: f"pred_{n}")] = val
     for key, val in true_phys.items(include_nested=True, leaves_only=True):
@@ -563,7 +569,7 @@ def main(cfg: DictConfig) -> None:
     totals: dict[str, float] = {k: 0.0 for k in metric_calculator.expected_keys()}
     count = 0
     sampling_cap = cfg.get("sampling_resolution", None)
-    truncation_warned = False
+    subsampling_warned = False
     for i, idx in enumerate(sampler):
         sample = dataset[idx]
         domain, metadata = sample
@@ -594,23 +600,25 @@ def main(cfg: DictConfig) -> None:
             )
             if sample_forces is not None:
                 force_acc.update(*sample_forces)
-                ### Force magnitudes are only physical at full surface
-                ### resolution (see forces.py): a vehicle cell count
-                ### sitting exactly at the subsample cap means the surface
-                ### was almost certainly truncated by the reader.
+                ### A vehicle cell count sitting exactly at the subsample
+                ### cap means the surface was almost certainly subsampled.
+                ### Measure weights compensate for retained-area shrinkage;
+                ### sampling and moment-frame caveats remain (see forces.py).
                 if (
-                    not truncation_warned
+                    not subsampling_warned
                     and sampling_cap is not None
                     and domain.boundaries["vehicle"].n_cells == sampling_cap
                 ):
                     logger.warning(
                         f"Vehicle surface has exactly sampling_resolution="
                         f"{sampling_cap} cells, so it was likely subsampled; "
-                        f"integrated force/moment coefficients cover only the "
-                        f"kept cells and their magnitudes are not physical. "
-                        f"Raise `sampling_resolution` for absolute CD/CL/CM."
+                        f"integrated force/moment coefficients are estimates "
+                        f"from weighted kept cells and may have sampling "
+                        f"noise or bias, including from a sample-dependent "
+                        f"moment origin. Check convergence by increasing "
+                        f"`sampling_resolution`; see forces.py for assumptions."
                     )
-                    truncation_warned = True
+                    subsampling_warned = True
 
         ### Re-dimensionalize predictions + reference to physical units,
         ### then write them back onto the DomainMesh.

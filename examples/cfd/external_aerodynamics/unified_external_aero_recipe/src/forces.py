@@ -38,7 +38,8 @@ moment coefficient vectors are
 
 The surface integral is evaluated with the mesh quadrature utility
 :meth:`physicsnemo.mesh.Mesh.integrate` (cell-data / P0 rule:
-:math:`\\int_S f\\,dA = \\sum_c f_c\\,A_c`).
+:math:`\\int_S f\\,dA = \\sum_c f_c\\,A_c\\,w_c`, where :math:`w_c` is the
+cell's measure weight -- one unless the surface was subsampled).
 
 The coefficient vectors are then projected onto an orthonormal
 (drag, lift, side) triad built from the per-sample freestream direction
@@ -66,16 +67,23 @@ Conventions and assumptions:
   L_ref`` to integrate on a physical-scale surface; areas and moment
   arms are translation-invariant, so the lost ``CenterMesh`` offset does
   not affect forces (and only shifts the moment reference for moments).
-- **Full surface resolution.** The quadrature covers exactly the cells
-  present on the ``vehicle`` mesh. If the pipeline subsampled the
-  surface (``sampling_resolution`` below the mesh's cell count), the
-  integral covers only the kept cells and every coefficient shrinks by
-  roughly the kept-to-total area fraction -- for predicted and reference
-  values alike, so the *comparison* stays meaningful but the magnitudes
-  do not. ``ForceContext.coefficients``'s 1:1 points/cells contract
-  check cannot detect this (a subsampled surface still satisfies it);
-  ``infer.py`` warns when a vehicle's cell count sits at the
-  ``sampling_resolution`` cap.
+- **Subsampled surfaces.** ``SubsampleMesh`` records the cell-count
+  correction ``n_before / n_kept`` as a measure weight, and
+  ``Mesh.integrate`` multiplies by it to compensate for the retained-area
+  shrinkage. This gives an unbiased Horvitz--Thompson estimate when every
+  cell has inclusion probability ``n_kept / n_before`` and its field value
+  and physical moment reference are fixed independently of the sample.
+  The large-population ``poisson_gap`` sampler is approximate, so this
+  guarantee does not apply to every ``SubsampleMesh`` path. Predictions
+  that depend on the sampled geometry can introduce additional bias.
+  Likewise, centering after reader-level subsampling changes the physical
+  moment origin between samples; measure weights cannot correct that
+  frame change. Subsampled coefficients can have both sampling noise and
+  bias and should be checked for convergence with surface resolution.
+  ``ForceContext.coefficients``'s 1:1 points/cells contract check cannot
+  tell an exact full-surface integral from such an estimate; ``infer.py``
+  warns when a vehicle's cell count sits at the ``sampling_resolution``
+  cap.
 """
 
 from dataclasses import dataclass
@@ -153,7 +161,8 @@ def force_moment_coefficients(
     Args:
         vehicle: Triangulated surface mesh (codimension-1) carrying the
             body. Its cells define the quadrature; ``cell_normals`` and
-            ``cell_areas`` are taken from this mesh.
+            the effective cell measures (areas times any measure weights)
+            are taken from this mesh.
         pressure_coeff: Per-cell pressure coefficient :math:`C_p`, shape
             ``(n_cells,)`` (a trailing singleton dim, e.g. ``(n_cells, 1)``,
             is flattened internally). Must align 1:1 with ``vehicle`` cells.
