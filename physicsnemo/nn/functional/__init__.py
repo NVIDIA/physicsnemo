@@ -63,6 +63,7 @@ from .interpolation import (
 )
 from .natten import na1d, na2d, na3d
 from .neighbors import knn, radius_search
+from .normalization import safe_normalize
 from .regularization_parameterization import drop_path, weight_fact
 from .rendering import (
     isosurface_render,
@@ -120,6 +121,7 @@ __all__ = [
     "rfft",
     "rfft2",
     "point_cloud_render",
+    "safe_normalize",
     "scalar_field_to_rgba",
     "shrinkwrap_points",
     "signed_distance_field",

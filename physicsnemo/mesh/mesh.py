@@ -35,7 +35,6 @@ from typing import (
 )
 
 import torch
-import torch.nn.functional as F
 from jaxtyping import Float
 from tensordict import NonTensorData, TensorDict, tensorclass
 
@@ -69,6 +68,7 @@ from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
 from physicsnemo.mesh.validation import validate
 from physicsnemo.mesh.visualization.draw_mesh import draw
+from physicsnemo.nn.functional import safe_normalize
 
 ### slice_points remaps cells through a full-mesh lookup table unless the mesh
 ### has more than this many points per cell-vertex entry, in which case it
@@ -1086,7 +1086,7 @@ class Mesh:
         )
 
         ### Normalize to get unit normals
-        return F.normalize(accumulated_normals, dim=-1)
+        return safe_normalize(accumulated_normals, dim=-1)
 
     @property
     def gaussian_curvature_vertices(self) -> torch.Tensor:

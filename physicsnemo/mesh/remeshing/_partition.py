@@ -35,10 +35,10 @@ repeat).
 from typing import TYPE_CHECKING, NamedTuple
 
 import torch
-import torch.nn.functional as F
 from jaxtyping import Float, Int
 
 from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
+from physicsnemo.nn.functional import safe_normalize
 from physicsnemo.nn.functional.neighbors import knn
 
 if TYPE_CHECKING:
@@ -182,7 +182,7 @@ def partition_cells(
             weights=cell_areas,
             aggregation="sum",
         )
-        cluster_normals = F.normalize(cluster_normals, dim=-1)
+        cluster_normals = safe_normalize(cluster_normals, dim=-1)
     else:
         cluster_normals = torch.zeros(n_seeds, n_dims, dtype=dtype, device=device)
 
@@ -194,7 +194,11 @@ def partition_cells(
         weights=cell_areas,
         aggregation="mean",
     )
-    cluster_centroids[cluster_areas == 0] = seeds[cluster_areas == 0]
+    ### ``torch.where`` rather than boolean-mask assignment: the latter routes
+    ### through ``nonzero``, which synchronizes the device on the host.
+    cluster_centroids = torch.where(
+        (cluster_areas == 0).unsqueeze(-1), seeds, cluster_centroids
+    )
 
     return CellPartition(
         assignments=assignments,

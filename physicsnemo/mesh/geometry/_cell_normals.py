@@ -32,8 +32,9 @@ factorization which does not support reduced-precision dtypes.
 """
 
 import torch
-import torch.nn.functional as F
 from jaxtyping import Float
+
+from physicsnemo.nn.functional import safe_normalize
 
 
 def compute_cell_normals(
@@ -57,7 +58,7 @@ def compute_cell_normals(
     -------
     Float[torch.Tensor, "n_cells n_spatial_dims"]
         Unit normal vectors. For degenerate cells (zero-area), the normal is
-        a zero vector (from ``F.normalize``'s default behavior).
+        a zero vector.
 
     Examples
     --------
@@ -75,17 +76,11 @@ def compute_cell_normals(
 
     match n_spatial_dims:
         case 2:
-            result = _normals_2d(relative_vectors)
+            return _normals_2d(relative_vectors)
         case 3:
-            result = _normals_3d(relative_vectors)
+            return _normals_3d(relative_vectors)
         case _:
-            result = _normals_general(relative_vectors)
-
-    # Lock the dtype contract: under CUDA ``torch.autocast`` (e.g. bf16),
-    # ``F.normalize`` calls ``aten::norm`` which is on the fp32 cast list, so
-    # the closed-form branches can silently return fp32 even when
-    # ``relative_vectors`` is bf16.
-    return result.to(relative_vectors.dtype)
+            return _normals_general(relative_vectors)
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +94,7 @@ def _normals_2d(
     """Edge normals in 2D via 90-degree CCW rotation: (x, y) -> (-y, x)."""
     e = relative_vectors[:, 0]  # (n_cells, 2)
     normals = torch.stack([-e[:, 1], e[:, 0]], dim=-1)
-    return F.normalize(normals, dim=-1)
+    return safe_normalize(normals, dim=-1)
 
 
 def _normals_3d(
@@ -107,7 +102,7 @@ def _normals_3d(
 ) -> Float[torch.Tensor, "n_cells 3"]:
     """Triangle normals in 3D via cross product."""
     normals = torch.linalg.cross(relative_vectors[:, 0], relative_vectors[:, 1])
-    return F.normalize(normals, dim=-1)
+    return safe_normalize(normals, dim=-1)
 
 
 def _normals_general(
@@ -146,4 +141,4 @@ def _normals_general(
 
         normals = torch.stack(normal_components, dim=-1)
 
-    return F.normalize(normals, dim=-1)
+    return safe_normalize(normals, dim=-1)
