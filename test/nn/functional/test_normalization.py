@@ -16,10 +16,15 @@
 
 """Tests for vector normalization across dtypes and scales."""
 
+import inspect
+
 import pytest
 import torch
 
+from benchmarks.physicsnemo.nn.functional._spec_utils import build_benchmark_plan
+from benchmarks.physicsnemo.nn.functional.registry import FUNCTIONAL_SPECS
 from physicsnemo.nn.functional import safe_normalize
+from physicsnemo.nn.functional.normalization import SafeNormalize
 
 _ALL_DTYPES = [torch.bfloat16, torch.float16, torch.float32, torch.float64]
 
@@ -133,8 +138,9 @@ class TestSafeNormalize:
 
     @pytest.mark.parametrize("dtype", _ALL_DTYPES)
     @pytest.mark.parametrize("autocast_dtype", [torch.float16, torch.bfloat16])
+    @pytest.mark.parametrize("implementation", [None, "torch"])
     def test_autocast_preserves_dtype_and_values(
-        self, device, dtype: torch.dtype, autocast_dtype: torch.dtype
+        self, device, dtype: torch.dtype, autocast_dtype: torch.dtype, implementation
     ) -> None:
         """Autocast preserves the input dtype, zero rows, and unit vectors."""
         info = torch.finfo(dtype)
@@ -150,7 +156,7 @@ class TestSafeNormalize:
         )
 
         with torch.autocast(torch.device(device).type, dtype=autocast_dtype):
-            result = safe_normalize(vectors, dim=-1)
+            result = safe_normalize(vectors, dim=-1, implementation=implementation)
 
         expected = torch.tensor(
             [
@@ -179,3 +185,73 @@ class TestSafeNormalize:
         result = safe_normalize(vectors, dim=dim)
 
         torch.testing.assert_close(result, expected)
+
+    def test_public_signature(self) -> None:
+        """Keep the required dimension and expose keyword-only backend selection."""
+        parameters = inspect.signature(safe_normalize).parameters
+
+        assert list(parameters) == ["vectors", "dim", "implementation"]
+        assert parameters["dim"].default is inspect.Parameter.empty
+        assert parameters["implementation"].kind is inspect.Parameter.KEYWORD_ONLY
+        assert parameters["implementation"].default is None
+
+    @pytest.mark.parametrize("implementation", [None, "torch"])
+    @pytest.mark.parametrize("compiled", [False, True])
+    def test_forward_and_backward(self, device, implementation, compiled) -> None:
+        """Eager and compiled dispatch preserve values and analytical gradients."""
+        vectors = torch.tensor(
+            [[3.0, 4.0, 0.0], [-2.0, 1.0, 5.0]],
+            device=device,
+            dtype=torch.float64,
+            requires_grad=True,
+        )
+        normalize = (
+            torch.compile(safe_normalize, fullgraph=True)
+            if compiled
+            else safe_normalize
+        )
+
+        result = normalize(vectors, dim=-1, implementation=implementation)
+        result.sum().backward()
+
+        lengths = vectors.detach().norm(dim=-1, keepdim=True)
+        expected = vectors.detach() / lengths
+        expected_gradient = (
+            1 - expected * expected.sum(dim=-1, keepdim=True)
+        ) / lengths
+        torch.testing.assert_close(result, expected)
+        torch.testing.assert_close(vectors.grad, expected_gradient)
+
+    def test_benchmark_registration(self) -> None:
+        """The shared benchmark runner discovers both normalization phases."""
+        assert SafeNormalize in FUNCTIONAL_SPECS
+        keys, specs = build_benchmark_plan(
+            device="cpu",
+            phases=("forward", "backward"),
+            selected_specs=(SafeNormalize,),
+        )
+
+        assert {key[0] for key in keys} == {"forward", "backward"}
+        assert {key[2] for key in keys} == {"torch"}
+        assert all(spec is SafeNormalize for spec in specs.values())
+
+    @pytest.mark.parametrize("backward", [False, True])
+    def test_benchmark_inputs(self, device, backward) -> None:
+        """Each benchmark workload runs with unit outputs and finite gradients."""
+        make_inputs = (
+            SafeNormalize.make_inputs_backward
+            if backward
+            else SafeNormalize.make_inputs_forward
+        )
+        for _, (vectors,), kwargs in make_inputs(device=device):
+            assert vectors.requires_grad == backward
+            result = SafeNormalize.dispatch(vectors, implementation="torch", **kwargs)
+            assert result.device == torch.device(device)
+            torch.testing.assert_close(
+                result.norm(dim=kwargs["dim"]),
+                torch.ones_like(result[..., 0]),
+            )
+            if backward:
+                result.sum().backward()
+                assert vectors.grad is not None
+                assert torch.isfinite(vectors.grad).all()

@@ -19,11 +19,10 @@
 import torch
 from jaxtyping import Float
 
+from physicsnemo.core.function_spec import FunctionSpec
 
-def safe_normalize(
-    vectors: Float[torch.Tensor, "..."],
-    dim: int,
-) -> Float[torch.Tensor, "..."]:
+
+class SafeNormalize(FunctionSpec):
     """Scale vectors to unit L2 length along ``dim``, preserving zero vectors.
 
     Each vector is divided by its largest absolute component before computing
@@ -36,6 +35,9 @@ def safe_normalize(
         Floating-point vectors of any shape.
     dim : int
         Dimension holding the vector components.
+    implementation : {"torch"} or None
+        Implementation to use. When ``None``, dispatch selects the available
+        implementation.
 
     Returns
     -------
@@ -55,12 +57,44 @@ def safe_normalize(
     tensor([[0.6000, 0.8000],
             [0.0000, 0.0000]])
     """
-    # Avoid an empty reduction, which amax does not support.
-    if vectors.shape[dim] == 0:
-        return vectors
 
-    scale = vectors.abs().amax(dim=dim, keepdim=True)
-    is_zero = scale == 0
-    scaled = vectors / scale.masked_fill(is_zero, 1)
-    norm = scaled.norm(dim=dim, keepdim=True)
-    return (scaled / norm.masked_fill(is_zero, 1)).to(vectors.dtype)
+    _BENCHMARK_CASES = (
+        ("small-1024x3", 1024),
+        ("medium-16384x3", 16384),
+        ("large-262144x3", 262144),
+    )
+
+    @FunctionSpec.register(name="torch", rank=0, baseline=True)
+    def torch_forward(
+        vectors: Float[torch.Tensor, "..."],
+        dim: int,
+    ) -> Float[torch.Tensor, "..."]:
+        """Normalize vectors using rescaled PyTorch operations."""
+        # Avoid an empty reduction, which amax does not support.
+        if vectors.shape[dim] == 0:
+            return vectors
+
+        scale = vectors.abs().amax(dim=dim, keepdim=True)
+        is_zero = scale == 0
+        scaled = vectors / scale.masked_fill(is_zero, 1)
+        norm = scaled.norm(dim=dim, keepdim=True)
+        return (scaled / norm.masked_fill(is_zero, 1)).to(vectors.dtype)
+
+    @classmethod
+    def make_inputs_forward(cls, device: torch.device | str = "cpu"):
+        """Generate increasing batches of three-component vectors."""
+        for label, n_vectors in cls._BENCHMARK_CASES:
+            vectors = torch.randn(n_vectors, 3, device=device)
+            yield label, (vectors,), {"dim": -1}
+
+    @classmethod
+    def make_inputs_backward(cls, device: torch.device | str = "cpu"):
+        """Generate differentiable versions of the forward workloads."""
+        for label, (vectors,), kwargs in cls.make_inputs_forward(device=device):
+            yield label, (vectors.requires_grad_(),), kwargs
+
+
+safe_normalize = SafeNormalize.make_function("safe_normalize")
+
+
+__all__ = ["SafeNormalize", "safe_normalize"]
