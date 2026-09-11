@@ -18,6 +18,8 @@ import atexit
 import os
 import queue
 import warnings
+from datetime import timedelta
+from numbers import Real
 from typing import Optional, Tuple
 from warnings import warn
 
@@ -306,7 +308,44 @@ class DistributedManager(object):
             return "gloo"
 
     @staticmethod
-    def initialize_env():
+    def _resolve_timeout(timeout: float | timedelta | None) -> timedelta | None:
+        """Resolve an explicit timeout or environment value without changing state.
+
+        Empty environment values retain the backend default, as do unset
+        values. Explicit values take precedence, including when the environment
+        contains an invalid value. Positive numeric seconds must remain positive
+        after conversion to ``timedelta``'s microsecond resolution.
+        """
+        source = "timeout"
+        if timeout is None:
+            value = os.environ.get("PHYSICSNEMO_DIST_TIMEOUT_S")
+            if not value:
+                return None
+            source = "PHYSICSNEMO_DIST_TIMEOUT_S"
+            try:
+                timeout = float(value)
+            except (ValueError, OverflowError) as error:
+                raise ValueError(f"{source} must be a number of seconds") from error
+
+        if isinstance(timeout, timedelta):
+            resolved = timeout
+        else:
+            if isinstance(timeout, bool) or not isinstance(timeout, Real):
+                raise TypeError("timeout must be numeric seconds or a timedelta")
+            try:
+                resolved = timedelta(seconds=float(timeout))
+            except (ValueError, OverflowError) as error:
+                raise ValueError(
+                    f"{source} must be finite, positive, and representable as a timedelta"
+                ) from error
+        if resolved <= timedelta(0):
+            raise ValueError(
+                f"{source} must be positive at timedelta's microsecond resolution"
+            )
+        return resolved
+
+    @staticmethod
+    def initialize_env(*, timeout: float | timedelta | None = None):
         """Setup method using generic initialization"""
         rank = int(os.environ.get("RANK"))
         world_size = int(os.environ.get("WORLD_SIZE"))
@@ -331,10 +370,11 @@ class DistributedManager(object):
             addr=addr,
             port=port,
             backend=DistributedManager.get_available_backend(),
+            timeout=timeout,
         )
 
     @staticmethod
-    def initialize_open_mpi(addr, port):
+    def initialize_open_mpi(addr, port, *, timeout: float | timedelta | None = None):
         """Setup method using OpenMPI initialization"""
         rank = int(os.environ.get("OMPI_COMM_WORLD_RANK"))
         world_size = int(os.environ.get("OMPI_COMM_WORLD_SIZE"))
@@ -348,10 +388,11 @@ class DistributedManager(object):
             port=port,
             backend=DistributedManager.get_available_backend(),
             method="openmpi",
+            timeout=timeout,
         )
 
     @staticmethod
-    def initialize_slurm(port):
+    def initialize_slurm(port, *, timeout: float | timedelta | None = None):
         """Setup method using SLURM initialization"""
         rank = int(os.environ.get("SLURM_PROCID"))
         world_size = int(os.environ.get("SLURM_NPROCS"))
@@ -366,10 +407,11 @@ class DistributedManager(object):
             port=port,
             backend=DistributedManager.get_available_backend(),
             method="slurm",
+            timeout=timeout,
         )
 
     @staticmethod
-    def initialize():
+    def initialize(*, timeout: float | timedelta | None = None):
         """
         Initialize distributed manager
 
@@ -387,10 +429,36 @@ class DistributedManager(object):
         listed above. Initialization method can also be explicitly controlled using the
         `PHYSICSNEMO_DISTRIBUTED_INITIALIZATION_METHOD` environment variable and setting it
         to one of the options above.
+
+        Parameters
+        ----------
+        timeout : float or datetime.timedelta or None, optional
+            Process-group timeout as numeric seconds (including fractional
+            seconds) or a ``timedelta``. For example,
+            ``DistributedManager.initialize(timeout=6000)``. An explicit value
+            overrides ``PHYSICSNEMO_DIST_TIMEOUT_S``. If ``None``, that environment
+            variable is read as seconds; unset or empty leaves PyTorch's backend
+            default unchanged. Values must be finite and positive at
+            ``timedelta``'s microsecond resolution. Set the same timeout on all
+            ranks. This configures the default process group; groups created
+            separately retain their own timeout policies.
+
+        Raises
+        ------
+        TypeError
+            If an explicit timeout is not numeric seconds or a ``timedelta``.
+        ValueError
+            If the selected timeout is invalid, nonpositive, or unrepresentable.
+            Validation precedes initialization state changes, so callers can
+            correct the configuration and retry.
         """
         if DistributedManager.is_initialized():
             warn("Distributed manager is already initialized")
             return
+
+        # Resolve before launcher autodetection: a bad timeout must not be
+        # mistaken for missing launcher variables by the TypeError fallback.
+        timeout = DistributedManager._resolve_timeout(timeout)
 
         addr = os.getenv("MASTER_ADDR", "localhost")
         port = os.getenv("MASTER_PORT", "12355")
@@ -405,23 +473,23 @@ class DistributedManager(object):
         )
         if initialization_method is None:
             try:
-                DistributedManager.initialize_env()
+                DistributedManager.initialize_env(timeout=timeout)
             except TypeError:
                 if "SLURM_PROCID" in os.environ:
-                    DistributedManager.initialize_slurm(port)
+                    DistributedManager.initialize_slurm(port, timeout=timeout)
                 elif "OMPI_COMM_WORLD_RANK" in os.environ:
-                    DistributedManager.initialize_open_mpi(addr, port)
+                    DistributedManager.initialize_open_mpi(addr, port, timeout=timeout)
                 else:
                     warn(
                         "Could not initialize using ENV, SLURM or OPENMPI methods. Assuming this is a single process job"
                     )
                     DistributedManager._shared_state["_is_initialized"] = True
         elif initialization_method == "ENV":
-            DistributedManager.initialize_env()
+            DistributedManager.initialize_env(timeout=timeout)
         elif initialization_method == "SLURM":
-            DistributedManager.initialize_slurm(port)
+            DistributedManager.initialize_slurm(port, timeout=timeout)
         elif initialization_method == "OPENMPI":
-            DistributedManager.initialize_open_mpi(addr, port)
+            DistributedManager.initialize_open_mpi(addr, port, timeout=timeout)
         else:
             raise RuntimeError(
                 "Unknown initialization method "
@@ -562,8 +630,16 @@ class DistributedManager(object):
         port="12355",
         backend="nccl",
         method="env",
+        *,
+        timeout: float | timedelta | None = None,
     ):
-        """Set up PyTorch distributed process group and update manager attributes"""
+        """Set up a process group and update manager attributes.
+
+        ``timeout`` accepts numeric seconds or a ``timedelta`` and takes
+        precedence over ``PHYSICSNEMO_DIST_TIMEOUT_S``, as in :meth:`initialize`.
+        Validate before mutating state, including for callers using setup directly.
+        """
+        timeout = DistributedManager._resolve_timeout(timeout)
         os.environ["MASTER_ADDR"] = addr
         os.environ["MASTER_PORT"] = str(port)
 
@@ -597,6 +673,7 @@ class DistributedManager(object):
                     rank=manager.rank,
                     world_size=manager.world_size,
                     device_id=manager.device,
+                    timeout=timeout,
                 )
             except TypeError:
                 # device_id only introduced in PyTorch 2.3
@@ -604,6 +681,7 @@ class DistributedManager(object):
                     backend,
                     rank=manager.rank,
                     world_size=manager.world_size,
+                    timeout=timeout,
                 )
 
         if torch.cuda.is_available():

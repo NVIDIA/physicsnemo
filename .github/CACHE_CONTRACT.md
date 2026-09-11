@@ -64,7 +64,7 @@ set the backend's cache-path env var in the test step, done.
 | Property | Value |
 |---|---|
 | Key | `<TESTMON_CACHE_KEY_PREFIX>-latest` |
-| Prefix encodes | nightly identity (`testmon-nightly`) |
+| Prefix encodes | nightly identity + CUDA stack (`testmon-nightly-cu13`); the CUDA tag keeps cu12/cu13 nightlies from clobbering each other's slot via delete-before-save |
 | Suffix | literal `latest` (mutable slot, refreshed via delete-before-save) |
 | Contents | `.testmondata`, `.testmondata-shm`, `.testmondata-wal` -- testmon's per-test dependency graph and last-run signatures |
 | Invalidates when | prefix is bumped (essentially never, by design) |
@@ -143,7 +143,7 @@ Two ways to run the regen:
 | Property | Value |
 |---|---|
 | Key | `<COVERAGE_CACHE_KEY_PREFIX>-latest` |
-| Prefix encodes | nightly identity (`coverage-nightly`) |
+| Prefix encodes | nightly identity + CUDA stack (`coverage-nightly-cu13`) |
 | Suffix | literal `latest` (mutable slot, refreshed via delete-before-save) |
 | Contents | parallel-mode coverage shards (`.coverage.*`) produced by the nightly's full-suite pytest run, before `coverage combine` |
 | Invalidates when | prefix is bumped |
