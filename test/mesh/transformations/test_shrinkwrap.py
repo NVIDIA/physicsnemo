@@ -91,8 +91,12 @@ def test_shrinkwrap_namespace_and_bound_method_are_canonical():
         torch.uint64,
     ],
 )
+@pytest.mark.parametrize(
+    "replace_cells", [False, True], ids=["constructor", "replacement"]
+)
 def test_mesh_shrinkwrap_normalizes_integer_target_connectivity(
     index_dtype: torch.dtype,
+    replace_cells: bool,
 ):
     source = _source_patch()
     target_template = _target_plane()
@@ -101,37 +105,36 @@ def test_mesh_shrinkwrap_normalizes_integer_target_connectivity(
         cells=target_template.cells.to(index_dtype),
         cell_data=target_template.cell_data,
     )
+    if replace_cells:
+        target.cells = target_template.cells.to(index_dtype)
+    original_cells = target.cells.clone()
 
     output = source.shrinkwrap(target, implementation="torch")
 
     expected = source.points.clone()
     expected[:, 2] = 0.0
     torch.testing.assert_close(output.points, expected)
-    assert target.cells.dtype == index_dtype
+    torch.testing.assert_close(target.cells, original_cells)
 
 
 @pytest.mark.parametrize("index_dtype", [torch.bool, torch.complex64])
 def test_mesh_shrinkwrap_rejects_non_integer_target_connectivity(
     index_dtype: torch.dtype,
 ):
-    target_template = _target_plane()
-    target = Mesh(
-        points=target_template.points,
-        cells=target_template.cells.to(index_dtype),
-    )
+    target = _target_plane()
+    # Construction rejects these dtypes; replacements still need validation here.
+    target.cells = target.cells.to(index_dtype)
 
     with pytest.raises(TypeError, match="non-bool integer dtype"):
         _source_patch().shrinkwrap(target, implementation="torch")
 
 
 def test_mesh_shrinkwrap_normalized_connectivity_keeps_range_validation():
-    target_template = _target_plane()
-    target = Mesh(
-        points=target_template.points,
-        cells=torch.tensor(
-            [[0, 1, torch.iinfo(torch.uint64).max]],
-            dtype=torch.uint64,
-        ),
+    target = _target_plane()
+    # Bypass constructor overflow checks to exercise shrinkwrap's range check.
+    target.cells = torch.tensor(
+        [[0, 1, torch.iinfo(torch.uint64).max], [0, 2, 3]],
+        dtype=torch.uint64,
     )
 
     with pytest.raises(ValueError, match="indices outside the target point range"):

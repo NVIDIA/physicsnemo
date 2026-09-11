@@ -34,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixes mesh dtype handling: preserves integer-coordinate precision, normalizes
+  connectivity safely, and rejects integer `.to()` casts. Floating/complex casts
+  preserve the source mesh.
 - Datapipe transforms, collators, readers, and the unified external aero
   recipe no longer silently skip or mis-handle nested `TensorDict` fields
   (membership was tested against top-level `td.keys()`, and
