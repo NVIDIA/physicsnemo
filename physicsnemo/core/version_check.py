@@ -242,7 +242,10 @@ _PACKAGE_HINTS: Dict[str, str] = {
     ),
     "transformer_engine": _format_install_hint(
         "transformer_engine",
-        group="perf",
+        direct_hint=(
+            'pip install "nvidia-physicsnemo[cu13,transformer-engine-cu13]"'
+            '  # or "nvidia-physicsnemo[cu12,transformer-engine-cu12]"'
+        ),
     ),
     "nvidia.dali": _format_install_hint(
         "nvidia-dali",
