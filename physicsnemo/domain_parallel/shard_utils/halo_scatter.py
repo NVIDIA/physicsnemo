@@ -628,6 +628,9 @@ def register_halo_scatter_handlers() -> None:
     non-empty ``_halo_meta_packed`` routing are corrected, all others fall through."""
     from torch.distributed.tensor import DTensor
 
+    from physicsnemo.domain_parallel._shard_tensor_spec import (
+        validate_aligned_sharding,
+    )
     from physicsnemo.domain_parallel.shard_tensor import (
         ShardTensor,
         _torch_function_fallback_via_dtensor,
@@ -711,6 +714,13 @@ def register_halo_scatter_handlers() -> None:
             return _torch_function_fallback_via_dtensor(f, args, kwargs)
         _assert_single_mesh_dim(self._spec)
         dim, index, src = args[1], args[2], args[3]
+        # index/src normally arrive promoted to Replicate; genuinely sharded
+        # ones pair positionally with each other and with the accumulator,
+        # so their uneven boundaries must agree (issue #1943).
+        validate_aligned_sharding(
+            [t._spec for t in (self, index, src) if isinstance(t, ShardTensor)],
+            getattr(f, "__name__", "scatter_add"),
+        )
         local_result = _apply_scatter(
             f, _local(self), dim, _local(index), _local(src), kwargs
         )
@@ -731,6 +741,11 @@ def register_halo_scatter_handlers() -> None:
             return _torch_function_fallback_via_dtensor(f, args, kwargs)
         _assert_single_mesh_dim(self._spec)
         dim, index, src = args[1], args[2], args[3]
+        # Same alignment requirement as the out-of-place handler (issue #1943).
+        validate_aligned_sharding(
+            [t._spec for t in (self, index, src) if isinstance(t, ShardTensor)],
+            getattr(f, "__name__", "scatter_add_"),
+        )
         local_result = _apply_scatter(
             _inplace_to_oop[f], _local(self), dim, _local(index), _local(src), kwargs
         )
