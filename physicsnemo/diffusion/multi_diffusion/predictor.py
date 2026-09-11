@@ -99,10 +99,10 @@ class MultiDiffusionPredictor(Predictor):
         pass. Useful when differentiating through the predictor on large
         domains. Works with or without ``chunk_size``.
     prediction_type : PredictorType, default="x0"
-        Output type of the wrapped model. One of ``"x0"``, ``"score"``, or
-        ``"epsilon"``. The predictor always exposes an x0-compatible
-        output; pass the appropriate conversion function below when the
-        model does not directly predict x0.
+        What the wrapped model outputs: one of ``"x0"``, ``"score"``,
+        ``"epsilon"``, or ``"flow"``. The predictor always exposes an
+        x0-compatible output; pass the appropriate conversion function
+        below when the model does not directly predict x0.
     score_to_x0_fn : callable, optional
         Conversion ``(score, x_t, t) -> x0`` applied to the model output.
         Required when ``prediction_type="score"``. Typically obtained from
@@ -113,6 +113,11 @@ class MultiDiffusionPredictor(Predictor):
         Required when ``prediction_type="epsilon"``. Typically obtained from
         a noise scheduler, e.g.
         :meth:`~physicsnemo.diffusion.noise_schedulers.LinearGaussianNoiseScheduler.epsilon_to_x0`.
+    flow_to_x0_fn : callable, optional
+        Conversion ``(flow, x_t, t) -> x0`` applied to the model output.
+        Required when ``prediction_type="flow"``. Typically obtained from
+        a noise scheduler, e.g.
+        :meth:`~physicsnemo.diffusion.noise_schedulers.LinearGaussianNoiseScheduler.flow_to_x0`.
     **model_kwargs : Any
         Additional keyword arguments bound once at construction and
         forwarded to the wrapped model at every call.
@@ -308,6 +313,11 @@ class MultiDiffusionPredictor(Predictor):
             Float[Tensor, " B *dims"],
         ]
         | None = None,
+        flow_to_x0_fn: Callable[
+            [Float[Tensor, " B *dims"], Float[Tensor, " B *dims"], Float[Tensor, " B"]],
+            Float[Tensor, " B *dims"],
+        ]
+        | None = None,
         **model_kwargs: Any,
     ) -> None:
         self._md_model: MultiDiffusionModel2D = _unwrap_module(
@@ -358,10 +368,16 @@ class MultiDiffusionPredictor(Predictor):
                         "epsilon_to_x0_fn must be provided when prediction_type='epsilon'."
                     )
                 self._to_x0 = epsilon_to_x0_fn
+            case "flow":
+                if flow_to_x0_fn is None:
+                    raise ValueError(
+                        "flow_to_x0_fn must be provided when prediction_type='flow'."
+                    )
+                self._to_x0 = flow_to_x0_fn
             case _:
                 raise ValueError(
-                    f"prediction_type must be 'x0', 'score', or 'epsilon', "
-                    f"got '{prediction_type}'."
+                    f"prediction_type must be 'x0', 'score', 'epsilon', or "
+                    f"'flow', got '{prediction_type}'."
                 )
 
         # Bind the model-call helper once so the use_checkpointing branch is

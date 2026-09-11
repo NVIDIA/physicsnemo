@@ -5,11 +5,11 @@ Multi-Diffusion
 
 .. currentmodule:: physicsnemo.diffusion.multi_diffusion
 
-Multi-diffusion is a technique for scaling diffusion models to spatial domains
+Multi-diffusion is a technique for scaling diffusion and flow-matching models to spatial domains
 that are too large to be processed in a single pass. Such large domains are
 common in the physics-AI and scientific machine learning applications targeted
 by the PhysicsNeMo diffusion module. The full domain is split into smaller
-patches, the diffusion model is run on each patch, and, when necessary, the
+patches, the model runs on each patch, and, when necessary, the
 patches are fused back into a single, globally coherent result. It is used
 whenever training or sampling on the full domain, whichever has the higher peak
 memory, would exceed the available GPU memory. The approach follows that
@@ -87,10 +87,10 @@ reduced parallelism lowers throughput, but peak memory stays bounded, so the
 same pipeline scales to global domains it could otherwise never fit.  Combined
 with the framework's built-in optimizations (``torch.compile``, AMP-bf16, and
 Apex layers), it scales both training and guided generation to domains with up
-to 64x more pixels than the same pipeline without it.  This brings diffusion
-within reach of the very large scientific domains (weather, CFD, and the like)
-whose grids run into billions of points, far beyond what a single GPU could
-hold.  The benchmarks below report throughput and peak GPU memory as a function
+to 64x more pixels than the same pipeline without it. This brings diffusion and flow matching
+within reach of large scientific domains such as weather and CFD.
+Their grids run into billions of points, far beyond what a single GPU could
+hold. The benchmarks below report throughput and peak GPU memory as a function
 of the global domain size (pixels per edge).
 
 .. figure:: ../../img/diffusion/training_throughput.png
@@ -161,7 +161,7 @@ on each forward pass performs three operations on the model's behalf:
 
 The objective is the ordinary batched denoising loss over the
 :math:`P \times B` patches (an embarrassingly parallel computation), with an
-independent diffusion time sampled per patch and no fusion involved.
+independent time sampled per patch and no fusion involved.
 
 Switching an existing full-domain pipeline to multi-diffusion is almost
 transparent: wrap the model, set the number of patches to extract, and swap the
