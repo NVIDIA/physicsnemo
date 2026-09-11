@@ -113,7 +113,7 @@ def _format_install_hint(
         Display name of the package.
     group : str, optional
         physicsnemo optional dependency group (e.g., "graph", "transformer").
-        If provided, shows `pip install physicsnemo[group]` instructions.
+        If provided, shows `pip install nvidia-physicsnemo[group]` instructions.
     direct_install : str, optional
         Package name for direct pip install (e.g., "warp-lang").
         If provided, shows `pip install <direct_install>` instructions.
@@ -136,8 +136,8 @@ def _format_install_hint(
             f"{c.YELLOW}[{group}]{c.RESET} optional dependency group."
         )
         lines.append(f"\n{c.BOLD}Install with:{c.RESET}")
-        lines.append(f"  {c.GREEN}uv pip install physicsnemo[{group}]{c.RESET}")
-        lines.append(f"  {c.GREEN}pip install physicsnemo[{group}]{c.RESET}")
+        lines.append(f"  {c.GREEN}uv pip install nvidia-physicsnemo[{group}]{c.RESET}")
+        lines.append(f"  {c.GREEN}pip install nvidia-physicsnemo[{group}]{c.RESET}")
 
     # Direct pip install
     elif direct_install:
@@ -646,8 +646,8 @@ class OptionalImport:
 
         torch_scatter is part of the [graph] optional dependency group.
         Install with:
-          uv pip install physicsnemo[graph]
-          pip install physicsnemo[graph]
+          uv pip install nvidia-physicsnemo[graph]
+          pip install nvidia-physicsnemo[graph]
 
     Notes
     -----

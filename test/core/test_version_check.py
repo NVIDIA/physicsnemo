@@ -14,12 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import re
+import tomllib
 from importlib import metadata
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from physicsnemo.core.version_check import (
+    _PACKAGE_HINTS,
     OptionalImport,
     _format_install_hint,
     _optional_import_registry,
@@ -360,7 +364,8 @@ class TestFormatInstallHint:
         hint = _format_install_hint("mypackage", group="extras")
         assert "mypackage" in hint
         assert "[extras]" in hint
-        assert "physicsnemo[extras]" in hint
+        assert "pip install nvidia-physicsnemo[extras]" in hint
+        assert "pip install physicsnemo[extras]" not in hint
 
     def test_direct_install_hint(self):
         """Formats hint with direct pip install."""
@@ -592,3 +597,59 @@ class TestRequireVersionSpecAdditional:
 
         assert my_documented_function.__name__ == "my_documented_function"
         assert "docstring" in my_documented_function.__doc__
+
+
+# =============================================================================
+# Regression tests: install hints must match the published package metadata
+# =============================================================================
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+# Matches `pip install [quote]<dist>[<extras>]` and captures dist + extras.
+_EXTRAS_INSTALL_RE = re.compile(r"pip install\s+\"?([A-Za-z0-9_.-]+)\[([^\]]+)\]")
+
+
+@pytest.fixture(scope="module")
+def pyproject():
+    path = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    with path.open("rb") as f:
+        return tomllib.load(f)
+
+
+def _extras_installs(hint: str):
+    """Yield (distribution, [extras]) for every extras-style install in a hint."""
+    for dist, extras in _EXTRAS_INSTALL_RE.findall(_ANSI_RE.sub("", hint)):
+        yield dist, [e.strip() for e in extras.split(",")]
+
+
+class TestInstallHintsMatchPyproject:
+    """The install commands shown to users must name the real PyPI distribution
+    and only extras that actually exist. A bare `physicsnemo[...]` hint would
+    send users to install an unrelated, unowned PyPI package."""
+
+    def test_group_hint_uses_published_distribution_name(self, pyproject):
+        hint = _format_install_hint("mypackage", group="extras")
+        installs = list(_extras_installs(hint))
+        assert installs, "group-based hint must include an extras install command"
+        for dist, extras in installs:
+            assert dist == pyproject["project"]["name"]
+            assert extras == ["extras"]
+
+    @pytest.mark.parametrize("package", sorted(_PACKAGE_HINTS))
+    def test_registered_hint_names_real_distribution_and_extras(
+        self, package, pyproject
+    ):
+        project_name = pyproject["project"]["name"]
+        known_extras = set(pyproject["project"]["optional-dependencies"])
+        hint = _PACKAGE_HINTS[package]
+
+        assert "pip install physicsnemo" not in _ANSI_RE.sub("", hint), (
+            f"{package}: hint uses the bare 'physicsnemo' name; "
+            f"the PyPI distribution is '{project_name}'"
+        )
+        for dist, extras in _extras_installs(hint):
+            assert dist == project_name, f"{package}: hint installs '{dist}'"
+            unknown = set(extras) - known_extras
+            assert not unknown, (
+                f"{package}: hint references extras {sorted(unknown)} that are "
+                f"not defined in [project.optional-dependencies]"
+            )
