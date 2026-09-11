@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PHYSICSNEMO_DIST_TIMEOUT_S`; unset or empty configuration keeps PyTorch's
   backend default. Invalid timeouts are rejected before initialization state
   changes, allowing corrected configuration to be retried.
+- Adds `ComputeFreestreamDirection` and `DropDegenerateCells` transforms to
+  the unified external aerodynamics recipe and uses them in the surface
+  dataset configs.
 
 ### Changed
 
