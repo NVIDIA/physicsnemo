@@ -30,20 +30,27 @@
 #   * Dockerfile lines 240-243 still use `>=` lower bounds for the
 #     pure-PyPI specs; tighten in a follow-up.
 #   * On a torch upgrade, bump the PyG --find-links URL and the
-#     `+pt211cu128` label on the PyG pins together.
+#     `+pt212cu130` label on the PyG pins together.
 #
 # earth2grid is intentionally NOT installed: the source build is fragile
 # in the CI container.  HEALPix tests skip via @requires_module until
 # earth2grid ships a wheel or the build is fixed.
 
 # PyG CUDA wheel index; the URL encodes the locked torch version.
---find-links https://data.pyg.org/whl/torch-2.11.0+cu128.html
+--find-links https://data.pyg.org/whl/torch-2.12.0+cu130.html
 
-# cuml-cu12 -> cudf -> numba caps numpy at <=2.2; uv.lock pins numpy
-# 2.2.6 under the cu12 extra for this reason.  Re-applied here so layered
+# cuml-cu13 -> cudf -> numba caps numpy at <=2.2; uv.lock pins numpy
+# accordingly under the cu13 extra.  Re-applied here so layered
 # installs (tensorstore, pyarrow, ...) cannot bump numpy to 2.4.x and
 # crash every test that touches cuml.
 numpy<2.3
+
+# transformer-engine 2.15 (cu13) needs a cublasLt symbol that first appears
+# after nvidia-cublas 13.1, but torch 2.12 caps nvidia-cublas at <= 13.1.1.3,
+# so uv.lock cannot resolve a working version.  This layered install upgrades
+# the wheel past torch's cap (safe: CUDA libraries are ABI-backward-compatible
+# within a major version).  Drop when torch's cap catches up to TE's build.
+nvidia-cublas==13.6.1.10
 
 # Test tooling with no extras home.
 moto[s3]==5.2.1
@@ -54,19 +61,32 @@ multi-storage-client[boto3]==0.48.0
 tensorstore==0.1.83
 pyarrow==24.0.0
 
-# PyG CUDA wheels.  `uv sync` installs the `gnns` extra as CPU-only
-# builds (no CUDA toolchain at build time), so CUDA tensors fail with
-# "Not compiled with CUDA support".  setup-uv-env swaps exactly these
-# four packages for the CUDA wheels via `--reinstall-package` (a bare
-# `--reinstall` would also refresh transitive deps and break ABI
-# compatibility with lockfile-pinned pyarrow / cudf / cuml).
+# PyG CUDA wheels.  Left to itself, `uv sync` would build the `gnns`
+# extra's PyG sdists CPU-only (no CUDA toolchain at build time), so CUDA
+# tensors would fail with "Not compiled with CUDA support".  setup-uv-env
+# therefore excludes torch-cluster/scatter/sparse from `uv sync` entirely
+# (`--no-install-package`) and installs exactly these four packages from
+# here instead, via `--reinstall-package` (a bare `--reinstall` would also
+# refresh transitive deps and break ABI compatibility with lockfile-pinned
+# pyarrow / cudf / cuml).
 #
-# Keep the `+pt211cu128` label in the pins: PyPI rejects local versions,
+# Keep the `+pt212cu130` label in the pins: PyPI rejects local versions,
 # so these pins can only be satisfied by the --find-links index above.
 # That blocks dependency confusion -- `pyg_lib` in particular is
 # unclaimed on PyPI (the team publishes there as `pyg_library`), so a
-# plain `==0.6.0` pin could match a squatted package.
-torch_scatter==2.1.2+pt211cu128
-torch_sparse==0.6.18+pt211cu128
-torch_cluster==1.6.3+pt211cu128
-pyg_lib==0.6.0+pt211cu128
+# plain `==0.8.0` pin could match a squatted package.
+torch_scatter==2.1.2+pt212cu130
+torch_sparse==0.6.18+pt212cu130
+pyg_lib==0.8.0+pt212cu130
+
+# torch_cluster has NO prebuilt wheel on the torch-2.12.0+cu130 PyG index
+# (the pt212cu130 build was never published), so it is pinned to the plain
+# PyPI sdist and built from source with CUDA enabled.  setup-uv-env
+# excludes it from `uv sync` (`--no-install-package torch-cluster`) so no
+# CPU-only build ever lands in the uv cache, then installs it here with
+# `--no-build-isolation-package torch_cluster` (the sdist's setup.py
+# imports torch, which the synced .venv provides) plus FORCE_CUDA=1 and a
+# fixed TORCH_CUDA_ARCH_LIST so the uv-cached built wheel is valid on the
+# H100 runners.  Revisit and restore a `+ptXXXcuYYY` wheel pin when PyG
+# publishes one for the locked torch/CUDA pair.
+torch_cluster==1.6.3
