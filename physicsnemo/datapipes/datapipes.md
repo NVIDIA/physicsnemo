@@ -85,6 +85,39 @@ For meshes, the `MeshTransform` ABC provides the same interface with
 `__call__(Mesh) -> Mesh` plus `apply_to_domain(DomainMesh)` for
 multi-region consistency.
 
+### Field names and nested TensorDicts
+
+A `TensorDict` (and therefore `Mesh.point_data` / `cell_data` /
+`global_data`) is a tree: a key is either a top-level string or a tuple of
+strings addressing a leaf inside nested sub-TensorDicts, e.g.
+`("solution", "gauge_pressure")`. TensorDict never parses separators in a
+string key, and `td.keys()` / `td.items()` / `td.values()` default to the
+top level only (`include_nested=False`), yielding sub-TensorDicts as values.
+
+Every transform, reader option, and collator that takes a field name from
+a config routes it through `physicsnemo.datapipes.keys.as_nested_key`:
+
+- A `"."` in a name addresses a nested leaf: `"solution.gauge_pressure"`
+  is `("solution", "gauge_pressure")`. This is the same separator
+  `TensorDict.flatten_keys` uses.
+- `"."` and `"/"` are reserved: `"."` is the config nesting separator and
+  `"/"` is the on-disk one (VTK, HDF5, zarr). Do not use either inside a
+  field name; a leaf literally named `p.mean` is unsupported and will be
+  read as the nested key `("p", "mean")`.
+
+Users never have to flatten or unflatten a TensorDict to reach a nested
+field. When writing new datapipe code, use `key in td` (works for both
+forms) rather than `key in td.keys()`, iterate with
+`td.items(include_nested=True, leaves_only=True)` rather than
+`td.items()`, apply leaf-wise functions with `td.apply` /
+`td.named_apply(fn, nested_keys=True)`, and read fields through
+`physicsnemo.datapipes.keys.get_leaf`, which reports missing fields with
+the full leaf listing and rejects a group name with an actionable error.
+
+`Mesh.to_pyvista` / `from_pyvista` serialize nested keys as `"/"`-joined
+VTK array names (`"solution/gauge_pressure"`), mirroring HDF5 / zarr group
+paths; that separator is an on-disk encoding, not a config convention.
+
 ### Collators
 
 Collators combine per-sample `(data, metadata)` tuples into batches,

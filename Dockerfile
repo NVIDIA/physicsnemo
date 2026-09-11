@@ -114,20 +114,27 @@ RUN --mount=type=bind,source=docker/install-container-dependencies.sh,target=/tm
     --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     bash /tmp/install-container-dependencies.sh
 
-# Install the remaining third-party dependencies from the canonical project
-# metadata. Only pyproject.toml participates in this layer's bind-mount cache
-# checksum. The torch-sparse build dependency is declared under
-# [tool.uv.extra-build-dependencies].
+# Install torch-sparse against the runtime PyTorch before installing the
+# remaining third-party dependencies from the canonical project metadata.
+# torch-sparse is a native extension and must not use an isolated build with a
+# different PyTorch ABI. Only pyproject.toml participates in this layer's
+# bind-mount cache checksum.
 RUN --mount=type=bind,source=pyproject.toml,target=/tmp/pyproject.toml,ro \
     --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     cd /tmp && \
+    uv pip install \
+        --no-cache \
+        --no-binary torch-sparse \
+        --no-build-isolation \
+        "torch-sparse>=0.6.18" && \
     uv pip install -r pyproject.toml \
         --extra cu13 \
         --extra utils-extras \
         --extra mesh-extras \
         --extra datapipes-extras \
         --extra gnns \
-        --extra sym
+        --extra sym && \
+    python -c 'import torch, torch_cluster, torch_scatter, torch_sparse; import natten.libnatten; print("Native extension ABI check passed:", torch.__version__)'
 
 # Branch the release builder after dependency installation. The CI stage below
 # branches directly from dependencies and therefore never installs PhysicsNeMo.

@@ -18,6 +18,8 @@
 subsample push-down (window reads must be bitwise-identical to an eager load
 followed by in-memory subsampling)."""
 
+from pathlib import Path
+
 import torch
 from conftest import assert_meshes_equal, make_domain_mesh, make_mesh
 
@@ -104,6 +106,6 @@ def test_mixed_directory_discovery(tmp_path):
     to_zarr(m1, tmp_path / "a.mesh.zarr")
     m2.save(tmp_path / "b.pmsh")
     reader = MeshReader(tmp_path, pattern="*.*")
-    metas = {reader[i][1]["source_path"].split("/")[-1]: reader[i][0] for i in (0, 1)}
+    metas = {Path(reader[i][1]["source_path"]).name: reader[i][0] for i in (0, 1)}
     assert_meshes_equal(m1, metas["a.mesh.zarr"])
     assert_meshes_equal(m2, metas["b.pmsh"])

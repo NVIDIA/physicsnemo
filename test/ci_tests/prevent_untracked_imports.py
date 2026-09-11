@@ -47,7 +47,6 @@ dep_to_import_name = {
     "warp-lang": "warp",
     "hydra-core": "hydra",
     "GitPython": "git",
-    "tensordict-nightly": "tensordict",
 }
 
 

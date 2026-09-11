@@ -16,6 +16,9 @@
 
 """Legacy checkpoint shim for the GeoTransolver model."""
 
-from physicsnemo.models.geotransolver.geotransolver import GeoTransolver
+from physicsnemo.models.geotransolver.geotransolver import (
+    GeoTransolver,
+    GeoTransolverMetaData,
+)
 
-__all__ = ["GeoTransolver"]
+__all__ = ["GeoTransolver", "GeoTransolverMetaData"]
