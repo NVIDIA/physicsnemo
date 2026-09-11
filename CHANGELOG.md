@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PHYSICSNEMO_DIST_TIMEOUT_S`; unset or empty configuration keeps PyTorch's
   backend default. Invalid timeouts are rejected before initialization state
   changes, allowing corrected configuration to be retried.
+- `MeshToDomainMesh` in `cell_centroids` mode records each source cell's
+  effective measure (area times any composed measure weights) on the interior
+  under the reserved `point_data` key `TARGET_QUADRATURE_MEASURE_KEY`, so
+  integrals and weighted losses over the query points remain possible after
+  the cells are gone.
 
 ### Changed
 
