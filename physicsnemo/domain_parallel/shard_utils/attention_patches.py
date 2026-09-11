@@ -35,12 +35,63 @@ from physicsnemo.domain_parallel.shard_utils.patch_core import (
 )
 from physicsnemo.domain_parallel.shard_utils.ring import (
     RingPassingConfig,
-    get_comm_stream,
-    perform_ring_iteration,
-    perform_ring_iteration_async,
+    finish_ring_iteration,
+    perform_ring_iteration_funcol,
 )
 
 aten = torch.ops.aten
+
+
+def _apply_autocast(*tensors: torch.Tensor) -> tuple[torch.Tensor, ...]:
+    r"""Cast floating-point inputs to the active autocast dtype, if any.
+
+    The sharded attention paths call the efficient-attention kernels directly
+    inside ``autograd.Function``s. Autocast would cast the kernel's inputs on
+    the way in, but the Function saves the *uncast* tensors for backward and
+    the backward kernel requires q/k/v, output and grad_output in one dtype.
+    Casting here, before the Function, makes the saved tensors match what the
+    kernel actually ran on. A no-op when autocast is off.
+
+    Parameters
+    ----------
+    *tensors : torch.Tensor
+        Local q/k/v (and optional mask) tensors.
+
+    Returns
+    -------
+    tuple[torch.Tensor, ...]
+        The inputs, cast where they are floating point and autocast is active.
+    """
+    device_type = tensors[0].device.type
+    if not torch.is_autocast_enabled(device_type):
+        return tensors
+    dtype = torch.get_autocast_dtype(device_type)
+    return tuple(t.to(dtype) if t.is_floating_point() else t for t in tensors)
+
+
+def _kernel_output_layout(t: torch.Tensor) -> torch.Tensor:
+    r"""Return ``t`` in the attention kernels' output memory layout.
+
+    The efficient-attention kernels write their ``(B, H, S, D)`` output with
+    ``(B, S, H, D)``-contiguous memory. In half precision the backward kernel
+    computes ``delta = rowsum(dO * O)`` itself and reads ``O`` assuming that
+    layout, so a saved output in plain ``(B, H, S, D)``-contiguous order gives
+    garbage dQ/dK (dV is unaffected); fp32 computes ``delta`` with strided ops
+    and does not care. Elementwise products of the kernel output keep the
+    layout, but collectives return contiguous tensors. No copy if ``t`` is
+    already in that layout.
+
+    Parameters
+    ----------
+    t : torch.Tensor
+        ``(B, H, S, D)`` attention output.
+
+    Returns
+    -------
+    torch.Tensor
+        Same values, ``(B, S, H, D)``-contiguous memory viewed as ``(B, H, S, D)``.
+    """
+    return t.transpose(1, 2).contiguous().transpose(1, 2)
 
 
 def add_log_sumexp(
@@ -162,10 +213,11 @@ class RingSDPA(torch.autograd.Function):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         r"""Forward pass for the ring attention implementation.
 
-        Overlaps communication with computation using a dedicated comm stream
-        and double-buffered K/V tensors. The p2p ring shift for the next
-        iteration's K/V runs concurrently with the current iteration's
-        attention kernel.
+        Overlaps communication with computation via functional collectives:
+        the ring shift for the next iteration's K/V is issued before the
+        current iteration's attention kernel and waited on after it, so the
+        collective runs concurrently with the compute on the communicator's
+        internal stream -- no caller-managed CUDA streams or events.
 
         Parameters
         ----------
@@ -198,51 +250,23 @@ class RingSDPA(torch.autograd.Function):
         sign_global_output = None
         global_log_sumexp = None
 
-        compute_stream = torch.cuda.current_stream()
-        comm_stream = get_comm_stream(q.device)
-
-        # Pre-allocate double buffers for K and V on the default stream to
-        # avoid caching-allocator cross-stream synchronization inside the loop.
-        k_buffers = [torch.empty_like(k), torch.empty_like(k)]
-        v_buffers = [torch.empty_like(v), torch.empty_like(v)]
-
         # Iteration 0 reads from the original k, v (no copy needed).
         current_k, current_v = k, v
-
-        # CUDA event used to signal that comm_stream has finished receiving
-        # the next iteration's K/V into the recv buffer.
-        comm_done = torch.cuda.Event()
+        next_k_flat = None
+        next_v_flat = None
 
         for i in range(ring_config.mesh_size):
-            # --- Async communication: send current K/V, recv next K/V ---
+            # --- Issue the next K/V shift before the local attention so the
+            # functional collective overlaps the compute; the wait after the
+            # kernel is the synchronization point. ---
             with record_function(f"sdpa_send_data_{i}_{dist.get_rank()}"):
                 if i < ring_config.mesh_size - 1:
-                    recv_idx = (i + 1) % 2
-                    next_k_buf = k_buffers[recv_idx]
-                    next_v_buf = v_buffers[recv_idx]
-
-                    # comm_stream must wait for compute_stream to finish
-                    # producing current_k / current_v before reading them.
-                    comm_stream.wait_stream(compute_stream)
-
-                    with torch.cuda.stream(comm_stream):
-                        _, k_work = perform_ring_iteration_async(
-                            current_k,
-                            mesh,
-                            ring_config,
-                            recv_tensor=next_k_buf,
-                        )
-                        _, v_work = perform_ring_iteration_async(
-                            current_v,
-                            mesh,
-                            ring_config,
-                            recv_tensor=next_v_buf,
-                        )
-
-                    # Prevent the allocator from recycling current_k/v while
-                    # comm_stream is still reading them for the send.
-                    current_k.record_stream(comm_stream)
-                    current_v.record_stream(comm_stream)
+                    next_k_flat = perform_ring_iteration_funcol(
+                        current_k, mesh, ring_config, wait=False
+                    )
+                    next_v_flat = perform_ring_iteration_funcol(
+                        current_v, mesh, ring_config, wait=False
+                    )
 
             # --- Compute: attention on current K/V ---
             with record_function(f"sdpa_forward_{i}_{dist.get_rank()}"):
@@ -278,20 +302,17 @@ class RingSDPA(torch.autograd.Function):
 
             # --- Synchronize: wait for next K/V to arrive ---
             if i < ring_config.mesh_size - 1:
-                for w in k_work + v_work:
-                    w.wait()
-
-                # Record completion on comm_stream and make compute_stream
-                # wait so the next iteration reads valid recv buffer data.
-                comm_stream.record_event(comm_done)
-                compute_stream.wait_event(comm_done)
-
-                current_k = next_k_buf
-                current_v = next_v_buf
+                current_k = finish_ring_iteration(next_k_flat, k.shape)
+                current_v = finish_ring_iteration(next_v_flat, v.shape)
 
         # Final normalization
-        stable_output = sign_global_output * torch.exp(
-            log_global_output - global_log_sumexp
+        # The log-space accumulators are fp32 (the kernel's log_sumexp dtype),
+        # so this product is fp32 even for bf16/fp16 q. The backward kernel
+        # requires output and q in the same dtype; cast back before returning.
+        stable_output = _kernel_output_layout(
+            (sign_global_output * torch.exp(log_global_output - global_log_sumexp)).to(
+                q.dtype
+            )
         )
 
         return stable_output, global_log_sumexp, philox_seed, philox_offset
@@ -335,16 +356,17 @@ class RingSDPA(torch.autograd.Function):
     ]:
         r"""Backward pass for the ring SDPA with overlapped communication.
 
-        Overlaps k/v communication with the backward attention kernel.
+        Overlaps k/v communication with the backward attention kernel using
+        functional collectives (issue before compute, wait after).
         Each iteration:
-        1. Wait for k, v from the previous iteration's async send.
-        2. Wait for grad_k, grad_v from the previous iteration's async send.
-        3. Async-send k, v for the next iteration (overlaps with compute).
+        1. Wait for k, v from the previous iteration's shift.
+        2. Wait for grad_k, grad_v from the previous iteration's shift.
+        3. Issue the k, v shift for the next iteration (overlaps with compute).
         4. Compute block gradients and accumulate.
-        5. Async-send accumulated grad_k, grad_v (overlaps with next
-           iteration's waits and k/v send).
-        The final grad_k/grad_v shift uses blocking communication since
-        there is no further compute to overlap with.
+        5. Issue the accumulated grad_k, grad_v shift (overlaps with the next
+           iteration's waits and k/v shift).
+        The final grad_k/grad_v shift is waited on immediately since there is
+        no further compute to overlap with.
 
         Parameters
         ----------
@@ -385,69 +407,34 @@ class RingSDPA(torch.autograd.Function):
         )
         grad_attn_mask = None
 
-        compute_stream = torch.cuda.current_stream()
-        comm_stream = get_comm_stream(q.device)
-
-        # Pre-allocate double buffers on the default stream.
-        k_bufs = [torch.empty_like(k), torch.empty_like(k)]
-        v_bufs = [torch.empty_like(v), torch.empty_like(v)]
-        grad_k_bufs = [torch.empty_like(k), torch.empty_like(k)]
-        grad_v_bufs = [torch.empty_like(v), torch.empty_like(v)]
-
-        kv_done = torch.cuda.Event()
-        grad_done = torch.cuda.Event()
-
-        kv_work = None
-        grad_work = None
-        next_k_buf = None
-        next_v_buf = None
-        next_grad_k_buf = None
-        next_grad_v_buf = None
+        next_k_flat = None
+        next_v_flat = None
+        next_grad_k_flat = None
+        next_grad_v_flat = None
 
         for i in range(mesh_size):
-            # --- Wait for k,v from previous async send ---
-            if kv_work is not None:
-                for w in kv_work:
-                    w.wait()
-                comm_stream.record_event(kv_done)
-                compute_stream.wait_event(kv_done)
-                k = next_k_buf
-                v = next_v_buf
-                kv_work = None
+            # --- Wait for k,v from the previous iteration's shift ---
+            if next_k_flat is not None:
+                k = finish_ring_iteration(next_k_flat, k.shape)
+                v = finish_ring_iteration(next_v_flat, v.shape)
+                next_k_flat = None
+                next_v_flat = None
 
-            # --- Wait for grad_k,v from previous async send ---
-            if grad_work is not None:
-                for w in grad_work:
-                    w.wait()
-                comm_stream.record_event(grad_done)
-                compute_stream.wait_event(grad_done)
-                grad_k = next_grad_k_buf
-                grad_v = next_grad_v_buf
-                grad_work = None
+            # --- Wait for grad_k,v from the previous iteration's shift ---
+            if next_grad_k_flat is not None:
+                grad_k = finish_ring_iteration(next_grad_k_flat, grad_k.shape)
+                grad_v = finish_ring_iteration(next_grad_v_flat, grad_v.shape)
+                next_grad_k_flat = None
+                next_grad_v_flat = None
 
-            # --- Async send k,v for next iteration (overlaps with compute) ---
+            # --- Issue the k,v shift for the next iteration (overlaps compute) ---
             if i < mesh_size - 1:
-                recv_idx = (i + 1) % 2
-                next_k_buf = k_bufs[recv_idx]
-                next_v_buf = v_bufs[recv_idx]
-
-                comm_stream.wait_stream(compute_stream)
-                with torch.cuda.stream(comm_stream):
-                    _, kv_work_k = perform_ring_iteration_async(
-                        k,
-                        mesh,
-                        ring_config,
-                        recv_tensor=next_k_buf,
-                    )
-                    _, kv_work_v = perform_ring_iteration_async(
-                        v,
-                        mesh,
-                        ring_config,
-                        recv_tensor=next_v_buf,
-                    )
-                kv_work = kv_work_k + kv_work_v
-                k.record_stream(comm_stream)
-                v.record_stream(comm_stream)
+                next_k_flat = perform_ring_iteration_funcol(
+                    k, mesh, ring_config, wait=False
+                )
+                next_v_flat = perform_ring_iteration_funcol(
+                    v, mesh, ring_config, wait=False
+                )
 
             # --- Compute block gradients ---
             with record_function(f"sdpa_backward_{i}_{dist.get_rank()}"):
@@ -474,33 +461,19 @@ class RingSDPA(torch.autograd.Function):
                 grad_k += block_grad_k
                 grad_v += block_grad_v
 
-            # --- Send grad_k,v: async for non-last, blocking for last ---
+            # --- Shift grad_k,v: overlapped for non-last, immediate for last ---
             if i < mesh_size - 1:
-                recv_idx = (i + 1) % 2
-                next_grad_k_buf = grad_k_bufs[recv_idx]
-                next_grad_v_buf = grad_v_bufs[recv_idx]
-
-                comm_stream.wait_stream(compute_stream)
-                with torch.cuda.stream(comm_stream):
-                    _, grad_work_k = perform_ring_iteration_async(
-                        grad_k,
-                        mesh,
-                        ring_config,
-                        recv_tensor=next_grad_k_buf,
-                    )
-                    _, grad_work_v = perform_ring_iteration_async(
-                        grad_v,
-                        mesh,
-                        ring_config,
-                        recv_tensor=next_grad_v_buf,
-                    )
-                grad_work = grad_work_k + grad_work_v
-                grad_k.record_stream(comm_stream)
-                grad_v.record_stream(comm_stream)
+                next_grad_k_flat = perform_ring_iteration_funcol(
+                    grad_k, mesh, ring_config, wait=False
+                )
+                next_grad_v_flat = perform_ring_iteration_funcol(
+                    grad_v, mesh, ring_config, wait=False
+                )
             else:
-                # Last iteration: blocking shift to place grads at the right rank
-                grad_k = perform_ring_iteration(grad_k, mesh, ring_config)
-                grad_v = perform_ring_iteration(grad_v, mesh, ring_config)
+                # Last iteration: shift grads to the owning rank; nothing left
+                # to overlap with, so wait immediately.
+                grad_k = perform_ring_iteration_funcol(grad_k, mesh, ring_config)
+                grad_v = perform_ring_iteration_funcol(grad_v, mesh, ring_config)
 
         return grad_q, grad_k, grad_v, grad_attn_mask, None, None, None
 
@@ -603,12 +576,17 @@ class RingSDPABlocking(torch.autograd.Function):
             global_log_sumexp = add_log_sumexp(global_log_sumexp, log_sumexp)
 
             # send k and v to the next rank:
-            current_k = perform_ring_iteration(current_k, mesh, ring_config)
-            current_v = perform_ring_iteration(current_v, mesh, ring_config)
+            current_k = perform_ring_iteration_funcol(current_k, mesh, ring_config)
+            current_v = perform_ring_iteration_funcol(current_v, mesh, ring_config)
 
         # Compute the final output
-        stable_output = sign_global_output * torch.exp(
-            log_global_output - global_log_sumexp
+        # The log-space accumulators are fp32 (the kernel's log_sumexp dtype),
+        # so this product is fp32 even for bf16/fp16 q. The backward kernel
+        # requires output and q in the same dtype; cast back before returning.
+        stable_output = _kernel_output_layout(
+            (sign_global_output * torch.exp(log_global_output - global_log_sumexp)).to(
+                q.dtype
+            )
         )
 
         return stable_output, global_log_sumexp, philox_seed, philox_offset
@@ -730,10 +708,10 @@ class RingSDPABlocking(torch.autograd.Function):
             grad_v += block_grad_v
 
             # Send k, v, grad_k, grad_v to the next rank:
-            k = perform_ring_iteration(k, ctx.mesh, ctx.ring_config)
-            v = perform_ring_iteration(v, ctx.mesh, ctx.ring_config)
-            grad_k = perform_ring_iteration(grad_k, ctx.mesh, ctx.ring_config)
-            grad_v = perform_ring_iteration(grad_v, ctx.mesh, ctx.ring_config)
+            k = perform_ring_iteration_funcol(k, ctx.mesh, ctx.ring_config)
+            v = perform_ring_iteration_funcol(v, ctx.mesh, ctx.ring_config)
+            grad_k = perform_ring_iteration_funcol(grad_k, ctx.mesh, ctx.ring_config)
+            grad_v = perform_ring_iteration_funcol(grad_v, ctx.mesh, ctx.ring_config)
 
         return grad_q, grad_k, grad_v, grad_attn_mask, None, None, None
 
@@ -754,27 +732,19 @@ def ring_sdpa(
 
     Notes
     -----
-    ``torch.compile`` around this function is currently unsupported and
-    will error. The ``@torch.compiler.disable`` decorator below blocks
-    dynamo's symbolic tracing of the body, which is *necessary* (the
-    overlap path uses ``torch.cuda.stream``, ``torch.cuda.Event``,
-    ``tensor.record_stream``, and async ``Work`` handles -- none of which
-    have an FX representation), but it is **not sufficient**: AOTAutograd
-    re-executes the captured graph against ``FunctionalTensor`` inputs
-    during metadata propagation, and our ``ShardTensor``
-    ``__torch_function__`` dispatcher re-enters this function on the
-    captured SDPA node, where ``record_stream``'s alias annotation trips
-    PyTorch's functionalization layer.
+    Communication/compute overlap comes from functional collectives: the
+    K/V shift for the next ring step is issued before the local attention
+    kernel and waited on (``wait_tensor``) after it, with no caller-managed
+    CUDA streams or events.
 
-    Eager (no ``torch.compile``) usage works as designed: this is the
-    overlap-K/V-with-compute attention kernel used by sharded models in
-    production. Compile support for sharded attention requires a separate
-    refactor of the ring (drop ``record_stream``, switch
-    ``perform_ring_iteration`` to functional p2p collectives, replace the
-    explicit ``cuda.stream`` overlap with implicit collective overlap).
-    Until then, callers that need ``torch.compile`` must either keep
-    sharded attention outside the compiled region or avoid sharded
-    attention entirely.
+    The ``@torch.compiler.disable`` decorator keeps the ring out of
+    dynamo's symbolic trace: dynamo's fake-tensor propagation calls ops
+    directly without consulting the ``ShardTensor`` named-handler table, so
+    tracing this region would bypass the ring dispatch entirely. The ring
+    runs eagerly as a graph-break region inside compiled models; the
+    surrounding model stays compiled. Full graph capture (with Inductor
+    scheduling the overlap) additionally requires dynamo-traceable subclass
+    dispatch and autograd.Functions.
 
     Parameters
     ----------
@@ -811,14 +781,14 @@ def ring_sdpa(
     )
 
     # First, get the tensors locally and perform halos:
-    lq, lk, lv = (
+    lq, lk, lv = _apply_autocast(
         q.to_local().contiguous(),
         k.to_local().contiguous(),
         v.to_local().contiguous(),
     )
 
     if attn_mask is not None:
-        latn_mask = attn_mask.to_local().contiguous()
+        (latn_mask,) = _apply_autocast(attn_mask.to_local().contiguous())
     else:
         latn_mask = None
 
@@ -901,6 +871,12 @@ class ReplicatedQSDPA(torch.autograd.Function):
         global_output = funcol.all_reduce(rescaled, "sum", (mesh, 0))
         if isinstance(global_output, funcol.AsyncCollectiveTensor):
             global_output = global_output.wait()
+        # log_sumexp is fp32, so ``rescaled`` is fp32 for bf16/fp16 inputs. The
+        # backward kernel requires output and q in the same dtype; without this
+        # cast a bf16 model gets garbage gradients.
+        # all_reduce hands back a plain contiguous tensor; the saved output
+        # must be in the kernel's layout for the half-precision backward.
+        global_output = _kernel_output_layout(global_output.to(output.dtype))
 
         # The backward kernel expects log_sumexp in the forward kernel's
         # (padded) layout: embed the combined values in the valid region and
@@ -1134,9 +1110,11 @@ def sdpa_wrapper(
             "dropout is not supported with replicated q and sharded k/v"
         )
     local_output, _lse, _seed, _offset = ReplicatedQSDPA.apply(
-        q.to_local().contiguous(),
-        k.to_local().contiguous(),
-        v.to_local().contiguous(),
+        *_apply_autocast(
+            q.to_local().contiguous(),
+            k.to_local().contiguous(),
+            v.to_local().contiguous(),
+        ),
         mesh,
         kwargs,
     )
