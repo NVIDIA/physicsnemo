@@ -49,6 +49,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mid-write no longer leaves an unloadable truncated checkpoint. Also fixes
   `legacy_format=True`, which failed with `FileNotFoundError` on current
   fsspec versions.
+- `MeshReader` and `DomainMeshReader` implement `close()`, so
+  `MeshDataset.close()` works on the mesh path.
+- Coordinated subsampling in the zarr readers picks its reference key in the
+  configured order rather than set order, so the rows read are deterministic.
+- `ShardTensor` fixes for domain parallelism: redistribute no longer grows an
+  unbounded planner cache (step time was climbing with step count),
+  `scatter_tensor` returns a shard that owns its storage, stream recording on
+  wrapped tensors works, and several `torch.compile` tracing issues are
+  resolved.
 
 ### Security
 
