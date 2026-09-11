@@ -1,0 +1,9 @@
+# One space between sentences. (Adapted from the MIT-licensed Microsoft
+# style for Vale; the missing-space token was dropped because it
+# false-positives on dotted code paths like physicsnemo.mesh.Mesh.)
+extends: existence
+message: "'%s' should have one space."
+level: error
+nonword: true
+tokens:
+  - '[a-z][.?!] {2,}[A-Z]'

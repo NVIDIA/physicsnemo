@@ -1,0 +1,8 @@
+# Adapted from the MIT-licensed Microsoft style for Vale
+# (https://github.com/errata-ai/Microsoft).
+extends: occurrence
+message: "Try to keep sentences short (< 30 words)."
+scope: sentence
+level: suggestion
+max: 30
+token: \b(\w+)\b

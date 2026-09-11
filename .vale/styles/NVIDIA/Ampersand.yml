@@ -1,0 +1,8 @@
+# House style: spell out "and" in prose and headings; "&" only in
+# code, product names, or where space is constrained (tables).
+extends: existence
+message: "Use 'and' instead of '&' in prose and headings."
+level: warning
+nonword: true
+raw:
+  - ' & '
