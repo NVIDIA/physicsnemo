@@ -196,15 +196,7 @@ def download_from_url(
         elif fpath.suffix == ".zip":
             logger.info(f"Extracting zip archive {fpath}...")
             with zipfile.ZipFile(fpath, "r") as z:
-                # Safely extract while supporting Python versions < 3.12 that lack the
-                # ``filter`` keyword.  Starting with 3.12, ``filter="data"`` is the
-                # recommended way to avoid unsafe members;
-                extract_kwargs = dict(
-                    path=root,
-                )
-                if "filter" in z.extractall.__code__.co_varnames:
-                    extract_kwargs["filter"] = "data"
-                z.extractall(**extract_kwargs)  # noqa: S202
+                z.extractall(path=root)
                 names = ", ".join(z.namelist())
             logger.info(f"Extracted files: {names}")
 
