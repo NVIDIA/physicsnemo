@@ -26,10 +26,34 @@ appropriate errors for:
 
 import pytest
 import torch
-from tensordict import TensorDict
+from tensordict import TensorClass, TensorDict
 
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.mesh import _requested_float_dtype
+
+
+def test_mesh_inherits_tensorclass():
+    assert TensorClass in Mesh.__bases__
+
+
+class FieldlessMesh(Mesh):
+    """Downstream-style Mesh subclass with no redeclared fields."""
+
+
+class MeshWithExtra(Mesh):
+    """Mesh subtype with one additional floating field."""
+
+    extra: torch.Tensor = None  # type: ignore[assignment]
+
+
+def test_fieldless_subclass_keeps_constructor_defaults():
+    mesh = FieldlessMesh(torch.randn(4, 2))
+
+    assert type(mesh) is FieldlessMesh
+    assert mesh.cells.shape == (0, 1)
+    assert not list(mesh.point_data.keys())
+    assert not list(mesh.cell_data.keys())
+    assert not list(mesh.global_data.keys())
 
 
 class TestPointsValidation:
@@ -379,6 +403,21 @@ def test_to_float_dtype_preserves_integer_cells_and_data():
     # Point cloud (empty cells) must also round-trip.
     pc = Mesh(points=torch.randn(5, 2)).to(torch.float64)
     assert pc.points.dtype == torch.float64 and pc.cells.dtype == torch.int64
+
+
+def test_to_float_dtype_preserves_subclass_fields():
+    """Floating conversion applies to added fields without downcasting."""
+    mesh = MeshWithExtra(
+        points=torch.randn(4, 2),
+        extra=torch.arange(4, dtype=torch.float32),
+    )
+
+    converted = mesh.to(torch.float64)
+
+    assert type(converted) is MeshWithExtra
+    assert converted.points.dtype == torch.float64
+    assert converted.cells.dtype == torch.int64
+    assert converted.extra.dtype == torch.float64
 
 
 def test_to_same_device_preserves_values_and_int_cells():

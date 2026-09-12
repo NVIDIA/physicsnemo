@@ -29,8 +29,8 @@ from physicsnemo.mesh import Mesh
 class TaggedMesh(Mesh):
     """Custom mesh subtype used to guard functional update behavior."""
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __post_init__(self) -> None:
+        super().__post_init__()
         object.__setattr__(self, "constructed_spatial_dims", self.n_spatial_dims)
 
     def tag(self) -> str:

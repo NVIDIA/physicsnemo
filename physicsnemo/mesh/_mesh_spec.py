@@ -294,10 +294,9 @@ class _MeshSpecMeta(type):
     def __instancecheck__(cls, instance: object) -> bool:
         from physicsnemo.mesh.mesh import Mesh
 
-        # Mesh's metaclass is plain ``type`` (not _MeshSpecMeta), so this
-        # ``isinstance`` call dispatches to the default implementation - no
-        # recursion risk - and narrows ``instance`` to ``Mesh`` for the
-        # subsequent matches() call.
+        # Mesh uses _MeshTensorClassMeta, not _MeshSpecMeta, so this
+        # ``isinstance`` call cannot recurse into this method and narrows
+        # ``instance`` to ``Mesh`` for the subsequent matches() call.
         if not isinstance(instance, Mesh):
             return False
         return cls._mesh_dims.matches(instance)
