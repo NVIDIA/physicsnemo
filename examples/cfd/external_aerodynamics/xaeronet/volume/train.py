@@ -44,7 +44,7 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.models.unet import UNet
-from torch.cuda.amp import GradScaler
+from torch.amp import GradScaler
 from torch.utils.tensorboard import SummaryWriter
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig
