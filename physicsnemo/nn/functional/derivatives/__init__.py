@@ -16,6 +16,7 @@
 
 from .mesh_green_gauss_gradient import MeshGreenGaussGradient, mesh_green_gauss_gradient
 from .mesh_lsq_gradient import MeshLSQGradient, mesh_lsq_gradient
+from .mesh_lsq_hessian import MeshLSQHessian, mesh_lsq_hessian
 from .meshless_finite_difference import (
     MeshlessFDDerivatives,
     meshless_fd_derivatives,
@@ -44,6 +45,7 @@ __all__ = [
     "UniformGridDivergence",
     "UniformGridLaplacian",
     "MeshGreenGaussGradient",
+    "MeshLSQHessian",
     "MeshlessFDDerivatives",
     "MeshLSQGradient",
     "RectilinearGridCurl",
@@ -56,6 +58,7 @@ __all__ = [
     "uniform_grid_divergence",
     "uniform_grid_laplacian",
     "mesh_green_gauss_gradient",
+    "mesh_lsq_hessian",
     "meshless_fd_derivatives",
     "mesh_lsq_gradient",
     "rectilinear_grid_curl",
