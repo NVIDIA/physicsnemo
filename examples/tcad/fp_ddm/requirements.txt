@@ -1,0 +1,6 @@
+imageio[ffmpeg]
+matplotlib
+numpy
+opensimplex
+scipy
+tqdm
