@@ -101,6 +101,18 @@ class ShardTensorSpec(DTensorSpec):
         hash_tuple = tuple(hash_items)
         return hash(hash_tuple)
 
+    def __setattr__(self, attr: str, value) -> None:
+        r"""Invalidate the cached hash when the sharding shapes change.
+
+        ``DTensorSpec.__setattr__`` resets ``_hash`` for the fields it hashes;
+        ``_sharding_shapes`` is hashed here as well and is populated lazily,
+        so it needs the same treatment or a spec hashed before population
+        keeps a stale hash.
+        """
+        super().__setattr__(attr, value)
+        if attr == "_sharding_shapes" and hasattr(self, "_hash"):
+            self._hash = None
+
     def __hash__(self) -> int:
         r"""Compute the hash lazily.
 
@@ -355,13 +367,19 @@ def _gather_shard_shapes_for_dim(
     """
     local_size = dist.get_world_size(group=local_group)
 
-    if not isinstance(local_shape, torch.Tensor):
-        shape = torch.tensor(local_shape, device="cpu", pin_memory=True)
+    # Collectives run on the process group's backend device: CUDA when
+    # available, otherwise CPU (gloo) -- so CPU-only single-process use of
+    # ``sharding_shapes="infer"`` works too.
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if isinstance(local_shape, torch.Tensor):
+        shape = local_shape
+    else:
+        shape = torch.tensor(local_shape, device="cpu", pin_memory=(device == "cuda"))
 
-    local_shape = shape.to(device="cuda", non_blocking=True)
+    local_shape = shape.to(device=device, non_blocking=True)
 
     all_shapes = [
-        torch.zeros_like(local_shape, device="cuda") for _ in range(local_size)
+        torch.zeros_like(local_shape, device=device) for _ in range(local_size)
     ]
 
     dist.all_gather(all_shapes, local_shape, group=local_group)
