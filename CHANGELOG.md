@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds `physicsnemo.nn.functional.safe_normalize` for vector normalization
+  across floating-point dtypes and scales, preserving zero vectors and the
+  input dtype under autocast.
 - Adds `physicsnemo.datapipes.keys` and routes every config-driven field name
   in `physicsnemo.datapipes` through it, so a `"."` in a YAML field name
   (`"solution.pressure"`) addresses a leaf inside a nested `TensorDict`.
@@ -21,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changes, allowing corrected configuration to be retried.
 
 ### Changed
+
+- `Mesh.slice_points` picks its cell-remapping algorithm by mesh shape: the
+  full-mesh lookup table as before, or a binary search over the kept ids when the
+  mesh has far more points than cell-vertex entries (a reader keeping a block of
+  cells out of a mesh with hundreds of millions of vertices). Index
+  normalization avoids allocating a full-mesh range and preserves empty slices,
+  integer indices, and boolean masks. Point fields use ordinary indexed gathers.
 
 ### Deprecated
 
@@ -34,6 +44,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Normalizes cell, point, transformed, and partition-cluster mesh normals
+  robustly across floating-point dtypes and scales. Zero vectors remain zero,
+  small nonzero vectors retain unit length, and large finite vectors avoid
+  norm overflow.
 - Datapipe transforms, collators, readers, and the unified external aero
   recipe no longer silently skip or mis-handle nested `TensorDict` fields
   (membership was tested against top-level `td.keys()`, and
@@ -928,7 +942,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   implementation. Use `torch.nn.init.trunc_normal_` directly.
 - Deprecates the CorrDiff example (`examples/weather/corrdiff`), which no longer
   receives maintenance, bug fixes, or new features. Use the regional
-  high-resolution weather model example (`examples/weather/stormcast`) instead.
+  high-resolution weather model example (`examples/weather/regional_weather_diffusion`) instead.
   That example unifies regional diffusion-based weather models, and covers the
   CorrDiff downscaling setting alongside other diffusion-based settings.
 

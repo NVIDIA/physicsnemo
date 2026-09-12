@@ -15,7 +15,7 @@
 # limitations under the License.
 
 # DEPRECATED: this example is no longer maintained. Use the regional
-# high-resolution weather model example in examples/weather/stormcast instead.
+# high-resolution weather model example in examples/weather/regional_weather_diffusion instead.
 
 import os
 import time
@@ -119,7 +119,7 @@ def main(cfg: DictConfig) -> None:
     # default filters silently drop it.
     warnings.warn(
         "The CorrDiff example is deprecated and is no longer maintained. Use the "
-        "regional high-resolution weather model example in examples/weather/stormcast "
+        "regional high-resolution weather model example in examples/weather/regional_weather_diffusion "
         "instead. It is a unified recipe for regional diffusion-based weather models, "
         "and supports the downscaling setting implemented here as well as other "
         "diffusion-based settings.",

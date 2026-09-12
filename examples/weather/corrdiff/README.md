@@ -5,7 +5,7 @@
 > bug fixes, or new features. It remains here for reference only.
 >
 > Start new projects from the regional high-resolution weather model example in
-> [`examples/weather/stormcast`](../stormcast) instead. That example unifies
+> [`examples/weather/regional_weather_diffusion`](../regional_weather_diffusion) instead. That example unifies
 > regional diffusion-based weather models. It covers the downscaling setting that
 > CorrDiff implements, plus other diffusion-based settings such as autoregressive
 > regional forecasting.

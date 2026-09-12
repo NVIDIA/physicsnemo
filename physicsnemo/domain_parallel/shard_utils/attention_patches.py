@@ -26,6 +26,7 @@ from torch.distributed import DeviceMesh
 from torch.distributed.tensor.placement_types import Replicate
 
 from physicsnemo.domain_parallel import ShardTensor
+from physicsnemo.domain_parallel._shard_tensor_spec import validate_aligned_sharding
 from physicsnemo.domain_parallel.shard_utils.grad_ops import (
     ContiguousGrad,
     GradReducer,
@@ -1040,6 +1041,10 @@ def sdpa_wrapper(
 
     if k_placement != v_placement:
         raise MissingShardPatch("k and v must have the same placement")
+    # k and v are paired positionally along the sequence dim in every path
+    # This checks the shardings match locally too, not just the global shapes
+    # and placements:
+    validate_aligned_sharding([k._spec, v._spec], "scaled_dot_product_attention (k/v)")
     if q_placement.is_shard() and q_placement.dim != 2:
         raise MissingShardPatch("q may only be sharded on the sequence dim (2)")
     if k_placement.is_shard() and k_placement.dim != 2:
@@ -1081,6 +1086,13 @@ def sdpa_wrapper(
         if attn_mask is not None and hasattr(attn_mask, "_spec"):
             if attn_mask._spec.placements[0] != q_placement:
                 raise MissingShardPatch("attn_mask must share q's placement")
+            # Mask rows pair positionally with q's local rows
+            # This checks the shardings match locally too, not just the global shapes
+            # and placements:
+            validate_aligned_sharding(
+                [q._spec, attn_mask._spec],
+                "scaled_dot_product_attention (q/attn_mask)",
+            )
         local_mask = (
             attn_mask.to_local() if hasattr(attn_mask, "to_local") else attn_mask
         )
@@ -1118,6 +1130,13 @@ def sdpa_wrapper(
         if attn_mask is not None and hasattr(attn_mask, "_spec"):
             if attn_mask._spec.placements[0] != q_placement:
                 raise MissingShardPatch("attn_mask must share q's placement")
+            # Mask rows pair positionally with q's local rows
+            # This checks the shardings match locally too, not just the global shapes
+            # and placements:
+            validate_aligned_sharding(
+                [q._spec, attn_mask._spec],
+                "scaled_dot_product_attention (q/attn_mask)",
+            )
         return ring_sdpa(q, k, v, attn_mask, **kwargs)
 
     # Static fold: full q everywhere, one K/V block per rank, no rotation.
