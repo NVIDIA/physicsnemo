@@ -32,9 +32,12 @@ import pytest
 import torch
 import torch.distributed as dist
 from torch.distributed.tensor import distribute_tensor
-from torch.distributed.tensor.placement_types import Shard
+from torch.distributed.tensor.placement_types import Replicate, Shard
 
 from physicsnemo.distributed import DistributedManager
+from physicsnemo.domain_parallel._shard_tensor_spec import (
+    _gather_shard_shapes_for_dim,
+)
 from physicsnemo.domain_parallel.shard_tensor import ShardTensor, scatter_tensor
 
 
@@ -162,6 +165,108 @@ def test_scatter_tensor_requires_grad_contract_1d(distributed_mesh, requires_gra
 @pytest.mark.parametrize("requires_grad", [False, True])
 def test_scatter_tensor_requires_grad_contract_2d(distributed_mesh_2d, requires_grad):
     scatter_tensor_requires_grad_contract_worker(distributed_mesh_2d, requires_grad)
+
+
+def scatter_tensor_local_owns_storage_worker(
+    mesh, requires_grad: bool, replicate: bool
+):
+    r"""The local shard handed out by ``scatter_tensor`` owns its storage.
+
+    Redistributing the broadcast buffer yields a storage-offset *view* of the
+    full tensor; ``scatter_tensor`` must clone it so the world-size-times
+    larger buffer is released and dynamo can fakeify the wrapper.
+    """
+    dm = DistributedManager()
+    rank = dm.rank
+    global_shape, placements = init_global_shape_and_placements(mesh)
+    if replicate:
+        placements = [Replicate() for _ in range(mesh.ndim)]
+    source = 0
+
+    torch.manual_seed(4321)
+    full = torch.randn(global_shape, device=torch.device(f"cuda:{dm.local_rank}"))
+    raw_data = full if rank == source else None
+
+    st = scatter_tensor(
+        raw_data,
+        source,
+        mesh,
+        placements,
+        global_shape=torch.Size(global_shape),
+        dtype=torch.float32,
+        requires_grad=requires_grad,
+    )
+
+    local = st._local_tensor
+    assert local._base is None
+    assert local.storage_offset() == 0
+    assert local.is_contiguous()
+    assert local.untyped_storage().nbytes() == local.numel() * local.element_size()
+    assert local.requires_grad is requires_grad
+    assert st.requires_grad is requires_grad
+    if requires_grad:
+        assert local.is_leaf
+        assert st.is_leaf
+
+    # Data survives the clone; full_tensor() is collective so all ranks call it.
+    gathered = st.full_tensor()
+    if rank == source:
+        torch.testing.assert_close(gathered.detach(), full)
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize("requires_grad", [False, True])
+@pytest.mark.parametrize("replicate", [False, True])
+def test_scatter_tensor_local_owns_storage_1d(
+    distributed_mesh, requires_grad, replicate
+):
+    scatter_tensor_local_owns_storage_worker(distributed_mesh, requires_grad, replicate)
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize("requires_grad", [False, True])
+def test_scatter_tensor_local_owns_storage_2d(distributed_mesh_2d, requires_grad):
+    scatter_tensor_local_owns_storage_worker(distributed_mesh_2d, requires_grad, False)
+
+
+def gather_shard_shapes_for_dim_worker(mesh):
+    r"""``_gather_shard_shapes_for_dim`` accepts a ``torch.Size`` or a tensor."""
+    dm = DistributedManager()
+    group = mesh.get_group(0)
+    group_rank = dist.get_group_rank(group, dm.rank)
+    group_size = dist.get_world_size(group)
+
+    local_shape = torch.Size((4 + 2 * group_rank, 7, 3))
+    expected: list = [None] * group_size
+    dist.all_gather_object(expected, tuple(local_shape), group=group)
+    expected = [tuple(e) for e in expected]
+
+    from_size = _gather_shard_shapes_for_dim(local_shape, 0, group, do_checks=True)
+    assert [tuple(s) for s in from_size] == expected
+
+    as_tensor = torch.tensor(local_shape, device=dm.device)
+    from_tensor = _gather_shard_shapes_for_dim(as_tensor, 0, group)
+    assert [tuple(s) for s in from_tensor] == expected
+
+    # The shape validation catches a mismatch on a non-sharded dim.
+    if group_size > 1:
+        bad = torch.Size((4, 7 + group_rank, 3))
+        with pytest.raises(ValueError, match="Dimension mismatch"):
+            _gather_shard_shapes_for_dim(bad, 0, group, do_checks=True)
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.multigpu_static
+def test_gather_shard_shapes_for_dim_1d(distributed_mesh):
+    gather_shard_shapes_for_dim_worker(distributed_mesh)
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.multigpu_static
+def test_gather_shard_shapes_for_dim_2d(distributed_mesh_2d):
+    gather_shard_shapes_for_dim_worker(distributed_mesh_2d)
 
 
 def scatter_tensor_grad_population_worker(mesh):
