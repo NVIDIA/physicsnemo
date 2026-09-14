@@ -128,6 +128,10 @@ class MultiDiffusionMSEDSMLoss:
         Callback to convert an epsilon (noise) prediction to an
         :math:`\hat{\mathbf{x}}_0` estimate. Required when
         ``prediction_type="epsilon"``.
+    flow_to_x0_fn : Callable[[Tensor, Tensor, Tensor], Tensor], optional
+        Callback to convert a flow (velocity) prediction to an
+        :math:`\hat{\mathbf{x}}_0` estimate. Required when
+        ``prediction_type="flow"``.
     reduction : Literal["none", "mean", "sum"], default="mean"
         Reduction applied to the output.
 
@@ -239,6 +243,10 @@ class MultiDiffusionMSEDSMLoss:
             [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
         ]
         | None = None,
+        flow_to_x0_fn: Callable[
+            [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
+        ]
+        | None = None,
         reduction: Literal["none", "mean", "sum"] = "mean",
     ) -> None:
         self.model = model
@@ -261,10 +269,16 @@ class MultiDiffusionMSEDSMLoss:
                         "epsilon_to_x0_fn must be provided when prediction_type='epsilon'."
                     )
                 self._to_x0 = epsilon_to_x0_fn
+            case "flow":
+                if flow_to_x0_fn is None:
+                    raise ValueError(
+                        "flow_to_x0_fn must be provided when prediction_type='flow'."
+                    )
+                self._to_x0 = flow_to_x0_fn
             case _:
                 raise ValueError(
-                    f"prediction_type must be 'x0', 'score', or 'epsilon', "
-                    f"got '{prediction_type}'."
+                    f"prediction_type must be 'x0', 'score', 'epsilon', or "
+                    f"'flow', got '{prediction_type}'."
                 )
 
         _reductions = {
@@ -407,6 +421,10 @@ class MultiDiffusionWeightedMSEDSMLoss:
         Callback to convert an epsilon (noise) prediction to an
         :math:`\hat{\mathbf{x}}_0` estimate. Required when
         ``prediction_type="epsilon"``.
+    flow_to_x0_fn : callable, optional
+        Callback to convert a flow (velocity) prediction to an
+        :math:`\hat{\mathbf{x}}_0` estimate. Required when
+        ``prediction_type="flow"``.
     reduction : {"none", "mean", "sum"}, default="mean"
         Reduction applied to the output.
 
@@ -502,6 +520,10 @@ class MultiDiffusionWeightedMSEDSMLoss:
             [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
         ]
         | None = None,
+        flow_to_x0_fn: Callable[
+            [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
+        ]
+        | None = None,
         reduction: Literal["none", "mean", "sum"] = "mean",
     ) -> None:
         self.model = model
@@ -524,10 +546,16 @@ class MultiDiffusionWeightedMSEDSMLoss:
                         "epsilon_to_x0_fn must be provided when prediction_type='epsilon'."
                     )
                 self._to_x0 = epsilon_to_x0_fn
+            case "flow":
+                if flow_to_x0_fn is None:
+                    raise ValueError(
+                        "flow_to_x0_fn must be provided when prediction_type='flow'."
+                    )
+                self._to_x0 = flow_to_x0_fn
             case _:
                 raise ValueError(
-                    f"prediction_type must be 'x0', 'score', or 'epsilon', "
-                    f"got '{prediction_type}'."
+                    f"prediction_type must be 'x0', 'score', 'epsilon', or "
+                    f"'flow', got '{prediction_type}'."
                 )
 
         _reductions = {

@@ -60,7 +60,7 @@ EXEC_MODES = [
     ("checkpointed", None, True),
 ]
 
-PREDICTION_TYPES = ["score", "epsilon"]
+PREDICTION_TYPES = ["score", "epsilon", "flow"]
 
 COMPILE_CONFIGS = ["uncond", "cond_patch", "cond_interp", "cond_vec_img"]
 
@@ -100,7 +100,7 @@ def _create_predictor(
     Unified factory for every predictor test. ``config_name`` selects the inner
     model (any MD_CONFIGS name or ``"edm_precond"``); ``chunk_size`` and
     ``use_checkpointing`` toggle the memory schedule; ``prediction_type`` plus a
-    ``scheduler`` wire the score/epsilon-to-x0 conversion.
+    ``scheduler`` wire the score/epsilon/flow-to-x0 conversion.
     """
     md = _create_md_for_config(config_name, img_shape=img_shape, seed=seed).to(device)
     md.set_grid_patching(
@@ -115,15 +115,12 @@ def _create_predictor(
         else _make_condition(config_name, img_shape=img_shape, device=device)
     )
     conv_kwargs = {}
-    if prediction_type == "score":
+    if prediction_type != "x0":
         conv_kwargs = {
-            "prediction_type": "score",
-            "score_to_x0_fn": scheduler.score_to_x0,
-        }
-    elif prediction_type == "epsilon":
-        conv_kwargs = {
-            "prediction_type": "epsilon",
-            "epsilon_to_x0_fn": scheduler.epsilon_to_x0,
+            "prediction_type": prediction_type,
+            f"{prediction_type}_to_x0_fn": getattr(
+                scheduler, f"{prediction_type}_to_x0"
+            ),
         }
     pred = MultiDiffusionPredictor(
         md,
@@ -387,7 +384,7 @@ class TestNonRegression:
         config_name,
         prediction_type,
     ):
-        """score / epsilon prediction_type applies the conversion to x0."""
+        """score / epsilon / flow prediction_type applies the conversion to x0."""
         scheduler = EDMNoiseScheduler()
         pred = _create_predictor(
             config_name,
@@ -662,17 +659,19 @@ class TestDiagnostics:
         with pytest.raises(ValueError, match="divisible"):
             pred.fuse_fn(bad)
 
-    def test_score_requires_conversion_fn(self):
-        """score prediction_type without score_to_x0_fn raises."""
+    @pytest.mark.parametrize(
+        "prediction_type,missing_fn",
+        [
+            ("score", "score_to_x0_fn"),
+            ("epsilon", "epsilon_to_x0_fn"),
+            ("flow", "flow_to_x0_fn"),
+        ],
+    )
+    def test_requires_conversion_fn(self, prediction_type, missing_fn):
+        """Non-x0 prediction types require the matching conversion callback."""
         md = _create_md_model("uncond")
-        with pytest.raises(ValueError, match="score_to_x0_fn"):
-            MultiDiffusionPredictor(md, prediction_type="score")
-
-    def test_epsilon_requires_conversion_fn(self):
-        """epsilon prediction_type without epsilon_to_x0_fn raises."""
-        md = _create_md_model("uncond")
-        with pytest.raises(ValueError, match="epsilon_to_x0_fn"):
-            MultiDiffusionPredictor(md, prediction_type="epsilon")
+        with pytest.raises(ValueError, match=missing_fn):
+            MultiDiffusionPredictor(md, prediction_type=prediction_type)
 
     def test_invalid_prediction_type(self):
         """An unknown prediction_type raises."""

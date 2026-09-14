@@ -6,7 +6,7 @@ Samplers and Solvers
 .. currentmodule:: physicsnemo.diffusion.samplers
 
 The sampler is the main interface for generating new data from a trained
-diffusion model.  Starting from pure noise :math:`\mathbf{x}_N`, the solver
+diffusion or flow-matching model. Starting from pure noise :math:`\mathbf{x}_N`, the solver
 iteratively denoises the latent state through a sequence of time-steps until it
 reaches a clean sample :math:`\mathbf{x}_0`.
 
@@ -92,7 +92,7 @@ A complete sampling workflow involves these steps:
    :ref:`Available Solvers <diffusion_available_solvers>`), or simply pass a
    built-in string key (for example, ``"heun"``) to :func:`sample`.
 
-6. **Call** :func:`sample` to run the reverse diffusion loop.
+6. **Call** :func:`sample` to run the reverse process.
 
 
 Example: Unconditional Image Generation
@@ -178,7 +178,7 @@ effect on sample quality:
 Example: Vector-Space Diffusion (Non-Image Data)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The diffusion framework is not limited to image data.  Any tensor-valued data
+The module is not limited to image data. Any tensor-valued data
 can be used, including 1D vectors.  Here the backbone uses the
 :class:`~physicsnemo.models.mlp.FullyConnected` model from PhysicsNeMo,
 wrapped with a thin adapter to match the
