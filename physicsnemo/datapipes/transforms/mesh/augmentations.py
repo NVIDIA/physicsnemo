@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import math
 import warnings
+from collections.abc import Sequence
 from typing import Literal
 
 import torch
@@ -86,6 +87,24 @@ def _sample_distribution(
             stacklevel=3,
         )
         return distribution.sample(shape).to(device=u.device)
+
+
+def _as_bound_tensor(value: float | Sequence[float]) -> torch.Tensor:
+    """Coerce a scalar or sequence (e.g. OmegaConf ``ListConfig``) to a tensor.
+
+    Parameters
+    ----------
+    value : float or sequence of float
+        Distribution bound as given by the user or a config file.
+
+    Returns
+    -------
+    torch.Tensor
+        Scalar or 1-D ``float32`` tensor.
+    """
+    if isinstance(value, Sequence) and not isinstance(value, str):
+        value = list(value)
+    return torch.as_tensor(value, dtype=torch.float32)
 
 
 @register()
@@ -193,11 +212,15 @@ class RandomTranslateMesh(MeshTransform):
     (default ``Uniform(-0.1, 0.1)``).  Pass a batched distribution to
     control each axis separately, e.g.
     ``Uniform(tensor([-0.1, -0.2, -0.3]), tensor([0.1, 0.2, 0.3]))``.
+    Alternatively pass *low* / *high* to build such a uniform
+    distribution from plain (config-friendly) numbers or sequences.
     """
 
     def __init__(
         self,
         distribution: torch.distributions.Distribution | None = None,
+        low: float | Sequence[float] | None = None,
+        high: float | Sequence[float] | None = None,
     ) -> None:
         """
         Parameters
@@ -208,8 +231,23 @@ class RandomTranslateMesh(MeshTransform):
             batched distribution (``batch_shape == (n_spatial_dims,)``)
             allows different parameters per axis.
             Defaults to ``Uniform(-0.1, 0.1)``.
+        low, high : float or sequence of float or None
+            Convenience bounds for a ``Uniform`` distribution, e.g.
+            ``low=[-1, -1, 0], high=[1, 1, 0]`` for in-plane offsets.
+            Both must be given together and are mutually exclusive with
+            *distribution*.
         """
         super().__init__()
+        if (low is None) != (high is None):
+            raise ValueError("low and high must be given together")
+        if low is not None:
+            if distribution is not None:
+                raise ValueError("low/high cannot be combined with distribution")
+            ### Uniform rejects lists (and OmegaConf's ListConfig), which is
+            ### what config-driven instantiation hands us.
+            distribution = torch.distributions.Uniform(
+                _as_bound_tensor(low), _as_bound_tensor(high)
+            )
         self._distribution = distribution or torch.distributions.Uniform(-0.1, 0.1)
         self._generator: torch.Generator | None = None
 
