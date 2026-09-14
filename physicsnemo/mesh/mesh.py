@@ -35,7 +35,6 @@ from typing import (
 )
 
 import torch
-import torch.nn.functional as F
 from jaxtyping import Float
 from tensordict import NonTensorData, TensorDict, tensorclass
 
@@ -69,6 +68,12 @@ from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
 from physicsnemo.mesh.validation import validate
 from physicsnemo.mesh.visualization.draw_mesh import draw
+from physicsnemo.nn.functional import safe_normalize
+
+### slice_points remaps cells through a full-mesh lookup table unless the mesh
+### has more than this many points per cell-vertex entry, in which case it
+### binary-searches the kept ids instead (see slice_points for the measurement).
+_SEARCH_REMAP_RATIO = 64
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.neighbors._adjacency import Adjacency
@@ -1081,7 +1086,7 @@ class Mesh:
         )
 
         ### Normalize to get unit normals
-        return F.normalize(accumulated_normals, dim=-1)
+        return safe_normalize(accumulated_normals, dim=-1)
 
     @property
     def gaussian_curvature_vertices(self) -> torch.Tensor:
@@ -1345,9 +1350,10 @@ class Mesh:
             Indices or mask to select points. Supports:
 
             - ``int``: Single point index
-            - ``slice``: Python slice object
+            - ``slice``: Python slice object with a positive step
             - ``Ellipsis`` or ``None``: Keep all points (returns self)
-            - ``torch.Tensor``: Integer indices or boolean mask
+            - ``torch.Tensor``: One-dimensional int32/int64 indices or a
+              boolean mask of length ``n_points`` (uint8 masks are also accepted)
             - ``Sequence[int | bool]``: List/tuple of indices or boolean mask
 
         Returns
@@ -1386,38 +1392,98 @@ class Mesh:
         if indices is None or indices is ...:
             return self
 
-        ### Normalize indices to a 1D tensor of point indices to keep
-        all_indices = torch.arange(self.n_points, device=self.points.device)
+        ### Normalize indices to a 1D tensor of point indices to keep. For
+        ### integer indices and slices nothing here is sized by n_points (a
+        ### slice expands to its own range), so slicing a huge, possibly
+        ### memory-mapped mesh costs what is kept, not what exists. A boolean
+        ### mask is necessarily n_points long and is scanned once by nonzero().
+        device = self.points.device
+        n_points = self.n_points
         if isinstance(indices, int):
-            kept_indices = torch.tensor([indices], device=self.points.device)
+            kept_indices = torch.tensor([indices], device=device)
+        elif isinstance(indices, slice):
+            start, stop, step = indices.indices(n_points)
+            if step < 0:
+                raise ValueError("step must be greater than zero")
+            kept_indices = torch.arange(start, max(start, stop), step, device=device)
         else:
-            # Works for slice, Tensor (int or bool), and Sequence
-            kept_indices = all_indices[indices]
+            # Tensor (int or bool) or Sequence of ints / bools
+            idx = (
+                torch.empty(0, dtype=torch.long, device=device)
+                if not isinstance(indices, torch.Tensor) and len(indices) == 0
+                else torch.as_tensor(indices, device=device)
+            )
+            if idx.ndim != 1:
+                raise IndexError("point indices or masks must be one-dimensional")
+            if idx.dtype in (torch.bool, torch.uint8):
+                if idx.numel() != n_points:
+                    raise IndexError(
+                        f"point mask must have length {n_points}, got {idx.numel()}"
+                    )
+                kept_indices = idx.nonzero().squeeze(-1)
+            else:
+                if idx.dtype not in (torch.int32, torch.int64):
+                    raise IndexError("point indices must have dtype int32 or int64")
+                kept_indices = idx.long()
 
-        ### Build old-to-new point index mapping
-        # old_to_new[old_idx] = new_idx if kept, else -1
-        old_to_new = torch.full(
-            (self.n_points,), -1, dtype=torch.long, device=self.points.device
+        ### Gather using the original indices so native indexing rejects
+        ### out-of-range negative values before normalization. This also avoids
+        ### scalar min/max reductions or extra copies for memory-mapped fields.
+        new_points = self.points[kept_indices]
+        new_point_data = cast(TensorDict, self.point_data[kept_indices])
+        kept_indices = torch.where(
+            kept_indices < 0, kept_indices + n_points, kept_indices
         )
-        old_to_new[kept_indices] = torch.arange(
-            len(kept_indices), dtype=torch.long, device=self.points.device
-        )
 
-        ### Remap cells and filter out cells with any removed vertices
-        remapped_cells = old_to_new[self.cells]  # (n_cells, n_verts_per_cell)
-        valid_cells_mask = (remapped_cells >= 0).all(
-            dim=-1
-        )  # cells with all verts kept
-
-        ### Extract valid cells with remapped indices
-        new_cells = remapped_cells[valid_cells_mask]
+        ### Remap cells and filter out cells with any removed vertices. Two
+        ### algorithms with the same result, chosen by mesh shape:
+        ###  * a full-mesh old->new lookup table (two n_points-long tensors,
+        ###    then one gather over the cell connectivity) when the mesh is not
+        ###    much larger than its connectivity -- the usual full-mesh slice --
+        ###    or when most points are kept, since the search's sort of the
+        ###    kept ids would then cost more than filling the table;
+        ###  * a sort of the kept ids plus a binary search per cell vertex when
+        ###    the connectivity and the kept set are both small next to
+        ###    n_points -- e.g. a reader that keeps a block of 10k cells out of
+        ###    a mesh with 10^8 vertices, where the table's allocation and fill
+        ###    dominated everything.
+        ### Measured crossover on synthetic meshes: the search wins from about
+        ### n_points ~ 300 x cells.numel(); the table is faster below ~ 30 x,
+        ### and from n_kept ~ n_points / 30 upwards regardless of connectivity.
+        ### Remapped connectivity is always int64, as before this choice existed.
+        n_kept = kept_indices.numel()
+        cells = self.cells
+        if n_kept == 0 or cells.numel() == 0:
+            # Nothing to remap: no points kept, or a point cloud without cells.
+            valid_cells_mask = torch.zeros(
+                cells.shape[0], dtype=torch.bool, device=device
+            )
+            new_cells = cells.new_empty((0, cells.shape[1]), dtype=torch.long)
+        elif (
+            n_points <= _SEARCH_REMAP_RATIO * cells.numel()
+            or n_kept * _SEARCH_REMAP_RATIO >= n_points
+        ):
+            old_to_new = torch.full((n_points,), -1, dtype=torch.long, device=device)
+            old_to_new[kept_indices] = torch.arange(
+                n_kept, dtype=torch.long, device=device
+            )
+            remapped_cells = old_to_new[cells]
+            valid_cells_mask = (remapped_cells >= 0).all(dim=-1)
+            new_cells = remapped_cells[valid_cells_mask]
+        else:
+            sorted_kept, order = torch.sort(kept_indices, stable=True)
+            # right=True then -1 selects the LAST equal entry, so a point id
+            # listed more than once in `indices` maps to its last position,
+            # matching the lookup-table semantics.
+            pos = (
+                torch.searchsorted(sorted_kept, cells.to(sorted_kept.dtype), right=True)
+                - 1
+            ).clamp_min(0)
+            valid_cells_mask = (sorted_kept[pos] == cells).all(dim=-1)
+            new_cells = order[pos[valid_cells_mask]]
         # cast: TensorDict[bool_mask] returns TensorCollection | Tensor statically;
         # the runtime is always TensorDict because cell_data is itself a TensorDict.
         new_cell_data = cast(TensorDict, self.cell_data[valid_cells_mask])
-
-        ### Slice points and point_data
-        new_points = self.points[kept_indices]
-        new_point_data = cast(TensorDict, self.point_data[kept_indices])
 
         return Mesh(
             points=new_points,

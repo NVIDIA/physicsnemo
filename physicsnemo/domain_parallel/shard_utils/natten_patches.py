@@ -23,6 +23,7 @@ from torch.distributed.tensor.placement_types import Shard
 
 from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.domain_parallel import ShardTensor
+from physicsnemo.domain_parallel._shard_tensor_spec import validate_aligned_sharding
 from physicsnemo.domain_parallel.shard_utils.halo import (
     HaloConfig,
     halo_padding,
@@ -183,6 +184,14 @@ def _partial_natten(
     MissingShardPatch
         If kernel configuration is not supported for sharding.
     """
+    # Halo configs are computed from q and applied to k/v, and the local
+    # kernel pairs q/k/v positionally along the sharded spatial dims:
+    # This checks the shardings match locally too, not just the global shapes
+    # and placements:
+    validate_aligned_sharding(
+        [q._spec, k._spec, v._spec], "neighborhood_attention (q/k/v)"
+    )
+
     # First, get the tensors locally and perform halos:
     lq, lk, lv = q.to_local(), k.to_local(), v.to_local()
 

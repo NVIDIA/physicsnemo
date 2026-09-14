@@ -62,7 +62,7 @@ The several examples inside PhysicsNeMo can be classified based on their domains
 |[Diagonistic (Precipitation) model using AFNO](./weather/diagnostic/)|AFNO|
 |[Unified Recipe for training several Global Weather Forecasting models](./weather/unified_recipe/)|AFNO, FCN-SFNO, GraphCast|
 |[Generative Correction Diffusion Model for Km-scale Atmospheric Downscaling](./weather/corrdiff/)|CorrDiff|
-|[StormCast: Generative Diffusion Model for Km-scale, Convection allowing Model Emulation](./weather/stormcast/)|StormCast|
+|[Regional Weather Diffusion: Generative Diffusion Models for Km-scale Weather](./weather/regional_weather_diffusion/)|StormCast, StormScope|
 |[Medium-range global weather forecast using Mixture of Experts](./weather/mixture_of_experts/)|MoE Model|
 |[Generative Data Assimilation of Sparse Weather Observations](./weather/regen/)|Denoising Diffusion Model|
 |[Flood Forecasting](./weather/flood_modeling/)|GNN + KAN|
