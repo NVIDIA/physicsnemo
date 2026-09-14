@@ -106,6 +106,10 @@ _INTEGER_DTYPES = frozenset(
 # silently reinterprets `uint8` as a boolean mask, so connectivity in any other
 # integer dtype is normalized to `int64` at construction.
 _NON_INDEXING_INTEGER_DTYPES = _INTEGER_DTYPES - {torch.int32, torch.int64}
+_FLOAT64_PROMOTION_DTYPES = frozenset(
+    {torch.int32, torch.uint32, torch.int64, torch.uint64}
+)
+_64_BIT_INTEGER_DTYPES = frozenset({torch.int64, torch.uint64})
 
 
 def _check_geometry_values(valid: torch.Tensor, message: str) -> None:
@@ -503,12 +507,11 @@ class Mesh:
             source_dtype = self.points.dtype
             target_dtype = (
                 torch.float64
-                if source_dtype
-                in {torch.int32, torch.uint32, torch.int64, torch.uint64}
+                if source_dtype in _FLOAT64_PROMOTION_DTYPES
                 else torch.float32
             )
             converted_points = self.points.to(target_dtype)
-            if source_dtype in {torch.int64, torch.uint64}:
+            if source_dtype in _64_BIT_INTEGER_DTYPES:
                 # CUDA casts can saturate, so round-trip equality alone misses
                 # maximum integers rounded up to the exclusive upper bound.
                 exact = (converted_points.to(source_dtype) == self.points) & (
