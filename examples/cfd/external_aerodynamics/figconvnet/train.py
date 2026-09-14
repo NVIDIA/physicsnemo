@@ -243,7 +243,8 @@ def train(config: DictConfig, signal_handler: SignalHandler):
     # Initialize AMP.
     scaler = instantiate(config.amp.scaler)
     autocast = partial(
-        torch.cuda.amp.autocast,
+        torch.amp.autocast,
+        "cuda",
         enabled=config.amp.enabled,
         dtype=hydra.utils.get_object(config.amp.autocast.dtype),
     )
