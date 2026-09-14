@@ -30,7 +30,7 @@ from physicsnemo.models.geotransolver.geotransolver import GeoTransolver
 # =============================================================================
 
 
-def _make_model(device, *, geometry_dim=3, global_dim=16):
+def _make_model(device, *, geometry_dim=3, global_dim=16, **kwargs):
     """Minimal GeoTransolver used by the guard-wrapper tests."""
     return GeoTransolver(
         functional_dim=32,
@@ -48,6 +48,7 @@ def _make_model(device, *, geometry_dim=3, global_dim=16):
         time_input=False,
         plus=False,
         include_local_features=False,
+        **kwargs,
     ).to(device)
 
 
@@ -99,6 +100,30 @@ def test_wrapper_collect_then_check_runs(device):
 
     guarded.eval()
     _ = guarded(**inputs)  # runs checks; must not raise
+
+
+def test_wrapper_collects_once_with_context_checkpointing(device):
+    """Backward recomputation must not duplicate OOD calibration samples."""
+    torch.manual_seed(42)
+    model = _make_model(
+        device,
+        activation_checkpointing=True,
+        activation_checkpointing_components=(
+            "context",
+            "preprocess",
+            "blocks",
+            "output",
+        ),
+    )
+    guarded = GuardedGeoTransolver(
+        model, OODGuardConfig(buffer_size=8, knn_k=3, sensitivity=1.5)
+    ).to(device)
+    inputs = _inputs(device, batch_size=2)
+
+    guarded.train()
+    guarded(**inputs).square().mean().backward()
+
+    assert guarded.ood_guard.geo_ptr.item() == 2
 
 
 def test_wrapper_forwards_output_unchanged(device):

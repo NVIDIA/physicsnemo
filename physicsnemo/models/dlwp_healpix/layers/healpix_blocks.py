@@ -596,6 +596,7 @@ class Multi_SymmetricConvNeXtBlock(torch.nn.Module):
         enable_healpixpad: bool = False,
         dropout: float = 0.0,
         conditional_layer_norm: Callable = None,
+        legacy_skip_rule: bool = False,
     ):
         """
         Parameters
@@ -606,6 +607,9 @@ class Multi_SymmetricConvNeXtBlock(torch.nn.Module):
             Callable for physicsnemo.models.dlwp_healpix_layers.normalization.ConditionalLayerNorm.
             Callable can be passed in by setting _partial_ to True in hydra config. If None,
             conditional layer normalization is not applied.
+        legacy_skip_rule: bool, optional
+            Forwarded to each wrapped ``SymmetricConvNeXtBlock``; see its
+            docstring. Only intended for reconstructing legacy checkpoints.
         """
         super().__init__()
 
@@ -632,6 +636,7 @@ class Multi_SymmetricConvNeXtBlock(torch.nn.Module):
                     conditional_layer_norm=conditional_layer_norm
                     if conditional_layer_norm is not None
                     else None,
+                    legacy_skip_rule=legacy_skip_rule,
                 ),
             )
 
@@ -678,6 +683,7 @@ class SymmetricConvNeXtBlock(torch.nn.Module):
         enable_healpixpad: bool = False,
         dropout: float = 0.0,
         conditional_layer_norm: torch.nn.Module = None,
+        legacy_skip_rule: bool = False,
     ):
         """
         Parameters
@@ -709,6 +715,12 @@ class SymmetricConvNeXtBlock(torch.nn.Module):
         conditional_layer_norm: torch.nn.Module, optional
             conditional layer normalization. If None,
             no conditional layer normalization is applied.
+        legacy_skip_rule: bool, optional
+            If ``True``, use the pre-DLESyM-v1.1 identity-vs-conv skip rule
+            (``in_channels == latent_channels``) instead of the current rule
+            (``in_channels == out_channels``). Only intended for reconstructing
+            legacy checkpoints via ``_backward_compat_arg_mapper``; new models
+            should leave this ``False``.
         """
 
         super().__init__()
@@ -719,7 +731,12 @@ class SymmetricConvNeXtBlock(torch.nn.Module):
         self.cln_enabled = conditional_layer_norm is not None
 
         if use_block_skip_connection:
-            if in_channels == int(out_channels):
+            is_identity_skip = (
+                in_channels == int(latent_channels)
+                if legacy_skip_rule
+                else in_channels == int(out_channels)
+            )
+            if is_identity_skip:
                 self.skip_module = lambda x: x
             else:
                 self.skip_module = geometry_layer(
@@ -822,6 +839,41 @@ class SymmetricConvNeXtBlock(torch.nn.Module):
             convblock.append(torch.nn.Dropout2d(p=dropout))
 
         self.convblock = torch.nn.ModuleList(convblock)
+
+    def _load_from_state_dict(
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ):
+        """
+        Tolerant loading for the ``<prefix>activation.cap`` key: it is always a
+        duplicate reference to one of the ``<prefix>convblock.<i>.cap`` buffers
+        (same object, identical value), so checkpoints saved before
+        ``self.activation`` was stored as a standalone submodule reference are
+        missing it. Backfill it from the first matching convblock buffer before
+        delegating to the normal loading logic.
+        """
+        activation_cap_key = prefix + "activation.cap"
+        if activation_cap_key not in state_dict:
+            convblock_prefix = prefix + "convblock."
+            for key, value in state_dict.items():
+                if key.startswith(convblock_prefix) and key.endswith(".cap"):
+                    state_dict[activation_cap_key] = value
+                    break
+        super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )
 
     def forward(self, x, conditions_cln=None):
         """

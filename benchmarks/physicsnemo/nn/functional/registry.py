@@ -58,6 +58,7 @@ from physicsnemo.nn.functional.interpolation import (
     PointToGridInterpolation,
 )
 from physicsnemo.nn.functional.neighbors import KNN, RadiusSearch
+from physicsnemo.nn.functional.normalization import SafeNormalize
 from physicsnemo.nn.functional.regularization_parameterization import (
     DropPath,
     WeightFact,
@@ -72,6 +73,8 @@ FUNCTIONAL_SPECS: tuple[type[FunctionSpec], ...] = (
     # Regularization / parameterization.
     DropPath,
     WeightFact,
+    # Normalization.
+    SafeNormalize,
     # Neighbor queries.
     KNN,
     RadiusSearch,

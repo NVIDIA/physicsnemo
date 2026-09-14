@@ -266,11 +266,10 @@ def fix_orientation(
             mesh.cells[should_flip, 1],
         )
 
-        from physicsnemo.mesh.mesh import Mesh
-
-        oriented_mesh = Mesh(
-            points=mesh.points,
-            cells=new_cells,
+        # Repair results historically own independent data tensors. Preserve
+        # that behavior while routing connectivity cache handling through the
+        # public API.
+        oriented_mesh = mesh.with_cells(new_cells).with_data(
             point_data=mesh.point_data.clone(),
             cell_data=mesh.cell_data.clone(),
             global_data=mesh.global_data.clone(),

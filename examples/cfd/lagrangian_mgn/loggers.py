@@ -20,6 +20,7 @@ import functools
 import logging
 import os
 from typing import Any, Mapping, Optional
+from uuid import uuid4
 
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
@@ -228,7 +229,7 @@ class WandBLogger(ExperimentLogger):
         if (wandb_id := kwargs.pop("id", None)) is None:
             wandb_id_file = os.path.join(kwargs["dir"], "wandb_id.txt")
             if not os.path.exists(wandb_id_file):
-                wandb_id = wandb.util.generate_id()
+                wandb_id = uuid4().hex
                 with open(wandb_id_file, "w", encoding="utf-8") as f:
                     f.write(wandb_id)
                 logger.info(f"Starting new wandb run: {wandb_id}")

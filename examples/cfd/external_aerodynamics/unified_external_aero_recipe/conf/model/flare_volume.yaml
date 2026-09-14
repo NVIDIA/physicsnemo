@@ -20,6 +20,10 @@
 # ---------------------------------------------------------------------------
 # Same volume forward signature as Transolver volume; only the
 # attention backbone differs.
+dataset_reader_overrides:
+  # This point-based model consumes only the volume interior.
+  drop_in_file_boundaries: true
+
 input_type: tensors
 output_type: tensors
 
@@ -46,3 +50,6 @@ model:
   slice_num: 256          # n_global_queries for FLARE attention
   unified_pos: false
   structured_shape: null  # unstructured mesh
+  use_te: false
+  activation_checkpointing: false
+  checkpointing_ratio: 1.0

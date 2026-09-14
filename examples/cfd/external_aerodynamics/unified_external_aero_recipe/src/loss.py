@@ -36,6 +36,7 @@ to how many channels each field contributes.
 from __future__ import annotations
 
 import logging
+import warnings
 from typing import Literal
 
 import torch
@@ -44,11 +45,19 @@ from jaxtyping import Float
 from tensordict import TensorDict
 from utils import FieldType, align_scalar_shapes, field_dim, validate_field_coverage
 
+from physicsnemo.datapipes.keys import as_nested_key
+from physicsnemo.metrics.general.relative_error import relative_mse
+
 _LOGGER = logging.getLogger("training.loss")
 
 DEFAULT_HUBER_DELTA = 1.0
 
-LossType = Literal["huber", "mse", "rmse"]
+### ``"rmse"`` is a deprecated alias for ``"relative_mse"``: the quantity it
+### always computed is the target-normalized relative MSE (no square root
+### anywhere), so the old name misled anyone comparing against reported RMSE
+### numbers. ``LossCalculator`` rewrites it on construction with a warning.
+LossType = Literal["huber", "mse", "relative_mse", "rmse"]
+_VALID_LOSS_TYPES = ("huber", "mse", "relative_mse", "rmse")
 
 
 ### ---------------------------------------------------------------------------
@@ -81,10 +90,8 @@ def _scalar_loss(
         return F.huber_loss(pred, target, reduction="mean", delta=delta)
     if loss_type == "mse":
         return torch.mean((pred - target) ** 2)
-    if loss_type == "rmse":
-        num = torch.mean((pred - target) ** 2)
-        denom = torch.mean(target**2)
-        return num / (denom + eps)
+    if loss_type == "relative_mse":
+        return relative_mse(pred, target, eps=eps)
     raise ValueError(f"Unknown loss_type {loss_type!r}")
 
 
@@ -98,8 +105,8 @@ def _vector_loss(
     """Per-component scalar loss summed across components.
 
     For a vector field of dimension ``D``, the result is
-    ``D * mean_huber_over_all_elements`` (or the MSE / RMSE analogue),
-    not a single mean over the flattened tensor.
+    ``D * mean_huber_over_all_elements`` (or the MSE / relative-error
+    analogue), not a single mean over the flattened tensor.
     """
     if pred.shape != target.shape:
         raise ValueError(
@@ -108,11 +115,12 @@ def _vector_loss(
         )
     n_components = pred.shape[-1]
 
-    if loss_type == "rmse":
-        ### Per-component relative MSE, summed.
-        diff_sq = torch.mean((pred - target) ** 2, dim=tuple(range(pred.ndim - 1)))
-        target_sq = torch.mean(target**2, dim=tuple(range(pred.ndim - 1)))
-        return torch.sum(diff_sq / (target_sq + eps))
+    ### Relative MSE: each component normalized by its own target energy
+    ### (reduce over every axis but the last), then summed across components.
+    if loss_type == "relative_mse":
+        return torch.sum(
+            relative_mse(pred, target, dim=tuple(range(pred.ndim - 1)), eps=eps)
+        )
 
     total = torch.zeros((), device=pred.device, dtype=pred.dtype)
     for i in range(n_components):
@@ -138,7 +146,10 @@ class LossCalculator:
         target_config: ``{name: scalar|vector}`` mapping. Iteration order
             determines the order in the loss dict and the channel weighting
             in the total.
-        loss_type: One of ``"huber"``, ``"mse"``, ``"rmse"``.
+        loss_type: One of ``"huber"``, ``"mse"``, or ``"relative_mse"``
+            (``sum((pred - target)^2) / sum(target^2)``). ``"rmse"`` is
+            accepted only as a deprecated alias for ``"relative_mse"`` and
+            warns.
         n_spatial_dims: Vector field dimensionality. Used to compute
             channel counts for the normalization denominator.
         field_weights: Optional per-field multiplicative weights. Each
@@ -165,11 +176,26 @@ class LossCalculator:
         normalize_by_channels: bool = True,
         delta: float = DEFAULT_HUBER_DELTA,
     ) -> None:
-        if loss_type not in ("huber", "mse", "rmse"):
+        if loss_type not in _VALID_LOSS_TYPES:
             raise ValueError(
                 f"Unknown loss_type {loss_type!r}; expected one of "
-                f"'huber', 'mse', 'rmse'."
+                f"{_VALID_LOSS_TYPES!r}."
             )
+        if loss_type == "rmse":
+            ### FutureWarning rather than DeprecationWarning: this is a
+            ### user-facing config value, and DeprecationWarning is hidden
+            ### by default outside ``__main__``.
+            warnings.warn(
+                'loss_type="rmse" is a deprecated misnomer: the quantity it '
+                "computes is the target-normalized relative MSE (no square "
+                'root). Use "relative_mse", which computes the same quantity '
+                "for any target with nonzero energy (only the denominator "
+                "floor for an all-zero target differs). The alias will be "
+                "removed.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            loss_type = "relative_mse"
         ### `target_config` values are required to be lowercase per the
         ### `FieldType` contract; we copy the dict verbatim so callers can
         ### mutate their original without affecting us.
@@ -248,8 +274,9 @@ class LossCalculator:
         """
         validate_field_coverage(self.target_config, pred, target)
 
-        ### Find a tensor we can use to seed the accumulator's dtype/device.
-        any_pred = next(iter(pred.values()))
+        ### Find a leaf tensor (descending into nested groups) to seed the
+        ### accumulator's dtype/device.
+        any_pred = next(iter(pred.values(include_nested=True, leaves_only=True)))
         total_loss = torch.zeros((), device=any_pred.device, dtype=any_pred.dtype)
         ### Build the per-field bag as a plain dict during the loop so the
         ### inner ``loss_dict[key] = ...`` assignment stays simple, then
@@ -258,7 +285,10 @@ class LossCalculator:
         loss_dict: dict[str, torch.Tensor] = {}
 
         for name, field_type in self.target_config.items():
-            p, t = pred[name], target[name]
+            ### ``name`` may spell a nested leaf ("solution.p"); the loss
+            ### key keeps the config spelling while the lookup is nested.
+            key = as_nested_key(name)
+            p, t = pred[key], target[key]
             if field_type == "scalar":
                 ### Caller may pass scalar fields as (..., 1) or (...);
                 ### normalize to a single shape so the loss is shape-agnostic.

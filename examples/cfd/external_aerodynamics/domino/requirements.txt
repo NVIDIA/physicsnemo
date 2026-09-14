@@ -1,5 +1,6 @@
 torchinfo
 tensorboard
+nvidia-ml-py
 cuml-cu13==26.2.0
 einops
 tensorstore

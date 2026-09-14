@@ -16,9 +16,14 @@
 
 """Tests for FLARE attention layer."""
 
+import re
+import subprocess
+import sys
+
 import pytest
 import torch
 
+from physicsnemo.core.warnings import LegacyFeatureWarning
 from physicsnemo.nn import FLARE
 from test.conftest import requires_module
 
@@ -87,3 +92,46 @@ def test_flare_gradient_flow(device):
     loss.backward()
     assert x.grad is not None
     assert not torch.isnan(x.grad).any()
+
+
+def test_flare_attention_legacy_import_paths():
+    """Test the import paths used before the move out of experimental."""
+    # Drop the cached legacy module so the shim warning fires again.
+    sys.modules.pop("physicsnemo.experimental.nn.flare_attention", None)
+
+    with pytest.warns(
+        LegacyFeatureWarning, match=re.escape("from physicsnemo.nn import FLARE")
+    ):
+        from physicsnemo.experimental.nn.flare_attention import (
+            FLARE as LegacyModuleFLARE,
+        )
+    with pytest.warns(
+        LegacyFeatureWarning, match=re.escape("from physicsnemo.nn import FLARE")
+    ):
+        from physicsnemo.experimental.nn import FLARE as LegacyPackageFLARE
+
+    assert LegacyPackageFLARE is FLARE
+    assert LegacyModuleFLARE is FLARE
+
+
+def test_experimental_nn_import_does_not_warn():
+    """Importing physicsnemo.experimental.nn alone must not raise the FLARE shim warning.
+
+    Runs in a subprocess because a module body executes once per process: by the
+    time this test runs, the modules are already cached, so an in-process check
+    would pass regardless of what the package imports.
+    """
+    snippet = (
+        "import warnings\n"
+        "with warnings.catch_warnings(record=True) as caught:\n"
+        "    warnings.simplefilter('always')\n"
+        "    import physicsnemo.experimental.nn\n"
+        "leaked = [str(w.message) for w in caught if 'FLARE' in str(w.message)]\n"
+        "assert not leaked, leaked\n"
+    )
+    subprocess.run(  # noqa: S603 - interpreter and snippet are test constants
+        [sys.executable, "-c", snippet],
+        check=True,
+        capture_output=True,
+        text=True,
+    )

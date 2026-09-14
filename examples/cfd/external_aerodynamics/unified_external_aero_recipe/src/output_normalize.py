@@ -40,6 +40,7 @@ from omegaconf import DictConfig
 from tensordict import TensorDict
 from utils import FieldType, field_dim
 
+from physicsnemo.datapipes.keys import as_nested_key, format_leaf_keys
 from physicsnemo.mesh import Mesh
 
 ### Recipe-wide I/O contract literal: every model declares whether its
@@ -100,17 +101,20 @@ def split_concat_by_target(
             f"target_config={target_config!r}."
         )
 
-    leaves: dict[str, torch.Tensor] = {}
+    ### Build the TD leaf by leaf; ``set`` with a tuple key creates the
+    ### nesting, so a ``"solution.p"`` target lands at the same place
+    ### ``extract_targets`` reads it from.
+    out = TensorDict({}, batch_size=tensor.shape[:2], device=tensor.device)
     idx = 0
     for name, ftype in target_config.items():
         dim = field_dim(ftype, n_spatial_dims)
         slice_ = tensor[..., idx : idx + dim]
         if ftype == "scalar":
             slice_ = slice_.squeeze(-1)
-        leaves[name] = slice_
+        out.set(as_nested_key(name), slice_)
         idx += dim
 
-    return TensorDict(leaves, batch_size=tensor.shape[:2], device=tensor.device)
+    return out
 
 
 def normalize_output_to_tensordict(
@@ -149,14 +153,18 @@ def normalize_output_to_tensordict(
             raise TypeError(
                 f"output_type='mesh' but model returned {type(output).__name__}"
             )
-        available = set(output.point_data.keys())
-        missing = [name for name in target_config if name not in available]
+        keys = [as_nested_key(name) for name in target_config]
+        missing = [
+            name
+            for name, key in zip(target_config, keys)
+            if key not in output.point_data
+        ]
         if missing:
             raise KeyError(
                 f"Mesh output is missing target fields {missing!r}; "
-                f"available: {sorted(available)!r}"
+                f"available: {format_leaf_keys(output.point_data)!r}"
             )
-        return output.point_data.select(*target_config)
+        return output.point_data.select(*keys)
 
     if output_type == "tensors":
         if isinstance(output, tuple):

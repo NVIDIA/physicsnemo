@@ -14,29 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-name: Pre-commit
+"""Legacy import shim for the GeoTransolver context projector components."""
 
-on:
-  pull_request:
-    branches: [main, v2.0-refactor, "*-rc"]
-  merge_group:
+from physicsnemo.models.geotransolver.context_projector import (
+    ContextProjector,
+    GeometricFeatureProcessor,
+    GlobalContextBuilder,
+    MultiScaleFeatureExtractor,
+    StructuredContextProjector,
+)
 
-jobs:
-  pre-commit:
-    name: Run pre-commit hooks
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-
-    - uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
-
-    - name: Install project with dev dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -e . --group dev
-
-    - uses: pre-commit/action@v3.0.1
+__all__ = [
+    "ContextProjector",
+    "GeometricFeatureProcessor",
+    "GlobalContextBuilder",
+    "MultiScaleFeatureExtractor",
+    "StructuredContextProjector",
+]

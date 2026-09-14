@@ -55,8 +55,19 @@ _N_GLOBAL_TOKENS = 4
 _GLOBAL_DIM = 8
 
 
-def _build_geotransolver(attention_type, structured_shape=None, plus=False):
+def _build_geotransolver(
+    attention_type, structured_shape=None, plus=False, include_local_features=False
+):
     def build(device):
+        local_kwargs = {}
+        if include_local_features:
+            # Small multi-scale ball-query config: the BQWarp + neighbor-MLP
+            # path of the context projector (the recipe's volume setup).
+            local_kwargs = dict(
+                radii=[0.5, 2.0],
+                neighbors_in_radius=[4, 8],
+                n_hidden_local=8,
+            )
         model = GeoTransolver(
             functional_dim=3,
             out_dim=2,
@@ -72,9 +83,10 @@ def _build_geotransolver(attention_type, structured_shape=None, plus=False):
             use_te=False,
             time_input=False,
             plus=plus,
-            include_local_features=False,
+            include_local_features=include_local_features,
             structured_shape=structured_shape,
             attention_type=attention_type,
+            **local_kwargs,
         )
         return model.to(device)
 
@@ -203,6 +215,70 @@ _CASES = [
 @pytest.mark.parametrize("case", _CASES, ids=lambda c: c.name)
 def test_geotransolver_distributed(distributed_mesh, case):
     run_domain_parallel_model_check(case, mesh=distributed_mesh)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(600)
+def test_geotransolver_local_features_sharded_smoke(distributed_mesh):
+    r"""``include_local_features=True`` sharded forward + backward is
+    well-formed and every parameter gradient is a plain tensor.
+
+    No reference comparison: ``radius_search`` guarantees neither which
+    neighbors are returned under truncation nor their order, and the
+    neighbor-feature MLP consumes an order-sensitive concatenation -- so
+    the sharded output is a valid but different encoding than a gathered
+    single-device run (the op-level tests in ``test_radius_search.py``
+    sort and over-request to compare; a model cannot).
+
+    The gradient-type assertion is the load-bearing check: this is the
+    configuration (BQWarp + neighbor MLPs + the scalar ``state_mixing``
+    gate) where grad-tracking scalars once leaked DTensor gradients onto
+    plain parameters, breaking the optimizer's foreach kernels.
+    """
+    dm = DistributedManager()
+    n_points = _N_POINTS // 4
+    model = _build_geotransolver("GALE", include_local_features=True)(dm.device)
+
+    src = dist.get_global_rank(distributed_mesh.get_group(), 0)
+    torch.manual_seed(11)
+    local_embedding = torch.randn(1, n_points, 3, device=dm.device)
+    geometry = torch.randn(1, _N_GEO, 3, device=dm.device)
+    global_embedding = torch.randn(1, _N_GLOBAL_TOKENS, _GLOBAL_DIM, device=dm.device)
+
+    output = model(
+        scatter_tensor(
+            local_embedding, src, distributed_mesh, (Shard(1),), requires_grad=False
+        ),
+        geometry=scatter_tensor(
+            geometry, src, distributed_mesh, (Shard(1),), requires_grad=False
+        ),
+        global_embedding=scatter_tensor(
+            global_embedding, src, distributed_mesh, (Replicate(),)
+        ),
+        local_positions=scatter_tensor(
+            local_embedding.clone(),
+            src,
+            distributed_mesh,
+            (Shard(1),),
+            requires_grad=False,
+        ),
+    )
+
+    assert isinstance(output, ShardTensor)
+    assert output.shape == (1, n_points, 2)
+    assert output._spec.placements == (Shard(1),)
+    assert torch.isfinite(output.to_local()).all()
+
+    output.full_tensor().square().mean().backward()
+
+    for name, parameter in model.named_parameters():
+        grad = parameter.grad
+        if grad is None:
+            continue
+        assert type(grad) is torch.Tensor, (
+            f"parameter {name!r} received a {type(grad).__name__} gradient"
+        )
+        assert torch.isfinite(grad).all(), f"non-finite gradient on {name!r}"
 
 
 @pytest.mark.multigpu_static

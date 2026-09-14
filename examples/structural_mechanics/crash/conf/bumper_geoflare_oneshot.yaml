@@ -77,4 +77,4 @@ model:
   functional_dim: 3   # coords (3)
   out_dim: 250        # (num_time_steps - 1) * 5 = 50 * 5
   global_dim: 3       # must match len(datapipe.global_features)
-  attention_type: "GALE_FE"  # GALE for GeoTransolver, GALE_FE for GeoFLARE
+  attention_type: "GALE_FA"  # GALE for GeoTransolver, GALE_FA for GeoFLARE

@@ -858,7 +858,7 @@ class TestEmbed:
         )
 
     def test_embed_clears_cached_properties(self):
-        """Test that cached geometric properties are cleared."""
+        """Embedding clears geometry caches while retaining topology caches."""
         ### Create mesh and trigger cache
         points = torch.tensor(
             [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=torch.float32
@@ -870,6 +870,7 @@ class TestEmbed:
         _ = mesh.cell_centroids
         _ = mesh.cell_areas
         _ = mesh.cell_normals
+        topology = mesh.get_point_to_points_adjacency()
 
         # Verify cache exists
         assert len(mesh._cache["cell"].keys()) > 0
@@ -879,6 +880,11 @@ class TestEmbed:
 
         ### Verify cache is cleared
         assert len(embedded._cache["cell"].keys()) == 0
+        assert len(embedded._cache["point"].keys()) == 0
+        cached_topology = embedded._cache.get(("topology", "point_to_points"))
+        assert cached_topology is not None
+        assert cached_topology.offsets.data_ptr() == topology.offsets.data_ptr()
+        assert cached_topology.indices.data_ptr() == topology.indices.data_ptr()
 
     def test_embed_multiple_steps(self):
         """Test embedding through multiple dimension changes."""
@@ -1178,7 +1184,7 @@ class TestProject:
         assert torch.allclose(result.global_data["time"], torch.tensor(1.5))
 
     def test_project_clears_cache(self):
-        """Test that cached geometric properties are cleared on projection."""
+        """Projection clears geometry caches while retaining topology caches."""
         points = torch.tensor(
             [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=torch.float32
         )
@@ -1188,6 +1194,7 @@ class TestProject:
         # Populate cache
         _ = mesh.cell_centroids
         _ = mesh.cell_areas
+        topology = mesh.get_point_to_points_adjacency()
         assert len(mesh._cache["cell"].keys()) > 0
 
         ### Project to 2D
@@ -1195,6 +1202,11 @@ class TestProject:
 
         ### Verify cache is cleared
         assert len(result._cache["cell"].keys()) == 0
+        assert len(result._cache["point"].keys()) == 0
+        cached_topology = result._cache.get(("topology", "point_to_points"))
+        assert cached_topology is not None
+        assert cached_topology.offsets.data_ptr() == topology.offsets.data_ptr()
+        assert cached_topology.indices.data_ptr() == topology.indices.data_ptr()
 
     @pytest.mark.parametrize(
         "start_dims,target_dims",

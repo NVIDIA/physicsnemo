@@ -222,9 +222,6 @@ def project(
     ### Construct new points by indexing selected dimensions
     new_points = mesh.points[:, keep_dims_list]
 
-    ### Preserve cells (topology unchanged)
-    new_cells = mesh.cells
-
     ### Preserve user data, but clear cached properties
     # Cached properties depend on spatial embedding and must be recomputed
     new_point_data = mesh.point_data
@@ -266,11 +263,13 @@ def project(
                 "global_data",
             )
 
-    ### Create new mesh with modified spatial dimensions
-    return Mesh(
-        points=new_points,
-        cells=new_cells,
-        point_data=new_point_data,
-        cell_data=new_cell_data,
-        global_data=new_global_data,
-    )
+    ### Connectivity is unchanged, so retain topology while invalidating all
+    # projection-dependent geometry caches.
+    projected_mesh = mesh.with_points(new_points)
+    if transform_point_data or transform_cell_data or transform_global_data:
+        projected_mesh = projected_mesh.with_data(
+            point_data=new_point_data if transform_point_data else None,
+            cell_data=new_cell_data if transform_cell_data else None,
+            global_data=new_global_data if transform_global_data else None,
+        )
+    return projected_mesh

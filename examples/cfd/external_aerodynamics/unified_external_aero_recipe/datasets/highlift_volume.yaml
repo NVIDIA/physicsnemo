@@ -37,9 +37,10 @@ pipeline:
     # Interior consumed as a point cloud; drop tet topology so the point
     # subsample is a cheap contiguous block read (see drivaer_ml_volume.yaml).
     drop_interior_cells: true
-    # In-file boundaries unused by the volume pipeline (SDF uses stl_geometry);
-    # drop them to skip per-sample subsample + pin.
-    drop_in_file_boundaries: true
+    # Preserve in-file boundaries as the lossless default. Point-based model
+    # templates that consume only the interior explicitly opt into dropping
+    # them to skip per-sample subsampling and pinning.
+    drop_in_file_boundaries: false
     extra_boundaries:
       stl_geometry:
         pattern: "*.stl.pmsh"

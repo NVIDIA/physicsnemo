@@ -41,18 +41,37 @@ else:
 _PARENT_CELL_ID_KEY = "__physicsnemo_parent_cell_id"
 _ORIGINAL_POINT_ID_KEY = "vtkOriginalPointIds"
 
+### VTK data arrays live in a flat namespace, so ``to_pyvista`` writes a nested
+### TensorDict key as a ``"/"``-joined array name (``("solution", "p")`` ->
+### ``"solution/p"``) and records which names were nested in a string array in
+### ``field_data``. ``from_pyvista`` only splits names listed there, so files
+### written by other tools keep literal names such as ``"U [m/s]"`` intact.
+_VTK_KEY_SEPARATOR = "/"
+_NESTED_KEYS_MARKER = "__physicsnemo_nested_keys"
+
+
+def _nested_key_names(pyvista_mesh: "pv.DataSet") -> frozenset[str]:
+    """Names that :func:`to_pyvista` recorded as ``"/"``-joined nested keys."""
+    marker = pyvista_mesh.field_data.get(_NESTED_KEYS_MARKER)
+    if marker is None:
+        return frozenset()
+    return frozenset(str(name) for name in np.asarray(marker).ravel())
+
 
 def _vtk_data_to_tensor_dict(
     data: "pv.DataSetAttributes",
     force_copy: bool = False,
     indices: np.ndarray | None = None,
+    nested_names: frozenset[str] = frozenset(),
 ) -> TensorDict:
     """Convert a PyVista/VTK data container to a TensorDict.
 
     The returned TensorDict has no batch dimensions; ``Mesh.__post_init__``
-    assigns the batch_size appropriate to the container it lands in.
+    assigns the batch_size appropriate to the container it lands in. Array
+    names in ``nested_names`` (see :func:`_nested_key_names`) are split on
+    ``"/"`` into nested TensorDict keys; every other name is kept literally.
     """
-    tensor_data: dict[str, torch.Tensor] = {}
+    tensor_data: dict[str | tuple[str, ...], torch.Tensor] = {}
     for key, value in dict(data).items():
         array = np.asarray(value)
         if not np.issubdtype(array.dtype, np.number) and array.dtype != np.bool_:
@@ -61,7 +80,11 @@ def _vtk_data_to_tensor_dict(
             array = array[indices]
         elif force_copy:
             array = array.copy()
-        tensor_data[str(key)] = torch.as_tensor(array)
+        name = str(key)
+        nested_key: str | tuple[str, ...] = (
+            tuple(name.split(_VTK_KEY_SEPARATOR)) if name in nested_names else name
+        )
+        tensor_data[nested_key] = torch.as_tensor(array)
     return TensorDict(tensor_data, device="cpu")
 
 
@@ -1685,16 +1708,19 @@ def from_pyvista(
         and n_output_cells == pyvista_mesh.n_cells
         and (selected_unstructured_cells or manifold_dim >= native_dim)
     )
+    nested_names = _nested_key_names(source_pyvista_mesh)
     if output_parent_ids is not None:
         output_cell_data = _vtk_data_to_tensor_dict(
             source_pyvista_mesh.cell_data,
             force_copy,
             indices=output_parent_ids,
+            nested_names=nested_names,
         )
     elif pass_cell_data:
         output_cell_data = _vtk_data_to_tensor_dict(
             pyvista_mesh.cell_data,
             force_copy,
+            nested_names=nested_names,
         )
     else:
         output_cell_data = {}
@@ -1702,10 +1728,12 @@ def from_pyvista(
     return Mesh(
         points=points,
         cells=cells,
-        point_data=_vtk_data_to_tensor_dict(geometry_source.point_data, force_copy),
+        point_data=_vtk_data_to_tensor_dict(
+            geometry_source.point_data, force_copy, nested_names=nested_names
+        ),
         cell_data=output_cell_data,
         global_data=_vtk_data_to_tensor_dict(
-            source_pyvista_mesh.field_data, force_copy
+            source_pyvista_mesh.field_data, force_copy, nested_names=nested_names
         ),
     )
 
@@ -1804,16 +1832,26 @@ def to_pyvista(
     else:
         raise ValueError(f"Unsupported {mesh.n_manifold_dims=}. Must be 0, 1, 2, or 3.")
 
-    ### Copy data to PyVista (flatten high-rank tensors for VTK compatibility)
+    ### Copy data to PyVista (flatten high-rank tensors for VTK compatibility).
+    ### Nested keys become "/"-joined array names, recorded in a field_data
+    ### marker so from_pyvista knows which names to split back.
+    nested_names: list[str] = []
     for source, target in [
         (mesh.point_data, pv_mesh.point_data),
         (mesh.cell_data, pv_mesh.cell_data),
         (mesh.global_data, pv_mesh.field_data),
     ]:
         for k, v in source.items(include_nested=True, leaves_only=True):
+            if isinstance(k, str):
+                name = k
+            else:
+                name = _VTK_KEY_SEPARATOR.join(k)
+                nested_names.append(name)
             arr = _tensor_to_vtk_numpy(v)
             arr = arr.reshape(arr.shape[0], -1) if arr.ndim > 2 else arr
-            target[str(k)] = arr.copy() if force_copy else arr
+            target[name] = arr.copy() if force_copy else arr
+    if nested_names:
+        pv_mesh.field_data[_NESTED_KEYS_MARKER] = np.array(sorted(set(nested_names)))
 
     return pv_mesh
 
@@ -1873,11 +1911,16 @@ def _from_pyvista_cell_centroids(
         # Dual graph: edges connect cells that share a face.
         cells = _build_dual_graph_edges(pyvista_mesh)
 
+    nested_names = _nested_key_names(pyvista_mesh)
     return Mesh(
         points=points,
         cells=cells,
-        point_data=_vtk_data_to_tensor_dict(pyvista_mesh.cell_data, force_copy),
-        global_data=_vtk_data_to_tensor_dict(pyvista_mesh.field_data, force_copy),
+        point_data=_vtk_data_to_tensor_dict(
+            pyvista_mesh.cell_data, force_copy, nested_names=nested_names
+        ),
+        global_data=_vtk_data_to_tensor_dict(
+            pyvista_mesh.field_data, force_copy, nested_names=nested_names
+        ),
     )
 
 

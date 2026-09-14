@@ -26,73 +26,9 @@ import torch
 from physicsnemo.mesh.mesh import Mesh
 
 ### Helper Functions ###
-
-
-def create_simple_mesh(
-    n_spatial_dims: int, n_manifold_dims: int, device: torch.device | str = "cpu"
-):
-    """Create a simple mesh for testing."""
-    if n_manifold_dims > n_spatial_dims:
-        raise ValueError(
-            f"Manifold dimension {n_manifold_dims} cannot exceed spatial dimension {n_spatial_dims}"
-        )
-
-    if n_manifold_dims == 1:
-        if n_spatial_dims == 2:
-            points = torch.tensor(
-                [[0.0, 0.0], [1.0, 0.0], [1.5, 1.0], [0.5, 1.5]], device=device
-            )
-        elif n_spatial_dims == 3:
-            points = torch.tensor(
-                [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 1.0]],
-                device=device,
-            )
-        else:
-            raise ValueError(f"Unsupported {n_spatial_dims=}")
-        cells = torch.tensor([[0, 1], [1, 2], [2, 3]], device=device, dtype=torch.int64)
-    elif n_manifold_dims == 2:
-        if n_spatial_dims == 2:
-            points = torch.tensor(
-                [[0.0, 0.0], [1.0, 0.0], [0.5, 1.0], [1.5, 0.5]], device=device
-            )
-        elif n_spatial_dims == 3:
-            points = torch.tensor(
-                [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 1.0, 0.0], [1.5, 0.5, 0.5]],
-                device=device,
-            )
-        else:
-            raise ValueError(f"Unsupported {n_spatial_dims=}")
-        cells = torch.tensor([[0, 1, 2], [1, 3, 2]], device=device, dtype=torch.int64)
-    elif n_manifold_dims == 3:
-        if n_spatial_dims == 3:
-            points = torch.tensor(
-                [
-                    [0.0, 0.0, 0.0],
-                    [1.0, 0.0, 0.0],
-                    [0.0, 1.0, 0.0],
-                    [0.0, 0.0, 1.0],
-                    [1.0, 1.0, 1.0],
-                ],
-                device=device,
-            )
-            cells = torch.tensor(
-                [[0, 1, 2, 3], [1, 2, 3, 4]], device=device, dtype=torch.int64
-            )
-        else:
-            raise ValueError("3-simplices require 3D embedding space")
-    else:
-        raise ValueError(f"Unsupported {n_manifold_dims=}")
-
-    return Mesh(points=points, cells=cells)
-
-
-def assert_on_device(tensor: torch.Tensor, expected_device: str) -> None:
-    """Assert tensor is on expected device."""
-    actual_device = tensor.device.type
-    assert actual_device == expected_device, (
-        f"Device mismatch: tensor is on {actual_device!r}, expected {expected_device!r}"
-    )
-
+# The point/cell literals previously duplicated here are the shared
+# conftest factory's canonical meshes.
+from test.mesh.conftest import assert_on_device, create_simple_mesh  # noqa: E402
 
 ### Test Fixtures ###
 
@@ -248,6 +184,31 @@ class TestCellDataToPointData:
         assert torch.is_floating_point(material)
         # Point 1 is shared by both cells: mean(1, 2) = 1.5 (not truncated to 1).
         assert torch.allclose(material[1], torch.tensor(1.5, dtype=material.dtype))
+
+    @pytest.mark.parametrize("dtype", [torch.complex64, torch.complex128])
+    def test_complex_cell_field_preserves_imaginary_part(self, dtype):
+        """Regression: complex cell fields keep their dtype and imaginary part.
+
+        Complex tensors are not "floating point" by ``torch``'s definition, so
+        a complex field was previously promoted to float64 like an integer
+        field, silently discarding the imaginary part.
+        """
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+        cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
+        mesh = Mesh(
+            points=points,
+            cells=cells,
+            cell_data={"impedance": torch.tensor([1 + 2j, 3 + 6j], dtype=dtype)},
+        )
+
+        result = mesh.cell_data_to_point_data()
+
+        impedance = result.point_data["impedance"]
+        assert impedance.dtype == dtype
+        # Points 0 and 3 belong to one cell each; points 1 and 2 are shared, so
+        # they average to (1+2j + 3+6j) / 2 = 2+4j.
+        expected = torch.tensor([1 + 2j, 2 + 4j, 2 + 4j, 3 + 6j], dtype=dtype)
+        torch.testing.assert_close(impedance, expected)
 
 
 class TestPointDataToCellData:
