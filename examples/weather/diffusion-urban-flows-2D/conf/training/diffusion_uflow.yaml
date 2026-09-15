@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+# Hyperparameters
+hp:
+    epochs : 1000                    
+
+    total_batch_size: 2048 #redundant in new training loop
+    # Total batch size
+    batch_size_per_gpu: 64  #"auto"
+    # Batch size per GPU
+    lr: 1e-3
+    # Learning rate
+    lr_rampup: 0
+    # Rampup for learning rate, in number of epochs
+    grad_clip_threshold: null
+    # no gradient clipping for defualt non-patch-based training
+    lr_decay: 1
+    # LR decay rate
+    lr_decay_from : 100
+
+# Performance
+perf:
+    fp_optimizations: fp32
+    # Floating point mode, one of ["fp32", "fp16", "amp-fp16", "amp-bf16"]
+    # "amp-{fp16,bf16}" activates Automatic Mixed Precision (AMP) with {float16,bfloat16}
+    dataloader_workers: 16
+    # DataLoader worker processes
+    songunet_checkpoint_level: 0 # 0 means no checkpointing
+    # Gradient checkpointing level, value is number of layers to checkpoint
+# I/O
+io:
+    # Where to load the regression checkpoint
+    print_progress_freq: 5
+    # How often to print progress
+    save_checkpoint_freq: 100
+    # How often to save the checkpoints, measured in number of processed samples
