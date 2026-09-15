@@ -48,6 +48,20 @@ dataloader:
   use_streams: true
   num_workers: 4
   pin_memory: true
+  # Optional two-tier reader cache (RAM + node-local disk). Removes the
+  # repeated small/metadata reads that dominate per-sample latency on
+  # network filesystems (Lustre): tensordict meta.json trees, global_data
+  # scalars, extra-boundary globs. One instance is shared across all
+  # datasets/splits; a shared disk_dir is safe across ranks on a node.
+  # Enable with e.g.:
+  #   cache:
+  #     _target_: ${dp:DatasetCache}
+  #     ram_bytes_limit: 4294967296          # 4 GiB; null disables RAM tier
+  #     disk_dir: /raid/${oc.env:USER}/pn-datacache   # null disables disk tier
+  #     disk_bytes_limit: 214748364800       # 200 GiB (soft target)
+  #     eviction: largest                    # largest | fifo | lru
+  # Disk entries persist across runs, so later runs on a node start warm.
+  cache: null
 
 # -- Logging -----------------------------------------------------------------
 logging:
