@@ -24,7 +24,7 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
 import numpy as np
 import torch
@@ -33,8 +33,12 @@ from tensordict import TensorDict
 from torch.amp import autocast
 
 from physicsnemo.datapipes.keys import as_nested_key
+from physicsnemo.distributed import DistributedManager
 from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.optim import CombinedOptimizer, Muon
+
+if TYPE_CHECKING:
+    from torch.distributed.device_mesh import DeviceMesh
 
 ### Recipe-wide type aliases. Re-exported for use in loss.py, metrics.py,
 ### output_normalize.py, forward_kwargs.py, collate.py, train.py, infer.py,
@@ -81,6 +85,31 @@ def set_seed(seed: int | None, rank: int = 0) -> None:
     np.random.seed(seed % (1 << 31))
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+
+
+def build_distributed_meshes(
+    cfg: DictConfig, dist_manager: DistributedManager, logger: Any
+) -> tuple["DeviceMesh | None", "DeviceMesh | None"]:
+    """Build the ``(domain_mesh, data_mesh)`` pair for domain parallelism.
+
+    Both are ``None`` when ``domain_size == 1``. The ``domain`` axis varies
+    fastest, so a domain group is a block of consecutive ranks.
+    """
+    domain_size = int(cfg.get("domain_parallelism", {}).get("domain_size", 1))
+    if domain_size <= 1:
+        return None, None
+    if dist_manager.world_size % domain_size != 0:
+        raise ValueError(
+            f"world_size {dist_manager.world_size} is not divisible by "
+            f"domain_parallelism.domain_size {domain_size}"
+        )
+    global_mesh = dist_manager.initialize_mesh(
+        mesh_shape=(-1, domain_size), mesh_dim_names=("ddp", "domain")
+    )
+    domain_mesh = global_mesh["domain"]
+    data_mesh = global_mesh["ddp"]
+    logger.info(f"Domain parallelism: ddp={data_mesh.size()} x domain={domain_size}")
+    return domain_mesh, data_mesh
 
 
 def build_muon_optimizer(
