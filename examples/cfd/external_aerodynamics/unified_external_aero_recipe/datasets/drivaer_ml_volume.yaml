@@ -47,13 +47,12 @@ pipeline:
   augmentations:
     - _target_: ${dp:RandomRotateMesh}
       axes: ["z"]
+      mode: axis_aligned
       transform_point_data: true
       transform_global_data: true
     - _target_: ${dp:RandomTranslateMesh}
-      distribution:
-        _target_: torch.distributions.Uniform
-        low: [-1.0, -1.0, 0.0]
-        high: [1.0, 1.0, 0.0]
+      low: [-1.0, -1.0, 0.0]
+      high: [1.0, 1.0, 0.0]
   transforms:
     - _target_: ${dp:DropMeshFields}
       global_data: [TimeValue]

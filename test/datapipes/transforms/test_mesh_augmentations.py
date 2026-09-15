@@ -419,6 +419,34 @@ class TestRandomTranslateMesh:
             d1.boundaries["wall"].points, d2.boundaries["wall"].points
         )
 
+    def test_low_high_lists(self):
+        """low/high lists should build a per-axis Uniform (here, no z offset)."""
+        aug = _seed(RandomTranslateMesh(low=[-1.0, -1.0, 0.0], high=[1.0, 1.0, 0.0]), 0)
+        mesh = _simple_mesh_3d()
+        for _ in range(20):
+            translated = aug(mesh)
+            offset = translated.points - mesh.points
+            assert offset[:, :2].abs().max() <= 1.0
+            assert torch.allclose(offset[:, 2], torch.zeros(3), atol=1e-6)
+
+    def test_low_high_scalars(self):
+        """Scalar low/high should bound offsets on every axis."""
+        aug = _seed(RandomTranslateMesh(low=-0.5, high=0.5), 0)
+        mesh = _simple_mesh_3d()
+        for _ in range(20):
+            offset = aug(mesh).points - mesh.points
+            assert offset.abs().max() <= 0.5
+
+    def test_low_high_with_distribution_raises(self):
+        """low/high and distribution are mutually exclusive."""
+        with pytest.raises(ValueError, match="cannot be combined with distribution"):
+            RandomTranslateMesh(distribution=D.Uniform(-1.0, 1.0), low=0.0, high=1.0)
+
+    def test_low_without_high_raises(self):
+        """low and high must be given together."""
+        with pytest.raises(ValueError, match="must be given together"):
+            RandomTranslateMesh(low=0.0)
+
 
 # ---------------------------------------------------------------------------
 # RandomRotateMesh
@@ -526,6 +554,24 @@ class TestRandomRotateMesh:
         """Invalid mode should raise ValueError."""
         with pytest.raises(ValueError, match="mode must be"):
             RandomRotateMesh(mode="bogus")
+
+    def test_axes_without_mode_is_axis_aligned(self):
+        """axes without an explicit mode should restrict rotations to those axes."""
+        aug = _seed(RandomRotateMesh(axes=["z"]), 0)
+        assert aug.mode == "axis_aligned"
+        mesh = _simple_mesh_3d()
+        for _ in range(20):
+            rotated = aug(mesh)
+            assert torch.allclose(rotated.points[:, 2], mesh.points[:, 2], atol=1e-6)
+
+    def test_no_axes_defaults_to_uniform(self):
+        """Without axes or mode, rotations should be uniform over SO(3)."""
+        assert RandomRotateMesh().mode == "uniform"
+
+    def test_axes_with_uniform_mode_raises(self):
+        """axes combined with an explicit mode='uniform' is contradictory."""
+        with pytest.raises(ValueError, match="axes cannot be combined"):
+            RandomRotateMesh(axes=["z"], mode="uniform")
 
     def test_uniform_mode_3d_only(self):
         """mode='uniform' should reject non-3D meshes."""

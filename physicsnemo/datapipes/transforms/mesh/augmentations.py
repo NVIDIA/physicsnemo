@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import math
 import warnings
+from collections.abc import Sequence
 from typing import Literal
 
 import torch
@@ -86,6 +87,24 @@ def _sample_distribution(
             stacklevel=3,
         )
         return distribution.sample(shape).to(device=u.device)
+
+
+def _as_bound_tensor(value: float | Sequence[float]) -> torch.Tensor:
+    """Coerce a scalar or sequence (e.g. OmegaConf ``ListConfig``) to a tensor.
+
+    Parameters
+    ----------
+    value : float or sequence of float
+        Distribution bound as given by the user or a config file.
+
+    Returns
+    -------
+    torch.Tensor
+        Scalar or 1-D ``float32`` tensor.
+    """
+    if isinstance(value, Sequence) and not isinstance(value, str):
+        value = list(value)
+    return torch.as_tensor(value, dtype=torch.float32)
 
 
 @register()
@@ -193,11 +212,15 @@ class RandomTranslateMesh(MeshTransform):
     (default ``Uniform(-0.1, 0.1)``).  Pass a batched distribution to
     control each axis separately, e.g.
     ``Uniform(tensor([-0.1, -0.2, -0.3]), tensor([0.1, 0.2, 0.3]))``.
+    Alternatively pass *low* / *high* to build such a uniform
+    distribution from plain (config-friendly) numbers or sequences.
     """
 
     def __init__(
         self,
         distribution: torch.distributions.Distribution | None = None,
+        low: float | Sequence[float] | None = None,
+        high: float | Sequence[float] | None = None,
     ) -> None:
         """
         Parameters
@@ -208,8 +231,23 @@ class RandomTranslateMesh(MeshTransform):
             batched distribution (``batch_shape == (n_spatial_dims,)``)
             allows different parameters per axis.
             Defaults to ``Uniform(-0.1, 0.1)``.
+        low, high : float or sequence of float or None
+            Convenience bounds for a ``Uniform`` distribution, e.g.
+            ``low=[-1, -1, 0], high=[1, 1, 0]`` for in-plane offsets.
+            Both must be given together and are mutually exclusive with
+            *distribution*.
         """
         super().__init__()
+        if (low is None) != (high is None):
+            raise ValueError("low and high must be given together")
+        if low is not None:
+            if distribution is not None:
+                raise ValueError("low/high cannot be combined with distribution")
+            ### Uniform rejects lists (and OmegaConf's ListConfig), which is
+            ### what config-driven instantiation hands us.
+            distribution = torch.distributions.Uniform(
+                _as_bound_tensor(low), _as_bound_tensor(high)
+            )
         self._distribution = distribution or torch.distributions.Uniform(-0.1, 0.1)
         self._generator: torch.Generator | None = None
 
@@ -277,19 +315,22 @@ class RandomRotateMesh(MeshTransform):
 
     Two modes are supported:
 
-    * ``"axis_aligned"`` (default) -- picks one of the candidate *axes*
-      uniformly at random and samples an angle from *distribution*.
-      This limits rotations to the three cardinal planes.
+    * ``"axis_aligned"`` -- picks one of the candidate *axes* uniformly
+      at random and samples an angle from *distribution*.  This limits
+      rotations to the three cardinal planes.
     * ``"uniform"`` -- samples a rotation uniformly from SO(3) via random
       unit quaternions (3-D meshes only).  *axes* and *distribution* are
       ignored in this mode.
+
+    When *mode* is not given it defaults to ``"axis_aligned"`` if *axes*
+    is given and ``"uniform"`` otherwise.
     """
 
     def __init__(
         self,
         axes: list[Literal["x", "y", "z"]] | None = None,
         distribution: torch.distributions.Distribution | None = None,
-        mode: Literal["axis_aligned", "uniform"] = "uniform",
+        mode: Literal["axis_aligned", "uniform"] | None = None,
         transform_point_data: bool = False,
         transform_cell_data: bool = False,
         transform_global_data: bool = False,
@@ -305,10 +346,13 @@ class RandomRotateMesh(MeshTransform):
             Distribution from which the rotation angle (radians) is
             sampled.  Defaults to ``Uniform(-pi, pi)``.
             Only used when ``mode="axis_aligned"``.
-        mode : {"axis_aligned", "uniform"}
+        mode : {"axis_aligned", "uniform"} or None
             ``"axis_aligned"`` picks a random cardinal axis and angle
             each call.  ``"uniform"`` samples a rotation uniformly from
-            SO(3) via random quaternions (3-D only).
+            SO(3) via random quaternions (3-D only).  Defaults to
+            ``"axis_aligned"`` when *axes* is given, ``"uniform"``
+            otherwise.  Passing *axes* together with ``mode="uniform"``
+            is contradictory and raises ``ValueError``.
         transform_point_data : bool
             If ``True``, transform point-data fields under rotation.
         transform_cell_data : bool
@@ -317,6 +361,12 @@ class RandomRotateMesh(MeshTransform):
             If ``True``, transform global-data fields under rotation.
         """
         super().__init__()
+        if mode is None:
+            ### Passing axes without a mode is a request for axis-aligned
+            ### rotations; silently falling back to SO(3) would ignore them.
+            mode = "axis_aligned" if axes is not None else "uniform"
+        elif mode == "uniform" and axes is not None:
+            raise ValueError("axes cannot be combined with mode='uniform'")
         if mode not in ("axis_aligned", "uniform"):
             raise ValueError(f"mode must be 'axis_aligned' or 'uniform', got {mode!r}")
         self.axes = axes if axes is not None else ["x", "y", "z"]
