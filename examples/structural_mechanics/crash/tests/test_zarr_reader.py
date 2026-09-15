@@ -55,9 +55,9 @@ def create_mock_zarr_store(
 
     # Write to Zarr store
     store = zarr.open(str(store_path), mode="w")
-    store.create_dataset("mesh_pos", data=mesh_pos, dtype=np.float32)
-    store.create_dataset("thickness", data=node_thickness, dtype=np.float32)
-    store.create_dataset("edges", data=edges, dtype=np.int64)
+    store.create_array("mesh_pos", data=mesh_pos)
+    store.create_array("thickness", data=node_thickness)
+    store.create_array("edges", data=edges)
 
     return mesh_pos, node_thickness, edges
 
@@ -153,7 +153,7 @@ def test_load_zarr_store_missing_fields():
 
         # Create store with only thickness (missing mesh_pos and edges)
         store = zarr.open(str(store_path), mode="w")
-        store.create_dataset("thickness", data=np.ones(4, dtype=np.float32))
+        store.create_array("thickness", data=np.ones(4, dtype=np.float32))
 
         # Should raise KeyError for missing mesh_pos
         with pytest.raises(KeyError, match="mesh_pos"):
@@ -163,7 +163,7 @@ def test_load_zarr_store_missing_fields():
         store_path2 = Path(temp_dir) / "incomplete2.zarr"
         store_path2.mkdir()
         store2 = zarr.open(str(store_path2), mode="w")
-        store2.create_dataset(
+        store2.create_array(
             "mesh_pos", data=np.random.randn(3, 4, 3).astype(np.float32)
         )
 
@@ -181,20 +181,18 @@ def test_load_zarr_store_multiple_point_data_fields():
         # Create store with multiple point data fields
         num_nodes = 10
         store = zarr.open(str(store_path), mode="w")
-        store.create_dataset(
+        store.create_array(
             "mesh_pos", data=np.random.randn(3, num_nodes, 3).astype(np.float32)
         )
-        store.create_dataset("edges", data=np.array([[0, 1]], dtype=np.int64))
+        store.create_array("edges", data=np.array([[0, 1]], dtype=np.int64))
         # Add multiple point data fields
-        store.create_dataset("thickness", data=np.ones(num_nodes, dtype=np.float32))
-        store.create_dataset(
-            "stress", data=np.random.randn(num_nodes).astype(np.float32)
-        )
-        store.create_dataset(
+        store.create_array("thickness", data=np.ones(num_nodes, dtype=np.float32))
+        store.create_array("stress", data=np.random.randn(num_nodes).astype(np.float32))
+        store.create_array(
             "temperature", data=np.random.randn(num_nodes).astype(np.float32)
         )
         # This should be skipped (mesh connectivity, not point data)
-        store.create_dataset(
+        store.create_array(
             "mesh_connectivity_flat", data=np.array([0, 1, 2], dtype=np.int64)
         )
 
@@ -228,15 +226,15 @@ def test_load_zarr_store_2d_feature_arrays():
         num_nodes = 8
         feature_dim = 3
         store = zarr.open(str(store_path), mode="w")
-        store.create_dataset(
+        store.create_array(
             "mesh_pos", data=np.random.randn(3, num_nodes, 3).astype(np.float32)
         )
-        store.create_dataset("edges", data=np.array([[0, 1]], dtype=np.int64))
+        store.create_array("edges", data=np.array([[0, 1]], dtype=np.int64))
         # Add 1D feature (thickness)
-        store.create_dataset("thickness", data=np.ones(num_nodes, dtype=np.float32))
+        store.create_array("thickness", data=np.ones(num_nodes, dtype=np.float32))
         # Add 2D feature array [N, K] (e.g., stress tensor components)
         stress_tensor = np.random.randn(num_nodes, feature_dim).astype(np.float32)
-        store.create_dataset("stress_tensor", data=stress_tensor)
+        store.create_array("stress_tensor", data=stress_tensor)
 
         mesh_pos, edges, point_data_dict = zarr_reader.load_zarr_store(str(store_path))
 
@@ -309,11 +307,11 @@ def test_process_zarr_data_validation():
 
         # Create store with invalid mesh_pos shape (should be [T,N,3])
         store = zarr.open(str(store_path), mode="w")
-        store.create_dataset(
+        store.create_array(
             "mesh_pos", data=np.random.randn(3, 4, 2).astype(np.float32)
         )  # Wrong last dim
-        store.create_dataset("thickness", data=np.ones(4, dtype=np.float32))
-        store.create_dataset("edges", data=np.array([[0, 1]], dtype=np.int64))
+        store.create_array("thickness", data=np.ones(4, dtype=np.float32))
+        store.create_array("edges", data=np.array([[0, 1]], dtype=np.int64))
 
         with pytest.raises(ValueError, match="mesh_pos must be"):
             zarr_reader.process_zarr_data(
@@ -330,12 +328,12 @@ def test_process_zarr_data_edge_bounds():
 
         num_nodes = 4
         store = zarr.open(str(store_path), mode="w")
-        store.create_dataset(
+        store.create_array(
             "mesh_pos", data=np.random.randn(3, num_nodes, 3).astype(np.float32)
         )
-        store.create_dataset("thickness", data=np.ones(num_nodes, dtype=np.float32))
+        store.create_array("thickness", data=np.ones(num_nodes, dtype=np.float32))
         # Edge references node 10 which is out of bounds
-        store.create_dataset("edges", data=np.array([[0, 10]], dtype=np.int64))
+        store.create_array("edges", data=np.array([[0, 10]], dtype=np.int64))
 
         with pytest.raises(ValueError, match="Edge indices out of bounds"):
             zarr_reader.process_zarr_data(
@@ -346,9 +344,9 @@ def test_process_zarr_data_edge_bounds():
 
 def test_reader_class(mock_zarr_directory):
     """Test the Reader class callable interface."""
-    reader = zarr_reader.Reader()
+    reader = zarr_reader.Reader(lazy_load=False)
 
-    srcs, dsts, point_data = reader(
+    srcs, dsts, point_data, global_features = reader(
         data_dir=mock_zarr_directory,
         num_samples=2,
         split="train",
@@ -357,6 +355,58 @@ def test_reader_class(mock_zarr_directory):
     assert len(srcs) == 2
     assert len(dsts) == 2
     assert len(point_data) == 2
+    assert global_features == []
+
+
+def test_reader_lazy_load(mock_zarr_directory):
+    """Lazy reader returns handles without materialized coordinates."""
+    reader = zarr_reader.Reader(lazy_load=True)
+
+    srcs, dsts, point_data, global_features = reader(
+        data_dir=mock_zarr_directory,
+        num_samples=2,
+    )
+
+    assert len(point_data) == 2
+    assert global_features == []
+    for rec in point_data:
+        assert rec["_lazy"] is True
+        assert "_zarr_path" in rec
+        assert "_num_nodes" in rec
+        assert "coords" not in rec
+
+
+def test_materialize_zarr_record(mock_zarr_store):
+    """Materializing a lazy record matches eager load_zarr_store output."""
+    temp_dir, expected_mesh_pos, expected_thickness, expected_edges = mock_zarr_store
+    store_path = Path(temp_dir) / "Run001.zarr"
+
+    record = zarr_reader.materialize_zarr_record(str(store_path))
+
+    assert "coords" in record
+    assert "thickness" in record
+    np.testing.assert_array_almost_equal(record["coords"], expected_mesh_pos)
+    np.testing.assert_array_almost_equal(record["thickness"], expected_thickness)
+
+
+def test_process_zarr_data_lazy(mock_zarr_directory):
+    """Lazy processing validates stores without loading full mesh arrays."""
+    srcs, dsts, point_data = zarr_reader.process_zarr_data(
+        data_dir=mock_zarr_directory,
+        num_samples=2,
+        lazy_load=True,
+    )
+
+    assert len(srcs) == 2
+    assert len(dsts) == 2
+    assert len(point_data) == 2
+    assert all(rec["_lazy"] for rec in point_data)
+    assert all("coords" not in rec for rec in point_data)
+
+    materialized = zarr_reader.materialize_zarr_record(
+        point_data[0]["_zarr_path"], num_timesteps=3
+    )
+    assert materialized["coords"].shape[0] == 3
 
 
 def test_natural_sorting(mock_zarr_directory):
