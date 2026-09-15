@@ -22,6 +22,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PHYSICSNEMO_DIST_TIMEOUT_S`; unset or empty configuration keeps PyTorch's
   backend default. Invalid timeouts are rejected before initialization state
   changes, allowing corrected configuration to be retried.
+- `physicsnemo.nn.FLARE` accepts a new optional `context_dim` constructor
+  argument and an optional `context` forward argument. These enable a
+  cross-attention read of an external context sequence at the latent
+  bottleneck (between the encode and decode attention passes). Reading the
+  context from the `n_global_queries` latent tokens instead of the `N` point
+  tokens reduces the context-attention cost by a factor `n_global_queries / N`.
+  The `physicsnemo.nn.GALE_FA` layer gains the same capability through two
+  independent constructor options. Setting `context_placement="latents"`
+  relocates its context read from the point features to the FLARE latent
+  tokens. Setting `context_source_dims` splits the context channel-wise into
+  sources read with shared attention scores, per-source value projections,
+  and a learned per-source, per-channel softmax gate. Both options are also
+  exposed on `physicsnemo.nn.GALEBlock` and on the production
+  `physicsnemo.models.geotransolver.GeoTransolver` constructor when
+  `attention_type="GALE_FA"`, plumbed through to the underlying `GALE_FA`.
+  Defaults leave all layers and models unchanged.
 
 ### Changed
 

@@ -23,6 +23,8 @@ geometry and global context embeddings.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -34,7 +36,12 @@ import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.version_check import OptionalImport
 
 from .concrete_dropout import ConcreteDropout
-from .flare_attention import _flare_self_attention, _flare_self_attention_te
+from .flare_attention import (
+    _flare_encode,
+    _flare_encode_te,
+    _flare_self_attention,
+    _flare_self_attention_te,
+)
 from .mlp_layers import Mlp
 from .physics_attention import (
     PhysicsAttentionIrregularMesh,
@@ -525,6 +532,12 @@ class GALE_FA(nn.Module):
     GALE_FA combines FLARE self-attention on learned physical state slices with cross-attention
     to geometry-aware context, using a learnable mixing weight to blend the two.
 
+    Two independent axes control the context read: ``context_placement``
+    moves the cross-attention queries from the point features to the FLARE
+    latent tokens, and ``context_source_dims`` switches the blending from
+    the single-projection state mixing to a per-source gated read. Any
+    combination of the two is valid.
+
     Parameters
     ----------
     dim : int
@@ -548,7 +561,25 @@ class GALE_FA(nn.Module):
         How to blend self-attention and cross-attention outputs.  ``"weighted"`` uses
         a learnable sigmoid-gated weighted sum. ``"concat_project"``
         concatenates the two along the head dimension and projects back with a
-        linear layer. Default is ``"weighted"``.
+        linear layer. Only used when ``context_source_dims`` is ``None``.
+        Default is ``"weighted"``.
+    context_placement : {"points", "latents"}, optional
+        Where the context cross-attention queries come from. The
+        ``"points"`` placement reads the context from the :math:`N` point
+        features. The ``"latents"`` placement reads it from the
+        ``n_global_queries`` FLARE latent tokens, between the encode and
+        decode attention passes, and blends at the latent level before
+        decoding; this reduces the context-attention cost by a factor
+        ``n_global_queries`` :math:`/ N`. Default is ``"points"``.
+    context_source_dims : tuple[int, ...] | None, optional
+        Channel widths of the sources concatenated in the context (e.g.
+        ball-query scales, geometry, and global embeddings); must sum to
+        ``context_dim``. When provided, all sources share one attention
+        score matrix but each source applies its own value projection to
+        its channel slice, and a learned per-source, per-channel softmax
+        gate blends the reads with the self stream (see Notes). Passing
+        ``None`` keeps the single value projection over the full context
+        and the ``state_mixing_mode`` blend. Default is ``None``.
 
     Forward
     -------
@@ -568,9 +599,30 @@ class GALE_FA(nn.Module):
 
     Notes
     -----
-    The mixing between self-attention and cross-attention is controlled by a learnable
-    parameter ``state_mixing`` which is passed through a sigmoid function to ensure
-    the mixing weight stays in :math:`[0, 1]`.
+    With ``context_source_dims=None``, a learnable parameter
+    ``state_mixing`` controls the mixing between self-attention and
+    cross-attention; a sigmoid keeps the mixing weight in :math:`[0, 1]`.
+
+    With ``context_source_dims`` set, the layer splits the context
+    :math:`C = [C_1, \dots, C_S]` channel-wise into its sources and blends
+    the self stream :math:`z` with the per-source reads through a
+    channel-wise softmax gate:
+
+    .. math::
+
+        \alpha = \operatorname{softmax}(\eta, \text{dim}=0)
+        \in \mathbb{R}^{(1 + S) \times D},
+        \qquad
+        \tilde{z} = \alpha_0 \odot z + \sum_{s=1}^{S} \alpha_s \odot
+        \operatorname{softmax}\left(Q K^\top \cdot \text{scale}\right)
+        V_s(C_s),
+
+    where the logits :math:`\eta` are zero-initialized so the blend starts
+    uniform over the streams. The per-source value decomposition adds no
+    expressivity over a single value projection (the gate weights commute
+    with the attention row mixing), but it changes the parameterization,
+    the per-source weighting, and the initialization; unlike a residual
+    addition, the gate can also attenuate the self stream.
 
     See Also
     --------
@@ -588,6 +640,21 @@ class GALE_FA(nn.Module):
     1
     >>> outputs[0].shape
     torch.Size([2, 100, 256])
+
+    With the context read at the latent bottleneck and the gated per-source
+    blend (the context concatenates a 24- and an 8-channel source):
+
+    >>> gale_fa = GALE_FA(
+    ...     dim=256,
+    ...     heads=8,
+    ...     dim_head=32,
+    ...     context_dim=32,
+    ...     context_placement="latents",
+    ...     context_source_dims=(24, 8),
+    ... )
+    >>> outputs = gale_fa(x, context)
+    >>> outputs[0].shape
+    torch.Size([2, 100, 256])
     """
 
     def __init__(
@@ -601,6 +668,8 @@ class GALE_FA(nn.Module):
         context_dim: int = 0,
         concrete_dropout: bool = False,
         state_mixing_mode: str = "weighted",
+        context_placement: Literal["points", "latents"] = "points",
+        context_source_dims: tuple[int, ...] | None = None,
     ):
         # With use_te, linear projections and attention run on Transformer
         # Engine; otherwise on PyTorch. A missing TE install raises with an
@@ -613,6 +682,41 @@ class GALE_FA(nn.Module):
         # It is recommended by the FLARE authors to use self.scale = 1 if self.dim_head <= 8 else (self.dim_head ** -0.5)
         # but we use self.scale = 1.0 because the recommended scaling is not tested yet.
         inner_dim = dim_head * heads
+
+        # Bind the placement and blending paths once; forward has no
+        # per-call dispatch on either option.
+        self.context_placement = context_placement
+        match context_placement:
+            case "points":
+                self._attend = self._attend_points
+            case "latents":
+                self._attend = self._attend_latents
+            case _:
+                raise ValueError(
+                    f"Invalid context_placement: {context_placement!r}. "
+                    f"Expected 'points' or 'latents'."
+                )
+
+        if context_source_dims is None:
+            self.context_source_dims = None
+            self._project_context_values = self._project_context_values_single
+            self._blend_streams = self._blend_streams_state_mixing
+        else:
+            self.context_source_dims = tuple(context_source_dims)
+            if len(self.context_source_dims) == 0 or any(
+                w <= 0 for w in self.context_source_dims
+            ):
+                raise ValueError(
+                    f"context_source_dims must be a non-empty tuple of "
+                    f"positive channel widths, got {context_source_dims!r}"
+                )
+            if sum(self.context_source_dims) != context_dim:
+                raise ValueError(
+                    f"context_source_dims {context_source_dims!r} must sum "
+                    f"to context_dim ({context_dim})"
+                )
+            self._project_context_values = self._project_context_values_per_source
+            self._blend_streams = self._blend_streams_source_gate
 
         linear_layer = te.Linear if self.use_te else nn.Linear
 
@@ -639,7 +743,21 @@ class GALE_FA(nn.Module):
             )
 
         if context_dim > 0:
-            _gale_cross_init(self, dim_head, context_dim, use_te, state_mixing_mode)
+            if self.context_source_dims is None:
+                _gale_cross_init(self, dim_head, context_dim, use_te, state_mixing_mode)
+            else:
+                # Match _gale_cross_init: TE linear only when TE is available
+                cross_linear = te.Linear if (use_te and te.available) else nn.Linear
+                self.cross_q = cross_linear(dim_head, dim_head)
+                self.cross_k = cross_linear(context_dim, dim_head)
+                self.cross_v_sources = nn.ModuleList(
+                    [cross_linear(w, dim_head) for w in self.context_source_dims]
+                )
+                # Zero init: the softmax gate starts as a uniform blend over
+                # the self stream and the per-source reads
+                self.source_gate_logits = nn.Parameter(
+                    torch.zeros(1 + len(self.context_source_dims), dim_head)
+                )
 
         # Linear projection for output
         self.out_linear = linear_layer(inner_dim, dim)
@@ -651,46 +769,70 @@ class GALE_FA(nn.Module):
         else:
             self.out_dropout = nn.Dropout(dropout)
 
-    def forward(
+    def _project_context_values_single(
         self,
-        x: tuple[Float[torch.Tensor, "batch tokens channels"], ...],
-        context: Float[torch.Tensor, "batch heads context_slices context_dim"]
-        | None = None,
-    ) -> list[Float[torch.Tensor, "batch tokens channels"]]:
-        r"""Forward pass of the GALE_FA module.
+        context: Float[torch.Tensor, "batch heads context_slices context_dim"],
+    ) -> list[Float[torch.Tensor, "batch heads context_slices dim"]]:
+        r"""Project the full context through the single value projection."""
+        return [self.cross_v(context)]
 
-        Applies GALE_FA attention to the input features.
+    def _project_context_values_per_source(
+        self,
+        context: Float[torch.Tensor, "batch heads context_slices context_dim"],
+    ) -> list[Float[torch.Tensor, "batch heads context_slices dim"]]:
+        r"""Project each context source through its own value projection."""
+        chunks = torch.split(context, self.context_source_dims, dim=-1)
+        return [proj(chunk) for proj, chunk in zip(self.cross_v_sources, chunks)]
 
-        Parameters
-        ----------
-        x : tuple[torch.Tensor, ...]
-            Tuple of input tensors, each of shape :math:`(B, N, C)` where :math:`B`
-            is batch size, :math:`N` is number of tokens, and :math:`C` is number
-            of channels.
-        context : torch.Tensor | None, optional
-            Context tensor for cross-attention of shape :math:`(B, H, S_c, D_c)`
-            where :math:`H` is number of heads, :math:`S_c` is number of context
-            slices, and :math:`D_c` is context dimension. If ``None``, only
-            self-attention is applied. Default is ``None``.
+    def _blend_streams_state_mixing(
+        self,
+        stream: Float[torch.Tensor, "batch heads tokens dim"]
+        | Float[torch.Tensor, "batch tokens heads dim"],
+        reads: list[
+            Float[torch.Tensor, "batch heads tokens dim"]
+            | Float[torch.Tensor, "batch tokens heads dim"]
+        ],
+    ) -> (
+        Float[torch.Tensor, "batch heads tokens dim"]
+        | Float[torch.Tensor, "batch tokens heads dim"]
+    ):
+        r"""Blend the self stream with the single context read via state mixing."""
+        return _mix_self_and_cross(
+            stream,
+            reads[0],
+            self.state_mixing_mode,
+            state_mixing=getattr(self, "state_mixing", None),
+            concat_project=getattr(self, "concat_project", None),
+        )
 
-        Returns
-        -------
-        list[torch.Tensor]
-            List of output tensors, each of shape :math:`(B, N, C)``, same shape
-            as inputs.
+    def _blend_streams_source_gate(
+        self,
+        stream: Float[torch.Tensor, "batch heads tokens dim"]
+        | Float[torch.Tensor, "batch tokens heads dim"],
+        reads: list[
+            Float[torch.Tensor, "batch heads tokens dim"]
+            | Float[torch.Tensor, "batch tokens heads dim"]
+        ],
+    ) -> (
+        Float[torch.Tensor, "batch heads tokens dim"]
+        | Float[torch.Tensor, "batch tokens heads dim"]
+    ):
+        r"""Blend the self stream with the per-source reads via the softmax gate.
+
+        Channel-wise softmax over the stacked streams; the blend treats both
+        backend layouts identically because it only mixes the last (channel)
+        axis.
         """
-        # Input projection: (B, N, C) -> (B, N, H, D) -> (B, H, N, D)
-        x_mid = [
-            _project_input(
-                _x,
-                self.in_project_x,
-                self.heads,
-                self.dim_head,
-                "B N (H D) -> B N H D",
-            ).permute(0, 2, 1, 3)
-            for _x in x
-        ]
+        alpha = torch.softmax(self.source_gate_logits.to(dtype=stream.dtype), dim=0)
+        stacked = torch.stack([stream, *reads], dim=-2)  # (..., 1 + S, D)
+        return (alpha * stacked).sum(dim=-2)  # (..., D)
 
+    def _attend_points(
+        self,
+        x_mid: list[Float[torch.Tensor, "batch heads tokens dim"]],
+        context: Float[torch.Tensor, "batch heads context_slices context_dim"] | None,
+    ) -> list[Float[torch.Tensor, "batch heads tokens dim"]]:
+        r"""FLARE self-attention with the context read from the point features."""
         # FLARE self-attention per input
         if self.use_te:
             self_attention = [
@@ -716,43 +858,168 @@ class GALE_FA(nn.Module):
                 for _x_mid in x_mid
             ]
 
-        # Cross-attention with context and state mixing
+        # Cross-attention with context, blended per point
         if context is not None:
+            values = self._project_context_values(context)
             if self.use_te:
                 # TE cross-attention: reshape (B, H, S, D) -> bshd, run through
                 # the shared DotProductAttention, then back to (B, H, N, D).
                 k = rearrange(self.cross_k(context), "b h s d -> b s h d")
-                v = rearrange(self.cross_v(context), "b h s d -> b s h d")
-                cross_attention = [
-                    rearrange(
-                        self.attn_fn(
-                            rearrange(self.cross_q(_x_mid), "b h n d -> b n h d"), k, v
-                        ),
-                        "b n (h d) -> b h n d",
-                        h=self.heads,
-                    )
+                values = [rearrange(_v, "b h s d -> b s h d") for _v in values]
+                q = [
+                    rearrange(self.cross_q(_x_mid), "b h n d -> b n h d")
                     for _x_mid in x_mid
+                ]
+                reads = [
+                    [
+                        rearrange(
+                            self.attn_fn(_q, k, _v),
+                            "b n (h d) -> b h n d",
+                            h=self.heads,
+                        )
+                        for _v in values
+                    ]
+                    for _q in q
                 ]
             else:
                 q = [self.cross_q(_x_mid) for _x_mid in x_mid]
                 k = self.cross_k(context)
-                v = self.cross_v(context)
-                cross_attention = [
-                    F.scaled_dot_product_attention(_q, k, v, scale=self.scale)
+                reads = [
+                    [
+                        F.scaled_dot_product_attention(_q, k, _v, scale=self.scale)
+                        for _v in values
+                    ]
                     for _q in q
                 ]
             outputs = [
-                _mix_self_and_cross(
-                    sa,
-                    ca,
-                    self.state_mixing_mode,
-                    state_mixing=getattr(self, "state_mixing", None),
-                    concat_project=getattr(self, "concat_project", None),
-                )
-                for sa, ca in zip(self_attention, cross_attention)
+                self._blend_streams(sa, _reads)
+                for sa, _reads in zip(self_attention, reads)
             ]
         else:
             outputs = self_attention
+        return outputs
+
+    def _attend_latents(
+        self,
+        x_mid: list[Float[torch.Tensor, "batch heads tokens dim"]],
+        context: Float[torch.Tensor, "batch heads context_slices context_dim"] | None,
+    ) -> list[Float[torch.Tensor, "batch heads tokens dim"]]:
+        r"""FLARE attention with the context read from the latent tokens.
+
+        Runs the FLARE encode, blends the latent tokens with context reads
+        whose queries come from the latents, then decodes the blended
+        latents back to the point tokens. The per-point context read of
+        ``_attend_points`` is never executed on this path.
+        """
+        # FLARE encode per input: latent tokens gather the point tokens
+        if self.use_te:
+            encoded = [
+                _flare_encode_te(
+                    _x_mid,
+                    self.q_global,
+                    self.self_k,
+                    self.self_v,
+                    self.attn_fn,
+                    self.heads,
+                )
+                for _x_mid in x_mid
+            ]
+        else:
+            encoded = [
+                _flare_encode(
+                    _x_mid,
+                    self.q_global,
+                    self.self_k,
+                    self.self_v,
+                    self.scale,
+                )
+                for _x_mid in x_mid
+            ]
+
+        # Context read and blend at the latent bottleneck
+        if context is not None:
+            values = self._project_context_values(context)
+            blended = []
+            if self.use_te:
+                # Latents are already in the bshd layout; only the context
+                # projections need reshaping around the DotProductAttention.
+                k_ctx = rearrange(self.cross_k(context), "b h s d -> b s h d")
+                values = [rearrange(_v, "b h s d -> b s h d") for _v in values]
+                for k, G, z in encoded:
+                    q = self.cross_q(z)  # (B, S, H, D)
+                    reads = [
+                        rearrange(
+                            self.attn_fn(q, k_ctx, _v),
+                            "b s (h d) -> b s h d",
+                            h=self.heads,
+                        )
+                        for _v in values
+                    ]
+                    blended.append((k, G, self._blend_streams(z, reads)))
+            else:
+                k_ctx = self.cross_k(context)
+                for k, G, z in encoded:
+                    q = self.cross_q(z)  # (B, H, S, D)
+                    reads = [
+                        F.scaled_dot_product_attention(q, k_ctx, _v, scale=self.scale)
+                        for _v in values
+                    ]
+                    blended.append((k, G, self._blend_streams(z, reads)))
+            encoded = blended
+
+        # FLARE decode per input: point tokens read the blended latent tokens
+        if self.use_te:
+            return [
+                rearrange(self.attn_fn(k, G, z), "b n (h d) -> b h n d", h=self.heads)
+                for k, G, z in encoded
+            ]
+        return [
+            F.scaled_dot_product_attention(k, G, z, scale=self.scale)
+            for k, G, z in encoded
+        ]
+
+    def forward(
+        self,
+        x: tuple[Float[torch.Tensor, "batch tokens channels"], ...],
+        context: Float[torch.Tensor, "batch heads context_slices context_dim"]
+        | None = None,
+    ) -> list[Float[torch.Tensor, "batch tokens channels"]]:
+        r"""Forward pass of the GALE_FA module.
+
+        Applies GALE_FA attention to the input features.
+
+        Parameters
+        ----------
+        x : tuple[torch.Tensor, ...]
+            Tuple of input tensors, each of shape :math:`(B, N, C)` where :math:`B`
+            is batch size, :math:`N` is number of tokens, and :math:`C` is number
+            of channels.
+        context : torch.Tensor | None, optional
+            Context tensor for cross-attention of shape :math:`(B, H, S_c, D_c)`
+            where :math:`H` is number of heads, :math:`S_c` is number of context
+            slices, and :math:`D_c` is context dimension. If ``None``, the
+            layer applies only self-attention. Default is ``None``.
+
+        Returns
+        -------
+        list[torch.Tensor]
+            List of output tensors, each of shape :math:`(B, N, C)`, same shape
+            as inputs.
+        """
+        # Input projection: (B, N, C) -> (B, N, H, D) -> (B, H, N, D)
+        x_mid = [
+            _project_input(
+                _x,
+                self.in_project_x,
+                self.heads,
+                self.dim_head,
+                "B N (H D) -> B N H D",
+            ).permute(0, 2, 1, 3)
+            for _x in x
+        ]
+
+        # Self-attention and context read; construction binds the placement
+        outputs = self._attend(x_mid, context)
 
         # Back to token layout: (B, H, N, D) -> (B, N, H, D)
         outputs = [_y.permute(0, 2, 1, 3) for _y in outputs]
@@ -805,6 +1072,17 @@ class GALEBlock(nn.Module):
         a learnable sigmoid-gated weighted sum. ``"concat_project"``
         concatenates the two along the head dimension and projects back with a
         linear layer. Default is ``"weighted"``.
+    context_placement : {"points", "latents"}, optional
+        Forwarded to :class:`GALE_FA`: where its context cross-attention
+        queries come from, either the point features or the FLARE latent
+        tokens. Requires ``attention_type="GALE_FA"``. Default is
+        ``"points"``.
+    context_source_dims : tuple[int, ...] | None, optional
+        Forwarded to :class:`GALE_FA`: channel widths of the context sources
+        for the per-source gated blend; must sum to ``context_dim``. Requires
+        ``attention_type="GALE_FA"``. The validated combination is
+        ``context_placement="latents"`` with ``context_source_dims`` set.
+        Default is ``None``.
 
     Forward
     -------
@@ -861,6 +1139,8 @@ class GALEBlock(nn.Module):
         attention_type: str = "GALE",
         concrete_dropout: bool = False,
         state_mixing_mode: str = "weighted",
+        context_placement: Literal["points", "latents"] = "points",
+        context_source_dims: tuple[int, ...] | None = None,
     ) -> None:
         super().__init__()
 
@@ -876,6 +1156,13 @@ class GALEBlock(nn.Module):
         # First match on attention backend, then on spatial shape
         match attention_type:
             case "GALE":
+                if context_placement != "points" or context_source_dims is not None:
+                    raise ValueError(
+                        f"context_placement and context_source_dims require "
+                        f"attention_type='GALE_FA'; got attention_type='GALE' "
+                        f"with context_placement={context_placement!r} and "
+                        f"context_source_dims={context_source_dims!r}"
+                    )
                 if spatial_shape is None:
                     self.Attn = GALE(
                         hidden_dim,
@@ -934,6 +1221,8 @@ class GALEBlock(nn.Module):
                     context_dim=context_dim,
                     concrete_dropout=concrete_dropout,
                     state_mixing_mode=state_mixing_mode,
+                    context_placement=context_placement,
+                    context_source_dims=context_source_dims,
                 )
             case _:
                 raise ValueError(

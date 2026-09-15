@@ -282,6 +282,24 @@ class GeoTransolver(Module):
         ``"output"``. The default ``("blocks",)`` matches Transolver's
         block-only policy. ``checkpointing_ratio`` applies to the block stack;
         other selected components are either fully checkpointed or disabled.
+    context_placement : {"points", "latents"}, optional
+        Forwarded through :class:`~physicsnemo.nn.GALEBlock` to
+        :class:`~physicsnemo.nn.GALE_FA`: where each block reads the context,
+        either from the :math:`N` point features or from the ``slice_num``
+        FLARE latent tokens; the latter reduces the context-attention cost by
+        a factor ``slice_num`` :math:`/ N`. Requires
+        ``attention_type="GALE_FA"``. Default is ``"points"``.
+    context_source_dims : tuple[int, ...] | None, optional
+        Forwarded through :class:`~physicsnemo.nn.GALEBlock` to
+        :class:`~physicsnemo.nn.GALE_FA`: channel widths of the context
+        sources for the per-source gated blend. The assembled context
+        concatenates one ``n_hidden // n_head`` wide block per active source
+        (local-feature scales, geometry, global embedding), so a natural
+        setting is one entry of that width per source; the widths must sum to
+        the assembled context dimension. Requires
+        ``attention_type="GALE_FA"``. The validated combination is
+        ``context_placement="latents"`` with ``context_source_dims`` set.
+        Default is ``None``.
 
     Forward
     -------
@@ -437,6 +455,8 @@ class GeoTransolver(Module):
         activation_checkpointing: bool = False,
         checkpointing_ratio: float = 1.0,
         activation_checkpointing_components: tuple[str, ...] | list[str] = ("blocks",),
+        context_placement: Literal["points", "latents"] = "points",
+        context_source_dims: tuple[int, ...] | None = None,
     ) -> None:
         super().__init__(meta=GeoTransolverMetaData())
         self.__name__ = "GeoTransolver"
@@ -562,6 +582,8 @@ class GeoTransolver(Module):
                     attention_type=attention_type,
                     concrete_dropout=concrete_dropout,
                     state_mixing_mode=state_mixing_mode,
+                    context_placement=context_placement,
+                    context_source_dims=context_source_dims,
                 )
                 for layer_idx in range(n_layers)
             ]

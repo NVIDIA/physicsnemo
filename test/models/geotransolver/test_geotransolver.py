@@ -126,6 +126,114 @@ def test_geotransolver_forward(device, attention_type, use_geometry, use_global)
     assert not torch.isnan(outputs).any()
 
 
+def _create_geotransolver_gale_fa(device, **context_kwargs):
+    """Build a small GALE_FA GeoTransolver with geometry and global context."""
+    torch.manual_seed(42)
+    model = GeoTransolver(
+        functional_dim=32,
+        out_dim=4,
+        geometry_dim=3,
+        global_dim=16,
+        n_layers=2,
+        n_hidden=64,
+        dropout=0.0,
+        n_head=4,
+        mlp_ratio=2,
+        slice_num=8,
+        use_te=False,
+        attention_type="GALE_FA",
+        **context_kwargs,
+    ).to(device)
+    model.eval()
+    return model
+
+
+def test_geotransolver_context_options_forward(device):
+    """Test the context options reach GALE_FA and change the model output."""
+    batch_size = 2
+    n_tokens = 100
+    n_geom_tokens = 345
+
+    model_default = _create_geotransolver_gale_fa(device)
+    # Assembled context: one dim_head-wide block per source (geometry, global)
+    model_latents = _create_geotransolver_gale_fa(
+        device,
+        context_placement="latents",
+        context_source_dims=(16, 16),
+    )
+
+    for block in model_latents.blocks:
+        assert block.Attn.context_placement == "latents"
+        assert block.Attn.context_source_dims == (16, 16)
+
+    torch.manual_seed(7)
+    local_emb = torch.randn(batch_size, n_tokens, 32).to(device)
+    geometry = torch.randn(batch_size, n_geom_tokens, 3).to(device)
+    global_emb = torch.randn(batch_size, 5, 16).to(device)
+
+    out_default = model_default(
+        local_emb, global_embedding=global_emb, geometry=geometry
+    )
+    out_latents = model_latents(
+        local_emb, global_embedding=global_emb, geometry=geometry
+    )
+
+    assert out_latents.shape == (batch_size, n_tokens, 4)
+    assert out_latents.shape == out_default.shape
+    assert not torch.isnan(out_latents).any()
+    assert not torch.allclose(out_default, out_latents)
+
+
+def test_geotransolver_context_options_default_unchanged(device):
+    """Test that omitting the context options leaves the model unchanged."""
+    model_implicit = _create_geotransolver_gale_fa(device)
+    model_explicit = _create_geotransolver_gale_fa(
+        device,
+        context_placement="points",
+        context_source_dims=None,
+    )
+
+    implicit_state = model_implicit.state_dict()
+    explicit_state = model_explicit.state_dict()
+    assert set(implicit_state) == set(explicit_state)
+    for name, tensor in implicit_state.items():
+        assert torch.equal(tensor, explicit_state[name])
+
+    torch.manual_seed(7)
+    local_emb = torch.randn(2, 100, 32).to(device)
+    geometry = torch.randn(2, 345, 3).to(device)
+    global_emb = torch.randn(2, 5, 16).to(device)
+
+    out_implicit = model_implicit(
+        local_emb, global_embedding=global_emb, geometry=geometry
+    )
+    out_explicit = model_explicit(
+        local_emb, global_embedding=global_emb, geometry=geometry
+    )
+    assert torch.equal(out_implicit, out_explicit)
+
+
+def test_geotransolver_context_options_invalid():
+    """Test that invalid context options propagate their ValueErrors."""
+    config = dict(
+        functional_dim=32,
+        out_dim=4,
+        geometry_dim=3,
+        global_dim=16,
+        n_layers=2,
+        n_hidden=64,
+        n_head=4,
+        slice_num=8,
+        use_te=False,
+    )
+    with pytest.raises(ValueError, match="GALE_FA"):
+        GeoTransolver(**config, attention_type="GALE", context_placement="latents")
+    with pytest.raises(ValueError, match="context_placement"):
+        GeoTransolver(**config, attention_type="GALE_FA", context_placement="global")
+    with pytest.raises(ValueError, match="must sum to context_dim"):
+        GeoTransolver(**config, attention_type="GALE_FA", context_source_dims=(16, 8))
+
+
 def test_geotransolver_forward_returns_embedding_states(device):
     """Test returning geometry and global context embedding states."""
     torch.manual_seed(42)
