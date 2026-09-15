@@ -116,7 +116,7 @@ aug.set_generator(torch.Generator().manual_seed(42))
 aug = RandomTranslateMesh(
     distribution=D.Uniform(
         torch.tensor([-0.1, -0.2, -0.3]),
-        torch.tensor([ 0.1,  0.2,  0.3]),
+        torch.tensor([0.1, 0.2, 0.3]),
     ),
 )
 
