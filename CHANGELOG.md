@@ -69,13 +69,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mid-write no longer leaves an unloadable truncated checkpoint. Also fixes
   `legacy_format=True`, which failed with `FileNotFoundError` on current
   fsspec versions.
-- Mesh augmentations honour their configuration: `RandomRotateMesh` defaults to
-  `mode="axis_aligned"` when `axes` is given (instead of silently rotating over
-  all of SO(3)), and `RandomTranslateMesh` accepts `low` / `high` bounds, which
-  config-driven instantiation can express where a `torch.distributions.Uniform`
-  block cannot. The unified external aero recipe configs use both.
-- `RenameMeshFields` and `DropMeshFields` apply their `global_data` mapping to a
-  `DomainMesh`'s domain-level `global_data`, not only to its sub-meshes.
+- `RandomRotateMesh` defaults to `mode="axis_aligned"` when `axes` is given;
+  `RandomTranslateMesh` accepts `low` / `high` bounds.
+- `RenameMeshFields` and `DropMeshFields` also apply to a `DomainMesh`'s
+  domain-level `global_data`.
 
 ### Security
 
