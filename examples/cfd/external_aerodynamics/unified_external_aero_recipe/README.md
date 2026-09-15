@@ -139,6 +139,10 @@ flowchart LR
 
   Also supports temperature, density, and identity (pass-through) field
   types, and provides an `inverse()` for re-dimensionalizing predictions.
+  When `L_ref` is in `global_data` the mesh coordinates are divided by it
+  as well, once per instance: a chain that needs a second instance (say
+  interior `point_data` fields first, boundary `cell_data` fields second)
+  sets `scale_geometry: false` on the second one.
   Input points are non-dimensionalized by a single reference scalar
   `L_ref` (rather than scaling x/y/z independently) so geometry aspect
   ratios are preserved.

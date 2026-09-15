@@ -44,6 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Unified external aero recipe: `NonDimensionalizeByMetadata` gains
+  `scale_geometry` so chained instances scale the geometry once; inference
+  re-dimensionalizes with the field maps of every instance.
 - Fixes mesh dtype handling: preserves integer-coordinate precision, normalizes
   connectivity safely, and rejects integer `.to()` casts. Floating/complex casts
   preserve the source mesh.
