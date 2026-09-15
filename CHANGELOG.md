@@ -44,6 +44,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Unified external aerodynamics recipe: `NonDimensionalizeByMetadata` gains
+  `scale_geometry` so a chain with more than one instance (interior `point_data`
+  fields, then boundary `cell_data` fields) divides the mesh coordinates by
+  `L_ref` once instead of once per instance.
 - Fixes mesh dtype handling: preserves integer-coordinate precision, normalizes
   connectivity safely, and rejects integer `.to()` casts. Floating/complex casts
   preserve the source mesh.
