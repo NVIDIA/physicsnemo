@@ -446,3 +446,64 @@ class TestDefaultTrainingLoop:
         # it won't be used directly in this implementation
         # This test verifies the loop runs without error
         assert True
+
+    @pytest.mark.parametrize("enable_static_capture", [False, True])
+    def test_single_optimizer_step_per_minibatch(self, enable_static_capture):
+        """Regression test for #1911: static capture must not double-step.
+
+        The static-capture wrapper owns backward and the optimizer step via
+        ``GradScaler.step``. The loop must not call ``optimizer.step`` again,
+        otherwise every minibatch advances the parameters twice.
+        """
+        from physicsnemo.models.mlp import FullyConnected
+
+        torch.manual_seed(0)
+        model = FullyConnected(
+            in_features=1,
+            out_features=1,
+            layer_size=1,
+            num_layers=0,
+        )
+        with torch.no_grad():
+            for parameter in model.parameters():
+                parameter.fill_(1.0)
+
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+
+        original_optimizer_step = optimizer.step
+        optimizer.step = MagicMock(side_effect=original_optimizer_step)
+
+        dataloader = DataLoader(
+            TensorDataset(torch.ones(1, 1), torch.zeros(1, 1)),
+            batch_size=1,
+        )
+
+        def step(module, batch):
+            x, y = batch
+            return (module(x) - y).square().mean()
+
+        before = [p.detach().clone() for p in model.parameters()]
+
+        DefaultTrainingLoop(
+            enable_static_capture=enable_static_capture,
+            use_progress_bars=False,
+        )(
+            model,
+            optimizer,
+            dataloader,
+            max_epochs=1,
+            train_step_fn=step,
+            device=torch.device("cpu"),
+            dtype=torch.float32,
+        )
+
+        deltas = [(new - old).item() for old, new in zip(before, model.parameters())]
+
+        # One deterministic minibatch, lr=0.1, dloss/dw yields a -0.4 delta.
+        for delta in deltas:
+            assert delta == pytest.approx(-0.4, abs=1e-5)
+
+        # Exactly one optimizer step per minibatch on both paths. With static
+        # capture, GradScaler.step invokes optimizer.step once; the loop must
+        # not step again.
+        assert optimizer.step.call_count == 1
