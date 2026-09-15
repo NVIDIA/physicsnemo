@@ -121,7 +121,7 @@ class RedistributeWrapper(torch.nn.Module):
 
 
 class IndexSelectWrapper(torch.nn.Module):
-    r"""``torch.index_select(...)`` on a ShardTensor (exercises ``ShardedIndexSelect``)."""
+    r"""``torch.index_select(...)`` on a ShardTensor (exercises ``sharded_index_select``)."""
 
     def __init__(self, dim: int):
         super().__init__()
@@ -330,10 +330,11 @@ def test_compile_shard_redistribute_2d(distributed_mesh_2d):
 @pytest.mark.multigpu_static
 @pytest.mark.timeout(180)
 def test_compile_sharded_index_select_replicated_index_1d(distributed_mesh):
-    r"""Compile + backward through ``ShardedIndexSelect`` with a replicated index.
+    r"""Compile + backward through ``sharded_index_select`` off the sharded dim.
 
-    A replicated ``index`` keeps the output sharding aligned with the input,
-    which is the cheaper / less collective-heavy code path inside the op.
+    The source is ``Shard(2)`` and the selection is along dim 1, so the op is
+    purely local: the (small) index is gathered and the local shard is
+    index-selected; the output keeps the input's placement.
     """
     if not torch.cuda.is_available():
         pytest.skip("CUDA is not available")
@@ -362,6 +363,62 @@ def test_compile_sharded_index_select_replicated_index_1d(distributed_mesh):
     )
 
     _run_compile_fwd_bwd(IndexSelectWrapper(dim=dim), [sharded, sharded_index])
+
+
+class GetItemWrapper(torch.nn.Module):
+    r"""``tensor[index]`` with an integer tensor index (exercises the routed gather)."""
+
+    def forward(self, tensor: torch.Tensor, index: torch.Tensor) -> torch.Tensor:
+        return tensor[index]
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(180)
+@pytest.mark.parametrize("index_placement", [Shard(0), Replicate()])
+def test_compile_getitem_routed_gather_1d(distributed_mesh, index_placement):
+    r"""Compile + backward through the routed gather (``physicsnemo::routed_gather``).
+
+    ``Shard(0)`` source; the index holds global row ids that reference every
+    rank and is either rank-local (``Shard(0)``) or replicated. Runs the
+    compiled module twice and compares grads to eager so guard / recompile
+    problems and stale specs would surface.
+    """
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+
+    dm = DistributedManager()
+    n_rows, n_index = 291, 97  # uneven on 2, 4 and 8 ranks
+
+    torch.manual_seed(7)
+    original = torch.rand(n_rows, 4, device=dm.device)
+    index = torch.randint(0, n_rows, (n_index, 3), device=dm.device)
+
+    reference = original.clone().requires_grad_(True)
+    _scalar_loss(reference[index]).backward()
+
+    sharded = scatter_tensor(
+        original,
+        global_src=0,
+        mesh=distributed_mesh,
+        placements=(Shard(0),),
+        requires_grad=True,
+    )
+    sharded_index = scatter_tensor(
+        index,
+        global_src=0,
+        mesh=distributed_mesh,
+        placements=(index_placement,),
+        requires_grad=False,
+    )
+
+    torch._dynamo.reset()
+    compiled = torch.compile(
+        GetItemWrapper(), backend="aot_eager", fullgraph=True, dynamic=False
+    )
+    for _ in range(2):
+        sharded.grad = None
+        _scalar_loss(compiled(sharded, sharded_index)).backward()
+        torch.testing.assert_close(sharded.grad.full_tensor(), reference.grad)
 
 
 @pytest.mark.multigpu_static
