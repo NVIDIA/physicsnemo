@@ -1,0 +1,27 @@
+# House style for formal technical documentation: expand contractions.
+# (Replaces Microsoft.Contractions, which prefers the opposite.)
+extends: substitution
+message: "Use '%s' instead of '%s' in formal technical documentation."
+level: warning
+ignorecase: true
+action:
+  name: replace
+swap:
+  aren't: are not
+  can't: cannot
+  'can not': cannot
+  couldn't: could not
+  didn't: did not
+  doesn't: does not
+  don't: do not
+  hasn't: has not
+  haven't: have not
+  isn't: is not
+  "it's": it is
+  shouldn't: should not
+  "that's": that is
+  wasn't: was not
+  weren't: were not
+  won't: will not
+  wouldn't: would not
+  "you're": you are
