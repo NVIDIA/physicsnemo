@@ -48,6 +48,12 @@ pipeline:
         low: [-1.0, -1.0, 0.0]
         high: [1.0, 1.0, 0.0]
   transforms:
+    # Unit freestream direction as a new global leaf `U_inf_dir` (`U_inf`
+    # stays physical). Placed before CenterMesh so the rotation augmentation
+    # (inserted after CenterMesh) rotates it together with the geometry.
+    - _target_: ${dp:ComputeFreestreamDirection}
+      velocity_field: U_inf
+      output_field: U_inf_dir
     - _target_: ${dp:CenterMesh}
       use_area_weighting: true
     - _target_: ${dp:NonDimensionalizeByMetadata}
@@ -68,6 +74,9 @@ pipeline:
       field_name: normals
     - _target_: ${dp:SubsampleMesh}
       n_cells: ${sampling_resolution}
+    # Check the final coordinates for collapsed/non-finite faces. Direct
+    # cross products preserve thin valid faces despite Gram-area cancellation.
+    - _target_: ${dp:DropDegenerateCells}
     # Terminal: convert the surface Mesh into a DomainMesh per the recipe
     # contract. cell_data_targets are auto-injected from the `targets:` block.
     - _target_: ${dp:MeshToDomainMesh}
