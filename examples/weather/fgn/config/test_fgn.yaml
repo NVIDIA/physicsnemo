@@ -1,0 +1,60 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Fast CPU smoke-test config — uses SyntheticFGNDataset (no data files needed).
+# Tiny grid (8x16), 3 channels, 2 steps, minimal model.
+
+defaults:
+  - fgn
+  - _self_
+
+dataset:
+  name: synthetic.SyntheticFGNDataset
+  state_channels: [t2m, u10m, v10m]
+  background_channels: []
+  invariant_channels: [z, lsm]
+  image_height: 8
+  image_width: 16
+  history_frames: 2
+  future_frames: 1
+  num_samples: 8
+
+model:
+  latent_dim: 4
+  patch_size: [2, 2]
+  hidden_size: 16
+  depth: 2
+  num_heads: 2
+  attention_backend: timm
+  detokenizer: proj_reshape_2d_conv
+
+training:
+  batch_size: 2
+  total_train_steps: 4
+  print_progress_freq: 2
+  checkpoint_freq: 4
+  validation_freq: 4
+  validation_steps: 2
+  resume_checkpoint: null
+  amp: false
+  use_wandb: false
+  ar_steps: 1
+  loss:
+    num_samples: 2
+    mse_weight: 0.1
+  optimizer:
+    lr: 1.0e-3
+    lr_warmup_steps: 0
