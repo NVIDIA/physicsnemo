@@ -23,6 +23,7 @@ from physicsnemo.datapipes.mesh_dataset import MeshDataset
 from physicsnemo.datapipes.readers.mesh import (
     DomainMeshReader,
     MeshReader,
+    _pread_leaf,
     _subsample_mesh_points,
 )
 from physicsnemo.datapipes.transforms.mesh import (
@@ -539,3 +540,86 @@ class TestCellSubsampleMeasureWeights:
             m, _ = reader[0]
             distinct_blocks.add(round(float(m.points[0, 0])))
         assert len(distinct_blocks) > 5
+
+
+class TestPreadMaterialization:
+    """Reading memmap-backed leaves must be indistinguishable from mapping them.
+
+    The risk in ``_pread_leaf`` is silent byte-level error (wrong offset,
+    dtype, or shape), which produces plausible garbage rather than a
+    failure, so these compare it against the mapped reads it replaces.
+    """
+
+    @staticmethod
+    def _save_point_cloud(tmp_path):
+        """A cloud (no cells) takes the contiguous-block subsample path."""
+        Mesh(
+            points=torch.rand(64, 3),
+            point_data={"f": torch.rand(64, 2), "i": torch.arange(64)},
+            global_data={"s": torch.tensor(1.5)},
+        ).save(tmp_path / "c.pmsh")
+        return Mesh.load(tmp_path / "c.pmsh")
+
+    def test_whole_tensor_matches_mapping(self, tmp_path):
+        loaded = self._save_point_cloud(tmp_path)
+        for t in (
+            loaded.points,
+            loaded.point_data["f"],
+            loaded.point_data["i"],
+            loaded.global_data["s"],  # 0-dim
+        ):
+            assert torch.equal(_pread_leaf(t), t)
+
+    @pytest.mark.parametrize("runs", [[(0, 64)], [(10, 20)], [(60, 4), (0, 6)]])
+    def test_row_runs_match_mapping(self, tmp_path, runs):
+        loaded = self._save_point_cloud(tmp_path)
+        for t in (loaded.points, loaded.point_data["f"], loaded.point_data["i"]):
+            want = torch.cat([t[start : start + length] for start, length in runs])
+            assert torch.equal(_pread_leaf(t, runs), want)
+
+    def test_declines_tensors_it_cannot_locate(self, tmp_path):
+        loaded = self._save_point_cloud(tmp_path)
+        assert _pread_leaf(torch.rand(4, 3)) is None  # never mapped
+        assert _pread_leaf(loaded.points[:4]) is None  # a view of a mapping
+
+    def test_reader_output_matches_mapped_reads(self, tmp_path, monkeypatch):
+        """Disabling pread reproduces the pre-pread path exactly."""
+        self._save_point_cloud(tmp_path)
+
+        def sample():
+            reader = MeshReader(tmp_path, pattern="*.pmsh", subsample_n_points=10)
+            reader.set_generator(torch.Generator().manual_seed(3))
+            return reader[0][0]
+
+        with_pread = sample()
+        monkeypatch.setattr(
+            "physicsnemo.datapipes.readers.mesh._pread_leaf", lambda *a, **k: None
+        )
+        mapped = sample()
+        keys = list(with_pread.keys(include_nested=True, leaves_only=True))
+        assert keys == list(mapped.keys(include_nested=True, leaves_only=True))
+        for key in keys:
+            assert torch.equal(with_pread.get(key), mapped.get(key))
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+    def test_pinned_output_matches_mapped_reads(self, tmp_path, monkeypatch):
+        """pin_memory reads every leaf, including the ones subsampling skips."""
+        self._save_point_cloud(tmp_path)
+
+        def sample():
+            reader = MeshReader(tmp_path, pattern="*.pmsh", pin_memory=True)
+            reader.set_generator(torch.Generator().manual_seed(3))
+            return reader[0][0]
+
+        with_pread = sample()
+        monkeypatch.setattr(
+            "physicsnemo.datapipes.readers.mesh._pread_leaf", lambda *a, **k: None
+        )
+        mapped = sample()
+        assert with_pread.points.is_pinned()
+        for key in with_pread.keys(include_nested=True, leaves_only=True):
+            got, want = with_pread.get(key), mapped.get(key)
+            ### Empty leaves stay unpinned on both paths: pin_memory() does not
+            ### page-lock a zero-byte allocation.
+            assert got.is_pinned() == want.is_pinned()
+            assert torch.equal(got, want)
