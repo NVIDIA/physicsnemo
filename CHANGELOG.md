@@ -345,6 +345,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   next event (the new particle's features and inter-event delay) from the
   current particle population, an optional background mesh, and the simulation
   time. Independent rollouts form an ensemble for uncertainty quantification.
+- Adds `physicsnemo.datapipes.DatasetCache`, an opt-in RAM and local-disk
+  cache for the small metadata reads datapipe readers repeat every epoch.
+  Readers accept a shared `cache=` argument; without one, nothing changes.
 
 ### Changed
 
