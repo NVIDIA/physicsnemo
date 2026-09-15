@@ -36,7 +36,7 @@ from physicsnemo.domain_parallel.shard_utils.patch_core import (
 )
 from physicsnemo.domain_parallel.shard_utils.ring import (
     RingPassingConfig,
-    perform_ring_iteration,
+    perform_ring_iteration_funcol,
 )
 from physicsnemo.nn.functional.neighbors.radius_search._warp_impl import (
     radius_search_impl,
@@ -255,6 +255,109 @@ def ringless_ball_query(
     return indices, num_neighbors, output_points
 
 
+@wp.kernel
+def _merge_indices_and_points(
+    current_m: wp.array2d(dtype=wp.int32),
+    current_nn: wp.array(dtype=wp.int32),
+    current_o: wp.array3d(dtype=wp.float32),
+    incoming_m: wp.array2d(dtype=wp.int32),
+    incoming_nn: wp.array(dtype=wp.int32),
+    incoming_o: wp.array3d(dtype=wp.float32),
+    max_neighbors: int,
+):
+    """Ragged concat + truncate: append each query's incoming neighbors after
+    its current ones, up to ``max_neighbors``, and update the count."""
+    tid = wp.tid()
+
+    num_neighbors = current_nn[tid]
+    available_space = max_neighbors - num_neighbors
+    incoming_num_neighbors = incoming_nn[tid]
+
+    neighbors_to_add = min(incoming_num_neighbors, available_space)
+    for i in range(neighbors_to_add):
+        current_m[tid, num_neighbors + i] = incoming_m[tid, i]
+        current_o[tid, num_neighbors + i, 0] = incoming_o[tid, i, 0]
+        current_o[tid, num_neighbors + i, 1] = incoming_o[tid, i, 1]
+        current_o[tid, num_neighbors + i, 2] = incoming_o[tid, i, 2]
+
+    current_nn[tid] = num_neighbors + neighbors_to_add
+
+
+@torch.library.custom_op("physicsnemo::ring_ball_query_merge", mutates_args=())
+def _ring_ball_query_merge(
+    current_indices: torch.Tensor,
+    current_num_neighbors: torch.Tensor,
+    current_points: torch.Tensor,
+    incoming_indices: torch.Tensor,
+    incoming_num_neighbors: torch.Tensor,
+    incoming_points: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    r"""Append one ring block's neighbors to the accumulated (padded) results.
+
+    Opaque custom op so the sharded ball query can be fake-propagated under
+    ``torch.compile``: the warp launch never sees a ``FakeTensor``.
+
+    Parameters
+    ----------
+    current_indices, current_num_neighbors, current_points : torch.Tensor
+        Accumulated ``(..., N, K)`` indices, ``(..., N)`` counts and
+        ``(..., N, K, 3)`` points; unbatched or with one leading batch dim.
+    incoming_indices, incoming_num_neighbors, incoming_points : torch.Tensor
+        Same layout for the block being merged.
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        New merged ``(indices, num_neighbors, points)`` tensors.
+    """
+    merged_indices = current_indices.clone()
+    merged_num_neighbors = current_num_neighbors.clone()
+    merged_points = current_points.clone()
+
+    batched = merged_indices.ndim == 3
+    n_points = merged_indices.shape[-2]
+    max_neighbors = merged_indices.shape[-1]
+    batches = range(merged_indices.shape[0]) if batched else [None]
+
+    _, stream = FunctionSpec.warp_launch_context(merged_indices)
+    with FunctionSpec.warp_stream_scope(stream):
+        for b in batches:
+            sel = (slice(None),) if b is None else (b,)
+            wp.launch(
+                _merge_indices_and_points,
+                dim=n_points,
+                inputs=[
+                    wp.from_torch(merged_indices[sel], return_ctype=True),
+                    wp.from_torch(merged_num_neighbors[sel], return_ctype=True),
+                    wp.from_torch(merged_points[sel], return_ctype=True),
+                    wp.from_torch(incoming_indices[sel], return_ctype=True),
+                    wp.from_torch(incoming_num_neighbors[sel], return_ctype=True),
+                    wp.from_torch(incoming_points[sel], return_ctype=True),
+                    max_neighbors,
+                ],
+                stream=stream,
+            )
+
+    return merged_indices, merged_num_neighbors, merged_points
+
+
+@_ring_ball_query_merge.register_fake
+def _ring_ball_query_merge_fake(
+    current_indices: torch.Tensor,
+    current_num_neighbors: torch.Tensor,
+    current_points: torch.Tensor,
+    incoming_indices: torch.Tensor,
+    incoming_num_neighbors: torch.Tensor,
+    incoming_points: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Shapes and dtypes of the merged results equal the accumulated ones."""
+    return (
+        torch.empty_like(current_indices),
+        torch.empty_like(current_num_neighbors),
+        torch.empty_like(current_points),
+    )
+
+
 def merge_outputs(
     current_indices: torch.Tensor | None,
     current_num_neighbors: torch.Tensor | None,
@@ -263,134 +366,34 @@ def merge_outputs(
     incoming_num_neighbors: torch.Tensor,
     incoming_points: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    r"""Perform a gather/scatter operation on the mapping and outputs tensors.
+    r"""Merge one ring block's ball-query results into the accumulated ones.
 
-    This is an inplace operation on the current tensors, assuming they are not ``None``.
+    The accumulated arrays are ragged results padded to ``max_neighbors``:
+    incoming neighbors are appended per query and truncated to the available
+    space, and the counts are updated. The first block is taken as is.
 
     Parameters
     ----------
-    current_indices : Union[torch.Tensor, None]
-        Current mapping tensor or ``None``.
-    current_num_neighbors : Union[torch.Tensor, None]
-        Current number of neighbors tensor or ``None``.
-    current_points : Union[torch.Tensor, None]
-        Current outputs tensor or ``None``.
-    incoming_indices : torch.Tensor
-        Incoming mapping tensor to merge.
-    incoming_num_neighbors : torch.Tensor
-        Incoming number of neighbors tensor to merge.
-    incoming_points : torch.Tensor
-        Incoming outputs tensor to merge.
+    current_indices, current_num_neighbors, current_points : torch.Tensor | None
+        Accumulated results, or ``None`` before the first block.
+    incoming_indices, incoming_num_neighbors, incoming_points : torch.Tensor
+        Results of the block to merge.
 
     Returns
     -------
-    Tuple[torch.Tensor, torch.Tensor, torch.Tensor]
-        Tuple of merged (mapping, num_neighbors, outputs) tensors.
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        Merged ``(indices, num_neighbors, points)``.
     """
-
-    @wp.kernel
-    def merge_indices_and_points(
-        current_m: wp.array2d(dtype=wp.int32),
-        current_nn: wp.array(dtype=wp.int32),
-        current_o: wp.array3d(dtype=wp.float32),
-        incoming_m: wp.array2d(dtype=wp.int32),
-        incoming_nn: wp.array(dtype=wp.int32),
-        incoming_o: wp.array3d(dtype=wp.float32),
-        max_neighbors: int,
-    ):
-        # This is a kernel that is essentially doing a ragged concat + truncate
-
-        # Which points are we looking at?
-        tid = wp.tid()
-
-        # How many neighbors do we have?
-        num_neighbors = current_nn[tid]
-        available_space = max_neighbors - num_neighbors
-
-        # How many neighbors do we have in the incoming tensor?
-        incoming_num_neighbors = incoming_nn[tid]
-
-        # Can't add more neighbors than we have space for:
-        neighbors_to_add = min(incoming_num_neighbors, available_space)
-        # Now, copy the incoming neighbors to offset locations in the current tensor:
-        for i in range(neighbors_to_add):
-            # incoming has no offset
-            # current has offset of num_neighbors
-            current_m[tid, num_neighbors + i] = incoming_m[tid, i]
-            current_o[tid, num_neighbors + i, 0] = incoming_o[tid, i, 0]
-            current_o[tid, num_neighbors + i, 1] = incoming_o[tid, i, 1]
-            current_o[tid, num_neighbors + i, 2] = incoming_o[tid, i, 2]
-
-        # Finally, update the number of neighbors:
-        current_nn[tid] = num_neighbors + neighbors_to_add
-        return
-
-    if (
-        current_indices is None
-        and current_num_neighbors is None
-        and current_points is None
-    ):
+    if current_indices is None:
         return incoming_indices, incoming_num_neighbors, incoming_points
-
-    # This is a gather/scatter operation:
-    # We need to merge the incoming values into the current arrays.  The arrays
-    # are essentially a ragged tensor that has been padded to a consistent shape.
-    # What happens here is:
-    # - Compare the available space in current tensors to the number of incoming values.
-    #   - If there are more values coming in than there is space, they are truncated.
-    # - Using the available space, determine the section in the incoming tensor to gather.
-    # - Using the (trucated) size of incoming values, determine the region of the current tensor for scatter.
-    # - gather / scatter from incoming to current.
-    # - Update the current num neighbors correctly
-
-    # The warp kernel expects 2D indices, 1D num_neighbors, 3D points.
-    # For batched inputs (3D indices, 2D num_neighbors, 4D points),
-    # loop over the batch dimension.
-    batched = current_indices.ndim == 3
-    if batched:
-        B = current_indices.shape[0]
-        n_points = current_indices.shape[1]
-        max_neighbors = current_indices.shape[2]
-    else:
-        n_points = current_indices.shape[0]
-        max_neighbors = current_indices.shape[1]
-
-    _, stream = FunctionSpec.warp_launch_context(current_indices)
-
-    with FunctionSpec.warp_stream_scope(stream):
-        if batched:
-            for b in range(B):
-                wp.launch(
-                    merge_indices_and_points,
-                    dim=n_points,
-                    inputs=[
-                        wp.from_torch(current_indices[b], return_ctype=True),
-                        wp.from_torch(current_num_neighbors[b], return_ctype=True),
-                        wp.from_torch(current_points[b], return_ctype=True),
-                        wp.from_torch(incoming_indices[b], return_ctype=True),
-                        wp.from_torch(incoming_num_neighbors[b], return_ctype=True),
-                        wp.from_torch(incoming_points[b], return_ctype=True),
-                        max_neighbors,
-                    ],
-                    stream=stream,
-                )
-        else:
-            wp.launch(
-                merge_indices_and_points,
-                dim=n_points,
-                inputs=[
-                    wp.from_torch(current_indices, return_ctype=True),
-                    wp.from_torch(current_num_neighbors, return_ctype=True),
-                    wp.from_torch(current_points, return_ctype=True),
-                    wp.from_torch(incoming_indices, return_ctype=True),
-                    wp.from_torch(incoming_num_neighbors, return_ctype=True),
-                    wp.from_torch(incoming_points, return_ctype=True),
-                    max_neighbors,
-                ],
-                stream=stream,
-            )
-
-    return current_indices, current_num_neighbors, current_points
+    return _ring_ball_query_merge(
+        current_indices,
+        current_num_neighbors,
+        current_points,
+        incoming_indices.contiguous(),
+        incoming_num_neighbors.contiguous(),
+        incoming_points.contiguous(),
+    )
 
 
 class RingBallQuery(torch.autograd.Function):
@@ -483,10 +486,12 @@ class RingBallQuery(torch.autograd.Function):
             # For point clouds, we need to pass the size of the incoming shard.
             next_source_rank = (source_rank - 1) % world_size
 
-            # TODO - this operation should be done async and checked for completion at the start of the next loop.
+            # TODO - issue this shift with wait=False before the local
+            # radius search and finish_ring_iteration afterwards to overlap
+            # communication with compute.
             if i != world_size - 1:
                 # Don't do a ring on the last iteration.
-                current_points = perform_ring_iteration(
+                current_points = perform_ring_iteration_funcol(
                     current_points,
                     mesh,
                     ring_config,
