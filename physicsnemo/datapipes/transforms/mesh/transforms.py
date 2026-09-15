@@ -45,8 +45,15 @@ from physicsnemo.mesh import (
     Mesh,
     MeshFieldAssociation,
 )
-from physicsnemo.mesh.calculus.measure import compose_measure_weights
+from physicsnemo.mesh.calculus.measure import cell_measures, compose_measure_weights
 from physicsnemo.nn.functional import weighted_multinomial
+
+### Reserved ``point_data`` key carrying the effective quadrature measure of
+### the cell-centroid query points created by :class:`MeshToDomainMesh`.
+### Distinct from ``MEASURE_WEIGHTS_KEY``: that is a dimensionless factor on
+### source cells, while this is the full geometric measure (area * weight),
+### aligned one-for-one with the interior points.
+TARGET_QUADRATURE_MEASURE_KEY: str = "_target_quadrature_measure"
 
 
 @register()
@@ -1003,8 +1010,11 @@ class MeshToDomainMesh(MeshTransform):
         Names of cell-centered fields on the input mesh to use as prediction
         targets. They are moved out of the boundary's ``cell_data`` and into
         ``interior.point_data``. Use with ``interior_points='cell_centroids'``.
-        If ``None`` (and ``point_data_targets`` is also ``None``), no targets
-        are placed on the interior.
+        If ``None`` (and ``point_data_targets`` is also ``None``), no user
+        targets are placed on the interior. Centroid mode still records each
+        source cell's effective measure under
+        :data:`TARGET_QUADRATURE_MEASURE_KEY`, so integrals over the query
+        points remain possible after the cells are gone.
     point_data_targets : list[str] or None, default ``None``
         Names of vertex-centered fields on the input mesh to use as prediction
         targets. They are moved out of the boundary's ``point_data`` and into
@@ -1086,10 +1096,27 @@ class MeshToDomainMesh(MeshTransform):
         ### ``select`` / ``exclude`` below accept the parsed tuple keys.
         self._cell_data_targets: list[NestedKey] = as_nested_keys(cell_data_targets)
         self._point_data_targets: list[NestedKey] = as_nested_keys(point_data_targets)
+        if TARGET_QUADRATURE_MEASURE_KEY in (
+            self._cell_data_targets + self._point_data_targets
+        ):
+            raise ValueError(
+                f"{TARGET_QUADRATURE_MEASURE_KEY!r} is reserved for the query "
+                "measure and cannot be configured as a target."
+            )
         self._interior_points = interior_points
         self._boundary_name = boundary_name
 
     def __call__(self, mesh: Mesh) -> DomainMesh:  # type: ignore[override]
+        for association, data in (
+            ("point_data", mesh.point_data),
+            ("cell_data", mesh.cell_data),
+        ):
+            if TARGET_QUADRATURE_MEASURE_KEY in data:
+                raise ValueError(
+                    f"Input mesh {association} already contains reserved key "
+                    f"{TARGET_QUADRATURE_MEASURE_KEY!r}; rename the field "
+                    "before MeshToDomainMesh."
+                )
         ### v1 supports two diagonal corners:
         ### (cell_data_targets, interior_points='cell_centroids')
         ### (point_data_targets, interior_points='vertices')
@@ -1123,13 +1150,16 @@ class MeshToDomainMesh(MeshTransform):
 
     def _call_cell_centroids(self, mesh: Mesh) -> DomainMesh:
         ### Build the interior as a point cloud at cell centroids, with target
-        ### cell_data fields moved into interior.point_data.
+        ### cell_data fields moved into interior.point_data. The source cells
+        ### do not exist on the interior, so record their effective measure
+        ### (area * any composed measure weights) beside the centroids now.
         require_keys(mesh.cell_data, self._cell_data_targets, what="Target field")
         interior_point_data = (
             mesh.cell_data.select(*self._cell_data_targets)
             if self._cell_data_targets
             else TensorDict({}, batch_size=[mesh.n_cells])
         )
+        interior_point_data[TARGET_QUADRATURE_MEASURE_KEY] = cell_measures(mesh)
         interior = Mesh(
             points=mesh.cell_centroids,
             point_data=interior_point_data,

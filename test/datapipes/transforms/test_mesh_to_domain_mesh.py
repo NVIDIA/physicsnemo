@@ -19,8 +19,12 @@
 import pytest
 import torch
 
-from physicsnemo.datapipes.transforms.mesh import MeshToDomainMesh
+from physicsnemo.datapipes.transforms.mesh import (
+    TARGET_QUADRATURE_MEASURE_KEY,
+    MeshToDomainMesh,
+)
 from physicsnemo.mesh import DomainMesh, Mesh
+from physicsnemo.mesh.calculus import MEASURE_WEIGHTS_KEY, cell_measures
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -72,6 +76,27 @@ def _point_cloud_mesh_3d(n_points: int = 5) -> Mesh:
         points=torch.randn(n_points, 3),
         point_data={
             "phi": torch.randn(n_points),
+        },
+    )
+
+
+def _unequal_triangle_mesh_3d() -> Mesh:
+    """Two disconnected triangles with areas 0.5 and 2.0 and measure weights."""
+    return Mesh(
+        points=torch.tensor(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [3.0, 0.0, 0.0],
+                [5.0, 0.0, 0.0],
+                [3.0, 2.0, 0.0],
+            ]
+        ),
+        cells=torch.tensor([[0, 1, 2], [3, 4, 5]]),
+        cell_data={
+            "C_p": torch.tensor([10.0, 20.0]),
+            MEASURE_WEIGHTS_KEY: torch.tensor([2.0, 0.25]),
         },
     )
 
@@ -160,9 +185,31 @@ class TestCellCentroidsCorner:
         transform = MeshToDomainMesh(cell_data_targets=["C_p", "C_f"])
         domain = transform(mesh)
         interior_keys = set(domain.interior.point_data.keys())
-        assert interior_keys == {"C_p", "C_f"}
+        assert interior_keys == {"C_p", "C_f", TARGET_QUADRATURE_MEASURE_KEY}
         assert torch.allclose(domain.interior.point_data["C_p"], mesh.cell_data["C_p"])
         assert torch.allclose(domain.interior.point_data["C_f"], mesh.cell_data["C_f"])
+
+    def test_target_measure_is_effective_cell_measure_in_cell_order(self):
+        mesh = _unequal_triangle_mesh_3d()
+        domain = MeshToDomainMesh(cell_data_targets=["C_p"])(mesh)
+        boundary = domain.boundaries["vehicle"]
+
+        assert torch.equal(
+            domain.interior.point_data[TARGET_QUADRATURE_MEASURE_KEY],
+            cell_measures(mesh),
+        )
+        assert torch.equal(
+            domain.interior.point_data["C_p"], torch.tensor([10.0, 20.0])
+        )
+        ### Query i, target i, and measure i all refer to boundary cell i.
+        assert torch.equal(domain.interior.points, boundary.cell_centroids)
+        assert torch.equal(
+            domain.interior.point_data[TARGET_QUADRATURE_MEASURE_KEY],
+            cell_measures(boundary),
+        )
+        ### The measure lives only on the interior, never on the boundary.
+        assert TARGET_QUADRATURE_MEASURE_KEY not in boundary.point_data
+        assert TARGET_QUADRATURE_MEASURE_KEY not in boundary.cell_data
 
     def test_non_target_cell_data_stays_on_boundary(self):
         mesh = _two_triangle_mesh_3d()
@@ -197,14 +244,27 @@ class TestCellCentroidsCorner:
         assert "U_inf" in domain.global_data.keys()
         assert torch.allclose(domain.global_data["U_inf"], mesh.global_data["U_inf"])
 
-    def test_no_targets_yields_empty_interior_point_data(self):
+    def test_no_targets_yields_only_target_measure(self):
         mesh = _two_triangle_mesh_3d()
         transform = MeshToDomainMesh(cell_data_targets=None)
         domain = transform(mesh)
-        assert len(domain.interior.point_data.keys()) == 0
+        assert set(domain.interior.point_data.keys()) == {TARGET_QUADRATURE_MEASURE_KEY}
         ### All original cell_data should still be on the boundary.
         boundary_keys = set(domain.boundaries["vehicle"].cell_data.keys())
         assert boundary_keys == {"C_p", "C_f", "normals"}
+
+    def test_reserved_measure_key_cannot_be_a_target(self):
+        with pytest.raises(ValueError, match="reserved"):
+            MeshToDomainMesh(cell_data_targets=[TARGET_QUADRATURE_MEASURE_KEY])
+
+    @pytest.mark.parametrize("association", ["point_data", "cell_data"])
+    def test_preexisting_reserved_measure_key_is_rejected(self, association):
+        mesh = _two_triangle_mesh_3d()
+        getattr(mesh, association)[TARGET_QUADRATURE_MEASURE_KEY] = torch.ones(
+            mesh.n_points if association == "point_data" else mesh.n_cells
+        )
+        with pytest.raises(ValueError, match="already contains reserved key"):
+            MeshToDomainMesh(cell_data_targets=["C_p"])(mesh)
 
     def test_custom_boundary_name(self):
         mesh = _two_triangle_mesh_3d()

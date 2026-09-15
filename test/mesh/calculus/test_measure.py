@@ -87,10 +87,26 @@ class TestSamplingWeights:
         )
 
     def test_storage_rejects_wrong_shape(self):
-        ### cell_data's batch dimension enforces the (n_cells,) shape.
+        ### cell_data's batch dimension rejects a wrong leading dimension.
         mesh = two_triangles_2d.load()
         with pytest.raises(RuntimeError):
             mesh.cell_data[MEASURE_WEIGHTS_KEY] = torch.ones(mesh.n_cells + 1)
+
+    def test_reserved_field_rejects_trailing_singleton_dimension(self):
+        ### TensorDict accepts vector-valued cell data, so the reserved
+        ### scalar field must enforce its own exact shape.
+        mesh = two_triangles_2d.load()
+        mesh.cell_data[MEASURE_WEIGHTS_KEY] = torch.ones(mesh.n_cells, 1)
+
+        with pytest.raises(ValueError, match="one scalar per cell"):
+            cell_measure_weights(mesh)
+        with pytest.raises(ValueError, match="one scalar per cell"):
+            cell_measures(mesh)
+
+    def test_compose_rejects_non_scalar_broadcast_shape(self):
+        mesh = two_triangles_2d.load()
+        with pytest.raises(ValueError, match="scalar or have shape"):
+            compose_measure_weights(mesh, torch.ones(mesh.n_cells, 1))
 
     def test_weights_survive_slice_cells(self):
         mesh = make_triangle_strip(6)
