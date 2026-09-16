@@ -213,7 +213,9 @@ class RandomTranslateMesh(MeshTransform):
     control each axis separately, e.g.
     ``Uniform(tensor([-0.1, -0.2, -0.3]), tensor([0.1, 0.2, 0.3]))``.
     Alternatively pass *low* / *high* to build such a uniform
-    distribution from plain (config-friendly) numbers or sequences.
+    distribution from plain (config-friendly) numbers or sequences. Equal
+    bounds pin that axis (the offset is exactly ``low`` there); ``low > high``
+    raises ``ValueError``.
     """
 
     def __init__(
@@ -244,10 +246,18 @@ class RandomTranslateMesh(MeshTransform):
             if distribution is not None:
                 raise ValueError("low/high cannot be combined with distribution")
             ### Uniform rejects lists (and OmegaConf's ListConfig), which is
-            ### what config-driven instantiation hands us.
-            distribution = torch.distributions.Uniform(
-                _as_bound_tensor(low), _as_bound_tensor(high)
-            )
+            ### what config-driven instantiation hands us. It also rejects
+            ### ``low == high`` under argument validation, yet an equal bound is
+            ### how a config pins an axis (``low: [-1, -1, 0], high: [1, 1, 0]``
+            ### for in-plane offsets), so validate the ordering here and build
+            ### the distribution without it; sampling a zero-width interval
+            ### returns ``low`` exactly.
+            lo, hi = _as_bound_tensor(low), _as_bound_tensor(high)
+            if bool((lo > hi).any()):
+                raise ValueError(
+                    f"low must be <= high elementwise, got low={low!r}, high={high!r}"
+                )
+            distribution = torch.distributions.Uniform(lo, hi, validate_args=False)
         self._distribution = distribution or torch.distributions.Uniform(-0.1, 0.1)
         self._generator: torch.Generator | None = None
 
@@ -319,8 +329,9 @@ class RandomRotateMesh(MeshTransform):
       at random and samples an angle from *distribution*.  This limits
       rotations to the three cardinal planes.
     * ``"uniform"`` -- samples a rotation uniformly from SO(3) via random
-      unit quaternions (3-D meshes only).  *axes* and *distribution* are
-      ignored in this mode.
+      unit quaternions (3-D meshes only).  *distribution* is ignored in this
+      mode, and *axes* must not be given (``ValueError``): a caller who
+      lists axes wants axis-aligned rotations.
 
     When *mode* is not given it defaults to ``"axis_aligned"`` if *axes*
     is given and ``"uniform"`` otherwise.

@@ -447,6 +447,20 @@ class TestRandomTranslateMesh:
         with pytest.raises(ValueError, match="must be given together"):
             RandomTranslateMesh(low=0.0)
 
+    def test_equal_bounds_pin_an_axis_without_argument_validation(self):
+        """``low == high`` on an axis is how configs pin it; Uniform would reject
+        it under validate_args, so the transform must build it itself."""
+        aug = _seed(RandomTranslateMesh(low=[-1.0, -1.0, 0.0], high=[1.0, 1.0, 0.0]), 0)
+        for _ in range(5):
+            off = aug._sample_offset(3)
+            assert float(off[2]) == 0.0
+            assert -1.0 <= float(off[0]) <= 1.0 and -1.0 <= float(off[1]) <= 1.0
+
+    def test_low_above_high_raises(self):
+        """A reversed bound is a config error and must not be silently accepted."""
+        with pytest.raises(ValueError, match="low must be <= high"):
+            RandomTranslateMesh(low=[0.0, 1.0, 0.0], high=[1.0, 0.0, 0.0])
+
 
 # ---------------------------------------------------------------------------
 # RandomRotateMesh
