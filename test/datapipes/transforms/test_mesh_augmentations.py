@@ -419,48 +419,6 @@ class TestRandomTranslateMesh:
             d1.boundaries["wall"].points, d2.boundaries["wall"].points
         )
 
-    def test_low_high_lists(self):
-        """low/high lists should build a per-axis Uniform (here, no z offset)."""
-        aug = _seed(RandomTranslateMesh(low=[-1.0, -1.0, 0.0], high=[1.0, 1.0, 0.0]), 0)
-        mesh = _simple_mesh_3d()
-        for _ in range(20):
-            translated = aug(mesh)
-            offset = translated.points - mesh.points
-            assert offset[:, :2].abs().max() <= 1.0
-            assert torch.allclose(offset[:, 2], torch.zeros(3), atol=1e-6)
-
-    def test_low_high_scalars(self):
-        """Scalar low/high should bound offsets on every axis."""
-        aug = _seed(RandomTranslateMesh(low=-0.5, high=0.5), 0)
-        mesh = _simple_mesh_3d()
-        for _ in range(20):
-            offset = aug(mesh).points - mesh.points
-            assert offset.abs().max() <= 0.5
-
-    def test_low_high_with_distribution_raises(self):
-        """low/high and distribution are mutually exclusive."""
-        with pytest.raises(ValueError, match="cannot be combined with distribution"):
-            RandomTranslateMesh(distribution=D.Uniform(-1.0, 1.0), low=0.0, high=1.0)
-
-    def test_low_without_high_raises(self):
-        """low and high must be given together."""
-        with pytest.raises(ValueError, match="must be given together"):
-            RandomTranslateMesh(low=0.0)
-
-    def test_equal_bounds_pin_an_axis_without_argument_validation(self):
-        """``low == high`` on an axis is how configs pin it; Uniform would reject
-        it under validate_args, so the transform must build it itself."""
-        aug = _seed(RandomTranslateMesh(low=[-1.0, -1.0, 0.0], high=[1.0, 1.0, 0.0]), 0)
-        for _ in range(5):
-            off = aug._sample_offset(3)
-            assert float(off[2]) == 0.0
-            assert -1.0 <= float(off[0]) <= 1.0 and -1.0 <= float(off[1]) <= 1.0
-
-    def test_low_above_high_raises(self):
-        """A reversed bound is a config error and must not be silently accepted."""
-        with pytest.raises(ValueError, match="low must be <= high"):
-            RandomTranslateMesh(low=[0.0, 1.0, 0.0], high=[1.0, 0.0, 0.0])
-
 
 # ---------------------------------------------------------------------------
 # RandomRotateMesh

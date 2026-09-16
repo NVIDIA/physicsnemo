@@ -51,8 +51,14 @@ pipeline:
       transform_point_data: true
       transform_global_data: true
     - _target_: ${dp:RandomTranslateMesh}
-      low: [-1.0, -1.0, 0.0]
-      high: [1.0, 1.0, 0.0]
+      distribution:
+        _target_: torch.distributions.Uniform
+        low:
+          _target_: torch.tensor
+          data: [-1.0, -1.0, 0.0]
+        high:
+          _target_: torch.tensor
+          data: [1.0, 1.0, 0.0]
   transforms:
     - _target_: ${dp:DropMeshFields}
       global_data: [TimeValue]
