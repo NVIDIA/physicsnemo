@@ -349,16 +349,20 @@ class PrototypeTokenJEPAHead(Module):
                 k=self_k,
             )
             self_idx = self_idx.long()
-            cross_k = min(
-                int(cross_blk0.neighbor_k),
-                int(flat_context_coords.shape[0]),
-            )
-            cross_idx, _ = knn(
-                points=flat_context_coords.float(),
-                queries=flat_target_coords.float(),
-                k=cross_k,
-            )
-            cross_idx = cross_idx.long()
+            # A fully masked context leaves no tokens to search. The cross
+            # blocks pass queries through unchanged in that case, so skip
+            # the neighbour search (kNN backends reject empty point sets).
+            if int(flat_context_coords.shape[0]) > 0:
+                cross_k = min(
+                    int(cross_blk0.neighbor_k),
+                    int(flat_context_coords.shape[0]),
+                )
+                cross_idx, _ = knn(
+                    points=flat_context_coords.float(),
+                    queries=flat_target_coords.float(),
+                    k=cross_k,
+                )
+                cross_idx = cross_idx.long()
 
         for self_block, cross_block in zip(
             self.self_blocks, self.cross_blocks, strict=True

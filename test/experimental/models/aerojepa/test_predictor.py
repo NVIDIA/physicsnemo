@@ -93,6 +93,36 @@ def test_unbatched_mask_excludes_context_tokens(device):
     torch.testing.assert_close(masked, trimmed)
 
 
+@pytest.mark.parametrize("batched", [False, True])
+def test_fully_masked_context(device, batched):
+    """A fully masked context yields a finite prediction that ignores its features."""
+    head = _build().to(device).eval()
+    coords = torch.randn(16, 3, device=device)
+    mask = torch.zeros(16, dtype=torch.bool, device=device)
+    target_positions = torch.randn(12, 3, device=device)
+    cond = torch.randn(4, device=device)
+    outs = []
+    for _ in range(2):
+        features = torch.randn(16, 32, device=device)
+        ctx = (
+            TokenSet(features=features[None], coords=coords[None], mask=mask[None])
+            if batched
+            else TokenSet(features=features, coords=coords, mask=mask)
+        )
+        with torch.no_grad():
+            outs.append(
+                head.forward(
+                    context_tokens=ctx,
+                    target_positions=target_positions,
+                    cond=cond,
+                )
+            )
+    expected_shape = (1, 12, 32) if batched else (12, 32)
+    assert outs[0].shape == expected_shape
+    assert torch.isfinite(outs[0]).all()
+    torch.testing.assert_close(outs[0], outs[1])
+
+
 def test_target_positions_broadcast(device):
     """Rank-2 ``target_positions`` is broadcast across the context batch."""
     head = _build().to(device).eval()

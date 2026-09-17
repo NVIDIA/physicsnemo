@@ -324,26 +324,21 @@ class AeroJEPA(Module):
         query_pos : torch.Tensor
             Query positions of shape ``(Nq, 3)``. May be on any device;
             chunks are moved to the model's device on demand.
-        query_sdf : torch.Tensor, optional
+        query_sdf : torch.Tensor, optional, default=None
             Per-query SDF of shape ``(Nq, 1)``. Required when the decoder
             was built with ``use_sdf=True``.
         chunk_size : int
-            Maximum number of queries decoded per chunk. Must be positive.
-        precision : str, optional
+            Maximum number of queries decoded per chunk. Must be positive;
+            other values raise a ``ValueError``.
+        precision : str, optional, default="fp32"
             ``"fp32"``, ``"fp16"``, or ``"bf16"`` (case-insensitive).
             ``"fp16"`` and ``"bf16"`` run the chunk's decode under
-            ``torch.autocast``. Default ``"fp32"``.
+            ``torch.autocast``. Other values raise a ``ValueError``.
 
         Returns
         -------
         torch.Tensor
             Decoded field of shape ``(Nq, C)`` on CPU.
-
-        Raises
-        ------
-        ValueError
-            If ``chunk_size`` is not positive or ``precision`` is not one
-            of the supported values.
         """
         dtype_map = {
             "fp32": torch.float32,

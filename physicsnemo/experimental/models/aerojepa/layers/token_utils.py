@@ -152,23 +152,24 @@ def flatten_valid_token_features(
 ) -> torch.Tensor:
     r"""Flatten token features and drop padded rows when a mask is present.
 
-    Without a mask, rank-2 inputs of shape ``(N, D)`` are returned
-    unchanged and rank-3 inputs of shape ``(B, N, D)`` are reshaped to
-    ``(B * N, D)``. With a mask, either rank is indexed by the mask.
+    Without a mask, rank-2 inputs of shape :math:`(N, D)` are returned
+    unchanged and rank-3 inputs of shape :math:`(B, N, D)` are reshaped to
+    :math:`(B \cdot N, D)`. With a mask, either rank is indexed by the mask.
 
     Parameters
     ----------
     features : torch.Tensor
-        Token features of shape ``(N, D)`` or ``(B, N, D)``.
-    mask : torch.Tensor, optional
-        Boolean mask of shape ``(N,)`` or ``(B, N)`` matching
+        Token features of shape :math:`(N, D)` or :math:`(B, N, D)`.
+    mask : torch.Tensor, optional, default=None
+        Boolean mask of shape :math:`(N,)` or :math:`(B, N)` matching
         ``features.shape[:-1]``; ``True`` selects valid positions.
 
     Returns
     -------
     torch.Tensor
-        Flat tensor of shape ``(M, D)`` where ``M`` is the number of valid
-        rows after masking (or ``N`` / ``B * N`` when no mask is provided).
+        Flat tensor of shape :math:`(M, D)` where :math:`M` is the number
+        of valid rows after masking (or :math:`N` / :math:`B \cdot N` when
+        no mask is provided).
 
     Raises
     ------
