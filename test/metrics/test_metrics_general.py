@@ -1073,3 +1073,12 @@ def test_ensemble_mse_rmse(device, rtol: float = 1e-5, atol: float = 1e-5):
     assert torch.allclose(R2.rmse, torch.sqrt(R2.mse), rtol=rtol, atol=atol), (
         "self.rmse must equal sqrt(self.mse)"
     )
+
+
+def test_ensemble_mse_rmse_package_exports():
+    import physicsnemo.metrics.general as general
+
+    assert general.EnsembleMSE is em.EnsembleMSE
+    assert general.EnsembleRMSE is em.EnsembleRMSE
+    # Package-level exports must not shadow the ``mse`` submodule.
+    assert general.mse is mse_mod

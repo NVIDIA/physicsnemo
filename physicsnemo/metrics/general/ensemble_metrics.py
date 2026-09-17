@@ -437,10 +437,16 @@ class EnsembleMSE(EnsembleMetrics):
 
     Examples
     --------
-    >>> metric = EnsembleMSE((72, 144), device="cpu")
-    >>> mse_val = metric(preds, target)   # preds: [N, 72, 144], target: [72, 144]
-    >>> mse_val = metric.update(more_preds, target)
-    >>> final_mse = metric.finalize()
+    >>> import torch
+    >>> from physicsnemo.metrics.general.ensemble_metrics import EnsembleMSE
+    >>> target = torch.zeros(4, 8)
+    >>> metric = EnsembleMSE((4, 8), device="cpu")
+    >>> metric(torch.ones(3, 4, 8), target).mean()  # first 3 members
+    tensor(1.)
+    >>> metric.update(torch.full((2, 4, 8), 2.0), target).mean()  # 2 more members
+    tensor(2.2000)
+    >>> metric.finalize().shape
+    torch.Size([4, 8])
     """
 
     def __init__(self, input_shape: Union[Tuple, List], **kwargs):
@@ -551,6 +557,14 @@ class EnsembleRMSE(EnsembleMSE):
     input_shape : Union[Tuple, List]
         Shape of the non-ensemble (spatial/channel) dimensions, i.e. the shape
         of the target tensor.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.metrics.general.ensemble_metrics import EnsembleRMSE
+    >>> metric = EnsembleRMSE((4, 8), device="cpu")
+    >>> metric(torch.full((3, 4, 8), 2.0), torch.zeros(4, 8)).mean()
+    tensor(2.)
     """
 
     def __call__(self, preds: Tensor, target: Tensor, dim: int = 0) -> Tensor:
