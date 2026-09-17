@@ -77,6 +77,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `torch.distributions.Uniform` instantiates.
 - `RenameMeshFields` and `DropMeshFields` also apply to a `DomainMesh`'s
   domain-level `global_data`.
+- AeroJEPA (experimental) honors the `mask` of unbatched `TokenSet`s:
+  `PrototypeTokenJEPAHead` excludes masked-out context tokens,
+  `pad_token_sets` carries per-set masks into the packed mask and global
+  token, and `flatten_valid_token_features` applies rank-2 masks.
 
 ### Security
 

@@ -80,9 +80,11 @@ def pad_token_sets(token_sets: Iterable[TokenSet]) -> TokenSet:
     r"""Pack a list of unbatched ``TokenSet`` instances into a batched one.
 
     Each item's tokens are placed in the leading positions of the batched
-    output and a boolean ``mask`` records validity. Missing ``global_token``
-    entries are synthesised by taking the masked mean of features so the
-    output always carries a well-defined per-batch global token.
+    output and a boolean ``mask`` records validity. An item's own ``mask``
+    is carried over, so tokens it marks invalid stay invalid after packing.
+    Missing ``global_token`` entries are synthesised by taking the masked
+    mean of the valid features so the output always carries a well-defined
+    per-batch global token.
 
     Parameters
     ----------
@@ -98,7 +100,8 @@ def pad_token_sets(token_sets: Iterable[TokenSet]) -> TokenSet:
     Raises
     ------
     ValueError
-        If ``token_sets`` is empty.
+        If ``token_sets`` is empty, or if an item's ``mask`` does not have
+        shape :math:`[N_i]`.
     """
     token_sets = list(token_sets)
     if not token_sets:
@@ -120,13 +123,21 @@ def pad_token_sets(token_sets: Iterable[TokenSet]) -> TokenSet:
     global_tokens = []
     for i, token_set in enumerate(token_sets):
         count = int(token_set.features.shape[0])
+        set_mask = token_set.mask
+        if set_mask is not None and tuple(set_mask.shape) != (count,):
+            raise ValueError(
+                f"Expected mask of shape ({count},) for token set {i}, "
+                f"got {tuple(set_mask.shape)}"
+            )
         padded_features[i, :count] = token_set.features
         padded_coords[i, :count] = token_set.coords
-        mask[i, :count] = True
+        mask[i, :count] = True if set_mask is None else set_mask
         if token_set.global_token is not None:
             global_tokens.append(token_set.global_token.reshape(1, -1))
         else:
-            global_tokens.append(masked_mean(token_set.features, None).reshape(1, -1))
+            global_tokens.append(
+                masked_mean(token_set.features, set_mask).reshape(1, -1)
+            )
     return TokenSet(
         features=padded_features,
         coords=padded_coords,
@@ -141,42 +152,42 @@ def flatten_valid_token_features(
 ) -> torch.Tensor:
     r"""Flatten token features and drop padded rows when a mask is present.
 
-    Rank-2 inputs of shape ``(N, D)`` are returned unchanged. Rank-3 inputs
-    of shape ``(B, N, D)`` are reshaped to ``(B * N, D)`` when ``mask`` is
-    ``None`` and indexed by the mask otherwise.
+    Without a mask, rank-2 inputs of shape ``(N, D)`` are returned
+    unchanged and rank-3 inputs of shape ``(B, N, D)`` are reshaped to
+    ``(B * N, D)``. With a mask, either rank is indexed by the mask.
 
     Parameters
     ----------
     features : torch.Tensor
         Token features of shape ``(N, D)`` or ``(B, N, D)``.
     mask : torch.Tensor, optional
-        Boolean mask of shape ``(B, N)``; ``True`` selects valid positions.
-        Required to be ``None`` for rank-2 inputs.
+        Boolean mask of shape ``(N,)`` or ``(B, N)`` matching
+        ``features.shape[:-1]``; ``True`` selects valid positions.
 
     Returns
     -------
     torch.Tensor
         Flat tensor of shape ``(M, D)`` where ``M`` is the number of valid
-        rows after masking (or ``B * N`` when no mask is provided).
+        rows after masking (or ``N`` / ``B * N`` when no mask is provided).
 
     Raises
     ------
     ValueError
         If ``features`` is not rank 2 or 3, or if ``mask.shape`` does not
-        match ``features.shape[:2]``.
+        match ``features.shape[:-1]``.
     """
-    if features.ndim == 2:
-        return features
-    if features.ndim != 3:
+    if features.ndim not in (2, 3):
         raise ValueError(
             f"Expected rank-2 or rank-3 features, got {tuple(features.shape)}"
         )
     if mask is None:
+        if features.ndim == 2:
+            return features
         return features.reshape(-1, int(features.shape[-1]))
-    if mask.shape != features.shape[:2]:
+    if mask.shape != features.shape[:-1]:
         raise ValueError(
-            "mask must match features.shape[:2], "
-            f"got {tuple(mask.shape)} vs {tuple(features.shape[:2])}"
+            "mask must match features.shape[:-1], "
+            f"got {tuple(mask.shape)} vs {tuple(features.shape[:-1])}"
         )
     return features[mask]
 

@@ -69,6 +69,30 @@ def test_forward_batched(device):
     assert out.shape == (2, 12, 32)
 
 
+def test_unbatched_mask_excludes_context_tokens(device):
+    """Masked-out tokens of an unbatched context do not affect the prediction."""
+    head = _build().to(device).eval()
+    features = torch.randn(16, 32, device=device)
+    coords = torch.randn(16, 3, device=device)
+    mask = torch.ones(16, dtype=torch.bool, device=device)
+    mask[10:] = False
+    target_positions = torch.randn(12, 3, device=device)
+    cond = torch.randn(4, device=device)
+    with torch.no_grad():
+        masked = head.forward(
+            context_tokens=TokenSet(features=features, coords=coords, mask=mask),
+            target_positions=target_positions,
+            cond=cond,
+        )
+        trimmed = head.forward(
+            context_tokens=TokenSet(features=features[:10], coords=coords[:10]),
+            target_positions=target_positions,
+            cond=cond,
+        )
+    assert masked.shape == (12, 32)
+    torch.testing.assert_close(masked, trimmed)
+
+
 def test_target_positions_broadcast(device):
     """Rank-2 ``target_positions`` is broadcast across the context batch."""
     head = _build().to(device).eval()
