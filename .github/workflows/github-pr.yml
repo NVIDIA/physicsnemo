@@ -221,13 +221,15 @@ jobs:
       with:
         hf-token: ${{ secrets.HF_CI_DATA_TOKEN }}
 
+    # --testmon-nocollect: testmon's own tracer would otherwise displace
+    # `coverage run` and drop everything executed inside tests.
     - name: Run core tests for coverage report (testmon-selected)
       env:
         WARP_CACHE_PATH: ${{ env.JIT_CACHE_DIR }}/warp
         TRITON_CACHE_DIR: ${{ env.JIT_CACHE_DIR }}/triton
         TORCHINDUCTOR_CACHE_DIR: ${{ env.JIT_CACHE_DIR }}/inductor
       run: |
-        uv run --no-sync coverage run --rcfile='test/coverage.pytest.rc' -m pytest --testmon --ignore-glob="*docs*" --ignore-glob="*examples*"
+        uv run --no-sync coverage run --rcfile='test/coverage.pytest.rc' -m pytest --testmon --testmon-nocollect --ignore-glob="*docs*" --ignore-glob="*examples*"
 
     - name: Run doc tests (testmon not supported for doctests)
       env:
