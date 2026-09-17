@@ -47,6 +47,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- Removes `physicsnemo.utils.mesh`, deprecated since 2.1 with removal scheduled
+  for 2.2. The `vtk` and `stl` entries leave the `utils-extras` extra with it.
+  Replacements:
+  - `sdf_to_stl(field, threshold)`: `marching_cubes` from
+    `physicsnemo.mesh.generate` returns a `Mesh`; save it with `to_pyvista`
+    from `physicsnemo.mesh.io`, e.g.
+    `to_pyvista(marching_cubes(torch.as_tensor(field), threshold)).save("out.stl")`.
+  - `combine_vtp_files(files, out)`:
+    `pyvista.merge([pyvista.read(f) for f in files]).save(out)`.
+  - `convert_tesselated_files_in_directory`: `pyvista.read(src).save(dst)` per
+    file; PyVista reads and writes OBJ, VTP and STL.
+
 ### Fixed
 
 - `physicsnemo.distributed.utils.pad_helper` pads the requested `dim`; it
