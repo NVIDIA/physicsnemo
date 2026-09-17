@@ -42,6 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- Removes `physicsnemo.utils.mesh` (`sdf_to_stl`, `combine_vtp_files`,
+  `convert_tesselated_files_in_directory`), deprecated since 2.1 with removal
+  scheduled for 2.2. Use `physicsnemo.mesh` or PyVista directly. The `vtk` and
+  `stl` entries leave the `utils-extras` extra with it.
+
 ### Fixed
 
 - Normalizes cell, point, transformed, and partition-cluster mesh normals
