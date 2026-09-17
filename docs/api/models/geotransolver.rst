@@ -10,7 +10,9 @@ GALE layers use either
 :class:`~physicsnemo.nn.module.physics_attention.PhysicsAttentionBase` (the default
 setting) or
 :class:`~physicsnemo.nn.module.flare_attention.FLARE` (with ``attention_type="GALE_FA"``)
-as the self-attention backend.
+as the self-attention backend. Setting ``attention_type="GALE_FPP"`` selects
+input-conditioned :class:`~physicsnemo.nn.module.flare_attention.FLAREPlusPlus`
+attention while retaining GeoTransolver's context path.
 
 For more information on GeoTransolver, refer to the `GeoTransolver paper
 <https://arxiv.org/abs/2512.20399>`__.
@@ -99,6 +101,16 @@ physical-state slices, reducing attention cost at scale. Refer also the
 :doc:`FLARE model <flare>` documentation.
 
 .. autoclass:: physicsnemo.nn.module.gale.GALE_FA
+    :show-inheritance:
+    :members:
+    :exclude-members: forward
+
+The ``"GALE_FPP"`` backend uses the standalone FLARE++ mixer for token
+self-attention and adds only GeoTransolver's optional geometry/global-context
+cross-attention. The core FLARE++ implementation therefore remains shared with
+the standalone model rather than being embedded in GeoTransolver.
+
+.. autoclass:: physicsnemo.nn.module.gale.GALE_FPP
     :show-inheritance:
     :members:
     :exclude-members: forward

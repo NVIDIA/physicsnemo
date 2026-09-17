@@ -20,6 +20,8 @@ import torch
 from physicsnemo.nn import (
     GALE,
     GALE_FA,
+    GALE_FPP,
+    FLAREPlusPlus,
     GALEBlock,
 )
 from test.conftest import requires_module
@@ -258,6 +260,122 @@ def test_gale_fa_forward_multiple_inputs(device):
 
 
 # =============================================================================
+# GALE_FPP Attention Tests
+# =============================================================================
+
+
+def test_gale_fpp_without_context_matches_standalone(device):
+    """The context-free backend is exactly the standalone FLARE++ layer."""
+    torch.manual_seed(42)
+    standalone = FLAREPlusPlus(
+        dim=32,
+        heads=4,
+        dim_head=8,
+        n_global_queries=6,
+        dropout=0.0,
+    ).to(device)
+    backend = GALE_FPP(
+        dim=32,
+        heads=4,
+        dim_head=8,
+        n_global_queries=6,
+        dropout=0.0,
+        context_dim=0,
+    ).to(device)
+    backend.load_state_dict(standalone.state_dict(), strict=True)
+    x = torch.randn(2, 19, 32, device=device)
+
+    torch.testing.assert_close(backend((x,), None)[0], standalone(x))
+
+
+@pytest.mark.parametrize("state_mixing_mode", ["weighted", "concat_project"])
+def test_gale_fpp_context_matches_reference(device, state_mixing_mode):
+    """The GeoTransolver adapter adds only context attention and mixing."""
+    torch.manual_seed(7)
+    backend = GALE_FPP(
+        dim=24,
+        heads=3,
+        dim_head=8,
+        n_global_queries=5,
+        context_dim=6,
+        state_mixing_mode=state_mixing_mode,
+    ).to(device)
+    x = torch.randn(2, 17, 24, device=device)
+    context = torch.randn(2, 3, 7, 6, device=device)
+
+    actual = backend((x,), context)[0]
+    self_output, physical_keys = backend._compute_attention(x)
+    context_k, context_v = backend.context_kv(context).chunk(2, dim=-1)
+    cross_output = torch.nn.functional.scaled_dot_product_attention(
+        backend.cross_q(physical_keys),
+        context_k,
+        context_v,
+        scale=backend.scale,
+    )
+    if state_mixing_mode == "weighted":
+        weight = torch.sigmoid(backend.state_mixing)
+        mixed = weight * self_output + (1.0 - weight) * cross_output
+    else:
+        mixed = backend.concat_project(torch.cat((self_output, cross_output), dim=-1))
+    expected = backend._project_output(mixed)
+
+    torch.testing.assert_close(actual, expected)
+
+
+def test_gale_fpp_multiple_inputs_backward(device):
+    """FLARE++ context attention supports multiple streams and gradients."""
+    backend = GALE_FPP(
+        dim=16,
+        heads=2,
+        dim_head=8,
+        n_global_queries=4,
+        context_dim=5,
+    ).to(device)
+    x1 = torch.randn(2, 11, 16, device=device, requires_grad=True)
+    x2 = torch.randn(2, 13, 16, device=device, requires_grad=True)
+    context = torch.randn(2, 2, 6, 5, device=device, requires_grad=True)
+
+    outputs = backend((x1, x2), context)
+    sum(output.square().mean() for output in outputs).backward()
+
+    assert [output.shape for output in outputs] == [(2, 11, 16), (2, 13, 16)]
+    assert x1.grad is not None
+    assert x2.grad is not None
+    assert context.grad is not None
+    assert torch.isfinite(context.grad).all()
+
+
+def test_gale_fpp_torch_compile_fullgraph(device):
+    """The context-enabled backend supports full-graph compilation."""
+    backend = GALE_FPP(
+        dim=16,
+        heads=2,
+        dim_head=8,
+        n_global_queries=4,
+        context_dim=5,
+    ).to(device)
+    x = torch.randn(2, 11, 16, device=device)
+    context = torch.randn(2, 2, 6, 5, device=device)
+    expected = backend((x,), context)
+    compile_backend = "inductor" if str(device).startswith("cuda") else "aot_eager"
+    compiled = torch.compile(backend, backend=compile_backend, fullgraph=True)
+
+    torch.testing.assert_close(compiled((x,), context)[0], expected[0])
+
+
+def test_gale_fpp_validates_configuration():
+    """GALE_FPP rejects unsupported and inconsistent configurations."""
+    with pytest.raises(ValueError, match="does not support Transformer Engine"):
+        GALE_FPP(dim=16, heads=2, dim_head=8, use_te=True)
+    with pytest.raises(ValueError, match="state_mixing_mode"):
+        GALE_FPP(dim=16, heads=2, dim_head=8, state_mixing_mode="invalid")
+
+    backend = GALE_FPP(dim=16, heads=2, dim_head=8, context_dim=0)
+    with pytest.raises(ValueError, match="context_dim=0"):
+        backend((torch.randn(1, 5, 16),), torch.randn(1, 2, 3, 4))
+
+
+# =============================================================================
 # concat_project state mixing mode
 # =============================================================================
 
@@ -336,7 +454,7 @@ def test_gale_fa_concat_project_forward(device):
 # =============================================================================
 
 
-@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
+@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA", "GALE_FPP"])
 def test_gale_block_forward(device, attention_type):
     """Test GALEBlock transformer block forward pass (GALE and GALE_FA)."""
     torch.manual_seed(42)
@@ -373,7 +491,7 @@ def test_gale_block_forward(device, attention_type):
     assert not torch.isnan(outputs[0]).any()
 
 
-@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
+@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA", "GALE_FPP"])
 def test_gale_block_multiple_inputs(device, attention_type):
     """Test GALEBlock with multiple input tensors and attention type (GALE and GALE_FA)."""
     torch.manual_seed(42)
@@ -412,7 +530,7 @@ def test_gale_block_multiple_inputs(device, attention_type):
     assert outputs[1].shape == (batch_size, n_tokens_2, hidden_dim)
 
 
-@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
+@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA", "GALE_FPP"])
 def test_gale_block_concat_project(device, attention_type):
     """Test GALEBlock with state_mixing_mode='concat_project'."""
     torch.manual_seed(42)

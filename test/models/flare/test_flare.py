@@ -17,13 +17,15 @@
 import random
 import re
 import sys
+from pathlib import Path
 
 import pytest
 import torch
 
 from physicsnemo.core.module import Module
 from physicsnemo.core.warnings import LegacyFeatureWarning
-from physicsnemo.models.flare import FLARE
+from physicsnemo.models.flare import FLARE, FLAREPlusPlus
+from physicsnemo.nn import FLAREPlusPlus as FLAREPlusPlusAttention
 from test.common import (
     check_ort_version,
     validate_amp,
@@ -137,6 +139,164 @@ def test_flare_constructor(config):
     assert hasattr(model, "preprocess"), "Model should have preprocess MLP"
     assert hasattr(model, "blocks"), "Model should have transformer blocks"
     assert hasattr(model, "meta"), "Model should have metadata"
+
+
+@pytest.mark.parametrize(
+    "kwargs,expected",
+    [
+        (
+            {
+                "functional_dim": 3,
+                "out_dim": 1,
+                "structured_shape": (8, 8),
+                "unified_pos": True,
+            },
+            (4, 256, 8, 32),
+        ),
+        (
+            {
+                "functional_dim": 2,
+                "out_dim": 3,
+                "embedding_dim": 3,
+                "n_layers": 3,
+                "n_hidden": 24,
+                "n_head": 3,
+                "slice_num": 5,
+                "structured_shape": None,
+            },
+            (3, 24, 3, 5),
+        ),
+    ],
+    ids=("defaults", "custom"),
+)
+def test_flare_plus_plus_constructor(kwargs, expected):
+    """Standalone FLARE++ exposes default and custom model configuration."""
+    model = FLAREPlusPlus(**kwargs)
+    n_layers, n_hidden, n_head, n_queries = expected
+
+    assert isinstance(model, Module)
+    assert model.n_hidden == n_hidden
+    assert len(model.blocks) == n_layers
+    assert all(isinstance(block.Attn, FLAREPlusPlusAttention) for block in model.blocks)
+    assert all(block.Attn.heads == n_head for block in model.blocks)
+    assert all(block.Attn.n_global_queries == n_queries for block in model.blocks)
+
+
+@pytest.mark.parametrize(
+    "n_hidden,n_head,slice_num,file_name",
+    [
+        (16, 4, 4, "models/flare/data/flare_plus_plus_small_output.pth"),
+        (24, 3, 5, "models/flare/data/flare_plus_plus_custom_output.pth"),
+    ],
+    ids=("small", "custom_heads"),
+)
+def test_flare_plus_plus_forward_accuracy(
+    device, n_hidden, n_head, slice_num, file_name
+):
+    """Standalone FLARE++ forward passes match committed golden outputs."""
+    torch.manual_seed(1234)
+    model = FLAREPlusPlus(
+        functional_dim=2,
+        out_dim=2,
+        embedding_dim=3,
+        n_layers=2,
+        n_hidden=n_hidden,
+        n_head=n_head,
+        mlp_ratio=2,
+        slice_num=slice_num,
+        structured_shape=None,
+    ).to(device)
+    functional_input = torch.randn(2, 17, 2).to(device)
+    embedding = torch.randn(2, 17, 3).to(device)
+
+    assert validate_forward_accuracy(
+        model,
+        (functional_input, embedding),
+        file_name=file_name,
+        atol=1e-3,
+        rtol=1e-3,
+    )
+
+
+def test_flare_plus_plus_forward_backward(device):
+    """Standalone FLARE++ supports end-to-end backpropagation."""
+    model = FLAREPlusPlus(
+        functional_dim=2,
+        out_dim=1,
+        embedding_dim=3,
+        n_layers=2,
+        n_hidden=16,
+        n_head=4,
+        mlp_ratio=1,
+        slice_num=4,
+    ).to(device)
+    functional_input = torch.randn(2, 19, 2, device=device, requires_grad=True)
+    embedding = torch.randn(2, 19, 3, device=device, requires_grad=True)
+
+    output = model(functional_input, embedding)
+    output.square().mean().backward()
+
+    assert output.shape == (2, 19, 1)
+    assert functional_input.grad is not None
+    assert embedding.grad is not None
+    assert torch.isfinite(functional_input.grad).all()
+    assert torch.isfinite(embedding.grad).all()
+
+
+def test_flare_plus_plus_checkpoint_roundtrip(device):
+    """Standalone FLARE++ saves and restores through PhysicsNeMo checkpoints."""
+
+    def make_model():
+        return FLAREPlusPlus(
+            functional_dim=2,
+            out_dim=1,
+            embedding_dim=3,
+            n_layers=2,
+            n_hidden=16,
+            n_head=4,
+            mlp_ratio=1,
+            slice_num=4,
+        ).to(device)
+
+    functional_input = torch.randn(1, 13, 2, device=device)
+    embedding = torch.randn(1, 13, 3, device=device)
+    assert validate_checkpoint(
+        make_model(),
+        make_model(),
+        (functional_input, embedding),
+    )
+
+
+def test_flare_plus_plus_reference_checkpoint(device):
+    """The committed v1 FLARE++ checkpoint remains loadable."""
+    checkpoint = Path(__file__).parent / "data/flare_plus_plus_v1.mdlus"
+    model = Module.from_checkpoint(checkpoint).to(device)
+    functional_input = torch.randn(1, 13, 2, device=device)
+    embedding = torch.randn(1, 13, 3, device=device)
+
+    assert isinstance(model, FLAREPlusPlus)
+    assert model(functional_input, embedding).shape == (1, 13, 1)
+
+
+def test_flare_plus_plus_torch_compile_fullgraph(device):
+    """The standalone FLARE++ model supports full-graph compilation."""
+    model = FLAREPlusPlus(
+        functional_dim=2,
+        out_dim=1,
+        embedding_dim=3,
+        n_layers=2,
+        n_hidden=16,
+        n_head=4,
+        mlp_ratio=1,
+        slice_num=4,
+    ).to(device)
+    functional_input = torch.randn(1, 13, 2, device=device)
+    embedding = torch.randn(1, 13, 3, device=device)
+    expected = model(functional_input, embedding)
+    backend = "inductor" if str(device).startswith("cuda") else "aot_eager"
+    compiled = torch.compile(model, backend=backend, fullgraph=True)
+
+    torch.testing.assert_close(compiled(functional_input, embedding), expected)
 
 
 def test_flare_activation_checkpointing_matches_outputs_and_gradients(device):

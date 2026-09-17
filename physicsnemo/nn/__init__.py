@@ -92,7 +92,7 @@ from .module.embedding_layers import (
     PositionalEmbedding,
     SinusoidalTimestepEmbedding,
 )
-from .module.flare_attention import FLARE
+from .module.flare_attention import FLARE, FLAREPlusPlus
 from .module.fourier_layers import (
     FourierFilter,
     FourierLayer,
@@ -112,6 +112,7 @@ from .module.fully_connected_layers import (
 from .module.gale import (
     GALE,
     GALE_FA,
+    GALE_FPP,
     GALEBlock,
     GALEStructuredMesh2D,
     GALEStructuredMesh3D,

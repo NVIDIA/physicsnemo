@@ -22,9 +22,10 @@ import sys
 
 import pytest
 import torch
+import torch.nn.functional as F
 
 from physicsnemo.core.warnings import LegacyFeatureWarning
-from physicsnemo.nn import FLARE
+from physicsnemo.nn import FLARE, FLAREPlusPlus
 from test.conftest import requires_module
 
 
@@ -92,6 +93,161 @@ def test_flare_gradient_flow(device):
     loss.backward()
     assert x.grad is not None
     assert not torch.isnan(x.grad).any()
+
+
+@pytest.mark.parametrize(
+    "kwargs,expected",
+    [
+        ({"dim": 64}, (8, 64, 64, 64**-0.5)),
+        (
+            {
+                "dim": 24,
+                "heads": 3,
+                "dim_head": 8,
+                "n_global_queries": 5,
+                "attn_scale": 0.25,
+            },
+            (3, 8, 5, 0.25),
+        ),
+    ],
+    ids=("defaults", "custom"),
+)
+def test_flare_plus_plus_constructor(kwargs, expected):
+    """Default and custom constructor values are exposed consistently."""
+    attention = FLAREPlusPlus(**kwargs)
+    heads, dim_head, n_queries, scale = expected
+
+    assert attention.dim == kwargs["dim"]
+    assert attention.heads == heads
+    assert attention.dim_head == dim_head
+    assert attention.n_global_queries == n_queries
+    assert attention.scale == pytest.approx(scale)
+    assert attention.q_seed.shape == (1, heads, n_queries, dim_head)
+    assert attention.in_projection.out_features == 4 * heads * dim_head
+    assert attention.out_linear.in_features == heads * dim_head
+    if heads * dim_head == kwargs["dim"]:
+        projection_weights = (
+            attention.in_projection.weight.numel() + attention.out_linear.weight.numel()
+        )
+        assert projection_weights == 5 * kwargs["dim"] ** 2
+
+
+def test_flare_plus_plus_matches_paper_equations(device):
+    """FLARE++ matches the three-SDPA formulation from the paper."""
+    torch.manual_seed(7)
+    attention = FLAREPlusPlus(
+        dim=24,
+        heads=3,
+        dim_head=8,
+        n_global_queries=5,
+        dropout=0.0,
+    ).to(device)
+    attention.eval()
+    x = torch.randn(2, 11, 24, device=device)
+
+    actual = attention(x)
+    query_k, query_v, physical_k, physical_v = attention.in_projection(x).chunk(
+        4, dim=-1
+    )
+
+    def split_heads(tensor):
+        return tensor.reshape(2, 11, 3, 8).transpose(1, 2)
+
+    query_k, query_v, physical_k, physical_v = map(
+        split_heads, (query_k, query_v, physical_k, physical_v)
+    )
+    queries = F.scaled_dot_product_attention(
+        attention.q_seed.expand(2, -1, -1, -1),
+        query_k,
+        query_v,
+        scale=attention.scale,
+    )
+    routed_values = F.scaled_dot_product_attention(
+        queries, physical_k, physical_v, scale=attention.scale
+    )
+    expected = F.scaled_dot_product_attention(
+        physical_k, queries, routed_values, scale=attention.scale
+    )
+    expected = expected.transpose(1, 2).reshape(2, 11, 24)
+    expected = attention.out_dropout(attention.out_linear(expected))
+
+    torch.testing.assert_close(actual, expected)
+
+
+def test_flare_plus_plus_routing_is_input_conditioned(device):
+    """Different samples synthesize different routing queries."""
+    torch.manual_seed(11)
+    attention = FLAREPlusPlus(
+        dim=16,
+        heads=2,
+        dim_head=8,
+        n_global_queries=4,
+    ).to(device)
+    x = torch.stack(
+        (
+            torch.zeros(9, 16, device=device),
+            torch.ones(9, 16, device=device),
+        )
+    )
+    query_k, query_v, _, _ = attention.in_projection(x).chunk(4, dim=-1)
+    query_k = query_k.reshape(2, 9, 2, 8).transpose(1, 2)
+    query_v = query_v.reshape(2, 9, 2, 8).transpose(1, 2)
+    queries = F.scaled_dot_product_attention(
+        attention.q_seed.expand(2, -1, -1, -1),
+        query_k,
+        query_v,
+        scale=attention.scale,
+    )
+
+    assert not torch.allclose(queries[0], queries[1])
+
+
+def test_flare_plus_plus_gradient_flow(device):
+    """Gradients reach the input, learned seeds, and fused projections."""
+    attention = FLAREPlusPlus(
+        dim=32,
+        heads=4,
+        dim_head=8,
+        n_global_queries=7,
+    ).to(device)
+    x = torch.randn(2, 20, 32, device=device, requires_grad=True)
+    attention(x).square().mean().backward()
+
+    assert x.grad is not None
+    assert torch.isfinite(x.grad).all()
+    for parameter in (
+        attention.q_seed,
+        attention.in_projection.weight,
+        attention.out_linear.weight,
+    ):
+        assert parameter.grad is not None
+        assert torch.isfinite(parameter.grad).all()
+
+
+def test_flare_plus_plus_validates_options():
+    """Unsupported backends and invalid scales fail during construction."""
+    with pytest.raises(ValueError, match="does not support Transformer Engine"):
+        FLAREPlusPlus(dim=32, use_te=True)
+
+    for scale in (0.0, -1.0, float("inf"), float("nan")):
+        with pytest.raises(ValueError, match="attn_scale"):
+            FLAREPlusPlus(dim=32, attn_scale=scale)
+
+
+def test_flare_plus_plus_torch_compile_fullgraph(device):
+    """FLARE++ can be captured by torch.compile with fullgraph enabled."""
+    attention = FLAREPlusPlus(
+        dim=16,
+        heads=2,
+        dim_head=8,
+        n_global_queries=4,
+    ).to(device)
+    x = torch.randn(2, 13, 16, device=device)
+    expected = attention(x)
+    backend = "inductor" if str(device).startswith("cuda") else "aot_eager"
+    compiled = torch.compile(attention, backend=backend, fullgraph=True)
+
+    torch.testing.assert_close(compiled(x), expected)
 
 
 def test_flare_attention_legacy_import_paths():

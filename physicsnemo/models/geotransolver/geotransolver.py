@@ -260,10 +260,11 @@ class GeoTransolver(Module):
         (Conv2d/Conv3d GALE; no ball-query local features). Inputs may be
         flattened :math:`(B, N, C)` with :math:`N = H W` or :math:`H W D`, or
         spatial :math:`(B, H, W, C)` / :math:`(B, H, W, D, C)`. Default is ``None``.
-    attention_type : {"GALE", "GALE_FA"}, optional
+    attention_type : {"GALE", "GALE_FA", "GALE_FPP"}, optional
         Attention implementation used inside each GALE block: ``"GALE"`` for the
-        reference version, ``"GALE_FA"`` for the flash-attention one.  Validated
-        in :class:`~physicsnemo.nn.GALEBlock`, which raises on any other value.
+        reference version, ``"GALE_FA"`` for fixed-query FLARE, and
+        ``"GALE_FPP"`` for input-conditioned FLARE++ routing. Validated in
+        :class:`~physicsnemo.nn.GALEBlock`, which raises on any other value.
         Default is ``"GALE"``.
     state_mixing_mode : str, optional
         How to blend self-attention and cross-attention outputs in GALE layers.
@@ -431,7 +432,7 @@ class GeoTransolver(Module):
         neighbors_in_radius: list[int] | None = None,
         n_hidden_local: int = 32,
         structured_shape: tuple[int, ...] | None = None,
-        attention_type: Literal["GALE", "GALE_FA"] = "GALE",
+        attention_type: Literal["GALE", "GALE_FA", "GALE_FPP"] = "GALE",
         concrete_dropout: bool = False,
         state_mixing_mode: str = "weighted",
         activation_checkpointing: bool = False,
@@ -440,6 +441,12 @@ class GeoTransolver(Module):
     ) -> None:
         super().__init__(meta=GeoTransolverMetaData())
         self.__name__ = "GeoTransolver"
+
+        if attention_type == "GALE_FPP" and use_te:
+            raise ValueError(
+                "The GALE_FPP backend does not support Transformer Engine; "
+                "set use_te=False."
+            )
 
         # Set defaults for mutable arguments
         if radii is None:

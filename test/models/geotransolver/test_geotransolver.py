@@ -74,7 +74,7 @@ def _assert_parameter_gradients_close(
         )
 
 
-@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
+@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA", "GALE_FPP"])
 @pytest.mark.parametrize("use_geometry", [False, True])
 @pytest.mark.parametrize("use_global", [False, True])
 def test_geotransolver_forward(device, attention_type, use_geometry, use_global):
@@ -124,6 +124,20 @@ def test_geotransolver_forward(device, attention_type, use_geometry, use_global)
     assert isinstance(outputs, torch.Tensor)
     assert outputs.shape == (batch_size, n_tokens, 4)
     assert not torch.isnan(outputs).any()
+
+
+def test_geotransolver_gale_fpp_rejects_transformer_engine():
+    """GALE_FPP reports its unsupported backend before constructing TE layers."""
+    with pytest.raises(ValueError, match="GALE_FPP.*Transformer Engine"):
+        GeoTransolver(
+            functional_dim=3,
+            out_dim=2,
+            n_hidden=16,
+            n_head=4,
+            slice_num=4,
+            attention_type="GALE_FPP",
+            use_te=True,
+        )
 
 
 def test_geotransolver_forward_returns_embedding_states(device):

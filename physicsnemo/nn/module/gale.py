@@ -23,6 +23,8 @@ geometry and global context embeddings.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -34,7 +36,11 @@ import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.version_check import OptionalImport
 
 from .concrete_dropout import ConcreteDropout
-from .flare_attention import _flare_self_attention, _flare_self_attention_te
+from .flare_attention import (
+    FLAREPlusPlus,
+    _flare_self_attention,
+    _flare_self_attention_te,
+)
 from .mlp_layers import Mlp
 from .physics_attention import (
     PhysicsAttentionIrregularMesh,
@@ -761,8 +767,177 @@ class GALE_FA(nn.Module):
         return [self.out_dropout(_out) for _out in outputs]
 
 
+class GALE_FPP(FLAREPlusPlus):
+    r"""GeoTransolver adapter for FLARE++ attention.
+
+    The FLARE++ token mixer is inherited directly from
+    :class:`~physicsnemo.nn.FLAREPlusPlus`. When GeoTransolver supplies geometry
+    or global context, this adapter cross-attends the physical token keys to
+    that context and mixes the result with the FLARE++ output. With no context,
+    its parameters and outputs are identical to the standalone attention layer.
+
+    Parameters
+    ----------
+    dim : int
+        Number of input and output channels.
+    heads : int, optional
+        Number of attention heads. Default is 8.
+    dim_head : int, optional
+        Number of channels per attention head. Default is 64.
+    dropout : float, optional
+        Output dropout rate. Default is 0.0.
+    n_global_queries : int, optional
+        Number of dynamic routing queries. Default is 64.
+    use_te : bool, optional
+        Transformer Engine is not currently supported. Default is ``False``.
+    context_dim : int, optional
+        Number of channels in each context token. A value of 0 disables context
+        cross-attention. Default is 0.
+    concrete_dropout : bool, optional
+        Whether to replace standard output dropout with Concrete Dropout.
+        Default is ``False``.
+    state_mixing_mode : {"weighted", "concat_project"}, optional
+        How to combine FLARE++ and context attention. Default is ``"weighted"``.
+    attn_scale : float | None, optional
+        Scale applied to attention scores. ``None`` uses the standard
+        ``1 / sqrt(dim_head)`` scale. Default is ``None``.
+
+    Forward
+    -------
+    x : tuple[torch.Tensor, ...]
+        Input streams with shape :math:`(B, N, C)`.
+    context : torch.Tensor | None, optional
+        Context with shape :math:`(B, H, S_c, C_c)`.
+
+    Outputs
+    -------
+    list[torch.Tensor]
+        One output of shape :math:`(B, N, C)` for each input stream.
+    """
+
+    def __init__(
+        self,
+        dim: int,
+        heads: int = 8,
+        dim_head: int = 64,
+        dropout: float = 0.0,
+        n_global_queries: int = 64,
+        use_te: bool = False,
+        context_dim: int = 0,
+        concrete_dropout: bool = False,
+        state_mixing_mode: Literal["weighted", "concat_project"] = "weighted",
+        attn_scale: float | None = None,
+    ) -> None:
+        if context_dim < 0:
+            raise ValueError(f"context_dim must be non-negative, got {context_dim}")
+        if state_mixing_mode not in ("weighted", "concat_project"):
+            raise ValueError(
+                f"Invalid state_mixing_mode: {state_mixing_mode!r}. "
+                "Expected 'weighted' or 'concat_project'."
+            )
+        super().__init__(
+            dim=dim,
+            heads=heads,
+            dim_head=dim_head,
+            dropout=dropout,
+            n_global_queries=n_global_queries,
+            use_te=use_te,
+            attn_scale=attn_scale,
+        )
+        self.context_dim = context_dim
+        self.state_mixing_mode = state_mixing_mode
+
+        if context_dim > 0:
+            self.cross_q = nn.Linear(dim_head, dim_head)
+            self.context_kv = nn.Linear(context_dim, 2 * dim_head)
+            if state_mixing_mode == "weighted":
+                self.state_mixing = nn.Parameter(torch.tensor(0.0))
+            else:
+                self.concat_project = nn.Sequential(
+                    nn.Linear(2 * dim_head, dim_head),
+                    nn.GELU(),
+                )
+
+        if concrete_dropout:
+            self.out_dropout = ConcreteDropout(
+                in_features=dim,
+                init_p=max(dropout, 0.05),
+            )
+
+    def forward(
+        self,
+        x: tuple[Float[torch.Tensor, "batch tokens channels"], ...],
+        context: Float[torch.Tensor, "batch heads context_slices context_dim"]
+        | None = None,
+    ) -> list[Float[torch.Tensor, "batch tokens channels"]]:
+        r"""Apply FLARE++ and optional GeoTransolver context attention.
+
+        Parameters
+        ----------
+        x : tuple[torch.Tensor, ...]
+            Non-empty tuple of tensors with shape :math:`(B, N, C)`.
+        context : torch.Tensor | None, optional
+            Context tensor with shape :math:`(B, H, S_c, C_c)`.
+
+        Returns
+        -------
+        list[torch.Tensor]
+            One tensor with shape :math:`(B, N, C)` per input stream.
+        """
+        if not torch.compiler.is_compiling():
+            if not x:
+                raise ValueError("Expected non-empty tuple of input tensors")
+            for index, tensor in enumerate(x):
+                if tensor.ndim != 3:
+                    raise ValueError(
+                        f"Expected 3D input tensor (B, N, C) at index {index}, "
+                        f"got shape {tuple(tensor.shape)}"
+                    )
+                if hasattr(tensor, "redistribute"):
+                    raise NotImplementedError(
+                        "GALE_FPP does not yet support token-sharded inputs; "
+                        "use replicated inputs with data parallelism."
+                    )
+            if context is not None and self.context_dim == 0:
+                raise ValueError(
+                    "Received context, but GALE_FPP was constructed with context_dim=0"
+                )
+
+        attention_and_keys = [self._compute_attention(tensor) for tensor in x]
+        outputs = [result[0] for result in attention_and_keys]
+
+        if context is not None:
+            context_k, context_v = self.context_kv(context).chunk(2, dim=-1)
+            cross_outputs = [
+                F.scaled_dot_product_attention(
+                    self.cross_q(result[1]),
+                    context_k,
+                    context_v,
+                    scale=self.scale,
+                )
+                for result in attention_and_keys
+            ]
+            if self.state_mixing_mode == "weighted":
+                weight = torch.sigmoid(self.state_mixing)
+                outputs = [
+                    weight * self_output + (1.0 - weight) * cross_output
+                    for self_output, cross_output in zip(
+                        outputs, cross_outputs, strict=True
+                    )
+                ]
+            else:
+                outputs = [
+                    self.concat_project(torch.cat((self_output, cross_output), dim=-1))
+                    for self_output, cross_output in zip(
+                        outputs, cross_outputs, strict=True
+                    )
+                ]
+
+        return [self._project_output(output) for output in outputs]
+
+
 class GALEBlock(nn.Module):
-    r"""Transformer encoder block using GALE attention.
+    r"""Transformer encoder block using configurable attention.
 
     This block replaces standard self-attention with the GALE (Geometry-Aware Latent
     Embeddings) attention mechanism, which combines physics-aware self-attention with
@@ -796,10 +971,11 @@ class GALEBlock(nn.Module):
         If ``None``, uses irregular-mesh GALE. Length-2 tuple enables 2D Conv2d
         projection; length-3 tuple enables 3D Conv3d projection (flattened
         :math:`N = H \times W` or :math:`H \times W \times D`). Default is ``None``.
-    attention_type : str, optional
+    attention_type : {"GALE", "GALE_FA", "GALE_FPP"}, optional
         Attention backend to use. ``"GALE"`` uses the standard physics-aware
-        slice attention; ``"GALE_FA"`` uses flash-attention variant.
-        Default is ``"GALE"``.
+        slice attention, ``"GALE_FA"`` uses fixed-query FLARE, and
+        ``"GALE_FPP"`` uses input-conditioned FLARE++ routing. Default is
+        ``"GALE"``.
     state_mixing_mode : str, optional
         How to blend self-attention and cross-attention outputs. ``"weighted"`` uses
         a learnable sigmoid-gated weighted sum. ``"concat_project"``
@@ -858,7 +1034,7 @@ class GALEBlock(nn.Module):
         plus: bool = False,
         context_dim: int = 0,
         spatial_shape: tuple[int, ...] | None = None,
-        attention_type: str = "GALE",
+        attention_type: Literal["GALE", "GALE_FA", "GALE_FPP"] = "GALE",
         concrete_dropout: bool = False,
         state_mixing_mode: str = "weighted",
     ) -> None:
@@ -935,10 +1111,22 @@ class GALEBlock(nn.Module):
                     concrete_dropout=concrete_dropout,
                     state_mixing_mode=state_mixing_mode,
                 )
+            case "GALE_FPP":
+                self.Attn = GALE_FPP(
+                    hidden_dim,
+                    heads=num_heads,
+                    dim_head=dim_head,
+                    dropout=dropout,
+                    n_global_queries=slice_num,
+                    use_te=use_te,
+                    context_dim=context_dim,
+                    concrete_dropout=concrete_dropout,
+                    state_mixing_mode=state_mixing_mode,
+                )
             case _:
                 raise ValueError(
                     f"Invalid attention type: {attention_type}. "
-                    f"Expected 'GALE' or 'GALE_FA'."
+                    f"Expected 'GALE', 'GALE_FA', or 'GALE_FPP'."
                 )
 
         # Feed-forward network with layer normalization
