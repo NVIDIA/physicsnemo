@@ -156,8 +156,8 @@ Grep -n "^class <ClassName>" physicsnemo/ --type py
 # 7b. Search by function name
 Grep -n "^def <func_name>" physicsnemo/ --type py
 
-# 7c. If not found where expected — check compat layer for renames
-Read physicsnemo/compat/__init__.py
+# 7c. If not found where expected — check the rename tables for moved paths
+Grep -n "<ClassName>" v2.0-MIGRATION-GUIDE.md CHANGELOG.md
 ```
 
 If a name isn't found anywhere, it may have been renamed. Do not emit it.
