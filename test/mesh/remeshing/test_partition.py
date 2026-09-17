@@ -257,6 +257,31 @@ class TestEmptyClusters:
         result = partition_cells(two_triangles_3d, seeds)
         assert result.cluster_normals[1].norm().item() == 0.0
 
+    def test_empty_cluster_normal_is_zero_float16(self):
+        """Empty reduced-precision clusters must not produce NaN normals."""
+        mesh = Mesh(
+            points=torch.tensor(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [1.0, 1.0, 0.0],
+                ],
+                dtype=torch.float16,
+            ),
+            cells=torch.tensor([[0, 1, 2], [1, 3, 2]]),
+        )
+        seeds = torch.tensor(
+            [[0.5, 0.5, 0.0], [100.0, 100.0, 100.0]], dtype=torch.float16
+        )
+
+        result = partition_cells(mesh, seeds)
+
+        assert result.cluster_normals.isfinite().all()
+        assert torch.equal(
+            result.cluster_normals[1], torch.zeros(3, dtype=torch.float16)
+        )
+
 
 ### Non-codimension-1 meshes ###
 

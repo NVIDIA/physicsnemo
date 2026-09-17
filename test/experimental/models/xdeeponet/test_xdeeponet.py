@@ -1208,5 +1208,65 @@ class TestDeepONetStress:
         torch.testing.assert_close(y_compiled, y_eager, rtol=1e-4, atol=1e-5)
 
 
+# ----------------------------------------------------------------------
+# AMP / autocast (GPU-guarded)
+# ----------------------------------------------------------------------
+
+
+class TestDeepONetAMP:
+    """``SpatialBranch`` trains under AMP/autocast (spectral conv forced fp32).
+
+    FFT-based spectral convolutions cannot run in autocast's reduced precision
+    (cuFFT lacks complex-half support), so
+    :meth:`~physicsnemo.experimental.models.xdeeponet.SpatialBranch._spectral`
+    evaluates them in float32 while the rest of the branch (lift, 1x1 conv,
+    UNet, decoder) uses autocast.  These tests drive a forward (and backward)
+    pass under :func:`torch.autocast` on CUDA to exercise that guard.  They are
+    skipped without a GPU because the autocast-disabled code path only runs on
+    CUDA (CPU autocast does not engage the cuda guard).
+    """
+
+    @pytest.mark.skipif(
+        not torch.cuda.is_available(),
+        reason="AMP autocast path requires CUDA (cuFFT fp32 guard)",
+    )
+    @pytest.mark.parametrize(
+        "builder",
+        [_wrapper_2d_fourier, _xfno_packed_3d],
+        ids=["fourier_packed_2d", "xfno_packed_3d"],
+    )
+    def test_autocast_forward(self, builder):
+        """Autocast forward runs, matches eager shape, and is finite."""
+        model, args = builder()
+        model = model.cuda()
+        args = tuple(a.cuda() for a in args)
+        _init_lazy(model, *args)
+        with torch.no_grad():
+            y_eager = model(*args)
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                y_amp = model(*args)
+        assert y_amp.shape == y_eager.shape
+        assert torch.isfinite(y_amp).all()
+
+    @pytest.mark.skipif(
+        not torch.cuda.is_available(),
+        reason="AMP autocast path requires CUDA (cuFFT fp32 guard)",
+    )
+    def test_autocast_backward(self):
+        """Autocast backward populates finite gradients (spectral path included)."""
+        model, args = _wrapper_2d_fourier()
+        model = model.cuda()
+        args = tuple(a.cuda() for a in args)
+        _init_lazy(model, *args)
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            y = model(*args)
+            loss = y.float().sum()
+        loss.backward()
+        grads = [p.grad for p in model.parameters() if p.requires_grad]
+        assert grads, "model has no trainable parameters"
+        assert all(g is not None for g in grads)
+        assert all(torch.isfinite(g).all() for g in grads)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

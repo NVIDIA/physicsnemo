@@ -23,7 +23,8 @@ from . import common
 
 @pytest.fixture
 def data_dir(nfs_data_dir):
-    return nfs_data_dir.joinpath("datasets/vortex_shedding/cylinder_flow")
+    # Resolve so the path stays valid after the test chdirs away.
+    return nfs_data_dir.joinpath("datasets/vortex_shedding/cylinder_flow").resolve()
 
 
 @requires_module(["tfrecord"])
@@ -32,12 +33,26 @@ def data_dir(nfs_data_dir):
     [("train", 1876, 10788), ("valid", 1896, 10908), ("test", 1923, 11070)],
 )
 def test_vortex_shedding_constructor(
-    data_dir, split, num_nodes, num_edges, device, pytestconfig
+    data_dir, split, num_nodes, num_edges, device, pytestconfig, monkeypatch, tmp_path
 ):
     from physicsnemo.datapipes.gnn.vortex_shedding_dataset import VortexSheddingDataset
 
     num_samples = 2
     num_steps = 4
+
+    # The dataset reads/writes edge_stats.json and node_stats.json in the
+    # CWD, and non-train splits require the stats computed by the train
+    # split. Isolate the CWD per test case and generate the stats here so
+    # each case is self-contained regardless of execution order.
+    monkeypatch.chdir(tmp_path)
+    if split != "train":
+        VortexSheddingDataset(
+            data_dir=data_dir,
+            split="train",
+            num_samples=num_samples,
+            num_steps=num_steps,
+        )
+
     dataset = VortexSheddingDataset(
         data_dir=data_dir,
         split=split,

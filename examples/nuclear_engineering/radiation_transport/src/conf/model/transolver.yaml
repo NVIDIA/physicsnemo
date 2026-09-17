@@ -31,6 +31,8 @@ mlp_ratio: 4
 dropout: 0.0
 use_te: false                                       # default false for portability; flip to true if Transformer Engine is installed.
 structured_shape: null
+activation_checkpointing: false                     # true checkpoints Transolver blocks during training
+checkpointing_ratio: 1.0                            # fraction of blocks to checkpoint when enabled
 
 # RTE-specific (stripped before instantiation in train.py::build_model)
 num_spatial_points: -1

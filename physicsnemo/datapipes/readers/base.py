@@ -29,7 +29,9 @@ from abc import ABC, abstractmethod
 from typing import Any, Iterator
 
 import torch
-from tensordict import TensorDict
+from tensordict import TensorDict, is_leaf_nontensor
+
+from physicsnemo.datapipes._rng import spawn_generator
 
 logger = logging.getLogger(__name__)
 
@@ -104,12 +106,19 @@ class Reader(ABC):
             - ``n_points``: Number of points to read from each target tensor
             - ``target_keys``: List of tensor keys to apply subsampling to
 
-            This allows configuration via Hydra. Readers that don't support
-            coordinated subsampling will ignore this parameter.
+            Supporting readers select a cyclic contiguous block, so every
+            point has equal inclusion probability while reads retain storage
+            locality. This allows configuration via Hydra. Readers that don't
+            support coordinated subsampling will ignore this parameter.
         """
         self.pin_memory = pin_memory
         self.include_index_in_metadata = include_index_in_metadata
         self._coordinated_subsampling_config = coordinated_subsampling
+        # Base seed + epoch for deterministic per-index RNG. See
+        # :meth:`_index_generator`. ``None`` means no seed was provided
+        # (random draws fall back to the global default RNG).
+        self._seed_base: int | None = None
+        self._epoch: int = 0
 
     @abstractmethod
     def _load_sample(self, index: int) -> dict[str, torch.Tensor]:
@@ -148,22 +157,27 @@ class Reader(ABC):
         """
         raise NotImplementedError
 
-    def _get_field_names(self) -> list[str]:
+    def _get_field_names(self) -> list[str | tuple[str, ...]]:
         """
         Return the list of field names in samples.
 
         Override this to provide field names without loading a sample.
-        Default implementation loads sample 0 and extracts keys.
+        Default implementation loads sample 0 and extracts its leaf keys;
+        fields inside nested groups are reported as tuple paths.
 
         Returns
         -------
-        list[str]
+        list[str | tuple[str, ...]]
             List of field names available in samples.
         """
         if len(self) == 0:
             return []
-        data = self._load_sample(0)
-        return list(data.keys())
+        td = TensorDict(self._load_sample(0))
+        ### ``is_leaf_nontensor`` keeps non-tensor entries (strings, None)
+        ### in the listing, as they were before nesting was supported.
+        return list(
+            td.keys(include_nested=True, leaves_only=True, is_leaf=is_leaf_nontensor)
+        )
 
     def _get_sample_metadata(self, index: int) -> dict[str, Any]:
         """
@@ -246,12 +260,12 @@ class Reader(ABC):
         if self.include_index_in_metadata:
             metadata["index"] = index
 
-        # Pin memory if requested
-        if self.pin_memory:
-            data_dict = {k: v.pin_memory() for k, v in data_dict.items()}
-
-        # Create TensorDict
+        # Create TensorDict (nested dicts become nested sub-TensorDicts)
         data = TensorDict(data_dict, device=torch.device("cpu"))
+
+        # Pin memory if requested; TensorDict.pin_memory walks every leaf
+        if self.pin_memory:
+            data = data.pin_memory()
 
         return data, metadata
 
@@ -279,28 +293,61 @@ class Reader(ABC):
                 raise RuntimeError(error_msg) from e
 
     def set_generator(self, generator: torch.Generator) -> None:
-        """Assign a ``torch.Generator`` for reproducible random sampling.
+        """Assign a base seed for reproducible, order-independent sampling.
 
-        Override in subclasses that use randomness (e.g. subsampling).
-        The default implementation is a no-op.
+        Stores ``generator.initial_seed()`` as the base seed. Per-sample
+        generators are then derived deterministically from
+        ``(base_seed, epoch, index)`` via :meth:`_index_generator`, so
+        random draws are reproducible regardless of the order in which
+        samples are read or which worker thread reads them.
+
+        Subclasses that use randomness should draw from
+        :meth:`_index_generator` rather than a shared generator. Readers
+        with no randomness inherit this harmlessly.
 
         Parameters
         ----------
         generator : torch.Generator
-            Generator to use for random draws.
+            Generator whose ``initial_seed()`` seeds all per-sample RNG.
         """
+        self._seed_base = generator.initial_seed()
 
     def set_epoch(self, epoch: int) -> None:
-        """Reseed the reader's RNG for a new epoch.
+        """Set the epoch used to vary per-sample RNG deterministically.
 
-        Override in subclasses that use randomness.
-        The default implementation is a no-op.
+        The epoch is folded into each sample's derived seed (see
+        :meth:`_index_generator`), so each epoch produces a different but
+        reproducible sequence.
 
         Parameters
         ----------
         epoch : int
             Current epoch number.
         """
+        self._epoch = epoch
+
+    def _index_generator(self, index: int) -> torch.Generator | None:
+        """Return a fresh generator seeded for sample *index* this epoch.
+
+        Derives an independent :class:`torch.Generator` from
+        ``(base_seed, epoch, index)``. Because the seed depends only on
+        those values, the draw for a given sample is identical regardless
+        of read order or worker thread. Returns ``None`` when no base
+        seed has been set (the unseeded fallback).
+
+        Parameters
+        ----------
+        index : int
+            Sample index.
+
+        Returns
+        -------
+        torch.Generator or None
+            A per-sample generator, or ``None`` if no seed was provided.
+        """
+        if self._seed_base is None:
+            return None
+        return spawn_generator(self._seed_base, self._epoch, index)
 
     def close(self) -> None:
         """

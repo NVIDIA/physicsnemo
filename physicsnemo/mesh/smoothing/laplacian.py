@@ -115,8 +115,8 @@ def smooth_laplacian(
 
     Notes
     -----
-    - Cotangent weights are used for codimension-1 manifolds (surfaces, curves)
-    - Uniform weights are used for higher codimension or volumetric meshes
+    - Cotangent weights are used for codimension-1 manifolds of dimension >= 2
+    - Uniform weights are used for curves, higher codimension, or volumetric meshes
     - Feature detection only works for codimension-1 manifolds where normals exist
     - Cell connectivity and all data fields are preserved (only points move)
     """
@@ -214,9 +214,10 @@ def smooth_laplacian(
         weight_sum.scatter_add_(0, edges[:, 0], edge_weights)
         weight_sum.scatter_add_(0, edges[:, 1], edge_weights)
 
-        ### Normalize by total weight per vertex
-        weight_sum = weight_sum.clamp(min=safe_eps(dtype))
-        laplacian = laplacian / weight_sum.unsqueeze(-1)
+        ### Normalize by total weight per vertex (in place, to actually reuse the
+        # pre-allocated buffers across iterations rather than reallocating each step).
+        weight_sum.clamp_(min=safe_eps(dtype))
+        laplacian /= weight_sum.unsqueeze(-1)
 
         ### Apply relaxation
         mesh.points = mesh.points + relaxation_factor * laplacian
@@ -232,6 +233,13 @@ def smooth_laplacian(
             if max_displacement < convergence_threshold:
                 break
 
+    ### The loop mutated mesh.points in place, so geometry caches derived from
+    ### point positions (cell_areas / cell_normals / cell_centroids, point_normals,
+    ### curvature, ...) are now stale. Invalidate them so callers recompute from the
+    ### smoothed geometry. Topology/adjacency caches depend only on `cells` (which
+    ### smoothing does not change), so they remain valid and are preserved.
+    mesh._cache["cell"] = mesh._cache["cell"].empty()
+    mesh._cache["point"] = mesh._cache["point"].empty()
     return mesh
 
 

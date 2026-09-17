@@ -634,3 +634,13 @@ class TestEdgeManifoldCheck3DRegression:
         assert mesh.is_manifold(check_level="facets") is True
         assert mesh.is_manifold(check_level="edges") is False
         assert mesh.is_manifold(check_level="full") is False
+
+
+def test_is_manifold_invalid_check_level_raises():
+    """A typo'd check_level (e.g. 'facet') must raise a clear ValueError, not
+    silently run the 'full' check."""
+    points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+    cells = torch.tensor([[0, 1, 2]])
+    mesh = Mesh(points=points, cells=cells)
+    with pytest.raises(ValueError, match="check_level"):
+        mesh.is_manifold(check_level="facet")

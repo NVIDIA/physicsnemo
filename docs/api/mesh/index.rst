@@ -180,6 +180,24 @@ Key Features
   tangent spaces
 - **Mesh operations**: subdivision (linear, Loop, Butterfly), smoothing,
   remeshing, repair
+- **Geometry transformations**: translation, rotation, scaling, dense point
+  displacement, compact control-point morphing, and global radial-basis
+  deformation
+- **Differentiable deformation energies**: strain, local and total measure,
+  inversion, closed-surface volume, and surface bending penalties
+- **Tessellation**: triangulate polygon soups into simplicial meshes (convex
+  fan with an ear-clip fallback for non-convex polygons), for example, using
+  ``Mesh.from_polygons``
+- **Mesh generation**:
+
+  - Fill a boundary ``Mesh`` with guaranteed-quality simplices using
+    ``tessellation.fill_interior``. Provides exact boundaries and provenance
+    data.
+  - Mesh an implicit domain (SDF, level set, or neural field) in any
+    dimension on CPU or GPU using ``generate.mesh_implicit_domain``. Robust
+    by construction and differentiable through
+    ``generate.refit_mesh_to_implicit``.
+  - Extract isosurfaces with ``generate.marching_cubes``.
 - **Spatial queries**: BVH-accelerated point containment and nearest-cell search
 - **Topology**: boundary detection, watertight/manifold checking, adjacency
   queries
@@ -199,6 +217,9 @@ Runnable Jupyter notebook tutorials are available in ``examples/minimal/mesh/``:
 4. **Neighbors & Spatial** -- adjacency queries, BVH, sampling, interpolation
 5. **Quality & Repair** -- validation, quality metrics, repair pipeline
 6. **ML Integration** -- batching, feature extraction, torch.compile, benchmarks
+7. **Domain Mesh** -- simulation domains, boundaries, transforms, validation
+8. **I/O, Interop & Serialization** -- PyVista conversion, tessellation,
+   native save/load
 
 
 API Reference
@@ -209,6 +230,8 @@ API Reference
 
    core
    io
+   tessellation
+   generate
    calculus
    curvature
    geometry
@@ -217,6 +240,7 @@ API Reference
    spatial
    sampling
    transformations
+   deformation
    subdivision
    smoothing
    remeshing

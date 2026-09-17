@@ -219,9 +219,11 @@ def sharp(
             contrib_spatial = (
                 orientations.unsqueeze(-1) * weights.unsqueeze(-1) * grad_phi
             )  # (n_matched, n_spatial_dims)
-            contrib_spatial_expanded = contrib_spatial.unsqueeze(
-                -1
-            )  # (n_matched, n_spatial_dims, 1)
+            contrib_spatial_expanded = contrib_spatial.view(
+                len(matched_edge_indices),
+                n_spatial_dims,
+                *([1] * (edge_1form.ndim - 1)),
+            )
             alpha_expanded = alpha_values.unsqueeze(1)  # (n_matched, 1, features...)
 
             contributions = (

@@ -95,6 +95,28 @@ def apply_loss_weight(
     return w.reshape(*w.shape, *([1] * (data_ndim - w.ndim)))
 
 
+def _as_broadcastable(
+    x: float | Float[Tensor, " *#shape"],
+    y: Float[Tensor, " *shape"],
+) -> Float[Tensor, " *#shape"]:
+    """Return ``x`` as a tensor broadcastable to ``y``.
+
+    A ``float`` becomes a scalar tensor; a ``Tensor`` must broadcast to the
+    shape of ``y``, otherwise a ``ValueError`` is raised.
+    """
+    x = torch.as_tensor(x)
+    try:
+        ok = torch.broadcast_shapes(x.shape, y.shape) == y.shape
+    except RuntimeError:
+        ok = False
+    if not ok:
+        raise ValueError(
+            f"First tensor of shape {tuple(x.shape)} must broadcast to the "
+            f"second tensor of shape {tuple(y.shape)}."
+        )
+    return x
+
+
 class StackedRandomGenerator:
     """
     Wrapper for ``torch.Generator`` that allows specifying a different random

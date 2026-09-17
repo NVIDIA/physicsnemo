@@ -70,6 +70,25 @@ class TestZarrReaderCoordinatedSubsampling:
         # Non-target arrays should have original size
         assert data["metadata_scalar"].shape == (1,)
 
+    def test_coordinated_subsampling_wraps_cyclically(self, tmp_path, monkeypatch):
+        zarr = pytest.importorskip("zarr")
+        root = zarr.open(tmp_path / "sample_000.zarr", mode="w")
+        root.create_array("values", data=np.arange(10, dtype=np.float32))
+        reader = dp.ZarrReader(
+            tmp_path,
+            group_pattern="sample_*.zarr",
+            coordinated_subsampling={"n_points": 4, "target_keys": ["values"]},
+        )
+        monkeypatch.setattr(
+            reader,
+            "_index_generator",
+            lambda _: torch.Generator().manual_seed(2),
+        )
+
+        data, _ = reader[0]
+
+        torch.testing.assert_close(data["values"], torch.tensor([8.0, 9.0, 0.0, 1.0]))
+
     def test_coordinated_subsampling_consistency(self, zarr_large_data_dir):
         """Test that coordinated subsampling is consistent across target keys."""
         reader = dp.ZarrReader(

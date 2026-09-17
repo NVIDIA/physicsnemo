@@ -25,7 +25,6 @@ from typing import TYPE_CHECKING, Any, Iterable, Optional
 
 import numpy as np
 import torch
-import yaml
 from torch import Tensor
 from torch.utils.data import Dataset
 
@@ -42,6 +41,7 @@ pyg = OptionalImport("torch_geometric")
 pyg_data = OptionalImport("torch_geometric.data")
 pv = OptionalImport("pyvista")
 vtk = OptionalImport("vtk")
+yaml = OptionalImport("yaml")
 
 
 logger = logging.getLogger(__name__)

@@ -16,7 +16,7 @@
 
 import torch
 
-from physicsnemo.experimental.models.geotransolver.context_projector import (
+from physicsnemo.models.geotransolver.context_projector import (
     ContextProjector,
 )
 

@@ -1,0 +1,93 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""AeroJEPA-specific building blocks (experimental).
+
+This package owns the AeroJEPA-specific contract — :class:`TokenSet` and
+:class:`EncoderOutput` dataclasses, the prototype-anchor utilities, and
+two ``TokenSet``-coupled batching helpers. The generic layers it composes
+live outside this package: the local point-transformer blocks
+(:class:`~physicsnemo.nn.LocalPointTransformerBlock`,
+:class:`~physicsnemo.nn.LocalTokenCrossAttentionBlock`) and query-coordinate
+embedding (:class:`~physicsnemo.nn.FourierPositionalEmbedding`) come from
+:mod:`physicsnemo.nn`; ``PointCloudTokenizer`` and the batch/gather/k-NN
+utilities come from :mod:`physicsnemo.experimental.nn` and are re-exported
+here for backward-compatible imports.
+
+API stability: experimental. Names and signatures may change between releases
+until the design graduates out of ``physicsnemo.experimental``.
+
+References
+----------
+Giral et al., "AeroJEPA: Learning Semantic Latent Representations for
+Scalable 3D Aerodynamic Field Modeling", preprint arXiv:2605.05586 (2026).
+"""
+
+from physicsnemo.experimental.nn import (
+    PointCloudTokenizer,
+    chunked_knn_indices,
+    compute_batch_offset_step,
+    counts_to_mask,
+    flatten_batched_coords,
+    flatten_padded_batch,
+    gather_rows,
+    masked_mean,
+    unflatten_to_padded,
+)
+
+from .prototype_anchors import (
+    build_context_prototype_anchors,
+    build_target_prototype_anchors,
+    ensure_context_prototype_anchors,
+    ensure_target_prototype_anchors,
+    load_context_prototype_anchors,
+    load_target_prototype_anchors,
+)
+from .token_utils import (
+    flatten_valid_token_features,
+    pad_token_sets,
+    reshape_token_features_for_sigreg,
+    trim_batched_tokens,
+)
+from .types import EncoderOutput, TokenSet
+
+__all__ = [
+    # Core dataclasses
+    "EncoderOutput",
+    "TokenSet",
+    # Re-exports from physicsnemo.experimental.nn
+    "PointCloudTokenizer",
+    "chunked_knn_indices",
+    "compute_batch_offset_step",
+    "counts_to_mask",
+    "flatten_batched_coords",
+    "flatten_padded_batch",
+    "gather_rows",
+    "masked_mean",
+    "unflatten_to_padded",
+    # TokenSet-coupled helpers (this package only)
+    "flatten_valid_token_features",
+    "pad_token_sets",
+    "reshape_token_features_for_sigreg",
+    "trim_batched_tokens",
+    # Prototype anchors
+    "build_context_prototype_anchors",
+    "build_target_prototype_anchors",
+    "ensure_context_prototype_anchors",
+    "ensure_target_prototype_anchors",
+    "load_context_prototype_anchors",
+    "load_target_prototype_anchors",
+]

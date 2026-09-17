@@ -33,8 +33,8 @@ import torch
 from jaxtyping import Float, Int
 from tensordict import TensorDict
 
-from physicsnemo.mesh.utilities._index_tuple_ops import unique_index_tuples
 from physicsnemo.mesh.utilities._tolerances import safe_eps
+from physicsnemo.utils._index_tuple_ops import unique_index_tuples
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -635,8 +635,14 @@ def _aggregate_point_data_to_facets(
         # Shape: (n_candidate_facets, n_vertices_per_facet, *data_shape)
         facet_point_data = tensor[candidate_facets]
 
-        ### Average over vertices to get candidate facet data
+        ### Average over vertices to get candidate facet data.
+        # Promote integer/bool point data to float first: torch.mean rejects integer
+        # dtypes, and a mean of integers is real-valued anyway. Complex data is
+        # already a valid mean dtype, so it must not be promoted: casting it to a
+        # real dtype would silently discard the imaginary part.
         # Shape: (n_candidate_facets, *data_shape)
+        if not (facet_point_data.is_floating_point() or facet_point_data.is_complex()):
+            facet_point_data = facet_point_data.to(torch.float64)
         candidate_facet_data = facet_point_data.mean(dim=1)
 
         ### Aggregate to unique facets using scatter_aggregate

@@ -76,7 +76,7 @@ def test_step(model, dataloader, log, cfg, swe_nl_node, device, option):
             pred_y = out.reshape(y.shape)
 
             if cfg.loss.derivative == "original":
-                loss_pde = PINO_loss_swe_nonlin(
+                loss_pde = pino_loss_swe_nonlin(
                     out,
                     g=cfg.data.g,
                     nu=cfg.data.nu,

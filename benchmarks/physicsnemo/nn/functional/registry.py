@@ -21,9 +21,15 @@ from physicsnemo.nn.functional.derivatives import (
     MeshGreenGaussGradient,
     MeshlessFDDerivatives,
     MeshLSQGradient,
+    RectilinearGridCurl,
+    RectilinearGridDivergence,
     RectilinearGridGradient,
+    RectilinearGridLaplacian,
     SpectralGridGradient,
+    UniformGridCurl,
+    UniformGridDivergence,
     UniformGridGradient,
+    UniformGridLaplacian,
 )
 from physicsnemo.nn.functional.fourier_spectral import (
     IRFFT,
@@ -34,35 +40,69 @@ from physicsnemo.nn.functional.fourier_spectral import (
     Real,
     ViewAsComplex,
 )
-from physicsnemo.nn.functional.geometry import SignedDistanceField
+from physicsnemo.nn.functional.geometry import (
+    DisplacePoints,
+    FarthestPointSampling,
+    FreeFormDeformPoints,
+    MeshPoissonDiskSample,
+    MeshToVoxelFraction,
+    MorphPoints,
+    RadialBasisFunctionDeformPoints,
+    RayMeshIntersect,
+    ShrinkwrapPoints,
+    SignedDistanceField,
+    SobolevDeformPoints,
+)
 from physicsnemo.nn.functional.interpolation import (
     GridToPointInterpolation,
     PointToGridInterpolation,
 )
 from physicsnemo.nn.functional.neighbors import KNN, RadiusSearch
+from physicsnemo.nn.functional.normalization import SafeNormalize
 from physicsnemo.nn.functional.regularization_parameterization import (
     DropPath,
     WeightFact,
 )
+from physicsnemo.nn.functional.weighted_multinomial import WeightedMultinomial
 
 # FunctionSpec classes listed here must implement ``make_inputs_forward`` for ASV.
 # ``make_inputs_backward`` is optional and only used when backward benchmarks run.
 FUNCTIONAL_SPECS: tuple[type[FunctionSpec], ...] = (
+    # Sampling.
+    WeightedMultinomial,
     # Regularization / parameterization.
     DropPath,
     WeightFact,
+    # Normalization.
+    SafeNormalize,
     # Neighbor queries.
     KNN,
     RadiusSearch,
     # Derivatives.
     UniformGridGradient,
+    RectilinearGridDivergence,
+    RectilinearGridCurl,
+    RectilinearGridLaplacian,
     RectilinearGridGradient,
     MeshLSQGradient,
     MeshGreenGaussGradient,
     SpectralGridGradient,
     MeshlessFDDerivatives,
+    UniformGridDivergence,
+    UniformGridCurl,
+    UniformGridLaplacian,
     # Geometry.
+    DisplacePoints,
+    MorphPoints,
+    RadialBasisFunctionDeformPoints,
+    FreeFormDeformPoints,
+    ShrinkwrapPoints,
+    FarthestPointSampling,
+    MeshPoissonDiskSample,
+    MeshToVoxelFraction,
+    RayMeshIntersect,
     SignedDistanceField,
+    SobolevDeformPoints,
     # Interpolation.
     GridToPointInterpolation,
     PointToGridInterpolation,
@@ -75,5 +115,9 @@ FUNCTIONAL_SPECS: tuple[type[FunctionSpec], ...] = (
     Real,
     Imag,
 )
+
+# Remeshing uses a dedicated benchmark that measures the complete Mesh-level
+# operation, including topology cleanup. The current benchmark measures
+# synchronized CUDA execution; see ``benchmarks/physicsnemo/mesh/remeshing.py``.
 
 __all__ = ["FUNCTIONAL_SPECS"]

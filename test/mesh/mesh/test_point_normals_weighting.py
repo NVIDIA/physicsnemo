@@ -390,6 +390,23 @@ class TestIsolatedPoints:
         for i in range(3):
             assert normals[i].norm() > 0.9
 
+    def test_isolated_float16_point_has_zero_normal(self):
+        points = torch.tensor(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [2.0, 2.0, 2.0],
+            ],
+            dtype=torch.float16,
+        )
+        mesh = Mesh(points=points, cells=torch.tensor([[0, 1, 2]]))
+
+        normals = mesh.compute_point_normals(weighting="unweighted")
+
+        assert normals.isfinite().all()
+        assert torch.equal(normals[3], torch.zeros(3, dtype=torch.float16))
+
 
 class TestCaching:
     """Tests for caching behavior of point normals."""
@@ -409,3 +426,11 @@ class TestCaching:
         # Second access uses cache
         normals2 = mesh.point_normals
         assert torch.equal(normals1, normals2)
+
+
+def test_invalid_weighting_raises():
+    """A typo'd weighting (e.g. 'areas') must raise a clear ValueError, not crash
+    later with UnboundLocalError from the unbound weights buffer."""
+    mesh = create_triangle_surface_3d()
+    with pytest.raises(ValueError, match="weighting"):
+        mesh.compute_point_normals(weighting="areas")

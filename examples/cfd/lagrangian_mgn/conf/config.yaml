@@ -93,7 +93,6 @@ loggers:
     mode: disabled
     dir: ${output}
     id:
-    wandb_key:
     watch_model: false
   tensorboard:
     _target_: loggers.TensorBoardLogger

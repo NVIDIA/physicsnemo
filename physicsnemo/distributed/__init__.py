@@ -23,6 +23,7 @@ import torch
 
 from .autograd import all_gather_v, gather_v, indexed_all_to_all_v, scatter_v
 from .config import ProcessGroupConfig, ProcessGroupNode
+from .fused_all_reduce import fused_all_reduce
 
 # Load and register custom ops:
 from .manager import (

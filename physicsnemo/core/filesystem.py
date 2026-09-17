@@ -19,8 +19,11 @@ import json
 import logging
 import os
 import re
-import urllib
+import tempfile
+import urllib.parse
+import warnings
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 
 import fsspec
@@ -150,9 +153,68 @@ def _download_ngc_model_file(path: str, out_path: str, timeout: int = 300) -> st
     return out_path
 
 
+def _file_sha256(path: str | os.PathLike) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _validate_checksum(path: str | os.PathLike, checksum: str) -> None:
+    if re.fullmatch(r"[0-9a-fA-F]{64}", checksum) is None:
+        raise ValueError("checksum must be a 64-character SHA-256 hex digest")
+    actual = _file_sha256(path)
+    if actual.lower() != checksum.lower():
+        raise ValueError(
+            f"Checksum mismatch for {path}: expected {checksum}, got {actual}"
+        )
+
+
+def _install_in_cache(
+    fetch: Callable[[str], object],
+    cache_path: str | os.PathLike,
+    checksum: str | None,
+) -> None:
+    """Fetch, optionally verify, and atomically install a single cache file."""
+    cache_file = Path(cache_path)
+    # Staging beside the cache file keeps the final replacement atomic.
+    with tempfile.NamedTemporaryFile(
+        dir=cache_file.parent,
+        prefix=f"{cache_file.name}.",
+        delete=False,
+    ) as staged:
+        staged_path = Path(staged.name)
+
+    try:
+        fetch(str(staged_path))
+        if checksum is not None:
+            _validate_checksum(staged_path, checksum)
+        os.replace(staged_path, cache_file)
+    finally:
+        staged_path.unlink(missing_ok=True)
+
+
 def _download_cached(
-    path: str, recursive: bool = False, local_cache_path: str = LOCAL_CACHE
+    path: str,
+    recursive: bool = False,
+    local_cache_path: str | os.PathLike = LOCAL_CACHE,
+    checksum: str | None = None,
 ) -> str:
+    if checksum is not None and recursive:
+        raise ValueError("checksum verification is only supported for individual files")
+    if checksum is not None and re.fullmatch(r"[0-9a-fA-F]{64}", checksum) is None:
+        raise ValueError("checksum must be a 64-character SHA-256 hex digest")
+    if (
+        checksum is not None
+        and path.startswith("ngc://models/")
+        and path.endswith(".zip")
+    ):
+        raise ValueError(
+            "checksum verification is not supported for automatically extracted "
+            "NGC archives"
+        )
+
     sha = hashlib.sha256(path.encode())
     filename = sha.hexdigest()
     try:
@@ -173,32 +235,74 @@ def _download_cached(
     cache_path = os.path.join(local_cache_path, filename)
 
     url = urllib.parse.urlparse(path)
+    if url.scheme == "http":
+        warnings.warn(
+            "Downloading over plain HTTP; prefer HTTPS. A checksum can verify "
+            "file integrity.",
+            UserWarning,
+            stacklevel=2,
+        )
 
-    # TODO watch for race condition here
-    if not os.path.exists(cache_path):
-        logger.debug("Downloading %s to cache: %s", path, cache_path)
-        if url.scheme in ("s3", "msc"):
-            fs = fsspec.filesystem(fsspec.utils.get_protocol(path))
-            fs.get(path, cache_path, recursive=recursive)
-        elif path.startswith("ngc://models/"):
-            path = _download_ngc_model_file(path, cache_path)
-            return path
-        elif url.scheme == "http":
-            # urllib.request.urlretrieve(path, cache_path)
-            # TODO: Check if this supports directory fetches
-            response = requests.get(path, stream=True, timeout=5)
-            with open(cache_path, "wb") as output:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        output.write(chunk)
-        elif url.scheme == "file":
-            path = os.path.join(url.netloc, url.path)
-            return path
-        else:
-            return path
+    cache_available = os.path.exists(cache_path)
+    if cache_available and checksum is not None:
+        try:
+            _validate_checksum(cache_path, checksum)
+        except ValueError:
+            logger.warning(
+                "Refetching cached file with an unexpected checksum: %s", path
+            )
+            # Leave the shared path untouched until a verified replacement is ready.
+            cache_available = False
 
-    else:
+    if cache_available:
         logger.debug("Opening from cache: %s", cache_path)
+        return cache_path
+
+    logger.debug("Downloading %s to cache: %s", path, cache_path)
+    if url.scheme in ("s3", "msc"):
+        fs = fsspec.filesystem(fsspec.utils.get_protocol(path))
+        if recursive:
+            fs.get(path, cache_path, recursive=True)
+        else:
+            _install_in_cache(
+                lambda destination: fs.get(path, destination),
+                cache_path,
+                checksum,
+            )
+    elif path.startswith("ngc://models/"):
+        if path.endswith(".zip"):
+            return _download_ngc_model_file(path, cache_path)
+        _install_in_cache(
+            lambda destination: _download_ngc_model_file(path, destination),
+            cache_path,
+            checksum,
+        )
+    elif url.scheme in ("http", "https"):
+
+        def fetch_over_http(destination: str) -> None:
+            with requests.get(path, stream=True, timeout=5) as response:
+                response_url = getattr(response, "url", path)
+                if (
+                    url.scheme == "https"
+                    and urllib.parse.urlparse(response_url).scheme != "https"
+                ):
+                    raise ValueError("HTTPS download redirected to a non-HTTPS URL")
+                response.raise_for_status()
+                with open(destination, "wb") as output:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            output.write(chunk)
+
+        _install_in_cache(fetch_over_http, cache_path, checksum)
+    elif url.scheme == "file":
+        path = os.path.join(url.netloc, url.path)
+        if checksum is not None:
+            _validate_checksum(path, checksum)
+        return path
+    else:
+        if checksum is not None:
+            _validate_checksum(path, checksum)
+        return path
 
     return cache_path
 
@@ -212,7 +316,8 @@ class Package:
     Presently one can use Package with the following directories:
     - Package("/path/to/local/directory") = local file system
     - Package("s3://bucket/path/to/directory") = object store file system
-    - Package("http://url/path/to/directory") = http file system
+    - Package("http://url/path/to/directory") = HTTP file system (not recommended)
+    - Package("https://url/path/to/directory") = HTTPS file system
     - Package("ngc://model/<org_id/team_id/model_id>@<version>") = ngc model file system
 
     Args:
@@ -224,13 +329,18 @@ class Package:
         self.root = root
         self.seperator = seperator
 
-    def get(self, path: str, recursive: bool = False) -> str:
+    def get(
+        self, path: str, recursive: bool = False, checksum: str | None = None
+    ) -> str:
         """Get a local path to the item at ``path``
 
         ``path`` might be a remote file, in which case it is downloaded to a
-        local cache at $LOCAL_CACHE or $HOME/.cache/physicsnemo first.
+        local cache at $LOCAL_CACHE or $HOME/.cache/physicsnemo first. Pass a
+        SHA-256 ``checksum`` to verify an individual file before it is used.
         """
-        return _download_cached(self._fullpath(path), recursive=recursive)
+        return _download_cached(
+            self._fullpath(path), recursive=recursive, checksum=checksum
+        )
 
     def _fullpath(self, path):
         return self.root + self.seperator + path

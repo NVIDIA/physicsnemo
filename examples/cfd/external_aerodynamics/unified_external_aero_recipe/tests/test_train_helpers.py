@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for `src/train.py`'s private TensorDict-aware walkers and for `src/output_normalize.py`.
+"""Unit tests for `src/train.py`'s private TensorDict-aware helpers and for `src/output_normalize.py`.
 
 ``TensorDict`` is not a ``dict`` subclass, so the bare
 ``isinstance(obj, dict)`` branches in the recipe's recursive helpers
@@ -22,12 +22,6 @@ must be paired with explicit ``isinstance(obj, TensorDict)`` branches
 for TD inputs to be walked at all. These tests pin that explicit
 handling for:
 
-- :func:`train._recursive_to_device`: must move TensorDict leaves to
-  the requested device, including when the TD is nested under a plain
-  dict. The tests assert ``result.device == cpu`` -- a freshly built
-  ``TensorDict(..., batch_size=[N])`` has ``device is None``, and
-  ``td.to("cpu")`` updates ``.device``, so this assertion fails if the
-  walker skips the TD branch.
 - :func:`train._walk_batch_for_logging`: must yield ``(name, tensor)``
   pairs from TensorDict leaves -- including correctly producing dotted
   paths for nested TDs via ``TD.flatten_keys('.')``.
@@ -35,6 +29,14 @@ handling for:
   model output (``Mesh`` or ``(B, N, C)`` tensor) to a per-target
   TensorDict, with clear error messages on shape / channel-count
   mismatches.
+- :func:`train._reduce_and_average`: averages rank-local loss / metric
+  sums over the global sample count (used per step and per epoch); its
+  single-process path must equal plain ``total_loss / n`` + per-leaf
+  ``sum / n`` averaging.
+
+(The analogous tests for the shared, tensorboard-free
+:func:`utils.recursive_to_device` live in ``test_utils.py``, outside
+this module's tensorboard skip guard.)
 """
 
 from __future__ import annotations
@@ -51,61 +53,13 @@ from tensordict import TensorDict
 ### directly (no skip).
 pytest.importorskip("tensorboard")
 
-from train import (  # noqa: E402  -- after the importorskip guard
-    _recursive_to_device,
+from output_normalize import normalize_output_to_tensordict  # noqa: E402
+from train import (  # noqa: E402  -- after the skip guard
+    _reduce_and_average,
     _walk_batch_for_logging,
 )
-from output_normalize import normalize_output_to_tensordict  # noqa: E402
-from physicsnemo.mesh import (  # noqa: E402  -- after the importorskip guard
-    DomainMesh,
-    Mesh,
-)
 
-
-### ---------------------------------------------------------------------------
-### _recursive_to_device
-### ---------------------------------------------------------------------------
-
-
-class TestRecursiveToDevice:
-    """Tests for `_recursive_to_device`."""
-
-    def test_tensordict_input_moves_to_device(self):
-        """Bare TD input goes through `.to(device)`."""
-        cpu = torch.device("cpu")
-        td = TensorDict(
-            {"pressure": torch.zeros(4), "wss": torch.zeros(4, 3)},
-            batch_size=[4],
-        )
-        ### Baseline: TD with no explicit device has .device is None.
-        assert td.device is None
-
-        result = _recursive_to_device(td, cpu)
-        assert isinstance(result, TensorDict)
-        ### `.to(cpu)` sets `.device`, so a non-None `.device` here is
-        ### proof the walker recursed into the TD branch (a skipped TD
-        ### would leave `.device` at its initial `None`).
-        assert result.device == cpu
-        assert result["pressure"].device == cpu
-        assert result["wss"].device == cpu
-        assert set(result.keys()) == {"pressure", "wss"}
-
-    def test_dict_with_nested_tensordict(self):
-        """Plain dict containing a TD: walker recurses into the dict, then
-        the TD branch picks up the inner TD."""
-        cpu = torch.device("cpu")
-        batch = {
-            "forward_kwargs": {"x": torch.zeros(2, 3)},
-            "targets": TensorDict({"pressure": torch.zeros(4)}, batch_size=[4]),
-        }
-        assert batch["targets"].device is None
-
-        result = _recursive_to_device(batch, cpu)
-        assert isinstance(result, dict)
-        assert isinstance(result["targets"], TensorDict)
-        assert result["targets"].device == cpu
-        assert result["forward_kwargs"]["x"].device == cpu
-
+from physicsnemo.mesh import Mesh  # noqa: E402  -- after the importorskip guard
 
 ### ---------------------------------------------------------------------------
 ### _walk_batch_for_logging
@@ -225,3 +179,68 @@ class TestNormalizeOutputToTensordict:
         mesh = Mesh(points=torch.randn(7, 3), point_data={"other": torch.randn(7)})
         with pytest.raises(KeyError, match="missing target fields"):
             normalize_output_to_tensordict(mesh, target_config, "mesh")
+
+
+### ---------------------------------------------------------------------------
+### _reduce_and_average
+### ---------------------------------------------------------------------------
+
+
+class TestReduceAndAverage:
+    """Tests for `_reduce_and_average` (single-process path).
+
+    The distributed branch is gated on an initialized process group with
+    ``world_size > 1``; with no group initialized these tests exercise the
+    pure-local path, which must stay equivalent to the previous
+    ``total_loss / n`` + per-leaf ``sum / n`` averaging it replaced. The
+    collective branch mirrors the already-shipped ``infer._allreduce_sums``
+    and is validated by inspection.
+    """
+
+    @staticmethod
+    def _epoch_sums() -> tuple[TensorDict, TensorDict]:
+        """A representative pair of 0-D (epoch-accumulated) sum TensorDicts."""
+        losses_td = TensorDict(
+            {"pressure": torch.tensor(6.0), "wss": torch.tensor(9.0)},
+        )
+        metrics_td = TensorDict(
+            {"pressure_l2": torch.tensor(3.0), "wss_mae": torch.tensor(12.0)},
+        )
+        return losses_td, metrics_td
+
+    def test_single_process_divides_sums_by_local_count(self):
+        """No process group: global average == local sum / n_local.
+
+        ``loss_sum`` is passed as a 0-D tensor (matching the on-device epoch
+        accumulator); the reducer returns Python floats.
+        """
+        losses_td, metrics_td = self._epoch_sums()
+        avg_loss, avg_losses, avg_metrics = _reduce_and_average(
+            torch.tensor(15.0), losses_td, metrics_td, 3, device="cpu"
+        )
+        assert avg_loss == pytest.approx(5.0)
+        assert avg_losses == pytest.approx({"pressure": 2.0, "wss": 3.0})
+        assert avg_metrics == pytest.approx({"pressure_l2": 1.0, "wss_mae": 4.0})
+
+    def test_none_sentinel_returns_loss_only(self):
+        """The "no steps seeded" sentinel (either TD ``None``) yields (loss / n, {}, {})."""
+        loss, losses, metrics = _reduce_and_average(
+            torch.tensor(8.0), None, None, 2, device="cpu"
+        )
+        assert loss == pytest.approx(4.0)
+        assert losses == {} and metrics == {}
+        ### A single ``None`` is enough to trip the sentinel.
+        losses_td, _ = self._epoch_sums()
+        loss, losses, metrics = _reduce_and_average(
+            torch.tensor(8.0), losses_td, None, 2, device="cpu"
+        )
+        assert loss == pytest.approx(4.0)
+        assert losses == {} and metrics == {}
+
+    def test_zero_local_count_avoids_zero_division(self):
+        """``n_local == 0`` (a step-less epoch) divides by 1, not 0."""
+        loss, losses, metrics = _reduce_and_average(
+            torch.tensor(7.0), None, None, 0, device="cpu"
+        )
+        assert loss == pytest.approx(7.0)
+        assert losses == {} and metrics == {}

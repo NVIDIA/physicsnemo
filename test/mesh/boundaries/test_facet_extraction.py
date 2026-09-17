@@ -328,6 +328,53 @@ class TestDataInheritance:
                 rtol=1e-5,
             ), f"Edge [{v0}, {v1}] expected {expected}"
 
+    @pytest.mark.parametrize(
+        "data_source",
+        [pytest.param("cells", id="cells"), pytest.param("points", id="points")],
+    )
+    def test_complex_data_inheritance_preserves_imaginary_part(self, data_source):
+        """Regression: complex fields survive both data-inheritance routes.
+
+        Complex tensors are not "floating point" by ``torch``'s definition, so
+        both the cell-to-facet scatter and the point-to-facet vertex average
+        previously promoted them to float64 like an integer field, discarding
+        the imaginary part. Both routes are settings of one public method, so
+        they must agree.
+        """
+        ### Two triangles sharing edge [1, 2]
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+        cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
+
+        if data_source == "cells":
+            # Both triangles bound the shared edge: mean(1+2j, 3+6j) = 2+4j.
+            mesh = Mesh(
+                points=points,
+                cells=cells,
+                cell_data={"impedance": torch.tensor([1 + 2j, 3 + 6j])},
+            )
+            expected = torch.tensor(2 + 4j)
+        else:
+            # The shared edge averages its endpoints: mean(2+2j, 4+4j) = 3+3j.
+            mesh = Mesh(
+                points=points,
+                cells=cells,
+                point_data={
+                    "impedance": torch.tensor([1 + 1j, 2 + 2j, 4 + 4j, 8 + 8j])
+                },
+            )
+            expected = torch.tensor(3 + 3j)
+
+        facet_mesh = mesh.get_facet_mesh(data_source=data_source)
+
+        shared_edge_idx = torch.where(
+            (facet_mesh.cells[:, 0] == 1) & (facet_mesh.cells[:, 1] == 2)
+        )[0]
+        assert len(shared_edge_idx) == 1
+
+        impedance = facet_mesh.cell_data["impedance"]
+        assert impedance.dtype == torch.complex64
+        torch.testing.assert_close(impedance[shared_edge_idx[0]], expected)
+
     def test_multidimensional_data_aggregation(self):
         """Test that multidimensional face data is aggregated correctly."""
         ### Create two triangles
@@ -1228,3 +1275,33 @@ class TestFacetExtractionParametrized:
             n_spatial_dims,
         ), f"Velocity shape mismatch: {facet_mesh_cd.cell_data['velocity'].shape=}"
         assert_on_device(facet_mesh_cd.cell_data["velocity"], device)
+
+
+def test_facet_aggregation_handles_integer_data():
+    """Regression: integer/bool data (e.g. material/region IDs) must aggregate onto
+    facets without crashing and without integer-division truncation. Previously the
+    'mean' path raised (safe_eps(int64) -> torch.finfo) for cell data, and .mean(dim=1)
+    raised for point data; integers are now promoted to float for the mean.
+    """
+    # Two triangles sharing edge (1, 2); the shared facet averages both parents.
+    points = torch.tensor(
+        [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]], dtype=torch.float32
+    )
+    cells = torch.tensor([[0, 1, 2], [1, 3, 2]], dtype=torch.int64)
+    mesh = Mesh(points=points, cells=cells)
+    mesh.cell_data["material_id"] = torch.tensor([1, 2], dtype=torch.int64)
+    mesh.point_data["region"] = torch.tensor([1, 1, 2, 2], dtype=torch.int64)
+
+    # Cell-sourced: shared edge = mean(1, 2) = 1.5 (not int-truncated to 1).
+    facet_cells = mesh.get_facet_mesh(data_source="cells", data_aggregation="mean")
+    agg_cells = facet_cells.cell_data["material_id"]
+    assert torch.is_floating_point(agg_cells)
+    assert torch.isclose(agg_cells, torch.full_like(agg_cells, 1.5)).any(), (
+        f"shared-facet mean 1.5 missing: {agg_cells=}"
+    )
+
+    # Point-sourced: shared edge (1,2) = mean(region[1]=1, region[2]=2) = 1.5.
+    facet_pts = mesh.get_facet_mesh(data_source="points", data_aggregation="mean")
+    agg_pts = facet_pts.cell_data["region"]
+    assert torch.is_floating_point(agg_pts)
+    assert torch.isclose(agg_pts, torch.full_like(agg_pts, 1.5)).any()

@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import importlib.metadata
 import inspect
@@ -27,12 +28,14 @@ import os
 import re
 import tarfile
 import tempfile
+import uuid
 import warnings
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, Optional, Set, Union
 
 import torch
+from fsspec.implementations.local import LocalFileSystem
 
 from physicsnemo.core.filesystem import _download_cached, _get_fs
 from physicsnemo.core.meta import ModelMetaData
@@ -67,6 +70,39 @@ def _load_state_dict_with_logging(
             f"Unexpected keys when loading {module.__class__.__name__}: {unexpected_keys}"
         )
     return missing_keys, unexpected_keys
+
+
+@contextlib.contextmanager
+def _atomic_write(fs, file_name: str):
+    """Open ``file_name`` on ``fs`` for writing so the destination never holds a partial file.
+
+    The data is written to a sibling temporary name and moved into place once
+    the ``with`` block exits cleanly, so a process killed mid-write (e.g. a job
+    hitting its wall-time limit) leaves either the previous complete file or
+    the new one, never a truncated archive. On a local filesystem the final
+    step is an atomic ``os.replace``; on remote filesystems it is ``fs.mv``,
+    which is only as atomic as the backend makes it. A kill between the two
+    steps can leave a stray ``<file_name>.tmp-*`` file behind; the destination
+    is unaffected.
+    """
+    tmp_name = f"{file_name}.tmp-{uuid.uuid4().hex}"
+    try:
+        with fs.open(tmp_name, "wb") as f:
+            yield f
+        if isinstance(fs, LocalFileSystem):
+            # os.replace overwrites atomically on every platform; fs.mv does not.
+            os.replace(fs._strip_protocol(tmp_name), fs._strip_protocol(file_name))
+        else:
+            fs.mv(tmp_name, file_name)
+    except BaseException:
+        try:
+            if fs.exists(tmp_name):
+                fs.rm(tmp_name)
+        except Exception as exc:
+            logging.getLogger("core.module").warning(
+                "Could not remove temporary checkpoint file %s: %s", tmp_name, exc
+            )
+        raise
 
 
 def _ignore_device_buffer_keys(module, incompatible_keys):
@@ -259,17 +295,20 @@ class Module(torch.nn.Module):
 
     @staticmethod
     def _safe_members(tar, local_path):
+        extraction_root = Path(local_path).resolve()
         for member in tar.getmembers():
-            if (
-                ".." in member.name
-                or os.path.isabs(member.name)
-                or os.path.realpath(os.path.join(local_path, member.name)).startswith(
-                    os.path.realpath(local_path)
+            destination = (extraction_root / member.name).resolve()
+            stays_within_root = (
+                destination == extraction_root or extraction_root in destination.parents
+            )
+            is_supported_type = member.isfile() or member.isdir()
+            if not stays_within_root or not is_supported_type:
+                logging.warning(
+                    "Skipping archive member which goes above the archive parent: %s",
+                    member.name,
                 )
-            ):
-                yield member
-            else:
-                print(f"Skipping potentially malicious file: {member.name}")
+                continue
+            yield member
 
     @classmethod
     def _backward_compat_arg_mapper(
@@ -580,32 +619,24 @@ class Module(torch.nn.Module):
         fs = _get_fs(file_name)
 
         if not legacy_format:
-            # Save in zip format (default)
-            try:
-                with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
-                    tmp_path = tmp.name
+            # Save in zip format (default), written straight to the destination
+            with (
+                _atomic_write(fs, file_name) as f,
+                zipfile.ZipFile(f, "w", zipfile.ZIP_STORED) as archive,
+            ):
+                # Save model state dict
+                state_dict_buffer = io.BytesIO()
+                _sd = _state_dict if _state_dict is not None else self.state_dict()
+                torch.save(_sd, state_dict_buffer)
+                archive.writestr("model.pt", state_dict_buffer.getvalue())
 
-                with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_STORED) as archive:
-                    # Save model state dict
-                    state_dict_buffer = io.BytesIO()
-                    _sd = _state_dict if _state_dict is not None else self.state_dict()
-                    torch.save(_sd, state_dict_buffer)
-                    archive.writestr("model.pt", state_dict_buffer.getvalue())
+                # Save args
+                args_str = json.dumps(_args)
+                archive.writestr("args.json", args_str)
 
-                    # Save args
-                    args_str = json.dumps(_args)
-                    archive.writestr("args.json", args_str)
-
-                    # Save metadata
-                    metadata_str = json.dumps(metadata_info)
-                    archive.writestr("metadata.json", metadata_str)
-
-                # Upload to final destination
-                fs.put(tmp_path, file_name)
-            finally:
-                # Clean up temporary file
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
+                # Save metadata
+                metadata_str = json.dumps(metadata_info)
+                archive.writestr("metadata.json", metadata_str)
         else:
             # Save in legacy tar format
             with tempfile.TemporaryDirectory() as temp_dir:
@@ -623,13 +654,14 @@ class Module(torch.nn.Module):
                 with open(local_path / "metadata.json", "w") as f:
                     json.dump(metadata_info, f)
 
-                # Create tar archive
-                with tarfile.open(local_path / "model.tar", "w") as tar:
+                # Create tar archive, written straight to the destination
+                # ("w|" streams, so remote file objects need not be seekable)
+                with (
+                    _atomic_write(fs, file_name) as f,
+                    tarfile.open(fileobj=f, mode="w|") as tar,
+                ):
                     for file in local_path.iterdir():
                         tar.add(str(file), arcname=file.name)
-
-                # Upload to final destination
-                fs.put(local_path / "model.tar", file_name)
 
     @staticmethod
     def _detect_checkpoint_format(file_path: str) -> str:

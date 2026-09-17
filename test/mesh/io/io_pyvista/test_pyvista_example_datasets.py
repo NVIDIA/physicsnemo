@@ -23,6 +23,45 @@ pv = pytest.importorskip("pyvista")
 from physicsnemo.mesh.io.io_pyvista import from_pyvista  # noqa: E402
 
 
+def _download_or_skip(loader):
+    r"""Call a pyvista ``download_*`` loader, skipping on upstream failures.
+
+    The ``download_*`` example datasets are fetched from the ``pyvista/data``
+    GitHub repository when not already cached locally. Transient upstream
+    problems (HTTP 5xx such as the 502 seen in CI, connection resets,
+    DNS/proxy errors, timeouts) are outside this project's control and should
+    not fail CI, so they are converted into a skip. Only the download is
+    wrapped, so genuine ``from_pyvista`` bugs still fail the test.
+
+    We deliberately catch the builtin :class:`OSError` rather than a specific
+    HTTP library's exception (e.g. ``requests.exceptions.RequestException``).
+    This avoids coupling the test to pyvista's transitive dependencies: every
+    network/HTTP error hierarchy pyvista's downloader can surface -- ``requests``
+    (whose ``RequestException`` subclasses ``OSError``), ``urllib``, and
+    ``socket`` -- derives from :class:`OSError`. So the skip keeps working with
+    no extra import even if pyvista swaps out its HTTP backend. Because only the
+    download call is wrapped, an ``OSError`` here can only mean the dataset
+    could not be fetched (network failure or a local cache I/O error), never a
+    conversion bug.
+
+    Parameters
+    ----------
+    loader : Callable[[], pyvista.DataSet]
+        A zero-argument pyvista ``download_*`` function.
+
+    Returns
+    -------
+    pyvista.DataSet
+        The downloaded mesh.
+    """
+    try:
+        return loader()
+    except OSError as exc:
+        pytest.skip(
+            f"Upstream pyvista data server unavailable for {loader.__name__!r}: {exc!r}"
+        )
+
+
 class TestPyVistaExampleDatasets:
     """Tests for various PyVista example datasets covering edge cases."""
 
@@ -32,7 +71,7 @@ class TestPyVistaExampleDatasets:
         The cow mesh is a classic test case that contains both triangular
         and quadrilateral cells, requiring automatic triangulation.
         """
-        pv_mesh = pv.examples.download_cow()
+        pv_mesh = _download_or_skip(pv.examples.download_cow)
 
         # Verify it has mixed cell types (not all triangles)
         assert not pv_mesh.is_all_triangles
@@ -49,7 +88,7 @@ class TestPyVistaExampleDatasets:
 
     def test_bunny_mesh(self):
         """Test Stanford bunny mesh (classic computer graphics mesh)."""
-        pv_mesh = pv.examples.download_bunny()
+        pv_mesh = _download_or_skip(pv.examples.download_bunny)
 
         mesh = from_pyvista(pv_mesh, manifold_dim="auto")
 
@@ -116,7 +155,7 @@ class TestPyVistaExampleDatasets:
         The drill dataset is a laser-scanned PolyData mesh from Laser Design,
         representing a detailed 3D surface scan of a power drill.
         """
-        pv_mesh = pv.examples.download_drill()
+        pv_mesh = _download_or_skip(pv.examples.download_drill)
 
         # Verify it's PolyData (surface mesh)
         assert isinstance(pv_mesh, pv.PolyData)

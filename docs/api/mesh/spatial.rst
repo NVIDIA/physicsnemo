@@ -30,6 +30,45 @@ search over all cells.
     query_points = torch.randn(1000, 3)
     candidate_cells = bvh.find_candidate_cells(query_points)
 
+Signed Distance Field
+---------------------
+
+:func:`signed_distance_field` computes the signed distance from a set of
+query points to a triangle surface mesh, together with the closest point on the
+surface for each query. It is a :class:`~physicsnemo.mesh.Mesh`-typed wrapper
+around the Warp-backed :func:`physicsnemo.nn.functional.signed_distance_field`
+op, which runs NVIDIA Warp mesh queries on CPU and CUDA.
+
+The **sign** is determined by one of two methods, selected with
+``use_sign_winding_number``:
+
+- ``False`` (default): the angle-weighted pseudo-normal of the closest mesh
+  feature (``wp.mesh_query_point_sign_normal``). This is fast and robust for
+  **watertight** meshes.
+- ``True``: the generalized winding number
+  (``wp.mesh_query_point_sign_winding_number``). This is robust for
+  **non-watertight / self-intersecting** ("soup") geometry.
+
+.. code:: python
+
+    import torch
+    from physicsnemo.mesh import Mesh
+    from physicsnemo.mesh.spatial import signed_distance_field
+
+    # A triangle surface mesh: (n_vertices, 3) coords + (n_faces, 3) connectivity.
+    mesh = Mesh(
+        points=torch.randn(500, 3),
+        cells=torch.randint(0, 500, (1000, 3)),
+    )
+
+    query = torch.randn(10000, 3)
+    sdf, hit_points, hit_faces = signed_distance_field(
+        mesh, query, use_sign_winding_number=True
+    )
+    # sdf:        (10000,)   signed distances
+    # hit_points: (10000, 3) closest surface points
+    # hit_faces:  (10000,)   nearest-face index into mesh.cells
+
 API Reference
 -------------
 

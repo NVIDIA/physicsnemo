@@ -276,10 +276,12 @@ def _find_containing_pairs(
 
     is_inside = (bary_cand >= -tolerance).all(dim=-1) & (recon_cand <= tolerance)
 
-    ### Filter to confirmed containments
-    query_indices = query_idx_cand[is_inside]
-    cell_indices = cell_idx_cand[is_inside]
-    bary_coords = bary_cand[is_inside] if len(query_indices) > 0 else None
+    ### Filter to confirmed containments. Reuse one integer compaction for all
+    ### three arrays instead of independently compacting the same CUDA mask.
+    keep_indices = is_inside.nonzero(as_tuple=True)[0]
+    query_indices = query_idx_cand[keep_indices]
+    cell_indices = cell_idx_cand[keep_indices]
+    bary_coords = bary_cand[keep_indices] if len(keep_indices) > 0 else None
 
     return query_indices, cell_indices, bary_coords
 
@@ -519,30 +521,50 @@ def _accumulate_sampled_data(
     """
     device = mesh.points.device
 
-    ### Count how many cells contain each query point
-    if len(query_indices) > 0:
-        query_containment_count = torch.bincount(query_indices, minlength=n_queries)
-    else:
-        query_containment_count = torch.zeros(
-            n_queries, dtype=torch.long, device=device
+    if multiple_cells_strategy not in ("mean", "nan"):
+        raise ValueError(
+            f"Invalid {multiple_cells_strategy=!r}. Must be 'mean' or 'nan'."
         )
+
+    ### Count how many cells contain each query point. ``torch.bincount`` reads
+    ### back the maximum bin on CUDA; fixed-size scatter avoids that host sync.
+    query_containment_count = torch.zeros(n_queries, dtype=torch.long, device=device)
+    query_containment_count.scatter_add_(
+        0, query_indices, torch.ones_like(query_indices)
+    )
+    if multiple_cells_strategy == "mean":
+        invalid_queries = query_containment_count == 0
+    else:
+        invalid_queries = query_containment_count != 1
 
     source_data = mesh.cell_data if data_source == "cells" else mesh.point_data
     cells = mesh.cells  # captured for point-data interpolation below
 
     def _accumulate_field(values: torch.Tensor) -> torch.Tensor:
         """Scatter-accumulate a single data field across query points."""
+        if values.is_floating_point() or values.is_complex():
+            output_dtype = (
+                torch.promote_types(values.dtype, mesh.points.dtype)
+                if data_source == "points"
+                else values.dtype
+            )
+        else:
+            # Missing and ambiguous samples are represented by NaN. Integer and
+            # boolean fields therefore need a floating output dtype. Float64
+            # minimizes precision loss, but cannot exactly represent every int64
+            # value outside the range [-2**53, 2**53].
+            output_dtype = torch.float64
+
         output_shape = (n_queries,) + values.shape[1:]
-        output = torch.full(
-            output_shape, float("nan"), dtype=values.dtype, device=device
-        )
 
         if len(query_indices) == 0:
-            return output
+            return torch.full(
+                output_shape, float("nan"), dtype=output_dtype, device=device
+            )
 
         ### Compute per-pair values
         if data_source == "cells":
-            pair_values = values[cell_indices]
+            pair_values = values[cell_indices].to(output_dtype)
         elif data_source == "points":
             if (
                 bary_coords is None
@@ -551,7 +573,7 @@ def _accumulate_sampled_data(
                     "bary_coords is unexpectedly None for non-empty query set."
                 )
             point_idx = cells[cell_indices]
-            point_vals = values[point_idx]
+            point_vals = values[point_idx].to(output_dtype)
 
             bary_expanded = bary_coords.view(
                 bary_coords.shape[0],
@@ -562,28 +584,24 @@ def _accumulate_sampled_data(
         else:
             raise ValueError(f"Invalid {data_source=!r}. Must be 'cells' or 'points'.")
 
-        ### Scatter-accumulate into output
+        ### Scatter directly into the result buffer. The following in-place
+        ### normalization and masking preserve autograd while avoiding redundant
+        ### full-sized output, division, and ``where`` tensors.
+        output = torch.zeros(output_shape, dtype=output_dtype, device=device)
+        idx_expanded = query_indices.view(-1, *([1] * (values.ndim - 1))).expand_as(
+            pair_values
+        )
+        output.scatter_add_(0, idx_expanded, pair_values)
+
+        count_shape = (-1,) + (1,) * (values.ndim - 1)
         if multiple_cells_strategy == "mean":
-            output_sum = torch.zeros(output_shape, dtype=values.dtype, device=device)
-            idx_expanded = query_indices.view(-1, *([1] * (values.ndim - 1))).expand_as(
-                pair_values
-            )
-            output_sum.scatter_add_(0, idx_expanded, pair_values)
+            # Clamp in integer space because ``clamp_min`` rejects complex dtypes.
+            divisor = query_containment_count.clamp_min(1)
+            output.div_(divisor.view(count_shape))
 
-            valid = query_containment_count > 0
-            output[valid] = output_sum[valid] / query_containment_count[valid].to(
-                values.dtype
-            ).view(-1, *([1] * (values.ndim - 1)))
-
-        elif multiple_cells_strategy == "nan":
-            single_cell_mask = query_containment_count == 1
-            if single_cell_mask.any():
-                has_single = single_cell_mask[query_indices]
-                output[query_indices[has_single]] = pair_values[has_single]
-        else:
-            raise ValueError(
-                f"Invalid {multiple_cells_strategy=!r}. Must be 'mean' or 'nan'."
-            )
+        # Mask in place instead of compacting a CUDA boolean mask. Together with
+        # the fixed-size count scatter above, this reduces host synchronizations.
+        output.masked_fill_(invalid_queries.view(count_shape), float("nan"))
 
         return output
 
@@ -654,7 +672,15 @@ def sample_data_at_points(
     TensorDict
         Sampled data for each query point, with the same keys as
         ``mesh.cell_data`` or ``mesh.point_data`` (depending on
-        ``data_source``). Values are NaN for query points outside the mesh.
+        ``data_source``). Values are NaN for query points outside the mesh, and
+        for ambiguous points when ``multiple_cells_strategy="nan"``.
+
+        Floating-point and complex cell data retain their source dtype. For
+        floating-point and complex point data, interpolation uses the dtype
+        resulting from promoting the field dtype with ``mesh.points.dtype``.
+        Integer and boolean data are promoted to ``torch.float64`` so that NaN
+        and non-integral interpolated or mean values can be represented. This
+        conversion may round integer values whose magnitude exceeds ``2**53``.
 
     Raises
     ------

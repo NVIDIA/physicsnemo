@@ -128,9 +128,8 @@ set `loggers.wandb.mode` to `online` in the command line:
 python train.py +experiment=water data.data_dir=/data/Water loggers.wandb.mode=online
 ```
 
-An active Weights & Biases account is required. You will also need to set your
-API key either through the command line option `loggers.wandb.wandb_key`
-or by using the `WANDB_API_KEY` environment variable:
+An active Weights & Biases account is required. Set your API key using the
+`WANDB_API_KEY` environment variable:
 
 ```bash
 export WANDB_API_KEY=key

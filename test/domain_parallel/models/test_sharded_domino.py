@@ -14,34 +14,47 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Domain-parallel test for DoMINO.
+
+DoMINO's parameters are all replicated, so it is distributed with DDP; the grids
+and point clouds are ``ShardTensor``s sharded along the point/grid axis (with a
+few genuinely global tensors replicated). ShardTensor auto-promotion lets the
+plain weights meet the sharded activations. The shared harness runs the
+distributed forward/backward against a single-GPU reference.
+"""
+
 import copy
 
 import pytest
 import torch
-from torch.distributed.tensor import distribute_module
 from torch.distributed.tensor.placement_types import Replicate, Shard
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.domain_parallel import scatter_tensor
 from physicsnemo.models.domino import DoMINO
 from physicsnemo.models.domino.config import DEFAULT_MODEL_PARAMS
+from test.domain_parallel.models.harness import (
+    DomainParallelModelCase,
+    run_domain_parallel_model_check,
+)
 
 # Conv processor for faster tests; same shapes as DEFAULT_MODEL_PARAMS.
 _DOMINO_TEST_CONFIG = copy.deepcopy(DEFAULT_MODEL_PARAMS)
 _DOMINO_TEST_CONFIG.geometry_rep.geo_processor.processor_type = "conv"
 
+_NPOINTS = 500
 
-def generate_synthetic_data(shard_grid, shard_points, npoints=100, config=None):
-    """
-    Generate synthetic data for the DoMINO model.
-    Args:
-        shard_grid: Whether to shard the grid.
-        shard_points: Whether to shard the points.
-        npoints: Number of points.
-        config: DoMINO config for grid size and neighbor counts. Defaults to DEFAULT_MODEL_PARAMS.
-    Returns:
-        input_dict: Dictionary of input tensors.
-    """
+# Point/grid tensors are sharded along dim 1; these are genuinely global.
+_NON_SHARDED_KEYS = [
+    "volume_min_max",
+    "surface_min_max",
+    "global_params_reference",
+    "global_params_values",
+]
+
+
+def generate_synthetic_data(npoints=_NPOINTS, config=None):
+    """Generate synthetic (full, plain) input tensors for the DoMINO model."""
     if config is None:
         config = DEFAULT_MODEL_PARAMS
     dm = DistributedManager()
@@ -102,116 +115,76 @@ def generate_synthetic_data(shard_grid, shard_points, npoints=100, config=None):
 def convert_input_dict_to_shard_tensor(
     input_dict, point_placements, grid_placements, mesh
 ):
-    # Strategy: convert the point clouds to replicated tensors, and
-    # grid objects to sharded tensors
-
-    non_sharded_keys = [
-        "volume_min_max",
-        "surface_min_max",
-        "global_params_reference",
-        "global_params_values",
-    ]
-
+    """Shard the point clouds and grids; replicate the genuinely global tensors."""
     sharded_dict = {}
-
     for key, value in input_dict.items():
-        # Skip non-tensor values
         if not isinstance(value, torch.Tensor):
             continue
-
-        # Skip keys that should not be sharded
-        if key in non_sharded_keys:
-            sharded_dict[key] = scatter_tensor(
-                value,
-                0,
-                mesh,
-                [
-                    Replicate(),
-                ],
-                global_shape=value.shape,
-                dtype=value.dtype,
-                requires_grad=value.requires_grad,
-            )
-            continue
-
-        if "grid" in key:
-            sharded_dict[key] = scatter_tensor(
-                value,
-                0,
-                mesh,
-                grid_placements,
-                global_shape=value.shape,
-                dtype=value.dtype,
-                requires_grad=value.requires_grad,
-            )
+        if key in _NON_SHARDED_KEYS:
+            placements = (Replicate(),)
+        elif "grid" in key:
+            placements = grid_placements
         else:
-            sharded_dict[key] = scatter_tensor(
-                value,
-                0,
-                mesh,
-                point_placements,
-                global_shape=value.shape,
-                dtype=value.dtype,
-                requires_grad=value.requires_grad,
-            )
-
+            placements = point_placements
+        sharded_dict[key] = scatter_tensor(
+            value,
+            0,
+            mesh,
+            placements,
+            global_shape=value.shape,
+            dtype=value.dtype,
+            requires_grad=value.requires_grad,
+        )
     return sharded_dict
 
 
-@pytest.mark.multigpu_static
-@pytest.mark.parametrize(
-    "shard_grid",
-    [
-        True,
-    ],
-)
-@pytest.mark.parametrize(
-    "shard_points",
-    [
-        True,
-    ],
-)
-def test_domino_distributed(
-    distributed_mesh,
-    shard_grid,
-    shard_points,
-):
-    """Test DoMINO distributed forward pass"""
-
-    dm = DistributedManager()
-
-    # Construct DoMINO model (conv processor for faster tests)
-    model = DoMINO(
+def _build_domino(device):
+    return DoMINO(
         input_features=3,
         output_features_vol=5,
         output_features_surf=4,
         model_parameters=_DOMINO_TEST_CONFIG,
-    ).to(dm.device)
+    ).to(device)
 
-    npoints = 500
 
-    # Create data:
-    input_dict = generate_synthetic_data(
-        shard_grid, shard_points, npoints, config=_DOMINO_TEST_CONFIG
+def _build_inputs(device):
+    return (generate_synthetic_data(_NPOINTS, config=_DOMINO_TEST_CONFIG),), {}
+
+
+def _shard_inputs(args, kwargs, mesh):
+    (input_dict,) = args
+    sharded = convert_input_dict_to_shard_tensor(
+        input_dict, (Shard(1),), (Shard(1),), mesh
     )
+    return (sharded,), kwargs
 
-    # Scatter the data
-    point_placements = (Shard(1),) if shard_points else (Replicate(),)
-    grid_placements = (Shard(1),) if shard_grid else (Replicate(),)
 
-    sharded_input_dict = convert_input_dict_to_shard_tensor(
-        input_dict, point_placements, grid_placements, distributed_mesh
-    )
+def _check_output(d_out):
+    volume_predictions, surface_predictions = d_out
+    assert volume_predictions.shape == (1, _NPOINTS, 5)
+    assert surface_predictions.shape == (1, _NPOINTS, 4)
+    # Outputs follow the point sharding.
+    assert volume_predictions._spec.placements == (Shard(1),)
+    assert surface_predictions._spec.placements == (Shard(1),)
 
-    model = distribute_module(model, device_mesh=distributed_mesh)
 
-    # Run model
-    volume_predictions, surface_predictions = model(sharded_input_dict)
+def _loss_fn(output):
+    """Scalar loss over both volume and surface predictions."""
+    volume_predictions, surface_predictions = output
+    return volume_predictions.mean() + surface_predictions.mean()
 
-    # Check output
-    assert volume_predictions.shape == (1, npoints, 5)
-    assert surface_predictions.shape == (1, npoints, 4)
 
-    # The outputs should always match the point sharding:
-    assert volume_predictions._spec.placements == point_placements
-    assert surface_predictions._spec.placements == point_placements
+_CASE = DomainParallelModelCase(
+    name="domino",
+    build_model=_build_domino,
+    build_inputs=_build_inputs,
+    shard_inputs=_shard_inputs,
+    output_check_fn=_check_output,
+    loss_fn=_loss_fn,
+)
+
+
+@pytest.mark.multigpu_static
+def test_domino_distributed(distributed_mesh):
+    """Distributed forward/backward matches a single-GPU reference."""
+    run_domain_parallel_model_check(_CASE, mesh=distributed_mesh)

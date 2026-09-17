@@ -59,9 +59,12 @@ Reproducibility flows from the `DataLoader`.  The loader seeds a
 master `torch.Generator` and passes it to
 `MeshDataset.set_generator(parent_gen)`, which forks the parent
 into independent children — one for the reader and one per
-transform.  `MeshDataset.set_epoch(epoch)` reseeds every child
-with `initial_seed() + epoch` so each epoch is different but
-deterministic.  Deterministic transforms silently ignore both calls.
+transform.  `MeshDataset.set_epoch(epoch)` reseeds every stochastic
+transform from its captured base seed via `derive_seed(base_seed,
+epoch)` so each epoch is different but deterministic — and because the
+seed depends only on `(base_seed, epoch)`, resuming at epoch *N*
+reproduces the same stream as a continuous run.  Deterministic
+transforms silently ignore both calls.
 
 For standalone usage outside a `DataLoader`, call `set_generator`
 on the transform directly:

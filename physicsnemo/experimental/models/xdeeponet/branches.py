@@ -24,9 +24,12 @@ Provides a single dimension-generic spatial encoder:
   primitives are dispatched through the module-level :data:`_DIM_LAYERS`
   lookup table.
 
-The MLP trunk and the optional MLP branch are built directly from
-:class:`physicsnemo.models.mlp.FullyConnected` by the helpers in
-``deeponet.py`` (``_build_trunk_mlp`` and ``_build_mlp_branch``).
+The coordinate trunk and the optional MLP (scalar) branch are not defined in
+this package: following the dependency-injection design of
+:class:`~physicsnemo.experimental.models.xdeeponet.DeepONet`, the caller
+supplies them as :class:`torch.nn.Module` instances -- typically a
+:class:`physicsnemo.models.mlp.FullyConnected` -- via ``DeepONet``'s ``trunk``
+and ``branch2`` constructor arguments.
 
 UNet sub-modules inside the spatial branch use
 :class:`physicsnemo.models.unet.UNet` (3D).  A small adapter
@@ -446,6 +449,25 @@ class SpatialBranch(Module):
         coord = coord.unsqueeze(0).expand(batch_size, *spatial_shape, self.dimension)
         return coord
 
+    def _spectral(self, conv: nn.Module, x: Tensor) -> Tensor:
+        """Evaluate an FFT-based spectral conv in float32.
+
+        FFT backends (e.g. cuFFT) do not support the reduced / complex-half
+        precisions that AMP autocast would introduce, so the spectral
+        convolution is always run in float32 (autocast disabled) when autocast
+        is active for the input's device.  The surrounding pointwise / UNet /
+        conv branches still benefit from autocast.  The autocast state and the
+        disabling context both use the input tensor's own device type, so the
+        guard is device-agnostic (CUDA, CPU, or other accelerators).  This is a
+        no-op in full-precision training (autocast disabled), so it does not
+        change fp32 behavior.
+        """
+        device_type = x.device.type
+        if torch.is_autocast_enabled(device_type):
+            with torch.autocast(device_type=device_type, enabled=False):
+                return conv(x.float())
+        return conv(x)
+
     def forward(
         self,
         x: Float[Tensor, "..."],
@@ -469,20 +491,22 @@ class SpatialBranch(Module):
             x = self.adaptive_pool(x)
 
         for i in range(self.num_fourier_layers):
-            x = self.activation_fn(self.spectral_convs[i](x) + self.conv_1x1s[i](x))
+            x = self.activation_fn(
+                self._spectral(self.spectral_convs[i], x) + self.conv_1x1s[i](x)
+            )
 
         if self.use_fourier_base:
             for i in range(self.num_unet_layers):
                 j = self.num_fourier_layers + i
                 x = self.activation_fn(
-                    self.spectral_convs[j](x)
+                    self._spectral(self.spectral_convs[j], x)
                     + self.conv_1x1s[j](x)
                     + self.unet_modules[i](x)
                 )
             for i in range(self.num_conv_layers):
                 j = self.num_fourier_layers + self.num_unet_layers + i
                 x = self.activation_fn(
-                    self.spectral_convs[j](x)
+                    self._spectral(self.spectral_convs[j], x)
                     + self.conv_1x1s[j](x)
                     + self.conv_modules[i](x)
                 )

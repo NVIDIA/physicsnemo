@@ -40,7 +40,7 @@ from .launch_forward import _launch_forward, _launch_forward_fused_no_mixed
 
 ### Warp runtime initialization for custom kernels.
 wp.init()
-wp.config.quiet = True
+wp.config.log_level = wp.LOG_WARNING
 
 
 def _rectilinear_forward_common(

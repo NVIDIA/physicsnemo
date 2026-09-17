@@ -16,6 +16,7 @@
 
 """Tests for DomainMesh transform passthrough methods."""
 
+import inspect
 import math
 
 import pytest
@@ -282,6 +283,21 @@ class TestStripCaches:
         dm2 = dm.strip_caches()
         assert "normals" not in dm2.interior._cache["cell"].keys()
 
+    def test_propagates_keep_to_all_meshes(self):
+        dm = DomainMesh(
+            interior=single_triangle_3d.load(),
+            boundaries={"wall": single_triangle_3d.load()},
+        )
+        for _, mesh in dm.all_meshes():
+            _ = mesh.cell_areas
+            _ = mesh.cell_normals
+
+        stripped = dm.strip_caches(keep=("cell", "areas"))
+
+        for _, mesh in stripped.all_meshes():
+            assert mesh._cache.get(("cell", "areas"), None) is not None
+            assert mesh._cache.get(("cell", "normals"), None) is None
+
 
 class TestSubdivide:
     """Tests for DomainMesh.subdivide passthrough."""
@@ -362,6 +378,16 @@ class TestComputeCellDerivatives:
 class TestValidate:
     """Tests for DomainMesh.validate passthrough."""
 
+    def test_options_match_mesh_validate(self):
+        """Domain validation should expose the canonical per-mesh options."""
+        mesh_options = list(inspect.signature(Mesh.validate).parameters.values())[1:]
+        domain_options = list(
+            inspect.signature(DomainMesh.validate).parameters.values()
+        )[1:]
+        assert [
+            (option.name, option.kind, option.default) for option in domain_options
+        ] == [(option.name, option.kind, option.default) for option in mesh_options]
+
     def test_report_structure(self, tet_domain):
         report = tet_domain.validate()
         assert "interior" in report
@@ -388,6 +414,15 @@ class TestValidate:
         dm = DomainMesh(interior=interior)
         report = dm.validate()
         assert not report["valid"]
+
+    def test_self_intersection_option_propagates(self, tet_domain):
+        with pytest.raises(NotImplementedError, match="[Ss]elf-intersection"):
+            tet_domain.validate(check_self_intersection=True)
+
+    def test_positional_tolerance_is_preserved(self, tet_domain):
+        """The sixth historical argument remains the geometric tolerance."""
+        report = tet_domain.validate(True, True, False, True, False, 1e-6)
+        assert isinstance(report["valid"], bool)
 
 
 ### Boundary watertightness
@@ -717,3 +752,88 @@ class TestDomainGlobalDataTransform:
         )
         assert dm2.global_data["velocity"][0].item() == pytest.approx(0.0, abs=1e-6)
         assert dm2.global_data["velocity"][1].item() == pytest.approx(1.0, abs=1e-6)
+
+
+@pytest.mark.parametrize("known_device", [False, True])
+def test_domain_mesh_to_float_dtype_preserves_integer_cells(known_device):
+    """Regression: DomainMesh.to(<float dtype>) must cast floating tensors only;
+    the integer cells of the interior and boundary meshes must stay integer (the
+    generated tensorclass .to recursed in and cast them to float, failing
+    Mesh.__post_init__)."""
+    interior = Mesh(
+        points=torch.randn(4, 3), cells=torch.tensor([[0, 1, 2], [1, 3, 2]])
+    )
+    dm = DomainMesh(interior=interior, boundaries={"b": interior.get_boundary_mesh()})
+    dm.global_data["scale"] = torch.tensor(2.0)
+    if known_device:
+        dm = dm.to("cpu")
+
+    dm64 = dm.to(torch.float64)
+    assert dm.interior.points.dtype == torch.float32
+    assert dm.boundaries["b"].points.dtype == torch.float32
+    assert dm.global_data["scale"].dtype == torch.float32
+    assert dm64.interior.points.dtype == torch.float64
+    assert dm64.interior.cells.dtype == torch.int64
+    assert dm64.boundaries["b"].points.dtype == torch.float64
+    assert dm64.boundaries["b"].cells.dtype == torch.int64
+    assert dm64.global_data["scale"].dtype == torch.float64
+
+
+def test_domain_mesh_to_same_float_dtype_preserves_integer_cells():
+    """Regression (PR #1716 review): DomainMesh.to(<same float dtype>) must keep the
+    cells-safe path instead of falling back to the cells-breaking tensorclass `.to`
+    when the domain is already at the requested float dtype."""
+    interior = Mesh(
+        points=torch.randn(4, 3).double(),  # already float64
+        cells=torch.tensor([[0, 1, 2], [1, 3, 2]]),
+    )
+    dm = DomainMesh(interior=interior)
+
+    dm64 = dm.to(torch.float64)  # same dtype -> must not raise
+    assert dm64.interior.points.dtype == torch.float64
+    assert dm64.interior.cells.dtype == torch.int64
+
+
+def test_domain_mesh_to_device_move_preserves_mixed_precision():
+    """A device-only DomainMesh.to must not homogenize float dtypes: a float16
+    global_data leaf stays float16 (only an explicit float-dtype request casts it)."""
+    interior = Mesh(points=torch.randn(4, 3), cells=torch.tensor([[0, 1, 2]]))
+    dm = DomainMesh(interior=interior)
+    dm.global_data["half"] = torch.randn(3, dtype=torch.float16)
+
+    out = dm.to("cpu")
+    assert out.global_data["half"].dtype == torch.float16
+    assert out.interior.cells.dtype == torch.int64
+
+
+def test_domain_mesh_to_float_dtype_forwards_transfer_kwargs():
+    """Regression (PR #1716 review): a DomainMesh float cast forwards transfer kwargs
+    (e.g. non_blocking) rather than dropping them, while preserving integer cells."""
+    interior = Mesh(points=torch.randn(4, 3), cells=torch.tensor([[0, 1, 2]]))
+    dm = DomainMesh(interior=interior)
+    dm.global_data["scale"] = torch.tensor(2.0)
+
+    out = dm.to(dtype=torch.float64, non_blocking=True)
+    assert out.interior.points.dtype == torch.float64
+    assert out.interior.cells.dtype == torch.int64
+    assert out.global_data["scale"].dtype == torch.float64
+
+
+def test_domain_mesh_to_rejects_integer_coordinate_dtype():
+    dm = DomainMesh(
+        interior=Mesh(points=torch.randn(3, 2), cells=torch.tensor([[0, 1]]))
+    )
+
+    with pytest.raises(TypeError, match="coordinates must remain floating point"):
+        dm.to(torch.int32)
+
+
+def test_domain_mesh_to_complex_preserves_integer_cells():
+    dm = DomainMesh(
+        interior=Mesh(points=torch.randn(3, 2), cells=torch.tensor([[0, 1]]))
+    )
+
+    converted = dm.to(torch.complex64)
+
+    assert converted.interior.points.dtype == torch.complex64
+    assert converted.interior.cells.dtype == torch.int64

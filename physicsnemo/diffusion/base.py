@@ -228,13 +228,13 @@ class Denoiser(Protocol):
 
     A denoiser is the **update function** used during sampling. It takes a
     noisy state ``x`` and diffusion time ``t``, and returns the update term
-    consumed by a :class:`~physicsnemo.diffusion.samplers.solvers.Solver`.
+    consumed by a :class:`~physicsnemo.diffusion.samplers.Solver`.
     For continuous-time methods this is typically the right-hand side of the
     ODE/SDE, but the interface is generic and can support other sampling
     methods as well.
 
     This is the interface used by
-    :class:`~physicsnemo.diffusion.samplers.solvers.Solver` classes and the
+    :class:`~physicsnemo.diffusion.samplers.Solver` classes and the
     :func:`~physicsnemo.diffusion.samplers.sample` function. Any callable
     that implements this interface can be used as a denoiser.
 
@@ -253,7 +253,7 @@ class Denoiser(Protocol):
        :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.get_denoiser`
     4. Pass the denoiser to
        :func:`~physicsnemo.diffusion.samplers.sample` together with a
-       :class:`~physicsnemo.diffusion.samplers.solvers.Solver`
+       :class:`~physicsnemo.diffusion.samplers.Solver`
 
     See Also
     --------

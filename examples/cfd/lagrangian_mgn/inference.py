@@ -27,7 +27,7 @@ from matplotlib import pyplot as plt
 
 import numpy as np
 
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 
 import torch
 from torch import Tensor
@@ -36,7 +36,7 @@ from torch_geometric.loader import DataLoader as PyGDataLoader
 from physicsnemo.datapipes.gnn.lagrangian_dataset import graph_update
 from physicsnemo.utils import load_checkpoint
 
-from loggers import get_gpu_info, init_python_logging
+from loggers import config_summary, get_gpu_info, init_python_logging
 
 
 logger = logging.getLogger("lmgn")
@@ -215,7 +215,7 @@ def plot_error(mse, out_dir):
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
     init_python_logging(cfg, base_filename="inference")
-    logger.info(f"Config summary:\n{OmegaConf.to_yaml(cfg, sort_keys=True)}")
+    logger.info(f"Config summary:\n{config_summary(cfg)}")
     logger.info(get_gpu_info())
 
     logger.info("Rollout started...")

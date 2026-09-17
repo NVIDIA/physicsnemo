@@ -22,8 +22,8 @@ named target field declared in ``target_config`` produces:
 - For ``"scalar"`` types: per-metric values (``l1``, ``l2``, ``mae`` by
   default), keyed ``"<prefix>/<name>_<metric>"``.
 - For ``"vector"`` types: per-component values
-  (``"<prefix>/<name>_x_<metric>"`` etc.) plus aggregate magnitude values
-  (``"<prefix>/<name>_<metric>"``).
+  (``"<prefix>/<name>_x_<metric>"`` etc.) plus aggregate values over all
+  components jointly (``"<prefix>/<name>_<metric>"``).
 
 Metrics are reported unweighted -- per-field weighting belongs in the
 loss, not in diagnostic summaries.
@@ -32,14 +32,15 @@ loss, not in diagnostic summaries.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from typing import Literal, TypeAlias
+from typing import Literal, TypeAlias, cast
 
 import torch
-import torch.distributed as dist
 from jaxtyping import Float
+from omegaconf import DictConfig, OmegaConf
 from tensordict import TensorDict
+from utils import FieldType, align_scalar_shapes, validate_field_coverage
 
-from utils import FieldType, align_scalar_shapes, field_dim, validate_field_coverage
+from physicsnemo.datapipes.keys import as_nested_key
 
 ### Recipe-wide alias for the metric-name enum that the dataset YAMLs use.
 MetricName: TypeAlias = Literal["mae", "l1", "l2"]
@@ -96,6 +97,40 @@ METRIC_FUNCTIONS: dict[MetricName, Callable[..., torch.Tensor]] = {
 DEFAULT_METRICS: tuple[MetricName, ...] = ("l1", "l2", "mae")
 
 
+def resolve_metrics(cfg: DictConfig) -> list[MetricName]:
+    """Resolve the recipe-side ``cfg.metrics`` list, or the default set.
+
+    ``metrics:`` is a recipe-level (not per-dataset) choice; both the
+    trainer and the inference companion read it the same way. Falls back
+    to :data:`DEFAULT_METRICS` when the key is unset.
+
+    The resolved list is validated against :data:`METRIC_FUNCTIONS` here so
+    a typo (e.g. ``rmse``) fails fast with a clear message rather than
+    surfacing later as a :class:`MetricCalculator` lookup error (which
+    still guards as a backstop).
+
+    Raises:
+        TypeError: If ``metrics:`` is set but is not a list.
+        ValueError: If any entry is not a known metric name.
+    """
+    metrics_cfg = OmegaConf.select(cfg, "metrics", default=None)
+    if metrics_cfg is None:
+        return list(DEFAULT_METRICS)
+    resolved = OmegaConf.to_container(metrics_cfg, resolve=True)
+    if not isinstance(resolved, list):
+        raise TypeError(
+            f"`metrics:` must be a list of metric names, got "
+            f"{type(resolved).__name__} ({resolved!r})."
+        )
+    unknown = [m for m in resolved if m not in METRIC_FUNCTIONS]
+    if unknown:
+        raise ValueError(
+            f"Unknown metric(s) {unknown!r} in `metrics:`; "
+            f"available: {list(METRIC_FUNCTIONS)!r}."
+        )
+    return cast("list[MetricName]", resolved)
+
+
 ### ---------------------------------------------------------------------------
 ### MetricCalculator
 ### ---------------------------------------------------------------------------
@@ -109,8 +144,6 @@ class MetricCalculator:
 
     Args:
         target_config: ``{name: scalar|vector}`` mapping.
-        process_group: Optional distributed process group for all-reduce.
-            When ``None`` (default), no reduction is performed.
         n_spatial_dims: Vector field dimensionality (used to label
             components when ``> len(VECTOR_COMPONENTS)`` falls back to
             integer indices).
@@ -122,7 +155,6 @@ class MetricCalculator:
     def __init__(
         self,
         target_config: dict[str, FieldType],
-        process_group: dist.ProcessGroup | None = None,
         n_spatial_dims: int = 3,
         metrics: Sequence[MetricName] | None = None,
         prefix: str = "",
@@ -131,7 +163,6 @@ class MetricCalculator:
         ### `FieldType` contract; copy verbatim so callers can mutate their
         ### original without affecting us.
         self.target_config: dict[str, FieldType] = dict(target_config)
-        self.process_group = process_group
         self.n_spatial_dims = n_spatial_dims
         self.metric_names = (
             list(metrics) if metrics is not None else list(DEFAULT_METRICS)
@@ -143,11 +174,6 @@ class MetricCalculator:
                 raise ValueError(
                     f"Unknown metric {m!r}; available {list(METRIC_FUNCTIONS)!r}"
                 )
-
-        ### `field_dim` raises on unknown field types, validating the config.
-        self.total_channels = sum(
-            field_dim(t, n_spatial_dims) for t in self.target_config.values()
-        )
 
     def _make_key(self, *parts: str) -> str:
         """Build a flat metric key, ``"<prefix>/<part1>_<part2>_..."``.
@@ -162,6 +188,29 @@ class MetricCalculator:
         key = "_".join(parts)
         return f"{self.prefix}/{key}" if self.prefix else key
 
+    def expected_keys(self) -> list[str]:
+        """The exact key set :meth:`__call__` produces, derivable without data.
+
+        Vector fields contribute keys per spatial component plus the bare-name
+        aggregate keys; scalars contribute one key per metric.
+        Lets callers pre-size accumulators identically on every rank --
+        e.g. ``infer.py`` zero-fills its running sums with these keys so
+        the cross-rank all-reduce packs the same tensor length even on a
+        rank whose sampler shard was empty.
+        """
+        keys: list[str] = []
+        for name, field_type in self.target_config.items():
+            if field_type == "vector":
+                for i in range(self.n_spatial_dims):
+                    comp = (
+                        VECTOR_COMPONENTS[i] if i < len(VECTOR_COMPONENTS) else str(i)
+                    )
+                    keys.extend(
+                        self._make_key(name, comp, m) for m in self.metric_names
+                    )
+            keys.extend(self._make_key(name, m) for m in self.metric_names)
+        return keys
+
     def _metrics_for_tensor(
         self, pred: torch.Tensor, target: torch.Tensor, name_parts: tuple[str, ...]
     ) -> dict[str, torch.Tensor]:
@@ -169,22 +218,6 @@ class MetricCalculator:
             self._make_key(*name_parts, m): METRIC_FUNCTIONS[m](pred, target)
             for m in self.metric_names
         }
-
-    def _all_reduce(self, metrics: TensorDict) -> TensorDict:
-        if self.process_group is None:
-            return metrics
-        world_size = dist.get_world_size(self.process_group)
-        if world_size == 1:
-            return metrics
-        ### Single all_reduce over a stacked 1-D tensor (vs. one comm
-        ### per leaf) -- one collective beats N regardless of the
-        ### container type. Rebuild a TensorDict from the reduced
-        ### stack so callers see the same per-key access pattern.
-        keys = list(metrics.keys())
-        stacked = torch.stack([metrics[k] for k in keys])
-        dist.all_reduce(stacked, group=self.process_group)
-        stacked = stacked / world_size
-        return TensorDict({k: stacked[i] for i, k in enumerate(keys)}, batch_size=[])
 
     def __call__(
         self,
@@ -201,8 +234,9 @@ class MetricCalculator:
             0-D ``TensorDict`` (``batch_size=[]``) keyed by
             ``"<prefix>/<name>_<metric>"`` for scalar fields and by
             ``"<prefix>/<name>_<comp>_<metric>"`` plus
-            ``"<prefix>/<name>_<metric>"`` (aggregate magnitude) for
-            vector fields. Slash-containing keys are stored verbatim;
+            ``"<prefix>/<name>_<metric>"`` (aggregate over all components
+            jointly) for vector fields.
+            Slash-containing keys are stored verbatim;
             TensorDict only treats ``/`` as nested when the caller
             explicitly invokes ``flatten_keys("/")``.
         """
@@ -215,7 +249,9 @@ class MetricCalculator:
         out: dict[str, torch.Tensor] = {}
         with torch.no_grad():
             for name, field_type in self.target_config.items():
-                p, t = pred[name], target[name]
+                ### Nested lookup; metric keys keep the config spelling.
+                key = as_nested_key(name)
+                p, t = pred[key], target[key]
                 if field_type == "scalar":
                     p, t = align_scalar_shapes(p, t)
                     out.update(self._metrics_for_tensor(p, t, (name,)))
@@ -231,12 +267,15 @@ class MetricCalculator:
                         out.update(
                             self._metrics_for_tensor(p[..., i], t[..., i], (name, comp))
                         )
-                    ### Aggregate magnitude metric.
-                    p_mag = torch.linalg.vector_norm(p, dim=-1)
-                    t_mag = torch.linalg.vector_norm(t, dim=-1)
-                    out.update(self._metrics_for_tensor(p_mag, t_mag, (name,)))
+                    ### Aggregate vector metric under the bare field name:
+                    ### all components jointly, flattened so the relative
+                    ### norms reduce over the whole field (Frobenius for
+                    ### l2) and direction errors count.
+                    out.update(
+                        self._metrics_for_tensor(p.flatten(-2), t.flatten(-2), (name,))
+                    )
 
-        return self._all_reduce(TensorDict(out, batch_size=[]))
+        return TensorDict(out)
 
     def __repr__(self) -> str:
         fields_str = ", ".join(f"{n}:{t}" for n, t in self.target_config.items())

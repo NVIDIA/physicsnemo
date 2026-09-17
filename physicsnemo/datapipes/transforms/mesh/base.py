@@ -29,6 +29,7 @@ from typing import Optional
 
 import torch
 
+from physicsnemo.datapipes._rng import derive_seed
 from physicsnemo.mesh import DomainMesh, Mesh
 
 
@@ -108,14 +109,21 @@ class MeshTransform(ABC):
         """
         if self.stochastic:
             self._generator = generator
+            # Base seed for history-independent epoch reseeding; see
+            # set_epoch.
+            self._seed_base = generator.initial_seed()
 
     def set_epoch(self, epoch: int) -> None:
         """Reseed the generator for a new epoch.
 
-        Reseeds ``self._generator`` with ``initial_seed() + epoch`` so
-        each epoch produces a different but deterministic random
-        sequence.  No-op for deterministic transforms or when no
-        generator has been assigned.
+        Reseeds ``self._generator`` with ``derive_seed(base_seed,
+        epoch)`` -- the base seed captured by :meth:`set_generator` --
+        so each epoch produces a different but deterministic random
+        sequence. The mapping depends only on the base seed and
+        ``epoch`` (never on how many times ``set_epoch`` was called
+        before), so resuming at epoch *N* reproduces the same stream as
+        reaching epoch *N* sequentially. No-op for deterministic
+        transforms or when no generator has been assigned.
 
         Parameters
         ----------
@@ -123,7 +131,12 @@ class MeshTransform(ABC):
             Current epoch number.
         """
         if self.stochastic and self._generator is not None:
-            self._generator.manual_seed(self._generator.initial_seed() + epoch)
+            if getattr(self, "_seed_base", None) is None:
+                # Generator assigned without set_generator (e.g.
+                # standalone usage): capture its seed once so repeated
+                # reseeds do not compound.
+                self._seed_base = self._generator.initial_seed()
+            self._generator.manual_seed(derive_seed(self._seed_base, epoch))
 
     def to(self, device: torch.device | str) -> MeshTransform:
         """Move any internal tensors, generators, and distributions to *device*.

@@ -16,6 +16,8 @@
 
 """Tests for physicsnemo.mesh.io module - 2D mesh conversion."""
 
+import warnings
+
 import numpy as np
 import pytest
 import torch
@@ -71,6 +73,43 @@ class TestFromPyvista2D:
         # Should be automatically triangulated
         assert mesh.cells.shape[1] == 3
         assert mesh.n_manifold_dims == 2
+
+    def test_integer_quad_triangulation_does_not_warn(self):
+        """Internal PolyData reconstruction retains integer coordinates quietly."""
+        points = np.array(
+            [[0, 0, 0], [2, 0, 0], [2, 2, 0], [0, 2, 0]],
+            dtype=np.int64,
+        )
+        pv_mesh = pv.PolyData(
+            points,
+            faces=np.array([4, 0, 1, 2, 3]),
+            force_float=False,
+        )
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            mesh = from_pyvista(pv_mesh, warn_on_lost_data=False)
+
+        assert torch.equal(mesh.cells, torch.tensor([[0, 1, 3], [1, 2, 3]]))
+
+    def test_triangle_strip_auto_detection(self):
+        """Triangle strips remain auto-detectable and triangulate fully."""
+        points = np.array(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [1.0, 1.0, 0.0],
+            ]
+        )
+        pv_mesh = pv.PolyData(points)
+        pv_mesh.strips = np.array([4, 0, 1, 2, 3])
+
+        mesh = from_pyvista(pv_mesh)
+
+        assert mesh.n_manifold_dims == 2
+        assert mesh.n_cells == 2
+        assert mesh.cell_areas.sum().item() == pytest.approx(1.0)
 
 
 class TestFromPyvistaUnstructuredGrid2D:

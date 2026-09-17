@@ -1870,6 +1870,34 @@ class TestHigherCodeimension:
         grad = mesh_grad.point_data["test_gradient"]
         assert grad.shape == (mesh.n_points, 3)
 
+    def test_intrinsic_gradient_on_curve_in_3d_is_nonzero(self):
+        """Regression: intrinsic LSQ gradient on a codimension-2 manifold (a 1D
+        curve in 3D) must use a PCA-estimated tangent and return a real gradient,
+        not silently fall through to all-zeros (the pre-fix behaviour for
+        codimension >= 2, which was also the DEFAULT compute_point_derivatives path).
+        """
+        t = torch.linspace(0, 2 * torch.pi, 40)
+        points = torch.stack([torch.cos(t), torch.sin(t), t], dim=-1)
+        cells = torch.stack([torch.arange(39), torch.arange(1, 40)], dim=-1)
+        mesh = Mesh(points=points, cells=cells)
+        assert mesh.codimension == 2
+
+        # f = curve parameter t. Its intrinsic (tangential) gradient has magnitude
+        # |df/ds| = 1/||dP/dt|| = 1/sqrt(2) for this helix parametrisation.
+        mesh.point_data["f"] = t
+        mesh_grad = mesh.compute_point_derivatives(keys="f", gradient_type="intrinsic")
+        grad = mesh_grad.point_data["f_gradient"]
+
+        assert grad.shape == (mesh.n_points, 3)
+        assert torch.isfinite(grad).all()
+
+        # Interior points (2 neighbours) -- the core regression: NOT all ~zero.
+        norms = grad[1:-1].norm(dim=-1)
+        assert (norms > 0.3).all(), f"intrinsic gradient collapsed to ~zero: {norms=}"
+        # And it recovers the analytic tangential magnitude 1/sqrt(2) ~= 0.707.
+        expected = 1.0 / (2.0**0.5)
+        assert abs(norms.mean().item() - expected) / expected < 0.25
+
 
 class TestLSQWeighting:
     """Test LSQ weight variations."""
@@ -2534,6 +2562,150 @@ class TestCotanWeightsFEM:
         # All edges accounted for
         assert edges.shape[1] == 2
         assert len(weights) == len(edges)
+
+
+class TestMeshCalculusConvenienceMethods:
+    """The tensor-returning Mesh.gradient/divergence/curl/laplacian methods.
+
+    They mirror Mesh.integrate (return a tensor; accept a point_data key or a raw
+    tensor) and must agree with the underlying free functions.
+    """
+
+    @staticmethod
+    def _surface():
+        from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+
+        return sphere_icosahedral.load(subdivisions=2)  # 2-manifold in 3D
+
+    def test_gradient_matches_free_function_by_key_and_tensor(self):
+        from physicsnemo.mesh.calculus import compute_gradient_points_lsq
+
+        mesh = self._surface()
+        f = mesh.points[:, 0].clone()
+        mesh.point_data["f"] = f
+        expected = compute_gradient_points_lsq(mesh, f, intrinsic=True)
+        assert torch.allclose(mesh.gradient(f), expected, atol=1e-6)
+        assert torch.allclose(mesh.gradient("f"), expected, atol=1e-6)
+        # extrinsic differs from the (default) intrinsic gradient on a curved surface
+        assert not torch.allclose(
+            mesh.gradient("f", gradient_type="extrinsic"), expected, atol=1e-4
+        )
+
+    def test_divergence_matches_free_function(self):
+        from physicsnemo.mesh.calculus import compute_divergence_points_lsq
+
+        mesh = self._surface()
+        v = mesh.points.clone()
+        mesh.point_data["v"] = v
+        expected = compute_divergence_points_lsq(mesh, v)
+        assert torch.allclose(mesh.divergence("v"), expected, atol=1e-6)
+        assert torch.allclose(mesh.divergence(v), expected, atol=1e-6)
+
+    def test_curl_matches_free_function(self):
+        from physicsnemo.mesh.calculus import compute_curl_points_lsq
+
+        mesh = self._surface()
+        v = mesh.points.clone()
+        expected = compute_curl_points_lsq(mesh, v)
+        assert torch.allclose(mesh.curl(v), expected, atol=1e-6)
+
+    def test_laplacian_matches_free_function(self):
+        from physicsnemo.mesh.calculus import compute_laplacian_points_dec
+
+        mesh = self._surface()
+        f = (mesh.points**2).sum(-1)
+        mesh.point_data["f"] = f
+        expected = compute_laplacian_points_dec(mesh, f)
+        assert torch.allclose(mesh.laplacian("f"), expected, atol=1e-6)
+        assert torch.allclose(mesh.laplacian(f), expected, atol=1e-6)
+
+    def test_invalid_method_raises(self):
+        mesh = self._surface()
+        mesh.point_data["f"] = mesh.points[:, 0].clone()
+        with pytest.raises(ValueError, match="method"):
+            mesh.gradient("f", method="bogus")
+        with pytest.raises(ValueError, match="method"):
+            mesh.divergence("f", method="bogus")
+
+    def test_invalid_data_source_raises(self):
+        """A typo'd data_source (e.g. 'cell' for 'cells') must raise, never
+        silently fall back to the points path. Raw tensors are passed so the
+        methods' own dispatch (not just _resolve_field's key lookup) is what
+        rejects the value."""
+        mesh = self._surface()
+        f = mesh.points[:, 0].clone()
+        v = mesh.points.clone()
+        with pytest.raises(ValueError, match="data_source"):
+            mesh.gradient(f, data_source="cell")
+        with pytest.raises(ValueError, match="data_source"):
+            mesh.divergence(v, data_source="Points")
+        with pytest.raises(ValueError, match="data_source"):
+            mesh.curl(v, data_source="bogus")
+        with pytest.raises(ValueError, match="data_source"):
+            mesh.laplacian(f, data_source="vertices")
+
+    def test_invalid_gradient_type_raises(self):
+        mesh = self._surface()
+        f = mesh.points[:, 0].clone()
+        with pytest.raises(ValueError, match="gradient_type"):
+            mesh.gradient(f, gradient_type="bogus")
+
+    def test_gradient_cells_matches_free_function(self):
+        from physicsnemo.mesh.calculus import compute_gradient_cells_lsq
+        from physicsnemo.mesh.calculus.gradient import project_to_tangent_space
+
+        mesh = self._surface()
+        f = mesh.cell_centroids[:, 0].clone()
+        mesh.cell_data["f"] = f
+        expected_extrinsic = compute_gradient_cells_lsq(mesh, f)
+        expected_intrinsic = project_to_tangent_space(mesh, expected_extrinsic, "cells")
+        got = mesh.gradient("f", gradient_type="extrinsic", data_source="cells")
+        assert got.shape == (mesh.n_cells, 3)
+        assert torch.allclose(got, expected_extrinsic, atol=1e-6)
+        assert torch.allclose(
+            mesh.gradient(f, data_source="cells"), expected_intrinsic, atol=1e-6
+        )
+
+    def test_divergence_cells_matches_free_function(self):
+        from physicsnemo.mesh.calculus import compute_divergence_cells_lsq
+
+        mesh = self._surface()
+        v = mesh.cell_centroids.clone()
+        mesh.cell_data["v"] = v
+        expected = compute_divergence_cells_lsq(mesh, v)
+        assert expected.shape == (mesh.n_cells,)
+        assert torch.allclose(
+            mesh.divergence("v", data_source="cells"), expected, atol=1e-6
+        )
+        assert torch.allclose(
+            mesh.divergence(v, data_source="cells"), expected, atol=1e-6
+        )
+
+    def test_curl_cells_matches_free_function(self):
+        from physicsnemo.mesh.calculus import compute_curl_cells_lsq
+
+        mesh = self._surface()
+        # Rotational field v = (-y, x, 0): curl = (0, 0, 2), so the comparison is
+        # against an O(1) signal rather than pure floating-point noise.
+        c = mesh.cell_centroids
+        v = torch.stack([-c[:, 1], c[:, 0], torch.zeros_like(c[:, 2])], dim=-1)
+        expected = compute_curl_cells_lsq(mesh, v)
+        assert expected.shape == (mesh.n_cells, 3)
+        assert torch.allclose(mesh.curl(v, data_source="cells"), expected, atol=1e-6)
+
+    def test_cells_unsupported_combinations_raise(self):
+        """DEC operators and the cotangent Laplacian are vertex-only; cell-data
+        requests must fail loudly with an explanation, not silently degrade."""
+        mesh = self._surface()
+        f = mesh.cell_centroids[:, 0].clone()
+        with pytest.raises(NotImplementedError, match="cell"):
+            mesh.gradient(f, method="dec", data_source="cells")
+        with pytest.raises(NotImplementedError, match="cell"):
+            mesh.divergence(
+                mesh.cell_centroids.clone(), method="dec", data_source="cells"
+            )
+        with pytest.raises(NotImplementedError, match="vertex"):
+            mesh.laplacian(f, data_source="cells")
 
 
 if __name__ == "__main__":

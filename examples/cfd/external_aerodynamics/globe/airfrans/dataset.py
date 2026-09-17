@@ -353,10 +353,9 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
             output_fields[non_physical_C_pt] = torch.nan
 
         return AirFRANSSample(
-            prediction_mesh=Mesh(
-                points=internal.points,
-                cells=internal.cells,
+            prediction_mesh=internal.with_data(
                 point_data=output_fields,
+                cell_data={},
                 global_data=TensorDict(
                     {
                         "U_inf / U_inf_magnitude": U_inf / U_inf_magnitude,
@@ -364,7 +363,11 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
                 ),
             ),
             boundary_meshes=TensorDict(
-                {"no_slip": Mesh(points=airfoil.points, cells=airfoil.cells)},  # ty: ignore[invalid-argument-type]
+                {
+                    "no_slip": airfoil.with_data(
+                        point_data={}, cell_data={}, global_data={}
+                    )
+                },  # ty: ignore[invalid-argument-type]
             ),
             reference_lengths=TensorDict(
                 {
@@ -444,9 +447,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         airfoil_mesh: Mesh[1, 2] = sample.boundary_meshes["no_slip"]
         chord = float(sample.reference_lengths["chord"])
 
-        return Mesh(
-            points=true_mesh.points,
-            cells=true_mesh.cells,
+        return true_mesh.with_data(
             point_data=TensorDict(
                 {
                     "true": true_selected,
@@ -455,6 +456,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
                 },
                 batch_size=[true_mesh.n_points],
             ),
+            cell_data={},
             global_data=TensorDict(
                 {
                     "pred": compute_surface_force_coefficients(
@@ -895,13 +897,13 @@ def compute_surface_force_coefficients(
     cf_shear_surface = volume_mesh.point_data["C_F,shear"][nearest_idx]
 
     ### Construct a surface Mesh with the mapped predictions
-    surface_mesh = Mesh(
-        points=airfoil_mesh.points,
-        cells=airfoil_mesh.cells,
+    surface_mesh = airfoil_mesh.with_data(
         point_data=TensorDict(
             {"C_p": cp_surface, "C_F,shear": cf_shear_surface},
             batch_size=[airfoil_mesh.n_points],
         ),
+        cell_data={},
+        global_data={},
     )
 
     ### Convert point data to cell-centered values

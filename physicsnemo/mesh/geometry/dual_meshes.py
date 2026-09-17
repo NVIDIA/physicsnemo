@@ -562,8 +562,6 @@ def compute_cotan_weights_fem(
     >>> weights, edges = compute_cotan_weights_fem(mesh)
     >>> # weights[i] is the cotangent weight for edges[i]
     """
-    from itertools import combinations
-
     from physicsnemo.mesh.utilities._topology import extract_unique_edges
 
     device = mesh.points.device
@@ -593,26 +591,40 @@ def compute_cotan_weights_fem(
     # G: (n_cells, n_manifold_dims, n_manifold_dims)
     G = E @ E.transpose(-1, -2)
 
-    ### Handle degenerate cells by regularizing singular Gram matrices
-    # Degenerate cells (collinear/coplanar vertices) have det(G) ~ 0.
-    # We regularize these so that torch.linalg.inv doesn't produce NaN,
-    # then zero out their contributions via the cell volume (which is also ~0).
-    det_G = torch.linalg.det(G)  # (n_cells,)
-    # Scale-aware degeneracy threshold: compare det against typical edge length
-    # raised to the 2n power (since det(G) has units of length^{2n})
-    edge_length_scale = E.norm(dim=-1).mean(dim=-1).clamp(min=1e-30)  # (n_cells,)
-    det_threshold = (edge_length_scale ** (2 * n_manifold_dims)) * 1e-12
-    is_degenerate = det_G.abs() < det_threshold  # (n_cells,)
+    ### Handle degenerate cells by substituting an isotropic Gram matrix
+    # Degenerate cells (collinear/coplanar vertices) have det(G) ~ 0, so inverting
+    # G as-is would fail. Their contribution is meant to vanish anyway, because
+    # their cell volume is ~0, so we swap in an isotropic Gram matrix of the same
+    # magnitude: strictly positive and diagonal, hence exactly invertible, and
+    # scaled so that the volume suppresses the contribution at any coordinate
+    # scale. (Adding a bare identity instead would be a no-op once the entries of
+    # G exceed the dtype's unit-in-last-place, leaving G singular.)
 
-    # Add identity to degenerate Gram matrices to make them invertible.
-    # The contribution from these cells will be zeroed by cell_volumes ~ 0.
+    # A cell's mean edge length is its natural scale. Floor it where squaring
+    # would underflow, so g_scale -- the magnitude of an entry of G -- is always a
+    # normal positive number and G / g_scale is a dimensionless O(1) matrix.
+    edge_length_scale = E.norm(dim=-1).mean(dim=-1)  # (n_cells,)
+    has_extent = edge_length_scale > torch.finfo(dtype).tiny ** 0.5  # (n_cells,)
+    g_scale = torch.where(has_extent, edge_length_scale, 1.0).square()  # (n_cells,)
+
+    # det(G) == det(G / g_scale) * g_scale**n, so thresholding the dimensionless
+    # determinant applies exactly the same criterion as a scale-aware threshold on
+    # det(G), without the under/overflow that the g_scale**n factor would suffer.
+    # Cells with no usable extent carry no direction at all, so are always degenerate.
     # Written branchlessly so torch.compile can trace through without graph breaks.
+    is_degenerate = ~has_extent | (
+        torch.linalg.det(G / g_scale[:, None, None]).abs() < 1e-12
+    )  # (n_cells,)
     eye = torch.eye(n_manifold_dims, dtype=dtype, device=device)
-    G = G + is_degenerate.float().unsqueeze(-1).unsqueeze(-1) * eye
+    G = torch.where(is_degenerate[:, None, None], g_scale[:, None, None] * eye, G)
 
     ### Invert Gram matrix
     # G_inv: (n_cells, n_manifold_dims, n_manifold_dims)
-    G_inv = torch.linalg.inv(G)
+    # Every G is now invertible by construction: degenerate cells hold a positive
+    # diagonal matrix, and the rest satisfy |det(G / g_scale)| >= 1e-12. So the
+    # non-checking ``inv_ex`` variant is safe here, and it spares CUDA callers a
+    # device-to-host synchronization made solely for error reporting.
+    G_inv = torch.linalg.inv_ex(G, check_errors=False).inverse
 
     ### Build the gradient dot product matrix C = H @ G_inv @ H^T
     # H: (n_verts_per_cell, n_manifold_dims) = [[-1,...,-1]; I_n]
@@ -626,10 +638,12 @@ def compute_cotan_weights_fem(
     C = H.unsqueeze(0) @ G_inv @ H.T.unsqueeze(0)
 
     ### Extract gradient dot products for each local edge pair
-    # Local edge pairs in combinations order (matches extract_candidate_facets)
-    local_pairs = list(combinations(range(n_verts_per_cell), 2))
-    pair_i = torch.as_tensor([p[0] for p in local_pairs], device=device)
-    pair_j = torch.as_tensor([p[1] for p in local_pairs], device=device)
+    # Upper-triangle order is itertools.combinations order, which is the local edge
+    # order that extract_candidate_facets produces. Building the indices on-device
+    # avoids the host-to-device copy (and its synchronization) a Python list needs.
+    pair_i, pair_j = torch.triu_indices(
+        n_verts_per_cell, n_verts_per_cell, offset=1, device=device
+    )
 
     # grad_dots: (n_cells, n_pairs) - one value per cell per local edge
     grad_dots = C[:, pair_i, pair_j]

@@ -28,6 +28,7 @@ from physicsnemo.nn.module.hpx import (
 )
 from physicsnemo.nn.module.hpx.padding import (
     HEALPixFoldFaces,
+    HEALPixPaddingv2,
     HEALPixUnfoldFaces,
 )
 from physicsnemo.nn.module.hpx.tokenizer import (
@@ -35,17 +36,7 @@ from physicsnemo.nn.module.hpx.tokenizer import (
 )
 from test import common
 from test.conftest import requires_module
-
-
-class MulX(torch.nn.Module):
-    """Helper class that just multiplies the values of an input tensor."""
-
-    def __init__(self, multiplier: int = 1):
-        super().__init__()
-        self.multiplier = multiplier
-
-    def forward(self, x):
-        return x * self.multiplier
+from test.nn.module.healpix_helpers import MulX, distinct_face_tensor
 
 
 @pytest.fixture
@@ -56,6 +47,36 @@ def test_data():
         return test.expand([faces, channels, -1, -1])
 
     return generate_test_data
+
+
+def _padded_faces(pad_func, size, device):
+    """Run ``pad_func`` on a distinct-face pattern and return the padded
+    output alongside a per-face lookup of the (unpadded) input, so
+    correctness tests can slice out expected neighbor regions."""
+    pattern = distinct_face_tensor(size=size, device=device)
+    out = pad_func(pattern)
+    faces = {i: pattern[i, 0] for i in range(12)}
+    return out, faces
+
+
+def _arange_grid(size, offset, device):
+    """A square, value-distinguishable tensor for isolated corner-blend
+    tests, offset so the two operands of tl()/br() never overlap in value."""
+    return offset + torch.arange(
+        size * size, device=device, dtype=torch.float32
+    ).reshape(size, size)
+
+
+def _make_pad_func(pad_cls, padding, device):
+    """Construct and move a ``HEALPixPadding``/``HEALPixPaddingv2`` instance
+    to ``device`` in one call, since every padding test needs this."""
+    return pad_cls(padding=padding).to(device)
+
+
+def _padded_shape(batch_faces, channels, size, padding):
+    """Expected output shape after padding a ``(batch_faces, channels, size,
+    size)`` tensor by ``padding`` on each side of the last two dims."""
+    return torch.Size([batch_faces, channels, size + 2 * padding, size + 2 * padding])
 
 
 @requires_module("earth2grid")
@@ -78,6 +99,88 @@ def test_HEALPixFoldFaces_forward(device, pytestconfig):
     fold_func = HEALPixFoldFaces(enable_nhwc=True)
     assert fold_func(invar).shape == outvar.shape
     assert fold_func(invar).stride() != outvar.stride()
+
+
+@requires_module("earth2grid")
+def test_HEALPixFoldFaces_forward_correctness(device, pytestconfig):
+    fold_func = HEALPixFoldFaces()
+
+    batch, faces, channels, height, width = 2, 3, 2, 4, 5
+    invar = torch.arange(
+        batch * faces * channels * height * width, device=device, dtype=torch.float32
+    ).reshape(batch, faces, channels, height, width)
+
+    outvar = fold_func(invar)
+
+    for b in range(batch):
+        for f in range(faces):
+            assert torch.equal(outvar[b * faces + f], invar[b, f])
+
+
+@requires_module("earth2grid")
+def test_HEALPixFoldFaces_forward_invalid_ndim(device, pytestconfig):
+    fold_func = HEALPixFoldFaces()
+
+    invar = torch.randn(2, 3, 4, device=device)  # only 3D, needs 5D
+    with pytest.raises(ValueError, match="requires 5D tensor"):
+        fold_func(invar)
+
+
+@requires_module("earth2grid")
+def test_HEALPixUnfoldFaces_forward_correctness(device, pytestconfig):
+    num_faces = 12
+    unfold_func = HEALPixUnfoldFaces(num_faces=num_faces)
+
+    batch, channels, height, width = 2, 2, 4, 5
+    invar = torch.arange(
+        batch * num_faces * channels * height * width,
+        device=device,
+        dtype=torch.float32,
+    ).reshape(batch * num_faces, channels, height, width)
+
+    outvar = unfold_func(invar)
+
+    for b in range(batch):
+        for f in range(num_faces):
+            assert torch.equal(outvar[b, f], invar[b * num_faces + f])
+
+
+@requires_module("earth2grid")
+def test_HEALPixUnfoldFaces_forward_invalid_ndim(device, pytestconfig):
+    unfold_func = HEALPixUnfoldFaces(num_faces=12)
+
+    invar = torch.randn(2, 3, 4, device=device)  # only 3D, needs 4D
+    with pytest.raises(ValueError, match="requires 4D tensor"):
+        unfold_func(invar)
+
+
+@requires_module("earth2grid")
+def test_HEALPixUnfoldFaces_forward_invalid_batch_size(device, pytestconfig):
+    unfold_func = HEALPixUnfoldFaces(num_faces=12)
+
+    # batch_faces=13 is not a multiple of num_faces=12
+    invar = torch.randn(13, 2, 4, 4, device=device)
+    with pytest.raises(ValueError, match="invalid batch size"):
+        unfold_func(invar)
+
+
+@requires_module("earth2grid")
+def test_HEALPixFoldFaces_UnfoldFaces_roundtrip(device, pytestconfig):
+    num_faces = 12
+    fold_func = HEALPixFoldFaces()
+    unfold_func = HEALPixUnfoldFaces(num_faces=num_faces)
+
+    batch, channels, height, width = 3, 2, 4, 4
+    invar = torch.randn(batch, num_faces, channels, height, width, device=device)
+
+    folded = fold_func(invar)
+    assert folded.shape == (batch * num_faces, channels, height, width)
+
+    unfolded = unfold_func(folded)
+    assert torch.equal(unfolded, invar)
+
+    refolded = fold_func(unfolded)
+    assert torch.equal(refolded, folded)
 
 
 @requires_module("earth2grid")
@@ -132,6 +235,201 @@ def test_HEALPixPadding_forward(device, padding, pytestconfig):
 
     outvar = pad_func(invar)
     assert outvar.shape == out_size
+
+
+@requires_module("earth2grid")
+def test_HEALPixPadding_forward_invalid_ndim(device, pytestconfig):
+    pad_func = _make_pad_func(HEALPixPadding, 1, device)
+
+    invar = torch.randn(2, 3, 4, device=device)  # only 3D, needs 4D
+    with pytest.raises(ValueError, match="requires a 4D tensor"):
+        pad_func(invar)
+
+
+@requires_module("earth2grid")
+@pytest.mark.parametrize(
+    "pad_cls,batch_faces,channels",
+    [(HEALPixPadding, 12, 2), (HEALPixPaddingv2, 24, 3)],
+    ids=["HEALPixPadding", "HEALPixPaddingv2"],
+)
+def test_padding_forward_skips_validation_when_compiling(
+    device, monkeypatch, pad_cls, batch_faces, channels, pytestconfig
+):
+    """When invoked from inside a compiled graph, ``torch.compiler.is_compiling()``
+    reports ``True`` and shape validation (in ``HEALPixPadding``/``HEALPixFoldFaces``/
+    ``HEALPixUnfoldFaces``) must be skipped without affecting correctness."""
+    if pad_cls is HEALPixPaddingv2 and device == "cpu":
+        pytest.skip("HEALPixPaddingv2 requires a CUDA device")
+
+    padding = 2
+    size = 4
+    pad_func = _make_pad_func(pad_cls, padding, device)
+
+    monkeypatch.setattr(torch.compiler, "is_compiling", lambda: True)
+
+    invar = torch.randn(batch_faces, channels, size, size, device=device)
+    outvar = pad_func(invar)
+
+    assert outvar.shape == _padded_shape(batch_faces, channels, size, padding)
+
+
+@requires_module("earth2grid")
+@pytest.mark.parametrize(
+    "pad_cls,batch_faces,channels",
+    [(HEALPixPadding, 12, 2), (HEALPixPaddingv2, 24, 3)],
+    ids=["HEALPixPadding", "HEALPixPaddingv2"],
+)
+def test_padding_forward_cuda_nvtx_skipped_without_cuda(
+    device, monkeypatch, pad_cls, batch_faces, channels, pytestconfig
+):
+    """The nvtx range push/pop around the forward pass is gated on
+    ``torch.cuda.is_available()``, independent of the tensor's actual
+    device; verify the pass-through path when it reports unavailable."""
+    if pad_cls is HEALPixPaddingv2 and device == "cpu":
+        pytest.skip("HEALPixPaddingv2 requires a CUDA device")
+
+    padding = 2
+    size = 4
+    pad_func = _make_pad_func(pad_cls, padding, device)
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+    invar = torch.randn(batch_faces, channels, size, size, device=device)
+    outvar = pad_func(invar)
+
+    assert outvar.shape == _padded_shape(batch_faces, channels, size, padding)
+
+
+@requires_module("earth2grid")
+def test_HEALPixPadding_forward_correctness_north(device, pytestconfig):
+    """Face 0 is a northern-hemisphere face padded via ``pn``, which rotates
+    its top/left neighbors. Verify against an independently computed expected
+    tensor built from the same documented neighbor/rotation contract."""
+    padding = 2
+    size = 4
+    d = (-2, -1)
+
+    pad_func = _make_pad_func(HEALPixPadding, padding, device)
+    out, f = _padded_faces(pad_func, size, device)
+
+    p = padding
+    center = torch.cat((f[1].rot90(1, d)[-p:, :], f[0], f[4][:p, :]), dim=0)
+    left = torch.cat(
+        (f[2].rot90(2, d)[-p:, -p:], f[3].rot90(-1, d)[:, -p:], f[3][:p, -p:]), dim=0
+    )
+    right = torch.cat((f[1][-p:, :p], f[5][:, :p], f[8][:p, :p]), dim=0)
+    expected = torch.cat((left, center, right), dim=1)
+
+    torch.testing.assert_close(out[0, 0], expected)
+
+
+@requires_module("earth2grid")
+def test_HEALPixPadding_forward_correctness_equator(device, pytestconfig):
+    """Face 4 is an equatorial face padded via ``pe``, including the tl()/br()
+    corner-blend helpers for its missing diagonal neighbors."""
+    padding = 2
+    size = 4
+
+    pad_func = _make_pad_func(HEALPixPadding, padding, device)
+    out, f = _padded_faces(pad_func, size, device)
+
+    p = padding
+    tl_corner = pad_func.tl(f[0], f[3])
+    br_corner = pad_func.br(f[11], f[8])
+
+    center = torch.cat((f[0][-p:, :], f[4], f[11][:p, :]), dim=0)
+    left = torch.cat((tl_corner[-p:, -p:], f[3][:, -p:], f[7][:p, -p:]), dim=0)
+    right = torch.cat((f[5][-p:, :p], f[8][:, :p], br_corner[:p, :p]), dim=0)
+    expected = torch.cat((left, center, right), dim=1)
+
+    torch.testing.assert_close(out[4, 0], expected)
+
+
+@requires_module("earth2grid")
+def test_HEALPixPadding_forward_correctness_south(device, pytestconfig):
+    """Face 8 is a southern-hemisphere face padded via ``ps``, which rotates
+    its bottom/right neighbors."""
+    padding = 2
+    size = 4
+    d = (-2, -1)
+
+    pad_func = _make_pad_func(HEALPixPadding, padding, device)
+    out, f = _padded_faces(pad_func, size, device)
+
+    p = padding
+    center = torch.cat((f[5][-p:, :], f[8], f[11].rot90(1, d)[:p, :]), dim=0)
+    left = torch.cat((f[0][-p:, -p:], f[4][:, -p:], f[11][:p, -p:]), dim=0)
+    right = torch.cat(
+        (f[9][-p:, :p], f[9].rot90(-1, d)[:, :p], f[10].rot90(2, d)[:p, :p]), dim=0
+    )
+    expected = torch.cat((left, center, right), dim=1)
+
+    torch.testing.assert_close(out[8, 0], expected)
+
+
+@requires_module("earth2grid")
+def test_HEALPixPadding_tl_corner_blend(device, pytestconfig):
+    """Directly verify the tl() diagonal-corner blend formula in isolation."""
+    padding = 3
+    size = 5
+    pad_func = _make_pad_func(HEALPixPadding, padding, device)
+
+    top = _arange_grid(size, offset=0, device=device)
+    lft = _arange_grid(size, offset=1000, device=device)
+
+    result = pad_func.tl(top, lft)
+
+    p = padding
+    expected = torch.zeros_like(top)[..., :p, :p]
+    expected[..., -1, -1] = 0.5 * top[..., -1, 0] + 0.5 * lft[..., 0, -1]
+    for i in range(1, p):
+        expected[..., -i - 1, -i:] = top[..., -i - 1, :i]
+        expected[..., -i:, -i - 1] = lft[..., :i, -i - 1]
+        expected[..., -i - 1, -i - 1] = (
+            0.5 * top[..., -i - 1, 0] + 0.5 * lft[..., 0, -i - 1]
+        )
+
+    torch.testing.assert_close(result, expected)
+
+
+@requires_module("earth2grid")
+def test_HEALPixPadding_br_corner_blend(device, pytestconfig):
+    """Directly verify the br() diagonal-corner blend formula in isolation."""
+    padding = 3
+    size = 5
+    pad_func = _make_pad_func(HEALPixPadding, padding, device)
+
+    b = _arange_grid(size, offset=0, device=device)
+    r = _arange_grid(size, offset=1000, device=device)
+
+    result = pad_func.br(b, r)
+
+    p = padding
+    expected = torch.zeros_like(b)[..., :p, :p]
+    expected[..., 0, 0] = 0.5 * b[..., 0, -1] + 0.5 * r[..., -1, 0]
+    for i in range(1, p):
+        expected[..., :i, i] = r[..., -i:, i]
+        expected[..., i, :i] = b[..., i, -i:]
+        expected[..., i, i] = 0.5 * b[..., i, -1] + 0.5 * r[..., -1, i]
+
+    torch.testing.assert_close(result, expected)
+
+
+@requires_module("earth2grid")
+def test_HEALPixPaddingv2_forward(device, pytestconfig):
+    """``HEALPixPaddingv2`` wraps the accelerated ``earth2grid`` padding kernel,
+    which requires an actual CUDA device regardless of earth2grid's presence."""
+    if device == "cpu":
+        pytest.skip("HEALPixPaddingv2 requires a CUDA device")
+
+    padding = 2
+    size = 4
+    pad_func = _make_pad_func(HEALPixPaddingv2, padding, device)
+
+    invar = torch.randn(24, 3, size, size, device=device)
+    outvar = pad_func(invar)
+
+    assert outvar.shape == _padded_shape(24, 3, size, padding)
 
 
 @requires_module("earth2grid")

@@ -153,3 +153,121 @@ def test_post_init_runs_under_compile(
     compiled = torch.compile(fn, fullgraph=False)(points, cells)
 
     torch.testing.assert_close(compiled, expected)
+
+
+@pytest.mark.parametrize(
+    "property_name",
+    ["cell_normals", "cell_areas", "cell_centroids"],
+)
+def test_local_cell_geometry_under_fullgraph_compile(
+    property_name: str,
+    triangle_3d: tuple[torch.Tensor, torch.Tensor],
+) -> None:
+    """Local cell geometry should be capturable as one complete graph.
+
+    Constructing the nested cache must not trigger a nested ``TensorDict.to``
+    while Dynamo is tracing the ``Mesh`` constructor.
+    """
+    points, cells = triangle_3d
+
+    def fn(p: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+        return getattr(Mesh(points=p, cells=c), property_name)
+
+    expected = fn(points, cells)
+    compiled = torch.compile(fn, backend="eager", fullgraph=True)(points, cells)
+
+    torch.testing.assert_close(compiled, expected)
+
+
+def test_cache_rebuild_paths_under_fullgraph_compile(
+    triangle_3d: tuple[torch.Tensor, torch.Tensor],
+) -> None:
+    """Operations that rebuild cache containers remain full-graph capturable."""
+    points, cells = triangle_3d
+
+    def fn(p: torch.Tensor, c: torch.Tensor) -> tuple[torch.Tensor, ...]:
+        mesh = Mesh(points=p, cells=c)
+        _ = mesh.cell_areas
+        mesh = mesh.translate([1.0, 2.0, 3.0])
+        mesh = mesh.transform(
+            torch.eye(3, dtype=p.dtype, device=p.device), assume_invertible=True
+        )
+        mesh = mesh.slice_cells(torch.tensor([0], device=c.device))
+        mesh = mesh.pad(target_n_points=4, target_n_cells=2)
+        mesh = mesh.with_data(point_data={"coordinate": mesh.points[:, 0]})
+        return mesh.points, mesh.cells, mesh.cell_areas, mesh.point_data["coordinate"]
+
+    expected = fn(points, cells)
+    compiled = torch.compile(fn, backend="eager", fullgraph=True)(points, cells)
+
+    for actual, reference in zip(compiled, expected):
+        torch.testing.assert_close(actual, reference)
+
+
+def test_with_points_checks_point_count_under_fullgraph_compile(
+    triangle_3d: tuple[torch.Tensor, torch.Tensor],
+) -> None:
+    """Compiled coordinate replacement must preserve point indexing."""
+    points, cells = triangle_3d
+
+    def fn(p: torch.Tensor, c: torch.Tensor, replacement: torch.Tensor) -> torch.Tensor:
+        return Mesh(points=p, cells=c).with_points(replacement).points
+
+    compiled = torch.compile(fn, backend="eager", fullgraph=True, dynamic=True)
+    torch.testing.assert_close(compiled(points, cells, points.clone()), points)
+
+    with pytest.raises(RuntimeError, match="must preserve point indexing"):
+        compiled(points, cells, points[:-1])
+
+
+def test_with_cells_checks_simplex_type_under_fullgraph_compile(
+    triangle_3d: tuple[torch.Tensor, torch.Tensor],
+) -> None:
+    """Compiled connectivity replacement must preserve simplex type."""
+    points, cells = triangle_3d
+
+    def fn(p: torch.Tensor, c: torch.Tensor, replacement: torch.Tensor) -> torch.Tensor:
+        return Mesh(points=p, cells=c).with_cells(replacement).cells
+
+    compiled = torch.compile(fn, backend="eager", fullgraph=True, dynamic=True)
+    torch.testing.assert_close(compiled(points, cells, cells.clone()), cells)
+
+    tetrahedra = torch.cat([cells, cells[:, :1]], dim=1)
+    with pytest.raises(RuntimeError, match="must preserve simplex type"):
+        compiled(points, cells, tetrahedra)
+
+
+@pytest.mark.parametrize("backend", ["eager", "inductor"])
+@pytest.mark.parametrize("dtype", [torch.int64, torch.uint64])
+def test_integer_coordinates_under_fullgraph_compile(backend, dtype):
+    """Integer promotion stays in one graph and retains its exactness check."""
+    points = torch.tensor([[0, 0], [1, 0], [0, 1]], dtype=dtype)
+    cells = torch.tensor([[0, 1, 2]])
+
+    def area(p, c):
+        return Mesh(points=p, cells=c).cell_areas
+
+    compiled = torch.compile(area, backend=backend, fullgraph=True)
+    torch.testing.assert_close(compiled(points, cells), torch.tensor([0.5]).double())
+
+    inexact = points.clone()
+    inexact[0, 0] = 2**53 + 1
+    with pytest.raises(RuntimeError, match="cannot be represented exactly"):
+        compiled(inexact, cells)
+
+
+@pytest.mark.parametrize("backend", ["eager", "inductor"])
+def test_uint64_connectivity_under_fullgraph_compile(backend):
+    """Compiled normalization rejects overflow instead of using negative IDs."""
+    points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+    cells = torch.tensor([[0, 1, 2]], dtype=torch.uint64)
+
+    def area(p, c):
+        return Mesh(points=p, cells=c).cell_areas
+
+    compiled = torch.compile(area, backend=backend, fullgraph=True)
+    torch.testing.assert_close(compiled(points, cells), torch.tensor([0.5]))
+
+    overflow = torch.tensor([[0, 1, 2**64 - 1]], dtype=torch.uint64)
+    with pytest.raises(RuntimeError, match="uint64 indices.*int64"):
+        compiled(points, overflow)

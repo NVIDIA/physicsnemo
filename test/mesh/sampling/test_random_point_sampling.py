@@ -557,3 +557,16 @@ class TestRealisticMeshSampling:
 
         assert sampled.shape == (5, 3)
         assert_on_device(sampled, device)
+
+
+def test_random_sampling_preserves_mesh_dtype():
+    """Regression: barycentric weights (hence sampled points) must be drawn in the
+    mesh dtype; a float64 mesh previously sampled weights in float32, halving precision.
+    """
+    points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float64)
+    cells = torch.tensor([[0, 1, 2]], dtype=torch.int64)
+    mesh = Mesh(points=points, cells=cells)
+    samples = sample_random_points_on_cells(
+        mesh, cell_indices=torch.zeros(64, dtype=torch.int64)
+    )
+    assert samples.dtype == torch.float64

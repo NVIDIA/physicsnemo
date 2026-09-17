@@ -17,5 +17,6 @@
 """Optimizer utilities for PhysicsNeMo."""
 
 from physicsnemo.optim.combined_optimizer import CombinedOptimizer
+from physicsnemo.optim.muon import Muon
 
-__all__ = ["CombinedOptimizer"]
+__all__ = ["CombinedOptimizer", "Muon"]

@@ -3,10 +3,11 @@ import torch.distributed as dist
 from torch.overrides import handle_torch_function, has_torch_function
 import time
 
-from physicsnemo.distributed import DistributedManager, scatter_tensor, ShardTensor
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.domain_parallel import ShardTensor, scatter_tensor
 from torch.distributed.tensor.placement_types import Shard, Replicate
 
-from physicsnemo.distributed.shard_utils.ring import perform_ring_iteration, RingPassingConfig
+from physicsnemo.domain_parallel.shard_utils.ring import perform_ring_iteration, RingPassingConfig
 
 # This time, let's make two moderately large tensors since we'll have to, at least briefly,
 # construct a tensor of their point-by-point difference.

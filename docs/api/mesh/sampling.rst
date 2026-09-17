@@ -10,7 +10,9 @@ This module provides two categories of functionality:
     Points are sampled using the
     `Dirichlet distribution <https://en.wikipedia.org/wiki/Dirichlet_distribution>`_
     to produce uniform random barycentric coordinates within each cell. Sampling
-    can be uniform per cell or weighted by cell area/volume.
+    returns one point for every supplied cell index; repeated indices request
+    multiple samples from a cell. Callers can draw those indices using cell
+    areas/volumes when they need samples uniform over the full mesh measure.
 
 **Data interpolation at query points**
     Given a set of arbitrary query points, find which mesh cell contains each
@@ -28,12 +30,18 @@ Both capabilities are also accessible as methods on
 
     mesh = sphere_icosahedral.load(subdivisions=3)
 
-    # Sample 10000 random points on the surface
-    sampled_mesh = mesh.sample_random_points_on_cells(n_points=10000)
-    print(sampled_mesh.points.shape)  # (10000, 3)
+    # Sample 10000 points uniformly over surface area. The method returns a
+    # tensor of coordinates, not a new Mesh.
+    import torch
+    cell_indices = torch.multinomial(
+        mesh.cell_areas / mesh.cell_areas.sum(),
+        num_samples=10000,
+        replacement=True,
+    )
+    sampled_points = mesh.sample_random_points_on_cells(cell_indices)
+    print(sampled_points.shape)  # (10000, 3)
 
     # Interpolate data at arbitrary query points
-    import torch
     query_points = torch.randn(500, 3)
     mesh.point_data["height"] = mesh.points[:, 2]
     result = mesh.sample_data_at_points(query_points, data_source="points")

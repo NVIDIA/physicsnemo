@@ -26,8 +26,8 @@ including:
 """
 
 import copy
-from collections.abc import Iterable
-from typing import Optional
+from collections.abc import Iterable, Mapping
+from typing import Callable, Optional
 
 import torch
 import torch.distributed as dist
@@ -35,6 +35,11 @@ from torch.distributed.tensor import DTensor, distribute_module
 from torch.distributed.tensor.device_mesh import DeviceMesh
 
 from physicsnemo.domain_parallel import ShardTensor
+
+try:
+    from tensordict import TensorDict
+except ImportError:
+    TensorDict = None
 
 
 def collective_assert(
@@ -169,7 +174,9 @@ def unparallelize_module(module):
     This function is for testing purposes only. Do not use in production code.
     """
     for name, param in list(module._parameters.items()):
-        if isinstance(param, torch.nn.Parameter) and isinstance(param.data, DTensor):
+        if isinstance(param, torch.nn.Parameter) and isinstance(
+            param.data, (ShardTensor, DTensor)
+        ):
             # gather to replicated then unwrap
             local_tensor = param.data.full_tensor()
             # replace with a normal Parameter
@@ -231,18 +238,34 @@ def sharded_to_local(container):
         The same structure with ShardTensor/DTensor replaced by full tensors.
         If the original tensor required gradients, the returned tensor will
         be detached and have ``requires_grad=True``.
+
+    Notes
+    -----
+    Plain ``torch.Tensor`` values are returned unchanged (they are already
+    local). ``Mapping``/``TensorDict`` containers are rebuilt preserving their
+    type so a model that consumes a ``TensorDict`` condition still receives one.
     """
-    if isinstance(container, ShardTensor) or isinstance(container, DTensor):
+    if isinstance(container, (ShardTensor, DTensor)):
         local_output = container.full_tensor()
         if container.requires_grad:
             local_output = local_output.detach().requires_grad_(True)
         return local_output
-    elif isinstance(container, dict):
-        return {key: sharded_to_local(value) for key, value in container.items()}
-    elif isinstance(container, Iterable):
-        return [sharded_to_local(item) for item in container]
-    else:
+    # A plain tensor is already local; guard this before the generic Iterable
+    # branch so we do not iterate over its leading dimension.
+    if isinstance(container, torch.Tensor):
         return container
+    if TensorDict is not None and isinstance(container, TensorDict):
+        return TensorDict(
+            {key: sharded_to_local(value) for key, value in container.items()},
+            batch_size=container.batch_size,
+        )
+    if isinstance(container, Mapping):
+        return {key: sharded_to_local(value) for key, value in container.items()}
+    if isinstance(container, (list, tuple)):
+        return type(container)(sharded_to_local(item) for item in container)
+    if isinstance(container, Iterable):
+        return [sharded_to_local(item) for item in container]
+    return container
 
 
 def validate_shard_tensor_spec(shard_tensor, group: Optional[dist.ProcessGroup] = None):
@@ -390,6 +413,8 @@ def numerical_shard_tensor_check(
     group: Optional[dist.ProcessGroup] = None,
     amp: bool = False,
     amp_dtype: torch.dtype = torch.float16,
+    distribute_fn: Optional[Callable[[torch.nn.Module], torch.nn.Module]] = None,
+    output_check_fn: Optional[Callable[[object], None]] = None,
 ) -> None:
     r"""Numerically validate a ShardTensor operation against local computation.
 
@@ -424,19 +449,35 @@ def numerical_shard_tensor_check(
     amp_dtype : torch.dtype, default=torch.float16
         The dtype to use for autocast when ``amp=True``.  Common choices are
         ``torch.float16`` and ``torch.bfloat16``.
+    distribute_fn : Optional[Callable[[torch.nn.Module], torch.nn.Module]], optional
+        Strategy used to distribute the module across the mesh. When ``None``
+        (default) the module is replicated with ``distribute_module`` -- the
+        historical behavior used by the op tests. When provided (e.g. a DDP or
+        FSDP2 wrapper from the model harness), it is called on ``module`` and its
+        result is used as the distributed module. Because DDP/FSDP wrappers are
+        not safely deep-copyable, the local reference is snapshotted from
+        ``module`` *before* ``distribute_fn`` runs; the autouse seed fixture makes
+        per-rank construction identical, so this matches the distributed weights.
+    output_check_fn : Optional[Callable[[object], None]], optional
+        Optional callback invoked on the distributed output (e.g. to assert its
+        shape and ``ShardTensor`` placements). Assertions must be identical on
+        every rank to stay collective.
 
     Raises
     ------
     AssertionError
         If forward outputs don't match or (if checking grads) gradients don't match.
     """
-    # Make sure the module's parameters all align on ever rank of the mesh:
-    d_module = distribute_module(module, device_mesh=mesh)
-    # (By default this replicates)
-
-    # Then, get a local copy of the parameters
-    module = copy.deepcopy(d_module)
-    module = unparallelize_module(module)
+    if distribute_fn is None:
+        # Replicate params across the mesh, then snapshot a local (full) copy.
+        d_module = distribute_module(module, device_mesh=mesh)
+        local_module = unparallelize_module(copy.deepcopy(d_module))
+    else:
+        # Snapshot the plain module before wrapping (wrappers are not safely
+        # deep-copyable), then distribute in place / via wrapper.
+        local_module = unparallelize_module(copy.deepcopy(module))
+        d_module = distribute_fn(module)
+    module = local_module
 
     # Now, get the local version of the data:
     local_input_args = sharded_to_local(input_args)
@@ -448,25 +489,31 @@ def numerical_shard_tensor_check(
         # Run the distributed module on the distributed data:
         d_output = d_module(*input_args, **input_kwargs)
 
+    if output_check_fn is not None:
+        output_check_fn(d_output)
+
     fwd_comparison_fn(output, d_output, atol, rtol, group)
 
     if check_grads:
         with torch.amp.autocast("cuda", enabled=amp, dtype=amp_dtype):
             # single device grads:
-            default_loss_fn(output).backward()
+            loss_fn(output).backward()
 
             # distributed grads:
-            default_loss_fn(d_output).backward()
+            loss_fn(d_output).backward()
 
         # compare the grads:
         for param, d_param in zip(module.parameters(), d_module.parameters()):
+            # Skip params unused by this config (no grad on either side).
+            if param.grad is None and d_param.grad is None:
+                continue
             default_tensor_comparison(
                 param.grad, d_param.grad, atol=atol, rtol=rtol, group=group
             )
 
         # Check the input grads, if they are required:
         for input_arg, d_input_arg in zip(local_input_args, input_args):
-            if d_input_arg.requires_grad:
+            if isinstance(d_input_arg, torch.Tensor) and d_input_arg.requires_grad:
                 default_tensor_comparison(
                     input_arg.grad, d_input_arg.grad, atol, rtol, group
                 )

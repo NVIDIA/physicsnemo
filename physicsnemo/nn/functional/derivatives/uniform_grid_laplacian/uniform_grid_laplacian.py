@@ -1,0 +1,181 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+
+import torch
+
+from physicsnemo.core.function_spec import FunctionSpec
+
+from ._torch_impl import uniform_grid_laplacian_torch
+from ._warp_impl import uniform_grid_laplacian_warp
+
+
+class UniformGridLaplacian(FunctionSpec):
+    r"""Compute periodic Laplacians on a uniform grid.
+
+    This functional accepts scalar fields defined on a 1D/2D/3D uniform
+    Cartesian grid and computes the trace of the Hessian,
+
+    .. math::
+
+       \nabla^2 f = \sum_i \partial_{ii} f.
+
+    Parameters
+    ----------
+    field : torch.Tensor
+        Scalar grid field with shape ``(n0,)``, ``(n0,n1)``, or ``(n0,n1,n2)``.
+    spacing : float | Sequence[float], optional
+        Uniform spacing per grid axis. A scalar applies the same spacing to
+        every axis.
+    order : int, optional
+        Central-difference accuracy order. Supported values match
+        :func:`physicsnemo.nn.functional.uniform_grid_gradient`.
+    implementation : {"warp", "torch"} or None
+        Explicit backend selection. When ``None``, rank-based backend dispatch
+        is used.
+
+    Returns
+    -------
+    torch.Tensor
+        Scalar Laplacian field with the same shape as ``field``.
+    """
+
+    _BENCHMARK_CASES = (
+        ("1d-n8192-o2", (8192,), 0.01, 2),
+        ("1d-n8192-o4", (8192,), 0.01, 4),
+        ("2d-512x512-o2", (512, 512), (0.01, 0.02), 2),
+        ("2d-384x384-o4", (384, 384), (0.01, 0.02), 4),
+        ("3d-96x96x96-o2", (96, 96, 96), 0.02, 2),
+    )
+
+    _BACKWARD_CASES = (
+        ("1d-grad-n4096-o2", (4096,), 0.01, 2),
+        ("2d-grad-256x256-o2", (256, 256), (0.01, 0.02), 2),
+        ("2d-grad-192x192-o4", (192, 192), (0.01, 0.02), 4),
+        ("3d-grad-64x64x64-o2", (64, 64, 64), 0.02, 2),
+    )
+
+    # Fourth-order second-derivative stencils subtract nearly equal values.
+    # The fused Warp kernel and composed Torch reference take different
+    # float32 rounding paths on CUDA, so Laplacian parity needs a small
+    # absolute tolerance while the analytic tests keep physical accuracy
+    # coverage separate.
+    _COMPARE_ATOL = 5e-3
+    _COMPARE_RTOL = 1e-5
+    _COMPARE_BACKWARD_ATOL = 1e-2
+    _COMPARE_BACKWARD_RTOL = 1e-5
+
+    @FunctionSpec.register(name="warp", required_imports=("warp>=0.6.0",), rank=0)
+    def warp_forward(
+        field: torch.Tensor,
+        spacing: float | Sequence[float] = 1.0,
+        order: int = 2,
+    ) -> torch.Tensor:
+        """Dispatch uniform-grid Laplacian to the Warp backend."""
+        return uniform_grid_laplacian_warp(
+            field=field,
+            spacing=spacing,
+            order=order,
+        )
+
+    @FunctionSpec.register(name="torch", rank=1, baseline=True)
+    def torch_forward(
+        field: torch.Tensor,
+        spacing: float | Sequence[float] = 1.0,
+        order: int = 2,
+    ) -> torch.Tensor:
+        """Dispatch uniform-grid Laplacian to eager PyTorch."""
+        return uniform_grid_laplacian_torch(
+            field=field,
+            spacing=spacing,
+            order=order,
+        )
+
+    @classmethod
+    def make_inputs_forward(cls, device: torch.device | str = "cpu"):
+        """Yield representative forward benchmark and parity input cases."""
+        device = torch.device(device)
+        for label, shape, spacing, order in cls._BENCHMARK_CASES:
+            field = _make_periodic_scalar_field(shape, device=device)
+            yield label, (field,), {"spacing": spacing, "order": order}
+
+    @classmethod
+    def make_inputs_backward(cls, device: torch.device | str = "cpu"):
+        """Yield representative backward benchmark and parity input cases."""
+        device = torch.device(device)
+        for label, shape, spacing, order in cls._BACKWARD_CASES:
+            field = (
+                _make_periodic_scalar_field(shape, device=device)
+                .detach()
+                .clone()
+                .requires_grad_(True)
+            )
+            yield label, (field,), {"spacing": spacing, "order": order}
+
+    @classmethod
+    def compare_forward(cls, output: torch.Tensor, reference: torch.Tensor) -> None:
+        """Compare forward outputs across implementations."""
+        torch.testing.assert_close(
+            output,
+            reference,
+            atol=cls._COMPARE_ATOL,
+            rtol=cls._COMPARE_RTOL,
+        )
+
+    @classmethod
+    def compare_backward(cls, output: torch.Tensor, reference: torch.Tensor) -> None:
+        """Compare backward gradients across implementations."""
+        torch.testing.assert_close(
+            output,
+            reference,
+            atol=cls._COMPARE_BACKWARD_ATOL,
+            rtol=cls._COMPARE_BACKWARD_RTOL,
+        )
+
+
+def _make_periodic_scalar_field(
+    shape: tuple[int, ...],
+    *,
+    device: torch.device,
+) -> torch.Tensor:
+    """Construct smooth periodic scalar fields for benchmark cases."""
+    axes = tuple(
+        torch.arange(n, device=device, dtype=torch.float32) / float(n) for n in shape
+    )
+    if len(shape) == 1:
+        (x0,) = axes
+        return torch.sin(2.0 * torch.pi * x0)
+
+    if len(shape) == 2:
+        x0, x1 = axes
+        xx, yy = torch.meshgrid(x0, x1, indexing="ij")
+        return torch.sin(2.0 * torch.pi * xx) + 0.5 * torch.cos(2.0 * torch.pi * yy)
+
+    x0, x1, x2 = axes
+    xx, yy, zz = torch.meshgrid(x0, x1, x2, indexing="ij")
+    return (
+        torch.sin(2.0 * torch.pi * xx)
+        + 0.5 * torch.cos(2.0 * torch.pi * yy)
+        + 0.25 * torch.sin(2.0 * torch.pi * zz)
+    )
+
+
+uniform_grid_laplacian = UniformGridLaplacian.make_function("uniform_grid_laplacian")
+
+__all__ = ["UniformGridLaplacian", "uniform_grid_laplacian"]

@@ -21,7 +21,65 @@ that are under active development. These components may have breaking API
 changes between releases.
 """
 
-from .flare_attention import FLARE
-from .diffusion_unet_3d_blocks import UNetBlock3D, Conv3D, GroupNorm3D, UNetAttention3D
+import warnings
 
-__all__ = ["FLARE", "UNetBlock3D", "Conv3D", "GroupNorm3D", "UNetAttention3D"]
+from physicsnemo.core.warnings import LegacyFeatureWarning
+
+from .diffusion_unet_3d_blocks import Conv3D, GroupNorm3D, UNetAttention3D, UNetBlock3D
+from .rope import (
+    build_axial_rope_cos_sin_2d_continuous,
+    build_rope_cos_sin_1d_continuous,
+    spherical_centroid,
+    stereographic_projection,
+)
+from .point_tokenizer import PointCloudTokenizer
+from .point_utils import (
+    chunked_knn_indices,
+    compute_batch_offset_step,
+    counts_to_mask,
+    flatten_batched_coords,
+    flatten_padded_batch,
+    gather_rows,
+    masked_mean,
+    unflatten_to_padded,
+)
+
+__all__ = [
+    "FLARE",
+    "UNetBlock3D",
+    "Conv3D",
+    "GroupNorm3D",
+    "UNetAttention3D",
+    "build_axial_rope_cos_sin_2d_continuous",
+    "build_rope_cos_sin_1d_continuous",
+    "spherical_centroid",
+    "stereographic_projection",
+    "PointCloudTokenizer",
+    "chunked_knn_indices",
+    "compute_batch_offset_step",
+    "counts_to_mask",
+    "flatten_batched_coords",
+    "flatten_padded_batch",
+    "gather_rows",
+    "masked_mean",
+    "unflatten_to_padded",
+]
+
+
+def __getattr__(name):
+    # Lazy legacy re-export: FLARE moved to physicsnemo.nn, and warning only on
+    # access keeps plain 'import physicsnemo.experimental.nn' silent.
+    if name == "FLARE":
+        warnings.warn(
+            "Importing 'FLARE' from 'physicsnemo.experimental.nn' is deprecated. "
+            "Use 'from physicsnemo.nn import FLARE' instead. "
+            "This backward-compatibility shim will be removed in a future release.",
+            LegacyFeatureWarning,
+            stacklevel=2,
+        )
+        from physicsnemo.nn import FLARE
+
+        return FLARE
+    raise AttributeError(
+        f"module 'physicsnemo.experimental.nn' has no attribute {name!r}"
+    )

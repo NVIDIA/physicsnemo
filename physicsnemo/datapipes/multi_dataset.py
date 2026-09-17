@@ -32,6 +32,7 @@ import torch
 from tensordict import TensorDict
 
 from physicsnemo.datapipes._rng import fork_generator
+from physicsnemo.datapipes.keys import format_leaf_keys, leaf_keys
 from physicsnemo.datapipes.protocols import DatasetBase
 from physicsnemo.datapipes.registry import register
 
@@ -63,23 +64,29 @@ def _validate_strict_outputs(datasets: Sequence[DatasetBase]) -> list[str]:
     """
     if not datasets:
         return []
-    ref_keys: Optional[list[str]] = None
+    ref_keys: Optional[set] = None
+    ref_names: list[str] = []
     ref_index: Optional[int] = None
     for i, ds in enumerate(datasets):
         if len(ds) == 0:
             continue
         data, _ = ds[0]
-        keys = sorted(data.keys())
+        ### Compare the actual leaf keys (nested included) so two datasets
+        ### whose groups hold different leaves are caught here, not mid-epoch
+        ### in collate; a literal "a.b" and a nested ("a", "b") stay distinct.
+        keys = set(leaf_keys(data))
         if ref_keys is None:
             ref_keys = keys
+            ref_names = format_leaf_keys(data)
             ref_index = i
         elif keys != ref_keys:
             raise ValueError(
                 "output_strict=True requires identical output keys (TensorDict keys) "
-                f"across datasets: dataset {ref_index} has {ref_keys}, dataset {i} has {keys}"
+                f"across datasets: dataset {ref_index} has {ref_names}, "
+                f"dataset {i} has {format_leaf_keys(data)}"
             )
     if ref_keys is not None:
-        return list(ref_keys)
+        return ref_names
     first = datasets[0]
     return list(first.field_names) if hasattr(first, "field_names") else []
 
@@ -303,6 +310,76 @@ class MultiDataset:
         metadata = dict(metadata)
         metadata[DATASET_INDEX_METADATA_KEY] = ds_id
         return data, metadata
+
+    def submit(self, index: int, stream: Optional[Any] = None) -> tuple[int, Any]:
+        """
+        Submit a global index for background loading (FIFO prefetch primitive).
+
+        Maps the global index to its owning sub-dataset and delegates to
+        that dataset's :meth:`~DatasetBase.submit`. The returned handle is
+        wrapped with the owning dataset id so :meth:`consume` can restore
+        the ``dataset_index`` metadata.
+
+        Parameters
+        ----------
+        index : int
+            Global sample index to load.
+        stream : object, optional
+            CUDA stream for the consume step.
+
+        Returns
+        -------
+        tuple[int, PrefetchHandle]
+            ``(dataset_index, handle)`` to pass to :meth:`consume`.
+        """
+        ds_id, local_i = self._index_to_dataset_and_local(index)
+        handle = self._datasets[ds_id].submit(local_i, stream=stream)
+        return ds_id, handle
+
+    def consume(
+        self, handle: tuple[int, Any], *, defer_sync: bool = False
+    ) -> tuple[TensorDict, dict[str, Any]]:
+        """
+        Resolve a :meth:`submit` handle into ``(data, metadata)``.
+
+        Parameters
+        ----------
+        handle : tuple[int, PrefetchHandle]
+            The ``(dataset_index, handle)`` returned by :meth:`submit`.
+        defer_sync : bool, default=False
+            Forwarded to the owning sub-dataset's
+            :meth:`~DatasetBase.consume`.  When True, the sub-dataset records
+            its preprocessing event into its own ``_events_pending`` instead
+            of making the compute stream wait on it; :meth:`_pop_events`
+            collects those events for the DataLoader.
+
+        Returns
+        -------
+        tuple[TensorDict, dict[str, Any]]
+            Sample and metadata, enriched with ``dataset_index``.
+        """
+        ds_id, inner = handle
+        data, metadata = self._datasets[ds_id].consume(inner, defer_sync=defer_sync)
+        metadata = dict(metadata)
+        metadata[DATASET_INDEX_METADATA_KEY] = ds_id
+        return data, metadata
+
+    def _pop_events(self) -> list:
+        """Aggregate and clear pending preprocessing events across sub-datasets.
+
+        Each sub-dataset records its deferred preprocessing CUDA events on
+        itself, so the DataLoader retrieves them through the
+        :class:`MultiDataset` by gathering from every constituent.
+
+        Returns
+        -------
+        list
+            CUDA events recorded by the sub-datasets since the last pop.
+        """
+        collected: list = []
+        for ds in self._datasets:
+            collected.extend(ds._pop_events())
+        return collected
 
     def prefetch(
         self,

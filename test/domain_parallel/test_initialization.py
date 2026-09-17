@@ -121,6 +121,101 @@ def init_from_data_rank_worker(mesh):
         assert dim == local_data.shape[i]
 
 
+def scatter_tensor_requires_grad_contract_worker(mesh, requires_grad: bool):
+    r"""Validate scatter_tensor construction contract for requires_grad modes."""
+    dm = DistributedManager()
+    rank = dm.rank
+    global_shape, placements = init_global_shape_and_placements(mesh)
+    source = 0
+
+    if rank == source:
+        raw_data = torch.randn(
+            global_shape, device=torch.device(f"cuda:{dm.local_rank}")
+        )
+    else:
+        raw_data = None
+
+    st = scatter_tensor(
+        raw_data,
+        source,
+        mesh,
+        placements,
+        global_shape=torch.Size(global_shape),
+        dtype=torch.float32,
+        requires_grad=requires_grad,
+    )
+
+    assert st.requires_grad is requires_grad
+    if requires_grad:
+        assert st.is_leaf
+
+
+@pytest.mark.timeout(10)
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize("requires_grad", [False, True])
+def test_scatter_tensor_requires_grad_contract_1d(distributed_mesh, requires_grad):
+    scatter_tensor_requires_grad_contract_worker(distributed_mesh, requires_grad)
+
+
+@pytest.mark.timeout(10)
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize("requires_grad", [False, True])
+def test_scatter_tensor_requires_grad_contract_2d(distributed_mesh_2d, requires_grad):
+    scatter_tensor_requires_grad_contract_worker(distributed_mesh_2d, requires_grad)
+
+
+def scatter_tensor_grad_population_worker(mesh):
+    r"""Validate that gradients populate for scatter_tensor(..., requires_grad=True)."""
+    dm = DistributedManager()
+    rank = dm.rank
+    global_shape, placements = init_global_shape_and_placements(mesh)
+    source = 0
+
+    if rank == source:
+        raw_data = torch.randn(
+            global_shape, device=torch.device(f"cuda:{dm.local_rank}")
+        )
+    else:
+        raw_data = None
+
+    st = scatter_tensor(
+        raw_data,
+        source,
+        mesh,
+        placements,
+        global_shape=torch.Size(global_shape),
+        dtype=torch.float32,
+        requires_grad=True,
+    )
+    assert st.is_leaf
+    assert st.requires_grad
+
+    reference = st.full_tensor().detach().requires_grad_(True)
+    reference_loss = (reference**2).sum()
+    reference_loss.backward()
+
+    st2 = st**2
+    sharded_loss = st2.sum()
+    sharded_loss.backward()
+
+    assert st.grad is not None
+    assert st.grad._spec.placements == st._spec.placements
+    assert st.grad._spec.sharding_shapes() == st._spec.sharding_shapes()
+    assert torch.allclose(st.grad.full_tensor(), reference.grad)
+
+
+@pytest.mark.timeout(10)
+@pytest.mark.multigpu_static
+def test_scatter_tensor_requires_grad_gradient_1d(distributed_mesh):
+    scatter_tensor_grad_population_worker(distributed_mesh)
+
+
+@pytest.mark.timeout(10)
+@pytest.mark.multigpu_static
+def test_scatter_tensor_requires_grad_gradient_2d(distributed_mesh_2d):
+    scatter_tensor_grad_population_worker(distributed_mesh_2d)
+
+
 @pytest.mark.timeout(10)
 @pytest.mark.multigpu_static
 def test_shard_tensor_initialization_from_data_rank_1d(distributed_mesh, verbose=False):
@@ -161,8 +256,6 @@ def shard_tensor_initialization_from_all_dtensor_worker(mesh):
     dt = distribute_tensor(raw_data, device_mesh=mesh, placements=placements)
 
     st = ShardTensor.from_dtensor(dt)
-
-    print(f"Rank {dm.rank} made shard tensors.")
 
     dt_full = dt.full_tensor()
     st_full = st.full_tensor()

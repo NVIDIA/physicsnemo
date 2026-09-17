@@ -37,6 +37,7 @@ from typing import Literal
 
 import torch
 import torch.distributed as dist
+import torch.distributed._functional_collectives as funcol
 from torch.autograd.profiler import record_function
 from torch.distributed.device_mesh import DeviceMesh
 
@@ -170,7 +171,6 @@ class HaloPadding(torch.autograd.Function):
 
     @staticmethod
     def forward(
-        ctx: torch.autograd.function.FunctionCtx,
         tensor: torch.Tensor,
         mesh: DeviceMesh,
         config: HaloConfig,
@@ -179,8 +179,6 @@ class HaloPadding(torch.autograd.Function):
 
         Parameters
         ----------
-        ctx : torch.autograd.function.FunctionCtx
-            Autograd context for saving tensors/variables for backward.
         tensor : torch.Tensor
             Tensor to apply halo padding to.
         mesh : DeviceMesh
@@ -193,17 +191,14 @@ class HaloPadding(torch.autograd.Function):
         torch.Tensor
             Padded tensor with halos added locally to each chunk.
         """
+        return halo_padding_fwd_primitive(tensor, mesh, config)
 
-        # Save context for backward pass
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        r"""Save ``mesh`` and ``config`` for the backward pass."""
+        _tensor, mesh, config = inputs
         ctx.mesh = mesh
         ctx.config = config
-
-        padded_tensor = halo_padding_fwd_primitive(
-            tensor,
-            mesh,
-            config,
-        )
-        return padded_tensor
 
     @staticmethod
     def backward(
@@ -224,13 +219,10 @@ class HaloPadding(torch.autograd.Function):
             Tuple of (gradient for input tensor, ``None`` for mesh,
             ``None`` for config).
         """
-        mesh = ctx.mesh
-        config = ctx.config
-
         grad_input = halo_padding_bwd_primitive(
             grad_output,
-            mesh,
-            config,
+            ctx.mesh,
+            ctx.config,
         )
 
         return grad_input, None, None
@@ -249,7 +241,6 @@ class UnHaloPadding(torch.autograd.Function):
 
     @staticmethod
     def forward(
-        ctx: torch.autograd.function.FunctionCtx,
         tensor: torch.Tensor,
         mesh: DeviceMesh,
         config: HaloConfig,
@@ -262,8 +253,6 @@ class UnHaloPadding(torch.autograd.Function):
 
         Parameters
         ----------
-        ctx : torch.autograd.function.FunctionCtx
-            Autograd context for saving tensors/variables for backward.
         tensor : torch.Tensor
             Tensor to remove halo padding from.
         mesh : DeviceMesh
@@ -277,10 +266,6 @@ class UnHaloPadding(torch.autograd.Function):
             Tensor with halo regions removed.
         """
 
-        # Save context for backward pass
-        ctx.mesh = mesh
-        ctx.config = config
-
         # Chop off the halos
         _left, unpadded_tensor, _right = slice_halo_regions(
             tensor,
@@ -288,10 +273,42 @@ class UnHaloPadding(torch.autograd.Function):
             config,
         )
 
-        ctx.left_shape = _left.shape
-        ctx.right_shape = _right.shape
-
         return unpadded_tensor
+
+    @staticmethod
+    def setup_context(ctx, inputs, output) -> None:
+        r"""Save ``mesh``, ``config`` and the left/right halo shapes for backward.
+
+        The left/right halo shapes are derived from the input tensor's shape
+        along ``config.tensor_dim`` and the rank in the mesh, matching the
+        slicing performed by ``slice_halo_regions``.
+        """
+        tensor, mesh, config = inputs
+
+        # Reconstruct the left/right slice boundaries on this rank without
+        # actually running ``slice_halo_regions`` a second time.
+        local_group = mesh.get_group(config.mesh_dim)
+        local_rank = mesh.get_local_rank(config.mesh_dim)
+        local_size = dist.get_world_size(group=local_group)
+
+        dim_shape = tensor.shape[config.tensor_dim]
+
+        start = config.halo_size if local_rank != 0 else config.edge_padding_size
+        end = (
+            dim_shape - config.halo_size
+            if local_rank != local_size - 1
+            else dim_shape - config.edge_padding_size
+        )
+
+        left_shape = list(tensor.shape)
+        left_shape[config.tensor_dim] = start
+        right_shape = list(tensor.shape)
+        right_shape[config.tensor_dim] = dim_shape - end
+
+        ctx.mesh = mesh
+        ctx.config = config
+        ctx.left_shape = torch.Size(left_shape)
+        ctx.right_shape = torch.Size(right_shape)
 
     @staticmethod
     def backward(
@@ -501,11 +518,15 @@ def halo_padding_bwd_primitive(
         halo_config.communication_method,
     )
 
-    # Apply halo gradients
+    # ``local_grad`` is a view into ``grad_output`` and ``apply_grad_halo``
+    # accumulates in place. Own the memory before writing: the engine's
+    # grad_output must never be mutated by a backward, and expanded grads
+    # (e.g. the stride-0 ones from ``.sum().backward()``) reject in-place
+    # writes outright.
     final_grad_local = apply_grad_halo(
         mesh,
         halo_config,
-        local_grad,
+        local_grad.clone(),
         grad_from_left,
         grad_from_right,
     )
@@ -571,6 +592,16 @@ def perform_halo_collective(
     local_size = dist.get_world_size(group=local_group)
 
     if method == "p2p":
+        # ``P2POp`` / ``batch_isend_irecv`` / ``set_device`` have no FX
+        # representation, so this branch cannot be traced. Fail loudly at
+        # trace time instead of letting dynamo graph-break unpredictably
+        # inside the autograd.Function. Eager p2p is unaffected.
+        if torch.compiler.is_compiling():
+            raise RuntimeError(
+                "Halo exchange with communication_method='p2p' is not "
+                "supported under torch.compile; use 'a2a' (the default), "
+                "which lowers to a traceable funcol all-to-all."
+            )
         # Point-to-point communication
         id_of_right = local_rank + 1 if local_rank < local_size - 1 else None
         id_of_left = local_rank - 1 if local_rank > 0 else None
@@ -630,45 +661,63 @@ def perform_halo_collective(
                 req.wait()
 
     elif method == "a2a":
-        # All-to-all communication
-        all_to_all_send = [
-            torch.empty(0, dtype=dtype, device=device) for _ in range(local_size)
-        ]
-        all_to_all_recv = [
-            torch.empty(0, dtype=dtype, device=device) for _ in range(local_size)
-        ]
+        # This has to be funcol collectives, below, to be
+        # compatible with torch.compile.
+        #
+        # Symmetric-halo assumption: what I receive from neighbor R has the
+        # same numel as what I send to R (true for uniform halo sizes used
+        # by conv / natten / pooling / etc).
+        input_split_sizes = [0] * local_size
+        output_split_sizes = [0] * local_size
+        halo_from_left_shape: torch.Size | None = None
+        halo_from_right_shape: torch.Size | None = None
+        send_chunks: list[torch.Tensor] = []
 
-        # Set up send/recv buffers
         if local_rank != 0:
-            # Send one left
-            all_to_all_send[local_rank - 1] = halo_to_left
-            # Receive one right (need to initialize an empty buffer of the right size):
-            all_to_all_recv[local_rank - 1] = torch.zeros_like(
-                halo_to_left
-            ).contiguous()
+            # Send one to the left; receive one (same size) from the left.
+            flat_left = halo_to_left.reshape(-1).contiguous()
+            send_chunks.append(flat_left)
+            input_split_sizes[local_rank - 1] = flat_left.numel()
+            output_split_sizes[local_rank - 1] = flat_left.numel()
+            halo_from_left_shape = halo_to_left.shape
 
         if local_rank != local_size - 1:
-            # Send one to the right:
-            all_to_all_send[local_rank + 1] = halo_to_right
-            # Receive one from the right:
-            all_to_all_recv[local_rank + 1] = torch.zeros_like(
-                halo_to_right
-            ).contiguous()
+            # Send one to the right; receive one (same size) from the right.
+            flat_right = halo_to_right.reshape(-1).contiguous()
+            send_chunks.append(flat_right)
+            input_split_sizes[local_rank + 1] = flat_right.numel()
+            output_split_sizes[local_rank + 1] = flat_right.numel()
+            halo_from_right_shape = halo_to_right.shape
 
-        # Perform exchange
-        with record_function("all_to_all_queue_and_wait"):
-            request = dist.all_to_all(
-                all_to_all_recv, all_to_all_send, group=local_group, async_op=async_op
+        # Concatenated send buffer. The cat order (left then right) matches
+        # the ascending destination-rank order required by all_to_all_single.
+        if send_chunks:
+            send_buf = torch.cat(send_chunks)
+        else:
+            send_buf = torch.empty(0, dtype=dtype, device=device)
+
+        with record_function("all_to_all_single_funcol"):
+            recv_buf = funcol.all_to_all_single_autograd(
+                send_buf,
+                output_split_sizes,
+                input_split_sizes,
+                (mesh, mesh_dim),
             )
+            if isinstance(recv_buf, funcol.AsyncCollectiveTensor):
+                recv_buf = recv_buf.wait()
 
-            if async_op:
-                # According to the docs, this will wait until the collectives are enqueued and it's safe to use the recv buffers.
-                request.wait()
-
-        # Extract received halos
-        halo_from_left = all_to_all_recv[local_rank - 1] if local_rank != 0 else None
+        # Split into per-source-rank chunks (some empty), then reshape to
+        # the original halo tensor shapes.
+        recv_chunks = list(torch.split(recv_buf, output_split_sizes))
+        halo_from_left = (
+            recv_chunks[local_rank - 1].view(halo_from_left_shape)
+            if local_rank != 0
+            else None
+        )
         halo_from_right = (
-            all_to_all_recv[local_rank + 1] if local_rank != local_size - 1 else None
+            recv_chunks[local_rank + 1].view(halo_from_right_shape)
+            if local_rank != local_size - 1
+            else None
         )
 
     return halo_from_left, halo_from_right

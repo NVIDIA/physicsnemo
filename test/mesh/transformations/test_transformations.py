@@ -40,10 +40,6 @@ from physicsnemo.mesh.transformations.geometric import (
     translate,
 )
 
-pv = pytest.importorskip("pyvista", minversion="0.46.4")
-
-from physicsnemo.mesh.io.io_pyvista import from_pyvista, to_pyvista  # noqa: E402
-
 ###############################################################################
 # Helper Functions
 ###############################################################################
@@ -114,13 +110,7 @@ def validate_caches(
                 f"Cache {cache_name} should exist but is missing"
             )
 
-            mesh_no_cache = Mesh(
-                points=mesh.points,
-                cells=mesh.cells,
-                point_data=mesh.point_data,
-                cell_data=mesh.cell_data,
-                global_data=mesh.global_data,
-            )
+            mesh_no_cache = mesh.strip_caches()
 
             if cache_name == "areas":
                 recomputed = mesh_no_cache.cell_areas
@@ -139,6 +129,58 @@ def validate_caches(
             assert mesh._cache.get(("cell", cache_name), None) is None, (
                 f"Cache {cache_name} should not exist but is present"
             )
+
+
+def test_point_normals_cache_correct_under_shear():
+    """Regression: the point-normals cache must not be propagated via the per-face
+    inverse-transpose law under an anisotropic/shear map. Vertex normals are an
+    angle_area-weighted average of incident face normals, and those weights are not
+    preserved by anisotropic maps, so the propagated value diverges from a true
+    recompute. After the fix the cache is dropped and lazily recomputed, so it must
+    match a freshly-built sheared mesh.
+    """
+    from physicsnemo.mesh.primitives.surfaces import tetrahedron_surface
+
+    # A tetrahedron surface is non-coplanar: each vertex is shared by 3 faces with
+    # distinct normals, so angle_area weighting genuinely blends directions.
+    mesh = tetrahedron_surface.load()
+    _ = mesh.point_normals  # warm the point-normals cache on the original mesh
+    assert mesh._cache.get(("point", "normals"), None) is not None
+
+    shear = torch.tensor(
+        [[1.0, 0.6, 0.2], [0.0, 1.0, 0.4], [0.0, 0.0, 1.0]],
+        dtype=mesh.points.dtype,
+    )
+    transformed = mesh.transform(shear)
+
+    fresh = Mesh(points=transformed.points, cells=transformed.cells).point_normals
+    assert torch.allclose(transformed.point_normals, fresh, atol=1e-5), (
+        "point_normals after a shear must match a fresh recompute, not a stale "
+        "inverse-transpose propagation"
+    )
+
+
+def test_cached_normals_remain_unit_after_large_scale_transform(device):
+    """Small inverse-transformed normals retain their direction and unit length."""
+    mesh = Mesh(
+        points=torch.tensor(
+            [[0.0, 0.0], [1.0, 0.25], [1.5, 1.5]],
+            dtype=torch.float64,
+            device=device,
+        ),
+        cells=torch.tensor([[0, 1], [1, 2]], device=device),
+    )
+    _ = mesh.cell_normals
+    _ = mesh.point_normals
+    matrix = torch.diag(torch.tensor([1.0e14, 2.0e14], device=device).double())
+
+    transformed = mesh.transform(matrix, assume_invertible=True)
+    fresh = Mesh(points=transformed.points, cells=transformed.cells)
+
+    for association in ("cell", "point"):
+        cached = transformed._cache[association, "normals"]
+        torch.testing.assert_close(cached, getattr(fresh, f"{association}_normals"))
+        torch.testing.assert_close(cached.norm(dim=-1), torch.ones_like(cached[:, 0]))
 
 
 def assert_on_device(tensor: torch.Tensor, expected_device: str) -> None:
@@ -161,6 +203,9 @@ class TestTranslation:
 
     def test_translate_against_pyvista(self, device):
         """Cross-validate against PyVista translate."""
+        pv = pytest.importorskip("pyvista", minversion="0.46.4")
+        from physicsnemo.mesh.io.io_pyvista import from_pyvista, to_pyvista
+
         pv_mesh = pv.examples.load_airplane()
         tm_mesh = from_pyvista(pv_mesh)
         tm_mesh = Mesh(
@@ -209,6 +254,7 @@ class TestTranslation:
 
         original_areas = mesh._cache.get(("cell", "areas"), None).clone()
         original_centroids = mesh._cache.get(("cell", "centroids"), None).clone()
+        original_topology = mesh.get_point_to_points_adjacency()
 
         offset = torch.ones(n_spatial_dims, device=device)
         translated = translate(mesh, offset)
@@ -238,6 +284,15 @@ class TestTranslation:
                 translated._cache.get(("cell", "normals"), None), original_normals
             ), "Normals should be unchanged by translation"
 
+        cached_topology = translated._cache.get(("topology", "point_to_points"))
+        assert cached_topology is not None
+        assert (
+            cached_topology.offsets.data_ptr() == original_topology.offsets.data_ptr()
+        )
+        assert (
+            cached_topology.indices.data_ptr() == original_topology.indices.data_ptr()
+        )
+
     def test_translate_preserves_data(self):
         """Test that translate preserves vector fields unchanged."""
         points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
@@ -264,6 +319,9 @@ class TestRotation:
     @pytest.mark.parametrize("axis_idx,angle", [(0, 45.0), (1, 30.0), (2, 60.0)])
     def test_rotate_against_pyvista(self, axis_idx, angle, device):
         """Cross-validate against PyVista rotation."""
+        pv = pytest.importorskip("pyvista", minversion="0.46.4")
+        from physicsnemo.mesh.io.io_pyvista import from_pyvista, to_pyvista
+
         pv_mesh = pv.examples.load_airplane()
         tm_mesh = from_pyvista(pv_mesh)
         tm_mesh = Mesh(
@@ -388,6 +446,9 @@ class TestScale:
 
     def test_scale_against_pyvista(self, device):
         """Cross-validate against PyVista scale."""
+        pv = pytest.importorskip("pyvista", minversion="0.46.4")
+        from physicsnemo.mesh.io.io_pyvista import from_pyvista, to_pyvista
+
         pv_mesh = pv.examples.load_airplane()
         tm_mesh = from_pyvista(pv_mesh)
         tm_mesh = Mesh(
@@ -671,11 +732,20 @@ class TestTransform:
         """Test identity transformation leaves mesh unchanged."""
         n_manifold_dims = n_spatial_dims - 1
         mesh = create_mesh_with_caches(n_spatial_dims, n_manifold_dims, device=device)
+        original_topology = mesh.get_point_to_points_adjacency()
 
         identity_matrix = torch.eye(n_spatial_dims, device=device)
         transformed = transform(mesh, identity_matrix)
 
         assert torch.allclose(transformed.points, mesh.points)
+        cached_topology = transformed._cache.get(("topology", "point_to_points"))
+        assert cached_topology is not None
+        assert (
+            cached_topology.offsets.data_ptr() == original_topology.offsets.data_ptr()
+        )
+        assert (
+            cached_topology.indices.data_ptr() == original_topology.indices.data_ptr()
+        )
 
     def test_transform_shear_2d(self, device):
         """Test shear transformation in 2D."""

@@ -15,7 +15,7 @@
 # limitations under the License.
 import torch
 
-from physicsnemo.experimental.models.healda import scatter_mean
+from physicsnemo.experimental.models.healda.scatter_aggregator import scatter_mean
 
 
 def test_scatter_mean_basic():
