@@ -300,15 +300,6 @@ _PACKAGE_HINTS: Dict[str, str] = {
         "line_profiler",
         group="utils-extras",
     ),
-    # Mesh utilities
-    "numpy-stl": _format_install_hint(
-        "numpy-stl",
-        group="utils-extras",
-    ),
-    "stl": _format_install_hint(
-        "numpy-stl",
-        group="utils-extras",
-    ),
     "shapely": _format_install_hint(
         "shapely",
         direct_install="shapely",
