@@ -560,8 +560,6 @@ physicsnemo/datapipes/healpix/couplers.py:TrailingAverageCoupler.setup_coupling
 physicsnemo/distributed/fft.py:conj_pad_helper_2d
 physicsnemo/distributed/manager.py:DistributedManager.create_group_from_node
 physicsnemo/distributed/manager.py:DistributedManager.create_groups_from_config
-physicsnemo/distributed/utils.py:compute_split_shapes
-physicsnemo/distributed/utils.py:split_tensor_along_dim
 physicsnemo/domain_parallel/__init__.py:register_custom_ops
 physicsnemo/domain_parallel/shard_utils/__init__.py:register_shard_wrappers
 physicsnemo/mesh/mesh.py:Mesh.n_cells

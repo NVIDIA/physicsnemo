@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import List, Literal, Optional, Tuple
+from typing import List, Literal, Optional
 
 import torch
 import torch.distributed as dist
@@ -25,6 +25,24 @@ from .manager import DistributedManager
 
 
 def compute_split_shapes(size: int, num_chunks: int) -> List[int]:
+    """Computes balanced chunk sizes for splitting ``size`` items into chunks.
+
+    All chunks but the last get ``ceil(size / num_chunks)`` items. If that
+    would leave the last chunk empty, all chunks but the last get
+    ``size // num_chunks`` items and the last chunk takes the remainder.
+
+    Parameters
+    ----------
+    size : int
+        Total number of items to split.
+    num_chunks : int
+        Number of chunks to produce.
+
+    Returns
+    -------
+    List[int]
+        ``num_chunks`` chunk sizes that sum to ``size``.
+    """
     # treat trivial case first
     if num_chunks == 1:
         return [size]
@@ -64,7 +82,10 @@ def get_memory_format(tensor: torch.Tensor) -> torch.memory_format:
 
 
 def pad_helper(
-    tensor: torch.Tensor, dim: int, new_size: int, mode: Literal["zero", "conj"] = "zero"
+    tensor: torch.Tensor,
+    dim: int,
+    new_size: int,
+    mode: Literal["zero", "conj"] = "zero",
 ) -> torch.Tensor:
     """Pads a tensor along a specified dimension to a new size.
 
@@ -157,7 +178,7 @@ def split_tensor_along_dim(
 
     Returns
     -------
-    Tuple[torch.Tensor, ...]
+    tuple[torch.Tensor, ...]
         Tuple of ``num_chunks`` tensors.
 
     Raises
@@ -184,7 +205,9 @@ def split_tensor_along_dim(
 
 
 @torch.no_grad()
-def reduce_loss(loss: float, dst_rank: int = 0, mean: bool = True) -> Optional[float]:  # pragma: no cover
+def reduce_loss(  # pragma: no cover
+    loss: float, dst_rank: int = 0, mean: bool = True
+) -> Optional[float]:
     """Reduces loss from all processes to destination rank for logging.
 
     Parameters
@@ -235,7 +258,7 @@ def distributed_transpose(
     dim1: int,
     group: Optional[dist.ProcessGroup] = None,
     async_op: bool = False,
-) -> tuple[list[torch.Tensor, ...], dist.Work | None]:
+) -> tuple[list[torch.Tensor], dist.Work | None]:
     """Performs a distributed transpose to switch the sharding dimension.
 
     Splits ``tensor`` along ``dim0`` across all ranks in the process group,
@@ -259,7 +282,7 @@ def distributed_transpose(
 
     Returns
     -------
-    Tuple[List[torch.Tensor], Optional[dist.Work]]
+    tuple[list[torch.Tensor], dist.Work | None]
         A 2-tuple of (received tensor chunks, work handle). The work handle
         is ``None`` when ``async_op=False``.
     """
