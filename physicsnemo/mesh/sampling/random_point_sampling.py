@@ -111,10 +111,14 @@ def sample_random_points_on_cells(
     n_samples = len(cell_indices)
 
     ### Sample from Gamma(alpha, 1) distribution and normalize to get Dirichlet
-    # When alpha=1, Gamma(1,1) is equivalent to Exponential(1), which is more efficient
+    # When alpha=1, Gamma(1,1) is equivalent to Exponential(1), which is more efficient.
+    # Build the distribution parameters in the mesh's dtype so the barycentric
+    # weights match the mesh precision (otherwise a float64 mesh silently samples
+    # weights in float32, halving precision).
+    dtype = mesh.points.dtype
     if alpha == 1.0:
         distribution = torch.distributions.Exponential(
-            rate=torch.ones((), device=mesh.points.device),
+            rate=torch.ones((), device=mesh.points.device, dtype=dtype),
         )
     else:
         if torch.compiler.is_compiling():
@@ -124,9 +128,9 @@ def sample_random_points_on_cells(
                 f"when using torch.compile. Use alpha=1.0 (uniform distribution) instead, or disable torch.compile.\n"
                 f"See https://github.com/pytorch/pytorch/issues/165751."
             )
-        _rate = torch.ones((), device=mesh.points.device)
+        _rate = torch.ones((), device=mesh.points.device, dtype=dtype)
         distribution = torch.distributions.Gamma(
-            concentration=torch.full((), alpha, device=mesh.points.device),
+            concentration=torch.full((), alpha, device=mesh.points.device, dtype=dtype),
             rate=_rate,
         )
 

@@ -485,3 +485,69 @@ class TestRepairIntegration:
         # Meshes should be identical
         assert mesh1.n_points == mesh2.n_points
         assert mesh1.n_cells == mesh2.n_cells
+
+
+def test_fix_orientation_component_size_not_overcounted():
+    """Regression: the orientation BFS front must be deduplicated. A child face
+    reached from two parents in one level was counted twice, making
+    largest_component_size exceed n_cells on any mesh with cycles (every closed
+    surface). Here a single closed connected surface must yield exactly one
+    component covering all cells.
+    """
+    from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+    from physicsnemo.mesh.repair.orientation import fix_orientation
+
+    mesh = sphere_icosahedral.load(subdivisions=2)  # closed, connected, has cycles
+    oriented, stats = fix_orientation(mesh)
+
+    assert oriented.n_cells == mesh.n_cells
+    assert stats["n_components"] == 1
+    assert stats["largest_component_size"] == mesh.n_cells
+
+
+def test_fix_orientation_preserves_data_and_invalidates_caches():
+    """Rewinding indexed cells preserves fields without retaining stale caches."""
+    from physicsnemo.mesh.repair.orientation import fix_orientation
+
+    mesh = Mesh(
+        points=torch.tensor(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [0.0, 1.0, 0.0],
+            ]
+        ),
+        cells=torch.tensor(
+            [
+                [0, 1, 2],
+                [0, 3, 2],  # Opposite winding from the first triangle.
+            ]
+        ),
+        point_data={"point_id": torch.arange(4)},
+        cell_data={"cell_id": torch.arange(2)},
+        global_data={"case": torch.tensor(1)},
+    )
+    mesh._cache["point", "sentinel"] = torch.ones(mesh.n_points)
+    mesh._cache["topology", "sentinel"] = torch.tensor(1)
+
+    oriented, stats = fix_orientation(mesh)
+
+    assert stats["n_faces_flipped"] == 1
+    torch.testing.assert_close(oriented.point_data["point_id"], torch.arange(4))
+    torch.testing.assert_close(oriented.cell_data["cell_id"], torch.arange(2))
+    torch.testing.assert_close(oriented.global_data["case"], torch.tensor(1))
+    assert (
+        oriented.point_data["point_id"].data_ptr()
+        != mesh.point_data["point_id"].data_ptr()
+    )
+    assert (
+        oriented.cell_data["cell_id"].data_ptr() != mesh.cell_data["cell_id"].data_ptr()
+    )
+    assert not oriented._cache["cell"].keys()
+    assert not oriented._cache["point"].keys()
+    assert not oriented._cache["topology"].keys()
+    torch.testing.assert_close(
+        oriented.cell_normals[:, 2],
+        torch.ones(oriented.n_cells),
+    )

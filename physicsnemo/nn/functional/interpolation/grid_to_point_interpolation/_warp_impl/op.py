@@ -30,7 +30,6 @@ import warnings
 from typing import List, Tuple
 
 import torch
-import warp as wp
 
 from physicsnemo.core.function_spec import FunctionSpec
 from physicsnemo.nn.functional.interpolation._warp_common import (
@@ -107,7 +106,7 @@ def interpolation_impl(
     wp_device, wp_stream = FunctionSpec.warp_launch_context(query_points)
 
     # Launch the specialized interpolation kernel for the input dimensionality.
-    with wp.ScopedStream(wp_stream):
+    with FunctionSpec.warp_stream_scope(wp_stream):
         launch_forward(
             query_points=query_points,
             context_grid=context_grid,

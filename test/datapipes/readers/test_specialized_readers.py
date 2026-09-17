@@ -232,6 +232,32 @@ class TestTensorStoreZarrReader:
         assert data["positions"].shape[0] == 50
         assert data["features"].shape[0] == 50
 
+    def test_coordinated_subsampling_wraps_cyclically(
+        self, tensorstore_available, tmp_path, monkeypatch
+    ):
+        zarr = pytest.importorskip("zarr")
+        root = zarr.open(tmp_path / "sample_000.zarr", mode="w")
+        root.create_array("values", data=np.arange(10, dtype=np.float32))
+
+        from physicsnemo.datapipes.readers.tensorstore_zarr import (
+            TensorStoreZarrReader,
+        )
+
+        reader = TensorStoreZarrReader(
+            tmp_path,
+            group_pattern="sample_*.zarr",
+            coordinated_subsampling={"n_points": 4, "target_keys": ["values"]},
+        )
+        monkeypatch.setattr(
+            reader,
+            "_index_generator",
+            lambda _: torch.Generator().manual_seed(2),
+        )
+
+        data, _ = reader[0]
+
+        torch.testing.assert_close(data["values"], torch.tensor([8.0, 9.0, 0.0, 1.0]))
+
     def test_coordinated_subsampling_too_few_points_raises(
         self, tensorstore_available, zarr_v2_data_dir
     ):

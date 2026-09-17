@@ -27,8 +27,13 @@ if HEALPIXPAD_AVAILABLE:
     hpx_pad = importlib.import_module("earth2grid.healpix._padding").pad
 else:
 
-    def hpx_pad(*args, **kwargs):
-        """Dummy symbol for missing earth2grid backend."""
+    def hpx_pad(*args, **kwargs):  # pragma: no cover
+        """Dummy symbol for missing earth2grid backend.
+
+        Only reachable when ``earth2grid`` is not installed, so it cannot be
+        exercised in an environment where it is (as is required to test the
+        rest of this module's accelerated path).
+        """
         raise ImportError(
             (
                 "earth2grid is not installed, cannot use it as a backend for HEALPix padding.\n"
@@ -390,7 +395,7 @@ class HEALPixFoldFaces(torch.nn.Module):
             Folded tensor of shape :math:`(B \cdot F, C, H, W)`.
         """
         if not torch.compiler.is_compiling() and tensor.ndim != 5:
-            ValueError(
+            raise ValueError(
                 f"HEALPixFoldFaces.forward requires 5D tensor, got {tensor.shape}"
             )
 
@@ -455,11 +460,11 @@ class HEALPixUnfoldFaces(torch.nn.Module):
         """
         if not torch.compiler.is_compiling():
             if tensor.ndim != 4:
-                ValueError(
+                raise ValueError(
                     f"HEALPixUnfoldFaces.forward requires 4D tensor, got {tensor.shape}"
                 )
             if tensor.shape[0] % self.num_faces != 0:
-                ValueError(
+                raise ValueError(
                     f"HEALPixUnfoldFaces.forward invalid batch size: {tensor.shape[0]}"
                 )
 

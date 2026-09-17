@@ -108,12 +108,21 @@ def _radius_search_warp(
         device=device,
     )
 
-    torch_offset = torch.zeros(len(result_count) + 1, device=device, dtype=torch.int32)
     result_count_torch = wp.to_torch(result_count)
-    torch.cumsum(result_count_torch, dim=0, out=torch_offset[1:])
-    total_count = torch_offset[-1].item()
-    if total_count >= 2**31 - 1:
-        raise ValueError(f"Total result count is too large: {total_count} > 2**31 - 1")
+    torch_offset_64 = torch.empty(
+        len(result_count) + 1, device=device, dtype=torch.int64
+    )
+    torch_offset_64[0] = 0
+    torch.cumsum(
+        result_count_torch,
+        dim=0,
+        dtype=torch.int64,
+        out=torch_offset_64[1:],
+    )
+    total_count = torch_offset_64[-1].item()
+    if total_count >= torch.iinfo(torch.int32).max:
+        raise ValueError(f"Total result count is too large: {total_count} >= 2**31 - 1")
+    torch_offset = torch_offset_64.to(dtype=torch.int32)
 
     result_point_idx = wp.zeros(shape=(total_count,), dtype=wp.int32, device=device)
     result_point_dist = wp.zeros(shape=(total_count,), dtype=wp.float32, device=device)

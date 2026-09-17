@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: physicsnemo.experimental.models.geotransolver.GeoTransolver
+_target_: physicsnemo.models.geotransolver.GeoTransolver
 functional_dim: 6
 global_dim: 2
 geometry_dim: 3
@@ -33,4 +33,6 @@ radii: [0.05, 0.25, 1.0, 2.5] # radius for local features
 neighbors_in_radius: [8, 32, 64, 128] # neighbors in radius for local features
 n_hidden_local: 32 # hidden dimension for local features
 concrete_dropout: false # enable learned per-layer dropout for UQ
-
+activation_checkpointing: false
+checkpointing_ratio: 1.0
+activation_checkpointing_components: [blocks]

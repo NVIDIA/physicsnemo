@@ -18,7 +18,6 @@
 
 from typing import TYPE_CHECKING
 
-import numpy as np
 import torch
 import warp as wp
 from jaxtyping import Float
@@ -120,7 +119,9 @@ def marching_cubes(
                     f"size {field.shape[dim]} along dimension {dim}"
                 )
 
-    field_np = field.detach().cpu().numpy().astype(np.float32)
+    # Convert before crossing the NumPy boundary: NumPy has no bfloat16 dtype,
+    # so ``field.cpu().numpy().astype(...)`` raises before the cast can run.
+    field_np = field.detach().to(device="cpu", dtype=torch.float32).numpy()
     field_wp = wp.array(field_np)
 
     mc = wp.MarchingCubes(

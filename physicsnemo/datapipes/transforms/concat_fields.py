@@ -26,6 +26,7 @@ from __future__ import annotations
 import torch
 from tensordict import TensorDict
 
+from physicsnemo.datapipes.keys import as_nested_key, as_nested_keys, get_leaf
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.base import Transform
 
@@ -93,8 +94,8 @@ class ConcatFields(Transform):
             instead of raising an error. Useful for optional fields.
         """
         super().__init__()
-        self.input_keys = input_keys
-        self.output_key = output_key
+        self.input_keys = as_nested_keys(input_keys)
+        self.output_key = as_nested_key(output_key)
         self.dim = dim
         self.skip_missing = skip_missing
 
@@ -124,14 +125,9 @@ class ConcatFields(Transform):
         tensors = []
 
         for key in self.input_keys:
-            if key not in data.keys():
-                if self.skip_missing:
-                    continue
-                raise KeyError(
-                    f"Input key '{key}' not found in data. "
-                    f"Available keys: {list(data.keys())}"
-                )
-            tensors.append(data[key])
+            if self.skip_missing and key not in data:
+                continue
+            tensors.append(get_leaf(data, key, what="Input key"))
 
         if not tensors:
             raise ValueError(
@@ -204,7 +200,7 @@ class NormalizeVectors(Transform):
             Small value to prevent division by zero.
         """
         super().__init__()
-        self.input_keys = input_keys
+        self.input_keys = as_nested_keys(input_keys)
         self.dim = dim
         self.eps = eps
 
@@ -230,10 +226,7 @@ class NormalizeVectors(Transform):
         updates = {}
 
         for key in self.input_keys:
-            if key not in data.keys():
-                raise KeyError(f"Input key '{key}' not found in data")
-
-            tensor = data[key]
+            tensor = get_leaf(data, key, what="Input key")
             norm = torch.norm(tensor, dim=self.dim, keepdim=True)
             normalized = tensor / norm.clamp(min=self.eps)
             updates[key] = normalized

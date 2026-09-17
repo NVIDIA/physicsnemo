@@ -67,7 +67,6 @@ from physicsnemo.datapipes.transforms.spatial import (
 )
 from physicsnemo.datapipes.transforms.subsample import (
     SubsamplePoints,
-    poisson_sample_indices_fixed,
     shuffle_array,
 )
 from physicsnemo.datapipes.transforms.utility import (
@@ -84,7 +83,6 @@ __all__ = [
     "Normalize",
     # Subsampling
     "SubsamplePoints",
-    "poisson_sample_indices_fixed",
     "shuffle_array",
     # Geometric
     "ComputeSDF",

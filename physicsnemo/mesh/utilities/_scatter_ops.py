@@ -22,18 +22,18 @@ mesh entities (points, cells, facets).
 """
 
 import torch
-from jaxtyping import Float, Int
+from jaxtyping import Float, Int, Shaped
 
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 
 def scatter_aggregate(
-    src_data: Float[torch.Tensor, "n_src ..."],
+    src_data: Shaped[torch.Tensor, "n_src ..."],
     src_to_dst_mapping: Int[torch.Tensor, " n_src"],
     n_dst: int,
     weights: Float[torch.Tensor, " n_src"] | None = None,
     aggregation: str = "mean",
-) -> Float[torch.Tensor, "n_dst ..."]:
+) -> Shaped[torch.Tensor, "n_dst ..."]:
     """Aggregate source data to destination using scatter operations.
 
     This is the core scatter-based aggregation pattern used throughout physicsnemo.mesh
@@ -60,7 +60,8 @@ def scatter_aggregate(
         Number of destination elements.
     weights : torch.Tensor or None
         Optional weights for each source element, shape (n_src,).
-        If None, uses uniform weights of 1.0.
+        If None, uses uniform weights of 1.0. Must be real-valued when
+        ``aggregation="mean"``; a ``"sum"`` also accepts complex weights.
     aggregation : str
         Aggregation mode:
 
@@ -73,6 +74,28 @@ def scatter_aggregate(
         Aggregated data at destinations, shape (n_dst, *data_shape).
         For "mean" mode, values are weighted averages.
         For "sum" mode, values are weighted sums.
+
+    Raises
+    ------
+    ValueError
+        If ``aggregation`` is not ``"mean"`` or ``"sum"``.
+    TypeError
+        If ``weights`` is complex and ``aggregation="mean"``. A weighted mean
+        divides by per-destination weight sums that are clamped away from zero,
+        and ``torch.clamp`` rejects complex dtypes.
+
+    Notes
+    -----
+    The output dtype follows ``src_data``, including for complex data, with two
+    exceptions. A ``"mean"`` of an integer or boolean ``src_data`` is promoted to
+    ``torch.float64``: a mean of integers is generally non-integral, so computing
+    it in the source integer dtype would truncate (e.g. ``(1 + 2) // 2 == 1``).
+    A ``"sum"`` with complex ``weights`` is promoted to the common dtype of the
+    values and the weights, so the imaginary part of the product survives. An
+    unweighted or real-weighted ``"sum"`` preserves the source dtype.
+
+    ``torch.complex32`` is not supported in either mode: PyTorch has no
+    ``scatter_add_`` kernel for it. Cast to ``torch.complex64`` first.
 
     Examples
     --------
@@ -91,6 +114,17 @@ def scatter_aggregate(
     if aggregation not in ("mean", "sum"):
         raise ValueError(f"Invalid {aggregation=}. Must be 'mean' or 'sum'.")
 
+    ### Choose the compute dtype. A "mean" of integer/bool data must be computed in a
+    ### floating dtype: integer division truncates (e.g. (1 + 2) // 2 == 1), and the
+    ### division guard ``safe_eps()`` -> ``torch.finfo`` raises on integer dtypes. A
+    ### "sum" preserves the native (possibly integer) dtype.
+    if aggregation == "mean" and not (
+        src_data.is_floating_point() or src_data.is_complex()
+    ):
+        compute_dtype = torch.float64
+    else:
+        compute_dtype = dtype
+
     ### Fast path: unweighted sum is a single scatter_add_ with no extra work
     if weights is None and aggregation == "sum":
         aggregated_data = torch.zeros((n_dst, *data_shape), dtype=dtype, device=device)
@@ -100,23 +134,46 @@ def scatter_aggregate(
         aggregated_data.scatter_add_(dim=0, index=expanded_indices, src=src_data)
         return aggregated_data
 
+    ### Choose the dtype the weights are carried in. Past the fast path a "sum"
+    ### always has explicit weights, so only a "mean" can still have none.
+    if aggregation == "mean":
+        # A mean divides by per-destination weight sums that are clamped away from
+        # zero, and ``clamp`` rejects complex dtypes. Keeping the weights real
+        # leaves that guard well-defined, while complex ``src_data`` still
+        # accumulates in its own complex ``compute_dtype``.
+        if weights is not None and weights.is_complex():
+            raise TypeError(
+                "weights must be real-valued for aggregation='mean', got "
+                f"{weights.dtype=}. Complex weights are supported for "
+                "aggregation='sum'."
+            )
+        weight_dtype = compute_dtype.to_real()
+    elif weights.is_complex():
+        # A sum has no divisor, so complex weights (e.g. phasor weighting) are
+        # well-defined. Promote the accumulator so the product keeps its
+        # imaginary part.
+        compute_dtype = torch.promote_types(compute_dtype, weights.dtype)
+        weight_dtype = compute_dtype
+    else:
+        weight_dtype = compute_dtype
+
     ### Initialize weights if not provided
     if weights is None:
-        weights = torch.ones(len(src_to_dst_mapping), dtype=dtype, device=device)
+        weights = torch.ones(len(src_to_dst_mapping), dtype=weight_dtype, device=device)
 
-    ### Ensure weights have same dtype as data (avoid dtype mismatch in multiplication)
-    if weights.dtype != dtype:
-        weights = weights.to(dtype)
+    ### Ensure weights share the compute dtype (avoid dtype mismatch in multiplication)
+    if weights.dtype != weight_dtype:
+        weights = weights.to(weight_dtype)
 
     ### Weight the source data
     # Broadcast weights to match data shape: (n_src, *data_shape)
     weight_shape = [len(weights)] + [1] * len(data_shape)
-    weighted_data = src_data * weights.view(weight_shape)
+    weighted_data = src_data.to(compute_dtype) * weights.view(weight_shape)
 
     ### Scatter-add weighted data to destinations
     aggregated_data = torch.zeros(
         (n_dst, *data_shape),
-        dtype=dtype,
+        dtype=compute_dtype,
         device=device,
     )
 
@@ -134,7 +191,7 @@ def scatter_aggregate(
     ### Normalize weighted sum to weighted mean
     if aggregation == "mean":
         ### Compute sum of weights at each destination
-        weight_sums = torch.zeros(n_dst, dtype=dtype, device=device)
+        weight_sums = torch.zeros(n_dst, dtype=weight_dtype, device=device)
         weight_sums.scatter_add_(
             dim=0,
             index=src_to_dst_mapping,

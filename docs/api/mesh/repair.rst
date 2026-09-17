@@ -22,25 +22,28 @@ For full control, use :func:`repair_mesh` or call individual functions.
 
 .. code:: python
 
-    from physicsnemo.mesh.repair import repair_mesh, clean_mesh
+    from physicsnemo.mesh.repair import clean_mesh, repair_mesh
 
-    # Quick cleanup
+    # Quick cleanup through the Mesh convenience API returns only the mesh
     clean = mesh.clean()
 
-    # Full repair pipeline
-    repaired = repair_mesh(mesh)
+    # Standalone cleanup and the full repair pipeline also return statistics
+    clean, clean_stats = clean_mesh(mesh)
+    repaired, repair_stats = repair_mesh(mesh)
 
     # Individual operations
     from physicsnemo.mesh.repair import (
-        merge_duplicate_points,
         remove_degenerate_cells,
         fix_orientation,
         fill_holes,
     )
-    mesh = merge_duplicate_points(mesh)
-    mesh = remove_degenerate_cells(mesh)
-    mesh = fix_orientation(mesh)
-    mesh = fill_holes(mesh)
+    mesh, degenerate_stats = remove_degenerate_cells(mesh)
+    mesh, orientation_stats = fix_orientation(mesh)
+    mesh, hole_stats = fill_holes(mesh)
+
+``merge_duplicate_points`` is a lower-level tensor API accepting separate
+``points``, ``cells``, and ``point_data`` arguments. Use ``mesh.clean()`` or
+``clean_mesh()`` for mesh-level duplicate-point cleanup.
 
 API Reference
 -------------

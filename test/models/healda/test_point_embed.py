@@ -18,11 +18,11 @@
 import pytest
 import torch
 
-from physicsnemo.experimental.models.healda import (
+from physicsnemo.experimental.models.healda.point_embed import (
     MultiSensorObsEmbedder,
     SensorEmbedder,
+    _split_by_sensor,
 )
-from physicsnemo.experimental.models.healda.point_embed import _split_by_sensor
 from test import common
 
 

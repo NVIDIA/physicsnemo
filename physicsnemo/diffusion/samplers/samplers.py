@@ -18,6 +18,7 @@
 
 from typing import Any, Dict, List, Literal
 
+import torch
 import torch.distributed as dist
 from jaxtyping import Float
 from torch import Tensor
@@ -27,13 +28,11 @@ from physicsnemo.diffusion.base import Denoiser
 from physicsnemo.diffusion.noise_schedulers import NoiseScheduler
 from physicsnemo.domain_parallel.shard_tensor import scatter_tensor
 
-from .solvers import (
-    EDMStochasticEulerSolver,
-    EDMStochasticHeunSolver,
-    EulerSolver,
-    HeunSolver,
-    Solver,
-)
+from .base import Solver
+from .edm_stochastic_euler import EDMStochasticEulerSolver
+from .edm_stochastic_heun import EDMStochasticHeunSolver
+from .euler import EulerSolver
+from .heun import HeunSolver
 
 SOLVERS: Dict[str, type[Solver]] = {
     "euler": EulerSolver,
@@ -110,12 +109,12 @@ def sample(
 
     where :math:`D` is the ``denoiser`` and :math:`\text{Step}` is the
     update rule of the solver, implemented by the
-    :meth:`~physicsnemo.diffusion.samplers.solvers.Solver.step` method.
+    :meth:`~physicsnemo.diffusion.samplers.Solver.step` method.
     Variants are possible by passing more complex solvers and denoisers.
 
     The ``solver`` can be specified as a string key (with optional
     ``solver_options``), or as a pre-configured object implementing the
-    :class:`~physicsnemo.diffusion.samplers.solvers.Solver` interface (in
+    :class:`~physicsnemo.diffusion.samplers.Solver` interface (in
     which case ``solver_options`` must be ``None``). The solver must implement
     a ``step`` method with the following signature:
 
@@ -129,7 +128,7 @@ def sample(
         ) -> Tensor: ...  # updated x, shape: (B, *dims)
 
     Any object that implements the
-    :class:`~physicsnemo.diffusion.samplers.solvers.Solver` interface can be
+    :class:`~physicsnemo.diffusion.samplers.Solver` interface can be
     used as a solver.
 
     The ``denoiser`` must implement the
@@ -195,25 +194,25 @@ def sample(
 
         **Advanced**: Pass a custom :class:`Solver` instance
         implementing the
-        :class:`~physicsnemo.diffusion.samplers.solvers.Solver` interface.
+        :class:`~physicsnemo.diffusion.samplers.Solver` interface.
         In this case, ``solver_options`` must be empty.
 
         Available string keys:
 
         * ``"euler"``: First-order Euler method. Fast but lower quality.
-          See :class:`~physicsnemo.diffusion.samplers.solvers.EulerSolver`.
+          See :class:`~physicsnemo.diffusion.samplers.EulerSolver`.
 
         * ``"heun"``: Second-order Heun method. Higher quality but requires
           two denoiser evaluations per step.
-          See :class:`~physicsnemo.diffusion.samplers.solvers.HeunSolver`.
+          See :class:`~physicsnemo.diffusion.samplers.HeunSolver`.
 
         * ``"edm_stochastic_euler"``: First-order stochastic sampler from
           the EDM paper with configurable noise injection. See
-          :class:`~physicsnemo.diffusion.samplers.solvers.EDMStochasticEulerSolver`.
+          :class:`~physicsnemo.diffusion.samplers.EDMStochasticEulerSolver`.
 
         * ``"edm_stochastic_heun"``: Second-order stochastic sampler from
           the EDM paper with configurable noise injection. See
-          :class:`~physicsnemo.diffusion.samplers.solvers.EDMStochasticHeunSolver`.
+          :class:`~physicsnemo.diffusion.samplers.EDMStochasticHeunSolver`.
 
     time_steps : Tensor | None, default=None
         Optional 1D tensor of shape :math:`(N + 1,)` containing explicit
@@ -243,7 +242,7 @@ def sample(
 
     See Also
     --------
-    :mod:`~physicsnemo.diffusion.samplers.solvers` : Available ODE/SDE solvers.
+    :mod:`~physicsnemo.diffusion.samplers` : Available ODE/SDE solvers.
     :mod:`~physicsnemo.diffusion.noise_schedulers` : Available noise schedules.
 
     Examples
@@ -382,6 +381,14 @@ def sample(
     # type-compatible.
     t_steps = _maybe_replicate_timesteps(t_steps, xN)
 
+    # Capture caller's grad mode. When called under ``torch.no_grad()`` (the
+    # recommended pattern for inference, including DPS sampling), detach ``x``
+    # between solver steps so any per-step autograd graph attached by the
+    # denoiser (e.g. by DPS score predictors) does not compound across the
+    # loop. Under default (caller grad enabled), preserve the graph so
+    # callers that intentionally backprop through sample() are unaffected.
+    outer_grad_enabled = torch.is_grad_enabled()
+
     # Main sampling loop
     samples: List[Tensor] = []
     x = xN
@@ -406,6 +413,8 @@ def sample(
 
         # Perform one solver step
         x = solver_.step(x, t_cur_batch, t_next_batch)
+        if not outer_grad_enabled:
+            x = x.detach()
 
         # Collect sample if requested
         if time_eval is not None and i in time_eval:

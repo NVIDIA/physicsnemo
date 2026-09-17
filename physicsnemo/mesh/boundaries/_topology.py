@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Literal
 
 import torch
 
-from physicsnemo.mesh.utilities._index_tuple_ops import unique_index_tuples
+from physicsnemo.utils._index_tuple_ops import unique_index_tuples
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -36,6 +36,9 @@ def is_watertight(mesh: "Mesh") -> bool:
 
     A mesh is watertight if every codimension-1 facet is shared by exactly 2 cells.
     This means the mesh forms a closed surface/volume with no holes or gaps.
+
+    Call it as ``is_watertight(mesh)`` or as ``mesh.is_watertight()``. The
+    bound method supplies ``mesh`` automatically.
 
     Parameters
     ----------
@@ -94,6 +97,9 @@ def is_manifold(
     A mesh is a manifold if it locally looks like Euclidean space at every point.
     This function checks various topological constraints depending on the check level.
 
+    Call it as ``is_manifold(mesh, ...)`` or as ``mesh.is_manifold(...)``. The
+    bound method supplies ``mesh`` automatically.
+
     Parameters
     ----------
     mesh : Mesh
@@ -126,6 +132,11 @@ def is_manifold(
     This function checks topological constraints but does not check for
     geometric self-intersections (which would require expensive spatial queries).
     """
+    if check_level not in ("facets", "edges", "full"):
+        raise ValueError(
+            f"Invalid {check_level=!r}. Must be 'facets', 'edges', or 'full'."
+        )
+
     ### Empty mesh is considered a valid manifold
     if mesh.n_cells == 0:
         return True

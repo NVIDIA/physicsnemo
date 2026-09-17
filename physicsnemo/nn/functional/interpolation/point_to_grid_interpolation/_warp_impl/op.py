@@ -30,7 +30,6 @@ import warnings
 from typing import List, Tuple
 
 import torch
-import warp as wp
 
 from physicsnemo.core.function_spec import FunctionSpec
 from physicsnemo.nn.functional.interpolation._warp_common import (
@@ -112,7 +111,7 @@ def point_to_grid_interpolation_impl(
 
     # Resolve Warp device/stream from torch inputs and launch.
     wp_device, wp_stream = FunctionSpec.warp_launch_context(query_fp32)
-    with wp.ScopedStream(wp_stream):
+    with FunctionSpec.warp_stream_scope(wp_stream):
         launch_forward(
             query_points=query_fp32,
             point_values=values_fp32,

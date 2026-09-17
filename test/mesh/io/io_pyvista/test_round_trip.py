@@ -60,6 +60,28 @@ class TestRoundTrip:
         assert pv_reconstructed.n_cells == pv_original.n_cells
         assert np.allclose(pv_reconstructed.points, pv_original.points)
 
+    def test_round_trip_preserves_large_offset_float64_geometry(self):
+        """Supported coordinate precision must not narrow at either boundary."""
+        points = np.array(
+            [
+                [1e8, 1e8, 0.0],
+                [1e8 + 1.0, 1e8, 0.0],
+                [1e8, 1e8 + 1.0, 0.0],
+            ],
+            dtype=np.float64,
+        )
+        original = pv.PolyData.from_regular_faces(points, np.array([[0, 1, 2]]))
+
+        mesh = from_pyvista(original)
+        reconstructed = to_pyvista(mesh)
+
+        assert mesh.points.dtype == torch.float64
+        torch.testing.assert_close(
+            mesh.cell_areas, torch.tensor([0.5], dtype=torch.float64)
+        )
+        assert reconstructed.points.dtype == np.float64
+        assert np.array_equal(reconstructed.points, points)
+
     def test_round_trip_3d_tetbeam(self):
         """Test round-trip conversion preserves geometry for 3D mesh."""
         pv_original = pv.examples.load_tetbeam()
@@ -136,6 +158,52 @@ class TestRoundTrip:
         assert np.array_equal(
             pv_reconstructed.field_data["metadata"], pv_original.field_data["metadata"]
         )
+
+    def test_round_trip_nested_data_keys(self):
+        """Nested TensorDict keys survive Mesh → PyVista → Mesh as "/"-joined names."""
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]]
+        )
+        cells = torch.tensor([[0, 1, 2], [0, 2, 3]])
+        mesh = Mesh(
+            points=points,
+            cells=cells,
+            point_data={"solution": {"p": torch.arange(4.0), "v": torch.ones(4, 3)}},
+            cell_data={"flat": torch.zeros(2), "grp": {"sub": {"q": torch.ones(2)}}},
+            global_data={"ref": {"L": torch.tensor([2.0])}},
+        )
+
+        pv_mesh = to_pyvista(mesh)
+        assert "solution/p" in pv_mesh.point_data
+        assert "solution/v" in pv_mesh.point_data
+        assert "grp/sub/q" in pv_mesh.cell_data
+        assert "ref/L" in pv_mesh.field_data
+
+        back = from_pyvista(pv_mesh)
+        assert set(back.point_data.keys(True, True)) == {
+            ("solution", "p"),
+            ("solution", "v"),
+        }
+        assert torch.allclose(back.point_data["solution", "p"], torch.arange(4.0))
+        assert ("grp", "sub", "q") in back.cell_data
+        assert "flat" in back.cell_data
+        assert torch.allclose(back.global_data["ref", "L"], torch.tensor([2.0]))
+        ### The bookkeeping marker is not surfaced as a data field.
+        assert set(back.global_data.keys(True, True)) == {("ref", "L")}
+
+    def test_external_slash_names_stay_literal(self):
+        """Arrays named by other tools (e.g. "U [m/s]") are not split into groups."""
+        pv_mesh = pv.Sphere(theta_resolution=6, phi_resolution=6)
+        pv_mesh.clear_data()
+        pv_mesh.point_data["U [m/s]"] = np.zeros(
+            (pv_mesh.n_points, 3), dtype=np.float32
+        )
+        pv_mesh.cell_data["p"] = np.zeros(pv_mesh.n_cells, dtype=np.float32)
+        pv_mesh.cell_data["p/grad"] = np.zeros((pv_mesh.n_cells, 3), dtype=np.float32)
+
+        mesh = from_pyvista(pv_mesh)
+        assert "U [m/s]" in mesh.point_data
+        assert set(mesh.cell_data.keys(True, True)) == {"p", "p/grad"}
 
 
 ### Parametrized Tests for Device Handling ###

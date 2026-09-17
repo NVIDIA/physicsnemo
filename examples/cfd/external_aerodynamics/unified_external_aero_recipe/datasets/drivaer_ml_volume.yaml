@@ -15,11 +15,11 @@
 # limitations under the License.
 
 # DrivaerML volume dataset (DomainMesh)
-# Loads domain_*.pmsh files containing interior volume mesh + vehicle boundary + global_data.
+# Loads domain_*.pdmsh files containing interior volume mesh + vehicle boundary + global_data.
 # Interior: tetrahedral volume mesh with fields in point_data.
 # Boundary: triangulated car-body surface mesh keyed `vehicle` (curated layout).
 # global_data: freestream conditions (U_inf, rho_inf, p_inf, nu, L_ref) are
-# embedded directly in the .pmsh files and read straight out of each sample's
+# embedded directly in the .pdmsh files and read straight out of each sample's
 # global_data by NonDimensionalizeByMetadata.
 # Splits are controlled by manifest.json + train_split/val_split in the training config.
 
@@ -29,22 +29,36 @@ pipeline:
   reader:
     _target_: ${dp:DomainMeshReader}
     path: ${train_datadir}
-    pattern: "**/domain_*.pdmsh"
+    pattern: "run_*/domain_*.pdmsh"
     subsample_n_points: ${sampling_resolution}
     subsample_n_cells: ${sampling_resolution}
+    # The volume model consumes the interior as a point cloud (interior.points +
+    # interior.point_data); dropping interior tet topology makes the point
+    # subsample a cheap contiguous block read instead of a full slice_points
+    # remap (the dominant per-sample IO cost otherwise).
+    drop_interior_cells: true
+    # Preserve in-file boundaries as the lossless default. Point-based model
+    # templates that consume only the interior explicitly opt into dropping
+    # them to skip per-sample subsampling (expensive, GIL-held) and pinning.
+    drop_in_file_boundaries: false
     extra_boundaries:
       stl_geometry:
         pattern: "*_single_solid.stl.pmsh"
   augmentations:
     - _target_: ${dp:RandomRotateMesh}
       axes: ["z"]
+      mode: axis_aligned
       transform_point_data: true
       transform_global_data: true
     - _target_: ${dp:RandomTranslateMesh}
       distribution:
         _target_: torch.distributions.Uniform
-        low: [-1.0, -1.0, 0.0]
-        high: [1.0, 1.0, 0.0]
+        low:
+          _target_: torch.tensor
+          data: [-1.0, -1.0, 0.0]
+        high:
+          _target_: torch.tensor
+          data: [1.0, 1.0, 0.0]
   transforms:
     - _target_: ${dp:DropMeshFields}
       global_data: [TimeValue]
@@ -60,7 +74,10 @@ pipeline:
       boundary_name: stl_geometry
       sdf_field: sdf
       normals_field: sdf_normals
-      use_winding_number: true
+      # Pseudo-normal sign (fed by the fast nearest-triangle kernel). The
+      # _single_solid STL is watertight, so this is exact and avoids the
+      # O(n_points * n_faces) winding-number sign pass.
+      use_winding_number: false
     - _target_: ${dp:DropBoundary}
       names: [stl_geometry]
     - _target_: ${dp:RenameMeshFields}

@@ -30,17 +30,19 @@ import logging
 from pathlib import Path
 from types import SimpleNamespace
 
+import datasets as datasets_module
 import pytest
-from omegaconf import OmegaConf
-
 from datasets import (
     ManifestSampler,
+    _build_manifest_val_dataset,
+    build_dataloaders,
+    build_dataset,
     load_manifest,
     resolve_manifest_indices,
     resolve_manifest_spec,
     validate_dataset_consistency,
 )
-
+from omegaconf import DictConfig, OmegaConf
 
 ### ---------------------------------------------------------------------------
 ### load_manifest
@@ -286,7 +288,7 @@ class TestValidateDatasetConsistency:
     def test_metrics_mismatch_warns(self, caplog):
         """Metrics mismatch is a soft drift -- warns, doesn't raise."""
         first_targets, first_metrics = self._first()
-        with caplog.at_level(logging.WARNING, logger="training.build_dataloaders"):
+        with caplog.at_level(logging.WARNING, logger="training.datasets"):
             validate_dataset_consistency(
                 ds_key="ds_b",
                 ds_targets=dict(first_targets),
@@ -310,6 +312,33 @@ class TestResolveManifestSpec:
         ds_yaml = OmegaConf.create({"train_datadir": "/data/foo"})
         ds_block = OmegaConf.create({})
         assert resolve_manifest_spec(ds_yaml, ds_block) is None
+
+    def test_directory_mode_with_sibling_manifest_warns(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ):
+        """A manifest next to the data that is about to be ignored is loud.
+
+        Clearing the top-level split selectors is how a manifest/directory
+        mix is configured, so this misconfiguration is easy to reach: it
+        would silently sweep the manifest's held-out val/test runs into
+        training.
+        """
+        (tmp_path / "manifest.json").write_text(
+            json.dumps({"train": ["run_1"], "val": ["run_0"]})
+        )
+        ds_yaml = OmegaConf.create({"train_datadir": str(tmp_path)})
+        with caplog.at_level(logging.WARNING, logger="training.datasets"):
+            assert resolve_manifest_spec(ds_yaml, OmegaConf.create({})) is None
+        assert any("manifest's splits are ignored" in r.message for r in caplog.records)
+
+    def test_directory_mode_without_sibling_manifest_is_silent(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ):
+        """Genuine directory mode must not nag."""
+        ds_yaml = OmegaConf.create({"train_datadir": str(tmp_path)})
+        with caplog.at_level(logging.WARNING, logger="training.datasets"):
+            assert resolve_manifest_spec(ds_yaml, OmegaConf.create({})) is None
+        assert not caplog.records
 
     def test_style_a_separate_files(self, tmp_path: Path):
         """``train_manifest`` / ``val_manifest`` (style A)."""
@@ -388,3 +417,415 @@ class TestResolveManifestSpec:
         ds_yaml = OmegaConf.create({"train_datadir": str(tmp_path)})
         ds_block = OmegaConf.create({})
         assert resolve_manifest_spec(ds_yaml, ds_block) is None
+
+
+### ---------------------------------------------------------------------------
+### _build_manifest_val_dataset
+### ---------------------------------------------------------------------------
+
+
+class TestManifestValDataset:
+    """Tests for :func:`datasets._build_manifest_val_dataset`.
+
+    Manifest mode shares one reader across the train / val splits, so
+    validation must not inherit the train augmentations. This mirrors
+    directory mode, which always builds its val dataset with
+    ``augment=False`` -- the asymmetry these tests lock down.
+    """
+
+    @staticmethod
+    def _augmented_ds_yaml(datadir: Path) -> DictConfig:
+        """Minimal manifest-style volume dataset YAML carrying augmentations.
+
+        Trimmed to what the dataset builder inspects: the reader globs
+        paths lazily (no file is opened at construction), so the directory
+        only needs placeholder files, and the transform chain just needs a
+        ``CenterMesh`` anchor plus the augmentations that get inserted
+        after it.
+        """
+        return OmegaConf.create(
+            {
+                "train_datadir": str(datadir),
+                "pipeline": {
+                    "reader": {
+                        "_target_": "${dp:DomainMeshReader}",
+                        "path": "${train_datadir}",
+                        "pattern": "run_*/domain_*.pdmsh",
+                    },
+                    "augmentations": [
+                        {"_target_": "${dp:RandomRotateMesh}", "axes": ["z"]},
+                        {"_target_": "${dp:RandomTranslateMesh}"},
+                    ],
+                    "transforms": [
+                        {"_target_": "${dp:CenterMesh}"},
+                    ],
+                },
+                "targets": {"pressure": "scalar"},
+            }
+        )
+
+    @staticmethod
+    def _make_datadir(tmp_path: Path, n_samples: int = 2) -> Path:
+        """Create placeholder runs the reader can glob (it never opens them)."""
+        for i in range(n_samples):
+            run = tmp_path / f"run_{i}"
+            run.mkdir()
+            (run / f"domain_{i}.pdmsh").write_bytes(b"")
+        return tmp_path
+
+    def test_augment_off_returns_none(self, tmp_path: Path):
+        """``augment=False`` -> val shares the train dataset (None sentinel)."""
+        ds_yaml = self._augmented_ds_yaml(self._make_datadir(tmp_path))
+        assert (
+            _build_manifest_val_dataset(
+                ds_yaml,
+                augment=False,
+                device=None,
+                num_workers=1,
+                pin_memory=False,
+            )
+            is None
+        )
+
+    def test_augment_on_returns_unaugmented_dataset(self, tmp_path: Path):
+        """``augment=True`` -> a separate dataset whose chain has no augmentations."""
+        ds_yaml = self._augmented_ds_yaml(self._make_datadir(tmp_path))
+
+        ### Guard against a vacuous assertion: the train dataset must
+        ### actually carry a stochastic augmentation for the val check to
+        ### mean anything.
+        train_ds = build_dataset(
+            ds_yaml, augment=True, device=None, num_workers=1, pin_memory=False
+        )
+        assert any(getattr(t, "stochastic", False) for t in train_ds.transforms)
+
+        val_ds = _build_manifest_val_dataset(
+            ds_yaml, augment=True, device=None, num_workers=1, pin_memory=False
+        )
+        assert val_ds is not None
+        ### A distinct object (own reader), not the train dataset.
+        assert val_ds is not train_ds
+        ### No stochastic (augmentation) transforms survive on the val chain.
+        assert not any(getattr(t, "stochastic", False) for t in val_ds.transforms)
+        ### ...but the deterministic CenterMesh transform is still present.
+        assert any(type(t).__name__ == "CenterMesh" for t in val_ds.transforms)
+
+
+class TestMultiDatasetManifestOffsets:
+    """Local split indices map correctly into concatenated datasets."""
+
+    _augmented_ds_yaml = staticmethod(TestManifestValDataset._augmented_ds_yaml)
+    _make_datadir = staticmethod(TestManifestValDataset._make_datadir)
+
+    @staticmethod
+    def _patch_configs(
+        monkeypatch: pytest.MonkeyPatch,
+        configs: dict,
+        *,
+        world_size: int = 1,
+        rank: int = 0,
+    ) -> None:
+        monkeypatch.setattr(
+            datasets_module,
+            "load_dataset_config",
+            lambda path: configs[path.stem],
+        )
+        monkeypatch.setattr(
+            datasets_module,
+            "DistributedManager",
+            lambda: SimpleNamespace(world_size=world_size, rank=rank),
+        )
+
+    @staticmethod
+    def _loader_cfg(
+        primary: str,
+        extras: list[str],
+        *,
+        train_split: str | None,
+        val_split: str | None,
+        augment: bool = False,
+    ) -> DictConfig:
+        return OmegaConf.create(
+            {
+                "dataset": primary,
+                "extra_datasets": extras,
+                "train_split": train_split,
+                "val_split": val_split,
+                "augment": augment,
+                "sampling_resolution": None,
+                "input_type": "mesh",
+                "forward_kwargs": {"domain": ""},
+                "training": {"batch_size": 1, "seed": 0},
+                "dataloader": {
+                    "num_workers": 1,
+                    "pin_memory": False,
+                    "prefetch_factor": 0,
+                },
+            }
+        )
+
+    def test_multiple_manifest_datasets_use_global_offsets(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Every manifest contributes offset train and val selections."""
+        first_root = tmp_path / "first"
+        second_root = tmp_path / "second"
+        first_root.mkdir()
+        second_root.mkdir()
+        self._make_datadir(first_root, n_samples=4)
+        self._make_datadir(second_root, n_samples=3)
+        (first_root / "manifest.json").write_text(
+            json.dumps({"train": ["run_1", "run_3"], "val": ["run_0"]})
+        )
+        (second_root / "manifest.json").write_text(
+            json.dumps({"train": ["run_0", "run_2"], "val": ["run_1"]})
+        )
+        configs = {
+            "drivaer_ml_surface": self._augmented_ds_yaml(first_root),
+            "shift_suv_estate_surface": self._augmented_ds_yaml(second_root),
+        }
+        self._patch_configs(monkeypatch, configs)
+
+        train_loader, val_loader, _, _ = build_dataloaders(
+            self._loader_cfg(
+                "drivaer_ml_surface",
+                ["shift_suv_estate_surface"],
+                train_split="train",
+                val_split="val",
+                augment=True,
+            )
+        )
+
+        ### The second dataset begins at global index 4 in both combined
+        ### datasets: local train [0, 2] -> [4, 6], local val [1] -> [5].
+        assert sorted(train_loader.sampler) == [1, 3, 4, 6]
+        assert list(val_loader.sampler) == [0, 5]
+        assert len(train_loader.dataset) == len(val_loader.dataset) == 7
+        assert all(
+            any(getattr(transform, "stochastic", False) for transform in ds.transforms)
+            for ds in train_loader.dataset._datasets
+        )
+        assert all(
+            not any(
+                getattr(transform, "stochastic", False) for transform in ds.transforms
+            )
+            for ds in val_loader.dataset._datasets
+        )
+
+    def test_offsets_resolve_to_the_intended_files(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The offset indices address the runs the manifests actually name.
+
+        Asserting index *numbers* only checks the arithmetic against
+        itself. This walks ``MultiDataset``'s own global -> (dataset,
+        local) mapping back to reader paths, which is the property that
+        actually matters: mis-offset indices silently train on another
+        dataset's samples.
+        """
+        roots = []
+        for name, n_samples, manifest in (
+            ("first", 4, {"train": ["run_2", "run_3"], "val": ["run_0", "run_1"]}),
+            ("second", 3, {"train": ["run_0"], "val": ["run_1"]}),
+            ("third", 2, {"train": ["run_1"], "val": ["run_0"]}),
+        ):
+            root = tmp_path / name
+            root.mkdir()
+            self._make_datadir(root, n_samples=n_samples)
+            (root / "manifest.json").write_text(json.dumps(manifest))
+            roots.append(root)
+        names = [
+            "drivaer_ml_surface",
+            "shift_suv_estate_surface",
+            "shift_suv_fastback_surface",
+        ]
+        self._patch_configs(
+            monkeypatch,
+            {name: self._augmented_ds_yaml(root) for name, root in zip(names, roots)},
+        )
+
+        train_loader, val_loader, _, _ = build_dataloaders(
+            self._loader_cfg(names[0], names[1:], train_split="train", val_split="val")
+        )
+
+        def resolved(dataset, global_index: int) -> str:
+            ds_idx, local = dataset._index_to_dataset_and_local(global_index)
+            path = dataset._datasets[ds_idx].reader._paths[local]
+            return str(path.relative_to(tmp_path))
+
+        train_files = {resolved(train_loader.dataset, i) for i in train_loader.sampler}
+        val_files = {resolved(val_loader.dataset, i) for i in val_loader.sampler}
+        assert train_files == {
+            "first/run_2/domain_2.pdmsh",
+            "first/run_3/domain_3.pdmsh",
+            "second/run_0/domain_0.pdmsh",
+            "third/run_1/domain_1.pdmsh",
+        }
+        assert val_files == {
+            "first/run_0/domain_0.pdmsh",
+            "first/run_1/domain_1.pdmsh",
+            "second/run_1/domain_1.pdmsh",
+            "third/run_0/domain_0.pdmsh",
+        }
+        ### The pre-offset bug trained on the first dataset's held-out runs.
+        assert train_files.isdisjoint(val_files)
+
+    def test_distributed_ranks_shard_the_combined_indices(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Sharding partitions the concatenated selection, not one dataset's."""
+        first_root = tmp_path / "first"
+        second_root = tmp_path / "second"
+        first_root.mkdir()
+        second_root.mkdir()
+        self._make_datadir(first_root, n_samples=4)
+        self._make_datadir(second_root, n_samples=3)
+        (first_root / "manifest.json").write_text(
+            json.dumps({"train": ["run_1", "run_3"], "val": ["run_0"]})
+        )
+        (second_root / "manifest.json").write_text(
+            json.dumps({"train": ["run_0", "run_2"], "val": ["run_1"]})
+        )
+        configs = {
+            "drivaer_ml_surface": self._augmented_ds_yaml(first_root),
+            "shift_suv_estate_surface": self._augmented_ds_yaml(second_root),
+        }
+
+        per_rank_train, per_rank_val = [], []
+        for rank in range(2):
+            with monkeypatch.context() as ctx:
+                self._patch_configs(ctx, configs, world_size=2, rank=rank)
+                train_loader, val_loader, _, _ = build_dataloaders(
+                    self._loader_cfg(
+                        "drivaer_ml_surface",
+                        ["shift_suv_estate_surface"],
+                        train_split="train",
+                        val_split="val",
+                    )
+                )
+                per_rank_train.append(list(train_loader.sampler))
+                per_rank_val.append(list(val_loader.sampler))
+
+        ### 4 train indices over 2 ranks divides evenly, so drop_last keeps
+        ### all of them; each rank sees half, and no sample is duplicated.
+        assert [len(shard) for shard in per_rank_train] == [2, 2]
+        assert sorted(per_rank_train[0] + per_rank_train[1]) == [1, 3, 4, 6]
+        assert set(per_rank_train[0]).isdisjoint(per_rank_train[1])
+        ### Validation spans both datasets rather than one rank's slice.
+        assert sorted(per_rank_val[0] + per_rank_val[1]) == [0, 5]
+
+    @pytest.mark.parametrize("manifest_first", [True, False])
+    def test_mixed_manifest_and_directory_offsets_are_split_specific(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        manifest_first: bool,
+    ):
+        """Directory ranges and manifest selections share each split's index space."""
+        manifest_root = tmp_path / "manifest"
+        directory_root = tmp_path / "directory"
+        directory_val_root = tmp_path / "directory_val"
+        for root, n_samples in (
+            (manifest_root, 3),
+            (directory_root, 4),
+            (directory_val_root, 2),
+        ):
+            root.mkdir()
+            self._make_datadir(root, n_samples=n_samples)
+        train_manifest = tmp_path / "train.txt"
+        val_manifest = tmp_path / "val.txt"
+        train_manifest.write_text("run_2\n")
+        val_manifest.write_text("run_0\n")
+        manifest_name = "drivaer_ml_surface"
+        directory_name = "shift_suv_estate_surface"
+        configs = {
+            manifest_name: OmegaConf.merge(
+                self._augmented_ds_yaml(manifest_root),
+                {
+                    "train_manifest": str(train_manifest),
+                    "val_manifest": str(val_manifest),
+                },
+            ),
+            directory_name: OmegaConf.merge(
+                self._augmented_ds_yaml(directory_root),
+                {"val_datadir": str(directory_val_root)},
+            ),
+        }
+        self._patch_configs(monkeypatch, configs)
+        ordered_names = (
+            [manifest_name, directory_name]
+            if manifest_first
+            else [directory_name, manifest_name]
+        )
+
+        train_loader, val_loader, _, _ = build_dataloaders(
+            self._loader_cfg(
+                ordered_names[0],
+                ordered_names[1:],
+                train_split=None,
+                val_split=None,
+            )
+        )
+
+        if manifest_first:
+            ### Train offsets: manifest len=3; val offsets: manifest len=3.
+            expected_train = [2, 3, 4, 5, 6]
+            expected_val = [0, 3, 4]
+        else:
+            ### Train offsets: directory len=4; val offsets: directory val len=2.
+            expected_train = [0, 1, 2, 3, 6]
+            expected_val = [0, 1, 2]
+        assert sorted(train_loader.sampler) == expected_train
+        assert list(val_loader.sampler) == expected_val
+        assert len(train_loader.dataset) == 7
+        assert len(val_loader.dataset) == 5
+
+    def test_missing_val_manifest_falls_back_before_offsetting(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        """A per-dataset train fallback cannot capture another dataset's indices."""
+        first_root = tmp_path / "first"
+        second_root = tmp_path / "second"
+        first_root.mkdir()
+        second_root.mkdir()
+        self._make_datadir(first_root, n_samples=3)
+        self._make_datadir(second_root, n_samples=2)
+        first_train = tmp_path / "first_train.txt"
+        second_train = tmp_path / "second_train.txt"
+        second_val = tmp_path / "second_val.txt"
+        first_train.write_text("run_1\n")
+        second_train.write_text("run_0\n")
+        second_val.write_text("run_1\n")
+        configs = {
+            "drivaer_ml_surface": OmegaConf.merge(
+                self._augmented_ds_yaml(first_root),
+                {"train_manifest": str(first_train)},
+            ),
+            "shift_suv_estate_surface": OmegaConf.merge(
+                self._augmented_ds_yaml(second_root),
+                {
+                    "train_manifest": str(second_train),
+                    "val_manifest": str(second_val),
+                },
+            ),
+        }
+        self._patch_configs(monkeypatch, configs)
+
+        with caplog.at_level(logging.WARNING, logger="training.datasets"):
+            train_loader, val_loader, _, _ = build_dataloaders(
+                self._loader_cfg(
+                    "drivaer_ml_surface",
+                    ["shift_suv_estate_surface"],
+                    train_split=None,
+                    val_split=None,
+                )
+            )
+
+        ### First local train/val [1]; second starts at 3 and contributes
+        ### local train [0] / val [1].
+        assert sorted(train_loader.sampler) == [1, 3]
+        assert list(val_loader.sampler) == [1, 4]
+        assert any("drivaer_ml_surface" in record.message for record in caplog.records)

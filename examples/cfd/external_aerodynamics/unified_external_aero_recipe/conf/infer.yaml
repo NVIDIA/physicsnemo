@@ -1,0 +1,125 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ---------------------------------------------------------------------------
+# Unified External Aerodynamics -- inference entry point.
+# ---------------------------------------------------------------------------
+# Companion to train.yaml.  Loads a trained checkpoint, runs it over a
+# split, reports metrics (in training space, matching validation), and
+# writes physical-unit predictions back as native .pdmsh DomainMeshes.
+# Shares conf/base.yaml with the trainer so precision / dataloader knobs
+# stay consistent; the training schedule is replaced by checkpoint /
+# output knobs below.
+#
+#   # HiLift surface (vanilla GeoTransolver)
+#   python src/infer.py model=geotransolver_surface dataset=highlift_surface \
+#       run_id=<the trained run_id> infer_split=test
+#
+#   # HiLift volume
+#   python src/infer.py model=geotransolver_volume_highlift \
+#       dataset=highlift_volume run_id=<the trained run_id> infer_split=test
+defaults:
+  - base
+  - model: ???   # must match the model the checkpoint was trained with
+  - _self_
+
+# -- Dataset selection ------------------------------------------------------
+# Must declare the same `targets:` contract the model was trained on.
+# Inference runs one dataset at a time: re-dimensionalization keys off this
+# single dataset's field types + normalization stats, so `extra_datasets`
+# (multi-dataset training) is intentionally unsupported here -- infer.py
+# raises if it is set.
+dataset: ???
+
+# -- Split selection --------------------------------------------------------
+# Which manifest split to run inference over.  `val_split` is what
+# build_dataloaders actually reads; it is set from `infer_split` so the
+# val loader iterates the requested holdout.  `train_split` must still
+# resolve (exist in the manifest and match at least one on-disk run)
+# because the shared loader assembly also builds the -- never iterated --
+# train loader; on a machine holding only the inference split, override
+# it (e.g. `train_split=test`).  Setting these keys requests manifest
+# mode, so a manifest-less (directory-mode) dataset needs
+# `train_split=null val_split=null` on the CLI.
+infer_split: test
+train_split: train
+val_split: ${infer_split}
+
+# -- Checkpoint location ----------------------------------------------------
+# The trainer writes to `${output_dir}/${run_id}/checkpoints` (its
+# output_dir defaults to "runs"; the trainer's optional `checkpoint_dir`
+# overrides that root).  Point this script's `checkpoint_dir` at that
+# *training* output directory (NOT this script's output_dir) and set
+# `run_id` to the run you want to load.  Or set `checkpoint_path` to the
+# checkpoints directory directly to bypass the derivation.
+checkpoint_dir: runs
+run_id: ???
+checkpoint_path: null
+
+# -- Output -----------------------------------------------------------------
+# Where predictions are written: one DomainMesh per sample under
+# `${output_dir}/${run_id}/predictions/<sample_id>.pdmsh`.
+output_dir: inference
+
+# Re-dimensionalize predicted (and reference) fields to physical units by
+# inverting NormalizeMeshFields then NonDimensionalizeByMetadata.  A no-op
+# for datasets that declare neither transform (fields already physical).
+redimensionalize: true
+
+# Best-effort physical-scale geometry: multiply coordinates by L_ref.  The
+# per-sample CenterMesh offset is not stored, so geometry remains centered
+# at the origin; field values are unaffected either way.  Off by default.
+rescale_geometry: false
+
+# -- Runtime ----------------------------------------------------------------
+# torch.compile off by default: per-sample point counts vary, so compiling
+# would trigger repeated recompiles for little benefit at inference.
+compile: false
+
+# Run inference at full mesh resolution.  A large cap turns the reader's
+# subsample and the SubsampleMesh transform into no-ops (both resolve
+# `${sampling_resolution}`).  Lower it if a full volume mesh does not fit.
+sampling_resolution: 100000000
+
+# Metrics to report (training space, identical to validation).
+metrics: [l2]
+
+# -- Integrated force / moment coefficients (surface cases) -----------------
+# Integrates the predicted (and reference) surface traction (-Cp*n + Cf)
+# over the vehicle into force/moment coefficients: CD/CL/CS (drag/lift/side)
+# and CMR/CMP/CMY (roll/pitch/yaw). Auto-skips when the dataset has no
+# Cp/Cf surface fields (e.g. volume runs). Magnitudes are only physical at
+# full surface resolution: a `sampling_resolution` below the mesh's cell
+# count truncates the integral (pred and true alike; infer.py warns when
+# it detects this). See src/forces.py for the math and sign/orientation
+# conventions.
+force_coefficients:
+  enabled: true
+  # A_ref in physical units. CD/CL/CM magnitudes are only physically
+  # meaningful when this matches the dataset's convention (e.g. the vehicle
+  # frontal area); the predicted-vs-reference comparison is independent of
+  # it. Set this to your reference area for absolute coefficients.
+  reference_area: 1.0
+  # L_ref for the moment coefficient. null -> use each sample's
+  # global_data.L_ref (the same length used to non-dimensionalize geometry).
+  reference_length: null
+  # Moment reference point, in the centered + physical-scale body frame
+  # (origin = the CenterMesh area/point centroid; the absolute offset is
+  # not recoverable). Predicted and reference moments use the same frame.
+  moment_center: [0.0, 0.0, 0.0]
+  # Global "up" axis; the drag axis is taken from each sample's U_inf and
+  # the lift axis is `up` orthogonalized against drag.
+  up_direction: [0.0, 0.0, 1.0]

@@ -1,0 +1,156 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Model architecture. With these defaults the model has ~1.26 M parameters.
+model:
+  # Cap on particles per snapshot. Must be >= the largest population in the
+  # data. Required: set it for your dataset (no default). Override at CLI.
+  num_particles_max: ???
+  # Per-token hidden width of the local stream.
+  num_hidden: 128
+  # Number of attention heads in every block.
+  num_heads: 4
+  # Number of transformer blocks in the tower.
+  num_blocks: 4
+  # Size of the per-block learnable global-query bank used to compress the
+  # per-slot stream during attention.
+  num_flare_global_queries: 32
+  # Number of slice tokens in the persistent geometric context, built once
+  # per forward and shared across blocks.
+  num_context_slices: 32
+  # Width of the typed-token MLP outputs feeding the persistent context.
+  context_token_dim: 64
+  # FFN expansion ratio inside each block.
+  mlp_ratio: 4
+  # torch.compile(model) before DDP wrap. Disable for debugging.
+  compile: true
+
+  # Input embeddings (particle + mesh + time/delay token kinds).
+  embeddings:
+    # Width of the Fourier embedding for every time-related scalar.
+    time_embed_channels: 64
+    # Width of learnable type-embedding vectors (particle / mesh / time tokens).
+    token_type_embed_dim: 8
+    # How the mesh xyz coordinates are embedded into the context-token MLP:
+    #   "fourier": a per-axis Fourier basis is appended to the raw scalars.
+    #   "raw":     the xyz coordinates are passed unchanged.
+    mesh_xyz_type: "fourier"
+    # How time-related scalars (current simulation time and per-particle
+    # delays) are embedded:
+    #   "log_concat": Fourier embedding of the linearly-normalized value
+    #     concatenated with a Fourier embedding of the log-normalized value;
+    #     expands the lower end of the distribution when delays span many
+    #     orders of magnitude.
+    #   "raw":        Fourier embedding of the linearly-normalized value only.
+    time_delay_type: "log_concat"
+    # Frequency range of the linear-scale and log-scale time embeddings.
+    time_max_positions_lin: 1000
+    time_max_positions_log: 1000
+    # Multipliers applied to the time scalars before each embedding.
+    time_prescale_lin: 100.0
+    time_prescale_log: 100.0
+    # Mesh-coordinate Fourier lift (used when mesh_xyz_type == "fourier"):
+    # number of frequencies and the geometric ratio between them.
+    mesh_fourier_num_freqs: 6
+    mesh_fourier_base: 2.0
+
+  # Output heads (delay head + particle-features head).
+  heads:
+    # Number of mixture components, shared between the two heads.
+    num_gmm_components: 16
+    # Width of the delay-conditioning embedding feeding the particle-features
+    # head at inference (consumes the realized delta-t from the delay head).
+    dt_conditioning_embed_dim: 32
+    # Predictive distribution used by the delay head ("gmm": Gaussian mixture
+    # on R, with the non-negativity of the delay enforced at inference time by
+    # rejection sampling in generate.py).
+    delay_head_type: "gmm"
+    # How the log-standard-deviation outputs of both GMM heads are bounded:
+    #   "smooth": smooth softplus-based clamp; keeps gradients alive past
+    #     saturation. Uses both log_sigma_clamp and log_sigma_smooth_beta.
+    #   "hard":   torch.clamp at log_sigma_clamp; log_sigma_smooth_beta is
+    #     unused.
+    #   "none":   no clamping; both log_sigma_clamp and log_sigma_smooth_beta
+    #     are unused.
+    log_sigma_clamp_type: "smooth"
+    # Saturation bounds [lo, hi] for log_sigma.
+    log_sigma_clamp: [-10.0, 2.0]
+    # Sharpness of the "smooth" clamp; ignored by the other modes.
+    log_sigma_smooth_beta: 1.0
+
+# Dataset. Reads the samples/ and maps/ subtrees from data_dir.
+dataset:
+  # Directory containing the samples/ and maps/ subtrees. Override at CLI.
+  data_dir: ???
+  # Path to stats.json produced by compute_stats.py. Override at CLI.
+  stats_file: ???
+  # Number of consecutive snapshots per sample. Pure teacher forcing needs 2:
+  # current state and next event.
+  n_steps: 2
+  # Names of the scalar particle features stored between the (x, y, z)
+  # coordinates and the trailing delay column, in column order. Each name must
+  # have a matching entry in stats.json.
+  particle_feature_names: [ionization_energy]
+  # Names of the scalar mesh fields stored alongside positions in each maps
+  # file. Each name must have a matching entry in stats.json.
+  mesh_feature_names: [temperature, voltage]
+  # Held-out evaluation. false: train on everything under data_dir (samples/
+  # and maps/ read directly). true: read the train split from data_dir/train/
+  # and a test split from data_dir/test/, and report a test loss each logging
+  # step alongside the train loss. See the README dataset-format section.
+  train_test_split: false
+
+# Loss weighting and regularization.
+loss:
+  # Weight on the particle-features NLL term relative to the delay NLL term.
+  lambda_particle_features: 1.0
+  # Weight on the L2 penalty applied to the pre-clamp log_sigma outputs of both
+  # GMM heads. Keeps the unbounded linear projection from drifting deep into the
+  # clamp's saturated region, where the data-fit gradient becomes faint. Set to
+  # 0.0 to disable. Small by default so it does not dominate the NLL.
+  lambda_log_sigma: 1.0e-2
+  # AdamW weight decay.
+  weight_decay: 1.0e-4
+  # Max global L2 norm for gradient clipping (set null to disable). NLL-style
+  # losses occasionally produce huge corrective gradients when the loss spikes
+  # into the negative regime, so a conservative cap keeps training stable.
+  grad_clip_norm: 1.0
+
+# Training schedule (sample-based).
+training:
+  batch_size_per_gpu: 8
+  lr: 1.0e-3
+  # Total samples to see before stopping.
+  max_training_samples: 5000000
+  # PyTorch DataLoader workers.
+  num_workers: 4
+  # LR scheduler. Set name=null to disable (constant lr) or
+  # "cosine_annealing" to use CosineAnnealingLR with the parameters below.
+  scheduler:
+    name: cosine_annealing
+    eta_min: 2.0e-5
+
+# I/O and logging (PythonLogger only).
+io:
+  checkpoint_dir: "./checkpoints/"
+  load_checkpoint: false
+  # Log every N samples.
+  logging_frequency: 10000
+  # Save checkpoint every N samples.
+  checkpoint_frequency: 200000
+
+# Reproducibility.
+seed: 1234

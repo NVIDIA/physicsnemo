@@ -20,10 +20,11 @@ from typing import Dict, List
 
 import numpy as np
 import torch
-from sympy import Add, Basic, Derivative, Function, Symbol, lambdify
-from sympy.printing.str import StrPrinter
 
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.sym.constants import diff_str, tf_dt
+
+sympy = OptionalImport("sympy")
 
 
 def torch_lambdify(f, r, separable=False):
@@ -40,7 +41,7 @@ def torch_lambdify(f, r, separable=False):
         return loop_lambda(f)
 
     variables = [k for k in r] if separable else [[k for k in r]]
-    return lambdify(variables, f, [TORCH_SYMPY_PRINTER])
+    return sympy.lambdify(variables, f, [TORCH_SYMPY_PRINTER])
 
 
 def _where_torch(conditions, x, y):
@@ -145,7 +146,7 @@ TORCH_SYMPY_PRINTER = {
 }
 
 
-class CustomDerivativePrinter(StrPrinter):
+class CustomDerivativePrinter(sympy.printing.str.StrPrinter):
     """Print SymPy derivatives as ``u__x`` style names using ``diff_str``."""
 
     def _print_Function(self, expr):
@@ -162,16 +163,18 @@ def _subs_derivatives(expr):
     """Replace SymPy Derivative and Function atoms with named Symbols."""
     while True:
         try:
-            deriv = expr.atoms(Derivative).pop()
+            deriv = expr.atoms(sympy.Derivative).pop()
             new_fn_name = str(deriv)
-            expr = expr.subs(deriv, Function(new_fn_name)(*deriv.free_symbols))
+            expr = expr.subs(deriv, sympy.Function(new_fn_name)(*deriv.free_symbols))
         except KeyError:
             break
     while True:
         try:
-            fn = {fn for fn in expr.atoms(Function) if fn.class_key()[1] == 0}.pop()
+            fn = {
+                fn for fn in expr.atoms(sympy.Function) if fn.class_key()[1] == 0
+            }.pop()
             new_symbol_name = str(fn)
-            expr = expr.subs(fn, Symbol(new_symbol_name))
+            expr = expr.subs(fn, sympy.Symbol(new_symbol_name))
         except KeyError:
             break
     return expr
@@ -180,7 +183,7 @@ def _subs_derivatives(expr):
 # This global patch is required so that str(Derivative(u(x), x)) produces "u__x"
 # instead of "Derivative(u(x), x)".  The entire _subs_derivatives → SympyToTorch
 # pipeline relies on this naming convention to wire derivative keys in the graph.
-Basic.__str__ = lambda self: CustomDerivativePrinter().doprint(self)
+sympy.Basic.__str__ = lambda self: CustomDerivativePrinter().doprint(self)
 
 
 class SympyToTorch(torch.nn.Module):
@@ -199,14 +202,14 @@ class SympyToTorch(torch.nn.Module):
         if not self.freeze_terms:
             self.torch_expr = torch_lambdify(sympy_expr, self.keys)
         else:
-            if not all(x < len(Add.make_args(sympy_expr)) for x in freeze_terms):
+            if not all(x < len(sympy.Add.make_args(sympy_expr)) for x in freeze_terms):
                 raise ValueError(
                     "freeze_terms indices must be less than the number of terms in the expression"
                 )
             self.torch_expr = []
-            for i in range(len(Add.make_args(sympy_expr))):
+            for i in range(len(sympy.Add.make_args(sympy_expr))):
                 self.torch_expr.append(
-                    torch_lambdify(Add.make_args(sympy_expr)[i], self.keys)
+                    torch_lambdify(sympy.Add.make_args(sympy_expr)[i], self.keys)
                 )
             self.freeze_list = list(self.torch_expr[i] for i in freeze_terms)
         self.name = name

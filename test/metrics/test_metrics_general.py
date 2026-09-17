@@ -25,7 +25,9 @@ import physicsnemo.metrics.general.crps as crps
 import physicsnemo.metrics.general.ensemble_metrics as em
 import physicsnemo.metrics.general.entropy as ent
 import physicsnemo.metrics.general.histogram as hist
+import physicsnemo.metrics.general.mse as mse_mod
 import physicsnemo.metrics.general.power_spectrum as ps
+import physicsnemo.metrics.general.relative_error as rel
 import physicsnemo.metrics.general.wasserstein as w
 from physicsnemo.distributed.manager import DistributedManager
 
@@ -853,3 +855,137 @@ def test_power_spectrum(device):
     assert (power[0, 0] < 1e-6).sum() > (
         power[0, 0].numel() * 0.9
     )  # Most bins are zero
+
+
+# ---------------------------------------------------------------------------
+# Relative errors (relative_error.py)
+# ---------------------------------------------------------------------------
+def test_relative_error_known_values(device):
+    target = torch.randn(8, 5, device=device)
+    # Perfect prediction -> 0.
+    assert torch.allclose(
+        rel.relative_l2(target, target), torch.zeros((), device=device), atol=1e-6
+    )
+    assert torch.allclose(
+        rel.relative_mse(target, target), torch.zeros((), device=device), atol=1e-6
+    )
+    # Zero prediction -> sum(target^2) / sum(target^2) == 1 (and its sqrt == 1).
+    zeros = torch.zeros_like(target)
+    assert torch.allclose(
+        rel.relative_l2(zeros, target), torch.ones((), device=device), atol=1e-6
+    )
+    assert torch.allclose(
+        rel.relative_mse(zeros, target), torch.ones((), device=device), atol=1e-6
+    )
+
+
+def test_relative_error_matches_manual(device):
+    torch.manual_seed(0)
+    pred = torch.randn(4, 6, device=device)
+    target = torch.randn(4, 6, device=device)
+    man_mse = ((pred - target) ** 2).sum() / (target**2).sum()
+    torch.testing.assert_close(rel.relative_mse(pred, target), man_mse)
+    torch.testing.assert_close(rel.relative_l2(pred, target), man_mse.sqrt())
+
+
+def test_relative_l2_is_sqrt_of_relative_mse(device):
+    torch.manual_seed(1)
+    pred = torch.randn(3, 7, device=device)
+    target = torch.randn(3, 7, device=device)
+    torch.testing.assert_close(
+        rel.relative_l2(pred, target), rel.relative_mse(pred, target).sqrt()
+    )
+
+
+def test_relative_l2_dim_per_channel(device):
+    torch.manual_seed(2)
+    pred = torch.randn(10, 3, device=device)
+    target = torch.randn(10, 3, device=device)
+    # Reduce the point axis only -> per-channel result of shape (3,).
+    out = rel.relative_l2(pred, target, dim=0)
+    assert out.shape == (3,)
+    man = (((pred - target) ** 2).sum(0) / (target**2).sum(0)).sqrt()
+    torch.testing.assert_close(out, man)
+
+
+def test_relative_l2_weights_mask(device):
+    torch.manual_seed(3)
+    pred = torch.randn(12, 4, device=device)
+    target = torch.randn(12, 4, device=device)
+    # All-ones weights == unweighted.
+    torch.testing.assert_close(
+        rel.relative_l2(pred, target, weights=torch.ones_like(pred)),
+        rel.relative_l2(pred, target),
+    )
+    # A 0/1 mask must equal computing the ratio over the kept elements only.
+    mask = (torch.rand(12, 1, device=device) > 0.5).to(pred.dtype)
+    ratio = (mask * (pred - target) ** 2).sum() / (mask * target**2).sum()
+    torch.testing.assert_close(rel.relative_mse(pred, target, weights=mask), ratio)
+    torch.testing.assert_close(
+        rel.relative_l2(pred, target, weights=mask), ratio.sqrt()
+    )
+
+
+def test_relative_error_shape_mismatch_raises(device):
+    a, b = torch.randn(4, 3, device=device), torch.randn(4, 5, device=device)
+    with pytest.raises(ValueError, match="same shape"):
+        rel.relative_l2(a, b)
+    with pytest.raises(ValueError, match="same shape"):
+        rel.relative_mse(a, b)
+
+
+# ---------------------------------------------------------------------------
+# Weighted MSE / RMSE (mse.py)
+# ---------------------------------------------------------------------------
+def test_mse_weights_none_unchanged(device):
+    # weights=None must reproduce the plain mean exactly (no downstream change).
+    torch.manual_seed(4)
+    pred = torch.randn(6, 5, device=device)
+    target = torch.randn(6, 5, device=device)
+    torch.testing.assert_close(
+        mse_mod.mse(pred, target), torch.mean((pred - target) ** 2)
+    )
+    # All-ones weights == unweighted mean.
+    torch.testing.assert_close(
+        mse_mod.mse(pred, target, weights=torch.ones_like(pred)),
+        mse_mod.mse(pred, target),
+    )
+
+
+def test_mse_weights_mask_matches_manual(device):
+    torch.manual_seed(5)
+    pred = torch.randn(10, 4, device=device)
+    target = torch.randn(10, 4, device=device)
+    mask = (torch.rand(10, 1, device=device) > 0.5).to(pred.dtype)
+    w = torch.broadcast_to(mask, pred.shape)
+    man = (w * (pred - target) ** 2).sum() / w.sum()
+    torch.testing.assert_close(mse_mod.mse(pred, target, weights=mask), man)
+    # rmse inherits the weighting.
+    torch.testing.assert_close(mse_mod.rmse(pred, target, weights=mask), man.sqrt())
+
+
+def test_mse_rmse_unweighted_and_dim(device):
+    torch.manual_seed(6)
+    pred = torch.randn(3, 8, device=device)
+    target = torch.randn(3, 8, device=device)
+    se = (pred - target) ** 2
+    torch.testing.assert_close(mse_mod.mse(pred, target), se.mean())
+    torch.testing.assert_close(mse_mod.rmse(pred, target), se.mean().sqrt())
+    # dim reduction matches a plain mean over that axis.
+    torch.testing.assert_close(mse_mod.mse(pred, target, dim=1), se.mean(dim=1))
+    torch.testing.assert_close(mse_mod.rmse(pred, target, dim=1), se.mean(dim=1).sqrt())
+
+
+def test_mse_weights_channel_and_eps(device):
+    torch.manual_seed(7)
+    pred = torch.randn(2, 9, 4, device=device)
+    target = torch.randn(2, 9, 4, device=device)
+    # Per-channel weights broadcast over (B, N): a genuine weighted mean — unlike
+    # the relative ratio, channel weights do NOT cancel here.
+    cw = torch.rand(4, device=device) + 0.5
+    w = torch.broadcast_to(cw, pred.shape)
+    man = (w * (pred - target) ** 2).sum() / w.sum()
+    torch.testing.assert_close(mse_mod.mse(pred, target, weights=cw), man)
+    # All-zero weights -> finite 0 via the eps floor (no division by zero).
+    out = mse_mod.mse(pred, target, weights=torch.zeros_like(pred))
+    assert torch.isfinite(out) and float(out) == 0.0

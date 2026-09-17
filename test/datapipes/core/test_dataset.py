@@ -742,3 +742,60 @@ class TestDatasetIntegration:
             assert data["positions"].device.type == "cuda"
 
         torch.cuda.synchronize()
+
+
+class TestDatasetSubsamplingReproducibility:
+    """Reader subsampling RNG is reproducible across the threaded path.
+
+    Reader subsampling derives its generator per ``(base_seed, epoch,
+    index)``, so the multi-worker ``prefetch`` path matches synchronous
+    loading and two seeded runs agree -- even with ``num_workers > 1``.
+    """
+
+    def _make_dataset(self, data_dir, seed: int) -> dp.Dataset:
+        reader = dp.NumpyReader(
+            data_dir,
+            file_pattern="sample_*.npz",
+            fields=["positions", "features"],
+            coordinated_subsampling={
+                "n_points": 50,
+                "target_keys": ["positions", "features"],
+            },
+        )
+        dataset = dp.Dataset(reader, num_workers=2)
+        dataset.set_generator(torch.Generator().manual_seed(seed))
+        return dataset
+
+    def test_prefetch_matches_synchronous(self, numpy_data_dir):
+        """Threaded prefetch (num_workers=2) matches synchronous loading."""
+        indices = list(range(10))
+
+        sync_ds = self._make_dataset(numpy_data_dir, seed=2024)
+        expected = {i: sync_ds._load(i)[0]["positions"] for i in indices}
+
+        async_ds = self._make_dataset(numpy_data_dir, seed=2024)
+        for i in indices:
+            async_ds.prefetch(i)
+        actual = {i: async_ds[i][0]["positions"] for i in indices}
+        async_ds.close()
+
+        for i in indices:
+            assert torch.equal(actual[i], expected[i])
+
+    def test_two_seeded_runs_identical(self, numpy_data_dir):
+        """Two datasets seeded identically yield identical prefetch results."""
+        indices = list(range(10))
+
+        ds_a = self._make_dataset(numpy_data_dir, seed=99)
+        ds_b = self._make_dataset(numpy_data_dir, seed=99)
+        for i in indices:
+            ds_a.prefetch(i)
+            ds_b.prefetch(i)
+
+        for i in indices:
+            a = ds_a[i][0]["positions"]
+            b = ds_b[i][0]["positions"]
+            assert torch.equal(a, b)
+
+        ds_a.close()
+        ds_b.close()

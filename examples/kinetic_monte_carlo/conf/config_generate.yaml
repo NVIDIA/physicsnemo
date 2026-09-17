@@ -1,0 +1,57 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Path to the .mdlus checkpoint file produced by save_checkpoint during training.
+checkpoint: ???
+
+# Data
+dataset:
+  # Directory containing the samples/ and maps/ subtrees.
+  data_dir: ???
+  # stats.json produced by compute_stats.py - required for normalization.
+  stats_file: ???
+  # Scalar particle / mesh feature names, in column order. Must match what the
+  # checkpoint was trained with and have matching stats.json entries.
+  particle_feature_names: [ionization_energy]
+  mesh_feature_names: [temperature, voltage]
+  # Slot budget for each rollout (set it to the model's num_particles_max).
+  # Required (no default). Override at CLI.
+  num_particles_max: ???
+
+# What to roll out. Each entry identifies a simulation by its geometry-group
+# directory name and its sim_id. Use ``sim_id: "all"`` to expand into every
+# simulation available for that geometry group.
+rollout:
+  # Number of independent trajectories generated per simulation. They share the
+  # same initial state and mesh but diverge through independent GMM draws.
+  num_ensemble: 8
+  simulations:
+    # "geometry" is a placeholder: replace it with one of your own
+    # geometry-group directory names under the data root.
+    - geometry: "my_geometry"
+      sim_id: "all"
+
+# Output
+io:
+  # Root directory for the rollouts. One subdirectory per geometry group is
+  # created underneath, and each simulation lands in
+  # ``<output_dir>/<geometry>/rollout_sim<sim_id>.pth``.
+  output_dir: "./rollouts/"
+  # Log progress every N rollout iterations (one iteration = one batched
+  # forward pass + one event added to every still-active ensemble member).
+  logging_frequency: 50
+
+seed: 1234

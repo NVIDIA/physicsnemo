@@ -30,16 +30,12 @@ from torch.profiler import record_function
 from torch.utils.checkpoint import checkpoint
 
 from physicsnemo.core.module import Module
-from physicsnemo.experimental.models.globe.utilities.rank_spec import (
-    RankSpecDict,
-    flatten_rank_spec,
-    rank_counts,
-)
 from physicsnemo.experimental.models.globe.utilities.tensordict_utils import (
     concatenate_leaves,
     concatenated_length,
     split_by_leaf_rank,
 )
+from physicsnemo.mesh import RankSpecDict, flatten_rank_spec, rank_counts
 from physicsnemo.nn import Mlp, Pade
 from physicsnemo.nn.functional.equivariant_ops import (
     legendre_polynomials,
@@ -51,7 +47,7 @@ from physicsnemo.nn.functional.equivariant_ops import (
 logger = logging.getLogger("globe.field_kernel")
 
 if TYPE_CHECKING:
-    from physicsnemo.experimental.models.globe.cluster_tree import (
+    from physicsnemo.mesh.spatial.cluster_tree import (
         ClusterTree,
         DualInteractionPlan,
         SourceAggregates,
@@ -919,12 +915,12 @@ class BarnesHutKernel(Kernel):
         TensorDict[str, Float[torch.Tensor, "n_targets ..."]]
             Kernel output fields at target points.
         """
-        from physicsnemo.experimental.models.globe.cluster_tree import (
+        from physicsnemo.mesh.spatial._ragged import _ragged_arange
+        from physicsnemo.mesh.spatial.cluster_tree import (
             ClusterTree,
             DualInteractionPlan,
             SourceAggregates,
         )
-        from physicsnemo.mesh.spatial._ragged import _ragged_arange
 
         n_sources = source_points.shape[0]
         n_targets = target_points.shape[0]
@@ -1757,7 +1753,7 @@ class MultiscaleKernel(Module):
         TensorDict[str, Float[torch.Tensor, "n_targets ..."]]
             Summed results from all kernel branches.
         """
-        from physicsnemo.experimental.models.globe.cluster_tree import ClusterTree
+        from physicsnemo.mesh.spatial.cluster_tree import ClusterTree
 
         n_sources: int = len(source_points)
         device = source_points.device

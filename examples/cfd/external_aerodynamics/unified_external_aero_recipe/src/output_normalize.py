@@ -36,17 +36,34 @@ from typing import Any, Literal, TypeAlias
 
 import torch
 from jaxtyping import Float
+from omegaconf import DictConfig
 from tensordict import TensorDict
-
-from physicsnemo.mesh import Mesh
-
 from utils import FieldType, field_dim
+
+from physicsnemo.datapipes.keys import as_nested_key, format_leaf_keys
+from physicsnemo.mesh import Mesh
 
 ### Recipe-wide I/O contract literal: every model declares whether its
 ### `forward()` consumes / returns Mesh-like objects or plain `(B, N, C)`
 ### tensors. The collate, output normalizer, and forward-pass dispatch
 ### all key off this same enum.
 IOType: TypeAlias = Literal["mesh", "tensors"]
+
+
+def require_output_type(cfg: DictConfig) -> IOType:
+    """Return the model's declared ``output_type``, or raise if missing/invalid.
+
+    Both entry points (``train.py`` / ``infer.py``) require the model YAML
+    to declare ``output_type`` (``"mesh"`` or ``"tensors"``) so the forward
+    output can be unpacked; this is the shared validation.
+    """
+    output_type = cfg.get("output_type", None)
+    if output_type not in ("mesh", "tensors"):
+        raise ValueError(
+            f"Model YAML must declare `output_type` as one of 'mesh', "
+            f"'tensors'; got {output_type!r}."
+        )
+    return output_type
 
 
 def split_concat_by_target(
@@ -84,17 +101,20 @@ def split_concat_by_target(
             f"target_config={target_config!r}."
         )
 
-    leaves: dict[str, torch.Tensor] = {}
+    ### Build the TD leaf by leaf; ``set`` with a tuple key creates the
+    ### nesting, so a ``"solution.p"`` target lands at the same place
+    ### ``extract_targets`` reads it from.
+    out = TensorDict({}, batch_size=tensor.shape[:2], device=tensor.device)
     idx = 0
     for name, ftype in target_config.items():
         dim = field_dim(ftype, n_spatial_dims)
         slice_ = tensor[..., idx : idx + dim]
         if ftype == "scalar":
             slice_ = slice_.squeeze(-1)
-        leaves[name] = slice_
+        out.set(as_nested_key(name), slice_)
         idx += dim
 
-    return TensorDict(leaves, batch_size=tensor.shape[:2], device=tensor.device)
+    return out
 
 
 def normalize_output_to_tensordict(
@@ -133,14 +153,18 @@ def normalize_output_to_tensordict(
             raise TypeError(
                 f"output_type='mesh' but model returned {type(output).__name__}"
             )
-        available = set(output.point_data.keys())
-        missing = [name for name in target_config if name not in available]
+        keys = [as_nested_key(name) for name in target_config]
+        missing = [
+            name
+            for name, key in zip(target_config, keys)
+            if key not in output.point_data
+        ]
         if missing:
             raise KeyError(
                 f"Mesh output is missing target fields {missing!r}; "
-                f"available: {sorted(available)!r}"
+                f"available: {format_leaf_keys(output.point_data)!r}"
             )
-        return output.point_data.select(*target_config)
+        return output.point_data.select(*keys)
 
     if output_type == "tensors":
         if isinstance(output, tuple):

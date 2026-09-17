@@ -30,7 +30,7 @@ from physicsnemo.mesh.mesh import Mesh
 
 pv = pytest.importorskip("pyvista")
 
-from physicsnemo.mesh.io.io_pyvista import from_pyvista  # noqa: E402
+from physicsnemo.mesh.io.io_pyvista import from_pyvista, to_pyvista  # noqa: E402
 
 ### Helper Functions ###
 
@@ -151,6 +151,129 @@ class TestDataPreservation:
         assert isinstance(normals_tensor, torch.Tensor)
         assert normals_tensor.shape == (mesh.n_points, 3)
         assert torch.allclose(normals_tensor, torch.from_numpy(normals_data), atol=1e-6)
+
+
+class TestForceCopy:
+    """Explicit ownership requests must cover geometry and every data container."""
+
+    @staticmethod
+    def _triangle_with_data():
+        mesh = pv.PolyData.from_regular_faces(
+            np.array(
+                [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                dtype=np.float32,
+            ),
+            np.array([[0, 1, 2]], dtype=np.int64),
+        )
+        mesh.point_data["point_value"] = np.array([1.0, 2.0, 3.0])
+        mesh.cell_data["cell_value"] = np.array([4.0])
+        mesh.field_data["case_value"] = np.array([5.0])
+        return mesh
+
+    def test_from_pyvista_force_copy_owns_geometry_and_data(self):
+        pv_mesh = self._triangle_with_data()
+        source_points = pv_mesh.points.copy()
+        source_faces = pv_mesh.regular_faces.copy()
+        source_point_data = pv_mesh.point_data["point_value"].copy()
+        source_cell_data = pv_mesh.cell_data["cell_value"].copy()
+        source_global_data = pv_mesh.field_data["case_value"].copy()
+
+        mesh = from_pyvista(pv_mesh, force_copy=True)
+        mesh.points[0, 0] = 10.0
+        mesh.cells[0, 0] = 1
+        mesh.point_data["point_value"][0] = 10.0
+        mesh.cell_data["cell_value"][0] = 10.0
+        mesh.global_data["case_value"][0] = 10.0
+
+        np.testing.assert_array_equal(pv_mesh.points, source_points)
+        np.testing.assert_array_equal(pv_mesh.regular_faces, source_faces)
+        np.testing.assert_array_equal(
+            pv_mesh.point_data["point_value"], source_point_data
+        )
+        np.testing.assert_array_equal(pv_mesh.cell_data["cell_value"], source_cell_data)
+        np.testing.assert_array_equal(
+            pv_mesh.field_data["case_value"], source_global_data
+        )
+
+    def test_from_pyvista_centroid_mode_copies_mapped_data(self):
+        pv_mesh = self._triangle_with_data()
+        source_cell_data = pv_mesh.cell_data["cell_value"].copy()
+        source_global_data = pv_mesh.field_data["case_value"].copy()
+
+        mesh = from_pyvista(
+            pv_mesh,
+            point_source="cell_centroids",
+            warn_on_lost_data=False,
+            force_copy=True,
+        )
+        mesh.point_data["cell_value"][0] = 10.0
+        mesh.global_data["case_value"][0] = 10.0
+
+        np.testing.assert_array_equal(pv_mesh.cell_data["cell_value"], source_cell_data)
+        np.testing.assert_array_equal(
+            pv_mesh.field_data["case_value"], source_global_data
+        )
+
+    def test_to_pyvista_force_copy_cannot_mutate_source_mesh(self):
+        mesh = Mesh(
+            points=torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+            cells=torch.tensor([[0, 1, 2]]),
+            point_data={"point_value": torch.tensor([1.0, 2.0, 3.0])},
+            cell_data={"cell_value": torch.tensor([4.0])},
+            global_data={"case_value": torch.tensor([5.0])},
+        )
+        source_points = mesh.points.clone()
+        source_cells = mesh.cells.clone()
+        source_point_data = mesh.point_data["point_value"].clone()
+        source_cell_data = mesh.cell_data["cell_value"].clone()
+        source_global_data = mesh.global_data["case_value"].clone()
+
+        pv_mesh = to_pyvista(mesh, force_copy=True)
+        pv_mesh.points[0, 0] = 10.0
+        pv_mesh.regular_faces[0, 0] = 1
+        pv_mesh.point_data["point_value"][0] = 10.0
+        pv_mesh.cell_data["cell_value"][0] = 10.0
+        pv_mesh.field_data["case_value"][0] = 10.0
+
+        torch.testing.assert_close(mesh.points, source_points)
+        torch.testing.assert_close(mesh.cells, source_cells)
+        torch.testing.assert_close(mesh.point_data["point_value"], source_point_data)
+        torch.testing.assert_close(mesh.cell_data["cell_value"], source_cell_data)
+        torch.testing.assert_close(mesh.global_data["case_value"], source_global_data)
+
+    def test_to_pyvista_force_copy_cannot_mutate_source_mesh_3d(self):
+        # The 3D export path builds an UnstructuredGrid with its own
+        # connectivity layout, so exercise it separately from the 2D PolyData
+        # path. `cell_connectivity` is a live view of VTK's storage, so writing
+        # through it (like the geometry/data writes below) would reach the
+        # source Mesh if any buffer were still shared.
+        mesh = Mesh(
+            points=torch.tensor(
+                [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+            ),
+            cells=torch.tensor([[0, 1, 2, 3]]),
+            point_data={"point_value": torch.tensor([1.0, 2.0, 3.0, 4.0])},
+            cell_data={"cell_value": torch.tensor([4.0])},
+            global_data={"case_value": torch.tensor([5.0])},
+        )
+        source_points = mesh.points.clone()
+        source_cells = mesh.cells.clone()
+        source_point_data = mesh.point_data["point_value"].clone()
+        source_cell_data = mesh.cell_data["cell_value"].clone()
+        source_global_data = mesh.global_data["case_value"].clone()
+
+        pv_mesh = to_pyvista(mesh, force_copy=True)
+        pv_mesh.points[0, 0] = 10.0
+        pv_mesh.cell_connectivity[0] = 1
+        pv_mesh.point_data["point_value"][0] = 10.0
+        pv_mesh.cell_data["cell_value"][0] = 10.0
+        pv_mesh.field_data["case_value"][0] = 10.0
+
+        torch.testing.assert_close(mesh.points, source_points)
+        torch.testing.assert_close(mesh.cells, source_cells)
+        torch.testing.assert_close(mesh.point_data["point_value"], source_point_data)
+        torch.testing.assert_close(mesh.cell_data["cell_value"], source_cell_data)
+        torch.testing.assert_close(mesh.global_data["case_value"], source_global_data)
 
 
 ### Parametrized Tests for Device Handling ###

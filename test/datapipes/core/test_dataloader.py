@@ -309,10 +309,27 @@ class TestDataLoaderPrefetching:
 
         loader.disable_prefetch()
         assert loader.use_streams is False
+        # Fully synchronous: the threaded pump is disabled too.
+        assert loader.prefetch_factor == 0
 
         # Should still work in sync mode
         batches = list(loader)
         assert len(batches) == 5
+
+    def test_disable_prefetch_iterable_dataset_no_error(self):
+        """disable_prefetch must not raise on an iterable dataset (which has
+        no cancel_prefetch)."""
+
+        class _RangeIterable(dp.IterableDatasetBase):
+            def __iter__(self):
+                for i in range(4):
+                    yield TensorDict({"x": torch.full((3,), float(i))}), {}
+
+        loader = dp.DataLoader(_RangeIterable(), batch_size=2)
+        loader.disable_prefetch()
+        assert loader.use_streams is False
+        batches = list(loader)
+        assert len(batches) == 2
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
     def test_prefetch_with_cuda_streams(self, numpy_data_dir):
@@ -392,21 +409,30 @@ class TestDataLoaderPrefetching:
         assert len(batches) == 5
         torch.cuda.synchronize()
 
-    def test_enable_prefetch_without_cuda_raises(self, numpy_data_dir):
-        """Test that enable_prefetch raises when CUDA unavailable."""
+    def test_enable_prefetch_without_cuda_restores_pump(self, numpy_data_dir):
+        """Without CUDA, enable_prefetch restores the threaded pump (no
+        raise) and leaves streams off."""
         if torch.cuda.is_available():
-            pytest.skip("CUDA is available, cannot test error case")
+            pytest.skip("CUDA is available, cannot test the CPU-only path")
 
         reader = dp.NumpyReader(numpy_data_dir)
         dataset = dp.Dataset(reader)
         loader = dp.DataLoader(
             dataset,
             batch_size=2,
+            prefetch_factor=3,
             use_streams=False,
         )
 
-        with pytest.raises(RuntimeError, match="CUDA is not available"):
-            loader.enable_prefetch()
+        loader.disable_prefetch()
+        assert loader.prefetch_factor == 0
+
+        loader.enable_prefetch()
+        assert loader.prefetch_factor == 3
+        assert loader.use_streams is False
+
+        batches = list(loader)
+        assert len(batches) == 5
 
     def test_streams_not_created_when_cuda_unavailable(self, numpy_data_dir):
         """Test that no streams are created when CUDA is unavailable."""
@@ -902,6 +928,7 @@ class TestDataLoaderIntegration:
         # Disable prefetch
         loader.disable_prefetch()
         assert loader.use_streams is False
+        assert loader.prefetch_factor == 0
 
         # Second pass without prefetch
         batches2 = list(loader)
@@ -910,6 +937,7 @@ class TestDataLoaderIntegration:
         # Re-enable prefetch
         loader.enable_prefetch()
         assert loader.use_streams is True
+        assert loader.prefetch_factor == 2
 
         # Third pass with prefetch re-enabled
         batches3 = list(loader)

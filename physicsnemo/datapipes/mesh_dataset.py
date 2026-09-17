@@ -29,7 +29,12 @@ import torch
 from tensordict import TensorDict
 
 from physicsnemo.datapipes._rng import fork_generator
-from physicsnemo.datapipes.protocols import DatasetBase, _PrefetchResult
+from physicsnemo.datapipes.protocols import (
+    DatasetBase,
+    HostPayload,
+    preprocessing_stream,
+    record_consumer_stream,
+)
 from physicsnemo.datapipes.readers.mesh import DomainMeshReader, MeshReader
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
@@ -88,10 +93,10 @@ class MeshDataset(DatasetBase):
         device : str or torch.device, optional
             If set, move mesh data to this device after loading (before transforms).
         num_workers : int, default=1
-            Number of worker threads for prefetching. Defaults to 1
-            because mesh transforms construct new Mesh objects internally
-            and tensordict's ``_device_recorder`` is not safe for
-            concurrent TensorDict construction across threads.
+            Number of worker threads for the prefetch pool.  Worker threads
+            run :meth:`_load_host` (disk read + pin_memory) concurrently;
+            GPU operations (H2D transfer, transforms) always run on the
+            main thread in :meth:`_consume`.
         """
         super().__init__(num_workers=num_workers)
         self.reader = reader
@@ -165,16 +170,21 @@ class MeshDataset(DatasetBase):
         self, index: int
     ) -> tuple[Union[Mesh, DomainMesh, TensorDict], dict[str, Any]]:
         """Synchronous load: reader -> device transfer -> transforms."""
-        data, metadata = self.reader[index]
+        with torch.profiler.record_function("MeshDataset._load: reader[index]"):
+            data, metadata = self.reader[index]
 
         if self._device is not None:
-            data = data.to(self._device)
+            with torch.profiler.record_function("MeshDataset._load: data.to(device)"):
+                data = data.to(self._device)
 
         for t in self.transforms:
-            if isinstance(data, DomainMesh):
-                data = t.apply_to_domain(data)
-            else:
-                data = t(data)
+            with torch.profiler.record_function(
+                f"MeshDataset._load: transform {type(t).__name__}"
+            ):
+                if isinstance(data, DomainMesh):
+                    data = t.apply_to_domain(data)
+                else:
+                    data = t(data)
 
         return data, metadata
 
@@ -182,101 +192,69 @@ class MeshDataset(DatasetBase):
         return len(self.reader)
 
     # ------------------------------------------------------------------
-    # Stream-aware prefetch (overrides DatasetBase defaults)
+    # Producer / consumer split (overrides DatasetBase defaults)
     # ------------------------------------------------------------------
 
-    def _load_and_transform(
-        self,
-        index: int,
-        stream: Optional[torch.cuda.Stream] = None,
-    ) -> _PrefetchResult:
-        """Load a sample and apply transforms with optional CUDA stream.
+    def _load_host(self, work_item: int) -> HostPayload:
+        """Producer stage: read a mesh sample on a worker thread.
+
+        Launches no device kernels: it only reads the raw sample. Device
+        transfer and mesh transforms happen later in :meth:`_consume` on
+        the consuming thread.
 
         Parameters
         ----------
-        index : int
-            Sample index.
-        stream : torch.cuda.Stream, optional
-            Optional CUDA stream for GPU operations.
+        work_item : int
+            Sample index to read from the reader.
 
         Returns
         -------
-        _PrefetchResult
-            Result with data, metadata, or error.
+        HostPayload
+            Payload carrying the host data and metadata, or a captured
+            error.
         """
-        result = _PrefetchResult(index=index)
-
         try:
-            data, metadata = self.reader[index]
+            data, metadata = self.reader[work_item]
+            return HostPayload(work_item=work_item, data=data, metadata=metadata)
+        except Exception as e:  # noqa: BLE001
+            return HostPayload(work_item=work_item, error=e)
 
-            if self._device is not None:
-                if stream is not None:
-                    with torch.cuda.stream(stream):
-                        data = data.to(self._device, non_blocking=True)
-                else:
-                    data = data.to(self._device, non_blocking=True)
-
-            for t in self.transforms:
-                if stream is not None:
-                    with torch.cuda.stream(stream):
-                        if isinstance(data, DomainMesh):
-                            data = t.apply_to_domain(data)
-                        else:
-                            data = t(data)
-                else:
-                    if isinstance(data, DomainMesh):
-                        data = t.apply_to_domain(data)
-                    else:
-                        data = t(data)
-
-            if stream is not None:
-                result.event = torch.cuda.Event()
-                result.event.record(stream)
-
-            result.data = data
-            result.metadata = metadata
-
-        except Exception as e:
-            result.error = e
-
-        return result
-
-    def prefetch(
+    def _consume(
         self,
-        index: int,
+        payload: HostPayload,
         stream: Optional[torch.cuda.Stream] = None,
-    ) -> None:
-        """Start prefetching a sample asynchronously.
-
-        When a CUDA stream is provided, GPU operations (device transfer
-        and transforms) run on that stream for overlap with computation.
-
-        Parameters
-        ----------
-        index : int
-            Sample index to prefetch.
-        stream : torch.cuda.Stream, optional
-            Optional CUDA stream for GPU operations.
-        """
-        if index in self._prefetch_futures:
-            return
-
-        executor = self._ensure_executor()
-        future = executor.submit(self._load_and_transform, index, stream)
-        self._prefetch_futures[index] = future
-
-    def __getitem__(
-        self, index: int
+        *,
+        defer_sync: bool = False,
     ) -> tuple[Union[Mesh, DomainMesh, TensorDict], dict[str, Any]]:
-        """Get a transformed sample by index.
+        """Consumer stage: device transfer + transforms on the calling thread.
 
-        If the index was prefetched, returns the prefetched result
-        (waiting for completion if necessary). Otherwise loads synchronously.
+        Runs on whatever thread calls this (the main thread, so any device
+        kernels in the transforms share the model's launching thread). When
+        a CUDA ``stream`` is assigned, the host-to-device copy *and* the
+        transforms run on that preprocessing stream via
+        :func:`preprocessing_stream` -- so this sample's preprocessing
+        overlaps the previous batch's training on the compute stream. A CUDA
+        event orders the preprocessing before the compute stream (not a
+        host-side synchronize), and the returned mesh's tensors are recorded
+        against the compute stream (:meth:`torch.Tensor.record_stream`) so the
+        caching allocator does not recycle their memory for later prep-stream
+        samples while compute-stream reads are still pending.
 
         Parameters
         ----------
-        index : int
-            Sample index.
+        payload : HostPayload
+            Producer payload from :meth:`_load_host`.
+        stream : torch.cuda.Stream, optional
+            Preprocessing stream for the host-to-device transfer and
+            transforms. ``None`` runs on the current stream.
+        defer_sync : bool, default=False
+            When False, ``compute_stream.wait_event`` is enqueued here so the
+            result is immediately safe to use on the current stream. When
+            True, the recorded event is appended to :attr:`_events_pending`
+            and the DataLoader enqueues the wait just before the batch is
+            yielded -- after the previous batch's model work -- so this
+            batch's preprocessing overlaps the previous batch's compute
+            instead of blocking it.
 
         Returns
         -------
@@ -286,27 +264,63 @@ class MeshDataset(DatasetBase):
         Raises
         ------
         Exception
-            If prefetch failed, re-raises the error.
+            If the producer captured an error, re-raises it.
         """
-        future = self._prefetch_futures.pop(index, None)
+        if payload.error is not None:
+            raise payload.error
 
-        if future is not None:
-            result = future.result()
+        data = payload.data
+        metadata = payload.metadata
 
-            if isinstance(result, _PrefetchResult):
-                if result.error is not None:
-                    raise result.error
-                if result.event is not None:
-                    torch.cuda.current_stream().wait_event(result.event)
-                return result.data, result.metadata
+        def _apply_transforms(d: Any) -> Any:
+            for t in self.transforms:
+                if isinstance(d, DomainMesh):
+                    d = t.apply_to_domain(d)
+                else:
+                    d = t(d)
+            return d
 
-            return result
+        device_is_cuda = (
+            self._device is not None and torch.device(self._device).type == "cuda"
+        )
+        use_stream = stream is not None and device_is_cuda
+        compute_stream = torch.cuda.current_stream() if use_stream else None
 
-        return self._load(index)
+        with preprocessing_stream(stream if use_stream else None):
+            if self._device is not None:
+                with torch.profiler.record_function(
+                    "MeshDataset._consume: data.to(device)"
+                ):
+                    data = data.to(self._device, non_blocking=True)
+            with torch.profiler.record_function(
+                "MeshDataset._consume: _apply_transforms"
+            ):
+                data = _apply_transforms(data)
+
+        if use_stream:
+            # The compute stream will read these tensors (collate + model);
+            # record it so the allocator does not recycle their blocks for
+            # later prep-stream samples while those reads are still pending.
+            record_consumer_stream(data, compute_stream)
+            # Record an event marking the preprocessing's completion on the
+            # prep stream.
+            event = torch.cuda.Event()
+            event.record(stream)
+            if defer_sync:
+                # Defer the compute-stream wait to the DataLoader so it lands
+                # after the previous batch's model work (real overlap).
+                self._events_pending.append(event)
+            else:
+                # Inline ordering for standalone callers (no DataLoader to
+                # insert the wait at the right point).
+                compute_stream.wait_event(event)
+
+        return data, metadata
 
     def close(self) -> None:
-        """Close the dataset and stop prefetching.
+        """Close the dataset, its reader, and stop prefetching.
 
         Waits for any in-flight prefetch tasks to complete before shutdown.
         """
         super().close()
+        self.reader.close()

@@ -499,8 +499,14 @@ class BaseAffinePreconditioner(Module, ABC):
             _ensure_plain_tensor(c) for c in (c_in, c_noise, c_out, c_skip)
         )
 
-        x_mesh = getattr(x, "device_mesh", None)
-        if x_mesh is not None:
+        # Only manually promote coefficients for genuine (non-Shard) DTensor
+        # activations. A ShardTensor subclasses torch.Tensor (not DTensor), so
+        # it never matches this check; its dispatch path auto-promotes plain
+        # coefficients to replicated tensors on its mesh on the way in, so
+        # leaving them plain here avoids over-wrapping scalar coefficients (which
+        # otherwise breaks ops like PositionalEmbedding's torch.outer).
+        if isinstance(x, DTensor):
+            x_mesh = x.device_mesh
             c_in, c_noise, c_out, c_skip = (
                 _replicate_on_mesh(c, x_mesh) for c in (c_in, c_noise, c_out, c_skip)
             )

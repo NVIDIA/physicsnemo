@@ -25,7 +25,7 @@ from omegaconf import DictConfig
 from torch.utils.data import DataLoader, DistributedSampler
 import numpy as np
 from tqdm import tqdm
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 
 from dataset import ProcessedVTPDataset
 from model import MoEGatingNet
@@ -186,7 +186,7 @@ def train_gating_networks(dataset, cfg):
             )  # (N, 12)
 
             # --- Forward  ---
-            with autocast(enabled=cfg.use_amp):
+            with autocast("cuda", enabled=cfg.use_amp):
                 gate_p = pressure_gating(p_gating_input)  # (N, 3)
                 pred_p = torch.sum(gate_p * p_preds, dim=1, keepdim=True)  # (N, 1)
 

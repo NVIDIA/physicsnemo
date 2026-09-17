@@ -21,6 +21,10 @@
 # Same `embedding` + `fx` shape as the surface variant, but the
 # embedding pulls the precomputed SDF / SDF normals from
 # `interior.point_data` instead of the surface boundary's cell normals.
+dataset_reader_overrides:
+  # This point-based model consumes only the volume interior.
+  drop_in_file_boundaries: true
+
 input_type: tensors
 output_type: tensors
 
@@ -49,3 +53,5 @@ model:
   structured_shape: null  # unstructured mesh
   use_te: false
   plus: false
+  activation_checkpointing: false
+  checkpointing_ratio: 1.0

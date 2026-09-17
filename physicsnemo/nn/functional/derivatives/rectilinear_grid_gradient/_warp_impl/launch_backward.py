@@ -19,6 +19,8 @@ from __future__ import annotations
 import torch
 import warp as wp
 
+from physicsnemo.core.function_spec import FunctionSpec
+
 from ._kernels import (
     _rectilinear_derivatives_1d_fused_no_mixed_backward_kernel,
     _rectilinear_derivatives_2d_fused_no_mixed_backward_kernel,
@@ -87,7 +89,7 @@ def _launch_backward(
         wp.from_torch(grad_field, dtype=wp.float32),
     ]
 
-    with wp.ScopedStream(wp_stream):
+    with FunctionSpec.warp_stream_scope(wp_stream):
         wp.launch(
             kernel=kernel,
             dim=_launch_dim(grad_field.shape),
@@ -118,7 +120,7 @@ def _launch_backward_fused_no_mixed(
         wp.from_torch(grad_field, dtype=wp.float32),
     ]
 
-    with wp.ScopedStream(wp_stream):
+    with FunctionSpec.warp_stream_scope(wp_stream):
         wp.launch(
             kernel=kernel,
             dim=_launch_dim(grad_field.shape),

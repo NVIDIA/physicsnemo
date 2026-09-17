@@ -170,8 +170,10 @@ def gaussian_curvature_cells(mesh: "Mesh") -> Float[torch.Tensor, " n_cells"]:
     if n_cells == 0:
         return torch.zeros(0, dtype=mesh.points.dtype, device=device)
 
-    ### Compute vertex Gaussian curvature (intrinsic, angle-defect based)
-    K_vertices = gaussian_curvature_vertices(mesh)  # (n_points,)
+    ### Compute vertex Gaussian curvature (intrinsic, angle-defect based).
+    # Route through the cached property so a previously-computed vertex curvature is
+    # reused (and otherwise cached) instead of recomputed on every cell-curvature call.
+    K_vertices = mesh.gaussian_curvature_vertices  # (n_points,)
 
     ### Average vertex curvature to cell centers
     # For each cell, take the mean of its vertices' curvatures, ignoring NaN.

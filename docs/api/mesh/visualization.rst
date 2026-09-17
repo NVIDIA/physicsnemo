@@ -1,7 +1,7 @@
 Visualization
 =============
 
-.. currentmodule:: physicsnemo.mesh.visualization.draw_mesh
+.. currentmodule:: physicsnemo.mesh.visualization
 
 PhysicsNeMo-Mesh supports two visualization backends:
 
@@ -14,7 +14,7 @@ PhysicsNeMo-Mesh supports two visualization backends:
     Interactive 3D rendering with hardware acceleration. Preferred for
     exploratory visualization of large meshes.
 
-The primary entry point is :func:`draw_mesh`, which is also accessible as the
+The primary entry point is :func:`draw`, which is also accessible as the
 ``mesh.draw()`` method. The backend is selected automatically based on
 availability, or can be specified explicitly.
 
@@ -32,12 +32,14 @@ For vector fields, the L2 norm is computed automatically for colormapping.
     mesh.draw(point_scalars="height", show_edges=True)
 
     # Standalone function
-    from physicsnemo.mesh.visualization.draw_mesh import draw_mesh
-    draw_mesh(mesh, point_scalars="height")
+    from physicsnemo.mesh.visualization import draw
+    draw(mesh, point_scalars="height")
+
+``draw_mesh`` remains available as a pending-deprecation compatibility name.
 
 API Reference
 -------------
 
-.. automodule:: physicsnemo.mesh.visualization.draw_mesh
+.. automodule:: physicsnemo.mesh.visualization
    :members:
    :show-inheritance:

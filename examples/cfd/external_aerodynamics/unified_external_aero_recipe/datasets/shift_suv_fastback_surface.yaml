@@ -24,26 +24,34 @@
 # MeshReaderWithGlobalData to merge them onto each boundary Mesh at
 # load time.
 
+# All splits share this root; the train/val/test subsets are selected
+# by manifest.json (auto-discovered next to train_datadir) plus the
+# top-level train_split / val_split keys in the training config.
 train_datadir: ${dataset_paths.shift_suv}/fastback/
 
 pipeline:
   reader:
     _target_: ${dp:MeshReaderWithGlobalData}
     path: ${train_datadir}
-    pattern: "**/domain.pdmsh/_tensordict/boundaries/vehicle"
+    pattern: "run_*/domain.pdmsh/_tensordict/boundaries/vehicle"
     # Walk up two levels from the boundary tensordict to the parent
     # DomainMesh's global_data and merge its keys onto each sample.
     merge_global_data_from: "../../global_data"
   augmentations:
     - _target_: ${dp:RandomRotateMesh}
       axes: ["z"]
+      mode: axis_aligned
       transform_cell_data: true
       transform_global_data: true
     - _target_: ${dp:RandomTranslateMesh}
       distribution:
         _target_: torch.distributions.Uniform
-        low: [-1.0, -1.0, 0.0]
-        high: [1.0, 1.0, 0.0]
+        low:
+          _target_: torch.tensor
+          data: [-1.0, -1.0, 0.0]
+        high:
+          _target_: torch.tensor
+          data: [1.0, 1.0, 0.0]
   transforms:
     - _target_: ${dp:CenterMesh}
       use_area_weighting: true
