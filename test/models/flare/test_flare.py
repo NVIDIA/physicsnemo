@@ -243,6 +243,41 @@ def test_flare_plus_plus_forward_backward(device):
     assert torch.isfinite(embedding.grad).all()
 
 
+def test_flare_plus_plus_eval_is_rng_free(device):
+    """The standalone FLARE++ model is deterministic during evaluation."""
+    torch.manual_seed(44)
+    model = FLAREPlusPlus(
+        functional_dim=2,
+        out_dim=1,
+        embedding_dim=3,
+        n_layers=2,
+        n_hidden=32,
+        dropout=0.4,
+        n_head=4,
+        mlp_ratio=1,
+        slice_num=8,
+    ).to(device)
+    functional_input = torch.randn(2, 19, 2, device=device)
+    embedding = torch.randn(2, 19, 3, device=device)
+
+    model.eval()
+    model_device = next(model.parameters()).device
+    cpu_rng_before = torch.random.get_rng_state().clone()
+    cuda_rng_before = (
+        torch.cuda.get_rng_state(model_device).clone()
+        if model_device.type == "cuda"
+        else None
+    )
+    with torch.no_grad():
+        output_1 = model(functional_input, embedding)
+        output_2 = model(functional_input, embedding)
+
+    assert torch.equal(output_1, output_2)
+    assert torch.equal(torch.random.get_rng_state(), cpu_rng_before)
+    if cuda_rng_before is not None:
+        assert torch.equal(torch.cuda.get_rng_state(model_device), cuda_rng_before)
+
+
 def test_flare_plus_plus_checkpoint_roundtrip(device):
     """Standalone FLARE++ saves and restores through PhysicsNeMo checkpoints."""
 

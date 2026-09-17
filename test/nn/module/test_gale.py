@@ -345,6 +345,43 @@ def test_gale_fpp_multiple_inputs_backward(device):
     assert torch.isfinite(context.grad).all()
 
 
+def test_gale_fpp_eval_is_rng_free(device):
+    """GALE_FPP with context and Concrete Dropout has deterministic eval."""
+    torch.manual_seed(45)
+    attention = GALE_FPP(
+        dim=32,
+        heads=4,
+        dim_head=8,
+        n_global_queries=6,
+        dropout=0.4,
+        context_dim=8,
+        concrete_dropout=True,
+    ).to(device)
+    x = torch.randn(2, 31, 32, device=device)
+    context = torch.randn(2, 4, 6, 8, device=device)
+
+    attention.eval()
+    model_device = next(attention.parameters()).device
+    cpu_rng_before = torch.random.get_rng_state().clone()
+    cuda_rng_before = (
+        torch.cuda.get_rng_state(model_device).clone()
+        if model_device.type == "cuda"
+        else None
+    )
+    with torch.no_grad():
+        outputs_1 = attention((x,), context=context)
+        outputs_2 = attention((x,), context=context)
+
+    assert len(outputs_1) == len(outputs_2)
+    assert all(
+        torch.equal(output_1, output_2)
+        for output_1, output_2 in zip(outputs_1, outputs_2, strict=True)
+    )
+    assert torch.equal(torch.random.get_rng_state(), cpu_rng_before)
+    if cuda_rng_before is not None:
+        assert torch.equal(torch.cuda.get_rng_state(model_device), cuda_rng_before)
+
+
 def test_gale_fpp_torch_compile_fullgraph(device):
     """The context-enabled backend supports full-graph compilation."""
     backend = GALE_FPP(
@@ -373,6 +410,18 @@ def test_gale_fpp_validates_configuration():
     backend = GALE_FPP(dim=16, heads=2, dim_head=8, context_dim=0)
     with pytest.raises(ValueError, match="context_dim=0"):
         backend((torch.randn(1, 5, 16),), torch.randn(1, 2, 3, 4))
+
+
+def test_gale_block_rejects_transolver_plus_with_flare_plus_plus():
+    """The FLARE++ backend cannot be combined with Transolver++ slicing."""
+    with pytest.raises(ValueError, match="GALE_FPP.*requires plus=False"):
+        GALEBlock(
+            num_heads=2,
+            hidden_dim=16,
+            dropout=0.0,
+            plus=True,
+            attention_type="GALE_FPP",
+        )
 
 
 # =============================================================================

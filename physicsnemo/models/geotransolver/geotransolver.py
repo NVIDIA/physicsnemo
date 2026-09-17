@@ -246,7 +246,9 @@ class GeoTransolver(Module):
     time_input : bool, optional
         Whether to include time embeddings. Default is ``False``.
     plus : bool, optional
-        Whether to use Transolver++ features in the GALE layers. Default is ``False``.
+        Whether to use Transolver++ features in the GALE layers. This is a
+        separate architecture from FLARE++ and must be ``False`` when
+        ``attention_type="GALE_FPP"``. Default is ``False``.
     include_local_features : bool, optional
         Whether to include local features in the global context. Default is ``False``.
     radii : list[float], optional
@@ -442,6 +444,13 @@ class GeoTransolver(Module):
         super().__init__(meta=GeoTransolverMetaData())
         self.__name__ = "GeoTransolver"
 
+        if attention_type == "GALE_FPP" and plus:
+            raise ValueError(
+                "attention_type='GALE_FPP' implements FLARE++ and requires "
+                "plus=False. The plus=True option enables the separate "
+                "Transolver++ Gumbel-slice path and must not be combined with "
+                "FLARE++."
+            )
         if attention_type == "GALE_FPP" and use_te:
             raise ValueError(
                 "The GALE_FPP backend does not support Transformer Engine; "

@@ -202,6 +202,36 @@ def test_flare_plus_plus_routing_is_input_conditioned(device):
     assert not torch.allclose(queries[0], queries[1])
 
 
+def test_flare_plus_plus_eval_is_rng_free(device):
+    """Standalone FLARE++ attention is deterministic during evaluation."""
+    torch.manual_seed(43)
+    attention = FLAREPlusPlus(
+        dim=32,
+        heads=4,
+        dim_head=8,
+        n_global_queries=7,
+        dropout=0.4,
+    ).to(device)
+    x = torch.randn(2, 23, 32, device=device)
+
+    attention.eval()
+    model_device = next(attention.parameters()).device
+    cpu_rng_before = torch.random.get_rng_state().clone()
+    cuda_rng_before = (
+        torch.cuda.get_rng_state(model_device).clone()
+        if model_device.type == "cuda"
+        else None
+    )
+    with torch.no_grad():
+        output_1 = attention(x)
+        output_2 = attention(x)
+
+    assert torch.equal(output_1, output_2)
+    assert torch.equal(torch.random.get_rng_state(), cpu_rng_before)
+    if cuda_rng_before is not None:
+        assert torch.equal(torch.cuda.get_rng_state(model_device), cuda_rng_before)
+
+
 def test_flare_plus_plus_gradient_flow(device):
     """Gradients reach the input, learned seeds, and fused projections."""
     attention = FLAREPlusPlus(

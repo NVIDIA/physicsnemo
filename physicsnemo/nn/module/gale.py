@@ -964,7 +964,9 @@ class GALEBlock(nn.Module):
     use_te : bool, optional
         Whether to use Transformer Engine backend. Default is ``False``.
     plus : bool, optional
-        Whether to use Transolver++ features. Default is ``False``.
+        Whether to use Transolver++ features. This is a separate architecture
+        from FLARE++ and must be ``False`` when
+        ``attention_type="GALE_FPP"``. Default is ``False``.
     context_dim : int, optional
         Dimension of the context vector for cross-attention. Default is 0.
     spatial_shape : tuple[int, ...] | None, optional
@@ -1039,6 +1041,14 @@ class GALEBlock(nn.Module):
         state_mixing_mode: str = "weighted",
     ) -> None:
         super().__init__()
+
+        if attention_type == "GALE_FPP" and plus:
+            raise ValueError(
+                "attention_type='GALE_FPP' implements FLARE++ and requires "
+                "plus=False. The plus=True option enables the separate "
+                "Transolver++ Gumbel-slice path and must not be combined with "
+                "FLARE++."
+            )
 
         self.last_layer = last_layer
 
