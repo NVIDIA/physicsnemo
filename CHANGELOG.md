@@ -49,6 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `physicsnemo.distributed.utils.pad_helper` pads the requested `dim`; it
+  previously always padded the last dimension. `split_tensor_along_dim` now
+  formats the values in its too-few-elements error message.
 - Fixes mesh dtype handling: preserves integer-coordinate precision, normalizes
   connectivity safely, and rejects integer `.to()` casts. Floating/complex casts
   preserve the source mesh.

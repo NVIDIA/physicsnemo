@@ -112,7 +112,9 @@ def pad_helper(
     ndim_pad = ndim - dim
     output_shape = [0 for _ in range(2 * ndim_pad)]
     orig_size = tensor.shape[dim]
-    output_shape[1] = new_size - orig_size
+    # F.pad lists (left, right) pairs starting from the last dimension, so the
+    # right-hand padding of ``dim`` is the final entry.
+    output_shape[-1] = new_size - orig_size
     tensor_pad = F.pad(tensor, output_shape, mode="constant", value=0.0)
 
     if mode == "conj":
@@ -121,11 +123,11 @@ def pad_helper(
             for idx, x in enumerate(tensor.shape)
         ]
         rhs_slice = [
-            slice(0, x) if idx != dim else slice(1, output_shape[1] + 1)
+            slice(0, x) if idx != dim else slice(1, output_shape[-1] + 1)
             for idx, x in enumerate(tensor.shape)
         ]
-        tensor_pad[lhs_slice] = torch.flip(
-            torch.conj(tensor_pad[rhs_slice]), dims=[dim]
+        tensor_pad[tuple(lhs_slice)] = torch.flip(
+            torch.conj(tensor_pad[tuple(rhs_slice)]), dims=[dim]
         )
 
     return tensor_pad
@@ -156,7 +158,7 @@ def truncate_helper(tensor: torch.Tensor, dim: int, new_size: int) -> torch.Tens
         slice(0, x) if idx != dim else slice(0, new_size)
         for idx, x in enumerate(tensor.shape)
     ]
-    tensor_trunc = tensor[output_slice].contiguous(memory_format=input_format)
+    tensor_trunc = tensor[tuple(output_slice)].contiguous(memory_format=input_format)
 
     return tensor_trunc
 
@@ -173,8 +175,9 @@ def split_tensor_along_dim(
     dim : int
         Dimension along which to split.
     num_chunks : int
-        Number of chunks to produce. The last chunk may be smaller if
-        ``tensor.shape[dim]`` is not evenly divisible.
+        Number of chunks to produce. When ``tensor.shape[dim]`` is not evenly
+        divisible, only the last chunk differs in size (see
+        :func:`compute_split_shapes`).
 
     Returns
     -------
@@ -193,8 +196,8 @@ def split_tensor_along_dim(
         )
     if tensor.shape[dim] < num_chunks:
         raise ValueError(
-            "Error, cannot split dim {dim} of size {tensor.shape[dim]} into \
-        {num_chunks} chunks. Empty slices are currently not supported."
+            f"Error, cannot split dim {dim} of size {tensor.shape[dim]} into "
+            f"{num_chunks} chunks. Empty slices are currently not supported."
         )
 
     # get split
