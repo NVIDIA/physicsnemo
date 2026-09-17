@@ -941,3 +941,46 @@ def test_to_local_grad_under_compile_1d(distributed_mesh, fn, ref_fn, backend):
 )
 def test_to_local_grad_under_compile_2d(distributed_mesh_2d, fn, ref_fn):
     run_to_local_grad_under_compile(distributed_mesh_2d, fn, ref_fn, "aot_eager")
+
+
+# ---------------------------------------------------------------------------
+# ShardTensor.__new__ is a non-recursive dynamo skip
+# ---------------------------------------------------------------------------
+
+
+def test_shard_tensor_new_is_nonrecursive_dynamo_skip():
+    r"""A graph break *inside* ``__new__`` leaves a half-built wrapper in
+    dynamo's resume frame; the frame is marked skipped (non-recursively) so
+    every traced construction site is an atomic eager call."""
+    new = ShardTensor.__new__
+    assert getattr(new, "_torchdynamo_disable", False) is True
+    assert getattr(new, "_torchdynamo_disable_recursive", True) is False
+
+
+def run_construct_shard_tensor_inside_compiled_fn(mesh):
+    r"""Constructing a ShardTensor inside a compiled function runs eagerly at
+    the construction site and the rest of the function still compiles."""
+    st = shard_tensor_factory(mesh, uneven=False)
+    spec = st._spec
+    local = st._local_tensor
+
+    def f(x):
+        wrapped = ShardTensor.__new__(
+            ShardTensor, local_tensor=x * 2, spec=spec, requires_grad=False
+        )
+        return wrapped.to_local() + 1
+
+    expected = local * 2 + 1
+
+    torch._dynamo.reset()
+    compiled = torch.compile(f, backend="aot_eager")
+    out = compiled(local)
+    torch.testing.assert_close(out, expected)
+    # Second call: no error on the (possibly cached) path either.
+    torch.testing.assert_close(compiled(local), expected)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(300)
+def test_construct_shard_tensor_inside_compiled_fn_1d(distributed_mesh):
+    run_construct_shard_tensor_inside_compiled_fn(distributed_mesh)

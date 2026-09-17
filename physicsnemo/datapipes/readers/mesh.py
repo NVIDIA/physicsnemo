@@ -361,8 +361,11 @@ class MeshReader:
         self._epoch = epoch
 
     def __getitem__(self, index: int) -> tuple[Mesh, dict[str, Any]]:
-        mesh = self._load_sample(index)
+        metadata = self._get_sample_metadata(index)
+        if self.include_index_in_metadata:
+            metadata["index"] = index
 
+        mesh = self._load_sample(index)
         generator = (
             None
             if self._seed_base is None
@@ -377,10 +380,6 @@ class MeshReader:
 
         if self.pin_memory:
             mesh = mesh.pin_memory()
-
-        metadata = self._get_sample_metadata(index)
-        if self.include_index_in_metadata:
-            metadata["index"] = index
         return mesh, metadata
 
     def __iter__(self) -> Iterator[tuple[Mesh, dict[str, Any]]]:
@@ -390,6 +389,9 @@ class MeshReader:
             except Exception as e:
                 logger.error("Sample %s failed: %s", i, e)
                 raise RuntimeError(f"Sample {i} failed: {e}") from e
+
+    def close(self) -> None:
+        """No reader-level resources; present for ``MeshDataset.close``."""
 
     def __repr__(self) -> str:
         return f"MeshReader(path={self._root!r}, len={len(self)})"
@@ -650,25 +652,36 @@ class DomainMeshReader:
         if self._extra_boundaries:
             dm = self._load_extra_boundaries(dm, index)
 
-        if self.pin_memory:
-            dm = dm.pin_memory()
-
         metadata: dict[str, Any] = {
             "source_path": str(self._paths[index]),
             "boundary_names": dm.boundary_names,
         }
         if self.include_index_in_metadata:
             metadata["index"] = index
+
+        if self.pin_memory:
+            dm = dm.pin_memory()
         return dm, metadata
 
     def _load_extra_boundaries(self, dm: DomainMesh, index: int) -> DomainMesh:
-        """Find and load sibling meshes as additional boundaries.
+        """Attach the sibling meshes from :meth:`_load_extra_boundary_meshes`."""
+        return DomainMesh(
+            interior=dm.interior,
+            boundaries={
+                **dict(dm.boundaries),
+                **self._load_extra_boundary_meshes(index),
+            },
+            global_data=dm.global_data,
+        )
+
+    def _load_extra_boundary_meshes(self, index: int) -> dict[str, Mesh]:
+        """Find and load sibling meshes configured as extra boundaries.
 
         Extra boundaries are loaded at full resolution (no subsampling)
         so they are suitable for geometric queries like SDF computation.
         """
         case_dir = Path(self._paths[index]).parent
-        new_boundaries = dict(dm.boundaries)
+        new_boundaries: dict[str, Mesh] = {}
 
         for bnd_name, bnd_cfg in self._extra_boundaries.items():
             glob_pattern = bnd_cfg["pattern"]
@@ -694,11 +707,7 @@ class DomainMeshReader:
             else:
                 new_boundaries[bnd_name] = Mesh.load(matches[0])
 
-        return DomainMesh(
-            interior=dm.interior,
-            boundaries=new_boundaries,
-            global_data=dm.global_data,
-        )
+        return new_boundaries
 
     def __iter__(self) -> Iterator[tuple[DomainMesh, dict[str, Any]]]:
         for i in range(len(self)):
@@ -707,6 +716,9 @@ class DomainMeshReader:
             except Exception as e:
                 logger.error("Sample %s failed: %s", i, e)
                 raise RuntimeError(f"Sample {i} failed: {e}") from e
+
+    def close(self) -> None:
+        """No reader-level resources; present for ``MeshDataset.close``."""
 
     def __repr__(self) -> str:
         return f"DomainMeshReader(path={self._root!r}, len={len(self)})"

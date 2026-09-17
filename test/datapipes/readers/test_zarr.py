@@ -525,3 +525,86 @@ class TestZarrReaderRepr:
         repr_str = repr(reader)
 
         assert "subsampling=25" in repr_str
+
+
+# ============================================================================
+# ZarrReader Window Selection Tests
+# ============================================================================
+
+
+@requires_module("zarr>=3.0.0")
+class TestZarrReaderWindowSelection:
+    """How ZarrReader maps ``Reader._window_indices`` onto zarr arrays."""
+
+    @pytest.fixture
+    def zarr_dir(self, tmp_path):
+        zarr = pytest.importorskip("zarr")
+        for i in range(2):
+            root = zarr.open(tmp_path / f"sample_{i:03d}.zarr", mode="w")
+            root.create_array("coords", data=np.random.randn(30, 3).astype(np.float32))
+            root.create_array("fields", data=np.random.randn(30, 2).astype(np.float32))
+        return tmp_path
+
+    @pytest.fixture
+    def zarr_single(self, tmp_path):
+        zarr = pytest.importorskip("zarr")
+        path = tmp_path / "data.zarr"
+        root = zarr.open(path, mode="w")
+        root.create_array("coords", data=np.random.randn(4, 30, 3).astype(np.float32))
+        root.create_array("fields", data=np.random.randn(4, 30, 2).astype(np.float32))
+        return path
+
+    def test_array_rows_directory_mode(self, zarr_dir):
+        reader = dp.ZarrReader(zarr_dir, group_pattern="sample_*.zarr")
+        root, _ = reader._open_sample(0)
+        assert reader._array_rows(root["coords"]) == 30
+
+    def test_array_rows_single_group_mode(self, zarr_single):
+        reader = dp.ZarrReader(zarr_single)
+        assert reader._single_group_mode is True
+        root, _ = reader._open_sample(0)
+        # Rows live on dim 1: dim 0 indexes samples.
+        assert reader._array_rows(root["coords"]) == 30
+
+    def test_absent_leading_target_key_falls_back(self, zarr_dir):
+        reader = dp.ZarrReader(
+            zarr_dir,
+            group_pattern="sample_*.zarr",
+            coordinated_subsampling={
+                "n_points": 7,
+                "target_keys": ["not_in_store", "fields"],
+            },
+        )
+        data, _ = reader[0]
+        assert data["fields"].shape == (7, 2)
+        # Not a target key: loaded at full size.
+        assert data["coords"].shape == (30, 3)
+
+    def test_absent_leading_target_key_falls_back_single_group(self, zarr_single):
+        reader = dp.ZarrReader(
+            zarr_single,
+            coordinated_subsampling={
+                "n_points": 7,
+                "target_keys": ["not_in_store", "fields"],
+            },
+        )
+        data, _ = reader[2]
+        assert data["fields"].shape == (7, 2)
+        assert data["coords"].shape == (30, 3)
+
+    def test_no_target_key_present_loads_full_arrays(self, zarr_dir):
+        reader = dp.ZarrReader(
+            zarr_dir,
+            group_pattern="sample_*.zarr",
+            coordinated_subsampling={"n_points": 7, "target_keys": ["not_in_store"]},
+        )
+        data, _ = reader[0]
+        assert data["coords"].shape == (30, 3)
+        assert data["fields"].shape == (30, 2)
+
+    def test_include_index_in_metadata_false(self, zarr_dir):
+        reader = dp.ZarrReader(
+            zarr_dir, group_pattern="sample_*.zarr", include_index_in_metadata=False
+        )
+        _, meta = reader[1]
+        assert "index" not in meta
