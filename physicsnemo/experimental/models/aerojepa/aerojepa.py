@@ -296,13 +296,13 @@ class AeroJEPA(Module):
         target_tokens: TokenSet,
         cond_global: torch.Tensor,
         query_pos: torch.Tensor,
-        query_sdf: torch.Tensor,
+        query_sdf: torch.Tensor | None = None,
         chunk_size: int,
         precision: str = "fp32",
     ) -> torch.Tensor:
         r"""Chunked decode for very large query sets with autocast precision control.
 
-        Splits ``query_pos`` (and ``query_sdf``) into chunks of size
+        Splits ``query_pos`` (and ``query_sdf``, when given) into chunks of size
         ``chunk_size``, decodes each chunk under the requested autocast
         precision, and moves the chunk's output to CPU before
         concatenation. Returns a CPU tensor so callers don't have to
@@ -324,28 +324,46 @@ class AeroJEPA(Module):
         query_pos : torch.Tensor
             Query positions of shape ``(Nq, 3)``. May be on any device;
             chunks are moved to the model's device on demand.
-        query_sdf : torch.Tensor
-            Per-query SDF of shape ``(Nq, 1)``.
+        query_sdf : torch.Tensor, optional
+            Per-query SDF of shape ``(Nq, 1)``. Required when the decoder
+            was built with ``use_sdf=True``.
         chunk_size : int
-            Maximum number of queries decoded per chunk.
+            Maximum number of queries decoded per chunk. Must be positive.
         precision : str, optional
-            ``"fp32"``, ``"fp16"``, or ``"bf16"``. Anything other than
-            ``"fp32"`` enables ``torch.autocast`` for the chunk's
-            decode. Default ``"fp32"``.
+            ``"fp32"``, ``"fp16"``, or ``"bf16"`` (case-insensitive).
+            ``"fp16"`` and ``"bf16"`` run the chunk's decode under
+            ``torch.autocast``. Default ``"fp32"``.
 
         Returns
         -------
         torch.Tensor
             Decoded field of shape ``(Nq, C)`` on CPU.
+
+        Raises
+        ------
+        ValueError
+            If ``chunk_size`` is not positive or ``precision`` is not one
+            of the supported values.
         """
-        device = next(self.parameters()).device
         dtype_map = {
             "fp32": torch.float32,
             "fp16": torch.float16,
             "bf16": torch.bfloat16,
         }
-        autocast_dtype = dtype_map.get(precision, torch.float32)
-        enabled = precision in {"fp16", "bf16"}
+        precision_key = str(precision).lower()
+        if precision_key not in dtype_map:
+            raise ValueError(
+                f"precision must be one of {sorted(dtype_map)}, got {precision!r}."
+            )
+        chunk_size = int(chunk_size)
+        if chunk_size < 1:
+            raise ValueError(
+                f"chunk_size must be a positive integer, got {chunk_size}."
+            )
+
+        device = next(self.parameters()).device
+        autocast_dtype = dtype_map[precision_key]
+        enabled = precision_key != "fp32"
 
         context = {"target_tokens": target_tokens, "cond_global": cond_global}
         preds = []
@@ -353,12 +371,14 @@ class AeroJEPA(Module):
         with torch.autocast(
             device_type=device.type, dtype=autocast_dtype, enabled=enabled
         ):
-            for st in range(0, n, max(1, int(chunk_size))):
-                en = min(st + int(chunk_size), n)
+            for st in range(0, n, chunk_size):
+                en = min(st + chunk_size, n)
                 pred_chunk = self.trunk.decode_queries(
                     context=context,
                     query_pos=query_pos[st:en].to(device),
-                    query_sdf=query_sdf[st:en].to(device),
+                    query_sdf=(
+                        None if query_sdf is None else query_sdf[st:en].to(device)
+                    ),
                 )
                 preds.append(pred_chunk.detach().float().cpu())
         return torch.cat(preds, dim=0)
