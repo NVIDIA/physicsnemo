@@ -157,7 +157,7 @@ def test_flare_plus_plus_forward_accuracy(device):
         dim_head=8,
         n_global_queries=5,
     ).to(device)
-    x = torch.randn(2, 17, 24, device=device)
+    x = torch.randn(2, 17, 24).to(device)
     with torch.no_grad():
         output = attention(x)
     reference = _load_or_create_output_reference(

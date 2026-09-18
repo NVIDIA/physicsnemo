@@ -340,8 +340,8 @@ def test_flare_plus_plus_reference_checkpoint(device):
         )
     model = Module.from_checkpoint(checkpoint).to(device)
     torch.manual_seed(4321)
-    functional_input = torch.randn(1, 13, 2, device=device)
-    embedding = torch.randn(1, 13, 3, device=device)
+    functional_input = torch.randn(1, 13, 2).to(device)
+    embedding = torch.randn(1, 13, 3).to(device)
     with torch.no_grad():
         output = model(functional_input, embedding)
     reference = _load_or_create_output_reference(
