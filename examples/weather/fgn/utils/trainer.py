@@ -1,0 +1,775 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from pathlib import Path
+
+import numpy as np
+import torch
+import torch.distributed as dist
+from datasets import dataset_classes
+from omegaconf import OmegaConf
+from utils.config import TrainMainConfig
+from utils.loss import (
+    build_area_weights,
+    build_channel_weights,
+    ensemble_mean_mse,
+    fair_crps,
+)
+from utils.metrics import (
+    crps_per_variable_per_lead,
+    derived_variable_crps,
+    energy_score_per_lead,
+    ensemble_rmse_per_variable_per_lead,
+    plot_metric_vs_lead,
+    plot_power_spectra,
+    plot_rank_histograms,
+    power_spectra_per_variable,
+    rank_histogram_per_variable,
+    save_summary,
+    spread_skill_per_variable_per_lead,
+)
+from utils.nn import build_model
+from utils.parallel import ParallelHelper
+
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.utils import load_checkpoint, save_checkpoint
+from physicsnemo.utils.logging import LaunchLogger, PythonLogger, RankZeroLoggingWrapper
+
+
+def find_latest_model_checkpoint(checkpoint_dir: Path) -> str:
+    candidates = sorted(checkpoint_dir.glob("*.mdlus"))
+    if not candidates:
+        raise FileNotFoundError(f"No .mdlus checkpoints found in {checkpoint_dir}")
+    return str(candidates[-1])
+
+
+class Trainer:
+    def __init__(self, cfg):
+        cfg_dict = OmegaConf.to_container(cfg, resolve=True)
+        self.cfg = TrainMainConfig(**cfg_dict)
+
+        self.dist = DistributedManager()
+        self.device = self.dist.device
+        # Rank-0-only logger mirrors the StormCast convention
+        # (examples/weather/stormcast/utils/logging.ExperimentLogger) — uses
+        # physicsnemo.utils.logging.PythonLogger so output flushes on each
+        # record instead of sitting in a print() stdio buffer under srun.
+        self.logger = RankZeroLoggingWrapper(PythonLogger("fgn"), self.dist)
+        self.logger.info("Trainer.__init__ starting")
+        self.amp = bool(self.cfg.training.amp) and torch.cuda.is_available()
+
+        # Experiment tracking — trackio (drop-in wandb replacement) with real
+        # wandb as fallback.  Rank-0 only; no-op when use_wandb=False or neither
+        # library is installed.
+        self._tracker = None
+        if bool(self.cfg.training.use_wandb) and self.dist.rank == 0:
+            try:
+                import trackio as _wandb_api
+            except ImportError:
+                try:
+                    import wandb as _wandb_api  # type: ignore[no-redef]
+                except ImportError:
+                    _wandb_api = None  # type: ignore[assignment]
+            if _wandb_api is not None:
+                _wandb_api.init(
+                    project=str(self.cfg.training.wandb_project),
+                    name=f"{self.cfg.training.experiment_name}/{self.cfg.training.run_id}",
+                )
+                self._tracker = _wandb_api
+        LaunchLogger.initialize(
+            use_wandb=False,
+            use_mlflow=bool(self.cfg.training.use_mlflow) and self.dist.rank == 0,
+        )
+
+        # Data + domain parallel setup. For single-process runs we skip the
+        # ParallelHelper entirely: DistributedManager may be in its fallback
+        # "single process" state (no process group), which is incompatible
+        # with ShardTensor mesh creation. StormCast's trainer always builds a
+        # ParallelHelper because it assumes a real distributed init; the FGN
+        # recipe keeps a no-helper path so the CPU-only smoke test stays
+        # runnable without an init_process_group call.
+        self.parallel_helper: ParallelHelper | None = None
+        domain_parallel_size = int(self.cfg.training.domain_parallel_size)
+        force_sharding = bool(self.cfg.training.force_sharding)
+        self.use_shard_tensor = domain_parallel_size > 1 or force_sharding
+        if self.dist.world_size > 1 or self.use_shard_tensor:
+            self.parallel_helper = ParallelHelper(
+                domain_parallel_size=domain_parallel_size,
+                use_shard_tensor=self.use_shard_tensor,
+            )
+            if (
+                self.use_shard_tensor
+                and self.parallel_helper.local_batch_size(
+                    int(self.cfg.training.batch_size)
+                )
+                > 1
+            ):
+                raise ValueError("Domain parallelism requires a local batch size of 1")
+
+        self.checkpoint_dir = (
+            Path(self.cfg.training.rundir) / self.cfg.training.checkpoint_dir
+        )
+        if self.dist.rank == 0:
+            self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+        # All ranks use the same seed so parameter initialization is identical.
+        torch.manual_seed(int(self.cfg.training.seed))
+
+        dataset_cls = dataset_classes[self.cfg.dataset.name]
+        self.logger.info(f"Building datasets: {self.cfg.dataset.name}")
+        self.train_dataset = dataset_cls(self.cfg.dataset, train=True)
+        self.valid_dataset = dataset_cls(self.cfg.dataset, train=False)
+        self.logger.info(
+            f"Dataset ready: train={len(self.train_dataset)} val={len(self.valid_dataset)}"
+        )
+
+        self.logger.info("Fetching dataset invariants")
+        invariants = self.train_dataset.get_invariants()
+        self.invariants = None
+        invariant_channels = 0
+        if invariants is not None:
+            self.invariants = torch.from_numpy(invariants).to(
+                self.device, dtype=torch.float32
+            )
+            invariant_channels = int(self.invariants.shape[0])
+
+        self.logger.info("Building model")
+        _H, _W = self.train_dataset.image_shape()
+        self.model = build_model(
+            self.cfg,
+            state_channels=len(self.train_dataset.state_channels()),
+            background_channels=len(self.train_dataset.background_channels()),
+            invariant_channels=invariant_channels,
+            input_height=_H,
+            input_width=_W,
+        ).to(self.device)
+        self.logger.info(
+            f"Model ready on {self.device} "
+            f"(params={sum(p.numel() for p in self.model.parameters()):,})"
+        )
+
+        # torch.compile: applied BEFORE FSDP so the compiled graph covers the
+        # full model forward. Skipped when ShardTensor is active (DTensor ops
+        # cause graph breaks). Mirrors StormCast's torch_compile flag.
+        use_compile = (
+            bool(self.cfg.training.torch_compile) and not self.use_shard_tensor
+        )
+        if use_compile:
+            self.logger.info("Compiling model with torch.compile...")
+            self.model = torch.compile(self.model)
+
+        # Wrap with FSDP / ShardTensor when running distributed. Domain-
+        # sharded invariant tensor so forward passes on sharded inputs find
+        # the invariant in the same layout.
+        if self.parallel_helper is not None:
+            self.model = self.parallel_helper.distribute_model(self.model)
+            if self.invariants is not None and self.use_shard_tensor:
+                self.invariants = self.parallel_helper.distribute_tensor(
+                    self.invariants
+                )
+
+        # Optimizer must be built after FSDP wrapping.
+        opt_cfg = self.cfg.training.optimizer
+        self.optimizer = torch.optim.AdamW(
+            self.model.parameters(),
+            lr=float(opt_cfg.lr),
+            betas=tuple(opt_cfg.betas),
+            weight_decay=float(opt_cfg.weight_decay),
+        )
+        # LR schedule: linear warmup then cosine decay (paper Table A.2).
+        warmup = int(opt_cfg.lr_warmup_steps)
+        total = int(self.cfg.training.total_train_steps)
+        lr_min = float(opt_cfg.lr_min)
+        lr_max = float(opt_cfg.lr)
+
+        def _lr_lambda(step: int) -> float:
+            if warmup > 0 and step < warmup:
+                return step / warmup
+            if total <= warmup:
+                return 1.0
+            import math
+
+            progress = (step - warmup) / max(1, total - warmup)
+            cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+            return lr_min / lr_max + (1.0 - lr_min / lr_max) * cosine
+
+        self.scheduler = torch.optim.lr_scheduler.LambdaLR(
+            self.optimizer, lr_lambda=_lr_lambda
+        )
+
+        # Train/val loaders: ranks get disjoint contiguous index slices via
+        # ParallelHelper.sharded_dataloader. Single-process falls back to a
+        # plain DataLoader so we don't depend on a process group.
+        batch_size = int(self.cfg.training.batch_size)
+        num_workers = int(self.cfg.training.num_data_workers)
+        seed = int(self.cfg.training.seed)
+        if self.parallel_helper is not None:
+            local_batch = self.parallel_helper.local_batch_size(batch_size)
+            self.train_loader = self.parallel_helper.sharded_dataloader(
+                self.train_dataset,
+                batch_size=local_batch,
+                seed=seed,
+                num_workers=num_workers,
+                shuffle=True,
+            )
+            self.valid_loader = self.parallel_helper.sharded_dataloader(
+                self.valid_dataset,
+                batch_size=local_batch,
+                seed=seed + 1,
+                num_workers=0,
+                shuffle=False,
+            )
+            # Cap validation length: the parallel_helper sampler is infinite
+            # by design (StormCast convention), so we bound iteration the
+            # same way StormCast does — `sharded_data_iter(loader, N)`. By
+            # default sweep one local epoch over each rank's shard.
+            local_valid = max(
+                1,
+                len(self.valid_dataset)
+                // (max(self.dist.world_size, 1) * max(local_batch, 1)),
+            )
+            self.validation_steps = int(
+                getattr(self.cfg.training, "validation_steps", local_valid)
+                or local_valid
+            )
+        else:
+            from datasets.dataset import worker_init
+            from torch.utils.data import DataLoader
+
+            self.train_loader = DataLoader(
+                self.train_dataset,
+                batch_size=batch_size,
+                shuffle=True,
+                num_workers=num_workers,
+                worker_init_fn=worker_init if num_workers else None,
+            )
+            self.valid_loader = DataLoader(
+                self.valid_dataset,
+                batch_size=batch_size,
+                shuffle=False,
+                num_workers=0,
+            )
+            self.validation_steps = None  # plain DataLoader is finite
+
+        self.loss_weights: torch.Tensor | None = None
+        channel_w = None
+        if bool(self.cfg.training.loss.use_channel_weights):
+            channel_w = torch.from_numpy(
+                build_channel_weights(self.train_dataset.state_channels())
+            ).to(self.device, dtype=torch.float32)
+        area_w = None
+        if bool(self.cfg.training.loss.use_area_weights):
+            H, _ = self.train_dataset.image_shape()
+            area_w = torch.from_numpy(build_area_weights(H)).to(
+                self.device, dtype=torch.float32
+            )
+        override_w = None
+        cfg_overrides = self.cfg.training.loss.channel_loss_weights or {}
+        if cfg_overrides:
+            state_channels = self.train_dataset.state_channels()
+            unknown = set(cfg_overrides) - set(state_channels)
+            if unknown:
+                self.logger.info(
+                    f"channel_loss_weights references unknown channels (ignored): {sorted(unknown)}"
+                )
+            vals = [float(cfg_overrides.get(ch, 1.0)) for ch in state_channels]
+            override_w = torch.tensor(vals, device=self.device, dtype=torch.float32)
+        if channel_w is not None or area_w is not None or override_w is not None:
+            H, W = self.train_dataset.image_shape()
+            combined = torch.ones(1, 1, H, W, device=self.device, dtype=torch.float32)
+            if channel_w is not None:
+                combined = combined * channel_w.view(1, -1, 1, 1)
+            if area_w is not None:
+                combined = combined * area_w.view(1, 1, H, 1)
+            if override_w is not None:
+                combined = combined * override_w.view(1, -1, 1, 1)
+            self.loss_weights = combined
+
+        self.step = 0
+        self.best_val_loss = float("inf")
+        self._resume_if_needed()
+
+    def _resume_if_needed(self) -> None:
+        resume = self.cfg.training.resume_checkpoint
+        if resume is None:
+            return
+        if not self.checkpoint_dir.exists():
+            return
+        epoch = None if resume == "latest" else int(resume)
+        metadata = {}
+        loaded = load_checkpoint(
+            self.checkpoint_dir,
+            models=self.model,
+            optimizer=self.optimizer,
+            scheduler=self.scheduler,
+            epoch=epoch,
+            metadata_dict=metadata,
+            device=self.device,
+        )
+        self.step = int(loaded)
+        if metadata.get("best_val_loss") is not None:
+            self.best_val_loss = float(metadata["best_val_loss"])
+
+    def _loss(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
+        history = batch["history"].to(self.device, dtype=torch.float32)
+        target = batch["target"].to(self.device, dtype=torch.float32)
+        background = batch["background"].to(self.device, dtype=torch.float32)
+
+        # Normalize target layout to (B, K, C, H, W); datasets may emit (B, C, H, W).
+        if target.ndim == 4:
+            target = target.unsqueeze(1)
+        if target.ndim != 5:
+            raise ValueError(
+                f"target must have shape [B, K, C, H, W] or [B, C, H, W], got {tuple(target.shape)}"
+            )
+
+        ar_steps = int(target.shape[1])
+        cfg_ar = int(getattr(self.cfg.training, "ar_steps", 1))
+        if cfg_ar != ar_steps:
+            raise ValueError(
+                f"training.ar_steps={cfg_ar} but dataset produced {ar_steps} future frames; "
+                "set future_frames to match ar_steps"
+            )
+
+        invariants = None
+        if self.invariants is not None:
+            invariants = self.invariants.unsqueeze(0).expand(
+                history.shape[0], -1, -1, -1
+            )
+
+        num_samples = int(self.cfg.training.loss.num_samples)
+        mse_weight = float(self.cfg.training.loss.mse_weight)
+
+        B, T, C, H, W = history.shape
+        N = num_samples
+
+        # Stack batch and sample axes into a single batch axis for one forward
+        # pass per AR step instead of N serial passes (WeatherNext2 §run_model_
+        # with_sample_as_batch pattern).  (B,N,T,C,H,W) → (B*N, T, C, H, W).
+        hist_bn = (
+            history.unsqueeze(1).expand(B, N, T, C, H, W).reshape(B * N, T, C, H, W)
+        )
+        bg_bn = (
+            background.unsqueeze(1)
+            .expand(B, N, *background.shape[1:])
+            .reshape(B * N, *background.shape[1:])
+        )
+        inv_bn = None
+        if invariants is not None:
+            inv_bn = (
+                invariants.unsqueeze(1)
+                .expand(B, N, *invariants.shape[1:])
+                .reshape(B * N, *invariants.shape[1:])
+            )
+
+        step_losses: list[torch.Tensor] = []
+        for k in range(ar_steps):
+            latent = torch.randn(
+                B * N,
+                int(self.cfg.model.latent_dim),
+                device=self.device,
+                dtype=torch.float32,
+            )
+            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=self.amp):
+                pred_bn = self.model(
+                    history=hist_bn,
+                    latent=latent,
+                    background=bg_bn,
+                    invariants=inv_bn,
+                ).float()  # (B*N, C, H, W)
+
+            preds = pred_bn.reshape(B, N, C, H, W)  # (B, N, C, H, W)
+
+            step_loss = fair_crps(preds, target[:, k], weights=self.loss_weights)
+            if mse_weight > 0.0:
+                step_loss = step_loss + mse_weight * ensemble_mean_mse(
+                    preds, target[:, k], weights=self.loss_weights
+                )
+            step_losses.append(step_loss)
+
+            if k < ar_steps - 1:
+                # Paper §3: predicted-only channels (e.g. tp06) must not be
+                # fed back as input on the next AR step.
+                next_bn = pred_bn
+                output_only = self.train_dataset.output_only_channels()
+                if output_only:
+                    next_bn = next_bn.clone()
+                    for ci in output_only:
+                        next_bn[:, ci].zero_()
+                hist_bn = torch.cat([hist_bn[:, 1:], next_bn.unsqueeze(1)], dim=1)
+
+        return torch.stack(step_losses).mean()
+
+    def _validation_loss(self) -> tuple[float, np.ndarray]:
+        """Return (scalar_loss, per_channel_mse) averaged over validation batches.
+
+        Per-channel MSE uses the ensemble-mean prediction — cheap (single
+        forward pass per member, no CRPS kernel) and mirrors StormCast's
+        per-channel val logging (stormcast/utils/trainer.py log_progress).
+        """
+        self.model.eval()
+        losses: list[float] = []
+        channel_acc: np.ndarray | None = None
+        n_batches = 0
+
+        if self.parallel_helper is not None:
+            iterator = self.parallel_helper.sharded_data_iter(
+                self.valid_loader, self.validation_steps
+            )
+        else:
+            iterator = self.valid_loader
+
+        with torch.no_grad():
+            for batch in iterator:
+                losses.append(float(self._loss(batch).detach().cpu()))
+                # Per-channel MSE: use a single deterministic member (latent=0)
+                history = batch["history"].to(self.device, dtype=torch.float32)
+                target = batch["target"].to(self.device, dtype=torch.float32)
+                if target.ndim == 4:
+                    target = target.unsqueeze(1)
+                background = batch["background"].to(self.device, dtype=torch.float32)
+                inv_b = (
+                    self.invariants.unsqueeze(0).expand(history.shape[0], -1, -1, -1)
+                    if self.invariants is not None
+                    else None
+                )
+                latent = torch.zeros(
+                    history.shape[0],
+                    int(self.cfg.model.latent_dim),
+                    device=self.device,
+                    dtype=torch.float32,
+                )
+                with torch.autocast(
+                    "cuda", dtype=torch.bfloat16, enabled=torch.cuda.is_available()
+                ):
+                    pred = self.model(
+                        history=history,
+                        latent=latent,
+                        background=background,
+                        invariants=inv_b,
+                    ).float()
+                # MSE vs first target step, averaged over batch and spatial dims → (C,)
+                mse_c = ((pred - target[:, 0]) ** 2).mean(dim=(0, -2, -1)).cpu().numpy()
+                channel_acc = mse_c if channel_acc is None else channel_acc + mse_c
+                n_batches += 1
+
+        self.model.train()
+        scalar = sum(losses) / max(len(losses), 1)
+        per_channel = (
+            channel_acc / max(n_batches, 1) if channel_acc is not None else np.array([])
+        )
+
+        # Sync val loss across all ranks so rank-0 logs the global mean.
+        if self.dist.world_size > 1:
+            # Pack [sum_of_losses, n_batches] so we can correctly weight each rank's
+            # contribution (ranks may see different numbers of batches at epoch end).
+            n = len(losses)
+            t = torch.tensor([scalar * n, float(n)], device=self.device)
+            torch.distributed.all_reduce(t, op=torch.distributed.ReduceOp.SUM)
+            scalar = float(t[0] / t[1].clamp_min(1.0))
+
+        return scalar, per_channel
+
+    def _run_validation_metrics(self) -> None:
+        """Figure 2 + 3 diagnostics on a single validation batch.
+
+        Runs an ensemble rollout across all ``ar_steps`` lead times and
+        writes per-variable CRPS / RMSE / spread-skill / rank hist / 1D
+        power spectra to ``rundir/validation/step=<step>/``. No-op on
+        non-rank-0 ranks.
+        """
+        if self.dist.rank != 0:
+            return
+        try:
+            batch = next(iter(self.valid_loader))
+        except StopIteration:
+            return
+
+        self.model.eval()
+        history = batch["history"].to(self.device, dtype=torch.float32)
+        target = batch["target"].to(self.device, dtype=torch.float32)
+        background = batch["background"].to(self.device, dtype=torch.float32)
+        if target.ndim == 4:
+            target = target.unsqueeze(1)
+        K = target.shape[1]
+
+        invariants = None
+        if self.invariants is not None:
+            invariants = self.invariants.unsqueeze(0).expand(
+                history.shape[0], -1, -1, -1
+            )
+
+        M = int(self.cfg.training.validation_ensemble_size)
+        latent_dim = int(self.cfg.model.latent_dim)
+
+        # N parallel trajectories diverge step-by-step exactly as in the
+        # training loop, but we don't need gradients.
+        B, T, C, H, W = history.shape
+        per_member_hist = history.unsqueeze(1).expand(B, M, T, C, H, W).contiguous()
+        preds_all: list[torch.Tensor] = []
+        with torch.no_grad():
+            for k in range(K):
+                members = []
+                for n in range(M):
+                    latent = torch.randn(
+                        B, latent_dim, device=self.device, dtype=torch.float32
+                    )
+                    with torch.autocast("cuda", dtype=torch.bfloat16, enabled=self.amp):
+                        pred = self.model(
+                            history=per_member_hist[:, n],
+                            latent=latent,
+                            background=background,
+                            invariants=invariants,
+                        )
+                    members.append(pred.float())
+                preds = torch.stack(members, dim=1)  # (B, M, C, H, W)
+                preds_all.append(preds)
+                if k < K - 1:
+                    # Paper §3: zero predicted-only channels (e.g. tp06)
+                    # before feeding them back as next-step history.
+                    next_frame = preds
+                    output_only = self.train_dataset.output_only_channels()
+                    if output_only:
+                        next_frame = next_frame.clone()
+                        for ci in output_only:
+                            next_frame[:, :, ci].zero_()
+                    per_member_hist = torch.cat(
+                        [per_member_hist[:, :, 1:], next_frame.unsqueeze(2)], dim=2
+                    )
+
+        self.model.train()
+        ensemble = torch.stack(preds_all, dim=1)  # (B, K, M, C, H, W)
+
+        variables = list(self.train_dataset.state_channels())
+        crps_kc = crps_per_variable_per_lead(ensemble, target)
+        rmse_kc = ensemble_rmse_per_variable_per_lead(ensemble, target)
+        spread_kc, skill_kc, ratio_kc = spread_skill_per_variable_per_lead(
+            ensemble, target
+        )
+        ranks_cb = rank_histogram_per_variable(ensemble, target)
+        es_k = energy_score_per_lead(ensemble, target)
+        derived = derived_variable_crps(ensemble, target, variables)
+        ensemble_mean = ensemble.mean(dim=2)
+        k_vec, ens_spec, tgt_spec = power_spectra_per_variable(ensemble_mean, target)
+
+        out_dir = Path(self.cfg.training.rundir) / "validation" / f"step={self.step}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        summary = {
+            "crps_per_lead_per_channel": crps_kc,
+            "rmse_per_lead_per_channel": rmse_kc,
+            "spread_per_lead_per_channel": spread_kc,
+            "skill_per_lead_per_channel": skill_kc,
+            "spread_skill_ratio": ratio_kc,
+            "rank_histograms": ranks_cb,
+            "energy_score_per_lead": es_k,
+            "variables": np.array(variables, dtype=object),
+            "lead_steps": np.arange(1, K + 1, dtype=np.int64),
+            "power_spectrum_k": k_vec,
+            "power_spectrum_forecast": ens_spec,
+            "power_spectrum_truth": tgt_spec,
+        }
+        for dname, vals in derived.items():
+            summary[f"derived_crps_{dname}"] = vals
+        save_summary(summary, str(out_dir / "metrics.npz"))
+
+        leads = np.arange(1, K + 1)
+        plot_metric_vs_lead(
+            crps_kc,
+            variables,
+            leads,
+            "CRPS",
+            "CRPS per lead (lower is better)",
+            str(out_dir / "crps_vs_lead.png"),
+        )
+        plot_metric_vs_lead(
+            rmse_kc,
+            variables,
+            leads,
+            "ensemble-mean RMSE",
+            "Ensemble-mean RMSE per lead",
+            str(out_dir / "rmse_vs_lead.png"),
+        )
+        plot_metric_vs_lead(
+            ratio_kc,
+            variables,
+            leads,
+            "spread / skill",
+            "Spread-skill ratio (1.0 = calibrated)",
+            str(out_dir / "spread_skill_vs_lead.png"),
+            hline_y=1.0,
+        )
+        plot_rank_histograms(ranks_cb, variables, str(out_dir / "rank_histograms.png"))
+        # Energy score is a (K,) scalar — plot as a single-series lead curve.
+        plot_metric_vs_lead(
+            es_k[:, None],
+            ["multivariate"],
+            leads,
+            "energy score",
+            "Energy score per lead (lower is better)",
+            str(out_dir / "energy_score_vs_lead.png"),
+        )
+        plot_power_spectra(
+            k_vec,
+            ens_spec,
+            tgt_spec,
+            variables,
+            lead_hours_all=np.arange(1, K + 1, dtype=float),
+            out_path=str(out_dir / f"power_spectra_lead{K}.png"),
+        )
+
+    def save_checkpoint(self) -> None:
+        # Unwrap torch.compile wrapper: save_checkpoint needs the original
+        # physicsnemo.Module, not the OptimizedModule (which has no __len__).
+        model_to_save = getattr(self.model, "_orig_mod", self.model)
+        save_checkpoint(
+            self.checkpoint_dir,
+            models=model_to_save,
+            optimizer=self.optimizer,
+            scheduler=self.scheduler,
+            epoch=self.step,
+            metadata={"best_val_loss": self.best_val_loss},
+        )
+        self._rotate_checkpoints(keep=2)
+
+    def _rotate_checkpoints(self, keep: int = 2) -> None:
+        if not dist.is_initialized() or dist.get_rank() != 0:
+            return
+        for pattern in ("*.mdlus", "checkpoint.*.pt"):
+            files = sorted(
+                self.checkpoint_dir.glob(pattern),
+                key=lambda p: int(p.stem.rsplit(".", 1)[-1]),
+            )
+            for old in files[:-keep]:
+                old.unlink()
+
+    def _make_train_iter(self) -> Iterator:
+        # When domain parallelism is active, sharded_data_iter handles both
+        # data-parallel sample routing and spatial scatter (ShardTensor).
+        # Mirrors StormCast's pattern (stormcast/utils/trainer.py).
+        if self.parallel_helper is not None:
+            remaining = int(self.cfg.training.total_train_steps) - self.step
+            return self.parallel_helper.sharded_data_iter(
+                self.train_loader, num_samples=remaining
+            )
+
+        # Plain single-process / DDP path: restart the DataLoader on exhaustion.
+        def _plain() -> Iterator:
+            loader_iter = iter(self.train_loader)
+            while True:
+                try:
+                    yield next(loader_iter)
+                except StopIteration:
+                    loader_iter = iter(self.train_loader)
+                    yield next(loader_iter)
+
+        return _plain()
+
+    def train(self) -> None:
+        self.model.train()
+        total_steps = int(self.cfg.training.total_train_steps)
+
+        for batch in self._make_train_iter():
+            self.optimizer.zero_grad(set_to_none=True)
+            loss = self._loss(batch)
+            loss.backward()
+
+            clip = float(self.cfg.training.clip_grad_norm)
+            if clip > 0.0:
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), clip)
+
+            # NaN/Inf gradients can appear in AR rollouts with bf16; zero them
+            # before the optimizer step so one bad batch doesn't corrupt params.
+            for p in self.model.parameters():
+                if p.grad is not None:
+                    torch.nan_to_num(
+                        p.grad, nan=0.0, posinf=1e5, neginf=-1e5, out=p.grad
+                    )
+
+            self.optimizer.step()
+            self.scheduler.step()
+            self.step += 1
+
+            # Sync train loss across ranks so the logged value is the global mean.
+            if self.dist.world_size > 1:
+                loss_sync = loss.detach().clone()
+                torch.distributed.all_reduce(
+                    loss_sync, op=torch.distributed.ReduceOp.AVG
+                )
+                train_loss_val = float(loss_sync.cpu())
+            else:
+                train_loss_val = float(loss.detach().cpu())
+
+            lr = self.optimizer.param_groups[0]["lr"]
+
+            # Route to LaunchLogger (stdout / MLflow) and tracker (trackio/wandb).
+            with LaunchLogger("train", epoch=self.step) as launchlog:
+                launchlog.log_minibatch({"loss": train_loss_val, "lr": lr})
+            if self._tracker is not None:
+                self._tracker.log(
+                    {"train/loss": train_loss_val, "train/lr": lr}, step=self.step
+                )
+
+            if self.step % int(self.cfg.training.print_progress_freq) == 0:
+                self.logger.info(
+                    f"step={self.step} train_loss={train_loss_val:.6f} lr={lr:.3e}"
+                )
+
+            if self.step % int(self.cfg.training.validation_freq) == 0:
+                val_loss, per_ch = self._validation_loss()
+                self.best_val_loss = min(self.best_val_loss, val_loss)
+                self.logger.info(f"step={self.step} val_loss={val_loss:.6f}")
+
+                val_metrics: dict = {"val_loss": val_loss}
+                if per_ch.size:
+                    channels = list(self.train_dataset.state_channels())
+                    ch_parts = " ".join(
+                        f"{ch}={per_ch[i]:.4f}"
+                        for i, ch in enumerate(channels)
+                        if i < len(per_ch)
+                    )
+                    self.logger.info(f"step={self.step} val_mse_per_ch: {ch_parts}")
+                    val_metrics.update(
+                        {
+                            f"val_mse/{ch}": float(per_ch[i])
+                            for i, ch in enumerate(channels)
+                            if i < len(per_ch)
+                        }
+                    )
+                with LaunchLogger("valid", epoch=self.step) as launchlog:
+                    launchlog.log_minibatch(val_metrics)
+                if self._tracker is not None:
+                    self._tracker.log(
+                        {f"valid/{k}": v for k, v in val_metrics.items()},
+                        step=self.step,
+                    )
+                if bool(self.cfg.training.validation_metrics):
+                    self._run_validation_metrics()
+
+            if self.step % int(self.cfg.training.checkpoint_freq) == 0:
+                self.save_checkpoint()
+
+            if self.step >= total_steps:
+                break
+
+        if self.step % int(self.cfg.training.checkpoint_freq) != 0:
+            self.save_checkpoint()
+
+        if self._tracker is not None and self.dist.rank == 0:
+            self._tracker.finish()
