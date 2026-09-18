@@ -49,6 +49,12 @@ Derivative Functionals
    :alt: Mesh LSQ gradient example
    :width: 100%
 
+.. autofunction:: physicsnemo.nn.functional.mesh_lsq_hessian
+
+.. figure:: /img/nn/functional/derivatives/mesh_lsq_hessian.png
+   :alt: Mesh LSQ Hessian example
+   :width: 100%
+
 .. autofunction:: physicsnemo.nn.functional.mesh_green_gauss_gradient
 
 .. figure:: /img/nn/functional/derivatives/mesh_green_gauss_gradient.png
