@@ -183,6 +183,7 @@ full active learning loop. The `train_step_fn` argument provides the per-batch t
            # training logic here
            ...
 
+
    driver()  # no train_step_fn needed
    ```
 
@@ -244,7 +245,7 @@ The `DefaultTrainingLoop` supports static capture via CUDA graphs for
 performance optimization:
 
 ```python
-train_loop_fn=DefaultTrainingLoop(
+train_loop_fn = DefaultTrainingLoop(
     enable_static_capture=True,  # Enable CUDA graph capture (default)
     use_progress_bars=True,
 )

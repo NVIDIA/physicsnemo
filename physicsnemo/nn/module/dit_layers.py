@@ -870,9 +870,9 @@ class DiTBlock(nn.Module):
         self.adaptive_modulation = nn.Sequential(
             nn.SiLU(), nn.Linear(modulation_input_dim, 6 * hidden_size, bias=True)
         )
-        self.modulation = lambda x, scale, shift: x * (
-            1 + scale.unsqueeze(1)
-        ) + shift.unsqueeze(1)
+        self.modulation = lambda x, scale, shift: (
+            x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
+        )
 
         self.drop_path = DropPath(drop_path)
 
@@ -984,9 +984,9 @@ class ProjLayer(nn.Module):
         self.adaptive_modulation = nn.Sequential(
             nn.SiLU(), nn.Linear(hidden_size, 2 * hidden_size, bias=True)
         )
-        self.modulation = lambda x, scale, shift: x * (
-            1 + scale.unsqueeze(1)
-        ) + shift.unsqueeze(1)
+        self.modulation = lambda x, scale, shift: (
+            x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
+        )
 
     def forward(
         self,
