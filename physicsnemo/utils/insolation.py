@@ -14,8 +14,53 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import datetime
+import re
+
 import numpy as np
-import pandas as pd
+
+_LEADING_YEAR = re.compile(r"\s*(-?\d{4,})")
+
+
+def _calendar_year(d) -> int:
+    """Calendar year of one date-like value, as ``pandas.Timestamp(d).year`` reports it.
+
+    For timezone-aware datetimes and ISO strings that carry a UTC offset, this is
+    the year of the *local* wall-clock time, not of the UTC instant numpy stores.
+    """
+    if isinstance(
+        d, datetime.date
+    ):  # datetime.datetime, datetime.date, pandas.Timestamp
+        return d.year
+    if isinstance(d, str):
+        match = _LEADING_YEAR.match(d)
+        if match:
+            return int(match.group(1))
+    return int(np.datetime64(d).astype("datetime64[Y]").astype(np.int64)) + 1970
+
+
+def _days_since_year_start(dates) -> np.ndarray:
+    """Fractional days from January 1st 00:00 of each date's calendar year.
+
+    Reproduces ``(np.array(dates, dtype="datetime64") - Timestamp(year, 1, 1)) / 1 day``
+    from the earlier pandas-based implementation exactly: instants are numpy's
+    conversion of ``dates`` (UTC for timezone-aware input), the year is the local
+    calendar year, and year starts are held at microsecond resolution, which is the
+    unit numpy inferred from the ``Timestamp`` objects, so unit promotion in the
+    subtraction is unchanged for every input dtype.
+    """
+    instants = np.array(dates, dtype="datetime64")
+    if np.isnat(instants).any():
+        raise ValueError("insolation: 'dates' contains NaT or None entries")
+    if isinstance(dates, np.ndarray) and np.issubdtype(dates.dtype, np.datetime64):
+        # Naive datetime64 arrays: the calendar year is unambiguous, stay vectorized.
+        years = instants.astype("datetime64[Y]")
+    else:
+        flat = np.asarray(dates, dtype=object).ravel()
+        years = np.array([_calendar_year(d) for d in flat], dtype=np.int64) - 1970
+        years = years.astype("datetime64[Y]").reshape(instants.shape)
+    start_years = years.astype("datetime64[us]")
+    return (instants - start_years) / np.timedelta64(1, "D")
 
 
 def insolation(
@@ -69,12 +114,7 @@ def insolation(
     beta = np.sqrt(1 - ecc**2.0)
 
     # Get the day of year as a float.
-    start_years = np.array(
-        [pd.Timestamp(pd.Timestamp(d).year, 1, 1) for d in dates], dtype="datetime64"
-    )
-    days_arr = (np.array(dates, dtype="datetime64") - start_years) / np.timedelta64(
-        1, "D"
-    )
+    days_arr = _days_since_year_start(dates)
     for d in range(n_dim):
         days_arr = np.expand_dims(days_arr, -1)
     # For daily max values, set the day to 0.5 and the longitude everywhere to 0 (this is approx noon)

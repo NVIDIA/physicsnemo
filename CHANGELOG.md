@@ -94,6 +94,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Dependencies
 
+- Drops `onnx`, `torchvision` and `pandas` from the required dependencies.
+  `pandas` is now optional via `datapipes-extras` or `model-extras`.
+
 ## [2.2.1] - 2026-XX-YY
 
 ### Fixed

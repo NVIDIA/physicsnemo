@@ -24,7 +24,9 @@ import pathlib
 from dataclasses import dataclass, field
 
 import numpy as np
-import pandas as pd
+from physicsnemo.core.version_check import OptionalImport
+
+pd = OptionalImport("pandas")
 
 # Recipe-side directory containing per-sensor `*_normalizations.csv` files
 # (and the ERA5 stats CSV consumed by `loaders.era5`). When unset, sensor
