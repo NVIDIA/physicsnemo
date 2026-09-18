@@ -63,3 +63,19 @@ repos:
       additional_dependencies:
       - packaging==26.0
       args: [--verbose]
+
+# Vale prose linting for documentation. All styles are tracked in
+# .vale/styles (no remote packages, so no `vale sync` needed). Vale needs
+# docutils (rst2html) on PATH to lint reStructuredText, so both are
+# installed into one isolated hook environment via the `vale` PyPI package
+# (which bundles the official binary).
+-   repo: local
+    hooks:
+    - id: vale
+      name: vale
+      language: python
+      additional_dependencies: ['vale==3.13.0.0', 'docutils>=0.21']
+      entry: vale
+      args: [--output=line, --minAlertLevel=error]
+      types: [rst]
+      files: ^docs/
