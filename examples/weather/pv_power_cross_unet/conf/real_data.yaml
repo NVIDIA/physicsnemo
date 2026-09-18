@@ -1,0 +1,66 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+hydra:
+  job:
+    chdir: False
+  run:
+    dir: .
+
+# train, predict, or evaluate
+mode: train
+
+# Data
+data_file: ./dataset/your_data.csv
+time_col: Time
+target_col: power
+weather_cols:
+  - SWR
+freq_minutes: 15
+seq_len: 96
+pred_len: 16
+horizon_label: null  # null, 4h, 1d, or 7d; labels override seq_len/pred_len/seg_len
+normalization: standard  # standard or minmax
+max_train_samples: null
+max_valid_samples: null
+max_predict_samples: null
+
+# Model
+seg_len: 12
+e_layers: 3
+d_model: 256
+n_heads: 4
+d_ff: 512
+dropout: 0.0
+nonlinear_correlation_proj: True
+attention_kind: two_stage
+merge_kind: seg_merge
+use_bottleneck_in_decoder: True
+
+# Optimization
+seed: 2021
+batch_size: 16
+batch_size_valid: 16
+max_epochs: 100
+early_stop_patience: 5
+start_lr: 1.0e-4
+lr_scheduler_gamma: 0.99
+
+# Outputs
+output_dir: ./outputs/real_cross_unet
+checkpoint_path: null
+prediction_path: null
+metrics_csv_path: ./outputs/real_cross_unet/metrics.csv
