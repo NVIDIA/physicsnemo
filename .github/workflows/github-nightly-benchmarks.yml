@@ -1,0 +1,265 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# This CI runs nightly to execute the ASV benchmark suite (benchmarks/,
+# configured by asv.conf.json) on a GPU runner.  It benchmarks the current
+# HEAD against the uv-managed `.venv` (the same pinned cu12 stack the rest of
+# CI uses) and uploads the raw ASV results, the published HTML dashboard, and
+# the generated benchmark plots as artifacts.  Results are NOT persisted
+# across runs: each night is a fresh, artifact-only run.
+#
+# ----------------------------------------------------------------------------
+# Why `asv run --python=same` instead of asv's own virtualenv:
+#
+#   asv.conf.json declares `environment_type: virtualenv` with a matrix
+#   requiring `cuml-cu13` (CUDA 13).  Letting asv build that environment
+#   inside this CUDA 12.8 container would (a) bypass the carefully pinned
+#   cu12 CUDA wheels the rest of CI uses and (b) mismatch the container's
+#   CUDA runtime.  `--python=same` runs the benchmarks in the existing uv
+#   `.venv` and ignores the asv.conf.json matrix/build/install commands
+#   entirely, so no change to asv.conf.json is required.
+#
+# Cache usage:
+#   This workflow only RESTORES the uv download cache (and optionally the
+#   JIT compilation cache) published by the main nightly
+#   (github-nightly-uv.yml).  It never saves/replaces those caches, so it
+#   cannot race the main nightly's delete-before-save on the shared
+#   `-latest` slots.  Reusing the same UV_CACHE_KEY_PREFIX + EXTRAS_TAG is
+#   what lets the warm cache hit here.
+# ----------------------------------------------------------------------------
+
+name: Nightly Github ASV Benchmarks
+on:
+  # TEMPORARY: run on every push to the development branch so the workflow can
+  # be exercised before it lands on the default branch (workflow_dispatch and
+  # schedule are only registered once the file is on the default branch).
+  # REMOVE this push trigger before merging.
+  push:
+    branches:
+      - asv-benchmarks-in-ci
+  schedule:
+    # Run nightly at 4 AM UTC -- offset from the 2 AM main nightly so the two
+    # workflows do not contend for the same GPU runner pool.
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    # Allow manual triggering
+
+permissions:
+  contents: read
+
+# Serialise overlapping benchmark runs (manual + schedule, or two manuals).
+# We do NOT cancel in-progress: a benchmark run is cheap to let finish and we
+# would rather have last night's artifacts than none.
+concurrency:
+  group: nightly-github-benchmarks
+  cancel-in-progress: false
+
+# The CUDA container's default shell is sh, which does not support
+# `set -o pipefail`.  Force bash everywhere.
+defaults:
+  run:
+    shell: bash
+
+env:
+  # ---- Container baseline identity ---------------------------------------
+  # Keep these in lockstep with github-nightly-uv.yml so this workflow hits
+  # the warm uv download cache that nightly publishes.  Keep CONTAINER_ID in
+  # sync with the `image:` tag below.
+  PYTHON_VERSION: "3.12"
+  UV_VERSION: "0.11.7"
+  CONTAINER_ID: "cuda12.8.1-cudnn-devel-ubuntu24.04"
+  # All feature extras + cu12 backend.  Must match github-nightly-uv.yml so
+  # the restored uv cache is valid AND so the benchmark dependencies resolve:
+  #   * cu12         -> torch, cuml-cu12 (knn/functional "cuml" impls)
+  #   * nn-extras    -> scipy           (knn/functional "scipy" impls)
+  #   * mesh-extras  -> matplotlib      (plot_functional_benchmarks.py)
+  EXTRAS_TAG: "cu12,natten-cu12,utils-extras,mesh-extras,nn-extras,model-extras,datapipes-extras,uq-extras,gnns,sym,transformer-engine-cu12"
+
+  # ---- Cache key prefixes ------------------------------------------------
+  # Must match github-nightly-uv.yml to reuse the warm caches it publishes.
+  UV_CACHE_KEY_PREFIX:   "uv-cache-nightly-cuda12.8.1-cudnn-devel-ubuntu24.04-py3.12-uv0.11.7-fullextras"
+  JIT_CACHE_KEY_PREFIX: "jit-cache-cuda12.8.1-cudnn-devel-ubuntu24.04-py3.12"
+  JIT_CACHE_DIR: "/root/.cache/jit"
+
+  # ---- uv read-only defaults --------------------------------------------
+  # UV_FROZEN=1   -> all uv invocations refuse to mutate the lockfile.
+  # UV_NO_SYNC=1  -> `uv run` will not implicitly sync.  The explicit
+  #                  `uv sync` inside setup-uv-env is unaffected by this flag.
+  UV_FROZEN: "1"
+  UV_NO_SYNC: "1"
+
+  PYVISTA_OFF_SCREEN: "true"
+
+jobs:
+  benchmarks:
+    name: ASV Benchmarks
+    runs-on: linux-amd64-gpu-h100-latest-1
+    container:
+      image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+      # /dev/shm defaults to 64 MiB in docker; 2 GiB matches the rest of CI
+      # and the PyTorch container default.
+      options: --shm-size=2g
+
+    steps:
+    # First checkout brings the repo files (including the composite actions
+    # below) into the workspace.  The bare CUDA image has no git yet, so
+    # actions/checkout falls back to a tarball download with no .git/.
+    - uses: actions/checkout@v5
+
+    - name: Bootstrap cuDNN CI container
+      uses: ./.github/actions/bootstrap-cudnn-ci
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        uv-version: ${{ env.UV_VERSION }}
+
+    # Re-run checkout now that bootstrap-cudnn-ci has installed git.  This
+    # populates a real .git/ directory, which asv requires (asv.conf.json
+    # sets "dvcs": "git") to resolve the HEAD commit hash for
+    # `asv run --python=same`.  fetch-depth: 1 is enough because we only
+    # benchmark the current HEAD.
+    - name: Re-checkout with git history for asv
+      uses: actions/checkout@v5
+
+    # Restore the warm uv download cache (published by the main nightly) and
+    # rebuild .venv from the frozen lockfile.  setup-uv-env is restore-only;
+    # we deliberately do NOT add a replace-cache step so this workflow cannot
+    # race the main nightly's delete-before-save on the `-latest` slot.
+    - name: Setup uv environment from cache
+      uses: ./.github/actions/setup-uv-env
+      with:
+        uv-cache-key-prefix: ${{ env.UV_CACHE_KEY_PREFIX }}
+        uv-cache-key-suffix: "latest"
+        extras: ${{ env.EXTRAS_TAG }}
+
+    # Restore compiled JIT artifacts (warp, triton, inductor) from the main
+    # nightly so kernel compilation in the functional/warp benchmarks is
+    # skipped when source hasn't changed.  Restore-only and fail-open: a miss
+    # only costs compilation time.
+    - name: Restore JIT compilation cache
+      id: jit-cache-restore
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ env.JIT_CACHE_DIR }}
+        key: ${{ env.JIT_CACHE_KEY_PREFIX }}-latest
+
+    # asv shells out to git for every command (the container runs as root but
+    # the checked-out tree is owned by a different uid, which otherwise trips
+    # git's "detected dubious ownership" guard and fails `asv publish`).  Also
+    # ensure a local `main` ref exists: asv resolves conf.branches (["main"]
+    # in asv.conf.json) to build its commit list, which fails on a feature
+    # branch where `main` was never fetched.  Results are still stored under
+    # the real HEAD sha via --set-commit-hash below, so pointing `main` at
+    # HEAD here only satisfies asv's branch lookup.
+    - name: Prepare git for asv
+      run: |
+        set -euo pipefail
+        git config --global --add safe.directory "$GITHUB_WORKSPACE"
+        git config --global --add safe.directory '*'
+        if ! git rev-parse --verify --quiet main >/dev/null; then
+          git branch main HEAD
+        fi
+
+    # asv prompts interactively for machine metadata on first use; --yes
+    # accepts the autodetected defaults and writes ~/.asv-machine.json.
+    - name: Configure asv machine
+      run: |
+        uv run --no-sync asv machine --yes
+
+    # Benchmark the installed physicsnemo in .venv against the current HEAD.
+    # --launch-method spawn matches benchmarks/run_benchmarks.sh (required for
+    # CUDA compatibility).  --python=same runs in the existing uv env and
+    # ignores the asv.conf.json matrix.  `uv run --no-sync` puts .venv/bin on
+    # PATH and keeps the env read-only (UV_FROZEN/UV_NO_SYNC).
+    #
+    # --set-commit-hash is REQUIRED: with an existing environment (--python=
+    # same) asv skips saving results entirely unless a commit hash is pinned
+    # (see asv/commands/run.py: skip_save is True for ExistingEnvironment when
+    # set_commit_hash is None).  Without it, .asv/results stays empty and the
+    # publish/plot steps have nothing to consume.  --no-pull avoids an
+    # unnecessary `git fetch` against the shallow checkout.
+    #
+    # Verbosity:
+    #   -v / --verbose    : per-benchmark progress and asv internals.
+    #   --show-stderr     : surface each benchmark process's stdout/stderr so
+    #                       a slow or hanging benchmark is visible live in the
+    #                       job log instead of only the terminal summary line.
+    #   PYTHONUNBUFFERED=1: flush asv/benchmark output immediately so the live
+    #                       log is not held back by stdio buffering.
+    #
+    # Exit-code handling: asv returns 2 when one or more benchmarks fail (e.g.
+    # the functional KNN "scipy" cases, which cannot run on CUDA inputs).
+    # Those are individual benchmark failures, not an infrastructure problem,
+    # so we downgrade exit code 2 to a warning and still publish the partial
+    # results.  Any other nonzero exit (config/usage/infra errors) remains
+    # fatal.
+    - name: Run ASV benchmarks
+      env:
+        WARP_CACHE_PATH: ${{ env.JIT_CACHE_DIR }}/warp
+        TRITON_CACHE_DIR: ${{ env.JIT_CACHE_DIR }}/triton
+        TORCHINDUCTOR_CACHE_DIR: ${{ env.JIT_CACHE_DIR }}/inductor
+        PYTHONUNBUFFERED: "1"
+      run: |
+        commit_hash="$(git rev-parse HEAD)"
+        # GitHub's default bash shell runs with `set -e`; disable it around
+        # the asv call so we can inspect the exit code instead of aborting.
+        set +e
+        uv run --no-sync asv run \
+          --launch-method spawn \
+          --python=same \
+          --set-commit-hash "$commit_hash" \
+          --no-pull \
+          --verbose \
+          --show-stderr
+        rc=$?
+        set -e
+        if [ "$rc" -eq 2 ]; then
+          echo "::warning::asv reported one or more failed benchmarks (exit code 2); publishing partial results."
+        elif [ "$rc" -ne 0 ]; then
+          echo "::error::asv run failed with exit code $rc."
+          exit "$rc"
+        fi
+
+    # Generate the browsable HTML dashboard from the fresh results.
+    - name: Publish ASV HTML report
+      if: ${{ !cancelled() }}
+      run: |
+        uv run --no-sync asv publish
+
+    # Generate the functional benchmark bar plots under docs/img/.  Runs even
+    # if publish failed, as long as at least one result JSON was produced.
+    - name: Generate functional benchmark plots
+      if: ${{ !cancelled() }}
+      run: |
+        uv run --no-sync python benchmarks/physicsnemo/nn/functional/plot_functional_benchmarks.py
+
+    - name: Upload ASV results and HTML report
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: asv-benchmarks-nightly
+        path: |
+          .asv/results
+          .asv/html
+        retention-days: 30
+
+    - name: Upload functional benchmark plots
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: asv-benchmark-plots-nightly
+        path: docs/img/nn/functional/**
+        retention-days: 30
+        if-no-files-found: ignore
