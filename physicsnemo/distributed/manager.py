@@ -349,15 +349,12 @@ class DistributedManager(object):
         """Setup method using generic initialization"""
         rank = int(os.environ.get("RANK"))
         world_size = int(os.environ.get("WORLD_SIZE"))
-        if "LOCAL_RANK" in os.environ:
-            local_rank = os.environ.get("LOCAL_RANK")
-            if local_rank is not None:
-                local_rank = int(local_rank)
-            else:
-                local_rank = rank % torch.cuda.device_count()
-
-        else:
-            local_rank = rank % torch.cuda.device_count()
+        local_rank = os.environ.get("LOCAL_RANK")
+        if local_rank is not None:
+            local_rank = int(local_rank)
+        # When LOCAL_RANK is not provided, leave it as None so that setup()
+        # derives it (rank modulo the accelerator count, or 0 on CPU-only
+        # hosts).
 
         # Read env variables
         addr = os.environ.get("MASTER_ADDR")
@@ -652,7 +649,9 @@ class DistributedManager(object):
             manager._rank = rank
             manager._world_size = world_size
             if local_rank is None:
-                manager._local_rank = rank % torch.cuda.device_count()
+                # On CPU-only hosts there are no devices to assign by rank
+                n_devices = torch.cuda.device_count()
+                manager._local_rank = rank % n_devices if n_devices > 0 else 0
             else:
                 manager._local_rank = local_rank
 
@@ -666,13 +665,16 @@ class DistributedManager(object):
             )
 
         if manager._distributed:
-            # Setup distributed process group
+            # Setup distributed process group. device_id must be an
+            # accelerator device: recent PyTorch versions raise when a CPU
+            # device is passed, so only bind a device on CUDA.
+            device_id = manager.device if manager.device.type == "cuda" else None
             try:
                 dist.init_process_group(
                     backend,
                     rank=manager.rank,
                     world_size=manager.world_size,
-                    device_id=manager.device,
+                    device_id=device_id,
                     timeout=timeout,
                 )
             except TypeError:
@@ -993,6 +995,7 @@ class DistributedManager(object):
             and DistributedManager._shared_state["_is_initialized"]
             and "_distributed" in DistributedManager._shared_state
             and DistributedManager._shared_state["_distributed"]
+            and dist.is_initialized()
         ):
             if barrier:
                 if torch.cuda.is_available():
