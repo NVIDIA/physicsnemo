@@ -22,9 +22,7 @@ import physicsnemo.metrics.general.ensemble_metrics as em
 
 @pytest.mark.parametrize("dim", [1, 2, -1])
 @pytest.mark.parametrize("input_shape", [(4, 6, 5), (6, 6, 5)])
-def test_variance_dim(
-    device, input_shape, dim, rtol: float = 1e-4, atol: float = 1e-4
-):
+def test_variance_dim(device, input_shape, dim, rtol: float = 1e-4, atol: float = 1e-4):
     # The ensemble dimension is not the leading one here. Variance has to take
     # the sample count from that dimension and subtract a mean that broadcasts
     # along it. The square shape is the case that used to run without an error
