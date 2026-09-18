@@ -46,7 +46,7 @@ PyTorch checkpoint backend can also be combined with ``torch.compile``.
     :members:
     :exclude-members: forward
 
-.. autoclass:: physicsnemo.models.flare.flare.FLAREPlusPlus
+.. autoclass:: physicsnemo.models.flare.FLAREPlusPlus
     :show-inheritance:
     :members:
     :exclude-members: forward
