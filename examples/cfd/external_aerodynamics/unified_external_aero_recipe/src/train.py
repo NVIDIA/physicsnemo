@@ -655,6 +655,24 @@ def _walk_batch_for_logging(
 
 
 @profile
+def _collect_reader_caches(*dataloaders: DataLoader) -> list[Any]:
+    """Collect the distinct DatasetCache instances behind the loaders' readers.
+
+    Walks each loader's dataset (descending into ``MultiDataset`` children)
+    and pulls ``reader._cache``. Returns unique instances (train/val
+    typically share one).
+    """
+    caches: list[Any] = []
+    for loader in dataloaders:
+        datasets = [loader.dataset]
+        datasets.extend(getattr(loader.dataset, "_datasets", []))
+        for ds in datasets:
+            cache = getattr(getattr(ds, "reader", None), "_cache", None)
+            if cache is not None and all(cache is not c for c in caches):
+                caches.append(cache)
+    return caches
+
+
 def benchmark_io_epoch(
     dataloader: DataLoader,
     label: str,
@@ -812,12 +830,17 @@ def main(cfg: DictConfig) -> None:
             f"benchmark_io=True  — benchmarking dataloader I/O only "
             f"({num_epochs} epoch(s), max_steps={max_steps})"
         )
+        reader_caches = _collect_reader_caches(train_loader, val_loader)
         with torch.no_grad(), Profiler():
             for epoch in range(num_epochs):
                 logger.info(f"--- Epoch {epoch + 1}/{num_epochs} ---")
                 train_loader.set_epoch(epoch)
                 benchmark_io_epoch(train_loader, "train", logger, max_steps=max_steps)
                 benchmark_io_epoch(val_loader, "val", logger, max_steps=max_steps)
+                ### Per-epoch reader-cache counters: epoch 1 shows the cold
+                ### (populate) cost, epoch 2+ the warm hit rates.
+                for cache in reader_caches:
+                    logger.info(f"  [cache] epoch {epoch + 1}: {cache.stats()}")
         logger.info("benchmark_io complete!")
         if is_rank0:
             if train_writer is not None:
