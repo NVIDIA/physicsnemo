@@ -23,6 +23,8 @@ geometry and global context embeddings.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -762,7 +764,7 @@ class GALE_FA(nn.Module):
 
 
 class GALEBlock(nn.Module):
-    r"""Transformer encoder block using GALE attention.
+    r"""Transformer encoder block using configurable attention.
 
     This block replaces standard self-attention with the GALE (Geometry-Aware Latent
     Embeddings) attention mechanism, which combines physics-aware self-attention with
@@ -796,10 +798,10 @@ class GALEBlock(nn.Module):
         If ``None``, uses irregular-mesh GALE. Length-2 tuple enables 2D Conv2d
         projection; length-3 tuple enables 3D Conv3d projection (flattened
         :math:`N = H \times W` or :math:`H \times W \times D`). Default is ``None``.
-    attention_type : str, optional
+    attention_type : {"GALE", "GALE_FA"}, optional
         Attention backend to use. ``"GALE"`` uses the standard physics-aware
-        slice attention; ``"GALE_FA"`` uses flash-attention variant.
-        Default is ``"GALE"``.
+        slice attention and ``"GALE_FA"`` uses fixed-query FLARE. Default is
+        ``"GALE"``.
     state_mixing_mode : str, optional
         How to blend self-attention and cross-attention outputs. ``"weighted"`` uses
         a learnable sigmoid-gated weighted sum. ``"concat_project"``
@@ -858,7 +860,7 @@ class GALEBlock(nn.Module):
         plus: bool = False,
         context_dim: int = 0,
         spatial_shape: tuple[int, ...] | None = None,
-        attention_type: str = "GALE",
+        attention_type: Literal["GALE", "GALE_FA"] = "GALE",
         concrete_dropout: bool = False,
         state_mixing_mode: str = "weighted",
     ) -> None:
