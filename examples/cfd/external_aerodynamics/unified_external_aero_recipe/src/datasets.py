@@ -93,6 +93,18 @@ def load_dataset_config(yaml_path: str | Path) -> DictConfig:
     return OmegaConf.merge({"dataset_paths": paths}, cfg)
 
 
+def _apply_dataset_reader_overrides(
+    dataset_cfg: DictConfig, recipe_cfg: DictConfig
+) -> DictConfig:
+    """Apply optional model/recipe overrides to a dataset's reader config."""
+    reader_overrides = OmegaConf.select(
+        recipe_cfg, "dataset_reader_overrides", default=None
+    )
+    if not reader_overrides:
+        return dataset_cfg
+    return OmegaConf.merge(dataset_cfg, {"pipeline": {"reader": reader_overrides}})
+
+
 ### Transform-config kwargs whose values are file paths and should be
 ### resolved against the recipe root before Hydra instantiates the
 ### transform. Add new entries here when introducing transforms with
@@ -828,6 +840,7 @@ def build_dataloaders(
             ds_yaml = OmegaConf.merge(
                 ds_yaml, {"sampling_resolution": sampling_resolution}
             )
+        ds_yaml = _apply_dataset_reader_overrides(ds_yaml, cfg)
 
         train_datadir = OmegaConf.select(ds_yaml, "train_datadir", default=None)
         if train_datadir and not Path(str(train_datadir)).exists():

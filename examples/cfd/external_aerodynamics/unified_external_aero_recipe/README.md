@@ -139,6 +139,10 @@ flowchart LR
 
   Also supports temperature, density, and identity (pass-through) field
   types, and provides an `inverse()` for re-dimensionalizing predictions.
+  When `L_ref` is in `global_data` the mesh coordinates are divided by it
+  as well, once per instance: a chain that needs a second instance (say
+  interior `point_data` fields first, boundary `cell_data` fields second)
+  sets `scale_geometry: false` on the second one.
   Input points are non-dimensionalized by a single reference scalar
   `L_ref` (rather than scaling x/y/z independently) so geometry aspect
   ratios are preserved.
@@ -314,7 +318,10 @@ For each field, the loss type is applied per the field's type (`scalar`
 or `vector`); per-field losses are then weighted by the optional
 `training.field_weights` block in the model YAML and summed.
 
-Supported loss types: Huber (default), MSE, relative MSE.
+Supported loss types (`training.loss_type`): `huber` (default), `mse`, and
+`relative_mse` (`sum((pred - target)^2) / sum(target^2)`, per field; per
+component and summed for vector fields). `rmse` is a deprecated alias for
+`relative_mse` and warns.
 Supported metrics: relative L1, relative L2, MAE.
 
 **`training.field_weights`** is a model-side dict that multiplies each
@@ -515,6 +522,10 @@ Notes on the composition:
 - Forward kwargs live alongside the model in the same template because
   they are a property of the model class's forward signature, not an
   independent dimension.
+- Model templates may declare `dataset_reader_overrides`; `build_dataloaders`
+  merges those keys into each selected dataset's reader config. Volume datasets
+  preserve in-file boundaries by default; point-based volume templates opt into
+  dropping them, while GLOBE keeps the lossless default it requires.
 - The model template's `out_dim: ${out_dim}` interpolation resolves
   against a top-level `out_dim` value that `build_dataloaders()`
   computes from the chosen dataset's `targets:` block (sum of channel
@@ -625,13 +636,18 @@ pipeline:
   augmentations:
     - _target_: ${dp:RandomRotateMesh}
       axes: ["z"]
+      mode: axis_aligned
       transform_cell_data: true
       transform_global_data: true
     - _target_: ${dp:RandomTranslateMesh}
       distribution:
         _target_: torch.distributions.Uniform
-        low: [-1.0, -1.0, 0.0]
-        high: [1.0, 1.0, 0.0]
+        low:
+          _target_: torch.tensor
+          data: [-1.0, -1.0, 0.0]
+        high:
+          _target_: torch.tensor
+          data: [1.0, 1.0, 0.0]
   transforms:
     - _target_: ${dp:DropMeshFields}
       global_data: [TimeValue]

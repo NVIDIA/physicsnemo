@@ -37,24 +37,28 @@ pipeline:
     # subsample a cheap contiguous block read instead of a full slice_points
     # remap (the dominant per-sample IO cost otherwise).
     drop_interior_cells: true
-    # The in-file `vehicle` surface boundary is unused by the volume pipeline
-    # (SDF comes from the injected stl_geometry below; model/collate use only
-    # the interior). Drop it so we don't subsample (expensive, GIL-held) or pin
-    # it every sample.
-    drop_in_file_boundaries: true
+    # Preserve in-file boundaries as the lossless default. Point-based model
+    # templates that consume only the interior explicitly opt into dropping
+    # them to skip per-sample subsampling (expensive, GIL-held) and pinning.
+    drop_in_file_boundaries: false
     extra_boundaries:
       stl_geometry:
         pattern: "*_single_solid.stl.pmsh"
   augmentations:
     - _target_: ${dp:RandomRotateMesh}
       axes: ["z"]
+      mode: axis_aligned
       transform_point_data: true
       transform_global_data: true
     - _target_: ${dp:RandomTranslateMesh}
       distribution:
         _target_: torch.distributions.Uniform
-        low: [-1.0, -1.0, 0.0]
-        high: [1.0, 1.0, 0.0]
+        low:
+          _target_: torch.tensor
+          data: [-1.0, -1.0, 0.0]
+        high:
+          _target_: torch.tensor
+          data: [1.0, 1.0, 0.0]
   transforms:
     - _target_: ${dp:DropMeshFields}
       global_data: [TimeValue]

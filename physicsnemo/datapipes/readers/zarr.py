@@ -260,9 +260,13 @@ class ZarrReader(Reader):
         available_attrs = set(root.attrs.keys()) if hasattr(root, "attrs") else set()
         available = available_arrays | available_attrs
 
-        # Check for missing required fields (check both arrays and attributes)
+        # Check for missing required fields (check both arrays and attributes).
+        # ``array_keys()`` lists only direct children, so a path into a
+        # sub-group (``"solution/pressure"``) is resolved via ``in root``.
         required_fields = set(fields_to_load) - set(self.default_values.keys())
-        missing_fields = required_fields - available
+        missing_fields = {
+            f for f in required_fields if f not in available and f not in root
+        }
         if missing_fields:
             raise KeyError(
                 f"Required fields {missing_fields} not found in {group_path}. "

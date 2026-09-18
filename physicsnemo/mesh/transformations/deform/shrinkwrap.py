@@ -23,10 +23,7 @@ from typing import TYPE_CHECKING, Literal
 import torch
 from jaxtyping import Bool, Float
 
-from physicsnemo.mesh.transformations.deform._utils import (
-    _mesh_with_deformed_points,
-    _resolve_point_field,
-)
+from physicsnemo.mesh.transformations.deform._utils import _resolve_point_field
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -156,7 +153,7 @@ def shrinkwrap(
         point_weights=resolved_weights,
         implementation=implementation,
     )
-    return _mesh_with_deformed_points(mesh, points)
+    return mesh.with_points(points)
 
 
 __all__ = ["shrinkwrap"]

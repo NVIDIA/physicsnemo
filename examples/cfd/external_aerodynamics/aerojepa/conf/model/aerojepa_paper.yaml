@@ -43,6 +43,7 @@ trunk:
     neighbor_k: 16
     mlp_ratio: 4
     dropout: 0.0
+    use_te: ${use_te}
     use_sdf: false
     use_solid_normals: false
     use_solid_n_dot_uinf: false
@@ -62,6 +63,7 @@ trunk:
     neighbor_k: 16
     mlp_ratio: 4
     dropout: 0.0
+    use_te: ${use_te}
 
   decoder:
     _target_: physicsnemo.experimental.models.aerojepa.QueryTokenDecoder
@@ -78,6 +80,7 @@ trunk:
     attention_mlp_ratio: 4
     dropout: 0.0
     query_chunk_size: 1024
+    use_te: ${use_te}
 
 predictor:
   _target_: physicsnemo.experimental.models.aerojepa.PrototypeTokenJEPAHead
@@ -90,3 +93,4 @@ predictor:
   query_pe_bands: 6
   mlp_ratio: 4
   dropout: 0.0
+  use_te: ${use_te}

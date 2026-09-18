@@ -283,6 +283,21 @@ class TestStripCaches:
         dm2 = dm.strip_caches()
         assert "normals" not in dm2.interior._cache["cell"].keys()
 
+    def test_propagates_keep_to_all_meshes(self):
+        dm = DomainMesh(
+            interior=single_triangle_3d.load(),
+            boundaries={"wall": single_triangle_3d.load()},
+        )
+        for _, mesh in dm.all_meshes():
+            _ = mesh.cell_areas
+            _ = mesh.cell_normals
+
+        stripped = dm.strip_caches(keep=("cell", "areas"))
+
+        for _, mesh in stripped.all_meshes():
+            assert mesh._cache.get(("cell", "areas"), None) is not None
+            assert mesh._cache.get(("cell", "normals"), None) is None
+
 
 class TestSubdivide:
     """Tests for DomainMesh.subdivide passthrough."""
@@ -739,7 +754,8 @@ class TestDomainGlobalDataTransform:
         assert dm2.global_data["velocity"][1].item() == pytest.approx(1.0, abs=1e-6)
 
 
-def test_domain_mesh_to_float_dtype_preserves_integer_cells():
+@pytest.mark.parametrize("known_device", [False, True])
+def test_domain_mesh_to_float_dtype_preserves_integer_cells(known_device):
     """Regression: DomainMesh.to(<float dtype>) must cast floating tensors only;
     the integer cells of the interior and boundary meshes must stay integer (the
     generated tensorclass .to recursed in and cast them to float, failing
@@ -749,8 +765,13 @@ def test_domain_mesh_to_float_dtype_preserves_integer_cells():
     )
     dm = DomainMesh(interior=interior, boundaries={"b": interior.get_boundary_mesh()})
     dm.global_data["scale"] = torch.tensor(2.0)
+    if known_device:
+        dm = dm.to("cpu")
 
     dm64 = dm.to(torch.float64)
+    assert dm.interior.points.dtype == torch.float32
+    assert dm.boundaries["b"].points.dtype == torch.float32
+    assert dm.global_data["scale"].dtype == torch.float32
     assert dm64.interior.points.dtype == torch.float64
     assert dm64.interior.cells.dtype == torch.int64
     assert dm64.boundaries["b"].points.dtype == torch.float64
@@ -796,3 +817,23 @@ def test_domain_mesh_to_float_dtype_forwards_transfer_kwargs():
     assert out.interior.points.dtype == torch.float64
     assert out.interior.cells.dtype == torch.int64
     assert out.global_data["scale"].dtype == torch.float64
+
+
+def test_domain_mesh_to_rejects_integer_coordinate_dtype():
+    dm = DomainMesh(
+        interior=Mesh(points=torch.randn(3, 2), cells=torch.tensor([[0, 1]]))
+    )
+
+    with pytest.raises(TypeError, match="coordinates must remain floating point"):
+        dm.to(torch.int32)
+
+
+def test_domain_mesh_to_complex_preserves_integer_cells():
+    dm = DomainMesh(
+        interior=Mesh(points=torch.randn(3, 2), cells=torch.tensor([[0, 1]]))
+    )
+
+    converted = dm.to(torch.complex64)
+
+    assert converted.interior.points.dtype == torch.complex64
+    assert converted.interior.cells.dtype == torch.int64

@@ -70,7 +70,7 @@ def default_spatial_param_selector(name: str) -> int | None:
     r"""Return the dim along which a spatial parameter/buffer should be sharded.
 
     A local copy of the production ``shard_dim_selector``
-    (``examples/weather/stormcast/utils/parallel.py``): positional embeddings
+    (``examples/weather/regional_weather_diffusion/utils/parallel.py``): positional embeddings
     laid out as :math:`(1, H W, C)` shard the flattened spatial axis (dim 1),
     while DiT RoPE cos/sin tables laid out :math:`(H, W, d)` shard height (dim 0)
     so each rank owns globally-correct rows. Everything else returns ``None``

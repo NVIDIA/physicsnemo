@@ -25,6 +25,9 @@ defaults:
 seed: 42
 device: cuda
 
+# Must match the setting used to create the checkpoint.
+use_te: false
+
 # Required: path to the checkpoint produced by `train.py`.
 checkpoint: ???
 

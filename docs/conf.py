@@ -118,6 +118,7 @@ exclude_patterns = [
     "README.md",
     "CONTRIBUTING.md",
     "LICENSE.txt",
+    "research.md",
 ]
 
 # Fake imports

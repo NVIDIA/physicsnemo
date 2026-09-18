@@ -109,6 +109,7 @@ class ParallelHelper:
         seed: int | None = None,
         num_workers: int = 2,
         shuffle: bool = True,
+        pin_memory: bool = True,
     ) -> torch.utils.data.DataLoader:
         """Create a rank-sharded DataLoader.
 
@@ -132,6 +133,8 @@ class ParallelHelper:
             Number of worker processes.
         shuffle : bool, optional
             Whether to shuffle local indices.
+        pin_memory : bool, optional
+            Whether to use pinned memory with the dataloader.
 
         Returns
         -------
@@ -163,7 +166,7 @@ class ParallelHelper:
             num_workers=num_workers,
             worker_init_fn=worker_init,
             drop_last=True,
-            pin_memory=torch.cuda.is_available(),
+            pin_memory=torch.cuda.is_available() and pin_memory,
             prefetch_factor=2 if num_workers > 0 else None,
         )
 

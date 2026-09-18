@@ -101,6 +101,20 @@ def test_meta_data():
     assert meta.onnx_runtime is False
 
 
+@pytest.mark.parametrize(
+    "component",
+    [
+        ContextTransformer,
+        TargetTransformer,
+        QueryTokenDecoder,
+        PrototypeTokenJEPAHead,
+    ],
+)
+def test_transformer_engine_is_opt_in(component):
+    """Public AeroJEPA components default to standard PyTorch layers."""
+    assert inspect.signature(component).parameters["use_te"].default is False
+
+
 def test_forward_returns_plain_tensor(device):
     """``forward`` returns a plain ``torch.Tensor`` (not a ``TokenSet``)."""
     model = _build_model().to(device).eval()

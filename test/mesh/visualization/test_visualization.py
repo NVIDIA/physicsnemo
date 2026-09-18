@@ -271,6 +271,25 @@ def test_cell_scalars_tensor():
     plt.close("all")
 
 
+def test_volume_cell_scalars_do_not_mutate_source_cache():
+    """Surface extraction uses an independent cache container."""
+    mesh = create_3d_tetrahedral_mesh()
+    cached_centroids = mesh.cell_centroids
+    cache_keys = set(mesh._cache.keys(include_nested=True, leaves_only=True))
+
+    ax = mesh.draw(
+        show=False,
+        backend="matplotlib",
+        cell_scalars=torch.ones(mesh.n_cells),
+    )
+
+    assert isinstance(ax, matplotlib.axes.Axes)
+    assert mesh._cache["cell", "centroids"] is cached_centroids
+    assert set(mesh._cache.keys(include_nested=True, leaves_only=True)) == cache_keys
+    assert "_viz_cell_scalars" not in mesh.cell_data
+    plt.close("all")
+
+
 def test_point_scalars_key():
     """Test point scalars with key lookup."""
     mesh = create_2d_triangle_mesh()
