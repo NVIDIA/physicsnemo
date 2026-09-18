@@ -763,11 +763,7 @@ def test_model_types(
     cfg_diffusion.dataset.num_scalar_cond_channels = num_scalar_cond_channels
     cfg_diffusion.dataset.num_invariant_channels = num_invariant_channels
 
-    if model_type == "hybrid":
-        cfg_diffusion.model.diffusion_conditions = ["state", "background"]
-    elif model_type == "nowcasting":
-        cfg_diffusion.model.diffusion_conditions = ["state"]
-    elif model_type == "downscaling":
+    if model_type in ("hybrid", "nowcasting", "downscaling"):
         cfg_diffusion.model.diffusion_conditions = ["background"]
     elif model_type == "unconditional":
         cfg_diffusion.model.diffusion_conditions = []
@@ -793,3 +789,80 @@ def test_model_types(
             rundir, "checkpoints_diffusion", "EDMPreconditioner.0.10.mdlus"
         )
         assert os.path.isfile(ckpt_path), "Diffusion checkpoint not found"
+
+
+def test_two_element_state_rejected():
+    """The two-element `state: [input, target]` convention has been removed;
+    a dataset that still returns it must fail loudly rather than silently
+    mis-train (see the 'Adding custom datasets' section of the README)."""
+    from utils.nn import unpack_batch
+
+    batch = {"state": [torch.zeros(1, 3, 4, 4), torch.zeros(1, 3, 4, 4)]}
+    with pytest.raises(ValueError, match="two-element"):
+        unpack_batch(batch, device="cpu")
+
+
+@pytest.mark.parametrize("backend", ["torch", "datapipes"])
+def test_loader_backend_batches(backend: str):
+    """Both `dataset.loader.backend` strategies must satisfy the same batch
+    contract: same keys, same shapes, for the same LoaderSpec."""
+    from datasets import MockDataset
+    from datasets.dataset import LoaderSpec
+
+    dist = DistributedManager()
+    if dist.world_size > 1:
+        pytest.skip("Skipping: single-process loader backend check.")
+
+    dataset = MockDataset(
+        {
+            "num_state_channels": 3,
+            "num_background_channels": 4,
+            "num_past_state_channels": 2,
+            "num_invariant_channels": 0,
+            "num_scalar_cond_channels": 0,
+            "image_size": [16, 8],
+            "num_samples": 20,
+            "model_type": "hybrid",
+            "use_mask": False,
+        },
+        train=True,
+    )
+
+    spec = LoaderSpec(
+        batch_size=2,
+        sampler=iter(range(len(dataset))),
+        num_workers=1,
+        backend=backend,
+        drop_last=True,
+    )
+    loader = dataset.make_loader(spec)
+    batch = next(iter(loader))
+
+    assert set(batch.keys()) >= {"background", "state"}
+    assert tuple(batch["state"].shape) == (2, 3, 16, 8)
+    assert tuple(batch["background"].shape) == (2, 6, 16, 8)  # 4 + 2 past-state
+
+
+def test_datapipes_backend_training(
+    tmp_path: Path,
+    cfg_diffusion_unet: DictConfig,
+):
+    """Exercise the PhysicsNeMo datapipe loading strategy end to end, through
+    the trainer's normal setup path rather than a hand-built LoaderSpec."""
+    dist = DistributedManager()
+    if dist.world_size > 1:
+        pytest.skip("Skipping: single-process datapipes backend check.")
+
+    rundir = _setup_rundir(tmp_path, dist.world_size)
+    cfg = cfg_diffusion_unet.copy()
+    cfg.training.rundir = rundir
+    cfg.dataset.loader.backend = "datapipes"
+    if "regression" in cfg.model.diffusion_conditions:
+        cfg.model.diffusion_conditions.remove("regression")
+
+    train.main(cfg)
+
+    ckpt_path = os.path.join(
+        rundir, "checkpoints_diffusion", "EDMPreconditioner.0.10.mdlus"
+    )
+    assert os.path.isfile(ckpt_path), "Diffusion checkpoint not found"

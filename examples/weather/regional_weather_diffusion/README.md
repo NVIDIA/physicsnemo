@@ -37,7 +37,7 @@ The regression and diffusion components are trained separately (with the diffusi
 
 Meanwhile, Stormscope omits the regression model in favor of a diffusion-only approach using a diffusion transformer (DiT) architecture.
 
-These models can make longer forecasts (more than one timestep) during inference by feeding their predictions back into the model as input for the next step (autoregressive rollout). Both models can be formulated in terms of a high-resolution state update guided by a low-resolution conditioning. In the code, we refer to the high-resolution state in generic terms as `state` and to the low-resolution data source as `background`.
+These models can make longer forecasts (more than one timestep) during inference by feeding their predictions back into the model as input for the next step (autoregressive rollout). Both models can be formulated in terms of a high-resolution state update guided by a low-resolution conditioning. In the code, we refer to the high-resolution training target in generic terms as `state` and to everything the model conditions on as `background`, including any past state history a forecasting model needs as input -- the dataset concatenates that onto `background` as extra channels rather than returning it as a separate tensor. See [Model types](#model-types) and [Adding custom datasets](#adding-custom-datasets) for details.
 
 ## Getting Started
 
@@ -116,19 +116,19 @@ This recipe supports training nowcasting and downscaling models as well as hybri
 
 To specify the type of model:
 
-  1. Specify the appropriate conditions (a combination of `["state", "background", "invariant", "regression"]`) in the `model.diffusion_conditions` (if training a diffusion model) or `model.regression_conditions` (if training a regression model) configuration settings.
+  1. Specify the appropriate conditions (a combination of `["background", "invariant", "regression"]`) in the `model.diffusion_conditions` (if training a diffusion model) or `model.regression_conditions` (if training a regression model) configuration settings.
   2. Return the necessary tensors from the `__getitem__` function of your dataset (refer to the section [Adding custom datasets](#adding-custom-datasets) for details).
 
-The following table shows typical settings for each type of model:
+`"background"` is the only per-sample conditioning entry in the conditions list; a dataset that needs to condition on past state (a "hybrid" or "nowcasting" model) concatenates it onto the `background` tensor as extra channels rather than returning a separate tensor for it. The following table shows typical settings for each type of model:
 
 | Model type | Example model | `diffusion_conditions` / `regression_conditions` | Dataset `__getitem__` returns |
 | --- | --- | --- | --- |
-| Hybrid | StormCast | `["state", "background"]` | `{"background": background_tensor, "state": [past_state_tensor, future_state_tensor]}` |
-| Nowcasting | Stormscope | `["state"]` | `{"state": [past_state_tensor, future_state_tensor]}` |
+| Hybrid | StormCast | `["background"]` | `{"background": cat(background_tensor, past_state_tensor), "state": future_state_tensor}` |
+| Nowcasting | Stormscope | `["background"]` | `{"background": past_state_tensor, "state": future_state_tensor}` |
 | Downscaling | CorrDiff | `["background"]` | `{"background": background_tensor, "state": state_tensor}` |
 | Unconditional | | `[]` | `{"state": state_tensor}` |
 
-Changing the form of the dictionary returned by `__getitem__` is not strictly necessary if, for instance, the same dataset is used to train different types of models. As long as the conditions list is set appropriately, unnecessary tensors will be ignored (if `"state"` is a list for models that expect only one state tensor, the second element of the list (`state[1]`) will be used as the target). However, unnecessary outputs may introduce overhead that negatively affects performance.
+`"background"` may be omitted from the dict returned by `__getitem__` when it isn't in the conditions list; if it is provided anyway, it will be ignored (unnecessary outputs may introduce overhead that negatively affects performance).
 
 If you want to use invariants (that is, conditions that are the same for each sample, a surface elevation map is a typical example), return the invariants as a NumPy array from the `get_invariants` function of your dataset and add `"invariant"` to your condition list.
 
@@ -149,7 +149,7 @@ python train.py --config-name regression training.experiment_name=regression
 
 * Use `--config-name test_regression_unet`: To test training with synthetic data.
 
-To customize which inputs are used for the regression model, you can change the list in `model.regression_conditions`. The default of `["state", "background", "invariant"]` corresponds to the StormCast paper. By changing the default you can, for instance, train a model that uses only the background data or the state data for benchmarking purposes.
+To customize which inputs are used for the regression model, you can change the list in `model.regression_conditions`. The default of `["background", "invariant"]` corresponds to the StormCast paper, with `background` carrying both the ERA5 conditioning and the previous HRRR timestep concatenated together. `regression_conditions` only toggles whole tensors on or off (`background`, `invariant`), so removing `"background"` drops ERA5 *and* the previous HRRR timestep together, e.g. down to `["invariant"]` for benchmarking against invariants alone. Since `HrrrEra5Dataset.__getitem__` always concatenates both into `background`, there is currently no config-only way to condition on ERA5 without the previous HRRR timestep (or vice versa) -- that split would need to be added to the dataset, e.g. as an `include_past_state` option controlling what it concatenates.
 
 ### Training Diffusion Models
 
@@ -249,9 +249,9 @@ To run inference:
 python inference.py --config-name <your_inference_config>
 ```
 
-This will load regression and diffusion models from directories specified by `inference.regression_checkpoint` and `inference.diffusion_checkpoint` respectively; each of these should be a path to a PhysicsNeMo checkpoint (`.mdlus` file) from your training runs. The `inference.py` script will use these models to run a forecast and save outputs as a `zarr` file along with a few plots saved as `png` files.
+This will load regression and diffusion models from directories specified by `inference.regression_checkpoint` and `inference.diffusion_checkpoint` respectively; each of these should be a path to a PhysicsNeMo checkpoint (`.mdlus` file) from your training runs. `inference.py` evaluates `inference.n_steps` independent diagnostic samples starting at `inference.initial_time` -- each step is scored against its own sample straight from the dataset's `background`/`state`, and saves outputs as a `zarr` file along with a few plots saved as `png` files.
 
-The `inference.py` script fully supports only the default ERA5-HRRR StormCast implementation. For custom datasets and more complex inference workflows, we recommend bringing your checkpoints to [Earth2Studio](https://github.com/NVIDIA/earth2studio) for further analysis and visualizations. The [Earth2Studio wrapper for StormCast](https://github.com/NVIDIA/earth2studio/blob/main/earth2studio/models/px/stormcast.py) can be used as a starting point for custom implementations.
+**This is not autoregressive rollout.** `inference.py` does not feed its predictions back into the model as input for a following step; it only evaluates single-step accuracy against the dataset's own history. (Prior versions of this recipe carried predictions forward through the two-element `state` convention; that convention has been removed -- see [Adding custom datasets](#adding-custom-datasets).) For autoregressive rollout, custom datasets, or more complex inference workflows, we recommend bringing your checkpoints to [Earth2Studio](https://github.com/NVIDIA/earth2studio) for further analysis and visualizations. The [Earth2Studio wrapper for StormCast](https://github.com/NVIDIA/earth2studio/blob/main/earth2studio/models/px/stormcast.py) can be used as a starting point for custom implementations.
 
 
 ## Datasets
@@ -299,12 +299,14 @@ invariants (the land and water mask and orography).
 
 ### Adding Custom Datasets
 
-While it is possible to train models on custom datasets by formatting them identically to the Zarr datasets used in the ERA5-HRRR example, a more flexible option is to define a custom dataset object. These datasets must follow the `StormCastDataset` interface defined in `datasets/dataset.py`. Refer to the docstrings in that file for a specification of what the functions must accept and return. You can use the `datasets/mock.py` implementation as a minimal synthetic example and the `datasets/data_loader_hrrr_era5.py` implementation as a real-world example.
+While it is possible to train models on custom datasets by formatting them identically to the Zarr datasets used in the ERA5-HRRR example, a more flexible option is to define a custom dataset object. These datasets must follow the `StormCastDataSource`/`StormCastDataset` interface defined in `datasets/dataset.py`. Refer to the docstrings in that file for a full specification of what the functions must accept and return. You can use the `datasets/mock.py` implementation as a minimal synthetic example and the `datasets/data_loader_hrrr_era5.py` implementation as a real-world example.
+
+Most custom datasets should subclass `StormCastDataset`, the map-style (`__getitem__`) tier that most existing datasets use and that gets the classic PyTorch `DataLoader` for free. `StormCastDataSource` is the lower-level contract it builds on -- implement it directly only if your data source isn't naturally indexable (e.g. a streaming source); see [Loading strategy: `torch` vs `datapipes`](#loading-strategy-torch-vs-datapipes) below.
 
 The dataset class must implement the following methods:
 
 * `__len__`: Returns the number of items in the dataset
-* `__getitem__`: Returns the data for the item at index `idx`. For StormCast-like hybrid models, it returns a dict with the following format: `{"background": background, "state": [old_state, new_state]}` where `background` is the low-resolution conditioning, `old_state` is the previous state used as input for the model and `new_state` is the next state used as the training target. Models that use different inputs can omit some of these; see [Model types](#model-types).
+* `__getitem__`: Returns the data for the item at index `idx`, a dict with the following format: `{"background": background, "state": state}`. `background` is **all** per-sample conditioning -- including any past state a forecasting model needs as input, which the dataset concatenates onto `background` as extra channels rather than returning as a separate tensor -- and `state` is the training target only, always a single tensor (there is no longer a two-element `[past_state, target]` form; a dataset that returns one will raise a clear error at training time). Models that use different inputs can omit `background` entirely; see [Model types](#model-types).
 * `background_channels`: Returns a list with the names of each background channel. It is important that the length of this list correspond to the exact number of channels in `background`, as this is used to set the number of inputs used by the model. May return an empty list for models that do not utilize a background input (that is, no `"background"` in `model.diffusion_conditions`/`model.regression_conditions`).
 * `state_channels`: Returns a list with the names of each state channel. As above, the length of this list must match the number of channels in `state`.
 * `image_shape`: Returns a 2-tuple with the spatial dimensions of the data.
@@ -313,12 +315,14 @@ The following methods are optional for training:
 
 * `get_invariants`: Returns the invariants (conditions that are the same for each sample) for the dataset. To use them, `"invariant"` needs to be included in `model.diffusion_conditions`and `model.regression_conditions`.
 * `scalar_condition_channels`: Returns a list with the names of the scalar condition channels. The corresponding 1D array of scalar conditions should be returned in the `scalar_conditions` key of the dict returned by `__getitem__`.
+* `make_loader`: Override to supply a loading strategy other than the default PyTorch `DataLoader` (e.g. a PhysicsNeMo datapipe); see [Loading strategy: `torch` vs `datapipes`](#loading-strategy-torch-vs-datapipes).
+* `index_segments` / `sample_group_size`: For datasets that concatenate several independently-shardable sub-sources (e.g. geographic domains), or that pack multiple training samples into one drawable item (e.g. several crops sharing one expensive read). See the docstrings in `datasets/dataset.py`.
 
 **Spatial mask**: `__getitem__` may optionally return a `"mask"` key containing a float32 array of shape `(1, H, W)` with values in `{0, 1}` (or boolean), where `1`/`True` marks *valid* pixels and `0`/`False` marks invalid or excluded pixels (e.g. outside sensor coverage, LAM sponge zones, land-sea boundaries). When present, the training loop uses the mask as a per-pixel loss weight. For the DiT architecture with `use_nan_mask_tokens: true` in `model.hyperparameters`, the mask is additionally pooled to token granularity and used to replace invalid-region tokens with learned mask tokens inside every NATTEN attention block. The dataset is responsible for producing this mask (e.g. loading a pre-computed coverage map or computing it from quality flags); for static masks, caching the array internally and returning it for every sample is recommended.
 
 The following methods are optional and are **only used by the `inference.py` script**:
 
-* `normalize_background`: Performs the transformation from physical values to normalized values for the background array.
+* `normalize_background`: Performs the transformation from physical values to normalized values for the background array. If `background` concatenates channel blocks from different sources with different statistics (as `HrrrEra5Dataset` does for ERA5 + previous-HRRR-timestep), normalize each block with its own statistics.
 * `denormalize_background`: The inverse of `normalize_background`.
 * `normalize_state`: Performs the transformation from physical values to normalized values for the state array.
 * `denormalize_state`: The inverse of `normalize_state`.
@@ -330,7 +334,29 @@ While not used in the original StormCast, the `StormCastDataset` interface also 
 
 Lead time labels can currently only be used with U-Nets, but `scalar_conditions` may achieve the same effect with DiT models.
 
-After you have implemented the custom dataset, create a configuration file in `config/dataset`. This configuration file must have one special attribute, `name`. This indicates a module in the `datasets` directory and a class to be used for the dataset. For instance, specifying `name: data_loader_hrrr_era5.HrrrEra5Dataset` will use the default ERA5-HRRR dataset, found in `datasets/data_loader_hrrr_era5.py`. The other parameters in the dataset configuration file will be passed to the `params` object used to initialize the dataset and can be used to specify, for example, the file system path from which the dataset is loaded.
+After you have implemented the custom dataset, create a configuration file in `config/dataset`. This configuration file must have one special attribute, `name`. This indicates a module in the `datasets` directory and a class to be used for the dataset. For instance, specifying `name: data_loader_hrrr_era5.HrrrEra5Dataset` will use the default ERA5-HRRR dataset, found in `datasets/data_loader_hrrr_era5.py`. Aside from the reserved `loader` block (see below), the other parameters in the dataset configuration file will be passed to the `params` object used to initialize the dataset and can be used to specify, for example, the file system path from which the dataset is loaded.
+
+#### Loading strategy: `torch` vs `datapipes`
+
+Every dataset serves batches through `make_loader(spec)`, where `spec` is a `LoaderSpec` describing what the trainer needs (batch size, worker count, device, an already rank-sharded sample stream, etc. -- see `datasets/dataset.py`). `StormCastDataset.make_loader` defaults to building the classic PyTorch `DataLoader` (fork worker processes), which is what every dataset in this recipe used before and requires no changes to keep using.
+
+A dataset can opt into a different loading strategy by overriding `make_loader`. `datasets/mock.py` shows both strategies side by side for exactly this reason: `make_loader` dispatches on `spec.backend` to either the default PyTorch path or a PhysicsNeMo [`datapipes`](../../../physicsnemo/datapipes/) loader (threads instead of forked processes, and, with `use_streams: true`, host-to-device copies and device-side transforms overlapped with training compute on a side CUDA stream). Which strategy actually runs is controlled entirely by config, not by which dataset class you pick:
+
+```yaml
+dataset:
+  name: mock.MockDataset
+  loader:
+    backend: "datapipes"  # or "torch" (the default)
+    num_workers: 4         # optional override of training.num_data_workers
+    prefetch_factor: 2
+    pin_memory: true
+    use_streams: true      # datapipes only
+    shard_by_domain: true  # give each rank a slice of every index segment, not just a contiguous block
+```
+
+Fields a chosen backend can't honor are simply ignored, so the same `loader` block is valid regardless of `backend`. If training seems data-bound (see [Training is slow](#training-is-slow)) and your dataset implements a `datapipes` loader, trying `backend: "datapipes"` is one of the first things worth testing.
+
+If you are implementing a custom dataset and want it to support both backends, look at `datasets/mock.py`'s `make_loader`/`_make_datapipe_loader` for the pattern: dispatch on `spec.backend`, keep the PhysicsNeMo datapipe import inside the `"datapipes"` branch so the `torch` path has no hard dependency on it, and make sure both backends draw from `spec.sampler` and produce identical batch shapes for the same index (this recipe's test suite checks exactly that in `test_loader_backend_batches`).
 
 ## Logging
 
@@ -350,16 +376,17 @@ Ensure that the `model.diffusion_conditions` and `model.regression_conditions` s
 
 ### How do I train a pure downscaling model without state update?
 
-Ensure that the `model.diffusion_conditions` and `model.regression_conditions` settings for your model don't include `"state"`. Your dataset may return a single tensor instead of a list as the `"state"` key of the dict returned by `__getitem__`; if your dataset does provide a list, `state[0]` will be ignored. Refer to [Model types](#model-types).
+This is the default: `state` is always a single tensor (the training target), so there is no separate past-state input to disable. Simply don't fold any past state into your dataset's `background` tensor. Refer to [Model types](#model-types).
 
 ### How do I train an unconditional diffusion model?
 
-Ensure that the `model.diffusion_conditions` and `model.regression_conditions` settings for your model are empty. Your dataset may return a single tensor instead of a list as the `"state"` key of the dict returned by `__getitem__`; if your dataset does provide a list for `"state"`, `state[0]` will be ignored. See [Model types](#model-types).
+Ensure that the `model.diffusion_conditions` and `model.regression_conditions` settings for your model are empty. Your dataset may omit the `"background"` key entirely from the dict returned by `__getitem__`; if it provides one anyway, it will be ignored. See [Model types](#model-types).
 
 ### Training is slow
 
 If training seems slow, check your GPU utilization. If it's low, the problem is likely a bottleneck with the data loading. Another way to identify a data bottleneck is to test your model using `MockDataset` (set `dataset.name=mock.MockDataset`); if training with `MockDataset` is much faster than with real data, it likely indicates a data loading bottleneck. Many datasets used in regional high-resolution models contain lots of data. Depending on the dataset size and format, consider the following optimizations:
-  * Increasing `training.num_data_workers`
+  * Increasing `training.num_data_workers` (or `dataset.loader.num_workers`, which overrides it)
+  * If your dataset implements one, switching to the PhysicsNeMo `datapipes` loading strategy (`dataset.loader.backend: "datapipes"`) -- see [Loading strategy: `torch` vs `datapipes`](#loading-strategy-torch-vs-datapipes)
   * Parallel loading of data in multiple threads within the dataset
   * Optimized data preprocessing using e.g. [Numba](https://numba.pydata.org/)
   * Data compression, if bandwidth from storage is the limiting factor
