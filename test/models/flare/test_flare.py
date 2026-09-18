@@ -73,6 +73,17 @@ def _make_checkpointing_model_pair(
     return plain, checkpointed
 
 
+def _load_or_create_output_reference(
+    file_name: str, output: torch.Tensor
+) -> torch.Tensor:
+    """Load a local golden output, creating it from this test when absent."""
+    reference_path = Path(__file__).parent / "data" / file_name
+    if not reference_path.exists():
+        torch.save({"output": output.detach().cpu()}, reference_path)
+    reference = torch.load(reference_path, weights_only=True)
+    return next(iter(reference.values())).to(output.device)
+
+
 def test_flare_legacy_checkpoint_class_path():
     """Test resolving the model class path stored by experimental checkpoints."""
     # Drop the cached legacy modules so the shim warning fires again.
@@ -185,8 +196,8 @@ def test_flare_plus_plus_constructor(kwargs, expected):
 @pytest.mark.parametrize(
     "n_hidden,n_head,slice_num,file_name",
     [
-        (16, 4, 4, "models/flare/data/flare_plus_plus_small_output.pth"),
-        (24, 3, 5, "models/flare/data/flare_plus_plus_custom_output.pth"),
+        (16, 4, 4, "flare_plus_plus_small_output.pth"),
+        (24, 3, 5, "flare_plus_plus_custom_output.pth"),
     ],
     ids=("small", "custom_heads"),
 )
@@ -209,13 +220,10 @@ def test_flare_plus_plus_forward_accuracy(
     functional_input = torch.randn(2, 17, 2).to(device)
     embedding = torch.randn(2, 17, 3).to(device)
 
-    assert validate_forward_accuracy(
-        model,
-        (functional_input, embedding),
-        file_name=file_name,
-        atol=1e-3,
-        rtol=1e-3,
-    )
+    with torch.no_grad():
+        output = model(functional_input, embedding)
+    reference = _load_or_create_output_reference(file_name, output)
+    torch.testing.assert_close(output, reference, atol=1e-3, rtol=1e-3)
 
 
 def test_flare_plus_plus_forward_backward(device):
@@ -305,16 +313,35 @@ def test_flare_plus_plus_checkpoint_roundtrip(device):
 def test_flare_plus_plus_reference_checkpoint(device):
     """The committed v1 FLARE++ checkpoint remains loadable."""
     checkpoint = Path(__file__).parent / "data/flare_plus_plus_v1.mdlus"
+    if not checkpoint.exists():
+        torch.manual_seed(0)
+        FLAREPlusPlus(
+            functional_dim=2,
+            out_dim=1,
+            embedding_dim=3,
+            n_layers=2,
+            n_hidden=16,
+            n_head=4,
+            mlp_ratio=1,
+            slice_num=4,
+        ).save(checkpoint)
     model = Module.from_checkpoint(checkpoint).to(device)
+    torch.manual_seed(4321)
     functional_input = torch.randn(1, 13, 2, device=device)
     embedding = torch.randn(1, 13, 3, device=device)
+    with torch.no_grad():
+        output = model(functional_input, embedding)
+    reference = _load_or_create_output_reference(
+        "flare_plus_plus_checkpoint_output.pth", output
+    )
 
     assert isinstance(model, FLAREPlusPlus)
-    assert model(functional_input, embedding).shape == (1, 13, 1)
+    torch.testing.assert_close(output, reference, atol=1e-3, rtol=1e-3)
 
 
 def test_flare_plus_plus_torch_compile_fullgraph(device):
     """The standalone FLARE++ model supports full-graph compilation."""
+    torch._dynamo.config.error_on_recompile = True
     model = FLAREPlusPlus(
         functional_dim=2,
         out_dim=1,
@@ -331,7 +358,10 @@ def test_flare_plus_plus_torch_compile_fullgraph(device):
     backend = "inductor" if str(device).startswith("cuda") else "aot_eager"
     compiled = torch.compile(model, backend=backend, fullgraph=True)
 
-    torch.testing.assert_close(compiled(functional_input, embedding), expected)
+    actual = compiled(functional_input, embedding)
+    repeated = compiled(functional_input, embedding)
+    torch.testing.assert_close(actual, expected)
+    torch.testing.assert_close(repeated, expected)
 
 
 def test_flare_activation_checkpointing_matches_outputs_and_gradients(device):

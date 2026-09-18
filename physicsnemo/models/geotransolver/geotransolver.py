@@ -51,6 +51,7 @@ from .activation_checkpointing import (
     should_checkpoint_component,
 )
 from .context_projector import GlobalContextBuilder
+from .flare_plus_plus import _FLAREPlusPlusBlock
 
 te = OptionalImport("transformer_engine.pytorch")
 
@@ -265,9 +266,8 @@ class GeoTransolver(Module):
     attention_type : {"GALE", "GALE_FA", "GALE_FPP"}, optional
         Attention implementation used inside each GALE block: ``"GALE"`` for the
         reference version, ``"GALE_FA"`` for fixed-query FLARE, and
-        ``"GALE_FPP"`` for input-conditioned FLARE++ routing. Validated in
-        :class:`~physicsnemo.nn.GALEBlock`, which raises on any other value.
-        Default is ``"GALE"``.
+        ``"GALE_FPP"`` for input-conditioned FLARE++ routing. Default is
+        ``"GALE"``.
     state_mixing_mode : str, optional
         How to blend self-attention and cross-attention outputs in GALE layers.
         ``"weighted"`` uses a learnable sigmoid-gated weighted sum.
@@ -560,28 +560,46 @@ class GeoTransolver(Module):
             else n_hidden
         )
 
-        # GALE transformer blocks
-        self.blocks = nn.ModuleList(
-            [
-                GALEBlock(
-                    num_heads=n_head,
-                    hidden_dim=effective_hidden,
-                    dropout=dropout,
-                    act=act,
-                    mlp_ratio=mlp_ratio,
-                    slice_num=slice_num,
-                    last_layer=(layer_idx == n_layers - 1),
-                    use_te=use_te,
-                    plus=plus,
-                    context_dim=context_dim,
-                    spatial_shape=structured_shape,
-                    attention_type=attention_type,
-                    concrete_dropout=concrete_dropout,
-                    state_mixing_mode=state_mixing_mode,
-                )
-                for layer_idx in range(n_layers)
-            ]
-        )
+        # Keep the model-specific FLARE++ adapter out of the general GALE API.
+        if attention_type == "GALE_FPP":
+            self.blocks = nn.ModuleList(
+                [
+                    _FLAREPlusPlusBlock(
+                        num_heads=n_head,
+                        hidden_dim=effective_hidden,
+                        dropout=dropout,
+                        act=act,
+                        mlp_ratio=mlp_ratio,
+                        slice_num=slice_num,
+                        context_dim=context_dim,
+                        concrete_dropout=concrete_dropout,
+                        state_mixing_mode=state_mixing_mode,
+                    )
+                    for _ in range(n_layers)
+                ]
+            )
+        else:
+            self.blocks = nn.ModuleList(
+                [
+                    GALEBlock(
+                        num_heads=n_head,
+                        hidden_dim=effective_hidden,
+                        dropout=dropout,
+                        act=act,
+                        mlp_ratio=mlp_ratio,
+                        slice_num=slice_num,
+                        last_layer=(layer_idx == n_layers - 1),
+                        use_te=use_te,
+                        plus=plus,
+                        context_dim=context_dim,
+                        spatial_shape=structured_shape,
+                        attention_type=attention_type,
+                        concrete_dropout=concrete_dropout,
+                        state_mixing_mode=state_mixing_mode,
+                    )
+                    for layer_idx in range(n_layers)
+                ]
+            )
 
         # Output projection layers - one per output type
         if use_te:
@@ -662,7 +680,7 @@ class GeoTransolver(Module):
 
     def _checkpoint_block(
         self,
-        block: GALEBlock,
+        block: nn.Module,
         x: tuple[torch.Tensor, ...] | list[torch.Tensor],
         embedding_states: torch.Tensor | None,
     ) -> list[torch.Tensor]:

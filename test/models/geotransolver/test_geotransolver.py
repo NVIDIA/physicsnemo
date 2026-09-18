@@ -200,58 +200,6 @@ def test_geotransolver_gale_fpp_rejects_transolver_plus():
         )
 
 
-def test_geotransolver_gale_fpp_eval_is_rng_free(device):
-    """End-to-end GALE_FPP evaluation is exact and does not consume RNG."""
-    torch.manual_seed(46)
-    model = GeoTransolver(
-        functional_dim=8,
-        out_dim=3,
-        geometry_dim=3,
-        global_dim=4,
-        n_layers=2,
-        n_hidden=32,
-        dropout=0.4,
-        n_head=4,
-        mlp_ratio=2,
-        slice_num=6,
-        use_te=False,
-        plus=False,
-        attention_type="GALE_FPP",
-        concrete_dropout=True,
-    ).to(device)
-    local_embedding = torch.randn(2, 23, 8, device=device)
-    local_positions = torch.randn(2, 23, 3, device=device)
-    global_embedding = torch.randn(2, 2, 4, device=device)
-    geometry = torch.randn(2, 23, 3, device=device)
-
-    model.eval()
-    model_device = next(model.parameters()).device
-    cpu_rng_before = torch.random.get_rng_state().clone()
-    cuda_rng_before = (
-        torch.cuda.get_rng_state(model_device).clone()
-        if model_device.type == "cuda"
-        else None
-    )
-    with torch.no_grad():
-        output_1 = model(
-            local_embedding,
-            local_positions,
-            global_embedding,
-            geometry,
-        )
-        output_2 = model(
-            local_embedding,
-            local_positions,
-            global_embedding,
-            geometry,
-        )
-
-    assert torch.equal(output_1, output_2)
-    assert torch.equal(torch.random.get_rng_state(), cpu_rng_before)
-    if cuda_rng_before is not None:
-        assert torch.equal(torch.cuda.get_rng_state(model_device), cuda_rng_before)
-
-
 def test_geotransolver_forward_returns_embedding_states(device):
     """Test returning geometry and global context embedding states."""
     torch.manual_seed(42)

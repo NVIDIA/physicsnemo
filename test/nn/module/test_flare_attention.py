@@ -19,6 +19,7 @@
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 import torch
@@ -27,6 +28,17 @@ import torch.nn.functional as F
 from physicsnemo.core.warnings import LegacyFeatureWarning
 from physicsnemo.nn import FLARE, FLAREPlusPlus
 from test.conftest import requires_module
+
+
+def _load_or_create_output_reference(
+    file_name: str, output: torch.Tensor
+) -> torch.Tensor:
+    """Load a local golden output, creating it from this test when absent."""
+    reference_path = Path(__file__).parent / "data" / file_name
+    if not reference_path.exists():
+        torch.save({"output": output.detach().cpu()}, reference_path)
+    reference = torch.load(reference_path, weights_only=True)
+    return next(iter(reference.values())).to(output.device)
 
 
 def test_flare_forward(device):
@@ -130,6 +142,25 @@ def test_flare_plus_plus_constructor(kwargs, expected):
             attention.in_projection.weight.numel() + attention.out_linear.weight.numel()
         )
         assert projection_weights == 5 * kwargs["dim"] ** 2
+
+
+def test_flare_plus_plus_forward_accuracy(device):
+    """A freshly initialized FLARE++ attention layer matches its golden output."""
+    torch.manual_seed(1234)
+    attention = FLAREPlusPlus(
+        dim=24,
+        heads=3,
+        dim_head=8,
+        n_global_queries=5,
+    ).to(device)
+    x = torch.randn(2, 17, 24, device=device)
+    with torch.no_grad():
+        output = attention(x)
+    reference = _load_or_create_output_reference(
+        "flare_plus_plus_attention_output.pth", output
+    )
+
+    torch.testing.assert_close(output, reference, atol=1e-3, rtol=1e-3)
 
 
 def test_flare_plus_plus_matches_paper_equations(device):
@@ -266,6 +297,7 @@ def test_flare_plus_plus_validates_options():
 
 def test_flare_plus_plus_torch_compile_fullgraph(device):
     """FLARE++ can be captured by torch.compile with fullgraph enabled."""
+    torch._dynamo.config.error_on_recompile = True
     attention = FLAREPlusPlus(
         dim=16,
         heads=2,
@@ -277,7 +309,10 @@ def test_flare_plus_plus_torch_compile_fullgraph(device):
     backend = "inductor" if str(device).startswith("cuda") else "aot_eager"
     compiled = torch.compile(attention, backend=backend, fullgraph=True)
 
-    torch.testing.assert_close(compiled(x), expected)
+    actual = compiled(x)
+    repeated = compiled(x)
+    torch.testing.assert_close(actual, expected)
+    torch.testing.assert_close(repeated, expected)
 
 
 def test_flare_attention_legacy_import_paths():

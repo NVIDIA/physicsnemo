@@ -106,11 +106,7 @@ physical-state slices, reducing attention cost at scale. Refer also the
     :exclude-members: forward
 
 The ``"GALE_FPP"`` backend uses the standalone FLARE++ mixer for token
-self-attention and adds only GeoTransolver's optional geometry/global-context
-cross-attention. The core FLARE++ implementation therefore remains shared with
-the standalone model rather than being embedded in GeoTransolver.
-
-.. autoclass:: physicsnemo.nn.module.gale.GALE_FPP
-    :show-inheritance:
-    :members:
-    :exclude-members: forward
+self-attention and adds a private, model-specific geometry/global-context
+cross-attention adapter. The core FLARE++ implementation therefore remains
+shared with the standalone model rather than being duplicated in
+GeoTransolver.
