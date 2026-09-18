@@ -66,10 +66,14 @@ def _make_inputs(device):
 def _load_or_create_output_reference(
     file_name: str, output: torch.Tensor
 ) -> torch.Tensor:
-    """Load a local golden output, creating it from this test when absent."""
+    """Load a local golden output, or create it and require a second run."""
     reference_path = DATA_DIR / file_name
     if not reference_path.exists():
         torch.save({"output": output.detach().cpu()}, reference_path)
+        raise IOError(
+            f"Golden output {reference_path} was missing and has been created; "
+            "commit it and re-run the test."
+        )
     reference = torch.load(reference_path, weights_only=True)
     return next(iter(reference.values())).to(output.device)
 
@@ -236,6 +240,10 @@ def test_reference_checkpoint_matches_golden(device):
     if not checkpoint.exists():
         torch.manual_seed(2026)
         _make_model().save(checkpoint)
+        raise IOError(
+            f"Reference checkpoint {checkpoint} was missing and has been created; "
+            "commit it and re-run the test."
+        )
     model = Module.from_checkpoint(checkpoint).to(device).eval()
     local_embedding, geometry, global_embedding = _make_inputs(device)
     with torch.no_grad():
@@ -306,6 +314,57 @@ def test_end_to_end_gradients(device):
     ):
         assert parameter.grad is not None
         assert torch.isfinite(parameter.grad).all()
+
+
+def test_activation_checkpointing_matches_outputs_and_gradients(device):
+    """Full checkpointing preserves FLARE++ outputs and gradients."""
+    checkpointing_components = ("context", "preprocess", "blocks", "output")
+    torch.manual_seed(19)
+    plain = _make_model(activation_checkpointing=False).to(device).train()
+    checkpointed = (
+        _make_model(
+            activation_checkpointing=True,
+            activation_checkpointing_components=checkpointing_components,
+        )
+        .to(device)
+        .train()
+    )
+    checkpointed.load_state_dict(plain.state_dict())
+
+    plain_inputs = tuple(tensor.requires_grad_(True) for tensor in _make_inputs(device))
+    checkpointed_inputs = tuple(
+        tensor.detach().clone().requires_grad_(True) for tensor in plain_inputs
+    )
+    plain_output = plain(
+        plain_inputs[0],
+        geometry=plain_inputs[1],
+        global_embedding=plain_inputs[2],
+    )
+    checkpointed_output = checkpointed(
+        checkpointed_inputs[0],
+        geometry=checkpointed_inputs[1],
+        global_embedding=checkpointed_inputs[2],
+    )
+
+    torch.testing.assert_close(checkpointed_output, plain_output)
+    plain_output.square().mean().backward()
+    checkpointed_output.square().mean().backward()
+
+    for checkpointed_input, plain_input in zip(
+        checkpointed_inputs, plain_inputs, strict=True
+    ):
+        torch.testing.assert_close(checkpointed_input.grad, plain_input.grad)
+    for (checkpointed_name, checkpointed_parameter), (
+        plain_name,
+        plain_parameter,
+    ) in zip(checkpointed.named_parameters(), plain.named_parameters(), strict=True):
+        assert checkpointed_name == plain_name
+        assert checkpointed_parameter.grad is not None, checkpointed_name
+        assert plain_parameter.grad is not None, plain_name
+        torch.testing.assert_close(
+            checkpointed_parameter.grad,
+            plain_parameter.grad,
+        )
 
 
 def test_eval_is_rng_free_with_concrete_dropout(device):

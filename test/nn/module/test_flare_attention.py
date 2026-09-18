@@ -33,10 +33,14 @@ from test.conftest import requires_module
 def _load_or_create_output_reference(
     file_name: str, output: torch.Tensor
 ) -> torch.Tensor:
-    """Load a local golden output, creating it from this test when absent."""
+    """Load a local golden output, or create it and require a second run."""
     reference_path = Path(__file__).parent / "data" / file_name
     if not reference_path.exists():
         torch.save({"output": output.detach().cpu()}, reference_path)
+        raise IOError(
+            f"Golden output {reference_path} was missing and has been created; "
+            "commit it and re-run the test."
+        )
     reference = torch.load(reference_path, weights_only=True)
     return next(iter(reference.values())).to(output.device)
 

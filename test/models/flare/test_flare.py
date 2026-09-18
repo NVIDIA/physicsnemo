@@ -76,10 +76,14 @@ def _make_checkpointing_model_pair(
 def _load_or_create_output_reference(
     file_name: str, output: torch.Tensor
 ) -> torch.Tensor:
-    """Load a local golden output, creating it from this test when absent."""
+    """Load a local golden output, or create it and require a second run."""
     reference_path = Path(__file__).parent / "data" / file_name
     if not reference_path.exists():
         torch.save({"output": output.detach().cpu()}, reference_path)
+        raise IOError(
+            f"Golden output {reference_path} was missing and has been created; "
+            "commit it and re-run the test."
+        )
     reference = torch.load(reference_path, weights_only=True)
     return next(iter(reference.values())).to(output.device)
 
@@ -205,6 +209,11 @@ def test_flare_plus_plus_forward_accuracy(
     device, n_hidden, n_head, slice_num, file_name
 ):
     """Standalone FLARE++ forward passes match committed golden outputs."""
+    if torch.__version__ < "2.12":
+        pytest.skip(
+            "FLARE++ golden outputs require torch >= 2.12 because "
+            "trunc_normal_ initialization changed in PyTorch 2.12."
+        )
     torch.manual_seed(1234)
     model = FLAREPlusPlus(
         functional_dim=2,
@@ -325,6 +334,10 @@ def test_flare_plus_plus_reference_checkpoint(device):
             mlp_ratio=1,
             slice_num=4,
         ).save(checkpoint)
+        raise IOError(
+            f"Reference checkpoint {checkpoint} was missing and has been created; "
+            "commit it and re-run the test."
+        )
     model = Module.from_checkpoint(checkpoint).to(device)
     torch.manual_seed(4321)
     functional_input = torch.randn(1, 13, 2, device=device)
