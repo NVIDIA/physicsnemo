@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""Domain-parallel tests for FLARE and FLARE++ (DDP strategy, use_te=False).
+r"""Domain-parallel tests for FLARE (DDP strategy, use_te=False).
 
 FLARE attention makes two SDPA passes with mixed placements (op-level
 coverage in ``test/domain_parallel/ops/test_sdpa.py``):
@@ -23,9 +23,6 @@ coverage in ``test/domain_parallel/ops/test_sdpa.py``):
   queries attend to the sharded point cloud.
 - pass 2: ``sdpa(q_sharded, K_replicated, V_replicated)`` — embarrassingly
   parallel over the query shards.
-
-FLARE++ uses the first placement pattern twice, first to synthesize dynamic
-queries and then to gather physical values, before the same sharded decode.
 
 The ``unified_pos=True`` case shards the model's ``(1, N, ref^2)``
 position-grid buffer over the domain mesh (fsdp_spatial pattern,
@@ -40,7 +37,7 @@ import torch.distributed as dist
 from torch.distributed.tensor.placement_types import Shard
 
 from physicsnemo.domain_parallel import scatter_tensor
-from physicsnemo.models.flare import FLARE, FLAREPlusPlus
+from physicsnemo.models.flare import FLARE
 from test.domain_parallel.models.harness import (
     DomainParallelModelCase,
     run_domain_parallel_model_check,
@@ -49,9 +46,9 @@ from test.domain_parallel.models.harness import (
 _SIDE_BY_NDIMS = {2: 128, 3: 24}
 
 
-def _build_flare(model_type=FLARE, structured_shape=None, unified_pos=False, ref=8):
+def _build_flare(structured_shape=None, unified_pos=False, ref=8):
     def build(device):
-        model = model_type(
+        model = FLARE(
             functional_dim=3,
             out_dim=2,
             # unified_pos derives embedding_dim = ref^2 from the grid buffer.
@@ -82,7 +79,9 @@ def _check_output(n_points):
     return check
 
 
-def _irregular_case(model_type=FLARE, n_points=16384):
+def _irregular_case():
+    n_points = 16384
+
     def build_inputs(device):
         fx = torch.randn(1, n_points, 3, device=device)
         embedding = torch.randn(1, n_points, 5, device=device)
@@ -98,8 +97,8 @@ def _irregular_case(model_type=FLARE, n_points=16384):
         return (sharded_fx,), {"embedding": sharded_embedding}
 
     return DomainParallelModelCase(
-        name=f"{model_type.__name__.lower()}-irregular",
-        build_model=_build_flare(model_type, None),
+        name="flare-irregular",
+        build_model=_build_flare(None),
         build_inputs=build_inputs,
         shard_inputs=shard_inputs,
         strategy="ddp",
@@ -109,7 +108,7 @@ def _irregular_case(model_type=FLARE, n_points=16384):
     )
 
 
-def _structured_2d_case(model_type=FLARE):
+def _structured_2d_case():
     dims = (_SIDE_BY_NDIMS[2],) * 2
     n_points = math.prod(dims)
 
@@ -130,8 +129,8 @@ def _structured_2d_case(model_type=FLARE):
         return (sharded_fx,), {"embedding": sharded_embedding}
 
     return DomainParallelModelCase(
-        name=f"{model_type.__name__.lower()}-structured2d",
-        build_model=_build_flare(model_type, dims),
+        name="flare-structured2d",
+        build_model=_build_flare(dims),
         build_inputs=build_inputs,
         shard_inputs=shard_inputs,
         strategy="ddp",
@@ -141,13 +140,7 @@ def _structured_2d_case(model_type=FLARE):
     )
 
 
-_CASES = [
-    _irregular_case(),
-    _structured_2d_case(),
-    # Exercise an uneven token shard in both communicating encoder passes.
-    _irregular_case(FLAREPlusPlus, n_points=16387),
-    _structured_2d_case(FLAREPlusPlus),
-]
+_CASES = [_irregular_case(), _structured_2d_case()]
 
 
 @pytest.mark.multigpu_static
@@ -199,7 +192,7 @@ def test_flare_unified_pos_buffer_sharded(distributed_mesh_2d):
 
     case = DomainParallelModelCase(
         name="flare-unified-pos",
-        build_model=_build_flare(FLARE, dims, unified_pos=True, ref=8),
+        build_model=_build_flare(dims, unified_pos=True, ref=8),
         build_inputs=build_inputs,
         shard_inputs=shard_inputs,
         strategy="fsdp_spatial",

@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Adds standalone FLARE++ attention and model APIs, with input-conditioned
   dynamic routing, plus a ``GALE_FPP`` backend for using the same mixer inside
-  GeoTransolver and exact token-sharded domain parallelism.
+  GeoTransolver.
 - Adds `physicsnemo.nn.functional.safe_normalize` for vector normalization
   across floating-point dtypes and scales, preserving zero vectors and the
   input dtype under autocast.

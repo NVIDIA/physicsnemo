@@ -26,10 +26,9 @@ Placement contract:
 - Output is (B, N, out_dim) with ``Shard(1)``, numerically matching the
   gathered single-GPU reference.
 
-The GALE cases exercise sharded slice attention with cross-attention context;
-GALE_FA exercises one distributed FLARE encoder and GALE_FPP exercises the two
-distributed FLARE++ encoders plus sharded decode (op-level coverage in
-``test/domain_parallel/ops/test_sdpa.py``).
+The GALE cases exercise sharded slice attention with cross-attention
+context; GALE_FA additionally exercises the mixed-placement SDPA paths
+(op-level coverage in ``test/domain_parallel/ops/test_sdpa.py``).
 """
 
 import pytest
@@ -51,7 +50,6 @@ from test.domain_parallel.ops.utils import numerical_shard_tensor_check
 # so keep the point budgets modest. Sizes divisible by 2/4/8 for N; N_geo
 # deliberately NOT divisible so the geometry cloud is unevenly sharded.
 _N_POINTS = 16384
-_FLAREPP_N_POINTS = 16387
 _N_GEO = 2345
 _N_GLOBAL_TOKENS = 4
 _GLOBAL_DIM = 8
@@ -138,20 +136,20 @@ def _check_output(n_points):
     return check
 
 
-def _irregular_case(attention_type, n_points=_N_POINTS):
+def _irregular_case(attention_type):
     return DomainParallelModelCase(
         name=f"geotransolver-irregular-{attention_type.lower()}",
         build_model=_build_geotransolver(attention_type),
-        build_inputs=_build_inputs(n_points),
+        build_inputs=_build_inputs(_N_POINTS),
         shard_inputs=_shard_inputs,
         strategy="ddp",
-        output_check_fn=_check_output(n_points),
+        output_check_fn=_check_output(_N_POINTS),
         atol=1e-4,
         rtol=1e-4,
     )
 
 
-def _structured_2d_case(attention_type="GALE"):
+def _structured_2d_case():
     dims = (128, 128)
     n_points = dims[0] * dims[1]
 
@@ -190,8 +188,8 @@ def _structured_2d_case(attention_type="GALE"):
         return (sharded,), sharded_kwargs
 
     return DomainParallelModelCase(
-        name=f"geotransolver-structured2d-{attention_type.lower()}",
-        build_model=_build_geotransolver(attention_type, structured_shape=dims),
+        name="geotransolver-structured2d-gale",
+        build_model=_build_geotransolver("GALE", structured_shape=dims),
         build_inputs=build_inputs,
         shard_inputs=shard_inputs,
         strategy="ddp",
@@ -208,10 +206,7 @@ _CASES = [
     # GALE_FA has no structured variant; it additionally exercises the
     # mixed-placement SDPA wrapper.
     _irregular_case("GALE_FA"),
-    # FLARE++ performs two distributed encoders and a local sharded decoder.
-    _irregular_case("GALE_FPP", n_points=_FLAREPP_N_POINTS),
     _structured_2d_case(),
-    _structured_2d_case("GALE_FPP"),
 ]
 
 
@@ -400,11 +395,12 @@ def test_context_builder_distributed(distributed_mesh):
 
 @pytest.mark.multigpu_static
 @pytest.mark.timeout(300)
-@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA", "GALE_FPP"])
-def test_attention_block_distributed(distributed_mesh, attention_type):
-    r"""One attention block: sharded hidden states and replicated context.
+@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
+def test_gale_block_distributed(distributed_mesh, attention_type):
+    r"""One GALEBlock: sharded hidden states + replicated context vs reference.
 
-    Covers GALE, fixed-query FLARE, and dynamic-query FLARE++ backends.
+    Covers both attention backends; GALE_FA routes through the
+    mixed-placement SDPA paths.
     """
     dm = DistributedManager()
     model = _build_geotransolver(attention_type)(dm.device)
