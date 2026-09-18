@@ -25,6 +25,7 @@ from torch.nn.functional import dropout, scaled_dot_product_attention, silu
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.nn.module.fully_connected_layers import Linear
+from physicsnemo.nn.module.utils.utils import _validate_amp
 from physicsnemo.nn.module.utils.weight_init import _weight_init
 
 
@@ -450,6 +451,10 @@ class UNetBlock3D(Module):
     init_attn : dict or None, optional, default=None
         Weight initialization kwargs for the attention QKV projection. Defaults to
         ``init`` if ``None``.
+    amp_mode : bool, optional, default=False
+        A flag indicating whether mixed-precision (AMP) training is enabled.
+        When ``False``, running the block under ``torch.autocast`` raises an
+        error; when ``True``, dtype handling is delegated to autocast.
 
     Forward
     -------
@@ -497,6 +502,7 @@ class UNetBlock3D(Module):
         init: Dict[str, Any] = dict(),
         init_zero: Dict[str, Any] = dict(init_weight=0),
         init_attn: Any = None,
+        amp_mode: bool = False,
     ):
         super().__init__(meta=ModelMetaData())
 
@@ -507,6 +513,7 @@ class UNetBlock3D(Module):
         self.dropout = dropout
         self.skip_scale = skip_scale
         self.adaptive_scale = adaptive_scale
+        self.amp_mode = amp_mode
         self.act = silu if activation == "silu" else torch.nn.functional.gelu
 
         self.norm0 = GroupNorm3D(num_channels=in_channels, eps=eps)
@@ -522,6 +529,7 @@ class UNetBlock3D(Module):
         self.affine = Linear(
             in_features=emb_channels,
             out_features=out_channels * (2 if adaptive_scale else 1),
+            amp_mode=amp_mode,
             **init,
         )
         self.norm1 = GroupNorm3D(num_channels=out_channels, eps=eps)
@@ -563,7 +571,10 @@ class UNetBlock3D(Module):
         x = self.conv0(self.act(self.norm0(x)))
 
         # Affine conditioning from emb, broadcast over spatial dims
-        params = self.affine(emb).unsqueeze(2).unsqueeze(3).unsqueeze(4).to(x.dtype)
+        params = self.affine(emb).unsqueeze(2).unsqueeze(3).unsqueeze(4)
+        _validate_amp(self.amp_mode)
+        if not self.amp_mode and params.dtype != x.dtype:
+            params = params.to(x.dtype)
         if self.adaptive_scale:
             scale, shift = params.chunk(chunks=2, dim=1)
             x = self.act(torch.addcmul(shift, self.norm1(x), scale + 1))
