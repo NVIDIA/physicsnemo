@@ -23,6 +23,9 @@ FLARE++ replaces FLARE's fixed learned routing queries with routing queries
 synthesized from the current input. It uses one attention pass to create those
 queries and the usual FLARE gather/scatter pair to route information, preserving
 linear complexity in the number of input tokens for a fixed query count.
+With PhysicsNeMo domain parallelism, the token dimension may be sharded across
+devices: both encoder calls perform globally normalized distributed attention,
+while the decoder remains token-local, so no device gathers the full sequence.
 
 For details, see the `FLARE++ paper
 <https://arxiv.org/abs/2608.11519>`__.

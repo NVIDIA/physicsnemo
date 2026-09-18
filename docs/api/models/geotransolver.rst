@@ -109,4 +109,5 @@ The ``"GALE_FPP"`` backend uses the standalone FLARE++ mixer for token
 self-attention and adds a private, model-specific geometry/global-context
 cross-attention adapter. The core FLARE++ implementation therefore remains
 shared with the standalone model rather than being duplicated in
-GeoTransolver.
+GeoTransolver. The backend also supports token-sharded domain parallelism for
+both FLARE++ routing and GeoTransolver context attention.

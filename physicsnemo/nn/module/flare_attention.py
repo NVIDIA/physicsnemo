@@ -266,6 +266,10 @@ class FLAREPlusPlus(nn.Module):
     use scaled dot-product attention, so the cost is linear in the number of
     input tokens when the number of routing queries is fixed.
 
+    PhysicsNeMo ``ShardTensor`` inputs may shard the token dimension. The two
+    encoder calls then use globally normalized distributed SDPA, and the
+    decoder preserves the token sharding without gathering the full sequence.
+
     For architecture details, see the `FLARE++ paper
     <https://arxiv.org/abs/2608.11519>`_.
 
@@ -406,14 +410,6 @@ class FLAREPlusPlus(nn.Module):
             if x.ndim != 3:
                 raise ValueError(
                     f"Expected a 3D input tensor (B, N, C), got shape {tuple(x.shape)}"
-                )
-            # Exact token-sharded FLARE++ needs globally normalized encoders.
-            # Ordinary DDP tensors do not expose ``redistribute`` and remain
-            # fully supported.
-            if hasattr(x, "redistribute"):
-                raise NotImplementedError(
-                    "FLAREPlusPlus does not yet support token-sharded inputs; "
-                    "use replicated inputs with data parallelism."
                 )
 
         output, _ = self._compute_attention(x)
