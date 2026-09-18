@@ -37,22 +37,28 @@ pipeline:
     # Interior consumed as a point cloud; drop tet topology so the point
     # subsample is a cheap contiguous block read (see drivaer_ml_volume.yaml).
     drop_interior_cells: true
-    # In-file boundaries unused by the volume pipeline (SDF uses stl_geometry);
-    # drop them to skip per-sample subsample + pin.
-    drop_in_file_boundaries: true
+    # Preserve in-file boundaries as the lossless default. Point-based model
+    # templates that consume only the interior explicitly opt into dropping
+    # them to skip per-sample subsampling and pinning.
+    drop_in_file_boundaries: false
     extra_boundaries:
       stl_geometry:
         pattern: "*.stl.pmsh"
   # augmentations:
   #   - _target_: ${dp:RandomRotateMesh}
   #     axes: ["z"]
+  #     mode: axis_aligned
   #     transform_point_data: true
   #     transform_global_data: true
   #   - _target_: ${dp:RandomTranslateMesh}
   #     distribution:
   #       _target_: torch.distributions.Uniform
-  #       low: [-1.0, -1.0, 0.0]
-  #       high: [1.0, 1.0, 0.0]
+  #       low:
+  #         _target_: torch.tensor
+  #         data: [-1.0, -1.0, 0.0]
+  #       high:
+  #         _target_: torch.tensor
+  #         data: [1.0, 1.0, 0.0]
   transforms:
     # - _target_: ${dp:CenterMesh}
     #   use_area_weighting: false

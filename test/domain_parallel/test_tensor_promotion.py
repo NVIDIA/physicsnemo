@@ -150,3 +150,42 @@ def test_promotion_disabled_1d(distributed_mesh):
 @pytest.mark.timeout(120)
 def test_promotion_disabled_2d(distributed_mesh_2d):
     run_promotion_disabled(distributed_mesh_2d)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+def test_grad_tracking_scalar_gets_plain_grad(distributed_mesh):
+    r"""A grad-tracking 0-dim scalar in ShardTensor math gets a plain grad.
+
+    Regression for learnable scalar gates: 0-dim tensors used to be
+    exempt from promotion (DTensor handles them natively in forward), but
+    the implicit-replication path emits the scalar's cotangent as a DTensor
+    with no from_local bridge, depositing a DTensor ``.grad`` on the plain
+    leaf. Grad-tracking scalars must route through the differentiable
+    promotion bridge instead.
+    """
+    dm = DistributedManager()
+    torch.manual_seed(7)
+    n = 8 * distributed_mesh.size(0) + 3
+    full_a = torch.randn(1, n, 4, device=dm.device)
+    full_b = torch.randn(1, n, 4, device=dm.device)
+
+    def run(a, b):
+        gate = torch.zeros((), device=dm.device, requires_grad=True)
+        w = torch.sigmoid(gate)
+        out = w * a + (1 - w) * b
+        loss = out.full_tensor().mean() if hasattr(out, "full_tensor") else out.mean()
+        loss.backward()
+        return gate.grad
+
+    reference_grad = run(full_a, full_b)
+
+    sharded_grad = run(
+        scatter_tensor(full_a, 0, distributed_mesh, (Shard(1),)),
+        scatter_tensor(full_b, 0, distributed_mesh, (Shard(1),)),
+    )
+
+    assert type(sharded_grad) is torch.Tensor, (
+        f"scalar gate grad leaked as {type(sharded_grad).__name__}"
+    )
+    torch.testing.assert_close(sharded_grad, reference_grad, atol=1e-5, rtol=1e-5)

@@ -28,6 +28,12 @@ from typing import Optional
 import torch
 from tensordict import TensorDict
 
+from physicsnemo.datapipes.keys import (
+    as_nested_key,
+    as_nested_keys,
+    get_leaf,
+    with_leaf_name,
+)
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.base import Transform
 from physicsnemo.nn.functional import knn
@@ -95,10 +101,10 @@ class BoundingBoxFilter(Transform):
             These maintain correspondence with the filtered coordinates.
         """
         super().__init__()
-        self.input_keys = input_keys
+        self.input_keys = as_nested_keys(input_keys)
         self.bbox_min = bbox_min
         self.bbox_max = bbox_max
-        self.dependent_keys = dependent_keys or []
+        self.dependent_keys = as_nested_keys(dependent_keys)
 
     def __call__(self, data: TensorDict) -> TensorDict:
         """
@@ -120,7 +126,7 @@ class BoundingBoxFilter(Transform):
             if coord_key not in data:
                 continue
 
-            coords = data[coord_key]
+            coords = get_leaf(data, coord_key, what="Coordinate key")
 
             # Move bbox to same device
             bbox_min = self.bbox_min.to(coords.device)
@@ -138,7 +144,9 @@ class BoundingBoxFilter(Transform):
             # Apply same mask to dependent keys
             for dep_key in self.dependent_keys:
                 if dep_key in data:
-                    updates[dep_key] = data[dep_key][ids_in_bbox]
+                    updates[dep_key] = get_leaf(data, dep_key, what="Dependent key")[
+                        ids_in_bbox
+                    ]
 
         return data.update(updates)
 
@@ -212,7 +220,7 @@ class CreateGrid(Transform):
             Maximum corner of bounding box, shape :math:`(3,)`.
         """
         super().__init__()
-        self.output_key = output_key
+        self.output_key = as_nested_key(output_key)
         self.resolution = resolution
         self.bbox_min = bbox_min
         self.bbox_max = bbox_max
@@ -334,11 +342,11 @@ class KNearestNeighbors(Transform):
             (e.g., ``["normals", "areas"]``). If None, only extracts coordinates.
         """
         super().__init__()
-        self.points_key = points_key
-        self.queries_key = queries_key
+        self.points_key = as_nested_key(points_key)
+        self.queries_key = as_nested_key(queries_key)
         self.k = k
         self.output_prefix = output_prefix
-        self.extract_keys = extract_keys or []
+        self.extract_keys = as_nested_keys(extract_keys)
         self.drop_first_neighbor = drop_first_neighbor
 
     def __call__(self, data: TensorDict) -> TensorDict:
@@ -360,13 +368,8 @@ class KNearestNeighbors(Transform):
         KeyError
             If points or queries keys are not found in the data.
         """
-        if self.points_key not in data:
-            raise KeyError(f"Points key '{self.points_key}' not found")
-        if self.queries_key not in data:
-            raise KeyError(f"Queries key '{self.queries_key}' not found")
-
-        points = data[self.points_key]
-        queries = data[self.queries_key]
+        points = get_leaf(data, self.points_key, what="Points key")
+        queries = get_leaf(data, self.queries_key, what="Queries key")
 
         # Compute k-NN
         neighbor_indices, neighbor_distances = knn(
@@ -388,14 +391,18 @@ class KNearestNeighbors(Transform):
             neighbor_coords = points[neighbor_indices]
         updates[f"{self.output_prefix}_coords"] = neighbor_coords
 
-        # Extract additional features for neighbors
+        # Extract additional features for neighbors. A nested source key
+        # ``("solution", "v")`` lands at ``("solution", "<prefix>_v")``.
         for key in self.extract_keys:
             if key in data:
+                features = get_leaf(data, key, what="Extract key")
                 if self.drop_first_neighbor:
-                    neighbor_features = data[key][neighbor_indices][:, 1:]
+                    neighbor_features = features[neighbor_indices][:, 1:]
                 else:
-                    neighbor_features = data[key][neighbor_indices]
-                updates[f"{self.output_prefix}_{key}"] = neighbor_features
+                    neighbor_features = features[neighbor_indices]
+                updates[with_leaf_name(key, lambda n: f"{self.output_prefix}_{n}")] = (
+                    neighbor_features
+                )
 
         return data.update(updates)
 
@@ -467,9 +474,9 @@ class CenterOfMass(Transform):
             Key to store the computed center of mass, shape :math:`(1, 3)`.
         """
         super().__init__()
-        self.coords_key = coords_key
-        self.areas_key = areas_key
-        self.output_key = output_key
+        self.coords_key = as_nested_key(coords_key)
+        self.areas_key = as_nested_key(areas_key) if areas_key is not None else None
+        self.output_key = as_nested_key(output_key)
 
     def __call__(self, data: TensorDict) -> TensorDict:
         """
@@ -490,15 +497,9 @@ class CenterOfMass(Transform):
         KeyError
             If coordinates or areas keys are not found in the data.
         """
-        if self.coords_key not in data:
-            raise KeyError(f"Coordinates key '{self.coords_key}' not found")
-
-        coords = data[self.coords_key]
+        coords = get_leaf(data, self.coords_key, what="Coordinates key")
         if self.areas_key is not None:
-            if self.areas_key not in data:
-                raise KeyError(f"Areas key '{self.areas_key}' not found")
-
-            areas = data[self.areas_key]
+            areas = get_leaf(data, self.areas_key, what="Areas key")
             # Compute weighted center of mass
             total_area = areas.sum()
 

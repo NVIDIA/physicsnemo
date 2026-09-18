@@ -54,6 +54,7 @@ import torch
 from forward_kwargs import extract_targets, resolve_forward_kwargs
 from jaxtyping import Float
 from output_normalize import IOType
+from tensordict import TensorDict
 from utils import FieldType
 
 ### ---------------------------------------------------------------------------
@@ -81,10 +82,15 @@ def _add_batch_dim_recursive(value: Any, *, leaf_fn) -> Any:
     """Apply *leaf_fn* to every tensor in a (possibly nested) value.
 
     Non-tensor values are passed through unchanged. Dicts and lists / tuples
-    are walked recursively.
+    are walked recursively; a TensorDict-valued kwarg (a forward_kwargs path
+    that resolves to a whole group of fields) is walked leaf by leaf with
+    ``TensorDict.apply`` so its nesting is preserved.
     """
     if isinstance(value, torch.Tensor):
         return leaf_fn(value)
+    if isinstance(value, TensorDict):
+        ### ``batch_size=[]`` so leaves may change shape freely.
+        return value.apply(leaf_fn, batch_size=[])
     if isinstance(value, dict):
         return {
             k: _add_batch_dim_recursive(v, leaf_fn=leaf_fn) for k, v in value.items()

@@ -100,10 +100,7 @@ def load(
             template.n_points, 1, generator=generator, device=device
         )
         # Log-normal scaling applied to base icosahedron (same as lumpy_sphere)
-        template = Mesh(
-            points=template.points * noise.exp(),
-            cells=template.cells,
-        )
+        template = template.with_points(template.points * noise.exp())
 
     ### Step 3: Subdivide with loop scheme (if any)
     # Loop subdivision is an approximating scheme that smooths the noisy base

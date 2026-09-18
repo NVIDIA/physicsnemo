@@ -19,8 +19,8 @@
 # FLARE template -- SURFACE recipes.
 # ---------------------------------------------------------------------------
 # FLARE inherits from Transolver and replaces physics attention blocks
-# with FLARE (Fast Low-rank Attention Routing Engine) blocks.  TE is
-# not supported, so there are no use_te / plus knobs to configure.
+# with FLARE (Fast Low-rank Attention Routing Engine) blocks. The plus
+# variant is disabled internally; Transformer Engine remains configurable.
 # Forward signature matches Transolver's, hence the identical
 # forward_kwargs spec.
 input_type: tensors
@@ -48,3 +48,6 @@ model:
   slice_num: 256          # n_global_queries for FLARE attention
   unified_pos: false
   structured_shape: null  # unstructured mesh
+  use_te: false
+  activation_checkpointing: false
+  checkpointing_ratio: 1.0

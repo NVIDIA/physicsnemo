@@ -46,7 +46,7 @@ repos:
       entry: python test/ci_tests/header_check.py
       language: python
       additional_dependencies: ['GitPython']
-      files: \.(py|yaml|ci|release)$|Dockerfile$
+      files: \.(py|yaml|yml|ci|release)$|Dockerfile$
       exclude: ^(physicsnemo/internal/|docs/)
 
 -   repo: https://github.com/pre-commit/pre-commit-hooks
