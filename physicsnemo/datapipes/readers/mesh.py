@@ -35,7 +35,7 @@ from physicsnemo.datapipes._indexing import _cyclic_block_indices
 from physicsnemo.datapipes._rng import spawn_generator
 from physicsnemo.datapipes.registry import register
 from physicsnemo.mesh import DomainMesh, Mesh
-from physicsnemo.mesh.calculus.measure import compose_measure_weights
+from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY, scale_measures
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ def _subsample_mesh_points(
     falls back to ``slice_points``.
 
     Unlike :func:`_subsample_mesh_cells`, this does NOT maintain
-    measure weights: dropping points removes cells implicitly, with
+    cell-measure corrections: dropping points removes cells implicitly, with
     no per-cell inclusion probability to invert.  Prefer cell
     subsampling when downstream code integrates over the mesh.
     """
@@ -73,14 +73,18 @@ def _subsample_mesh_points(
         device=mesh.points.device,
     )
     if mesh.n_cells == 0:
-        return Mesh(
+        result = Mesh(
             points=mesh.points[indices],
             cells=mesh.cells,
             point_data=mesh.point_data[indices],
             cell_data=mesh.cell_data,
             global_data=mesh.global_data,
         )
-    return mesh.slice_points(indices)
+    else:
+        result = mesh.slice_points(indices)
+    if EFFECTIVE_MEASURE_KEY in result.point_data:
+        scale_measures(result, mesh.n_points / n_points, association="points")
+    return result
 
 
 def _subsample_mesh_cells(
@@ -97,8 +101,8 @@ def _subsample_mesh_cells(
 
     Preserves the mesh's integration measure: every cell's inclusion
     probability is exactly ``k/N``, and the retained cells' measure
-    weights (see :mod:`physicsnemo.mesh.calculus.measure`) are multiplied by
-    ``N/k``, composing with any weights from earlier sampling stages.
+    (see :mod:`physicsnemo.mesh.calculus.measure`) is multiplied by
+    ``N/k``, composing with corrections from earlier sampling stages.
     Consumers of the effective cell measure (see
     :mod:`physicsnemo.mesh.calculus.measure`) then see an unbiased estimate
     of the full-mesh measure rather than the ~``k/N`` retained fraction.
@@ -125,7 +129,7 @@ def _subsample_mesh_cells(
     ### Compose the Horvitz-Thompson weight for this sampling stage.
     ### slice_cells/slice_points returned fresh TensorDicts, so the
     ### in-place update cannot leak into the memmap-backed source.
-    compose_measure_weights(mesh, n_total / n_cells)
+    scale_measures(mesh, n_total / n_cells)
     return mesh
 
 
@@ -146,7 +150,7 @@ def _zarr_mesh_subsampled(
     """Partial-read a zarr mesh group: fetch only the subsample window.
 
     Reproduces :func:`_subsample_mesh` semantics (cyclic contiguous blocks,
-    vertex compaction, Horvitz-Thompson measure weights) while reading only
+    vertex compaction, Horvitz-Thompson measure corrections) while reading only
     the selected rows from the store instead of materializing the full mesh.
     """
     from physicsnemo.mesh.io import io_zarr as _ioz
@@ -174,7 +178,7 @@ def _zarr_mesh_subsampled(
             ),
             global_data=_ioz._read_tree(group, "global_data"),
         )
-        compose_measure_weights(mesh, total_cells / n_cells)
+        scale_measures(mesh, total_cells / n_cells)
         if n_points is not None:
             mesh = _subsample_mesh_points(mesh, n_points, generator=generator)
         return mesh
@@ -182,7 +186,7 @@ def _zarr_mesh_subsampled(
     if total_cells == 0 and n_points is not None and total_points > n_points:
         indices = _cyclic_block_indices(total_points, n_points, generator=generator)
         runs = _indices_to_runs(indices)
-        return Mesh(
+        mesh = Mesh(
             points=_ioz._read_rows(group["points"], runs),
             point_data=_ioz._read_tree(
                 group, "point_data", leaf_reader=lambda a: _ioz._read_rows(a, runs)
@@ -190,6 +194,9 @@ def _zarr_mesh_subsampled(
             cell_data=_ioz._read_tree(group, "cell_data"),
             global_data=_ioz._read_tree(group, "global_data"),
         )
+        if EFFECTIVE_MEASURE_KEY in mesh.point_data:
+            scale_measures(mesh, total_points / n_points, association="points")
+        return mesh
 
     # No subsampling applies (small mesh, or unsupported combination):
     # eager full read keeps semantics identical to the memmap path.
@@ -263,7 +270,7 @@ class MeshReader:
             choice for triangulated surface meshes where downstream
             transforms depend on cells (e.g. surface normals, cell
             centroids, cell_data fields).  Records the inverse inclusion
-            probability as measure weights, preserving the integration
+            probability to effective measures, preserving the integration
             measure (see :mod:`physicsnemo.mesh.calculus.measure`).  Applied before
             ``subsample_n_points`` when both are set.
         """
@@ -449,7 +456,7 @@ class DomainMeshReader:
             sequential I/O, then compacts unreferenced vertices.
             Preserves cell topology and is the correct choice when
             downstream transforms depend on cells.  Records the
-            inverse inclusion probability as measure weights, preserving
+            inverse inclusion probability to effective measures, preserving
             the integration measure (see
             :mod:`physicsnemo.mesh.calculus.measure`).  Applied
             before

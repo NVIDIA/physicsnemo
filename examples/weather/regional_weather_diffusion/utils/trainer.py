@@ -916,6 +916,7 @@ class Trainer:
             seed=0,
             num_workers=0,  # self.cfg.training.num_data_workers,
             shuffle=False,
+            pin_memory=False,
         )
         valid_iter = self.parallel_helper.sharded_data_iter(
             valid_dataloader, self.validation_steps

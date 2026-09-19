@@ -14,16 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for ``physicsnemo.mesh.calculus.measure`` and weighted integration.
-
-Covers the module contract (ones fallback, multiplicative composition,
-storage in ``cell_data`` under the reserved key), that ``integrate`` /
-``integrate_flux`` / ``integrate_moment`` consume the effective measure
-``cell_measures = cell_areas * measure_weights``, that a
-Horvitz-Thompson-weighted cell subsample yields unbiased integrals, and
-that weights survive slicing and rigid/scaling transforms with the
-correct semantics.
-"""
+"""Effective cell measures, composable sampling corrections, and integration."""
 
 import math
 
@@ -33,10 +24,9 @@ import torch
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.calculus import integrate_moment
 from physicsnemo.mesh.calculus.measure import (
-    MEASURE_WEIGHTS_KEY,
-    cell_measure_weights,
+    EFFECTIVE_MEASURE_KEY,
     cell_measures,
-    compose_measure_weights,
+    scale_measures,
 )
 from physicsnemo.mesh.primitives.basic import two_triangles_2d
 
@@ -67,53 +57,53 @@ def make_triangle_strip(n_cells: int, widths: torch.Tensor | None = None) -> Mes
 class TestSamplingWeights:
     def test_defaults_to_ones(self):
         mesh = two_triangles_2d.load()
-        w = cell_measure_weights(mesh)
+        w = cell_measures(mesh)
         assert w.shape == (mesh.n_cells,)
-        torch.testing.assert_close(w, torch.ones(mesh.n_cells))
+        torch.testing.assert_close(w, mesh.cell_areas)
         ### The fallback must not materialize the reserved key.
-        assert MEASURE_WEIGHTS_KEY not in mesh.cell_data.keys()
+        assert EFFECTIVE_MEASURE_KEY not in mesh.cell_data.keys()
         ### And the effective measure is exactly the geometric one.
         torch.testing.assert_close(cell_measures(mesh), mesh.cell_areas)
 
     def test_compose_roundtrip_via_reserved_key(self):
         mesh = two_triangles_2d.load()
-        compose_measure_weights(mesh, torch.tensor([2.0, 3.0]))
-        assert MEASURE_WEIGHTS_KEY in mesh.cell_data.keys()
-        torch.testing.assert_close(cell_measure_weights(mesh), torch.tensor([2.0, 3.0]))
-        ### Stages compose multiplicatively.
-        compose_measure_weights(mesh, 10.0)
+        scale_measures(mesh, torch.tensor([2.0, 3.0]))
+        assert EFFECTIVE_MEASURE_KEY in mesh.cell_data.keys()
         torch.testing.assert_close(
-            cell_measure_weights(mesh), torch.tensor([20.0, 30.0])
+            cell_measures(mesh), mesh.cell_areas * torch.tensor([2.0, 3.0])
+        )
+        ### Stages compose multiplicatively.
+        scale_measures(mesh, 10.0)
+        torch.testing.assert_close(
+            cell_measures(mesh), mesh.cell_areas * torch.tensor([20.0, 30.0])
         )
 
     def test_storage_rejects_wrong_shape(self):
         ### cell_data's batch dimension rejects a wrong leading dimension.
         mesh = two_triangles_2d.load()
         with pytest.raises(RuntimeError):
-            mesh.cell_data[MEASURE_WEIGHTS_KEY] = torch.ones(mesh.n_cells + 1)
+            mesh.cell_data[EFFECTIVE_MEASURE_KEY] = torch.ones(mesh.n_cells + 1)
 
     def test_reserved_field_rejects_trailing_singleton_dimension(self):
         ### TensorDict accepts vector-valued cell data, so the reserved
         ### scalar field must enforce its own exact shape.
         mesh = two_triangles_2d.load()
-        mesh.cell_data[MEASURE_WEIGHTS_KEY] = torch.ones(mesh.n_cells, 1)
+        mesh.cell_data[EFFECTIVE_MEASURE_KEY] = torch.ones(mesh.n_cells, 1)
 
-        with pytest.raises(ValueError, match="one scalar per cell"):
-            cell_measure_weights(mesh)
         with pytest.raises(ValueError, match="one scalar per cell"):
             cell_measures(mesh)
 
     def test_compose_rejects_non_scalar_broadcast_shape(self):
         mesh = two_triangles_2d.load()
         with pytest.raises(ValueError, match="scalar or have shape"):
-            compose_measure_weights(mesh, torch.ones(mesh.n_cells, 1))
+            scale_measures(mesh, torch.ones(mesh.n_cells, 1))
 
     def test_weights_survive_slice_cells(self):
         mesh = make_triangle_strip(6)
-        compose_measure_weights(mesh, torch.arange(1.0, 7.0))
+        scale_measures(mesh, torch.arange(1.0, 7.0))
         sliced = mesh.slice_cells(torch.tensor([1, 4]))
         torch.testing.assert_close(
-            cell_measure_weights(sliced), torch.tensor([2.0, 5.0])
+            cell_measures(sliced), sliced.cell_areas * torch.tensor([2.0, 5.0])
         )
 
 
@@ -122,14 +112,14 @@ class TestWeightedIntegration:
         mesh = make_triangle_strip(4)
         mesh.cell_data["f"] = torch.tensor([1.0, 2.0, 3.0, 4.0])
         unweighted = mesh.integrate("f")
-        compose_measure_weights(mesh, torch.full((4,), 2.5))
+        scale_measures(mesh, torch.full((4,), 2.5))
         torch.testing.assert_close(mesh.integrate("f"), unweighted * 2.5)
 
     def test_integrate_point_data_uses_effective_measure(self):
         mesh = make_triangle_strip(3)
         mesh.point_data["T"] = torch.randn(mesh.n_points)
         unweighted = mesh.integrate("T", data_source="points")
-        compose_measure_weights(mesh, torch.full((3,), 4.0))
+        scale_measures(mesh, torch.full((3,), 4.0))
         torch.testing.assert_close(
             mesh.integrate("T", data_source="points"), unweighted * 4.0
         )
@@ -138,7 +128,7 @@ class TestWeightedIntegration:
         mesh = make_triangle_strip(3)  # planar, normals +/- z
         mesh.cell_data["v"] = torch.randn(3, 3)
         unweighted = mesh.integrate_flux("v")
-        compose_measure_weights(mesh, torch.full((3,), 3.0))
+        scale_measures(mesh, torch.full((3,), 3.0))
         torch.testing.assert_close(mesh.integrate_flux("v"), unweighted * 3.0)
 
     def test_integrate_moment_uses_effective_measure(self):
@@ -146,7 +136,7 @@ class TestWeightedIntegration:
         left = torch.randn(4, 2)
         right = torch.randn(4, 3)
         unweighted = integrate_moment(mesh, left, right)
-        compose_measure_weights(mesh, torch.full((4,), 2.0))
+        scale_measures(mesh, torch.full((4,), 2.0))
         torch.testing.assert_close(
             integrate_moment(mesh, left, right), unweighted * 2.0
         )
@@ -171,7 +161,7 @@ class TestWeightedIntegration:
         for start in range(n):
             idx = torch.arange(start, start + k) % n
             sub = mesh.slice_cells(idx)
-            compose_measure_weights(sub, torch.full((k,), n / k))
+            scale_measures(sub, torch.full((k,), n / k))
             estimates.append(sub.integrate("f").to(torch.float64))
         torch.testing.assert_close(
             torch.stack(estimates).mean(), full, rtol=1e-5, atol=1e-6
@@ -186,7 +176,7 @@ class TestWeightsUnderTransforms:
         n = 5
         mesh = make_triangle_strip(n, widths=torch.rand(n) + 0.5)
         mesh.cell_data["f"] = torch.ones(n)
-        compose_measure_weights(mesh, torch.full((n,), 2.0))
+        scale_measures(mesh, torch.full((n,), 2.0))
         base_integral = mesh.integrate("f")
 
         moved = (
@@ -195,7 +185,7 @@ class TestWeightsUnderTransforms:
             .scale(1.0 / 5.0, transform_cell_data=True)
         )
 
-        torch.testing.assert_close(cell_measure_weights(moved), torch.full((n,), 2.0))
+        torch.testing.assert_close(cell_measures(moved), moved.cell_areas * 2.0)
         torch.testing.assert_close(
             moved.integrate("f"), base_integral / 25.0, rtol=1e-5, atol=1e-7
         )

@@ -35,10 +35,10 @@ repeat).
 from typing import TYPE_CHECKING, NamedTuple
 
 import torch
-import torch.nn.functional as F
 from jaxtyping import Float, Int
 
 from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
+from physicsnemo.nn.functional import safe_normalize
 from physicsnemo.nn.functional.neighbors import knn
 
 if TYPE_CHECKING:
@@ -132,7 +132,7 @@ def partition_cells(
       smooth surfaces where inter-seed spacing is small relative to the radius
       of curvature, this is an excellent approximation.
     - Every original cell is assigned to exactly one cluster, so
-      ``cluster_areas.sum() == mesh.cell_areas.sum()`` by construction.
+      ``cluster_areas.sum() == cell_measures(mesh).sum()`` by construction.
     - If a cluster receives no cells (possible when seeds outnumber cells or
       cluster heavily), its area is 0, its normal is the zero vector, and its
       centroid falls back to the seed position.
@@ -157,7 +157,9 @@ def partition_cells(
     ### Read source geometry (cached on Mesh)
     n_dims = mesh.n_spatial_dims
     cell_centroids = mesh.cell_centroids  # (M, D)
-    cell_areas = mesh.cell_areas  # (M,)
+    from physicsnemo.mesh.calculus.measure import cell_measures
+
+    cell_areas = cell_measures(mesh)  # complete represented measures (M,)
     has_normals = mesh.codimension == 1
 
     ### Assign each cell to its nearest seed via kNN search (k=1).
@@ -182,7 +184,7 @@ def partition_cells(
             weights=cell_areas,
             aggregation="sum",
         )
-        cluster_normals = F.normalize(cluster_normals, dim=-1)
+        cluster_normals = safe_normalize(cluster_normals, dim=-1)
     else:
         cluster_normals = torch.zeros(n_seeds, n_dims, dtype=dtype, device=device)
 
@@ -194,7 +196,11 @@ def partition_cells(
         weights=cell_areas,
         aggregation="mean",
     )
-    cluster_centroids[cluster_areas == 0] = seeds[cluster_areas == 0]
+    ### ``torch.where`` rather than boolean-mask assignment: the latter routes
+    ### through ``nonzero``, which synchronizes the device on the host.
+    cluster_centroids = torch.where(
+        (cluster_areas == 0).unsqueeze(-1), seeds, cluster_centroids
+    )
 
     return CellPartition(
         assignments=assignments,

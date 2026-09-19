@@ -99,7 +99,6 @@ from utils import (
 
 from physicsnemo import datapipes  # noqa: F401 - registers ${dp:...} resolver
 from physicsnemo.datapipes.keys import as_nested_key, with_leaf_name
-from physicsnemo.datapipes.transforms.mesh import TARGET_QUADRATURE_MEASURE_KEY
 from physicsnemo.distributed import DistributedManager, fused_all_reduce
 from physicsnemo.mesh import DomainMesh
 from physicsnemo.utils import load_checkpoint
@@ -161,7 +160,11 @@ def build_redim_field_types(ds_yaml: DictConfig) -> dict[str, NondimFieldType]:
             continue
         target = str(t.get("_target_", ""))
         if "NonDimensionalizeByMetadata" in target:
-            nondim_fields = dict(t.get("fields", {}) or {})
+            ### A chain may hold several instances (interior point_data fields,
+            ### then boundary cell_data fields); merge them instead of keeping
+            ### only the last one, or the interior predictions would not be
+            ### re-dimensionalized.
+            nondim_fields.update(t.get("fields", {}) or {})
         elif "RenameMeshFields" in target:
             ### Rename maps live under per-association sub-blocks; a field
             ### is renamed in whichever association it was declared.
@@ -278,14 +281,15 @@ def attach_and_save(
     Writes ``pred_<name>`` and ``true_<name>`` onto a copy of the
     interior's ``point_data`` (the training-space target fields are
     dropped to avoid ambiguity with their physical ``true_<name>``
-    counterparts; non-target inputs like ``sdf`` are kept; the query
-    measure ``MeshToDomainMesh`` records is dropped). The result is saved
-    with :meth:`DomainMesh.save` as a native ``.pdmsh`` tree.
+    counterparts; non-target inputs like ``sdf`` are kept). Explicit point
+    measures are retained and follow geometric rescaling, so the saved sample
+    can still be integrated in physical coordinates. The result is saved with
+    :meth:`DomainMesh.save` as a native ``.pdmsh`` tree.
 
     When *rescale_geometry* is set and ``L_ref`` is available, every mesh
     in the domain is scaled by ``L_ref`` to recover physical-scale
-    coordinates (``Mesh.scale`` leaves ``point_data`` untouched, so the
-    attached fields are not affected).
+    coordinates. ``Mesh.scale`` leaves ordinary ``point_data`` untouched;
+    effective measures scale with their represented dimension.
     """
     if rescale_geometry and "L_ref" in domain.global_data:
         L_ref = domain.global_data["L_ref"]
@@ -297,13 +301,9 @@ def attach_and_save(
     ### Names may spell nested leaves ("solution.p"); ``key in td`` and
     ### ``exclude`` resolve them, and the pred_/true_ prefix goes on the
     ### leaf so the nesting is preserved: ("solution", "pred_p").
-    ### The query measure is in training-geometry units and would be stale
-    ### once the geometry is rescaled, so it is not written either.
     target_keys = [as_nested_key(n) for n in target_config]
-    drop_keys = [k for k in target_keys if k in interior.point_data]
-    if TARGET_QUADRATURE_MEASURE_KEY in interior.point_data:
-        drop_keys.append(TARGET_QUADRATURE_MEASURE_KEY)
-    new_pd = interior.point_data.exclude(*drop_keys).clone()
+    present_targets = [k for k in target_keys if k in interior.point_data]
+    new_pd = interior.point_data.exclude(*present_targets).clone()
     for key, val in pred_phys.items(include_nested=True, leaves_only=True):
         new_pd[with_leaf_name(key, lambda n: f"pred_{n}")] = val
     for key, val in true_phys.items(include_nested=True, leaves_only=True):
@@ -602,7 +602,7 @@ def main(cfg: DictConfig) -> None:
                 force_acc.update(*sample_forces)
                 ### A vehicle cell count sitting exactly at the subsample
                 ### cap means the surface was almost certainly subsampled.
-                ### Measure weights compensate for retained-area shrinkage;
+                ### Effective measures compensate for retained-area shrinkage;
                 ### sampling and moment-frame caveats remain (see forces.py).
                 if (
                     not subsampling_warned
