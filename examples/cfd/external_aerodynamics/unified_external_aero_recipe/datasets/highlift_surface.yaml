@@ -42,14 +42,19 @@ pipeline:
   augmentations:
     - _target_: ${dp:RandomRotateMesh}
       axes: ["z"]
+      mode: axis_aligned
       transform_point_data: true
       transform_cell_data: true
       transform_global_data: true
     - _target_: ${dp:RandomTranslateMesh}
       distribution:
         _target_: torch.distributions.Uniform
-        low: [-1.0, -1.0, 0.0]
-        high: [1.0, 1.0, 0.0]
+        low:
+          _target_: torch.tensor
+          data: [-1.0, -1.0, 0.0]
+        high:
+          _target_: torch.tensor
+          data: [1.0, 1.0, 0.0]
   transforms:
     # Unit freestream direction as a new global leaf `U_inf_dir` (`U_inf`
     # stays physical). Placed before CenterMesh so the rotation augmentation

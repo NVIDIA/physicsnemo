@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 
-from torch.cuda.amp import GradScaler
+from torch.amp import GradScaler
 from generate_dataset import generate_normalized_graphs
 from physicsnemo.models.meshgraphnet import MeshGraphNet
 from physicsnemo.utils.logging import PythonLogger
