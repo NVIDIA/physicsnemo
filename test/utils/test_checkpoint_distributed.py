@@ -71,6 +71,19 @@ def shared_tmp_dir():
         shutil.rmtree(path, ignore_errors=True)
 
 
+def _forbid_nonzero_rank_file_access(monkeypatch):
+    """Require checkpoint discovery and reads to use only rank 0."""
+    if DistributedManager().rank != 0:
+        fs = fsspec.filesystem("file")
+
+        def unexpected_file_access(*args, **kwargs):
+            """Fail if a nonzero rank inspects or opens checkpoint files."""
+            pytest.fail("Only rank 0 should access checkpoint files")
+
+        for method in ("exists", "isfile", "glob", "open"):
+            monkeypatch.setattr(fs, method, unexpected_file_access)
+
+
 # ---------------------------------------------------------------------------
 # Plain FSDP (1-D mesh, no domain sharding)
 # ---------------------------------------------------------------------------
@@ -109,14 +122,7 @@ def test_distributed_checkpoint_file_requirements(
     mesh = init_device_mesh(dm.device.type, (dm.world_size,))
     model = distribute_module(nn.Linear(8, 8, device=dm.device), mesh)
 
-    if dm.rank != 0:
-
-        def unexpected_file_access(*args, **kwargs):
-            """Nonzero ranks may not inspect checkpoint files."""
-            pytest.fail("Only rank 0 should inspect checkpoint files")
-
-        monkeypatch.setattr(fs, "exists", unexpected_file_access)
-        monkeypatch.setattr(fs, "glob", unexpected_file_access)
+    _forbid_nonzero_rank_file_access(monkeypatch)
 
     if checkpoint_kind == "missing_weights":
         with pytest.raises(FileNotFoundError, match="uninitialized") as exc:
@@ -132,6 +138,132 @@ def test_distributed_checkpoint_file_requirements(
             for parameter in model.parameters():
                 full = parameter.full_tensor()
                 torch.testing.assert_close(full, torch.full_like(full, 0.25))
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize("automatic_index", [False, True])
+@pytest.mark.parametrize("latest_weights", ["complete", "deleted", "newer"])
+def test_distributed_checkpoint_uses_training_checkpoint_index(
+    shared_tmp_dir, monkeypatch, automatic_index, latest_weights
+):
+    """All ranks restore one index or reject stale weights without changing state."""
+    dm = DistributedManager()
+    if dm.world_size < 2:
+        pytest.skip("Need at least 2 ranks")
+    mesh = init_device_mesh(dm.device.type, (dm.world_size,))
+    source = distribute_module(nn.Linear(8, 8, device=dm.device), mesh)
+    optimizer = torch.optim.Adam(source.parameters(), lr=0.01)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1)
+    for epoch in (1, 2):
+        for parameter in source.parameters():
+            parameter.grad = torch.ones_like(parameter)
+        optimizer.step()
+        optimizer.zero_grad()
+        scheduler.step()
+        optimizer.param_groups[0]["lr"] = epoch * 0.01
+        with torch.no_grad():
+            for parameter in source.parameters():
+                parameter.fill_(epoch)
+        save_checkpoint(
+            shared_tmp_dir,
+            models=source,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            epoch=None if automatic_index else epoch,
+            metadata={"generation": epoch},
+        )
+    index = 1 if automatic_index else 2
+    if latest_weights == "deleted" and dm.rank == 0:
+        fsspec.filesystem("file").rm(f"{shared_tmp_dir}/Linear.0.{index}.pt")
+    elif latest_weights == "newer":
+        with torch.no_grad():
+            for parameter in source.parameters():
+                parameter.fill_(3)
+        save_checkpoint(shared_tmp_dir, models=source)
+    dist.barrier()
+
+    fresh = distribute_module(nn.Linear(8, 8, device=dm.device), mesh)
+    before = {k: v.full_tensor().clone() for k, v in fresh.state_dict().items()}
+    fresh_optimizer = torch.optim.Adam(fresh.parameters(), lr=0.5)
+    fresh_scheduler = torch.optim.lr_scheduler.StepLR(fresh_optimizer, step_size=1)
+    metadata = {}
+    _forbid_nonzero_rank_file_access(monkeypatch)
+    if latest_weights == "deleted":
+        with pytest.raises(FileNotFoundError, match=rf"checkpoint\.0\.{index}\.pt"):
+            load_checkpoint(
+                shared_tmp_dir,
+                models=fresh,
+                optimizer=fresh_optimizer,
+                scheduler=fresh_scheduler,
+                metadata_dict=metadata,
+            )
+        for name, value in fresh.state_dict().items():
+            torch.testing.assert_close(value.full_tensor(), before[name])
+        assert fresh_optimizer.param_groups[0]["lr"] == 0.5
+        assert not fresh_optimizer.state
+        assert fresh_scheduler.last_epoch == 0
+        assert metadata == {}
+    else:
+        restored_epoch = load_checkpoint(
+            shared_tmp_dir,
+            models=fresh,
+            optimizer=fresh_optimizer,
+            scheduler=fresh_scheduler,
+            metadata_dict=metadata,
+        )
+        assert restored_epoch == (0 if automatic_index else 2)
+        for parameter in fresh.parameters():
+            full = parameter.full_tensor()
+            torch.testing.assert_close(full, torch.full_like(full, 2))
+        assert fresh_optimizer.param_groups[0]["lr"] == 0.02
+        assert fresh_scheduler.last_epoch == 2
+        assert metadata == {"generation": 2}
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize("epoch", [None, 3])
+def test_distributed_checkpoint_checks_all_models_before_restoring(
+    shared_tmp_dir, monkeypatch, epoch
+):
+    """A later missing model leaves every model unchanged on every rank."""
+    dm = DistributedManager()
+    if dm.world_size < 2:
+        pytest.skip("Need at least 2 ranks")
+    if dm.rank == 0:
+        save_checkpoint(
+            shared_tmp_dir, models=[nn.Linear(8, 8), nn.Linear(8, 8)], epoch=3
+        )
+        fsspec.filesystem("file").rm(f"{shared_tmp_dir}/Linear1.0.3.pt")
+    dist.barrier()
+    mesh = init_device_mesh(dm.device.type, (dm.world_size,))
+    models = [
+        distribute_module(nn.Linear(8, 8, device=dm.device), mesh) for _ in range(2)
+    ]
+    before = [
+        {k: v.full_tensor().clone() for k, v in m.state_dict().items()} for m in models
+    ]
+    optimizer = torch.optim.Adam(models[0].parameters(), lr=0.5)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1)
+    metadata = {}
+    _forbid_nonzero_rank_file_access(monkeypatch)
+    with pytest.raises(FileNotFoundError, match="Linear1"):
+        load_checkpoint(
+            shared_tmp_dir,
+            models=models,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            epoch=epoch,
+            metadata_dict=metadata,
+        )
+    for model, original in zip(models, before):
+        for name, value in model.state_dict().items():
+            torch.testing.assert_close(value.full_tensor(), original[name])
+    assert optimizer.param_groups[0]["lr"] == 0.5
+    assert not optimizer.state
+    assert scheduler.last_epoch == 0
+    assert metadata == {}
 
 
 @pytest.mark.timeout(30)
