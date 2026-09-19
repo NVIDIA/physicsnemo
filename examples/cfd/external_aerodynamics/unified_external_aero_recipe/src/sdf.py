@@ -51,17 +51,18 @@ class ComputeSDFFromBoundary(MeshTransform):
     Reads the surface mesh from ``domain.boundaries[boundary_name]`` and
     evaluates the signed distance field at every interior point using
     :func:`physicsnemo.mesh.spatial.sdf.signed_distance_field`,
-    a mesh-native, pure-PyTorch implementation backed by a torch BVH.
+    a mesh-native wrapper around Warp mesh queries.
 
     The computed SDF is stored as a scalar field ``(N, 1)`` in
     ``interior.point_data[sdf_field]``.  If ``normals_field`` is set,
     approximate surface normals ``(N, 3)`` are also stored, computed as
-    the normalized direction from each query point to its closest point
-    on the surface.  Points essentially *on* the surface (boundary-layer
+    the normalized direction from the closest surface point to each query
+    point. Points essentially *on* the surface (boundary-layer
     points at sub-micron wall distances) instead use the oriented normal
     of the hit face, since at those distances the closest-point direction
-    and SDF sign can be float32 rounding noise. Within this uncertainty
-    band, the fallback uses the outward face normal.
+    and SDF sign can be float32 rounding noise. A smaller sign-uncertainty
+    band keeps on-wall normals outward while resolved interior points
+    retain inward normals throughout the direction-fallback band.
 
     Parameters
     ----------
@@ -164,10 +165,13 @@ class ComputeSDFFromBoundary(MeshTransform):
             # ``cell_normals`` returns a zero vector for it. Keep the raw
             # closest-point direction there instead of substituting zeros.
             face_normal_ok = (face_normals * face_normals).sum(-1) > 0.5
-            # A tiny negative SDF at the wall can be rounding noise. Only
-            # reverse the fallback when the signed distance resolves a point
-            # inside the body beyond the same uncertainty band.
-            genuinely_inside = sdf_values < -surface_tolerance
+            # Resolving the side needs only a few ulps, whereas recovering
+            # a direction needs the wider band above. Reusing that band for
+            # the sign would force every fallback outward: |sdf| == dist.
+            # Ignore only small negative distances consistent with float32
+            # roundoff, retaining inward normals for resolved inside points.
+            sign_tolerance = 8.0 * torch.finfo(torch.float32).eps * coord_scale
+            genuinely_inside = sdf_values < -sign_tolerance
             oriented = torch.where(
                 genuinely_inside.unsqueeze(-1), -face_normals, face_normals
             )
