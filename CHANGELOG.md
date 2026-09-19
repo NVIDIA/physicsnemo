@@ -26,8 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backend default. Invalid timeouts are rejected before initialization state
   changes, allowing corrected configuration to be retried.
 - `MeshToDomainMesh` in `cell_centroids` mode records each source cell's
-  effective measure (area times any composed measure weights) on the interior
-  under the reserved `point_data` key `TARGET_QUADRATURE_MEASURE_KEY`, so
+  complete effective measure on the interior under the mesh-owned
+  `_effective_measure` point-data key, so
   integrals and weighted losses over the query points remain possible after
   the cells are gone.
 - Unified external aero recipe: `NonDimensionalizeByMetadata` gains
@@ -35,6 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   re-dimensionalizes with the field maps of every instance.
 
 ### Changed
+
+- Mesh integration uses a shared `_effective_measure` field for complete cell
+  and point measures. Cell measures fall back to geometry; point measures are
+  explicit and independent of connectivity. `Mesh.integrate_samples` evaluates
+  point quadrature separately from existing cell and vertex-field integration.
+  Sampling, centroid conversion, geometric transformations, subdivision and
+  GLOBE use the mesh-owned measure API. Point measures carry their represented
+  dimension so geometric scaling preserves their physical units.
 
 - `Mesh.slice_points` picks its cell-remapping algorithm by mesh shape: the
   full-mesh lookup table as before, or a binary search over the kept ids when the

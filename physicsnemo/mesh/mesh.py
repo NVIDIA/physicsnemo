@@ -45,6 +45,7 @@ from physicsnemo.mesh.calculus import (
     integrate,
     integrate_flux,
     integrate_moment,
+    integrate_samples,
 )
 from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
 from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
@@ -1401,8 +1402,29 @@ class Mesh:
         cell_index_offsets = cumsum_n_points.roll(1)
         cell_index_offsets[0] = 0
 
+        from physicsnemo.mesh.calculus.measure import (
+            EFFECTIVE_MEASURE_KEY,
+            POINT_MEASURE_DIMENSION_KEY,
+            point_measure_dimension,
+        )
+
+        point_dimension = None
+        if EFFECTIVE_MEASURE_KEY in meshes[0].point_data:
+            point_dimension = point_measure_dimension(meshes[0])
+            if any(
+                not torch.equal(point_measure_dimension(m), point_dimension)
+                for m in meshes[1:]
+            ):
+                raise ValueError(
+                    "Cannot merge point quadrature with different measure dimensions"
+                )
         if global_data_strategy == "stack":
-            global_data = TensorDict.stack([m.global_data for m in meshes])
+            global_data = TensorDict.stack(
+                [m.global_data.exclude(POINT_MEASURE_DIMENSION_KEY) for m in meshes]
+            )
+            if point_dimension is not None:
+                global_data.batch_size = []
+                global_data[POINT_MEASURE_DIMENSION_KEY] = point_dimension
         else:
             raise ValueError(f"Invalid {global_data_strategy=}")
 
@@ -1837,6 +1859,7 @@ class Mesh:
         points: torch.Tensor,
         *,
         keep: str | tuple[str, ...] | Sequence[str | tuple[str, ...]] = "topology",
+        preserve_measures: builtins.bool = False,
     ) -> "Mesh":
         r"""Return a mesh with replacement point coordinates.
 
@@ -1854,6 +1877,11 @@ class Mesh:
         keep : str, tuple[str, ...], or sequence of either, optional
             Cache keys to retain. Uses the same key semantics as
             :meth:`strip_caches`; defaults to the complete ``"topology"`` cache.
+
+        preserve_measures : bool, default False
+            Explicitly retain reference measures when replacing coordinates.
+            Otherwise cell measures follow geometric measure changes; dimensional
+            point measures require a known transformation or replacement measures.
 
         Returns
         -------
@@ -1893,11 +1921,21 @@ class Mesh:
             lambda: "with_points must preserve point indexing.",
         )
 
-        return self._new_with_structure(
+        from physicsnemo.mesh.calculus.measure import (
+            _require_preserved_point_measures,
+            _transfer_cell_measures,
+        )
+
+        if not preserve_measures:
+            _require_preserved_point_measures(self)
+        result = self._new_with_structure(
             points=points,
             cells=self.cells,
             keep=keep,
         )
+        if not preserve_measures:
+            _transfer_cell_measures(self, result)
+        return result
 
     def with_cells(
         self,
@@ -1962,11 +2000,15 @@ class Mesh:
             lambda: "with_cells must preserve simplex type.",
         )
 
-        return self._new_with_structure(
+        result = self._new_with_structure(
             points=self.points,
             cells=cells,
             keep=keep,
         )
+        from physicsnemo.mesh.calculus.measure import _transfer_cell_measures
+
+        _transfer_cell_measures(self, result)
+        return result
 
     def with_data(
         self,
@@ -2071,9 +2113,13 @@ class Mesh:
         >>> mesh_with_point_data = mesh.cell_data_to_point_data()  # doctest: +SKIP
         >>> # Now mesh has both cell_data["pressure"] and point_data["pressure"]
         """
+        from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY
+
+        fields = self.cell_data.exclude(EFFECTIVE_MEASURE_KEY)
+        # Effective measures are not interpolated; use lumped_point_measures.
         ### Check for key conflicts
         if not overwrite_keys:
-            src_keys = set(self.cell_data.keys(include_nested=True, leaves_only=True))
+            src_keys = set(fields.keys(include_nested=True, leaves_only=True))
             dst_keys = set(self.point_data.keys(include_nested=True, leaves_only=True))
             conflicts = src_keys & dst_keys
             if conflicts:
@@ -2099,7 +2145,7 @@ class Mesh:
             self.n_cells, device=self.points.device
         ).repeat_interleave(n_vertices_per_cell)
 
-        converted = self.cell_data.apply(
+        converted = fields.apply(
             lambda cell_values: scatter_aggregate(
                 src_data=cell_values[cell_indices],
                 src_to_dst_mapping=point_indices,
@@ -2150,9 +2196,12 @@ class Mesh:
         >>> mesh_with_cell_data = mesh.point_data_to_cell_data()  # doctest: +SKIP
         >>> # Now mesh has both point_data["temperature"] and cell_data["temperature"]
         """
+        from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY
+
+        fields = self.point_data.exclude(EFFECTIVE_MEASURE_KEY)
         ### Check for key conflicts
         if not overwrite_keys:
-            src_keys = set(self.point_data.keys(include_nested=True, leaves_only=True))
+            src_keys = set(fields.keys(include_nested=True, leaves_only=True))
             dst_keys = set(self.cell_data.keys(include_nested=True, leaves_only=True))
             conflicts = src_keys & dst_keys
             if conflicts:
@@ -2176,7 +2225,7 @@ class Mesh:
                 cell_values = cell_values.to(torch.float64)
             return cell_values.mean(dim=1)
 
-        converted = self.point_data.apply(
+        converted = fields.apply(
             _mean_over_cell_vertices,
             batch_size=torch.Size([self.n_cells]),
         )
@@ -2412,11 +2461,12 @@ class Mesh:
         mask = sources < targets
         edges = torch.stack([sources[mask], targets[mask]], dim=1)
 
+        centroids = self.to_point_cloud(point_source="cell_centroids")
         return Mesh(
-            points=self.cell_centroids,
+            points=centroids.points,
             cells=edges,
-            point_data=self.cell_data,
-            global_data=self.global_data,
+            point_data=centroids.point_data,
+            global_data=centroids.global_data,
         )
 
     def to_point_cloud(
@@ -2432,7 +2482,8 @@ class Mesh:
             - ``"vertices"`` (default): Uses mesh vertices as points,
               preserving ``point_data``.
             - ``"cell_centroids"``: Uses cell centroids as points,
-              mapping ``cell_data`` to ``point_data``.
+              mapping ``cell_data`` to ``point_data``. Complete cell measures
+              become point measures with the source manifold's dimension.
 
         Returns
         -------
@@ -2457,11 +2508,20 @@ class Mesh:
                 global_data=self.global_data,
             )
         elif point_source == "cell_centroids":
-            return Mesh(
-                points=self.cell_centroids,
-                point_data=self.cell_data,
-                global_data=self.global_data,
+            from physicsnemo.mesh.calculus.measure import (
+                cell_measures,
+                set_point_measures,
             )
+
+            result = Mesh(
+                points=self.cell_centroids,
+                point_data=self.cell_data.copy(),
+                global_data=self.global_data.copy(),
+            )
+            set_point_measures(
+                result, cell_measures(self), dimension=self.n_manifold_dims
+            )
+            return result
         else:
             raise ValueError(
                 f"Invalid {point_source=!r}. Must be 'vertices' or 'cell_centroids'."
@@ -2854,6 +2914,8 @@ class Mesh:
     compute_cell_derivatives = compute_cell_derivatives
 
     compute_point_derivatives = compute_point_derivatives
+
+    integrate_samples = integrate_samples
 
     integrate = integrate
 

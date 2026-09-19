@@ -17,7 +17,7 @@
 """GLOBE consumption of the effective cell measure.
 
 GLOBE weights its boundary integrals by the effective cell measure
-``cell_areas * measure_weights`` (see
+``cell_measures(mesh)`` (see
 :mod:`physicsnemo.mesh.calculus.measure`), and compounds one such
 measure-weighted sum per integral stage
 (``n_communication_hyperlayers + 1`` in total), so an incorrect measure is
@@ -35,7 +35,7 @@ amplified to that power.  These tests pin the consumption contract:
 import torch
 
 from physicsnemo.experimental.models.globe.model import GLOBE
-from physicsnemo.mesh.calculus.measure import compose_measure_weights
+from physicsnemo.mesh.calculus.measure import scale_measures
 from physicsnemo.mesh.primitives.procedural import lumpy_sphere
 
 SEED = 7
@@ -92,7 +92,7 @@ def test_weights_equivalent_to_scaled_areas():
     for name in ("vehicle", "floor"):
         mesh_w = kwargs_weighted["boundary_meshes"][name]
         w = torch.rand(mesh_w.n_cells, generator=gen) + 0.5
-        compose_measure_weights(mesh_w, w)
+        scale_measures(mesh_w, w)
 
         mesh_s = kwargs_scaled["boundary_meshes"][name]
         mesh_s._cache["cell", "areas"] = mesh_s.cell_areas * w
@@ -112,7 +112,7 @@ def test_unit_weights_match_no_weights():
     kwargs_ones = _make_inputs(device)
     for name in ("vehicle", "floor"):
         mesh = kwargs_ones["boundary_meshes"][name]
-        compose_measure_weights(mesh, torch.ones(mesh.n_cells))
+        scale_measures(mesh, torch.ones(mesh.n_cells))
 
     out_plain = _forward(model, kwargs_plain)
     out_ones = _forward(model, kwargs_ones)
@@ -134,7 +134,7 @@ def test_weights_change_output():
     kwargs_weighted = _make_inputs(device)
     for name in ("vehicle", "floor"):
         mesh = kwargs_weighted["boundary_meshes"][name]
-        compose_measure_weights(mesh, torch.full((mesh.n_cells,), 3.0))
+        scale_measures(mesh, torch.full((mesh.n_cells,), 3.0))
 
     out_plain = _forward(model, kwargs_plain)
     out_weighted = _forward(model, kwargs_weighted)
