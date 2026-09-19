@@ -31,7 +31,7 @@ from physicsnemo.mesh.calculus.measure import cell_measures, set_cell_measures
 def test_subsample_preserves_represented_measure(geometry_only, explicit):
     pytest.importorskip("pyvista")
     path = (
-        Path(__file__).parents[2]
+        Path(__file__).parents[3]
         / "examples/cfd/external_aerodynamics/globe/drivaer/dataset.py"
     )
     spec = importlib.util.spec_from_file_location("globe_drivaer_dataset", path)
