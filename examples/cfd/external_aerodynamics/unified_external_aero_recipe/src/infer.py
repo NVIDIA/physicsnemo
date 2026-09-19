@@ -160,7 +160,11 @@ def build_redim_field_types(ds_yaml: DictConfig) -> dict[str, NondimFieldType]:
             continue
         target = str(t.get("_target_", ""))
         if "NonDimensionalizeByMetadata" in target:
-            nondim_fields = dict(t.get("fields", {}) or {})
+            ### A chain may hold several instances (interior point_data fields,
+            ### then boundary cell_data fields); merge them instead of keeping
+            ### only the last one, or the interior predictions would not be
+            ### re-dimensionalized.
+            nondim_fields.update(t.get("fields", {}) or {})
         elif "RenameMeshFields" in target:
             ### Rename maps live under per-association sub-blocks; a field
             ### is renamed in whichever association it was declared.

@@ -361,6 +361,10 @@ class DropMeshFields(MeshTransform):
 
     Field names may address nested leaves with ``"."`` (``"solution.p"``);
     see :mod:`physicsnemo.datapipes.keys`.
+
+    On a :class:`~physicsnemo.mesh.DomainMesh`, ``global_data`` fields are
+    dropped from the domain-level ``global_data`` as well as from every
+    sub-mesh's ``global_data``.
     """
 
     def __init__(
@@ -381,6 +385,31 @@ class DropMeshFields(MeshTransform):
             point_data=exclude_keys(mesh.point_data, self._point_data_keys),
             cell_data=exclude_keys(mesh.cell_data, self._cell_data_keys),
             global_data=exclude_keys(mesh.global_data, self._global_data_keys),
+        )
+
+    def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
+        """Drop the fields from a :class:`DomainMesh`.
+
+        Drops the ``global_data`` fields from the domain-level
+        ``global_data`` in addition to the base-class broadcast, which
+        only reaches sub-mesh ``global_data``.
+
+        Parameters
+        ----------
+        domain : DomainMesh
+            Input domain mesh (interior + boundaries).
+
+        Returns
+        -------
+        DomainMesh
+            Domain mesh with the fields dropped from the domain-level and
+            every sub-mesh ``global_data``.
+        """
+        domain = super().apply_to_domain(domain)
+        return DomainMesh(
+            interior=domain.interior,
+            boundaries=domain.boundaries,
+            global_data=exclude_keys(domain.global_data, self._global_data_keys),
         )
 
     def extra_repr(self) -> str:
@@ -406,6 +435,10 @@ class RenameMeshFields(MeshTransform):
     ``{"solution.pMeanTrim": "pressure"}`` hoists a nested field to the top
     level and ``{"p": "solution.p"}`` does the reverse. Missing source keys
     are silently skipped.
+
+    On a :class:`~physicsnemo.mesh.DomainMesh`, ``global_data`` fields are
+    renamed in the domain-level ``global_data`` as well as in every
+    sub-mesh's ``global_data``.
     """
 
     def __init__(
@@ -439,6 +472,35 @@ class RenameMeshFields(MeshTransform):
             point_data=new_pd,
             cell_data=new_cd,
             global_data=new_gd,
+        )
+
+    def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
+        """Rename the fields in a :class:`DomainMesh`.
+
+        Renames the ``global_data`` fields in the domain-level
+        ``global_data`` in addition to the base-class broadcast, which
+        only reaches sub-mesh ``global_data``.
+
+        Parameters
+        ----------
+        domain : DomainMesh
+            Input domain mesh (interior + boundaries).
+
+        Returns
+        -------
+        DomainMesh
+            Domain mesh with the fields renamed in the domain-level and
+            every sub-mesh ``global_data``.
+        """
+        domain = super().apply_to_domain(domain)
+        if not self._global_data_map:
+            return domain
+        return DomainMesh(
+            interior=domain.interior,
+            boundaries=domain.boundaries,
+            global_data=rename_keys(
+                domain.global_data, self._global_data_map, strict=False
+            ),
         )
 
     def extra_repr(self) -> str:
