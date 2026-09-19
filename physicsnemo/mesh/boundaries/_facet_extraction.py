@@ -637,9 +637,11 @@ def _aggregate_point_data_to_facets(
 
         ### Average over vertices to get candidate facet data.
         # Promote integer/bool point data to float first: torch.mean rejects integer
-        # dtypes, and a mean of integers is real-valued anyway.
+        # dtypes, and a mean of integers is real-valued anyway. Complex data is
+        # already a valid mean dtype, so it must not be promoted: casting it to a
+        # real dtype would silently discard the imaginary part.
         # Shape: (n_candidate_facets, *data_shape)
-        if not torch.is_floating_point(facet_point_data):
+        if not (facet_point_data.is_floating_point() or facet_point_data.is_complex()):
             facet_point_data = facet_point_data.to(torch.float64)
         candidate_facet_data = facet_point_data.mean(dim=1)
 

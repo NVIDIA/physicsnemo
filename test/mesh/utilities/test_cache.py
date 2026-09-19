@@ -462,7 +462,7 @@ class TestWithCells:
     def test_rejects_floating_point_cells(self):
         mesh = self._cached_triangle()
 
-        with pytest.raises(TypeError, match="int-like dtype"):
+        with pytest.raises(TypeError, match="integer dtype"):
             mesh.with_cells(mesh.cells.to(torch.float32))
 
     def test_result_containers_are_independent(self):

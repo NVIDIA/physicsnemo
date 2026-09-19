@@ -31,6 +31,7 @@ from physicsnemo.models.geotransolver import geotransolver as geotransolver_modu
 from physicsnemo.models.geotransolver.geotransolver import (
     GeoTransolver,
 )
+from physicsnemo.nn import GALE
 from test.common import (  # noqa E402
     validate_amp,
     validate_checkpoint,
@@ -74,7 +75,7 @@ def _assert_parameter_gradients_close(
         )
 
 
-@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
+@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA", "GALE_FPP"])
 @pytest.mark.parametrize("use_geometry", [False, True])
 @pytest.mark.parametrize("use_global", [False, True])
 def test_geotransolver_forward(device, attention_type, use_geometry, use_global):
@@ -124,6 +125,79 @@ def test_geotransolver_forward(device, attention_type, use_geometry, use_global)
     assert isinstance(outputs, torch.Tensor)
     assert outputs.shape == (batch_size, n_tokens, 4)
     assert not torch.isnan(outputs).any()
+
+
+def test_geotransolver_default_attention_matches_explicit_gale(device):
+    """Omitting attention_type preserves the established GALE model exactly."""
+    kwargs = dict(
+        functional_dim=3,
+        out_dim=2,
+        geometry_dim=3,
+        global_dim=4,
+        n_layers=2,
+        n_hidden=16,
+        n_head=4,
+        mlp_ratio=2,
+        slice_num=4,
+        use_te=False,
+    )
+    torch.manual_seed(47)
+    default_model = GeoTransolver(**kwargs).to(device)
+    torch.manual_seed(47)
+    explicit_gale_model = GeoTransolver(**kwargs, attention_type="GALE").to(device)
+
+    assert all(isinstance(block.Attn, GALE) for block in default_model.blocks)
+    assert default_model.state_dict().keys() == explicit_gale_model.state_dict().keys()
+    for name, default_value in default_model.state_dict().items():
+        assert torch.equal(default_value, explicit_gale_model.state_dict()[name])
+
+    local_embedding = torch.randn(2, 13, 3, device=device)
+    geometry = torch.randn(2, 17, 3, device=device)
+    global_embedding = torch.randn(2, 2, 4, device=device)
+    default_model.eval()
+    explicit_gale_model.eval()
+    with torch.no_grad():
+        default_output = default_model(
+            local_embedding,
+            geometry=geometry,
+            global_embedding=global_embedding,
+        )
+        explicit_gale_output = explicit_gale_model(
+            local_embedding,
+            geometry=geometry,
+            global_embedding=global_embedding,
+        )
+
+    assert torch.equal(default_output, explicit_gale_output)
+
+
+def test_geotransolver_gale_fpp_rejects_transformer_engine():
+    """GALE_FPP reports its unsupported backend before constructing TE layers."""
+    with pytest.raises(ValueError, match="GALE_FPP.*Transformer Engine"):
+        GeoTransolver(
+            functional_dim=3,
+            out_dim=2,
+            n_hidden=16,
+            n_head=4,
+            slice_num=4,
+            attention_type="GALE_FPP",
+            use_te=True,
+        )
+
+
+def test_geotransolver_gale_fpp_rejects_transolver_plus():
+    """FLARE++ and Transolver++ slicing cannot be enabled together."""
+    with pytest.raises(ValueError, match="GALE_FPP.*requires plus=False"):
+        GeoTransolver(
+            functional_dim=3,
+            out_dim=2,
+            n_hidden=16,
+            n_head=4,
+            slice_num=4,
+            attention_type="GALE_FPP",
+            plus=True,
+            use_te=False,
+        )
 
 
 def test_geotransolver_forward_returns_embedding_states(device):

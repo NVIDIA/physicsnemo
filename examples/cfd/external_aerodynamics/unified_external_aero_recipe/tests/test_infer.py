@@ -65,6 +65,41 @@ def test_build_redim_field_types_volume():
     }
 
 
+def test_build_redim_field_types_merges_every_nondim_instance():
+    """Two instances (interior point_data, boundary cell_data) both contribute."""
+    ds_yaml = OmegaConf.create(
+        {
+            "pipeline": {
+                "transforms": [
+                    {
+                        "_target_": "${dp:NonDimensionalizeByMetadata}",
+                        "fields": {"UMeanTrim": "velocity", "pMeanTrim": "pressure"},
+                        "association": "point_data",
+                    },
+                    {
+                        "_target_": "${dp:NonDimensionalizeByMetadata}",
+                        "fields": {"prescribed.velocity": "velocity"},
+                        "association": "cell_data",
+                        "scale_geometry": False,
+                    },
+                    {
+                        "_target_": "${dp:RenameMeshFields}",
+                        "point_data": {
+                            "UMeanTrim": "velocity",
+                            "pMeanTrim": "pressure",
+                        },
+                    },
+                ]
+            }
+        }
+    )
+    assert infer.build_redim_field_types(ds_yaml) == {
+        "velocity": "velocity",
+        "pressure": "pressure",
+        "prescribed.velocity": "velocity",
+    }
+
+
 def test_build_redim_field_types_no_nondim_is_empty():
     """No NonDimensionalizeByMetadata transform (or no pipeline at all) -> {}.
 
