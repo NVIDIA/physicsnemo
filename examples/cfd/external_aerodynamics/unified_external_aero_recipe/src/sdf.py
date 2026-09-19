@@ -60,7 +60,8 @@ class ComputeSDFFromBoundary(MeshTransform):
     on the surface.  Points essentially *on* the surface (boundary-layer
     points at sub-micron wall distances) instead use the oriented normal
     of the hit face, since at those distances the closest-point direction
-    is float32 rounding noise.
+    and SDF sign can be float32 rounding noise. Within this uncertainty
+    band, the fallback uses the outward face normal.
 
     Parameters
     ----------
@@ -147,27 +148,28 @@ class ComputeSDFFromBoundary(MeshTransform):
             # rounding noise (or exactly zero) and its direction is
             # meaningless. Substitute the oriented normal of the hit face:
             # the exact limit of the closest-point direction at the wall.
-            # Sign-align with the SDF so the rare interior point keeps
-            # pointing into the body like its neighbors (the SDF treats
-            # on-surface as outside, so dist == 0 gets the outward normal).
             # The band is scale-aware: the closest point carries rounding
             # noise ~ eps * |coordinate|, so an absolute cutoff under-covers
             # geometry far from the origin. 128 eps (~1.5e-5 per unit
-            # coordinate) clears that noise floor with a wide margin, and
-            # widening the band is free because the substitute is exact.
+            # coordinate) clears that noise floor with a wide margin.
             # Computed unconditionally and selected with a mask rather than
             # branching on ``near_surface.any()`` -- that host readback would
             # stall the prefetch stream.
             dist = torch.norm(normals, dim=-1)
             coord_scale = query_points.abs().amax(dim=-1).clamp(min=1.0)
-            near_surface = dist < (128.0 * torch.finfo(torch.float32).eps * coord_scale)
+            surface_tolerance = 128.0 * torch.finfo(torch.float32).eps * coord_scale
+            near_surface = dist < surface_tolerance
             face_normals = surface.cell_normals.to(query_points.dtype)[hit_faces]
             # A degenerate (zero-area) hit face has no meaningful normal --
             # ``cell_normals`` returns a zero vector for it. Keep the raw
             # closest-point direction there instead of substituting zeros.
             face_normal_ok = (face_normals * face_normals).sum(-1) > 0.5
+            # A tiny negative SDF at the wall can be rounding noise. Only
+            # reverse the fallback when the signed distance resolves a point
+            # inside the body beyond the same uncertainty band.
+            genuinely_inside = sdf_values < -surface_tolerance
             oriented = torch.where(
-                (sdf_values >= 0).unsqueeze(-1), face_normals, -face_normals
+                genuinely_inside.unsqueeze(-1), -face_normals, face_normals
             )
             normals = torch.where(
                 (near_surface & face_normal_ok).unsqueeze(-1), oriented, normals
