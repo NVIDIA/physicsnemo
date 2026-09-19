@@ -98,6 +98,7 @@ from utils import (
 )
 
 from physicsnemo import datapipes  # noqa: F401 - registers ${dp:...} resolver
+from physicsnemo.datapipes.keys import as_nested_key, with_leaf_name
 from physicsnemo.distributed import DistributedManager, fused_all_reduce
 from physicsnemo.mesh import DomainMesh
 from physicsnemo.utils import load_checkpoint
@@ -159,7 +160,11 @@ def build_redim_field_types(ds_yaml: DictConfig) -> dict[str, NondimFieldType]:
             continue
         target = str(t.get("_target_", ""))
         if "NonDimensionalizeByMetadata" in target:
-            nondim_fields = dict(t.get("fields", {}) or {})
+            ### A chain may hold several instances (interior point_data fields,
+            ### then boundary cell_data fields); merge them instead of keeping
+            ### only the last one, or the interior predictions would not be
+            ### re-dimensionalized.
+            nondim_fields.update(t.get("fields", {}) or {})
         elif "RenameMeshFields" in target:
             ### Rename maps live under per-association sub-blocks; a field
             ### is renamed in whichever association it was declared.
@@ -291,12 +296,16 @@ def attach_and_save(
     interior = domain.interior
     ### Drop training-space targets (replaced by physical true_<name>);
     ### keep non-target inputs such as sdf / sdf_normals for inspection.
-    present_targets = [n for n in target_config if n in interior.point_data.keys()]
+    ### Names may spell nested leaves ("solution.p"); ``key in td`` and
+    ### ``exclude`` resolve them, and the pred_/true_ prefix goes on the
+    ### leaf so the nesting is preserved: ("solution", "pred_p").
+    target_keys = [as_nested_key(n) for n in target_config]
+    present_targets = [k for k in target_keys if k in interior.point_data]
     new_pd = interior.point_data.exclude(*present_targets).clone()
-    for name, val in pred_phys.items():
-        new_pd[f"pred_{name}"] = val
-    for name, val in true_phys.items():
-        new_pd[f"true_{name}"] = val
+    for key, val in pred_phys.items(include_nested=True, leaves_only=True):
+        new_pd[with_leaf_name(key, lambda n: f"pred_{n}")] = val
+    for key, val in true_phys.items(include_nested=True, leaves_only=True):
+        new_pd[with_leaf_name(key, lambda n: f"true_{n}")] = val
 
     ### `Mesh.copy` is the tensorclass shallow copy used by the transforms;
     ### swap in the augmented point_data, mirroring their pattern.
@@ -469,8 +478,9 @@ def main(cfg: DictConfig) -> None:
             for live in {
                 id(n): n for n in (normalizer, val_normalizer) if n is not None
             }.values():
-                live.stats.clear()
-                live.stats.update(saved_stats)
+                ### ``stats`` returns a copy; the setter replaces the live
+                ### statistics (re-keying dotted names to nested keys).
+                live.stats = saved_stats
 
     if cfg.get("compile", False):
         model = torch.compile(model)

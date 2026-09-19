@@ -97,15 +97,22 @@ def test_promotes_reduced_precision_geometry_to_float32(dtype):
     assert result.points.dtype == np.float32
 
 
-@pytest.mark.parametrize("dtype", [torch.int64, torch.complex64])
-def test_other_geometry_dtypes_retain_float32_conversion(dtype):
-    points = torch.tensor([[0, 0], [1, 0]], dtype=dtype)
+@pytest.mark.parametrize("dtype", [torch.int32, torch.int64, torch.uint64])
+def test_integer_geometry_preserves_coordinates_after_promotion(dtype):
+    points = torch.tensor([[2**24, 0], [2**24 + 1, 0]], dtype=dtype)
     mesh = Mesh(points=points, cells=torch.tensor([[0, 1]]))
 
-    if dtype.is_complex:
-        with pytest.warns(UserWarning, match="Casting complex values"):
-            result = to_pyvista(mesh)
-    else:
+    result = to_pyvista(mesh)
+
+    assert result.points.dtype == np.float64
+    assert np.array_equal(result.points[:, :2], points.numpy())
+
+
+def test_complex_geometry_retains_float32_conversion():
+    points = torch.tensor([[0, 0], [1, 0]], dtype=torch.complex64)
+    mesh = Mesh(points=points, cells=torch.tensor([[0, 1]]))
+
+    with pytest.warns(UserWarning, match="Casting complex values"):
         result = to_pyvista(mesh)
 
     assert result.points.dtype == np.float32

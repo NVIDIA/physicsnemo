@@ -444,7 +444,7 @@ examples/weather/graphcast/ @mnabian
 examples/weather/mixture_of_experts/
 examples/weather/pangu_weather/ @dallasfoster
 examples/weather/regen/
-examples/weather/stormcast/
+examples/weather/regional_weather_diffusion/
 examples/weather/temporal_interpolation/
 examples/weather/unified_recipe/
 

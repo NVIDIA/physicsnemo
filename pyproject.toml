@@ -84,6 +84,7 @@ conflicts = [
 torch-sparse = ["torch"]
 torch-cluster = ["torch"]
 torch-scatter = ["torch"]
+transformer-engine-torch = [{ requirement = "torch", match-runtime = true }]
 
 [[tool.uv.index]]
 name = "nvidia"
@@ -291,8 +292,6 @@ utils-extras = [
     "wandb",
     "mlflow>=3.12.0",
     "line_profiler",
-    "vtk",
-    "stl",
 ]
 mesh-extras = [
     "matplotlib>=3.10.8",

@@ -46,7 +46,7 @@ ST_AVAILABLE = check_version_spec("torch", "2.6.0a0", hard_fail=False)
 if ST_AVAILABLE:
     # In minumum versions are met, we can import the shard tensor and spec.
 
-    from ._shard_tensor_spec import ShardTensorSpec
+    from ._shard_tensor_spec import ShardTensorSpec, validate_aligned_sharding
     from .shard_tensor import (
         ShardTensor,
         TensorPromotionMode,
@@ -82,3 +82,4 @@ else:
     scatter_tensor = None
     TensorPromotionMode = None
     sync_module_over_mesh = None
+    validate_aligned_sharding = None
