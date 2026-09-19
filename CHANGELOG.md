@@ -317,7 +317,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   surface covers three pieces:
   - New losses in `physicsnemo.diffusion.metrics.losses` train against a
     flow/velocity target: `FlowMatchingLoss`, plus `WeightedFlowMatchingLoss`
-    for an element-wise weight such as a binary mask.
+    for an element-wise weight such as a binary mask. Their
+    `MultiDiffusionFlowMatchingLoss` and
+    `MultiDiffusionWeightedFlowMatchingLoss` counterparts provide patch-based
+    flow-matching training in `physicsnemo.diffusion.multi_diffusion`.
   - A dedicated `RectifiedFlowNoiseScheduler` in
     `physicsnemo.diffusion.noise_schedulers` provides a rectified-flow
     schedule.

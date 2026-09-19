@@ -730,10 +730,11 @@ class FlowMatchingLoss:
         when the model predicts clean data, the score, or the noise; the
         matching ``*_to_flow_fn`` callback then converts the prediction to
         the flow target :math:`\mathbf{v}`.
-    x0_to_flow_fn : Callable[[Tensor, Tensor, Tensor], Tensor]
+    x0_to_flow_fn : Callable[[Tensor, Tensor, Tensor], Tensor], optional, default=None
         Callback ``(x0, x_t, t) -> v`` computing the flow target
         :math:`\mathbf{v}(\mathbf{x}_0, \mathbf{x}_t, t)` (see the equation
-        above) from clean data. Always required. For
+        above) from clean data. You must provide this callback for every
+        prediction type; raises a ``ValueError`` when passed ``None``. For
         :class:`~physicsnemo.diffusion.noise_schedulers.LinearGaussianNoiseScheduler`
         subclasses, in most cases pass
         :meth:`~physicsnemo.diffusion.noise_schedulers.LinearGaussianNoiseScheduler.x0_to_flow`.
@@ -951,9 +952,10 @@ class WeightedFlowMatchingLoss:
         protocol.
     prediction_type : PredictorType, default="flow"
         The prediction the model outputs.
-    x0_to_flow_fn : callable
+    x0_to_flow_fn : callable, optional, default=None
         Callback ``(x0, x_t, t) -> v`` computing the flow target
-        :math:`\mathbf{v}` from clean data. Always required.
+        :math:`\mathbf{v}` from clean data. You must provide this callback for
+        every prediction type; raises a ``ValueError`` when passed ``None``.
     score_to_flow_fn : callable, optional
         Callback ``(score, x_t, t) -> v`` converting a score prediction to
         the flow target :math:`\mathbf{v}`. Required when

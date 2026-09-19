@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Multi-diffusion predictor wrapper for patch-based diffusion sampling."""
+"""Predictor wrapper for patch-based diffusion and flow-matching sampling."""
 
 import warnings
 from typing import Any, Callable, Iterator, cast
@@ -32,7 +32,9 @@ from physicsnemo.diffusion.utils.utils import _unwrap_module
 
 
 class MultiDiffusionPredictor(Predictor):
-    r"""Predictor for sampling from a trained
+    r"""Predictor for patch-based diffusion and flow-matching sampling.
+
+    Wraps a trained
     :class:`~physicsnemo.diffusion.multi_diffusion.MultiDiffusionModel2D`.
 
     Satisfies the :class:`~physicsnemo.diffusion.Predictor` protocol, so it
@@ -71,19 +73,18 @@ class MultiDiffusionPredictor(Predictor):
 
     .. warning::
 
-        :class:`MultiDiffusionPredictor` is intended for **test-time
-        sampling**: it is not suitable for training. The wrapped
-        multi-diffusion model should already be trained before being passed
-        to the predictor.
+        The :class:`MultiDiffusionPredictor` class supports **test-time
+        sampling** only, not training. Train the wrapped patch-based diffusion
+        or flow-matching model before constructing the predictor.
 
     Parameters
     ----------
     model : MultiDiffusionModel2D
-        A trained multi-diffusion model. The grid patching configuration
-        must be supplied through :meth:`set_patching` after construction.
+        A trained patch-based diffusion or flow-matching model. Call
+        :meth:`set_patching` after construction to configure grid patching.
     condition : torch.Tensor, TensorDict, or None, optional, default=None
         Conditioning at the global resolution, bound once at construction
-        and reused at every diffusion step. Shape :math:`(B, *cond\_dims)`.
+        and reused at every sampling step. Shape :math:`(B, *cond\_dims)`.
         Pass ``None`` for unconditional models.
     fuse : bool, default=True
         Whether to fuse per-patch outputs back to the global resolution
@@ -170,8 +171,7 @@ class MultiDiffusionPredictor(Predictor):
     torch.Size([8, 3, 8, 8])
 
     **Example 2:** Unconditional sampling. The predictor plugs straight into
-    the standard diffusion sampling stack (noise scheduler, denoiser,
-    solver):
+    the standard sampling stack (noise scheduler, denoiser, solver):
 
     >>> from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
     >>> from physicsnemo.diffusion.samplers import sample
@@ -746,14 +746,14 @@ class MultiDiffusionPredictor(Predictor):
         x: Float[Tensor, "B C H W"],
         t: Float[Tensor, " B"],
     ) -> Float[Tensor, "B C H W"] | Float[Tensor, "P_times_B C Hp Wp"]:
-        r"""Run the predictor on a noisy latent and diffusion time.
+        r"""Run the predictor on the current state and sampling time.
 
         Parameters
         ----------
         x : torch.Tensor
-            Noisy latent at global resolution, shape :math:`(B, C, H, W)`.
+            Current state at global resolution, shape :math:`(B, C, H, W)`.
         t : torch.Tensor
-            Diffusion time, shape :math:`(B,)`.
+            Diffusion or flow-matching time, shape :math:`(B,)`.
 
         Returns
         -------

@@ -20,11 +20,16 @@ import pytest
 import torch
 
 from physicsnemo.diffusion.multi_diffusion import (
+    MultiDiffusionFlowMatchingLoss,
     MultiDiffusionModel2D,
     MultiDiffusionMSEDSMLoss,
+    MultiDiffusionWeightedFlowMatchingLoss,
     MultiDiffusionWeightedMSEDSMLoss,
 )
-from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
+from physicsnemo.diffusion.noise_schedulers import (
+    EDMNoiseScheduler,
+    RectifiedFlowNoiseScheduler,
+)
 from physicsnemo.diffusion.preconditioners import EDMPreconditioner
 
 from .conftest import GLOBAL_SEED
@@ -62,6 +67,41 @@ TRAIN_STEPS = 2
 # to mirror the realistic SDA recipe pattern.
 SIGMA_DATA = 1.0
 
+LOSS_FAMILIES = [
+    (
+        MultiDiffusionMSEDSMLoss,
+        EDMNoiseScheduler,
+        "x0",
+        "mse",
+    ),
+    (
+        MultiDiffusionFlowMatchingLoss,
+        RectifiedFlowNoiseScheduler,
+        "flow",
+        "fm",
+    ),
+]
+
+WEIGHTED_LOSS_FAMILIES = [
+    (
+        MultiDiffusionWeightedMSEDSMLoss,
+        EDMNoiseScheduler,
+        "x0",
+        "wmse",
+    ),
+    (
+        MultiDiffusionWeightedFlowMatchingLoss,
+        RectifiedFlowNoiseScheduler,
+        "flow",
+        "wfm",
+    ),
+]
+
+FLOW_LOSS_CLASSES = [
+    MultiDiffusionFlowMatchingLoss,
+    MultiDiffusionWeightedFlowMatchingLoss,
+]
+
 # (config_name, prediction_type, img_shape, patch_shape, tag)
 LOSS_CONFIGS = [
     ("uncond", "x0", (IMG_H, IMG_W), PATCH_SHAPE, "uncond_x0_sq"),
@@ -88,6 +128,8 @@ COMPILE_LOSS_CONFIGS = [
 
 _LOSS_IDS = [c[4] for c in LOSS_CONFIGS]
 _COMPILE_LOSS_IDS = [c[4] for c in COMPILE_LOSS_CONFIGS]
+_LOSS_FAMILY_IDS = [c[3] for c in LOSS_FAMILIES]
+_WEIGHTED_LOSS_FAMILY_IDS = [c[3] for c in WEIGHTED_LOSS_FAMILIES]
 
 
 # =============================================================================
@@ -100,15 +142,32 @@ def _first_param(model: MultiDiffusionModel2D) -> torch.Tensor:
     return next(model.model.parameters()).detach().clone()
 
 
-def _make_loss(loss_cls, md, scheduler, prediction_type):
-    """Create a loss of type *loss_cls* with the given prediction type."""
+def _make_scheduler(scheduler_cls, prediction_type):
+    """Instantiate a scheduler for the requested prediction type."""
     kwargs = {}
-    if prediction_type == "score":
-        kwargs["score_to_x0_fn"] = scheduler.score_to_x0
-    elif prediction_type == "epsilon":
-        kwargs["epsilon_to_x0_fn"] = scheduler.epsilon_to_x0
-    elif prediction_type == "flow":
-        kwargs["flow_to_x0_fn"] = scheduler.flow_to_x0
+    if scheduler_cls is RectifiedFlowNoiseScheduler and prediction_type == "x0":
+        kwargs["t_min"] = 1e-3
+    return scheduler_cls(**kwargs)
+
+
+def _make_loss(loss_cls, md, scheduler, prediction_type, target_type):
+    """Create a configured loss with the requested prediction type."""
+    kwargs = {}
+    if target_type == "flow":
+        kwargs["x0_to_flow_fn"] = scheduler.x0_to_flow
+        if prediction_type == "score":
+            kwargs["score_to_flow_fn"] = scheduler.score_to_flow
+        elif prediction_type == "epsilon":
+            kwargs["epsilon_to_flow_fn"] = lambda eps, x_t, t: scheduler.x0_to_flow(
+                scheduler.epsilon_to_x0(eps, x_t, t), x_t, t
+            )
+    else:
+        if prediction_type == "score":
+            kwargs["score_to_x0_fn"] = scheduler.score_to_x0
+        elif prediction_type == "epsilon":
+            kwargs["epsilon_to_x0_fn"] = scheduler.epsilon_to_x0
+        elif prediction_type == "flow":
+            kwargs["flow_to_x0_fn"] = scheduler.flow_to_x0
     return loss_cls(md, scheduler, prediction_type=prediction_type, **kwargs)
 
 
@@ -206,6 +265,15 @@ class TestConstructor:
         assert loss_fn.model is md
         assert loss_fn.noise_scheduler is scheduler
 
+    @pytest.mark.parametrize("loss_cls", FLOW_LOSS_CLASSES, ids=["fm", "wfm"])
+    def test_flow_constructor(self, loss_cls):
+        md = _create_md_model("uncond")
+        md.set_random_patching(patch_shape=PATCH_SHAPE, patch_num=PATCH_NUM)
+        scheduler = RectifiedFlowNoiseScheduler()
+        loss_fn = loss_cls(md, scheduler, x0_to_flow_fn=scheduler.x0_to_flow)
+        assert loss_fn.model is md
+        assert loss_fn.noise_scheduler is scheduler
+
     def test_invalid_prediction_type(self):
         md = _create_md_model("uncond")
         md.set_random_patching(patch_shape=PATCH_SHAPE, patch_num=PATCH_NUM)
@@ -229,6 +297,46 @@ class TestConstructor:
                 md, EDMNoiseScheduler(), prediction_type=prediction_type
             )
 
+    @pytest.mark.parametrize("loss_cls", FLOW_LOSS_CLASSES, ids=["fm", "wfm"])
+    def test_flow_requires_x0_to_flow_fn(self, loss_cls):
+        md = _create_md_model("uncond")
+        md.set_random_patching(patch_shape=PATCH_SHAPE, patch_num=PATCH_NUM)
+        with pytest.raises(ValueError, match="x0_to_flow_fn"):
+            loss_cls(md, RectifiedFlowNoiseScheduler())
+
+    @pytest.mark.parametrize("loss_cls", FLOW_LOSS_CLASSES, ids=["fm", "wfm"])
+    @pytest.mark.parametrize(
+        "prediction_type,missing_fn",
+        [
+            ("score", "score_to_flow_fn"),
+            ("epsilon", "epsilon_to_flow_fn"),
+        ],
+    )
+    def test_flow_requires_conversion_fn(self, loss_cls, prediction_type, missing_fn):
+        md = _create_md_model("uncond")
+        md.set_random_patching(patch_shape=PATCH_SHAPE, patch_num=PATCH_NUM)
+        scheduler = RectifiedFlowNoiseScheduler()
+        with pytest.raises(ValueError, match=missing_fn):
+            loss_cls(
+                md,
+                scheduler,
+                prediction_type=prediction_type,
+                x0_to_flow_fn=scheduler.x0_to_flow,
+            )
+
+    @pytest.mark.parametrize("loss_cls", FLOW_LOSS_CLASSES, ids=["fm", "wfm"])
+    def test_flow_invalid_prediction_type(self, loss_cls):
+        md = _create_md_model("uncond")
+        md.set_random_patching(patch_shape=PATCH_SHAPE, patch_num=PATCH_NUM)
+        scheduler = RectifiedFlowNoiseScheduler()
+        with pytest.raises(ValueError, match="prediction_type"):
+            loss_cls(
+                md,
+                scheduler,
+                prediction_type="bad",
+                x0_to_flow_fn=scheduler.x0_to_flow,
+            )
+
     def test_epsilon_constructor(self):
         md = _create_md_model("uncond")
         md.set_random_patching(patch_shape=PATCH_SHAPE, patch_num=PATCH_NUM)
@@ -241,34 +349,53 @@ class TestConstructor:
         )
         assert loss_fn.model is md
 
-    def test_invalid_reduction(self):
+    @pytest.mark.parametrize(
+        "loss_cls,scheduler_cls,target_type,loss_name",
+        LOSS_FAMILIES + WEIGHTED_LOSS_FAMILIES,
+        ids=_LOSS_FAMILY_IDS + _WEIGHTED_LOSS_FAMILY_IDS,
+    )
+    def test_invalid_reduction(self, loss_cls, scheduler_cls, target_type, loss_name):
         md = _create_md_model("uncond")
         md.set_random_patching(patch_shape=PATCH_SHAPE, patch_num=PATCH_NUM)
+        scheduler = scheduler_cls()
+        kwargs = (
+            {"x0_to_flow_fn": scheduler.x0_to_flow} if target_type == "flow" else {}
+        )
         with pytest.raises(ValueError, match="reduction"):
-            MultiDiffusionMSEDSMLoss(md, EDMNoiseScheduler(), reduction="bad")
+            loss_cls(md, scheduler, reduction="bad", **kwargs)
 
-    def test_mse_no_patching_raises(self):
-        """Calling the loss without setting a patching strategy must fail."""
+    @pytest.mark.parametrize(
+        "loss_cls,scheduler_cls,target_type,loss_name,weighted",
+        [(*config, False) for config in LOSS_FAMILIES]
+        + [(*config, True) for config in WEIGHTED_LOSS_FAMILIES],
+        ids=_LOSS_FAMILY_IDS + _WEIGHTED_LOSS_FAMILY_IDS,
+    )
+    def test_no_patching_raises(
+        self,
+        loss_cls,
+        scheduler_cls,
+        target_type,
+        loss_name,
+        weighted,
+    ):
+        """Calling a loss without setting a patching strategy must fail."""
         md = _create_md_model("uncond")
-        scheduler = EDMNoiseScheduler()
-        loss_fn = MultiDiffusionMSEDSMLoss(md, scheduler)
+        scheduler = _make_scheduler(scheduler_cls, target_type)
+        loss_fn = _make_loss(
+            loss_cls,
+            md,
+            scheduler,
+            prediction_type=target_type,
+            target_type=target_type,
+        )
         x0 = torch.randn(*INPUT_SHAPE)
+        kwargs = {"weight": torch.ones_like(x0)} if weighted else {}
         with pytest.raises(RuntimeError, match="patching"):
-            loss_fn(x0)
-
-    def test_weighted_mse_no_patching_raises(self):
-        """Calling the weighted loss without setting a patching strategy must fail."""
-        md = _create_md_model("uncond")
-        scheduler = EDMNoiseScheduler()
-        loss_fn = MultiDiffusionWeightedMSEDSMLoss(md, scheduler)
-        x0 = torch.randn(*INPUT_SHAPE)
-        weight = torch.ones_like(x0)
-        with pytest.raises(RuntimeError, match="patching"):
-            loss_fn(x0, weight=weight)
+            loss_fn(x0, **kwargs)
 
 
 # =============================================================================
-# Non-Regression Tests — MSEDSMLoss
+# Non-Regression Tests: Unweighted Losses
 # =============================================================================
 
 
@@ -277,8 +404,13 @@ class TestConstructor:
     LOSS_CONFIGS,
     ids=_LOSS_IDS,
 )
-class TestMSEDSMLossNonRegression:
-    """Non-regression training loop tests for MultiDiffusionMSEDSMLoss."""
+@pytest.mark.parametrize(
+    "loss_cls,scheduler_cls,target_type,loss_name",
+    LOSS_FAMILIES,
+    ids=_LOSS_FAMILY_IDS,
+)
+class TestLossNonRegression:
+    """Non-regression training loop tests for unweighted losses."""
 
     def test_training_loop(
         self,
@@ -290,11 +422,15 @@ class TestMSEDSMLossNonRegression:
         img_shape,
         patch_shape,
         tag,
+        loss_cls,
+        scheduler_cls,
+        target_type,
+        loss_name,
     ):
         md = _create_md_model(config_name, img_shape=img_shape).to(device)
         md.set_random_patching(patch_shape=patch_shape, patch_num=PATCH_NUM)
-        scheduler = EDMNoiseScheduler()
-        loss_fn = _make_loss(MultiDiffusionMSEDSMLoss, md, scheduler, prediction_type)
+        scheduler = _make_scheduler(scheduler_cls, prediction_type)
+        loss_fn = _make_loss(loss_cls, md, scheduler, prediction_type, target_type)
 
         H, W = img_shape
         x0 = make_input((BATCH, CHANNELS, H, W), seed=GLOBAL_SEED, device=device)
@@ -303,14 +439,14 @@ class TestMSEDSMLossNonRegression:
 
         losses, params = _run_training_loop(loss_fn, md, x0, condition)
 
-        ref_file = f"{REF_PREFIX}mse_{tag}_train.pth"
+        ref_file = f"{REF_PREFIX}{loss_name}_{tag}_train.pth"
         _check_non_regression(
             losses, params, param_before, ref_file, device, tolerances
         )
 
 
 # =============================================================================
-# Non-Regression Tests — WeightedMSEDSMLoss
+# Non-Regression Tests: Weighted Losses
 # =============================================================================
 
 
@@ -319,8 +455,13 @@ class TestMSEDSMLossNonRegression:
     LOSS_CONFIGS,
     ids=_LOSS_IDS,
 )
-class TestWeightedMSEDSMLossNonRegression:
-    """Non-regression training loop tests for MultiDiffusionWeightedMSEDSMLoss."""
+@pytest.mark.parametrize(
+    "loss_cls,scheduler_cls,target_type,loss_name",
+    WEIGHTED_LOSS_FAMILIES,
+    ids=_WEIGHTED_LOSS_FAMILY_IDS,
+)
+class TestWeightedLossNonRegression:
+    """Non-regression training loop tests for weighted losses."""
 
     def test_training_loop(
         self,
@@ -332,13 +473,15 @@ class TestWeightedMSEDSMLossNonRegression:
         img_shape,
         patch_shape,
         tag,
+        loss_cls,
+        scheduler_cls,
+        target_type,
+        loss_name,
     ):
         md = _create_md_model(config_name, img_shape=img_shape).to(device)
         md.set_random_patching(patch_shape=patch_shape, patch_num=PATCH_NUM)
-        scheduler = EDMNoiseScheduler()
-        loss_fn = _make_loss(
-            MultiDiffusionWeightedMSEDSMLoss, md, scheduler, prediction_type
-        )
+        scheduler = _make_scheduler(scheduler_cls, prediction_type)
+        loss_fn = _make_loss(loss_cls, md, scheduler, prediction_type, target_type)
 
         H, W = img_shape
         x0 = make_input((BATCH, CHANNELS, H, W), seed=GLOBAL_SEED, device=device)
@@ -349,7 +492,7 @@ class TestWeightedMSEDSMLossNonRegression:
 
         losses, params = _run_training_loop(loss_fn, md, x0, condition, weight=weight)
 
-        ref_file = f"{REF_PREFIX}wmse_{tag}_train.pth"
+        ref_file = f"{REF_PREFIX}{loss_name}_{tag}_train.pth"
         _check_non_regression(
             losses, params, param_before, ref_file, device, tolerances
         )
@@ -366,7 +509,12 @@ class TestWeightedMSEDSMLossNonRegression:
     COMPILE_LOSS_CONFIGS,
     ids=_COMPILE_LOSS_IDS,
 )
-class TestMSEDSMLossCompile:
+@pytest.mark.parametrize(
+    "loss_cls,scheduler_cls,target_type,loss_name",
+    LOSS_FAMILIES,
+    ids=_LOSS_FAMILY_IDS,
+)
+class TestLossCompile:
     """Verify internal _CompiledPatchX compilation is reused across calls."""
 
     def test_internal_compile_no_recompile(
@@ -378,24 +526,28 @@ class TestMSEDSMLossCompile:
         img_shape,
         patch_shape,
         tag,
+        loss_cls,
+        scheduler_cls,
+        target_type,
+        loss_name,
     ):
         """The internally compiled patch_x graph is reused across patch resets."""
         torch._dynamo.config.error_on_recompile = True
 
         md = _create_md_model(config_name, img_shape=img_shape).to(device)
         md.set_random_patching(patch_shape=patch_shape, patch_num=PATCH_NUM)
-        scheduler = EDMNoiseScheduler()
-        loss_fn = _make_loss(MultiDiffusionMSEDSMLoss, md, scheduler, prediction_type)
+        scheduler = _make_scheduler(scheduler_cls, prediction_type)
+        loss_fn = _make_loss(loss_cls, md, scheduler, prediction_type, target_type)
 
         H, W = img_shape
         x0 = make_input((BATCH, CHANNELS, H, W), seed=GLOBAL_SEED, device=device)
         condition = _make_condition(config_name, img_shape=img_shape, device=device)
 
-        # First call — triggers internal _CompiledPatchX compilation
+        # First call triggers internal _CompiledPatchX compilation
         loss_1 = loss_fn(x0, condition=condition)
         assert loss_1.ndim == 0 and torch.isfinite(loss_1)
 
-        # Second call — patch indices reset internally, compiled graph must be reused
+        # Patch resets must reuse the compiled graph
         loss_2 = loss_fn(x0, condition=condition)
         assert loss_2.ndim == 0 and torch.isfinite(loss_2)
 
@@ -406,7 +558,12 @@ class TestMSEDSMLossCompile:
     COMPILE_LOSS_CONFIGS,
     ids=_COMPILE_LOSS_IDS,
 )
-class TestWeightedMSEDSMLossCompile:
+@pytest.mark.parametrize(
+    "loss_cls,scheduler_cls,target_type,loss_name",
+    WEIGHTED_LOSS_FAMILIES,
+    ids=_WEIGHTED_LOSS_FAMILY_IDS,
+)
+class TestWeightedLossCompile:
     """Verify internal _CompiledPatchX compilation is reused across calls."""
 
     def test_internal_compile_no_recompile(
@@ -418,16 +575,18 @@ class TestWeightedMSEDSMLossCompile:
         img_shape,
         patch_shape,
         tag,
+        loss_cls,
+        scheduler_cls,
+        target_type,
+        loss_name,
     ):
         """The internally compiled patch_x graph is reused across patch resets."""
         torch._dynamo.config.error_on_recompile = True
 
         md = _create_md_model(config_name, img_shape=img_shape).to(device)
         md.set_random_patching(patch_shape=patch_shape, patch_num=PATCH_NUM)
-        scheduler = EDMNoiseScheduler()
-        loss_fn = _make_loss(
-            MultiDiffusionWeightedMSEDSMLoss, md, scheduler, prediction_type
-        )
+        scheduler = _make_scheduler(scheduler_cls, prediction_type)
+        loss_fn = _make_loss(loss_cls, md, scheduler, prediction_type, target_type)
 
         H, W = img_shape
         x0 = make_input((BATCH, CHANNELS, H, W), seed=GLOBAL_SEED, device=device)
@@ -435,17 +594,17 @@ class TestWeightedMSEDSMLossCompile:
         weight[:, :, :, : W // 2] = 0.0
         condition = _make_condition(config_name, img_shape=img_shape, device=device)
 
-        # First call — triggers internal _CompiledPatchX compilation
+        # First call triggers internal _CompiledPatchX compilation
         loss_1 = loss_fn(x0, weight=weight, condition=condition)
         assert loss_1.ndim == 0 and torch.isfinite(loss_1)
 
-        # Second call — patch indices reset internally, compiled graph must be reused
+        # Patch resets must reuse the compiled graph
         loss_2 = loss_fn(x0, weight=weight, condition=condition)
         assert loss_2.ndim == 0 and torch.isfinite(loss_2)
 
 
 # =============================================================================
-# Combined Workflow Tests — EDMPreconditioner inside MultiDiffusionModel2D
+# Combined Workflow Tests: EDMPreconditioner inside MultiDiffusionModel2D
 # =============================================================================
 
 
