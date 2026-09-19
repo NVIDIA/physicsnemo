@@ -31,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Adds type annotations and NumPy-style docstrings to the helpers in
+  `physicsnemo.distributed.utils` (no behavior change).
 - `Mesh.slice_points` picks its cell-remapping algorithm by mesh shape: the
   full-mesh lookup table as before, or a binary search over the kept ids when the
   mesh has far more points than cell-vertex entries (a reader keeping a block of
@@ -62,6 +64,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `physicsnemo.distributed.utils.pad_helper` pads the requested `dim`; it
+  previously always padded the last dimension. `split_tensor_along_dim` now
+  formats the values in its too-few-elements error message.
 - Fixes mesh dtype handling: preserves integer-coordinate precision, normalizes
   connectivity safely, and rejects integer `.to()` casts. Floating/complex casts
   preserve the source mesh.
