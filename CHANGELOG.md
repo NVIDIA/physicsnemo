@@ -25,9 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PHYSICSNEMO_DIST_TIMEOUT_S`; unset or empty configuration keeps PyTorch's
   backend default. Invalid timeouts are rejected before initialization state
   changes, allowing corrected configuration to be retried.
-- Adds `ComputeFreestreamDirection` and `DropDegenerateCells` transforms to
-  the unified external aerodynamics recipe and uses them in the surface
-  dataset configs.
+- Adds `DropDegenerateCells` to the unified external aerodynamics surface
+  pipelines, dropping collapsed or non-finite cells before centroid conversion.
 - `MeshToDomainMesh` in `cell_centroids` mode records each source cell's
   complete effective measure on the interior under the mesh-owned
   `_effective_measure` point-data key, so
@@ -77,6 +76,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     file; PyVista reads and writes OBJ, VTP and STL.
 
 ### Fixed
+
+- Triangle areas use direct area components and a rescaled norm, preserving
+  thin faces and their quadrature measures without Gram cancellation or
+  overflow/underflow in the norm.
 
 - Fixes mesh dtype handling: preserves integer-coordinate precision, normalizes
   connectivity safely, and rejects integer `.to()` casts. Floating/complex casts

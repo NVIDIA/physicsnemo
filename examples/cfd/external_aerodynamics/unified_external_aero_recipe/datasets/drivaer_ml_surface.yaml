@@ -54,12 +54,6 @@ pipeline:
   transforms:
     - _target_: ${dp:DropMeshFields}
       global_data: [TimeValue]
-    # Unit freestream direction as a new global leaf `U_inf_dir` (`U_inf`
-    # stays physical). Placed before CenterMesh so the rotation augmentation
-    # (inserted after CenterMesh) rotates it together with the geometry.
-    - _target_: ${dp:ComputeFreestreamDirection}
-      velocity_field: U_inf
-      output_field: U_inf_dir
     - _target_: ${dp:CenterMesh}
       use_area_weighting: false
     - _target_: ${dp:NonDimensionalizeByMetadata}

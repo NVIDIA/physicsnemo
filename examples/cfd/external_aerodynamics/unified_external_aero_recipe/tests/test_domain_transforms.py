@@ -21,12 +21,13 @@ from pathlib import Path
 import pytest
 import torch
 from datasets import build_dataset
-from domain_transforms import ComputeFreestreamDirection, DropDegenerateCells
+from domain_transforms import DropDegenerateCells
 from omegaconf import OmegaConf
-from tensordict import TensorDict
 
 from physicsnemo.datapipes.protocols import DatasetBase
+from physicsnemo.datapipes.transforms.mesh import MeshToDomainMesh
 from physicsnemo.mesh import DomainMesh, Mesh
+from physicsnemo.mesh.calculus import cell_measures, point_measures, set_cell_measures
 
 
 def _two_triangles(second_degenerate: bool = False) -> Mesh:
@@ -47,71 +48,7 @@ def _two_triangles(second_degenerate: bool = False) -> Mesh:
         points=points,
         cells=torch.tensor([[0, 1, 2], [3, 4, 5]]),
         cell_data={"pressure": torch.tensor([10.0, 20.0])},
-        global_data={"U_inf": torch.tensor([3.0, 0.0, 4.0])},
     )
-
-
-class TestComputeFreestreamDirection:
-    """ComputeFreestreamDirection on meshes and domains."""
-
-    def test_adds_unit_direction_and_keeps_velocity(self):
-        """The unit direction is added and the physical velocity is untouched."""
-        mesh = _two_triangles()
-        out = ComputeFreestreamDirection()(mesh)
-
-        torch.testing.assert_close(
-            out.global_data["U_inf_dir"], torch.tensor([0.6, 0.0, 0.8])
-        )
-        torch.testing.assert_close(out.global_data["U_inf"], mesh.global_data["U_inf"])
-        assert "U_inf_dir" not in mesh.global_data.keys()
-        assert torch.equal(out.points, mesh.points)
-        assert torch.equal(out.cell_data["pressure"], mesh.cell_data["pressure"])
-
-    def test_custom_field_names(self):
-        """Input and output field names are configurable."""
-        mesh = Mesh(
-            points=torch.zeros(3, 3),
-            cells=torch.tensor([[0, 1, 2]]),
-            global_data={"velocity": torch.tensor([0.0, -2.0, 0.0])},
-        )
-        out = ComputeFreestreamDirection(
-            velocity_field="velocity", output_field="direction"
-        )(mesh)
-
-        torch.testing.assert_close(
-            out.global_data["direction"], torch.tensor([0.0, -1.0, 0.0])
-        )
-
-    def test_domain_writes_domain_level_global_data(self):
-        """On a DomainMesh the direction lands on the domain-level global_data."""
-        boundary = _two_triangles()
-        domain = DomainMesh(
-            interior=Mesh(points=torch.zeros(2, 3)),
-            boundaries={"vehicle": boundary},
-            global_data=TensorDict({"U_inf": torch.tensor([0.0, 5.0, 0.0])}),
-        )
-        out = ComputeFreestreamDirection().apply_to_domain(domain)
-
-        torch.testing.assert_close(
-            out.global_data["U_inf_dir"], torch.tensor([0.0, 1.0, 0.0])
-        )
-        assert "U_inf_dir" not in out.boundaries["vehicle"].global_data.keys()
-
-    def test_missing_velocity_raises(self):
-        """A missing velocity field is a KeyError naming the field."""
-        mesh = Mesh(points=torch.zeros(3, 3), cells=torch.tensor([[0, 1, 2]]))
-        with pytest.raises(KeyError, match="U_inf"):
-            ComputeFreestreamDirection()(mesh)
-
-    def test_zero_velocity_raises(self):
-        """A zero freestream vector has no direction and raises."""
-        mesh = Mesh(
-            points=torch.zeros(3, 3),
-            cells=torch.tensor([[0, 1, 2]]),
-            global_data={"U_inf": torch.zeros(3)},
-        )
-        with pytest.raises(ValueError, match="finite and positive"):
-            ComputeFreestreamDirection()(mesh)
 
 
 class TestDropDegenerateCells:
@@ -146,8 +83,7 @@ class TestDropDegenerateCells:
             cells=torch.tensor([[0, 1, 2]]),
             cell_data={"pressure": torch.tensor([10.0])},
         )
-        # Populate the area cache before filtering. The float32 Gram formula
-        # currently cancels to zero for these valid triangles.
+        # Populate the area cache before filtering.
         _ = mesh.cell_areas
 
         out = DropDegenerateCells()(mesh)
@@ -155,6 +91,29 @@ class TestDropDegenerateCells:
         assert out is mesh
         assert out.n_cells == 1
         torch.testing.assert_close(out.cell_data["pressure"], torch.tensor([10.0]))
+        domain = MeshToDomainMesh(
+            interior_points="cell_centroids", cell_data_targets=["pressure"]
+        )(out)
+        torch.testing.assert_close(
+            point_measures(domain.interior),
+            torch.tensor([height / 2]),
+            atol=0,
+            rtol=1e-6,
+        )
+
+    def test_filter_and_centroids_preserve_sampling_correction(self):
+        """Filtering slices complete measures rather than replacing them with areas."""
+        mesh = _two_triangles(second_degenerate=True)
+        set_cell_measures(mesh, torch.tensor([2.0, 8.0]))
+        with pytest.warns(UserWarning, match="dropping 1 cell"):
+            out = DropDegenerateCells()(mesh)
+        domain = MeshToDomainMesh(
+            interior_points="cell_centroids", cell_data_targets=["pressure"]
+        )(out)
+        torch.testing.assert_close(point_measures(domain.interior), torch.tensor([2.0]))
+        torch.testing.assert_close(
+            domain.interior.integrate_samples("pressure"), torch.tensor(20.0)
+        )
 
     def test_rechecks_coordinates_after_area_cache_was_populated(self):
         """Cached positive areas cannot hide a subsequently collapsed face."""
@@ -216,9 +175,9 @@ class TestDropDegenerateCells:
         torch.testing.assert_close(out.cell_data["pressure"], torch.tensor([10.0]))
 
 
-@pytest.mark.parametrize("rotate", [False, True])
+@pytest.mark.parametrize("augment", [False, True])
 def test_drivaer_dataset_pipeline_preserves_thin_face_and_aligns_targets(
-    tmp_path, rotate
+    tmp_path, augment
 ):
     """Run the actual reader, configured transforms, and target conversion."""
     vehicle = Mesh(
@@ -263,10 +222,7 @@ def test_drivaer_dataset_pipeline_preserves_thin_face_and_aligns_targets(
             "sampling_resolution": 3,
         },
     )
-    # Exercise the configured rotation and its insertion point. Translation's
-    # pre-existing Uniform/list instantiation issue is outside this regression.
-    cfg.pipeline.augmentations = [cfg.pipeline.augmentations[0]]
-    dataset = build_dataset(cfg, augment=rotate, device=None, num_workers=1)
+    dataset = build_dataset(cfg, augment=augment, device=None, num_workers=1)
     try:
         with pytest.warns(UserWarning, match="dropping 1 cell"):
             domain, _ = dataset[0]
@@ -283,8 +239,15 @@ def test_drivaer_dataset_pipeline_preserves_thin_face_and_aligns_targets(
     torch.testing.assert_close(
         boundary.cell_data["normals"].norm(dim=-1), torch.ones(2)
     )
-    torch.testing.assert_close(
-        domain.global_data["U_inf_dir"],
-        domain.global_data["U_inf"] / domain.global_data["U_inf"].norm(),
-    )
+    measures = point_measures(domain.interior)
+    assert torch.isfinite(measures).all() and (measures > 0).all()
+    torch.testing.assert_close(measures, cell_measures(boundary))
+    # A measure-weighted loss must include both retained targets and backpropagate.
+    prediction = torch.zeros(2, requires_grad=True)
+    error = prediction - domain.interior.point_data["pressure"]
+    loss = domain.interior.integrate_samples(error.square()) / measures.sum()
+    weights = measures / measures.sum()
+    torch.testing.assert_close(loss, (weights * torch.tensor([1.0, 9.0])).sum())
+    loss.backward()
+    torch.testing.assert_close(prediction.grad, 2 * weights * error.detach())
     assert "TimeValue" not in domain.global_data
