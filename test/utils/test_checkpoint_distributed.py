@@ -25,6 +25,7 @@ Run with::
 import shutil
 import tempfile
 
+import fsspec
 import pytest
 import torch
 import torch.distributed as dist
@@ -73,6 +74,64 @@ def shared_tmp_dir():
 # ---------------------------------------------------------------------------
 # Plain FSDP (1-D mesh, no domain sharding)
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize(
+    "checkpoint_kind", ["empty", "weights_only", "missing_weights", "complete"]
+)
+@pytest.mark.parametrize("epoch", [None, 3])
+def test_distributed_checkpoint_file_requirements(
+    shared_tmp_dir, monkeypatch, checkpoint_kind, epoch
+):
+    """All ranks reject missing weights using only rank 0's filesystem access."""
+    dm = DistributedManager()
+    if dm.world_size < 2:
+        pytest.skip("Need at least 2 ranks")
+
+    fs = fsspec.filesystem("file")
+    if dm.rank == 0 and checkpoint_kind != "empty":
+        source = nn.Linear(8, 8)
+        with torch.no_grad():
+            for parameter in source.parameters():
+                parameter.fill_(0.25)
+        save_checkpoint(shared_tmp_dir, models=source, epoch=3)
+        if checkpoint_kind == "missing_weights":
+            fs.mv(
+                shared_tmp_dir + "/Linear.0.3.pt",
+                shared_tmp_dir + "/FormerName.0.3.pt",
+            )
+        elif checkpoint_kind == "weights_only":
+            fs.rm(shared_tmp_dir + "/checkpoint.0.3.pt")
+    dist.barrier()
+
+    mesh = init_device_mesh(dm.device.type, (dm.world_size,))
+    model = distribute_module(nn.Linear(8, 8, device=dm.device), mesh)
+
+    if dm.rank != 0:
+
+        def unexpected_file_access(*args, **kwargs):
+            """Nonzero ranks may not inspect checkpoint files."""
+            pytest.fail("Only rank 0 should inspect checkpoint files")
+
+        monkeypatch.setattr(fs, "exists", unexpected_file_access)
+        monkeypatch.setattr(fs, "glob", unexpected_file_access)
+
+    if checkpoint_kind == "missing_weights":
+        with pytest.raises(FileNotFoundError, match="uninitialized") as exc:
+            load_checkpoint(shared_tmp_dir, models=model, epoch=epoch)
+        assert "Linear" in str(exc.value)
+        assert "checkpoint.0.3.pt" in str(exc.value)
+    else:
+        expected_epoch = 3 if checkpoint_kind == "complete" else 0
+        assert (
+            load_checkpoint(shared_tmp_dir, models=model, epoch=epoch) == expected_epoch
+        )
+        if checkpoint_kind != "empty":
+            for parameter in model.parameters():
+                full = parameter.full_tensor()
+                torch.testing.assert_close(full, torch.full_like(full, 0.25))
 
 
 @pytest.mark.timeout(30)

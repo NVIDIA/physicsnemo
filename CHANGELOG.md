@@ -62,6 +62,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Checkpoint loading raises when training state exists but a requested model's
+  weights are missing, preventing a resume with uninitialized weights. Distributed
+  loads report the failure on every rank using rank 0's file lookup.
 - Fixes mesh dtype handling: preserves integer-coordinate precision, normalizes
   connectivity safely, and rejects integer `.to()` casts. Floating/complex casts
   preserve the source mesh.

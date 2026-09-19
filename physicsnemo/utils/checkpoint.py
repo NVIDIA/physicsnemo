@@ -1008,6 +1008,14 @@ def load_checkpoint(
         * No training-state file is found inside the directory.
         * The training-state file does not contain an ``"epoch"`` key.
 
+    Raises
+    ------
+    FileNotFoundError
+        A training-state checkpoint exists but a supplied model's weights
+        file cannot be found. Training state is not restored around an
+        uninitialized model. A missing checkpoint directory or a directory
+        without a training-state checkpoint retains the skip behavior.
+
     Examples
     --------
     Save and then restore a model, optimizer, and scheduler from a checkpoint:
@@ -1094,6 +1102,8 @@ def load_checkpoint(
         )
         return 0
 
+    checkpoint_filename = _get_checkpoint_filename(path, index=epoch, model_type="pt")
+
     # == Loading model checkpoint ==
     for name, model in named_models.items():
         inner = _unwrap_fsdp(model)
@@ -1102,6 +1112,12 @@ def load_checkpoint(
             path, name, index=epoch, model_type=model_type
         )
         if not fs.exists(file_name):
+            if fs.exists(checkpoint_filename):
+                raise FileNotFoundError(
+                    f"Training checkpoint {checkpoint_filename} exists, but no "
+                    f"weights file for model '{name}' was found at {file_name}; "
+                    "refusing to restore training state with uninitialized weights."
+                )
             checkpoint_logging.error(
                 f"Could not find valid model file {file_name}, skipping load"
             )
@@ -1128,7 +1144,6 @@ def load_checkpoint(
         )
 
     # == Loading training checkpoint ==
-    checkpoint_filename = _get_checkpoint_filename(path, index=epoch, model_type="pt")
     if not fs.exists(checkpoint_filename):
         checkpoint_logging.warning(
             "Could not find valid checkpoint file, skipping load"
@@ -1266,9 +1281,16 @@ def _load_checkpoint_distributed(
 
     # --- Rank 0 checks directory existence and loads raw data -----------
     dir_exists = fs.exists(path) and not fs.isfile(path) if is_rank0 else None
-    flags: list[Any] = [dir_exists]
+    checkpoint_filename = None
+    if is_rank0 and dir_exists:
+        candidate = _get_checkpoint_filename(
+            path, index=epoch, model_type="pt", distributed=True
+        )
+        if fs.exists(candidate):
+            checkpoint_filename = candidate
+    flags: list[Any] = [dir_exists, checkpoint_filename]
     torch.distributed.broadcast_object_list(flags, src=0)
-    dir_exists = flags[0]
+    dir_exists, checkpoint_filename = flags
 
     if not dir_exists:
         checkpoint_logging.warning(
@@ -1315,6 +1337,12 @@ def _load_checkpoint_distributed(
     # Distribute model state dicts via DCP
     for name, model in named_models.items():
         if model_file_info.get(name) is None:
+            if checkpoint_filename is not None:
+                raise FileNotFoundError(
+                    f"Training checkpoint {checkpoint_filename} exists, but no "
+                    f"weights file for model '{name}' was found; refusing to "
+                    "restore training state with uninitialized weights."
+                )
             checkpoint_logging.error(
                 f"Could not find valid model file for {name}, skipping load"
             )
@@ -1369,23 +1397,11 @@ def _load_checkpoint_distributed(
         )
 
     # --- Load training checkpoint ---------------------------------------
-    checkpoint_filename = _get_checkpoint_filename(
-        path, index=epoch, model_type="pt", distributed=True
-    )
-
-    # Broadcast file existence so all ranks agree on whether to enter the
-    # (collective) optimizer load. Without this, a rundir that has model
-    # weights but no training checkpoint -- e.g. fine-tuning from a
-    # weights-only export -- would have rank 0 enter ``set_optimizer_state_dict``
-    # with an empty dict and trip the "missing 'state'" error inside DCP.
-    ckpt_exists = fs.exists(checkpoint_filename) if is_rank0 else None
-    ckpt_flags: list[Any] = [ckpt_exists]
-    torch.distributed.broadcast_object_list(ckpt_flags, src=0)
-    ckpt_exists = ckpt_flags[0]
-
-    if not ckpt_exists:
+    # The rank-0 file lookup above also keeps weights-only exports out of
+    # the collective optimizer load, which requires a training-state dict.
+    if checkpoint_filename is None:
         checkpoint_logging.warning(
-            f"No training checkpoint at {checkpoint_filename}; "
+            f"No training checkpoint in {path}; "
             "skipping optimizer/scheduler/scaler load"
         )
         return 0

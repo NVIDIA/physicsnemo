@@ -233,6 +233,59 @@ def test_load_model_weights(
     assert torch.allclose(ref_output, loaded_output, rtol=rtol, atol=atol)
 
 
+@pytest.mark.parametrize("epoch", [None, 3])
+@pytest.mark.parametrize("missing_weights", ["deleted", "renamed"])
+def test_load_checkpoint_refuses_missing_model_weights(
+    tmp_path, model_generator, epoch, missing_weights
+):
+    """Missing weights cannot restore training state around a fresh model."""
+    from physicsnemo.utils import load_checkpoint, save_checkpoint
+
+    model = model_generator(8)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+    save_checkpoint(tmp_path, models=model, optimizer=optimizer, epoch=3)
+    weights = next(
+        p for p in tmp_path.iterdir() if not p.name.startswith("checkpoint.")
+    )
+    if missing_weights == "deleted":
+        weights.unlink()
+    else:
+        weights.rename(weights.with_name("FormerName.0.3" + weights.suffix))
+
+    fresh = model_generator(8)
+    fresh_optimizer = torch.optim.Adam(fresh.parameters(), lr=0.5)
+    metadata = {}
+    with pytest.raises(FileNotFoundError, match="uninitialized") as exc:
+        load_checkpoint(
+            tmp_path,
+            models=fresh,
+            optimizer=fresh_optimizer,
+            epoch=epoch,
+            metadata_dict=metadata,
+        )
+    assert type(fresh).__name__ in str(exc.value)
+    assert "checkpoint.0.3.pt" in str(exc.value)
+    assert fresh_optimizer.param_groups[0]["lr"] == 0.5
+    assert metadata == {}
+
+
+def test_load_checkpoint_without_training_state(tmp_path, model_generator):
+    """Fresh runs, absent epochs, and weights-only exports remain loadable."""
+    from physicsnemo.utils import load_checkpoint, save_checkpoint
+
+    fresh = model_generator(8)
+    assert load_checkpoint(tmp_path / "nonexistent", models=fresh) == 0
+    assert load_checkpoint(tmp_path, models=fresh) == 0
+
+    source = model_generator(8)
+    save_checkpoint(tmp_path, models=source, epoch=3)
+    assert load_checkpoint(tmp_path, models=fresh, epoch=4) == 0
+    (tmp_path / "checkpoint.0.3.pt").unlink()
+    assert load_checkpoint(tmp_path, models=fresh) == 0
+    for name, value in source.state_dict().items():
+        torch.testing.assert_close(fresh.state_dict()[name], value)
+
+
 @pytest.mark.parametrize("device", ["cpu", "cuda:0"])
 def test_compiled_model_checkpointing(
     tmp_path, device, rtol: float = 1e-3, atol: float = 1e-3
