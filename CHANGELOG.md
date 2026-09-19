@@ -44,6 +44,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GLOBE use the mesh-owned measure API. Point measures carry their represented
   dimension so geometric scaling preserves their physical units.
 
+  **Migration from 2.2.x:** meshes saved with `cell_data["_measure_weights"]`
+  must be regenerated or converted once before integration:
+
+  ```python
+  from physicsnemo.mesh.calculus import set_cell_measures
+
+  if "_measure_weights" in mesh.cell_data:
+      weights = mesh.cell_data.pop("_measure_weights")
+      set_cell_measures(mesh, mesh.cell_areas * weights)
+  ```
+
+  Replace `compose_measure_weights` calls with `scale_measures`. Consumers
+  should read complete measures with `cell_measures` instead of multiplying
+  `cell_areas` by `cell_measure_weights`. Update stored-field mappings from
+  `cell_data._measure_weights` to `cell_data._effective_measure` and remove any
+  subsequent multiplication by geometric areas.
+
 - `Mesh.slice_points` picks its cell-remapping algorithm by mesh shape: the
   full-mesh lookup table as before, or a binary search over the kept ids when the
   mesh has far more points than cell-vertex entries (a reader keeping a block of
