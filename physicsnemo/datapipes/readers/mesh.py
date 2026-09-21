@@ -34,6 +34,7 @@ import torch
 
 from physicsnemo.datapipes._indexing import _cyclic_block_indices
 from physicsnemo.datapipes._rng import spawn_generator
+from physicsnemo.datapipes.caching import DatasetCache, cached_or_load
 from physicsnemo.datapipes.registry import register
 from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.mesh.calculus.measure import compose_measure_weights
@@ -358,6 +359,7 @@ class MeshReader:
         include_index_in_metadata: bool = True,
         subsample_n_points: int | None = None,
         subsample_n_cells: int | None = None,
+        cache: DatasetCache | None = None,
     ) -> None:
         """
         Initialize the mesh reader.
@@ -394,6 +396,16 @@ class MeshReader:
             probability as measure weights, preserving the integration
             measure (see :mod:`physicsnemo.mesh.calculus.measure`).  Applied before
             ``subsample_n_points`` when both are set.
+        cache : DatasetCache, optional
+            Shared :class:`~physicsnemo.datapipes.caching.DatasetCache`. Each
+            sample load becomes a tree entry: the loaded, memmap-backed mesh is
+            kept in the RAM tier and its many small files are mirrored to the
+            disk tier, removing the per-sample metadata reads on network
+            filesystems. The stock ``load`` stays the only decoder and a bad
+            mirror falls back to the source. Entries assume an immutable
+            dataset: after rewriting or adding files, ``cache.clear()``. Under
+            a ``DistributedSampler`` RAM hits build slowly; the disk tier
+            carries reuse across epochs and ranks.
         """
         self._root = Path(path)
         self._pattern = pattern
@@ -401,6 +413,7 @@ class MeshReader:
         self.include_index_in_metadata = include_index_in_metadata
         self.subsample_n_points = subsample_n_points
         self.subsample_n_cells = subsample_n_cells
+        self._cache = cache
         # Base seed + epoch for deterministic per-index RNG (see
         # :meth:`set_generator`). ``None`` means unseeded.
         self._seed_base: int | None = None
@@ -420,7 +433,7 @@ class MeshReader:
             raise ValueError(f"No paths matching {pattern!r} found in {self._root}")
 
     def _load_sample(self, index: int) -> Mesh:
-        """Load a single Mesh from disk."""
+        """Load a single Mesh from disk (through the cache when configured)."""
         mesh_path = self._paths[index]
         if (mesh_path / "zarr.json").exists():
             from physicsnemo.mesh.io import from_zarr, io_zarr
@@ -453,8 +466,11 @@ class MeshReader:
                     self.subsample_n_points,
                     generator,
                 )
+            # Zarr loads stream chunk data eagerly, so they bypass the cache.
             return from_zarr(mesh_path)
-        return Mesh.load(mesh_path)
+        return cached_or_load(
+            self._cache, "mesh/v1", mesh_path, Mesh.load, src=mesh_path
+        )
 
     def _get_sample_metadata(self, index: int) -> dict[str, Any]:
         """Return metadata for the sample (e.g. source path)."""
@@ -546,6 +562,7 @@ class DomainMeshReader:
         extra_boundaries: dict[str, dict] | None = None,
         drop_interior_cells: bool = False,
         drop_in_file_boundaries: bool = False,
+        cache: DatasetCache | None = None,
     ) -> None:
         """
         Initialize the domain mesh reader.
@@ -621,6 +638,16 @@ class DomainMeshReader:
             otherwise be subsampled (an expensive ``slice_points`` remap,
             GIL-held, that blocks worker-thread overlap) and pinned every
             sample for nothing.
+        cache : DatasetCache, optional
+            Shared :class:`~physicsnemo.datapipes.caching.DatasetCache`. Each
+            sample load becomes a tree entry: the loaded, memmap-backed mesh is
+            kept in the RAM tier and its many small files are mirrored to the
+            disk tier, removing the per-sample metadata reads on network
+            filesystems. The stock ``load`` stays the only decoder and a bad
+            mirror falls back to the source. Entries assume an immutable
+            dataset: after rewriting or adding files, ``cache.clear()``. Under
+            a ``DistributedSampler`` RAM hits build slowly; the disk tier
+            carries reuse across epochs and ranks.
         """
         self._root = Path(path)
         self._pattern = pattern
@@ -635,6 +662,7 @@ class DomainMeshReader:
         self._seed_base: int | None = None
         self._epoch: int = 0
         self._extra_boundaries = extra_boundaries or {}
+        self._cache = cache
 
         if not self._root.exists():
             raise FileNotFoundError(f"Path not found: {self._root}")
@@ -650,7 +678,7 @@ class DomainMeshReader:
             raise ValueError(f"No paths matching {pattern!r} found in {self._root}")
 
     def _load_sample(self, index: int) -> DomainMesh:
-        """Load a single DomainMesh from disk."""
+        """Load a single DomainMesh from disk (through the cache when configured)."""
         path = self._paths[index]
         if (path / "zarr.json").exists():
             from physicsnemo.mesh.io import from_zarr, io_zarr
@@ -696,8 +724,11 @@ class DomainMeshReader:
                     boundaries=boundaries,
                     global_data=io_zarr._read_tree(root, "global_data"),
                 )
+            # Zarr loads stream chunk data eagerly, so they bypass the cache.
             return from_zarr(path)
-        return DomainMesh.load(path)
+        return cached_or_load(
+            self._cache, "domain-mesh/v1", path, DomainMesh.load, src=path
+        )
 
     def __len__(self) -> int:
         return len(self._paths)
@@ -804,12 +835,7 @@ class DomainMeshReader:
 
         for bnd_name, bnd_cfg in self._extra_boundaries.items():
             glob_pattern = bnd_cfg["pattern"]
-            matches = sorted(case_dir.glob(glob_pattern))
-            if not matches:
-                raise FileNotFoundError(
-                    f"No mesh matching {glob_pattern!r} found in "
-                    f"{case_dir} for extra boundary {bnd_name!r}"
-                )
+            matches = self._glob_extra_boundary(case_dir, glob_pattern, bnd_name)
             if len(matches) > 1:
                 logger.warning(
                     "Multiple meshes found for extra boundary %r in %s "
@@ -819,17 +845,45 @@ class DomainMeshReader:
                     glob_pattern,
                     matches[0],
                 )
-            if (matches[0] / "zarr.json").exists():
+            bnd_path = Path(matches[0])  # cached globs are strings
+            if (bnd_path / "zarr.json").exists():
                 from physicsnemo.mesh.io import from_zarr
 
-                new_boundaries[bnd_name] = from_zarr(matches[0])
+                new_boundaries[bnd_name] = from_zarr(bnd_path)
             else:
-                new_boundaries[bnd_name] = Mesh.load(matches[0])
+                new_boundaries[bnd_name] = cached_or_load(
+                    self._cache, "mesh/v1", bnd_path, Mesh.load, src=bnd_path
+                )
 
         return DomainMesh(
             interior=dm.interior,
             boundaries=new_boundaries,
             global_data=dm.global_data,
+        )
+
+    def _glob_extra_boundary(
+        self, case_dir: Path, glob_pattern: str, bnd_name: str
+    ) -> list[str]:
+        """Resolve an extra-boundary glob: a ``readdir`` per sample, cached.
+
+        The identity carries the pattern as well as the directory, so two
+        boundaries globbed from one case directory are two entries. An
+        empty match raises rather than returning, so it is never cached: a
+        boundary file added while setting a dataset up is found on the
+        next read instead of after a ``cache.clear()``.
+        """
+
+        def _do_glob() -> list[str]:
+            matches = [str(p) for p in sorted(case_dir.glob(glob_pattern))]
+            if not matches:
+                raise FileNotFoundError(
+                    f"No mesh matching {glob_pattern!r} found in "
+                    f"{case_dir} for extra boundary {bnd_name!r}"
+                )
+            return matches
+
+        return cached_or_load(
+            self._cache, "glob/v1", f"{case_dir}::{glob_pattern}", _do_glob
         )
 
     def __iter__(self) -> Iterator[tuple[DomainMesh, dict[str, Any]]]:
