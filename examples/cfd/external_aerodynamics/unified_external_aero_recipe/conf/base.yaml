@@ -48,6 +48,19 @@ dataloader:
   use_streams: true
   num_workers: 4
   pin_memory: true
+  # Optional reader cache (RAM + node-local disk) for the small metadata
+  # reads every sample repeats: tensordict meta.json trees, global_data
+  # scalars, extra-boundary globs. One instance is shared by every dataset
+  # and split; ranks on a node may share the disk_dir. Bulk tensor data is
+  # not cached. Enable with e.g.:
+  #   cache:
+  #     _target_: ${dp:DatasetCache}
+  #     ram_bytes_limit: 4294967296          # 4 GiB per rank; null disables
+  #     disk_dir: ${oc.env:TMPDIR,/tmp}/pn-datacache-${oc.env:USER}
+  #     disk_bytes_limit: 214748364800       # 200 GiB, clamped to free space
+  # disk_dir must be node-local (NVMe, tmpfs, $TMPDIR); network filesystems
+  # are refused. Under /tmp the cache is usually gone after the job.
+  cache: null
 
 # -- Logging -----------------------------------------------------------------
 logging:
