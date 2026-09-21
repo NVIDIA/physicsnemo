@@ -29,48 +29,53 @@ class RectifiedFlowNoiseScheduler(LinearGaussianNoiseScheduler):
     r"""
     Rectified flow noise scheduler.
 
-    Implements the linear interpolation path used in flow matching, with
-    :math:`\alpha(t) = 1 - t` and :math:`\sigma(t) = t` for
-    :math:`t \in [0, 1]`:
-
-    .. math::
-        \mathbf{x}(t) = (1 - t)\, \mathbf{x}_0 + t\, \boldsymbol{\epsilon},
-        \quad \boldsymbol{\epsilon} \sim \mathcal{N}(0, \mathbf{I})
-
-    At :math:`t = 0` the state is clean data, and at :math:`t = 1` pure
-    Gaussian noise. The flow (velocity) field of this path,
+    The rectified-flow formulation uses :math:`\alpha(t) = 1 - t` and
+    :math:`\sigma(t) = t` for :math:`t \in [0, 1]`. The state corresponds to
+    clean data at :math:`t = 0` and standard Gaussian noise at :math:`t = 1`.
+    This interpolation has the flow (velocity)
 
     .. math::
         \mathbf{v} = \frac{d\mathbf{x}(t)}{dt}
-        = \boldsymbol{\epsilon} - \mathbf{x}_0,
+        = \boldsymbol{\epsilon} - \mathbf{x}_0.
 
-    is the regression target of
-    :class:`~physicsnemo.diffusion.metrics.losses.FlowMatchingLoss`
-    (``prediction_type="flow"``). Sampling time-steps run linearly from
-    ``t_max`` down to 0; training times follow a uniform distribution on
+    A model can learn this velocity field directly and use the same
+    parameterization for training and sampling.
+
+    Sampled times during training follow a uniform distribution over
     :math:`[t_{\min}, t_{\max}]`.
+
+    Sampling uses equidistant time steps that decrease from ``t_max`` to zero.
+    The sampling grid does not use :math:`t_{\min}`.
 
     .. warning::
 
-        The reverse-process drift :math:`\dot{\alpha}(t)/\alpha(t)` is
-        singular at :math:`t = 1`. The default ``t_max=0.99`` keeps
-        sampling clear of it (``0.999`` would round to exactly ``1.0`` in
-        ``bfloat16``); constructing with ``t_max=1.0`` emits a
-        ``UserWarning``. Training with
-        :class:`~physicsnemo.diffusion.metrics.losses.FlowMatchingLoss`
-        stays exact at any ``t_max``, including ``1.0``.
+        The endpoints require care:
+
+        - At :math:`t = 0`: the direct flow parameterization remains finite,
+          but :meth:`x0_to_score`, :meth:`epsilon_to_score`,
+          :meth:`x0_to_epsilon`, :meth:`x0_to_flow`, and
+          :meth:`flow_to_score` become singular. Keep the default
+          ``t_min=0.0`` unless training uses one of these conversions at this
+          endpoint. In that case, set ``t_min`` slightly above zero.
+        - At :math:`t = 1`: :meth:`drift`, :meth:`diffusion`,
+          :meth:`score_to_x0`, :meth:`epsilon_to_x0`, and
+          :meth:`score_to_flow` become singular. Keep ``t_max`` below one for
+          sampling. The default ``t_max=0.99`` is safe for ``bfloat16``; use
+          ``t_max=1.0`` only for training operations that remain finite at this
+          endpoint.
 
     Parameters
     ----------
     t_min : float, optional
-        Smallest training time, by default 0.0. Requires
-        ``0 <= t_min < t_max``. Set slightly above 0 (e.g. ``1e-3``) for
-        x0-predictors, whose flow conversion is singular at :math:`t = 0`.
+        Lower bound for times sampled during training by :meth:`sample_time`,
+        by default 0.0. Requires ``0 <= t_min < t_max``. Most flow-matching
+        workflows can keep the default; see the warning above for when to use a
+        positive value.
     t_max : float, optional
-        Largest diffusion time, by default 0.99: the first sampling
-        time-step and the upper bound for training times. Requires
-        ``t_min < t_max <= 1``; ``t_max=1.0`` is valid for training but
-        emits a ``UserWarning`` (see the warning above).
+        Upper bound for times sampled during training and initial diffusion
+        time :math:`t_N` of the sampling grid returned by :meth:`timesteps`, by
+        default 0.99. Requires ``t_min < t_max <= 1``. Keep this value below one
+        for sampling.
 
     Note
     ----
@@ -81,7 +86,8 @@ class RectifiedFlowNoiseScheduler(LinearGaussianNoiseScheduler):
 
     Examples
     --------
-    Basic training and sampling workflow:
+    Construct noisy states for training, then initialize sampling with the same
+    flow parameterization:
 
     >>> import torch
     >>> from physicsnemo.diffusion.noise_schedulers import (
@@ -107,12 +113,6 @@ class RectifiedFlowNoiseScheduler(LinearGaussianNoiseScheduler):
     >>> # Convert flow-predictor to denoiser for sampling
     >>> flow_predictor = lambda x, t: -x  # Toy flow-predictor
     >>> denoiser = scheduler.get_denoiser(flow_predictor=flow_predictor)
-    >>> denoiser(xN, tN).shape  # ODE RHS for sampling
-    torch.Size([4, 3, 8, 8])
-    >>>
-    >>> # An x0-predictor works as well (score/x0 conversions still apply)
-    >>> x0_predictor = lambda x, t: x * 0.9  # Toy x0-predictor
-    >>> denoiser = scheduler.get_denoiser(x0_predictor=x0_predictor)
     >>> denoiser(xN, tN).shape
     torch.Size([4, 3, 8, 8])
     """
@@ -130,11 +130,10 @@ class RectifiedFlowNoiseScheduler(LinearGaussianNoiseScheduler):
         if t_max >= 1.0:
             warnings.warn(
                 "RectifiedFlowNoiseScheduler was constructed with t_max=1.0: "
-                "the reverse-process drift is singular at t=1, so sampling "
-                "with get_denoiser starting from t_max=1.0 will produce "
-                "non-finite values. Use t_max slightly below 1 for sampling "
-                "(the default is 0.99; avoid 0.999, which rounds to 1.0 in "
-                "bfloat16). Training with FlowMatchingLoss is unaffected.",
+                "the reverse-process drift is undefined at t=1. Use a value "
+                "below 1 for sampling; the default is 0.99. Avoid 0.999 "
+                "because bfloat16 rounds it to 1.0. The endpoint remains valid "
+                "for operations that stay finite there.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -198,8 +197,8 @@ class RectifiedFlowNoiseScheduler(LinearGaussianNoiseScheduler):
         Returns
         -------
         torch.Tensor
-            Time-steps tensor of shape :math:`(N + 1,)` in decreasing order,
-            with the last element being 0.
+            Sampling times of shape :math:`(N + 1,)` in decreasing order. The
+            last value is zero.
         """
         return torch.linspace(
             self.t_max, 0.0, num_steps + 1, device=device, dtype=dtype
@@ -213,7 +212,8 @@ class RectifiedFlowNoiseScheduler(LinearGaussianNoiseScheduler):
         dtype: torch.dtype | None = None,
     ) -> Float[Tensor, " N"]:
         r"""
-        Sample N diffusion times uniformly in :math:`[t_{\min}, t_{\max}]`.
+        Sample :math:`N` time values uniformly from
+        :math:`[t_{\min}, t_{\max}]`.
 
         Parameters
         ----------
@@ -227,7 +227,7 @@ class RectifiedFlowNoiseScheduler(LinearGaussianNoiseScheduler):
         Returns
         -------
         Tensor
-            Sampled diffusion times of shape :math:`(N,)`.
+            Sampled time values of shape :math:`(N,)`.
         """
         u = torch.rand(N, device=device, dtype=dtype)
         return self.t_min + u * (self.t_max - self.t_min)
@@ -239,13 +239,12 @@ class RectifiedFlowNoiseScheduler(LinearGaussianNoiseScheduler):
         r"""
         Compute flow matching loss weight: :math:`w(t) = 1`.
 
-        Standard flow matching uses uniform weighting across
-        diffusion times.
+        Rectified flow applies equal weight to every sampled time.
 
         Parameters
         ----------
         t : Tensor
-            Diffusion time values of shape :math:`(N,)`.
+            Time values of shape :math:`(N,)`.
 
         Returns
         -------
