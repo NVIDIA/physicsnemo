@@ -97,7 +97,7 @@ from torch_geometric.data import Data
 # Node indices that define a simple, 3-node, 2-edge directed graph:
 src = [0, 1]
 dst = [1, 2]
-node_features = torch.tensor([[0.], [1.], [2.]])
+node_features = torch.tensor([[0.0], [1.0], [2.0]])
 
 # DGL:
 graph_dgl = dgl.graph((src, dst))
@@ -113,7 +113,6 @@ graph_pyg = Data(x=node_features, edge_index=edge_index)
 
 print(graph_dgl)
 print(graph_pyg)
-
 ```
 
 The following table shows other popular operations:

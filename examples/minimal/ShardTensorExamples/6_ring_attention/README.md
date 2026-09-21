@@ -58,8 +58,8 @@ The module also exposes helpers for custom analysis:
 ```python
 import plot_scaling_results as psr
 
-df = psr.load_results()                          # DataFrame, one row per JSON file
-train = psr.filter(df, mode="train", gpus=4)     # filter by mode / GPUs / seq_len
-df = psr.add_efficiency(df)                      # adds speedup & parallel_efficiency columns
-print(psr.summary_table(df))                     # pivot table of mean latency (ms)
+df = psr.load_results()  # DataFrame, one row per JSON file
+train = psr.filter(df, mode="train", gpus=4)  # filter by mode / GPUs / seq_len
+df = psr.add_efficiency(df)  # adds speedup & parallel_efficiency columns
+print(psr.summary_table(df))  # pivot table of mean latency (ms)
 ```

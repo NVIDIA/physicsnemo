@@ -17,7 +17,7 @@ becomes reproducible. Not using a seed means you rely on globally set behavior.
 loader = DataLoader(dataset, batch_size=16, shuffle=True, seed=42)
 
 for epoch in range(n_epochs):
-    loader.set_epoch(epoch)   # vary randomness per epoch, still deterministic
+    loader.set_epoch(epoch)  # vary randomness per epoch, still deterministic
     for batch in loader:
         ...
 ```
