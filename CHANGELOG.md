@@ -348,6 +348,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds `physicsnemo.datapipes.DatasetCache`, an opt-in RAM and local-disk
   cache for the small metadata reads datapipe readers repeat every epoch.
   Readers accept a shared `cache=` argument; without one, nothing changes.
+- `MeshReader`, `DomainMeshReader`, and the zarr, tensorstore, and VTK readers
+  route their per-sample metadata reads (tree loads, attributes, key listings,
+  directory scans) through `DatasetCache` when one is given.
 
 ### Changed
 

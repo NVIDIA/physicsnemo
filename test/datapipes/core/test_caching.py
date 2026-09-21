@@ -433,14 +433,29 @@ class TestSizeEstimation:
         t = torch.zeros(1000, dtype=torch.float32)
         assert estimate_resident_size(t) >= 4000
 
-    def test_memmap_leaves_do_not_count(self, tmp_path):
+    def test_memmap_leaf_bytes_do_not_count_but_mappings_do(self, tmp_path):
         td = TensorDict(
             {"big": torch.zeros(100_000), "small": torch.tensor(1.0)}, batch_size=[]
         )
         td.memmap_(str(tmp_path / "td"))
         loaded = TensorDict.load_memmap(str(tmp_path / "td"))
         size = estimate_resident_size(loaded, small_file_bytes=64 * 1024)
-        assert size < 10_000  # 400 KB memmap leaf not counted as resident
+        # The 400 KB leaf's bytes are not resident, but each of the two
+        # leaves is one mmap region and is charged the mapping cost.
+        assert 2 * caching._MAPPING_CHARGE <= size < 400_000
+
+    def test_ram_budget_bounds_mapping_count(self, tmp_path):
+        """Many small memmap trees must evict, not accumulate mmap regions."""
+        for i in range(8):
+            TensorDict({"x": torch.zeros(4)}, batch_size=[]).memmap_(
+                str(tmp_path / f"td{i}")
+            )
+        cache = DatasetCache(ram_bytes_limit=4 * caching._MAPPING_CHARGE)
+        for i in range(8):
+            p = tmp_path / f"td{i}"
+            cache.get_or_load(("td/v1", str(p)), TensorDict.load_memmap, src=p)
+        assert cache.stats()["ram"]["entries"] <= 4
+        assert cache.stats()["ram"]["evictions"] > 0
 
 
 class TestMultiProcessSharing:

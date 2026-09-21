@@ -337,6 +337,12 @@ def decode_blob(data: bytes) -> Any:
 # Rough allowance for Python object headers, dict slots, and the like.
 _PER_OBJECT_OVERHEAD = 128
 
+# What a memory-mapped leaf is charged regardless of its byte size. A mapped
+# leaf is one live mmap region, and the kernel caps those per process
+# (vm.max_map_count, 65530 by default). Charging each one this much makes the
+# RAM budget bound the number of mappings too: 2 GiB / 64 KiB ~ 32k leaves.
+_MAPPING_CHARGE = 64 * 2**10
+
 
 def estimate_resident_size(value: Any, *, small_file_bytes: int = 0) -> int:
     """Estimate how many bytes of RAM *value* occupies.
@@ -349,11 +355,12 @@ def estimate_resident_size(value: Any, *, small_file_bytes: int = 0) -> int:
         Tensors, TensorDicts, tensorclasses such as ``Mesh``, and plain
         containers of those.
     small_file_bytes : int, default=0
-        A memory-mapped tensor at or under this size is counted in full;
-        a larger one is counted as a pointer. Small mapped files are
-        metadata in practice and end up resident once touched. Large ones
-        are the bulk data the cache deliberately leaves on the source
-        filesystem.
+        A memory-mapped tensor at or under this size is counted in full
+        (small mapped files are metadata in practice and end up resident
+        once touched). A larger one is bulk data the cache leaves on the
+        source filesystem, so its bytes are not counted. Every mapped
+        tensor is charged at least ``_MAPPING_CHARGE`` because it holds one
+        mmap region, and the kernel limits those per process.
 
     Returns
     -------
@@ -369,8 +376,9 @@ def estimate_resident_size(value: Any, *, small_file_bytes: int = 0) -> int:
     def _size(v: Any) -> int:
         if isinstance(v, torch.Tensor):
             nbytes = v.numel() * v.element_size()
-            if isinstance(v, MemoryMappedTensor) and nbytes > small_file_bytes:
-                return _PER_OBJECT_OVERHEAD
+            if isinstance(v, MemoryMappedTensor):
+                resident = nbytes if nbytes <= small_file_bytes else 0
+                return max(resident, _MAPPING_CHARGE) + _PER_OBJECT_OVERHEAD
             return nbytes + _PER_OBJECT_OVERHEAD
         if isinstance(v, TensorDictBase):
             return _PER_OBJECT_OVERHEAD + sum(_size(x) for x in v.values())
@@ -1167,8 +1175,9 @@ class DatasetCache:
     A ``DistributedSampler`` hands different samples to each rank every
     epoch, so over time every rank's RAM tier fills with every sample's
     metadata. The bytes are small, but each memory-mapped leaf held there
-    is a live mapping; for very large datasets, check the count against
-    the kernel's per-process mapping limit.
+    is a live mapping, so every leaf is charged at least 64 KiB and the
+    budget bounds the mapping count: the 2 GiB default holds about 32k
+    leaves, under the kernel's default per-process limit of 65530.
 
     **The disk limit is soft.** Each process enforces it against the
     entries it has seen, and it learns of other ranks' entries as it hits
