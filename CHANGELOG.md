@@ -28,6 +28,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unified external aero recipe: `NonDimensionalizeByMetadata` gains
   `scale_geometry` so chained instances scale the geometry once; inference
   re-dimensionalizes with the field maps of every instance.
+- Extends the diffusion module to support flow matching. The new API
+  surface covers three pieces:
+  - New losses in `physicsnemo.diffusion.metrics.losses` train against a
+    flow/velocity target: `FlowMatchingLoss`, plus `WeightedFlowMatchingLoss`
+    for an element-wise weight such as a binary mask. Their
+    `MultiDiffusionFlowMatchingLoss` and
+    `MultiDiffusionWeightedFlowMatchingLoss` counterparts provide patch-based
+    flow-matching training on large spatial domains. `MultiDiffusionModel2D`
+    and `MultiDiffusionPredictor` support both patch-based diffusion and flow
+    matching during training and inference.
+  - A dedicated `RectifiedFlowNoiseScheduler` in
+    `physicsnemo.diffusion.noise_schedulers` provides a rectified-flow
+    schedule.
+  - Module-wide support for flow predictors, enabled by new conversion
+    functions in `LinearGaussianNoiseScheduler` (`x0_to_flow` / `flow_to_x0`
+    / `score_to_flow` / `flow_to_score`) and the corresponding conversion
+    callbacks everywhere conversions between prediction types are necessary.
 
 ### Changed
 
@@ -392,21 +409,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   overlapping Schwarz method for steady 2-D thermal problems with a
   physics-informed PhysicsNeMo FNO local solver, a matrix-free finite-volume
   reference solver, and a numerical plane-stress elasticity baseline.
-- Extends the diffusion module to support flow matching. The new API
-  surface covers three pieces:
-  - New losses in `physicsnemo.diffusion.metrics.losses` train against a
-    flow/velocity target: `FlowMatchingLoss`, plus `WeightedFlowMatchingLoss`
-    for an element-wise weight such as a binary mask. Their
-    `MultiDiffusionFlowMatchingLoss` and
-    `MultiDiffusionWeightedFlowMatchingLoss` counterparts provide patch-based
-    flow-matching training in `physicsnemo.diffusion.multi_diffusion`.
-  - A dedicated `RectifiedFlowNoiseScheduler` in
-    `physicsnemo.diffusion.noise_schedulers` provides a rectified-flow
-    schedule.
-  - Module-wide support for flow predictors, enabled by new conversion
-    functions in `LinearGaussianNoiseScheduler` (`x0_to_flow` / `flow_to_x0`
-    / `score_to_flow` / `flow_to_score`) and the corresponding conversion
-    callbacks everywhere conversions between prediction types are necessary.
 
 ### Changed
 
