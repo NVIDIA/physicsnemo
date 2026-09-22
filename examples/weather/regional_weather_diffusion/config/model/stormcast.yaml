@@ -19,8 +19,9 @@
 model_name: 'regression' # 'regression', 'diffusion', or custom model added by user
 
 # Model conditions
-regression_conditions: ["state", "background", "invariant"] # list consisting of "state", "background", "invariant" (default from StormCast paper)
-diffusion_conditions: ["state", "regression", "invariant"] # list consisting of "state", "regression", "background", "invariant" (default from StormCast paper)
+regression_conditions: ["background", "invariant"] # list consisting of "background", "invariant" (default from StormCast paper).
+                                                    # The dataset's "background" tensor includes the previous HRRR timestep.
+diffusion_conditions: ["regression", "invariant"] # list consisting of "regression", "background", "invariant" (default from StormCast paper)
 
 # Model hyperparameters
 model_type: "SongUNetPosEmbd" # Model class to use

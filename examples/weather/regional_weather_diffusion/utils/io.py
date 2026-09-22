@@ -36,7 +36,7 @@ def init_inference_results_zarr(
     edm_prediction_group = group.create_group("edm_prediction")
     noedm_prediction_group = group.create_group("noedm_prediction")
     target_group = group.create_group("target")
-    state, _ = dataset[0]["state"]
+    state = dataset[0]["state"]
     assert state.ndim == 3
 
     grid_size = state.shape[1:]

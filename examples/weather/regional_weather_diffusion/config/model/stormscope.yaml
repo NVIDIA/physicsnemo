@@ -22,7 +22,8 @@ architecture: dit
 
 # Model conditions
 regression_conditions: []
-diffusion_conditions: ["state", "background", "invariant"] # list consisting of "state", "regression", "background", "invariant" (default from StormCast paper)
+diffusion_conditions: ["background", "invariant"] # list consisting of "regression", "background", "invariant".
+                                                   # The dataset's "background" tensor includes any past-state history.
 
 # Model hyperparameters (defaults follow Stormscope)
 hyperparameters:

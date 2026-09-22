@@ -14,6 +14,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Single-step diagnostic inference.
+
+Evaluates a trained regression/diffusion pair against ``n_steps`` independent
+samples from the dataset's own ``background`` (which, per the data-source
+contract, already carries any past-state input the model needs -- see
+``datasets/dataset.py``). This script does not perform autoregressive
+rollout: each step is scored against its own dataset sample rather than fed
+forward as input to the next step. For autoregressive rollout or more
+elaborate inference workflows, bring your checkpoints to
+[Earth2Studio](https://github.com/NVIDIA/earth2studio); see the README's
+"Running inference" section.
+"""
+
 import matplotlib.pyplot as plt
 import torch
 from datetime import datetime
@@ -54,7 +67,11 @@ def main(cfg: DictConfig):
     lead_time_steps = dataset.lead_time_steps
 
     invariant_array = dataset.get_invariants()
-    invariant_tensor = torch.from_numpy(invariant_array).to(device).repeat(1, 1, 1, 1)
+    invariant_tensor = (
+        None
+        if invariant_array is None
+        else torch.from_numpy(invariant_array).to(device).repeat(1, 1, 1, 1)
+    )
 
     if len(cfg.inference.output_state_channels) == 0:
         output_state_channels = state_channels.copy()
@@ -106,18 +123,42 @@ def main(cfg: DictConfig):
 
             background = data["background"].to(device=device, dtype=torch.float32)
             background = background.unsqueeze(0)
+            target = data["state"].to(device=device, dtype=torch.float32)
+            target = target.unsqueeze(0)
 
-            if i == 0:
-                state_pred = data["state"][0].to(device=device, dtype=torch.float32)
-                state_pred = state_pred.unsqueeze(0)
-                state_pred_edm = state_pred.clone()
-                state_pred_noedm = state_pred.clone()
-                lead_time_label = data.get("lead_time_label")
-                if lead_time_label is not None:
-                    lead_time_label = lead_time_label.to(
-                        device=device, dtype=torch.int64
-                    )
-                    lead_time_label = lead_time_label.unsqueeze(0)
+            lead_time_label = data.get("lead_time_label")
+            if lead_time_label is not None:
+                lead_time_label = lead_time_label.to(device=device, dtype=torch.int64)
+                lead_time_label = lead_time_label.unsqueeze(0)
+
+            # build diffusion condition and inference regression model
+            (condition, _, reg_out) = build_network_condition_and_target(
+                background,
+                target,
+                invariant_tensor,
+                lead_time_label=lead_time_label,
+                regression_net=regression_model,
+                condition_list=cfg.model.diffusion_conditions,
+                regression_condition_list=cfg.model.regression_conditions,
+            )
+
+            # regression-only estimate (the diffusion model's condition), or
+            # zero if no regression model is used
+            state_pred_noedm = (
+                reg_out.clone() if reg_out is not None else torch.zeros_like(target)
+            )
+
+            # inference diffusion model: it predicts a residual around
+            # `state_pred_noedm` (see build_network_condition_and_target)
+            edm_corrected_outputs = diffusion_model_forward(
+                diffusion_model,
+                condition,
+                target.shape,
+                scheduler=sampling_scheduler,
+                sampler_args=sa,
+                lead_time_label=lead_time_label,
+            )
+            state_pred_edm = state_pred_noedm + edm_corrected_outputs.float()
 
             assert (
                 state_pred_edm.shape == (1, len(state_channels)) + dataset.image_shape()
@@ -130,7 +171,7 @@ def main(cfg: DictConfig):
             write_inference_results_zarr(
                 dataset.denormalize_state(state_pred_edm.cpu().numpy())[0],
                 dataset.denormalize_state(state_pred_noedm.cpu().numpy())[0],
-                dataset.denormalize_state(data["state"][0].cpu().numpy()),
+                dataset.denormalize_state(target.cpu().numpy())[0],
                 edm_prediction_group,
                 noedm_prediction_group,
                 target_group,
@@ -139,40 +180,12 @@ def main(cfg: DictConfig):
                 i,
             )
 
-            # build diffusion condition and inference regression model, placing output into state_pred
-            (condition, _, state_pred) = build_network_condition_and_target(
-                background,
-                [state_pred, state_pred],
-                invariant_tensor,
-                lead_time_label=lead_time_label,
-                regression_net=regression_model,
-                condition_list=cfg.model.diffusion_conditions,
-                regression_condition_list=cfg.model.regression_conditions,
-            )
-
-            if state_pred is None:  # in case of no regression model
-                state_pred = torch.zeros_like(state_pred_edm)
-
-            state_pred_noedm = state_pred.clone()
-            # inference diffusion model
-            edm_corrected_outputs = diffusion_model_forward(
-                diffusion_model,
-                condition,
-                state_pred.shape,
-                scheduler=sampling_scheduler,
-                sampler_args=sa,
-                lead_time_label=lead_time_label,
-            )
-
-            state_pred[0, :] += edm_corrected_outputs[0].float()
-            state_pred_edm = state_pred.clone()
-
             varidx_state = vardict_state[cfg.inference.plot_var_state]
             varidx_background = vardict_background[cfg.inference.plot_var_background]
 
             background_arr = background.cpu().numpy()[0]
-            state_true_arr = data["state"][1].cpu().numpy()
-            state_pred_arr = state_pred.cpu().numpy()[0]
+            state_true_arr = target.cpu().numpy()[0]
+            state_pred_arr = state_pred_edm.cpu().numpy()[0]
 
             background_arr = dataset.denormalize_background(background_arr)
             state_true_arr = dataset.denormalize_state(state_true_arr)
@@ -193,7 +206,7 @@ def main(cfg: DictConfig):
     initial_time_pd = pd.to_datetime(initial_time)
     val_times = []
     for i in range(n_steps):
-        val_times.append(initial_time_pd + pd.Timedelta(seconds=i * hours_since_jan_01))
+        val_times.append(initial_time_pd + pd.Timedelta(hours=i))
 
     save_inference_results_netcdf(
         ds_out_path=cfg.inference.rundir,

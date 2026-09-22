@@ -159,29 +159,30 @@ def get_preconditioned_natten_dit(
 
 def build_network_condition_and_target(
     background: torch.Tensor,
-    state: tuple[torch.Tensor, torch.Tensor],
+    target: torch.Tensor,
     invariant_tensor: torch.Tensor | None,
     scalar_conditions: torch.Tensor | None = None,
     lead_time_label: torch.Tensor | None = None,
     regression_net: Module | None = None,
-    condition_list: Iterable[str] = ("state", "background"),
-    regression_condition_list: Iterable[str] = ("state", "background"),
+    condition_list: Iterable[str] = ("background",),
+    regression_condition_list: Iterable[str] = ("background",),
 ) -> tuple[torch.Tensor | TensorDict, torch.Tensor, torch.Tensor | None]:
     """Build the condition and target tensors for the network.
 
     Args:
-        background: background tensor
-        state: tuple of previous state and target state
+        background: background tensor -- all per-sample conditioning, including
+            any past state the dataset folds in as extra channels
+        target: training target (the "state" tensor from the batch)
         invariant_tensor: invariant tensor or None if no invariant is used
         lead_time_label: lead time label or None if lead time embedding is not used
         regression_net: regression model, can be None if 'regression' is not in condition_list
-        condition_list: list of conditions to include, may include 'state', 'background', 'regression' and 'invariant'
-        regression_condition_list: list of conditions for the regression network, may include 'state', 'background', and 'invariant'
+        condition_list: list of conditions to include, may include 'background', 'regression' and 'invariant'
+        regression_condition_list: list of conditions for the regression network, may include 'background' and 'invariant'
             This is only used if regression_net is set.
     Returns:
         A tuple of tensors: (
             condition: model condition concatenated from conditions specified in condition_list,
-            target: training target,
+            target: training target (residual of the regression estimate if 'regression' is in condition_list),
             regression: regression model output
         ). The regression model output will be None if 'regression' is not in condition_list.
     """
@@ -189,10 +190,8 @@ def build_network_condition_and_target(
         raise ValueError(
             "regression_net must be provided if 'regression' is in condition_list"
         )
-    target = state[1]
 
     condition_tensors = {
-        "state": state[0],
         "background": background,
         "invariant": invariant_tensor,
         "regression": None,
@@ -203,7 +202,6 @@ def build_network_condition_and_target(
             # Inference regression model
             condition_tensors["regression"] = regression_model_forward(
                 regression_net,
-                state[0],
                 background,
                 invariant_tensor,
                 lead_time_label=lead_time_label,
@@ -221,8 +219,8 @@ def build_network_condition_and_target(
             {"cond_concat": condition, "cond_vec": scalar_conditions}
             if condition is not None
             else {"cond_vec": scalar_conditions},
-            device=state[1].device,
-        ).to(dtype=state[1].dtype)
+            device=target.device,
+        ).to(dtype=target.dtype)
 
     return (condition, target, condition_tensors["regression"])
 
@@ -235,9 +233,14 @@ def unpack_batch(
     """Unpack a data batch into background, state and lead time label with the correct
     device and data types.
     """
-    if isinstance(batch["state"], torch.Tensor):
-        # downscaling and unconditional models may return a single tensor as "state"
-        batch["state"] = [None, batch["state"]]
+    if isinstance(batch["state"], (list, tuple)):
+        raise ValueError(
+            "batch['state'] must be a single tensor (the training target). "
+            "The two-element [input, target] convention has been removed: "
+            "concatenate any past state your model needs as input onto the "
+            "'background' tensor instead. See the 'Adding custom datasets' "
+            "section of the README for details."
+        )
 
     (background, state, mask) = nested_to(
         (batch.get("background"), batch["state"], batch.get("mask")),
@@ -372,17 +375,16 @@ def diffusion_model_forward(
 
 def regression_model_forward(
     model: Module,
-    state: torch.Tensor,
     background: torch.Tensor,
     invariant_tensor: torch.Tensor,
     lead_time_label: torch.Tensor | None = None,
-    condition_list: Iterable[str] = ("state", "background"),
+    condition_list: Iterable[str] = ("background",),
 ) -> torch.Tensor:
     """Helper function to run regression model forward pass in inference"""
 
     (x, _, _) = build_network_condition_and_target(
         background,
-        (state, None),
+        None,
         invariant_tensor,
         lead_time_label=lead_time_label,
         condition_list=condition_list,

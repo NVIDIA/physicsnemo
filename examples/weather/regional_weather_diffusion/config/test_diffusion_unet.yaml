@@ -62,7 +62,7 @@ model:
     num_blocks: 2
 
   regression_conditions: []
-  diffusion_conditions: ["state", "background", "invariant"]
+  diffusion_conditions: ["background", "invariant"]
 
 sampler:
   args:
