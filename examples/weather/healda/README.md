@@ -190,7 +190,9 @@ dataset = ObsERA5Dataset(
 
 # 3. Sampler + DataLoader
 sampler = RestartableDistributedSampler(
-    dataset, rank=rank, num_replicas=world_size,
+    dataset,
+    rank=rank,
+    num_replicas=world_size,
 )
 sampler.set_epoch(0)
 dataloader = DataLoader(

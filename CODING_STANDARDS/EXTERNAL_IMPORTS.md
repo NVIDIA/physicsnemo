@@ -128,8 +128,7 @@ if CUML_AVAILABLE and CUPY_AVAILABLE:
     cuml = importlib.import_module("cuml")
     cp = importlib.import_module("cupy")
 
-    def knn_impl(points, queries, k) -> torch.Tensor:
-        ...
+    def knn_impl(points, queries, k) -> torch.Tensor: ...
 else:
 
     def knn_impl(*args, **kwargs) -> torch.Tensor:
