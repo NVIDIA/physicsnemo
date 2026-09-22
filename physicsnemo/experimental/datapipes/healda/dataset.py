@@ -52,7 +52,6 @@ import asyncio
 from typing import Union
 
 import numpy as np
-import pandas as pd
 import torch
 
 from physicsnemo.experimental.datapipes.healda.indexing import get_flat_indexer
@@ -60,6 +59,9 @@ from physicsnemo.experimental.datapipes.healda.loaders.era5 import get_batch_inf
 from physicsnemo.experimental.datapipes.healda.protocols import ObsLoader, Transform
 from physicsnemo.experimental.datapipes.healda.time_utils import as_cftime
 from physicsnemo.experimental.datapipes.healda.types import VariableConfig
+from physicsnemo.core.version_check import OptionalImport
+
+pd = OptionalImport("pandas")
 
 # HEALPix level-6 pixel count: 12 * 4^6
 NPIX_HPX6 = 12 * 4**6

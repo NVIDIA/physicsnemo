@@ -18,7 +18,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-import pandas as pd
 import torch
 from torch import Tensor
 from torch.utils.data import Dataset
@@ -27,6 +26,8 @@ from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.datapipe import Datapipe
 from physicsnemo.datapipes.meta import DatapipeMetaData
 from physicsnemo.nn.module.gnn_layers.utils import PyGData
+
+pd = OptionalImport("pandas")
 
 # Lazy imports for optional dependencies
 pyg = OptionalImport("torch_geometric")

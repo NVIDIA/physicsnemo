@@ -20,10 +20,11 @@ import logging
 from typing import Sequence
 
 import numpy as np
-import pandas as pd
 import torch as th
 
 from physicsnemo.core.version_check import OptionalImport
+
+pd = OptionalImport("pandas")
 
 xr = OptionalImport("xarray")
 
@@ -46,7 +47,7 @@ class ConstantCoupler:
         presteps: int = 0,
         input_time_dim: int = 2,
         output_time_dim: int = 2,
-        input_times: Sequence = [pd.Timedelta("24h"), pd.Timedelta("48h")],
+        input_times: Sequence = ["24h", "48h"],
         prepared_coupled_data=True,
     ):
         """
@@ -68,8 +69,8 @@ class ConstantCoupler:
         output_time_dim: int, optional
             number of output times for each model step, default 2
         input_times: Sequence, optional
-            sequence of pandas Timedelta objects that indicate which times are to be coupled,
-            default [pd.Timedelta("24h"), pd.Timedelta("48h")]
+            sequence of pandas Timedelta objects (or strings accepted by ``pd.Timedelta``)
+            that indicate which times are to be coupled, default ["24h", "48h"]
         prepared_coupled_data: boolean, optional
             If True assumes data in dataset has been prepared approiately for training:
             averages have already been calculated so that each time step denotes
@@ -289,7 +290,7 @@ class TrailingAverageCoupler:
         input_time_dim: int = 2,
         output_time_dim: int = 2,
         averaging_window: str = "24h",
-        input_times: Sequence = [pd.Timedelta("24h"), pd.Timedelta("48h")],
+        input_times: Sequence = ["24h", "48h"],
         prepared_coupled_data=True,
     ):
         """
@@ -313,8 +314,8 @@ class TrailingAverageCoupler:
         averaging_window: str, optional
             period over which coupled data is averaged before sent back to model, default "24h"
         input_times: Sequence, optional
-            sequence of pandas Timedelta objects that indicate which times are to be coupled,
-            default [pd.Timedelta("24h"), pd.Timedelta("48h")]
+            sequence of pandas Timedelta objects (or strings accepted by ``pd.Timedelta``)
+            that indicate which times are to be coupled, default ["24h", "48h"]
         prepared_coupled_data: boolean, optional
             If True assumes data in dataset has been prepared approiately for training:
             averages have already been calculated so that each time step denotes

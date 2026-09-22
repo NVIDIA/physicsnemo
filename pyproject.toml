@@ -21,14 +21,11 @@ classifiers = [
 dynamic = ["version", "optional_dependencies"]
 
 dependencies = [
-    "onnx>=1.14.0",
     "warp-lang>=1.14.0",
-    "pandas>=2.2.0",
     "nvtx>=0.2.10",
     "treelib>=1.2.5",
     "numpy>=1.22.4",
     "torch>=2.10.0",
-    "torchvision>=0.25.0a0",
     "tqdm>=4.60.0",
     "requests>=2.32.2",
     # urllib3 is a transitive dependency (via requests/botocore/etc.); pin to
@@ -304,10 +301,12 @@ nn-extras = [
 ]
 model-extras = [
     "nvidia-physicsnemo[nn-extras]",
+    "pandas>=2.2.0",
     "pyvista>=0.46.4",
     "vtk",
 ]
 datapipes-extras = [
+    "pandas>=2.2.0",
     "tfrecord",
     "dask",
     "netCDF4",

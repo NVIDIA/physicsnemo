@@ -18,9 +18,9 @@
 import datetime
 
 import numpy as np
-import pandas as pd
 import pytest
 
+pd = pytest.importorskip("pandas")
 cftime = pytest.importorskip("cftime")
 
 from physicsnemo.experimental.datapipes.healda.time_utils import (  # noqa: E402

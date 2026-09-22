@@ -27,13 +27,13 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, Sequence
 
-import pandas as pd
 import torch
 from hydra.utils import instantiate
 from omegaconf import DictConfig
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.nn.module.hpx import HEALPixFoldFaces, HEALPixUnfoldFaces
 
 from .layers import (
@@ -42,6 +42,8 @@ from .layers import (
     _legacy_hydra_targets_warning,
     _remap_obj,
 )
+
+pd = OptionalImport("pandas")
 
 logger = logging.getLogger(__name__)
 
