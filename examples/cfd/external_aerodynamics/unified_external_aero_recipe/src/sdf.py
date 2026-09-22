@@ -51,16 +51,18 @@ class ComputeSDFFromBoundary(MeshTransform):
     Reads the surface mesh from ``domain.boundaries[boundary_name]`` and
     evaluates the signed distance field at every interior point using
     :func:`physicsnemo.mesh.spatial.sdf.signed_distance_field`,
-    a mesh-native, pure-PyTorch implementation backed by a torch BVH.
+    a mesh-native wrapper around Warp mesh queries.
 
     The computed SDF is stored as a scalar field ``(N, 1)`` in
     ``interior.point_data[sdf_field]``.  If ``normals_field`` is set,
     approximate surface normals ``(N, 3)`` are also stored, computed as
-    the normalized direction from each query point to its closest point
-    on the surface.  Points essentially *on* the surface (boundary-layer
+    the normalized direction from the closest surface point to each query
+    point. Points essentially *on* the surface (boundary-layer
     points at sub-micron wall distances) instead use the oriented normal
     of the hit face, since at those distances the closest-point direction
-    is float32 rounding noise.
+    and SDF sign can be float32 rounding noise. A smaller sign-uncertainty
+    band keeps on-wall normals outward while resolved interior points
+    retain inward normals throughout the direction-fallback band.
 
     Parameters
     ----------
@@ -147,27 +149,31 @@ class ComputeSDFFromBoundary(MeshTransform):
             # rounding noise (or exactly zero) and its direction is
             # meaningless. Substitute the oriented normal of the hit face:
             # the exact limit of the closest-point direction at the wall.
-            # Sign-align with the SDF so the rare interior point keeps
-            # pointing into the body like its neighbors (the SDF treats
-            # on-surface as outside, so dist == 0 gets the outward normal).
             # The band is scale-aware: the closest point carries rounding
             # noise ~ eps * |coordinate|, so an absolute cutoff under-covers
             # geometry far from the origin. 128 eps (~1.5e-5 per unit
-            # coordinate) clears that noise floor with a wide margin, and
-            # widening the band is free because the substitute is exact.
+            # coordinate) clears that noise floor with a wide margin.
             # Computed unconditionally and selected with a mask rather than
             # branching on ``near_surface.any()`` -- that host readback would
             # stall the prefetch stream.
             dist = torch.norm(normals, dim=-1)
             coord_scale = query_points.abs().amax(dim=-1).clamp(min=1.0)
-            near_surface = dist < (128.0 * torch.finfo(torch.float32).eps * coord_scale)
+            surface_tolerance = 128.0 * torch.finfo(torch.float32).eps * coord_scale
+            near_surface = dist < surface_tolerance
             face_normals = surface.cell_normals.to(query_points.dtype)[hit_faces]
             # A degenerate (zero-area) hit face has no meaningful normal --
             # ``cell_normals`` returns a zero vector for it. Keep the raw
             # closest-point direction there instead of substituting zeros.
             face_normal_ok = (face_normals * face_normals).sum(-1) > 0.5
+            # Resolving the side needs only a few ulps, whereas recovering
+            # a direction needs the wider band above. Reusing that band for
+            # the sign would force every fallback outward: |sdf| == dist.
+            # Ignore only small negative distances consistent with float32
+            # roundoff, retaining inward normals for resolved inside points.
+            sign_tolerance = 8.0 * torch.finfo(torch.float32).eps * coord_scale
+            genuinely_inside = sdf_values < -sign_tolerance
             oriented = torch.where(
-                (sdf_values >= 0).unsqueeze(-1), face_normals, -face_normals
+                genuinely_inside.unsqueeze(-1), -face_normals, face_normals
             )
             normals = torch.where(
                 (near_surface & face_normal_ok).unsqueeze(-1), oriented, normals
