@@ -84,6 +84,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Unified external aerodynamics recipe: synchronizes data-loading failures
+  before DDP forward and forward/loss failures before backward; failures
+  inside model collectives or backward still rely on the process-group
+  timeout. An optional `training.divergence_loss_threshold` aborts on
+  non-finite or exploding losses. Epoch schedulers advance before saving,
+  legacy scheduler state is migrated, fp16 `GradScaler` state is persisted,
+  and the final epoch is always checkpointed. Resume metadata reports
+  scheduler/scaler restoration; exact trajectory continuation is unverified
+  because RNG and stochastic data state are not restored.
 - Fixes mesh dtype handling: preserves integer-coordinate precision, normalizes
   connectivity safely, and rejects integer `.to()` casts. Floating/complex casts
   preserve the source mesh.
