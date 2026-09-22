@@ -156,7 +156,7 @@ Grep -n "^class <ClassName>" physicsnemo/ --type py
 # 7b. Search by function name
 Grep -n "^def <func_name>" physicsnemo/ --type py
 
-# 7c. If not found where expected — check the rename tables for moved paths
+# 7c. If not found where expected, review the rename tables for moved paths
 #     (<name> is the class or function name from 7a / 7b)
 Grep -n "<name>" v2.0-MIGRATION-GUIDE.md CHANGELOG.md
 ```
