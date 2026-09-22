@@ -45,7 +45,14 @@ from physicsnemo.mesh import (
     Mesh,
     MeshFieldAssociation,
 )
-from physicsnemo.mesh.calculus.measure import compose_measure_weights
+from physicsnemo.mesh.calculus.measure import (
+    EFFECTIVE_MEASURE_KEY,
+    cell_measures,
+    point_measure_dimension,
+    point_measures,
+    scale_measures,
+    set_point_measures,
+)
 from physicsnemo.nn.functional import weighted_multinomial
 
 
@@ -268,10 +275,10 @@ def _compact_points(mesh: Mesh) -> Mesh:
 class SubsampleMesh(MeshTransform):
     r"""Subsample a mesh to a fixed number of cells and/or points.
 
-    Cell subsampling preserves the integration measure by recording
-    each stage's inverse inclusion probability into the mesh's measure
-    weights (see :mod:`physicsnemo.mesh.calculus.measure`); point
-    subsampling does not maintain weights.
+    Sampling multiplies explicit effective measures by the stage's inverse
+    inclusion probability. Cell measures default to geometric measures;
+    point measures remain absent unless supplied explicitly. Point sampling
+    does not correct cell measures for cells removed indirectly.
     """
 
     def __init__(
@@ -317,16 +324,19 @@ class SubsampleMesh(MeshTransform):
             if self.compact:
                 mesh = _compact_points(mesh)
             ### Compose this stage's inverse inclusion probability into the
-            ### mesh's measure weights.
+            ### mesh's effective measures.
             ### `_random_indices` is exact below the large-population threshold
             ### and uses the near-uniform Poisson-gap approximation above it.
-            compose_measure_weights(mesh, n_before / self.n_cells)
+            scale_measures(mesh, n_before / self.n_cells)
 
         if self.n_points is not None and mesh.n_points > self.n_points:
             indices = self._random_indices(
                 mesh.n_points, self.n_points, mesh.points.device
             )
+            n_before = mesh.n_points
             mesh = mesh.slice_points(indices)
+            if EFFECTIVE_MEASURE_KEY in mesh.point_data:
+                scale_measures(mesh, n_before / self.n_points, association="points")
 
         return mesh
 
@@ -1065,8 +1075,11 @@ class MeshToDomainMesh(MeshTransform):
         Names of cell-centered fields on the input mesh to use as prediction
         targets. They are moved out of the boundary's ``cell_data`` and into
         ``interior.point_data``. Use with ``interior_points='cell_centroids'``.
-        If ``None`` (and ``point_data_targets`` is also ``None``), no targets
-        are placed on the interior.
+        If ``None`` (and ``point_data_targets`` is also ``None``), no user
+        targets are placed on the interior. Centroid mode still records each
+        source cell's effective measure under
+        :data:`~physicsnemo.mesh.calculus.measure.EFFECTIVE_MEASURE_KEY`, so integrals over the query
+        points remain possible after the cells are gone.
     point_data_targets : list[str] or None, default ``None``
         Names of vertex-centered fields on the input mesh to use as prediction
         targets. They are moved out of the boundary's ``point_data`` and into
@@ -1148,6 +1161,12 @@ class MeshToDomainMesh(MeshTransform):
         ### ``select`` / ``exclude`` below accept the parsed tuple keys.
         self._cell_data_targets: list[NestedKey] = as_nested_keys(cell_data_targets)
         self._point_data_targets: list[NestedKey] = as_nested_keys(point_data_targets)
+        reserved = as_nested_key(EFFECTIVE_MEASURE_KEY)
+        if reserved in self._cell_data_targets or reserved in self._point_data_targets:
+            raise ValueError(
+                f"{EFFECTIVE_MEASURE_KEY!r} is reserved for effective "
+                "measure bookkeeping and cannot be configured as a user target."
+            )
         self._interior_points = interior_points
         self._boundary_name = boundary_name
 
@@ -1185,7 +1204,10 @@ class MeshToDomainMesh(MeshTransform):
 
     def _call_cell_centroids(self, mesh: Mesh) -> DomainMesh:
         ### Build the interior as a point cloud at cell centroids, with target
-        ### cell_data fields moved into interior.point_data.
+        ### cell_data fields moved into interior.point_data.  The original
+        ### cells disappear at this boundary, so materialize their effective
+        ### measure beside the centroid queries while cell geometry and any
+        ### sampling corrections are still available.
         require_keys(mesh.cell_data, self._cell_data_targets, what="Target field")
         interior_point_data = (
             mesh.cell_data.select(*self._cell_data_targets)
@@ -1195,6 +1217,9 @@ class MeshToDomainMesh(MeshTransform):
         interior = Mesh(
             points=mesh.cell_centroids,
             point_data=interior_point_data,
+        )
+        set_point_measures(
+            interior, cell_measures(mesh), dimension=mesh.n_manifold_dims
         )
         ### Build the boundary by stripping target fields from cell_data.
         boundary_cell_data = (
@@ -1222,6 +1247,12 @@ class MeshToDomainMesh(MeshTransform):
             points=mesh.points,
             point_data=interior_point_data,
         )
+        if EFFECTIVE_MEASURE_KEY in mesh.point_data:
+            set_point_measures(
+                interior,
+                point_measures(mesh),
+                dimension=int(point_measure_dimension(mesh)),
+            )
         boundary_point_data = (
             exclude_keys(mesh.point_data, self._point_data_targets)
             if self._point_data_targets

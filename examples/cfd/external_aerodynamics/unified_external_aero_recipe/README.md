@@ -147,6 +147,13 @@ flowchart LR
   `L_ref` (rather than scaling x/y/z independently) so geometry aspect
   ratios are preserved.
 
+- **DropDegenerateCells** — Surface pipelines. Checks the current triangle
+  coordinates with the same area routine used for centroid measures. Direct
+  triangle areas preserve thin valid faces without Gram cancellation. Drops
+  collapsed or non-finite cells and their associated data; vertices are retained.
+  Runs last so it checks the coordinates after centering, rotation, and
+  scaling, without relying on cached areas.
+
 - **ComputeSDFFromBoundary** — Volume pipelines only.  Computes a
   signed distance field (and surface normals) from an auxiliary STL
   boundary mesh loaded via the reader's `extra_boundaries` option.

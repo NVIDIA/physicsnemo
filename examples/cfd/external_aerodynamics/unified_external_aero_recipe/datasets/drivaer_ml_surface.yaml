@@ -74,6 +74,9 @@ pipeline:
       field_name: normals
     - _target_: ${dp:SubsampleMesh}
       n_cells: ${sampling_resolution}
+    # Check the final coordinates for collapsed/non-finite faces. Direct
+    # cross products preserve thin valid faces despite Gram-area cancellation.
+    - _target_: ${dp:DropDegenerateCells}
     # Terminal transform: convert the surface Mesh into a DomainMesh per the
     # recipe's prediction-vs-input contract. `interior` becomes a Mesh[0, 3]
     # point cloud at the cell centroids (where the model predicts), with the

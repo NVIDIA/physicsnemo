@@ -428,10 +428,15 @@ def subdivide_loop(mesh: "Mesh") -> "Mesh":
     )
 
     ### Create and return subdivided mesh
-    return Mesh(
+    result = Mesh(
         points=new_points,
         cells=child_cells,
         point_data=new_point_data,
         cell_data=new_cell_data,
         global_data=mesh.global_data,
     )
+
+    from physicsnemo.mesh.calculus.measure import _transfer_cell_measures
+
+    _transfer_cell_measures(mesh, result, parent_indices)
+    return result

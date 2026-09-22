@@ -365,7 +365,7 @@ class RandomRotateMesh(MeshTransform):
         axis_idx = torch.randint(
             len(self.axes), (1,), generator=self._generator, device=gen_device
         )
-        axis = self.axes[axis_idx]
+        axis = self.axes[axis_idx.item()]
         angle = _sample_distribution(
             self._distribution, (1,), self._generator, self._device
         ).squeeze(0)

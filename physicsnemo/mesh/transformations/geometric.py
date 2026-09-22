@@ -485,6 +485,13 @@ def transform(
 
     Notes
     -----
+    Explicit effective measures follow geometry independently of the ordinary
+    field-transformation flags. Cell measures follow geometric measure ratios.
+    Point measures use their represented dimension for similarities and the
+    determinant for full-dimensional square maps. Other point-measure maps
+    require support geometry and raise ValueError. To retain reference measures
+    explicitly, use ``mesh.with_points(new_points, preserve_measures=True)``.
+
     Cache Handling:
 
         - areas: For square invertible matrices:
@@ -508,7 +515,7 @@ def transform(
 
     ### Start from the cache policy for coordinate replacement: retain topology,
     # invalidate geometry, then opt individual transformed values back in below.
-    transformed_mesh = mesh.with_points(new_points)
+    transformed_mesh = mesh.with_points(new_points, preserve_measures=True)
     new_cache = transformed_mesh._cache
 
     ### Opt-in: areas and normals (only for square invertible matrices)
@@ -602,6 +609,13 @@ def transform(
             ),
         )
 
+    from physicsnemo.mesh.calculus.measure import (
+        _transfer_cell_measures,
+        _transform_point_measures,
+    )
+
+    _transfer_cell_measures(mesh, transformed_mesh)
+    _transform_point_measures(mesh, transformed_mesh, matrix)
     return transformed_mesh
 
 
@@ -648,6 +662,7 @@ def translate(
     new_points = mesh.points + offset
     translated_mesh = mesh.with_points(
         new_points,
+        preserve_measures=True,
         keep=(
             "topology",
             ("cell", "areas"),
