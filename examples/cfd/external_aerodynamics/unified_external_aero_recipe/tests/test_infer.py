@@ -29,6 +29,7 @@ import os
 from pathlib import Path
 
 import infer
+import pytest
 import torch
 from conftest import make_surface_domain_mesh, make_volume_domain_mesh
 from nondim import NonDimensionalizeByMetadata, freestream_scales
@@ -36,6 +37,7 @@ from omegaconf import OmegaConf
 from tensordict import TensorDict
 
 from physicsnemo.mesh import DomainMesh
+from physicsnemo.mesh.calculus.measure import point_measures, set_point_measures
 
 _RECIPE = Path(__file__).resolve().parent.parent
 _DATASETS = _RECIPE / "datasets"
@@ -292,3 +294,29 @@ def test_attach_and_save_rescale_geometry_scales_points(tmp_path):
 
     reloaded = DomainMesh.load(str(out_path))
     assert torch.allclose(reloaded.interior.points, orig_points * l_ref, atol=1e-4)
+
+
+@pytest.mark.parametrize("rescale_geometry", [False, True])
+def test_attach_and_save_preserves_physical_point_measures(tmp_path, rescale_geometry):
+    """Saved measures remain integrable and follow geometry through a round trip."""
+    targets = {"pressure": "scalar", "wss": "vector"}
+    domain = make_surface_domain_mesh(targets, n_cells=16)
+    measures = torch.linspace(0.5, 2.0, domain.interior.n_points)
+    set_point_measures(domain.interior, measures, dimension=2)
+    phys = domain.interior.point_data.select("pressure", "wss")
+    out_path = tmp_path / "m.pdmsh"
+    infer.attach_and_save(
+        domain, phys, phys, targets, out_path, rescale_geometry=rescale_geometry
+    )
+
+    reloaded = DomainMesh.load(str(out_path))
+    factor = domain.global_data["L_ref"] ** 2 if rescale_geometry else 1.0
+    torch.testing.assert_close(point_measures(reloaded.interior), measures * factor)
+    torch.testing.assert_close(
+        reloaded.interior.integrate_samples("pred_pressure"),
+        (phys["pressure"] * measures * factor).sum(),
+    )
+    torch.testing.assert_close(
+        point_measures(reloaded.interior.scale(2.0)), measures * factor * 4
+    )
+    torch.testing.assert_close(point_measures(domain.interior), measures)

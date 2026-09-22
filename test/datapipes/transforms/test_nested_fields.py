@@ -38,6 +38,7 @@ from physicsnemo.datapipes.transforms.mesh import (
     SetGlobalField,
 )
 from physicsnemo.mesh import DomainMesh, Mesh
+from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY
 
 
 def _surface_mesh() -> Mesh:
@@ -277,7 +278,10 @@ class TestMeshToDomainMesh:
     def test_nested_target_moved_to_interior(self):
         mesh = _surface_mesh()
         domain = MeshToDomainMesh(cell_data_targets=["solution.pMeanTrim"])(mesh)
-        assert _leaves(domain.interior.point_data) == {("solution", "pMeanTrim")}
+        assert _leaves(domain.interior.point_data) == {
+            ("solution", "pMeanTrim"),
+            EFFECTIVE_MEASURE_KEY,
+        }
         boundary = domain.boundaries["vehicle"]
         assert ("solution", "pMeanTrim") not in boundary.cell_data
         assert ("solution", "wssMeanTrim") in boundary.cell_data
