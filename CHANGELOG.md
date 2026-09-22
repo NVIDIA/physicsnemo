@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PHYSICSNEMO_DIST_TIMEOUT_S`; unset or empty configuration keeps PyTorch's
   backend default. Invalid timeouts are rejected before initialization state
   changes, allowing corrected configuration to be retried.
+- `MeshToDomainMesh` in `cell_centroids` mode records each source cell's
+  complete effective measure on the interior under the mesh-owned
+  `_effective_measure` point-data key, so
+  integrals and weighted losses over the query points remain possible after
+  the cells are gone.
 - Unified external aero recipe: `NonDimensionalizeByMetadata` gains
   `scale_geometry` so chained instances scale the geometry once; inference
   re-dimensionalizes with the field maps of every instance.
@@ -47,6 +52,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     callbacks everywhere conversions between prediction types are necessary.
 
 ### Changed
+
+- Mesh integration uses a shared `_effective_measure` field for complete cell
+  and point measures. Cell measures fall back to geometry; point measures are
+  explicit and independent of connectivity. `Mesh.integrate_samples` evaluates
+  point quadrature separately from existing cell and vertex-field integration.
+  Sampling, centroid conversion, geometric transformations, subdivision and
+  GLOBE use the mesh-owned measure API. Point measures carry their represented
+  dimension so geometric scaling preserves their physical units.
+
+  **Migration from 2.2.x:** meshes saved with `cell_data["_measure_weights"]`
+  must be regenerated or converted once before integration:
+
+  ```python
+  from physicsnemo.mesh.calculus import set_cell_measures
+
+  if "_measure_weights" in mesh.cell_data:
+      weights = mesh.cell_data.pop("_measure_weights")
+      set_cell_measures(mesh, mesh.cell_areas * weights)
+  ```
+
+  Replace `compose_measure_weights` calls with `scale_measures`. Consumers
+  should read complete measures with `cell_measures` instead of multiplying
+  `cell_areas` by `cell_measure_weights`. Update stored-field mappings from
+  `cell_data._measure_weights` to `cell_data._effective_measure` and remove any
+  subsequent multiplication by geometric areas.
 
 - `Mesh.slice_points` picks its cell-remapping algorithm by mesh shape: the
   full-mesh lookup table as before, or a binary search over the kept ids when the
