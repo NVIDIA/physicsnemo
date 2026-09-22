@@ -68,10 +68,12 @@ class PrototypeTokenJEPAHead(Module):
     4. ``LayerNorm`` + linear projection back to ``token_dim``.
 
     Accepts both unbatched (``context_tokens.features`` rank 2) and
-    padded batched (rank 3) context inputs. When ``target_positions`` is
-    rank 2 it is broadcast to match the context batch size. When
-    ``cond`` is rank 1 it is treated as the single-sample case; when its
-    leading dim is 1 it is broadcast over the batch.
+    padded batched (rank 3) context inputs. In both cases, context tokens
+    whose ``context_tokens.mask`` entry is ``False`` are excluded from
+    cross-attention. When ``target_positions`` is rank 2 it is broadcast
+    to match the context batch size. When ``cond`` is rank 1 it is
+    treated as the single-sample case; when its leading dim is 1 it is
+    broadcast over the batch.
 
     Parameters
     ----------
@@ -193,11 +195,14 @@ class PrototypeTokenJEPAHead(Module):
         if not batched_context:
             context_features = context_tokens.features.unsqueeze(0)
             context_coords = context_tokens.coords.unsqueeze(0)
-            context_mask = torch.ones(
-                (1, int(context_tokens.features.shape[0])),
-                device=context_tokens.features.device,
-                dtype=torch.bool,
-            )
+            if context_tokens.mask is not None:
+                context_mask = context_tokens.mask.unsqueeze(0)
+            else:
+                context_mask = torch.ones(
+                    (1, int(context_tokens.features.shape[0])),
+                    device=context_tokens.features.device,
+                    dtype=torch.bool,
+                )
         else:
             context_features = context_tokens.features
             context_coords = context_tokens.coords
@@ -344,16 +349,20 @@ class PrototypeTokenJEPAHead(Module):
                 k=self_k,
             )
             self_idx = self_idx.long()
-            cross_k = min(
-                int(cross_blk0.neighbor_k),
-                int(flat_context_coords.shape[0]),
-            )
-            cross_idx, _ = knn(
-                points=flat_context_coords.float(),
-                queries=flat_target_coords.float(),
-                k=cross_k,
-            )
-            cross_idx = cross_idx.long()
+            # A fully masked context leaves no tokens to search. The cross
+            # blocks pass queries through unchanged in that case, so skip
+            # the neighbour search (kNN backends reject empty point sets).
+            if int(flat_context_coords.shape[0]) > 0:
+                cross_k = min(
+                    int(cross_blk0.neighbor_k),
+                    int(flat_context_coords.shape[0]),
+                )
+                cross_idx, _ = knn(
+                    points=flat_context_coords.float(),
+                    queries=flat_target_coords.float(),
+                    k=cross_k,
+                )
+                cross_idx = cross_idx.long()
 
         for self_block, cross_block in zip(
             self.self_blocks, self.cross_blocks, strict=True
