@@ -16,3 +16,4 @@
 
 _target_: zarr_reader.Reader
 _convert_: all
+lazy_load: true

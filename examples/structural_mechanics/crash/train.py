@@ -80,6 +80,12 @@ class Trainer:
         # Dataset
         reader = instantiate(cfg.reader)
         logging.getLogger().setLevel(logging.INFO)
+        if self.dist.world_size > 1 and getattr(reader, "lazy_load", False):
+            logger0.info(
+                "Multi-GPU training with lazy Zarr loading: DistributedSampler "
+                "shards sample indices only; lazy_load=true materializes each run "
+                "when its index is accessed instead of at dataset construction."
+            )
         dataset = instantiate(
             cfg.datapipe,
             name="crash_train",
@@ -238,6 +244,7 @@ class Trainer:
             self.writer = SummaryWriter(log_dir=cfg.training.tensorboard_log_dir)
 
     def train(self, sample: SimSample):
+        """Run one training step on a single collated sample."""
         self.optimizer.zero_grad()
         loss = self.forward(sample)
         self.backward(loss)
@@ -300,6 +307,7 @@ class Trainer:
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
+    """Hydra entry point for crash model training."""
     DistributedManager.initialize()
     dist = DistributedManager()
 
