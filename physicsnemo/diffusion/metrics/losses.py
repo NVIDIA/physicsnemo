@@ -119,11 +119,12 @@ class MSEDSMLoss:
     - **Loss weighting** via :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.loss_weight`: returns
       the per-sample weight :math:`w(t)`.
 
-    The model can be trained to either directly predict the clean data
-    :math:`\hat{\mathbf{x}}_0` (``prediction_type="x0"``, default) or to
-    predict the score, which is then converted to an
-    :math:`\hat{\mathbf{x}}_0` estimate via a user-provided
-    ``score_to_x0_fn`` callback (``prediction_type="score"``).
+    The model can directly predict the clean data
+    :math:`\hat{\mathbf{x}}_0` (``prediction_type="x0"``, default), or
+    predict the score, noise, or flow (``prediction_type="score"``,
+    ``"epsilon"``, or ``"flow"``); the matching user-provided
+    ``*_to_x0_fn`` callback then converts the prediction to an
+    :math:`\hat{\mathbf{x}}_0` estimate.
 
     .. warning::
 
@@ -171,9 +172,10 @@ class MSEDSMLoss:
         model wrapped with a preconditioner (e.g.,
         :class:`~physicsnemo.diffusion.preconditioners.EDMPreconditioner`).
         The output is interpreted according to ``prediction_type``: as a
-        clean-data estimate when ``"x0"``, or as a score when ``"score"``.
-        Must satisfy the
-        :class:`~physicsnemo.diffusion.DiffusionModel` protocol.
+        clean-data estimate when ``"x0"``, as a score when ``"score"``, as
+        noise when ``"epsilon"``, or as a flow (velocity) when ``"flow"``.
+        Must implement the :class:`~physicsnemo.diffusion.DiffusionModel`
+        protocol.
     noise_scheduler : NoiseScheduler
         Noise scheduler implementing the
         :class:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler`
@@ -186,8 +188,9 @@ class MSEDSMLoss:
         directly predicts clean data (the most common case with standard
         preconditioners). Use ``"score"`` when the model predicts the score,
         in which case ``score_to_x0_fn`` must be provided. Use ``"epsilon"``
-        when the model predicts the noise, in which case ``epsilon_to_x0_fn``
-        must be provided.
+        when the model predicts the noise, which requires
+        ``epsilon_to_x0_fn``. Use ``"flow"`` when the model predicts the
+        flow (velocity), which requires ``flow_to_x0_fn``.
     score_to_x0_fn : Callable[[Tensor, Tensor, Tensor], Tensor], optional
         Callback to convert a score prediction to an
         :math:`\hat{\mathbf{x}}_0` estimate. Required when
@@ -196,19 +199,28 @@ class MSEDSMLoss:
         Callback to convert an epsilon (noise) prediction to an
         :math:`\hat{\mathbf{x}}_0` estimate. Required when
         ``prediction_type="epsilon"``. See above for the expected signature.
+    flow_to_x0_fn : Callable[[Tensor, Tensor, Tensor], Tensor], optional
+        Callback to convert a flow (velocity) prediction to an
+        :math:`\hat{\mathbf{x}}_0` estimate. Required when
+        ``prediction_type="flow"``. See above for the expected signature.
     reduction : Literal["none", "mean", "sum"], default="mean"
         Reduction to apply to the output: ``"none"`` returns the
         per-element loss, ``"mean"`` returns the mean over all elements,
-        ``"sum"`` returns the sum over all elements.
+        ``"sum"`` returns the sum over all elements. For irregular data
+        (e.g. padded batches, point clouds, etc.), use ``"none"`` and apply
+        your own reduction.
 
     Raises
     ------
     ValueError
-        If ``prediction_type`` is not ``"x0"``, ``"score"``, or ``"epsilon"``.
+        If ``prediction_type`` is not ``"x0"``, ``"score"``, ``"epsilon"``,
+        or ``"flow"``.
     ValueError
         If ``prediction_type="score"`` and ``score_to_x0_fn`` is ``None``.
     ValueError
         If ``prediction_type="epsilon"`` and ``epsilon_to_x0_fn`` is ``None``.
+    ValueError
+        If ``prediction_type="flow"`` and ``flow_to_x0_fn`` is ``None``.
 
     Examples
     --------
@@ -357,6 +369,10 @@ class MSEDSMLoss:
             [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
         ]
         | None = None,
+        flow_to_x0_fn: Callable[
+            [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
+        ]
+        | None = None,
         reduction: Literal["none", "mean", "sum"] = "mean",
     ) -> None:
         self.model = model
@@ -377,10 +393,16 @@ class MSEDSMLoss:
                         "epsilon_to_x0_fn must be provided when prediction_type='epsilon'."
                     )
                 self._to_x0 = epsilon_to_x0_fn
+            case "flow":
+                if flow_to_x0_fn is None:
+                    raise ValueError(
+                        "flow_to_x0_fn must be provided when prediction_type='flow'."
+                    )
+                self._to_x0 = flow_to_x0_fn
             case _:
                 raise ValueError(
-                    f"prediction_type must be 'x0', 'score', or 'epsilon', "
-                    f"got '{prediction_type}'."
+                    f"prediction_type must be 'x0', 'score', 'epsilon', or "
+                    f"'flow', got '{prediction_type}'."
                 )
 
         # Define the reduction callbacks
@@ -484,7 +506,7 @@ class WeightedMSEDSMLoss:
     Parameters
     ----------
     model : DiffusionModel
-        Diffusion model to train. Must satisfy the
+        Diffusion model to train. Must implement the
         :class:`~physicsnemo.diffusion.DiffusionModel` protocol.
     noise_scheduler : NoiseScheduler
         Noise scheduler implementing the
@@ -500,9 +522,15 @@ class WeightedMSEDSMLoss:
         Callback to convert an epsilon (noise) prediction to an
         :math:`\hat{\mathbf{x}}_0` estimate. Required when
         ``prediction_type="epsilon"``.
+    flow_to_x0_fn : callable, optional
+        Callback to convert a flow prediction to an
+        :math:`\hat{\mathbf{x}}_0` estimate. Required when
+        ``prediction_type="flow"``.
     reduction : {"none", "mean", "sum"}, default="mean"
         Reduction to apply to the output: ``"none"`` returns the
-        per-element loss, ``"mean"`` the mean, ``"sum"`` the sum.
+        per-element loss, ``"mean"`` the mean, ``"sum"`` the sum. For
+        irregular data (e.g. padded batches, point clouds, etc.), use
+        ``"none"`` and apply your own reduction.
 
     Examples
     --------
@@ -548,6 +576,10 @@ class WeightedMSEDSMLoss:
             [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
         ]
         | None = None,
+        flow_to_x0_fn: Callable[
+            [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
+        ]
+        | None = None,
         reduction: Literal["none", "mean", "sum"] = "mean",
     ) -> None:
         self.model = model
@@ -568,10 +600,16 @@ class WeightedMSEDSMLoss:
                         "epsilon_to_x0_fn must be provided when prediction_type='epsilon'."
                     )
                 self._to_x0 = epsilon_to_x0_fn
+            case "flow":
+                if flow_to_x0_fn is None:
+                    raise ValueError(
+                        "flow_to_x0_fn must be provided when prediction_type='flow'."
+                    )
+                self._to_x0 = flow_to_x0_fn
             case _:
                 raise ValueError(
-                    f"prediction_type must be 'x0', 'score', or 'epsilon', "
-                    f"got '{prediction_type}'."
+                    f"prediction_type must be 'x0', 'score', 'epsilon', or "
+                    f"'flow', got '{prediction_type}'."
                 )
 
         # Define the reduction callbacks
@@ -639,6 +677,457 @@ class WeightedMSEDSMLoss:
         prediction = self.model(x_t, t, condition=condition, **model_kwargs)
         x0_pred = self._to_x0(prediction, x_t, t)
         loss = weight * (x0_pred - x0) ** 2
+        w = self.noise_scheduler.loss_weight(t)
+        w = apply_loss_weight(w, x0.ndim)
+        w = _maybe_promote_to_mesh(w, loss)
+        loss = w * loss
+        return self._reduce(loss)
+
+
+class FlowMatchingLoss:
+    r"""
+    Mean-squared-error loss for training flow-matching models with a flow
+    (velocity) target.
+
+    This is the flow-matching counterpart of :class:`MSEDSMLoss`. It
+    regresses the model's prediction against a flow target
+    :math:`\mathbf{v}(\mathbf{x}_0, \mathbf{x}_t, t)` instead of
+    against clean data :math:`\mathbf{x}_0`:
+
+    .. math::
+        \mathcal{L} = \mathbb{E}_{t}
+        \left[ w(t) \left\| \hat{\mathbf{v}}(\mathbf{x}_t, t)
+        - \mathbf{v}(\mathbf{x}_0, \mathbf{x}_t, t) \right\|^2 \right]
+
+    See :class:`MSEDSMLoss` for the shared mechanics: the noise
+    scheduler interface (time sampling, noise injection, loss weighting),
+    the ``model`` signature, and the ``reduction`` options.
+
+    .. warning::
+
+        For domain-parallel training where ``x0`` is a ``ShardTensor``,
+        you **must** wrap the scheduler with
+        :class:`~physicsnemo.diffusion.noise_schedulers.DomainParallelNoiseScheduler`;
+        a plain scheduler with sharded data raises a ``ValueError``.
+
+    Parameters
+    ----------
+    model : DiffusionModel
+        Flow-matching model to train.
+        The loss interprets the output according to ``prediction_type``: as a
+        flow (velocity) estimate when ``"flow"``, as clean data when
+        ``"x0"``, as a score when ``"score"``, or as noise when
+        ``"epsilon"``. Must implement the
+        :class:`~physicsnemo.diffusion.DiffusionModel` protocol.
+    noise_scheduler : NoiseScheduler
+        Noise scheduler implementing the
+        :class:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler`
+        protocol (see :class:`MSEDSMLoss` for details).
+    prediction_type : PredictorType, default="flow"
+        The prediction the model outputs. Use ``"flow"`` when the
+        model directly predicts the flow (velocity) (the most common case
+        for flow matching). Use ``"x0"``, ``"score"``, or ``"epsilon"``
+        when the model predicts clean data, the score, or the noise; the
+        matching ``*_to_flow_fn`` callback then converts the prediction to
+        the flow target :math:`\mathbf{v}`.
+    x0_to_flow_fn : Callable[[Tensor, Tensor, Tensor], Tensor], optional, default=None
+        Callback ``(x0, x_t, t) -> v`` computing the flow target
+        :math:`\mathbf{v}(\mathbf{x}_0, \mathbf{x}_t, t)` (see the equation
+        above) from clean data. You must provide this callback for every
+        prediction type; raises a ``ValueError`` when passed ``None``. For
+        :class:`~physicsnemo.diffusion.noise_schedulers.LinearGaussianNoiseScheduler`
+        subclasses, in most cases pass
+        :meth:`~physicsnemo.diffusion.noise_schedulers.LinearGaussianNoiseScheduler.x0_to_flow`.
+    score_to_flow_fn : Callable[[Tensor, Tensor, Tensor], Tensor], optional
+        Callback ``(score, x_t, t) -> v`` converting a score prediction to
+        the flow target :math:`\mathbf{v}`. Required when
+        ``prediction_type="score"``.
+    epsilon_to_flow_fn : Callable[[Tensor, Tensor, Tensor], Tensor], optional
+        Callback ``(epsilon, x_t, t) -> v`` converting an epsilon (noise)
+        prediction to the flow target :math:`\mathbf{v}`. Required when
+        ``prediction_type="epsilon"``.
+    reduction : Literal["none", "mean", "sum"], default="mean"
+        Reduction to apply to the output: ``"none"`` returns the
+        per-element loss, ``"mean"`` returns the mean over all elements,
+        ``"sum"`` returns the sum over all elements. For irregular data
+        (padded batches, point clouds, graphs), use ``"none"`` and apply
+        your own reduction, such as a masked mean.
+
+    Raises
+    ------
+    ValueError
+        If ``prediction_type`` is not ``"flow"``, ``"x0"``, ``"score"``,
+        or ``"epsilon"``.
+    ValueError
+        If ``x0_to_flow_fn`` is missing, or the callback required by
+        ``prediction_type`` is missing.
+
+    Examples
+    --------
+    Train a flow-predictor with the rectified flow schedule:
+
+    >>> import torch
+    >>> from physicsnemo.core import Module
+    >>> from physicsnemo.diffusion.noise_schedulers import (
+    ...     RectifiedFlowNoiseScheduler,
+    ... )
+    >>> from physicsnemo.diffusion.metrics.losses import FlowMatchingLoss
+    >>>
+    >>> class FlowModel(Module):
+    ...     def __init__(self):
+    ...         super().__init__()
+    ...         self.net = torch.nn.Conv2d(3, 3, 1)
+    ...     def forward(self, x, t, condition=None):
+    ...         return self.net(x)
+    >>>
+    >>> model = FlowModel()
+    >>> scheduler = RectifiedFlowNoiseScheduler()
+    >>> loss_fn = FlowMatchingLoss(
+    ...     model, scheduler, x0_to_flow_fn=scheduler.x0_to_flow
+    ... )
+    >>> x0 = torch.randn(4, 3, 8, 8)
+    >>> loss = loss_fn(x0)
+    >>> loss.shape
+    torch.Size([])
+
+    See :class:`MSEDSMLoss` for more usage patterns (conditional training,
+    pre-sampled times, switching the prediction type); they apply here
+    unchanged.
+    """
+
+    def __init__(
+        self,
+        model: DiffusionModel,
+        noise_scheduler: NoiseScheduler,
+        prediction_type: PredictorType = "flow",
+        x0_to_flow_fn: Callable[
+            [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
+        ]
+        | None = None,
+        score_to_flow_fn: Callable[
+            [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
+        ]
+        | None = None,
+        epsilon_to_flow_fn: Callable[
+            [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
+        ]
+        | None = None,
+        reduction: Literal["none", "mean", "sum"] = "mean",
+    ) -> None:
+        self.model = model
+        self.noise_scheduler = noise_scheduler
+
+        if x0_to_flow_fn is None:
+            raise ValueError(
+                "x0_to_flow_fn must be provided: it computes the flow target "
+                "from clean data. LinearGaussianNoiseScheduler subclasses "
+                "provide it as noise_scheduler.x0_to_flow."
+            )
+        self._x0_to_flow = x0_to_flow_fn
+
+        match prediction_type:
+            case "flow":
+                self._to_flow = lambda prediction, x_t, t: prediction
+            case "x0":
+                self._to_flow = x0_to_flow_fn
+            case "score":
+                if score_to_flow_fn is None:
+                    raise ValueError(
+                        "score_to_flow_fn must be provided when prediction_type='score'."
+                    )
+                self._to_flow = score_to_flow_fn
+            case "epsilon":
+                if epsilon_to_flow_fn is None:
+                    raise ValueError(
+                        "epsilon_to_flow_fn must be provided when "
+                        "prediction_type='epsilon'."
+                    )
+                self._to_flow = epsilon_to_flow_fn
+            case _:
+                raise ValueError(
+                    f"prediction_type must be 'flow', 'x0', 'score', or "
+                    f"'epsilon', got '{prediction_type}'."
+                )
+
+        # Define the reduction callbacks
+        _reductions = {
+            "none": lambda x: x,
+            "mean": lambda x: x.mean(),
+            "sum": lambda x: x.sum(),
+        }
+        if reduction not in _reductions:
+            raise ValueError(
+                f"reduction must be 'none', 'mean', or 'sum', got '{reduction}'."
+            )
+        self._reduce = _reductions[reduction]
+
+    def __call__(
+        self,
+        x0: Float[Tensor, " B *dims"],
+        t: Float[Tensor, " B"] | None = None,
+        condition: Float[Tensor, " B *cond_dims"] | TensorDict | None = None,
+        **model_kwargs: Any,
+    ) -> Float[Tensor, " B *dims"] | Float[Tensor, ""]:
+        r"""
+        Compute the flow matching loss.
+
+        Parameters
+        ----------
+        x0 : Tensor
+            Clean data of shape :math:`(B, *)` where :math:`B` is the batch
+            size and :math:`*` denotes any number of extra dimensions.
+        t : Tensor or None, optional, default=None
+            Pre-sampled diffusion times of shape :math:`(B,)`. When ``None``
+            (the default), the loss samples times internally via
+            :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.sample_time`.
+            Pass explicit times for diagnostics such as per-time-bin loss
+            tracking.
+        condition : Tensor, TensorDict, or None, optional, default=None
+            Conditioning information passed to the model. See
+            :class:`~physicsnemo.diffusion.DiffusionModel` for details.
+        **model_kwargs : Any
+            Extra keyword arguments forwarded to the model
+
+        Returns
+        -------
+        Tensor
+            If ``reduction="none"``, the per-element weighted loss with same
+            shape :math:`(B, *)` as ``x0``. If ``reduction="mean"``, or
+            ``reduction="sum"``, a scalar tensor.
+        """
+        if not torch.compiler.is_compiling():
+            _check_domain_parallel_scheduler(x0, self.noise_scheduler)
+        B = x0.shape[0]
+        if t is None:
+            t = self.noise_scheduler.sample_time(B, device=x0.device, dtype=x0.dtype)
+        x_t = self.noise_scheduler.add_noise(x0, t)
+        prediction = self.model(x_t, t, condition=condition, **model_kwargs)
+        flow_pred = self._to_flow(prediction, x_t, t)
+        flow_target = self._x0_to_flow(x0, x_t, t)
+        loss = (flow_pred - flow_target) ** 2
+        w = self.noise_scheduler.loss_weight(t)
+        w = apply_loss_weight(w, x0.ndim)
+        w = _maybe_promote_to_mesh(w, loss)
+        loss = w * loss
+        return self._reduce(loss)
+
+
+class WeightedFlowMatchingLoss:
+    r"""
+    Weighted mean-squared-error flow matching loss.
+
+    Identical to :class:`FlowMatchingLoss` but accepts a
+    ``weight`` argument that multiplies the per-element squared error.
+
+    .. math::
+        \mathcal{L} = \mathbb{E}_{t}
+        \left[ w(t) \left\| \mathbf{m} \odot
+        \left(\hat{\mathbf{v}}(\mathbf{x}_t, t)
+        - \mathbf{v}(\mathbf{x}_0, \mathbf{x}_t, t)\right) \right\|^2 \right]
+
+    where :math:`\mathbf{m}` is the element-wise weight (e.g., a binary
+    mask). A common use case is masking out certain spatial regions or
+    channels of the state.
+
+    .. note::
+
+        The ``weight`` argument is **not** related to the time-dependent
+        loss weight :math:`w(t)` provided by the noise scheduler.
+
+    .. warning::
+
+        For domain-parallel training where ``x0`` is a ``DTensor``
+        (e.g., a :class:`~physicsnemo.domain_parallel.ShardTensor`),
+        ``weight`` must be a ``DTensor`` on the same device mesh; a plain
+        tensor ``weight`` raises a ``ValueError``.
+
+    Parameters
+    ----------
+    model : DiffusionModel
+        Flow-matching model to train. Must implement the
+        :class:`~physicsnemo.diffusion.DiffusionModel` protocol.
+    noise_scheduler : NoiseScheduler
+        Noise scheduler implementing the
+        :class:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler`
+        protocol.
+    prediction_type : PredictorType, default="flow"
+        The prediction the model outputs.
+    x0_to_flow_fn : callable, optional, default=None
+        Callback ``(x0, x_t, t) -> v`` computing the flow target
+        :math:`\mathbf{v}` from clean data. You must provide this callback for
+        every prediction type; raises a ``ValueError`` when passed ``None``.
+    score_to_flow_fn : callable, optional
+        Callback ``(score, x_t, t) -> v`` converting a score prediction to
+        the flow target :math:`\mathbf{v}`. Required when
+        ``prediction_type="score"``.
+    epsilon_to_flow_fn : callable, optional
+        Callback ``(epsilon, x_t, t) -> v`` converting an epsilon (noise)
+        prediction to the flow target :math:`\mathbf{v}`. Required when
+        ``prediction_type="epsilon"``.
+    reduction : {"none", "mean", "sum"}, default="mean"
+        Reduction to apply to the output: ``"none"`` returns the
+        per-element loss, ``"mean"`` the mean, ``"sum"`` the sum. For
+        irregular data (e.g. padded batches, point clouds, etc.), use
+        ``"none"`` and apply your own reduction.
+
+    Raises
+    ------
+    ValueError
+        If ``prediction_type`` is not ``"flow"``, ``"x0"``, ``"score"``,
+        or ``"epsilon"``.
+    ValueError
+        If ``x0_to_flow_fn`` is missing, or the callback required by
+        ``prediction_type`` is missing.
+
+    Examples
+    --------
+    Apply a binary mask so the loss covers only unmasked elements:
+
+    >>> import torch
+    >>> from physicsnemo.core import Module
+    >>> from physicsnemo.diffusion.noise_schedulers import (
+    ...     RectifiedFlowNoiseScheduler,
+    ... )
+    >>> from physicsnemo.diffusion.metrics.losses import WeightedFlowMatchingLoss
+    >>>
+    >>> class FlowModel(Module):
+    ...     def __init__(self):
+    ...         super().__init__()
+    ...         self.net = torch.nn.Conv2d(3, 3, 1)
+    ...     def forward(self, x, t, condition=None):
+    ...         return self.net(x)
+    >>>
+    >>> model = FlowModel()
+    >>> scheduler = RectifiedFlowNoiseScheduler()
+    >>> loss_fn = WeightedFlowMatchingLoss(
+    ...     model, scheduler, x0_to_flow_fn=scheduler.x0_to_flow
+    ... )
+    >>>
+    >>> x0 = torch.randn(4, 3, 8, 8)
+    >>> # Binary mask: zero out the left half of the spatial domain
+    >>> mask = torch.ones(4, 3, 8, 8)
+    >>> mask[:, :, :, :4] = 0.0
+    >>> loss = loss_fn(x0, weight=mask)
+    >>> loss.shape
+    torch.Size([])
+    """
+
+    def __init__(
+        self,
+        model: DiffusionModel,
+        noise_scheduler: NoiseScheduler,
+        prediction_type: PredictorType = "flow",
+        x0_to_flow_fn: Callable[
+            [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
+        ]
+        | None = None,
+        score_to_flow_fn: Callable[
+            [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
+        ]
+        | None = None,
+        epsilon_to_flow_fn: Callable[
+            [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
+        ]
+        | None = None,
+        reduction: Literal["none", "mean", "sum"] = "mean",
+    ) -> None:
+        self.model = model
+        self.noise_scheduler = noise_scheduler
+
+        if x0_to_flow_fn is None:
+            raise ValueError(
+                "x0_to_flow_fn must be provided: it computes the flow target "
+                "from clean data. LinearGaussianNoiseScheduler subclasses "
+                "provide it as noise_scheduler.x0_to_flow."
+            )
+        self._x0_to_flow = x0_to_flow_fn
+
+        match prediction_type:
+            case "flow":
+                self._to_flow = lambda prediction, x_t, t: prediction
+            case "x0":
+                self._to_flow = x0_to_flow_fn
+            case "score":
+                if score_to_flow_fn is None:
+                    raise ValueError(
+                        "score_to_flow_fn must be provided when prediction_type='score'."
+                    )
+                self._to_flow = score_to_flow_fn
+            case "epsilon":
+                if epsilon_to_flow_fn is None:
+                    raise ValueError(
+                        "epsilon_to_flow_fn must be provided when "
+                        "prediction_type='epsilon'."
+                    )
+                self._to_flow = epsilon_to_flow_fn
+            case _:
+                raise ValueError(
+                    f"prediction_type must be 'flow', 'x0', 'score', or "
+                    f"'epsilon', got '{prediction_type}'."
+                )
+
+        # Define the reduction callbacks
+        _reductions = {
+            "none": lambda x: x,
+            "mean": lambda x: x.mean(),
+            "sum": lambda x: x.sum(),
+        }
+        if reduction not in _reductions:
+            raise ValueError(
+                f"reduction must be 'none', 'mean', or 'sum', got '{reduction}'."
+            )
+        self._reduce = _reductions[reduction]
+
+    def __call__(
+        self,
+        x0: Float[Tensor, " B *dims"],
+        weight: Float[Tensor, " B *dims"],
+        t: Float[Tensor, " B"] | None = None,
+        condition: Float[Tensor, " B *cond_dims"] | TensorDict | None = None,
+        **model_kwargs: Any,
+    ) -> Float[Tensor, " B *dims"] | Float[Tensor, ""]:
+        r"""
+        Compute the weighted flow matching loss.
+
+        Parameters
+        ----------
+        x0 : Tensor
+            Clean data of shape :math:`(B, *)` where :math:`B` is the batch
+            size and :math:`*` denotes any number of extra dimensions.
+        weight : Tensor
+            Per-element weight with the same shape as ``x0`` (0/1 for
+            binary masking). When ``x0`` is a ``DTensor``, ``weight`` must
+            be a ``DTensor`` on the same device mesh.
+        t : Tensor or None, optional, default=None
+            Pre-sampled diffusion times of shape :math:`(B,)`. When ``None``
+            (the default), the loss samples times internally via
+            :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.sample_time`.
+            Pass explicit times for diagnostics such as per-time-bin loss
+            tracking.
+        condition : Tensor, TensorDict, or None, optional, default=None
+            Conditioning information passed to the model. See
+            :class:`~physicsnemo.diffusion.DiffusionModel` for details.
+        **model_kwargs : Any
+            Extra keyword arguments forwarded to the model
+
+        Returns
+        -------
+        Tensor
+            If ``reduction="none"``, the per-element weighted loss with same
+            shape :math:`(B, *)` as ``x0``. If ``reduction="mean"``, or
+            ``reduction="sum"``, a scalar tensor.
+        """
+        if not torch.compiler.is_compiling():
+            _check_domain_parallel_scheduler(x0, self.noise_scheduler)
+            _check_weight_mesh(weight, x0)
+        B = x0.shape[0]
+        if t is None:
+            t = self.noise_scheduler.sample_time(B, device=x0.device, dtype=x0.dtype)
+        x_t = self.noise_scheduler.add_noise(x0, t)
+        prediction = self.model(x_t, t, condition=condition, **model_kwargs)
+        flow_pred = self._to_flow(prediction, x_t, t)
+        flow_target = self._x0_to_flow(x0, x_t, t)
+        loss = weight * (flow_pred - flow_target) ** 2
         w = self.noise_scheduler.loss_weight(t)
         w = apply_loss_weight(w, x0.ndim)
         w = _maybe_promote_to_mesh(w, loss)

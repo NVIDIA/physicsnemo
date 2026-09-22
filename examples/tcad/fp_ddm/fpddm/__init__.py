@@ -14,6 +14,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .combine_vtp_files import combine_vtp_files
-from .convert_file_formats import convert_tesselated_files_in_directory
-from .generate_stl import sdf_to_stl
+"""FP-DDM components for the PhysicsNeMo thermal and elasticity examples."""

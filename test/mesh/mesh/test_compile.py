@@ -235,3 +235,39 @@ def test_with_cells_checks_simplex_type_under_fullgraph_compile(
     tetrahedra = torch.cat([cells, cells[:, :1]], dim=1)
     with pytest.raises(RuntimeError, match="must preserve simplex type"):
         compiled(points, cells, tetrahedra)
+
+
+@pytest.mark.parametrize("backend", ["eager", "inductor"])
+@pytest.mark.parametrize("dtype", [torch.int64, torch.uint64])
+def test_integer_coordinates_under_fullgraph_compile(backend, dtype):
+    """Integer promotion stays in one graph and retains its exactness check."""
+    points = torch.tensor([[0, 0], [1, 0], [0, 1]], dtype=dtype)
+    cells = torch.tensor([[0, 1, 2]])
+
+    def area(p, c):
+        return Mesh(points=p, cells=c).cell_areas
+
+    compiled = torch.compile(area, backend=backend, fullgraph=True)
+    torch.testing.assert_close(compiled(points, cells), torch.tensor([0.5]).double())
+
+    inexact = points.clone()
+    inexact[0, 0] = 2**53 + 1
+    with pytest.raises(RuntimeError, match="cannot be represented exactly"):
+        compiled(inexact, cells)
+
+
+@pytest.mark.parametrize("backend", ["eager", "inductor"])
+def test_uint64_connectivity_under_fullgraph_compile(backend):
+    """Compiled normalization rejects overflow instead of using negative IDs."""
+    points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+    cells = torch.tensor([[0, 1, 2]], dtype=torch.uint64)
+
+    def area(p, c):
+        return Mesh(points=p, cells=c).cell_areas
+
+    compiled = torch.compile(area, backend=backend, fullgraph=True)
+    torch.testing.assert_close(compiled(points, cells), torch.tensor([0.5]))
+
+    overflow = torch.tensor([[0, 1, 2**64 - 1]], dtype=torch.uint64)
+    with pytest.raises(RuntimeError, match="uint64 indices.*int64"):
+        compiled(points, overflow)

@@ -55,7 +55,7 @@ exhaustive = True
 containers=
    physicsnemo.utils
 layers = 
-   mesh | insolation | zenith_angle
+   insolation | zenith_angle
    profiling
    checkpoint
    capture

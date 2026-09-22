@@ -292,8 +292,6 @@ utils-extras = [
     "wandb",
     "mlflow>=3.12.0",
     "line_profiler",
-    "vtk",
-    "stl",
 ]
 mesh-extras = [
     "matplotlib>=3.10.8",
