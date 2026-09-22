@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from unittest.mock import MagicMock
 
 import pytest
@@ -446,3 +447,51 @@ class TestDefaultTrainingLoop:
         # it won't be used directly in this implementation
         # This test verifies the loop runs without error
         assert True
+
+    def test_single_optimizer_step_per_minibatch(self, mock_module):
+        """Static capture must not add a second optimizer update per minibatch.
+
+        ``StaticCaptureTraining`` runs the backward pass and steps the optimizer
+        itself through its grad scaler, so the loop stepping again would apply the
+        same gradients twice.
+        """
+        dataset = TensorDataset(torch.randn(4, 64), torch.randn(4, 3))
+        dataloader = DataLoader(dataset, batch_size=4)
+        initial_state = deepcopy(mock_module.state_dict())
+
+        def train_step(model, batch, *args, **kwargs):
+            inputs, targets = batch
+            return (model(inputs) - targets).square().mean()
+
+        def run(enable_static_capture: bool) -> tuple[list[torch.Tensor], int]:
+            mock_module.load_state_dict(initial_state)
+            optimizer = torch.optim.SGD(mock_module.parameters(), lr=0.1)
+            optimizer.step = MagicMock(side_effect=optimizer.step)
+
+            DefaultTrainingLoop(
+                enable_static_capture=enable_static_capture,
+                use_progress_bars=False,
+                use_amp=False,
+            )(
+                mock_module,
+                optimizer,
+                dataloader,
+                max_epochs=1,
+                train_step_fn=train_step,
+                device=torch.device("cpu"),
+            )
+
+            deltas = [
+                parameter.detach() - initial_state[name]
+                for name, parameter in mock_module.named_parameters()
+            ]
+            return deltas, optimizer.step.call_count
+
+        eager_deltas, eager_steps = run(False)
+        captured_deltas, captured_steps = run(True)
+
+        # one minibatch, so exactly one update on both paths
+        assert eager_steps == 1
+        assert captured_steps == 1
+        for eager, captured in zip(eager_deltas, captured_deltas):
+            assert torch.equal(eager, captured)
