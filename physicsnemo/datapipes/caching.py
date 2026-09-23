@@ -1043,15 +1043,16 @@ def _filesystem_type(path: Path) -> str | None:
     return None
 
 
-def check_disk_dir(path: Path, limit_bytes: int, *, allow_network: bool = False) -> int:
+def check_disk_dir(path: Path, limit_bytes: int) -> int:
     """Vet a disk-tier directory and return the byte budget it can support.
 
-    Three checks, in order:
+    Nothing here stops training; the checks warn and clamp.
 
-    1. **Network filesystems are refused.** A cache on Lustre or NFS turns
-       every one of its many small files into a metadata-server round
-       trip, which is the cost the cache exists to remove. Pass
-       ``allow_network=True`` to downgrade the error to a warning.
+    1. **Network filesystems are warned about.** A cache on Lustre or NFS
+       turns every one of its many small files into a metadata-server
+       round trip, which is the cost the cache exists to remove. It still
+       works, so it is a warning: an operator may knowingly use a fast
+       parallel filesystem as a warm cache shared across nodes.
     2. **tmpfs is called out.** On many nodes ``/tmp`` is memory. The
        tier still works, but it is then RAM shared with training and with
        every rank's RAM tier, and the budget below matters all the more.
@@ -1067,29 +1068,22 @@ def check_disk_dir(path: Path, limit_bytes: int, *, allow_network: bool = False)
         The intended ``disk_dir``. Need not exist yet.
     limit_bytes : int
         The configured ``disk_bytes_limit``.
-    allow_network : bool, default=False
-        Warn instead of raising on a network filesystem.
 
     Returns
     -------
     int
         The effective byte budget, ``<= limit_bytes``.
-
-    Raises
-    ------
-    ValueError
-        If *path* is on a network filesystem and *allow_network* is False.
     """
     fstype = _filesystem_type(path)
     if fstype is not None and fstype.startswith(_NETWORK_FS_PREFIXES):
-        msg = (
-            f"DatasetCache disk_dir {str(path)!r} is on a {fstype!r} filesystem. "
-            "The disk tier writes many small files and must live on node-local "
-            "storage (NVMe, tmpfs, or $TMPDIR)."
+        logger.warning(
+            "DatasetCache disk_dir %r is on a %r filesystem. The disk tier "
+            "writes many small files and is meant for node-local storage "
+            "(NVMe, tmpfs, or $TMPDIR); on a network filesystem it may be "
+            "slower than no cache at all.",
+            str(path),
+            fstype,
         )
-        if not allow_network:
-            raise ValueError(msg + " Pass allow_network_disk=True to override.")
-        logger.warning("%s Continuing because allow_network_disk=True.", msg)
     if fstype == "tmpfs":
         logger.warning(
             "DatasetCache disk_dir %s is tmpfs: the disk tier is RAM-backed on "
@@ -1164,10 +1158,6 @@ class DatasetCache:
         ``"mtime"`` stats each tree source once per process and drops
         entries older than it. Use it while a dataset is still being
         edited.
-    allow_network_disk : bool, default=False
-        The disk tier refuses to live on a network filesystem (Lustre,
-        NFS, and friends), since that recreates the cost it removes. Set
-        True to turn that error into a warning. See :func:`check_disk_dir`.
 
     Notes
     -----
@@ -1217,7 +1207,6 @@ class DatasetCache:
         max_item_bytes: int = 8 * 2**20,
         small_file_bytes: int = 64 * 2**10,
         validate: str = "none",
-        allow_network_disk: bool = False,
     ) -> None:
         if eviction not in EVICTION_POLICIES:
             raise ValueError(
@@ -1236,9 +1225,7 @@ class DatasetCache:
         self._disk = None
         if disk_dir is not None:
             disk_dir = Path(disk_dir)
-            budget = check_disk_dir(
-                disk_dir, disk_bytes_limit, allow_network=allow_network_disk
-            )
+            budget = check_disk_dir(disk_dir, disk_bytes_limit)
             self._disk = _DiskTier(disk_dir, budget, policy, small_file_bytes)
         self._locks = [threading.RLock() for _ in range(_N_LOCK_STRIPES)]
         # Small bookkeeping sets that share one lock: keys already checked

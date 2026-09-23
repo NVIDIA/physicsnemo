@@ -537,19 +537,12 @@ class TestIdentity:
 
 
 class TestDiskDirChecks:
-    def test_network_filesystem_refused(self, tmp_path, monkeypatch):
+    def test_network_filesystem_warns_but_works(self, tmp_path, monkeypatch, caplog):
         monkeypatch.setattr(caching, "_filesystem_type", lambda p: "lustre")
-        with pytest.raises(ValueError, match="lustre"):
-            DatasetCache(disk_dir=tmp_path / "c")
-
-    def test_network_filesystem_allowed_with_override(
-        self, tmp_path, monkeypatch, caplog
-    ):
-        monkeypatch.setattr(caching, "_filesystem_type", lambda p: "nfs4")
         with caplog.at_level("WARNING"):
-            cache = DatasetCache(disk_dir=tmp_path / "c", allow_network_disk=True)
+            cache = DatasetCache(disk_dir=tmp_path / "c")
         assert cache._disk is not None
-        assert "nfs4" in caplog.text
+        assert "lustre" in caplog.text and "node-local" in caplog.text
 
     def test_tmpfs_warns(self, tmp_path, monkeypatch, caplog):
         monkeypatch.setattr(caching, "_filesystem_type", lambda p: "tmpfs")
