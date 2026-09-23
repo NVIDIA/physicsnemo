@@ -58,8 +58,8 @@ dataloader:
   #     ram_bytes_limit: 4294967296          # 4 GiB per rank; null disables
   #     disk_dir: ${oc.env:TMPDIR,/tmp}/pn-datacache-${oc.env:USER}
   #     disk_bytes_limit: 214748364800       # 200 GiB, clamped to free space
-  # disk_dir must be node-local (NVMe, tmpfs, $TMPDIR); network filesystems
-  # are refused. Under /tmp the cache is usually gone after the job.
+  # disk_dir should be node-local (NVMe, tmpfs, $TMPDIR); a network filesystem
+  # works but is warned about. Under /tmp the cache is usually gone after the job.
   cache: null
 
 # -- Logging -----------------------------------------------------------------
