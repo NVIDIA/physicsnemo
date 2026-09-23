@@ -244,9 +244,9 @@ Readers
 ^^^^^^^
 
 Readers are the data-ingestion layer. Each one loads individual samples from a
-specific storage format (HDF5, Zarr, NumPy, VTK) and returns CPU tensors
-in a uniform dict interface. Refer to :doc:`physicsnemo.datapipes.readers` for the
-base class API and all built-in readers.
+specific storage format (HDF5, Zarr, NumPy, VTK, PhysicsNeMo meshes) and returns
+CPU tensors in a uniform dict interface. Refer to :doc:`physicsnemo.datapipes.readers`
+for the base class API and all built-in readers.
 
 Transforms
 ^^^^^^^^^^
