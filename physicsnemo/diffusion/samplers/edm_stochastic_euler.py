@@ -245,10 +245,17 @@ class EDMStochasticEulerSolver(Solver):
         # Noise scale: sqrt(sigma_hat^2 - sigma_cur^2) * S_noise * g(x,t) / sqrt(2*t)
         g_sq_bc = self.diffusion_fn(x, t_cur)
         safe_t_cur_bc = torch.where(t_cur_bc == 0, torch.ones_like(t_cur_bc), t_cur_bc)
-        noise_scale_bc = (
-            (t_hat_bc**2 - t_cur_bc**2).clamp(min=0).sqrt()
+        has_churn_bc = gamma_bc > 0
+        noise_variance_bc = (sigma_hat_bc**2 - sigma_cur_bc**2).clamp(min=0)
+        safe_noise_variance_bc = torch.where(
+            has_churn_bc, noise_variance_bc, torch.ones_like(noise_variance_bc)
+        )
+        noise_scale_bc = torch.where(
+            has_churn_bc,
+            safe_noise_variance_bc.sqrt()
             * self.S_noise
-            * (g_sq_bc / (2 * safe_t_cur_bc)).sqrt()
+            * (g_sq_bc / (2 * safe_t_cur_bc)).sqrt(),
+            torch.zeros_like(noise_variance_bc),
         )
         noise_scale_bc = torch.where(
             t_cur_bc == 0, torch.zeros_like(noise_scale_bc), noise_scale_bc

@@ -45,9 +45,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     functions in `LinearGaussianNoiseScheduler` (`x0_to_flow` / `flow_to_x0`
     / `score_to_flow` / `flow_to_score`) and the corresponding conversion
     callbacks everywhere conversions between prediction types are necessary.
+- Adds `ExponentialEulerSolver`, `EDMStochasticExponentialEulerSolver`,
+  `DPMPlusPlus2M`, and `DPMPlusPlus2MUniC2` to
+  `physicsnemo.diffusion.samplers`. `ExponentialEulerSolver` supports
+  DDIM-like sampling for distilled few-step models, its stochastic
+  counterpart adds EDM-style churn and configurable re-noising,
+  `DPMPlusPlus2M` provides efficient second-order sampling, and
+  `DPMPlusPlus2MUniC2` adds a UniC-2 corrector stage that raises
+  DPM-Solver++(2M) to third order while keeping one denoiser evaluation
+  per step. The solvers share an extended semi-linear callback API
+  (`bias_fn`, `bias_int_fn`, `slope_fn`); users can select all four
+  solvers by string key through `physicsnemo.diffusion.samplers.sample`.
 
 ### Changed
 
+- Extends `LinearGaussianNoiseScheduler` with two methods.
+  `get_linear_denoiser` accepts `prediction_type` and `denoising_type`, and
+  returns bias, antiderivative, and slope callables for the new exponential
+  and multistep solvers. `snr` exposes the schedule's signal-to-noise ratio,
+  used as the multistep extrapolation coordinate by `DPMPlusPlus2M` and
+  `DPMPlusPlus2MUniC2`.
 - `Mesh.slice_points` picks its cell-remapping algorithm by mesh shape: the
   full-mesh lookup table as before, or a binary search over the kept ids when the
   mesh has far more points than cell-vertex entries (a reader keeping a block of
@@ -84,6 +101,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixes `VPNoiseScheduler.sigma_inv` at extreme noise levels. In particular,
+  converting `sigma=0` no longer returns a slightly negative diffusion time.
 - Fixes mesh dtype handling: preserves integer-coordinate precision, normalizes
   connectivity safely, and rejects integer `.to()` casts. Floating/complex casts
   preserve the source mesh.

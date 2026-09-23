@@ -5,7 +5,7 @@ Metrics and Losses
 
 .. currentmodule:: physicsnemo.diffusion.metrics
 
-This module provides two categories of tools: 
+This module provides two categories of tools:
 
 * **training losses** for learning diffusion models
 * **evaluation metrics** for measuring the quality of generated samples
