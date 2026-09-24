@@ -109,6 +109,16 @@ class GradientsFiniteDifference(torch.nn.Module):
         Derivative order (1 or 2).
     return_mixed_derivs : bool
         If True and ``order=2``, include cross-derivatives like ``u__x__y``.
+
+    Notes
+    -----
+    The central-difference stencils wrap around at the edges of the grid,
+    i.e. the domain is assumed to be **periodic** along every axis. For
+    non-periodic problems (e.g. Dirichlet or Neumann walls) the derivatives,
+    and therefore any PDE residual built from them, are incorrect in the
+    cells adjacent to the boundary. Exclude those cells from the loss, pad
+    the field consistently with the boundary conditions, or use a
+    non-grid method such as ``"autodiff"`` or ``"least_squares"``.
     """
 
     def __init__(
@@ -172,7 +182,29 @@ class GradientsFiniteDifference(torch.nn.Module):
 
 
 class GradientsSpectral(torch.nn.Module):
-    """Compute spatial derivatives via ``SpectralGridGradient``."""
+    """Compute spatial derivatives via ``SpectralGridGradient``.
+
+    Parameters
+    ----------
+    invar : str
+        Name of the variable to differentiate (e.g. ``"u"``).
+    ell : float or list[float]
+        Domain length (period) per axis.
+    dim : int
+        Spatial dimensionality (1, 2, or 3).
+    order : int
+        Derivative order (1 or 2).
+    return_mixed_derivs : bool
+        If True and ``order=2``, include cross-derivatives like ``u__x__y``.
+
+    Notes
+    -----
+    Derivatives are computed with the FFT, so the field is assumed to be
+    **periodic** along every axis with period ``ell``. For non-periodic
+    fields the discontinuity at the wrap-around causes Gibbs oscillations,
+    and the derivatives are incorrect near the boundary (and can be
+    polluted further into the domain).
+    """
 
     def __init__(
         self,

@@ -54,6 +54,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cells out of a mesh with hundreds of millions of vertices). Index
   normalization avoids allocating a full-mesh range and preserves empty slices,
   integer indices, and boolean masks. Point fields use ordinary indexed gathers.
+- The docstrings of `PhysicsInformer`, `GradientsFiniteDifference` and
+  `GradientsSpectral` now state that the `"finite_difference"` and
+  `"spectral"` gradient methods assume a periodic domain, so residuals next to
+  non-periodic boundaries are incorrect.
 
 ### Deprecated
 
