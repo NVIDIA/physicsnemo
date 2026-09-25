@@ -52,10 +52,12 @@ class PhysicsInformer:
     grad_method : str
         One of ``"autodiff"``, ``"meshless_finite_difference"``,
         ``"finite_difference"``, ``"spectral"``, ``"least_squares"``.
+        ``"finite_difference"`` and ``"spectral"`` assume a periodic domain;
+        see the Notes section.
     fd_dx : float or list[float]
         Grid spacing for FD / meshless FD methods.
     bounds : list[float]
-        Domain lengths for spectral method.
+        Domain lengths (periods) for spectral method.
     compute_connectivity : bool
         If True and using ``"least_squares"``, build the connectivity tensor
         on the fly from ``"nodes"`` and ``"edges"`` in the input dict.
@@ -73,6 +75,24 @@ class PhysicsInformer:
         while the flow network is trained solely on data-fitting loss.
     device : str or torch.device or None
         Target device.
+
+    Notes
+    -----
+    The grid-based methods ``"finite_difference"`` and ``"spectral"`` treat
+    the input grid as **periodic** along every axis: finite-difference
+    stencils wrap around the edges and spectral derivatives use the FFT.
+    For problems with physical boundaries (Dirichlet, Neumann, walls, ...)
+    the returned residual is therefore incorrect:
+
+    - with ``"finite_difference"``, only in the cells next to the boundary,
+      which can be masked out of the loss;
+    - with ``"spectral"``, the wrap-around discontinuity causes Gibbs
+      oscillations that also pollute the interior, so masking the boundary
+      cells is not enough.
+
+    For non-periodic domains prefer ``"autodiff"``,
+    ``"meshless_finite_difference"`` or ``"least_squares"``, which do not
+    make this assumption.
 
     Examples
     --------
