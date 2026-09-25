@@ -82,8 +82,15 @@ class PhysicsInformer:
     the input grid as **periodic** along every axis: finite-difference
     stencils wrap around the edges and spectral derivatives use the FFT.
     For problems with physical boundaries (Dirichlet, Neumann, walls, ...)
-    the residual returned in the cells next to the boundary is therefore
-    incorrect. Mask those cells out of the loss, or use ``"autodiff"``,
+    the returned residual is therefore incorrect:
+
+    - with ``"finite_difference"``, only in the cells next to the boundary,
+      which can be masked out of the loss;
+    - with ``"spectral"``, the wrap-around discontinuity causes Gibbs
+      oscillations that also pollute the interior, so masking the boundary
+      cells is not enough.
+
+    For non-periodic domains prefer ``"autodiff"``,
     ``"meshless_finite_difference"`` or ``"least_squares"``, which do not
     make this assumption.
 
