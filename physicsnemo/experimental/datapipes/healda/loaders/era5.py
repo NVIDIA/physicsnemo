@@ -25,7 +25,6 @@ import pathlib
 from typing import Optional
 
 import numpy as np
-import pandas as pd
 
 from physicsnemo.core.version_check import OptionalImport
 
@@ -34,6 +33,8 @@ xarray = OptionalImport("xarray")
 from physicsnemo.experimental.datapipes.healda.configs.sensors import STATS_DIR_ENV
 from physicsnemo.experimental.datapipes.healda.loaders.zarr_loader import NO_LEVEL, ZarrLoader
 from physicsnemo.experimental.datapipes.healda.types import BatchInfo, TimeUnit, VariableConfig
+
+pd = OptionalImport("pandas")
 
 __all__ = ["ERA5Loader", "get_batch_info"]
 
@@ -174,7 +175,7 @@ def _encode_channel(channel) -> str:
         return name
 
 
-def _load_raw_stats(config: VariableConfig) -> pd.DataFrame:
+def _load_raw_stats(config: VariableConfig) -> "pd.DataFrame":
     if config.name == "ufs":
         file_name = "ufs_v0_stats.csv"
     elif config.name == "era5":

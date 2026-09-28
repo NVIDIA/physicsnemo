@@ -21,7 +21,12 @@ import torch
 
 from physicsnemo.models.dlwp_healpix import HEALPixRecUNet
 from test import common
+from test.conftest import requires_module
 from test.models.graphcast.utils import fix_random_seeds
+
+# HEALPixRecUNet parses ``delta_time`` / ``reset_cycle`` with ``pandas.Timedelta``,
+# an optional dependency (``model-extras``).
+pytestmark = requires_module("pandas")
 
 
 @pytest.fixture
