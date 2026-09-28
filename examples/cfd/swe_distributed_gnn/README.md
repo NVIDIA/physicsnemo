@@ -217,7 +217,6 @@ local_edge_feat = graph.get_edge_features_in_local_graph(global_edge_feat)
 global_src_feat = graph.get_global_src_node_features(part_src_feat)
 global_dst_feat = graph.get_global_dst_node_features(part_dst_feat)
 global_edge_feat = graph.get_global_edge_features(part_edge_feat)
-
 ```
 
 As explained in more detail in the corresponding documentation sections, the

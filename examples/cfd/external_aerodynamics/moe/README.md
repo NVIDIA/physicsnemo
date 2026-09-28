@@ -256,8 +256,12 @@ To add a new expert model to the MoE system:
 
    ```python
    # Add new expert predictions to the mesh
-   mesh.point_data["pMeanTrimPred_new_expert"] = new_expert_mesh.point_data["pMeanTrimPred"]
-   mesh.point_data["wallShearStressMeanTrimPred_new_expert"] = new_expert_mesh.point_data["wallShearStressMeanTrimPred"]
+   mesh.point_data["pMeanTrimPred_new_expert"] = new_expert_mesh.point_data[
+       "pMeanTrimPred"
+   ]
+   mesh.point_data["wallShearStressMeanTrimPred_new_expert"] = new_expert_mesh.point_data[
+       "wallShearStressMeanTrimPred"
+   ]
    ```
 
 3. **Update Dataset**: Modify `dataset.py` to load the new expert predictions:
@@ -272,7 +276,9 @@ To add a new expert model to the MoE system:
 
    ```python
    # Concatenate new expert predictions
-   p_preds = torch.cat([p_pred_xmgn, p_pred_fignet, p_pred_domino, p_pred_new_expert], dim=1)
+   p_preds = torch.cat(
+       [p_pred_xmgn, p_pred_fignet, p_pred_domino, p_pred_new_expert], dim=1
+   )
    ```
 
 The gating network will automatically adapt to the new number of experts and learn optimal
