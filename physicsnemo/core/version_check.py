@@ -214,6 +214,11 @@ _PACKAGE_HINTS: Dict[str, str] = {
         "h5py",
         group="datapipes-extras",
     ),
+    "pandas": _format_install_hint(
+        "pandas",
+        group="datapipes-extras",
+        direct_hint="pip install pandas  (also included in [model-extras])",
+    ),
     "netCDF4": _format_install_hint(
         "netCDF4",
         group="model-extras",
@@ -298,15 +303,6 @@ _PACKAGE_HINTS: Dict[str, str] = {
     ),
     "line_profiler": _format_install_hint(
         "line_profiler",
-        group="utils-extras",
-    ),
-    # Mesh utilities
-    "numpy-stl": _format_install_hint(
-        "numpy-stl",
-        group="utils-extras",
-    ),
-    "stl": _format_install_hint(
-        "numpy-stl",
         group="utils-extras",
     ),
     "shapely": _format_install_hint(

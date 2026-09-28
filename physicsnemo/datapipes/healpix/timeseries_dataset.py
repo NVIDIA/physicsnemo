@@ -23,7 +23,6 @@ from dataclasses import dataclass
 from typing import Optional, Sequence, Union
 
 import numpy as np
-import pandas as pd
 import torch
 from omegaconf import DictConfig, OmegaConf
 
@@ -31,6 +30,8 @@ from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.datapipe import Datapipe
 from physicsnemo.datapipes.meta import DatapipeMetaData
 from physicsnemo.utils.insolation import insolation
+
+pd = OptionalImport("pandas")
 
 xr = OptionalImport("xarray")
 

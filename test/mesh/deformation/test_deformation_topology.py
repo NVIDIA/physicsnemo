@@ -192,8 +192,9 @@ def test_triangle_hinge_validation_rejects_invalid_connectivity(cells, match):
 
 @pytest.mark.parametrize("dtype", [torch.bool, torch.complex64])
 def test_deformation_topology_rejects_noninteger_connectivity(dtype):
-    cells = torch.tensor([[0, 1]], dtype=dtype)
-    mesh = Mesh(points=torch.tensor([[0.0], [1.0]]), cells=cells)
+    mesh = Mesh(points=torch.tensor([[0.0], [1.0]]), cells=torch.tensor([[0, 1]]))
+    # Construction rejects these dtypes; replacements still need validation here.
+    mesh.cells = mesh.cells.to(dtype)
 
     with pytest.raises(TypeError, match="integer dtype"):
         _validate_indexed_simplex_topology(mesh)

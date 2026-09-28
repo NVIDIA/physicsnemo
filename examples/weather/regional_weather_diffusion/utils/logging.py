@@ -71,7 +71,7 @@ class ExperimentLogger:
         if self.log_to_tensorboard:
             tb_dir = os.path.join(cfg.training.rundir, "tensorboard")
             os.makedirs(tb_dir, exist_ok=True)
-            self.tensorboard_writer = SummaryWriter(log_dir=tb_dir)
+            self.tensorboard_writer = SummaryWriter(log_dir=tb_dir, max_queue=65536)
             self.info(f"TensorBoard logging enabled: {tb_dir}")
 
         self.step = 0
@@ -99,15 +99,19 @@ class ExperimentLogger:
     def dump(self):
         """Write out logged values."""
         if self.log_to_wandb:
-            wandb.log(self.wandb_logs, step=self.step)
+            if self.wandb_logs:
+                wandb.log(self.wandb_logs, step=self.step)
+            self.wandb_logs = {}
 
-        if self.log_to_tensorboard:
-            self.tensorboard_writer.flush()
+        # With TensorBoard, we rely on its internal async dumping
 
     def finalize(self):
         """Close loggers."""
+        self.dump()
+
         if self.log_to_wandb:
             wandb.finish()
 
         if self.log_to_tensorboard:
+            self.tensorboard_writer.flush()
             self.tensorboard_writer.close()

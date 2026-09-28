@@ -113,6 +113,7 @@ def get_preconditioned_natten_dit(
     lead_time_steps: int = 0,
     layernorm_backend: Literal["torch", "apex"] = "torch",
     conditioning_embedder: Literal["dit", "edm", "zero"] = "dit",
+    attn_kwargs: dict[str, Any] = {},
     **model_kwargs,
 ) -> EDMPreconditioner:
     """
@@ -129,13 +130,15 @@ def get_preconditioned_natten_dit(
         patch_size: the patch size used by the DiT embedder
         attn_kernel_size: the attention neighborhood size
         lead_time_steps: the number of possible lead time steps, if 0 lead time embedding will be disabled
+        attn_kwargs: parameters to be passed to the DiT attention backend
         **model_kwargs: any additional parameters to the model
     Returns:
         EDMPreconditioner: a wrapped torch module net(x+n, sigma, condition) -> x
     """
 
     condition_dim = scalar_condition_channels + lead_time_steps
-    attn_kwargs = {"attn_kernel": attn_kernel_size}
+    attn_kw = {"attn_kernel": attn_kernel_size}
+    attn_kw.update(attn_kwargs)
     dit = DiT(
         input_size=img_resolution,
         in_channels=target_channels + conditional_channels,
@@ -146,7 +149,7 @@ def get_preconditioned_natten_dit(
         patch_size=patch_size,
         attention_backend="natten2d",
         layernorm_backend=layernorm_backend,
-        attn_kwargs=attn_kwargs,
+        attn_kwargs=attn_kw,
         condition_dim=condition_dim,
         conditioning_embedder=conditioning_embedder,
         **model_kwargs,

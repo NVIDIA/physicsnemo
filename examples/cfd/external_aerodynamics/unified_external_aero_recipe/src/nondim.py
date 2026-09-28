@@ -157,9 +157,14 @@ class NonDimensionalizeByMetadata(MeshTransform):
     - **density**: ``rho / rho_inf``
     - **identity**: pass-through (no scaling applied)
 
-    If ``L_ref`` is present in ``global_data``, mesh points are divided
-    by it to produce non-dimensional coordinates: ``x* = x / L_ref``.
-    This normalises point clouds and cell centroids computed downstream.
+    If ``L_ref`` is present in ``global_data`` and ``scale_geometry`` is
+    ``True`` (the default), mesh points are divided by it to produce
+    non-dimensional coordinates: ``x* = x / L_ref``. This normalises point
+    clouds and cell centroids computed downstream. The geometry is scaled
+    once per instance, so a chain that needs a second instance (for example
+    ``point_data`` fields on the interior and ``cell_data`` fields on the
+    boundaries) sets ``scale_geometry: false`` on every instance after the
+    first; otherwise the coordinates are divided by ``L_ref`` again.
 
     Args:
         fields: Mapping of ``{field_name: field_type}`` where *field_type*
@@ -168,6 +173,9 @@ class NonDimensionalizeByMetadata(MeshTransform):
             in a field name addresses a nested leaf (``"solution.p"``).
         association: Mesh field association containing the fields
             (``"point_data"`` or ``"cell_data"``).
+        scale_geometry: Divide the mesh coordinates by ``L_ref`` (and multiply
+            them back in :meth:`inverse`). Leave ``True`` on the first instance
+            in a transform chain and set ``False`` on any further instance.
 
     Example YAML::
 
@@ -176,12 +184,20 @@ class NonDimensionalizeByMetadata(MeshTransform):
             pMeanTrim: pressure
             wallShearStressMeanTrim: stress
           association: point_data
+        # a second instance for boundary face data: fields only, geometry
+        # was already scaled above
+        - _target_: ${dp:NonDimensionalizeByMetadata}
+          fields:
+            prescribed.velocity: velocity
+          association: cell_data
+          scale_geometry: false
     """
 
     def __init__(
         self,
         fields: dict[str, NondimFieldType],
         association: MeshFieldAssociation = "point_data",
+        scale_geometry: bool = True,
     ) -> None:
         super().__init__()
         if association not in MESH_FIELD_ASSOCIATIONS:
@@ -201,6 +217,7 @@ class NonDimensionalizeByMetadata(MeshTransform):
             as_nested_key(name): ftype for name, ftype in fields.items()
         }
         self._association = association
+        self._scale_geometry = scale_geometry
 
     def _transform_mesh(
         self,
@@ -251,7 +268,7 @@ class NonDimensionalizeByMetadata(MeshTransform):
 
         # Scale geometry to/from nondim space (x* = x / L_ref).
         # assume_invertible=True avoids a per-mesh sync from the det check.
-        if L_ref is not None:
+        if L_ref is not None and self._scale_geometry:
             torch._assert_async(L_ref != 0)
             factor = L_ref if inverse else 1.0 / L_ref
             new_mesh = new_mesh.scale(factor, assume_invertible=True)
@@ -365,4 +382,7 @@ class NonDimensionalizeByMetadata(MeshTransform):
         return td.named_apply(_redim, nested_keys=True)  # ty: ignore[invalid-return-type]
 
     def extra_repr(self) -> str:
-        return f"fields={self._fields}, association={self._association!r}"
+        return (
+            f"fields={self._fields}, association={self._association!r}, "
+            f"scale_geometry={self._scale_geometry}"
+        )

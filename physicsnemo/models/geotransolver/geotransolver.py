@@ -51,6 +51,7 @@ from .activation_checkpointing import (
     should_checkpoint_component,
 )
 from .context_projector import GlobalContextBuilder
+from .flare_plus_plus import _FLAREPlusPlusBlock
 
 te = OptionalImport("transformer_engine.pytorch")
 
@@ -246,7 +247,9 @@ class GeoTransolver(Module):
     time_input : bool, optional
         Whether to include time embeddings. Default is ``False``.
     plus : bool, optional
-        Whether to use Transolver++ features in the GALE layers. Default is ``False``.
+        Whether to use Transolver++ features in the GALE layers. This is a
+        separate architecture from FLARE++ and must be ``False`` when
+        ``attention_type="GALE_FPP"``. Default is ``False``.
     include_local_features : bool, optional
         Whether to include local features in the global context. Default is ``False``.
     radii : list[float], optional
@@ -260,11 +263,11 @@ class GeoTransolver(Module):
         (Conv2d/Conv3d GALE; no ball-query local features). Inputs may be
         flattened :math:`(B, N, C)` with :math:`N = H W` or :math:`H W D`, or
         spatial :math:`(B, H, W, C)` / :math:`(B, H, W, D, C)`. Default is ``None``.
-    attention_type : {"GALE", "GALE_FA"}, optional
+    attention_type : {"GALE", "GALE_FA", "GALE_FPP"}, optional
         Attention implementation used inside each GALE block: ``"GALE"`` for the
-        reference version, ``"GALE_FA"`` for the flash-attention one.  Validated
-        in :class:`~physicsnemo.nn.GALEBlock`, which raises on any other value.
-        Default is ``"GALE"``.
+        reference version, ``"GALE_FA"`` for fixed-query FLARE, and
+        ``"GALE_FPP"`` for input-conditioned FLARE++ routing. Default is
+        ``"GALE"``.
     state_mixing_mode : str, optional
         How to blend self-attention and cross-attention outputs in GALE layers.
         ``"weighted"`` uses a learnable sigmoid-gated weighted sum.
@@ -431,7 +434,7 @@ class GeoTransolver(Module):
         neighbors_in_radius: list[int] | None = None,
         n_hidden_local: int = 32,
         structured_shape: tuple[int, ...] | None = None,
-        attention_type: Literal["GALE", "GALE_FA"] = "GALE",
+        attention_type: Literal["GALE", "GALE_FA", "GALE_FPP"] = "GALE",
         concrete_dropout: bool = False,
         state_mixing_mode: str = "weighted",
         activation_checkpointing: bool = False,
@@ -440,6 +443,19 @@ class GeoTransolver(Module):
     ) -> None:
         super().__init__(meta=GeoTransolverMetaData())
         self.__name__ = "GeoTransolver"
+
+        if attention_type == "GALE_FPP" and plus:
+            raise ValueError(
+                "attention_type='GALE_FPP' implements FLARE++ and requires "
+                "plus=False. The plus=True option enables the separate "
+                "Transolver++ Gumbel-slice path and must not be combined with "
+                "FLARE++."
+            )
+        if attention_type == "GALE_FPP" and use_te:
+            raise ValueError(
+                "The GALE_FPP backend does not support Transformer Engine; "
+                "set use_te=False."
+            )
 
         # Set defaults for mutable arguments
         if radii is None:
@@ -544,28 +560,46 @@ class GeoTransolver(Module):
             else n_hidden
         )
 
-        # GALE transformer blocks
-        self.blocks = nn.ModuleList(
-            [
-                GALEBlock(
-                    num_heads=n_head,
-                    hidden_dim=effective_hidden,
-                    dropout=dropout,
-                    act=act,
-                    mlp_ratio=mlp_ratio,
-                    slice_num=slice_num,
-                    last_layer=(layer_idx == n_layers - 1),
-                    use_te=use_te,
-                    plus=plus,
-                    context_dim=context_dim,
-                    spatial_shape=structured_shape,
-                    attention_type=attention_type,
-                    concrete_dropout=concrete_dropout,
-                    state_mixing_mode=state_mixing_mode,
-                )
-                for layer_idx in range(n_layers)
-            ]
-        )
+        # Keep the model-specific FLARE++ adapter out of the general GALE API.
+        if attention_type == "GALE_FPP":
+            self.blocks = nn.ModuleList(
+                [
+                    _FLAREPlusPlusBlock(
+                        num_heads=n_head,
+                        hidden_dim=effective_hidden,
+                        dropout=dropout,
+                        act=act,
+                        mlp_ratio=mlp_ratio,
+                        slice_num=slice_num,
+                        context_dim=context_dim,
+                        concrete_dropout=concrete_dropout,
+                        state_mixing_mode=state_mixing_mode,
+                    )
+                    for _ in range(n_layers)
+                ]
+            )
+        else:
+            self.blocks = nn.ModuleList(
+                [
+                    GALEBlock(
+                        num_heads=n_head,
+                        hidden_dim=effective_hidden,
+                        dropout=dropout,
+                        act=act,
+                        mlp_ratio=mlp_ratio,
+                        slice_num=slice_num,
+                        last_layer=(layer_idx == n_layers - 1),
+                        use_te=use_te,
+                        plus=plus,
+                        context_dim=context_dim,
+                        spatial_shape=structured_shape,
+                        attention_type=attention_type,
+                        concrete_dropout=concrete_dropout,
+                        state_mixing_mode=state_mixing_mode,
+                    )
+                    for layer_idx in range(n_layers)
+                ]
+            )
 
         # Output projection layers - one per output type
         if use_te:
@@ -646,7 +680,7 @@ class GeoTransolver(Module):
 
     def _checkpoint_block(
         self,
-        block: GALEBlock,
+        block: nn.Module,
         x: tuple[torch.Tensor, ...] | list[torch.Tensor],
         embedding_states: torch.Tensor | None,
     ) -> list[torch.Tensor]:

@@ -19,11 +19,19 @@ matching* (DSM).  The model is trained to recover clean data from a noisy
 version, with the :ref:`noise scheduler <diffusion_noise_schedulers>` handling
 time sampling, noise injection, and loss weighting.
 
-:class:`~physicsnemo.diffusion.metrics.losses.MSEDSMLoss` implements the
-MSE-based DSM loss and supports both x0-predictor and score-predictor
-training.  :class:`~physicsnemo.diffusion.metrics.losses.WeightedMSEDSMLoss`
-extends it with an element-wise weight tensor for masking specific spatial
-regions or channels (for example, land versus ocean in weather applications).
+The :class:`~physicsnemo.diffusion.metrics.losses.MSEDSMLoss` class implements
+the MSE-based denoising score matching loss, the standard choice for
+diffusion. The :class:`~physicsnemo.diffusion.metrics.losses.FlowMatchingLoss`
+class provides the corresponding loss for flow matching. It trains the model
+to predict the velocity of a linear-Gaussian path from noise to data. Both
+losses support training an x0-predictor as well as other parameterizations,
+converting them internally as needed.
+
+:class:`~physicsnemo.diffusion.metrics.losses.WeightedFlowMatchingLoss`
+and :class:`~physicsnemo.diffusion.metrics.losses.WeightedMSEDSMLoss`
+extend their unweighted counterparts with an element-wise weight tensor for
+masking specific spatial regions or channels (for example, land versus ocean
+in weather applications).
 
 .. code-block:: python
 
@@ -67,6 +75,20 @@ API Reference
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. autoclass:: physicsnemo.diffusion.metrics.losses.WeightedMSEDSMLoss
+    :members:
+    :exclude-members: __init__
+
+:code:`FlowMatchingLoss`
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: physicsnemo.diffusion.metrics.losses.FlowMatchingLoss
+    :members:
+    :exclude-members: __init__
+
+:code:`WeightedFlowMatchingLoss`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: physicsnemo.diffusion.metrics.losses.WeightedFlowMatchingLoss
     :members:
     :exclude-members: __init__
 

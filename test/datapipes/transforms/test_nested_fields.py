@@ -37,7 +37,7 @@ from physicsnemo.datapipes.transforms.mesh import (
     RestructureTensorDict,
     SetGlobalField,
 )
-from physicsnemo.mesh import Mesh
+from physicsnemo.mesh import DomainMesh, Mesh
 
 
 def _surface_mesh() -> Mesh:
@@ -56,6 +56,15 @@ def _surface_mesh() -> Mesh:
             "normals": torch.tensor([[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]]),
         },
         point_data={"geom": {"sdf": torch.zeros(4)}, "id": torch.arange(4)},
+    )
+
+
+def _domain_with_global_data() -> DomainMesh:
+    global_data = {"reference": {"velocity": torch.tensor([30.0, 0.0, 0.0])}}
+    return DomainMesh(
+        interior=_surface_mesh().with_data(global_data=global_data),
+        boundaries={"wall": _surface_mesh().with_data(global_data=global_data)},
+        global_data=global_data,
     )
 
 
@@ -91,6 +100,15 @@ class TestRenameMeshFields:
         out = RenameMeshFields(cell_data={"solution.nope": "x"})(mesh)
         assert _leaves(out.cell_data) == _leaves(mesh.cell_data)
 
+    def test_domain_level_global_data_is_renamed(self):
+        domain = _domain_with_global_data()
+        out = RenameMeshFields(
+            global_data={"reference.velocity": "U_inf"}
+        ).apply_to_domain(domain)
+        assert "U_inf" in out.global_data
+        assert ("reference", "velocity") not in out.global_data
+        assert "U_inf" in out.interior.global_data
+
 
 class TestDropMeshFields:
     def test_nested_leaf_is_dropped(self):
@@ -116,6 +134,12 @@ class TestDropMeshFields:
         mesh = _surface_mesh()
         out = DropMeshFields(cell_data=["normals.x"])(mesh)
         assert _leaves(out.cell_data) == _leaves(mesh.cell_data)
+
+    def test_domain_level_global_data_is_dropped(self):
+        domain = _domain_with_global_data()
+        out = DropMeshFields(global_data=["reference.velocity"]).apply_to_domain(domain)
+        assert ("reference", "velocity") not in out.global_data
+        assert ("reference", "velocity") not in out.interior.global_data
 
 
 class TestNormalizeMeshFields:
