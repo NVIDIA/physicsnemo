@@ -84,6 +84,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed `Diffusion(time=True)` in the `darcy_physics_informed` example
+  silently dropping the time derivative: the field is now a function of `t`
+  when `time=True`, so `dT/dt` is no longer evaluated as zero.
 - Fixes mesh dtype handling: preserves integer-coordinate precision, normalizes
   connectivity safely, and rejects integer `.to()` casts. Floating/complex casts
   preserve the source mesh.
