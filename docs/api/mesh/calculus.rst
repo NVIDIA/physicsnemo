@@ -50,16 +50,16 @@ Key Operators
 - **Curl**: :math:`\operatorname{curl}(\mathbf{v})` (vector :math:`\to` vector, 3D only)
 - **Laplacian**: :math:`\Delta\varphi` (scalar :math:`\to` scalar, Laplace-Beltrami)
 
-Effective measures and integration
+Effective Measures and Integration
 ----------------------------------
 
 The reserved ``_effective_measure`` field stores one complete integration
 measure per cell or point in ``cell_data`` or ``point_data``. Read these with
-``cell_measures(mesh)`` or ``point_measures(mesh)``; they already include any
+``cell_measures(mesh)`` or ``point_measures(mesh)``. They already include any
 geometric contribution and sampling correction.
 
 * ``mesh.integrate(field, data_source="cells")`` integrates piecewise-constant
-  cell values; ``data_source="points"`` integrates piecewise-linear vertex
+  cell values. ``data_source="points"`` integrates piecewise-linear vertex
   values over the same cells. Both use cell measures, which default to the
   geometric simplex measures.
 * ``mesh.integrate_samples(field)`` sums independent point samples times their
@@ -67,8 +67,14 @@ geometric contribution and sampling correction.
   required. For counting measure, use an ordinary sum.
 
 Use ``set_cell_measures`` or ``set_point_measures`` to assign measures. Point
-measures require their represented ``dimension``: 0 for counting, 1 for length,
-2 for area, or 3 for volume. ``scale_measures`` multiplies existing measures by
+measures require their represented ``dimension``: 
+
+- 0 for counting
+- 1 for length
+- 2 for area
+- 3 for volume
+
+``scale_measures`` multiplies existing measures by
 a scalar or per-entity factor, such as an inverse sampling probability. Raw
 slicing does not apply a sampling correction.
 
@@ -84,7 +90,7 @@ For vertex quadrature, ``lumped_point_measures(mesh)`` distributes each cell's
 measure equally among its vertices without modifying the mesh. For finite
 fields, these weights reproduce piecewise-linear integration.
 
-See :doc:`transformations` for supported geometric changes and explicit
+Refer to :doc:`transformations` for supported geometric changes and explicit
 preservation of reference measures.
 
 API Reference

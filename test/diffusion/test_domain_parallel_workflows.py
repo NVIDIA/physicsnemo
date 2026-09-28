@@ -14,14 +14,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Multi-GPU tests for EDMPreconditioner with FSDP and ShardTensor.
+"""Multi-GPU tests for diffusion pipelines with FSDP and ShardTensor.
 
-Tests verify the interaction between:
+Tests cover two training and sampling workflows:
 
-- ``EDMPreconditioner`` with scalar and per-channel ``sigma_data``
+- EDM with ``EDMPreconditioner`` and scalar or per-channel ``sigma_data``
+- Rectified flow with direct flow prediction and no preconditioner
+
+Both workflows verify the interaction between:
+
 - FSDP wrapping (which converts registered buffers to replicated DTensors)
 - ``ShardTensor`` inputs for domain-parallel spatial sharding
-- ``MSEDSMLoss`` with ``DomainParallelNoiseScheduler``
+- ``MSEDSMLoss`` or ``FlowMatchingLoss`` with
+  ``DomainParallelNoiseScheduler``
 - ``sample()`` with domain-parallel scheduler
 
 The distribution patterns follow the following expected pattern:
@@ -36,20 +41,18 @@ The distribution patterns follow the following expected pattern:
    the **domain** sub-mesh to broadcast sampled times, shard initial
    latents, and promote alpha/sigma coefficients for ``add_noise``
    compatibility.
-5. ``_ensure_plain_tensor`` + ``_replicate_on_mesh`` in the preconditioner
-   unwrap FSDP DTensor coefficients (living on the ddp mesh) and
-   re-promote them to replicated DTensors on the data mesh (domain)
-   for type-compatible arithmetic.
+5. The EDM workflow also verifies that the preconditioner moves FSDP DTensor
+   coefficients from the ddp mesh to the domain mesh for type-compatible
+   arithmetic.
 
 Two mesh topologies are tested:
 
-- **FSDP-only** — ``(world_size, 1)``: all ranks are data-parallel, no
-  domain parallelism.  Exercises FSDP DTensor unwrapping with plain tensor
-  inputs.
-- **FSDP + ShardTensor** — ``(1, world_size)`` (pure domain-parallel) and
+- **FSDP-only**, ``(world_size, 1)``: all ranks are data-parallel, with no
+  domain parallelism. These tests retain focused coverage of EDM
+  preconditioning with plain tensor inputs.
+- **FSDP + ShardTensor**, ``(1, world_size)`` (pure domain-parallel) and
   ``(world_size/2, 2)`` (combined ddp + domain, requires >= 4 GPUs).
-  Exercises the full unwrap/re-promote path across distinct mesh
-  dimensions.
+  These tests exercise complete EDM and rectified-flow pipelines.
 
 Distributed tests require ``@pytest.mark.multigpu_static`` (>= 2 GPUs).
 """
@@ -62,10 +65,11 @@ from torch.distributed.fsdp import ShardingStrategy
 from torch.distributed.tensor.placement_types import Replicate, Shard
 
 from physicsnemo.core import Module
-from physicsnemo.diffusion.metrics.losses import MSEDSMLoss
+from physicsnemo.diffusion.metrics.losses import FlowMatchingLoss, MSEDSMLoss
 from physicsnemo.diffusion.noise_schedulers import (
     DomainParallelNoiseScheduler,
     EDMNoiseScheduler,
+    RectifiedFlowNoiseScheduler,
 )
 from physicsnemo.diffusion.preconditioners import EDMPreconditioner
 from physicsnemo.diffusion.samplers import sample
@@ -81,7 +85,7 @@ _SHARD_DIM = 2
 
 
 class _SimpleConvModel(Module):
-    """Minimal conv model for distributed preconditioner testing.
+    """Minimal conv model for distributed workflow testing.
 
     Uses ``kernel_size=1`` to avoid halo-exchange requirements when the
     input is sharded along a spatial dimension.
@@ -116,6 +120,15 @@ def _make_model_deterministic(channels=_C, seed=42):
 def _make_preconditioner(sigma_data, seed=42):
     model = _make_model_deterministic(channels=_C, seed=seed)
     return EDMPreconditioner(model, sigma_data=sigma_data)
+
+
+def _make_workflow_model(workflow_name, sigma_data, seed=42):
+    model = _make_model_deterministic(channels=_C, seed=seed)
+    if workflow_name == "edm":
+        return EDMPreconditioner(model, sigma_data=sigma_data)
+    if workflow_name == "rectified_flow":
+        return model
+    raise ValueError(f"Unknown workflow '{workflow_name}'.")
 
 
 def _make_2d_mesh(ddp_size, domain_size):
@@ -162,9 +175,26 @@ def _make_inputs(device="cuda", seed=42):
     return x, t
 
 
-def _make_dp_scheduler(sigma_data, domain_mesh):
-    scheduler = EDMNoiseScheduler(sigma_data=sigma_data)
+def _make_dp_scheduler(workflow_name, sigma_data, domain_mesh):
+    if workflow_name == "edm":
+        scheduler = EDMNoiseScheduler(sigma_data=sigma_data)
+    elif workflow_name == "rectified_flow":
+        scheduler = RectifiedFlowNoiseScheduler(t_min=1e-3)
+    else:
+        raise ValueError(f"Unknown workflow '{workflow_name}'.")
     return DomainParallelNoiseScheduler(scheduler, domain_mesh, shard_dim=_SHARD_DIM)
+
+
+def _make_workflow_loss(workflow_name, model, scheduler):
+    if workflow_name == "edm":
+        return MSEDSMLoss(model, scheduler)
+    if workflow_name == "rectified_flow":
+        return FlowMatchingLoss(
+            model,
+            scheduler,
+            x0_to_flow_fn=scheduler.inner_scheduler.x0_to_flow,
+        )
+    raise ValueError(f"Unknown workflow '{workflow_name}'.")
 
 
 def _dp_mesh_from_config(config_name):
@@ -193,6 +223,16 @@ _dp_configs = pytest.mark.parametrize(
     "dp_config",
     ["domain_only", "ddp_and_domain"],
     ids=["domain_only", "ddp_and_domain"],
+)
+
+_workflow_params = pytest.mark.parametrize(
+    "workflow_name,sigma_data",
+    [
+        ("edm", 0.5),
+        ("edm", [0.3, 0.5, 0.7]),
+        ("rectified_flow", None),
+    ],
+    ids=["edm_scalar_sigma", "edm_per_channel_sigma", "rectified_flow"],
 )
 
 
@@ -317,42 +357,41 @@ def test_fsdp_only_training_step(sigma_data):
 
 
 # =====================================================================
-# FSDP + ShardTensor — 2-D mesh (ddp, domain)
+# FSDP + ShardTensor: 2-D mesh (ddp, domain)
 #
 # The model is FSDP-wrapped on mesh["ddp"], data is scattered as
 # ShardTensor on mesh["domain"], and the noise scheduler is wrapped
 # with DomainParallelNoiseScheduler on mesh["domain"].
 #
-# This exercises the full _ensure_plain_tensor + _replicate_on_mesh
-# path: FSDP creates DTensor coefficients on the ddp sub-mesh, which
-# must be unwrapped and re-promoted to Replicate DTensors on the
-# domain sub-mesh for type-compatible arithmetic with ShardTensor data.
+# The EDM workflow exercises the full _ensure_plain_tensor +
+# _replicate_on_mesh path. The rectified-flow workflow uses the model
+# directly without a preconditioner.
 #
 # Two mesh configurations are parametrized:
-# - domain_only: (1, world_size) — pure domain parallelism (>= 2 GPUs)
-# - ddp_and_domain: (world_size/2, 2) — combined (>= 4 GPUs)
+# - domain_only: (1, world_size), pure domain parallelism (>= 2 GPUs)
+# - ddp_and_domain: (world_size/2, 2), combined (>= 4 GPUs)
 # =====================================================================
 
 
 @pytest.mark.timeout(30)
 @pytest.mark.multigpu_static
-@_sigma_data_params
+@_workflow_params
 @_dp_configs
-def test_dp_preconditioner_forward(sigma_data, dp_config):
-    """FSDP + ShardTensor forward matches non-distributed reference."""
+def test_dp_model_forward(workflow_name, sigma_data, dp_config):
+    """FSDP + ShardTensor model forward matches the plain reference."""
     mesh = _dp_mesh_from_config(dp_config)
 
-    precond_ref = _make_preconditioner(sigma_data).cuda()
+    model_ref = _make_workflow_model(workflow_name, sigma_data).cuda()
     x, t = _make_inputs()
     with torch.no_grad():
-        ref_out = precond_ref(x, t)
+        ref_out = model_ref(x, t)
 
-    precond = _make_preconditioner(sigma_data).cuda()
-    precond = _wrap_fsdp(precond, mesh["ddp"])
+    model = _make_workflow_model(workflow_name, sigma_data).cuda()
+    model = _wrap_fsdp(model, mesh["ddp"])
     x_shard = _scatter(x, mesh["domain"])
 
     with torch.no_grad():
-        out = precond(x_shard, t)
+        out = model(x_shard, t)
 
     assert out.shape == (_B, _C, _H, _W)
     full_out = out.full_tensor()
@@ -361,39 +400,38 @@ def test_dp_preconditioner_forward(sigma_data, dp_config):
 
 @pytest.mark.timeout(30)
 @pytest.mark.multigpu_static
-@_sigma_data_params
+@_workflow_params
 @_dp_configs
-def test_dp_preconditioner_gradient_flow(sigma_data, dp_config):
-    """Gradients flow through FSDP + ShardTensor preconditioner."""
+def test_dp_model_gradient_flow(workflow_name, sigma_data, dp_config):
+    """Gradients flow through an FSDP model with ShardTensor input."""
     mesh = _dp_mesh_from_config(dp_config)
-    precond = _make_preconditioner(sigma_data).cuda()
-    precond = _wrap_fsdp(precond, mesh["ddp"])
+    model = _make_workflow_model(workflow_name, sigma_data).cuda()
+    model = _wrap_fsdp(model, mesh["ddp"])
 
     x, t = _make_inputs()
     x_shard = _scatter(x, mesh["domain"])
 
-    out = precond(x_shard, t)
+    out = model(x_shard, t)
     out.sum().backward()
 
     has_grad = any(
-        p.grad is not None and torch.isfinite(p.grad).all()
-        for p in precond.parameters()
+        p.grad is not None and torch.isfinite(p.grad).all() for p in model.parameters()
     )
     assert has_grad
 
 
 @pytest.mark.timeout(30)
 @pytest.mark.multigpu_static
-@_sigma_data_params
+@_workflow_params
 @_dp_configs
-def test_dp_preconditioner_loss(sigma_data, dp_config):
-    """MSEDSMLoss with FSDP on ddp mesh + domain-parallel scheduler on domain mesh."""
+def test_dp_loss(workflow_name, sigma_data, dp_config):
+    """Training loss runs with FSDP and a domain-parallel scheduler."""
     mesh = _dp_mesh_from_config(dp_config)
-    precond = _make_preconditioner(sigma_data).cuda()
-    precond = _wrap_fsdp(precond, mesh["ddp"])
-    dp_scheduler = _make_dp_scheduler(sigma_data, mesh["domain"])
+    model = _make_workflow_model(workflow_name, sigma_data).cuda()
+    model = _wrap_fsdp(model, mesh["ddp"])
+    dp_scheduler = _make_dp_scheduler(workflow_name, sigma_data, mesh["domain"])
 
-    loss_fn = MSEDSMLoss(precond, dp_scheduler)
+    loss_fn = _make_workflow_loss(workflow_name, model, dp_scheduler)
 
     x0, _ = _make_inputs()
     x0_shard = _scatter(x0, mesh["domain"])
@@ -406,16 +444,16 @@ def test_dp_preconditioner_loss(sigma_data, dp_config):
 
 @pytest.mark.timeout(30)
 @pytest.mark.multigpu_static
-@_sigma_data_params
+@_workflow_params
 @_dp_configs
-def test_dp_preconditioner_loss_backward(sigma_data, dp_config):
-    """Gradients flow through MSEDSMLoss with FSDP + domain-parallel scheduler."""
+def test_dp_loss_backward(workflow_name, sigma_data, dp_config):
+    """Gradients flow through the domain-parallel training loss."""
     mesh = _dp_mesh_from_config(dp_config)
-    precond = _make_preconditioner(sigma_data).cuda()
-    precond = _wrap_fsdp(precond, mesh["ddp"])
-    dp_scheduler = _make_dp_scheduler(sigma_data, mesh["domain"])
+    model = _make_workflow_model(workflow_name, sigma_data).cuda()
+    model = _wrap_fsdp(model, mesh["ddp"])
+    dp_scheduler = _make_dp_scheduler(workflow_name, sigma_data, mesh["domain"])
 
-    loss_fn = MSEDSMLoss(precond, dp_scheduler)
+    loss_fn = _make_workflow_loss(workflow_name, model, dp_scheduler)
 
     x0, _ = _make_inputs()
     x0_shard = _scatter(x0, mesh["domain"])
@@ -424,26 +462,30 @@ def test_dp_preconditioner_loss_backward(sigma_data, dp_config):
     loss.backward()
 
     has_grad = any(
-        p.grad is not None and torch.isfinite(p.grad).all()
-        for p in precond.parameters()
+        p.grad is not None and torch.isfinite(p.grad).all() for p in model.parameters()
     )
     assert has_grad
 
 
 @pytest.mark.timeout(30)
 @pytest.mark.multigpu_static
-@_sigma_data_params
+@_workflow_params
 @_dp_configs
-def test_dp_preconditioner_sampling(sigma_data, dp_config):
-    """sample() with FSDP on ddp mesh + domain-parallel scheduler on domain mesh."""
+def test_dp_sampling(workflow_name, sigma_data, dp_config):
+    """Sampling runs with FSDP and a domain-parallel scheduler."""
     mesh = _dp_mesh_from_config(dp_config)
-    precond = _make_preconditioner(sigma_data).cuda()
-    precond = _wrap_fsdp(precond, mesh["ddp"])
-    dp_scheduler = _make_dp_scheduler(sigma_data, mesh["domain"])
+    model = _make_workflow_model(workflow_name, sigma_data).cuda()
+    model = _wrap_fsdp(model, mesh["ddp"])
+    dp_scheduler = _make_dp_scheduler(workflow_name, sigma_data, mesh["domain"])
 
-    denoiser = dp_scheduler.get_denoiser(x0_predictor=precond)
+    if workflow_name == "edm":
+        denoiser = dp_scheduler.get_denoiser(x0_predictor=model)
+    elif workflow_name == "rectified_flow":
+        denoiser = dp_scheduler.get_denoiser(flow_predictor=model)
+    else:
+        raise ValueError(f"Unknown workflow '{workflow_name}'.")
 
-    tN = torch.tensor([80.0] * _B, device="cuda")
+    tN = dp_scheduler.timesteps(3, device="cuda")[0].expand(_B)
     xN = dp_scheduler.init_latents((_C, _H, _W), tN, device="cuda")
 
     with torch.no_grad():
@@ -461,12 +503,12 @@ def test_dp_preconditioner_sampling(sigma_data, dp_config):
 
 @pytest.mark.timeout(30)
 @pytest.mark.multigpu_static
-@_sigma_data_params
+@_workflow_params
 @_dp_configs
-def test_dp_scheduler_add_noise(sigma_data, dp_config):
-    """EDMNoiseScheduler.add_noise works with ShardTensor clean data."""
+def test_dp_scheduler_add_noise(workflow_name, sigma_data, dp_config):
+    """The workflow scheduler adds noise to ShardTensor clean data."""
     mesh = _dp_mesh_from_config(dp_config)
-    dp_scheduler = _make_dp_scheduler(sigma_data, mesh["domain"])
+    dp_scheduler = _make_dp_scheduler(workflow_name, sigma_data, mesh["domain"])
 
     x0, _ = _make_inputs()
     x0_shard = _scatter(x0, mesh["domain"])
@@ -479,23 +521,20 @@ def test_dp_scheduler_add_noise(sigma_data, dp_config):
 
 @pytest.mark.timeout(30)
 @pytest.mark.multigpu_static
-@_sigma_data_params
+@_workflow_params
 @_dp_configs
-def test_dp_scheduler_loss_weight(sigma_data, dp_config):
+def test_dp_scheduler_loss_weight(workflow_name, sigma_data, dp_config):
     """loss_weight through domain-parallel wrapper matches inner scheduler."""
     mesh = _dp_mesh_from_config(dp_config)
-    scheduler = EDMNoiseScheduler(sigma_data=sigma_data)
-    dp_scheduler = DomainParallelNoiseScheduler(
-        scheduler, mesh["domain"], shard_dim=_SHARD_DIM
-    )
+    dp_scheduler = _make_dp_scheduler(workflow_name, sigma_data, mesh["domain"])
 
     t = dp_scheduler.sample_time(_B, device="cuda")
     w = dp_scheduler.loss_weight(t)
-    w_ref = scheduler.loss_weight(t)
+    w_ref = dp_scheduler.inner_scheduler.loss_weight(t)
 
     torch.testing.assert_close(w, w_ref)
 
-    if isinstance(sigma_data, list):
+    if workflow_name == "edm" and isinstance(sigma_data, list):
         assert w.shape == (_B, _C)
     else:
         assert w.shape == (_B,)
@@ -508,9 +547,9 @@ def test_dp_scheduler_loss_weight(sigma_data, dp_config):
 
 @pytest.mark.timeout(30)
 @pytest.mark.multigpu_static
-@_sigma_data_params
+@_workflow_params
 @_dp_configs
-def test_dp_full_training_step(sigma_data, dp_config):
+def test_dp_full_training_step(workflow_name, sigma_data, dp_config):
     """End-to-end training step: forward + loss + backward + optimizer step.
 
     Mirrors a typical training loop: FSDP model on the ddp sub-mesh,
@@ -518,16 +557,16 @@ def test_dp_full_training_step(sigma_data, dp_config):
     and an optimizer step.
     """
     mesh = _dp_mesh_from_config(dp_config)
-    precond = _make_preconditioner(sigma_data).cuda()
-    precond = _wrap_fsdp(precond, mesh["ddp"])
-    dp_scheduler = _make_dp_scheduler(sigma_data, mesh["domain"])
-    loss_fn = MSEDSMLoss(precond, dp_scheduler)
-    optimizer = torch.optim.Adam(precond.parameters(), lr=1e-3)
+    model = _make_workflow_model(workflow_name, sigma_data).cuda()
+    model = _wrap_fsdp(model, mesh["ddp"])
+    dp_scheduler = _make_dp_scheduler(workflow_name, sigma_data, mesh["domain"])
+    loss_fn = _make_workflow_loss(workflow_name, model, dp_scheduler)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
     x0, _ = _make_inputs()
     x0_shard = _scatter(x0, mesh["domain"])
 
-    initial_params = [p.clone() for p in precond.parameters()]
+    initial_params = [p.clone() for p in model.parameters()]
 
     optimizer.zero_grad()
     loss = loss_fn(x0_shard)
@@ -536,6 +575,6 @@ def test_dp_full_training_step(sigma_data, dp_config):
 
     params_changed = any(
         not torch.equal(p_old, p_new)
-        for p_old, p_new in zip(initial_params, precond.parameters())
+        for p_old, p_new in zip(initial_params, model.parameters())
     )
     assert params_changed, "Parameters were not updated after optimizer step"
