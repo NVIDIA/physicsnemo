@@ -84,6 +84,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed the `B_grad_u` term of `MHD_PDE` in the `mhd_pino` example, which
+  used `v * Bx.diff(y)` instead of `By * u.diff(y)`. The shipped MHD losses
+  do not use this term, so their results are unchanged.
 - Fixes mesh dtype handling: preserves integer-coordinate precision, normalizes
   connectivity safely, and rejects integer `.to()` casts. Floating/complex casts
   preserve the source mesh.
