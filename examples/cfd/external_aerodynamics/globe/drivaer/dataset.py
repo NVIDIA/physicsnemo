@@ -646,6 +646,7 @@ def postprocess(
         cell_data={},
         global_data={},
     )
+    set_cell_measures(pred_surface, cell_measures(true_mesh))
 
     return true_mesh.with_data(
         point_data=TensorDict(
@@ -736,7 +737,7 @@ def compute_surface_force_coefficients(
 
     Computes drag, lift, and side-force coefficients by area-weighted
     integration of pressure and skin-friction contributions over the car
-    body surface.
+    body surface, using effective cell measures to account for subsampling.
 
     The pressure force on the body is ``-C_p * n`` (outward normal convention)
     and the friction force is ``C_f`` (tangential).  Normal orientation is
@@ -753,7 +754,7 @@ def compute_surface_force_coefficients(
     Returns:
         TensorDict with scalar-tensor entries ``"Cd"``, ``"Cl"``, ``"Cs"``.
     """
-    areas = surface_mesh.cell_areas  # (n_cells,)
+    areas = cell_measures(surface_mesh)  # (n_cells,)
     raw_normals = surface_mesh.cell_normals  # (n_cells, 3)
 
     ### Orient normals outward using the divergence theorem
