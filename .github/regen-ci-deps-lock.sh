@@ -94,11 +94,11 @@ for e in "${extras[@]}"; do
   fi
 done
 rm -rf .venv
-# This is a temporary hack for transformer engine and cuda13.
-# It can be removed when this PR merges upstream:
+# Work around Transformer Engine's CUDA 13 build dependency discovery.
+# The upstream fix is merged but absent from TE 2.18 and 2.19:
 # https://github.com/NVIDIA/TransformerEngine/pull/3251
-# That PR was open against v2.18, so we need TE > 2.18
-# to resolve before removing this env hack:
+# Remove the two-stage sync and CUDA/include path overrides once
+# the minimum supported TE release includes that fix.
 #
 # The PyG sdists (torch-cluster/scatter/sparse) are excluded from BOTH
 # syncs, mirroring setup-uv-env: `uv sync` would build them CPU-only at
