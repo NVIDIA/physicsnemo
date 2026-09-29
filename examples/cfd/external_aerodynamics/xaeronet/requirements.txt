@@ -1,5 +1,5 @@
-trimesh>=5.1.0
-torch_geometric>=2.8.0.post1
+trimesh>=4.5.0
+torch_geometric>=2.6.1
 tensorboard
 pyvista
 vtk

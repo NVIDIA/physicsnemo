@@ -4,4 +4,4 @@ dask
 netCDF4
 h5netcdf
 hydra-core
-termcolor>=3.3.0
+termcolor>=2.1.1

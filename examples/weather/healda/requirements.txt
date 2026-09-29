@@ -1,7 +1,7 @@
 nvidia-physicsnemo[datapipes-extras]
-pyarrow>=23.0.1
-triton>=3.7.1
-fsspec>=2026.9.0
+pyarrow>=14.0.1
+triton>=3.0.0
+fsspec>=2023.5.0
 dotenv
 earth2grid @ git+https://github.com/NVlabs/earth2grid.git@main
 matplotlib
