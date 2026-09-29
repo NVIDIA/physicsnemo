@@ -719,8 +719,15 @@ def test_source_aggregates_match_bruteforce(device, dtype, offset, with_zero_are
     Parametrized over precision, an ``offset`` (all-positive) coordinate regime
     that stresses fp32 prefix-sum cancellation (range sums extracted from a long
     same-sign cumsum lose precision unless accumulated in fp64 internally), and
-    zero-area (zero-weight) subtrees, which must yield zero aggregates.
-    ``leaf_size=1`` maximizes the number of internal-node range reductions.
+    zero-area (zero-weight) leaves, which must yield zero aggregates (a
+    zero-weight *internal* node is constructed explicitly in
+    :func:`test_zero_weight_internal_subtree_aggregates`).  ``leaf_size=1``
+    maximizes the number of internal-node range reductions.
+
+    Errors are bounded absolutely against a float64 reference.  The fp32 bound
+    (1e-5 in coordinate/feature units) is a few output ulps at magnitude ~100
+    and far below the milliscale errors of fp32 prefix sums in small leaves, so
+    it pins the internal fp64 accumulation at the fp32 public interface.
     """
     n = 173
     pts = _points(n, 3, device, seed=9, dtype=dtype) + offset
@@ -741,8 +748,8 @@ def test_source_aggregates_match_bruteforce(device, dtype, offset, with_zero_are
         source_points=pts, areas=areas, source_data=data
     )
 
-    # fp32 range sums on offset coordinates need looser tolerances than fp64.
-    rtol, atol = (1e-4, 1e-4) if dtype == torch.float32 else (1e-9, 1e-9)
+    # fp64: the reference itself carries ~ulp(cumsum total) ~ 4e-12 at offset 100.
+    max_abs_err = 1e-5 if dtype == torch.float32 else 1e-10
 
     for node in range(tree.n_nodes):
         ids = _subtree_point_ids(tree, node)
@@ -754,15 +761,17 @@ def test_source_aggregates_match_bruteforce(device, dtype, offset, with_zero_are
                 assert agg.node_source_data[key][node].eq(0).all()
         else:
             ref_c = (pts[ids].double() * w[:, None]).sum(0) / total
-            assert torch.allclose(
-                agg.node_centroid[node].double(), ref_c, rtol=rtol, atol=atol
-            ), f"centroid mismatch at node {node}"
+            err_c = (agg.node_centroid[node].double() - ref_c).abs().max()
+            assert err_c < max_abs_err, (
+                f"centroid mismatch at node {node}: max abs err {err_c:.3e}"
+            )
             for key in ("vec", "mat"):
                 flat = data[key][ids].reshape(len(ids), -1).double()
                 ref = (flat * w[:, None]).sum(0) / total
                 got = agg.node_source_data[key][node].reshape(-1).double()
-                assert torch.allclose(got, ref, rtol=rtol, atol=atol), (
-                    f"{key} aggregate mismatch at node {node}"
+                err = (got - ref).abs().max()
+                assert err < max_abs_err, (
+                    f"{key} aggregate mismatch at node {node}: max abs err {err:.3e}"
                 )
         ### node_total_area is a construction-time reduction; brute-force it too.
         assert torch.allclose(
@@ -771,6 +780,50 @@ def test_source_aggregates_match_bruteforce(device, dtype, offset, with_zero_are
             rtol=1e-5,
             atol=1e-6,
         ), f"node_total_area mismatch at node {node}"
+
+
+def test_zero_weight_internal_subtree_aggregates(device):
+    """A zero-weight *internal* node reduces to exactly zero aggregates.
+
+    Zeroing scattered areas only guarantees zero-weight single-point leaves.
+    Here a spatially separated 8-point cluster carries zero weight: it takes the
+    highest morton codes, so it is the final contiguous block in sorted order,
+    and with ``n = 64`` the index-midpoint splits make ``[56, 64)`` (and its
+    4- and 2-point descendants) tree nodes.  With ``leaf_size=1`` these are
+    internal nodes whose whole range has zero total weight, so the zero-total
+    guard is exercised on internal range reductions, not only on leaves.
+    """
+    n_main, n_cluster = 56, 8
+    main = _points(n_main, 3, device, seed=14)
+    cluster = _points(n_cluster, 3, device, seed=15) + 50.0
+    pts = torch.cat([main, cluster])
+    areas = torch.cat([_areas(n_main, device), torch.zeros(n_cluster, device=device)])
+    data = TensorDict(
+        {"vec": _points(n_main + n_cluster, 3, device, seed=16)},
+        batch_size=[n_main + n_cluster],
+        device=device,
+    )
+    tree = ClusterTree.from_points(pts, leaf_size=1, areas=areas)
+    agg = tree.compute_source_aggregates(
+        source_points=pts, areas=areas, source_data=data
+    )
+
+    zero_internal_nodes = []
+    for node in range(tree.n_nodes):
+        ids = _subtree_point_ids(tree, node)
+        if not (ids >= n_main).all():
+            continue
+        ### Every node inside the cluster block has zero weight, exactly.
+        assert tree.node_total_area[node] == 0
+        assert agg.node_centroid[node].eq(0).all()
+        assert agg.node_source_data["vec"][node].eq(0).all()
+        if int(tree.node_left_child[node]) >= 0:
+            zero_internal_nodes.append(node)
+
+    ### The construction must actually have produced internal zero-weight
+    ### nodes (the full 8-point block plus its 4- and 2-point descendants).
+    counts = sorted(int(tree.node_range_count[node]) for node in zero_internal_nodes)
+    assert counts == [2, 2, 2, 2, 4, 4, 8], counts
 
 
 def test_source_aggregates_use_call_time_weights(device):
