@@ -35,7 +35,7 @@ repos:
       exclude: ^docs/|^physicsnemo/experimental/|^test/
 
 -   repo: https://github.com/igorshubovych/markdownlint-cli
-    rev: v0.49.1
+    rev: v0.35.0
     hooks:
     - id: markdownlint
       exclude: ^skills/
