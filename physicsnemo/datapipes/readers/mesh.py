@@ -424,6 +424,7 @@ class DomainMeshReader:
         extra_boundaries: dict[str, dict] | None = None,
         drop_interior_cells: bool = False,
         drop_in_file_boundaries: bool = False,
+        interior_n_points_range: tuple[int, int] | None = None,
     ) -> None:
         """
         Initialize the domain mesh reader.
@@ -461,6 +462,17 @@ class DomainMeshReader:
             :mod:`physicsnemo.mesh.calculus.measure`).  Applied
             before
             ``subsample_n_points`` when both are set.
+        interior_n_points_range : (int, int), optional
+            If set, the *interior* point count is drawn per sample, uniformly
+            over the closed integer range ``[lo, hi]``, from the sample's
+            generator (so it is reproducible per ``(epoch, index)`` under
+            ``set_epoch``), and overrides ``subsample_n_points`` for the
+            interior only; boundaries keep the fixed sizes. This is
+            query-count augmentation: a model trained on a range of interior
+            request sizes is asked to give the same field at every size
+            (consistency in the fine-mesh limit) instead of learning the one
+            count it was trained at. Default ``None`` leaves behaviour
+            unchanged.
         extra_boundaries : dict[str, dict] or None, optional
             Load additional sibling meshes as extra boundaries on each
             sample.  Each key is the boundary name to assign; each value
@@ -506,6 +518,15 @@ class DomainMeshReader:
         self.drop_in_file_boundaries = drop_in_file_boundaries
         self.subsample_n_points = subsample_n_points
         self.subsample_n_cells = subsample_n_cells
+        if interior_n_points_range is not None:
+            lo, hi = (int(interior_n_points_range[0]), int(interior_n_points_range[1]))
+            if lo <= 0 or hi < lo:
+                raise ValueError(
+                    "interior_n_points_range must be (lo, hi) with 0 < lo <= hi, "
+                    f"got {interior_n_points_range!r}"
+                )
+            interior_n_points_range = (lo, hi)
+        self.interior_n_points_range = interior_n_points_range
         # Base seed + epoch for deterministic per-index RNG (see
         # :meth:`set_generator`). ``None`` means unseeded.
         self._seed_base: int | None = None
@@ -525,6 +546,19 @@ class DomainMeshReader:
         if not self._paths:
             raise ValueError(f"No paths matching {pattern!r} found in {self._root}")
 
+    def _interior_n_points(self, generator: torch.Generator | None) -> int | None:
+        """Interior point budget for one sample.
+
+        The fixed ``subsample_n_points`` unless ``interior_n_points_range`` is
+        set, in which case one count is drawn from ``generator`` before the
+        subsample consumes it, so ``(epoch, index)`` fixes both the count and
+        the draw.
+        """
+        if self.interior_n_points_range is None:
+            return self.subsample_n_points
+        lo, hi = self.interior_n_points_range
+        return int(torch.randint(lo, hi + 1, (1,), generator=generator).item())
+
     def _load_sample(self, index: int) -> DomainMesh:
         """Load a single DomainMesh from disk."""
         path = self._paths[index]
@@ -534,6 +568,7 @@ class DomainMeshReader:
             if (
                 self.subsample_n_cells is not None
                 or self.subsample_n_points is not None
+                or self.interior_n_points_range is not None
             ):
                 # Push the subsample into the read (window reads per
                 # sub-mesh); drop flags are honored at read time so skipped
@@ -544,6 +579,7 @@ class DomainMeshReader:
                     if self._seed_base is None
                     else spawn_generator(self._seed_base, self._epoch, index)
                 )
+                interior_n_points = self._interior_n_points(generator)
                 cache = getattr(self, "_zarr_groups", None)
                 if cache is None:
                     cache = self._zarr_groups = {}
@@ -553,7 +589,7 @@ class DomainMeshReader:
                 interior = _zarr_mesh_subsampled(
                     root["interior"],
                     self.subsample_n_cells,
-                    self.subsample_n_points,
+                    interior_n_points,
                     generator,
                 )
                 boundaries = {}
@@ -631,18 +667,27 @@ class DomainMeshReader:
                 global_data=dm.global_data,
             )
 
-        if self.subsample_n_cells is not None or self.subsample_n_points is not None:
+        if (
+            self.subsample_n_cells is not None
+            or self.subsample_n_points is not None
+            or self.interior_n_points_range is not None
+        ):
             generator = (
                 None
                 if self._seed_base is None
                 else spawn_generator(self._seed_base, self._epoch, index)
+            )
+            interior = _subsample_mesh(
+                dm.interior,
+                n_cells=self.subsample_n_cells,
+                n_points=self._interior_n_points(generator),
+                generator=generator,
             )
             sub_kw = dict(
                 n_cells=self.subsample_n_cells,
                 n_points=self.subsample_n_points,
                 generator=generator,
             )
-            interior = _subsample_mesh(dm.interior, **sub_kw)
             boundaries = {
                 name: _subsample_mesh(dm.boundaries[name], **sub_kw)
                 for name in dm.boundary_names
