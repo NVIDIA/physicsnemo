@@ -1480,6 +1480,10 @@ class Mesh:
         copied. Mutating shared data on the result therefore also mutates the
         source; clone first if you need an independent copy.
 
+        On CUDA, boolean point masks and filtering surviving cells require
+        host-device synchronization to determine output sizes. Integer point
+        indices avoid these waits for meshes without cells or empty selections.
+
         Examples
         --------
         >>> import torch
@@ -1566,9 +1570,7 @@ class Mesh:
         cells = self.cells
         if n_kept == 0 or cells.numel() == 0:
             # Nothing to remap: no points kept, or a point cloud without cells.
-            valid_cells_mask = torch.zeros(
-                cells.shape[0], dtype=torch.bool, device=device
-            )
+            kept_cell_indices = slice(0, 0)
             new_cells = cells.new_empty((0, cells.shape[1]), dtype=torch.long)
         elif (
             n_points <= _SEARCH_REMAP_RATIO * cells.numel()
@@ -1580,7 +1582,9 @@ class Mesh:
             )
             remapped_cells = old_to_new[cells]
             valid_cells_mask = (remapped_cells >= 0).all(dim=-1)
-            new_cells = remapped_cells[valid_cells_mask]
+            # Share one compaction (and CUDA wait) with all cell-data fields.
+            kept_cell_indices = valid_cells_mask.nonzero().squeeze(-1)
+            new_cells = remapped_cells[kept_cell_indices]
         else:
             sorted_kept, order = torch.sort(kept_indices, stable=True)
             # right=True then -1 selects the LAST equal entry, so a point id
@@ -1591,10 +1595,11 @@ class Mesh:
                 - 1
             ).clamp_min(0)
             valid_cells_mask = (sorted_kept[pos] == cells).all(dim=-1)
-            new_cells = order[pos[valid_cells_mask]]
-        # cast: TensorDict[bool_mask] returns TensorCollection | Tensor statically;
+            kept_cell_indices = valid_cells_mask.nonzero().squeeze(-1)
+            new_cells = order[pos[kept_cell_indices]]
+        # cast: TensorDict[index] returns TensorCollection | Tensor statically;
         # the runtime is always TensorDict because cell_data is itself a TensorDict.
-        new_cell_data = cast(TensorDict, self.cell_data[valid_cells_mask])
+        new_cell_data = cast(TensorDict, self.cell_data[kept_cell_indices])
 
         return Mesh(
             points=new_points,
@@ -1633,6 +1638,10 @@ class Mesh:
         ``Ellipsis`` return this mesh itself. Mutating any shared field on the
         result therefore also mutates the source; clone first if you need an
         independent copy.
+
+        A one-dimensional CUDA boolean mask requires one host-device
+        synchronization to determine the output cell count. Integer index
+        tensors and Python slices avoid this data-dependent synchronization.
         """
         ### Handle no-op cases: None or Ellipsis means keep all cells (returns self),
         # matching slice_points and the documented type hint (which previously raised
@@ -1642,6 +1651,18 @@ class Mesh:
 
         if isinstance(indices, int):
             indices = torch.tensor([indices], device=self.cells.device)
+        elif (
+            isinstance(indices, torch.Tensor)
+            and indices.ndim == 1
+            and indices.dtype in (torch.bool, torch.uint8)
+        ):
+            if indices.numel() != self.n_cells:
+                raise IndexError(
+                    f"cell mask must have length {self.n_cells}, got {indices.numel()}"
+                )
+            # Reuse integer indices for connectivity, data and caches instead
+            # of synchronizing for the same mask once per tensor or TensorDict.
+            indices = indices.nonzero().squeeze(-1)
         new_cell_data = cast(TensorDict, self.cell_data[indices])
         # Only purely-local per-cell geometry caches survive a cell slice: each
         # cell's centroid/area/normal depends solely on that cell's own vertices.
