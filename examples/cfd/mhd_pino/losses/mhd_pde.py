@@ -55,7 +55,7 @@ class MHD_PDE(PDE):
         self.equations["vel_grad_u"] = u * u.diff(x) + v * u.diff(y)
         self.equations["vel_grad_v"] = u * v.diff(x) + v * v.diff(y)
 
-        self.equations["B_grad_u"] = Bx * u.diff(x) + v * Bx.diff(y)
+        self.equations["B_grad_u"] = Bx * u.diff(x) + By * u.diff(y)
         self.equations["B_grad_v"] = Bx * v.diff(x) + By * v.diff(y)
 
         self.equations["vel_grad_Bx"] = u * Bx.diff(x) + v * Bx.diff(y)
