@@ -49,6 +49,8 @@ class Diffusion(PDE):
         self.dim = dim
         x, y = Symbol("x"), Symbol("y")
         iv = {"x": x, "y": y}
+        if time:
+            iv["t"] = Symbol("t")
         T_var = Function(T)(*iv.values())
         D_var = Function(D)(*iv.values()) if isinstance(D, str) else Number(D)
         Q_var = Number(Q) if isinstance(Q, (int, float)) else Q
