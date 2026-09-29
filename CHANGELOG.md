@@ -114,6 +114,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The unified external aero recipe's force documentation and subsampling warning
+  explain how effective measures compensate for retained-area shrinkage and
+  when sampling or sample-dependent moment origins can introduce bias. Saved
+  inference outputs retain explicit query measures and scale them with geometry
+  so the exported fields remain integrable in physical coordinates.
 - Fixes mesh dtype handling: preserves integer-coordinate precision, normalizes
   connectivity safely, and rejects integer `.to()` casts. Floating/complex casts
   preserve the source mesh.
