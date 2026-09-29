@@ -17,7 +17,7 @@
 import torch
 
 from contextlib import nullcontext
-from torch.cuda.amp import GradScaler
+from torch.amp import GradScaler
 from torch.nn.parallel import DistributedDataParallel
 import numpy as np
 import time

@@ -19,17 +19,15 @@ r"""Activation-checkpointing helpers for GeoTransolver."""
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import torch
+import torch.nn as nn
 
 from physicsnemo.models.utils.activation_checkpointing import (
     run_checkpoint,
     should_checkpoint_interleaved_block,
 )
-
-if TYPE_CHECKING:
-    from physicsnemo.nn import GALEBlock
 
 DEFAULT_CHECKPOINTING_COMPONENTS = frozenset({"blocks"})
 CHECKPOINTABLE_COMPONENTS = DEFAULT_CHECKPOINTING_COMPONENTS | frozenset(
@@ -108,7 +106,7 @@ def run_checkpointed_component(
 
 
 def checkpoint_block(
-    block: GALEBlock,
+    block: nn.Module,
     streams: tuple[torch.Tensor, ...] | list[torch.Tensor],
     embedding_states: torch.Tensor | None,
     *,

@@ -16,10 +16,10 @@
 
 r"""FLARE Transolver: Transolver with FLARE attention.
 
-This module provides FLARE, a Transolver variant that uses
-FLARE (Fast Low-rank Attention Routing Engine) attention.
+This module provides standalone Transolver variants using FLARE and FLARE++
+low-rank attention.
 """
 
-from .flare import FLARE
+from .flare import FLARE, FLAREPlusPlus
 
-__all__ = ["FLARE"]
+__all__ = ["FLARE", "FLAREPlusPlus"]

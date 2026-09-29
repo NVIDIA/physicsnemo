@@ -33,8 +33,10 @@ from tensordict import TensorDictBase
 
 
 def _resolved_device(device: torch.device | str) -> torch.device:
-    """Resolve an index-free CUDA device for comparison with tensor devices."""
+    """Normalize CPU aliases and resolve the current CUDA device."""
     device = torch.device(device)
+    if device.type == "cpu":
+        return torch.device("cpu")
     if device.type == "cuda" and device.index is None:
         return torch.device("cuda", torch.cuda.current_device())
     return device

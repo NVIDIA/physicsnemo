@@ -15,3 +15,19 @@ For details of the method, see the `FLARE paper
    :show-inheritance:
    :members:
    :exclude-members: forward
+
+FLARE++
+-------
+
+FLARE++ replaces FLARE's fixed learned routing queries with routing queries
+synthesized from the current input. It uses one attention pass to create those
+queries and the usual FLARE gather/scatter pair to route information, preserving
+linear complexity in the number of input tokens for a fixed query count.
+
+For details, see the `FLARE++ paper
+<https://arxiv.org/abs/2608.11519>`__.
+
+.. autoclass:: physicsnemo.nn.module.flare_attention.FLAREPlusPlus
+   :show-inheritance:
+   :members:
+   :exclude-members: forward

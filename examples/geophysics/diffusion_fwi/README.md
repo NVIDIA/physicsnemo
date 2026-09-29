@@ -97,7 +97,7 @@ problem.
 This example requires basic knowledge of [denoising diffusion
 models](../../generative/README.md); it is also recommended to be familiar with
 other examples using diffusion models, such as
-[StormCast](../../weather/stormcast/README.md) or
+[StormCast](../../weather/regional_weather_diffusion/README.md) or
 [CorrDiff](../../weather/corrdiff/README.md).
 
 Start by installing PhysicsNeMo (if not already installed) and copying this

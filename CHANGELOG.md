@@ -10,19 +10,124 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds standalone FLARE++ attention and model APIs, with input-conditioned
+  dynamic routing, plus a ``GALE_FPP`` backend for using the same mixer inside
+  GeoTransolver.
+- Adds `physicsnemo.nn.functional.safe_normalize` for vector normalization
+  across floating-point dtypes and scales, preserving zero vectors and the
+  input dtype under autocast.
 - Adds `physicsnemo.datapipes.keys` and routes every config-driven field name
   in `physicsnemo.datapipes` through it, so a `"."` in a YAML field name
   (`"solution.pressure"`) addresses a leaf inside a nested `TensorDict`.
   Nested `Mesh` data no longer needs to be flattened before use.
+- `DistributedManager.initialize(timeout=...)` accepts numeric seconds or a
+  `timedelta` for the default process-group timeout. Explicit values override
+  `PHYSICSNEMO_DIST_TIMEOUT_S`; unset or empty configuration keeps PyTorch's
+  backend default. Invalid timeouts are rejected before initialization state
+  changes, allowing corrected configuration to be retried.
+- `MeshToDomainMesh` in `cell_centroids` mode records each source cell's
+  complete effective measure on the interior under the mesh-owned
+  `_effective_measure` point-data key, so
+  integrals and weighted losses over the query points remain possible after
+  the cells are gone.
+- Unified external aero recipe: `NonDimensionalizeByMetadata` gains
+  `scale_geometry` so chained instances scale the geometry once; inference
+  re-dimensionalizes with the field maps of every instance.
+- Extends the diffusion module to support flow matching. The new API
+  surface covers three pieces:
+  - New losses in `physicsnemo.diffusion.metrics.losses` train against a
+    flow/velocity target: `FlowMatchingLoss`, plus `WeightedFlowMatchingLoss`
+    for an element-wise weight such as a binary mask. Their
+    `MultiDiffusionFlowMatchingLoss` and
+    `MultiDiffusionWeightedFlowMatchingLoss` counterparts provide patch-based
+    flow-matching training on large spatial domains. `MultiDiffusionModel2D`
+    and `MultiDiffusionPredictor` support both patch-based diffusion and flow
+    matching during training and inference.
+  - A dedicated `RectifiedFlowNoiseScheduler` in
+    `physicsnemo.diffusion.noise_schedulers` provides a rectified-flow
+    schedule.
+  - Module-wide support for flow predictors, enabled by new conversion
+    functions in `LinearGaussianNoiseScheduler` (`x0_to_flow` / `flow_to_x0`
+    / `score_to_flow` / `flow_to_score`) and the corresponding conversion
+    callbacks everywhere conversions between prediction types are necessary.
 
 ### Changed
 
+- `physicsnemo.mesh.Mesh` and `DomainMesh` now inherit directly from
+  `TensorClass`. Existing constructor defaults and `Mesh[m, s]` runtime
+  specialization remain available, nested mesh types survive memmap round
+  trips, and decorator-era `.pmsh` / `.pdmsh` files remain readable.
+- Mesh integration uses a shared `_effective_measure` field for complete cell
+  and point measures. Cell measures fall back to geometry; point measures are
+  explicit and independent of connectivity. `Mesh.integrate_samples` evaluates
+  point quadrature separately from existing cell and vertex-field integration.
+  Sampling, centroid conversion, geometric transformations, subdivision and
+  GLOBE use the mesh-owned measure API. Point measures carry their represented
+  dimension so geometric scaling preserves their physical units.
+
+  **Migration from 2.2.x:** meshes saved with `cell_data["_measure_weights"]`
+  must be regenerated or converted once before integration:
+
+  ```python
+  from physicsnemo.mesh.calculus import set_cell_measures
+
+  if "_measure_weights" in mesh.cell_data:
+      weights = mesh.cell_data.pop("_measure_weights")
+      set_cell_measures(mesh, mesh.cell_areas * weights)
+  ```
+
+  Replace `compose_measure_weights` calls with `scale_measures`. Consumers
+  should read complete measures with `cell_measures` instead of multiplying
+  `cell_areas` by `cell_measure_weights`. Update stored-field mappings from
+  `cell_data._measure_weights` to `cell_data._effective_measure` and remove any
+  subsequent multiplication by geometric areas.
+
+- `Mesh.slice_points` picks its cell-remapping algorithm by mesh shape: the
+  full-mesh lookup table as before, or a binary search over the kept ids when the
+  mesh has far more points than cell-vertex entries (a reader keeping a block of
+  cells out of a mesh with hundreds of millions of vertices). Index
+  normalization avoids allocating a full-mesh range and preserves empty slices,
+  integer indices, and boolean masks. Point fields use ordinary indexed gathers.
+
 ### Deprecated
+
+- Unified external aerodynamics recipe: `training.loss_type: rmse` is
+  deprecated in favour of `relative_mse`, which names what it always
+  computed (target-normalized relative MSE, no square root) and delegates
+  to `physicsnemo.metrics.general.relative_error`. `rmse` still works and
+  warns.
 
 ### Removed
 
+- Removes the opt-in `physicsnemo.compat` import-alias layer and the
+  `PHYSICSNEMO_ENABLE_COMPAT` environment variable. The layer mapped pre-v2.0
+  module paths onto their v2.0 locations; three minor releases later, callers
+  should import from the current paths listed in `v2.0-MIGRATION-GUIDE.md`.
+  Checkpoint loading is unaffected.
+- Removes `physicsnemo.utils.mesh`, deprecated since 2.1 with removal scheduled
+  for 2.2. The `vtk` and `stl` entries leave the `utils-extras` extra with it.
+  Replacements:
+  - `sdf_to_stl(field, threshold)`: `marching_cubes` from
+    `physicsnemo.mesh.generate` returns a `Mesh`; save it with `to_pyvista`
+    from `physicsnemo.mesh.io`, e.g.
+    `to_pyvista(marching_cubes(torch.as_tensor(field), threshold)).save("out.stl")`.
+  - `combine_vtp_files(files, out)`:
+    `pyvista.merge([pyvista.read(f) for f in files]).save(out)`.
+  - `convert_tesselated_files_in_directory`: `pyvista.read(src).save(dst)` per
+    file; PyVista reads and writes OBJ, VTP and STL.
+
 ### Fixed
 
+- Fixes mesh dtype handling: preserves integer-coordinate precision, normalizes
+  connectivity safely, and rejects integer `.to()` casts. Floating/complex casts
+  preserve the source mesh.
+- Fixed an issue in `Natten2DSelfAttention` and `RopeNatten2DSelfAttention`
+  with `qk_norm=True` mixing `LayerNorm` fp32 Q/K outputs with autocasted V
+  dtypes.
+- Normalizes cell, point, transformed, and partition-cluster mesh normals
+  robustly across floating-point dtypes and scales. Zero vectors remain zero,
+  small nonzero vectors retain unit length, and large finite vectors avoid
+  norm overflow.
 - Datapipe transforms, collators, readers, and the unified external aero
   recipe no longer silently skip or mis-handle nested `TensorDict` fields
   (membership was tested against top-level `td.keys()`, and
@@ -33,10 +138,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `nr_multigrids >= 3` that could return huge or NaN pressure fields, and
   corrects the coarse-node coordinates used by bilinear upsampling for
   reduction factors greater than 2.
+- `Module.save` now writes `.mdlus` checkpoints atomically (transfer to a
+  temporary sibling name, then rename into place), so a process killed
+  mid-write no longer leaves an unloadable truncated checkpoint. Also fixes
+  `legacy_format=True`, which failed with `FileNotFoundError` on current
+  fsspec versions.
+- `RandomRotateMesh` defaults to `mode="axis_aligned"` when `axes` is given.
+  Unified external aero recipe translation configs pass tensor bounds so
+  `torch.distributions.Uniform` instantiates.
+- `RenameMeshFields` and `DropMeshFields` also apply to a `DomainMesh`'s
+  domain-level `global_data`.
 
 ### Security
 
 ### Dependencies
+
+- Drops `onnx`, `torchvision` and `pandas` from the required dependencies.
+  `pandas` is now optional via `datapipes-extras` or `model-extras`.
 
 ## [2.2.1] - 2026-XX-YY
 
@@ -329,13 +447,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   next event (the new particle's features and inter-event delay) from the
   current particle population, an optional background mesh, and the simulation
   time. Independent rollouts form an ensemble for uncertainty quantification.
+- Adds an FP-DDM domain-decomposition example (`examples/tcad/fp_ddm`): an
+  overlapping Schwarz method for steady 2-D thermal problems with a
+  physics-informed PhysicsNeMo FNO local solver, a matrix-free finite-volume
+  reference solver, and a numerical plane-stress elasticity baseline.
 
 ### Changed
 
-- `physicsnemo.mesh.Mesh` and `DomainMesh` now inherit directly from
-  `TensorClass`. Existing constructor defaults and `Mesh[m, s]` runtime
-  specialization remain available, nested mesh types survive memmap round
-  trips, and decorator-era `.pmsh` / `.pdmsh` files remain readable.
 - Splits the monolithic `physicsnemo.diffusion.noise_schedulers.noise_schedulers`
   and `physicsnemo.diffusion.samplers.solvers` modules into one module per class,
   named after the schedule or solver it defines, with the `NoiseScheduler` and
@@ -623,6 +741,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   detached before `.numpy()`); and integer/bool data crashed (`safe_eps` on an
   integer dtype) or truncated via integer division during facet/scatter
   aggregation (now computed in a floating dtype).
+- `physicsnemo.mesh`: averaging a complex point or cell field no longer silently
+  returns `float64` with the imaginary part discarded. Complex tensors are not
+  "floating point" by `torch`'s definition, so facet/scatter aggregation
+  promoted them like an integer field, corrupting
+  `Mesh.cell_data_to_point_data`, `Mesh.get_facet_mesh` (both `data_source`
+  settings), and `repair.merge_duplicate_points`. A `"mean"` still requires
+  real weights, because its divisor is clamped away from zero and `clamp`
+  rejects complex dtypes; a `"sum"` accepts complex weights and promotes to the
+  common dtype of the values and the weights.
 - `physicsnemo.mesh` Morton-code quantization now handles empty inputs, tiny
   extents, half-precision coordinates, and one-dimensional endpoints correctly.
 - `physicsnemo.mesh`: fixed Loop subdivision pulling open boundaries inward (now
@@ -907,7 +1034,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   implementation. Use `torch.nn.init.trunc_normal_` directly.
 - Deprecates the CorrDiff example (`examples/weather/corrdiff`), which no longer
   receives maintenance, bug fixes, or new features. Use the regional
-  high-resolution weather model example (`examples/weather/stormcast`) instead.
+  high-resolution weather model example (`examples/weather/regional_weather_diffusion`) instead.
   That example unifies regional diffusion-based weather models, and covers the
   CorrDiff downscaling setting alongside other diffusion-based settings.
 

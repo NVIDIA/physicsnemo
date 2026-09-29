@@ -113,12 +113,13 @@ class TestPmshGoldenFixture:
         assert (LEGACY_FIXTURE_DIR / "_tensordict").is_dir()
         assert any(path.startswith("_tensordict/") for path in current_manifest)
 
-    def test_out_fills_preallocated_tensors(self, fixture_dir: Path):
-        """Both layouts fill a caller-provided TensorDict payload."""
+    @pytest.mark.parametrize("device", [None, "cpu", "cpu:0", torch.device("cpu:0")])
+    def test_out_fills_preallocated_tensors(self, fixture_dir: Path, device):
+        """Both layouts fill CPU storage, including indexed CPU device aliases."""
         expected = build_canonical_mesh()
         out = expected._tensordict.apply(torch.zeros_like)
 
-        loaded = Mesh.load(fixture_dir, out=out)
+        loaded = Mesh.load(fixture_dir, out=out, device=device)
 
         assert loaded._tensordict is out
         assert torch.equal(loaded.points, expected.points)

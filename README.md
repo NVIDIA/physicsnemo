@@ -47,11 +47,11 @@ For CUDA 12, a basic install, optional features, or source setup, refer to
   </tr>
   <tr>
     <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/external_aerodynamics/active_learning_aero"><img width="100%" alt="Ground-truth and GeoTransolver-predicted pressure and wall-shear-stress fields on a held-out ShiftSUV" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/al_shiftsuv_field_predictions.png"></a></td>
-    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/stormcast"><img width="100%" alt="StormCast prediction beside a high-resolution weather analysis" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/stormcast_rollout.gif"></a></td>
+    <td width="50%" align="center"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/regional_weather_diffusion"><img width="100%" alt="StormCast prediction beside a high-resolution weather analysis" src="https://raw.githubusercontent.com/NVIDIA/physicsnemo/main/docs/img/stormcast_rollout.gif"></a></td>
   </tr>
   <tr>
     <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/external_aerodynamics/unified_external_aero_recipe"><strong>Unified external aerodynamics</strong></a>: train and compare current surface and volume models</td>
-    <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/stormcast"><strong>StormCast</strong></a>: generative regional weather forecasting</td>
+    <td width="50%" align="center" valign="top"><a href="https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/regional_weather_diffusion"><strong>StormCast</strong></a>: generative regional weather forecasting</td>
   </tr>
   <tr>
     <th width="50%" align="center">Semiconductor packaging</th>
@@ -175,7 +175,7 @@ code. The final column links to examples and papers.
 
 | Model family | Data representation | Known uses and starting points |
 | --- | --- | --- |
-| [Diffusion U-Nets](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/diffusion_unets) / [DiT](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/dit) | 2D fields or patch tokens | Stochastic regional forecasting, downscaling, and inverse problems: [StormCast and StormScope](https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/stormcast), [diffusion FWI](https://github.com/NVIDIA/physicsnemo/tree/main/examples/geophysics/diffusion_fwi) |
+| [Diffusion U-Nets](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/diffusion_unets) / [DiT](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/dit) | 2D fields or patch tokens | Stochastic regional forecasting, downscaling, and inverse problems: [StormCast and StormScope](https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/regional_weather_diffusion), [diffusion FWI](https://github.com/NVIDIA/physicsnemo/tree/main/examples/geophysics/diffusion_fwi) |
 | [TopoDiff](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/topodiff) | 2D topology fields conditioned on design constraints | Generative topology optimization: [recipe](https://github.com/NVIDIA/physicsnemo/tree/main/examples/generative/topodiff), [paper](https://arxiv.org/abs/2208.09591) |
 
 Refer to the [model catalog](https://docs.nvidia.com/physicsnemo/latest/physicsnemo/api_models.html)

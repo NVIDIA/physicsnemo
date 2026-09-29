@@ -269,9 +269,9 @@ class _StaticCapture(object):
 
     def _init_amp_scaler(
         self, scaler_enabled: bool, logger: Logger
-    ) -> torch.cuda.amp.GradScaler:
+    ) -> torch.amp.GradScaler:
         # Create gradient scaler
-        scaler = torch.cuda.amp.GradScaler(enabled=scaler_enabled)
+        scaler = torch.amp.GradScaler("cuda", enabled=scaler_enabled)
         # Store scaler in class variable
         self.amp_scalers[self.label] = scaler
         logging.debug(f"Created gradient scaler {self.label}")

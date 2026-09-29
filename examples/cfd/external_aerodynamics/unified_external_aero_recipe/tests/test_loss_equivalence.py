@@ -147,7 +147,7 @@ class TestReferenceTotal:
         assert "loss/total" in loss_dict
         assert torch.allclose(loss_dict["loss/total"], ref_total, atol=1e-7, rtol=1e-6)
 
-    @pytest.mark.parametrize("loss_type", ["huber", "mse"])
+    @pytest.mark.parametrize("loss_type", ["huber", "mse", "relative_mse"])
     def test_per_field_keys_match_target_config(self, loss_type):
         """Per field keys match target config."""
         torch.manual_seed(0)
@@ -164,6 +164,60 @@ class TestReferenceTotal:
         ### iterating it directly raises StopIteration (no batch dim to walk),
         ### so we materialise the keys explicitly.
         assert set(ldict.keys()) == {"loss/pressure", "loss/wss", "loss/total"}
+
+
+### ---------------------------------------------------------------------------
+### Relative losses and the deprecated "rmse" alias
+### ---------------------------------------------------------------------------
+
+
+def _random_fields(seed: int = 11) -> tuple[TensorDict, TensorDict]:
+    """One scalar and one vector field, ``(1, N)`` and ``(1, N, 3)``."""
+    torch.manual_seed(seed)
+    pred = _make_td({"pressure": torch.randn(1, 40), "wss": torch.randn(1, 40, 3)})
+    target = _make_td({"pressure": torch.randn(1, 40), "wss": torch.randn(1, 40, 3)})
+    return pred, target
+
+
+class TestRelativeLosses:
+    """``relative_mse`` semantics and the ``"rmse"`` alias."""
+
+    def test_relative_mse_is_target_normalized_mse_per_field(self):
+        """Scalar: ``mean(err^2) / mean(target^2)``; vector: per component, summed."""
+        pred, target = _random_fields()
+        lc = LossCalculator(
+            {"pressure": "scalar", "wss": "vector"}, loss_type="relative_mse"
+        )
+        _, ldict = lc(pred, target)
+
+        p, t = pred["pressure"], target["pressure"]
+        ref_scalar = torch.mean((p - t) ** 2) / torch.mean(t**2)
+        p, t = pred["wss"], target["wss"]
+        ref_vector = torch.sum(
+            torch.mean((p - t) ** 2, dim=(0, 1)) / torch.mean(t**2, dim=(0, 1))
+        )
+        assert torch.allclose(ldict["loss/pressure"], ref_scalar, rtol=1e-6)
+        assert torch.allclose(ldict["loss/wss"], ref_vector, rtol=1e-6)
+
+    def test_rmse_alias_warns_and_matches_relative_mse(self):
+        """``"rmse"`` warns once at construction and computes ``relative_mse``."""
+        pred, target = _random_fields()
+        target_config = {"pressure": "scalar", "wss": "vector"}
+        with pytest.warns(FutureWarning, match='Use "relative_mse"'):
+            legacy = LossCalculator(target_config, loss_type="rmse")
+        assert legacy.loss_type == "relative_mse"
+
+        canonical = LossCalculator(target_config, loss_type="relative_mse")
+        legacy_total, legacy_dict = legacy(pred, target)
+        total, ldict = canonical(pred, target)
+        assert torch.equal(legacy_total, total)
+        for key in ldict.keys():
+            assert torch.equal(legacy_dict[key], ldict[key])
+
+    def test_unknown_loss_type_rejected(self):
+        """Typos fail at construction with the accepted names in the message."""
+        with pytest.raises(ValueError, match="relative_mse"):
+            LossCalculator({"pressure": "scalar"}, loss_type="rsme")
 
 
 ### ---------------------------------------------------------------------------

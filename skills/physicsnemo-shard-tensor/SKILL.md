@@ -133,7 +133,7 @@ you don't have to (a `Shard`-placement param under DDP breaks DDP).
 Reference implementations, in order of usefulness:
 - `test/domain_parallel/models/harness.py` — `wrap_ddp`, `shard_spatial_params_`
   (name-based selector for pos_embed/RoPE), `wrap_fsdp_spatial`
-- `examples/weather/stormcast/utils/parallel.py` — production `ParallelHelper`
+- `examples/weather/regional_weather_diffusion/utils/parallel.py` — production `ParallelHelper`
 - `examples/minimal/ShardTensorExamples/5_vit_training_loop/` — end-to-end
   benchmark script with DDP/FSDP2/compile flags
 

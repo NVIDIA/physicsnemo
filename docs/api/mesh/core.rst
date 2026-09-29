@@ -79,6 +79,20 @@ Use a list when retaining multiple keys, for example
 geometry or connectivity is an expert operation. You are responsible for the
 validity of the retained cache.
 
+Subclassing
+-----------
+
+``Mesh`` subclasses can declare additional tensor fields. Cloning, floating dtype
+conversion, memmap serialization, and the cache-aware update methods above preserve
+the concrete subclass and its declared fields.
+
+Subclass preservation does not extend to every operation that creates a mesh.
+For example, :meth:`Mesh.slice_points` and :meth:`Mesh.slice_cells` construct a
+base ``Mesh`` and omit additional subclass fields when given indices. Their
+``None`` and ``Ellipsis`` selections return the original object. Store per-point
+and per-cell quantities in ``point_data`` and ``cell_data`` so slicing handles
+them with the corresponding geometry.
+
 .. autoclass:: Mesh
    :members:
    :show-inheritance:
@@ -94,6 +108,11 @@ meshes and domain-level data. Operations such as
 :meth:`~physicsnemo.mesh.domain_mesh.DomainMesh.radial_basis_function_deform`
 apply one consistent geometry change to every component and return a new
 domain.
+
+:meth:`DomainMesh.apply_to_meshes` preserves the domain subclass and its additional
+fields. Each component's type and fields follow the operation applied to that
+component: a callback that slices a mesh returns a base ``Mesh`` as described
+above.
 
 .. autoclass:: DomainMesh
    :members:

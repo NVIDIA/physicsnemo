@@ -129,12 +129,13 @@ class TestPdmshGoldenFixture:
         assert (LEGACY_FIXTURE_DIR / "_tensordict").is_dir()
         assert any(path.startswith("_tensordict/") for path in current_manifest)
 
-    def test_out_fills_nested_meshes(self, fixture_dir: Path):
-        """Both layouts fill preallocated interior and boundary tensors."""
+    @pytest.mark.parametrize("device", [None, "cpu", "cpu:0", torch.device("cpu:0")])
+    def test_out_fills_nested_meshes(self, fixture_dir: Path, device):
+        """Both layouts fill nested CPU storage for indexed CPU device aliases."""
         expected = build_canonical_domain_mesh()
         out = expected._tensordict.apply(torch.zeros_like)
 
-        loaded = DomainMesh.load(fixture_dir, out=out)
+        loaded = DomainMesh.load(fixture_dir, out=out, device=device)
 
         assert loaded._tensordict is out
         _assert_mesh_equal(loaded.interior, expected.interior, "interior")

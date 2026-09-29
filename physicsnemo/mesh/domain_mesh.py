@@ -27,7 +27,7 @@ from jaxtyping import Bool, Float
 from tensordict import TensorClass, TensorDict
 
 from physicsnemo.mesh._serialization import install_mesh_memmap_reader
-from physicsnemo.mesh.mesh import Mesh, _requested_float_dtype
+from physicsnemo.mesh.mesh import Mesh, _requested_dtype
 from physicsnemo.mesh.transformations.deform.ffd import _FFDBasis
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
 
@@ -290,6 +290,13 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
             DomainMesh
                 A new DomainMesh on the target device/dtype, or the same
                 instance if no changes were required.
+
+            Raises
+            ------
+            TypeError
+                If ``dtype`` is neither floating-point nor complex. Coordinates
+                must stay real- or complex-valued, and the cast would also be
+                applied to each component mesh's integer ``cells``.
 
             Examples
             --------
@@ -1692,11 +1699,17 @@ DomainMesh.__repr__ = _domain_mesh_repr  # type: ignore[method-assign]  # ty: ig
 ### Override the TensorClass ``to`` for the same reason as ``Mesh.to``: a floating/
 # complex dtype cast via the generated tensorclass ``to`` recurses into the interior/
 # boundary meshes and casts their integer ``cells`` to a float dtype, which fails
-# ``Mesh.__post_init__``. Only an explicitly requested floating dtype takes the
-# recursive floating-leaf cast path; device-only moves and non-float dtypes are
-# delegated unchanged (cells-safe and metadata-preserving).
+# ``Mesh.__post_init__``. Only an explicitly requested floating/complex dtype takes the
+# recursive floating-leaf cast path. Device-only moves are delegated unchanged.
 def _domain_mesh_to(self, *args: Any, **kwargs: Any) -> "DomainMesh":
-    cast_dtype = _requested_float_dtype(args, kwargs)
+    cast_dtype = _requested_dtype(args, kwargs)
+    if cast_dtype is not None and not (
+        cast_dtype.is_floating_point or cast_dtype.is_complex
+    ):
+        raise TypeError(
+            "Mesh coordinates must remain floating point or complex; "
+            f"cannot convert a DomainMesh to {cast_dtype}."
+        )
     if cast_dtype is None:
         return _tensorclass_domain_to(self, *args, **kwargs)
 
