@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds `examples/minimal/mesh/deformation_energy_optimization.py`, which
+  optimizes an RBF deformation of a unit square against the strain, total-area,
+  and element-inversion penalties in `physicsnemo.mesh.deformation`.
 - Adds standalone FLARE++ attention and model APIs, with input-conditioned
   dynamic routing, plus a ``GALE_FPP`` backend for using the same mixer inside
   GeoTransolver.
