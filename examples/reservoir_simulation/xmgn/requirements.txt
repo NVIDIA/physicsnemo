@@ -1,14 +1,16 @@
 # XMeshGraphNet Standalone Training Requirements
 # Tested with Python 3.10 and CUDA 12.1
 
-# Build PyG extensions against the installed PyTorch/CUDA version.
-# The old torch 2.10 wheel index is incompatible with PhysicsNeMo's torch>=2.13.
+# PyTorch Geometric wheel repository for extension packages
+# Aligned with torch>=2.10.0 (CUDA 12.8 wheels) to pick up the CVE-2025-32434
+# and CVE-2026-24747 fixes in torch.
+--find-links https://data.pyg.org/whl/torch-2.10.0+cu128.html
 
 # Core dependencies
 torch>=2.10.0
 torchaudio>=2.10.0
 torchvision>=0.25.0
-numpy>=1.26.0
+numpy>=1.26.0,<2.0
 hydra-core>=1.3.0
 omegaconf>=2.3.0
 

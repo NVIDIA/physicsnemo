@@ -1,7 +1,7 @@
 torchinfo
 tensorboard
 nvidia-ml-py
-cuml-cu13==26.8.0
+cuml-cu13==26.2.0
 einops
 tensorstore
 tabulate

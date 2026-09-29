@@ -54,7 +54,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Refresh core, optional, development, and container dependency versions.
-  Limit example requirement changes to conflicts with these dependencies.
   Require PyTorch 2.13 or newer and TensorDict 0.14.2 or newer;
   use CUDA 12.6 wheels for the CUDA 12 backend. NATTEN extras select
   PyTorch 2.13 to match their prebuilt kernels. Python support remains
