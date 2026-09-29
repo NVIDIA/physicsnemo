@@ -652,3 +652,93 @@ class TestConsistency:
         assert errors[2] < errors[1]
         # subdivision=3 should be within ~0.5% of analytic
         assert errors[2] < 0.005
+
+
+def test_constant_field_exact(unit_triangle: Mesh):
+    """P1 integral of constant field = constant * volume."""
+    f = torch.tensor([3.0, 3.0, 3.0])
+    result = integrate(unit_triangle, f, data_source="points")
+    assert torch.isclose(result, torch.tensor(3.0 * 0.5))
+
+
+def test_multiple_cells(two_triangles: Mesh):
+    """Integration over mesh with two cells."""
+    f = torch.ones(two_triangles.n_points)
+    result = integrate(two_triangles, f, data_source="points")
+    assert torch.isclose(result, two_triangles.cell_areas.sum())
+
+
+def test_tet_constant(unit_tet: Mesh):
+    """Constant field on tetrahedron: integral = c * V."""
+    f = torch.full((4,), 5.0)
+    result = integrate(unit_tet, f, data_source="points")
+    expected = 5.0 / 6.0
+    assert torch.isclose(result, torch.tensor(expected))
+
+
+def test_edge_constant(edge_mesh: Mesh):
+    """Constant field on edges: integral = c * total_length."""
+    f = torch.full((4,), 2.0)
+    result = integrate(edge_mesh, f, data_source="points")
+    assert torch.isclose(result, torch.tensor(2.0 * 3.0))
+
+
+def test_cell_nan_propagated(two_triangles: Mesh):
+    f = torch.tensor([2.0, float("nan")])
+    result = integrate(
+        two_triangles,
+        f,
+        data_source="cells",
+        nan_policy="propagate",
+    )
+    assert torch.isnan(result)
+
+
+def test_point_nan_propagated(two_triangles: Mesh):
+    f = torch.tensor([1.0, float("nan"), 1.0, 1.0])
+    result = integrate(
+        two_triangles,
+        f,
+        data_source="points",
+        nan_policy="propagate",
+    )
+    assert torch.isnan(result)
+
+
+def test_string_key_cell(two_triangles: Mesh):
+    two_triangles.cell_data["p"] = torch.tensor([1.0, 2.0])
+    result = integrate(two_triangles, "p", data_source="cells")
+    areas = two_triangles.cell_areas
+    assert torch.isclose(result, (torch.tensor([1.0, 2.0]) * areas).sum())
+
+
+def test_string_key_point(unit_triangle: Mesh):
+    unit_triangle.point_data["T"] = torch.ones(3) * 4.0
+    result = integrate(unit_triangle, "T", data_source="points")
+    assert torch.isclose(result, torch.tensor(4.0 * 0.5))
+
+
+def test_missing_cell_key(unit_triangle: Mesh):
+    """String key not in cell_data gives a helpful KeyError."""
+    with pytest.raises(KeyError, match="cell.*_data"):
+        integrate(unit_triangle, "nonexistent")
+
+
+def test_missing_point_key(unit_triangle: Mesh):
+    """String key not in point_data gives a helpful KeyError."""
+    with pytest.raises(KeyError, match="point.*_data"):
+        integrate(unit_triangle, "nonexistent", data_source="points")
+
+
+def test_wrong_cell_tensor_shape(unit_triangle: Mesh):
+    """Tensor with wrong leading dimension for cell data raises ValueError."""
+    wrong = torch.ones(unit_triangle.n_cells + 5)
+    with pytest.raises(ValueError, match="n_cells"):
+        integrate(unit_triangle, wrong, data_source="cells")
+
+
+def test_wrong_point_tensor_shape(unit_triangle: Mesh):
+    """Tensor with wrong leading dimension for point data raises ValueError."""
+    wrong = torch.ones(unit_triangle.n_points + 5)
+    with pytest.raises(ValueError, match="n_points"):
+        integrate(unit_triangle, wrong, data_source="points")
