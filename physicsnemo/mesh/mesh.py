@@ -1570,7 +1570,8 @@ class Mesh:
         cells = self.cells
         if n_kept == 0 or cells.numel() == 0:
             # Nothing to remap: no points kept, or a point cloud without cells.
-            kept_cell_indices = slice(0, 0)
+            # An integer gather avoids retaining source storage or memmap files.
+            kept_cell_indices = torch.empty(0, dtype=torch.long, device=device)
             new_cells = cells.new_empty((0, cells.shape[1]), dtype=torch.long)
         elif (
             n_points <= _SEARCH_REMAP_RATIO * cells.numel()

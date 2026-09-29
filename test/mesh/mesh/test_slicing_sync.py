@@ -73,6 +73,47 @@ def test_cell_mask_length_is_checked(mesh_with_fields, device, dtype, length):
         mesh_with_fields.slice_cells(mask)
 
 
+@pytest.mark.parametrize("case", ["empty", "cloud"])
+def test_empty_cell_data_does_not_retain_storage(mesh_with_fields, device, case):
+    """Point slicing releases cell-field storage when no cells remain."""
+    mesh = mesh_with_fields
+    if case == "cloud":
+        mesh = mesh.slice_cells(slice(0, 0))
+    indices = torch.tensor(
+        [] if case == "empty" else [1, 2, 3], dtype=torch.long, device=device
+    )
+
+    actual = mesh.slice_points(indices)
+
+    assert actual.n_cells == 0
+    for key in mesh.cell_data.keys(True, True):
+        torch.testing.assert_close(actual.cell_data[key], mesh.cell_data[key][:0])
+        assert actual.cell_data[key].untyped_storage().nbytes() == 0
+
+
+@pytest.mark.parametrize("device", ["cpu"])
+def test_empty_memmap_selection_can_be_saved(mesh_with_fields, tmp_path):
+    """Empty selections can be saved without copying the source memmap files."""
+    source = tmp_path / "source.pmsh"
+    destination = tmp_path / "empty.pmsh"
+    mesh_with_fields.save(source)
+    loaded = mesh_module.Mesh.load(source)
+
+    selected = loaded.slice_points([])
+    selected.save(destination)
+    restored = mesh_module.Mesh.load(destination)
+
+    torch.testing.assert_close(restored.points, selected.points)
+    torch.testing.assert_close(restored.cells, selected.cells)
+    for expected, actual in (
+        (selected.point_data, restored.point_data),
+        (selected.cell_data, restored.cell_data),
+    ):
+        assert set(actual.keys(True, True)) == set(expected.keys(True, True))
+        for key in expected.keys(True, True):
+            torch.testing.assert_close(actual[key], expected[key])
+
+
 @contextmanager
 def _cuda_sync_budget(max_syncs):
     """Count CUDA synchronization warnings without requiring profiler support."""
