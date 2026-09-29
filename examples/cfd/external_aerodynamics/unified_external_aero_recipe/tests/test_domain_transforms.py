@@ -115,6 +115,25 @@ class TestDropDegenerateCells:
             domain.interior.integrate_samples("pressure"), torch.tensor(20.0)
         )
 
+    @pytest.mark.parametrize(
+        "measure", [0.0, -1.0, float("nan"), float("inf"), -float("inf")]
+    )
+    def test_drops_unusable_measures_on_valid_geometry(self, measure):
+        """Retained targets must have usable measures without losing corrections."""
+        mesh = _two_triangles()
+        set_cell_measures(mesh, torch.tensor([2.0, measure]))
+        with pytest.warns(UserWarning, match="dropping 1 cell"):
+            out = DropDegenerateCells()(mesh)
+        domain = MeshToDomainMesh(cell_data_targets=["pressure"])(out)
+
+        torch.testing.assert_close(
+            domain.interior.point_data["pressure"], torch.tensor([10.0])
+        )
+        torch.testing.assert_close(point_measures(domain.interior), torch.tensor([2.0]))
+        torch.testing.assert_close(
+            domain.interior.integrate_samples("pressure"), torch.tensor(20.0)
+        )
+
     def test_rechecks_coordinates_after_area_cache_was_populated(self):
         """Cached positive areas cannot hide a subsequently collapsed face."""
         mesh = _two_triangles()
@@ -140,17 +159,15 @@ class TestDropDegenerateCells:
         assert torch.isfinite(out.points[out.cells]).all()
         torch.testing.assert_close(out.cell_data["pressure"], torch.tensor([10.0]))
 
-    def test_all_rejected_cells_return_empty_connectivity_and_data(self):
-        """An entirely collapsed mesh keeps empty cell fields aligned."""
+    def test_all_rejected_cells_raise_clear_error(self):
+        """An entirely collapsed sample fails at the filter."""
         mesh = _two_triangles()
         mesh.points.zero_()
 
-        with pytest.warns(UserWarning, match="dropping 2 cell"):
-            out = DropDegenerateCells()(mesh)
-
-        assert out.cells.shape == (0, 3)
-        assert out.cell_data["pressure"].shape == (0,)
-        assert out.n_points == mesh.n_points
+        with pytest.raises(
+            ValueError, match="DropDegenerateCells: no usable cells remain"
+        ):
+            DropDegenerateCells()(mesh)
 
     def test_drops_faces_collapsed_by_coordinate_rounding(self):
         """The check sees geometry after a translation rounds vertices together."""
@@ -158,10 +175,10 @@ class TestDropDegenerateCells:
         translated = mesh.translate(torch.full((3,), 1e8))
         assert torch.equal(translated.points[0], translated.points[1])
 
-        with pytest.warns(UserWarning, match="dropping 2 cell"):
-            out = DropDegenerateCells()(translated)
-
-        assert out.n_cells == 0
+        with pytest.raises(
+            ValueError, match="DropDegenerateCells: no usable cells remain"
+        ):
+            DropDegenerateCells()(translated)
 
     def test_other_simplex_dimensions_use_fresh_measure(self):
         """The general simplex path still drops a collapsed 2D triangle."""
@@ -251,3 +268,71 @@ def test_drivaer_dataset_pipeline_preserves_thin_face_and_aligns_targets(
     loss.backward()
     torch.testing.assert_close(prediction.grad, 2 * weights * error.detach())
     assert "TimeValue" not in domain.global_data
+
+
+@pytest.mark.parametrize("all_rejected", [False, True])
+def test_shift_dataset_rejects_unusable_centroid_measures(tmp_path, all_rejected):
+    """Run cached geometry through the configured SHIFT-SUV pipeline."""
+    points = torch.tensor(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 1.0, 0.0],
+            [4.0, 2.0, 0.0],
+        ]
+    )
+    if all_rejected:
+        points.zero_()
+    vehicle = Mesh(
+        points=points,
+        cells=torch.arange(6).reshape(2, 3),
+        cell_data={
+            "pressure_average": torch.tensor([100.0, 200.0]),
+            "wall_shear_stress_average": torch.zeros(2, 3),
+        },
+    )
+    # Cached normals let nondimensionalization preserve the area cache populated
+    # by CenterMesh. Centering rounds the collinear face into a positive-area
+    # triangle, but its measure remains zero and must not reach the queries.
+    _ = vehicle.cell_normals
+    source = DomainMesh(
+        interior=Mesh(points=torch.zeros(0, 3)),
+        boundaries={"vehicle": vehicle},
+        global_data={
+            "U_inf": torch.tensor([10.0, 0.0, 0.0]),
+            "rho_inf": torch.tensor(2.0),
+            "p_inf": torch.tensor(0.0),
+            "L_ref": torch.tensor(1.0),
+        },
+    )
+    sample_path = tmp_path / "estate" / "run_001" / "domain.pdmsh"
+    sample_path.parent.mkdir(parents=True)
+    source.save(sample_path)
+    recipe = Path(__file__).resolve().parent.parent
+    cfg = OmegaConf.merge(
+        OmegaConf.load(recipe / "datasets" / "shift_suv_estate_surface.yaml"),
+        {"dataset_paths": {"shift_suv": str(tmp_path)}, "sampling_resolution": 2},
+    )
+    dataset = build_dataset(cfg, augment=False, device=None, num_workers=1)
+    try:
+        if all_rejected:
+            with pytest.raises(
+                ValueError, match="DropDegenerateCells: no usable cells remain"
+            ):
+                dataset[0]
+            return
+        with pytest.warns(UserWarning, match="dropping 1 cell"):
+            domain, _ = dataset[0]
+    finally:
+        DatasetBase.close(dataset)
+
+    assert domain.boundaries["vehicle"].n_cells == domain.interior.n_points == 1
+    torch.testing.assert_close(
+        domain.interior.point_data["pressure"], torch.tensor([1.0])
+    )
+    torch.testing.assert_close(point_measures(domain.interior), torch.tensor([0.5]))
+    torch.testing.assert_close(
+        domain.interior.integrate_samples("pressure"), torch.tensor(0.5)
+    )

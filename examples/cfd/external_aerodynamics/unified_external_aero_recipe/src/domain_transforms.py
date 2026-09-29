@@ -17,8 +17,8 @@
 """
 Small mesh transforms used by the surface dataset pipelines.
 
-- :class:`DropDegenerateCells` checks the current coordinates for collapsed
-  or non-finite cells using the same geometric measures as centroid conversion.
+- :class:`DropDegenerateCells` checks current cell geometry and the integration
+  measures passed to centroid conversion.
 
 Recipe-local module registered into the global datapipe component
 registry so components can be referenced via ``${dp:...}`` in Hydra
@@ -36,23 +36,25 @@ import torch
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
 from physicsnemo.mesh import Mesh
+from physicsnemo.mesh.calculus import cell_measures
 from physicsnemo.mesh.geometry import compute_cell_areas
 
 
 @register()
 class DropDegenerateCells(MeshTransform):
-    r"""Drop cells with non-finite or degenerate current geometry.
+    r"""Drop cells with invalid geometry or unusable integration measures.
 
     Recompute geometric measures from the current coordinates, in the mesh's
     dtype, using the same area routine as ``Mesh.cell_areas``. Its direct
     triangle area calculation preserves thin valid faces without Gram
-    cancellation. Cached areas are ignored: centering, rotation, and scaling
-    can collapse a face through rounding. Cells whose area is zero or
-    non-finite in the mesh's dtype cannot supply usable quadrature weights.
+    cancellation. Geometry is checked independently of caches: centering,
+    rotation, and scaling can collapse a face through rounding. The integration
+    measures used by centroid conversion must also be finite and positive.
 
     Place this last in the transform chain so it sees the same coordinates
     the model will. Meshes without rejected cells pass through unchanged.
-    Only cells and their associated data are sliced; vertices are retained.
+    Only cells and their associated data are sliced; vertices and valid sampling
+    corrections are retained. Raise ``ValueError`` if every cell is rejected.
     """
 
     def __call__(self, mesh: Mesh) -> Mesh:
@@ -62,12 +64,24 @@ class DropDegenerateCells(MeshTransform):
         edges = cell_points[:, 1:] - cell_points[:, :1]
         finite_points = torch.isfinite(cell_points).all(dim=(-2, -1))
         areas = compute_cell_areas(edges)
-        keep = finite_points & torch.isfinite(areas) & (areas > 0)
+        measures = cell_measures(mesh)
+        keep = (
+            finite_points
+            & torch.isfinite(areas)
+            & (areas > 0)
+            & torch.isfinite(measures)
+            & (measures > 0)
+        )
         n_bad = int((~keep).sum())
         if n_bad == 0:
             return mesh
+        if n_bad == mesh.n_cells:
+            raise ValueError(
+                f"DropDegenerateCells: no usable cells remain; all {n_bad} cells "
+                "have invalid geometry or non-finite/non-positive integration measures."
+            )
         warn(
             f"DropDegenerateCells: dropping {n_bad} cell(s) with "
-            "non-finite or degenerate geometry"
+            "invalid geometry or non-finite/non-positive integration measures"
         )
         return mesh.slice_cells(keep)
