@@ -25,7 +25,10 @@ Both use tensorclass .load(path) directly; no conversion from other formats.
 from __future__ import annotations
 
 import glob as _glob
+import importlib
 import logging
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -38,6 +41,50 @@ from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY, scale_measures
 
 logger = logging.getLogger(__name__)
+
+_RO_LOCK = threading.Lock()
+_RO_DEPTH = 0
+_RO_ORIGINAL = None
+
+
+@contextmanager
+def read_only_memory_maps():
+    """Map memmap-backed tensors read-only while loading a saved mesh.
+
+    ``tensordict`` opens a memory-mapped file read-write and *shared* whenever
+    the process may write it (``torch.from_file(shared=True)``).  Page faults
+    through such a mapping take write extent locks on a networked file system,
+    and two readers on different nodes faulting the same case then wait on each
+    other indefinitely (observed as a training hang on a Lustre-hosted dataset).
+    Datasets are immutable artifacts, so the readers below load them under this
+    context, which makes ``tensordict`` map every file read-only regardless of
+    the file permissions.  Re-entrant and thread-safe: the original behaviour is
+    restored when the outermost context exits.
+
+    This patches the private ``tensordict.memmap._is_writable`` predicate, the
+    single place where ``tensordict`` decides the mapping mode; there is no
+    public switch for it.
+    """
+    global _RO_DEPTH, _RO_ORIGINAL
+
+    # ``tensordict.memmap`` the submodule is shadowed by the ``memmap`` function at
+    # package level, so it is fetched through importlib.
+    _tdm = importlib.import_module("tensordict.memmap")
+
+    with _RO_LOCK:
+        if _RO_DEPTH == 0:
+            _RO_ORIGINAL = _tdm._is_writable
+            _tdm._is_writable = lambda file_path: False
+        _RO_DEPTH += 1
+    try:
+        yield
+    finally:
+        with _RO_LOCK:
+            _RO_DEPTH -= 1
+            if _RO_DEPTH == 0:
+                _tdm._is_writable = _RO_ORIGINAL
+                _RO_ORIGINAL = None
+
 
 # Default extensions for physicsnemo mesh formats (tensordict/tensorclass layout).
 # Do not hardcode elsewhere so format can evolve.
@@ -333,7 +380,8 @@ class MeshReader:
                     generator,
                 )
             return from_zarr(mesh_path)
-        return Mesh.load(mesh_path)
+        with read_only_memory_maps():
+            return Mesh.load(mesh_path)
 
     def _get_sample_metadata(self, index: int) -> dict[str, Any]:
         """Return metadata for the sample (e.g. source path)."""
@@ -573,7 +621,8 @@ class DomainMeshReader:
                     global_data=io_zarr._read_tree(root, "global_data"),
                 )
             return from_zarr(path)
-        return DomainMesh.load(path)
+        with read_only_memory_maps():
+            return DomainMesh.load(path)
 
     def __len__(self) -> int:
         return len(self._paths)
@@ -699,7 +748,8 @@ class DomainMeshReader:
 
                 new_boundaries[bnd_name] = from_zarr(matches[0])
             else:
-                new_boundaries[bnd_name] = Mesh.load(matches[0])
+                with read_only_memory_maps():
+                    new_boundaries[bnd_name] = Mesh.load(matches[0])
 
         return DomainMesh(
             interior=dm.interior,

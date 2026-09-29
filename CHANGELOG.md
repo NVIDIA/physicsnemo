@@ -114,6 +114,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `MeshReader` and `DomainMeshReader` map saved meshes read-only. `tensordict`
+  maps an owner-writable memmap file read-write and shared, and on a networked
+  file system two ranks faulting the same file then wait on each other's write
+  extent locks (observed as a training hang on Lustre).
 - Triangle areas use direct area components and a rescaled norm, preserving
   thin faces and their quadrature measures without Gram cancellation or
   overflow/underflow in the norm.
