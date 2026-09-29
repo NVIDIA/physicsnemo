@@ -49,6 +49,14 @@ controlled by its own environment variable:
 - **Triton**: `TRITON_CACHE_DIR` → `$JIT_CACHE_DIR/triton`
 - **torch.compile / Inductor**: `TORCHINDUCTOR_CACHE_DIR` → `$JIT_CACHE_DIR/inductor`
 
+Static multi-GPU workers instead use
+`$JIT_CACHE_DIR/inductor/rank-$LOCAL_RANK`. Inductor's cached wrappers can
+contain device-specific code, so ranks must not share that directory.
+The dynamic multi-GPU stream unsets `TORCHINDUCTOR_CACHE_DIR` before
+launching pytest, allowing `DistributedManager` to choose a separate
+temporary cache directory for each spawned rank. An explicit shared
+directory would bypass that isolation.
+
 The cache is additive and survives lockfile changes.  Correctness is
 guaranteed by each compiler's built-in source-hash invalidation: Warp
 hashes kernel source and recompiles changed kernels; Triton and
