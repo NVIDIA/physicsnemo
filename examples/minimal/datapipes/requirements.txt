@@ -2,4 +2,4 @@ jupyter
 matplotlib
 torch_geometric
 scipy
-zarr>=3
+zarr>=3.1.6

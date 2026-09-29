@@ -179,8 +179,8 @@ class TestCellAreas:
         pv_sized = pv_mesh.compute_cell_sizes(area=False, volume=True)
         pv_volumes = pv_sized.cell_data["Volume"]  # shape: (n_cells,)
 
-        ### Compare results
-        pv_tensor = torch.from_numpy(pv_volumes).float()
+        ### VTK can return signed tetrahedron volumes; Mesh measures are unsigned.
+        pv_tensor = torch.from_numpy(pv_volumes).abs().float()
         assert torch.allclose(mesh_volumes, pv_tensor, atol=ATOL, rtol=RTOL), (
             f"Cell volumes differ for sphere volume mesh.\n"
             f"Max diff: {(mesh_volumes - pv_tensor).abs().max()}"

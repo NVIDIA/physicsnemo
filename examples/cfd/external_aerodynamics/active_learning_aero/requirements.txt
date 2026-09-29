@@ -11,7 +11,7 @@ torchinfo
 einops
 transformer_engine[pytorch]
 tensorstore
-zarr>=3.0
+zarr>=3.1.6
 gpytorch
 pyvista
 matplotlib

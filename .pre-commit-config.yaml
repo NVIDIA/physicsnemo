@@ -16,12 +16,13 @@
 
 repos:
 -   repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.12.5
+    rev: v0.16.9
     hooks:
       - id: ruff-check
         args: [--fix]
         exclude: ^examples/
       - id: ruff-format
+        types_or: [python, pyi, jupyter]
 
 -   repo: local
     hooks:
@@ -34,7 +35,7 @@ repos:
       exclude: ^docs/|^physicsnemo/experimental/|^test/
 
 -   repo: https://github.com/igorshubovych/markdownlint-cli
-    rev: v0.35.0
+    rev: v0.49.1
     hooks:
     - id: markdownlint
       exclude: ^skills/
@@ -50,16 +51,16 @@ repos:
       exclude: ^(physicsnemo/internal/|docs/)
 
 -   repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v3.4.0
+    rev: v6.0.0
     hooks:
     - id: check-added-large-files
       args: [--maxkb=5000]
 
 -   repo: https://github.com/seddonym/import-linter
-    rev: v2.11
+    rev: v2.15
     hooks:
     - id: import-linter
       language: python
       additional_dependencies:
-      - packaging==26.0
+      - packaging==26.3
       args: [--verbose]

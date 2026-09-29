@@ -1,6 +1,6 @@
-mlflow>=3.12.0
+mlflow>=3.16.1
 hydra-core
 wandb
-termcolor>=2.1.1
-torch_geometric>=2.6.1
+termcolor>=3.3.0
+torch_geometric>=2.8.0.post1
 torch_scatter>=2.1.2

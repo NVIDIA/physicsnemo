@@ -1,8 +1,8 @@
-gdown>=5.2.2
-psutil>=6.0.0
-termcolor>=2.1.1
-hydra-core>=1.2.0
-scipy>=1.15.0
-matplotlib>=3.8.0
-torch_geometric>=2.6.1
+gdown>=6.4.1
+psutil>=7.2.2
+termcolor>=3.3.0
+hydra-core>=1.3.7
+scipy>=1.17.1
+matplotlib>=3.11.2
+torch_geometric>=2.8.0.post1
 torch_scatter>=2.1.2

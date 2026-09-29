@@ -53,6 +53,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Refresh core, optional, development, example, and container dependency
+  versions. Require PyTorch 2.13 or newer and TensorDict 0.14.2 or newer;
+  use CUDA 12.6 wheels for the CUDA 12 backend. NATTEN extras select
+  PyTorch 2.13 to match their prebuilt kernels. Python support remains
+  3.11 through 3.14.
+
 - Mesh integration uses a shared `_effective_measure` field for complete cell
   and point measures. Cell measures fall back to geometry; point measures are
   explicit and independent of connectivity. `Mesh.integrate_samples` evaluates
@@ -228,8 +234,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a portable `funcol` path and an intra-node symmetric-memory (CUDA-IPC) path.
 - Extends `halo_scatter` with `pack_halo_routing(cap=)` fixed-shape routing (for compiled
   `dynamic=False` runs), an in-place `scatter_add_` / `index_add_` dispatch handler, and
-  node-locality routing in `select_halo_backend` (single-node uses symm-mem, multi-node falls
-  back to `funcol`).
+  node-locality routing in `select_halo_backend` (single-node uses symm-mem,
+  multi-node falls back to `funcol`).
 - Adds a `ShardTensor.grad_dtype` property override (returns the local tensor's dtype)
   so a newer-PyTorch `grad_dtype` read during Dynamo fake conversion doesn't fall back
   to a non-leaf DTensor and break compile. Mirrors the `grad_fn` / `is_leaf` / `grad`
@@ -1034,7 +1040,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   implementation. Use `torch.nn.init.trunc_normal_` directly.
 - Deprecates the CorrDiff example (`examples/weather/corrdiff`), which no longer
   receives maintenance, bug fixes, or new features. Use the regional
-  high-resolution weather model example (`examples/weather/regional_weather_diffusion`) instead.
+  high-resolution weather model example
+  (`examples/weather/regional_weather_diffusion`) instead.
   That example unifies regional diffusion-based weather models, and covers the
   CorrDiff downscaling setting alongside other diffusion-based settings.
 
@@ -1049,10 +1056,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Fixed functional benchmark plot fallback labeling so unlabeled ASV results use
   the same key ordering as the benchmark runner.
-- Fixed graph break caused by `FunctionSpec` dispatch (`max(key=)` is not supported by `torch.compile`)
+- Fixed graph break caused by `FunctionSpec` dispatch (`max(key=)` is not
+  supported by `torch.compile`)
 - Fixed bug in Pangu, FengWu attention window shift for asymmetric longitudes
-- Fixed a bug in `mesh.sampling.find_nearest_cells`, where a mixup between L2 and L-inf norms
-  could cause slightly incorrect nearest-neighbor assignments in highly skewed meshes.
+- Fixed a bug in `mesh.sampling.find_nearest_cells`, where a mixup between
+  L2 and L-inf norms could cause slightly incorrect nearest-neighbor
+  assignments in highly skewed meshes.
 - Fixed TensorDict key-ordering bug in GLOBE's Barnes-Hut kernel that caused
   incorrect results when `tensordict >= 0.12` reordered leaves during
   TensorDict construction from dict literals mixing plain and nested keys.

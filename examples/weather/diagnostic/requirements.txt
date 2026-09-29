@@ -1,2 +1,2 @@
 hydra-core
-termcolor>=2.1.1
+termcolor>=3.3.0
