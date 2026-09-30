@@ -4,7 +4,7 @@
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# You may obtain a copy of the License at/
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 #
@@ -332,9 +332,6 @@ class RandomRotateMesh(MeshTransform):
             raise ValueError("axes cannot be combined with mode='uniform'")
         if mode not in ("axis_aligned", "uniform"):
             raise ValueError(f"mode must be 'axis_aligned' or 'uniform', got {mode!r}")
-        # A tuple, whatever sequence the caller passed: Hydra hands configs over as
-        # OmegaConf ListConfig, which rejects the one-element index tensor drawn in
-        # ``_sample_axis_and_angle`` (a Python sequence accepts it via __index__).
         self.axes = tuple(axes) if axes is not None else ("x", "y", "z")
         self._distribution = distribution or torch.distributions.Uniform(
             -math.pi, math.pi
