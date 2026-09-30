@@ -56,7 +56,7 @@ def as_timestamp(time) -> np.ndarray:
 
 def second_of_day(time):
     """Return seconds elapsed since the start of the day for *time*."""
-    begin_of_day = time.replace(hour=0, second=0, minute=0)
+    begin_of_day = time.replace(hour=0, minute=0, second=0, microsecond=0)
     return (time - begin_of_day).total_seconds()
 
 
@@ -86,13 +86,13 @@ def cftime_to_timestamp(time: cftime.datetime) -> float:
 
 def compute_second_of_day(time: cftime.datetime) -> float:
     """Return seconds elapsed since midnight for *time*."""
-    day_start = time.replace(hour=0, minute=0, second=0)
+    day_start = time.replace(hour=0, minute=0, second=0, microsecond=0)
     return (time - day_start) / datetime.timedelta(seconds=1)
 
 
 def compute_day_of_year(time: cftime.datetime) -> float:
     """Return fractional day-of-year for *time*."""
-    day_start = time.replace(hour=0, minute=0, second=0)
+    day_start = time.replace(hour=0, minute=0, second=0, microsecond=0)
     year_start = day_start.replace(month=1, day=1)
     return (time - year_start) / datetime.timedelta(seconds=86400)
 

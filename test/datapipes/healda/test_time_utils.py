@@ -28,6 +28,9 @@ from physicsnemo.experimental.datapipes.healda.time_utils import (  # noqa: E402
     as_numpy,
     as_pydatetime,
     as_timestamp,
+    compute_day_of_year,
+    compute_second_of_day,
+    second_of_day,
 )
 
 
@@ -74,3 +77,17 @@ def test_as_timestamp():
     result = as_timestamp(idx)
     assert result.dtype == int
     assert result[0] == 1577836800  # 2020-01-01T00:00:00 UTC
+
+
+def test_fractional_second_is_kept_since_midnight():
+    stamped = datetime.datetime(2024, 1, 1, 1, 0, 0, 500000)
+    assert second_of_day(stamped) == 3600.5
+    assert second_of_day(datetime.datetime(2024, 1, 1, 1, 0, 0)) == 3600.0
+
+    fraction = cftime.DatetimeGregorian(2024, 1, 1, 0, 0, 0, 500000)
+    assert compute_second_of_day(fraction) == 0.5
+    expected_day = datetime.timedelta(microseconds=500000) / datetime.timedelta(seconds=86400)
+    assert compute_day_of_year(fraction) == expected_day
+
+    noon = cftime.DatetimeGregorian(2024, 6, 15, 12, 0, 0)
+    assert compute_second_of_day(noon) == 12 * 3600
