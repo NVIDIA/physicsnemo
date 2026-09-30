@@ -118,10 +118,13 @@ name = "pytorch-cu130"
 url = "https://download.pytorch.org/whl/cu130"
 explicit = true
 
-# PyTorch 2.13+ publishes CUDA 12 wheels on the CUDA 12.6 index.
+# PyTorch 2.13 is the newest release with CUDA 12.9 wheels. CUDA 12.9 keeps
+# Blackwell kernels and satisfies RAPIDS' nvJitLink>=12.9 requirement; later
+# PyTorch releases publish CUDA 12 wheels only for CUDA 12.6, which stops at
+# sm_90. Linux only: this index has no Windows wheels.
 [[tool.uv.index]]
-name = "pytorch-cu126"
-url = "https://download.pytorch.org/whl/cu126"
+name = "pytorch-cu129"
+url = "https://download.pytorch.org/whl/cu129"
 explicit = true
 
 # NATTEN pre-built wheel indexes (flat HTML pages), split by CUDA version AND
@@ -129,6 +132,8 @@ explicit = true
 # and torch versions in local version identifiers (e.g. 0.21.7+torch2130cu126).
 # Keep these URLs and the torch pins in the natten extras in sync: the binary
 # extensions must use the same PyTorch ABI as the runtime.
+# NATTEN publishes no CUDA 12.9 build; its CUDA 12.6 wheels run on the CUDA
+# 12.9 PyTorch runtime but contain kernels only through sm_90.
 # See https://natten.org/install/ for available builds.
 [[tool.uv.index]]
 name = "natten-cu126-whl"
@@ -143,17 +148,28 @@ format = "flat"
 explicit = true
 
 [tool.uv.sources]
-# When cu12 is active, torch/torchvision come from the CUDA 12.6 index.
-# When cu13 is active, they come from the CUDA 13.0 index.
-# When neither extra is active (bare install), they come from PyPI.
+# When a CUDA 12 extra is active, torch/torchvision come from the CUDA 12.9
+# index; with a CUDA 13 extra, they come from the CUDA 13.0 index. The NATTEN
+# and Transformer Engine extras select the index too, so their CUDA binaries
+# match PyTorch even without cu12/cu13. Every extra listed here must also
+# declare torch and torchvision.
+# When no CUDA extra is active (bare install), they come from PyPI.
 # On macOS, CUDA extras should not be used (no GPU builds available).
 torch = [
-    { index = "pytorch-cu126", extra = "cu12" },
+    { index = "pytorch-cu129", extra = "cu12" },
+    { index = "pytorch-cu129", extra = "natten-cu12" },
+    { index = "pytorch-cu129", extra = "transformer-engine-cu12" },
     { index = "pytorch-cu130", extra = "cu13" },
+    { index = "pytorch-cu130", extra = "natten-cu13" },
+    { index = "pytorch-cu130", extra = "transformer-engine-cu13" },
 ]
 torchvision = [
-    { index = "pytorch-cu126", extra = "cu12" },
+    { index = "pytorch-cu129", extra = "cu12" },
+    { index = "pytorch-cu129", extra = "natten-cu12" },
+    { index = "pytorch-cu129", extra = "transformer-engine-cu12" },
     { index = "pytorch-cu130", extra = "cu13" },
+    { index = "pytorch-cu130", extra = "natten-cu13" },
+    { index = "pytorch-cu130", extra = "transformer-engine-cu13" },
 ]
 cuml-cu13 = { index = "nvidia" }
 cuml-cu12 = { index = "nvidia" }
@@ -263,14 +279,13 @@ cu13 = [
     "nvidia-dali-cuda130>=2.3.0",
 ]
 cu12 = [
-    "torch>=2.13.0",
+    # PyTorch 2.14+ has no CUDA 12.9 wheels; see the pytorch-cu129 index.
+    "torch>=2.13.0,<2.14",
     "torchvision>=0.28.0",
-    # RAPIDS 26.4+ requires nvJitLink 12.9, while torch's cu126 build pins 12.6.
-    "cuml-cu12>=26.2.0",
-    "pylibraft-cu12>=26.2.0",
+    "cuml-cu12>=26.8.0",
+    "pylibraft-cu12>=26.8.0",
     "cupy-cuda12x>=14.2.0",
-    # Match RAPIDS 26.2's libnvcomp dependency.
-    "nvidia-dali-cuda120>=2.1.0",
+    "nvidia-dali-cuda120>=2.3.0",
 ]
 # NATTEN pre-built wheel extras (mutually exclusive via [tool.uv] conflicts).
 # Pair with the matching CUDA backend extra, e.g.:
@@ -280,10 +295,12 @@ cu12 = [
 # Without these extras, install NATTEN separately; see https://natten.org/install/.
 natten-cu12 = [
     "torch==2.13.0",
+    "torchvision>=0.28.0",
     "natten>=0.21.7",
 ]
 natten-cu13 = [
     "torch==2.13.0",
+    "torchvision>=0.28.0",
     "natten>=0.21.7",
 ]
 # Transformer Engine extras (mutually exclusive via [tool.uv] conflicts).
@@ -296,9 +313,13 @@ natten-cu13 = [
 # env.  See [[tool.uv.dependency-metadata]] above for the matching
 # override on transformer-engine-torch's dynamic CUDA dep.
 transformer-engine-cu12 = [
+    "torch>=2.13.0,<2.14",
+    "torchvision>=0.28.0",
     "transformer_engine[core_cu12,pytorch]>=2.19.0",
 ]
 transformer-engine-cu13 = [
+    "torch>=2.13.0",
+    "torchvision>=0.28.0",
     "transformer_engine[core_cu13,pytorch]>=2.19.0",
 ]
 utils-extras = [

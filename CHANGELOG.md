@@ -55,8 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Refresh core, optional, development, and container dependency versions.
   Require PyTorch 2.13 or newer and TensorDict 0.14.2 or newer;
-  use CUDA 12.6 wheels for the CUDA 12 backend. NATTEN extras select
-  PyTorch 2.13 to match their prebuilt kernels. Python support remains
+  use PyTorch 2.13's CUDA 12.9 wheels for the CUDA 12 backend. NATTEN
+  extras select PyTorch 2.13 to match their prebuilt kernels. Python support remains
   3.11 through 3.14.
 
 - Mesh integration uses a shared `_effective_measure` field for complete cell
