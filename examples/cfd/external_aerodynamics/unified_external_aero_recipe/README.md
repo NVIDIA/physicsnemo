@@ -210,7 +210,7 @@ geometric embeddings.
 
 ### DomainMesh contract and the data-to-model mapping
 
-Each dataset YAML's pipeline produces a [`DomainMesh`](../../../physicsnemo/mesh/domain_mesh.py)
+Each dataset YAML's pipeline produces a [`DomainMesh`](../../../../physicsnemo/mesh/domain_mesh.py)
 that follows a simple semantic contract:
 
 - **`interior`** — answers "where should the output be?". For surface
