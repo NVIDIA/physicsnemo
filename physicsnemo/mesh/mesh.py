@@ -1488,9 +1488,6 @@ class Mesh(
         copied. Mutating shared data on the result therefore also mutates the
         source; clone first if you need an independent copy.
 
-        Selections other than ``None`` / ``Ellipsis`` return a base ``Mesh``
-        without additional subclass fields.
-
         On CUDA, boolean point masks and filtering surviving cells require
         host-device synchronization to determine output sizes. Integer point
         indices avoid these waits for meshes without cells or empty selections.
@@ -1650,9 +1647,6 @@ class Mesh(
         ``Ellipsis`` return this mesh itself. Mutating any shared field on the
         result therefore also mutates the source; clone first if you need an
         independent copy.
-
-        Selections other than ``None`` / ``Ellipsis`` return a base ``Mesh``
-        without additional subclass fields.
 
         A one-dimensional CUDA boolean mask requires one host-device
         synchronization to determine the output cell count. Integer index
