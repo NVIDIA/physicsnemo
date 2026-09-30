@@ -114,6 +114,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `RandomRotateMesh` stores its `axes` as a tuple. Hydra instantiates
+  transforms with OmegaConf containers, and a `ListConfig` rejected the
+  one-element index tensor drawn for the axis, so every augmented sample
+  raised `KeyValidationError`; a plain sequence indexes by tensor through
+  `__index__`.
 - Mesh slicing reuses integer indices across connectivity, fields, and caches
   to avoid repeated CUDA synchronization for the same boolean mask.
   Point slicing skips mask processing when the output has no cells because
