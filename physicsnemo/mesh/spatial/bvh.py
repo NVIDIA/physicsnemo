@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING
 
 import torch
 from jaxtyping import Bool, Float, Int
-from tensordict import tensorclass
+from tensordict import TensorClass
 
 from physicsnemo.mesh.neighbors._adjacency import Adjacency, build_adjacency_from_pairs
 from physicsnemo.mesh.spatial._lbvh import build_lbvh_topology
@@ -257,8 +257,7 @@ def _compute_leaf_aabbs(
 # ---------------------------------------------------------------------------
 
 
-@tensorclass
-class BVH:
+class BVH(TensorClass):
     """Bounding Volume Hierarchy for efficient spatial queries.
 
     The BVH is stored as flat tensors for GPU compatibility, avoiding

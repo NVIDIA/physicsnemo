@@ -53,10 +53,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `physicsnemo.mesh.Mesh` and `DomainMesh` now inherit directly from
-  `TensorClass`. Existing constructor defaults and `Mesh[m, s]` runtime
-  specialization remain available, nested mesh types survive memmap round
-  trips, and decorator-era `.pmsh` / `.pdmsh` files remain readable.
+- `physicsnemo.mesh.Mesh`, `DomainMesh`, `Adjacency`, `BVH`, `ClusterTree`,
+  `DualInteractionPlan`, and `SourceAggregates` now inherit directly from
+  `TensorClass` instead of using the `@tensorclass` decorator. Existing
+  constructor defaults and `Mesh[m, s]` runtime specialization remain
+  available, and nested mesh types survive memmap round trips. The memmap
+  layout is unchanged: existing `.pmsh` / `.pdmsh` files remain readable, and
+  new files are byte-identical to those written with the decorator.
 - Mesh integration uses a shared `_effective_measure` field for complete cell
   and point measures. Cell measures fall back to geometry; point measures are
   explicit and independent of connectivity. `Mesh.integrate_samples` evaluates

@@ -49,7 +49,7 @@ from typing import NamedTuple
 import torch
 import torch.nn.functional as F
 from jaxtyping import Float, Int
-from tensordict import TensorDict, tensorclass
+from tensordict import TensorClass, TensorDict
 from torch.profiler import record_function
 
 from physicsnemo.mesh.spatial._lbvh import build_lbvh_topology
@@ -64,8 +64,7 @@ logger = logging.getLogger("mesh.spatial.cluster_tree")
 # ---------------------------------------------------------------------------
 
 
-@tensorclass
-class DualInteractionPlan:
+class DualInteractionPlan(TensorClass):
     r"""Result of a dual-tree Barnes-Hut traversal: four categories of
     interactions that together cover all source contributions for every
     target point.
@@ -568,8 +567,7 @@ def _sort_by_key(
 # ---------------------------------------------------------------------------
 
 
-@tensorclass
-class ClusterTree:
+class ClusterTree(TensorClass):
     r"""Hierarchical spatial decomposition for Barnes-Hut kernel acceleration.
 
     Stores a binary radix tree over source points as flat GPU-compatible tensors.
@@ -1311,8 +1309,7 @@ class ClusterTree:
 # ---------------------------------------------------------------------------
 
 
-@tensorclass
-class SourceAggregates:
+class SourceAggregates(TensorClass):
     """Per-node aggregated source data for far-field monopole approximation.
 
     Computed by :meth:`ClusterTree.compute_source_aggregates` and consumed
