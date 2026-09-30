@@ -14,41 +14,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Regenerate the current ``.pmsh`` layout manifest.
+"""Build and write the canonical ``.pmsh`` golden fixture.
 
-The companion test keeps two compatibility records:
+``v2.0_two_triangles.pmsh`` is immutable data written by the decorator-based
+``Mesh`` implementation. The companion test checks that it loads exactly and
+that a fresh save reproduces its directory and metadata layout.
 
-- ``v2.0_two_triangles.pmsh`` is immutable legacy data written by the
-  decorator-based ``Mesh`` implementation. It protects backward reads.
-- ``current_manifest.json`` is a compact snapshot of the current writer layout.
-
-Run this script when the current ``.pmsh`` writer intentionally changes:
+If the writer layout intentionally changes, keep this fixture for backward
+reads and write a new one beside it:
 
 .. code-block:: bash
 
-    uv run --no-sync python -m test.mesh.mesh.golden_pmsh._regenerate
-
-Then commit the updated manifest. Never regenerate the legacy fixture with
-current code.
+    uv run --no-sync python -m test.mesh.mesh.golden_pmsh._regenerate <new_fixture_dir>
 """
 
 from __future__ import annotations
 
-import json
-import tempfile
+import sys
 from pathlib import Path
 
 import torch
 
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.primitives.basic import two_triangles_2d
-from test.mesh._serialization_manifest import serialization_manifest
 
 ### Fixture identity #########################################################
 
-CURRENT_MANIFEST_PATH: Path = (
-    Path(__file__).parent / "current_manifest.json"
-).resolve()
 LEGACY_FIXTURE_DIR: Path = (Path(__file__).parent / "v2.0_two_triangles.pmsh").resolve()
 
 
@@ -86,15 +77,13 @@ def build_canonical_mesh() -> Mesh:
     return mesh
 
 
-def regenerate(manifest_path: Path = CURRENT_MANIFEST_PATH) -> None:
-    """Write a snapshot of the current writer's directory and metadata layout."""
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        fixture_dir = Path(tmp_dir) / "current.pmsh"
-        build_canonical_mesh().save(fixture_dir)
-        manifest = serialization_manifest(fixture_dir)
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
-    print(f"Wrote {manifest_path.relative_to(Path.cwd())} ({len(manifest)} entries)")
+def regenerate(fixture_dir: Path) -> None:
+    """Write the canonical mesh to a new fixture directory."""
+    if fixture_dir.exists():
+        raise FileExistsError(f"{fixture_dir} exists; committed fixtures are immutable")
+    build_canonical_mesh().save(fixture_dir)
+    print(f"Wrote {fixture_dir}")
 
 
 if __name__ == "__main__":
-    regenerate()
+    regenerate(Path(sys.argv[1]))

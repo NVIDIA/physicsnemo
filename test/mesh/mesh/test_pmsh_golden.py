@@ -16,28 +16,26 @@
 
 """Writer-layout and backward-read tests for the ``.pmsh`` memmap format.
 
-``golden_pmsh/`` contains an immutable decorator-era fixture and a compact
-manifest of the current ``TensorClass`` writer layout. The legacy fixture must
-reconstruct an exact :class:`~physicsnemo.mesh.Mesh`; current files are written
-and round-tripped at runtime.
+``golden_pmsh/`` contains an immutable fixture written by the decorator-based
+:class:`~physicsnemo.mesh.Mesh`. It must reconstruct an exact ``Mesh``, and a
+fresh save must reproduce its directory and metadata layout. Current files are
+also written and round-tripped at runtime.
 
-To intentionally update the current writer layout, run
-``python -m test.mesh.mesh.golden_pmsh._regenerate`` and commit the new
-manifest without replacing the legacy fixture.
+If the writer layout intentionally changes, keep this fixture for backward
+reads and add a new one with ``python -m test.mesh.mesh.golden_pmsh._regenerate``.
 """
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 import torch
+from tensordict import TensorDict
 
 from physicsnemo.mesh.mesh import Mesh
 from test.mesh._serialization_manifest import serialization_manifest
 from test.mesh.mesh.golden_pmsh._regenerate import (
-    CURRENT_MANIFEST_PATH,
     LEGACY_FIXTURE_DIR,
     build_canonical_mesh,
 )
@@ -64,8 +62,8 @@ class TestPmshGoldenFixture:
 
     def test_reconstructs_exact_mesh_type(self, fixture_dir: Path):
         """Both layouts reconstruct the structured type, not a TensorDict."""
-        loaded = Mesh.load(fixture_dir)
-        assert type(loaded) is Mesh
+        assert type(Mesh.load(fixture_dir)) is Mesh
+        assert type(TensorDict.load(fixture_dir)) is Mesh
 
     def test_geometry_matches(self, fixture_dir: Path):
         """`points` and `cells` round-trip exactly."""
@@ -95,23 +93,13 @@ class TestPmshGoldenFixture:
                     f"{field}[{key!r}] value mismatch after load"
                 )
 
-    def test_current_writer_layout_matches_manifest(self, tmp_path: Path):
-        """A fresh save has the committed current directory and metadata layout."""
+    def test_current_writer_layout_matches_fixture(self, tmp_path: Path):
+        """A fresh save reproduces the fixture's directory and metadata layout."""
         written = tmp_path / "current.pmsh"
         build_canonical_mesh().save(written)
-        expected = json.loads(CURRENT_MANIFEST_PATH.read_text())
-        assert serialization_manifest(written) == expected
-
-    def test_current_and_legacy_layouts_record_the_mesh_type(self):
-        """Both writer generations retain a root-level type discriminator."""
-        expected_type = "<class 'physicsnemo.mesh.mesh.Mesh'>"
-        legacy_metadata = json.loads((LEGACY_FIXTURE_DIR / "meta.json").read_text())
-        current_manifest = json.loads(CURRENT_MANIFEST_PATH.read_text())
-
-        assert legacy_metadata == {"_type": expected_type}
-        assert current_manifest["meta.json"] == {"_type": expected_type}
-        assert (LEGACY_FIXTURE_DIR / "_tensordict").is_dir()
-        assert any(path.startswith("_tensordict/") for path in current_manifest)
+        assert serialization_manifest(written) == serialization_manifest(
+            LEGACY_FIXTURE_DIR
+        )
 
     @pytest.mark.parametrize("device", [None, "cpu", "cpu:0", torch.device("cpu:0")])
     def test_out_fills_preallocated_tensors(self, fixture_dir: Path, device):

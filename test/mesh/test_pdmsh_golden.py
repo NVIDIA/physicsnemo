@@ -18,17 +18,15 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 import torch
-from tensordict import TensorDictBase
+from tensordict import TensorDict, TensorDictBase
 
 from physicsnemo.mesh import DomainMesh, Mesh
 from test.mesh._serialization_manifest import serialization_manifest
 from test.mesh.golden_pdmsh._regenerate import (
-    CURRENT_MANIFEST_PATH,
     LEGACY_FIXTURE_DIR,
     build_canonical_domain_mesh,
 )
@@ -87,12 +85,12 @@ class TestPdmshGoldenFixture:
     """Verify exact reconstruction from current and decorator-era layouts."""
 
     def test_reconstructs_exact_nested_types(self, fixture_dir: Path):
-        loaded = DomainMesh.load(fixture_dir)
-        assert type(loaded) is DomainMesh
-        assert type(loaded.interior) is Mesh
-        assert set(loaded.boundaries.keys()) == {"wall", "inlet"}
-        for boundary in loaded.boundaries.values():
-            assert type(boundary) is Mesh
+        for loaded in (DomainMesh.load(fixture_dir), TensorDict.load(fixture_dir)):
+            assert type(loaded) is DomainMesh
+            assert type(loaded.interior) is Mesh
+            assert set(loaded.boundaries.keys()) == {"wall", "inlet"}
+            for boundary in loaded.boundaries.values():
+                assert type(boundary) is Mesh
 
     def test_all_fields_match(self, fixture_dir: Path):
         loaded = DomainMesh.load(fixture_dir)
@@ -112,22 +110,13 @@ class TestPdmshGoldenFixture:
             "global_data",
         )
 
-    def test_current_writer_layout_matches_manifest(self, tmp_path: Path):
+    def test_current_writer_layout_matches_fixture(self, tmp_path: Path):
+        """A fresh save reproduces the fixture's directory and metadata layout."""
         written = tmp_path / "current.pdmsh"
         build_canonical_domain_mesh().save(written)
-        expected = json.loads(CURRENT_MANIFEST_PATH.read_text())
-        assert serialization_manifest(written) == expected
-
-    def test_current_and_legacy_layouts_record_the_domain_type(self):
-        """Both writer generations retain a root-level type discriminator."""
-        expected_type = "<class 'physicsnemo.mesh.domain_mesh.DomainMesh'>"
-        legacy_metadata = json.loads((LEGACY_FIXTURE_DIR / "meta.json").read_text())
-        current_manifest = json.loads(CURRENT_MANIFEST_PATH.read_text())
-
-        assert legacy_metadata == {"_type": expected_type}
-        assert current_manifest["meta.json"] == {"_type": expected_type}
-        assert (LEGACY_FIXTURE_DIR / "_tensordict").is_dir()
-        assert any(path.startswith("_tensordict/") for path in current_manifest)
+        assert serialization_manifest(written) == serialization_manifest(
+            LEGACY_FIXTURE_DIR
+        )
 
     @pytest.mark.parametrize("device", [None, "cpu", "cpu:0", torch.device("cpu:0")])
     def test_out_fills_nested_meshes(self, fixture_dir: Path, device):
