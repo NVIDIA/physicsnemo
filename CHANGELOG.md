@@ -118,6 +118,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Mesh slicing reuses integer indices across connectivity, fields, and caches
+  to avoid repeated CUDA synchronization for the same boolean mask.
+  Point slicing skips mask processing when the output has no cells because
+  the input has no cells or the point selection is empty.
+
+- Triangle areas use direct area components and a rescaled norm, preserving
+  thin faces and their quadrature measures without Gram cancellation or
+  overflow/underflow in the norm.
+
 - Fixes mesh dtype handling: preserves integer-coordinate precision, normalizes
   connectivity safely, and rejects integer `.to()` casts. Floating/complex casts
   preserve the source mesh.
