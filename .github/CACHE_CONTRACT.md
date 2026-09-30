@@ -16,10 +16,10 @@ them without updating this document.
 | Property | Value |
 |---|---|
 | Key | `<UV_CACHE_KEY_PREFIX>-latest` |
-| Prefix encodes | container image + Python version + uv version |
+| Prefix encodes | container image + Python version + uv version + locked PyTorch minor version |
 | Suffix | literal `latest` (mutable slot, refreshed via delete-before-save) |
-| Contents | every wheel uv has ever downloaded for this baseline; additive across lockfile changes |
-| Invalidates when | container image, CUDA version, Python version, or uv version changes (prefix change → new slot) |
+| Contents | every wheel uv has ever downloaded for this baseline, plus the PyG extensions built from source against the locked PyTorch; additive across lockfile changes |
+| Invalidates when | container image, CUDA version, Python version, uv version, or PyTorch minor version changes (prefix change → new slot) |
 | Does **not** invalidate on | `uv.lock` or `pyproject.toml` changes |
 | Restore semantics | **fail-open**; missing cache only costs download time, never correctness |
 | Save semantics | nightly only, on cold-cache runs: delete the existing entry first, then save, then verify with `gh cache list` |
@@ -320,7 +320,12 @@ publisher jobs can replace the two coverage shard slots.
 ## Bumping any of the baseline values
 
 If you change the container image, CUDA version, Python version, uv
-version, or extras tag, you must update all three workflows:
+version, locked PyTorch minor version, or extras tag, you must update all
+three workflows. PyTorch belongs in this list because uv caches the
+source-built `torch_scatter`, `torch_sparse`, and `torch_cluster` wheels
+by their sdists alone; the key does not include the PyTorch that compiled
+them. Without a new prefix, CI would reuse wheels built for the old
+PyTorch ABI.
 
 1. The matching `env:` value at the top of
    [.github/workflows/github-nightly-uv.yml](workflows/github-nightly-uv.yml)

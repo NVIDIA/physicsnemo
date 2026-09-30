@@ -28,8 +28,11 @@
 #
 # Coupling notes (bump in lockstep):
 #   * Keep the Dockerfile's CI-only lower bounds aligned with these pins.
-#   * On a torch upgrade, bump the PyG --find-links URL and the
-#     `+pt213cu130` label on the PyG pin together.
+#   * On a torch upgrade, bump the PyG --find-links URL, the
+#     `+pt213cu130` label on the PyG pin, and the `-torchX.Y` segment of
+#     UV_CACHE_KEY_PREFIX in all three GPU workflows together.  uv caches
+#     the source-built scatter/sparse/cluster wheels by sdist alone, so an
+#     unchanged prefix would reuse wheels built for the old torch ABI.
 #
 # earth2grid is intentionally NOT installed: the source build is fragile
 # in the CI container.  HEALPix tests skip via @requires_module until
