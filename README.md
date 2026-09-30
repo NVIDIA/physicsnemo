@@ -263,18 +263,12 @@ dependency constraints. The command at the top of this README selects the CUDA 1
 backend. Use the CUDA 12 backend instead with:
 
 ```bash
-pip install "torch>=2.13.0" "torchvision>=0.28.0" --index-url https://download.pytorch.org/whl/cu126
-pip install "nvidia-physicsnemo[cu12]"
+pip install "nvidia-physicsnemo[cu12]" \
+  --extra-index-url https://download.pytorch.org/whl/cu126
 ```
 
-Select the CUDA 12.6 PyTorch wheels first: pip does not read the CUDA indexes
-in `pyproject.toml`. The `cu12` extra must use the same CUDA major version for
-PyTorch, CuPy, and RAPIDS. For a source checkout, `uv sync --extra cu12`
-selects this index automatically.
-
-The CUDA 12 backend retains RAPIDS 26.2 and DALI 2.1 because newer releases
-require CUDA libraries that conflict with PyTorch's CUDA 12.6 wheels.
-Use the CUDA 13 backend for RAPIDS 26.8 and Blackwell GPUs.
+Specify the CUDA 12.6 PyTorch index because pip does not read the index settings
+in `pyproject.toml`.
 
 For a basic installation that uses PyPI's default PyTorch distribution and does not
 install the CUDA-specific RAPIDS packages:
@@ -296,10 +290,6 @@ git clone https://github.com/NVIDIA/physicsnemo.git
 cd physicsnemo
 uv sync --extra cu13
 ```
-
-Add `--extra natten-cu13` (or `natten-cu12` with `cu12`) for NATTEN's
-prebuilt kernels. These extras select PyTorch 2.13 to match the available
-NATTEN wheels. Installs without NATTEN also support PyTorch 2.14.
 
 ## Learning Resources
 
