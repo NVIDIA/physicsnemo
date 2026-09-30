@@ -14,10 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Python 3.14 evaluates annotations lazily in the class namespace, where
-# ``TensorClass`` provides dtype-conversion methods such as ``int``. Qualify
-# scalar annotations that must continue to resolve to builtin types.
-import builtins
 import math
 import types
 from collections.abc import Mapping
@@ -533,7 +529,7 @@ class Mesh(
                 # CUDA casts can saturate, so round-trip equality alone misses
                 # maximum integers rounded up to the exclusive upper bound.
                 exact = (converted_points.to(source_dtype) == self.points) & (
-                    converted_points < builtins.float(torch.iinfo(source_dtype).max + 1)
+                    converted_points < float(torch.iinfo(source_dtype).max + 1)
                 )
                 _check_geometry_values(
                     exact.all(),
@@ -560,7 +556,7 @@ class Mesh(
         point_data: TensorDict | dict[str, torch.Tensor] | None = None,
         cell_data: TensorDict | dict[str, torch.Tensor] | None = None,
         global_data: TensorDict | dict[str, torch.Tensor] | None = None,
-        assume_convex: builtins.bool = False,
+        assume_convex: bool = False,
     ) -> Self:
         r"""Build a triangulated surface :class:`Mesh` from a polygon soup.
 
@@ -644,7 +640,7 @@ class Mesh(
         )
 
     @classmethod
-    def __class_getitem__(cls, params: tuple) -> builtins.type:
+    def __class_getitem__(cls, params: tuple) -> type:
         r"""Parametrize Mesh by manifold and spatial dimensions.
 
         Returns a synthetic type usable in type annotations and ``isinstance``
@@ -842,27 +838,27 @@ class Mesh(
             ...
 
     @property
-    def n_points(self) -> builtins.int:
+    def n_points(self) -> int:
         """Number of points in the mesh."""
         return self.points.shape[0]
 
     @property
-    def n_spatial_dims(self) -> builtins.int:
+    def n_spatial_dims(self) -> int:
         """Dimension of the ambient coordinate space."""
         return self.points.shape[-1]
 
     @property
-    def n_cells(self) -> builtins.int:
+    def n_cells(self) -> int:
         """Number of cells in the mesh."""
         return self.cells.shape[0]
 
     @property
-    def n_manifold_dims(self) -> builtins.int:
+    def n_manifold_dims(self) -> int:
         """Intrinsic dimension of each simplicial cell."""
         return self.cells.shape[-1] - 1
 
     @property
-    def codimension(self) -> builtins.int:
+    def codimension(self) -> int:
         """Compute the codimension of the mesh.
 
         The codimension is the difference between the spatial dimension and the
@@ -1453,12 +1449,12 @@ class Mesh(
 
     def slice_points(
         self,
-        indices: builtins.int
+        indices: int
         | slice
         | types.EllipsisType
         | None
         | torch.Tensor
-        | Sequence[builtins.int | builtins.bool],
+        | Sequence[int | bool],
     ) -> "Mesh":
         """Returns a new Mesh with a subset of the points.
 
@@ -1627,12 +1623,12 @@ class Mesh(
 
     def slice_cells(
         self,
-        indices: builtins.int
+        indices: int
         | slice
         | types.EllipsisType
         | None
         | torch.Tensor
-        | Sequence[builtins.int | builtins.bool | slice],
+        | Sequence[int | bool | slice],
     ) -> "Mesh":
         """Returns a new Mesh with a subset of the cells.
 
@@ -1714,8 +1710,8 @@ class Mesh(
 
     def sample_random_points_on_cells(
         self,
-        cell_indices: Sequence[builtins.int] | torch.Tensor | None = None,
-        alpha: builtins.float = 1.0,
+        cell_indices: Sequence[int] | torch.Tensor | None = None,
+        alpha: float = 1.0,
     ) -> torch.Tensor:
         """Sample random points on specified cells of the mesh.
 
@@ -1777,8 +1773,8 @@ class Mesh(
         query_points: torch.Tensor,
         data_source: Literal["cells", "points"] = "cells",
         multiple_cells_strategy: Literal["mean", "nan"] = "mean",
-        project_onto_nearest_cell: builtins.bool = False,
-        tolerance: builtins.float = 1e-6,
+        project_onto_nearest_cell: bool = False,
+        tolerance: float = 1e-6,
         bvh: Any = None,
     ) -> "TensorDict":
         """Extract or interpolate mesh data at specified query points.
@@ -1899,7 +1895,7 @@ class Mesh(
         points: torch.Tensor,
         *,
         keep: str | tuple[str, ...] | Sequence[str | tuple[str, ...]] = "topology",
-        preserve_measures: builtins.bool = False,
+        preserve_measures: bool = False,
     ) -> "Mesh":
         r"""Return a mesh with replacement point coordinates.
 
@@ -2117,7 +2113,7 @@ class Mesh(
             _cache=self._cache.copy(),
         )
 
-    def cell_data_to_point_data(self, overwrite_keys: builtins.bool = False) -> "Mesh":
+    def cell_data_to_point_data(self, overwrite_keys: bool = False) -> "Mesh":
         """Convert cell data to point data by averaging.
 
         For each point, computes the average of the cell data values from all cells
@@ -2199,7 +2195,7 @@ class Mesh(
 
         return self.with_data(point_data=new_point_data)
 
-    def point_data_to_cell_data(self, overwrite_keys: builtins.bool = False) -> "Mesh":
+    def point_data_to_cell_data(self, overwrite_keys: bool = False) -> "Mesh":
         """Convert point data to cell data by averaging.
 
         For each cell, computes the average of the point data values from all points
@@ -2275,10 +2271,10 @@ class Mesh(
 
     def get_facet_mesh(
         self,
-        manifold_codimension: builtins.int = 1,
+        manifold_codimension: int = 1,
         data_source: Literal["points", "cells"] = "cells",
         data_aggregation: Literal["mean", "area_weighted", "inverse_distance"] = "mean",
-        target_counts: list[builtins.int]
+        target_counts: list[int]
         | Literal["boundary", "shared", "interior", "all"] = "all",
     ) -> "Mesh":
         """Extract k-codimension facet mesh from this n-dimensional mesh.
@@ -2663,7 +2659,7 @@ class Mesh(
 
         return self._cached_adjacency("point_to_points", get_point_to_points_adjacency)
 
-    def get_cell_to_cells_adjacency(self, adjacency_codimension: builtins.int = 1):
+    def get_cell_to_cells_adjacency(self, adjacency_codimension: int = 1):
         """Compute cell-to-cells adjacency based on shared facets.
 
         Two cells are considered adjacent if they share a k-codimension facet.
@@ -2735,9 +2731,9 @@ class Mesh(
 
     def pad(
         self,
-        target_n_points: builtins.int | None = None,
-        target_n_cells: builtins.int | None = None,
-        data_padding_value: builtins.float = torch.nan,
+        target_n_points: int | None = None,
+        target_n_cells: int | None = None,
+        data_padding_value: float = torch.nan,
     ) -> "Mesh":
         """Pad points and cells arrays to specified sizes.
 
@@ -2857,8 +2853,8 @@ class Mesh(
 
     def pad_to_next_power(
         self,
-        power: builtins.float = 1.5,
-        data_padding_value: builtins.float = torch.nan,
+        power: float = 1.5,
+        data_padding_value: float = torch.nan,
     ) -> "Mesh":
         """Pads points and cells arrays to their next power of `power` (integer-floored).
 
@@ -3221,9 +3217,7 @@ class Mesh(
         self,
     ) -> Mapping[
         str,
-        builtins.int
-        | builtins.float
-        | tuple[builtins.float, builtins.float, builtins.float, builtins.float],
+        int | float | tuple[float, float, float, float],
     ]:
         """Compute summary statistics for the mesh.
 
@@ -3256,7 +3250,7 @@ class Mesh(
 
     def subdivide(
         self,
-        levels: builtins.int = 1,
+        levels: int = 1,
         filter: Literal["linear", "butterfly", "loop"] = "linear",
     ) -> "Mesh":
         """Subdivide the mesh using iterative application of subdivision schemes.
@@ -3355,10 +3349,10 @@ class Mesh(
 
     def clean(
         self,
-        tolerance: builtins.float = 1e-12,
-        merge_points: builtins.bool = True,
-        remove_duplicate_cells: builtins.bool = True,
-        remove_unused_points: builtins.bool = True,
+        tolerance: float = 1e-12,
+        merge_points: bool = True,
+        remove_duplicate_cells: bool = True,
+        remove_unused_points: bool = True,
     ) -> "Mesh":
         r"""Clean and repair this mesh.
 

@@ -25,7 +25,6 @@ O(log N) Python iterations instead of the O(N) iterations required by a naive
 sequential approach, enabling scalability to hundreds of millions of cells.
 """
 
-import builtins
 from typing import TYPE_CHECKING
 
 import torch
@@ -312,12 +311,12 @@ class BVH(TensorClass):
     sorted_cell_order: Int[torch.Tensor, " n_cells"]
 
     @property
-    def n_nodes(self) -> builtins.int:
+    def n_nodes(self) -> int:
         """Number of nodes in the BVH."""
         return self.node_aabb_min.shape[0]
 
     @property
-    def n_spatial_dims(self) -> builtins.int:
+    def n_spatial_dims(self) -> int:
         """Dimensionality of the spatial space."""
         return self.node_aabb_min.shape[1]
 
@@ -327,7 +326,7 @@ class BVH(TensorClass):
         return self.node_aabb_min.device
 
     @classmethod
-    def from_mesh(cls, mesh: "Mesh", leaf_size: builtins.int = 1) -> "BVH":
+    def from_mesh(cls, mesh: "Mesh", leaf_size: int = 1) -> "BVH":
         """Construct a BVH from a mesh using morton-code LBVH.
 
         Cells are sorted by the morton code of their centroids, then the tree
@@ -498,8 +497,8 @@ class BVH(TensorClass):
     def _traverse(
         self,
         query_points: Float[torch.Tensor, "n_queries n_spatial_dims"],
-        max_candidates_per_point: builtins.int | None,
-        aabb_tolerance: builtins.float,
+        max_candidates_per_point: int | None,
+        aabb_tolerance: float,
     ) -> tuple[
         Int[torch.Tensor, " n_pairs"],
         Int[torch.Tensor, " n_pairs"],
@@ -609,8 +608,8 @@ class BVH(TensorClass):
     def find_candidate_cells(
         self,
         query_points: Float[torch.Tensor, "n_queries n_spatial_dims"],
-        max_candidates_per_point: builtins.int | None = 32,
-        aabb_tolerance: builtins.float = 1e-6,
+        max_candidates_per_point: int | None = 32,
+        aabb_tolerance: float = 1e-6,
     ) -> Adjacency:
         r"""Find candidate cells that might contain each query point.
 
