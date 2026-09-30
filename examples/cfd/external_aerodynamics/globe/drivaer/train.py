@@ -262,8 +262,8 @@ def main(
     model = GLOBE(
         n_spatial_dims=3,
         output_field_ranks={
-            "C_p": 0,
-            "C_f": 1,
+            "C_p": {"rank": 0},
+            "C_f": {"rank": 1},
         },
         boundary_source_data_ranks={
             "vehicle": {},

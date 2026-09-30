@@ -48,7 +48,7 @@ def _make_model(
     """Build a minimal GLOBE that only varies the bits the test cares about."""
     return GLOBE(
         n_spatial_dims=3,
-        output_field_ranks={"pressure": 0},
+        output_field_ranks={"pressure": {"rank": 0}},
         boundary_source_data_ranks=boundary_source_data_ranks
         if boundary_source_data_ranks is not None
         else {"no_slip": {}},
@@ -114,10 +114,10 @@ def test_globe_rejects_missing_cell_data_keys(
     reference_lengths: dict[str, torch.Tensor],
 ) -> None:
     """A declared cell_data key absent from the input mesh must raise."""
-    model = _make_model(boundary_source_data_ranks={"no_slip": {"alpha": 0}})
+    model = _make_model(boundary_source_data_ranks={"no_slip": {"alpha": {"rank": 0}}})
     empty_mesh = _mesh_with_cell_data(None)
 
-    with pytest.raises(ValueError, match=r"missing leaf 'alpha'"):
+    with pytest.raises(ValueError, match=r"missing field 'alpha'"):
         with torch.no_grad():
             model(
                 prediction_points=prediction_points,
@@ -131,7 +131,7 @@ def test_globe_rejects_cell_data_rank_mismatch(
     reference_lengths: dict[str, torch.Tensor],
 ) -> None:
     """Declaring a scalar but passing a vector (or vice versa) must raise."""
-    model = _make_model(boundary_source_data_ranks={"no_slip": {"alpha": 0}})
+    model = _make_model(boundary_source_data_ranks={"no_slip": {"alpha": {"rank": 0}}})
     n_cells = lumpy_sphere.load(subdivisions=1).n_cells
     bad_mesh = _mesh_with_cell_data({"alpha": torch.zeros(n_cells, 3)})
 

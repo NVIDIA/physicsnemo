@@ -53,6 +53,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `physicsnemo.mesh.fields` is rebuilt around two types. `RankSpec` (frozen
+  dataclass: `rank`, `symmetric`, `parity`) is one field's transformation law;
+  `FieldSchema` is an immutable, insertion-ordered mapping from dotted field
+  names to `RankSpec`, parsed once at a model's boundary with
+  `FieldSchema.parse` (nested groups and dotted names flatten alike) and
+  queried with `.ranks`, `.count(rank)`, `FieldSchema.key(name)` and
+  `.check(tensordict, label=...)`. Validation is construction, so an invalid
+  schema cannot exist. Integer leaves are no longer accepted: a field is
+  declared as `{"rank": n}` (YAML: `pressure: {rank: 0}`) or a `RankSpec`,
+  and any mapping without a `"rank"` key is a nested group. GLOBE and the
+  unified external-aerodynamics recipe configs are updated accordingly.
 - Mesh integration uses a shared `_effective_measure` field for complete cell
   and point measures. Cell measures fall back to geometry; point measures are
   explicit and independent of connectivity. `Mesh.integrate_samples` evaluates
@@ -95,6 +106,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- `physicsnemo.mesh.fields`: `RankSpecDict`, `flatten_rank_spec`,
+  `rank_counts`, `ranks_from_tensordict` and `validate_data_contains_ranks`,
+  replaced by `FieldSchema` (see Changed).
 - Removes the opt-in `physicsnemo.compat` import-alias layer and the
   `PHYSICSNEMO_ENABLE_COMPAT` environment variable. The layer mapped pre-v2.0
   module paths onto their v2.0 locations; three minor releases later, callers

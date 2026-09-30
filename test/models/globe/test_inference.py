@@ -29,7 +29,7 @@ def test_communication_meshes_have_independent_cache_containers(monkeypatch) -> 
     """Communication updates preserve caches without aliasing their containers."""
     model = GLOBE(
         n_spatial_dims=3,
-        output_field_ranks={"pressure": 0},
+        output_field_ranks={"pressure": {"rank": 0}},
         boundary_source_data_ranks={"no_slip": {}},
         reference_length_names=["test_length"],
         reference_area=1.0,
@@ -90,7 +90,7 @@ def test_globe_inference(device: str) -> None:
     ### Create model
     model = GLOBE(
         n_spatial_dims=3,
-        output_field_ranks={"pressure": 0, "velocity": 1},
+        output_field_ranks={"pressure": {"rank": 0}, "velocity": {"rank": 1}},
         boundary_source_data_ranks={"no_slip": {}},
         reference_length_names=["test_length"],
         reference_area=1.0,
@@ -146,7 +146,7 @@ def test_globe_inference_multi_bc(device: str) -> None:
     ### Create model with two BC types
     model = GLOBE(
         n_spatial_dims=3,
-        output_field_ranks={"pressure": 0, "velocity": 1},
+        output_field_ranks={"pressure": {"rank": 0}, "velocity": {"rank": 1}},
         boundary_source_data_ranks={"no_slip": {}, "freestream": {}},
         reference_length_names=["test_length"],
         reference_area=1.0,

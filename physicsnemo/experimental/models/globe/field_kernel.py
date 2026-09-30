@@ -35,7 +35,7 @@ from physicsnemo.experimental.models.globe.utilities.tensordict_utils import (
     concatenated_length,
     split_by_leaf_rank,
 )
-from physicsnemo.mesh import RankSpecDict, flatten_rank_spec, rank_counts
+from physicsnemo.mesh import FieldSchema, FieldSchemaLike
 from physicsnemo.nn import Mlp, Pade
 from physicsnemo.nn.functional.equivariant_ops import (
     legendre_polynomials,
@@ -138,16 +138,18 @@ class Kernel(Module):
     ----------
     n_spatial_dims : int
         Number of spatial dimensions (2 or 3).
-    output_field_ranks : TensorDict
-        Rank-spec TensorDict with integer leaves (0 = scalar, 1 = vector)
-        describing the output fields. Nesting is supported and mirrors the
-        desired output structure. Derive from data via
-        :func:`ranks_from_tensordict`.
-    source_data_ranks : TensorDict
-        Rank-spec TensorDict describing per-source features. The number of rank-0 leaves determines scalar input
-        width; rank-1 leaves determine vector input width.
-    global_data_ranks : TensorDict
-        Rank-spec TensorDict describing global conditioning features.
+    output_field_ranks : FieldSchemaLike
+        Field schema declaring the output fields, e.g.
+        ``{"pressure": {"rank": 0}, "velocity": {"rank": 1}}`` (see
+        :class:`~physicsnemo.mesh.FieldSchema`). Nesting is supported and
+        mirrors the desired output structure. Derive from data via
+        :meth:`FieldSchema.from_tensordict`.
+    source_data_ranks : FieldSchemaLike
+        Field schema describing per-source features. The number of rank-0
+        fields determines scalar input width; rank-1 fields determine vector
+        input width.
+    global_data_ranks : FieldSchemaLike
+        Field schema describing global conditioning features.
     smoothing_radius : float, optional, default=1e-8
         Small value used to smooth power functions near zero to avoid numerical
         instabilities.
@@ -202,9 +204,9 @@ class Kernel(Module):
         self,
         *,
         n_spatial_dims: int,
-        output_field_ranks: RankSpecDict,
-        source_data_ranks: RankSpecDict | None = None,
-        global_data_ranks: RankSpecDict | None = None,
+        output_field_ranks: FieldSchemaLike,
+        source_data_ranks: FieldSchemaLike | None = None,
+        global_data_ranks: FieldSchemaLike | None = None,
         smoothing_radius: float = 1e-8,
         hidden_layer_sizes: Sequence[int] | None = None,
         n_spherical_harmonics: int = 4,
@@ -226,6 +228,16 @@ class Kernel(Module):
         self.output_field_ranks = output_field_ranks
         self.source_data_ranks = source_data_ranks
         self.global_data_ranks = global_data_ranks
+        ### Parsed schemas (the raw declarations above are kept as given).
+        self.output_schema = FieldSchema.parse(
+            output_field_ranks, label="output_field_ranks"
+        )
+        self.source_schema = FieldSchema.parse(
+            source_data_ranks, label="source_data_ranks"
+        )
+        self.global_schema = FieldSchema.parse(
+            global_data_ranks, label="global_data_ranks"
+        )
         self.smoothing_radius = smoothing_radius
         self.hidden_layer_sizes = hidden_layer_sizes
         self.n_spherical_harmonics = n_spherical_harmonics
@@ -293,9 +305,7 @@ class Kernel(Module):
         operation.  The caller applies a runtime multiplier to account for
         this (see ``BarnesHutKernel._auto_chunk_size``).
         """
-        source_rc = rank_counts(self.source_data_ranks)
-        global_rc = rank_counts(self.global_data_ranks)
-        n_vec = 1 + source_rc[1] + global_rc[1]
+        n_vec = 1 + self.source_schema.count(1) + self.global_schema.count(1)
         n_pairs = comb(n_vec, 2)
 
         return (
@@ -328,13 +338,10 @@ class Kernel(Module):
         3. Pairwise spherical harmonic features for all :math:`\binom{n}{2}` vector
            pairs, each producing ``n_spherical_harmonics`` Legendre polynomial terms
         """
-        source_rank_counts = rank_counts(self.source_data_ranks)
-        global_rank_counts = rank_counts(self.global_data_ranks)
-
         n_vectors_in: int = (
-            1 + source_rank_counts[1] + global_rank_counts[1]
+            1 + self.source_schema.count(1) + self.global_schema.count(1)
         )  # +1 for r
-        n_scalars_in: int = source_rank_counts[0] + global_rank_counts[0]
+        n_scalars_in: int = self.source_schema.count(0) + self.global_schema.count(0)
         n_vector_pairs_in: int = comb(n_vectors_in, 2)
 
         return (
@@ -348,14 +355,11 @@ class Kernel(Module):
         One channel per scalar output field, plus vector reprojection coefficients
         for each vector output field (1 radial + 2 per non-radial input vector).
         """
-        source_rank_counts = rank_counts(self.source_data_ranks)
-        global_rank_counts = rank_counts(self.global_data_ranks)
-        output_rank_counts = rank_counts(self.output_field_ranks)
         n_vectors_in: int = (
-            1 + source_rank_counts[1] + global_rank_counts[1]
+            1 + self.source_schema.count(1) + self.global_schema.count(1)
         )  # +1 for r
 
-        return output_rank_counts[0] + output_rank_counts[1] * (
+        return self.output_schema.count(0) + self.output_schema.count(1) * (
             1  # r_hat
             + 2 * (n_vectors_in - 1)  # All non-r vectors
         )
@@ -371,7 +375,7 @@ class Kernel(Module):
         ~1 s out of 4.5 s total GPU time per training step), and packing
         cuts that cost proportional to the number of output fields.
         """
-        ranks_dict = flatten_rank_spec(self.output_field_ranks)
+        ranks_dict = self.output_schema.ranks
         keys = tuple(sorted(ranks_dict.keys()))
         features_per_key = tuple(
             1 if ranks_dict[k] == 0 else self.n_spatial_dims for k in keys
@@ -473,24 +477,22 @@ class Kernel(Module):
                     f"Expected target_points last dimension to be {self.n_spatial_dims}, "
                     f"got {target_points.shape[-1]}"
                 )
-            source_rank_counts = rank_counts(self.source_data_ranks)
-            global_rank_counts = rank_counts(self.global_data_ranks)
             for name, (actual, expected) in {
                 "source scalars": (
                     concatenated_length(source_scalars),
-                    source_rank_counts[0],
+                    self.source_schema.count(0),
                 ),
                 "source vectors": (
                     concatenated_length(source_vectors),
-                    source_rank_counts[1],
+                    self.source_schema.count(1),
                 ),
                 "global scalars": (
                     concatenated_length(global_scalars),
-                    global_rank_counts[0],
+                    self.global_schema.count(0),
                 ),
                 "global vectors": (
                     concatenated_length(global_vectors),
-                    global_rank_counts[1],
+                    self.global_schema.count(1),
                 ),
             }.items():
                 if actual != expected:
@@ -670,7 +672,7 @@ class Kernel(Module):
                 )
 
             ### Local rotationally-equivariant basis (built only when needed)
-            ranks_dict = flatten_rank_spec(self.output_field_ranks)
+            ranks_dict = self.output_schema.ranks
             needs_basis = any(rank == 1 for rank in ranks_dict.values())
 
             if needs_basis:
@@ -808,9 +810,9 @@ class BarnesHutKernel(Kernel):
         self,
         *,
         n_spatial_dims: int,
-        output_field_ranks: RankSpecDict,
-        source_data_ranks: RankSpecDict | None = None,
-        global_data_ranks: RankSpecDict | None = None,
+        output_field_ranks: FieldSchemaLike,
+        source_data_ranks: FieldSchemaLike | None = None,
+        global_data_ranks: FieldSchemaLike | None = None,
         smoothing_radius: float = 1e-8,
         hidden_layer_sizes: Sequence[int] | None = None,
         n_spherical_harmonics: int = 4,
@@ -1301,7 +1303,7 @@ class BarnesHutKernel(Kernel):
         does not need a separate degenerate-case branch.
         """
         keys, features_per_key, _ = self._output_packing
-        ranks_dict = flatten_rank_spec(self.output_field_ranks)
+        ranks_dict = self.output_schema.ranks
         fields: dict[str, torch.Tensor] = {}
         offset = 0
         for key, n_features in zip(keys, features_per_key):
@@ -1627,10 +1629,10 @@ class MultiscaleKernel(Module):
         self,
         *,
         n_spatial_dims: int,
-        output_field_ranks: RankSpecDict,
+        output_field_ranks: FieldSchemaLike,
         reference_length_names: Sequence[str],
-        source_data_ranks: RankSpecDict | None = None,
-        global_data_ranks: RankSpecDict | None = None,
+        source_data_ranks: FieldSchemaLike | None = None,
+        global_data_ranks: FieldSchemaLike | None = None,
         smoothing_radius: float = 1e-8,
         hidden_layer_sizes: Sequence[int] | None = None,
         n_spherical_harmonics: int = 4,
@@ -1659,13 +1661,24 @@ class MultiscaleKernel(Module):
         self.spectral_norm = spectral_norm
         self.use_gradient_checkpointing = use_gradient_checkpointing
         self.leaf_size = leaf_size
+        ### Parsed schemas; ``GLOBE`` reads ``source_schema`` to select the
+        ### cell_data leaves each kernel consumes.
+        self.output_schema = FieldSchema.parse(
+            output_field_ranks, label="output_field_ranks"
+        )
+        self.source_schema = FieldSchema.parse(
+            source_data_ranks, label="source_data_ranks"
+        )
+        self.global_schema = FieldSchema.parse(
+            global_data_ranks, label="global_data_ranks"
+        )
 
         ### Augment global_data_ranks with log-ratio entries for each
         # pair of reference lengths. These are rank-0 (scalar) features.
         augmented_global = {
             **global_data_ranks,
             "log_reference_length_ratios": {
-                f"{k1}_{k2}": 0
+                f"{k1}_{k2}": {"rank": 0}
                 for k1, k2 in itertools.combinations(reference_length_names, 2)
             },
         }

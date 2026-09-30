@@ -67,17 +67,17 @@ def make_kernel_and_input_data(
 
     ### Build rank specs from output_fields
     output_field_ranks = {
-        k: (0 if v == "scalar" else 1) for k, v in output_fields.items()
+        k: {"rank": 0 if v == "scalar" else 1} for k, v in output_fields.items()
     }
 
     ### Build source and global rank specs from counts
     source_data_ranks = {
-        **{f"source_scalar_{i}": 0 for i in range(n_source_scalars)},
-        **{f"source_vector_{i}": 1 for i in range(n_source_vectors)},
+        **{f"source_scalar_{i}": {"rank": 0} for i in range(n_source_scalars)},
+        **{f"source_vector_{i}": {"rank": 1} for i in range(n_source_vectors)},
     }
     global_data_ranks = {
-        **{f"global_scalar_{i}": 0 for i in range(n_global_scalars)},
-        **{f"global_vector_{i}": 1 for i in range(n_global_vectors)},
+        **{f"global_scalar_{i}": {"rank": 0} for i in range(n_global_scalars)},
+        **{f"global_vector_{i}": {"rank": 1} for i in range(n_global_vectors)},
     }
 
     kernel = Kernel(

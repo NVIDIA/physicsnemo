@@ -16,11 +16,10 @@
 
 from physicsnemo.mesh.domain_mesh import DomainMesh
 from physicsnemo.mesh.fields import (
-    RankSpecDict,
-    flatten_rank_spec,
-    rank_counts,
-    ranks_from_tensordict,
-    validate_data_contains_ranks,
+    FieldSchema,
+    FieldSchemaLike,
+    RankSpec,
+    RankSpecLike,
 )
 from physicsnemo.mesh.mesh import MESH_FIELD_ASSOCIATIONS, Mesh, MeshFieldAssociation
 
@@ -29,9 +28,8 @@ __all__ = [
     "MESH_FIELD_ASSOCIATIONS",
     "Mesh",
     "MeshFieldAssociation",
-    "RankSpecDict",
-    "flatten_rank_spec",
-    "rank_counts",
-    "ranks_from_tensordict",
-    "validate_data_contains_ranks",
+    "FieldSchema",
+    "FieldSchemaLike",
+    "RankSpec",
+    "RankSpecLike",
 ]

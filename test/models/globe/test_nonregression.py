@@ -56,7 +56,7 @@ def _make_globe_and_inputs(
 
     model = GLOBE(
         n_spatial_dims=3,
-        output_field_ranks={"C_p": 0, "C_f": 1},
+        output_field_ranks={"C_p": {"rank": 0}, "C_f": {"rank": 1}},
         boundary_source_data_ranks={
             "vehicle": {},
             "floor": {},

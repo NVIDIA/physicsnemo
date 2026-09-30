@@ -54,8 +54,8 @@ model:
   _target_: physicsnemo.experimental.models.globe.GLOBE
   n_spatial_dims: 3
   output_field_ranks:
-    pressure: 0                # scalar
-    wss: 1                     # vector
+    pressure: {rank: 0}        # scalar
+    wss: {rank: 1}             # vector
   boundary_source_data_ranks:
     vehicle: {}
   reference_length_names: [L_ref, delta_turb]
