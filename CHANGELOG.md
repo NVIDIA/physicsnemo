@@ -133,6 +133,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixes mesh dtype handling: preserves integer-coordinate precision, normalizes
   connectivity safely, and rejects integer `.to()` casts. Floating/complex casts
   preserve the source mesh.
+- `Mesh.load`, `DomainMesh.load`, and their `load_memmap` variants raise
+  `ValueError` when `device=` conflicts with the device of the `out=` storage.
+  Previously, `Mesh` loads returned a mesh split across CPU and CUDA, and
+  `DomainMesh` loads ignored `device=`. `out=` also accepts a `Mesh` or
+  `DomainMesh` instance, which previously raised `AttributeError`.
 - Fixed an issue in `Natten2DSelfAttention` and `RopeNatten2DSelfAttention`
   with `qk_norm=True` mixing `LayerNorm` fp32 Q/K outputs with autocasted V
   dtypes.
