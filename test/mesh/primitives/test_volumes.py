@@ -86,6 +86,17 @@ class TestVolumePrimitives:
         # Should have reasonable number of cells
         assert mesh.n_cells > 10
 
+    @requires_pyvista
+    @pytest.mark.parametrize("example_name", PYVISTA_VOLUMES)
+    def test_delaunay_volumes_positively_oriented(self, example_name):
+        """VTK 9.7+ Delaunay output can contain inverted tetrahedra."""
+        mesh = getattr(primitives.volumes, example_name).load()
+        vertices = mesh.points[mesh.cells]
+        det = torch.det(vertices[:, 1:] - vertices[:, [0]])
+        # Delaunay slivers have rounding-level volumes with arbitrary sign.
+        tol = 1e-6 * det.abs().median()
+        assert (det > -tol).all()
+
 
 class TestCubeVolumeBoundary:
     """Test that cube_volume boundary extraction produces correct axis-aligned faces.

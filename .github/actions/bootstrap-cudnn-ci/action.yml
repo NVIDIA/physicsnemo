@@ -28,7 +28,7 @@ inputs:
       otherwise silently invalidate the wheel store). Bump in lockstep
       with the workflow's UV_VERSION env value.
     required: false
-    default: "0.12.5"
+    default: "0.12.20"
 runs:
   using: composite
   steps:
