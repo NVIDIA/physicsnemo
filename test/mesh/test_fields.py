@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import copy
+import importlib
 import json
 import pickle
 
@@ -301,3 +302,45 @@ def test_check_accepts_supersets_and_reports_schema_errors():
         "  - missing field 'fluid.T' (declared rank 0)\n"
         "  - rank mismatch for 'pressure': declared 0, got 1"
     )
+
+
+### Names removed in 2.3 --------------------------------------------------------
+
+
+@pytest.mark.parametrize("module", ["physicsnemo.mesh", "physicsnemo.mesh.fields"])
+@pytest.mark.parametrize(
+    ("name", "replacement"),
+    [
+        ("RankSpecDict", r"FieldSchemaLike"),
+        ("flatten_rank_spec", r"FieldSchema\.parse\(spec\)\.ranks"),
+        ("rank_counts", r"FieldSchema\.parse\(spec\)\.count\(rank\)"),
+        ("ranks_from_tensordict", r"FieldSchema\.from_tensordict\(data\)\.ranks"),
+        ("validate_data_contains_ranks", r"\.check\(data, label=source_label\)"),
+    ],
+)
+def test_removed_names_point_to_their_replacements(module, name, replacement):
+    with pytest.raises(
+        ImportError,
+        match=rf"{module}\.{name} was removed in PhysicsNeMo 2\.3.*{replacement}",
+    ):
+        getattr(importlib.import_module(module), name)
+
+
+def test_removed_names_keep_their_message_in_import_statements():
+    ### An AttributeError here would be replaced by Python's bare "cannot
+    ### import name"; the ImportError carries the replacement through.
+    with pytest.raises(
+        ImportError, match=r"flatten_rank_spec was removed.*\{'rank': n\}"
+    ):
+        from physicsnemo.mesh import (
+            flatten_rank_spec,  # noqa: F401  # ty: ignore[unresolved-import]
+        )
+    with pytest.raises(ImportError, match=r"validate_data_contains_ranks was removed"):
+        from physicsnemo.mesh.fields import (
+            validate_data_contains_ranks,  # noqa: F401  # ty: ignore[unresolved-import]
+        )
+    ### Any other missing name is still an ordinary AttributeError.
+    mesh = importlib.import_module("physicsnemo.mesh")
+    assert not hasattr(mesh, "not_a_mesh_name")
+    with pytest.raises(AttributeError, match="has no attribute 'not_a_mesh_name'"):
+        getattr(mesh, "not_a_mesh_name")

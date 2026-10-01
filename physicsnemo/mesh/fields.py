@@ -61,7 +61,7 @@ JSON in checkpoints):
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, Literal, NoReturn, TypeAlias, Union
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypeAlias, Union
 
 from tensordict import TensorDict
 
@@ -476,6 +476,44 @@ def _check_paths(paths: list[tuple[str, ...]], label: str) -> None:
                     f"{_SEP.join(path)!r}; a name cannot be both a field and a "
                     f"group of fields"
                 )
+
+
+### Names removed in 2.3, each with what replaces it. Importing one raises an
+### ImportError that names the replacement instead of Python's bare "cannot
+### import name"; the old functions are not kept, since they read the old
+### integer-leaf grammar.
+_REMOVED_IN_2_3 = {
+    "RankSpecDict": "FieldSchemaLike (a declaration) or FieldSchema (a parsed schema)",
+    "flatten_rank_spec": "FieldSchema.parse(spec).ranks",
+    "rank_counts": "FieldSchema.parse(spec).count(rank)",
+    "ranks_from_tensordict": "FieldSchema.from_tensordict(data).ranks (flat dotted names)",
+    "validate_data_contains_ranks": (
+        "FieldSchema.parse(declared_ranks).check(data, label=source_label)"
+    ),
+}
+
+
+def _missing_attribute(module: str, name: str) -> NoReturn:
+    """Raise for an attribute ``module`` lacks: an ImportError naming the
+    replacement of a name removed in 2.3, an AttributeError otherwise."""
+    if name in _REMOVED_IN_2_3:
+        raise ImportError(
+            f"{module}.{name} was removed in PhysicsNeMo 2.3, when "
+            f"physicsnemo.mesh.fields moved to FieldSchema and RankSpec; use "
+            f"{_REMOVED_IN_2_3[name]} instead. Fields are now declared as "
+            f"{{'rank': n}} rather than as bare integers.",
+            name=module,
+        )
+    raise AttributeError(f"module {module!r} has no attribute {name!r}")
+
+
+### Hidden from type checkers, so that they keep reporting unknown names (these
+### included) as missing instead of accepting any attribute of this module.
+if not TYPE_CHECKING:
+
+    def __getattr__(name: str) -> NoReturn:
+        """Point imports of removed names at their replacements (PEP 562)."""
+        _missing_attribute(__name__, name)
 
 
 __all__ = [
