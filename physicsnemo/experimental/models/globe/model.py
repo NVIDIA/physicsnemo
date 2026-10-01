@@ -27,7 +27,10 @@ from torch.profiler import record_function
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
-from physicsnemo.experimental.models.globe.field_kernel import MultiscaleKernel
+from physicsnemo.experimental.models.globe.field_kernel import (
+    MultiscaleKernel,
+    _require_supported,
+)
 from physicsnemo.mesh import FieldSchema, FieldSchemaLike, Mesh
 from physicsnemo.mesh.calculus.measure import cell_measures
 from physicsnemo.mesh.spatial.cluster_tree import (
@@ -91,13 +94,14 @@ class GLOBE(Module):
     ----------
     n_spatial_dims : int
         Number of spatial dimensions (2 or 3).
-    output_field_ranks : FieldSchemaLike
+    output_schema : FieldSchemaLike
         Field schema declaring the output fields, e.g.
         ``{"pressure": {"rank": 0}, "velocity": {"rank": 1}}`` (see
-        :class:`~physicsnemo.mesh.FieldSchema`). Only ranks 0 (scalar) and 1
-        (vector) are supported. Derive from data via
-        :meth:`FieldSchema.from_tensordict`.
-    boundary_source_data_ranks : dict[str, FieldSchemaLike]
+        :class:`~physicsnemo.mesh.FieldSchema`). GLOBE implements true
+        scalars (rank 0) and vectors (rank 1); any other declaration, in this
+        or the other schemas, raises :class:`NotImplementedError`. Derive from
+        data via :meth:`FieldSchema.from_tensordict`.
+    boundary_source_schemas : dict[str, FieldSchemaLike]
         Mapping of boundary condition type names to field schemas
         describing the per-face source features for each BC type. The keys
         implicitly define the set of boundary condition names. The face normal
@@ -109,7 +113,7 @@ class GLOBE(Module):
     reference_area : float
         Scalar used to nondimensionalize face areas. Typically a characteristic
         area of the problem (e.g., chord^2 for airfoils).
-    global_data_ranks : FieldSchemaLike or None, optional
+    global_schema : FieldSchemaLike or None, optional
         Field schema for global conditioning features. Defaults to empty
         (no global conditioning).
     n_communication_hyperlayers : int, optional, default=2
@@ -167,12 +171,12 @@ class GLOBE(Module):
     boundary_meshes : dict[str, Mesh["n-1", "n"]]
         Dictionary mapping boundary condition type names to
         :class:`~physicsnemo.mesh.Mesh` objects. Keys must be a subset of the
-        model's boundary condition names (from ``boundary_source_data_ranks``).
+        model's boundary condition names (from ``boundary_source_schemas``).
     reference_lengths : dict[str, torch.Tensor]
         Dictionary mapping reference length names to scalar tensors.
     global_data : TensorDict or None, optional, default=None
         Nondimensional conditioning features. Leaf keys and ranks must match
-        ``global_data_ranks``. Passed through to the output Mesh.
+        ``global_schema``. Passed through to the output Mesh.
 
     Outputs
     -------
@@ -180,7 +184,7 @@ class GLOBE(Module):
         A point-cloud :class:`~physicsnemo.mesh.Mesh` (0-dimensional manifold)
         whose ``.points`` attribute equals the input ``prediction_points``. The
         predicted fields are in ``.point_data``, keyed by the names from
-        ``output_field_ranks``. Scalar fields have shape :math:`(N_{points},)`,
+        ``output_schema``. Scalar fields have shape :math:`(N_{points},)`,
         vector fields have shape :math:`(N_{points}, D)`. Cells are empty (shape
         ``(0, 1)``). ``global_data`` is passed through from the input.
 
@@ -211,8 +215,8 @@ class GLOBE(Module):
     --------
     >>> model = GLOBE(
     ...     n_spatial_dims=3,
-    ...     output_field_ranks={"pressure": {"rank": 0}, "velocity": {"rank": 1}},
-    ...     boundary_source_data_ranks={"no_slip": {}, "freestream": {}},
+    ...     output_schema={"pressure": {"rank": 0}, "velocity": {"rank": 1}},
+    ...     boundary_source_schemas={"no_slip": {}, "freestream": {}},
     ...     reference_length_names=["delta_FS", "chord"],
     ...     reference_area=1.0,
     ... )
@@ -228,11 +232,11 @@ class GLOBE(Module):
     def __init__(
         self,
         n_spatial_dims: int,
-        output_field_ranks: FieldSchemaLike,
-        boundary_source_data_ranks: dict[str, FieldSchemaLike],
+        output_schema: FieldSchemaLike,
+        boundary_source_schemas: dict[str, FieldSchemaLike],
         reference_length_names: Sequence[str],
         reference_area: float,
-        global_data_ranks: FieldSchemaLike | None = None,
+        global_schema: FieldSchemaLike | None = None,
         n_communication_hyperlayers: int = 2,
         n_latent_scalars: int = 12,
         n_latent_vectors: int = 6,
@@ -250,39 +254,36 @@ class GLOBE(Module):
     ):
         if hidden_layer_sizes is None:
             hidden_layer_sizes = [64, 64, 64]
-        if global_data_ranks is None:
-            global_data_ranks = {}
 
-        boundary_condition_names = list(boundary_source_data_ranks.keys())
-
-        ### Parsed schemas.  The raw declarations stay as the constructor
-        ### arguments (they are what ``Module`` records for checkpoints);
-        ### the parsed FieldSchema objects are separate attributes.
-        output_schema = FieldSchema.parse(
-            output_field_ranks, label="output_field_ranks"
-        )
+        ### Parse the field declarations (``Module`` has already recorded the
+        ### arguments as given; a FieldSchema serializes to JSON as it stands).
+        ### The kernels refuse what they do not implement as well; checking
+        ### here names the declaration as the caller wrote it.
+        output_schema = FieldSchema.parse(output_schema, label="output_schema")
         boundary_source_schemas = {
             bc_name: FieldSchema.parse(
-                spec, label=f"boundary_source_data_ranks[{bc_name!r}]"
+                spec, label=f"boundary_source_schemas[{bc_name!r}]"
             )
-            for bc_name, spec in boundary_source_data_ranks.items()
+            for bc_name, spec in boundary_source_schemas.items()
         }
-        global_schema = FieldSchema.parse(global_data_ranks, label="global_data_ranks")
+        global_schema = FieldSchema.parse(
+            {} if global_schema is None else global_schema, label="global_schema"
+        )
+        _require_supported(output_schema, label="output_schema")
+        for bc_name, schema in boundary_source_schemas.items():
+            _require_supported(schema, label=f"boundary_source_schemas[{bc_name!r}]")
+        _require_supported(global_schema, label="global_schema")
+
+        boundary_condition_names = list(boundary_source_schemas.keys())
 
         ### Input validation (eager mode only).  Only validate parameters whose
         ### use sites are inside `GLOBE` itself; parameters plumbed through to a
         ### deeper owner (e.g. `self_regularization_beta` -> `Pade`) are validated
         ### at that owner's constructor to avoid drift between the two checks.
-        for rank in output_schema.ranks.values():
-            if rank not in (0, 1):
-                raise ValueError(
-                    f"All leaves of output_field_ranks must be 0 (scalar) or 1 (vector), "
-                    f"got {rank!r}"
-                )
         for bc_name in boundary_condition_names:
             if "." in bc_name:
                 raise ValueError(
-                    f"In `boundary_source_data_ranks`, got {bc_name=!r};\n"
+                    f"In `boundary_source_schemas`, got {bc_name=!r};\n"
                     "BC names must not contain `.` for TensorDict compatibility."
                 )
         if smoothing_radius <= 0:
@@ -311,15 +312,12 @@ class GLOBE(Module):
         super().__init__(meta=MetaData())
 
         self.n_spatial_dims = n_spatial_dims
-        self.output_field_ranks = output_field_ranks
+        self.output_schema = output_schema
         self.boundary_condition_names = boundary_condition_names
-        self.boundary_source_data_ranks = boundary_source_data_ranks
+        self.boundary_source_schemas = boundary_source_schemas
         self.reference_length_names = reference_length_names
         self.register_buffer("reference_area", torch.tensor(reference_area))
-        self.global_data_ranks = global_data_ranks
-        self._output_schema = output_schema
-        self._boundary_source_schemas = boundary_source_schemas
-        self._global_schema = global_schema
+        self.global_schema = global_schema
         self.n_communication_hyperlayers = n_communication_hyperlayers
         self.n_latent_scalars = n_latent_scalars
         self.n_latent_vectors = n_latent_vectors
@@ -337,9 +335,9 @@ class GLOBE(Module):
             torch.device(tree_build_device) if tree_build_device is not None else None
         )
 
-        ### Build the intermediate output-field rank spec for communication
-        # hyperlayers. Only the final hyperlayer emits output_field_ranks.
-        intermediate_field_ranks: FieldSchemaLike = {
+        ### Build the intermediate output schema for communication
+        # hyperlayers. Only the final hyperlayer emits output_schema.
+        intermediate_schema: FieldSchemaLike = {
             **{f"strengths.{name}": {"rank": 0} for name in reference_length_names},
             **{f"latent.scalars.{i}": {"rank": 0} for i in range(n_latent_scalars)},
             **{f"latent.vectors.{i}": {"rank": 1} for i in range(n_latent_vectors)},
@@ -355,17 +353,17 @@ class GLOBE(Module):
                 {
                     bc_type: MultiscaleKernel(
                         n_spatial_dims=n_spatial_dims,
-                        output_field_ranks=(
-                            output_field_ranks
+                        output_schema=(
+                            output_schema
                             if is_last_hyperlayer
-                            else intermediate_field_ranks
+                            else intermediate_schema
                         ),
                         reference_length_names=reference_length_names,
-                        source_data_ranks=self._build_source_data_ranks(
-                            bc_source_ranks=boundary_source_data_ranks[bc_type],
+                        source_schema=self._build_source_schema(
+                            bc_source_schema=boundary_source_schemas[bc_type],
                             include_latents=not is_first_hyperlayer,
                         ),
-                        global_data_ranks=global_data_ranks,
+                        global_schema=global_schema,
                         smoothing_radius=smoothing_radius,
                         hidden_layer_sizes=hidden_layer_sizes,
                         n_spherical_harmonics=n_spherical_harmonics,
@@ -384,7 +382,7 @@ class GLOBE(Module):
         ### Per-field learnable affine calibration (y = a*x + b). Bias is only
         # applied to scalar fields; adding bias to vector fields would break
         # rotational equivariance. Uses ModuleList (not ModuleDict) to support
-        # output field names containing dots from nested rank specs.
+        # output field names containing dots from nested schemas.
         flat_output_ranks = output_schema.ranks
         self._output_field_order = sorted(flat_output_ranks.keys())
         self.final_field_transforms = nn.ModuleList(
@@ -398,20 +396,20 @@ class GLOBE(Module):
             ]
         )
 
-    def _build_source_data_ranks(
+    def _build_source_schema(
         self,
-        bc_source_ranks: FieldSchemaLike,
+        bc_source_schema: FieldSchemaLike,
         include_latents: bool,
     ) -> FieldSchemaLike:
-        """Build the full source_data_ranks for a specific (layer, bc_type) kernel.
+        """Build the full source schema for a specific (layer, bc_type) kernel.
 
         Combines the BC's physical features (under ``"physical"``), cell
-        normals, and optionally latent features into a single rank spec
-        that mirrors the ``source_data`` structure produced by
+        normals, and optionally latent features into a single schema
+        declaration that mirrors the ``source_data`` structure produced by
         :meth:`_evaluate_hyperlayer`.
         """
         result: dict[str, Any] = {
-            "physical": bc_source_ranks,
+            "physical": bc_source_schema,
             "normals": {"rank": 1},
         }
         if include_latents:
@@ -651,7 +649,7 @@ class GLOBE(Module):
 
             kernel: MultiscaleKernel = self.kernel_layers[layer_idx][bc_type]  # ty: ignore[not-subscriptable]
             ### Pull only the leaves the kernel was built to consume.
-            ### `kernel.source_data_ranks` covers the per-bc declared
+            ### `kernel.source_schema` covers the per-bc declared
             ### `physical.<X>` plus, in layers >= 1, `latent.<...>` added
             ### by the previous communication step.  `"normals"` is
             ### excluded here because we auto-inject it from
@@ -781,7 +779,7 @@ class GLOBE(Module):
             Mapping of reference length names to scalar tensors.
         global_data : TensorDict or None, optional, default=None
             Nondimensional conditioning features. Leaf keys and ranks must
-            match ``global_data_ranks``. Passed through to the output Mesh.
+            match ``global_schema``. Passed through to the output Mesh.
         prediction_chunk_size : int or "auto" or None, optional, default="auto"
             Maximum number of prediction points to evaluate in a single
             pass through the final hyperlayer.  ``"auto"`` (the default)
@@ -810,7 +808,7 @@ class GLOBE(Module):
         ### names are "."-joined, which TensorDict does not parse, so
         ### convert them to nested keys.
         global_data = global_data.select(
-            *(FieldSchema.key(name) for name in self._global_schema)
+            *(FieldSchema.key(name) for name in self.global_schema)
         )
 
         ### Input validation
@@ -833,7 +831,7 @@ class GLOBE(Module):
                 )
             ### Check the bc-types subset BEFORE the per-bc loop so a typo'd
             ### bc name fails with a clear message instead of crashing on
-            ### `self.boundary_source_data_ranks[bc_type]` lookup below.
+            ### `self.boundary_source_schemas[bc_type]` lookup below.
             bc_types_from_input = set(boundary_meshes.keys())
             if not bc_types_from_input.issubset(self.boundary_condition_names):
                 raise ValueError(
@@ -851,21 +849,21 @@ class GLOBE(Module):
                         f"{self.n_spatial_dims}"
                     )
                 ### Subset cell_data contract: every leaf declared in
-                ### `boundary_source_data_ranks[bc_type]` must be present
+                ### `boundary_source_schemas[bc_type]` must be present
                 ### in `mesh.cell_data` with the declared rank. Extras
                 ### are silently dropped by the `select` in
                 ### `_evaluate_hyperlayer`. Catches typo'd declarations
                 ### and shape regressions with a friendlier error than
                 ### the bare KeyError that `select(strict=True)` would
                 ### otherwise raise on a missing leaf.
-                self._boundary_source_schemas[bc_type].check(
+                self.boundary_source_schemas[bc_type].check(
                     mesh.cell_data,
                     label=f"`boundary_meshes[{bc_type!r}].cell_data`",
                 )
             ### Same subset contract for `global_data`. The pre-filter
             ### above already dropped extras, so this only fires when a
             ### declared leaf was missing or had a rank mismatch.
-            self._global_schema.check(global_data, label="`global_data`")
+            self.global_schema.check(global_data, label="`global_data`")
 
         ### Build per-BC-type trees and areas (reused across all layers).
         ### Tree construction and traversal involve irregular control flow
@@ -987,7 +985,7 @@ class GLOBE(Module):
                 global_data=global_data,
             )
             for idx, name in enumerate(self._output_field_order):
-                key = tuple(name.split("."))
+                key = FieldSchema.key(name)
                 t = output_mesh.point_data[key]
                 output_mesh.point_data[key] = self.final_field_transforms[idx](
                     t.reshape(-1, 1)

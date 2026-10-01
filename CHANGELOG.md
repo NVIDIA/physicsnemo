@@ -53,17 +53,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `physicsnemo.mesh.fields` is rebuilt around two types. `RankSpec` (frozen
-  dataclass: `rank`, `symmetric`, `parity`) is one field's transformation law;
-  `FieldSchema` is an immutable, insertion-ordered mapping from dotted field
-  names to `RankSpec`, parsed once at a model's boundary with
-  `FieldSchema.parse` (nested groups and dotted names flatten alike) and
-  queried with `.ranks`, `.count(rank)`, `FieldSchema.key(name)` and
-  `.check(tensordict, label=...)`. Validation is construction, so an invalid
-  schema cannot exist. Integer leaves are no longer accepted: a field is
-  declared as `{"rank": n}` (YAML: `pressure: {rank: 0}`) or a `RankSpec`,
-  and any mapping without a `"rank"` key is a nested group. GLOBE and the
-  unified external-aerodynamics recipe configs are updated accordingly.
+- `physicsnemo.mesh.fields` is rebuilt around two types. `RankSpec` (`rank`,
+  `symmetric`, `parity`; `shape(n_spatial_dims)`, `numel(n_spatial_dims)`) is
+  one field's transformation law; `FieldSchema` is an insertion-ordered
+  mapping from dotted field names to `RankSpec`, parsed once at a model's
+  boundary with `FieldSchema.parse` (nested groups and dotted names flatten
+  alike) and queried with `.ranks`, `.count(rank)`, `FieldSchema.key(name)`
+  and `.check(tensordict, label=...)`. Both are read-only `dict`s, so a
+  declaration serializes to JSON as written and model checkpoints can record
+  them directly. Validation is construction, so an invalid schema cannot
+  exist. A field is declared as a `RankSpec` or a mapping of values,
+  `{"rank": n}` (YAML: `pressure: {rank: 0}`); a mapping of mappings is a
+  nested group. Integer leaves are no longer accepted.
+- GLOBE's field declarations are renamed after the schemas they hold:
+  `output_field_ranks`, `boundary_source_data_ranks` and `global_data_ranks`
+  become `output_schema`, `boundary_source_schemas` and `global_schema`
+  (kernels: `output_schema`, `source_schema`, `global_schema`), each also the
+  attribute holding the parsed `FieldSchema`. GLOBE raises
+  `NotImplementedError` for fields it does not implement (rank 2 and above,
+  pseudotensors) instead of silently dropping or misreading them. The GLOBE
+  examples and the unified external-aerodynamics recipe configs are updated.
 - Mesh integration uses a shared `_effective_measure` field for complete cell
   and point measures. Cell measures fall back to geometry; point measures are
   explicit and independent of connectivity. `Mesh.integrate_samples` evaluates

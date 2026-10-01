@@ -14,6 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
+import json
+import pickle
+
 import pytest
 import torch
 from tensordict import TensorDict
@@ -44,17 +48,31 @@ def test_rank_spec_parse_accepts_rank_spec_and_mapping():
     assert RankSpec.parse({"rank": 0}) == RankSpec(rank=0)
 
     assert RankSpec(rank=0).shape(3) == ()
-    assert RankSpec(rank=0).size(3) == 1
+    assert RankSpec(rank=0).numel(3) == 1
     assert RankSpec(rank=1).shape(2) == (2,)
     assert RankSpec(rank=2).shape(3) == (3, 3)
-    assert RankSpec(rank=2).size(3) == 9
+    assert RankSpec(rank=2).numel(3) == 9
+
+
+def test_rank_spec_is_its_canonical_declaration():
+    ### A spec is the dict of its non-default attributes, so equal laws are
+    ### equal (and hash alike) however they were spelled, and the JSON is the
+    ### declaration a user writes.
+    spec = RankSpec(2, symmetric=True)
+    assert spec == {"rank": 2, "symmetric": True}
+    assert spec == RankSpec(rank=2, symmetric=True, parity="even")
+    assert hash(spec) == hash(RankSpec.parse({"rank": 2, "symmetric": True}))
+    assert (spec.rank, spec.symmetric, spec.parity) == (2, True, "even")
+    assert RankSpec(0) == {"rank": 0}
+    assert json.dumps(RankSpec(1, parity="odd")) == '{"rank": 1, "parity": "odd"}'
+    assert repr(spec) == "RankSpec(rank=2, symmetric=True)"
 
 
 @pytest.mark.parametrize(
     ("spec", "error", "match"),
     [
         (0, TypeError, r"got int \(write \{'rank': 0\}\)"),
-        (True, TypeError, "got bool"),
+        (True, TypeError, "got bool$"),  # no "(write {'rank': 1})" hint
         (1.0, TypeError, "got float"),
         ({"symmetric": True}, ValueError, "must contain a 'rank' key"),
         ({"rank": 1, "channels": 3}, ValueError, r"unknown keys \['channels'\]"),
@@ -113,16 +131,39 @@ def test_parse_is_idempotent_and_direct_construction_matches():
     assert FieldSchema.parse(schema) is schema
     assert FieldSchema({"pressure": RankSpec(0)}) == schema
     assert FieldSchema.parse({}) == FieldSchema({})
-    assert repr(schema) == (
-        "FieldSchema({'pressure': RankSpec(rank=0, symmetric=False, parity='even')})"
-    )
+    assert repr(schema) == "FieldSchema({'pressure': RankSpec(rank=0)})"
 
 
 def test_parse_rejects_integer_leaves():
     with pytest.raises(TypeError, match=r"outputs\['pressure'\] must be a RankSpec"):
         FieldSchema.parse({"pressure": 0}, label="outputs")
-    with pytest.raises(TypeError, match=r"outputs\['fluid.velocity'\].*got int"):
+    ### Nested, a mapping of bare values reads as a field with unknown keys.
+    with pytest.raises(
+        ValueError,
+        match=r"outputs\['fluid'\] has unknown keys \['velocity'\].*\{'rank': 0\}",
+    ):
         FieldSchema.parse({"fluid": {"velocity": 1}}, label="outputs")
+
+
+def test_fields_and_groups_are_told_apart_by_their_values():
+    ### Field attribute names are not reserved: a nested field may be called
+    ### "rank", "symmetric" or "parity".
+    schema = FieldSchema.parse(
+        {"stats": {"rank": {"rank": 0}, "parity": {"rank": 1}, "symmetric": {}}}
+    )
+    assert schema.ranks == {"stats.rank": 0, "stats.parity": 1}
+    ### A field that forgets "rank" is reported as that field.
+    with pytest.raises(ValueError, match=r"outputs\['stress'\] mapping must contain"):
+        FieldSchema.parse({"stress": {"symmetric": True}}, label="outputs")
+    with pytest.raises(ValueError, match=r"outputs\['w'\] has unknown keys \['rnak'\]"):
+        FieldSchema.parse({"w": {"rnak": 1}}, label="outputs")
+    with pytest.raises(
+        ValueError, match=r"outputs\['surface'\] mixes field attributes"
+    ):
+        FieldSchema.parse(
+            {"surface": {"rank": 0, "pressure": {"rank": 0}}}, label="outputs"
+        )
+    assert FieldSchema.parse({"no_slip": {}}) == FieldSchema({})
 
 
 def test_parse_rejects_group_leaf_conflicts_and_bad_names():
@@ -149,6 +190,14 @@ def test_parse_rejects_group_leaf_conflicts_and_bad_names():
         FieldSchema.parse({"shear": {"rank": 1, "parity": "axial"}}, label="outputs")
 
 
+def test_conflicts_are_reported_in_declaration_order():
+    ### Deterministic messages: the first offending declaration is reported,
+    ### independent of hash seeding.
+    spec = {name: {"rank": 0} for name in ("c", "c.z", "a", "a.x", "b", "b.y")}
+    with pytest.raises(ValueError, match="'c' is a group of 'c.z'"):
+        FieldSchema.parse(spec)
+
+
 def test_direct_construction_is_validated_too():
     with pytest.raises(TypeError, match="must be a RankSpec.*use FieldSchema.parse"):
         FieldSchema({"pressure": {"rank": 0}})
@@ -158,12 +207,49 @@ def test_direct_construction_is_validated_too():
         FieldSchema([("a", RankSpec(0))])
 
 
-def test_schema_is_immutable():
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda d: d.__setitem__("velocity", RankSpec(1)),
+        lambda d: d.__delitem__(next(iter(d))),
+        lambda d: d.update(velocity=RankSpec(1)),
+        lambda d: d.setdefault("velocity", RankSpec(1)),
+        lambda d: d.pop(next(iter(d))),
+        lambda d: d.popitem(),
+        lambda d: d.clear(),
+        lambda d: d.__ior__({"velocity": RankSpec(1)}),
+    ],
+)
+def test_schema_and_spec_are_read_only(mutate):
     schema = FieldSchema.parse({"pressure": {"rank": 0}})
-    with pytest.raises(AttributeError):
-        schema.fields = {}  # frozen dataclass
-    with pytest.raises(TypeError):
-        schema["velocity"] = RankSpec(1)  # Mapping, not MutableMapping
+    for obj in (schema, schema["pressure"]):
+        with pytest.raises(TypeError, match="is immutable"):
+            mutate(obj)
+    assert schema == {"pressure": RankSpec(0)}
+
+
+def test_schema_round_trips_through_json_pickle_and_copy():
+    ### Model checkpoints store constructor arguments as JSON, so a schema (or
+    ### a spec) passed to a constructor must serialize as it stands and parse
+    ### back to an equal schema.
+    schema = FieldSchema.parse(
+        {
+            "surface": {"pressure": {"rank": 0}},
+            "stress": RankSpec(2, symmetric=True),
+            "vorticity": {"rank": 1, "parity": "odd"},
+        }
+    )
+    text = json.dumps(schema)
+    assert json.loads(text) == {
+        "surface.pressure": {"rank": 0},
+        "stress": {"rank": 2, "symmetric": True},
+        "vorticity": {"rank": 1, "parity": "odd"},
+    }
+    assert FieldSchema.parse(json.loads(text)) == schema
+    pickled = pickle.loads(pickle.dumps(schema))  # noqa: S301 - local round trip
+    for clone in (pickled, copy.deepcopy(schema)):
+        assert clone == schema and type(clone) is FieldSchema
+        assert all(type(spec) is RankSpec for spec in clone.values())
 
 
 ### TensorDict interplay --------------------------------------------------------
@@ -196,6 +282,12 @@ def test_check_accepts_supersets_and_reports_schema_errors():
         {"pressure": {"rank": 0}, "state": {"temperature": {"rank": 0}}}
     )
     schema.check(_mixed_fields(), label="data")  # extra leaves are fine
+    ### ... whatever their names: undeclared leaves are never parsed as fields.
+    odd_names = TensorDict(
+        {k: torch.zeros(3) for k in ("pressure", "a", "a.b", "trailing.")},
+        batch_size=[3],
+    )
+    FieldSchema.parse({"pressure": {"rank": 0}}).check(odd_names, label="data")
 
     data = TensorDict({"pressure": torch.zeros(3, 2)}, batch_size=[3])
     declared = FieldSchema.parse(

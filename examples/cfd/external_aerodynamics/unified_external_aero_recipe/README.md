@@ -530,7 +530,7 @@ Notes on the composition:
   against a top-level `out_dim` value that `build_dataloaders()`
   computes from the chosen dataset's `targets:` block (sum of channel
   counts via `field_dim()`). GLOBE templates declare per-target
-  `output_field_ranks` instead and don't touch `out_dim`.
+  `output_schema` instead and don't touch `out_dim`.
 - `conf/infer.yaml` follows the same shape:
   `defaults: - base, - model: ???, - _self_` with checkpoint /
   output-path knobs in place of the training schedule. `base.yaml` is

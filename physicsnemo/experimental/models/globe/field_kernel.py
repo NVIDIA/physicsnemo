@@ -119,6 +119,29 @@ def _device_chunk_budget_bytes(device: torch.device) -> int:
     return _device_total_memory_bytes(device) * _CHUNK_MEMORY_BUDGET_PERCENT // 100
 
 
+def _require_supported(schema: FieldSchema, *, label: str) -> None:
+    """Refuse field declarations the kernels do not implement.
+
+    The kernels form invariant features from scalars and the dot products of
+    true vectors, and build vector outputs on a basis of true vectors.  A
+    field of rank 2 or more would be silently left out, and a pseudotensor
+    would transform with the wrong sign under reflections.
+    """
+    for name, spec in schema.items():
+        if spec.rank not in (0, 1):
+            raise NotImplementedError(
+                f"{label}[{name!r}]: rank-{spec.rank} fields are not supported; "
+                f"GLOBE implements scalars (rank 0) and vectors (rank 1)"
+            )
+        if spec.parity != "even":
+            raise NotImplementedError(
+                f"{label}[{name!r}]: pseudotensors (parity='odd') are not "
+                f"supported; GLOBE's features and vector outputs are built from "
+                f"true vectors, so a pseudotensor would transform with the wrong "
+                f"sign under reflections"
+            )
+
+
 class Kernel(Module):
     r"""A kernel function for evaluating scalar and vector fields from source points.
 
@@ -138,17 +161,19 @@ class Kernel(Module):
     ----------
     n_spatial_dims : int
         Number of spatial dimensions (2 or 3).
-    output_field_ranks : FieldSchemaLike
+    output_schema : FieldSchemaLike
         Field schema declaring the output fields, e.g.
         ``{"pressure": {"rank": 0}, "velocity": {"rank": 1}}`` (see
         :class:`~physicsnemo.mesh.FieldSchema`). Nesting is supported and
-        mirrors the desired output structure. Derive from data via
-        :meth:`FieldSchema.from_tensordict`.
-    source_data_ranks : FieldSchemaLike
+        mirrors the desired output structure. Only true scalars (rank 0) and
+        vectors (rank 1) are implemented, here and in the other schemas;
+        anything else raises :class:`NotImplementedError`. Derive from data
+        via :meth:`FieldSchema.from_tensordict`.
+    source_schema : FieldSchemaLike or None, optional
         Field schema describing per-source features. The number of rank-0
         fields determines scalar input width; rank-1 fields determine vector
         input width.
-    global_data_ranks : FieldSchemaLike
+    global_schema : FieldSchemaLike or None, optional
         Field schema describing global conditioning features.
     smoothing_radius : float, optional, default=1e-8
         Small value used to smooth power functions near zero to avoid numerical
@@ -185,11 +210,11 @@ class Kernel(Module):
         Per-source features with ``batch_size=(N_sources,)``. Contains a mix
         of scalar (rank-0) and vector (rank-1) tensors; the kernel splits
         them internally via :func:`split_by_leaf_rank`. Leaf keys and ranks
-        must match ``source_data_ranks``. All values must be dimensionless.
+        must match ``source_schema``. All values must be dimensionless.
     global_data : TensorDict or None, optional, default=None
         Problem-level features with ``batch_size=()``. Contains a mix of
         scalar (rank-0) and vector (rank-1) tensors; split internally.
-        Leaf keys and ranks must match ``global_data_ranks``. All values
+        Leaf keys and ranks must match ``global_schema``. All values
         must be dimensionless.
 
     Outputs
@@ -204,9 +229,9 @@ class Kernel(Module):
         self,
         *,
         n_spatial_dims: int,
-        output_field_ranks: FieldSchemaLike,
-        source_data_ranks: FieldSchemaLike | None = None,
-        global_data_ranks: FieldSchemaLike | None = None,
+        output_schema: FieldSchemaLike,
+        source_schema: FieldSchemaLike | None = None,
+        global_schema: FieldSchemaLike | None = None,
         smoothing_radius: float = 1e-8,
         hidden_layer_sizes: Sequence[int] | None = None,
         n_spherical_harmonics: int = 4,
@@ -217,27 +242,23 @@ class Kernel(Module):
     ):
         if hidden_layer_sizes is None:
             hidden_layer_sizes = [64]
-        if source_data_ranks is None:
-            source_data_ranks = {}
-        if global_data_ranks is None:
-            global_data_ranks = {}
 
         super().__init__()
 
         self.n_spatial_dims = n_spatial_dims
-        self.output_field_ranks = output_field_ranks
-        self.source_data_ranks = source_data_ranks
-        self.global_data_ranks = global_data_ranks
-        ### Parsed schemas (the raw declarations above are kept as given).
-        self.output_schema = FieldSchema.parse(
-            output_field_ranks, label="output_field_ranks"
-        )
+        self.output_schema = FieldSchema.parse(output_schema, label="output_schema")
         self.source_schema = FieldSchema.parse(
-            source_data_ranks, label="source_data_ranks"
+            {} if source_schema is None else source_schema, label="source_schema"
         )
         self.global_schema = FieldSchema.parse(
-            global_data_ranks, label="global_data_ranks"
+            {} if global_schema is None else global_schema, label="global_schema"
         )
+        for label, schema in (
+            ("output_schema", self.output_schema),
+            ("source_schema", self.source_schema),
+            ("global_schema", self.global_schema),
+        ):
+            _require_supported(schema, label=label)
         self.smoothing_radius = smoothing_radius
         self.hidden_layer_sizes = hidden_layer_sizes
         self.n_spherical_harmonics = n_spherical_harmonics
@@ -810,9 +831,9 @@ class BarnesHutKernel(Kernel):
         self,
         *,
         n_spatial_dims: int,
-        output_field_ranks: FieldSchemaLike,
-        source_data_ranks: FieldSchemaLike | None = None,
-        global_data_ranks: FieldSchemaLike | None = None,
+        output_schema: FieldSchemaLike,
+        source_schema: FieldSchemaLike | None = None,
+        global_schema: FieldSchemaLike | None = None,
         smoothing_radius: float = 1e-8,
         hidden_layer_sizes: Sequence[int] | None = None,
         n_spherical_harmonics: int = 4,
@@ -824,9 +845,9 @@ class BarnesHutKernel(Kernel):
     ):
         super().__init__(
             n_spatial_dims=n_spatial_dims,
-            output_field_ranks=output_field_ranks,
-            source_data_ranks=source_data_ranks,
-            global_data_ranks=global_data_ranks,
+            output_schema=output_schema,
+            source_schema=source_schema,
+            global_schema=global_schema,
             smoothing_radius=smoothing_radius,
             hidden_layer_sizes=hidden_layer_sizes,
             n_spherical_harmonics=n_spherical_harmonics,
@@ -1248,7 +1269,7 @@ class BarnesHutKernel(Kernel):
         ----------
         chunk_result : TensorDict
             Output of one ``_evaluate_interactions`` call.  Contains the
-            keys declared in ``self.output_field_ranks``; values have
+            keys declared in ``self.output_schema``; values have
             ``batch_size=(n_pairs,)``.
         weights : Float[torch.Tensor, "n_pairs"]
             Per-pair scalar multipliers (e.g. source strengths).
@@ -1542,15 +1563,15 @@ class MultiscaleKernel(Module):
     ----------
     n_spatial_dims : int
         Number of spatial dimensions (2 or 3).
-    output_field_ranks : TensorDict
-        Rank-spec TensorDict (see :class:`Kernel`).
+    output_schema : FieldSchemaLike
+        Field schema declaring the output fields (see :class:`Kernel`).
     reference_length_names : Sequence[str]
         Sequence of identifiers for reference length scales. Each creates an
         independent kernel branch. Examples: ``["viscous", "geometric"]``.
-    source_data_ranks : TensorDict or None, optional
-        Rank-spec TensorDict for per-source features (see :class:`Kernel`).
-    global_data_ranks : TensorDict or None, optional
-        Rank-spec TensorDict for global features (see :class:`Kernel`).
+    source_schema : FieldSchemaLike or None, optional
+        Field schema for per-source features (see :class:`Kernel`).
+    global_schema : FieldSchemaLike or None, optional
+        Field schema for global features (see :class:`Kernel`).
         Log-ratios of reference lengths are automatically added as scalar
         entries before passing to each kernel branch.
     smoothing_radius : float, optional, default=1e-8
@@ -1609,9 +1630,9 @@ class MultiscaleKernel(Module):
     --------
     >>> kernel = MultiscaleKernel(
     ...     n_spatial_dims=2,
-    ...     output_field_ranks=TensorDict({"phi": 0, "u": 1}),
+    ...     output_schema={"phi": {"rank": 0}, "u": {"rank": 1}},
     ...     reference_length_names=["viscous_length", "chord_length"],
-    ...     source_data_ranks=TensorDict({"normal": 1}),
+    ...     source_schema={"normal": {"rank": 1}},
     ...     hidden_layer_sizes=[64, 64],
     ... )
     >>> result = kernel(
@@ -1629,10 +1650,10 @@ class MultiscaleKernel(Module):
         self,
         *,
         n_spatial_dims: int,
-        output_field_ranks: FieldSchemaLike,
+        output_schema: FieldSchemaLike,
         reference_length_names: Sequence[str],
-        source_data_ranks: FieldSchemaLike | None = None,
-        global_data_ranks: FieldSchemaLike | None = None,
+        source_schema: FieldSchemaLike | None = None,
+        global_schema: FieldSchemaLike | None = None,
         smoothing_radius: float = 1e-8,
         hidden_layer_sizes: Sequence[int] | None = None,
         n_spherical_harmonics: int = 4,
@@ -1644,16 +1665,8 @@ class MultiscaleKernel(Module):
     ):
         super().__init__()
 
-        if source_data_ranks is None:
-            source_data_ranks = {}
-        if global_data_ranks is None:
-            global_data_ranks = {}
-
         self.n_spatial_dims = n_spatial_dims
-        self.output_field_ranks = output_field_ranks
         self.reference_length_names = reference_length_names
-        self.source_data_ranks = source_data_ranks
-        self.global_data_ranks = global_data_ranks
         self.smoothing_radius = smoothing_radius
         self.hidden_layer_sizes = hidden_layer_sizes
         self.n_spherical_harmonics = n_spherical_harmonics
@@ -1663,20 +1676,18 @@ class MultiscaleKernel(Module):
         self.leaf_size = leaf_size
         ### Parsed schemas; ``GLOBE`` reads ``source_schema`` to select the
         ### cell_data leaves each kernel consumes.
-        self.output_schema = FieldSchema.parse(
-            output_field_ranks, label="output_field_ranks"
-        )
+        self.output_schema = FieldSchema.parse(output_schema, label="output_schema")
         self.source_schema = FieldSchema.parse(
-            source_data_ranks, label="source_data_ranks"
+            {} if source_schema is None else source_schema, label="source_schema"
         )
         self.global_schema = FieldSchema.parse(
-            global_data_ranks, label="global_data_ranks"
+            {} if global_schema is None else global_schema, label="global_schema"
         )
 
-        ### Augment global_data_ranks with log-ratio entries for each
+        ### Augment global_schema with log-ratio entries for each
         # pair of reference lengths. These are rank-0 (scalar) features.
         augmented_global = {
-            **global_data_ranks,
+            **self.global_schema,
             "log_reference_length_ratios": {
                 f"{k1}_{k2}": {"rank": 0}
                 for k1, k2 in itertools.combinations(reference_length_names, 2)
@@ -1687,9 +1698,9 @@ class MultiscaleKernel(Module):
             {
                 name: BarnesHutKernel(
                     n_spatial_dims=n_spatial_dims,
-                    output_field_ranks=output_field_ranks,
-                    source_data_ranks=source_data_ranks,
-                    global_data_ranks=augmented_global,
+                    output_schema=self.output_schema,
+                    source_schema=self.source_schema,
+                    global_schema=augmented_global,
                     smoothing_radius=smoothing_radius,
                     hidden_layer_sizes=hidden_layer_sizes,
                     n_spherical_harmonics=n_spherical_harmonics,
