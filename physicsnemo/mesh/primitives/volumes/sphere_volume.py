@@ -59,6 +59,7 @@ def load(
     Mesh[3, 3]
         Mesh with n_manifold_dims=3, n_spatial_dims=3.
     """
+    from physicsnemo.mesh.generate._simplex_ops import orient_positive
     from physicsnemo.mesh.io.io_pyvista import from_pyvista
 
     ### Create a sphere surface and fill it with tetrahedra
@@ -69,5 +70,7 @@ def load(
     ### Use delaunay_3d to fill the interior with tetrahedra
     volume = sphere.delaunay_3d()
 
-    ### Convert to physicsnemo Mesh and move to device
-    return from_pyvista(volume).to(device=device)
+    ### Convert to physicsnemo Mesh; VTK 9.7+ can emit inverted tetrahedra
+    mesh = from_pyvista(volume)
+    mesh = mesh.with_cells(orient_positive(mesh.points, mesh.cells))
+    return mesh.to(device=device)
