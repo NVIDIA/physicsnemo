@@ -46,6 +46,7 @@ class _FLAREPlusPlusAttention(FLAREPlusPlus):
         context_dim: int,
         concrete_dropout: bool,
         state_mixing_mode: Literal["weighted", "concat_project"],
+        attn_scale: float | None = None,
     ) -> None:
         if context_dim < 0:
             raise ValueError(f"context_dim must be non-negative, got {context_dim}")
@@ -61,6 +62,7 @@ class _FLAREPlusPlusAttention(FLAREPlusPlus):
             dropout=dropout,
             n_global_queries=n_global_queries,
             use_te=False,
+            attn_scale=attn_scale,
         )
         self.context_dim = context_dim
         self.state_mixing_mode = state_mixing_mode
@@ -157,6 +159,7 @@ class _FLAREPlusPlusBlock(nn.Module):
         context_dim: int,
         concrete_dropout: bool,
         state_mixing_mode: Literal["weighted", "concat_project"],
+        attn_scale: float | None = None,
     ) -> None:
         super().__init__()
         dim_head = hidden_dim // num_heads
@@ -170,6 +173,7 @@ class _FLAREPlusPlusBlock(nn.Module):
             context_dim=context_dim,
             concrete_dropout=concrete_dropout,
             state_mixing_mode=state_mixing_mode,
+            attn_scale=attn_scale,
         )
         self.ln_mlp1 = nn.Sequential(
             nn.LayerNorm(hidden_dim),

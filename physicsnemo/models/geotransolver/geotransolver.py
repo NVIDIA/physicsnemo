@@ -285,6 +285,11 @@ class GeoTransolver(Module):
         ``"output"``. The default ``("blocks",)`` matches Transolver's
         block-only policy. ``checkpointing_ratio`` applies to the block stack;
         other selected components are either fully checkpointed or disabled.
+    attn_scale : float | None, optional
+        Positive finite attention-logit scale for FLARE-family backends.
+        ``None`` preserves the backend default: ``1.0`` for ``GALE_FA`` and
+        inverse square root of the per-head width for ``GALE_FPP``.
+        Must remain ``None`` for ``GALE``.
 
     Forward
     -------
@@ -440,9 +445,18 @@ class GeoTransolver(Module):
         activation_checkpointing: bool = False,
         checkpointing_ratio: float = 1.0,
         activation_checkpointing_components: tuple[str, ...] | list[str] = ("blocks",),
+        attn_scale: float | None = None,
     ) -> None:
         super().__init__(meta=GeoTransolverMetaData())
         self.__name__ = "GeoTransolver"
+
+        if attention_type not in {"GALE", "GALE_FA", "GALE_FPP"}:
+            raise ValueError(f"Invalid attention_type: {attention_type!r}")
+        if attention_type == "GALE" and attn_scale is not None:
+            raise ValueError(
+                "attn_scale is only supported by the GALE_FA and GALE_FPP "
+                "attention backends"
+            )
 
         if attention_type == "GALE_FPP" and plus:
             raise ValueError(
@@ -574,6 +588,7 @@ class GeoTransolver(Module):
                         context_dim=context_dim,
                         concrete_dropout=concrete_dropout,
                         state_mixing_mode=state_mixing_mode,
+                        attn_scale=attn_scale,
                     )
                     for _ in range(n_layers)
                 ]
@@ -596,6 +611,7 @@ class GeoTransolver(Module):
                         attention_type=attention_type,
                         concrete_dropout=concrete_dropout,
                         state_mixing_mode=state_mixing_mode,
+                        attn_scale=attn_scale,
                     )
                     for layer_idx in range(n_layers)
                 ]
@@ -713,6 +729,40 @@ class GeoTransolver(Module):
             geometry,
             global_embedding,
         )
+
+    def _process_preprocessed_embeddings(
+        self,
+        embeddings: list[torch.Tensor],
+        context: torch.Tensor | None,
+        local_features: list[torch.Tensor] | None,
+        *,
+        return_point_features: bool = False,
+    ) -> list[torch.Tensor] | tuple[list[torch.Tensor], list[torch.Tensor]]:
+        r"""Process native hidden states, allowing hybrid mesh refinement.
+
+        Each input is ``[B, N, n_hidden]``. This seam lets mesh processors
+        refine the projected state without a bottleneck back to raw features.
+        Both regular and hybrid forwards share checkpointing and output heads.
+        """
+        if self.include_local_features and local_features is not None:
+            embeddings = [
+                torch.cat([embeddings[i], local_features[i]], dim=-1)
+                for i in range(len(embeddings))
+            ]
+        for block_idx, block in enumerate(self.blocks):
+            if self._should_checkpoint_block(block_idx):
+                embeddings = self._checkpoint_block(block, embeddings, context)
+            else:
+                embeddings = block(tuple(embeddings), context)
+
+        point_features = list(embeddings)
+        outputs = [
+            self._run_checkpointed_component("output", self.ln_mlp_out[i], value)
+            for i, value in enumerate(embeddings)
+        ]
+        if return_point_features:
+            return outputs, point_features
+        return outputs
 
     def forward(
         self,
@@ -882,28 +932,9 @@ class GeoTransolver(Module):
             for i, le in enumerate(local_embedding)
         ]
 
-        # Concatenate local features if enabled
-        if self.include_local_features and local_embedding_bq is not None:
-            x = [
-                torch.cat([x[i], local_embedding_bq[i]], dim=-1) for i in range(len(x))
-            ]
-
-        # Pass through GALE transformer blocks with context cross-attention
-        for block_idx, block in enumerate(self.blocks):
-            if self._should_checkpoint_block(block_idx):
-                x = self._checkpoint_block(block, x, embedding_states)
-            else:
-                x = block(tuple(x), embedding_states)
-
-        # Per-point features just before the output projection. Shape per
-        # stream: (B, N, effective_hidden). Captured for pointwise heads.
-        point_features = list(x)
-
-        # Project to output dimensions: (B, N, n_hidden) -> (B, N, out_dim)
-        x = [
-            self._run_checkpointed_component("output", self.ln_mlp_out[i], x[i])
-            for i in range(len(x))
-        ]
+        x, point_features = self._process_preprocessed_embeddings(
+            x, embedding_states, local_embedding_bq, return_point_features=True
+        )
 
         if self.structured_shape is not None and unflatten_output:
             B = x[0].shape[0]

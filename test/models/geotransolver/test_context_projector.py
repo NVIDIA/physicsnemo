@@ -18,6 +18,7 @@ import torch
 
 from physicsnemo.models.geotransolver.context_projector import (
     ContextProjector,
+    GlobalContextBuilder,
 )
 
 # =============================================================================
@@ -53,3 +54,29 @@ def test_context_projector_forward(device):
     # Output shape: [Batch, Heads, Slice_num, dim_head]
     assert slice_tokens.shape == (batch_size, heads, slice_num, dim_head)
     assert not torch.isnan(slice_tokens).any()
+
+
+def test_global_context_builder_can_return_live_geometry_context(device):
+    builder = GlobalContextBuilder(
+        functional_dims=(3,),
+        geometry_dim=3,
+        n_hidden=32,
+        n_head=4,
+        slice_num=8,
+        use_te=False,
+    ).to(device)
+    local = (torch.randn(1, 12, 3, device=device),)
+    geometry = torch.randn(1, 12, 3, device=device, requires_grad=True)
+
+    _, _, detached = builder.build_context(local, None, geometry)
+    assert detached is not None
+    assert not detached.requires_grad
+
+    _, _, live = builder.build_context(
+        local, None, geometry, detach_geometry_context=False
+    )
+    assert live is not None
+    assert live.requires_grad
+    live.square().mean().backward()
+    assert geometry.grad is not None
+    assert torch.isfinite(geometry.grad).all()

@@ -240,8 +240,13 @@ def radius_search_impl(
         for b in range(B):
             pts_b = points[b].contiguous()
             qrs_b = queries[b].contiguous()
-            wp_pts_b = wp.from_torch(pts_b, dtype=wp.vec3)
-            wp_qrs_b = wp.from_torch(qrs_b, dtype=wp.vec3, return_ctype=True)
+            # PyTorch's registered scatter backward owns differentiation. Warp
+            # must not allocate/mutate tensor .grad buffers during discovery,
+            # including when this forward is recomputed by checkpointing.
+            wp_pts_b = wp.from_torch(pts_b, dtype=wp.vec3, requires_grad=False)
+            wp_qrs_b = wp.from_torch(
+                qrs_b, dtype=wp.vec3, requires_grad=False, return_ctype=True
+            )
             grid = wp.HashGrid(dim_x=128, dim_y=128, dim_z=128, device=wp_pts_b.device)
             grid.reserve(N_queries)
             grid.build(points=wp_pts_b, radius=0.5 * radius)
@@ -356,10 +361,16 @@ def radius_search_impl(
 
             # Convert batched points/queries to warp 2D arrays
             wp_points_2d = wp.from_torch(
-                points.contiguous(), dtype=wp.vec3, return_ctype=True
+                points.contiguous(),
+                dtype=wp.vec3,
+                requires_grad=False,
+                return_ctype=True,
             )
             wp_queries_2d = wp.from_torch(
-                queries.contiguous(), dtype=wp.vec3, return_ctype=True
+                queries.contiguous(),
+                dtype=wp.vec3,
+                requires_grad=False,
+                return_ctype=True,
             )
 
             # Allocate outputs with batch dimension
@@ -562,6 +573,43 @@ def backward_radius_search(
     return point_grads, None, None, None, None, None
 
 
+def _deterministic_point_gradients(
+    indexes: torch.Tensor,
+    num_neighbors: torch.Tensor,
+    grad_points_out: torch.Tensor,
+    points_shape: List[int],
+    max_points: int | None,
+) -> torch.Tensor:
+    """Accumulate selected-point gradients using PyTorch's deterministic path.
+
+    Warp's atomic scatter is not covered by ``use_deterministic_algorithms``.
+    Repeated point indices can therefore change backward summation order even
+    when the selected neighbors and forward values are identical. Flatten batch
+    and point indices and delegate the reduction to deterministic ``index_add``.
+    Padding slots must be removed, not merely assigned a zero gradient: their
+    indices need not be valid, and their upstream gradients can contain NaNs.
+    """
+    if max_points is None:
+        flat_indices = indexes[-1].to(torch.int64)
+        if len(points_shape) == 3:
+            flat_indices = flat_indices + indexes[0].to(torch.int64) * points_shape[1]
+        values = grad_points_out.reshape(-1, points_shape[-1])
+    else:
+        valid = torch.arange(
+            indexes.shape[-1], device=indexes.device
+        ) < num_neighbors.unsqueeze(-1)
+        flat_indices = indexes.to(torch.int64)
+        if len(points_shape) == 3:
+            offsets = (
+                torch.arange(points_shape[0], device=indexes.device) * points_shape[1]
+            )
+            flat_indices = flat_indices + offsets[:, None, None]
+        flat_indices = flat_indices[valid]
+        values = grad_points_out[valid]
+    result = grad_points_out.new_zeros(points_shape).reshape(-1, points_shape[-1])
+    return result.index_add(0, flat_indices, values).reshape(points_shape)
+
+
 @torch.library.custom_op(
     "physicsnemo::radius_search_apply_grad_to_points", mutates_args=()
 )
@@ -586,6 +634,11 @@ def apply_grad_to_points(
     Returns:
         torch.Tensor: The gradient with respect to the input points.
     """
+    if torch.are_deterministic_algorithms_enabled():
+        return _deterministic_point_gradients(
+            indexes, num_neighbors, grad_points_out, points_shape, max_points
+        )
+
     point_grads = torch.zeros(
         points_shape, dtype=grad_points_out.dtype, device=grad_points_out.device
     )
@@ -626,7 +679,10 @@ def apply_grad_to_points(
                                         b_indexes, dtype=wp.int32, return_ctype=True
                                     ),
                                     wp.from_torch(
-                                        b_grad_out, dtype=wp.vec3, return_ctype=True
+                                        b_grad_out,
+                                        dtype=wp.vec3,
+                                        requires_grad=False,
+                                        return_ctype=True,
                                     ),
                                     wp.from_torch(
                                         point_grads[b_idx],
@@ -646,7 +702,10 @@ def apply_grad_to_points(
                         inputs=[
                             wp.from_torch(indexes, dtype=wp.int32, return_ctype=True),
                             wp.from_torch(
-                                grad_points_out, dtype=wp.vec3, return_ctype=True
+                                grad_points_out,
+                                dtype=wp.vec3,
+                                requires_grad=False,
+                                return_ctype=True,
                             ),
                             wp.from_torch(
                                 point_grads, dtype=wp.vec3, return_ctype=True
@@ -658,7 +717,8 @@ def apply_grad_to_points(
                     )
 
         else:
-            # Deterministic path: always use batched kernel.
+            # Fixed-capacity path: always use batched kernel. The atomic
+            # reduction is intentionally used only outside deterministic mode.
             # Unsqueeze 2D tensors to 3D so we can use a single kernel variant.
             if indexes.ndim == 2:
                 indexes = indexes.unsqueeze(0)
@@ -673,7 +733,12 @@ def apply_grad_to_points(
                 inputs=[
                     wp.from_torch(indexes, dtype=wp.int32, return_ctype=True),
                     wp.from_torch(num_neighbors, dtype=wp.int32, return_ctype=True),
-                    wp.from_torch(grad_points_out, dtype=wp.vec3, return_ctype=True),
+                    wp.from_torch(
+                        grad_points_out,
+                        dtype=wp.vec3,
+                        requires_grad=False,
+                        return_ctype=True,
+                    ),
                     wp.from_torch(point_grads, dtype=wp.vec3, return_ctype=True),
                 ],
                 device=wp_launch_device,

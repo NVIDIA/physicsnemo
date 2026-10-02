@@ -14,21 +14,48 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import tempfile
-import numpy as np
-import pyvista as pv
-import pytest
-from pathlib import Path
-
 # Import functions from vtp_reader
 import sys
+import tempfile
+from pathlib import Path
+
+import numpy as np
+import pytest
+import pyvista as pv
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from vtp_reader import (
-    load_vtp_file,
-    extract_mesh_connectivity_from_polydata,
+    _load_vtp_cache,
+    _save_vtp_cache,
+    _vtp_cache_path,
     build_edges_from_mesh_connectivity,
+    collect_mesh_pos,
+    extract_mesh_connectivity_from_polydata,
+    load_vtp_file,
 )
+
+
+def test_vtp_tensor_cache_round_trip_and_source_validation(tmp_path):
+    """Verify VTP tensor cache round trip and source validation."""
+    source = tmp_path / "Run1.vtp"
+    source.write_bytes(b"source-v1")
+    cache_path = _vtp_cache_path(str(tmp_path / "cache"), str(source))
+    src = np.array([0, 1], dtype=np.int64)
+    dst = np.array([1, 2], dtype=np.int64)
+    coords = np.arange(36, dtype=np.float64).reshape(3, 4, 3)
+    point_data = {"thickness": np.arange(4, dtype=np.float32)}
+
+    _save_vtp_cache(cache_path, str(source), src, dst, coords, point_data)
+    cached = _load_vtp_cache(cache_path, str(source))
+
+    assert cached is not None
+    np.testing.assert_array_equal(cached[0], src)
+    np.testing.assert_array_equal(cached[1], dst)
+    np.testing.assert_array_equal(cached[2], coords.astype(np.float32))
+    np.testing.assert_array_equal(cached[3]["thickness"], point_data["thickness"])
+
+    source.write_bytes(b"source-v2-with-a-different-size")
+    assert _load_vtp_cache(cache_path, str(source)) is None
 
 
 @pytest.fixture
@@ -171,6 +198,20 @@ def test_build_edges_from_mesh_connectivity():
 
     expected_edges = {(0, 1), (1, 2), (2, 3), (0, 3)}
     assert edges == expected_edges, f"Expected {expected_edges}, got {edges}"
+
+
+def test_collect_mesh_pos_skips_mesh_construction_when_not_writing(monkeypatch):
+    """Verify collect mesh pos skips mesh construction when not writing."""
+    positions = np.arange(36, dtype=np.float32).reshape(3, 4, 3)
+
+    def fail_if_constructed(*args, **kwargs):
+        raise AssertionError("PyVista mesh construction should be skipped")
+
+    monkeypatch.setattr(pv, "PolyData", fail_if_constructed)
+
+    collected = collect_mesh_pos("unused", positions, [[0, 1, 2, 3]], write_vtp=False)
+
+    np.testing.assert_array_equal(collected, positions)
 
 
 def test_point_data_extraction(simple_vtp_file):

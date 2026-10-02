@@ -1,0 +1,75 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Reference DeFormer recipe: predictive node-to-face contact, reference-edge
+# geodesic exclusions, original point-space FLARE, and fixed BPTT-4.
+defaults:
+  - crash_deformer_autoregressive
+  - _self_
+
+experiment_name: Crash-DeFormer-GeodesicContact-Autoregressive
+
+reader:
+  include_contact_topology: true
+
+training:
+  deterministic: true
+  reproducible_sampling: true
+  sampler_seed: 0
+
+datapipe:
+  contact_surface: true
+  contact_require_elements: true
+  contact_exclusion_hops: null
+  window_seed: ${training.seed}
+  contact_surface_exclusion: reference_geodesic
+  contact_geodesic_distance_scale: 1.4142135623730951
+  contact_geodesic_gap_scale: 1.0
+  # Physical mm before normalization; independent of the message-activation band.
+  # This floor is a modeling assumption, not a recovered solver-deck setting.
+  contact_geodesic_gap_min: 5.0
+  contact_geodesic_max_pairs: 16000000
+  contact_geodesic_cache_dir: ${datapipe.stats_dir}/surface_geodesic_cache
+
+model:
+  use_contact: true
+  enable_contact: true
+  enable_node_contact: true
+  enable_cylinder_contact: false
+  contact_graph_backend: surface
+  contact_search_implementation: warp
+  contact_dim: 12
+  contact_gate_init: 1.0e-3
+  contact_include_velocity: true
+  contact_velocity_scale: 1000.0  # mm/s
+  contact_smooth_cutoff: true
+  contact_activation_distance: 5.0  # shell-clearance activation band, mm
+  node_contact_radius: 10.0  # feature scaling only for the surface backend
+  contact_normal_epsilon: 0.1  # direction regularization length, mm
+  base_shell_thickness: 0.0  # supplied nodal thickness; no invented fallback
+  exclude_same_component: false  # retain folded-shell self-contact
+  contact_max_neighbors: 16  # unused by surface search; no top-k truncation
+  contact_selection_taper: false
+  contact_prune_zero_weight: true
+  contact_isolate_rng: true
+  # Two causal material anchors, not continuous triangle collision detection.
+  contact_surface_predictive: true
+  contact_surface_material_fan: true
+  contact_surface_max_pairs: 8000000  # fail on overflow; never truncate contacts
+  checkpoint_contact: true
+  checkpoint_offloading: true
+  num_pre_processor_checkpoint_segments: 2
+  num_post_processor_checkpoint_segments: 4

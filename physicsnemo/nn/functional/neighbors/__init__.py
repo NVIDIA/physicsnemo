@@ -14,10 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .contact_search import ContactSearch, contact_search
 from .knn import KNN, knn
 from .radius_search import RadiusSearch, radius_search
 
 __all__ = [
+    "ContactSearch",
+    "contact_search",
     "KNN",
     "knn",
     "RadiusSearch",

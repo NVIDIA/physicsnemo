@@ -14,11 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import os
 import re
+from typing import Any, Callable, Optional
+
 import numpy as np
 import torch
-from typing import Any, Callable, Optional
 
 from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.gnn.utils import load_json, save_json
@@ -31,6 +33,7 @@ from physicsnemo.utils.logging import PythonLogger
 NODE_STATS_FILE = "node_stats.json"
 FEATURE_STATS_FILE = "feature_stats.json"
 EDGE_STATS_FILE = "edge_stats.json"
+GLOBAL_STATS_FILE = "global_stats.json"
 EPS = 1e-8  # numerical stability for std
 
 
@@ -68,11 +71,16 @@ class SimSample:
         self.target_series = target_series
 
     def to(self, device: torch.device):
+        """Move sample tensors without mutating the cached graph attribute store."""
         for k, v in self.node_features.items():
             self.node_features[k] = v.to(device)
         self.node_target = self.node_target.to(device)
         if self.graph is not None:
-            self.graph = self.graph.to(device)
+            # PyG Data.to mutates its attribute store in place. The graph may
+            # belong to CrashGraphDataset.graphs, so isolate the store before
+            # transfer; otherwise every visited graph remains cached on GPU.
+            # Data.__copy__ copies stores without duplicating tensor storage.
+            self.graph = copy.copy(self.graph).to(device)
         if self.global_features is not None:
             self.global_features = {
                 k: v.to(device) for k, v in self.global_features.items()
@@ -80,6 +88,7 @@ class SimSample:
         return self
 
     def is_graph(self) -> bool:
+        """Return whether this sample carries structural graph connectivity."""
         return self.graph is not None
 
     def __repr__(self) -> str:
@@ -135,7 +144,21 @@ class CrashBaseDataset:
         logger=None,
         dt: float = 5e-3,
         stats_dir: str = "stats",
+        stats_mode: str = "compute",
         sample_type: str = "all_time_steps",
+        initial_history_steps: int = 1,
+        rollout_window_steps: Optional[int] = None,
+        windows_per_sample: int = 1,
+        window_seed: int | None = None,
+        contact_exclusion_hops: int | None = None,
+        contact_require_elements: bool = False,
+        contact_surface: bool = False,
+        contact_surface_exclusion: str = "incidence",
+        contact_geodesic_distance_scale: float = 2.0**0.5,
+        contact_geodesic_gap_scale: float = 1.0,
+        contact_geodesic_gap_min: float = 0.0,
+        contact_geodesic_max_pairs: int = 16_000_000,
+        contact_geodesic_cache_dir: Optional[str] = None,
     ):
         super().__init__()
         self.name = name
@@ -152,17 +175,89 @@ class CrashBaseDataset:
         self.logger = logger or PythonLogger()
         self.dt = dt
         self.sample_type = sample_type
-
-        if sample_type not in ["all_time_steps", "one_time_step"]:
+        self.initial_history_steps = int(initial_history_steps)
+        self.rollout_window_steps = (
+            None if rollout_window_steps is None else int(rollout_window_steps)
+        )
+        self.windows_per_sample = int(windows_per_sample)
+        self.window_seed = window_seed
+        self.epoch = 0
+        self.contact_exclusion_hops = contact_exclusion_hops
+        self.contact_require_elements = bool(contact_require_elements)
+        self.contact_surface = bool(contact_surface)
+        if contact_surface_exclusion not in (
+            "incidence",
+            "one_ring",
+            "reference_geodesic",
+        ):
             raise ValueError(
-                f"Invalid sample type: {sample_type} Expected 'all_time_steps' or 'one_time_step'"
+                "contact_surface_exclusion must be incidence, one_ring or reference_geodesic"
             )
+        if not contact_surface and contact_surface_exclusion != "incidence":
+            raise ValueError("surface exclusions require contact_surface=True")
+        self.contact_surface_exclusion = contact_surface_exclusion
+        self.contact_geodesic_options = dict(
+            distance_scale=contact_geodesic_distance_scale,
+            gap_scale=contact_geodesic_gap_scale,
+            gap_min=contact_geodesic_gap_min,
+            max_pairs=contact_geodesic_max_pairs,
+        )
+        self.contact_geodesic_cache_dir = contact_geodesic_cache_dir
+        if contact_surface and contact_exclusion_hops is not None:
+            raise ValueError(
+                "surface contact uses contact_surface_exclusion, not node hop exclusions"
+            )
+        if contact_exclusion_hops is not None and contact_exclusion_hops not in (1, 2):
+            raise ValueError("contact_exclusion_hops must be 1, 2, or None")
+        if (
+            contact_require_elements
+            and contact_exclusion_hops is None
+            and not contact_surface
+        ):
+            raise ValueError("contact_require_elements requires contact_exclusion_hops")
+        if stats_mode not in {"compute", "load"}:
+            raise ValueError("stats_mode must be either 'compute' or 'load'")
+        self.stats_mode = stats_mode
+
+        valid_sample_types = {
+            "all_time_steps",
+            "one_time_step",
+            "random_time_window",
+        }
+        if sample_type not in valid_sample_types:
+            raise ValueError(
+                f"Invalid sample type: {sample_type}. Expected one of "
+                f"{sorted(valid_sample_types)}"
+            )
+        if not 1 <= self.initial_history_steps < num_steps:
+            raise ValueError(
+                "initial_history_steps must be in [1, num_steps); got "
+                f"{self.initial_history_steps} for num_steps={num_steps}"
+            )
+        if self.initial_history_steps > 2:
+            raise ValueError(
+                "Only one- and two-frame initialization are currently supported"
+            )
+        if self.windows_per_sample <= 0:
+            raise ValueError("windows_per_sample must be positive")
 
         # Precompute batch_idx logic
-        rollout_steps = num_steps - 1
+        rollout_steps = num_steps - self.initial_history_steps
         if sample_type == "one_time_step":
             self._max_idx = num_samples * rollout_steps
             self._resolve_idx = lambda idx: (idx // rollout_steps, idx % rollout_steps)
+        elif sample_type == "random_time_window":
+            if self.rollout_window_steps is None:
+                raise ValueError(
+                    "rollout_window_steps is required for random_time_window"
+                )
+            if not 1 <= self.rollout_window_steps <= rollout_steps:
+                raise ValueError(
+                    "rollout_window_steps must be in [1, "
+                    f"{rollout_steps}], got {self.rollout_window_steps}"
+                )
+            self._max_idx = num_samples * self.windows_per_sample
+            self._resolve_idx = lambda idx: (idx % num_samples, None)
         else:
             self._max_idx = num_samples
             self._resolve_idx = lambda idx: (idx, None)
@@ -204,6 +299,20 @@ class CrashBaseDataset:
             global_features_filepath=self.global_features_filepath,
             logger=self.logger,
         )
+        self.mesh_cells = []
+        reference_cells = None
+        for record in point_data:
+            cells = record.get("mesh_cells")
+            if (contact_require_elements or contact_surface) and cells is None:
+                raise ValueError(
+                    "Contact requires element connectivity; enable reader.include_contact_topology"
+                )
+            if cells is not None:
+                if reference_cells is None:
+                    reference_cells = cells
+                elif np.array_equal(cells, reference_cells):
+                    cells = reference_cells
+            self.mesh_cells.append(cells)
         # Check if any global features are present
         # global_features is a list of dictionaries, each containing the global features for a sample
         has_global = global_features and any(gf for gf in global_features)
@@ -226,9 +335,32 @@ class CrashBaseDataset:
 
             self.global_features = global_features
 
+        global_stats_path = os.path.join(self._stats_dir, GLOBAL_STATS_FILE)
+        if self.global_features is None:
+            self.global_stats = {
+                "global_mean": torch.zeros(0, dtype=torch.float32),
+                "global_std": torch.ones(0, dtype=torch.float32),
+            }
+        elif self.split == "train" and self.stats_mode == "compute":
+            self.global_stats = self._compute_global_stats()
+            save_json(self.global_stats, global_stats_path)
+        elif os.path.exists(global_stats_path):
+            self.global_stats = load_json(global_stats_path)
+        else:
+            raise FileNotFoundError(
+                f"Global stats file {global_stats_path} not found. "
+                "Build the training split before validation or inference."
+            )
+        self.global_stats = {
+            key: torch.as_tensor(value, dtype=torch.float32)
+            for key, value in self.global_stats.items()
+        }
+
         # Storage for per-sample tensors
         self.mesh_pos_seq: list[torch.Tensor] = []  # [T,N,3]
+        self.contact_reference_positions: list[torch.Tensor] = []
         self.node_features_data: list[torch.Tensor] = []  # [N,F]
+        self.shell_thickness_data: list[torch.Tensor] = []  # physical [N]
         self._feature_slices: dict[
             str, tuple[int, int]
         ] = {}  # per-sample feature slices
@@ -243,6 +375,33 @@ class CrashBaseDataset:
                 f"coords must be [T,N,3], got {coords_np.shape}"
             )
             self.mesh_pos_seq.append(torch.as_tensor(coords_np, dtype=torch.float32))
+            if self.contact_surface_exclusion == "reference_geodesic":
+                # Freeze physical INITIAL geometry before normalization. Neither
+                # the sampled window start nor future ground truth defines d0.
+                self.contact_reference_positions.append(
+                    self.mesh_pos_seq[-1][0].clone()
+                )
+
+            try:
+                raw_thickness = self._get_static_feature(rec, "thickness")
+            except KeyError:
+                raw_thickness = None
+            if raw_thickness is None:
+                if self.contact_surface:
+                    raise ValueError(
+                        "surface contact requires supplied physical thickness"
+                    )
+                thickness_np = np.zeros(coords_np.shape[1], dtype=np.float32)
+            else:
+                thickness_np = np.asarray(raw_thickness, dtype=np.float32)
+                if thickness_np.ndim == 2 and thickness_np.shape[-1] == 1:
+                    thickness_np = thickness_np[:, 0]
+                if thickness_np.shape != (coords_np.shape[1],):
+                    raise ValueError(
+                        "thickness must have shape [N] or [N, 1], got "
+                        f"{thickness_np.shape}"
+                    )
+            self.shell_thickness_data.append(torch.from_numpy(thickness_np.copy()))
 
             # Features: concatenate requested keys if present; allow empty
             parts = []
@@ -308,7 +467,7 @@ class CrashBaseDataset:
         node_stats_path = os.path.join(self._stats_dir, NODE_STATS_FILE)
         feat_stats_path = os.path.join(self._stats_dir, FEATURE_STATS_FILE)
 
-        if self.split == "train":
+        if self.split == "train" and self.stats_mode == "compute":
             self.node_stats = self._compute_autoreg_node_stats()
             self.feature_stats = self._compute_feature_stats()
             save_json(self.node_stats, node_stats_path)
@@ -346,10 +505,17 @@ class CrashBaseDataset:
         return self._max_idx
 
     # Common x/y construction
-    def build_xy(self, batch_idx: int, time_idx: int | None):
+    def set_epoch(self, epoch: int):
+        """Set before constructing each epoch's (non-persistent) worker iterator."""
+        self.epoch = int(epoch)
+
+    def build_xy(
+        self, batch_idx: int, time_idx: int | None, sample_idx: int | None = None
+    ):
         """
         x: dict with:
-            - 'coords': [N, 3] at t0
+            - 'coords': [N, 3] at the current state
+            - optional 'previous_coords': [N, 3] for two-frame initialization
             - 'features': [N, F] concatenated (static + flattened dynamic)
         y: [N, T, Fo] where T=rollout steps, Fo=3+sum(C_k) per timestep
         """
@@ -363,11 +529,34 @@ class CrashBaseDataset:
         T, N, _ = pos_seq.shape
         F = feats.shape[1]
 
-        pos_t0 = pos_seq[0]  # [N,3]
-        x = {"coords": pos_t0, "features": feats}
+        current_idx = self.initial_history_steps - 1
+        target_start = self.initial_history_steps
+        target_end = T
+        if self.sample_type == "random_time_window":
+            window_steps = self.rollout_window_steps
+            if window_steps is None:
+                raise RuntimeError(
+                    "random_time_window was not initialized with a window length"
+                )
+            max_current_idx = T - window_steps - 1
+            current_idx = int(
+                torch.randint(
+                    self.initial_history_steps - 1,
+                    max_current_idx + 1,
+                    (1,),
+                    generator=self._window_generator(
+                        batch_idx if sample_idx is None else sample_idx
+                    ),
+                ).item()
+            )
+            target_start = current_idx + 1
+            target_end = target_start + window_steps
 
-        # pos_seq[1:]: [T-1, N, 3]
-        pos_rollout = pos_seq[1:]  # [T-1, N, 3]
+        x = {"coords": pos_seq[current_idx], "features": feats}
+        if self.initial_history_steps == 2:
+            x["previous_coords"] = pos_seq[current_idx - 1]
+
+        pos_rollout = pos_seq[target_start:target_end]
 
         if len(self.dynamic_targets) > 0:
             # Collect dynamic targets [T-1, N, C_k] for each target
@@ -381,8 +570,7 @@ class CrashBaseDataset:
                 series = ts_rec[k]  # Tensor [T,N] or [T,N,C]
                 if series.ndim == 2:
                     series = series.unsqueeze(-1)  # [T,N,1]
-                # keep steps 1..T-1 to match rollout_steps
-                series_rollout = series[1:]  # [T-1,N,C]
+                series_rollout = series[target_start:target_end]
                 dyn_list.append(series_rollout)
 
             # Concatenate along feature dim per timestep: [T-1, N, 3+sum(C_k)]
@@ -394,7 +582,9 @@ class CrashBaseDataset:
         y = y_per_t.transpose(0, 1)  # [N, T-1, Fo]
 
         if time_idx is not None:
-            x["time"] = torch.tensor(time_idx / (self.num_steps - 1))
+            x["time"] = torch.tensor(
+                time_idx / (self.num_steps - self.initial_history_steps)
+            )
             y = y[:, time_idx]
 
             Fo = y.shape[-1]
@@ -414,6 +604,16 @@ class CrashBaseDataset:
                 f"target shape {y.shape} does not match expected (N={N}, T={T_out}, Fo={Fo})"
             )
         return x, y
+
+    def _window_generator(self, sample_idx):
+        """Stateless draw keyed by seed, epoch and sample/window slot, not rank/RNG."""
+        import hashlib
+
+        if getattr(self, "window_seed", None) is None:
+            return None  # Explicit legacy sampling, for old recipes/checkpoints.
+        key = f"crash-window-v2:{self.window_seed}:{self.epoch}:{sample_idx}".encode()
+        seed = int.from_bytes(hashlib.blake2b(key, digest_size=8).digest(), "little")
+        return torch.Generator().manual_seed(seed)
 
     # ---- stats helpers ----
     def _compute_autoreg_node_stats(self):
@@ -488,6 +688,42 @@ class CrashBaseDataset:
         feat_var = torch.clamp(feat_meansqr - feat_mean * feat_mean, min=0.0)
         feat_std = torch.sqrt(feat_var + EPS)
         return {"feature_mean": feat_mean, "feature_std": feat_std}
+
+    def _compute_global_stats(self):
+        if self.global_features is None or not self.global_features_keys:
+            return {
+                "global_mean": torch.zeros(0, dtype=torch.float32),
+                "global_std": torch.ones(0, dtype=torch.float32),
+            }
+        values = torch.tensor(
+            [
+                [float(features[key]) for key in self.global_features_keys]
+                for features in self.global_features
+            ],
+            dtype=torch.float32,
+        )
+        global_mean = values.mean(dim=0)
+        global_var = torch.clamp(
+            (values * values).mean(dim=0) - global_mean**2, min=0.0
+        )
+        return {
+            "global_mean": global_mean,
+            "global_std": torch.sqrt(global_var + EPS),
+        }
+
+    def _normalized_global_features(self, batch_idx: int):
+        if self.global_features is None:
+            return None
+        mean = self.global_stats["global_mean"]
+        std = self.global_stats["global_std"]
+        return {
+            key: (
+                torch.tensor(self.global_features[batch_idx][key], dtype=torch.float32)
+                - mean[index]
+            )
+            / (std[index] + EPS)
+            for index, key in enumerate(self.global_features_keys)
+        }
 
     @staticmethod
     def _normalize_node_tensor(
@@ -583,20 +819,106 @@ class CrashGraphDataset(CrashBaseDataset):
 
         Data = _pyg_data.Data
         self.graphs = []
-        for i in range(self.num_samples):
-            g = self.create_graph(
-                self.srcs[i],
-                self.dsts[i],
-                num_nodes=self.mesh_pos_seq[i][0].shape[0],
-                dtype=torch.long,
+        reference_src = None
+        reference_dst = None
+        reference_num_nodes = None
+        reference_edge_index = None
+        reference_component_id = None
+        reference_contact_exclusions = None
+        self.geodesic_cache = None
+        if self.contact_surface_exclusion == "reference_geodesic":
+            from surface_geodesic_cache import SurfaceGeodesicCache
+
+            self.geodesic_cache = SurfaceGeodesicCache(
+                self.contact_geodesic_cache_dir, logger=self.logger
             )
+        for i in range(self.num_samples):
+            num_nodes = int(self.mesh_pos_seq[i][0].shape[0])
+            shares_reference_topology = (
+                reference_src is not None
+                and num_nodes == reference_num_nodes
+                and np.array_equal(self.srcs[i], reference_src)
+                and np.array_equal(self.dsts[i], reference_dst)
+            )
+            if shares_reference_topology:
+                # Crash ensembles normally deform the same mesh. Reuse its
+                # immutable connectivity and component labels instead of
+                # repeating coalescing and a Python union-find for every run.
+                g = Data(edge_index=reference_edge_index, num_nodes=num_nodes)
+                g.component_id = reference_component_id
+            else:
+                g = self.create_graph(
+                    self.srcs[i],
+                    self.dsts[i],
+                    num_nodes=num_nodes,
+                    dtype=torch.long,
+                )
+                g.component_id = self.connected_component_ids(
+                    g.edge_index, int(g.num_nodes)
+                )
+                if reference_src is None:
+                    reference_src = self.srcs[i]
+                    reference_dst = self.dsts[i]
+                    reference_num_nodes = num_nodes
+                    reference_edge_index = g.edge_index
+                    reference_component_id = g.component_id
             pos0 = self.mesh_pos_seq[i][0]
             g = self.add_edge_features(g, pos0)
+            g.shell_thickness = self.shell_thickness_data[i]
+            if self.contact_surface:
+                from surface_topology import (
+                    SurfaceContactData,
+                    surface_faces_from_cells,
+                    surface_one_ring_exclusions,
+                )
+
+                g = SurfaceContactData(**g.to_dict())
+                if (
+                    shares_reference_topology
+                    and self.mesh_cells[i] is self.mesh_cells[0]
+                ):
+                    g.contact_faces = self.graphs[0].contact_faces
+                    if self.contact_surface_exclusion == "one_ring":
+                        g.contact_surface_exclusions = self.graphs[
+                            0
+                        ].contact_surface_exclusions
+                else:
+                    g.contact_faces = surface_faces_from_cells(
+                        self.mesh_cells[i], num_nodes
+                    )
+                    if self.contact_surface_exclusion == "one_ring":
+                        g.contact_surface_exclusions = surface_one_ring_exclusions(
+                            g.contact_faces, num_nodes
+                        )
+            if self.contact_exclusion_hops is not None:
+                from material_contact import material_contact_exclusions
+
+                if (
+                    shares_reference_topology
+                    and self.mesh_cells[i] is self.mesh_cells[0]
+                ):
+                    g.contact_exclusion_edges = reference_contact_exclusions
+                else:
+                    g.contact_exclusion_edges = material_contact_exclusions(
+                        g.edge_index,
+                        num_nodes,
+                        self.contact_exclusion_hops,
+                        self.mesh_cells[i],
+                    )
+                    if i == 0:
+                        reference_contact_exclusions = g.contact_exclusion_edges
+            if self.contact_surface_exclusion == "reference_geodesic":
+                g.contact_surface_exclusions = self.geodesic_cache.get(
+                    self.contact_reference_positions[i],
+                    g.contact_faces,
+                    g.shell_thickness,
+                    self.contact_geodesic_options,
+                )
             self.graphs.append(g)
 
         # Edge stats
         edge_stats_path = os.path.join(self._stats_dir, EDGE_STATS_FILE)
-        if self.split == "train":
+        if self.split == "train" and self.stats_mode == "compute":
             self.edge_stats = self._compute_edge_stats()
             save_json(self.edge_stats, edge_stats_path)
         else:
@@ -625,19 +947,14 @@ class CrashGraphDataset(CrashBaseDataset):
         assert 0 <= idx < self._max_idx, f"Index {idx} out of range"
         batch_idx, time_idx = self._resolve_idx(idx)
         g = self.graphs[batch_idx]
-        x, y = self.build_xy(batch_idx, time_idx)
-        if self.global_features is not None:
-            gf = {
-                k: torch.tensor(v, dtype=torch.float32)
-                for k, v in self.global_features[batch_idx].items()
-            }
-        else:
-            gf = None
-        # For one_time_step (time_idx is not None): pass target_series=None to avoid moving
-        # full [T,N,C] tensors to device. target_series is only used at inference (to slice
-        # stress/strain from pred); training uses node_target only. Inference always uses
-        # all_time_steps, so it never receives one_time_step samples.
-        ts = None if time_idx is not None else self.target_series_data[batch_idx]
+        x, y = self.build_xy(batch_idx, time_idx, sample_idx=idx)
+        gf = self._normalized_global_features(batch_idx)
+        # Truncated training samples do not need the full target series on device.
+        ts = (
+            None
+            if time_idx is not None or self.sample_type == "random_time_window"
+            else self.target_series_data[batch_idx]
+        )
         return SimSample(
             node_features=x,
             node_target=y,
@@ -649,6 +966,7 @@ class CrashGraphDataset(CrashBaseDataset):
     # ----- graph-specific helpers (use _pyg_data / _pyg_utils so PyG loads only when used) -----
     @staticmethod
     def create_graph(src, dst, num_nodes: int, dtype=torch.long):
+        """Build coalesced bidirectional structural edges and node self-loops."""
         src = torch.as_tensor(src, dtype=dtype)
         dst = torch.as_tensor(dst, dtype=dtype)
         edge_index = torch.stack(
@@ -659,8 +977,43 @@ class CrashGraphDataset(CrashBaseDataset):
         return _pyg_data.Data(edge_index=edge_index, num_nodes=num_nodes)
 
     @staticmethod
+    def connected_component_ids(
+        edge_index: torch.Tensor, num_nodes: int
+    ) -> torch.Tensor:
+        """Return contiguous structural component IDs using union-find."""
+
+        parents = np.arange(num_nodes, dtype=np.int64)
+        ranks = np.zeros(num_nodes, dtype=np.int8)
+
+        def find(node: int) -> int:
+            while parents[node] != node:
+                parents[node] = parents[parents[node]]
+                node = int(parents[node])
+            return node
+
+        for source, destination in edge_index.detach().cpu().numpy().T:
+            root_source = find(int(source))
+            root_destination = find(int(destination))
+            if root_source == root_destination:
+                continue
+            if ranks[root_source] < ranks[root_destination]:
+                root_source, root_destination = root_destination, root_source
+            parents[root_destination] = root_source
+            if ranks[root_source] == ranks[root_destination]:
+                ranks[root_source] += 1
+
+        root_to_component: dict[int, int] = {}
+        labels = np.empty(num_nodes, dtype=np.int64)
+        for node in range(num_nodes):
+            root = find(node)
+            component = root_to_component.setdefault(root, len(root_to_component))
+            labels[node] = component
+        return torch.from_numpy(labels)
+
+    @staticmethod
     def add_edge_features(data, pos: torch.Tensor):
         # data: PyG Data; pos: [N,3]
+        """Attach reference displacement and distance to each structural edge."""
         row, col = data.edge_index
         pos_t = torch.as_tensor(pos, dtype=torch.float32)
         disp = pos_t[row] - pos_t[col]  # [E,3]
@@ -669,16 +1022,17 @@ class CrashGraphDataset(CrashBaseDataset):
         return data
 
     def _compute_edge_stats(self):
-        edge_mean = None
-        edge_meansqr = None
+        if self.num_samples <= 0:
+            raise ValueError("Cannot compute edge statistics without samples")
+        edge_dim = self.graphs[0].edge_attr.shape[-1]
+        edge_mean = torch.zeros(edge_dim, dtype=torch.float32)
+        edge_meansqr = torch.zeros(edge_dim, dtype=torch.float32)
         for i in range(self.num_samples):
             x_e = self.graphs[i].edge_attr.to(torch.float32)  # [E,De]
             m = torch.mean(x_e, dim=0)
             msq = torch.mean(x_e * x_e, dim=0)
-            edge_mean = m if edge_mean is None else edge_mean + m / self.num_samples
-            edge_meansqr = (
-                msq if edge_meansqr is None else edge_meansqr + msq / self.num_samples
-            )
+            edge_mean += m / self.num_samples
+            edge_meansqr += msq / self.num_samples
 
         edge_var = torch.clamp(edge_meansqr - edge_mean * edge_mean, min=0.0)
         edge_std = torch.sqrt(edge_var + EPS)
@@ -710,19 +1064,14 @@ class CrashPointCloudDataset(CrashBaseDataset):
     def __getitem__(self, idx: int):
         assert 0 <= idx < self._max_idx, f"Index {idx} out of range"
         batch_idx, time_idx = self._resolve_idx(idx)
-        x, y = self.build_xy(batch_idx, time_idx)
-        if self.global_features is not None:
-            gf = {
-                k: torch.tensor(v, dtype=torch.float32)
-                for k, v in self.global_features[batch_idx].items()
-            }
-        else:
-            gf = None
-        # For one_time_step (time_idx is not None): pass target_series=None to avoid moving
-        # full [T,N,C] tensors to device. target_series is only used at inference (to slice
-        # stress/strain from pred); training uses node_target only. Inference always uses
-        # all_time_steps, so it never receives one_time_step samples.
-        ts = None if time_idx is not None else self.target_series_data[batch_idx]
+        x, y = self.build_xy(batch_idx, time_idx, sample_idx=idx)
+        gf = self._normalized_global_features(batch_idx)
+        # Truncated training samples do not need the full target series on device.
+        ts = (
+            None
+            if time_idx is not None or self.sample_type == "random_time_window"
+            else self.target_series_data[batch_idx]
+        )
         return SimSample(
             node_features=x,
             node_target=y,
