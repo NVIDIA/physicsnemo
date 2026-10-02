@@ -29,6 +29,7 @@ Designed for clean separation of concerns:
 
 from tensordict import TensorDict
 
+from physicsnemo.datapipes.caching import DatasetCache
 from physicsnemo.datapipes.collate import (
     Collator,
     ConcatCollator,
@@ -164,6 +165,8 @@ __all__ = [
     "TensorStoreZarrReader",
     "MeshReader",
     "DomainMeshReader",
+    # Caching
+    "DatasetCache",
     # Collation
     "Collator",
     "DefaultCollator",
