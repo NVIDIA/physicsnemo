@@ -118,23 +118,6 @@ class TestPdmshGoldenFixture:
             LEGACY_FIXTURE_DIR
         )
 
-    @pytest.mark.parametrize("device", [None, "cpu", "cpu:0", torch.device("cpu:0")])
-    def test_out_fills_nested_meshes(self, fixture_dir: Path, device):
-        """Both layouts fill nested CPU storage for indexed CPU device aliases."""
-        expected = build_canonical_domain_mesh()
-        out = expected._tensordict.apply(torch.zeros_like)
-
-        loaded = DomainMesh.load(fixture_dir, out=out, device=device)
-
-        assert loaded._tensordict is out
-        _assert_mesh_equal(loaded.interior, expected.interior, "interior")
-        for name in expected.boundaries.keys():
-            _assert_mesh_equal(
-                loaded.boundaries[name],
-                expected.boundaries[name],
-                f"boundaries.{name}",
-            )
-
     @pytest.mark.cuda
     def test_load_honors_device(self, fixture_dir: Path):
         """``device=`` reaches the interior and boundaries in both layouts."""
@@ -143,11 +126,3 @@ class TestPdmshGoldenFixture:
         assert loaded.global_data.device.type == "cuda"
         for boundary in loaded.boundaries.values():
             assert boundary.points.device.type == "cuda"
-
-    @pytest.mark.cuda
-    def test_load_rejects_device_that_conflicts_with_out(self, fixture_dir: Path):
-        """A CPU output cannot silently override or mix with a CUDA request."""
-        out = build_canonical_domain_mesh()._tensordict.apply(torch.zeros_like)
-
-        with pytest.raises(ValueError, match=r"device=.*conflicts with `out`"):
-            DomainMesh.load(fixture_dir, device="cuda", out=out)

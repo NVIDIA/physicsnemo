@@ -22,9 +22,6 @@ causing downstream failures in n_manifold_dims, repr, and any method that access
 These tests verify that __post_init__ correctly restores empty cells tensors.
 """
 
-import inspect
-
-import pytest
 import torch
 from tensordict import TensorClass, TensorDict
 
@@ -257,19 +254,6 @@ class TestMemmapRoundTrip:
                     getattr(loaded, field)[key], getattr(mesh, field)[key]
                 ), f"{field}[{key!r}] mismatch after round-trip"
 
-    def test_allow_pickle_policy_is_forwarded(self, tmp_path):
-        """Mesh loaders preserve TensorDict's explicit pickle safety policy."""
-        mesh = two_triangles_2d.load()
-        mesh.global_data.set_non_tensor("complex_value", 1 + 2j)
-        path = tmp_path / "mesh-with-pickle"
-        mesh.save(path)
-
-        with pytest.raises(RuntimeError, match="Refusing to load pickled"):
-            Mesh.load_memmap(path, allow_pickle=False)
-
-        loaded = Mesh.load_memmap(path, allow_pickle=True)
-        assert loaded.global_data.get_non_tensor("complex_value") == 1 + 2j
-
     def test_all_dimension_configs(self, tmp_path, dims_all):
         """All (n_spatial_dims, n_manifold_dims) configurations survive memmap round-trip."""
         from test.mesh.conftest import create_simple_mesh
@@ -317,14 +301,3 @@ class TestTorchSaveLoadRoundTrip:
         assert loaded.cells.shape == (0, 1)
         assert loaded.n_manifold_dims == 0
         assert repr(loaded)  # should not raise
-
-
-@pytest.mark.parametrize("cls", (Mesh, DomainMesh))
-def test_load_runtime_metadata_matches_tensordict_api(cls):
-    """The public loaders retain TensorClass signatures, docs, and return types."""
-    assert inspect.signature(cls.load) == inspect.signature(TensorClass.load)
-    assert inspect.signature(cls.load_memmap) == inspect.signature(
-        TensorClass.load_memmap
-    )
-    assert inspect.getdoc(cls.load) == inspect.getdoc(TensorClass.load)
-    assert inspect.getdoc(cls.load_memmap) == inspect.getdoc(TensorClass.load_memmap)

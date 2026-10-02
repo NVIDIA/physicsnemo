@@ -23,7 +23,6 @@ import torch
 from jaxtyping import Bool, Float
 from tensordict import TensorClass, TensorDict
 
-from physicsnemo.mesh._serialization import install_mesh_memmap_reader
 from physicsnemo.mesh.mesh import Mesh, _requested_dtype
 from physicsnemo.mesh.transformations.deform.ffd import _FFDBasis
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
@@ -1637,9 +1636,6 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
 
     ### Repr is defined after the class body (see below) because
     ### TensorClass overwrites __repr__ even when defined inline.
-
-
-install_mesh_memmap_reader(DomainMesh)
 
 
 ### Override the TensorClass __repr__ with custom formatting.

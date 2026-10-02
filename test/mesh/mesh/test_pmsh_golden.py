@@ -101,23 +101,6 @@ class TestPmshGoldenFixture:
             LEGACY_FIXTURE_DIR
         )
 
-    @pytest.mark.parametrize("device", [None, "cpu", "cpu:0", torch.device("cpu:0")])
-    def test_out_fills_preallocated_tensors(self, fixture_dir: Path, device):
-        """Both layouts fill CPU storage, including indexed CPU device aliases."""
-        expected = build_canonical_mesh()
-        out = expected._tensordict.apply(torch.zeros_like)
-
-        loaded = Mesh.load(fixture_dir, out=out, device=device)
-
-        assert loaded._tensordict is out
-        assert torch.equal(loaded.points, expected.points)
-        assert torch.equal(loaded.cells, expected.cells)
-        for field in ("point_data", "cell_data", "global_data"):
-            for key in getattr(expected, field).keys():
-                assert torch.equal(
-                    getattr(loaded, field)[key], getattr(expected, field)[key]
-                )
-
     @pytest.mark.cuda
     def test_load_honors_device(self, fixture_dir: Path):
         """``device=`` applies to both layouts, not just the current one."""
@@ -125,11 +108,3 @@ class TestPmshGoldenFixture:
         assert loaded.points.device.type == "cuda"
         assert loaded.cells.device.type == "cuda"
         assert loaded.point_data.device.type == "cuda"
-
-    @pytest.mark.cuda
-    def test_load_rejects_device_that_conflicts_with_out(self, fixture_dir: Path):
-        """A CPU output cannot silently override or mix with a CUDA request."""
-        out = build_canonical_mesh()._tensordict.apply(torch.zeros_like)
-
-        with pytest.raises(ValueError, match=r"device=.*conflicts with `out`"):
-            Mesh.load(fixture_dir, device="cuda", out=out)

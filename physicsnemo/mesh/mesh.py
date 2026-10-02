@@ -34,7 +34,6 @@ import torch
 from jaxtyping import Float
 from tensordict import NonTensorData, TensorClass, TensorDict
 
-from physicsnemo.mesh._serialization import install_mesh_memmap_reader
 from physicsnemo.mesh.boundaries import is_manifold, is_watertight
 from physicsnemo.mesh.calculus import (
     compute_cell_derivatives,
@@ -3468,9 +3467,6 @@ class Mesh(
             cells=self.cells,
             keep=keep,
         )
-
-
-install_mesh_memmap_reader(Mesh)
 
 
 ### Override the TensorClass __repr__ with custom formatting
