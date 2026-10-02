@@ -29,9 +29,9 @@
 # below are constants for now; per-sample reference lengths are a
 # planned follow-up.
 #
-# `output_field_ranks` keys must match the dataset YAML's `targets:`
+# `output_schema` keys must match the dataset YAML's `targets:`
 # block so the loss can find each predicted field in the output Mesh's
-# point_data.  `boundary_source_data_ranks` keys must match the
+# point_data.  `boundary_source_schemas` keys must match the
 # dataset's boundary_name (set to `vehicle` by MeshToDomainMesh in
 # drivaer_ml_surface.yaml).  GLOBE auto-injects cell_normals from the
 # boundary mesh's geometry and only pulls leaves it declared here from
@@ -53,10 +53,10 @@ forward_kwargs:
 model:
   _target_: physicsnemo.experimental.models.globe.GLOBE
   n_spatial_dims: 3
-  output_field_ranks:
-    pressure: 0                # scalar
-    wss: 1                     # vector
-  boundary_source_data_ranks:
+  output_schema:
+    pressure: {rank: 0}        # scalar
+    wss: {rank: 1}             # vector
+  boundary_source_schemas:
     vehicle: {}
   reference_length_names: [L_ref, delta_turb]
   reference_area: 0.0868       # 2.170 / 5.0^2 (nondim, since positions / L_ref)
