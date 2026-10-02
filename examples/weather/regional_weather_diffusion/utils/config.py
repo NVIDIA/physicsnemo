@@ -29,12 +29,12 @@ class ModelConfig:
         "diffusion"  # model type, "regression" or "diffusion"
     )
     architecture: Literal["unet", "dit"] = "unet"  # model architecture, "unet" or "dit"
-    regression_conditions: list[Literal["state", "background", "invariant"]] = Field(
-        default=["state", "background", "invariant"]
+    regression_conditions: list[Literal["background", "invariant"]] = Field(
+        default=["background", "invariant"]
     )
-    diffusion_conditions: list[
-        Literal["state", "regression", "background", "invariant"]
-    ] = Field(default=["state", "regression", "invariant"])
+    diffusion_conditions: list[Literal["regression", "background", "invariant"]] = (
+        Field(default=["regression", "invariant"])
+    )
     spatial_pos_embed: bool = False  # use spatial positional embedding for unet
     attn_resolutions: list[int] = Field(
         default=[]
@@ -224,6 +224,29 @@ class TrainingConfig:
 
 
 @dataclass(config={"extra": "allow"})
+class LoaderConfig:
+    """Dataloader configuration: cfg.dataset.loader
+
+    Selects and tunes the loading strategy the dataset builds in
+    ``make_loader``. Fields that a given backend cannot honor are ignored, so
+    the same block is valid for either backend.
+    """
+
+    backend: Literal["torch", "datapipes"] = (
+        "torch"  # "torch": PyTorch DataLoader (fork workers); "datapipes": PhysicsNeMo datapipe (threads + CUDA streams)
+    )
+    num_workers: int | None = Field(
+        default=None, ge=0
+    )  # overrides training.num_data_workers when set
+    prefetch_factor: int = Field(default=2, ge=1)  # batches kept in flight
+    pin_memory: bool = True  # stage host tensors in pinned memory
+    use_streams: bool = (
+        True  # datapipes only: overlap H2D + device transforms on a side CUDA stream
+    )
+    shard_by_domain: bool = True  # give each rank a contiguous slice of EVERY domain, so local batches mix domains
+
+
+@dataclass(config={"extra": "allow"})
 class DatasetConfig:
     """Dataset configuration: cfg.dataset
 
@@ -231,6 +254,9 @@ class DatasetConfig:
     """
 
     name: str  # module and class of the dataset in the datasets directory, e.g. data_loader_hrrr_era5.HrrrEra5Dataset
+    loader: LoaderConfig = Field(
+        default_factory=LoaderConfig
+    )  # how batches are produced; not forwarded to the dataset constructor
 
 
 @dataclass(config={"extra": "allow"})
