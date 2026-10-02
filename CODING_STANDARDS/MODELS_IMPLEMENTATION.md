@@ -130,14 +130,18 @@ and promotes code reuse across different models.
 # Good: Reusable layer in physicsnemo/nn/module/attention_layers.py
 class MultiHeadAttention(Module):
     """A reusable attention layer that can be used in various architectures."""
+
     pass
+
 
 # Good: Import in physicsnemo/nn/__init__.py
 from physicsnemo.nn import MultiHeadAttention
 
+
 # Good: Example-specific layer in examples/weather/utils/nn.py
 class WeatherSpecificLayer(Module):
     """Layer highly specific to the weather forecasting example."""
+
     pass
 ```
 
@@ -148,6 +152,7 @@ class WeatherSpecificLayer(Module):
 # File: physicsnemo/models/attention.py
 class MultiHeadAttention(Module):
     """Should be in physicsnemo/nn/module/ not physicsnemo/models/"""
+
     pass
 ```
 
@@ -182,10 +187,12 @@ models that are applicable to a specific domain or specific data modality.
 # Good: Complete model in physicsnemo/models/transformer.py
 class TransformerModel(Module):
     """A complete transformer model composed of attention and feedforward layers."""
+
     def __init__(self):
         super().__init__()
         self.attention = MultiHeadAttention(...)
         self.ffn = FeedForward(...)
+
 
 # Good: Import in physicsnemo/models/__init__.py
 from physicsnemo.models.transformer import TransformerModel
@@ -198,6 +205,7 @@ from physicsnemo.models.transformer import TransformerModel
 # File: physicsnemo/nn/module/transformer_model.py
 class TransformerModel(Module):
     """Should be in physicsnemo/models/ not physicsnemo/nn/module/"""
+
     pass
 ```
 
@@ -227,6 +235,7 @@ handle backward compatibility, as well as ability to be registered in the
 ```python
 from physicsnemo import Module
 
+
 class MyModel(Module):
     def __init__(self, input_dim: int, output_dim: int):
         super().__init__(meta=MyModelMetaData())
@@ -237,6 +246,7 @@ class MyModel(Module):
 
 ```python
 from torch import nn
+
 
 class MyModel(nn.Module):
     def __init__(self, input_dim: int, output_dim: int):
@@ -286,12 +296,15 @@ protects users from unstable APIs while allowing innovation.
 # File: physicsnemo/experimental/models/new_diffusion.py
 class DiffusionModel(Module):
     """New diffusion model under active development. API may change."""
+
     pass
+
 
 # Good: After 1+ release cycles, promoted to production
 # File: physicsnemo/models/diffusion.py (moved from experimental/)
 class DiffusionModel(Module):
     """Stable diffusion model with backward compatibility guarantees."""
+
     pass
 ```
 
@@ -302,6 +315,7 @@ class DiffusionModel(Module):
 # File: physicsnemo/models/brand_new_model.py (should be in experimental/ first)
 class BrandNewModel(Module):
     """Skipped experimental stage - risky for stability"""
+
     pass
 ```
 
@@ -345,12 +359,14 @@ class DiffusionModel(Module):
         ``OldDiffusionModel`` is deprecated and will be removed in version 0.7.0.
         Use :class:`~physicsnemo.models.NewDiffusionModel` instead.
     """
+
     def __init__(self):
         import warnings
+
         warnings.warn(
             "OldDiffusionModel is deprecated. Use NewDiffusionModel instead.",
             DeprecationWarning,
-            stacklevel=2
+            stacklevel=2,
         )
         super().__init__()
 ```
@@ -362,9 +378,11 @@ class DiffusionModel(Module):
 # File: physicsnemo/models/old_model.py
 class OldModel(Module):
     """Will be removed next release."""  # Docstring mentions it but no runtime warning
+
     def __init__(self):
         # Missing: warnings.warn(..., DeprecationWarning)
         super().__init__()
+
 
 # WRONG: Deprecation without sufficient warning period
 # (Model deprecated and removed in same release)
@@ -461,6 +479,7 @@ class MyEncoder(Module):
     >>> output.shape
     torch.Size([32, 128])
     """
+
     pass
 ```
 
@@ -469,7 +488,8 @@ class MyEncoder(Module):
 ```python
 # WRONG: Missing all required sections
 class BadEncoder(Module):
-    '''A simple encoder.'''  # Wrong quotes, no sections
+    """A simple encoder."""  # Wrong quotes, no sections
+
     pass
 ```
 
@@ -502,6 +522,7 @@ class MyModel(Module):
     dim : int
         Dimension :math:`D` of input features.
     """
+
     pass
 ```
 
@@ -510,9 +531,10 @@ class MyModel(Module):
 ```python
 # WRONG: Using ''' instead of r"""
 class MyModel(Module):
-    '''
+    """
     A model with LaTeX notation.
-    '''
+    """
+
     pass
 ```
 
@@ -562,6 +584,7 @@ class MyModel(Module):
     torch.Tensor
         Output tensor of shape :math:`(B, D_{out})`.
     """
+
     pass
 ```
 
@@ -575,6 +598,7 @@ class BadModel(Module):
 
     No proper sections defined.
     """
+
     pass
 ```
 
@@ -631,6 +655,7 @@ def compute_loss(
 # WRONG: No docstring
 def helper_method(self, x):
     return x * 2
+
 
 # WRONG: Using wrong section names
 def compute_loss(self, pred, target):
@@ -745,6 +770,7 @@ class MyModel(Module):
     preprocess_fn : Callable[[torch.Tensor], torch.Tensor], optional
         Optional preprocessing function. See code block above for signature.
     """
+
     pass
 ```
 
@@ -759,6 +785,7 @@ class MyModel(Module):
     preprocess_fn : Callable, optional
         Preprocessing function.  # No specification!
     """
+
     pass
 ```
 
@@ -793,6 +820,7 @@ class MyModel(Module):
     hidden_dim : int
         Size of hidden layer. Access via ``self.hidden_dim``.
     """
+
     pass
 ```
 
@@ -804,6 +832,7 @@ class MyModel(Module):
     r"""
     If `True`, enables dropout.  # WRONG
     """
+
     pass
 ```
 
@@ -842,6 +871,7 @@ class MyModel(Module):
     dropout : float, optional, default=0.1
         Dropout probability.
     """
+
     pass
 ```
 
@@ -857,6 +887,7 @@ class MyModel(Module):
         optional, default=128  # Should be on line above
         Dimension of hidden layer.
     """
+
     pass
 ```
 
@@ -897,6 +928,7 @@ class MyEncoder(Module):
     activation : str
         Activation function. See :func:`~torch.nn.functional.relu`.
     """
+
     pass
 ```
 
@@ -909,6 +941,7 @@ class MyEncoder(Module):
     Uses MultiHeadAttention.  # Could link to class
     Based on Transformer paper.  # Could link to paper
     """
+
     pass
 ```
 
@@ -956,6 +989,7 @@ class MyEncoder(Module):
     >>> output.shape
     torch.Size([32, 128])
     """
+
     pass
 ```
 
@@ -970,6 +1004,7 @@ class MyEncoder(Module):
     input_dim : int
         Dimension of input features.
     """
+
     pass
 ```
 
@@ -1039,6 +1074,7 @@ def forward(self, x: torch.Tensor, context: torch.Tensor) -> torch.Tensor:
     h = torch.cat([h, c], dim=1)
     return self.decoder(self.attention(h))
 
+
 # WRONG: Too low-level, syntactic comments
 def forward(self, x, context):
     # Pass x through encoder layer
@@ -1084,24 +1120,31 @@ refactored or removed.
 # Good Pattern 1: Single self-contained file
 # File: physicsnemo/models/my_simple_model.py
 
+
 def _compute_attention_mask(seq_length: int) -> torch.Tensor:
     """Helper function specific to MySimpleModel."""
     mask = torch.triu(torch.ones(seq_length, seq_length), diagonal=1)
-    return mask.masked_fill(mask == 1, float('-inf'))
+    return mask.masked_fill(mask == 1, float("-inf"))
+
 
 class MySimpleModel(Module):
     """A simple model with utilities in same file."""
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         mask = _compute_attention_mask(x.shape[1])
         return self._apply_attention(x, mask)
+
 
 # Good Pattern 2: Subdirectory organization
 # File: physicsnemo/models/my_complex_model/my_complex_model.py
 from physicsnemo.models.my_complex_model.utils import helper_function
 
+
 class MyComplexModel(Module):
     """A complex model with utilities in subdirectory."""
+
     pass
+
 
 # File: physicsnemo/models/my_complex_model/utils.py
 def helper_function(x):
@@ -1116,8 +1159,10 @@ def helper_function(x):
 # File: physicsnemo/models/my_transformer.py
 from physicsnemo.models.my_transformer_utils import _compute_mask  # WRONG
 
+
 class MyTransformer(Module):
     pass
+
 
 # File: physicsnemo/models/my_transformer_utils.py (WRONG: mixed with other models)
 # File: physicsnemo/models/other_model.py
@@ -1185,6 +1230,7 @@ def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch
     # Actual computation happens after validation
     return self._process(x, mask)
 
+
 def process_list(self, tensors: List[torch.Tensor]) -> torch.Tensor:
     """Process a list of tensors with validation."""
     ### Input validation
@@ -1212,11 +1258,13 @@ def process_list(self, tensors: List[torch.Tensor]) -> torch.Tensor:
 def forward(self, x: torch.Tensor) -> torch.Tensor:
     return self.layer(x)  # Will fail with cryptic error if shape is wrong
 
+
 # WRONG: Validation not guarded by torch.compiler.is_compiling()
 def forward(self, x: torch.Tensor) -> torch.Tensor:
     if x.ndim != 4:  # Breaks torch.compile
         raise ValueError(f"Expected 4D tensor, got {x.ndim}D")
     return self.layer(x)
+
 
 # WRONG: Validation after computation has started
 def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -1224,6 +1272,7 @@ def forward(self, x: torch.Tensor) -> torch.Tensor:
     if x.shape[1] != self.in_channels:  # Too late!
         raise ValueError(f"Wrong number of channels")
     return self.layer2(h)
+
 
 # WRONG: Non-standard error message format
 def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -1261,22 +1310,23 @@ enabled.
 from jaxtyping import Float
 import torch
 
+
 class MyConvNet(Module):
     def __init__(self, in_channels: int, out_channels: int):
         super().__init__()
         self.conv = torch.nn.Conv2d(in_channels, out_channels, kernel_size=3)
 
     def forward(
-        self,
-        x: Float[torch.Tensor, "batch in_channels height width"]
+        self, x: Float[torch.Tensor, "batch in_channels height width"]
     ) -> Float[torch.Tensor, "batch out_channels height width"]:
         """Process input with convolution."""
         return self.conv(x)
 
+
 def process_attention(
     query: Float[torch.Tensor, "batch seq_len d_model"],
     key: Float[torch.Tensor, "batch seq_len d_model"],
-    value: Float[torch.Tensor, "batch seq_len d_model"]
+    value: Float[torch.Tensor, "batch seq_len d_model"],
 ) -> Float[torch.Tensor, "batch seq_len d_model"]:
     """Compute attention with clear shape annotations."""
     pass
@@ -1289,16 +1339,18 @@ def process_attention(
 def forward(self, x: torch.Tensor) -> torch.Tensor:
     return self.layer(x)
 
+
 # WRONG: Using plain comments instead of jaxtyping
 def forward(self, x: torch.Tensor) -> torch.Tensor:
     # x: (batch, channels, height, width)  # Use jaxtyping instead
     return self.layer(x)
 
+
 # WRONG: Incomplete annotations (missing jaxtyping for tensor arguments)
 def forward(
     self,
     x: Float[torch.Tensor, "b c h w"],
-    mask: torch.Tensor  # Missing jaxtyping annotation
+    mask: torch.Tensor,  # Missing jaxtyping annotation
 ) -> Float[torch.Tensor, "b c h w"]:
     return self.layer(x, mask)
 ```
@@ -1339,7 +1391,7 @@ class MyModel(Module):
         input_dim: int,
         output_dim: int,
         dropout: float = 0.0,  # New parameter with default - backward compatible
-        new_feature: bool = False  # New parameter with default - backward compatible
+        new_feature: bool = False,  # New parameter with default - backward compatible
     ):
         super().__init__(meta=MyModelMetaData())
 ```
@@ -1355,7 +1407,7 @@ class MyModel(Module):
         self,
         input_dim: int,
         output_dim: int,
-        new_param: int  # WRONG: No default! Breaks old checkpoints
+        new_param: int,  # WRONG: No default! Breaks old checkpoints
     ):
         super().__init__(meta=MyModelMetaData())
 ```
@@ -1386,6 +1438,7 @@ be loaded and users have time to migrate to the new API.
 
 ```python
 from typing import Any, Dict
+
 
 # Good: Proper backward compatibility for parameter rename
 class MyModel(Module):
@@ -1435,10 +1488,13 @@ class MyModel(Module):
         super().__init__(meta=MyModelMetaData())
         # WRONG: Old checkpoints with 'hidden_dim' will fail!
 
+
 # WRONG: Not calling super()
 class MyModel(Module):
     @classmethod
-    def _backward_compat_arg_mapper(cls, version: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _backward_compat_arg_mapper(
+        cls, version: str, args: Dict[str, Any]
+    ) -> Dict[str, Any]:
         # WRONG: Missing super()._backward_compat_arg_mapper(version, args)
         if "hidden_dim" in args:
             args["hidden_size"] = args.pop("hidden_dim")
@@ -1477,6 +1533,7 @@ class MyModel(Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Always returns single tensor."""
         return self.process(x)
+
 
 # Good: If new return is needed, add new method
 class MyModel(Module):
@@ -1528,9 +1585,7 @@ issues early in the development cycle.
 
 ```python
 @pytest.mark.parametrize(
-    "config",
-    ["default", "custom"],
-    ids=["with_defaults", "with_custom_args"]
+    "config", ["default", "custom"], ids=["with_defaults", "with_custom_args"]
 )
 def test_my_model_constructor(config):
     """Test model constructor and attributes."""
@@ -1539,12 +1594,7 @@ def test_my_model_constructor(config):
         assert model.hidden_dim == 128  # Default value
         assert model.dropout == 0.0  # Default value
     else:
-        model = MyModel(
-            input_dim=64,
-            output_dim=32,
-            hidden_dim=256,
-            dropout=0.1
-        )
+        model = MyModel(input_dim=64, output_dim=32, hidden_dim=256, dropout=0.1)
         assert model.hidden_dim == 256
         assert model.dropout == 0.1
 
@@ -1596,6 +1646,7 @@ import pytest
 import torch
 from physicsnemo.models import MyModel
 
+
 def _instantiate_model(cls, seed: int = 0, **kwargs):
     """Helper to create model with reproducible parameters."""
     model = cls(**kwargs)
@@ -1606,6 +1657,7 @@ def _instantiate_model(cls, seed: int = 0, **kwargs):
             param.copy_(torch.randn(param.shape, generator=gen, dtype=param.dtype))
     return model
 
+
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("config", ["default", "custom"])
 def test_my_model_non_regression(device, config):
@@ -1613,12 +1665,7 @@ def test_my_model_non_regression(device, config):
     if config == "default":
         model = _instantiate_model(MyModel, input_dim=64, output_dim=32)
     else:
-        model = _instantiate_model(
-            MyModel,
-            input_dim=64,
-            output_dim=32,
-            hidden_dim=256
-        )
+        model = _instantiate_model(MyModel, input_dim=64, output_dim=32, hidden_dim=256)
 
     model = model.to(device)
 
@@ -1641,6 +1688,7 @@ def test_my_model_bad(device):
     x = torch.randn(4, 64).to(device)
     out = model(x)
     assert out.shape == (4, 32)  # NOT SUFFICIENT!
+
 
 # WRONG: Using singleton dimensions
 def test_my_model_bad(device):
@@ -1727,30 +1775,26 @@ type safety, and makes testing easier by allowing mock object injection.
 ```python
 # Good: Limited choices (2-3 max) - string selection acceptable
 class MyModel(Module):
-    def __init__(
-        self,
-        activation: Literal["relu", "gelu"] = "relu"
-    ):
+    def __init__(self, activation: Literal["relu", "gelu"] = "relu"):
         if activation == "relu":
             self.act = nn.ReLU()
         elif activation == "gelu":
             self.act = nn.GELU()
+
 
 # Good: Many choices - use instance injection
 class MyModel(Module):
     def __init__(
         self,
         encoder: Module,  # Pass instance, not string
-        decoder: Module   # Pass instance, not string
+        decoder: Module,  # Pass instance, not string
     ):
         self.encoder = encoder
         self.decoder = decoder
 
+
 # Usage:
-model = MyModel(
-    encoder=MyCustomEncoder(dim=128),
-    decoder=MyCustomDecoder(dim=128)
-)
+model = MyModel(encoder=MyCustomEncoder(dim=128), decoder=MyCustomDecoder(dim=128))
 ```
 
 **Anti-pattern:**
@@ -1760,7 +1804,7 @@ model = MyModel(
 class MyModel(Module):
     def __init__(
         self,
-        encoder_type: str = "transformer"  # Many possible values
+        encoder_type: str = "transformer",  # Many possible values
     ):
         # String-based factory pattern with 10+ choices
         if encoder_type == "transformer":
@@ -1803,16 +1847,15 @@ class MyModel(Module):
         self,
         input_dim: int,
         output_dim: int,
-        encoder_config: Optional[Dict[str, Any]] = None
+        encoder_config: Optional[Dict[str, Any]] = None,
     ):
         encoder_config = encoder_config or {}
         self.encoder = Encoder(input_dim=input_dim, **encoder_config)
 
+
 # Usage:
 model = MyModel(
-    input_dim=64,
-    output_dim=32,
-    encoder_config={"hidden_dim": 128, "num_layers": 3}
+    input_dim=64, output_dim=32, encoder_config={"hidden_dim": 128, "num_layers": 3}
 )
 ```
 
@@ -1825,10 +1868,11 @@ class MyModel(Module):
         self,
         input_dim: int,
         output_dim: int,
-        **encoder_kwargs  # WRONG: Unclear what's accepted
+        **encoder_kwargs,  # WRONG: Unclear what's accepted
     ):
         self.encoder = Encoder(input_dim=input_dim, **encoder_kwargs)
         # Risk of name conflicts, unclear API
+
 
 # Usage - unclear what parameters are valid:
 model = MyModel(input_dim=64, output_dim=32, hidden_dim=128, num_layers=3)
@@ -1876,12 +1920,9 @@ from physicsnemo.core.version_check import check_min_version, require_version
 # Check optional dependency availability without importing
 APEX_AVAILABLE = check_min_version("apex", "0.1.0", hard_fail=False)
 
+
 class MyModel(Module):
-    def __init__(
-        self,
-        input_dim: int,
-        use_apex: bool = False
-    ):
+    def __init__(self, input_dim: int, use_apex: bool = False):
         super().__init__()
         self.use_apex = use_apex
 
@@ -1893,9 +1934,11 @@ class MyModel(Module):
 
         if use_apex:
             import apex  # Only import when actually needed
+
             self.fused_layer = apex.FusedLayer()
         else:
             self.fused_layer = None
+
 
 # Using @require_version for protecting version-specific features
 class AdvancedModel(Module):
@@ -1912,14 +1955,17 @@ class AdvancedModel(Module):
 # WRONG: Direct import without checking availability
 import apex  # Will fail if apex not installed!
 
+
 class MyModel(Module):
     def __init__(self, use_apex: bool = False):
         if use_apex:
             self.layer = apex.FusedLayer()  # Already failed at import!
 
+
 # WRONG: Try/except for dependency checking
 try:
     import apex
+
     APEX_AVAILABLE = True
 except ImportError:
     APEX_AVAILABLE = False

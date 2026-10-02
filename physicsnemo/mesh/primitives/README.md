@@ -218,16 +218,11 @@ base_sphere = examples.surfaces.sphere_icosahedral.load(subdivisions=3)
 
 # Add noise
 noisy_sphere = examples.procedural.noisy_mesh.load(
-    base_mesh=base_sphere,
-    noise_scale=0.05,
-    seed=42
+    base_mesh=base_sphere, noise_scale=0.05, seed=42
 )
 
 # Or use pre-made lumpy sphere
-lumpy = examples.procedural.lumpy_sphere.load(
-    noise_amplitude=0.1,
-    seed=42
-)
+lumpy = examples.procedural.lumpy_sphere.load(noise_amplitude=0.1, seed=42)
 ```
 
 ## Design Principles
