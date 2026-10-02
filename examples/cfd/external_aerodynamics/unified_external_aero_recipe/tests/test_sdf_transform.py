@@ -116,9 +116,8 @@ def test_sdf_normals_near_wall_use_face_normal(device):
     assert sdf.shape == (n_query, 1)
     assert normals.shape == (n_query, 3)
     # All points are outside (or, for the sub-float32-resolution wall
-    # distances, exactly on) the closed box. The distance calculation can
-    # return a slightly negative value from float32 rounding at the wall;
-    # allow a few ulps at the coordinate scale on either CPU or CUDA.
+    # distances, exactly on) the closed box; on-wall rounding can leave the
+    # SDF a few ulps negative.
     sign_tolerance = (
         8.0
         * torch.finfo(torch.float32).eps
@@ -135,22 +134,22 @@ def test_sdf_normals_near_wall_use_face_normal(device):
     assert torch.all(normals[:, 2] > 0.99)
 
 
+@pytest.mark.parametrize("ulps", [1.0, 32.0])
 @pytest.mark.parametrize("offset", [0.0, 1e4])
 @pytest.mark.parametrize("device", _DEVICES)
-def test_sdf_normals_ignore_subresolution_sign_noise(monkeypatch, offset, device):
+def test_sdf_normals_ignore_subresolution_sign_noise(monkeypatch, offset, device, ulps):
     """Uncertain SDF signs at the wall cannot reverse its outward normal."""
     domain = _domain_with_interior(torch.tensor([[9.5, 0.0, 1.0]]).repeat(3, 1))
     domain = domain.translate(torch.tensor([offset, 0.0, 0.0])).to(device)
+    # Tangential roundoff with an uncertain SDF sign. On thin faces it
+    # reaches tens of ulps: past the side band, inside the direction band.
     noise = (
         torch.tensor([-1.0, 0.0, 1.0], device=device) * torch.finfo(torch.float32).eps
     )
-    noise *= domain.interior.points.abs().amax()
+    noise *= ulps * domain.interior.points.abs().amax()
 
     def noisy_distance(surface, points, **kwargs):
-        """Return subresolution distance noise for points on the top face."""
-        # Keep the distance magnitude consistent with the closest-point
-        # displacement, as the real SDF kernel does. Tangential roundoff on
-        # a wall can acquire either sign from the winding-number query.
+        """Shift closest points along the wall; |sdf| matches the shift."""
         closest = points.clone()
         closest[:, 0] += noise.abs()
         distances = (points - closest).norm(dim=-1) * noise.sign()
@@ -176,10 +175,10 @@ def test_sdf_normals_preserve_resolved_sides_after_translation(
     device, use_winding_number, offset
 ):
     """Resolved interior normals stay inward inside the direction-fallback band."""
-    # At coordinate scale 1e4, the direction-fallback band is about 0.153.
-    # Distances 0.01 and 0.1 are inside that band but well above sign noise;
-    # 0.2 exercises the ordinary closest-point direction. Include the wall
-    # and exterior points to preserve the original near-wall correction.
+    # At coordinate scale 1e4 the direction band is ~0.153 and the side band
+    # ~0.0095. Depths 0.1 and 0.01 use the face normal; 0.01 is just past the
+    # side band, so raising its 8 eps factor above ~8.2 fails here. Depth 0.2
+    # takes the closest-point direction.
     points = torch.tensor([[5.0, 0.0, z] for z in [0.8, 0.9, 0.99, 1.0, 1.01, 1.1]])
     domain = _domain_with_interior(points).translate(torch.tensor(offset)).to(device)
     transform = ComputeSDFFromBoundary(use_winding_number=use_winding_number)
@@ -192,8 +191,7 @@ def test_sdf_normals_preserve_resolved_sides_after_translation(
     torch.testing.assert_close(
         result.interior.point_data["sdf_normals"], expected_normals
     )
-    # Compare against the represented geometry, including float32 rounding
-    # after translation, and ensure the normal correction never edits SDF.
+    # The SDF is untouched: it matches the translated float32 geometry.
     wall_z = domain.boundaries["stl_geometry"].points[4, 2]
     expected_sdf = domain.interior.points[:, 2] - wall_z
     torch.testing.assert_close(

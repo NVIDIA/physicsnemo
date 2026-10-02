@@ -57,12 +57,10 @@ class ComputeSDFFromBoundary(MeshTransform):
     ``interior.point_data[sdf_field]``.  If ``normals_field`` is set,
     approximate surface normals ``(N, 3)`` are also stored, computed as
     the normalized direction from the closest surface point to each query
-    point. Points essentially *on* the surface (boundary-layer
-    points at sub-micron wall distances) instead use the oriented normal
-    of the hit face, since at those distances the closest-point direction
-    and SDF sign can be float32 rounding noise. A smaller sign-uncertainty
-    band keeps on-wall normals outward while resolved interior points
-    retain inward normals throughout the direction-fallback band.
+    point.  Points essentially *on* the surface (boundary-layer points at
+    sub-micron wall distances) instead use the hit-face normal, since at
+    those distances that direction is float32 rounding noise.  The normal
+    points outward unless the query is inside by more than roundoff.
 
     Parameters
     ----------
@@ -144,18 +142,11 @@ class ComputeSDFFromBoundary(MeshTransform):
         if self.normals_field is not None:
             normals = query_points - closest_points
 
-            # For points essentially on the surface -- boundary-layer points
-            # at sub-micron wall distances -- (query - closest) is float32
-            # rounding noise (or exactly zero) and its direction is
-            # meaningless. Substitute the oriented normal of the hit face:
-            # the exact limit of the closest-point direction at the wall.
-            # The band is scale-aware: the closest point carries rounding
-            # noise ~ eps * |coordinate|, so an absolute cutoff under-covers
-            # geometry far from the origin. 128 eps (~1.5e-5 per unit
-            # coordinate) clears that noise floor with a wide margin.
-            # Computed unconditionally and selected with a mask rather than
-            # branching on ``near_surface.any()`` -- that host readback would
-            # stall the prefetch stream.
+            # Near the wall, (query - closest) is float32 roundoff, so use the
+            # hit-face normal, the exact limit of its direction at the wall.
+            # Roundoff scales with eps * |coordinate|; 128 eps leaves a wide
+            # margin. Mask rather than branch on ``near_surface.any()``: that
+            # host readback would stall the prefetch stream.
             dist = torch.norm(normals, dim=-1)
             coord_scale = query_points.abs().amax(dim=-1).clamp(min=1.0)
             surface_tolerance = 128.0 * torch.finfo(torch.float32).eps * coord_scale
@@ -165,13 +156,12 @@ class ComputeSDFFromBoundary(MeshTransform):
             # ``cell_normals`` returns a zero vector for it. Keep the raw
             # closest-point direction there instead of substituting zeros.
             face_normal_ok = (face_normals * face_normals).sum(-1) > 0.5
-            # Resolving the side needs only a few ulps, whereas recovering
-            # a direction needs the wider band above. Reusing that band for
-            # the sign would force every fallback outward: |sdf| == dist.
-            # Ignore only small negative distances consistent with float32
-            # roundoff, retaining inward normals for resolved inside points.
+            # Take the side from the offset along the face normal, not the
+            # SDF: |sdf| also carries tangential closest-point roundoff, which
+            # reaches tens of ulps on thin faces. Within a few ulps the side
+            # is unresolved; default to outward, as volume points lie outside.
             sign_tolerance = 8.0 * torch.finfo(torch.float32).eps * coord_scale
-            genuinely_inside = sdf_values < -sign_tolerance
+            genuinely_inside = (normals * face_normals).sum(-1) < -sign_tolerance
             oriented = torch.where(
                 genuinely_inside.unsqueeze(-1), -face_normals, face_normals
             )
