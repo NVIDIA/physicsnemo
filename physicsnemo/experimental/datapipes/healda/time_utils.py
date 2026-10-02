@@ -19,7 +19,9 @@ import datetime
 
 import cftime
 import numpy as np
-import pandas as pd
+from physicsnemo.core.version_check import OptionalImport
+
+pd = OptionalImport("pandas")
 
 
 def as_pydatetime(time) -> datetime.datetime:
