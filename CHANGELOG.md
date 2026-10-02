@@ -79,6 +79,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NotImplementedError` for fields it does not implement (rank 2 and above,
   pseudotensors) instead of silently dropping or misreading them. The GLOBE
   examples and the unified external-aerodynamics recipe configs are updated.
+- `physicsnemo.mesh.Mesh`, `DomainMesh`, `Adjacency`, `BVH`, `ClusterTree`,
+  `DualInteractionPlan`, and `SourceAggregates` now inherit directly from
+  `TensorClass` instead of using the `@tensorclass` decorator. Existing
+  constructor defaults and `Mesh[m, s]` runtime specialization remain
+  available, and nested mesh types survive memmap round trips. The memmap
+  layout is unchanged: existing `.pmsh` / `.pdmsh` files remain readable, and
+  new files are byte-identical to those written with the decorator.
 - Mesh integration uses a shared `_effective_measure` field for complete cell
   and point measures. Cell measures fall back to geometry; point measures are
   explicit and independent of connectivity. `Mesh.integrate_samples` evaluates
