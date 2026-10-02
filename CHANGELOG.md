@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `MeshDataset` gains `cache_host` / `cache_host_views` to serve repeated
+  indices from a host-memory cache; `DomainMeshReader` gains
+  `interior_n_points_range` to draw the interior point count per sample;
+  `CenterMesh` gains `store_center_as` to record the subtracted center in
+  `global_data` and `use_measure_weighting` to center by effective cell measure,
+  so a weighted subsample is centered where the full mesh would be.
 - Adds standalone FLARE++ attention and model APIs, with input-conditioned
   dynamic routing, plus a ``GALE_FPP`` backend for using the same mixer inside
   GeoTransolver.
