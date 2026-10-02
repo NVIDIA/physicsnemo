@@ -270,7 +270,10 @@ def _update_var(
 
     temp_n = inputs.shape[batch_dim]
     temp_sum = torch.sum(inputs, dim=batch_dim)
-    temp_sum2 = torch.sum((inputs - temp_sum / temp_n) ** 2, dim=batch_dim)
+    # Put the reduced dimension back so the mean broadcasts against inputs for
+    # any batch_dim, not only for the leading one.
+    temp_mean = torch.unsqueeze(temp_sum, batch_dim) / temp_n
+    temp_sum2 = torch.sum((inputs - temp_mean) ** 2, dim=batch_dim)
 
     delta = old_sum * temp_n / old_n - temp_sum
 
@@ -327,7 +330,7 @@ class Variance(EnsembleMetrics):
                 f"Input device, {inputs.device}, and Module device, {self.device}, must be the same."
             )
         self.sum = torch.sum(inputs, dim=dim)
-        self.n = torch.as_tensor([inputs.shape[0]], device=self.device)
+        self.n = torch.as_tensor([inputs.shape[dim]], device=self.device)
 
         if (
             DistributedManager.is_initialized() and dist.is_initialized()
@@ -336,10 +339,14 @@ class Variance(EnsembleMetrics):
             dist.all_reduce(self.sum, op=dist.ReduceOp.SUM)
             dist.all_reduce(self.n, op=dist.ReduceOp.SUM)
 
-            self.sum2 = torch.sum((inputs - self.sum / self.n) ** 2, dim=dim)
+            # Put the reduced dimension back so the mean broadcasts against
+            # inputs for any dim, not only for the leading one.
+            mean = torch.unsqueeze(self.sum, dim) / self.n
+            self.sum2 = torch.sum((inputs - mean) ** 2, dim=dim)
             dist.all_reduce(self.sum2, op=dist.ReduceOp.SUM)
         else:
-            self.sum2 = torch.sum((inputs - self.sum / self.n) ** 2, dim=dim)
+            mean = torch.unsqueeze(self.sum, dim) / self.n
+            self.sum2 = torch.sum((inputs - mean) ** 2, dim=dim)
 
         if self.n < 2.0:
             return self.sum2
