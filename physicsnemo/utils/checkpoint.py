@@ -567,6 +567,82 @@ def _extract_mdlus_state_dict(
         )
 
 
+def _filename_format_index_pattern(
+    filename_format: str,
+    base_name: str,
+    model_parallel_rank: int,
+    file_extension: str,
+) -> re.Pattern[str]:
+    """Build a regex that matches formatted checkpoint filenames and captures epoch."""
+    token_pattern = re.compile(r"\{(name|mp_rank|epoch)(?::[^}]*)?\}")
+
+    regex_parts: list[str] = ["^"]
+    last_end = 0
+    for match in token_pattern.finditer(filename_format):
+        regex_parts.append(re.escape(filename_format[last_end : match.start()]))
+        field = match.group(1)
+        if field == "name":
+            regex_parts.append(re.escape(base_name))
+        elif field == "mp_rank":
+            regex_parts.append(re.escape(str(model_parallel_rank)))
+        elif field == "epoch":
+            regex_parts.append(r"(\d+)")
+        last_end = match.end()
+
+    regex_parts.append(re.escape(filename_format[last_end:]))
+    regex_parts.append(re.escape(file_extension))
+    regex_parts.append("$")
+    return re.compile("".join(regex_parts))
+
+
+def _resolve_checkpoint_index(
+    fs,
+    path: str,
+    base_name: str,
+    model_parallel_rank: int,
+    file_extension: str,
+    index: int | None,
+    saving: bool,
+    filename_format: str | None = None,
+) -> int:
+    """Resolve the numeric checkpoint index when ``index`` is ``None``."""
+    if index is not None:
+        return index
+
+    if filename_format is not None:
+        if "{name}" in filename_format:
+            glob_pattern = f"{path}/{base_name}*{file_extension}"
+        else:
+            glob_pattern = f"{path}/*{file_extension}"
+        file_names = fs.glob(glob_pattern)
+        pattern = _filename_format_index_pattern(
+            filename_format, base_name, model_parallel_rank, file_extension
+        )
+    else:
+        checkpoint_prefix = f"{path}/{base_name}.{model_parallel_rank}"
+        file_names = fs.glob(checkpoint_prefix + "*" + file_extension)
+        pattern = re.compile(
+            rf"^{re.escape(base_name)}\.{model_parallel_rank}\.(\d+)"
+            rf"{re.escape(file_extension)}$"
+        )
+
+    if len(file_names) == 0:
+        return 0
+
+    file_idx = []
+    for fname in file_names:
+        file_stem = PurePath(fname).name
+        match = pattern.match(file_stem)
+        if match:
+            file_idx.append(int(match.group(1)))
+
+    if not file_idx:
+        return 0
+
+    file_idx.sort()
+    return file_idx[-1] + 1 if saving else file_idx[-1]
+
+
 def _get_checkpoint_filename(
     path: str,
     base_name: str = "checkpoint",
@@ -574,6 +650,7 @@ def _get_checkpoint_filename(
     saving: bool = False,
     model_type: str = "mdlus",
     distributed: bool = False,
+    filename_format: str | None = None,
 ) -> str:
     """
     Builds the filename for a numbered checkpoint.
@@ -600,6 +677,12 @@ def _get_checkpoint_filename(
         When ``True`` the model_parallel_rank component of the filename is
         forced to ``0`` because FSDP/DTensor distribution is handled by the
         DCP APIs, not per-rank files.  By default ``False``.
+    filename_format : str | None, optional
+        Optional ``str.format`` template for the checkpoint basename (without
+        directory or extension).  Supported fields are ``name`` (model or
+        checkpoint stem), ``epoch`` (checkpoint index), and ``mp_rank``.
+        Example: ``"{name}.{epoch:06d}"`` produces zero-padded epoch numbers.
+        When ``None``, the legacy ``{name}.{mp_rank}.{epoch}`` layout is used.
 
     Returns
     -------
@@ -631,47 +714,36 @@ def _get_checkpoint_filename(
     fs = fsspec.filesystem(protocol)
     if protocol == "file":
         path = str(Path(path).resolve())
-    checkpoint_filename = f"{path}/{base_name}.{model_parallel_rank}"
 
     # File extension for PhysicsNeMo models or PyTorch models
     file_extension = ".mdlus" if model_type == "mdlus" else ".pt"
 
-    # If epoch is provided load that file
-    if index is not None:
-        checkpoint_filename = checkpoint_filename + f".{index}"
-        checkpoint_filename += file_extension
-    # Otherwise try loading the latest epoch or rolling checkpoint
-    else:
-        file_names = [
-            fname for fname in fs.glob(checkpoint_filename + "*" + file_extension)
-        ]
+    resolved_index = _resolve_checkpoint_index(
+        fs,
+        path,
+        base_name,
+        model_parallel_rank,
+        file_extension,
+        index,
+        saving,
+        filename_format,
+    )
 
-        if len(file_names) > 0:
-            # If checkpoint from a null index save exists load that
-            # This is the most likely line to error since it will fail with
-            # invalid checkpoint names
+    if filename_format is not None:
+        try:
+            formatted_name = filename_format.format(
+                name=base_name,
+                epoch=resolved_index,
+                mp_rank=model_parallel_rank,
+            )
+        except KeyError as exc:
+            raise ValueError(
+                "filename_format contains unsupported placeholders. "
+                "Supported fields are: name, epoch, mp_rank."
+            ) from exc
+        return f"{path}/{formatted_name}{file_extension}"
 
-            file_idx = []
-
-            for fname in file_names:
-                fname_path = PurePath(fname)
-                file_stem = fname_path.name
-
-                pattern = rf"^{re.escape(base_name)}\.{model_parallel_rank}\.(\d+){re.escape(file_extension)}$"
-                match = re.match(pattern, file_stem)
-                if match:
-                    file_idx.append(int(match.group(1)))
-            file_idx.sort()
-            # If we are saving index by 1 to get the next free file name
-            if saving:
-                checkpoint_filename = checkpoint_filename + f".{file_idx[-1] + 1}"
-            else:
-                checkpoint_filename = checkpoint_filename + f".{file_idx[-1]}"
-            checkpoint_filename += file_extension
-        else:
-            checkpoint_filename += ".0" + file_extension
-
-    return checkpoint_filename
+    return f"{path}/{base_name}.{model_parallel_rank}.{resolved_index}{file_extension}"
 
 
 def _unique_model_names(
@@ -730,6 +802,7 @@ def save_checkpoint(
     epoch: int | None = None,
     metadata: dict[str, Any] | None = None,
     optimizer_model: torch.nn.Module | None = None,
+    filename_format: str | None = None,
 ) -> None:
     r"""Save a training checkpoint to disk (or a remote store).
 
@@ -784,6 +857,10 @@ def save_checkpoint(
         them is a distributed model (FSDP/ShardTensor). When ``None``, the
         first model in ``models`` is used.  Ignored when *not* in distributed
         mode.
+    filename_format : str | None, optional
+        Optional ``str.format`` template for model checkpoint basenames.
+        Supported fields: ``name``, ``epoch``, ``mp_rank``. When ``None``,
+        the legacy ``{name}.{mp_rank}.{epoch}`` naming is used.
 
     Examples
     --------
@@ -855,6 +932,7 @@ def save_checkpoint(
             saving=True,
             model_type=model_type,
             distributed=is_distributed,
+            filename_format=filename_format,
         )
 
         if _is_distributed_model(model):
