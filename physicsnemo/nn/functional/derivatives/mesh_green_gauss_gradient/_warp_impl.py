@@ -605,7 +605,9 @@ def _launch_backward_points(
 
 
 @torch.library.custom_op(
-    "physicsnemo::mesh_green_gauss_gradient_warp_impl", mutates_args=()
+    "physicsnemo::mesh_green_gauss_gradient_warp_impl",
+    mutates_args=(),
+    schema="(Tensor points, Tensor cells, Tensor neighbors, Tensor values) -> Tensor",
 )
 def mesh_green_gauss_gradient_impl(
     points: torch.Tensor,
