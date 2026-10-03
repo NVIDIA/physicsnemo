@@ -5,16 +5,15 @@ Multi-Diffusion
 
 .. currentmodule:: physicsnemo.diffusion.multi_diffusion
 
-Multi-diffusion is a technique for scaling diffusion models to spatial domains
-that are too large to be processed in a single pass. Such large domains are
-common in the physics-AI and scientific machine learning applications targeted
-by the PhysicsNeMo diffusion module. The full domain is split into smaller
-patches, the diffusion model is run on each patch, and, when necessary, the
-patches are fused back into a single, globally coherent result. It is used
-whenever training or sampling on the full domain, whichever has the higher peak
-memory, would exceed the available GPU memory. The approach follows that
-introduced in `MultiDiffusion: Fusing Diffusion Paths for Controlled Image
-Generation <https://arxiv.org/abs/2302.08113>`_ (Bar-Tal et al., 2023).
+Multi-diffusion scales diffusion and flow-matching models to spatial domains
+that do not fit in a single pass. Such large domains are common in the
+physics-AI and scientific machine learning applications targeted by the
+PhysicsNeMo diffusion module. The technique splits the full domain into smaller
+patches and runs the model on each patch. When necessary, it fuses the patches
+back into a single, globally coherent result. Use multi-diffusion whenever
+full-domain training or sampling would exceed the available GPU memory. The
+approach follows the `MultiDiffusion paper
+<https://arxiv.org/abs/2302.08113>`_ by Bar-Tal et al. in 2023.
 
 Multi-diffusion does not reduce the total amount of computation: apart from the
 patching, fusing, and optional positional-embedding and conditioning
@@ -24,21 +23,21 @@ What changes is how that work is mapped onto the GPU:
 * **Training** (through :class:`MultiDiffusionModel2D` and the
   :ref:`multi-diffusion losses <diffusion_multi_diffusion_losses>`): small
   patches are extracted from the global sample (they need not cover all of it)
-  and treated as independent batch elements, each noised and denoised on its
-  own.  The objective is the ordinary batched denoising loss
+  and treated as independent batch elements. The scheduler adds noise, and the
+  model evaluates each patch. Training uses the ordinary batched
+  denoising score matching or flow-matching loss
   over the resulting :math:`P \times B` patches, an embarrassingly parallel
   computation.  There is **no fusion step**, reassembling a full-resolution
   output is only required at inference.  Peak memory is set by the patch size
   and the number of patches processed per step, not by the global domain size
   (illustrated in :ref:`the training schematic <md_schematic_training>`).
-* **Inference** (through :class:`MultiDiffusionPredictor`): the global noisy
-  state is tiled into a deterministic grid of patches, each patch is denoised,
-  and at every solver step the per-patch estimates are **fused** (overlapping
-  regions averaged) back into a single global state before the next step. The
-  patches are processed with reduced parallelism, sequentially or in small
-  chunks, so peak memory is set by the patch size and chunk size rather than
-  the global domain size (illustrated in :ref:`the inference schematic
-  <md_schematic_inference>`).
+* **Inference**: :class:`MultiDiffusionPredictor` tiles the current global state
+  into a deterministic grid of patches. The model processes each patch and
+  **fuses** the per-patch estimates at every solver step. Fusion averages
+  overlapping regions before the next step. Running patches sequentially or in
+  small chunks reduces parallelism. As a result, the patch and chunk sizes
+  determine peak memory rather than the global domain size. See
+  :ref:`the inference schematic <md_schematic_inference>`.
 
 In both cases this trades GPU parallelism (and therefore throughput) for the
 ability to run on domains that would otherwise exhaust memory.
@@ -49,7 +48,7 @@ ability to run on domains that would otherwise exhaust memory.
    :width: 100%
 
    Training. Patches are extracted from the global tensor at random positions
-   (they need not cover all of it) and denoised independently as batch
+   (they need not cover all of it) and processed independently as batch
    elements.  No fusion is performed.
 
 .. _md_schematic_inference:
@@ -87,10 +86,10 @@ reduced parallelism lowers throughput, but peak memory stays bounded, so the
 same pipeline scales to global domains it could otherwise never fit.  Combined
 with the framework's built-in optimizations (``torch.compile``, AMP-bf16, and
 Apex layers), it scales both training and guided generation to domains with up
-to 64x more pixels than the same pipeline without it.  This brings diffusion
-within reach of the very large scientific domains (weather, CFD, and the like)
-whose grids run into billions of points, far beyond what a single GPU could
-hold.  The benchmarks below report throughput and peak GPU memory as a function
+to 64x more pixels than the same pipeline without it. This brings diffusion and
+flow matching within reach of large scientific domains such as weather and CFD.
+Their grids run into billions of points, far beyond what a single GPU could
+hold. The benchmarks below report throughput and peak GPU memory as a function
 of the global domain size (pixels per edge).
 
 .. figure:: ../../img/diffusion/training_throughput.png
@@ -159,9 +158,9 @@ on each forward pass performs three operations on the model's behalf:
   supports interpolating it to the patch resolution (a coarse global view in
   every patch) or repeating it across patches.
 
-The objective is the ordinary batched denoising loss over the
-:math:`P \times B` patches (an embarrassingly parallel computation), with an
-independent diffusion time sampled per patch and no fusion involved.
+Training uses the ordinary batched denoising score matching or flow-matching
+loss over the :math:`P \times B` patches. Each patch receives an independent
+time, and no fusion occurs.
 
 Switching an existing full-domain pipeline to multi-diffusion is almost
 transparent: wrap the model, set the number of patches to extract, and swap the
@@ -218,6 +217,26 @@ of patches to extract, and swaps the loss:
         loss = loss_fn(x0)  # internally: extract patches -> per-patch noise -> denoise
         loss.backward()
         # ... standard optimizer step (unchanged from full-domain training) ...
+
+Flow-matching training uses the same wrapper and patching configuration. Swap
+the scheduler and loss while keeping the training loop unchanged:
+
+.. code-block:: python
+
+    from physicsnemo.diffusion.multi_diffusion import (
+        MultiDiffusionFlowMatchingLoss,
+    )
+    from physicsnemo.diffusion.noise_schedulers import (
+        RectifiedFlowNoiseScheduler,
+    )
+
+    scheduler = RectifiedFlowNoiseScheduler()
+    loss_fn = MultiDiffusionFlowMatchingLoss(
+        md_model,
+        scheduler,
+        prediction_type="x0",
+        x0_to_flow_fn=scheduler.x0_to_flow,
+    )
 
 A conditional variant adds positional embeddings and an image condition
 :math:`y_{img}`. The model reads both from the ``TensorDict`` condition that
@@ -282,6 +301,11 @@ protocol, so it plugs into the standard :ref:`sampling stack
 ``functools.partial(model, condition=...)`` step: the conditioning is bound once
 at construction and the grid geometry is set with
 :meth:`~MultiDiffusionPredictor.set_patching`.
+
+The predictor supports both diffusion and flow-matching models. For a model
+that predicts flow, set ``prediction_type="flow"`` and pass
+:meth:`~physicsnemo.diffusion.noise_schedulers.LinearGaussianNoiseScheduler.flow_to_x0`
+as ``flow_to_x0_fn``. Patching and fusion are otherwise unchanged.
 
 As in training, switching a full-domain sampling pipeline to multi-diffusion is
 almost transparent: only the predictor changes.  A standard, full-domain
@@ -510,6 +534,20 @@ Multi-Diffusion Losses
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. autoclass:: physicsnemo.diffusion.multi_diffusion.MultiDiffusionWeightedMSEDSMLoss
+    :members:
+    :exclude-members: __init__
+
+The :code:`MultiDiffusionFlowMatchingLoss` class
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. autoclass:: physicsnemo.diffusion.multi_diffusion.MultiDiffusionFlowMatchingLoss
+    :members:
+    :exclude-members: __init__
+
+The :code:`MultiDiffusionWeightedFlowMatchingLoss` class
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. autoclass:: physicsnemo.diffusion.multi_diffusion.MultiDiffusionWeightedFlowMatchingLoss
     :members:
     :exclude-members: __init__
 

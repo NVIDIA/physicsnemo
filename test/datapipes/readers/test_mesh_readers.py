@@ -33,8 +33,7 @@ from physicsnemo.datapipes.transforms.mesh import (
 )
 from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.mesh.calculus.measure import (
-    MEASURE_WEIGHTS_KEY,
-    cell_measure_weights,
+    EFFECTIVE_MEASURE_KEY,
     cell_measures,
 )
 from physicsnemo.mesh.primitives.basic import (
@@ -471,7 +470,7 @@ class TestCellSubsampleMeasureWeights:
         reader.set_generator(torch.Generator().manual_seed(0))
         mesh, _ = reader[0]
         assert mesh.n_cells == k
-        torch.testing.assert_close(cell_measure_weights(mesh), torch.full((k,), n / k))
+        torch.testing.assert_close(cell_measures(mesh), mesh.cell_areas * (n / k))
 
     def test_reader_noop_below_threshold(self, tmp_path):
         n = 8
@@ -479,7 +478,7 @@ class TestCellSubsampleMeasureWeights:
         reader = MeshReader(tmp_path, pattern="*.pmsh", subsample_n_cells=20)
         mesh, _ = reader[0]
         assert mesh.n_cells == n
-        assert MEASURE_WEIGHTS_KEY not in mesh.cell_data.keys()
+        assert EFFECTIVE_MEASURE_KEY not in mesh.cell_data.keys()
 
     def test_equal_area_mesh_recovers_total_exactly(self, tmp_path):
         # With identical triangles, ANY cyclic block reproduces the full
@@ -504,9 +503,7 @@ class TestCellSubsampleMeasureWeights:
         mesh, _ = reader[0]
         mesh = SubsampleMesh(n_cells=k2)(mesh)
         assert mesh.n_cells == k2
-        torch.testing.assert_close(
-            cell_measure_weights(mesh), torch.full((k2,), n / k2)
-        )
+        torch.testing.assert_close(cell_measures(mesh), mesh.cell_areas * (n / k2))
 
     def test_domain_mesh_reader_records_weights_on_boundaries(self, tmp_path):
         interior = Mesh(points=torch.randn(10, 3))
@@ -517,11 +514,11 @@ class TestCellSubsampleMeasureWeights:
         loaded, _ = reader[0]
         assert loaded.boundaries["wall"].n_cells == 6
         torch.testing.assert_close(
-            cell_measure_weights(loaded.boundaries["wall"]),
-            torch.full((6,), 24 / 6),
+            cell_measures(loaded.boundaries["wall"]),
+            loaded.boundaries["wall"].cell_areas * (24 / 6),
         )
         ### Interior is a point cloud: no cells, no weights.
-        assert MEASURE_WEIGHTS_KEY not in loaded.interior.cell_data.keys()
+        assert EFFECTIVE_MEASURE_KEY not in loaded.interior.cell_data.keys()
 
     def test_seeded_reproducibility(self, tmp_path):
         ### Reader RNG is derived per-sample from (base_seed, epoch, index):

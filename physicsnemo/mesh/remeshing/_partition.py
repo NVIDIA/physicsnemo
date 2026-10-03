@@ -132,7 +132,7 @@ def partition_cells(
       smooth surfaces where inter-seed spacing is small relative to the radius
       of curvature, this is an excellent approximation.
     - Every original cell is assigned to exactly one cluster, so
-      ``cluster_areas.sum() == mesh.cell_areas.sum()`` by construction.
+      ``cluster_areas.sum() == cell_measures(mesh).sum()`` by construction.
     - If a cluster receives no cells (possible when seeds outnumber cells or
       cluster heavily), its area is 0, its normal is the zero vector, and its
       centroid falls back to the seed position.
@@ -157,7 +157,9 @@ def partition_cells(
     ### Read source geometry (cached on Mesh)
     n_dims = mesh.n_spatial_dims
     cell_centroids = mesh.cell_centroids  # (M, D)
-    cell_areas = mesh.cell_areas  # (M,)
+    from physicsnemo.mesh.calculus.measure import cell_measures
+
+    cell_areas = cell_measures(mesh)  # complete represented measures (M,)
     has_normals = mesh.codimension == 1
 
     ### Assign each cell to its nearest seed via kNN search (k=1).

@@ -22,6 +22,8 @@ an alternative to the PhysicsAttention attention mechanism of the Transolver.
 
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -253,3 +255,166 @@ class FLARE(nn.Module):
         out_x = rearrange(out_x, "b n h d -> b n (h d)")
         out_x = self.out_linear(out_x)
         return self.out_dropout(out_x)
+
+
+class FLAREPlusPlus(nn.Module):
+    r"""FLARE++ attention with input-conditioned routing queries.
+
+    FLARE++ first uses learned seeds to summarize the current input into a set
+    of routing queries. Those queries then gather values from the input and
+    scatter the gathered information back to the input tokens. All three steps
+    use scaled dot-product attention, so the cost is linear in the number of
+    input tokens when the number of routing queries is fixed.
+
+    For architecture details, see the `FLARE++ paper
+    <https://arxiv.org/abs/2608.11519>`_.
+
+    Parameters
+    ----------
+    dim : int
+        Number of input and output channels.
+    heads : int, optional
+        Number of attention heads. Default is 8.
+    dim_head : int, optional
+        Number of channels per attention head. Default is 64.
+    dropout : float, optional
+        Dropout applied after the output projection. Default is 0.0.
+    n_global_queries : int, optional
+        Number of learned seeds and synthesized routing queries. Default is 64.
+    use_te : bool, optional
+        Transformer Engine is not currently supported for FLARE++. Default is
+        ``False``.
+    attn_scale : float | None, optional
+        Scale applied to attention scores. ``None`` uses the standard
+        ``1 / sqrt(dim_head)`` scale. Default is ``None``.
+
+    Forward
+    -------
+    x : torch.Tensor
+        Input of shape :math:`(B, N, C)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output of shape :math:`(B, N, C)`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> attention = FLAREPlusPlus(dim=256, heads=8, dim_head=32)
+    >>> output = attention(torch.randn(2, 100, 256))
+    >>> output.shape
+    torch.Size([2, 100, 256])
+    """
+
+    def __init__(
+        self,
+        dim: int,
+        heads: int = 8,
+        dim_head: int = 64,
+        dropout: float = 0.0,
+        n_global_queries: int = 64,
+        use_te: bool = False,
+        attn_scale: float | None = None,
+    ) -> None:
+        super().__init__()
+        if use_te:
+            raise ValueError(
+                "FLAREPlusPlus does not support Transformer Engine; set use_te=False."
+            )
+        if dim <= 0:
+            raise ValueError(f"dim must be positive, got {dim}")
+        if heads <= 0:
+            raise ValueError(f"heads must be positive, got {heads}")
+        if dim_head <= 0:
+            raise ValueError(f"dim_head must be positive, got {dim_head}")
+        if n_global_queries <= 0:
+            raise ValueError(
+                f"n_global_queries must be positive, got {n_global_queries}"
+            )
+        if attn_scale is None:
+            attn_scale = dim_head**-0.5
+        if not math.isfinite(attn_scale) or attn_scale <= 0.0:
+            raise ValueError(
+                f"attn_scale must be a positive finite value, got {attn_scale}"
+            )
+
+        self.dim = dim
+        self.heads = heads
+        self.dim_head = dim_head
+        self.n_global_queries = n_global_queries
+        self.use_te = False
+        self.scale = float(attn_scale)
+        inner_dim = heads * dim_head
+
+        self.q_seed = nn.Parameter(torch.randn(1, heads, n_global_queries, dim_head))
+        # A fused projection is mathematically identical to four independent
+        # projections and executes them in one matrix multiplication. The
+        # chunks are query-synthesis K/V followed by physical K/V.
+        self.in_projection = nn.Linear(dim, 4 * inner_dim)
+        self.out_linear = nn.Linear(inner_dim, dim)
+        self.out_dropout = nn.Dropout(dropout)
+
+    def _compute_attention(
+        self, x: Float[torch.Tensor, "B N C"]
+    ) -> tuple[
+        Float[torch.Tensor, "B H N D"],
+        Float[torch.Tensor, "B H N D"],
+    ]:
+        """Return FLARE++ head outputs and physical keys for backend reuse."""
+        query_k, query_v, physical_k, physical_v = self.in_projection(x).chunk(
+            4, dim=-1
+        )
+        query_k, query_v, physical_k, physical_v = (
+            rearrange(tensor, "b n (h d) -> b h n d", h=self.heads, d=self.dim_head)
+            for tensor in (query_k, query_v, physical_k, physical_v)
+        )
+
+        seeds = self.q_seed.to(dtype=x.dtype).expand(x.shape[0], -1, -1, -1)
+        queries = F.scaled_dot_product_attention(
+            seeds, query_k, query_v, scale=self.scale
+        )
+        routed_values = F.scaled_dot_product_attention(
+            queries, physical_k, physical_v, scale=self.scale
+        )
+        output = F.scaled_dot_product_attention(
+            physical_k, queries, routed_values, scale=self.scale
+        )
+        return output, physical_k
+
+    def _project_output(
+        self, output: Float[torch.Tensor, "B H N D"]
+    ) -> Float[torch.Tensor, "B N C"]:
+        """Merge attention heads and apply the output projection."""
+        output = rearrange(output, "b h n d -> b n (h d)")
+        return self.out_dropout(self.out_linear(output))
+
+    def forward(self, x: Float[torch.Tensor, "B N C"]) -> Float[torch.Tensor, "B N C"]:
+        r"""Apply FLARE++ dynamic routing to ``x``.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input tensor of shape :math:`(B, N, C)`.
+
+        Returns
+        -------
+        torch.Tensor
+            Output tensor of shape :math:`(B, N, C)`.
+        """
+        if not torch.compiler.is_compiling():
+            if x.ndim != 3:
+                raise ValueError(
+                    f"Expected a 3D input tensor (B, N, C), got shape {tuple(x.shape)}"
+                )
+            # Exact token-sharded FLARE++ needs globally normalized encoders.
+            # Ordinary DDP tensors do not expose ``redistribute`` and remain
+            # fully supported.
+            if hasattr(x, "redistribute"):
+                raise NotImplementedError(
+                    "FLAREPlusPlus does not yet support token-sharded inputs; "
+                    "use replicated inputs with data parallelism."
+                )
+
+        output, _ = self._compute_attention(x)
+        return self._project_output(output)

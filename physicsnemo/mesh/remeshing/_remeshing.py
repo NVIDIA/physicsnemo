@@ -299,6 +299,16 @@ def remesh(
     :func:`physicsnemo.nn.functional.remeshing`. These advanced parameters may
     change as the implementation evolves.
     """
+    from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY
+
+    if (
+        EFFECTIVE_MEASURE_KEY in mesh.cell_data
+        or EFFECTIVE_MEASURE_KEY in mesh.point_data
+    ):
+        raise ValueError(
+            "Remeshing explicit quadrature requires a conservative measure transfer; supply replacement measures instead of interpolating or dropping them"
+        )
+
     if mesh.n_manifold_dims != 2 or mesh.n_spatial_dims != 3:
         raise NotImplementedError(
             "remesh only supports 2D triangle surfaces embedded in 3D. Got "
