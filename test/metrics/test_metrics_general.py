@@ -1029,6 +1029,17 @@ def test_wasserstein_cdf_nonuniform_batch_and_partition_refinement(device):
     )
 
 
+def test_wasserstein_cdf_shared_nonuniform_edges_broadcast_across_batches(device):
+    """A shared edge vector broadcasts widths over trailing batch dimensions."""
+    bins = torch.tensor([0.0, 1.0, 4.0, 10.0], device=device)
+    x = torch.tensor([[0.2, 0.1], [0.7, 0.9], [1.0, 1.0]], device=device)
+    y = torch.tensor([[0.0, 0.4], [0.2, 0.4], [1.0, 1.0]], device=device)
+
+    result = w.wasserstein_from_cdf(bins, x, y)
+
+    torch.testing.assert_close(result, result.new_tensor([1.7, 1.8]))
+
+
 def test_wasserstein_cdf_gradients_follow_bin_widths(device):
     """Check gradients against the integral of a nonuniform step CDF."""
     bins = torch.tensor(
@@ -1050,7 +1061,7 @@ def test_wasserstein_cdf_gradients_follow_bin_widths(device):
 
 def test_wasserstein_cdf_discrete_samples_match_scipy(device):
     """Recover the exact transport distance on a shared nonuniform support."""
-    from scipy.stats import wasserstein_distance
+    wasserstein_distance = pytest.importorskip("scipy.stats").wasserstein_distance
 
     support = np.array([-4.0, -1.0, 2.0, 10.0, 12.0])
     first = np.array([-4.0, -4.0, 2.0, 10.0])
