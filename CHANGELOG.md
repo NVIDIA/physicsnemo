@@ -145,6 +145,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Compute Wasserstein CDF distances using each interval width for nonuniform bins.
+
 - Mesh slicing reuses integer indices across connectivity, fields, and caches
   to avoid repeated CUDA synchronization for the same boolean mask.
   Point slicing skips mask processing when the output has no cells because

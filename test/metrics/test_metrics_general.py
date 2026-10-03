@@ -989,3 +989,79 @@ def test_mse_weights_channel_and_eps(device):
     # All-zero weights -> finite 0 via the eps floor (no division by zero).
     out = mse_mod.mse(pred, target, weights=torch.zeros_like(pred))
     assert torch.isfinite(out) and float(out) == 0.0
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+@pytest.mark.parametrize(
+    "edges", [[0.0, 1.0, 4.0, 10.0], [-8.0, -7.0, -5.0, 2.0], [0.0, 2.0, 4.0, 6.0]]
+)
+def test_wasserstein_cdf_bin_widths(device, dtype, edges):
+    """Integrate each CDF difference over its actual interval width."""
+    bins = torch.tensor(edges, device=device, dtype=dtype)
+    cdf_x = torch.tensor([0.2, 0.7, 1.0], device=device, dtype=dtype)
+    cdf_y = torch.tensor([0.0, 0.2, 1.0], device=device, dtype=dtype)
+    original = bins.clone()
+    expected = 0.2 * (edges[1] - edges[0]) + 0.5 * (edges[2] - edges[1])
+    result = w.wasserstein_from_cdf(bins, cdf_x, cdf_y)
+    torch.testing.assert_close(result, bins.new_tensor(expected))
+    torch.testing.assert_close(result, w.wasserstein_from_cdf(bins, cdf_y, cdf_x))
+    assert result.dtype == dtype
+    torch.testing.assert_close(bins, original, rtol=0, atol=0)
+
+
+def test_wasserstein_cdf_nonuniform_batch_and_partition_refinement(device):
+    """Changing the partition of a constant CDF section leaves the integral unchanged."""
+    bins = torch.tensor(
+        [[0.0, -2.0], [1.0, 0.0], [4.0, 6.0], [10.0, 8.0]], device=device
+    )
+    x = torch.tensor([[0.2, 0.1], [0.7, 0.9], [1.0, 1.0]], device=device)
+    y = torch.tensor([[0.0, 0.4], [0.2, 0.4], [1.0, 1.0]], device=device)
+    result = w.wasserstein_from_cdf(bins, x, y)
+    torch.testing.assert_close(result, result.new_tensor([1.7, 3.6]))
+    refined_bins = torch.cat([bins[:2], ((bins[1] + bins[2]) / 2)[None], bins[2:]])
+    refined_x = torch.cat([x[:2], x[1:2], x[2:]])
+    refined_y = torch.cat([y[:2], y[1:2], y[2:]])
+    torch.testing.assert_close(
+        w.wasserstein_from_cdf(refined_bins, refined_x, refined_y), result
+    )
+    torch.testing.assert_close(
+        w.wasserstein_from_cdf(bins, x, x), torch.zeros_like(result)
+    )
+
+
+def test_wasserstein_cdf_gradients_follow_bin_widths(device):
+    """Check gradients against the integral of a nonuniform step CDF."""
+    bins = torch.tensor(
+        [0.0, 1.0, 4.0, 10.0], dtype=torch.float64, device=device, requires_grad=True
+    )
+    x = torch.tensor(
+        [0.2, 0.7, 0.95], dtype=torch.float64, device=device, requires_grad=True
+    )
+    y = torch.tensor(
+        [0.1, 0.3, 0.9], dtype=torch.float64, device=device, requires_grad=True
+    )
+    result = w.wasserstein_from_cdf(bins, x, y)
+    dx, dy, de = torch.autograd.grad(result, (x, y, bins))
+    torch.testing.assert_close(dx, x.new_tensor([1.0, 3.0, 6.0]))
+    torch.testing.assert_close(dy, -dx)
+    torch.testing.assert_close(de, bins.new_tensor([-0.1, -0.3, 0.35, 0.05]))
+    assert torch.autograd.gradcheck(w.wasserstein_from_cdf, (bins, x, y))
+
+
+def test_wasserstein_cdf_discrete_samples_match_scipy(device):
+    """Recover the exact transport distance on a shared nonuniform support."""
+    from scipy.stats import wasserstein_distance
+
+    support = np.array([-4.0, -1.0, 2.0, 10.0, 12.0])
+    first = np.array([-4.0, -4.0, 2.0, 10.0])
+    second = np.array([-1.0, -1.0, 10.0, 10.0])
+    x = np.array([(first <= edge).mean() for edge in support[:-1]])
+    y = np.array([(second <= edge).mean() for edge in support[:-1]])
+    actual = w.wasserstein_from_cdf(
+        torch.tensor(support, device=device),
+        torch.tensor(x, device=device),
+        torch.tensor(y, device=device),
+    )
+    torch.testing.assert_close(
+        actual, actual.new_tensor(wasserstein_distance(first, second))
+    )

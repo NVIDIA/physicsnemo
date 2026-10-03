@@ -151,5 +151,5 @@ def wasserstein_from_cdf(bin_edges: Tensor, cdf_x: Tensor, cdf_y: Tensor) -> Ten
         The 1-Wasserstein distance between cdf_x and cdf_y
     """
     return torch.sum(
-        torch.abs(cdf_x - cdf_y) * (bin_edges[1, ...] - bin_edges[0, ...]), dim=0
+        torch.abs(cdf_x - cdf_y) * (bin_edges[1:, ...] - bin_edges[:-1, ...]), dim=0
     )
