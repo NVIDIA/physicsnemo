@@ -103,8 +103,8 @@ def darcy_mgrid_jacobi_iterative_batched_2d(
     # compute terms
     dx_squared = gdx * gdx
     t_1 = p_1_1 * (d_0_1 + d_2_1 + d_1_0 + d_1_2) / dx_squared
-    t_2 = ((p_2_1 - p_0_1) * (d_2_1 - d_0_1)) / (2.0 * gdx)
-    t_3 = ((p_1_2 - p_1_0) * (d_1_2 - d_1_0)) / (2.0 * gdx)
+    t_2 = ((p_2_1 - p_0_1) * (d_2_1 - d_0_1)) / (4.0 * dx_squared)
+    t_3 = ((p_1_2 - p_1_0) * (d_1_2 - d_1_0)) / (4.0 * dx_squared)
 
     # jacobi iterative method
     d_star = (t_1 + t_2 + t_3 + source) / (p_1_1 * 4.0 / dx_squared)
