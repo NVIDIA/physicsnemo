@@ -32,7 +32,7 @@ are welcome to do so.  Please follow the issue templates as much as you can,
 within reason.
 
 Usage of automated AI bots to find and open issues
-(i.e., those NOT encountered naturally in the course of development and usage),
+(that is, those NOT encountered naturally in the course of development and usage),
 and submit corresponding Pull Requests,
 is discouraged strongly.  Issues or Pull Requests that the maintainers
 deem are submitted entirely by AI,
