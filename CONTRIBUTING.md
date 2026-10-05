@@ -34,7 +34,8 @@ within reason.
 Usage of automated AI bots to find and open issues
 (i.e., those NOT encountered naturally in the course of development and usage),
 and submit corresponding Pull Requests,
-is discouraged strongly.  Issues or Pull Requests that the maintainers deem are submitted entirely by AI,
+is discouraged strongly.  Issues or Pull Requests that the maintainers
+deem are submitted entirely by AI,
 without human review, will be closed without review.
 
 ## Contribute to PhysicsNeMo-Core
