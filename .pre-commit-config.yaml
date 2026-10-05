@@ -16,7 +16,7 @@
 
 repos:
 -   repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.12.5
+    rev: v0.16.10
     hooks:
       - id: ruff-check
         args: [--fix]
@@ -34,7 +34,7 @@ repos:
       exclude: ^docs/|^physicsnemo/experimental/|^test/
 
 -   repo: https://github.com/igorshubovych/markdownlint-cli
-    rev: v0.35.0
+    rev: v0.49.1
     hooks:
     - id: markdownlint
       exclude: ^skills/
