@@ -71,23 +71,23 @@ def _make_bh_kernel_and_data(
     device_obj = torch.device(device)
     torch.manual_seed(seed)
 
-    output_field_ranks = {
-        k: (0 if v == "scalar" else 1) for k, v in output_fields.items()
+    output_schema = {
+        k: {"rank": 0 if v == "scalar" else 1} for k, v in output_fields.items()
     }
-    source_data_ranks = {
-        **{f"source_scalar_{i}": 0 for i in range(n_source_scalars)},
-        **{f"source_vector_{i}": 1 for i in range(n_source_vectors)},
+    source_schema = {
+        **{f"source_scalar_{i}": {"rank": 0} for i in range(n_source_scalars)},
+        **{f"source_vector_{i}": {"rank": 1} for i in range(n_source_vectors)},
     }
-    global_data_ranks = {
-        **{f"global_scalar_{i}": 0 for i in range(n_global_scalars)},
-        **{f"global_vector_{i}": 1 for i in range(n_global_vectors)},
+    global_schema = {
+        **{f"global_scalar_{i}": {"rank": 0} for i in range(n_global_scalars)},
+        **{f"global_vector_{i}": {"rank": 1} for i in range(n_global_vectors)},
     }
 
     common_kwargs = dict(
         n_spatial_dims=n_spatial_dims,
-        output_field_ranks=output_field_ranks,
-        source_data_ranks=source_data_ranks,
-        global_data_ranks=global_data_ranks,
+        output_schema=output_schema,
+        source_schema=source_schema,
+        global_schema=global_schema,
         hidden_layer_sizes=hidden_layer_sizes,
     )
 
@@ -738,9 +738,9 @@ def test_multiscale_bh_convergence(n_dims: int):
 
     ms = MultiscaleKernel(
         n_spatial_dims=n_dims,
-        output_field_ranks={"p": 0},
+        output_schema={"p": {"rank": 0}},
         reference_length_names=["short", "long"],
-        source_data_ranks={"normal": 1},
+        source_schema={"normal": {"rank": 1}},
         hidden_layer_sizes=[16],
         leaf_size=4,
     )
@@ -896,17 +896,20 @@ def test_bh_nested_source_data_keys(n_dims: int):
     torch.manual_seed(DEFAULT_SEED)
     n_src, n_tgt = 30, 15
 
-    source_data_ranks = {
-        "physical": {"pressure": 0},
-        "latent": {"scalars": {"0": 0, "1": 0}, "vectors": {"0": 1}},
-        "normals": 1,
+    source_schema = {
+        "physical": {"pressure": {"rank": 0}},
+        "latent": {
+            "scalars": {"0": {"rank": 0}, "1": {"rank": 0}},
+            "vectors": {"0": {"rank": 1}},
+        },
+        "normals": {"rank": 1},
     }
-    output_field_ranks = {"p": 0, "u": 1}
+    output_schema = {"p": {"rank": 0}, "u": {"rank": 1}}
 
     common_kwargs = dict(
         n_spatial_dims=n_dims,
-        output_field_ranks=output_field_ranks,
-        source_data_ranks=source_data_ranks,
+        output_schema=output_schema,
+        source_schema=source_schema,
         hidden_layer_sizes=[16],
     )
 
@@ -953,7 +956,7 @@ def test_bh_nested_source_data_keys(n_dims: int):
     exact_result = exact_kernel(**data)
     bh_result = bh_kernel(**data, theta=0.01)
 
-    for field_name in output_field_ranks:
+    for field_name in output_schema:
         torch.testing.assert_close(
             bh_result[field_name],
             exact_result[field_name],
@@ -993,10 +996,13 @@ def test_all_four_categories_active_and_correct(
     n_src, n_tgt = 60, 30
     common_kwargs = dict(
         n_spatial_dims=n_dims,
-        output_field_ranks={"p": 0, "v": 1},
-        source_data_ranks={
-            **{f"source_scalar_{i}": 0 for i in range(n_source_scalars)},
-            **{f"source_vector_{i}": 1 for i in range(max(n_source_vectors, 1))},
+        output_schema={"p": {"rank": 0}, "v": {"rank": 1}},
+        source_schema={
+            **{f"source_scalar_{i}": {"rank": 0} for i in range(n_source_scalars)},
+            **{
+                f"source_vector_{i}": {"rank": 1}
+                for i in range(max(n_source_vectors, 1))
+            },
         },
         hidden_layer_sizes=[32, 32],
     )
@@ -1493,10 +1499,13 @@ def test_four_quadrant_per_category_accuracy(
     n_src, n_tgt = 60, 30
     common_kwargs = dict(
         n_spatial_dims=n_dims,
-        output_field_ranks={"p": 0},
-        source_data_ranks={
-            **{f"source_scalar_{i}": 0 for i in range(n_source_scalars)},
-            **{f"source_vector_{i}": 1 for i in range(max(n_source_vectors, 1))},
+        output_schema={"p": {"rank": 0}},
+        source_schema={
+            **{f"source_scalar_{i}": {"rank": 0} for i in range(n_source_scalars)},
+            **{
+                f"source_vector_{i}": {"rank": 1}
+                for i in range(max(n_source_vectors, 1))
+            },
         },
         hidden_layer_sizes=[32, 32],
     )

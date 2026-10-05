@@ -21,31 +21,30 @@ classifiers = [
 dynamic = ["version", "optional_dependencies"]
 
 dependencies = [
-    "warp-lang>=1.14.0",
-    "nvtx>=0.2.10",
-    "treelib>=1.2.5",
-    "numpy>=1.22.4",
-    "torch>=2.10.0",
-    "tqdm>=4.60.0",
-    "requests>=2.32.2",
-    # urllib3 is a transitive dependency (via requests/botocore/etc.); pin to
-    # >=2.7.0 to pick up the CVE-2026-44432 decompression-bomb fix.
-    "urllib3>=2.7.0",
-    "GitPython>=3.1.49",
-    "s3fs>=2023.5.0",
-    "packaging>=24.2",
-    "timm>=1.0.22",
-    "einops>=0.8.1",
-    "h5py>=3.15.1",
-    "cftime>=1.6.5",
-    "jaxtyping>=0.3.3",
-    "termcolor>=3.2.0",
-    "hydra-core>=1.3.2",
-    "tensordict[zarr]>=0.14.0",
-    "omegaconf>=2.3.0",
-    "importlib-metadata>=8.7.1",
-    "psutil>=6.0.0",
-    "fsspec>=2026.4.0",
+    "warp-lang>=1.17.0",
+    "nvtx>=0.2.16",
+    "treelib>=1.8.0",
+    "numpy>=2.2.6",
+    "torch>=2.13.0",
+    "tqdm>=4.70.1",
+    "requests>=2.34.2",
+    # Retain a direct floor for urllib3's decompression-bomb security fixes.
+    "urllib3>=2.8.0",
+    "GitPython>=3.1.62",
+    "s3fs>=2026.9.0",
+    "packaging>=26.0",
+    "timm>=1.0.30",
+    "einops>=0.8.2",
+    "h5py>=3.16.0",
+    "cftime>=1.6.6",
+    "jaxtyping>=0.3.11",
+    "termcolor>=3.3.0",
+    "hydra-core>=1.3.7",
+    "tensordict[zarr]>=0.14.2",
+    "omegaconf>=2.3.1",
+    "importlib-metadata>=9.0.1",
+    "psutil>=7.2.2",
+    "fsspec>=2026.9.0",
 ]
 
 [project.urls]
@@ -75,6 +74,30 @@ conflicts = [
         { extra = "transformer-engine-cu12" },
         { extra = "transformer-engine-cu13" },
     ],
+    [
+        { extra = "cu12" },
+        { extra = "natten-cu13" },
+    ],
+    [
+        { extra = "cu12" },
+        { extra = "transformer-engine-cu13" },
+    ],
+    [
+        { extra = "cu13" },
+        { extra = "natten-cu12" },
+    ],
+    [
+        { extra = "cu13" },
+        { extra = "transformer-engine-cu12" },
+    ],
+    [
+        { extra = "natten-cu12" },
+        { extra = "transformer-engine-cu13" },
+    ],
+    [
+        { extra = "natten-cu13" },
+        { extra = "transformer-engine-cu12" },
+    ],
 ]
 
 [tool.uv.extra-build-dependencies]
@@ -88,56 +111,65 @@ name = "nvidia"
 url = "https://pypi.nvidia.com"
 explicit = true  # Only use for packages that explicitly specify this index
 
-# PyTorch CUDA 13 index - used on Linux and Windows for torch builds compatible with cuml-cu13.
-# torch 2.10+ on PyPI (CUDA 12.8) pins cuda-bindings==12.9.4, which conflicts with
-# cuml-cu13's requirement for cuda-bindings>=13.0.1 via cuda-python.
-# The CUDA 13 build of torch pins cuda-bindings==13.0.3, which is compatible.
-# On Mac, we fall back to PyPI (CUDA is not available on macOS).
+# Select PyTorch wheels from the same CUDA major version as RAPIDS and CuPy.
+# These indexes apply to uv; pip users must select the wheel index explicitly.
 [[tool.uv.index]]
 name = "pytorch-cu130"
 url = "https://download.pytorch.org/whl/cu130"
 explicit = true
 
-# PyTorch CUDA 12.8 index - used when the cu12 extra is active.
-# On PyPI, torch 2.10+ ships CUDA 12.8 builds by default, but pulling from
-# this explicit index keeps resolution symmetric with the cu130 path and
-# avoids implicit fallback differences between uv sync and pip install.
+# PyTorch 2.13 is the newest release with CUDA 12.9 wheels. CUDA 12.9 keeps
+# Blackwell kernels and satisfies RAPIDS' nvJitLink>=12.9 requirement; later
+# PyTorch releases publish CUDA 12 wheels only for CUDA 12.6, which stops at
+# sm_90. Linux only: this index has no Windows wheels.
 [[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
+name = "pytorch-cu129"
+url = "https://download.pytorch.org/whl/cu129"
 explicit = true
 
 # NATTEN pre-built wheel indexes (flat HTML pages), split by CUDA version AND
 # torch version.  The full path is required because natten encodes both CUDA
-# and torch versions in local version identifiers (e.g. 0.21.5+torch2100cu128)
-# and uv compares local segments lexicographically — without the torch pin,
-# "torch290" sorts above "torch2100" and the wrong wheel gets installed.
-# >>> UPDATE the torch version component when bumping the torch pin. <<<
+# and torch versions in local version identifiers (e.g. 0.21.7+torch2130cu126).
+# Keep these URLs and the torch pins in the natten extras in sync: the binary
+# extensions must use the same PyTorch ABI as the runtime.
+# NATTEN publishes no CUDA 12.9 build; its CUDA 12.6 wheels run on the CUDA
+# 12.9 PyTorch runtime but contain kernels only through sm_90.
 # See https://natten.org/install/ for available builds.
 [[tool.uv.index]]
-name = "natten-cu128-whl"
-url = "https://whl.natten.org/cu128/torch2.10.0"
+name = "natten-cu126-whl"
+url = "https://whl.natten.org/cu126/torch2.13.0"
 format = "flat"
 explicit = true
 
 [[tool.uv.index]]
 name = "natten-cu130-whl"
-url = "https://whl.natten.org/cu130/torch2.10.0"
+url = "https://whl.natten.org/cu130/torch2.13.0"
 format = "flat"
 explicit = true
 
 [tool.uv.sources]
-# When cu12 is active, torch/torchvision come from the CUDA 12.8 index.
-# When cu13 is active, they come from the CUDA 13.0 index.
-# When neither extra is active (bare install), they come from PyPI.
+# When a CUDA 12 extra is active, torch/torchvision come from the CUDA 12.9
+# index; with a CUDA 13 extra, they come from the CUDA 13.0 index. The NATTEN
+# and Transformer Engine extras select the index too, so their CUDA binaries
+# match PyTorch even without cu12/cu13. Every extra listed here must also
+# declare torch and torchvision.
+# When no CUDA extra is active (bare install), they come from PyPI.
 # On macOS, CUDA extras should not be used (no GPU builds available).
 torch = [
-    { index = "pytorch-cu128", extra = "cu12" },
+    { index = "pytorch-cu129", extra = "cu12" },
+    { index = "pytorch-cu129", extra = "natten-cu12" },
+    { index = "pytorch-cu129", extra = "transformer-engine-cu12" },
     { index = "pytorch-cu130", extra = "cu13" },
+    { index = "pytorch-cu130", extra = "natten-cu13" },
+    { index = "pytorch-cu130", extra = "transformer-engine-cu13" },
 ]
 torchvision = [
-    { index = "pytorch-cu128", extra = "cu12" },
+    { index = "pytorch-cu129", extra = "cu12" },
+    { index = "pytorch-cu129", extra = "natten-cu12" },
+    { index = "pytorch-cu129", extra = "transformer-engine-cu12" },
     { index = "pytorch-cu130", extra = "cu13" },
+    { index = "pytorch-cu130", extra = "natten-cu13" },
+    { index = "pytorch-cu130", extra = "transformer-engine-cu13" },
 ]
 cuml-cu13 = { index = "nvidia" }
 cuml-cu12 = { index = "nvidia" }
@@ -148,7 +180,7 @@ nvidia-dali-cuda120 = { index = "nvidia" }
 # When natten-cu12 or natten-cu13 extras are active, pull natten from
 # the pre-built wheel index instead of building from source via PyPI.
 natten = [
-    { index = "natten-cu128-whl", extra = "natten-cu12" },
+    { index = "natten-cu126-whl", extra = "natten-cu12" },
     { index = "natten-cu130-whl", extra = "natten-cu13" },
 ]
 
@@ -161,7 +193,7 @@ natten = [
 # errors at import time).  We provide the CUDA-agnostic subset of the
 # dependencies here; the matching cuXX binary is pulled by the explicit
 # transformer-engine-cu12 / transformer-engine-cu13 extras below.
-# Static deps mirror TE 2.15's build_tools/pytorch.py::install_requirements().
+# Static deps mirror TE 2.19's build_tools/pytorch.py::install_requirements().
 [[tool.uv.dependency-metadata]]
 name = "transformer-engine-torch"
 requires-dist = [
@@ -172,13 +204,14 @@ requires-dist = [
     "packaging",
     "pydantic",
     "nvdlfw-inspect",
+    "nvidia-cudnn-frontend>=1.28.0",
 ]
 
 #####################################################################
 # Flags Controlling the local build of physicsnemo
 #####################################################################
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.32.4"]
 build-backend = "hatchling.build"
 
 
@@ -205,20 +238,19 @@ exclude = [
 
 [dependency-groups]
 dev = [
-    "asv>=0.6.0",
-    "coverage>=7.13.0",
-    "import-linter>=2.7",
+    "asv>=0.6.6",
+    "coverage>=7.16.2",
     "interrogate>=1.7.0",
-    "onnx>=1.20.0",
-    "onnxscript>=0.5.6",
-    "pre-commit>=4.5.0",
-    "pytest>=9.0.1",
-    "pytest-dependency>=0.6.0",
+    "onnx>=1.23.1",
+    "onnxscript>=0.7.2",
+    "pre-commit>=4.6.2",
+    "pytest>=9.1.1",
+    "pytest-dependency>=0.6.1",
     "pytest-timeout>=2.4.0",
     "ruff>=0.14.8",
     "pytest-testmon>=2.2.0",
-    "ipykernel>=7.1.0",
-    "import-linter>=2.10",
+    "ipykernel>=7.4.0",
+    "import-linter>=2.15",
 ]
 
 #####################################################################
@@ -236,39 +268,40 @@ dev = [
 # When neither is specified, torch comes from PyPI and no RAPIDS
 # packages are installed.
 cu13 = [
-    "torch>=2.10.0",
-    "torchvision>=0.25.0a0",
-    "cuml-cu13>=26.2.0",
-    "pylibraft-cu13>=26.2.0",
-    # Avoid cupy 14.x: 14.0.0 ships a broken cuda13 wheel
-    # (see https://github.com/NVIDIA/physicsnemo/pull/1428) and 14.0.1 still
-    # CUDA_ERROR_INVALID_IMAGEs alongside torch>=2.11
-    # (see https://github.com/cupy/cupy/issues/9827).
-    "cupy-cuda13x>=13.6.0,<14.0.0",
-    "nvidia-dali-cuda130",
+    "torch>=2.13.0",
+    "torchvision>=0.28.0",
+    "cuml-cu13>=26.8.0",
+    "pylibraft-cu13>=26.8.0",
+    # RAPIDS' stable Numba 0.64 dependency does not support NumPy 2.5.
+    "numpy<2.5",
+    # Keep CuPy and PyTorch on the same CUDA major version (cupy/cupy#9827).
+    "cupy-cuda13x>=14.2.0",
+    "nvidia-dali-cuda130>=2.3.0",
 ]
 cu12 = [
-    "torch>=2.10.0",
-    "torchvision>=0.25.0a0",
-    "cuml-cu12>=26.2.0",
-    "pylibraft-cu12>=26.2.0",
-    # See cu13 note: cupy 14.x also interacts badly with torch>=2.11 on the
-    # cu128 wheel via cupy issue #9827.
-    "cupy-cuda12x>=13.6.0,<14.0.0",
-    "nvidia-dali-cuda120",
+    # PyTorch 2.14+ has no CUDA 12.9 wheels; see the pytorch-cu129 index.
+    "torch>=2.13.0,<2.14",
+    "torchvision>=0.28.0",
+    "cuml-cu12>=26.8.0",
+    "pylibraft-cu12>=26.8.0",
+    "cupy-cuda12x>=14.2.0",
+    "nvidia-dali-cuda120>=2.3.0",
 ]
 # NATTEN pre-built wheel extras (mutually exclusive via [tool.uv] conflicts).
 # Pair with the matching CUDA backend extra, e.g.:
-#   pip install nvidia-physicsnemo[cu12,natten-cu12]
-#   pip install nvidia-physicsnemo[cu13,natten-cu13]
-# The flat wheel index at https://whl.natten.org hosts wheels for the two most
-# recent PyTorch releases.  Without these extras, natten must be installed
-# separately — see https://natten.org/install/ for details.
+#   uv sync --extra cu12 --extra natten-cu12
+#   uv sync --extra cu13 --extra natten-cu13
+# NATTEN 0.21.7 provides wheels for PyTorch 2.13, but not 2.14 yet.
+# Without these extras, install NATTEN separately; see https://natten.org/install/.
 natten-cu12 = [
-    "natten>=0.21.5",
+    "torch==2.13.0",
+    "torchvision>=0.28.0",
+    "natten>=0.21.7",
 ]
 natten-cu13 = [
-    "natten>=0.21.5",
+    "torch==2.13.0",
+    "torchvision>=0.28.0",
+    "natten>=0.21.7",
 ]
 # Transformer Engine extras (mutually exclusive via [tool.uv] conflicts).
 # Pair with the matching CUDA backend extra, e.g.:
@@ -280,56 +313,60 @@ natten-cu13 = [
 # env.  See [[tool.uv.dependency-metadata]] above for the matching
 # override on transformer-engine-torch's dynamic CUDA dep.
 transformer-engine-cu12 = [
-    "transformer_engine[pytorch,core_cu12]>=2.14.0",
+    "torch>=2.13.0,<2.14",
+    "torchvision>=0.28.0",
+    "transformer_engine[core_cu12,pytorch]>=2.19.0",
 ]
 transformer-engine-cu13 = [
-    "transformer_engine[pytorch,core_cu13]>=2.14.0",
+    "torch>=2.13.0",
+    "torchvision>=0.28.0",
+    "transformer_engine[core_cu13,pytorch]>=2.19.0",
 ]
 utils-extras = [
-    "wandb",
-    "mlflow>=3.12.0",
-    "line_profiler",
+    "wandb>=0.30.0",
+    "mlflow>=3.16.1",
+    "line_profiler>=5.0.2",
 ]
 mesh-extras = [
-    "matplotlib>=3.10.8",
-    "pyvista>=0.47.0",
-    "vtk>=9.6.0",
+    "matplotlib>=3.11.2",
+    "pyvista>=0.49.0",
+    "vtk>=9.7.1",
 ]
 nn-extras = [
-    "scipy",
+    "scipy>=1.17.1",
     "nvidia-physicsnemo[utils-extras]",
 ]
 model-extras = [
     "nvidia-physicsnemo[nn-extras]",
-    "pandas>=2.2.0",
-    "pyvista>=0.46.4",
-    "vtk",
+    "pandas>=2.3.3",
+    "pyvista>=0.49.0",
+    "vtk>=9.7.1",
 ]
 datapipes-extras = [
-    "pandas>=2.2.0",
-    "tfrecord",
-    "dask",
-    "netCDF4",
-    "xarray>=2025.6.1",
-    "zarr>=3.0.0",
+    "pandas>=2.3.3",
+    "tfrecord>=1.14.6",
+    "dask>=2026.8.0",
+    "netCDF4>=1.7.3",
+    "xarray>=2026.7.0",
+    "zarr>=3.1.6",
 ]
 uq-extras = [
-    "gpytorch>=1.11",
+    "gpytorch>=1.15.2",
 ]
 
 # Use case specific dependency groups.
 gnns = [
-    "torch_geometric",
-    "torch_scatter",
-    "torch_sparse",
-    "torch_cluster",
-    "PyYAML>=6.0.2",
+    "torch_geometric>=2.8.0.post1",
+    "torch_scatter>=2.1.2",
+    "torch_sparse>=0.6.18",
+    "torch_cluster>=1.6.3",
+    "PyYAML>=6.0.3",
     # "nvfuser",
     "nvidia-physicsnemo[model-extras]",
 ]
 
 sym = [
-    "sympy>=1.12",
+    "sympy>=1.14.0",
 ]
 
 

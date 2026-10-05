@@ -380,7 +380,7 @@ def _homogeneous_simplex_dimension(
     expected_arity = int(_linear_cell_specs()[cell_type][1] or 0)
     actual_arity = int(pyvista_mesh.GetCells().IsHomogeneous())
     if actual_arity != expected_arity:
-        arities = np.diff(np.asarray(pyvista_mesh.offset))
+        arities = np.diff(np.asarray(pyvista_mesh.cell_offsets))
         invalid_cell_index = int(np.flatnonzero(arities != expected_arity)[0])
         cell_type_name = _vtk_cell_type_name(cell_type)
         raise ValueError(
@@ -851,7 +851,7 @@ def _validate_polyhedron_auxiliary_arrays(
     if len(face_complex_parent_ids) == 0:
         return
 
-    cell_offsets = np.asarray(pyvista_mesh.offset)
+    cell_offsets = np.asarray(pyvista_mesh.cell_offsets)
     cell_point_ids = np.asarray(pyvista_mesh.GetCells().GetConnectivityArray())
     _validate_polyhedron_face_complexes(
         np.asarray(face_complex_parent_ids, dtype=np.int64),
@@ -979,7 +979,7 @@ def _validate_cells_against_specs(
     if len(cell_types) == 0:
         return
 
-    arities = np.diff(np.asarray(pyvista_mesh.offset))
+    arities = np.diff(np.asarray(pyvista_mesh.cell_offsets))
     for cell_type_value in unique_cell_types:
         cell_type = int(cell_type_value)
         spec = cell_specs.get(cell_type)

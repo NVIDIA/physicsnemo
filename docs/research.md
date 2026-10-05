@@ -30,6 +30,7 @@ To add your work, see [Add your paper](#add-your-paper) below.
 | [Physics-informed AI Accelerated Retention Analysis of Ferroelectric Vertical NAND: From Day-Scale TCAD to Second-Scale Surrogate Model](https://arxiv.org/abs/2603.06881) | G. Jeong, S. Cho et al. | semiconductor / TCAD |
 | [Physics-Informed Neural Network Modeling and Optimization of Fin-Embedded Heat Sink Using NVIDIA PhysicsNeMo](https://doi.org/10.2139/ssrn.6072494) | E. O. Teng, C. Li, H. Kan | electronics cooling |
 | [Physics-Informed Neural Networks, an Instrument for Solving a 3D Wheel-Rail Interface, to Facilitate Prognostics Root Cause Analysis](https://doi.org/10.1007/978-3-032-18771-0_96) | A. Serafini, U. Kumar | railway / structural |
+| [Predictive Uncertainty for Neural CAE Surrogates](https://arxiv.org/abs/2609.25430) | K. Tangsali, M. A. Nabian, K. Lee et al. | uncertainty quantification / external aerodynamics and crash dynamics |
 | [Reconstructive AI Spectroscopy of Charged Particle Beams](https://arxiv.org/abs/2608.11628) | Kozhevnikov, Kozyrev, Klepalova et al. | accelerator/plasma physics, electron-beam energy spectrum inverse problem (PINN) |
 | [Sequential Physics-Constrained Neural Operator Forward Modeling for the Norne Reservoir System](https://arxiv.org/abs/2605.28909) | C. Etienam, J. Yang, O. Ovcharenko et al. | reservoir / subsurface |
 | [ShardTensor: Domain Parallelism for Scientific Machine Learning](https://arxiv.org/abs/2605.11111) | C. Adams, P. Harrington, A. Subramaniam et al. | SciML infrastructure |

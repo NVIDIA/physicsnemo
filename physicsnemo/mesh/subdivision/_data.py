@@ -66,6 +66,13 @@ def interpolate_point_data_to_edges(
     >>> new_data = interpolate_point_data_to_edges(point_data, edges, 3)
     >>> # new_data["temperature"] = [100, 200, 300, 150, 250]
     """
+    from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY
+
+    if EFFECTIVE_MEASURE_KEY in point_data:
+        raise ValueError(
+            "Subdivision of explicit point quadrature requires replacement measures; point measures cannot be interpolated as fields"
+        )
+
     if len(point_data.keys()) == 0:
         # No data to interpolate
         return TensorDict(
