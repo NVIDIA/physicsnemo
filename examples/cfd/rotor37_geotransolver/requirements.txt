@@ -1,2 +1,3 @@
+huggingface-hub>=0.34
 matplotlib>=3.9
 pyarrow>=18.0
