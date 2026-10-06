@@ -96,164 +96,242 @@ builds on this.
 
 ### Step 1. What should the network predict?
 
-**Coefficients of fixed spatial modes, not values at every vertex.**
+**A short list of numbers that describes the whole field, instead of a value at
+every vertex.**
 
-The obvious alternative is to predict density, pressure and temperature at each
-vertex, as point cloud and graph models do. That is the right tool when every
-case has its own mesh. Here it spends capacity relearning that neighboring
-vertices behave alike, and nothing ties the 29,773 predictions of a blade into a
-coherent field.
+*The direct approach.* Ask the network for the pressure at one vertex, and
+repeat for all 29,773 vertices. Point cloud and graph networks work this way,
+and they are the right choice when every case has its own mesh. Here two things
+go wrong. With only 800 examples the network must learn on its own that
+neighboring vertices have similar values, and nothing forces its 29,773 answers
+to form one smooth, consistent field.
 
-Because the meshes correspond, the training fields can be stacked and
-decomposed by proper orthogonal decomposition into a mean field and spatial
-modes ordered by how much variation they explain. 248 pressure modes and 101
-temperature modes keep 99.9% of the training variation. The network predicts
-these 349 coefficients, and a fixed decoder without learned parameters turns
-them into complete fields.
+*The shortcut this dataset allows.* Every blade uses the same mesh, so a
+pressure field is simply a list of 29,773 numbers in a fixed order, and the 800
+training fields can be compared entry by entry. Seen this way, the fields do not
+vary arbitrarily. They change in a limited number of typical ways, such as the
+overall pressure level rising with the operating point or the shock shifting
+along the blade.
 
-Every prediction is now a combination of patterns seen in real simulations,
-which keeps fields coherent and shrinks the learning problem. The price is that
-the model only applies to blades meshed with the same vertex ordering, and it
-cannot produce patterns absent from the training fields.
+Proper orthogonal decomposition, the same method as principal component
+analysis, finds these typical patterns automatically. It returns a **mean field**,
+the average over the training blades, and a set of **modes**, fixed spatial
+patterns ordered from most to least important. Each field is then approximated
+by the mean plus a weighted sum of modes,
+
+$$
+\log p(\mathbf x) \approx \overline{\log p}(\mathbf x) +
+\sum_{k=1}^{248} c_k\, \phi_k(\mathbf x).
+$$
+
+The mean and the modes $\phi_k$ are computed once from the training data and
+never change. Only the weights $c_k$, called **coefficients**, differ from blade
+to blade. 248 pressure modes and 101 temperature modes reproduce 99.9% of the
+variation in the training fields. Step 2 explains why the sum describes the
+logarithm of the field.
+
+The network therefore predicts 349 coefficients per blade, plus the three
+compressor outputs, and a fixed decoder evaluates the sum above on all 29,773
+vertices.
+
+| | Value at every vertex | Mode coefficients |
+| --- | --- | --- |
+| Numbers predicted per blade | 89,319 | 349 |
+| Smooth, consistent fields | Must be learned from the data | Built in, since every mode is a pattern from real simulations |
+| Blades on a different mesh | Supported | Not supported without first mapping them to this mesh |
+| Patterns never seen in training | Possible | Only combinations of training patterns |
+
+The last two rows are the price of this choice. For design studies on one fixed
+mesh, as here, it is a good trade.
 
 ### Step 2. How do predictions stay physical?
 
-**Predict log fields and compute density from the gas law.**
+**Build positivity and the gas law into the decoder, so the network cannot break
+them.**
 
-The modes describe log pressure and log temperature, and the decoder
-exponentiates them. Pressure and temperature are therefore always positive, and
-the multiplicative changes between operating points become additive, which suits
-a linear combination of modes.
+*The problem.* A network that outputs pressure, temperature and density directly
+can produce a negative pressure for an unusual blade, and its three outputs can
+disagree with the ideal-gas relation that the simulations satisfy exactly.
+Penalizing such errors in the loss makes them rare but never impossible.
 
-Density is never predicted. It follows from the ideal-gas relation
+*Positivity.* The modes of step 1 describe the logarithm of pressure and of
+temperature, and the decoder takes the exponential of the result. Whatever
+coefficients the network predicts, the decoded pressure and temperature are
+positive. The logarithm also suits the physics. A change of operating point
+scales the pressure, and a scaling becomes a simple shift in the logarithm, which
+a sum of modes represents easily.
+
+*Consistency.* Density is never predicted. The decoder computes it from the
+ideal-gas relation
 
 $$
 \hat\rho = \frac{\hat p}{R\hat T},
 $$
 
-with the gas constant $R$ fitted to the training fields, which satisfy the
-relation to a relative deviation below $2\times10^{-7}$. A third independent
-output could contradict the other two, while this construction holds exactly.
-Density is still compared with its reference during training, so its errors
-also correct pressure and temperature.
+where the gas constant $R$ is fitted to the training fields, which follow this
+relation to within a relative deviation of $2\times10^{-7}$. The three fields
+therefore agree exactly in every prediction. Density is still compared with the
+simulation during training, and because it depends on both pressure and
+temperature, its errors also improve those two fields.
 
 ### Step 3. How is the shock kept sharp?
 
-**Measure pressure through its differences across mesh edges.**
+**Compare pressure differences between neighboring vertices, not only pressure
+values.**
 
-A shock is a large pressure difference between neighboring vertices. A slightly
-blurred or shifted shock increases the pointwise error only a little, so a model
-trained on pointwise errors alone has little reason to get it right. The recipe
-uses edge differences in two places.
+*The problem.* A shock is a jump in pressure between neighboring vertices.
+Imagine a predicted shock that is correct everywhere except that it is spread
+over five cells instead of one, or shifted by one cell. Only the few vertices at
+the shock are wrong, so the average pointwise error barely changes, although
+the prediction now misses the most important feature of the flow. A model
+trained on pointwise errors alone has little reason to get shocks right.
 
-- **In the basis.** The pressure modes are fitted in a norm that weighs edge
-  differences equally with pointwise values. Modes describing sharp transitions
-  carry little pointwise energy, and this norm keeps them.
-- **In the loss.** A jump term compares predicted and simulated pressure
-  differences over the set $E$ of mesh edges and penalizes a shock with the
-  wrong strength or position.
+*The idea.* The pressure difference across each mesh edge is large exactly at
+the shock and small elsewhere. Measuring errors in these differences makes a
+blurred or misplaced shock expensive. The recipe uses them in two places.
+
+- **When choosing the modes.** Proper orthogonal decomposition keeps the
+  patterns that explain the most variation. A sharp shock occupies few vertices,
+  so measured pointwise it explains little and its patterns would be dropped.
+  The pressure modes are therefore selected by a measure that counts the edge
+  differences as much as the pointwise values, which keeps the patterns that
+  describe sharp transitions.
+- **In the loss.** A jump term compares the predicted and simulated pressure
+  differences over all mesh edges $E$,
 
 $$
 \mathcal L_{\mathrm{jump}} =
 \frac{1}{C_p |E|}\sum_{(i,j)\in E}
-\left[\frac{(\hat p_i-\hat p_j)-(p_i-p_j)}{\sigma_p}\right]^2
+\left[\frac{(\hat p_i-\hat p_j)-(p_i-p_j)}{\sigma_p}\right]^2 .
 $$
 
-Here $\sigma_p$ is the training pressure standard deviation and $C_p$ is the
-value of the same mean for a prediction equal to the training mean pressure,
-which puts the term on the scale of the others. Differences cannot see a
-constant pressure offset, so the pointwise field loss stays to fix the overall
+Pressure is divided by its training standard deviation $\sigma_p$, and the sum
+is divided by $C_p$, its value when every blade is predicted with the training
+mean pressure. A value of 1 therefore means no better than the mean, which keeps
+the term on the same scale as the other losses.
+
+Differences cannot detect an error that shifts the whole pressure field by a
+constant, so the ordinary pointwise loss stays in place to fix the pressure
 level.
 
 ### Step 4. How does the geometry enter?
 
-**As 66 compact case features plus a cloud of surface points.**
+**As 66 numbers that summarize each blade, plus a sample of surface points.**
 
-All 29,773 vertex positions as a flat vector would give the network far more
-inputs than training cases. The blade shapes vary in a structured way, so
-principal component analysis again gives a compact description.
+*The problem.* The blade shape is the main design variable, but its raw form is
+29,773 points in 3D. Feeding all of them to the network as one long vector gives
+it about 90,000 inputs to relate to only 800 examples.
 
-| Features | Count | Why |
+*The idea.* The training blades are variations of one design, so their shapes
+differ in a limited number of typical ways, just like the fields in step 1.
+Principal component analysis finds these ways of deforming the blade, and each
+blade is then described by how much of each deformation it contains.
+
+| Features | Count | What they describe |
 | --- | --- | --- |
-| Operating conditions `Omega` and `P` | 2 | They set the flow regime |
-| Principal components of the displacement from the mean blade | 32 | Overall blade shape |
-| Principal components of the surface normals | 32 | Curvature such as the leading edge, which barely changes coordinates |
+| Operating conditions `Omega` and `P` | 2 | The flow regime |
+| Components of the displacement from the average blade | 32 | The overall shape |
+| Components of the surface normals | 32 | Local curvature, such as the shape of the leading edge |
 
-Each feature is standardized with its training mean and standard deviation.
-Without the normal features, the error on the strongest pressure jumps grows by
-about half. The number of components is a trade-off. Too few lose shape detail
-that moves the shock, while too many add weak components that are mostly noise
-yet receive full weight after standardization. Halving or quadrupling the count
-both make validation errors clearly worse.
+Normals are included because small, sharp shape details barely move the surface
+coordinates yet change the surface direction strongly, and they influence where
+the shock forms. Without the normal features, the error on the strongest
+pressure jumps grows by about half. Every feature is standardized, meaning
+shifted and scaled to zero mean and unit spread over the training blades, so
+that all inputs reach the network on the same scale.
 
-The network also receives 2,048 surface vertices with their coordinates,
-normals and displacements, which GeoTransolver reads as a geometry context.
+*How many components?* Too few lose shape details that move the shock. Too many
+add components that capture tiny, mostly random variations, and standardization
+gives them the same weight as the important ones. Halving or quadrupling the 32
+components per group both make validation errors clearly worse.
+
+In addition to the 66 features, the network receives 2,048 points of the blade
+surface with their coordinates, normals and displacements.
 
 ### Step 5. Which network?
 
 **GeoTransolver, with a multilayer perceptron as baseline.**
 
-After steps 1 to 4 the task is to map 66 case features, plus the surface points,
-to 352 numbers. Three families of PhysicsNeMo models fit.
+After steps 1 to 4 the task is to map the 66 features and the surface points of
+a blade to 352 numbers, three compressor outputs and 349 mode coefficients.
+Three families of PhysicsNeMo models suit this task.
 
-- **Multilayer perceptron.** Reads only the 66 features. The simplest choice and
-  the natural baseline, included as `model=mlp`.
-- **Fourier neural operator.** Treats the blade surface as an image. Apart from
-  the tip, the Rotor37 mesh is a structured sheet of 133 by 216 vertices wrapped
-  around the blade, so spectral convolutions can run on the surface directly.
-- **GeoTransolver.** Uses the 66 features as its single query token and its
-  global context, and reads the surface points through cross-attention. With
-  four GALE layers, 512 hidden channels, four attention heads and 32 slices it
-  has 8,764,988 parameters. Its 352 outputs are the three compressor outputs and
-  the 349 mode coefficients.
+- **Multilayer perceptron.** A stack of fully connected layers that reads only
+  the 66 features. It is the simplest choice and the natural baseline, included
+  as `model=mlp`.
+- **Fourier neural operator.** Learns convolutions in Fourier space over a grid,
+  treating the blade surface as an image. Apart from the tip, the Rotor37 mesh
+  is a regular sheet of 133 by 216 vertices wrapped around the blade, so this
+  is possible here.
+- **GeoTransolver.** A transformer for physics on geometry. It builds an internal
+  representation of the case from the 66 features and refines it by attending
+  to the surface points, which lets it look up local shape information wherever
+  it helps. The configuration used here has four GALE layers, 512 hidden
+  channels, four attention heads and 32 slices.
 
-GeoTransolver is the most accurate. A multilayer perceptron with the same number
-of parameters, trained with the same modes, losses and schedule, has 70 to 80%
-higher field errors and strongest-jump error, and even a GeoTransolver shrunk to
-3.5 million parameters beats it on every metric. A Fourier neural operator on
-the surface grid matches GeoTransolver's overall jump error only with about four
-times as many parameters, and stays less accurate on the strongest jumps and the
-fields.
+All three were trained with the same modes, losses and schedule. Averages over
+three training seeds on the validation cases are
 
-The principal components already carry most of the shape information. Replacing
-each blade's surface points with the training mean blade changes GeoTransolver's
-errors by only a few percent. The surface points matter more when shape
-variations are too rich for a few dozen components.
+| Network | Parameters | Pressure relative L2 | Jump RMSE / $\sigma_p$ | Strongest 1% jump RMSE / $\sigma_p$ |
+| --- | --- | --- | --- | --- |
+| GeoTransolver | 8.8 million | 0.457% | 0.0055 | 0.0107 |
+| GeoTransolver, smaller | 3.5 million | 0.484% | 0.0056 | 0.0110 |
+| Fourier neural operator | 33.6 million | 0.495% | 0.0055 | 0.0119 |
+| Multilayer perceptron | 9.0 million | 0.853% | 0.0078 | 0.0176 |
+
+The multilayer perceptron, at the same size as GeoTransolver, has about 85%
+higher field error and 65% higher error on the strongest jumps. The Fourier
+neural operator matches GeoTransolver's overall jump error only with four times
+as many parameters, and is less accurate at the shock. Even the smaller
+GeoTransolver beats both, so the advantage comes from the architecture and not
+from its size.
+
+How much do the surface points contribute? Replacing each blade's points with
+those of the average blade changes GeoTransolver's errors by only a few percent,
+because the 66 features already carry most of the shape information. The
+surface points become more important when the shapes vary too richly for a few
+dozen components.
 
 ### Step 6. How to train with only 800 examples?
 
-**Start from the mean prediction and balance the loss.**
+**Start the network from the average answer, balance the loss terms and keep the
+learning rate moderate.**
 
-*Initialization.* With so few cases, how the network starts matters more than
-the usual regularizers. The weights that read the 66 case features and the
-output layer start at zero, so the untrained model predicts the training mean
-for every blade and its sensitivity to each input grows only as far as the data
-support it. Standard random initialization makes the network respond from the
-start to every input direction, including weak principal components, and that
-sensitivity persists. Starting at zero lowers validation errors by 15 to 37%
-across fields, shock and compressor outputs. Dropout and input noise, by
-contrast, make the model worse.
+*Initialization.* A freshly initialized network has random weights, so it
+responds to every input from the start, including the weakest geometry
+components, which mostly carry noise. With 800 examples that early sensitivity
+is never fully unlearned. Here the weights that read the 66 features and the
+weights of the output layer start at zero instead. The untrained model then
+predicts the average training blade for every input, and its sensitivity to
+each feature grows only as far as the training data support it. This lowers
+validation errors by 15 to 37% across fields, shock and compressor outputs.
+Common regularizers such as dropout and input noise, by contrast, make this
+model worse.
 
-*Loss.* The total loss is
+*Loss.* The training loss adds up four kinds of error
 
 $$
 \mathcal L = \mathcal L_{\mathrm{fields}} + 4\,\mathcal L_{\mathrm{globals}} +
 \tfrac12\mathcal L_{\mathrm{coeff},p} + \tfrac12\mathcal L_{\mathrm{coeff},T} +
-\mathcal L_{\mathrm{jump}}
+\mathcal L_{\mathrm{jump}} .
 $$
 
-| Term | Compares | Why |
+| Term | What it compares | Why it is there |
 | --- | --- | --- |
-| $\mathcal L_{\mathrm{fields}}$ | Decoded density, pressure and temperature, normalized | The quantity users evaluate |
-| $\mathcal L_{\mathrm{globals}}$ | The three normalized compressor outputs | Weight 4 keeps three numbers from being drowned out by the fields |
-| $\mathcal L_{\mathrm{coeff}}$ | Predicted and training mode coefficients | A direct target per mode, weighted by mode energy for pressure and its square root for temperature |
-| $\mathcal L_{\mathrm{jump}}$ | Pressure differences across mesh edges | Sharp, correctly placed shocks, step 3 |
+| $\mathcal L_{\mathrm{fields}}$ | Decoded density, pressure and temperature at every vertex | These fields are what users evaluate |
+| $\mathcal L_{\mathrm{globals}}$ | Mass flow, compression ratio and efficiency | Only three numbers per blade, so weight 4 keeps them from being drowned out by the fields |
+| $\mathcal L_{\mathrm{coeff},p}$, $\mathcal L_{\mathrm{coeff},T}$ | Predicted and true mode coefficients | A direct target for every mode, with important modes weighted more |
+| $\mathcal L_{\mathrm{jump}}$ | Pressure differences across mesh edges | Keeps shocks sharp and in place, see step 3 |
+
+All quantities are normalized by their training statistics so that the terms
+are comparable.
 
 *Optimization.* Training runs 300 epochs at batch size 16, which gives 15,000
-updates, with AdamW, an initial learning rate of 0.001 decayed to 0.00001 by a
-cosine schedule, weight decay 0.0001 and gradient clipping at 1. Larger learning
-rates speed up early progress, but with the exponential decoder they can make
-training diverge midway.
+parameter updates. It uses the AdamW optimizer with a learning rate that starts
+at 0.001 and decays to 0.00001 along a cosine curve, weight decay 0.0001 and
+gradient clipping at 1. Larger learning rates speed up early progress, but
+because the decoder exponentiates its input, a large step can blow up the
+predicted fields and make training diverge midway.
 
 ## Prerequisites
 
