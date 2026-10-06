@@ -92,6 +92,7 @@ from physicsnemo.core.function_spec import FunctionSpec
 wp.init()
 wp.config.quiet = True
 
+
 @wp.kernel
 def _identity_kernel(
     x: wp.array(dtype=wp.float32),
@@ -99,6 +100,7 @@ def _identity_kernel(
 ):
     i = wp.tid()
     y[i] = x[i]
+
 
 @torch.library.custom_op("physicsnemo::identity_warp", mutates_args=())
 def identity_impl(x: torch.Tensor) -> torch.Tensor:
@@ -116,12 +118,15 @@ def identity_impl(x: torch.Tensor) -> torch.Tensor:
         )
     return out
 
+
 @identity_impl.register_fake
 def identity_impl_fake(x: torch.Tensor) -> torch.Tensor:
     return torch.empty_like(x)
 
+
 def identity_torch(x: torch.Tensor) -> torch.Tensor:
     return x.clone()
+
 
 class Identity(FunctionSpec):
     """Identity function with Warp and PyTorch backends."""
@@ -165,16 +170,13 @@ class Identity(FunctionSpec):
         )
 
     @classmethod
-    def compare_forward(
-        cls, output: torch.Tensor, reference: torch.Tensor
-    ) -> None:
+    def compare_forward(cls, output: torch.Tensor, reference: torch.Tensor) -> None:
         torch.testing.assert_close(output, reference)
 
     @classmethod
-    def compare_backward(
-        cls, output: torch.Tensor, reference: torch.Tensor
-    ) -> None:
+    def compare_backward(cls, output: torch.Tensor, reference: torch.Tensor) -> None:
         torch.testing.assert_close(output, reference)
+
 
 identity = Identity.make_function("identity")
 
@@ -208,6 +210,7 @@ the public API consistent.
 ```python
 # physicsnemo/nn/functional/__init__.py
 from .knn import knn
+
 __all__ = ["knn"]
 ```
 
@@ -378,14 +381,17 @@ def make_inputs_forward(cls, device="cpu"):
     yield ("medium", (torch.randn(4096, device=device),), {})
     yield ("large", (torch.randn(16384, device=device),), {})
 
+
 @classmethod
 def make_inputs_backward(cls, device="cpu"):
     x = torch.randn(4096, device=device, requires_grad=True)
     yield ("medium", (x,), {})
 
+
 @classmethod
 def compare_forward(cls, output, reference):
     torch.testing.assert_close(output, reference)
+
 
 @classmethod
 def compare_backward(cls, output, reference):
@@ -448,20 +454,19 @@ backend behavior.
 **Example:**
 
 ```python
-def test_grid_to_point_interpolation_torch():
-    ...
+def test_grid_to_point_interpolation_torch(): ...
 
-def test_grid_to_point_interpolation_warp():
-    ...
 
-def test_grid_to_point_interpolation_backend_forward_parity():
-    ...
+def test_grid_to_point_interpolation_warp(): ...
 
-def test_grid_to_point_interpolation_backend_backward_parity():
-    ...
 
-def test_grid_to_point_interpolation_error_handling():
-    ...
+def test_grid_to_point_interpolation_backend_forward_parity(): ...
+
+
+def test_grid_to_point_interpolation_backend_backward_parity(): ...
+
+
+def test_grid_to_point_interpolation_error_handling(): ...
 ```
 
 **Anti-pattern:**
@@ -532,16 +537,19 @@ def my_warp_op_impl(x: torch.Tensor) -> torch.Tensor:
     ...
     return y
 
+
 @my_warp_op_impl.register_fake
 def _my_warp_op_impl_fake(x: torch.Tensor) -> torch.Tensor:
     return torch.empty_like(x)
 
-def setup_my_warp_op_context(ctx, inputs, output):
-    ...
+
+def setup_my_warp_op_context(ctx, inputs, output): ...
+
 
 def backward_my_warp_op(ctx, grad_output):
     ...
     return grad_x
+
 
 my_warp_op_impl.register_autograd(
     backward_my_warp_op,
@@ -554,6 +562,5 @@ my_warp_op_impl.register_autograd(
 ```python
 class _MyWarpAutograd(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, x):
-        ...
+    def forward(ctx, x): ...
 ```
