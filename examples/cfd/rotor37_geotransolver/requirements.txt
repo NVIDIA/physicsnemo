@@ -1,0 +1,8 @@
+hydra-core>=1.3.2
+huggingface-hub>=0.34
+matplotlib>=3.9
+numpy>=2.0
+pyarrow>=18.0
+pyvista>=0.46
+PyYAML>=6.0
+threadpoolctl>=3.5

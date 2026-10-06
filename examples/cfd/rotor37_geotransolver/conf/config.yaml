@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+defaults:
+  - model: geotransolver
+  - _self_
+
+seed: 42  # Model initialization and data order
+output_dir: runs/${hydra:runtime.choices.model}  # Run directory
+num_threads: 4  # CPU threads per process
+
+data:
+  data_dir: data/rotor37/processed  # Output of prepare_data.py
+  geometry_points: 2048  # Surface vertices in the point context
+
+training:
+  num_epochs: 300
+  batch_size: 16  # Per process
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr: 1.0e-3
+    weight_decay: 1.0e-4
+  min_lr: 1.0e-5  # Final learning rate of the cosine schedule
+  gradient_clip: 1.0
+  loss_weights:
+    field: 1.0  # Normalized density, pressure and temperature
+    global: 4.0  # Normalized mass flow, compression ratio and efficiency
+    pressure_coefficient: 0.5
+    temperature_coefficient: 0.5
+    jump: 1.0  # Signed pressure differences across mesh edges
+  validation_interval: 100  # Epochs between validation passes
+  checkpoint_interval: 100  # Epochs between checkpoints
+  resume: false  # Continue the run in output_dir from its last checkpoint
+
+evaluation:
+  split: validation  # validation, test or official_test
+  export_samples: []  # Sample IDs whose predictions are saved
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: ${output_dir}/hydra/${hydra.job.name}
