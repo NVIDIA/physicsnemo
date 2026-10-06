@@ -1796,7 +1796,12 @@ class Mesh(
             If True, snaps each query point to the centroid of the nearest cell
             before containment testing. Useful for codimension != 0 manifolds.
         tolerance : float, optional
-            Tolerance for considering a point inside a cell.
+            Relative tolerance for considering a point inside a cell. A point is
+            inside if all barycentric coordinates are ``>= -tolerance`` and its
+            distance to the cell's affine hull (nonzero only when
+            ``n_spatial_dims > n_manifold_dims``) is ``<= tolerance * L``, where
+            ``L`` is the largest absolute coordinate of the mesh, so the thresholds
+            scale with the length unit of the mesh.
         bvh : BVH or None, optional
             Pre-built Bounding Volume Hierarchy. If ``None`` (default), one is
             built automatically. For repeated queries, pre-build with

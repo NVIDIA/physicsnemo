@@ -118,6 +118,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   normalization avoids allocating a full-mesh range and preserves empty slices,
   integer indices, and boolean masks. Point fields use ordinary indexed gathers.
 
+- The `tolerance` of `sample_data_at_points`, `find_containing_cells` and
+  `find_all_containing_cells` is now relative. Barycentric coordinates must
+  still be `>= -tolerance`, but the distance from a point to a cell's affine
+  hull and the BVH box padding are now limited to `tolerance` times the
+  largest absolute coordinate of the mesh, instead of `tolerance` in mesh
+  units. Results no longer depend on the mesh's length unit and are identical
+  when the mesh and query points are scaled by a power of two.
+
 ### Deprecated
 
 - Unified external aerodynamics recipe: `training.loss_type: rmse` is
@@ -193,6 +201,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `torch.distributions.Uniform` instantiates.
 - `RenameMeshFields` and `DropMeshFields` also apply to a `DomainMesh`'s
   domain-level `global_data`.
+- `sample_data_at_points` and `find_containing_cells` find on-surface points
+  of float32 surface meshes in large length units. A torus scaled to
+  `|x| ~ 1300` (millimetres) previously found 0.4% of its on-surface points
+  and returned NaN for the rest, because float32 rounding (about
+  `1.2e-7 * |x|`) exceeded the absolute `1e-6` distance tolerance.
 
 ### Security
 

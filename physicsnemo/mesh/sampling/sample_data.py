@@ -241,7 +241,10 @@ def _find_containing_pairs(
     bvh : BVH
         Bounding Volume Hierarchy for the mesh.
     tolerance : float
-        Containment tolerance.
+        Relative containment tolerance. Barycentric coordinates must be
+        ``>= -tolerance``; the distance to the cell's affine hull and the AABB
+        padding are limited to ``tolerance`` times the largest absolute
+        coordinate of the mesh.
 
     Returns
     -------
@@ -254,8 +257,22 @@ def _find_containing_pairs(
     """
     device = mesh.points.device
 
+    ### Distances are compared against ``tolerance`` times the largest absolute
+    ### mesh coordinate, because float rounding error grows with |x|. The BVH
+    ### root (node 0) bounds the mesh, so its box gives this length without a
+    ### pass over the points. An empty BVH yields no candidates below.
+    if bvh.n_nodes > 0:
+        length_scale = torch.maximum(
+            bvh.node_aabb_min[0].abs(), bvh.node_aabb_max[0].abs()
+        ).amax()
+        distance_tolerance = tolerance * length_scale
+    else:
+        distance_tolerance = tolerance
+
     ### Get candidate pairs from BVH (AABB overlap test)
-    candidate_adj = bvh.find_candidate_cells(query_points, aabb_tolerance=tolerance)
+    candidate_adj = bvh.find_candidate_cells(
+        query_points, aabb_tolerance=distance_tolerance
+    )
 
     if candidate_adj.n_total_neighbors == 0:
         return (
@@ -274,7 +291,9 @@ def _find_containing_pairs(
         cand_query_pts, cand_cell_verts
     )
 
-    is_inside = (bary_cand >= -tolerance).all(dim=-1) & (recon_cand <= tolerance)
+    is_inside = (bary_cand >= -tolerance).all(dim=-1) & (
+        recon_cand <= distance_tolerance
+    )
 
     ### Filter to confirmed containments. Reuse one integer compaction for all
     ### three arrays instead of independently compacting the same CUDA mask.
@@ -304,7 +323,12 @@ def find_containing_cells(
     query_points : torch.Tensor
         Query point locations, shape ``(n_queries, n_spatial_dims)``.
     tolerance : float
-        Tolerance for considering a point inside a cell.
+        Relative tolerance for considering a point inside a cell. A point is
+        inside if all barycentric coordinates are ``>= -tolerance`` and its
+        distance to the cell's affine hull (nonzero only when
+        ``n_spatial_dims > n_manifold_dims``) is ``<= tolerance * L``, where
+        ``L`` is the largest absolute coordinate of the mesh, so the thresholds
+        scale with the length unit of the mesh.
     bvh : BVH or None, optional
         Pre-built BVH. Auto-built from ``mesh`` if ``None``.
 
@@ -374,7 +398,12 @@ def find_all_containing_cells(
     query_points : torch.Tensor
         Query point locations, shape ``(n_queries, n_spatial_dims)``.
     tolerance : float
-        Tolerance for considering a point inside a cell.
+        Relative tolerance for considering a point inside a cell. A point is
+        inside if all barycentric coordinates are ``>= -tolerance`` and its
+        distance to the cell's affine hull (nonzero only when
+        ``n_spatial_dims > n_manifold_dims``) is ``<= tolerance * L``, where
+        ``L`` is the largest absolute coordinate of the mesh, so the thresholds
+        scale with the length unit of the mesh.
     bvh : BVH or None, optional
         Pre-built BVH. Auto-built from ``mesh`` if ``None``.
 
@@ -659,9 +688,12 @@ def sample_data_at_points(
         before performing containment testing. Useful for codimension != 0
         manifolds where exact on-surface points are hard to construct.
     tolerance : float, optional
-        Tolerance for considering a point inside a cell. A point is inside if
-        all barycentric coordinates >= -tolerance AND reconstruction error
-        <= tolerance.
+        Relative tolerance for considering a point inside a cell. A point is
+        inside if all barycentric coordinates are ``>= -tolerance`` and its
+        distance to the cell's affine hull (nonzero only when
+        ``n_spatial_dims > n_manifold_dims``) is ``<= tolerance * L``, where
+        ``L`` is the largest absolute coordinate of the mesh, so the thresholds
+        scale with the length unit of the mesh.
     bvh : BVH or None, optional
         Pre-built Bounding Volume Hierarchy. If ``None`` (default), one is
         built automatically. For repeated queries on the same mesh, pre-build
