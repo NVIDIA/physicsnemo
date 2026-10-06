@@ -26,7 +26,7 @@ from tempfile import TemporaryDirectory
 import numpy as np
 import pyarrow.parquet as pq
 import yaml
-from basis import fit_bases
+from basis import fit_transforms
 from tqdm import tqdm
 
 DATASET_ID = "PLAID-datasets/Rotor37"
@@ -34,7 +34,6 @@ FIELD_NAMES = ("Density", "Pressure", "Temperature")
 GLOBAL_NAMES = ("Massflow", "Compression_ratio", "Efficiency")
 CONDITION_NAMES = ("Omega", "P")
 NORMAL_NAMES = ("NormalsX", "NormalsY", "NormalsZ")
-EOS_TOLERANCE = 1e-6
 
 
 class NumpyUnpickler(pickle.Unpickler):
@@ -133,84 +132,18 @@ def make_splits(official_splits, seed=42, validation_fraction=0.1, test_fraction
     }
 
 
-class RunningMoments:
-    """Accumulate float64 population moments one sample at a time."""
-
-    def __init__(self):
-        self.count, self.mean, self.m2 = 0, 0.0, 0.0
-
-    def update(self, values):
-        """Merge the rows of ``values`` into the running mean and variance."""
-        values = np.atleast_2d(np.asarray(values, dtype=np.float64))
-        count, mean = len(values), values.mean(axis=0)
-        m2 = np.sum((values - mean) ** 2, axis=0)
-        total = self.count + count
-        delta = mean - self.mean
-        self.m2 = self.m2 + m2 + delta**2 * self.count * count / total
-        self.mean = self.mean + delta * count / total
-        self.count = total
-
-    def result(self):
-        """Return the mean, population standard deviation and count."""
-        std = np.sqrt(self.m2 / self.count)
-        if not np.all(std > 0):
-            raise ValueError("Cannot normalize a constant training channel")
-        return {"mean": self.mean.tolist(), "std": std.tolist(), "count": self.count}
-
-
-class TrainingStatistics:
-    """Fit normalization statistics and the ideal-gas constant on training cases."""
-
-    KEYS = ("points", "conditions", "fields", "globals")
-
-    def __init__(self):
-        self.moments = {key: RunningMoments() for key in self.KEYS}
-        self.gas_constant = RunningMoments()
-        self.gas_range = [np.inf, -np.inf]
-
-    def update(self, arrays):
-        """Accumulate one labeled training sample."""
-        fields = np.asarray(arrays["fields"], dtype=np.float64)
-        if not np.all(fields > 0):
-            raise ValueError("Training fields must be finite and positive")
-        density, pressure, temperature = fields.T
-        gas_constant = pressure / (density * temperature)
-        self.gas_constant.update(gas_constant[:, None])
-        self.gas_range[0] = min(self.gas_range[0], gas_constant.min())
-        self.gas_range[1] = max(self.gas_range[1], gas_constant.max())
-        for key, moments in self.moments.items():
-            moments.update(arrays[key])
-
-    def result(self, sample_ids):
-        """Return the statistics after checking a constant ideal-gas relation."""
-        stats = {key: moments.result() for key, moments in self.moments.items()}
-        gas_constant = float(self.gas_constant.mean[0])
-        deviation = max(abs(1 - gas_constant / value) for value in self.gas_range)
-        if deviation > EOS_TOLERANCE:
-            raise ValueError(
-                "Training fields do not satisfy a constant ideal-gas relation "
-                f"within relative tolerance {EOS_TOLERANCE:g}"
-            )
-        stats["gas_constant"] = gas_constant
-        stats["gas_constant_max_relative_deviation"] = float(deviation)
-        stats["sample_ids"] = list(sample_ids)
-        return stats
-
-
 def write_samples(raw_dir, output_dir, seed):
-    """Decode every source sample and fit training statistics."""
+    """Decode every source sample and write it with the split manifest."""
     card = (raw_dir / "README.md").read_text()
     metadata = yaml.safe_load(card.split("---", 2)[1])["dataset_info"]
     official = metadata["description"]["split"]
     splits = make_splits(official, seed)
     labeled = set(official["train_1000"])
-    train = set(splits["train"])
     shards = sorted((raw_dir / "data").glob("all_samples-*.parquet"))
     rows = sum(pq.ParquetFile(path).metadata.num_rows for path in shards)
     if set(range(rows)) != labeled | set(official["test"]):
         raise ValueError("Source rows must match the official sample IDs")
     (output_dir / "samples").mkdir(parents=True)
-    statistics = TrainingStatistics()
     samples = {}
     sample_id = 0
     with tqdm(total=rows, desc="Preparing Rotor37") as progress:
@@ -225,8 +158,6 @@ def write_samples(raw_dir, output_dir, seed):
                     "path": path,
                     "labeled": sample_id in labeled,
                 }
-                if sample_id in train:
-                    statistics.update(arrays)
                 sample_id += 1
                 progress.update()
     manifest = {
@@ -238,9 +169,7 @@ def write_samples(raw_dir, output_dir, seed):
         "conditions": list(CONDITION_NAMES),
         "samples": samples,
     }
-    stats = statistics.result(splits["train"])
-    for name, document in (("manifest.json", manifest), ("stats.json", stats)):
-        (output_dir / name).write_text(json.dumps(document, indent=2) + "\n")
+    (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return manifest
 
 
@@ -260,7 +189,7 @@ def prepare(data_dir, seed=42):
     with TemporaryDirectory(prefix=".rotor37-", dir=data_dir) as staging:
         staging = Path(staging)
         manifest = write_samples(raw_dir, staging, seed)
-        fit_bases(staging)
+        fit_transforms(staging)
         staging.rename(output_dir)
     sizes = ", ".join(f"{name} {len(ids)}" for name, ids in manifest["splits"].items())
     print(f"Prepared {output_dir} with {sizes} cases")

@@ -14,13 +14,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Fit the training-only geometry encodings and field bases of Rotor37."""
+"""Fit the training-only statistics, geometry encodings and field bases of Rotor37."""
 
 import json
 from pathlib import Path
 
 import numpy as np
 from geometry import fit_geometry_encodings
+
+EOS_TOLERANCE = 1e-6
 
 
 def quad_edges(quads, num_points):
@@ -111,18 +113,49 @@ def fit_field_bases(fields, edges, pressure_scale, energy_fraction=0.999):
     return arrays, {"pressure": pressure_metadata, "temperature": temperature_metadata}
 
 
-def fit_bases(data_dir, geometry_rank=32, energy_fraction=0.999):
-    """Fit the geometry encodings and field bases on the training cases.
+def fit_statistics(arrays, sample_ids):
+    """Return normalization statistics and the gas constant of the training cases.
 
-    Writes ``basis.npz`` and ``basis.json`` next to the prepared samples.
+    ``arrays`` maps each prepared array name to its stacked training values.
+    The gas constant is the mean of pressure over density times temperature,
+    and preparation stops if it varies by more than ``EOS_TOLERANCE``.
+    """
+    stats = {}
+    for key in ("points", "conditions", "fields", "globals"):
+        values = arrays[key].astype(np.float64)
+        values = values.reshape(-1, values.shape[-1])
+        std = values.std(axis=0)
+        if not np.all(std > 0):
+            raise ValueError(f"Cannot normalize a constant training channel in {key}")
+        stats[key] = {"mean": values.mean(axis=0).tolist(), "std": std.tolist()}
+    fields = arrays["fields"].astype(np.float64)
+    if not np.all(fields > 0):
+        raise ValueError("Training fields must be finite and positive")
+    gas = fields[..., 1] / (fields[..., 0] * fields[..., 2])
+    gas_constant = float(gas.mean())
+    deviation = float(np.abs(1 - gas_constant / gas).max())
+    if deviation > EOS_TOLERANCE:
+        raise ValueError(
+            "Training fields do not satisfy a constant ideal-gas relation "
+            f"within relative tolerance {EOS_TOLERANCE:g}"
+        )
+    stats["gas_constant"] = gas_constant
+    stats["gas_constant_max_relative_deviation"] = deviation
+    stats["sample_ids"] = list(sample_ids)
+    return stats
+
+
+def fit_transforms(data_dir, geometry_rank=32, energy_fraction=0.999):
+    """Fit the statistics, geometry encodings and field bases on training cases.
+
+    Writes ``stats.json``, ``basis.npz`` and ``basis.json`` next to the
+    prepared samples.
     """
     data_dir = Path(data_dir)
     manifest = json.loads((data_dir / "manifest.json").read_text())
-    stats = json.loads((data_dir / "stats.json").read_text())
     train_ids = manifest["splits"]["train"]
-    if stats["sample_ids"] != train_ids:
-        raise ValueError("Statistics must come from the training split")
-    points, normals, fields, quads = [], [], [], None
+    names = ("points", "normals", "conditions", "fields", "globals")
+    arrays, quads = {name: [] for name in names}, None
     for sample_id in train_ids:
         path = data_dir / manifest["samples"][str(sample_id)]["path"]
         with np.load(path) as sample:
@@ -130,15 +163,17 @@ def fit_bases(data_dir, geometry_rank=32, energy_fraction=0.999):
                 quads = sample["quads"]
             if not np.array_equal(sample["quads"], quads):
                 raise ValueError("Training meshes must share ordered connectivity")
-            points.append(sample["points"])
-            normals.append(sample["normals"])
-            fields.append(sample["fields"])
-    edges = quad_edges(quads, len(points[0]))
+            for name in names:
+                arrays[name].append(sample[name])
+    arrays = {name: np.stack(values) for name, values in arrays.items()}
+    stats = fit_statistics(arrays, train_ids)
+    (data_dir / "stats.json").write_text(json.dumps(stats, indent=2) + "\n")
+    edges = quad_edges(quads, arrays["points"].shape[1])
     geometry, geometry_metadata = fit_geometry_encodings(
-        np.stack(points), np.stack(normals), geometry_rank
+        arrays["points"], arrays["normals"], geometry_rank
     )
     bases, field_metadata = fit_field_bases(
-        np.stack(fields), edges, stats["fields"]["std"][1], energy_fraction
+        arrays["fields"], edges, stats["fields"]["std"][1], energy_fraction
     )
     np.savez(
         data_dir / "basis.npz",

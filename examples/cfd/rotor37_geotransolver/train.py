@@ -34,22 +34,11 @@ from omegaconf import DictConfig, OmegaConf
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler, Subset
 
-from physicsnemo.distributed import DistributedManager
+from physicsnemo.distributed import DistributedManager, fused_all_reduce
 from physicsnemo.utils import load_checkpoint, save_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
 RUN_FILES = ("manifest.json", "stats.json", "basis.npz", "basis.json")
-
-
-@contextmanager
-def thread_limit(count):
-    """Limit the CPU threads used by PyTorch."""
-    previous = torch.get_num_threads()
-    torch.set_num_threads(count)
-    try:
-        yield
-    finally:
-        torch.set_num_threads(previous)
 
 
 @contextmanager
@@ -113,24 +102,27 @@ def check_resume(cfg, run_dir, data_dir, world_size):
 
 
 @torch.no_grad()
-def validate(model, loader, decoder, device, world_size):
+def validate(model, loader, decoder, device):
     """Return mean normalized field and compressor output errors."""
     model.eval()
-    totals = torch.zeros(3, dtype=torch.float64, device=device)
+    zero = torch.zeros((), dtype=torch.float64, device=device)
+    totals = {"field": zero.clone(), "global": zero.clone(), "cases": zero.clone()}
     with strict_float32():
         for batch in loader:
             batch = to_device(batch, device)
             prediction = predict(model, batch, decoder)
             fields = (prediction.fields - batch["fields"]).square().mean(dim=(1, 2))
             globals_ = (prediction.globals - batch["globals"]).square().mean(dim=1)
-            totals[0] += fields.sum()
-            totals[1] += globals_.sum()
-            totals[2] += len(fields)
-    if world_size > 1:
-        distributed.all_reduce(totals)
+            totals["field"] += fields.sum()
+            totals["global"] += globals_.sum()
+            totals["cases"] += len(fields)
+    if distributed.is_initialized():
+        totals = fused_all_reduce(totals)
     model.train()
-    field, global_ = (totals[:2] / totals[2]).tolist()
-    return {"validation_field_loss": field, "validation_global_loss": global_}
+    return {
+        "validation_field_loss": float(totals["field"] / totals["cases"]),
+        "validation_global_loss": float(totals["global"] / totals["cases"]),
+    }
 
 
 def append_history(path, row):
@@ -264,7 +256,7 @@ def train(cfg):
         }
         last = epoch == cfg.training.num_epochs
         if epoch % cfg.training.validation_interval == 0 or last:
-            row.update(validate(model, validation_loader, decoder, device, world_size))
+            row.update(validate(model, validation_loader, decoder, device))
         scheduler.step()
         row["seconds"] = time.perf_counter() - started
         if rank == 0:
@@ -288,8 +280,8 @@ def train(cfg):
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
     """Train the configured network with the Hydra configuration."""
-    with thread_limit(cfg.num_threads):
-        train(cfg)
+    torch.set_num_threads(cfg.num_threads)
+    train(cfg)
 
 
 if __name__ == "__main__":

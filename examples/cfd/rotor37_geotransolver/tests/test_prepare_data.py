@@ -24,7 +24,7 @@ import prepare_data
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from basis import fit_bases
+from basis import fit_transforms
 from conftest import synthetic_case
 from prepare_data import (
     CONDITION_NAMES,
@@ -122,7 +122,9 @@ def snapshot(tmp_path, monkeypatch):
     card = {"dataset_info": {"description": {"split": official}}}
     (raw / "README.md").write_text(f"---\n{json.dumps(card)}\n---\n")
     monkeypatch.setattr(
-        prepare_data, "fit_bases", lambda path: fit_bases(path, geometry_rank=2)
+        prepare_data,
+        "fit_transforms",
+        lambda path: fit_transforms(path, geometry_rank=2),
     )
     return tmp_path, splits, cases
 

@@ -29,7 +29,7 @@ from models import predict
 from objectives import FieldDecoder
 from omegaconf import DictConfig, OmegaConf
 from prepare_data import FIELD_NAMES, GLOBAL_NAMES
-from train import make_dataset, strict_float32, thread_limit
+from train import make_dataset, strict_float32
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils.logging import PythonLogger
@@ -179,8 +179,8 @@ def evaluate(cfg, run_dir, log):
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
     """Evaluate the run selected by ``output_dir``."""
-    with thread_limit(cfg.num_threads):
-        evaluate(cfg, Path(to_absolute_path(cfg.output_dir)), PythonLogger("rotor37"))
+    torch.set_num_threads(cfg.num_threads)
+    evaluate(cfg, Path(to_absolute_path(cfg.output_dir)), PythonLogger("rotor37"))
 
 
 if __name__ == "__main__":

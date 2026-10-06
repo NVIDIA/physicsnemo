@@ -28,8 +28,8 @@ import pytest
 RECIPE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RECIPE))
 
-from basis import fit_bases  # noqa: E402
-from prepare_data import TrainingStatistics, make_splits  # noqa: E402
+from basis import fit_transforms  # noqa: E402
+from prepare_data import make_splits  # noqa: E402
 
 GRID = 5
 GAS_CONSTANT = 287.0
@@ -97,26 +97,20 @@ def write_prepared(directory, cases=16, official_test=2, seed=0, geometry_rank=2
         official, seed=42, validation_fraction=0.125, test_fraction=0.125
     )
     (directory / "samples").mkdir(parents=True)
-    statistics = TrainingStatistics()
     samples = {}
     for sample_id in range(cases + official_test):
         arrays = synthetic_case(generator, labeled=sample_id < cases)
         path = f"samples/{sample_id:06d}.npz"
         np.savez(directory / path, **arrays)
         samples[str(sample_id)] = {"path": path, "labeled": sample_id < cases}
-        if sample_id in splits["train"]:
-            statistics.update(arrays)
     manifest = {
-        "source": {"repository": "synthetic", "revision": "fixture", "license": "none"},
+        "source": {"repository": "synthetic", "license": "none"},
         "split_seed": 42,
         "splits": splits,
         "samples": samples,
     }
     (directory / "manifest.json").write_text(json.dumps(manifest))
-    (directory / "stats.json").write_text(
-        json.dumps(statistics.result(splits["train"]))
-    )
-    fit_bases(directory, geometry_rank=geometry_rank)
+    fit_transforms(directory, geometry_rank=geometry_rank)
     return directory
 
 
