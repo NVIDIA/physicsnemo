@@ -23,6 +23,7 @@ manifold dimensions, and compute backends.
 import pytest
 import torch
 
+import physicsnemo.mesh.spatial.bvh as bvh_module
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.spatial import BVH
 from physicsnemo.mesh.spatial.bvh import _compute_morton_codes
@@ -250,6 +251,35 @@ class TestMortonCodes:
         cuda_codes = _compute_morton_codes(centroids.cuda()).cpu()
 
         assert torch.equal(cuda_codes, cpu_codes)
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+    @pytest.mark.parametrize("n_spatial_dims", [1, 2, 3])
+    def test_cuda_codes_match_cpu_across_chunks(self, monkeypatch, n_spatial_dims):
+        """Chunked CUDA interleave matches CPU when N spans several chunks."""
+        monkeypatch.setattr(bvh_module, "_MORTON_CUDA_CHUNK_ROWS", 7)
+        points = torch.rand(30, n_spatial_dims, dtype=torch.float64)
+
+        cpu_codes = _compute_morton_codes(points)
+        cuda_codes = _compute_morton_codes(points.cuda()).cpu()
+
+        assert torch.equal(cuda_codes, cpu_codes)
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+    def test_cuda_peak_memory_is_bounded_by_chunk(self, monkeypatch):
+        """The CUDA bit temporaries scale with the chunk, not with N."""
+        monkeypatch.setattr(bvh_module, "_MORTON_CUDA_CHUNK_ROWS", 1 << 10)
+        n_points = 1 << 16
+        points = torch.rand(n_points, 3, device="cuda")
+
+        torch.cuda.synchronize()
+        torch.cuda.reset_peak_memory_stats()
+        baseline = torch.cuda.memory_allocated()
+        _compute_morton_codes(points)
+        torch.cuda.synchronize()
+        peak = torch.cuda.max_memory_allocated() - baseline
+
+        # Materializing all 63 bits of every point at once needs 504 B per point.
+        assert peak < 504 * n_points
 
     def test_rejects_integer_input(self):
         """Integer centroids should be rejected (would silently corrupt quantization)."""

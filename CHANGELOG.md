@@ -193,6 +193,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `torch.distributions.Uniform` instantiates.
 - `RenameMeshFields` and `DropMeshFields` also apply to a `DomainMesh`'s
   domain-level `global_data`.
+- `BVH.from_mesh` and `ClusterTree.from_points` on CUDA compute Morton codes
+  in chunks of rows, so the bit-interleave temporary stays near 1 GB instead
+  of about 1 kB per point (55 GB at 50M cells). Codes are unchanged.
 
 ### Security
 
