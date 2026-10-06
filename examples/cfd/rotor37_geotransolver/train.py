@@ -31,7 +31,6 @@ from hydra.utils import instantiate, to_absolute_path
 from models import build_model, predict
 from objectives import FieldDecoder, loss_components
 from omegaconf import DictConfig, OmegaConf
-from threadpoolctl import threadpool_limits
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler, Subset
 
@@ -44,12 +43,11 @@ RUN_FILES = ("manifest.json", "stats.json", "basis.npz", "basis.json")
 
 @contextmanager
 def thread_limit(count):
-    """Limit PyTorch and NumPy CPU threads."""
+    """Limit the CPU threads used by PyTorch."""
     previous = torch.get_num_threads()
     torch.set_num_threads(count)
     try:
-        with threadpool_limits(limits=count, user_api="blas"):
-            yield
+        yield
     finally:
         torch.set_num_threads(previous)
 

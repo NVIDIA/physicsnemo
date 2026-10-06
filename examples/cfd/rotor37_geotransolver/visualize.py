@@ -26,9 +26,9 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pyvista as pv
 from basis import quad_edges
 from matplotlib.cm import ScalarMappable
+from matplotlib.collections import PolyCollection
 from matplotlib.colors import Normalize
 from matplotlib.ticker import MaxNLocator
 
@@ -109,33 +109,32 @@ def plot_parity(cases, output_dir):
     save(figure, output_dir, "compressor_parity")
 
 
-def render(points, quads, values, limits, cmap, side):
-    """Render one side of the blade surface with an orthographic camera."""
+def draw_surface(axis, points, quads, values, limits, cmap, side):
+    """Draw one side of the blade surface in an orthographic view."""
     center = points.mean(axis=0)
-    _, _, axes = np.linalg.svd(points - center, full_matrices=False)
-    axes *= np.sign(axes[np.arange(3), np.abs(axes).argmax(axis=1)])[:, None]
-    distance = float(np.linalg.norm(np.ptp(points, axis=0)))
-    faces = np.column_stack((np.full(len(quads), 4), quads)).ravel()
-    plotter = pv.Plotter(off_screen=True, window_size=(700, 850), lighting=None)
-    try:
-        plotter.set_background("white")
-        plotter.add_mesh(
-            pv.PolyData(points, faces),
-            scalars=values,
-            cmap=cmap,
-            clim=limits,
-            show_scalar_bar=False,
-            lighting=False,
-        )
-        direction = side * axes[2] + 0.12 * axes[1]
-        plotter.camera_position = (center + 3 * distance * direction, center, axes[0])
-        plotter.enable_parallel_projection()
-        plotter.reset_camera()
-        plotter.camera.zoom(1.35)
-        plotter.enable_anti_aliasing("ssaa")
-        return plotter.screenshot(return_img=True)
-    finally:
-        plotter.close()
+    _, _, frame = np.linalg.svd(points - center, full_matrices=False)
+    frame *= np.sign(frame[np.arange(3), np.abs(frame).argmax(axis=1)])[:, None]
+    view = side * frame[2] + 0.12 * frame[1]
+    view /= np.linalg.norm(view)
+    up = frame[0] - (frame[0] @ view) * view
+    up /= np.linalg.norm(up)
+    right = np.cross(up, view)
+    relative = points - center
+    screen = np.stack((relative @ right, relative @ up), axis=-1)
+    depth = (relative @ view)[quads].mean(axis=1)
+    order = np.argsort(depth)
+    colors = plt.get_cmap(cmap)(Normalize(*limits)(values[quads].mean(axis=1)))
+    faces = PolyCollection(
+        screen[quads[order]],
+        facecolors=colors[order],
+        edgecolors=colors[order],
+        linewidths=0.2,
+    )
+    axis.add_collection(faces)
+    axis.set_xlim(screen[:, 0].min(), screen[:, 0].max())
+    axis.set_ylim(screen[:, 1].min(), screen[:, 1].max())
+    axis.set_aspect("equal")
+    axis.set_axis_off()
 
 
 def vertex_maximum(values, edges, count):
@@ -173,11 +172,10 @@ def plot_pressure_jumps(prediction_path, output_dir):
         (error, (0.0, error.max()), "magma", r"Jump error / $\sigma_p$"),
     )
     figure, axes = plt.subplots(2, len(columns), figsize=(3.05 * len(columns), 6.8))
-    figure.subplots_adjust(wspace=0.015, hspace=0, bottom=0.15, top=0.995)
+    figure.subplots_adjust(wspace=0.015, hspace=0.04, bottom=0.15, top=0.995)
     for column, (values, limits, cmap, label) in enumerate(columns):
         for row, side in enumerate((1, -1)):
-            axes[row, column].imshow(render(points, quads, values, limits, cmap, side))
-            axes[row, column].set_axis_off()
+            draw_surface(axes[row, column], points, quads, values, limits, cmap, side)
         colorbar = figure.colorbar(
             ScalarMappable(norm=Normalize(*limits), cmap=cmap),
             ax=list(axes[:, column]),

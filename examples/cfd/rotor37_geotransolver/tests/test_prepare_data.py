@@ -18,7 +18,6 @@
 
 import json
 import pickle
-from types import SimpleNamespace
 
 import numpy as np
 import prepare_data
@@ -104,7 +103,7 @@ def test_splits_are_reproducible_and_disjoint():
 
 @pytest.fixture
 def snapshot(tmp_path, monkeypatch):
-    """Provide a downloaded source snapshot with distinct held-out outliers."""
+    """Provide a downloaded source dataset with distinct held-out outliers."""
     official = {"train_1000": list(range(10)), "test": [10, 11]}
     splits = make_splits(official)
     generator = np.random.default_rng(5)
@@ -122,13 +121,6 @@ def snapshot(tmp_path, monkeypatch):
     )
     card = {"dataset_info": {"description": {"split": official}}}
     (raw / "README.md").write_text(f"---\n{json.dumps(card)}\n---\n")
-    info = SimpleNamespace(sha="resolved-revision")
-    monkeypatch.setattr(
-        prepare_data,
-        "HfApi",
-        lambda: SimpleNamespace(dataset_info=lambda *a, **k: info),
-    )
-    monkeypatch.setattr(prepare_data, "snapshot_download", lambda *a, **k: None)
     monkeypatch.setattr(
         prepare_data, "fit_bases", lambda path: fit_bases(path, geometry_rank=2)
     )
@@ -147,7 +139,7 @@ def test_preparation_uses_only_training_cases(snapshot):
     np.testing.assert_allclose(stats["fields"]["mean"], training.mean(axis=0))
     np.testing.assert_allclose(stats["fields"]["std"], training.std(axis=0))
     assert stats["sample_ids"] == splits["train"]
-    assert manifest["source"]["revision"] == "resolved-revision"
+    assert manifest["source"]["repository"] == prepare_data.DATASET_ID
     assert manifest["splits"] == splits
     with np.load(output / "basis.npz") as basis:
         assert basis["training_sample_ids"].tolist() == splits["train"]

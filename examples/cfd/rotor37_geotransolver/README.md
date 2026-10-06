@@ -335,7 +335,8 @@ predicted fields and make training diverge midway.
 
 ## Prerequisites
 
-Install PhysicsNeMo and the additional dependencies of this example.
+Besides PhysicsNeMo, the example needs pyarrow to read the dataset's Parquet
+files and matplotlib for the figures.
 
 ```bash
 pip install -r requirements.txt
@@ -347,20 +348,23 @@ Run all commands from this directory.
 
 ### Data preparation
 
-Running this code will automatically download data from
+This example uses data from
 [https://huggingface.co/datasets/PLAID-datasets/Rotor37](https://huggingface.co/datasets/PLAID-datasets/Rotor37).
-Before you run the code, please confirm the content of the dataset and licensing
+Before you download it, please confirm the content of the dataset and licensing
 is appropriate for your intended use.
 
+Download the dataset files from that page and place them in `data/rotor37/raw`,
+so that the dataset card is at `data/rotor37/raw/README.md` and the samples are
+at `data/rotor37/raw/data/*.parquet`. The results below were obtained with
+revision `bac06c0caa7254120eecc6711a5fb85c58dfbdbc`, about 4 GB. Then run
+
 ```bash
-python prepare_data.py --data-dir data/rotor37
+python prepare_data.py
 ```
 
-This downloads a pinned revision of the dataset into `data/rotor37/raw`,
-decodes every case, splits the labeled cases and fits the normalization, the
+It decodes every case, splits the labeled cases and fits the normalization, the
 geometry principal components and the field modes on the training cases. The
-results go to `data/rotor37/processed`. Download and preparation need about
-10 GB of disk space.
+results go to `data/rotor37/processed`, which needs about 1.5 GB more.
 
 ### Training
 

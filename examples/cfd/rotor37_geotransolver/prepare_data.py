@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Download Rotor37, split it and fit every training-only transform."""
+"""Prepare the downloaded Rotor37 dataset and fit every training-only transform."""
 
 import argparse
 import io
@@ -27,11 +27,9 @@ import numpy as np
 import pyarrow.parquet as pq
 import yaml
 from basis import fit_bases
-from huggingface_hub import HfApi, snapshot_download
 from tqdm import tqdm
 
 DATASET_ID = "PLAID-datasets/Rotor37"
-REVISION = "bac06c0caa7254120eecc6711a5fb85c58dfbdbc"
 FIELD_NAMES = ("Density", "Pressure", "Temperature")
 GLOBAL_NAMES = ("Massflow", "Compression_ratio", "Efficiency")
 CONDITION_NAMES = ("Omega", "P")
@@ -199,7 +197,7 @@ class TrainingStatistics:
         return stats
 
 
-def write_samples(raw_dir, output_dir, revision, seed):
+def write_samples(raw_dir, output_dir, seed):
     """Decode every source sample and fit training statistics."""
     card = (raw_dir / "README.md").read_text()
     metadata = yaml.safe_load(card.split("---", 2)[1])["dataset_info"]
@@ -232,11 +230,7 @@ def write_samples(raw_dir, output_dir, revision, seed):
                 sample_id += 1
                 progress.update()
     manifest = {
-        "source": {
-            "repository": DATASET_ID,
-            "revision": revision,
-            "license": "CC-BY-SA-4.0",
-        },
+        "source": {"repository": DATASET_ID, "license": "CC-BY-SA-4.0"},
         "split_seed": seed,
         "splits": splits,
         "fields": list(FIELD_NAMES),
@@ -250,20 +244,22 @@ def write_samples(raw_dir, output_dir, revision, seed):
     return manifest
 
 
-def prepare(data_dir, revision=REVISION, seed=42):
-    """Download the source dataset and publish the complete prepared directory."""
+def prepare(data_dir, seed=42):
+    """Convert ``data_dir/raw`` into the complete ``data_dir/processed`` directory."""
     data_dir = Path(data_dir).expanduser().resolve()
+    raw_dir = data_dir / "raw"
     output_dir = data_dir / "processed"
+    if not (raw_dir / "README.md").is_file() or not list(
+        raw_dir.glob("data/*.parquet")
+    ):
+        raise FileNotFoundError(
+            f"Place the downloaded dataset in {raw_dir}, with README.md and data/*.parquet"
+        )
     if output_dir.exists():
         raise FileExistsError(f"Prepared data already exist at {output_dir}")
-    revision = HfApi().dataset_info(DATASET_ID, revision=revision).sha
-    raw_dir = data_dir / "raw"
-    snapshot_download(
-        DATASET_ID, repo_type="dataset", revision=revision, local_dir=raw_dir
-    )
     with TemporaryDirectory(prefix=".rotor37-", dir=data_dir) as staging:
         staging = Path(staging)
-        manifest = write_samples(raw_dir, staging, revision, seed)
+        manifest = write_samples(raw_dir, staging, seed)
         fit_bases(staging)
         staging.rename(output_dir)
     sizes = ", ".join(f"{name} {len(ids)}" for name, ids in manifest["splits"].items())
@@ -275,10 +271,9 @@ def main():
     """Prepare Rotor37 from the command line."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, default=Path("data/rotor37"))
-    parser.add_argument("--revision", default=REVISION)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
-    prepare(args.data_dir, args.revision, args.seed)
+    prepare(args.data_dir, args.seed)
 
 
 if __name__ == "__main__":
