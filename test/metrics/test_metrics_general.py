@@ -989,3 +989,38 @@ def test_mse_weights_channel_and_eps(device):
     # All-zero weights -> finite 0 via the eps floor (no division by zero).
     out = mse_mod.mse(pred, target, weights=torch.zeros_like(pred))
     assert torch.isfinite(out) and float(out) == 0.0
+
+
+@pytest.mark.parametrize("dim", [0, 1, 2, -1, -2, -3])
+@pytest.mark.parametrize("method", ["kernel", "sort", "histogram"])
+def test_crps_ensemble_axis_equivalence(device, dim, method):
+    # Compute each point separately, without a multidimensional ensemble-axis move.
+    pred = torch.arange(30, dtype=torch.float32, device=device).reshape(5, 2, 3) / 7
+    obs = pred.mean(dim=0)
+    expected = torch.stack(
+        [
+            crps.crps(pred[:, i, j], obs[i, j], method=method)
+            for i in range(2)
+            for j in range(3)
+        ]
+    ).reshape(2, 3)
+    reordered = torch.movedim(pred, 0, dim)
+    before = reordered.clone()
+    actual = crps.crps(reordered, obs, dim=dim, method=method)
+    torch.testing.assert_close(actual, expected)
+    torch.testing.assert_close(reordered, before)
+
+
+@pytest.mark.parametrize("shape,dim", [((4, 4, 4), -1), ((5, 1, 3), -2), ((5,), -1)])
+def test_crps_histogram_negative_axis_numpy_observations(device, shape, dim):
+    # Equal-sized axes can hide the incorrect reduction without a shape error.
+    pred = torch.arange(np.prod(shape), dtype=torch.float32, device=device).reshape(
+        shape
+    )
+    obs = pred.mean(dim=0)
+    expected = crps.crps(pred, obs, dim=0, method="histogram")
+    actual = crps.crps(
+        torch.movedim(pred, 0, dim), obs.cpu().numpy(), dim=dim, method="histogram"
+    )
+    assert actual.shape == obs.shape
+    torch.testing.assert_close(actual, expected)

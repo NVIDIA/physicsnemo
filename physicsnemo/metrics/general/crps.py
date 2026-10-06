@@ -301,7 +301,7 @@ def crps(
         with respect to.
     dim : int, Optional
         Dimension with which to calculate the CRPS over, the ensemble dimension.
-        Assumed to be zero.
+        Assumed to be zero. Negative indices count from the last dimension.
     method: str, Optional
         The method to calculate the crps. Can either be "kernel", "sort" or "histogram".
 
@@ -347,7 +347,7 @@ def crps(
     if method in ["kernel", "sort"]:
         return kcrps(pred, obs, dim=dim)
     else:
-        pred = pred.unsqueeze(0).transpose(0, dim + 1).squeeze(dim + 1)
+        pred = torch.movedim(pred, dim, 0)
         number_of_bins = max(int(np.sqrt(n)), 100)
         bin_edges, cdf = cdf_function(pred, bins=number_of_bins)
         _crps = _crps_from_cdf(bin_edges, cdf, obs)
