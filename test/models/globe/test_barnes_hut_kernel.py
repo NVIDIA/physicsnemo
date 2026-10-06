@@ -1180,6 +1180,10 @@ class TestDualInteractionPlanValidate:
             fn_broadcast_targets=torch.tensor([3, 4, 5]),
             fn_broadcast_starts=torch.tensor([0, 1]),
             fn_broadcast_counts=torch.tensor([1, 2]),
+            far_broadcast_target_ids=torch.empty(0, dtype=torch.long),
+            far_broadcast_pair_ids=torch.empty(0, dtype=torch.long),
+            fn_expanded_target_ids=torch.empty(0, dtype=torch.long),
+            fn_expanded_pair_ids=torch.empty(0, dtype=torch.long),
         )
 
     def test_valid_plan_passes(self):
@@ -1202,6 +1206,10 @@ class TestDualInteractionPlanValidate:
             fn_broadcast_targets=e.clone(),
             fn_broadcast_starts=e.clone(),
             fn_broadcast_counts=e.clone(),
+            far_broadcast_target_ids=e.clone(),
+            far_broadcast_pair_ids=e.clone(),
+            fn_expanded_target_ids=e.clone(),
+            fn_expanded_pair_ids=e.clone(),
         )
         plan.validate()
 
@@ -1219,6 +1227,10 @@ class TestDualInteractionPlanValidate:
             fn_broadcast_targets=torch.empty(0, dtype=torch.long),
             fn_broadcast_starts=torch.empty(0, dtype=torch.long),
             fn_broadcast_counts=torch.empty(0, dtype=torch.long),
+            far_broadcast_target_ids=torch.empty(0, dtype=torch.long),
+            far_broadcast_pair_ids=torch.empty(0, dtype=torch.long),
+            fn_expanded_target_ids=torch.empty(0, dtype=torch.long),
+            fn_expanded_pair_ids=torch.empty(0, dtype=torch.long),
         )
         with pytest.raises(ValueError, match="Shape mismatch"):
             plan.validate()
@@ -1241,6 +1253,10 @@ class TestDualInteractionPlanValidate:
             fn_broadcast_targets=torch.tensor([0, 1]),
             fn_broadcast_starts=torch.tensor([1]),
             fn_broadcast_counts=torch.tensor([3]),
+            far_broadcast_target_ids=torch.empty(0, dtype=torch.long),
+            far_broadcast_pair_ids=torch.empty(0, dtype=torch.long),
+            fn_expanded_target_ids=torch.empty(0, dtype=torch.long),
+            fn_expanded_pair_ids=torch.empty(0, dtype=torch.long),
         )
         with pytest.raises(ValueError, match="fn_broadcast out of bounds"):
             plan.validate()
@@ -1259,6 +1275,10 @@ class TestDualInteractionPlanValidate:
             fn_broadcast_targets=torch.tensor([0, 1, 2]),
             fn_broadcast_starts=torch.tensor([0]),
             fn_broadcast_counts=torch.tensor([-1]),
+            far_broadcast_target_ids=torch.empty(0, dtype=torch.long),
+            far_broadcast_pair_ids=torch.empty(0, dtype=torch.long),
+            fn_expanded_target_ids=torch.empty(0, dtype=torch.long),
+            fn_expanded_pair_ids=torch.empty(0, dtype=torch.long),
         )
         with pytest.raises(ValueError, match="negative values"):
             plan.validate()
