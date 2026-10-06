@@ -18,7 +18,7 @@
 # ==============================================================================
 
 # Top-level markdown files
-./*.md @ram-cherukuri @megnvidia
+./*.md @megnvidia
 
 # Keep CHANGELOG separate - don't require specific people to approve updates
 ./CHANGELOG.md

@@ -122,6 +122,13 @@ runs:
         # same command as a single pseudo-rank without torchrun.
         rank_cmd='
           set -euo pipefail
+          if [ "$STREAM" = "static" ]; then
+            # Cached Inductor wrappers can contain rank-specific CUDA devices.
+            export TORCHINDUCTOR_CACHE_DIR="${TORCHINDUCTOR_CACHE_DIR}/rank-${LOCAL_RANK}"
+          else
+            # Let DistributedManager isolate caches in dynamically spawned workers.
+            unset TORCHINDUCTOR_CACHE_DIR
+          fi
           pytest_args=(
             "--multigpu-${STREAM}"
             -m "multigpu_${STREAM}"

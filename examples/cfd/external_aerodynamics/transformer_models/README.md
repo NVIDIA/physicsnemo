@@ -222,6 +222,14 @@ Transolver++ is supported with the `plus` flag to the model. In our experiments,
 
 ## Uncertainty Quantification
 
+For the methodology and scientific evaluation of UQ for geometry-conditioned
+neural surrogates, refer to
+[Predictive Uncertainty for Neural CAE Surrogates](https://arxiv.org/abs/2609.25430).
+The paper evaluates GP-based uncertainty, concrete
+MC-dropout, and deep ensembles across external aerodynamics and crash dynamics,
+examining calibration, error ranking, unfamiliar inputs, and derived engineering
+quantities.
+
 GeoTransolver supports three complementary UQ methods:
 
 | Method | Granularity | Cost at inference |

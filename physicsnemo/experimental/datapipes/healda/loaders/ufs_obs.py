@@ -38,7 +38,6 @@ from typing import List, Literal
 
 import fsspec
 import numpy as np
-import pandas as pd
 from physicsnemo.core.version_check import OptionalImport
 
 pa = OptionalImport("pyarrow")
@@ -52,6 +51,8 @@ from physicsnemo.experimental.datapipes.healda.configs.combined_schema import (
 )
 from physicsnemo.experimental.datapipes.healda.configs.sensors import SENSOR_CONFIGS
 from physicsnemo.experimental.datapipes.healda.transforms.obs_filtering import filter_observations
+
+pd = OptionalImport("pandas")
 
 LOCAL_CHANNEL_ID = pa.field("local_channel_id", pa.uint16())
 
@@ -163,7 +164,7 @@ class UFSUnifiedLoader:
         array = pa.array(local_channel_ids).cast(LOCAL_CHANNEL_ID.type)
         return table.append_column(LOCAL_CHANNEL_ID, array)
 
-    def _get_interval_times(self, dt: datetime) -> pd.DatetimeIndex:
+    def _get_interval_times(self, dt: datetime) -> "pd.DatetimeIndex":
         start, end = self.obs_context_hours
         start += self.data_spacing
         return pd.date_range(
@@ -172,7 +173,7 @@ class UFSUnifiedLoader:
             freq=f"{self.data_spacing}h",
         )
 
-    def _get_parquet_files_to_read(self, interval_times: pd.DatetimeIndex):
+    def _get_parquet_files_to_read(self, interval_times: "pd.DatetimeIndex"):
         required_dates = {t.strftime("%Y%m%d") for t in interval_times}
         for sensor in self.sensors:
             for date in required_dates:
@@ -247,7 +248,7 @@ class UFSUnifiedLoader:
             GLOBAL_CHANNEL_ID.name,
         )
 
-    async def sel_time(self, times: pd.DatetimeIndex) -> dict:
+    async def sel_time(self, times: "pd.DatetimeIndex") -> dict:
         """Load observation data for specified times.
 
         Args:
