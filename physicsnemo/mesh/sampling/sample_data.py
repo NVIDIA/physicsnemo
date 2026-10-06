@@ -254,8 +254,12 @@ def _find_containing_pairs(
     """
     device = mesh.points.device
 
-    ### Get candidate pairs from BVH (AABB overlap test)
-    candidate_adj = bvh.find_candidate_cells(query_points, aabb_tolerance=tolerance)
+    ### Get candidate pairs from BVH (AABB overlap test). No per-point cap:
+    ### truncating candidates before the exact test can drop the containing
+    ### cell (e.g., at high-valence vertices or with a large BVH leaf_size).
+    candidate_adj = bvh.find_candidate_cells(
+        query_points, max_candidates_per_point=None, aabb_tolerance=tolerance
+    )
 
     if candidate_adj.n_total_neighbors == 0:
         return (

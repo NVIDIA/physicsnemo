@@ -193,6 +193,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `torch.distributions.Uniform` instantiates.
 - `RenameMeshFields` and `DropMeshFields` also apply to a `DomainMesh`'s
   domain-level `global_data`.
+- `sample_data_at_points`, `find_containing_cells`, and
+  `find_all_containing_cells` no longer miss the containing cell when a query
+  point has more than 32 BVH candidate cells (for example, near a vertex shared
+  by many triangles, or with a prebuilt BVH with `leaf_size > 1`). The BVH
+  candidate search used by these functions no longer caps candidates per point.
 
 ### Security
 
