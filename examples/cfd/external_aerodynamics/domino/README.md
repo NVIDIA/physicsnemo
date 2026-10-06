@@ -662,8 +662,8 @@ The steps below outline the process.
   Please modify these formulations if your variables are in a different order
   or don't require these losses.
 5. Run `test.py` to validate the trained model.
-6. Use `inference_on_stl.py` script to deploy the model in applications where inference is
-   needed only from STL inputs and the volume mesh is not calculated.
+6. Use `inference_on_stl.py` script to deploy the model in applications where inference
+   is needed only from STL inputs and the volume mesh is not calculated.
 
 The DoMINO model architecture is used to support the
 [Real Time Digital Twin Blueprint](https://github.com/NVIDIA-Omniverse-blueprints/digital-twins-for-fluid-simulation)

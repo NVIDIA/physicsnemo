@@ -372,10 +372,10 @@ flattened together (denormalized to physical flux):
 | --- | --- |
 | `mse` | `mean((pred − target)^2)` |
 | `rmse` | `sqrt(mse)` |
-| `mae` | `mean(|pred − target|)` |
+| `mae` | `mean(\|pred − target\|)` |
 | `l2_relative_error` | `‖pred − target‖₂ / ‖target‖₂` — the headline number |
-| `relative_error` | `mean(|pred − target| / |target|)` — sensitive to near-zero target cells, often dominated by void regions |
-| `max_error` | `max(|pred − target|)` |
+| `relative_error` | `mean(\|pred − target\| / \|target\|)` — sensitive to near-zero target cells, often dominated by void regions |
+| `max_error` | `max(\|pred − target\|)` |
 
 `metrics.yaml::per_sample_aggregate` reports `{mean, std, min, max}` of each
 metric across simulations — useful for catching outliers (one bad simulation
@@ -388,7 +388,7 @@ dominating the mean).
 | `mae` | mean absolute error of the integrated QoI scalar |
 | `rmse` | RMSE of the integrated QoI scalar |
 | `max_error` | worst single-simulation QoI error |
-| `mean_relative_error_pct` | mean of `100 · |Q_pred − Q_true| / |Q_true|` |
+| `mean_relative_error_pct` | mean of `100 · \|Q_pred − Q_true\| / \|Q_true\|` |
 | `median_relative_error_pct` | median of the same |
 | `max_relative_error_pct` | worst single-simulation relative error |
 

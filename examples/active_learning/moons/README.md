@@ -46,8 +46,8 @@ within the training loop.
 
 2. **Training loop** - The example uses `DefaultTrainingLoop`, a built-in training loop
 that handles epoch iteration, progress bars, validation, and static capture optimizations.
-For reference, a custom `training_loop` function is also defined in the example but not used,
-showing how you could implement your own if needed.
+For reference, a custom `training_loop` function is also defined in the example but
+not used, showing how you could implement your own if needed.
 
 3. **Query strategy** - `moon_strategies.ClassifierUQQuery` uses the classifier uncertainty
 to rank data indices from the full (not in training) sample set, selecting points where
@@ -123,7 +123,8 @@ strategy_config = c.StrategiesConfig(
 - `queue_cls`: Queue implementation for passing data between phases (e.g., `queue.Queue`)
 - `label_strategy`: Single strategy for labeling queried samples
 - `metrology_strategies`: List of strategies for measuring model performance
-- `unlabeled_datapool`: Optional pool of unlabeled data for query strategies (not shown here)
+- `unlabeled_datapool`: Optional pool of unlabeled data for query strategies
+  (not shown here)
 
 ### DriverConfig
 
@@ -165,7 +166,8 @@ driver(train_step_fn=training_step)
 ### Running the Driver
 
 The final `driver(...)` call is syntactic sugar for `driver.run(...)`, which executes the
-full active learning loop. The `train_step_fn` argument provides the per-batch training logic.
+full active learning loop. The `train_step_fn` argument provides the per-batch training
+logic.
 
 **Two ways to provide training logic:**
 

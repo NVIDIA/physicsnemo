@@ -84,24 +84,24 @@ Surface meshes embedded in 3D.
 <!-- markdownlint-disable MD013 -->
 | Function | Dimensions | Description | Properties |
 | ---------- | ------------ | ------------- | ------------ |
-| **Spheres** |
+| **Spheres** | | | |
 | `sphere_icosahedral` | 2D→3D | Sphere via icosahedron subdivision | Closed, uniform triangulation |
 | `sphere_uv` | 2D→3D | Sphere via lat/long (UV) parametrization | Closed, polar singularities |
-| **Cylinders** |
+| **Cylinders** | | | |
 | `cylinder` | 2D→3D | Cylinder with caps | Closed |
 | `cylinder_open` | 2D→3D | Cylinder without caps | Has boundary circles |
-| **Other Shapes** |
+| **Other Shapes** | | | |
 | `torus` | 2D→3D | Torus (donut shape) | Closed, genus=1 |
 | `plane` | 2D→3D | Flat plane | Has boundary |
 | `cone` | 2D→3D | Cone with base | Has boundary |
 | `disk` | 2D→3D | Flat disk | Has boundary circle |
 | `hemisphere` | 2D→3D | Half sphere | Has boundary circle |
-| **Platonic Solids** |
+| **Platonic Solids** | | | |
 | `cube_surface` | 2D→3D | Cube surface (triangulated) | Closed |
 | `tetrahedron_surface` | 2D→3D | Regular tetrahedron | Closed |
 | `octahedron_surface` | 2D→3D | Regular octahedron | Closed |
 | `icosahedron_surface` | 2D→3D | Regular icosahedron | Closed |
-| **Special Surfaces** |
+| **Special Surfaces** | | | |
 | `mobius_strip` | 2D→3D | Möbius strip | Non-orientable, has boundary |
 <!-- markdownlint-enable MD013 -->
 

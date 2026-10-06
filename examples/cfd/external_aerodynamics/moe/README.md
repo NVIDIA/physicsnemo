@@ -116,7 +116,8 @@ The training process:
 - Implements mixed precision training for efficiency
 - Applies **entropy regularization** to encourage expert diversity and more reliable scoring.
 
-Data parallelism is also supported with multi-GPU runs. To launch a multi-GPU training, run:
+Data parallelism is also supported with multi-GPU runs. To launch a multi-GPU
+training, run:
 
 ```bash
 torchrun --nproc_per_node=<num_GPUs> train.py
@@ -205,7 +206,8 @@ $$
 \end{aligned}
 $$
 
-You can control the strength of this effect using the `lambda_entropy` parameter in the config.
+You can control the strength of this effect using the `lambda_entropy` parameter in
+the config.
 
 ## Logging
 
