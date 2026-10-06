@@ -236,7 +236,7 @@ with your experiment name from the config):
 
 ```bash
 cd outputs/<your-experiment-name>
-mlflow ui --host 0.0.0.0 --port 5000
+mlflow ui --backend-store-uri sqlite:///mlruns/mlflow.db --host 0.0.0.0 --port 5000
 ```
 
 Access the dashboard at: <http://localhost:5000>

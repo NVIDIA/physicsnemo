@@ -1,16 +1,30 @@
 # [imports]
+import logging
+
 import torch
 
 import physicsnemo
 from physicsnemo.datapipes.benchmarks.darcy import Darcy2D
-from physicsnemo.launch.logging import LaunchLogger, PythonLogger
-from physicsnemo.launch.logging.mlflow import initialize_mlflow
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.utils.logging import LaunchLogger, PythonLogger
+from physicsnemo.utils.logging.mlflow import initialize_mlflow
 from physicsnemo.metrics.general.mse import mse
 from physicsnemo.models.fno.fno import FNO
 
 # [imports]
 
 # [code]
+# the loggers need the distributed manager, even for a single process
+DistributedManager.initialize()
+
+# PythonLogger and LaunchLogger log at INFO through the standard logging module,
+# which drops INFO by default outside a framework like Hydra
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s - %(name)s - %(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+
 normaliser = {
     "permeability": (1.25, 0.75),
     "darcy": (4.52e-2, 2.79e-2),
@@ -62,6 +76,7 @@ for i in range(20):
             truth = batch["darcy"]
             pred = model(batch["permeability"])
             loss = mse(pred, truth)
+            optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             scheduler.step()

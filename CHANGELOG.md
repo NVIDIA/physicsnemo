@@ -145,6 +145,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `initialize_mlflow` offline mode logs to SQLite (`./mlruns/mlflow.db`)
+  instead of the file store that current MLflow rejects.
+- `docs/test_scripts` run again on current PhysicsNeMo.
 - Mesh slicing reuses integer indices across connectivity, fields, and caches
   to avoid repeated CUDA synchronization for the same boolean mask.
   Point slicing skips mask processing when the output has no cells because

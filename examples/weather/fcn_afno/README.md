@@ -113,7 +113,7 @@ Progress can be monitored using MLFlow. Open a new terminal and navigate to the 
 directory, then run:
 
 ```bash
-mlflow ui -p 2458
+mlflow ui --backend-store-uri sqlite:///mlruns/mlflow.db -p 2458
 ```
 
 View progress in a browser at <http://127.0.0.1:2458>

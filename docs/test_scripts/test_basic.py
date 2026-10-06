@@ -40,6 +40,7 @@ for i in range(20):
     truth = batch["darcy"]
     pred = model(batch["permeability"])
     loss = mse(pred, truth)
+    optimizer.zero_grad()
     loss.backward()
     optimizer.step()
     scheduler.step()

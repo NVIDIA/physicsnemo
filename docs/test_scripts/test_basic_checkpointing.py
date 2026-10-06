@@ -3,7 +3,7 @@ import torch
 
 import physicsnemo
 from physicsnemo.datapipes.benchmarks.darcy import Darcy2D
-from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.utils import load_checkpoint, save_checkpoint
 from physicsnemo.metrics.general.mse import mse
 from physicsnemo.models.fno.fno import FNO
 
@@ -55,6 +55,7 @@ for i in range(max(1, loaded_epoch), 20):
         true = batch["darcy"]
         pred = model(batch["permeability"])
         loss = mse(pred, true)
+        optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         scheduler.step()
