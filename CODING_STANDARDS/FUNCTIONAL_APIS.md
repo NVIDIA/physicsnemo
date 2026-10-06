@@ -52,7 +52,7 @@ This document is structured in two main sections:
 ## Rule Index
 
 | Rule ID | Summary | Apply When |
-|---------|---------|------------|
+| --------- | --------- | ------------ |
 | [`FNC-000`](#fnc-000-functionals-must-use-functionspec) | Functionals must use FunctionSpec | Creating new functional APIs |
 | [`FNC-001`](#fnc-001-functional-location-and-public-api) | Functional location and public API | Organizing or exporting functionals |
 | [`FNC-002`](#fnc-002-file-layout-for-functionals) | File layout for functionals | Adding or refactoring functional files |

@@ -491,8 +491,8 @@ predictions' ability to respect the governing laws better.
 </table>
 <!-- markdownlint-enable -->
 
-*Addition of physics constraints to the DoMINO training is under active
-development and might introduce breaking changes in the future*
+_Addition of physics constraints to the DoMINO training is under active
+development and might introduce breaking changes in the future_
 
 ### Retraining recipe for DoMINO model
 

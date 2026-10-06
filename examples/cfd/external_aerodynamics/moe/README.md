@@ -155,7 +155,7 @@ of the individual experts, demonstrating the MoE model's significant
 reduction in error across all variables.
 
 | Model | P L-2 Error | WSS (x) L-2 Error | WSS (y) L-2 Error | WSS (z) L-2 Error |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | MoE | 0.08 | 0.14 | 0.19 | 0.21 |
 | DoMINO | 0.10 | 0.18 | 0.26 | 0.28 |
 | X-MeshGraphNet | 0.14 | 0.17 | 0.22 | 0.29 |

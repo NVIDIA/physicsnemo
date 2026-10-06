@@ -15,7 +15,7 @@ explicitly justified in code comments and approved during code review.
 ## Rule Index
 
 | Rule ID | Summary | Apply When |
-|---------|---------|------------|
+| --------- | --------- | ------------ |
 | `EXT-001` | Keep `pyproject.toml` as the single source of truth for dependencies | Declaring or modifying package requirements |
 | `EXT-002` | Preserve the dependency hierarchy via optional dependency groups | Adding dependencies to any `physicsnemo` submodule |
 | `EXT-003` | Classify every external import as hard or optional and guard optional ones | Importing third-party packages anywhere in the codebase |

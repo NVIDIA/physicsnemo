@@ -22,7 +22,7 @@ torchrun --nproc-per-node 4 benchmark_sharded_attention.py \
 ## Key options
 
 | Flag | Default | Description |
-|------|---------|-------------|
+| ------ | --------- | ------------- |
 | `--seq_len` | 4096 | Sequence length (world-size-divisible; chunk multiple of 32) |
 | `--num_heads` | 16 | Number of attention heads |
 | `--head_dim` | 64 | Dimension per head |

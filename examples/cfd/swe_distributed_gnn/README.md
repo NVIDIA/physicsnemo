@@ -139,7 +139,6 @@ from physicsnemo.distributed import mark_module_as_shared
 
 ...
 
-
 model_with_shared_weights = GraphCast(...)
 mark_module_as_shared(model_with_shared_weights)
 ```

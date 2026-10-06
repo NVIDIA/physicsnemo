@@ -431,7 +431,7 @@ assert torch.allclose(div_curl_v, torch.zeros_like(div_curl_v), atol=1e-5)
 ## Dimension Support
 
 | Operator | 1D | 2D | 3D | nD |
-|----------|----|----|----|----|
+| ---------- | ---- | ---- | ---- | ---- |
 | Gradient (LSQ) | ✓ | ✓ | ✓ | ✓ |
 | Gradient (DEC) | ✓ | ✓ | ✓ | ✓ |
 | Divergence | ✓ | ✓ | ✓ | ✓ |

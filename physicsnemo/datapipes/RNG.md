@@ -128,7 +128,7 @@ Every boundary where a generator might cross devices contains explicit
 re-creation logic:
 
 | Location | What happens |
-|---|---|
+| --- | --- |
 | `fork_generator` | Creates children on `parent.device` |
 | `Dataset.set_generator` | If `target_device != child.device`, creates a new generator on `target_device` seeded from the child |
 | `MeshDataset.set_generator` | Same device-alignment logic as `Dataset` |
@@ -203,7 +203,7 @@ sampler order (via the consume stage), so their sequentially-drawn
 generators are unaffected by the threaded producer.
 
 | Reader | Randomness | Per-`(seed, epoch, index)` RNG |
-|---|---|---|
+| --- | --- | --- |
 | `MeshReader` | `torch.randint` (cyclic block selection) | Yes |
 | `DomainMeshReader` | `torch.randint` (cyclic block selection) | Yes |
 | `NumpyReader` | `torch.randint` (cyclic coordinated subsampling) | Yes |

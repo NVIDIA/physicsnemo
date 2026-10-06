@@ -273,7 +273,7 @@ Comprehensive overview of PhysicsNeMo-Mesh capabilities:
 
 <!-- markdownlint-disable MD013 -->
 | Feature | Status | Notes |
-|---------|--------|-------|
+| --------- | -------- | ------- |
 | **Core Operations** | | |
 | Mesh creation & manipulation | ✅ | n-dimensional simplicial meshes |
 | Point/cell/global data | ✅ | TensorDict-based (including nested data) |

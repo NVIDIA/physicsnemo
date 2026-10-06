@@ -192,7 +192,7 @@ results = guardrail_gpu.query(test_meshes)  # Fast GPU inference
 The guardrail extracts **22 non-invariant geometric features** from each mesh:
 
 | Feature Category | Description | Count |
-|-----------------|-------------|-------|
+| ----------------- | ------------- | ------- |
 | Centroid | 3D position of geometry center | 3 |
 | PCA Axes | First two principal component directions | 6 |
 | PCA Eigenvalues | Variance along principal axes | 3 |

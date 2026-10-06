@@ -90,7 +90,7 @@ class MyTransform:
 ### Provided Implementations
 
 | Component | Module | Description |
-|---|---|---|
+| --- | --- | --- |
 | `ObsERA5Dataset` | `dataset` | ERA5 state + observations |
 | `UFSUnifiedLoader` | `loaders.ufs_obs` | Parquet obs loader |
 | `ERA5Loader` | `loaders.era5` | Async ERA5 zarr loader |

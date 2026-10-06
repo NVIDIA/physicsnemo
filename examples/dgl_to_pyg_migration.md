@@ -118,7 +118,7 @@ print(graph_pyg)
 The following table shows other popular operations:
 
 | DGL | PyG | Notes |
-|-----|-----|-------|
+| ----- | ----- | ------- |
 | `dgl.save_graphs()` | `torch.save()` | Save graph to disk |
 | `dgl.load_graphs()` | `torch.load()` | Load graph from disk |
 | `dgl.to_bidirected()` | `torch_geometric.utils.to_undirected()` | Convert to bidirectional graph |

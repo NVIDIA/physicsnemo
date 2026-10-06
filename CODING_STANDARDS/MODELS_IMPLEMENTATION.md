@@ -62,7 +62,7 @@ This document is structured in two main sections:
 ## Rule Index
 
 | Rule ID | Summary | Apply When |
-|---------|---------|------------|
+| --------- | --------- | ------------ |
 | [`MOD-000a`](#mod-000a-reusable-layersblocks-belong-in-physicsnemonn) | Reusable layers/blocks belong in physicsnemo.nn (stored in physicsnemo/nn/module) | Creating or refactoring reusable layer classes |
 | [`MOD-000b`](#mod-000b-complete-models-belong-in-physicsnemomodels) | Complete models belong in physicsnemo.models | Creating or refactoring complete model classes |
 | [`MOD-001`](#mod-001-use-physicsnemomodule-as-model-base-classes) | Use physicsnemo.Module as model base classes | Creating or refactoring new model classes |

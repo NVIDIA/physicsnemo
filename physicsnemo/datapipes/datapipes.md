@@ -39,7 +39,7 @@ Reader  -->  Dataset  -->  DataLoader  -->  Training loop
 Three dataset types share this pattern:
 
 | Type | Data model | Transform base |
-|------|------------|----------------|
+| ------ | ------------ | ---------------- |
 | `Dataset` | `TensorDict` fields | `Transform` |
 | `MeshDataset` | `Mesh` / `DomainMesh` tensorclasses | `MeshTransform` |
 | `MultiDataset` | Union of child `DatasetBase` instances | Delegates to children |
@@ -125,7 +125,7 @@ where `data` is usually a `TensorDict`, `Mesh`, or `DomainMesh` depending
 on the dataset and collator:
 
 | Collator | Strategy |
-|----------|----------|
+| ---------- | ---------- |
 | `DefaultCollator` | `TensorDict.stack()` -- all samples must share shape |
 | `ConcatCollator` | `torch.cat()` along an axis with optional `batch_idx` -- for variable-length point clouds |
 | `FunctionCollator` | Wraps any callable |
