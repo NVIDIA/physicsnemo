@@ -69,6 +69,60 @@ def test_forward_batched(device):
     assert out.shape == (2, 12, 32)
 
 
+def test_unbatched_mask_excludes_context_tokens(device):
+    """Masked-out tokens of an unbatched context do not affect the prediction."""
+    head = _build().to(device).eval()
+    features = torch.randn(16, 32, device=device)
+    coords = torch.randn(16, 3, device=device)
+    mask = torch.ones(16, dtype=torch.bool, device=device)
+    mask[10:] = False
+    target_positions = torch.randn(12, 3, device=device)
+    cond = torch.randn(4, device=device)
+    with torch.no_grad():
+        masked = head.forward(
+            context_tokens=TokenSet(features=features, coords=coords, mask=mask),
+            target_positions=target_positions,
+            cond=cond,
+        )
+        trimmed = head.forward(
+            context_tokens=TokenSet(features=features[:10], coords=coords[:10]),
+            target_positions=target_positions,
+            cond=cond,
+        )
+    assert masked.shape == (12, 32)
+    torch.testing.assert_close(masked, trimmed)
+
+
+@pytest.mark.parametrize("batched", [False, True])
+def test_fully_masked_context(device, batched):
+    """A fully masked context yields a finite prediction that ignores its features."""
+    head = _build().to(device).eval()
+    coords = torch.randn(16, 3, device=device)
+    mask = torch.zeros(16, dtype=torch.bool, device=device)
+    target_positions = torch.randn(12, 3, device=device)
+    cond = torch.randn(4, device=device)
+    outs = []
+    for _ in range(2):
+        features = torch.randn(16, 32, device=device)
+        ctx = (
+            TokenSet(features=features[None], coords=coords[None], mask=mask[None])
+            if batched
+            else TokenSet(features=features, coords=coords, mask=mask)
+        )
+        with torch.no_grad():
+            outs.append(
+                head.forward(
+                    context_tokens=ctx,
+                    target_positions=target_positions,
+                    cond=cond,
+                )
+            )
+    expected_shape = (1, 12, 32) if batched else (12, 32)
+    assert outs[0].shape == expected_shape
+    assert torch.isfinite(outs[0]).all()
+    torch.testing.assert_close(outs[0], outs[1])
+
+
 def test_target_positions_broadcast(device):
     """Rank-2 ``target_positions`` is broadcast across the context batch."""
     head = _build().to(device).eval()
