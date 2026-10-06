@@ -195,6 +195,7 @@ physicsnemo/datapipes/healpix/ @pzharrington
 # UTILITIES
 # ==============================================================================
 
+physicsnemo/utils/_index_tuple_ops.py @peterdsharpe
 physicsnemo/utils/capture.py @nickgeneva @ktangsali
 physicsnemo/utils/checkpoint.py @CharlelieLrt @negin513
 physicsnemo/utils/insolation.py @pzharrington
