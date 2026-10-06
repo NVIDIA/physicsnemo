@@ -132,27 +132,10 @@ one fixed mesh, as here, it is a favorable trade.
 
 ### Step 2. How do predictions stay physical?
 
-A network that outputs the three fields directly can return a negative pressure
-for an unusual blade, and its outputs need not satisfy the ideal-gas relation
-that the simulations obey exactly. A penalty in the loss makes such violations
-rare but never impossible, so the recipe builds both constraints into the
-decoder instead.
-
-The modes describe the logarithm of pressure and of temperature, and the decoder
-exponentiates the result, so any predicted coefficients yield positive fields.
-The logarithm also matches the physics, since a change of operating point
-scales the pressure, and a scaling becomes an additive shift that a sum of modes
-represents easily. Density is not predicted at all. The decoder computes it as
-
-$$
-\hat\rho = \frac{\hat p}{R\hat T},
-$$
-
-with the gas constant $R$ fitted to the training fields, which satisfy the
-relation to within a relative deviation of $2\times10^{-7}$. The three fields
-therefore agree exactly in every prediction. Density is still compared with the
-simulation during training, and since it depends on both pressure and
-temperature, its errors refine both fields.
+The modes describe log pressure and log temperature, so the decoded fields are
+positive for any coefficients. Density is not predicted but computed from the
+ideal-gas relation $\hat\rho = \hat p / (R\hat T)$, with $R$ fitted to the
+training fields, so the three fields always agree.
 
 ### Step 3. How is the shock kept sharp?
 
