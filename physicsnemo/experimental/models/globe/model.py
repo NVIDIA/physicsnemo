@@ -509,7 +509,7 @@ class GLOBE(Module):
                     )
 
         ### Transfer to the original device.  ``ClusterTree`` and
-        ### ``DualInteractionPlan`` are both ``@tensorclass``, so ``.to`` moves
+        ### ``DualInteractionPlan`` are both tensorclasses, so ``.to`` moves
         ### all member tensors at once.  No-op when devices already match.
         cluster_trees = {
             bc: t.to(original_device)  # ty: ignore[unresolved-attribute]

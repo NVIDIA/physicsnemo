@@ -20,15 +20,12 @@ This module provides the Adjacency tensorclass for representing ragged arrays
 using offset-indices encoding, commonly used in graph and mesh processing.
 """
 
-import builtins
-
 import torch
 from jaxtyping import Int
-from tensordict import tensorclass
+from tensordict import TensorClass
 
 
-@tensorclass
-class Adjacency:
+class Adjacency(TensorClass):
     """Ragged adjacency list stored with offset-indices encoding.
 
     This structure efficiently represents variable-length neighbor lists using two
@@ -95,7 +92,7 @@ class Adjacency:
                     f"The offset-indices encoding requires offsets[-1] == len(indices)."
                 )
 
-    def to_list(self) -> list[list[builtins.int]]:
+    def to_list(self) -> list[list[int]]:
         """Convert adjacency to a ragged list-of-lists representation.
 
         This method is primarily for testing and comparison with other libraries.
@@ -135,12 +132,12 @@ class Adjacency:
         return result
 
     @property
-    def n_sources(self) -> builtins.int:
+    def n_sources(self) -> int:
         """Number of source elements (points or cells) in the adjacency."""
         return len(self.offsets) - 1
 
     @property
-    def n_total_neighbors(self) -> builtins.int:
+    def n_total_neighbors(self) -> int:
         """Total number of neighbor relationships across all sources."""
         return len(self.indices)
 
@@ -212,7 +209,7 @@ class Adjacency:
 
         return source_indices, self.indices
 
-    def truncate_per_source(self, max_count: builtins.int | None = None) -> "Adjacency":
+    def truncate_per_source(self, max_count: int | None = None) -> "Adjacency":
         """Limit each source to at most max_count neighbors.
 
         This is useful for capping the number of candidates in spatial queries
