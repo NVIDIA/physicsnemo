@@ -462,6 +462,17 @@ def test_interval_width_stays_tight(dtype):
     assert (width[finite] <= bound[finite]).all()
 
 
+def test_normalized_interval_stays_tight_for_large_sigma_in_low_precision():
+    """The absolute rounding floor is not multiplied by sigma (float16, sigma 6e4)."""
+    score = NormalizedErrorScore()
+    pred = torch.zeros(3, dtype=_H)
+    aux = {"sigma": torch.full((3,), 60000.0, dtype=_H)}
+    lo, hi = score.interval(pred, torch.tensor(0.0, dtype=_F64), aux=aux)
+    assert float(hi.abs().max()) < 1e-3 and float(lo.abs().max()) < 1e-3
+    lo, hi = score.interval(pred, torch.tensor(1e-3, dtype=_F64), aux=aux)
+    assert float(hi.max()) <= 60.0 * (1 + 8 * torch.finfo(_H).eps) + 0.0625
+
+
 def test_cast_directed_fp16_bf16_and_narrowing(device):
     # FP16 -> BF16 is a 16->16-bit cast that LOSES mantissa precision; a
     # total-bit-width test would skip the conservative bump.
