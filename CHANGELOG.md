@@ -164,6 +164,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   filename index, preventing resumes that mix epochs. Missing required weights
   raise before any model or training state is restored. Distributed loads validate
   on every rank using rank 0's file lookup.
+- `fix_orientation` decides orientations from connectivity alone, with a
+  union-find over every cell and its flipped copy, instead of a geometric
+  breadth-first search. It now orients meshes consistently across sharp
+  creases, works in any manifold and spatial dimension, leaves non-orientable
+  components (such as a Möbius strip) as given and counts them in the new
+  `n_non_orientable_components` statistic. On a GB300 it is 6x faster on the
+  17.7M-triangle DrivAerML surface and 16-40x faster on 10M-cell meshes.
+  `repair_mesh(fix_orientation=True)` orients every mesh whose cells have at
+  least two vertices.
 - Mesh slicing reuses integer indices across connectivity, fields, and caches
   to avoid repeated CUDA synchronization for the same boolean mask.
   Point slicing skips mask processing when the output has no cells because
