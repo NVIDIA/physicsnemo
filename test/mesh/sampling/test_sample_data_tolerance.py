@@ -49,20 +49,25 @@ def _contains_source_cell(
     query_idx, cell_idx = find_all_containing_cells(
         mesh, query_points
     ).expand_to_pairs()
-    found = torch.zeros(len(query_points), dtype=torch.bool)
+    found = torch.zeros(len(query_points), dtype=torch.bool, device=query_points.device)
     found[query_idx[cell_idx == source_cells[query_idx]]] = True
     return found
 
 
-def test_power_of_two_rescaling_gives_identical_results():
+def test_power_of_two_rescaling_gives_identical_results(device):
     """Rescaling mesh and points by a power of two leaves every output unchanged."""
     torch.manual_seed(0)
-    base = torus.load(n_major=16, n_minor=8)
-    base = Mesh(points=base.points + torch.tensor([3.0, -1.0, 0.5]), cells=base.cells)
-    base.point_data["f"] = torch.randn(base.n_points)
-    base.cell_data["id"] = torch.arange(base.n_cells, dtype=torch.float32)
+    base = torus.load(n_major=16, n_minor=8, device=device)
+    base = Mesh(
+        points=base.points + torch.tensor([3.0, -1.0, 0.5], device=device),
+        cells=base.cells,
+    )
+    base.point_data["f"] = torch.randn(base.n_points, device=device)
+    base.cell_data["id"] = torch.arange(
+        base.n_cells, dtype=torch.float32, device=device
+    )
 
-    source_cells = torch.randint(0, base.n_cells, (500,))
+    source_cells = torch.randint(0, base.n_cells, (500,), device=device)
     on_surface = base.sample_random_points_on_cells(source_cells)
     off_surface = on_surface[:100] + 1e-2 * base.cell_normals[source_cells[:100]]
     query = torch.cat([on_surface, off_surface])
@@ -94,7 +99,7 @@ def test_power_of_two_rescaling_gives_identical_results():
 
 
 @pytest.mark.parametrize("scale", [1000.0, 1024.0])
-def test_float32_surface_in_large_units_finds_on_surface_points(scale):
+def test_float32_surface_in_large_units_finds_on_surface_points(scale, device):
     """A float32 triangle surface in large units (e.g. millimetres) finds its points.
 
     Float32 rounding of on-surface points is about ``1.2e-7 * |x|``, so an
@@ -102,11 +107,13 @@ def test_float32_surface_in_large_units_finds_on_surface_points(scale):
     ``|x| ~ 1e3``.
     """
     torch.manual_seed(0)
-    base = torus.load()
+    base = torus.load(device=device)
     mesh = Mesh(points=base.points * scale, cells=base.cells)
-    mesh.cell_data["id"] = torch.arange(mesh.n_cells, dtype=torch.float32)
+    mesh.cell_data["id"] = torch.arange(
+        mesh.n_cells, dtype=torch.float32, device=device
+    )
 
-    source_cells = torch.randint(0, mesh.n_cells, (2000,))
+    source_cells = torch.randint(0, mesh.n_cells, (2000,), device=device)
     query = mesh.sample_random_points_on_cells(source_cells)
 
     assert not sample_data_at_points(mesh, query)["id"].isnan().any()
