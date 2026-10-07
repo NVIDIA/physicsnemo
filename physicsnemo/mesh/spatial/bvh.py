@@ -25,12 +25,11 @@ O(log N) Python iterations instead of the O(N) iterations required by a naive
 sequential approach, enabling scalability to hundreds of millions of cells.
 """
 
-import builtins
 from typing import TYPE_CHECKING
 
 import torch
 from jaxtyping import Bool, Float, Int
-from tensordict import tensorclass
+from tensordict import TensorClass
 
 from physicsnemo.mesh.neighbors._adjacency import Adjacency, build_adjacency_from_pairs
 from physicsnemo.mesh.spatial._lbvh import build_lbvh_topology
@@ -43,6 +42,27 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # Morton code computation
 # ---------------------------------------------------------------------------
+
+# Shift-and-mask steps that move bit b of a coordinate to bit b*D, for the bits
+# per dimension that _compute_morton_codes uses (D=2: 31 bits, D=3: 21 bits).
+# D=1 needs no spreading.
+_MORTON_SPREAD_STEPS: dict[int, tuple[tuple[int, int], ...]] = {
+    1: (),
+    2: (
+        (16, 0x0000_FFFF_0000_FFFF),
+        (8, 0x00FF_00FF_00FF_00FF),
+        (4, 0x0F0F_0F0F_0F0F_0F0F),
+        (2, 0x3333_3333_3333_3333),
+        (1, 0x5555_5555_5555_5555),
+    ),
+    3: (
+        (32, 0x001F_0000_0000_FFFF),
+        (16, 0x001F_0000_FF00_00FF),
+        (8, 0x100F_00F0_0F00_F00F),
+        (4, 0x10C3_0C30_C30C_30C3),
+        (2, 0x1249_2492_4924_9249),
+    ),
+}
 
 
 def _compute_morton_codes(
@@ -109,17 +129,18 @@ def _compute_morton_codes(
     )  # (N, D)
 
     ### Bit-interleave all dimensions: bit b of dim d -> position b*D + d.
-    if device.type == "cuda":
-        # CUDA is launch-bound in the bit loop below. Materializing all bits at
-        # once trades a modest temporary for far fewer kernel launches.
-        bit_offsets = torch.arange(n_bits, dtype=torch.int64, device=device)
-        dim_offsets = torch.arange(D, dtype=torch.int64, device=device)
-        bits = (coords.unsqueeze(-1) >> bit_offsets) & 1  # (N, D, n_bits)
-        shifts = bit_offsets.view(1, 1, -1) * D + dim_offsets.view(1, -1, 1)
-        return (bits << shifts).reshape(N, -1).sum(dim=1)
+    dim_offsets = torch.arange(D, dtype=torch.int64, device=device)  # (D,)
+    spread_steps = _MORTON_SPREAD_STEPS.get(D)
+    if spread_steps is not None:
+        # Spread every coordinate's bits D apart in a few whole-tensor steps,
+        # then shift dimension d by d. The dimensions' bits do not overlap, so
+        # the sum is their bitwise OR. Temporaries are O(N * D), and the number
+        # of kernel launches depends on neither N nor n_bits.
+        for shift, mask in spread_steps:
+            coords = (coords | (coords << shift)) & mask
+        return (coords << dim_offsets).sum(dim=1)
 
     code = torch.zeros(N, dtype=torch.int64, device=device)
-    dim_offsets = torch.arange(D, dtype=torch.int64, device=device)  # (D,)
     for b in range(n_bits):
         bits = (coords >> b) & 1  # (N, D) - extract bit b from every dim
         code += (bits << (b * D + dim_offsets)).sum(dim=1)  # (N,)
@@ -257,8 +278,7 @@ def _compute_leaf_aabbs(
 # ---------------------------------------------------------------------------
 
 
-@tensorclass
-class BVH:
+class BVH(TensorClass):
     """Bounding Volume Hierarchy for efficient spatial queries.
 
     The BVH is stored as flat tensors for GPU compatibility, avoiding
@@ -313,12 +333,12 @@ class BVH:
     sorted_cell_order: Int[torch.Tensor, " n_cells"]
 
     @property
-    def n_nodes(self) -> builtins.int:
+    def n_nodes(self) -> int:
         """Number of nodes in the BVH."""
         return self.node_aabb_min.shape[0]
 
     @property
-    def n_spatial_dims(self) -> builtins.int:
+    def n_spatial_dims(self) -> int:
         """Dimensionality of the spatial space."""
         return self.node_aabb_min.shape[1]
 
@@ -328,7 +348,7 @@ class BVH:
         return self.node_aabb_min.device
 
     @classmethod
-    def from_mesh(cls, mesh: "Mesh", leaf_size: builtins.int = 1) -> "BVH":
+    def from_mesh(cls, mesh: "Mesh", leaf_size: int = 1) -> "BVH":
         """Construct a BVH from a mesh using morton-code LBVH.
 
         Cells are sorted by the morton code of their centroids, then the tree
@@ -499,8 +519,8 @@ class BVH:
     def _traverse(
         self,
         query_points: Float[torch.Tensor, "n_queries n_spatial_dims"],
-        max_candidates_per_point: builtins.int | None,
-        aabb_tolerance: builtins.float,
+        max_candidates_per_point: int | None,
+        aabb_tolerance: float,
     ) -> tuple[
         Int[torch.Tensor, " n_pairs"],
         Int[torch.Tensor, " n_pairs"],
@@ -610,8 +630,8 @@ class BVH:
     def find_candidate_cells(
         self,
         query_points: Float[torch.Tensor, "n_queries n_spatial_dims"],
-        max_candidates_per_point: builtins.int | None = 32,
-        aabb_tolerance: builtins.float = 1e-6,
+        max_candidates_per_point: int | None = 32,
+        aabb_tolerance: float = 1e-6,
     ) -> Adjacency:
         r"""Find candidate cells that might contain each query point.
 

@@ -20,8 +20,9 @@ This module provides helper functions for manipulating TensorDict objects,
 including concatenation of leaf tensors, computing total lengths, and
 splitting by tensor rank.
 
-For field-to-rank *schema metadata* (e.g. ``{"pressure": 0, "velocity": 1}``),
-see :mod:`physicsnemo.mesh.fields` and its :class:`RankSpecDict` type.
+For field-to-rank *schema metadata* (e.g. ``{"pressure": {"rank": 0},
+"velocity": {"rank": 1}}``), see :mod:`physicsnemo.mesh.fields` and its
+:class:`~physicsnemo.mesh.fields.FieldSchema` type.
 """
 
 from math import prod

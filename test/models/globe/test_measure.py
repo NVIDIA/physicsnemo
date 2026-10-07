@@ -45,8 +45,8 @@ def _make_model(device: torch.device) -> GLOBE:
     torch.manual_seed(SEED)
     model = GLOBE(
         n_spatial_dims=3,
-        output_field_ranks={"C_p": 0, "C_f": 1},
-        boundary_source_data_ranks={"vehicle": {}, "floor": {}},
+        output_schema={"C_p": {"rank": 0}, "C_f": {"rank": 1}},
+        boundary_source_schemas={"vehicle": {}, "floor": {}},
         reference_length_names=["L_ref"],
         reference_area=1.0,
         n_communication_hyperlayers=2,

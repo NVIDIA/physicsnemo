@@ -453,7 +453,7 @@ def test_mesh_input_config_synthetic_e2e(
     batch = collate([(ds, {})])
 
     ### Shrink GLOBE while preserving the externally-visible
-    ### `output_field_ranks` and `boundary_source_data_ranks`.
+    ### `output_schema` and `boundary_source_schemas`.
     small_model_cfg = OmegaConf.merge(
         train_cfg.model, OmegaConf.create(_GLOBE_SHRINK_OVERRIDES)
     )

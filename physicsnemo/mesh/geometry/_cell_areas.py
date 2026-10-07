@@ -20,7 +20,8 @@ Computes the volume of each n-simplex from its edge vectors using
 dimension-specific closed-form expressions where possible:
 
 - **Edges** (n=1): vector norm.
-- **Triangles** (n=2): Lagrange identity (works in any spatial dimension).
+- **Triangles** (n=2): cross product in 3-space, or exterior product in
+  other spatial dimensions, with a rescaled norm.
 - **Tetrahedra** (n=3): scalar triple product in 3-space, or Sarrus' rule
   on the 3x3 Gram matrix for higher spatial dimensions.
 - **General** (n>=4): Gram determinant via ``torch.det``.
@@ -118,19 +119,29 @@ def _edge_lengths(
 def _triangle_areas(
     relative_vectors: Float[torch.Tensor, "n_cells 2 n_spatial_dims"],
 ) -> Float[torch.Tensor, " n_cells"]:
-    r"""Triangle area via Lagrange's identity (any spatial dimension).
+    r"""Triangle area from the exterior product (any spatial dimension).
 
     .. math::
-        A = \tfrac{1}{2}\sqrt{\|e_1\|^2 \|e_2\|^2 - (e_1 \cdot e_2)^2}
+        A = \tfrac{1}{2}\sqrt{\sum_{i<j}(e_{1,i}e_{2,j}-e_{1,j}e_{2,i})^2}
 
-    This is equivalent to ``||e1 x e2|| / 2`` but generalises beyond 3-space.
+    Direct minors avoid subtracting nearly equal squared dot products for
+    thin triangles. Rescaling before the norm avoids squaring tiny or large
+    area components; in 3D these are the usual cross product components.
     """
     e1, e2 = relative_vectors[:, 0], relative_vectors[:, 1]
-    d11 = (e1 * e1).sum(-1)
-    d22 = (e2 * e2).sum(-1)
-    d12 = (e1 * e2).sum(-1)
-    # clamp guards against tiny negative values from floating-point roundoff
-    return (d11 * d22 - d12 * d12).clamp(min=0).sqrt() / 2
+    n_spatial_dims = relative_vectors.shape[-1]
+    if n_spatial_dims == 2:
+        return (e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]).abs() / 2
+    if n_spatial_dims == 3:
+        components = torch.linalg.cross(e1, e2)
+    else:
+        i, j = torch.triu_indices(
+            n_spatial_dims, n_spatial_dims, offset=1, device=relative_vectors.device
+        )
+        components = e1[:, i] * e2[:, j] - e1[:, j] * e2[:, i]
+    scale = components.abs().amax(dim=-1)
+    scaled = components / scale.masked_fill(scale == 0, 1).unsqueeze(-1)
+    return scaled.norm(dim=-1) * (scale / 2)
 
 
 def _tetrahedron_volumes(
