@@ -17,7 +17,8 @@
 r"""Nonconformity scores for conformal prediction.
 
 A score measures, per element, how far a target falls from a prediction,
-and turns a threshold into an interval ``(lo, hi)``.
+and turns a calibrated threshold into an interval ``(lo, hi)``. Pass a score
+to a calibrator; you rarely need to call its methods yourself.
 
 Choose the score by what your model outputs:
 
@@ -28,8 +29,12 @@ Choose the score by what your model outputs:
   sigma is large.
 - :class:`QuantileRegressionScore`: lower and upper quantile heads, passed
   as ``aux["lo"]`` and ``aux["hi"]``. Intervals follow the heads.
+
+For tensor inputs, ``aux`` maps each key to a tensor; for ``TensorDict``
+inputs, it maps each field name to such a mapping.
 """
 
+import copy
 from collections.abc import Mapping
 
 import torch
@@ -75,17 +80,23 @@ def _require_aux(
     if missing:
         raise ValueError(
             f"{score_name} requires aux entries {list(keys)}; missing {missing}. "
-            "Pass aux={key: tensor}."
+            "Pass aux={key: tensor} (or, for TensorDict inputs, "
+            "aux={field: {key: tensor}})."
         )
 
 
 class _NonconformityScore:
     """Base class for the built-in scores.
 
-    ``aux_keys`` lists the aux entries a score reads.
+    ``aux_keys`` lists the aux entries a score reads. ``_kind`` is the saved
+    name, ``_saved_kwargs`` maps each saved constructor argument to its exact
+    type, and ``_signed_threshold`` allows negative thresholds.
     """
 
     aux_keys: tuple[str, ...] = ()
+    _kind: str
+    _saved_kwargs: dict[str, type] = {}
+    _signed_threshold: bool = False
 
     def score(
         self,
@@ -135,8 +146,9 @@ class _NonconformityScore:
         prediction : torch.Tensor
             Model output of shape :math:`(*\text{dims})`.
         threshold : torch.Tensor
-            Threshold, broadcastable against ``prediction``: a scalar or one
-            value per element of shape :math:`(*\text{dims})`.
+            Fitted threshold, broadcastable against ``prediction``, such as
+            the one value per element of shape :math:`(*\text{dims})` fitted
+            by the cellwise calibrator.
         aux : Mapping[str, torch.Tensor], optional
             The same ``aux`` entries that :meth:`score` needs.
 
@@ -179,6 +191,8 @@ class AbsoluteErrorScore(_NonconformityScore):
     >>> lo.shape, bool((hi > lo).all())
     (torch.Size([50, 2]), True)
     """
+
+    _kind = "absolute_error"
 
     def score(
         self,
@@ -247,6 +261,8 @@ class NormalizedErrorScore(_NonconformityScore):
     """
 
     aux_keys = ("sigma",)
+    _kind = "normalized_error"
+    _saved_kwargs = {"eps": float}
 
     def __init__(self, eps: float = 1e-8) -> None:
         self.eps = positive_finite_float(eps, "eps")
@@ -319,6 +335,8 @@ class QuantileRegressionScore(_NonconformityScore):
     """
 
     aux_keys = ("lo", "hi")
+    _kind = "quantile_regression"
+    _signed_threshold = True
 
     def score(
         self,
@@ -342,3 +360,30 @@ class QuantileRegressionScore(_NonconformityScore):
         lo64 = aux["lo"].to(torch.float64) - t
         hi64 = aux["hi"].to(torch.float64) + t
         return _outward_interval(prediction, lo64, hi64)
+
+
+_Score = AbsoluteErrorScore | NormalizedErrorScore | QuantileRegressionScore
+"""Built-in score types accepted by calibrators and predictors."""
+
+_SCORE_REGISTRY: dict[str, type[_NonconformityScore]] = {
+    cls._kind: cls
+    for cls in (AbsoluteErrorScore, NormalizedErrorScore, QuantileRegressionScore)
+}
+"""Serialization names of the built-in score types."""
+
+
+def _strategy_kind(strategy: object, registry: Mapping[str, type]) -> str | None:
+    """Serialization name of a built-in strategy, or ``None`` for any other type."""
+    kind = getattr(type(strategy), "_kind", None)
+    return kind if registry.get(kind) is type(strategy) else None
+
+
+def _snapshot_strategy(strategy: object, registry: Mapping[str, type], what: str):
+    """Deep-copy a built-in strategy; raise ``TypeError`` for any other type."""
+    if _strategy_kind(strategy, registry) is None:
+        names = ", ".join(sorted(cls.__name__ for cls in registry.values()))
+        raise TypeError(
+            f"{what} must be one of: {names}; got {type(strategy).__name__}. "
+            "Subclasses are not supported."
+        )
+    return copy.deepcopy(strategy)
