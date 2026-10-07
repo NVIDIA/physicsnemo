@@ -59,11 +59,20 @@ def _coarsest_finfo(*tensors: Tensor) -> torch.finfo:
     return max((torch.finfo(t.dtype) for t in tensors), key=lambda fi: fi.eps)
 
 
-def _slack_threshold(threshold: Tensor, *dtype_sources: Tensor) -> Tensor:
-    """Float64 threshold, inflated so rounding cannot exclude an admitted target."""
+def _slack_threshold(
+    threshold: Tensor, *dtype_sources: Tensor, scale: Tensor | None = None
+) -> Tensor:
+    """Float64 threshold, inflated so rounding cannot exclude an admitted target.
+
+    ``scale`` multiplies the relative part only; the absolute ``tiny`` floor is
+    in output units and must not grow with it.
+    """
     t = threshold.to(torch.float64)
     fi = _coarsest_finfo(*dtype_sources)
-    return t + (t.abs() * (4.0 * fi.eps) + 4.0 * fi.tiny)
+    grown = t + t.abs() * (4.0 * fi.eps)
+    if scale is not None:
+        grown = grown * scale
+    return grown + 4.0 * fi.tiny
 
 
 def _outward_interval(
@@ -303,7 +312,7 @@ class NormalizedErrorScore(_NonconformityScore):
         sigma = clamp_min_floor(aux["sigma"], self.eps).to(torch.float64)
         p = prediction.to(torch.float64)
         # Sigma converts to float64 without rounding, so it needs no slack.
-        half = _slack_threshold(threshold, prediction) * sigma
+        half = _slack_threshold(threshold, prediction, scale=sigma)
         return _outward_interval(prediction, p - half, p + half)
 
 
