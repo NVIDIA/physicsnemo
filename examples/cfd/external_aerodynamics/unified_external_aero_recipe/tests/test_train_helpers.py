@@ -33,13 +33,12 @@ handling for:
   sums over the global sample count (used per step and per epoch); its
   single-process path must equal plain ``total_loss / n`` + per-leaf
   ``sum / n`` averaging.
-- :func:`train._step_failure_barrier` / :func:`train._raise_if_divergent_loss`:
-  loading failures rendezvous before DDP forward, and local forward/loss
-  failures rendezvous before backward.
-- :func:`train._finish_epoch` / :func:`train._reconcile_loaded_checkpoint`:
-  the epoch-mode scheduler advances before the checkpoint is written, so a
-  resumed scheduler/scaler state is restored; older checkpoints are migrated.
-  Stochastic trajectory fidelity remains unverified without RNG restoration.
+- :func:`train._fail_together`: a loading, forward, or divergent-loss
+  failure on one rank stops every rank, before DDP forward and before
+  backward.
+- :func:`train._finish_epoch`: the epoch-mode scheduler steps before the
+  checkpoint is written and the final epoch is always saved, so a resumed
+  run matches a continuous one.
 
 (The analogous tests for the shared, tensorboard-free
 :func:`utils.recursive_to_device` live in ``test_utils.py``, outside
@@ -67,10 +66,8 @@ pytest.importorskip("tensorboard")
 import train  # noqa: E402  -- monkeypatch module globals in focused tests
 from output_normalize import normalize_output_to_tensordict  # noqa: E402
 from train import (  # noqa: E402  -- after the skip guard
+    _fail_together,
     _finish_epoch,
-    _raise_if_divergent_loss,
-    _step_failure_barrier,
-    _reconcile_loaded_checkpoint,
     _reduce_and_average,
     _run_epoch,
     _walk_batch_for_logging,
@@ -264,224 +261,99 @@ class TestReduceAndAverage:
 
 
 ### ---------------------------------------------------------------------------
-### Loss divergence guard
+### Rank-failure rendezvous and divergence guard
 ### ---------------------------------------------------------------------------
 
 
-class TestLossDivergenceGuard:
-    """Tests for the synchronized, pre-backward loss guard."""
+def _single_rank() -> SimpleNamespace:
+    """Return a single-process stand-in for ``DistributedManager``."""
+    return SimpleNamespace(rank=0, world_size=1, device=torch.device("cpu"))
 
-    @staticmethod
-    def _dist_manager(*, world_size: int = 1) -> SimpleNamespace:
-        return SimpleNamespace(
-            rank=0, world_size=world_size, device=torch.device("cpu")
-        )
 
-    def test_finite_loss_at_threshold_passes(self):
-        """The optional threshold is strict: equality is still accepted."""
-        _raise_if_divergent_loss(
-            torch.tensor(1000.0),
-            mode="train",
-            epoch=3,
-            step=7,
-            threshold=1000.0,
-        )
-
-    @pytest.mark.parametrize(
-        ("loss", "message"),
-        [
-            (float("nan"), "non-finite"),
-            (float("inf"), "non-finite"),
-            (1000.1, "above 1000"),
-        ],
+def _run_test_epoch(
+    loader,
+    model,
+    *,
+    mode,
+    dist_manager,
+    threshold=None,
+    loss_calculator=None,
+    metric_calculator=None,
+):
+    """Run one :func:`train._run_epoch` on a one-field tensor model with SGD."""
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+    cfg = OmegaConf.create(
+        {
+            "precision": "float32",
+            "profile": False,
+            "training": {
+                "scheduler_update_mode": "epoch",
+                "divergence_loss_threshold": threshold,
+            },
+        }
     )
-    def test_local_nonfinite_or_threshold_failure_raises(self, loss, message):
-        """NaN, inf, and above-threshold losses each raise with a clear reason."""
-        with pytest.raises(RuntimeError, match=message):
-            _raise_if_divergent_loss(
-                torch.tensor(loss),
-                mode="val",
-                epoch=2,
-                step=4,
-                threshold=1000.0,
-            )
+    return _run_epoch(
+        loader,
+        model,
+        loss_calculator,
+        metric_calculator,
+        SimpleNamespace(info=lambda *args, **kwargs: None),
+        0,
+        cfg,
+        dist_manager,
+        mode=mode,
+        output_type="tensors",
+        target_config={"pressure": "scalar"},
+        optimizer=optimizer,
+        scheduler=torch.optim.lr_scheduler.StepLR(optimizer, step_size=1),
+    )
 
-    def test_barrier_is_noop_on_healthy_step(self):
-        """Single process, no error: the barrier returns without a collective."""
-        _step_failure_barrier(
-            None, mode="train", epoch=1, step=2, dist_manager=self._dist_manager()
+
+def test_fail_together_single_process():
+    """A healthy step is a no-op; a failure re-raises the original error with a note."""
+    where = "train epoch 5, step 9 (data loading)"
+    _fail_together(None, _single_rank(), where)
+
+    error = ValueError("corrupt sample")
+    with pytest.raises(ValueError) as exc:
+        _fail_together(error, _single_rank(), where)
+    assert exc.value is error
+    assert exc.value.__notes__ == [f"Raised during {where}."]
+
+
+@pytest.mark.parametrize(
+    ("mode", "loss_value", "threshold", "raises"),
+    [
+        ("train", 1000.0, 1000.0, False),
+        ("train", 1000.1, 1000.0, True),
+        ("train", float("nan"), 1000.0, True),
+        ("train", float("inf"), float("inf"), True),
+        ("train", 5.0, float("inf"), False),
+        ("val", float("nan"), 1000.0, False),
+    ],
+)
+def test_divergence_guard_stops_before_backward(
+    monkeypatch, mode, loss_value, threshold, raises
+):
+    """Bad training losses raise before backward; validation losses are unchecked."""
+    model = torch.nn.Linear(1, 1, bias=False)
+
+    def forward(*args, **kwargs):
+        loss = model.weight.sum() * 0.0 + loss_value
+        values = TensorDict({"loss/test": loss.detach()})
+        return loss, values, values.clone()
+
+    monkeypatch.setattr(train, "forward_pass", forward)
+    if not raises:
+        _run_test_epoch(
+            [{}], model, mode=mode, dist_manager=_single_rank(), threshold=threshold
         )
-
-    def test_barrier_reraises_local_error_with_cause(self):
-        """The failing rank's original exception is chained as ``__cause__``."""
-        original = ValueError("corrupt sample")
-        with pytest.raises(RuntimeError, match="step failed at epoch 5") as info:
-            _step_failure_barrier(
-                original,
-                mode="train",
-                epoch=5,
-                step=9,
-                dist_manager=self._dist_manager(),
-            )
-        assert info.value.__cause__ is original
-
-    def test_barrier_synchronizes_peer_failure(self, monkeypatch):
-        """A healthy rank raises too when the reduced any-rank flag is set."""
-
-        def report_remote_failure(flag, op):
-            assert op == torch.distributed.ReduceOp.MAX
-            flag.fill_(1)
-
-        monkeypatch.setattr(train.dist, "all_reduce", report_remote_failure)
-        with pytest.raises(RuntimeError, match="peer rank failed"):
-            _step_failure_barrier(
-                None,
-                mode="train",
-                epoch=0,
-                step=0,
-                dist_manager=self._dist_manager(world_size=2),
-            )
-
-    def test_barrier_healthy_when_no_rank_failed(self, monkeypatch):
-        """Multi-rank, all healthy: the reduced flag stays 0 and nothing raises."""
-
-        def report_no_failure(flag, op):
-            assert op == torch.distributed.ReduceOp.MAX
-
-        monkeypatch.setattr(train.dist, "all_reduce", report_no_failure)
-        _step_failure_barrier(
-            None,
-            mode="val",
-            epoch=0,
-            step=0,
-            dist_manager=self._dist_manager(world_size=2),
+        return
+    with pytest.raises(RuntimeError, match="divergence_loss_threshold"):
+        _run_test_epoch(
+            [{}], model, mode=mode, dist_manager=_single_rank(), threshold=threshold
         )
-
-    @pytest.mark.parametrize("mode", ["train", "val"])
-    def test_epoch_loop_checks_before_backward_in_both_modes(self, mode, monkeypatch):
-        """A NaN from forward aborts train and val; train creates no gradient."""
-        model = torch.nn.Linear(1, 1, bias=False)
-        optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1)
-        nan = torch.tensor(float("nan"))
-
-        def divergent_forward(*args, **kwargs):
-            loss = model.weight.sum() * nan
-            values = TensorDict({"loss/test": loss.detach()})
-            return loss, values, values.clone()
-
-        monkeypatch.setattr(train, "forward_pass", divergent_forward)
-        cfg = OmegaConf.create(
-            {
-                "precision": "float32",
-                "profile": False,
-                "training": {
-                    "scheduler_update_mode": "epoch",
-                    "divergence_loss_threshold": 1.0e6,
-                },
-            }
-        )
-        kwargs = {}
-        if mode == "train":
-            kwargs = {"optimizer": optimizer, "scheduler": scheduler}
-
-        with pytest.raises(RuntimeError, match=rf"{mode} step failed at epoch"):
-            _run_epoch(
-                [{}],
-                model,
-                None,
-                None,
-                SimpleNamespace(
-                    info=lambda *args, **kwargs: None,
-                    error=lambda *args, **kwargs: None,
-                ),
-                0,
-                cfg,
-                self._dist_manager(),
-                mode=mode,
-                output_type="tensors",
-                target_config={"pressure": "scalar"},
-                **kwargs,
-            )
-        assert model.weight.grad is None
-
-    def test_default_null_threshold_runs_no_per_step_guard(self, monkeypatch):
-        """With the knob unset, the loop must not pay the guard's host sync."""
-
-        def forbidden_guard(*args, **kwargs):
-            raise AssertionError("guard must not run when threshold is null")
-
-        def finite_forward(*args, **kwargs):
-            loss = torch.tensor(0.5, requires_grad=True)
-            values = TensorDict({"loss/test": loss.detach()})
-            return loss, values, values.clone()
-
-        monkeypatch.setattr(train, "_raise_if_divergent_loss", forbidden_guard)
-        monkeypatch.setattr(train, "forward_pass", finite_forward)
-        cfg = OmegaConf.create(
-            {
-                "precision": "float32",
-                "profile": False,
-                "training": {
-                    "scheduler_update_mode": "epoch",
-                    "divergence_loss_threshold": None,
-                },
-            }
-        )
-        _run_epoch(
-            [{}],
-            torch.nn.Linear(1, 1),
-            None,
-            None,
-            SimpleNamespace(
-                info=lambda *args, **kwargs: None, error=lambda *args, **kwargs: None
-            ),
-            0,
-            cfg,
-            self._dist_manager(),
-            mode="val",
-            output_type="tensors",
-            target_config={"pressure": "scalar"},
-        )
-
-    def test_invalid_threshold_fails_before_forward(self, monkeypatch):
-        """A non-positive threshold is a config error caught before any step runs."""
-        called = False
-
-        def forward(*args, **kwargs):
-            nonlocal called
-            called = True
-            raise AssertionError("forward should not run")
-
-        monkeypatch.setattr(train, "forward_pass", forward)
-        cfg = OmegaConf.create(
-            {
-                "precision": "float32",
-                "profile": False,
-                "training": {
-                    "scheduler_update_mode": "epoch",
-                    "divergence_loss_threshold": 0,
-                },
-            }
-        )
-        with pytest.raises(ValueError, match="must be positive"):
-            _run_epoch(
-                [{}],
-                torch.nn.Linear(1, 1),
-                None,
-                None,
-                SimpleNamespace(
-                    info=lambda *args, **kwargs: None,
-                    error=lambda *args, **kwargs: None,
-                ),
-                0,
-                cfg,
-                self._dist_manager(),
-                mode="val",
-                output_type="tensors",
-                target_config={"pressure": "scalar"},
-            )
-        assert not called
+    assert model.weight.grad is None
 
 
 class _TwoStepLoader:
@@ -504,8 +376,41 @@ class _TwoStepLoader:
         yield self.batch
 
 
-def _ddp_loading_failure_worker(rank, store_uri, mode, failing_rank):
-    """Exercise the real epoch loop with a rank-local second-load failure."""
+class _FlakyLinear(torch.nn.Module):
+    """Linear model whose second forward raises or returns NaN when asked to."""
+
+    def __init__(self, failure):
+        """Store the failure (``None``, ``"raise"``, or ``"nan"``) for step 1."""
+        super().__init__()
+        self.linear = torch.nn.Linear(2, 1)
+        ### DDP broadcasts buffers at the start of every forward, a collective
+        ### that a rank which failed during loading must not leave unmatched.
+        self.register_buffer("marker", torch.ones(1))
+        self.failure = failure
+        self.calls = 0
+
+    def forward(self, input):
+        """Apply the linear layer, failing on the second call if configured."""
+        self.calls += 1
+        out = self.linear(input)
+        if self.calls == 2 and self.failure == "raise":
+            raise RuntimeError("simulated forward failure")
+        if self.calls == 2 and self.failure == "nan":
+            out = out * float("nan")
+        return out
+
+
+### (failing phase, mode, failing rank); the divergence guard is train-only.
+_DDP_FAILURES = [
+    (phase, mode, failing_rank)
+    for phase in ("loading", "forward", "divergence")
+    for mode in (("train",) if phase == "divergence" else ("train", "val"))
+    for failing_rank in (0, 1)
+]
+
+
+def _ddp_failure_worker(rank, store_uri):
+    """Run every ``_DDP_FAILURES`` case through the real epoch loop."""
     torch.set_num_threads(1)
     train.dist.init_process_group(
         "gloo",
@@ -514,62 +419,56 @@ def _ddp_loading_failure_worker(rank, store_uri, mode, failing_rank):
         world_size=2,
         timeout=timedelta(seconds=10),
     )
+    batch = {
+        "forward_kwargs": {"input": torch.ones(1, 3, 2)},
+        "targets": TensorDict({"pressure": torch.ones(1, 3)}, batch_size=[1, 3]),
+    }
+    dist_manager = SimpleNamespace(rank=rank, world_size=2, device=torch.device("cpu"))
     try:
-        base = torch.nn.Linear(2, 1)
-        base.register_buffer("marker", torch.ones(1))
-        model = torch.nn.parallel.DistributedDataParallel(base)
-        optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1)
-        batch = {
-            "forward_kwargs": {"input": torch.ones(1, 3, 2)},
-            "targets": TensorDict({"pressure": torch.ones(1, 3)}, batch_size=[1, 3]),
-        }
-        cfg = OmegaConf.create(
-            {
-                "precision": "float32",
-                "profile": False,
-                "training": {"scheduler_update_mode": "epoch"},
-            }
-        )
-        expected = (
-            "step failed at epoch 0, step 1"
-            if rank == failing_rank
-            else "peer rank failed during"
-        )
-        with pytest.raises(RuntimeError, match=expected) as exc:
-            _run_epoch(
-                _TwoStepLoader(batch, fail=rank == failing_rank),
-                model,
-                train.LossCalculator({"pressure": "scalar"}, loss_type="mse"),
-                train.MetricCalculator({"pressure": "scalar"}),
-                SimpleNamespace(info=lambda *a, **k: None, error=lambda *a, **k: None),
-                0,
-                cfg,
-                SimpleNamespace(rank=rank, world_size=2, device=torch.device("cpu")),
-                mode=mode,
-                output_type="tensors",
-                target_config={"pressure": "scalar"},
-                optimizer=optimizer,
-                scheduler=scheduler,
-            )
-        assert "data loading" in str(exc.value)
-        if rank == failing_rank:
-            assert isinstance(exc.value.__cause__, ValueError)
-            assert str(exc.value.__cause__) == "corrupt second sample"
-        else:
-            assert exc.value.__cause__ is None
+        for phase, mode, failing_rank in _DDP_FAILURES:
+            fails = rank == failing_rank
+            failure = {"forward": "raise", "divergence": "nan"}.get(phase)
+            stage = "data loading" if phase == "loading" else "forward/loss"
+            where = f"{mode} epoch 0, step 1 ({stage})"
+            with pytest.raises((ValueError, RuntimeError)) as exc:
+                _run_test_epoch(
+                    _TwoStepLoader(batch, fail=fails and phase == "loading"),
+                    torch.nn.parallel.DistributedDataParallel(
+                        _FlakyLinear(failure if fails else None)
+                    ),
+                    mode=mode,
+                    dist_manager=dist_manager,
+                    threshold=1.0e6,
+                    loss_calculator=train.LossCalculator(
+                        {"pressure": "scalar"}, loss_type="mse"
+                    ),
+                    metric_calculator=train.MetricCalculator({"pressure": "scalar"}),
+                )
+            if fails:
+                expected = {
+                    "loading": "corrupt second sample",
+                    "forward": "simulated forward failure",
+                    "divergence": "divergence_loss_threshold",
+                }[phase]
+                assert expected in str(exc.value)
+                assert exc.value.__notes__ == [f"Raised during {where}."]
+            else:
+                assert type(exc.value) is RuntimeError
+                assert str(exc.value) == f"rank {failing_rank} failed during {where}"
     finally:
         train.dist.destroy_process_group()
 
 
 @pytest.mark.skipif(not torch.distributed.is_gloo_available(), reason="requires Gloo")
-@pytest.mark.parametrize("mode", ["train", "val"])
-@pytest.mark.parametrize("failing_rank", [0, 1])
-def test_ddp_loading_failure_precedes_forward(tmp_path, mode, failing_rank):
-    """Both ranks raise the intended error instead of a mismatched-collective timeout."""
+def test_ddp_failure_on_one_rank_stops_both(tmp_path):
+    """Loading, forward, and divergence failures on either rank stop both ranks.
+
+    One spawn runs every case: each failure leaves both ranks at the same
+    rendezvous, so the process group stays usable for the next case.
+    """
     torch.multiprocessing.spawn(
-        _ddp_loading_failure_worker,
-        args=((tmp_path / "store").as_uri(), mode, failing_rank),
+        _ddp_failure_worker,
+        args=((tmp_path / "store").as_uri(),),
         nprocs=2,
         join=True,
     )
@@ -581,7 +480,7 @@ def test_ddp_loading_failure_precedes_forward(tmp_path, mode, failing_rank):
 
 
 class TestFinishEpoch:
-    """Tests for scheduler/checkpoint ordering and terminal persistence."""
+    """Tests for scheduler/checkpoint ordering and the final checkpoint."""
 
     @staticmethod
     def _cfg(*, save_interval: int, scheduler_update_mode: str = "epoch"):
@@ -594,55 +493,31 @@ class TestFinishEpoch:
             }
         )
 
-    def test_scheduler_advances_before_checkpoint_and_epoch_is_next(self, monkeypatch):
-        """Epoch-mode scheduler steps first; the saved epoch is the resume index."""
+    def test_scheduler_steps_before_checkpoint(self, monkeypatch):
+        """The epoch-mode scheduler steps first; the index counts completed epochs."""
         events = []
-        scheduler = SimpleNamespace(step=lambda: events.append("scheduler"))
-
-        def save(**kwargs):
-            metadata = kwargs["metadata"]["unified_external_aero_recipe"]
-            events.append(
-                ("checkpoint", kwargs["epoch"], metadata["scaler_state_saved"])
-            )
-
-        monkeypatch.setattr(train, "save_checkpoint", save)
-        saved = _finish_epoch(
-            epoch=4,
-            num_epochs=5,
-            cfg=self._cfg(save_interval=2),
-            scheduler=scheduler,
-            ckpt_args={"path": "/unused"},
-            normalizer=None,
-            is_rank0=True,
-        )
-
-        assert saved
-        ### Epoch 4 is both periodic and terminal, but is persisted once as
-        ### five completed epochs / the next resume index.
-        assert events == ["scheduler", ("checkpoint", 5, False)]
-
-    def test_nonperiodic_terminal_is_always_saved(self, monkeypatch):
-        """The last epoch is checkpointed even when it is off the periodic cadence."""
-        saved_epochs = []
         monkeypatch.setattr(
             train,
             "save_checkpoint",
-            lambda **kwargs: saved_epochs.append(kwargs["epoch"]),
+            lambda **kwargs: events.append(("save", kwargs["epoch"])),
         )
-        saved = _finish_epoch(
-            epoch=4,
-            num_epochs=5,
-            cfg=self._cfg(save_interval=3, scheduler_update_mode="step"),
-            scheduler=SimpleNamespace(step=lambda: pytest.fail("unexpected step")),
+        _finish_epoch(
+            epoch=0,
+            num_epochs=10,
+            cfg=self._cfg(save_interval=5),
+            scheduler=SimpleNamespace(step=lambda: events.append("step")),
             ckpt_args={"path": "/unused"},
             normalizer=None,
             is_rank0=True,
         )
-        assert saved
-        assert saved_epochs == [5]
+        assert events == ["step", ("save", 1)]
 
-    def test_existing_periodic_cadence_is_preserved(self, monkeypatch):
-        """The historical epoch-0 save remains checkpoint 1."""
+    @pytest.mark.parametrize(
+        ("epoch", "is_rank0", "saved"),
+        [(0, True, [1]), (24, True, []), (499, True, [500]), (499, False, [])],
+    )
+    def test_saves_periodic_and_final_epochs(self, monkeypatch, epoch, is_rank0, saved):
+        """Rank 0 saves on the periodic cadence and after the final epoch."""
         saved_epochs = []
         monkeypatch.setattr(
             train,
@@ -650,217 +525,73 @@ class TestFinishEpoch:
             lambda **kwargs: saved_epochs.append(kwargs["epoch"]),
         )
         _finish_epoch(
-            epoch=0,
+            epoch=epoch,
             num_epochs=500,
             cfg=self._cfg(save_interval=25, scheduler_update_mode="step"),
             scheduler=SimpleNamespace(step=lambda: pytest.fail("unexpected step")),
             ckpt_args={"path": "/unused"},
             normalizer=None,
-            is_rank0=True,
+            is_rank0=is_rank0,
         )
-        assert saved_epochs == [1]
+        assert saved_epochs == saved
 
-    @pytest.mark.parametrize("dropout", [0.0, 0.5])
-    def test_real_save_resume_reports_state_fidelity(self, tmp_path, dropout):
-        """Restore scheduler state without promising stochastic trajectory fidelity."""
+    def test_resume_matches_continuous_training(self, tmp_path):
+        """Saving after three epochs and resuming matches six continuous epochs."""
         features = torch.tensor(
             [[0.5, -1.0], [1.5, 0.25], [-0.75, 0.4]], dtype=torch.float64
         )
         targets = torch.tensor([[0.2], [-0.1], [0.7]], dtype=torch.float64)
 
-        def build_state():
-            torch.manual_seed(1701)
-            model = torch.nn.Sequential(
-                torch.nn.Linear(2, 4, dtype=torch.float64),
-                torch.nn.Dropout(dropout),
-                torch.nn.Linear(4, 1, dtype=torch.float64),
-            )
-            optimizer = torch.optim.AdamW(
-                model.parameters(), lr=0.03, weight_decay=0.01
-            )
+        def build():
+            torch.manual_seed(0)
+            model = torch.nn.Linear(2, 1, dtype=torch.float64)
+            optimizer = torch.optim.AdamW(model.parameters(), lr=0.03)
             scheduler = torch.optim.lr_scheduler.StepLR(
                 optimizer, step_size=3, gamma=0.2
             )
             return model, optimizer, scheduler
 
-        def step_epoch(model, optimizer, scheduler, epoch, checkpoint_dir=None):
-            optimizer.zero_grad()
-            loss = (model(features) - targets).square().sum()
-            loss.backward()
-            optimizer.step()
-            _finish_epoch(
-                epoch=epoch,
-                num_epochs=3 if checkpoint_dir is not None else 6,
-                cfg=self._cfg(save_interval=1000),
-                scheduler=scheduler,
-                ckpt_args={
-                    "path": checkpoint_dir or tmp_path / "unused",
-                    "models": model,
-                    "optimizer": optimizer,
-                    "scheduler": scheduler,
-                },
-                normalizer=None,
-                is_rank0=checkpoint_dir is not None,
-            )
-            return (
-                loss.detach().clone(),
-                torch.nn.utils.parameters_to_vector(model.parameters())
-                .detach()
-                .clone(),
-                optimizer.param_groups[0]["lr"],
-            )
+        def train_epochs(model, optimizer, scheduler, epochs, save_dir=None):
+            lrs = []
+            for epoch in epochs:
+                lrs.append(optimizer.param_groups[0]["lr"])
+                optimizer.zero_grad()
+                (model(features) - targets).square().sum().backward()
+                optimizer.step()
+                _finish_epoch(
+                    epoch=epoch,
+                    num_epochs=epochs.stop,
+                    cfg=self._cfg(save_interval=100),
+                    scheduler=scheduler,
+                    ckpt_args={
+                        "path": str(save_dir),
+                        "models": model,
+                        "optimizer": optimizer,
+                        "scheduler": scheduler,
+                    },
+                    normalizer=None,
+                    is_rank0=save_dir is not None,
+                )
+            return lrs
 
-        continuous_model, continuous_opt, continuous_sched = build_state()
-        continuous_history = [
-            step_epoch(continuous_model, continuous_opt, continuous_sched, epoch)
-            for epoch in range(6)
-        ]
+        model, optimizer, scheduler = build()
+        expected_lrs = train_epochs(model, optimizer, scheduler, range(6))
 
-        first_model, first_opt, first_sched = build_state()
-        checkpoint_dir = tmp_path / "resume"
-        resumed_history = [
-            step_epoch(
-                first_model,
-                first_opt,
-                first_sched,
-                epoch,
-                checkpoint_dir if epoch == 2 else None,
-            )
-            for epoch in range(3)
-        ]
-        resumed_model, resumed_opt, resumed_sched = build_state()
-        metadata = {}
-        loaded_epoch = train.load_checkpoint(
-            path=checkpoint_dir,
-            models=resumed_model,
-            optimizer=resumed_opt,
-            scheduler=resumed_sched,
-            metadata_dict=metadata,
-            device="cpu",
-        )
-        assert loaded_epoch == 3
-        report = _reconcile_loaded_checkpoint(
-            loaded_epoch=loaded_epoch,
-            metadata=metadata,
-            scheduler=resumed_sched,
-            scheduler_update_mode="epoch",
-            scaler=None,
-            logger=SimpleNamespace(warning=lambda message: pytest.fail(message)),
-        )
-        assert not report["legacy_checkpoint"]
-        assert report["scheduler_scaler_state_restored"]
-        assert report["trajectory_exactness"] == "unverified"
-        assert "RNG" in report["trajectory_exactness_reason"]
-        assert "resume_exact" not in report
-        resumed_history.extend(
-            step_epoch(resumed_model, resumed_opt, resumed_sched, epoch)
-            for epoch in range(loaded_epoch, 6)
-        )
-
-        assert continuous_sched.state_dict() == resumed_sched.state_dict()
-        for epoch, (expected, actual) in enumerate(
-            zip(continuous_history, resumed_history, strict=True)
-        ):
-            assert expected[2] == actual[2]
-            if dropout == 0.0 or epoch < loaded_epoch:
-                assert torch.equal(expected[0], actual[0])
-                assert torch.equal(expected[1], actual[1])
-        if dropout:
-            assert not torch.equal(continuous_history[-1][1], resumed_history[-1][1])
-
-    def test_no_checkpoint_does_not_report_restored_state(self):
-        """A fresh run has no restored state or trajectory-fidelity assessment."""
-        report = _reconcile_loaded_checkpoint(
-            loaded_epoch=0,
-            metadata={},
-            scheduler=SimpleNamespace(step=lambda: pytest.fail("unexpected step")),
-            scheduler_update_mode="epoch",
-            scaler=None,
-            logger=SimpleNamespace(warning=lambda message: pytest.fail(message)),
-        )
-        assert not report["checkpoint_found"]
-        assert not report["scheduler_scaler_state_restored"]
-        assert report["trajectory_exactness"] == "not_applicable"
-
-    def test_legacy_epoch_checkpoint_scheduler_is_migrated(self, tmp_path):
-        """Old pre-step scheduler state is advanced to the continuous state."""
-        model = torch.nn.Linear(1, 1)
-        optimizer = torch.optim.SGD(model.parameters(), lr=1.0)
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=2, gamma=0.1)
-
-        ### Reproduce the old ordering after two completed epochs: epoch 1
-        ### stepped, then checkpoint 2 was written before the epoch-2 step.
-        optimizer.step()
-        scheduler.step()
-        train.save_checkpoint(
-            path=tmp_path,
-            models=model,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            epoch=2,
-        )
-
-        resumed_model = torch.nn.Linear(1, 1)
-        resumed_optimizer = torch.optim.SGD(resumed_model.parameters(), lr=1.0)
-        resumed_scheduler = torch.optim.lr_scheduler.StepLR(
-            resumed_optimizer, step_size=2, gamma=0.1
-        )
-        metadata = {}
-        loaded_epoch = train.load_checkpoint(
-            path=tmp_path,
+        lrs = train_epochs(*build(), range(3), save_dir=tmp_path)
+        resumed_model, resumed_optimizer, resumed_scheduler = build()
+        start = train.load_checkpoint(
+            path=str(tmp_path),
             models=resumed_model,
             optimizer=resumed_optimizer,
             scheduler=resumed_scheduler,
-            metadata_dict=metadata,
             device="cpu",
         )
-        messages = []
-        report = _reconcile_loaded_checkpoint(
-            loaded_epoch=loaded_epoch,
-            metadata=metadata,
-            scheduler=resumed_scheduler,
-            scheduler_update_mode="epoch",
-            scaler=None,
-            logger=SimpleNamespace(warning=messages.append),
+        lrs += train_epochs(
+            resumed_model, resumed_optimizer, resumed_scheduler, range(start, 6)
         )
 
-        assert resumed_scheduler.last_epoch == 2
-        assert resumed_optimizer.param_groups[0]["lr"] == pytest.approx(0.1)
-        assert report["legacy_scheduler_step_applied"]
-        assert report["scheduler_scaler_state_restored"]
-        assert report["trajectory_exactness"] == "unverified"
-        assert len(messages) == 1
-
-    def test_legacy_fp16_resume_reports_missing_scaler(self):
-        """A pre-metadata checkpoint resumed under fp16 is flagged as non-exact."""
-        messages = []
-        scaler = SimpleNamespace()
-        report = _reconcile_loaded_checkpoint(
-            loaded_epoch=25,
-            metadata={},
-            scheduler=SimpleNamespace(step=lambda: None),
-            scheduler_update_mode="step",
-            scaler=scaler,
-            logger=SimpleNamespace(warning=messages.append),
-        )
-
-        assert not report["scheduler_scaler_state_restored"]
-        assert "scaler" in report["missing_state_reason"]
-        assert len(messages) == 1
-
-    def test_metadata_checkpoint_reports_missing_scaler(self):
-        """A post-fix fp32 checkpoint resumed under fp16 is flagged, not migrated."""
-        messages = []
-        report = _reconcile_loaded_checkpoint(
-            loaded_epoch=4,
-            metadata={"unified_external_aero_recipe": {"scaler_state_saved": False}},
-            scheduler=SimpleNamespace(step=lambda: pytest.fail("unexpected step")),
-            scheduler_update_mode="epoch",
-            scaler=SimpleNamespace(),
-            logger=SimpleNamespace(warning=messages.append),
-        )
-
-        assert not report["legacy_checkpoint"]
-        assert not report["legacy_scheduler_step_applied"]
-        assert not report["scheduler_scaler_state_restored"]
-        assert len(messages) == 1
+        assert start == 3
+        assert lrs == expected_lrs
+        assert resumed_scheduler.state_dict() == scheduler.state_dict()
+        assert torch.equal(resumed_model.weight, model.weight)
+        assert torch.equal(resumed_model.bias, model.bias)

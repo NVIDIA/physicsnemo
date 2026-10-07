@@ -36,11 +36,9 @@ training:
   loss_type: "huber"
   batch_size: 1
   scheduler_update_mode: "epoch"
-  # Each step synchronizes loading/transfer errors before DDP forward and
-  # forward/loss errors before backward. Failures inside model collectives
-  # or backward still rely on the process-group timeout. Set a positive
-  # value to also reject non-finite losses or losses above this value
-  # (adds one host sync per step for the loss read).
+  # Stop training when a training loss is non-finite or above this value
+  # (.inf checks only for non-finite losses). Enabling the check adds one
+  # host sync per step; null disables it.
   divergence_loss_threshold: null
   optimizer:
     weight_decay: 1.0e-4
