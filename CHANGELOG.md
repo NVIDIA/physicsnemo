@@ -71,6 +71,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exist. A field is declared as a `RankSpec` or a mapping of values,
   `{"rank": n}` (YAML: `pressure: {rank: 0}`); a mapping of mappings is a
   nested group. Integer leaves are no longer accepted.
+- Vertex angles, solid angles and FEM cotangent weights use closed-form 2x2
+  and 3x3 determinants and inverses instead of batched `torch.linalg` calls on
+  millions of tiny matrices. On a GB300, vertex angles, Gaussian curvature and
+  quality metrics of planar and tetrahedral meshes are 30-130x faster with 28%
+  less peak memory, and the DEC Laplacian, mean curvature and Laplacian
+  smoothing are 1.9-3.2x faster (26-120x on CPU).
 - GLOBE's field declarations are renamed after the schemas they hold:
   `output_field_ranks`, `boundary_source_data_ranks` and `global_data_ranks`
   become `output_schema`, `boundary_source_schemas` and `global_schema`
