@@ -152,15 +152,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Checkpoint loading resolves model weights at the selected training checkpoint's
+  filename index, preventing resumes that mix epochs. Missing required weights
+  raise before any model or training state is restored. Distributed loads validate
+  on every rank using rank 0's file lookup.
 - Mesh slicing reuses integer indices across connectivity, fields, and caches
   to avoid repeated CUDA synchronization for the same boolean mask.
   Point slicing skips mask processing when the output has no cells because
   the input has no cells or the point selection is empty.
-
 - Triangle areas use direct area components and a rescaled norm, preserving
   thin faces and their quadrature measures without Gram cancellation or
   overflow/underflow in the norm.
-
 - Unified external aero recipe: near-wall SDF normals no longer flip inward
   from float32 roundoff. Stored signed distances are unchanged.
 - Fixes mesh dtype handling: preserves integer-coordinate precision, normalizes
@@ -198,6 +200,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shift-and-mask steps. CUDA no longer materializes every bit as int64 (about
   1 kB per point, 55 GB at 50M cells); temporaries are about 72 B per point in
   3D, and the step is about 4x faster on large inputs. Codes are unchanged.
+- `sample_data_at_points`, `find_containing_cells`, and
+  `find_all_containing_cells` no longer miss the containing cell when a query
+  point has more than 32 BVH candidate cells (for example, near a vertex shared
+  by many triangles, or with a prebuilt BVH with `leaf_size > 1`). The BVH
+  candidate search used by these functions no longer caps candidates per point.
 
 ### Security
 
