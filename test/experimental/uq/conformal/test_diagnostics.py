@@ -256,6 +256,16 @@ def test_update_syncs_once_and_accepts_a_second_device(monkeypatch, device, tier
     assert accumulator.finalize() == reference.finalize()
 
 
+def test_update_does_not_keep_the_autograd_graph():
+    accumulator = _accumulator()
+    prediction = torch.zeros(3, requires_grad=True) * 2.0
+    lo, hi = prediction - 1.0, prediction + 1.0
+    accumulator.update(lo, hi, torch.zeros(3))
+    for counters in accumulator._counters.values():
+        assert not counters.width_sum.requires_grad
+    assert all(not hits.requires_grad for hits in accumulator._element_hits.values())
+
+
 def test_accumulator_constructor_rejects_bare_string_keys():
     with pytest.raises(TypeError, match="not the string"):
         CoverageAccumulator(tier="cellwise", alpha=0.5, n_cal=3, keys="p")

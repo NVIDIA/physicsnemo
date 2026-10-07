@@ -235,9 +235,10 @@ class CoverageAccumulator:
         """
         staged = []
         for key in self._counters:
-            lo_field = containers["lo"][key]
-            hi_field = containers["hi"][key]
-            target_field = containers["target"][key]
+            # Detach so the running totals never keep the model's autograd graph.
+            lo_field = containers["lo"][key].detach()
+            hi_field = containers["hi"][key].detach()
+            target_field = containers["target"][key].detach()
             if target_field.numel() == 0:
                 raise ValueError(f"{_field_label(key)}: empty target tensor.")
             check_exact_shape(key, "lo", lo_field, "target", target_field)
