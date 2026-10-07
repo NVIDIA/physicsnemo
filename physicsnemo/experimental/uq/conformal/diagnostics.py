@@ -89,17 +89,19 @@ class CoverageAccumulator:
       inside its interval.
     - ``"functional"`` (``FunctionalBandCalibrator``): how often a sample
       lies inside its band at every point.
+    - ``"risk_control"`` (``RiskControlCalibrator``): the mean fraction of
+      points per sample that fall outside the band.
 
     Call :meth:`update` once per held-out sample, then :meth:`finalize` for
     the report.
 
     Parameters
     ----------
-    tier : {"cellwise", "functional"}
+    tier : {"cellwise", "functional", "risk_control"}
         The predictor's ``tier``, naming the calibrator that produced it;
         selects the reported statistic.
     alpha : float
-        The predictor's target miscoverage level. Reported in the
+        The predictor's target miscoverage (or risk) level. Reported in the
         metadata and used to count cellwise elements at or above target
         coverage.
     n_cal : int
@@ -284,6 +286,10 @@ class CoverageAccumulator:
                         )
                 case "functional":
                     coverage = element_covered.all().to(torch.float64)
+                case "risk_control":
+                    points = torch.atleast_1d(element_covered)
+                    point_covered = points.reshape(points.shape[0], -1).all(dim=1)
+                    coverage = point_covered.to(torch.float64).mean()
                 case _:
                     raise ValueError(
                         f"tier must be one of {TIERS}, got {self._tier!r}."
@@ -331,7 +337,7 @@ class CoverageAccumulator:
         dict
             ``{"meta": {...}, "fields": {<field>: {...}}}``. ``meta`` holds
             ``tier``, ``alpha``, ``n_cal``, and ``target_coverage``
-            (``1 - alpha``).
+            (``1 - alpha``), or ``target_risk`` (``alpha``) for risk control.
             ``fields`` has one entry per calibrated field (key ``"tensor"``
             for plain tensors) with ``n_samples``, ``mean_interval_width``
             (mean width over every element of every sample), and the tier's
@@ -342,6 +348,8 @@ class CoverageAccumulator:
               fraction of elements whose coverage is at least the target).
             - functional: ``whole_field_coverage``, the fraction of samples
               inside the band at every point.
+            - risk control: ``empirical_mean_risk``, the mean fraction of
+              points per sample with any value outside the interval.
 
             Statistics are ``None`` before the first :meth:`update`.
         """
@@ -349,8 +357,11 @@ class CoverageAccumulator:
             "tier": self._tier,
             "alpha": self._alpha,
             "n_cal": self._n_cal,
-            "target_coverage": 1.0 - self._alpha,
         }
+        if self._tier == "risk_control":
+            metadata["target_risk"] = self._alpha
+        else:
+            metadata["target_coverage"] = 1.0 - self._alpha
         fields: dict = {}
         for key, counters in self._counters.items():
             n = counters.n_samples
@@ -380,6 +391,10 @@ class CoverageAccumulator:
                 case "functional":
                     entry["whole_field_coverage"] = (
                         float(counters.coverage_sum) / n if n else None
+                    )
+                case "risk_control":
+                    entry["empirical_mean_risk"] = (
+                        1.0 - float(counters.coverage_sum) / n if n else None
                     )
             fields["tensor" if key == TENSOR_KEY else key] = entry
         return {"meta": metadata, "fields": fields}

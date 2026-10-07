@@ -174,7 +174,8 @@ def alpha_as_fraction(alpha: float) -> Fraction:
 def require_feasible_alpha(n_cal: int, alpha: float) -> Fraction:
     """Require ``alpha >= 1 / (n_cal + 1)``; return ``alpha`` as an exact fraction.
 
-    Below that, the quantile rank exceeds ``n_cal``.
+    Below that, the quantile rank exceeds ``n_cal`` and the CRC bound cannot be
+    met even at zero risk.
     """
     alpha_exact = alpha_as_fraction(alpha)
     n_cal = validate_n_cal(n_cal)
@@ -241,7 +242,7 @@ def cast_directed(t: Tensor, dtype: torch.dtype, *, up: bool) -> Tensor:
     return torch.where(wrong_side, bumped, cast)
 
 
-Tier = Literal["cellwise", "functional"]
+Tier = Literal["cellwise", "functional", "risk_control"]
 """Guarantee tier names."""
 
 TIERS: tuple[str, ...] = get_args(Tier)

@@ -32,7 +32,7 @@ from physicsnemo.experimental.uq.conformal._utils import points_fingerprint
 from test.experimental.uq.conformal._helpers import (
     TIERS,
     fit,
-    fitted_functional,
+    fitted_risk,
     make_predictor,
 )
 
@@ -132,7 +132,7 @@ def test_provenance_is_read_only_snapshotted_and_survives_resave(tmp_path):
         "identity": {"dataset": "drivaer", "checkpoint": "/runs/x"},
         "audit": [True, None, 300, 0.25],
     }
-    predictor = fitted_functional()
+    predictor = fitted_risk()
     with pytest.raises(AttributeError, match="no setter"):
         predictor.provenance = provenance
 
@@ -151,7 +151,7 @@ def test_provenance_is_read_only_snapshotted_and_survives_resave(tmp_path):
 
 
 def test_non_json_provenance_fails_closed_without_replacing_artifact(tmp_path):
-    predictor = fitted_functional()
+    predictor = fitted_risk()
     path = tmp_path / "artifact.pt"
     predictor.save(path, provenance={"note": "valid"})
     original_bytes = path.read_bytes()
@@ -191,7 +191,7 @@ def test_all_builtin_strategies_are_standalone_artifacts(
 
 
 BASES = {
-    "functional": fitted_functional,
+    "risk": fitted_risk,
     "normalized": lambda: make_predictor(
         tier="functional", score=NormalizedErrorScore()
     ),
@@ -216,7 +216,7 @@ def _delete(key):
 
 _CTOR = "Invalid constructor arguments"
 # fmt: off
-# name: (mutator, load-error regex[, base predictor]); base defaults to "functional".
+# name: (mutator, load-error regex[, base predictor]); base defaults to "risk".
 # A mutator may return a replacement payload, otherwise it edits in place.
 CORRUPTIONS = {
     "not_an_artifact": (lambda p: {"weights": torch.ones(3)}, "[Nn]ot a conformal predictor artifact"),
@@ -253,7 +253,7 @@ CORRUPTIONS = {
 def test_corrupted_artifacts_fail_to_load_with_a_named_reason(tmp_path, corruption):
     mutate, match, *base = CORRUPTIONS[corruption]
     path = tmp_path / "artifact.pt"
-    BASES[base[0] if base else "functional"]().save(path)
+    BASES[base[0] if base else "risk"]().save(path)
     payload = torch.load(path, weights_only=True)
     payload = mutate(payload) or payload
     torch.save(payload, path)
@@ -278,7 +278,7 @@ def test_load_refuses_pickled_code(tmp_path):
 
 
 def test_atomic_save_preserves_previous_artifact(tmp_path, monkeypatch):
-    predictor = fitted_functional()
+    predictor = fitted_risk()
     path = tmp_path / "artifact.pt"
     predictor.save(path, provenance={"epoch": 1})
     original_bytes = path.read_bytes()
@@ -297,10 +297,10 @@ def test_atomic_save_preserves_previous_artifact(tmp_path, monkeypatch):
 
 def test_atomic_save_semantically_validates_before_replace(tmp_path):
     path = tmp_path / "artifact.pt"
-    fitted_functional().save(path, provenance={"epoch": 1})
+    fitted_risk().save(path, provenance={"epoch": 1})
     original_bytes = path.read_bytes()
 
-    invalid = fitted_functional(torch.Generator().manual_seed(19))
+    invalid = fitted_risk(torch.Generator().manual_seed(19))
     invalid._thresholds_by_key["__tensor__"].fill_(float("inf"))
     with pytest.raises(ValueError, match=f"at {re.escape(str(path))}: .*non-finite"):
         invalid.save(path, provenance={"epoch": 2})

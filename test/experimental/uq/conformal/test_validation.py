@@ -51,7 +51,7 @@ from test.experimental.uq.conformal._helpers import (
     CALIBRATORS,
     TIERS,
     fit,
-    fitted_functional,
+    fitted_risk,
 )
 
 _F = torch.zeros(3)
@@ -184,12 +184,12 @@ def _calibrator_entry(tier):
 
 
 def _predictor_entry():
-    predictor = fitted_functional()
+    predictor = fitted_risk()
     return predictor.predict_interval, lambda: predictor.thresholds
 
 
 def _accumulator_entry():
-    accumulator = fitted_functional().coverage_accumulator()
+    accumulator = fitted_risk().coverage_accumulator()
     accumulator.update(-torch.ones(3), torch.ones(3), _F)
     return (
         lambda bad: accumulator.update(-torch.ones(3), torch.ones(3), bad),
@@ -219,7 +219,7 @@ def test_entry_points_reject_bad_inputs_transactionally(entry_point, bad_kind):
 
 
 def test_field_mode_entry_points_reject_plain_tensors():
-    predictor, _ = fit("functional", n_samples=10, shape=(3,), fields=["p"])
+    predictor, _ = fit("risk_control", n_samples=10, shape=(3,), fields=["p"])
     accumulator = predictor.coverage_accumulator()
     message = r"calibrated on TensorDict fields \['p'\]; pass {} as a TensorDict"
     with pytest.raises(TypeError, match=message.format("prediction")):
@@ -230,7 +230,7 @@ def test_field_mode_entry_points_reject_plain_tensors():
 
 def test_tensordict_inputs_take_the_same_validation_path():
     """Field containers route each field through the shared validators."""
-    calibrator = CALIBRATORS["functional"](AbsoluteErrorScore(), alpha=0.5)
+    calibrator = CALIBRATORS["risk_control"](AbsoluteErrorScore(), alpha=0.5)
     bad = TensorDict({"bad": torch.full((3,), torch.nan)}, batch_size=[])
     with pytest.raises(ValueError, match="Field 'bad': 3 non-finite"):
         calibrator.update(bad, bad)

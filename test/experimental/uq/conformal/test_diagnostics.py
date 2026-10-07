@@ -27,16 +27,17 @@ from physicsnemo.experimental.uq.conformal import (
     CoverageAccumulator,
     FunctionalBandCalibrator,
     QuantileRegressionScore,
+    RiskControlCalibrator,
 )
 from test.experimental.uq.conformal._helpers import (
     TIERS,
     count_syncs,
     fit,
-    fitted_functional,
+    fitted_risk,
 )
 
 
-def _accumulator(tier="functional", **fit_kwargs):
+def _accumulator(tier="risk_control", **fit_kwargs):
     """Diagnostics for a 3-sample, alpha=0.5 predictor (fit kwargs override)."""
     kwargs = {"n_samples": 3, "alpha": 0.5, "shape": (3,), **fit_kwargs}
     return fit(tier, **kwargs)[0].coverage_accumulator()
@@ -54,6 +55,39 @@ def _interval_sample(n_points, n_covered, *, n_components=1, half_width=1.0):
     if n_covered < n_points:
         target[n_covered:, 0 if n_components > 1 else ...] = 2 * half_width
     return lo, hi, target
+
+
+def test_risk_report_averages_each_sample_point_event_equally():
+    accumulator = _accumulator()
+    accumulator.update(*_interval_sample(1, 0))
+    accumulator.update(*_interval_sample(99, 99))
+    report = accumulator.finalize()
+
+    assert report["meta"] == {
+        "tier": "risk_control",
+        "alpha": 0.5,
+        "n_cal": 3,
+        "target_risk": 0.5,
+    }
+    assert report["fields"]["tensor"] == {
+        "n_samples": 2,
+        "mean_interval_width": pytest.approx(2.0),
+        "empirical_mean_risk": pytest.approx(0.5),
+    }
+    assert set(report) == {"meta", "fields"}
+    assert set(report["fields"]) == {"tensor"}
+    json.dumps(report, allow_nan=False)
+
+
+def test_risk_coverage_reduces_trailing_components_to_point_events():
+    accumulator = _accumulator(shape=(3, 3))
+    lo = torch.full((2, 2, 3), -1.0)
+    hi = torch.full((2, 2, 3), 1.0)
+    target = torch.zeros(2, 2, 3)
+    target[1, 1, 2] = 5.0
+    accumulator.update(lo, hi, target)
+    report = accumulator.finalize()["fields"]["tensor"]
+    assert report["empirical_mean_risk"] == pytest.approx(0.5)
 
 
 def test_functional_report_counts_whole_field_containment():
@@ -144,8 +178,8 @@ def test_tensordict_fields_report_per_field_and_select_fitted_keys():
     accumulator.update(lo, hi, _td(p=torch.zeros(3), v=torch.zeros(3), w=torch.ones(3)))
     report = accumulator.finalize()
     assert set(report["fields"]) == {"p", "v"}
-    assert report["fields"]["p"]["whole_field_coverage"] == 1.0
-    assert report["fields"]["v"]["whole_field_coverage"] == 0.5
+    assert report["fields"]["p"]["empirical_mean_risk"] == 0.0
+    assert report["fields"]["v"]["empirical_mean_risk"] == 0.5
     assert report["fields"]["p"]["n_samples"] == report["fields"]["v"]["n_samples"] == 2
     json.dumps(report, allow_nan=False)
 
@@ -157,6 +191,7 @@ EMPTY_ENTRIES = {
         "fraction_at_target": None,
     },
     "functional": {"whole_field_coverage": None},
+    "risk_control": {"empirical_mean_risk": None},
 }
 
 
@@ -189,12 +224,12 @@ _WIDE = (_td(a=_Z64, b=_Z64), _td(a=_Z64 + 1, b=_BIG), _td(a=_Z64, b=_Z64))
 _WIDER = (_WIDE[0], _td(a=_Z64 + 2, b=_BIG), _WIDE[2])
 # fmt: off
 TRANSACTIONAL_REJECTIONS = [  # (id, tier, fields, warm-up update, rejected update, error, match)
-    ("hi-shape-mismatch", "functional", ["a", "b"], (_LO4, _HI4, _T4), (_LO4, _td(a=_ONES4, b=torch.ones(5)), _T4), ValueError, "shape"),
-    ("nonfinite-target", "functional", ["a", "b"], (_LO4, _HI4, _T4), (_LO4, _HI4, _td(a=0 * _ONES4, b=torch.full((4,), torch.inf))), ValueError, "non-finite"),
-    ("missing-fitted-field", "functional", ["a", "b"], (_LO4, _HI4, _T4), (_LO4, _HI4, _td(a=0 * _ONES4)), KeyError, "not present"),
-    ("width-overflow", "functional", None, _PLAIN, tuple(torch.tensor([v], dtype=_F64) for v in (-1e308, 1e308, 0.0)), ValueError, "width overflows"),
-    ("empty-target", "functional", None, _PLAIN, (torch.empty(0),) * 3, ValueError, "Plain tensor: empty"),
-    ("container-mode-mismatch", "functional", None, _PLAIN, (_td(value=0 * _ONES3),) * 3, TypeError, "calibrated on a plain tensor; pass lo as a tensor"),
+    ("hi-shape-mismatch", "risk_control", ["a", "b"], (_LO4, _HI4, _T4), (_LO4, _td(a=_ONES4, b=torch.ones(5)), _T4), ValueError, "shape"),
+    ("nonfinite-target", "risk_control", ["a", "b"], (_LO4, _HI4, _T4), (_LO4, _HI4, _td(a=0 * _ONES4, b=torch.full((4,), torch.inf))), ValueError, "non-finite"),
+    ("missing-fitted-field", "risk_control", ["a", "b"], (_LO4, _HI4, _T4), (_LO4, _HI4, _td(a=0 * _ONES4)), KeyError, "not present"),
+    ("width-overflow", "risk_control", None, _PLAIN, tuple(torch.tensor([v], dtype=_F64) for v in (-1e308, 1e308, 0.0)), ValueError, "width overflows"),
+    ("empty-target", "risk_control", None, _PLAIN, (torch.empty(0),) * 3, ValueError, "Plain tensor: empty"),
+    ("container-mode-mismatch", "risk_control", None, _PLAIN, (_td(value=0 * _ONES3),) * 3, TypeError, "calibrated on a plain tensor; pass lo as a tensor"),
     ("cellwise-second-field-fails", "cellwise", ["a", "b"], (_LO3, _HI3, _T3), (_LO3, _HI3, _td(a=0 * _ONES3, b=0 * _ONES4)), ValueError, "shape"),
     ("width-sum-within-sample", "cellwise", ["a", "b"], (_LO3, _HI3, _T3), (_WIDE[0], _td(a=_Z64 + 2, b=_BIG.roll(1) + _BIG), _WIDE[2]), ValueError, "Field 'b'.*width sum.*[Rr]escale"),
     ("width-sum-cross-call", "cellwise", ["a", "b"], _WIDE, _WIDER, ValueError, "Field 'b'.*width sum.*[Rr]escale"),
@@ -291,26 +326,26 @@ def test_accumulator_update_rejects_unknown_tier():
 
 def test_report_metadata_is_private():
     accumulator = _accumulator()
-    for name, value in (("tier", "cellwise"), ("alpha", 0.1), ("n_cal", 99)):
+    for name, value in (("tier", "functional"), ("alpha", 0.1), ("n_cal", 99)):
         setattr(accumulator, name, value)
     accumulator.keys = ("other",)
     assert accumulator.finalize()["meta"] == {
-        "tier": "functional",
+        "tier": "risk_control",
         "alpha": 0.5,
         "n_cal": 3,
-        "target_coverage": 0.5,
+        "target_risk": 0.5,
     }
 
 
 def _calibrator_finalizer():
-    calibrator = FunctionalBandCalibrator(AbsoluteErrorScore(), alpha=0.5)
+    calibrator = RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.5)
     for _ in range(3):
         calibrator.update(torch.zeros(2), torch.zeros(2))
     return calibrator.finalize
 
 
 def _accumulator_finalizer():
-    accumulator = fitted_functional().coverage_accumulator()
+    accumulator = fitted_risk().coverage_accumulator()
     accumulator.update(*_PLAIN)
     return accumulator.finalize
 

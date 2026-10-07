@@ -16,7 +16,8 @@
 
 """Numerical guarantees at the theorem boundary.
 
-Exact-arithmetic release gates (conformal rank in exact decimal), the theorem-preserving
+Exact-arithmetic release gates (CRC threshold against a candidate-set
+oracle, conformal rank in exact decimal), the theorem-preserving
 containment property (score-admitted targets stay inside the reconstructed
 interval across scores, dtypes, tiers and persistence), and the
 quantile/container utility layer.
@@ -24,6 +25,7 @@ quantile/container utility layer.
 
 import math
 from decimal import ROUND_CEILING, Decimal
+from fractions import Fraction
 
 import pytest
 import torch
@@ -36,6 +38,7 @@ from physicsnemo.experimental.uq.conformal import (
     FunctionalBandCalibrator,
     NormalizedErrorScore,
     QuantileRegressionScore,
+    RiskControlCalibrator,
 )
 from physicsnemo.experimental.uq.conformal._utils import (
     TENSOR_KEY,
@@ -46,6 +49,7 @@ from physicsnemo.experimental.uq.conformal._utils import (
     pack_fields,
     slice_aux,
 )
+from physicsnemo.experimental.uq.conformal.calibrators import _crc_threshold
 from test.experimental.uq.conformal._helpers import (
     CALIBRATOR_CLASSES,
     TIERS,
@@ -62,6 +66,104 @@ LOW_PRECISION = [_H, _BF, _F32]
 # Exact-arithmetic release gates.  Approximate stopping rules and floating
 # tolerances are not allowed at the theorem boundary.
 # =========================================================================
+
+
+def _crc_oracle(per_sample_scores, alpha):
+    """Exact reference: scan every candidate in float64, pick the smallest
+    feasible one, and return it with its corrected risk."""
+    n = len(per_sample_scores)
+    samples = [sorted(float(v) for v in s.double()) for s in per_sample_scores]
+    alpha_exact = Fraction(Decimal(str(alpha)))
+
+    def g(lam):
+        total = sum(
+            (Fraction(sum(v > lam for v in sample), len(sample)) for sample in samples),
+            start=Fraction(),
+        )
+        return (total + 1) / (n + 1)
+
+    candidates = sorted({v for s in samples for v in s})
+    feasible = [c for c in candidates if g(c) <= alpha_exact]
+    assert feasible, "oracle: infeasible input"
+    return feasible[0], g(feasible[0])
+
+
+# fmt: off
+CRC_CASES = {  # name: (per-sample scores, alpha, dtype)
+    "wide_range_float32_exhaustion": ([[1.0]] * 8 + [[1e5], [1e38]], 0.25, _F32),
+    "subnormals": ([[i * 1e-45] for i in range(1, 10)], 0.2, _F32),
+    "ties": ([[1.0, 1.0, 2.0], [2.0, 2.0, 3.0], [1.0, 3.0, 3.0]], 0.4, _F64),
+    "negative_cqr_scores": ([[-3.0, -1.0], [-2.0, 0.5], [-4.0, -0.5]], 0.4, _F64),
+    "log_spaced": ([[10.0**e] for e in range(-30, 31, 6)], 0.3, _F64),
+    "uneven_lengths": ([[0.1], [0.2, 0.9, 1.4], [0.05, 0.6], [2.0, 2.5, 3.0, 3.5]], 0.45, _F32),
+    "uneven_sample_weights": ([[1.0], [0.0] * 9], 0.5, _F64),
+    "uneven_negative_ties": ([[-3.0, -1.0], [-2.0], [-4.0, -2.0, -2.0, 1.0]], 0.5, _F64),
+    "single_sample": ([[-2.0, 1.0, 3.0]], 0.9, _F64),
+    "float16": ([[0.5, 1.5], [1.0, 2.0], [0.25, 3.0]], 0.4, _H),
+}
+# fmt: on
+
+
+@pytest.mark.parametrize("case", sorted(CRC_CASES))
+def test_crc_threshold_matches_exact_candidate_oracle(case):
+    """The CRC threshold must equal the smallest feasible observed candidate
+    and satisfy its own corrected-risk constraint."""
+    raw, alpha, dtype = CRC_CASES[case]
+    tensors = [torch.tensor(s, dtype=dtype) for s in raw]
+    lam = _crc_threshold([t.sort().values for t in tensors], alpha)
+    expected, corrected = _crc_oracle(tensors, alpha)
+    assert lam == expected
+    assert corrected <= Fraction(Decimal(str(alpha)))
+
+
+def test_crc_threshold_compares_against_declared_decimal_alpha_exactly():
+    """Binary-float equality must not admit exact risk 2/3 below a
+    declared decimal alpha of 0.6666666666666666."""
+    samples = [torch.tensor([0.0, 0.0]), torch.tensor([1.0, 2.0])]
+    lam = _crc_threshold(
+        [s.sort().values for s in samples],
+        0.6666666666666666,
+    )
+    assert lam == 1.0
+
+
+@pytest.mark.parametrize("length", [1, 2], ids=["equal-lengths", "unequal-lengths"])
+def test_crc_threshold_mixed_dtypes_single_comparison_dtype(length):
+    """Per-sample probe rounding must not disagree with the returned
+    threshold (mixed-dtype variant)."""
+    a = torch.tensor([1.0015], dtype=_H).sort().values
+    b = torch.full((length,), 1.0019, dtype=_F32).sort().values
+    alpha = 0.34
+    lam = _crc_threshold([a, b], alpha)
+    expected, corrected = _crc_oracle([a, b], alpha)
+    assert lam == expected
+    assert corrected <= Fraction(Decimal(str(alpha)))
+
+
+@pytest.mark.parametrize(
+    "alpha",
+    [
+        math.nextafter(0.25, 0.0),
+        0.25,
+        math.nextafter(0.5, 0.0),
+        0.5,
+        math.nextafter(0.5, 1.0),
+        math.nextafter(1.0, 0.0),
+    ],
+)
+def test_crc_equal_lengths_exact_rank_boundaries(alpha):
+    """Pooled selection preserves strict exceedances, ties, and signed ranks."""
+    samples = [
+        torch.tensor(values, dtype=_F64)
+        for values in ([-4.0, -2.0, -2.0], [-3.0, -2.0, 0.0], [-2.0, 1.0, 2.0])
+    ]
+    if alpha < 0.25:
+        with pytest.raises(ValueError, match="calibration samples"):
+            _crc_threshold(samples, alpha)
+        return
+    expected, corrected = _crc_oracle(samples, alpha)
+    assert _crc_threshold(samples, alpha) == expected
+    assert corrected <= Fraction(Decimal(str(alpha)))
 
 
 def _rank_oracle(n_cal, alpha):
@@ -118,7 +220,7 @@ def test_conformal_rank_nextafter_boundaries(base_alpha, n_cal):
             )
 
 
-@pytest.mark.parametrize("cls", [FunctionalBandCalibrator])
+@pytest.mark.parametrize("cls", [FunctionalBandCalibrator, RiskControlCalibrator])
 def test_normalization_underflow_handled_exactly(cls):
     """A huge constant difficulty must not zero the fitted statistic: the
     float64 policy preserves it and the identical population is covered."""
@@ -132,7 +234,7 @@ def test_normalization_underflow_handled_exactly(cls):
     assert_predictor_covers_admitted(predictor, torch.zeros(4), target, aux=aux)
 
 
-@pytest.mark.parametrize("cls", [FunctionalBandCalibrator])
+@pytest.mark.parametrize("cls", [FunctionalBandCalibrator, RiskControlCalibrator])
 @pytest.mark.parametrize(
     "score,magnitude",
     [
@@ -152,7 +254,7 @@ def test_normalization_rejects_subnormal_and_underflowed_scores(cls, score, magn
     assert calibrator.n_cal == 0
 
 
-@pytest.mark.parametrize("cls", [FunctionalBandCalibrator])
+@pytest.mark.parametrize("cls", [FunctionalBandCalibrator, RiskControlCalibrator])
 @pytest.mark.parametrize("signed", [False, True], ids=["unsigned", "signed-cqr"])
 def test_normalization_normal_boundary_and_true_zero(cls, signed):
     """Reject just below float64's normal range; retain normals and true zero."""
@@ -180,7 +282,7 @@ def test_normalization_normal_boundary_and_true_zero(cls, signed):
 
 def test_normalization_overflow_rejected():
     """A quotient that overflows even float64 is rejected at update time."""
-    calibrator = FunctionalBandCalibrator(
+    calibrator = RiskControlCalibrator(
         AbsoluteErrorScore(), alpha=0.5, difficulty=AuxDifficulty("s")
     )
     with pytest.raises(ValueError, match="non-finite"):
@@ -381,7 +483,7 @@ def test_adaptive_difficulty_keeps_float64_radius():
     (PyTorch scalar promotion); containment holds through the adaptive path."""
     generator = torch.Generator().manual_seed(31)
     predictor, _ = fit(
-        "functional",
+        "risk_control",
         generator=generator,
         difficulty=AuxDifficulty(key="sigma"),
         n_samples=20,

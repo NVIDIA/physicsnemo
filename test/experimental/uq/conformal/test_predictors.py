@@ -35,7 +35,7 @@ from test.experimental.uq.conformal._helpers import count_syncs, fit, make_predi
 
 def test_nonfinite_deployment_difficulty_is_rejected():
     predictor, _ = fit(
-        "functional",
+        "risk_control",
         difficulty=AuxDifficulty(key="spread"),
         n_samples=10,
         shape=(20,),
@@ -53,7 +53,7 @@ def _sigma(prediction, generator):
 
 @pytest.mark.parametrize(
     "tier,fields",
-    [("cellwise", None), ("functional", None), ("functional", ["a", "b"])],
+    [("cellwise", None), ("risk_control", None), ("risk_control", ["a", "b"])],
 )
 def test_predict_interval_syncs_once(monkeypatch, tier, fields):
     """All value checks, including the mesh checksum, share one host sync."""
@@ -150,7 +150,7 @@ CONSTRUCTOR_REJECTIONS = [  # (id, make_predictor overrides, error, match)
     ("cellwise-without-mesh", {"tier": "cellwise", "thresholds": torch.ones(2)}, ValueError, "requires points="),
     ("cellwise-scalar-threshold", {**_CELL, "thresholds": torch.tensor(1.0)}, ValueError, "at least one dimension"),
     ("custom-difficulty", {"tier": "functional", "difficulty": _CustomDifficulty()}, TypeError, "Subclasses are not supported"),
-    ("functional-with-points", {"points": torch.ones(2, 1)}, ValueError, "does not take points="),
+    ("risk-with-points", {"points": torch.ones(2, 1)}, ValueError, "does not take points="),
     ("dict-thresholds", {"thresholds": {"pressure": torch.tensor(1.0)}}, TypeError, "Tensor or TensorDict"),
     ("empty-tensordict-thresholds", {"thresholds": TensorDict({})}, ValueError, "at least one"),
     ("integer-thresholds", {"thresholds": torch.ones((), dtype=torch.int32)}, TypeError, "floating"),
@@ -182,6 +182,7 @@ def test_public_api_exports():
         "FunctionalBandCalibrator",
         "NormalizedErrorScore",
         "QuantileRegressionScore",
+        "RiskControlCalibrator",
     }
     assert set(conformal.__all__) == expected
     assert all(hasattr(conformal, name) for name in expected)

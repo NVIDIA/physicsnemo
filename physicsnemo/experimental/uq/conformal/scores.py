@@ -34,7 +34,7 @@ For tensor inputs, ``aux`` maps each key to a tensor; for ``TensorDict``
 inputs, it maps each field name to such a mapping.
 
 :class:`AuxDifficulty` is an optional per-point scale for the functional
-band calibrator.
+band and risk-control calibrators.
 """
 
 import copy
@@ -155,8 +155,8 @@ class _NonconformityScore:
             Fitted threshold, broadcastable against ``prediction``: one value
             per element of shape :math:`(*\text{dims})` for the cellwise
             calibrator, or a scalar (already multiplied by the
-            ``AuxDifficulty`` scale, if any) for the functional band
-            calibrator.
+            ``AuxDifficulty`` scale, if any) for the functional band and
+            risk-control calibrators.
         aux : Mapping[str, torch.Tensor], optional
             The same ``aux`` entries that :meth:`score` needs.
 
@@ -385,8 +385,9 @@ class AuxDifficulty:
     r"""Per-point scale read from ``aux`` that widens the band where it is large.
 
     Use it with
-    :class:`~physicsnemo.experimental.uq.conformal.FunctionalBandCalibrator`
-    when the model outputs a per-point uncertainty estimate (a predicted sigma,
+    :class:`~physicsnemo.experimental.uq.conformal.FunctionalBandCalibrator` or
+    :class:`~physicsnemo.experimental.uq.conformal.RiskControlCalibrator` when
+    the model outputs a per-point uncertainty estimate (a predicted sigma,
     MC-dropout or ensemble spread). The fitted threshold is multiplied by the
     scale :math:`s(x)`, which is read at each point, so point sets may differ
     between samples. Pass the same ``aux`` entry at calibration and at
@@ -490,7 +491,7 @@ class AuxDifficulty:
             )
         check_real(self.key, "AuxDifficulty input", s, pending)
         if s.ndim >= 2:
-            # One scale per point, large enough for every channel.
+            # One scale per point, the unit in which risk control counts misses.
             s = s.amax(dim=tuple(range(1, s.ndim)))
         return clamp_min_floor(s, self.eps)
 
