@@ -337,6 +337,11 @@ def points_fingerprint(
     return f"{_mesh_label(points)}-{digest}"
 
 
+def mesh_point_count(fingerprint: str) -> int:
+    """Number of points recorded in a mesh fingerprint (``<dtype>-<n>x<d>-<hex>``)."""
+    return int(fingerprint.split("-")[1].split("x")[0])
+
+
 def _mesh_label(points: Tensor) -> str:
     """The ``<dtype>-<n_points>x<n_dims>`` prefix of a mesh fingerprint."""
     n_points, n_dims = points.shape

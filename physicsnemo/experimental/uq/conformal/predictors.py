@@ -36,6 +36,7 @@ from ._utils import (
     check_real,
     fetch_ints,
     field_items,
+    mesh_point_count,
     pack_fields,
     points_fingerprint,
     require_container_kind,
@@ -212,6 +213,13 @@ class ConformalPredictor:
         self._alpha = alpha
         self._n_cal = n_cal
         self._thresholds_by_key = _validate_thresholds(thresholds, type(score_snapshot))
+        n_points = mesh_point_count(mesh_snapshot)
+        for key, threshold in self._thresholds_by_key.items():
+            if threshold.shape[0] != n_points:
+                raise ValueError(
+                    f"{_field_label(key)}: threshold shape {tuple(threshold.shape)} "
+                    f"must have one leading entry per mesh point ({n_points})."
+                )
         self._mesh_fingerprint = mesh_snapshot
         self._provenance = {} if provenance is None else validate_provenance(provenance)
 
