@@ -38,6 +38,7 @@ from ._utils import (
     check_real,
     fetch_ints,
     field_items,
+    mesh_point_count,
     pack_fields,
     points_fingerprint,
     require_container_kind,
@@ -271,6 +272,15 @@ class ConformalPredictor:
         self._thresholds_by_key = _validate_thresholds(
             tier, thresholds, type(score_snapshot)
         )
+        if mesh_snapshot is not None:
+            n_points = mesh_point_count(mesh_snapshot)
+            for key, threshold in self._thresholds_by_key.items():
+                if threshold.shape[0] != n_points:
+                    raise ValueError(
+                        f"{_field_label(key)}: threshold shape "
+                        f"{tuple(threshold.shape)} must have one leading entry "
+                        f"per mesh point ({n_points})."
+                    )
         self._difficulty = difficulty_snapshot
         self._mesh_fingerprint = mesh_snapshot
         self._provenance = {} if provenance is None else validate_provenance(provenance)
@@ -373,7 +383,16 @@ class ConformalPredictor:
         difficulty = self._difficulty._scales(aux, pending).to(
             device=prediction.device, dtype=torch.float64
         )
-        return threshold * broadcast_difficulty(difficulty, prediction, key)
+        scaled = threshold * broadcast_difficulty(difficulty, prediction, key)
+        finite = torch.isfinite(scaled).all()
+        if pending is not None:
+            pending.append(finite)
+        elif not finite:
+            raise ValueError(
+                f"{_field_label(key)}: threshold times the AuxDifficulty scale "
+                "overflows float64; rescale the difficulty values."
+            )
+        return scaled
 
     def _bounds(
         self,
