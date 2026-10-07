@@ -25,7 +25,7 @@ from physicsnemo.mesh.boundaries._facet_extraction import extract_candidate_face
 from physicsnemo.mesh.utilities._duplicate_detection import (
     vectorized_connected_components,
 )
-from physicsnemo.utils._index_tuple_ops import unique_index_tuples
+from physicsnemo.utils._index_tuple_ops import sort_index_tuples, unique_index_tuples
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -83,7 +83,7 @@ def _validate_indexed_simplex_topology(mesh: "Mesh") -> None:
                 f"maximum {maximum_index}"
             )
 
-        sorted_cells = torch.sort(cells, dim=1).values
+        sorted_cells = sort_index_tuples(cells)
         if bool((sorted_cells[:, 1:] == sorted_cells[:, :-1]).any().item()):
             raise ValueError(
                 "mesh cells must contain distinct point indices; found a cell "
@@ -162,7 +162,7 @@ def extract_triangle_hinges(
     if cells.shape[0] == 0:
         hinges = cells.new_empty((0, 4))
     else:
-        canonical_faces = torch.sort(cells, dim=1).values
+        canonical_faces = sort_index_tuples(cells)
         if torch.unique(canonical_faces, dim=0).shape[0] != cells.shape[0]:
             raise ValueError(
                 "triangle hinges require unique triangles; found a duplicate face"
@@ -173,7 +173,7 @@ def extract_triangle_hinges(
         starts = cells[:, (0, 1, 2)].reshape(-1)
         ends = cells[:, (1, 2, 0)].reshape(-1)
         opposite = cells[:, (2, 0, 1)].reshape(-1)
-        candidate_edges = torch.sort(torch.stack((starts, ends), dim=1), dim=1).values
+        candidate_edges = sort_index_tuples(torch.stack((starts, ends), dim=1))
 
         edge_keys = candidate_edges[:, 0] * mesh.n_points + candidate_edges[:, 1]
         order = torch.argsort(edge_keys, stable=True)
@@ -233,7 +233,7 @@ def _validate_closed_oriented_triangle_surface(mesh: "Mesh") -> None:
         raise ValueError("closed-surface volume energy requires at least one triangle")
 
     cells = _deformation_energy_cells(mesh)
-    canonical_faces = torch.sort(cells, dim=1).values
+    canonical_faces = sort_index_tuples(cells)
     _, face_counts = torch.unique(canonical_faces, dim=0, return_counts=True)
     if bool((face_counts > 1).any().item()):
         raise ValueError(
@@ -244,7 +244,7 @@ def _validate_closed_oriented_triangle_surface(mesh: "Mesh") -> None:
     starts = cells[:, (0, 1, 2)].reshape(-1)
     ends = cells[:, (1, 2, 0)].reshape(-1)
     halfedges = torch.stack((starts, ends), dim=1)
-    undirected_edges = torch.sort(halfedges, dim=1).values
+    undirected_edges = sort_index_tuples(halfedges)
     _, inverse, edge_counts = torch.unique(
         undirected_edges,
         dim=0,
@@ -329,7 +329,7 @@ def extract_unique_edges(
     """
     if mesh.n_manifold_dims == 1:
         ### 1D meshes: cells ARE edges - sort and deduplicate directly
-        sorted_cells = torch.sort(mesh.cells, dim=1)[0]
+        sorted_cells = sort_index_tuples(mesh.cells)
         unique_edges, inverse_indices = unique_index_tuples(
             sorted_cells,
             index_bound=mesh.n_points,

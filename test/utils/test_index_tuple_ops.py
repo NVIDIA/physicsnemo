@@ -16,10 +16,17 @@
 
 """Tests for bounded integer tuple operations."""
 
+import itertools
+
 import pytest
 import torch
 
-from physicsnemo.utils._index_tuple_ops import unique_index_tuples
+from physicsnemo.utils._index_tuple_ops import (
+    _SORTING_NETWORKS,
+    _sort_by_network,
+    sort_index_tuples,
+    unique_index_tuples,
+)
 
 
 def _assert_matches_torch_unique(
@@ -157,3 +164,61 @@ def test_unique_index_tuples_rejects_non_2d_rows() -> None:
 def test_unique_index_tuples_rejects_invalid_index_bound() -> None:
     with pytest.raises(ValueError, match="index_bound"):
         unique_index_tuples(torch.ones(2, 2, dtype=torch.long), index_bound=0)
+
+
+@pytest.mark.parametrize("n_columns", [1, 2, 3, 4])
+def test_sorting_networks_sort_every_binary_input(n_columns: int) -> None:
+    """By the 0-1 principle, a network that sorts every 0/1 input sorts every input."""
+    rows = torch.tensor(list(itertools.product([0, 1], repeat=n_columns)))
+    actual = _sort_by_network(rows, _SORTING_NETWORKS[n_columns])
+    assert torch.equal(actual, torch.sort(rows, dim=-1).values)
+
+
+@pytest.mark.parametrize("n_columns", [1, 2, 3, 4])
+@pytest.mark.parametrize("dtype", [torch.int32, torch.int64])
+def test_sorting_networks_match_torch_sort(n_columns: int, dtype: torch.dtype) -> None:
+    generator = torch.Generator().manual_seed(4321 + n_columns)
+    # A small index range forces repeated entries within rows
+    rows = torch.randint(
+        low=0, high=4, size=(300, n_columns), generator=generator, dtype=dtype
+    )
+    actual = _sort_by_network(rows, _SORTING_NETWORKS[n_columns])
+    assert actual.dtype == dtype
+    assert torch.equal(actual, torch.sort(rows, dim=-1).values)
+
+
+@pytest.mark.parametrize(
+    "device",
+    [
+        "cpu",
+        pytest.param(
+            "cuda",
+            marks=pytest.mark.skipif(
+                not torch.cuda.is_available(), reason="CUDA not available"
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize("n_rows", [1_000, 300_000])
+@pytest.mark.parametrize("n_columns", [2, 3, 4, 5])
+def test_sort_index_tuples_matches_torch_sort(
+    device: str, n_rows: int, n_columns: int
+) -> None:
+    """Both dispatch paths (torch.sort and the sorting network) sort correctly."""
+    generator = torch.Generator().manual_seed(8765 + n_columns)
+    rows = torch.randint(0, 50, size=(n_rows, n_columns), generator=generator).to(
+        device
+    )
+    assert torch.equal(sort_index_tuples(rows), torch.sort(rows, dim=-1).values)
+
+
+def test_sort_index_tuples_handles_batched_noncontiguous_and_empty_rows() -> None:
+    generator = torch.Generator().manual_seed(8765)
+    rows = torch.randint(0, 100, size=(7, 5, 6), generator=generator)[..., ::2]
+    assert not rows.is_contiguous()
+    assert torch.equal(
+        _sort_by_network(rows, _SORTING_NETWORKS[3]), torch.sort(rows, dim=-1).values
+    )
+
+    empty = torch.empty((0, 3), dtype=torch.long)
+    assert sort_index_tuples(empty).shape == (0, 3)

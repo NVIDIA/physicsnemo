@@ -59,6 +59,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   extras select PyTorch 2.13 to match their prebuilt kernels. Python support remains
   3.11 through 3.14.
 
+- Mesh connectivity sorts the vertices of its short index tuples (edges,
+  faces, cells) with a sorting network of elementwise minima and maxima on
+  large CUDA inputs, instead of `torch.sort`. On a GB300, facet and boundary
+  extraction, edge graphs, point adjacency and manifold checks of 10M-cell
+  meshes are 3-5x faster, butterfly subdivision 2.3x, and cell adjacency,
+  cleaning and the DEC Laplacian 1.2-2.1x. Results are unchanged.
 - `physicsnemo.mesh.fields` is rebuilt around two types. `RankSpec` (`rank`,
   `symmetric`, `parity`; `shape(n_spatial_dims)`, `numel(n_spatial_dims)`) is
   one field's transformation law; `FieldSchema` is an insertion-ordered
