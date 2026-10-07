@@ -38,6 +38,8 @@ from ._utils import (
     normalize_keys,
     pack_fields,
     require_container_kind,
+    validate_alpha,
+    validate_n_cal,
 )
 
 __all__ = ["CoverageAccumulator"]
@@ -140,8 +142,8 @@ class CoverageAccumulator:
         keys: Sequence[str] | None = None,
     ) -> None:
         self._tier = tier
-        self._alpha = alpha
-        self._n_cal = n_cal
+        self._alpha = validate_alpha(alpha)
+        self._n_cal = validate_n_cal(n_cal)
         self._keys = normalize_keys(keys)
         field_keys = (TENSOR_KEY,) if self._keys is None else self._keys
         self._counters = {key: _FieldCounters() for key in field_keys}

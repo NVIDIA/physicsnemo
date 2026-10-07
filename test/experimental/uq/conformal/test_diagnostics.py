@@ -284,6 +284,16 @@ def test_empty_key_selection_is_rejected_up_front(make):
         make()
 
 
+@pytest.mark.parametrize(
+    "alpha,n_cal,error",
+    [(float("nan"), 3, ValueError), (0.5, -1, ValueError), (0.5, 2.0, TypeError)],
+    ids=["nan-alpha", "negative-n_cal", "float-n_cal"],
+)
+def test_accumulator_constructor_validates_alpha_and_n_cal(alpha, n_cal, error):
+    with pytest.raises(error):
+        CoverageAccumulator(tier="cellwise", alpha=alpha, n_cal=n_cal)
+
+
 def test_accumulator_update_rejects_unknown_tier():
     accumulator = CoverageAccumulator(tier="bogus", alpha=0.5, n_cal=3)
     with pytest.raises(ValueError, match="tier must be one of"):
