@@ -208,6 +208,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `|x| ~ 1300` (millimetres) previously found 0.4% of its on-surface points
   and returned NaN for the rest, because float32 rounding (about
   `1.2e-7 * |x|`) exceeded the absolute `1e-6` distance tolerance.
+- `BVH.from_mesh` and `ClusterTree.from_points` compute Morton codes for 1-3
+  spatial dimensions by spreading each coordinate's bits with a few
+  shift-and-mask steps. CUDA no longer materializes every bit as int64 (about
+  1 kB per point, 55 GB at 50M cells); temporaries are about 72 B per point in
+  3D, and the step is about 4x faster on large inputs. Codes are unchanged.
 - `sample_data_at_points`, `find_containing_cells`, and
   `find_all_containing_cells` no longer miss the containing cell when a query
   point has more than 32 BVH candidate cells (for example, near a vertex shared
