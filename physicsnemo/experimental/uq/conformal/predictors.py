@@ -380,7 +380,16 @@ class ConformalPredictor:
         difficulty = self._difficulty._scales(aux, pending).to(
             device=prediction.device, dtype=torch.float64
         )
-        return threshold * broadcast_difficulty(difficulty, prediction, key)
+        scaled = threshold * broadcast_difficulty(difficulty, prediction, key)
+        finite = torch.isfinite(scaled).all()
+        if pending is not None:
+            pending.append(finite)
+        elif not finite:
+            raise ValueError(
+                f"{_field_label(key)}: threshold times the AuxDifficulty scale "
+                "overflows float64; rescale the difficulty values."
+            )
+        return scaled
 
     def _bounds(
         self,

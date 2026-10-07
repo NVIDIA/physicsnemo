@@ -28,6 +28,7 @@ from physicsnemo.experimental.uq.conformal import (
     AuxDifficulty,
     CellwiseCalibrator,
     ConformalPredictor,
+    QuantileRegressionScore,
 )
 from physicsnemo.experimental.uq.conformal._utils import points_fingerprint
 from test.experimental.uq.conformal._helpers import count_syncs, fit, make_predictor
@@ -239,3 +240,22 @@ def test_aux_and_points_are_keyword_only():
     for method in (score.score, score.interval):
         with pytest.raises(TypeError, match="positional"):
             method(torch.zeros(2), torch.zeros(2), {})
+
+
+def test_scaled_threshold_overflow_raises_instead_of_nan_bounds():
+    predictor = ConformalPredictor(
+        tier="functional",
+        score=QuantileRegressionScore(),
+        alpha=0.5,
+        n_cal=3,
+        thresholds=torch.tensor(-1e300, dtype=torch.float64),
+        difficulty=AuxDifficulty("sigma"),
+    )
+    f64 = torch.float64
+    aux = {
+        "lo": torch.full((3,), -1.0, dtype=f64),
+        "hi": torch.full((3,), 1.0, dtype=f64),
+        "sigma": torch.full((3,), 1e20, dtype=f64),
+    }
+    with pytest.raises(ValueError, match="overflows float64"):
+        predictor.predict_interval(torch.zeros(3, dtype=f64), aux=aux)
