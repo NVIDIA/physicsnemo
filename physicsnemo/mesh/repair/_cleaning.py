@@ -260,26 +260,24 @@ def remove_duplicate_cells(
     # First element is always a boundary (first occurrence)
     is_first_in_group = torch.cat(
         [
-            torch.tensor([True], device=device),
+            torch.ones(1, dtype=torch.bool, device=device),
             sorted_inverse[1:] != sorted_inverse[:-1],
         ]
     )
 
-    # Map back to original indices: first_occurrence_indices are the cells to keep
-    first_occurrence_indices = sorted_order[is_first_in_group]
+    # Map back to original indices: keep the first occurrence of each group
+    keep_mask = torch.empty(n_cells, dtype=torch.bool, device=device)
+    keep_mask[sorted_order] = is_first_in_group
 
-    # Build keep_mask from first occurrences
-    keep_mask = torch.zeros(n_cells, dtype=torch.bool, device=device)
-    keep_mask[first_occurrence_indices] = True
-
-    ### Filter cells and data
-    unique_cells = cells[keep_mask]
+    ### Filter cells and data (one nonzero, so one device sync, for both)
+    kept = torch.nonzero(keep_mask).squeeze(1)
+    unique_cells = cells[kept]
     unique_cell_data = (
-        cell_data[keep_mask]
+        cell_data[kept]
         if len(cell_data.keys()) > 0
         else TensorDict(
             {},
-            batch_size=torch.Size([keep_mask.sum().item()]),
+            batch_size=torch.Size([len(kept)]),
             device=cell_data.device,
         )
     )

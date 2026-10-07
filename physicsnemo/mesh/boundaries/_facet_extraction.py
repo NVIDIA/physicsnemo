@@ -172,18 +172,15 @@ def categorize_facets_by_count(
         )
 
     ### Filter facets and update inverse indices
-    filtered_facets = unique_facets[mask]
-    filtered_counts = counts[mask]
+    # One nonzero (a single device sync) serves both compactions.
+    kept = torch.nonzero(mask).squeeze(1)
+    filtered_facets = unique_facets[kept]
+    filtered_counts = counts[kept]
 
     # Update inverse indices to point to filtered facets
     # Create mapping from old unique indices to new filtered indices
     # For facets that don't pass the filter, map to -1
-    old_to_new = torch.full(
-        (len(unique_facets),), -1, dtype=torch.int64, device=unique_facets.device
-    )
-    old_to_new[mask] = torch.arange(
-        mask.sum(), dtype=torch.int64, device=unique_facets.device
-    )
+    old_to_new = torch.where(mask, torch.cumsum(mask, dim=0) - 1, -1)
 
     # Remap inverse indices
     filtered_inverse = old_to_new[inverse_indices]
@@ -261,10 +258,13 @@ def extract_candidate_facets(
 
     ### Generate combination indices for selecting vertices
     # Shape: (n_combinations, n_vertices_per_subsimplex)
+    # The table is built in pageable host memory, which CUDA stages before an
+    # asynchronous copy returns, so ``non_blocking`` is safe here and avoids the
+    # device synchronization of a blocking host-to-device copy.
     combination_indices = _generate_combination_indices(
         n_vertices_per_cell,
         n_vertices_per_subsimplex,
-    ).to(cells.device)
+    ).to(cells.device, non_blocking=True)
     n_combinations = len(combination_indices)
 
     ### Extract sub-simplices using combination indices
@@ -532,10 +532,10 @@ def extract_facet_mesh_data(
             index_bound=parent_mesh.n_points,
         )
         # Discard candidates that were filtered out (inverse == -1)
-        keep_mask = inverse_indices >= 0
-        candidate_facets = candidate_facets[keep_mask]
-        parent_cell_indices = parent_cell_indices[keep_mask]
-        inverse_indices = inverse_indices[keep_mask]
+        keep = torch.nonzero(inverse_indices >= 0).squeeze(1)
+        candidate_facets = candidate_facets[keep]
+        parent_cell_indices = parent_cell_indices[keep]
+        inverse_indices = inverse_indices[keep]
 
     n_unique_facets = len(unique_facets)
 

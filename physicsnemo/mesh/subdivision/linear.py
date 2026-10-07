@@ -109,7 +109,8 @@ def subdivide_linear(mesh: "Mesh") -> "Mesh":
 
     ### Get subdivision pattern for this manifold dimension
     subdivision_pattern = get_subdivision_pattern(mesh.n_manifold_dims)
-    subdivision_pattern = subdivision_pattern.to(mesh.cells.device)
+    # non_blocking: a small pageable host table, staged by CUDA before returning
+    subdivision_pattern = subdivision_pattern.to(mesh.cells.device, non_blocking=True)
 
     ### Generate child cells from parents
     child_cells, parent_indices = generate_child_cells(

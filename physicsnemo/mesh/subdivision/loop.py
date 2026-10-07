@@ -113,9 +113,11 @@ def reposition_original_vertices_2d(
     # Get source point indices by expanding offsets
     # For adjacency.indices[i], the source point is the one whose offset range contains i
     # We can use searchsorted or create source indices directly
+    # (output_size is known, which spares a device synchronization)
     source_point_indices = torch.repeat_interleave(
         torch.arange(n_points, dtype=torch.int64, device=device),
         valences,
+        output_size=adjacency.n_total_neighbors,
     )
 
     # Get neighbor positions and scatter-add to source points
@@ -161,9 +163,11 @@ def reposition_original_vertices_2d(
         return interior_new_positions
 
     be0, be1 = boundary_edges[:, 0], boundary_edges[:, 1]
+    # index_fill_ passes the value as a kernel argument; ``mask[index] = True``
+    # would copy it from the host and synchronize.
     boundary_vertex_mask = torch.zeros(n_points, dtype=torch.bool, device=device)
-    boundary_vertex_mask[be0] = True
-    boundary_vertex_mask[be1] = True
+    boundary_vertex_mask.index_fill_(0, be0, True)
+    boundary_vertex_mask.index_fill_(0, be1, True)
 
     boundary_neighbor_sums = torch.zeros_like(mesh.points)
     idx0 = be0.unsqueeze(-1).expand(-1, mesh.n_spatial_dims)
@@ -228,15 +232,14 @@ def compute_loop_edge_positions_2d(
         manifold_codimension=mesh.n_manifold_dims - 1,
     )
 
-    _, inverse_indices = unique_index_tuples(
+    ### Map candidates to unique edges and count adjacent cells for each edge
+    # adjacent_counts shape: (n_edges,)
+    _, inverse_indices, adjacent_counts = unique_index_tuples(
         candidate_edges,
         index_bound=mesh.n_points,
         return_inverse=True,
+        return_counts=True,
     )
-
-    ### Count adjacent cells for each edge
-    # Shape: (n_edges,)
-    adjacent_counts = torch.bincount(inverse_indices, minlength=n_edges)
 
     ### Identify boundary vs interior edges
     is_interior = adjacent_counts == 2
@@ -410,7 +413,8 @@ def subdivide_loop(mesh: "Mesh") -> "Mesh":
 
     ### Get subdivision pattern
     subdivision_pattern = get_subdivision_pattern(mesh.n_manifold_dims)
-    subdivision_pattern = subdivision_pattern.to(mesh.cells.device)
+    # non_blocking: a small pageable host table, staged by CUDA before returning
+    subdivision_pattern = subdivision_pattern.to(mesh.cells.device, non_blocking=True)
 
     ### Generate child cells
     child_cells, parent_indices = generate_child_cells(

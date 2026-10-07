@@ -230,7 +230,7 @@ def validate(
 
             # Compute signed volume using determinant
             # For n-simplex: V = (1/n!) * det([v1-v0, v2-v0, ..., vn-v0])
-            relative_vectors = cell_vertices[:, 1:] - cell_vertices[:, [0]]
+            relative_vectors = cell_vertices[:, 1:] - cell_vertices[:, :1]
 
             # Compute determinant (works for 2x2 and 3x3 matrices)
             if mesh.n_manifold_dims >= 2:
