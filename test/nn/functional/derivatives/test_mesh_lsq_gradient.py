@@ -331,6 +331,63 @@ def test_mesh_lsq_gradient_error_handling(device: str):
             )
 
 
+# Validate the CSR checks that share one device-to-host transfer.
+@pytest.mark.parametrize(
+    "corrupt, message",
+    [
+        (lambda o, i: (o + 1, i), "neighbor_offsets must start at 0"),
+        (
+            lambda o, i: (o, i.index_fill(0, torch.tensor([3], device=i.device), -1)),
+            "must satisfy 0 <= index < n_entities",
+        ),
+    ],
+)
+def test_mesh_lsq_gradient_csr_validation(device: str, corrupt, message):
+    points, offsets, indices = _make_case(
+        device, n_entities=32, n_dims=2, k_neighbors=4
+    )
+    bad_offsets, bad_indices = corrupt(offsets, indices)
+    with pytest.raises(ValueError, match=message):
+        MeshLSQGradient.dispatch(
+            points,
+            points[:, 0],
+            bad_offsets,
+            bad_indices,
+            implementation="torch",
+        )
+
+
+# Validate grouping by neighbor count against independent per-entity solves.
+def test_mesh_lsq_gradient_ragged_neighborhoods_match_per_entity_lstsq(device: str):
+    generator = torch.Generator().manual_seed(5)
+    n_entities = 30
+    points = torch.rand(n_entities, 2, generator=generator, dtype=torch.float64)
+    values = torch.sin(3 * points[:, 0]) + points[:, 1] ** 2
+    # 3 to 5 distinct neighbors per entity, never the entity itself
+    neighbors = []
+    for i in range(n_entities):
+        others = [j for j in torch.randperm(n_entities, generator=generator).tolist()]
+        neighbors.append([j for j in others if j != i][: 3 + i % 3])
+    offsets = torch.tensor([0] + [len(n) for n in neighbors]).cumsum(0)
+    indices = torch.tensor(sum(neighbors, []))
+
+    output = MeshLSQGradient.dispatch(
+        points.to(device),
+        values.to(device),
+        offsets.to(device),
+        indices.to(device),
+        implementation="torch",
+    )
+
+    for i, n in enumerate(neighbors):
+        dx = points[n] - points[i]
+        sqrt_w = (1.0 / dx.norm(dim=-1))[:, None]  # inverse-distance-squared weights
+        expected = torch.linalg.lstsq(
+            sqrt_w * dx, sqrt_w * (values[n] - values[i])[:, None]
+        ).solution[:, 0]
+        torch.testing.assert_close(output[i].cpu(), expected)
+
+
 # Validate warp backend input validation paths mirror torch behavior.
 @requires_module("warp")
 def test_mesh_lsq_gradient_error_handling_warp(device: str):
