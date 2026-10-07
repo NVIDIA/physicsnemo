@@ -2710,3 +2710,43 @@ class TestMeshCalculusConvenienceMethods:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestDECGradientIsExactForLinearFields:
+    """The DEC gradient uses the edges of every cell, in any manifold dimension."""
+
+    def test_barycentric_gradients_of_segments(self):
+        from physicsnemo.mesh.geometry.interpolation import (
+            compute_barycentric_gradients,
+        )
+
+        points = torch.tensor([[0.0, 0.0, 0.0], [2.0, 1.0, 2.0], [2.0, 4.0, 6.0]])
+        mesh = Mesh(points=points, cells=torch.tensor([[0, 1], [2, 1]]))
+        gradients = compute_barycentric_gradients(mesh)  # (n_cells, 2, 3)
+
+        edges = points[mesh.cells[:, 1]] - points[mesh.cells[:, 0]]
+        # Each phi rises from 0 to 1 along its edge, and the two sum to one
+        torch.testing.assert_close((gradients[:, 1] * edges).sum(-1), torch.ones(2))
+        torch.testing.assert_close(gradients.sum(dim=1), torch.zeros(2, 3))
+
+    def test_straight_polyline(self):
+        from physicsnemo.mesh.calculus.gradient import compute_gradient_points_dec
+
+        x = torch.tensor([0.0, 0.3, 1.0, 1.2, 2.0], dtype=torch.float64)
+        mesh = Mesh(
+            points=torch.stack([x, torch.zeros_like(x)], dim=1),
+            cells=torch.tensor([[0, 1], [1, 2], [2, 3], [3, 4]]),
+        )
+        gradient = compute_gradient_points_dec(mesh, 2.0 * x)
+        expected = torch.tensor([2.0, 0.0], dtype=torch.float64).expand(5, 2)
+        torch.testing.assert_close(gradient, expected)
+
+    def test_tetrahedra(self):
+        from physicsnemo.mesh.calculus.gradient import compute_gradient_points_dec
+        from physicsnemo.mesh.primitives.volumes import cube_volume
+
+        mesh = cube_volume.load(subdivisions=3)
+        mesh = Mesh(points=mesh.points.double(), cells=mesh.cells)
+        slope = torch.tensor([2.0, 3.0, -1.0], dtype=torch.float64)
+        gradient = compute_gradient_points_dec(mesh, mesh.points @ slope)
+        torch.testing.assert_close(gradient, slope.expand(mesh.n_points, 3))

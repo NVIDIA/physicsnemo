@@ -76,7 +76,7 @@ def sharp(
     Parameters
     ----------
     mesh : Mesh
-        Simplicial mesh (2D or 3D).
+        Simplicial mesh of segments, triangles, or tetrahedra.
     edge_1form : torch.Tensor
         1-form values on edges, shape ``(n_edges,)`` or ``(n_edges, ...)``.
     edges : torch.Tensor
@@ -128,9 +128,11 @@ def sharp(
     ### Build mapping from edges to cells containing them
     from physicsnemo.mesh.boundaries import extract_candidate_facets
 
+    # The edges of each cell are its facets of codimension n_manifold_dims - 1
+    # (for a 1D mesh, the cell itself)
     candidate_edges, parent_cells = extract_candidate_facets(
         mesh.cells,
-        manifold_codimension=1,
+        manifold_codimension=mesh.n_manifold_dims - 1,
     )
 
     ### Match candidates to input edges to get 1-form values

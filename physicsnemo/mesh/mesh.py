@@ -2293,6 +2293,7 @@ class Mesh(
         manifold_codimension : int, optional
             Codimension of extracted mesh relative to parent.
 
+            - 0: The cells themselves, deduplicated (e.g., the edges of a 1D mesh)
             - 1: Extract (n-1)-facets (default, immediate boundaries of all cells)
             - 2: Extract (n-2)-facets (e.g., edges from tets, vertices from triangles)
             - k: Extract (n-k)-facets

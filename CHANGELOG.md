@@ -168,6 +168,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to avoid repeated CUDA synchronization for the same boolean mask.
   Point slicing skips mask processing when the output has no cells because
   the input has no cells or the point selection is empty.
+- DEC gradients (`gradient(method="dec")`) of tetrahedral meshes read triangle
+  faces as edges and were wrong at most vertices, and on 1D meshes they raised.
+  They now use the edges of every cell and are exact for linear fields on
+  segments, triangles and tetrahedra. `to_edge_graph()` works on 1D meshes, and
+  `get_facet_mesh(manifold_codimension=0)` returns the deduplicated cells.
 - Triangle areas use direct area components and a rescaled norm, preserving
   thin faces and their quadrature measures without Gram cancellation or
   overflow/underflow in the norm.
