@@ -24,6 +24,7 @@ from tensordict import TensorDict
 
 from physicsnemo.experimental.uq.conformal import (
     AbsoluteErrorScore,
+    CellwiseCalibrator,
     CoverageAccumulator,
     FunctionalBandCalibrator,
     QuantileRegressionScore,
@@ -278,9 +279,42 @@ def test_update_syncs_once_and_accepts_a_second_device(monkeypatch, device, tier
     assert accumulator.finalize() == reference.finalize()
 
 
+def test_update_does_not_keep_the_autograd_graph():
+    accumulator = _accumulator()
+    prediction = torch.zeros(3, requires_grad=True) * 2.0
+    lo, hi = prediction - 1.0, prediction + 1.0
+    accumulator.update(lo, hi, torch.zeros(3))
+    for counters in accumulator._counters.values():
+        assert not counters.width_sum.requires_grad
+    assert all(not hits.requires_grad for hits in accumulator._element_hits.values())
+
+
 def test_accumulator_constructor_rejects_bare_string_keys():
     with pytest.raises(TypeError, match="not the string"):
         CoverageAccumulator(tier="functional", alpha=0.5, n_cal=3, keys="p")
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda: CellwiseCalibrator(AbsoluteErrorScore(), alpha=0.5, keys=[]),
+        lambda: CoverageAccumulator(tier="cellwise", alpha=0.5, n_cal=3, keys=[]),
+    ],
+    ids=["calibrator", "accumulator"],
+)
+def test_empty_key_selection_is_rejected_up_front(make):
+    with pytest.raises(ValueError, match="at least one field"):
+        make()
+
+
+@pytest.mark.parametrize(
+    "alpha,n_cal,error",
+    [(float("nan"), 3, ValueError), (0.5, -1, ValueError), (0.5, 2.0, TypeError)],
+    ids=["nan-alpha", "negative-n_cal", "float-n_cal"],
+)
+def test_accumulator_constructor_validates_alpha_and_n_cal(alpha, n_cal, error):
+    with pytest.raises(error):
+        CoverageAccumulator(tier="cellwise", alpha=alpha, n_cal=n_cal)
 
 
 def test_accumulator_update_rejects_unknown_tier():

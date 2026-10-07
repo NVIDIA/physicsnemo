@@ -157,6 +157,7 @@ CONSTRUCTOR_REJECTIONS = [  # (id, make_predictor overrides, error, match)
     ("empty-thresholds", {"thresholds": torch.empty(0)}, ValueError, "empty"),
     ("nonscalar-threshold", {"thresholds": torch.ones(3)}, ValueError, "must be scalars"),
     ("negative-threshold", {"thresholds": torch.tensor(-1.0)}, ValueError, "^Plain tensor: negative threshold"),  # no internal key
+    ("threshold-mesh-size-mismatch", {**_CELL, "thresholds": torch.ones(3)}, ValueError, "one leading entry per mesh point"),
     ("unknown-tier", {"tier": "bogus"}, ValueError, "tier must be one of"),
     ("provenance-is-save-only", {"provenance": {}}, TypeError, "unexpected keyword"),
 ]

@@ -38,6 +38,8 @@ from ._utils import (
     normalize_keys,
     pack_fields,
     require_container_kind,
+    validate_alpha,
+    validate_n_cal,
 )
 
 __all__ = ["CoverageAccumulator"]
@@ -146,8 +148,8 @@ class CoverageAccumulator:
         keys: Sequence[str] | None = None,
     ) -> None:
         self._tier = tier
-        self._alpha = alpha
-        self._n_cal = n_cal
+        self._alpha = validate_alpha(alpha)
+        self._n_cal = validate_n_cal(n_cal)
         self._keys = normalize_keys(keys)
         field_keys = (TENSOR_KEY,) if self._keys is None else self._keys
         self._counters = {key: _FieldCounters() for key in field_keys}
@@ -243,9 +245,10 @@ class CoverageAccumulator:
         """
         staged = []
         for key in self._counters:
-            lo_field = containers["lo"][key]
-            hi_field = containers["hi"][key]
-            target_field = containers["target"][key]
+            # Detach so the running totals never keep the model's autograd graph.
+            lo_field = containers["lo"][key].detach()
+            hi_field = containers["hi"][key].detach()
+            target_field = containers["target"][key].detach()
             if target_field.numel() == 0:
                 raise ValueError(f"{_field_label(key)}: empty target tensor.")
             check_exact_shape(key, "lo", lo_field, "target", target_field)

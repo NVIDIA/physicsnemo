@@ -337,6 +337,11 @@ def points_fingerprint(
     return f"{_mesh_label(points)}-{digest}"
 
 
+def mesh_point_count(fingerprint: str) -> int:
+    """Number of points recorded in a mesh fingerprint (``<dtype>-<n>x<d>-<hex>``)."""
+    return int(fingerprint.split("-")[1].split("x")[0])
+
+
 def _mesh_label(points: Tensor) -> str:
     """The ``<dtype>-<n_points>x<n_dims>`` prefix of a mesh fingerprint."""
     n_points, n_dims = points.shape
@@ -435,7 +440,10 @@ def normalize_keys(keys: Sequence[str] | None) -> tuple[str, ...] | None:
             f"keys must be a list of field names, not the string {keys!r}; "
             f"pass [{keys!r}]."
         )
-    return tuple(dict.fromkeys(keys))
+    normalized = tuple(dict.fromkeys(keys))
+    if not normalized:
+        raise ValueError("keys must select at least one field.")
+    return normalized
 
 
 def positive_finite_float(value: object, name: str) -> float:
