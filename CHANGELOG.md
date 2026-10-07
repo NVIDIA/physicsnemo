@@ -193,9 +193,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `torch.distributions.Uniform` instantiates.
 - `RenameMeshFields` and `DropMeshFields` also apply to a `DomainMesh`'s
   domain-level `global_data`.
-- `BVH.from_mesh` and `ClusterTree.from_points` on CUDA compute Morton codes
-  in chunks of rows, so the bit-interleave temporary stays near 1 GB instead
-  of about 1 kB per point (55 GB at 50M cells). Codes are unchanged.
+- `BVH.from_mesh` and `ClusterTree.from_points` compute Morton codes for 1-3
+  spatial dimensions by spreading each coordinate's bits with a few
+  shift-and-mask steps. CUDA no longer materializes every bit as int64 (about
+  1 kB per point, 55 GB at 50M cells); temporaries are about 72 B per point in
+  3D, and the step is about 4x faster on large inputs. Codes are unchanged.
 
 ### Security
 
