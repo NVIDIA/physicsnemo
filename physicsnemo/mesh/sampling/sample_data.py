@@ -271,7 +271,7 @@ def _find_containing_pairs(
 
     ### Get candidate pairs from BVH (AABB overlap test)
     candidate_adj = bvh.find_candidate_cells(
-        query_points, aabb_tolerance=distance_tolerance
+        query_points, max_candidates_per_point=None, aabb_tolerance=distance_tolerance
     )
 
     if candidate_adj.n_total_neighbors == 0:

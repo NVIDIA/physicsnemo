@@ -721,6 +721,53 @@ def _unique_model_names(
     return output_dict
 
 
+def _resolve_checkpoint_files(
+    path: str,
+    fs: fsspec.AbstractFileSystem,
+    named_models: dict[str, torch.nn.Module],
+    epoch: int | None,
+    *,
+    distributed: bool = False,
+) -> tuple[str | None, dict[str, str | None]]:
+    """Resolve one training checkpoint and matching model files without loading.
+
+    The filename index also identifies automatically numbered saves, whose
+    training-state payload need not contain an epoch. Without training state,
+    preserve the independent model lookup used for weights-only exports.
+    Distributed callers run this lookup only on rank 0.
+    """
+    checkpoint_filename = _get_checkpoint_filename(
+        path, index=epoch, model_type="pt", distributed=distributed
+    )
+    if fs.exists(checkpoint_filename):
+        epoch = int(PurePath(checkpoint_filename).name.rsplit(".", 2)[1])
+    else:
+        checkpoint_filename = None
+
+    model_files: dict[str, str | None] = {}
+    for name, model in named_models.items():
+        inner = _unwrap_fsdp(model)
+        model_type = "mdlus" if isinstance(inner, physicsnemo.core.Module) else "pt"
+        filename = _get_checkpoint_filename(
+            path, name, index=epoch, model_type=model_type, distributed=distributed
+        )
+        model_files[name] = filename if fs.exists(filename) else None
+    return checkpoint_filename, model_files
+
+
+def _validate_checkpoint_files(
+    checkpoint_filename: str | None, model_files: dict[str, str | None]
+) -> None:
+    """Reject missing required weights before any model is changed, on every rank."""
+    missing = [name for name, filename in model_files.items() if filename is None]
+    if checkpoint_filename is not None and missing:
+        raise FileNotFoundError(
+            f"Training checkpoint {checkpoint_filename} exists, but matching "
+            f"weights files for models {missing} were not found; refusing to "
+            "restore training state with stale or uninitialized weights."
+        )
+
+
 def save_checkpoint(
     path: Path | str,
     models: torch.nn.Module | list[torch.nn.Module] | None = None,
@@ -1008,6 +1055,16 @@ def load_checkpoint(
         * No training-state file is found inside the directory.
         * The training-state file does not contain an ``"epoch"`` key.
 
+    Raises
+    ------
+    FileNotFoundError
+        A training-state checkpoint exists but a supplied model's weights
+        file at the same checkpoint index cannot be found. All required files
+        are checked before any model or training state is restored. With
+        ``epoch=None``, the latest training checkpoint selects the index for
+        every supplied model. A missing checkpoint directory or a directory
+        without a training-state checkpoint retains the skip behavior.
+
     Examples
     --------
     Save and then restore a model, optimizer, and scheduler from a checkpoint:
@@ -1094,16 +1151,18 @@ def load_checkpoint(
         )
         return 0
 
+    checkpoint_filename, model_files = _resolve_checkpoint_files(
+        path, fs, named_models, epoch
+    )
+    _validate_checkpoint_files(checkpoint_filename, model_files)
+
     # == Loading model checkpoint ==
     for name, model in named_models.items():
         inner = _unwrap_fsdp(model)
-        model_type = "mdlus" if isinstance(inner, physicsnemo.core.Module) else "pt"
-        file_name = _get_checkpoint_filename(
-            path, name, index=epoch, model_type=model_type
-        )
-        if not fs.exists(file_name):
+        file_name = model_files[name]
+        if file_name is None:
             checkpoint_logging.error(
-                f"Could not find valid model file {file_name}, skipping load"
+                f"Could not find valid model file for {name}, skipping load"
             )
             continue
 
@@ -1128,8 +1187,7 @@ def load_checkpoint(
         )
 
     # == Loading training checkpoint ==
-    checkpoint_filename = _get_checkpoint_filename(path, index=epoch, model_type="pt")
-    if not fs.exists(checkpoint_filename):
+    if checkpoint_filename is None:
         checkpoint_logging.warning(
             "Could not find valid checkpoint file, skipping load"
         )
@@ -1264,35 +1322,33 @@ def _load_checkpoint_distributed(
     )
     full_options = StateDictOptions(full_state_dict=True)
 
-    # --- Rank 0 checks directory existence and loads raw data -----------
+    # --- Rank 0 resolves files; every rank validates before loading ------
     dir_exists = fs.exists(path) and not fs.isfile(path) if is_rank0 else None
-    flags: list[Any] = [dir_exists]
+    checkpoint_filename = None
+    model_file_info: dict[str, str | None] = {}
+    if is_rank0 and dir_exists:
+        checkpoint_filename, model_file_info = _resolve_checkpoint_files(
+            path, fs, named_models, epoch, distributed=True
+        )
+    flags: list[Any] = [dir_exists, checkpoint_filename, model_file_info]
     torch.distributed.broadcast_object_list(flags, src=0)
-    dir_exists = flags[0]
+    dir_exists, checkpoint_filename, model_file_info = flags
 
     if not dir_exists:
         checkpoint_logging.warning(
             f"Provided checkpoint directory {path} does not exist, skipping load"
         )
         return 0
+    _validate_checkpoint_files(checkpoint_filename, model_file_info)
 
     # --- Load model checkpoints -----------------------------------------
-    # Rank 0: determine which model files exist and load their state dicts
-    model_file_info: dict[str, str | None] = {}
+    # Rank 0 reads the resolved files only after all required files are found.
     model_state_dicts: dict[str, dict[str, Any]] = {}
     if is_rank0:
         for name, model in named_models.items():
             inner = _unwrap_fsdp(model)
-            model_type = "mdlus" if isinstance(inner, physicsnemo.core.Module) else "pt"
-            file_name = _get_checkpoint_filename(
-                path,
-                name,
-                index=epoch,
-                model_type=model_type,
-                distributed=True,
-            )
-            if fs.exists(file_name):
-                model_file_info[name] = file_name
+            file_name = model_file_info[name]
+            if file_name is not None:
                 if isinstance(inner, physicsnemo.core.Module):
                     model_state_dicts[name] = _extract_mdlus_state_dict(
                         file_name, device
@@ -1304,13 +1360,6 @@ def _load_checkpoint_distributed(
                         map_location=device,
                         weights_only=False,
                     )
-            else:
-                model_file_info[name] = None
-
-    # Broadcast which model files were found
-    info_list: list[Any] = [model_file_info]
-    torch.distributed.broadcast_object_list(info_list, src=0)
-    model_file_info = info_list[0]
 
     # Distribute model state dicts via DCP
     for name, model in named_models.items():
@@ -1369,23 +1418,11 @@ def _load_checkpoint_distributed(
         )
 
     # --- Load training checkpoint ---------------------------------------
-    checkpoint_filename = _get_checkpoint_filename(
-        path, index=epoch, model_type="pt", distributed=True
-    )
-
-    # Broadcast file existence so all ranks agree on whether to enter the
-    # (collective) optimizer load. Without this, a rundir that has model
-    # weights but no training checkpoint -- e.g. fine-tuning from a
-    # weights-only export -- would have rank 0 enter ``set_optimizer_state_dict``
-    # with an empty dict and trip the "missing 'state'" error inside DCP.
-    ckpt_exists = fs.exists(checkpoint_filename) if is_rank0 else None
-    ckpt_flags: list[Any] = [ckpt_exists]
-    torch.distributed.broadcast_object_list(ckpt_flags, src=0)
-    ckpt_exists = ckpt_flags[0]
-
-    if not ckpt_exists:
+    # The rank-0 file lookup above also keeps weights-only exports out of
+    # the collective optimizer load, which requires a training-state dict.
+    if checkpoint_filename is None:
         checkpoint_logging.warning(
-            f"No training checkpoint at {checkpoint_filename}; "
+            f"No training checkpoint in {path}; "
             "skipping optimizer/scheduler/scaler load"
         )
         return 0
