@@ -160,11 +160,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- The unified external aero recipe's force documentation and subsampling warning
-  explain how effective measures compensate for retained-area shrinkage and
-  when sampling or sample-dependent moment origins can introduce bias. Saved
-  inference outputs retain explicit query measures and scale them with geometry
-  so the exported fields remain integrable in physical coordinates.
+- GLOBE DrivAerML postprocessing integrates predicted force coefficients with
+  the effective cell measures of a subsampled surface, so Cd, Cl, and Cs no
+  longer shrink by the kept-cell fraction. The matplotlib comparison sizes its
+  cell disks by the same measures, so they cover the represented surface
+  instead of only the kept triangles.
+- The unified external aero recipe's force documentation, inference config,
+  and subsampling warning explain how effective measures compensate for
+  retained-area shrinkage and when sampling or sample-dependent moment origins
+  can introduce bias.
 - Checkpoint loading resolves model weights at the selected training checkpoint's
   filename index, preventing resumes that mix epochs. Missing required weights
   raise before any model or training state is restored. Distributed loads validate
