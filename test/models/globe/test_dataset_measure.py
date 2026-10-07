@@ -75,7 +75,7 @@ def test_subsample_preserves_represented_measure(
 def test_postprocess_preserves_sampled_force_coefficients(
     drivaer_dataset, n_cells, explicit
 ):
-    """Constant traction integrates over the full represented surface area."""
+    """Forces and the returned mesh both use the represented surface area."""
     full = Mesh(
         points=torch.tensor([[1.0, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]]),
         cells=torch.tensor([[1, 3, 2], [0, 2, 3], [0, 3, 1], [0, 1, 2]]),
@@ -120,4 +120,6 @@ def test_postprocess_preserves_sampled_force_coefficients(
         torch.testing.assert_close(
             combined.global_data["true", key], sample.aero_coefficients[key]
         )
+    ### Disk rendering reads the represented area from the combined mesh.
+    torch.testing.assert_close(cell_measures(combined), original_measures)
     torch.testing.assert_close(cell_measures(sampled), original_measures)
