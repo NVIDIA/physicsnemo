@@ -97,31 +97,29 @@ def test_uniform_shear_gives_drag_equal_to_c_times_area():
 
 
 @pytest.mark.parametrize("length_scale", [1.0, 3.0])
-def test_subsampled_surface_with_measure_weights_recovers_full_surface_drag(
+def test_subsampled_surface_with_effective_measures_recovers_full_surface_drag(
     length_scale,
 ):
-    """Measure weights make the integral over kept cells estimate the full one."""
+    """Effective measures make the integral over kept cells estimate the full one."""
     full = _closed_tetrahedron()
-    retained = full.slice_cells(torch.tensor([0, 1]))
-    scale_measures(retained, full.n_cells / retained.n_cells)
+    kept = torch.tensor([0, 1])
+    unweighted = full.slice_cells(kept)
+    weighted = full.slice_cells(kept)
+    scale_measures(weighted, full.n_cells / weighted.n_cells)
 
     c = 2.0
-    cf = torch.tensor([[c, 0.0, 0.0]]).repeat(retained.n_cells, 1)
-    res = forces.force_moment_coefficients(
-        retained,
-        torch.zeros(retained.n_cells),
-        cf,
-        **{**_COMMON, "length_scale": length_scale},
-    )
+    cp = torch.zeros(len(kept))
+    cf = torch.tensor([[c, 0.0, 0.0]]).repeat(len(kept), 1)
+    common = {**_COMMON, "length_scale": length_scale}
+    res = forces.force_moment_coefficients(weighted, cp, cf, **common)
+    res_unweighted = forces.force_moment_coefficients(unweighted, cp, cf, **common)
 
     ### A regular tetrahedron's faces have equal area, so two of four cells
     ### weighted by 4/2 reproduce the full-surface value exactly; without
-    ### the weights the integral would be half of it.
+    ### the weights the integral covers only the kept half.
     expected = c * float(full.cell_areas.sum()) * length_scale**2
     assert res["CD"] == pytest.approx(expected, abs=1e-3)
-    assert c * float(retained.cell_areas.sum()) * length_scale**2 == pytest.approx(
-        expected / 2, abs=1e-3
-    )
+    assert res_unweighted["CD"] == pytest.approx(expected / 2, abs=1e-3)
 
 
 def test_uniform_shear_moment_about_offset_center():

@@ -67,10 +67,11 @@ Conventions and assumptions:
   L_ref`` to integrate on a physical-scale surface; areas and moment
   arms are translation-invariant, so the lost ``CenterMesh`` offset does
   not affect forces (and only shifts the moment reference for moments).
-- **Subsampled surfaces.** ``SubsampleMesh`` multiplies each retained cell's
-  effective measure by ``n_before / n_kept``. ``Mesh.integrate`` uses that
-  complete measure to compensate for the retained-area shrinkage. This gives
-  an unbiased Horvitz--Thompson estimate when every cell has inclusion
+- **Subsampled surfaces.** Cell subsampling, by the reader's
+  ``subsample_n_cells`` or by ``SubsampleMesh``, multiplies each retained
+  cell's effective measure by ``n_before / n_kept``. ``Mesh.integrate`` uses
+  that complete measure to compensate for the retained-area shrinkage. This
+  gives an unbiased Horvitz--Thompson estimate when every cell has inclusion
   probability ``n_kept / n_before`` and its field value and physical moment
   reference are fixed independently of the sample.
   The large-population ``poisson_gap`` sampler is approximate, so this
@@ -78,6 +79,10 @@ Conventions and assumptions:
   that depend on the sampled geometry can introduce additional bias.
   Likewise, centering after reader-level subsampling changes the physical
   moment origin between samples; reweighting cannot correct that frame change.
+  The reader keeps one contiguous (cyclic) block of cells in storage order.
+  Storage order is often spatially coherent, so reader-subsampled estimates
+  can be much noisier than those from ``SubsampleMesh``'s uniform random
+  subset.
   Subsampled coefficients can have both sampling noise and bias and should be
   checked for convergence with surface resolution.
   ``ForceContext.coefficients``'s 1:1 points/cells contract check cannot
