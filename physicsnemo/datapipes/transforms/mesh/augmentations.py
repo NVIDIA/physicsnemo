@@ -332,7 +332,7 @@ class RandomRotateMesh(MeshTransform):
             raise ValueError("axes cannot be combined with mode='uniform'")
         if mode not in ("axis_aligned", "uniform"):
             raise ValueError(f"mode must be 'axis_aligned' or 'uniform', got {mode!r}")
-        self.axes = axes if axes is not None else ["x", "y", "z"]
+        self.axes = tuple(axes) if axes is not None else ("x", "y", "z")
         self._distribution = distribution or torch.distributions.Uniform(
             -math.pi, math.pi
         )

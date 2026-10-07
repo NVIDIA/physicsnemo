@@ -261,18 +261,18 @@ def main(
     # Reference area: constant aRefRef = 2.170 m² from the DrivAerML spec
     model = GLOBE(
         n_spatial_dims=3,
-        output_field_ranks={
-            "C_p": 0,
-            "C_f": 1,
+        output_schema={
+            "C_p": {"rank": 0},
+            "C_f": {"rank": 1},
         },
-        boundary_source_data_ranks={
+        boundary_source_schemas={
             "vehicle": {},
             "no_slip_floor": {},
             "slip_floor": {},
         },
         reference_length_names=["L_ref", "delta_turb"],
         reference_area=2.170,
-        global_data_ranks=None,
+        global_schema=None,
         n_communication_hyperlayers=n_communication_hyperlayers,
         hidden_layer_sizes=hidden_layer_sizes,
         n_latent_scalars=n_latent_scalars,

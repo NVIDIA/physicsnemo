@@ -652,3 +652,40 @@ class TestConsistency:
         assert errors[2] < errors[1]
         # subdivision=3 should be within ~0.5% of analytic
         assert errors[2] < 0.005
+
+
+def test_constant_field_exact(unit_triangle: Mesh):
+    """P1 integral of constant field = constant * volume."""
+    f = torch.tensor([3.0, 3.0, 3.0])
+    result = integrate(unit_triangle, f, data_source="points")
+    assert torch.isclose(result, torch.tensor(3.0 * 0.5))
+
+
+def test_multiple_cells(two_triangles: Mesh):
+    """Integration over mesh with two cells."""
+    f = torch.ones(two_triangles.n_points)
+    result = integrate(two_triangles, f, data_source="points")
+    assert torch.isclose(result, two_triangles.cell_areas.sum())
+
+
+def test_tet_constant(unit_tet: Mesh):
+    """Constant field on tetrahedron: integral = c * V."""
+    f = torch.full((4,), 5.0)
+    result = integrate(unit_tet, f, data_source="points")
+    expected = 5.0 / 6.0
+    assert torch.isclose(result, torch.tensor(expected))
+
+
+def test_edge_constant(edge_mesh: Mesh):
+    """Constant field on edges: integral = c * total_length."""
+    f = torch.full((4,), 2.0)
+    result = integrate(edge_mesh, f, data_source="points")
+    assert torch.isclose(result, torch.tensor(2.0 * 3.0))
+
+
+def test_string_key_cell(two_triangles: Mesh):
+    """Non-uniform per-cell values resolved through a string key."""
+    two_triangles.cell_data["p"] = torch.tensor([1.0, 2.0])
+    result = integrate(two_triangles, "p", data_source="cells")
+    areas = two_triangles.cell_areas
+    assert torch.isclose(result, (torch.tensor([1.0, 2.0]) * areas).sum())

@@ -27,7 +27,7 @@
 # .pdmsh files carry pMeanTrim, wallShearStressMeanTrim, etc. for
 # other recipe models) is silently ignored.  To use one of those as a
 # real boundary-condition input, add it to
-# `boundary_source_data_ranks.vehicle` and GLOBE will pick it up.
+# `boundary_source_schemas.vehicle` and GLOBE will pick it up.
 input_type: mesh
 output_type: mesh
 
@@ -42,11 +42,11 @@ forward_kwargs:
 model:
   _target_: physicsnemo.experimental.models.globe.GLOBE
   n_spatial_dims: 3
-  output_field_ranks:
-    velocity: 1                # vector
-    pressure: 0                # scalar
-    nut: 0                     # scalar
-  boundary_source_data_ranks:
+  output_schema:
+    velocity: {rank: 1}        # vector
+    pressure: {rank: 0}        # scalar
+    nut: {rank: 0}             # scalar
+  boundary_source_schemas:
     vehicle: {}
   reference_length_names: [L_ref, delta_turb]
   reference_area: 0.0868       # 2.170 / 5.0^2 (nondim)

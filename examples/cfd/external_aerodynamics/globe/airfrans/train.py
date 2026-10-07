@@ -251,17 +251,17 @@ def main(
     ### [Model]
     model = GLOBE(
         n_spatial_dims=2,
-        output_field_ranks={
-            "ΔU/|U_inf|": 1,
-            "C_p": 0,
-            "C_pt": 0,
-            "ln(1+nut/nu)": 0,
-            "C_F,shear": 1,
+        output_schema={
+            "ΔU/|U_inf|": {"rank": 1},
+            "C_p": {"rank": 0},
+            "C_pt": {"rank": 0},
+            "ln(1+nut/nu)": {"rank": 0},
+            "C_F,shear": {"rank": 1},
         },
-        boundary_source_data_ranks={"no_slip": {}},
+        boundary_source_schemas={"no_slip": {}},
         reference_length_names=["chord", "delta_FS"],
         reference_area=1.0,
-        global_data_ranks={"U_inf / U_inf_magnitude": 1},
+        global_schema={"U_inf / U_inf_magnitude": {"rank": 1}},
         n_communication_hyperlayers=n_communication_hyperlayers,
         hidden_layer_sizes=hidden_layer_sizes,
         n_latent_scalars=n_latent_scalars,

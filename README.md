@@ -263,8 +263,13 @@ dependency constraints. The command at the top of this README selects the CUDA 1
 backend. Use the CUDA 12 backend instead with:
 
 ```bash
-pip install "nvidia-physicsnemo[cu12]"
+pip install "nvidia-physicsnemo[cu12]" \
+  --extra-index-url https://download.pytorch.org/whl/cu129
 ```
+
+Specify the CUDA 12.9 PyTorch index because pip does not read the index settings
+in `pyproject.toml`. The CUDA 12 backend is Linux-only and uses PyTorch 2.13,
+the newest release with CUDA 12.9 wheels.
 
 For a basic installation that uses PyPI's default PyTorch distribution and does not
 install the CUDA-specific RAPIDS packages:
