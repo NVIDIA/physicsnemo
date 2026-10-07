@@ -223,9 +223,6 @@ def compute_loop_edge_positions_2d(
     """
     from physicsnemo.mesh.boundaries import extract_candidate_facets
 
-    n_edges = len(unique_edges)
-    device = mesh.points.device
-
     ### Build edge-to-cells mapping
     candidate_edges, parent_cell_indices = extract_candidate_facets(
         mesh.cells,
@@ -243,91 +240,57 @@ def compute_loop_edge_positions_2d(
 
     ### Identify boundary vs interior edges
     is_interior = adjacent_counts == 2
-    is_boundary = ~is_interior
 
-    ### Initialize edge positions
-    edge_positions = torch.zeros(
-        (n_edges, mesh.n_spatial_dims),
-        dtype=mesh.points.dtype,
-        device=device,
+    ### Boundary rule (simple average), computed for every edge
+    v0_pos = mesh.points[unique_edges[:, 0]]  # (n_edges, n_spatial_dims)
+    v1_pos = mesh.points[unique_edges[:, 1]]  # (n_edges, n_spatial_dims)
+    boundary_positions = (v0_pos + v1_pos) / 2
+
+    ### Interior rule (Loop's formula), also computed for every edge
+    # torch.where then keeps it for the interior edges; selecting them by boolean
+    # masks instead would synchronize the device for each selection.
+
+    # Sorted by edge, the candidates of each edge form one contiguous run, so the
+    # two cells adjacent to an interior edge are the first two of its run. (For
+    # any other edge the second entry is unused, and may belong to the next edge.)
+    sorted_parents = parent_cell_indices[torch.argsort(inverse_indices)]
+    run_starts = torch.cumsum(adjacent_counts, dim=0) - adjacent_counts
+    second = (run_starts + 1).clamp(max=len(sorted_parents) - 1)
+    # Shape: (n_edges, 2)
+    adjacent_cells = torch.stack(
+        [sorted_parents[run_starts], sorted_parents[second]], dim=1
     )
 
-    ### Compute boundary edge positions (simple average)
-    # Shape: (n_boundary_edges, n_spatial_dims)
-    boundary_edges = unique_edges[is_boundary]
-    if len(boundary_edges) > 0:
-        v0_pos = mesh.points[boundary_edges[:, 0]]
-        v1_pos = mesh.points[boundary_edges[:, 1]]
-        edge_positions[is_boundary] = (v0_pos + v1_pos) / 2
+    ### Get the triangles
+    # Shape: (n_edges, 2, 3)
+    triangles = mesh.cells[adjacent_cells]
 
-    ### Compute interior edge positions (Loop's formula)
-    interior_edge_indices = torch.where(is_interior)[0]
-    n_interior = len(interior_edge_indices)
+    ### Find opposite vertices for each triangle
+    # For each triangle, find the vertex that's not in the edge
+    # Shape: (n_edges, 2, 3) - broadcast comparison
+    edge_v0 = unique_edges[:, 0].unsqueeze(1).unsqueeze(2)  # (n_edges, 1, 1)
+    edge_v1 = unique_edges[:, 1].unsqueeze(1).unsqueeze(2)  # (n_edges, 1, 1)
+    is_edge_vertex = (triangles == edge_v0) | (triangles == edge_v1)
 
-    if n_interior > 0:
-        ### For each interior edge, find its two adjacent cells (vectorized)
-        # Filter candidate edges to only those belonging to interior edges
-        is_interior_candidate = is_interior[inverse_indices]
-        interior_inverse = inverse_indices[is_interior_candidate]
-        interior_parents = parent_cell_indices[is_interior_candidate]
+    # The opposite vertex is where is_edge_vertex is False; argmax finds it
+    # Shape: (n_edges, 2)
+    opposite_vertex_indices = torch.argmax((~is_edge_vertex).int(), dim=2)
+    opposite_vertices = torch.gather(
+        triangles,  # (n_edges, 2, 3)
+        dim=2,
+        index=opposite_vertex_indices.unsqueeze(2),  # (n_edges, 2, 1)
+    ).squeeze(2)  # (n_edges, 2)
 
-        # Sort by edge index to group candidates belonging to same edge
-        sort_indices = torch.argsort(interior_inverse)
-        sorted_parents = interior_parents[sort_indices]
+    ### Compute Loop edge rule: 3/8 * (v0 + v1) + 1/8 * (opp0 + opp1)
+    opp0_pos = mesh.points[opposite_vertices[:, 0]]  # (n_edges, n_spatial_dims)
+    opp1_pos = mesh.points[opposite_vertices[:, 1]]  # (n_edges, n_spatial_dims)
+    interior_positions = (3.0 / 8.0) * (v0_pos + v1_pos) + (1.0 / 8.0) * (
+        opp0_pos + opp1_pos
+    )
 
-        # Reshape to (n_interior, 2) - each interior edge has exactly 2 adjacent cells
-        # Shape: (n_interior, 2)
-        adjacent_cells = sorted_parents.reshape(n_interior, 2)
-
-        ### Get the triangles
-        # Shape: (n_interior, 2, 3)
-        triangles = mesh.cells[adjacent_cells]
-
-        ### Get edge vertices
-        # Shape: (n_interior, 2)
-        interior_edges = unique_edges[interior_edge_indices]
-
-        ### Find opposite vertices for each triangle
-        # For each triangle, find the vertex that's not in the edge
-        # Shape: (n_interior, 2, 3) - broadcast comparison
-        # Create masks for which vertices are in the edge
-        edge_v0 = interior_edges[:, 0].unsqueeze(1).unsqueeze(2)  # (n_interior, 1, 1)
-        edge_v1 = interior_edges[:, 1].unsqueeze(1).unsqueeze(2)  # (n_interior, 1, 1)
-
-        # Check if each triangle vertex matches edge vertices
-        # Shape: (n_interior, 2, 3)
-        is_edge_vertex = (triangles == edge_v0) | (triangles == edge_v1)
-
-        # The opposite vertex is where is_edge_vertex is False
-        # Shape: (n_interior, 2, 3)
-        opposite_mask = ~is_edge_vertex
-
-        # Extract opposite vertices using argmax (finds first True in mask)
-        # Shape: (n_interior, 2)
-        # torch.argmax on the opposite_mask gives us the index of the opposite vertex
-        opposite_vertex_indices = torch.argmax(
-            opposite_mask.int(), dim=2
-        )  # (n_interior, 2)
-
-        # Gather the actual vertex IDs
-        # Shape: (n_interior, 2)
-        opposite_vertices = torch.gather(
-            triangles,  # (n_interior, 2, 3)
-            dim=2,
-            index=opposite_vertex_indices.unsqueeze(2),  # (n_interior, 2, 1)
-        ).squeeze(2)  # (n_interior, 2)
-
-        ### Compute Loop edge rule: 3/8 * (v0 + v1) + 1/8 * (opp0 + opp1)
-        v0_pos = mesh.points[interior_edges[:, 0]]  # (n_interior, n_spatial_dims)
-        v1_pos = mesh.points[interior_edges[:, 1]]  # (n_interior, n_spatial_dims)
-        opp0_pos = mesh.points[opposite_vertices[:, 0]]  # (n_interior, n_spatial_dims)
-        opp1_pos = mesh.points[opposite_vertices[:, 1]]  # (n_interior, n_spatial_dims)
-
-        edge_positions[interior_edge_indices] = (3.0 / 8.0) * (v0_pos + v1_pos) + (
-            1.0 / 8.0
-        ) * (opp0_pos + opp1_pos)
-
-    return edge_positions
+    return torch.where(
+        is_interior.unsqueeze(-1), interior_positions, boundary_positions
+    )
 
 
 def subdivide_loop(mesh: "Mesh") -> "Mesh":

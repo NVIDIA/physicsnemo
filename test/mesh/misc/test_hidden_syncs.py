@@ -234,7 +234,7 @@ def test_smoothing_synchronizations_do_not_grow_with_iterations():
 
 @requires_cuda
 @pytest.mark.parametrize(
-    "subdivision, max_syncs", [("linear", 1), ("loop", 12), ("butterfly", 13)]
+    "subdivision, max_syncs", [("linear", 1), ("loop", 8), ("butterfly", 3)]
 )
 def test_subdivision_synchronizations_are_bounded(subdivision, max_syncs):
     """Subdivision synchronizes only for data-dependent sizes, not for small tables."""
