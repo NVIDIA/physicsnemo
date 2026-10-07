@@ -422,7 +422,10 @@ def normalize_keys(keys: Sequence[str] | None) -> tuple[str, ...] | None:
             f"keys must be a list of field names, not the string {keys!r}; "
             f"pass [{keys!r}]."
         )
-    return tuple(dict.fromkeys(keys))
+    normalized = tuple(dict.fromkeys(keys))
+    if not normalized:
+        raise ValueError("keys must select at least one field.")
+    return normalized
 
 
 def positive_finite_float(value: object, name: str) -> float:

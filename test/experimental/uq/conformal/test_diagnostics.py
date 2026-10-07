@@ -271,6 +271,19 @@ def test_accumulator_constructor_rejects_bare_string_keys():
         CoverageAccumulator(tier="cellwise", alpha=0.5, n_cal=3, keys="p")
 
 
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda: CellwiseCalibrator(AbsoluteErrorScore(), alpha=0.5, keys=[]),
+        lambda: CoverageAccumulator(tier="cellwise", alpha=0.5, n_cal=3, keys=[]),
+    ],
+    ids=["calibrator", "accumulator"],
+)
+def test_empty_key_selection_is_rejected_up_front(make):
+    with pytest.raises(ValueError, match="at least one field"):
+        make()
+
+
 def test_accumulator_update_rejects_unknown_tier():
     accumulator = CoverageAccumulator(tier="bogus", alpha=0.5, n_cal=3)
     with pytest.raises(ValueError, match="tier must be one of"):
