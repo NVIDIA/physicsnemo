@@ -34,6 +34,7 @@ from physicsnemo.experimental.uq.conformal import (
 )
 from physicsnemo.experimental.uq.conformal._utils import (
     TENSOR_KEY,
+    broadcast_difficulty,
     check_aux,
     check_exact_shape,
     check_points,
@@ -50,6 +51,7 @@ from test.experimental.uq.conformal._helpers import (
     CALIBRATORS,
     TIERS,
     fit,
+    fitted_functional,
 )
 
 _F = torch.zeros(3)
@@ -76,6 +78,7 @@ VALIDATOR_CASES = [
     ("check_aux-integer", lambda: check_aux("k", _N, _F, {"sigma": _I64}), (TypeError, "floating")),
     ("check_aux-nonfinite", lambda: check_aux("k", _N, _F, {"sigma": _INF3}), (ValueError, "non-finite")),
     ("check_aux-plain-label", lambda: check_aux(TENSOR_KEY, _N, _F, {"sigma": 1.0}), (TypeError, "^Plain tensor: aux")),
+    ("broadcast_difficulty-plain-label", lambda: broadcast_difficulty(torch.ones(2), _F, TENSOR_KEY), (ValueError, "^Plain tensor: AuxDifficulty gave")),
     ("keys-bare-string", lambda: normalize_keys("pressure"), (TypeError, "not the string")),
     ("keys-order-preserved", lambda: normalize_keys(["b", "a"]), ("b", "a")),
     ("keys-none", lambda: normalize_keys(None), None),
@@ -170,9 +173,10 @@ _POINTS = torch.arange(3.0).reshape(3, 1)
 def _calibrator_entry(tier):
     def build():
         calibrator = CALIBRATORS[tier](AbsoluteErrorScore(), alpha=0.5)
-        calibrator.update(_F, _F, points=_POINTS)
+        points = _POINTS if tier == "cellwise" else None
+        calibrator.update(_F, _F, points=points)
         return (
-            lambda bad: calibrator.update(_F, bad, points=_POINTS),
+            lambda bad: calibrator.update(_F, bad, points=points),
             lambda: calibrator.n_cal,
         )
 
@@ -180,15 +184,12 @@ def _calibrator_entry(tier):
 
 
 def _predictor_entry():
-    predictor, points = fit("cellwise", n_samples=8, shape=(3,))
-    return (
-        lambda bad: predictor.predict_interval(bad, points=points),
-        lambda: predictor.thresholds,
-    )
+    predictor = fitted_functional()
+    return predictor.predict_interval, lambda: predictor.thresholds
 
 
 def _accumulator_entry():
-    accumulator = fit("cellwise", n_samples=8, shape=(3,))[0].coverage_accumulator()
+    accumulator = fitted_functional().coverage_accumulator()
     accumulator.update(-torch.ones(3), torch.ones(3), _F)
     return (
         lambda bad: accumulator.update(-torch.ones(3), torch.ones(3), bad),
@@ -218,7 +219,7 @@ def test_entry_points_reject_bad_inputs_transactionally(entry_point, bad_kind):
 
 
 def test_field_mode_entry_points_reject_plain_tensors():
-    predictor, _ = fit("cellwise", n_samples=10, shape=(3,), fields=["p"])
+    predictor, _ = fit("functional", n_samples=10, shape=(3,), fields=["p"])
     accumulator = predictor.coverage_accumulator()
     message = r"calibrated on TensorDict fields \['p'\]; pass {} as a TensorDict"
     with pytest.raises(TypeError, match=message.format("prediction")):
@@ -229,8 +230,8 @@ def test_field_mode_entry_points_reject_plain_tensors():
 
 def test_tensordict_inputs_take_the_same_validation_path():
     """Field containers route each field through the shared validators."""
-    calibrator = CALIBRATORS["cellwise"](AbsoluteErrorScore(), alpha=0.5)
+    calibrator = CALIBRATORS["functional"](AbsoluteErrorScore(), alpha=0.5)
     bad = TensorDict({"bad": torch.full((3,), torch.nan)}, batch_size=[])
     with pytest.raises(ValueError, match="Field 'bad': 3 non-finite"):
-        calibrator.update(bad, bad, points=_POINTS)
+        calibrator.update(bad, bad)
     assert calibrator.n_cal == 0

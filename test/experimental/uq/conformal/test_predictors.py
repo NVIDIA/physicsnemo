@@ -25,6 +25,7 @@ from tensordict import TensorDict
 import physicsnemo.experimental.uq.conformal as conformal
 from physicsnemo.experimental.uq.conformal import (
     AbsoluteErrorScore,
+    AuxDifficulty,
     CellwiseCalibrator,
     ConformalPredictor,
 )
@@ -32,15 +33,40 @@ from physicsnemo.experimental.uq.conformal._utils import points_fingerprint
 from test.experimental.uq.conformal._helpers import count_syncs, fit, make_predictor
 
 
-@pytest.mark.parametrize("fields", [None, ["a", "b"]])
-def test_predict_interval_syncs_once(monkeypatch, fields):
+def test_nonfinite_deployment_difficulty_is_rejected():
+    predictor, _ = fit(
+        "functional",
+        difficulty=AuxDifficulty(key="spread"),
+        n_samples=10,
+        shape=(20,),
+        aux_factory=lambda p, g: {"spread": torch.rand(p.shape, generator=g) + 0.5},
+    )
+    spread = torch.ones(5)
+    spread[2] = torch.nan
+    with pytest.raises(ValueError, match="non-finite"):
+        predictor.predict_interval(torch.zeros(5), aux={"spread": spread})
+
+
+def _sigma(prediction, generator):
+    return {"sigma": torch.rand(prediction.shape, generator=generator) + 0.5}
+
+
+@pytest.mark.parametrize(
+    "tier,fields",
+    [("cellwise", None), ("functional", None), ("functional", ["a", "b"])],
+)
+def test_predict_interval_syncs_once(monkeypatch, tier, fields):
     """All value checks, including the mesh checksum, share one host sync."""
-    predictor, points = fit("cellwise", shape=(20,), fields=fields, n_samples=10)
+    difficulty = None if tier == "cellwise" else AuxDifficulty()
+    kwargs = dict(difficulty=difficulty, shape=(20,), fields=fields, n_samples=10)
+    predictor, points = fit(tier, aux_factory=_sigma, **kwargs)
+    aux = {"sigma": torch.rand(20) + 0.5}
     prediction = torch.randn(20)
     if fields is not None:
         prediction = TensorDict({key: prediction for key in fields}, batch_size=[])
+        aux = {key: aux for key in fields}
     calls = count_syncs(monkeypatch)
-    predictor.predict_interval(prediction, points=points)
+    predictor.predict_interval(prediction, aux=aux, points=points)
     assert calls == ["tolist"]
 
 
@@ -112,16 +138,25 @@ class _CustomScore(AbsoluteErrorScore):
     pass
 
 
+class _CustomDifficulty(AuxDifficulty):
+    pass
+
+
+_CELL = {"tier": "cellwise", "thresholds": torch.ones(2), "points": torch.ones(2, 1)}
 # fmt: off
 CONSTRUCTOR_REJECTIONS = [  # (id, make_predictor overrides, error, match)
-    ("custom-score", {"score": _CustomScore()}, TypeError, "Subclasses are not supported"),
-    ("cellwise-without-mesh", {"points": None}, ValueError, "requires points="),
-    ("cellwise-scalar-threshold", {"thresholds": torch.tensor(1.0)}, ValueError, "at least one dimension"),
-    ("dict-thresholds", {"thresholds": {"pressure": torch.ones(3)}}, TypeError, "Tensor or TensorDict"),
+    ("custom-score", {**_CELL, "score": _CustomScore()}, TypeError, "Subclasses are not supported"),
+    ("cellwise-with-difficulty", {**_CELL, "difficulty": AuxDifficulty()}, ValueError, "does not take difficulty="),
+    ("cellwise-without-mesh", {"tier": "cellwise", "thresholds": torch.ones(2)}, ValueError, "requires points="),
+    ("cellwise-scalar-threshold", {**_CELL, "thresholds": torch.tensor(1.0)}, ValueError, "at least one dimension"),
+    ("custom-difficulty", {"tier": "functional", "difficulty": _CustomDifficulty()}, TypeError, "Subclasses are not supported"),
+    ("functional-with-points", {"points": torch.ones(2, 1)}, ValueError, "does not take points="),
+    ("dict-thresholds", {"thresholds": {"pressure": torch.tensor(1.0)}}, TypeError, "Tensor or TensorDict"),
     ("empty-tensordict-thresholds", {"thresholds": TensorDict({})}, ValueError, "at least one"),
-    ("integer-thresholds", {"thresholds": torch.ones(3, dtype=torch.int32)}, TypeError, "floating"),
+    ("integer-thresholds", {"thresholds": torch.ones((), dtype=torch.int32)}, TypeError, "floating"),
     ("empty-thresholds", {"thresholds": torch.empty(0)}, ValueError, "empty"),
-    ("negative-threshold", {"thresholds": torch.full((3,), -1.0)}, ValueError, "^Plain tensor: negative threshold"),  # no internal key
+    ("nonscalar-threshold", {"thresholds": torch.ones(3)}, ValueError, "must be scalars"),
+    ("negative-threshold", {"thresholds": torch.tensor(-1.0)}, ValueError, "^Plain tensor: negative threshold"),  # no internal key
     ("unknown-tier", {"tier": "bogus"}, ValueError, "tier must be one of"),
     ("provenance-is-save-only", {"provenance": {}}, TypeError, "unexpected keyword"),
 ]
@@ -140,9 +175,11 @@ def test_constructor_tier_invariants_and_threshold_guards(overrides, error, matc
 def test_public_api_exports():
     expected = {
         "AbsoluteErrorScore",
+        "AuxDifficulty",
         "CellwiseCalibrator",
         "ConformalPredictor",
         "CoverageAccumulator",
+        "FunctionalBandCalibrator",
         "NormalizedErrorScore",
         "QuantileRegressionScore",
     }

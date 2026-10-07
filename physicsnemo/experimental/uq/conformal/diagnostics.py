@@ -47,6 +47,7 @@ __all__ = ["CoverageAccumulator"]
 class _FieldCounters:
     """Running totals for one field; the sums are float64 device tensors."""
 
+    coverage_sum: Tensor | None = None
     width_sum: Tensor | None = None
     width_count: int = 0
     n_samples: int = 0
@@ -79,18 +80,24 @@ class CoverageAccumulator:
     Use it to check that a
     :class:`~physicsnemo.experimental.uq.conformal.ConformalPredictor` reaches
     its target on data not used for calibration, and to compare interval
-    widths across scores. Create one with
+    widths across scores or calibrators. Create one with
     ``predictor.coverage_accumulator()``, which sets the parameters below
     from the predictor, so the report measures what the predictor's
-    calibrator guarantees: how often each element lies inside its interval.
+    calibrator guarantees:
+
+    - ``"cellwise"`` (``CellwiseCalibrator``): how often each element lies
+      inside its interval.
+    - ``"functional"`` (``FunctionalBandCalibrator``): how often a sample
+      lies inside its band at every point.
 
     Call :meth:`update` once per held-out sample, then :meth:`finalize` for
     the report.
 
     Parameters
     ----------
-    tier : {"cellwise"}
-        The predictor's ``tier``, naming the calibrator that produced it.
+    tier : {"cellwise", "functional"}
+        The predictor's ``tier``, naming the calibrator that produced it;
+        selects the reported statistic.
     alpha : float
         The predictor's target miscoverage level. Reported in the
         metadata and used to count cellwise elements at or above target
@@ -114,15 +121,14 @@ class CoverageAccumulator:
     ...     AbsoluteErrorScore, ConformalPredictor,
     ... )
     >>> _ = torch.manual_seed(0)
-    >>> points = torch.rand(50, 3)
     >>> predictor = ConformalPredictor(
-    ...     tier="cellwise", score=AbsoluteErrorScore(), alpha=0.1, n_cal=20,
-    ...     thresholds=torch.full((50, 2), 0.3), points=points,
+    ...     tier="functional", score=AbsoluteErrorScore(), alpha=0.1, n_cal=20,
+    ...     thresholds=torch.tensor(0.3, dtype=torch.float64),
     ... )
     >>> accumulator = predictor.coverage_accumulator()
     >>> for _ in range(5):
     ...     prediction = torch.randn(50, 2)
-    ...     lo, hi = predictor.predict_interval(prediction, points=points)
+    ...     lo, hi = predictor.predict_interval(prediction)
     ...     accumulator.update(lo, hi, prediction + 0.1 * torch.randn(50, 2))
     >>> report = accumulator.finalize()
     >>> sorted(report)
@@ -185,7 +191,7 @@ class CoverageAccumulator:
         ValueError
             If ``target`` is empty, shapes differ, a value is NaN or
             infinite, a width or the running width sum overflows float64, or
-            the sample shape differs from earlier samples.
+            (cellwise) the sample shape differs from earlier samples.
 
         Notes
         -----
@@ -220,7 +226,9 @@ class CoverageAccumulator:
             counters.width_sum = width_total
             counters.width_count += width_count
             counters.n_samples += 1
-            if key in self._element_hits:
+            if self._tier != "cellwise":
+                counters.coverage_sum = _add(counters.coverage_sum, coverage)
+            elif key in self._element_hits:
                 previous = self._element_hits[key]
                 previous += coverage.to(device=previous.device)
             else:
@@ -274,6 +282,8 @@ class CoverageAccumulator:
                             f"fixed sample shape; got {tuple(coverage.shape)} after "
                             f"{tuple(previous.shape)}."
                         )
+                case "functional":
+                    coverage = element_covered.all().to(torch.float64)
                 case _:
                     raise ValueError(
                         f"tier must be one of {TIERS}, got {self._tier!r}."
@@ -283,7 +293,7 @@ class CoverageAccumulator:
         return staged
 
     def empirical_coverage_map(self) -> Float[Tensor, "*dims"] | TensorDict:
-        r"""Fraction of samples in which each element was covered.
+        r"""Fraction of samples in which each element was covered (cellwise only).
 
         Use it to locate the regions of the mesh that the predictor under- or
         over-covers.
@@ -298,8 +308,12 @@ class CoverageAccumulator:
         Raises
         ------
         RuntimeError
-            Before the first :meth:`update`.
+            If the tier is not cellwise, or before the first :meth:`update`.
         """
+        if self._tier != "cellwise":
+            raise RuntimeError(
+                "empirical_coverage_map() is available only for cellwise predictors."
+            )
         if not self._element_hits:
             raise RuntimeError("No samples collected; call update() first.")
         return pack_fields(
@@ -320,10 +334,14 @@ class CoverageAccumulator:
             (``1 - alpha``).
             ``fields`` has one entry per calibrated field (key ``"tensor"``
             for plain tensors) with ``n_samples``, ``mean_interval_width``
-            (mean width over every element of every sample),
-            ``mean_element_coverage``, ``minimum_element_coverage``, and
-            ``fraction_at_target`` (the fraction of elements whose coverage is
-            at least the target).
+            (mean width over every element of every sample), and the tier's
+            statistic:
+
+            - cellwise: ``mean_element_coverage``,
+              ``minimum_element_coverage``, and ``fraction_at_target`` (the
+              fraction of elements whose coverage is at least the target).
+            - functional: ``whole_field_coverage``, the fraction of samples
+              inside the band at every point.
 
             Statistics are ``None`` before the first :meth:`update`.
         """
@@ -358,6 +376,10 @@ class CoverageAccumulator:
                         mean_element_coverage=None,
                         minimum_element_coverage=None,
                         fraction_at_target=None,
+                    )
+                case "functional":
+                    entry["whole_field_coverage"] = (
+                        float(counters.coverage_sum) / n if n else None
                     )
             fields["tensor" if key == TENSOR_KEY else key] = entry
         return {"meta": metadata, "fields": fields}

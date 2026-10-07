@@ -241,7 +241,7 @@ def cast_directed(t: Tensor, dtype: torch.dtype, *, up: bool) -> Tensor:
     return torch.where(wrong_side, bumped, cast)
 
 
-Tier = Literal["cellwise"]
+Tier = Literal["cellwise", "functional"]
 """Guarantee tier names."""
 
 TIERS: tuple[str, ...] = get_args(Tier)
@@ -357,6 +357,7 @@ def _same_mesh(points: Tensor, expected: str) -> Tensor:
 def require_mesh(
     points: Tensor | None,
     expected: str | None,
+    hint: str = "",
     pending: list[Tensor] | None = None,
 ) -> str:
     """Fingerprint ``points`` and require it to equal ``expected`` unless ``None``.
@@ -377,7 +378,7 @@ def require_mesh(
         raise ValueError(
             "points does not match the exact calibration mesh; cellwise "
             "conformal needs the same mesh (coordinates, dtype, and point "
-            "order) on every call."
+            f"order) on every call.{hint}"
         )
     return fingerprint
 
@@ -411,6 +412,18 @@ def clamp_min_floor(t: Tensor, eps: float) -> Tensor:
             )
         floor = max(eps, float(info.tiny))
     return t.clamp_min(floor)
+
+
+def broadcast_difficulty(t: Tensor, ref: Tensor, key: str) -> Tensor:
+    """Reshape per-point scales to ``(n_points, 1, ...)`` to broadcast on ``ref``."""
+    if t.ndim == 0:
+        return t
+    if ref.shape[0] != t.shape[0]:
+        raise ValueError(
+            f"{_field_label(key)}: AuxDifficulty gave {t.shape[0]} scales, but "
+            f"the field has {ref.shape[0]} points (leading dimension)."
+        )
+    return t.reshape(t.shape[0], *([1] * (ref.ndim - 1)))
 
 
 def normalize_keys(keys: Sequence[str] | None) -> tuple[str, ...] | None:

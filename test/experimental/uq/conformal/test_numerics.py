@@ -31,7 +31,9 @@ from tensordict import TensorDict
 
 from physicsnemo.experimental.uq.conformal import (
     AbsoluteErrorScore,
+    AuxDifficulty,
     ConformalPredictor,
+    FunctionalBandCalibrator,
     NormalizedErrorScore,
     QuantileRegressionScore,
 )
@@ -116,6 +118,105 @@ def test_conformal_rank_nextafter_boundaries(base_alpha, n_cal):
             )
 
 
+@pytest.mark.parametrize("cls", [FunctionalBandCalibrator])
+def test_normalization_underflow_handled_exactly(cls):
+    """A huge constant difficulty must not zero the fitted statistic: the
+    float64 policy preserves it and the identical population is covered."""
+    target = torch.full((4,), 1e-10)
+    aux = {"s": torch.full((4,), 1e38)}
+    calibrator = cls(AbsoluteErrorScore(), alpha=0.5, difficulty=AuxDifficulty("s"))
+    for _ in range(3):
+        calibrator.update(torch.zeros(4), target, aux=aux)
+    predictor = calibrator.finalize()
+    assert float(predictor.thresholds) > 0.0
+    assert_predictor_covers_admitted(predictor, torch.zeros(4), target, aux=aux)
+
+
+@pytest.mark.parametrize("cls", [FunctionalBandCalibrator])
+@pytest.mark.parametrize(
+    "score,magnitude",
+    [
+        pytest.param(AbsoluteErrorScore(), 1e-12, id="unsigned-subnormal"),
+        pytest.param(AbsoluteErrorScore(), 1e-20, id="unsigned-zero-underflow"),
+        pytest.param(QuantileRegressionScore(), 8e-16, id="signed-cqr-subnormal"),
+    ],
+)
+def test_normalization_rejects_subnormal_and_underflowed_scores(cls, score, magnitude):
+    """Loss of relative precision must fail before an interval can exclude y."""
+    prediction = torch.zeros(1, dtype=_F64)
+    target = torch.full_like(prediction, magnitude)
+    aux = {"s": torch.full_like(prediction, 1e308), "lo": prediction, "hi": 2 * target}
+    calibrator = cls(score, alpha=0.5, difficulty=AuxDifficulty("s"))
+    with pytest.raises(ValueError, match="float64.*Rescale"):
+        calibrator.update(prediction, target, aux=aux)
+    assert calibrator.n_cal == 0
+
+
+@pytest.mark.parametrize("cls", [FunctionalBandCalibrator])
+@pytest.mark.parametrize("signed", [False, True], ids=["unsigned", "signed-cqr"])
+def test_normalization_normal_boundary_and_true_zero(cls, signed):
+    """Reject just below float64's normal range; retain normals and true zero."""
+    prediction = torch.zeros(1, dtype=_F64)
+    scale = torch.full_like(prediction, 2.0**1022)
+    score = QuantileRegressionScore() if signed else AbsoluteErrorScore()
+    # Two steps below 1 divide to the largest subnormal without rounding to tiny.
+    below = math.nextafter(math.nextafter(1.0, 0.0), 0.0)
+    for magnitude in (below, 1.0, math.nextafter(1.0, math.inf), 0.0):
+        target = torch.full_like(prediction, magnitude)
+        aux = {"s": scale, "lo": prediction, "hi": 2 * target}
+        calibrator = cls(score, alpha=0.5, difficulty=AuxDifficulty("s"))
+        if magnitude == below:
+            with pytest.raises(ValueError, match="float64.*Rescale"):
+                calibrator.update(prediction, target, aux=aux)
+            assert calibrator.n_cal == 0
+            continue
+        calibrator.update(prediction, target, aux=aux)
+        predictor = calibrator.finalize()
+        expected = score.score(prediction, target, aux=aux) / scale
+        assert float(predictor.thresholds) == float(expected)
+        lo, hi = predictor.predict_interval(prediction, aux=aux)
+        assert bool(((lo <= target) & (target <= hi)).all())
+
+
+def test_normalization_overflow_rejected():
+    """A quotient that overflows even float64 is rejected at update time."""
+    calibrator = FunctionalBandCalibrator(
+        AbsoluteErrorScore(), alpha=0.5, difficulty=AuxDifficulty("s")
+    )
+    with pytest.raises(ValueError, match="non-finite"):
+        calibrator.update(
+            torch.zeros(4, dtype=_F64),
+            torch.full((4,), 1e308, dtype=_F64),
+            aux={"s": torch.full((4,), 1e-30, dtype=_F64)},
+        )
+    assert calibrator.n_cal == 0
+
+
+@pytest.mark.parametrize("persist", [False, True], ids=["in_memory", "save_load"])
+def test_aux_difficulty_is_stable_across_default_dtype_changes(
+    persist, default_dtype, tmp_path
+):
+    """The same difficulty scale applies at calibration and deployment even
+    when the ambient default dtype changes in between (and across save/load)."""
+    torch.set_default_dtype(_F32)
+    calibrator = FunctionalBandCalibrator(
+        AbsoluteErrorScore(), alpha=0.5, difficulty=AuxDifficulty("s")
+    )
+    prediction = torch.zeros(1, dtype=_F64)
+    target = torch.ones(1, dtype=_F64)
+    aux = {"s": torch.full((1,), 0.1, dtype=_F64)}
+    for _ in range(3):
+        calibrator.update(prediction, target, aux=aux)
+    predictor = calibrator.finalize()
+    if persist:
+        predictor.save(tmp_path / "aux.pt")
+        predictor = ConformalPredictor.load(tmp_path / "aux.pt")
+
+    torch.set_default_dtype(_F64)
+    lo, hi = predictor.predict_interval(prediction, aux=aux)
+    assert bool(((target >= lo) & (target <= hi)).all())
+
+
 # =========================================================================
 # The theorem-preserving numerical-policy property.
 #
@@ -136,7 +237,7 @@ def test_admitted_targets_stay_inside_interval(tier, dtype, persist, tmp_path):
     """End-to-end containment: a fresh target admitted by the fitted
     statistic lies inside the reconstructed interval, across tiers,
     low-precision dtypes, and the artifact round trip (which must never
-    shrink a threshold)."""
+    shrink a threshold and keeps scalar thresholds in float64)."""
     generator = torch.Generator().manual_seed(31)
     predictor, points = fit(tier, generator=generator, dtype=dtype)
     if persist:
@@ -144,6 +245,8 @@ def test_admitted_targets_stay_inside_interval(tier, dtype, persist, tmp_path):
         predictor.save(tmp_path / "artifact.pt")
         predictor = ConformalPredictor.load(tmp_path / "artifact.pt")
         assert bool((predictor.thresholds.double() >= original).all())
+        if tier != "cellwise":
+            assert predictor.thresholds.dtype == _F64
 
     pred = torch.randn(200, generator=generator).to(dtype)
     target = (pred.float() + 0.3 * torch.randn(200, generator=generator)).to(dtype)
@@ -273,12 +376,32 @@ def test_cast_directed_fp16_bf16_and_narrowing(device):
     assert torch.equal(cast_directed(t16, _F64, up=True), t16.to(_F64))
 
 
+def test_adaptive_difficulty_keeps_float64_radius():
+    """A float32 difficulty vector must not demote the float64 threshold
+    (PyTorch scalar promotion); containment holds through the adaptive path."""
+    generator = torch.Generator().manual_seed(31)
+    predictor, _ = fit(
+        "functional",
+        generator=generator,
+        difficulty=AuxDifficulty(key="sigma"),
+        n_samples=20,
+        shape=(100,),
+        aux_factory=lambda p, g: {"sigma": torch.rand(p.shape, generator=g) + 0.5},
+    )
+    assert predictor.thresholds.dtype == _F64
+    pred = torch.randn(50, generator=generator)
+    sigma = (torch.rand(50, generator=generator) + 0.5).to(_F32)
+    target = pred + 0.3 * torch.randn(50, generator=generator)
+    assert_predictor_covers_admitted(predictor, pred, target, aux={"sigma": sigma})
+
+
 @pytest.mark.parametrize("cls", CALIBRATOR_CLASSES)
 def test_empty_samples_rejected_uniformly(cls):
     """Every tier rejects an empty sample with the same transactional error."""
     calibrator = cls(AbsoluteErrorScore(), alpha=0.25)
+    kwargs = {"points": torch.zeros(1, 1)} if cls.__name__.startswith("Cell") else {}
     with pytest.raises(ValueError, match="empty sample"):
-        calibrator.update(torch.zeros(0), torch.zeros(0), points=torch.zeros(1, 1))
+        calibrator.update(torch.zeros(0), torch.zeros(0), **kwargs)
     assert calibrator.n_cal == 0
 
 

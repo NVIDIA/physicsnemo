@@ -16,8 +16,13 @@
 
 r"""Calibrators that turn held-out model errors into conformal intervals.
 
-:class:`~physicsnemo.experimental.uq.conformal.CellwiseCalibrator` fits an
-interval for each output element, when every sample uses the same mesh.
+Choose a calibrator by the guarantee you need:
+
+- :class:`~physicsnemo.experimental.uq.conformal.CellwiseCalibrator`: an
+  interval for each output element, when every sample uses the same mesh.
+- :class:`~physicsnemo.experimental.uq.conformal.FunctionalBandCalibrator`:
+  a functional band that contains every point of a field at once; meshes
+  may vary.
 
 Pass each calibration sample to ``update``, then call ``finalize``
 to get a :class:`~physicsnemo.experimental.uq.conformal.ConformalPredictor`.
@@ -48,10 +53,12 @@ from torch import Tensor
 
 from ._utils import (
     _field_label,
+    broadcast_difficulty,
     check_aux,
     check_exact_shape,
     check_finite,
     check_point_alignment,
+    check_points,
     check_real,
     conformal_quantile_index,
     field_items,
@@ -64,12 +71,41 @@ from ._utils import (
     validate_alpha,
 )
 from .predictors import ConformalPredictor
-from .scores import _SCORE_REGISTRY, _NonconformityScore, _Score, _snapshot_strategy
+from .scores import (
+    _DIFFICULTY_REGISTRY,
+    _SCORE_REGISTRY,
+    AuxDifficulty,
+    _check_no_double_scale,
+    _NonconformityScore,
+    _Score,
+    _snapshot_strategy,
+)
 
-__all__ = ["CellwiseCalibrator"]
+__all__ = [
+    "CellwiseCalibrator",
+    "FunctionalBandCalibrator",
+]
 
 # One field's staged record: (key, prediction, target, aux) -> stored value.
 _Stage = Callable[[str, Tensor, Tensor, Mapping[str, Tensor] | None], object]
+
+
+def _normalized_scores(raw: Tensor, difficulty: Tensor | None, key: str) -> Tensor:
+    """Divide scores by the difficulty in float64; reject non-finite or tiny results."""
+    raw64 = raw.to(torch.float64)
+    if difficulty is None:
+        return raw64
+    difficulty64 = broadcast_difficulty(difficulty, raw, key).to(torch.float64)
+    normalized = raw64 / difficulty64
+    check_finite(key, "the scores divided by the AuxDifficulty scale", normalized)
+    underflow = (raw64 != 0) & (normalized.abs() < torch.finfo(torch.float64).tiny)
+    if bool(underflow.any()):
+        raise ValueError(
+            f"{_field_label(key)}: {int(underflow.sum())} score(s) divided by "
+            "the AuxDifficulty scale are too small for float64. Rescale the "
+            "data or the difficulty aux entry."
+        )
+    return normalized
 
 
 class _SplitCalibratorBase:
@@ -162,7 +198,7 @@ class _SplitCalibratorBase:
         prediction: Tensor | TensorDict,
         target: Tensor | TensorDict,
         aux: Mapping | None,
-        points: Tensor,
+        points: Tensor | None,
         stage: _Stage,
     ) -> None:
         """Check every field first so that a rejected sample is not stored."""
@@ -172,7 +208,8 @@ class _SplitCalibratorBase:
             )
             staged: dict[str, object] = {}
             for key, prediction_field, target_field, aux_field in fields:
-                check_point_alignment(key, prediction_field, points, "prediction")
+                if points is not None:
+                    check_point_alignment(key, prediction_field, points, "prediction")
                 staged[key] = stage(key, prediction_field, target_field, aux_field)
             self._tensor_mode, self._schema = _tensor_mode, schema
             for key, record in staged.items():
@@ -212,7 +249,9 @@ class CellwiseCalibrator(_SplitCalibratorBase):
     the same mesh or grid, with the points in the same order, and you want
     an interval for each output element, as in the field-level conformal
     prediction of `Gopakumar et al., 2024
-    <https://arxiv.org/abs/2408.09881>`_.
+    <https://arxiv.org/abs/2408.09881>`_. If the mesh changes between
+    samples, use
+    :class:`~physicsnemo.experimental.uq.conformal.FunctionalBandCalibrator`.
 
     Pass the mesh coordinates as ``points=`` on every call. Two meshes count
     as the same only when their coordinate values, order, shape, and dtype
@@ -367,4 +406,185 @@ class CellwiseCalibrator(_SplitCalibratorBase):
             "cellwise",
             self._conformal_thresholds(),
             mesh_fingerprint=self._mesh_fingerprint,
+        )
+
+
+class _ScaledCalibratorBase(_SplitCalibratorBase):
+    """Shared ``update`` for calibrators with an optional ``AuxDifficulty``."""
+
+    _reduce: Callable[[Tensor], Tensor]
+
+    def __init__(
+        self,
+        score: _Score,
+        alpha: float,
+        *,
+        difficulty: AuxDifficulty | None = None,
+        keys: Sequence[str] | None = None,
+    ) -> None:
+        super().__init__(score, alpha, keys=keys)
+        self._difficulty = (
+            None
+            if difficulty is None
+            else _snapshot_strategy(difficulty, _DIFFICULTY_REGISTRY, "difficulty")
+        )
+        _check_no_double_scale(self._score, self._difficulty)
+
+    @property
+    def difficulty(self) -> AuxDifficulty | None:
+        r"""Copy of the ``AuxDifficulty`` set at construction, or ``None``."""
+        return copy.deepcopy(self._difficulty)
+
+    def update(
+        self,
+        prediction: Float[Tensor, "*dims"] | TensorDict,
+        target: Float[Tensor, "*dims"] | TensorDict,
+        *,
+        aux: Mapping[str, Float[Tensor, "*dims"]] | Mapping[str, Mapping] | None = None,
+        points: Float[Tensor, "n_points n_spatial_dims"] | None = None,
+    ) -> None:
+        r"""Add one calibration sample; its point count may differ from other samples.
+
+        Parameters
+        ----------
+        prediction : torch.Tensor | TensorDict
+            Model output of shape :math:`(n_{\text{points}}, *\text{dims})`
+            (any shape :math:`(*\text{dims})` when neither ``points`` nor
+            ``difficulty`` is used), or a field container of such tensors.
+        target : torch.Tensor | TensorDict
+            Observed values, same shape and container type as ``prediction``.
+        aux : Mapping[str, torch.Tensor] | Mapping[str, Mapping], optional
+            Extra tensors read by the score or ``AuxDifficulty``, each the
+            same shape as ``prediction``, such as ``{"sigma": ...}`` for
+            ``AuxDifficulty("sigma")``. For ``TensorDict`` inputs, nest by
+            field name, as in ``{"pressure": {"sigma": ...}}``.
+        points : torch.Tensor, optional
+            Mesh coordinates of shape
+            :math:`(n_{\text{points}}, n_{\text{spatial\_dims}})`; may differ
+            between samples. Only checks that each field has one leading
+            entry per point; it does not change the band.
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        ValueError
+            If ``prediction`` and ``target`` shapes differ, if any value or
+            scale is non-finite, or if a score divided by its scale is too
+            small for float64.
+        TypeError
+            If plain tensors and ``TensorDict`` inputs are mixed.
+        KeyError
+            If the set of fields differs from the first sample.
+
+        Notes
+        -----
+        A sample that raises is not stored.
+        """
+
+        def stage(key, prediction_field, target_field, aux_field):
+            difficulty = (
+                None if self._difficulty is None else self._difficulty(aux_field)
+            )
+            raw = check_finite(
+                key,
+                "the nonconformity scores",
+                self._score.score(prediction_field, target_field, aux=aux_field),
+            )
+            return self._reduce(_normalized_scores(raw, difficulty, key))
+
+        if points is not None:
+            check_points(points)
+        self._collect(prediction, target, aux, points, stage)
+
+
+class FunctionalBandCalibrator(_ScaledCalibratorBase):
+    r"""Calibrate a band that contains every point of each new field at once.
+
+    Use this calibrator when a single band must cover every point of a field
+    at the same time, for example to bound the worst-case error over a mesh.
+    Meshes may differ between calibration and deployment. The band's
+    half-width at point :math:`x` is :math:`\text{threshold} \cdot s(x)`,
+    where :math:`s` is the optional ``AuxDifficulty`` scale; without one the
+    width is constant.
+
+    Guarantee: a new field lies inside the band at every point with
+    probability at least :math:`1 - \alpha`.
+
+    Parameters
+    ----------
+    score : AbsoluteErrorScore | NormalizedErrorScore | QuantileRegressionScore
+        Defines the interval (see
+        :class:`~physicsnemo.experimental.uq.conformal.CellwiseCalibrator`).
+        The calibrator keeps a copy.
+    alpha : float
+        Target miscoverage level in :math:`(0, 1)`.
+    difficulty : AuxDifficulty, optional
+        Per-point scale :math:`s(x)` that widens the band where it is large.
+        ``None`` gives a constant width.
+    keys : Sequence[str], optional
+        Names of the ``TensorDict`` fields to calibrate (see
+        :class:`~physicsnemo.experimental.uq.conformal.CellwiseCalibrator`).
+        By default every field is calibrated.
+
+    Raises
+    ------
+    ValueError
+        If ``score`` already divides by the aux key ``difficulty`` reads.
+
+    Notes
+    -----
+    Each calibration sample contributes its largest scaled score,
+    :math:`\max_x \text{score}(x) / s(x)`, as in `Conformal prediction bands
+    for multivariate functional data <https://arxiv.org/abs/2106.01792>`_
+    (Diquigiovanni, Fontana and Vantini, 2021). The threshold is the
+    :math:`k`-th smallest of the :math:`n_{cal}` per-sample maxima,
+    :math:`k = \lceil (n_{cal} + 1)(1 - \alpha) \rceil`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.experimental.uq.conformal import (
+    ...     AbsoluteErrorScore, FunctionalBandCalibrator,
+    ... )
+    >>> _ = torch.manual_seed(0)
+    >>> calibrator = FunctionalBandCalibrator(AbsoluteErrorScore(), alpha=0.1)
+    >>> for n_points in range(40, 60):
+    ...     prediction = torch.randn(n_points, 2)
+    ...     target = prediction + 0.1 * torch.randn(n_points, 2)
+    ...     calibrator.update(prediction, target)
+    >>> predictor = calibrator.finalize()
+    >>> lo, hi = predictor.predict_interval(torch.randn(80, 2))
+    >>> hi.shape
+    torch.Size([80, 2])
+    """
+
+    _reduce = staticmethod(lambda normalized: normalized.amax().detach().cpu())
+
+    def finalize(self) -> ConformalPredictor:
+        r"""Fit the band threshold and return the predictor.
+
+        Returns
+        -------
+        ConformalPredictor
+            A functional
+            :class:`~physicsnemo.experimental.uq.conformal.ConformalPredictor`
+            with one float64 scalar threshold per field. It applies the same
+            ``AuxDifficulty``, so pass the same ``aux`` keys at prediction.
+
+        Raises
+        ------
+        RuntimeError
+            If no samples were collected.
+        ValueError
+            If :math:`n_{cal} < (1 - \alpha) / \alpha`, for example fewer
+            than 9 samples for ``alpha=0.1``. Collect more or raise ``alpha``.
+        """
+        self._require_finalizable()
+        return self._build_predictor(
+            "functional",
+            self._conformal_thresholds(),
+            difficulty=self._difficulty,
         )

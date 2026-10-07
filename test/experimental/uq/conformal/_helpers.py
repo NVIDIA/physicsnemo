@@ -31,28 +31,32 @@ from physicsnemo.experimental.uq.conformal import (
     AbsoluteErrorScore,
     CellwiseCalibrator,
     ConformalPredictor,
+    FunctionalBandCalibrator,
 )
-from physicsnemo.experimental.uq.conformal._utils import TIERS
+from physicsnemo.experimental.uq.conformal._utils import (
+    TIERS,
+    broadcast_difficulty,
+)
 
 __all__ = [
     "CALIBRATORS",
     "CALIBRATOR_CLASSES",
-    "MESH_POINTS",
     "TIERS",
     "assert_admitted_covered",
     "assert_predictor_covers_admitted",
     "count_syncs",
     "fit",
+    "fitted_functional",
     "make_predictor",
 ]
 
 CALIBRATORS = {
     "cellwise": CellwiseCalibrator,
+    "functional": FunctionalBandCalibrator,
 }
 CALIBRATOR_CLASSES = [
     pytest.param(CALIBRATORS[tier], id=tier) for tier in sorted(CALIBRATORS)
 ]
-MESH_POINTS = torch.arange(3.0).reshape(3, 1)
 
 
 def fit(
@@ -60,6 +64,7 @@ def fit(
     *,
     generator: torch.Generator | None = None,
     score=None,
+    difficulty=None,
     alpha: float = 0.2,
     n_samples: int = 30,
     shape: tuple[int, ...] = (200,),
@@ -70,18 +75,21 @@ def fit(
 ):
     """Fit one predictor on ``n_samples`` seeded ``pred + 0.3 * noise`` samples.
 
-    Returns ``(predictor, points)``: the predictor calibrates on a fixed
+    Returns ``(predictor, points)``: the cellwise tier calibrates on a fixed
     ``(shape[0], 1)`` mesh passed on every call (and needed again at
-    prediction time). ``fields``
+    prediction time); the scaled tiers get ``points=None``. ``fields``
     switches to ``TensorDict`` mode (one independent draw per field, so a
     single-field container sees exactly the tensor-mode data for the same
     seed). ``aux_factory(prediction, generator)`` builds the per-field aux
     mapping.
     """
     generator = generator or torch.Generator(device=device).manual_seed(0)
-    calibrator = CALIBRATORS[tier](score or AbsoluteErrorScore(), alpha)
-    points = torch.arange(shape[0], dtype=torch.float64, device=device)
-    points = points.reshape(shape[0], 1)
+    kwargs = {} if difficulty is None else {"difficulty": difficulty}
+    calibrator = CALIBRATORS[tier](score or AbsoluteErrorScore(), alpha, **kwargs)
+    points = None
+    if tier == "cellwise":
+        points = torch.arange(shape[0], dtype=torch.float64, device=device)
+        points = points.reshape(shape[0], 1)
 
     def draw():
         pred = torch.randn(shape, generator=generator, device=device)
@@ -105,15 +113,23 @@ def fit(
     return calibrator.finalize(), points
 
 
+def fitted_functional(generator: torch.Generator | None = None) -> ConformalPredictor:
+    """Small seeded functional predictor (8 samples of 12 points, alpha=0.25)."""
+    generator = generator or torch.Generator().manual_seed(13)
+    calibrator = FunctionalBandCalibrator(AbsoluteErrorScore(), alpha=0.25)
+    for _ in range(8):
+        calibrator.update(torch.zeros(12), torch.randn(12, generator=generator))
+    return calibrator.finalize()
+
+
 def make_predictor(**overrides) -> ConformalPredictor:
-    """Directly constructed predictor with valid defaults on a 3-point mesh."""
+    """Directly constructed predictor with valid functional defaults."""
     kwargs = {
-        "tier": "cellwise",
+        "tier": "functional",
         "score": AbsoluteErrorScore(),
         "alpha": 0.5,
         "n_cal": 3,
-        "thresholds": torch.full((3,), 0.5),
-        "points": MESH_POINTS,
+        "thresholds": torch.tensor(0.5),
     }
     kwargs.update(overrides)
     return ConformalPredictor(**kwargs)
@@ -135,12 +151,15 @@ def assert_admitted_covered(score, pred, target, threshold, aux) -> None:
 def assert_predictor_covers_admitted(
     predictor, prediction, target, *, aux=None, points=None
 ):
-    """Predictor-level property through the fitted threshold.
+    """Predictor-level property through the fitted (possibly scaled) threshold.
 
     Returns the interval so callers can make further assertions.
     """
     score = predictor.score.score(prediction, target, aux=aux).double()
     threshold = predictor.thresholds.double()
+    if predictor.difficulty is not None:
+        difficulty = predictor.difficulty(aux).double()
+        threshold = threshold * broadcast_difficulty(difficulty, prediction, "field")
     lo, hi = predictor.predict_interval(prediction, aux=aux, points=points)
     inside = (target.double() >= lo.double()) & (target.double() <= hi.double())
     bad = (score <= threshold) & ~inside

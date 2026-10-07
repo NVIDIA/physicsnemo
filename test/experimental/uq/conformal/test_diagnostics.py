@@ -24,14 +24,19 @@ from tensordict import TensorDict
 
 from physicsnemo.experimental.uq.conformal import (
     AbsoluteErrorScore,
-    CellwiseCalibrator,
     CoverageAccumulator,
+    FunctionalBandCalibrator,
     QuantileRegressionScore,
 )
-from test.experimental.uq.conformal._helpers import TIERS, count_syncs, fit
+from test.experimental.uq.conformal._helpers import (
+    TIERS,
+    count_syncs,
+    fit,
+    fitted_functional,
+)
 
 
-def _accumulator(tier="cellwise", **fit_kwargs):
+def _accumulator(tier="functional", **fit_kwargs):
     """Diagnostics for a 3-sample, alpha=0.5 predictor (fit kwargs override)."""
     kwargs = {"n_samples": 3, "alpha": 0.5, "shape": (3,), **fit_kwargs}
     return fit(tier, **kwargs)[0].coverage_accumulator()
@@ -49,6 +54,24 @@ def _interval_sample(n_points, n_covered, *, n_components=1, half_width=1.0):
     if n_covered < n_points:
         target[n_covered:, 0 if n_components > 1 else ...] = 2 * half_width
     return lo, hi, target
+
+
+def test_functional_report_counts_whole_field_containment():
+    accumulator = _accumulator("functional")
+    accumulator.update(*_interval_sample(100, 99))
+    accumulator.update(*_interval_sample(5, 5))
+    report = accumulator.finalize()
+    assert report["meta"] == {
+        "tier": "functional",
+        "alpha": 0.5,
+        "n_cal": 3,
+        "target_coverage": 0.5,
+    }
+    assert report["fields"]["tensor"] == {
+        "n_samples": 2,
+        "mean_interval_width": pytest.approx(2.0),
+        "whole_field_coverage": pytest.approx(0.5),
+    }
 
 
 def test_cellwise_map_and_summary_are_elementwise():
@@ -82,33 +105,26 @@ def test_cellwise_target_fraction_uses_exact_declared_alpha():
 
 
 def test_mean_interval_width_uses_all_reported_elements():
-    accumulator = _accumulator("cellwise", shape=(2,))
-    for half_width in ([1.0, 2.0], [3.0, 3.0]):
-        half_width = torch.tensor(half_width)
-        accumulator.update(-half_width, half_width, torch.zeros(2))
-    # (widths 2 and 4, then two of width 6) / four elements.
+    accumulator = _accumulator("functional")
+    accumulator.update(*_interval_sample(1, 1, half_width=1.0))
+    accumulator.update(*_interval_sample(3, 3, half_width=2.0))
+    # (one width-2 element + three width-4 elements) / four elements.
     width = accumulator.finalize()["fields"]["tensor"]["mean_interval_width"]
-    assert width == pytest.approx(4.5)
+    assert width == pytest.approx(3.5)
 
 
 def test_empty_quantile_regression_set_has_zero_width():
-    calibrator = CellwiseCalibrator(QuantileRegressionScore(), alpha=0.5)
+    calibrator = FunctionalBandCalibrator(QuantileRegressionScore(), alpha=0.5)
     prediction = torch.zeros(1)
     target = torch.zeros(1)
-    points = torch.zeros(1, 1)
     for _ in range(3):
         calibrator.update(
-            prediction,
-            target,
-            aux={"lo": -torch.ones(1), "hi": torch.ones(1)},
-            points=points,
+            prediction, target, aux={"lo": -torch.ones(1), "hi": torch.ones(1)}
         )
 
     predictor = calibrator.finalize()
     lo, hi = predictor.predict_interval(
-        prediction,
-        aux={"lo": torch.full((1,), -0.1), "hi": torch.full((1,), 0.1)},
-        points=points,
+        prediction, aux={"lo": torch.full((1,), -0.1), "hi": torch.full((1,), 0.1)}
     )
     assert bool((lo > hi).all())
 
@@ -128,8 +144,8 @@ def test_tensordict_fields_report_per_field_and_select_fitted_keys():
     accumulator.update(lo, hi, _td(p=torch.zeros(3), v=torch.zeros(3), w=torch.ones(3)))
     report = accumulator.finalize()
     assert set(report["fields"]) == {"p", "v"}
-    assert report["fields"]["p"]["mean_element_coverage"] == 1.0
-    assert report["fields"]["v"]["mean_element_coverage"] == 0.5
+    assert report["fields"]["p"]["whole_field_coverage"] == 1.0
+    assert report["fields"]["v"]["whole_field_coverage"] == 0.5
     assert report["fields"]["p"]["n_samples"] == report["fields"]["v"]["n_samples"] == 2
     json.dumps(report, allow_nan=False)
 
@@ -140,6 +156,7 @@ EMPTY_ENTRIES = {
         "minimum_element_coverage": None,
         "fraction_at_target": None,
     },
+    "functional": {"whole_field_coverage": None},
 }
 
 
@@ -171,45 +188,48 @@ _Z64, _BIG = torch.zeros(3, dtype=_F64), torch.tensor([1e308, 0.0, 0.0], dtype=_
 _WIDE = (_td(a=_Z64, b=_Z64), _td(a=_Z64 + 1, b=_BIG), _td(a=_Z64, b=_Z64))
 _WIDER = (_WIDE[0], _td(a=_Z64 + 2, b=_BIG), _WIDE[2])
 # fmt: off
-TRANSACTIONAL_REJECTIONS = [  # (id, fields, warm-up update, rejected update, error, match)
-    ("hi-shape-mismatch", ["a", "b"], (_LO4, _HI4, _T4), (_LO4, _td(a=_ONES4, b=torch.ones(5)), _T4), ValueError, "shape"),
-    ("nonfinite-target", ["a", "b"], (_LO4, _HI4, _T4), (_LO4, _HI4, _td(a=0 * _ONES4, b=torch.full((4,), torch.inf))), ValueError, "non-finite"),
-    ("missing-fitted-field", ["a", "b"], (_LO4, _HI4, _T4), (_LO4, _HI4, _td(a=0 * _ONES4)), KeyError, "not present"),
-    ("width-overflow", None, _PLAIN, tuple(torch.full((3,), v, dtype=_F64) for v in (-1e308, 1e308, 0.0)), ValueError, "width overflows"),
-    ("empty-target", None, _PLAIN, (torch.empty(0),) * 3, ValueError, "Plain tensor: empty"),
-    ("container-mode-mismatch", None, _PLAIN, (_td(value=0 * _ONES3),) * 3, TypeError, "calibrated on a plain tensor; pass lo as a tensor"),
-    ("cellwise-second-field-fails", ["a", "b"], (_LO3, _HI3, _T3), (_LO3, _HI3, _td(a=0 * _ONES3, b=0 * _ONES4)), ValueError, "shape"),
-    ("width-sum-within-sample", ["a", "b"], (_LO3, _HI3, _T3), (_WIDE[0], _td(a=_Z64 + 2, b=_BIG.roll(1) + _BIG), _WIDE[2]), ValueError, "Field 'b'.*width sum.*[Rr]escale"),
-    ("width-sum-cross-call", ["a", "b"], _WIDE, _WIDER, ValueError, "Field 'b'.*width sum.*[Rr]escale"),
-    ("nonfinite-bounds", None, _PLAIN, (-_ONES3, torch.full((3,), torch.inf), 0 * _ONES3), ValueError, "non-finite"),
-    ("cellwise-sample-shape-drift", None, _PLAIN, (-_ONES4, _ONES4, 0 * _ONES4), ValueError, "fixed sample shape"),
+TRANSACTIONAL_REJECTIONS = [  # (id, tier, fields, warm-up update, rejected update, error, match)
+    ("hi-shape-mismatch", "functional", ["a", "b"], (_LO4, _HI4, _T4), (_LO4, _td(a=_ONES4, b=torch.ones(5)), _T4), ValueError, "shape"),
+    ("nonfinite-target", "functional", ["a", "b"], (_LO4, _HI4, _T4), (_LO4, _HI4, _td(a=0 * _ONES4, b=torch.full((4,), torch.inf))), ValueError, "non-finite"),
+    ("missing-fitted-field", "functional", ["a", "b"], (_LO4, _HI4, _T4), (_LO4, _HI4, _td(a=0 * _ONES4)), KeyError, "not present"),
+    ("width-overflow", "functional", None, _PLAIN, tuple(torch.tensor([v], dtype=_F64) for v in (-1e308, 1e308, 0.0)), ValueError, "width overflows"),
+    ("empty-target", "functional", None, _PLAIN, (torch.empty(0),) * 3, ValueError, "Plain tensor: empty"),
+    ("container-mode-mismatch", "functional", None, _PLAIN, (_td(value=0 * _ONES3),) * 3, TypeError, "calibrated on a plain tensor; pass lo as a tensor"),
+    ("cellwise-second-field-fails", "cellwise", ["a", "b"], (_LO3, _HI3, _T3), (_LO3, _HI3, _td(a=0 * _ONES3, b=0 * _ONES4)), ValueError, "shape"),
+    ("width-sum-within-sample", "cellwise", ["a", "b"], (_LO3, _HI3, _T3), (_WIDE[0], _td(a=_Z64 + 2, b=_BIG.roll(1) + _BIG), _WIDE[2]), ValueError, "Field 'b'.*width sum.*[Rr]escale"),
+    ("width-sum-cross-call", "cellwise", ["a", "b"], _WIDE, _WIDER, ValueError, "Field 'b'.*width sum.*[Rr]escale"),
+    ("nonfinite-bounds", "cellwise", None, _PLAIN, (-_ONES3, torch.full((3,), torch.inf), 0 * _ONES3), ValueError, "non-finite"),
+    ("cellwise-sample-shape-drift", "cellwise", None, _PLAIN, (-_ONES4, _ONES4, 0 * _ONES4), ValueError, "fixed sample shape"),
 ]
 # fmt: on
 
 
 @pytest.mark.parametrize(
-    "fields,warmup,rejected,error,match",
+    "tier,fields,warmup,rejected,error,match",
     [pytest.param(*row[1:], id=row[0]) for row in TRANSACTIONAL_REJECTIONS],
 )
-def test_update_rejections_are_transactional(fields, warmup, rejected, error, match):
+def test_update_rejections_are_transactional(
+    tier, fields, warmup, rejected, error, match
+):
     """A rejected update leaves scalar counters and per-element hit counts
     exactly as they were, even when the failure is on a later field."""
-    accumulator = _accumulator(fields=fields)
+    accumulator = _accumulator(tier, fields=fields)
     accumulator.update(*warmup)
     before = accumulator.finalize()
-    before_map = accumulator.empirical_coverage_map()
+    before_map = accumulator.empirical_coverage_map() if tier == "cellwise" else None
     with pytest.raises(error, match=match) as excinfo:
         accumulator.update(*rejected)
     assert "__tensor__" not in str(excinfo.value)
     after = accumulator.finalize()
     assert after == before
     json.dumps(after, allow_nan=False)
-    after_map = accumulator.empirical_coverage_map()
-    for key in fields or [None]:
-        torch.testing.assert_close(
-            after_map if key is None else after_map[key],
-            before_map if key is None else before_map[key],
-        )
+    if before_map is not None:
+        after_map = accumulator.empirical_coverage_map()
+        for key in fields or [None]:
+            torch.testing.assert_close(
+                after_map if key is None else after_map[key],
+                before_map if key is None else before_map[key],
+            )
 
 
 def test_infinite_prediction_bounds_require_recomputing_in_wider_dtype():
@@ -232,9 +252,11 @@ def test_infinite_prediction_bounds_require_recomputing_in_wider_dtype():
     assert accumulator.finalize()["fields"]["tensor"]["n_samples"] == 1
 
 
-def test_coverage_map_requires_samples():
+def test_coverage_map_availability_errors():
     with pytest.raises(RuntimeError, match="No samples collected"):
         _accumulator("cellwise").empirical_coverage_map()
+    with pytest.raises(RuntimeError, match="only for cellwise"):
+        _accumulator("functional").empirical_coverage_map()
 
 
 @pytest.mark.parametrize("tier", TIERS)
@@ -258,7 +280,7 @@ def test_update_syncs_once_and_accepts_a_second_device(monkeypatch, device, tier
 
 def test_accumulator_constructor_rejects_bare_string_keys():
     with pytest.raises(TypeError, match="not the string"):
-        CoverageAccumulator(tier="cellwise", alpha=0.5, n_cal=3, keys="p")
+        CoverageAccumulator(tier="functional", alpha=0.5, n_cal=3, keys="p")
 
 
 def test_accumulator_update_rejects_unknown_tier():
@@ -269,11 +291,11 @@ def test_accumulator_update_rejects_unknown_tier():
 
 def test_report_metadata_is_private():
     accumulator = _accumulator()
-    for name, value in (("tier", "other"), ("alpha", 0.1), ("n_cal", 99)):
+    for name, value in (("tier", "cellwise"), ("alpha", 0.1), ("n_cal", 99)):
         setattr(accumulator, name, value)
     accumulator.keys = ("other",)
     assert accumulator.finalize()["meta"] == {
-        "tier": "cellwise",
+        "tier": "functional",
         "alpha": 0.5,
         "n_cal": 3,
         "target_coverage": 0.5,
@@ -281,14 +303,14 @@ def test_report_metadata_is_private():
 
 
 def _calibrator_finalizer():
-    calibrator = CellwiseCalibrator(AbsoluteErrorScore(), alpha=0.5)
+    calibrator = FunctionalBandCalibrator(AbsoluteErrorScore(), alpha=0.5)
     for _ in range(3):
-        calibrator.update(torch.zeros(2), torch.zeros(2), points=torch.zeros(2, 1))
+        calibrator.update(torch.zeros(2), torch.zeros(2))
     return calibrator.finalize
 
 
 def _accumulator_finalizer():
-    accumulator = _accumulator()
+    accumulator = fitted_functional().coverage_accumulator()
     accumulator.update(*_PLAIN)
     return accumulator.finalize
 

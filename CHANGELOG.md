@@ -11,9 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Adds `physicsnemo.experimental.uq.conformal`: post-hoc conformal prediction
-  for spatio-temporal fields with `CellwiseCalibrator`, `ConformalPredictor`,
-  `CoverageAccumulator`, `AbsoluteErrorScore`, `NormalizedErrorScore`, and
-  `QuantileRegressionScore`.
+  for spatio-temporal fields with `CellwiseCalibrator`,
+  `FunctionalBandCalibrator`, `ConformalPredictor`, `CoverageAccumulator`,
+  `AbsoluteErrorScore`, `NormalizedErrorScore`, `QuantileRegressionScore`,
+  and `AuxDifficulty`.
 - Adds standalone FLARE++ attention and model APIs, with input-conditioned
   dynamic routing, plus a ``GALE_FPP`` backend for using the same mixer inside
   GeoTransolver.
