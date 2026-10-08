@@ -27,6 +27,8 @@ Cached fields handled:
 
 """
 
+import math
+import numbers
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Literal
 
@@ -35,6 +37,7 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from tensordict import TensorDict
 
+from physicsnemo.mesh.utilities._device import to_device
 from physicsnemo.nn.functional import safe_normalize
 
 if TYPE_CHECKING:
@@ -168,6 +171,7 @@ def _build_rotation_matrix(
     angle: float | Float[torch.Tensor, ""],
     axis: Float[torch.Tensor, " n_spatial_dims"] | None,
     device: torch.device,
+    assume_valid_axis: bool = False,
 ) -> Float[torch.Tensor, "n_spatial_dims n_spatial_dims"]:
     """Build rotation matrix for 2D or 3D.
 
@@ -176,9 +180,13 @@ def _build_rotation_matrix(
     angle : float or Float[torch.Tensor, ""]
         Rotation angle in radians.
     axis : Float[torch.Tensor, " n_spatial_dims"] or None
-        Rotation axis vector. None for 2D, shape :math:`(3,)` for 3D.
+        Rotation axis vector. None for 2D, shape :math:`(3,)` for 3D. A host
+        axis must be one built from Python values by
+        :func:`_resolve_rotation_axis`.
     device : device
         Target device for the output matrix.
+    assume_valid_axis : bool
+        Skip the check that ``axis`` has non-zero length. See :func:`rotate`.
 
     Returns
     -------
@@ -186,7 +194,7 @@ def _build_rotation_matrix(
         Rotation matrix: :math:`(2, 2)` if axis is None,
         :math:`(3, 3)` if axis has shape :math:`(3,)`.
     """
-    angle = torch.as_tensor(angle, device=device)
+    angle = to_device(angle, device)
     c, s = torch.cos(angle), torch.sin(angle)
 
     if axis is None:
@@ -194,16 +202,19 @@ def _build_rotation_matrix(
         return torch.stack([torch.stack([c, -s]), torch.stack([s, c])])
 
     ### 3D rotation using Rodrigues' formula: R = cI + s[u]_× + (1-c)(u⊗u)
-    axis = torch.as_tensor(axis, device=device, dtype=angle.dtype)
+    # An axis given as Python values arrives as a host tensor, so validating it
+    # reads no device memory; it moves to the device afterwards.
+    axis = axis.to(dtype=angle.dtype)
     if axis.shape != (3,):
         raise NotImplementedError(
             f"Rotation only supported for 2D (axis=None) or 3D (axis shape (3,)). "
             f"Got axis with shape {axis.shape}."
         )
-    if axis.norm() < 1e-10:
+    if not assume_valid_axis and axis.norm() < 1e-10:
         raise ValueError(f"Axis vector has near-zero length: {axis.norm()=}")
 
-    u = F.normalize(axis, dim=0, eps=0.0)
+    # A host axis is fresh pageable memory, staged by CUDA before the copy returns
+    u = F.normalize(axis.to(device, non_blocking=True), dim=0, eps=0.0)
     ux, uy, uz = u
     zero = torch.zeros((), device=device, dtype=u.dtype)
 
@@ -240,7 +251,9 @@ def _resolve_rotation_axis(
     n_spatial_dims : int
         Number of spatial dimensions (used for validation).
     device : torch.device
-        Target device for the output tensor.
+        Target device for a tensor axis. An axis given as a string or as
+        Python values is returned on the host, so that it can be validated
+        there without a device synchronization.
 
     Returns
     -------
@@ -258,12 +271,14 @@ def _resolve_rotation_axis(
                 f"axis={axis!r} is invalid for mesh with "
                 f"n_spatial_dims={n_spatial_dims}"
             )
-        resolved = torch.zeros(n_spatial_dims, device=device)
-        resolved[idx] = 1.0
-        return resolved
+        return torch.eye(n_spatial_dims, device="cpu")[idx]
 
     if axis is not None:
-        axis = torch.as_tensor(axis, device=device, dtype=torch.float32)
+        axis = torch.as_tensor(
+            axis,
+            device=device if isinstance(axis, torch.Tensor) else "cpu",
+            dtype=torch.float32,
+        )
 
     expected_dims = 2 if axis is None else 3
     if n_spatial_dims != expected_dims:
@@ -287,6 +302,7 @@ def rotation_matrix(
     n_spatial_dims: int,
     device: torch.device,
     dtype: torch.dtype,
+    assume_valid_axis: bool = False,
 ) -> Float[torch.Tensor, "n_spatial_dims n_spatial_dims"]:
     """Build a rotation matrix from angle and axis.
 
@@ -302,6 +318,8 @@ def rotation_matrix(
         Target device for the output matrix.
     dtype : torch.dtype
         Target dtype for the output matrix.
+    assume_valid_axis : bool
+        Skip the check that ``axis`` has non-zero length. See :func:`rotate`.
 
     Returns
     -------
@@ -309,9 +327,12 @@ def rotation_matrix(
         Rotation matrix, shape :math:`(S, S)`.
     """
     resolved = _resolve_rotation_axis(axis, n_spatial_dims, device)
-    return _build_rotation_matrix(angle=angle, axis=resolved, device=device).to(
-        dtype=dtype
-    )
+    return _build_rotation_matrix(
+        angle=angle,
+        axis=resolved,
+        device=device,
+        assume_valid_axis=assume_valid_axis,
+    ).to(dtype=dtype)
 
 
 def scale_matrix(
@@ -344,7 +365,7 @@ def scale_matrix(
         If ``factor`` is a vector whose length does not match
         ``n_spatial_dims``.
     """
-    factor_t = torch.as_tensor(factor, device=device, dtype=dtype)
+    factor_t = to_device(factor, device, dtype)
     if factor_t.ndim == 0:
         factor_t = factor_t.expand(n_spatial_dims)
     elif not torch.compiler.is_compiling() and factor_t.shape[-1] != n_spatial_dims:
@@ -429,6 +450,37 @@ def _is_similarity_transform(matrix: torch.Tensor, atol: float = 1e-6) -> bool:
     return bool(torch.allclose(gram, scale * identity, atol=atol, rtol=1e-5))
 
 
+def _scale_assumptions(
+    factor: float | Float[torch.Tensor, " n_spatial_dims"] | Sequence[float],
+    n_spatial_dims: int,
+) -> tuple[bool | None, bool | None]:
+    """Whether a scale is invertible and a similarity, where knowable on the host.
+
+    :func:`transform` otherwise tests both at runtime, and each test reads a
+    device scalar back to the host. For Python factors, this applies the same
+    tests to ``diag(factor)`` in Python arithmetic: ``|det| > 1e-10``, and the
+    ``M.T @ M == c * I`` test of :func:`_is_similarity_transform`. A scalar
+    factor is an isotropic scale, hence a similarity, whatever its value.
+    Products use ``*``, which overflows to ``inf`` as tensor arithmetic does,
+    where Python's ``**`` raises :class:`OverflowError`.
+
+    Returns
+    -------
+    tuple[bool or None, bool or None]
+        ``(assume_invertible, assume_similarity)`` for :func:`transform`,
+        with ``None`` where only the device values can tell.
+    """
+    if isinstance(factor, torch.Tensor):
+        return None, (True if factor.ndim == 0 else None)
+    if isinstance(factor, numbers.Real):
+        return abs(math.prod([factor] * n_spatial_dims)) > 1e-10, True
+    values = [float(f) for f in factor]
+    squares = [v * v for v in values]
+    mean = sum(squares) / len(squares)
+    is_similarity = all(abs(s - mean) <= 1e-6 + 1e-5 * mean for s in squares)
+    return abs(math.prod(values)) > 1e-10, is_similarity
+
+
 ### Public API ###
 
 
@@ -439,6 +491,7 @@ def transform(
     transform_cell_data: bool | TensorDict = False,
     transform_global_data: bool | TensorDict = False,
     assume_invertible: bool | None = None,
+    assume_similarity: bool | None = None,
 ) -> "Mesh":
     """Apply a linear transformation to the mesh.
 
@@ -477,6 +530,22 @@ def transform(
           take one of the branches above. Safe for singular input, but the test
           reads a device scalar back to the host, which synchronizes on CUDA and
           may cause graph breaks under ``torch.compile``.
+    assume_similarity : bool or None
+        Whether ``matrix`` is a similarity, orthogonal up to a uniform scale
+        (rotations, reflections, isotropic scales, and their compositions).
+        Similarities preserve angles, so they exactly carry over the cached
+        angle-weighted point normals of 2+ manifolds and the point measures of
+        lower-dimensional quadrature:
+
+        - ``True``: assume a similarity (compile-safe). This is a promise, not
+          a check: for any other matrix the propagated point normals are
+          silently inexact, and point measures scale incorrectly.
+        - ``False``: assume not a similarity (compile-safe). The point-normal
+          cache is dropped and recomputed lazily on demand.
+        - ``None`` (default): test ``M.T @ M == c * I`` at runtime when the
+          answer is needed. The test reads a device scalar back to the host,
+          which synchronizes on CUDA; under ``torch.compile`` it is skipped and
+          the point-normal cache is dropped.
 
     Returns
     -------
@@ -540,11 +609,18 @@ def transform(
             ### Codimension-1 manifolds: per-element area scaling via normals
             # Formula: area' = area * |det(M)| * ||M^{-T} n||
             elif mesh.codimension == 1:
+                # Normals map by the inverse transpose: as rows, n' = n @ M^-1. One
+                # small inverse and a matmul; on CUDA, solve_ex with millions of
+                # right-hand sides is ~200x slower whenever its LU factorization pivots.
+                if any(
+                    mesh._cache.get((association, "normals"), None) is not None
+                    for association in ("cell", "point")
+                ):
+                    inverse = torch.linalg.inv_ex(matrix, check_errors=False).inverse
+
                 ### Cell (face) normals: the inverse-transpose law is exact per face.
                 if (v := mesh._cache.get(("cell", "normals"), None)) is not None:
-                    transformed = torch.linalg.solve_ex(
-                        matrix.T, v.T, check_errors=False
-                    ).result.T
+                    transformed = v @ inverse
                     norm_scale = transformed.norm(dim=-1)
                     if (areas := mesh._cache.get(("cell", "areas"), None)) is not None:
                         new_cache["cell", "areas"] = areas * det_abs * norm_scale
@@ -566,13 +642,15 @@ def transform(
                 if (v := mesh._cache.get(("point", "normals"), None)) is not None and (
                     mesh.n_manifold_dims < 2
                     or (
-                        not torch.compiler.is_compiling()
-                        and _is_similarity_transform(matrix)
+                        assume_similarity
+                        if assume_similarity is not None
+                        else (
+                            not torch.compiler.is_compiling()
+                            and _is_similarity_transform(matrix)
+                        )
                     )
                 ):
-                    transformed = torch.linalg.solve_ex(
-                        matrix.T, v.T, check_errors=False
-                    ).result.T
+                    transformed = v @ inverse
                     new_cache["point", "normals"] = det_sign * safe_normalize(
                         transformed, dim=-1
                     )
@@ -615,7 +693,7 @@ def transform(
     )
 
     _transfer_cell_measures(mesh, transformed_mesh)
-    _transform_point_measures(mesh, transformed_mesh, matrix)
+    _transform_point_measures(mesh, transformed_mesh, matrix, assume_similarity)
     return transformed_mesh
 
 
@@ -651,7 +729,7 @@ def translate(
         - centroids: Translated
         - normals: Unchanged
     """
-    offset = torch.as_tensor(offset, device=mesh.points.device, dtype=mesh.points.dtype)
+    offset = to_device(offset, mesh.points.device, mesh.points.dtype)
 
     if not torch.compiler.is_compiling():
         if offset.shape[-1] != mesh.n_spatial_dims:
@@ -691,6 +769,7 @@ def rotate(
     transform_point_data: bool | TensorDict = False,
     transform_cell_data: bool | TensorDict = False,
     transform_global_data: bool | TensorDict = False,
+    assume_valid_axis: bool = False,
 ) -> "Mesh":
     """Rotate the mesh about an axis by a specified angle.
 
@@ -716,6 +795,12 @@ def rotate(
         Same semantics as ``transform_point_data``, for ``cell_data``.
     transform_global_data : bool or TensorDict
         Same semantics as ``transform_point_data``, for ``global_data``.
+    assume_valid_axis : bool
+        Skip the check that ``axis`` has non-zero length (compile-safe). Only
+        an axis given as a device tensor benefits: checking it reads a device
+        scalar back to the host, which synchronizes on CUDA, whereas an axis
+        given as Python values or a string is checked on the host. This is a
+        promise, not a check: a zero-length axis then gives a NaN rotation.
 
     Returns
     -------
@@ -736,13 +821,12 @@ def rotate(
         n_spatial_dims=mesh.n_spatial_dims,
         device=mesh.points.device,
         dtype=mesh.points.dtype,
+        assume_valid_axis=assume_valid_axis,
     )
 
     ### Handle center by translate-rotate-translate
     if center is not None:
-        center = torch.as_tensor(
-            center, device=mesh.points.device, dtype=mesh.points.dtype
-        )
+        center = to_device(center, mesh.points.device, mesh.points.dtype)
         return translate(
             rotate(
                 translate(mesh, -center),
@@ -752,6 +836,7 @@ def rotate(
                 transform_point_data=transform_point_data,
                 transform_cell_data=transform_cell_data,
                 transform_global_data=transform_global_data,
+                assume_valid_axis=assume_valid_axis,
             ),
             center,
         )
@@ -763,6 +848,7 @@ def rotate(
         transform_cell_data=transform_cell_data,
         transform_global_data=transform_global_data,
         assume_invertible=True,
+        assume_similarity=True,
     )
 
 
@@ -800,7 +886,8 @@ def scale(
 
         - True: Assume all factors are non-zero, propagate caches (compile-safe)
         - False: Assume some factor is zero, skip cache propagation (compile-safe)
-        - None: Check determinant at runtime (may cause graph breaks under torch.compile)
+        - None: Check the determinant; on the host for Python factors, else at
+          runtime (may cause graph breaks under torch.compile)
 
     Returns
     -------
@@ -825,9 +912,7 @@ def scale(
 
     ### Handle center by translate-scale-translate
     if center is not None:
-        center = torch.as_tensor(
-            center, device=mesh.points.device, dtype=mesh.points.dtype
-        )
+        center = to_device(center, mesh.points.device, mesh.points.dtype)
         return translate(
             scale(
                 translate(mesh, -center),
@@ -841,11 +926,15 @@ def scale(
             center,
         )
 
+    is_invertible, is_similarity = _scale_assumptions(factor, mesh.n_spatial_dims)
     return transform(
         mesh,
         matrix=M,
         transform_point_data=transform_point_data,
         transform_cell_data=transform_cell_data,
         transform_global_data=transform_global_data,
-        assume_invertible=assume_invertible,
+        assume_invertible=is_invertible
+        if assume_invertible is None
+        else assume_invertible,
+        assume_similarity=is_similarity,
     )

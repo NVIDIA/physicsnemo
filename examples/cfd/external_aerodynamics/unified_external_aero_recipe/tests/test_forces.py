@@ -40,6 +40,7 @@ from conftest import make_surface_domain_mesh, make_volume_domain_mesh
 from omegaconf import OmegaConf
 
 from physicsnemo.mesh import Mesh
+from physicsnemo.mesh.calculus.measure import scale_measures
 
 
 def _closed_tetrahedron() -> Mesh:
@@ -93,6 +94,32 @@ def test_uniform_shear_gives_drag_equal_to_c_times_area():
     res = forces.force_moment_coefficients(vehicle, torch.zeros(n), cf, **_COMMON)
     assert res["CD"] == pytest.approx(c * area_total, abs=1e-3)
     assert abs(res["CL"]) < 1e-4 and abs(res["CS"]) < 1e-4
+
+
+@pytest.mark.parametrize("length_scale", [1.0, 3.0])
+def test_subsampled_surface_with_effective_measures_recovers_full_surface_drag(
+    length_scale,
+):
+    """Effective measures make the integral over kept cells estimate the full one."""
+    full = _closed_tetrahedron()
+    kept = torch.tensor([0, 1])
+    unweighted = full.slice_cells(kept)
+    weighted = full.slice_cells(kept)
+    scale_measures(weighted, full.n_cells / weighted.n_cells)
+
+    c = 2.0
+    cp = torch.zeros(len(kept))
+    cf = torch.tensor([[c, 0.0, 0.0]]).repeat(len(kept), 1)
+    common = {**_COMMON, "length_scale": length_scale}
+    res = forces.force_moment_coefficients(weighted, cp, cf, **common)
+    res_unweighted = forces.force_moment_coefficients(unweighted, cp, cf, **common)
+
+    ### A regular tetrahedron's faces have equal area, so two of four cells
+    ### weighted by 4/2 reproduce the full-surface value exactly; without
+    ### the weights the integral covers only the kept half.
+    expected = c * float(full.cell_areas.sum()) * length_scale**2
+    assert res["CD"] == pytest.approx(expected, abs=1e-3)
+    assert res_unweighted["CD"] == pytest.approx(expected / 2, abs=1e-3)
 
 
 def test_uniform_shear_moment_about_offset_center():

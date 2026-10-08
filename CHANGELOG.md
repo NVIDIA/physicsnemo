@@ -159,6 +159,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   normalization avoids allocating a full-mesh range and preserves empty slices,
   integer indices, and boolean masks. Point fields use ordinary indexed gathers.
 
+- `translate`, `rotate`, `scale` and their `DomainMesh` and datapipe
+  counterparts no longer synchronize CUDA for Python-number arguments, string
+  axes, rotations and scalar scales, so they return without waiting for queued
+  GPU work. `transform` gains `assume_similarity` and `rotate` gains
+  `assume_valid_axis`, to skip the remaining runtime checks for general
+  matrices and device-tensor axes. Cached normals are mapped with one small
+  inverse instead of `solve_ex` with millions of right-hand sides, whose slow
+  path for pivoting matrices made `RandomRotateMesh(mode="uniform")` take 1.3 s
+  on the 17.7M-triangle DrivAerML surface (6.5 ms now, on a GB300).
+
 - The `tolerance` of `sample_data_at_points`, `find_containing_cells` and
   `find_all_containing_cells` is now relative. Barycentric coordinates must
   still be `>= -tolerance`, but the distance from a point to a cell's affine
@@ -201,6 +211,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- GLOBE DrivAerML postprocessing reports correct Cd, Cl, and Cs on subsampled
+  surfaces. Before, they shrank with the fraction of cells kept.
+- The unified external aero recipe documents how surface subsampling affects
+  force integration.
 - `ClusterTree.find_dual_interaction_pairs` no longer drops every pair whose
   boxes contain a NaN coordinate (one NaN emptied the whole plan, so GLOBE
   returned zeros instead of NaN), no longer fails when a stream exceeds 2^31
