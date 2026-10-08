@@ -228,16 +228,17 @@ forward pass unchanged:
 
 ```python
 from physicsnemo.experimental.guardrails.embedded import (
-    GuardedGeoTransolver, OODGuardConfig,
+    GuardedGeoTransolver,
+    OODGuardConfig,
 )
 
-model = instantiate(cfg.model)          # your GeoTransolver (or rollout subclass)
+model = instantiate(cfg.model)  # your GeoTransolver (or rollout subclass)
 model = GuardedGeoTransolver(
     model,
     OODGuardConfig(
-        buffer_size=121,   # FIFO buffer; typically = num_training_samples
-        knn_k=10,          # k for geometry kNN distance
-        sensitivity=1.5,   # threshold multiplier on 99th-percentile kNN dist
+        buffer_size=121,  # FIFO buffer; typically = num_training_samples
+        knn_k=10,  # k for geometry kNN distance
+        sensitivity=1.5,  # threshold multiplier on 99th-percentile kNN dist
     ),
 )
 ```
@@ -450,9 +451,9 @@ At `__getitem__` time, the datapipe converts the selected scalars to a dict of s
 
 ```python
 sample.global_features = {
-    "velocity_x":      tensor(-5.0),
+    "velocity_x": tensor(-5.0),
     "thickness_scale": tensor(1.0),
-    "rwall_origin_y":  tensor(0.0),
+    "rwall_origin_y": tensor(0.0),
 }
 ```
 
@@ -593,8 +594,7 @@ class MyReader:
         split: str | None = None,
         logger=None,
         **kwargs,
-    ):
-        ...
+    ): ...
 ```
 
 With this pattern, your reader will keep working even if the framework adds new optional arguments later.

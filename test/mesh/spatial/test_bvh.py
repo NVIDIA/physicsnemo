@@ -240,7 +240,7 @@ class TestMortonCodes:
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
     def test_cuda_codes_match_cpu_for_primitive_mesh_centroids(self):
-        """CUDA vectorized path matches CPU bit-loop path on primitive mesh data."""
+        """CUDA and CPU produce identical codes on primitive mesh data."""
         from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
 
         mesh = sphere_icosahedral.load(subdivisions=2)
@@ -250,6 +250,41 @@ class TestMortonCodes:
         cuda_codes = _compute_morton_codes(centroids.cuda()).cpu()
 
         assert torch.equal(cuda_codes, cpu_codes)
+
+    @pytest.mark.parametrize("n_spatial_dims", [1, 2, 3, 4])
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+    def test_codes_match_per_bit_interleave(self, device, n_spatial_dims, dtype):
+        """Codes equal a bit-by-bit interleave of the quantized coordinates."""
+        g = torch.Generator().manual_seed(0)
+        points = torch.rand(500, n_spatial_dims, generator=g, dtype=dtype).to(device)
+
+        ### Reference: the same quantization, then one bit of one axis at a time.
+        n_bits = min(62, 63 // n_spatial_dims)
+        max_val = (1 << n_bits) - 1
+        cmin, cmax = points.min(dim=0).values, points.max(dim=0).values
+        coords = ((points - cmin) / (cmax - cmin) * max_val).long().clamp(0, max_val)
+        expected = torch.zeros(len(points), dtype=torch.int64, device=device)
+        for b in range(n_bits):
+            for d in range(n_spatial_dims):
+                expected |= ((coords[:, d] >> b) & 1) << (b * n_spatial_dims + d)
+
+        assert torch.equal(_compute_morton_codes(points), expected)
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+    def test_cuda_peak_memory_is_linear_in_points(self):
+        """Temporaries are a few (N, D) arrays, not one int64 per bit."""
+        n_points = 1 << 16
+        points = torch.rand(n_points, 3, device="cuda")
+
+        torch.cuda.synchronize()
+        torch.cuda.reset_peak_memory_stats()
+        baseline = torch.cuda.memory_allocated()
+        _compute_morton_codes(points)
+        torch.cuda.synchronize()
+        peak = torch.cuda.max_memory_allocated() - baseline
+
+        # Materializing all 63 bits of every point as int64 needs 504 B per point.
+        assert peak < 128 * n_points
 
     def test_rejects_integer_input(self):
         """Integer centroids should be rejected (would silently corrupt quantization)."""

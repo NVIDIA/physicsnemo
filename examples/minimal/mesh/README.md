@@ -41,7 +41,7 @@ pip install -e ".[mesh]"
 
 <!-- markdownlint-disable MD013 -->
 | Tutorial | Topic | What You'll Learn |
-|----------|-------|-------------------|
+| ---------- | ------- | ------------------- |
 | **1. Getting Started** | Core concepts | Mesh structure, data attachment, GPU acceleration |
 | **2. Operations** | Mesh manipulation | Transformations, subdivision, slicing, merging |
 | **3. Discrete Calculus** | Mathematical operators | Gradients, divergence, curl, curvature |

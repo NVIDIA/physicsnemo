@@ -14,12 +14,12 @@ them without updating this document.
 ### uv download cache (`~/.cache/uv`)
 
 | Property | Value |
-|---|---|
+| --- | --- |
 | Key | `<UV_CACHE_KEY_PREFIX>-latest` |
-| Prefix encodes | container image + Python version + uv version |
+| Prefix encodes | container image + Python version + uv version + locked PyTorch minor version |
 | Suffix | literal `latest` (mutable slot, refreshed via delete-before-save) |
-| Contents | every wheel uv has ever downloaded for this baseline; additive across lockfile changes |
-| Invalidates when | container image, CUDA version, Python version, or uv version changes (prefix change → new slot) |
+| Contents | every wheel uv has ever downloaded for this baseline, plus the PyG extensions built from source against the locked PyTorch; additive across lockfile changes |
+| Invalidates when | container image, CUDA version, Python version, uv version, or PyTorch minor version changes (prefix change → new slot) |
 | Does **not** invalidate on | `uv.lock` or `pyproject.toml` changes |
 | Restore semantics | **fail-open**; missing cache only costs download time, never correctness |
 | Save semantics | nightly only, on cold-cache runs: delete the existing entry first, then save, then verify with `gh cache list` |
@@ -31,7 +31,7 @@ from three independent sources: a pinned CUDA container image, a pinned
 ### JIT compilation cache (`/root/.cache/jit`)
 
 | Property | Value |
-|---|---|
+| --- | --- |
 | Key | `<JIT_CACHE_KEY_PREFIX>-latest` |
 | Prefix encodes | container image + Python version |
 | Suffix | literal `latest` (mutable slot, refreshed via delete-before-save) |
@@ -49,6 +49,14 @@ controlled by its own environment variable:
 - **Triton**: `TRITON_CACHE_DIR` → `$JIT_CACHE_DIR/triton`
 - **torch.compile / Inductor**: `TORCHINDUCTOR_CACHE_DIR` → `$JIT_CACHE_DIR/inductor`
 
+Static multi-GPU workers instead use
+`$JIT_CACHE_DIR/inductor/rank-$LOCAL_RANK`. Inductor's cached wrappers can
+contain device-specific code, so ranks must not share that directory.
+The dynamic multi-GPU stream unsets `TORCHINDUCTOR_CACHE_DIR` before
+launching pytest, allowing `DistributedManager` to choose a separate
+temporary cache directory for each spawned rank. An explicit shared
+directory would bypass that isolation.
+
 The cache is additive and survives lockfile changes.  Correctness is
 guaranteed by each compiler's built-in source-hash invalidation: Warp
 hashes kernel source and recompiles changed kernels; Triton and
@@ -62,7 +70,7 @@ set the backend's cache-path env var in the test step, done.
 ### Testmon database cache (`.testmondata*`)
 
 | Property | Value |
-|---|---|
+| --- | --- |
 | Key | `<TESTMON_CACHE_KEY_PREFIX>-latest` |
 | Prefix encodes | nightly identity + CUDA stack (`testmon-nightly-cu13`); the CUDA tag keeps cu12/cu13 nightlies from clobbering each other's slot via delete-before-save |
 | Suffix | literal `latest` (mutable slot, refreshed via delete-before-save) |
@@ -141,7 +149,7 @@ Two ways to run the regen:
 ### Coverage baseline cache (`.coverage*`)
 
 | Property | Value |
-|---|---|
+| --- | --- |
 | Key | `<COVERAGE_CACHE_KEY_PREFIX>-latest` |
 | Prefix encodes | nightly identity + CUDA stack (`coverage-nightly-cu13`) |
 | Suffix | literal `latest` (mutable slot, refreshed via delete-before-save) |
@@ -160,7 +168,7 @@ The multi-GPU workflow owns two independent shard caches: one for the
 dynamic stream and one for the static stream.
 
 | Property | Value |
-|---|---|
+| --- | --- |
 | Keys | `coverage-multigpu-dynamic-latest` and `coverage-multigpu-static-latest` |
 | Paths | `.coverage.pytest.multigpu-dynamic*` and `.coverage.pytest.multigpu-static*` |
 | Suffix | literal `latest` (mutable slots, refreshed via delete-before-save) |
@@ -312,7 +320,12 @@ publisher jobs can replace the two coverage shard slots.
 ## Bumping any of the baseline values
 
 If you change the container image, CUDA version, Python version, uv
-version, or extras tag, you must update all three workflows:
+version, locked PyTorch minor version, or extras tag, you must update all
+three workflows. PyTorch belongs in this list because uv caches the
+source-built `torch_scatter`, `torch_sparse`, and `torch_cluster` wheels
+by their sdists alone; the key does not include the PyTorch that compiled
+them. Without a new prefix, CI would reuse wheels built for the old
+PyTorch ABI.
 
 1. The matching `env:` value at the top of
    [.github/workflows/github-nightly-uv.yml](workflows/github-nightly-uv.yml)

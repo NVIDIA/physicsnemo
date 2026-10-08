@@ -222,6 +222,14 @@ Transolver++ is supported with the `plus` flag to the model. In our experiments,
 
 ## Uncertainty Quantification
 
+For the methodology and scientific evaluation of UQ for geometry-conditioned
+neural surrogates, refer to
+[Predictive Uncertainty for Neural CAE Surrogates](https://arxiv.org/abs/2609.25430).
+The paper evaluates GP-based uncertainty, concrete
+MC-dropout, and deep ensembles across external aerodynamics and crash dynamics,
+examining calibration, error ranking, unfamiliar inputs, and derived engineering
+quantities.
+
 GeoTransolver supports three complementary UQ methods:
 
 | Method | Granularity | Cost at inference |
@@ -651,14 +659,14 @@ exposing whatever that model computes before its final projection:
 from physicsnemo.experimental.uq import FieldVariationalGPHead
 
 head = FieldVariationalGPHead(
-    input_dim=feat_dim,          # backbone feature width
-    num_tasks=4,                 # output channels
+    input_dim=feat_dim,  # backbone feature width
+    num_tasks=4,  # output channels
     n_train=n_points_per_epoch,  # ELBO normalizer
     mlp_hidden=[128, 16],
     feature_norm="l2_radial",
 )
 
-feats = backbone.encode(batch)              # (B, N, feat_dim)
+feats = backbone.encode(batch)  # (B, N, feat_dim)
 mean, neg_elbo = head.forward_and_loss(feats, targets, beta=beta)
 loss = neg_elbo + lambda_mse * mse(mean, targets)
 ```

@@ -110,12 +110,12 @@ well = Well(name="INJ1", type_id=3, stat=1)  # Water injector
 
 # Add completions
 well.add_completion(
-    I=10,          # Grid I-index
-    J=10,          # Grid J-index
-    K=5,           # Grid K-index
-    dir=3,         # Direction (1=X, 2=Y, 3=Z)
-    stat=1,        # Status (1=OPEN)
-    conx_factor=1.0  # Connection factor
+    I=10,  # Grid I-index
+    J=10,  # Grid J-index
+    K=5,  # Grid K-index
+    dir=3,  # Direction (1=X, 2=Y, 3=Z)
+    stat=1,  # Status (1=OPEN)
+    conx_factor=1.0,  # Connection factor
 )
 
 # Check well properties

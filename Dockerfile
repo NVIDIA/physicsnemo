@@ -25,15 +25,14 @@
 # Python packages use uv (UV_SYSTEM_PYTHON=1). Build-only source and uv caches are
 # mounted into RUN instructions so they do not become part of the image layers.
 
-ARG BASE_CONTAINER=nvcr.io/nvidia/pytorch:26.06-py3
+ARG BASE_CONTAINER=nvcr.io/nvidia/pytorch:26.08-py3
 FROM ${BASE_CONTAINER} AS dependencies
 
 ARG TARGETPLATFORM
 
 # Install uv (use system Python for installs; set so --system is default)
-# Pinned to 0.11.14 (latest stable as of May 2026) which bundles
-# rustls-webpki >= 0.103.13 (fixes GHSA-82j2-j2ch-gfr8).
-COPY --from=ghcr.io/astral-sh/uv:0.11.14 /uv /uvx /bin/
+# Keep the installer version aligned with the deterministic CI environments.
+COPY --from=ghcr.io/astral-sh/uv:0.12.20 /uv /uvx /bin/
 # Use system Python, allow installs into the externally managed base environment,
 # and copy installed files out of the temporary cache mount.
 ENV UV_SYSTEM_PYTHON=1 \
@@ -45,7 +44,7 @@ ENV UV_SYSTEM_PYTHON=1 \
 # inherited constraint file in one layer. Package downloads live only in the
 # BuildKit cache mount, and apt metadata is removed before the layer is committed.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-    uv pip install "pip>=23.2.1" "setuptools>=77.0.3" && \
+    uv pip install "pip>=26.2.1" "setuptools>=84.0.0" && \
     apt-get update && \
     apt-get install -y git-lfs graphviz libgl1 zip unzip && \
     git lfs install && \
@@ -158,14 +157,14 @@ ARG TARGETPLATFORM
 # The source is needed only while resolving/installing the dev group.
 RUN --mount=type=bind,target=/physicsnemo,rw \
     --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-    uv pip install "netcdf4>1.7.3" dask && \
+    uv pip install "netcdf4>=1.7.4" "dask>=2026.8.0" && \
     cd /physicsnemo && \
     uv pip install --group dev && \
-    FORCE_CUDA_EXTENSION=1 uv pip install --no-build-isolation "torch-harmonics==0.8.0" && \
-    uv pip install "tensorly>=0.8.1" "tensorly-torch>=0.4.0" "torchinfo>=1.8" "webdataset>=0.2" && \
-    uv pip install "moto[s3]>=5.0.28" && \
-    uv pip install "numpy-stl" "scikit-image>=0.24.0" "shapely" && \
-    uv pip install "multi-storage-client[boto3]>=0.33.0"
+    FORCE_CUDA_EXTENSION=1 uv pip install --no-build-isolation "torch-harmonics==0.9.2" && \
+    uv pip install "tensorly>=0.9.0" "tensorly-torch>=0.5.0" "torchinfo>=1.8.0" "webdataset>=1.0.2" && \
+    uv pip install "moto[s3]>=5.2.3" && \
+    uv pip install "numpy-stl>=4.0.1" "scikit-image>=0.26.0" "shapely>=2.1.2" && \
+    uv pip install "multi-storage-client[boto3]>=1.1.0"
 
 # FigNet/Makani and related CI-only deps
 # Install Makani via direct URL
@@ -196,7 +195,7 @@ ARG TARGETPLATFORM
 
 # Install packages for Sphinx build
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-    uv pip install "recommonmark>=0.7.1" "sphinx>=5.1.1" "nvidia-sphinx-theme>=0.0.7" "pydocstyle>=6.1.1" "nbsphinx>=0.8.9" "nbconvert>=6.4.3" "jinja2>=3.0.3" && \
-    wget https://github.com/jgm/pandoc/releases/download/3.1.6.2/pandoc-3.1.6.2-1-amd64.deb && \
-    dpkg -i pandoc-3.1.6.2-1-amd64.deb && \
-    rm -f pandoc-3.1.6.2-1-amd64.deb
+    uv pip install "recommonmark>=0.7.1" "sphinx>=9.1.0" "nvidia-sphinx-theme>=0.0.9.post1" "pydocstyle>=6.3.0" "nbsphinx>=0.9.8" "nbconvert>=7.17.1" "jinja2>=3.1.6" && \
+    wget https://github.com/jgm/pandoc/releases/download/3.12/pandoc-3.12-1-amd64.deb && \
+    dpkg -i pandoc-3.12-1-amd64.deb && \
+    rm -f pandoc-3.12-1-amd64.deb
