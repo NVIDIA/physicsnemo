@@ -314,6 +314,181 @@ class Conv2d(torch.nn.Module):
         return x
 
 
+class Conv3D(Module):
+    r"""
+    3D convolution with optional fused up/downsampling.
+
+    Implements a 3D convolution with optional 2x upsampling or downsampling via
+    separable bilinear/bicubic filters. When a convolution weight is present
+    (``kernel > 0``), resampling is fused with the convolution for efficiency.
+
+    Parameters
+    ----------
+    in_channels : int
+        Number of input channels.
+    out_channels : int
+        Number of output channels.
+    kernel : int
+        Convolution kernel size applied uniformly across all spatial dimensions.
+        Set to 0 to apply resampling only (no learned convolution).
+    bias : bool, optional, default=True
+        Whether to include a learnable bias.
+    up : bool, optional, default=False
+        Apply 2x upsampling. Cannot be ``True`` simultaneously with ``down``.
+    down : bool, optional, default=False
+        Apply 2x downsampling. Cannot be ``True`` simultaneously with ``up``.
+    resample_filter : list[int], optional, default=[1, 1]
+        1D coefficients for the separable up/downsampling filter. The 3D filter
+        is constructed as their outer product, normalized so it sums to 1.
+        Use ``[1, 1]`` for bilinear resampling or ``[1, 3, 3, 1]`` for bicubic.
+        Must be a non-empty list of positive integers.
+    init_mode : Literal["xavier_uniform", "xavier_normal", "kaiming_uniform", "kaiming_normal"], optional, default="kaiming_normal"
+        Weight initialization mode.
+    init_weight : float, optional, default=1.0
+        Multiplier applied to the initialized weight tensor.
+    init_bias : float, optional, default=0.0
+        Multiplier applied to the initialized bias tensor.
+
+    Raises
+    ------
+    ValueError
+        If both ``up`` and ``down`` are ``True``, or if ``resample_filter`` is
+        empty or contains non-positive values when ``up`` or ``down`` is ``True``.
+
+    Forward
+    -------
+    x : torch.Tensor
+        Input tensor of shape :math:`(B, C_{in}, D, H, W)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor of shape :math:`(B, C_{out}, D', H', W')`. The spatial
+        dimensions are doubled (``up=True``), halved (``down=True``), or unchanged.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.nn import Conv3D
+    >>> conv = Conv3D(in_channels=4, out_channels=8, kernel=3)
+    >>> x = torch.randn(2, 4, 4, 12, 16)
+    >>> conv(x).shape
+    torch.Size([2, 8, 4, 12, 16])
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel: int,
+        bias: bool = True,
+        up: bool = False,
+        down: bool = False,
+        resample_filter: List[int] = [1, 1],
+        init_mode: Literal[
+            "xavier_uniform", "xavier_normal", "kaiming_uniform", "kaiming_normal"
+        ] = "kaiming_normal",
+        init_weight: float = 1.0,
+        init_bias: float = 0.0,
+    ):
+        if up and down:
+            raise ValueError("Both 'up' and 'down' cannot be True at the same time.")
+        if (up or down) and (
+            not resample_filter or any(value <= 0 for value in resample_filter)
+        ):
+            raise ValueError(
+                "resample_filter must be a non-empty list of positive integers "
+                f"when up=True or down=True, got {resample_filter}"
+            )
+
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.up = up
+        self.down = down
+
+        init_kwargs = dict(
+            mode=init_mode,
+            fan_in=in_channels * kernel * kernel * kernel,
+            fan_out=out_channels * kernel * kernel * kernel,
+        )
+        self.weight = (
+            torch.nn.Parameter(
+                _weight_init(
+                    (out_channels, in_channels, kernel, kernel, kernel), **init_kwargs
+                )
+                * init_weight
+            )
+            if kernel
+            else None
+        )
+        self.bias = (
+            torch.nn.Parameter(_weight_init((out_channels,), **init_kwargs) * init_bias)
+            if kernel and bias
+            else None
+        )
+
+        f = torch.as_tensor(resample_filter, dtype=torch.float32)
+        f = (f.ger(f).unsqueeze(2) * f.view(1, 1, -1)).unsqueeze(0).unsqueeze(
+            1
+        ) / f.sum().pow(3)
+        self.register_buffer("resample_filter", f.contiguous() if up or down else None)
+
+    def forward(
+        self, x: Float[torch.Tensor, "B C_in D H W"]
+    ) -> Float[torch.Tensor, "B C_out D_out H_out W_out"]:
+        w = self.weight.to(x.dtype) if self.weight is not None else None
+        b = self.bias.to(x.dtype) if self.bias is not None else None
+        f = (
+            self.resample_filter.to(x.dtype)
+            if self.resample_filter is not None
+            else None
+        )
+        w_pad = w.shape[-1] // 2 if w is not None else 0
+        f_pad = (f.shape[-1] - 1) // 2 if f is not None else 0
+
+        if self.up and w is not None:
+            x = torch.nn.functional.conv_transpose3d(
+                x,
+                f.mul(8).tile([self.in_channels, 1, 1, 1, 1]),
+                groups=self.in_channels,
+                stride=2,
+                padding=max(f_pad - w_pad, 0),
+            )
+            x = torch.nn.functional.conv3d(x, w, padding=max(w_pad - f_pad, 0))
+        elif self.down and w is not None:
+            x = torch.nn.functional.conv3d(x, w, padding=w_pad + f_pad)
+            x = torch.nn.functional.conv3d(
+                x,
+                f.tile([self.out_channels, 1, 1, 1, 1]),
+                groups=self.out_channels,
+                stride=2,
+            )
+        else:
+            if self.up:
+                x = torch.nn.functional.conv_transpose3d(
+                    x,
+                    f.mul(8).tile([self.in_channels, 1, 1, 1, 1]),
+                    groups=self.in_channels,
+                    stride=2,
+                    padding=f_pad,
+                )
+            if self.down:
+                x = torch.nn.functional.conv3d(
+                    x,
+                    f.tile([self.in_channels, 1, 1, 1, 1]),
+                    groups=self.in_channels,
+                    stride=2,
+                    padding=f_pad,
+                )
+            if w is not None:
+                x = torch.nn.functional.conv3d(x, w, padding=w_pad)
+
+        if b is not None:
+            x = x.add_(b.reshape(1, -1, 1, 1, 1))
+        return x
+
+
 class ConvLayer(Module):
     r"""
     Generalized Convolution Block.
