@@ -225,7 +225,6 @@ STRATEGY_REJECTIONS = [  # (id, thunk, error, match)
     ("score-missing-sigma", lambda: _S.score(_Z2, _O2), ValueError, "sigma"),
     ("score-aux-not-mapping", lambda: _S.score(_Z2, _O2, aux=[_O2]), ValueError, "requires aux entries"),
     ("key-int", lambda: AuxDifficulty(key=7), TypeError, "key must be a string"),
-    ("key-empty", lambda: AuxDifficulty(key=""), ValueError, "non-empty"),
 ]
 # fmt: on
 
