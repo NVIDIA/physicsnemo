@@ -141,6 +141,8 @@ class CoverageAccumulator:
         n_cal: int,
         keys: Sequence[str] | None = None,
     ) -> None:
+        if tier not in TIERS:
+            raise ValueError(f"tier must be one of {TIERS}, got {tier!r}.")
         self._tier = tier
         self._alpha = validate_alpha(alpha)
         self._n_cal = validate_n_cal(n_cal)
@@ -277,10 +279,6 @@ class CoverageAccumulator:
                             f"fixed sample shape; got {tuple(coverage.shape)} after "
                             f"{tuple(previous.shape)}."
                         )
-                case _:
-                    raise ValueError(
-                        f"tier must be one of {TIERS}, got {self._tier!r}."
-                    )
 
             staged.append((key, coverage, width_total, widths.numel()))
         return staged
