@@ -76,7 +76,7 @@ def test_prediction_container_contract():
 def test_exact_cellwise_mesh_identity_and_point_alignment():
     predictor, points = fit("cellwise", n_samples=10, shape=(4, 2))
     assert predictor._mesh_fingerprint == points_fingerprint(points)
-    with pytest.raises(ValueError, match="requires points"):
+    with pytest.raises(TypeError, match="points must be a torch.Tensor"):
         predictor.predict_interval(torch.zeros(4, 2))
     changed = points.clone()
     changed[0, 0] = torch.nextafter(changed[0, 0], torch.tensor(torch.inf))
@@ -116,11 +116,11 @@ class _CustomScore(AbsoluteErrorScore):
 CONSTRUCTOR_REJECTIONS = [  # (id, make_predictor overrides, error, match)
     ("custom-score", {"score": _CustomScore()}, TypeError, "Subclasses are not supported"),
     ("cellwise-without-mesh", {"points": None}, ValueError, "requires points="),
-    ("cellwise-scalar-threshold", {"thresholds": torch.tensor(1.0)}, ValueError, "at least one dimension"),
+    ("cellwise-scalar-threshold", {"thresholds": torch.tensor(1.0)}, ValueError, "one leading entry per mesh point"),
     ("dict-thresholds", {"thresholds": {"pressure": torch.ones(3)}}, TypeError, "Tensor or TensorDict"),
     ("empty-tensordict-thresholds", {"thresholds": TensorDict({})}, ValueError, "at least one"),
     ("integer-thresholds", {"thresholds": torch.ones(3, dtype=torch.int32)}, TypeError, "floating"),
-    ("empty-thresholds", {"thresholds": torch.empty(0)}, ValueError, "empty"),
+    ("empty-thresholds", {"thresholds": torch.empty(0)}, ValueError, "one leading entry per mesh point"),
     ("negative-threshold", {"thresholds": torch.full((3,), -1.0)}, ValueError, "^Plain tensor: negative threshold"),  # no internal key
     ("threshold-mesh-size-mismatch", {"thresholds": torch.full((4,), 0.5)}, ValueError, "one leading entry per mesh point"),
     ("unknown-tier", {"tier": "bogus"}, ValueError, "tier must be one of"),

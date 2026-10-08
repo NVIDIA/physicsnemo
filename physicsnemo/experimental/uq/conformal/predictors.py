@@ -72,13 +72,6 @@ def _validate_thresholds(
     out: dict[str, Tensor] = {}
     for key, value in field_items(thresholds):
         check_real(key, "threshold", value)
-        if value.numel() == 0:
-            raise ValueError(f"{_field_label(key)}: empty threshold tensor.")
-        if value.ndim == 0:
-            raise ValueError(
-                f"{_field_label(key)}: cellwise thresholds must have at least one "
-                "dimension, got a scalar."
-            )
         if not score_type._signed_threshold and bool((value < 0).any()):
             raise ValueError(
                 f"{_field_label(key)}: negative threshold, but "
@@ -134,7 +127,8 @@ class ConformalPredictor:
         - :math:`n_{cal} < (1 - \alpha) / \alpha`: collect more samples or
           raise ``alpha``.
         - ``points`` is missing, empty, not 2-D, or not finite.
-        - A threshold is empty, not finite, or a scalar.
+        - A threshold is not finite, or its leading size is not the number
+          of mesh points.
         - A threshold is negative and ``score`` is not
           ``QuantileRegressionScore``.
     TypeError
@@ -215,7 +209,7 @@ class ConformalPredictor:
         self._thresholds_by_key = _validate_thresholds(thresholds, type(score_snapshot))
         n_points = mesh_point_count(mesh_snapshot)
         for key, threshold in self._thresholds_by_key.items():
-            if threshold.shape[0] != n_points:
+            if threshold.ndim == 0 or threshold.shape[0] != n_points:
                 raise ValueError(
                     f"{_field_label(key)}: threshold shape {tuple(threshold.shape)} "
                     f"must have one leading entry per mesh point ({n_points})."
@@ -369,10 +363,11 @@ class ConformalPredictor:
         ------
         TypeError
             If ``prediction`` is a plain tensor for a predictor calibrated on
-            ``TensorDict`` fields, or the reverse.
+            ``TensorDict`` fields, or the reverse, or a cellwise predictor
+            gets no ``points``.
         ValueError
             If a shape differs from calibration, values are not finite, or
-            ``points`` is missing or describes a different mesh.
+            ``points`` describes a different mesh.
         KeyError
             If a ``TensorDict`` prediction lacks a calibrated field.
 

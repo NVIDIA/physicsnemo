@@ -90,7 +90,7 @@ def test_artifact_has_one_exact_schema_and_cellwise_load_requires_the_mesh(tmp_p
 
     loaded = ConformalPredictor.load(path)
     prediction = torch.zeros(6, 3)
-    with pytest.raises(ValueError, match="requires points"):
+    with pytest.raises(TypeError, match="points must be a torch.Tensor"):
         loaded.predict_interval(prediction)
     for changed in (_MESH_POINTS.flip(0), _MESH_POINTS.to(torch.float64)):
         with pytest.raises(ValueError, match="exact calibration mesh"):

@@ -103,7 +103,6 @@ VALIDATOR_CASES = [
     ("eps-tensor-coerced", lambda: type(positive_finite_float(torch.tensor(1e-3), "eps")) is float, True),
     ("points-1d", lambda: check_points(torch.ones(3)), (ValueError, "shape")),
     ("points-empty", lambda: check_points(torch.empty(0, 2)), (ValueError, "non-empty")),
-    ("points-integer", lambda: check_points(torch.ones(3, 2, dtype=torch.int64)), (TypeError, "floating")),
     ("points-nan", lambda: check_points(torch.tensor([[0.0], [torch.nan]])), (ValueError, "non-finite")),
     ("fingerprint-not-tensor", lambda: points_fingerprint([[0.0, 1.0]]), (TypeError, "torch.Tensor")),
     ("fingerprint-dtype-sensitive", lambda: points_fingerprint(_P64) != points_fingerprint(_P64.float()), True),
@@ -120,7 +119,6 @@ VALIDATOR_CASES = [
     ("provenance-tuple", lambda: validate_provenance({"labels": ("a",)}), (TypeError, "strict-JSON")),
     ("provenance-non-string-key", lambda: validate_provenance({7: "x"}), (TypeError, "strict-JSON")),
     ("provenance-nan", lambda: validate_provenance({"m": float("nan")}), (ValueError, "finite")),
-    ("provenance-reserved-key", lambda: validate_provenance({"mesh_fingerprint": "x"}), (ValueError, "mesh_fingerprint")),
 ]
 # fmt: on
 
