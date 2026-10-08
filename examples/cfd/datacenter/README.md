@@ -22,8 +22,8 @@ rate and rack exit temperature (max load condition). Steady state simulations
 are used and the resulting OpenFOAM data is exported in VTK format for training
 of the AI surrogate. The dataset is then normalized using the mean and standard
 deviation statistics of the dataset. The normalized dataset, along with a sample
-OpenFOAM configuration, can be downloaded from NGC link
-[here](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/physicsnemo/resources/physicsnemo_datacenter_cfd_dataset)
+OpenFOAM configuration, can be downloaded from the
+[datacenter CFD dataset page on NGC](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/physicsnemo/resources/physicsnemo_datacenter_cfd_dataset).
 
 After downloading, place the datasets directory into the current directory.
 Running below commands should setup the directory structure required to run the

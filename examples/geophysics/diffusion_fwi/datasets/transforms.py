@@ -402,8 +402,8 @@ class MinMaxNormalize(DataLoaderUfuncTransform):
                 if a is None or b is None:
                     ufuncs[k] = None
                 else:
-                    ufuncs[k] = (
-                        lambda t, a=a, b=b: 2.0 * ((t - a) / (b - a + eps)) - 1.0
+                    ufuncs[k] = lambda t, a=a, b=b: (
+                        2.0 * ((t - a) / (b - a + eps)) - 1.0
                     )
 
         elif isinstance(min_val, Sequence):

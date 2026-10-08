@@ -70,8 +70,8 @@ for automotive aerodynamics research. It comprises 500 parametrically morphed va
 of the widely utilized DrivAer notchback generic vehicle. Mesh generation and scale-resolving
 computational fluid dynamics (CFD) simulations were executed using consistent and validated
 automatic workflows that represent the industrial state-of-the-art. Geometries and comprehensive
-aerodynamic data are published in open-source formats. For more technical details about this
-dataset, please refer to their [paper](https://arxiv.org/pdf/2408.11969).
+aerodynamic data are published in open-source formats. For more technical details about
+this dataset, please refer to their [paper](https://arxiv.org/pdf/2408.11969).
 
 ## XAeroNet-S prerequisites
 

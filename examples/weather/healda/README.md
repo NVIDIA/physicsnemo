@@ -90,7 +90,7 @@ class MyTransform:
 ### Provided Implementations
 
 | Component | Module | Description |
-|---|---|---|
+| --- | --- | --- |
 | `ObsERA5Dataset` | `dataset` | ERA5 state + observations |
 | `UFSUnifiedLoader` | `loaders.ufs_obs` | Parquet obs loader |
 | `ERA5Loader` | `loaders.era5` | Async ERA5 zarr loader |
@@ -190,7 +190,9 @@ dataset = ObsERA5Dataset(
 
 # 3. Sampler + DataLoader
 sampler = RestartableDistributedSampler(
-    dataset, rank=rank, num_replicas=world_size,
+    dataset,
+    rank=rank,
+    num_replicas=world_size,
 )
 sampler.set_epoch(0)
 dataloader = DataLoader(

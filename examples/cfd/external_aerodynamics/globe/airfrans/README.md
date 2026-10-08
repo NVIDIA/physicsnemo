@@ -72,7 +72,7 @@ automatically selects the most recent output directory.
 ## File Overview
 
 | File | Purpose |
-|---|---|
+| --- | --- |
 | `train.py` | Training loop, loss function, model construction |
 | `dataset.py` | AirFRANS preprocessing, caching, DataLoader creation |
 | `utilities.py` | Checkpointing, device transfer, distributed helpers |

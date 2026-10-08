@@ -465,15 +465,15 @@ Benchmarks on DrivAerML (20k boundary faces, H100) show `leaf_size=1` is
 
 ## 9. Complexity Analysis
 
-| Component          | Time complexity     | Memory complexity   |
-|--------------------|---------------------|---------------------|
-| Tree construction  | O(N log N)          | O(N)                |
-| Aggregate computation | O(N)             | O(N)                |
-| Dual-tree traversal | O(N log N)         | O(N log N)          |
-| Near-field evaluation | O(N log N)       | O(chunk_size)       |
-| Far-field evaluation | O(N)              | O(N_far_pairs)      |
-| Far-field broadcast | O(N log N)         | O(N_targets)        |
-| **Total**          | **O(N log N)**      | **O(N log N)**      |
+| Component             | Time complexity | Memory complexity |
+|-----------------------|-----------------|-------------------|
+| Tree construction     | O(N log N)      | O(N)              |
+| Aggregate computation | O(N)            | O(N)              |
+| Dual-tree traversal   | O(N log N)      | O(N log N)        |
+| Near-field evaluation | O(N log N)      | O(chunk_size)     |
+| Far-field evaluation  | O(N)            | O(N_far_pairs)    |
+| Far-field broadcast   | O(N log N)      | O(N_targets)      |
+| **Total**             | **O(N log N)**  | **O(N log N)**    |
 
 The far-field evaluation step is O(N) rather than O(N log N) because the
 number of well-separated node pairs grows linearly for typical point

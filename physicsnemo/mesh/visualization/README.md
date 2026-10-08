@@ -80,10 +80,13 @@ Access nested data structures using tuple keys:
 ```python
 from tensordict import TensorDict
 
-mesh.cell_data["flow"] = TensorDict({
-    "temperature": torch.rand(mesh.n_cells),
-    "pressure": torch.rand(mesh.n_cells),
-}, batch_size=[mesh.n_cells])
+mesh.cell_data["flow"] = TensorDict(
+    {
+        "temperature": torch.rand(mesh.n_cells),
+        "pressure": torch.rand(mesh.n_cells),
+    },
+    batch_size=[mesh.n_cells],
+)
 
 # Access nested data
 mesh.draw(cell_scalars=("flow", "temperature"))
@@ -96,9 +99,9 @@ mesh.draw(cell_scalars=("flow", "temperature"))
 ```python
 mesh.draw(
     cell_scalars="data",
-    cmap="viridis",      # Colormap name
-    vmin=0.0,            # Minimum value
-    vmax=1.0,            # Maximum value
+    cmap="viridis",  # Colormap name
+    vmin=0.0,  # Minimum value
+    vmax=1.0,  # Maximum value
 )
 ```
 
@@ -106,10 +109,10 @@ mesh.draw(
 
 ```python
 mesh.draw(
-    alpha_points=1.0,    # Point opacity (0-1)
-    alpha_cells=0.3,     # Cell opacity (0-1)
-    alpha_edges=0.7,     # Edge opacity (0-1)
-    show_edges=True,     # Display cell edges
+    alpha_points=1.0,  # Point opacity (0-1)
+    alpha_cells=0.3,  # Cell opacity (0-1)
+    alpha_edges=0.7,  # Edge opacity (0-1)
+    show_edges=True,  # Display cell edges
 )
 ```
 
@@ -165,19 +168,19 @@ plotter.show()
 
 ```python
 mesh.draw(
-    backend="auto",                  # "auto", "matplotlib", "pyvista"
-    show=True,                       # Display immediately
-    point_scalars=None,              # Point scalar data
-    cell_scalars=None,               # Cell scalar data
-    cmap="viridis",                  # Colormap name
-    vmin=None,                       # Colormap min value
-    vmax=None,                       # Colormap max value
-    alpha_points=1.0,                # Point opacity
-    alpha_cells=0.3,                 # Cell opacity
-    alpha_edges=0.7,                 # Edge opacity
-    show_edges=True,                 # Display edges
-    ax=None,                         # Matplotlib axes (matplotlib only)
-    **kwargs                         # Backend-specific arguments
+    backend="auto",  # "auto", "matplotlib", "pyvista"
+    show=True,  # Display immediately
+    point_scalars=None,  # Point scalar data
+    cell_scalars=None,  # Cell scalar data
+    cmap="viridis",  # Colormap name
+    vmin=None,  # Colormap min value
+    vmax=None,  # Colormap max value
+    alpha_points=1.0,  # Point opacity
+    alpha_cells=0.3,  # Cell opacity
+    alpha_edges=0.7,  # Edge opacity
+    show_edges=True,  # Display edges
+    ax=None,  # Matplotlib axes (matplotlib only)
+    **kwargs,  # Backend-specific arguments
 )
 ```
 

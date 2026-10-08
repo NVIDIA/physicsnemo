@@ -14,7 +14,7 @@ them without updating this document.
 ### uv download cache (`~/.cache/uv`)
 
 | Property | Value |
-|---|---|
+| --- | --- |
 | Key | `<UV_CACHE_KEY_PREFIX>-latest` |
 | Prefix encodes | container image + Python version + uv version + locked PyTorch minor version |
 | Suffix | literal `latest` (mutable slot, refreshed via delete-before-save) |
@@ -31,7 +31,7 @@ from three independent sources: a pinned CUDA container image, a pinned
 ### JIT compilation cache (`/root/.cache/jit`)
 
 | Property | Value |
-|---|---|
+| --- | --- |
 | Key | `<JIT_CACHE_KEY_PREFIX>-latest` |
 | Prefix encodes | container image + Python version |
 | Suffix | literal `latest` (mutable slot, refreshed via delete-before-save) |
@@ -70,7 +70,7 @@ set the backend's cache-path env var in the test step, done.
 ### Testmon database cache (`.testmondata*`)
 
 | Property | Value |
-|---|---|
+| --- | --- |
 | Key | `<TESTMON_CACHE_KEY_PREFIX>-latest` |
 | Prefix encodes | nightly identity + CUDA stack (`testmon-nightly-cu13`); the CUDA tag keeps cu12/cu13 nightlies from clobbering each other's slot via delete-before-save |
 | Suffix | literal `latest` (mutable slot, refreshed via delete-before-save) |
@@ -149,7 +149,7 @@ Two ways to run the regen:
 ### Coverage baseline cache (`.coverage*`)
 
 | Property | Value |
-|---|---|
+| --- | --- |
 | Key | `<COVERAGE_CACHE_KEY_PREFIX>-latest` |
 | Prefix encodes | nightly identity + CUDA stack (`coverage-nightly-cu13`) |
 | Suffix | literal `latest` (mutable slot, refreshed via delete-before-save) |
@@ -168,7 +168,7 @@ The multi-GPU workflow owns two independent shard caches: one for the
 dynamic stream and one for the static stream.
 
 | Property | Value |
-|---|---|
+| --- | --- |
 | Keys | `coverage-multigpu-dynamic-latest` and `coverage-multigpu-static-latest` |
 | Paths | `.coverage.pytest.multigpu-dynamic*` and `.coverage.pytest.multigpu-static*` |
 | Suffix | literal `latest` (mutable slots, refreshed via delete-before-save) |
