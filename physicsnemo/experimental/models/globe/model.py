@@ -39,17 +39,6 @@ from physicsnemo.mesh.spatial.cluster_tree import (
 )
 from physicsnemo.utils.logging import PythonLogger
 
-# allow_in_graph wraps these TensorDict methods as opaque graph nodes so that
-# torch.compile doesn't trace into them (their internals cause graph breaks).
-# This is safe because flatten_keys/unflatten_keys are pure structural
-# key-renaming operations with no tensor-data side effects — the set of tensor
-# storages in equals the set coming out.  Do NOT generalise this pattern to
-# functions with tensor-value-dependent control flow or side effects.
-# If a future tensordict version makes these natively Dynamo-traceable, remove
-# these wrappers.
-_flatten_keys = torch.compiler.allow_in_graph(TensorDict.flatten_keys)
-_unflatten_keys = torch.compiler.allow_in_graph(TensorDict.unflatten_keys)
-
 logger = PythonLogger("globe.model")
 
 @dataclass
@@ -495,7 +484,7 @@ class GLOBE(Module):
                     n_src = src_mesh.n_cells
                     plan = cluster_trees_built[src_bc].find_dual_interaction_pairs(
                         target_tree=cluster_trees_built[dst_bc], theta=self.theta,
-                        expand_far_targets=self.expand_far_targets,
+                        expand_far_targets=self.expand_far_targets, validate=False,
                     )
                     comm_plans_built[dst_bc][src_bc] = plan
                     logger.logger.debug(
@@ -509,7 +498,7 @@ class GLOBE(Module):
                     )
 
         ### Transfer to the original device.  ``ClusterTree`` and
-        ### ``DualInteractionPlan`` are both ``@tensorclass``, so ``.to`` moves
+        ### ``DualInteractionPlan`` are both tensorclasses, so ``.to`` moves
         ### all member tensors at once.  No-op when devices already match.
         cluster_trees = {
             bc: t.to(original_device)  # ty: ignore[unresolved-attribute]
@@ -566,7 +555,7 @@ class GLOBE(Module):
             for bc_type, tree in cluster_trees.items():
                 plan = tree.to(build_device).find_dual_interaction_pairs(  # ty: ignore[unresolved-attribute]
                     target_tree=pred_target_tree_built, theta=self.theta,
-                    expand_far_targets=self.expand_far_targets,
+                    expand_far_targets=self.expand_far_targets, validate=False,
                 )
                 pred_plans_built[bc_type] = plan
                 logger.logger.debug(
@@ -659,7 +648,7 @@ class GLOBE(Module):
             ### enforced by ``FieldSchema.check`` at ``GLOBE.forward``
             ### entry.
             kernel_source_keys = kernel.source_schema.keys() - {"normals"}
-            source_data = _flatten_keys(mesh.cell_data).select(*kernel_source_keys)
+            source_data = mesh.cell_data.flatten_keys().select(*kernel_source_keys)
             source_data["normals"] = mesh.cell_normals
 
             kernel_result: TensorDict[str, Float[torch.Tensor, "n_targets ..."]] = kernel(
@@ -675,7 +664,7 @@ class GLOBE(Module):
                 dual_plan=dual_plans[bc_type],
                 source_areas=source_areas[bc_type],
             )
-            result_pieces.append(_unflatten_keys(kernel_result))
+            result_pieces.append(kernel_result.unflatten_keys())
 
         return reduce(operator.add, result_pieces)
 

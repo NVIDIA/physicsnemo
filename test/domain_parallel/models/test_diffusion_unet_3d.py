@@ -30,7 +30,7 @@ from tensordict import TensorDict
 from torch.distributed.tensor.placement_types import Shard
 
 from physicsnemo.domain_parallel import scatter_tensor
-from physicsnemo.experimental.models.diffusion_unets import DiffusionUNet3D
+from physicsnemo.models.diffusion_unets import DiffusionUNet3D
 from test.domain_parallel.models.harness import (
     DomainParallelModelCase,
     run_domain_parallel_model_check,
