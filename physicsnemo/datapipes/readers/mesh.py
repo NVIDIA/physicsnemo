@@ -146,16 +146,20 @@ def _zarr_mesh_subsampled(
     n_cells: int | None,
     n_points: int | None,
     generator: torch.Generator | None,
+    drop_cells: bool = False,
 ) -> Mesh:
     """Partial-read a zarr mesh group: fetch only the subsample window.
 
     Reproduces :func:`_subsample_mesh` semantics (cyclic contiguous blocks,
     vertex compaction, Horvitz-Thompson measure corrections) while reading only
     the selected rows from the store instead of materializing the full mesh.
+    The generator advances as in :func:`_subsample_mesh`, so a seed selects the
+    same rows as on the memmap path. ``drop_cells`` reads the mesh as a point
+    cloud, as ``DomainMeshReader(drop_interior_cells=True)`` does.
     """
     from physicsnemo.mesh.io import io_zarr as _ioz
 
-    total_cells = group["cells"].shape[0] if "cells" in group else 0
+    total_cells = group["cells"].shape[0] if "cells" in group and not drop_cells else 0
     total_points = group["points"].shape[0]
 
     if total_cells > 0 and n_cells is not None and total_cells > n_cells:
@@ -191,16 +195,25 @@ def _zarr_mesh_subsampled(
             point_data=_ioz._read_tree(
                 group, "point_data", leaf_reader=lambda a: _ioz._read_rows(a, runs)
             ),
-            cell_data=_ioz._read_tree(group, "cell_data"),
+            cell_data=None if drop_cells else _ioz._read_tree(group, "cell_data"),
             global_data=_ioz._read_tree(group, "global_data"),
         )
         if EFFECTIVE_MEASURE_KEY in mesh.point_data:
             scale_measures(mesh, total_points / n_points, association="points")
         return mesh
 
-    # No subsampling applies (small mesh, or unsupported combination):
-    # eager full read keeps semantics identical to the memmap path.
-    return _ioz._mesh_from_group(group, None)
+    # No window read applies (small mesh, or a point subsample of a mesh with
+    # cells): read in full and subsample in memory, as the memmap path does.
+    # Subsampling here, not in __getitem__, keeps the generator's draws in
+    # sub-mesh order, so later sub-meshes also select the memmap path's rows.
+    mesh = _ioz._mesh_from_group(group, None)
+    if drop_cells:
+        mesh = Mesh(
+            points=mesh.points,
+            point_data=mesh.point_data,
+            global_data=mesh.global_data,
+        )
+    return _subsample_mesh(mesh, n_cells, n_points, generator=generator)
 
 
 def _subsample_mesh(
@@ -584,6 +597,7 @@ class DomainMeshReader:
                     self.subsample_n_cells,
                     self.subsample_n_points,
                     generator,
+                    drop_cells=self.drop_interior_cells,
                 )
                 boundaries = {}
                 if not self.drop_in_file_boundaries and "boundaries" in root:

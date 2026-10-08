@@ -22,7 +22,12 @@ from pathlib import Path
 
 import pytest
 import torch
-from conftest import assert_meshes_equal, make_domain_mesh, make_mesh
+from conftest import (
+    assert_meshes_equal,
+    make_domain_mesh,
+    make_mesh,
+    make_point_cloud,
+)
 
 from physicsnemo.datapipes.readers.mesh import (
     DomainMeshReader,
@@ -100,6 +105,60 @@ def test_pushdown_point_cloud_matches_eager(tmp_path):
     assert_meshes_equal(interior, lazy.interior)
     for n in eager_full.boundary_names:
         assert_meshes_equal(boundaries[n], lazy.boundaries[n])
+
+
+@pytest.mark.parametrize("interior_has_cells", [False, True])
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"subsample_n_points": 30},
+        {"subsample_n_cells": 20},
+        {"subsample_n_cells": 20, "subsample_n_points": 30},
+        {
+            "subsample_n_cells": 20,
+            "subsample_n_points": 30,
+            "boundary_subsample": "cells",
+        },
+        {
+            "subsample_n_cells": 20,
+            "subsample_n_points": 30,
+            "boundary_subsample": "points",
+        },
+        {
+            "subsample_n_cells": 20,
+            "subsample_n_points": 30,
+            "drop_interior_cells": True,
+        },
+    ],
+)
+def test_seeded_subsamples_match_between_formats(tmp_path, interior_has_cells, options):
+    """One seed selects the same rows from a zarr store as from a memmap file."""
+    interior = (
+        make_mesh(n_points=80, n_cells=60, seed=5)
+        if interior_has_cells
+        else make_point_cloud(seed=5)
+    )
+    domain = DomainMesh(
+        interior=interior,
+        boundaries={
+            "wall": make_mesh(n_points=60, n_cells=50, seed=6),
+            "inlet": make_mesh(n_points=50, n_cells=40, seed=7),
+        },
+    )
+    domain.save(tmp_path / "case.pdmsh")
+    to_zarr(domain, tmp_path / "case.zarr", chunk_rows=8)
+    loaded = []
+    for pattern in ("*.pdmsh", "*.zarr"):
+        reader = DomainMeshReader(
+            tmp_path, pattern=pattern, pin_memory=False, **options
+        )
+        reader.set_generator(torch.Generator().manual_seed(17))
+        loaded.append(reader[0][0])
+    from_memmap, from_store = loaded
+    assert_meshes_equal(from_memmap.interior, from_store.interior)
+    assert sorted(from_memmap.boundary_names) == sorted(from_store.boundary_names)
+    for name in from_memmap.boundary_names:
+        assert_meshes_equal(from_memmap.boundaries[name], from_store.boundaries[name])
 
 
 def test_mixed_directory_discovery(tmp_path):
