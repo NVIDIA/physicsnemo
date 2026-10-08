@@ -29,8 +29,8 @@ VALIDATOR_CASES = [
     ("eps-nan", lambda: positive_finite_float(float("nan"), "eps"), _NOT_POSITIVE),
     ("eps-inf", lambda: positive_finite_float(float("inf"), "eps"), _NOT_POSITIVE),
     ("eps-zero", lambda: positive_finite_float(0.0, "eps"), _NOT_POSITIVE),
-    ("eps-none", lambda: positive_finite_float(None, "eps"), (ValueError, "positive finite value")),
-    ("eps-string", lambda: positive_finite_float("not a number", "eps"), (ValueError, "positive finite value")),
+    ("eps-none", lambda: positive_finite_float(None, "eps"), (TypeError, "float")),
+    ("eps-string", lambda: positive_finite_float("not a number", "eps"), (ValueError, "could not convert")),
     ("eps-tensor-coerced", lambda: type(positive_finite_float(torch.tensor(1e-3), "eps")) is float, True),
 ]
 # fmt: on

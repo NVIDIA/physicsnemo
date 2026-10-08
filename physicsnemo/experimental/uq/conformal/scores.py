@@ -128,7 +128,6 @@ class _NonconformityScore:
         ValueError
             If a required ``aux`` entry is missing.
         """
-        raise NotImplementedError
 
     def interval(
         self,
@@ -162,7 +161,6 @@ class _NonconformityScore:
         ValueError
             If a required ``aux`` entry is missing.
         """
-        raise NotImplementedError
 
 
 class AbsoluteErrorScore(_NonconformityScore):
