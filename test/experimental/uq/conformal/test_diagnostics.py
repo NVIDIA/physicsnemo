@@ -352,10 +352,9 @@ def test_accumulator_constructor_validates_alpha_and_n_cal(alpha, n_cal, error):
         CoverageAccumulator(tier="cellwise", alpha=alpha, n_cal=n_cal)
 
 
-def test_accumulator_update_rejects_unknown_tier():
-    accumulator = CoverageAccumulator(tier="bogus", alpha=0.5, n_cal=3)
+def test_accumulator_constructor_rejects_unknown_tier():
     with pytest.raises(ValueError, match="tier must be one of"):
-        accumulator.update(torch.zeros(2), torch.ones(2), torch.zeros(2))
+        CoverageAccumulator(tier="bogus", alpha=0.5, n_cal=3)
 
 
 def test_report_metadata_is_private():

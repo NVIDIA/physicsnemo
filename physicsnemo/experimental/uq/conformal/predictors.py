@@ -83,14 +83,7 @@ def _validate_thresholds(
     out: dict[str, Tensor] = {}
     for key, value in field_items(thresholds):
         check_real(key, "threshold", value)
-        if value.numel() == 0:
-            raise ValueError(f"{_field_label(key)}: empty threshold tensor.")
         if tier == "cellwise":
-            if value.ndim == 0:
-                raise ValueError(
-                    f"{_field_label(key)}: cellwise thresholds must have at least one "
-                    "dimension, got a scalar."
-                )
             threshold = value
         else:
             if value.ndim != 0:
@@ -167,8 +160,9 @@ class ConformalPredictor:
         - ``tier="cellwise"`` without ``points`` or with ``difficulty``.
         - Another tier with ``points``.
         - ``points`` is empty, not 2-D, or not finite.
-        - A threshold is empty, not finite, or has the wrong shape for
-          ``tier``.
+        - A threshold is not finite; a cellwise threshold's leading size is
+          not the number of mesh points; another tier's threshold is not a
+          scalar.
         - A threshold is negative and ``score`` is not
           ``QuantileRegressionScore``.
         - ``difficulty`` reads the aux key that ``score`` divides by.
@@ -275,7 +269,7 @@ class ConformalPredictor:
         if mesh_snapshot is not None:
             n_points = mesh_point_count(mesh_snapshot)
             for key, threshold in self._thresholds_by_key.items():
-                if threshold.shape[0] != n_points:
+                if threshold.ndim == 0 or threshold.shape[0] != n_points:
                     raise ValueError(
                         f"{_field_label(key)}: threshold shape "
                         f"{tuple(threshold.shape)} must have one leading entry "
@@ -477,10 +471,11 @@ class ConformalPredictor:
         ------
         TypeError
             If ``prediction`` is a plain tensor for a predictor calibrated on
-            ``TensorDict`` fields, or the reverse.
+            ``TensorDict`` fields, or the reverse, or a cellwise predictor
+            gets no ``points``.
         ValueError
             If a shape differs from calibration, values are not finite, or
-            (cellwise) ``points`` is missing or describes a different mesh.
+            (cellwise) ``points`` describes a different mesh.
             If meshes vary between samples, calibrate with
             :class:`~physicsnemo.experimental.uq.conformal.FunctionalBandCalibrator`
             or

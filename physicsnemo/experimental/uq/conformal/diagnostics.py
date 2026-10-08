@@ -149,6 +149,8 @@ class CoverageAccumulator:
         n_cal: int,
         keys: Sequence[str] | None = None,
     ) -> None:
+        if tier not in TIERS:
+            raise ValueError(f"tier must be one of {TIERS}, got {tier!r}.")
         self._tier = tier
         self._alpha = validate_alpha(alpha)
         self._n_cal = validate_n_cal(n_cal)
@@ -293,10 +295,6 @@ class CoverageAccumulator:
                     points = torch.atleast_1d(element_covered)
                     point_covered = points.reshape(points.shape[0], -1).all(dim=1)
                     coverage = point_covered.to(torch.float64).mean()
-                case _:
-                    raise ValueError(
-                        f"tier must be one of {TIERS}, got {self._tier!r}."
-                    )
 
             staged.append((key, coverage, width_total, widths.numel()))
         return staged

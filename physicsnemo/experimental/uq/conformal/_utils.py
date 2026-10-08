@@ -125,12 +125,6 @@ def slice_aux(
     if field == TENSOR_KEY:
         return aux  # type: ignore[return-value]
     entry = aux.get(field)
-    if entry is None and aux and all(isinstance(v, Tensor) for v in aux.values()):
-        raise TypeError(
-            "aux for TensorDict inputs must be nested by field name, got "
-            f"top-level tensor entries {sorted(aux)}; pass "
-            f"aux={{'{field}': {{key: tensor}}, ...}}."
-        )
     if entry is not None and not isinstance(entry, Mapping):
         raise TypeError(
             f"Field '{field}': aux entry must be a mapping, got {type(entry).__name__}."
@@ -254,7 +248,7 @@ def _field_label(key: str) -> str:
 
 
 def check_points(points: Tensor, pending: list[Tensor] | None = None) -> Tensor:
-    """Require finite floating ``points`` of shape ``(n_points, n_spatial_dims)``.
+    """Require finite ``points`` of shape ``(n_points, n_spatial_dims)``.
 
     With ``pending``, append the finiteness flag there instead of syncing.
     """
@@ -265,8 +259,6 @@ def check_points(points: Tensor, pending: list[Tensor] | None = None) -> Tensor:
             "points must have non-empty shape (n_points, n_spatial_dims), "
             f"got {tuple(points.shape)}."
         )
-    if not points.is_floating_point():
-        raise TypeError(f"points must have a floating dtype, got {points.dtype}.")
     finite = torch.isfinite(points).all()
     if pending is not None:
         pending.append(finite)
@@ -371,10 +363,6 @@ def require_mesh(
     With ``pending`` (and ``expected`` set), append the finiteness and match
     flags there instead of syncing; the caller must check them.
     """
-    if points is None:
-        raise ValueError(
-            "Cellwise conformal requires points=, the calibration mesh coordinates."
-        )
     if pending is not None:
         check_points(points, pending)
         pending.append(_same_mesh(points, expected))
@@ -449,12 +437,7 @@ def normalize_keys(keys: Sequence[str] | None) -> tuple[str, ...] | None:
 
 def positive_finite_float(value: object, name: str) -> float:
     """Coerce a strategy scalar (``eps``, ``value``) to a positive finite float."""
-    try:
-        value = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            f"{name} must be a positive finite value, got {value!r}."
-        ) from exc
+    value = float(value)
     if not (value > 0 and math.isfinite(value)):
         raise ValueError(f"{name} must be a positive finite value, got {value}.")
     return value
@@ -562,10 +545,5 @@ def validate_provenance(value: object) -> dict:
         raise TypeError(
             "provenance must contain only strict-JSON values: string keys, lists "
             "(not tuples), and str, int, float, bool, or None leaves."
-        )
-    if "mesh_fingerprint" in snapshot:
-        raise ValueError(
-            "provenance must not contain 'mesh_fingerprint'; that name is "
-            "reserved for the predictor's mesh check."
         )
     return snapshot

@@ -145,7 +145,6 @@ class _NonconformityScore:
         ValueError
             If a required ``aux`` entry is missing.
         """
-        raise NotImplementedError
 
     def interval(
         self,
@@ -182,7 +181,6 @@ class _NonconformityScore:
         ValueError
             If a required ``aux`` entry is missing.
         """
-        raise NotImplementedError
 
 
 class AbsoluteErrorScore(_NonconformityScore):
@@ -448,8 +446,6 @@ class AuxDifficulty:
     def __init__(self, key: str = "sigma", eps: float = 1e-8) -> None:
         if not isinstance(key, str):
             raise TypeError(f"key must be a string, got {type(key).__name__}.")
-        if not key:
-            raise ValueError("key must be a non-empty string.")
         self.key = key
         self.eps = positive_finite_float(eps, "eps")
 
