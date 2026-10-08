@@ -109,7 +109,7 @@ def main(
     n_latent_scalars: int = 8,
     n_latent_vectors: int = 4,
     n_spherical_harmonics: int = 4,
-    theta: float = 1.0,
+    theta: float = 0.6,
     leaf_size: int = 1,
     tree_build_device: Literal["cpu", "cuda"] | None = None,
     n_faces_per_boundary: int = 80_000,

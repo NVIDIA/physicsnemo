@@ -17,7 +17,7 @@
 """Spatial cluster tree for dual-tree Barnes-Hut acceleration.
 
 This module provides a GPU-compatible hierarchical spatial decomposition over a
-set of points, designed for dual-tree Barnes-Hut O(N) acceleration of
+set of points, designed for dual-tree Barnes-Hut acceleration of
 kernel-summation and attention-style operators (e.g. GLOBE's field kernels and
 mesh attention layers).
 Trees are built over both source and target points.  The dual-tree traversal
@@ -28,18 +28,29 @@ classifies (target_node, source_node) pairs as near-field or far-field:
 - **Far-field**: nodes are well-separated - evaluate the kernel ONCE at the
   node centroids and broadcast the result to all targets in the target node.
 
-This reduces far-field kernel evaluations from O(N log N) (single-tree) to
-O(N) (dual-tree), which is critical at large mesh scales (800k+ faces).
+Far-field node pairs make the number of far-field kernel evaluations O(N)
+instead of the O(N log N) of single-tree Barnes-Hut. With
+``expand_far_targets=True`` every target is evaluated individually again, so
+the evaluations are O(N log N), and only the source side is approximated.
 
-Construction uses the same morton-code-based Linear BVH (LBVH) algorithm as
-:mod:`physicsnemo.mesh.spatial.bvh` (morton sort, midpoint splits, bottom-up
-AABB propagation), but the resulting data structure differs: ClusterTree stores
-additional per-node fields (diameter, subtree ranges, area-weighted aggregates)
-needed for the Barnes-Hut opening criterion, dual-tree traversal, and
-far-field monopole approximation. The two classes share
-:func:`~physicsnemo.mesh.spatial.bvh._compute_morton_codes` and
-:func:`~physicsnemo.mesh.spatial._ragged._ragged_arange` but are otherwise
-independent.
+Approximation error has three sources. The opening angle ``theta`` bounds the
+first two: replacing a source node by a monopole at its centroid, and, without
+``expand_far_targets``, evaluating a target node at its centroid, which is
+first order in ``D_T / r`` and piecewise constant over the node. The third is
+replacing the sources' features (normals, latents) by their node average,
+which is exact for kernels linear in those features and otherwise grows with
+how much they vary inside the node; ``theta`` does not bound it. A node that
+spans both faces of a thin body, for example, averages opposite normals.
+``find_dual_interaction_pairs(source_admissible=...)`` keeps chosen nodes exact.
+
+Construction sorts the points by Morton code and splits the sorted ranges
+recursively (:mod:`physicsnemo.mesh.spatial._lbvh`), then fills leaf AABBs from
+the points and propagates them bottom up. By default the splits follow Morton
+cells, on a grid with cubic cells, which keeps the boxes tight;
+``split="midpoint"`` reproduces the count-midpoint trees of
+:mod:`physicsnemo.mesh.spatial.bvh`. ClusterTree stores additional per-node
+fields (diameter, subtree ranges, total areas) needed for the opening
+criterion, dual-tree traversal, and far-field monopole approximation.
 """
 
 import logging
@@ -52,11 +63,18 @@ from jaxtyping import Float, Int
 from tensordict import TensorClass, TensorDict
 from torch.profiler import record_function
 
-from physicsnemo.mesh.spatial._lbvh import build_lbvh_topology
+from physicsnemo.mesh.spatial._lbvh import (
+    LBVHTopology,
+    build_lbvh_topology,
+    build_morton_topology,
+)
 from physicsnemo.mesh.spatial._ragged import _ragged_arange
 from physicsnemo.mesh.spatial.bvh import _compute_morton_codes
 
 logger = logging.getLogger("mesh.spatial.cluster_tree")
+
+#: Minimum child size, as a divisor of the parent size, for ``split="morton"``.
+_MORTON_BALANCE = 4
 
 
 # ---------------------------------------------------------------------------
@@ -283,6 +301,8 @@ def _expand_dual_leaf_hits(
     theta: float,
     t_total: int | None = None,
     s_total: int | None = None,
+    source_admissible: torch.Tensor | None = None,
+    target_approximation: bool = True,
 ) -> _ExpandedLeafHits:
     """Expand ``(target_leaf, source_leaf)`` pairs with two-stage filtering.
 
@@ -364,6 +384,8 @@ def _expand_dual_leaf_hits(
     target_is_far = (
         dist_sq_t * theta_sq > source_tree.node_diameter_sq[src_leaf_per_target]
     )
+    if source_admissible is not None:
+        target_is_far = target_is_far & source_admissible[src_leaf_per_target]
 
     ### (near, far) stream is returned unfiltered.  ``target_point_ids``,
     ### ``src_leaf_per_target`` are length ``t_full``; the caller compacts
@@ -386,6 +408,9 @@ def _expand_dual_leaf_hits(
     source_is_far = (
         dist_sq_s * theta_sq > target_tree.node_diameter_sq[tgt_leaf_per_src]
     )
+    if not target_approximation:
+        ### No (far, near) entries: every survivor meets every source exactly.
+        source_is_far = torch.zeros_like(source_is_far)
 
     ### (far, near) stream is returned unfiltered: ``src_point_ids``,
     ### ``tgt_leaf_per_src`` are length ``s_full``; the caller compacts
@@ -588,7 +613,8 @@ def _traversal_tables(
 class ClusterTree(TensorClass):
     r"""Hierarchical spatial decomposition for Barnes-Hut kernel acceleration.
 
-    Stores a binary radix tree over source points as flat GPU-compatible tensors.
+    Stores a binary tree over source points as flat GPU-compatible tensors;
+    every node covers a contiguous range of the Morton-sorted points.
     The tree structure (positions, AABBs, children) is precomputable per mesh
     geometry. Per-node source-data aggregates are recomputed whenever the source
     features change (e.g., between communication hyperlayers).
@@ -669,6 +695,7 @@ class ClusterTree(TensorClass):
         *,
         leaf_size: int = 1,
         areas: Float[torch.Tensor, " n_points"] | None = None,
+        split: str = "morton",
     ) -> "ClusterTree":
         r"""Build a cluster tree from a set of points via morton-code LBVH.
 
@@ -683,6 +710,21 @@ class ClusterTree(TensorClass):
         areas : Float[torch.Tensor, "n_points"] or None
             Per-source area weights used for aggregate computation. If
             ``None``, all areas default to 1.
+        split : {"morton", "midpoint"}, optional, default="morton"
+            How ranges of Morton-sorted points are split into children.
+            ``"morton"`` sorts on a Morton grid with cubic cells and splits
+            each range at the coarsest Morton-cell boundary that leaves at
+            least a quarter of its points on each side, so nodes are compact
+            and their boxes tight. ``"midpoint"`` reproduces the trees of
+            earlier releases: a grid stretched to the bounding box on every
+            axis, and splits at the count midpoint, which cut through Morton
+            cells and give looser boxes (at the same ``theta``, about 3x more
+            interactions on a car surface and 25-40x on a 10:1:0.01 slab).
+            The stretched grid does separate the two faces of a thin body
+            aligned with an axis, so it can be more accurate there for
+            kernels that depend nonlinearly on normals; the
+            ``source_admissible`` mask of :meth:`find_dual_interaction_pairs`
+            handles such bodies in any orientation.
 
         Returns
         -------
@@ -691,6 +733,8 @@ class ClusterTree(TensorClass):
         """
         if leaf_size < 1:
             raise ValueError(f"leaf_size must be >= 1, got {leaf_size=!r}")
+        if split not in ("morton", "midpoint"):
+            raise ValueError(f"split must be 'morton' or 'midpoint', got {split=!r}")
 
         n_points = points.shape[0]
         D = points.shape[1]
@@ -715,63 +759,44 @@ class ClusterTree(TensorClass):
                 node_range_count=empty_long,
                 node_total_area=torch.empty(0, dtype=dtype, device=device),
                 sorted_source_order=empty_long,
-                source_points=points,
+                source_points=points.detach(),
                 max_depth=torch.tensor(0, dtype=torch.long, device=device),
                 batch_size=torch.Size([]),
             )
 
-        ### Sort points by morton code for spatial coherence
+        ### Sort points by morton code for spatial coherence. The tree is a
+        ### fixed function of the point positions, so no gradient flows into it.
+        points_detached = points.detach()
         with record_function("cluster_tree::morton_sort"):
-            morton_codes = _compute_morton_codes(points)
-            sorted_order = morton_codes.argsort(stable=True)  # (n_points,)
-            sorted_points = points[sorted_order]  # (n_points, D)
-            sorted_areas = areas[sorted_order]  # (n_points,)
-
-        ### Build the shared morton-LBVH node topology over the sorted points.
-        with record_function("cluster_tree::top_down_build"):
-            topo = build_lbvh_topology(n_points, leaf_size, device)
-
-        ### Fill leaf AABBs + total areas from the source points/areas (single
-        # combined pass over the compacted leaf segments), then propagate AABBs
-        # and areas bottom-up so each internal node summarises its subtree.
-        aabb_min_buf = torch.full(
-            (topo.max_nodes, D), float("inf"), dtype=dtype, device=device
-        )
-        aabb_max_buf = torch.full(
-            (topo.max_nodes, D), float("-inf"), dtype=dtype, device=device
-        )
-        total_area_buf = torch.zeros(topo.max_nodes, dtype=dtype, device=device)
-        with record_function("cluster_tree::leaf_aggregates"):
-            _fill_leaf_aggregates(
-                topo.leaf_node_ids,
-                topo.leaf_starts,
-                topo.leaf_sizes,
-                sorted_points,
-                sorted_areas,
-                aabb_min_buf,
-                aabb_max_buf,
-                total_area_buf,
+            morton_codes = _compute_morton_codes(
+                points_detached, isotropic=split == "morton"
             )
+            sorted_codes, sorted_order = morton_codes.sort(stable=True)
+            sorted_points = points_detached[sorted_order]  # (n_points, D)
 
-        with record_function("cluster_tree::bottom_up_aabb"):
-            for level_node_ids in reversed(topo.internal_nodes_per_level):
-                left = topo.left_child[level_node_ids]
-                right = topo.right_child[level_node_ids]
-                aabb_min_buf[level_node_ids] = torch.minimum(
-                    aabb_min_buf[left], aabb_min_buf[right]
+        ### Build the node topology over the sorted points.
+        with record_function("cluster_tree::top_down_build"):
+            if split == "morton":
+                topo = build_morton_topology(
+                    sorted_codes, leaf_size, balance=_MORTON_BALANCE
                 )
-                aabb_max_buf[level_node_ids] = torch.maximum(
-                    aabb_max_buf[left], aabb_max_buf[right]
-                )
-                total_area_buf[level_node_ids] = (
-                    total_area_buf[left] + total_area_buf[right]
-                )
+            else:
+                topo = build_lbvh_topology(n_points, leaf_size, device)
 
-        ### Compute squared AABB diagonals
+        with record_function("cluster_tree::node_boxes"):
+            aabb_min, aabb_max = _node_boxes(topo, sorted_points, leaf_size)
+            diameter_sq = (aabb_max - aabb_min).pow(2).sum(dim=-1)
+
+        ### Total area per node: a range sum of the sorted areas.
         node_count = topo.node_count
-        aabb_min_trimmed = aabb_min_buf[:node_count]
-        aabb_max_trimmed = aabb_max_buf[:node_count]
-        diameter_sq = (aabb_max_trimmed - aabb_min_trimmed).pow(2).sum(dim=-1)
+        range_start = topo.range_start[:node_count]
+        range_count = topo.range_count[:node_count]
+        area_prefix = F.pad(
+            torch.cumsum(areas.detach()[sorted_order].double(), dim=0), (1, 0)
+        )
+        total_area = (
+            area_prefix[range_start + range_count] - area_prefix[range_start]
+        ).to(dtype)
 
         logger.debug(
             "ClusterTree: %d points -> %d nodes, depth %d, leaf_size=%d",
@@ -782,18 +807,18 @@ class ClusterTree(TensorClass):
         )
 
         return cls(
-            node_aabb_min=aabb_min_trimmed,
-            node_aabb_max=aabb_max_trimmed,
+            node_aabb_min=aabb_min,
+            node_aabb_max=aabb_max,
             node_diameter_sq=diameter_sq,
             node_left_child=topo.left_child[:node_count],
             node_right_child=topo.right_child[:node_count],
             leaf_start=topo.leaf_start[:node_count],
             leaf_count=topo.leaf_count[:node_count],
-            node_range_start=topo.range_start[:node_count],
-            node_range_count=topo.range_count[:node_count],
-            node_total_area=total_area_buf[:node_count],
+            node_range_start=range_start,
+            node_range_count=range_count,
+            node_total_area=total_area,
             sorted_source_order=sorted_order,
-            source_points=points,
+            source_points=points_detached,
             max_depth=torch.full((), topo.max_depth, dtype=torch.long, device=device),
             batch_size=torch.Size([]),
         )
@@ -931,6 +956,7 @@ class ClusterTree(TensorClass):
         *,
         expand_far_targets: bool = False,
         validate: bool = True,
+        source_admissible: torch.Tensor | None = None,
     ) -> DualInteractionPlan:
         r"""Find near-field and far-field pairs via dual-tree traversal.
 
@@ -938,7 +964,9 @@ class ClusterTree(TensorClass):
         simultaneously.  For well-separated node pairs, records a single
         far-field (target_node, source_node) entry - the kernel is evaluated
         ONCE at the node centroids and broadcast to all targets in the node.
-        This reduces far-field kernel evaluations from O(N log N) to O(N).
+        This reduces far-field kernel evaluations from O(N log N) to O(N)
+        (unless ``expand_far_targets`` asks for one evaluation per target).
+        The streams are returned in traversal order.
 
         Uses a combined AABB-distance opening criterion:
         ``(D_T + D_S) / r < theta``, where D_T and D_S are the AABB
@@ -955,14 +983,28 @@ class ClusterTree(TensorClass):
             Barnes-Hut opening angle.  Larger = more aggressive.
             ``theta = 0`` forces all interactions to be exact.
         expand_far_targets : bool, optional, default=False
-            If ``True``, far-field node pairs are expanded to individual
-            target points, converting ``(far, far)`` entries into
-            ``(near, far)`` entries.  This eliminates the target-side
-            centroid approximation (and the blocky spatial artifacts it
-            produces) at the cost of more kernel evaluations while
-            preserving the source-side monopole speedup.
+            If ``True``, no target is approximated by a target-node centroid:
+            far-field node pairs are expanded to individual target points
+            (``(far, far)`` entries become ``(near, far)`` entries), and the
+            leaf-level ``(far, near)`` stream is not used (its sources pair
+            exactly with every target). This removes the target-side error
+            (and the blocky spatial artifacts it produces) at the cost of
+            one kernel evaluation per target instead of one per target
+            node, while keeping the source-side monopole speedup.
         validate : bool, optional, default=True
             Run :meth:`DualInteractionPlan.validate` (synchronizes).
+        source_admissible : torch.Tensor or None, optional
+            Boolean mask of shape ``(n_source_nodes,)``. A source node whose
+            entry is ``False`` is never replaced by its aggregate: pairs that
+            pass the geometric test are split on the source side instead, so
+            the node's sources reach the kernel individually or through
+            admissible descendants. The geometric test bounds only the
+            position error of a monopole; use the mask when the kernel also
+            depends on per-source features that vary within some nodes. For
+            unit normals that spread by an RMS angle ``s`` inside a node, the
+            norm of their node average (:meth:`compute_source_aggregates`)
+            is about ``1 - s**2 / 2``, so ``norm >= 1 - tol**2 / 2`` admits
+            nodes whose normals spread by at most about ``tol`` radians.
 
         Returns
         -------
@@ -1088,7 +1130,11 @@ class ClusterTree(TensorClass):
             ### per call before we even start the loop.
             n_src_levels = max(1, int(source_tree.n_sources).bit_length())
             n_tgt_levels = max(1, int(target_tree.n_sources).bit_length())
-            max_iters = 2 * (n_src_levels + n_tgt_levels) + 4
+            # Morton-split trees are deeper than midpoint ones: at most
+            # log(n) / log(4/3) levels with the default balance, and up to the
+            # code width (64) more without it. The loop exits as soon as the
+            # active set is empty, so a generous bound costs nothing.
+            max_iters = 2 * (n_src_levels + n_tgt_levels) + 4 + 2 * 64
             depth = 0
 
             ### Per-node tables gathered once per iteration and side (instead
@@ -1131,6 +1177,12 @@ class ClusterTree(TensorClass):
                 diam_sq_S = bS[2 * n_dims + 1]
                 combined_diam_sq = (bT[2 * n_dims] + bS[2 * n_dims]).pow(2)
                 is_far = min_dist_sq * theta_sq > combined_diam_sq
+                if source_admissible is not None:
+                    ### A geometrically far but inadmissible source node is
+                    ### opened on the source side.
+                    admissible_S = source_admissible[active_src_nodes]
+                    force_split_S = is_far & ~admissible_S
+                    is_far = is_far & admissible_S
 
                 ### Classify active pairs (boolean masks over the full
                 ### active set; combined later via ``need_split``).
@@ -1167,6 +1219,10 @@ class ClusterTree(TensorClass):
                 # matching no case and silently dropping out of the plan.
                 do_split_T = (~is_leaf_T) & (is_leaf_S | ~(diam_sq_S > diam_sq_T))
                 do_split_S = (~is_leaf_S) & (is_leaf_T | ~(diam_sq_T > diam_sq_S))
+                if source_admissible is not None:
+                    forced = force_split_S & ~is_leaf_S
+                    do_split_S = do_split_S | forced
+                    do_split_T = do_split_T & ~forced
                 case_T_only = need_split & do_split_T & (~do_split_S)
                 case_S_only = need_split & do_split_S & (~do_split_T)
                 case_both = need_split & do_split_T & do_split_S
@@ -1258,6 +1314,8 @@ class ClusterTree(TensorClass):
                 theta,
                 t_total=t_total,
                 s_total=s_total,
+                source_admissible=source_admissible,
+                target_approximation=not expand_far_targets,
             )
             near_target_list.append(hits.near_tgts)
             near_source_list.append(hits.near_srcs)
@@ -1449,48 +1507,49 @@ class SourceAggregates(TensorClass):
 # ---------------------------------------------------------------------------
 
 
-def _fill_leaf_aggregates(
-    leaf_nids: Int[torch.Tensor, " n_leaves"],
-    leaf_starts: Int[torch.Tensor, " n_leaves"],
-    leaf_sizes: Int[torch.Tensor, " n_leaves"],
-    sorted_points: Float[torch.Tensor, "n_sorted_sources n_dims"],
-    sorted_areas: Float[torch.Tensor, " n_sorted_sources"],
-    aabb_min_buf: Float[torch.Tensor, "n_nodes n_dims"],
-    aabb_max_buf: Float[torch.Tensor, "n_nodes n_dims"],
-    total_area_buf: Float[torch.Tensor, " n_nodes"],
-) -> None:
-    """Fill leaf AABB and total-area buffers in one segmented reduction pass.
+def _node_boxes(
+    topo: LBVHTopology,
+    sorted_points: Float[torch.Tensor, "n_sorted n_dims"],
+    leaf_size: int,
+) -> tuple[
+    Float[torch.Tensor, "n_nodes n_dims"], Float[torch.Tensor, "n_nodes n_dims"]
+]:
+    """Per-node AABBs: leaves from their points, internal nodes bottom-up.
 
-    AABB and area aggregations share the same per-source ``(positions,
-    seg_ids)`` mapping from ``_ragged_arange``; doing them together
-    halves the ragged-arange work and avoids a redundant
-    ``int(leaf_sizes.sum())`` sync that the previous separate
-    ``_fill_leaf_aabbs`` / ``_fill_leaf_total_areas`` helpers each paid.
-    Empty inputs (``n_leaves == 0``) are a no-op via the early return.
+    Bounds are kept packed as ``[min, -max]`` so that one ``torch.minimum``
+    merges both. Both topology builders give each node's two children the
+    consecutive ids ``left`` and ``left + 1``, so one gather from an
+    overlapping ``(left, left + 1)`` row-pair view fetches both children.
     """
-    n_leaves = leaf_nids.shape[0]
-    if n_leaves == 0:
-        return
-
-    device = leaf_nids.device
-    D = sorted_points.shape[1]
-    dtype = sorted_points.dtype
-
-    positions, seg_ids = _ragged_arange(
-        leaf_starts, leaf_sizes, total=sorted_points.shape[0]
+    n_items, D = sorted_points.shape
+    packed = torch.cat([sorted_points, -sorted_points], dim=1)  # (n_items, 2D)
+    box = torch.empty(
+        (topo.max_nodes, 2 * D), dtype=sorted_points.dtype, device=sorted_points.device
     )
-    pts = sorted_points[positions]
-    areas_per_pos = sorted_areas[positions]
-
-    seg_min = torch.full((n_leaves, D), float("inf"), dtype=dtype, device=device)
-    seg_max = torch.full((n_leaves, D), float("-inf"), dtype=dtype, device=device)
-    exp_ids = seg_ids.unsqueeze(1).expand_as(pts)
-    seg_min.scatter_reduce_(0, exp_ids, pts, reduce="amin", include_self=True)
-    seg_max.scatter_reduce_(0, exp_ids, pts, reduce="amax", include_self=True)
-
-    leaf_areas = torch.zeros(n_leaves, dtype=areas_per_pos.dtype, device=device)
-    leaf_areas.scatter_add_(0, seg_ids, areas_per_pos)
-
-    aabb_min_buf[leaf_nids] = seg_min
-    aabb_max_buf[leaf_nids] = seg_max
-    total_area_buf[leaf_nids] = leaf_areas
+    if leaf_size == 1:
+        box[topo.leaf_node_ids] = packed[topo.leaf_starts]
+    else:
+        positions, seg_ids = _ragged_arange(
+            topo.leaf_starts, topo.leaf_sizes, total=n_items
+        )
+        leaf_box = torch.full(
+            (topo.leaf_node_ids.shape[0], 2 * D),
+            float("inf"),
+            dtype=sorted_points.dtype,
+            device=sorted_points.device,
+        )
+        leaf_box.scatter_reduce_(
+            0,
+            seg_ids.unsqueeze(1).expand(-1, 2 * D),
+            packed[positions],
+            reduce="amin",
+            include_self=True,
+        )
+        box[topo.leaf_node_ids] = leaf_box
+    if topo.max_nodes > 1:
+        child_pairs = box.as_strided((topo.max_nodes - 1, 2, 2 * D), (2 * D, 2 * D, 1))
+        for nodes in reversed(topo.internal_nodes_per_level):
+            pairs = child_pairs[topo.left_child[nodes]]  # (n_level, 2, 2D)
+            box[nodes] = pairs.amin(dim=1)
+    box = box[: topo.node_count]
+    return box[:, :D].contiguous(), (-box[:, D:]).contiguous()

@@ -14,21 +14,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Shared morton-code LBVH node-topology construction.
+"""Morton-code LBVH node-topology construction.
 
-Both :class:`~physicsnemo.mesh.spatial.bvh.BVH` (over cell AABBs) and
-:class:`~physicsnemo.mesh.spatial.cluster_tree.ClusterTree` (over source points)
-build the *same* binary tree: morton-sort the items, then recursively split each
-sorted range at its midpoint, classifying ranges of ``<= leaf_size`` items as
-leaves. This module factors out that topology construction so the two structures
-no longer duplicate it; each consumer separately fills its own per-node geometry
-and aggregates (leaf AABBs, total areas, diameters, ...) using the returned node
-ranges and leaf segments.
+Both builders take items (cells or points) in Morton-sorted order and split
+each sorted range in two until ranges hold at most ``leaf_size`` items. Each
+consumer then fills its own per-node geometry and aggregates (leaf AABBs, total
+areas, diameters, ...) from the returned node ranges and leaf segments.
 
-The split is purely by sorted-range midpoint (``start + size // 2``) and depends
-only on the item *count* and ``leaf_size`` -- not on the items' coordinates -- so
-the topology is identical for any consumer over the same number of morton-sorted
-items.
+- :func:`build_lbvh_topology` splits every range at its count midpoint
+  (``start + size // 2``). The topology depends only on the item count and
+  ``leaf_size``, so it is computed on the host without synchronizing, and
+  :class:`~physicsnemo.mesh.spatial.bvh.BVH` and a ClusterTree built with
+  ``split="midpoint"`` share it.
+- :func:`build_morton_topology` splits every range at a Morton-cell boundary,
+  so nodes cover compact cells with tight bounding boxes. It is the default for
+  :class:`~physicsnemo.mesh.spatial.cluster_tree.ClusterTree`, whose
+  Barnes-Hut plans grow with the box sizes.
+
+Both builders give the two children of a node the consecutive ids ``left`` and
+``left + 1``, and every internal node has exactly two children.
 """
 
 from collections import defaultdict
@@ -38,7 +42,7 @@ import torch
 
 
 class LBVHTopology(NamedTuple):
-    """Topology of a midpoint-split LBVH over ``n_items`` morton-sorted items.
+    """Topology of a binary tree over ``n_items`` morton-sorted items.
 
     All ``(max_nodes,)`` buffers are pre-allocated to the capacity bound; callers
     slice them to ``[:node_count]``. Leaf-only fields (``leaf_start``,
@@ -246,4 +250,129 @@ def build_lbvh_topology(
         leaf_starts=leaf_starts,
         leaf_sizes=leaf_sizes,
         max_depth=actual_depth,
+    )
+
+
+def build_morton_topology(
+    codes: torch.Tensor, leaf_size: int, *, balance: int = 4
+) -> LBVHTopology:
+    """Build a binary tree over sorted Morton ``codes`` whose splits follow Morton cells.
+
+    Each range ``[s, e)`` of more than ``leaf_size`` items is split at the
+    coarsest Morton-grid boundary (the highest bit in which two of its codes
+    differ) among the split positions that leave at least
+    ``max(1, (e - s) // balance)`` items on each side. ``balance=0`` allows
+    any position, which is the binary radix tree of Karras (2012); with
+    ``balance=4`` every child holds at least a quarter of its parent, so the
+    depth is at most ``log(n) / log(4 / 3)``. A range of identical codes is
+    split at its midpoint.
+
+    Nodes then cover Morton cells (or, near the balance limit, a few adjacent
+    cells), so their bounding boxes are tight. Count-midpoint splits
+    (:func:`build_lbvh_topology`) cut through Morton cells instead, and the
+    boxes of the resulting nodes span both sides of every cut.
+
+    The topology depends on the codes, so each level synchronizes once to
+    size the next.
+
+    Parameters
+    ----------
+    codes : torch.Tensor
+        Morton codes sorted in non-decreasing order, shape ``(n_items,)``,
+        int64, ``n_items >= 1``.
+    leaf_size : int
+        Maximum items per leaf (``>= 1``).
+    balance : int, optional, default=4
+        Minimum child size as a divisor of the parent size; ``0`` disables
+        the bound.
+
+    Returns
+    -------
+    LBVHTopology
+        Same layout as :func:`build_lbvh_topology`. Leaves may hold fewer
+        than ``ceil(leaf_size / 2)`` items, so ``max_nodes = 2 * n_items - 1``.
+    """
+    if leaf_size < 1:
+        raise ValueError(f"leaf_size must be >= 1, got {leaf_size=!r}")
+    if balance < 0 or balance == 1:
+        raise ValueError(f"balance must be 0 or >= 2, got {balance=!r}")
+    device = codes.device
+    n_items = codes.shape[0]
+    max_nodes = max(1, 2 * n_items - 1)
+
+    ### Node tables: children ``[left, right]`` (-1 for leaves) and sorted-order
+    ### ranges ``[start, count]``. Children of the k-th split at a level get
+    ### the consecutive ids ``base + 2k`` and ``base + 2k + 1``, so each level
+    ### writes its children's ranges as one contiguous slice.
+    children = torch.full((2, max_nodes), -1, dtype=torch.long, device=device)
+    ranges = torch.zeros((2, max_nodes), dtype=torch.long, device=device)
+    ranges[1, 0] = n_items
+    node_count = 1
+    internal_nodes_per_level: list[torch.Tensor] = []
+
+    ### Ranges still to split, packed as ``[start, end, node id]``.
+    segments = torch.tensor([[0], [n_items], [0]], dtype=torch.long, device=device)
+    width = 1 if n_items > leaf_size else 0
+    # For d in [2**k, 2**(k+1)), searchsorted(powers, d, right=True) == k + 1
+    # and prefix_masks[k + 1] == -(2**k) clears the bits below k, exactly for
+    # all 63-bit codes. d == 0 gives index 0, whose mask keeps every bit.
+    powers = torch.tensor([1 << k for k in range(63)], dtype=torch.long, device=device)
+    prefix_masks = torch.cat([powers.new_full((1,), -1), -powers])
+    # ``codes_before[i] == codes[i - 1]``: the code just left of split position i.
+    codes_before = torch.cat([codes[:1], codes[:-1]])
+    while width:
+        start, end, node = segments[0], segments[1], segments[2]
+        size = end - start
+        # Split positions p (left child [start, p)) range over [lo, hi].
+        margin = (size // balance).clamp_min(1) if balance else 1
+        lo = start + margin
+        hi = end - margin
+        first = codes_before[lo]
+        last = codes[hi]
+        diff = first ^ last
+        # The first code whose bits from the highest differing bit up match
+        # ``last`` starts the right child: clearing the low bits gives its key.
+        mask = prefix_masks[torch.searchsorted(powers, diff, right=True)]
+        boundary = torch.searchsorted(codes, last & mask)
+        split = torch.where(diff > 0, boundary, start + (size >> 1))
+
+        ids = torch.arange(node_count, node_count + 2 * width, device=device)
+        children[:, node] = ids.view(width, 2).t()
+        child_start = torch.stack([start, split], dim=1).reshape(-1)
+        child_end = torch.stack([split, end], dim=1).reshape(-1)
+        child_count = child_end - child_start
+        ranges[0, node_count : node_count + 2 * width] = child_start
+        ranges[1, node_count : node_count + 2 * width] = child_count
+        internal_nodes_per_level.append(node)
+        node_count += 2 * width
+
+        keep = (child_count > leaf_size).nonzero(as_tuple=True)[0]
+        width = keep.shape[0]
+        segments = torch.stack([child_start, child_end, ids]).index_select(1, keep)
+
+    ### Every range with more than ``leaf_size`` items was split, so the
+    ### leaves are exactly the nodes with at most ``leaf_size`` items.
+    range_start, range_count = ranges[0], ranges[1]
+    is_leaf = range_count[:node_count] <= leaf_size
+    leaf_node_ids = is_leaf.nonzero(as_tuple=True)[0]
+    leaf_start = torch.full((max_nodes,), -1, dtype=torch.long, device=device)
+    leaf_count = torch.zeros(max_nodes, dtype=torch.long, device=device)
+    leaf_starts = range_start[leaf_node_ids]
+    leaf_sizes = range_count[leaf_node_ids]
+    leaf_start[leaf_node_ids] = leaf_starts
+    leaf_count[leaf_node_ids] = leaf_sizes
+    return LBVHTopology(
+        left_child=children[0],
+        right_child=children[1],
+        leaf_start=leaf_start,
+        leaf_count=leaf_count,
+        range_start=range_start,
+        range_count=range_count,
+        node_count=node_count,
+        max_nodes=max_nodes,
+        internal_nodes_per_level=internal_nodes_per_level,
+        leaf_node_ids=leaf_node_ids,
+        leaf_starts=leaf_starts,
+        leaf_sizes=leaf_sizes,
+        max_depth=len(internal_nodes_per_level),
     )

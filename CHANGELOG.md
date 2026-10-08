@@ -51,8 +51,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     / `score_to_flow` / `flow_to_score`) and the corresponding conversion
     callbacks everywhere conversions between prediction types are necessary.
 
+- `ClusterTree.find_dual_interaction_pairs(source_admissible=...)` takes a
+  per-source-node mask; masked-out nodes are never replaced by their aggregate
+  in any far-field stream. The opening angle bounds only position errors, so
+  the mask can keep nodes exact whose per-source features (for example,
+  normals) vary too much for a kernel that depends on them nonlinearly.
+
 ### Changed
 
+- `ClusterTree.from_points` splits ranges at Morton-cell boundaries on a
+  Morton grid with cubic cells (`split="morton"`, the new default), so nodes
+  are compact and their boxes tight. At the same `theta`, Barnes-Hut plans
+  need 2-4x fewer interactions on surfaces and volumes (3.1x for an 80k-face
+  car, 4x at 800k faces, 25-40x on a 10:1:0.01 slab), with unchanged position
+  error. Errors from averaging per-source features over a node can grow (for
+  GLOBE's kernel at `theta=1`, 6.3% to 7.6%); at equal error the new trees
+  still need 1.2-1.5x fewer interactions. Thin bodies aligned with an axis,
+  such as 2D airfoils, are the exception: the previous trees kept their two
+  faces apart, which helps kernels that depend nonlinearly on normals; pass
+  `source_admissible` to keep nodes with mixed normals exact.
+  `split="midpoint"` reproduces the previous trees.
+- GLOBE's default `theta` is 0.6 instead of 1.0, in the model, its kernels,
+  and the DrivAerML example. With the Morton-split trees above, it keeps the
+  far-field error of `theta=1.0` with the previous trees (within 5% on
+  DrivAerML surfaces and volumes, and 30% lower for long-range kernels),
+  with 1.5x fewer kernel evaluations.
+- GLOBE's default `expand_far_targets` is `True` instead of `False`, as in
+  both examples, so no target is evaluated at the centroid of its node.
+- With `expand_far_targets=True`, `ClusterTree.find_dual_interaction_pairs`
+  no longer evaluates targets at leaf centroids in the `(far, near)` stream
+  (only reachable with `leaf_size > 1`).
 - `ClusterTree.find_dual_interaction_pairs` returns its streams in traversal
   order instead of sorting them by source.
 - `BarnesHutKernel` evaluates the `(near, far)` stream in chunks, like the
@@ -184,6 +212,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CUDA `cumsum` along the first dimension of an `(N, F)` tensor runs serially
   per column, so all features now share one prefix sum along the innermost
   dimension.
+- `ClusterTree.from_points` detaches its inputs, so trees no longer hold an
+  autograd graph.
 - Checkpoint loading resolves model weights at the selected training checkpoint's
   filename index, preventing resumes that mix epochs. Missing required weights
   raise before any model or training state is restored. Distributed loads validate

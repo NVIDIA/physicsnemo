@@ -809,7 +809,7 @@ class BarnesHutKernel(Kernel):
     -------
     Same parameters as :class:`Kernel`, with additions:
 
-    theta : float, optional, default=1.0
+    theta : float, optional, default=0.6
         Barnes-Hut opening angle.  A node is approximated when
         ``D/r < theta``.  Larger values are more aggressive (more
         approximation, faster).  At ``theta = 0``, all interactions
@@ -873,7 +873,7 @@ class BarnesHutKernel(Kernel):
         source_strengths: Float[torch.Tensor, " n_sources"] | None = None,
         source_data: TensorDict | None = None,
         global_data: TensorDict | None = None,
-        theta: float = 1.0,
+        theta: float = 0.6,
         cluster_tree: "ClusterTree | None" = None,
         target_tree: "ClusterTree | None" = None,
         dual_plan: "DualInteractionPlan | None" = None,
@@ -1619,7 +1619,7 @@ class MultiscaleKernel(Module):
         Problem-level features with ``batch_size=()``. Automatically
         augmented with log-ratios of reference lengths before being passed
         to each kernel branch.
-    theta : float, optional, default=1.0
+    theta : float, optional, default=0.6
         Barnes-Hut opening angle (larger = more aggressive).
     cluster_tree : ClusterTree or None, optional, default=None
         Pre-built cluster tree for source points.  If ``None``, one is
@@ -1742,7 +1742,7 @@ class MultiscaleKernel(Module):
         source_data: TensorDict[str, Float[torch.Tensor, "n_sources ..."]]
         | None = None,
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None = None,
-        theta: float = 1.0,
+        theta: float = 0.6,
         cluster_tree: "ClusterTree | None" = None,
         target_tree: "ClusterTree | None" = None,
         dual_plan: "DualInteractionPlan | None" = None,

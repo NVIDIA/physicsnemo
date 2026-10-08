@@ -120,7 +120,7 @@ class GLOBE(Module):
     n_spherical_harmonics : int, optional, default=4
         Number of Legendre polynomial terms used for angle-dependent features in
         kernel functions.
-    theta : float, optional, default=1.0
+    theta : float, optional, default=0.6
         Barnes-Hut opening angle controlling the near/far-field split in the
         dual-tree traversal. The criterion is :math:`(D_T + D_S) / r < \theta`,
         where :math:`D_T` and :math:`D_S` are AABB diagonals and :math:`r` is
@@ -131,11 +131,12 @@ class GLOBE(Module):
         Maximum number of source points per leaf node in the cluster tree.
         Larger values produce shallower trees (fewer traversal iterations) at
         the cost of more exact near-field interactions per leaf hit.
-    expand_far_targets : bool, optional, default=False
+    expand_far_targets : bool, optional, default=True
         If ``True``, far-field target nodes are expanded to individual points,
         converting ``(far, far)`` pairs into ``(near, far)`` pairs. This
-        eliminates the target-side approximation at the cost of more kernel
-        evaluations.
+        eliminates the target-side approximation, which makes the output
+        piecewise constant over each far target node, at the cost of more
+        kernel evaluations.
     use_gradient_checkpointing : bool, optional, default=True
         If ``True``, applies ``torch.utils.checkpoint.checkpoint`` to each
         kernel evaluation during training, trading compute for memory. See
@@ -232,12 +233,12 @@ class GLOBE(Module):
         smoothing_radius: float = 1e-8,
         hidden_layer_sizes: Sequence[int] | None = None,
         n_spherical_harmonics: int = 4,
-        theta: float = 1.0,
+        theta: float = 0.6,
         leaf_size: int = 1,
         network_type: Literal["pade", "mlp"] = "pade",
         self_regularization_beta: float | None = None,
         latent_compression_scale: float | None = None,
-        expand_far_targets: bool = False,
+        expand_far_targets: bool = True,
         use_gradient_checkpointing: bool = True,
         tree_build_device: torch.device | str | None = None,
     ):
