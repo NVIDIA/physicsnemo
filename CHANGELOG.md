@@ -53,6 +53,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `ClusterTree.find_dual_interaction_pairs` returns its streams in traversal
+  order instead of sorting them by source.
+- `BarnesHutKernel` evaluates the `(near, far)` stream in chunks, like the
+  near field, and gathers with `index_select`, whose backward is an
+  `index_add_` instead of a sort-based scatter. With `expand_far_targets=True`
+  this stream holds nearly every pair, and an 80k-face DrivAerML training step
+  needed a single 82 GiB allocation.
 - Refresh core, optional, development, and container dependency versions.
   Require PyTorch 2.13 or newer and TensorDict 0.14.2 or newer;
   use PyTorch 2.13's CUDA 12.9 wheels for the CUDA 12 backend. NATTEN
@@ -166,6 +173,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `ClusterTree.find_dual_interaction_pairs` no longer drops every pair whose
+  boxes contain a NaN coordinate (one NaN emptied the whole plan, so GLOBE
+  returned zeros instead of NaN), no longer fails when a stream exceeds 2^31
+  entries (GLOBE at 800k faces and `theta=1`), raises instead of dropping
+  pairs if its level loop runs out of iterations, and builds `theta=0` plans
+  directly. Its level loop launches about a third fewer kernels.
+- `ClusterTree.compute_source_aggregates` is 19-29x faster (forward plus
+  backward: 130 to 6.8 ms at 80k sources, 319 to 11 ms at 200k on a GB300):
+  CUDA `cumsum` along the first dimension of an `(N, F)` tensor runs serially
+  per column, so all features now share one prefix sum along the innermost
+  dimension.
 - Checkpoint loading resolves model weights at the selected training checkpoint's
   filename index, preventing resumes that mix epochs. Missing required weights
   raise before any model or training state is restored. Distributed loads validate
