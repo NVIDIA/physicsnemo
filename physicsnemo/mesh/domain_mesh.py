@@ -462,13 +462,11 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
         DomainMesh
             New domain with rotated geometry.
         """
-        from physicsnemo.mesh.transformations.geometric import (
-            _to_device,
-            rotation_matrix,
-        )
+        from physicsnemo.mesh.transformations.geometric import rotation_matrix
+        from physicsnemo.mesh.utilities._device import to_device
 
         if center is not None:
-            c = _to_device(
+            c = to_device(
                 center, self.interior.points.device, self.interior.points.dtype
             )
             return (
@@ -542,12 +540,12 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
         """
         from physicsnemo.mesh.transformations.geometric import (
             _scale_assumptions,
-            _to_device,
             scale_matrix,
         )
+        from physicsnemo.mesh.utilities._device import to_device
 
         if center is not None:
-            c = _to_device(
+            c = to_device(
                 center, self.interior.points.device, self.interior.points.dtype
             )
             return (

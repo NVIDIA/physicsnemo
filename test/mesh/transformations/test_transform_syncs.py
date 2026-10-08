@@ -30,6 +30,7 @@ from physicsnemo.mesh.calculus.measure import point_measures, set_point_measures
 from physicsnemo.mesh.primitives.planar import structured_grid
 from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
 from physicsnemo.mesh.transformations.geometric import (
+    _is_similarity_transform,
     _scale_assumptions,
     rotation_matrix,
     scale_matrix,
@@ -79,6 +80,8 @@ def _assert_same_mesh(actual: Mesh, expected: Mesh) -> None:
         ([1.0, 2.0, 3.0], (True, False)),
         ([2.0, -2.0, 2.0], (True, True)),  # a reflection is still a similarity
         ([1.0, 0.0, 1.0], (False, False)),
+        (1e160, (True, True)),  # |det| overflows to inf
+        ([1e160, 1e-160, 1.0], (True, False)),  # 1e160 ** 2 overflows to inf
         (torch.tensor(2.0), (None, True)),
         (torch.tensor([1.0, 2.0, 3.0]), (None, None)),
     ],
@@ -95,6 +98,19 @@ def test_scale_matches_runtime_tests(factor, device):
     mesh = _surface(device)
     matrix = scale_matrix(factor, 3, mesh.points.device, mesh.points.dtype)
     _assert_same_mesh(mesh.scale(factor), transform(mesh, matrix))
+
+
+@pytest.mark.parametrize(
+    "factor", [[1e160, 1e-160, 1.0], [1e200, 1e200, 1e-200], [1e-200, 1e-200, 1e-200]]
+)
+def test_extreme_scale_assumptions_match_runtime_tests(factor):
+    """Factors whose products overflow or underflow in float64 decide alike."""
+    matrix = scale_matrix(factor, 3, torch.device("cpu"), torch.float64)
+    runtime = (
+        bool(torch.linalg.det(matrix).abs() > 1e-10),
+        _is_similarity_transform(matrix),
+    )
+    assert _scale_assumptions(factor, 3) == runtime
 
 
 @pytest.mark.parametrize("axis", [[0.0, 0.0, 2.0], "z", (1.0, 1.0, 0.0)])
@@ -242,6 +258,27 @@ def test_transforms_are_sync_free(operation):
 
     with _cuda_sync_budget(0):
         operation(mesh)
+    torch.cuda.synchronize()
+
+
+@requires_cuda
+def test_python_arguments_stay_on_the_host_under_a_cuda_default_device():
+    """Arguments built from Python values do not follow the default device."""
+    mesh = _surface("cuda")
+    operations = [
+        lambda: mesh.translate([1.0, 2.0, 3.0]),
+        lambda: mesh.rotate(0.3, axis=[0.0, 0.0, 1.0]),
+        lambda: mesh.rotate(0.3, axis="y", center=[1.0, 0.0, 0.0]),
+        lambda: mesh.scale([1.0, 2.0, 3.0]),
+    ]
+    with torch.device("cuda"):
+        for operation in operations:
+            operation()
+        torch.cuda.synchronize()
+
+        with _cuda_sync_budget(0):
+            for operation in operations:
+                operation()
     torch.cuda.synchronize()
 
 

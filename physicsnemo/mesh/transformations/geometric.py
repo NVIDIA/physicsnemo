@@ -37,27 +37,11 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from tensordict import TensorDict
 
+from physicsnemo.mesh.utilities._device import to_device
 from physicsnemo.nn.functional import safe_normalize
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
-
-
-def _to_device(
-    value: float | Sequence[float] | torch.Tensor,
-    device: torch.device,
-    dtype: torch.dtype | None = None,
-) -> torch.Tensor:
-    """``torch.as_tensor(value, device=device, dtype=dtype)``, without a host sync.
-
-    Tensors convert as before. Python numbers and sequences are first built in
-    fresh pageable host memory, which CUDA stages before an asynchronous copy
-    returns; ``non_blocking`` thus avoids the device synchronization that a
-    blocking host-to-device copy makes.
-    """
-    if isinstance(value, torch.Tensor):
-        return torch.as_tensor(value, device=device, dtype=dtype)
-    return torch.as_tensor(value, dtype=dtype).to(device, non_blocking=True)
 
 
 ### User Data Transformation ###
@@ -210,7 +194,7 @@ def _build_rotation_matrix(
         Rotation matrix: :math:`(2, 2)` if axis is None,
         :math:`(3, 3)` if axis has shape :math:`(3,)`.
     """
-    angle = _to_device(angle, device)
+    angle = to_device(angle, device)
     c, s = torch.cos(angle), torch.sin(angle)
 
     if axis is None:
@@ -287,12 +271,12 @@ def _resolve_rotation_axis(
                 f"axis={axis!r} is invalid for mesh with "
                 f"n_spatial_dims={n_spatial_dims}"
             )
-        return torch.eye(n_spatial_dims)[idx]
+        return torch.eye(n_spatial_dims, device="cpu")[idx]
 
     if axis is not None:
         axis = torch.as_tensor(
             axis,
-            device=device if isinstance(axis, torch.Tensor) else None,
+            device=device if isinstance(axis, torch.Tensor) else "cpu",
             dtype=torch.float32,
         )
 
@@ -381,7 +365,7 @@ def scale_matrix(
         If ``factor`` is a vector whose length does not match
         ``n_spatial_dims``.
     """
-    factor_t = _to_device(factor, device, dtype)
+    factor_t = to_device(factor, device, dtype)
     if factor_t.ndim == 0:
         factor_t = factor_t.expand(n_spatial_dims)
     elif not torch.compiler.is_compiling() and factor_t.shape[-1] != n_spatial_dims:
@@ -477,6 +461,8 @@ def _scale_assumptions(
     tests to ``diag(factor)`` in Python arithmetic: ``|det| > 1e-10``, and the
     ``M.T @ M == c * I`` test of :func:`_is_similarity_transform`. A scalar
     factor is an isotropic scale, hence a similarity, whatever its value.
+    Products use ``*``, which overflows to ``inf`` as tensor arithmetic does,
+    where Python's ``**`` raises :class:`OverflowError`.
 
     Returns
     -------
@@ -487,11 +473,12 @@ def _scale_assumptions(
     if isinstance(factor, torch.Tensor):
         return None, (True if factor.ndim == 0 else None)
     if isinstance(factor, numbers.Real):
-        return abs(factor) ** n_spatial_dims > 1e-10, True
-    squares = [float(f) ** 2 for f in factor]
+        return abs(math.prod([factor] * n_spatial_dims)) > 1e-10, True
+    values = [float(f) for f in factor]
+    squares = [v * v for v in values]
     mean = sum(squares) / len(squares)
     is_similarity = all(abs(s - mean) <= 1e-6 + 1e-5 * mean for s in squares)
-    return math.prod(squares) ** 0.5 > 1e-10, is_similarity
+    return abs(math.prod(values)) > 1e-10, is_similarity
 
 
 ### Public API ###
@@ -742,7 +729,7 @@ def translate(
         - centroids: Translated
         - normals: Unchanged
     """
-    offset = _to_device(offset, mesh.points.device, mesh.points.dtype)
+    offset = to_device(offset, mesh.points.device, mesh.points.dtype)
 
     if not torch.compiler.is_compiling():
         if offset.shape[-1] != mesh.n_spatial_dims:
@@ -839,7 +826,7 @@ def rotate(
 
     ### Handle center by translate-rotate-translate
     if center is not None:
-        center = _to_device(center, mesh.points.device, mesh.points.dtype)
+        center = to_device(center, mesh.points.device, mesh.points.dtype)
         return translate(
             rotate(
                 translate(mesh, -center),
@@ -925,7 +912,7 @@ def scale(
 
     ### Handle center by translate-scale-translate
     if center is not None:
-        center = _to_device(center, mesh.points.device, mesh.points.dtype)
+        center = to_device(center, mesh.points.device, mesh.points.dtype)
         return translate(
             scale(
                 translate(mesh, -center),
