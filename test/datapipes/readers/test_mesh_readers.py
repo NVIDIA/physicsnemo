@@ -158,6 +158,62 @@ class TestDomainMeshReader:
         loaded, _ = reader[0]
         assert "Re" in loaded.global_data.keys()
 
+    def _save_point_cloud_with_triangulated_wall(self, tmp_path, n_cells, n_interior):
+        """Point-cloud interior next to a triangulated wall of ``n_cells``."""
+        gen = torch.Generator().manual_seed(0)
+        wall = Mesh(
+            points=torch.randn(3 * n_cells, 3, generator=gen),
+            cells=torch.randperm(3 * n_cells, generator=gen).reshape(n_cells, 3),
+        )
+        dm = DomainMesh(
+            interior=Mesh(points=torch.randn(n_interior, 3, generator=gen)),
+            boundaries={"wall": wall},
+        )
+        dm.save(tmp_path / "dm.pdmsh")
+
+    def test_interior_n_points_range(self, tmp_path):
+        """Query-count augmentation: the interior count is drawn per sample
+        from ``[lo, hi]``, reproducibly under ``set_epoch``; boundaries keep
+        their fixed sizes; ``None`` leaves the fixed behaviour unchanged."""
+        self._save_point_cloud_with_triangulated_wall(tmp_path, 2000, 5000)
+        lo, hi = 300, 900
+        reader = DomainMeshReader(
+            tmp_path,
+            pattern="*.pdmsh",
+            subsample_n_cells=500,
+            interior_n_points_range=(lo, hi),
+        )
+        reader.set_generator(torch.Generator().manual_seed(0))
+        fixed = DomainMeshReader(
+            tmp_path,
+            pattern="*.pdmsh",
+            subsample_n_cells=500,
+            subsample_n_points=500,
+        )
+        fixed.set_generator(torch.Generator().manual_seed(0))
+        counts = []
+        for epoch in range(6):
+            reader.set_epoch(epoch)
+            dm = reader[0][0]
+            counts.append(dm.interior.n_points)
+            assert lo <= dm.interior.n_points <= hi
+            # Boundaries are not touched by the range: the cell subsample
+            # alone keeps exactly ``subsample_n_cells`` wall cells.
+            assert dm.boundaries["wall"].n_cells == 500
+        assert len(set(counts)) > 1, counts
+        # Reproducible: same epoch, same draw.
+        reader.set_epoch(3)
+        a = reader[0][0].interior.n_points
+        reader.set_epoch(4)
+        reader.set_epoch(3)
+        assert reader[0][0].interior.n_points == a
+        # Default None: fixed count unchanged.
+        assert fixed[0][0].interior.n_points == 500
+        with pytest.raises(ValueError):
+            DomainMeshReader(
+                tmp_path, pattern="*.pdmsh", interior_n_points_range=(900, 300)
+            )
+
 
 class TestMeshDataset:
     """Tests for MeshDataset with mesh transforms."""
