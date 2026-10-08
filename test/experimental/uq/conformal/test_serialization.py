@@ -93,7 +93,7 @@ def test_artifact_has_one_exact_schema_and_cellwise_load_requires_the_mesh(tmp_p
 
     loaded = ConformalPredictor.load(path)
     prediction = torch.zeros(6, 3)
-    with pytest.raises(ValueError, match="requires points"):
+    with pytest.raises(TypeError, match="points must be a torch.Tensor"):
         loaded.predict_interval(prediction)
     for changed in (_MESH_POINTS.flip(0), _MESH_POINTS.to(torch.float64)):
         with pytest.raises(ValueError, match="exact calibration mesh"):
@@ -233,7 +233,7 @@ CORRUPTIONS = {
     "extra_score_key": (_set_in("score", "class", "AbsoluteErrorScore"), "score spec schema is invalid"),
     "unknown_difficulty_kind": (_set("difficulty", {"kind": "bogus", "kwargs": {}}), "Unknown built-in difficulty kind"),
     "extra_difficulty_key": (_set("difficulty", {"kind": "aux", "kwargs": {"key": "s", "eps": 1e-8}, "class": "X"}), "difficulty spec schema is invalid"),
-    "non_mapping_difficulty": (_set("difficulty", "aux"), "difficulty spec must be a mapping"),
+    "non_mapping_difficulty": (_set("difficulty", "aux"), "difficulty spec schema is invalid"),
     "non_json_provenance": (_set("provenance", {"tags": ("x",)}), "strict-JSON"),
     # Strategy kwargs: exact key sets and exact wire types.
     "aux_missing_key": (_set_in("difficulty", "kwargs", {"eps": 1e-4}), "kwargs schema is invalid", "aux"),

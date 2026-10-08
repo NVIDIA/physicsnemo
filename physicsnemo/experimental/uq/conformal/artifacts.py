@@ -46,8 +46,6 @@ _SCHEMA_KEYS = {
 
 def _check_exact_keys(value: object, expected: set[str], where: str) -> Mapping:
     """Require a mapping with exactly the ``expected`` keys."""
-    if not isinstance(value, Mapping):
-        raise ValueError(f"{where} must be a mapping, got {type(value).__name__}.")
     keys = set(value)
     missing = expected - keys
     unexpected = keys - expected
