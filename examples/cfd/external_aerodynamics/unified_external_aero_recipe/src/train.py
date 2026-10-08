@@ -36,7 +36,7 @@ Usage::
 import os
 import time
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from typing import Any, Literal
 
 import hydra
@@ -277,6 +277,34 @@ def forward_pass(
 ### ---------------------------------------------------------------------------
 
 
+@contextmanager
+def _fail_together(dist_manager: DistributedManager, where: str) -> Iterator[None]:
+    """Run a block on every rank; if it raises on any rank, raise on all of them.
+
+    Every rank must enter the same blocks in the same order. The epoch loop
+    wraps batch loading, before DDP forward can run collectives, and the
+    forward pass, before backward. The failing rank re-raises its own
+    exception; the others raise a ``RuntimeError`` naming it. A failure inside
+    a collective, in backward, or that breaks the CUDA context still waits for
+    the process-group timeout.
+    """
+    error = None
+    try:
+        yield
+    except Exception as err:
+        error = err
+    if dist_manager.world_size > 1:
+        failed_rank = torch.tensor(
+            -1 if error is None else dist_manager.rank, device=dist_manager.device
+        )
+        dist.all_reduce(failed_rank, op=dist.ReduceOp.MAX)
+        if error is None and (rank := int(failed_rank.item())) >= 0:
+            raise RuntimeError(f"rank {rank} failed during {where}")
+    if error is not None:
+        error.add_note(f"Raised during {where}.")
+        raise error
+
+
 def _run_epoch(
     dataloader: DataLoader,
     model: torch.nn.Module,
@@ -344,18 +372,23 @@ def _run_epoch(
     epoch_t0 = time.perf_counter()
     with grad_ctx:
         step_t0 = time.perf_counter()
-        for i, batch in enumerate(dataloader):
-            batch = recursive_to_device(batch, dist_manager.device)
-
-            loss, losses, metrics = forward_pass(
-                batch,
-                model,
-                precision,
-                loss_calculator,
-                metric_calculator,
-                output_type=output_type,
-                target_config=target_config,
-            )
+        ### Load and run forward inside _fail_together, so a failure on one
+        ### rank stops every rank before the next DDP collective.
+        batches = iter(dataloader)
+        for i in range(num_steps):
+            where = f"{mode} epoch {epoch}, step {i}"
+            with _fail_together(dist_manager, f"{where} (data loading)"):
+                batch = recursive_to_device(next(batches), dist_manager.device)
+            with _fail_together(dist_manager, f"{where} (forward/loss)"):
+                loss, losses, metrics = forward_pass(
+                    batch,
+                    model,
+                    precision,
+                    loss_calculator,
+                    metric_calculator,
+                    output_type=output_type,
+                    target_config=target_config,
+                )
 
             if is_train:
                 optimizer.zero_grad()
@@ -365,7 +398,17 @@ def _run_epoch(
                     scaler.update()
                 else:
                     loss.backward()
-                    optimizer.step()
+                    ### Skip the update on a NaN/inf loss or gradient, as
+                    ### GradScaler does for float16. DDP has averaged the
+                    ### gradients, so every rank makes the same choice.
+                    grads = [p.grad for p in model.parameters() if p.grad is not None]
+                    if torch.nn.utils.get_total_norm(grads).isfinite():
+                        optimizer.step()
+                    else:
+                        logger.warning(
+                            f"{log_prefix} {epoch} [{i + 1}/{num_steps}] "
+                            "non-finite gradient norm; skipped the optimizer step"
+                        )
                 if cfg.training.get("scheduler_update_mode", "epoch") == "step":
                     scheduler.step()
 
@@ -903,6 +946,7 @@ def main(cfg: DictConfig) -> None:
         "path": os.path.join(checkpoint_dir, cfg.run_id, "checkpoints"),
         "optimizer": optimizer,
         "scheduler": scheduler,
+        "scaler": scaler,
         "models": model,
     }
     loaded_epoch = load_checkpoint(device=device, **ckpt_args)
@@ -973,14 +1017,16 @@ def main(cfg: DictConfig) -> None:
                     f"{table}\n"
                 )
 
-            if epoch % cfg.training.save_interval == 0 and is_rank0:
+            ### Step first so a checkpoint holds the schedule its resume uses.
+            if cfg.training.get("scheduler_update_mode", "epoch") == "epoch":
+                scheduler.step()
+
+            is_last_epoch = epoch + 1 == num_epochs
+            if (epoch % cfg.training.save_interval == 0 or is_last_epoch) and is_rank0:
                 save_checkpoint(**ckpt_args, epoch=epoch + 1)
                 if normalizer is not None:
                     norm_path = os.path.join(ckpt_args["path"], "norm_stats.pt")
                     torch.save(normalizer.stats, norm_path)
-
-            if cfg.training.get("scheduler_update_mode", "epoch") == "epoch":
-                scheduler.step()
 
     if is_rank0:
         if train_writer is not None:
