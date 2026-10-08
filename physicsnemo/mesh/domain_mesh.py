@@ -427,6 +427,7 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
         transform_point_data: bool | TensorDict = False,
         transform_cell_data: bool | TensorDict = False,
         transform_global_data: bool | TensorDict = False,
+        assume_valid_axis: bool = False,
     ) -> "DomainMesh":
         r"""Rotate all meshes in the domain about an axis.
 
@@ -452,17 +453,21 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
         transform_global_data : bool or TensorDict
             Same semantics, for each mesh's ``global_data`` and the
             domain-level :attr:`global_data`.
+        assume_valid_axis : bool, optional
+            Skip the check that ``axis`` has non-zero length.  See
+            :meth:`Mesh.rotate`.
 
         Returns
         -------
         DomainMesh
             New domain with rotated geometry.
         """
+        from physicsnemo.mesh.transformations.geometric import rotation_matrix
+        from physicsnemo.mesh.utilities._device import to_device
+
         if center is not None:
-            c = torch.as_tensor(
-                center,
-                device=self.interior.points.device,
-                dtype=self.interior.points.dtype,
+            c = to_device(
+                center, self.interior.points.device, self.interior.points.dtype
             )
             return (
                 self.translate(-c)
@@ -473,11 +478,10 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
                     transform_point_data=transform_point_data,
                     transform_cell_data=transform_cell_data,
                     transform_global_data=transform_global_data,
+                    assume_valid_axis=assume_valid_axis,
                 )
                 .translate(c)
             )
-
-        from physicsnemo.mesh.transformations.geometric import rotation_matrix
 
         R = rotation_matrix(
             angle=angle,
@@ -485,6 +489,7 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
             n_spatial_dims=self.interior.n_spatial_dims,
             device=self.interior.points.device,
             dtype=self.interior.points.dtype,
+            assume_valid_axis=assume_valid_axis,
         )
         return self.transform(
             matrix=R,
@@ -492,6 +497,7 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
             transform_cell_data=transform_cell_data,
             transform_global_data=transform_global_data,
             assume_invertible=True,
+            assume_similarity=True,
         )
 
     def scale(
@@ -532,11 +538,15 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
         DomainMesh
             New domain with scaled geometry.
         """
+        from physicsnemo.mesh.transformations.geometric import (
+            _scale_assumptions,
+            scale_matrix,
+        )
+        from physicsnemo.mesh.utilities._device import to_device
+
         if center is not None:
-            c = torch.as_tensor(
-                center,
-                device=self.interior.points.device,
-                dtype=self.interior.points.dtype,
+            c = to_device(
+                center, self.interior.points.device, self.interior.points.dtype
             )
             return (
                 self.translate(-c)
@@ -551,20 +561,24 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
                 .translate(c)
             )
 
-        from physicsnemo.mesh.transformations.geometric import scale_matrix
-
         M = scale_matrix(
             factor=factor,
             n_spatial_dims=self.interior.n_spatial_dims,
             device=self.interior.points.device,
             dtype=self.interior.points.dtype,
         )
+        is_invertible, is_similarity = _scale_assumptions(
+            factor, self.interior.n_spatial_dims
+        )
         return self.transform(
             matrix=M,
             transform_point_data=transform_point_data,
             transform_cell_data=transform_cell_data,
             transform_global_data=transform_global_data,
-            assume_invertible=assume_invertible,
+            assume_invertible=is_invertible
+            if assume_invertible is None
+            else assume_invertible,
+            assume_similarity=is_similarity,
         )
 
     def transform(
@@ -574,6 +588,7 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
         transform_cell_data: bool | TensorDict = False,
         transform_global_data: bool | TensorDict = False,
         assume_invertible: bool | None = None,
+        assume_similarity: bool | None = None,
     ) -> "DomainMesh":
         r"""Apply a linear transformation to all meshes in the domain.
 
@@ -596,6 +611,8 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
             domain-level :attr:`global_data`.
         assume_invertible : bool or None, optional
             Controls cache propagation.  See :meth:`Mesh.transform`.
+        assume_similarity : bool or None, optional
+            Whether ``matrix`` is a similarity.  See :meth:`Mesh.transform`.
 
         Returns
         -------
@@ -609,6 +626,7 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
                 transform_cell_data=transform_cell_data,
                 transform_global_data=transform_global_data,
                 assume_invertible=assume_invertible,
+                assume_similarity=assume_similarity,
             )
         )
         if transform_global_data is not False:

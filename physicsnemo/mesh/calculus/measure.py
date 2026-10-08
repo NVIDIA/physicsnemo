@@ -219,9 +219,16 @@ def _require_preserved_point_measures(mesh: "Mesh") -> None:
 
 
 def _transform_point_measures(
-    source: "Mesh", result: "Mesh", matrix: torch.Tensor
+    source: "Mesh",
+    result: "Mesh",
+    matrix: torch.Tensor,
+    assume_similarity: bool | None = None,
 ) -> None:
-    """Transform counting, full-dimensional, or similarity-mapped point measures."""
+    """Transform counting, full-dimensional, or similarity-mapped point measures.
+
+    ``assume_similarity`` follows :func:`~physicsnemo.mesh.transformations.geometric.transform`;
+    ``None`` tests ``matrix`` when the answer is needed.
+    """
     if EFFECTIVE_MEASURE_KEY not in source.point_data:
         return
     dimension = point_measure_dimension(source)
@@ -232,7 +239,9 @@ def _transform_point_measures(
     else:
         from physicsnemo.mesh.transformations.geometric import _is_similarity_transform
 
-        if not _is_similarity_transform(matrix):
+        if assume_similarity is None:
+            assume_similarity = _is_similarity_transform(matrix)
+        if not assume_similarity:
             raise ValueError(
                 "Anisotropic transformation of point measures requires support geometry; transform the source cells before constructing quadrature, or explicitly preserve reference measures"
             )
