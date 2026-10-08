@@ -435,12 +435,7 @@ def normalize_keys(keys: Sequence[str] | None) -> tuple[str, ...] | None:
 
 def positive_finite_float(value: object, name: str) -> float:
     """Coerce a strategy scalar (``eps``, ``value``) to a positive finite float."""
-    try:
-        value = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            f"{name} must be a positive finite value, got {value!r}."
-        ) from exc
+    value = float(value)
     if not (value > 0 and math.isfinite(value)):
         raise ValueError(f"{name} must be a positive finite value, got {value}.")
     return value
