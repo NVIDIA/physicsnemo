@@ -27,6 +27,35 @@ Tensor = torch.Tensor
 
 
 @requires_module("warp")
+def test_init_uniform_random_2d_kernel(device, pytestconfig):
+    """Regression test for NVIDIA/physicsnemo#2035.
+
+    Every element must get its own random draw within ``[min_value, max_value]``.
+    """
+    import numpy as np
+    import warp as wp
+
+    from physicsnemo.datapipes.benchmarks.kernels.initialization import (
+        init_uniform_random_2d,
+    )
+
+    wp.init()
+    shape = (4, 6)
+    array = wp.zeros(shape, dtype=float, device=device)
+    wp.launch(
+        kernel=init_uniform_random_2d,
+        dim=shape,
+        inputs=[array, -0.1, 0.1, 1234],
+        device=device,
+    )
+    values = array.numpy()
+
+    assert np.unique(values).size == values.size
+    assert values.min() >= -0.1 and values.max() <= 0.1
+    assert values.min() < 0.0 < values.max()
+
+
+@requires_module("warp")
 def test_kelvin_helmholtz_2d_constructor(device, pytestconfig):
     from physicsnemo.datapipes.benchmarks.kelvin_helmholtz import KelvinHelmholtz2D
 

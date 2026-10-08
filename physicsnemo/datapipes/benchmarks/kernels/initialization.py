@@ -48,8 +48,11 @@ def init_uniform_random_2d(
         External seed to use
     """
     i, j = wp.tid()
-    state = wp.rand_init(external_seed, wp.tid())
-    array[i, j] = wp.randf(state, -min_value, max_value)
+    # bare wp.tid() in a multi-dim launch is only the first index, so seed
+    # each thread with its flat element offset
+    offset = i * array.shape[1] + j
+    state = wp.rand_init(external_seed, offset)
+    array[i, j] = wp.randf(state, min_value, max_value)
 
 
 @wp.kernel
@@ -73,5 +76,8 @@ def init_uniform_random_4d(
         External seed to use
     """
     b, i, j, k = wp.tid()
-    state = wp.rand_init(external_seed, wp.tid())
+    # bare wp.tid() in a multi-dim launch is only the first index, so seed
+    # each thread with its flat element offset
+    offset = ((b * array.shape[1] + i) * array.shape[2] + j) * array.shape[3] + k
+    state = wp.rand_init(external_seed, offset)
     array[b, i, j, k] = wp.randf(state, min_value, max_value)

@@ -123,6 +123,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cells out of a mesh with hundreds of millions of vertices). Index
   normalization avoids allocating a full-mesh range and preserves empty slices,
   integer indices, and boolean masks. Point fields use ordinary indexed gathers.
+- `Darcy2D` solves with multi-grid red-black successive over-relaxation
+  instead of Jacobi iteration, converging in far fewer iterations and about
+  100x closer to the discrete solution at the default tolerance. Batches whose
+  SOR solve diverges are re-solved with Gauss-Seidel. `Darcy2D` now raises a
+  `ValueError` unless `0 < min_permeability <= max_permeability` and
+  `max_permeability / min_permeability <= 4`; above that ratio the
+  finite-difference scheme does not converge.
 
 - The `tolerance` of `sample_data_at_points`, `find_containing_cells` and
   `find_all_containing_cells` is now relative. Barycentric coordinates must
@@ -199,6 +206,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `nr_multigrids >= 3` that could return huge or NaN pressure fields, and
   corrects the coarse-node coordinates used by bilinear upsampling for
   reduction factors greater than 2.
+- `Darcy2D` permeability fields are random per sample again: the
+  `init_uniform_random_4d` and `init_uniform_random_2d` kernels seeded every
+  thread from only its first launch index, so all samples in a batch shared
+  four random Fourier coefficients
+  ([#2035](https://github.com/NVIDIA/physicsnemo/issues/2035)).
+  `init_uniform_random_2d` also negated `min_value`, which made the
+  `KelvinHelmholtz2D` perturbations constant.
+- `Darcy2D` solves the Darcy equation it documents: the Jacobi update divided
+  the `grad(k) . grad(u)` term by `2 dx` instead of `4 dx**2`, effectively
+  dropping it ([#2036](https://github.com/NVIDIA/physicsnemo/issues/2036)).
+  Generated pressure fields change; the `darcy` normaliser in the `darcy_fno`,
+  `darcy_transolver` and `darcy_nested_fnos` examples is updated to match, and
+  `darcy_nested_fnos` datasets must be regenerated.
+- The `Darcy2D` convergence check no longer reports a diverged (NaN) solve as
+  converged.
 - `Module.save` now writes `.mdlus` checkpoints atomically (transfer to a
   temporary sibling name, then rename into place), so a process killed
   mid-write no longer leaves an unloadable truncated checkpoint. Also fixes

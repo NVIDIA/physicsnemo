@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import sys
+import warnings
 from dataclasses import dataclass
 from typing import Dict, Tuple, Union
 
@@ -25,7 +26,7 @@ import warp as wp
 from ..datapipe import Datapipe
 from ..meta import DatapipeMetaData
 from .kernels.finite_difference import (
-    darcy_mgrid_jacobi_iterative_batched_2d,
+    darcy_mgrid_rbsor_batched_2d,
     mgrid_inf_residual_batched_2d,
 )
 from .kernels.initialization import init_uniform_random_4d
@@ -38,6 +39,22 @@ from .kernels.utils import (
 Tensor = torch.Tensor
 # TODO unsure if better to remove this. Keeping this in for now
 wp.init()
+
+# The non-conservative stencil's neighbor weights k_c +/- (k_n - k_o) / 4 go
+# negative above a max/min permeability ratio of 5, and red-black SOR diverges
+# from about 4.5. Cap the ratio with some margin for stability.
+# Above this number requires changes.
+MAX_PERMEABILITY_RATIO = 4.0
+
+# Young's optimal SOR factor assumes a symmetric operator. The cross term makes
+# this one non-symmetric, and close to 2 SOR diverges for some permeability
+# fields, so cap the over-relaxation. Batches that still diverge are re-solved
+# with Gauss-Seidel (omega = 1), which converges for any permeability ratio
+# below 5 because every stencil weight stays positive.
+MAX_SOR_OMEGA = 1.9
+
+# inf-norm update reported by the residual kernel for non-finite values
+_DIVERGED_RESIDUAL = 1.0e30
 
 
 @dataclass
@@ -57,7 +74,7 @@ class Darcy2D(Datapipe):
     permeability. All samples are generated on the fly and is meant to be a benchmark
     problem for testing data driven models. Permeability is drawn from a random Fourier
     series and threshold it to give a piecewise constant function. The solution is obtained
-    using a GPU enabled multi-grid Jacobi iterative method.
+    using a GPU enabled multi-grid red-black successive over-relaxation (SOR) method.
 
     Parameters
     ----------
@@ -71,13 +88,16 @@ class Darcy2D(Datapipe):
     max_permeability : float, optional
         Max permeability, by default 2.0
     min_permeability : float, optional
-        Min permeability, by default 0.5
+        Min permeability, by default 0.5. Must be positive, and
+        ``max_permeability / min_permeability`` must not exceed 4 or the solver
+        diverges.
     max_iterations : int, optional
         Maximum iterations to use for each multi-grid, by default 30000
     convergence_threshold : float, optional
         Solver L-Infinity convergence threshold, by default 1e-6
     iterations_per_convergence_check : int, optional
-        Number of Jacobi iterations to run before checking convergence, by default 1000
+        Number of SOR iterations (one red and one black half-sweep each) to run
+        before checking convergence, by default 1000
     nr_multigrids : int, optional
         Number of multi-grid levels, by default 4
     normaliser : Union[Dict[str, Tuple[float, float]], None], optional
@@ -88,7 +108,8 @@ class Darcy2D(Datapipe):
     Raises
     ------
     ValueError
-        Incompatable multi-grid and resolution settings
+        Incompatable multi-grid and resolution settings, or permeability bounds
+        the solver cannot converge for
     """
 
     def __init__(
@@ -144,6 +165,19 @@ class Darcy2D(Datapipe):
         # assert resolution is compatible with multi-grid method
         if (resolution % 2 ** (nr_multigrids - 1)) != 0:
             raise ValueError("Resolution is incompatible with number of sub grids.")
+
+        if not 0.0 < min_permeability <= max_permeability:
+            raise ValueError(
+                "Permeability bounds must satisfy 0 < min_permeability <= "
+                f"max_permeability, got min_permeability={min_permeability} and "
+                f"max_permeability={max_permeability}."
+            )
+        if max_permeability / min_permeability > MAX_PERMEABILITY_RATIO:
+            raise ValueError(
+                f"max_permeability / min_permeability must be at most "
+                f"{MAX_PERMEABILITY_RATIO}, got {max_permeability / min_permeability:g}. "
+                "Above this ratio the finite-difference solver does not converge."
+            )
 
         # allocate arrays for constructing dataset
         self.darcy0 = wp.zeros(self.dim, dtype=float, device=self.device)
@@ -202,7 +236,30 @@ class Darcy2D(Datapipe):
         # initialize tensors with random permeability
         self.initialize_batch()
 
-        # run solver
+        if self._solve(MAX_SOR_OMEGA):
+            return
+        warnings.warn(
+            "Darcy2D SOR solve diverged; re-solving the batch with Gauss-Seidel."
+        )
+        if not self._solve(1.0):
+            raise RuntimeError("Darcy2D solver diverged.")
+
+    def _solve(self, max_omega: float) -> bool:
+        """Multi-grid red-black SOR solve of the current batch into ``darcy0``.
+
+        Parameters
+        ----------
+        max_omega : float
+            Cap on the over-relaxation factor. ``1.0`` gives Gauss-Seidel.
+
+        Returns
+        -------
+        bool
+            ``False`` if the solution became non-finite, ``True`` otherwise
+        """
+        self.darcy0.zero_()
+        self.darcy1.zero_()
+
         for res in range(self.nr_multigrids):
             # calculate grid reduction factor and reduced dim
             grid_reduction_factor = 2 ** (self.nr_multigrids - res - 1)
@@ -213,31 +270,38 @@ class Darcy2D(Datapipe):
             else:
                 multigrid_dim = self.dim
 
+            # over-relaxation factor that is optimal for the Poisson operator on
+            # this level's grid, capped at max_omega
+            omega = min(2.0 / (1.0 + np.sin(np.pi / (multigrid_dim[1] + 1))), max_omega)
+
             # run till max steps is reached
             for k in range(
                 self.max_iterations // self.iterations_per_convergence_check
             ):
-                # run jacobi iterations
+                # run red-black SOR iterations in place on darcy0
                 for s in range(self.iterations_per_convergence_check):
-                    # iterate solver
-                    wp.launch(
-                        kernel=darcy_mgrid_jacobi_iterative_batched_2d,
-                        dim=multigrid_dim,
-                        inputs=[
-                            self.darcy0,
-                            self.darcy1,
-                            self.permeability,
-                            1.0,
-                            self.dim[1],
-                            self.dim[2],
-                            self.dx,
-                            grid_reduction_factor,
-                        ],
-                        device=self.device,
-                    )
+                    # keep the iterate before the last iteration so the
+                    # convergence check can measure that iteration's update
+                    if s == self.iterations_per_convergence_check - 1:
+                        wp.copy(self.darcy1, self.darcy0)
 
-                    # swap buffers
-                    (self.darcy0, self.darcy1) = (self.darcy1, self.darcy0)
+                    for color in (0, 1):
+                        wp.launch(
+                            kernel=darcy_mgrid_rbsor_batched_2d,
+                            dim=multigrid_dim,
+                            inputs=[
+                                self.darcy0,
+                                self.permeability,
+                                1.0,
+                                self.dim[1],
+                                self.dim[2],
+                                self.dx,
+                                grid_reduction_factor,
+                                color,
+                                omega,
+                            ],
+                            device=self.device,
+                        )
 
                 # compute residual
                 self.inf_residual.zero_()
@@ -253,6 +317,9 @@ class Darcy2D(Datapipe):
                     device=self.device,
                 )
                 normalized_inf_residual = self.inf_residual.numpy()[0]
+
+                if normalized_inf_residual >= _DIVERGED_RESIDUAL:
+                    return False
 
                 # check if converged
                 if normalized_inf_residual < (
@@ -276,6 +343,8 @@ class Darcy2D(Datapipe):
                     device=self.device,
                 )
                 (self.darcy0, self.darcy1) = (self.darcy1, self.darcy0)
+
+        return True
 
     def __iter__(self) -> Tuple[Tensor, Tensor]:
         """
