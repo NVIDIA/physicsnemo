@@ -51,8 +51,6 @@ pipeline:
         high:
           _target_: torch.tensor
           data: [1.0, 1.0, 0.0]
-        # low == high pins z at 0, which Uniform accepts only with
-        # argument validation off.
         validate_args: false
   transforms:
     - _target_: ${dp:DropMeshFields}

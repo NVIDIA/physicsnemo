@@ -224,14 +224,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   point has more than 32 BVH candidate cells (for example, near a vertex shared
   by many triangles, or with a prebuilt BVH with `leaf_size > 1`). The BVH
   candidate search used by these functions no longer caps candidates per point.
-- Unified external aero recipe: the translation augmentations pass
-  `validate_args: false`, so their zero-width vertical range
-  (`low == high`) instantiates with `torch.distributions` validation on.
-  It worked before only because the first `torch.compile` in a process,
-  which importing `physicsnemo.datapipes` triggers, turns validation off
-  process-wide (pytorch/pytorch#157926). The per-axis YAML example in
-  `DISTRIBUTIONS.md` builds its bounds with `torch.tensor`; plain YAML
-  lists fail.
 
 ### Security
 
