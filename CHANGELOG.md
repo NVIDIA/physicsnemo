@@ -71,9 +71,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ClusterTree` builds tighter trees by default (`split="morton"`), so
   Barnes-Hut plans need 2-4x fewer interactions at the same `theta`.
   `split="midpoint"` gives the previous trees.
-- GLOBE defaults to `theta=0.6` (was 1.0), which with the new trees is as
-  accurate as 1.0 was before and still 1.5x faster, and to
-  `expand_far_targets=True` (was `False`), as in its examples.
+- GLOBE's default `theta` is 0.6 (was 1.0): with the new trees, it is as
+  accurate as 1.0 was before and still 1.5x faster.
+- GLOBE's default `expand_far_targets` is `True` (was `False`), as in its
+  examples.
 - `ClusterTree.compute_source_aggregates` is 20-30x faster, and
   `ClusterTree.find_dual_interaction_pairs` is up to 1.7x faster with 40% less
   peak memory. The plan's interactions are no longer sorted by source.
