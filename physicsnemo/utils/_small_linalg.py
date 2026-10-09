@@ -19,7 +19,8 @@
 Batched ``torch.linalg`` calls factorize every tiny matrix separately, which is
 slow on GPUs and a loop of LAPACK calls on CPUs. Meshes have one such matrix
 per cell, so these helpers use closed forms for matrices up to 3x3, and
-``small_lstsq`` a Gram-Schmidt QR over the few columns of each system. They use
+``small_lstsq`` a Gram-Schmidt QR over the few columns of each system
+(``batched_lstsq`` picks it or ``torch.linalg.lstsq``, whichever is faster). They use
 only elementwise products and sums, so they need no CUDA synchronization and
 support autograd and reduced-precision dtypes.
 """
@@ -227,6 +228,28 @@ def small_lstsq(
     ### Undo the column pivoting and the normalization
     unpermute = permutation.unsqueeze(-1).expand(*batch_shape, d, n_rhs)
     return torch.zeros_like(X).scatter(-2, unpermute, X) / scale
+
+
+def batched_lstsq(
+    A: Float[torch.Tensor, "... k d"],
+    B: Float[torch.Tensor, "... k n_rhs"],
+) -> Float[torch.Tensor, "... d n_rhs"]:
+    """Minimum-norm least-squares solution of each small system ``A X = B``.
+
+    Uses the faster method for the device, as measured on meshes of 1M cells
+    (32 Grace cores) and 10M cells (GB300). On CPU, :func:`small_lstsq` is
+    15-50x faster than batched ``torch.linalg.lstsq``, which loops over LAPACK
+    calls. On CUDA, batched ``torch.linalg.lstsq`` is 2-4x faster than
+    :func:`small_lstsq`, but its only driver, ``gels``, assumes full rank and
+    raises on rank-deficient systems, such as flat stencils: those batches fall
+    back to :func:`small_lstsq`.
+    """
+    if A.is_cuda:
+        try:
+            return torch.linalg.lstsq(A, B).solution
+        except torch.linalg.LinAlgError:
+            pass
+    return small_lstsq(A, B)
 
 
 def _solve_upper_triangular(

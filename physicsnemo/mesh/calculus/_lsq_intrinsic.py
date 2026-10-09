@@ -26,7 +26,7 @@ import torch
 from jaxtyping import Float
 
 from physicsnemo.mesh.utilities._tolerances import safe_eps
-from physicsnemo.utils._small_linalg import small_lstsq
+from physicsnemo.utils._small_linalg import batched_lstsq
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -147,7 +147,7 @@ def compute_point_gradient_lsq_intrinsic(
         ### Solve batched least-squares in tangent space
         if is_scalar:
             b_weighted = sqrt_w.squeeze(-1) * b
-            grad_tangent = small_lstsq(
+            grad_tangent = batched_lstsq(
                 A_tangent_weighted, b_weighted.unsqueeze(-1)
             ).squeeze(-1)  # (n_group, n_manifold_dims)
 
@@ -161,7 +161,7 @@ def compute_point_gradient_lsq_intrinsic(
             orig_shape = b.shape[2:]
             b_flat = b_weighted.reshape(n_group, n_neighbors, -1)
 
-            grad_tangent = small_lstsq(
+            grad_tangent = batched_lstsq(
                 A_tangent_weighted, b_flat
             )  # (n_group, n_manifold_dims, n_components)
 

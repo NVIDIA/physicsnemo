@@ -86,7 +86,7 @@ def test_point_gradient_lsq_intrinsic_matches_lstsq(
     for point_values in (values[:, 0], values):
         output = compute_point_gradient_lsq_intrinsic(mesh, point_values)
         with monkeypatch.context() as patch:
-            patch.setattr(_lsq_intrinsic, "small_lstsq", _lstsq_reference)
+            patch.setattr(_lsq_intrinsic, "batched_lstsq", _lstsq_reference)
             reference = compute_point_gradient_lsq_intrinsic(mesh, point_values)
         _assert_close_to_reference(output, reference, dtype)
 
@@ -132,6 +132,6 @@ def test_gradient_lsq_matches_lstsq(
 
     output = gradient_lsq(mesh, values)
     with monkeypatch.context() as patch:
-        patch.setattr(_torch_impl, "small_lstsq", _lstsq_reference)
+        patch.setattr(_torch_impl, "batched_lstsq", _lstsq_reference)
         reference = gradient_lsq(mesh, values)
     _assert_close_to_reference(output, reference, dtype)
