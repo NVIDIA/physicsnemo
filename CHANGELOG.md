@@ -170,6 +170,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   units. Results no longer depend on the mesh's length unit and are identical
   when the mesh and query points are scaled by a power of two.
 
+- `compute_mesh_statistics` reads all statistics in one device-to-host
+  transfer instead of about 20 `.item()` calls.
+
 ### Deprecated
 
 - Unified external aerodynamics recipe: `training.loss_type: rmse` is
