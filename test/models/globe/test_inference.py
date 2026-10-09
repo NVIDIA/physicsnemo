@@ -186,3 +186,31 @@ def test_globe_inference_multi_bc(device: str) -> None:
     assert fields["velocity"].shape == (N_PREDICTION_POINTS, 3)
     assert torch.all(torch.isfinite(fields["pressure"]))
     assert torch.all(torch.isfinite(fields["velocity"]))
+
+
+def test_globe_accepts_boundary_meshes_as_tensordict() -> None:
+    """The DrivAerML dataset passes ``boundary_meshes`` as a TensorDict, which
+    has no truth value; the output matches that of a plain dict."""
+    torch.manual_seed(0)
+    model = GLOBE(
+        n_spatial_dims=3,
+        output_schema={"pressure": {"rank": 0}},
+        boundary_source_schemas={"no_slip": {}},
+        reference_length_names=["test_length"],
+        reference_area=1.0,
+        hidden_layer_sizes=[8],
+    ).eval()
+    mesh = lumpy_sphere.load(subdivisions=1)
+    generator = torch.Generator().manual_seed(0)
+    kwargs = {
+        "prediction_points": torch.randn(N_PREDICTION_POINTS, 3, generator=generator),
+        "reference_lengths": {"test_length": torch.tensor(1.0)},
+    }
+    with torch.no_grad():
+        from_dict = model(boundary_meshes={"no_slip": mesh}, **kwargs)
+        from_tensordict = model(
+            boundary_meshes=TensorDict({"no_slip": mesh}, batch_size=[]), **kwargs
+        )
+    torch.testing.assert_close(
+        from_tensordict.point_data["pressure"], from_dict.point_data["pressure"]
+    )
