@@ -91,29 +91,37 @@ layers.  Separating these concerns means:
 
 ### 3.1 Construction via LBVH
 
-The tree is built using a Linear Bounding Volume Hierarchy (LBVH) algorithm
-(Karras 2012), the same approach used in PhysicsNeMo Mesh's existing `BVH`
-class for mesh spatial decomposition:
+The tree is a Linear Bounding Volume Hierarchy (LBVH) over the points:
 
 1. **Morton codes**: Each point is assigned a 63-bit Morton code that
-   interleaves the quantized coordinates.  Morton codes produce a
-   space-filling Z-curve ordering that preserves spatial locality - nearby
-   points in space tend to have nearby codes.
+   interleaves its quantized coordinates.  All axes share one scale, so the
+   cells of the Morton grid are cubes.  Morton codes produce a space-filling
+   Z-curve ordering that preserves spatial locality - nearby points in space
+   tend to have nearby codes.
 
 2. **Sort**: Points are sorted by Morton code.  After sorting, spatially
    nearby points are contiguous in the array.
 
 3. **Top-down recursive splitting**: Starting from the full sorted range as
-   the root, each segment with more than `leaf_size` points is split at its
-   midpoint.  Because Morton-sorted order preserves spatial locality, midpoint
-   splitting approximates a spatial median split, producing a balanced binary
-   tree.  Each iteration processes all segments at the current depth in
-   parallel, yielding O(log N) Python-level iterations.
+   the root, each segment with more than `leaf_size` points is split at the
+   coarsest Morton-cell boundary (the highest bit in which its codes differ)
+   that leaves at least a quarter of the points on each side.  Nodes are then
+   Morton cells, or a few adjacent cells, with tight bounding boxes, and the
+   quarter bound keeps the depth below `log(N) / log(4/3)`.  Each iteration
+   processes all segments at the current depth in parallel, yielding
+   O(log N) Python-level iterations.
+
+   `ClusterTree.from_points(split="midpoint")` instead splits every segment at
+   its count midpoint, on a grid stretched to the bounding box on each axis,
+   as PhysicsNeMo Mesh's `BVH` does.  Midpoint ranges straddle Morton-cell
+   boundaries, so their boxes span both sides of every cut; at the same
+   `theta` they need 2-4x more interactions on surfaces and volumes, and
+   25-40x on a 10:1:0.01 slab.
 
 4. **Bottom-up axis-aligned bounding box (AABB) propagation**: Leaf AABBs are
    computed from the actual points they contain.  Internal node AABBs are the
-   union of their children's AABBs.  Total areas are similarly propagated
-   (sum, not average).
+   union of their children's AABBs.  Total areas are range sums of the sorted
+   areas.
 
 The tree is stored as flat tensor arrays (`node_aabb_min`, `node_aabb_max`,
 `node_left_child`, etc.) indexed by node ID, making it fully GPU-compatible.
@@ -121,26 +129,24 @@ The tree is stored as flat tensor arrays (`node_aabb_min`, `node_aabb_max`,
 ### 3.2 Node Pre-allocation Bounds
 
 Before construction, arrays are pre-allocated at the worst-case node count.
-The midpoint split guarantees each child gets at least `floor(parent_size/2)`
-sources, so the minimum leaf occupancy is `ceil(leaf_size/2)`.  The maximum
-number of leaves is `ceil(N / min_per_leaf)`, and by the full-binary-tree
-identity (`n_internal = n_leaves - 1`), the maximum total node count is
-`2 * max_leaves - 1`.  After construction, the arrays are trimmed to the
-actual count.
+A Morton split can leave a single point on one side, so a leaf holds between
+one and `leaf_size` points and a tree has at most `2N - 1` nodes.  (With
+midpoint splits each child gets at least `floor(parent_size/2)` sources, so
+the bound tightens to `2 * ceil(N / ceil(leaf_size/2)) - 1`.)  After
+construction, the arrays are trimmed to the actual count.
 
 ### 3.3 Source Aggregates
 
-Per-node aggregate data is computed bottom-up for far-field evaluation:
+Per-node aggregate data for far-field evaluation is computed with range sums:
+every node covers a contiguous range of the Morton-sorted sources, so each
+node's sum is the difference of two entries of a prefix sum.
 
 - **Centroid**: area-weighted mean of source positions
 - **Source features** (normals, latent scalars/vectors): area-weighted mean
-  via `TensorDict.apply()` with segmented scatter operations
-- **Total area**: sum (not average) of children's areas
+- **Total area**: sum (not average) of the node's areas
 
-Internal node aggregates are computed from their children's aggregates using
-area-weighted averaging via a BFS level-ordering: internal nodes are
-discovered by depth, then processed deepest-first so children are correct
-before their parents read from them.
+All leaves of `source_data` and the centroid numerators share one float64
+prefix sum, taken along the innermost dimension of a feature-major array.
 
 Aggregates depend on the source data (which changes between communication
 layers as latent features are updated) but NOT on the tree structure (which
@@ -201,8 +207,21 @@ Hut 1986):
 - **Smaller theta** = more conservative (more exact interactions, slower).
 - **theta = 0** = all interactions are exact (no approximation).
 
-Typical values for GLOBE: `theta = 0.5` (conservative) to `theta = 1.5`
-(aggressive).  The default is `theta = 1.0`.
+Typical values for GLOBE: `theta = 0.25` (conservative) to `theta = 1.0`
+(aggressive).  The default is `theta = 0.6`.
+
+`theta` bounds the position errors.  The far-field monopole also averages
+each source feature (normals, latents) over the node, and GLOBE's network
+depends nonlinearly on them.  A smaller `theta` shrinks the admitted nodes and
+so reduces this error too, but slowly where normals jump (sharp edges, the two
+faces of thin parts).  For GLOBE's kernel with random weights on a 20k-face
+DrivAerML communication plan, the relative error of the long-range branch is
+7.6% at `theta = 1`, 4.4% at `theta = 0.6`, 2.6% at `theta = 0.25` and 0.9% at
+`theta = 0.0625`.  `find_dual_interaction_pairs(source_admissible=...)` can
+keep nodes with mixed normals exact, but at the same number of pairs a smaller
+`theta` is more accurate down to about 1% error.  Below that the mask helps:
+`theta = 0.125` with a 0.5 rad normal tolerance reaches 0.3% with 1.6e8 pairs,
+against 0.5% for `theta = 0.03125` alone with 1.7e8.
 
 ### 4.3 Breadth-First Traversal
 
@@ -230,15 +249,49 @@ level simultaneously:
    - Split both: 4 child pairs `(left_T, left_S)`, `(left_T, right_S)`,
      `(right_T, left_S)`, `(right_T, right_S)`.
 
-4. **Post-processing**: Near pairs are sorted by source index, far pairs by
-   source node, for cache-friendly memory access during kernel evaluation.
+4. **Leaf pairs**: near leaf-leaf pairs are expanded once after the loop,
+   testing each target against the source leaf (`(near, far)` entries) and
+   each remaining source against the target leaf (`(far, near)` entries).
 
-The output is a `DualInteractionPlan` containing four index arrays:
+The output is a `DualInteractionPlan` whose streams stay in traversal order:
 
 - `(near_target_ids, near_source_ids)`: individual target-source pairs
   requiring exact evaluation.
 - `(far_target_node_ids, far_source_node_ids)`: node-to-node pairs using the
   monopole approximation with target-side broadcast.
+- `(nf_target_ids, nf_source_node_ids)`: individual targets against source
+  monopoles.
+- `(fn_target_node_ids, fn_source_ids)` with a broadcast mapping: target-node
+  centroids against individual sources.
+
+With `expand_far_targets=True` the far-field node pairs are expanded into
+`(near, far)` entries and no `(far, near)` entries are made, so no target is
+evaluated at a node centroid.
+
+### 4.3a Point Targets: the Single-Tree Walk
+
+`ClusterTree.find_point_interaction_pairs(targets, theta)` builds a plan for
+individual target points without a target tree. Every point walks the source
+tree from the root: a node is admitted when `D_S / r < theta`, with `D_S` its
+AABB diagonal and `r` the minimum distance from the point to the box (the
+source-side half of the dual criterion; a point has no extent); a leaf that is
+not admitted contributes its sources individually; any other node hands the
+point to both children. The result is a `PointInteractionPlan` with two
+streams in traversal order, `(near_target_ids, near_source_ids)` and
+`(far_target_ids, far_source_node_ids)`, which together cover every (target,
+source) pair exactly once. A target's entries depend on the tree and that
+target alone, so the plan of a subset of the targets is the subset of the plan.
+
+Use it for scattered targets such as volume prediction points. The dual
+criterion charges the target node's own diameter `D_T`: a leaf of far-apart
+points in a sparse region of the volume is never well separated from the
+sources near it, so with `expand_far_targets=True` every point of that leaf
+reads those sources one by one, although each point alone would admit them as
+nodes. On a 200k-face car with 200k volume points the dual plan held 1.6e9
+pairs at `theta=0.5` and the point plan holds 1.5e8; for targets that are the
+sources themselves (communication layers), the dual plan's node-to-node
+entries remain the cheaper form. `source_admissible` applies as in the dual
+walk.
 
 ### 4.4 Self-Interaction and Cross-BC Interaction
 
@@ -428,9 +481,9 @@ The `theta` parameter controls accuracy vs. speed:
 | theta | Character            | Typical use case                       |
 |-------|----------------------|----------------------------------------|
 | 0     | Exact                | No approximation (equivalent to dense) |
-| 0.5   | Conservative         | High accuracy, for validation          |
-| 1.0   | Moderate             | Good default for production training   |
-| 1.5   | Aggressive           | Fast approximate evaluation            |
+| 0.25  | Conservative         | High accuracy, for validation          |
+| 0.6   | Moderate             | Default for production training        |
+| 1.0   | Aggressive           | Fast approximate evaluation            |
 | 100+  | Extremely aggressive | Testing only                           |
 
 The approximation error per interaction scales with theta, but the total
@@ -479,6 +532,8 @@ The far-field evaluation step is O(N) rather than O(N log N) because the
 number of well-separated node pairs grows linearly for typical point
 distributions.  This is a concrete improvement over single-tree Barnes-Hut,
 where each target individually evaluates against O(log N) source nodes.
+With `expand_far_targets=True` every target is evaluated individually, so
+the far-field evaluation is O(N log N) again.
 
 Compare with the all-to-all baseline:
 
@@ -490,8 +545,12 @@ Compare with the all-to-all baseline:
 | Aggregation        | O(N^2)              | O(N)                |
 | **Total**          | **O(N^2)**          | **O(N^2)**          |
 
-For N = 100k sources and targets, this represents a ~5000x reduction in
-interaction count (from 10 billion to ~2 million at theta=1.0).
+For an 80k-face DrivAerML communication plan at `theta = 1` (6.4e9 dense
+pairs), the plan needs 3.6e6 kernel evaluations, broadcast to 5.6e7 target
+entries, a 1,800x reduction; with
+`expand_far_targets=True` it evaluates the 5.6e7 entries individually, a 110x
+reduction.  At 800k faces the expanded plan has 8.9e8 entries against 6.4e11
+dense pairs.
 
 ---
 

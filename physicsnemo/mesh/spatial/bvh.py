@@ -67,6 +67,8 @@ _MORTON_SPREAD_STEPS: dict[int, tuple[tuple[int, int], ...]] = {
 
 def _compute_morton_codes(
     centroids: Float[torch.Tensor, "n_centroids n_spatial_dims"],
+    *,
+    isotropic: bool = False,
 ) -> Int[torch.Tensor, " n_centroids"]:
     """Compute morton codes (Z-order curve) for a set of points.
 
@@ -80,6 +82,11 @@ def _compute_morton_codes(
     ----------
     centroids : torch.Tensor
         Point coordinates, shape ``(N, D)``, any float dtype.
+    isotropic : bool, optional, default=False
+        If ``True``, every axis is quantized with the same scale (the largest
+        extent), so the Morton grid's cells are cubes. If ``False``, each axis
+        is stretched to the full grid independently, so the cells inherit the
+        aspect ratio of the bounding box.
 
     Returns
     -------
@@ -121,6 +128,8 @@ def _compute_morton_codes(
     cmin = quantization_points.min(dim=0).values  # (D,)
     cmax = quantization_points.max(dim=0).values  # (D,)
     extent = cmax - cmin
+    if isotropic:
+        extent = extent.amax().expand(D)
     # Preserve every representable nonzero extent. Constant axes have a zero
     # numerator, so replacing only their zero denominator maps them to zero.
     safe_extent = torch.where(extent != 0, extent, torch.ones_like(extent))

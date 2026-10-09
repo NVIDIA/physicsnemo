@@ -295,6 +295,26 @@ def test_adversarial_cross_plan_coverage(device, expand_far_targets):
         )
 
 
+@pytest.mark.parametrize("expand_far_targets", [False, True])
+def test_nan_point_keeps_exact_cover(device, expand_far_targets):
+    """A NaN coordinate must not drop interactions from the plan.
+
+    Every box containing the NaN point has NaN bounds and diameter, so no
+    opening test passes; the split rule must still descend such pairs to
+    their leaves (where they become exact near-field pairs and the NaN
+    reaches the output) rather than discard them.
+    """
+    points = _points(60, 3, device, seed=21)
+    points[17, 1] = float("nan")
+    _assert_exact_cover(points, theta=1.0, expand_far_targets=expand_far_targets)
+    _assert_exact_cover(
+        points,
+        _points(45, 3, device, seed=22),
+        theta=1.0,
+        expand_far_targets=expand_far_targets,
+    )
+
+
 def test_float64_plan_coverage(device):
     """Float64 trees preserve the exactly-once plan contract."""
     points = _points(97, 3, device, seed=20, dtype=torch.float64)
@@ -782,14 +802,16 @@ def test_source_aggregates_match_bruteforce(device, dtype, offset, with_zero_are
         ), f"node_total_area mismatch at node {node}"
 
 
-def test_zero_weight_internal_subtree_aggregates(device):
+@pytest.mark.parametrize("split", ["morton", "midpoint"])
+def test_zero_weight_internal_subtree_aggregates(device, split):
     """A zero-weight *internal* node reduces to exactly zero aggregates.
 
     Zeroing scattered areas only guarantees zero-weight single-point leaves.
     Here a spatially separated 8-point cluster carries zero weight: it takes the
-    highest morton codes, so it is the final contiguous block in sorted order,
-    and with ``n = 64`` the index-midpoint splits make ``[56, 64)`` (and its
-    4- and 2-point descendants) tree nodes.  With ``leaf_size=1`` these are
+    highest morton codes, so it is the final contiguous block in sorted order.
+    With ``n = 64`` the index-midpoint splits make ``[56, 64)`` (and its 4- and
+    2-point descendants) tree nodes, and the Morton splits separate the block
+    at the coarse cell boundary in front of it. With ``leaf_size=1`` these are
     internal nodes whose whole range has zero total weight, so the zero-total
     guard is exercised on internal range reductions, not only on leaves.
     """
@@ -803,7 +825,7 @@ def test_zero_weight_internal_subtree_aggregates(device):
         batch_size=[n_main + n_cluster],
         device=device,
     )
-    tree = ClusterTree.from_points(pts, leaf_size=1, areas=areas)
+    tree = ClusterTree.from_points(pts, leaf_size=1, areas=areas, split=split)
     agg = tree.compute_source_aggregates(
         source_points=pts, areas=areas, source_data=data
     )
@@ -823,7 +845,10 @@ def test_zero_weight_internal_subtree_aggregates(device):
     ### The construction must actually have produced internal zero-weight
     ### nodes (the full 8-point block plus its 4- and 2-point descendants).
     counts = sorted(int(tree.node_range_count[node]) for node in zero_internal_nodes)
-    assert counts == [2, 2, 2, 2, 4, 4, 8], counts
+    if split == "midpoint":
+        assert counts == [2, 2, 2, 2, 4, 4, 8], counts
+    else:
+        assert counts[-1] == n_cluster and len(counts) == n_cluster - 1, counts
 
 
 def test_source_aggregates_use_call_time_weights(device):
@@ -903,3 +928,270 @@ def test_validate_rejects_corrupted_plan(device):
     plan.fn_broadcast_counts[-1] = 1
     with pytest.raises(ValueError, match="out of bounds"):
         plan.validate()
+
+
+# ---------------------------------------------------------------------------
+# Split rules, admissibility masks, and expanded targets
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("split", ["morton", "midpoint"])
+@pytest.mark.parametrize("leaf_size", [1, 3])
+def test_split_rules_keep_structure_and_cover(device, split, leaf_size):
+    """Both split rules build valid partition trees with exact plan covers."""
+    clouds = _adversarial_clouds(device, 3)
+    clouds["anisotropic"] = _points(150, 3, device, seed=23) * torch.tensor(
+        [10.0, 1.0, 0.1], device=device
+    )
+    for name, points in clouds.items():
+        tree = ClusterTree.from_points(points, leaf_size=leaf_size, split=split)
+        is_leaf = tree.leaf_count > 0
+        assert (tree.leaf_count[is_leaf] <= leaf_size).all(), name
+        assert int(tree.leaf_count.sum()) == points.shape[0], name
+        is_internal = tree.node_left_child >= 0
+        left = tree.node_left_child[is_internal]
+        right = tree.node_right_child[is_internal]
+        assert (
+            tree.node_range_count[is_internal]
+            == tree.node_range_count[left] + tree.node_range_count[right]
+        ).all(), name
+        assert (tree.node_range_count[left] > 0).all(), name
+        assert (tree.node_range_count[right] > 0).all(), name
+        for theta in (0.7, 2.0):
+            for expand in (False, True):
+                plan = tree.find_dual_interaction_pairs(
+                    tree, theta=theta, expand_far_targets=expand
+                )
+                n = points.shape[0]
+                count = _coverage_counts(plan, tree, tree, n, n)
+                assert (count == 1).all(), (name, theta, expand)
+
+
+def test_morton_split_tightens_boxes(device):
+    """Splitting at Morton-cell boundaries opens fewer pairs on a surface."""
+    points = _points(4000, 3, device, seed=24)
+    points = points / points.norm(dim=-1, keepdim=True)  # a sphere
+    sizes = {}
+    for split in ("morton", "midpoint"):
+        tree = ClusterTree.from_points(points, split=split)
+        plan = tree.find_dual_interaction_pairs(
+            tree, theta=1.0, expand_far_targets=True
+        )
+        sizes[split] = plan.n_near + plan.n_nf
+    assert sizes["morton"] < 0.8 * sizes["midpoint"]
+
+
+def test_invalid_split_raises(device):
+    with pytest.raises(ValueError, match="split"):
+        ClusterTree.from_points(_points(10, 3, device), split="radix")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("expand_far_targets", [False, True])
+def test_source_admissible_mask(device, expand_far_targets):
+    """Inadmissible source nodes are never admitted; the cover stays exact."""
+    points = _points(300, 3, device, seed=25)
+    generator = torch.Generator(device="cpu").manual_seed(26)
+    for leaf_size in (1, 4):
+        tree = ClusterTree.from_points(points, leaf_size=leaf_size)
+        admissible = (torch.rand(tree.n_nodes, generator=generator) > 0.5).to(device)
+        plan = tree.find_dual_interaction_pairs(
+            tree,
+            theta=1.5,
+            expand_far_targets=expand_far_targets,
+            source_admissible=admissible,
+        )
+        admitted = torch.cat([plan.nf_source_node_ids, plan.far_source_node_ids])
+        assert admissible[admitted].all()
+        n = points.shape[0]
+        assert (_coverage_counts(plan, tree, tree, n, n) == 1).all()
+
+
+@pytest.mark.parametrize("leaf_size", [1, 4, 16])
+def test_expand_far_targets_has_no_target_side_approximation(device, leaf_size):
+    """With expand_far_targets, no entry evaluates the kernel at a target centroid."""
+    targets = _points(200, 3, device, seed=28)
+    sources = _points(250, 3, device, seed=29) + 0.5
+    target_tree = ClusterTree.from_points(targets, leaf_size=leaf_size)
+    source_tree = ClusterTree.from_points(sources, leaf_size=leaf_size)
+    plan = source_tree.find_dual_interaction_pairs(
+        target_tree, theta=1.5, expand_far_targets=True
+    )
+    assert plan.n_far_nodes == 0
+    assert plan.n_fn == 0
+    count = _coverage_counts(plan, target_tree, source_tree, 200, 250)
+    assert (count == 1).all()
+
+
+# ---------------------------------------------------------------------------
+# Point plans: the single-tree walk from individual targets
+# ---------------------------------------------------------------------------
+
+
+def _point_plan_counts(plan, tree, n_targets, n_sources):
+    """Expand a point plan's two streams into a dense (n_targets, n_sources) count."""
+    count = torch.zeros(
+        n_targets, n_sources, dtype=torch.long, device=tree.source_points.device
+    )
+    if plan.n_near:
+        count.index_put_(
+            (plan.near_target_ids, plan.near_source_ids),
+            torch.ones_like(plan.near_target_ids),
+            accumulate=True,
+        )
+    if plan.n_far:
+        positions, pair_ids = _ragged_arange(
+            tree.node_range_start[plan.far_source_node_ids],
+            tree.node_range_count[plan.far_source_node_ids],
+        )
+        count.index_put_(
+            (plan.far_target_ids[pair_ids], tree.sorted_source_order[positions]),
+            torch.ones_like(positions),
+            accumulate=True,
+        )
+    return count
+
+
+@pytest.mark.parametrize("theta", [0.0, 0.7, 1.5])
+@pytest.mark.parametrize("leaf_size", [1, 4])
+@pytest.mark.parametrize("n_dims", [2, 3])
+def test_point_plan_covers_every_pair_exactly_once(device, theta, leaf_size, n_dims):
+    """Near pairs plus expanded far nodes cover every (target, source) pair once,
+    for targets inside the cloud and far outside it."""
+    n_t, n_s = 61, 47
+    sources = _points(n_s, n_dims, device, seed=31)
+    targets = _points(n_t, n_dims, device, seed=32)
+    targets[::7] += 30.0  # distant targets admit coarse nodes
+    tree = ClusterTree.from_points(sources, leaf_size=leaf_size)
+    plan = tree.find_point_interaction_pairs(targets, theta=theta)
+    count = _point_plan_counts(plan, tree, n_t, n_s)
+    assert (count == 1).all(), f"min={count.min()}, max={count.max()}"
+    if theta == 0.0:
+        assert plan.n_far == 0 and plan.n_near == n_t * n_s
+    else:
+        assert plan.n_far > 0
+
+
+def test_point_plan_far_admissions_satisfy_mac_in_float64(device):
+    """Every far entry satisfies D_S / r < theta, recomputed in float64."""
+    theta = 0.7
+    sources = (_points(90, 3, device, seed=33) * 2.0).add(1.5)
+    targets = (_points(70, 3, device, seed=34) * 2.0).add(0.5)
+    tree = ClusterTree.from_points(sources, leaf_size=4)
+    plan = tree.find_point_interaction_pairs(targets, theta=theta)
+    assert plan.n_far > 0 and plan.n_near > 0
+    distance_squared = _aabb_distance_squared_float64(
+        targets[plan.far_target_ids],
+        tree.node_aabb_min[plan.far_source_node_ids],
+        tree.node_aabb_max[plan.far_source_node_ids],
+    )
+    assert (
+        distance_squared * theta**2 * (1.0 + _MAC_RTOL)
+        > tree.node_diameter_sq[plan.far_source_node_ids].double()
+    ).all()
+
+
+def test_point_plan_of_a_subset_is_the_subset_of_the_plan(device):
+    """A target's entries depend on the tree and the target alone."""
+    sources = _points(80, 3, device, seed=35)
+    targets = _points(50, 3, device, seed=36)
+    tree = ClusterTree.from_points(sources, leaf_size=2)
+    full = tree.find_point_interaction_pairs(targets, theta=0.8)
+    pick = torch.tensor([3, 17, 41], device=device)
+    part = tree.find_point_interaction_pairs(targets[pick], theta=0.8)
+
+    def entries(plan, t_ids, remap):
+        near = {
+            (int(remap[t]), int(s))
+            for t, s in zip(
+                plan.near_target_ids.tolist(), plan.near_source_ids.tolist()
+            )
+            if int(t) in t_ids
+        }
+        far = {
+            (int(remap[t]), int(s))
+            for t, s in zip(
+                plan.far_target_ids.tolist(), plan.far_source_node_ids.tolist()
+            )
+            if int(t) in t_ids
+        }
+        return near, far
+
+    remap_full = {int(t): i for i, t in enumerate(pick.tolist())}
+    remap_part = {i: i for i in range(len(pick))}
+    assert entries(full, set(remap_full), remap_full) == entries(
+        part, set(remap_part), remap_part
+    )
+
+
+def test_point_plan_source_admissible_mask(device):
+    """Masked source nodes never appear in the far stream, and the cover holds."""
+    sources = _points(64, 3, device, seed=37)
+    targets = _points(40, 3, device, seed=38) + 4.0
+    tree = ClusterTree.from_points(sources, leaf_size=2)
+    g = torch.Generator(device="cpu").manual_seed(39)
+    admissible = (torch.rand(tree.n_nodes, generator=g) > 0.5).to(device)
+    plan = tree.find_point_interaction_pairs(
+        targets, theta=1.0, source_admissible=admissible
+    )
+    assert admissible[plan.far_source_node_ids].all()
+    assert (_point_plan_counts(plan, tree, 40, 64) == 1).all()
+    plain = tree.find_point_interaction_pairs(targets, theta=1.0)
+    assert plan.n_near + plan.n_far >= plain.n_near + plain.n_far
+
+
+def test_point_plan_nan_target_and_source_keep_exact_cover(device):
+    """A NaN target coordinate or a NaN source coordinate opens its pairs down to
+    the exact stream instead of dropping them."""
+    sources = _points(50, 3, device, seed=40)
+    targets = _points(30, 3, device, seed=41)
+    targets[5, 1] = float("nan")
+    tree = ClusterTree.from_points(sources, leaf_size=2)
+    plan = tree.find_point_interaction_pairs(targets, theta=1.0)
+    count = _point_plan_counts(plan, tree, 30, 50)
+    assert (count == 1).all()
+    assert (plan.far_target_ids != 5).all()
+    sources_nan = sources.clone()
+    sources_nan[7, 0] = float("nan")
+    tree_nan = ClusterTree.from_points(sources_nan, leaf_size=2)
+    plan = tree_nan.find_point_interaction_pairs(
+        _points(30, 3, device, seed=41), theta=1.0
+    )
+    assert (_point_plan_counts(plan, tree_nan, 30, 50) == 1).all()
+
+
+def test_point_plan_empty_cases_and_validation(device):
+    """Empty trees or target sets give empty plans; validate rejects a corrupted one."""
+    tree = ClusterTree.from_points(_points(10, 3, device, seed=42))
+    empty = tree.find_point_interaction_pairs(
+        torch.empty(0, 3, device=device), theta=1.0
+    )
+    assert empty.n_near == 0 and empty.n_far == 0
+    none = ClusterTree.from_points(torch.empty(0, 3, device=device))
+    plan = none.find_point_interaction_pairs(_points(4, 3, device, seed=43), theta=1.0)
+    assert plan.n_near == 0 and plan.n_far == 0
+    plan = tree.find_point_interaction_pairs(_points(4, 3, device, seed=43), theta=0.0)
+    plan.validate()
+    assert plan.n_near == 40
+    plan.near_source_ids = plan.near_source_ids[:-1]
+    with pytest.raises(ValueError, match="Shape mismatch"):
+        plan.validate()
+
+
+def test_point_plan_is_cheaper_than_the_dual_plan_for_sparse_targets(device):
+    """Scattered targets around a surface-like cloud: the point plan needs fewer
+    kernel evaluations than the dual plan with expanded far targets, which charges
+    each target leaf's own extent."""
+    g = torch.Generator(device="cpu").manual_seed(44)
+    angles = torch.rand(2000, generator=g) * 6.283185307179586
+    surface = torch.stack(
+        [angles.cos(), angles.sin(), 0.2 * torch.randn(2000, generator=g)], -1
+    )
+    targets = torch.randn(1500, 3, generator=g) * 6.0
+    tree = ClusterTree.from_points(surface.to(device), leaf_size=4)
+    point_plan = tree.find_point_interaction_pairs(targets.to(device), theta=1.0)
+    target_tree = ClusterTree.from_points(targets.to(device), leaf_size=4)
+    dual = tree.find_dual_interaction_pairs(
+        target_tree, theta=1.0, expand_far_targets=True
+    )
+    assert point_plan.n_near + point_plan.n_far < dual.n_near + dual.n_nf + dual.n_fn
+    assert (_point_plan_counts(point_plan, tree, 1500, 2000) == 1).all()

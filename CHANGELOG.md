@@ -62,8 +62,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`bias_fn`, `bias_int_fn`, `slope_fn`); users can select all four
   solvers by string key through `physicsnemo.diffusion.samplers.sample`.
 
+- `ClusterTree.find_dual_interaction_pairs(source_admissible=...)` marks source
+  nodes that must never be approximated by their aggregate, such as nodes
+  whose normals differ too much.
+- `ClusterTree.find_point_interaction_pairs` builds a Barnes-Hut plan for
+  individual target points by a single-tree walk (every point reads nearby
+  sources exactly and distant nodes through their aggregates). For scattered
+  targets such as volume prediction points it replaces
+  `find_dual_interaction_pairs(expand_far_targets=True)`, whose criterion
+  charges the target leaf's own extent: on a 200k-face car with 200k volume
+  points the dual plan held 1.6e9 pairs at `theta=0.5` and the point plan
+  holds 1.5e8.
+
 ### Changed
 
+- `ClusterTree` builds tighter trees by default (`split="morton"`), so
+  Barnes-Hut plans need 2-4x fewer interactions at the same `theta`.
+  `split="midpoint"` gives the previous trees.
+- GLOBE's default `theta` is 0.6 (was 1.0): with the new trees, it is as
+  accurate as 1.0 was before and still 1.5x faster.
+- GLOBE's default `expand_far_targets` is `True` (was `False`), as in its
+  examples.
+- `ClusterTree.compute_source_aggregates` is 20-30x faster, and
+  `ClusterTree.find_dual_interaction_pairs` is up to 1.7x faster with 40% less
+  peak memory. The plan's interactions are no longer sorted by source.
+- GLOBE's `BarnesHutKernel` needs less memory to train: an 80k-face DrivAerML
+  training step no longer runs out of memory.
 - Refresh core, optional, development, and container dependency versions.
   Require PyTorch 2.13 or newer and TensorDict 0.14.2 or newer;
   use PyTorch 2.13's CUDA 12.9 wheels for the CUDA 12 backend. NATTEN
@@ -205,6 +229,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   surfaces. Before, they shrank with the fraction of cells kept.
 - The unified external aero recipe documents how surface subsampling affects
   force integration.
+- `ClusterTree.find_dual_interaction_pairs` returned an empty plan if any point
+  had a NaN coordinate, and failed on plans with more than 2^31 interactions.
+- `ClusterTree.from_points` no longer keeps the autograd graph of its inputs.
+- With `expand_far_targets=True` and `leaf_size > 1`,
+  `ClusterTree.find_dual_interaction_pairs` still approximated some targets by
+  their leaf's centroid.
 - Checkpoint loading resolves model weights at the selected training checkpoint's
   filename index, preventing resumes that mix epochs. Missing required weights
   raise before any model or training state is restored. Distributed loads validate

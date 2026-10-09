@@ -1036,8 +1036,8 @@ def test_all_four_categories_active_and_correct(
     exact_result = exact_kernel(**data)
 
     ### Sweep theta to find one where all four categories are active.
-    # With balanced geometry (source and target at same scale) and
-    # theta=1.0, the diagnostic shows near=751, nf=200, fn=131, far=2.
+    # With balanced geometry (source and target at same scale), all four
+    # are usually active at theta=1.0 already.
     for theta in [1.0, 1.5, 2.0]:
         source_tree = ClusterTree.from_points(source_pts, leaf_size=4)
         target_tree = ClusterTree.from_points(target_pts, leaf_size=4)
