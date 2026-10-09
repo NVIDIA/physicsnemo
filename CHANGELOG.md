@@ -74,8 +74,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Vertex angles, solid angles and FEM cotangent weights use closed-form 2x2
   and 3x3 determinants and inverses instead of batched `torch.linalg` calls on
   millions of tiny matrices. On a GB300, vertex angles, Gaussian curvature and
-  quality metrics of planar and tetrahedral meshes are 30-130x faster with 28%
-  less peak memory, and the DEC Laplacian, mean curvature and Laplacian
+  quality metrics of planar and tetrahedral meshes are 30-1100x faster with
+  38-90% less peak memory, and the DEC Laplacian, mean curvature and Laplacian
   smoothing are 1.9-3.2x faster (26-120x on CPU).
 - GLOBE's field declarations are renamed after the schemas they hold:
   `output_field_ranks`, `boundary_source_data_ranks` and `global_data_ranks`
@@ -177,6 +177,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Triangle areas use direct area components and a rescaled norm, preserving
   thin faces and their quadrature measures without Gram cancellation or
   overflow/underflow in the norm.
+- Vertex angles of nearly flat triangles in 2D and nearly flat tetrahedra are
+  now accurate. A 2D triangle with an angle near pi used to get angles of 0, 0
+  and 0, which also threw off Gaussian curvature and quality metrics.
 - Unified external aero recipe: near-wall SDF normals no longer flip inward
   from float32 roundoff. Stored signed distances are unchanged.
 - Fixes mesh dtype handling: preserves integer-coordinate precision, normalizes
