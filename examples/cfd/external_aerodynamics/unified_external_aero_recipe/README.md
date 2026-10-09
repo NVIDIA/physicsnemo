@@ -128,7 +128,8 @@ flowchart LR
   Augmentations are inserted after `CenterMesh` by the dataset builder.
   Rotation is restricted to the vertical axis.  Translation is restricted
   to horizontal axes by setting the vertical component of the offset
-  distribution to zero.
+  distribution to zero (`low == high`), which needs
+  `validate_args: false` on the `Uniform`.
 
 - **NonDimensionalizeByMetadata** — Converts raw physical fields into
   non-dimensional coefficients using the per-sample freestream
@@ -648,6 +649,7 @@ pipeline:
         high:
           _target_: torch.tensor
           data: [1.0, 1.0, 0.0]
+        validate_args: false
   transforms:
     - _target_: ${dp:DropMeshFields}
       global_data: [TimeValue]
