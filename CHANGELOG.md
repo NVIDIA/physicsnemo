@@ -108,6 +108,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   available, and nested mesh types survive memmap round trips. The memmap
   layout is unchanged: existing `.pmsh` / `.pdmsh` files remain readable, and
   new files are byte-identical to those written with the decorator.
+- Mesh facet extraction, repair, merging, smoothing, subdivision and quality
+  metrics avoid CUDA synchronizations hidden in indexing with Python lists,
+  blocking copies of small host tables, boolean masks and one `.item()` per
+  count. Laplacian smoothing synchronizes at most 4 times instead of about 30,
+  independent of the number of iterations, and `remove_degenerate_cells` is
+  about 5x faster. Results are unchanged.
 - Mesh integration uses a shared `_effective_measure` field for complete cell
   and point measures. Cell measures fall back to geometry; point measures are
   explicit and independent of connectivity. `Mesh.integrate_samples` evaluates

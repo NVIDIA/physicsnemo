@@ -347,7 +347,8 @@ def subdivide_butterfly(mesh: "Mesh") -> "Mesh":
 
     ### Get subdivision pattern (same as linear)
     subdivision_pattern = get_subdivision_pattern(mesh.n_manifold_dims)
-    subdivision_pattern = subdivision_pattern.to(mesh.cells.device)
+    # non_blocking: a small pageable host table, staged by CUDA before returning
+    subdivision_pattern = subdivision_pattern.to(mesh.cells.device, non_blocking=True)
 
     ### Generate child cells (same topology as linear)
     child_cells, parent_indices = generate_child_cells(

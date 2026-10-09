@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import itertools
 import math
 import types
 from collections.abc import Mapping
@@ -924,7 +925,7 @@ class Mesh(
         cached = self._cache.get(("cell", "areas"), None)
         if cached is None:
             relative_vectors = (
-                self.points[self.cells[:, 1:]] - self.points[self.cells[:, [0]]]
+                self.points[self.cells[:, 1:]] - self.points[self.cells[:, :1]]
             )
             cached = compute_cell_areas(relative_vectors)
             self._cache["cell", "areas"] = cached
@@ -1400,14 +1401,11 @@ class Mesh(
         ### Merge the meshes
 
         # Compute the number of points for each mesh, cumulatively, so that we can update
-        # the point indices for the constituent cells arrays accordingly.
-        n_points_for_meshes = torch.tensor(
-            [m.n_points for m in meshes],
-            device=meshes[0].points.device,
+        # the point indices for the constituent cells arrays accordingly. Python ints
+        # keep this on the host (device offsets would cost synchronizations).
+        cell_index_offsets = itertools.accumulate(
+            (m.n_points for m in meshes[:-1]), initial=0
         )
-        cumsum_n_points = torch.cumsum(n_points_for_meshes, dim=0)
-        cell_index_offsets = cumsum_n_points.roll(1)
-        cell_index_offsets[0] = 0
 
         from physicsnemo.mesh.calculus.measure import (
             EFFECTIVE_MEASURE_KEY,

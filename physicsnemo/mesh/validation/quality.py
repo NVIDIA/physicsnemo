@@ -98,14 +98,10 @@ def _compute_simplex_altitudes(
 
     cell_vertices = mesh.points[mesh.cells]
     vertex_indices = torch.arange(n_vertices_per_cell, device=mesh.cells.device)
-    facet_mask = ~torch.eye(
-        n_vertices_per_cell,
-        dtype=torch.bool,
-        device=mesh.cells.device,
-    )
-    facet_indices = vertex_indices.expand(n_vertices_per_cell, -1)[facet_mask].reshape(
-        n_vertices_per_cell, n_manifold_dims
-    )
+    # Row k lists the vertices of the facet opposite vertex k (every index but k),
+    # built arithmetically: a boolean-mask index would synchronize the device.
+    facet_positions = torch.arange(n_manifold_dims, device=mesh.cells.device)
+    facet_indices = facet_positions + (facet_positions >= vertex_indices[:, None])
     facet_vertices = cell_vertices[:, facet_indices]
     facet_relative_vectors = facet_vertices[..., 1:, :] - facet_vertices[..., :1, :]
     facet_measures = compute_cell_areas(facet_relative_vectors.flatten(0, 1)).unflatten(
