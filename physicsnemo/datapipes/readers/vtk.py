@@ -30,6 +30,7 @@ import numpy as np
 import torch
 
 from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.datapipes.caching import DatasetCache
 from physicsnemo.datapipes.readers.base import Reader
 from physicsnemo.datapipes.registry import register
 
@@ -98,6 +99,7 @@ class VTKReader(Reader):
         exclude_patterns: Optional[list[str]] = None,
         pin_memory: bool = False,
         include_index_in_metadata: bool = True,
+        cache: DatasetCache | None = None,
     ) -> None:
         """
         Initialize the VTK reader.
@@ -115,6 +117,10 @@ class VTKReader(Reader):
             If True, place tensors in pinned memory for faster GPU transfer.
         include_index_in_metadata : bool, default=True
             If True, include sample index in metadata.
+        cache : DatasetCache, optional
+            Optional :class:`~physicsnemo.datapipes.caching.DatasetCache`.
+            Caches the per-sample file resolution (a directory scan per
+            sample per file type otherwise).
 
         Raises
         ------
@@ -136,6 +142,7 @@ class VTKReader(Reader):
         super().__init__(
             pin_memory=pin_memory,
             include_index_in_metadata=include_index_in_metadata,
+            cache=cache,
         )
 
         self.path = Path(path)
@@ -193,13 +200,33 @@ class VTKReader(Reader):
         return False
 
     def _get_file_by_extension(self, directory: Path, extension: str) -> Optional[Path]:
-        """Get the first file with the given extension, excluding patterns."""
-        for file in directory.iterdir():
-            if file.suffix == extension:
-                # Check if any exclude pattern is in the filename
-                if not any(pattern in file.name for pattern in self.exclude_patterns):
-                    return file
-        return None
+        """Get the first file with the given extension, excluding patterns.
+
+        The resolution (a directory scan per sample per file type) is routed
+        through the optional reader cache.
+        """
+
+        def _scan() -> Optional[str]:
+            for file in sorted(directory.iterdir()):
+                if file.suffix == extension:
+                    # Check if any exclude pattern is in the filename
+                    if not any(
+                        pattern in file.name for pattern in self.exclude_patterns
+                    ):
+                        return str(file)
+            return None
+
+        if self._cache is None:
+            found = _scan()
+        else:
+            # Identity includes extension and exclude patterns: readers with
+            # different configs sharing one cache must not cross-hit.
+            identity = (
+                f"{directory.resolve()}::{extension}"
+                f"::{','.join(sorted(self.exclude_patterns))}"
+            )
+            found = self._cache.get_or_load(("vtk-file/v1", identity), _scan)
+        return Path(found) if found is not None else None
 
     def _read_stl_data(self, stl_path: Path) -> dict[str, torch.Tensor]:
         """Read data from an STL file."""
