@@ -18,7 +18,7 @@ During training, the model receives data corrupted by varying amounts of
 noise. It learns to predict the clean data (or, equivalently, the noise
 or the score) from the corrupted version. At inference time, the model
 starts from pure noise and iteratively removes it, step by step, to produce
-a new sample.  
+a new sample.
 
 Flow matching is a related paradigm. Instead of reversing a noising
 process, the model learns a velocity field that transports samples along a
@@ -39,13 +39,13 @@ or constraints.
 
 The framework is organized around a small number of clearly defined
 abstractions. Each abstraction maps to a specific role in the diffusion or
-flow-matching pipeline and the abstractions compose naturally. The abstractions include: 
+flow-matching pipeline and the abstractions compose naturally. The abstractions include:
 
-* a :ref:`noise scheduler <diffusion_noise_schedulers>` to control the forward and reverse processes 
-* a :ref:`model backbone <diffusion_model_backbones>` to implement the neural network 
-* a :ref:`preconditioner <diffusion_preconditioners>` to rescale model inputs and outputs for stable training 
-* a :ref:`loss function <diffusion_metrics>` to define the training objective 
-* a :ref:`sampler <diffusion_samplers>` to generate new data at inference time 
+* a :ref:`noise scheduler <diffusion_noise_schedulers>` to control the forward and reverse processes
+* a :ref:`model backbone <diffusion_model_backbones>` to implement the neural network
+* a :ref:`preconditioner <diffusion_preconditioners>` to rescale model inputs and outputs for stable training
+* a :ref:`loss function <diffusion_metrics>` to define the training objective
+* a :ref:`sampler <diffusion_samplers>` to generate new data at inference time
 * a :ref:`guidance <diffusion_guidance>` to steer the sampling toward desired properties
 
 
@@ -99,12 +99,12 @@ Design Philosophy: Layered Customization
 -----------------------------------------
 
 Diffusion and flow-matching models span a wide spectrum of applications in scientific
-machine learning and physics-AI, with users who have different needs, for example: 
+machine learning and physics-AI, with users who have different needs, for example:
 
 * diffusion and flow-matching experts who require full control over the forward
   process, the solver, or the guidance mechanism
 * domain experts in science and engineering who use diffusion or flow matching
-  as a tool and need reliable, easy-to-use components  
+  as a tool and need reliable, easy-to-use components
 
 The framework is designed to serve both audiences.
 

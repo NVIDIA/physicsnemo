@@ -50,6 +50,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     functions in `LinearGaussianNoiseScheduler` (`x0_to_flow` / `flow_to_x0`
     / `score_to_flow` / `flow_to_score`) and the corresponding conversion
     callbacks everywhere conversions between prediction types are necessary.
+- Adds `ExponentialEulerSolver`, `EDMStochasticExponentialEulerSolver`,
+  `DPMPlusPlus2M`, and `DPMPlusPlus2MUniC2` to
+  `physicsnemo.diffusion.samplers`. `ExponentialEulerSolver` supports
+  DDIM-like sampling for distilled few-step models, its stochastic
+  counterpart adds EDM-style churn and configurable re-noising,
+  `DPMPlusPlus2M` provides efficient second-order sampling, and
+  `DPMPlusPlus2MUniC2` adds a UniC-2 corrector stage that raises
+  DPM-Solver++(2M) to third order while keeping one denoiser evaluation
+  per step. The solvers share an extended semi-linear callback API
+  (`bias_fn`, `bias_int_fn`, `slope_fn`); users can select all four
+  solvers by string key through `physicsnemo.diffusion.samplers.sample`.
 
 ### Changed
 
@@ -123,6 +134,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cells out of a mesh with hundreds of millions of vertices). Index
   normalization avoids allocating a full-mesh range and preserves empty slices,
   integer indices, and boolean masks. Point fields use ordinary indexed gathers.
+- Extends `LinearGaussianNoiseScheduler` with two methods.
+  `get_linear_denoiser` accepts `prediction_type` and `denoising_type`, and
+  returns bias, antiderivative, and slope callables for the new exponential
+  and multistep solvers. `snr` exposes the schedule's signal-to-noise ratio,
+  used as the multistep extrapolation coordinate by `DPMPlusPlus2M` and
+  `DPMPlusPlus2MUniC2`.
+
+- `translate`, `rotate`, `scale` and their `DomainMesh` and datapipe
+  counterparts no longer synchronize CUDA for Python-number arguments, string
+  axes, rotations and scalar scales, so they return without waiting for queued
+  GPU work. `transform` gains `assume_similarity` and `rotate` gains
+  `assume_valid_axis`, to skip the remaining runtime checks for general
+  matrices and device-tensor axes. Cached normals are mapped with one small
+  inverse instead of `solve_ex` with millions of right-hand sides, whose slow
+  path for pivoting matrices made `RandomRotateMesh(mode="uniform")` take 1.3 s
+  on the 17.7M-triangle DrivAerML surface (6.5 ms now, on a GB300).
 
 - The `tolerance` of `sample_data_at_points`, `find_containing_cells` and
   `find_all_containing_cells` is now relative. Barycentric coordinates must
@@ -174,6 +201,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Seeded `DomainMeshReader` subsamples select the same rows from zarr stores
   as from memmap files. Before, boundaries read in full, and interiors read
   with `drop_interior_cells`, could differ between the two formats.
+- GLOBE DrivAerML postprocessing reports correct Cd, Cl, and Cs on subsampled
+  surfaces. Before, they shrank with the fraction of cells kept.
+- The unified external aero recipe documents how surface subsampling affects
+  force integration.
 - Checkpoint loading resolves model weights at the selected training checkpoint's
   filename index, preventing resumes that mix epochs. Missing required weights
   raise before any model or training state is restored. Distributed loads validate
@@ -232,6 +263,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   point has more than 32 BVH candidate cells (for example, near a vertex shared
   by many triangles, or with a prebuilt BVH with `leaf_size > 1`). The BVH
   candidate search used by these functions no longer caps candidates per point.
+- Fixes `VPNoiseScheduler.sigma_inv` at extreme noise levels. In particular,
+  converting `sigma=0` no longer returns a slightly negative diffusion time.
 
 ### Security
 
