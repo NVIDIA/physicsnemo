@@ -84,7 +84,9 @@ def _compute_1d_turning_angle_sums(mesh: "Mesh") -> torch.Tensor:
     Returns
     -------
     torch.Tensor
-        Turning angle sum at each vertex, shape ``(n_points,)``.
+        Sum of the interior angles between the incident edges at each vertex,
+        shape ``(n_points,)``. At a vertex with two edges, this is pi minus the
+        turning angle.
     """
     device = mesh.points.device
     n_points = mesh.n_points
@@ -135,7 +137,9 @@ def _compute_1d_turning_angle_sums(mesh: "Mesh") -> torch.Tensor:
             dot = (v_from_prev * v_to_next).sum(dim=-1)
             interior_angles = torch.pi - torch.atan2(cross_z, dot)
         else:
-            interior_angles = stable_angle_between_vectors(v_from_prev, v_to_next)
+            # The interior angle is between the two edges as seen from the vertex;
+            # the angle between v_from_prev and v_to_next is the turning angle.
+            interior_angles = stable_angle_between_vectors(-v_from_prev, v_to_next)
 
         angle_sums[two_edge_indices] = interior_angles
 

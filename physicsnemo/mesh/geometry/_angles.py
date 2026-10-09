@@ -65,7 +65,10 @@ def stable_angle_between_vectors(v1: torch.Tensor, v2: torch.Tensor) -> torch.Te
     """Compute angle between vectors using numerically stable atan2 formula.
 
     More stable than ``acos(dot product)`` which suffers from numerical
-    issues when vectors are nearly parallel or anti-parallel.
+    issues when vectors are nearly parallel or anti-parallel. The magnitude
+    ``|v1 x v2|`` comes from the cross product (in 2D and 3D) or the 2x2 minors
+    of ``[v1; v2]`` (in other dimensions), not from
+    ``|v1|^2 |v2|^2 - (v1 . v2)^2``, which cancels for those vectors.
 
     Parameters
     ----------
@@ -90,11 +93,20 @@ def stable_angle_between_vectors(v1: torch.Tensor, v2: torch.Tensor) -> torch.Te
     """
     dot_product = (v1 * v2).sum(dim=-1)
 
-    v1_norm = torch.linalg.vector_norm(v1, dim=-1)
-    v2_norm = torch.linalg.vector_norm(v2, dim=-1)
-
-    cross_magnitude_sq = torch.clamp(v1_norm**2 * v2_norm**2 - dot_product**2, min=0)
-    return torch.atan2(torch.sqrt(cross_magnitude_sq), dot_product)
+    n_dims = v1.shape[-1]
+    if n_dims == 2:
+        cross_magnitude = (v1[..., 0] * v2[..., 1] - v1[..., 1] * v2[..., 0]).abs()
+    elif n_dims == 3:
+        cross_magnitude = torch.linalg.vector_norm(
+            torch.linalg.cross(v1, v2, dim=-1), dim=-1
+        )
+    else:
+        # |v1 x v2|^2 is the sum of the squared 2x2 minors (Lagrange's identity)
+        i, j = torch.triu_indices(n_dims, n_dims, offset=1, device=v1.device)
+        cross_magnitude = torch.linalg.vector_norm(
+            v1[..., i] * v2[..., j] - v1[..., j] * v2[..., i], dim=-1
+        )
+    return torch.atan2(cross_magnitude, dot_product)
 
 
 def compute_triangle_angles(

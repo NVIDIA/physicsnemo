@@ -228,6 +228,44 @@ class TestClosedCurveAngleSums:
             f"Relative error {relative_error:.3f} unexpectedly large for 1% noise"
         )
 
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+    def test_circle_in_3d_matches_2d(self, device, dtype):
+        """A curve has the same angles and Gaussian curvature in 2D and in 3D."""
+        circle = circle_2d.load(radius=1.0, n_points=200, device=device)
+        mesh_2d = Mesh(points=circle.points.to(dtype), cells=circle.cells)
+        rotation, _ = torch.linalg.qr(
+            torch.tensor(
+                [[1.0, 2.0, 3.0], [0.0, 1.0, 4.0], [5.0, 6.0, 0.0]], dtype=dtype
+            )
+        )
+        mesh_3d = Mesh(
+            points=torch.nn.functional.pad(mesh_2d.points, (0, 1))
+            @ rotation.T.to(device),
+            cells=circle.cells,
+        )
+
+        torch.testing.assert_close(
+            compute_angles_at_vertices(mesh_3d), compute_angles_at_vertices(mesh_2d)
+        )
+        curvature_2d = mesh_2d.gaussian_curvature_vertices
+        torch.testing.assert_close(
+            mesh_3d.gaussian_curvature_vertices, curvature_2d, rtol=1e-4, atol=1e-4
+        )
+        torch.testing.assert_close(
+            curvature_2d, torch.ones_like(curvature_2d), rtol=0, atol=1e-3
+        )
+
+    def test_straight_polyline_in_3d_is_flat(self, device):
+        """A straight polyline in 3D has zero curvature at its interior vertex."""
+        mesh = Mesh(
+            points=torch.tensor(
+                [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0], [2.0, 2.0, 2.0]], device=device
+            ),
+            cells=torch.tensor([[0, 1], [1, 2]], device=device),
+        )
+        assert compute_angles_at_vertices(mesh)[1] == pytest.approx(torch.pi)
+        assert mesh.gaussian_curvature_vertices[1] == pytest.approx(0.0, abs=1e-6)
+
 
 ###############################################################################
 # 2D Manifolds (Closed Surfaces)
@@ -598,6 +636,23 @@ class TestHigherDimensionalAngles:
         angle = stable_angle_between_vectors(v1, v2)
 
         assert torch.abs(angle - torch.pi / 2) < 1e-6
+
+    @pytest.mark.parametrize("n_dims", [2, 3, 4])
+    def test_stable_angle_between_nearly_parallel_vectors(self, device, n_dims):
+        """Angles near 0 and pi keep their float32 accuracy."""
+        theta = torch.tensor(
+            [1e-5, 1e-3, torch.pi - 1e-3, torch.pi - 1e-5], device=device
+        )
+        v1 = torch.zeros(4, n_dims, device=device)
+        v1[:, 0] = 1.0
+        v2 = torch.zeros(4, n_dims, device=device)
+        v2[:, 0], v2[:, 1] = theta.cos(), theta.sin()
+
+        # The exact angle between the float32 vectors, which round theta
+        expected = torch.atan2(v2[:, 1].double(), v2[:, 0].double()).float()
+        torch.testing.assert_close(
+            stable_angle_between_vectors(v1, v2), expected, rtol=1e-6, atol=0
+        )
 
     def test_edges_in_higher_dim_space(self, device):
         """Test 1D manifold (edges) embedded in higher dimensional space."""
