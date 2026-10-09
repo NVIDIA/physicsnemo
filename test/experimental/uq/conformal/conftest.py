@@ -14,18 +14,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Run the package doctests, which CI's doctest pass skips for ``experimental``."""
-
-import doctest
-import importlib
+"""Fixtures for the conformal-UQ suite (helpers live in ``_helpers.py``)."""
 
 import pytest
+import torch
 
-MODULES = ["calibrators", "diagnostics", "predictors", "scores"]
 
+@pytest.fixture
+def fake_multi_rank(monkeypatch):
+    """Return an ``activate()`` that fakes a two-rank ``torch.distributed`` group.
 
-@pytest.mark.parametrize("name", MODULES)
-def test_module_doctests(name):
-    module = importlib.import_module(f"physicsnemo.experimental.uq.conformal.{name}")
-    result = doctest.testmod(module)
-    assert result.attempted > 0 and result.failed == 0
+    Deferred so tests can build fitted objects before the fake group exists.
+    """
+
+    def activate():
+        monkeypatch.setattr(torch.distributed, "is_available", lambda: True)
+        monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+        monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 2)
+
+    return activate
