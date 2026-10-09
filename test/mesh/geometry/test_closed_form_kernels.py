@@ -27,9 +27,9 @@ import torch
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.geometry._angles import compute_vertex_angles
 from physicsnemo.mesh.geometry.dual_meshes import compute_cotan_weights_fem
-from physicsnemo.mesh.utilities._small_linalg import small_det, small_inverse
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 from physicsnemo.mesh.utilities._topology import extract_unique_edges
+from physicsnemo.utils._small_linalg import small_det, small_inverse
 from test.mesh.mesh.test_slicing_sync import _cuda_sync_budget
 
 

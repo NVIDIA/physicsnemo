@@ -53,8 +53,8 @@ from typing import TYPE_CHECKING
 import torch
 from jaxtyping import Float, Int
 
-from physicsnemo.mesh.utilities._small_linalg import small_det, small_inverse
 from physicsnemo.mesh.utilities._tolerances import safe_eps
+from physicsnemo.utils._small_linalg import small_det, small_inverse
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh

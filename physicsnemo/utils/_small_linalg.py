@@ -18,7 +18,9 @@
 
 Batched ``torch.linalg`` calls factorize every tiny matrix separately, which is
 slow on GPUs and a loop of LAPACK calls on CPUs. Meshes have one such matrix
-per cell, so these helpers use closed forms for matrices up to 3x3.
+per cell, so these helpers use closed forms for matrices up to 3x3. They use
+only elementwise products and sums, so they need no CUDA synchronization and
+support autograd and reduced-precision dtypes.
 """
 
 import torch
@@ -64,11 +66,14 @@ def small_inverse(
             ],
             dim=-2,
         )
+        det = small_det(matrices)
     elif n == 3:
         # Row i of the cofactor matrix is the cross product of rows i + 1 and
-        # i + 2 (mod 3); the adjugate is its transpose.
+        # i + 2 (mod 3); the adjugate is its transpose. Expanding along row 0
+        # gives the determinant from the same cofactors.
         cofactors = torch.linalg.cross(m.roll(-1, dims=-2), m.roll(-2, dims=-2), dim=-1)
         adjugate = cofactors.transpose(-1, -2)
+        det = (m[..., 0, :] * cofactors[..., 0, :]).sum(-1)
     else:
         return torch.linalg.inv_ex(matrices, check_errors=False).inverse
-    return adjugate / small_det(matrices)[..., None, None]
+    return adjugate / det[..., None, None]
