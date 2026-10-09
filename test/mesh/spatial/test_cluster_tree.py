@@ -1020,3 +1020,154 @@ def test_expand_far_targets_has_no_target_side_approximation(device, leaf_size):
     assert plan.n_fn == 0
     count = _coverage_counts(plan, target_tree, source_tree, 200, 250)
     assert (count == 1).all()
+
+
+# ---------------------------------------------------------------------------
+# Point plans: the single-tree walk from individual targets
+# ---------------------------------------------------------------------------
+
+
+def _point_plan_counts(plan, tree, n_targets, n_sources):
+    """Expand a point plan's two streams into a dense (n_targets, n_sources) count."""
+    count = torch.zeros(
+        n_targets, n_sources, dtype=torch.long, device=tree.source_points.device
+    )
+    if plan.n_near:
+        count.index_put_(
+            (plan.near_target_ids, plan.near_source_ids),
+            torch.ones_like(plan.near_target_ids),
+            accumulate=True,
+        )
+    if plan.n_far:
+        positions, pair_ids = _ragged_arange(
+            tree.node_range_start[plan.far_source_node_ids],
+            tree.node_range_count[plan.far_source_node_ids],
+        )
+        count.index_put_(
+            (plan.far_target_ids[pair_ids], tree.sorted_source_order[positions]),
+            torch.ones_like(positions),
+            accumulate=True,
+        )
+    return count
+
+
+@pytest.mark.parametrize("theta", [0.0, 0.7, 1.5])
+@pytest.mark.parametrize("leaf_size", [1, 4])
+@pytest.mark.parametrize("n_dims", [2, 3])
+def test_point_plan_covers_every_pair_exactly_once(device, theta, leaf_size, n_dims):
+    """Near pairs plus expanded far nodes cover every (target, source) pair once,
+    for targets inside the cloud and far outside it."""
+    n_t, n_s = 61, 47
+    sources = _points(n_s, n_dims, device, seed=31)
+    targets = _points(n_t, n_dims, device, seed=32)
+    targets[::7] += 30.0  # distant targets admit coarse nodes
+    tree = ClusterTree.from_points(sources, leaf_size=leaf_size)
+    plan = tree.find_point_interaction_pairs(targets, theta=theta)
+    count = _point_plan_counts(plan, tree, n_t, n_s)
+    assert (count == 1).all(), f"min={count.min()}, max={count.max()}"
+    if theta == 0.0:
+        assert plan.n_far == 0 and plan.n_near == n_t * n_s
+    else:
+        assert plan.n_far > 0
+
+
+def test_point_plan_far_admissions_satisfy_mac_in_float64(device):
+    """Every far entry satisfies D_S / r < theta, recomputed in float64."""
+    theta = 0.7
+    sources = (_points(90, 3, device, seed=33) * 2.0).add(1.5)
+    targets = (_points(70, 3, device, seed=34) * 2.0).add(0.5)
+    tree = ClusterTree.from_points(sources, leaf_size=4)
+    plan = tree.find_point_interaction_pairs(targets, theta=theta)
+    assert plan.n_far > 0 and plan.n_near > 0
+    distance_squared = _aabb_distance_squared_float64(
+        targets[plan.far_target_ids],
+        tree.node_aabb_min[plan.far_source_node_ids],
+        tree.node_aabb_max[plan.far_source_node_ids],
+    )
+    assert (
+        distance_squared * theta**2 * (1.0 + _MAC_RTOL)
+        > tree.node_diameter_sq[plan.far_source_node_ids].double()
+    ).all()
+
+
+def test_point_plan_of_a_subset_is_the_subset_of_the_plan(device):
+    """A target's entries depend on the tree and the target alone."""
+    sources = _points(80, 3, device, seed=35)
+    targets = _points(50, 3, device, seed=36)
+    tree = ClusterTree.from_points(sources, leaf_size=2)
+    full = tree.find_point_interaction_pairs(targets, theta=0.8)
+    pick = torch.tensor([3, 17, 41], device=device)
+    part = tree.find_point_interaction_pairs(targets[pick], theta=0.8)
+
+    def entries(plan, t_ids, remap):
+        near = {(int(remap[t]), int(s)) for t, s in zip(plan.near_target_ids.tolist(), plan.near_source_ids.tolist()) if int(t) in t_ids}
+        far = {(int(remap[t]), int(s)) for t, s in zip(plan.far_target_ids.tolist(), plan.far_source_node_ids.tolist()) if int(t) in t_ids}
+        return near, far
+
+    remap_full = {int(t): i for i, t in enumerate(pick.tolist())}
+    remap_part = {i: i for i in range(len(pick))}
+    assert entries(full, set(remap_full), remap_full) == entries(part, set(remap_part), remap_part)
+
+
+def test_point_plan_source_admissible_mask(device):
+    """Masked source nodes never appear in the far stream, and the cover holds."""
+    sources = _points(64, 3, device, seed=37)
+    targets = _points(40, 3, device, seed=38) + 4.0
+    tree = ClusterTree.from_points(sources, leaf_size=2)
+    g = torch.Generator(device="cpu").manual_seed(39)
+    admissible = (torch.rand(tree.n_nodes, generator=g) > 0.5).to(device)
+    plan = tree.find_point_interaction_pairs(targets, theta=1.0, source_admissible=admissible)
+    assert admissible[plan.far_source_node_ids].all()
+    assert (_point_plan_counts(plan, tree, 40, 64) == 1).all()
+    plain = tree.find_point_interaction_pairs(targets, theta=1.0)
+    assert plan.n_near + plan.n_far >= plain.n_near + plain.n_far
+
+
+def test_point_plan_nan_target_and_source_keep_exact_cover(device):
+    """A NaN target coordinate or a NaN source coordinate opens its pairs down to
+    the exact stream instead of dropping them."""
+    sources = _points(50, 3, device, seed=40)
+    targets = _points(30, 3, device, seed=41)
+    targets[5, 1] = float("nan")
+    tree = ClusterTree.from_points(sources, leaf_size=2)
+    plan = tree.find_point_interaction_pairs(targets, theta=1.0)
+    count = _point_plan_counts(plan, tree, 30, 50)
+    assert (count == 1).all()
+    assert (plan.far_target_ids != 5).all()
+    sources_nan = sources.clone()
+    sources_nan[7, 0] = float("nan")
+    tree_nan = ClusterTree.from_points(sources_nan, leaf_size=2)
+    plan = tree_nan.find_point_interaction_pairs(_points(30, 3, device, seed=41), theta=1.0)
+    assert (_point_plan_counts(plan, tree_nan, 30, 50) == 1).all()
+
+
+def test_point_plan_empty_cases_and_validation(device):
+    """Empty trees or target sets give empty plans; validate rejects a corrupted one."""
+    tree = ClusterTree.from_points(_points(10, 3, device, seed=42))
+    empty = tree.find_point_interaction_pairs(torch.empty(0, 3, device=device), theta=1.0)
+    assert empty.n_near == 0 and empty.n_far == 0
+    none = ClusterTree.from_points(torch.empty(0, 3, device=device))
+    plan = none.find_point_interaction_pairs(_points(4, 3, device, seed=43), theta=1.0)
+    assert plan.n_near == 0 and plan.n_far == 0
+    plan = tree.find_point_interaction_pairs(_points(4, 3, device, seed=43), theta=0.0)
+    plan.validate()
+    assert plan.n_near == 40
+    plan.near_source_ids = plan.near_source_ids[:-1]
+    with pytest.raises(ValueError, match="Shape mismatch"):
+        plan.validate()
+
+
+def test_point_plan_is_cheaper_than_the_dual_plan_for_sparse_targets(device):
+    """Scattered targets around a surface-like cloud: the point plan needs fewer
+    kernel evaluations than the dual plan with expanded far targets, which charges
+    each target leaf's own extent."""
+    g = torch.Generator(device="cpu").manual_seed(44)
+    angles = torch.rand(2000, generator=g) * 6.283185307179586
+    surface = torch.stack([angles.cos(), angles.sin(), 0.2 * torch.randn(2000, generator=g)], -1)
+    targets = torch.randn(1500, 3, generator=g) * 6.0
+    tree = ClusterTree.from_points(surface.to(device), leaf_size=4)
+    point_plan = tree.find_point_interaction_pairs(targets.to(device), theta=1.0)
+    target_tree = ClusterTree.from_points(targets.to(device), leaf_size=4)
+    dual = tree.find_dual_interaction_pairs(target_tree, theta=1.0, expand_far_targets=True)
+    assert point_plan.n_near + point_plan.n_far < dual.n_near + dual.n_nf + dual.n_fn
+    assert (_point_plan_counts(point_plan, tree, 1500, 2000) == 1).all()

@@ -65,6 +65,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ClusterTree.find_dual_interaction_pairs(source_admissible=...)` marks source
   nodes that must never be approximated by their aggregate, such as nodes
   whose normals differ too much.
+- `ClusterTree.find_point_interaction_pairs` builds a Barnes-Hut plan for
+  individual target points by a single-tree walk (every point reads nearby
+  sources exactly and distant nodes through their aggregates). For scattered
+  targets such as volume prediction points it replaces
+  `find_dual_interaction_pairs(expand_far_targets=True)`, whose criterion
+  charges the target leaf's own extent: on a 200k-face car with 200k volume
+  points the dual plan held 1.6e9 pairs at `theta=0.5` and the point plan
+  holds 1.5e8.
 
 ### Changed
 

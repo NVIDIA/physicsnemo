@@ -268,6 +268,31 @@ With `expand_far_targets=True` the far-field node pairs are expanded into
 `(near, far)` entries and no `(far, near)` entries are made, so no target is
 evaluated at a node centroid.
 
+### 4.3a Point Targets: the Single-Tree Walk
+
+`ClusterTree.find_point_interaction_pairs(targets, theta)` builds a plan for
+individual target points without a target tree. Every point walks the source
+tree from the root: a node is admitted when `D_S / r < theta`, with `D_S` its
+AABB diagonal and `r` the minimum distance from the point to the box (the
+source-side half of the dual criterion; a point has no extent); a leaf that is
+not admitted contributes its sources individually; any other node hands the
+point to both children. The result is a `PointInteractionPlan` with two
+streams in traversal order, `(near_target_ids, near_source_ids)` and
+`(far_target_ids, far_source_node_ids)`, which together cover every (target,
+source) pair exactly once. A target's entries depend on the tree and that
+target alone, so the plan of a subset of the targets is the subset of the plan.
+
+Use it for scattered targets such as volume prediction points. The dual
+criterion charges the target node's own diameter `D_T`: a leaf of far-apart
+points in a sparse region of the volume is never well separated from the
+sources near it, so with `expand_far_targets=True` every point of that leaf
+reads those sources one by one, although each point alone would admit them as
+nodes. On a 200k-face car with 200k volume points the dual plan held 1.6e9
+pairs at `theta=0.5` and the point plan holds 1.5e8; for targets that are the
+sources themselves (communication layers), the dual plan's node-to-node
+entries remain the cheaper form. `source_admissible` applies as in the dual
+walk.
+
 ### 4.4 Self-Interaction and Cross-BC Interaction
 
 For communication layers with a single BC type (or the self-interaction
