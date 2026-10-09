@@ -187,3 +187,30 @@ def test_near_degenerate_square_cell_keeps_distant_circumcenter(device) -> None:
         centers, _circumcenters_solve(vertices), rtol=1e-9, atol=0
     )
     assert float(centers[0, 1]) > 1e9
+
+
+@pytest.mark.parametrize(("n_manifold_dims", "n_dims"), [(2, 4), (3, 4), (3, 5)])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_embedded_circumcenters_match_lstsq(
+    device, n_manifold_dims, n_dims, dtype
+) -> None:
+    """Cells embedded in a higher-dimensional space get the minimum-norm
+    solution, which is the circumcenter in their affine hull, also when thin."""
+    generator = torch.Generator().manual_seed(n_dims)
+    vertices = torch.randn(
+        256, n_manifold_dims + 1, n_dims, generator=generator, dtype=torch.float64
+    )
+    # Thin cells: the last vertex 1e-2 away from the facet spanned by the others.
+    vertices[:128, -1] = vertices[:128, :-1].mean(dim=1) + 1e-2 * vertices[:128, -1]
+    vertices = vertices.to(device=device, dtype=dtype)
+
+    centers = compute_circumcenters(vertices)
+
+    # Reference: CPU float64 lstsq (minimum norm) on the same (rounded) inputs.
+    v0 = vertices.double().cpu()[:, 0, :]
+    relative_vecs = vertices.double().cpu()[:, 1:, :] - v0[:, None, :]
+    rhs = (relative_vecs**2).sum(dim=-1, keepdim=True)
+    reference = v0 + torch.linalg.lstsq(2 * relative_vecs, rhs).solution.squeeze(-1)
+    radius = (vertices.double().cpu() - reference[:, None, :]).norm(dim=-1).mean(dim=-1)
+    error = (centers.double().cpu() - reference).norm(dim=-1) / radius
+    assert float(error.max()) < (1e-2 if dtype == torch.float32 else 1e-10)

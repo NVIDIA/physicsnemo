@@ -54,7 +54,7 @@ import torch
 from jaxtyping import Float, Int
 
 from physicsnemo.mesh.utilities._tolerances import safe_eps
-from physicsnemo.utils._small_linalg import small_det, small_inverse
+from physicsnemo.utils._small_linalg import small_det, small_inverse, small_lstsq
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -519,11 +519,12 @@ def compute_circumcenters(
         )
 
     ### Under-determined system (manifold embedded in higher-dim ambient space)
-    # The closed-form Gram route, inv(E E^T), squares the condition number of
-    # thin cells, so the minimum-norm least-squares solution is kept.
+    # The minimum-norm solution lies in the cell's affine hull. small_lstsq
+    # factorizes A itself; the closed-form Gram route, inv(E E^T), would square
+    # the condition number of thin cells.
     A = 2 * relative_vecs
     rhs = (relative_vecs**2).sum(dim=-1).unsqueeze(-1)  # (n_cells, n_manifold_dims, 1)
-    return v0 + torch.linalg.lstsq(A, rhs).solution.squeeze(-1)
+    return v0 + small_lstsq(A, rhs).squeeze(-1)
 
 
 def compute_cotan_weights_fem(
