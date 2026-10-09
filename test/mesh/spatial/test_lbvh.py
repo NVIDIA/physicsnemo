@@ -14,22 +14,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Direct unit tests for the shared morton-LBVH topology builder.
+"""Direct unit tests for the morton-LBVH topology builders.
 
-``build_lbvh_topology`` is the single source of truth for the node topology of
-both :class:`~physicsnemo.mesh.spatial.bvh.BVH` and
-:class:`~physicsnemo.mesh.spatial.cluster_tree.ClusterTree`. These tests pin
-its structural invariants (leaf partition, child links, range consistency,
-node-count bounds) and the cross-structure contract that both consumers build
-the identical tree for the same ``(n_items, leaf_size)``.
+``build_lbvh_topology`` (count-midpoint splits) builds the node topology of
+:class:`~physicsnemo.mesh.spatial.bvh.BVH` and of
+:class:`~physicsnemo.mesh.spatial.cluster_tree.ClusterTree` with
+``split="midpoint"``; ``build_morton_topology`` (Morton-cell splits) builds the
+default ClusterTree. These tests pin their structural invariants (leaf
+partition, child links, range consistency, node-count and depth bounds) and the
+contract that BVH and a midpoint ClusterTree build the identical tree for the
+same ``(n_items, leaf_size)``.
 """
+
+import math
 
 import pytest
 import torch
 
 from physicsnemo.mesh.mesh import Mesh
-from physicsnemo.mesh.spatial._lbvh import build_lbvh_topology
-from physicsnemo.mesh.spatial.bvh import BVH
+from physicsnemo.mesh.spatial._lbvh import build_lbvh_topology, build_morton_topology
+from physicsnemo.mesh.spatial.bvh import BVH, _compute_morton_codes
 from physicsnemo.mesh.spatial.cluster_tree import ClusterTree
 
 DEVICE = torch.device("cpu")
@@ -99,15 +103,16 @@ class TestBuilderInvariants:
 class TestSharedTopologyContract:
     @pytest.mark.parametrize("leaf_size", [1, 4])
     def test_bvh_and_cluster_tree_build_identical_trees(self, leaf_size):
-        """BVH and ClusterTree over the same item count and leaf_size must
-        produce the identical node topology -- the contract that lets them
-        share ``build_lbvh_topology``. The topology depends only on the item
-        count, so the mesh geometry need not relate to the points."""
+        """BVH and a midpoint ClusterTree over the same item count and
+        leaf_size must produce the identical node topology -- the contract
+        that lets them share ``build_lbvh_topology``. The topology depends only
+        on the item count, so the mesh geometry need not relate to the
+        points."""
         n = 137
         g = torch.Generator().manual_seed(0)
         pts = torch.rand(n, 3, generator=g)
 
-        tree = ClusterTree.from_points(pts, leaf_size=leaf_size)
+        tree = ClusterTree.from_points(pts, leaf_size=leaf_size, split="midpoint")
         mesh = Mesh(
             points=pts,
             cells=torch.randint(0, n, (n, 3), generator=g),
@@ -118,3 +123,98 @@ class TestSharedTopologyContract:
         assert torch.equal(tree.node_right_child, bvh.node_right_child)
         assert torch.equal(tree.leaf_start, bvh.leaf_start)
         assert torch.equal(tree.leaf_count, bvh.leaf_count)
+
+
+def _check_topology(topo, n_items, leaf_size):
+    """Leaves partition the items; children partition their parent's range."""
+    used = slice(0, topo.node_count)
+    assert topo.node_count <= topo.max_nodes
+    assert int(topo.leaf_sizes.sum()) == n_items
+    assert (topo.leaf_sizes >= 1).all() and (topo.leaf_sizes <= leaf_size).all()
+    order = torch.argsort(topo.leaf_starts)
+    starts, sizes = topo.leaf_starts[order], topo.leaf_sizes[order]
+    assert starts[0].item() == 0
+    assert torch.equal(starts[1:], (starts + sizes)[:-1])
+    left, right = topo.left_child[used], topo.right_child[used]
+    range_start, range_count = topo.range_start[used], topo.range_count[used]
+    assert range_start[0].item() == 0 and range_count[0].item() == n_items
+    internal = torch.where(left >= 0)[0]
+    lc, rc = left[internal], right[internal]
+    assert torch.equal(rc, lc + 1), "children must have consecutive ids"
+    assert torch.equal(range_start[lc], range_start[internal])
+    assert torch.equal(range_start[rc], range_start[lc] + range_count[lc])
+    assert torch.equal(range_count[internal], range_count[lc] + range_count[rc])
+    assert (range_count[internal] > leaf_size).all()
+    return internal, lc, rc
+
+
+class TestMortonBuilder:
+    @pytest.mark.parametrize("balance", [0, 2, 4, 8])
+    @pytest.mark.parametrize("leaf_size", [1, 3, 8])
+    @pytest.mark.parametrize("cloud", ["random", "duplicates", "line", "clusters"])
+    def test_topology_invariants(self, balance, leaf_size, cloud):
+        g = torch.Generator().manual_seed(1)
+        n = 500
+        points = {
+            "random": torch.randn(n, 3, generator=g),
+            "duplicates": torch.randint(0, 3, (n, 3), generator=g).float(),
+            "line": torch.linspace(0, 1, n)[:, None] * torch.tensor([1.0, 0, 0]),
+            "clusters": torch.cat(
+                [
+                    torch.randn(n // 2, 3, generator=g) * 1e-5,
+                    torch.randn(n - n // 2, 3, generator=g),
+                ]
+            ),
+        }[cloud]
+        codes = _compute_morton_codes(points, isotropic=True).sort().values
+        topo = build_morton_topology(codes, leaf_size, balance=balance)
+        internal, lc, rc = _check_topology(topo, n, leaf_size)
+        if balance:
+            ### Every child holds at least ``max(1, parent // balance)`` items,
+            ### which bounds the depth logarithmically.
+            parent = topo.range_count[internal]
+            floor = (parent // balance).clamp_min(1)
+            assert (topo.range_count[lc] >= floor).all()
+            assert (topo.range_count[rc] >= floor).all()
+            assert (
+                topo.max_depth
+                <= math.ceil(math.log(n) / math.log(balance / (balance - 1))) + 1
+            )
+
+    def test_splits_follow_morton_cells(self):
+        """With no balance bound, every split separates the two halves of the
+        coarsest Morton cell containing the node: all codes left of the split
+        share the node's prefix followed by 0, all codes right of it by 1."""
+        g = torch.Generator().manual_seed(2)
+        codes = _compute_morton_codes(torch.rand(400, 3, generator=g)).sort().values
+        topo = build_morton_topology(codes, 1, balance=0)
+        internal, lc, rc = _check_topology(topo, 400, 1)
+        first = codes[topo.range_start[internal]]
+        last = codes[topo.range_start[internal] + topo.range_count[internal] - 1]
+        bit = torch.tensor([d.bit_length() - 1 for d in (first ^ last).tolist()])
+        left_last = codes[topo.range_start[rc] - 1]
+        right_first = codes[topo.range_start[rc]]
+        assert ((left_last >> bit) & 1 == 0).all()
+        assert ((right_first >> bit) & 1 == 1).all()
+
+    def test_single_item_and_leaf_root(self):
+        codes = torch.tensor([5], dtype=torch.long)
+        topo = build_morton_topology(codes, 1)
+        assert topo.node_count == 1 and topo.max_depth == 0
+        codes = torch.arange(6, dtype=torch.long)
+        topo = build_morton_topology(codes, 8)
+        assert topo.node_count == 1 and int(topo.leaf_sizes[0]) == 6
+
+    def test_invalid_arguments(self):
+        codes = torch.arange(4, dtype=torch.long)
+        with pytest.raises(ValueError, match="leaf_size"):
+            build_morton_topology(codes, 0)
+        with pytest.raises(ValueError, match="balance"):
+            build_morton_topology(codes, 1, balance=1)
+
+    def test_splits_are_exact_for_63_bit_codes(self):
+        """The highest differing bit of 0 and 2**60 - 1 is 59, although the
+        nearest float64 to 2**60 - 1 is 2**60."""
+        codes = torch.tensor([0, 1 << 59, (1 << 60) - 1], dtype=torch.long)
+        topo = build_morton_topology(codes, 1, balance=0)
+        assert int(topo.range_count[topo.left_child[0]]) == 1
