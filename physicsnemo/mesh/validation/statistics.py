@@ -91,6 +91,7 @@ def compute_mesh_statistics(
     # its output has a fixed size, so it needs no device synchronization.
     used_vertices = mesh.cells.flatten().sort().values
     n_used = 1 + (used_vertices[1:] != used_vertices[:-1]).sum()
+    del used_vertices  # one index per cell vertex; free it before the quality metrics
 
     ### Compute quality metrics (includes edge lengths internally)
     # compute_quality_metrics already computes min/max edge lengths per cell,
