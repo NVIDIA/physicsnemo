@@ -50,6 +50,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     functions in `LinearGaussianNoiseScheduler` (`x0_to_flow` / `flow_to_x0`
     / `score_to_flow` / `flow_to_score`) and the corresponding conversion
     callbacks everywhere conversions between prediction types are necessary.
+- Adds `ExponentialEulerSolver`, `EDMStochasticExponentialEulerSolver`,
+  `DPMPlusPlus2M`, and `DPMPlusPlus2MUniC2` to
+  `physicsnemo.diffusion.samplers`. `ExponentialEulerSolver` supports
+  DDIM-like sampling for distilled few-step models, its stochastic
+  counterpart adds EDM-style churn and configurable re-noising,
+  `DPMPlusPlus2M` provides efficient second-order sampling, and
+  `DPMPlusPlus2MUniC2` adds a UniC-2 corrector stage that raises
+  DPM-Solver++(2M) to third order while keeping one denoiser evaluation
+  per step. The solvers share an extended semi-linear callback API
+  (`bias_fn`, `bias_int_fn`, `slope_fn`); users can select all four
+  solvers by string key through `physicsnemo.diffusion.samplers.sample`.
 
 ### Changed
 
@@ -130,6 +141,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cells out of a mesh with hundreds of millions of vertices). Index
   normalization avoids allocating a full-mesh range and preserves empty slices,
   integer indices, and boolean masks. Point fields use ordinary indexed gathers.
+- Extends `LinearGaussianNoiseScheduler` with two methods.
+  `get_linear_denoiser` accepts `prediction_type` and `denoising_type`, and
+  returns bias, antiderivative, and slope callables for the new exponential
+  and multistep solvers. `snr` exposes the schedule's signal-to-noise ratio,
+  used as the multistep extrapolation coordinate by `DPMPlusPlus2M` and
+  `DPMPlusPlus2MUniC2`.
 
 - `translate`, `rotate`, `scale` and their `DomainMesh` and datapipe
   counterparts no longer synchronize CUDA for Python-number arguments, string
@@ -183,6 +200,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `DomainMeshReader` gains `boundary_subsample` (`"both"`, `"cells"`,
+  `"points"`) to choose which subsample applies to the in-file boundaries.
+  Composing the cell and point subsamples on a triangulated boundary kept only
+  the cells whose three vertices all survived the point cut, about `N / 27` of
+  the `N` requested. The default keeps the composed behaviour.
+- Seeded `DomainMeshReader` subsamples select the same rows from zarr stores
+  as from memmap files. Before, boundaries read in full, and interiors read
+  with `drop_interior_cells`, could differ between the two formats.
 - GLOBE DrivAerML postprocessing reports correct Cd, Cl, and Cs on subsampled
   surfaces. Before, they shrank with the fraction of cells kept.
 - The unified external aero recipe documents how surface subsampling affects
@@ -256,6 +281,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   point has more than 32 BVH candidate cells (for example, near a vertex shared
   by many triangles, or with a prebuilt BVH with `leaf_size > 1`). The BVH
   candidate search used by these functions no longer caps candidates per point.
+- Fixes `VPNoiseScheduler.sigma_inv` at extreme noise levels. In particular,
+  converting `sigma=0` no longer returns a slightly negative diffusion time.
 
 ### Security
 
