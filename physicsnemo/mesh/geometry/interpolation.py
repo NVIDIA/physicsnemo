@@ -141,10 +141,13 @@ def compute_barycentric_gradients(
 
     if n_manifold_dims == 1:
         ### Segments: ∇φ₁ = e / |e|² along the edge e = v₁ - v₀, and ∇φ₀ = -∇φ₁
-        # (in any number of spatial dimensions)
+        # (in any number of spatial dimensions). Dividing twice by the clamped
+        # length, rather than once by |e|², keeps the clamp off short segments.
         edge = cell_vertices[:, 1, :] - cell_vertices[:, 0, :]
-        edge_length_sq = (edge * edge).sum(dim=-1, keepdim=True)
-        gradients[:, 1, :] = edge / edge_length_sq.clamp(min=safe_eps(dtype))
+        edge_length = torch.linalg.vector_norm(edge, dim=-1, keepdim=True).clamp(
+            min=safe_eps(dtype)
+        )
+        gradients[:, 1, :] = edge / edge_length / edge_length
         gradients[:, 0, :] = -gradients[:, 1, :]
 
     elif n_manifold_dims == 2:

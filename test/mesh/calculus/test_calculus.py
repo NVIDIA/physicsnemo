@@ -2741,6 +2741,26 @@ class TestDECGradientIsExactForLinearFields:
         expected = torch.tensor([2.0, 0.0], dtype=torch.float64).expand(5, 2)
         torch.testing.assert_close(gradient, expected)
 
+    @pytest.mark.parametrize("scale", [1e-6, 1.0, 1e6])
+    def test_float32_polyline_at_any_scale(self, scale):
+        from physicsnemo.mesh.calculus.gradient import compute_gradient_points_dec
+
+        x = torch.tensor([0.0, 0.3, 1.0, 1.2, 2.0]) * scale
+        mesh = Mesh(
+            points=torch.stack([x, torch.zeros_like(x)], dim=1),
+            cells=torch.tensor([[0, 1], [1, 2], [2, 3], [3, 4]]),
+        )
+        gradient = compute_gradient_points_dec(mesh, x)
+        torch.testing.assert_close(gradient, torch.tensor([1.0, 0.0]).expand(5, 2))
+
+    def test_barycentric_gradients_of_zero_length_segment_are_finite(self):
+        from physicsnemo.mesh.geometry.interpolation import (
+            compute_barycentric_gradients,
+        )
+
+        mesh = Mesh(points=torch.ones(2, 2), cells=torch.tensor([[0, 1]]))
+        assert torch.isfinite(compute_barycentric_gradients(mesh)).all()
+
     def test_tetrahedra(self):
         from physicsnemo.mesh.calculus.gradient import compute_gradient_points_dec
         from physicsnemo.mesh.primitives.volumes import cube_volume
