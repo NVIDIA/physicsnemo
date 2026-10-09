@@ -983,7 +983,7 @@ def test_morton_split_tightens_boxes(device):
 
 def test_invalid_split_raises(device):
     with pytest.raises(ValueError, match="split"):
-        ClusterTree.from_points(_points(10, 3, device), split="radix")
+        ClusterTree.from_points(_points(10, 3, device), split="radix")  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("expand_far_targets", [False, True])

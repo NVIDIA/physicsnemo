@@ -55,7 +55,7 @@ criterion, dual-tree traversal, and far-field monopole approximation.
 
 import logging
 import math
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 import torch
 import torch.nn.functional as F
@@ -695,7 +695,7 @@ class ClusterTree(TensorClass):
         *,
         leaf_size: int = 1,
         areas: Float[torch.Tensor, " n_points"] | None = None,
-        split: str = "morton",
+        split: Literal["morton", "midpoint"] = "morton",
     ) -> "ClusterTree":
         r"""Build a cluster tree from a set of points via morton-code LBVH.
 
