@@ -47,11 +47,14 @@ Van Oosterom, A. & Strackee, J. (1983). "The Solid Angle of a Plane
 Triangle." IEEE Trans. Biomed. Eng. BME-30(2):125-126.
 """
 
+import itertools
+import math
 from typing import TYPE_CHECKING
 
 import torch
 from jaxtyping import Float
 
+from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 if TYPE_CHECKING:
@@ -241,48 +244,22 @@ def compute_vertex_angles(
         min=safe_eps(torch.float64)
     )
 
-    if n_edges in (2, 3):
-        ### Closed-form det(C) and sum_{i<j} C_ij for triangles and tetrahedra
-        # Batched torch.linalg.det on millions of tiny float64 matrices is
-        # orders of magnitude slower than these elementwise products.
-        # C[i,j] = normalized_edge_i . normalized_edge_j, each (n_cells, n_verts)
-        def _corr(i: int, j: int) -> torch.Tensor:
-            return (edges_normalized[:, :, i] * edges_normalized[:, :, j]).sum(dim=-1)
+    ### sqrt(det(C)) for each vertex: (n_cells, n_verts)
+    # C is the Gram matrix of the unit edges, so sqrt(det(C)) is n! times the
+    # volume of the simplex they span. compute_cell_areas has closed forms for
+    # up to 3 edges; where there are as many edges as spatial dimensions it takes
+    # their determinant directly, without the cancellation of forming det(C).
+    numerator = math.factorial(n_edges) * compute_cell_areas(
+        edges_normalized.flatten(0, 1)
+    ).unflatten(0, edges_normalized.shape[:2])
 
-        c00, c11, c01 = _corr(0, 0), _corr(1, 1), _corr(0, 1)
-        if n_edges == 2:
-            det_C = c00 * c11 - c01 * c01
-            sum_off_diag = c01
-        else:
-            c22, c02, c12 = _corr(2, 2), _corr(0, 2), _corr(1, 2)
-            det_C = (
-                c00 * (c11 * c22 - c12 * c12)
-                - c01 * (c01 * c22 - c12 * c02)
-                + c02 * (c01 * c12 - c11 * c02)
-            )
-            sum_off_diag = c01 + c02 + c12
-    else:
-        ### Compute correlation matrix C for each vertex of each cell
-        # C[i,j] = normalized_edge_i . normalized_edge_j
-        # Shape: (n_cells, n_verts, n_edges, n_edges)
-        corr_matrix = torch.einsum(
-            "cvid,cvjd->cvij", edges_normalized, edges_normalized
-        )
+    ### sum_{i<j} C_ij, one off-diagonal entry at a time: (n_cells, n_verts)
+    sum_off_diag = torch.zeros_like(numerator)
+    for i, j in itertools.combinations(range(n_edges), 2):
+        sum_off_diag += (edges_normalized[:, :, i] * edges_normalized[:, :, j]).sum(-1)
 
-        ### Compute det(C) for each vertex: (n_cells, n_verts)
-        det_C = torch.linalg.det(corr_matrix)
-
-        ### Compute sum of upper-triangle off-diagonal elements: sum_{i<j} C_ij
-        # Index tensors built on the device: a boolean mask index would synchronize.
-        rows, cols = torch.triu_indices(
-            n_edges, n_edges, offset=1, device=mesh.points.device
-        )
-        sum_off_diag = corr_matrix[:, :, rows, cols].sum(dim=-1)  # (n_cells, n_verts)
-
-    ### Compute angle: Omega = 2 * arctan2(sqrt(|det(C)|), 1 + sum_{i<j} C_ij)
-    denominator = 1.0 + sum_off_diag
-    numerator = det_C.abs().sqrt()
-    angles = 2.0 * torch.atan2(numerator, denominator)
+    ### Compute angle: Omega = 2 * arctan2(sqrt(det(C)), 1 + sum_{i<j} C_ij)
+    angles = 2.0 * torch.atan2(numerator, 1.0 + sum_off_diag)
 
     return angles.to(input_dtype)
 
