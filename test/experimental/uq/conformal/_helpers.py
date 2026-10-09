@@ -32,6 +32,7 @@ from physicsnemo.experimental.uq.conformal import (
     CellwiseCalibrator,
     ConformalPredictor,
     FunctionalBandCalibrator,
+    RiskControlCalibrator,
 )
 from physicsnemo.experimental.uq.conformal._utils import (
     TIERS,
@@ -46,13 +47,14 @@ __all__ = [
     "assert_predictor_covers_admitted",
     "count_syncs",
     "fit",
-    "fitted_functional",
+    "fitted_risk",
     "make_predictor",
 ]
 
 CALIBRATORS = {
     "cellwise": CellwiseCalibrator,
     "functional": FunctionalBandCalibrator,
+    "risk_control": RiskControlCalibrator,
 }
 CALIBRATOR_CLASSES = [
     pytest.param(CALIBRATORS[tier], id=tier) for tier in sorted(CALIBRATORS)
@@ -113,19 +115,19 @@ def fit(
     return calibrator.finalize(), points
 
 
-def fitted_functional(generator: torch.Generator | None = None) -> ConformalPredictor:
-    """Small seeded functional predictor (8 samples of 12 points, alpha=0.25)."""
+def fitted_risk(generator: torch.Generator | None = None) -> ConformalPredictor:
+    """Small seeded RiskControl predictor (8 samples of 12 points, alpha=0.25)."""
     generator = generator or torch.Generator().manual_seed(13)
-    calibrator = FunctionalBandCalibrator(AbsoluteErrorScore(), alpha=0.25)
+    calibrator = RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.25)
     for _ in range(8):
         calibrator.update(torch.zeros(12), torch.randn(12, generator=generator))
     return calibrator.finalize()
 
 
 def make_predictor(**overrides) -> ConformalPredictor:
-    """Directly constructed predictor with valid functional defaults."""
+    """Directly constructed predictor with valid risk-control defaults."""
     kwargs = {
-        "tier": "functional",
+        "tier": "risk_control",
         "score": AbsoluteErrorScore(),
         "alpha": 0.5,
         "n_cal": 3,

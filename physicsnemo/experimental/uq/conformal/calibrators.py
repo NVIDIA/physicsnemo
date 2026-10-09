@@ -23,6 +23,9 @@ Choose a calibrator by the guarantee you need:
 - :class:`~physicsnemo.experimental.uq.conformal.FunctionalBandCalibrator`:
   a functional band that contains every point of a field at once; meshes
   may vary.
+- :class:`~physicsnemo.experimental.uq.conformal.RiskControlCalibrator`: a
+  band that bounds the expected fraction of points it misses; meshes may
+  vary.
 
 Pass each calibration sample to ``update``, then call ``finalize``
 to get a :class:`~physicsnemo.experimental.uq.conformal.ConformalPredictor`.
@@ -40,11 +43,15 @@ The split conformal construction follows `Distribution-Free Predictive
 Inference for Regression <https://arxiv.org/abs/1604.04173>`_ (Lei et al.,
 2018): with :math:`n_{cal}` calibration scores the fitted threshold is the
 :math:`k`-th smallest score, :math:`k = \lceil (n_{cal} + 1)(1 - \alpha)
-\rceil`.
+\rceil`. The conformal risk control (CRC) tier instead follows `Conformal
+Risk Control <https://arxiv.org/abs/2208.02814>`_ (Angelopoulos et al.,
+2022).
 """
 
 import copy
+import math
 from collections.abc import Callable, Mapping, Sequence
+from fractions import Fraction
 
 import torch
 from jaxtyping import Float
@@ -65,6 +72,7 @@ from ._utils import (
     kth_smallest_of_samples,
     normalize_keys,
     pack_fields,
+    require_feasible_alpha,
     require_matching_keys,
     require_mesh,
     slice_aux,
@@ -84,6 +92,7 @@ from .scores import (
 __all__ = [
     "CellwiseCalibrator",
     "FunctionalBandCalibrator",
+    "RiskControlCalibrator",
 ]
 
 # One field's staged record: (key, prediction, target, aux) -> stored value.
@@ -133,7 +142,7 @@ class _SplitCalibratorBase:
 
     @property
     def alpha(self) -> float:
-        r"""Target miscoverage level."""
+        r"""Target miscoverage level (risk level for risk control)."""
         return self._alpha
 
     @property
@@ -251,7 +260,8 @@ class CellwiseCalibrator(_SplitCalibratorBase):
     prediction of `Gopakumar et al., 2024
     <https://arxiv.org/abs/2408.09881>`_. If the mesh changes between
     samples, use
-    :class:`~physicsnemo.experimental.uq.conformal.FunctionalBandCalibrator`.
+    :class:`~physicsnemo.experimental.uq.conformal.FunctionalBandCalibrator`
+    or :class:`~physicsnemo.experimental.uq.conformal.RiskControlCalibrator`.
 
     Pass the mesh coordinates as ``points=`` on every call. Two meshes count
     as the same only when their coordinate values, order, shape, and dtype
@@ -508,7 +518,9 @@ class FunctionalBandCalibrator(_ScaledCalibratorBase):
     Meshes may differ between calibration and deployment. The band's
     half-width at point :math:`x` is :math:`\text{threshold} \cdot s(x)`,
     where :math:`s` is the optional ``AuxDifficulty`` scale; without one the
-    width is constant.
+    width is constant. If bounding the expected fraction of missed points is
+    enough, :class:`~physicsnemo.experimental.uq.conformal.RiskControlCalibrator`
+    gives tighter bands.
 
     Guarantee: a new field lies inside the band at every point with
     probability at least :math:`1 - \alpha`.
@@ -587,4 +599,152 @@ class FunctionalBandCalibrator(_ScaledCalibratorBase):
             "functional",
             self._conformal_thresholds(),
             difficulty=self._difficulty,
+        )
+
+
+def _crc_threshold(sorted_scores: list[Tensor], alpha: float) -> float:
+    """Smallest observed ``lambda`` with ``(R(lambda) + 1) / (n + 1) <= alpha``."""
+    n = len(sorted_scores)
+    alpha_exact = require_feasible_alpha(n, alpha)
+
+    scores64 = [scores.to(torch.float64) for scores in sorted_scores]
+    m = scores64[0].numel()
+    if all(scores.numel() == m for scores in scores64):
+        # Each exceeded point adds 1/m to the risk; ties at the pick only lower it.
+        allowed_exceed = math.floor(m * (alpha_exact * (n + 1) - 1))
+        k = n * m - allowed_exceed
+        return float(torch.cat(scores64).kthvalue(k).values)
+
+    def corrected_risk(candidate: Tensor) -> Fraction:
+        total_loss = Fraction()
+        for scores in scores64:
+            exceed = scores.numel() - int(
+                torch.searchsorted(scores, candidate, right=True)
+            )
+            total_loss += Fraction(exceed, scores.numel())
+        return (total_loss + 1) / (n + 1)
+
+    # Duplicates are harmless: corrected_risk is monotone in the probe value.
+    candidates = torch.cat(scores64).sort().values
+
+    lo = -1
+    hi = candidates.numel() - 1
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if corrected_risk(candidates[mid]) <= alpha_exact:
+            hi = mid
+        else:
+            lo = mid
+    return float(candidates[hi])
+
+
+def _sorted_point_scores(normalized: Tensor) -> Tensor:
+    """Max over trailing dims to get one score per point, sorted on the CPU."""
+    if normalized.ndim > 1:
+        normalized = normalized.amax(dim=tuple(range(1, normalized.ndim)))
+    point_scores = normalized.reshape(-1)
+    return point_scores.detach().cpu().sort().values
+
+
+class RiskControlCalibrator(_ScaledCalibratorBase):
+    r"""Calibrate a band that bounds the expected fraction of points it misses.
+
+    Use this calibrator when meshes vary between samples and it is enough to
+    control the average fraction of points outside the band, rather than
+    cover every point at once. It gives much tighter bands than
+    :class:`~physicsnemo.experimental.uq.conformal.FunctionalBandCalibrator`
+    in exchange for this weaker guarantee. A point counts as missed when any
+    of its components (trailing dimensions) falls outside the band. Every
+    sample has equal weight, whatever its point count. The threshold comes
+    from conformal risk control (CRC), `Conformal Risk Control
+    <https://arxiv.org/abs/2208.02814>`_ (Angelopoulos, Bates, Fisch, Lei
+    and Schuster, 2022).
+
+    Guarantee: the expected fraction of missed points in a new sample is at
+    most :math:`\alpha`.
+
+    Parameters
+    ----------
+    score : AbsoluteErrorScore | NormalizedErrorScore | QuantileRegressionScore
+        Defines the interval (see
+        :class:`~physicsnemo.experimental.uq.conformal.CellwiseCalibrator`).
+        The calibrator keeps a copy.
+    alpha : float
+        Target expected fraction of missed points, in :math:`(0, 1)`.
+    difficulty : AuxDifficulty, optional
+        Per-point scale :math:`s(x)` that widens the band where it is large.
+        ``None`` gives a constant width.
+    keys : Sequence[str], optional
+        Names of the ``TensorDict`` fields to calibrate (see
+        :class:`~physicsnemo.experimental.uq.conformal.CellwiseCalibrator`).
+        By default every field is calibrated.
+
+    Raises
+    ------
+    ValueError
+        If ``score`` already divides by the aux key ``difficulty`` reads.
+
+    Notes
+    -----
+    The threshold :math:`\lambda` is the smallest observed score with
+    :math:`(\hat R(\lambda) + 1)/(n_{cal} + 1) \le \alpha`, where
+    :math:`\hat R` sums the per-sample fractions of missed points.
+
+    The calibrator keeps every sample's per-point scores on the CPU until
+    :meth:`finalize`, so memory grows with the total number of calibration
+    points.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.experimental.uq.conformal import (
+    ...     AbsoluteErrorScore, AuxDifficulty, RiskControlCalibrator,
+    ... )
+    >>> _ = torch.manual_seed(0)
+    >>> calibrator = RiskControlCalibrator(
+    ...     AbsoluteErrorScore(), alpha=0.1, difficulty=AuxDifficulty("sigma")
+    ... )
+    >>> for n_points in range(40, 60):
+    ...     prediction = torch.randn(n_points, 2)
+    ...     sigma = torch.rand(n_points, 2) + 0.5
+    ...     target = prediction + sigma * torch.randn(n_points, 2)
+    ...     calibrator.update(prediction, target, aux={"sigma": sigma})
+    >>> predictor = calibrator.finalize()
+    >>> sigma = torch.rand(30, 2) + 0.5
+    >>> lo, hi = predictor.predict_interval(torch.randn(30, 2), aux={"sigma": sigma})
+    >>> lo.shape
+    torch.Size([30, 2])
+    """
+
+    _reduce = staticmethod(_sorted_point_scores)
+
+    def finalize(self) -> ConformalPredictor:
+        r"""Fit the CRC threshold and return the predictor.
+
+        Returns
+        -------
+        ConformalPredictor
+            A risk-control
+            :class:`~physicsnemo.experimental.uq.conformal.ConformalPredictor`
+            with one float64 scalar threshold per field. It applies the same
+            ``AuxDifficulty``, so pass the same ``aux`` keys at prediction.
+
+        Raises
+        ------
+        RuntimeError
+            If no samples were collected.
+        ValueError
+            If :math:`n_{cal} < (1 - \alpha) / \alpha`, for example fewer
+            than 9 samples for ``alpha=0.1``. Collect more or raise ``alpha``.
+        """
+        self._require_finalizable()
+        thresholds = {
+            key: torch.tensor(
+                _crc_threshold(samples, self._alpha),
+                dtype=torch.float64,
+            )
+            for key, samples in self._scores.items()
+        }
+        return self._build_predictor(
+            "risk_control", pack_fields(thresholds), difficulty=self._difficulty
         )
