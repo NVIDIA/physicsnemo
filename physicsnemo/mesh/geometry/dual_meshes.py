@@ -53,6 +53,7 @@ from typing import TYPE_CHECKING
 import torch
 from jaxtyping import Float, Int
 
+from physicsnemo.mesh.utilities._small_linalg import small_det, small_inverse
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 if TYPE_CHECKING:
@@ -506,55 +507,6 @@ def compute_circumcenters(
     return v0 + c_minus_v0
 
 
-def _small_det(
-    matrices: Float[torch.Tensor, "... n n"],
-) -> Float[torch.Tensor, "..."]:
-    """Determinant of each small square matrix, in closed form for n <= 3.
-
-    Batched ``torch.linalg.det`` factorizes every tiny matrix separately: slow
-    on GPUs, and a loop of LAPACK calls on CPUs.
-    """
-    n = matrices.shape[-1]
-    m = matrices
-    if n == 1:
-        return m[..., 0, 0]
-    if n == 2:
-        return m[..., 0, 0] * m[..., 1, 1] - m[..., 0, 1] * m[..., 1, 0]
-    if n == 3:  # scalar triple product of the rows
-        return (m[..., 0, :] * torch.linalg.cross(m[..., 1, :], m[..., 2, :])).sum(-1)
-    return torch.linalg.det(matrices)
-
-
-def _small_inverse(
-    matrices: Float[torch.Tensor, "... n n"],
-) -> Float[torch.Tensor, "... n n"]:
-    """Inverse of each small invertible matrix, by its adjugate for n <= 3.
-
-    The caller guarantees invertibility, so no error checks (which would
-    synchronize CUDA callers) are made.
-    """
-    n = matrices.shape[-1]
-    m = matrices
-    if n == 1:
-        return 1.0 / m
-    if n == 2:
-        adjugate = torch.stack(
-            [
-                torch.stack([m[..., 1, 1], -m[..., 0, 1]], dim=-1),
-                torch.stack([-m[..., 1, 0], m[..., 0, 0]], dim=-1),
-            ],
-            dim=-2,
-        )
-    elif n == 3:
-        # Row i of the cofactor matrix is the cross product of rows i + 1 and
-        # i + 2 (mod 3); the adjugate is its transpose.
-        cofactors = torch.linalg.cross(m.roll(-1, dims=-2), m.roll(-2, dims=-2), dim=-1)
-        adjugate = cofactors.transpose(-1, -2)
-    else:
-        return torch.linalg.inv_ex(matrices, check_errors=False).inverse
-    return adjugate / _small_det(matrices)[..., None, None]
-
-
 def compute_cotan_weights_fem(
     mesh: "Mesh",
 ) -> tuple[Float[torch.Tensor, " n_edges"], Int[torch.Tensor, "n_edges 2"]]:
@@ -662,7 +614,7 @@ def compute_cotan_weights_fem(
     # Cells with no usable extent carry no direction at all, so are always degenerate.
     # Written branchlessly so torch.compile can trace through without graph breaks.
     G_normalized = G / g_scale[:, None, None]
-    is_degenerate = ~has_extent | (_small_det(G_normalized).abs() < 1e-12)  # (n_cells,)
+    is_degenerate = ~has_extent | (small_det(G_normalized).abs() < 1e-12)  # (n_cells,)
     eye = torch.eye(n_manifold_dims, dtype=dtype, device=device)
     G_normalized = torch.where(is_degenerate[:, None, None], eye, G_normalized)
 
@@ -672,7 +624,7 @@ def compute_cotan_weights_fem(
     # the identity, and the rest satisfy |det(G / g_scale)| >= 1e-12. Inverting
     # the O(1) normalized matrix and rescaling, inv(G) = inv(G / g_scale) / g_scale,
     # keeps closed-form determinants of tiny or huge cells in range.
-    G_inv = _small_inverse(G_normalized) / g_scale[:, None, None]
+    G_inv = small_inverse(G_normalized) / g_scale[:, None, None]
 
     ### Extract gradient dot products for each local edge pair (i, j), i < j
     # These are the upper-triangle entries of C = H @ G_inv @ H^T, where

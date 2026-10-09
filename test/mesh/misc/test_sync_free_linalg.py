@@ -112,7 +112,7 @@ def test_cotan_weight_inverse_is_sync_free(monkeypatch) -> None:
     # regression test against reverting to the synchronizing ``linalg.inv``.
     from physicsnemo.mesh.geometry import dual_meshes
 
-    original_inverse = dual_meshes._small_inverse
+    original_inverse = dual_meshes.small_inverse
     called = False
 
     def checked_inverse(*args, **kwargs):
@@ -125,7 +125,7 @@ def test_cotan_weight_inverse_is_sync_free(monkeypatch) -> None:
         finally:
             torch.cuda.set_sync_debug_mode(previous_mode)
 
-    monkeypatch.setattr(dual_meshes, "_small_inverse", checked_inverse)
+    monkeypatch.setattr(dual_meshes, "small_inverse", checked_inverse)
     compute_cotan_weights_fem(mesh)
     torch.cuda.synchronize()
     assert called

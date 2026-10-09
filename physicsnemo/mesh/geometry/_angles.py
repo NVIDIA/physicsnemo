@@ -52,6 +52,7 @@ from typing import TYPE_CHECKING
 import torch
 from jaxtyping import Float
 
+from physicsnemo.mesh.utilities._small_linalg import small_det
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 if TYPE_CHECKING:
@@ -172,7 +173,11 @@ def compute_vertex_angles(
     The formula uses ``atan2`` for numerical stability when the denominator
     approaches zero (nearly degenerate simplices). Intermediate computations
     are performed in float64 to avoid catastrophic cancellation in the
-    correlation matrix when vertex angles approach 0 or pi.
+    correlation matrix when vertex angles approach 0 or pi. When the edge
+    vectors form a square matrix E (as for tetrahedra in 3D),
+    ``sqrt(det(C)) = |det(E)|`` is computed from E directly, which stays
+    accurate for nearly flat cells. Triangles in 2D and 3D use
+    ``atan2(|a x b|, a . b)`` instead.
 
     Examples
     --------
@@ -191,7 +196,7 @@ def compute_vertex_angles(
 
     if (
         mesh.n_manifold_dims == 2
-        and mesh.n_spatial_dims == 3
+        and mesh.n_spatial_dims in (2, 3)
         and mesh.cells.shape[1] == 3
     ):
         cell_vertices = mesh.points[mesh.cells]
@@ -200,9 +205,14 @@ def compute_vertex_angles(
         v2 = cell_vertices[:, 2, :]
 
         def _angle(edge_a: torch.Tensor, edge_b: torch.Tensor) -> torch.Tensor:
-            cross_norm = torch.linalg.vector_norm(
-                torch.linalg.cross(edge_a, edge_b, dim=-1), dim=-1
-            )
+            if mesh.n_spatial_dims == 2:
+                cross_norm = (
+                    edge_a[:, 0] * edge_b[:, 1] - edge_a[:, 1] * edge_b[:, 0]
+                ).abs()
+            else:
+                cross_norm = torch.linalg.vector_norm(
+                    torch.linalg.cross(edge_a, edge_b, dim=-1), dim=-1
+                )
             dot_product = (edge_a * edge_b).sum(dim=-1)
             return torch.atan2(cross_norm, dot_product)
 
@@ -241,47 +251,32 @@ def compute_vertex_angles(
         min=safe_eps(torch.float64)
     )
 
-    if n_edges in (2, 3):
-        ### Closed-form det(C) and sum_{i<j} C_ij for triangles and tetrahedra
-        # Batched torch.linalg.det on millions of tiny float64 matrices is
-        # orders of magnitude slower than these elementwise products.
-        # C[i,j] = normalized_edge_i . normalized_edge_j, each (n_cells, n_verts)
-        def _corr(i: int, j: int) -> torch.Tensor:
-            return (edges_normalized[:, :, i] * edges_normalized[:, :, j]).sum(dim=-1)
-
-        c00, c11, c01 = _corr(0, 0), _corr(1, 1), _corr(0, 1)
-        if n_edges == 2:
-            det_C = c00 * c11 - c01 * c01
-            sum_off_diag = c01
-        else:
-            c22, c02, c12 = _corr(2, 2), _corr(0, 2), _corr(1, 2)
-            det_C = (
-                c00 * (c11 * c22 - c12 * c12)
-                - c01 * (c01 * c22 - c12 * c02)
-                + c02 * (c01 * c12 - c11 * c02)
-            )
-            sum_off_diag = c01 + c02 + c12
+    # Index tensors built on the device: a boolean mask index would synchronize.
+    rows, cols = torch.triu_indices(
+        n_edges, n_edges, offset=1, device=mesh.points.device
+    )
+    if n_edges == mesh.n_spatial_dims:
+        ### Square edge matrix E (e.g. tetrahedra in 3D): sqrt(det(C)) = |det(E)|
+        # The determinant of the unit edge vectors themselves does not square and
+        # then cancel, as det(C) does, so it stays accurate for nearly flat cells.
+        numerator = small_det(edges_normalized).abs()  # (n_cells, n_verts)
+        sum_off_diag = (
+            edges_normalized[:, :, rows] * edges_normalized[:, :, cols]
+        ).sum(dim=(-2, -1))  # sum_{i<j} C_ij, (n_cells, n_verts)
     else:
         ### Compute correlation matrix C for each vertex of each cell
         # C[i,j] = normalized_edge_i . normalized_edge_j
         # Shape: (n_cells, n_verts, n_edges, n_edges)
-        corr_matrix = torch.einsum(
-            "cvid,cvjd->cvij", edges_normalized, edges_normalized
-        )
-
-        ### Compute det(C) for each vertex: (n_cells, n_verts)
-        det_C = torch.linalg.det(corr_matrix)
-
-        ### Compute sum of upper-triangle off-diagonal elements: sum_{i<j} C_ij
-        # Index tensors built on the device: a boolean mask index would synchronize.
-        rows, cols = torch.triu_indices(
-            n_edges, n_edges, offset=1, device=mesh.points.device
-        )
-        sum_off_diag = corr_matrix[:, :, rows, cols].sum(dim=-1)  # (n_cells, n_verts)
+        # Broadcast-and-sum: einsum would run a batched matmul of millions of tiny
+        # matrices, which is orders of magnitude slower on GPUs.
+        corr_matrix = (
+            edges_normalized.unsqueeze(-2) * edges_normalized.unsqueeze(-3)
+        ).sum(dim=-1)
+        numerator = small_det(corr_matrix).abs().sqrt()  # (n_cells, n_verts)
+        sum_off_diag = corr_matrix[:, :, rows, cols].sum(dim=-1)  # sum_{i<j} C_ij
 
     ### Compute angle: Omega = 2 * arctan2(sqrt(|det(C)|), 1 + sum_{i<j} C_ij)
     denominator = 1.0 + sum_off_diag
-    numerator = det_C.abs().sqrt()
     angles = 2.0 * torch.atan2(numerator, denominator)
 
     return angles.to(input_dtype)

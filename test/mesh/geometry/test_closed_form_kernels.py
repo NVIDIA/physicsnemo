@@ -26,11 +26,8 @@ import torch
 
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.geometry._angles import compute_vertex_angles
-from physicsnemo.mesh.geometry.dual_meshes import (
-    _small_det,
-    _small_inverse,
-    compute_cotan_weights_fem,
-)
+from physicsnemo.mesh.geometry.dual_meshes import compute_cotan_weights_fem
+from physicsnemo.mesh.utilities._small_linalg import small_det, small_inverse
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 from physicsnemo.mesh.utilities._topology import extract_unique_edges
 from test.mesh.mesh.test_slicing_sync import _cuda_sync_budget
@@ -111,8 +108,8 @@ def test_small_det_and_inverse_match_linalg(n, batch_shape, device):
     matrices = torch.randn(*batch_shape, n, n, generator=generator, dtype=torch.float64)
     matrices = (matrices + 3.0 * torch.eye(n, dtype=torch.float64)).to(device)
 
-    torch.testing.assert_close(_small_det(matrices), torch.linalg.det(matrices))
-    torch.testing.assert_close(_small_inverse(matrices), torch.linalg.inv(matrices))
+    torch.testing.assert_close(small_det(matrices), torch.linalg.det(matrices))
+    torch.testing.assert_close(small_inverse(matrices), torch.linalg.inv(matrices))
 
 
 @pytest.mark.parametrize(
@@ -128,6 +125,36 @@ def test_vertex_angles_match_determinant_formula(
         _reference_vertex_angles(mesh),
         rtol=1e-6,
         atol=1e-6,
+    )
+
+
+def test_vertex_angles_of_nearly_flat_cells(device):
+    """Accurate where det(C) cancels: a cap triangle and a flat tetrahedron."""
+    # Cap triangle with an angle of pi - 1e-9 at the origin: the same angles in
+    # 2D as in 3D, summing to pi
+    cap = torch.tensor([[0.0, 0.0], [-1.0, 0.0], [1.0, 1e-9]], device=device)
+    cells = torch.tensor([[0, 1, 2]], device=device)
+    angles_2d = compute_vertex_angles(Mesh(points=cap, cells=cells))
+    angles_3d = compute_vertex_angles(
+        Mesh(points=torch.nn.functional.pad(cap, (0, 1)), cells=cells)
+    )
+    torch.testing.assert_close(angles_2d, angles_3d)
+    torch.testing.assert_close(angles_2d.sum(), torch.tensor(torch.pi, device=device))
+
+    # Tetrahedron of height 1e-9, against Van Oosterom-Strackee on the raw edges
+    tet = torch.tensor(
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.25, 0.25, 1e-9]],
+        dtype=torch.float64,
+        device=device,
+    )
+    a, b, c = (tet.roll(-i, dims=0) - tet for i in (1, 2, 3))
+    la, lb, lc = a.norm(dim=-1), b.norm(dim=-1), c.norm(dim=-1)
+    triple = (a * torch.linalg.cross(b, c)).sum(dim=-1).abs()
+    dots = (a * b).sum(-1) * lc + (a * c).sum(-1) * lb + (b * c).sum(-1) * la
+    expected = 2.0 * torch.atan2(triple, la * lb * lc + dots)
+    mesh = Mesh(points=tet, cells=torch.tensor([[0, 1, 2, 3]], device=device))
+    torch.testing.assert_close(
+        compute_vertex_angles(mesh)[0], expected, rtol=1e-6, atol=0
     )
 
 
