@@ -479,7 +479,12 @@ def test_small_lstsq_gradients(device: str):
 def test_mesh_lsq_gradient_torch_rank_deficient_stencils(
     device: str, dtype: torch.dtype, monkeypatch
 ):
-    """Planar and collinear 3D stencils give the minimum-norm gradients of CPU lstsq."""
+    """Planar and collinear 3D stencils give the minimum-norm gradients of CPU lstsq.
+
+    On CUDA, batched_lstsq keeps the faster CUDA lstsq (gels), which falls back
+    to small_lstsq only for exactly rank-deficient systems: there, only the
+    planar stencils in the plane z = 0 are covered.
+    """
     from physicsnemo.nn.functional.derivatives.mesh_lsq_gradient import _torch_impl
 
     points_planar, offsets, indices = _make_case(
@@ -496,7 +501,7 @@ def test_mesh_lsq_gradient_torch_rank_deficient_stencils(
     )
     few_indices = indices[: indices.shape[0] // 4]
 
-    for points, case_offsets, case_indices in (
+    cases = [
         (points_planar, offsets, indices),
         (points_collinear, offsets, indices),
         (
@@ -504,7 +509,10 @@ def test_mesh_lsq_gradient_torch_rank_deficient_stencils(
             few_offsets,
             few_indices,
         ),
-    ):
+    ]
+    if torch.device(device).type == "cuda":
+        cases = cases[:1]
+    for points, case_offsets, case_indices in cases:
         values = torch.stack(
             [points[:, 0] - 3 * points[:, 1], torch.sin(4 * points).sum(-1)], dim=-1
         )

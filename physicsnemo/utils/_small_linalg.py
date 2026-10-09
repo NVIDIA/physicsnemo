@@ -240,9 +240,12 @@ def batched_lstsq(
     (32 Grace cores) and 10M cells (GB300). On CPU, :func:`small_lstsq` is
     15-50x faster than batched ``torch.linalg.lstsq``, which loops over LAPACK
     calls. On CUDA, batched ``torch.linalg.lstsq`` is 2-4x faster than
-    :func:`small_lstsq`, but its only driver, ``gels``, assumes full rank and
-    raises on rank-deficient systems, such as flat stencils: those batches fall
-    back to :func:`small_lstsq`.
+    :func:`small_lstsq`, but its only driver, ``gels``, assumes full rank. It
+    raises on exactly rank-deficient systems, such as flat stencils in a
+    coordinate plane: those batches fall back to :func:`small_lstsq`. Systems
+    that are rank-deficient only up to rounding (collinear or underdetermined
+    stencils, say) still get the answer of ``gels`` on CUDA, which is not the
+    minimum-norm solution.
     """
     if A.is_cuda:
         try:
