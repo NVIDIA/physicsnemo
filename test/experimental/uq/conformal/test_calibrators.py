@@ -22,15 +22,19 @@ from tensordict import TensorDict
 
 from physicsnemo.experimental.uq.conformal import (
     AbsoluteErrorScore,
+    AuxDifficulty,
     CellwiseCalibrator,
     ConformalPredictor,
+    FunctionalBandCalibrator,
     NormalizedErrorScore,
+    QuantileRegressionScore,
 )
 from physicsnemo.experimental.uq.conformal._utils import TENSOR_KEY, points_fingerprint
 from test.experimental.uq.conformal._helpers import (
     CALIBRATOR_CLASSES,
     TIERS,
     fit,
+    make_predictor,
 )
 
 
@@ -54,9 +58,9 @@ def test_cellwise_uses_exact_conformal_rank_and_returns_one_predictor():
 
 
 def test_plain_tensor_errors_do_not_leak_internal_key():
-    calibrator = CellwiseCalibrator(AbsoluteErrorScore(), alpha=0.2)
+    calibrator = FunctionalBandCalibrator(AbsoluteErrorScore(), alpha=0.2)
     with pytest.raises(ValueError, match="^Plain tensor: empty sample") as excinfo:
-        calibrator.update(torch.empty(0), torch.empty(0), points=torch.zeros(1, 1))
+        calibrator.update(torch.empty(0), torch.empty(0))
     assert TENSOR_KEY not in str(excinfo.value)
 
 
@@ -150,13 +154,12 @@ SCHEMA_REJECTIONS = [  # (id, first accepted sample or None, prediction, target,
 def test_schema_drift_is_rejected_transactionally(
     first, prediction, target, error, match
 ):
-    calibrator = CellwiseCalibrator(AbsoluteErrorScore(), alpha=0.5)
-    points = torch.arange(3.0).reshape(3, 1)
+    calibrator = FunctionalBandCalibrator(AbsoluteErrorScore(), alpha=0.5)
     if first is not None:
-        calibrator.update(first, first.clone(), points=points)
+        calibrator.update(first, first.clone())
     expected_n_cal = calibrator.n_cal
     with pytest.raises(error, match=match):
-        calibrator.update(prediction, target, points=points)
+        calibrator.update(prediction, target)
     assert calibrator.n_cal == expected_n_cal
 
 
@@ -183,66 +186,130 @@ def test_late_field_rejection_preserves_finalized_thresholds_transactionally(cls
         assert torch.equal(after[key], before[key])
 
 
-def test_score_snapshot_is_fixed():
-    """Calibrators and predictors hold snapshots of their score: neither
+def test_functional_band_uses_scalar_rank_across_varying_meshes():
+    calibrator = FunctionalBandCalibrator(AbsoluteErrorScore(), alpha=0.4)
+    for index, maximum in enumerate([1.0, 4.0, 2.0, 3.0], start=2):
+        target = torch.linspace(0.0, maximum, index)
+        points = torch.arange(float(index)).reshape(index, 1)
+        calibrator.update(torch.zeros_like(target), target, points=points)
+    predictor = calibrator.finalize()
+    assert predictor.tier == "functional"
+    assert predictor.thresholds.ndim == 0
+    assert float(predictor.thresholds) == 3.0  # k = ceil(5 * 0.6) = 3 of the sups
+
+    query = torch.zeros(7)
+    lo, hi = predictor.predict_interval(query, points=torch.arange(7.0).reshape(7, 1))
+    assert lo.shape == query.shape == hi.shape
+
+
+def test_difficulty_adaptation_and_strategy_snapshot_are_fixed():
+    """Calibrators and predictors hold snapshots of their strategies: neither
     caller-side mutation, accessor mutation, nor threshold mutation reaches
     the fitted rule, and semantic properties are read-only."""
     score = NormalizedErrorScore(eps=1.0)
-    calibrator = CellwiseCalibrator(score, alpha=0.5)
-    points = torch.arange(4.0).reshape(4, 1)
+    shared = AuxDifficulty("scale")
+    calibrator = FunctionalBandCalibrator(score, alpha=0.5, difficulty=shared)
     target = torch.ones(4, dtype=torch.float64)
     zeros = torch.zeros_like(target)
-    aux = {"sigma": zeros}
-    calibrator.update(zeros, target, aux=aux, points=points)
-    score.eps = 0.01  # the calibrator holds a snapshot, not the caller's object
-    for _ in range(2):
-        calibrator.update(zeros, target, aux=aux, points=points)
-    predictor = calibrator.finalize()
-    # sigma=0 clamps to eps=1: score |1 - 0| / 1 = 1.
-    assert torch.equal(predictor.thresholds, torch.ones(4, dtype=torch.float64))
-    assert predictor.score.eps == 1.0
-    calibrator.score.eps = 123.0  # accessors are defensive copies
-    assert calibrator.score.eps == 1.0
+    aux = {"scale": torch.full((4,), 2.0, dtype=torch.float64), "sigma": zeros}
+    bad_scale = torch.tensor([2.0, torch.inf, 2.0, 2.0], dtype=torch.float64)
+    with pytest.raises(ValueError, match="non-finite"):
+        calibrator.update(zeros, target, aux={**aux, "scale": bad_scale})
+    assert calibrator.n_cal == 0
 
-    lo, hi = predictor.predict_interval(zeros, aux=aux, points=points)
+    calibrator.update(zeros, target, aux=aux)
+    shared.key = "other"  # the calibrator holds a snapshot, not the caller's object
+    score.eps = 0.01
+    for _ in range(2):
+        calibrator.update(zeros, target, aux=aux)
+    predictor = calibrator.finalize()
+    # sigma=0 clamps to eps=1: score |1 - 0| / 1 = 1, normalized by scale 2.
+    assert float(predictor.thresholds) == 0.5
+    assert predictor.difficulty.key == "scale"
+    assert predictor.score.eps == 1.0
+    calibrator.difficulty.key = "mutated"  # accessors are defensive copies
+    assert calibrator.difficulty.key == "scale"
+
+    lo, hi = predictor.predict_interval(zeros, aux=aux)
     torch.testing.assert_close(hi, torch.ones(4, dtype=torch.float64))
     predictor.thresholds.mul_(1e6)
     predictor.score.__dict__["eps"] = 123.0
-    lo_again, hi_again = predictor.predict_interval(zeros, aux=aux, points=points)
+    predictor.difficulty.key = "mutated"
+    lo_again, hi_again = predictor.predict_interval(zeros, aux=aux)
     assert torch.equal(lo, lo_again) and torch.equal(hi, hi_again)
     for name, value in [
         ("tier", "cellwise"),
         ("alpha", 0.1),
         ("n_cal", 1),
         ("score", AbsoluteErrorScore()),
+        ("difficulty", AuxDifficulty()),
     ]:
         with pytest.raises(AttributeError, match="no setter"):
             setattr(predictor, name, value)
 
 
+@pytest.mark.parametrize("calibrator_cls", [FunctionalBandCalibrator])
+def test_scaled_tiers_reject_points_that_contradict_the_point_axis(calibrator_cls):
+    """A supplied coordinate tensor must align with the field's leading
+    (point) axis: the statistic is computed over that axis, so silently
+    accepting a contradictory points= would make it look load-bearing."""
+    calibrator = calibrator_cls(AbsoluteErrorScore(), alpha=0.5)
+    field = torch.zeros(2, 2, 1)
+    with pytest.raises(ValueError, match="leading entry per point"):
+        calibrator.update(field, field.clone(), points=torch.zeros(4, 3))
+    assert calibrator.n_cal == 0
+
+    for _ in range(3):
+        calibrator.update(field, torch.ones(2, 2, 1), points=torch.zeros(2, 3))
+    predictor = calibrator.finalize()
+    with pytest.raises(ValueError, match="leading entry per point"):
+        predictor.predict_interval(field, points=torch.zeros(4, 3))
+
+
+# fmt: off
+DOUBLE_SCALING_BOUNDARIES = [
+    pytest.param(lambda s, d: FunctionalBandCalibrator(s, alpha=0.5, difficulty=d), id="functional"),
+    pytest.param(lambda s, d: make_predictor(tier="functional", score=s, difficulty=d), id="direct_predictor"),
+]
+# fmt: on
+
+
+@pytest.mark.parametrize("build", DOUBLE_SCALING_BOUNDARIES)
+def test_double_scaling_pairing_is_rejected_everywhere(build):
+    """NormalizedErrorScore already divides by sigma; an AuxDifficulty('sigma')
+    would scale intervals by ~sigma**2. Every construction boundary must
+    reject it, and must keep allowing additive-aux pairings."""
+    with pytest.raises(ValueError, match="twice"):
+        build(NormalizedErrorScore(), AuxDifficulty("sigma"))
+    # Positive controls: reading a key is not dividing by it.
+    build(AbsoluteErrorScore(), AuxDifficulty("spread"))
+    build(QuantileRegressionScore(), AuxDifficulty("lo"))
+
+
 def test_keys_subset_round_trips_through_predict_save_and_diagnostics(tmp_path):
     generator = torch.Generator().manual_seed(7)
-    calibrator = CellwiseCalibrator(AbsoluteErrorScore(), alpha=0.25, keys=["pressure"])
-    points = torch.arange(12.0).reshape(12, 1)
+    calibrator = FunctionalBandCalibrator(
+        AbsoluteErrorScore(), alpha=0.25, keys=["pressure"]
+    )
     full = _td(pressure=torch.zeros(12), velocity=torch.zeros(12, 3))
     for _ in range(8):
         target = _td(
             pressure=torch.randn(12, generator=generator),
             velocity=torch.randn(12, 3, generator=generator),
         )
-        calibrator.update(full, target, points=points)
+        calibrator.update(full, target)
     predictor = calibrator.finalize()
     assert predictor.keys == ["pressure"]
 
     # The model's natural full output round-trips without a manual select.
-    lo, hi = predictor.predict_interval(full, points=points)
+    lo, hi = predictor.predict_interval(full)
     assert set(lo.keys()) == set(hi.keys()) == {"pressure"}
 
     path = tmp_path / "subset.pt"
     predictor.save(path)
     loaded = ConformalPredictor.load(path)
     assert loaded.keys == ["pressure"]
-    lo_loaded, hi_loaded = loaded.predict_interval(full, points=points)
+    lo_loaded, hi_loaded = loaded.predict_interval(full)
     torch.testing.assert_close(lo_loaded["pressure"], lo["pressure"])
     torch.testing.assert_close(hi_loaded["pressure"], hi["pressure"])
 
@@ -259,16 +326,24 @@ class _CustomScore(AbsoluteErrorScore):
     pass
 
 
+class _CustomDifficulty(AuxDifficulty):
+    pass
+
+
 def test_only_shipped_exact_strategy_types_are_accepted():
     with pytest.raises(TypeError, match="Subclasses are not supported"):
-        CellwiseCalibrator(_CustomScore(), alpha=0.5)
+        FunctionalBandCalibrator(_CustomScore(), alpha=0.5)
+    with pytest.raises(TypeError, match="Subclasses are not supported"):
+        FunctionalBandCalibrator(
+            AbsoluteErrorScore(), alpha=0.5, difficulty=_CustomDifficulty()
+        )
     # Every shipped score remains constructible.
     CellwiseCalibrator(NormalizedErrorScore(), alpha=0.5)
 
 
 def test_finalize_without_samples_fails_closed():
     with pytest.raises(RuntimeError, match="No calibration samples"):
-        CellwiseCalibrator(AbsoluteErrorScore(), alpha=0.5).finalize()
+        FunctionalBandCalibrator(AbsoluteErrorScore(), alpha=0.5).finalize()
 
 
 @pytest.mark.parametrize("tier", TIERS)
