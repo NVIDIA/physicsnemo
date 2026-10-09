@@ -111,8 +111,9 @@ def _solve_barycentric_system(
       matrix would square the condition number of thin cells.
 
     Degenerate cells, whose normalized edge matrix (square systems) or Gram
-    matrix has a determinant of exactly zero, have no barycentric
-    coordinates. Previously, on CPU, they fell back to the minimum-norm
+    matrix has a numerically zero determinant (within a few machine epsilons,
+    which also catches exactly singular cells whose determinant rounds to a
+    tiny nonzero value), have no barycentric coordinates. Previously, on CPU, they fell back to the minimum-norm
     least-squares solution and could contain query points; on CUDA the result
     was undefined. They now get NaN coordinates (and a NaN
     ``reconstruction_error`` for codimension != 0), so no containment test
@@ -129,11 +130,13 @@ def _solve_barycentric_system(
     length_scale = torch.where(edge_length_scale > 0, edge_length_scale, 1.0)
     E = relative_vectors / length_scale[..., None, None]  # rows e_i / L
     q = query_relative / length_scale[..., None]
+    # Exactly singular cells round to a determinant of a few eps, not always 0
+    # (e.g. with fused multiply-adds on CUDA).
+    singular_tolerance = n_manifold_dims * torch.finfo(E.dtype).eps
 
     if n_spatial_dims == n_manifold_dims:
         ### Square system: q = E^T w, so w = inv(E)^T q
-        # A zero determinant is where torch.linalg.solve used to raise.
-        is_degenerate = small_det(E) == 0
+        is_degenerate = small_det(E).abs() <= singular_tolerance
         eye = torch.eye(n_manifold_dims, dtype=E.dtype, device=E.device)
         E_inv = small_inverse(torch.where(is_degenerate[..., None, None], eye, E))
         # Broadcast-and-sum: a batched matmul of millions of tiny matrices is slow.
@@ -162,9 +165,12 @@ def _solve_barycentric_system(
                 b_k = b_k - r_jk.unsqueeze(-1) * b_j
                 edge_components[k].append(r_jk)
             b_k_sq = (b_k * b_k).sum(dim=-1)
-            is_degenerate = is_degenerate | (b_k_sq == 0)
+            # Dependent edge: its residual is at the rounding level of e_k
+            e_k_sq = (E[..., k, :] * E[..., k, :]).sum(dim=-1)
+            dependent = b_k_sq <= singular_tolerance**2 * e_k_sq
+            is_degenerate = is_degenerate | dependent
             basis.append(b_k)
-            safe_basis_sq.append(torch.where(b_k_sq == 0, 1.0, b_k_sq))
+            safe_basis_sq.append(torch.where(dependent, 1.0, b_k_sq))
 
         residual = q
         query_components = []  # c_j

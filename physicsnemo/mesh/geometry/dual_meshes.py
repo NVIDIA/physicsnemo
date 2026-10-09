@@ -504,10 +504,15 @@ def compute_circumcenters(
         E_normalized = relative_vecs / length_scale[:, None, None]
         b_normalized = 0.5 * (E_normalized * E_normalized).sum(dim=-1)
         # Degenerate cells have no circumcenter, so they return their centroid.
-        # safe_eps flags only numerically singular cells: near-degenerate cells
-        # keep their exact (distant) circumcenter. They invert the identity
-        # instead, which keeps values and gradients finite, branchlessly.
-        is_degenerate = ~has_extent | (small_det(E_normalized).abs() < safe_eps(dtype))
+        # The cutoff flags only numerically singular cells, whose determinant
+        # rounds to a few eps (not always 0, e.g. with fused multiply-adds on
+        # CUDA): near-degenerate cells keep their exact (distant) circumcenter.
+        # Degenerate cells invert the identity instead, which keeps values and
+        # gradients finite, branchlessly.
+        singular_tolerance = n_manifold_dims * torch.finfo(dtype).eps
+        is_degenerate = ~has_extent | (
+            small_det(E_normalized).abs() <= singular_tolerance
+        )
         eye = torch.eye(n_manifold_dims, dtype=dtype, device=vertices.device)
         E_inv = small_inverse(
             torch.where(is_degenerate[:, None, None], eye, E_normalized)

@@ -129,7 +129,8 @@ def _reference_cotan_weights(mesh: Mesh) -> torch.Tensor:
     H = torch.cat([-torch.ones(1, n, dtype=dtype), torch.eye(n, dtype=dtype)]).to(
         G.device
     )
-    C = H @ torch.linalg.inv(G) @ H.T
+    # Unchecked, as main inverted G: LAPACK may meet an exactly zero pivot in float32
+    C = H @ torch.linalg.inv_ex(G, check_errors=False).inverse @ H.T
     rows, cols = torch.triu_indices(n + 1, n + 1, offset=1)
     per_cell = -mesh.cell_areas[:, None] * C[:, rows, cols]
     weights = torch.zeros(len(unique_edges), dtype=dtype, device=G.device)
@@ -258,7 +259,8 @@ def test_float32_cotan_weights_of_thin_cells(
         """90th percentile of the relative error, floored at a typical weight."""
         floor = truth.abs().median()
         relative = (weights.double() - truth).abs() / truth.abs().clamp_min(floor)
-        return relative.quantile(0.9).item()
+        # A weight that failed (NaN) counts as an infinitely large error
+        return relative.nan_to_num(nan=float("inf")).quantile(0.9).item()
 
     fast = error(compute_cotan_weights_fem(mesh)[0])
     batched = error(_reference_cotan_weights(mesh))

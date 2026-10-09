@@ -263,8 +263,10 @@ class TestClosedCurveAngleSums:
             ),
             cells=torch.tensor([[0, 1], [1, 2]], device=device),
         )
-        assert compute_angles_at_vertices(mesh)[1] == pytest.approx(torch.pi)
-        assert mesh.gaussian_curvature_vertices[1] == pytest.approx(0.0, abs=1e-6)
+        assert compute_angles_at_vertices(mesh)[1].item() == pytest.approx(torch.pi)
+        assert mesh.gaussian_curvature_vertices[1].item() == pytest.approx(
+            0.0, abs=1e-6
+        )
 
 
 ###############################################################################
