@@ -1,0 +1,10 @@
+# House style word choices observed in tech-writer edits.
+extends: substitution
+message: "Use '%s' instead of '%s'."
+level: warning
+ignorecase: true
+action:
+  name: replace
+swap:
+  via: through
+  'just like': like
