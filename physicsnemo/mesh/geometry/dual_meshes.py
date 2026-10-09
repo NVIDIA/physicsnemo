@@ -587,7 +587,10 @@ def compute_cotan_weights_fem(
             \quad \text{for } k, l \ge 1.
 
     For pairs involving vertex 0, the constraint
-    :math:`\sum_i \nabla \lambda_i = 0` is used.
+    :math:`\sum_i \nabla \lambda_i = 0` is used. When the cells are
+    full-dimensional (:math:`n = d`), :math:`E` is square and
+    :math:`G^{-1} = E^{-\top} E^{-1}` comes from the inverse of :math:`E` itself:
+    forming :math:`G` would square the condition number of thin cells.
 
     Parameters
     ----------
@@ -635,11 +638,6 @@ def compute_cotan_weights_fem(
     # E: (n_cells, n_manifold_dims, n_spatial_dims) - rows are e_k = v_k - v_0
     E = cell_vertices[:, 1:, :] - cell_vertices[:, :1, :]
 
-    ### Compute Gram matrix G = E @ E^T
-    # G: (n_cells, n_manifold_dims, n_manifold_dims)
-    # Broadcast-and-sum: a batched matmul of millions of tiny matrices is slow.
-    G = (E.unsqueeze(-2) * E.unsqueeze(-3)).sum(dim=-1)
-
     ### Handle degenerate cells by substituting an isotropic Gram matrix
     # Degenerate cells (collinear/coplanar vertices) have det(G) ~ 0, so inverting
     # G as-is would fail. Their contribution is meant to vanish anyway, because
@@ -654,25 +652,41 @@ def compute_cotan_weights_fem(
     # normal positive number and G / g_scale is a dimensionless O(1) matrix.
     edge_length_scale = E.norm(dim=-1).mean(dim=-1)  # (n_cells,)
     has_extent = edge_length_scale > torch.finfo(dtype).tiny ** 0.5  # (n_cells,)
-    g_scale = torch.where(has_extent, edge_length_scale, 1.0).square()  # (n_cells,)
+    length_scale = torch.where(has_extent, edge_length_scale, 1.0)  # (n_cells,)
+    g_scale = length_scale.square()  # (n_cells,)
+    eye = torch.eye(n_manifold_dims, dtype=dtype, device=device)
 
     # det(G) == det(G / g_scale) * g_scale**n, so thresholding the dimensionless
     # determinant applies exactly the same criterion as a scale-aware threshold on
     # det(G), without the under/overflow that the g_scale**n factor would suffer.
     # Cells with no usable extent carry no direction at all, so are always degenerate.
     # Written branchlessly so torch.compile can trace through without graph breaks.
-    G_normalized = G / g_scale[:, None, None]
-    is_degenerate = ~has_extent | (_small_det(G_normalized).abs() < 1e-12)  # (n_cells,)
-    eye = torch.eye(n_manifold_dims, dtype=dtype, device=device)
-    G_normalized = torch.where(is_degenerate[:, None, None], eye, G_normalized)
+    # Every normalized matrix inverted below is then invertible by construction:
+    # degenerate cells hold the identity, and the rest satisfy
+    # |det(G / g_scale)| >= 1e-12. Inverting the O(1) normalized matrix and
+    # rescaling, inv(G) = inv(G / g_scale) / g_scale, keeps closed-form
+    # determinants of tiny or huge cells in range.
+    if n_manifold_dims == mesh.n_spatial_dims:
+        ### Full-dimensional cells: invert E itself, inv(G) = inv(E)^T inv(E)
+        # Forming G squares the condition number of E, which in float32 costs thin
+        # cells most of their accuracy. det(G / g_scale) == det(E / length_scale)**2.
+        E_normalized = E / length_scale[:, None, None]
+        is_degenerate = ~has_extent | (_small_det(E_normalized).square() < 1e-12)
+        E_normalized = torch.where(is_degenerate[:, None, None], eye, E_normalized)
+        E_inv = _small_inverse(E_normalized)
+        # Broadcast-and-sum: a batched matmul of millions of tiny matrices is slow.
+        G_normalized_inv = (E_inv.unsqueeze(-1) * E_inv.unsqueeze(-2)).sum(dim=-3)
+    else:
+        ### Gram matrix G = E @ E^T: (n_cells, n_manifold_dims, n_manifold_dims)
+        # Broadcast-and-sum: a batched matmul of millions of tiny matrices is slow.
+        G = (E.unsqueeze(-2) * E.unsqueeze(-3)).sum(dim=-1)
+        G_normalized = G / g_scale[:, None, None]
+        is_degenerate = ~has_extent | (_small_det(G_normalized).abs() < 1e-12)
+        G_normalized = torch.where(is_degenerate[:, None, None], eye, G_normalized)
+        G_normalized_inv = _small_inverse(G_normalized)
 
-    ### Invert Gram matrix
     # G_inv: (n_cells, n_manifold_dims, n_manifold_dims)
-    # Every normalized G is now invertible by construction: degenerate cells hold
-    # the identity, and the rest satisfy |det(G / g_scale)| >= 1e-12. Inverting
-    # the O(1) normalized matrix and rescaling, inv(G) = inv(G / g_scale) / g_scale,
-    # keeps closed-form determinants of tiny or huge cells in range.
-    G_inv = _small_inverse(G_normalized) / g_scale[:, None, None]
+    G_inv = G_normalized_inv / g_scale[:, None, None]
 
     ### Extract gradient dot products for each local edge pair (i, j), i < j
     # These are the upper-triangle entries of C = H @ G_inv @ H^T, where
