@@ -213,6 +213,7 @@ def extract_candidate_facets(
     manifold_codimension : int, optional
         Codimension of the extracted mesh relative to parent.
 
+        - 0: The cells themselves (e.g., the edges of a 1D mesh)
         - 1: Extract (n-1)-facets (default, e.g., triangular faces from tets)
         - 2: Extract (n-2)-facets (e.g., edges from tets, vertices from triangles)
         - k: Extract (n-k)-facets
@@ -247,9 +248,9 @@ def extract_candidate_facets(
     n_vertices_per_subsimplex = n_vertices_per_cell - manifold_codimension
 
     ### Validate codimension
-    if manifold_codimension < 1:
+    if manifold_codimension < 0:
         raise ValueError(
-            f"{manifold_codimension=} must be >= 1. "
+            f"{manifold_codimension=} must be >= 0. "
             "Use codimension=1 to extract immediate boundary facets."
         )
     if n_vertices_per_subsimplex < 1:
