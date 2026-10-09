@@ -100,29 +100,34 @@ def iter_neighborhood_batches(
     neighbor_counts = adjacency.counts
 
     ### Optionally clamp to max_neighbors
+    # (clamp takes the bound as a kernel argument; a device tensor built from it
+    # would be a blocking host-to-device copy)
     if max_neighbors is not None:
-        effective_counts = torch.minimum(
-            neighbor_counts,
-            torch.tensor(max_neighbors, dtype=neighbor_counts.dtype, device=device),
-        )
+        effective_counts = neighbor_counts.clamp(max=max_neighbors)
     else:
         effective_counts = neighbor_counts
 
     ### Group by effective neighbor count
-    unique_counts, inverse_indices = torch.unique(effective_counts, return_inverse=True)
+    # A stable sort lists each group's entities contiguously, in ascending index
+    # order. One transfer then brings every group's count and size to the host,
+    # rather than synchronizing the device twice per group.
+    order = torch.argsort(effective_counts, stable=True)
+    unique_counts, group_sizes = torch.unique_consecutive(
+        effective_counts[order], return_counts=True
+    )
+    group_counts, group_sizes = torch.stack((unique_counts, group_sizes)).tolist()
 
     ### Yield one batch per unique count
-    for count_idx, count_tensor in enumerate(unique_counts):
-        n_neighbors = int(count_tensor)
+    group_end = 0
+    for n_neighbors, group_size in zip(group_counts, group_sizes):
+        group_start, group_end = group_end, group_end + group_size
 
         # Skip groups below the minimum threshold
         if n_neighbors < min_neighbors:
             continue
 
-        # Find all entities in this group
-        entity_indices = torch.where(inverse_indices == count_idx)[0]
-        if len(entity_indices) == 0:
-            continue
+        # All entities in this group
+        entity_indices = order[group_start:group_end]
 
         ### Extract neighbor indices for the entire group at once
         # Build a (n_group, n_neighbors) index matrix into adjacency.indices

@@ -130,7 +130,9 @@ def compute_point_gradient_lsq_intrinsic(
         tangent_basis = tangent_bases[
             point_indices
         ]  # (n_group, n_spatial_dims, n_manifold_dims)
-        A_tangent = torch.einsum("gns,gsm->gnm", A_ambient, tangent_basis)
+        # Broadcast-and-sum contractions: batched matmuls of these tiny matrices
+        # (as einsum would dispatch) are much slower on GPUs.
+        A_tangent = (A_ambient.unsqueeze(-1) * tangent_basis.unsqueeze(1)).sum(dim=-2)
 
         ### Function differences
         b = point_values[neighbors_flat] - point_values[point_indices].unsqueeze(1)
@@ -151,7 +153,7 @@ def compute_point_gradient_lsq_intrinsic(
             ).solution.squeeze(-1)  # (n_group, n_manifold_dims)
 
             # Map back to ambient coordinates
-            grad_ambient = torch.einsum("gsm,gm->gs", tangent_basis, grad_tangent)
+            grad_ambient = (tangent_basis * grad_tangent.unsqueeze(1)).sum(dim=-1)
             gradients[point_indices] = grad_ambient
         else:
             # Tensor field: flatten extra dims, solve, map back
@@ -164,7 +166,9 @@ def compute_point_gradient_lsq_intrinsic(
                 A_tangent_weighted, b_flat, rcond=None
             ).solution  # (n_group, n_manifold_dims, n_components)
 
-            grad_ambient = torch.bmm(tangent_basis, grad_tangent)
+            grad_ambient = (
+                tangent_basis.unsqueeze(-1) * grad_tangent.unsqueeze(1)
+            ).sum(dim=-2)
             grad_ambient_reshaped = grad_ambient.reshape(
                 n_group, n_spatial_dims, *orig_shape
             )

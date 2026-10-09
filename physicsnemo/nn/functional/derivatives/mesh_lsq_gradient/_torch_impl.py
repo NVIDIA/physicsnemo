@@ -68,15 +68,20 @@ def mesh_lsq_gradient_torch(
     dist_eps = resolve_safe_epsilon(safe_epsilon=safe_epsilon, dtype=points_cast.dtype)
 
     ### Process one dense batch per neighbor-count group (mesh-module strategy).
-    unique_counts = torch.unique(counts)
-    for count_tensor in unique_counts:
-        n_neighbors = int(count_tensor.item())
+    # A stable sort lists each group's entities contiguously, in ascending index
+    # order; one transfer brings every group's count and size to the host.
+    order = torch.argsort(counts, stable=True)
+    unique_counts, group_sizes = torch.unique_consecutive(
+        counts[order], return_counts=True
+    )
+    group_counts, group_sizes = torch.stack((unique_counts, group_sizes)).tolist()
+    group_end = 0
+    for n_neighbors, group_size in zip(group_counts, group_sizes):
+        group_start, group_end = group_end, group_end + group_size
         if n_neighbors < min_neighbors or n_neighbors == 0:
             continue
 
-        entity_indices = torch.where(counts == count_tensor)[0]
-        if entity_indices.numel() == 0:
-            continue
+        entity_indices = order[group_start:group_end]
 
         offsets_group = neighbor_offsets[entity_indices]
         col_range = torch.arange(n_neighbors, device=points.device, dtype=torch.int64)
