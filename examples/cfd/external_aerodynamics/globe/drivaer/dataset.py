@@ -611,7 +611,9 @@ def postprocess(
         ``point_data["error"]`` for the selected fields, and
         ``global_data["pred"]`` (integrated from predictions) /
         ``global_data["true"]`` (CSV ground truth) each containing
-        scalar force coefficient tensors (Cd, Cl, Cs).
+        scalar force coefficient tensors (Cd, Cl, Cs). The mesh keeps the
+        effective cell measures of ``sample.prediction_mesh``, including
+        subsampling corrections.
 
     Raises:
         ValueError: If pred_mesh and the sample surface mesh have
@@ -641,13 +643,15 @@ def postprocess(
     # pred_mesh is a point cloud (no cells), so we construct a surface
     # mesh with true_mesh's cell connectivity for integration.
     a_ref = float(sample.dimensional_constants["A_ref"])
+    measures = cell_measures(true_mesh)
     pred_surface = true_mesh.with_data(
         point_data=pred_mesh.point_data,
         cell_data={},
         global_data={},
     )
+    set_cell_measures(pred_surface, measures)
 
-    return true_mesh.with_data(
+    combined = true_mesh.with_data(
         point_data=TensorDict(
             {
                 "true": true_selected,
@@ -666,6 +670,9 @@ def postprocess(
             }
         ),
     )
+    ### Disk rendering sizes cells by represented area, not kept-triangle area.
+    set_cell_measures(combined, measures)
+    return combined
 
 
 def visualize_comparison(
@@ -736,7 +743,7 @@ def compute_surface_force_coefficients(
 
     Computes drag, lift, and side-force coefficients by area-weighted
     integration of pressure and skin-friction contributions over the car
-    body surface.
+    body surface, using effective cell measures to account for subsampling.
 
     The pressure force on the body is ``-C_p * n`` (outward normal convention)
     and the friction force is ``C_f`` (tangential).  Normal orientation is
@@ -753,7 +760,7 @@ def compute_surface_force_coefficients(
     Returns:
         TensorDict with scalar-tensor entries ``"Cd"``, ``"Cl"``, ``"Cs"``.
     """
-    areas = surface_mesh.cell_areas  # (n_cells,)
+    areas = cell_measures(surface_mesh)  # (n_cells,)
     raw_normals = surface_mesh.cell_normals  # (n_cells, 3)
 
     ### Orient normals outward using the divergence theorem

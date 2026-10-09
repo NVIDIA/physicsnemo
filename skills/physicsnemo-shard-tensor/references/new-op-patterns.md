@@ -78,8 +78,10 @@ Modeled on `pooling_patches.py` / `conv_patches.py`:
 ```python
 from physicsnemo.domain_parallel import ShardTensor
 from physicsnemo.domain_parallel.shard_utils.patch_core import (
-    MissingShardPatch, promote_to_iterable,
+    MissingShardPatch,
+    promote_to_iterable,
 )
+
 
 def generic_my_op_wrapper(func, types, args, kwargs):
     # 1. Normalize arguments (scalars -> per-dim tuples, defaults, etc.)
@@ -103,12 +105,14 @@ def generic_my_op_wrapper(func, types, args, kwargs):
     #    ops, compute output shard shapes per rank from the input's
     #    spec.sharding_shapes() - pure arithmetic, no collectives.
     return ShardTensor.from_local(
-        local_out, x.device_mesh, x.placements,
-        sharding_shapes=computed_shapes_dict,   # or "chunk" + global_shape
+        local_out,
+        x.device_mesh,
+        x.placements,
+        sharding_shapes=computed_shapes_dict,  # or "chunk" + global_shape
     )
 
-ShardTensor.register_function_handler(torch.nn.functional.my_op,
-                                      generic_my_op_wrapper)
+
+ShardTensor.register_function_handler(torch.nn.functional.my_op, generic_my_op_wrapper)
 ```
 
 Result-construction options, cheapest first:

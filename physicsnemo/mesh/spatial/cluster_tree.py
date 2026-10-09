@@ -43,6 +43,7 @@ independent.
 """
 
 import logging
+import math
 from typing import NamedTuple
 
 import torch
@@ -554,20 +555,29 @@ def _compact_sentinel_padded(
     return padded_tensor[keep_idx], new_pos[referencing_indices]
 
 
-def _sort_by_key(
-    *tensors: torch.Tensor,
-    key: torch.Tensor,
-) -> tuple[torch.Tensor, ...]:
-    """Stable-sort companion tensors by ``key``; no-op on empty input.
+def _traversal_tables(
+    tree: "ClusterTree",
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Feature-major per-node tables for :meth:`ClusterTree.find_dual_interaction_pairs`.
 
-    Used at the end of ``find_dual_interaction_pairs`` to group each
-    output stream by source index (or source node) for coalesced
-    downstream gathers.
+    Returns ``box`` of shape ``(2 * D + 2, n_nodes)`` holding ``[aabb_min,
+    aabb_max, diameter, diameter_sq]`` and ``kids`` of shape ``(2, n_nodes)``
+    holding ``[left, right]``. They are gathered with ``index_select`` along
+    dim 1: row gathers ``x[idx]`` of rows that are a multiple of 16 bytes wide
+    take a vectorized CUDA path that is ~30x slower on GB300.
     """
-    if key.numel() == 0:
-        return tensors
-    order = key.argsort(stable=True)
-    return tuple(t[order] for t in tensors)
+    diam_sq = tree.node_diameter_sq
+    box = torch.cat(
+        [
+            tree.node_aabb_min.t(),
+            tree.node_aabb_max.t(),
+            diam_sq.sqrt()[None],
+            diam_sq[None],
+        ],
+        dim=0,
+    )
+    kids = torch.stack([tree.node_left_child, tree.node_right_child], dim=0)
+    return box, kids
 
 
 # ---------------------------------------------------------------------------
@@ -854,58 +864,63 @@ class ClusterTree(TensorClass):
         # fp64, but cumsum is a tiny fraction of step time).  CUDA fp32
         # cumsum is also non-deterministic across runs (pytorch#75240);
         # fp64 cumsum is much less affected.
+        #
+        # The centroid numerators and every ``source_data`` leaf share one
+        # packed ``(N, F)`` prefix sum, scanned feature-major: on CUDA,
+        # ``cumsum`` along a non-innermost dimension runs one thread per
+        # column, serially over all ``N`` rows (12 ms for ``(80_000, 3)`` in
+        # fp64 on a GB300, against 0.24 ms along the innermost dimension).
+        n_sources = source_points.shape[0]
         sorted_points = source_points[self.sorted_source_order]
         sorted_areas = areas[self.sorted_source_order]
-        # Both the numerator and denominator must use the call-time weights.
-        sorted_areas_64 = sorted_areas.double()
-        weighted_points_64 = (sorted_points * sorted_areas.unsqueeze(-1)).double()
-
-        ### Leading-zero padding makes ``prefix[i]`` the sum of the first
-        ### ``i`` elements, so subtraction gives the half-open range sum.
-        cumsum_weighted_points = F.pad(
-            torch.cumsum(weighted_points_64, dim=0), (0, 0, 1, 0)
+        leaf_keys: list = []
+        leaf_tensors: list[torch.Tensor] = []
+        if source_data is not None:
+            sorted_source_data = source_data[self.sorted_source_order]
+            for key in sorted_source_data.keys(include_nested=True, leaves_only=True):
+                leaf_keys.append(key)
+                leaf_tensors.append(sorted_source_data[key])
+        packed = torch.cat(
+            [sorted_points] + [t.reshape(n_sources, -1) for t in leaf_tensors], dim=1
         )
-        cumsum_areas = F.pad(torch.cumsum(sorted_areas_64, dim=0), (1, 0))
+        # Both the numerator and denominator must use the call-time weights.
+        weighted_64 = (packed * sorted_areas.unsqueeze(-1)).double()
+
+        ### Leading-zero padding makes ``prefix[:, i]`` the sum of the first
+        ### ``i`` elements, so subtraction gives the half-open range sum.
+        prefix = F.pad(torch.cumsum(weighted_64.t(), dim=1), (1, 0))  # (F, N + 1)
+        area_prefix = F.pad(torch.cumsum(sorted_areas.double(), dim=0), (1, 0))
 
         starts = self.node_range_start
         ends = starts + self.node_range_count
-        node_total_weighted_pts = (
-            cumsum_weighted_points[ends] - cumsum_weighted_points[starts]
-        )
-        node_total_area_64 = cumsum_areas[ends] - cumsum_areas[starts]
+        node_total_area_64 = area_prefix[ends] - area_prefix[starts]
         nonzero_total = node_total_area_64 != 0
         safe_areas_64 = node_total_area_64.where(nonzero_total, 1)
-        with record_function("cluster_tree::node_centroids"):
-            centroid_64 = node_total_weighted_pts / safe_areas_64.unsqueeze(-1)
-            centroid_buf = centroid_64.where(nonzero_total.unsqueeze(-1), 0).to(
-                source_points.dtype
-            )
+        with record_function("cluster_tree::node_means"):
+            node_means = (prefix[:, ends] - prefix[:, starts]) / safe_areas_64
+            node_means = node_means.where(nonzero_total, 0).t()  # (n_nodes, F)
 
+        centroid_buf = node_means[:, :D].to(dtype)
         node_source_data: TensorDict | None = None
         if source_data is not None:
-            sorted_source_data = source_data[self.sorted_source_order]
-
-            def _aggregate_via_prefix_sum(tensor: torch.Tensor) -> torch.Tensor:
-                trailing_shape = tensor.shape[1:]
-                ### Flatten trailing dims so the prefix sum is over a
-                ### single feature axis - avoids materialising a
-                ### per-feature kernel chain inside ``cumsum``.  Same fp64
-                ### upcast rationale as the centroid branch above.
-                flat = tensor.reshape(tensor.shape[0], -1)
-                weighted_64 = (flat * sorted_areas.unsqueeze(-1)).double()
-                cumsum_weighted = F.pad(torch.cumsum(weighted_64, dim=0), (0, 0, 1, 0))
-                node_weighted_sum = cumsum_weighted[ends] - cumsum_weighted[starts]
-                node_avg = node_weighted_sum / safe_areas_64.unsqueeze(-1)
-                node_avg = node_avg.where(nonzero_total.unsqueeze(-1), 0)
-                return node_avg.reshape((n_nodes,) + trailing_shape).to(tensor.dtype)
-
-            with record_function("cluster_tree::node_source_data"):
-                node_source_data = sorted_source_data.apply(
-                    _aggregate_via_prefix_sum, batch_size=[n_nodes]
-                )
+            nested: dict = {}
+            offset = D
+            for key, tensor in zip(leaf_keys, leaf_tensors):
+                width = math.prod(tensor.shape[1:])
+                value = node_means[:, offset : offset + width]
+                value = value.reshape((n_nodes,) + tensor.shape[1:]).to(tensor.dtype)
+                offset += width
+                *parents, name = (key,) if isinstance(key, str) else key
+                level = nested
+                for parent in parents:
+                    level = level.setdefault(parent, {})
+                level[name] = value.contiguous()
+            node_source_data = TensorDict(
+                nested, batch_size=[n_nodes], device=source_data.device
+            )
 
         return SourceAggregates(
-            node_centroid=centroid_buf,
+            node_centroid=centroid_buf.contiguous(),
             node_source_data=node_source_data,
         )
 
@@ -979,6 +994,35 @@ class ClusterTree(TensorClass):
                 fn_expanded_pair_ids=empty.clone(),
             )
 
+        if theta == 0:
+            ### No pair is ever admitted to the far field (``0 > d^2``), so the
+            ### plan is every (target, source) pair; build it directly instead
+            ### of walking both trees down to every leaf pair.
+            n_t, n_s = target_tree.n_sources, source_tree.n_sources
+            empty = torch.empty(0, dtype=torch.long, device=device)
+            plan = DualInteractionPlan(
+                near_target_ids=torch.arange(n_t, device=device).repeat_interleave(
+                    n_s, output_size=n_t * n_s
+                ),
+                near_source_ids=torch.arange(n_s, device=device).repeat(n_t),
+                far_target_node_ids=empty,
+                far_source_node_ids=empty.clone(),
+                nf_target_ids=empty.clone(),
+                nf_source_node_ids=empty.clone(),
+                fn_target_node_ids=empty.clone(),
+                fn_source_ids=empty.clone(),
+                fn_broadcast_targets=empty.clone(),
+                fn_broadcast_starts=empty.clone(),
+                fn_broadcast_counts=empty.clone(),
+                far_broadcast_target_ids=empty.clone(),
+                far_broadcast_pair_ids=empty.clone(),
+                fn_expanded_target_ids=empty.clone(),
+                fn_expanded_pair_ids=empty.clone(),
+            )
+            if validate and not torch.compiler.is_compiling():
+                plan.validate()
+            return plan
+
         with record_function("cluster_tree::dual_traversal"):
             ### Initialize: root-to-root pair
             active_tgt_nodes = torch.zeros(1, dtype=torch.long, device=device)
@@ -1047,37 +1091,53 @@ class ClusterTree(TensorClass):
             max_iters = 2 * (n_src_levels + n_tgt_levels) + 4
             depth = 0
 
+            ### Per-node tables gathered once per iteration and side (instead
+            ### of one gather per field): ``[aabb_min, aabb_max, diameter,
+            ### diameter_sq]`` and ``[left, right]``.  Every internal node of
+            ### the LBVH has two children and every leaf has none, so
+            ### ``left < 0`` identifies leaves and no child-validity checks
+            ### are needed below.
+            n_dims = source_tree.n_spatial_dims
+            box_S, kids_S = _traversal_tables(source_tree)
+            box_T, kids_T = (
+                (box_S, kids_S)
+                if target_tree is source_tree
+                else _traversal_tables(target_tree)
+            )
+
             for depth in range(max_iters):
                 ### ``numel()`` is a shape query (Python int), not a sync.
                 if active_tgt_nodes.numel() == 0:
                     break
 
+                bT = box_T.index_select(1, active_tgt_nodes)
+                bS = box_S.index_select(1, active_src_nodes)
+                kT = kids_T.index_select(1, active_tgt_nodes)
+                kS = kids_S.index_select(1, active_src_nodes)
+
                 ### Combined opening criterion: minimum AABB-to-AABB gap.
                 # For each dimension, the gap is the positive distance
                 # between the two boxes (zero if they overlap).
-                aabb_min_T = target_tree.node_aabb_min[active_tgt_nodes]
-                aabb_max_T = target_tree.node_aabb_max[active_tgt_nodes]
-                aabb_min_S = source_tree.node_aabb_min[active_src_nodes]
-                aabb_max_S = source_tree.node_aabb_max[active_src_nodes]
-
                 gap = torch.clamp(
-                    torch.maximum(aabb_min_T - aabb_max_S, aabb_min_S - aabb_max_T),
+                    torch.maximum(
+                        bT[:n_dims] - bS[n_dims : 2 * n_dims],
+                        bS[:n_dims] - bT[n_dims : 2 * n_dims],
+                    ),
                     min=0,
                 )
-                min_dist_sq = gap.pow(2).sum(dim=-1)
+                min_dist_sq = gap.pow(2).sum(dim=0)
 
-                diam_sq_T = target_tree.node_diameter_sq[active_tgt_nodes]
-                diam_sq_S = source_tree.node_diameter_sq[active_src_nodes]
-                diam_T = diam_sq_T.sqrt()
-                diam_S = diam_sq_S.sqrt()
-                combined_diam_sq = (diam_T + diam_S).pow(2)
-
+                diam_sq_T = bT[2 * n_dims + 1]
+                diam_sq_S = bS[2 * n_dims + 1]
+                combined_diam_sq = (bT[2 * n_dims] + bS[2 * n_dims]).pow(2)
                 is_far = min_dist_sq * theta_sq > combined_diam_sq
 
                 ### Classify active pairs (boolean masks over the full
                 ### active set; combined later via ``need_split``).
-                is_leaf_T = target_tree.leaf_count[active_tgt_nodes] > 0
-                is_leaf_S = source_tree.leaf_count[active_src_nodes] > 0
+                left_T, right_T = kT[0], kT[1]
+                left_S, right_S = kS[0], kS[1]
+                is_leaf_T = left_T < 0
+                is_leaf_S = left_S < 0
                 near_leaf_leaf = (~is_far) & is_leaf_T & is_leaf_S
                 need_split = (~is_far) & (~near_leaf_leaf)
 
@@ -1100,20 +1160,16 @@ class ClusterTree(TensorClass):
                 # the original implementation.  After unioning the eight
                 # potential child slots we pay ONE boolean compaction
                 # instead of the original ~12 ``.any()``-gated indexings.
-                do_split_T = (~is_leaf_T) & (is_leaf_S | (diam_sq_T >= diam_sq_S))
-                do_split_S = (~is_leaf_S) & (is_leaf_T | (diam_sq_S >= diam_sq_T))
+                # ``~(a > b)`` equals ``a <= b`` except that it is True for a
+                # NaN diameter: a pair with a non-finite box is then split
+                # down to its leaves and lands in the exact near-field
+                # stream (so NaN inputs propagate to the output) instead of
+                # matching no case and silently dropping out of the plan.
+                do_split_T = (~is_leaf_T) & (is_leaf_S | ~(diam_sq_S > diam_sq_T))
+                do_split_S = (~is_leaf_S) & (is_leaf_T | ~(diam_sq_T > diam_sq_S))
                 case_T_only = need_split & do_split_T & (~do_split_S)
                 case_S_only = need_split & do_split_S & (~do_split_T)
                 case_both = need_split & do_split_T & do_split_S
-
-                left_T = target_tree.node_left_child[active_tgt_nodes]
-                right_T = target_tree.node_right_child[active_tgt_nodes]
-                left_S = source_tree.node_left_child[active_src_nodes]
-                right_S = source_tree.node_right_child[active_src_nodes]
-                left_T_ok = left_T >= 0
-                right_T_ok = right_T >= 0
-                left_S_ok = left_S >= 0
-                right_S_ok = right_S >= 0
 
                 ### Eight child-pair slots: each is (t_ids, s_ids, validity)
                 ### where every tensor has shape ``(n_active,)``.
@@ -1151,14 +1207,14 @@ class ClusterTree(TensorClass):
                 )
                 slot_v = torch.stack(
                     [
-                        case_T_only & left_T_ok,
-                        case_T_only & right_T_ok,
-                        case_S_only & left_S_ok,
-                        case_S_only & right_S_ok,
-                        case_both & left_T_ok & left_S_ok,
-                        case_both & left_T_ok & right_S_ok,
-                        case_both & right_T_ok & left_S_ok,
-                        case_both & right_T_ok & right_S_ok,
+                        case_T_only,
+                        case_T_only,
+                        case_S_only,
+                        case_S_only,
+                        case_both,
+                        case_both,
+                        case_both,
+                        case_both,
                     ]
                 )
 
@@ -1171,6 +1227,12 @@ class ClusterTree(TensorClass):
                 keep_idx = flat_v.nonzero(as_tuple=True)[0]
                 active_tgt_nodes = slot_t.reshape(-1)[keep_idx]
                 active_src_nodes = slot_s.reshape(-1)[keep_idx]
+
+            if active_tgt_nodes.numel() != 0:
+                raise RuntimeError(
+                    f"dual traversal did not terminate in {max_iters} iterations "
+                    f"({active_tgt_nodes.numel()} node pairs still open)"
+                )
 
             ### Concatenate accumulated pairs and pay one boolean
             ### compaction per output stream, all at end-of-traversal.
@@ -1308,16 +1370,10 @@ class ClusterTree(TensorClass):
                 fn_bstarts = empty_long.clone()
                 fn_bcounts = empty_long.clone()
 
-            ### Group each output stream by source index (or source node)
-            ### for coalesced downstream gathers.  See :func:`_sort_by_key`.
-            near_tgt, near_src = _sort_by_key(near_tgt, near_src, key=near_src)
-            far_tgt_nid, far_src_nid = _sort_by_key(
-                far_tgt_nid, far_src_nid, key=far_src_nid
-            )
-            nf_tgt, nf_snid = _sort_by_key(nf_tgt, nf_snid, key=nf_snid)
-            fn_tnid, fn_sid, fn_bstarts, fn_bcounts = _sort_by_key(
-                fn_tnid, fn_sid, fn_bstarts, fn_bcounts, key=fn_sid
-            )
+            ### Streams stay in traversal order. Grouping them by source made
+            ### GLOBE's BarnesHutKernel 5-25% slower on a GB300, cost ~40% of the
+            ### plan's peak memory, and ``torch.sort`` rejects streams longer than
+            ### ``INT_MAX`` (the communication plan at 800k faces and theta=1).
 
             ### Expand both broadcasts now (sizes are host-known).
             positions, far_bcast_pairs = _ragged_arange(

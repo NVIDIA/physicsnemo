@@ -312,7 +312,7 @@ Contributions to the library, examples, and documentation are welcome.
   and coordinate the proposed work with maintainers in an issue or discussion.**
   Every pull request should correspond to an open issue. For substantial changes,
   wait for maintainer feedback before starting implementation.
-- Follow the [code of conduct](https://github.com/NVIDIA/physicsnemo/blob/main/CODE_OF_CONDUCT.MD),
+- Follow the [code of conduct](https://github.com/NVIDIA/physicsnemo/blob/main/CODE_OF_CONDUCT.md),
   and report vulnerabilities privately through the
   [security policy](https://github.com/NVIDIA/physicsnemo/blob/main/SECURITY.md).
 

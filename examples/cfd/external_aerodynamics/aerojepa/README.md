@@ -199,7 +199,7 @@ from the latent representation. The first block is the paper's reported
 numbers; the second is this recipe's tutorial-scale run.
 
 | Model | Field | Rel L2 | Rel L1 | RMSE / GT Max | MAE / GT Max | RMSE | MAE |
-|---|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- | --- |
 | **AeroJEPA (paper)** | Cf,τ | 0.0548 ± 0.0258 | 0.0302 ± 0.0121 | 0.0186 ± 0.0074 | 0.0090 ± 0.0029 | 0.0543 ± 0.0245 | 0.0261 ± 0.0092 |
 | | Cf,z | 0.1084 ± 0.0513 | 0.0768 ± 0.0284 | 0.0156 ± 0.0087 | 0.0077 ± 0.0035 | 0.1097 ± 0.0664 | 0.0531 ± 0.0254 |
 | | Cp | 0.0644 ± 0.0258 | 0.0473 ± 0.0179 | 0.0200 ± 0.0082 | 0.0116 ± 0.0041 | 0.0630 ± 0.0266 | 0.0365 ± 0.0133 |

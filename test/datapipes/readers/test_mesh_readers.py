@@ -158,6 +158,59 @@ class TestDomainMeshReader:
         loaded, _ = reader[0]
         assert "Re" in loaded.global_data.keys()
 
+    def _save_point_cloud_with_triangulated_wall(self, tmp_path, n_cells, n_interior):
+        """Point-cloud interior + disjoint-triangle wall with scattered vertex ids.
+
+        Vertex ids are permuted so a cell's three vertices are not stored
+        adjacently, as on a real surface; a contiguous point block then
+        retains a cell only if all three of its vertices happen to fall in it.
+        """
+        gen = torch.Generator().manual_seed(0)
+        wall = Mesh(
+            points=torch.randn(3 * n_cells, 3, generator=gen),
+            cells=torch.randperm(3 * n_cells, generator=gen).reshape(n_cells, 3),
+        )
+        dm = DomainMesh(
+            interior=Mesh(points=torch.randn(n_interior, 3, generator=gen)),
+            boundaries={"wall": wall},
+        )
+        dm.save(tmp_path / "dm.pdmsh")
+
+    def test_boundary_subsample_modes(self, tmp_path):
+        """``boundary_subsample`` selects which subsample(s) hit the boundaries."""
+        k = 500
+        self._save_point_cloud_with_triangulated_wall(tmp_path, 2000, 5000)
+
+        def load(mode):
+            reader = DomainMeshReader(
+                tmp_path,
+                pattern="*.pdmsh",
+                subsample_n_cells=k,
+                subsample_n_points=k,
+                boundary_subsample=mode,
+            )
+            reader.set_generator(torch.Generator().manual_seed(0))
+            return reader[0][0]
+
+        ### "both" (default): cells-then-points on a triangulated boundary keeps
+        ### only cells whose three vertices all survive the point cut, ~k/27.
+        both = load("both")
+        assert both.interior.n_points == k
+        assert both.boundaries["wall"].n_cells < 100
+
+        cells = load("cells")
+        assert cells.interior.n_points == k
+        assert cells.boundaries["wall"].n_cells == k
+
+        points = load("points")
+        assert points.interior.n_points == k
+        assert points.boundaries["wall"].n_points == k
+
+    def test_boundary_subsample_invalid(self, tmp_path):
+        self._make_domain_mesh().save(tmp_path / "dm.pdmsh")
+        with pytest.raises(ValueError, match="boundary_subsample"):
+            DomainMeshReader(tmp_path, pattern="*.pdmsh", boundary_subsample="neither")
+
 
 class TestMeshDataset:
     """Tests for MeshDataset with mesh transforms."""

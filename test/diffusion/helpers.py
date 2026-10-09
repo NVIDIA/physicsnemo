@@ -127,6 +127,94 @@ def instantiate_model_deterministic(
     return model
 
 
+def make_differentiable_solver_options(
+    solver_name,
+    solver_options,
+    scheduler,
+    predictor_type,
+    device,
+):
+    """Resolve a solver configuration with differentiable continuous options."""
+    options = dict(solver_options) if solver_options else {}
+    leaves = {}
+    nonzero_names = set()
+
+    def add_leaf(name, value, *, nonzero=True):
+        leaf = torch.tensor(float(value), device=device, requires_grad=True)
+        leaves[name] = leaf
+        if nonzero:
+            nonzero_names.add(name)
+        return leaf
+
+    if solver_name in {
+        "heun",
+        "heun_midpoint",
+        "stoch_heun",
+        "stoch_heun_nochurn",
+        "stoch_heun_churn",
+    }:
+        alpha = options.get("alpha", 1.0)
+        options["alpha"] = add_leaf("alpha", 0.8 if alpha == 1.0 else alpha)
+
+    if solver_name.startswith("stoch_"):
+        # num_steps is discrete, while S_min and S_max define a boolean mask;
+        # none of them has a meaningful pathwise derivative.
+        churn = options.get("S_churn", 0.0)
+        active_churn = churn > 0
+        differentiable_churn = min(churn, 0.2 * options.get("num_steps", 18))
+        options["S_churn"] = add_leaf(
+            "S_churn", differentiable_churn, nonzero=active_churn
+        )
+        options["S_noise"] = add_leaf("S_noise", 1.1, nonzero=active_churn)
+
+    if solver_name.startswith("stoch_exp_euler") and "renoise" in options:
+        renoise = options["renoise"]
+        options["renoise"] = add_leaf(
+            "renoise", 0.4 if renoise > 0 else 0.0, nonzero=renoise > 0
+        )
+
+    use_edm_sigma_fns = options.pop("_use_edm_sigma_fns", False)
+    use_sigma_fns = options.pop("_use_sigma_fns", False)
+    if use_edm_sigma_fns or use_sigma_fns:
+        sigma_scale = add_leaf("sigma callback", 0.1)
+        sigma_inv_scale = add_leaf("sigma inverse callback", 0.1)
+        options["sigma_fn"] = lambda t: (
+            (1 + sigma_scale * t / (1 + t)) * scheduler.sigma(t)
+        )
+        options["sigma_inv_fn"] = lambda sigma: scheduler.sigma_inv(
+            sigma / (1 + sigma_inv_scale)
+        )
+        if use_edm_sigma_fns:
+            diffusion_scale = add_leaf("diffusion callback", 0.1)
+            options["diffusion_fn"] = lambda x, t: (
+                (1 + diffusion_scale) * scheduler.diffusion(x, t)
+            )
+        if solver_name.startswith("stoch_exp_euler"):
+            alpha_scale = add_leaf("alpha callback", 0.1)
+            options["alpha_fn"] = lambda t: (1 + alpha_scale * t) * scheduler.alpha(t)
+
+    if options.pop("_use_linear_fn", False):
+        bias_fn, bias_int_fn, slope_fn = scheduler.get_linear_denoiser(
+            prediction_type=predictor_type
+        )
+        bias_scale = add_leaf("bias callbacks", 0.1)
+        options["bias_fn"] = lambda t: bias_fn(t) + bias_scale / (1 + t)
+        options["bias_int_fn"] = lambda t: (
+            bias_int_fn(t) + (bias_scale * torch.log1p(t))
+        )
+        if options.pop("_use_slope_fn", False):
+            slope_scale = add_leaf("slope callback", 0.1)
+            options["slope_fn"] = lambda t: slope_fn(t) + slope_scale / (1 + t)
+
+    if options.pop("_use_log_snr_lambda", False):
+        lambda_scale = add_leaf("lambda callback", 0.1)
+        options["lambda_fn"] = lambda t: (
+            torch.log(scheduler.snr(t)) + (lambda_scale * torch.log1p(t))
+        )
+
+    return options, leaves, nonzero_names
+
+
 def generate_batch_data(
     shape: Tuple[int, ...] = (4, 3, 16, 16),
     seed: int = 42,

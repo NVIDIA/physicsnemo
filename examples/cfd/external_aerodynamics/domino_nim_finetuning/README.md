@@ -49,7 +49,7 @@ conditions
 ### Architecture Components
 
 | Component | Description | Training Mode |
-|-----------|-------------|---------------|
+| ----------- | ------------- | --------------- |
 | **Predictor** | Pre-trained DoMINO-Automotive-Aero NIM | Frozen (Evaluation Only) |
 | **Corrector** | Custom DoMINO architecture | Trainable |
 | **Combined** | Predictor + Corrector outputs | End-to-End Inference |
@@ -83,7 +83,7 @@ multiple vehicle configurations.
 The dataset maybe found here: [DrivAerML Dataset](https://caemldatasets.org/drivaerml/)
 
 | File Type | Description | Extension | Use Case |
-|-----------|-------------|-----------|----------|
+| ----------- | ------------- | ----------- | ---------- |
 | **Geometry** | Vehicle STL meshes | `.stl` | 3D vehicle structure |
 | **Volume Fields** | 3D flow field data | `.vtu` | Velocity, pressure, turbulence |
 | **Surface Fields** | Vehicle surface data | `.vtp` | Wall pressure, shear stress |

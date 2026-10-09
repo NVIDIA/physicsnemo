@@ -295,6 +295,26 @@ def test_adversarial_cross_plan_coverage(device, expand_far_targets):
         )
 
 
+@pytest.mark.parametrize("expand_far_targets", [False, True])
+def test_nan_point_keeps_exact_cover(device, expand_far_targets):
+    """A NaN coordinate must not drop interactions from the plan.
+
+    Every box containing the NaN point has NaN bounds and diameter, so no
+    opening test passes; the split rule must still descend such pairs to
+    their leaves (where they become exact near-field pairs and the NaN
+    reaches the output) rather than discard them.
+    """
+    points = _points(60, 3, device, seed=21)
+    points[17, 1] = float("nan")
+    _assert_exact_cover(points, theta=1.0, expand_far_targets=expand_far_targets)
+    _assert_exact_cover(
+        points,
+        _points(45, 3, device, seed=22),
+        theta=1.0,
+        expand_far_targets=expand_far_targets,
+    )
+
+
 def test_float64_plan_coverage(device):
     """Float64 trees preserve the exactly-once plan contract."""
     points = _points(97, 3, device, seed=20, dtype=torch.float64)

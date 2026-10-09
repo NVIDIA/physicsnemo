@@ -410,6 +410,7 @@ SongUNet = "physicsnemo.models.diffusion_unets:SongUNet"
 SongUNetPosEmbd = "physicsnemo.models.diffusion_unets:SongUNetPosEmbd"
 SongUNetPosLtEmbd = "physicsnemo.models.diffusion_unets:SongUNetPosLtEmbd"
 DhariwalUNet = "physicsnemo.models.diffusion_unets:DhariwalUNet"
+DiffusionUNet3D = "physicsnemo.models.diffusion_unets:DiffusionUNet3D"
 
 # DiT
 DiT = "physicsnemo.models.dit:DiT"

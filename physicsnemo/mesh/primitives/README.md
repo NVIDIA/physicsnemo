@@ -26,7 +26,7 @@ mesh = primitives.procedural.lumpy_sphere.load(noise_amplitude=0.1)
 Simple meshes with one or few cells for unit testing and validation.
 
 | Function | Dimensions | Description |
-|----------|------------|-------------|
+| ---------- | ------------ | ------------- |
 | `single_point_2d` | 0D→2D | Single point in 2D space |
 | `single_point_3d` | 0D→3D | Single point in 3D space |
 | `three_points_2d` | 0D→2D | Three points in 2D space |
@@ -47,7 +47,7 @@ Simple meshes with one or few cells for unit testing and validation.
 Curves embedded in 1D, 2D, and 3D spaces.
 
 | Function | Dimensions | Description | Properties |
-|----------|------------|-------------|------------|
+| ---------- | ------------ | ------------- | ------------ |
 | `line_segment_1d` | 1D→1D | Line segment on real line | Open |
 | `line_segments_1d` | 1D→1D | Multiple disconnected segments | Disconnected |
 | `straight_line_2d` | 1D→2D | Straight line in 2D | Open |
@@ -67,7 +67,7 @@ Curves embedded in 1D, 2D, and 3D spaces.
 Triangulated 2D shapes in the plane.
 
 | Function | Dimensions | Description | Properties |
-|----------|------------|-------------|------------|
+| ---------- | ------------ | ------------- | ------------ |
 | `unit_square` | 2D→2D | Unit square with subdivisions | Has boundary |
 | `rectangle` | 2D→2D | Rectangular domain | Has boundary |
 | `equilateral_triangle` | 2D→2D | Equilateral triangle | Has boundary |
@@ -83,25 +83,25 @@ Surface meshes embedded in 3D.
 
 <!-- markdownlint-disable MD013 -->
 | Function | Dimensions | Description | Properties |
-|----------|------------|-------------|------------|
-| **Spheres** |
+| ---------- | ------------ | ------------- | ------------ |
+| **Spheres** | | | |
 | `sphere_icosahedral` | 2D→3D | Sphere via icosahedron subdivision | Closed, uniform triangulation |
 | `sphere_uv` | 2D→3D | Sphere via lat/long (UV) parametrization | Closed, polar singularities |
-| **Cylinders** |
+| **Cylinders** | | | |
 | `cylinder` | 2D→3D | Cylinder with caps | Closed |
 | `cylinder_open` | 2D→3D | Cylinder without caps | Has boundary circles |
-| **Other Shapes** |
+| **Other Shapes** | | | |
 | `torus` | 2D→3D | Torus (donut shape) | Closed, genus=1 |
 | `plane` | 2D→3D | Flat plane | Has boundary |
 | `cone` | 2D→3D | Cone with base | Has boundary |
 | `disk` | 2D→3D | Flat disk | Has boundary circle |
 | `hemisphere` | 2D→3D | Half sphere | Has boundary circle |
-| **Platonic Solids** |
+| **Platonic Solids** | | | |
 | `cube_surface` | 2D→3D | Cube surface (triangulated) | Closed |
 | `tetrahedron_surface` | 2D→3D | Regular tetrahedron | Closed |
 | `octahedron_surface` | 2D→3D | Regular octahedron | Closed |
 | `icosahedron_surface` | 2D→3D | Regular icosahedron | Closed |
-| **Special Surfaces** |
+| **Special Surfaces** | | | |
 | `mobius_strip` | 2D→3D | Möbius strip | Non-orientable, has boundary |
 <!-- markdownlint-enable MD013 -->
 
@@ -110,7 +110,7 @@ Surface meshes embedded in 3D.
 Tetrahedral volume meshes.
 
 | Function | Dimensions | Description | Properties |
-|----------|------------|-------------|------------|
+| ---------- | ------------ | ------------- | ------------ |
 | `cube_volume` | 3D→3D | Tetrahedral cube mesh | Structured |
 | `sphere_volume` | 3D→3D | Tetrahedral sphere mesh | Delaunay |
 | `cylinder_volume` | 3D→3D | Tetrahedral cylinder mesh | Delaunay |
@@ -124,7 +124,7 @@ Functions for creating modified versions of meshes and standalone noise generati
 
 <!-- markdownlint-disable MD013 -->
 | Function | Description | Use Case |
-|----------|-------------|----------|
+| ---------- | ------------- | ---------- |
 | `lumpy_sphere` | Sphere with radial noise | Testing robustness to irregular geometry |
 | `noisy_mesh` | Add Gaussian noise to any mesh | Generic perturbation utility |
 | `perturbed_grid` | Structured grid with random perturbations | Testing on nearly-regular grids |
@@ -133,7 +133,7 @@ Functions for creating modified versions of meshes and standalone noise generati
 **Procedural Noise Functions:**
 
 | Function | Description | Dimensions | GPU |
-|----------|-------------|------------|-----|
+| ---------- | ------------- | ------------ | ----- |
 | `perlin_noise_nd` | Dimension-agnostic Perlin noise | 1D-nD | ✓ |
 | `perlin_noise_1d` | 1D Perlin noise | 1D | ✓ |
 | `perlin_noise_2d` | 2D Perlin noise | 2D | ✓ |
@@ -157,7 +157,7 @@ noise_4d = perlin_noise_nd(points_4d, scale=2.0, seed=123)
 Wrappers for PyVista's built-in example datasets (automatically cached).
 
 | Function | Dimensions | Description |
-|----------|------------|-------------|
+| ---------- | ------------ | ------------- |
 | `airplane` | 2D→3D | Classic airplane surface mesh |
 | `bunny` | 2D→3D | Stanford bunny (computer graphics classic) |
 | `ant` | 2D→3D | Ant surface mesh |
@@ -218,16 +218,11 @@ base_sphere = examples.surfaces.sphere_icosahedral.load(subdivisions=3)
 
 # Add noise
 noisy_sphere = examples.procedural.noisy_mesh.load(
-    base_mesh=base_sphere,
-    noise_scale=0.05,
-    seed=42
+    base_mesh=base_sphere, noise_scale=0.05, seed=42
 )
 
 # Or use pre-made lumpy sphere
-lumpy = examples.procedural.lumpy_sphere.load(
-    noise_amplitude=0.1,
-    seed=42
-)
+lumpy = examples.procedural.lumpy_sphere.load(noise_amplitude=0.1, seed=42)
 ```
 
 ## Design Principles
