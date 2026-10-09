@@ -149,12 +149,14 @@ class VPNoiseScheduler(LinearGaussianNoiseScheduler):
 
         Solves: :math:`\sigma^2 = 1 - \exp(-a(t))` for :math:`t`.
         """
-        # sigma^2 = 1 - exp(-a) => a = -log(1 - sigma^2)
-        # a = beta_d/2 * t^2 + beta_min * t
-        # Quadratic: beta_d * t^2 + 2*beta_min * t + 2*log(1-sigma^2) = 0
-        log_term = torch.log(1 - sigma**2 + 1e-8)  # small eps for stability
-        discriminant = self.beta_min**2 - 2 * self.beta_d * log_term
-        return (-self.beta_min + torch.sqrt(discriminant.clamp(min=0))) / self.beta_d
+        # sigma^2 = 1 - exp(-a) => a = -log(1 - sigma^2); the clamp keeps the
+        # inversion finite when sigma reaches its upper bound of 1
+        a = -torch.log1p(-(sigma**2).clamp(max=1 - 1e-8))
+        # Root of beta_d/2 * t^2 + beta_min * t = a, in the rationalized form
+        # that avoids cancellation for small sigma and is exactly zero at
+        # sigma = 0
+        discriminant = self.beta_min**2 + 2 * self.beta_d * a
+        return 2 * a / (self.beta_min + torch.sqrt(discriminant))
 
     def timesteps(
         self,

@@ -50,44 +50,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     functions in `LinearGaussianNoiseScheduler` (`x0_to_flow` / `flow_to_x0`
     / `score_to_flow` / `flow_to_score`) and the corresponding conversion
     callbacks everywhere conversions between prediction types are necessary.
+- Adds `ExponentialEulerSolver`, `EDMStochasticExponentialEulerSolver`,
+  `DPMPlusPlus2M`, and `DPMPlusPlus2MUniC2` to
+  `physicsnemo.diffusion.samplers`. `ExponentialEulerSolver` supports
+  DDIM-like sampling for distilled few-step models, its stochastic
+  counterpart adds EDM-style churn and configurable re-noising,
+  `DPMPlusPlus2M` provides efficient second-order sampling, and
+  `DPMPlusPlus2MUniC2` adds a UniC-2 corrector stage that raises
+  DPM-Solver++(2M) to third order while keeping one denoiser evaluation
+  per step. The solvers share an extended semi-linear callback API
+  (`bias_fn`, `bias_int_fn`, `slope_fn`); users can select all four
+  solvers by string key through `physicsnemo.diffusion.samplers.sample`.
 
-- `ClusterTree.find_dual_interaction_pairs(source_admissible=...)` takes a
-  per-source-node mask; masked-out nodes are never replaced by their aggregate
-  in any far-field stream. The opening angle bounds only position errors, so
-  the mask can keep nodes exact whose per-source features (for example,
-  normals) vary too much for a kernel that depends on them nonlinearly.
+- `ClusterTree.find_dual_interaction_pairs(source_admissible=...)` marks source
+  nodes that must never be approximated by their aggregate, such as nodes
+  whose normals differ too much.
 
 ### Changed
 
-- `ClusterTree.from_points` splits ranges at Morton-cell boundaries on a
-  Morton grid with cubic cells (`split="morton"`, the new default), so nodes
-  are compact and their boxes tight. At the same `theta`, Barnes-Hut plans
-  need 2-4x fewer interactions on surfaces and volumes (3.1x for an 80k-face
-  car, 4x at 800k faces, 25-40x on a 10:1:0.01 slab), with unchanged position
-  error. Errors from averaging per-source features over a node can grow (for
-  GLOBE's kernel at `theta=1`, 6.3% to 7.6%); at equal error the new trees
-  still need 1.2-1.5x fewer interactions. Thin bodies aligned with an axis,
-  such as 2D airfoils, are the exception: the previous trees kept their two
-  faces apart, which helps kernels that depend nonlinearly on normals; pass
-  `source_admissible` to keep nodes with mixed normals exact.
-  `split="midpoint"` reproduces the previous trees.
-- GLOBE's default `theta` is 0.6 instead of 1.0, in the model, its kernels,
-  and the DrivAerML example. With the Morton-split trees above, it keeps the
-  far-field error of `theta=1.0` with the previous trees (within 5% on
-  DrivAerML surfaces and volumes, and 30% lower for long-range kernels),
-  with 1.5x fewer kernel evaluations.
-- GLOBE's default `expand_far_targets` is `True` instead of `False`, as in
-  both examples, so no target is evaluated at the centroid of its node.
-- With `expand_far_targets=True`, `ClusterTree.find_dual_interaction_pairs`
-  no longer evaluates targets at leaf centroids in the `(far, near)` stream
-  (only reachable with `leaf_size > 1`).
-- `ClusterTree.find_dual_interaction_pairs` returns its streams in traversal
-  order instead of sorting them by source.
-- `BarnesHutKernel` evaluates the `(near, far)` stream in chunks, like the
-  near field, and gathers with `index_select`, whose backward is an
-  `index_add_` instead of a sort-based scatter. With `expand_far_targets=True`
-  this stream holds nearly every pair, and an 80k-face DrivAerML training step
-  needed a single 82 GiB allocation.
+- `ClusterTree` builds tighter trees by default (`split="morton"`), so
+  Barnes-Hut plans need 2-4x fewer interactions at the same `theta`.
+  `split="midpoint"` gives the previous trees.
+- GLOBE defaults to `theta=0.6` (was 1.0), which with the new trees is as
+  accurate as 1.0 was before and still 1.5x faster, and to
+  `expand_far_targets=True` (was `False`), as in its examples.
+- `ClusterTree.compute_source_aggregates` is 20-30x faster, and
+  `ClusterTree.find_dual_interaction_pairs` is up to 1.7x faster with 40% less
+  peak memory. The plan's interactions are no longer sorted by source.
+- GLOBE's `BarnesHutKernel` needs less memory to train: an 80k-face DrivAerML
+  training step no longer runs out of memory.
 - Refresh core, optional, development, and container dependency versions.
   Require PyTorch 2.13 or newer and TensorDict 0.14.2 or newer;
   use PyTorch 2.13's CUDA 12.9 wheels for the CUDA 12 backend. NATTEN
@@ -158,6 +149,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cells out of a mesh with hundreds of millions of vertices). Index
   normalization avoids allocating a full-mesh range and preserves empty slices,
   integer indices, and boolean masks. Point fields use ordinary indexed gathers.
+- Extends `LinearGaussianNoiseScheduler` with two methods.
+  `get_linear_denoiser` accepts `prediction_type` and `denoising_type`, and
+  returns bias, antiderivative, and slope callables for the new exponential
+  and multistep solvers. `snr` exposes the schedule's signal-to-noise ratio,
+  used as the multistep extrapolation coordinate by `DPMPlusPlus2M` and
+  `DPMPlusPlus2MUniC2`.
 
 - `translate`, `rotate`, `scale` and their `DomainMesh` and datapipe
   counterparts no longer synchronize CUDA for Python-number arguments, string
@@ -211,23 +208,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `DomainMeshReader` gains `boundary_subsample` (`"both"`, `"cells"`,
+  `"points"`) to choose which subsample applies to the in-file boundaries.
+  Composing the cell and point subsamples on a triangulated boundary kept only
+  the cells whose three vertices all survived the point cut, about `N / 27` of
+  the `N` requested. The default keeps the composed behaviour.
+- Seeded `DomainMeshReader` subsamples select the same rows from zarr stores
+  as from memmap files. Before, boundaries read in full, and interiors read
+  with `drop_interior_cells`, could differ between the two formats.
 - GLOBE DrivAerML postprocessing reports correct Cd, Cl, and Cs on subsampled
   surfaces. Before, they shrank with the fraction of cells kept.
 - The unified external aero recipe documents how surface subsampling affects
   force integration.
-- `ClusterTree.find_dual_interaction_pairs` no longer drops every pair whose
-  boxes contain a NaN coordinate (one NaN emptied the whole plan, so GLOBE
-  returned zeros instead of NaN), no longer fails when a stream exceeds 2^31
-  entries (GLOBE at 800k faces and `theta=1`), raises instead of dropping
-  pairs if its level loop runs out of iterations, and builds `theta=0` plans
-  directly. Its level loop launches about a third fewer kernels.
-- `ClusterTree.compute_source_aggregates` is 19-29x faster (forward plus
-  backward: 130 to 6.8 ms at 80k sources, 319 to 11 ms at 200k on a GB300):
-  CUDA `cumsum` along the first dimension of an `(N, F)` tensor runs serially
-  per column, so all features now share one prefix sum along the innermost
-  dimension.
-- `ClusterTree.from_points` detaches its inputs, so trees no longer hold an
-  autograd graph.
+- `ClusterTree.find_dual_interaction_pairs` returned an empty plan if any point
+  had a NaN coordinate, and failed on plans with more than 2^31 interactions.
+- `ClusterTree.from_points` no longer keeps the autograd graph of its inputs.
+- With `expand_far_targets=True` and `leaf_size > 1`,
+  `ClusterTree.find_dual_interaction_pairs` still approximated some targets by
+  their leaf's centroid.
 - Checkpoint loading resolves model weights at the selected training checkpoint's
   filename index, preventing resumes that mix epochs. Missing required weights
   raise before any model or training state is restored. Distributed loads validate
@@ -286,6 +284,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   point has more than 32 BVH candidate cells (for example, near a vertex shared
   by many triangles, or with a prebuilt BVH with `leaf_size > 1`). The BVH
   candidate search used by these functions no longer caps candidates per point.
+- Fixes `VPNoiseScheduler.sigma_inv` at extreme noise levels. In particular,
+  converting `sigma=0` no longer returns a slightly negative diffusion time.
 
 ### Security
 
