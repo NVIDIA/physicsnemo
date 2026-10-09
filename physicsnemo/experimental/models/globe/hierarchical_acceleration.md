@@ -130,17 +130,16 @@ actual count.
 
 ### 3.3 Source Aggregates
 
-Per-node aggregate data is computed bottom-up for far-field evaluation:
+Per-node aggregate data for far-field evaluation is computed with range sums:
+every node covers a contiguous range of the Morton-sorted sources, so each
+node's sum is the difference of two entries of a prefix sum.
 
 - **Centroid**: area-weighted mean of source positions
 - **Source features** (normals, latent scalars/vectors): area-weighted mean
-  via `TensorDict.apply()` with segmented scatter operations
-- **Total area**: sum (not average) of children's areas
+- **Total area**: sum (not average) of the node's areas
 
-Internal node aggregates are computed from their children's aggregates using
-area-weighted averaging via a BFS level-ordering: internal nodes are
-discovered by depth, then processed deepest-first so children are correct
-before their parents read from them.
+All leaves of `source_data` and the centroid numerators share one float64
+prefix sum, taken along the innermost dimension of a feature-major array.
 
 Aggregates depend on the source data (which changes between communication
 layers as latent features are updated) but NOT on the tree structure (which
@@ -230,15 +229,20 @@ level simultaneously:
    - Split both: 4 child pairs `(left_T, left_S)`, `(left_T, right_S)`,
      `(right_T, left_S)`, `(right_T, right_S)`.
 
-4. **Post-processing**: Near pairs are sorted by source index, far pairs by
-   source node, for cache-friendly memory access during kernel evaluation.
+4. **Leaf pairs**: near leaf-leaf pairs are expanded once after the loop,
+   testing each target against the source leaf (`(near, far)` entries) and
+   each remaining source against the target leaf (`(far, near)` entries).
 
-The output is a `DualInteractionPlan` containing four index arrays:
+The output is a `DualInteractionPlan` whose streams stay in traversal order:
 
 - `(near_target_ids, near_source_ids)`: individual target-source pairs
   requiring exact evaluation.
 - `(far_target_node_ids, far_source_node_ids)`: node-to-node pairs using the
   monopole approximation with target-side broadcast.
+- `(nf_target_ids, nf_source_node_ids)`: individual targets against source
+  monopoles.
+- `(fn_target_node_ids, fn_source_ids)` with a broadcast mapping: target-node
+  centroids against individual sources.
 
 ### 4.4 Self-Interaction and Cross-BC Interaction
 

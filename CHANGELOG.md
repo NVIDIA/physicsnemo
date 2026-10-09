@@ -64,6 +64,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `ClusterTree.compute_source_aggregates` is 20-30x faster, and
+  `ClusterTree.find_dual_interaction_pairs` is up to 1.7x faster with 40% less
+  peak memory. The plan's interactions are no longer sorted by source.
+- GLOBE's `BarnesHutKernel` needs less memory to train: an 80k-face DrivAerML
+  training step no longer runs out of memory.
 - Refresh core, optional, development, and container dependency versions.
   Require PyTorch 2.13 or newer and TensorDict 0.14.2 or newer;
   use PyTorch 2.13's CUDA 12.9 wheels for the CUDA 12 backend. NATTEN
@@ -205,6 +210,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   surfaces. Before, they shrank with the fraction of cells kept.
 - The unified external aero recipe documents how surface subsampling affects
   force integration.
+- `ClusterTree.find_dual_interaction_pairs` returned an empty plan if any point
+  had a NaN coordinate, and failed on plans with more than 2^31 interactions.
 - Checkpoint loading resolves model weights at the selected training checkpoint's
   filename index, preventing resumes that mix epochs. Missing required weights
   raise before any model or training state is restored. Distributed loads validate
