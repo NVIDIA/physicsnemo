@@ -463,10 +463,14 @@ def compute_circumcenters(
     and
     :math:`b = [\|v_1 - v_0\|^2, \|v_2 - v_0\|^2, \ldots]^\top`.
 
-    Then :math:`c = v_0 + d`. For over-determined systems (embedded manifolds),
-    least-squares is used. Square systems use ``torch.linalg.solve_ex`` with a
-    fallback to least-squares for singular cells, written branchlessly so
-    ``torch.compile`` can trace through without graph breaks.
+    Then :math:`c = v_0 + d`. Square systems (full-dimensional cells) use the
+    closed form :math:`d = \tfrac{1}{2} E^{-1} [\|e_i\|^2]_i` with
+    :math:`E = A / 2` (rows :math:`v_i - v_0`), in units of the mean edge length so the closed-form
+    determinant and inverse stay in floating-point range at any scale.
+    Degenerate cells, whose normalized determinant is numerically zero, have
+    no circumcenter and return their centroid. Under-determined systems
+    (manifolds embedded in a higher-dimensional space) use the minimum-norm
+    least-squares solution, which lies in the cell's affine hull.
     """
     n_cells, n_verts_per_cell, n_spatial_dims = vertices.shape
     n_manifold_dims = n_verts_per_cell - 1
@@ -487,24 +491,39 @@ def compute_circumcenters(
     v0 = vertices[:, 0, :]  # (n_cells, n_spatial_dims)
     relative_vecs = vertices[:, 1:, :] - v0.unsqueeze(1)
     # (n_cells, n_manifold_dims, n_spatial_dims)
-    A = 2 * relative_vecs
-    b = (relative_vecs**2).sum(dim=-1)  # (n_cells, n_manifold_dims)
-    rhs = b.unsqueeze(-1)  # (n_cells, n_manifold_dims, 1)
 
-    ### Solve for c - v0
     if n_manifold_dims == n_spatial_dims:
-        # Square system: solve_ex returns info != 0 for singular cells.
-        # We always also compute lstsq and select branchlessly to avoid the
-        # try/except graph break that torch.compile would otherwise see.
-        solve_solution, info = torch.linalg.solve_ex(A, rhs, check_errors=False)
-        lstsq_solution = torch.linalg.lstsq(A, rhs).solution
-        singular = info.ne(0).view(-1, 1, 1)  # (n_cells, 1, 1)
-        c_minus_v0 = torch.where(singular, lstsq_solution, solve_solution).squeeze(-1)
-    else:
-        # Over-determined system (manifold embedded in higher-dim ambient space)
-        c_minus_v0 = torch.linalg.lstsq(A, rhs).solution.squeeze(-1)
+        ### Square system: closed form c - v0 = inv(E) b with b_i = |e_i|^2 / 2
+        # Batched solve/lstsq factorize every tiny matrix separately. In units of
+        # the mean edge length L, c - v0 = L * inv(E / L) (b / L^2), so the
+        # closed-form determinant and inverse stay in range for tiny or huge cells.
+        dtype = vertices.dtype
+        edge_length_scale = relative_vecs.norm(dim=-1).mean(dim=-1)  # (n_cells,)
+        has_extent = edge_length_scale > torch.finfo(dtype).tiny ** 0.5
+        length_scale = torch.where(has_extent, edge_length_scale, 1.0)
+        E_normalized = relative_vecs / length_scale[:, None, None]
+        b_normalized = 0.5 * (E_normalized * E_normalized).sum(dim=-1)
+        # Degenerate cells have no circumcenter, so they return their centroid.
+        # safe_eps flags only numerically singular cells: near-degenerate cells
+        # keep their exact (distant) circumcenter. They invert the identity
+        # instead, which keeps values and gradients finite, branchlessly.
+        is_degenerate = ~has_extent | (small_det(E_normalized).abs() < safe_eps(dtype))
+        eye = torch.eye(n_manifold_dims, dtype=dtype, device=vertices.device)
+        E_inv = small_inverse(
+            torch.where(is_degenerate[:, None, None], eye, E_normalized)
+        )
+        # Broadcast-and-sum: a batched matmul of millions of tiny matrices is slow.
+        c_minus_v0 = length_scale[:, None] * (E_inv * b_normalized[:, None, :]).sum(-1)
+        return torch.where(
+            is_degenerate[:, None], vertices.mean(dim=1), v0 + c_minus_v0
+        )
 
-    return v0 + c_minus_v0
+    ### Under-determined system (manifold embedded in higher-dim ambient space)
+    # The closed-form Gram route, inv(E E^T), squares the condition number of
+    # thin cells, so the minimum-norm least-squares solution is kept.
+    A = 2 * relative_vecs
+    rhs = (relative_vecs**2).sum(dim=-1).unsqueeze(-1)  # (n_cells, n_manifold_dims, 1)
+    return v0 + torch.linalg.lstsq(A, rhs).solution.squeeze(-1)
 
 
 def compute_cotan_weights_fem(
