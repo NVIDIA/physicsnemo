@@ -34,6 +34,7 @@ from physicsnemo.mesh.boundaries import (
 from physicsnemo.mesh.utilities._duplicate_detection import find_duplicate_pairs
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 from physicsnemo.utils._index_tuple_ops import sort_index_tuples
+from physicsnemo.utils._small_linalg import small_det
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -235,7 +236,7 @@ def validate(
 
             # Compute determinant (works for 2x2 and 3x3 matrices)
             if mesh.n_manifold_dims >= 2:
-                det = torch.det(relative_vectors)  # (n_cells,)
+                det = small_det(relative_vectors)  # (n_cells,)
 
                 inverted_mask = det < 0
                 n_inverted = inverted_mask.sum().item()

@@ -221,11 +221,26 @@ class TestTetrahedronVolumes3D:
         )
 
 
-### Branch 4: _tetrahedron_volumes_general (n=3, d>3, Sarrus' rule) ###
+### Branch 4: _tetrahedron_volumes_general (n=3, d>3, 3x3 minors) ###
 
 
 class TestTetrahedronVolumesGeneral:
-    """Tests for the n=3, d>3 branch (Sarrus' rule on 3x3 Gram matrix)."""
+    """Tests for the n=3, d>3 branch (norm of the 3x3 minors)."""
+
+    @pytest.mark.parametrize("spatial_dims", [3, 4, 5])
+    @pytest.mark.parametrize("height", [1e-4, 1e-30])
+    def test_thin_tetrahedron_keeps_its_volume(self, device, spatial_dims, height):
+        """Nearly flat tetrahedra keep their float32 volume, without Gram cancellation."""
+        edges = torch.zeros(1, 3, spatial_dims, device=device)
+        edges[0, 0, 0] = 1
+        edges[0, 1, 1] = 1
+        edges[0, 2, 0], edges[0, 2, 1], edges[0, 2, 2] = 0.3, 0.4, height
+        torch.testing.assert_close(
+            compute_cell_areas(edges),
+            torch.tensor([height / 6], device=device),
+            rtol=1e-6,
+            atol=0,
+        )
 
     def test_unit_tetrahedron_4d(self):
         """Unit tetrahedron with orthogonal edges embedded in 4D: volume = 1/6.

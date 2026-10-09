@@ -35,6 +35,7 @@ import torch
 from jaxtyping import Float
 
 from physicsnemo.nn.functional import safe_normalize
+from physicsnemo.utils._small_linalg import small_det
 
 
 def compute_cell_normals(
@@ -118,8 +119,9 @@ def _normals_general(
 
     where :math:`E_{\setminus i}` is :math:`E` with column ``i`` removed.
 
-    Disables ``torch.autocast`` because ``torch.det`` dispatches to cuBLAS
-    LU factorization which does not support reduced-precision dtypes.
+    The minors have closed forms up to 3x3 (d = 4). Disables ``torch.autocast``
+    because beyond that ``torch.linalg.det`` dispatches to cuBLAS LU
+    factorization, which does not support reduced-precision dtypes.
     """
     n_spatial_dims = relative_vectors.shape[-1]
     n_manifold_dims = relative_vectors.shape[-2]
@@ -135,7 +137,7 @@ def _normals_general(
                 [relative_vectors[:, :, :i], relative_vectors[:, :, i + 1 :]],
                 dim=-1,
             )
-            det = submatrix.det()
+            det = small_det(submatrix)
             sign = (-1) ** (n_manifold_dims + i)
             normal_components.append(sign * det)
 

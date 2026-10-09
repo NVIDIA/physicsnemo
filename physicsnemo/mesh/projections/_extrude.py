@@ -24,6 +24,7 @@ from tensordict import TensorDict
 
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.projections._embed import embed
+from physicsnemo.utils._small_linalg import small_det
 
 
 def extrude(
@@ -311,7 +312,7 @@ def extrude(
     if extruded_cells.shape[0] > 0 and target_manifold_dims == target_spatial_dims:
         cell_points = all_points[extruded_cells]  # (n_cells, D+1, D)
         edge_vectors = cell_points[:, 1:] - cell_points[:, :1]  # (n_cells, D, D)
-        inverted = torch.det(edge_vectors) < 0  # (n_cells,)
+        inverted = small_det(edge_vectors) < 0  # (n_cells,)
         swapped = extruded_cells[inverted, -2].clone()
         extruded_cells[inverted, -2] = extruded_cells[inverted, -1]
         extruded_cells[inverted, -1] = swapped
