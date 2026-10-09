@@ -48,13 +48,14 @@ Triangle." IEEE Trans. Biomed. Eng. BME-30(2):125-126.
 """
 
 import itertools
+import math
 from typing import TYPE_CHECKING
 
 import torch
 from jaxtyping import Float
 
+from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
 from physicsnemo.mesh.utilities._tolerances import safe_eps
-from physicsnemo.utils._small_linalg import small_det
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -252,39 +253,22 @@ def compute_vertex_angles(
         min=safe_eps(torch.float64)
     )
 
-    if n_edges == mesh.n_spatial_dims:
-        ### Square edge matrix E (e.g. tetrahedra in 3D): sqrt(det(C)) = |det(E)|
-        # The determinant of the unit edge vectors themselves does not square and
-        # then cancel, as det(C) does, so it stays accurate for nearly flat cells.
-        numerator = small_det(edges_normalized).abs()  # (n_cells, n_verts)
+    ### sqrt(det(C)) for each vertex: (n_cells, n_verts)
+    # C is the Gram matrix of the unit edges, so sqrt(det(C)) is n! times the
+    # volume of the simplex they span. compute_cell_areas has closed forms for
+    # up to 3 edges; where there are as many edges as spatial dimensions it takes
+    # their determinant directly, without the cancellation of forming det(C).
+    numerator = math.factorial(n_edges) * compute_cell_areas(
+        edges_normalized.flatten(0, 1)
+    ).unflatten(0, edges_normalized.shape[:2])
 
-        ### sum_{i<j} C_ij, one slice pair at a time to avoid gathered copies of E
-        sum_off_diag = torch.zeros_like(numerator)
-        for i, j in itertools.combinations(range(n_edges), 2):
-            sum_off_diag += (edges_normalized[:, :, i] * edges_normalized[:, :, j]).sum(
-                dim=-1
-            )
-    else:
-        ### Compute correlation matrix C for each vertex of each cell
-        # C[i,j] = normalized_edge_i . normalized_edge_j
-        # Shape: (n_cells, n_verts, n_edges, n_edges)
-        # Broadcast-and-sum: einsum would run a batched matmul of millions of tiny
-        # matrices, which is orders of magnitude slower on GPUs.
-        corr_matrix = (
-            edges_normalized.unsqueeze(-2) * edges_normalized.unsqueeze(-3)
-        ).sum(dim=-1)
-        numerator = small_det(corr_matrix).abs().sqrt()  # (n_cells, n_verts)
+    ### sum_{i<j} C_ij, one off-diagonal entry at a time: (n_cells, n_verts)
+    sum_off_diag = torch.zeros_like(numerator)
+    for i, j in itertools.combinations(range(n_edges), 2):
+        sum_off_diag += (edges_normalized[:, :, i] * edges_normalized[:, :, j]).sum(-1)
 
-        ### Compute sum of upper-triangle off-diagonal elements: sum_{i<j} C_ij
-        # Index tensors built on the device: a boolean mask index would synchronize.
-        rows, cols = torch.triu_indices(
-            n_edges, n_edges, offset=1, device=mesh.points.device
-        )
-        sum_off_diag = corr_matrix[:, :, rows, cols].sum(dim=-1)  # (n_cells, n_verts)
-
-    ### Compute angle: Omega = 2 * arctan2(sqrt(|det(C)|), 1 + sum_{i<j} C_ij)
-    denominator = 1.0 + sum_off_diag
-    angles = 2.0 * torch.atan2(numerator, denominator)
+    ### Compute angle: Omega = 2 * arctan2(sqrt(det(C)), 1 + sum_{i<j} C_ij)
+    angles = 2.0 * torch.atan2(numerator, 1.0 + sum_off_diag)
 
     return angles.to(input_dtype)
 

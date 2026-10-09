@@ -58,6 +58,41 @@ def _random_simplices(
     )
 
 
+def _thin_simplices(
+    n_cells: int,
+    n_manifold_dims: int,
+    n_spatial_dims: int,
+    n_thin: int,
+    thickness: float,
+    device,
+) -> Mesh:
+    """Disjoint random float32 simplices, ``thickness`` thin in ``n_thin`` directions.
+
+    One thin direction makes slivers; two make needles.
+    """
+    generator = torch.Generator().manual_seed(10 * n_manifold_dims + n_thin)
+    extent = torch.ones(n_manifold_dims, dtype=torch.float64)
+    extent[n_manifold_dims - n_thin :] = thickness
+    shape = (n_cells, n_manifold_dims + 1, n_manifold_dims)
+    local = extent * torch.randn(*shape, generator=generator, dtype=torch.float64)
+    frames = torch.linalg.qr(
+        torch.randn(
+            n_cells,
+            n_spatial_dims,
+            n_manifold_dims,
+            generator=generator,
+            dtype=torch.float64,
+        )
+    ).Q
+    points = local @ frames.transpose(-1, -2) + torch.randn(
+        n_cells, 1, n_spatial_dims, generator=generator, dtype=torch.float64
+    )
+    return Mesh(
+        points=points.reshape(-1, n_spatial_dims).float().to(device),
+        cells=torch.arange(n_cells * shape[1], device=device).reshape(n_cells, -1),
+    )
+
+
 def _reference_vertex_angles(mesh: Mesh) -> torch.Tensor:
     """Generalized vertex angles from batched determinants of correlation matrices."""
     vertices = mesh.points[mesh.cells].double()
@@ -196,6 +231,40 @@ def test_cotan_weights_match_gram_inverse(
     torch.testing.assert_close(
         weights, expected, rtol=1e-7, atol=1e-12 * expected.abs().max()
     )
+
+
+@pytest.mark.parametrize(
+    "n_manifold_dims, n_spatial_dims, n_thin",
+    [(2, 2, 1), (2, 3, 1), (3, 3, 1), (3, 3, 2)],
+)
+def test_float32_cotan_weights_of_thin_cells(
+    n_manifold_dims, n_spatial_dims, n_thin, device
+):
+    """In float32, thin cells above the degeneracy cutoff are no less accurate.
+
+    Each implementation is compared with a float64 truth. Full-dimensional cells
+    invert E itself rather than G = E E^T, so they must come out much more
+    accurate than the batched inverse of G. The closed-form inverse of G is far
+    less accurate than the batched one for needles (two thin directions).
+    """
+    mesh = _thin_simplices(
+        2000, n_manifold_dims, n_spatial_dims, n_thin, thickness=1e-2, device=device
+    )
+    truth = _reference_cotan_weights(
+        Mesh(points=mesh.points.double(), cells=mesh.cells)
+    )
+
+    def error(weights: torch.Tensor) -> float:
+        """90th percentile of the relative error, floored at a typical weight."""
+        floor = truth.abs().median()
+        relative = (weights.double() - truth).abs() / truth.abs().clamp_min(floor)
+        return relative.quantile(0.9).item()
+
+    fast = error(compute_cotan_weights_fem(mesh)[0])
+    batched = error(_reference_cotan_weights(mesh))
+    assert fast <= 2 * batched
+    if n_manifold_dims == n_spatial_dims:
+        assert fast <= batched / 10
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
