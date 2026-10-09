@@ -441,9 +441,7 @@ def test_small_lstsq_matches_lstsq(
     device: str, kind: str, length_scale: float, dtype: torch.dtype
 ):
     """small_lstsq gives the minimum-norm solutions of CPU lstsq, also when rank-deficient."""
-    from physicsnemo.nn.functional.derivatives.mesh_lsq_gradient._torch_impl import (
-        small_lstsq,
-    )
+    from physicsnemo.utils._small_linalg import small_lstsq
 
     A = (_make_stencils(kind) * length_scale).to(dtype=dtype, device=device)
     B = torch.randn(*A.shape[:-1], 2, dtype=dtype, device=device)
@@ -462,9 +460,7 @@ def test_small_lstsq_matches_lstsq(
 
 def test_small_lstsq_gradients(device: str):
     """small_lstsq is differentiable, with finite gradients on rank-deficient systems."""
-    from physicsnemo.nn.functional.derivatives.mesh_lsq_gradient._torch_impl import (
-        small_lstsq,
-    )
+    from physicsnemo.utils._small_linalg import small_lstsq
 
     A = torch.randn(8, 6, 3, dtype=torch.float64, device=device, requires_grad=True)
     B = torch.randn(8, 6, 2, dtype=torch.float64, device=device, requires_grad=True)

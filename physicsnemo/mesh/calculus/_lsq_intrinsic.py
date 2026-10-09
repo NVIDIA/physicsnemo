@@ -26,9 +26,7 @@ import torch
 from jaxtyping import Float
 
 from physicsnemo.mesh.utilities._tolerances import safe_eps
-from physicsnemo.nn.functional.derivatives.mesh_lsq_gradient._torch_impl import (
-    small_lstsq,
-)
+from physicsnemo.utils._small_linalg import small_lstsq
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
