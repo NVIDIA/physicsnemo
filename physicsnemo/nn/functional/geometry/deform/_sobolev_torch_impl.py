@@ -168,10 +168,7 @@ def _apply_stiffness(
     """Apply the assembled P1 stiffness matrix to a vertex field."""
 
     cell_values = values[:, cells.to(dtype=torch.long)]
-    # Broadcast-and-sum: a batched matmul of millions of tiny matrices is slow.
-    local_values = (local_stiffness.unsqueeze(-1) * cell_values.unsqueeze(-3)).sum(
-        dim=-2
-    )
+    local_values = local_stiffness @ cell_values
     return _scatter_cell_vertices(local_values, cells, values.shape[1])
 
 
