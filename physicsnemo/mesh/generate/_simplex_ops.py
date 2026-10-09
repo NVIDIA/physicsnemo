@@ -25,6 +25,8 @@ from itertools import combinations
 
 import torch
 
+from physicsnemo.utils._small_linalg import small_det
+
 __all__ = [
     "boundary_vertex_mask",
     "boundary_is_closed_manifold",
@@ -42,7 +44,7 @@ def signed_volumes(points, cells):
     d = points.shape[1]
     p0 = points[cells[:, 0]]
     rel = points[cells[:, 1:]] - p0[:, None, :]
-    return torch.linalg.det(rel) / math.factorial(d)
+    return small_det(rel) / math.factorial(d)
 
 
 def volume_length_quality(points, cells):

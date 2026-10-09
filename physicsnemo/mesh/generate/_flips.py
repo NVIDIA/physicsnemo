@@ -51,6 +51,7 @@ from physicsnemo.mesh.generate._simplex_ops import (
     signed_volumes,
     volume_length_quality,
 )
+from physicsnemo.utils._small_linalg import small_det
 
 __all__ = ["flip_pass", "flip_until_done"]
 
@@ -67,18 +68,36 @@ def _clusters_from_shared(cells, cell_ids, k_share, sub_size):
 
 
 def _radon_signs(points, cluster_verts):
-    """Affine-dependence sign pattern per cluster; ok = general position."""
+    """Affine-dependence sign pattern per cluster; ok = general position.
+
+    The affine dependence ``lam`` of the ``d+2`` points spans the null space
+    of the ``(d+1, d+2)`` matrix ``a = [1; p^T]``. For full-rank ``a`` it is
+    the signed maximal minors, ``lam_j = (-1)^j det(a without column j)``,
+    and ``det(a without column j)`` is ``d!`` times the signed volume of the
+    sub-simplex omitting point ``j``: ``d+2`` small determinants instead of
+    an SVD. ``a`` has full rank iff some minor is nonzero.
+    """
     p = points[cluster_verts]
     k, dp2, d = p.shape
-    a = torch.cat(
-        [torch.ones(k, 1, dp2, dtype=p.dtype, device=p.device), p.transpose(1, 2)],
-        dim=1,
-    )
-    _, s, vh = torch.linalg.svd(a)
-    lam = vh[:, -1, :]
-    lam = lam / lam.abs().max(dim=1, keepdim=True).values.clamp_min(1e-30)
+    # Relative to point 0 and divided by the mean edge length from it, so the
+    # minors are dimensionless and the thresholds below are scale-free.
+    rel = p - p[:, :1, :]
+    length_scale = rel.norm(dim=-1).mean(dim=1).clamp_min(torch.finfo(p.dtype).tiny)
+    rel = rel / length_scale[:, None, None]
+    ### Sub-simplex j omits point j: rest[j] = (0, ..., j-1, j+1, ..., d+1)
+    j = torch.arange(dp2, device=p.device)
+    i = torch.arange(dp2 - 1, device=p.device)
+    rest = i[None, :] + (i[None, :] >= j[:, None]).long()  # (d+2, d+1)
+    sub = rel[:, rest, :]  # (k, d+2, d+1, d)
+    minors = small_det(sub[:, :, 1:, :] - sub[:, :, :1, :])  # (k, d+2)
+    lam = torch.where(j % 2 == 0, minors, -minors)
+    lam_max = lam.abs().max(dim=1, keepdim=True).values
+    # Scale-free rank test: every |det| below 1e-12 L^d means a is
+    # numerically rank-deficient (e.g. all d+2 points in one hyperplane).
+    full_rank = lam_max[:, 0] > 1e-12
+    lam = lam / lam_max.clamp_min(1e-12)
     signs = torch.sign(torch.where(lam.abs() < 1e-9, torch.zeros_like(lam), lam))
-    ok = (signs != 0).all(dim=1) & (s[:, -2] > 1e-12)
+    ok = (signs != 0).all(dim=1) & full_rank
     return signs, ok
 
 
@@ -104,7 +123,7 @@ def _candidates(points, cells, q_all, cell_ids, k_share, sub_size, h):
     # validity filter (the shared vertices must form exactly one sign
     # class). Identifying the target by sign-class SIZE is ambiguous
     # whenever the two classes tie at k_share (2D 2-2 flips, 4D 3-3
-    # flips): the SVD null vector's sign is arbitrary, and resolving the
+    # flips): the null vector's sign is arbitrary, and resolving the
     # tie to "negative" proposed the identity retriangulation -- silently
     # rejected as zero-gain -- for about half of all improving 2D flips.
     k_new = d + 2 - k_share
