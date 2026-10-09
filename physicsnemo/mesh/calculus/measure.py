@@ -119,8 +119,9 @@ def set_point_measures(mesh: "Mesh", values: torch.Tensor, *, dimension: int) ->
         )
     values = _validate_measures(mesh, values, "points")
     mesh.point_data[EFFECTIVE_MEASURE_KEY] = values
-    mesh.global_data[POINT_MEASURE_DIMENSION_KEY] = torch.tensor(
-        dimension, device=mesh.points.device
+    # torch.full fills on the device; torch.tensor would copy from the host and sync.
+    mesh.global_data[POINT_MEASURE_DIMENSION_KEY] = torch.full(
+        (), dimension, dtype=torch.int64, device=mesh.points.device
     )
 
 

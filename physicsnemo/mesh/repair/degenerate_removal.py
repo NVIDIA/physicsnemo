@@ -74,23 +74,28 @@ def remove_degenerate_cells(
     ### Check 1: Zero area cells
     cell_areas = mesh.cell_areas
     non_degenerate_by_area = cell_areas >= area_tolerance
-    n_zero_area = (~non_degenerate_by_area).sum().item()
 
     ### Check 2: Cells with duplicate vertices (vectorized)
-    # For each cell, check if all vertices are unique
-    # Sort vertices in each cell and check for adjacent duplicates
-    cells_sorted = torch.sort(mesh.cells, dim=1).values  # (n_cells, n_verts)
-
-    # Check if any adjacent sorted vertices are equal
-    has_duplicates = (cells_sorted[:, 1:] == cells_sorted[:, :-1]).any(dim=-1)
+    # Compare every pair of vertex slots, which needs no sort and one byte per cell
+    n_verts = mesh.cells.shape[1]
+    has_duplicates = torch.zeros(n_original, dtype=torch.bool, device=mesh.cells.device)
+    for i in range(n_verts):
+        for j in range(i + 1, n_verts):
+            has_duplicates |= mesh.cells[:, i] == mesh.cells[:, j]
 
     has_unique_vertices = ~has_duplicates
 
-    n_duplicate_vertex = (~has_unique_vertices).sum().item()
-
     ### Combined mask: keep cells that are good
     keep_mask = non_degenerate_by_area & has_unique_vertices
-    n_keep = keep_mask.sum().item()
+
+    ### Read the three counts in one device-to-host transfer (one sync)
+    n_zero_area, n_duplicate_vertex, n_keep = torch.stack(
+        [
+            (~non_degenerate_by_area).sum(),
+            (~has_unique_vertices).sum(),
+            keep_mask.sum(),
+        ]
+    ).tolist()
 
     if n_keep == n_original:
         # No degenerate cells
@@ -101,11 +106,12 @@ def remove_degenerate_cells(
             "n_cells_final": n_original,
         }
 
-    ### Filter cells
-    new_cells = mesh.cells[keep_mask]
+    ### Filter cells and data (one nonzero, so one device sync, for both)
+    kept = torch.nonzero(keep_mask).squeeze(1)
+    new_cells = mesh.cells[kept]
 
     ### Transfer data (excluding cache)
-    new_cell_data = mesh.cell_data[keep_mask]
+    new_cell_data = mesh.cell_data[kept]
 
     ### Keep all points and point data (will be cleaned by remove_isolated_points if needed)
     from physicsnemo.mesh.mesh import Mesh

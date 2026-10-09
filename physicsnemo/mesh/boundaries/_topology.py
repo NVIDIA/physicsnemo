@@ -519,7 +519,7 @@ def _check_3d_vertex_manifold(mesh: "Mesh") -> bool:
     ### Step 3: Generate all edges of all link faces
     # Each sorted face (a, b, c) gives edges: (a,b), (a,c), (b,c)
     edge_ab = link_faces[:, :2]  # (total, 2) -> columns 0,1
-    edge_ac = link_faces[:, [0, 2]]  # (total, 2) -> columns 0,2
+    edge_ac = link_faces[:, ::2]  # (total, 2) -> columns 0,2
     edge_bc = link_faces[:, 1:]  # (total, 2) -> columns 1,2
 
     all_edges = torch.cat([edge_ab, edge_ac, edge_bc], dim=0)  # (3*total, 2)
