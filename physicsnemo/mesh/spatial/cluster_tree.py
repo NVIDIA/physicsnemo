@@ -271,8 +271,18 @@ class PointInteractionPlan(TensorClass):
             If any internal consistency check fails.
         """
         for name_a, a, name_b, b in (
-            ("near_target_ids", self.near_target_ids, "near_source_ids", self.near_source_ids),
-            ("far_target_ids", self.far_target_ids, "far_source_node_ids", self.far_source_node_ids),
+            (
+                "near_target_ids",
+                self.near_target_ids,
+                "near_source_ids",
+                self.near_source_ids,
+            ),
+            (
+                "far_target_ids",
+                self.far_target_ids,
+                "far_source_node_ids",
+                self.far_source_node_ids,
+            ),
         ):
             if a.shape != b.shape:
                 raise ValueError(
@@ -1606,9 +1616,9 @@ class ClusterTree(TensorClass):
         if theta == 0:
             n_s = self.n_sources
             plan = PointInteractionPlan(
-                near_target_ids=torch.arange(n_targets, device=device).repeat_interleave(
-                    n_s, output_size=n_targets * n_s
-                ),
+                near_target_ids=torch.arange(
+                    n_targets, device=device
+                ).repeat_interleave(n_s, output_size=n_targets * n_s),
                 near_source_ids=torch.arange(n_s, device=device).repeat(n_targets),
                 far_target_ids=empty,
                 far_source_node_ids=empty.clone(),
@@ -1677,15 +1687,29 @@ class ClusterTree(TensorClass):
                 )
 
             leaf_valid = torch.cat(leaf_validity_list)
-            leaf_counts = torch.where(leaf_valid, self.leaf_count[torch.cat(leaf_s_list)], 0)
+            leaf_counts = torch.where(
+                leaf_valid, self.leaf_count[torch.cat(leaf_s_list)], 0
+            )
             n_far, n_leaf, n_near = torch.stack(
-                [torch.cat(far_validity_list).sum(), leaf_valid.sum(), leaf_counts.sum()]
+                [
+                    torch.cat(far_validity_list).sum(),
+                    leaf_valid.sum(),
+                    leaf_counts.sum(),
+                ]
             ).tolist()
             far_t, far_s = _compact_deferred(
-                far_t_list, far_s_list, validity_list=far_validity_list, device=device, size=n_far
+                far_t_list,
+                far_s_list,
+                validity_list=far_validity_list,
+                device=device,
+                size=n_far,
             )
             leaf_t, leaf_s = _compact_deferred(
-                leaf_t_list, leaf_s_list, validity_list=leaf_validity_list, device=device, size=n_leaf
+                leaf_t_list,
+                leaf_s_list,
+                validity_list=leaf_validity_list,
+                device=device,
+                size=n_leaf,
             )
             positions, hit_ids = _ragged_arange(
                 self.leaf_start[leaf_s], self.leaf_count[leaf_s], total=n_near

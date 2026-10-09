@@ -1100,13 +1100,27 @@ def test_point_plan_of_a_subset_is_the_subset_of_the_plan(device):
     part = tree.find_point_interaction_pairs(targets[pick], theta=0.8)
 
     def entries(plan, t_ids, remap):
-        near = {(int(remap[t]), int(s)) for t, s in zip(plan.near_target_ids.tolist(), plan.near_source_ids.tolist()) if int(t) in t_ids}
-        far = {(int(remap[t]), int(s)) for t, s in zip(plan.far_target_ids.tolist(), plan.far_source_node_ids.tolist()) if int(t) in t_ids}
+        near = {
+            (int(remap[t]), int(s))
+            for t, s in zip(
+                plan.near_target_ids.tolist(), plan.near_source_ids.tolist()
+            )
+            if int(t) in t_ids
+        }
+        far = {
+            (int(remap[t]), int(s))
+            for t, s in zip(
+                plan.far_target_ids.tolist(), plan.far_source_node_ids.tolist()
+            )
+            if int(t) in t_ids
+        }
         return near, far
 
     remap_full = {int(t): i for i, t in enumerate(pick.tolist())}
     remap_part = {i: i for i in range(len(pick))}
-    assert entries(full, set(remap_full), remap_full) == entries(part, set(remap_part), remap_part)
+    assert entries(full, set(remap_full), remap_full) == entries(
+        part, set(remap_part), remap_part
+    )
 
 
 def test_point_plan_source_admissible_mask(device):
@@ -1116,7 +1130,9 @@ def test_point_plan_source_admissible_mask(device):
     tree = ClusterTree.from_points(sources, leaf_size=2)
     g = torch.Generator(device="cpu").manual_seed(39)
     admissible = (torch.rand(tree.n_nodes, generator=g) > 0.5).to(device)
-    plan = tree.find_point_interaction_pairs(targets, theta=1.0, source_admissible=admissible)
+    plan = tree.find_point_interaction_pairs(
+        targets, theta=1.0, source_admissible=admissible
+    )
     assert admissible[plan.far_source_node_ids].all()
     assert (_point_plan_counts(plan, tree, 40, 64) == 1).all()
     plain = tree.find_point_interaction_pairs(targets, theta=1.0)
@@ -1137,14 +1153,18 @@ def test_point_plan_nan_target_and_source_keep_exact_cover(device):
     sources_nan = sources.clone()
     sources_nan[7, 0] = float("nan")
     tree_nan = ClusterTree.from_points(sources_nan, leaf_size=2)
-    plan = tree_nan.find_point_interaction_pairs(_points(30, 3, device, seed=41), theta=1.0)
+    plan = tree_nan.find_point_interaction_pairs(
+        _points(30, 3, device, seed=41), theta=1.0
+    )
     assert (_point_plan_counts(plan, tree_nan, 30, 50) == 1).all()
 
 
 def test_point_plan_empty_cases_and_validation(device):
     """Empty trees or target sets give empty plans; validate rejects a corrupted one."""
     tree = ClusterTree.from_points(_points(10, 3, device, seed=42))
-    empty = tree.find_point_interaction_pairs(torch.empty(0, 3, device=device), theta=1.0)
+    empty = tree.find_point_interaction_pairs(
+        torch.empty(0, 3, device=device), theta=1.0
+    )
     assert empty.n_near == 0 and empty.n_far == 0
     none = ClusterTree.from_points(torch.empty(0, 3, device=device))
     plan = none.find_point_interaction_pairs(_points(4, 3, device, seed=43), theta=1.0)
@@ -1163,11 +1183,15 @@ def test_point_plan_is_cheaper_than_the_dual_plan_for_sparse_targets(device):
     each target leaf's own extent."""
     g = torch.Generator(device="cpu").manual_seed(44)
     angles = torch.rand(2000, generator=g) * 6.283185307179586
-    surface = torch.stack([angles.cos(), angles.sin(), 0.2 * torch.randn(2000, generator=g)], -1)
+    surface = torch.stack(
+        [angles.cos(), angles.sin(), 0.2 * torch.randn(2000, generator=g)], -1
+    )
     targets = torch.randn(1500, 3, generator=g) * 6.0
     tree = ClusterTree.from_points(surface.to(device), leaf_size=4)
     point_plan = tree.find_point_interaction_pairs(targets.to(device), theta=1.0)
     target_tree = ClusterTree.from_points(targets.to(device), leaf_size=4)
-    dual = tree.find_dual_interaction_pairs(target_tree, theta=1.0, expand_far_targets=True)
+    dual = tree.find_dual_interaction_pairs(
+        target_tree, theta=1.0, expand_far_targets=True
+    )
     assert point_plan.n_near + point_plan.n_far < dual.n_near + dual.n_nf + dual.n_fn
     assert (_point_plan_counts(point_plan, tree, 1500, 2000) == 1).all()
