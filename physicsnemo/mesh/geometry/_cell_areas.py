@@ -22,8 +22,8 @@ dimension-specific closed-form expressions where possible:
 - **Edges** (n=1): vector norm.
 - **Triangles** (n=2): cross product in 3-space, or exterior product in
   other spatial dimensions, with a rescaled norm.
-- **Tetrahedra** (n=3): scalar triple product in 3-space, or Sarrus' rule
-  on the 3x3 Gram matrix for higher spatial dimensions.
+- **Tetrahedra** (n=3): scalar triple product in 3-space, or the norm of the
+  3x3 minors of the edge vectors for higher spatial dimensions.
 - **General** (n>=4): Gram determinant via ``torch.det``.
 
 The closed-form branches use only multiply-add-sqrt operations, so they
@@ -33,10 +33,13 @@ native dtype, since ``torch.det`` dispatches to cuBLAS LU factorization
 which does not support reduced-precision dtypes.
 """
 
+import itertools
 import math
 
 import torch
 from jaxtyping import Float
+
+from physicsnemo.utils._small_linalg import small_det
 
 
 def compute_cell_areas(
@@ -131,7 +134,7 @@ def _triangle_areas(
     e1, e2 = relative_vectors[:, 0], relative_vectors[:, 1]
     n_spatial_dims = relative_vectors.shape[-1]
     if n_spatial_dims == 2:
-        return (e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]).abs() / 2
+        return small_det(relative_vectors).abs() / 2
     if n_spatial_dims == 3:
         components = torch.linalg.cross(e1, e2)
     else:
@@ -162,34 +165,32 @@ def _tetrahedron_volumes_3d(
     .. math::
         V = \frac{1}{6} \lvert e_1 \cdot (e_2 \times e_3) \rvert
     """
-    e1, e2, e3 = relative_vectors[:, 0], relative_vectors[:, 1], relative_vectors[:, 2]
-    return (e1 * torch.linalg.cross(e2, e3)).sum(-1).abs() / 6
+    return small_det(relative_vectors).abs() / 6
 
 
 def _tetrahedron_volumes_general(
     relative_vectors: Float[torch.Tensor, "n_cells 3 n_spatial_dims"],
 ) -> Float[torch.Tensor, " n_cells"]:
-    r"""Tetrahedral volume via Sarrus' rule on the 3x3 Gram matrix.
+    r"""Tetrahedral volume from the 3x3 minors of the edge vectors.
 
-    Computes the 6 unique entries of the symmetric Gram matrix
-    :math:`G_{ij} = e_i \cdot e_j` and evaluates its determinant with the
-    closed-form 3x3 expansion. Works for any spatial dimension >= 3.
+    By the Cauchy-Binet formula, :math:`\det(E E^T)` is the sum of the squared
+    3x3 minors of :math:`E`, so the volume is their norm over 6. As for
+    triangles, direct minors avoid the cancellation of the Gram determinant for
+    thin tetrahedra, and rescaling before the norm avoids squaring tiny or large
+    minors. Works for any spatial dimension >= 3.
     """
-    e1, e2, e3 = relative_vectors[:, 0], relative_vectors[:, 1], relative_vectors[:, 2]
-    ### 6 unique dot products (G is symmetric)
-    g11 = (e1 * e1).sum(-1)
-    g22 = (e2 * e2).sum(-1)
-    g33 = (e3 * e3).sum(-1)
-    g12 = (e1 * e2).sum(-1)
-    g13 = (e1 * e3).sum(-1)
-    g23 = (e2 * e3).sum(-1)
-    ### Sarrus' rule: det(G) expanded along first row
-    det_G = (
-        g11 * (g22 * g33 - g23 * g23)
-        - g12 * (g12 * g33 - g23 * g13)
-        + g13 * (g12 * g23 - g22 * g13)
-    )
-    return det_G.clamp(min=0).sqrt() / 6
+    n_spatial_dims = relative_vectors.shape[-1]
+    # Column slices rather than an index tensor, which a CUDA H2D copy would need
+    minors = torch.stack(
+        [
+            small_det(torch.stack([relative_vectors[..., c] for c in columns], dim=-1))
+            for columns in itertools.combinations(range(n_spatial_dims), 3)
+        ],
+        dim=-1,
+    )  # (n_cells, n_minors)
+    scale = minors.abs().amax(dim=-1)
+    scaled = minors / scale.masked_fill(scale == 0, 1).unsqueeze(-1)
+    return scaled.norm(dim=-1) * (scale / 6)
 
 
 def _gram_det_volumes(

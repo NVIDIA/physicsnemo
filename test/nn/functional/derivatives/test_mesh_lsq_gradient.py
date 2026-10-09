@@ -373,3 +373,160 @@ def test_mesh_lsq_gradient_error_handling_warp(device: str):
                 indices,
                 implementation="warp",
             )
+
+
+### small_lstsq: closed-form replacement for batched torch.linalg.lstsq
+
+
+def _lstsq_reference(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+    """Former formulation: CPU ``lstsq``, which gives minimum-norm solutions.
+
+    The driver is ``gelsd`` rather than the default ``gelsy``: batched CPU
+    ``gelsy`` intermittently returns zero for some exactly rank-deficient
+    systems (e.g. ``planar_3d`` below in float32, at length scale 1e8).
+    """
+    solution = torch.linalg.lstsq(A.cpu(), B.cpu(), rcond=None, driver="gelsd").solution
+    return solution.to(A.device)
+
+
+def _make_stencils(kind: str, n_systems: int = 256) -> torch.Tensor:
+    """Float64 stencil matrices (n_systems, k, d) of the given rank structure."""
+    A = torch.randn(n_systems, 6, 3, dtype=torch.float64)
+    t = torch.randn(n_systems, 6, 1, dtype=torch.float64)
+    nonzero_column = torch.zeros(n_systems, 6, 1, dtype=torch.float64)
+    tilted_normal = torch.ones(3, dtype=torch.float64) / 3**0.5
+    return {
+        "full_rank_3d": A,
+        "full_rank_2d": A[..., :2],
+        "full_rank_1d": A[..., :1],
+        "anisotropic_1e-3": A * torch.tensor([1.0, 1.0, 1e-3], dtype=A.dtype),
+        "planar_3d": torch.cat([A[..., :2], nonzero_column], dim=-1),
+        "tilted_planar_3d": A
+        - (A * tilted_normal).sum(-1, keepdim=True) * tilted_normal,
+        "duplicate_column": torch.stack([A[..., 0], A[..., 1], A[..., 0]], dim=-1),
+        "parallel_columns": torch.stack([A[..., 0], A[..., 1], 4 * A[..., 1]], dim=-1),
+        "collinear_3d": t * torch.tensor([1.0, -2.0, 0.5], dtype=A.dtype),
+        "collinear_2d": t * torch.tensor([1.0, -2.0], dtype=A.dtype),
+        "underdetermined_k1_d3": A[:, :1],
+        "underdetermined_k2_d3": A[:, :2],
+        "underdetermined_k1_d2": A[:, :1, :2],
+        "underdetermined_repeated_row": torch.cat([A[:, :1], A[:, :1]], dim=1),
+        "all_zero": torch.zeros_like(A),
+    }[kind]
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "full_rank_3d",
+        "full_rank_2d",
+        "full_rank_1d",
+        "anisotropic_1e-3",
+        "planar_3d",
+        "tilted_planar_3d",
+        "duplicate_column",
+        "parallel_columns",
+        "collinear_3d",
+        "collinear_2d",
+        "underdetermined_k1_d3",
+        "underdetermined_k2_d3",
+        "underdetermined_k1_d2",
+        "underdetermined_repeated_row",
+        "all_zero",
+    ],
+)
+@pytest.mark.parametrize("length_scale", [1e-8, 1.0, 1e8])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_small_lstsq_matches_lstsq(
+    device: str, kind: str, length_scale: float, dtype: torch.dtype
+):
+    """small_lstsq gives the minimum-norm solutions of CPU lstsq, also when rank-deficient."""
+    from physicsnemo.utils._small_linalg import small_lstsq
+
+    A = (_make_stencils(kind) * length_scale).to(dtype=dtype, device=device)
+    B = torch.randn(*A.shape[:-1], 2, dtype=dtype, device=device)
+
+    solution = small_lstsq(A, B)
+    reference = _lstsq_reference(A, B)
+
+    assert solution.shape == reference.shape
+    assert torch.isfinite(solution).all()
+    # Error relative to each system's solution scale.
+    error = (solution - reference).norm(dim=(-2, -1))
+    scale = reference.norm(dim=(-2, -1)).clamp_min(torch.finfo(dtype).tiny)
+    tolerance = 1e-4 if dtype == torch.float32 else 1e-10
+    assert (error <= tolerance * scale).all(), (error / scale).max()
+
+
+def test_small_lstsq_gradients(device: str):
+    """small_lstsq is differentiable, with finite gradients on rank-deficient systems."""
+    from physicsnemo.utils._small_linalg import small_lstsq
+
+    A = torch.randn(8, 6, 3, dtype=torch.float64, device=device, requires_grad=True)
+    B = torch.randn(8, 6, 2, dtype=torch.float64, device=device, requires_grad=True)
+    assert torch.autograd.gradcheck(small_lstsq, (A, B))
+
+    for kind in ("planar_3d", "collinear_3d", "underdetermined_k2_d3", "all_zero"):
+        A = _make_stencils(kind, n_systems=8).to(device).requires_grad_(True)
+        B = torch.randn(*A.shape[:-1], 2, dtype=A.dtype, device=device)
+        B.requires_grad_(True)
+        small_lstsq(A, B).square().sum().backward()
+        assert torch.isfinite(A.grad).all()
+        assert torch.isfinite(B.grad).all()
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_mesh_lsq_gradient_torch_rank_deficient_stencils(
+    device: str, dtype: torch.dtype, monkeypatch
+):
+    """Planar and collinear 3D stencils give the minimum-norm gradients of CPU lstsq.
+
+    On CUDA, batched_lstsq keeps the faster CUDA lstsq (gels), which falls back
+    to small_lstsq only for exactly rank-deficient systems: there, only the
+    planar stencils in the plane z = 0 are covered.
+    """
+    from physicsnemo.nn.functional.derivatives.mesh_lsq_gradient import _torch_impl
+
+    points_planar, offsets, indices = _make_case(
+        device, n_entities=256, n_dims=3, k_neighbors=8
+    )
+    points_planar = points_planar.to(dtype)
+    points_planar[:, 2] = 0.0
+    points_collinear = points_planar[:, :1] * torch.tensor(
+        [1.0, 2.0, 0.5], dtype=dtype, device=device
+    )
+    # A neighborhood of one or two points is underdetermined in 3D.
+    few_offsets = torch.arange(0, 2 * 256 + 1, 2, device=device).clamp_max(
+        indices.shape[0] // 4
+    )
+    few_indices = indices[: indices.shape[0] // 4]
+
+    cases = [
+        (points_planar, offsets, indices),
+        (points_collinear, offsets, indices),
+        (
+            points_planar + 0.1 * torch.rand_like(points_planar),
+            few_offsets,
+            few_indices,
+        ),
+    ]
+    if torch.device(device).type == "cuda":
+        cases = cases[:1]
+    for points, case_offsets, case_indices in cases:
+        values = torch.stack(
+            [points[:, 0] - 3 * points[:, 1], torch.sin(4 * points).sum(-1)], dim=-1
+        )
+        output = _torch_impl.mesh_lsq_gradient_torch(
+            points, values, case_offsets, case_indices
+        )
+        with monkeypatch.context() as patch:
+            patch.setattr(_torch_impl, "batched_lstsq", _lstsq_reference)
+            reference = _torch_impl.mesh_lsq_gradient_torch(
+                points, values, case_offsets, case_indices
+            )
+
+        assert torch.isfinite(output).all()
+        tolerance = 1e-4 if dtype == torch.float32 else 1e-10
+        torch.testing.assert_close(
+            output, reference, atol=tolerance * reference.abs().max(), rtol=tolerance
+        )

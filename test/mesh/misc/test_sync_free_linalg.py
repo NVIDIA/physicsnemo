@@ -110,20 +110,22 @@ def test_cotan_weight_inverse_is_sync_free(monkeypatch) -> None:
     # The surrounding topology path contains separate data-dependent indexing,
     # so guard the inversion call itself. The called assertion also makes this a
     # regression test against reverting to the synchronizing ``linalg.inv``.
-    original_inv_ex = torch.linalg.inv_ex
+    from physicsnemo.mesh.geometry import dual_meshes
+
+    original_inverse = dual_meshes.small_inverse
     called = False
 
-    def checked_inv_ex(*args, **kwargs):
+    def checked_inverse(*args, **kwargs):
         nonlocal called
         called = True
         previous_mode = torch.cuda.get_sync_debug_mode()
         torch.cuda.set_sync_debug_mode("error")
         try:
-            return original_inv_ex(*args, **kwargs)
+            return original_inverse(*args, **kwargs)
         finally:
             torch.cuda.set_sync_debug_mode(previous_mode)
 
-    monkeypatch.setattr(torch.linalg, "inv_ex", checked_inv_ex)
+    monkeypatch.setattr(dual_meshes, "small_inverse", checked_inverse)
     compute_cotan_weights_fem(mesh)
     torch.cuda.synchronize()
     assert called

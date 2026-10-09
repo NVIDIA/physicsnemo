@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import torch
 
+from physicsnemo.utils._small_linalg import batched_lstsq
+
 from .utils import resolve_safe_epsilon, validate_inputs
 
 
@@ -95,11 +97,7 @@ def mesh_lsq_gradient_torch(
         A_weighted = sqrt_w * relative
         b_weighted = sqrt_w * delta_values
 
-        solution = torch.linalg.lstsq(
-            A_weighted,
-            b_weighted,
-            rcond=None,
-        ).solution
+        solution = batched_lstsq(A_weighted, b_weighted)
         gradients_flat[entity_indices] = solution
 
     ### Restore gradient output shape.

@@ -59,7 +59,7 @@ layers =
    profiling
    checkpoint
    capture
-   logging | memory | _index_tuple_ops
+   logging | memory | _index_tuple_ops | _small_linalg
 
 [importlinter:contract:physicsnemo-nn]
 name = Control Dependencies in PhysicsNeMo nn

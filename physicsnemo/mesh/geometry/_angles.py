@@ -47,11 +47,14 @@ Van Oosterom, A. & Strackee, J. (1983). "The Solid Angle of a Plane
 Triangle." IEEE Trans. Biomed. Eng. BME-30(2):125-126.
 """
 
+import itertools
+import math
 from typing import TYPE_CHECKING
 
 import torch
 from jaxtyping import Float
 
+from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 if TYPE_CHECKING:
@@ -62,7 +65,10 @@ def stable_angle_between_vectors(v1: torch.Tensor, v2: torch.Tensor) -> torch.Te
     """Compute angle between vectors using numerically stable atan2 formula.
 
     More stable than ``acos(dot product)`` which suffers from numerical
-    issues when vectors are nearly parallel or anti-parallel.
+    issues when vectors are nearly parallel or anti-parallel. The magnitude
+    ``|v1 x v2|`` comes from the cross product (in 2D and 3D) or the 2x2 minors
+    of ``[v1; v2]`` (in other dimensions), not from
+    ``|v1|^2 |v2|^2 - (v1 . v2)^2``, which cancels for those vectors.
 
     Parameters
     ----------
@@ -87,11 +93,20 @@ def stable_angle_between_vectors(v1: torch.Tensor, v2: torch.Tensor) -> torch.Te
     """
     dot_product = (v1 * v2).sum(dim=-1)
 
-    v1_norm = torch.linalg.vector_norm(v1, dim=-1)
-    v2_norm = torch.linalg.vector_norm(v2, dim=-1)
-
-    cross_magnitude_sq = torch.clamp(v1_norm**2 * v2_norm**2 - dot_product**2, min=0)
-    return torch.atan2(torch.sqrt(cross_magnitude_sq), dot_product)
+    n_dims = v1.shape[-1]
+    if n_dims == 2:
+        cross_magnitude = (v1[..., 0] * v2[..., 1] - v1[..., 1] * v2[..., 0]).abs()
+    elif n_dims == 3:
+        cross_magnitude = torch.linalg.vector_norm(
+            torch.linalg.cross(v1, v2, dim=-1), dim=-1
+        )
+    else:
+        # |v1 x v2|^2 is the sum of the squared 2x2 minors (Lagrange's identity)
+        i, j = torch.triu_indices(n_dims, n_dims, offset=1, device=v1.device)
+        cross_magnitude = torch.linalg.vector_norm(
+            v1[..., i] * v2[..., j] - v1[..., j] * v2[..., i], dim=-1
+        )
+    return torch.atan2(cross_magnitude, dot_product)
 
 
 def compute_triangle_angles(
@@ -172,7 +187,11 @@ def compute_vertex_angles(
     The formula uses ``atan2`` for numerical stability when the denominator
     approaches zero (nearly degenerate simplices). Intermediate computations
     are performed in float64 to avoid catastrophic cancellation in the
-    correlation matrix when vertex angles approach 0 or pi.
+    correlation matrix when vertex angles approach 0 or pi. When the edge
+    vectors form a square matrix E (as for tetrahedra in 3D),
+    ``sqrt(det(C)) = |det(E)|`` is computed from E directly, which stays
+    accurate for nearly flat cells. Triangles in 2D and 3D use
+    ``atan2(|a x b|, a . b)`` instead.
 
     Examples
     --------
@@ -191,7 +210,7 @@ def compute_vertex_angles(
 
     if (
         mesh.n_manifold_dims == 2
-        and mesh.n_spatial_dims == 3
+        and mesh.n_spatial_dims in (2, 3)
         and mesh.cells.shape[1] == 3
     ):
         cell_vertices = mesh.points[mesh.cells]
@@ -200,9 +219,14 @@ def compute_vertex_angles(
         v2 = cell_vertices[:, 2, :]
 
         def _angle(edge_a: torch.Tensor, edge_b: torch.Tensor) -> torch.Tensor:
-            cross_norm = torch.linalg.vector_norm(
-                torch.linalg.cross(edge_a, edge_b, dim=-1), dim=-1
-            )
+            if mesh.n_spatial_dims == 2:
+                cross_norm = (
+                    edge_a[:, 0] * edge_b[:, 1] - edge_a[:, 1] * edge_b[:, 0]
+                ).abs()
+            else:
+                cross_norm = torch.linalg.vector_norm(
+                    torch.linalg.cross(edge_a, edge_b, dim=-1), dim=-1
+                )
             dot_product = (edge_a * edge_b).sum(dim=-1)
             return torch.atan2(cross_norm, dot_product)
 
@@ -241,25 +265,22 @@ def compute_vertex_angles(
         min=safe_eps(torch.float64)
     )
 
-    ### Compute correlation matrix C for each vertex of each cell
-    # C[i,j] = normalized_edge_i . normalized_edge_j
-    # Shape: (n_cells, n_verts, n_edges, n_edges)
-    corr_matrix = torch.einsum("cvid,cvjd->cvij", edges_normalized, edges_normalized)
+    ### sqrt(det(C)) for each vertex: (n_cells, n_verts)
+    # C is the Gram matrix of the unit edges, so sqrt(det(C)) is n! times the
+    # volume of the simplex they span. compute_cell_areas has closed forms for
+    # up to 3 edges; where there are as many edges as spatial dimensions it takes
+    # their determinant directly, without the cancellation of forming det(C).
+    numerator = math.factorial(n_edges) * compute_cell_areas(
+        edges_normalized.flatten(0, 1)
+    ).unflatten(0, edges_normalized.shape[:2])
 
-    ### Compute det(C) for each vertex: (n_cells, n_verts)
-    det_C = torch.linalg.det(corr_matrix)
+    ### sum_{i<j} C_ij, one off-diagonal entry at a time: (n_cells, n_verts)
+    sum_off_diag = torch.zeros_like(numerator)
+    for i, j in itertools.combinations(range(n_edges), 2):
+        sum_off_diag += (edges_normalized[:, :, i] * edges_normalized[:, :, j]).sum(-1)
 
-    ### Compute sum of upper-triangle off-diagonal elements: sum_{i<j} C_ij
-    triu_mask = torch.triu(
-        torch.ones(n_edges, n_edges, device=mesh.points.device, dtype=torch.bool),
-        diagonal=1,
-    )
-    sum_off_diag = corr_matrix[:, :, triu_mask].sum(dim=-1)  # (n_cells, n_verts)
-
-    ### Compute angle: Omega = 2 * arctan2(sqrt(|det(C)|), 1 + sum_{i<j} C_ij)
-    denominator = 1.0 + sum_off_diag
-    numerator = det_C.abs().sqrt()
-    angles = 2.0 * torch.atan2(numerator, denominator)
+    ### Compute angle: Omega = 2 * arctan2(sqrt(det(C)), 1 + sum_{i<j} C_ij)
+    angles = 2.0 * torch.atan2(numerator, 1.0 + sum_off_diag)
 
     return angles.to(input_dtype)
 

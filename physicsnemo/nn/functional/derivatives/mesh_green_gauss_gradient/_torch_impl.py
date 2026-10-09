@@ -16,7 +16,11 @@
 
 from __future__ import annotations
 
+import math
+
 import torch
+
+from physicsnemo.utils._small_linalg import small_det
 
 from .utils import validate_inputs
 
@@ -44,25 +48,9 @@ def mesh_green_gauss_gradient_torch(
     cell_points = points[cells_i64]
     centroids = cell_points.mean(dim=1)
 
-    if dims == 2:
-        p0, p1, p2 = cell_points[:, 0], cell_points[:, 1], cell_points[:, 2]
-        cell_volume = 0.5 * torch.abs(
-            (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
-            - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])
-        )
-    else:
-        p0, p1, p2, p3 = (
-            cell_points[:, 0],
-            cell_points[:, 1],
-            cell_points[:, 2],
-            cell_points[:, 3],
-        )
-        cell_volume = (
-            torch.abs(
-                torch.einsum("bi,bi->b", p1 - p0, torch.cross(p2 - p0, p3 - p0, dim=-1))
-            )
-            / 6.0
-        )
+    # Simplex volume |det(E)| / d!, with E the edge vectors from vertex 0
+    edges = cell_points[:, 1:] - cell_points[:, :1]  # (n_cells, dims, dims)
+    cell_volume = small_det(edges).abs() / math.factorial(dims)
     cell_volume = torch.clamp(cell_volume, min=1.0e-12)
 
     grad_flat = torch.zeros(

@@ -30,6 +30,7 @@ from tensordict import TensorDict
 from physicsnemo.mesh.neighbors._adjacency import Adjacency, build_adjacency_from_pairs
 from physicsnemo.mesh.spatial import BVH
 from physicsnemo.nn.functional.neighbors import knn
+from physicsnemo.utils._small_linalg import small_det, small_inverse
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -96,21 +97,50 @@ def _solve_barycentric_system(
 
     Notes
     -----
-    For square systems (``n_spatial_dims == n_manifold_dims``): uses direct
-    solve. For over/under-determined systems: uses least squares.
+    The systems are tiny and there is one per (query, cell) pair, so they are
+    solved in closed form rather than by batched ``torch.linalg`` calls, which
+    factorize every tiny matrix separately and, for ``solve``, synchronize CUDA
+    for an error check. Edge vectors and query are first divided by the cell's
+    mean edge length, so products of tiny or huge edge vectors stay in range.
+
+    - Square systems (``n_spatial_dims == n_manifold_dims``): the closed-form
+      inverse of the edge matrix.
+    - Other systems (edges, triangles in 3D, ...): modified Gram-Schmidt on
+      the edge vectors and the query, which solves the least-squares problem
+      as accurately as a QR factorization. The normal equations with the Gram
+      matrix would square the condition number of thin cells.
+
+    Degenerate cells, whose normalized edge matrix (square systems) or Gram
+    matrix has a numerically zero determinant (within a few machine epsilons,
+    which also catches exactly singular cells whose determinant rounds to a
+    tiny nonzero value), have no barycentric coordinates. Previously, on CPU, they fell back to the minimum-norm
+    least-squares solution and could contain query points; on CUDA the result
+    was undefined. They now get NaN coordinates (and a NaN
+    ``reconstruction_error`` for codimension != 0), so no containment test
+    accepts them on any device. The arithmetic runs on a nonsingular
+    substitute, so gradients stay finite. Near-singular cells keep their
+    (large) coordinates, as with ``torch.linalg.solve``.
     """
     n_manifold_dims = relative_vectors.shape[-2]
     n_spatial_dims = relative_vectors.shape[-1]
 
-    A = relative_vectors.transpose(-2, -1)
-    b = query_relative.unsqueeze(-1)
+    ### Normalize by the mean edge length of each cell. Cells whose vertices all
+    ### coincide have no length scale; they keep 1 and are degenerate below.
+    edge_length_scale = relative_vectors.norm(dim=-1).mean(dim=-1)  # (*batch,)
+    length_scale = torch.where(edge_length_scale > 0, edge_length_scale, 1.0)
+    E = relative_vectors / length_scale[..., None, None]  # rows e_i / L
+    q = query_relative / length_scale[..., None]
+    # Exactly singular cells round to a determinant of a few eps, not always 0
+    # (e.g. with fused multiply-adds on CUDA).
+    singular_tolerance = n_manifold_dims * torch.finfo(E.dtype).eps
 
     if n_spatial_dims == n_manifold_dims:
-        ### Square system: use torch.linalg.solve
-        try:
-            weights_1_to_n = torch.linalg.solve(A, b).squeeze(-1)
-        except torch.linalg.LinAlgError:
-            weights_1_to_n = torch.linalg.lstsq(A, b).solution.squeeze(-1)
+        ### Square system: q = E^T w, so w = inv(E)^T q
+        is_degenerate = small_det(E).abs() <= singular_tolerance
+        eye = torch.eye(n_manifold_dims, dtype=E.dtype, device=E.device)
+        E_inv = small_inverse(torch.where(is_degenerate[..., None, None], eye, E))
+        # Broadcast-and-sum: a batched matmul of millions of tiny matrices is slow.
+        weights_1_to_n = (E_inv * q.unsqueeze(-1)).sum(dim=-2)
 
         reconstruction_error = torch.zeros(
             weights_1_to_n.shape[:-1],
@@ -119,14 +149,54 @@ def _solve_barycentric_system(
         )
 
     else:
-        ### Over-determined or under-determined system: use least squares
-        weights_1_to_n = torch.linalg.lstsq(A, b).solution.squeeze(-1)
+        ### Over-determined system: project q onto the affine hull of the cell
+        # Modified Gram-Schmidt on the edges, then on q (Bjorck's stable least
+        # squares): e_k = b_k + sum_{j<k} r_jk b_j with orthogonal b_j, and
+        # q = sum_j c_j b_j + residual. det(E E^T) is the product of |b_k|^2.
+        basis = []  # b_k
+        safe_basis_sq = []  # |b_k|^2, or 1 where zero
+        edge_components = []  # edge_components[k][j] = r_jk
+        is_degenerate = torch.zeros(E.shape[:-2], dtype=torch.bool, device=E.device)
+        for k in range(n_manifold_dims):
+            b_k = E[..., k, :]
+            edge_components.append([])
+            for b_j, b_j_sq in zip(basis, safe_basis_sq):
+                r_jk = (b_k * b_j).sum(dim=-1) / b_j_sq
+                b_k = b_k - r_jk.unsqueeze(-1) * b_j
+                edge_components[k].append(r_jk)
+            b_k_sq = (b_k * b_k).sum(dim=-1)
+            # Dependent edge: its residual is at the rounding level of e_k
+            e_k_sq = (E[..., k, :] * E[..., k, :]).sum(dim=-1)
+            dependent = b_k_sq <= singular_tolerance**2 * e_k_sq
+            is_degenerate = is_degenerate | dependent
+            basis.append(b_k)
+            safe_basis_sq.append(torch.where(dependent, 1.0, b_k_sq))
 
-        reconstructed = torch.einsum(
-            "...m,...ms->...s", weights_1_to_n, relative_vectors
+        residual = q
+        query_components = []  # c_j
+        for b_j, b_j_sq in zip(basis, safe_basis_sq):
+            c_j = (residual * b_j).sum(dim=-1) / b_j_sq
+            residual = residual - c_j.unsqueeze(-1) * b_j
+            query_components.append(c_j)
+
+        ### sum_k w_k e_k = sum_j (w_j + sum_{k>j} r_jk w_k) b_j: back-substitute
+        weights = [None] * n_manifold_dims
+        for j in reversed(range(n_manifold_dims)):
+            weights[j] = query_components[j] - sum(
+                edge_components[k][j] * weights[k]
+                for k in range(j + 1, n_manifold_dims)
+            )
+        # (..., n_manifold_dims); point cells (n_manifold_dims == 0) have none.
+        weights_1_to_n = torch.stack(weights, dim=-1) if weights else residual[..., :0]
+
+        # The residual is q minus its projection onto the affine hull.
+        reconstruction_error = torch.where(
+            is_degenerate,
+            float("nan"),
+            length_scale * torch.linalg.vector_norm(residual, dim=-1),
         )
-        residual = query_relative - reconstructed
-        reconstruction_error = torch.linalg.vector_norm(residual, dim=-1)
+
+    weights_1_to_n = torch.where(is_degenerate[..., None], float("nan"), weights_1_to_n)
 
     ### w_0 = 1 - sum(w_i for i=1..n)
     w_0 = 1.0 - weights_1_to_n.sum(dim=-1, keepdim=True)

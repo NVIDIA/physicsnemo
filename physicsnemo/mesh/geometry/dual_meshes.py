@@ -54,6 +54,7 @@ import torch
 from jaxtyping import Float, Int
 
 from physicsnemo.mesh.utilities._tolerances import safe_eps
+from physicsnemo.utils._small_linalg import small_det, small_inverse, small_lstsq
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -462,10 +463,14 @@ def compute_circumcenters(
     and
     :math:`b = [\|v_1 - v_0\|^2, \|v_2 - v_0\|^2, \ldots]^\top`.
 
-    Then :math:`c = v_0 + d`. For over-determined systems (embedded manifolds),
-    least-squares is used. Square systems use ``torch.linalg.solve_ex`` with a
-    fallback to least-squares for singular cells, written branchlessly so
-    ``torch.compile`` can trace through without graph breaks.
+    Then :math:`c = v_0 + d`. Square systems (full-dimensional cells) use the
+    closed form :math:`d = \tfrac{1}{2} E^{-1} [\|e_i\|^2]_i` with
+    :math:`E = A / 2` (rows :math:`v_i - v_0`), in units of the mean edge length so the closed-form
+    determinant and inverse stay in floating-point range at any scale.
+    Degenerate cells, whose normalized determinant is numerically zero, have
+    no circumcenter and return their centroid. Under-determined systems
+    (manifolds embedded in a higher-dimensional space) use the minimum-norm
+    least-squares solution, which lies in the cell's affine hull.
     """
     n_cells, n_verts_per_cell, n_spatial_dims = vertices.shape
     n_manifold_dims = n_verts_per_cell - 1
@@ -486,24 +491,45 @@ def compute_circumcenters(
     v0 = vertices[:, 0, :]  # (n_cells, n_spatial_dims)
     relative_vecs = vertices[:, 1:, :] - v0.unsqueeze(1)
     # (n_cells, n_manifold_dims, n_spatial_dims)
-    A = 2 * relative_vecs
-    b = (relative_vecs**2).sum(dim=-1)  # (n_cells, n_manifold_dims)
-    rhs = b.unsqueeze(-1)  # (n_cells, n_manifold_dims, 1)
 
-    ### Solve for c - v0
     if n_manifold_dims == n_spatial_dims:
-        # Square system: solve_ex returns info != 0 for singular cells.
-        # We always also compute lstsq and select branchlessly to avoid the
-        # try/except graph break that torch.compile would otherwise see.
-        solve_solution, info = torch.linalg.solve_ex(A, rhs, check_errors=False)
-        lstsq_solution = torch.linalg.lstsq(A, rhs).solution
-        singular = info.ne(0).view(-1, 1, 1)  # (n_cells, 1, 1)
-        c_minus_v0 = torch.where(singular, lstsq_solution, solve_solution).squeeze(-1)
-    else:
-        # Over-determined system (manifold embedded in higher-dim ambient space)
-        c_minus_v0 = torch.linalg.lstsq(A, rhs).solution.squeeze(-1)
+        ### Square system: closed form c - v0 = inv(E) b with b_i = |e_i|^2 / 2
+        # Batched solve/lstsq factorize every tiny matrix separately. In units of
+        # the mean edge length L, c - v0 = L * inv(E / L) (b / L^2), so the
+        # closed-form determinant and inverse stay in range for tiny or huge cells.
+        dtype = vertices.dtype
+        edge_length_scale = relative_vecs.norm(dim=-1).mean(dim=-1)  # (n_cells,)
+        has_extent = edge_length_scale > torch.finfo(dtype).tiny ** 0.5
+        length_scale = torch.where(has_extent, edge_length_scale, 1.0)
+        E_normalized = relative_vecs / length_scale[:, None, None]
+        b_normalized = 0.5 * (E_normalized * E_normalized).sum(dim=-1)
+        # Degenerate cells have no circumcenter, so they return their centroid.
+        # The cutoff flags only numerically singular cells, whose determinant
+        # rounds to a few eps (not always 0, e.g. with fused multiply-adds on
+        # CUDA): near-degenerate cells keep their exact (distant) circumcenter.
+        # Degenerate cells invert the identity instead, which keeps values and
+        # gradients finite, branchlessly.
+        singular_tolerance = n_manifold_dims * torch.finfo(dtype).eps
+        is_degenerate = ~has_extent | (
+            small_det(E_normalized).abs() <= singular_tolerance
+        )
+        eye = torch.eye(n_manifold_dims, dtype=dtype, device=vertices.device)
+        E_inv = small_inverse(
+            torch.where(is_degenerate[:, None, None], eye, E_normalized)
+        )
+        # Broadcast-and-sum: a batched matmul of millions of tiny matrices is slow.
+        c_minus_v0 = length_scale[:, None] * (E_inv * b_normalized[:, None, :]).sum(-1)
+        return torch.where(
+            is_degenerate[:, None], vertices.mean(dim=1), v0 + c_minus_v0
+        )
 
-    return v0 + c_minus_v0
+    ### Under-determined system (manifold embedded in higher-dim ambient space)
+    # The minimum-norm solution lies in the cell's affine hull. small_lstsq
+    # factorizes A itself; the closed-form Gram route, inv(E E^T), would square
+    # the condition number of thin cells.
+    A = 2 * relative_vecs
+    rhs = (relative_vecs**2).sum(dim=-1).unsqueeze(-1)  # (n_cells, n_manifold_dims, 1)
+    return v0 + small_lstsq(A, rhs).squeeze(-1)
 
 
 def compute_cotan_weights_fem(
@@ -538,7 +564,10 @@ def compute_cotan_weights_fem(
             \quad \text{for } k, l \ge 1.
 
     For pairs involving vertex 0, the constraint
-    :math:`\sum_i \nabla \lambda_i = 0` is used.
+    :math:`\sum_i \nabla \lambda_i = 0` is used. When the cells are
+    full-dimensional (:math:`n = d`), :math:`E` is square and
+    :math:`G^{-1} = E^{-\top} E^{-1}` comes from the inverse of :math:`E` itself:
+    forming :math:`G` would square the condition number of thin cells.
 
     Parameters
     ----------
@@ -568,7 +597,6 @@ def compute_cotan_weights_fem(
     dtype = mesh.points.dtype
     n_cells = mesh.n_cells
     n_manifold_dims = mesh.n_manifold_dims
-    n_verts_per_cell = n_manifold_dims + 1  # n+1 vertices in an n-simplex
 
     ### Extract unique edges and the inverse mapping from candidate edges
     unique_edges, inverse_indices = extract_unique_edges(mesh)
@@ -585,11 +613,7 @@ def compute_cotan_weights_fem(
     # cell_vertices: (n_cells, n_verts_per_cell, n_spatial_dims)
     cell_vertices = mesh.points[mesh.cells]
     # E: (n_cells, n_manifold_dims, n_spatial_dims) - rows are e_k = v_k - v_0
-    E = cell_vertices[:, 1:, :] - cell_vertices[:, [0], :]
-
-    ### Compute Gram matrix G = E @ E^T
-    # G: (n_cells, n_manifold_dims, n_manifold_dims)
-    G = E @ E.transpose(-1, -2)
+    E = cell_vertices[:, 1:, :] - cell_vertices[:, :1, :]
 
     ### Handle degenerate cells by substituting an isotropic Gram matrix
     # Degenerate cells (collinear/coplanar vertices) have det(G) ~ 0, so inverting
@@ -605,48 +629,57 @@ def compute_cotan_weights_fem(
     # normal positive number and G / g_scale is a dimensionless O(1) matrix.
     edge_length_scale = E.norm(dim=-1).mean(dim=-1)  # (n_cells,)
     has_extent = edge_length_scale > torch.finfo(dtype).tiny ** 0.5  # (n_cells,)
-    g_scale = torch.where(has_extent, edge_length_scale, 1.0).square()  # (n_cells,)
+    length_scale = torch.where(has_extent, edge_length_scale, 1.0)  # (n_cells,)
+    g_scale = length_scale.square()  # (n_cells,)
+    eye = torch.eye(n_manifold_dims, dtype=dtype, device=device)
 
     # det(G) == det(G / g_scale) * g_scale**n, so thresholding the dimensionless
     # determinant applies exactly the same criterion as a scale-aware threshold on
     # det(G), without the under/overflow that the g_scale**n factor would suffer.
     # Cells with no usable extent carry no direction at all, so are always degenerate.
     # Written branchlessly so torch.compile can trace through without graph breaks.
-    is_degenerate = ~has_extent | (
-        torch.linalg.det(G / g_scale[:, None, None]).abs() < 1e-12
-    )  # (n_cells,)
-    eye = torch.eye(n_manifold_dims, dtype=dtype, device=device)
-    G = torch.where(is_degenerate[:, None, None], g_scale[:, None, None] * eye, G)
+    # Every normalized matrix inverted below is then invertible by construction:
+    # degenerate cells hold the identity, and the rest satisfy
+    # |det(G / g_scale)| >= 1e-12. Inverting the O(1) normalized matrix and
+    # rescaling, inv(G) = inv(G / g_scale) / g_scale, keeps closed-form
+    # determinants of tiny or huge cells in range.
+    if n_manifold_dims == mesh.n_spatial_dims:
+        ### Full-dimensional cells: invert E itself, inv(G) = inv(E)^T inv(E)
+        # Forming G squares the condition number of E, which in float32 costs thin
+        # cells most of their accuracy. det(G / g_scale) == det(E / length_scale)**2.
+        E_normalized = E / length_scale[:, None, None]
+        is_degenerate = ~has_extent | (small_det(E_normalized).square() < 1e-12)
+        E_normalized = torch.where(is_degenerate[:, None, None], eye, E_normalized)
+        E_inv = small_inverse(E_normalized)
+        # Broadcast-and-sum: a batched matmul of millions of tiny matrices is slow.
+        G_normalized_inv = (E_inv.unsqueeze(-1) * E_inv.unsqueeze(-2)).sum(dim=-3)
+    else:
+        ### Gram matrix G = E @ E^T: (n_cells, n_manifold_dims, n_manifold_dims)
+        # Broadcast-and-sum: a batched matmul of millions of tiny matrices is slow.
+        G = (E.unsqueeze(-2) * E.unsqueeze(-3)).sum(dim=-1)
+        G_normalized = G / g_scale[:, None, None]
+        is_degenerate = ~has_extent | (small_det(G_normalized).abs() < 1e-12)
+        G_normalized = torch.where(is_degenerate[:, None, None], eye, G_normalized)
+        G_normalized_inv = small_inverse(G_normalized)
 
-    ### Invert Gram matrix
     # G_inv: (n_cells, n_manifold_dims, n_manifold_dims)
-    # Every G is now invertible by construction: degenerate cells hold a positive
-    # diagonal matrix, and the rest satisfy |det(G / g_scale)| >= 1e-12. So the
-    # non-checking ``inv_ex`` variant is safe here, and it spares CUDA callers a
-    # device-to-host synchronization made solely for error reporting.
-    G_inv = torch.linalg.inv_ex(G, check_errors=False).inverse
+    G_inv = G_normalized_inv / g_scale[:, None, None]
 
-    ### Build the gradient dot product matrix C = H @ G_inv @ H^T
-    # H: (n_verts_per_cell, n_manifold_dims) = [[-1,...,-1]; I_n]
-    # This encodes the relationship: grad lambda_0 = -sum(grad lambda_k for k>=1)
-    H = torch.zeros(n_verts_per_cell, n_manifold_dims, dtype=dtype, device=device)
-    H[0, :] = -1.0
-    H[1:, :] = torch.eye(n_manifold_dims, dtype=dtype, device=device)
-
-    # C: (n_cells, n_verts_per_cell, n_verts_per_cell)
-    # C[c, i, j] = grad lambda_i . grad lambda_j in cell c
-    C = H.unsqueeze(0) @ G_inv @ H.T.unsqueeze(0)
-
-    ### Extract gradient dot products for each local edge pair
+    ### Extract gradient dot products for each local edge pair (i, j), i < j
+    # These are the upper-triangle entries of C = H @ G_inv @ H^T, where
+    # H = [[-1,...,-1]; I_n] encodes grad lambda_0 = -sum(grad lambda_k for k>=1):
+    #   C[0, j] = -sum_k G_inv[k, j-1]  and  C[i, j] = G_inv[i-1, j-1]  (i >= 1).
+    # Reading them off directly avoids batched matmuls of millions of tiny
+    # matrices, which are slow on GPUs.
     # Upper-triangle order is itertools.combinations order, which is the local edge
     # order that extract_candidate_facets produces. Building the indices on-device
     # avoids the host-to-device copy (and its synchronization) a Python list needs.
     pair_i, pair_j = torch.triu_indices(
-        n_verts_per_cell, n_verts_per_cell, offset=1, device=device
+        n_manifold_dims, n_manifold_dims, offset=1, device=device
     )
 
     # grad_dots: (n_cells, n_pairs) - one value per cell per local edge
-    grad_dots = C[:, pair_i, pair_j]
+    grad_dots = torch.cat([-G_inv.sum(dim=-2), G_inv[:, pair_i, pair_j]], dim=1)
 
     ### Compute cotangent weight contributions per cell per edge
     # w = -|sigma| * (grad lambda_i . grad lambda_j)
