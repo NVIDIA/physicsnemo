@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Literal
 
 import torch
 
-from physicsnemo.utils._index_tuple_ops import unique_index_tuples
+from physicsnemo.utils._index_tuple_ops import sort_index_tuples, unique_index_tuples
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -514,7 +514,7 @@ def _check_3d_vertex_manifold(mesh: "Mesh") -> bool:
     link_faces = torch.gather(tet_verts, 1, gather_cols)  # (total, 3)
 
     # Sort each link face for canonical ordering
-    link_faces, _ = torch.sort(link_faces, dim=1)
+    link_faces = sort_index_tuples(link_faces)
 
     ### Step 3: Generate all edges of all link faces
     # Each sorted face (a, b, c) gives edges: (a,b), (a,c), (b,c)

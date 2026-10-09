@@ -33,6 +33,7 @@ from physicsnemo.mesh.boundaries import (
 )
 from physicsnemo.mesh.utilities._duplicate_detection import find_duplicate_pairs
 from physicsnemo.mesh.utilities._tolerances import safe_eps
+from physicsnemo.utils._index_tuple_ops import sort_index_tuples
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -355,7 +356,7 @@ def check_duplicate_cell_vertices(
     # Vectorized approach: sort vertices within each cell, then check for
     # consecutive duplicates. A cell has duplicates if any adjacent pair
     # in the sorted order is equal.
-    sorted_cells = torch.sort(mesh.cells, dim=1).values  # (n_cells, n_verts)
+    sorted_cells = sort_index_tuples(mesh.cells)  # (n_cells, n_verts)
 
     # Check for consecutive duplicates: sorted_cells[:, i] == sorted_cells[:, i+1]
     has_duplicate = (sorted_cells[:, 1:] == sorted_cells[:, :-1]).any(dim=1)

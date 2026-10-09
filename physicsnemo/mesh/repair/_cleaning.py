@@ -31,7 +31,7 @@ from tensordict import TensorDict
 
 from physicsnemo.mesh.utilities._duplicate_detection import compute_canonical_indices
 from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
-from physicsnemo.utils._index_tuple_ops import unique_index_tuples
+from physicsnemo.utils._index_tuple_ops import sort_index_tuples, unique_index_tuples
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -233,7 +233,7 @@ def remove_duplicate_cells(
         return cells, cell_data
 
     ### Sort vertices within each cell to canonical form
-    sorted_cells = torch.sort(cells, dim=-1)[0]
+    sorted_cells = sort_index_tuples(cells)
 
     ### Find unique cells using vectorized first-occurrence detection
     n_cells = len(cells)
