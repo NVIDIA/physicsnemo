@@ -95,6 +95,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NotImplementedError` for fields it does not implement (rank 2 and above,
   pseudotensors) instead of silently dropping or misreading them. The GLOBE
   examples and the unified external-aerodynamics recipe configs are updated.
+- Cell-to-cell adjacency pairs the cells of each shared facet in one
+  vectorized pass, adjacency offsets come from a binary search instead of
+  `bincount`, and adjacencies carry their device, so cached adjacencies are
+  reused without revalidation. Cell adjacency and the dual graph are 1.4-1.6x
+  faster with 30% less peak memory, and synchronize CUDA 5 times instead of 38.
 - `physicsnemo.mesh.Mesh`, `DomainMesh`, `Adjacency`, `BVH`, `ClusterTree`,
   `DualInteractionPlan`, and `SourceAggregates` now inherit directly from
   `TensorClass` instead of using the `@tensorclass` decorator. Existing

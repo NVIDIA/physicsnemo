@@ -67,6 +67,7 @@ def get_point_to_cells_adjacency(mesh: "Mesh") -> Adjacency:
                 mesh.n_points + 1, dtype=torch.int64, device=mesh.points.device
             ),
             indices=torch.zeros(0, dtype=torch.int64, device=mesh.points.device),
+            device=mesh.points.device,
         )
 
     from physicsnemo.mesh.neighbors._adjacency import build_adjacency_from_pairs
@@ -132,6 +133,7 @@ def get_point_to_points_adjacency(mesh: "Mesh") -> Adjacency:
                 mesh.n_points + 1, dtype=torch.int64, device=mesh.points.device
             ),
             indices=torch.zeros(0, dtype=torch.int64, device=mesh.points.device),
+            device=mesh.points.device,
         )
 
     ### Extract all unique edges (handles 1D and n-D meshes uniformly)
