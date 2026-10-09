@@ -43,6 +43,7 @@ from physicsnemo.mesh.generate._simplex_ops import (
     signed_volumes,
     volume_length_quality,
 )
+from physicsnemo.utils._small_linalg import small_inverse
 
 __all__ = [
     "peel_boundary_slivers",
@@ -189,18 +190,20 @@ def pin_feature_points(points, cells, targets, h):
             points[vid] = x
             fixed_idx.append(vid)
             continue
-        # Containing cell via barycentric coordinates (batched solve).
+        # Containing cell via barycentric coordinates (batched inverse).
         p0 = points[cells[:, 0]]
         rel = points[cells[:, 1:]] - p0[:, None, :]
         vol_ok = signed_volumes(points, cells).abs() > 1e-12 * h**d
-        bary = torch.zeros(cells.shape[0], d, dtype=points.dtype, device=points.device)
         # Columns of the system matrix are the edge vectors: x - v0 =
         # sum_k bary_k (v_k - v0). rel stores edges as ROWS, so solve the
         # transposed system (using rel directly silently answers a
-        # different question -- found by adversarial fuzzing, round 2).
-        bary[vol_ok] = torch.linalg.solve(
-            rel[vol_ok].transpose(1, 2), (x - p0[vol_ok])[:, :, None]
-        )[:, :, 0]
+        # different question -- found by adversarial fuzzing, round 2):
+        # bary = inv(rel^T) (x - v0) = inv(rel)^T (x - v0). Edges in units
+        # of h keep the closed-form inverse in range; cells failing vol_ok
+        # invert the identity instead and are never hosts.
+        eye = torch.eye(d, dtype=points.dtype, device=points.device)
+        rel_inv = small_inverse(torch.where(vol_ok[:, None, None], rel / h, eye))
+        bary = (rel_inv * ((x - p0) / h)[:, :, None]).sum(dim=1)
         lam0 = 1.0 - bary.sum(dim=1)
         eps = 1e-9
         lam = torch.cat([lam0[:, None], bary], dim=1)  # (M, d+1) barycentric

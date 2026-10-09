@@ -23,10 +23,12 @@ inside the full generator.
 
 import math
 
+import pytest
 import torch
 
-from physicsnemo.mesh.generate._flips import flip_until_done
-from physicsnemo.mesh.generate._repair import split_pinched_vertices
+from physicsnemo.mesh.generate._flips import _radon_signs, flip_until_done
+from physicsnemo.mesh.generate._lattice import kuhn_lattice
+from physicsnemo.mesh.generate._repair import pin_feature_points, split_pinched_vertices
 from physicsnemo.mesh.generate._simplex_ops import (
     _unique_rows,
     boundary_is_closed_manifold,
@@ -313,3 +315,160 @@ def test_peel_followed_by_split_repairs_vertex_pinch():
     p3, c3, n_split = split_pinched_vertices(p2, c2)
     assert n_split == 1
     assert set(c3[0].tolist()).isdisjoint(set(c3[1].tolist()))
+
+
+# ---------------------------------------------------------------------------
+# Closed-form determinants (signed volumes, Radon signs, barycentrics)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("d", [2, 3, 4])
+@pytest.mark.parametrize("scale", [1e-8, 1.0, 1e8])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_signed_volumes_match_linalg_det(device, d, scale, dtype):
+    """Closed-form signed volumes equal the old ``torch.linalg.det`` ones,
+    including thin and exactly degenerate (coplanar) cells."""
+    g = torch.Generator().manual_seed(d)
+    points = torch.randn(64 * (d + 1), d, generator=g, dtype=torch.float64)
+    cells = torch.arange(points.shape[0]).reshape(-1, d + 1)
+    points[cells[:16, -1]] = points[cells[:16, :-1]].mean(dim=1)  # degenerate
+    points[cells[16:32, -1]] = points[cells[16:32, :-1]].mean(dim=1) + 1e-4
+    points = (points * scale).to(device=device, dtype=dtype)
+    cells = cells.to(device)
+
+    vol = signed_volumes(points, cells)
+
+    rel = points[cells[:, 1:]] - points[cells[:, :1]]
+    reference = torch.linalg.det(rel) / math.factorial(d)
+    rtol = 1e-4 if dtype == torch.float32 else 1e-12
+    torch.testing.assert_close(vol, reference, rtol=rtol, atol=rtol * scale**d)
+
+
+def _radon_signs_svd(points, cluster_verts):
+    """The former SVD formulation of ``_radon_signs``, kept as reference."""
+    p = points[cluster_verts]
+    k, dp2, d = p.shape
+    a = torch.cat(
+        [torch.ones(k, 1, dp2, dtype=p.dtype, device=p.device), p.transpose(1, 2)],
+        dim=1,
+    )
+    _, s, vh = torch.linalg.svd(a)
+    lam = vh[:, -1, :]
+    lam = lam / lam.abs().max(dim=1, keepdim=True).values.clamp_min(1e-30)
+    signs = torch.sign(torch.where(lam.abs() < 1e-9, torch.zeros_like(lam), lam))
+    ok = (signs != 0).all(dim=1) & (s[:, -2] > 1e-12)
+    return signs, ok
+
+
+@pytest.mark.parametrize("d", [2, 3, 4])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_radon_signs_match_svd_null_vector(device, d, dtype):
+    """The signed maximal minors give the SVD null vector's sign pattern
+    (up to its arbitrary overall sign) for clusters in general position."""
+    g = torch.Generator().manual_seed(d)
+    points = torch.rand(500 * (d + 2), d, generator=g, dtype=torch.float64)
+    points = points.to(device=device, dtype=dtype)
+    cluster_verts = torch.arange(points.shape[0], device=device).reshape(-1, d + 2)
+
+    signs, ok = _radon_signs(points, cluster_verts)
+
+    ref_signs, ref_ok = _radon_signs_svd(points, cluster_verts)
+    assert bool(ok.all()) and bool(ref_ok.all())
+    same = (signs == ref_signs).all(dim=1) | (signs == -ref_signs).all(dim=1)
+    assert bool(same.all())
+
+
+@pytest.mark.parametrize("scale", [1e-14, 1e-6, 1.0, 1e8])
+def test_radon_signs_are_scale_free(device, scale):
+    """A valid cluster is in general position at any coordinate scale.
+
+    Nonregression: the SVD guard ``s[-2] > 1e-12`` was an absolute
+    threshold on values that scale with the coordinates, so below ~1e-12
+    every cluster was rejected and flips were silently disabled.
+    """
+    points = torch.tensor(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.4, 0.4, 0.4],
+        ],
+        dtype=torch.float64,
+        device=device,
+    )
+    cluster_verts = torch.arange(5, device=device)[None, :]
+
+    signs, ok = _radon_signs(points * scale, cluster_verts)
+
+    assert bool(ok.all())
+    assert signs.tolist() == [[1.0, -1.0, -1.0, -1.0, 1.0]]
+
+
+def test_radon_signs_reject_rank_deficient_cluster(device):
+    """d+2 points in one hyperplane have no Radon partition.
+
+    Nonregression: the SVD guard tested the second-smallest singular value,
+    so these passed with signs from an arbitrary vector of the 2D null
+    space (flips were still rejected later, by the new-cell volume check).
+    """
+    collinear = torch.tensor(
+        [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.5, 0.0]],
+        dtype=torch.float64,
+        device=device,
+    )
+    coplanar = torch.tensor(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.2, 1.1, 0.0],
+            [-0.5, 0.4, 0.0],
+        ],
+        dtype=torch.float64,
+        device=device,
+    )
+    for points in (collinear, coplanar):
+        cluster_verts = torch.arange(points.shape[0], device=device)[None, :]
+        assert _radon_signs_svd(points, cluster_verts)[1].all()  # old guard
+        _, ok = _radon_signs(points, cluster_verts)
+        assert not bool(ok.any())
+
+
+@pytest.mark.parametrize("scale", [1e-13, 1.0, 1e8])
+def test_flip_improves_skinny_quad_at_any_scale(device, scale):
+    """The kite of ``test_flip_improves_skinny_quad`` flips at any scale
+    (at 1e-13 the former absolute SVD guard disabled all flips)."""
+    points = scale * torch.tensor(
+        [[0.0, 0.0], [1.0, -0.15], [2.0, 0.0], [1.0, 0.15]],
+        dtype=torch.float64,
+        device=device,
+    )
+    cells = torch.tensor([[0, 1, 2], [0, 2, 3]], dtype=torch.int64, device=device)
+    new_cells, n = flip_until_done(
+        points, cells, h=0.2 * scale, generator=torch.Generator().manual_seed(0)
+    )
+    assert n == 1
+    assert sorted_cells(new_cells) == {(0, 1, 3), (1, 2, 3)}
+
+
+@pytest.mark.parametrize("d", [2, 3])
+@pytest.mark.parametrize("scale", [1e-8, 1.0, 1e8])
+def test_pin_feature_point_splits_host_cell(device, d, scale):
+    """A feature strictly inside one lattice cell splits it into d+1 cells
+    at any scale (barycentrics from the closed-form inverse)."""
+    h = 0.5 * scale
+    points, cells = kuhn_lattice(
+        [0.0] * d, [scale] * d, h, device=device, dtype=torch.float64
+    )
+    host = 3
+    x = points[cells[host]].mean(dim=0) + 0.01 * h
+    vol0 = signed_volumes(points, cells).sum()
+
+    new_points, new_cells, fixed = pin_feature_points(points, cells, x[None, :], h)
+
+    assert new_cells.shape[0] == cells.shape[0] + d
+    assert torch.equal(new_points[fixed[0]], x)
+    vol = signed_volumes(new_points, new_cells)
+    assert bool((vol > 0).all())
+    torch.testing.assert_close(vol.sum(), vol0, rtol=1e-12, atol=0)

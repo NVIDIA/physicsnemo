@@ -35,6 +35,7 @@ from physicsnemo.mesh.generate import (
     sdf_sphere,
     sdf_union,
 )
+from physicsnemo.mesh.generate._lattice import kuhn_lattice
 from physicsnemo.mesh.generate._simplex_ops import (
     boundary_is_closed_manifold,
     boundary_vertex_mask,
@@ -679,3 +680,60 @@ def test_feature_point_on_lattice_ridge_3d():
     )
     assert_valid_volume_mesh(mesh)
     assert float((fp[:, None, :] - mesh.points[None, :, :]).norm(dim=-1).min()) < 1e-12
+
+
+# ---------------------------------------------------------------------------
+# ODT targets (closed-form circumcenters)
+# ---------------------------------------------------------------------------
+
+
+def _odt_targets_solve(points, cells, h):
+    """The former ``_odt_targets`` (masked batched solve), kept as reference."""
+    d = points.shape[1]
+    p0 = points[cells[:, 0]]
+    rel = points[cells[:, 1:]] - p0[:, None, :]
+    rhs = 0.5 * (rel * rel).sum(-1)
+    centroid_rel = rel.sum(dim=1) / (d + 1)
+    vol = signed_volumes(points, cells)
+    good = vol.abs() > 1e-8 * h**d / math.factorial(d)
+    cc_rel = centroid_rel.clone()
+    cc_rel[good] = torch.linalg.solve(rel[good], rhs[good])
+    off = cc_rel - centroid_rel
+    dist = off.norm(dim=-1, keepdim=True)
+    cc_rel = centroid_rel + off * (2.0 * h / dist.clamp_min(2.0 * h))
+    cc = p0 + cc_rel
+    w = vol.clamp_min(1e-300)[:, None]
+    num = torch.zeros_like(points)
+    den = torch.zeros(points.shape[0], 1, dtype=points.dtype, device=points.device)
+    idx = cells.reshape(-1)
+    num.index_add_(0, idx, (w * cc).repeat_interleave(cells.shape[1], dim=0))
+    den.index_add_(0, idx, w.repeat_interleave(cells.shape[1], dim=0))
+    has = den[:, 0] > 0
+    target = points.clone()
+    target[has] = num[has] / den[has]
+    return target
+
+
+@pytest.mark.parametrize("d", [2, 3])
+@pytest.mark.parametrize("scale", [1e-8, 1.0, 1e8])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_odt_targets_match_solve(device, d, scale, dtype):
+    """Closed-form ODT targets match the former masked solve on a jittered
+    lattice with thin and collapsed (non-``good``) cells, at any scale."""
+    from physicsnemo.mesh.generate.implicit_domain import _odt_targets
+
+    h = 0.25
+    points, cells = kuhn_lattice([0.0] * d, [1.0] * d, h, dtype=torch.float64)
+    g = torch.Generator().manual_seed(d)
+    points = points + 0.2 * h * torch.randn(
+        points.shape, generator=g, dtype=points.dtype
+    )
+    points[cells[0, 1]] = points[cells[0, 0]]  # collapsed edge: cells not good
+    points, h = (scale * points).to(device=device, dtype=dtype), scale * h
+    cells = cells.to(device)
+
+    target = _odt_targets(points, cells, h)
+
+    reference = _odt_targets_solve(points, cells, h)
+    tol = (1e-4 if dtype == torch.float32 else 1e-10) * h
+    torch.testing.assert_close(target, reference, rtol=0, atol=tol)
