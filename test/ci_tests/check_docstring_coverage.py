@@ -87,9 +87,12 @@ def _parse_interrogate_output(output: str, repo_root: Path) -> list[str]:
 
     for line in output.splitlines():
         ### Section header
-        # Interrogate section headers vary by version ("==== ... ====" vs
-        # "===== ... ====="), so accept both 4+ and 5+ equals styles.
-        m = re.match(r"={4,}\s+Coverage for (.+?)\s*={4,}", line)
+        # Interrogate pads the banner with "=" out to the terminal width and
+        # keeps shortening the padding as the title grows, down to a single "="
+        # a side. The title is "Coverage for " plus an absolute path, so a
+        # checkout more than a few directories deep already gets there. Match
+        # the title, not the padding.
+        m = re.match(r"=+\s+Coverage for (.+?)\s+=+$", line)
         if m:
             current_dir = m.group(1).rstrip("/")
             current_file = ""
