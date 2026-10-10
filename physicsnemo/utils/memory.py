@@ -105,7 +105,7 @@ def _setup_unified_gpu_memory():
             cupy = importlib.import_module("cupy")
             # from rmm.allocators.cupy import rmm_cupy_allocator
             rmm_cupy_allocator = importlib.import_module(
-                "rmm.allocators.torch"
+                "rmm.allocators.cupy"
             ).rmm_cupy_allocator
 
             cupy.cuda.set_allocator(rmm_cupy_allocator)

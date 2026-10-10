@@ -278,6 +278,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   candidate search used by these functions no longer caps candidates per point.
 - Fixes `VPNoiseScheduler.sigma_inv` at extreme noise levels. In particular,
   converting `sigma=0` no longer returns a slightly negative diffusion time.
+- `physicsnemo.utils.memory` hands CuPy the RMM allocator again. It read
+  `rmm_cupy_allocator` out of `rmm.allocators.torch`, which does not define it,
+  so `from physicsnemo.utils.memory import unified_gpu_memory` raised
+  `AttributeError` on any install with both RMM and CuPy, after the Torch
+  allocator had already been replaced.
 
 ### Security
 
