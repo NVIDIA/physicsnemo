@@ -240,16 +240,19 @@ def _conversion_active() -> bool:
 
 @contextmanager
 def _conversion_scope():
-    r"""Re-entrant conversion guard for cast-down/cast-up paths."""
+    r"""Re-entrant conversion guard for cast-down/cast-up paths.
+
+    Cleanup restores the previous depth rather than ``delattr``-ing the
+    thread-local at depth 0: ``_conversion_active`` treats 0 and absent
+    identically, and dynamo (which traces this via ``__torch_function__``)
+    handles the ``setattr`` but crashes on ``delattr``.
+    """
     previous_depth = getattr(_conversion_guard, "depth", 0)
     _conversion_guard.depth = previous_depth + 1
     try:
         yield
     finally:
-        if previous_depth == 0:
-            delattr(_conversion_guard, "depth")
-        else:
-            _conversion_guard.depth = previous_depth
+        _conversion_guard.depth = previous_depth
 
 
 def _find_mesh_in_args(*objs: object) -> DeviceMesh | None:
@@ -496,7 +499,17 @@ def _convert_args_to_dtensor(
             and ref_mesh is not None
             and _needs_promotion(arg)
         ):
-            return _promote_plain_tensor_to_dtensor(arg, ref_mesh)
+            if use_autograd:
+                return _promote_plain_tensor_to_dtensor(arg, ref_mesh)
+            # Below autograd (the __torch_dispatch__ fallback), promotion is
+            # pure data plumbing and must not create autograd state. Under
+            # AOT's joint trace, grad mode is ON during backward execution;
+            # without this guard, ``from_local``'s autograd.Function records
+            # its view-of-input output and torch's custom-function epilogue
+            # severs the alias with ``aten.detach_`` on the fresh DTensor --
+            # which DTensor's sharding propagation cannot handle.
+            with torch.no_grad():
+                return _promote_plain_tensor_to_dtensor(arg, ref_mesh)
         case _:
             return arg
 
@@ -977,7 +990,16 @@ class ShardTensor(torch.Tensor):
         """
         cls._named_function_registry[func_name] = handler
 
+    # Non-recursive dynamo skip: a graph break *inside* ``__new__`` leaves a
+    # half-constructed wrapper (``_spec`` not yet assigned) in dynamo's resume
+    # frame, and ``is_fake``/``__tensor_flatten__`` on it crashes. Skipping the
+    # frame makes every traced construction site an atomic eager call.
+    # ``recursive=False`` wraps ``__new__`` in a thin function whose frame
+    # dynamo skips, while the frames ``__new__`` calls are still traced (one
+    # extra Python call in eager). ``staticmethod`` stays outermost so the
+    # decorator always sees a plain function.
     @staticmethod
+    @torch.compiler.disable(recursive=False)
     def __new__(
         cls,
         local_tensor: torch.Tensor,
@@ -1910,6 +1932,12 @@ def scatter_tensor(
     ShardTensor
         The distributed tensor with specified placements.
 
+    Notes
+    -----
+    The source tensor is broadcast in place: a tensor passed on a non-source
+    rank is overwritten. With ``Replicate`` placements the result may share
+    storage with the passed tensor.
+
     Raises
     ------
     ValueError
@@ -1979,19 +2007,37 @@ def scatter_tensor(
         )
         st = st.redistribute(mesh, placements, async_op=False)
 
-    if requires_grad:
-        # 1. Ensure the local data is a clean leaf
-        local_leaf = st._local_tensor.detach().requires_grad_(True)
-
-        # 2. Create the ShardTensor wrapper
+        # A ``Shard(0)`` redistribute hands back a storage-offset VIEW of the
+        # full broadcast buffer (``tensor_split``). Give such a shard its own
+        # storage: this releases the world-size-times-larger buffer, and dynamo
+        # cannot fakeify a subclass whose inner tensor is a view (it replays
+        # the view via ``set_`` on the base's storage, which fails on every
+        # rank with a nonzero offset -- a rank-divergent error that presents as
+        # a hang). Shards that already own their storage (``Replicate``, other
+        # shard dims) are kept as-is: copying them costs a full extra shard.
+        local = st._local_tensor
+        owns_storage = (
+            local._base is None
+            and local.is_contiguous()
+            and local.untyped_storage().nbytes() == local.numel() * local.element_size()
+        )
+        if owns_storage:
+            # Alias, not the caller's tensor: requires_grad_ below must not
+            # flip the flag on the source rank's input.
+            local = local.detach()
+        else:
+            local = local.clone(memory_format=torch.contiguous_format)
+        if requires_grad:
+            local = local.requires_grad_(True)
         st = ShardTensor.__new__(
             ShardTensor,
-            local_tensor=local_leaf,
+            local_tensor=local,
             spec=st._spec,
-            requires_grad=True,
+            requires_grad=requires_grad,
         )
 
-        # 3. CRITICAL: Force the wrapper itself to be a leaf in the autograd graph
+    if requires_grad:
+        # Force the wrapper itself to be a leaf in the autograd graph.
         st = st.detach().requires_grad_(True)
 
     return st

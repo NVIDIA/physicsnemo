@@ -32,9 +32,12 @@ import pytest
 import torch
 import torch.distributed as dist
 from torch.distributed.tensor import distribute_tensor
-from torch.distributed.tensor.placement_types import Shard
+from torch.distributed.tensor.placement_types import Replicate, Shard
 
 from physicsnemo.distributed import DistributedManager
+from physicsnemo.domain_parallel._shard_tensor_spec import (
+    _gather_shard_shapes_for_dim,
+)
 from physicsnemo.domain_parallel.shard_tensor import ShardTensor, scatter_tensor
 
 
@@ -162,6 +165,201 @@ def test_scatter_tensor_requires_grad_contract_1d(distributed_mesh, requires_gra
 @pytest.mark.parametrize("requires_grad", [False, True])
 def test_scatter_tensor_requires_grad_contract_2d(distributed_mesh_2d, requires_grad):
     scatter_tensor_requires_grad_contract_worker(distributed_mesh_2d, requires_grad)
+
+
+# Placement layouts for the scatter_tensor storage tests. ``shard0`` is the one
+# that matters most: tensor_split on the leading dim hands back a storage-offset
+# view of the broadcast buffer, which is what scatter_tensor must copy.
+_SCATTER_LAYOUTS_1D = {
+    "shard1": [Shard(1)],
+    "shard0": [Shard(0)],
+    "replicate": [Replicate()],
+}
+_SCATTER_LAYOUTS_2D = {
+    "shard1_shard2": [Shard(1), Shard(2)],
+    "shard0_shard1": [Shard(0), Shard(1)],
+    "replicate": [Replicate(), Replicate()],
+}
+
+
+def _scatter_inputs(mesh):
+    dm = DistributedManager()
+    global_shape, _ = init_global_shape_and_placements(mesh)
+    torch.manual_seed(4321)
+    full = torch.randn(global_shape, device=torch.device(f"cuda:{dm.local_rank}"))
+    return global_shape, full, (full if dm.rank == 0 else None)
+
+
+def scatter_tensor_local_owns_storage_worker(mesh, requires_grad: bool, placements):
+    r"""The local shard handed out by ``scatter_tensor`` owns its storage.
+
+    Redistributing the broadcast buffer can yield a storage-offset *view* of
+    the full tensor (``Shard(0)``); ``scatter_tensor`` must copy it so the
+    world-size-times larger buffer is released and dynamo can fakeify the
+    wrapper.
+    """
+    dm = DistributedManager()
+    global_shape, full, raw_data = _scatter_inputs(mesh)
+
+    st = scatter_tensor(
+        raw_data,
+        0,
+        mesh,
+        placements,
+        global_shape=torch.Size(global_shape),
+        dtype=torch.float32,
+        requires_grad=requires_grad,
+    )
+
+    local = st._local_tensor
+    assert local._base is None
+    assert local.storage_offset() == 0
+    assert local.is_contiguous()
+    assert local.untyped_storage().nbytes() == local.numel() * local.element_size()
+    assert local.requires_grad is requires_grad
+    assert st.requires_grad is requires_grad
+    if requires_grad:
+        assert local.is_leaf
+        assert st.is_leaf
+
+    # Data survives the copy; full_tensor() is collective so all ranks call it.
+    gathered = st.full_tensor()
+    if dm.rank == 0:
+        torch.testing.assert_close(gathered.detach(), full)
+
+
+# The copy itself is exercised by the one true view (1d ``Shard(0)``); the
+# other layouts' copy decisions are covered by ``copies_only_views`` below.
+@pytest.mark.timeout(30)
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize("requires_grad", [False, True])
+@pytest.mark.parametrize("layout", ["shard1", "shard0"])
+def test_scatter_tensor_local_owns_storage_1d(distributed_mesh, requires_grad, layout):
+    scatter_tensor_local_owns_storage_worker(
+        distributed_mesh, requires_grad, _SCATTER_LAYOUTS_1D[layout]
+    )
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize("requires_grad", [False, True])
+def test_scatter_tensor_local_owns_storage_2d(distributed_mesh_2d, requires_grad):
+    scatter_tensor_local_owns_storage_worker(
+        distributed_mesh_2d, requires_grad, _SCATTER_LAYOUTS_2D["shard1_shard2"]
+    )
+
+
+def scatter_tensor_copies_only_views_worker(
+    mesh, requires_grad: bool, placements, monkeypatch
+):
+    r"""``scatter_tensor`` copies the redistributed shard only when it must.
+
+    A shard that already owns its storage (``Replicate``; non-leading ``Shard``
+    dims, which redistribute materializes as a fresh tensor) is handed out
+    as-is; copying it again costs a full extra shard per rank, every call.
+    On the source rank a ``Replicate`` scatter keeps the caller's tensor.
+    """
+    dm = DistributedManager()
+    global_shape, full, raw_data = _scatter_inputs(mesh)
+
+    redistributed: list[torch.Tensor] = []
+    orig_redistribute = ShardTensor.redistribute
+
+    def spy(self, *args, **kwargs):
+        out = orig_redistribute(self, *args, **kwargs)
+        redistributed.append(out._local_tensor)
+        return out
+
+    monkeypatch.setattr(ShardTensor, "redistribute", spy)
+    st = scatter_tensor(
+        raw_data,
+        0,
+        mesh,
+        placements,
+        global_shape=torch.Size(global_shape),
+        dtype=torch.float32,
+        requires_grad=requires_grad,
+    )
+    monkeypatch.undo()
+
+    (before,) = redistributed
+    owns = (
+        before._base is None
+        and before.untyped_storage().nbytes() == before.numel() * before.element_size()
+    )
+    after_ptr = st._local_tensor.untyped_storage().data_ptr()
+    if owns:
+        assert after_ptr == before.untyped_storage().data_ptr(), (
+            "scatter_tensor copied a shard that already owned its storage"
+        )
+    else:
+        assert after_ptr != before.untyped_storage().data_ptr()
+    if all(p.is_replicate() for p in placements) and dm.rank == 0:
+        assert after_ptr == full.untyped_storage().data_ptr(), (
+            "Replicate scatter copied the source rank's input"
+        )
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize("requires_grad", [False, True])
+@pytest.mark.parametrize("layout", list(_SCATTER_LAYOUTS_1D))
+def test_scatter_tensor_copies_only_views_1d(
+    distributed_mesh, requires_grad, layout, monkeypatch
+):
+    scatter_tensor_copies_only_views_worker(
+        distributed_mesh, requires_grad, _SCATTER_LAYOUTS_1D[layout], monkeypatch
+    )
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize("requires_grad", [False, True])
+@pytest.mark.parametrize("layout", list(_SCATTER_LAYOUTS_2D))
+def test_scatter_tensor_copies_only_views_2d(
+    distributed_mesh_2d, requires_grad, layout, monkeypatch
+):
+    scatter_tensor_copies_only_views_worker(
+        distributed_mesh_2d, requires_grad, _SCATTER_LAYOUTS_2D[layout], monkeypatch
+    )
+
+
+def gather_shard_shapes_for_dim_worker(mesh):
+    r"""``_gather_shard_shapes_for_dim`` accepts a ``torch.Size`` or a tensor."""
+    dm = DistributedManager()
+    group = mesh.get_group(0)
+    group_rank = dist.get_group_rank(group, dm.rank)
+    group_size = dist.get_world_size(group)
+
+    local_shape = torch.Size((4 + 2 * group_rank, 7, 3))
+    expected: list = [None] * group_size
+    dist.all_gather_object(expected, tuple(local_shape), group=group)
+    expected = [tuple(e) for e in expected]
+
+    from_size = _gather_shard_shapes_for_dim(local_shape, 0, group, do_checks=True)
+    assert [tuple(s) for s in from_size] == expected
+
+    as_tensor = torch.tensor(local_shape, device=dm.device)
+    from_tensor = _gather_shard_shapes_for_dim(as_tensor, 0, group)
+    assert [tuple(s) for s in from_tensor] == expected
+
+    # The shape validation catches a mismatch on a non-sharded dim.
+    if group_size > 1:
+        bad = torch.Size((4, 7 + group_rank, 3))
+        with pytest.raises(ValueError, match="Dimension mismatch"):
+            _gather_shard_shapes_for_dim(bad, 0, group, do_checks=True)
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.multigpu_static
+def test_gather_shard_shapes_for_dim_1d(distributed_mesh):
+    gather_shard_shapes_for_dim_worker(distributed_mesh)
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.multigpu_static
+def test_gather_shard_shapes_for_dim_2d(distributed_mesh_2d):
+    gather_shard_shapes_for_dim_worker(distributed_mesh_2d)
 
 
 def scatter_tensor_grad_population_worker(mesh):

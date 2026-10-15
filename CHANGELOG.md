@@ -407,6 +407,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   coordinates in unused neighbor slots when `max_points` exceeds the number of
   points. Those slots now stay zero, as with the warp backend, so point 0 no
   longer receives their gradient.
+- `MeshReader` and `DomainMeshReader` implement `close()`, so
+  `MeshDataset.close()` works on the mesh path.
+- Coordinated subsampling in the zarr readers picks its reference key in the
+  configured order rather than set order, so the rows read are deterministic.
+- `ShardTensor` fixes for domain parallelism: redistribute no longer grows an
+  unbounded planner cache for fixed shapes (step time was climbing with step
+  count),
+  `scatter_tensor` returns a shard that owns its storage, stream recording on
+  wrapped tensors works, and several `torch.compile` tracing issues are
+  resolved.
 
 ### Security
 

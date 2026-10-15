@@ -26,11 +26,13 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
+import numpy as np
 import torch
 from tensordict import TensorDict, is_leaf_nontensor
 
+from physicsnemo.datapipes._indexing import _cyclic_block_indices
 from physicsnemo.datapipes._rng import spawn_generator
 
 logger = logging.getLogger(__name__)
@@ -348,6 +350,44 @@ class Reader(ABC):
         if self._seed_base is None:
             return None
         return spawn_generator(self._seed_base, self._epoch, index)
+
+    def _window_indices(
+        self,
+        row_counts: Callable[[str], int | None],
+        generator: torch.Generator | None,
+    ) -> tuple[np.ndarray | None, set[str]]:
+        """Cyclic-block window for coordinated subsampling, or ``None``.
+
+        Parameters
+        ----------
+        row_counts : Callable[[str], int | None]
+            Maps a field name to its row count in this sample, or ``None``
+            when the field is absent.
+        generator : torch.Generator or None
+            Per-sample generator from :meth:`_index_generator`.
+
+        Returns
+        -------
+        tuple[np.ndarray | None, set[str]]
+            The window as a numpy index array (``None`` when subsampling is
+            off or no target key is present) and the set of target keys the
+            window applies to. The window length comes from the first
+            *configured* target key present -- list order, not set order, so
+            every process derives the window from the same key.
+        """
+        if self._coordinated_subsampling_config is None:
+            return None, set()
+        n_points = self._coordinated_subsampling_config["n_points"]
+        target_keys = list(self._coordinated_subsampling_config["target_keys"])
+
+        # A cyclic block gives every point equal inclusion probability while
+        # retaining contiguous storage locality.
+        for key in target_keys:
+            n_rows = row_counts(key)
+            if n_rows is not None:
+                window = _cyclic_block_indices(n_rows, n_points, generator=generator)
+                return window.numpy(), set(target_keys)
+        return None, set(target_keys)
 
     def close(self) -> None:
         """

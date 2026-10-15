@@ -189,3 +189,42 @@ def test_grad_tracking_scalar_gets_plain_grad(distributed_mesh):
         f"scalar gate grad leaked as {type(sharded_grad).__name__}"
     )
     torch.testing.assert_close(sharded_grad, reference_grad, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(60)
+def test_dispatch_level_promotion_creates_no_autograd_state(distributed_mesh):
+    r"""Promotion below autograd (``use_autograd=False``) must not record a graph.
+
+    Under AOT's joint trace grad mode is ON while the backward runs; without
+    the ``no_grad`` guard, ``from_local``'s autograd.Function would record a
+    view-of-input output that torch's custom-function epilogue then severs
+    with ``aten.detach_`` -- which DTensor's sharding propagation cannot
+    handle. Above autograd (``use_autograd=True``) the graph is wanted.
+    """
+    from torch.distributed.tensor import DTensor
+    from torch.distributed.tensor.placement_types import Replicate
+
+    from physicsnemo.domain_parallel.shard_tensor import _convert_args_to_dtensor
+
+    ShardTensor.set_promotion_mode(TensorPromotionMode.SILENT)
+    dm = DistributedManager()
+    plain = torch.randn(5, 3, device=dm.device, requires_grad=True)
+
+    with torch.enable_grad():
+        above = _convert_args_to_dtensor(
+            plain, use_autograd=True, ref_mesh=distributed_mesh
+        )
+        below = _convert_args_to_dtensor(
+            plain, use_autograd=False, ref_mesh=distributed_mesh
+        )
+
+    assert isinstance(above, DTensor)
+    assert above.requires_grad
+    assert above.grad_fn is not None
+
+    assert isinstance(below, DTensor)
+    assert not below.requires_grad
+    assert below.grad_fn is None
+    assert all(isinstance(p, Replicate) for p in below.placements)
+    torch.testing.assert_close(below.to_local(), plain.detach())
