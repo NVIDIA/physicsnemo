@@ -23,6 +23,7 @@ Supports CUDA stream-aware prefetching for overlapped IO and computation.
 
 from __future__ import annotations
 
+import threading
 from typing import Any, Optional, Sequence, Union
 
 import torch
@@ -82,6 +83,7 @@ class MeshDataset(DatasetBase):
         transforms: Sequence[MeshTransform] | None = None,
         device: str | torch.device | None = None,
         num_workers: int = 1,
+        cache_host: bool = False,
     ) -> None:
         """
         Parameters
@@ -97,9 +99,28 @@ class MeshDataset(DatasetBase):
             run :meth:`_load_host` (disk read + pin_memory) concurrently;
             GPU operations (H2D transfer, transforms) always run on the
             main thread in :meth:`_consume`.
+        cache_host : bool, default=False
+            Keep each sample the reader returns and serve later requests for
+            the same index from this cache, so each index is read once. Meant
+            for fitting runs on one or a few samples: the cached sample keeps
+            the reader's subsample, so every epoch sees the same one.
+            :meth:`set_generator` and :meth:`close` empty the cache. It has no size
+            limit and hands out the cached object itself, so unless
+            ``device`` moves samples to another device, transforms must not
+            modify them in place (the built-in mesh transforms do not).
+            Samples loaded from ``.pmsh`` or ``.pdmsh`` files without
+            subsampling or pinning stay memory-mapped, so the operating
+            system's page cache holds their bytes.
         """
         super().__init__(num_workers=num_workers)
         self.reader = reader
+        self.cache_host = bool(cache_host)
+        self._host_cache: dict[int, tuple[Any, dict[str, Any]]] = {}
+        # One lock per index: concurrent worker threads (num_workers > 1 or the
+        # dataset's own prefetch) must read an index only once; the outer lock
+        # guards the lock table.
+        self._host_cache_lock = threading.Lock()
+        self._host_cache_index_locks: dict[int, threading.Lock] = {}
         self.transforms = list(transforms) if transforms else []
         self._device = torch.device(device) if isinstance(device, str) else device
 
@@ -118,7 +139,8 @@ class MeshDataset(DatasetBase):
         Forks *generator* into ``1 + len(self.transforms)`` independent
         children: the first goes to the reader, the rest map 1-to-1 to
         the transform list (deterministic transforms silently ignore
-        theirs).
+        theirs). Also empties the ``cache_host`` cache, so samples read
+        before seeding are read again with the new generator.
 
         Parameters
         ----------
@@ -126,6 +148,7 @@ class MeshDataset(DatasetBase):
             Parent generator (typically forked from the DataLoader's
             master generator).
         """
+        self._host_cache.clear()
         n_children = 1 + len(self.transforms)
         children = fork_generator(generator, n_children)
 
@@ -171,7 +194,7 @@ class MeshDataset(DatasetBase):
     ) -> tuple[Union[Mesh, DomainMesh, TensorDict], dict[str, Any]]:
         """Synchronous load: reader -> device transfer -> transforms."""
         with torch.profiler.record_function("MeshDataset._load: reader[index]"):
-            data, metadata = self.reader[index]
+            data, metadata = self._read_host(index)
 
         if self._device is not None:
             with torch.profiler.record_function("MeshDataset._load: data.to(device)"):
@@ -195,6 +218,28 @@ class MeshDataset(DatasetBase):
     # Producer / consumer split (overrides DatasetBase defaults)
     # ------------------------------------------------------------------
 
+    def _read_host(
+        self, index: int
+    ) -> tuple[Union[Mesh, DomainMesh, TensorDict], dict[str, Any]]:
+        """Read one sample from the reader, through the host cache when enabled.
+
+        The per-index lock is held across the read, so concurrent requests
+        for one index (worker threads, prefetch) read it once and all get
+        the same sample. Requests for different indices do not wait on each
+        other.
+        """
+        if not self.cache_host:
+            return self.reader[index]
+        with self._host_cache_lock:
+            index_lock = self._host_cache_index_locks.setdefault(
+                index, threading.Lock()
+            )
+        with index_lock:
+            sample = self._host_cache.get(index)
+            if sample is None:
+                sample = self._host_cache[index] = self.reader[index]
+            return sample
+
     def _load_host(self, work_item: int) -> HostPayload:
         """Producer stage: read a mesh sample on a worker thread.
 
@@ -214,7 +259,7 @@ class MeshDataset(DatasetBase):
             error.
         """
         try:
-            data, metadata = self.reader[work_item]
+            data, metadata = self._read_host(work_item)
             return HostPayload(work_item=work_item, data=data, metadata=metadata)
         except Exception as e:  # noqa: BLE001
             return HostPayload(work_item=work_item, error=e)
@@ -320,7 +365,10 @@ class MeshDataset(DatasetBase):
     def close(self) -> None:
         """Close the dataset, its reader, and stop prefetching.
 
-        Waits for any in-flight prefetch tasks to complete before shutdown.
+        Waits for any in-flight prefetch tasks to complete before shutdown,
+        then empties the ``cache_host`` cache.
         """
         super().close()
+        self._host_cache.clear()
+        self._host_cache_index_locks.clear()
         self.reader.close()
