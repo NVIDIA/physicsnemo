@@ -41,7 +41,7 @@ import math
 import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import hydra
 import torch
@@ -52,6 +52,9 @@ import physicsnemo.datapipes  # noqa: F401  (registers ${dp:...} resolvers)
 from physicsnemo.datapipes import DataLoader, MeshDataset, MultiDataset
 from physicsnemo.datapipes.transforms.mesh import NormalizeMeshFields
 from physicsnemo.distributed import DistributedManager
+
+if TYPE_CHECKING:
+    from torch.distributed.device_mesh import DeviceMesh
 
 ### Make this folder importable by its bare module names (`nondim`, `sdf`)
 ### regardless of whether the caller invoked `python src/train.py` (which
@@ -330,6 +333,8 @@ def build_dataset(
     device: str | torch.device | None = "auto",
     num_workers: int = 1,
     pin_memory: bool = False,
+    domain_parallel: dict | None = None,
+    device_mesh: "DeviceMesh | None" = None,
 ) -> MeshDataset:
     """Build a single MeshDataset from a Hydra-style pipeline config.
 
@@ -358,6 +363,12 @@ def build_dataset(
             prefetch pool.
         pin_memory: If True, the reader places tensors in pinned
             (page-locked) memory for faster async CPU-to-GPU transfers.
+        domain_parallel: Optional domain-parallel reading policy dict
+            (see :class:`physicsnemo.datapipes.readers.base.Reader`);
+            requires *device_mesh*. The reader then reads each rank's
+            share and the dataset assembles ShardTensor-backed meshes.
+        device_mesh: Runtime 1-D DeviceMesh for domain-parallel reading
+            (the ``domain`` axis of the training mesh); never config.
 
     Returns:
         Configured ``MeshDataset`` ready to be wrapped in a DataLoader.
@@ -365,7 +376,12 @@ def build_dataset(
     if base_dir is None:
         base_dir = Path(__file__).resolve().parent.parent
 
-    reader = hydra.utils.instantiate(cfg.pipeline.reader, pin_memory=pin_memory)
+    ### The domain-parallel policy is already a plain dict (see
+    ### ``_domain_parallel_from_cfg``), so both branches instantiate the same way.
+    reader_kwargs: dict[str, Any] = {"pin_memory": pin_memory}
+    if domain_parallel is not None:
+        reader_kwargs.update(domain_parallel=domain_parallel, device_mesh=device_mesh)
+    reader = hydra.utils.instantiate(cfg.pipeline.reader, **reader_kwargs)
     resolved = []
 
     target_names = list(
@@ -622,6 +638,8 @@ def _build_manifest_val_dataset(
     device: str | torch.device | None,
     num_workers: int,
     pin_memory: bool,
+    domain_parallel: dict | None = None,
+    device_mesh: "DeviceMesh | None" = None,
 ) -> MeshDataset | None:
     """Build a dedicated un-augmented validation dataset for manifest mode.
 
@@ -647,6 +665,8 @@ def _build_manifest_val_dataset(
         device=device,
         num_workers=num_workers,
         pin_memory=pin_memory,
+        domain_parallel=domain_parallel,
+        device_mesh=device_mesh,
     )
 
 
@@ -690,6 +710,7 @@ def _build_directory_samplers(
     *,
     use_distributed: bool,
     sampler_seed: int,
+    data_mesh: "DeviceMesh | None" = None,
 ) -> tuple[Sampler | None, Sampler | None]:
     """Per-split :class:`DistributedSampler` pair for **directory-mode** datasets.
 
@@ -698,14 +719,24 @@ def _build_directory_samplers(
     single dataset across splits and uses :func:`_build_manifest_samplers`
     instead. Returns ``(None, None)`` on a single rank, where torch's
     default sequential sampler is sufficient.
+
+    Under domain parallelism, samples are distributed over the ``ddp``
+    axis only (*data_mesh*): every rank in a domain group must receive
+    the same sample index, since each holds one shard of that sample.
     """
     if not use_distributed:
         return None, None
+    replica_kwargs = {}
+    if data_mesh is not None:
+        replica_kwargs = {
+            "num_replicas": data_mesh.size(),
+            "rank": data_mesh.get_local_rank(),
+        }
     train_sampler = torch.utils.data.distributed.DistributedSampler(
-        train_dataset, shuffle=True, drop_last=True, seed=sampler_seed
+        train_dataset, shuffle=True, drop_last=True, seed=sampler_seed, **replica_kwargs
     )
     val_sampler = torch.utils.data.distributed.DistributedSampler(
-        val_dataset, shuffle=False, drop_last=False
+        val_dataset, shuffle=False, drop_last=False, **replica_kwargs
     )
     return train_sampler, val_sampler
 
@@ -716,11 +747,21 @@ def _build_manifest_samplers(
     *,
     dist_manager: DistributedManager,
     sampler_seed: int,
+    data_mesh: "DeviceMesh | None" = None,
 ) -> tuple[ManifestSampler, ManifestSampler]:
-    """ManifestSamplers over global dataset indices, with optional sharding."""
-    use_distributed = dist_manager.world_size > 1
-    rank = dist_manager.rank if use_distributed else 0
-    world_size = dist_manager.world_size if use_distributed else 1
+    """ManifestSamplers over global dataset indices, with optional sharding.
+
+    Under domain parallelism, indices are sharded over the ``ddp`` axis
+    only (*data_mesh*): every rank in a domain group must receive the same
+    sample index, since each holds one shard of that sample.
+    """
+    if data_mesh is not None:
+        rank = data_mesh.get_local_rank()
+        world_size = data_mesh.size()
+    elif dist_manager.world_size > 1:
+        rank, world_size = dist_manager.rank, dist_manager.world_size
+    else:
+        rank, world_size = 0, 1
 
     train_sampler = ManifestSampler(
         train_indices,
@@ -741,8 +782,26 @@ def _build_manifest_samplers(
     return train_sampler, val_sampler
 
 
+def _domain_parallel_from_cfg(cfg: DictConfig) -> dict[str, Any]:
+    """The reader-facing ``domain_parallel`` dict from ``cfg.domain_parallelism``.
+
+    Everything in the block except ``domain_size`` (a launch-topology knob
+    consumed by ``train.py``) is handed to the readers unchanged, so the
+    datapipes' own validation sees exactly what the user wrote.
+    """
+    block = OmegaConf.to_container(
+        cfg.get("domain_parallelism", OmegaConf.create({})), resolve=True
+    )
+    policy = dict(block or {})
+    policy.pop("domain_size", None)
+    return policy
+
+
 def build_dataloaders(
     cfg: DictConfig,
+    *,
+    domain_mesh: "DeviceMesh | None" = None,
+    data_mesh: "DeviceMesh | None" = None,
 ) -> tuple[DataLoader, DataLoader, "NormalizeMeshFields | None", dict[str, Any]]:
     """Build train and val dataloaders from the chosen dataset(s).
 
@@ -799,6 +858,12 @@ def build_dataloaders(
     pin_memory = dl_cfg.get("pin_memory", False)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     sampler_seed = cfg.training.get("seed", 0) or 0
+
+    ### Domain parallelism: declarative reading policy from cfg, paired
+    ### with the runtime device mesh injected by the caller. None when off.
+    domain_parallel = (
+        _domain_parallel_from_cfg(cfg) if domain_mesh is not None else None
+    )
 
     ### The primary dataset is `cfg.dataset` (a single string); extras
     ### combine via MultiDataset. The same `train_split`/`val_split`
@@ -897,6 +962,8 @@ def build_dataloaders(
             device=device,
             num_workers=num_workers,
             pin_memory=pin_memory,
+            domain_parallel=domain_parallel,
+            device_mesh=domain_mesh,
         )
         train_datasets.append(dataset)
 
@@ -936,6 +1003,8 @@ def build_dataloaders(
                 device=device,
                 num_workers=num_workers,
                 pin_memory=pin_memory,
+                domain_parallel=domain_parallel,
+                device_mesh=domain_mesh,
             )
             val_dataset = (
                 manifest_val_dataset if manifest_val_dataset is not None else dataset
@@ -959,6 +1028,8 @@ def build_dataloaders(
                 device=device,
                 num_workers=num_workers,
                 pin_memory=pin_memory,
+                domain_parallel=domain_parallel,
+                device_mesh=domain_mesh,
             )
             val_datasets.append(val_dataset)
             combined_val_indices.extend(
@@ -997,6 +1068,7 @@ def build_dataloaders(
             combined_val_indices,
             dist_manager=dist_manager,
             sampler_seed=sampler_seed,
+            data_mesh=data_mesh,
         )
     else:
         ### Directory mode: separate datasets per split, with per-rank
@@ -1007,6 +1079,7 @@ def build_dataloaders(
             val_dataset,
             use_distributed=use_distributed,
             sampler_seed=sampler_seed,
+            data_mesh=data_mesh,
         )
 
     ### Shared loader knobs; the two splits differ only in dataset / shuffle /
