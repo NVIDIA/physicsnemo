@@ -994,9 +994,10 @@ class ShardTensor(torch.Tensor):
     # half-constructed wrapper (``_spec`` not yet assigned) in dynamo's resume
     # frame, and ``is_fake``/``__tensor_flatten__`` on it crashes. Skipping the
     # frame makes every traced construction site an atomic eager call.
-    # ``recursive=False`` marks the code object rather than wrapping the
-    # function, so the eager path pays no extra Python frame. ``staticmethod``
-    # stays outermost so the decorator always sees a plain function.
+    # ``recursive=False`` wraps ``__new__`` in a thin function whose frame
+    # dynamo skips, while the frames ``__new__`` calls are still traced (one
+    # extra Python call in eager). ``staticmethod`` stays outermost so the
+    # decorator always sees a plain function.
     @staticmethod
     @torch.compiler.disable(recursive=False)
     def __new__(
@@ -1931,6 +1932,12 @@ def scatter_tensor(
     ShardTensor
         The distributed tensor with specified placements.
 
+    Notes
+    -----
+    The source tensor is broadcast in place: a tensor passed on a non-source
+    rank is overwritten. With ``Replicate`` placements the result may share
+    storage with the passed tensor.
+
     Raises
     ------
     ValueError
@@ -2000,13 +2007,26 @@ def scatter_tensor(
         )
         st = st.redistribute(mesh, placements, async_op=False)
 
-        # The redistributed local shard is a storage-offset VIEW of the full
-        # broadcast buffer (``tensor_split``). Give it its own storage: this
-        # releases the world-size-times-larger buffer, and dynamo cannot
-        # fakeify a subclass whose inner tensor is a view (it replays the view
-        # via ``set_`` on the base's storage, which fails on every rank with a
-        # nonzero offset -- a rank-divergent error that presents as a hang).
-        local = st._local_tensor.clone(memory_format=torch.contiguous_format)
+        # A ``Shard(0)`` redistribute hands back a storage-offset VIEW of the
+        # full broadcast buffer (``tensor_split``). Give such a shard its own
+        # storage: this releases the world-size-times-larger buffer, and dynamo
+        # cannot fakeify a subclass whose inner tensor is a view (it replays
+        # the view via ``set_`` on the base's storage, which fails on every
+        # rank with a nonzero offset -- a rank-divergent error that presents as
+        # a hang). Shards that already own their storage (``Replicate``, other
+        # shard dims) are kept as-is: copying them costs a full extra shard.
+        local = st._local_tensor
+        owns_storage = (
+            local._base is None
+            and local.is_contiguous()
+            and local.untyped_storage().nbytes() == local.numel() * local.element_size()
+        )
+        if owns_storage:
+            # Alias, not the caller's tensor: requires_grad_ below must not
+            # flip the flag on the source rank's input.
+            local = local.detach()
+        else:
+            local = local.clone(memory_format=torch.contiguous_format)
         if requires_grad:
             local = local.requires_grad_(True)
         st = ShardTensor.__new__(

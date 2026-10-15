@@ -211,5 +211,30 @@ def test_record_consumer_stream_records_shard_tensor_local(
     assert len(recorded) == 1
     tensor, seen_stream = recorded[0]
     assert type(tensor) is torch.Tensor, "wrapper must be unwrapped via to_local()"
-    assert tensor is st._local_tensor
+    # record_stream acts on storage; to_local() may return an alias object.
+    assert (
+        tensor.untyped_storage().data_ptr()
+        == st._local_tensor.untyped_storage().data_ptr()
+    )
     assert seen_stream is stream
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(60)
+def test_record_consumer_stream_unwraps_without_autograd(distributed_mesh, monkeypatch):
+    r"""The prefetch unwrap is pure data plumbing: it must hand back the local
+    tensor itself, not build a ``_ToTorchTensor`` autograd view per leaf."""
+    recorded: list = []
+    monkeypatch.setattr(
+        torch.Tensor,
+        "record_stream",
+        lambda self, stream: recorded.append(self),
+    )
+
+    st = shard_tensor_factory(distributed_mesh, requires_grad=True, uneven=True)
+    assert torch.is_grad_enabled()
+    record_consumer_stream({"x": st}, torch.cuda.Stream())
+
+    (tensor,) = recorded
+    assert tensor is st._local_tensor
+    assert tensor.grad_fn is None

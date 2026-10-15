@@ -357,15 +357,22 @@ def _to_new_shard_dim(
 def _plan_key(spec: DTensorSpec) -> DTensorSpec:
     r"""Immutable, canonical key for torch's cached redistribute planner.
 
-    A plain ``DTensorSpec`` hashes and compares on mesh, placements and
-    ``tensor_meta`` only -- it carries no lazily-populated sharding shapes, so
-    it can sit in a ``functools.cache`` without going stale.
+    A plain ``DTensorSpec`` hashes and compares on mesh, placements,
+    ``tensor_meta`` and shard order only -- it carries no lazily-populated
+    sharding shapes, so it can sit in a ``functools.cache`` without going stale.
     """
     meta = spec.tensor_meta
     if meta is not None:
         meta = TensorMeta(tuple(meta.shape), tuple(meta.stride), meta.dtype)
+    # The shard order changes the plan when several mesh dims shard one tensor
+    # dim; carry it (and its strided-shard flag) where this torch has them.
+    order = {
+        k: getattr(spec, k)
+        for k in ("shard_order", "use_strided_shard_as_shard_order")
+        if hasattr(spec, k)
+    }
     return DTensorSpec(
-        mesh=spec.mesh, placements=tuple(spec.placements), tensor_meta=meta
+        mesh=spec.mesh, placements=tuple(spec.placements), tensor_meta=meta, **order
     )
 
 

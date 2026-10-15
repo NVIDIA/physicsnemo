@@ -93,9 +93,12 @@ def record_consumer_stream(data: Any, stream: torch.cuda.Stream) -> None:
         # Distributed wrapper subclasses (ShardTensor/DTensor) must record
         # their local tensor: record_stream on the wrapper re-enters its
         # dispatch machinery, which has no handling for Stream arguments.
+        # Under no_grad, to_local() returns the local tensor itself instead of
+        # building a throwaway autograd view per leaf.
         to_local = getattr(t, "to_local", None)
         if callable(to_local):
-            t = to_local()
+            with torch.no_grad():
+                t = to_local()
         if t.is_cuda:
             t.record_stream(stream)
 
