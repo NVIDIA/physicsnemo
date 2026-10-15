@@ -186,6 +186,8 @@ class Dataset(DatasetBase):
         if self.target_device is not None:
             data = data.to(self.target_device, non_blocking=True)
 
+        data = self._assemble(data)
+
         if self.transforms is not None:
             data = self.transforms(data)
 
@@ -349,6 +351,7 @@ class Dataset(DatasetBase):
         with preprocessing_stream(stream if use_stream else None):
             if self.target_device is not None:
                 data = data.to(self.target_device, non_blocking=True)
+            data = self._assemble(data)
             if self.transforms is not None:
                 data = self.transforms(data)
 

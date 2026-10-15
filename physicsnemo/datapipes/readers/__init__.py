@@ -22,8 +22,16 @@ Readers are responsible for:
 - Converting to torch tensors
 - Async CPU->GPU transfers with optional prefetching
 - Returning Sample objects ready for the transform pipeline
+
+A custom reader can support domain-parallel (rank-local) reading by
+implementing ``Reader._load_sample_domain_parallel``; ``DomainParallelConfig``
+and ``resolve_leaf_placements`` are the two helpers that implementation needs.
 """
 
+from physicsnemo.datapipes._domain_parallel import (
+    DomainParallelConfig,
+    resolve_leaf_placements,
+)
 from physicsnemo.datapipes.readers.base import Reader
 from physicsnemo.datapipes.readers.hdf5 import HDF5Reader
 from physicsnemo.datapipes.readers.mesh import DomainMeshReader, MeshReader
@@ -34,6 +42,8 @@ from physicsnemo.datapipes.readers.zarr import ZarrReader
 
 __all__ = [
     "Reader",
+    "DomainParallelConfig",
+    "resolve_leaf_placements",
     "HDF5Reader",
     "ZarrReader",
     "NumpyReader",
