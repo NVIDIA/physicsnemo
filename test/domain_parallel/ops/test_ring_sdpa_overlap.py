@@ -273,3 +273,47 @@ def test_sdpa_e2e_sharded_vs_reference(
         atol=1e-4,
         rtol=1e-4,
     )
+
+
+# ---------------------------------------------------------------------------
+# Ring direction: uneven blocks travel the other way, same result
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize("ring_cls", [RingSDPA, RingSDPABlocking])
+def test_ring_sdpa_backward_direction_uneven(distributed_mesh, ring_cls):
+    """``ring_direction="backward"`` with uneven K/V blocks matches the forward
+    ring: each step receives the block of the neighbor on the other side, so
+    recv shapes and block bookkeeping must follow the direction."""
+    dm = DistributedManager()
+    mesh = distributed_mesh
+    n = dist.get_world_size(group=mesh.get_group(0))
+    if n < 2:
+        pytest.skip("needs at least 2 ranks")
+    rank = mesh.get_local_rank(0)
+    # Uneven, non-32-aligned local lengths, known on every rank.
+    lens = tuple(64 + 3 * r for r in range(n))
+    attn_args = {"dropout_p": 0.0, "is_causal": False, "scale": None}
+
+    torch.manual_seed(100 + rank)
+    q, k, v = (torch.randn(1, 4, lens[rank], 32, device=dm.device) for _ in range(3))
+
+    results = {}
+    for direction in ("forward", "backward"):
+        ring_config = RingPassingConfig(
+            mesh_dim=0, mesh_size=n, ring_direction=direction
+        )
+        qd, kd, vd = (t.clone().requires_grad_(True) for t in (q, k, v))
+        out, *_ = ring_cls.apply(qd, kd, vd, None, mesh, ring_config, attn_args, lens)
+        out.square().sum().backward()
+        results[direction] = (out.detach(), qd.grad, kd.grad, vd.grad)
+
+    for name, fwd, bwd in zip(
+        ("out", "grad_q", "grad_k", "grad_v"),
+        results["forward"],
+        results["backward"],
+    ):
+        collective_assert_close(
+            bwd, fwd, atol=1e-4, rtol=1e-4, msg=f"{name}: backward vs forward ring"
+        )
