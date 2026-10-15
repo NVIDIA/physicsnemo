@@ -883,6 +883,10 @@ class ShardTensor(torch.Tensor):
             getattr(torch.Tensor, "register_post_accumulate_grad_hook", None),
             getattr(torch.Tensor, "retain_grad", None),
             torch.autograd.grad,
+            # In-place: the fallback would detach a converted copy, not self.
+            torch.Tensor.detach_,
+            torch.ops.aten.detach_,
+            torch.ops.aten.detach_.default,
         )
         if fn is not None
     )

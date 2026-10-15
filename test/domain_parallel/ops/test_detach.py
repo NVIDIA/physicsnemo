@@ -19,8 +19,7 @@ r"""``aten.detach_`` handler on ShardTensor (``custom_ops/_tensor_ops.py``).
 DTensor registers no sharding strategy for the in-place ``detach_``, so the
 fallback route raises ``NotImplementedError`` -- AOT autograd's joint tracing
 emits ``detach_`` on ShardTensors, which broke the compiled domain-parallel
-recipe backward. The handler detaches the local tensor and rewraps with the
-same spec.
+recipe backward. ``detach_`` must still be in place on the wrapper itself.
 """
 
 import pytest
@@ -36,9 +35,14 @@ pytestmark = [pytest.mark.multigpu_static, pytest.mark.timeout(120)]
 _N = 19
 
 
-def test_detach_inplace_op_on_sharded(distributed_mesh):
-    r"""``aten.detach_`` on a non-leaf sharded tensor: same values, same
-    layout, autograd state dropped, local storage shared."""
+@pytest.mark.parametrize(
+    "detach_",
+    [torch.Tensor.detach_, torch.ops.aten.detach_],
+    ids=["method", "aten"],
+)
+def test_detach_inplace_op_on_sharded(distributed_mesh, detach_):
+    r"""``detach_`` on a non-leaf sharded tensor detaches *that* tensor in
+    place: same values, layout and local storage; autograd state dropped."""
     dm = DistributedManager()
     torch.manual_seed(7)
     a = torch.randn(_N, 3, device=dm.device)
@@ -46,21 +50,15 @@ def test_detach_inplace_op_on_sharded(distributed_mesh):
 
     y = a_s * 2.0
     assert y.grad_fn is not None
+    spec, ptr = y._spec, y._local_tensor.untyped_storage().data_ptr()
 
-    result = torch.ops.aten.detach_(y)
+    result = detach_(y)
 
-    assert isinstance(result, ShardTensor)
-    assert result._spec.placements == y._spec.placements
-    assert result._spec.sharding_shapes() == y._spec.sharding_shapes()
-    assert result.requires_grad is False
-    assert result.grad_fn is None
-    assert (
-        result._local_tensor.untyped_storage().data_ptr()
-        == y._local_tensor.untyped_storage().data_ptr()
-    )
-    torch.testing.assert_close(result.full_tensor(), a * 2.0)
-    # The handler returns a new wrapper rather than mutating ``y`` in place:
-    # re-entering ``aten.detach_`` on the wrapper from inside its own dispatch
-    # would recurse, and the caller (AOT functionalization) consumes the
-    # returned value. ``y`` therefore keeps its autograd state.
-    assert y.grad_fn is not None
+    assert result is y
+    assert isinstance(y, ShardTensor)
+    assert y._spec.placements == spec.placements
+    assert y._spec.sharding_shapes() == spec.sharding_shapes()
+    assert y.requires_grad is False
+    assert y.grad_fn is None
+    assert y._local_tensor.untyped_storage().data_ptr() == ptr
+    torch.testing.assert_close(y.full_tensor(), a * 2.0)

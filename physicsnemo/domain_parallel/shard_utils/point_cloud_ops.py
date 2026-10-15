@@ -77,7 +77,6 @@ def ring_ball_query(
     ring_config = RingPassingConfig(
         mesh_dim=mesh_dim,
         mesh_size=local_size,
-        communication_method="p2p",
         ring_direction="forward",
     )
 

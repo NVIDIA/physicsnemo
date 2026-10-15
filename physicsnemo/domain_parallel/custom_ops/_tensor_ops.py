@@ -863,23 +863,12 @@ def _cross_dispatch(
 def _detach__dispatch(tensor: ShardTensor) -> ShardTensor:
     r"""Dispatch handler for ``aten.detach_.default``.
 
-    DTensor registers no sharding strategy for the in-place ``detach_``, so
-    the fallback route raises. Detach is purely local: detach the local
-    tensor (shares storage, drops autograd state) and rewrap with the same
-    spec.
-
-    This deliberately returns a new wrapper rather than mutating ``tensor``
-    in place: re-entering ``aten.detach_`` on the wrapper from inside its
-    own ``__torch_dispatch__`` would recurse, and the caller that reaches
-    this handler is AOT functionalization -- the machinery whose job is
-    rewriting in-place ops into functional form -- which consumes the
-    returned value.
+    DTensor registers no sharding strategy for the in-place ``detach_``.
+    Autograd has already detached the wrapper by the time this runs; detach
+    its local tensor in place too and return ``tensor`` itself.
     """
-    return ShardTensor(
-        tensor._local_tensor.detach(),
-        tensor._spec,
-        requires_grad=False,
-    )
+    tensor._local_tensor = tensor._local_tensor.detach()
+    return tensor
 
 
 # Python-level function handlers (__torch_function__).

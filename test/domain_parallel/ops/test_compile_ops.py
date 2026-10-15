@@ -74,6 +74,10 @@ def _run_compile_fwd_bwd(
     # Run twice: the second call exercises guards / recompiles and any spec
     # that went stale after the first compiled execution.
     for _ in range(2):
+        # Fresh grads per run, so value checks compare one backward to eager.
+        for t in [*inputs, *module.parameters()]:
+            if isinstance(t, torch.Tensor) and t.is_leaf:
+                t.grad = None
         output = compiled(*inputs)
         if backward:
             loss = _scalar_loss(output)

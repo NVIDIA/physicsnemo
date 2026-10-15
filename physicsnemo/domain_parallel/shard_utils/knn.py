@@ -98,7 +98,6 @@ def ring_knn(
         mesh_dim=0,
         mesh_size=local_size,
         ring_direction="forward",
-        communication_method="p2p",
     )
 
     local_points, local_queries = points.to_local(), queries.to_local()

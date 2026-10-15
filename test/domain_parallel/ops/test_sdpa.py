@@ -26,6 +26,7 @@ from torch.distributed.tensor.placement_types import Replicate, Shard
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.domain_parallel import scatter_tensor
+from physicsnemo.domain_parallel.shard_utils.patch_core import MissingShardPatch
 
 from .utils import numerical_shard_tensor_check
 
@@ -133,6 +134,120 @@ def test_sdpa_sequence_parallel(
     numerical_shard_tensor_check(
         distributed_mesh, module, [sq, sk, sv], {}, check_grads=backward
     )
+
+
+def _ring_seq_len(distributed_mesh, uneven: bool) -> int:
+    # 64 per rank, plus 3 so the shards are uneven and not 32-aligned.
+    return 64 * distributed_mesh.size(0) + (3 if uneven else 0)
+
+
+@pytest.mark.multigpu_static
+def test_sdpa_ring_uneven_shards(distributed_mesh):
+    """Ring SDPA with uneven, non-32-aligned sequence shards, fwd + bwd.
+
+    Each ring step receives the neighbor's (differently sized) K/V block,
+    and the saved log-sum-exp must keep the kernel's padded layout.
+    """
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+    dm = DistributedManager()
+    seq_len = _ring_seq_len(distributed_mesh, uneven=True)
+    q, k, v = (
+        generate_sequence_data(2, seq_len, 4, 32, device=dm.device) for _ in range(3)
+    )
+    sq, sk, sv = (
+        scatter_tensor(t, 0, distributed_mesh, (Shard(2),), requires_grad=True)
+        for t in (q, k, v)
+    )
+    numerical_shard_tensor_check(
+        distributed_mesh,
+        SDPAWrapper(),
+        [sq, sk, sv],
+        {},
+        check_grads=True,
+        loss_fn=_sum_of_squares,
+    )
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize("uneven", [False, True])
+def test_sdpa_ring_attn_mask(distributed_mesh, uneven):
+    """Ring SDPA with an additive mask sharded like q: each ring step must use
+    the mask columns of the K/V block it holds, not the same columns every
+    step."""
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+    dm = DistributedManager()
+    seq_len = _ring_seq_len(distributed_mesh, uneven)
+    q, k, v = (
+        generate_sequence_data(1, seq_len, 4, 32, device=dm.device) for _ in range(3)
+    )
+    mask = torch.randn(1, 4, seq_len, seq_len, device=dm.device)
+    sq, sk, sv = (
+        scatter_tensor(t, 0, distributed_mesh, (Shard(2),), requires_grad=True)
+        for t in (q, k, v)
+    )
+    smask = scatter_tensor(mask, 0, distributed_mesh, (Shard(2),))
+    numerical_shard_tensor_check(
+        distributed_mesh,
+        SDPAWrapper(),
+        [sq, sk, sv],
+        {"attn_mask": smask},
+        check_grads=True,
+        loss_fn=_sum_of_squares,
+    )
+
+
+@pytest.mark.multigpu_static
+def test_sdpa_ring_attn_mask_broadcast_key_rejected(distributed_mesh):
+    """A mask that broadcasts over the key dim can't be split per K/V block."""
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+    dm = DistributedManager()
+    seq_len = _ring_seq_len(distributed_mesh, uneven=False)
+    q, k, v = (
+        scatter_tensor(
+            generate_sequence_data(1, seq_len, 4, 32, device=dm.device),
+            0,
+            distributed_mesh,
+            (Shard(2),),
+        )
+        for _ in range(3)
+    )
+    mask = scatter_tensor(
+        torch.zeros(1, 4, seq_len, 1, device=dm.device),
+        0,
+        distributed_mesh,
+        (Shard(2),),
+    )
+    with pytest.raises(MissingShardPatch, match="full key length"):
+        torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask)
+
+
+@pytest.mark.multigpu_static
+def test_sdpa_ring_bool_mask_rejected(distributed_mesh):
+    """The ring passes masks straight to the kernel, which expects additive bias."""
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+    dm = DistributedManager()
+    seq_len = _ring_seq_len(distributed_mesh, uneven=False)
+    q, k, v = (
+        scatter_tensor(
+            generate_sequence_data(1, seq_len, 4, 32, device=dm.device),
+            0,
+            distributed_mesh,
+            (Shard(2),),
+        )
+        for _ in range(3)
+    )
+    mask = scatter_tensor(
+        torch.ones(1, 4, seq_len, seq_len, dtype=torch.bool, device=dm.device),
+        0,
+        distributed_mesh,
+        (Shard(2),),
+    )
+    with pytest.raises(MissingShardPatch, match="bool attn_mask"):
+        torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask)
 
 
 @pytest.mark.multigpu_static

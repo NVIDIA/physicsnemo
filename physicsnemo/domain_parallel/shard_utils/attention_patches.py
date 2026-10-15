@@ -185,6 +185,55 @@ def stable_signed_accumulate(
     return log_abs_new, sign_new
 
 
+def _ring_kv_lens(
+    k: torch.Tensor, mesh_size: int, kv_seq_lens: tuple[int, ...] | None
+) -> tuple[int, ...]:
+    r"""Per-rank K/V sequence lengths (``None``: every rank holds ``k``'s length)."""
+    return tuple(kv_seq_lens) if kv_seq_lens is not None else (k.shape[2],) * mesh_size
+
+
+def _ring_src(ring_config: RingPassingConfig, rank: int, step: int) -> int:
+    r"""Rank whose K/V block this rank holds after ``step`` ring shifts."""
+    sign = -1 if ring_config.ring_direction == "forward" else 1
+    return (rank + sign * step) % ring_config.mesh_size
+
+
+def _ring_recv_shape(t: torch.Tensor, lens: tuple[int, ...], src: int) -> tuple:
+    r"""Shape of rank ``src``'s ``(B, H, S, D)`` block (shards may be uneven)."""
+    return (*t.shape[:2], lens[src], t.shape[3])
+
+
+def _ring_mask_block(
+    attn_mask: torch.Tensor | None, lens: tuple[int, ...], src: int
+) -> torch.Tensor | None:
+    r"""Columns of the local (q-sharded) mask for the K/V block of rank ``src``.
+
+    Laid out with a 16-aligned row stride, as the efficient-attention kernel
+    requires of ``attn_bias`` (what SDPA's own mask preprocessing does).
+    """
+    if attn_mask is None:
+        return None
+    start = sum(lens[:src])
+    block = attn_mask[..., start : start + lens[src]]
+    n = block.shape[-1]
+    return torch.nn.functional.pad(block, (0, -n % 16))[..., :n]
+
+
+def _lse_for_backward(raw_lse: torch.Tensor, global_lse: torch.Tensor) -> torch.Tensor:
+    r"""Combined log-sum-exp (``(B, H, S, 1)``) in the kernel's own layout.
+
+    The kernel pads the query dim of its log-sum-exp to an alignment multiple
+    and its backward reads that layout: embed the combined values in the valid
+    region of a block-kernel ``raw_lse``.
+    """
+    s_q = global_lse.shape[2]
+    if raw_lse.shape[-1] == s_q:
+        return global_lse.squeeze(-1)
+    out = raw_lse.clone()
+    out[..., :s_q] = global_lse.squeeze(-1)
+    return out
+
+
 class RingSDPA(torch.autograd.Function):
     r"""Performs scaled dot product attention on sharded Q, K, V.
 
@@ -211,6 +260,7 @@ class RingSDPA(torch.autograd.Function):
         mesh: DeviceMesh,
         ring_config: RingPassingConfig,
         attn_args: dict,
+        kv_seq_lens: tuple[int, ...] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         r"""Forward pass for the ring attention implementation.
 
@@ -236,6 +286,9 @@ class RingSDPA(torch.autograd.Function):
             Configuration for ring passing communication.
         attn_args : dict
             Additional arguments to pass to the attention function.
+        kv_seq_lens : tuple[int, ...], optional
+            Sequence length of each rank's K/V block, for uneven shards.
+            Default: every rank holds ``k``'s length.
 
         Returns
         -------
@@ -255,18 +308,23 @@ class RingSDPA(torch.autograd.Function):
         current_k, current_v = k, v
         next_k_flat = None
         next_v_flat = None
+        n = ring_config.mesh_size
+        rank = mesh.get_local_rank(ring_config.mesh_dim)
+        lens = _ring_kv_lens(k, n, kv_seq_lens)
 
-        for i in range(ring_config.mesh_size):
+        for i in range(n):
+            recv_k = _ring_recv_shape(k, lens, _ring_src(ring_config, rank, i + 1))
+            recv_v = _ring_recv_shape(v, lens, _ring_src(ring_config, rank, i + 1))
             # --- Issue the next K/V shift before the local attention so the
             # functional collective overlaps the compute; the wait after the
             # kernel is the synchronization point. ---
             with record_function(f"sdpa_send_data_{i}_{dist.get_rank()}"):
-                if i < ring_config.mesh_size - 1:
+                if i < n - 1:
                     next_k_flat = perform_ring_iteration_funcol(
-                        current_k, mesh, ring_config, wait=False
+                        current_k, mesh, ring_config, recv_shape=recv_k, wait=False
                     )
                     next_v_flat = perform_ring_iteration_funcol(
-                        current_v, mesh, ring_config, wait=False
+                        current_v, mesh, ring_config, recv_shape=recv_v, wait=False
                     )
 
             # --- Compute: attention on current K/V ---
@@ -280,13 +338,14 @@ class RingSDPA(torch.autograd.Function):
                     q,
                     current_k,
                     current_v,
-                    attn_mask,
+                    _ring_mask_block(attn_mask, lens, _ring_src(ring_config, rank, i)),
                     compute_log_sumexp=True,
                     **attn_args,
                 )
 
                 # Newer torch pads log_sumexp's query dim to a 32-element alignment;
                 # slice back to the real query length before it broadcasts against output.
+                raw_lse = log_sumexp
                 log_sumexp = log_sumexp[..., : output.shape[2]].unsqueeze(-1)
                 log_output = torch.log(torch.abs(output))
                 sign_output = torch.sign(output)
@@ -302,9 +361,9 @@ class RingSDPA(torch.autograd.Function):
                 global_log_sumexp = add_log_sumexp(global_log_sumexp, log_sumexp)
 
             # --- Synchronize: wait for next K/V to arrive ---
-            if i < ring_config.mesh_size - 1:
-                current_k = finish_ring_iteration(next_k_flat, k.shape)
-                current_v = finish_ring_iteration(next_v_flat, v.shape)
+            if i < n - 1:
+                current_k = finish_ring_iteration(next_k_flat, recv_k)
+                current_v = finish_ring_iteration(next_v_flat, recv_v)
 
         # Final normalization
         # The log-space accumulators are fp32 (the kernel's log_sumexp dtype),
@@ -316,12 +375,13 @@ class RingSDPA(torch.autograd.Function):
             )
         )
 
-        return stable_output, global_log_sumexp, philox_seed, philox_offset
+        lse = _lse_for_backward(raw_lse, global_log_sumexp)
+        return stable_output, lse, philox_seed, philox_offset
 
     @staticmethod
     def setup_context(ctx, inputs, output) -> None:
         r"""Save inputs and forward-computed stats for the backward pass."""
-        q, k, v, attn_mask, mesh, ring_config, attn_args = inputs
+        q, k, v, attn_mask, mesh, ring_config, attn_args, *kv_seq_lens = inputs
         stable_output, global_log_sumexp, philox_seed, philox_offset = output
         ctx.save_for_backward(
             q,
@@ -336,7 +396,11 @@ class RingSDPA(torch.autograd.Function):
         ctx.attn_args = attn_args
         ctx.mesh = mesh
         ctx.ring_config = ring_config
-        ctx.grad_input_mask = (True, True, True, attn_mask is not None)
+        ctx.kv_lens = _ring_kv_lens(
+            k, ring_config.mesh_size, kv_seq_lens[0] if kv_seq_lens else None
+        )
+        # The mask is not differentiated (its gradient is returned as None).
+        ctx.grad_input_mask = (True, True, True, False)
         ctx.mark_non_differentiable(global_log_sumexp, philox_seed, philox_offset)
 
     @staticmethod
@@ -351,6 +415,7 @@ class RingSDPA(torch.autograd.Function):
         torch.Tensor,
         torch.Tensor,
         torch.Tensor | None,
+        None,
         None,
         None,
         None,
@@ -378,9 +443,9 @@ class RingSDPA(torch.autograd.Function):
 
         Returns
         -------
-        tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor], None, None, None]
-            Gradients for (q, k, v, attn_mask, mesh, ring_config, attn_args).
-            ``None`` values indicate non-differentiable parameters.
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor, None, None, None, None, None]
+            Gradients for (q, k, v, attn_mask, mesh, ring_config, attn_args,
+            kv_seq_lens). ``None`` for the non-differentiable inputs.
         """
         (
             q,
@@ -396,6 +461,8 @@ class RingSDPA(torch.autograd.Function):
         mesh = ctx.mesh
         ring_config = ctx.ring_config
         mesh_size = ring_config.mesh_size
+        rank = mesh.get_local_rank(ring_config.mesh_dim)
+        lens = ctx.kv_lens
 
         grad_q = torch.zeros_like(
             q, device=q.device, memory_format=torch.contiguous_format
@@ -413,28 +480,33 @@ class RingSDPA(torch.autograd.Function):
         next_grad_k_flat = None
         next_grad_v_flat = None
 
+        recv_k = recv_v = None
         for i in range(mesh_size):
-            # --- Wait for k,v from the previous iteration's shift ---
+            # --- Wait for k,v and grad_k,v from the previous iteration's shift ---
             if next_k_flat is not None:
-                k = finish_ring_iteration(next_k_flat, k.shape)
-                v = finish_ring_iteration(next_v_flat, v.shape)
+                k = finish_ring_iteration(next_k_flat, recv_k)
+                v = finish_ring_iteration(next_v_flat, recv_v)
                 next_k_flat = None
                 next_v_flat = None
-
-            # --- Wait for grad_k,v from the previous iteration's shift ---
             if next_grad_k_flat is not None:
-                grad_k = finish_ring_iteration(next_grad_k_flat, grad_k.shape)
-                grad_v = finish_ring_iteration(next_grad_v_flat, grad_v.shape)
+                grad_k = finish_ring_iteration(next_grad_k_flat, recv_k)
+                grad_v = finish_ring_iteration(next_grad_v_flat, recv_v)
                 next_grad_k_flat = None
                 next_grad_v_flat = None
+
+            # Every shift (k/v and the grads riding with them) receives the
+            # block held after step i + 1.
+            src = _ring_src(ring_config, rank, i + 1)
+            recv_k = _ring_recv_shape(k, lens, src)
+            recv_v = _ring_recv_shape(v, lens, src)
 
             # --- Issue the k,v shift for the next iteration (overlaps compute) ---
             if i < mesh_size - 1:
                 next_k_flat = perform_ring_iteration_funcol(
-                    k, mesh, ring_config, wait=False
+                    k, mesh, ring_config, recv_shape=recv_k, wait=False
                 )
                 next_v_flat = perform_ring_iteration_funcol(
-                    v, mesh, ring_config, wait=False
+                    v, mesh, ring_config, recv_shape=recv_v, wait=False
                 )
 
             # --- Compute block gradients ---
@@ -449,7 +521,7 @@ class RingSDPA(torch.autograd.Function):
                     q,
                     k,
                     v,
-                    attn_mask,
+                    _ring_mask_block(attn_mask, lens, _ring_src(ring_config, rank, i)),
                     output,
                     log_sumexp,
                     philox_seed,
@@ -465,18 +537,22 @@ class RingSDPA(torch.autograd.Function):
             # --- Shift grad_k,v: overlapped for non-last, immediate for last ---
             if i < mesh_size - 1:
                 next_grad_k_flat = perform_ring_iteration_funcol(
-                    grad_k, mesh, ring_config, wait=False
+                    grad_k, mesh, ring_config, recv_shape=recv_k, wait=False
                 )
                 next_grad_v_flat = perform_ring_iteration_funcol(
-                    grad_v, mesh, ring_config, wait=False
+                    grad_v, mesh, ring_config, recv_shape=recv_v, wait=False
                 )
             else:
                 # Last iteration: shift grads to the owning rank; nothing left
                 # to overlap with, so wait immediately.
-                grad_k = perform_ring_iteration_funcol(grad_k, mesh, ring_config)
-                grad_v = perform_ring_iteration_funcol(grad_v, mesh, ring_config)
+                grad_k = perform_ring_iteration_funcol(
+                    grad_k, mesh, ring_config, recv_shape=recv_k
+                )
+                grad_v = perform_ring_iteration_funcol(
+                    grad_v, mesh, ring_config, recv_shape=recv_v
+                )
 
-        return grad_q, grad_k, grad_v, grad_attn_mask, None, None, None
+        return grad_q, grad_k, grad_v, grad_attn_mask, None, None, None, None
 
 
 class RingSDPABlocking(torch.autograd.Function):
@@ -505,6 +581,7 @@ class RingSDPABlocking(torch.autograd.Function):
         mesh: DeviceMesh,
         ring_config: RingPassingConfig,
         attn_args: dict,
+        kv_seq_lens: tuple[int, ...] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         r"""Forward pass for the ring attention implementation.
 
@@ -526,6 +603,9 @@ class RingSDPABlocking(torch.autograd.Function):
             Configuration for ring passing communication.
         attn_args : dict
             Additional arguments to pass to the attention function.
+        kv_seq_lens : tuple[int, ...], optional
+            Sequence length of each rank's K/V block, for uneven shards.
+            Default: every rank holds ``k``'s length.
 
         Returns
         -------
@@ -541,11 +621,13 @@ class RingSDPABlocking(torch.autograd.Function):
         sign_global_output = None
         global_log_sumexp = None
 
-        # For the first iteration, use local tensors
+        # For the first iteration, use local tensors.
         current_k, current_v = k, v
+        n = ring_config.mesh_size
+        rank = mesh.get_local_rank(ring_config.mesh_dim)
+        lens = _ring_kv_lens(k, n, kv_seq_lens)
 
-        for i in range(ring_config.mesh_size):
-            # Perform computation on current k,v while communication happens
+        for i in range(n):
             (
                 output,
                 log_sumexp,
@@ -555,13 +637,14 @@ class RingSDPABlocking(torch.autograd.Function):
                 q,
                 current_k,
                 current_v,
-                attn_mask,
+                _ring_mask_block(attn_mask, lens, _ring_src(ring_config, rank, i)),
                 compute_log_sumexp=True,
                 **attn_args,
             )
 
             # Add an extra dimension to the log_sumexp. Newer torch pads its query dim to a
             # 32-element alignment, so slice back to the real query length first.
+            raw_lse = log_sumexp
             log_sumexp = log_sumexp[..., : output.shape[2]].unsqueeze(-1)
             log_output = torch.log(torch.abs(output))
             sign_output = torch.sign(output)
@@ -577,8 +660,13 @@ class RingSDPABlocking(torch.autograd.Function):
             global_log_sumexp = add_log_sumexp(global_log_sumexp, log_sumexp)
 
             # send k and v to the next rank:
-            current_k = perform_ring_iteration_funcol(current_k, mesh, ring_config)
-            current_v = perform_ring_iteration_funcol(current_v, mesh, ring_config)
+            src = _ring_src(ring_config, rank, i + 1)
+            current_k = perform_ring_iteration_funcol(
+                current_k, mesh, ring_config, _ring_recv_shape(k, lens, src)
+            )
+            current_v = perform_ring_iteration_funcol(
+                current_v, mesh, ring_config, _ring_recv_shape(v, lens, src)
+            )
 
         # Compute the final output
         # The log-space accumulators are fp32 (the kernel's log_sumexp dtype),
@@ -590,12 +678,13 @@ class RingSDPABlocking(torch.autograd.Function):
             )
         )
 
-        return stable_output, global_log_sumexp, philox_seed, philox_offset
+        lse = _lse_for_backward(raw_lse, global_log_sumexp)
+        return stable_output, lse, philox_seed, philox_offset
 
     @staticmethod
     def setup_context(ctx, inputs, output) -> None:
         r"""Save inputs and forward-computed stats for the backward pass."""
-        q, k, v, attn_mask, mesh, ring_config, attn_args = inputs
+        q, k, v, attn_mask, mesh, ring_config, attn_args, *kv_seq_lens = inputs
         stable_output, global_log_sumexp, philox_seed, philox_offset = output
         ctx.save_for_backward(
             q,
@@ -610,7 +699,11 @@ class RingSDPABlocking(torch.autograd.Function):
         ctx.attn_args = attn_args
         ctx.mesh = mesh
         ctx.ring_config = ring_config
-        ctx.grad_input_mask = (True, True, True, attn_mask is not None)
+        ctx.kv_lens = _ring_kv_lens(
+            k, ring_config.mesh_size, kv_seq_lens[0] if kv_seq_lens else None
+        )
+        # The mask is not differentiated (its gradient is returned as None).
+        ctx.grad_input_mask = (True, True, True, False)
         ctx.mark_non_differentiable(global_log_sumexp, philox_seed, philox_offset)
 
     @staticmethod
@@ -625,6 +718,7 @@ class RingSDPABlocking(torch.autograd.Function):
         torch.Tensor,
         torch.Tensor,
         torch.Tensor | None,
+        None,
         None,
         None,
         None,
@@ -643,9 +737,9 @@ class RingSDPABlocking(torch.autograd.Function):
 
         Returns
         -------
-        tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor], None, None, None]
-            Gradients for (q, k, v, attn_mask, mesh, ring_config, attn_args).
-            ``None`` values indicate non-differentiable parameters.
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor, None, None, None, None, None]
+            Gradients for (q, k, v, attn_mask, mesh, ring_config, attn_args,
+            kv_seq_lens). ``None`` for the non-differentiable inputs.
         """
         (
             q,
@@ -684,18 +778,21 @@ class RingSDPABlocking(torch.autograd.Function):
         # 5. If iteration != N-1, wait for k, v to be received from the previous GPU (and split them) before the next iteration
         # 4. If iteration != 0, send grad_k, grad_v to the next GPU after combining them into one tensor.
 
-        for i in range(ctx.ring_config.mesh_size):
+        n = ctx.ring_config.mesh_size
+        rank = ctx.mesh.get_local_rank(ctx.ring_config.mesh_dim)
+        lens = ctx.kv_lens
+        for i in range(n):
             (
                 block_grad_q,
                 block_grad_k,
                 block_grad_v,
-                block_grad_attn_mask,
+                _,
             ) = aten._scaled_dot_product_efficient_attention_backward(
                 grad_output,
                 q,
                 k,
                 v,
-                attn_mask,
+                _ring_mask_block(attn_mask, lens, _ring_src(ctx.ring_config, rank, i)),
                 output,
                 log_sumexp,
                 philox_seed,
@@ -709,12 +806,19 @@ class RingSDPABlocking(torch.autograd.Function):
             grad_v += block_grad_v
 
             # Send k, v, grad_k, grad_v to the next rank:
-            k = perform_ring_iteration_funcol(k, ctx.mesh, ctx.ring_config)
-            v = perform_ring_iteration_funcol(v, ctx.mesh, ctx.ring_config)
-            grad_k = perform_ring_iteration_funcol(grad_k, ctx.mesh, ctx.ring_config)
-            grad_v = perform_ring_iteration_funcol(grad_v, ctx.mesh, ctx.ring_config)
+            src = _ring_src(ctx.ring_config, rank, i + 1)
+            recv_k = _ring_recv_shape(k, lens, src)
+            recv_v = _ring_recv_shape(v, lens, src)
+            k = perform_ring_iteration_funcol(k, ctx.mesh, ctx.ring_config, recv_k)
+            v = perform_ring_iteration_funcol(v, ctx.mesh, ctx.ring_config, recv_v)
+            grad_k = perform_ring_iteration_funcol(
+                grad_k, ctx.mesh, ctx.ring_config, recv_k
+            )
+            grad_v = perform_ring_iteration_funcol(
+                grad_v, ctx.mesh, ctx.ring_config, recv_v
+            )
 
-        return grad_q, grad_k, grad_v, grad_attn_mask, None, None, None
+        return grad_q, grad_k, grad_v, grad_attn_mask, None, None, None, None
 
 
 @torch.compiler.disable(recursive=True)
@@ -775,11 +879,7 @@ def ring_sdpa(
     local_size = dist.get_world_size(group=local_group)
 
     # Create a config object to simplify function args for message passing:
-    ring_config = RingPassingConfig(
-        mesh_dim=mesh_dim,
-        mesh_size=local_size,
-        communication_method="p2p",
-    )
+    ring_config = RingPassingConfig(mesh_dim=mesh_dim, mesh_size=local_size)
 
     # First, get the tensors locally and perform halos:
     lq, lk, lv = _apply_autocast(
@@ -796,8 +896,9 @@ def ring_sdpa(
     # RingSDPA returns (output, global_log_sumexp, philox_seed, philox_offset);
     # the three trailing tensors are intermediate stats marked non-differentiable
     # and consumed only by its backward pass.
+    kv_seq_lens = tuple(s[2] for s in k._spec.sharding_shapes()[0])
     x, _, _, _ = RingSDPA.apply(
-        lq, lk, lv, latn_mask, q._spec.mesh, ring_config, kwargs
+        lq, lk, lv, latn_mask, q._spec.mesh, ring_config, kwargs, kv_seq_lens
     )
 
     # Convert back to ShardTensor
@@ -1112,6 +1213,15 @@ def sdpa_wrapper(
             validate_aligned_sharding(
                 [q._spec, attn_mask._spec],
                 "scaled_dot_product_attention (q/attn_mask)",
+            )
+            if attn_mask.shape[-1] != k.shape[2]:
+                raise MissingShardPatch(
+                    "attn_mask must span the full key length with sharded q and k/v"
+                )
+        if attn_mask is not None and attn_mask.dtype == torch.bool:
+            raise MissingShardPatch(
+                "bool attn_mask is not supported with sharded q and k/v; "
+                "pass an additive float mask"
             )
         return ring_sdpa(q, k, v, attn_mask, **kwargs)
 
