@@ -32,8 +32,16 @@ from typing import Protocol
 
 import torch
 import torch.distributed as dist
-import torch.distributed._functional_collectives as funcol
 from torch.distributed.device_mesh import DeviceMesh
+
+from physicsnemo.domain_parallel.shard_utils.exchange import (  # noqa: F401
+    _accumulator_dtype,
+    _funcol_group_arg,
+    funcol_all_to_all_v_rows,
+    get_fp32_scatter_accumulator,
+    resolve_group_name,
+    set_fp32_scatter_accumulator,
+)
 
 __all__ = [
     "funcol_all_to_all_v_rows",
@@ -44,62 +52,6 @@ __all__ = [
     "register_halo_scatter_handlers",
     "select_halo_backend",
 ]
-
-
-def _funcol_group_arg(group: object) -> object:
-    r"""Return *group* in the form functional collectives accept (funcol rejects ``None``)."""
-    if isinstance(group, DeviceMesh):
-        return (group, 0)
-    if group is None:
-        return dist.distributed_c10d._get_default_group()
-    return group
-
-
-def _accumulator_dtype(dtype: torch.dtype) -> torch.dtype:
-    r"""Higher-precision dtype for folding scatter contributions: ``float32`` accumulates
-    in ``float64`` and reduced-precision (``float16``/``bfloat16``) in ``float32``; all
-    other dtypes accumulate in place. Row folds sum many contributions, so accumulating in
-    the input precision loses significance for the smaller float types."""
-    if dtype == torch.float32:
-        return torch.float64
-    if dtype in (torch.float16, torch.bfloat16):
-        return torch.float32
-    return dtype
-
-
-def _halo_group_name(group: object) -> str:
-    r"""Resolve *group* to a c10d group-name string (``""`` = default world group), the
-    traceable token a ``custom_op`` can carry in place of a ``ProcessGroup``."""
-    if group is None:
-        return ""
-    if isinstance(group, str):
-        return group
-    if isinstance(group, DeviceMesh):
-        return group._dim_group_names[0]
-    return group.group_name
-
-
-def funcol_all_to_all_v_rows(
-    send_rows: torch.Tensor,
-    send_counts: list[int],
-    recv_counts: list[int],
-    group: object = None,
-) -> torch.Tensor:
-    r"""AOT-traceable variable-sized row ``all_to_all`` via ``funcol.all_to_all_single``; send/recv buffers are destination/source-rank ordered."""
-    trailing = tuple(send_rows.shape[1:])
-    row_size = 1
-    for d in trailing:
-        row_size *= d
-    flat_send = send_rows.contiguous().reshape(-1)
-    send_flat = [c * row_size for c in send_counts]
-    recv_flat = [c * row_size for c in recv_counts]
-    total_recv = sum(recv_counts)
-    flat_recv = funcol.wait_tensor(
-        funcol.all_to_all_single(
-            flat_send, recv_flat, send_flat, _funcol_group_arg(group)
-        )
-    )
-    return flat_recv.reshape((total_recv,) + trailing)
 
 
 # A transport backend owns the whole reverse/forward exchange, since the data-movement
@@ -194,7 +146,7 @@ def _symm_group_name(group: object) -> str:
     if isinstance(group, str):
         return group
     if isinstance(group, DeviceMesh):
-        return group._dim_group_names[0]
+        return group.get_group(0).group_name
     return group.group_name
 
 
@@ -613,7 +565,7 @@ def halo_scatter_correct(
     contributions into their owners and refresh the ghost rows as a single
     AOT-traceable, differentiable graph node, with ``routing`` (from
     :func:`pack_halo_routing`) riding as a graph input to survive graph breaks."""
-    return _halo_scatter_correct_op(padded, routing, _halo_group_name(group))
+    return _halo_scatter_correct_op(padded, routing, resolve_group_name(group))
 
 
 # ShardTensor scatter/index-add integration. A ShardTensor carrying packed routing as an

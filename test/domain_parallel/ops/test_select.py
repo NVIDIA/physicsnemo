@@ -17,15 +17,15 @@
 """
 Test selection operations on ShardTensor.  This file tests
 both torch.select and torch.index_select.  We use a 3D tensor to
-do the tests, it has no special significance.  We're not testing
-over all possible selection dimensions, especially not along sharded dimensions.
+do the tests, it has no special significance.
 
-That could be implemented in the future.
+``index_select`` is covered both off the sharded dimension (a purely local
+op) and along it (the routed gather, with a sharded or a replicated index).
 """
 
 import pytest
 import torch
-from torch.distributed.tensor.placement_types import Shard
+from torch.distributed.tensor.placement_types import Replicate, Shard
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.domain_parallel import scatter_tensor
@@ -66,7 +66,7 @@ def test_select_operation(
     distributed_mesh,
     backward,
 ):
-    """Test basic scaled dot product attention with various configurations"""
+    """``torch.select`` on a ``Shard(2)`` tensor along an unsharded dim (local op)."""
 
     if not torch.cuda.is_available():
         pytest.skip("CUDA is not available")
@@ -108,7 +108,8 @@ def test_index_select_operation(
     distributed_mesh,
     backward,
 ):
-    """Test basic scaled dot product attention with various configurations"""
+    """``index_select`` off the sharded dim: the index is gathered, the shard is
+    selected locally, and the output keeps the input placement."""
 
     if not torch.cuda.is_available():
         pytest.skip("CUDA is not available")
@@ -149,4 +150,155 @@ def test_index_select_operation(
         [sharded_tensor, sharded_index],
         {},
         check_grads=backward,
+    )
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize("target_dim", [0, 1])
+@pytest.mark.parametrize("backward", [False, True])
+def test_index_select_along_sharded_dim(
+    distributed_mesh,
+    target_dim,
+    backward,
+):
+    """``index_select`` along the sharded dim with a sharded index (routed gather).
+
+    The index holds global positions along the sharded dim that reference
+    every rank; the output is sharded like the index.
+    """
+
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+
+    dm = DistributedManager()
+    shape = (61, 131, 8)  # uneven on 2, 4 and 8 ranks
+    N = 97
+
+    original_tensor = torch.rand(shape, device=dm.device, requires_grad=backward)
+    index = torch.randint(low=0, high=shape[target_dim], size=(N,), device=dm.device)
+
+    sharded_tensor = scatter_tensor(
+        original_tensor,
+        global_src=0,
+        mesh=distributed_mesh,
+        placements=(Shard(target_dim),),
+        requires_grad=backward,
+    )
+    sharded_index = scatter_tensor(
+        index,
+        global_src=0,
+        mesh=distributed_mesh,
+        placements=(Shard(0),),
+        requires_grad=False,
+    )
+
+    def check_output(output):
+        assert output._spec.placements == (Shard(target_dim),)
+
+    numerical_shard_tensor_check(
+        distributed_mesh,
+        IndexSelectWrapper(target_dim=target_dim),
+        [sharded_tensor, sharded_index],
+        {},
+        check_grads=backward,
+        output_check_fn=check_output,
+    )
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize("target_dim", [0, 1])
+@pytest.mark.parametrize("backward", [False, True])
+def test_index_select_along_sharded_dim_replicated_index(
+    distributed_mesh,
+    target_dim,
+    backward,
+):
+    """``index_select`` along the sharded dim with a replicated index.
+
+    Every rank asks for the same rows, so every rank holds the full result;
+    in backward each rank routes only its share of the requests.
+    """
+
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+
+    dm = DistributedManager()
+    shape = (61, 131, 8)
+    N = 97
+
+    original_tensor = torch.rand(shape, device=dm.device, requires_grad=backward)
+    index = torch.randint(low=0, high=shape[target_dim], size=(N,), device=dm.device)
+
+    sharded_tensor = scatter_tensor(
+        original_tensor,
+        global_src=0,
+        mesh=distributed_mesh,
+        placements=(Shard(target_dim),),
+        requires_grad=backward,
+    )
+    sharded_index = scatter_tensor(
+        index,
+        global_src=0,
+        mesh=distributed_mesh,
+        placements=(Replicate(),),
+        requires_grad=False,
+    )
+
+    def check_output(output):
+        assert output._spec.placements == (Replicate(),)
+
+    numerical_shard_tensor_check(
+        distributed_mesh,
+        IndexSelectWrapper(target_dim=target_dim),
+        [sharded_tensor, sharded_index],
+        {},
+        check_grads=backward,
+        output_check_fn=check_output,
+    )
+
+
+class IndexSelectMethodWrapper(torch.nn.Module):
+    """``tensor.index_select(dim=..., index=...)``: method spelling with keywords."""
+
+    def __init__(self, target_dim: int):
+        super().__init__()
+        self.target_dim = target_dim
+
+    def forward(self, tensor: torch.Tensor, index: torch.Tensor):
+        return tensor.index_select(dim=self.target_dim, index=index)
+
+
+@pytest.mark.multigpu_static
+def test_index_select_method_spelling(distributed_mesh):
+    """``Tensor.index_select`` with keyword arguments takes the same handler."""
+
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+
+    dm = DistributedManager()
+    shape = (61, 8)
+    original_tensor = torch.rand(shape, device=dm.device, requires_grad=True)
+    index = torch.randint(low=0, high=shape[0], size=(97,), device=dm.device)
+
+    sharded_tensor = scatter_tensor(
+        original_tensor,
+        global_src=0,
+        mesh=distributed_mesh,
+        placements=(Shard(0),),
+        requires_grad=True,
+    )
+    sharded_index = scatter_tensor(
+        index,
+        global_src=0,
+        mesh=distributed_mesh,
+        placements=(Shard(0),),
+        requires_grad=False,
+    )
+
+    numerical_shard_tensor_check(
+        distributed_mesh,
+        IndexSelectMethodWrapper(target_dim=0),
+        [sharded_tensor, sharded_index],
+        {},
+        check_grads=True,
     )
