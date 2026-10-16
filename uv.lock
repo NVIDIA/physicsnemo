@@ -3975,7 +3975,7 @@ wheels = [
 [[package]]
 name = "fastgen"
 version = "0.1.0"
-source = { git = "https://github.com/CharlelieLrt/FastGen.git?rev=cd7de8c386a92da2be4cbc3bf0558f16153e46b9#cd7de8c386a92da2be4cbc3bf0558f16153e46b9" }
+source = { git = "https://github.com/CharlelieLrt/FastGen.git?rev=81814e4f6a0863682a08c4823b22c93258dd3216#81814e4f6a0863682a08c4823b22c93258dd3216" }
 dependencies = [
     { name = "accelerate" },
     { name = "av", version = "18.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' or (extra == 'extra-18-nvidia-physicsnemo-cu12' and extra == 'extra-18-nvidia-physicsnemo-cu13') or (extra == 'extra-18-nvidia-physicsnemo-cu12' and extra == 'extra-18-nvidia-physicsnemo-natten-cu13') or (extra == 'extra-18-nvidia-physicsnemo-cu12' and extra == 'extra-18-nvidia-physicsnemo-transformer-engine-cu13') or (extra == 'extra-18-nvidia-physicsnemo-cu13' and extra == 'extra-18-nvidia-physicsnemo-natten-cu12') or (extra == 'extra-18-nvidia-physicsnemo-cu13' and extra == 'extra-18-nvidia-physicsnemo-transformer-engine-cu12') or (extra == 'extra-18-nvidia-physicsnemo-natten-cu12' and extra == 'extra-18-nvidia-physicsnemo-natten-cu13') or (extra == 'extra-18-nvidia-physicsnemo-natten-cu12' and extra == 'extra-18-nvidia-physicsnemo-transformer-engine-cu13') or (extra == 'extra-18-nvidia-physicsnemo-natten-cu13' and extra == 'extra-18-nvidia-physicsnemo-transformer-engine-cu12') or (extra == 'extra-18-nvidia-physicsnemo-transformer-engine-cu12' and extra == 'extra-18-nvidia-physicsnemo-transformer-engine-cu13')" },
@@ -9677,7 +9677,7 @@ requires-dist = [
     { name = "cupy-cuda13x", marker = "extra == 'cu13'", specifier = ">=14.2.0" },
     { name = "dask", marker = "extra == 'datapipes-extras'", specifier = ">=2026.8.0" },
     { name = "einops", specifier = ">=0.8.2" },
-    { name = "fastgen", marker = "extra == 'diffusion-fastgen'", git = "https://github.com/CharlelieLrt/FastGen.git?rev=cd7de8c386a92da2be4cbc3bf0558f16153e46b9" },
+    { name = "fastgen", marker = "extra == 'diffusion-fastgen'", git = "https://github.com/CharlelieLrt/FastGen.git?rev=81814e4f6a0863682a08c4823b22c93258dd3216" },
     { name = "fsspec", specifier = ">=2026.9.0" },
     { name = "gitpython", specifier = ">=3.1.62" },
     { name = "gpytorch", marker = "extra == 'uq-extras'", specifier = ">=1.15.2" },

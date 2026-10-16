@@ -34,7 +34,7 @@ from physicsnemo.diffusion.noise_schedulers import (
     LinearGaussianNoiseScheduler,
 )
 
-from ..._fastgen import _configure_options, _FastGenBinding, _ObjectiveReduction
+from ..._fastgen import _configure_options, _FastGenBinding
 
 _AVAILABLE = check_version_spec("fastgen", "0.1.0", hard_fail=False)
 if _AVAILABLE:
@@ -129,56 +129,14 @@ class _MeanFlowLoss(_FastGenBinding, _MeanFlowBase):
                 module.training = mode
 
     def _mf_pred_to_loss(
-        self,
-        u_theta: Float[Tensor, " B *dims"],
-        u_theta_jvp: Float[Tensor, " B *dims"],
-        x_t: Float[Tensor, " B *dims"],
-        dxt_dt: Float[Tensor, " B *dims"],
-        t: Float[Tensor, " B"],
-        r: Float[Tensor, " B"],
-        iteration: int,
+        self, *args: Any, **kwargs: Any
     ) -> tuple[
         Float[Tensor, " B"], Float[Tensor, " B *dims"], Float[Tensor, " *shape"], float
     ]:
-        r"""Exclude masked entries from adaptive norms before weighting residuals.
-
-        .. math::
-
-            h=v-\lambda(t-r)\partial_t u,\qquad
-            L_{\mathrm{L2}}=\operatorname{reduce}(w(u-\operatorname{sg}(h))^2).
-
-        The explicit-gradient variant also subtracts the stopped prediction
-        from its tangent, retaining FastGen's adaptive weighting function.
-        """
-        u = u_theta.double()
-        reduction = _ObjectiveReduction(u, self._call_weight)
-        shape = (-1,) + (1,) * (u.ndim - 1)
-        delta = (t.double() - r.double()).reshape(shape)  # (B, 1, ...)
-        steps = self.loss_config.tangent_warmup_steps
-        warmup = min(1.0, iteration / steps) if steps > 0 else 1.0
-        tangent = dxt_dt.double() - warmup * delta * u_theta_jvp.double()
-        if self.loss_config.loss_type == "l2":
-            tangent = reduction.clean(tangent)
-            residual = reduction.clean(u - tangent)
-            statistic = residual.square().sum(reduction.dims)
-            if self.loss_config.norm_method is None:
-                statistic = statistic / reduction.count.clamp_min(1)
-            adaptive = self._compute_weight(statistic, t)
-            loss = (
-                reduction.residual(residual, mean=self.loss_config.norm_method is None)
-                * adaptive
-            )
-        else:
-            tangent = reduction.clean(tangent - u.detach())
-            if self.loss_config.tangent_spatial_invariance:
-                tangent = tangent / reduction.count.clamp_min(1).sqrt().reshape(
-                    shape
-                )  # (B, 1, ...)
-            adaptive = self._compute_weight(reduction.norm(tangent), t)
-            target = (u + tangent * adaptive.reshape(shape)).detach()  # (B, 1, ...)
-            loss = reduction.residual(u - target, mean=False)
-        loss = torch.where(reduction.active, loss, torch.zeros_like(loss))
-        return loss, tangent, adaptive, warmup
+        r"""Compute the weighted MeanFlow loss without clipping native time intervals."""
+        return super()._mf_pred_to_loss(
+            *args, loss_weight=self._call_weight, clip_time_interval=False, **kwargs
+        )
 
     def single_train_step(
         self, data: Mapping[str, Any], iteration: int

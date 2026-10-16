@@ -337,6 +337,25 @@ class TestCompile:
 
 
 class TestGradientFlow:
+    @pytest.mark.parametrize("loss_type", ("l2", "opt_grad"))
+    def test_input_gradients(self, loss_type):
+        student = StructuredDiffusionModel()
+        objective = DistillationLoss(
+            student,
+            RectifiedFlowNoiseScheduler(),
+            method="MeanFlow",
+            method_options={"loss_type": loss_type},
+        )
+        x = torch.randn(2, 3, 5, requires_grad=True)
+        time = (
+            torch.tensor([0.3, 0.7]),
+            DiffusionExtraTimes(r=torch.tensor([0.1, 0.2]), batch_size=[2]),
+        )
+        result = objective(x, time, step=1000)["total_loss"]
+        gradient = torch.autograd.grad(result, x)[0]
+        assert torch.isfinite(gradient).all()
+        assert torch.count_nonzero(gradient) > 0
+
     @pytest.mark.parametrize("training", (False, True), ids=("eval", "mixed"))
     def test_guidance_preserves_modes(self, training):
         student = StochasticDiffusionModel().train(training)
