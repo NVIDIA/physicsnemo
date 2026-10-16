@@ -25,6 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as in sCM and EDM2. Existing single-time, single-prediction calls remain
   unchanged. Existing DSM and flow-matching losses continue to consume
   single tensors.
+- Adds `TrigFlowNoiseScheduler` and `TrigFlowPreconditioner` to the diffusion
+  noise schedulers and preconditioners in `physicsnemo.diffusion`. Pair them
+  with the same `sigma_data` to train and sample models along a trigonometric
+  diffusion path, with the backbone predicting normalized velocity. Built-in
+  linear Gaussian schedulers also provide differentiable `snr_inv()` methods
+  to convert signal-to-noise amplitude ratios back to diffusion times. Use
+  these inverses to match noise levels across schedules. The amplitude ratio
+  is `alpha(t) / sigma(t)`. The power signal-to-noise ratio is its square.
+  Custom schedulers can supply their own inverse. These additions are opt-in.
+  Existing schedulers, preconditioners, and training workflows work as before.
 - Adds standalone FLARE++ attention and model APIs, with input-conditioned
   dynamic routing, plus a ``GALE_FPP`` backend for using the same mixer inside
   GeoTransolver.

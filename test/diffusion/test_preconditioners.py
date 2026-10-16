@@ -27,6 +27,7 @@ from physicsnemo.diffusion.preconditioners import (
     BaseAffinePreconditioner,
     EDMPreconditioner,
     IDDPMPreconditioner,
+    TrigFlowPreconditioner,
     VEPreconditioner,
     VPPreconditioner,
 )
@@ -113,6 +114,7 @@ MODEL_CONFIGS = [
 
 # Preconditioner configurations for parameterized tests
 PRECOND_CONFIGS = [
+    (TrigFlowPreconditioner, {"sigma_data": 1.4}, "trigflow_precond"),
     (
         VPPreconditioner,
         {"beta_d": 19.9, "beta_min": 0.1, "M": 2000},
@@ -403,7 +405,7 @@ class TestEDMPreconditioner:
 @pytest.mark.parametrize(
     "precond_cls,precond_kwargs,precond_name",
     PRECOND_CONFIGS,
-    ids=["VP", "VE", "iDDPM", "EDM"],
+    ids=["TrigFlow", "VP", "VE", "iDDPM", "EDM"],
 )
 class TestNonRegression:
     """Non-regression tests parameterized across all preconditioner types."""
@@ -611,7 +613,7 @@ class TestNonRegression:
 @pytest.mark.parametrize(
     "precond_cls,precond_kwargs,precond_name",
     PRECOND_CONFIGS,
-    ids=["VP", "VE", "iDDPM", "EDM"],
+    ids=["TrigFlow", "VP", "VE", "iDDPM", "EDM"],
 )
 class TestAllPreconditioners:
     """Tests that apply to all preconditioner types."""

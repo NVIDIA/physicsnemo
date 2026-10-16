@@ -24,6 +24,7 @@ from physicsnemo.diffusion import DiffusionExtraOutputs, DiffusionExtraTimes
 from physicsnemo.diffusion.preconditioners import (
     EDMPreconditioner,
     IDDPMPreconditioner,
+    TrigFlowPreconditioner,
     VEPreconditioner,
     VPPreconditioner,
 )
@@ -36,8 +37,9 @@ CONFIGS = (
     (VEPreconditioner, {}),
     (VPPreconditioner, {}),
     (IDDPMPreconditioner, {"M": 32}),
+    (TrigFlowPreconditioner, {"sigma_data": 1.4}),
 )
-IDS = ("edm", "ve", "vp", "iddpm")
+IDS = ("edm", "ve", "vp", "iddpm", "trigflow")
 
 TIME_FIELDS = (None, (), ("r",), ("r1",), ("r2",), ("r1", "r2"))
 TIME_IDS = ("tensor", "empty", "r", "r1", "r2", "r1_r2")
