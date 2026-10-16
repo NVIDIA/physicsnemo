@@ -92,6 +92,14 @@ def _transform_tensordict(
         if len(shape) == 0:
             return value
 
+        ### Each field keeps its dtype: VTK files often pair float64 points
+        ### (and so a float64 matrix) with float32 fields.
+        field_matrix = (
+            matrix.to(value.dtype)
+            if value.is_floating_point() or value.is_complex()
+            else matrix
+        )
+
         ### Validate spatial dimension compatibility
         if shape[0] != n_spatial_dims:
             raise ValueError(
@@ -103,14 +111,14 @@ def _transform_tensordict(
 
         ### Vector field: v' = v @ M^T
         if len(shape) == 1:
-            return value @ matrix.T
+            return value @ field_matrix.T
 
         ### Rank-2 tensor field: T' = M @ T @ M^T (e.g., stress tensors)
         if shape == (n_spatial_dims, n_spatial_dims):
             if has_batch_dim:
-                return torch.einsum("ij,bjk,lk->bil", matrix, value, matrix)
+                return torch.einsum("ij,bjk,lk->bil", field_matrix, value, field_matrix)
             else:
-                return torch.einsum("ij,jk,lk->il", matrix, value, matrix)
+                return torch.einsum("ij,jk,lk->il", field_matrix, value, field_matrix)
 
         ### Higher-rank tensor field: apply transformation to each spatial index
         if all(s == n_spatial_dims for s in shape):
@@ -133,7 +141,7 @@ def _transform_tensordict(
                     for i in range(len(shape))
                 )
                 einsum_str = f"{chars[dim_idx].upper()}z,{batch_prefix}{input_indices}->{batch_prefix}{output_indices}"
-                result = torch.einsum(einsum_str, matrix, result)
+                result = torch.einsum(einsum_str, field_matrix, result)
 
             return result
 

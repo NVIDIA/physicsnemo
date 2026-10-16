@@ -296,6 +296,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with generated signatures.
 - The GLOBE examples no longer pin TensorDict 0.12, which conflicted with
   PhysicsNeMo's own requirement.
+- Mesh transforms and projections keep the dtype of each vector and tensor
+  field. A float32 field on float64 points, as VTK files often store them,
+  raised a dtype error.
+- The GLOBE AirfRANS example casts its meshes to float32. Since `from_pyvista`
+  began keeping float64 points, preprocessing failed on every sample.
 - `DomainMeshReader` gains `boundary_subsample` (`"both"`, `"cells"`,
   `"points"`) to choose which subsample applies to the in-file boundaries.
   Composing the cell and point subsamples on a triangulated boundary kept only

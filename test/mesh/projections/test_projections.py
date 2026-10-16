@@ -1431,6 +1431,27 @@ class TestProject:
         expected = torch.tensor([[1.0, 3.0], [4.0, 6.0]])
         assert torch.allclose(result.point_data["displacement"], expected)
 
+    def test_project_transform_keeps_field_dtypes(self):
+        """Float32 fields on float64 points (as VTK files store them) keep
+        their dtype, for vectors and rank-2 tensors."""
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float64)
+        cells = torch.tensor([[0, 1]], dtype=torch.int64)
+        stress = torch.arange(18, dtype=torch.float32).reshape(2, 3, 3)
+        point_data = TensorDict(
+            {"U": torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]), "stress": stress},
+            batch_size=[2],
+        )
+        mesh = Mesh(points=points, cells=cells, point_data=point_data)
+
+        result = project(mesh, keep_dims=[0, 1], transform_point_data=True)
+
+        assert result.point_data["U"].dtype == torch.float32
+        assert torch.equal(
+            result.point_data["U"], torch.tensor([[1.0, 2.0], [4.0, 5.0]])
+        )
+        assert result.point_data["stress"].dtype == torch.float32
+        assert torch.equal(result.point_data["stress"], stress[:, :2, :2])
+
     def test_project_transform_scalars_invariant(self):
         """Test that scalar fields are unchanged even when transform flags are True."""
         points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32)
