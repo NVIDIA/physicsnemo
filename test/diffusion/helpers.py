@@ -99,6 +99,18 @@ class GaussianDenoiser(Module):
         return self.gain * alpha * x / (alpha.square() + sigma.square())
 
 
+class FeatureDiscriminator(Module):
+    r"""Map named spatial features to one logit per sample."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.gain = torch.nn.Parameter(torch.tensor(0.4))
+
+    def forward(self, features: TensorDict) -> Float[torch.Tensor, " B logits"]:
+        r"""Keep a differentiable input path for generator-gradient checks."""
+        return self.gain * features["spatial"].flatten(1).mean(1, keepdim=True)
+
+
 class CustomGaussianScheduler(LinearGaussianNoiseScheduler):
     r"""A log-noise path with no training bounds or usable inference grid."""
 

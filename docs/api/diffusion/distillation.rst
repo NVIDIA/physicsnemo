@@ -6,9 +6,9 @@ Distillation losses
    This API is alpha. Imports emit ``ExperimentalFeatureWarning`` and future
    releases may introduce changes that break backward compatibility.
 
-``DistillationLoss`` computes sCM or MeanFlow objectives for PhysicsNeMo
-models. Each call constructs training targets and returns a differentiable
-``total_loss`` with detached values for logging.
+``DistillationLoss`` computes sCM, MeanFlow, DMD2, or f-distill losses for
+PhysicsNeMo models. Each call constructs training targets and returns a
+differentiable ``total_loss`` with detached values for logging.
 
 Use it in your training loop with initialized models and a noise scheduler.
 Your loop controls backpropagation, optimizer updates, and checkpoints.
@@ -142,6 +142,128 @@ distributed wrapping on your target hardware before a long training run.
 Save your PhysicsNeMo models and optimizers as usual. Recreate the loss with
 the same noise schedules and settings when resuming. sCM and MeanFlow have no
 extra running statistics, so their ``state_dict`` results are empty.
+
+Alternate distribution-matching objectives
+-----------------------------------------
+
+DMD2 and f-distill match a student's generated distribution to a fixed
+diffusion teacher. Unlike an ordinary denoising loss that trains a model on
+clean data and noise, these objectives also train a fake-score model on
+student-generated samples.
+
+Initialize the models and pass the fake-score model in ``auxiliary_models``.
+Choose ``phase="student"`` or ``phase="auxiliary"`` on each call and step
+the matching optimizer. Pass the training step separately as ``step``.
+
+.. code-block:: python
+
+   loss_fn = DistillationLoss(
+       student, scheduler, method="DMD2", teacher=teacher,
+       auxiliary_models={"fake_score": fake_score},
+   )
+   for phase, optimizer in (("auxiliary", fake_optimizer),
+                            ("student", student_optimizer)):
+       optimizer.zero_grad()
+       loss_fn(x0, phase=phase, step=step)["total_loss"].backward()
+       optimizer.step()
+
+The student phase trains only the student. The auxiliary phase trains the
+fake-score model and any discriminator. The teacher stays fixed in both phases.
+Use separate parameters for each model. The loss preserves your choices of
+training mode and frozen parameters.
+
+DMD2 trains the student using teacher and fake-score predictions, with an
+optional adversarial loss. f-distill also weights this score
+matching by a selected f-divergence and requires a discriminator.
+
+Supply ``discriminator`` in ``auxiliary_models`` to enable adversarial training.
+The generator GAN coefficient defaults to ``0.001``. Set
+``gan_loss_weight_gen`` to change it. f-distill requires a positive coefficient.
+The discriminator accepts a TensorDict of named teacher features and returns
+scores with shape :math:`(B, L)`, where :math:`L` counts scores per sample.
+Supply a ``feature_fn(prediction, extras)`` callback to select those features
+from your teacher output. The teacher must still return its prediction.
+Feature fields are model-specific, not reserved diffusion outputs. The callback
+interprets them. For example, if your teacher adds a
+``bottleneck`` field to a subclass of ``DiffusionExtraOutputs``:
+
+.. code-block:: python
+
+   from tensordict import TensorDict
+
+   def teacher_features(prediction, extras):
+       return TensorDict({"bottleneck": extras.bottleneck}, batch_size=extras.batch_size)
+
+   loss_fn = DistillationLoss(
+       student, scheduler, method="f-distill", teacher=teacher,
+       auxiliary_models={"fake_score": fake_score,
+                         "discriminator": discriminator},
+       model_options={"teacher": {"feature_names": ("bottleneck",),
+                                  "feature_fn": teacher_features}},
+       method_options={"f_distill": {"f_div": "js"}},
+   )
+
+Supported divergence names are ``rkl``, ``kl``, ``js``, ``sf``, ``neyman``,
+``sh``, and ``jf``. f-distill tracks running ratio statistics in the loss object.
+Save and restore ``loss_fn.state_dict()`` alongside model and optimizer state.
+Pass ``update_state=False`` to compute a loss without changing these statistics.
+
+``model_options["fake_score"]`` configures its prediction type or scheduler.
+The loss converts predictions when these models use different noise schedules.
+Use ``fake_score_pred_type`` to select the fake-score training target and
+``fake_score_sampling`` to choose its training-time distribution.
+
+One-step training draws student inputs at the scheduler's upper training time.
+Custom schedulers without that bound need explicit ``input_student`` and
+``t_student`` on the loss call, or configured training bounds. Multi-step training
+uses ``student_sample_steps`` and an explicit ``training_times`` grid under the
+student's ``scheduler_options``. Specify training times independently of your
+inference grid.
+Pass ``noise`` to control the score perturbation independently.
+
+Adversarial masking
+~~~~~~~~~~~~~~~~~~~
+
+Adversarial masks exclude corrupted inputs during feature extraction and
+discriminator pooling. The loss needs a callback that maps the input mask to
+valid discriminator scores.
+
+For masked adversarial training, supply a callback with this signature:
+
+.. code-block:: python
+
+   def adversarial_fn(x_t, t, condition, weight):
+       ...
+       return logits, logit_weight
+
+Return ``logits`` with shape :math:`(B, L)` and finite,
+nonnegative ``logit_weight`` values that broadcast to that shape.
+
+Use the same teacher and discriminator you passed to the loss, and keep
+gradients through their inputs for student training. You may need a masked
+backbone or feature extractor. Masking only the final scores cannot remove
+corruption that has already spread through features or pooled statistics.
+
+The loss applies the returned weights to generator, discriminator, and approximate
+R1 residuals. Zero weights also exclude scores and empty samples from f-distill
+ratio statistics. Positive residual weights remain linear. The callback receives
+both real and generated perturbations, including the R1 query when enabled.
+
+Distributed statistics and compilation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+f-distill reduces ratio statistics over the default process group for ordinary
+data parallelism. For a domain-parallel scheduler, explicitly supply the data
+group through ``method_options["f_distill"]["statistics_group"]``. It must
+group corresponding spatial partitions across independent data replicas, not
+different partitions of the same sample. Each rank participates even when its
+local batch has no valid entries. The callback must produce consistent global scores
+across spatial partitions when the architecture needs spatial aggregation.
+
+For DMD2, you can compile the individual models with ``torch.compile``.
+Keep phase selection and f-distill statistics updates outside compilation.
+Check combined domain parallelism and FSDP on your target hardware before
+a long training run.
 
 Custom implementations
 ----------------------
