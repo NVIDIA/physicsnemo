@@ -21,6 +21,7 @@ import warnings
 from physicsnemo.core.warnings import ExperimentalFeatureWarning
 
 from .base import BaseDistillationLoss, LossMap
+from .checkpoint import CheckpointStateBundle
 from .losses import DistillationLoss, WeightedDistillationLoss
 
 warnings.warn(
@@ -31,6 +32,7 @@ warnings.warn(
 
 __all__ = [
     "BaseDistillationLoss",
+    "CheckpointStateBundle",
     "LossMap",
     "DistillationLoss",
     "WeightedDistillationLoss",

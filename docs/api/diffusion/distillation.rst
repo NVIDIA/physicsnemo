@@ -265,6 +265,46 @@ Keep phase selection and f-distill statistics updates outside compilation.
 Check combined domain parallelism and FSDP on your target hardware before
 a long training run.
 
+Restarting training
+-------------------
+
+``CheckpointStateBundle`` groups named models, optimizers, and loss statistics
+for a training restart. A single-model checkpoint stores one model; a bundle
+keeps the state of the participating models and optimizers together.
+
+Use the model's checkpoint API when you only need its weights for inference.
+Use a bundle to resume training with optimizer state and loss statistics.
+Give each model a name, including fake-score, discriminator, and EMA models
+when present. Use these names for their optimizers:
+
+.. code-block:: python
+
+   from physicsnemo.diffusion.distillation import CheckpointStateBundle
+
+   bundle = CheckpointStateBundle(
+       {"student": student, "teacher": teacher, "fake_score": fake_score},
+       optimizers={"student": student_optimizer, "fake_score": fake_optimizer},
+       stateful={"loss": loss_fn},
+   )
+   bundle.save_checkpoint("checkpoints", epoch=20, progress={"step": 20}, include_rng=True)
+   progress = bundle.load_checkpoint("checkpoints", epoch=20, restore_rng=True)
+
+Recreate the same models, noise schedules, optimizers, and loss settings before
+loading. Save after completing an optimizer update and choose a new ``epoch``
+index each time. To restore a data-loader cursor, add it to ``stateful`` with
+``state_dict`` and ``load_state_dict`` methods. The bundle does not save pending
+gradients or reconstruct your training configuration.
+
+Call save and load on every rank, and restart with the same world size and
+parallel layout. The bundle uses the existing PhysicsNeMo checkpoint utilities.
+Use ``optimizer_models`` if optimizer and model names differ.
+Each optimizer saves a copy of its model weights, even when optimizers share
+a model.
+
+If loading fails, recreate your objects before retrying: some objects may
+already contain restored state. Existing checkpoint indices cannot be
+overwritten, including incomplete saves.
+
 Custom implementations
 ----------------------
 
