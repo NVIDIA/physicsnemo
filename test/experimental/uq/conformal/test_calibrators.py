@@ -28,6 +28,7 @@ from physicsnemo.experimental.uq.conformal import (
     FunctionalBandCalibrator,
     NormalizedErrorScore,
     QuantileRegressionScore,
+    RiskControlCalibrator,
 )
 from physicsnemo.experimental.uq.conformal._utils import TENSOR_KEY, points_fingerprint
 from test.experimental.uq.conformal._helpers import (
@@ -154,7 +155,7 @@ SCHEMA_REJECTIONS = [  # (id, first accepted sample or None, prediction, target,
 def test_schema_drift_is_rejected_transactionally(
     first, prediction, target, error, match
 ):
-    calibrator = FunctionalBandCalibrator(AbsoluteErrorScore(), alpha=0.5)
+    calibrator = RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.5)
     if first is not None:
         calibrator.update(first, first.clone())
     expected_n_cal = calibrator.n_cal
@@ -238,7 +239,7 @@ def test_difficulty_adaptation_and_strategy_snapshot_are_fixed():
     lo_again, hi_again = predictor.predict_interval(zeros, aux=aux)
     assert torch.equal(lo, lo_again) and torch.equal(hi, hi_again)
     for name, value in [
-        ("tier", "cellwise"),
+        ("tier", "risk_control"),
         ("alpha", 0.1),
         ("n_cal", 1),
         ("score", AbsoluteErrorScore()),
@@ -248,7 +249,44 @@ def test_difficulty_adaptation_and_strategy_snapshot_are_fixed():
             setattr(predictor, name, value)
 
 
-@pytest.mark.parametrize("calibrator_cls", [FunctionalBandCalibrator])
+def test_crc_uses_point_events_over_all_trailing_components():
+    calibrator = RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.5)
+    for score in (1.0, 2.0, 3.0):
+        target = torch.tensor([[score, 0.0], [0.0, 0.0]])
+        calibrator.update(torch.zeros_like(target), target)
+    # Point reduction yields vectors [score, 0] and selects 1. Component
+    # counting would select 0 for this construction.
+    predictor = calibrator.finalize()
+    assert predictor.tier == "risk_control"
+    assert float(predictor.thresholds) == 1.0
+
+
+def test_crc_exact_rational_feasibility_floor():
+    below = RiskControlCalibrator(AbsoluteErrorScore(), alpha=1.0 / 3.0)
+    for _ in range(2):
+        below.update(torch.zeros(4), torch.zeros(4))
+    with pytest.raises(ValueError, match="calibration samples"):
+        below.finalize()
+
+    exact = RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.25)
+    for _ in range(3):
+        exact.update(torch.zeros(4), torch.zeros(4))
+    assert float(exact.finalize().thresholds) == 0.0
+
+
+def test_crc_accepts_varying_mesh_sizes_and_tensordict():
+    calibrator = RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.25)
+    for n in (2, 7, 3, 11):
+        calibrator.update(_td(v=torch.zeros(n, 3)), _td(v=torch.ones(n, 3)))
+    predictor = calibrator.finalize()
+    assert isinstance(predictor.thresholds, TensorDict)
+    assert predictor.thresholds["v"].ndim == 0
+    assert float(predictor.thresholds["v"]) == 1.0
+
+
+@pytest.mark.parametrize(
+    "calibrator_cls", [FunctionalBandCalibrator, RiskControlCalibrator]
+)
 def test_scaled_tiers_reject_points_that_contradict_the_point_axis(calibrator_cls):
     """A supplied coordinate tensor must align with the field's leading
     (point) axis: the statistic is computed over that axis, so silently
@@ -269,6 +307,7 @@ def test_scaled_tiers_reject_points_that_contradict_the_point_axis(calibrator_cl
 # fmt: off
 DOUBLE_SCALING_BOUNDARIES = [
     pytest.param(lambda s, d: FunctionalBandCalibrator(s, alpha=0.5, difficulty=d), id="functional"),
+    pytest.param(lambda s, d: RiskControlCalibrator(s, alpha=0.5, difficulty=d), id="risk_control"),
     pytest.param(lambda s, d: make_predictor(tier="functional", score=s, difficulty=d), id="direct_predictor"),
 ]
 # fmt: on
@@ -288,7 +327,7 @@ def test_double_scaling_pairing_is_rejected_everywhere(build):
 
 def test_keys_subset_round_trips_through_predict_save_and_diagnostics(tmp_path):
     generator = torch.Generator().manual_seed(7)
-    calibrator = FunctionalBandCalibrator(
+    calibrator = RiskControlCalibrator(
         AbsoluteErrorScore(), alpha=0.25, keys=["pressure"]
     )
     full = _td(pressure=torch.zeros(12), velocity=torch.zeros(12, 3))
@@ -332,9 +371,9 @@ class _CustomDifficulty(AuxDifficulty):
 
 def test_only_shipped_exact_strategy_types_are_accepted():
     with pytest.raises(TypeError, match="Subclasses are not supported"):
-        FunctionalBandCalibrator(_CustomScore(), alpha=0.5)
+        RiskControlCalibrator(_CustomScore(), alpha=0.5)
     with pytest.raises(TypeError, match="Subclasses are not supported"):
-        FunctionalBandCalibrator(
+        RiskControlCalibrator(
             AbsoluteErrorScore(), alpha=0.5, difficulty=_CustomDifficulty()
         )
     # Every shipped score remains constructible.
@@ -343,7 +382,7 @@ def test_only_shipped_exact_strategy_types_are_accepted():
 
 def test_finalize_without_samples_fails_closed():
     with pytest.raises(RuntimeError, match="No calibration samples"):
-        FunctionalBandCalibrator(AbsoluteErrorScore(), alpha=0.5).finalize()
+        RiskControlCalibrator(AbsoluteErrorScore(), alpha=0.5).finalize()
 
 
 @pytest.mark.parametrize("tier", TIERS)
