@@ -1,0 +1,7 @@
+natten
+matplotlib
+tensorboard
+xarray
+zarr
+netCDF4
+pandas

@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# General inference config items
+outdir: 'rundir' # Root path under which to save inference outputs
+experiment_name: 'corrdiff-era5-hrrr-inference' # Name for the inference experiment being run
+run_id: '0' # Unique identifier for the inference run
+rundir: ${inference.outdir}/${inference.experiment_name}/${inference.run_id} # Path where experiment outputs will be saved
+checkpoint: checkpoints/corrdiff_era5_hrrr.mdlus # Model weights; for a model you trained, <training.rundir>/checkpoints/TimeScaledModel.0.<step>.mdlus
+
+# Sample selection
+time: "2025-10-24T00:00:00" # Time to downscale (YYYY-MM-DDTHH:MM:SS), must be within dataset.time_range_valid
+num_ensembles: 4 # Number of samples (ensemble members) to generate
+seed: 0 # Random seed of the first sample, sample i uses seed + i
+
+# I/O
+output_variables: ["u10m", "v10m", "t2m", "mslp", "refc"] # State variables to save to disk (empty list == all channels saved)
+plot_variables: ["u10m", "t2m", "refc"] # State variables to plot

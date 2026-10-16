@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+# Diffusion transformer (DiT) with neighborhood attention, 678M parameters.
+# These settings match the released checkpoint.
+hyperparameters:
+  hidden_size: 1152 # Number of channels in the transformer blocks
+  depth: 28 # Number of transformer blocks
+  num_heads: 18 # Number of attention heads
+  patch_size: 2 # Size of the patches embedded as tokens
+  attn_kernel_size: 31 # Neighborhood size of the attention, in tokens
+  attention_backend: natten2d_rope # Neighborhood attention with 2D rotary position embeddings
+  layernorm_backend: torch # Layer normalization backend of the blocks, "torch" or "apex"
+  qk_norm: true # Normalize the attention queries and keys (requires Apex), stabilizes bf16 training
+  time_scale: 999.0 # Flow-matching times in [0, 1] are multiplied by this before the timestep embedding

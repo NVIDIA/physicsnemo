@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+# General training config items
+outdir: 'rundir' # Root path under which to save training outputs
+experiment_name: 'corrdiff-era5-hrrr' # Name for the training experiment
+run_id: '0' # Unique ID to use for this training run
+rundir: ${training.outdir}/${training.experiment_name}/${training.run_id} # Path where experiment outputs will be saved
+num_data_workers: 8 # Number of worker processes per GPU for each of the training and validation dataloaders
+log_to_tensorboard: True # Whether to log to TensorBoard (logs saved in rundir/tensorboard)
+seed: 1 # Random seed
+initial_weights: null # if not null, a .mdlus checkpoint to load weights at the start of training; no effect if training continues from a checkpoint
+
+# Logging frequency
+print_progress_freq: 100 # How often to print progress, measured in number of training steps
+checkpoint_freq: 1562 # How often to save the checkpoints, measured in number of training steps (1562 steps = 100k samples)
+checkpoints_to_keep: 5 # Number of most recent checkpoints to keep, older ones are deleted; null keeps all (8 GB each)
+validation_freq: 1562 # How often to record the validation loss, measured in number of training steps
+
+# Optimization hyperparameters
+batch_size: 64 # Total training batch size -- must be divisible by the number of GPUs being used
+batch_size_per_gpu: 2 # Batch size on each GPU, gradients are accumulated over batch_size / (num_gpus * batch_size_per_gpu) rounds; "auto" uses batch_size / num_gpus
+total_train_steps: 781250 # Number of total training steps, 781250 with batch size 64 = 50M samples
+clip_grad_norm: 1.0 # Threshold for gradient clipping, set to -1 to disable
+
+# Performance
+perf:
+  fp_optimizations: amp-bf16 # Floating point mode: "fp32" or "amp-bf16"
+
+# Optimizer configuration (AdamW)
+optimizer:
+  lr: 1e-4 # Peak learning rate
+  betas: [0.9, 0.99] # Adam beta parameters
+  weight_decay: 0.0 # Weight decay
+
+# Learning rate schedule
+scheduler:
+  lr_rampup_steps: 1000 # Number of training steps over which to perform linear LR warmup
+  lr_decay: cosine # LR after warmup: "cosine" (decay to zero at total_train_steps) or "constant"
+
+# Validation options
+validation_steps: 8 # Number of batches to evaluate during validation
+validation_plot_variables: ["u10m", "v10m", "t2m", "refc"] # State variables to plot during validation
+
+# Loss options: rectified flow x_t = (1 - t) x0 + t eps with t drawn uniformly
+# from [t_min, t_max]; the network predicts x0 and the loss is ||x0_hat - x0||^2.
+# Training up to the pure-noise endpoint t = 1 matches inference, which samples
+# from pure noise.
+loss:
+  t_min: 0.0 # Lowest time (clean data)
+  t_max: 1.0 # Highest time (pure noise), where the validation sampling starts

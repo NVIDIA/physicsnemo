@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Sampler args for utils.nn.sample_flow: integrates the rectified-flow ODE
+# dx/dt = (x_t - x0_hat) / t from pure noise (t = 1) to t = 0 with
+# physicsnemo.diffusion.samplers.sample.
+
+name: 'Rectified flow'
+args:
+  num_steps: 18 # Number of solver steps
+  solver: heun # "heun" (2nd order, 2 model evaluations per step) or "euler" (1st order)
+  time_shift: 1.0 # Time shift a, t -> a t / (1 + (a - 1) t); use a > 1 to sample at higher resolution than the training patches
