@@ -1363,6 +1363,15 @@ wheels = [
 ]
 
 [[package]]
+name = "beartype"
+version = "0.23.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/79/34/c0cfdaee9c796c8381439fed0fcab62810753b8b0adb1ec88fa7f41eaa5d/beartype-0.23.1.tar.gz", hash = "sha256:8b805f246b32931c74f2b321ea0939fe5bb2ff43c12a3eff19cc4c854b832e1d", size = 1993714, upload-time = "2026-10-11T05:36:55.251Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1c/cb/2f6aa982e2860c1156830db3da7f823b71784ed7d533ca289ea9b6c6347a/beartype-0.23.1-py3-none-any.whl", hash = "sha256:4461b4dc57e3fdd6c8a8464b22cf118002eea107c33e9fef651c69068ab3cce3", size = 1582101, upload-time = "2026-10-11T05:36:52.431Z" },
+]
+
+[[package]]
 name = "beautifulsoup4"
 version = "4.15.0"
 source = { registry = "https://pypi.org/simple" }
@@ -7593,6 +7602,39 @@ wheels = [
 ]
 
 [[package]]
+name = "nvalchemi-toolkit"
+version = "0.2.0"
+source = { git = "https://github.com/NVIDIA/nvalchemi-toolkit.git?rev=f59e28dc6701583a13bb294e536076c2a7379e98#f59e28dc6701583a13bb294e536076c2a7379e98" }
+dependencies = [
+    { name = "click" },
+    { name = "jaxtyping" },
+    { name = "loguru" },
+    { name = "numpy" },
+    { name = "nvalchemi-toolkit-ops" },
+    { name = "nvidia-physicsnemo" },
+    { name = "periodictable" },
+    { name = "plotext" },
+    { name = "plum-dispatch" },
+    { name = "pydantic" },
+    { name = "rich" },
+    { name = "tensordict" },
+    { name = "torch", version = "2.13.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-18-nvidia-physicsnemo-cu12' and extra == 'extra-18-nvidia-physicsnemo-cu13') or (extra == 'extra-18-nvidia-physicsnemo-cu12' and extra == 'extra-18-nvidia-physicsnemo-natten-cu13') or (extra == 'extra-18-nvidia-physicsnemo-cu12' and extra == 'extra-18-nvidia-physicsnemo-transformer-engine-cu13') or (extra == 'extra-18-nvidia-physicsnemo-cu13' and extra == 'extra-18-nvidia-physicsnemo-natten-cu12') or (extra == 'extra-18-nvidia-physicsnemo-cu13' and extra == 'extra-18-nvidia-physicsnemo-transformer-engine-cu12') or (extra == 'extra-18-nvidia-physicsnemo-natten-cu12' and extra == 'extra-18-nvidia-physicsnemo-natten-cu13') or (extra == 'extra-18-nvidia-physicsnemo-natten-cu12' and extra == 'extra-18-nvidia-physicsnemo-transformer-engine-cu13') or (extra == 'extra-18-nvidia-physicsnemo-natten-cu13' and extra == 'extra-18-nvidia-physicsnemo-transformer-engine-cu12') or (extra == 'extra-18-nvidia-physicsnemo-transformer-engine-cu12' and extra == 'extra-18-nvidia-physicsnemo-transformer-engine-cu13') or (extra != 'extra-18-nvidia-physicsnemo-cu12' and extra != 'extra-18-nvidia-physicsnemo-cu13' and extra != 'extra-18-nvidia-physicsnemo-natten-cu12' and extra != 'extra-18-nvidia-physicsnemo-natten-cu13' and extra != 'extra-18-nvidia-physicsnemo-transformer-engine-cu12' and extra != 'extra-18-nvidia-physicsnemo-transformer-engine-cu13')" },
+    { name = "torch", version = "2.13.0+cu129", source = { registry = "https://download.pytorch.org/whl/cu129" }, marker = "extra == 'extra-18-nvidia-physicsnemo-cu12' or extra == 'extra-18-nvidia-physicsnemo-natten-cu12' or extra == 'extra-18-nvidia-physicsnemo-transformer-engine-cu12'" },
+    { name = "torch", version = "2.13.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "extra == 'extra-18-nvidia-physicsnemo-cu13' or extra == 'extra-18-nvidia-physicsnemo-natten-cu13' or extra == 'extra-18-nvidia-physicsnemo-transformer-engine-cu13'" },
+    { name = "zarr", version = "3.1.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' or (extra == 'extra-18-nvidia-physicsnemo-cu12' and extra == 'extra-18-nvidia-physicsnemo-cu13') or (extra == 'extra-18-nvidia-physicsnemo-cu12' and extra == 'extra-18-nvidia-physicsnemo-natten-cu13') or (extra == 'extra-18-nvidia-physicsnemo-cu12' and extra == 'extra-18-nvidia-physicsnemo-transformer-engine-cu13') or (extra == 'extra-18-nvidia-physicsnemo-cu13' and extra == 'extra-18-nvidia-physicsnemo-natten-cu12') or (extra == 'extra-18-nvidia-physicsnemo-cu13' and extra == 'extra-18-nvidia-physicsnemo-transformer-engine-cu12') or (extra == 'extra-18-nvidia-physicsnemo-natten-cu12' and extra == 'extra-18-nvidia-physicsnemo-natten-cu13') or (extra == 'extra-18-nvidia-physicsnemo-natten-cu12' and extra == 'extra-18-nvidia-physicsnemo-transformer-engine-cu13') or (extra == 'extra-18-nvidia-physicsnemo-natten-cu13' and extra == 'extra-18-nvidia-physicsnemo-transformer-engine-cu12') or (extra == 'extra-18-nvidia-physicsnemo-transformer-engine-cu12' and extra == 'extra-18-nvidia-physicsnemo-transformer-engine-cu13')" },
+    { name = "zarr", version = "3.4.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-18-nvidia-physicsnemo-cu12' and extra == 'extra-18-nvidia-physicsnemo-cu13') or (extra == 'extra-18-nvidia-physicsnemo-cu12' and extra == 'extra-18-nvidia-physicsnemo-natten-cu13') or (extra == 'extra-18-nvidia-physicsnemo-cu12' and extra == 'extra-18-nvidia-physicsnemo-transformer-engine-cu13') or (extra == 'extra-18-nvidia-physicsnemo-cu13' and extra == 'extra-18-nvidia-physicsnemo-natten-cu12') or (extra == 'extra-18-nvidia-physicsnemo-cu13' and extra == 'extra-18-nvidia-physicsnemo-transformer-engine-cu12') or (extra == 'extra-18-nvidia-physicsnemo-natten-cu12' and extra == 'extra-18-nvidia-physicsnemo-natten-cu13') or (extra == 'extra-18-nvidia-physicsnemo-natten-cu12' and extra == 'extra-18-nvidia-physicsnemo-transformer-engine-cu13') or (extra == 'extra-18-nvidia-physicsnemo-natten-cu13' and extra == 'extra-18-nvidia-physicsnemo-transformer-engine-cu12') or (extra == 'extra-18-nvidia-physicsnemo-transformer-engine-cu12' and extra == 'extra-18-nvidia-physicsnemo-transformer-engine-cu13')" },
+]
+
+[[package]]
+name = "nvalchemi-toolkit-ops"
+version = "0.5.0"
+source = { git = "https://github.com/NVIDIA/nvalchemi-toolkit-ops?rev=0.5.0-rc#6702138e404d40ea79dec62f68c2fa67e858580e" }
+dependencies = [
+    { name = "numpy" },
+    { name = "warp-lang" },
+]
+
+[[package]]
 name = "nvdlfw-inspect"
 version = "0.2.2"
 source = { registry = "https://pypi.org/simple" }
@@ -9537,6 +9579,9 @@ datapipes-extras = [
 diffusion-fastgen = [
     { name = "fastgen" },
 ]
+diffusion-strategy = [
+    { name = "nvalchemi-toolkit" },
+]
 gnns = [
     { name = "line-profiler" },
     { name = "mlflow" },
@@ -9654,6 +9699,7 @@ requires-dist = [
     { name = "netcdf4", marker = "extra == 'datapipes-extras'", specifier = ">=1.7.3" },
     { name = "numpy", specifier = ">=2.2.6" },
     { name = "numpy", marker = "extra == 'cu13'", specifier = "<2.5" },
+    { name = "nvalchemi-toolkit", marker = "extra == 'diffusion-strategy'", git = "https://github.com/NVIDIA/nvalchemi-toolkit.git?rev=f59e28dc6701583a13bb294e536076c2a7379e98" },
     { name = "nvidia-dali-cuda120", marker = "extra == 'cu12'", specifier = ">=2.3.0", index = "https://pypi.nvidia.com/" },
     { name = "nvidia-dali-cuda130", marker = "extra == 'cu13'", specifier = ">=2.3.0", index = "https://pypi.nvidia.com/" },
     { name = "nvtx", specifier = ">=0.2.16" },
@@ -9712,7 +9758,7 @@ requires-dist = [
     { name = "xarray", marker = "extra == 'datapipes-extras'", specifier = ">=2026.7.0" },
     { name = "zarr", marker = "extra == 'datapipes-extras'", specifier = ">=3.1.6" },
 ]
-provides-extras = ["cu12", "cu13", "datapipes-extras", "diffusion-fastgen", "gnns", "mesh-extras", "model-extras", "natten-cu12", "natten-cu13", "nn-extras", "sym", "transformer-engine-cu12", "transformer-engine-cu13", "uq-extras", "utils-extras"]
+provides-extras = ["cu12", "cu13", "datapipes-extras", "diffusion-fastgen", "diffusion-strategy", "gnns", "mesh-extras", "model-extras", "natten-cu12", "natten-cu13", "nn-extras", "sym", "transformer-engine-cu12", "transformer-engine-cu13", "uq-extras", "utils-extras"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -10217,6 +10263,18 @@ wheels = [
 ]
 
 [[package]]
+name = "periodictable"
+version = "2.0.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "pyparsing" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/82/e4/f2a338abfb5a6b9e2a48dc4acaa9df0bd94126df336ab403178f6a7a901a/periodictable-2.0.2-py3-none-any.whl", hash = "sha256:7d0680baf758715dd66bdac733de82dcb976aa03981fbd6d75a84213fb3b5f86", size = 811077, upload-time = "2024-12-20T02:26:26.165Z" },
+]
+
+[[package]]
 name = "pexpect"
 version = "4.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -10322,6 +10380,15 @@ wheels = [
 ]
 
 [[package]]
+name = "plotext"
+version = "5.3.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c9/d7/f75f397af966fe252d0d34ffd3cae765317fce2134f925f95e7d6725d1ce/plotext-5.3.2.tar.gz", hash = "sha256:52d1e932e67c177bf357a3f0fe6ce14d1a96f7f7d5679d7b455b929df517068e", size = 61967, upload-time = "2024-09-24T15:13:37.728Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f6/1e/12fe7c40cd2099a1f454518754ed229b01beaf3bbb343127f0cc13ce6c22/plotext-5.3.2-py3-none-any.whl", hash = "sha256:394362349c1ddbf319548cfac17ca65e6d5dfc03200c40dfdc0503b3e95a2283", size = 64047, upload-time = "2024-09-24T15:13:36.296Z" },
+]
+
+[[package]]
 name = "plotly"
 version = "7.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -10341,6 +10408,32 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f9/e2/3e91f31a7d2b083fe6ef3fa267035b518369d9511ffab804f839851d2779/pluggy-1.6.0.tar.gz", hash = "sha256:7dcc130b76258d33b90f61b658791dede3486c3e6bfb003ee5c9bfb396dd22f3", size = 69412, upload-time = "2025-05-15T12:30:07.975Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl", hash = "sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746", size = 20538, upload-time = "2025-05-15T12:30:06.134Z" },
+]
+
+[[package]]
+name = "plum-dispatch"
+version = "2.10.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "beartype" },
+    { name = "rich" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/dc/75/807b02f339906867de07baaecd3519fe8704df013a27ae0a57250ed461d3/plum_dispatch-2.10.1.tar.gz", hash = "sha256:93aa1ec5c4683c0777b9d7d1ccc0b31e0e82f38399116345b4ed8d0fb67cc66e", size = 250842, upload-time = "2026-09-07T17:38:44.9Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8a/1a/3736f28127e6aa0e87eaee3286c0f93bf8fd25382786d8409073fc1a9010/plum_dispatch-2.10.1-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:143b44537476fcfa644a7b3b00cdfce91cd94c501eb5d4a342d0b1dae6e00269", size = 279045, upload-time = "2026-09-07T17:38:26.368Z" },
+    { url = "https://files.pythonhosted.org/packages/67/a7/dfc192aa694244278d66c5251bc415bb23234a8cb12013e46dfae2747091/plum_dispatch-2.10.1-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:193fa7d9809e6ccf38d0ec423b92c2ce88b1bb5dfa7c769ce7a3b216aeb61eb4", size = 264041, upload-time = "2026-09-07T17:38:27.743Z" },
+    { url = "https://files.pythonhosted.org/packages/77/8d/15617a11d26a7dfa9e5f6f36103c4a3e27e5651d9261ca6bd6a099a69abc/plum_dispatch-2.10.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:b8909bc8c3b776f116c50986718befeda1de17a3dc61e7ae93f5d3d71de5f98d", size = 328403, upload-time = "2026-09-07T17:38:29.315Z" },
+    { url = "https://files.pythonhosted.org/packages/f0/20/7e5a1535a858ae4716083ac15d935394207145f8249fea8f693dd979a7f6/plum_dispatch-2.10.1-cp311-cp311-win_amd64.whl", hash = "sha256:4adc9e9335bee9fffd24abd3be0aa6810e403129697ab767976d70cc3c88405c", size = 244207, upload-time = "2026-09-07T17:38:30.608Z" },
+    { url = "https://files.pythonhosted.org/packages/5d/d1/10c40a76f0fc3959d73a245e3e63ab576062e2c7db1fb41a4e035a5f4ee0/plum_dispatch-2.10.1-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:476821e99fe4c747725887021ea09028ff5e013d8732c40c6d44df65815a70ea", size = 285017, upload-time = "2026-09-07T17:38:32.092Z" },
+    { url = "https://files.pythonhosted.org/packages/90/91/d0a7d52b1a2e02e883b078e2801cfd544abb05b1a28183e46db43d812667/plum_dispatch-2.10.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:e1a73a06483fffa8f8247bbf6057157075be2f63e76845792eb75d86b11f1188", size = 267393, upload-time = "2026-09-07T17:38:33.461Z" },
+    { url = "https://files.pythonhosted.org/packages/b9/c3/d8793642ce7d29ea15cc39c10185ef126a27fcb8ea230154978221deb4b2/plum_dispatch-2.10.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:a5b6a2474f53b23cd07254c2ad286fc8371a3c4ed17dee72794eac9c3a6873db", size = 334557, upload-time = "2026-09-07T17:38:34.857Z" },
+    { url = "https://files.pythonhosted.org/packages/41/c7/3544b2bf05aa9e1a1b45981d21da5e5d5c135fcc2da0ee1040f73512662f/plum_dispatch-2.10.1-cp312-cp312-win_amd64.whl", hash = "sha256:ae2f76ce97bcbf1d7038e7c352180cbb35c90c23ea0848e2924f35133fb0f223", size = 245830, upload-time = "2026-09-07T17:38:36.228Z" },
+    { url = "https://files.pythonhosted.org/packages/16/69/c73f5145dd136158c74295c3f1751062beaf744f508cd04dce61bfe9b059/plum_dispatch-2.10.1-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:a8cebe7c3380e8cd451008d405fbb3a202626a7da4c140deff36d52dfb05e5aa", size = 283228, upload-time = "2026-09-07T17:38:37.664Z" },
+    { url = "https://files.pythonhosted.org/packages/c3/1e/252f11d5443e341cf1a1c4986ec0e5a365bcb605190cfa26410acbe68dc6/plum_dispatch-2.10.1-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:4e6ffcc378838cffc9f13d67f1ea79585ffea7e04aa00e888941ef63400f175b", size = 265603, upload-time = "2026-09-07T17:38:39.254Z" },
+    { url = "https://files.pythonhosted.org/packages/65/11/6cdfa574f1682840b644527a1644e0740ddb3ddc6e759dcbef4a49091df6/plum_dispatch-2.10.1-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:131145651d4fa89ee97a026e49545638380a68f71f530ca57b0efaa04dfad1b6", size = 332929, upload-time = "2026-09-07T17:38:40.715Z" },
+    { url = "https://files.pythonhosted.org/packages/52/9a/665b51655fd98196066d042d06af9641d0ac589f9e23ad3e895002c9563b/plum_dispatch-2.10.1-cp313-cp313-win_amd64.whl", hash = "sha256:f75fcfb61c89ca561e3b856d2d9392167d51a283d23c7b9a5d11937a3120cae7", size = 246611, upload-time = "2026-09-07T17:38:42.249Z" },
+    { url = "https://files.pythonhosted.org/packages/55/9f/0adfb5a90d65233b764cb1b07244b72ded1db7cfc66955418544d0da2e38/plum_dispatch-2.10.1-py3-none-any.whl", hash = "sha256:dac63fd5ada8ae8045aefed127dacda0ba02db2635876b12f4e1dfaf6db73f39", size = 49430, upload-time = "2026-09-07T17:38:43.589Z" },
 ]
 
 [[package]]

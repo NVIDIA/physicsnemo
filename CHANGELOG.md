@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds an experimental, independently implemented SMART operator with sampled
   geometry encoding, reusable latent contexts, and chunked field decoding.
 
+- Adds alpha distillation losses and an optional strategy layer in
+  `physicsnemo.diffusion.distillation` for sCM, MeanFlow, DMD2, and f-distill.
+  Use `DistillationLoss` or `WeightedDistillationLoss` in your own training
+  loop, or let `DistillationStrategy` manage the optimizer loop. Define custom
+  losses through `BaseDistillationLoss` without depending on FastGen.
+  Use `CheckpointStateBundle` to resume models, optimizers, and loss statistics.
+  These alpha APIs may change without backward compatibility. Distillation is
+  opt-in, with optional dependencies available through extras. Existing diffusion
+  training and inference remain unchanged, and distilled models continue to use
+  PhysicsNeMo inference APIs.
 - Adds `DiffusionExtraTimes` and `DiffusionExtraOutputs` to
   `physicsnemo.diffusion` for utilities that carry named times or auxiliary
   outputs. Compatible model interfaces and preconditioners can accept

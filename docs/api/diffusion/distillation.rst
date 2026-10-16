@@ -265,11 +265,103 @@ Keep phase selection and f-distill statistics updates outside compilation.
 Check combined domain parallelism and FSDP on your target hardware before
 a long training run.
 
+Optional training strategy
+--------------------------
+
+``DistillationStrategy`` runs a distillation loss with named optimizers,
+alternating phases, gradient accumulation, and checkpoints. The loss object
+computes loss values. The strategy manages backward passes and optimizer updates.
+
+Use the strategy when you want a training loop for an existing loss. Call the
+same loss directly when your recipe needs its own loop. Install
+``nvidia-physicsnemo[diffusion-strategy]`` to use the strategy. Add
+``diffusion-fastgen`` for FastGen losses, or supply a custom loss without FastGen.
+
+.. code-block:: python
+
+   from physicsnemo.diffusion.distillation import DistillationStrategy
+
+   strategy = DistillationStrategy(
+       models={"student": student, "teacher": teacher, "fake_score": fake_score},
+       loss_fn=loss_fn,
+       optimizer_configs={
+           role: [{"optimizer_cls": torch.optim.Adam,
+                   "optimizer_kwargs": {"lr": 1e-4}}]
+           for role in ("student", "fake_score")
+       },
+       num_steps=10_000,
+       devices=[torch.device("cuda")],
+       accumulation_steps=2,
+   )
+   strategy.run(batches)  # TensorDict batches with x0 and optional loss arguments
+   strategy.save_checkpoint("checkpoints", epoch=10_000, include_rng=True)
+
+Call ``train_batch(batch)`` when your recipe controls batch iteration. Each
+batch produces one loss. The strategy computes gradients through the mean of
+``total_loss``, divided by ``accumulation_steps``. A custom ``training_fn(models, batch)`` can
+adapt batch fields to loss arguments. Let the loss call the models. The loss
+receives ``phase``, ``step``, and ``update_state=True`` from the strategy. Reserve
+these batch keys and ``return_outputs`` for the strategy.
+
+For explicit MeanFlow times, keep ``t`` and ``r`` as separate batch tensors.
+Assemble the time tuple in ``training_fn`` because a TensorDict cannot store
+this tuple as a tensor field:
+
+.. code-block:: python
+
+   from physicsnemo.diffusion import DiffusionExtraTimes
+
+   def meanflow_arguments(models, batch):
+       return {
+           "x0": batch["x0"],
+           "t": (batch["t"], DiffusionExtraTimes(r=batch["r"], batch_size=batch.batch_size)),
+       }
+
+   strategy = DistillationStrategy(
+       models={"student": student}, loss_fn=loss_fn,
+       optimizer_configs=optimizer_configs, num_steps=1000,
+       training_fn=meanflow_arguments,
+   )
+
+Single-phase training updates the student. With auxiliary optimizer roles, the
+default repeats one student update and four auxiliary updates. Supply
+``phase_fn(step)`` and ``phase_roles`` to change that policy. Steps count completed
+optimizer updates, not batches. Accumulation keeps a fixed phase. Inactive
+optimizers and their schedulers do not advance. Custom losses must control
+gradient flow through their model calls. Phase selection does not freeze
+inactive models. With ``precision=torch.float16``, gradient scaling skips the
+whole active phase if any active optimizer has infinite or NaN gradients.
+``precision=torch.bfloat16`` enables autocast without scaling. Use update hooks
+for policies such as gradient clipping.
+
+Set ``num_steps`` to the desired count of completed optimizer updates.
+Or set ``num_epochs`` with a data loader that has a length.
+Its total batch count must divide evenly by ``accumulation_steps``.
+Skipped updates can require extra epochs to finish the requested updates.
+
+Compile and wrap your models before constructing the loss and strategy.
+The strategy preserves your choices of training modes and frozen parameters.
+If a setup hook wraps a model used by a custom loss, supply
+``bind_models_fn(loss_fn, models)`` to update that loss's model references.
+Wrap before construction if wrapping replaces parameters.
+
+To track an EMA, initialize its target model, add it to ``models`` as ``ema``,
+and set ``ema_models={"student": "ema"}``. The strategy updates it after each
+successful student update. Keep inference and validation in your recipe.
+
+The strategy uses ``CheckpointStateBundle`` for all roles, optimizers, schedulers,
+loss statistics, counters, EMA targets, and AMP scaler state. Hooks with both
+``state_dict`` and ``load_state_dict`` contribute their state. Reconstruct matching
+hooks, settings, and phase callbacks before calling ``load_checkpoint``.
+Save checkpoints after a batch that completes an optimizer update, not during
+accumulation. Add your own data-loader cursor checkpoint if you need exact
+batch resumption.
+
 Restarting training
 -------------------
 
 ``CheckpointStateBundle`` groups named models, optimizers, and loss statistics
-for a training restart. A single-model checkpoint stores one model; a bundle
+for a training restart. A single-model checkpoint stores one model. A bundle
 keeps the state of the participating models and optimizers together.
 
 Use the model's checkpoint API when you only need its weights for inference.
