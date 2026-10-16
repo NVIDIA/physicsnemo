@@ -16,6 +16,7 @@
 
 r"""Alpha diffusion distillation APIs with optional training backends."""
 
+import importlib
 import warnings
 
 from physicsnemo.core.warnings import ExperimentalFeatureWarning
@@ -36,4 +37,12 @@ __all__ = [
     "LossMap",
     "DistillationLoss",
     "WeightedDistillationLoss",
+    "DistillationStrategy",
 ]
+
+
+def __getattr__(name: str):
+    r"""Load the optional training strategy only when requested."""
+    if name == "DistillationStrategy":
+        return importlib.import_module(f"{__name__}.strategy").DistillationStrategy
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

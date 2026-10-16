@@ -79,6 +79,28 @@ class _ObjectiveReduction:
 class _FastGenBinding:
     r"""Connect student and teacher models and collect batch loss outputs."""
 
+    def _bind_execution_models(self, models: Mapping[str, torch.nn.Module]) -> None:
+        r"""Rebind wrappers only when they keep the configured role parameters."""
+        for role, attribute in (
+            ("student", "net"),
+            ("teacher", "teacher"),
+            ("fake_score", "fake_score"),
+            ("discriminator", "discriminator"),
+        ):
+            adapter = getattr(self, attribute, None)
+            if adapter is None:
+                continue
+            if role not in models:
+                raise ValueError(f"Missing configured loss role {role!r}.")
+            replacement = models[role]
+            if {id(value) for value in adapter.model.parameters()} != {
+                id(value) for value in replacement.parameters()
+            }:
+                raise ValueError(
+                    f"Execution wrapper for {role!r} must preserve parameter identities; wrap before constructing the loss otherwise."
+                )
+            adapter.model = replacement
+
     def _jvp(self, *args: Any, **kwargs: Any) -> Float[Tensor, " B *dims"]:
         r"""Use differentiable attention kernels for backend tangent calculations."""
         with sdpa_kernel(SDPBackend.MATH):
