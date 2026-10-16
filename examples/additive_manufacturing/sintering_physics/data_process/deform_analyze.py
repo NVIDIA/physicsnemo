@@ -195,9 +195,9 @@ def read_solutions_data_temp_anchor(
             del_w.append(p_uvw[2])
 
     plot_p_deform(
-        build_name,
         temp_list,
         key_list=key_list,
+        stage_keys=None,
         del_u=del_u,
         del_v=del_v,
         del_w=del_w,
