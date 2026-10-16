@@ -17,16 +17,21 @@
 import math
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from functools import partial
 from typing import Any, Tuple
 
 import torch
-from jaxtyping import Float
+from jaxtyping import Float, Shaped
 from tensordict import TensorDict
 from torch.distributed.tensor import DTensor
 from torch.distributed.tensor.placement_types import Replicate
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
+from physicsnemo.diffusion.base import (
+    DiffusionExtraOutputs,
+    DiffusionExtraTimes,
+)
 
 
 def _ensure_plain_tensor(t: torch.Tensor) -> torch.Tensor:
@@ -65,8 +70,8 @@ class BaseAffinePreconditioner(Module, ABC):
     transformation.
 
     This class provides a standardized interface for implementing
-    preconditioners that use affine transformations of the model
-    input and output.
+    preconditioners that use affine transformations of the model input and
+    output.
 
     The preconditioner wraps a neural network model :math:`F` and applies
     a preconditioning formula to transform the network output to produce
@@ -90,7 +95,7 @@ class BaseAffinePreconditioner(Module, ABC):
     The wrapped model :math:`F` must be an instance of
     :class:`~physicsnemo.core.Module` that satisfies the
     :class:`~physicsnemo.diffusion.DiffusionModel` interface, with the
-    following signature:
+    following signature for a single diffusion time and prediction tensor:
 
     .. code-block:: python
 
@@ -100,6 +105,16 @@ class BaseAffinePreconditioner(Module, ABC):
             condition: torch.Tensor | TensorDict | None = None,
             **model_kwargs: Any,
         ) -> torch.Tensor  # Shape: (B, *)
+
+    .. note::
+
+        Models can also accept ``(t, extra_times)`` with
+        :class:`~physicsnemo.diffusion.DiffusionExtraTimes` and return
+        ``(prediction, extra_outputs)`` with
+        :class:`~physicsnemo.diffusion.DiffusionExtraOutputs`.
+        Every supplied time tensor uses the same time-to-noise mapping and
+        noise encoding as the primary time. The affine formula transforms
+        only the prediction tensor. Auxiliary outputs pass through unchanged.
 
     The preconditioner is agnostic to the prediction target of the wrapped
     model :math:`F`. The same preconditioning formula is applied regardless of
@@ -128,8 +143,11 @@ class BaseAffinePreconditioner(Module, ABC):
     x : torch.Tensor
         Noisy latent state of shape :math:`(B, *)` where :math:`B` is the
         batch size and :math:`*` denotes any number of additional dimensions.
-    t : torch.Tensor
-        Diffusion time tensor of shape :math:`(B,)`.
+    t : torch.Tensor or tuple[torch.Tensor, DiffusionExtraTimes]
+        Diffusion time for each sample, with shape :math:`(B,)`. Pass
+        ``(t, extra_times)`` to supply extra named diffusion times in
+        :class:`~physicsnemo.diffusion.DiffusionExtraTimes`.
+        The preconditioner encodes every supplied time for the backbone.
     condition : torch.Tensor, TensorDict, or None, optional, default=None
         Single Tensor or a TensorDict containing conditioning tensors with
         batch size :math:`B` matching that of ``x``. Pass ``None`` for an
@@ -140,9 +158,10 @@ class BaseAffinePreconditioner(Module, ABC):
 
     Outputs
     -------
-    torch.Tensor
-        Preconditioned model output with the same shape as the original model
-        output.
+    torch.Tensor or tuple[torch.Tensor, DiffusionExtraOutputs]
+        Preconditioned prediction with the shape of ``x``, optionally paired
+        with auxiliary outputs. The affine formula transforms only the
+        prediction; auxiliary outputs keep their values and gradients.
 
     Note
     ----
@@ -182,7 +201,8 @@ class BaseAffinePreconditioner(Module, ABC):
     method since :math:`\sigma(t) = t` (noise level and diffusion time are the
     same).
 
-    We first define a simple model to wrap:
+    First, define a small backbone with the required call signature. Its
+    convolution provides a prediction with the same shape as its input:
 
     >>> import torch
     >>> from tensordict import TensorDict
@@ -196,7 +216,8 @@ class BaseAffinePreconditioner(Module, ABC):
     ...     def forward(self, x, t, condition=None):
     ...         return self.net(x)
 
-    Now we define the EDM preconditioner:
+    The subclass below supplies the four EDM coefficients. It wraps the
+    backbone and keeps the original prediction shape:
 
     >>> from physicsnemo.diffusion.preconditioners import (
     ...     BaseAffinePreconditioner,
@@ -225,9 +246,9 @@ class BaseAffinePreconditioner(Module, ABC):
     >>> out.shape
     torch.Size([2, 3, 16, 16])
 
-    The following example shows how to override the :meth:`sigma` method to
-    implement a Variance Exploding (VE) preconditioner where
-    :math:`\sigma(t) = \sqrt{t}`.
+    A different schedule can override :meth:`sigma` while retaining the
+    preconditioner interface. This VE example uses
+    :math:`\sigma(t) = \sqrt{t}`:
 
     >>> class VEPreconditioner(BaseAffinePreconditioner):
     ...     def __init__(self, model):
@@ -256,17 +277,16 @@ class BaseAffinePreconditioner(Module, ABC):
 
     Some models in PhysicsNeMo have signatures that differ from the
     :class:`~physicsnemo.diffusion.DiffusionModel` interface. Below are
-    examples showing how to write thin wrappers to make them compatible
-    with preconditioners, including image-based conditioning via channel
+    examples showing thin wrappers that make them compatible with
+    preconditioners. They also show image conditioning through channel
     concatenation.
 
     **Example: Wrapping SongUNet**
 
     The :class:`~physicsnemo.models.diffusion_unets.SongUNet` model has
     the signature ``forward(x, noise_labels, class_labels, augment_labels)``.
-    We wrap it to match ``forward(x, t, condition)``, where ``condition``
-    contains both class labels (1D vector) and an image to concatenate
-    channel-wise:
+    We wrap it to match ``forward(x, t, condition)``. The condition carries
+    class labels as a vector and an image to concatenate along channels:
 
     >>> from physicsnemo.models.diffusion_unets import SongUNet
     >>> from physicsnemo.diffusion import DiffusionModel
@@ -309,8 +329,8 @@ class BaseAffinePreconditioner(Module, ABC):
 
     The :class:`~physicsnemo.models.dit.DiT` model has
     the signature ``forward(x, t, condition, ...)``. We wrap it to support
-    both image conditioning (via channel concatenation) and vector
-    conditioning:
+    both image conditioning through channel concatenation and vector
+    conditioning. The adapter passes the vector to DiT's ``condition`` input:
 
     >>> from physicsnemo.models.dit import DiT
     >>> class DiTWrapper(Module):
@@ -355,7 +375,8 @@ class BaseAffinePreconditioner(Module, ABC):
     is also passed as a separate argument) is common across several diffusion
     use-cases.
     Thus for convenience, we provide the wrapper class :class:`~physicsnemo.diffusion.utils.ConcatConditionWrapper`
-    to save you the trouble of writing your own wrapper for this common pattern:
+    to use this common pattern. The example pairs it with an EDM
+    preconditioner and checks the output shape:
 
     >>> from physicsnemo.diffusion.preconditioners import EDMPreconditioner
     >>> from physicsnemo.diffusion.utils import ConcatConditionWrapper
@@ -451,13 +472,34 @@ class BaseAffinePreconditioner(Module, ABC):
         tracing.  The default implementation is a no-op.
         """
 
+    def _encode_time(
+        self,
+        t: Float[torch.Tensor, " B"],
+        x: Float[torch.Tensor, " B *dims"],
+        c_noise: Float[torch.Tensor, " B *ones"] | None = None,
+    ) -> Float[torch.Tensor, " B"]:
+        r"""Encode a diffusion time, reusing its noise coefficient when available."""
+        if c_noise is None:
+            shape = (-1,) + (1,) * (x.ndim - 1)
+            sigma = self.sigma(t).reshape(shape)  # (B, 1, ...)
+            _, c_noise, _, _ = self.compute_coefficients(_ensure_plain_tensor(sigma))
+        c_noise = _ensure_plain_tensor(c_noise)
+        if isinstance(x, DTensor):
+            c_noise = _replicate_on_mesh(c_noise, x.device_mesh)
+        return c_noise.flatten()  # (B,)
+
     def forward(
         self,
-        x: torch.Tensor,
-        t: torch.Tensor,
-        condition: torch.Tensor | TensorDict | None = None,
+        x: Float[torch.Tensor, " B *dims"],
+        t: Float[torch.Tensor, " B"]
+        | tuple[Float[torch.Tensor, " B"], Shaped[DiffusionExtraTimes, " B"]],
+        condition: Float[torch.Tensor, " B *cond_dims"] | TensorDict | None = None,
         **model_kwargs: Any,
-    ) -> torch.Tensor:
+    ) -> (
+        Float[torch.Tensor, " B *dims"]
+        | tuple[Float[torch.Tensor, " B *dims"], Shaped[DiffusionExtraOutputs, " B"]]
+    ):
+        t, extra_times = t if isinstance(t, tuple) else (t, None)
         if not torch.compiler.is_compiling():
             B = x.shape[0]
             if t.shape != (B,):
@@ -465,6 +507,11 @@ class BaseAffinePreconditioner(Module, ABC):
                     f"Expected t to have shape ({B},) matching batch size of "
                     f"x, but got {t.shape}."
                 )
+            if extra_times is not None:
+                if extra_times.batch_size != torch.Size([B]):
+                    raise ValueError(
+                        f"Expected time batch size [{B}], got {extra_times.batch_size}."
+                    )
             if isinstance(condition, TensorDict):
                 if condition.batch_size and condition.batch_size[0] != B:
                     raise ValueError(
@@ -481,7 +528,7 @@ class BaseAffinePreconditioner(Module, ABC):
 
         # Map time step to noise level via sigma method
         expected_shape = (-1,) + (1,) * (x.ndim - 1)
-        sigma_t = self.sigma(t).reshape(expected_shape)
+        sigma_t = self.sigma(t).reshape(expected_shape)  # (B, 1, ...)
 
         # Compute preconditioning coefficients
         # Unwrap to plain tensors so that element-wise arithmetic between
@@ -495,9 +542,7 @@ class BaseAffinePreconditioner(Module, ABC):
         # tensors, then re-promote to replicated DTensors on x's mesh when
         # x is a ShardTensor so that element-wise arithmetic between
         # coefficients and data is type-compatible.
-        c_in, c_noise, c_out, c_skip = (
-            _ensure_plain_tensor(c) for c in (c_in, c_noise, c_out, c_skip)
-        )
+        c_in, c_out, c_skip = (_ensure_plain_tensor(c) for c in (c_in, c_out, c_skip))
 
         # Only manually promote coefficients for genuine (non-Shard) DTensor
         # activations. A ShardTensor subclasses torch.Tensor (not DTensor), so
@@ -507,28 +552,32 @@ class BaseAffinePreconditioner(Module, ABC):
         # otherwise breaks ops like PositionalEmbedding's torch.outer).
         if isinstance(x, DTensor):
             x_mesh = x.device_mesh
-            c_in, c_noise, c_out, c_skip = (
-                _replicate_on_mesh(c, x_mesh) for c in (c_in, c_noise, c_out, c_skip)
+            c_in, c_out, c_skip = (
+                _replicate_on_mesh(c, x_mesh) for c in (c_in, c_out, c_skip)
             )
 
-        # Forward through the underlying model
+        model_t = self._encode_time(t, x, c_noise=c_noise)  # (B,)
+        if extra_times is not None:
+            model_t = (model_t, extra_times.apply(partial(self._encode_time, x=x)))
+
         if condition is not None:
             F_x = self.model(
                 c_in * x,
-                c_noise.flatten(),
+                model_t,
                 condition=condition,
                 **model_kwargs,
             )
         else:
             F_x = self.model(
                 c_in * x,
-                c_noise.flatten(),
+                model_t,
                 **model_kwargs,
             )
 
-        D_x = c_skip * x + c_out * F_x
-
-        return D_x
+        if isinstance(F_x, tuple):
+            prediction, extra_outputs = F_x
+            return c_skip * x + c_out * prediction, extra_outputs
+        return c_skip * x + c_out * F_x
 
 
 class VPPreconditioner(BaseAffinePreconditioner):
@@ -604,6 +653,10 @@ class VPPreconditioner(BaseAffinePreconditioner):
 
     Examples
     --------
+    The VP coefficients map diffusion time to a noise level before calling
+    this convolutional backbone. The resulting prediction retains the image
+    shape for comparison with a clean-data target:
+
     >>> import torch
     >>> from physicsnemo.core import Module
     >>> # Define a simple model satisfying the diffusion model interface
@@ -742,6 +795,10 @@ class VEPreconditioner(BaseAffinePreconditioner):
 
     Examples
     --------
+    This VE preconditioner wraps a convolutional backbone whose prediction
+    matches the image shape. Passing one time per image produces one
+    preconditioned prediction per image:
+
     >>> import torch
     >>> from physicsnemo.core import Module
     >>> # Define a simple model satisfying the diffusion model interface
@@ -857,6 +914,10 @@ class IDDPMPreconditioner(BaseAffinePreconditioner):
 
     Examples
     --------
+    This iDDPM preconditioner receives a time for each image and calls a
+    convolutional backbone. It returns a clean-data prediction with the
+    same batch and spatial dimensions:
+
     >>> import torch
     >>> from physicsnemo.core import Module
     >>> # Define a simple model satisfying the diffusion model interface
@@ -1005,7 +1066,9 @@ class EDMPreconditioner(BaseAffinePreconditioner):
 
     Examples
     --------
-    Scalar ``sigma_data`` (default):
+    The first example uses one ``sigma_data`` value for all channels. A
+    convolutional backbone supplies the raw prediction, and EDM applies its
+    coefficients to produce a clean-data estimate:
 
     >>> import torch
     >>> from physicsnemo.core import Module
@@ -1024,8 +1087,8 @@ class EDMPreconditioner(BaseAffinePreconditioner):
     >>> out.shape
     torch.Size([2, 3, 16, 16])
 
-    Per-channel ``sigma_data`` for heterogeneous channels (e.g. weather
-    variables with different scales):
+    The second example gives each channel its own ``sigma_data``. This is
+    useful for variables with different scales, such as weather fields:
 
     >>> precond_ch = EDMPreconditioner(model, sigma_data=[0.3, 0.5, 0.7])
     >>> out_ch = precond_ch(x, t, condition=None)

@@ -117,7 +117,8 @@ layers =
    samplers | metrics
    multi_diffusion | preconditioners | guidance
    noise_schedulers
-   utils | base
+   utils
+   base
 
 [importlinter:contract:physicsnemo-sym]
 name = Control Internal Dependencies in PhysicsNeMo sym
