@@ -190,6 +190,8 @@ Multi-GPU (Distributed Data Parallel):
 torchrun --nproc_per_node=<NUM_GPUS> train.py --config-name=bumper_geotransolver_oneshot
 ```
 
+**Memory note (Zarr + DDP):** `DistributedSampler` shards **sample indices** across ranks, not dataset memory. Each rank still constructs its own dataset object. Without lazy loading, the Zarr reader materializes every run into host RAM at construction time, so memory scales roughly with `world_size × dataset_size`. The built-in Zarr reader defaults to `lazy_load: true` (see `conf/reader/zarr.yaml`), loading mesh trajectories and point features on first access in `__getitem__`. Set `reader.lazy_load=false` only for small datasets or debugging.
+
 ## Inference
 
 Use `inference.py` to evaluate trained models on test crash runs. Outputs are written under `output_dir_pred/rank{N}/{run_name}/`.
@@ -517,7 +519,8 @@ A Zarr reader provided in `zarr_reader.py`. It reads pre-processed Zarr stores c
 - loads pre-computed temporal positions directly from `mesh_pos` (no displacement reconstruction)
 - loads pre-computed edges (no connectivity-to-edge conversion needed)
 - dynamically extracts all point data fields (thickness, etc.) from the Zarr store
-- returns `(srcs, dsts, point_data)` similar to VTP reader
+- supports **lazy loading** (`lazy_load: true` by default) so large datasets do not fully materialize at dataset construction—important for multi-GPU training
+- returns `(srcs, dsts, point_data, global_features)` similar to the VTP reader (global features are empty for Zarr)
 
 Data layout expected by Zarr reader:
 - `<DATA_DIR>/*.zarr/` (each `.zarr` directory is treated as one run)
@@ -531,6 +534,7 @@ Example Hydra configuration for the Zarr reader:
 ```yaml
 # conf/reader/zarr.yaml
 _target_: zarr_reader.Reader
+lazy_load: true   # recommended for large datasets and DDP; set false to eager-load all runs
 ```
 
 Select it in your experiment config defaults:
