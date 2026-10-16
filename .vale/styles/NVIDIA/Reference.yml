@@ -1,0 +1,8 @@
+# House style (per tech-writer convention): direct readers with
+# "refer to" rather than "see".
+extends: existence
+message: "Prefer 'refer to' over 'see' when directing readers to other content."
+level: suggestion
+ignorecase: true
+tokens:
+  - 'see (?:the|this|these|those|above|below|also)\b'

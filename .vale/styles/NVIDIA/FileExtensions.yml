@@ -1,0 +1,9 @@
+# NVIDIA writing guidelines (Technical Content > File Name Extensions):
+# Extensions are lowercase with a period (a .tgz file); file types are
+# uppercase without a period (a TGZ file).
+extends: existence
+message: "Use lowercase for file name extensions ('%s'); reserve uppercase (no period) for the file type."
+level: warning
+ignorecase: false
+raw:
+  - '\.(?:ZIP|TAR|TGZ|GZ|BZ2|PDF|PNG|JPE?G|GIF|SVG|YAML|YML|JSON|XML|CSV|TXT|PY|RST|MD|SH|EXE|DEB|RPM|ONNX|WHL|HTML?)\b'

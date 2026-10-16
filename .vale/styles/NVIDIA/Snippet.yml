@@ -1,0 +1,8 @@
+# NVIDIA writing guidelines (Technical Content > Code Elements or Examples):
+# "Avoid using the term snippet."
+extends: existence
+message: "Avoid the term '%s'; use 'code example' instead."
+level: warning
+ignorecase: true
+tokens:
+  - snippets?

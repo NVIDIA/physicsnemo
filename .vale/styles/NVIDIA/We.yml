@@ -1,0 +1,12 @@
+# Adapted from the MIT-licensed Microsoft style for Vale
+# (https://github.com/errata-ai/Microsoft).
+extends: existence
+message: "Try to avoid using first-person plural like '%s'."
+level: suggestion
+ignorecase: true
+tokens:
+  - we
+  - we'(?:ve|re)
+  - ours?
+  - us
+  - let's
