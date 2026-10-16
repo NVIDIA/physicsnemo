@@ -77,7 +77,7 @@ def _build_edge_to_triangle_pairs(
     """
     ### Hash candidate edges (canonicalized) and map to unique edge indices
     sorted_cands = sort_index_tuples(candidate_edges)
-    cand_hash = sorted_cands[:, 0] * index_bound + sorted_cands[:, 1]
+    cand_hash = sorted_cands[:, 0].long() * index_bound + sorted_cands[:, 1]
 
     sorted_unique_hash, unique_sort_perm = torch.sort(unique_edge_hashes)
     positions = torch.searchsorted(sorted_unique_hash, cand_hash)
@@ -146,7 +146,7 @@ def compute_butterfly_weights_2d(
     # Canonical (sorted) hashes for the unique edges
     sorted_unique = sort_index_tuples(unique_edges)
     index_bound = mesh.n_points
-    unique_hash = sorted_unique[:, 0] * index_bound + sorted_unique[:, 1]
+    unique_hash = sorted_unique[:, 0].long() * index_bound + sorted_unique[:, 1]
 
     # Pair table: (n_edges, 2), with -1 for missing second triangle
     edge_tri_pairs = _build_edge_to_triangle_pairs(
@@ -217,7 +217,7 @@ def compute_butterfly_weights_2d(
     for wing_edge, known_tri in wing_edges_and_known_tris:
         # Hash the wing edges and look them up in the unique edge set
         ws = sort_index_tuples(wing_edge)
-        whash = ws[:, 0] * index_bound + ws[:, 1]
+        whash = ws[:, 0].long() * index_bound + ws[:, 1]
 
         pos = torch.searchsorted(sorted_uhash, whash).clamp(max=n_uhash - 1)
         matched = sorted_uhash[pos] == whash

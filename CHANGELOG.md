@@ -284,6 +284,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `__init__` with tensordict 0.15, whose tensorclass subclasses inherit the
   parent's `__init__`. The base `__init__` accepts and stores the fields that a
   subclass declares, and still raises `TypeError` for any other keyword.
+- Linear subdivision of tetrahedral meshes keeps the orientation of every
+  child cell. Before, half of the children came out inverted.
+- Meshes with `int32` connectivity give the same results as `int64` ones in
+  Butterfly and Loop subdivision, edge lookups and `refit_mesh_to_implicit`.
+  Before, large meshes could get wrong Butterfly midpoints and edge matches,
+  Loop subdivision raised on open surfaces, and `refit_mesh_to_implicit` could
+  leave boundary vertices off the surface.
+- Loop subdivision of `float64` meshes computes its vertex weights in
+  `float64`. Before, it computed them in `float32`, which limited the new
+  vertex positions to `float32` precision.
 - A mesh saved with cached adjacencies now loads in a new Python process.
   Before, `Mesh.load` raised unless `physicsnemo.mesh.neighbors` was already
   imported.

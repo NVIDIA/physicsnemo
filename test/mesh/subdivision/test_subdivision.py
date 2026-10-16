@@ -20,6 +20,8 @@ Tests linear, butterfly, and loop subdivision schemes across various
 manifold dimensions, spatial dimensions, and codimensions.
 """
 
+import math
+
 import pytest
 import torch
 
@@ -143,6 +145,26 @@ class TestLinearSubdivision:
         # After 1 level: 4 + 6 = 10 points, 1 * 8 = 8 tets
         assert subdivided.n_points == 10
         assert subdivided.n_cells == 8
+
+    def test_tet_subdivision_preserves_orientation(self, device):
+        """Regression: every child tet keeps the parent's orientation.
+
+        Midpoint subdivision splits a tet into 8 children of equal volume, so
+        each child's signed volume is 1/8 of the parent's.
+        """
+        mesh = create_tet_mesh(device)
+
+        def signed_volumes(m):
+            v = m.points[m.cells]
+            return torch.linalg.det(v[:, 1:] - v[:, :1]) / 6
+
+        parent_volume = signed_volumes(mesh)[0]
+        assert parent_volume > 0
+        subdivided = mesh.subdivide(levels=1, filter="linear")
+        torch.testing.assert_close(
+            signed_volumes(subdivided),
+            torch.full((8,), parent_volume.item() / 8, device=device),
+        )
 
     def test_multi_level_subdivision(self, device):
         """Test multiple levels of subdivision."""
@@ -345,6 +367,29 @@ class TestButterflySubdivision:
             # Acceptable to not support non-2D manifolds
             assert "manifold" in str(e).lower() or "dimension" in str(e).lower()
 
+    def test_butterfly_int32_cells_match_int64(self, device):
+        """Regression: int32 connectivity gives the same result as int64.
+
+        With 100000 points, edges (0, 1) and (42949, 67297) have edge hashes
+        1 and 2**32 + 1, which collide if the hash is computed in int32.
+        """
+        n_points = 100_000
+        points = torch.rand(
+            n_points, 3, generator=torch.Generator().manual_seed(0), dtype=torch.float64
+        ).to(device)
+        cells = torch.tensor(
+            [
+                [0, 1, 2],
+                [1, 0, 3],
+                [42949, 67297, 4],
+                [67297, 42949, 5],
+            ],
+            device=device,
+        )
+        expected = Mesh(points=points, cells=cells).subdivide(1, "butterfly")
+        actual = Mesh(points=points, cells=cells.int()).subdivide(1, "butterfly")
+        torch.testing.assert_close(actual.points, expected.points)
+
 
 ### Test Loop Subdivision
 
@@ -411,6 +456,36 @@ class TestLoopSubdivision:
         area_std = areas.std() / areas.mean()
         assert area_std < 1.0, (
             "Loop subdivision should produce reasonably uniform cell areas"
+        )
+
+    def test_loop_open_mesh_int32_cells_match_int64(self, device):
+        """Regression: Loop on an open mesh with int32 connectivity."""
+        mesh = create_triangle_mesh(device)
+        expected = mesh.subdivide(levels=1, filter="loop")
+        mesh_int32 = Mesh(points=mesh.points, cells=mesh.cells.int())
+        actual = mesh_int32.subdivide(levels=1, filter="loop")
+        torch.testing.assert_close(actual.points, expected.points)
+        assert torch.equal(actual.cells.long(), expected.cells)
+
+    def test_loop_vertex_rule_float64_precision(self, device):
+        """Regression: Loop weights are computed in float64 for float64 meshes."""
+        from physicsnemo.mesh.primitives.surfaces import icosahedron_surface
+
+        mesh = icosahedron_surface.load(device=device)
+        mesh = Mesh(points=mesh.points.double(), cells=mesh.cells)
+
+        # Every icosahedron vertex has valence 5
+        n = 5
+        beta = (5 / 8 - (3 / 8 + math.cos(2 * math.pi / n) / 4) ** 2) / n
+        neighbor_sums = torch.zeros_like(mesh.points)
+        edges = mesh.cells[:, [0, 1, 1, 2, 2, 0]].reshape(-1, 2)
+        # Each edge appears in two triangles, once in each direction
+        neighbor_sums.index_add_(0, edges[:, 0], mesh.points[edges[:, 1]])
+        expected = (1 - n * beta) * mesh.points + beta * neighbor_sums
+
+        subdivided = mesh.subdivide(levels=1, filter="loop")
+        torch.testing.assert_close(
+            subdivided.points[: mesh.n_points], expected, rtol=0, atol=1e-14
         )
 
 

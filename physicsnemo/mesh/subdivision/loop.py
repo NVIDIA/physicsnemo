@@ -99,8 +99,11 @@ def reposition_original_vertices_2d(
     # Else: beta = (1/n) * (5/8 - (3/8 + 1/4 * cos(2π/n))²)
     # Shape: (n_points,)
 
-    cos_term = 3.0 / 8.0 + 0.25 * torch.cos(2.0 * torch.pi / valences.float())
-    beta_else = (1.0 / valences.float()) * (5.0 / 8.0 - cos_term * cos_term)
+    # Weights are computed in the points' dtype, but at least float32
+    weight_dtype = torch.promote_types(mesh.points.dtype, torch.float32)
+    valences_float = valences.to(weight_dtype)
+    cos_term = 3.0 / 8.0 + 0.25 * torch.cos(2.0 * torch.pi / valences_float)
+    beta_else = (1.0 / valences_float) * (5.0 / 8.0 - cos_term * cos_term)
     beta = torch.where(valences == 3, 3.0 / 16.0, beta_else)
     # Handle isolated vertices (valence=0) - beta should be 0 to keep original position
     beta = torch.where(valences > 0, beta, 0.0)
@@ -140,7 +143,7 @@ def reposition_original_vertices_2d(
     ### Apply the interior Loop formula for all points at once
     # new_pos = (1 - n*beta) * old_pos + beta * sum(neighbors)
     # Shape: (n_points, n_spatial_dims)
-    valences_expanded = valences.unsqueeze(-1).float()  # (n_points, 1)
+    valences_expanded = valences_float.unsqueeze(-1)  # (n_points, 1)
     beta_expanded = beta.unsqueeze(-1)  # (n_points, 1)
 
     interior_new_positions = (
@@ -157,7 +160,7 @@ def reposition_original_vertices_2d(
     # special-cases boundary *edges*; this makes the *vertex* rule consistent.)
     from physicsnemo.mesh.boundaries import get_boundary_edges
 
-    boundary_edges = get_boundary_edges(mesh)  # (n_boundary_edges, 2)
+    boundary_edges = get_boundary_edges(mesh).long()  # (n_boundary_edges, 2)
 
     if len(boundary_edges) == 0:
         return interior_new_positions

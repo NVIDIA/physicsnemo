@@ -104,13 +104,13 @@ def get_subdivision_pattern(
         return torch.tensor(
             [
                 [0, 4, 5, 6],  # Corner at v0
-                [1, 4, 7, 8],  # Corner at v1
+                [1, 4, 8, 7],  # Corner at v1
                 [2, 5, 7, 9],  # Corner at v2
-                [3, 6, 8, 9],  # Corner at v3
-                [4, 5, 7, 8],  # Inner tet 1
+                [3, 6, 9, 8],  # Corner at v3
+                [4, 5, 8, 7],  # Inner tet 1
                 [5, 6, 8, 9],  # Inner tet 2
                 [4, 5, 6, 8],  # Inner tet 3
-                [5, 7, 8, 9],  # Inner tet 4
+                [5, 7, 9, 8],  # Inner tet 4
             ],
             dtype=torch.int64,
         )
