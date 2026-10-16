@@ -220,6 +220,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the mesh, instead of `tolerance` in mesh units. Results no longer depend on
   the mesh's length unit and are identical when the mesh and query points are
   scaled by a power of two.
+- Mesh BVH queries, and with them `validate`, `Mesh.clean()`, point
+  containment and sampling, use up to 2.7x less peak memory. Results are
+  unchanged.
 - `fix_orientation` orients cells of any dimension and is 6x faster on the
   DrivAerML surface. Cells that fill their space, such as tetrahedra in 3D,
   come out with positive volumes. Its stats add `n_cells_flipped`, with
