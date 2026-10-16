@@ -1,10 +1,10 @@
-Distillation losses
+Distillation Losses
 ===================
 
 .. warning::
 
    This API is alpha. Imports emit ``ExperimentalFeatureWarning`` and future
-   releases may introduce changes that break backward compatibility.
+   releases can introduce changes that break backward compatibility.
 
 ``DistillationLoss`` computes sCM, MeanFlow, DMD2, or f-distill losses for
 PhysicsNeMo models. Each call constructs training targets and returns a
@@ -14,7 +14,7 @@ Use it in your training loop with initialized models and a noise scheduler.
 Your loop controls backpropagation, optimizer updates, and checkpoints.
 Use PhysicsNeMo samplers for inference.
 
-Install the backend
+Install the Backend
 -------------------
 
 Install the optional ``diffusion-fastgen`` extra from this checkout:
@@ -26,13 +26,13 @@ Install the optional ``diffusion-fastgen`` extra from this checkout:
 This extra installs the FastGen version required by the built-in losses.
 You do not need FastGen to write your own loss using ``BaseDistillationLoss``.
 
-Train a student
+Train a Student
 ---------------
 
 Give your student the :class:`~physicsnemo.diffusion.base.DiffusionModel`
 interface. For MeanFlow, it receives ``(t, DiffusionExtraTimes(r=r, batch_size=[B]))``
-and predicts average velocity between these times. A teacher supplies
-instantaneous velocity at ``t``. Set its ``prediction_type`` if it predicts
+and predicts the average velocity between these times. A teacher supplies
+the instantaneous velocity at ``t``. Set its ``prediction_type`` if it predicts
 clean data, noise, or score instead.
 
 .. code-block:: python
@@ -54,24 +54,24 @@ clean data, noise, or score instead.
 
 Omit ``teacher`` to learn from the conditional velocity of paired data and noise.
 Backpropagate through ``total_loss`` only. Other entries are for logging and
-may duplicate parts of the total. ``return_outputs=True`` also returns
+can duplicate parts of the total. ``return_outputs=True`` also returns
 detached predictions and times without drawing extra samples.
 
 For sCM, select ``method="sCM"`` and return a prediction tensor paired with
-``DiffusionExtraOutputs(logvar=logvar, batch_size=[B])``. The prediction is
-always required. The ``logvar`` tensor has shape ``[B]`` and controls
+``DiffusionExtraOutputs(logvar=logvar, batch_size=[B])``. Always return
+the prediction. The ``logvar`` tensor has shape ``[B]`` and controls
 adaptive loss weighting. It does not describe diffusion posterior variance.
 The default student prediction type is ``"x0"``. A
 :class:`~physicsnemo.diffusion.preconditioners.TrigFlowPreconditioner` can provide
 this prediction from a normalized-velocity backbone.
 
-Control models and times
+Control Models and Times
 ------------------------
 
 ``model_options`` accepts role-specific mappings for ``student`` and ``teacher``.
 Use ``prediction_type="x0"``, ``"epsilon"``, ``"score"``, or ``"flow"`` to
 describe the model output. ``model_kwargs`` forwards extra model controls.
-For example, a model may need ``{"return_logvar": True}`` to produce ``logvar``.
+For example, some models need ``{"return_logvar": True}`` to produce ``logvar``.
 
 MeanFlow students receive both times in a tuple. Other model calls use a
 single time tensor. The extra-time container supplies only the
@@ -88,7 +88,8 @@ applies it at all diffusion times by default. Use
 
 By default, the loss uses the scheduler's ``sample_time`` distribution. Pass
 ``t=...`` to choose diffusion times directly. For MeanFlow, pass
-``(t, DiffusionExtraTimes(r=r, batch_size=[B]))``; the loss uses this pair as given.
+``(t, DiffusionExtraTimes(r=r, batch_size=[B]))``. The loss uses this pair as
+given.
 You can also supply ``sample_t_fn(N, *, device, dtype)`` at call time. This
 callback returns the same time structure and applies only to that call.
 
@@ -100,8 +101,8 @@ limits through ``model_options["student"]["scheduler_options"]["time_bounds"]``
 when the selected method or sampling policy needs them. sCM also needs a differentiable
 ``snr_inv`` implementation.
 
-Mask targets and weight residuals
---------------------------------
+Mask Targets and Weight Residuals
+---------------------------------
 
 ``WeightedDistillationLoss`` adds masks and element weights to the standard
 loss. Zero weights exclude entries from residuals, adaptive norms, and
@@ -124,7 +125,7 @@ time. Weights must be finite, nonnegative, and broadcast to the data shape.
 Replace invalid input values before calling the model. A loss mask cannot
 prevent corrupted inputs from affecting predictions at other locations.
 
-Compilation and state
+Compilation and State
 ---------------------
 
 To compile sCM or MeanFlow training, apply ``torch.compile`` to the enclosing
@@ -133,7 +134,7 @@ an exact Jacobian-vector product (JVP). If you compile only the model, select
 ``method_options={"use_jvp_finite_diff": True}`` to approximate the derivative
 with finite differences instead.
 
-With exact derivatives, MeanFlow updates stateful layers once per prediction
+With exact derivatives, MeanFlow updates stateful layers once for each prediction
 and shares random draws between the prediction and its derivative. These calculations use
 the math attention backend because fused kernels may not support these
 derivatives. Check your combination of compilation, mixed precision, and
@@ -143,8 +144,8 @@ Save your PhysicsNeMo models and optimizers as usual. Recreate the loss with
 the same noise schedules and settings when resuming. sCM and MeanFlow have no
 extra running statistics, so their ``state_dict`` results are empty.
 
-Alternate distribution-matching objectives
------------------------------------------
+Alternate Distribution-Matching Objectives
+------------------------------------------
 
 DMD2 and f-distill match a student's generated distribution to a fixed
 diffusion teacher. Unlike an ordinary denoising loss that trains a model on
@@ -177,10 +178,11 @@ optional adversarial loss. f-distill also weights this score
 matching by a selected f-divergence and requires a discriminator.
 
 Supply ``discriminator`` in ``auxiliary_models`` to enable adversarial training.
-The generator GAN coefficient defaults to ``0.001``. Set
+The generator's generative adversarial network (GAN) coefficient defaults
+to ``0.001``. Set
 ``gan_loss_weight_gen`` to change it. f-distill requires a positive coefficient.
 The discriminator accepts a TensorDict of named teacher features and returns
-scores with shape :math:`(B, L)`, where :math:`L` counts scores per sample.
+scores with shape :math:`(B, L)`, where :math:`L` is the number of scores for each sample.
 Supply a ``feature_fn(prediction, extras)`` callback to select those features
 from your teacher output. The teacher must still return its prediction.
 Feature fields are model-specific, not reserved diffusion outputs. The callback
@@ -221,7 +223,7 @@ student's ``scheduler_options``. Specify training times independently of your
 inference grid.
 Pass ``noise`` to control the score perturbation independently.
 
-Adversarial masking
+Adversarial Masking
 ~~~~~~~~~~~~~~~~~~~
 
 Adversarial masks exclude corrupted inputs during feature extraction and
@@ -249,7 +251,7 @@ R1 residuals. Zero weights also exclude scores and empty samples from f-distill
 ratio statistics. Positive residual weights remain linear. The callback receives
 both real and generated perturbations, including the R1 query when enabled.
 
-Distributed statistics and compilation
+Distributed Statistics and Compilation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 f-distill reduces ratio statistics over the default process group for ordinary
@@ -262,10 +264,51 @@ across spatial partitions when the architecture needs spatial aggregation.
 
 For DMD2, you can compile the individual models with ``torch.compile``.
 Keep phase selection and f-distill statistics updates outside compilation.
-Check combined domain parallelism and FSDP on your target hardware before
+Check combined domain parallelism and fully sharded data parallel (FSDP)
+training on your target hardware before
 a long training run.
 
-Custom implementations
+Restarting Training
+-------------------
+
+``CheckpointStateBundle`` groups named models, optimizers, and loss statistics
+for a training restart. A single-model checkpoint stores one model. A bundle
+keeps the state of the participating models and optimizers together.
+
+Use the model's checkpoint API when you only need its weights for inference.
+Use a bundle to resume training with optimizer state and loss statistics.
+Give each model a name, including fake-score, discriminator, and
+exponential moving average (EMA) models when present. Use these names for their optimizers:
+
+.. code-block:: python
+
+   from physicsnemo.diffusion.distillation import CheckpointStateBundle
+
+   bundle = CheckpointStateBundle(
+       {"student": student, "teacher": teacher, "fake_score": fake_score},
+       optimizers={"student": student_optimizer, "fake_score": fake_optimizer},
+       stateful={"loss": loss_fn},
+   )
+   bundle.save_checkpoint("checkpoints", epoch=20, progress={"step": 20}, include_rng=True)
+   progress = bundle.load_checkpoint("checkpoints", epoch=20, restore_rng=True)
+
+Recreate the same models, noise schedules, optimizers, and loss settings before
+loading. Save after completing an optimizer update and choose a new ``epoch``
+index each time. To restore a data-loader cursor, add it to ``stateful`` with
+``state_dict`` and ``load_state_dict`` methods. The bundle does not save pending
+gradients or reconstruct your training configuration.
+
+Call ``save_checkpoint`` and ``load_checkpoint`` on every rank, and restart with the same world size and
+parallel layout. The bundle uses the existing PhysicsNeMo checkpoint utilities.
+Use ``optimizer_models`` if optimizer and model names differ.
+Each optimizer saves a copy of its model weights, even when optimizers share
+a model.
+
+If loading fails, recreate your objects before retrying, because some
+objects might already contain restored state. You cannot overwrite an existing checkpoint
+index, even one from an incomplete save.
+
+Custom Implementations
 ----------------------
 
 ``BaseDistillationLoss`` defines the callable loss interface independently
@@ -277,7 +320,7 @@ containing a differentiable ``total_loss``. Add named entries for logging or
 extra arguments for your method as needed. The training loop computes gradients
 through ``total_loss`` and updates the model.
 
-API reference
+API Reference
 -------------
 
 .. automodule:: physicsnemo.diffusion.distillation
