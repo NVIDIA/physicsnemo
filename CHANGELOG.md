@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds an experimental, independently implemented SMART operator with sampled
   geometry encoding, reusable latent contexts, and chunked field decoding.
 
+- Adds `DiffusionExtraTimes` and `DiffusionExtraOutputs` to
+  `physicsnemo.diffusion` for utilities that carry named times or auxiliary
+  outputs. Compatible model interfaces and preconditioners can accept
+  `(t, extra_times)`, where `extra_times` is a `DiffusionExtraTimes` container,
+  and return `(prediction, extra_outputs)`, where `extra_outputs` is a
+  `DiffusionExtraOutputs` container. The reserved `r` field supports a
+  destination time as in MeanFlow. `logvar` supports learned loss weighting
+  as in sCM and EDM2. Existing single-time, single-prediction calls remain
+  unchanged. Existing DSM and flow-matching losses continue to consume
+  single tensors.
 - Adds standalone FLARE++ attention and model APIs, with input-conditioned
   dynamic routing, plus a ``GALE_FPP`` backend for using the same mixer inside
   GeoTransolver.
