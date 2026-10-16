@@ -113,9 +113,10 @@ exhaustive = True
 containers=
    physicsnemo.diffusion
 layers = 
+   distillation
    generate
    samplers | metrics
-   multi_diffusion | preconditioners | guidance
+   multi_diffusion | preconditioners | guidance | _fastgen
    noise_schedulers
    utils
    base

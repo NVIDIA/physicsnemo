@@ -52,7 +52,9 @@ class DiffusionExtraTimes(TensorClass):
     ----------
     r : torch.Tensor or None, optional, default=None
         Destination diffusion time for MeanFlow, with shape :math:`(B,)`.
-        Leave unset when the model does not use this field.
+        Used by :class:`~physicsnemo.diffusion.distillation.DistillationLoss`
+        with ``method="MeanFlow"``. Leave unset when the model does not use
+        this field.
     batch_size : sequence of int
         Set to ``[B]``, matching the primary time tensor.
 
@@ -129,7 +131,9 @@ class DiffusionExtraOutputs(TensorClass):
     ----------
     logvar : torch.Tensor or None, optional, default=None
         Learned log-scale for adaptive loss weighting in sCM and EDM2, with
-        shape :math:`(B,)`. Leave unset when the model does not use it.
+        shape :math:`(B,)`. Used by
+        :class:`~physicsnemo.diffusion.distillation.DistillationLoss` with
+        ``method="sCM"``. Leave unset when the model does not use it.
     batch_size : sequence of int
         Set to ``[B]``, matching the prediction's batch dimension.
 

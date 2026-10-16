@@ -29,6 +29,7 @@ from physicsnemo.diffusion import (
     DiffusionExtraOutputs,
     DiffusionExtraTimes,
 )
+from physicsnemo.diffusion.noise_schedulers import LinearGaussianNoiseScheduler
 
 # Directory for test reference data
 DATA_DIR = Path(__file__).parent / "data"
@@ -92,10 +93,13 @@ class CustomExtraTimes(DiffusionExtraTimes):
 class StructuredDiffusionModel(Module):
     r"""Linear model with optional destination times and learned loss weights."""
 
-    def __init__(self, output: str = "tuple"):
+    def __init__(self, output: str = "tuple", logvar: float | None = None):
         super().__init__()
         self.output = output
         self.gain = torch.nn.Parameter(torch.tensor(0.75))
+        self.logvar = (
+            None if logvar is None else torch.nn.Parameter(torch.tensor(logvar))
+        )
 
     def forward(
         self,
@@ -120,9 +124,122 @@ class StructuredDiffusionModel(Module):
             prediction = prediction + condition["shift"]
         if self.output == "tensor":
             return prediction
+        if self.output == "empty":
+            return prediction, DiffusionExtraOutputs(batch_size=[x.shape[0]])
         return prediction, DiffusionExtraOutputs(
-            logvar=self.gain * t, batch_size=[x.shape[0]]
+            logvar=(
+                self.gain * t if self.logvar is None else self.logvar.expand(x.shape[0])
+            ),
+            batch_size=[x.shape[0]],
         )
+
+
+class GaussianDenoiser(Module):
+    r"""Predict the posterior mean for unit-variance Gaussian clean data."""
+
+    def __init__(self, scheduler: LinearGaussianNoiseScheduler) -> None:
+        super().__init__()
+        self.scheduler = scheduler
+        self.gain = torch.nn.Parameter(torch.tensor(1.0))
+
+    def forward(
+        self,
+        x: Float[torch.Tensor, " B *dims"],
+        t: Float[torch.Tensor, " B"],
+        condition: TensorDict | None = None,
+        **kwargs: Any,
+    ) -> Float[torch.Tensor, " B *dims"]:
+        time = t.reshape(-1, *([1] * (x.ndim - 1)))  # (B, 1, ...)
+        alpha, sigma = self.scheduler.alpha(time), self.scheduler.sigma(time)
+        return self.gain * alpha * x / (alpha.square() + sigma.square())
+
+
+class AttentionDiffusionModel(StructuredDiffusionModel):
+    r"""Exercise attention kernels in state and time derivative calculations."""
+
+    def forward(
+        self,
+        x: Float[torch.Tensor, " B heads sequence channels"],
+        t: Float[torch.Tensor, " B"]
+        | tuple[Float[torch.Tensor, " B"], Shaped[DiffusionExtraTimes, " B"]],
+        condition: TensorDict | None = None,
+        **kwargs: Any,
+    ) -> (
+        Float[torch.Tensor, " B *dims"]
+        | tuple[Float[torch.Tensor, " B *dims"], Shaped[DiffusionExtraOutputs, " B"]]
+    ):
+        attended = torch.nn.functional.scaled_dot_product_attention(x, x, x)
+        return super().forward(attended, t, condition, **kwargs)
+
+
+class CustomGaussianScheduler(LinearGaussianNoiseScheduler):
+    r"""A log-noise path with no training bounds or usable inference grid."""
+
+    def alpha(
+        self, t: Float[torch.Tensor, " *shape"]
+    ) -> Float[torch.Tensor, " *shape"]:
+        return torch.ones_like(t)
+
+    def alpha_dot(
+        self, t: Float[torch.Tensor, " *shape"]
+    ) -> Float[torch.Tensor, " *shape"]:
+        return torch.zeros_like(t)
+
+    def sigma(
+        self, t: Float[torch.Tensor, " *shape"]
+    ) -> Float[torch.Tensor, " *shape"]:
+        return t.exp()
+
+    def sigma_dot(
+        self, t: Float[torch.Tensor, " *shape"]
+    ) -> Float[torch.Tensor, " *shape"]:
+        return t.exp()
+
+    def sigma_inv(
+        self, sigma: Float[torch.Tensor, " *shape"]
+    ) -> Float[torch.Tensor, " *shape"]:
+        return sigma.log()
+
+    def snr_inv(
+        self, snr: Float[torch.Tensor, " *shape"]
+    ) -> Float[torch.Tensor, " *shape"]:
+        return -snr.log()
+
+    def loss_weight(
+        self, t: Float[torch.Tensor, " *shape"]
+    ) -> Float[torch.Tensor, " *shape"]:
+        return torch.ones_like(t)
+
+    def sample_time(
+        self, N: int, *, device=None, dtype=None
+    ) -> Float[torch.Tensor, " N"]:
+        return torch.randn(N, device=device, dtype=dtype)
+
+    def timesteps(
+        self, num_steps: int, *, device=None, dtype=None
+    ) -> Float[torch.Tensor, " N"]:
+        raise AssertionError("Training must not request an inference grid.")
+
+
+class StochasticDiffusionModel(StructuredDiffusionModel):
+    r"""Exercise shared stochastic realizations in primal and tangent passes."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.dropout = torch.nn.Dropout(0.25)
+
+    def forward(
+        self,
+        x: Float[torch.Tensor, " B *dims"],
+        t: Float[torch.Tensor, " B"]
+        | tuple[Float[torch.Tensor, " B"], Shaped[DiffusionExtraTimes, " B"]],
+        condition: TensorDict | None = None,
+        **kwargs: Any,
+    ) -> (
+        Float[torch.Tensor, " B *dims"]
+        | tuple[Float[torch.Tensor, " B *dims"], Shaped[DiffusionExtraOutputs, " B"]]
+    ):
+        return super().forward(self.dropout(x), t, condition, **kwargs)
 
 
 def make_input(
