@@ -36,20 +36,22 @@ from .base import LossMap
 _METHODS = {
     "sCM": ("scm._fastgen", "_SCMLoss"),
     "MeanFlow": ("meanflow._fastgen", "_MeanFlowLoss"),
+    "DMD2": ("dmd2._fastgen", "_DMD2Loss"),
+    "f-distill": ("f_distill._fastgen", "_FDistillLoss"),
 }
 
 
 class DistillationLoss:
-    r"""Compute sCM or MeanFlow objectives for a diffusion student.
+    r"""Compute sCM, MeanFlow, DMD2, or f-distill losses for a diffusion student.
 
-    The selected method defines the training loss and constructs its
-    targets, with or without a teacher. The loss returns ``total_loss`` for
-    backpropagation and detached values for logging. Your training loop
-    controls optimization.
+    The selected method defines the training loss and constructs its targets.
+    Each call returns ``total_loss`` for backpropagation and detached values
+    for logging. Your training loop controls optimization.
 
     Initialize and wrap your models before constructing the loss. Call it on
-    each batch of clean data, backpropagate through ``losses["total_loss"]``,
-    and step your optimizer. See the distillation guide for compilation options.
+    each batch, backpropagate through ``losses["total_loss"]``, and step the
+    optimizer for the selected phase. See the distillation guide for
+    compilation options.
 
     Parameters
     ----------
@@ -59,18 +61,27 @@ class DistillationLoss:
     noise_scheduler : LinearGaussianNoiseScheduler or DomainParallelNoiseScheduler
         Noise schedule for the student. Its ``sample_time`` method supplies
         training times unless you pass times to the loss call.
-    method : {"sCM", "MeanFlow"}
+    method : {"sCM", "MeanFlow", "DMD2", "f-distill"}
         Training loss. MeanFlow students receive ``(t, DiffusionExtraTimes)``
         and predict average velocity over the interval from ``t`` to ``r``.
     teacher : torch.nn.Module, optional
-        Model providing training targets. Omit it to train from clean data
+        Model providing training targets. DMD2 and f-distill require a
+        teacher. For sCM and MeanFlow, omit it to train from clean data
         and noise without a pretrained teacher.
+    auxiliary_models : mapping, optional
+        Models trained during the auxiliary phase. Supply ``fake_score`` for
+        DMD2 and f-distill, and ``discriminator`` for adversarial training.
+        Initialize these models before passing them.
     method_options : mapping, optional
         Method-specific loss settings. Unknown settings raise an error.
     model_options : mapping, optional
-        Settings for ``student`` or ``teacher``. Set ``prediction_type`` to
+        Settings for ``student``, ``teacher``, or ``fake_score``. Set ``prediction_type`` to
         describe what each model predicts. ``model_kwargs`` forwards model-specific options,
         and ``noise_scheduler`` selects a different schedule for that model.
+        Adversarial teachers also need ``feature_names`` and a
+        ``feature_fn(prediction, extras)`` callback that returns named features
+        as a ``TensorDict``. The teacher always returns its prediction; the
+        callback selects model-specific extras for the discriminator.
 
     Examples
     --------
@@ -100,6 +111,7 @@ class DistillationLoss:
         *,
         method: str,
         teacher: torch.nn.Module | None = None,
+        auxiliary_models: Mapping[str, torch.nn.Module] | None = None,
         method_options: Mapping[str, Any] | None = None,
         model_options: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> None:
@@ -111,12 +123,18 @@ class DistillationLoss:
         implementation = getattr(
             importlib.import_module(f"{__package__}.methods.{module}"), name
         )
+        auxiliary_options = {}
+        if method in ("DMD2", "f-distill"):
+            auxiliary_options["auxiliary_models"] = dict(auxiliary_models or {})
+        elif auxiliary_models:
+            raise ValueError(f"{method} does not use auxiliary models.")
         self._implementation = implementation(
             student,
             noise_scheduler,
             teacher=teacher,
             method_options=dict(method_options or {}),
             model_options=dict(model_options or {}),
+            **auxiliary_options,
         )
 
     def __call__(
@@ -152,7 +170,9 @@ class DistillationLoss:
             Conditioning forwarded to the supplied models.
         phase : str, optional
             Training phase. sCM and MeanFlow accept only ``"student"``
-            or ``None``.
+            or ``None``. For DMD2 and f-distill, choose ``"student"``
+            to train the student or ``"auxiliary"`` to train the fake-score
+            model and optional discriminator. Step the matching optimizers.
         step : int, optional, default=0
             Training step, used to adjust loss warmup.
         return_outputs : bool, optional, default=False

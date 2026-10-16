@@ -17,7 +17,7 @@
 r"""Adapt PhysicsNeMo model calls and predictions for FastGen losses."""
 
 import importlib
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, Literal
 
 import torch
@@ -59,6 +59,11 @@ class _FastGenNetwork(_FastGenNetworkBase):
         prediction_type: Literal["x0", "epsilon", "score", "flow"],
         prediction_semantics: Literal["instantaneous", "average"] = "instantaneous",
         model_kwargs: Mapping[str, Any] | None = None,
+        feature_names: tuple[str, ...] = (),
+        feature_fn: Callable[
+            [Float[Tensor, " B *dims"], DiffusionExtraOutputs | None], TensorDict
+        ]
+        | None = None,
     ) -> None:
         if not _AVAILABLE:
             raise ImportError(
@@ -90,6 +95,8 @@ class _FastGenNetwork(_FastGenNetworkBase):
         self._prediction_semantics = prediction_semantics
         self._model_kwargs = dict(model_kwargs or {})
         self._input_noise_scheduler = None
+        self._feature_names = tuple(feature_names)
+        self._feature_fn = feature_fn
 
     def set_noise_schedule(
         self, schedule_type: str | None = None, **noise_schedule_kwargs: Any
@@ -131,10 +138,6 @@ class _FastGenNetwork(_FastGenNetworkBase):
             raise ValueError(
                 "An average flow cannot use instantaneous prediction conversions."
             )
-        if return_features_early or feature_indices:
-            raise NotImplementedError(
-                "This adapter does not define feature extraction."
-            )
         input_x, input_t = x_t, t
         source = self._input_noise_scheduler
         if source is not None:
@@ -168,6 +171,21 @@ class _FastGenNetwork(_FastGenNetworkBase):
         prediction, extras = output if isinstance(output, tuple) else (output, None)
         if not isinstance(prediction, Tensor):
             raise TypeError("A diffusion model must return a prediction tensor.")
+        features = None
+        if return_features_early or feature_indices:
+            if self._feature_fn is None:
+                raise ValueError(
+                    "Adversarial feature requests require an explicit feature_fn."
+                )
+            named_features = self._feature_fn(prediction, extras)
+            indices = (
+                sorted(feature_indices)
+                if feature_indices
+                else range(len(self._feature_names))
+            )
+            features = [named_features[self._feature_names[index]] for index in indices]
+            if return_features_early:
+                return features
         if self._prediction_type == "score":
             prediction = self.noise_scheduler._scheduler.score_to_epsilon(prediction, t)
         prediction = self.noise_scheduler.convert_model_output(
@@ -194,4 +212,4 @@ class _FastGenNetwork(_FastGenNetworkBase):
                     f"Expected logvar shape {(x_t.shape[0],)}, got {logvar.shape}."
                 )
             return prediction, logvar[:, None]  # (B, 1)
-        return prediction
+        return (prediction, features) if features is not None else prediction
