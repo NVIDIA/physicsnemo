@@ -33,6 +33,10 @@ handling for:
   sums over the global sample count (used per step and per epoch); its
   single-process path must equal plain ``total_loss / n`` + per-leaf
   ``sum / n`` averaging.
+- :func:`train._fail_together`: a loading or forward failure on one rank
+  stops every rank, before DDP forward and before backward.
+- :func:`train._run_epoch`: a non-finite gradient norm skips the optimizer
+  step, on every rank alike under DDP.
 
 (The analogous tests for the shared, tensorboard-free
 :func:`utils.recursive_to_device` live in ``test_utils.py``, outside
@@ -41,8 +45,12 @@ this module's tensorboard skip guard.)
 
 from __future__ import annotations
 
+from datetime import timedelta
+from types import SimpleNamespace
+
 import pytest
 import torch
+from omegaconf import OmegaConf
 from tensordict import TensorDict
 
 ### `train.py` imports `torch.utils.tensorboard.SummaryWriter` at module
@@ -53,9 +61,12 @@ from tensordict import TensorDict
 ### directly (no skip).
 pytest.importorskip("tensorboard")
 
+import train  # noqa: E402  -- monkeypatch module globals in focused tests
 from output_normalize import normalize_output_to_tensordict  # noqa: E402
 from train import (  # noqa: E402  -- after the skip guard
+    _fail_together,
     _reduce_and_average,
+    _run_epoch,
     _walk_batch_for_logging,
 )
 
@@ -244,3 +255,215 @@ class TestReduceAndAverage:
         )
         assert loss == pytest.approx(7.0)
         assert losses == {} and metrics == {}
+
+
+### ---------------------------------------------------------------------------
+### Rank-failure rendezvous and non-finite gradients
+### ---------------------------------------------------------------------------
+
+
+def _single_rank() -> SimpleNamespace:
+    """Return a single-process stand-in for ``DistributedManager``."""
+    return SimpleNamespace(rank=0, world_size=1, device=torch.device("cpu"))
+
+
+def _run_test_epoch(
+    loader,
+    model,
+    *,
+    mode,
+    dist_manager,
+    loss_calculator=None,
+    metric_calculator=None,
+):
+    """Run one :func:`train._run_epoch` on a one-field tensor model with SGD."""
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+    cfg = OmegaConf.create(
+        {
+            "precision": "float32",
+            "profile": False,
+            "training": {"scheduler_update_mode": "epoch"},
+        }
+    )
+    return _run_epoch(
+        loader,
+        model,
+        loss_calculator,
+        metric_calculator,
+        SimpleNamespace(
+            info=lambda *args, **kwargs: None, warning=lambda *args, **kwargs: None
+        ),
+        0,
+        cfg,
+        dist_manager,
+        mode=mode,
+        output_type="tensors",
+        target_config={"pressure": "scalar"},
+        optimizer=optimizer,
+        scheduler=torch.optim.lr_scheduler.StepLR(optimizer, step_size=1),
+    )
+
+
+def test_fail_together_single_process():
+    """A healthy block passes through; a failure re-raises the original error with a note."""
+    where = "train epoch 5, step 9 (data loading)"
+    with _fail_together(_single_rank(), where):
+        pass
+
+    error = ValueError("corrupt sample")
+    with pytest.raises(ValueError) as exc, _fail_together(_single_rank(), where):
+        raise error
+    assert exc.value is error
+    assert exc.value.__notes__ == [f"Raised during {where}."]
+
+
+@pytest.mark.parametrize(
+    ("loss_scale", "updates"),
+    [(1.0, True), (float("nan"), False), (float("inf"), False)],
+)
+def test_non_finite_gradients_skip_the_update(monkeypatch, loss_scale, updates):
+    """A NaN or inf loss leaves the weights unchanged; a finite loss updates them."""
+    model = torch.nn.Linear(1, 1, bias=False)
+    before = model.weight.detach().clone()
+
+    def forward(*args, **kwargs):
+        loss = model.weight.sum() * loss_scale
+        values = TensorDict({"loss/test": loss.detach()})
+        return loss, values, values.clone()
+
+    monkeypatch.setattr(train, "forward_pass", forward)
+    _run_test_epoch([{}], model, mode="train", dist_manager=_single_rank())
+    assert torch.equal(model.weight, before) != updates
+
+
+class _TwoStepLoader:
+    """Yield one healthy batch, then optionally fail on a chosen rank."""
+
+    def __init__(self, batch, *, fail):
+        """Store the common batch and this rank's failure switch."""
+        self.batch = batch
+        self.fail = fail
+
+    def __len__(self):
+        """Report equal step counts on both ranks."""
+        return 2
+
+    def __iter__(self):
+        """Fail after one complete step, when DDP may rebuild its buckets."""
+        yield self.batch
+        if self.fail:
+            raise ValueError("corrupt second sample")
+        yield self.batch
+
+
+class _FlakyLinear(torch.nn.Module):
+    """Linear model whose second forward raises or returns NaN when asked to."""
+
+    def __init__(self, failure):
+        """Store the failure (``None``, ``"raise"``, or ``"nan"``) for step 1."""
+        super().__init__()
+        self.linear = torch.nn.Linear(2, 1)
+        ### DDP broadcasts buffers at the start of every forward, a collective
+        ### that a rank which failed during loading must not leave unmatched.
+        self.register_buffer("marker", torch.ones(1))
+        self.failure = failure
+        self.calls = 0
+
+    def forward(self, input):
+        """Apply the linear layer, failing on the second call if configured."""
+        self.calls += 1
+        out = self.linear(input)
+        if self.calls == 2 and self.failure == "raise":
+            raise RuntimeError("simulated forward failure")
+        if self.calls == 2 and self.failure == "nan":
+            out = out * float("nan")
+        return out
+
+
+### (failing phase, mode, failing rank)
+_DDP_FAILURES = [
+    (phase, mode, failing_rank)
+    for phase in ("loading", "forward")
+    for mode in ("train", "val")
+    for failing_rank in (0, 1)
+]
+
+
+def _ddp_worker(rank, store_uri):
+    """Run every ``_DDP_FAILURES`` case, then a one-rank NaN, through the epoch loop."""
+    torch.set_num_threads(1)
+    train.dist.init_process_group(
+        "gloo",
+        init_method=store_uri,
+        rank=rank,
+        world_size=2,
+        timeout=timedelta(seconds=10),
+    )
+    batch = {
+        "forward_kwargs": {"input": torch.ones(1, 3, 2)},
+        "targets": TensorDict({"pressure": torch.ones(1, 3)}, batch_size=[1, 3]),
+    }
+    common = {
+        "dist_manager": SimpleNamespace(
+            rank=rank, world_size=2, device=torch.device("cpu")
+        ),
+        "loss_calculator": train.LossCalculator(
+            {"pressure": "scalar"}, loss_type="mse"
+        ),
+        "metric_calculator": train.MetricCalculator({"pressure": "scalar"}),
+    }
+    try:
+        for phase, mode, failing_rank in _DDP_FAILURES:
+            fails = rank == failing_rank
+            stage = "data loading" if phase == "loading" else "forward/loss"
+            where = f"{mode} epoch 0, step 1 ({stage})"
+            with pytest.raises((ValueError, RuntimeError)) as exc:
+                _run_test_epoch(
+                    _TwoStepLoader(batch, fail=fails and phase == "loading"),
+                    torch.nn.parallel.DistributedDataParallel(
+                        _FlakyLinear("raise" if fails and phase == "forward" else None)
+                    ),
+                    mode=mode,
+                    **common,
+                )
+            if fails:
+                expected = {
+                    "loading": "corrupt second sample",
+                    "forward": "simulated forward failure",
+                }[phase]
+                assert str(exc.value) == expected
+                assert exc.value.__notes__ == [f"Raised during {where}."]
+            else:
+                assert type(exc.value) is RuntimeError
+                assert str(exc.value) == f"rank {failing_rank} failed during {where}"
+
+        ### A NaN loss on rank 1 reaches both ranks through DDP's gradient
+        ### average, so both skip that update and stay finite and identical.
+        model = torch.nn.parallel.DistributedDataParallel(
+            _FlakyLinear("nan" if rank == 1 else None)
+        )
+        _run_test_epoch(
+            _TwoStepLoader(batch, fail=False), model, mode="train", **common
+        )
+        for param in model.parameters():
+            reference = param.detach().clone()
+            train.dist.broadcast(reference, src=0)
+            assert torch.isfinite(param).all()
+            assert torch.equal(param, reference)
+    finally:
+        train.dist.destroy_process_group()
+
+
+@pytest.mark.skipif(not torch.distributed.is_gloo_available(), reason="requires Gloo")
+def test_ddp_ranks_fail_and_skip_together(tmp_path):
+    """A failure or a NaN gradient on one rank applies to both ranks.
+
+    One spawn runs every case: each failure leaves both ranks at the same
+    rendezvous, so the process group stays usable for the next case.
+    """
+    torch.multiprocessing.spawn(
+        _ddp_worker,
+        args=((tmp_path / "store").as_uri(),),
+        nprocs=2,
+        join=True,
+    )
