@@ -33,3 +33,11 @@ def fake_multi_rank(monkeypatch):
         monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 2)
 
     return activate
+
+
+@pytest.fixture
+def default_dtype():
+    """Restore torch's default dtype after a test that changes it."""
+    original = torch.get_default_dtype()
+    yield original
+    torch.set_default_dtype(original)
