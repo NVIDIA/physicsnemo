@@ -236,6 +236,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CUDA device.
 - `BoundingBoxFilter` takes about half as long on CPU. On a GPU it
   synchronizes once per coordinate key, instead of once per filtered tensor.
+- `physicsnemo.nn.functional.knn` uses a new exact Warp backend by default for
+  CUDA points of one to three dimensions in float32, float16 or bfloat16. On
+  DoMINO's surface-neighbor search it is about 60x faster than cuML, which
+  stays the default for other CUDA points.
 
 ### Deprecated
 

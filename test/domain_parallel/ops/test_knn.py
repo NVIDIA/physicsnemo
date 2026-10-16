@@ -29,13 +29,17 @@ class kNNModule(torch.nn.Module):
     def __init__(
         self,
         num_neighbors=4,
+        implementation=None,
     ):
         super().__init__()
 
         self.num_neighbors = num_neighbors
+        self.implementation = implementation
 
     def forward(self, points, queries):
-        return knn(points, queries, self.num_neighbors)
+        return knn(
+            points, queries, self.num_neighbors, implementation=self.implementation
+        )
 
 
 @pytest.mark.multigpu_static
@@ -61,6 +65,33 @@ def test_knn_1dmesh(
     sharded_queries = scatter_tensor(queries, 0, distributed_mesh, queries_placements)
 
     module = kNNModule()
+
+    numerical_shard_tensor_check(
+        distributed_mesh,
+        module,
+        [sharded_points, sharded_queries],
+        {},
+        check_grads=False,
+    )
+
+
+# The Warp backend gives non-finite queries index -1 and distance inf. With
+# sharded points, the ring must keep -1 rather than offset it to a real index.
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize("scatter_queries", [True, False])
+def test_knn_1dmesh_non_finite_queries(distributed_mesh, scatter_queries: bool):
+    dm = DistributedManager()
+
+    points = torch.randn(1025, 3).to(dm.device)
+    queries = torch.randn(2048, 3).to(dm.device)
+    queries[::8] = float("nan")
+    queries[1::8, 0] = float("inf")
+
+    queries_placements = (Shard(0),) if scatter_queries else (Replicate(),)
+    sharded_points = scatter_tensor(points, 0, distributed_mesh, (Shard(0),))
+    sharded_queries = scatter_tensor(queries, 0, distributed_mesh, queries_placements)
+
+    module = kNNModule(implementation="warp")
 
     numerical_shard_tensor_check(
         distributed_mesh,

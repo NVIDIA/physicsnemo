@@ -437,6 +437,56 @@ class TestStreamBoundConsume:
         assert got == pytest.approx(expected, rel=1e-5)
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+    def test_knn_transform_on_prefetch_streams_matches_synchronous(self, tmp_path):
+        # The default CUDA kNN launches Warp kernels. Run it on the loader's
+        # preprocessing streams, where a Warp-backed SDF once freed its buffers
+        # before its kernels finished (#1741, fixed by warp_stream_scope).
+        rng = np.random.default_rng(0)
+        for i in range(8):
+            np.savez(
+                tmp_path / f"sample_{i:03d}.npz",
+                positions=rng.standard_normal((50_000, 3)).astype(np.float32),
+                features=rng.standard_normal((50_000, 4)).astype(np.float32),
+            )
+
+        def batches(prefetch_factor):
+            dataset = dp.Dataset(
+                dp.NumpyReader(tmp_path, pin_memory=True),
+                device="cuda:0",
+                transforms=dp.KNearestNeighbors(
+                    points_key="positions",
+                    queries_key="positions",
+                    k=11,
+                    extract_keys=["features"],
+                ),
+            )
+            try:
+                loader = dp.DataLoader(
+                    dataset,
+                    batch_size=2,
+                    shuffle=False,
+                    prefetch_factor=prefetch_factor,
+                    num_streams=4,
+                    use_streams=prefetch_factor > 0,
+                )
+                out = [
+                    (b["neighbors_indices"].clone(), b["neighbors_features"].clone())
+                    for b in loader
+                ]
+                torch.cuda.synchronize()
+                return out
+            finally:
+                dataset.close()
+
+        expected = batches(prefetch_factor=0)
+        for _ in range(2):
+            got = batches(prefetch_factor=2)
+            assert len(got) == len(expected) == 4
+            for (indices, features), (ref_indices, ref_features) in zip(got, expected):
+                assert torch.equal(indices, ref_indices)
+                assert torch.equal(features, ref_features)
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
     def test_prefetch_defers_wait_until_after_previous_batch(
         self, numpy_data_dir, monkeypatch
     ):
