@@ -21,7 +21,7 @@ import importlib
 
 import pytest
 
-MODULES = ["scores"]
+MODULES = ["calibrators", "diagnostics", "predictors", "scores"]
 
 
 @pytest.mark.parametrize("name", MODULES)

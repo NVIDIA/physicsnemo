@@ -24,7 +24,12 @@ from physicsnemo.experimental.uq.conformal import (
     NormalizedErrorScore,
     QuantileRegressionScore,
 )
-from test.experimental.uq.conformal._helpers import assert_admitted_covered
+from test.experimental.uq.conformal._helpers import (
+    CALIBRATORS,
+    TIERS,
+    assert_admitted_covered,
+    assert_predictor_covers_admitted,
+)
 
 
 def test_absolute_error_values(device):
@@ -92,15 +97,35 @@ def test_interval_endpoints_invert_score(score, aux, device):
         )
 
 
-def test_normalized_low_precision_sigma_keeps_intervals_tight(device):
+@pytest.mark.parametrize("tier", TIERS)
+def test_unused_aux_can_be_omitted(tier):
+    calibrator = CALIBRATORS[tier](AbsoluteErrorScore(), alpha=0.5)
+    pred, target = torch.zeros(1), torch.ones(1)
+    points = torch.zeros(1, 1)
+    for aux in (None, {}, {"spread": None}):
+        calibrator.update(pred, target, aux=aux, points=points)
+    predictor = calibrator.finalize()
+    for aux in (None, {}, {"spread": None}):
+        lo, hi = predictor.predict_interval(pred, aux=aux, points=points)
+        assert ((lo <= target) & (target <= hi)).all()
+
+
+@pytest.mark.parametrize("tier", TIERS)
+def test_normalized_low_precision_sigma_keeps_fitted_intervals_tight(tier, device):
     """Float16 sigma must not inflate a float64 unit radius to 15.65234375."""
     score = NormalizedErrorScore()
+    calibrator = CALIBRATORS[tier](score, alpha=0.5)
     pred = torch.zeros(1, dtype=torch.float64, device=device)
     target = torch.ones_like(pred)
     aux = {"sigma": torch.full((1,), 60000.0, dtype=torch.float16, device=device)}
-    threshold = score.score(pred, target, aux=aux)
-    assert_admitted_covered(score, pred, target, threshold, aux)
-    lo, hi = score.interval(pred, threshold, aux=aux)
+    points = torch.zeros(1, 1, device=device)
+    for _ in range(3):
+        calibrator.update(pred, target, aux=aux, points=points)
+    predictor = calibrator.finalize()
+    assert (score.score(pred, target, aux=aux) <= predictor.thresholds.to(device)).all()
+    lo, hi = assert_predictor_covers_admitted(
+        predictor, pred, target, aux=aux, points=points
+    )
     torch.testing.assert_close(hi, target, atol=0, rtol=1e-12)
     torch.testing.assert_close(lo, -target, atol=0, rtol=1e-12)
 
