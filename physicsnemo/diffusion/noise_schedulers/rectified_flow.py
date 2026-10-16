@@ -86,8 +86,9 @@ class RectifiedFlowNoiseScheduler(LinearGaussianNoiseScheduler):
 
     Examples
     --------
-    Construct noisy states for training, then initialize sampling with the same
-    flow parameterization:
+    Training interpolates clean data toward noise, while sampling starts near the noisy
+    endpoint. The flow predictor then supplies the ODE right-hand side under the same
+    time convention.
 
     >>> import torch
     >>> from physicsnemo.diffusion.noise_schedulers import (
@@ -153,6 +154,10 @@ class RectifiedFlowNoiseScheduler(LinearGaussianNoiseScheduler):
     ) -> Float[Tensor, " *shape"]:
         r"""Identity mapping: :math:`t = \sigma`."""
         return sigma
+
+    def snr_inv(self, q: Float[Tensor, " *shape"]) -> Float[Tensor, " *shape"]:
+        r"""Find diffusion time :math:`t = 1/(1+q)` for amplitude ratios ``q > 0``."""
+        return 1 / (1 + q)
 
     def sigma_dot(
         self,

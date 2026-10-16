@@ -580,6 +580,94 @@ class BaseAffinePreconditioner(Module, ABC):
         return c_skip * x + c_out * F_x
 
 
+class TrigFlowPreconditioner(BaseAffinePreconditioner):
+    r"""Convert normalized-velocity predictions into clean-data predictions.
+
+    Use with ``TrigFlowNoiseScheduler`` and the same ``sigma_data`` for
+    TrigFlow denoising or consistency training. The backbone predicts velocity
+    divided by ``sigma_data``, rather than clean data or noise. Diffusion times
+    are angles in radians. A backbone can return a prediction paired with
+    ``DiffusionExtraOutputs``; its learned loss weight passes through unchanged.
+
+    .. math::
+
+        D_\theta(x,t) = \cos(t)x - \sigma_d\sin(t)F_\theta(x/\sigma_d,t).
+
+    Parameters
+    ----------
+    model : physicsnemo.Module
+        Backbone predicting velocity divided by ``sigma_data``.
+    sigma_data : float, optional, default=0.5
+        Data scale, matching the noise scheduler. Must be finite and positive.
+
+    Forward
+    -------
+    x : Tensor
+        Noisy states with shape :math:`(B, \ldots)`.
+    t : torch.Tensor or tuple[torch.Tensor, DiffusionExtraTimes]
+        Diffusion time in radians. Pass ``(t, extra_times)`` to include a
+        destination diffusion time ``r``.
+    condition : Tensor or TensorDict, optional
+        Conditioning passed to the backbone.
+    **model_kwargs : Any
+        Model-specific keyword arguments.
+
+    Outputs
+    -------
+    torch.Tensor or tuple[torch.Tensor, DiffusionExtraOutputs]
+        Clean-data prediction, optionally paired with its unchanged loss weight.
+
+    Examples
+    --------
+    The backbone in this example predicts zero normalized velocity, so the wrapper
+    returns the clean-data skip term. At zero angular time, that term equals the input.
+
+    >>> class Velocity(Module):
+    ...     def forward(self, x, t, condition=None):
+    ...         return torch.zeros_like(x)
+    >>> model = TrigFlowPreconditioner(Velocity())
+    >>> model(torch.ones(2, 3), torch.zeros(2))
+    tensor([[1., 1., 1.],
+            [1., 1., 1.]])
+    """
+
+    sigma_data: Float[torch.Tensor, ""]
+
+    def __init__(self, model: Module, sigma_data: float = 0.5) -> None:
+        super().__init__(model)
+        if not math.isfinite(sigma_data) or sigma_data <= 0:
+            raise ValueError(f"Expected finite sigma_data > 0, got {sigma_data}.")
+        self.register_buffer("sigma_data", torch.tensor(float(sigma_data)))
+
+    def compute_coefficients(
+        self, t: Float[torch.Tensor, " B *dims"], /
+    ) -> tuple[
+        Float[torch.Tensor, " B *dims"],
+        Float[torch.Tensor, " B *dims"],
+        Float[torch.Tensor, " B *dims"],
+        Float[torch.Tensor, " B *dims"],
+    ]:
+        r"""Return input, time, output, and skip coefficients for diffusion time.
+
+        Parameters
+        ----------
+        t : Tensor
+            Diffusion times in radians with shape :math:`(B, 1, \ldots)`
+            for broadcasting over the noisy states.
+
+        Returns
+        -------
+        tuple of Tensor
+            Coefficients ``(1 / sigma_data, t, -sigma_data * sin(t), cos(t))``.
+        """
+        return (
+            torch.ones_like(t) / self.sigma_data,
+            t,
+            -self.sigma_data * t.sin(),
+            t.cos(),
+        )
+
+
 class VPPreconditioner(BaseAffinePreconditioner):
     r"""
     Variance Preserving (VP) preconditioner.

@@ -29,6 +29,7 @@ from physicsnemo.diffusion.preconditioners import (
     BaseAffinePreconditioner,
     EDMPreconditioner,
     IDDPMPreconditioner,
+    TrigFlowPreconditioner,
     VEPreconditioner,
     VPPreconditioner,
 )
@@ -145,6 +146,7 @@ MODEL_CONFIGS = [
 
 # Preconditioner configurations for parameterized tests
 PRECOND_CONFIGS = [
+    (TrigFlowPreconditioner, {"sigma_data": 1.4}, "trigflow_precond"),
     (
         VPPreconditioner,
         {"beta_d": 19.9, "beta_min": 0.1, "M": 2000},
@@ -461,7 +463,7 @@ class TestEDMPreconditioner:
 @pytest.mark.parametrize(
     "precond_cls,precond_kwargs,precond_name",
     PRECOND_CONFIGS,
-    ids=["VP", "VE", "iDDPM", "EDM"],
+    ids=["TrigFlow", "VP", "VE", "iDDPM", "EDM"],
 )
 class TestNonRegression:
     """Non-regression tests parameterized across all preconditioner types."""
@@ -689,7 +691,7 @@ class TestNonRegression:
 @pytest.mark.parametrize(
     "precond_cls,precond_kwargs,precond_name",
     PRECOND_CONFIGS,
-    ids=["VP", "VE", "iDDPM", "EDM"],
+    ids=["TrigFlow", "VP", "VE", "iDDPM", "EDM"],
 )
 class TestAllPreconditioners:
     """Tests that apply to all preconditioner types."""
@@ -713,6 +715,16 @@ class TestAllPreconditioners:
             precond(x, t_wrong, condition=condition)
         with pytest.raises(ValueError, match="batch"):
             precond(x, (batch_data["t"], DiffusionExtraTimes(batch_size=[])))
+
+    @pytest.mark.parametrize("sigma_data", (0, -1, float("nan")))
+    def test_trigflow_invalid_scale(
+        self, precond_cls, precond_kwargs, precond_name, sigma_data
+    ):
+        """TrigFlow rejects nonpositive or nonfinite data scales."""
+        if precond_cls is not TrigFlowPreconditioner:
+            pytest.skip("Only TrigFlow uses this scale validation")
+        with pytest.raises(ValueError):
+            precond_cls(ConvModel(), sigma_data=sigma_data)
 
     def test_forward_dtype_preservation(
         self,
