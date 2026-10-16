@@ -55,7 +55,8 @@ def load(
         Each level quadruples the number of faces.
     noise_amplitude : float
         Radial noise amplitude. 0 = perfect sphere, >0 = lumpy.
-        Uses log-normal scaling like lumpy_sphere.
+        Uses log-normal scaling like lumpy_sphere. Raises ``ValueError`` if
+        the noise makes the surface not star-shaped about the center.
     seed : int
         Random seed for noise reproducibility.
     device : torch.device or str
@@ -92,8 +93,9 @@ def load(
     ### Step 2: Apply noise to base icosahedron (if any)
     # Noise is applied to the base icosahedron (12 vertices) BEFORE subdivision.
     # This creates smooth, coherent lumps after subdivision, matching lumpy_sphere.
-    # All shells are scaled versions of this noisy shape, ensuring shells remain
-    # strictly nested and tetrahedra remain valid regardless of noise amplitude.
+    # All shells are scaled versions of this noisy shape, so they stay strictly
+    # nested; the tetrahedra are valid only while the shape stays star-shaped
+    # about the center (checked after subdivision).
     if noise_amplitude > 0:
         generator = torch.Generator(device=device).manual_seed(seed)
         noise = noise_amplitude * torch.randn(
@@ -107,6 +109,18 @@ def load(
     # icosahedron into broad, coherent lumps.
     if subdivisions > 0:
         template = template.subdivide(subdivisions, "loop")
+
+    ### Check that every face sees the center from inside (star-shaped
+    # template). Otherwise the center-fan tetrahedra fold over and overlap.
+    face_verts = template.points[template.cells]  # (n_faces, 3, 3)
+    face_normals = torch.cross(
+        face_verts[:, 1] - face_verts[:, 0], face_verts[:, 2] - face_verts[:, 0], dim=1
+    )
+    if not ((face_normals * face_verts.mean(dim=1)).sum(dim=1) > 0).all():
+        raise ValueError(
+            f"{noise_amplitude=} folds the surface so that it is not star-shaped "
+            f"about the center; use a smaller noise_amplitude or another seed"
+        )
 
     n_verts_per_shell = template.n_points
     n_faces = template.n_cells

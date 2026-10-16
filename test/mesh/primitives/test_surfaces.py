@@ -16,6 +16,8 @@
 
 """Tests for surface example meshes."""
 
+import itertools
+
 import pytest
 import torch
 
@@ -86,3 +88,47 @@ class TestSurfacePrimitives:
         # Both should have points
         assert cylinder_closed.n_points > 0
         assert cylinder_open.n_points > 0
+
+    def test_hemisphere_single_pole_vertex(self):
+        """The pole is one vertex, so no triangle is degenerate."""
+        mesh = primitives.surfaces.hemisphere.load(theta_resolution=30)
+
+        assert mesh.validate()["valid"]
+        tri = mesh.points.double()[mesh.cells]
+        areas = torch.linalg.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+        assert (areas.norm(dim=1) > 0).all()
+
+        # The only boundary is the 30-edge equator
+        boundary = mesh.get_boundary_mesh()
+        assert boundary.n_cells == 30
+        z = boundary.points[boundary.cells][..., 2]
+        assert torch.allclose(z, torch.zeros_like(z), atol=1e-6)
+
+    def test_cone_single_apex_vertex(self):
+        """The apex is one vertex, so the capped cone is closed."""
+        mesh = primitives.surfaces.cone.load(n_circ=32)
+
+        assert mesh.validate()["valid"]
+        assert mesh.is_watertight()
+        tri = mesh.points.double()[mesh.cells]
+        areas = torch.linalg.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+        assert (areas.norm(dim=1) > 0).all()
+
+    def test_tetrahedron_surface_side_length(self):
+        """Every edge has length side_length."""
+        mesh = primitives.surfaces.tetrahedron_surface.load(side_length=2.0)
+
+        for i, j in itertools.combinations(range(4), 2):
+            edge = (mesh.points[i] - mesh.points[j]).norm()
+            assert torch.isclose(edge, torch.tensor(2.0))
+
+    @pytest.mark.parametrize("radius", [2.5, 1e20, 1e-25])
+    @pytest.mark.parametrize("subdivisions", [0, 1, 2])
+    def test_sphere_icosahedral_radius(self, subdivisions, radius):
+        """All vertices lie at the requested radius, at every level and scale."""
+        mesh = primitives.surfaces.sphere_icosahedral.load(
+            radius=radius, subdivisions=subdivisions
+        )
+
+        radii = mesh.points.double().norm(dim=1) / radius
+        assert torch.allclose(radii, torch.ones_like(radii))

@@ -301,6 +301,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Composing the cell and point subsamples on a triangulated boundary kept only
   the cells whose three vertices all survived the point cut, about `N / 27` of
   the `N` requested. The default keeps the composed behaviour.
+- The `hemisphere` and `cone` primitives have a single pole or apex vertex.
+  Before, it was repeated around the ring, leaving zero-area triangles.
+- `tetrahedron_surface` edges have length `side_length`, and
+  `sphere_icosahedral` with `subdivisions=0` honours `radius`.
+- `sphere_volume` and `cylinder_volume` tetrahedra fill the solid without
+  overlap. With VTK 9.7, their Delaunay tetrahedra overlapped and left gaps.
+- `lumpy_ball` raises `ValueError` when `noise_amplitude` folds its surface
+  so far that the tetrahedra would overlap.
+- `text_1d_2d` outlines are closed loops; before, each ended in a zero-length
+  edge. `text_2d_2d` fills curved glyphs fully: thin rings such as U+25CB lost
+  part of their area.
 - Seeded `DomainMeshReader` subsamples select the same rows from zarr stores
   as from memmap files. Before, boundaries read in full, and interiors read
   with `drop_interior_cells`, could differ between the two formats.
