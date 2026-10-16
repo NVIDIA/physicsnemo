@@ -62,6 +62,7 @@ class _FDistillLoss(_DMD2Loss):
         backend = importlib.import_module(
             "fastgen.methods.distribution_matching.f_distill"
         )
+        self._loss_support = importlib.import_module("fastgen.methods.loss_support")
         ratio = self._ratio_options
         if ratio.f_div not in backend.all_f_div_weighting_function:
             raise ValueError(f"Unsupported f-divergence {ratio.f_div!r}.")
@@ -87,75 +88,37 @@ class _FDistillLoss(_DMD2Loss):
                 "Domain-parallel f-distill requires an explicit data-parallel statistics_group."
             )
 
-    def _sum_statistics(self, value: Tensor) -> Tensor:
-        r"""Reduce over data replicas without mixing spatial partitions into counts."""
-        if torch.distributed.is_initialized():
-            torch.distributed.all_reduce(
-                value, group=self._ratio_options.statistics_group
-            )
-        return value
-
     def _ratio_weight(
         self,
         logits: Float[Tensor, " B logits"],
         t: Float[Tensor, " B"],
         weight: Tensor | None,
     ) -> Float[Tensor, " B"]:
-        r"""Normalize ratios and divergence weights over valid samples only."""
-        with torch.no_grad():
-            if weight is None:
-                mean = logits.float().mean(1)
-                active = torch.ones_like(t, dtype=torch.bool)
-            else:
-                valid = weight > 0
-                count = valid.sum(1)
-                mean = torch.where(valid, logits.float(), 0).sum(1) / count.clamp_min(1)
-                active = count > 0
-            if self._call_weight is not None:
-                active = (
-                    active
-                    & _ObjectiveReduction(self._call_weight, self._call_weight).active
-                )
-            options = self._ratio_options
-            ratio = (
-                mean.clamp(-10, 10)
-                .exp()
-                .clamp(options.ratio_lower, options.ratio_upper)
-            )
-            if options.ratio_normalization:
-                source = self.net.noise_scheduler
-                lo, hi = source.min_t, source.max_t
-                width = (hi - lo) / options.bin_num
-                idx = (
-                    ((t.double() - lo) / width)
-                    .floor()
-                    .long()
-                    .clamp(0, options.bin_num - 1)
-                )
-                count = torch.bincount(
-                    idx, weights=active.float(), minlength=options.bin_num
-                )
-                total = torch.bincount(
-                    idx,
-                    weights=torch.where(active, ratio, 0),
-                    minlength=options.bin_num,
-                )
-                statistics = self._sum_statistics(torch.stack((count, total)))
-                count, total = statistics.unbind(0)
-                bins = self._bins.to(device=t.device, dtype=torch.float32)
-                if self._update_state:
-                    new_bins = bins * options.ratio_ema_rate + (
-                        1 - options.ratio_ema_rate
-                    ) * total / (count + 1e-6)
-                    bins = torch.where(count > 0, new_bins, bins)
-                    self._bins = bins.detach()
-                ratio = ratio / (bins[idx] + 1e-6)
-            h = self.f_div_weighting_function(ratio).expand_as(ratio)
-            totals = self._sum_statistics(
-                torch.stack((torch.where(active, h, 0).sum(), active.float().sum()))
-            )
-            h_mean = totals[0] / totals[1].clamp_min(1)
-            return torch.where(active, h / (h_mean + 1e-6), 0).to(logits.dtype)
+        r"""Normalize divergence weights over valid samples, optionally updating running bins."""
+        options = self._ratio_options
+        sample_mask = (
+            None
+            if self._call_weight is None
+            else _ObjectiveReduction(self._call_weight, self._call_weight).active
+        )
+        h, bins = self._loss_support.f_divergence_weights(
+            logits,
+            t,
+            self.f_div_weighting_function,
+            ratio_lower=options.ratio_lower,
+            ratio_upper=options.ratio_upper,
+            bins=self._bins if options.ratio_normalization else None,
+            min_t=self.net.noise_scheduler.min_t,
+            max_t=self.net.noise_scheduler.max_t,
+            ema_rate=options.ratio_ema_rate,
+            logit_weight=weight,
+            sample_mask=sample_mask,
+            statistics_group=options.statistics_group,
+            update_state=self._update_state,
+        )
+        if options.ratio_normalization and self._update_state:
+            self._bins = bins.detach()
+        return h
 
     def loss_state_dict(self) -> dict[str, Any]:
         r"""Return a copy of the running density-ratio bins for checkpointing."""

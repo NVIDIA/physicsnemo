@@ -22,7 +22,6 @@ from contextlib import contextmanager
 from typing import Any
 
 import torch
-import torch.nn.functional as F
 from jaxtyping import Float, Shaped
 from omegaconf import OmegaConf
 from tensordict import TensorDict
@@ -40,7 +39,7 @@ from physicsnemo.diffusion.noise_schedulers import (
 )
 from physicsnemo.diffusion.noise_schedulers._fastgen import _FastGenNoiseScheduler
 
-from ..._fastgen import _configure_options, _FastGenBinding, _ObjectiveReduction
+from ..._fastgen import _configure_options, _FastGenBinding
 
 _AVAILABLE = check_version_spec("fastgen", "0.1.0", hard_fail=False)
 if _AVAILABLE:
@@ -307,15 +306,13 @@ class _DMD2Loss(_FastGenBinding, _DMD2Base):
     ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
         r"""Evaluate the selected student or auxiliary loss."""
         args = (data["input_student"], data["t_student"], data["t"], data["eps"])
-        if self._phase == "student":
-            return self._student_update_step(
-                *args,
-                data,
-                condition=data["condition"],
-                neg_condition=data["neg_condition"],
-            )
-        return self._fake_score_discriminator_update_step(
-            *args, data["real"], condition=data["condition"]
+        return self._dispatch_training_phase(
+            self._phase,
+            *args,
+            data,
+            data["real"],
+            condition=data["condition"],
+            neg_condition=data["neg_condition"],
         )
 
     def _vsd_loss(
@@ -325,24 +322,14 @@ class _DMD2Loss(_FastGenBinding, _DMD2Base):
         fake: Tensor,
         scale: Tensor | None = None,
     ) -> Tensor:
-        r"""Exclude invalid entries from the target norm before weighting residuals."""
-        if self._call_weight is None:
-            return _backend.variational_score_distillation_loss(
-                generated, teacher, fake, additional_scale=scale
-            )
-        reduction = _ObjectiveReduction(generated, self._call_weight)
-        with torch.no_grad():
-            difference = reduction.clean(generated.float() - teacher.float())
-            mean = difference.abs().sum(reduction.dims) / reduction.count.clamp_min(1)
-            factor = (mean + 1e-6).reciprocal()
-            if scale is not None:
-                factor = factor * scale.float()
-            factor = factor.to(generated.dtype).reshape(
-                -1, *([1] * (generated.ndim - 1))
-            )
-            gradient = reduction.clean(fake - teacher) * factor
-            target = generated - gradient
-        return 0.5 * reduction.residual(generated - target, mean=True).mean()
+        r"""Compute weighted score distillation with normalization over valid entries."""
+        return _backend.variational_score_distillation_loss(
+            generated,
+            teacher,
+            fake,
+            additional_scale=scale,
+            loss_weight=self._call_weight,
+        )
 
     def _logits(
         self, x: Tensor, t: Tensor, condition: Any
@@ -421,14 +408,7 @@ class _DMD2Loss(_FastGenBinding, _DMD2Base):
                 perturbed, t, teacher, neg_condition=neg_condition
             )
         if self.config.gan_loss_weight_gen > 0:
-            gan = self._logit_mean(
-                F.softplus(
-                    -torch.where(weight > 0, logits, 0)
-                    if weight is not None
-                    else -logits
-                ),
-                weight,
-            )
+            gan = _backend.gan_loss_generator(logits, loss_weight=weight)
             scale = self._ratio_weight(logits, t, weight)
         vsd = self._vsd_loss(generated, teacher, fake, scale)
         return {
@@ -463,27 +443,18 @@ class _DMD2Loss(_FastGenBinding, _DMD2Base):
         prediction = self.fake_score(
             perturbed, t, condition=condition, fwd_pred_type=prediction_type
         )
-        if self._call_weight is None and prediction_type != "flow":
-            score_loss = _backend.denoising_score_matching_loss(
-                prediction_type,
-                prediction,
-                x0=generated,
-                eps=eps,
-                noise_scheduler=source,
-                t=t,
-            )
-        else:
-            targets = {"x0": generated, "eps": eps}
-            target = (
-                source.cond_velocity(generated, eps, t)
-                if prediction_type == "flow"
-                else targets[prediction_type]
-            )
-            score_loss = (
-                _ObjectiveReduction(prediction, self._call_weight)
-                .residual(prediction - target, mean=True)
-                .mean()
-            )
+        score_loss = _backend.denoising_score_matching_loss(
+            prediction_type,
+            prediction,
+            x0=generated,
+            eps=eps,
+            noise_scheduler=source,
+            t=t,
+            loss_weight=self._call_weight,
+            flow_target=source.cond_velocity(generated, eps, t)
+            if prediction_type == "flow"
+            else None,
+        )
         gan = score_loss * 0
         r1 = score_loss * 0
         if self.config.gan_loss_weight_gen > 0:
@@ -497,19 +468,12 @@ class _DMD2Loss(_FastGenBinding, _DMD2Base):
                 eps_real = torch.randn_like(real_data)
             real_perturbed = source.forward_process(real_data, eps_real, t_real)
             real_logits, real_weight = self._logits(real_perturbed, t_real, condition)
-            clean_fake = (
-                fake_logits
-                if fake_weight is None
-                else torch.where(fake_weight > 0, fake_logits, 0)
+            gan = _backend.gan_loss_discriminator(
+                real_logits,
+                fake_logits,
+                real_weight=real_weight,
+                fake_weight=fake_weight,
             )
-            clean_real = (
-                real_logits
-                if real_weight is None
-                else torch.where(real_weight > 0, real_logits, 0)
-            )
-            gan = self._logit_mean(
-                F.softplus(clean_fake), fake_weight
-            ) + self._logit_mean(F.softplus(-clean_real), real_weight)
             if self.config.gan_r1_reg_weight > 0:
                 jittered = real_data + self.config.gan_r1_reg_alpha * torch.randn_like(
                     real_data

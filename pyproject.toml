@@ -270,7 +270,7 @@ diffusion-strategy = [
     "nvalchemi-toolkit @ git+https://github.com/NVIDIA/nvalchemi-toolkit.git@f59e28dc6701583a13bb294e536076c2a7379e98",
 ]
 diffusion-fastgen = [
-    "fastgen @ git+https://github.com/CharlelieLrt/FastGen.git@cd7de8c386a92da2be4cbc3bf0558f16153e46b9",
+    "fastgen @ git+https://github.com/CharlelieLrt/FastGen.git@81814e4f6a0863682a08c4823b22c93258dd3216",
 ]
 # CUDA backend extras (mutually exclusive via [tool.uv] conflicts).
 # Combine with feature extras, e.g. nvidia-physicsnemo[nn-extras,cu13].

@@ -16,6 +16,7 @@
 
 r"""Connect PhysicsNeMo models to FastGen distillation objectives."""
 
+import importlib
 from collections.abc import Callable, Mapping
 from types import SimpleNamespace
 from typing import Any
@@ -26,6 +27,7 @@ from tensordict import TensorDict
 from torch import Tensor
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
+from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.diffusion._fastgen import _FastGenNetwork
 from physicsnemo.diffusion.base import (
     DiffusionExtraTimes,
@@ -36,44 +38,12 @@ from physicsnemo.diffusion.noise_schedulers import (
 )
 from physicsnemo.diffusion.noise_schedulers._fastgen import _FastGenNoiseScheduler
 
-
-class _ObjectiveReduction:
-    r"""Compute masked statistics and weighted squared residuals.
-
-    Statistics use :math:`m=1_{w>0}` and count :math:`\sum m`. Residuals
-    use :math:`w` with the full element count for means. Positive weights
-    scale residuals linearly and leave the adaptive target unchanged.
-    """
-
-    def __init__(
-        self,
-        reference: Float[Tensor, " B *dims"],
-        weight: Float[Tensor, " #B *#dims"] | None,
-    ) -> None:
-        self.weight = (
-            torch.ones_like(reference)
-            if weight is None
-            else torch.broadcast_to(weight, reference.shape)
-        )
-        self.valid = self.weight > 0
-        self.dims = tuple(range(1, reference.ndim))
-        self.count = self.valid.sum(self.dims)
-        self.active = self.count > 0
-
-    def clean(self, value: Float[Tensor, " B *dims"]) -> Float[Tensor, " B *dims"]:
-        r"""Remove invalid entries before nonlinear operations."""
-        return torch.where(self.valid, value, torch.zeros_like(value))
-
-    def norm(self, value: Float[Tensor, " B *dims"]) -> Float[Tensor, " B"]:
-        r"""Compute the Euclidean norm on valid entries only."""
-        return torch.linalg.vector_norm(self.clean(value).flatten(1), dim=1)
-
-    def residual(
-        self, value: Float[Tensor, " B *dims"], *, mean: bool
-    ) -> Float[Tensor, " B"]:
-        r"""Weight squared residuals linearly, retaining the backend denominator."""
-        weighted = self.clean(value).square() * self.weight
-        return weighted.mean(self.dims) if mean else weighted.sum(self.dims)
+if check_version_spec("fastgen", "0.1.0", hard_fail=False):
+    _ObjectiveReduction = importlib.import_module(
+        "fastgen.methods.loss_support"
+    ).LossReduction
+else:
+    _ObjectiveReduction = None
 
 
 class _FastGenBinding:
