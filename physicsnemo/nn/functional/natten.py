@@ -26,6 +26,40 @@ from physicsnemo.core.version_check import OptionalImport
 _natten = OptionalImport("natten")
 
 
+def _subclass_under_compile(*tensors: torch.Tensor) -> bool:
+    r"""True while Dynamo traces a call with a tensor-subclass operand.
+
+    Dynamo folds ``has_torch_function`` to ``False`` for traceable wrapper
+    subclasses such as ``ShardTensor``, so the check above alone would hand the
+    subclass to the raw kernel. ``type()`` still reports the subclass.
+    """
+    return torch.compiler.is_compiling() and any(
+        type(t) is not torch.Tensor for t in tensors
+    )
+
+
+@torch._dynamo.allow_in_graph
+def _dispatch_in_graph(
+    name: str,
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    kernel_size: int,
+    dilation: int,
+    kwargs: dict[str, Any],
+) -> torch.Tensor:
+    r"""Subclass dispatch as one opaque graph node.
+
+    Dynamo records the call and runs it under fake propagation, where
+    ``__torch_function__`` dispatches to the subclass handler (for
+    ``ShardTensor``, the halo-exchange path), as for ``torch`` ops.
+    """
+    func = _NA_FUNCS[name]
+    return handle_torch_function(
+        func, (q, k, v), q, k, v, kernel_size, dilation=dilation, **kwargs
+    )
+
+
 def na1d(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -73,6 +107,8 @@ def na1d(
             dilation=dilation,
             **kwargs,
         )
+    if _subclass_under_compile(q, k, v):
+        return _dispatch_in_graph("na1d", q, k, v, kernel_size, dilation, kwargs)
     return _natten.functional.na1d(q, k, v, kernel_size, dilation=dilation, **kwargs)
 
 
@@ -123,6 +159,8 @@ def na2d(
             dilation=dilation,
             **kwargs,
         )
+    if _subclass_under_compile(q, k, v):
+        return _dispatch_in_graph("na2d", q, k, v, kernel_size, dilation, kwargs)
     return _natten.functional.na2d(q, k, v, kernel_size, dilation=dilation, **kwargs)
 
 
@@ -173,7 +211,11 @@ def na3d(
             dilation=dilation,
             **kwargs,
         )
+    if _subclass_under_compile(q, k, v):
+        return _dispatch_in_graph("na3d", q, k, v, kernel_size, dilation, kwargs)
     return _natten.functional.na3d(q, k, v, kernel_size, dilation=dilation, **kwargs)
 
+
+_NA_FUNCS = {"na1d": na1d, "na2d": na2d, "na3d": na3d}
 
 __all__ = ["na1d", "na2d", "na3d"]
