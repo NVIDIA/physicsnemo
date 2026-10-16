@@ -334,7 +334,7 @@ def subdivide_butterfly(mesh: "Mesh") -> "Mesh":
     subdivision_pattern = subdivision_pattern.to(mesh.cells.device, non_blocking=True)
 
     ### Generate child cells (same topology as linear)
-    child_cells, parent_indices = generate_child_cells(
+    child_cells = generate_child_cells(
         parent_cells=mesh.cells,
         edge_inverse=edge_inverse,
         n_original_points=n_original_points,
@@ -344,8 +344,8 @@ def subdivide_butterfly(mesh: "Mesh") -> "Mesh":
     ### Propagate cell_data
     new_cell_data = propagate_cell_data_to_children(
         cell_data=mesh.cell_data,
-        parent_indices=parent_indices,
-        n_total_children=len(child_cells),
+        n_children_per_parent=subdivision_pattern.shape[0],
+        device=mesh.cells.device,
     )
 
     ### Create and return subdivided mesh
@@ -354,10 +354,18 @@ def subdivide_butterfly(mesh: "Mesh") -> "Mesh":
         cells=child_cells,
         point_data=new_point_data,
         cell_data=new_cell_data,
-        global_data=mesh.global_data,
+        global_data=mesh.global_data.copy(),  # Shared tensors, own container
     )
 
-    from physicsnemo.mesh.calculus.measure import _transfer_cell_measures
+    from physicsnemo.mesh.calculus.measure import (
+        EFFECTIVE_MEASURE_KEY,
+        _transfer_cell_measures,
+    )
 
-    _transfer_cell_measures(mesh, result, parent_indices)
+    if EFFECTIVE_MEASURE_KEY in mesh.cell_data:
+        # Only explicit measures need each child's parent index
+        parent_indices = torch.arange(
+            mesh.n_cells, device=mesh.cells.device
+        ).repeat_interleave(subdivision_pattern.shape[0])
+        _transfer_cell_measures(mesh, result, parent_indices)
     return result

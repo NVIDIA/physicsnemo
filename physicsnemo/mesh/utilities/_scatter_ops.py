@@ -134,14 +134,41 @@ def scatter_aggregate(
         aggregated_data.scatter_add_(dim=0, index=expanded_indices, src=src_data)
         return aggregated_data
 
-    ### Choose the dtype the weights are carried in. Past the fast path a "sum"
-    ### always has explicit weights, so only a "mean" can still have none.
+    ### Fast path: unweighted mean is a sum divided by the destination counts.
+    # Scattering the data itself, rather than a copy multiplied by ones, and
+    # counting with an expanded scalar keeps the only n_src-sized allocation
+    # the cast of an integer src_data. Values match the weighted path exactly.
+    if weights is None and aggregation == "mean":
+        src_data = src_data.to(compute_dtype)
+        aggregated_data = torch.zeros(
+            (n_dst, *data_shape), dtype=compute_dtype, device=device
+        )
+        expanded_indices = src_to_dst_mapping.view(
+            -1, *([1] * len(data_shape))
+        ).expand_as(src_data)
+        aggregated_data.scatter_add_(dim=0, index=expanded_indices, src=src_data)
+
+        # Real counts, as for the weighted mean, so the clamp guard is defined
+        count_dtype = compute_dtype.to_real()
+        counts = torch.zeros(n_dst, dtype=count_dtype, device=device)
+        counts.scatter_add_(
+            dim=0,
+            index=src_to_dst_mapping,
+            src=torch.ones((), dtype=count_dtype, device=device).expand_as(
+                src_to_dst_mapping
+            ),
+        )
+        counts = counts.clamp_(min=safe_eps(count_dtype))
+        return aggregated_data.div_(counts.view(-1, *([1] * len(data_shape))))
+
+    ### Choose the dtype the weights are carried in. Past the fast paths every
+    ### aggregation has explicit weights.
     if aggregation == "mean":
         # A mean divides by per-destination weight sums that are clamped away from
         # zero, and ``clamp`` rejects complex dtypes. Keeping the weights real
         # leaves that guard well-defined, while complex ``src_data`` still
         # accumulates in its own complex ``compute_dtype``.
-        if weights is not None and weights.is_complex():
+        if weights.is_complex():
             raise TypeError(
                 "weights must be real-valued for aggregation='mean', got "
                 f"{weights.dtype=}. Complex weights are supported for "
@@ -156,10 +183,6 @@ def scatter_aggregate(
         weight_dtype = compute_dtype
     else:
         weight_dtype = compute_dtype
-
-    ### Initialize weights if not provided
-    if weights is None:
-        weights = torch.ones(len(src_to_dst_mapping), dtype=weight_dtype, device=device)
 
     ### Ensure weights share the compute dtype (avoid dtype mismatch in multiplication)
     if weights.dtype != weight_dtype:

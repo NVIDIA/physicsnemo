@@ -312,6 +312,29 @@ class TestSliceCells:
         assert sliced.n_cells == 1
         assert sliced.cells.tolist() == [[0, 2, 3]]
 
+    def test_slice_cells_data_containers_are_independent(self):
+        """Adding a field to the result must not add it to the source."""
+        points = torch.tensor(
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], dtype=torch.float32
+        )
+        cells = torch.tensor([[0, 1, 2], [0, 2, 3]], dtype=torch.int64)
+        temperature = torch.arange(4.0)
+        mesh = Mesh(
+            points=points,
+            cells=cells,
+            point_data={"temperature": temperature},
+            global_data={"time": torch.tensor(1.0)},
+        )
+
+        sliced = mesh.slice_cells([0])
+        sliced.point_data["new"] = torch.zeros(4)
+        sliced.global_data["new"] = torch.tensor(0.0)
+
+        assert "new" not in mesh.point_data.keys()
+        assert "new" not in mesh.global_data.keys()
+        # The field tensors themselves are still shared, not copied
+        assert sliced.point_data["temperature"] is mesh.point_data["temperature"]
+
 
 class TestSlicingEdgeCases:
     """Edge cases and special scenarios for slicing operations."""

@@ -52,8 +52,10 @@ def test_cell_masks_preserve_data_and_caches(mesh_with_fields, device, dtype, ke
     for selection in (mask, mask.cpu()):
         actual = mesh.slice_cells(selection)
         assert actual.points is mesh.points
-        assert actual.point_data is mesh.point_data
-        assert actual.global_data is mesh.global_data
+        # Unsliced fields share their tensors, in independent containers
+        assert actual.point_data is not mesh.point_data
+        assert actual.point_data["temperature"] is mesh.point_data["temperature"]
+        assert actual.global_data is not mesh.global_data
         torch.testing.assert_close(actual.cells, expected.cells)
         assert actual.cell_data.batch_size == expected.cell_data.batch_size
         for key in expected.cell_data.keys(True, True):

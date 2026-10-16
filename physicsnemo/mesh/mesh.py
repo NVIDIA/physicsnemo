@@ -509,6 +509,17 @@ class Mesh(
                 if value.batch_size != batch_size:
                     value.batch_size = batch_size
                 continue
+            if value is None:
+                # An empty container needs no validation; the checked constructor
+                # dominates the construction time of small meshes
+                setattr(
+                    self,
+                    field_name,
+                    TensorDict._new_unsafe(
+                        batch_size=batch_size, device=self.points.device
+                    ),
+                )
+                continue
             setattr(
                 self,
                 field_name,
@@ -522,12 +533,16 @@ class Mesh(
         ### _cache: default empty cache structure
         if self._cache is None:
             device = self.points.device
-            self._cache = TensorDict(
+            empty = TensorDict._new_unsafe  # as for the empty data containers above
+            self._cache = empty(
                 {
-                    "cell": TensorDict({}, batch_size=[self.n_cells], device=device),
-                    "point": TensorDict({}, batch_size=[self.n_points], device=device),
-                    "topology": TensorDict({}, device=device),
+                    "cell": empty(batch_size=torch.Size([self.n_cells]), device=device),
+                    "point": empty(
+                        batch_size=torch.Size([self.n_points]), device=device
+                    ),
+                    "topology": empty(batch_size=torch.Size([]), device=device),
                 },
+                batch_size=torch.Size([]),
                 device=device,
             )
 
@@ -1501,7 +1516,11 @@ class Mesh(
         return cls(
             points=torch.cat([m.points for m in meshes], dim=0),
             cells=torch.cat(
-                [m.cells + offset for m, offset in zip(meshes, cell_index_offsets)],
+                [
+                    # The first mesh's offset is 0: cat its cells without a copy
+                    m.cells if i == 0 else m.cells + offset
+                    for i, (m, offset) in enumerate(zip(meshes, cell_index_offsets))
+                ],
                 dim=0,
             ),
             point_data=TensorDict.cat([m.point_data for m in meshes], dim=0),
@@ -1704,11 +1723,12 @@ class Mesh(
         Notes
         -----
         Slicing shares unsliced data with the source by reference rather than
-        copying: the returned mesh shares ``points``, ``point_data``, and
-        ``global_data`` with this mesh, and the no-op selections ``None`` /
-        ``Ellipsis`` return this mesh itself. Mutating any shared field on the
-        result therefore also mutates the source; clone first if you need an
-        independent copy.
+        copying: the returned mesh shares ``points`` and the field tensors of
+        ``point_data`` and ``global_data`` with this mesh (in new containers,
+        so adding or removing a field does not affect the source), and the
+        no-op selections ``None`` / ``Ellipsis`` return this mesh itself.
+        Mutating a shared tensor in place on the result therefore also mutates
+        the source; clone first if you need an independent copy.
 
         A one-dimensional CUDA boolean mask requires one host-device
         synchronization to determine the output cell count. Integer index
@@ -1758,9 +1778,10 @@ class Mesh(
         return Mesh(
             points=self.points,
             cells=self.cells[indices],
-            point_data=self.point_data,
+            # Shallow copies: shared field tensors, independent containers
+            point_data=self.point_data.copy(),
             cell_data=new_cell_data,
-            global_data=self.global_data,
+            global_data=self.global_data.copy(),
             _cache=new_cache,
         )
 
@@ -2226,9 +2247,10 @@ class Mesh(
                 )
 
         ### Convert each cell data field to point data via scatter aggregation
-        new_point_data = self.point_data.clone()
+        # A shallow copy: with_data shares the unchanged leaves anyway
+        new_point_data = self.point_data.copy()
 
-        # Get flat list of point indices and corresponding cell indices
+        # Get flat list of point indices
         # self.cells shape: (n_cells, n_vertices_per_cell)
         n_vertices_per_cell = self.cells.shape[1]
 
@@ -2236,20 +2258,35 @@ class Mesh(
         # Shape: (n_cells * n_vertices_per_cell,)
         point_indices = self.cells.flatten()
 
-        # Corresponding cell index for each point
-        # Shape: (n_cells * n_vertices_per_cell,)
-        cell_indices = torch.arange(
-            self.n_cells, device=self.points.device
-        ).repeat_interleave(n_vertices_per_cell)
+        # Number of cells using each point, counted once for every field
+        device = self.points.device
+        vertex_degree = torch.zeros(self.n_points, dtype=torch.int64, device=device)
+        vertex_degree.scatter_add_(
+            0,
+            point_indices,
+            torch.ones((), dtype=torch.int64, device=device).expand_as(point_indices),
+        )
+        # Points in no cell have zero sums, which divided by 1 stay the same zero
+        # that scatter_aggregate's epsilon-clamped count gives
+        vertex_degree = vertex_degree.clamp_(min=1)
 
-        converted = fields.apply(
-            lambda cell_values: scatter_aggregate(
-                src_data=cell_values[cell_indices],
+        def _mean_over_point_cells(cell_values: torch.Tensor) -> torch.Tensor:
+            """Average a single cell field over the cells around each point."""
+            # Same arithmetic as scatter_aggregate's unweighted mean, which would
+            # recount the vertex degree for every field
+            if not cell_values.is_floating_point() and not cell_values.is_complex():
+                cell_values = cell_values.to(torch.float64)
+            sums = scatter_aggregate(
+                # Each cell's value once per vertex, lined up with point_indices
+                src_data=cell_values.repeat_interleave(n_vertices_per_cell, dim=0),
                 src_to_dst_mapping=point_indices,
                 n_dst=self.n_points,
-                weights=None,
-                aggregation="mean",
-            ),
+                aggregation="sum",
+            )
+            return sums.div_(vertex_degree.view(-1, *([1] * (sums.ndim - 1))))
+
+        converted = fields.apply(
+            _mean_over_point_cells,
             batch_size=torch.Size([self.n_points]),
         )
         new_point_data.update(converted)
@@ -2308,19 +2345,34 @@ class Mesh(
                 )
 
         ### Convert each point data field to cell data by averaging over cell vertices
-        new_cell_data = self.cell_data.clone()
+        # A shallow copy: with_data shares the unchanged leaves anyway
+        new_cell_data = self.cell_data.copy()
+        n_vertices_per_cell = self.cells.shape[1]
 
         def _mean_over_cell_vertices(point_values: torch.Tensor) -> torch.Tensor:
             """Average a single point field over the vertices of each cell."""
-            # Shape: (n_cells, n_vertices_per_cell, *data_shape)
-            cell_values = point_values[self.cells]
-            # Promote integer/bool fields to float first: torch.mean rejects
-            # integer dtypes, and a mean of integers is real-valued anyway.
-            # Casting after the gather rather than the point field before it
-            # keeps the gather on the narrow source dtype, which measures faster.
-            if not cell_values.is_floating_point() and not cell_values.is_complex():
-                cell_values = cell_values.to(torch.float64)
-            return cell_values.mean(dim=1)
+            # Promote integer/bool fields to float first: a mean of integers is
+            # real-valued, and an integer sum could overflow.
+            if not point_values.is_floating_point() and not point_values.is_complex():
+                point_values = point_values.to(torch.float64)
+            # Accumulate one vertex at a time over the static vertex count rather
+            # than gathering an (n_cells, n_vertices_per_cell, *data_shape)
+            # tensor. The sum runs in the order of mean(dim=1), which it matches
+            # bitwise on CPU. Like mean(dim=1), floats narrower than float32
+            # accumulate in float32 and round once at the end.
+            field_dtype = point_values.dtype
+            accumulate_dtype = (
+                torch.float32
+                if point_values.is_floating_point() and point_values.element_size() < 4
+                else field_dtype
+            )
+            # index_select rather than indexing: same values, but its backward is
+            # an index_add_ instead of CUDA's sort-based index_put_
+            cell_values = point_values.index_select(0, self.cells[:, 0])
+            cell_values = cell_values.to(accumulate_dtype)
+            for j in range(1, n_vertices_per_cell):
+                cell_values += point_values.index_select(0, self.cells[:, j])
+            return cell_values.div_(n_vertices_per_cell).to(field_dtype)
 
         converted = fields.apply(
             _mean_over_cell_vertices,

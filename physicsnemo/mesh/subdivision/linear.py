@@ -91,14 +91,26 @@ def subdivide_linear(mesh: "Mesh") -> "Mesh":
     unique_edges, edge_inverse = extract_unique_edges(mesh)
     n_original_points = mesh.n_points
 
-    ### Compute edge midpoints
-    # Shape: (n_edges, n_spatial_dims)
-    edge_vertices = mesh.points[unique_edges]  # (n_edges, 2, n_spatial_dims)
-    edge_midpoints = edge_vertices.mean(dim=1)  # Average the two endpoints
+    ### Get subdivision pattern for this manifold dimension
+    subdivision_pattern = get_subdivision_pattern(mesh.n_manifold_dims)
+    # non_blocking: a small pageable host table, staged by CUDA before returning
+    subdivision_pattern = subdivision_pattern.to(mesh.cells.device, non_blocking=True)
+    n_children_per_parent = subdivision_pattern.shape[0]
 
-    ### Create new points array: original + midpoints
-    # Shape: (n_original_points + n_edges, n_spatial_dims)
-    new_points = torch.cat([mesh.points, edge_midpoints], dim=0)
+    ### Generate child cells from parents
+    # Done first so edge_inverse can be freed before the data is built.
+    child_cells = generate_child_cells(
+        parent_cells=mesh.cells,
+        edge_inverse=edge_inverse,
+        n_original_points=n_original_points,
+        subdivision_pattern=subdivision_pattern,
+    )
+    del edge_inverse
+
+    ### Create new points array: original + edge midpoints
+    # Shape: (n_original_points + n_edges, n_spatial_dims). The (n_edges, 2,
+    # n_spatial_dims) endpoint gather is a temporary of the mean.
+    new_points = torch.cat([mesh.points, mesh.points[unique_edges].mean(dim=1)], dim=0)
 
     ### Interpolate point_data to edge midpoints
     new_point_data = interpolate_point_data_to_edges(
@@ -106,25 +118,13 @@ def subdivide_linear(mesh: "Mesh") -> "Mesh":
         edges=unique_edges,
         n_original_points=n_original_points,
     )
-
-    ### Get subdivision pattern for this manifold dimension
-    subdivision_pattern = get_subdivision_pattern(mesh.n_manifold_dims)
-    # non_blocking: a small pageable host table, staged by CUDA before returning
-    subdivision_pattern = subdivision_pattern.to(mesh.cells.device, non_blocking=True)
-
-    ### Generate child cells from parents
-    child_cells, parent_indices = generate_child_cells(
-        parent_cells=mesh.cells,
-        edge_inverse=edge_inverse,
-        n_original_points=n_original_points,
-        subdivision_pattern=subdivision_pattern,
-    )
+    del unique_edges
 
     ### Propagate cell_data from parents to children
     new_cell_data = propagate_cell_data_to_children(
         cell_data=mesh.cell_data,
-        parent_indices=parent_indices,
-        n_total_children=len(child_cells),
+        n_children_per_parent=n_children_per_parent,
+        device=mesh.cells.device,
     )
 
     ### Create and return subdivided mesh
@@ -133,10 +133,18 @@ def subdivide_linear(mesh: "Mesh") -> "Mesh":
         cells=child_cells,
         point_data=new_point_data,
         cell_data=new_cell_data,
-        global_data=mesh.global_data,  # Preserved unchanged
+        global_data=mesh.global_data.copy(),  # Shared tensors, own container
     )
 
-    from physicsnemo.mesh.calculus.measure import _transfer_cell_measures
+    from physicsnemo.mesh.calculus.measure import (
+        EFFECTIVE_MEASURE_KEY,
+        _transfer_cell_measures,
+    )
 
-    _transfer_cell_measures(mesh, result, parent_indices)
+    if EFFECTIVE_MEASURE_KEY in mesh.cell_data:
+        # Only explicit measures need each child's parent index
+        parent_indices = torch.arange(
+            mesh.n_cells, device=mesh.cells.device
+        ).repeat_interleave(n_children_per_parent)
+        _transfer_cell_measures(mesh, result, parent_indices)
     return result

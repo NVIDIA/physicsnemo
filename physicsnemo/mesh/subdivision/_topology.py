@@ -129,10 +129,7 @@ def generate_child_cells(
     subdivision_pattern: Int[
         torch.Tensor, "n_children_per_parent n_vertices_per_child"
     ],
-) -> tuple[
-    Int[torch.Tensor, "n_total_children n_vertices_per_cell"],
-    Int[torch.Tensor, " n_total_children"],
-]:
+) -> Int[torch.Tensor, "n_total_children n_vertices_per_cell"]:
     """Generate child cells from parent cells using subdivision pattern.
 
     This implementation is fully vectorized using torch operations, avoiding Python loops
@@ -154,13 +151,11 @@ def generate_child_cells(
 
     Returns
     -------
-    tuple[torch.Tensor, torch.Tensor]
-        Tuple of (child_cells, parent_indices):
-
-        - child_cells: Child cell connectivity,
-          shape (n_parent_cells * n_children_per_parent, n_vertices_per_child)
-        - parent_indices: Parent cell index for each child,
-          shape (n_parent_cells * n_children_per_parent,)
+    torch.Tensor
+        Child cell connectivity,
+        shape (n_parent_cells * n_children_per_parent, n_vertices_per_child).
+        The children of parent ``i`` are rows
+        ``i * n_children_per_parent`` to ``(i + 1) * n_children_per_parent - 1``.
 
     Algorithm
     ---------
@@ -171,7 +166,6 @@ def generate_child_cells(
     """
     n_parent_cells, n_vertices_per_cell = parent_cells.shape
     n_children_per_parent = subdivision_pattern.shape[0]
-    device = parent_cells.device
 
     ### Compute number of edges per cell
     # For n-simplex: C(n+1, 2) = (n+1) * n / 2
@@ -209,12 +203,4 @@ def generate_child_cells(
         index=pattern_expanded,
     ).reshape(n_parent_cells * n_children_per_parent, n_vertices_per_cell)
 
-    ### Generate parent indices for each child
-    # Shape: (n_parent_cells * n_children_per_parent,)
-    parent_indices = torch.arange(
-        n_parent_cells,
-        dtype=torch.int64,
-        device=device,
-    ).repeat_interleave(n_children_per_parent)
-
-    return child_cells, parent_indices
+    return child_cells
