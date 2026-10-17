@@ -20,13 +20,15 @@ For manifolds embedded in higher dimensions, solves LSQ in the local tangent spa
 rather than solving in ambient space and projecting. This avoids ill-conditioning.
 """
 
+import functools
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 import torch
 from jaxtyping import Float
 
 from physicsnemo.mesh.utilities._tolerances import safe_eps
-from physicsnemo.utils._small_linalg import batched_lstsq
+from physicsnemo.utils._small_linalg import _lstsq_solver, batched_lstsq
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -71,31 +73,47 @@ def compute_point_gradient_lsq_intrinsic(
         Fully vectorized using batched operations. Groups points by neighbor count
         and processes each group in parallel.
     """
+    return _compute_point_gradients_lsq_intrinsic(mesh, [point_values], weight_power)[0]
+
+
+def _compute_point_gradients_lsq_intrinsic(
+    mesh: "Mesh",
+    point_values: Sequence[Float[torch.Tensor, "n_points ..."]],
+    weight_power: float = 2.0,
+) -> list[Float[torch.Tensor, "n_points n_spatial_dims ..."]]:
+    """Intrinsic gradients of several fields, sharing their tangent-space systems.
+
+    Each gradient is that of :func:`compute_point_gradient_lsq_intrinsic`, bit
+    for bit. The fields share the tangent bases, the neighbor-count groups and
+    the weighted systems and their factorization; each field is then solved on
+    its own, so the peak memory is that of one field.
+    """
     n_points = mesh.n_points
     n_spatial_dims = mesh.n_spatial_dims
     n_manifold_dims = mesh.n_manifold_dims
     device = mesh.points.device
-    dtype = point_values.dtype
 
     if mesh.codimension == 0:
         # No manifold structure: use standard LSQ
         from physicsnemo.mesh.calculus._lsq_reconstruction import (
-            compute_point_gradient_lsq,
+            _compute_point_gradients_lsq,
         )
 
-        return compute_point_gradient_lsq(mesh, point_values, weight_power)
+        return _compute_point_gradients_lsq(mesh, point_values, weight_power)
 
     ### Get adjacency
     adjacency = mesh.get_point_to_points_adjacency()
 
-    ### Determine output shape
-    is_scalar = point_values.ndim == 1
-    if is_scalar:
-        gradient_shape = (n_points, n_spatial_dims)
-    else:
-        gradient_shape = (n_points, n_spatial_dims) + point_values.shape[1:]
+    ### Determine output shapes
+    def zero_gradients(i: int) -> torch.Tensor:
+        """Zero gradients of field ``i``."""
+        shape = (n_points, n_spatial_dims) + point_values[i].shape[1:]
+        return torch.zeros(shape, dtype=point_values[i].dtype, device=device)
 
-    gradients = torch.zeros(gradient_shape, dtype=dtype, device=device)
+    # Several fields: each field's gradients are created before its first
+    # solve, as one field at a time would
+    several = len(point_values) > 1
+    gradients = [None if several else zero_gradients(0) for _ in point_values]
 
     ### Build per-point tangent-space bases, expressed in ambient coordinates with
     # shape (n_points, n_spatial_dims, n_manifold_dims): each column is a tangent vector.
@@ -120,7 +138,11 @@ def compute_point_gradient_lsq_intrinsic(
     ### Process each neighbor-count group in parallel
     from physicsnemo.mesh.calculus._neighborhoods import iter_neighborhood_batches
 
-    for batch in iter_neighborhood_batches(mesh.points, adjacency, min_neighbors=2):
+    # Several fields: the group of the largest systems first, so that the peak
+    # memory falls where only the gradients of the fields solved so far exist
+    for batch in iter_neighborhood_batches(
+        mesh.points, adjacency, min_neighbors=2, largest_first=several
+    ):
         point_indices = batch.entity_indices
         neighbors_flat = batch.neighbor_indices
         A_ambient = batch.relative_positions  # (n_group, n_neighbors, n_spatial_dims)
@@ -135,9 +157,6 @@ def compute_point_gradient_lsq_intrinsic(
         # (as einsum would dispatch) are much slower on GPUs.
         A_tangent = (A_ambient.unsqueeze(-1) * tangent_basis.unsqueeze(1)).sum(dim=-2)
 
-        ### Function differences
-        b = point_values[neighbors_flat] - point_values[point_indices].unsqueeze(1)
-
         ### Compute inverse-distance weights (using ambient distances)
         distances = torch.linalg.vector_norm(A_ambient, dim=-1)
         weights = 1.0 / distances.pow(weight_power).clamp(min=safe_eps(distances.dtype))
@@ -146,42 +165,66 @@ def compute_point_gradient_lsq_intrinsic(
         sqrt_w = weights.sqrt().unsqueeze(-1)  # (n_group, n_neighbors, 1)
         A_tangent_weighted = sqrt_w * A_tangent
         # Only the weighted system is needed from here on
-        del batch, neighbors_flat, A_ambient, A_tangent, distances, weights
+        del batch, A_ambient, A_tangent, distances, weights
 
-        ### Solve batched least-squares in tangent space
-        if is_scalar:
-            b_weighted = sqrt_w.squeeze(-1) * b
-            del b, sqrt_w
-            grad_tangent = batched_lstsq(
-                A_tangent_weighted, b_weighted.unsqueeze(-1)
-            ).squeeze(-1)  # (n_group, n_manifold_dims)
-            del A_tangent_weighted, b_weighted
-
-            # Map back to ambient coordinates
-            grad_ambient = (tangent_basis * grad_tangent.unsqueeze(1)).sum(dim=-1)
-            gradients[point_indices] = grad_ambient
+        ### Factorize the tangent-space system once, for all fields
+        if not several:
+            solve = functools.partial(batched_lstsq, A_tangent_weighted)
         else:
-            # Tensor field: flatten extra dims, solve, map back
-            value_weights = sqrt_w.view(n_group, n_neighbors, *([1] * (b.ndim - 2)))
-            b_weighted = value_weights * b
-            orig_shape = b.shape[2:]
-            b_flat = b_weighted.reshape(n_group, n_neighbors, -1)
-            del b, sqrt_w, value_weights, b_weighted
+            solve = _lstsq_solver(A_tangent_weighted)
+        del A_tangent_weighted  # kept by the solver if it needs it
 
-            grad_tangent = batched_lstsq(
-                A_tangent_weighted, b_flat
-            )  # (n_group, n_manifold_dims, n_components)
-            del A_tangent_weighted, b_flat
+        for i, field in enumerate(point_values):
+            ### Function differences
+            b = field[neighbors_flat] - field[point_indices].unsqueeze(1)
+            is_last = i == len(point_values) - 1
+            if gradients[i] is None:
+                gradients[i] = zero_gradients(i)
+            field_gradients = gradients[i]
 
-            grad_ambient = (
-                tangent_basis.unsqueeze(-1) * grad_tangent.unsqueeze(1)
-            ).sum(dim=-2)
-            grad_ambient_reshaped = grad_ambient.reshape(
-                n_group, n_spatial_dims, *orig_shape
-            )
-            gradients[point_indices] = grad_ambient_reshaped
+            ### Solve batched least-squares in tangent space
+            if field.ndim == 1:
+                b_weighted = sqrt_w.squeeze(-1) * b
+                del b
+                if is_last:
+                    del sqrt_w
+                grad_tangent = solve(b_weighted.unsqueeze(-1)).squeeze(
+                    -1
+                )  # (n_group, n_manifold_dims)
+                del b_weighted
 
-    return gradients
+                # Map back to ambient coordinates
+                grad_ambient = (tangent_basis * grad_tangent.unsqueeze(1)).sum(dim=-1)
+                field_gradients[point_indices] = grad_ambient
+                del grad_tangent, grad_ambient
+            else:
+                # Tensor field: flatten extra dims, solve, map back
+                value_weights = sqrt_w.view(n_group, n_neighbors, *([1] * (b.ndim - 2)))
+                b_weighted = value_weights * b
+                orig_shape = b.shape[2:]
+                b_flat = b_weighted.reshape(n_group, n_neighbors, -1)
+                del b, value_weights, b_weighted
+                if is_last:
+                    del sqrt_w
+
+                grad_tangent = solve(b_flat)  # (n_group, n_manifold_dims, n_components)
+                del b_flat
+
+                grad_ambient = (
+                    tangent_basis.unsqueeze(-1) * grad_tangent.unsqueeze(1)
+                ).sum(dim=-2)
+                grad_ambient_reshaped = grad_ambient.reshape(
+                    n_group, n_spatial_dims, *orig_shape
+                )
+                field_gradients[point_indices] = grad_ambient_reshaped
+                del grad_tangent, grad_ambient, grad_ambient_reshaped
+        del solve  # before the next group's
+
+    # Zero for fields never solved
+    return [
+        zero_gradients(i) if gradients[i] is None else gradients[i]
+        for i in range(len(point_values))
+    ]
 
 
 def _build_tangent_bases_vectorized(

@@ -648,3 +648,31 @@ def test_small_lstsq_bfloat16(device: str, solver: str):
 
     assert solution.dtype == torch.bfloat16
     assert (solution.float() > 0.5).all()
+
+
+@pytest.mark.parametrize(
+    "dtype, n_unknowns",
+    [
+        (torch.float32, 2),  # normal equations
+        (torch.float32, 3),
+        (torch.float64, 3),  # small_lstsq
+        (torch.float32, 4),
+        (torch.bfloat16, 3),  # normal equations in float32
+    ],
+)
+def test_lstsq_solver_matches_batched_lstsq(
+    device: str, dtype: torch.dtype, n_unknowns: int
+):
+    """One solver of ``A`` serves right-hand sides of any width, bit for bit as
+    ``batched_lstsq``, also with rank-deficient systems in the batch."""
+    from physicsnemo.utils._small_linalg import _lstsq_solver, batched_lstsq
+
+    generator = torch.Generator().manual_seed(0)
+    A = torch.randn(300, 8, n_unknowns, generator=generator)
+    A[:100, :, -1] = A[:100, :, 0]  # rank-deficient
+    A[100:110] = 0.0
+    A = A.to(device=device, dtype=dtype)
+    solve = _lstsq_solver(A)
+    for n_rhs in (1, 3, 1, 4):
+        B = torch.randn(300, 8, n_rhs, generator=generator).to(device, dtype)
+        assert torch.equal(solve(B), batched_lstsq(A, B))
