@@ -355,6 +355,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Seeded `DomainMeshReader` subsamples select the same rows from zarr stores
   as from memmap files. Before, boundaries read in full, and interiors read
   with `drop_interior_cells`, could differ between the two formats.
+- `from_pyvista(point_source="cell_centroids")` places the centroid of each
+  polygon, polyline, and triangle strip at the mean of its vertices. Before,
+  even a regular pentagon got an off-centre point.
+- `to_pyvista` exports vertex-cell meshes, and empty line and triangle meshes,
+  with their cell data. Before, the export failed.
+- `to_zarr` raises a `TypeError` naming any field it cannot store, such as a
+  bfloat16 field, before it writes anything. Before, it left a partial store
+  that loaded without those fields.
+- `from_zarr` loads scalar uint64 fields, where it raised before.
+- `Mesh.draw` with matplotlib colors 2D curves by their scalars and honours
+  `alpha_edges`. It also draws 1D meshes in view, vertex cells in 1D, and
+  integer vector scalars, where it failed before.
+- `Mesh.draw` with PyVista lets `backend_options` set the edge color, line
+  width and scalar bar, where it raised before.
 - GLOBE DrivAerML postprocessing reports correct Cd, Cl, and Cs on subsampled
   surfaces. Before, they shrank with the fraction of cells kept.
 - The unified external aero recipe documents how surface subsampling affects

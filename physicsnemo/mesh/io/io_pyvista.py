@@ -1475,7 +1475,7 @@ def from_pyvista(
                     "omitting them would break cell_data alignment."
                 )
         return _from_pyvista_cell_centroids(
-            pyvista_mesh, manifold_dim, warn_on_lost_data, force_copy
+            pyvista_mesh, manifold_dim, warn_on_lost_data, force_copy, polydata_topology
         )
 
     ### Determine native mesh dimension (used for auto-detection, data-loss
@@ -1779,7 +1779,8 @@ def to_pyvista(
     Returns
     -------
     pv.PolyData or pv.UnstructuredGrid or pv.PointSet
-        PyVista mesh (PointSet for 0D, PolyData for 1D/2D, UnstructuredGrid for 3D).
+        PyVista mesh: PointSet for a point cloud without cells, PolyData for
+        vertex cells (0D) and for 1D/2D, UnstructuredGrid for 3D.
 
     Raises
     ------
@@ -1816,12 +1817,20 @@ def to_pyvista(
 
     ### Convert based on manifold dimension
     if mesh.n_manifold_dims == 0:
-        pv_mesh = pv.PointSet(points_np)
+        if mesh.n_cells == 0:
+            pv_mesh = pv.PointSet(points_np)
+        else:
+            # Explicit VERTEX cells, so that cell_data has cells to attach to.
+            cells_np = mesh.cells.cpu().numpy()
+            pv_mesh = pv.PolyData(points_np, verts=_to_vtk_cell_array(cells_np))
 
     elif mesh.n_manifold_dims == 1:
         cells_np = mesh.cells.cpu().numpy()
         if mesh.n_cells == 0:
-            pv_mesh = pv.PolyData(points_np)
+            # Set points after construction: pv.PolyData(points) would add one
+            # VERTEX cell per point.
+            pv_mesh = pv.PolyData()
+            pv_mesh.points = points_np
         else:
             # Offsets-free connectivity; it shares storage with mesh.cells
             # (kept alive by VTK) unless force_copy requests a deep copy.
@@ -1831,7 +1840,8 @@ def to_pyvista(
     elif mesh.n_manifold_dims == 2:
         cells_np = mesh.cells.cpu().numpy()
         if mesh.n_cells == 0:
-            pv_mesh = pv.PolyData(points_np)
+            pv_mesh = pv.PolyData()
+            pv_mesh.points = points_np
         else:
             if force_copy:
                 cells_np = cells_np.copy()
@@ -1885,6 +1895,7 @@ def _from_pyvista_cell_centroids(
     manifold_dim: int | Literal["auto"],
     warn_on_lost_data: bool,
     force_copy: bool,
+    polydata_topology: dict[str, tuple[np.ndarray, np.ndarray]] | None,
 ) -> Mesh:
     """Build a Mesh from cell centroids, mapping cell_data to point_data.
 
@@ -1899,11 +1910,15 @@ def _from_pyvista_cell_centroids(
         Emit a warning if non-empty point_data will be discarded.
     force_copy : bool
         Copy attached data arrays instead of sharing their storage.
+    polydata_topology : dict or None
+        Validated ``(offsets, connectivity)`` per PolyData cell array, from
+        :func:`_validate_polydata_topology`, or None if the input is not
+        PolyData.
 
     Returns
     -------
     Mesh
-        Mesh whose points are the cell centroids.
+        Mesh whose points are the cell centroids (vertex means).
     """
     if manifold_dim == "auto":
         manifold_dim = 0
@@ -1922,9 +1937,65 @@ def _from_pyvista_cell_centroids(
             warning_stacklevel=5,
         )
 
-    ### Compute cell centroids with VTK's fast C++ filter.
-    centroids_np = pyvista_mesh.cell_centers().points
-    points = torch.from_numpy(centroids_np.copy())
+    ### Compute cell centroids with VTK's fast C++ filter. It evaluates each
+    ### cell at its parametric centre, which is the vertex mean only for
+    ### fixed-size cells: use the vertex mean (as Mesh.cell_centroids does)
+    ### for the variable-size poly-vertex, polyline, polygon and strip cells.
+    centroids_np = pyvista_mesh.cell_centers().points.copy()
+    cell_blocks = []
+    if isinstance(pyvista_mesh, pv.UnstructuredGrid):
+        is_variable_size = np.isin(
+            pyvista_mesh.celltypes,
+            [
+                pv.CellType.POLY_VERTEX,
+                pv.CellType.POLY_LINE,
+                pv.CellType.POLYGON,
+                pv.CellType.TRIANGLE_STRIP,
+            ],
+        )
+        cell_blocks = [
+            (
+                np.asarray(pyvista_mesh.cell_offsets),
+                np.asarray(pyvista_mesh.cell_connectivity),
+                is_variable_size,
+            )
+        ]
+    elif polydata_topology is not None:
+        # PolyData cell IDs run over verts, lines, polys and strips in turn;
+        # VTK reads polys of 3 and 4 points as triangles and quads.
+        for association, min_variable_arity in (
+            ("verts", 2),
+            ("lines", 3),
+            ("faces", 5),
+            ("strips", 3),
+        ):
+            offsets, connectivity = polydata_topology[association]
+            cell_blocks.append(
+                (offsets, connectivity, np.diff(offsets) >= min_variable_arity)
+            )
+    first_cell_id = 0
+    for offsets, connectivity, is_variable_size in cell_blocks:
+        cell_ids = np.flatnonzero(is_variable_size)
+        if len(cell_ids) > 0:
+            point_ids, _, cell_offsets = _gather_vtk_rows(
+                offsets, connectivity, cell_ids
+            )
+            # Average in float64, with each cell's points scaled into [-1, 1],
+            # so that the sum cannot overflow (or wrap, for integer points)
+            # when the mean is finite.
+            counts = np.diff(cell_offsets)
+            starts = cell_offsets[:-1]
+            cell_points = pyvista_mesh.points[point_ids].astype(np.float64)
+            scale = np.maximum.reduceat(np.abs(cell_points), starts, axis=0)
+            scale[(scale == 0) | ~np.isfinite(scale)] = 1.0
+            scaled_sums = np.add.reduceat(
+                cell_points / np.repeat(scale, counts, axis=0), starts, axis=0
+            )
+            centroids_np[first_cell_id + cell_ids] = (
+                scaled_sums / counts[:, None] * scale
+            )
+        first_cell_id += len(offsets) - 1
+    points = torch.from_numpy(centroids_np)
     if not points.is_floating_point() or points.element_size() < 4:
         points = points.float()
 

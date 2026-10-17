@@ -343,7 +343,7 @@ def _draw_1d(
     alpha_points,
     alpha_cells,
 ):
-    """Draw 1D manifold (edges) in 1D or 2D space."""
+    """Draw 1D manifold (edges) in 1D space."""
     # Points are 1D, so plot along x-axis (or in 2D if embedded in 2D)
     if points_np.shape[1] == 1:
         # Truly 1D: plot on x-axis
@@ -354,8 +354,8 @@ def _draw_1d(
             f"Expected 1D points for 1D spatial dimension, got shape {points_np.shape}"
         )
 
-    ### Draw cells (line segments)
-    if cells_np.shape[0] > 0 and alpha_cells > 0:
+    ### Draw cells (line segments); vertex cells are drawn as the points below
+    if cells_np.shape[0] > 0 and cells_np.shape[1] == 2 and alpha_cells > 0:
         segments = points_np[cells_np[:, :2]]  # Shape: (n_cells, 2, 1)
         segments = np.stack(
             [segments[:, :, 0], np.zeros((len(segments), 2))], axis=-1
@@ -380,6 +380,10 @@ def _draw_1d(
 
         ax.scatter(x, np.zeros_like(x), c=colors, alpha=alpha_points, s=5, zorder=2)
 
+    ### add_collection does not rescale the view, so fit it to the lines too.
+    ### A no-op on axes whose limits the caller fixed.
+    ax.autoscale_view()
+
 
 def _draw_2d(
     ax,
@@ -396,9 +400,25 @@ def _draw_2d(
     alpha_edges,
     show_edges,
 ):
-    """Draw 2D manifold (triangles) in 2D space."""
+    """Draw mesh in 2D space: line segments for 1D manifolds, else polygons."""
+    ### Draw cells: line segments for 1D manifolds (edges)
+    if cells_np.shape[0] > 0 and cells_np.shape[1] == 2 and alpha_cells > 0:
+        if active_scalar_source == "cells" and cell_scalar_values is not None:
+            colors = scalar_mapper.to_rgba(cell_scalar_values.cpu().numpy())
+        else:
+            colors = cell_neutral_color
+
+        lc = mpl_collections.LineCollection(
+            points_np[cells_np],
+            colors=colors,
+            alpha=alpha_cells,
+            linewidths=2,
+            zorder=1,
+        )
+        ax.add_collection(lc)
+
     ### Draw cells (filled polygons)
-    if cells_np.shape[0] > 0 and alpha_cells > 0:
+    elif cells_np.shape[0] > 0 and alpha_cells > 0:
         # Create polygons from cells
         verts = points_np[cells_np]  # Shape: (n_cells, n_vertices_per_cell, 2)
 
@@ -415,24 +435,21 @@ def _draw_2d(
             facecolors = cell_neutral_color
 
         if show_edges and alpha_edges > 0:
-            edgecolors = "black"
+            edgecolors = (0, 0, 0, alpha_edges)
             linewidths = 0.25
         else:
             edgecolors = "none"
             linewidths = 0
 
+        # Bake the opacities into the RGBA colors: a collection-wide alpha
+        # would override alpha_edges.
         pc = mpl_collections.PolyCollection(
             verts,
-            facecolors=facecolors,
+            facecolors=mpl_colors.to_rgba_array(facecolors, alpha_cells),
             edgecolors=edgecolors,
             linewidths=linewidths,
-            alpha=alpha_cells,
             zorder=1,
         )
-        # Set edge alpha separately if needed
-        if show_edges and alpha_edges > 0 and alpha_edges != alpha_cells:
-            pc.set_edgecolor([(0, 0, 0, alpha_edges)] * len(verts))
-
         ax.add_collection(pc)
 
     ### Draw points
@@ -441,6 +458,7 @@ def _draw_2d(
     # overlaid dots would be redundant. This matches _draw_3d behavior.
     has_colored_surface = (
         cells_np.shape[0] > 0
+        and cells_np.shape[1] >= 3
         and alpha_cells > 0
         and active_scalar_source == "points"
         and point_scalar_values is not None

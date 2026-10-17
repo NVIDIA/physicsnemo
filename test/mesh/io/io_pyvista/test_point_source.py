@@ -298,6 +298,71 @@ class TestCellCentroidsPointCloud:
         assert mesh.n_points == 1
         assert mesh.point_data["vol_id"].item() == 42
 
+    @pytest.mark.parametrize("as_unstructured", [False, True])
+    def test_centroid_of_variable_size_cells_is_vertex_mean(self, as_unstructured):
+        """Polygon, polyline, strip and poly-vertex centroids are vertex means."""
+        angles = np.linspace(0, 2 * np.pi, 6)[:-1]
+        pentagon = np.stack([np.cos(angles), np.sin(angles), np.zeros(5)], axis=1)
+        others = np.array(
+            [[0, 0, 1], [1, 0, 1], [2, 0, 1], [0, 1, 2], [1, 1, 2], [2, 1, 2]],
+            dtype=np.float64,
+        )
+        pv_mesh = pv.PolyData(
+            np.concatenate([pentagon, others]),
+            verts=[4, 5, 6, 7, 10],  # poly-vertex
+            lines=[3, 5, 6, 7],  # straight polyline
+            faces=[5, 0, 1, 2, 3, 4],  # regular pentagon
+            strips=[6, 5, 6, 7, 8, 9, 10],  # triangle strip
+        )
+        if as_unstructured:
+            pv_mesh = pv_mesh.cast_to_unstructured_grid()
+
+        mesh = from_pyvista(
+            pv_mesh,
+            manifold_dim=0,
+            point_source="cell_centroids",
+            warn_on_lost_data=False,
+        )
+
+        # PolyData cell order: verts, lines, polys, strips.
+        expected = [
+            [1.25, 0.25, 1.25],  # mean of (0,0,1), (1,0,1), (2,0,1), (2,1,2)
+            [1.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0],
+            [1.0, 0.5, 1.5],
+        ]
+        np.testing.assert_allclose(mesh.points.numpy(), expected, atol=1e-12)
+
+    @pytest.mark.parametrize("as_unstructured", [False, True])
+    @pytest.mark.parametrize(
+        "dtype,x",
+        [
+            (np.int64, 2**62),
+            (np.float32, 2e38),
+            (np.float64, 8e307),
+            (np.float64, np.finfo(np.float64).max),
+        ],
+    )
+    def test_variable_size_centroid_near_dtype_limit(self, as_unstructured, dtype, x):
+        """A polyline centroid is exact even when its vertex sum would overflow."""
+        pv_mesh = pv.PolyData(
+            np.array([[x, 0, 0], [x, 1, 0], [x, 2, 0]], dtype=dtype),
+            lines=[3, 0, 1, 2],
+            force_float=False,
+        )
+        if as_unstructured:
+            pv_mesh = pv_mesh.cast_to_unstructured_grid()
+
+        mesh = from_pyvista(
+            pv_mesh,
+            manifold_dim=0,
+            point_source="cell_centroids",
+            warn_on_lost_data=False,
+        )
+
+        expected = [[float(dtype(x)), 1.0, 0.0]]
+        np.testing.assert_allclose(mesh.points.numpy(), expected, rtol=1e-12)
+
 
 # ---------------------------------------------------------------------------
 # point_source="cell_centroids", manifold_dim=1 (dual graph)

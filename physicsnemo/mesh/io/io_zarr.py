@@ -78,6 +78,13 @@ def to_zarr(
     zstd_level : int
         zstd compression level (0 disables compression).
 
+    Raises
+    ------
+    TypeError
+        If ``obj`` is not a Mesh or DomainMesh, or if a field has a dtype
+        that NumPy cannot represent (e.g. ``torch.bfloat16``). Nothing is
+        written in that case; cast the field first (e.g. to ``torch.float32``).
+
     Examples
     --------
     >>> from physicsnemo.mesh.io import to_zarr, from_zarr  # doctest: +SKIP
@@ -87,13 +94,27 @@ def to_zarr(
     if not isinstance(obj, (Mesh, DomainMesh)):
         raise TypeError(f"Expected Mesh or DomainMesh, got {type(obj).__name__}")
 
-    kwargs = {"chunks": (chunk_rows,)}
-    if zstd_level > 0:
-        kwargs["compressors"] = [zarr.codecs.ZstdCodec(level=zstd_level)]
     # Serialize the underlying TensorDict: the tensorclass `to_zarr` proxy
     # tries to re-wrap the returned PersistentTensorDict as a Mesh/DomainMesh,
     # which their __post_init__ validation rejects.
-    obj.to_tensordict().to_zarr(str(store), **kwargs)
+    td = obj.to_tensordict()
+
+    # tensordict writes through NumPy, so a dtype NumPy lacks would fail midway
+    # and leave a partial store behind. Reject it before writing anything.
+    for key, value in td.items(include_nested=True, leaves_only=True):
+        try:
+            torch.empty(0, dtype=value.dtype, device="cpu").numpy()
+        except TypeError:
+            name = key if isinstance(key, str) else "/".join(key)
+            raise TypeError(
+                f"Cannot write field {name!r} with {value.dtype} to zarr: NumPy "
+                f"has no equivalent dtype. Cast it first (e.g. to torch.float32)."
+            ) from None
+
+    kwargs = {"chunks": (chunk_rows,)}
+    if zstd_level > 0:
+        kwargs["compressors"] = [zarr.codecs.ZstdCodec(level=zstd_level)]
+    td.to_zarr(str(store), **kwargs)
 
     root = zarr.open_group(str(store), mode="a")
     root.attrs[_TYPE_ATTR] = type(obj).__name__
@@ -110,7 +131,10 @@ def _open_group(store) -> "zarr.Group":
 
 def _read_full(arr, device=None) -> torch.Tensor:
     """Read a whole zarr array as a tensor."""
-    return torch.as_tensor(arr[...], device=device)
+    import numpy as np
+
+    # A 0-d array reads as a NumPy scalar, which torch rejects for uint64.
+    return torch.as_tensor(np.asarray(arr[...]), device=device)
 
 
 def _read_rows(arr, runs: list[tuple[int, int]], device=None) -> torch.Tensor:
