@@ -2827,6 +2827,7 @@ class Mesh(
         - Points: Additional points at the last existing point (preserves bounding box)
         - cells: Degenerate cells with all vertices at the last existing point (zero area)
         - cell data: NaN-valued padding for all cell data fields (default)
+        - explicit effective measures: zero, so padding adds nothing to integrals
 
         Parameters
         ----------
@@ -2893,6 +2894,20 @@ class Mesh(
                 value = 0.0
             return _pad_with_value(tensor, size, value)
 
+        from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY
+
+        def _pad_fields(data: TensorDict, size: int) -> TensorDict:
+            padded = data.apply(
+                lambda x: _pad_data(x, size), batch_size=torch.Size([size])
+            )
+            # Padding elements contribute nothing to integrals, whatever the
+            # padding value of ordinary fields.
+            if EFFECTIVE_MEASURE_KEY in data.keys():
+                padded[EFFECTIVE_MEASURE_KEY] = _pad_with_value(
+                    data[EFFECTIVE_MEASURE_KEY], size, 0.0
+                )
+            return padded
+
         padded_cell_cache = self._cache["cell"].apply(
             lambda x: _pad_with_value(x, target_n_cells, 0.0),
             batch_size=torch.Size([target_n_cells]),
@@ -2913,14 +2928,8 @@ class Mesh(
             cells=_pad_with_value(
                 self.cells, target_n_cells, max(self.n_points - 1, 0)
             ),
-            point_data=self.point_data.apply(
-                lambda x: _pad_data(x, target_n_points),
-                batch_size=torch.Size([target_n_points]),
-            ),
-            cell_data=self.cell_data.apply(
-                lambda x: _pad_data(x, target_n_cells),
-                batch_size=torch.Size([target_n_cells]),
-            ),
+            point_data=_pad_fields(self.point_data, target_n_points),
+            cell_data=_pad_fields(self.cell_data, target_n_cells),
             global_data=self.global_data,
             _cache=TensorDict(
                 {
@@ -2992,6 +3001,11 @@ class Mesh(
             # Solve for n: floor(base^n) >= current_size
             # n >= log(current_size) / log(base)
             n = math.ceil(math.log(safe_size) / math.log(base))
+            # The logarithm is only an estimate; check the actual floored powers.
+            while n > 0 and int(base ** (n - 1)) >= safe_size:
+                n -= 1
+            while int(base**n) < safe_size:
+                n += 1
             return int(base**n)
 
         target_n_points = next_power_size(self.n_points, power)

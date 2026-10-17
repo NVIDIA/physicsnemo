@@ -22,6 +22,10 @@ import torch
 from jaxtyping import Float
 from tensordict import TensorDict
 
+from physicsnemo.mesh.calculus.measure import (
+    EFFECTIVE_MEASURE_KEY,
+    _transfer_cell_measures,
+)
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.projections._embed import embed
 from physicsnemo.utils._small_linalg import small_det
@@ -318,8 +322,9 @@ def extrude(
         extruded_cells[inverted, -1] = swapped
 
     ### Propagate data (excluding cached properties, which depend on geometry)
+    # Explicit cell measures are not copied as data; they are transferred below.
     filtered_point_data = mesh.point_data
-    filtered_cell_data = mesh.cell_data
+    filtered_cell_data = mesh.cell_data.exclude(EFFECTIVE_MEASURE_KEY)
     # Point data: concatenate original and copy for extruded points
     if len(filtered_point_data.keys()) > 0:
         extruded_point_data = TensorDict.cat(
@@ -353,10 +358,15 @@ def extrude(
     extruded_global_data = mesh.global_data
 
     ### Create and return extruded mesh
-    return Mesh(
+    extruded = Mesh(
         points=all_points,
         cells=extruded_cells,
         point_data=extruded_point_data,
         cell_data=extruded_cell_data,
         global_data=extruded_global_data,
     )
+    if EFFECTIVE_MEASURE_KEY in mesh.cell_data:
+        # Each child keeps its parent's ratio of explicit to geometric measure.
+        parents = torch.arange(n_original_cells, device=mesh.cells.device)
+        _transfer_cell_measures(mesh, extruded, parents.repeat(n_children_per_parent))
+    return extruded

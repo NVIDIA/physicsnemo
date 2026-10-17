@@ -548,9 +548,15 @@ def extract_facet_mesh_data(
         device=parent_mesh.points.device,
     )
 
+    ### Explicit measures have the parent's dimension, so they are not data of
+    # lower-dimensional facets, which fall back to their geometric measures.
+    from physicsnemo.mesh.calculus.measure import EFFECTIVE_MEASURE_KEY
+
     if data_source == "cells":
         ### Aggregate data from parent cells
         filtered_cell_data = parent_mesh.cell_data
+        if manifold_codimension > 0:
+            filtered_cell_data = filtered_cell_data.exclude(EFFECTIVE_MEASURE_KEY)
         if len(filtered_cell_data.keys()) > 0:
             ### Compute facet centroids if needed for inverse_distance
             facet_centroids = None
@@ -590,9 +596,10 @@ def extract_facet_mesh_data(
 
     elif data_source == "points":
         ### Aggregate data from facet vertices
-        if len(parent_mesh.point_data.keys()) > 0:
+        filtered_point_data = parent_mesh.point_data.exclude(EFFECTIVE_MEASURE_KEY)
+        if len(filtered_point_data.keys()) > 0:
             facet_cell_data = _aggregate_point_data_to_facets(
-                point_data=parent_mesh.point_data,
+                point_data=filtered_point_data,
                 candidate_facets=candidate_facets,
                 inverse_indices=inverse_indices,
                 n_unique_facets=n_unique_facets,

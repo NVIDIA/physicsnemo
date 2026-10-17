@@ -259,7 +259,9 @@ class DomainMesh(TensorClass, metaclass=_DomainMeshTensorClassMeta):
             self,
             interior=fn(self.interior) if interior else self.interior.clone(),
             boundaries=(
-                self.boundaries.apply(fn, call_on_nested=True)
+                # device=None keeps each result on the device fn put it on,
+                # rather than casting it back to the container's device.
+                self.boundaries.apply(fn, call_on_nested=True, device=None)
                 if boundaries
                 else self.boundaries.clone()
             ),

@@ -345,6 +345,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The API reference again shows the docstrings of `Mesh`, `DomainMesh` and the
   other tensorclasses in `physicsnemo.mesh`. TensorDict 0.14 replaced them
   with generated signatures.
+- Meshes with explicit measures integrate correctly after `get_facet_mesh`,
+  `get_boundary_mesh`, `to_edge_graph`, `extrude`, `project`, `embed` and `pad`.
+  Before, facets and extruded cells inherited the parent's measure, `project`
+  kept the old one, `embed` raised on centroid point clouds, and padding cells
+  got NaN measures that made a later `scale` raise.
+- `DomainMesh.apply_to_meshes` leaves each boundary mesh on the device the
+  function returns it on. Before, the boundaries went back to the domain's
+  device.
+- `rotate` with a Python angle rotates float64 meshes at float64 precision.
+  Before, it computed the rotation in float32.
+- Anisotropic maps with a small overall scale are no longer taken for
+  similarities. Before, transforming by one kept wrong cached point normals,
+  and scaled point measures instead of raising.
+- `pad_to_next_power` pads to the smallest power that fits. Before, a size that
+  already was such a power could be padded to the next one, and some
+  non-integer powers raised.
 - The GLOBE examples no longer pin TensorDict 0.12, which conflicted with
   PhysicsNeMo's own requirement.
 - `DomainMeshReader` gains `boundary_subsample` (`"both"`, `"cells"`,
