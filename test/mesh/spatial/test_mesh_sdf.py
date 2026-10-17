@@ -525,6 +525,100 @@ def test_repair_degenerate_faces(device):
     assert torch.equal(_repair_degenerate_faces(valid), valid)
 
 
+def test_repair_degenerate_faces_keeps_orientation(device):
+    """A thin face with a nonzero height keeps its plane and orientation.
+
+    Moving the off-edge vertex to the far side of its edge, or out of the
+    face's plane, turns the face's normal and so the pseudo-normal sign.
+    """
+    from physicsnemo.mesh.spatial.sdf import _repair_degenerate_faces
+
+    device = torch.device(device)
+    torch.manual_seed(0)
+    n = 10_000
+    f64 = {"device": device, "dtype": torch.float64}
+    a = torch.randn(n, 3, **f64)
+    edge = torch.randn(n, 3, **f64)
+    edge = edge / edge.norm(dim=-1, keepdim=True) * (1 + torch.rand(n, 1, **f64))
+    b = a + edge
+    w = torch.randn(n, 3, **f64)
+    w = w - ((w * edge).sum(-1) / (edge * edge).sum(-1)).unsqueeze(-1) * edge
+    w = w / w.norm(dim=-1, keepdim=True)
+    t = torch.rand(n, 1, **f64)
+    # Relative height 5e-5: below the repair threshold, far above float32 noise.
+    c = a + t * edge + 5e-5 * edge.norm(dim=-1, keepdim=True) * w
+
+    def unit_normal(tri):
+        tri = tri.to(torch.float64)
+        nrm = torch.linalg.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0], dim=-1)
+        return nrm / nrm.norm(dim=-1, keepdim=True)
+
+    for tri in (torch.stack([a, b, c], 1), torch.stack([c, a, b], 1)):
+        tri = tri.to(torch.float32)
+        repaired = _repair_degenerate_faces(tri)
+        assert not torch.equal(repaired, tri)
+        cos = (unit_normal(repaired) * unit_normal(tri)).sum(-1)
+        assert torch.all(cos > 0.99)
+
+
+def test_sdf_sliver_face_keeps_sign(device):
+    """A repaired sliver on an outward closed surface keeps exterior points
+    positive.
+
+    The boundary of [0, 100]^3, with the y = 0 wall split at (50, 0, 99.999)
+    into a valid sliver below its top edge. The query projects onto that wall,
+    so its signed distance is +100.
+    """
+    device = torch.device(device)
+    points = torch.tensor(
+        [
+            [0, 0, 0],
+            [1, 0, 0],
+            [1, 1, 0],
+            [0, 1, 0],
+            [0, 0, 1],
+            [1, 0, 1],
+            [1, 1, 1],
+            [0, 1, 1],
+            [0.5, 0, 0.99999],
+        ],
+        dtype=torch.float64,
+        device=device,
+    )
+    cells = torch.tensor(
+        [
+            [0, 2, 1],
+            [0, 3, 2],
+            [1, 2, 6],
+            [1, 6, 5],
+            [0, 4, 7],
+            [0, 7, 3],
+            [3, 7, 6],
+            [3, 6, 2],
+            [4, 8, 5],
+            [4, 5, 6],
+            [4, 6, 7],
+            [0, 1, 5],
+            [0, 5, 8],
+            [0, 8, 4],
+        ],
+        device=device,
+    )
+    mesh = Mesh(points=points * 100, cells=cells)
+    query = torch.tensor(
+        [[25.0, -100.0, 99.99], [25.0, -1.0, 99.99], [50.0, 50.0, 50.0]],
+        dtype=torch.float64,
+        device=device,
+    )
+    sdf_out, _, _ = signed_distance_field(mesh, query)
+    torch.testing.assert_close(
+        sdf_out,
+        torch.tensor([100.0, 1.0, -50.0], dtype=torch.float64, device=device),
+        atol=1e-3,
+        rtol=0.0,
+    )
+
+
 def test_sdf_degenerate_face_mesh(device):
     """An isolated degenerate face reports the distance to its segment.
 

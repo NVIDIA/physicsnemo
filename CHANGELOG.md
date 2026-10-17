@@ -347,6 +347,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with generated signatures.
 - The GLOBE examples no longer pin TensorDict 0.12, which conflicted with
   PhysicsNeMo's own requirement.
+- `delaunay_mesh_2d` recovers boundary segments that cross several triangles.
+  Before, it raised on simple polygons, even rectilinear ones, and blamed
+  float64 degeneracy or crossing segments.
+- `signed_distance_field` accepts non-contiguous query points and vertices,
+  such as a transposed tensor, which used to raise a Warp error.
+- The mesh `signed_distance_field` keeps the orientation of the near-degenerate
+  faces it repairs. Before, the repair could flip a thin face, so points
+  outside a watertight mesh got a negative distance.
+- `knn` with the cuML backend, `find_nearest_cells` and `match_points` return
+  empty results for an empty query set on CUDA, as they do on CPU, instead of
+  raising a CUDA error. `match_points` also returns no matches for an empty
+  target.
 - `DomainMeshReader` gains `boundary_subsample` (`"both"`, `"cells"`,
   `"points"`) to choose which subsample applies to the in-file boundaries.
   Composing the cell and point subsamples on a triangulated boundary kept only
