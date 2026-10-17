@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Strata depthwise conditioning convolutions automatically size their vmap
+  chunks to the 32-bit indexing limit instead of using fixed chunks of two
+  channels. `DepthwiseConv(chunk_size="auto")` enables this behavior directly;
+  explicit integer chunk sizes and `None` retain their existing behavior.
+
 - Adds a Rotor37 compressor blade example with GeoTransolver
   (`examples/cfd/rotor37_geotransolver`)
 - Adds an experimental, independently implemented SMART operator with sampled

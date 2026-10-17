@@ -131,8 +131,9 @@ class Strata(Module):
         layer norm); the rest are plain :class:`StrataTransformer3DBlock` blocks.
     use_chunked_depthwise_conv : bool, optional, default=True
         Whether ``"bilinear_dw"`` blocks use the chunked :class:`DepthwiseConv`.
-    chunk_size_grouped_conv : int, optional, default=2
-        ``torch.vmap`` chunk size for the ``"bilinear_dw"`` depthwise conv.
+    chunk_size_grouped_conv : int | Literal["auto"], optional, default="auto"
+        Channel chunk size for the ``"bilinear_dw"`` depthwise conv. ``"auto"``
+        chooses index-safe batch and channel chunks from the input.
     rope_mode_pixel : Literal["none", "axial", "stereographic"], optional, default="none"
         Pixel-pathway RoPE mode. ``"stereographic"`` builds pixel-resolution
         coordinates via :func:`~physicsnemo.experimental.models.strata.coords.build_stereographic_token_coords`
@@ -223,7 +224,7 @@ class Strata(Module):
         adaln_mode: Literal["pixel_proj", "bilinear_dw"] = "pixel_proj",
         first_block_only_adaln: bool = False,
         use_chunked_depthwise_conv: bool = True,
-        chunk_size_grouped_conv: int = 2,
+        chunk_size_grouped_conv: int | Literal["auto"] = "auto",
         rope_mode_pixel: Literal["none", "axial", "stereographic"] = "none",
         rope_base_pixel: float = 100.0,
         rope_length_scale_pixel: float = 1.0,
@@ -298,8 +299,10 @@ class Strata(Module):
         self.bf16_mixed_pixel = bf16_mixed_pixel
         # Reuse StrataTransformer3D's pure parser (a staticmethod) so the ratio semantics match
         # the backbone stage.
-        self._activation_checkpointing_ratio_pixel = StrataTransformer3D._parse_checkpointing_param(
-            activation_checkpointing_pixel
+        self._activation_checkpointing_ratio_pixel = (
+            StrataTransformer3D._parse_checkpointing_param(
+                activation_checkpointing_pixel
+            )
         )
 
         ### Stage 2: pixel pathway at 1x1x1-patch resolution.
@@ -505,7 +508,9 @@ class Strata(Module):
             for b in self.pixel_blocks
         )
         s_cond_bilinear = (
-            StrataPixel3DBlock.precompute_bilinear_cond(backbone_cond, pixel_dhw, backbone_dhw)
+            StrataPixel3DBlock.precompute_bilinear_cond(
+                backbone_cond, pixel_dhw, backbone_dhw
+            )
             if use_shared_bilinear
             else None
         )
