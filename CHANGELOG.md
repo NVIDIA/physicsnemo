@@ -78,6 +78,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   charges the target leaf's own extent: on a 200k-face car with 200k volume
   points the dual plan held 1.6e9 pairs at `theta=0.5` and the point plan
   holds 1.5e8.
+- `ClusterTree.merge` joins trees into one forest, and
+  `find_dual_interaction_pairs(target_roots=...)` plans a source tree against
+  every tree of a forest in one traversal.
 
 ### Changed
 
@@ -93,6 +96,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   peak memory. The plan's interactions are no longer sorted by source.
 - GLOBE's `BarnesHutKernel` needs less memory to train: an 80k-face DrivAerML
   training step no longer runs out of memory.
+- GLOBE trains up to 2.2x faster, and `torch.compile` builds it faster, with
+  the same outputs.
+- `ClusterTree.compute_source_aggregates` packs its source data with
+  `TensorDict.pack`, so source data with leaves of several dtypes now raises
+  a `TypeError` instead of being promoted.
 - Refresh core, optional, development, and container dependency versions.
   Require PyTorch 2.13 or newer;
   use PyTorch 2.13's CUDA 12.9 wheels for the CUDA 12 backend. NATTEN
@@ -257,6 +265,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- `physicsnemo.experimental.models.globe.utilities`, whose TensorDict helpers
+  GLOBE no longer uses.
 - `physicsnemo.mesh.fields`: `RankSpecDict`, `flatten_rank_spec`,
   `rank_counts`, `ranks_from_tensordict` and `validate_data_contains_ranks`,
   replaced by `FieldSchema` (see Changed). Importing one of them from
@@ -283,6 +293,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `GLOBE` accepts `boundary_meshes` as a TensorDict, as the DrivAerML example
   passes them. Before, every forward pass of that example failed.
+- Under `torch.compile`, GLOBE no longer recompiles on its second training
+  step, nor for each new sample of a similar size. Each of these recompiles
+  took minutes at DrivAerML sizes.
 - The GLOBE examples' requirements no longer downgrade PyVista and Matplotlib
   below the versions PhysicsNeMo requires.
 - `signed_distance_field`, in `physicsnemo.nn.functional` and
