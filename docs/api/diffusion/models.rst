@@ -23,6 +23,61 @@ Models from external libraries can also be integrated (see
 :ref:`below <backbone_external_models>`).
 
 
+Extra diffusion times and outputs
+--------------------------------
+
+Most diffusion and flow-matching models take one diffusion time tensor and
+return one prediction tensor. These calls remain unchanged. For models that
+need extra values, a tuple pairs the primary tensor with a named container.
+
+Use :class:`DiffusionExtraTimes` for the destination time ``r`` in MeanFlow.
+Use :class:`DiffusionExtraOutputs` for the learned loss weight ``logvar``
+required by sCM or an EDM2-style loss. The primary time and prediction are
+always tensors, never ``None``.
+
+.. code-block:: python
+
+    import torch
+    from physicsnemo.diffusion import DiffusionExtraOutputs, DiffusionExtraTimes
+
+    t = torch.full((2,), 0.8)
+    times = (t, DiffusionExtraTimes(r=torch.full((2,), 0.2), batch_size=[2]))
+    prediction = torch.zeros(2, 3, 5, 7)
+    output = (prediction, DiffusionExtraOutputs(logvar=torch.zeros(2), batch_size=[2]))
+
+    current_time, extra_times = times
+    prediction, extra_outputs = output
+
+The primary time and ``r`` both have shape :math:`(B,)` and use the same
+scheduler coordinates. The output prediction has the noisy state's shape.
+``logvar`` has shape :math:`(B,)`. It controls adaptive loss weighting,
+not diffusion transition variance. Both containers have batch size ``[B]``.
+
+Affine preconditioners encode both ``t`` and ``r`` and apply their affine
+formula only to the prediction. The learned loss weight keeps its value and
+gradients. Conditioning wrappers forward the time argument and model output
+unchanged when the wrapped backbone supports these formats.
+
+Existing DSM and flow-matching losses, denoisers, and samplers still use
+single time and prediction tensors. If a model returns auxiliary outputs,
+select its prediction before passing it to a tensor-only API:
+
+.. code-block:: python
+
+    def predictor(x, t):
+        prediction, _ = model(x, t)
+        return prediction
+
+Both containers inherit from ``tensordict.TensorClass` and can be subclassed.
+PhysicsNeMo currently interprets only the reserved ``r`` and ``logvar``
+fields. Models and wrappers must define how to handle any extra fields.
+General support for custom fields remains future work.
+
+.. autoclass:: DiffusionExtraTimes
+
+.. autoclass:: DiffusionExtraOutputs
+
+
 UNet-Based Architectures
 ------------------------
 
@@ -100,4 +155,3 @@ You can bring in models from external libraries, such as:
 * by using :meth:`~physicsnemo.core.module.Module.from_torch` to convert a
 ``torch.nn.Module`` subclass into a :class:`~physicsnemo.core.module.Module`
 with PhysicsNeMo serialization support
-

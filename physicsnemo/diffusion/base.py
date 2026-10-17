@@ -19,8 +19,83 @@
 from typing import Any, Literal, Protocol, runtime_checkable
 
 import torch
-from jaxtyping import Float
-from tensordict import TensorDict
+from jaxtyping import Float, Shaped
+from tensordict import TensorClass, TensorDict
+
+
+class DiffusionExtraTimes(TensorClass):
+    r"""Named, batched diffusion times accompanying the primary time tensor.
+
+    The reserved field ``r`` holds a destination diffusion time for each
+    sample. The primary diffusion time remains a separate tensor.
+
+    Most models take a single time tensor. For a two-time model such as
+    MeanFlow, pass ``(t, DiffusionExtraTimes(r=r, batch_size=[B]))`` instead.
+    Both times have shape :math:`(B,)` and use the same scheduler coordinates.
+    Subclasses can add fields, but PhysicsNeMo utilities currently interpret
+    only ``r``. Handling extra fields is the model author's responsibility.
+
+    Parameters
+    ----------
+    r : torch.Tensor
+        Destination diffusion time for each sample, with shape :math:`(B,)`.
+    batch_size : sequence of int
+        Set to ``[B]``, matching the primary time tensor.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.diffusion import DiffusionExtraTimes
+    >>> t = torch.ones(2)
+    >>> times = (t, DiffusionExtraTimes(r=torch.zeros(2), batch_size=[2]))
+    >>> current, extra = times
+    >>> current.shape, extra.r.shape
+    (torch.Size([2]), torch.Size([2]))
+    """
+
+    r: Float[torch.Tensor, " B"]
+
+
+class DiffusionExtraOutputs(TensorClass):
+    r"""Named, batched auxiliary outputs accompanying a model prediction.
+
+    The reserved field ``logvar`` provides a learned log-scale for adaptive
+    loss weighting. The prediction remains a separate, required tensor.
+
+    Most models return only a prediction tensor. Return
+    ``(prediction, DiffusionExtraOutputs(logvar=logvar, batch_size=[B]))``
+    when a loss such as sCM also needs a learned weight. The same field can
+    support an EDM2-style loss. Existing DSM and flow-matching losses still
+    expect a prediction tensor.
+    Subclasses can add fields, but PhysicsNeMo utilities currently interpret
+    only ``logvar``. Handling extra fields is the model author's
+    responsibility.
+
+    Parameters
+    ----------
+    logvar : torch.Tensor
+        Learned log-scale for adaptive loss weighting, with shape
+        :math:`(B,)`. This controls the loss weight, not the diffusion
+        transition variance.
+    batch_size : sequence of int
+        Set to ``[B]``, matching the prediction's batch dimension.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.diffusion import DiffusionExtraOutputs
+    >>> prediction = torch.zeros(2, 3, 5)
+    >>> output = (
+    ...     prediction,
+    ...     DiffusionExtraOutputs(logvar=torch.zeros(2), batch_size=[2]),
+    ... )
+    >>> prediction, extra = output
+    >>> prediction.shape, extra.logvar.shape
+    (torch.Size([2, 3, 5]), torch.Size([2]))
+    """
+
+    logvar: Float[torch.Tensor, " B"]
+
 
 PredictorType = Literal["x0", "score", "epsilon", "flow"]
 """Type of prediction produced by a diffusion model.
@@ -46,8 +121,13 @@ class DiffusionModel(Protocol):
     into a prediction. This protocol defines the standard interface that all
     such models must meet.
 
-    Any model or function that implements this interface can be used with
-    preconditioners, losses, samplers, and other diffusion utilities.
+    Use a diffusion time tensor and return a prediction tensor for the usual
+    single-time model. For a two-time model, pass a tuple containing the
+    primary time and :class:`DiffusionExtraTimes`. To include a learned
+    loss weight, return a tuple containing the prediction and
+    :class:`DiffusionExtraOutputs`. The primary time and prediction are
+    always tensors, never ``None``. Use these tuples only with models and
+    utilities that support the extra fields.
 
     The interface is **prediction-agnostic**: whether your model predicts
     clean data (:math:`\mathbf{x}_0`), noise (:math:`\epsilon`), score
@@ -84,10 +164,14 @@ class DiffusionModel(Protocol):
     def __call__(
         self,
         x: Float[torch.Tensor, " B *dims"],
-        t: Float[torch.Tensor, " B"],
+        t: Float[torch.Tensor, " B"]
+        | tuple[Float[torch.Tensor, " B"], Shaped[DiffusionExtraTimes, " B"]],
         condition: Float[torch.Tensor, " B *cond_dims"] | TensorDict | None = None,
         **model_kwargs: Any,
-    ) -> Float[torch.Tensor, " B *dims"]:
+    ) -> (
+        Float[torch.Tensor, " B *dims"]
+        | tuple[Float[torch.Tensor, " B *dims"], Shaped[DiffusionExtraOutputs, " B"]]
+    ):
         r"""
         Forward pass of the diffusion model.
 
@@ -97,8 +181,10 @@ class DiffusionModel(Protocol):
             Noisy latent state of shape :math:`(B, *)` where :math:`B` is the
             batch size and :math:`*` denotes any number of additional
             dimensions (e.g., channels and spatial dimensions).
-        t : torch.Tensor
-            Diffusion time or noise level tensor of shape :math:`(B,)`.
+        t : torch.Tensor or tuple[torch.Tensor, DiffusionExtraTimes]
+            Diffusion time for each sample, with shape :math:`(B,)`.
+            For a two-time model, pass ``(t, extra_times)``, where
+            ``extra_times.r`` supplies the destination diffusion time.
         condition : torch.Tensor, TensorDict, or None, optional, default=None
             Conditioning information for the model. If a Tensor or a TensorDict
             is passed, it should have batch size :math:`B` matching that of
@@ -109,8 +195,9 @@ class DiffusionModel(Protocol):
 
         Returns
         -------
-        torch.Tensor
-            Model output with the same shape as ``x``.
+        torch.Tensor or tuple[torch.Tensor, DiffusionExtraOutputs]
+            Prediction with the shape of ``x``, optionally paired with a
+            learned loss weight. Every call returns a prediction tensor.
         """
         ...
 
@@ -139,6 +226,10 @@ class Predictor(Protocol):
     obtained from a :class:`DiffusionModel` by partially applying the
     ``condition`` and any other keyword arguments using
     ``functools.partial``.
+
+    A model returning auxiliary outputs needs a wrapper that selects its
+    prediction tensor, as shown below. Standard denoiser factories require
+    a predictor that accepts a single diffusion time tensor.
 
     **Relationship to Denoiser:**
 
@@ -198,6 +289,19 @@ class Predictor(Protocol):
     >>>
     >>> isinstance(score_predictor, Predictor)
     True
+
+    Select the prediction from a model that also returns a loss weight:
+
+    >>> from physicsnemo.diffusion import DiffusionExtraOutputs
+    >>> def weighted_model(x, t, condition=None):
+    ...     return x / 2, DiffusionExtraOutputs(
+    ...         logvar=torch.zeros(x.shape[0]), batch_size=[x.shape[0]]
+    ...     )
+    >>> def prediction_only(x, t):
+    ...     prediction, _ = weighted_model(x, t)
+    ...     return prediction
+    >>> prediction_only(torch.ones(2, 3), torch.ones(2)).shape
+    torch.Size([2, 3])
     """
 
     def __call__(

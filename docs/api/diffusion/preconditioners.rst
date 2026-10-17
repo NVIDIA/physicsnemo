@@ -135,6 +135,16 @@ API Reference
 :code:`EDMPreconditioner`
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
+.. note::
+
+    Affine preconditioners accept a time tensor or ``(t, DiffusionExtraTimes)``.
+    They encode the primary time ``t`` and destination time ``r``.
+    Backbones can return a prediction tensor or
+    ``(prediction, DiffusionExtraOutputs)``. The affine formula transforms
+    only the prediction; ``logvar`` retains its value and gradients.
+    Every model call must return a prediction tensor.
+    See :doc:`models` for examples and supported fields.
+
 .. autoclass:: physicsnemo.diffusion.preconditioners.EDMPreconditioner
     :show-inheritance:
     :members:

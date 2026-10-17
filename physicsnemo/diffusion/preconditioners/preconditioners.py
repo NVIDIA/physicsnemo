@@ -20,13 +20,17 @@ from collections.abc import Sequence
 from typing import Any, Tuple
 
 import torch
-from jaxtyping import Float
+from jaxtyping import Float, Shaped
 from tensordict import TensorDict
 from torch.distributed.tensor import DTensor
 from torch.distributed.tensor.placement_types import Replicate
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
+from physicsnemo.diffusion.base import (
+    DiffusionExtraOutputs,
+    DiffusionExtraTimes,
+)
 
 
 def _ensure_plain_tensor(t: torch.Tensor) -> torch.Tensor:
@@ -64,9 +68,10 @@ class BaseAffinePreconditioner(Module, ABC):
     Abstract base class for diffusion model preconditioners using an affine
     transformation.
 
-    This class provides a standardized interface for implementing
-    preconditioners that use affine transformations of the model
-    input and output.
+    Subclass this class to define the input scaling, diffusion time encoding,
+    and output scaling for a preconditioning scheme. It accepts a diffusion
+    time tensor or ``(t, DiffusionExtraTimes)``. It scales the prediction
+    tensor and preserves auxiliary outputs in ``DiffusionExtraOutputs``.
 
     The preconditioner wraps a neural network model :math:`F` and applies
     a preconditioning formula to transform the network output to produce
@@ -90,7 +95,7 @@ class BaseAffinePreconditioner(Module, ABC):
     The wrapped model :math:`F` must be an instance of
     :class:`~physicsnemo.core.Module` that satisfies the
     :class:`~physicsnemo.diffusion.DiffusionModel` interface, with the
-    following signature:
+    following signature for a single diffusion time and prediction tensor:
 
     .. code-block:: python
 
@@ -128,8 +133,10 @@ class BaseAffinePreconditioner(Module, ABC):
     x : torch.Tensor
         Noisy latent state of shape :math:`(B, *)` where :math:`B` is the
         batch size and :math:`*` denotes any number of additional dimensions.
-    t : torch.Tensor
-        Diffusion time tensor of shape :math:`(B,)`.
+    t : torch.Tensor or tuple[torch.Tensor, DiffusionExtraTimes]
+        Diffusion time for each sample, with shape :math:`(B,)`. Pass
+        ``(t, extra_times)`` to include a destination time ``r``.
+        The preconditioner encodes both times for the backbone.
     condition : torch.Tensor, TensorDict, or None, optional, default=None
         Single Tensor or a TensorDict containing conditioning tensors with
         batch size :math:`B` matching that of ``x``. Pass ``None`` for an
@@ -140,9 +147,10 @@ class BaseAffinePreconditioner(Module, ABC):
 
     Outputs
     -------
-    torch.Tensor
-        Preconditioned model output with the same shape as the original model
-        output.
+    torch.Tensor or tuple[torch.Tensor, DiffusionExtraOutputs]
+        Preconditioned prediction with the shape of ``x``, optionally paired
+        with auxiliary outputs. The affine formula transforms only the
+        prediction; ``logvar`` retains its value and gradients.
 
     Note
     ----
@@ -453,18 +461,33 @@ class BaseAffinePreconditioner(Module, ABC):
 
     def forward(
         self,
-        x: torch.Tensor,
-        t: torch.Tensor,
-        condition: torch.Tensor | TensorDict | None = None,
+        x: Float[torch.Tensor, " B *dims"],
+        t: Float[torch.Tensor, " B"]
+        | tuple[Float[torch.Tensor, " B"], Shaped[DiffusionExtraTimes, " B"]],
+        condition: Float[torch.Tensor, " B *cond_dims"] | TensorDict | None = None,
         **model_kwargs: Any,
-    ) -> torch.Tensor:
+    ) -> (
+        Float[torch.Tensor, " B *dims"]
+        | tuple[Float[torch.Tensor, " B *dims"], Shaped[DiffusionExtraOutputs, " B"]]
+    ):
+        current_t = t[0] if isinstance(t, tuple) else t
         if not torch.compiler.is_compiling():
             B = x.shape[0]
-            if t.shape != (B,):
+            if current_t.shape != (B,):
                 raise ValueError(
                     f"Expected t to have shape ({B},) matching batch size of "
-                    f"x, but got {t.shape}."
+                    f"x, but got {current_t.shape}."
                 )
+            if isinstance(t, tuple):
+                extra_times = t[1]
+                if extra_times.batch_size != torch.Size([B]):
+                    raise ValueError(
+                        f"Expected time batch size [{B}], got {extra_times.batch_size}."
+                    )
+                if extra_times.r.shape != (B,):
+                    raise ValueError(
+                        f"Expected r shape ({B},), got {extra_times.r.shape}."
+                    )
             if isinstance(condition, TensorDict):
                 if condition.batch_size and condition.batch_size[0] != B:
                     raise ValueError(
@@ -481,7 +504,7 @@ class BaseAffinePreconditioner(Module, ABC):
 
         # Map time step to noise level via sigma method
         expected_shape = (-1,) + (1,) * (x.ndim - 1)
-        sigma_t = self.sigma(t).reshape(expected_shape)
+        sigma_t = self.sigma(current_t).reshape(expected_shape)  # (B, 1, ...)
 
         # Compute preconditioning coefficients
         # Unwrap to plain tensors so that element-wise arithmetic between
@@ -511,24 +534,35 @@ class BaseAffinePreconditioner(Module, ABC):
                 _replicate_on_mesh(c, x_mesh) for c in (c_in, c_noise, c_out, c_skip)
             )
 
-        # Forward through the underlying model
+        model_t = c_noise.flatten()  # (B,)
+        if isinstance(t, tuple):
+            extra_times = t[1].clone(recurse=False)
+            sigma_r = self.sigma(extra_times.r).reshape(expected_shape)  # (B, 1, ...)
+            _, r_noise, _, _ = self.compute_coefficients(_ensure_plain_tensor(sigma_r))
+            r_noise = _ensure_plain_tensor(r_noise)
+            if isinstance(x, DTensor):
+                r_noise = _replicate_on_mesh(r_noise, x.device_mesh)
+            extra_times.r = r_noise.flatten()  # (B,)
+            model_t = (model_t, extra_times)
+
         if condition is not None:
             F_x = self.model(
                 c_in * x,
-                c_noise.flatten(),
+                model_t,
                 condition=condition,
                 **model_kwargs,
             )
         else:
             F_x = self.model(
                 c_in * x,
-                c_noise.flatten(),
+                model_t,
                 **model_kwargs,
             )
 
-        D_x = c_skip * x + c_out * F_x
-
-        return D_x
+        if isinstance(F_x, tuple):
+            prediction, extra_outputs = F_x
+            return c_skip * x + c_out * prediction, extra_outputs
+        return c_skip * x + c_out * F_x
 
 
 class VPPreconditioner(BaseAffinePreconditioner):

@@ -18,10 +18,11 @@ import warnings
 from typing import Any
 
 import torch
-from jaxtyping import Float
+from jaxtyping import Float, Shaped
 from tensordict import TensorDict
 
 from physicsnemo.core import Module
+from physicsnemo.diffusion.base import DiffusionExtraOutputs, DiffusionExtraTimes
 from physicsnemo.models.diffusion_unets import (
     DhariwalUNet,
     SongUNet,
@@ -88,8 +89,9 @@ class ConcatConditionWrapper(Module):
     x : torch.Tensor
         Noisy latent state of shape :math:`(B, *)` where :math:`B` is the
         batch size.
-    t : torch.Tensor
-        Diffusion time tensor of shape :math:`(B,)`.
+    t : torch.Tensor or tuple[torch.Tensor, DiffusionExtraTimes]
+        Diffusion time tensor of shape :math:`(B,)`, optionally paired with
+        extra times. The wrapped model must accept the supplied format.
     condition : torch.Tensor, TensorDict, or None, optional, default=None
         Conditioning data. Use a ``TensorDict`` to explicitly supply
         concatenated conditioning and vector conditioning as keys
@@ -101,8 +103,9 @@ class ConcatConditionWrapper(Module):
 
     Outputs
     -------
-    torch.Tensor
-        Model output with the same shape as ``x``.
+    torch.Tensor or tuple[torch.Tensor, DiffusionExtraOutputs]
+        The wrapped model's prediction, optionally paired with auxiliary
+        outputs. The wrapper returns both unchanged.
 
     Examples
     --------
@@ -135,6 +138,24 @@ class ConcatConditionWrapper(Module):
     >>> out = dit_wrapper(x, t, condition)
     >>> out.shape
     torch.Size([2, 3, 8, 8])
+
+    A backbone supporting extra times and outputs can use tuples:
+
+    >>> from physicsnemo.diffusion import DiffusionExtraTimes, DiffusionExtraOutputs
+    >>> class TwoTimeModel(Module):
+    ...     def forward(self, x, t, condition=None):
+    ...         current, extra = t
+    ...         prediction = x[:, :3] * (current - extra.r)[:, None, None, None]
+    ...         return prediction, DiffusionExtraOutputs(
+    ...             logvar=torch.zeros_like(current), batch_size=[x.shape[0]]
+    ...         )
+    >>> wrapper = ConcatConditionWrapper(TwoTimeModel())
+    >>> times = (t, DiffusionExtraTimes(r=torch.zeros_like(t), batch_size=[2]))
+    >>> prediction, extra = wrapper(x, times, condition)
+    >>> prediction.shape, extra.logvar.shape
+    (torch.Size([2, 3, 8, 8]), torch.Size([2]))
+
+    SongUNet and DhariwalUNet backbones still require a single time tensor.
     """
 
     def __init__(
@@ -151,10 +172,14 @@ class ConcatConditionWrapper(Module):
     def forward(
         self,
         x: Float[torch.Tensor, " B *dims"],
-        t: Float[torch.Tensor, " B"],
+        t: Float[torch.Tensor, " B"]
+        | tuple[Float[torch.Tensor, " B"], Shaped[DiffusionExtraTimes, " B"]],
         condition: Float[torch.Tensor, " B *cond_dims"] | TensorDict | None = None,
         **model_kwargs: Any,
-    ) -> Float[torch.Tensor, " B *dims"]:
+    ) -> (
+        Float[torch.Tensor, " B *dims"]
+        | tuple[Float[torch.Tensor, " B *dims"], Shaped[DiffusionExtraOutputs, " B"]]
+    ):
         r"""
         Forward pass for the conditioned wrapper.
 
@@ -163,8 +188,9 @@ class ConcatConditionWrapper(Module):
         x : torch.Tensor
             Noisy latent state of shape :math:`(B, *)` where :math:`B` is the
             batch size.
-        t : torch.Tensor
-            Diffusion time tensor of shape :math:`(B,)`.
+        t : torch.Tensor or tuple[torch.Tensor, DiffusionExtraTimes]
+            Diffusion time tensor of shape :math:`(B,)`, optionally paired
+            with extra times. Forwarded to the backbone unchanged.
         condition : torch.Tensor, TensorDict, or None, optional, default=None
             Conditioning data. Use a ``TensorDict`` to supply ``cond_concat`` and
             ``cond_vec`` tensors. A plain tensor is treated as the concatenated
@@ -174,8 +200,9 @@ class ConcatConditionWrapper(Module):
 
         Returns
         -------
-        torch.Tensor
-            Model output with the same shape as ``x``.
+        torch.Tensor or tuple[torch.Tensor, DiffusionExtraOutputs]
+            The wrapped model's prediction and any auxiliary outputs,
+            returned unchanged.
         """
         cond_concat: torch.Tensor | None = None
         cond_vec: torch.Tensor | None = None
@@ -210,10 +237,11 @@ class ConcatConditionWrapper(Module):
 
         if not torch.compiler.is_compiling():
             batch_size = x.shape[0]
-            if t.shape != (batch_size,):
+            current_t = t[0] if isinstance(t, tuple) else t
+            if current_t.shape != (batch_size,):
                 raise ValueError(
                     f"Expected t to have shape ({batch_size},) matching batch size of "
-                    f"x, but got {t.shape}."
+                    f"x, but got {current_t.shape}."
                 )
             if cond_vec is not None:
                 if cond_vec.shape[0] != batch_size:
