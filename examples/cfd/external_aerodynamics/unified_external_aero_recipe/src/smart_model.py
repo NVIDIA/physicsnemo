@@ -18,6 +18,8 @@
 
 from __future__ import annotations
 
+import math
+
 import torch
 from jaxtyping import Float, Int
 from torch import Tensor
@@ -45,6 +47,10 @@ class SMARTField(SMART):
         Maximum queries decoded at once during evaluation.
     parameter_channels : int, optional, default=3
         Number of global simulation conditions, normally freestream velocity.
+    parameter_scale : float, optional, default=1.0
+        Fixed positive divisor for simulation conditions. The DrivAerML
+        templates use 30 m/s for freestream velocity. Physical metadata is
+        preserved for nondimensionalization and force integration.
     hidden_dim, num_heads, num_layers, num_latents, geometry_subsample, mlp_ratio : int, optional
         Architecture settings with the same defaults as
         :class:`~physicsnemo.experimental.models.smart.SMART`.
@@ -103,6 +109,7 @@ class SMARTField(SMART):
         eval_seed: int = 0,
         qk_normalization: bool = False,
         qk_temperature_max: float | None = None,
+        parameter_scale: float = 1.0,
     ):
         if field not in ("surface", "volume"):
             raise ValueError("field must be surface or volume")
@@ -112,6 +119,13 @@ class SMARTField(SMART):
             or eval_chunk_size <= 0
         ):
             raise ValueError("eval_chunk_size must be a positive integer")
+        if (
+            isinstance(parameter_scale, bool)
+            or not isinstance(parameter_scale, (int, float))
+            or not math.isfinite(parameter_scale)
+            or parameter_scale <= 0
+        ):
+            raise ValueError("parameter_scale must be finite and positive")
         super().__init__(
             surface_channels=out_dim if field == "surface" else 0,
             volume_channels=out_dim if field == "volume" else 0,
@@ -135,6 +149,7 @@ class SMARTField(SMART):
         )
         self.field = field
         self.eval_chunk_size = eval_chunk_size
+        self.parameter_scale = float(parameter_scale)
 
     def forward(
         self,
@@ -186,6 +201,8 @@ class SMARTField(SMART):
             parameters = parameters.reshape(1, self.parameter_channels)
         if not torch.compiler.is_compiling():
             self._validate_parameters(parameters, 1, geometry.device)
+        if parameters is not None:
+            parameters = parameters / self.parameter_scale
         generator = None
         if self.training:
             generator = torch.Generator(device=geometry.device).manual_seed(

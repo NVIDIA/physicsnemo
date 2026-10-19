@@ -659,14 +659,23 @@ Surface normals enter the existing additive query projection. Volume features
 use the recipe's signed SDF/closest-point direction operation on the **CFD**
 boundary. The fast pseudo-normal sign depends on boundary orientation. It does
 not make an open or non-manifold surface watertight. Freestream velocity supplies
-three global conditioning channels. Geometry and queries are centered together
+three global conditioning channels, divided by the fixed 30 m/s reference in
+`model.parameter_scale`. This preserves speed and direction information. Raw
+`U_inf` metadata remains unchanged for physical-unit export and forces. The
+adapter default is 1.0 for compatibility with earlier checkpoints. Geometry and
+queries are centered together
 on the complete CFD boundary and scaled by `L_ref`, so the coordinate frame does
 not change with query sampling. Full surface data is loaded before online query
 selection. Volume target reads remain subsampled. Existing model/dataset configs
 and their sampling behavior are unchanged.
 
-SMART is integrated through this recipe and uses its preprocessing and training
-defaults. The implementation was developed independently from the published
+SMART templates use FP32, a Muon/AdamW learning rate of 0.001, and a StepLR
+factor of 0.5 every 100 epochs. The recipe's Huber objective and field
+normalization remain unchanged. These settings need dataset-specific learning
+validation. Finite loss alone does not rule out spatially constant predictions
+or zero gradients through the output head.
+
+The implementation was developed independently from the published
 paper and PhysicsNeMo components. The CFD geometry source, query features,
 global conditioning, and sample counts above are recipe choices. These configs
 do not claim to reproduce the paper's experiments or another model's accuracy.

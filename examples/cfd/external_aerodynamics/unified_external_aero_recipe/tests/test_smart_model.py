@@ -114,6 +114,35 @@ def test_explicit_constructor_keeps_legacy_checkpoint_arguments():
         }
     }
     restored = Module.instantiate(old_args)
+    assert restored.parameter_scale == 1.0
     restored.load_state_dict(model.state_dict())
     inputs = _inputs()
     torch.testing.assert_close(restored(**inputs), model(**inputs), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("field", ["surface", "volume"])
+def test_condition_scaling_preserves_metadata_and_checkpoint(field, tmp_path):
+    """Scale once in training and chunked inference without mutating metadata."""
+    model = _model(field=field, parameter_scale=30.0)
+    reference = _model(field=field)
+    reference.load_state_dict(model.state_dict())
+    inputs = _inputs()
+    raw_parameters = inputs["parameters"].clone()
+    normalized_inputs = {**inputs, "parameters": raw_parameters / 30.0}
+    for training in (True, False):
+        model.train(training)
+        reference.train(training)
+        torch.testing.assert_close(model(**inputs), reference(**normalized_inputs))
+        torch.testing.assert_close(inputs["parameters"], raw_parameters, rtol=0, atol=0)
+    path = tmp_path / "scaled.mdlus"
+    model.save(path)
+    restored = Module.from_checkpoint(path).eval()
+    assert restored.parameter_scale == 30.0
+    torch.testing.assert_close(restored(**inputs), model(**inputs))
+
+
+@pytest.mark.parametrize("scale", [0, -1, float("nan"), float("inf"), True])
+def test_invalid_condition_scale(scale):
+    """Reject invalid reference scales before constructing the model."""
+    with pytest.raises(ValueError, match="parameter_scale"):
+        _model(parameter_scale=scale)
