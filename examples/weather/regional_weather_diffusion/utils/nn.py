@@ -147,7 +147,7 @@ def get_preconditioned_natten_dit(
         depth=depth,
         num_heads=num_heads,
         patch_size=patch_size,
-        attention_backend="natten2d",
+        attention_backend=model_kwargs.pop("attention_backend", "natten2d"),
         layernorm_backend=layernorm_backend,
         attn_kwargs=attn_kw,
         condition_dim=condition_dim,
