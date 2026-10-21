@@ -797,6 +797,14 @@ def _is_tracing(args: object, kwargs: object = None) -> bool:
     return False
 
 
+def _has_plain_dtensor(args: object, kwargs: object = None) -> bool:
+    r"""True when any operand is a ``DTensor`` that is not a ``ShardTensor``."""
+    return any(
+        isinstance(leaf, DTensor) and not isinstance(leaf, ShardTensor)
+        for leaf in torch.utils._pytree.tree_leaves((args, kwargs))
+    )
+
+
 class ShardTensor(torch.Tensor):
     r"""A distributed tensor class with support for uneven data sharding.
 
@@ -1629,10 +1637,12 @@ class ShardTensor(torch.Tensor):
         elif str(func) in cls._named_function_registry and cls._enable_shard_patches:
             args, kwargs = _promote_plain_handler_args(args, kwargs)
             res = cls._named_function_registry[str(func)](func, types, args, kwargs)
-        elif _is_tracing(args, kwargs):
+        elif _is_tracing(args, kwargs) and not _has_plain_dtensor(args, kwargs):
             # Under torch.compile tracing, route unpatched ops straight to
             # ``__torch_dispatch__`` (like DTensor) so the aten-level path -- which AOT
             # handles correctly -- owns the op and keeps the graph differentiable.
+            # A plain DTensor operand (e.g. a Replicate parameter) would take that
+            # dispatch itself and reject the ShardTensor, so it uses the fallback.
             with torch._C.DisableTorchFunctionSubclass():
                 return func(*args, **kwargs)
         else:
