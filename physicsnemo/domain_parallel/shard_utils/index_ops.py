@@ -190,7 +190,7 @@ def _exchange_requests_fake(
 
 
 def _owned_rows(
-    values: torch.Tensor,
+    n_local: int,
     all_requests: torch.Tensor,
     offsets: list[int],
     rank: int,
@@ -199,8 +199,8 @@ def _owned_rows(
 
     Parameters
     ----------
-    values : torch.Tensor
-        This rank's shard of rows.
+    n_local : int
+        Number of rows in this rank's shard.
     all_requests : torch.Tensor
         Every rank's requests (global positions), rank-ordered.
     offsets : list[int]
@@ -216,7 +216,6 @@ def _owned_rows(
     """
     lo, hi = offsets[rank], offsets[rank + 1]
     owned = (all_requests >= lo) & (all_requests < hi)
-    n_local = values.shape[0]
     local_rows = (all_requests - lo).clamp_(0, max(n_local - 1, 0))
     return local_rows, owned
 
@@ -268,7 +267,7 @@ def _routed_gather_op(
 
     # Rows for the requests this rank owns (filler for the rest), then one
     # full-length buffer back to every requester.
-    local_rows, _ = _owned_rows(values, all_requests, offsets, rank)
+    local_rows, _ = _owned_rows(values.shape[0], all_requests, offsets, rank)
     if values.shape[0] == 0:
         rows = values.new_zeros((all_requests.numel(), *trailing))
     else:
@@ -361,26 +360,21 @@ def _routed_scatter_add_op(
 
     # Keep a request iff this rank owns its row and it falls in the sender's
     # responsible share.
-    local_rows, owned = _owned_rows(grad, all_requests, offsets, rank)
-    position = torch.cat(
-        [torch.arange(n, device=grad.device, dtype=torch.int64) for n in request_sizes]
-    )
-    lo = torch.tensor(
-        [request_slices[2 * r] for r in range(world_size)],
-        device=grad.device,
-        dtype=torch.int64,
-    ).repeat_interleave(torch.tensor(request_sizes, device=grad.device))
-    hi = torch.tensor(
-        [request_slices[2 * r + 1] for r in range(world_size)],
-        device=grad.device,
-        dtype=torch.int64,
-    ).repeat_interleave(torch.tensor(request_sizes, device=grad.device))
-    keep = owned & (position >= lo) & (position < hi)
+    # Shares are compared as Python ints against device aranges: no
+    # host-to-device copy and no data-dependent size, so no host sync.
+    local_rows, owned = _owned_rows(n_local_rows, all_requests, offsets, rank)
+    in_share = []
+    for r, n in enumerate(request_sizes):
+        position = torch.arange(n, device=grad.device, dtype=torch.int64)
+        lo, hi = request_slices[2 * r], request_slices[2 * r + 1]
+        in_share.append((position >= lo) & (position < hi))
+    keep = owned & torch.cat(in_share)
 
     acc_dtype = _accumulator_dtype(grad.dtype)
     out = torch.zeros((n_local_rows, *trailing), dtype=acc_dtype, device=grad.device)
-    weight = keep.to(acc_dtype).reshape(-1, *([1] * len(trailing)))
-    out.index_add_(0, local_rows, incoming.to(acc_dtype) * weight)
+    # where, not a 0/1 weight: 0 * NaN would spread another owner's NaN here.
+    keep = keep.reshape(-1, *([1] * len(trailing)))
+    out.index_add_(0, local_rows, torch.where(keep, incoming.to(acc_dtype), 0))
     return out.to(grad.dtype)
 
 
@@ -762,8 +756,11 @@ ShardTensor.register_function_handler(torch.index_select, index_select_wrapper)
 ShardTensor.register_function_handler(torch.Tensor.index_select, index_select_wrapper)
 
 
-def _is_int_tensor_key(key: Any) -> bool:
-    r"""Whether *key* is a single integer tensor (advanced indexing).
+def _is_tensor_index_key(key: Any) -> bool:
+    r"""Whether *key* is a single non-mask tensor (advanced indexing).
+
+    Integer dtypes take the routed gather; any other non-bool dtype is routed
+    there too so it is rejected with ``MissingShardPatch``.
 
     Parameters
     ----------
@@ -773,9 +770,30 @@ def _is_int_tensor_key(key: Any) -> bool:
     Returns
     -------
     bool
-        ``True`` for an ``int32`` / ``int64`` tensor of any subclass.
+        ``True`` for a non-bool tensor of any subclass.
     """
-    return isinstance(key, torch.Tensor) and key.dtype in _INDEX_DTYPES
+    return isinstance(key, torch.Tensor) and key.dtype != torch.bool
+
+
+def _has_bool_mask(key: Any) -> bool:
+    r"""Whether *key*, or an entry of a tuple key, is a boolean mask.
+
+    Any tensor type counts: a plain mask arrives as a ``Replicate`` DTensor
+    (handler args are promoted), and DTensor's sharding propagation cannot
+    fake-run the ``nonzero`` a mask needs either way.
+
+    Parameters
+    ----------
+    key : Any
+        ``__getitem__`` key.
+
+    Returns
+    -------
+    bool
+        ``True`` if any entry is a bool tensor.
+    """
+    entries = key if isinstance(key, tuple) else (key,)
+    return any(isinstance(k, torch.Tensor) and k.dtype == torch.bool for k in entries)
 
 
 def getitem_wrapper(
@@ -787,10 +805,11 @@ def getitem_wrapper(
     r"""``torch.Tensor.__getitem__`` on a ShardTensor.
 
     A single integer-tensor key on a ``Shard(0)`` source is advanced indexing
-    along the sharded dim and takes the routed gather. Every other key (ints,
-    slices, tuples, masks, other placements) follows the default route, which
-    mirrors the tail of ``ShardTensor.__torch_function__``: straight to
-    dispatch under tracing, the DTensor fallback otherwise.
+    along the sharded dim and takes the routed gather. A boolean mask is
+    rejected: its output size depends on the data, so it would need a host
+    sync. Every other key (ints, slices, tuples, other placements) follows the
+    default route, which mirrors the tail of ``ShardTensor.__torch_function__``:
+    straight to dispatch under tracing, the DTensor fallback otherwise.
 
     Parameters
     ----------
@@ -807,6 +826,11 @@ def getitem_wrapper(
     -------
     Any
         The indexed result; a ShardTensor on the routed path.
+
+    Raises
+    ------
+    MissingShardPatch
+        For a boolean-mask key on a ShardTensor.
     """
     if len(args) == 2 and not kwargs:
         values, key = args
@@ -814,9 +838,16 @@ def getitem_wrapper(
             isinstance(values, ShardTensor)
             and values._spec.mesh.ndim == 1
             and values._spec.placements == (Shard(0),)
-            and _is_int_tensor_key(key)
+            and _is_tensor_index_key(key)
         ):
             return routed_gather(values, key, 0)
+        if isinstance(values, ShardTensor) and _has_bool_mask(key):
+            raise MissingShardPatch(
+                "Indexing a ShardTensor with a boolean mask is not supported: its "
+                "output size depends on the data, so it needs a host sync. Keep "
+                "the shape with torch.where / masked_fill / x * mask, or compute "
+                "integer indices once (mask.nonzero()) and index with those."
+            )
     if _is_tracing(args, kwargs):
         with torch._C.DisableTorchFunctionSubclass():
             return func(*args, **kwargs)

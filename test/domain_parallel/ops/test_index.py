@@ -265,10 +265,10 @@ def test_getitem_duplicate_and_negative_index(distributed_mesh):
 @pytest.mark.multigpu_static
 @pytest.mark.parametrize(
     "key",
-    ["int", "slice", "tuple", "mask", "ellipsis"],
+    ["int", "slice", "tuple", "ellipsis"],
 )
 def test_getitem_non_tensor_keys_fall_through(distributed_mesh, key):
-    """Keys other than an integer tensor take the default route and match eager."""
+    """Non-tensor keys take the default route and match eager."""
 
     if not torch.cuda.is_available():
         pytest.skip("CUDA is not available")
@@ -279,19 +279,84 @@ def test_getitem_non_tensor_keys_fall_through(distributed_mesh, key):
     sharded_tensor = scatter_tensor(
         values, global_src=0, mesh=distributed_mesh, placements=(Shard(0),)
     )
-    mask = torch.zeros(4, dtype=torch.bool, device=dm.device)
-    mask[1] = mask[3] = True
     keys = {
         "int": (lambda t: t[3]),
         "slice": (lambda t: t[10:50]),
         "tuple": (lambda t: t[:, 1:3]),
-        "mask": (lambda t: t[:, mask]),
         "ellipsis": (lambda t: t[..., 0]),
     }
     out = keys[key](sharded_tensor)
     expected = keys[key](values)
     out = out.full_tensor() if isinstance(out, ShardTensor) else out
     torch.testing.assert_close(out, expected)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize("key", ["rows", "columns", "tuple"])
+def test_getitem_rejects_plain_bool_mask(distributed_mesh, key):
+    """A plain boolean mask raises ``MissingShardPatch`` on every rank: its
+    output size depends on the data, so it would need a host sync."""
+
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+
+    dm = DistributedManager()
+    torch.manual_seed(7)
+    values = torch.rand(N_ROWS, 4, device=dm.device)
+    sharded_tensor = scatter_tensor(
+        values, global_src=0, mesh=distributed_mesh, placements=(Shard(0),)
+    )
+    row_mask = torch.rand(N_ROWS, device=dm.device) > 0.5
+    col_mask = torch.tensor([False, True, False, True], device=dm.device)
+    keys = {
+        "rows": (lambda t: t[row_mask]),
+        "columns": (lambda t: t[:, col_mask]),
+        "tuple": (lambda t: t[10:50, col_mask]),
+    }
+    with pytest.raises(MissingShardPatch, match="torch.where"):
+        keys[key](sharded_tensor)
+
+
+@pytest.mark.multigpu_static
+def test_getitem_backward_uneven_request_counts(distributed_mesh):
+    """Backward when a rank gathers more rows than its shard holds and the
+    others gather fewer: gradients land on the right rows, as in eager."""
+
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+
+    dm = DistributedManager()
+    world = distributed_mesh.size(0)
+    rank = distributed_mesh.get_local_rank()
+    torch.manual_seed(7)
+    values = torch.rand(N_ROWS, 4, device=dm.device, requires_grad=True)
+    sharded_tensor = scatter_tensor(
+        values,
+        global_src=0,
+        mesh=distributed_mesh,
+        placements=(Shard(0),),
+        requires_grad=True,
+    )
+
+    # Rank 0 asks for more rows than any shard holds, the others for fewer.
+    shard_rows = N_ROWS // world
+    sizes = [2 * shard_rows + 5] + [3] * (world - 1)
+    index = torch.randint(0, N_ROWS, (sum(sizes),), device=dm.device)
+    weight = torch.rand(sum(sizes), 4, device=dm.device)
+    start = sum(sizes[:rank])
+    stop = start + sizes[rank]
+    sharded_index = ShardTensor.from_local(
+        index[start:stop],
+        distributed_mesh,
+        (Shard(0),),
+        sharding_shapes={0: [(n,) for n in sizes]},
+    )
+
+    out = sharded_tensor[sharded_index]
+    (out.to_local() * weight[start:stop]).sum().backward()
+    (values[index] * weight).sum().backward()
+
+    torch.testing.assert_close(sharded_tensor.grad.full_tensor(), values.grad)
 
 
 @pytest.mark.multigpu_static
@@ -348,3 +413,85 @@ def test_getitem_rejects_2d_mesh(distributed_mesh_2d):
     index = torch.randint(0, N_ROWS, (5,), device=dm.device)
     with pytest.raises(MissingShardPatch):
         torch.index_select(sharded_tensor, 0, index)
+
+
+@pytest.mark.multigpu_static
+def test_routed_backward_no_host_sync(distributed_mesh):
+    """The routed backward op runs without a CUDA host sync: request sizes
+    and shares are plain Python ints, so no output size is read back."""
+
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+
+    from physicsnemo.domain_parallel.shard_utils.exchange import resolve_group_name
+    from physicsnemo.domain_parallel.shard_utils.index_ops import (
+        _exchange_requests_op,
+        _routed_scatter_add_op,
+    )
+
+    dm = DistributedManager()
+    world = distributed_mesh.size(0)
+    rank = distributed_mesh.get_local_rank()
+    group_name = resolve_group_name(distributed_mesh)
+    n_local = 5
+    offsets = [n_local * r for r in range(world + 1)]
+    sizes = [3 + r for r in range(world)]  # uneven request counts
+    torch.manual_seed(rank)
+    index = torch.randint(0, offsets[-1], (sizes[rank],), device=dm.device)
+    all_requests = _exchange_requests_op(index, sizes, group_name)
+    slices = [v for n in sizes for v in (0, n)]
+    grad = torch.rand(sizes[rank], 4, device=dm.device)
+
+    def backward():
+        return _routed_scatter_add_op(
+            grad, index, all_requests, offsets, sizes, slices, rank, n_local, group_name
+        )
+
+    backward()  # warm-up: communicator setup may sync
+    torch.cuda.synchronize()
+    torch.cuda.set_sync_debug_mode("error")
+    try:
+        backward()
+    finally:
+        torch.cuda.set_sync_debug_mode("default")
+
+
+@pytest.mark.multigpu_static
+def test_routed_backward_nonfinite_stays_with_owner(distributed_mesh):
+    """A NaN gradient for a row reaches only that row's owner: requests a rank
+    does not own are dropped, not multiplied by zero (0 * NaN is NaN)."""
+
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+
+    dm = DistributedManager()
+    world = distributed_mesh.size(0)
+    rank = distributed_mesh.get_local_rank()
+    values = torch.rand(N_ROWS, 4, device=dm.device)
+    sharded_tensor = scatter_tensor(
+        values,
+        global_src=0,
+        mesh=distributed_mesh,
+        placements=(Shard(0),),
+        requires_grad=True,
+    )
+    shard_rows = [s[0] for s in sharded_tensor._spec.sharding_shapes()[0]]
+    lo = sum(shard_rows[:rank])
+
+    # Every rank asks only for its own rows; the last rank's gradient is NaN.
+    local_index = torch.arange(lo, lo + shard_rows[rank], device=dm.device)
+    sharded_index = ShardTensor.from_local(
+        local_index,
+        distributed_mesh,
+        (Shard(0),),
+        sharding_shapes={0: [(n,) for n in shard_rows]},
+    )
+    out = sharded_tensor[sharded_index]
+    scale = float("nan") if rank == world - 1 else 1.0
+    (out.to_local() * scale).sum().backward()
+
+    local_grad = sharded_tensor.grad.to_local()
+    if rank == world - 1:
+        assert local_grad.isnan().all()
+    else:
+        torch.testing.assert_close(local_grad, torch.ones_like(local_grad))
