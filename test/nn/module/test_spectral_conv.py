@@ -201,13 +201,21 @@ def test_fno_autocast_training_step(dimension, amp_dtype, device):
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     scaler = torch.amp.GradScaler(device_type, enabled=amp_dtype == torch.float16)
     x = torch.randn(2, 2, *([10] * dimension), device=device)
+    params = [p for p in model.parameters() if p.requires_grad]
+    initial = [p.detach().clone() for p in params]
     with torch.autocast(device_type, dtype=amp_dtype):
         loss = model(x).float().square().mean()
+    assert torch.isfinite(loss)
     scaler.scale(loss).backward()
+
+    # GradScaler skips the optimizer step when gradients are not finite, so
+    # check the unscaled gradients and that the step updated every weight
+    scaler.unscale_(optimizer)
+    assert all(p.grad is not None and torch.isfinite(p.grad).all() for p in params)
     scaler.step(optimizer)
     scaler.update()
-    assert torch.isfinite(loss)
-    assert all(torch.isfinite(p).all() for p in model.parameters())
+    assert all(torch.isfinite(p).all() for p in params)
+    assert all(not torch.equal(p, p0) for p, p0 in zip(params, initial))
 
 
 @pytest.mark.parametrize("dimension", [2, 3])
