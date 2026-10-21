@@ -98,8 +98,12 @@ class ShardTensorSpec(DTensorSpec):
             hash_items.append(self.tensor_meta.dtype)
         if self._sharding_shapes is not None:
             hash_items.append(tuple(sorted(self._sharding_shapes.items())))
-        hash_tuple = tuple(hash_items)
-        return hash(hash_tuple)
+        try:
+            return hash(tuple(hash_items))
+        except TypeError:
+            # Symbolic (SymInt) shapes under torch.compile are unhashable;
+            # collisions are allowed and __eq__ still discriminates.
+            return hash((self.mesh, self.placements))
 
     def __setattr__(self, attr: str, value) -> None:
         r"""Invalidate the cached hash when the sharding shapes change.
@@ -731,6 +735,8 @@ def validate_aligned_sharding(specs, op_name: str) -> None:
             continue
         cached = getattr(spec, "_sharding_shapes", None) or {}
         shape = tuple(spec.tensor_meta.shape)
+        if any(type(d) is not int for d in shape):
+            continue  # symbolic shapes: boundaries can't be compared here
         key = (spec.mesh, len(shape), placements, tuple(shape[d] for _, d in sharded))
         known = reference.setdefault(key, {})
         for mesh_dim, tensor_dim in sharded:
