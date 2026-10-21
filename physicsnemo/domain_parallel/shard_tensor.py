@@ -27,7 +27,8 @@ from typing import Callable, Sequence, cast
 
 import torch
 import torch.distributed as dist
-from torch._subclasses.fake_tensor import is_fake
+from torch._subclasses.fake_tensor import FakeTensor, is_fake
+from torch._subclasses.functional_tensor import FunctionalTensor
 from torch.distributed.device_mesh import DeviceMesh, _mesh_resources
 from torch.distributed.tensor import DTensor
 from torch.distributed.tensor._dtensor_spec import (
@@ -797,12 +798,36 @@ def _is_tracing(args: object, kwargs: object = None) -> bool:
     return False
 
 
-def _has_plain_dtensor(args: object, kwargs: object = None) -> bool:
-    r"""True when any operand is a ``DTensor`` that is not a ``ShardTensor``."""
-    return any(
-        isinstance(leaf, DTensor) and not isinstance(leaf, ShardTensor)
-        for leaf in torch.utils._pytree.tree_leaves((args, kwargs))
+# Plain tensors as they appear inside a traced ``__torch_function__``: a plain
+# tensor or parameter is a FakeTensor (FunctionalTensor during AOT's trace).
+# Exact types only: other subclasses (torchao, AsyncCollectiveTensor, ...) keep
+# their own type under tracing and must not be wrapped in a DTensor.
+_PLAIN_TRACED_TYPES = (
+    torch.Tensor,
+    torch.nn.Parameter,
+    FakeTensor,
+    FunctionalTensor,
+)
+
+
+def _needs_fallback_under_tracing(args: object, kwargs: object = None) -> bool:
+    r"""Whether a traced op must take the DTensor fallback instead of dispatch.
+
+    True for a plain ``DTensor`` operand (dispatch would reject the
+    ShardTensor) or a grad-requiring plain tensor to promote: the fallback's
+    differentiable promotion reduces its ``Partial`` gradient to a plain one,
+    as in eager; promotion at dispatch level records no backward.
+    """
+    promote = (
+        ShardTensor._promotion_mode is not TensorPromotionMode.DISABLED
+        and torch.is_grad_enabled()
     )
+    for leaf in torch.utils._pytree.tree_leaves((args, kwargs)):
+        if isinstance(leaf, DTensor) and not isinstance(leaf, ShardTensor):
+            return True
+        if promote and type(leaf) in _PLAIN_TRACED_TYPES and leaf.requires_grad:
+            return True
+    return False
 
 
 class ShardTensor(torch.Tensor):
@@ -1637,12 +1662,14 @@ class ShardTensor(torch.Tensor):
         elif str(func) in cls._named_function_registry and cls._enable_shard_patches:
             args, kwargs = _promote_plain_handler_args(args, kwargs)
             res = cls._named_function_registry[str(func)](func, types, args, kwargs)
-        elif _is_tracing(args, kwargs) and not _has_plain_dtensor(args, kwargs):
+        elif _is_tracing(args, kwargs) and not _needs_fallback_under_tracing(
+            args, kwargs
+        ):
             # Under torch.compile tracing, route unpatched ops straight to
             # ``__torch_dispatch__`` (like DTensor) so the aten-level path -- which AOT
             # handles correctly -- owns the op and keeps the graph differentiable.
-            # A plain DTensor operand (e.g. a Replicate parameter) would take that
-            # dispatch itself and reject the ShardTensor, so it uses the fallback.
+            # Plain DTensor operands and grad-requiring plain tensors use the
+            # fallback instead (see ``_needs_fallback_under_tracing``).
             with torch._C.DisableTorchFunctionSubclass():
                 return func(*args, **kwargs)
         else:
