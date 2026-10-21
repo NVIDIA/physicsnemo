@@ -14,34 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""Attention primitives used by :class:`~physicsnemo.experimental.models.argent.ArGEnTCross`.
+r"""Attention layers of :class:`~physicsnemo.experimental.models.argent.ArGEnT`.
 
-Ported from the reference implementation accompanying "ArGEnT: Arbitrary
-Geometry-encoded Transformer for Operator Learning" (Chen et al., 2026). The
-port preserves three algorithmic choices that are not swappable for their
-standard-transformer equivalents without changing the trained model:
+The attention differs from a standard transformer in three ways:
 
-1. **Continuous-coordinate rotary embeddings.** Instead of rotating by integer
-   sequence/grid positions, each token carries its own real-valued position
-   :math:`(x, y, \ldots)`; ``head_dim`` is sliced across spatial axes
-   (``axis_slices``) and each axis-slice is rotated independently.
-2. **Linearized cross-attention.** The attention output is
-   :math:`Q\,(K^\top V) / N` — no softmax. This is what argent uses to make
-   attention over large geometry point clouds tractable, and the training
-   dynamics (and therefore the paper's Table 3 numbers) depend on it.
-3. **Per-layer RoPE scale decay.** Layer :math:`d \in \{0, \ldots, \text{depth}-1\}`
-   uses ``scale = max_freq / 2**d``, halving the effective frequency range at
-   deeper layers.
-
-The rotation math reuses
-:func:`~physicsnemo.nn.module.rope.apply_rotary_pos_emb` from physicsnemo,
-with cos/sin built in the physicsnemo-standard **interleaved** layout
-(``[c0, c0, c1, c1, ...]``). This deviates from argent_exp, which uses a
-**halves** layout (``[c0, c1, ..., c0, c1, ...]``) and therefore produces a
-different — arguably non-coherent — rotation of adjacent channels. See
-:func:`build_continuous_rope_cos_sin` for the switch site; a training run
-with the interleaved convention is needed to establish new baseline numbers
-(paper Table 3 was reported with the halves layout).
+1. **Continuous-coordinate RoPE.** Each token is rotated by its real-valued
+   spatial coordinates rather than an integer position. The head dimension is
+   split across spatial axes (``axis_slices``) and each slice is rotated by
+   its own coordinate.
+2. **Linear attention.** The output is :math:`Q\,(K^\top V) / N` with no
+   softmax, so the cost is linear in the number of geometry tokens.
+3. **Per-layer RoPE decay.** Layer :math:`d` scales its RoPE frequencies by
+   :math:`1 / 2^d`.
 """
 
 from __future__ import annotations
@@ -51,7 +35,7 @@ from typing import List, Optional
 import torch
 import torch.nn as nn
 from einops import rearrange
-from jaxtyping import Float
+from jaxtyping import Float, Shaped
 
 from physicsnemo.nn.module.rope import apply_rotary_pos_emb
 
@@ -65,89 +49,71 @@ def build_continuous_rope_cos_sin(
     r"""Build RoPE ``(cos, sin)`` tables for continuous per-token coordinates.
 
     Unlike :class:`~physicsnemo.nn.module.rope.RotaryEmbedding1DTables`, which
-    encodes integer sequence positions, this helper accepts real-valued
-    coordinates and returns cos/sin tables sized to match the tokens. The
-    frequency schedule and coordinate scaling mirror argent_exp's
-    ``RotaryEmbedding`` module ([MultiHeadAttetnion.py:10-23]):
+    encodes integer positions, this accepts real-valued coordinates. The
+    angle for frequency index :math:`k` is
 
     .. math::
 
-        \text{inv\_freq}_k = 10000^{-2k/\text{axis\_dim}},\quad
-        k = 0, 1, \ldots, \text{axis\_dim}/2 - 1
+        \theta_k = \text{scale} \cdot \text{max\_freq} \cdot x \cdot
+        10000^{-2k/\text{axis\_dim}},\quad k = 0, \ldots, \text{axis\_dim}/2 - 1
 
-    The coordinate is multiplied by ``scale * max_freq`` before broadcasting
-    against ``inv_freq`` — the ``scale`` factor is passed by the caller so a
-    multi-layer stack can shrink it geometrically at deeper layers
-    (``scale = max_freq / 2**layer_idx`` in argent).
+    and the tables use the interleaved layout ``[c0, c0, c1, c1, ...]``
+    expected by :func:`~physicsnemo.nn.module.rope.apply_rotary_pos_emb`.
 
     Parameters
     ----------
     coords : torch.Tensor
-        Per-token coordinate for one spatial axis, of shape
-        :math:`(B, L)`.
+        Coordinate along one spatial axis, of shape :math:`(B, L)`.
     axis_dim : int
-        Number of channels this axis owns within ``head_dim``. Must be even.
+        Number of channels rotated by this axis. Must be even.
     max_freq : float
-        Maximum frequency (the RoPE angular scale, prior to layer decay).
+        RoPE frequency scale.
     scale : float
-        Multiplicative layer-decay factor applied to ``coords`` before the
-        frequency broadcast. Argent's convention is
-        ``scale = max_freq / 2**layer_idx``.
+        Additional multiplier on the coordinates (per-layer decay factor).
 
     Returns
     -------
-    Tuple[torch.Tensor, torch.Tensor]
+    tuple[torch.Tensor, torch.Tensor]
         ``(cos, sin)`` tables of shape :math:`(B, L, \text{axis\_dim})`, in fp32.
     """
     if not torch.compiler.is_compiling() and axis_dim % 2 != 0:
-        raise ValueError(
-            f"Expected axis_dim to be even, got {axis_dim}"
-        )
-    device = coords.device
+        raise ValueError(f"Expected axis_dim to be even, got {axis_dim}")
     inv_freq = 1.0 / (
         10000.0
-        ** (torch.arange(0, axis_dim, 2, dtype=torch.float32, device=device) / axis_dim)
+        ** (
+            torch.arange(0, axis_dim, 2, dtype=torch.float32, device=coords.device)
+            / axis_dim
+        )
     )  # (axis_dim/2,)
     t = coords.float() * (scale * max_freq)  # (B, L)
     freqs = torch.einsum("bl,d->bld", t, inv_freq)  # (B, L, axis_dim/2)
-    # Interleaved layout [f0, f0, f1, f1, ...] — physicsnemo convention.
-    # Deviates from argent_exp which uses halves layout via
-    # `torch.cat((freqs, freqs), dim=-1)` — kept below for reference. See
-    # class docstring for the trade-off.
-    freqs = freqs.repeat_interleave(2, dim=-1)  # (B, L, axis_dim)
-    # freqs = torch.cat((freqs, freqs), dim=-1)  # argent_exp halves layout
+    freqs = freqs.repeat_interleave(2, dim=-1)  # (B, L, axis_dim), interleaved
     return freqs.cos(), freqs.sin()
 
 
 def _split_last_dim(x: torch.Tensor, splits: List[int]) -> List[torch.Tensor]:
-    r"""Split the last dimension of ``x`` into contiguous chunks of the given sizes.
+    r"""Split the last dimension of ``x`` into chunks of the given sizes.
 
-    Any unclaimed trailing channels (``x.shape[-1] > sum(splits)``) are
-    returned as an extra chunk — these pass through the attention without
-    rotation. Matches argent_exp's ``split_last_dim``
-    ([MultiHeadAttetnion.py:36-47]).
+    Channels beyond ``sum(splits)`` are returned as one extra trailing chunk.
 
     Parameters
     ----------
     x : torch.Tensor
         Input tensor.
     splits : list of int
-        Per-chunk channel counts along the last dimension.
+        Chunk sizes along the last dimension.
 
     Returns
     -------
     list of torch.Tensor
-        Chunks of ``x``. If ``sum(splits) < x.shape[-1]`` there is one extra
-        trailing chunk holding the leftover channels.
+        Chunks of ``x``.
     """
-    D = x.shape[-1]
-    total = sum(splits)
     chunks: List[torch.Tensor] = []
     start = 0
     for s in splits:
         chunks.append(x[..., start : start + s])
         start += s
-    if start < D:
+    if start < x.shape[-1]:
         chunks.append(x[..., start:])
     return chunks
 
@@ -155,55 +121,45 @@ def _split_last_dim(x: torch.Tensor, splits: List[int]) -> List[torch.Tensor]:
 class RotaryLinearCrossAttentionND(nn.Module):
     r"""Multi-head linear cross-attention with N-D continuous-coordinate RoPE.
 
-    Faithful port of argent_exp's ``RotaryMHA_ND`` ([MultiHeadAttetnion.py:50-234]).
-    The attention is **linear** (:math:`Q\,K^\top V / N`, not softmax) and RoPE
-    is applied to real-valued per-token coordinates split per spatial axis by
-    ``axis_slices``. See the module docstring of
-    :mod:`physicsnemo.experimental.models.argent.argent_attention` for why
-    these choices matter for reproducibility.
+    Computes :math:`Q\,(K^\top V) / N` per head, where :math:`N` is the number
+    of valid key/value tokens. :math:`K` and :math:`V` are layer-normalized
+    per head, and RoPE is applied to :math:`Q` and :math:`K` per spatial axis
+    on the channel slices given by ``axis_slices``.
 
     Parameters
     ----------
     dim_inout : int, optional, default=128
-        Input and output feature dimension.
+        Input and output feature dimension :math:`E`.
     dim_head : int, optional, default=128
-        Per-head feature dimension. The full multi-head embedding dimension is
-        ``dim_head * num_heads``.
+        Per-head feature dimension.
     num_heads : int, optional, default=4
         Number of attention heads.
     axis_slices : list of int, optional
-        Per-axis channel slice within ``dim_head`` (each entry must be even).
-        Position ``i`` in ``axis_slices`` corresponds to spatial axis ``i`` in
-        the ``pos_q`` / ``pos_kv`` tensors. If ``None``, defaults to
-        ``[dim_head]`` (single axis using the full head).
+        Even channel counts within ``dim_head``, one per spatial axis; entry
+        ``i`` is rotated by coordinate ``i`` of ``pos_q``/``pos_kv``. Defaults
+        to ``[dim_head]``.
     dropout : float, optional, default=0.0
-        Dropout probability. Currently unused (argent's reference does not
-        apply dropout inside the attention op) — kept in the signature for API
-        stability.
+        Unused.
     max_freq : float, optional, default=64.0
-        Base RoPE frequency (prior to layer decay).
+        RoPE frequency scale.
     scale : float, optional, default=1.0
-        Layer-decay factor applied to coordinates; argent's multi-layer
-        wrapper (:class:`MultiLayerCrossAttention`) sets this to
-        ``max_freq / 2**layer_idx``.
+        Additional RoPE coordinate multiplier (per-layer decay factor).
 
     Forward
     -------
     x_q : torch.Tensor
-        Query tokens of shape :math:`(B, L_q, E)`, with :math:`E =` ``dim_inout``.
+        Query tokens of shape :math:`(B, L_q, E)`.
     x_kv : torch.Tensor, optional
-        Key/value tokens of shape :math:`(B, L_{kv}, E)`. If ``None``, defaults
-        to ``x_q`` (self-attention).
+        Key/value tokens of shape :math:`(B, L_{kv}, E)`. Defaults to ``x_q``.
     pos_q : torch.Tensor, optional
-        Query coordinates of shape :math:`(B, L_q, n_{\text{axes}})`. Required
-        for cross-attention; ``None`` disables RoPE.
+        Query coordinates of shape :math:`(B, L_q, n_{axes})`. RoPE is applied
+        only when coordinates are given.
     pos_kv : torch.Tensor, optional
-        KV coordinates of shape :math:`(B, L_{kv}, n_{\text{axes}})`.
+        Key/value coordinates of shape :math:`(B, L_{kv}, n_{axes})`.
     padding_kv : torch.Tensor, optional
-        Boolean/float mask over KV tokens, of shape :math:`(B, L_{kv})` or
-        :math:`(B, L_{kv}, 1)` — ``True`` (or nonzero) means "keep." Padded
-        tokens contribute zero to :math:`K^\top V` and are excluded from the
-        normalizer :math:`N`.
+        Boolean or float mask of shape :math:`(B, L_{kv})` or
+        :math:`(B, L_{kv}, 1)`. Nonzero entries mark valid tokens; padded
+        tokens are excluded from :math:`K^\top V` and from :math:`N`.
 
     Outputs
     -------
@@ -242,14 +198,14 @@ class RotaryLinearCrossAttentionND(nn.Module):
         self.embed_dim = self.dim_head * self.num_heads
         if axis_slices is None:
             axis_slices = [self.dim_head]
-        for s in axis_slices:
-            if s % 2 != 0:
-                raise ValueError(
-                    f"Each entry of axis_slices must be even, got {axis_slices}"
-                )
+        if any(s % 2 != 0 for s in axis_slices):
+            raise ValueError(
+                f"Expected every entry of axis_slices to be even, got {axis_slices}"
+            )
         if sum(axis_slices) > self.dim_head:
             raise ValueError(
-                f"sum(axis_slices)={sum(axis_slices)} exceeds dim_head={self.dim_head}"
+                f"Expected sum(axis_slices) <= dim_head={self.dim_head}, "
+                f"got {sum(axis_slices)}"
             )
         self.axis_slices = list(axis_slices)
         self.n_axes = len(self.axis_slices)
@@ -257,52 +213,39 @@ class RotaryLinearCrossAttentionND(nn.Module):
         self.scale = float(scale)
         self.dropout = float(dropout)
 
-        # Projections: kv_proj emits K and V concatenated along the last dim.
+        # kv_proj emits K and V concatenated along the last dim.
         self.q_proj = nn.Linear(self.dim_inout, self.embed_dim, bias=False)
         self.kv_proj = nn.Linear(self.dim_inout, self.embed_dim * 2, bias=False)
         self.out_proj = nn.Linear(self.embed_dim, self.dim_inout, bias=True)
 
-        # Per-head LayerNorm on K and V (matches argent's k_norm/v_norm).
         self.k_norm = nn.LayerNorm(self.dim_head)
         self.v_norm = nn.LayerNorm(self.dim_head)
 
         self._reset_projections()
 
     def _reset_projections(self) -> None:
-        r"""Apply orthogonal-plus-identity per-head init to Q, K, V projections.
+        r"""Initialize each head block of Q, K, V as orthogonal plus identity.
 
-        Mirrors argent_exp's init recipe: for each attention head, initialize
-        the head's block of weights with an orthogonal matrix scaled by
-        ``1/dim_head``, then add ``1/dim_head`` times the identity on the
-        diagonal. This preserves norms at initialization and is what argent
-        was trained with.
+        Each ``dim_head`` block is set to an orthogonal matrix with gain
+        ``1/dim_head`` plus ``1/dim_head`` times the identity.
         """
-        init_gain = 1.0 / self.dim_head
-        diag_weight = 1.0 / self.dim_head
+        gain = 1.0 / self.dim_head
+
+        def _init_block(block: torch.Tensor) -> None:
+            nn.init.orthogonal_(block, gain=gain)
+            m = min(block.shape)
+            block[:m, :m] += gain * torch.eye(m, dtype=block.dtype, device=block.device)
+
         with torch.no_grad():
-            # Q projection: (embed_dim, dim_inout), per-head block along dim 0.
             for h in range(self.num_heads):
-                block = self.q_proj.weight[h * self.dim_head : (h + 1) * self.dim_head, :]
-                nn.init.orthogonal_(block, gain=init_gain)
-                # Add identity along the smaller dim to keep the shape general.
-                m = min(block.shape[0], block.shape[1])
-                block[:m, :m] += diag_weight * torch.eye(m, dtype=block.dtype, device=block.device)
-
-            # KV projection: (2*embed_dim, dim_inout). Argent applies the same
-            # ortho+identity init to each head block for K (first half) and V
-            # (second half). See MultiHeadAttetnion.py:124-135.
-            kv_weight = self.kv_proj.weight  # (2*embed_dim, dim_inout)
+                _init_block(
+                    self.q_proj.weight[h * self.dim_head : (h + 1) * self.dim_head]
+                )
             for h in range(self.num_heads):
-                k_block = kv_weight[h * self.dim_head : (h + 1) * self.dim_head, :]
-                nn.init.orthogonal_(k_block, gain=init_gain)
-                m = min(k_block.shape[0], k_block.shape[1])
-                k_block[:m, :m] += diag_weight * torch.eye(m, dtype=k_block.dtype, device=k_block.device)
-
-                v_start = self.embed_dim + h * self.dim_head
-                v_block = kv_weight[v_start : v_start + self.dim_head, :]
-                nn.init.orthogonal_(v_block, gain=init_gain)
-                m = min(v_block.shape[0], v_block.shape[1])
-                v_block[:m, :m] += diag_weight * torch.eye(m, dtype=v_block.dtype, device=v_block.device)
+                k_start = h * self.dim_head
+                v_start = self.embed_dim + k_start
+                _init_block(self.kv_proj.weight[k_start : k_start + self.dim_head])
+                _init_block(self.kv_proj.weight[v_start : v_start + self.dim_head])
 
     def forward(
         self,
@@ -310,80 +253,71 @@ class RotaryLinearCrossAttentionND(nn.Module):
         x_kv: Optional[Float[torch.Tensor, "batch len_kv dim"]] = None,
         pos_q: Optional[Float[torch.Tensor, "batch len_q axes"]] = None,
         pos_kv: Optional[Float[torch.Tensor, "batch len_kv axes"]] = None,
-        padding_kv: Optional[torch.Tensor] = None,
+        padding_kv: Optional[Shaped[torch.Tensor, "batch len_kv ..."]] = None,
     ) -> Float[torch.Tensor, "batch len_q dim"]:
         if x_kv is None:
             x_kv = x_q
         B, L_q, E = x_q.shape
         L_kv = x_kv.shape[1]
 
-        # Input validation (skipped under torch.compile per MOD-005).
+        ### Input validation
         if not torch.compiler.is_compiling():
             if E != self.dim_inout:
                 raise ValueError(
-                    f"Expected x_q with last dim {self.dim_inout}, got {tuple(x_q.shape)}"
+                    f"Expected x_q of shape (B, L_q, {self.dim_inout}) "
+                    f"but got tensor of shape {tuple(x_q.shape)}"
                 )
             if x_kv.shape[0] != B or x_kv.shape[-1] != self.dim_inout:
                 raise ValueError(
-                    f"Expected x_kv shape (B, L_kv, {self.dim_inout}), got {tuple(x_kv.shape)}"
+                    f"Expected x_kv of shape ({B}, L_kv, {self.dim_inout}) "
+                    f"but got tensor of shape {tuple(x_kv.shape)}"
                 )
-            if pos_q is not None and (
-                pos_q.ndim != 3 or pos_q.shape[0] != B or pos_q.shape[1] != L_q or pos_q.shape[2] != self.n_axes
-            ):
+            if pos_q is not None and pos_q.shape != (B, L_q, self.n_axes):
                 raise ValueError(
-                    f"Expected pos_q shape (B, L_q, {self.n_axes}), got {tuple(pos_q.shape)}"
+                    f"Expected pos_q of shape ({B}, {L_q}, {self.n_axes}) "
+                    f"but got tensor of shape {tuple(pos_q.shape)}"
                 )
-            if pos_kv is not None and (
-                pos_kv.ndim != 3 or pos_kv.shape[0] != B or pos_kv.shape[1] != L_kv or pos_kv.shape[2] != self.n_axes
-            ):
+            if pos_kv is not None and pos_kv.shape != (B, L_kv, self.n_axes):
                 raise ValueError(
-                    f"Expected pos_kv shape (B, L_kv, {self.n_axes}), got {tuple(pos_kv.shape)}"
+                    f"Expected pos_kv of shape ({B}, {L_kv}, {self.n_axes}) "
+                    f"but got tensor of shape {tuple(pos_kv.shape)}"
+                )
+            if padding_kv is not None and padding_kv.numel() != B * L_kv:
+                raise ValueError(
+                    f"Expected padding_kv of shape ({B}, {L_kv}) or ({B}, {L_kv}, 1) "
+                    f"but got tensor of shape {tuple(padding_kv.shape)}"
                 )
 
-        # Decide whether to apply RoPE.  Self-attention with pos_q inferred from pos_kv
-        # was in argent_exp; here we accept both cross- and self-configurations.
-        is_self = x_kv is x_q
-        if is_self:
+        # Self-attention may give only pos_q; cross-attention needs both.
+        if x_kv is x_q:
             use_rope = pos_q is not None
             if use_rope and pos_kv is None:
                 pos_kv = pos_q
         else:
             use_rope = pos_q is not None and pos_kv is not None
 
-        # Project to Q, K, V and reshape into per-head layout.
-        q = self.q_proj(x_q)  # (B, L_q, embed_dim)
-        k, v = self.kv_proj(x_kv).chunk(2, dim=-1)  # each (B, L_kv, embed_dim)
+        q = self.q_proj(x_q)
+        k, v = self.kv_proj(x_kv).chunk(2, dim=-1)
         q = rearrange(q, "b l (h d) -> b h l d", h=self.num_heads)
         k = rearrange(k, "b l (h d) -> b h l d", h=self.num_heads)
         v = rearrange(v, "b l (h d) -> b h l d", h=self.num_heads)
 
-        # Per-head LayerNorm on K and V — collapse (batch, heads) into one
-        # normalization axis so nn.LayerNorm operates on the (L, dim_head)
-        # slice for each (b, h) independently.
-        k = rearrange(
-            self.k_norm(rearrange(k, "b h l d -> (b h) l d")),
-            "(b h) l d -> b h l d",
-            b=B,
-        )
-        v = rearrange(
-            self.v_norm(rearrange(v, "b h l d -> (b h) l d")),
-            "(b h) l d -> b h l d",
-            b=B,
-        )
+        # Per-head LayerNorm on K and V over dim_head.
+        k = self.k_norm(k)
+        v = self.v_norm(v)
 
-        # Apply per-axis RoPE by slicing head_dim according to axis_slices.
+        # Rotate each axis slice of head_dim by the matching coordinate.
         if use_rope:
             q_chunks = _split_last_dim(q, self.axis_slices)
             k_chunks = _split_last_dim(k, self.axis_slices)
-            for ax in range(self.n_axes):
-                axis_dim = self.axis_slices[ax]
+            for ax, axis_dim in enumerate(self.axis_slices):
                 cos_q, sin_q = build_continuous_rope_cos_sin(
-                    pos_q[..., ax], axis_dim=axis_dim, max_freq=self.max_freq, scale=self.scale
+                    pos_q[..., ax], axis_dim, self.max_freq, self.scale
                 )  # (B, L_q, axis_dim)
                 cos_k, sin_k = build_continuous_rope_cos_sin(
-                    pos_kv[..., ax], axis_dim=axis_dim, max_freq=self.max_freq, scale=self.scale
+                    pos_kv[..., ax], axis_dim, self.max_freq, self.scale
                 )  # (B, L_kv, axis_dim)
-                # Broadcast over the head dimension.
+                # unsqueeze(1) broadcasts the tables over heads.
                 q_chunks[ax] = apply_rotary_pos_emb(
                     q_chunks[ax], cos_q.unsqueeze(1), sin_q.unsqueeze(1)
                 )
@@ -393,43 +327,34 @@ class RotaryLinearCrossAttentionND(nn.Module):
             q = torch.cat(q_chunks, dim=-1)
             k = torch.cat(k_chunks, dim=-1)
 
-        # Optional KV padding mask: zero out padded K and V, and use the valid
-        # count as the linear-attention normalizer.  Matches argent's
-        # MultiHeadAttetnion.py:222-228.
-        n_valid = float(L_kv)
+        # Zero padded K/V tokens and normalize by the number of valid tokens.
         if padding_kv is not None:
-            # Normalize mask to shape (B, 1, L_kv, 1) so it broadcasts over heads and dim_head.
             mask = padding_kv.reshape(B, 1, L_kv, 1).float()
             k = k * mask
             v = v * mask
-            n_valid = mask.sum(dim=-2, keepdim=True)  # (B, 1, 1, 1) — per-batch scalar
-
-        # Linear attention: out = q @ (k^T v) / n_valid.  See rule 3 in the
-        # plan's Faithfulness invariants — do NOT replace with softmax.
-        kv = torch.matmul(k.transpose(-1, -2), v)  # (B, H, dim_head, dim_head)
-        out = torch.matmul(q, kv)  # (B, H, L_q, dim_head)
-        if isinstance(n_valid, torch.Tensor):
-            # n_valid has shape (B, 1, 1, 1); avoid divide-by-zero on all-padded cases.
-            out = out / n_valid.clamp(min=1.0)
+            n_valid = mask.sum(dim=-2, keepdim=True).clamp(min=1.0)  # (B, 1, 1, 1)
         else:
-            out = out / max(n_valid, 1.0)
+            n_valid = float(max(L_kv, 1))
 
-        # (B, H, L_q, D) -> (B, L_q, H*D)
+        # Linear attention: Q (K^T V) / N, no softmax.
+        kv = torch.matmul(k.transpose(-1, -2), v)  # (B, H, dim_head, dim_head)
+        out = torch.matmul(q, kv) / n_valid  # (B, H, L_q, dim_head)
+
         out = rearrange(out, "b h l d -> b l (h d)")
         return self.out_proj(out)
 
 
 class GeGELU(nn.Module):
-    r"""GEGLU activation — GELU-gated linear unit ("A. Shazeer, 2020").
+    r"""GELU-gated linear unit (GEGLU, `Shazeer, 2020
+    <https://arxiv.org/abs/2002.05202>`_).
 
-    Splits the last dimension in half; the first half is passed through
-    :class:`torch.nn.GELU` and gates the second half by elementwise product.
-    Matches argent_exp's ``GeGELU`` ([MultiHeadAttetnion.py:237-245]).
+    Splits the last dimension in half and returns
+    :math:`\text{GELU}(x_1) \odot x_2`.
 
     Forward
     -------
     x : torch.Tensor
-        Input of shape :math:`(\ldots, 2C)`. The last dim must be even.
+        Input of shape :math:`(\ldots, 2C)`.
 
     Outputs
     -------
@@ -449,18 +374,14 @@ class GeGELU(nn.Module):
 class FeedForward(nn.Module):
     r"""Two-layer feed-forward block with GEGLU activation.
 
-    Matches argent_exp's ``FeedForward`` block ([MultiHeadAttetnion.py:247-259])
-    used inside each attention layer.
-
     Parameters
     ----------
     dim : int
-        Input/output feature dimension :math:`E`.
+        Input and output feature dimension :math:`E`.
     hidden_dim : int
-        Hidden dimension of the block. Internally allocates ``2 * hidden_dim``
-        so the gated split leaves ``hidden_dim`` post-activation channels.
+        Hidden dimension after gating; the first linear emits ``2 * hidden_dim``.
     dropout : float, optional, default=0.0
-        Dropout probability applied after each linear.
+        Dropout probability after each linear.
 
     Forward
     -------
@@ -490,19 +411,14 @@ class FeedForward(nn.Module):
 class ReLUFeedForward(nn.Module):
     r"""Two-layer feed-forward block with ReLU activation.
 
-    Alternative to :class:`FeedForward`, selected by
-    :class:`~physicsnemo.experimental.models.argent.ArGEnTCross` when
-    ``use_relu_mlp=True``. Matches argent_exp's ``ReLUFeedForward``
-    ([MultiHeadAttetnion.py:262-274]).
-
     Parameters
     ----------
     dim : int
-        Input/output feature dimension.
+        Input and output feature dimension :math:`E`.
     hidden_dim : int
-        Hidden dimension of the block.
+        Hidden dimension.
     dropout : float, optional, default=0.0
-        Dropout probability applied after each linear.
+        Dropout probability after each linear.
 
     Forward
     -------
@@ -530,19 +446,15 @@ class ReLUFeedForward(nn.Module):
 
 
 class MultiLayerCrossAttention(nn.Module):
-    r"""Stack of :class:`RotaryLinearCrossAttentionND` + :class:`FeedForward` blocks.
+    r"""Stack of residual :class:`RotaryLinearCrossAttentionND` and feed-forward blocks.
 
-    Faithful port of argent_exp's ``MultiHeadMultiLayerAttention`` ([ArGEnT.py:85-128]).
-
-    Composes ``depth`` attention layers, each followed by a feed-forward block,
-    both wrapped in residual connections. The RoPE scale for layer index
-    :math:`d` is ``max_freq / 2**d`` — this per-layer decay is set at
-    ArGEnT.py:107 and changes the model, so keep it.
+    Layer :math:`d` uses RoPE ``scale = max_freq / 2**d``, so deeper layers see
+    lower RoPE frequencies.
 
     Parameters
     ----------
     dim_inout : int, optional, default=128
-        Input and output feature dimension.
+        Input and output feature dimension :math:`E`.
     depth : int, optional, default=4
         Number of attention + feed-forward layers.
     dim_head : int, optional, default=128
@@ -550,31 +462,28 @@ class MultiLayerCrossAttention(nn.Module):
     num_heads : int, optional, default=4
         Number of attention heads.
     dim_mlp : int, optional, default=256
-        Hidden dimension for the feed-forward blocks.
+        Hidden dimension of the feed-forward blocks.
     axis_slices : list of int, optional
-        See :class:`RotaryLinearCrossAttentionND`.
+        Per-axis RoPE channel split; see :class:`RotaryLinearCrossAttentionND`.
     dropout : float, optional, default=0.0
-        Dropout probability inside the feed-forward blocks. The attention op
-        does not use dropout.
+        Dropout probability inside the feed-forward blocks.
     max_freq : float, optional, default=64.0
-        Base RoPE frequency; layer ``d`` uses ``scale = max_freq / 2**d``.
+        RoPE frequency scale.
     use_relu_mlp : bool, optional, default=False
-        If ``True``, use :class:`ReLUFeedForward` instead of :class:`FeedForward`
-        (GEGLU) for the feed-forward blocks.
+        If ``True``, use :class:`ReLUFeedForward`; otherwise :class:`FeedForward`.
 
     Forward
     -------
     x_q : torch.Tensor
         Query tokens of shape :math:`(B, L_q, E)`.
     x_kv : torch.Tensor, optional
-        KV tokens of shape :math:`(B, L_{kv}, E)`. Defaults to ``x_q``
-        (self-attention).
+        Key/value tokens of shape :math:`(B, L_{kv}, E)`. Defaults to ``x_q``.
     pos_q : torch.Tensor, optional
-        Query coordinates of shape :math:`(B, L_q, n_{\text{axes}})`.
+        Query coordinates of shape :math:`(B, L_q, n_{axes})`.
     pos_kv : torch.Tensor, optional
-        KV coordinates of shape :math:`(B, L_{kv}, n_{\text{axes}})`.
+        Key/value coordinates of shape :math:`(B, L_{kv}, n_{axes})`.
     padding_kv : torch.Tensor, optional
-        KV padding mask; see :class:`RotaryLinearCrossAttentionND`.
+        Key/value padding mask; see :class:`RotaryLinearCrossAttentionND`.
 
     Outputs
     -------
@@ -595,24 +504,24 @@ class MultiLayerCrossAttention(nn.Module):
         use_relu_mlp: bool = False,
     ) -> None:
         super().__init__()
-        self.layers = nn.ModuleList()
-        for d in range(depth):
-            attn = RotaryLinearCrossAttentionND(
-                dim_inout=dim_inout,
-                dim_head=dim_head,
-                num_heads=num_heads,
-                axis_slices=axis_slices,
-                dropout=dropout,
-                max_freq=max_freq,
-                # Per-layer RoPE decay — see Faithfulness invariant #2 in the plan.
-                scale=max_freq / (2 ** d),
+        ffn_cls = ReLUFeedForward if use_relu_mlp else FeedForward
+        self.layers = nn.ModuleList(
+            nn.ModuleList(
+                [
+                    RotaryLinearCrossAttentionND(
+                        dim_inout=dim_inout,
+                        dim_head=dim_head,
+                        num_heads=num_heads,
+                        axis_slices=axis_slices,
+                        dropout=dropout,
+                        max_freq=max_freq,
+                        scale=max_freq / (2**d),
+                    ),
+                    ffn_cls(dim_inout, dim_mlp, dropout=dropout),
+                ]
             )
-            ffn: nn.Module
-            if use_relu_mlp:
-                ffn = ReLUFeedForward(dim_inout, dim_mlp, dropout=dropout)
-            else:
-                ffn = FeedForward(dim_inout, dim_mlp, dropout=dropout)
-            self.layers.append(nn.ModuleList([attn, ffn]))
+            for d in range(depth)
+        )
 
     def forward(
         self,
@@ -620,9 +529,12 @@ class MultiLayerCrossAttention(nn.Module):
         x_kv: Optional[Float[torch.Tensor, "batch len_kv dim"]] = None,
         pos_q: Optional[Float[torch.Tensor, "batch len_q axes"]] = None,
         pos_kv: Optional[Float[torch.Tensor, "batch len_kv axes"]] = None,
-        padding_kv: Optional[torch.Tensor] = None,
+        padding_kv: Optional[Shaped[torch.Tensor, "batch len_kv ..."]] = None,
     ) -> Float[torch.Tensor, "batch len_q dim"]:
         for attn, ffn in self.layers:
-            x_q = attn(x_q, x_kv=x_kv, pos_q=pos_q, pos_kv=pos_kv, padding_kv=padding_kv) + x_q
+            x_q = (
+                attn(x_q, x_kv=x_kv, pos_q=pos_q, pos_kv=pos_kv, padding_kv=padding_kv)
+                + x_q
+            )
             x_q = ffn(x_q) + x_q
         return x_q

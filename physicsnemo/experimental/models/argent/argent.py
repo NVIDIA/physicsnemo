@@ -14,91 +14,38 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""ArGEnT — Arbitrary Geometry-encoded Transformer for Operator Learning.
+r"""ArGEnT: Arbitrary Geometry-encoded Transformer for operator learning.
 
-Port of the cross-attention variant of ArGEnT (Chen et al. 2026;
-`ArGEnT: Arbitrary Geometry-encoded Transformer for Operator Learning
-<https://arxiv.org/abs/2602.11626>`_) into the PhysicsNeMo framework. The
-model composes a geometry-aware transformer trunk with a DeepONet-style branch
-over non-geometric operator parameters and predicts field values at arbitrary
-query points inside the domain.
-
-Only the cross-attention variant is implemented in v1. Passing
-``attention_type='self'`` or ``attention_type='hybrid'`` to :class:`ArGEnT`
-or :class:`ArGEnTDeepONet` raises :class:`NotImplementedError`; a future
-implementer only needs to fill in the corresponding branch of
-:meth:`ArGEnT.__init__` and :meth:`ArGEnT.forward` without renaming or
-changing the public API.
+Implements the cross-attention variant of ArGEnT (`Chen et al., 2026
+<https://arxiv.org/abs/2602.11626>`_): a geometry-aware transformer trunk that
+attends from query points to a geometry point cloud, optionally fused with a
+DeepONet-style branch over non-geometric operator parameters.
 """
 
 from __future__ import annotations
 
-from typing import Callable, List, Literal, Optional, Union
+from typing import List, Literal, Optional
 
 import torch
 import torch.nn as nn
-from jaxtyping import Float
+from jaxtyping import Float, Shaped
 
 from physicsnemo.core import Module
 from physicsnemo.core.meta import ModelMetaData
+from physicsnemo.nn import get_activation
 
 from .argent_attention import MultiLayerCrossAttention
 
-# Activation dictionary — mirrors argent_exp/ArGEnT/nn_module/basis.py:7-15
-# so the same string identifiers ("relu", "gelu", etc.) work interchangeably.
-_ACTIVATION_DICT: dict[str, Callable[[torch.Tensor], torch.Tensor]] = {
-    "relu": torch.relu,
-    "selu": torch.selu,
-    "gelu": nn.GELU(),
-    "sigmoid": torch.sigmoid,
-    "sin": torch.sin,
-    "swish": lambda x: x * torch.sigmoid(x),
-    "tanh": torch.tanh,
-}
-
-
-def _resolve_activation(
-    activation: Union[str, Callable[[torch.Tensor], torch.Tensor]],
-) -> Callable[[torch.Tensor], torch.Tensor]:
-    r"""Resolve an activation identifier (string or callable) to a callable.
-
-    Parameters
-    ----------
-    activation : str or callable
-        Either a key of the internal activation dictionary (``"relu"``,
-        ``"gelu"``, ``"selu"``, ``"sigmoid"``, ``"sin"``, ``"swish"``,
-        ``"tanh"``) or a direct callable.
-
-    Returns
-    -------
-    Callable[[torch.Tensor], torch.Tensor]
-        The activation function.
-    """
-    if callable(activation):
-        return activation
-    if isinstance(activation, str) and activation.lower() in _ACTIVATION_DICT:
-        return _ACTIVATION_DICT[activation.lower()]
-    raise ValueError(f"Unsupported activation function: {activation!r}")
-
 
 class _FNN(nn.Module):
-    r"""Simple feed-forward stack used for embeddings and the DeepONet branch.
-
-    Faithful port of argent_exp's ``FNN`` ([basis.py:25-73]). Kept as an
-    internal helper (leading underscore) so this file stays self-contained
-    per **MOD-004** — physicsnemo's :class:`~physicsnemo.nn.FCLayer` uses a
-    different default init (Xavier uniform vs PyTorch's default Kaiming
-    uniform in ``nn.Linear``) which would silently perturb trained-model
-    reproducibility, so we don't compose it here.
-
-    Applies ``activation`` after every linear except the last.
+    r"""Feed-forward stack with ``activation`` after every linear except the last.
 
     Parameters
     ----------
     layers : list of int
-        Sequence of layer widths ``[in, hidden_0, hidden_1, ..., out]``.
-    activation : callable
-        Activation function applied between hidden layers.
+        Layer widths ``[in, hidden_0, ..., out]``.
+    activation : nn.Module
+        Activation applied between layers.
 
     Forward
     -------
@@ -111,11 +58,7 @@ class _FNN(nn.Module):
         Output tensor of shape :math:`(\ldots, \text{layers}[-1])`.
     """
 
-    def __init__(
-        self,
-        layers: List[int],
-        activation: Callable[[torch.Tensor], torch.Tensor],
-    ) -> None:
+    def __init__(self, layers: List[int], activation: nn.Module) -> None:
         super().__init__()
         self.activation = activation
         self.net = nn.ModuleList(
@@ -129,21 +72,18 @@ class _FNN(nn.Module):
 
 
 class _MFNN(nn.Module):
-    r"""Modified feed-forward network from Wang et al. (2021).
+    r"""Modified feed-forward network of `Wang, Teng & Perdikaris (2021)
+    <https://epubs.siam.org/doi/abs/10.1137/20M1318043>`_.
 
-    Faithful port of argent_exp's ``MFNN`` ([basis.py:75-129]). Selected when
-    the argent constructor is called with ``use_MFNN=True``. Interpolates
-    between two side-branch projections ``U`` and ``V`` using the main-branch
-    activations ``Z_l`` at each hidden layer, following
-    `Wang, Teng & Perdikaris (2021)
-    <https://epubs.siam.org/doi/abs/10.1137/20M1318043>`_ (SIAM SISC).
+    Each hidden layer output :math:`Z` gates two input projections:
+    :math:`x \leftarrow Z \odot U + (1 - Z) \odot V`.
 
     Parameters
     ----------
     layers : list of int
-        Sequence of layer widths ``[in, hidden_0, hidden_1, ..., out]``.
-    activation : callable
-        Activation function applied at every hidden layer.
+        Layer widths ``[in, hidden_0, ..., out]``.
+    activation : nn.Module
+        Activation applied at every hidden layer and to :math:`U`, :math:`V`.
 
     Forward
     -------
@@ -156,11 +96,7 @@ class _MFNN(nn.Module):
         Output tensor of shape :math:`(\ldots, \text{layers}[-1])`.
     """
 
-    def __init__(
-        self,
-        layers: List[int],
-        activation: Callable[[torch.Tensor], torch.Tensor],
-    ) -> None:
+    def __init__(self, layers: List[int], activation: nn.Module) -> None:
         super().__init__()
         self.activation = activation
         self.Znet = nn.ModuleList(
@@ -195,18 +131,15 @@ class ArGEnTDeepONetMetaData(ModelMetaData):
 
 
 class ArGEnT(Module):
-    r"""Cross-attention ArGEnT trunk network (no branch).
+    r"""ArGEnT trunk network with cross-attention from query points to geometry.
 
-    Faithful port of argent_exp's ``ArGEnT`` ([ArGEnT.py:10-83]) with
-    ``attention_type='cross'``. Given query tokens (evaluation points) and
-    key/value tokens (a geometry point cloud), produces per-query output
-    features via a stack of linear cross-attention layers with per-token
-    continuous-coordinate RoPE.
-
-    The first ``dim_pos`` channels of ``x_query`` and ``x_kv`` are interpreted
-    as spatial coordinates and consumed by the RoPE inside the attention
-    (they still participate in the embedding MLP through the full input
-    channel count).
+    Query tokens (evaluation points) and key/value tokens (a geometry point
+    cloud) are embedded by MLPs, passed through a stack of linear
+    cross-attention layers with continuous-coordinate RoPE
+    (:class:`~physicsnemo.experimental.models.argent.argent_attention.MultiLayerCrossAttention`),
+    and projected to ``dim_out`` channels per query. The first ``dim_pos``
+    channels of ``x_query`` and ``x_kv`` are the spatial coordinates used by
+    RoPE; all channels are fed to the embedding MLPs.
 
     Parameters
     ----------
@@ -215,64 +148,58 @@ class ArGEnT(Module):
     dim_kv : int, optional, default=2
         Number of input channels of ``x_kv``.
     dim_pos : int, optional, default=2
-        Number of leading input channels used as continuous coordinates for
-        RoPE. Both ``x_query`` and ``x_kv`` are expected to have at least
-        ``dim_pos`` channels.
+        Number of leading coordinate channels used by RoPE. Must not exceed
+        ``dim_query`` or ``dim_kv``.
     dim_out : int, optional, default=1
         Number of output channels per query token.
     dim_emb : int, optional, default=128
-        Feature dimension used throughout the trunk (embeddings and attention
-        head sum).
+        Embedding and per-head attention dimension.
     num_heads : int, optional, default=4
-        Number of attention heads inside each attention layer.
+        Number of attention heads.
     depth : int, optional, default=2
-        Number of stacked cross-attention layers.
+        Number of cross-attention layers.
     max_freq : float, optional, default=64.0
-        Base RoPE frequency. Layer ``d`` uses ``scale = max_freq / 2**d``.
-    use_MFNN : bool, optional, default=False
+        RoPE frequency scale. At layer :math:`d`, coordinates are multiplied by
+        :math:`\text{max\_freq}^2 / 2^d` before the RoPE frequency schedule.
+    use_mfnn : bool, optional, default=False
         If ``True``, use the modified FNN of Wang et al. (2021) for the
-        query/KV embeddings and output projection; if ``False``, use a plain
-        stack of ``Linear`` + activation.
-    activation : str or callable, optional, default="relu"
-        Activation function for the embedding and output MLPs. String
-        identifiers accepted: ``"relu"``, ``"selu"``, ``"gelu"``,
-        ``"sigmoid"``, ``"sin"``, ``"swish"``, ``"tanh"``.
+        embedding and output MLPs instead of a plain feed-forward stack.
+    activation : str, optional, default="relu"
+        Activation of the embedding and output MLPs; any name accepted by
+        :func:`~physicsnemo.nn.get_activation`.
     use_relu_mlp : bool, optional, default=False
-        If ``True``, use ReLU inside the feed-forward blocks of the attention
-        stack; if ``False``, use GEGLU.
+        If ``True``, use ReLU feed-forward blocks in the attention stack;
+        otherwise GEGLU.
     axis_slices : list of int, optional
-        Per-axis channel slice within ``dim_head`` (= ``dim_emb``); each entry
-        must be even. If ``None``, defaults to
-        ``[dim_emb // dim_pos] * dim_pos`` (matches argent_exp
-        [ArGEnT.py:44-45]).
+        Channels of each attention head assigned to each coordinate axis. Must
+        have ``dim_pos`` even entries summing to at most ``dim_emb``. Defaults
+        to ``[dim_emb // dim_pos] * dim_pos``.
     attention_type : {"cross", "self", "hybrid"}, optional, default="cross"
-        Which ArGEnT variant to build. Only ``"cross"`` is implemented in
-        v1; ``"self"`` and ``"hybrid"`` raise :class:`NotImplementedError`.
+        ArGEnT variant. Only ``"cross"`` is currently supported; other values
+        raise :class:`NotImplementedError`.
 
     Forward
     -------
     x_query : torch.Tensor
-        Query tokens of shape :math:`(B, N_q, \text{dim\_query})`. The first
-        ``dim_pos`` channels are the query coordinates.
+        Query tokens of shape :math:`(B, N_q, D_q)`.
     x_kv : torch.Tensor
-        Key/value tokens of shape :math:`(B, N_{kv}, \text{dim\_kv})`. The
-        first ``dim_pos`` channels are the KV coordinates.
+        Key/value tokens of shape :math:`(B, N_{kv}, D_{kv})`.
     padding_kv : torch.Tensor, optional
-        Mask of shape :math:`(B, N_{kv})` or :math:`(B, N_{kv}, 1)`; ``True``
-        (or nonzero) keeps the token, ``False`` (or zero) excludes it from
-        :math:`K^\top V` and the normalizer.
+        Boolean or float mask of shape :math:`(B, N_{kv})` or
+        :math:`(B, N_{kv}, 1)`. Nonzero entries mark valid tokens; padded
+        tokens are excluded from the attention.
 
     Outputs
     -------
     torch.Tensor
-        Output tokens of shape :math:`(B, N_q, \text{dim\_out})`.
+        Output tokens of shape :math:`(B, N_q, D_{out})`.
 
     Examples
     --------
     >>> import torch
     >>> from physicsnemo.experimental.models.argent import ArGEnT
     >>> model = ArGEnT(dim_query=3, dim_kv=3, dim_pos=2,
-    ...                     dim_out=3, dim_emb=64, num_heads=2, depth=2)
+    ...                dim_out=3, dim_emb=64, num_heads=2, depth=2)
     >>> x_query = torch.randn(2, 500, 3)
     >>> x_kv = torch.randn(2, 200, 3)
     >>> out = model(x_query, x_kv)
@@ -290,8 +217,8 @@ class ArGEnT(Module):
         num_heads: int = 4,
         depth: int = 2,
         max_freq: float = 64.0,
-        use_MFNN: bool = False,
-        activation: Union[str, Callable[[torch.Tensor], torch.Tensor]] = "relu",
+        use_mfnn: bool = False,
+        activation: str = "relu",
         use_relu_mlp: bool = False,
         axis_slices: Optional[List[int]] = None,
         attention_type: Literal["cross", "self", "hybrid"] = "cross",
@@ -300,90 +227,92 @@ class ArGEnT(Module):
         attention_type = attention_type.lower()
         if attention_type != "cross":
             raise NotImplementedError(
-                f"attention_type={attention_type!r} is not yet implemented in the "
-                f"PhysicsNeMo port. Only 'cross' is supported in v1."
+                f"attention_type={attention_type!r} is not supported. "
+                "Only attention_type='cross' is currently supported."
             )
-        self.dim_query = int(dim_query)
-        self.dim_kv = int(dim_kv)
-        self.dim_pos = int(dim_pos)
-        self.dim_out = int(dim_out)
-        self.dim_emb = int(dim_emb)
-        self.num_heads = int(num_heads)
-        self.depth = int(depth)
+        if dim_pos > min(dim_query, dim_kv):
+            raise ValueError(
+                f"Expected dim_pos <= min(dim_query, dim_kv), got dim_pos={dim_pos}, "
+                f"dim_query={dim_query}, dim_kv={dim_kv}"
+            )
+        if axis_slices is None:
+            axis_slices = [dim_emb // dim_pos] * dim_pos
+        if len(axis_slices) != dim_pos:
+            raise ValueError(
+                f"Expected axis_slices with {dim_pos} entries (dim_pos), "
+                f"got {list(axis_slices)}"
+            )
+
+        self.dim_query = dim_query
+        self.dim_kv = dim_kv
+        self.dim_pos = dim_pos
+        self.dim_out = dim_out
+        self.dim_emb = dim_emb
+        self.num_heads = num_heads
+        self.depth = depth
         self.max_freq = float(max_freq)
-        self.use_MFNN = bool(use_MFNN)
-        self.use_relu_mlp = bool(use_relu_mlp)
+        self.use_mfnn = use_mfnn
+        self.use_relu_mlp = use_relu_mlp
+        self.axis_slices = list(axis_slices)
         self.attention_type = attention_type
 
-        self.activation = _resolve_activation(activation)
+        self.activation = get_activation(activation)
 
-        # Argent default: equal-sized per-axis slices of head_dim across dim_pos axes.
-        if axis_slices is None:
-            axis_slices = [self.dim_emb // self.dim_pos] * self.dim_pos
-        self.axis_slices = list(axis_slices)
-
-        # Embedding stacks: match argent_exp/ArGEnT/nn_module/ArGEnT.py:41-43.
-        mlp_cls = _MFNN if self.use_MFNN else _FNN
+        mlp_cls = _MFNN if use_mfnn else _FNN
         self.query_to_embedding = mlp_cls(
-            layers=[self.dim_query] + [self.dim_emb] * 4,
-            activation=self.activation,
+            layers=[dim_query] + [dim_emb] * 4, activation=self.activation
         )
         self.kv_to_embedding = mlp_cls(
-            layers=[self.dim_kv] + [self.dim_emb] * 4,
-            activation=self.activation,
+            layers=[dim_kv] + [dim_emb] * 4, activation=self.activation
         )
         self.to_out = mlp_cls(
-            layers=[self.dim_emb] * 4 + [self.dim_out],
-            activation=self.activation,
+            layers=[dim_emb] * 4 + [dim_out], activation=self.activation
         )
 
         self.transformer = MultiLayerCrossAttention(
-            dim_inout=self.dim_emb,
-            depth=self.depth,
-            num_heads=self.num_heads,
-            dim_head=self.dim_emb,
-            dim_mlp=self.dim_emb,
+            dim_inout=dim_emb,
+            depth=depth,
+            num_heads=num_heads,
+            dim_head=dim_emb,
+            dim_mlp=dim_emb,
             max_freq=self.max_freq,
             axis_slices=self.axis_slices,
-            use_relu_mlp=self.use_relu_mlp,
+            use_relu_mlp=use_relu_mlp,
         )
 
     def forward(
         self,
         x_query: Float[torch.Tensor, "batch nq dim_query"],
         x_kv: Float[torch.Tensor, "batch nkv dim_kv"],
-        padding_kv: Optional[torch.Tensor] = None,
+        padding_kv: Optional[Shaped[torch.Tensor, "batch nkv ..."]] = None,
     ) -> Float[torch.Tensor, "batch nq dim_out"]:
-        # Input validation, skipped under torch.compile per MOD-005.
+        ### Input validation
         if not torch.compiler.is_compiling():
             if x_query.ndim != 3 or x_query.shape[-1] != self.dim_query:
                 raise ValueError(
-                    f"Expected x_query shape (B, Nq, {self.dim_query}), "
-                    f"got {tuple(x_query.shape)}"
+                    f"Expected x_query of shape (B, N_q, {self.dim_query}) "
+                    f"but got tensor of shape {tuple(x_query.shape)}"
                 )
-            if x_kv.ndim != 3 or x_kv.shape[-1] != self.dim_kv:
+            B = x_query.shape[0]
+            if x_kv.ndim != 3 or x_kv.shape[0] != B or x_kv.shape[-1] != self.dim_kv:
                 raise ValueError(
-                    f"Expected x_kv shape (B, Nkv, {self.dim_kv}), "
-                    f"got {tuple(x_kv.shape)}"
+                    f"Expected x_kv of shape ({B}, N_kv, {self.dim_kv}) "
+                    f"but got tensor of shape {tuple(x_kv.shape)}"
                 )
-            if x_query.shape[-1] < self.dim_pos or x_kv.shape[-1] < self.dim_pos:
+            if padding_kv is not None and padding_kv.numel() != B * x_kv.shape[1]:
                 raise ValueError(
-                    f"Both x_query and x_kv must have at least dim_pos={self.dim_pos} "
-                    f"channels; got x_query dim {x_query.shape[-1]}, x_kv dim "
-                    f"{x_kv.shape[-1]}"
+                    f"Expected padding_kv of shape ({B}, {x_kv.shape[1]}) or "
+                    f"({B}, {x_kv.shape[1]}, 1) but got tensor of shape "
+                    f"{tuple(padding_kv.shape)}"
                 )
 
-        # First dim_pos channels serve as continuous coordinates for RoPE
-        # (matches argent_exp/ArGEnT/nn_module/ArGEnT.py:72-73).
         pos_query = x_query[..., : self.dim_pos]
         pos_kv = x_kv[..., : self.dim_pos]
 
-        # Embed query and KV — the activation is applied AFTER the last linear
-        # of each embedding stack (matches argent_exp/ArGEnT.py:75-76).
+        # The activation is also applied after the last embedding layer.
         x_kv_emb = self.activation(self.kv_to_embedding(x_kv))
         x_query_emb = self.activation(self.query_to_embedding(x_query))
 
-        # Cross-attention transformer.
         x_query_emb = self.transformer(
             x_query_emb,
             x_kv_emb,
@@ -391,99 +320,90 @@ class ArGEnT(Module):
             pos_kv=pos_kv,
             padding_kv=padding_kv,
         )
-
         return self.to_out(x_query_emb)
 
 
 class ArGEnTDeepONet(Module):
     r"""ArGEnT trunk fused with a DeepONet-style branch over operator parameters.
 
-    Faithful port of argent_exp's ``ArGEnT_DeepONet``
-    ([ArGEnT_DeepONet.py:8-109]) restricted to ``attention_type='cross'``.
-    Wraps :class:`ArGEnT` as the trunk and a small FNN as the branch
-    over non-geometric operator parameters (e.g. Reynolds number for the
-    lid-driven cavity example). Fuses trunk and branch multiplicatively:
+    The :class:`ArGEnT` trunk produces ``dim_emb`` basis features per output
+    channel at each query point, and a feed-forward branch maps the operator
+    parameters :math:`\mu` (e.g. a Reynolds number) to matching coefficients:
 
     .. math::
 
-        \text{out}(x) = \sum_{j=1}^{J} c_j(\mu) \, f_j(x, \Omega)
+        u_k(x) = \sum_{j=1}^{\text{dim\_emb}} c_{jk}(\mu) \, f_{jk}(x, \Omega)
 
-    where :math:`c_j(\mu)` is the branch output for operator parameter
-    :math:`\mu`, :math:`f_j(x, \Omega)` is the trunk output for query point
-    :math:`x` given geometry :math:`\Omega`, and the sum runs over the
-    ``dim_emb`` inner dimension per output channel.
-
-    When ``dim_Op < 1`` the branch is disabled and the model degenerates to
-    :class:`ArGEnT` (matches argent_exp's behavior at
-    ArGEnT_DeepONet.py:39-40 and forward at line 104-105).
+    where :math:`f` is the trunk output for query point :math:`x` and geometry
+    :math:`\Omega`. With ``dim_op < 1`` the branch is disabled and the model
+    reduces to :class:`ArGEnT`.
 
     Parameters
     ----------
-    dim_Op : int, optional, default=1
-        Dimension of the operator-parameter input. If ``<1``, the branch net
-        is skipped entirely and the model reduces to the trunk alone.
+    dim_op : int, optional, default=1
+        Number of operator parameters. Values below 1 disable the branch.
     dim_query : int, optional, default=2
-        See :class:`ArGEnT`.
+        Number of input channels of ``x_query``.
     dim_kv : int, optional, default=2
-        See :class:`ArGEnT`.
+        Number of input channels of ``x_kv``.
     dim_pos : int, optional, default=2
-        See :class:`ArGEnT`.
+        Number of leading coordinate channels used by RoPE.
     dim_out : int, optional, default=1
         Number of output channels per query token.
     dim_emb : int, optional, default=128
-        See :class:`ArGEnT`.
+        Embedding dimension; also the number of basis functions per output
+        channel.
     num_heads : int, optional, default=4
-        See :class:`ArGEnT`.
+        Number of attention heads.
     depth : int, optional, default=2
-        See :class:`ArGEnT`.
+        Number of cross-attention layers.
     max_freq : float, optional, default=64.0
-        See :class:`ArGEnT`.
-    use_MFNN : bool, optional, default=False
-        See :class:`ArGEnT`. Also applied to the branch FNN.
-    activation : str or callable, optional, default="relu"
-        See :class:`ArGEnT`.
+        RoPE frequency scale; see :class:`ArGEnT`.
+    use_mfnn : bool, optional, default=False
+        If ``True``, use the modified FNN for the trunk MLPs and the branch.
+    activation : str, optional, default="relu"
+        Activation of the trunk MLPs and the branch; see :class:`ArGEnT`.
     use_relu_mlp : bool, optional, default=False
-        See :class:`ArGEnT`.
+        If ``True``, use ReLU feed-forward blocks in the attention stack.
     axis_slices : list of int, optional
-        See :class:`ArGEnT`.
+        Per-axis RoPE channel split; see :class:`ArGEnT`.
     attention_type : {"cross", "self", "hybrid"}, optional, default="cross"
-        See :class:`ArGEnT`.
+        ArGEnT variant; see :class:`ArGEnT`.
 
     Forward
     -------
     x_query : torch.Tensor
-        Query tokens of shape :math:`(B, N_q, \text{dim\_query})`.
+        Query tokens of shape :math:`(B, N_q, D_q)`.
     x_kv : torch.Tensor
-        Key/value tokens of shape :math:`(B, N_{kv}, \text{dim\_kv})`.
-    OPParas : torch.Tensor, optional
-        Operator parameters of shape :math:`(B, 1, \text{dim\_Op})`. Required
-        when ``dim_Op >= 1``; ignored otherwise.
+        Key/value tokens of shape :math:`(B, N_{kv}, D_{kv})`.
+    op_params : torch.Tensor, optional
+        Operator parameters of shape :math:`(B, 1, D_{op})`. Required when
+        ``dim_op >= 1``; ignored otherwise.
     padding_kv : torch.Tensor, optional
-        KV padding mask; see :class:`ArGEnT`.
+        Key/value padding mask; see :class:`ArGEnT`.
 
     Outputs
     -------
     torch.Tensor
-        Predicted field values at query points, of shape
-        :math:`(B, N_q, \text{dim\_out})`.
+        Predicted fields at the query points, of shape :math:`(B, N_q, D_{out})`.
 
     Examples
     --------
     >>> import torch
     >>> from physicsnemo.experimental.models.argent import ArGEnTDeepONet
-    >>> model = ArGEnTDeepONet(dim_Op=1, dim_query=3, dim_kv=3, dim_pos=2,
+    >>> model = ArGEnTDeepONet(dim_op=1, dim_query=3, dim_kv=3, dim_pos=2,
     ...                        dim_out=3, dim_emb=64, num_heads=2, depth=2)
     >>> x_query = torch.randn(2, 500, 3)
     >>> x_kv = torch.randn(2, 200, 3)
-    >>> Re = torch.randn(2, 1, 1)
-    >>> out = model(x_query, x_kv, Re)
+    >>> re = torch.randn(2, 1, 1)
+    >>> out = model(x_query, x_kv, re)
     >>> out.shape
     torch.Size([2, 500, 3])
     """
 
     def __init__(
         self,
-        dim_Op: int = 1,
+        dim_op: int = 1,
         dim_query: int = 2,
         dim_kv: int = 2,
         dim_pos: int = 2,
@@ -492,21 +412,19 @@ class ArGEnTDeepONet(Module):
         num_heads: int = 4,
         depth: int = 2,
         max_freq: float = 64.0,
-        use_MFNN: bool = False,
-        activation: Union[str, Callable[[torch.Tensor], torch.Tensor]] = "relu",
+        use_mfnn: bool = False,
+        activation: str = "relu",
         use_relu_mlp: bool = False,
         axis_slices: Optional[List[int]] = None,
         attention_type: Literal["cross", "self", "hybrid"] = "cross",
     ) -> None:
         super().__init__(meta=ArGEnTDeepONetMetaData())
-        # If dim_Op < 1, disable the branch (matches ArGEnT_DeepONet.py:39-40).
-        self.dim_Op = int(dim_Op) if int(dim_Op) >= 1 else 0
-        self.dim_out = int(dim_out)
-        self.dim_emb = int(dim_emb)
+        self.dim_op = max(dim_op, 0)
+        self.dim_out = dim_out
+        self.dim_emb = dim_emb
 
-        # Trunk: when a branch exists, its output feature dim is dim_out * dim_emb
-        # so the multiplicative fusion has enough channels; otherwise dim_out.
-        trunk_dim_out = self.dim_out * self.dim_emb if self.dim_Op > 0 else self.dim_out
+        # With a branch, the trunk emits dim_emb basis features per output channel.
+        trunk_dim_out = dim_out * dim_emb if self.dim_op > 0 else dim_out
         self.argent = ArGEnT(
             dim_query=dim_query,
             dim_kv=dim_kv,
@@ -516,60 +434,44 @@ class ArGEnTDeepONet(Module):
             num_heads=num_heads,
             depth=depth,
             max_freq=max_freq,
-            use_MFNN=use_MFNN,
+            use_mfnn=use_mfnn,
             activation=activation,
             use_relu_mlp=use_relu_mlp,
             axis_slices=axis_slices,
             attention_type=attention_type,
         )
 
-        if self.dim_Op > 0:
-            act = _resolve_activation(activation)
-            mlp_cls = _MFNN if bool(use_MFNN) else _FNN
-            # Branch layer sequence — matches ArGEnT_DeepONet.py:90.
+        if self.dim_op > 0:
+            mlp_cls = _MFNN if use_mfnn else _FNN
             self.branch_net = mlp_cls(
-                layers=[self.dim_Op] + [self.dim_emb] * 5 + [self.dim_out * self.dim_emb],
-                activation=act,
+                layers=[self.dim_op] + [dim_emb] * 5 + [dim_out * dim_emb],
+                activation=get_activation(activation),
             )
 
     def forward(
         self,
         x_query: Float[torch.Tensor, "batch nq dim_query"],
         x_kv: Float[torch.Tensor, "batch nkv dim_kv"],
-        OPParas: Optional[Float[torch.Tensor, "batch 1 dim_op"]] = None,
-        padding_kv: Optional[torch.Tensor] = None,
+        op_params: Optional[Float[torch.Tensor, "batch 1 dim_op"]] = None,
+        padding_kv: Optional[Shaped[torch.Tensor, "batch nkv ..."]] = None,
     ) -> Float[torch.Tensor, "batch nq dim_out"]:
-        # Input validation (skipped under torch.compile per MOD-005).
-        if not torch.compiler.is_compiling():
-            if self.dim_Op > 0:
-                if OPParas is None:
-                    raise ValueError(
-                        f"OPParas is required when dim_Op={self.dim_Op}>0"
-                    )
-                if (
-                    OPParas.ndim != 3
-                    or OPParas.shape[-1] != self.dim_Op
-                    or OPParas.shape[-2] != 1
-                ):
-                    raise ValueError(
-                        f"Expected OPParas shape (B, 1, {self.dim_Op}), "
-                        f"got {tuple(OPParas.shape)}"
-                    )
+        ### Input validation (x_query, x_kv, padding_kv are checked by the trunk)
+        if not torch.compiler.is_compiling() and self.dim_op > 0:
+            B = x_query.shape[0]
+            if op_params is None or op_params.shape != (B, 1, self.dim_op):
+                raise ValueError(
+                    f"Expected op_params of shape ({B}, 1, {self.dim_op}) but got "
+                    f"{None if op_params is None else tuple(op_params.shape)}"
+                )
 
         trunk_out = self.argent(x_query, x_kv, padding_kv=padding_kv)
-
-        if self.dim_Op == 0:
-            # Branch is disabled; trunk_out is (B, Nq, dim_out) already.
+        if self.dim_op == 0:
             return trunk_out
 
-        # Multiplicative fusion (matches ArGEnT_DeepONet.py:106-108):
-        #   trunk (B, Nq, dim_out*dim_emb) * branch (B, 1, dim_out*dim_emb)
-        #   -> reshape to (B, Nq, dim_emb, dim_out) and sum along dim_emb.
-        branch_out = self.branch_net(OPParas)  # (B, 1, dim_out * dim_emb)
-        fused = trunk_out * branch_out  # (B, Nq, dim_out * dim_emb)
-        fused = fused.view(
+        # Multiplicative fusion: (B, Nq, dim_emb*dim_out) * (B, 1, dim_emb*dim_out),
+        # then sum over the dim_emb basis functions of each output channel.
+        branch_out = self.branch_net(op_params)
+        fused = (trunk_out * branch_out).view(
             trunk_out.shape[0], trunk_out.shape[1], -1, self.dim_out
-        )  # (B, Nq, dim_emb, dim_out)
-        return fused.sum(dim=2)  # (B, Nq, dim_out)
-
-
+        )
+        return fused.sum(dim=2)

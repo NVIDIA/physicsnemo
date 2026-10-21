@@ -61,6 +61,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per step. The solvers share an extended semi-linear callback API
   (`bias_fn`, `bias_int_fn`, `slope_fn`); users can select all four
   solvers by string key through `physicsnemo.diffusion.samplers.sample`.
+- Adds the experimental ArGEnT (Arbitrary Geometry-encoded Transformer)
+  models `physicsnemo.experimental.models.argent.ArGEnT` and
+  `ArGEnTDeepONet`: linear cross-attention from query points to a geometry
+  point cloud with continuous-coordinate RoPE, optionally fused with a
+  DeepONet-style branch over operator parameters.
 
 ### Changed
 

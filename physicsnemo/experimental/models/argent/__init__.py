@@ -14,12 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""ArGEnT — Arbitrary Geometry-encoded Transformer for Operator Learning.
-
-Port of ArGEnT (Chen et al. 2026) into PhysicsNeMo. Only the cross-attention
-variant is implemented in v1; ``ArGEnT(attention_type='self')`` and
-``ArGEnT(attention_type='hybrid')`` raise :class:`NotImplementedError`.
-"""
+r"""ArGEnT: Arbitrary Geometry-encoded Transformer for operator learning
+(`Chen et al., 2026 <https://arxiv.org/abs/2602.11626>`_)."""
 
 from .argent import ArGEnT, ArGEnTDeepONet
 
