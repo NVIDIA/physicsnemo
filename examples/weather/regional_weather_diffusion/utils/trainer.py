@@ -683,12 +683,7 @@ class Trainer:
 
         self.sampling_scheduler = None
 
-        compile_loss = self.use_torch_compile and not self.use_shard_tensor
-        if self.use_torch_compile and self.use_shard_tensor:
-            self.logger.info(
-                "Skipping torch.compile on loss: not supported with "
-                "domain parallelism / ShardTensor."
-            )
+        compile_loss = self.use_torch_compile
 
         if self.loss_type == "regression":
             loss_fn = RegressionLoss(self.net)
